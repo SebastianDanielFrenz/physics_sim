@@ -1,0 +1,156 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "clang-cl-base",
+      "hidden": true,
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Windows / clang-cl / Debug",
+      "inherits": "clang-cl-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Windows / clang-cl / Release",
+      "inherits": "clang-cl-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "Windows / clang-cl / RelWithDebInfo",
+      "inherits": "clang-cl-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Windows / clang-cl / ASan",
+      "inherits": "clang-cl-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address /OPT:NOICF",
+        "CMAKE_TRY_COMPILE_CONFIGURATION": "RelWithDebInfo"
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_odr_violation=0"
+      }
+    },
+    {
+      "name": "msvc-base",
+      "hidden": true,
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "displayName": "Windows / cl / Debug",
+      "inherits": "msvc-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "msvc-release",
+      "displayName": "Windows / cl / Release",
+      "inherits": "msvc-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "$env{HOME}/build/physics_sim/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux / clang / Release",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "displayName": "Linux / clang / ASan+UBSan",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all",
+        "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld -fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "linux-tsan",
+      "displayName": "Linux / clang / TSan",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread",
+        "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld -fsanitize=thread"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "msvc-debug", "configurePreset": "msvc-debug" },
+    { "name": "msvc-release", "configurePreset": "msvc-release" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "linux-asan-ubsan", "configurePreset": "linux-asan-ubsan" },
+    { "name": "linux-tsan", "configurePreset": "linux-tsan" }
+  ],
+  "testPresets": [
+    { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
+    { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo", "output": { "outputOnFailure": true } },
+    { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
+    { "name": "msvc-debug", "configurePreset": "msvc-debug", "output": { "outputOnFailure": true } },
+    { "name": "msvc-release", "configurePreset": "msvc-release", "output": { "outputOnFailure": true } },
+    { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } },
+    { "name": "linux-asan-ubsan", "configurePreset": "linux-asan-ubsan", "output": { "outputOnFailure": true } },
+    { "name": "linux-tsan", "configurePreset": "linux-tsan", "output": { "outputOnFailure": true } }
+  ]
+}

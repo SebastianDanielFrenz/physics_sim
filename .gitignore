@@ -1,0 +1,29 @@
+# Build outputs (Windows CMake presets: out/build/<preset>)
+out/
+build/
+/CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+compile_commands.json
+
+# Godot
+.godot/
+*.translation
+export_presets.cfg
+
+# Python (tools/plots)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors / OS / local agent tooling
+.vs/
+.vscode/
+.claude/
+*.user
+.DS_Store
+Thumbs.db
+
+# Telemetry / scenario run output
+*.csv.tmp
