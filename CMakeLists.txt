@@ -122,8 +122,34 @@ option(PS_BUILD_GODOT_ADAPTER "Build the Godot GDExtension adapter (P2)" OFF)
 if(MSVC)
   if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /clang:-ffp-contract=off")
+  else()
+    # Real cl.exe (CMAKE_CXX_COMPILER_ID "MSVC", the msvc-release preset):
+    # /arch:AVX2 alone (as set on ps_options, below - our own 3 targets
+    # only) is not enough here. Jolt's Core.h auto-detects its own
+    # JPH_USE_AVX/AVX2/SSE4.x/F16C/LZCNT feature macros purely from
+    # compiler-predefined macros (__AVX2__ etc., the GCC/Clang convention -
+    # confirmed by reading Jolt/Core/Core.h). clang-cl predefines these
+    # under /arch:AVX2 (it is Clang underneath), so Jolt's own build
+    # picks the right ABI there automatically; real cl.exe does not
+    # predefine them from /arch:AVX2 at all. Left alone, that means Jolt's
+    # *own* compiled .lib silently uses the narrower (pre-AVX) calling
+    # convention for a few double-precision APIs (Math/MathTypes.h:
+    # DVec3Arg is "const DVec3" - by value - only #ifdef JPH_USE_AVX, else
+    # "const DVec3&"), while our own code - compiled with /arch:AVX2 via
+    # ps_options - disagrees, since /arch:AVX2 alone was already enough to
+    # flip OUR translation units' JPH_USE_AVX (this MSVC toolset, 14.44,
+    # does predefine __AVX2__ under /arch:AVX2 after all - verified via
+    # dumpbin, not assumed). Net effect without this line: a hard
+    # `LNK2019 unresolved external symbol` for exactly the DVec3Arg-taking
+    # overloads (BodyInterface::SetPositionAndRotation,
+    # NarrowPhaseQuery::CastShape, *Shape::GetSubmergedVolume), reproduced
+    # and diagnosed via dumpbin /symbols on both objects before writing
+    # this fix. Setting this project-wide (not just on ps_options) means
+    # Jolt's own CMakeLists.txt picks it up as part of its inherited
+    # CMAKE_CXX_FLAGS baseline too, the same mechanism already used for
+    # the FMA-contraction flag below.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
   endif()
-  # cl (CMAKE_CXX_COMPILER_ID "MSVC"): no flag needed, see ps_options below.
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffp-contract=off")
 endif()
@@ -143,6 +169,22 @@ set(USE_AVX2 ON CACHE BOOL "" FORCE)                       # matches PLAN.md sec
 set(USE_FMADD OFF CACHE BOOL "" FORCE)                     # explicit; CROSS_PLATFORM_DETERMINISTIC already forces this off internally
 set(USE_AVX512 OFF CACHE BOOL "" FORCE)                    # 5900X (Zen 3) has no AVX-512
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)           # third-party code: warnings-as-errors is our own targets' business only, not Jolt's (see ps_warnings below); Jolt's own /Wall /WX default is not something we want breaking CI on a newer compiler
+# Jolt defaults both of these OFF (its own CMakeLists.txt), trading a
+# little codegen for RTTI/exception machinery it does not use internally.
+# Our own code is compiled with RTTI and exceptions ON (neither is turned
+# off anywhere in this file), and core/src/backend/jolt/jolt_job_system.h
+# derives ps::jobs::JoltJobSystemBridge from JPH::JobSystemWithBarrier -
+# with the two mismatched, that derived class's own RTTI needs "typeinfo
+# for JPH::JobSystemWithBarrier", which a Jolt built with RTTI off never
+# emits anywhere. This is a hard `ld.lld: undefined symbol` on the WSL/
+# Linux legs (Itanium ABI requires a derived class's RTTI to reference
+# every base's typeinfo, unconditionally); it was not caught by the
+# Windows legs at all, where the COFF linker did not seem to enforce the
+# same requirement here - found by actually running the Linux legs, not by
+# inspection, and worth being explicit about since it is exactly the kind
+# of Windows-vs-Linux difference D7 says to run down rather than relax.
+set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
+set(CPP_EXCEPTIONS_ENABLED ON CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)  # LTO is a P9 performance-pass concern; keep P0 builds fast and simple
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)                # we vendor Jolt via FetchContent, never install it
 set(TARGET_UNIT_TESTS OFF CACHE BOOL "" FORCE)
@@ -243,13 +285,19 @@ endif()
 # Placeholder targets (PLAN.md section 4 layout).
 # ===========================================================================
 
+add_subdirectory(tools/common)
 add_subdirectory(core)
 add_subdirectory(tools/ps_run)
+add_subdirectory(tools/sweep)
 
 if(PS_BUILD_TESTS)
   include(CTest)
   enable_testing()
+  add_subdirectory(tests/support)
   add_subdirectory(tests/unit)
+  add_subdirectory(tests/validation)
+  add_subdirectory(tests/determinism)
+  add_subdirectory(tests/bench)
 endif()
 
 if(PS_BUILD_GODOT_ADAPTER)

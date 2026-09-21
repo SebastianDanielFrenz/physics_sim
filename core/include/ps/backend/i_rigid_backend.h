@@ -1,0 +1,143 @@
+// ps/backend/i_rigid_backend.h — backend seam (PLAN.md D2).
+//
+// create/destroy bodies, shapes (via our own descriptors, never a backend
+// shape handle), joints; apply wrench; step; ray/shape casts; contacts.
+// No Jolt type appears anywhere in this header - the only implementation in
+// P1 is core/src/backend/jolt/jolt_backend.cpp, reached only through
+// create_jolt_backend() below, which returns the abstract interface.
+
+#pragma once
+
+#include "ps/jobs/job_system.h"
+#include "ps/math/mat3.h"
+#include "ps/math/pose.h"
+#include "ps/world/ids.h"
+
+#include <cstdint>
+#include <memory>
+#include <variant>
+#include <vector>
+
+namespace ps {
+
+enum class BodyMotionType { Static, Kinematic, Dynamic };
+
+struct BoxShape { Vec3 half_extents{0.5, 0.5, 0.5}; };
+struct SphereShape { real radius = 0.5; };
+struct CapsuleShape { real half_height = 0.5; real radius = 0.25; };
+using ShapeDesc = std::variant<BoxShape, SphereShape, CapsuleShape>;
+
+struct BodyDesc {
+    ShapeDesc shape = SphereShape{};
+    BodyMotionType motion = BodyMotionType::Dynamic;
+    real mass = 1.0;              // ignored for Static/Kinematic
+    Pose pose = Pose::identity();
+    Motion velocity{};
+    real friction = 0.5;
+    real restitution = 0.0;
+    real linear_damping = 0.0;
+    real angular_damping = 0.0;
+    bool gravity_enabled = true;
+    // Allow the body to sleep/deactivate. Off by default: determinism tests
+    // step bodies that may sit still (box on slope below the friction
+      // angle) and must keep producing state, not silently stop updating.
+    bool allow_sleep = false;
+};
+
+enum class JointType { Fixed, Hinge };
+
+struct JointDesc {
+    JointType type = JointType::Fixed;
+    BodyId body_a;                          // must be valid
+    BodyId body_b;                          // invalid == anchored to the world
+    Vec3 anchor_a_local = Vec3::zero();      // attach point, body A local space
+    Vec3 anchor_b_local = Vec3::zero();      // attach point, body B local space (or world space if body_b invalid)
+    Vec3 axis_a_local = Vec3::unit_z();      // hinge axis, body A local space
+    Vec3 axis_b_local = Vec3::unit_z();      // hinge axis, body B local space (or world space if body_b invalid)
+    real friction_torque = 0.0;              // hinge only; 0 == frictionless
+    bool limits_enabled = false;             // hinge only
+    real limit_min_rad = 0.0;
+    real limit_max_rad = 0.0;
+};
+
+struct RayCastHit {
+    bool hit = false;
+    BodyId body;
+    real fraction = 1.0;
+    Vec3 point;
+    Vec3 normal;
+};
+
+struct ShapeCastHit {
+    bool hit = false;
+    BodyId body;
+    real fraction = 1.0;
+    Vec3 point;
+    Vec3 normal;
+};
+
+struct ContactEvent {
+    BodyId a;
+    BodyId b;
+    Vec3 point;
+    Vec3 normal;
+    real normal_impulse = 0.0;
+};
+
+class IRigidBackend {
+public:
+    virtual ~IRigidBackend() = default;
+
+    virtual BodyId create_body(const BodyDesc& desc) = 0;
+    virtual void destroy_body(BodyId id) = 0;
+
+    virtual JointId create_joint(const JointDesc& desc) = 0;
+    virtual void destroy_joint(JointId id) = 0;
+
+    [[nodiscard]] virtual Pose get_pose(BodyId id) const = 0;
+    [[nodiscard]] virtual Motion get_motion(BodyId id) const = 0;
+    virtual void set_pose(BodyId id, const Pose& pose) = 0;
+    virtual void set_motion(BodyId id, const Motion& motion) = 0;
+
+    // Queried fresh every call, never cached by a caller (PLAN.md section 6:
+    // mass properties come from the body every tick, ready for a future
+    // body whose mass changes, e.g. fuel burn, loader bucket fill).
+    [[nodiscard]] virtual real get_mass(BodyId id) const = 0;
+    [[nodiscard]] virtual Mat3 get_inertia_world(BodyId id) const = 0; // about world-space COM
+
+    // Accumulates a force+torque (about the body's world-space COM) for the
+    // step about to run; cleared after step(). Must only be called from
+    // World's sequential, fixed-order gather stage (PLAN.md D8) - never
+    // concurrently for the same body.
+    virtual void apply_wrench(BodyId id, const Wrench& wrench_at_com) = 0;
+
+    // Advances the backend by exactly dt (PLAN.md D3: fixed-rate stepping;
+    // no wall clock is read here or anywhere in the backend).
+    virtual void step(real dt) = 0;
+
+    [[nodiscard]] virtual RayCastHit ray_cast(const Vec3& origin, const Vec3& direction, real max_distance) const = 0;
+    [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
+
+    // Contact events observed during the most recent step(), drained (and
+    // cleared) by the caller once per tick.
+    virtual std::vector<ContactEvent> drain_contact_events() = 0;
+
+    // Folds every live body's pose+velocity (in a fixed, id-ascending
+    // order) into a running FNV-1a hash, starting from seed. Part of
+    // World::state_hash() (PLAN.md D7).
+    [[nodiscard]] virtual std::uint64_t compute_state_hash(std::uint64_t seed) const = 0;
+
+    [[nodiscard]] virtual std::size_t body_count() const = 0;
+
+    // Every live BodyId, ascending by index (fixed, deterministic order).
+    // Used by World's snapshot stage; not a hot-path call.
+    [[nodiscard]] virtual std::vector<BodyId> live_body_ids() const = 0;
+};
+
+// The only P1 implementation. job_system is the single pool Jolt's own
+// internal parallel work (broadphase/narrowphase/island solving) is
+// submitted to via a JPH::JobSystem bridge (core/src/jobs/jolt_job_system.h,
+// internal) - never a second thread pool (PLAN.md D8).
+std::unique_ptr<IRigidBackend> create_jolt_backend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies);
+
+} // namespace ps

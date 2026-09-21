@@ -6,6 +6,20 @@
 add_library(ps_core STATIC
   src/version.cpp
   src/jolt_proof.cpp
+
+  src/math/math_check.cpp
+
+  src/jobs/job_system.cpp
+  src/jobs/task_graph.cpp
+  src/jobs/topology.cpp
+  src/jobs/debug_alloc.cpp
+
+  src/backend/jolt/jolt_backend.cpp
+
+  src/world/world.cpp
+
+  src/io/telemetry.cpp
+  src/io/scenario.cpp
 )
 
 target_include_directories(ps_core PUBLIC
@@ -17,6 +31,7 @@ target_include_directories(ps_core PUBLIC
 target_link_libraries(ps_core
   PRIVATE
     Jolt
+    nlohmann_json::nlohmann_json
     ps_warnings
     ps_options
 )
