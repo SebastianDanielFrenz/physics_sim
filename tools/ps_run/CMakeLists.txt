@@ -6,6 +6,7 @@ add_executable(ps_run main.cpp)
 target_link_libraries(ps_run
   PRIVATE
     ps_core
+    ps_headless_env
     ps_warnings
     ps_options
 )

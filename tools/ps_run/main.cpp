@@ -1,12 +1,72 @@
-// ps_run — headless scenario runner (CLI -> CSV). Placeholder for Phase 0:
-// prints the ps_core version and exits. Scenario loading, stepping and CSV
-// telemetry are P1 work (PLAN.md section 4, D6).
+// ps_run — headless scenario runner (PLAN.md D6/section 4): scenario file
+// -> CSV, a pure function with no other side effects (no wall clock reads
+// beyond telemetry profiling inside World, no network, no global state
+// carried between runs) so tools/sweep can fan many of these out safely.
 
+#include "headless_env.h"
+#include "ps/io/scenario.h"
 #include "ps/version.h"
+#include "ps/world/world.h"
 
 #include <cstdio>
+#include <exception>
+#include <filesystem>
+#include <string>
 
-int main() {
-    std::printf("ps_run %s\n", ps::version_string());
-    return 0;
+namespace {
+
+std::string default_csv_path(const std::string& scenario_path, const std::string& scenario_name) {
+    std::filesystem::path p(scenario_path);
+    p = p.parent_path() / (scenario_name + ".csv");
+    return p.string();
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    ps_tools::install_headless_crt_handlers();
+
+    if (argc < 2) {
+        std::fprintf(stderr, "ps_run %s\nusage: ps_run <scenario.json> [output.csv] [--workers N]\n", ps::version_string());
+        return 2;
+    }
+
+    const std::string scenario_path = argv[1];
+    std::string csv_override;
+    int worker_override = -1;
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--workers" && i + 1 < argc) {
+            worker_override = std::atoi(argv[++i]);
+        } else if (csv_override.empty()) {
+            csv_override = arg;
+        }
+    }
+
+    try {
+        ps::io::Scenario scenario = ps::io::load_scenario(scenario_path);
+        if (worker_override >= 0) scenario.world_config.job_workers = worker_override;
+
+        ps::io::BuiltScenario built = ps::io::build_scenario(scenario);
+        ps::World& world = *built.world;
+
+        const std::string csv_path = !csv_override.empty() ? csv_override
+            : (!scenario.telemetry_csv.empty() ? scenario.telemetry_csv : default_csv_path(scenario_path, scenario.name));
+        world.telemetry().start_csv(csv_path);
+
+        const std::uint64_t num_ticks = static_cast<std::uint64_t>(scenario.duration_s * scenario.world_config.tick_rate_hz + 0.5);
+        for (std::uint64_t i = 0; i < num_ticks; ++i) world.step();
+
+        world.telemetry().stop();
+
+        std::printf("ps_run: scenario '%s' -> %s (%llu ticks, %d workers, state_hash=0x%016llx)\n",
+                    scenario.name.c_str(), csv_path.c_str(),
+                    static_cast<unsigned long long>(num_ticks),
+                    world.job_system().worker_count(),
+                    static_cast<unsigned long long>(world.state_hash()));
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "ps_run: error: %s\n", e.what());
+        return 1;
+    }
 }

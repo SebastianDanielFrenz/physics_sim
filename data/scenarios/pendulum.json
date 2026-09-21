@@ -1,0 +1,32 @@
+{
+  "name": "pendulum",
+  "duration_s": 5.0,
+  "tick_rate_hz": 240.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "bodies": [
+    {
+      "name": "bob",
+      "motion": "dynamic",
+      "mass": 1.0,
+      "shape": {"type": "sphere", "radius": 0.1},
+      "position": [2.0, 0, 0],
+      "gravity_enabled": true,
+      "allow_sleep": false
+    }
+  ],
+  "joints": [
+    {
+      "name": "pivot",
+      "type": "hinge",
+      "body_a": "bob",
+      "body_b": "",
+      "anchor_a": [-2.0, 0, 0],
+      "anchor_b": [0, 0, 0],
+      "axis_a": [0, 1, 0],
+      "axis_b": [0, 1, 0],
+      "friction_torque": 0.0
+    }
+  ],
+  "telemetry_csv": "pendulum.csv"
+}

@@ -1,0 +1,18 @@
+{
+  "name": "joint_chain",
+  "duration_s": 5.0,
+  "tick_rate_hz": 240.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "bodies": [
+    {"name": "link0", "motion": "dynamic", "mass": 1.0, "shape": {"type": "capsule", "half_height": 0.4, "radius": 0.1}, "position": [1.0, 0, 0], "allow_sleep": false},
+    {"name": "link1", "motion": "dynamic", "mass": 1.0, "shape": {"type": "capsule", "half_height": 0.4, "radius": 0.1}, "position": [3.0, 0, 0], "allow_sleep": false},
+    {"name": "link2", "motion": "dynamic", "mass": 1.0, "shape": {"type": "capsule", "half_height": 0.4, "radius": 0.1}, "position": [5.0, 0, 0], "allow_sleep": false}
+  ],
+  "joints": [
+    {"name": "j0", "type": "hinge", "body_a": "link0", "body_b": "", "anchor_a": [-1.0, 0, 0], "anchor_b": [0, 0, 0], "axis_a": [0, 1, 0], "axis_b": [0, 1, 0], "friction_torque": 0.0},
+    {"name": "j1", "type": "hinge", "body_a": "link1", "body_b": "link0", "anchor_a": [-1.0, 0, 0], "anchor_b": [1.0, 0, 0], "axis_a": [0, 1, 0], "axis_b": [0, 1, 0], "friction_torque": 0.0},
+    {"name": "j2", "type": "hinge", "body_a": "link2", "body_b": "link1", "anchor_a": [-1.0, 0, 0], "anchor_b": [1.0, 0, 0], "axis_a": [0, 1, 0], "axis_b": [0, 1, 0], "friction_torque": 0.0}
+  ],
+  "telemetry_csv": "joint_chain.csv"
+}
