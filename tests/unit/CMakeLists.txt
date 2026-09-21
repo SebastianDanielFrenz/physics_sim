@@ -4,12 +4,15 @@
 
 add_executable(ps_unit_tests
   test_hello.cpp
+  test_math.cpp
+  test_jobs.cpp
+  test_world_basic.cpp
 )
 
 target_link_libraries(ps_unit_tests
   PRIVATE
     ps_core
-    Catch2::Catch2WithMain
+    ps_test_catch_main
     ps_warnings
     ps_options
 )
