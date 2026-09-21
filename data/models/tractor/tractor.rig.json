@@ -1,0 +1,1059 @@
+{
+  "format": "physics_sim.rig/1",
+  "model": "tractor.glb",
+  "title": "Row-crop tractor (~200 hp)",
+  "description": "Generic ~200 hp row-crop tractor, 5.1 m, 710/70 R42 rear and 600/70 R30 front farm tyres, pendulum front axle, 4-post cab, rear three-point linkage, PTO and drawbar.",
+  "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
+  "origin": "Ground plane below the wheel centres, x = 0 midway between the axles, y = 0 on the centreline.",
+  "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
+  "overall_bounds": {
+    "min": [
+      -2.59,
+      -1.39,
+      0.0
+    ],
+    "max": [
+      2.576,
+      1.39,
+      3.5502
+    ]
+  },
+  "nodes": [
+    {
+      "name": "tractor",
+      "parent": null,
+      "pivot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_local": {
+        "min": [
+          -2.515,
+          -1.39,
+          0.39
+        ],
+        "max": [
+          2.576,
+          1.39,
+          3.5502
+        ]
+      }
+    },
+    {
+      "name": "front_axle",
+      "parent": "tractor",
+      "pivot": [
+        1.4,
+        0.0,
+        0.86
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "min": -0.17453292519943295,
+        "max": 0.17453292519943295,
+        "note": "front axle pendulum about the centre pivot, + = left wheel up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3,
+          -0.83,
+          -0.32
+        ],
+        "max": [
+          0.3,
+          0.83,
+          0.2
+        ]
+      }
+    },
+    {
+      "name": "steer_FL",
+      "parent": "front_axle",
+      "pivot": [
+        1.4,
+        0.8,
+        0.8
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.8726646259971648,
+        "max": 0.8726646259971648,
+        "note": "road-wheel steer angle about the kingpin, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.4188,
+          -0.2407,
+          -0.205
+        ],
+        "max": [
+          0.391,
+          0.45,
+          0.8944
+        ]
+      }
+    },
+    {
+      "name": "wheel_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.4,
+        0.95,
+        0.8
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.7999,
+          -0.31,
+          -0.7999
+        ],
+        "max": [
+          0.7999,
+          0.31,
+          0.7999
+        ]
+      },
+      "wheel": {
+        "radius": 0.8,
+        "width": 0.6,
+        "side": "left"
+      }
+    },
+    {
+      "name": "steer_cyl_FL",
+      "parent": "front_axle",
+      "pivot": [
+        1.22,
+        0.1,
+        0.9
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FL",
+        "target_point": [
+          1.22,
+          0.6000000000000001,
+          0.9
+        ],
+        "stretch": false,
+        "note": "steering cylinder barrel, follows the steering arm"
+      },
+      "bounds_local": {
+        "min": [
+          -0.035,
+          0.0,
+          -0.035
+        ],
+        "max": [
+          0.035,
+          0.4,
+          0.035
+        ]
+      }
+    },
+    {
+      "name": "steer_cyl_rod_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.22,
+        0.6,
+        0.9
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_cyl_FL",
+        "target_point": [
+          1.22,
+          0.1,
+          0.9
+        ],
+        "stretch": false,
+        "note": "steering cylinder rod, follows the barrel"
+      },
+      "bounds_local": {
+        "min": [
+          -0.018,
+          -0.4,
+          -0.018
+        ],
+        "max": [
+          0.018,
+          0.0,
+          0.018
+        ]
+      }
+    },
+    {
+      "name": "steer_FR",
+      "parent": "front_axle",
+      "pivot": [
+        1.4,
+        -0.8,
+        0.8
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.8726646259971648,
+        "max": 0.8726646259971648,
+        "note": "road-wheel steer angle about the kingpin, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.4188,
+          -0.45,
+          -0.205
+        ],
+        "max": [
+          0.391,
+          0.2407,
+          0.8944
+        ]
+      }
+    },
+    {
+      "name": "wheel_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.4,
+        -0.95,
+        0.8
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.7999,
+          -0.31,
+          -0.7999
+        ],
+        "max": [
+          0.7999,
+          0.31,
+          0.7999
+        ]
+      },
+      "wheel": {
+        "radius": 0.8,
+        "width": 0.6,
+        "side": "right"
+      }
+    },
+    {
+      "name": "steer_cyl_FR",
+      "parent": "front_axle",
+      "pivot": [
+        1.22,
+        -0.1,
+        0.9
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FR",
+        "target_point": [
+          1.22,
+          -0.6000000000000001,
+          0.9
+        ],
+        "stretch": false,
+        "note": "steering cylinder barrel, follows the steering arm"
+      },
+      "bounds_local": {
+        "min": [
+          -0.035,
+          -0.4,
+          -0.035
+        ],
+        "max": [
+          0.035,
+          0.0,
+          0.035
+        ]
+      }
+    },
+    {
+      "name": "steer_cyl_rod_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.22,
+        -0.6,
+        0.9
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_cyl_FR",
+        "target_point": [
+          1.22,
+          -0.1,
+          0.9
+        ],
+        "stretch": false,
+        "note": "steering cylinder rod, follows the barrel"
+      },
+      "bounds_local": {
+        "min": [
+          -0.018,
+          0.0,
+          -0.018
+        ],
+        "max": [
+          0.018,
+          0.4,
+          0.018
+        ]
+      }
+    },
+    {
+      "name": "wheel_RL",
+      "parent": "tractor",
+      "pivot": [
+        -1.4,
+        0.95,
+        1.025
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -1.025,
+          -0.365,
+          -1.025
+        ],
+        "max": [
+          1.025,
+          0.365,
+          1.025
+        ]
+      },
+      "wheel": {
+        "radius": 1.025,
+        "width": 0.71,
+        "side": "left"
+      }
+    },
+    {
+      "name": "wheel_RR",
+      "parent": "tractor",
+      "pivot": [
+        -1.4,
+        -0.95,
+        1.025
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -1.025,
+          -0.365,
+          -1.025
+        ],
+        "max": [
+          1.025,
+          0.365,
+          1.025
+        ]
+      },
+      "wheel": {
+        "radius": 1.025,
+        "width": 0.71,
+        "side": "right"
+      }
+    },
+    {
+      "name": "door_L",
+      "parent": "tractor",
+      "pivot": [
+        -1.68,
+        0.855,
+        2.45
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": 0.0,
+        "max": 1.3962634015954636,
+        "note": "door opening angle (hinge on the rear left post)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.02,
+          -0.024,
+          -0.9462
+        ],
+        "max": [
+          1.5974,
+          0.035,
+          0.3866
+        ]
+      }
+    },
+    {
+      "name": "rear_window",
+      "parent": "tractor",
+      "pivot": [
+        -1.745,
+        0.0,
+        2.825
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": 0.0,
+        "max": 0.6981317007977318,
+        "note": "rear window opening angle (hinge at the top, + = swings out)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.04,
+          -0.795,
+          -0.6381
+        ],
+        "max": [
+          0.01,
+          0.795,
+          -0.0019
+        ]
+      }
+    },
+    {
+      "name": "steering_wheel",
+      "parent": "tractor",
+      "pivot": [
+        -0.55,
+        0.0,
+        2.22
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.447213595499958,
+          -0.0,
+          0.894427190999916
+        ],
+        "min": -15.707963267948966,
+        "max": 15.707963267948966,
+        "note": "steering wheel angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1957,
+          -0.217,
+          -0.1063
+        ],
+        "max": [
+          0.1957,
+          0.217,
+          0.1063
+        ]
+      }
+    },
+    {
+      "name": "pto",
+      "parent": "tractor",
+      "pivot": [
+        -1.95,
+        0.0,
+        0.74
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "note": "PTO shaft, + = clockwise seen from behind"
+      },
+      "bounds_local": {
+        "min": [
+          -0.14,
+          -0.05,
+          -0.05
+        ],
+        "max": [
+          0.0,
+          0.05,
+          0.05
+        ]
+      }
+    },
+    {
+      "name": "top_link",
+      "parent": "tractor",
+      "pivot": [
+        -1.99,
+        0.0,
+        1.2
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.3490658503988659,
+        "max": 0.3490658503988659,
+        "note": "top link pitch, + = rear end up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.6,
+          -0.042,
+          -0.045
+        ],
+        "max": [
+          0.045,
+          0.042,
+          0.09
+        ]
+      }
+    },
+    {
+      "name": "lower_link_L",
+      "parent": "tractor",
+      "pivot": [
+        -1.58,
+        0.42,
+        0.52
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.3490658503988659,
+        "max": 0.4363323129985824,
+        "note": "lower link pitch about its front pivot, + = ball end up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.945,
+          -0.03,
+          -0.055
+        ],
+        "max": [
+          0.055,
+          0.1052,
+          0.145
+        ]
+      }
+    },
+    {
+      "name": "lift_arm_L",
+      "parent": "tractor",
+      "pivot": [
+        -1.72,
+        0.4664,
+        1.52
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.17453292519943295,
+        "max": 0.7853981633974483,
+        "note": "lift arm angle, + = raise"
+      },
+      "bounds_local": {
+        "min": [
+          -0.6,
+          -0.05,
+          -0.1492
+        ],
+        "max": [
+          0.085,
+          0.0636,
+          0.0837
+        ]
+      }
+    },
+    {
+      "name": "lift_rod_L",
+      "parent": "lift_arm_L",
+      "pivot": [
+        -2.28,
+        0.4664,
+        1.42
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "lower_link_L",
+        "target_point": [
+          -2.0904,
+          0.4664,
+          0.6214000000000001
+        ],
+        "stretch": true,
+        "note": "lift rod: arm end -> lower link pin, stretches (closes the loop)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0185,
+          -0.032,
+          -0.803
+        ],
+        "max": [
+          0.2081,
+          0.032,
+          0.0044
+        ]
+      }
+    },
+    {
+      "name": "lift_ram_L",
+      "parent": "tractor",
+      "pivot": [
+        -1.62,
+        0.53,
+        0.92
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "lift_arm_L",
+        "target_point": [
+          -2.056,
+          0.53,
+          1.46
+        ],
+        "stretch": false,
+        "note": "assist cylinder barrel, follows the lift arm"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3022,
+          -0.042,
+          -0.04
+        ],
+        "max": [
+          0.04,
+          0.042,
+          0.3605
+        ]
+      }
+    },
+    {
+      "name": "lift_ram_rod_L",
+      "parent": "lift_arm_L",
+      "pivot": [
+        -2.056,
+        0.53,
+        1.46
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "lift_ram_L",
+        "target_point": [
+          -1.62,
+          0.53,
+          0.92
+        ],
+        "stretch": false,
+        "note": "assist cylinder rod, follows the barrel"
+      },
+      "bounds_local": {
+        "min": [
+          -0.035,
+          -0.025,
+          -0.3371
+        ],
+        "max": [
+          0.2779,
+          0.025,
+          0.035
+        ]
+      }
+    },
+    {
+      "name": "lower_link_R",
+      "parent": "tractor",
+      "pivot": [
+        -1.58,
+        -0.42,
+        0.52
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.3490658503988659,
+        "max": 0.4363323129985824,
+        "note": "lower link pitch about its front pivot, + = ball end up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.945,
+          -0.1052,
+          -0.055
+        ],
+        "max": [
+          0.055,
+          0.03,
+          0.145
+        ]
+      }
+    },
+    {
+      "name": "lift_arm_R",
+      "parent": "tractor",
+      "pivot": [
+        -1.72,
+        -0.4664,
+        1.52
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.17453292519943295,
+        "max": 0.7853981633974483,
+        "note": "lift arm angle, + = raise"
+      },
+      "bounds_local": {
+        "min": [
+          -0.6,
+          -0.0636,
+          -0.1492
+        ],
+        "max": [
+          0.085,
+          0.05,
+          0.0837
+        ]
+      }
+    },
+    {
+      "name": "lift_rod_R",
+      "parent": "lift_arm_R",
+      "pivot": [
+        -2.28,
+        -0.4664,
+        1.42
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "lower_link_R",
+        "target_point": [
+          -2.0904,
+          -0.4664,
+          0.6214000000000001
+        ],
+        "stretch": true,
+        "note": "lift rod: arm end -> lower link pin, stretches (closes the loop)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0185,
+          -0.032,
+          -0.803
+        ],
+        "max": [
+          0.2081,
+          0.032,
+          0.0044
+        ]
+      }
+    },
+    {
+      "name": "lift_ram_R",
+      "parent": "tractor",
+      "pivot": [
+        -1.62,
+        -0.53,
+        0.92
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "lift_arm_R",
+        "target_point": [
+          -2.056,
+          -0.53,
+          1.46
+        ],
+        "stretch": false,
+        "note": "assist cylinder barrel, follows the lift arm"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3022,
+          -0.042,
+          -0.04
+        ],
+        "max": [
+          0.04,
+          0.042,
+          0.3605
+        ]
+      }
+    },
+    {
+      "name": "lift_ram_rod_R",
+      "parent": "lift_arm_R",
+      "pivot": [
+        -2.056,
+        -0.53,
+        1.46
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "lift_ram_R",
+        "target_point": [
+          -1.62,
+          -0.53,
+          0.92
+        ],
+        "stretch": false,
+        "note": "assist cylinder rod, follows the barrel"
+      },
+      "bounds_local": {
+        "min": [
+          -0.035,
+          -0.025,
+          -0.3371
+        ],
+        "max": [
+          0.2779,
+          0.025,
+          0.035
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "socket_3pt_top",
+      "parent": "top_link",
+      "position": [
+        -2.54,
+        0.0,
+        1.24
+      ],
+      "note": "three-point linkage top link pin (implement top point)"
+    },
+    {
+      "name": "socket_3pt_L",
+      "parent": "lower_link_L",
+      "position": [
+        -2.46,
+        0.5,
+        0.6
+      ],
+      "note": "three-point linkage lower link ball end (implement lower hitch point)"
+    },
+    {
+      "name": "socket_3pt_R",
+      "parent": "lower_link_R",
+      "position": [
+        -2.46,
+        -0.5,
+        0.6
+      ],
+      "note": "three-point linkage lower link ball end (implement lower hitch point)"
+    },
+    {
+      "name": "socket_hitch",
+      "parent": "tractor",
+      "position": [
+        -2.45,
+        0.0,
+        0.5
+      ],
+      "note": "drawbar pin centre (trailer eye couples here), 0.50 m above ground"
+    },
+    {
+      "name": "socket_pto",
+      "parent": "pto",
+      "position": [
+        -2.09,
+        0.0,
+        0.74
+      ],
+      "note": "PTO stub end (1 3/8 in, 6 splines)"
+    },
+    {
+      "name": "socket_driver_eye",
+      "parent": "tractor",
+      "position": [
+        -1.08,
+        0.0,
+        2.62
+      ],
+      "note": "driver eye point (camera)"
+    },
+    {
+      "name": "socket_exhaust",
+      "parent": "tractor",
+      "position": [
+        0.24,
+        -0.62,
+        3.12
+      ],
+      "note": "exhaust stack outlet (points up)"
+    },
+    {
+      "name": "socket_ballast_front",
+      "parent": "tractor",
+      "position": [
+        2.4,
+        0.0,
+        0.99
+      ],
+      "note": "front ballast block centre (~900 kg)"
+    }
+  ],
+  "lights": {
+    "head": {
+      "materials": [
+        "light_head"
+      ],
+      "emissive_on": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "tail": {
+      "materials": [
+        "light_tail"
+      ],
+      "emissive_on": [
+        1.0,
+        0.03,
+        0.02
+      ],
+      "emissive_strength_on": 2.0
+    },
+    "brake": {
+      "materials": [
+        "light_brake"
+      ],
+      "emissive_on": [
+        1.0,
+        0.02,
+        0.01
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "indicator_left": {
+      "materials": [
+        "light_indicator_left"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "indicator_right": {
+      "materials": [
+        "light_indicator_right"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "work": {
+      "materials": [
+        "light_work"
+      ],
+      "emissive_on": [
+        1.0,
+        0.97,
+        0.9
+      ],
+      "emissive_strength_on": 10.0
+    },
+    "beacon": {
+      "materials": [
+        "light_beacon"
+      ],
+      "emissive_on": [
+        1.0,
+        0.55,
+        0.0
+      ],
+      "emissive_strength_on": 8.0
+    }
+  },
+  "notes": [
+    "Generic ~200 hp row-crop tractor; dimensions are class-typical, not a specific production machine.",
+    "Drawbar pin (socket_hitch) at x = -2.45, z = 0.50 m (HITCH_HEIGHT, same value as trailer_tipper.HITCH_HEIGHT), 0.36 m behind the PTO stub end; the drawbar is rigid on the body.",
+    "Farm tyres: wheel radius in the extras is the nominal radius over the lugs (rear 1.025, front 0.80); the carcass is lug_height smaller (rear 0.065, front 0.05).",
+    "Front axle: pendulum pivot at (1.4, 0.0, 0.86) about x (+-10 deg); steering axes (kingpins) are vertical at x = 1.4, y = +-0.8, i.e. 0.15 m inboard of the tyre centre (scrub radius). Both steer joints are independent: the sim sets Ackermann angles.",
+    "Steering clearance: with the front axle level, +-50 deg lock clears the hood (wasp waist) and frame. With the axle oscillated towards a wheel, that wheel's fender/tyre touch the hood beyond ~25 deg lock at 10 deg oscillation (~35 deg at 6 deg); a sim wanting clean visuals can clamp the combination.",
+    "Rear wheels are on the rigid body (no suspension); tyres touch z = 0 at rest.",
+    "Three-point linkage kinematic loop: lift rod rest length 0.821 m between the lift arm end (arm length 0.569 m from its pivot) and the lower link pin (0.522 m from the link pivot). The sim should drive lower_link_* from lift_arm_* so this distance stays constant; the aim links follow either way (lift rods stretch, assist rams telescope).",
+    "Aim links: rest direction pivot -> target_point is modelled; stretch scales along it.",
+    "PTO: 540/1000 rpm stub at socket_pto, axis +x, + = clockwise seen from behind (standard).",
+    "Mass hints (not in the geometry): ~9.5 t operating mass, ~40 % front / 60 % rear without ballast; front weight block ~0.9 t."
+  ]
+}

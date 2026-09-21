@@ -1,0 +1,726 @@
+{
+  "format": "physics_sim.rig/1",
+  "model": "car_shitbox.glb",
+  "title": "Shitbox (worn-out hatchback)",
+  "description": "Worn-out late-80s style 3-door hatchback supermini, 3.74 m, 155/70 R13 steel wheels, front-engine front-wheel-drive layout.",
+  "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
+  "origin": "Ground plane below the wheel centres, x = 0 midway between the axles, y = 0 on the centreline.",
+  "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
+  "overall_bounds": {
+    "min": [
+      -1.851,
+      -0.935,
+      0.0
+    ],
+    "max": [
+      1.9302,
+      0.935,
+      1.5382
+    ]
+  },
+  "nodes": [
+    {
+      "name": "car_shitbox",
+      "parent": null,
+      "pivot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_local": {
+        "min": [
+          -1.851,
+          -0.8589,
+          0.1595
+        ],
+        "max": [
+          1.9302,
+          0.8589,
+          1.5382
+        ]
+      }
+    },
+    {
+      "name": "susp_FL",
+      "parent": "car_shitbox",
+      "pivot": [
+        1.175,
+        0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.08,
+        "max": 0.08,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FL",
+      "parent": "susp_FL",
+      "pivot": [
+        1.175,
+        0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.6632251157578453,
+        "max": 0.6632251157578453,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1058,
+          -0.05,
+          0.0494
+        ],
+        "max": [
+          -0.0261,
+          0.01,
+          0.139
+        ]
+      }
+    },
+    {
+      "name": "wheel_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.175,
+        0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.274,
+          -0.0775,
+          -0.274
+        ],
+        "max": [
+          0.274,
+          0.0794,
+          0.274
+        ]
+      },
+      "wheel": {
+        "radius": 0.274,
+        "width": 0.155,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_FR",
+      "parent": "car_shitbox",
+      "pivot": [
+        1.175,
+        -0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.08,
+        "max": 0.08,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FR",
+      "parent": "susp_FR",
+      "pivot": [
+        1.175,
+        -0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.6632251157578453,
+        "max": 0.6632251157578453,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1058,
+          -0.01,
+          0.0494
+        ],
+        "max": [
+          -0.0261,
+          0.05,
+          0.139
+        ]
+      }
+    },
+    {
+      "name": "wheel_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.175,
+        -0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.274,
+          -0.0794,
+          -0.274
+        ],
+        "max": [
+          0.274,
+          0.0775,
+          0.274
+        ]
+      },
+      "wheel": {
+        "radius": 0.274,
+        "width": 0.155,
+        "side": "right"
+      }
+    },
+    {
+      "name": "susp_RL",
+      "parent": "car_shitbox",
+      "pivot": [
+        -1.175,
+        0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.08,
+        "max": 0.08,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.115,
+          -0.045,
+          -0.115
+        ],
+        "max": [
+          0.115,
+          0.02,
+          0.115
+        ]
+      }
+    },
+    {
+      "name": "wheel_RL",
+      "parent": "susp_RL",
+      "pivot": [
+        -1.175,
+        0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.274,
+          -0.0775,
+          -0.274
+        ],
+        "max": [
+          0.274,
+          0.0794,
+          0.274
+        ]
+      },
+      "wheel": {
+        "radius": 0.274,
+        "width": 0.155,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_RR",
+      "parent": "car_shitbox",
+      "pivot": [
+        -1.175,
+        -0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.08,
+        "max": 0.08,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.115,
+          -0.02,
+          -0.115
+        ],
+        "max": [
+          0.115,
+          0.045,
+          0.115
+        ]
+      }
+    },
+    {
+      "name": "wheel_RR",
+      "parent": "susp_RR",
+      "pivot": [
+        -1.175,
+        -0.685,
+        0.274
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.274,
+          -0.0794,
+          -0.274
+        ],
+        "max": [
+          0.274,
+          0.0775,
+          0.274
+        ]
+      },
+      "wheel": {
+        "radius": 0.274,
+        "width": 0.155,
+        "side": "right"
+      }
+    },
+    {
+      "name": "door_L",
+      "parent": "car_shitbox",
+      "pivot": [
+        0.84,
+        0.78,
+        0.6
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          -1
+        ],
+        "min": 0.0,
+        "max": 1.1868238913561442,
+        "note": "door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -1.1593,
+          -0.1061,
+          -0.3627
+        ],
+        "max": [
+          -0.0097,
+          0.155,
+          0.7244
+        ]
+      }
+    },
+    {
+      "name": "door_R",
+      "parent": "car_shitbox",
+      "pivot": [
+        0.84,
+        -0.78,
+        0.6
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": 0.0,
+        "max": 1.1868238913561442,
+        "note": "door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -1.1593,
+          -0.155,
+          -0.3626
+        ],
+        "max": [
+          -0.0097,
+          0.1061,
+          0.7244
+        ]
+      }
+    },
+    {
+      "name": "hood",
+      "parent": "car_shitbox",
+      "pivot": [
+        0.97,
+        0.0,
+        0.87379
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": 0.0,
+        "max": 0.9599310885968813,
+        "note": "hood opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          0.0279,
+          -0.5661,
+          -0.1969
+        ],
+        "max": [
+          0.8801,
+          0.5663,
+          -0.0026
+        ]
+      }
+    },
+    {
+      "name": "hatch",
+      "parent": "car_shitbox",
+      "pivot": [
+        -1.53,
+        0.0,
+        1.38343
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": 0.0,
+        "max": 1.3089969389957472,
+        "note": "hatch opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -0.256,
+          -0.6409,
+          -0.8594
+        ],
+        "max": [
+          -0.0137,
+          0.6409,
+          -0.0158
+        ]
+      }
+    },
+    {
+      "name": "steering_wheel",
+      "parent": "car_shitbox",
+      "pivot": [
+        0.42,
+        0.36,
+        0.84
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.8983843609192009,
+          -0.0,
+          0.43921013200494263
+        ],
+        "min": -9.42477796076938,
+        "max": 9.42477796076938,
+        "note": "steering wheel angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1003,
+          -0.207,
+          -0.1874
+        ],
+        "max": [
+          0.1003,
+          0.207,
+          0.1874
+        ]
+      }
+    },
+    {
+      "name": "wiper_L",
+      "parent": "car_shitbox",
+      "pivot": [
+        0.905,
+        0.05,
+        0.95069
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0.6598779873294539,
+          0.0,
+          0.75137277155752
+        ],
+        "min": 0.0,
+        "max": 1.7453292519943295,
+        "note": "wiper sweep"
+      },
+      "bounds_local": {
+        "min": [
+          -0.028,
+          -0.016,
+          -0.015
+        ],
+        "max": [
+          0.0152,
+          0.5,
+          0.018
+        ]
+      }
+    },
+    {
+      "name": "wiper_R",
+      "parent": "car_shitbox",
+      "pivot": [
+        0.905,
+        -0.52,
+        0.93224
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0.6598779873294539,
+          0.0,
+          0.75137277155752
+        ],
+        "min": 0.0,
+        "max": 1.7453292519943295,
+        "note": "wiper sweep"
+      },
+      "bounds_local": {
+        "min": [
+          -0.028,
+          -0.016,
+          -0.015
+        ],
+        "max": [
+          0.0152,
+          0.46,
+          0.018
+        ]
+      }
+    },
+    {
+      "name": "wiper_rear",
+      "parent": "hatch",
+      "pivot": [
+        -1.74017,
+        0.0,
+        1.00698
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.9371850772747777,
+          0.0,
+          0.3488325256243588
+        ],
+        "min": 0.0,
+        "max": 1.9198621771937625,
+        "note": "rear wiper sweep"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0194,
+          -0.4,
+          -0.0212
+        ],
+        "max": [
+          0.0241,
+          0.016,
+          0.0195
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "socket_driver_eye",
+      "parent": "car_shitbox",
+      "position": [
+        -0.22,
+        0.36,
+        1.14
+      ],
+      "note": "driver eye point (camera)"
+    },
+    {
+      "name": "socket_tow_front",
+      "parent": "car_shitbox",
+      "position": [
+        1.9,
+        0.3,
+        0.26
+      ],
+      "note": "front towing eye"
+    },
+    {
+      "name": "socket_tow_rear",
+      "parent": "car_shitbox",
+      "position": [
+        -1.82,
+        0.3,
+        0.28
+      ],
+      "note": "rear towing eye"
+    },
+    {
+      "name": "socket_exhaust",
+      "parent": "car_shitbox",
+      "position": [
+        -1.83,
+        -0.42,
+        0.21
+      ],
+      "note": "exhaust outlet (points -x)"
+    }
+  ],
+  "lights": {
+    "head": {
+      "materials": [
+        "light_head"
+      ],
+      "emissive_on": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "tail": {
+      "materials": [
+        "light_tail"
+      ],
+      "emissive_on": [
+        1.0,
+        0.03,
+        0.02
+      ],
+      "emissive_strength_on": 2.0
+    },
+    "brake": {
+      "materials": [
+        "light_brake"
+      ],
+      "emissive_on": [
+        1.0,
+        0.02,
+        0.01
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "indicator_left": {
+      "materials": [
+        "light_indicator_left"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "indicator_right": {
+      "materials": [
+        "light_indicator_right"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "reverse": {
+      "materials": [
+        "light_reverse"
+      ],
+      "emissive_on": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "emissive_strength_on": 5.0
+    }
+  },
+  "notes": [
+    "Generic worn-out late-80s style supermini hatchback; dimensions are class-typical, not a specific production car.",
+    "Front-wheel drive, front-engine (transverse) layout; front discs, rear drums.",
+    "Rear right wheel has no hubcap (wheel tag RR_nocap); visual only.",
+    "door_R is a mismatched green junkyard door; it opens like door_L (mirror image).",
+    "The hatch includes the rear glass, the plate and the rear wiper (wiper_rear is its child).",
+    "Bumpers are unpainted plastic protruding ~5 cm from the body: overall length 3.74 m; the antenna tip reaches z = 1.54 m."
+  ]
+}

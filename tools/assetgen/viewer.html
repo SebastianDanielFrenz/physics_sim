@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vehicle Model Viewer</title>
+<style>
+  :root { --bg:#1b1d21; --panel:#23262c; --text:#e6e6e6; --muted:#9aa0a8; --accent:#6aa8ff; --line:#343841; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.35 system-ui,sans-serif; }
+  #app { display:flex; height:100%; }
+  #view { flex:1; position:relative; min-width:0; }
+  canvas { display:block; }
+  #side { width:320px; background:var(--panel); border-left:1px solid var(--line); overflow:auto; padding:10px 12px; box-sizing:border-box; }
+  h1 { font-size:15px; margin:0 0 6px; } h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:14px 0 6px; }
+  select,button { background:#2d3139; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 6px; font:inherit; }
+  button.on { background:var(--accent); color:#000; }
+  .row { display:grid; grid-template-columns: 1fr 64px; gap:2px 6px; align-items:center; margin:3px 0; }
+  .row label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+  .row .val { color:var(--muted); text-align:right; font-variant-numeric:tabular-nums; }
+  .row input[type=range] { grid-column: 1 / 3; width:100%; }
+  .btns { display:flex; flex-wrap:wrap; gap:4px; }
+  #stats { color:var(--muted); font-size:12px; white-space:pre-wrap; }
+  #hint { position:absolute; left:8px; bottom:6px; color:var(--muted); font-size:12px; }
+  @media (max-width: 700px) { #app { flex-direction:column; } #side { width:100%; height:45%; border-left:0; border-top:1px solid var(--line);} }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="view"><div id="hint">drag: orbit · right-drag: pan · wheel: zoom</div></div>
+  <div id="side">
+    <h1>Vehicle models</h1>
+    <select id="model"></select>
+    <div class="btns" style="margin-top:6px">
+      <button data-view="iso">3/4</button><button data-view="side">side</button><button data-view="front">front</button>
+      <button data-view="rear">rear</button><button data-view="top">top</button>
+      <button id="wire">wire</button><button id="reset">reset joints</button>
+    </div>
+    <h2>Lights</h2><div id="lights" class="btns"></div>
+    <h2>Animate</h2><div id="anim" class="btns"></div>
+    <h2>Joints</h2><div id="joints"></div>
+    <h2>Stats</h2><div id="stats"></div>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fb3c8);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 500);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(8, 14, 10); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -14, right: 14, top: 14, bottom: -14, near: 1, far: 60 });
+scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x7d7f7a, roughness: 0.95 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+const grid = new THREE.GridHelper(40, 40, 0x555555, 0x666666); grid.position.y = 0.002; scene.add(grid);
+
+let root = null, joints = [], lights = [], anims = {}, size = new THREE.Vector3(), center = new THREE.Vector3();
+const loader = new GLTFLoader();
+const state = { values: {} };
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+
+async function loadIndex() {
+  const idx = await (await fetch('../../data/models/index.json', { cache: 'no-store' })).json();
+  const sel = document.getElementById('model');
+  sel.innerHTML = idx.map(m => `<option value="${m.id}">${m.title}</option>`).join('');
+  const want = new URLSearchParams(location.search).get('model');
+  if (want) sel.value = want;
+  sel.onchange = () => load(sel.value);
+  await load(sel.value);
+}
+
+function load(id) {
+  return new Promise((resolve, reject) => {
+    loader.load(`../../data/models/${id}/${id}.glb?t=${Date.now()}`, gltf => {
+      if (root) scene.remove(root);
+      root = gltf.scene; scene.add(root);
+      joints = []; lights = []; anims = {}; state.values = {};
+      const mats = new Map();
+      let tris = 0;
+      root.traverse(o => {
+        if (o.isMesh) {
+          o.castShadow = true; o.receiveShadow = true;
+          tris += o.geometry.index ? o.geometry.index.count / 3 : 0;
+          const ms = Array.isArray(o.material) ? o.material : [o.material];
+          ms.forEach(m => mats.set(m.name, m));
+        }
+        const j = o.userData && o.userData.joint;
+        if (j) joints.push({ node: o, j, restPos: o.position.clone(), restQuat: o.quaternion.clone(), restScale: o.scale.clone() });
+      });
+      for (const m of mats.values()) if (m.userData && m.userData.light) lights.push(m);
+      new THREE.Box3().setFromObject(root).getSize(size);
+      new THREE.Box3().setFromObject(root).getCenter(center);
+      buildUI(tris, mats.size);
+      setView('iso');
+      resolve();
+    }, undefined, reject);
+  });
+}
+
+function fmt(j, v) { return j.type === 'prismatic' ? v.toFixed(3) + ' m' : (v * 180 / Math.PI).toFixed(1) + '°'; }
+
+function buildUI(tris, nmats) {
+  const jd = document.getElementById('joints'); jd.innerHTML = '';
+  const ad = document.getElementById('anim'); ad.innerHTML = '';
+  for (const J of joints) {
+    const { j, node } = J;
+    if (j.type === 'aim') continue;
+    if (j.type === 'continuous') {
+      const b = document.createElement('button'); b.textContent = node.name;
+      b.onclick = () => { anims[node.name] = !anims[node.name]; b.classList.toggle('on', !!anims[node.name]); };
+      ad.appendChild(b); continue;
+    }
+    const row = document.createElement('div'); row.className = 'row';
+    row.innerHTML = `<label title="${j.note || ''}">${node.name}</label><span class="val"></span><input type="range" min="${j.min}" max="${j.max}" step="${(j.max - j.min) / 400}" value="0">`;
+    const input = row.querySelector('input'), val = row.querySelector('.val');
+    const upd = () => { setJoint(node.name, parseFloat(input.value)); val.textContent = fmt(j, parseFloat(input.value)); };
+    input.oninput = upd; val.textContent = fmt(j, 0); J.input = input; J.val = val;
+    jd.appendChild(row);
+  }
+  if (joints.some(J => J.j.type === 'continuous')) {
+    const all = document.createElement('button'); all.textContent = 'all wheels';
+    all.onclick = () => { const on = !all.classList.contains('on'); all.classList.toggle('on', on);
+      joints.filter(J => J.j.type === 'continuous' && J.node.name.startsWith('wheel_')).forEach(J => anims[J.node.name] = on); };
+    ad.prepend(all);
+  }
+  const ld = document.getElementById('lights'); ld.innerHTML = '';
+  const byFn = {};
+  for (const m of lights) (byFn[m.userData.light] ||= []).push(m);
+  for (const [fn, ms] of Object.entries(byFn)) {
+    const b = document.createElement('button'); b.textContent = fn;
+    b.onclick = () => { const on = !b.classList.contains('on'); b.classList.toggle('on', on); setLight(fn, on); };
+    ld.appendChild(b);
+  }
+  document.getElementById('stats').textContent =
+    `${Math.round(tris)} triangles, ${nmats} materials, ${joints.length} joints\n` +
+    `size (glTF x/y/z): ${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)} m`;
+}
+
+function setLight(fn, on) {
+  for (const m of lights) if (m.userData.light === fn) {
+    const c = m.userData.emissive_on;
+    m.emissive.setRGB(on ? c[0] : 0, on ? c[1] : 0, on ? c[2] : 0);
+    m.emissiveIntensity = on ? m.userData.emissive_strength_on : 1;
+  }
+}
+
+function setJoint(name, v) {
+  const J = joints.find(J => J.node.name === name); if (!J) return false;
+  state.values[name] = v;
+  const a = new THREE.Vector3().fromArray(J.j.axis);
+  if (J.j.type === 'prismatic') J.node.position.copy(J.restPos).addScaledVector(a, v);
+  else J.node.quaternion.copy(J.restQuat).multiply(new THREE.Quaternion().setFromAxisAngle(a, v));
+  if (J.input) { J.input.value = v; J.val.textContent = fmt(J.j, v); }
+  return true;
+}
+
+// Aim links: keep the rest direction node -> target_point (model frame at rest) pointing at
+// the same point as carried by the moving target node; optionally stretch along it.
+// Assumes the model root sits at the scene origin with identity rotation (as loaded here).
+function updateAims() {
+  if (!root) return;
+  root.updateMatrixWorld(true);
+  for (const J of joints) {
+    if (J.j.type !== 'aim') continue;
+    const tgt = root.getObjectByName(J.j.target); if (!tgt) continue;
+    if (!J.aimInit) {  // everything is still at rest the first time through
+      const tp = new THREE.Vector3().fromArray(J.j.target_point);
+      J.local = tgt.worldToLocal(tp.clone());            // target point in the target's frame
+      const nw = J.node.getWorldPosition(new THREE.Vector3());
+      J.restDir = tp.clone().sub(nw);
+      J.restLen = J.restDir.length();
+      J.restDir.normalize();
+      J.aimInit = true;
+    }
+    const tw = tgt.localToWorld(J.local.clone());
+    const nw = J.node.getWorldPosition(new THREE.Vector3());
+    const dir = tw.sub(nw);
+    const len = dir.length(); dir.normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(J.restDir, dir);        // world delta
+    const pq = J.node.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+    const lq = pq.multiply(q).multiply(J.restQuat);                              // local rotation
+    // local = T(rest position) * R * S, S = I + (s-1) d d^T stretches along the rest direction d
+    // (d is the same in the node frame, since the rest rotation is identity)
+    const s = J.j.stretch && J.restLen > 1e-6 ? len / J.restLen : 1, d = J.restDir;
+    const S = new THREE.Matrix4().set(
+      1 + (s - 1) * d.x * d.x, (s - 1) * d.x * d.y, (s - 1) * d.x * d.z, 0,
+      (s - 1) * d.y * d.x, 1 + (s - 1) * d.y * d.y, (s - 1) * d.y * d.z, 0,
+      (s - 1) * d.z * d.x, (s - 1) * d.z * d.y, 1 + (s - 1) * d.z * d.z, 0, 0, 0, 0, 1);
+    J.node.matrixAutoUpdate = false;
+    J.node.matrix.makeRotationFromQuaternion(lq).multiply(S).setPosition(J.restPos);
+    J.node.matrixWorldNeedsUpdate = true;
+  }
+}
+
+function setView(k) {
+  const d = Math.max(size.x, size.y, size.z) * 1.6 + 2;
+  const c = center;
+  const v = { iso: [0.75, 0.45, 0.85], side: [1, 0.15, 0], front: [0, 0.2, 1], rear: [0, 0.25, -1], top: [0.001, 1, 0] }[k];
+  camera.position.set(c.x + v[0] * d, c.y + v[1] * d, c.z + v[2] * d);
+  controls.target.copy(c); controls.update();
+}
+document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => setView(b.dataset.view));
+document.getElementById('wire').onclick = e => { const on = !e.target.classList.contains('on'); e.target.classList.toggle('on', on);
+  root && root.traverse(o => { if (o.isMesh) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.wireframe = on); }); };
+document.getElementById('reset').onclick = () => joints.forEach(J => J.j.type !== 'aim' && J.j.type !== 'continuous' && setJoint(J.node.name, 0));
+
+let last = performance.now();
+function tick(t) {
+  const dt = Math.min(0.05, (t - last) / 1000); last = t;
+  for (const J of joints) if (anims[J.node.name]) {
+    const a = new THREE.Vector3().fromArray(J.j.axis);
+    J.node.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(a, dt * 4));
+  }
+  updateAims();
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+window.viewer = { load, setJoint, setLight, setView, joints: () => joints.map(J => ({ name: J.node.name, ...J.j })),
+  camera, controls, scene, THREE, ready: false };
+resize();
+loadIndex().then(() => { window.viewer.ready = true; });
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

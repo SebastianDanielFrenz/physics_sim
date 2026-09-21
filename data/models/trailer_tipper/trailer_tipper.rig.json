@@ -1,0 +1,475 @@
+{
+  "format": "physics_sim.rig/1",
+  "model": "trailer_tipper.glb",
+  "title": "Tandem tipping trailer (14 t)",
+  "description": "Generic tandem-axle agricultural rear-tipping trailer, 6.0 m bed, 560/60 R22.5, walking-beam bogie, telescopic front ram, A-frame drawbar.",
+  "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
+  "origin": "Ground plane below the wheel centres, x = 0 midway between the two axles, y = 0 on the centreline.",
+  "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
+  "overall_bounds": {
+    "min": [
+      -2.665,
+      -1.265,
+      0.0
+    ],
+    "max": [
+      5.025,
+      1.265,
+      2.666
+    ]
+  },
+  "nodes": [
+    {
+      "name": "trailer_tipper",
+      "parent": null,
+      "pivot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_local": {
+        "min": [
+          -2.665,
+          -1.265,
+          0.44
+        ],
+        "max": [
+          5.025,
+          1.265,
+          1.34
+        ]
+      }
+    },
+    {
+      "name": "jack",
+      "parent": "trailer_tipper",
+      "pivot": [
+        4.1,
+        0.0,
+        0.27
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          -1
+        ],
+        "min": 0.0,
+        "max": 0.32,
+        "note": "parking leg extension, + = foot down; foot reaches the ground at 0.25"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1,
+          -0.1,
+          -0.02
+        ],
+        "max": [
+          0.1,
+          0.1,
+          0.35
+        ]
+      }
+    },
+    {
+      "name": "bogie",
+      "parent": "trailer_tipper",
+      "pivot": [
+        0.0,
+        0.0,
+        0.72
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.08726646259971647,
+        "max": 0.08726646259971647,
+        "note": "walking-beam pitch, + = front axle down / rear axle up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.975,
+          -0.86,
+          -0.18
+        ],
+        "max": [
+          0.975,
+          0.86,
+          0.08
+        ]
+      }
+    },
+    {
+      "name": "wheel_1L",
+      "parent": "bogie",
+      "pivot": [
+        0.8,
+        0.95,
+        0.62
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.62,
+          -0.28,
+          -0.62
+        ],
+        "max": [
+          0.62,
+          0.28,
+          0.62
+        ]
+      },
+      "wheel": {
+        "radius": 0.62,
+        "width": 0.56,
+        "side": "left"
+      }
+    },
+    {
+      "name": "wheel_1R",
+      "parent": "bogie",
+      "pivot": [
+        0.8,
+        -0.95,
+        0.62
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.62,
+          -0.28,
+          -0.62
+        ],
+        "max": [
+          0.62,
+          0.28,
+          0.62
+        ]
+      },
+      "wheel": {
+        "radius": 0.62,
+        "width": 0.56,
+        "side": "right"
+      }
+    },
+    {
+      "name": "wheel_2L",
+      "parent": "bogie",
+      "pivot": [
+        -0.8,
+        0.95,
+        0.62
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.62,
+          -0.28,
+          -0.62
+        ],
+        "max": [
+          0.62,
+          0.28,
+          0.62
+        ]
+      },
+      "wheel": {
+        "radius": 0.62,
+        "width": 0.56,
+        "side": "left"
+      }
+    },
+    {
+      "name": "wheel_2R",
+      "parent": "bogie",
+      "pivot": [
+        -0.8,
+        -0.95,
+        0.62
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.62,
+          -0.28,
+          -0.62
+        ],
+        "max": [
+          0.62,
+          0.28,
+          0.62
+        ]
+      },
+      "wheel": {
+        "radius": 0.62,
+        "width": 0.56,
+        "side": "right"
+      }
+    },
+    {
+      "name": "bed",
+      "parent": "trailer_tipper",
+      "pivot": [
+        -2.5,
+        0.0,
+        1.28
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": 0.0,
+        "max": 0.8726646259971648,
+        "note": "tipping angle about the rear hinge, + = front up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.085,
+          -1.25,
+          -0.23
+        ],
+        "max": [
+          6.166,
+          1.25,
+          1.386
+        ]
+      }
+    },
+    {
+      "name": "tailgate",
+      "parent": "bed",
+      "pivot": [
+        -2.575,
+        0.0,
+        2.62
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": 0.0,
+        "max": 1.7453292519943295,
+        "note": "tailgate swing about its top hinge, + = bottom swings out"
+      },
+      "bounds_local": {
+        "min": [
+          -0.07,
+          -1.2,
+          -1.225
+        ],
+        "max": [
+          0.04,
+          1.2,
+          0.04
+        ]
+      }
+    },
+    {
+      "name": "ram_barrel",
+      "parent": "trailer_tipper",
+      "pivot": [
+        3.52,
+        0.0,
+        0.6
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "bed",
+        "target_point": [
+          3.28,
+          0.0,
+          1.235
+        ],
+        "stretch": false,
+        "note": "tipping ram outer barrel, follows the bed"
+      },
+      "bounds_local": {
+        "min": [
+          -0.2968,
+          -0.112,
+          -0.07
+        ],
+        "max": [
+          0.0935,
+          0.112,
+          0.5476
+        ]
+      }
+    },
+    {
+      "name": "ram_stages",
+      "parent": "bed",
+      "pivot": [
+        3.28,
+        0.0,
+        1.235
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "ram_barrel",
+        "target_point": [
+          3.52,
+          0.0,
+          0.6
+        ],
+        "stretch": true,
+        "note": "tipping ram inner stages: stretch from the bed bracket back to the barrel base"
+      },
+      "bounds_local": {
+        "min": [
+          -0.05,
+          -0.085,
+          -0.6328
+        ],
+        "max": [
+          0.3063,
+          0.085,
+          0.05
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "socket_tipping_hinge",
+      "parent": "trailer_tipper",
+      "position": [
+        -2.5,
+        0.0,
+        1.28
+      ],
+      "note": "bed tipping hinge axis (along y)"
+    },
+    {
+      "name": "socket_hitch_eye",
+      "parent": "trailer_tipper",
+      "position": [
+        4.95,
+        0.0,
+        0.5
+      ],
+      "note": "hitch eye centre, 0.50 m above ground; couples to tractor socket_hitch"
+    },
+    {
+      "name": "socket_jack_foot",
+      "parent": "jack",
+      "position": [
+        4.1,
+        0.0,
+        0.25
+      ],
+      "note": "parking leg foot contact point"
+    },
+    {
+      "name": "socket_bed_centre",
+      "parent": "bed",
+      "position": [
+        0.5,
+        0.0,
+        2.0
+      ],
+      "note": "centroid of the bed's inner volume (load mass point when level-full)"
+    }
+  ],
+  "lights": {
+    "tail": {
+      "materials": [
+        "light_tail"
+      ],
+      "emissive_on": [
+        1.0,
+        0.03,
+        0.02
+      ],
+      "emissive_strength_on": 2.0
+    },
+    "brake": {
+      "materials": [
+        "light_brake"
+      ],
+      "emissive_on": [
+        1.0,
+        0.02,
+        0.01
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "indicator_left": {
+      "materials": [
+        "light_indicator_left"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "indicator_right": {
+      "materials": [
+        "light_indicator_right"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    }
+  },
+  "notes": [
+    "Generic tandem tipping trailer; dimensions are class-typical, not a specific production machine.",
+    "Hitch eye (socket_hitch_eye) at x = 4.95, z = 0.50 m (HITCH_HEIGHT, same value as tractor.HITCH_HEIGHT): coupled on flat ground it coincides with the tractor's socket_hitch and the trailer stands level.",
+    "Drawbar length for off-tracking: hitch eye to axle-group centre (origin, bogie pivot x) = 4.95 m (horizontal).",
+    "Axles on a walking-beam bogie (bogie joint, +-5 deg, pivot at x = 0, z = 0.72); axle spacing 1.60 m, track 1.90 m; no steering. Tyres touch z = 0 at rest.",
+    "Bed tips about socket_tipping_hinge (x = -2.50, z = 1.28), 0..50 deg. Tipping ram: base (3.52, 0.0, 0.6) (chassis) to bed bracket (3.28, 0.0, 1.235) (bed), closed length 0.68 m; barrel = aim link without stretch, inner stages = aim link with stretch along the rest direction.",
+    "Bed inner 6.00 x 2.30 x 1.20 m = 16.6 m3 (floor top 1.40 m); socket_bed_centre is the centroid of the inner volume (child of bed, so it follows the tipping).",
+    "Tailgate hangs from its top hinge (child of bed); + swings the bottom rearward (free-swinging or latched).",
+    "Parking jack: prismatic, foot 0.25 m above ground at 0; value 0.25 touches the ground with the drawbar at hitch height.",
+    "Mass hints (not in the geometry): ~5.5 t empty, 14 t payload, ~1.5-2 t static drawbar load loaded."
+  ]
+}

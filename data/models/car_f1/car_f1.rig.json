@@ -1,0 +1,1540 @@
+{
+  "format": "physics_sim.rig/1",
+  "model": "car_f1.glb",
+  "title": "Formula car (open-wheel single-seater)",
+  "description": "Generic modern open-wheel single-seater, 5.48 m, wheelbase 3.40 m, 18-inch slicks.",
+  "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
+  "origin": "Ground plane below the wheel centres (tyres touch z = 0), x = 0 midway between the axles, y = 0 on the centreline.",
+  "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
+  "overall_bounds": {
+    "min": [
+      -2.648,
+      -0.9465,
+      0.0
+    ],
+    "max": [
+      2.86,
+      0.9465,
+      0.986
+    ]
+  },
+  "nodes": [
+    {
+      "name": "car_f1",
+      "parent": null,
+      "pivot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_local": {
+        "min": [
+          -2.648,
+          -0.907,
+          0.025
+        ],
+        "max": [
+          2.86,
+          0.907,
+          0.986
+        ]
+      }
+    },
+    {
+      "name": "steering_wheel",
+      "parent": "car_f1",
+      "pivot": [
+        0.36,
+        0.0,
+        0.645
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.9766444667050899,
+          -0.0,
+          0.21486178267511977
+        ],
+        "min": -3.141592653589793,
+        "max": 3.141592653589793,
+        "note": "steering wheel angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0337,
+          -0.145,
+          -0.0689
+        ],
+        "max": [
+          0.0306,
+          0.145,
+          0.0598
+        ]
+      }
+    },
+    {
+      "name": "front_flap",
+      "parent": "car_f1",
+      "pivot": [
+        2.555,
+        0.0,
+        0.135
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": -0.08726646259971647,
+        "max": 0.4363323129985824,
+        "note": "front wing flap pair angle about the hinge line, + = flatter (low drag)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.2864,
+          -0.9,
+          -0.012
+        ],
+        "max": [
+          -0.005,
+          0.9,
+          0.1864
+        ]
+      }
+    },
+    {
+      "name": "rear_flap",
+      "parent": "car_f1",
+      "pivot": [
+        -2.57553,
+        0.0,
+        0.942
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": 0.0,
+        "max": 0.5235987755982988,
+        "note": "rear wing flap angle about its trailing edge, + = opening (DRS / low drag)"
+      },
+      "bounds_local": {
+        "min": [
+          0.0,
+          -0.5,
+          -0.1134
+        ],
+        "max": [
+          0.1905,
+          0.5,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "susp_FL",
+      "parent": "car_f1",
+      "pivot": [
+        1.7,
+        0.8,
+        0.36
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.04,
+        "max": 0.03,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FL",
+      "parent": "susp_FL",
+      "pivot": [
+        1.7,
+        0.7,
+        0.36
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.3839724354387525,
+        "max": 0.3839724354387525,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1484,
+          -0.045,
+          -0.19
+        ],
+        "max": [
+          0.14,
+          0.11,
+          0.1945
+        ]
+      }
+    },
+    {
+      "name": "wheel_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.7,
+        0.8,
+        0.36
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.36,
+          -0.15,
+          -0.36
+        ],
+        "max": [
+          0.36,
+          0.1465,
+          0.36
+        ]
+      },
+      "wheel": {
+        "radius": 0.36,
+        "width": 0.3,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_FR",
+      "parent": "car_f1",
+      "pivot": [
+        1.7,
+        -0.8,
+        0.36
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.04,
+        "max": 0.03,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FR",
+      "parent": "susp_FR",
+      "pivot": [
+        1.7,
+        -0.7,
+        0.36
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.3839724354387525,
+        "max": 0.3839724354387525,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1484,
+          -0.11,
+          -0.19
+        ],
+        "max": [
+          0.14,
+          0.045,
+          0.1945
+        ]
+      }
+    },
+    {
+      "name": "wheel_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.7,
+        -0.8,
+        0.36
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.36,
+          -0.1465,
+          -0.36
+        ],
+        "max": [
+          0.36,
+          0.15,
+          0.36
+        ]
+      },
+      "wheel": {
+        "radius": 0.36,
+        "width": 0.3,
+        "side": "right"
+      }
+    },
+    {
+      "name": "susp_RL",
+      "parent": "car_f1",
+      "pivot": [
+        -1.7,
+        0.76,
+        0.36
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.045,
+        "max": 0.035,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.16,
+          -0.145,
+          -0.19
+        ],
+        "max": [
+          0.09,
+          0.01,
+          0.1945
+        ]
+      }
+    },
+    {
+      "name": "wheel_RL",
+      "parent": "susp_RL",
+      "pivot": [
+        -1.7,
+        0.76,
+        0.36
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.36,
+          -0.19,
+          -0.36
+        ],
+        "max": [
+          0.36,
+          0.1865,
+          0.36
+        ]
+      },
+      "wheel": {
+        "radius": 0.36,
+        "width": 0.38,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_RR",
+      "parent": "car_f1",
+      "pivot": [
+        -1.7,
+        -0.76,
+        0.36
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.045,
+        "max": 0.035,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.16,
+          -0.01,
+          -0.19
+        ],
+        "max": [
+          0.09,
+          0.145,
+          0.1945
+        ]
+      }
+    },
+    {
+      "name": "wheel_RR",
+      "parent": "susp_RR",
+      "pivot": [
+        -1.7,
+        -0.76,
+        0.36
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.36,
+          -0.1865,
+          -0.36
+        ],
+        "max": [
+          0.36,
+          0.19,
+          0.36
+        ]
+      },
+      "wheel": {
+        "radius": 0.36,
+        "width": 0.38,
+        "side": "right"
+      }
+    },
+    {
+      "name": "wishbone_upper_front_FL",
+      "parent": "car_f1",
+      "pivot": [
+        1.95,
+        0.1,
+        0.44
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FL",
+        "target_point": [
+          1.7,
+          0.7000000000000001,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.271,
+          -0.0088,
+          -0.0071
+        ],
+        "max": [
+          0.021,
+          0.618,
+          0.103
+        ]
+      }
+    },
+    {
+      "name": "wishbone_upper_rear_FL",
+      "parent": "car_f1",
+      "pivot": [
+        1.43,
+        0.16,
+        0.52
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FL",
+        "target_point": [
+          1.7,
+          0.7000000000000001,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0204,
+          -0.0102,
+          -0.013
+        ],
+        "max": [
+          0.2904,
+          0.558,
+          0.023
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_front_FL",
+      "parent": "car_f1",
+      "pivot": [
+        2.02,
+        0.09,
+        0.25
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FL",
+        "target_point": [
+          1.7,
+          0.7000000000000001,
+          0.205
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3402,
+          -0.0106,
+          -0.063
+        ],
+        "max": [
+          0.0202,
+          0.628,
+          0.0072
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_rear_FL",
+      "parent": "car_f1",
+      "pivot": [
+        1.4,
+        0.15,
+        0.27
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FL",
+        "target_point": [
+          1.7,
+          0.7000000000000001,
+          0.205
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.02,
+          -0.0109,
+          -0.083
+        ],
+        "max": [
+          0.32,
+          0.568,
+          0.0072
+        ]
+      }
+    },
+    {
+      "name": "trackrod_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.82,
+        0.705,
+        0.37
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "car_f1",
+        "target_point": [
+          1.8199999999999998,
+          0.05,
+          0.39
+        ],
+        "stretch": false,
+        "note": "steering track rod (visual): steering arm -> rack end inside the chassis"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0209,
+          -0.6715,
+          -0.0066
+        ],
+        "max": [
+          0.0209,
+          0.0002,
+          0.0365
+        ]
+      }
+    },
+    {
+      "name": "pushrod_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.68,
+        0.68,
+        0.235
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "car_f1",
+        "target_point": [
+          1.5999999999999999,
+          0.07,
+          0.5
+        ],
+        "stretch": false,
+        "note": "push rod (visual): upright -> rocker inside the chassis"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0995,
+          -0.6295,
+          -0.0114
+        ],
+        "max": [
+          0.0129,
+          0.0054,
+          0.2845
+        ]
+      }
+    },
+    {
+      "name": "wishbone_upper_front_FR",
+      "parent": "car_f1",
+      "pivot": [
+        1.95,
+        -0.1,
+        0.44
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FR",
+        "target_point": [
+          1.7,
+          -0.7000000000000001,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.271,
+          -0.618,
+          -0.0071
+        ],
+        "max": [
+          0.021,
+          0.0088,
+          0.103
+        ]
+      }
+    },
+    {
+      "name": "wishbone_upper_rear_FR",
+      "parent": "car_f1",
+      "pivot": [
+        1.43,
+        -0.16,
+        0.52
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FR",
+        "target_point": [
+          1.7,
+          -0.7000000000000001,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0204,
+          -0.558,
+          -0.013
+        ],
+        "max": [
+          0.2904,
+          0.0102,
+          0.023
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_front_FR",
+      "parent": "car_f1",
+      "pivot": [
+        2.02,
+        -0.09,
+        0.25
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FR",
+        "target_point": [
+          1.7,
+          -0.7000000000000001,
+          0.205
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3402,
+          -0.628,
+          -0.063
+        ],
+        "max": [
+          0.0202,
+          0.0106,
+          0.0072
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_rear_FR",
+      "parent": "car_f1",
+      "pivot": [
+        1.4,
+        -0.15,
+        0.27
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "steer_FR",
+        "target_point": [
+          1.7,
+          -0.7000000000000001,
+          0.205
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.02,
+          -0.568,
+          -0.083
+        ],
+        "max": [
+          0.32,
+          0.0109,
+          0.0072
+        ]
+      }
+    },
+    {
+      "name": "trackrod_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.82,
+        -0.705,
+        0.37
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "car_f1",
+        "target_point": [
+          1.8199999999999998,
+          -0.05,
+          0.39
+        ],
+        "stretch": false,
+        "note": "steering track rod (visual): steering arm -> rack end inside the chassis"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0209,
+          -0.0002,
+          -0.0066
+        ],
+        "max": [
+          0.0209,
+          0.6715,
+          0.0365
+        ]
+      }
+    },
+    {
+      "name": "pushrod_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.68,
+        -0.68,
+        0.235
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "car_f1",
+        "target_point": [
+          1.5999999999999999,
+          -0.07,
+          0.5
+        ],
+        "stretch": false,
+        "note": "push rod (visual): upright -> rocker inside the chassis"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0995,
+          -0.0054,
+          -0.0114
+        ],
+        "max": [
+          0.0129,
+          0.6295,
+          0.2845
+        ]
+      }
+    },
+    {
+      "name": "wishbone_upper_front_RL",
+      "parent": "car_f1",
+      "pivot": [
+        -1.45,
+        0.14,
+        0.52
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RL",
+        "target_point": [
+          -1.7,
+          0.66,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.2705,
+          -0.0099,
+          -0.013
+        ],
+        "max": [
+          0.0205,
+          0.538,
+          0.023
+        ]
+      }
+    },
+    {
+      "name": "wishbone_upper_rear_RL",
+      "parent": "car_f1",
+      "pivot": [
+        -1.95,
+        0.07,
+        0.42
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RL",
+        "target_point": [
+          -1.7,
+          0.66,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.021,
+          -0.0089,
+          -0.0071
+        ],
+        "max": [
+          0.271,
+          0.608,
+          0.123
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_front_RL",
+      "parent": "car_f1",
+      "pivot": [
+        -1.4,
+        0.2,
+        0.15
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RL",
+        "target_point": [
+          -1.7,
+          0.66,
+          0.2
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3191,
+          -0.0125,
+          -0.0072
+        ],
+        "max": [
+          0.0191,
+          0.478,
+          0.068
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_rear_RL",
+      "parent": "car_f1",
+      "pivot": [
+        -1.95,
+        0.09,
+        0.21
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RL",
+        "target_point": [
+          -1.7,
+          0.66,
+          0.2
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0209,
+          -0.0092,
+          -0.028
+        ],
+        "max": [
+          0.2709,
+          0.588,
+          0.008
+        ]
+      }
+    },
+    {
+      "name": "toelink_RL",
+      "parent": "car_f1",
+      "pivot": [
+        -1.95,
+        0.09,
+        0.33
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RL",
+        "target_point": [
+          -1.8399999999999999,
+          0.665,
+          0.33
+        ],
+        "stretch": false,
+        "note": "rear toe link (visual)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0205,
+          -0.0039,
+          -0.0165
+        ],
+        "max": [
+          0.1305,
+          0.5915,
+          0.0165
+        ]
+      }
+    },
+    {
+      "name": "pushrod_RL",
+      "parent": "susp_RL",
+      "pivot": [
+        -1.72,
+        0.63,
+        0.23
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "car_f1",
+        "target_point": [
+          -1.5999999999999999,
+          0.06,
+          0.49
+        ],
+        "stretch": false,
+        "note": "push rod (visual): upright -> rocker inside the chassis"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0127,
+          -0.5895,
+          -0.0113
+        ],
+        "max": [
+          0.1395,
+          0.0058,
+          0.2795
+        ]
+      }
+    },
+    {
+      "name": "driveshaft_RL",
+      "parent": "car_f1",
+      "pivot": [
+        -1.7,
+        0.12,
+        0.36
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RL",
+        "target_point": [
+          -1.7,
+          0.625,
+          0.36
+        ],
+        "stretch": false,
+        "note": "drive shaft (visual): gearbox -> hub"
+      },
+      "bounds_local": {
+        "min": [
+          -0.035,
+          0.0,
+          -0.04
+        ],
+        "max": [
+          0.035,
+          0.545,
+          0.04
+        ]
+      }
+    },
+    {
+      "name": "wishbone_upper_front_RR",
+      "parent": "car_f1",
+      "pivot": [
+        -1.45,
+        -0.14,
+        0.52
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RR",
+        "target_point": [
+          -1.7,
+          -0.66,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.2705,
+          -0.538,
+          -0.013
+        ],
+        "max": [
+          0.0205,
+          0.0099,
+          0.023
+        ]
+      }
+    },
+    {
+      "name": "wishbone_upper_rear_RR",
+      "parent": "car_f1",
+      "pivot": [
+        -1.95,
+        -0.07,
+        0.42
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RR",
+        "target_point": [
+          -1.7,
+          -0.66,
+          0.525
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.021,
+          -0.608,
+          -0.0071
+        ],
+        "max": [
+          0.271,
+          0.0089,
+          0.123
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_front_RR",
+      "parent": "car_f1",
+      "pivot": [
+        -1.4,
+        -0.2,
+        0.15
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RR",
+        "target_point": [
+          -1.7,
+          -0.66,
+          0.2
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3191,
+          -0.478,
+          -0.0072
+        ],
+        "max": [
+          0.0191,
+          0.0125,
+          0.068
+        ]
+      }
+    },
+    {
+      "name": "wishbone_lower_rear_RR",
+      "parent": "car_f1",
+      "pivot": [
+        -1.95,
+        -0.09,
+        0.21
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RR",
+        "target_point": [
+          -1.7,
+          -0.66,
+          0.2
+        ],
+        "stretch": false,
+        "note": "wishbone leg (visual): chassis pick-up -> upright ball joint"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0209,
+          -0.588,
+          -0.028
+        ],
+        "max": [
+          0.2709,
+          0.0092,
+          0.008
+        ]
+      }
+    },
+    {
+      "name": "toelink_RR",
+      "parent": "car_f1",
+      "pivot": [
+        -1.95,
+        -0.09,
+        0.33
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RR",
+        "target_point": [
+          -1.8399999999999999,
+          -0.665,
+          0.33
+        ],
+        "stretch": false,
+        "note": "rear toe link (visual)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0205,
+          -0.5915,
+          -0.0165
+        ],
+        "max": [
+          0.1305,
+          0.0039,
+          0.0165
+        ]
+      }
+    },
+    {
+      "name": "pushrod_RR",
+      "parent": "susp_RR",
+      "pivot": [
+        -1.72,
+        -0.63,
+        0.23
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "car_f1",
+        "target_point": [
+          -1.5999999999999999,
+          -0.06,
+          0.49
+        ],
+        "stretch": false,
+        "note": "push rod (visual): upright -> rocker inside the chassis"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0127,
+          -0.0058,
+          -0.0113
+        ],
+        "max": [
+          0.1395,
+          0.5895,
+          0.2795
+        ]
+      }
+    },
+    {
+      "name": "driveshaft_RR",
+      "parent": "car_f1",
+      "pivot": [
+        -1.7,
+        -0.12,
+        0.36
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "susp_RR",
+        "target_point": [
+          -1.7,
+          -0.625,
+          0.36
+        ],
+        "stretch": false,
+        "note": "drive shaft (visual): gearbox -> hub"
+      },
+      "bounds_local": {
+        "min": [
+          -0.035,
+          -0.545,
+          -0.04
+        ],
+        "max": [
+          0.035,
+          0.0,
+          0.04
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "socket_driver_eye",
+      "parent": "car_f1",
+      "position": [
+        0.03,
+        0.0,
+        0.805
+      ],
+      "note": "driver eye point (camera)"
+    },
+    {
+      "name": "socket_camera_onboard",
+      "parent": "car_f1",
+      "position": [
+        -0.4,
+        0.0,
+        0.99
+      ],
+      "note": "onboard T-bar camera on the roll hoop"
+    },
+    {
+      "name": "socket_jack_front",
+      "parent": "car_f1",
+      "position": [
+        2.74,
+        0.0,
+        0.12
+      ],
+      "note": "front jack point (nose tip, on the main plane)"
+    },
+    {
+      "name": "socket_jack_rear",
+      "parent": "car_f1",
+      "position": [
+        -2.23,
+        0.0,
+        0.3
+      ],
+      "note": "rear jack point (rear crash structure)"
+    },
+    {
+      "name": "socket_light_rear",
+      "parent": "car_f1",
+      "position": [
+        -2.23,
+        0.0,
+        0.32
+      ],
+      "note": "rear rain light"
+    }
+  ],
+  "lights": {
+    "rain": {
+      "materials": [
+        "light_rain"
+      ],
+      "emissive_on": [
+        1.0,
+        0.03,
+        0.02
+      ],
+      "emissive_strength_on": 10.0
+    },
+    "brake": {
+      "materials": [
+        "light_brake"
+      ],
+      "emissive_on": [
+        1.0,
+        0.02,
+        0.01
+      ],
+      "emissive_strength_on": 8.0
+    }
+  },
+  "aero": {
+    "frame": "ISO model frame at rest; angle_deg = element chord angle, + = trailing edge up",
+    "front_wing": {
+      "main_plane": {
+        "le_x": 2.82,
+        "le_z": 0.085,
+        "te_x": 2.5207,
+        "te_z": 0.1059,
+        "chord": 0.3,
+        "span": 1.8,
+        "angle_deg": 4.0,
+        "section": "NACA 5410, inverted"
+      },
+      "flap_1": {
+        "le_x": 2.55,
+        "le_z": 0.128,
+        "te_x": 2.3621,
+        "te_z": 0.1964,
+        "chord": 0.2,
+        "span": 1.54,
+        "angle_deg": 20.0,
+        "section": "NACA 6409, inverted"
+      },
+      "flap_2": {
+        "le_x": 2.39,
+        "le_z": 0.205,
+        "te_x": 2.2686,
+        "te_z": 0.2932,
+        "chord": 0.15,
+        "span": 1.54,
+        "angle_deg": 36.0,
+        "section": "NACA 6409, inverted"
+      },
+      "flap_node": "front_flap",
+      "pivot": [
+        2.555,
+        0.0,
+        0.135
+      ],
+      "axis": [
+        0,
+        -1,
+        0
+      ],
+      "flap_range_deg": [
+        -5.0,
+        25.0
+      ],
+      "note": "flaps span 0.13 < |y| < 0.895 (the nose sits on the main plane); outer 0.4 m of each element twisted up to +4 deg; endplates at |y| = 0.90, z 0.045..0.36"
+    },
+    "rear_wing": {
+      "main_plane": {
+        "le_x": -2.08,
+        "le_z": 0.76,
+        "te_x": -2.4167,
+        "te_z": 0.8073,
+        "chord": 0.34,
+        "span": 1.0,
+        "angle_deg": 8.0,
+        "section": "NACA 7411, inverted"
+      },
+      "flap": {
+        "le_x": -2.385,
+        "le_z": 0.832,
+        "te_x": -2.5755,
+        "te_z": 0.942,
+        "chord": 0.22,
+        "span": 1.0,
+        "angle_deg": 30.0,
+        "section": "NACA 6410, inverted"
+      },
+      "beam_wing": {
+        "le_x": -2.1,
+        "le_z": 0.445,
+        "te_x": -2.297,
+        "te_z": 0.4797,
+        "chord": 0.2,
+        "span": 1.0,
+        "angle_deg": 10.0,
+        "section": "NACA 5410, inverted"
+      },
+      "flap_node": "rear_flap",
+      "pivot": [
+        -2.5755255888325763,
+        0.0,
+        0.942
+      ],
+      "axis": [
+        0,
+        -1,
+        0
+      ],
+      "flap_range_deg": [
+        0.0,
+        30.0
+      ],
+      "note": "endplates at |y| = 0.50, x -2.03..-2.64, z 0.37..0.965"
+    },
+    "floor": {
+      "x_front": 1.16,
+      "x_diffuser_start": -1.22,
+      "x_diffuser_exit": -2.02,
+      "underside_z_flat": 0.035,
+      "plank_bottom_z": 0.025,
+      "half_width_max": 0.8,
+      "diffuser_half_width": 0.5,
+      "diffuser_exit_roof_z": 0.27,
+      "leading_edge_z": 0.15,
+      "half_width_profile": [
+        [
+          -2.02,
+          0.5
+        ],
+        [
+          -1.38,
+          0.5
+        ],
+        [
+          -1.3,
+          0.56
+        ],
+        [
+          -1.02,
+          0.8
+        ],
+        [
+          0.7,
+          0.8
+        ],
+        [
+          1.0,
+          0.62
+        ],
+        [
+          1.16,
+          0.36
+        ]
+      ],
+      "underside_z_profile": [
+        [
+          -2.02,
+          0.27
+        ],
+        [
+          -1.75,
+          0.15
+        ],
+        [
+          -1.45,
+          0.07
+        ],
+        [
+          -1.22,
+          0.035
+        ],
+        [
+          0.55,
+          0.035
+        ],
+        [
+          0.8,
+          0.045
+        ],
+        [
+          1.02,
+          0.09
+        ],
+        [
+          1.16,
+          0.15
+        ]
+      ]
+    }
+  },
+  "notes": [
+    "Generic open-wheel single-seater with 2026-style proportions; no real team, livery or sponsor.",
+    "Front wing: main plane chord 0.30 m, span 1.79 m; flap 1 chord 0.20 m and flap 2 chord 0.15 m, each 2 x 0.765 m (|y| 0.13..0.895). Node front_flap carries both flaps and rotates about the hinge line through (2.555, 0.0, 0.135) along -y: + = flatter / low drag, range (-5.0, 25.0) deg.",
+    "Rear wing: main plane chord 0.34 m, flap chord 0.22 m, beam wing chord 0.20 m, all span 0.99 m. Node rear_flap rotates about the flap trailing edge (-2.576, 0.0, 0.942) along -y: + = opening (DRS), range (0.0, 30.0) deg.",
+    "Floor from x = 1.16 (raised leading edge, z 0.15) to the diffuser exit at x = -2.02; flat underside z = 0.035 between x = 0.55 and -1.22, plank bottom z = 0.025 (x 0.55..-1.15, 0.30 m wide), diffuser roof rises to z = 0.27 at the exit, half width 0.50. Full aero geometry under rig 'aero'.",
+    "Suspension travel: front -0.040..+0.030 m, rear -0.045..+0.035 m; at about +0.025 m bump the plank reaches the ground (the chassis bottoms out, as intended for a ground-effect car).",
+    "Steering wheel +-180 deg vs road-wheel steer +-22 deg (overall ratio ~8.2:1). Kingpin: vertical (no inclination / caster) through the upright ball joints, 0.1 m inboard of the wheel centre plane (steer_XX pivot), so the front wheels swing about it when steered.",
+    "Suspension links (wishbone legs, track rods, toe links, push rods, drive shafts) are visual `aim` nodes with stretch off; the sim should model the suspension from the susp_/steer_ joints, not these.",
+    "Lights: 'rain' = rear rain light on the crash structure; 'brake' = LED strips on the rear wing endplate trailing edges."
+  ]
+}

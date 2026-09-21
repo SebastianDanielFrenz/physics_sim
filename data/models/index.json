@@ -1,0 +1,44 @@
+[
+  {
+    "id": "car_shitbox",
+    "title": "Shitbox (worn-out hatchback)",
+    "glb": "car_shitbox/car_shitbox.glb",
+    "rig": "car_shitbox/car_shitbox.rig.json"
+  },
+  {
+    "id": "car_sedan",
+    "title": "Sedan (decent car)",
+    "glb": "car_sedan/car_sedan.glb",
+    "rig": "car_sedan/car_sedan.rig.json"
+  },
+  {
+    "id": "car_hyper",
+    "title": "Hyper car (mid-engine)",
+    "glb": "car_hyper/car_hyper.glb",
+    "rig": "car_hyper/car_hyper.rig.json"
+  },
+  {
+    "id": "car_f1",
+    "title": "Formula car (open-wheel single-seater)",
+    "glb": "car_f1/car_f1.glb",
+    "rig": "car_f1/car_f1.rig.json"
+  },
+  {
+    "id": "tractor",
+    "title": "Row-crop tractor (~200 hp)",
+    "glb": "tractor/tractor.glb",
+    "rig": "tractor/tractor.rig.json"
+  },
+  {
+    "id": "trailer_tipper",
+    "title": "Tandem tipping trailer (14 t)",
+    "glb": "trailer_tipper/trailer_tipper.glb",
+    "rig": "trailer_tipper/trailer_tipper.rig.json"
+  },
+  {
+    "id": "combine",
+    "title": "Combine harvester (class 8, 9 m header)",
+    "glb": "combine/combine.glb",
+    "rig": "combine/combine.rig.json"
+  }
+]

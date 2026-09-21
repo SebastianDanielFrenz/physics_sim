@@ -1,0 +1,743 @@
+{
+  "format": "physics_sim.rig/1",
+  "model": "car_sedan.glb",
+  "title": "Sedan (decent car)",
+  "description": "Mid-size 4-door sedan, 4.55 m, 225/45 R17, front-engine layout.",
+  "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
+  "origin": "Ground plane below the wheel centres, x = 0 midway between the axles, y = 0 on the centreline.",
+  "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
+  "overall_bounds": {
+    "min": [
+      -2.28,
+      -1.06,
+      0.0
+    ],
+    "max": [
+      2.3041,
+      1.06,
+      1.49
+    ]
+  },
+  "nodes": [
+    {
+      "name": "car_sedan",
+      "parent": null,
+      "pivot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_local": {
+        "min": [
+          -2.28,
+          -0.91,
+          0.1514
+        ],
+        "max": [
+          2.3041,
+          0.91,
+          1.49
+        ]
+      }
+    },
+    {
+      "name": "susp_FL",
+      "parent": "car_sedan",
+      "pivot": [
+        1.35,
+        0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.09,
+        "max": 0.09,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FL",
+      "parent": "susp_FL",
+      "pivot": [
+        1.35,
+        0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.6283185307179586,
+        "max": 0.6283185307179586,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.14,
+          -0.05,
+          0.0632
+        ],
+        "max": [
+          -0.0327,
+          0.01,
+          0.1835
+        ]
+      }
+    },
+    {
+      "name": "wheel_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.35,
+        0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.317,
+          -0.1125,
+          -0.317
+        ],
+        "max": [
+          0.317,
+          0.1125,
+          0.317
+        ]
+      },
+      "wheel": {
+        "radius": 0.317,
+        "width": 0.225,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_FR",
+      "parent": "car_sedan",
+      "pivot": [
+        1.35,
+        -0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.09,
+        "max": 0.09,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FR",
+      "parent": "susp_FR",
+      "pivot": [
+        1.35,
+        -0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.6283185307179586,
+        "max": 0.6283185307179586,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.14,
+          -0.01,
+          0.0632
+        ],
+        "max": [
+          -0.0327,
+          0.05,
+          0.1835
+        ]
+      }
+    },
+    {
+      "name": "wheel_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.35,
+        -0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.317,
+          -0.1125,
+          -0.317
+        ],
+        "max": [
+          0.317,
+          0.1125,
+          0.317
+        ]
+      },
+      "wheel": {
+        "radius": 0.317,
+        "width": 0.225,
+        "side": "right"
+      }
+    },
+    {
+      "name": "susp_RL",
+      "parent": "car_sedan",
+      "pivot": [
+        -1.35,
+        0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.09,
+        "max": 0.09,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.14,
+          -0.05,
+          0.0632
+        ],
+        "max": [
+          -0.0327,
+          0.01,
+          0.1835
+        ]
+      }
+    },
+    {
+      "name": "wheel_RL",
+      "parent": "susp_RL",
+      "pivot": [
+        -1.35,
+        0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.317,
+          -0.1125,
+          -0.317
+        ],
+        "max": [
+          0.317,
+          0.1125,
+          0.317
+        ]
+      },
+      "wheel": {
+        "radius": 0.317,
+        "width": 0.225,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_RR",
+      "parent": "car_sedan",
+      "pivot": [
+        -1.35,
+        -0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.09,
+        "max": 0.09,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.14,
+          -0.01,
+          0.0632
+        ],
+        "max": [
+          -0.0327,
+          0.05,
+          0.1835
+        ]
+      }
+    },
+    {
+      "name": "wheel_RR",
+      "parent": "susp_RR",
+      "pivot": [
+        -1.35,
+        -0.78,
+        0.317
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.317,
+          -0.1125,
+          -0.317
+        ],
+        "max": [
+          0.317,
+          0.1125,
+          0.317
+        ]
+      },
+      "wheel": {
+        "radius": 0.317,
+        "width": 0.225,
+        "side": "right"
+      }
+    },
+    {
+      "name": "door_FL",
+      "parent": "car_sedan",
+      "pivot": [
+        0.93,
+        0.89,
+        0.62
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          -1
+        ],
+        "min": 0.0,
+        "max": 1.2217304763960306,
+        "note": "door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -1.0152,
+          -0.2154,
+          -0.351
+        ],
+        "max": [
+          -0.004,
+          0.17,
+          0.7442
+        ]
+      }
+    },
+    {
+      "name": "door_RL",
+      "parent": "car_sedan",
+      "pivot": [
+        -0.1,
+        0.89,
+        0.62
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          -1
+        ],
+        "min": 0.0,
+        "max": 1.2217304763960306,
+        "note": "door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -0.8645,
+          -0.2155,
+          -0.3402
+        ],
+        "max": [
+          -0.0072,
+          0.0365,
+          0.7469
+        ]
+      }
+    },
+    {
+      "name": "door_FR",
+      "parent": "car_sedan",
+      "pivot": [
+        0.93,
+        -0.89,
+        0.62
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": 0.0,
+        "max": 1.2217304763960306,
+        "note": "door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -1.0152,
+          -0.17,
+          -0.351
+        ],
+        "max": [
+          -0.004,
+          0.2154,
+          0.7442
+        ]
+      }
+    },
+    {
+      "name": "door_RR",
+      "parent": "car_sedan",
+      "pivot": [
+        -0.1,
+        -0.89,
+        0.62
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": 0.0,
+        "max": 1.2217304763960306,
+        "note": "door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -0.8645,
+          -0.0365,
+          -0.3402
+        ],
+        "max": [
+          -0.0072,
+          0.2155,
+          0.7469
+        ]
+      }
+    },
+    {
+      "name": "hood",
+      "parent": "car_sedan",
+      "pivot": [
+        1.0,
+        0.0,
+        0.94624
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": 0.0,
+        "max": 1.0471975511965976,
+        "note": "hood opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          0.0251,
+          -0.8723,
+          -0.3004
+        ],
+        "max": [
+          1.2822,
+          0.8723,
+          -0.0022
+        ]
+      }
+    },
+    {
+      "name": "trunk",
+      "parent": "car_sedan",
+      "pivot": [
+        -1.57,
+        0.0,
+        1.02997
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": 0.0,
+        "max": 1.2217304763960306,
+        "note": "trunk lid opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -0.6141,
+          -0.8551,
+          -0.1507
+        ],
+        "max": [
+          -0.0206,
+          0.8551,
+          -0.0001
+        ]
+      }
+    },
+    {
+      "name": "steering_wheel",
+      "parent": "car_sedan",
+      "pivot": [
+        0.38,
+        0.38,
+        0.86
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.8983843609192009,
+          -0.0,
+          0.43921013200494263
+        ],
+        "min": -9.42477796076938,
+        "max": 9.42477796076938,
+        "note": "steering wheel angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0981,
+          -0.202,
+          -0.1829
+        ],
+        "max": [
+          0.0981,
+          0.202,
+          0.1829
+        ]
+      }
+    },
+    {
+      "name": "wiper_L",
+      "parent": "car_sedan",
+      "pivot": [
+        0.93,
+        0.02,
+        0.975
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0.4982838758534584,
+          0.0,
+          0.8670139439850176
+        ],
+        "min": 0.0,
+        "max": 1.6580627893946132,
+        "note": "wiper sweep"
+      },
+      "bounds_local": {
+        "min": [
+          -0.026,
+          -0.018,
+          -0.0064
+        ],
+        "max": [
+          0.0259,
+          0.58,
+          0.0314
+        ]
+      }
+    },
+    {
+      "name": "wiper_R",
+      "parent": "car_sedan",
+      "pivot": [
+        0.93,
+        -0.55,
+        0.975
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0.4982838758534584,
+          0.0,
+          0.8670139439850176
+        ],
+        "min": 0.0,
+        "max": 1.6580627893946132,
+        "note": "wiper sweep"
+      },
+      "bounds_local": {
+        "min": [
+          -0.026,
+          -0.018,
+          -0.0064
+        ],
+        "max": [
+          0.0259,
+          0.52,
+          0.0314
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "socket_driver_eye",
+      "parent": "car_sedan",
+      "position": [
+        -0.35,
+        0.38,
+        1.18
+      ],
+      "note": "driver eye point (camera)"
+    },
+    {
+      "name": "socket_tow_rear",
+      "parent": "car_sedan",
+      "position": [
+        -2.22,
+        0.0,
+        0.38
+      ],
+      "note": "rear towing eye"
+    },
+    {
+      "name": "socket_tow_front",
+      "parent": "car_sedan",
+      "position": [
+        2.28,
+        0.25,
+        0.32
+      ],
+      "note": "front towing eye"
+    }
+  ],
+  "lights": {
+    "head": {
+      "materials": [
+        "light_head"
+      ],
+      "emissive_on": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "tail": {
+      "materials": [
+        "light_tail"
+      ],
+      "emissive_on": [
+        1.0,
+        0.03,
+        0.02
+      ],
+      "emissive_strength_on": 2.0
+    },
+    "brake": {
+      "materials": [
+        "light_brake"
+      ],
+      "emissive_on": [
+        1.0,
+        0.02,
+        0.01
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "indicator_left": {
+      "materials": [
+        "light_indicator_left"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "indicator_right": {
+      "materials": [
+        "light_indicator_right"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "reverse": {
+      "materials": [
+        "light_reverse"
+      ],
+      "emissive_on": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "emissive_strength_on": 5.0
+    }
+  },
+  "notes": [
+    "Generic mid-size sedan; dimensions are class-typical, not a specific production car."
+  ]
+}

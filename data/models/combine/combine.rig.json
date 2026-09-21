@@ -1,0 +1,1271 @@
+{
+  "format": "physics_sim.rig/1",
+  "model": "combine.glb",
+  "title": "Combine harvester (class 8, 9 m header)",
+  "description": "Class-8 combine harvester with a 9.0 m grain header: 900/60 R32 front drive tyres, 600/65 R28 steered rear tyres on a pendulum axle, ~12,000 l grain tank, 6.2 m unloading auger.",
+  "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
+  "origin": "Ground plane below the tyres at rest, x = 0 midway between the front drive axle and the rear steer axle, y = 0 on the centreline.",
+  "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
+  "overall_bounds": {
+    "min": [
+      -4.44,
+      -4.636,
+      0.0
+    ],
+    "max": [
+      6.88,
+      4.636,
+      4.0
+    ]
+  },
+  "nodes": [
+    {
+      "name": "combine",
+      "parent": null,
+      "pivot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_local": {
+        "min": [
+          -4.44,
+          -1.79,
+          0.52
+        ],
+        "max": [
+          3.36,
+          1.8598,
+          3.985
+        ]
+      }
+    },
+    {
+      "name": "straw_chopper",
+      "parent": "combine",
+      "pivot": [
+        -3.75,
+        0.0,
+        1.45
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "chopper rotor, + = top moving forward (works at ~3000 rpm)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.301,
+          -0.72,
+          -0.301
+        ],
+        "max": [
+          0.301,
+          0.72,
+          0.301
+        ]
+      }
+    },
+    {
+      "name": "spreader_L",
+      "parent": "combine",
+      "pivot": [
+        -4.1,
+        0.42,
+        1.0
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "note": "residue spreader disc; L turns + (CCW from above), R turns - in operation"
+      },
+      "bounds_local": {
+        "min": [
+          -0.34,
+          -0.34,
+          0.0
+        ],
+        "max": [
+          0.34,
+          0.34,
+          0.3
+        ]
+      }
+    },
+    {
+      "name": "spreader_R",
+      "parent": "combine",
+      "pivot": [
+        -4.1,
+        -0.42,
+        1.0
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "note": "residue spreader disc; L turns + (CCW from above), R turns - in operation"
+      },
+      "bounds_local": {
+        "min": [
+          -0.34,
+          -0.34,
+          0.0
+        ],
+        "max": [
+          0.34,
+          0.34,
+          0.3
+        ]
+      }
+    },
+    {
+      "name": "rear_axle",
+      "parent": "combine",
+      "pivot": [
+        -1.95,
+        0.0,
+        0.95
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "min": -0.13962634015954636,
+        "max": 0.13962634015954636,
+        "note": "pendulum (oscillating) rear axle roll, + = left wheel up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.2,
+          -0.9374,
+          -0.4257
+        ],
+        "max": [
+          0.2,
+          0.9374,
+          0.07
+        ]
+      }
+    },
+    {
+      "name": "steer_RL",
+      "parent": "rear_axle",
+      "pivot": [
+        -1.95,
+        1.2,
+        0.745
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.8726646259971648,
+        "max": 0.8726646259971648,
+        "note": "rear-wheel steer angle, + = wheel points left (so + on the rear axle turns the machine right); kingpin simplified to the wheel centre"
+      },
+      "bounds_local": {
+        "min": [
+          -0.09,
+          -0.6,
+          -0.0877
+        ],
+        "max": [
+          0.09,
+          -0.04,
+          0.0877
+        ]
+      }
+    },
+    {
+      "name": "wheel_RL",
+      "parent": "steer_RL",
+      "pivot": [
+        -1.95,
+        1.2,
+        0.745
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.745,
+          -0.31,
+          -0.745
+        ],
+        "max": [
+          0.745,
+          0.31,
+          0.745
+        ]
+      },
+      "wheel": {
+        "radius": 0.745,
+        "width": 0.6,
+        "side": "left"
+      }
+    },
+    {
+      "name": "steer_RR",
+      "parent": "rear_axle",
+      "pivot": [
+        -1.95,
+        -1.2,
+        0.745
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.8726646259971648,
+        "max": 0.8726646259971648,
+        "note": "rear-wheel steer angle, + = wheel points left (so + on the rear axle turns the machine right); kingpin simplified to the wheel centre"
+      },
+      "bounds_local": {
+        "min": [
+          -0.09,
+          0.04,
+          -0.0877
+        ],
+        "max": [
+          0.09,
+          0.6,
+          0.0877
+        ]
+      }
+    },
+    {
+      "name": "wheel_RR",
+      "parent": "steer_RR",
+      "pivot": [
+        -1.95,
+        -1.2,
+        0.745
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.745,
+          -0.31,
+          -0.745
+        ],
+        "max": [
+          0.745,
+          0.31,
+          0.745
+        ]
+      },
+      "wheel": {
+        "radius": 0.745,
+        "width": 0.6,
+        "side": "right"
+      }
+    },
+    {
+      "name": "wheel_FL",
+      "parent": "combine",
+      "pivot": [
+        1.95,
+        1.3,
+        0.955
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.9549,
+          -0.46,
+          -0.9549
+        ],
+        "max": [
+          0.9549,
+          0.46,
+          0.9549
+        ]
+      },
+      "wheel": {
+        "radius": 0.955,
+        "width": 0.9,
+        "side": "left"
+      }
+    },
+    {
+      "name": "wheel_FR",
+      "parent": "combine",
+      "pivot": [
+        1.95,
+        -1.3,
+        0.955
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.9549,
+          -0.46,
+          -0.9549
+        ],
+        "max": [
+          0.9549,
+          0.46,
+          0.9549
+        ]
+      },
+      "wheel": {
+        "radius": 0.955,
+        "width": 0.9,
+        "side": "right"
+      }
+    },
+    {
+      "name": "steering_wheel",
+      "parent": "combine",
+      "pivot": [
+        2.62,
+        0.0,
+        3.08
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.4512199429985135,
+          -0.0,
+          0.8924127761526156
+        ],
+        "min": -12.566370614359172,
+        "max": 12.566370614359172,
+        "note": "steering wheel angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1863,
+          -0.207,
+          -0.1025
+        ],
+        "max": [
+          0.1863,
+          0.207,
+          0.1025
+        ]
+      }
+    },
+    {
+      "name": "door_L",
+      "parent": "combine",
+      "pivot": [
+        1.46,
+        0.91,
+        3.0
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": 0.0,
+        "max": 0.9599310885968813,
+        "note": "cab door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          0.0,
+          -0.03,
+          -0.6118
+        ],
+        "max": [
+          0.975,
+          0.045,
+          0.6118
+        ]
+      }
+    },
+    {
+      "name": "ladder",
+      "parent": "combine",
+      "pivot": [
+        3.26,
+        1.315,
+        2.32
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": 0.0,
+        "max": 1.3962634015954636,
+        "note": "ladder fold, + = swings up forward (transport)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0457,
+          -0.26,
+          -1.9244
+        ],
+        "max": [
+          0.3857,
+          0.26,
+          0.6806
+        ]
+      }
+    },
+    {
+      "name": "grain_tank_cover_L",
+      "parent": "combine",
+      "pivot": [
+        0.0,
+        1.4,
+        3.9
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -1,
+          0,
+          0
+        ],
+        "min": 0.0,
+        "max": 1.7453292519943295,
+        "note": "grain tank extension, + = folds up/out (open for harvest)"
+      },
+      "bounds_local": {
+        "min": [
+          -1.33,
+          -1.4,
+          -0.03
+        ],
+        "max": [
+          1.26,
+          0.0,
+          0.03
+        ]
+      }
+    },
+    {
+      "name": "grain_tank_cover_R",
+      "parent": "combine",
+      "pivot": [
+        0.0,
+        -1.4,
+        3.9
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "min": 0.0,
+        "max": 1.7453292519943295,
+        "note": "grain tank extension, + = folds up/out (open for harvest)"
+      },
+      "bounds_local": {
+        "min": [
+          -1.33,
+          0.0,
+          -0.03
+        ],
+        "max": [
+          1.26,
+          1.4,
+          0.03
+        ]
+      }
+    },
+    {
+      "name": "unloading_auger",
+      "parent": "combine",
+      "pivot": [
+        -1.55,
+        1.62,
+        3.8
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": 0.0,
+        "max": 1.7453292519943295,
+        "note": "unloading auger swing, 0 = folded forward along the left side, + = swings out to the left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.22,
+          -0.22,
+          -0.2
+        ],
+        "max": [
+          6.2,
+          0.22,
+          0.2
+        ]
+      },
+      "aero": {
+        "tube_diameter": 0.35,
+        "tube_length": 6.2,
+        "pivot": [
+          -1.55,
+          1.62,
+          3.8
+        ],
+        "tube_axis_rest": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "note": "straight horizontal tube on the node's +x axis at rest, starting at the pivot; tip elbow and spout on child auger_spout"
+      }
+    },
+    {
+      "name": "auger_spout",
+      "parent": "unloading_auger",
+      "pivot": [
+        4.5,
+        1.62,
+        3.8
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": -0.4363323129985824,
+        "max": 0.6108652381980153,
+        "note": "spout tilt about the tube tip, + = outlet swings away from the pivot"
+      },
+      "bounds_local": {
+        "min": [
+          -0.17,
+          -0.1674,
+          -0.74
+        ],
+        "max": [
+          0.223,
+          0.1674,
+          -0.12
+        ]
+      }
+    },
+    {
+      "name": "feeder",
+      "parent": "combine",
+      "pivot": [
+        2.4,
+        0.0,
+        1.62
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": -0.03490658503988659,
+        "max": 0.3490658503988659,
+        "note": "feeder house lift about its top rear pivot, + = raises the header"
+      },
+      "bounds_local": {
+        "min": [
+          -0.25,
+          -0.8,
+          -1.22
+        ],
+        "max": [
+          2.0,
+          0.8,
+          0.06
+        ]
+      }
+    },
+    {
+      "name": "feeder_ram_L_barrel",
+      "parent": "combine",
+      "pivot": [
+        2.05,
+        0.76,
+        0.66
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "feeder_ram_L_rod",
+        "target_point": [
+          3.6,
+          0.76,
+          0.86
+        ],
+        "stretch": false,
+        "note": "ram barrel, aims at the rod eye"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0585,
+          -0.0747,
+          -0.0645
+        ],
+        "max": [
+          1.4784,
+          0.0747,
+          0.2637
+        ]
+      }
+    },
+    {
+      "name": "feeder_ram_L_rod",
+      "parent": "feeder",
+      "pivot": [
+        3.6,
+        0.76,
+        0.86
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "feeder_ram_L_barrel",
+        "target_point": [
+          2.05,
+          0.76,
+          0.66
+        ],
+        "stretch": false,
+        "note": "ram rod, aims at the barrel eye"
+      },
+      "bounds_local": {
+        "min": [
+          -1.4434,
+          -0.052,
+          -0.2194
+        ],
+        "max": [
+          0.0488,
+          0.052,
+          0.0464
+        ]
+      }
+    },
+    {
+      "name": "feeder_ram_R_barrel",
+      "parent": "combine",
+      "pivot": [
+        2.05,
+        -0.76,
+        0.66
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "feeder_ram_R_rod",
+        "target_point": [
+          3.6,
+          -0.76,
+          0.86
+        ],
+        "stretch": false,
+        "note": "ram barrel, aims at the rod eye"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0585,
+          -0.0747,
+          -0.0645
+        ],
+        "max": [
+          1.4784,
+          0.0747,
+          0.2637
+        ]
+      }
+    },
+    {
+      "name": "feeder_ram_R_rod",
+      "parent": "feeder",
+      "pivot": [
+        3.6,
+        -0.76,
+        0.86
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "feeder_ram_R_barrel",
+        "target_point": [
+          2.05,
+          -0.76,
+          0.66
+        ],
+        "stretch": false,
+        "note": "ram rod, aims at the barrel eye"
+      },
+      "bounds_local": {
+        "min": [
+          -1.4434,
+          -0.052,
+          -0.2194
+        ],
+        "max": [
+          0.0488,
+          0.052,
+          0.0464
+        ]
+      }
+    },
+    {
+      "name": "header",
+      "parent": "feeder",
+      "pivot": [
+        4.4,
+        0.0,
+        0.8
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "min": -0.06981317007977318,
+        "max": 0.06981317007977318,
+        "note": "header_tilt: lateral tilt about the feeder face centre, + = left end up"
+      },
+      "bounds_local": {
+        "min": [
+          0.0,
+          -4.636,
+          -0.65
+        ],
+        "max": [
+          2.48,
+          4.636,
+          0.86
+        ]
+      },
+      "header": {
+        "cut_width": 9.0,
+        "cutter_bar_x": 6.1,
+        "cutter_bar_z": 0.18
+      }
+    },
+    {
+      "name": "header_auger",
+      "parent": "header",
+      "pivot": [
+        4.95,
+        0.0,
+        0.58
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "cross auger, + = working direction (front of the auger moves down, flights convey to the centre)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.36,
+          -4.46,
+          -0.36
+        ],
+        "max": [
+          0.36,
+          4.46,
+          0.36
+        ]
+      }
+    },
+    {
+      "name": "reel_arms",
+      "parent": "header",
+      "pivot": [
+        4.62,
+        0.0,
+        1.55
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": -0.10471975511965978,
+        "max": 0.4363323129985824,
+        "note": "reel lift, + = raises the reel"
+      },
+      "bounds_local": {
+        "min": [
+          -0.04,
+          -4.53,
+          -0.6134
+        ],
+        "max": [
+          1.6976,
+          4.53,
+          0.0429
+        ]
+      }
+    },
+    {
+      "name": "reel_fore_aft",
+      "parent": "reel_arms",
+      "pivot": [
+        5.94615,
+        0.0,
+        1.1013
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0.9472492385936407,
+          0.0,
+          -0.32049786268205893
+        ],
+        "min": -0.25,
+        "max": 0.3,
+        "note": "reel fore/aft along the arms, + = forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1124,
+          -4.505,
+          -0.0967
+        ],
+        "max": [
+          0.1124,
+          4.505,
+          0.0967
+        ]
+      }
+    },
+    {
+      "name": "reel",
+      "parent": "reel_fore_aft",
+      "pivot": [
+        5.94615,
+        0.0,
+        1.1013
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "reel, + = working direction (top moves forward, bats sweep rearward at the bottom)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.6603,
+          -4.42,
+          -0.6022
+        ],
+        "max": [
+          0.6603,
+          4.42,
+          0.6022
+        ]
+      }
+    },
+    {
+      "name": "reel_ram_L_barrel",
+      "parent": "header",
+      "pivot": [
+        4.64,
+        4.45,
+        0.95
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "reel_ram_L_rod",
+        "target_point": [
+          5.118587081226503,
+          4.45,
+          1.3074361755248676
+        ],
+        "stretch": false,
+        "note": "ram barrel, aims at the rod eye"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0315,
+          -0.0403,
+          -0.03
+        ],
+        "max": [
+          0.4207,
+          0.0403,
+          0.3284
+        ]
+      }
+    },
+    {
+      "name": "reel_ram_L_rod",
+      "parent": "reel_arms",
+      "pivot": [
+        5.11859,
+        4.45,
+        1.30744
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "reel_ram_L_barrel",
+        "target_point": [
+          4.64,
+          4.45,
+          0.95
+        ],
+        "stretch": false,
+        "note": "ram rod, aims at the barrel eye"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3835,
+          -0.028,
+          -0.2929
+        ],
+        "max": [
+          0.0263,
+          0.028,
+          0.025
+        ]
+      }
+    },
+    {
+      "name": "reel_ram_R_barrel",
+      "parent": "header",
+      "pivot": [
+        4.64,
+        -4.45,
+        0.95
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "reel_ram_R_rod",
+        "target_point": [
+          5.118587081226503,
+          -4.45,
+          1.3074361755248676
+        ],
+        "stretch": false,
+        "note": "ram barrel, aims at the rod eye"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0315,
+          -0.0403,
+          -0.03
+        ],
+        "max": [
+          0.4207,
+          0.0403,
+          0.3284
+        ]
+      }
+    },
+    {
+      "name": "reel_ram_R_rod",
+      "parent": "reel_arms",
+      "pivot": [
+        5.11859,
+        -4.45,
+        1.30744
+      ],
+      "joint": {
+        "type": "aim",
+        "target": "reel_ram_R_barrel",
+        "target_point": [
+          4.64,
+          -4.45,
+          0.95
+        ],
+        "stretch": false,
+        "note": "ram rod, aims at the barrel eye"
+      },
+      "bounds_local": {
+        "min": [
+          -0.3835,
+          -0.028,
+          -0.2929
+        ],
+        "max": [
+          0.0263,
+          0.028,
+          0.025
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "socket_auger_spout",
+      "parent": "auger_spout",
+      "position": [
+        4.5,
+        1.62,
+        3.04
+      ],
+      "note": "grain outlet of the unloading auger spout (moves with swing and spout tilt)"
+    },
+    {
+      "name": "socket_cutterbar_center",
+      "parent": "header",
+      "position": [
+        6.1,
+        0.0,
+        0.18
+      ],
+      "note": "cutter bar centre (cut line, cut height reference)"
+    },
+    {
+      "name": "socket_divider_L",
+      "parent": "header",
+      "position": [
+        6.88,
+        4.556,
+        0.21
+      ],
+      "note": "crop divider point (header outer end)"
+    },
+    {
+      "name": "socket_divider_R",
+      "parent": "header",
+      "position": [
+        6.88,
+        -4.556,
+        0.21
+      ],
+      "note": "crop divider point (header outer end)"
+    },
+    {
+      "name": "socket_driver_eye",
+      "parent": "combine",
+      "position": [
+        2.05,
+        0.0,
+        3.5
+      ],
+      "note": "driver eye point (camera)"
+    },
+    {
+      "name": "socket_grain_tank_fill",
+      "parent": "combine",
+      "position": [
+        0.0,
+        0.0,
+        3.7
+      ],
+      "note": "grain tank fill point / grain surface centre when full (tank ~12,000 l)"
+    },
+    {
+      "name": "socket_hitch_rear",
+      "parent": "combine",
+      "position": [
+        -4.38,
+        0.0,
+        0.62
+      ],
+      "note": "rear hitch pin for the header transport trailer"
+    },
+    {
+      "name": "socket_exhaust",
+      "parent": "combine",
+      "position": [
+        -3.01,
+        -1.05,
+        3.905
+      ],
+      "note": "exhaust outlet (points rearward-up)"
+    }
+  ],
+  "lights": {
+    "head": {
+      "materials": [
+        "light_head"
+      ],
+      "emissive_on": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "tail": {
+      "materials": [
+        "light_tail"
+      ],
+      "emissive_on": [
+        1.0,
+        0.03,
+        0.02
+      ],
+      "emissive_strength_on": 2.0
+    },
+    "brake": {
+      "materials": [
+        "light_brake"
+      ],
+      "emissive_on": [
+        1.0,
+        0.02,
+        0.01
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "indicator_left": {
+      "materials": [
+        "light_indicator_left"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "indicator_right": {
+      "materials": [
+        "light_indicator_right"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "reverse": {
+      "materials": [
+        "light_reverse"
+      ],
+      "emissive_on": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "emissive_strength_on": 5.0
+    },
+    "work": {
+      "materials": [
+        "light_work"
+      ],
+      "emissive_on": [
+        1.0,
+        1.0,
+        0.95
+      ],
+      "emissive_strength_on": 10.0
+    },
+    "beacon": {
+      "materials": [
+        "light_beacon"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 8.0
+    }
+  },
+  "aero_hints": {
+    "unloading_auger": {
+      "node": "unloading_auger",
+      "shape": "cylinder",
+      "diameter": 0.35,
+      "length": 6.2,
+      "pivot": [
+        -1.55,
+        1.62,
+        3.8
+      ],
+      "axis_at_rest": [
+        1,
+        0,
+        0
+      ],
+      "centre_of_area_from_pivot": [
+        3.1,
+        0.0,
+        0.0
+      ],
+      "swing_axis": [
+        0,
+        0,
+        1
+      ],
+      "swing_range_deg": [
+        0,
+        100
+      ]
+    }
+  },
+  "notes": [
+    "Generic class-8 combine; dimensions are class-typical, not a specific production machine.",
+    "Unloading auger (node unloading_auger): straight tube, diameter 0.35 m, length 6.20 m from the swing pivot at [-1.55, 1.62, 3.8] along the node +x axis at rest (pointing forward, folded). Swing is revolute about +z (0 = folded, + = out to the left, max 100 deg); side area ~2.2 m2, centre of area 3.1 m from the pivot. Crosswind yaw moment test: compare joint 0 vs ~1.57 rad.",
+    "Front axle is rigid (no suspension node): the tyres are the only springs. Rear axle is a pendulum (rear_axle, +-8 deg roll about x at z 0.95) with steered wheels (+-50 deg).",
+    "Rear-wheel steer sign: + still means the wheel points left, which turns the machine to the right.",
+    "Header is carried by feeder (lift) and header (lateral tilt); cutter bar at z 0.18, skids 0.15 m above the ground at rest; feeder -2 deg puts the header on the ground.",
+    "Hydraulic rams (feeder_ram_*, reel_ram_*) are aim links (visual only, no stretch).",
+    "Typical masses for the sim: machine ~16.5 t empty (CG approx x +0.5, z 1.6), header ~2.8 t, full grain tank ~9 t (CG near socket_grain_tank_fill, z ~3.2)."
+  ]
+}

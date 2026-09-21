@@ -1,0 +1,834 @@
+{
+  "format": "physics_sim.rig/1",
+  "model": "car_hyper.glb",
+  "title": "Hyper car (mid-engine)",
+  "description": "Generic mid-engine two-seat hypercar, 4.65 m, 265/35 R20 front, 325/30 R21 rear, butterfly doors, active rear wing.",
+  "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
+  "origin": "Ground plane below the wheel centres, x = 0 midway between the axles, y = 0 on the centreline.",
+  "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
+  "overall_bounds": {
+    "min": [
+      -2.362,
+      -1.07,
+      0.0
+    ],
+    "max": [
+      2.34,
+      1.07,
+      1.155
+    ]
+  },
+  "nodes": [
+    {
+      "name": "car_hyper",
+      "parent": null,
+      "pivot": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds_local": {
+        "min": [
+          -2.362,
+          -1.025,
+          0.0554
+        ],
+        "max": [
+          2.3004,
+          1.025,
+          1.155
+        ]
+      }
+    },
+    {
+      "name": "susp_FL",
+      "parent": "car_hyper",
+      "pivot": [
+        1.35,
+        0.85,
+        0.347
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.06,
+        "max": 0.05,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FL",
+      "parent": "susp_FL",
+      "pivot": [
+        1.35,
+        0.85,
+        0.347
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.5585053606381855,
+        "max": 0.5585053606381855,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1655,
+          -0.05,
+          0.0734
+        ],
+        "max": [
+          -0.0376,
+          0.01,
+          0.2166
+        ]
+      }
+    },
+    {
+      "name": "wheel_FL",
+      "parent": "steer_FL",
+      "pivot": [
+        1.35,
+        0.85,
+        0.347
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.347,
+          -0.1325,
+          -0.347
+        ],
+        "max": [
+          0.347,
+          0.1325,
+          0.347
+        ]
+      },
+      "wheel": {
+        "radius": 0.347,
+        "width": 0.265,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_FR",
+      "parent": "car_hyper",
+      "pivot": [
+        1.35,
+        -0.85,
+        0.347
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.06,
+        "max": 0.05,
+        "note": "wheel travel (bump +)"
+      }
+    },
+    {
+      "name": "steer_FR",
+      "parent": "susp_FR",
+      "pivot": [
+        1.35,
+        -0.85,
+        0.347
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.5585053606381855,
+        "max": 0.5585053606381855,
+        "note": "road-wheel steer angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1655,
+          -0.01,
+          0.0734
+        ],
+        "max": [
+          -0.0376,
+          0.05,
+          0.2166
+        ]
+      }
+    },
+    {
+      "name": "wheel_FR",
+      "parent": "steer_FR",
+      "pivot": [
+        1.35,
+        -0.85,
+        0.347
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.347,
+          -0.1325,
+          -0.347
+        ],
+        "max": [
+          0.347,
+          0.1325,
+          0.347
+        ]
+      },
+      "wheel": {
+        "radius": 0.347,
+        "width": 0.265,
+        "side": "right"
+      }
+    },
+    {
+      "name": "susp_RL",
+      "parent": "car_hyper",
+      "pivot": [
+        -1.35,
+        0.825,
+        0.364
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.06,
+        "max": 0.05,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1742,
+          -0.05,
+          0.0769
+        ],
+        "max": [
+          -0.0393,
+          0.01,
+          0.2279
+        ]
+      }
+    },
+    {
+      "name": "wheel_RL",
+      "parent": "susp_RL",
+      "pivot": [
+        -1.35,
+        0.825,
+        0.364
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.364,
+          -0.1625,
+          -0.364
+        ],
+        "max": [
+          0.364,
+          0.1625,
+          0.364
+        ]
+      },
+      "wheel": {
+        "radius": 0.364,
+        "width": 0.325,
+        "side": "left"
+      }
+    },
+    {
+      "name": "susp_RR",
+      "parent": "car_hyper",
+      "pivot": [
+        -1.35,
+        -0.825,
+        0.364
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -0.06,
+        "max": 0.05,
+        "note": "wheel travel (bump +)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1742,
+          -0.01,
+          0.0769
+        ],
+        "max": [
+          -0.0393,
+          0.05,
+          0.2279
+        ]
+      }
+    },
+    {
+      "name": "wheel_RR",
+      "parent": "susp_RR",
+      "pivot": [
+        -1.35,
+        -0.825,
+        0.364
+      ],
+      "joint": {
+        "type": "continuous",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "note": "wheel spin, + = rolling forward"
+      },
+      "bounds_local": {
+        "min": [
+          -0.364,
+          -0.1625,
+          -0.364
+        ],
+        "max": [
+          0.364,
+          0.1625,
+          0.364
+        ]
+      },
+      "wheel": {
+        "radius": 0.364,
+        "width": 0.325,
+        "side": "right"
+      }
+    },
+    {
+      "name": "door_L",
+      "parent": "car_hyper",
+      "pivot": [
+        0.88,
+        0.8,
+        0.8
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0.3069867060579905,
+          0.7674667651449764,
+          -0.562808961106316
+        ],
+        "min": 0.0,
+        "max": 1.3089969389957472,
+        "note": "butterfly door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -1.4586,
+          -0.4536,
+          -0.5523
+        ],
+        "max": [
+          0.0178,
+          0.27,
+          0.3299
+        ]
+      }
+    },
+    {
+      "name": "door_R",
+      "parent": "car_hyper",
+      "pivot": [
+        0.88,
+        -0.8,
+        0.8
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.3069867060579905,
+          0.7674667651449764,
+          0.562808961106316
+        ],
+        "min": 0.0,
+        "max": 1.3089969389957472,
+        "note": "butterfly door opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          -1.4586,
+          -0.27,
+          -0.5523
+        ],
+        "max": [
+          0.0178,
+          0.4536,
+          0.3299
+        ]
+      }
+    },
+    {
+      "name": "frunk",
+      "parent": "car_hyper",
+      "pivot": [
+        1.0,
+        0.0,
+        0.77019
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "min": 0.0,
+        "max": 0.9599310885968813,
+        "note": "front lid opening angle"
+      },
+      "bounds_local": {
+        "min": [
+          0.0201,
+          -0.4767,
+          -0.3525
+        ],
+        "max": [
+          1.1082,
+          0.4767,
+          -0.0085
+        ]
+      }
+    },
+    {
+      "name": "engine_cover",
+      "parent": "car_hyper",
+      "pivot": [
+        -1.24,
+        0.0,
+        0.9178
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": 0.0,
+        "max": 0.8726646259971648,
+        "note": "engine cover opening angle (hinged at the cabin, rear edge lifts)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.9662,
+          -0.5426,
+          -0.0641
+        ],
+        "max": [
+          -0.0314,
+          0.5426,
+          0.0128
+        ]
+      }
+    },
+    {
+      "name": "splitter",
+      "parent": "car_hyper",
+      "pivot": [
+        1.95,
+        0.0,
+        0.09
+      ],
+      "bounds_local": {
+        "min": [
+          -0.25,
+          -0.856,
+          -0.01
+        ],
+        "max": [
+          0.39,
+          0.856,
+          0.12
+        ]
+      },
+      "aero": {
+        "kind": "splitter",
+        "note": "front splitter plate: ground-effect region under the nose"
+      }
+    },
+    {
+      "name": "flap_front_L",
+      "parent": "splitter",
+      "pivot": [
+        2.31,
+        0.6,
+        0.128
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.17453292519943295,
+        "max": 0.3490658503988659,
+        "note": "front aero flap pitch about its leading edge, + = trailing edge up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.128,
+          -0.17,
+          -0.0082
+        ],
+        "max": [
+          0.0,
+          0.17,
+          0.0226
+        ]
+      }
+    },
+    {
+      "name": "flap_front_R",
+      "parent": "splitter",
+      "pivot": [
+        2.31,
+        -0.6,
+        0.128
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.17453292519943295,
+        "max": 0.3490658503988659,
+        "note": "front aero flap pitch about its leading edge, + = trailing edge up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.128,
+          -0.17,
+          -0.0082
+        ],
+        "max": [
+          0.0,
+          0.17,
+          0.0226
+        ]
+      }
+    },
+    {
+      "name": "diffuser",
+      "parent": "car_hyper",
+      "pivot": [
+        -2.05,
+        0.0,
+        0.1
+      ],
+      "bounds_local": {
+        "min": [
+          -0.296,
+          -0.9905,
+          0.0049
+        ],
+        "max": [
+          0.3387,
+          0.9905,
+          0.3357
+        ]
+      },
+      "aero": {
+        "kind": "diffuser",
+        "note": "rear diffuser: underbody ramp from x=-1.75 (z=0.105) to the rear (z=0.33)"
+      }
+    },
+    {
+      "name": "wing_lift",
+      "parent": "car_hyper",
+      "pivot": [
+        -1.93,
+        0.0,
+        1.005
+      ],
+      "joint": {
+        "type": "prismatic",
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": 0.0,
+        "max": 0.28,
+        "note": "rear wing raise on its struts, + = up"
+      },
+      "bounds_local": {
+        "min": [
+          -0.1,
+          -0.38,
+          -0.385
+        ],
+        "max": [
+          0.03,
+          0.38,
+          0.018
+        ]
+      }
+    },
+    {
+      "name": "wing_flap",
+      "parent": "wing_lift",
+      "pivot": [
+        -1.93,
+        0.0,
+        1.005
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -0.13962634015954636,
+        "max": 0.9599310885968813,
+        "note": "rear wing pitch about the leading edge, + = trailing edge up (airbrake)"
+      },
+      "bounds_local": {
+        "min": [
+          -0.33,
+          -0.822,
+          -0.07
+        ],
+        "max": [
+          0.05,
+          0.822,
+          0.1
+        ]
+      },
+      "aero": {
+        "kind": "wing",
+        "chord": 0.3,
+        "span": 1.62,
+        "pivot": [
+          -1.93,
+          0.0,
+          1.005
+        ],
+        "rest_pitch_deg": 8.0,
+        "pitch_range_deg": [
+          -8.0,
+          55.0
+        ],
+        "profile": "inverted NACA 4-digit, 12 % thick, 6 % camber"
+      }
+    },
+    {
+      "name": "steering_wheel",
+      "parent": "car_hyper",
+      "pivot": [
+        0.3,
+        0.33,
+        0.62
+      ],
+      "joint": {
+        "type": "revolute",
+        "axis": [
+          -0.9535826651341417,
+          -0.0,
+          0.3011313679370974
+        ],
+        "min": -6.283185307179586,
+        "max": 6.283185307179586,
+        "note": "steering wheel angle, + = left"
+      },
+      "bounds_local": {
+        "min": [
+          -0.0682,
+          -0.187,
+          -0.1783
+        ],
+        "max": [
+          0.0821,
+          0.187,
+          0.1783
+        ]
+      }
+    }
+  ],
+  "sockets": [
+    {
+      "name": "socket_driver_eye",
+      "parent": "car_hyper",
+      "position": [
+        -0.28,
+        0.33,
+        0.93
+      ],
+      "note": "driver eye point (camera)"
+    },
+    {
+      "name": "socket_tow_front",
+      "parent": "car_hyper",
+      "position": [
+        2.27,
+        0.3,
+        0.24
+      ],
+      "note": "front towing eye"
+    },
+    {
+      "name": "socket_tow_rear",
+      "parent": "car_hyper",
+      "position": [
+        -2.33,
+        -0.45,
+        0.4
+      ],
+      "note": "rear towing eye"
+    },
+    {
+      "name": "socket_exhaust_left",
+      "parent": "car_hyper",
+      "position": [
+        -2.362,
+        0.45,
+        0.555
+      ],
+      "note": "exhaust outlet (left), flow along -x"
+    },
+    {
+      "name": "socket_exhaust_right",
+      "parent": "car_hyper",
+      "position": [
+        -2.362,
+        -0.45,
+        0.555
+      ],
+      "note": "exhaust outlet (right), flow along -x"
+    }
+  ],
+  "lights": {
+    "head": {
+      "materials": [
+        "light_head"
+      ],
+      "emissive_on": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "tail": {
+      "materials": [
+        "light_tail"
+      ],
+      "emissive_on": [
+        1.0,
+        0.03,
+        0.02
+      ],
+      "emissive_strength_on": 2.0
+    },
+    "brake": {
+      "materials": [
+        "light_brake"
+      ],
+      "emissive_on": [
+        1.0,
+        0.02,
+        0.01
+      ],
+      "emissive_strength_on": 8.0
+    },
+    "indicator_left": {
+      "materials": [
+        "light_indicator_left"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "indicator_right": {
+      "materials": [
+        "light_indicator_right"
+      ],
+      "emissive_on": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "emissive_strength_on": 6.0
+    },
+    "reverse": {
+      "materials": [
+        "light_reverse"
+      ],
+      "emissive_on": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "emissive_strength_on": 5.0
+    }
+  },
+  "notes": [
+    "Generic mid-engine hypercar; dimensions are class-typical, not a specific production car.",
+    "Different wheel radii: front 0.347 m, rear 0.364 m; at rest the wheel centres are at z = r per axle.",
+    "Rear wing: node wing_flap = main plane, chord 0.3 m, span 1.62 m, inverted NACA 4-digit (12 % thick, 6 % camber). Pivot = leading edge [-1.93, 0.0, 1.005] at rest (moves with wing_lift). Rest chord angle 8 deg trailing edge up (downforce). wing_flap range -8..+55 deg about the rest angle (-8 = flat/low drag, +55 = airbrake). wing_lift raises the whole wing 0..0.28 m along +z.",
+    "Front flaps flap_front_L/R: chord 0.13 m, span 0.34 m each, leading edge x=2.31, |y|=0.6, z=0.128; rest chord angle 10 deg trailing edge up; range -10..+20 deg.",
+    "Aero regions: node 'splitter' = front splitter plate (x 1.70..2.38, |y|<0.85, z=0.09); node 'diffuser' = rear diffuser ramp + 6 fins (underbody from x=-1.75, z=0.105 rising to z=0.33 at x=-2.35). Flat underbody at z=0.10 between them. Frontal area approx. 2.0 m^2.",
+    "Butterfly doors: tilted hinge axis at the A-pillar base; door + mirror open together."
+  ]
+}
