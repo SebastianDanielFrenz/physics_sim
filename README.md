@@ -14,7 +14,8 @@ tools\setup_dev_env.ps1
 ```
 
 It installs the Windows toolchain (VS 2022 Build Tools with clang-cl, CMake,
-Ninja, Godot, Python) via winget and the WSL Ubuntu build toolchain via apt.
+Ninja, Godot, Python, Blender) via winget and the WSL Ubuntu build toolchain
+via apt.
 It is idempotent - safe to re-run.
 
 To only verify the toolchain without installing anything:

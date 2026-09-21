@@ -3,7 +3,7 @@
 .SYNOPSIS
     Sets up (or verifies) the physics_sim development toolchain on a fresh
     Windows machine: VS 2022 Build Tools (MSVC + clang-cl), CMake, Ninja,
-    Godot, Python, and the WSL Ubuntu build toolchain.
+    Godot, Python, Blender, and the WSL Ubuntu build toolchain.
 
 .DESCRIPTION
     Idempotent: each step checks whether its tool is already present/working
@@ -12,6 +12,11 @@
 .PARAMETER CheckOnly
     Do not install anything. Only verify every tool (Windows + WSL), print
     its version, and exit with a non-zero code if anything is missing.
+
+.PARAMETER BlenderLocation
+    Optional install directory passed to winget's --location for the Blender
+    MSI (e.g. a custom drive/path). Ignored if Blender is already found by
+    Find-Blender.
 
 .NOTES
     Deliberate deviation from a "download LLVM.LLVM via winget" approach:
@@ -27,7 +32,8 @@
 #>
 [CmdletBinding()]
 param(
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [string]$BlenderLocation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -100,6 +106,45 @@ function Get-ClangClPath {
 }
 
 # ---------------------------------------------------------------------------
+# Locate blender.exe without relying on PATH: the user's install is not on
+# PATH (a custom -Location install directory). Order: explicit override env
+# var, PATH (in case a future machine does put it there), the uninstall
+# registry entries winget/the MSI register (both bitness views, both hives),
+# then the default per-machine install directory.
+# ---------------------------------------------------------------------------
+function Find-Blender {
+    if ($env:PS_BLENDER -and (Test-Path $env:PS_BLENDER)) {
+        return $env:PS_BLENDER
+    }
+
+    $cmd = Get-Command blender -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $uninstallKeys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $entry = Get-ItemProperty -Path $uninstallKeys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like 'Blender*' -and $_.InstallLocation } |
+        Select-Object -First 1
+    if ($entry) {
+        $exe = Join-Path $entry.InstallLocation 'blender.exe'
+        if (Test-Path $exe) { return $exe }
+    }
+
+    $blenderDir = Get-ChildItem "$env:ProgramFiles\Blender Foundation" -Directory -Filter 'Blender *' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($blenderDir) {
+        $exe = Join-Path $blenderDir.FullName 'blender.exe'
+        if (Test-Path $exe) { return $exe }
+    }
+
+    return $null
+}
+
+# ---------------------------------------------------------------------------
 # winget install helper (idempotent: winget itself no-ops if already
 # installed at the requested version; we additionally skip the call when a
 # working command is already on PATH, to keep -CheckOnly-free runs fast).
@@ -152,6 +197,14 @@ if ($CheckOnly) {
         Write-Ok "Godot -> $($godotExe.FullName)"
     } else {
         Write-Missing "Godot (GodotEngine.GodotEngine winget package) not found"
+    }
+
+    $blender = Find-Blender
+    if ($blender) {
+        $blenderVer = & $blender --version 2>&1 | Select-Object -First 1
+        Write-Ok "Blender -> $blender ($blenderVer)"
+    } else {
+        Write-Missing "Blender (BlenderFoundation.Blender winget package) not found"
     }
 
     Write-Section "WSL toolchain (Ubuntu)"
@@ -216,6 +269,15 @@ Install-WingetPackage -Id 'Ninja-build.Ninja'
 
 Write-Section "Godot 4.x"
 Install-WingetPackage -Id 'GodotEngine.GodotEngine'
+
+Write-Section "Blender (dev-time only - headless model checks/preview renders via tools/assetgen/blender_check.py)"
+if (Find-Blender) {
+    Write-Host "Already installed, skipping." -ForegroundColor Yellow
+} else {
+    $blenderArgs = @()
+    if ($BlenderLocation) { $blenderArgs += @('--location', $BlenderLocation) }
+    Install-WingetPackage -Id 'BlenderFoundation.Blender' -ExtraArgs $blenderArgs
+}
 
 Write-Section "Python 3.13 (telemetry plots only - never a runtime dependency)"
 Install-WingetPackage -Id 'Python.Python.3.13'
