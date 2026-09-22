@@ -37,6 +37,7 @@
 #pragma once
 
 #include "aba.h"
+#include "loop_closure.h"
 #include "model.h"
 #include "ps/math/pose.h"
 
@@ -135,6 +136,11 @@ private:
     // public accessors above (World-facing API addresses links by their
     // original descriptor index, not the internal body numbering).
     std::vector<int> link_to_body_;
+
+    // PLAN.md P1.5a scope item 4 (loop_closure.h); empty for the common
+    // open-chain case, at which point every solve below degenerates to a
+    // plain aba() call at no extra cost.
+    std::vector<LoopClosureRuntime> loop_closures_;
 };
 
 } // namespace ps::articulation

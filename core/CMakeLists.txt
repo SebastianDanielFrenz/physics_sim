@@ -20,6 +20,7 @@ add_library(ps_core STATIC
   src/articulation/rnea.cpp
   src/articulation/crba.cpp
   src/articulation/aba.cpp
+  src/articulation/loop_closure.cpp
   src/articulation/instance.cpp
   src/articulation/system.cpp
 

@@ -8,6 +8,7 @@ add_executable(ps_unit_tests
   test_jobs.cpp
   test_world_basic.cpp
   test_articulation_core.cpp
+  test_articulation_four_bar.cpp
 )
 
 target_link_libraries(ps_unit_tests

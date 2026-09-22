@@ -71,6 +71,8 @@ Instance::Instance(Model model, const articulation::ArticulationDesc& desc) : mo
         state_.qd[3] = v_body.x; state_.qd[4] = v_body.y; state_.qd[5] = v_body.z;
     }
 
+    loop_closures_ = build_loop_closure_runtime(model_, link_to_body_);
+
     recompute_world_kinematics();
 }
 
@@ -140,6 +142,11 @@ void Instance::step_tick(const InstanceConfig& cfg, real tick_dt) {
             step_semi_implicit_euler(cfg, ext_force, h);
         }
         clamp_joint_limits();
+        // Drift stabilisation (PLAN.md P1.5a scope item 4), every substep:
+        // measured (P1.5a report) against once-per-tick - per-substep
+        // corrections are individually much smaller, which measured lower
+        // energy drift overall despite the extra ABA-probe cost.
+        if (!loop_closures_.empty()) project_onto_constraints(model_, state_, loop_closures_);
     }
 
     recompute_world_kinematics();
@@ -157,13 +164,7 @@ void Instance::clamp_joint_limits() {
 
 void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h) {
     const std::vector<real> tau = compute_tau(state_.qd);
-    AbaInput ain;
-    ain.model = &model_;
-    ain.state = &state_;
-    ain.tau = tau;
-    ain.gravity = cfg.gravity;
-    ain.ext_force = ext_force;
-    const AbaOutput aout = aba(ain);
+    const AbaOutput aout = solve_constrained_dynamics(model_, state_, loop_closures_, tau, cfg.gravity, ext_force);
 
     // Semi-implicit (symplectic) Euler: velocity first, then position using
     // the NEW velocity.
@@ -184,13 +185,7 @@ void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::ve
 
 Instance::Derivative Instance::evaluate_derivative(const ArticulationState& st, const std::vector<real>& tau,
                                                      const std::vector<SpatialVector>& ext_force, const Vec3& gravity) const {
-    AbaInput ain;
-    ain.model = &model_;
-    ain.state = &st;
-    ain.tau = tau;
-    ain.gravity = gravity;
-    ain.ext_force = ext_force;
-    const AbaOutput aout = aba(ain);
+    const AbaOutput aout = solve_constrained_dynamics(model_, st, loop_closures_, tau, gravity, ext_force);
 
     Derivative d;
     d.qdot.assign(static_cast<std::size_t>(model_.num_q), real(0.0));
