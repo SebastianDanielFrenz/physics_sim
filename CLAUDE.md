@@ -287,7 +287,8 @@ ctest --preset linux-release --output-on-failure
 ## CI
 
 ```powershell
-tools\ci.ps1                      # every leg
+tools\ci.ps1                      # every leg, FAST test selection (default)
+tools\ci.ps1 -Full                # every leg, every test (pre-P1.5b behaviour)
 tools\ci.ps1 -SkipWsl             # Windows legs only
 tools\ci.ps1 -SkipWindows         # WSL legs only
 tools\ci.ps1 -Only debug,asan     # named legs only (matches preset names, plus msvc-release)
@@ -295,10 +296,47 @@ tools\ci.ps1 -Only debug,asan     # named legs only (matches preset names, plus 
 
 Legs: clang-cl `debug`, `release`, `asan`; cl `msvc-release`; a grep that
 fails the run if anything under `core/` includes a Godot/GDExtension header;
-WSL `linux-release`, `linux-asan-ubsan`, `linux-tsan`. Every leg's `ctest`
-step runs the full suite above (`ps_unit_tests`, `ps_validation_tests`,
-`ps_determinism_tests`, `bench_force_elements`). Prints a per-leg PASS/FAIL
-summary; exits non-zero on any failure.
+WSL `linux-release`, `linux-asan-ubsan`, `linux-tsan`. Prints a per-leg
+PASS/FAIL summary with per-stage (configure/build/ctest) timing and a
+per-leg + total wall-clock line; exits non-zero on any failure. Every
+`ctest` invocation passes `--parallel` (12 on Windows, 24 in WSL - see
+"Test tags" below for why heavy determinism tests are exempted from
+oversubscription).
+
+**Test selection (default = FAST, target < 5 min wall clock on the dev
+machine).** `tools/ci.ps1` (no flag): the `release`, `msvc-release` and
+`linux-release` legs run every test except `[long]`-tagged ones
+(`ctest -LE long`); the `debug`, `asan`, `linux-asan-ubsan` and `linux-tsan`
+legs run only `ps_unit_tests` + `ps_determinism_tests` + `[sanitizer]`-tagged
+tests (`ctest -LE "validation|long"` - the whole `ps_validation_tests` suite
+is `[validation]`-tagged, and the `[sanitizer]` short variants deliberately
+omit that tag so this one exclusion routes them back in). `tools/ci.ps1
+-Full`: no label filter, every test runs on every leg (the behaviour before
+this split; mandatory before a phase counts done per PLAN.md section 7).
+
+**Test tags** (`tests/*/CMakeLists.txt` pass `ADD_TAGS_AS_LABELS` to
+`catch_discover_tests`, so every Catch2 tag becomes a CTest `LABEL`
+selectable via `ctest -L`/`-LE`):
+- `[long]`: a physics test that simulates tens of seconds (60 s energy-drift/
+  momentum tests, 30-35 s mass-ratio/resting-contact tests) - cheap in a
+  release build but 5-15x slower under a sanitizer, where it would blow the
+  fast-CI budget. Never used on a test needing under about 2 s in release.
+- `[sanitizer]`: a short (1-3 s simulated) hand-written variant of a
+  `[long]` Jolt/job-system-backed test (`test_joint_chain_energy.cpp`,
+  `test_mass_ratio.cpp`, `test_resting_contact.cpp`), reusing the same
+  thresholds (all three are steady-state/bounded-oscillation quantities, not
+  ones that grow with run length - see each variant's comment) so the
+  sanitizer legs still exercise the Jolt/job-system path without the full
+  60 s cost. Pure-articulation `[long]` tests (energy, floating-base,
+  four-bar, mass-ratio) got no `[sanitizer]` variant: articulation stepping
+  never touches the job system (`tests/determinism/test_worker_count_hash.cpp`'s
+  comment), so a short variant would add no TSan-relevant coverage beyond
+  what the always-run white-box unit tests (`test_articulation_core.cpp`,
+  `test_articulation_four_bar.cpp`) already give.
+- `[heavy]` (`tests/determinism`): a test that spins up its own `JobSystem`
+  with up to 24 workers; given CTest `PROCESSORS=24` so `ctest --parallel`
+  never schedules it alongside another test and oversubscribes the
+  machine's 24 logical threads.
 
 ## Dev environment setup
 
