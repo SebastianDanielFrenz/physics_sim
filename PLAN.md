@@ -446,6 +446,16 @@ penetration, stability, energy, action = reaction, cost. Sebastian decides.
 thread, snapshot → Node3D transforms, input → sim controls, debug draw of
 force vectors, static mesh/heightmap → sim collision. Demo project with a flat
 test ground.
+Front-end performance target (Sebastian, 2026-09-23): the games should run at
+4K and 240 Hz on his machine (Ryzen 9 5900X, Radeon RX 7900 XT, 32 GB) with
+decent 2026-era visuals. Native 4K240 is out of reach for that GPU, so the
+realistic path is rendering at a lower internal resolution with upscaling
+(Godot's FSR) plus driver-side frame generation, and an art style that avoids
+the heaviest effects. What this repo owes that target: the adapter's per-frame
+main-thread work must fit far inside a 4.2 ms frame — bulk transform updates,
+instancing for repeated objects, never blocking on the sim, and no per-body
+script work. Measure it: adapter main-thread time per frame with 30 vehicles
+visible, reported as a telemetry channel, target < 1 ms.
 Large worlds: the sim works in double precision (D2/D4), but standard Godot
 renders in float32, which gives about 4 mm steps at 50 km, so the camera and
 car jitter. The adapter therefore uses origin rebasing: Godot positions are
