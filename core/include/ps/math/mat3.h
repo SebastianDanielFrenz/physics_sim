@@ -46,6 +46,10 @@ struct Mat3 {
         return Mat3{rows[0] + o.rows[0], rows[1] + o.rows[1], rows[2] + o.rows[2]};
     }
 
+    constexpr Mat3 operator-(const Mat3& o) const {
+        return Mat3{rows[0] - o.rows[0], rows[1] - o.rows[1], rows[2] - o.rows[2]};
+    }
+
     constexpr Mat3 operator*(real s) const { return Mat3{rows[0] * s, rows[1] * s, rows[2] * s}; }
 
     [[nodiscard]] constexpr Mat3 transposed() const {

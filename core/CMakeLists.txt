@@ -16,6 +16,11 @@ add_library(ps_core STATIC
 
   src/backend/jolt/jolt_backend.cpp
 
+  src/articulation/model.cpp
+  src/articulation/rnea.cpp
+  src/articulation/crba.cpp
+  src/articulation/aba.cpp
+
   src/world/world.cpp
 
   src/io/telemetry.cpp
