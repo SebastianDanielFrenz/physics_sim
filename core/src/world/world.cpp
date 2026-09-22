@@ -1,5 +1,7 @@
 #include "ps/world/world.h"
 
+#include "../articulation/system.h" // internal; World owns it via the forward-declared pointer (world.h)
+
 #include <algorithm>
 #include <chrono>
 #include <string>
@@ -8,6 +10,7 @@ namespace ps {
 
 World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / config.tick_rate_hz) {
     job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers);
+    articulation_system_ = std::make_unique<articulation::System>();
     RigidBackendSettings backend_settings;
     backend_settings.baumgarte = config.baumgarte;
     backend_settings.num_velocity_steps = config.num_velocity_steps;
@@ -56,7 +59,7 @@ void World::build_pipeline() {
     std::size_t slot = 0;
     const auto freeze = pipeline_->add_stage("freeze_tick_start_state", timed(slot++, [] {}));
     const auto queries = pipeline_->add_stage("scene_queries", timed(slot++, [] {}), {freeze});
-    const auto islands = pipeline_->add_stage("vehicle_islands_substep", timed(slot++, [] {}), {queries});
+    const auto islands = pipeline_->add_stage("vehicle_islands_substep", timed(slot++, [this] { stage_vehicle_islands(); }), {queries});
     const auto force_el = pipeline_->add_stage("force_elements", timed(slot++, [this] { stage_force_elements(); }), {islands});
     const auto gather = pipeline_->add_stage("gather", timed(slot++, [this] { stage_gather(); }), {force_el});
     const auto solver_seam = pipeline_->add_stage(
@@ -106,6 +109,26 @@ void World::stage_force_elements() {
     });
 }
 
+void World::stage_vehicle_islands() {
+    // PLAN.md D10/P1.5a: articulations integrate here, one job per
+    // articulation (System::step_all internally loops instances; a
+    // per-instance job is a straightforward future extension once more
+    // than a handful of articulations are common - PLAN.md D8's
+    // "do not create jobs for less than ~20us of work" applies the same
+    // way it does to force elements). Consumes the external wrenches
+    // gathered during the PREVIOUS tick's stage_gather (D3: multi-rate
+    // stepping - islands substep using state/forces already known at the
+    // start of this tick, then force_elements/gather below compute this
+    // tick's wrenches for the NEXT tick's islands stage), then clears them
+    // so stage_gather can accumulate fresh ones for next tick.
+    if (articulation_system_->empty()) return;
+    articulation::InstanceConfig cfg;
+    cfg.gravity = config_.gravity;
+    cfg.substep_rate_hz = config_.substep_rate_hz;
+    articulation_system_->step_all(cfg, dt_);
+    articulation_system_->clear_external_wrenches();
+}
+
 void World::stage_gather() {
     // Ordered gather, sequential in fixed element-id order (PLAN.md D8:
     // "never sum floats in completion order"): result is independent of
@@ -113,7 +136,17 @@ void World::stage_gather() {
     for (std::size_t i = 0; i < force_elements_.size(); ++i) {
         const IForceElement* el = force_elements_[i];
         if (!el) continue;
-        backend_->apply_wrench(el->frame().body(), force_element_wrenches_[i]);
+        const Frame& frame = el->frame();
+        if (frame.is_articulation_link()) {
+            // PLAN.md D10/P1.5a: "their wrenches reach the articulation as
+            // external spatial forces" - held constant across this
+            // articulation's substeps next tick (D3), same as a Jolt
+            // body's accumulated wrench is held for one backend step.
+            articulation_system_->accumulate_external_wrench(
+                frame.articulation_link(), frame.world_pose(*backend_), force_element_wrenches_[i]);
+        } else {
+            backend_->apply_wrench(frame.body(), force_element_wrenches_[i]);
+        }
     }
 }
 
@@ -162,7 +195,31 @@ std::uint64_t World::state_hash() const {
     std::uint64_t h = 14695981039346656037ULL; // FNV-1a offset basis
     h ^= tick_;
     h *= 1099511628211ULL;
-    return backend_->compute_state_hash(h);
+    h = backend_->compute_state_hash(h);
+    // PLAN.md D10/P1.5a: articulation joint state folds in too (D7: "same
+    // binary + same inputs -> bit-identical state" applies to it exactly
+    // as it does to every Jolt body).
+    return articulation_system_->fold_state_hash(h);
+}
+
+ArticulationId World::create_articulation(const articulation::ArticulationDesc& desc) {
+    return articulation_system_->create(desc);
+}
+
+real World::joint_position(ArticulationId id, int link_index) const {
+    return articulation_system_->at(id).joint_position(link_index);
+}
+
+real World::joint_velocity(ArticulationId id, int link_index) const {
+    return articulation_system_->at(id).joint_velocity(link_index);
+}
+
+void World::set_joint_force(ArticulationId id, int link_index, real tau) {
+    articulation_system_->at(id).set_joint_force(link_index, tau);
+}
+
+Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) const {
+    return articulation_system_->link_frame(id, link_index, local_offset);
 }
 
 } // namespace ps

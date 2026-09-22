@@ -46,8 +46,10 @@ Model build_model(const articulation::ArticulationDesc& desc) {
         if (ld.parent < 0 && !m.floating_root) {
             const Pose pre_joint_world = desc.root.pose * ld.joint_frame_in_parent;
             b.Xtree = spatial::spatial_transform_from_pose(pre_joint_world);
+            b.joint_pose_in_parent = pre_joint_world;
         } else {
             b.Xtree = spatial::spatial_transform_from_pose(ld.joint_frame_in_parent);
+            b.joint_pose_in_parent = ld.joint_frame_in_parent;
         }
 
         switch (ld.joint) {

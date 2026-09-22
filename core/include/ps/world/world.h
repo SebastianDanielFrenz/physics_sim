@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "ps/articulation/articulation_desc.h"
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/io/telemetry.h"
 #include "ps/jobs/job_system.h"
@@ -18,6 +19,12 @@
 #include <functional>
 #include <memory>
 #include <vector>
+
+// Forward-declared only: the articulation runtime (PLAN.md D10/P1.5a) is
+// internal (core/src/articulation/system.h), never included from a public
+// header - World owns it through this incomplete-type pointer exactly the
+// way it owns IRigidBackend's Jolt implementation (PLAN.md D2's seam).
+namespace ps::articulation { class System; }
 
 namespace ps {
 
@@ -63,6 +70,26 @@ public:
     [[nodiscard]] Motion get_motion(BodyId id) const { return backend_->get_motion(id); }
     [[nodiscard]] real get_mass(BodyId id) const { return backend_->get_mass(id); }
 
+    // PLAN.md D10/P1.5a: our own reduced-coordinate (Featherstone) solver
+    // for articulated chains. Runs in the vehicle-island stage,
+    // sub-stepped at WorldConfig::substep_rate_hz inside each tick (D3/D8);
+    // see PLAN.md section 5 and P1.5a's scope for the model. Additive to
+    // every existing World method; a World that never calls this behaves
+    // exactly as before.
+    ArticulationId create_articulation(const articulation::ArticulationDesc& desc);
+    [[nodiscard]] real joint_position(ArticulationId id, int link_index) const;
+    [[nodiscard]] real joint_velocity(ArticulationId id, int link_index) const;
+    // Direct joint force/torque actuation (PLAN.md P1.5a scope item 2);
+    // persists until changed, applied every substep.
+    void set_joint_force(ArticulationId id, int link_index, real tau);
+    // A Frame anchored to link_index (-1 == the articulation's own root -
+    // meaningful only for a floating root, PLAN.md P1.5a scope item 2).
+    // Force elements attach to this exactly like to a body Frame; their
+    // wrenches reach the articulation as external spatial forces.
+    [[nodiscard]] Frame link_frame(ArticulationId id, int link_index, Pose local_offset = Pose::identity()) const;
+    [[nodiscard]] Pose root_pose(ArticulationId id) const { return link_frame(id, -1).world_pose(*backend_); }
+    [[nodiscard]] Motion root_motion(ArticulationId id) const { return link_frame(id, -1).world_motion(*backend_); }
+
     // Registration order is the element's fixed evaluation/gather id
     // (PLAN.md D8: deterministic ordered gather). Ownership stays with the
     // caller, who must keep the element alive (and remove it first if it
@@ -102,6 +129,7 @@ public:
 
 private:
     void build_pipeline();
+    void stage_vehicle_islands();
     void stage_force_elements();
     void stage_gather();
     void stage_backend_step();
@@ -115,6 +143,7 @@ private:
     std::unique_ptr<jobs::JobSystem> job_system_;
     std::unique_ptr<IRigidBackend> backend_;
     std::unique_ptr<jobs::TaskGraph> pipeline_;
+    std::unique_ptr<articulation::System> articulation_system_; // PLAN.md D10/P1.5a; forward-declared above
 
     std::vector<const IForceElement*> force_elements_; // index == ForceElementId.index; nullptr == removed
     std::vector<Wrench> force_element_wrenches_;        // scatter slots, parallel to force_elements_

@@ -42,6 +42,7 @@ struct BodyModel {
     BodyJointKind joint = BodyJointKind::Revolute;
     Vec3 axis = Vec3::unit_z();             // 1-DoF joints only, joint-frame-local
     spatial::SpatialTransform Xtree;        // fixed parent -> pre-joint transform (see file comment)
+    Pose joint_pose_in_parent = Pose::identity(); // same fixed transform as Xtree, kept as a Pose (position+quaternion) for forward-kinematics callers that need an actual Pose rather than a Plucker transform (instance.cpp's world-pose cache)
     spatial::SpatialInertia inertia;        // about this body's own frame origin, this body's own axes
 
     real joint_damping = 0.0;

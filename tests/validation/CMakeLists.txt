@@ -10,6 +10,11 @@ add_executable(ps_validation_tests
   test_resting_contact.cpp
   test_huge_forces.cpp
   test_mass_ratio.cpp
+  test_articulation_pendulum.cpp
+  test_articulation_double_pendulum.cpp
+  test_articulation_energy.cpp
+  test_articulation_mass_ratio.cpp
+  test_articulation_floating_base.cpp
 )
 
 target_link_libraries(ps_validation_tests

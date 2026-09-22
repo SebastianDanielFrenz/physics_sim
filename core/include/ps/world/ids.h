@@ -21,9 +21,11 @@ struct Id {
 struct BodyIdTag {};
 struct JointIdTag {};
 struct ForceElementIdTag {};
+struct ArticulationIdTag {}; // PLAN.md D10/P1.5a: ps::World::create_articulation
 
 using BodyId = Id<BodyIdTag>;
 using JointId = Id<JointIdTag>;
 using ForceElementId = Id<ForceElementIdTag>;
+using ArticulationId = Id<ArticulationIdTag>;
 
 } // namespace ps
