@@ -46,13 +46,13 @@ physics_sim/
     support/                          test-only shared helpers (not part of ps_core)
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
-    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs, test_world_basic, test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_scenario_articulation
+    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs, test_world_basic, test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation
     validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path)
     determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario)
     bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
   data/
     vehicles/ tyres/ aircraft/        empty (.gitkeep) until P3+
-    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json
+    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json, multi_articulation.json (several open chains of different sizes, a floating base, a four-bar loop closure - Windows/Linux hash-compare and worker-count determinism)
     models/                           Godot art assets (glb + rig.json); owned by a separate session, do not touch
   adapters/
     godot/                            empty (.gitkeep) until P2; built only when PS_BUILD_GODOT_ADAPTER=ON
@@ -83,7 +83,8 @@ physics_sim/
   (`target_include_directories ... PRIVATE`) for the white-box tests that
   `#include "articulation/..."` directly (internal, not part of `ps_core`'s
   public API) - `test_articulation_core.cpp`, `test_articulation_four_bar.cpp`,
-  `test_articulation_four_bar_energy.cpp`.
+  `test_articulation_four_bar_energy.cpp`, `test_articulation_parallel_alloc.cpp`,
+  `test_aba_fast_transform.cpp`.
 - `bench_force_elements` (executable, `tests/bench`): plain `main()`
   (not Catch2, so its measured numbers are always on stdout); links
   `ps_core`, `ps_headless_env`. Registered with CTest via `add_test()`.
@@ -161,7 +162,12 @@ instance at `WorldConfig::substep_rate_hz` (default 960 Hz) inside the
 tick's `gather` stage (held constant across all of a tick's substeps,
 PLAN.md D3), then clears them so this tick's `force_elements`/`gather`
 can accumulate fresh ones for next tick. A no-op (near-zero cost) when
-`World` has no articulations.
+`World` has no articulations. `System::step_all` (PLAN.md D8/P1.5a,
+PHYS-009 Step 1) runs one job per articulation via `ps::jobs::parallel_for`
+(batched by `WorldConfig::articulation_grain`, default auto - same formula
+as `force_element_grain`); instances are already in `ArticulationId` order
+so no separate ordered-gather step is needed (each job touches only its
+own `Instance`'s state, PLAN.md D8's scatter/compute pattern).
 
 Each stage records its own wall-clock duration to a
 `stage.<name>.ms` telemetry channel; `World::step` also records one
@@ -200,7 +206,22 @@ P1.5b).
 - `crba.h`/`.cpp` - Composite Rigid Body Algorithm (ch. 3): the joint-space
   mass matrix `M(q)`; reference/test-only, not on ABA's hot path.
 - `aba.h`/`.cpp` - Articulated-Body Algorithm (ch. 7): O(n) forward
-  dynamics, the production per-substep call.
+  dynamics, the production per-substep call. Pass 2's per-body inertia
+  congruence transform up into the parent has two implementations
+  (PHYS-009 Step 2): `transform_inertia_to_parent_fast` (production,
+  `aba_into`/`aba`) computes the congruence directly from the Plucker
+  transform's `(E, r)` block structure via `Mat3` operations instead of
+  building two dense 6x6 matrices and multiplying them;
+  `transform_inertia_to_parent_reference` is the original dense-`Mat6`
+  form, kept byte-identical as a test-only reference (`aba_reference()`,
+  `tests/unit/test_aba_fast_transform.cpp` cross-checks both to 1e-12
+  relative on random trees). `AbaScratch` (per-`Instance`, preallocated at
+  construction - PHYS-009 Step 1) holds every `aba()` call's n-sized
+  scratch, including a reusable `AbaInput` (`ain`), so the open-chain
+  hot path (`Instance::step_tick` via `*_into` helpers) allocates nothing;
+  a loop-closure-bearing instance (e.g. a four-bar linkage) still allocates
+  in `loop_closure.cpp`'s constraint solve (`ClosureLinearAlgebra`),
+  unchanged by either pass.
 - `loop_closure.h`/`.cpp` - closed-loop constraints (ch. 8):
   acceleration-level Lagrange-multiplier solve via the Schur complement,
   reusing ABA as the `M^-1` operator, plus mass-weighted position/velocity
