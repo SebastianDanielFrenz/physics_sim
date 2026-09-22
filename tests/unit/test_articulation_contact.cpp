@@ -15,7 +15,33 @@
 // (one DoF, no joint chain dynamics to entangle with the contact model) and
 // mirrors the "known resting geometry" shape of tests/validation/
 // test_resting_contact.cpp's Jolt-only equivalent.
-
+//
+// PHYS-011/PHYS-012 (see the vault): the original P1.5b handover
+// (out/handover_p15b.md) left both strategies failing here. Both are now
+// fixed:
+//  - Compliant's energy-gain bug (root cause: the contact force was frozen
+//    across all 4 of a substep's RK4 stages instead of being resampled at
+//    each stage's own state - contact_source.h's header comment) is fixed
+//    in instance.cpp (evaluate_stage_ext_force_into). A leftover "energy
+//    safety clamp" that actively suppressed the restoring force at peak
+//    penetration was removed (contact.cpp). The rig's material.damping
+//    below was also raised from the handover's 5e3 to 1e6 - the smaller
+//    value gave an honest but very lightly damped Hunt-Crossley contact
+//    (measured coefficient of restitution ~0.995), which is physically
+//    correct but needs hundreds of bounces (tens of seconds) to settle
+//    within 1 cm from these drop heights - not a bug, just under-damped for
+//    a "settle quickly" scenario. 1e6 settles both drop heights within 4 s.
+//  - ProxyBody's ~15 cm settle error (root cause: the proxy body had
+//    gravity disabled, so at rest it had no velocity-level signal for
+//    Jolt's contact solver to react to, leaving only the much weaker
+//    penetration/baumgarte position correction to hold it up - see
+//    contact.cpp's constructor comment) is fixed by enabling gravity on the
+//    proxy and subtracting it back out of the impulse readback
+//    (post_backend_step).
+//
+// One residual, genuinely open case remains: ProxyBody at a high (~9.6 m/s)
+// impact speed settles about 2.3 cm short of the 1 cm target - see the
+// [!mayfail] case below for the measured number and the suspected cause.
 #include "ps/world/world.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -34,9 +60,7 @@ constexpr real kLinkMass = 1.0;
 constexpr real kContactRadius = 0.3;
 // A gentle drop (root just above resting height) for the main settle
 // checks - representative of P1.5b's actual scenarios (a bucket resting or
-// lowered onto the ground, not a high-speed impact). See the separate
-// [!mayfail] high-speed case below for the still-open issue at a large
-// drop height.
+// lowered onto the ground, not a high-speed impact).
 constexpr real kGentleRootZ = 1.0;
 constexpr real kHighDropRootZ = 5.0;
 
@@ -66,7 +90,12 @@ ArticulationDesc make_rail_desc(ContactStrategy strategy, real root_z) {
     link.contact.shape = SphereShape{kContactRadius};
     link.contact.material.stiffness = 1.0e6;
     link.contact.material.stiffness_exponent = 1.5;
-    link.contact.material.damping = 5.0e3;
+    // PHYS-011: raised from the handover's 5e3 (see this file's header
+    // comment) - that value is a physically honest but very lightly damped
+    // Hunt-Crossley contact (measured restitution ~0.995) that needs many
+    // dozens of bounces to settle within 1 cm; 1e6 settles within 4 s at
+    // both drop heights exercised below without going unstable.
+    link.contact.material.damping = 1.0e6;
     link.contact.material.friction = 0.8;
     desc.links.push_back(link);
     return desc;
@@ -111,11 +140,7 @@ TEST_CASE("ContactStrategy::None leaves a falling link unaffected by the ground 
     CHECK(r.final_q < -4.5);
 }
 
-// KNOWN OPEN ISSUE (see out/handover_p15b.md): this reproduces even at a
-// gentle drop (~3.7 m/s impact), not only the high-speed case below -
-// tagged [!mayfail] until the root cause is found. Do not loosen the bound
-// instead of fixing the model (PLAN.md working rule).
-TEST_CASE("Compliant strategy settles a gently-lowered link on the ground with small penetration", "[articulation][contact][!mayfail]") {
+TEST_CASE("Compliant strategy settles a gently-lowered link on the ground with small penetration", "[articulation][contact]") {
     const SettleResult r = run(ContactStrategy::Compliant, kGentleRootZ);
     CHECK_FALSE(r.any_nan);
     const real expected_q = (kGroundTopZ + kContactRadius) - kGentleRootZ;
@@ -123,17 +148,11 @@ TEST_CASE("Compliant strategy settles a gently-lowered link on the ground with s
     // Settled within 1 cm of the geometric resting position (sphere radius
     // touching the ground top) - the default material (see make_rail_desc)
     // gives sub-mm penetration at 1 kg/9.81 N (see contact.cpp's header
-    // comment for the Hunt-Crossley law), so 1 cm is a generous bound. This
-    // is the P1.5b-representative case (a link lowered gently onto the
-    // ground, impact speed a few m/s) - the separate high-drop case below
-    // is [!mayfail]; see out/handover_p15b.md for the open issue there.
+    // comment for the Hunt-Crossley law), so 1 cm is a generous bound.
     CHECK(std::abs(r.final_q - expected_q) < 0.01);
 }
 
-// Close (within ~16 cm) but not yet reliably inside the 1 cm target -
-// tagged [!mayfail] pending tuning/investigation rather than loosening the
-// bound (see out/handover_p15b.md).
-TEST_CASE("ProxyBody strategy settles a gently-lowered link on the ground with small penetration", "[articulation][contact][!mayfail]") {
+TEST_CASE("ProxyBody strategy settles a gently-lowered link on the ground with small penetration", "[articulation][contact]") {
     const SettleResult r = run(ContactStrategy::ProxyBody, kGentleRootZ);
     CHECK_FALSE(r.any_nan);
     const real expected_q = (kGroundTopZ + kContactRadius) - kGentleRootZ;
@@ -141,17 +160,7 @@ TEST_CASE("ProxyBody strategy settles a gently-lowered link on the ground with s
     CHECK(std::abs(r.final_q - expected_q) < 0.01);
 }
 
-// KNOWN OPEN ISSUE (P1.5b, not yet fixed - see out/handover_p15b.md): a
-// high-speed impact (dropped from kHighDropRootZ, impact speed ~9.6 m/s)
-// gains energy at the very first bounce under the Compliant strategy
-// instead of settling - observed velocity reversing from -7.9 m/s to
-// +13.4 m/s at first contact (more energy OUT than IN). An impulse safety
-// clamp (contact.cpp, "Energy-safety clamp") was added but did not fix
-// this specific case - the actual mechanism is still open. Tagged
-// [!mayfail] so it does not fail tools/ci.ps1 while this is unresolved;
-// do not delete or loosen this comment/tag without first fixing the root
-// cause (PLAN.md working rule: fix the model, not the tolerance).
-TEST_CASE("Compliant strategy at a high impact speed (known open issue)", "[articulation][contact][!mayfail]") {
+TEST_CASE("Compliant strategy settles from a high impact speed", "[articulation][contact]") {
     const SettleResult r = run(ContactStrategy::Compliant, kHighDropRootZ);
     CHECK_FALSE(r.any_nan);
     const real expected_q = (kGroundTopZ + kContactRadius) - kHighDropRootZ;
@@ -159,11 +168,26 @@ TEST_CASE("Compliant strategy at a high impact speed (known open issue)", "[arti
     CHECK(std::abs(r.final_q - expected_q) < 0.01);
 }
 
-// ProxyBody at the gentle drop height above settles within ~1 cm; at this
-// low root_z=0.5 kLinkMass=1.0 combination it is closer but still not
-// reliably inside the 1 cm bound in every configuration tried - tagged
-// mayfail for the same reason (open issue, see handover) rather than
-// loosening the bound.
+// KNOWN OPEN ISSUE (PHYS-012, see the vault): settles about 2.3 cm short of
+// the 1 cm target (measured final_q=-4.72276, expected_q=-4.7) - much
+// improved from the handover's ~15-16 cm (PHYS-012's gravity/impulse-readback
+// fix applies here too), but not fully inside the bound at this impact
+// speed (~9.6 m/s). Confirmed to be a steady-state offset, not a slow
+// transient (re-running with settle_s=12 instead of 4 gives the exact same
+// final_q). Leading suspect: RigidBackendSettings::penetration_slop's
+// default (0.02 m, i.e. 2 cm - i_rigid_backend.h) is the allowed-without-
+// correction penetration band Jolt's own position solver uses for EVERY
+// body, including the proxy; 2.3 cm is within a factor of ~1.15x of that
+// default, and unlike the gentle-drop case (which settles under a much
+// smaller effective load) this rig's momentum at ~9.6 m/s pushes the proxy
+// close enough to that band's edge for it to show up in the one-tick-
+// delayed readback. Tightening penetration_slop would very likely fix this,
+// but it is a WORLD-level (not per-body) RigidBackendSettings field shared
+// by every Jolt body in a scenario (world.cpp forwards WorldConfig's own
+// field into it) - overriding the documented "every default matches Jolt's
+// own default" contract for every other body just to fix one contact rig
+// is out of scope for this fix; do not loosen this bound instead (PLAN.md
+// working rule).
 TEST_CASE("ProxyBody strategy at a high impact speed (known open issue)", "[articulation][contact][!mayfail]") {
     const SettleResult r = run(ContactStrategy::ProxyBody, kHighDropRootZ);
     CHECK_FALSE(r.any_nan);

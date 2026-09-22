@@ -56,17 +56,23 @@ public:
 
     // ProxyBody only. World's "contact_coupling_post" stage, right after
     // backend_step: reads back each proxy's velocity change, converts it to
-    // an impulse/dt wrench, and accumulates it as the link's external
-    // wrench for NEXT tick (same seam as every other force element). A
-    // no-op for Compliant/None.
-    void post_backend_step(System& sys, ArticulationId id, IRigidBackend& backend, real dt);
+    // an impulse/dt wrench, subtracts the proxy's own known gravity
+    // contribution (see the constructor's gravity_enabled comment and
+    // contact.cpp's header comment for why this subtraction is required),
+    // and accumulates the remainder as the link's external wrench for NEXT
+    // tick (same seam as every other force element). A no-op for
+    // Compliant/None. `gravity` is World's own uniform gravity vector
+    // (WorldConfig::gravity) - the same one the proxy body itself falls
+    // under.
+    void post_backend_step(System& sys, ArticulationId id, IRigidBackend& backend, real dt, const Vec3& gravity);
 
     // IContactSubstepSource (Compliant only - contact_source.h's header
     // comment on why this runs at substep, not tick, rate). A no-op for
     // ProxyBody/None (never actually called for them: Instance only calls
     // this when has_contact_source() is true, which only Compliant sets -
-    // see the constructor).
-    void evaluate_substep_contacts(const Instance& inst, IRigidBackend& backend, real substep_dt, real tick_dt, std::vector<Wrench>& out_wrench) override;
+    // see the constructor). See contact_source.h for apply_reaction_to_other.
+    void evaluate_substep_contacts(const Instance& inst, IRigidBackend& backend, real substep_dt, real tick_dt, std::vector<Wrench>& out_wrench,
+                                    bool apply_reaction_to_other) override;
 
 private:
     struct LinkContact {

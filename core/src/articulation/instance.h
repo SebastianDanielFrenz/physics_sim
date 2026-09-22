@@ -100,16 +100,19 @@ public:
     }
     [[nodiscard]] bool has_contact_source() const { return contact_source_ != nullptr; }
 
-    // Runs num_substeps of semi-implicit Euler at dt_sub = 1/InstanceConfig::substep_rate_hz,
-    // holding the externally-accumulated wrenches constant across all of
-    // them (PLAN.md D3). Converts the accumulated world-frame wrenches to
-    // per-body spatial forces once, at the start, using each body's
-    // current cached world pose. EXCEPT when contact_source_ is set
-    // (PLAN.md P1.5b, contact_source.h): that contribution is instead
-    // recomputed fresh every substep (still held constant across one
-    // substep's internal RK4 stages only) - a stiff contact spring aliases
-    // and goes unstable if sampled/held at the coarser 240 Hz tick rate
-    // (contact_source.h's header comment has the numbers).
+    // Runs num_substeps of semi-implicit Euler (or RK4 - InstanceConfig::integrator)
+    // at dt_sub = 1/InstanceConfig::substep_rate_hz, holding the
+    // externally-accumulated wrenches constant across all of them (PLAN.md
+    // D3). Converts the accumulated world-frame wrenches to per-body spatial
+    // forces once, at the start, using each body's current cached world
+    // pose. EXCEPT when contact_source_ is set (PLAN.md P1.5b,
+    // contact_source.h): that contribution is instead recomputed fresh at
+    // EVERY RK4 stage (up to 4x per substep - see evaluate_stage_ext_force_into
+    // in instance.cpp), not just once per substep - a stiff contact spring
+    // sampled/held constant across a whole substep's 4 RK4 stages can still
+    // manufacture energy at a fast impact even though the substep rate
+    // itself (960 Hz) is fine; see contact_source.h's header comment for the
+    // full argument and PHYS-011 for the numbers that pinned it down.
     void step_tick(const InstanceConfig& cfg, real tick_dt);
 
     [[nodiscard]] real joint_position(int link_index) const;
@@ -121,11 +124,37 @@ public:
 
 private:
     void recompute_world_kinematics();
+    // Same kinematics recompute_world_kinematics() does, but for an
+    // arbitrary state `st` (e.g. an RK4 stage's offset state, PHYS-011)
+    // instead of the member state_, writing into caller-owned,
+    // already-sized pose_out/motion_out instead of body_world_pose_/
+    // body_world_motion_ - used by evaluate_stage_ext_force_into below to
+    // give the contact source that stage's own kinematics without
+    // disturbing the "current tick" caches other code (accumulate_external_wrench,
+    // the public link_world_pose/motion accessors) depends on.
+    void compute_world_kinematics_into(const ArticulationState& st, std::vector<Pose>& pose_out, std::vector<Motion>& motion_out);
     // Writes into tau_scratch_ (PHYS-009 Step 1 rule 2: no per-call vector,
     // reused every call at a stable size == model_.num_v).
     void compute_tau_into(const std::vector<real>& qd_for_actuators, std::vector<real>& out) const;
-    void step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<spatial::SpatialVector>& ext_force, real h);
-    void step_rk4(const InstanceConfig& cfg, const std::vector<spatial::SpatialVector>& ext_force, real h);
+    // If contact_source_ is null: out := base_ext_force (cheap copy, no
+    // extra cost for the common non-contact instance). Otherwise (PLAN.md
+    // P1.5b, PHYS-011): computes `st`'s own world kinematics
+    // (compute_world_kinematics_into), temporarily points
+    // body_world_pose_/body_world_motion_ at them (swap in, call, swap back -
+    // safe: contact-bearing instances step strictly sequentially, never
+    // concurrently with anything else touching this Instance, system.cpp),
+    // asks the contact source for THAT state's contact wrench, and writes
+    // base_ext_force + that wrench (converted to body-local axes using the
+    // SAME stage kinematics) into out. apply_reaction_to_other must be true
+    // for exactly one call per substep (the k1/start-of-substep stage) and
+    // false for every other RK4 stage - see contact_source.h's header
+    // comment for why (double/quadruple-counting the reaction wrench
+    // applied to the other body otherwise).
+    void evaluate_stage_ext_force_into(const ArticulationState& st, const std::vector<spatial::SpatialVector>& base_ext_force,
+                                        real substep_dt, real tick_dt, bool apply_reaction_to_other,
+                                        std::vector<spatial::SpatialVector>& out);
+    void step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<spatial::SpatialVector>& ext_force, real h, real tick_dt);
+    void step_rk4(const InstanceConfig& cfg, const std::vector<spatial::SpatialVector>& ext_force, real h, real tick_dt);
     void clamp_joint_limits();
 
     // One evaluation of the ODE right-hand side at an arbitrary (possibly
@@ -202,13 +231,20 @@ private:
     std::vector<spatial::SpatialVector> ext_force_scratch_;   // size bodies.size(), body-local, held constant across a tick's substeps
     std::vector<spatial::SpatialVector> ext_force_g_scratch_; // size bodies.size(), ext_force + gravity, reused per aba() evaluation
     // PLAN.md P1.5b (contact_source.h): only touched when contact_source_ is
-    // set. contact_wrench_scratch_ is world-frame, refilled by the source
-    // every substep; combined_ext_force_scratch_ is ext_force_scratch_ plus
-    // that substep's contact contribution, body-local - what actually gets
-    // passed to step_rk4/step_semi_implicit_euler for a contact-bearing
-    // substep instead of ext_force_scratch_ directly.
+    // set. contact_wrench_scratch_ is world-frame, refilled by the source at
+    // EVERY RK4 stage (PHYS-011: not once per substep any more - see
+    // evaluate_stage_ext_force_into); combined_ext_force_scratch_ is
+    // ext_force_scratch_ plus that stage's contact contribution, body-local -
+    // what actually gets passed to evaluate_derivative_into for a
+    // contact-bearing stage instead of the tick-held ext_force_scratch_
+    // directly. stage_pose_scratch_/stage_motion_scratch_ hold the RK4
+    // stage's own world kinematics (compute_world_kinematics_into) while
+    // they are temporarily swapped into body_world_pose_/body_world_motion_
+    // for the contact source's call.
     std::vector<Wrench> contact_wrench_scratch_;
     std::vector<spatial::SpatialVector> combined_ext_force_scratch_;
+    std::vector<Pose> stage_pose_scratch_;
+    std::vector<Motion> stage_motion_scratch_;
     IContactSubstepSource* contact_source_ = nullptr;
     IRigidBackend* contact_backend_ = nullptr;
     std::vector<Pose> fk_pose_scratch_;                       // size bodies.size(), forward-kinematics scratch for add_gravity_into

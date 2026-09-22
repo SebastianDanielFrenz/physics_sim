@@ -89,6 +89,8 @@ Instance::Instance(Model model, const articulation::ArticulationDesc& desc) : mo
     ext_force_g_scratch_.assign(model_.bodies.size(), SpatialVector{});
     contact_wrench_scratch_.assign(model_.bodies.size(), Wrench{});
     combined_ext_force_scratch_.assign(model_.bodies.size(), SpatialVector{});
+    stage_pose_scratch_.assign(model_.bodies.size(), Pose::identity());
+    stage_motion_scratch_.assign(model_.bodies.size(), Motion{});
     fk_pose_scratch_.assign(model_.bodies.size(), Pose::identity());
     tau_scratch_.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
     qdd_scratch_.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
@@ -166,30 +168,18 @@ void Instance::step_tick(const InstanceConfig& cfg, real tick_dt) {
     }
 
     for (int s = 0; s < num_substeps; ++s) {
-        const std::vector<SpatialVector>* ext_force_for_substep = &ext_force_scratch_;
-
         // PLAN.md P1.5b (contact_source.h's header comment): a stiff
-        // compliant contact spring must be resampled every substep, not
-        // held constant across the whole tick like every other external
-        // wrench above - recompute_world_kinematics() here gives the
-        // source THIS substep's actual state (not the tick-start state the
-        // loop began with).
-        if (contact_source_) {
-            recompute_world_kinematics();
-            for (auto& w : contact_wrench_scratch_) w = Wrench{};
-            contact_source_->evaluate_substep_contacts(*this, *contact_backend_, h, tick_dt, contact_wrench_scratch_);
-            for (std::size_t i = 0; i < model_.bodies.size(); ++i) {
-                const Wrench& cw = contact_wrench_scratch_[i];
-                const Mat3 r_inv = body_world_pose_[i].orientation.inverse().to_mat3();
-                combined_ext_force_scratch_[i] = ext_force_scratch_[i] + SpatialVector{r_inv * cw.torque, r_inv * cw.force};
-            }
-            ext_force_for_substep = &combined_ext_force_scratch_;
-        }
-
+        // compliant contact spring must be resampled at every RK4 stage,
+        // not held constant across a whole substep (let alone the whole
+        // tick) - step_rk4/step_semi_implicit_euler below call the contact
+        // source themselves, once per stage, via evaluate_stage_ext_force_into,
+        // each at that stage's own offset state. ext_force_scratch_ (the
+        // ordinary, tick-held external wrench, D3) is passed in unchanged;
+        // no per-substep bookkeeping is needed here any more.
         if (cfg.integrator == IntegratorKind::Rk4) {
-            step_rk4(cfg, *ext_force_for_substep, h);
+            step_rk4(cfg, ext_force_scratch_, h, tick_dt);
         } else {
-            step_semi_implicit_euler(cfg, *ext_force_for_substep, h);
+            step_semi_implicit_euler(cfg, ext_force_scratch_, h, tick_dt);
         }
         clamp_joint_limits();
         // Drift stabilisation (PLAN.md P1.5a scope item 4), every substep:
@@ -228,14 +218,19 @@ void Instance::add_gravity_into(const ArticulationState& st, const std::vector<S
     }
 }
 
-void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h) {
+void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h, real tick_dt) {
     compute_tau_into(state_.qd, tau_scratch_);
+    // PLAN.md P1.5b: fold in this substep's contact contribution, if any -
+    // apply_reaction_to_other=true since semi-implicit Euler only evaluates
+    // once per substep, so this IS that substep's one-and-only stage
+    // (contact_source.h).
+    evaluate_stage_ext_force_into(state_, ext_force, h, tick_dt, /*apply_reaction_to_other=*/true, combined_ext_force_scratch_);
     // Gravity applied per body as an external spatial force at its own
     // COM (gravity.h), not Featherstone's a_0 base-acceleration trick -
     // gravity=zero() below so aba()'s own (still-present, unused here)
     // trick contributes nothing.
     const GravityField field{cfg.gravity};
-    add_gravity_into(state_, ext_force, field, ext_force_g_scratch_);
+    add_gravity_into(state_, combined_ext_force_scratch_, field, ext_force_g_scratch_);
     solve_constrained_dynamics_into(model_, state_, loop_closures_, tau_scratch_, Vec3::zero(), ext_force_g_scratch_, aba_scratch_, qdd_scratch_,
                                      loop_closure_scratch_);
 
@@ -293,16 +288,26 @@ void Instance::add_scaled_into(const ArticulationState& base, const Derivative& 
     }
 }
 
-void Instance::step_rk4(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h) {
+void Instance::step_rk4(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h, real tick_dt) {
     compute_tau_into(state_.qd, tau_scratch_);
 
-    evaluate_derivative_into(state_, tau_scratch_, ext_force, cfg.gravity, rk4_k1_);
+    // PLAN.md P1.5b / PHYS-011: resample the contact contribution at EACH
+    // stage's own offset state (evaluate_stage_ext_force_into), not once for
+    // the whole substep - see contact_source.h's header comment for why
+    // freezing it across all 4 stages was the actual root cause of the
+    // strategy-A energy-gain bug. Only k1 (the substep-start stage) may
+    // apply the reaction wrench to the other body.
+    evaluate_stage_ext_force_into(state_, ext_force, h, tick_dt, /*apply_reaction_to_other=*/true, combined_ext_force_scratch_);
+    evaluate_derivative_into(state_, tau_scratch_, combined_ext_force_scratch_, cfg.gravity, rk4_k1_);
     add_scaled_into(state_, rk4_k1_, h * real(0.5), rk4_s2_);
-    evaluate_derivative_into(rk4_s2_, tau_scratch_, ext_force, cfg.gravity, rk4_k2_);
+    evaluate_stage_ext_force_into(rk4_s2_, ext_force, h, tick_dt, /*apply_reaction_to_other=*/false, combined_ext_force_scratch_);
+    evaluate_derivative_into(rk4_s2_, tau_scratch_, combined_ext_force_scratch_, cfg.gravity, rk4_k2_);
     add_scaled_into(state_, rk4_k2_, h * real(0.5), rk4_s3_);
-    evaluate_derivative_into(rk4_s3_, tau_scratch_, ext_force, cfg.gravity, rk4_k3_);
+    evaluate_stage_ext_force_into(rk4_s3_, ext_force, h, tick_dt, /*apply_reaction_to_other=*/false, combined_ext_force_scratch_);
+    evaluate_derivative_into(rk4_s3_, tau_scratch_, combined_ext_force_scratch_, cfg.gravity, rk4_k3_);
     add_scaled_into(state_, rk4_k3_, h, rk4_s4_);
-    evaluate_derivative_into(rk4_s4_, tau_scratch_, ext_force, cfg.gravity, rk4_k4_);
+    evaluate_stage_ext_force_into(rk4_s4_, ext_force, h, tick_dt, /*apply_reaction_to_other=*/false, combined_ext_force_scratch_);
+    evaluate_derivative_into(rk4_s4_, tau_scratch_, combined_ext_force_scratch_, cfg.gravity, rk4_k4_);
 
     const Derivative &k1 = rk4_k1_, &k2 = rk4_k2_, &k3 = rk4_k3_, &k4 = rk4_k4_;
 
@@ -322,6 +327,69 @@ void Instance::step_rk4(const InstanceConfig& cfg, const std::vector<SpatialVect
         }
         state_.root_pose.orientation = q.normalized();
     }
+}
+
+void Instance::compute_world_kinematics_into(const ArticulationState& st, std::vector<Pose>& pose_out, std::vector<Motion>& motion_out) {
+    // Mirrors recompute_world_kinematics() below exactly, but for an
+    // arbitrary state `st` and into caller-owned buffers instead of
+    // state_/body_world_pose_/body_world_motion_ - see instance.h's comment
+    // on this method. Reuses v_local_scratch_ (safe: never called
+    // concurrently with recompute_world_kinematics() or with itself - both
+    // only ever run sequentially within one Instance's own step_tick).
+    const std::size_t n = model_.bodies.size();
+    std::vector<SpatialVector>& v_local = v_local_scratch_;
+    for (std::size_t i = 0; i < n; ++i) {
+        const BodyModel& b = model_.bodies[i];
+        if (model_.floating_root && i == 0) {
+            pose_out[i] = st.root_pose;
+        } else {
+            const Pose parent_pose = (b.parent < 0) ? Pose::identity() : pose_out[static_cast<std::size_t>(b.parent)];
+            pose_out[i] = parent_pose * b.joint_pose_in_parent * joint_transform_pose(b, st);
+        }
+
+        const SpatialVector v_parent_local = (b.parent < 0) ? SpatialVector{} : v_local[static_cast<std::size_t>(b.parent)];
+        const spatial::SpatialTransform xup = compute_xup(model_, static_cast<int>(i), st);
+        const SpatialVector vj = ::ps::articulation::joint_velocity(b, st);
+        v_local[i] = xup.apply_motion(v_parent_local) + vj;
+
+        const Quat rot = pose_out[i].orientation;
+        motion_out[i] = Motion{rot.rotate(v_local[i].bottom), rot.rotate(v_local[i].top)};
+    }
+}
+
+void Instance::evaluate_stage_ext_force_into(const ArticulationState& st, const std::vector<SpatialVector>& base_ext_force,
+                                              real substep_dt, real tick_dt, bool apply_reaction_to_other,
+                                              std::vector<SpatialVector>& out) {
+    if (!contact_source_) {
+        out = base_ext_force; // no contact on this instance: unchanged, no extra cost
+        return;
+    }
+
+    // Point body_world_pose_/body_world_motion_ at THIS stage's own
+    // kinematics for the duration of the contact source's call - contact.cpp
+    // reads them through inst.link_world_pose()/link_world_motion(), which
+    // just index these members, so this is the minimal way to hand a
+    // per-stage state through that interface without changing its contract.
+    // Swapped back immediately after (see below) so every other caller
+    // (accumulate_external_wrench, the public accessors, the NEXT stage's
+    // own compute_world_kinematics_into call) keeps seeing the real
+    // "current tick" caches undisturbed.
+    compute_world_kinematics_into(st, stage_pose_scratch_, stage_motion_scratch_);
+    std::swap(body_world_pose_, stage_pose_scratch_);
+    std::swap(body_world_motion_, stage_motion_scratch_);
+
+    for (auto& w : contact_wrench_scratch_) w = Wrench{};
+    contact_source_->evaluate_substep_contacts(*this, *contact_backend_, substep_dt, tick_dt, contact_wrench_scratch_, apply_reaction_to_other);
+
+    out = base_ext_force;
+    for (std::size_t i = 0; i < model_.bodies.size(); ++i) {
+        const Wrench& cw = contact_wrench_scratch_[i];
+        const Mat3 r_inv = body_world_pose_[i].orientation.inverse().to_mat3(); // body_world_pose_ == this stage's pose right now
+        out[i] += SpatialVector{r_inv * cw.torque, r_inv * cw.force};
+    }
+
+    std::swap(body_world_pose_, stage_pose_scratch_);
+    std::swap(body_world_motion_, stage_motion_scratch_);
 }
 
 void Instance::recompute_world_kinematics() {

@@ -175,7 +175,7 @@ void World::stage_contact_coupling_post() {
     for (std::size_t i = 0; i < articulation_contacts_.size(); ++i) {
         if (!articulation_contacts_[i]) continue;
         const ArticulationId id{static_cast<id_index_t>(i), 1};
-        articulation_contacts_[i]->post_backend_step(*articulation_system_, id, *backend_, dt_);
+        articulation_contacts_[i]->post_backend_step(*articulation_system_, id, *backend_, dt_, config_.gravity);
     }
 }
 
