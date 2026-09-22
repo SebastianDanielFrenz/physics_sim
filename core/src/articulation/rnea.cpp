@@ -41,8 +41,8 @@ RneaOutput rnea(const RneaInput& in) {
         if (b.joint == BodyJointKind::Floating6) {
             sj_qdd = SpatialVector{Vec3{in.qdd[0], in.qdd[1], in.qdd[2]}, Vec3{in.qdd[3], in.qdd[4], in.qdd[5]}};
         } else if (b.ndof == 1) {
-            const auto s = motion_subspace(b);
-            sj_qdd = s[0] * in.qdd[static_cast<std::size_t>(b.dof_index)];
+            const MotionSubspace s = motion_subspace(b);
+            sj_qdd = s.cols[0] * in.qdd[static_cast<std::size_t>(b.dof_index)];
         }
         out.a[i] = xup[i].apply_motion(a_parent) + sj_qdd + cross_motion(out.v[i], vj);
     }
@@ -60,8 +60,8 @@ RneaOutput rnea(const RneaInput& in) {
             out.tau[0] = f[idx].top.x; out.tau[1] = f[idx].top.y; out.tau[2] = f[idx].top.z;
             out.tau[3] = f[idx].bottom.x; out.tau[4] = f[idx].bottom.y; out.tau[5] = f[idx].bottom.z;
         } else if (b.ndof == 1) {
-            const auto s = motion_subspace(b);
-            out.tau[static_cast<std::size_t>(b.dof_index)] = spatial_dot(s[0], f[idx]);
+            const MotionSubspace s = motion_subspace(b);
+            out.tau[static_cast<std::size_t>(b.dof_index)] = spatial_dot(s.cols[0], f[idx]);
         }
         if (b.parent >= 0) {
             f[static_cast<std::size_t>(b.parent)] += xup[idx].apply_force_inverse(f[idx]);

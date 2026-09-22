@@ -29,8 +29,10 @@
 #pragma once
 
 #include "ps/articulation/articulation_desc.h"
+#include "small_matrix.h" // kMaxJointDof
 #include "spatial.h"
 
+#include <array>
 #include <vector>
 
 namespace ps::articulation {
@@ -81,8 +83,16 @@ struct ArticulationState {
 // Motion subspace columns for body i (1 column for Revolute/Prismatic, 6
 // for Floating6 - the canonical basis of R^6, i.e. the free joint's own
 // axes -, 0 for Fixed). Featherstone ch. 2/7's "S" matrix, one spatial
-// vector per column.
-[[nodiscard]] std::vector<spatial::SpatialVector> motion_subspace(const BodyModel& b);
+// vector per column. Fixed-capacity (kMaxJointDof == 6, the most any joint
+// in this project ever has - a floating base) rather than a std::vector:
+// this is called from aba()'s hot path (up to 3x per 1-DoF body per
+// evaluation - PLAN.md D5 "fix the biggest costs first" / PHYS-009 Step 2),
+// and a std::vector of 0-1 elements is a pure-overhead heap allocation.
+struct MotionSubspace {
+    std::array<spatial::SpatialVector, kMaxJointDof> cols{};
+    int count = 0;
+};
+[[nodiscard]] MotionSubspace motion_subspace(const BodyModel& b);
 
 // q-dependent joint transform only (pre-joint frame -> this body's frame);
 // compute_xup() below composes it with Xtree, except for a floating body 0

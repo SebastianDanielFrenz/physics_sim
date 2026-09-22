@@ -104,6 +104,56 @@ Mat6 transform_inertia_to_parent(const SpatialTransform& xup, const Mat6& child)
 
 } // namespace
 
+namespace {
+
+// Per-body DoF-indexed scratch (U columns, u entries): fixed capacity
+// kMaxJointDof (== 6, a floating base is the largest joint this project
+// has) instead of a std::vector, so the tip->base / base->tip passes below
+// never heap-allocate per body (PLAN.md D5 "fix the biggest costs first" /
+// PHYS-009 Step 2 profiling: this - plus the per-call n-sized vectors -
+// was the dominant cost of the original implementation, one heap
+// allocation of some kind for essentially every body on every aba() call).
+struct DofScratch {
+    std::array<SpatialVector, kMaxJointDof> U{};
+    std::array<real, kMaxJointDof> u{};
+};
+
+// Reusable per-thread scratch for the n-sized arrays every aba() call
+// needs. thread_local (not just static) because, although System::step_all
+// steps articulations sequentially today (tests/determinism/
+// test_worker_count_hash.cpp's comment: articulation stepping never
+// touches the job system), aba() has no way to know that and must stay
+// safe if that changes later; a plain function-local static vector would
+// be a data race the moment two threads call aba() concurrently. Each
+// thread that ever calls aba() pays the vector-growth allocation once
+// (first call, or first call after the largest n seen so far), then
+// .resize() to an equal-or-smaller n is a no-op (capacity is kept, no
+// reallocation, no deallocation) - the whole point of reusing these across
+// calls instead of declaring them fresh every time.
+struct AbaScratch {
+    std::vector<SpatialTransform> xup;
+    std::vector<SpatialVector> v;
+    std::vector<SpatialVector> c; // velocity-product bias term, v_i x (S_i*qd_i)
+    std::vector<Mat6> IA;
+    std::vector<SpatialVector> pA;
+    std::vector<DofScratch> dof;
+    std::vector<SmallMatrix> Dinv;
+    std::vector<SpatialVector> a;
+
+    void ensure(std::size_t n) {
+        xup.resize(n);
+        v.resize(n);
+        c.resize(n);
+        IA.resize(n);
+        pA.resize(n);
+        dof.resize(n);
+        Dinv.resize(n);
+        a.resize(n);
+    }
+};
+
+} // namespace
+
 AbaOutput aba(const AbaInput& in) {
     const Model& m = *in.model;
     const ArticulationState& st = *in.state;
@@ -112,14 +162,15 @@ AbaOutput aba(const AbaInput& in) {
     AbaOutput out;
     out.qdd.assign(static_cast<std::size_t>(m.num_v), real(0.0));
 
-    std::vector<SpatialTransform> xup(n);
-    std::vector<SpatialVector> v(n);
-    std::vector<SpatialVector> c(n); // velocity-product bias term, v_i x (S_i*qd_i)
-    std::vector<Mat6> IA(n);
-    std::vector<SpatialVector> pA(n);
-    std::vector<std::vector<SpatialVector>> U(n);
-    std::vector<SmallMatrix> Dinv(n);
-    std::vector<std::vector<real>> u(n);
+    thread_local AbaScratch sc;
+    sc.ensure(n);
+    std::vector<SpatialTransform>& xup = sc.xup;
+    std::vector<SpatialVector>& v = sc.v;
+    std::vector<SpatialVector>& c = sc.c;
+    std::vector<Mat6>& IA = sc.IA;
+    std::vector<SpatialVector>& pA = sc.pA;
+    std::vector<DofScratch>& dof = sc.dof;
+    std::vector<SmallMatrix>& Dinv = sc.Dinv;
 
     const SpatialVector a_world{Vec3::zero(), -in.gravity};
 
@@ -143,19 +194,19 @@ AbaOutput aba(const AbaInput& in) {
     for (std::size_t idx = n; idx-- > 0;) {
         const BodyModel& b = m.bodies[idx];
         if (b.ndof > 0) {
-            const auto s = motion_subspace(b);
-            U[idx].resize(s.size());
-            for (std::size_t a = 0; a < s.size(); ++a) U[idx][a] = IA[idx].apply(s[a]);
+            const MotionSubspace s = motion_subspace(b);
+            const std::size_t ns = static_cast<std::size_t>(s.count);
+            DofScratch& ds = dof[idx];
+            for (std::size_t a = 0; a < ns; ++a) ds.U[a] = IA[idx].apply(s.cols[a]);
 
-            SmallMatrix D = SmallMatrix::zero(static_cast<int>(s.size()), static_cast<int>(s.size()));
-            for (std::size_t a = 0; a < s.size(); ++a)
-                for (std::size_t bcol = 0; bcol < s.size(); ++bcol) D.at(static_cast<int>(a), static_cast<int>(bcol)) = spatial_dot(s[a], U[idx][bcol]);
+            SmallMatrix D = SmallMatrix::zero(static_cast<int>(ns), static_cast<int>(ns));
+            for (std::size_t a = 0; a < ns; ++a)
+                for (std::size_t bcol = 0; bcol < ns; ++bcol) D.at(static_cast<int>(a), static_cast<int>(bcol)) = spatial_dot(s.cols[a], ds.U[bcol]);
             Dinv[idx] = D.inverse();
 
-            u[idx].resize(s.size());
-            for (std::size_t a = 0; a < s.size(); ++a) {
+            for (std::size_t a = 0; a < ns; ++a) {
                 const real tau_a = (b.joint == BodyJointKind::Floating6) ? in.tau[a] : in.tau[static_cast<std::size_t>(b.dof_index)];
-                u[idx][a] = tau_a - spatial_dot(s[a], pA[idx]);
+                ds.u[a] = tau_a - spatial_dot(s.cols[a], pA[idx]);
             }
 
             // Ia = IA_i - U*Dinv*U^T (rank-|s| reduction); pa = pA_i + Ia*c_i + U*Dinv*u.
@@ -163,24 +214,24 @@ AbaOutput aba(const AbaInput& in) {
             for (int r = 0; r < 6; ++r)
                 for (int cc = 0; cc < 6; ++cc) {
                     real sum = 0.0;
-                    for (std::size_t a = 0; a < s.size(); ++a)
-                        for (std::size_t bcol = 0; bcol < s.size(); ++bcol) {
-                            const real ur[6] = {U[idx][a].top.x, U[idx][a].top.y, U[idx][a].top.z, U[idx][a].bottom.x, U[idx][a].bottom.y, U[idx][a].bottom.z};
-                            const real uc[6] = {U[idx][bcol].top.x, U[idx][bcol].top.y, U[idx][bcol].top.z, U[idx][bcol].bottom.x, U[idx][bcol].bottom.y, U[idx][bcol].bottom.z};
+                    for (std::size_t a = 0; a < ns; ++a)
+                        for (std::size_t bcol = 0; bcol < ns; ++bcol) {
+                            const real ur[6] = {ds.U[a].top.x, ds.U[a].top.y, ds.U[a].top.z, ds.U[a].bottom.x, ds.U[a].bottom.y, ds.U[a].bottom.z};
+                            const real uc[6] = {ds.U[bcol].top.x, ds.U[bcol].top.y, ds.U[bcol].top.z, ds.U[bcol].bottom.x, ds.U[bcol].bottom.y, ds.U[bcol].bottom.z};
                             sum += ur[r] * Dinv[idx].at(static_cast<int>(a), static_cast<int>(bcol)) * uc[cc];
                         }
                     udu.m[r][cc] = sum;
                 }
             const Mat6 Ia = IA[idx] - udu;
 
-            std::vector<real> dinv_u(s.size(), real(0.0));
-            for (std::size_t a = 0; a < s.size(); ++a) {
+            std::array<real, kMaxJointDof> dinv_u{};
+            for (std::size_t a = 0; a < ns; ++a) {
                 real sum = 0.0;
-                for (std::size_t bcol = 0; bcol < s.size(); ++bcol) sum += Dinv[idx].at(static_cast<int>(a), static_cast<int>(bcol)) * u[idx][bcol];
+                for (std::size_t bcol = 0; bcol < ns; ++bcol) sum += Dinv[idx].at(static_cast<int>(a), static_cast<int>(bcol)) * ds.u[bcol];
                 dinv_u[a] = sum;
             }
             SpatialVector u_term{};
-            for (std::size_t a = 0; a < s.size(); ++a) u_term += U[idx][a] * dinv_u[a];
+            for (std::size_t a = 0; a < ns; ++a) u_term += ds.U[a] * dinv_u[a];
             const SpatialVector pa = pA[idx] + Ia.apply(c[idx]) + u_term;
 
             if (b.parent >= 0) {
@@ -197,23 +248,25 @@ AbaOutput aba(const AbaInput& in) {
     }
 
     // Pass 3 (base -> tip): resolve accelerations and generalized accelerations.
-    std::vector<SpatialVector> a(n);
+    std::vector<SpatialVector>& a = sc.a;
     for (std::size_t i = 0; i < n; ++i) {
         const BodyModel& b = m.bodies[i];
         const SpatialVector a_parent = (b.parent < 0) ? a_world : a[static_cast<std::size_t>(b.parent)];
         a[i] = xup[i].apply_motion(a_parent) + c[i];
 
         if (b.ndof > 0) {
-            const auto s = motion_subspace(b);
-            std::vector<real> rhs(s.size());
-            for (std::size_t k = 0; k < s.size(); ++k) rhs[k] = u[i][k] - spatial_dot(a[i], U[i][k]);
-            std::vector<real> qdd_local(s.size(), real(0.0));
-            for (std::size_t r = 0; r < s.size(); ++r) {
+            const MotionSubspace s = motion_subspace(b);
+            const std::size_t ns = static_cast<std::size_t>(s.count);
+            const DofScratch& ds = dof[i];
+            std::array<real, kMaxJointDof> rhs{};
+            for (std::size_t k = 0; k < ns; ++k) rhs[k] = ds.u[k] - spatial_dot(a[i], ds.U[k]);
+            std::array<real, kMaxJointDof> qdd_local{};
+            for (std::size_t r = 0; r < ns; ++r) {
                 real sum = 0.0;
-                for (std::size_t cidx = 0; cidx < s.size(); ++cidx) sum += Dinv[i].at(static_cast<int>(r), static_cast<int>(cidx)) * rhs[cidx];
+                for (std::size_t cidx = 0; cidx < ns; ++cidx) sum += Dinv[i].at(static_cast<int>(r), static_cast<int>(cidx)) * rhs[cidx];
                 qdd_local[r] = sum;
             }
-            for (std::size_t k = 0; k < s.size(); ++k) a[i] += s[k] * qdd_local[k];
+            for (std::size_t k = 0; k < ns; ++k) a[i] += s.cols[k] * qdd_local[k];
 
             if (b.joint == BodyJointKind::Floating6) {
                 for (int k = 0; k < 6; ++k) out.qdd[static_cast<std::size_t>(k)] = qdd_local[static_cast<std::size_t>(k)];

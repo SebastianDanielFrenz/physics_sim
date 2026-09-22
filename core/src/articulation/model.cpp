@@ -96,25 +96,31 @@ Model build_model(const articulation::ArticulationDesc& desc) {
     return m;
 }
 
-std::vector<SpatialVector> motion_subspace(const BodyModel& b) {
+MotionSubspace motion_subspace(const BodyModel& b) {
+    MotionSubspace out;
     switch (b.joint) {
         case BodyJointKind::Revolute:
-            return {SpatialVector{b.axis, Vec3::zero()}};
+            out.cols[0] = SpatialVector{b.axis, Vec3::zero()};
+            out.count = 1;
+            break;
         case BodyJointKind::Prismatic:
-            return {SpatialVector{Vec3::zero(), b.axis}};
+            out.cols[0] = SpatialVector{Vec3::zero(), b.axis};
+            out.count = 1;
+            break;
         case BodyJointKind::Fixed:
-            return {};
+            out.count = 0;
+            break;
         case BodyJointKind::Floating6:
-            return {
-                SpatialVector{Vec3::unit_x(), Vec3::zero()},
-                SpatialVector{Vec3::unit_y(), Vec3::zero()},
-                SpatialVector{Vec3::unit_z(), Vec3::zero()},
-                SpatialVector{Vec3::zero(), Vec3::unit_x()},
-                SpatialVector{Vec3::zero(), Vec3::unit_y()},
-                SpatialVector{Vec3::zero(), Vec3::unit_z()},
-            };
+            out.cols[0] = SpatialVector{Vec3::unit_x(), Vec3::zero()};
+            out.cols[1] = SpatialVector{Vec3::unit_y(), Vec3::zero()};
+            out.cols[2] = SpatialVector{Vec3::unit_z(), Vec3::zero()};
+            out.cols[3] = SpatialVector{Vec3::zero(), Vec3::unit_x()};
+            out.cols[4] = SpatialVector{Vec3::zero(), Vec3::unit_y()};
+            out.cols[5] = SpatialVector{Vec3::zero(), Vec3::unit_z()};
+            out.count = 6;
+            break;
     }
-    return {};
+    return out;
 }
 
 SpatialTransform compute_joint_transform(const BodyModel& b, const ArticulationState& st) {
@@ -146,8 +152,8 @@ SpatialVector joint_velocity(const BodyModel& b, const ArticulationState& st) {
         return SpatialVector{Vec3{st.qd[0], st.qd[1], st.qd[2]}, Vec3{st.qd[3], st.qd[4], st.qd[5]}};
     }
     if (b.ndof == 0) return SpatialVector{};
-    const auto s = motion_subspace(b);
-    return s[0] * st.qd[static_cast<std::size_t>(b.dof_index)];
+    const MotionSubspace s = motion_subspace(b);
+    return s.cols[0] * st.qd[static_cast<std::size_t>(b.dof_index)];
 }
 
 } // namespace ps::articulation

@@ -37,22 +37,22 @@ MassMatrix crba(const Model& model, const ArticulationState& state) {
     for (std::size_t i = 0; i < n; ++i) {
         const BodyModel& bi = model.bodies[i];
         if (bi.ndof == 0) continue;
-        const auto si = motion_subspace(bi);
+        const MotionSubspace si = motion_subspace(bi);
 
         // F holds, for each of body i's own DoF columns, the spatial force
         // Ic_i * S_i column - expressed initially in body i's own frame,
         // then walked up the ancestor chain one body at a time.
-        std::vector<SpatialVector> f(si.size());
-        for (std::size_t c = 0; c < si.size(); ++c) f[c] = composite[i] * si[c];
+        std::vector<SpatialVector> f(static_cast<std::size_t>(si.count));
+        for (std::size_t c = 0; c < static_cast<std::size_t>(si.count); ++c) f[c] = composite[i] * si.cols[c];
 
         int j = static_cast<int>(i);
         while (true) {
             const BodyModel& bj = model.bodies[static_cast<std::size_t>(j)];
-            const auto sj = motion_subspace(bj);
+            const MotionSubspace sj = motion_subspace(bj);
             if (bj.ndof > 0) {
-                for (std::size_t a = 0; a < si.size(); ++a) {
-                    for (std::size_t c = 0; c < sj.size(); ++c) {
-                        const real val = spatial_dot(sj[c], f[a]);
+                for (std::size_t a = 0; a < static_cast<std::size_t>(si.count); ++a) {
+                    for (std::size_t c = 0; c < static_cast<std::size_t>(sj.count); ++c) {
+                        const real val = spatial_dot(sj.cols[c], f[a]);
                         const int row = bi.dof_index + static_cast<int>(a);
                         const int col = bj.dof_index + static_cast<int>(c);
                         M.at(row, col) = val;
