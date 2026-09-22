@@ -1,0 +1,46 @@
+{
+  "format": "physics_sim.surfaces/1",
+  "description": "Physical surface parameters shared by every terrain source (see PLAN.md section 6 / P11): data/tracks/test_ground/terrain.json's per-cell surface ids and every feature mesh's per-triangle collision surface (test_ground_collision) both reference the ids in this file rather than embedding their own copy, so a later real-world land-cover source can map its classes onto the same ids/values.",
+  "fields": {
+    "lambda_mu": "Pacejka-style friction scale relative to dry asphalt = 1.0.",
+    "crr": "Rolling-resistance coefficient (dimensionless, F_roll = crr * N)."
+  },
+  "surfaces": {
+    "asphalt": {
+      "display_name": "Dry asphalt",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "Reference surface (lambda_mu=1.0 by definition). Crr for dry asphalt/concrete roads: Wong, Theory of Ground Vehicles, 5th ed., Table 1.3 (typical range 0.010-0.015; midpoint used)."
+    },
+    "kerb": {
+      "display_name": "Painted concrete kerb",
+      "lambda_mu": 0.9,
+      "crr": 0.013,
+      "source": "Painted concrete: base Crr as asphalt (Wong Table 1.3); lambda_mu reduced ~10% from dry asphalt for the paint film, especially when wet -- illustrative test-ground estimate, not a measured value."
+    },
+    "grass": {
+      "display_name": "Dry grass on firm soil",
+      "lambda_mu": 0.42,
+      "crr": 0.08,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3 / typical terrain friction-coefficient tables: firm turf mu ~ 0.35-0.45 dry, Crr ~ 0.06-0.10; midpoints used, flagged as a plausible published range rather than a specific measurement."
+    },
+    "dirt": {
+      "display_name": "Dry compact dirt / gravel road",
+      "lambda_mu": 0.6,
+      "crr": 0.04,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3: dry, hard-packed dirt/gravel road, mu ~ 0.55-0.65, Crr ~ 0.03-0.05; midpoints used (plausible published range)."
+    },
+    "low_mu": {
+      "display_name": "Polished ice (unstudded tyre)",
+      "lambda_mu": 0.1,
+      "crr": 0.01,
+      "source": "Generic vehicle-dynamics references (e.g. SAE / SAE-adjacent tables cited by Milliken, Race Car Vehicle Dynamics, ch. 1) give unstudded-tyre-on-ice peak mu ~ 0.05-0.15; midpoint used. Crr assumed close to dry asphalt (smooth, hard surface) -- plausible range, not a specific measurement."
+    },
+    "field": {
+      "display_name": "Cultivated field / tilled soil",
+      "lambda_mu": 0.5,
+      "crr": 0.09,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3: tilled/cultivated soil bracketed between firm dirt and loose soil, mu ~ 0.45-0.55, Crr ~ 0.08-0.10; midpoints used (plausible published range). Used by terrain.py's surface rules for the procedural farmland, not by any mesh here."
+    }
+  }
+}

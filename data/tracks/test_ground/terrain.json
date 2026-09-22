@@ -1,0 +1,130 @@
+{
+  "format": "physics_sim.terrain/1",
+  "seed": 1592590337,
+  "world": {
+    "half_extent_m": 50000.0,
+    "frame": "Local east-north-up: x=east, y=north, z=up, metres (see layout.py's module docstring -- algebraically the same right-handed axes as a vehicle's own ISO 8855 frame; the world is oriented so the main spawn's forward is east).",
+    "note": "Square world, x and y each in [-half_extent_m, +half_extent_m]."
+  },
+  "precision": "Evaluate in IEEE-754 double precision throughout (matches ps::real = double, PLAN.md D4). The hash is exact-integer (uint32_t wraparound); only the final hash-to-float division is floating point.",
+  "hash": {
+    "name": "murmur3_fmix32_seeded",
+    "reference": "MurmurHash3 fmix32 finalizer (public domain, Austin Appleby), with an added seeded lattice-coordinate mix before the finaliser.",
+    "pseudocode": [
+      "h = (uint32)(ix) * 0x27D4EB2D",
+      "h = h + (uint32)(iy) * 0x165667B1   (mod 2**32)",
+      "h = h + (uint32)(seed)               (mod 2**32)",
+      "h = h ^ (h >> 15)",
+      "h = h * 0x85EBCA6B                   (mod 2**32)",
+      "h = h ^ (h >> 13)",
+      "h = h * 0xC2B2AE35                   (mod 2**32)",
+      "h = h ^ (h >> 16)",
+      "return h                              // uint32"
+    ],
+    "lattice_value": "value01 = hash / 4294967295.0; value = value01*2.0 - 1.0  -> [-1, 1] double"
+  },
+  "value_noise": {
+    "description": "Bilinear interpolation of the 4 surrounding lattice values, using the fractional coordinate remapped by smoothstep(t) = t*t*(3-2*t) on both axes (standard Hermite smoothstep, applied to x then y).",
+    "formula": "gx=x/wavelength; gy=y/wavelength; ix0=floor(gx); iy0=floor(gy); fx=gx-ix0; fy=gy-iy0; sx=smoothstep(fx); sy=smoothstep(fy); a=lerp(v(ix0,iy0),v(ix0+1,iy0),sx); b=lerp(v(ix0,iy0+1),v(ix0+1,iy0+1),sx); noise=lerp(a,b,sy)"
+  },
+  "height_noise": {
+    "formula": "sum(amplitude_k * value_noise(x, y, wavelength_k, seed + seed_offset_k)) over ROLLING_OCTAVES, plus roughness(x,y) * hill.amplitude * value_noise(x,y,hill.wavelength,seed+hill.seed_offset)",
+    "rolling_octaves": [
+      {
+        "wavelength": 2000.0,
+        "amplitude": 22.0,
+        "seed_offset": 1
+      },
+      {
+        "wavelength": 600.0,
+        "amplitude": 10.0,
+        "seed_offset": 2
+      },
+      {
+        "wavelength": 200.0,
+        "amplitude": 4.0,
+        "seed_offset": 3
+      },
+      {
+        "wavelength": 70.0,
+        "amplitude": 1.4,
+        "seed_offset": 4
+      }
+    ],
+    "hill_octave": {
+      "wavelength": 900.0,
+      "amplitude": 55.0,
+      "seed_offset": 5
+    },
+    "roughness": {
+      "near_radius_m": 8000.0,
+      "far_radius_m": 30000.0,
+      "formula": "0 at/inside near_radius_m, 1 at/beyond far_radius_m, smoothstep(dist_from_origin) in between"
+    }
+  },
+  "flat_zones": {
+    "description": "height(x,y) = height_noise(x,y) * (1 - flat_mask(x,y)); flat_mask is the max over every zone below of: 1 inside the zone, smoothstep-blended to 0 over the zone's own blend width outside it.",
+    "zones": [
+      {
+        "center": [
+          0.0,
+          0.0
+        ],
+        "radius": 3000.0,
+        "blend": 400.0,
+        "kind": "disc",
+        "name": "main_disc"
+      },
+      {
+        "kind": "corridor",
+        "name": "long_straight_corridor",
+        "center": [
+          8000.0,
+          800.0
+        ],
+        "heading_deg": 0.0,
+        "half_length": 5300.0,
+        "half_width": 120.0,
+        "blend": 200.0
+      },
+      {
+        "kind": "corridor",
+        "name": "airstrip_corridor",
+        "center": [
+          0.0,
+          19950.0
+        ],
+        "heading_deg": 90.0,
+        "half_length": 2950.0,
+        "half_width": 300.0,
+        "blend": 250.0
+      }
+    ]
+  },
+  "surface_rules": {
+    "description": "Surface is a *per-cell* property, one id per (tile_x, tile_y) cell at tiling.tile_size_m granularity: tile_x=floor(x/tile_size_m), tile_y=floor(y/tile_size_m); a cell's surface is these rules evaluated at its centre point ((tile_x+0.5)*tile_size_m, (tile_y+0.5)*tile_size_m) -- never at an arbitrary point, so every point in a cell agrees. This is the fill surface of the open terrain only; a meshed test feature's own footprint (always on a flat zone, above) is covered by that mesh's own per-triangle collision surface instead (test_ground_collision.json) -- the two are never blended. Rules evaluated in order, first whose channel value >= 'min' wins; default is 'grass' if none match. Each rule's channel is value_noise(cell_cx,cell_cy,wavelength,seed+seed_offset), renormalised from [-1,1] to [0,1] before the threshold.",
+    "default": "grass",
+    "rules": [
+      {
+        "surface": "dirt",
+        "wavelength": 900.0,
+        "seed_offset": 101,
+        "min": 0.62
+      },
+      {
+        "surface": "field",
+        "wavelength": 1600.0,
+        "seed_offset": 102,
+        "min": 0.55
+      }
+    ]
+  },
+  "tiling": {
+    "tile_size_m": 256.0,
+    "sample_spacing_near_m": 1.0,
+    "sample_spacing_far_m": 8.0,
+    "lod_near_radius_m": 500.0,
+    "note": "256 m tiles are both the height-mesh LOD unit (suggestion, not a requirement: 1 m vertex spacing within lod_near_radius_m of the player/camera, coarsening towards sample_spacing_far_m with distance; regenerate/re-mesh a tile deterministically from (tile_x, tile_y, seed), no persisted state needed) and the surface-id cell size (a requirement -- see surface_rules)."
+  },
+  "surface_params_ref": "data/surfaces/surfaces.json: physical lambda_mu/crr values for every surface id used here (grass, dirt, field) or by the feature meshes (asphalt, kerb, low_mu) -- one shared table, not duplicated per source (PLAN.md P11: a later real-world land-cover source maps onto the same ids)."
+}

@@ -1,0 +1,108 @@
+{
+  "format": "physics_sim.collision/1",
+  "file": "test_ground_collision.bin",
+  "frame": "World east-north-up: x=east, y=north, z=up, metres (no basis change -- unlike the .glb; same right-handed axes as ISO 8855, see data/tracks/README.md).",
+  "layout": "Per surface, in this order: float32[vertex_count*3] positions (x,y,z interleaved), then uint32[index_count] triangle indices local to that surface's own vertex block (index 0 = its first vertex). Little-endian, 4-byte aligned throughout.",
+  "surfaces": [
+    {
+      "surface": "asphalt",
+      "vertex_offset": 0,
+      "vertex_count": 75986,
+      "index_offset": 911832,
+      "index_count": 380280,
+      "triangle_count": 126760,
+      "aabb": {
+        "min": [
+          -500.0,
+          -1256.0,
+          -0.5
+        ],
+        "max": [
+          13000.0,
+          20900.0,
+          13.4164
+        ]
+      }
+    },
+    {
+      "surface": "dirt",
+      "vertex_offset": 2432952,
+      "vertex_count": 4,
+      "index_offset": 2433000,
+      "index_count": 6,
+      "triangle_count": 2,
+      "aabb": {
+        "min": [
+          -80.0,
+          -515.0,
+          0.0
+        ],
+        "max": [
+          80.0,
+          -445.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "surface": "grass",
+      "vertex_offset": 2433024,
+      "vertex_count": 4,
+      "index_offset": 2433072,
+      "index_count": 6,
+      "triangle_count": 2,
+      "aabb": {
+        "min": [
+          -380.0,
+          -515.0,
+          0.0
+        ],
+        "max": [
+          -220.0,
+          -445.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "surface": "kerb",
+      "vertex_offset": 2433096,
+      "vertex_count": 576,
+      "index_offset": 2440008,
+      "index_count": 1692,
+      "triangle_count": 564,
+      "aabb": {
+        "min": [
+          -330.0034,
+          -1244.9999,
+          0.0
+        ],
+        "max": [
+          -23.1581,
+          -709.536,
+          3.0
+        ]
+      }
+    },
+    {
+      "surface": "low_mu",
+      "vertex_offset": 2446776,
+      "vertex_count": 602,
+      "index_offset": 2454000,
+      "index_count": 1800,
+      "triangle_count": 600,
+      "aabb": {
+        "min": [
+          150.0,
+          -485.5,
+          0.0
+        ],
+        "max": [
+          450.0,
+          -480.0,
+          0.0
+        ]
+      }
+    }
+  ]
+}
