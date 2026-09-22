@@ -27,9 +27,10 @@ physics_sim/
       types.h                         ps::real = double; id_index_t/id_generation_t
       math/                           vec3.h, quat.h, mat3.h, pose.h (Pose/Motion/Wrench), simd.h (f64x4 skeleton)
       jobs/                           job_fn.h (JobFn), job_system.h (JobSystem, WaitGroup, parallel_for/parallel_batches), task_graph.h, debug_alloc.h
-      world/                          ids.h (BodyId/JointId/ForceElementId), frame.h, force_element.h (IForceElement), snapshot.h (WorldSnapshot, SnapshotTripleBuffer), world.h (World, WorldConfig)
+      world/                          ids.h (BodyId/JointId/ForceElementId/ArticulationId), frame.h (Frame, ILinkStateSource, ArticulationLinkRef), force_element.h (IForceElement), snapshot.h (WorldSnapshot, SnapshotTripleBuffer), world.h (World, WorldConfig)
       backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc/ShapeDesc, create_jolt_backend())
-      io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario, load_scenario, build_scenario)
+      articulation/                   articulation_desc.h (ArticulationDesc, RootDesc, LinkDesc, JointType, JointLimits, VelocityActuator, LoopClosureDesc/LoopClosureType) - descriptors only, no algorithm code
+      io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario incl. ScenarioArticulation, load_scenario, build_scenario)
     src/                              implementation
       version.cpp, jolt_proof.cpp
       math/math_check.cpp             compiles every math header once + static_asserts (math/ is otherwise header-only)
@@ -38,19 +39,20 @@ physics_sim/
         jolt_job_system.h             INTERNAL: JoltJobSystemBridge (JPH::JobSystemWithBarrier over ps::jobs::JobSystem); only included from backend/jolt/
       world/world.cpp                 World's staged tick pipeline (built as a jobs::TaskGraph)
       backend/jolt/jolt_backend.cpp   the only P1 IRigidBackend implementation; every Jolt type is confined to this file + jolt_job_system.h
+      articulation/                   INTERNAL (ps::articulation, not a public header); see "Articulation solver" below
       io/telemetry.cpp, io/scenario.cpp
       vehicle/ drivetrain/ aero/ machine/ terrain/   empty (.gitkeep) until P3+
   tests/
     support/                          test-only shared helpers (not part of ps_core)
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
-    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs, test_world_basic
-    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail])
-    determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test)
-    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep, energy_study.cpp
+    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs, test_world_basic, test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_scenario_articulation
+    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path)
+    determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario)
+    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
   data/
     vehicles/ tyres/ aircraft/        empty (.gitkeep) until P3+
-    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json
+    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json
     models/                           Godot art assets (glb + rig.json); owned by a separate session, do not touch
   adapters/
     godot/                            empty (.gitkeep) until P2; built only when PS_BUILD_GODOT_ADAPTER=ON
@@ -76,7 +78,12 @@ physics_sim/
   `sweep <scenario.json>... [--jobs N] [--ps-run path]`.
 - `ps_unit_tests`, `ps_validation_tests`, `ps_determinism_tests`
   (executables): Catch2 v3 via `ps_test_catch_main`; link `ps_core`.
-  Registered with CTest via `catch_discover_tests`.
+  Registered with CTest via `catch_discover_tests`. `ps_unit_tests` and
+  `ps_validation_tests` additionally get `core/src` on their include path
+  (`target_include_directories ... PRIVATE`) for the white-box tests that
+  `#include "articulation/..."` directly (internal, not part of `ps_core`'s
+  public API) - `test_articulation_core.cpp`, `test_articulation_four_bar.cpp`,
+  `test_articulation_four_bar_energy.cpp`.
 - `bench_force_elements` (executable, `tests/bench`): plain `main()`
   (not Catch2, so its measured numbers are always on stdout); links
   `ps_core`, `ps_headless_env`. Registered with CTest via `add_test()`.
@@ -139,20 +146,86 @@ Built once (constructor) as a `jobs::TaskGraph` of barrier stages, re-run
 every tick:
 
 ```
-freeze_tick_start_state (stub) -> scene_queries (stub) -> vehicle_islands_substep (stub)
+freeze_tick_start_state (stub) -> scene_queries (stub) -> vehicle_islands_substep (articulation stepping, PLAN.md D10/P1.5a)
   -> force_elements (parallel_for over IForceElement::evaluate, scatter into per-element wrench slots)
-  -> gather (sequential, fixed element-id order: backend->apply_wrench)
+  -> gather (sequential, fixed element-id order: backend->apply_wrench, or articulation::System::accumulate_external_wrench for an articulation-link Frame)
   -> solver_seam (named hook, World::set_between_forces_and_backend_step_hook; no-op in P1)
   -> backend_step (IRigidBackend::step, i.e. JoltPhysics PhysicsSystem::Update via the Jolt job-system bridge)
   -> terrain_tiles (stub) -> snapshot (publishes to SnapshotTripleBuffer, records one telemetry row)
 ```
+
+`vehicle_islands_substep` (`World::stage_vehicle_islands`) calls
+`articulation::System::step_all`, which sub-steps every live articulation
+instance at `WorldConfig::substep_rate_hz` (default 960 Hz) inside the
+240 Hz tick, using the external wrenches gathered during the *previous*
+tick's `gather` stage (held constant across all of a tick's substeps,
+PLAN.md D3), then clears them so this tick's `force_elements`/`gather`
+can accumulate fresh ones for next tick. A no-op (near-zero cost) when
+`World` has no articulations.
 
 Each stage records its own wall-clock duration to a
 `stage.<name>.ms` telemetry channel; `World::step` also records one
 `jobs.worker<N>.utilization` channel per worker (busy time / tick wall
 time). `World::state_hash()` folds `IRigidBackend::compute_state_hash`
 (FNV-1a over every live body's pose+velocity bytes, in ascending `BodyId`
-order) - PLAN.md D7.
+order) and then `articulation::System::fold_state_hash` (same FNV-1a
+fold, every live articulation's q/qd and, if floating, root pose) -
+PLAN.md D7; a `World` with no articulations hashes bit-identically to
+before this field existed.
+
+## Articulation solver (`core/src/articulation/`, PLAN.md D10/P1.5a)
+
+Reduced-coordinate (Featherstone) solver for articulated chains, replacing
+Jolt joints wherever energy conservation and mass-ratio robustness matter
+(D10). Entirely internal except the descriptors in
+`ps/articulation/articulation_desc.h` and the `World`/`Frame` seams below;
+no Jolt type anywhere in it, and articulations do not collide with
+anything or touch Jolt at all (P1.5a scope - coupling to Jolt contacts is
+P1.5b).
+
+- `spatial.h` - 6D spatial vector algebra in `ps::real` (motion/force
+  vectors, Plucker transforms, spatial rigid-body inertia), Featherstone
+  ch. 2. Header-only.
+- `small_matrix.h` - dense matrix up to 6x6 (Gauss-Jordan inverse), used
+  for a joint's `D` block in ABA (at most 6x6 because only a floating base
+  needs more than 1x1).
+- `model.h`/`.cpp` - builds a flat `Model` (`BodyModel` array; body 0 is
+  the floating root if `ArticulationDesc::root.floating`, else
+  `ArticulationDesc::links[i]` is body `i` directly) from a public
+  `ArticulationDesc`; `ArticulationState` (`q`/`qd`/`root_pose`);
+  `compute_xup`, `motion_subspace`, `joint_velocity`.
+- `rnea.h`/`.cpp` - Recursive Newton-Euler (Featherstone ch. 3): inverse
+  dynamics; also used (via `qd=0`, `qdd=e_j`, no gravity) to build mass-
+  matrix columns and (via `qdd=0`) bias forces for cross-checks.
+- `crba.h`/`.cpp` - Composite Rigid Body Algorithm (ch. 3): the joint-space
+  mass matrix `M(q)`; reference/test-only, not on ABA's hot path.
+- `aba.h`/`.cpp` - Articulated-Body Algorithm (ch. 7): O(n) forward
+  dynamics, the production per-substep call.
+- `loop_closure.h`/`.cpp` - closed-loop constraints (ch. 8):
+  acceleration-level Lagrange-multiplier solve via the Schur complement,
+  reusing ABA as the `M^-1` operator, plus mass-weighted position/velocity
+  drift-stabilisation projection (run every substep). Only
+  `LoopClosureType::Point` is implemented; `Hinge` is parsed but not yet
+  given its axis-alignment rows.
+- `instance.h`/`.cpp` - one runtime articulation: state, direct/actuator
+  joint forces, external-wrench accumulation, and the integrator. Default
+  integrator is classical RK4 in joint coordinates (chosen by measurement
+  over semi-implicit Euler - see the file's header comment and
+  `tests/bench/energy_study.cpp`'s table); floating-base orientation on
+  the quaternion manifold (exponential map for Euler, renormalised linear
+  rate per RK4 stage).
+- `system.h`/`.cpp` - owns every `World` articulation instance; implements
+  `ps::ILinkStateSource` (`ps/world/frame.h`) so a `Frame` can be anchored
+  to a link without `frame.h` depending on anything in this internal
+  directory.
+
+`World` additions (additive, `ps/world/world.h`): `create_articulation`,
+`joint_position`/`joint_velocity`, `set_joint_force` (direct actuation),
+`link_frame` (a `Frame` anchored to a link, `link_index == -1` == the
+root), `root_pose`/`root_motion`. `Frame` additions (additive,
+`ps/world/frame.h`): a constructor taking an `ILinkStateSource` and
+`ArticulationLinkRef` instead of a `BodyId`; `is_articulation_link()`/
+`articulation_link()`.
 
 ## Jolt backend (`core/src/backend/jolt/jolt_backend.cpp`)
 
