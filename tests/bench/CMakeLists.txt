@@ -30,6 +30,25 @@ add_test(NAME bench_force_elements COMMAND bench_force_elements)
 # test completely alone, regardless of leg.
 set_tests_properties(bench_force_elements PROPERTIES PROCESSORS 24)
 
+# bench_contact_coupling - PLAN.md P1.5b measurement (f): cost per tick per
+# strategy, scaling with contact count (bench_contact_coupling.cpp's header
+# comment). Registered as a smoke check (must run to completion without
+# crashing) like bench_force_elements, but does not itself assert a scaling
+# bound - there is no PLAN.md acceptance number for this measurement.
+add_executable(bench_contact_coupling bench_contact_coupling.cpp)
+
+target_include_directories(bench_contact_coupling PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+
+target_link_libraries(bench_contact_coupling
+  PRIVATE
+    ps_core
+    ps_headless_env
+    ps_warnings
+    ps_options
+)
+
+add_test(NAME bench_contact_coupling COMMAND bench_contact_coupling)
+
 # ps_energy_study - Part A energy-loss measurement study (see
 # tests/bench/energy_study.cpp's header comment). Deliberately NOT
 # registered with add_test/CTest: it is a measurement tool whose table feeds
