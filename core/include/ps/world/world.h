@@ -24,7 +24,7 @@
 // internal (core/src/articulation/system.h), never included from a public
 // header - World owns it through this incomplete-type pointer exactly the
 // way it owns IRigidBackend's Jolt implementation (PLAN.md D2's seam).
-namespace ps::articulation { class System; }
+namespace ps::articulation { class System; class ContactCoupling; } // ContactCoupling: PLAN.md P1.5b, core/src/articulation/contact.h
 
 namespace ps {
 
@@ -141,7 +141,9 @@ private:
     void stage_vehicle_islands();
     void stage_force_elements();
     void stage_gather();
+    void stage_contact_coupling_pre();  // PLAN.md P1.5b; between solver_seam and backend_step
     void stage_backend_step();
+    void stage_contact_coupling_post(); // PLAN.md P1.5b; between backend_step and terrain_tiles
     void stage_snapshot();
 
     WorldConfig config_;
@@ -153,6 +155,13 @@ private:
     std::unique_ptr<IRigidBackend> backend_;
     std::unique_ptr<jobs::TaskGraph> pipeline_;
     std::unique_ptr<articulation::System> articulation_system_; // PLAN.md D10/P1.5a; forward-declared above
+    // PLAN.md P1.5b; index i pairs with ArticulationId{i, 1} (articulations
+    // are never destroyed, so index == id.index always); nullptr == that
+    // articulation's contact_strategy was None. Declared after backend_
+    // (above) so it is destroyed before backend_ (reverse declaration
+    // order) - ContactCoupling's destructor calls backend_.destroy_body()
+    // on any ProxyBody strategy bodies it created.
+    std::vector<std::unique_ptr<articulation::ContactCoupling>> articulation_contacts_;
 
     std::vector<const IForceElement*> force_elements_; // index == ForceElementId.index; nullptr == removed
     std::vector<Wrench> force_element_wrenches_;        // scatter slots, parallel to force_elements_

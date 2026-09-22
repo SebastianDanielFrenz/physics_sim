@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "ps/backend/shape_desc.h" // ShapeDesc only (PLAN.md D2: no Jolt type here either)
 #include "ps/math/pose.h"
 #include "ps/math/mat3.h"
 #include "ps/math/vec3.h"
@@ -20,6 +21,48 @@
 namespace ps::articulation {
 
 enum class JointType { Revolute, Prismatic, Fixed };
+
+// PLAN.md P1.5b: how an articulation's links interact with Jolt contacts.
+// Selected per articulation (ArticulationDesc::contact_strategy below), not
+// globally - a scenario can run one articulation with each strategy side by
+// side for the comparison measurements. None (default) preserves every
+// pre-P1.5b articulation's behaviour exactly: links do not collide with
+// anything.
+//
+//  - Compliant: Jolt is used only as a narrowphase collision query
+//    (IRigidBackend::collide_shape_into) against static and dynamic
+//    geometry; contact forces are computed by this codebase (Hunt-Crossley
+//    normal force + regularised Coulomb friction, contact.h/.cpp) and
+//    applied to the link's Frame, with the reaction applied directly to the
+//    other body when it is dynamic.
+//  - ProxyBody: each contact-enabled link gets one Jolt body that is pose-
+//    and velocity-driven from the link every tick; Jolt solves the contact
+//    (so the OTHER body's reaction is exactly Jolt's own solve, not
+//    reconstructed), and the resulting velocity change is read back after
+//    the step and converted into an external wrench applied to the link
+//    next tick.
+enum class ContactStrategy { None, Compliant, ProxyBody };
+
+// Hunt-Crossley normal contact + regularised Coulomb friction parameters
+// (Compliant strategy) and the proxy body's mass scale (ProxyBody strategy) -
+// see contact.cpp's header comment for the exact force law and its sources.
+struct ContactMaterial {
+    real stiffness = 1.0e6;                    // N/m^stiffness_exponent (Hunt-Crossley k)
+    real stiffness_exponent = 1.5;              // Hertzian-contact exponent (Hunt-Crossley n)
+    real damping = 5.0e3;                       // N*s/m^stiffness_exponent (Hunt-Crossley b, scales the closing-speed term)
+    real friction = 0.8;                        // Coulomb mu
+    real friction_regularization_speed = 0.01;  // m/s; below this the friction force blends smoothly to zero (no stick-slip discontinuity)
+    real proxy_mass_scale = 1.0;                // ProxyBody only: proxy body mass = link mass * this
+};
+
+// Additive per-link contact shape (PLAN.md P1.5b); default-disabled, so an
+// ArticulationDesc built before this field existed behaves identically.
+struct LinkContactDesc {
+    bool enabled = false;
+    ShapeDesc shape = SphereShape{};
+    Pose shape_offset = Pose::identity(); // link-local (link's own post-joint frame)
+    ContactMaterial material{};
+};
 
 struct JointLimits {
     bool enabled = false;
@@ -58,6 +101,8 @@ struct LinkDesc {
 
     real q0 = 0.0;  // initial joint position
     real qd0 = 0.0; // initial joint velocity
+
+    LinkContactDesc contact; // PLAN.md P1.5b; disabled by default
 };
 
 struct RootDesc {
@@ -97,6 +142,13 @@ struct ArticulationDesc {
     RootDesc root;
     std::vector<LinkDesc> links;
     std::vector<LoopClosureDesc> loop_closures;
+
+    // PLAN.md P1.5b: None (default) preserves pre-P1.5b behaviour exactly
+    // (links never collide, every LinkDesc::contact is ignored). Compliant/
+    // ProxyBody only take effect on links whose own LinkContactDesc::enabled
+    // is true - a strategy with no contact-enabled link is a documented
+    // no-op, same cost as None.
+    ContactStrategy contact_strategy = ContactStrategy::None;
 };
 
 } // namespace ps::articulation

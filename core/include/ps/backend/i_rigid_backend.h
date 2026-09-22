@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "ps/backend/shape_desc.h"
 #include "ps/jobs/job_system.h"
 #include "ps/math/mat3.h"
 #include "ps/math/pose.h"
@@ -30,11 +31,6 @@ enum class BodyMotionType { Static, Kinematic, Dynamic };
 // cannot tunnel through thin static geometry (but a long thin body can still
 // tunnel via rotation - see Jolt's own doc comment on EMotionQuality).
 enum class MotionQuality { Discrete, LinearCast };
-
-struct BoxShape { Vec3 half_extents{0.5, 0.5, 0.5}; };
-struct SphereShape { real radius = 0.5; };
-struct CapsuleShape { real half_height = 0.5; real radius = 0.25; };
-using ShapeDesc = std::variant<BoxShape, SphereShape, CapsuleShape>;
 
 struct BodyDesc {
     ShapeDesc shape = SphereShape{};
@@ -116,6 +112,20 @@ struct ContactEvent {
     real normal_impulse = 0.0;
 };
 
+// One overlap of a queried shape against a live body, from collide_shape_into
+// below (PLAN.md P1.5b, strategy A: "compliant contact force elements... Jolt
+// used only as a collision query"). `normal` points away from `body`'s
+// surface, toward the queried shape - i.e. the direction that resolves the
+// overlap (same convention shape_cast's own doc comment above uses for its
+// penetration axis). `penetration` is the overlap depth (> 0 while
+// overlapping); point is a representative world-space contact point.
+struct ShapeContactHit {
+    BodyId body;
+    Vec3 point;
+    Vec3 normal;
+    real penetration = 0.0;
+};
+
 class IRigidBackend {
 public:
     virtual ~IRigidBackend() = default;
@@ -149,6 +159,18 @@ public:
 
     [[nodiscard]] virtual RayCastHit ray_cast(const Vec3& origin, const Vec3& direction, real max_distance) const = 0;
     [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
+
+    // Pure narrowphase overlap query (no sweep, no side effects on the
+    // backend) - PLAN.md P1.5b strategy A: "Jolt is used only as a collision
+    // query (shape casts / collide-shape) against static and dynamic
+    // geometry". Every live body overlapping `shape` at `pose` is appended
+    // into caller-owned `out` (out.clear()'d first, so this can be called
+    // every substep from preallocated scratch with no allocation - PLAN.md
+    // D8). Safe to call concurrently with other read-only queries as long as
+    // the backend is not concurrently stepping (World's pipeline only calls
+    // this between vehicle_islands_substep and backend_step, PLAN.md section
+    // 5 - never overlapping with IRigidBackend::step()).
+    virtual void collide_shape_into(const ShapeDesc& shape, const Pose& pose, std::vector<ShapeContactHit>& out) const = 0;
 
     // Contact events observed during the most recent step(), drained (and
     // cleared) by the caller once per tick, appended into caller-owned

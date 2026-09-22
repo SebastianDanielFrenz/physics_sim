@@ -27,6 +27,25 @@ void System::accumulate_external_wrench(ArticulationLinkRef ref, const ps::Pose&
 
 void System::step_all(jobs::JobSystem& job_system, const InstanceConfig& cfg, real tick_dt, std::size_t grain) {
     if (instances_.empty()) return;
+
+    // PLAN.md P1.5b: an instance with a contact source (Compliant strategy,
+    // contact_source.h) calls IRigidBackend::apply_wrench on ANOTHER body
+    // from inside its own step_tick - apply_wrench's own doc comment
+    // (i_rigid_backend.h) requires that never happen concurrently for the
+    // same body, which parallel_for's arbitrary worker assignment cannot
+    // guarantee across different articulations that might share a body
+    // (e.g. two arms pushing the same crate). Stepped sequentially here,
+    // in the same fixed (creation) order every time regardless of worker
+    // count - correct and deterministic, just not yet parallelised; every
+    // P1.5b scenario has at most a handful of these, so this is not the
+    // bottleneck a future P9 pass would need to address first. Contact-free
+    // instances (still the overwhelming common case) are completely
+    // unaffected: same parallel path, same grain formula as before this
+    // feature existed.
+    for (auto& inst : instances_) {
+        if (inst->has_contact_source()) inst->step_tick(cfg, tick_dt);
+    }
+
     const std::size_t n = instances_.size();
     const int workers = std::max(1, job_system.worker_count());
     // Same auto-grain formula as World::stage_force_elements (world.cpp):
@@ -40,8 +59,11 @@ void System::step_all(jobs::JobSystem& job_system, const InstanceConfig& cfg, re
         // Scatter -> compute (PLAN.md D8): each iteration only ever reads
         // or writes instances_[i]'s own Instance object (its own
         // preallocated scratch, instance.h) - safe to run concurrently
-        // with any other i.
-        for (std::size_t i = begin; i < end; ++i) instances_[i]->step_tick(cfg, tick_dt);
+        // with any other i. Contact-source-bearing instances were already
+        // stepped above (sequentially) and are skipped here.
+        for (std::size_t i = begin; i < end; ++i) {
+            if (!instances_[i]->has_contact_source()) instances_[i]->step_tick(cfg, tick_dt);
+        }
     });
 }
 

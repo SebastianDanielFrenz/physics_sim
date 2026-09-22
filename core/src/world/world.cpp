@@ -1,5 +1,6 @@
 #include "ps/world/world.h"
 
+#include "../articulation/contact.h" // internal; PLAN.md P1.5b
 #include "../articulation/system.h" // internal; World owns it via the forward-declared pointer (world.h)
 
 #include <algorithm>
@@ -65,8 +66,17 @@ void World::build_pipeline() {
     const auto gather = pipeline_->add_stage("gather", timed(slot++, [this] { stage_gather(); }), {force_el});
     const auto solver_seam = pipeline_->add_stage(
         "solver_seam", timed(slot++, [this] { if (between_hook_) between_hook_(*this); }), {gather});
-    const auto backend_step = pipeline_->add_stage("backend_step", timed(slot++, [this] { stage_backend_step(); }), {solver_seam});
-    const auto terrain = pipeline_->add_stage("terrain_tiles", timed(slot++, [] {}), {backend_step});
+    // PLAN.md P1.5b: Compliant queries+applies its contact wrenches here
+    // (right before backend_step, so the reaction it applies to the other
+    // body affects THIS tick's step); ProxyBody pose/velocity-syncs its
+    // proxy bodies here so backend_step solves their contacts below.
+    const auto contact_pre = pipeline_->add_stage("contact_coupling_pre", timed(slot++, [this] { stage_contact_coupling_pre(); }), {solver_seam});
+    const auto backend_step = pipeline_->add_stage("backend_step", timed(slot++, [this] { stage_backend_step(); }), {contact_pre});
+    // PLAN.md P1.5b: ProxyBody reads back each proxy's post-step velocity
+    // change here and accumulates the resulting wrench for next tick
+    // (Compliant is a no-op here, already fully applied above).
+    const auto contact_post = pipeline_->add_stage("contact_coupling_post", timed(slot++, [this] { stage_contact_coupling_post(); }), {backend_step});
+    const auto terrain = pipeline_->add_stage("terrain_tiles", timed(slot++, [] {}), {contact_post});
     pipeline_->add_stage("snapshot", timed(slot++, [this] { stage_snapshot(); }), {terrain});
 
     last_stage_ms_.assign(slot, 0.0);
@@ -149,6 +159,26 @@ void World::stage_gather() {
     }
 }
 
+void World::stage_contact_coupling_pre() {
+    // Sequential, fixed ArticulationId (== index) order (PLAN.md D8's
+    // determinism contract needs a fixed order here, not a parallel
+    // scatter/gather - see contact.h's comment on why that is enough for
+    // the contact counts P1.5b's scenarios actually have).
+    for (std::size_t i = 0; i < articulation_contacts_.size(); ++i) {
+        if (!articulation_contacts_[i]) continue;
+        const ArticulationId id{static_cast<id_index_t>(i), 1};
+        articulation_contacts_[i]->pre_backend_step(articulation_system_->at(id), *backend_);
+    }
+}
+
+void World::stage_contact_coupling_post() {
+    for (std::size_t i = 0; i < articulation_contacts_.size(); ++i) {
+        if (!articulation_contacts_[i]) continue;
+        const ArticulationId id{static_cast<id_index_t>(i), 1};
+        articulation_contacts_[i]->post_backend_step(*articulation_system_, id, *backend_, dt_);
+    }
+}
+
 void World::stage_backend_step() {
     backend_->step(dt_);
     backend_->drain_contact_events_into(last_contact_events_);
@@ -204,7 +234,23 @@ std::uint64_t World::state_hash() const {
 }
 
 ArticulationId World::create_articulation(const articulation::ArticulationDesc& desc) {
-    return articulation_system_->create(desc);
+    const ArticulationId id = articulation_system_->create(desc);
+    if (desc.contact_strategy != articulation::ContactStrategy::None) {
+        // PLAN.md P1.5b: articulation_contacts_[i] pairs with ArticulationId{i, 1}
+        // (see world.h's comment on the member) - grow to keep that index
+        // aligned even though articulations are never destroyed, so id.index
+        // is always articulation_contacts_.size() - 1 the first time this fires
+        // for a given id, but writing it this way keeps the invariant explicit.
+        if (articulation_contacts_.size() <= id.index) articulation_contacts_.resize(id.index + 1);
+        articulation_contacts_[id.index] = std::make_unique<articulation::ContactCoupling>(desc, articulation_system_->at(id), *backend_);
+        if (desc.contact_strategy == articulation::ContactStrategy::Compliant) {
+            // PLAN.md P1.5b/contact_source.h: wired once here, never per
+            // tick - Instance::step_tick calls through this pointer at
+            // substep rate for the rest of this articulation's lifetime.
+            articulation_system_->at(id).set_contact_source(articulation_contacts_[id.index].get(), backend_.get());
+        }
+    }
+    return id;
 }
 
 real World::joint_position(ArticulationId id, int link_index) const {

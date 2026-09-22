@@ -87,6 +87,8 @@ Instance::Instance(Model model, const articulation::ArticulationDesc& desc) : mo
     aba_scratch_.ain.ext_force.assign(model_.bodies.size(), SpatialVector{});
     ext_force_scratch_.assign(model_.bodies.size(), SpatialVector{});
     ext_force_g_scratch_.assign(model_.bodies.size(), SpatialVector{});
+    contact_wrench_scratch_.assign(model_.bodies.size(), Wrench{});
+    combined_ext_force_scratch_.assign(model_.bodies.size(), SpatialVector{});
     fk_pose_scratch_.assign(model_.bodies.size(), Pose::identity());
     tau_scratch_.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
     qdd_scratch_.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
@@ -164,10 +166,30 @@ void Instance::step_tick(const InstanceConfig& cfg, real tick_dt) {
     }
 
     for (int s = 0; s < num_substeps; ++s) {
+        const std::vector<SpatialVector>* ext_force_for_substep = &ext_force_scratch_;
+
+        // PLAN.md P1.5b (contact_source.h's header comment): a stiff
+        // compliant contact spring must be resampled every substep, not
+        // held constant across the whole tick like every other external
+        // wrench above - recompute_world_kinematics() here gives the
+        // source THIS substep's actual state (not the tick-start state the
+        // loop began with).
+        if (contact_source_) {
+            recompute_world_kinematics();
+            for (auto& w : contact_wrench_scratch_) w = Wrench{};
+            contact_source_->evaluate_substep_contacts(*this, *contact_backend_, h, tick_dt, contact_wrench_scratch_);
+            for (std::size_t i = 0; i < model_.bodies.size(); ++i) {
+                const Wrench& cw = contact_wrench_scratch_[i];
+                const Mat3 r_inv = body_world_pose_[i].orientation.inverse().to_mat3();
+                combined_ext_force_scratch_[i] = ext_force_scratch_[i] + SpatialVector{r_inv * cw.torque, r_inv * cw.force};
+            }
+            ext_force_for_substep = &combined_ext_force_scratch_;
+        }
+
         if (cfg.integrator == IntegratorKind::Rk4) {
-            step_rk4(cfg, ext_force_scratch_, h);
+            step_rk4(cfg, *ext_force_for_substep, h);
         } else {
-            step_semi_implicit_euler(cfg, ext_force_scratch_, h);
+            step_semi_implicit_euler(cfg, *ext_force_for_substep, h);
         }
         clamp_joint_limits();
         // Drift stabilisation (PLAN.md P1.5a scope item 4), every substep:

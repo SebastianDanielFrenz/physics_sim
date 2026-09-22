@@ -52,6 +52,7 @@ struct Wrench {
 
     constexpr Wrench operator+(const Wrench& o) const { return {force + o.force, torque + o.torque}; }
     constexpr Wrench& operator+=(const Wrench& o) { force += o.force; torque += o.torque; return *this; }
+    constexpr Wrench operator*(real s) const { return {force * s, torque * s}; }
 };
 
 } // namespace ps

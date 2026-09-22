@@ -37,6 +37,7 @@
 #pragma once
 
 #include "aba.h"
+#include "contact_source.h"
 #include "gravity.h"
 #include "loop_closure.h"
 #include "model.h"
@@ -88,11 +89,27 @@ public:
     void accumulate_external_wrench(int body_index, const Pose& frame_world_pose, const Wrench& wrench);
     void clear_external_wrenches();
 
+    // PLAN.md P1.5b (see contact_source.h's header comment for why this
+    // exists at substep, not tick, granularity): set once at setup time
+    // (World::create_articulation), never per tick/substep - a null source
+    // (default, every pre-P1.5b articulation) costs nothing extra in
+    // step_tick below beyond one pointer comparison.
+    void set_contact_source(IContactSubstepSource* source, IRigidBackend* backend) {
+        contact_source_ = source;
+        contact_backend_ = backend;
+    }
+    [[nodiscard]] bool has_contact_source() const { return contact_source_ != nullptr; }
+
     // Runs num_substeps of semi-implicit Euler at dt_sub = 1/InstanceConfig::substep_rate_hz,
     // holding the externally-accumulated wrenches constant across all of
     // them (PLAN.md D3). Converts the accumulated world-frame wrenches to
     // per-body spatial forces once, at the start, using each body's
-    // current cached world pose.
+    // current cached world pose. EXCEPT when contact_source_ is set
+    // (PLAN.md P1.5b, contact_source.h): that contribution is instead
+    // recomputed fresh every substep (still held constant across one
+    // substep's internal RK4 stages only) - a stiff contact spring aliases
+    // and goes unstable if sampled/held at the coarser 240 Hz tick rate
+    // (contact_source.h's header comment has the numbers).
     void step_tick(const InstanceConfig& cfg, real tick_dt);
 
     [[nodiscard]] real joint_position(int link_index) const;
@@ -184,6 +201,16 @@ private:
     LoopClosureScratch loop_closure_scratch_;
     std::vector<spatial::SpatialVector> ext_force_scratch_;   // size bodies.size(), body-local, held constant across a tick's substeps
     std::vector<spatial::SpatialVector> ext_force_g_scratch_; // size bodies.size(), ext_force + gravity, reused per aba() evaluation
+    // PLAN.md P1.5b (contact_source.h): only touched when contact_source_ is
+    // set. contact_wrench_scratch_ is world-frame, refilled by the source
+    // every substep; combined_ext_force_scratch_ is ext_force_scratch_ plus
+    // that substep's contact contribution, body-local - what actually gets
+    // passed to step_rk4/step_semi_implicit_euler for a contact-bearing
+    // substep instead of ext_force_scratch_ directly.
+    std::vector<Wrench> contact_wrench_scratch_;
+    std::vector<spatial::SpatialVector> combined_ext_force_scratch_;
+    IContactSubstepSource* contact_source_ = nullptr;
+    IRigidBackend* contact_backend_ = nullptr;
     std::vector<Pose> fk_pose_scratch_;                       // size bodies.size(), forward-kinematics scratch for add_gravity_into
     std::vector<real> tau_scratch_;                           // size num_v
     std::vector<real> qdd_scratch_;                            // size num_v, semi-implicit Euler's own aba() output buffer

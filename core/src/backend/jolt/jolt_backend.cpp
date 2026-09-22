@@ -23,6 +23,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
@@ -500,6 +501,43 @@ public:
     }
 
     void drain_contact_events_into(std::vector<ContactEvent>& out) override { contact_listener_.drain_into(out); }
+
+    // PLAN.md P1.5b strategy A: pure narrowphase overlap query, no sweep, no
+    // side effects. AllHitCollisionCollector (not the ClosestHit collector
+    // shape_cast above uses) - a compliant-contact link can genuinely rest
+    // on more than one body's worth of geometry at once (e.g. straddling a
+    // seam between two static pieces), and summing every overlap's force is
+    // the physically correct thing to do, not just the closest one.
+    void collide_shape_into(const ShapeDesc& shape, const Pose& pose, std::vector<ShapeContactHit>& out) const override {
+        out.clear();
+        JPH::RefConst<JPH::Shape> jph_shape = make_shape(shape);
+        JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(to_jph_quat(pose.orientation), to_rvec3(pose.position));
+        JPH::CollideShapeSettings settings;
+        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        physics_system_.GetNarrowPhaseQuery().CollideShape(jph_shape, JPH::Vec3::sReplicate(1.0f), transform, settings,
+                                                             to_rvec3(pose.position), collector);
+        out.reserve(collector.mHits.size());
+        for (const auto& hit : collector.mHits) {
+            const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(hit.mBodyID2);
+            if (!body) continue;
+            ShapeContactHit sch;
+            sch.body = unpack_body_id(body->GetUserData());
+            // mContactPointOn2 is relative to inBaseOffset (passed as
+            // pose.position above) - Jolt's convention for keeping contact
+            // points precise far from the origin even though the query
+            // itself runs in float (Jolt/Physics/Collision/NarrowPhaseQuery.h).
+            sch.point = pose.position + from_vec3f(hit.mContactPointOn2);
+            // Same convention as shape_cast above ("You can use
+            // -mPenetrationAxis.Normalized() as contact normal", Jolt's own
+            // CollideShapeResult doc comment) - mPenetrationAxis points from
+            // shape 1 (the query shape, `pose`) to shape 2 (`body`), so its
+            // negation points away from body's surface toward the query
+            // shape, matching ShapeContactHit::normal's documented direction.
+            sch.normal = from_vec3f(-hit.mPenetrationAxis.Normalized());
+            sch.penetration = real(hit.mPenetrationDepth);
+            out.push_back(sch);
+        }
+    }
 
     std::uint64_t compute_state_hash(std::uint64_t seed) const override {
         std::uint64_t h = seed;

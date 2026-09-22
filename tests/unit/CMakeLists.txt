@@ -14,6 +14,7 @@ add_executable(ps_unit_tests
   test_scenario_articulation.cpp
   test_detmath.cpp
   test_articulation_hinge_guard.cpp
+  test_articulation_contact.cpp
 )
 
 target_link_libraries(ps_unit_tests
