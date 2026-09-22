@@ -179,7 +179,7 @@ RunResult run_mass_ratio_chain(const std::vector<LinkSpec>& links, double durati
 // vs. 20 t box) rather than a discretization-error problem the usual
 // finer-step remedies fix - see the report for the full measurement table
 // and the caveat this is not yet root-caused enough to prescribe a fix.
-TEST_CASE("A 20 t box hanging through a 10 kg link holds without exploding", "[validation][mass_ratio][!mayfail]") {
+TEST_CASE("A 20 t box hanging through a 10 kg link holds without exploding", "[validation][mass_ratio][long][!mayfail]") {
     const std::vector<LinkSpec> links = {
         LinkSpec{CapsuleShape{0.3, 0.05}, 10.0, 0.35},  // light link near the pivot
         LinkSpec{BoxShape{Vec3{1.0, 1.0, 1.0}}, 20000.0, 1.0}, // heavy box at the far end
@@ -193,12 +193,36 @@ TEST_CASE("A 20 t box hanging through a 10 kg link holds without exploding", "[v
     CHECK(r.energy_end <= r.energy_start * 1.01 + 1.0); // no energy gain (small numerical slack)
 }
 
-TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding", "[validation][mass_ratio]") {
+TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding", "[validation][mass_ratio][long]") {
     const std::vector<LinkSpec> links = {
         LinkSpec{BoxShape{Vec3{1.0, 1.0, 1.0}}, 20000.0, 1.0}, // heavy box near the pivot
         LinkSpec{CapsuleShape{0.3, 0.05}, 10.0, 0.35},         // light link at the far end
     };
     const RunResult r = run_mass_ratio_chain(links);
+    INFO("max_anchor_sep_mm=" << r.max_anchor_sep_mm << " energy_start=" << r.energy_start
+         << " energy_end=" << r.energy_end << " max_speed=" << r.max_speed << " finite=" << r.finite);
+    REQUIRE(r.finite);
+    CHECK(r.max_anchor_sep_mm < 10.0);
+    CHECK(r.max_speed < 100.0);
+    CHECK(r.energy_end <= r.energy_start * 1.01 + 1.0);
+}
+
+// Short [sanitizer] variant of the passing (heavy-near-pivot) direction
+// only - the far-end-heavy case above is [!mayfail] already (a known,
+// documented solver-convergence limit, not something a short smoke test
+// should re-litigate). 3 s instead of 30 s, same thresholds: all three
+// checks are steady-state/early-transient bounds (anchor separation,
+// max speed, no energy gain), not quantities that only cross the bound
+// after a long run, so the 30 s bound stays valid for less of it. Runs on
+// the debug/asan/linux-asan-ubsan/linux-tsan legs by default - exercises
+// the same 2000:1-mass-ratio Jolt joint-solving path those legs would
+// otherwise skip entirely once the 30 s tests are excluded as [long].
+TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding, 3 s (short)", "[mass_ratio][sanitizer]") {
+    const std::vector<LinkSpec> links = {
+        LinkSpec{BoxShape{Vec3{1.0, 1.0, 1.0}}, 20000.0, 1.0}, // heavy box near the pivot
+        LinkSpec{CapsuleShape{0.3, 0.05}, 10.0, 0.35},         // light link at the far end
+    };
+    const RunResult r = run_mass_ratio_chain(links, 3.0);
     INFO("max_anchor_sep_mm=" << r.max_anchor_sep_mm << " energy_start=" << r.energy_start
          << " energy_end=" << r.energy_end << " max_speed=" << r.max_speed << " finite=" << r.finite);
     REQUIRE(r.finite);

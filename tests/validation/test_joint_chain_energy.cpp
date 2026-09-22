@@ -49,7 +49,17 @@ double total_mechanical_energy(World& world, const std::vector<BodyId>& bodies, 
 
 } // namespace
 
-TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 60 s", "[validation][joint_chain]") {
+namespace {
+
+// Shared by the full 60 s acceptance test and the short [sanitizer] variant
+// below (tools/ci.ps1 -Full runs the former on every leg; the debug/asan/
+// linux-asan-ubsan/linux-tsan legs run only the latter by default - see
+// CLAUDE.md "CI"). duration_s is the only thing that changes: same chain,
+// same release angle, same 0.5% bound. That bound stays valid for a shorter
+// run because - per the header comment above - a symplectic integrator
+// conserves energy with *bounded oscillation*, not systematic drift, so
+// cutting the run short cannot make the measured drift larger.
+void run_joint_chain_energy_case(double duration_s, double max_rel_drift) {
     const double g = 9.81;
     WorldConfig cfg;
     cfg.tick_rate_hz = 240.0;
@@ -140,12 +150,28 @@ TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 60 s", "[v
     const double z_ref = -(kLinks * kLinkLength + 2.0); // safely below the chain's lowest reachable point
     const double e_start = total_mechanical_energy(world, bodies, g, z_ref);
 
-    const std::uint64_t num_ticks = static_cast<std::uint64_t>(60.0 * cfg.tick_rate_hz + 0.5);
+    const std::uint64_t num_ticks = static_cast<std::uint64_t>(duration_s * cfg.tick_rate_hz + 0.5);
     for (std::uint64_t i = 0; i < num_ticks; ++i) world.step();
 
     const double e_end = total_mechanical_energy(world, bodies, g, z_ref);
     const double rel_drift = std::abs(e_end - e_start) / std::abs(e_start);
 
     INFO("e_start=" << e_start << " e_end=" << e_end << " rel_drift=" << rel_drift);
-    REQUIRE(rel_drift < 0.005);
+    REQUIRE(rel_drift < max_rel_drift);
+}
+
+} // namespace
+
+TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 60 s", "[validation][joint_chain][long]") {
+    run_joint_chain_energy_case(60.0, 0.005);
+}
+
+// Short [sanitizer] variant: same chain, same 0.5% bound, 2 s instead of
+// 60 s (see run_joint_chain_energy_case's comment for why the bound stays
+// valid). Runs on the debug/asan/linux-asan-ubsan/linux-tsan legs by
+// default (tools/ci.ps1, not -Full) - exercises the Jolt hinge-joint plus
+// job-scheduled force-element path those legs would otherwise skip
+// entirely once the 60 s test is excluded as [long].
+TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 2 s (short)", "[joint_chain][sanitizer]") {
+    run_joint_chain_energy_case(2.0, 0.005);
 }

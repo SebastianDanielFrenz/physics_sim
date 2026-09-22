@@ -97,7 +97,7 @@ double total_energy(World& world, ArticulationId art, double g) {
 
 } // namespace
 
-TEST_CASE("Four-bar linkage conserves energy and holds closure over 60 s", "[validation][articulation][four_bar]") {
+TEST_CASE("Four-bar linkage conserves energy and holds closure over 60 s", "[validation][articulation][four_bar][long]") {
     const double g = 9.81;
 
     // Find a closure-consistent initial configuration at crank angle 0.4 rad

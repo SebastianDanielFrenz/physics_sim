@@ -96,7 +96,7 @@ RunResult run_chain(const std::vector<LinkSpec>& links, double duration_s = 60.0
 
 } // namespace
 
-TEST_CASE("Articulation: 20t link carried by a 10kg link stays stable (heavy at the far end)", "[validation][articulation][mass_ratio]") {
+TEST_CASE("Articulation: 20t link carried by a 10kg link stays stable (heavy at the far end)", "[validation][articulation][mass_ratio][long]") {
     const std::vector<LinkSpec> links = {LinkSpec{10.0, 0.35}, LinkSpec{20000.0, 1.0}};
     const RunResult r = run_chain(links);
     INFO("energy_start=" << r.energy_start << " energy_end=" << r.energy_end << " max_qd=" << r.max_qd << " finite=" << r.finite);
@@ -104,7 +104,7 @@ TEST_CASE("Articulation: 20t link carried by a 10kg link stays stable (heavy at 
     CHECK(std::abs(r.energy_end - r.energy_start) < 0.005 * std::abs(r.energy_start));
 }
 
-TEST_CASE("Articulation: 10kg link carried by a 20t link stays stable (heavy near the pivot)", "[validation][articulation][mass_ratio]") {
+TEST_CASE("Articulation: 10kg link carried by a 20t link stays stable (heavy near the pivot)", "[validation][articulation][mass_ratio][long]") {
     const std::vector<LinkSpec> links = {LinkSpec{20000.0, 1.0}, LinkSpec{10.0, 0.35}};
     const RunResult r = run_chain(links);
     INFO("energy_start=" << r.energy_start << " energy_end=" << r.energy_end << " max_qd=" << r.max_qd << " finite=" << r.finite);

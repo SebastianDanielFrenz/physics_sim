@@ -55,7 +55,7 @@ std::uint64_t run_scenario(int workers, std::size_t num_bodies, std::size_t grai
 
 } // namespace
 
-TEST_CASE("State hash is identical across 1, 2, 4, 10 and 24 workers", "[determinism]") {
+TEST_CASE("State hash is identical across 1, 2, 4, 10 and 24 workers", "[determinism][heavy]") {
     constexpr std::size_t kBodies = 64;
     constexpr int kTicks = 40;
 
@@ -117,7 +117,7 @@ std::uint64_t run_articulation_scenario(int workers, int ticks) {
 
 } // namespace
 
-TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation]") {
+TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation][heavy]") {
     constexpr int kTicks = 100;
     const std::uint64_t reference = run_articulation_scenario(1, kTicks);
     for (int workers : {2, 4, 10, 24}) {

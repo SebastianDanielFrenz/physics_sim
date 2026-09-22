@@ -112,15 +112,15 @@ void run_energy_case(const std::vector<LinkSpec>& links, double duration_s) {
 
 } // namespace
 
-TEST_CASE("Articulation single link at 90 deg conserves energy within 0.5% over 60 s", "[validation][articulation][energy]") {
+TEST_CASE("Articulation single link at 90 deg conserves energy within 0.5% over 60 s", "[validation][articulation][energy][long]") {
     run_energy_case({LinkSpec{1.0, 1.0, 90.0 * kPi / 180.0}}, 60.0);
 }
 
-TEST_CASE("Articulation single link at 170 deg conserves energy within 0.5% over 60 s", "[validation][articulation][energy]") {
+TEST_CASE("Articulation single link at 170 deg conserves energy within 0.5% over 60 s", "[validation][articulation][energy][long]") {
     run_energy_case({LinkSpec{1.0, 1.0, 170.0 * kPi / 180.0}}, 60.0);
 }
 
-TEST_CASE("Articulation 3-link chain at 90 deg conserves energy within 0.5% over 60 s", "[validation][articulation][energy]") {
+TEST_CASE("Articulation 3-link chain at 90 deg conserves energy within 0.5% over 60 s", "[validation][articulation][energy][long]") {
     run_energy_case({
         LinkSpec{1.0, 0.6, 90.0 * kPi / 180.0},
         LinkSpec{1.0, 0.6, 0.0},

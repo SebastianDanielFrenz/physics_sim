@@ -55,7 +55,7 @@ Momentum total_momentum(World& world, ArticulationId art, real root_mass, const 
 
 } // namespace
 
-TEST_CASE("Floating-base articulation without gravity conserves momentum over 60 s", "[validation][articulation][floating_base]") {
+TEST_CASE("Floating-base articulation without gravity conserves momentum over 60 s", "[validation][articulation][floating_base][long]") {
     WorldConfig cfg;
     cfg.tick_rate_hz = 240.0;
     cfg.substep_rate_hz = 960.0;

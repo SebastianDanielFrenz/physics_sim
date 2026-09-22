@@ -20,7 +20,8 @@ struct SettleResult {
     double drift_m = 0.0;           // max(z) - min(z) over the tail window
 };
 
-SettleResult drop_box_on_ground(const Vec3& half_extents, double mass, double drop_height) {
+SettleResult drop_box_on_ground(const Vec3& half_extents, double mass, double drop_height,
+                                 double settle_s = 5.0, double tail_s = 30.0) {
     WorldConfig cfg;
     cfg.tick_rate_hz = 240.0;
     cfg.gravity = Vec3{0, 0, -9.81};
@@ -50,9 +51,11 @@ SettleResult drop_box_on_ground(const Vec3& half_extents, double mass, double dr
 
     // 5 s to fall (drop_height is small; free fall to 0.5 m takes ~0.32 s)
     // and settle, then a 30 s tail window used for both the penetration and
-    // drift checks (PLAN.md: "stable (no drift over 30 s)").
-    const double settle_s = 5.0;
-    const double tail_s = 30.0;
+    // drift checks (PLAN.md: "stable (no drift over 30 s)"). settle_s/tail_s
+    // are parameters so the short [sanitizer] variant below can reuse this
+    // function with a shorter tail - penetration and drift are steady-state
+    // properties here (the box has long since stopped moving), not
+    // quantities that grow with run length, so the same thresholds hold.
     const std::uint64_t settle_ticks = static_cast<std::uint64_t>(settle_s * cfg.tick_rate_hz + 0.5);
     const std::uint64_t tail_ticks = static_cast<std::uint64_t>(tail_s * cfg.tick_rate_hz + 0.5);
 
@@ -78,15 +81,29 @@ SettleResult drop_box_on_ground(const Vec3& half_extents, double mass, double dr
 
 } // namespace
 
-TEST_CASE("A 1500 kg car-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact]") {
+TEST_CASE("A 1500 kg car-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact][long]") {
     const SettleResult r = drop_box_on_ground(Vec3{2.25, 0.9, 0.7}, 1500.0, 0.5);
     INFO("max_penetration_mm=" << (r.max_penetration_m * 1000.0) << " drift_mm=" << (r.drift_m * 1000.0));
     CHECK(r.max_penetration_m < 0.01);
     CHECK(r.drift_m < 0.01);
 }
 
-TEST_CASE("A 20 t combine-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact]") {
+TEST_CASE("A 20 t combine-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact][long]") {
     const SettleResult r = drop_box_on_ground(Vec3{4.0, 2.0, 1.75}, 20000.0, 0.5);
+    INFO("max_penetration_mm=" << (r.max_penetration_m * 1000.0) << " drift_mm=" << (r.drift_m * 1000.0));
+    CHECK(r.max_penetration_m < 0.01);
+    CHECK(r.drift_m < 0.01);
+}
+
+// Short [sanitizer] variant of the car-sized case only (same contact code
+// path as the combine-sized one, just a different mass/size - one smoke
+// test is enough here). 1 s settle + 2 s tail instead of 5 s + 30 s, same
+// thresholds (see drop_box_on_ground's comment on why they still hold).
+// Runs on the debug/asan/linux-asan-ubsan/linux-tsan legs by default -
+// exercises Jolt resting contact under those sanitizers, which those legs
+// would otherwise skip entirely once the two tests above are [long].
+TEST_CASE("A 1500 kg car-sized box settles on the ground, short settle+tail (short)", "[resting_contact][sanitizer]") {
+    const SettleResult r = drop_box_on_ground(Vec3{2.25, 0.9, 0.7}, 1500.0, 0.5, 1.0, 2.0);
     INFO("max_penetration_mm=" << (r.max_penetration_m * 1000.0) << " drift_mm=" << (r.drift_m * 1000.0));
     CHECK(r.max_penetration_m < 0.01);
     CHECK(r.drift_m < 0.01);
