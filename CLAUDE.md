@@ -25,11 +25,11 @@ physics_sim/
     include/ps/                       public API headers (no Jolt or Godot types); target ps_core (STATIC)
       version.h                       ps::version_string(), ps::jolt_backend_self_check()
       types.h                         ps::real = double; id_index_t/id_generation_t
-      math/                           vec3.h, quat.h, mat3.h, pose.h (Pose/Motion/Wrench), simd.h (f64x4 skeleton)
+      math/                           vec3.h, quat.h, mat3.h, pose.h (Pose/Motion/Wrench incl. Wrench::operator*(real)), simd.h (f64x4 skeleton)
       jobs/                           job_fn.h (JobFn), job_system.h (JobSystem, WaitGroup, parallel_for/parallel_batches), task_graph.h, debug_alloc.h
       world/                          ids.h (BodyId/JointId/ForceElementId/ArticulationId), frame.h (Frame, ILinkStateSource, ArticulationLinkRef), force_element.h (IForceElement), snapshot.h (WorldSnapshot, SnapshotTripleBuffer), world.h (World, WorldConfig)
-      backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc/ShapeDesc, create_jolt_backend())
-      articulation/                   articulation_desc.h (ArticulationDesc, RootDesc, LinkDesc, JointType, JointLimits, VelocityActuator, LoopClosureDesc/LoopClosureType) - descriptors only, no algorithm code
+      backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc, ShapeContactHit, ContactEvent, create_jolt_backend()); shape_desc.h (ShapeDesc/BoxShape/SphereShape/CapsuleShape - split out of i_rigid_backend.h so articulation_desc.h can use ShapeDesc without pulling in the backend's JointType)
+      articulation/                   articulation_desc.h (ArticulationDesc incl. contact_strategy, RootDesc, LinkDesc incl. contact, JointType, JointLimits, VelocityActuator, LoopClosureDesc/LoopClosureType, ContactStrategy, ContactMaterial, LinkContactDesc) - descriptors only, no algorithm code
       io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario incl. ScenarioArticulation, load_scenario, build_scenario)
     src/                              implementation
       version.cpp, jolt_proof.cpp
@@ -39,20 +39,20 @@ physics_sim/
         jolt_job_system.h             INTERNAL: JoltJobSystemBridge (JPH::JobSystemWithBarrier over ps::jobs::JobSystem); only included from backend/jolt/
       world/world.cpp                 World's staged tick pipeline (built as a jobs::TaskGraph)
       backend/jolt/jolt_backend.cpp   the only P1 IRigidBackend implementation; every Jolt type is confined to this file + jolt_job_system.h
-      articulation/                   INTERNAL (ps::articulation, not a public header); see "Articulation solver" below
+      articulation/                   INTERNAL (ps::articulation, not a public header); see "Articulation solver" below, incl. contact.h/.cpp (ContactCoupling) and contact_source.h (IContactSubstepSource)
       io/telemetry.cpp, io/scenario.cpp
       vehicle/ drivetrain/ aero/ machine/ terrain/   empty (.gitkeep) until P3+
   tests/
     support/                          test-only shared helpers (not part of ps_core)
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
-    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs, test_world_basic, test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation
-    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path)
-    determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario)
-    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
+    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case)
+    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path), test_articulation_contact_measurements (Compliant/ProxyBody: a fixed-base arm resting on the ground, the same rig pressed with a known force, a rail rig pushing a dynamic crate, a floating-base vehicle drop, 5/20 m/s impacts; two [!mayfail] ProxyBody cases)
+    determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario, one case mixes Compliant/ProxyBody contact-bearing rail rigs with plain chains)
+    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target bench_contact_coupling (plain main, also CTest-registered): cost per tick per contact strategy, scaling with contact count; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
   data/
     vehicles/ tyres/ aircraft/        empty (.gitkeep) until P3+
-    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json, multi_articulation.json (several open chains of different sizes, a floating base, a four-bar loop closure - Windows/Linux hash-compare and worker-count determinism)
+    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json, multi_articulation.json (several open chains of different sizes, a floating base, a four-bar loop closure - Windows/Linux hash-compare and worker-count determinism), contact_articulation.json (one Compliant and one ProxyBody rail rig - same hash-compare/determinism coverage for P1.5b contact coupling)
     models/                           Godot art assets (glb + rig.json); owned by a separate session, do not touch
   adapters/
     godot/                            empty (.gitkeep) until P2; built only when PS_BUILD_GODOT_ADAPTER=ON
@@ -88,6 +88,11 @@ physics_sim/
 - `bench_force_elements` (executable, `tests/bench`): plain `main()`
   (not Catch2, so its measured numbers are always on stdout); links
   `ps_core`, `ps_headless_env`. Registered with CTest via `add_test()`.
+- `bench_contact_coupling` (executable, `tests/bench`): plain `main()`;
+  links `ps_core`, `ps_headless_env`. Registered with CTest via
+  `add_test()` as a smoke check only (no scaling assertion, unlike
+  `bench_force_elements`) - PLAN.md P1.5b measurement (f), cost per tick
+  per contact strategy over 1/2/4/8/16 independent contact-bearing rigs.
 - `ps_energy_study` (executable, `tests/bench/energy_study.cpp`): plain
   `main()`; links `ps_core`, `ps_headless_env`. Deliberately NOT
   registered with CTest - a measurement tool (Jolt solver-settings sweep
@@ -104,8 +109,8 @@ physics_sim/
 ## CMake options
 
 - `PS_BUILD_TESTS` (default `ON`): build `ps_unit_tests`,
-  `ps_validation_tests`, `ps_determinism_tests`, `bench_force_elements` and
-  fetch Catch2.
+  `ps_validation_tests`, `ps_determinism_tests`, `bench_force_elements`,
+  `bench_contact_coupling` and fetch Catch2.
 - `PS_BUILD_GODOT_ADAPTER` (default `OFF`): fetch godot-cpp and build
   `adapters/godot`.
 
@@ -150,10 +155,15 @@ than a `std::deque` (PHYS-009 Step 3: a `std::deque<JobEntry>` allocated a
 new internal node on Linux/libstdc++ every time a worker's own queue's
 `push_back` crossed a block boundary a thief's `pop_front` had just
 vacated - reproducible with a no-op nested `parallel_for` alone, Windows
-unaffected). `submit()`'s `push_back` returns `false` on a full queue,
-which calls `JobSystem::fail_queue_full()` (prints to stderr, then
-`std::abort()` - unconditional, not gated by `NDEBUG`) instead of ever
-falling back to heap allocation. `deques_` is
+unaffected). `submit()`'s `push_back` returns `false` on a full queue; the
+caller then runs the job inline/synchronously on the submitting thread
+(`JobSystem::run_job(entry, /*counts_toward_pending=*/false)`) instead of
+aborting or falling back to heap allocation. Counted via
+`JobSystem::queue_full_fallback_count()`, exposed as a `WorldConfig`-driven
+telemetry channel `jobs.queue_full_fallbacks` (`World`'s constructor/
+`step()`). `JobSystem`/`WorldConfig` also carry an explicit
+`queue_capacity`/`job_queue_capacity` (default `0` = auto = 4096) so a test
+can force the tiny-queue path deliberately. `deques_` is
 `std::vector<std::unique_ptr<WorkerQueue>>` (`WorkerQueue` holds a
 `std::mutex`, so it cannot live directly in a plain growable `std::vector`).
 `debug_alloc.cpp` additionally supports an opt-in backtrace dump on Linux
@@ -171,7 +181,9 @@ freeze_tick_start_state (stub) -> scene_queries (stub) -> vehicle_islands_subste
   -> force_elements (parallel_for over IForceElement::evaluate, scatter into per-element wrench slots)
   -> gather (sequential, fixed element-id order: backend->apply_wrench, or articulation::System::accumulate_external_wrench for an articulation-link Frame)
   -> solver_seam (named hook, World::set_between_forces_and_backend_step_hook; no-op in P1)
+  -> contact_coupling_pre (PLAN.md P1.5b: ProxyBody pose/velocity-syncs its proxy Jolt bodies; no-op for Compliant/None)
   -> backend_step (IRigidBackend::step, i.e. JoltPhysics PhysicsSystem::Update via the Jolt job-system bridge)
+  -> contact_coupling_post (PLAN.md P1.5b: ProxyBody reads back each proxy's post-step velocity change and accumulates the resulting wrench for next tick; no-op for Compliant/None)
   -> terrain_tiles (stub) -> snapshot (publishes to SnapshotTripleBuffer, records one telemetry row)
 ```
 
@@ -276,6 +288,54 @@ root), `root_pose`/`root_motion`. `Frame` additions (additive,
 `ArticulationLinkRef` instead of a `BodyId`; `is_articulation_link()`/
 `articulation_link()`.
 
+### Contact coupling (`core/src/articulation/contact.h`/`.cpp`, PLAN.md P1.5b)
+
+How an articulation's contact-enabled links (`LinkDesc::contact`,
+`ps/articulation/articulation_desc.h`) interact with Jolt geometry, selected
+per articulation via `ArticulationDesc::contact_strategy`
+(`ContactStrategy::None` default - zero behaviour change - `Compliant`, or
+`ProxyBody`). `ContactCoupling` (one per contact-enabled articulation,
+owned by `World::articulation_contacts_`, constructed in
+`World::create_articulation`) implements both:
+
+- `Compliant`: `IContactSubstepSource` (`contact_source.h`), wired via
+  `Instance::set_contact_source` and called from inside
+  `Instance::step_rk4`/`step_semi_implicit_euler`
+  (`evaluate_stage_ext_force_into`) at EVERY RK4 stage (up to 4x per 960 Hz
+  substep, not once per substep) - a stiff Hunt-Crossley force sampled and
+  frozen across a whole substep's stages can still manufacture energy at a
+  fast impact even though the substep rate itself is fine (see
+  `contact_source.h`'s header comment). Queries geometry via
+  `IRigidBackend::collide_shape_into` (pure narrowphase overlap, no side
+  effects); force law (Hunt-Crossley normal + regularised Coulomb friction)
+  and the reaction wrench applied directly to the other body (only from the
+  substep-start stage - `apply_reaction_to_other`, never from k2/k3/k4, or
+  the reaction would be over-counted) live in `contact.cpp`. Instance
+  kinematics for an arbitrary (e.g. RK4-offset) state are computed by
+  `Instance::compute_world_kinematics_into`, temporarily swapped into
+  `body_world_pose_`/`body_world_motion_` for the source's call and swapped
+  back immediately after.
+- `ProxyBody`: one Jolt dynamic body per contact-enabled link, pose/
+  velocity-synced from the link every tick (`ContactCoupling::pre_backend_step`,
+  `World`'s `contact_coupling_pre` stage) with real gravity enabled (needed
+  for Jolt's velocity-level contact solver to have anything to react to at
+  rest, not just the much weaker penetration/baumgarte position corrector);
+  `post_backend_step` (`contact_coupling_post` stage) reads back the
+  proxy's velocity change, subtracts the proxy's own known gravity
+  contribution back out, and accumulates the remainder as the link's
+  external wrench for next tick via `System::accumulate_external_wrench`.
+  The proxy's mass is `link.mass * ContactMaterial::proxy_mass_scale` - for
+  a contact-bearing link rigidly carrying much more mass behind it (e.g. a
+  floating-base chassis behind a Fixed-jointed leg), `proxy_mass_scale`
+  must reflect the full carried mass or the proxy's contact impulse is
+  sized for the link alone and is far too weak.
+
+`System::step_all` (`system.cpp`) steps any contact-source-bearing instance
+(`Compliant` only) SEQUENTIALLY FIRST, in fixed creation order, before the
+ordinary `parallel_for` over everything else - `apply_wrench` must never be
+called concurrently for the same body, which two different `Compliant`
+articulations both touching the same dynamic body could otherwise race on.
+
 ## Jolt backend (`core/src/backend/jolt/jolt_backend.cpp`)
 
 `JoltRigidBackend : IRigidBackend`. Two-layer broadphase/object-layer setup
@@ -294,7 +354,13 @@ by-value `live_body_ids()`/`drain_contact_events()` convenience wrappers
 `BackendContactListener::drain_into` copies `pending_` into `out` and then
 `clear()`s `pending_` in place (PHYS-009 Step 3: the previous `drain()`
 `swap()`'d `pending_`'s buffer away every tick, so the very next
-`OnContactAdded`/`OnContactPersisted` reallocated). `ensure_jolt_registered()`
+`OnContactAdded`/`OnContactPersisted` reallocated).
+`IRigidBackend::collide_shape_into` (PLAN.md P1.5b, `ps::articulation`'s
+Compliant contact strategy): pure narrowphase overlap query via
+`JPH::NarrowPhaseQuery::CollideShape` + `AllHitCollisionCollector`, no side
+effects on the backend; every live body overlapping the queried
+`ShapeDesc`/`Pose` is appended into caller-owned `out`
+(`ShapeContactHit`: body/point/normal/penetration). `ensure_jolt_registered()`
 installs `JPH::Trace`/`AssertFailed`
 callbacks that print to stderr (Jolt's own defaults are silent and just
 trigger a bare breakpoint). Broadphase/contact-constraint capacity and the
