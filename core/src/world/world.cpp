@@ -150,7 +150,7 @@ void World::stage_gather() {
 
 void World::stage_backend_step() {
     backend_->step(dt_);
-    last_contact_events_ = backend_->drain_contact_events();
+    backend_->drain_contact_events_into(last_contact_events_);
 }
 
 void World::stage_snapshot() {
@@ -160,7 +160,8 @@ void World::stage_snapshot() {
     snap.bodies.clear();
     snap.deformation_payload.clear(); // seam only (PLAN.md section 6); unused in P1
 
-    for (BodyId id : backend_->live_body_ids()) {
+    backend_->live_body_ids_into(live_body_ids_scratch_);
+    for (BodyId id : live_body_ids_scratch_) {
         snap.bodies.push_back(BodySnapshot{id, backend_->get_pose(id), backend_->get_motion(id)});
     }
     snapshots_->publish();

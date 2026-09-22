@@ -151,8 +151,22 @@ public:
     [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
 
     // Contact events observed during the most recent step(), drained (and
-    // cleared) by the caller once per tick.
-    virtual std::vector<ContactEvent> drain_contact_events() = 0;
+    // cleared) by the caller once per tick, appended into caller-owned
+    // `out` (out is reassigned to hold exactly this tick's events - see
+    // JoltRigidBackend::drain_contact_events_into). PHYS-009 Step 3: World's
+    // backend-step stage calls this every tick, inside a job; a fresh
+    // by-value vector allocated inside the contact listener's own drain
+    // every tick with a live contact - see BackendContactListener::drain_into's
+    // comment (jolt_backend.cpp) for the debug_alloc backtrace that found
+    // it. World reuses its own last_contact_events_ member as `out`.
+    virtual void drain_contact_events_into(std::vector<ContactEvent>& out) = 0;
+
+    // Convenience wrapper for non-hot-path callers (tests, tools).
+    std::vector<ContactEvent> drain_contact_events() {
+        std::vector<ContactEvent> out;
+        drain_contact_events_into(out);
+        return out;
+    }
 
     // Folds every live body's pose+velocity (in a fixed, id-ascending
     // order) into a running FNV-1a hash, starting from seed. Part of
@@ -161,9 +175,23 @@ public:
 
     [[nodiscard]] virtual std::size_t body_count() const = 0;
 
-    // Every live BodyId, ascending by index (fixed, deterministic order).
-    // Used by World's snapshot stage; not a hot-path call.
-    [[nodiscard]] virtual std::vector<BodyId> live_body_ids() const = 0;
+    // Every live BodyId, ascending by index (fixed, deterministic order),
+    // appended into caller-owned `out` (out.clear()'d first). PHYS-009 Step
+    // 3: World's snapshot stage (World::stage_snapshot) calls this every
+    // tick, and every pipeline stage runs inside a job (PLAN.md D8) - a
+    // fresh by-value vector here allocated once per tick forever, found via
+    // a debug_alloc backtrace landing in JoltRigidBackend::live_body_ids()
+    // called from World::stage_snapshot(). World reuses the same
+    // already-capacity'd vector every tick (World::live_body_ids_scratch_).
+    virtual void live_body_ids_into(std::vector<BodyId>& out) const = 0;
+
+    // Convenience wrapper for non-hot-path callers (tests, tools) that just
+    // want the list once and do not care about the allocation.
+    [[nodiscard]] std::vector<BodyId> live_body_ids() const {
+        std::vector<BodyId> out;
+        live_body_ids_into(out);
+        return out;
+    }
 };
 
 // Jolt solver settings exposed for the P1 Part A energy-loss study

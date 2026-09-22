@@ -165,6 +165,11 @@ private:
     std::vector<std::size_t> worker_utilization_channels_;
     std::vector<double> last_stage_ms_;
     std::vector<ContactEvent> last_contact_events_;
+    // PHYS-009 Step 3: reused every tick by stage_snapshot() instead of
+    // taking IRigidBackend::live_body_ids()'s by-value return - see that
+    // method's comment (i_rigid_backend.h) for why a fresh vector there
+    // allocated inside a job every single tick.
+    std::vector<BodyId> live_body_ids_scratch_;
 
 public:
     [[nodiscard]] const std::vector<ContactEvent>& last_contact_events() const { return last_contact_events_; }

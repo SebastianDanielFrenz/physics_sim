@@ -233,11 +233,19 @@ public:
         record(body1, body2, manifold);
     }
 
-    std::vector<ContactEvent> drain() {
+    // PHYS-009 Step 3: out.swap(pending_) used to hand pending_'s entire
+    // buffer to a freshly default-constructed local `out` and leave
+    // pending_ at zero capacity - so the very next OnContactAdded/
+    // OnContactPersisted callback (called from inside Jolt's own solver
+    // jobs, i.e. inside a job per PLAN.md D8) had to reallocate, every
+    // single tick with any live contact (found via a debug_alloc backtrace
+    // landing right here, called from JobFindCollisions). Copying into a
+    // caller-owned, already-capacity'd `out` and clear()ing (not swapping)
+    // pending_ lets both buffers stabilise independently after warm-up.
+    void drain_into(std::vector<ContactEvent>& out) {
         std::lock_guard<std::mutex> lock(m_);
-        std::vector<ContactEvent> out;
-        out.swap(pending_);
-        return out;
+        out = pending_;
+        pending_.clear();
     }
 
 private:
@@ -491,7 +499,7 @@ public:
         return out;
     }
 
-    std::vector<ContactEvent> drain_contact_events() override { return contact_listener_.drain(); }
+    void drain_contact_events_into(std::vector<ContactEvent>& out) override { contact_listener_.drain_into(out); }
 
     std::uint64_t compute_state_hash(std::uint64_t seed) const override {
         std::uint64_t h = seed;
@@ -515,13 +523,11 @@ public:
         return n;
     }
 
-    std::vector<BodyId> live_body_ids() const override {
-        std::vector<BodyId> ids;
-        ids.reserve(slots_.size());
+    void live_body_ids_into(std::vector<BodyId>& out) const override {
+        out.clear(); // keeps capacity (PHYS-009 Step 3): no allocation once the caller's vector has stabilised
         for (std::size_t i = 0; i < slots_.size(); ++i) {
-            if (slots_[i].alive) ids.push_back(BodyId{static_cast<id_index_t>(i), slots_[i].generation});
+            if (slots_[i].alive) out.push_back(BodyId{static_cast<id_index_t>(i), slots_[i].generation});
         }
-        return ids;
     }
 
 private:
