@@ -17,6 +17,7 @@ add_executable(ps_validation_tests
   test_articulation_floating_base.cpp
   test_articulation_actuator.cpp
   test_articulation_four_bar_energy.cpp
+  test_articulation_contact_measurements.cpp
 )
 
 target_link_libraries(ps_validation_tests
