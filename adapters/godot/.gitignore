@@ -1,0 +1,7 @@
+# adapters/godot/.gitignore — build artifacts and Godot's own editor cache,
+# neither of which belongs in version control (both are regenerated: the
+# extension by CMake, the cache by Godot's first import pass - see this
+# adapter's report for why the cache has to exist before a headless run
+# can find PsSimulation et al.).
+demo/bin/
+demo/.godot/
