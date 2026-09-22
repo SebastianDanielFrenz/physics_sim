@@ -81,6 +81,88 @@ ScenarioJoint read_joint(const json& j) {
     return sj;
 }
 
+// --- PLAN.md D10/P1.5a: articulations ---------------------------------
+
+Pose read_pose(const json& j) {
+    Pose p;
+    if (j.is_null()) return p;
+    p.position = read_vec3(j.value("position", json()));
+    p.orientation = read_quat(j.value("orientation", json()));
+    return p;
+}
+
+Mat3 read_inertia_diag(const json& j) {
+    const Vec3 d = read_vec3(j, Vec3::zero());
+    return Mat3::diagonal(d.x, d.y, d.z);
+}
+
+articulation::JointType read_articulation_joint_type(const std::string& s) {
+    if (s == "revolute" || s.empty()) return articulation::JointType::Revolute;
+    if (s == "prismatic") return articulation::JointType::Prismatic;
+    if (s == "fixed") return articulation::JointType::Fixed;
+    throw std::runtime_error("unknown articulation joint type '" + s + "' (expected revolute|prismatic|fixed)");
+}
+
+articulation::LinkDesc read_link(const json& j) {
+    articulation::LinkDesc ld;
+    ld.parent = j.value("parent", -1);
+    ld.joint = read_articulation_joint_type(j.value("joint", std::string("revolute")));
+    ld.joint_frame_in_parent = read_pose(j.value("joint_frame_in_parent", json()));
+    ld.axis = read_vec3(j.value("axis", json::array({0, 0, 1})));
+    ld.mass = j.value("mass", real(1.0));
+    ld.com = read_vec3(j.value("com", json()));
+    ld.inertia = read_inertia_diag(j.value("inertia_diag", json::array({0, 0, 0})));
+    ld.joint_damping = j.value("joint_damping", real(0.0));
+    if (j.contains("limit_min") || j.contains("limit_max")) {
+        ld.limits.enabled = true;
+        ld.limits.min = j.value("limit_min", real(0.0));
+        ld.limits.max = j.value("limit_max", real(0.0));
+    }
+    if (j.contains("velocity_actuator")) {
+        const json& va = j.at("velocity_actuator");
+        ld.velocity_actuator.enabled = true;
+        ld.velocity_actuator.target_speed = va.value("target_speed", real(0.0));
+        ld.velocity_actuator.max_force = va.value("max_force", real(0.0));
+    }
+    ld.q0 = j.value("q0", real(0.0));
+    ld.qd0 = j.value("qd0", real(0.0));
+    return ld;
+}
+
+articulation::LoopClosureDesc read_loop_closure(const json& j) {
+    articulation::LoopClosureDesc lc;
+    const std::string type = j.value("type", std::string("point"));
+    lc.type = (type == "hinge") ? articulation::LoopClosureType::Hinge : articulation::LoopClosureType::Point;
+    lc.link_a = j.value("link_a", -1);
+    lc.link_b = j.value("link_b", -1);
+    lc.anchor_a = read_vec3(j.value("anchor_a", json()));
+    lc.anchor_b = read_vec3(j.value("anchor_b", json()));
+    lc.axis_a = read_vec3(j.value("axis_a", json::array({0, 0, 1})));
+    lc.axis_b = read_vec3(j.value("axis_b", json::array({0, 0, 1})));
+    return lc;
+}
+
+ScenarioArticulation read_articulation(const json& j) {
+    ScenarioArticulation sa;
+    sa.name = j.at("name").get<std::string>();
+    const json& root = j.value("root", json::object());
+    sa.desc.root.floating = root.value("floating", false);
+    sa.desc.root.pose = read_pose(root.value("pose", json()));
+    sa.desc.root.velocity.linear = read_vec3(root.value("linear_velocity", json()));
+    sa.desc.root.velocity.angular = read_vec3(root.value("angular_velocity", json()));
+    sa.desc.root.mass = root.value("mass", real(1.0));
+    sa.desc.root.com = read_vec3(root.value("com", json()));
+    sa.desc.root.inertia = read_inertia_diag(root.value("inertia_diag", json::array({0, 0, 0})));
+
+    if (j.contains("links")) {
+        for (const auto& lj : j.at("links")) sa.desc.links.push_back(read_link(lj));
+    }
+    if (j.contains("loop_closures")) {
+        for (const auto& cj : j.at("loop_closures")) sa.desc.loop_closures.push_back(read_loop_closure(cj));
+    }
+    return sa;
+}
+
 } // namespace
 
 Scenario load_scenario(const std::string& json_path) {
@@ -111,6 +193,9 @@ Scenario load_scenario(const std::string& json_path) {
         if (j.contains("joints")) {
             for (const auto& jj : j.at("joints")) s.joints.push_back(read_joint(jj));
         }
+        if (j.contains("articulations")) {
+            for (const auto& aj : j.at("articulations")) s.articulations.push_back(read_articulation(aj));
+        }
     } catch (const json::exception& e) {
         throw std::runtime_error("invalid scenario " + json_path + ": " + e.what());
     }
@@ -136,6 +221,10 @@ BuiltScenario build_scenario(const Scenario& scenario) {
             desc.body_b = it_b->second;
         }
         built.world->create_joint(desc);
+    }
+    for (const auto& sa : scenario.articulations) {
+        const ArticulationId id = built.world->create_articulation(sa.desc);
+        built.articulations_by_name[sa.name] = id;
     }
     return built;
 }

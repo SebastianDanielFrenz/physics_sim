@@ -1,0 +1,49 @@
+{
+  "name": "articulation_chain",
+  "duration_s": 10.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "articulations": [
+    {
+      "name": "chain",
+      "root": {"floating": false, "pose": {"position": [0, 0, 3.0]}},
+      "links": [
+        {
+          "parent": -1,
+          "joint": "revolute",
+          "axis": [0, 1, 0],
+          "mass": 1.0,
+          "com": [0, 0, -0.5],
+          "inertia_diag": [0.0834, 0.0834, 0.0001],
+          "joint_damping": 0.0,
+          "q0": 1.4
+        },
+        {
+          "parent": 0,
+          "joint": "revolute",
+          "joint_frame_in_parent": {"position": [0, 0, -1.0]},
+          "axis": [0, 1, 0],
+          "mass": 1.0,
+          "com": [0, 0, -0.5],
+          "inertia_diag": [0.0834, 0.0834, 0.0001],
+          "joint_damping": 0.0,
+          "q0": 0.0
+        },
+        {
+          "parent": 1,
+          "joint": "revolute",
+          "joint_frame_in_parent": {"position": [0, 0, -1.0]},
+          "axis": [0, 1, 0],
+          "mass": 1.0,
+          "com": [0, 0, -0.5],
+          "inertia_diag": [0.0834, 0.0834, 0.0001],
+          "joint_damping": 0.0,
+          "q0": 0.0
+        }
+      ]
+    }
+  ],
+  "telemetry_csv": "articulation_chain.csv"
+}
