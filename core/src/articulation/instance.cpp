@@ -10,34 +10,6 @@ using spatial::SpatialVector;
 
 namespace {
 
-// Adds each body's own gravity contribution (GravityField::at, evaluated
-// at that body's CURRENT world COM position/orientation - see gravity.h)
-// into a copy of base_ext_force, as an ordinary external spatial force
-// about the body's own origin, body-local axes - exactly the same
-// "moment about a reference point" conversion accumulate_external_wrench
-// already uses for force-element wrenches. Poses are recomputed fresh
-// from st (not Instance's body_world_pose_ cache, which is stale
-// mid-substep and, for RK4, does not exist at all for the intermediate
-// stage states) - cheap (one forward-kinematics pass, O(bodies)) relative
-// to the ABA call this feeds into.
-std::vector<SpatialVector> add_gravity(const Model& model, const ArticulationState& st, const std::vector<SpatialVector>& base_ext_force,
-                                        const GravityField& field) {
-    const std::vector<Pose> poses = forward_kinematics_poses(model, st);
-    std::vector<SpatialVector> out = base_ext_force;
-    if (out.empty()) out.assign(model.bodies.size(), SpatialVector{});
-    for (std::size_t i = 0; i < model.bodies.size(); ++i) {
-        const auto& b = model.bodies[i];
-        if (b.inertia.mass <= real(0.0)) continue;
-        const Vec3 com_local = b.inertia.mass > real(0.0) ? b.inertia.h / b.inertia.mass : Vec3::zero();
-        const Vec3 com_world = poses[i].transform_point(com_local);
-        const Vec3 g_world = field.at(com_world);
-        const Mat3 r_inv = poses[i].orientation.inverse().to_mat3();
-        const Vec3 f_local = r_inv * (g_world * b.inertia.mass);
-        out[i] += SpatialVector{cross(com_local, f_local), f_local};
-    }
-    return out;
-}
-
 // FNV-1a over a POD value's bytes, matching the convention
 // IRigidBackend::compute_state_hash uses (core/src/backend/jolt/jolt_backend.cpp)
 // so World::state_hash's fold order is uniform across backends.
@@ -103,6 +75,31 @@ Instance::Instance(Model model, const articulation::ArticulationDesc& desc) : mo
 
     loop_closures_ = build_loop_closure_runtime(model_, link_to_body_);
 
+    // --- Preallocate every step_tick()-time scratch buffer HERE, on the
+    // caller's thread at construction time - never inside a job (PHYS-009
+    // Step 1 rule 2). Every buffer below is sized once, from model_'s fixed
+    // dimensions, and never resized again for the rest of this instance's
+    // lifetime; every write to it from here on is an in-place overwrite of
+    // already-allocated storage.
+    aba_scratch_.ensure(model_.bodies.size());
+    aba_scratch_.ain.tau.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
+    aba_scratch_.ain.ext_force.assign(model_.bodies.size(), SpatialVector{});
+    ext_force_scratch_.assign(model_.bodies.size(), SpatialVector{});
+    ext_force_g_scratch_.assign(model_.bodies.size(), SpatialVector{});
+    fk_pose_scratch_.assign(model_.bodies.size(), Pose::identity());
+    tau_scratch_.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
+    qdd_scratch_.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
+    v_local_scratch_.assign(model_.bodies.size(), SpatialVector{});
+    for (ArticulationState* s : {&rk4_s2_, &rk4_s3_, &rk4_s4_}) {
+        s->q.assign(static_cast<std::size_t>(model_.num_q), real(0.0));
+        s->qd.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
+        s->root_pose = state_.root_pose;
+    }
+    for (Derivative* d : {&rk4_k1_, &rk4_k2_, &rk4_k3_, &rk4_k4_}) {
+        d->qdot.assign(static_cast<std::size_t>(model_.num_q), real(0.0));
+        d->qddot.assign(static_cast<std::size_t>(model_.num_v), real(0.0));
+    }
+
     recompute_world_kinematics();
 }
 
@@ -127,13 +124,13 @@ void Instance::clear_external_wrenches() {
     std::fill(ext_wrench_world_.begin(), ext_wrench_world_.end(), Wrench{});
 }
 
-std::vector<real> Instance::compute_tau(const std::vector<real>& qd) const {
-    std::vector<real> tau = direct_tau_;
+void Instance::compute_tau_into(const std::vector<real>& qd, std::vector<real>& out) const {
+    out = direct_tau_; // same size every call (num_v); vector::operator= reuses existing capacity, no realloc
     for (const auto& b : model_.bodies) {
         if (b.ndof != 1) continue;
         const std::size_t di = static_cast<std::size_t>(b.dof_index);
         // Viscous joint damping.
-        tau[di] -= b.joint_damping * qd[di];
+        out[di] -= b.joint_damping * qd[di];
         // Force-limited velocity actuator (a hydraulic-cylinder preview,
         // PLAN.md P1.5a scope item 2): always pushes at +-max_force toward
         // target_speed. Against a load needing more than max_force to
@@ -145,10 +142,9 @@ std::vector<real> Instance::compute_tau(const std::vector<real>& qd) const {
         if (b.vel_actuator.enabled) {
             const real err = b.vel_actuator.target_speed - qd[di];
             const real cmd = (err > real(0.0)) ? b.vel_actuator.max_force : (err < real(0.0) ? -b.vel_actuator.max_force : real(0.0));
-            tau[di] += cmd;
+            out[di] += cmd;
         }
     }
-    return tau;
 }
 
 void Instance::step_tick(const InstanceConfig& cfg, real tick_dt) {
@@ -157,26 +153,27 @@ void Instance::step_tick(const InstanceConfig& cfg, real tick_dt) {
 
     // Convert the tick's accumulated external wrenches to per-body spatial
     // forces, body-local axes, ONCE - held constant across every substep
-    // (PLAN.md D3).
-    std::vector<SpatialVector> ext_force(model_.bodies.size());
+    // (PLAN.md D3). Written into ext_force_scratch_ (preallocated at
+    // construction) instead of a fresh per-tick vector (PHYS-009 Step 1
+    // rule 2 - step_tick itself now runs inside a job, System::step_all).
     for (std::size_t i = 0; i < model_.bodies.size(); ++i) {
         const Wrench& w = ext_wrench_world_[i];
         const Mat3 r_inv = body_world_pose_[i].orientation.inverse().to_mat3();
-        ext_force[i] = SpatialVector{r_inv * w.torque, r_inv * w.force};
+        ext_force_scratch_[i] = SpatialVector{r_inv * w.torque, r_inv * w.force};
     }
 
     for (int s = 0; s < num_substeps; ++s) {
         if (cfg.integrator == IntegratorKind::Rk4) {
-            step_rk4(cfg, ext_force, h);
+            step_rk4(cfg, ext_force_scratch_, h);
         } else {
-            step_semi_implicit_euler(cfg, ext_force, h);
+            step_semi_implicit_euler(cfg, ext_force_scratch_, h);
         }
         clamp_joint_limits();
         // Drift stabilisation (PLAN.md P1.5a scope item 4), every substep:
         // measured (P1.5a report) against once-per-tick - per-substep
         // corrections are individually much smaller, which measured lower
         // energy drift overall despite the extra ABA-probe cost.
-        if (!loop_closures_.empty()) project_onto_constraints(model_, state_, loop_closures_);
+        if (!loop_closures_.empty()) project_onto_constraints(model_, state_, loop_closures_, &aba_scratch_);
     }
 
     recompute_world_kinematics();
@@ -192,19 +189,35 @@ void Instance::clamp_joint_limits() {
     }
 }
 
+void Instance::add_gravity_into(const ArticulationState& st, const std::vector<SpatialVector>& base_ext_force,
+                                 const GravityField& field, std::vector<SpatialVector>& out) {
+    forward_kinematics_poses_into(model_, st, fk_pose_scratch_);
+    out = base_ext_force; // same size every call (bodies.size()); reuses capacity
+    for (std::size_t i = 0; i < model_.bodies.size(); ++i) {
+        const auto& b = model_.bodies[i];
+        if (b.inertia.mass <= real(0.0)) continue;
+        const Vec3 com_local = b.inertia.mass > real(0.0) ? b.inertia.h / b.inertia.mass : Vec3::zero();
+        const Vec3 com_world = fk_pose_scratch_[i].transform_point(com_local);
+        const Vec3 g_world = field.at(com_world);
+        const Mat3 r_inv = fk_pose_scratch_[i].orientation.inverse().to_mat3();
+        const Vec3 f_local = r_inv * (g_world * b.inertia.mass);
+        out[i] += SpatialVector{cross(com_local, f_local), f_local};
+    }
+}
+
 void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h) {
-    const std::vector<real> tau = compute_tau(state_.qd);
+    compute_tau_into(state_.qd, tau_scratch_);
     // Gravity applied per body as an external spatial force at its own
     // COM (gravity.h), not Featherstone's a_0 base-acceleration trick -
     // gravity=zero() below so aba()'s own (still-present, unused here)
     // trick contributes nothing.
     const GravityField field{cfg.gravity};
-    const std::vector<SpatialVector> ext_force_g = add_gravity(model_, state_, ext_force, field);
-    const AbaOutput aout = solve_constrained_dynamics(model_, state_, loop_closures_, tau, Vec3::zero(), ext_force_g);
+    add_gravity_into(state_, ext_force, field, ext_force_g_scratch_);
+    solve_constrained_dynamics_into(model_, state_, loop_closures_, tau_scratch_, Vec3::zero(), ext_force_g_scratch_, aba_scratch_, qdd_scratch_);
 
     // Semi-implicit (symplectic) Euler: velocity first, then position using
     // the NEW velocity.
-    for (int i = 0; i < model_.num_v; ++i) state_.qd[static_cast<std::size_t>(i)] += aout.qdd[static_cast<std::size_t>(i)] * h;
+    for (int i = 0; i < model_.num_v; ++i) state_.qd[static_cast<std::size_t>(i)] += qdd_scratch_[static_cast<std::size_t>(i)] * h;
     for (const auto& b : model_.bodies) {
         if (b.ndof == 1) state_.q[static_cast<std::size_t>(b.q_index)] += state_.qd[static_cast<std::size_t>(b.dof_index)] * h;
     }
@@ -219,57 +232,55 @@ void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::ve
     }
 }
 
-Instance::Derivative Instance::evaluate_derivative(const ArticulationState& st, const std::vector<real>& tau,
-                                                     const std::vector<SpatialVector>& ext_force, const Vec3& gravity) const {
+void Instance::evaluate_derivative_into(const ArticulationState& st, const std::vector<real>& tau,
+                                         const std::vector<SpatialVector>& ext_force, const Vec3& gravity, Derivative& out) {
     const GravityField field{gravity};
-    const std::vector<SpatialVector> ext_force_g = add_gravity(model_, st, ext_force, field);
-    const AbaOutput aout = solve_constrained_dynamics(model_, st, loop_closures_, tau, Vec3::zero(), ext_force_g);
+    add_gravity_into(st, ext_force, field, ext_force_g_scratch_);
+    solve_constrained_dynamics_into(model_, st, loop_closures_, tau, Vec3::zero(), ext_force_g_scratch_, aba_scratch_, out.qddot);
 
-    Derivative d;
-    d.qdot.assign(static_cast<std::size_t>(model_.num_q), real(0.0));
     for (const auto& b : model_.bodies) {
-        if (b.ndof == 1) d.qdot[static_cast<std::size_t>(b.q_index)] = st.qd[static_cast<std::size_t>(b.dof_index)];
+        if (b.ndof == 1) out.qdot[static_cast<std::size_t>(b.q_index)] = st.qd[static_cast<std::size_t>(b.dof_index)];
     }
-    d.qddot = aout.qdd;
     if (model_.floating_root) {
         const Vec3 w_body{st.qd[0], st.qd[1], st.qd[2]};
         const Vec3 v_body{st.qd[3], st.qd[4], st.qd[5]};
-        d.root_pos_dot = st.root_pose.orientation.rotate(v_body);
+        out.root_pos_dot = st.root_pose.orientation.rotate(v_body);
         // Standard quaternion kinematic relation q_dot = 0.5*q(x)(w,0)
         // (Hamilton product, w expressed in BODY axes matches this file's
         // "q maps body->world" convention throughout).
         const Quat wq{w_body.x, w_body.y, w_body.z, real(0.0)};
         const Quat qdot = st.root_pose.orientation * wq; // *0.5 folded into the writes below
-        d.root_quat_dot[0] = real(0.5) * qdot.x; d.root_quat_dot[1] = real(0.5) * qdot.y;
-        d.root_quat_dot[2] = real(0.5) * qdot.z; d.root_quat_dot[3] = real(0.5) * qdot.w;
+        out.root_quat_dot[0] = real(0.5) * qdot.x; out.root_quat_dot[1] = real(0.5) * qdot.y;
+        out.root_quat_dot[2] = real(0.5) * qdot.z; out.root_quat_dot[3] = real(0.5) * qdot.w;
     }
-    return d;
+}
+
+void Instance::add_scaled_into(const ArticulationState& base, const Derivative& d, real scale, ArticulationState& out) const {
+    for (std::size_t i = 0; i < out.q.size(); ++i) out.q[i] = base.q[i] + scale * d.qdot[i];
+    for (std::size_t i = 0; i < out.qd.size(); ++i) out.qd[i] = base.qd[i] + scale * d.qddot[i];
+    if (model_.floating_root) {
+        out.root_pose.position = base.root_pose.position + d.root_pos_dot * scale;
+        Quat q = base.root_pose.orientation;
+        q.x += scale * d.root_quat_dot[0]; q.y += scale * d.root_quat_dot[1];
+        q.z += scale * d.root_quat_dot[2]; q.w += scale * d.root_quat_dot[3];
+        out.root_pose.orientation = q.normalized();
+    } else {
+        out.root_pose = base.root_pose;
+    }
 }
 
 void Instance::step_rk4(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h) {
-    const std::vector<real> tau = compute_tau(state_.qd);
+    compute_tau_into(state_.qd, tau_scratch_);
 
-    auto add_scaled = [&](const ArticulationState& base, const Derivative& d, real scale) {
-        ArticulationState out = base;
-        for (std::size_t i = 0; i < out.q.size(); ++i) out.q[i] = state_.q[i] + scale * d.qdot[i];
-        for (std::size_t i = 0; i < out.qd.size(); ++i) out.qd[i] = state_.qd[i] + scale * d.qddot[i];
-        if (model_.floating_root) {
-            out.root_pose.position = state_.root_pose.position + d.root_pos_dot * scale;
-            Quat q = state_.root_pose.orientation;
-            q.x += scale * d.root_quat_dot[0]; q.y += scale * d.root_quat_dot[1];
-            q.z += scale * d.root_quat_dot[2]; q.w += scale * d.root_quat_dot[3];
-            out.root_pose.orientation = q.normalized();
-        }
-        return out;
-    };
+    evaluate_derivative_into(state_, tau_scratch_, ext_force, cfg.gravity, rk4_k1_);
+    add_scaled_into(state_, rk4_k1_, h * real(0.5), rk4_s2_);
+    evaluate_derivative_into(rk4_s2_, tau_scratch_, ext_force, cfg.gravity, rk4_k2_);
+    add_scaled_into(state_, rk4_k2_, h * real(0.5), rk4_s3_);
+    evaluate_derivative_into(rk4_s3_, tau_scratch_, ext_force, cfg.gravity, rk4_k3_);
+    add_scaled_into(state_, rk4_k3_, h, rk4_s4_);
+    evaluate_derivative_into(rk4_s4_, tau_scratch_, ext_force, cfg.gravity, rk4_k4_);
 
-    const Derivative k1 = evaluate_derivative(state_, tau, ext_force, cfg.gravity);
-    const ArticulationState s2 = add_scaled(state_, k1, h * real(0.5));
-    const Derivative k2 = evaluate_derivative(s2, tau, ext_force, cfg.gravity);
-    const ArticulationState s3 = add_scaled(state_, k2, h * real(0.5));
-    const Derivative k3 = evaluate_derivative(s3, tau, ext_force, cfg.gravity);
-    const ArticulationState s4 = add_scaled(state_, k3, h);
-    const Derivative k4 = evaluate_derivative(s4, tau, ext_force, cfg.gravity);
+    const Derivative &k1 = rk4_k1_, &k2 = rk4_k2_, &k3 = rk4_k3_, &k4 = rk4_k4_;
 
     for (std::size_t i = 0; i < state_.q.size(); ++i) {
         state_.q[i] += (h / real(6.0)) * (k1.qdot[i] + real(2.0) * k2.qdot[i] + real(2.0) * k3.qdot[i] + k4.qdot[i]);
@@ -291,7 +302,10 @@ void Instance::step_rk4(const InstanceConfig& cfg, const std::vector<SpatialVect
 
 void Instance::recompute_world_kinematics() {
     const std::size_t n = model_.bodies.size();
-    std::vector<SpatialVector> v_local(n); // body-local spatial velocity, for world_motion conversion
+    // PHYS-009 Step 1 rule 2: was a fresh local vector every call (this
+    // runs once per step_tick, i.e. once per job); v_local_scratch_ is
+    // preallocated at construction like every other step-time buffer.
+    std::vector<SpatialVector>& v_local = v_local_scratch_; // body-local spatial velocity, for world_motion conversion
     for (std::size_t i = 0; i < n; ++i) {
         const BodyModel& b = model_.bodies[i];
         if (model_.floating_root && i == 0) {

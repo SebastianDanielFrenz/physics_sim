@@ -37,6 +37,7 @@
 #pragma once
 
 #include "aba.h"
+#include "gravity.h"
 #include "loop_closure.h"
 #include "model.h"
 #include "ps/math/pose.h"
@@ -103,7 +104,9 @@ public:
 
 private:
     void recompute_world_kinematics();
-    [[nodiscard]] std::vector<real> compute_tau(const std::vector<real>& qd_for_actuators) const;
+    // Writes into tau_scratch_ (PHYS-009 Step 1 rule 2: no per-call vector,
+    // reused every call at a stable size == model_.num_v).
+    void compute_tau_into(const std::vector<real>& qd_for_actuators, std::vector<real>& out) const;
     void step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<spatial::SpatialVector>& ext_force, real h);
     void step_rk4(const InstanceConfig& cfg, const std::vector<spatial::SpatialVector>& ext_force, real h);
     void clamp_joint_limits();
@@ -128,8 +131,26 @@ private:
         Vec3 root_pos_dot;
         real root_quat_dot[4] = {0, 0, 0, 0}; // x,y,z,w rate
     };
-    [[nodiscard]] Derivative evaluate_derivative(const ArticulationState& st, const std::vector<real>& tau,
-                                                  const std::vector<spatial::SpatialVector>& ext_force, const Vec3& gravity) const;
+    // Fills `out` (already sized by resize_scratch(), see the constructor)
+    // in place - PHYS-009 Step 1 rule 2: this is called 4x per substep by
+    // step_rk4 and used to heap-allocate a fresh Derivative (two vectors)
+    // plus a fresh forward-kinematics pose vector (via add_gravity) every
+    // single time; now it and everything it calls write into Instance's
+    // own preallocated scratch members instead.
+    // Not const: writes into aba_scratch_/ext_force_g_scratch_/fk_pose_scratch_.
+    void evaluate_derivative_into(const ArticulationState& st, const std::vector<real>& tau,
+                                   const std::vector<spatial::SpatialVector>& ext_force, const Vec3& gravity, Derivative& out);
+    // Writes ext_force + this state's per-body gravity contribution into
+    // out (PHYS-009 Step 1 rule 2's add_gravity, now allocation-free: uses
+    // fk_pose_scratch_ instead of a fresh forward_kinematics_poses() call).
+    // Not const: writes into fk_pose_scratch_.
+    void add_gravity_into(const ArticulationState& st, const std::vector<spatial::SpatialVector>& base_ext_force,
+                           const GravityField& field, std::vector<spatial::SpatialVector>& out);
+    // out := base + scale*d (RK4's stage-offset state); out must already be
+    // sized like state_ (resize_scratch()) - PHYS-009 Step 1 rule 2: this
+    // used to construct a fresh ArticulationState (two vector allocations)
+    // per call, 3x per substep (s2/s3/s4).
+    void add_scaled_into(const ArticulationState& base, const Derivative& d, real scale, ArticulationState& out) const;
 
     Model model_;
     ArticulationState state_;
@@ -147,6 +168,21 @@ private:
     // open-chain case, at which point every solve below degenerates to a
     // plain aba() call at no extra cost.
     std::vector<LoopClosureRuntime> loop_closures_;
+
+    // --- Step-time scratch, preallocated once in the constructor and
+    // reused in place by every step_tick() call for this instance's
+    // lifetime (PHYS-009 Step 1 rule 2: PLAN.md D8 "no allocation inside
+    // jobs" - System::step_all (system.cpp) now runs one job per
+    // articulation, so everything step_tick touches must not allocate). ---
+    AbaScratch aba_scratch_;
+    std::vector<spatial::SpatialVector> ext_force_scratch_;   // size bodies.size(), body-local, held constant across a tick's substeps
+    std::vector<spatial::SpatialVector> ext_force_g_scratch_; // size bodies.size(), ext_force + gravity, reused per aba() evaluation
+    std::vector<Pose> fk_pose_scratch_;                       // size bodies.size(), forward-kinematics scratch for add_gravity_into
+    std::vector<real> tau_scratch_;                           // size num_v
+    std::vector<real> qdd_scratch_;                            // size num_v, semi-implicit Euler's own aba() output buffer
+    std::vector<spatial::SpatialVector> v_local_scratch_;      // size bodies.size(), recompute_world_kinematics' body-local velocity scratch
+    ArticulationState rk4_s2_, rk4_s3_, rk4_s4_; // RK4 stage-offset states, pre-sized q/qd
+    Derivative rk4_k1_, rk4_k2_, rk4_k3_, rk4_k4_; // pre-sized qdot/qddot
 };
 
 } // namespace ps::articulation

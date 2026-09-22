@@ -37,6 +37,10 @@ struct WorldConfig {
     // Chunk size for the force-element parallel_for stage; 0 = auto
     // (spreads elements evenly over the worker count).
     std::size_t force_element_grain = 0;
+    // Chunk size for the vehicle-island (articulation) parallel_for stage
+    // (PLAN.md D8/P1.5a, PHYS-009 Step 1); 0 = auto, same formula as
+    // force_element_grain.
+    std::size_t articulation_grain = 0;
 
     // Jolt solver settings, exposed for the Part A energy-loss study
     // (PLAN.md). Defaults equal Jolt's own defaults (see

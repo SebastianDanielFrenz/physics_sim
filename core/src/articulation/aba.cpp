@@ -1,5 +1,4 @@
 #include "aba.h"
-#include "small_matrix.h"
 
 #include <vector>
 
@@ -12,84 +11,74 @@ using spatial::cross_force;
 using spatial::cross_motion;
 using spatial::spatial_dot;
 
-namespace {
-
-// Dense, general 6x6 spatial operator - needed only for the articulated-
-// body inertia IA (Featherstone ch. 7 notes explicitly that after the
-// first rank reduction (see below) IA generally no longer has the
-// restricted (mass, first-moment, rotational-inertia-about-a-point)
-// structure a single rigid body's SpatialInertia assumes, so it cannot be
-// carried in that compact form the way CRBA's composite inertia can).
-struct Mat6 {
-    real m[6][6] = {};
-
-    static Mat6 from_rigid(const SpatialInertia& i) {
-        Mat6 out;
-        const Mat3 hx = skew(i.h);
-        for (int r = 0; r < 3; ++r) {
-            for (int c = 0; c < 3; ++c) {
-                out.m[r][c] = i.io(r, c);
-                out.m[r][c + 3] = hx(r, c);
-                out.m[r + 3][c] = -hx(r, c);
-                out.m[r + 3][c + 3] = (r == c) ? i.mass : real(0.0);
-            }
+Mat6 Mat6::from_rigid(const SpatialInertia& i) {
+    Mat6 out;
+    const Mat3 hx = skew(i.h);
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            out.m[r][c] = i.io(r, c);
+            out.m[r][c + 3] = hx(r, c);
+            out.m[r + 3][c] = -hx(r, c);
+            out.m[r + 3][c + 3] = (r == c) ? i.mass : real(0.0);
         }
-        return out;
     }
+    return out;
+}
 
-    [[nodiscard]] SpatialVector apply(const SpatialVector& v) const {
-        const real x[6] = {v.top.x, v.top.y, v.top.z, v.bottom.x, v.bottom.y, v.bottom.z};
-        real y[6] = {};
-        for (int r = 0; r < 6; ++r) {
+SpatialVector Mat6::apply(const SpatialVector& v) const {
+    const real x[6] = {v.top.x, v.top.y, v.top.z, v.bottom.x, v.bottom.y, v.bottom.z};
+    real y[6] = {};
+    for (int r = 0; r < 6; ++r) {
+        real s = 0.0;
+        for (int c = 0; c < 6; ++c) s += m[r][c] * x[c];
+        y[r] = s;
+    }
+    return SpatialVector{Vec3{y[0], y[1], y[2]}, Vec3{y[3], y[4], y[5]}};
+}
+
+Mat6 Mat6::operator-(const Mat6& o) const {
+    Mat6 r;
+    for (int i = 0; i < 6; ++i)
+        for (int j = 0; j < 6; ++j) r.m[i][j] = m[i][j] - o.m[i][j];
+    return r;
+}
+
+Mat6 Mat6::operator+(const Mat6& o) const {
+    Mat6 r;
+    for (int i = 0; i < 6; ++i)
+        for (int j = 0; j < 6; ++j) r.m[i][j] = m[i][j] + o.m[i][j];
+    return r;
+}
+
+Mat6 Mat6::operator*(const Mat6& o) const {
+    Mat6 r;
+    for (int i = 0; i < 6; ++i)
+        for (int j = 0; j < 6; ++j) {
             real s = 0.0;
-            for (int c = 0; c < 6; ++c) s += m[r][c] * x[c];
-            y[r] = s;
+            for (int k = 0; k < 6; ++k) s += m[i][k] * o.m[k][j];
+            r.m[i][j] = s;
         }
-        return SpatialVector{Vec3{y[0], y[1], y[2]}, Vec3{y[3], y[4], y[5]}};
-    }
+    return r;
+}
 
-    Mat6 operator-(const Mat6& o) const {
-        Mat6 r;
-        for (int i = 0; i < 6; ++i)
-            for (int j = 0; j < 6; ++j) r.m[i][j] = m[i][j] - o.m[i][j];
-        return r;
+// Column c is X applied to the c-th canonical basis spatial vector - i.e.
+// the dense matrix representation of the linear map `apply`.
+Mat6 Mat6::from_linear_map(const SpatialTransform& x, bool force_map) {
+    Mat6 out;
+    const SpatialVector basis[6] = {
+        {Vec3::unit_x(), Vec3::zero()}, {Vec3::unit_y(), Vec3::zero()}, {Vec3::unit_z(), Vec3::zero()},
+        {Vec3::zero(), Vec3::unit_x()}, {Vec3::zero(), Vec3::unit_y()}, {Vec3::zero(), Vec3::unit_z()},
+    };
+    for (int c = 0; c < 6; ++c) {
+        const SpatialVector col = force_map ? x.apply_force(basis[static_cast<std::size_t>(c)])
+                                             : x.apply_motion(basis[static_cast<std::size_t>(c)]);
+        const real v[6] = {col.top.x, col.top.y, col.top.z, col.bottom.x, col.bottom.y, col.bottom.z};
+        for (int r = 0; r < 6; ++r) out.m[r][c] = v[r];
     }
+    return out;
+}
 
-    Mat6 operator+(const Mat6& o) const {
-        Mat6 r;
-        for (int i = 0; i < 6; ++i)
-            for (int j = 0; j < 6; ++j) r.m[i][j] = m[i][j] + o.m[i][j];
-        return r;
-    }
-
-    Mat6 operator*(const Mat6& o) const {
-        Mat6 r;
-        for (int i = 0; i < 6; ++i)
-            for (int j = 0; j < 6; ++j) {
-                real s = 0.0;
-                for (int k = 0; k < 6; ++k) s += m[i][k] * o.m[k][j];
-                r.m[i][j] = s;
-            }
-        return r;
-    }
-
-    // Column c is X applied to the c-th canonical basis spatial vector -
-    // i.e. the dense matrix representation of the linear map `apply`.
-    static Mat6 from_linear_map(const SpatialTransform& x, bool force_map) {
-        Mat6 out;
-        const SpatialVector basis[6] = {
-            {Vec3::unit_x(), Vec3::zero()}, {Vec3::unit_y(), Vec3::zero()}, {Vec3::unit_z(), Vec3::zero()},
-            {Vec3::zero(), Vec3::unit_x()}, {Vec3::zero(), Vec3::unit_y()}, {Vec3::zero(), Vec3::unit_z()},
-        };
-        for (int c = 0; c < 6; ++c) {
-            const SpatialVector col = force_map ? x.apply_force(basis[static_cast<std::size_t>(c)])
-                                                 : x.apply_motion(basis[static_cast<std::size_t>(c)]);
-            const real v[6] = {col.top.x, col.top.y, col.top.z, col.bottom.x, col.bottom.y, col.bottom.z};
-            for (int r = 0; r < 6; ++r) out.m[r][c] = v[r];
-        }
-        return out;
-    }
-};
+namespace {
 
 // Transforms a child-frame Mat6 "inertia-like" operator up into the
 // parent's frame, given Xup (parent -> child, motion sense): M_A = Xf(A<-B) * M_B * Xm(A->B),
@@ -104,65 +93,28 @@ Mat6 transform_inertia_to_parent(const SpatialTransform& xup, const Mat6& child)
 
 } // namespace
 
-namespace {
+AbaOutput aba(const AbaInput& in, AbaScratch* scratch_in) {
+    // See aba.h's AbaScratch comment: hot-path callers (Instance) always
+    // pass their own preallocated scratch; other callers (unit-test cross-
+    // checks, never run inside a job) fall back to a stack-local instance -
+    // still one allocation for THIS call's fresh AbaOutput::qdd, acceptable
+    // since these callers never run inside a job.
+    AbaScratch local;
+    AbaScratch& sc = scratch_in ? *scratch_in : local;
+    AbaOutput out;
+    aba_into(in, sc, out.qdd);
+    return out;
+}
 
-// Per-body DoF-indexed scratch (U columns, u entries): fixed capacity
-// kMaxJointDof (== 6, a floating base is the largest joint this project
-// has) instead of a std::vector, so the tip->base / base->tip passes below
-// never heap-allocate per body (PLAN.md D5 "fix the biggest costs first" /
-// PHYS-009 Step 2 profiling: this - plus the per-call n-sized vectors -
-// was the dominant cost of the original implementation, one heap
-// allocation of some kind for essentially every body on every aba() call).
-struct DofScratch {
-    std::array<SpatialVector, kMaxJointDof> U{};
-    std::array<real, kMaxJointDof> u{};
-};
-
-// Reusable per-thread scratch for the n-sized arrays every aba() call
-// needs. thread_local (not just static) because, although System::step_all
-// steps articulations sequentially today (tests/determinism/
-// test_worker_count_hash.cpp's comment: articulation stepping never
-// touches the job system), aba() has no way to know that and must stay
-// safe if that changes later; a plain function-local static vector would
-// be a data race the moment two threads call aba() concurrently. Each
-// thread that ever calls aba() pays the vector-growth allocation once
-// (first call, or first call after the largest n seen so far), then
-// .resize() to an equal-or-smaller n is a no-op (capacity is kept, no
-// reallocation, no deallocation) - the whole point of reusing these across
-// calls instead of declaring them fresh every time.
-struct AbaScratch {
-    std::vector<SpatialTransform> xup;
-    std::vector<SpatialVector> v;
-    std::vector<SpatialVector> c; // velocity-product bias term, v_i x (S_i*qd_i)
-    std::vector<Mat6> IA;
-    std::vector<SpatialVector> pA;
-    std::vector<DofScratch> dof;
-    std::vector<SmallMatrix> Dinv;
-    std::vector<SpatialVector> a;
-
-    void ensure(std::size_t n) {
-        xup.resize(n);
-        v.resize(n);
-        c.resize(n);
-        IA.resize(n);
-        pA.resize(n);
-        dof.resize(n);
-        Dinv.resize(n);
-        a.resize(n);
-    }
-};
-
-} // namespace
-
-AbaOutput aba(const AbaInput& in) {
+void aba_into(const AbaInput& in, AbaScratch& sc, std::vector<real>& qdd_out) {
     const Model& m = *in.model;
     const ArticulationState& st = *in.state;
     const std::size_t n = m.bodies.size();
 
-    AbaOutput out;
-    out.qdd.assign(static_cast<std::size_t>(m.num_v), real(0.0));
-
-    thread_local AbaScratch sc;
+    // Idempotent at a stable num_v (assign() to an already-current size
+    // neither allocates nor deallocates - PHYS-009 Step 1 rule 2, same
+    // reasoning as AbaScratch::ensure below).
+    qdd_out.assign(static_cast<std::size_t>(m.num_v), real(0.0));
     sc.ensure(n);
     std::vector<SpatialTransform>& xup = sc.xup;
     std::vector<SpatialVector>& v = sc.v;
@@ -269,14 +221,12 @@ AbaOutput aba(const AbaInput& in) {
             for (std::size_t k = 0; k < ns; ++k) a[i] += s.cols[k] * qdd_local[k];
 
             if (b.joint == BodyJointKind::Floating6) {
-                for (int k = 0; k < 6; ++k) out.qdd[static_cast<std::size_t>(k)] = qdd_local[static_cast<std::size_t>(k)];
+                for (int k = 0; k < 6; ++k) qdd_out[static_cast<std::size_t>(k)] = qdd_local[static_cast<std::size_t>(k)];
             } else {
-                out.qdd[static_cast<std::size_t>(b.dof_index)] = qdd_local[0];
+                qdd_out[static_cast<std::size_t>(b.dof_index)] = qdd_local[0];
             }
         }
     }
-
-    return out;
 }
 
 } // namespace ps::articulation

@@ -1,5 +1,7 @@
 #include "system.h"
 
+#include <algorithm>
+
 namespace ps::articulation {
 
 ArticulationId System::create(const ArticulationDesc& desc) {
@@ -23,8 +25,24 @@ void System::accumulate_external_wrench(ArticulationLinkRef ref, const ps::Pose&
     inst.accumulate_external_wrench(body_index, frame_world_pose, wrench);
 }
 
-void System::step_all(const InstanceConfig& cfg, real tick_dt) {
-    for (auto& inst : instances_) inst->step_tick(cfg, tick_dt);
+void System::step_all(jobs::JobSystem& job_system, const InstanceConfig& cfg, real tick_dt, std::size_t grain) {
+    if (instances_.empty()) return;
+    const std::size_t n = instances_.size();
+    const int workers = std::max(1, job_system.worker_count());
+    // Same auto-grain formula as World::stage_force_elements (world.cpp):
+    // spreads n items over roughly 4 chunks per worker, at least 1 item per
+    // chunk, so small articulations batch together instead of one job each
+    // (PLAN.md D8: "do not create jobs for less than ~20us of work").
+    const std::size_t auto_grain = std::max<std::size_t>(1, (n + static_cast<std::size_t>(workers) * 4 - 1) / (static_cast<std::size_t>(workers) * 4));
+    const std::size_t g = grain != 0 ? grain : auto_grain;
+
+    job_system.parallel_for(n, g, [this, &cfg, tick_dt](std::size_t begin, std::size_t end) {
+        // Scatter -> compute (PLAN.md D8): each iteration only ever reads
+        // or writes instances_[i]'s own Instance object (its own
+        // preallocated scratch, instance.h) - safe to run concurrently
+        // with any other i.
+        for (std::size_t i = begin; i < end; ++i) instances_[i]->step_tick(cfg, tick_dt);
+    });
 }
 
 std::uint64_t System::fold_state_hash(std::uint64_t seed) const {

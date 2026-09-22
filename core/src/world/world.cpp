@@ -110,22 +110,20 @@ void World::stage_force_elements() {
 }
 
 void World::stage_vehicle_islands() {
-    // PLAN.md D10/P1.5a: articulations integrate here, one job per
-    // articulation (System::step_all internally loops instances; a
-    // per-instance job is a straightforward future extension once more
-    // than a handful of articulations are common - PLAN.md D8's
-    // "do not create jobs for less than ~20us of work" applies the same
-    // way it does to force elements). Consumes the external wrenches
-    // gathered during the PREVIOUS tick's stage_gather (D3: multi-rate
-    // stepping - islands substep using state/forces already known at the
-    // start of this tick, then force_elements/gather below compute this
-    // tick's wrenches for the NEXT tick's islands stage), then clears them
-    // so stage_gather can accumulate fresh ones for next tick.
+    // PLAN.md D10/P1.5a/D8, delivered in PHYS-009 Step 1: one job per
+    // articulation (System::step_all, batched by config_.articulation_grain
+    // - see its own comment in system.h for why no separate gather step is
+    // needed here). Consumes the external wrenches gathered during the
+    // PREVIOUS tick's stage_gather (D3: multi-rate stepping - islands
+    // substep using state/forces already known at the start of this tick,
+    // then force_elements/gather below compute this tick's wrenches for
+    // the NEXT tick's islands stage), then clears them so stage_gather can
+    // accumulate fresh ones for next tick.
     if (articulation_system_->empty()) return;
     articulation::InstanceConfig cfg;
     cfg.gravity = config_.gravity;
     cfg.substep_rate_hz = config_.substep_rate_hz;
-    articulation_system_->step_all(cfg, dt_);
+    articulation_system_->step_all(*job_system_, cfg, dt_, config_.articulation_grain);
     articulation_system_->clear_external_wrenches();
 }
 

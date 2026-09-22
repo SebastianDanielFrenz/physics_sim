@@ -125,18 +125,23 @@ Vec3 point_bias_accel(const std::vector<Pose>& poses, const std::vector<SpatialV
 
 } // namespace
 
-std::vector<Pose> forward_kinematics_poses(const Model& model, const ArticulationState& state) {
+void forward_kinematics_poses_into(const Model& model, const ArticulationState& state, std::vector<Pose>& out) {
     const std::size_t n = model.bodies.size();
-    std::vector<Pose> poses(n);
+    out.resize(n); // no-op at a stable n (PHYS-009 Step 1 rule 2)
     for (std::size_t i = 0; i < n; ++i) {
         const BodyModel& b = model.bodies[i];
         if (model.floating_root && i == 0) {
-            poses[i] = state.root_pose;
+            out[i] = state.root_pose;
         } else {
-            const Pose parent_pose = (b.parent < 0) ? Pose::identity() : poses[static_cast<std::size_t>(b.parent)];
-            poses[i] = parent_pose * b.joint_pose_in_parent * joint_transform_pose(b, state);
+            const Pose parent_pose = (b.parent < 0) ? Pose::identity() : out[static_cast<std::size_t>(b.parent)];
+            out[i] = parent_pose * b.joint_pose_in_parent * joint_transform_pose(b, state);
         }
     }
+}
+
+std::vector<Pose> forward_kinematics_poses(const Model& model, const ArticulationState& state) {
+    std::vector<Pose> poses;
+    forward_kinematics_poses_into(model, state, poses);
     return poses;
 }
 
@@ -181,7 +186,8 @@ struct ClosureLinearAlgebra {
     std::vector<real> A;              // m x m = J * M^-1 * J^T
 };
 
-ClosureLinearAlgebra build_linear_algebra(const Model& model, const ArticulationState& state, const std::vector<LoopClosureRuntime>& closures) {
+ClosureLinearAlgebra build_linear_algebra(const Model& model, const ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
+                                           AbaScratch* scratch) {
     ClosureLinearAlgebra out;
     const int nv = model.num_v;
     out.m = static_cast<int>(closures.size()) * 3;
@@ -228,7 +234,7 @@ ClosureLinearAlgebra build_linear_algebra(const Model& model, const Articulation
         ain.state = &zero_v_state;
         ain.tau = j_row;
         ain.gravity = Vec3::zero();
-        const AbaOutput aout = aba(ain);
+        const AbaOutput aout = aba(ain, scratch);
         out.minv_jrow[static_cast<std::size_t>(row)] = aout.qdd;
     }
 
@@ -264,18 +270,19 @@ std::vector<real> apply_minv_jt(const ClosureLinearAlgebra& la, const std::vecto
 } // namespace
 
 AbaOutput solve_constrained_dynamics(const Model& model, const ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
-                                      const std::vector<real>& tau, const Vec3& gravity, const std::vector<SpatialVector>& ext_force) {
+                                      const std::vector<real>& tau, const Vec3& gravity, const std::vector<SpatialVector>& ext_force,
+                                      AbaScratch* scratch) {
     AbaInput ain;
     ain.model = &model;
     ain.state = &state;
     ain.tau = tau;
     ain.gravity = gravity;
     ain.ext_force = ext_force;
-    AbaOutput free_out = aba(ain);
+    AbaOutput free_out = aba(ain, scratch);
     if (closures.empty()) return free_out;
 
     const int nv = model.num_v;
-    const ClosureLinearAlgebra la = build_linear_algebra(model, state, closures);
+    const ClosureLinearAlgebra la = build_linear_algebra(model, state, closures, scratch);
 
     // Jdot*qd per closure (bias point acceleration at qdd=0, real qd).
     const std::vector<Pose> poses = forward_kinematics_poses(model, state);
@@ -308,10 +315,39 @@ AbaOutput solve_constrained_dynamics(const Model& model, const ArticulationState
     return out;
 }
 
-void project_velocity_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures) {
+void solve_constrained_dynamics_into(const Model& model, const ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
+                                      const std::vector<real>& tau, const Vec3& gravity, const std::vector<SpatialVector>& ext_force,
+                                      AbaScratch& scratch, std::vector<real>& qdd_out) {
+    if (closures.empty()) {
+        // Open-chain fast path (the common case - PHYS-009 Step 1 rule 2):
+        // straight into aba_into, no AbaOutput/closure-machinery allocation
+        // at all. Reuses scratch.ain (sized once at instance construction,
+        // instance.cpp) instead of a fresh local AbaInput: assigning INTO
+        // an already-capacity'd vector<real>/vector<SpatialVector> does
+        // not reallocate, but default-constructing a fresh AbaInput and
+        // then assigning into its (empty, 0-capacity) tau/ext_force members
+        // would allocate both every single call - the dominant remaining
+        // allocation source this rule's debug_alloc-armed test caught.
+        scratch.ain.model = &model;
+        scratch.ain.state = &state;
+        scratch.ain.tau = tau;
+        scratch.ain.gravity = gravity;
+        scratch.ain.ext_force = ext_force;
+        aba_into(scratch.ain, scratch, qdd_out);
+        return;
+    }
+    // Closure-bearing instance (e.g. a four-bar linkage): still goes
+    // through the allocating path (see this function's header comment in
+    // loop_closure.h) and copies into qdd_out.
+    const AbaOutput out = solve_constrained_dynamics(model, state, closures, tau, gravity, ext_force, &scratch);
+    qdd_out = out.qdd;
+}
+
+void project_velocity_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
+                                        AbaScratch* scratch) {
     if (closures.empty()) return;
     const int nv = model.num_v;
-    const ClosureLinearAlgebra la = build_linear_algebra(model, state, closures);
+    const ClosureLinearAlgebra la = build_linear_algebra(model, state, closures, scratch);
 
     // Orthogonal projection in the mass inner product: removes the
     // constraint-violating component of qd, so 0.5*qd^T*M*qd can only
@@ -324,10 +360,11 @@ void project_velocity_onto_constraints(const Model& model, ArticulationState& st
     for (int i = 0; i < nv; ++i) state.qd[static_cast<std::size_t>(i)] += dqd[static_cast<std::size_t>(i)];
 }
 
-void project_position_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures) {
+void project_position_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
+                                        AbaScratch* scratch) {
     if (closures.empty()) return;
     const int nv = model.num_v;
-    const ClosureLinearAlgebra la = build_linear_algebra(model, state, closures);
+    const ClosureLinearAlgebra la = build_linear_algebra(model, state, closures, scratch);
 
     // First-order Newton step toward g(q) == 0, mass-weighted (PLAN.md:
     // not a plain/unweighted projection).

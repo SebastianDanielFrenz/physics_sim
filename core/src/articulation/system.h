@@ -8,6 +8,7 @@
 
 #include "instance.h"
 #include "ps/articulation/articulation_desc.h"
+#include "ps/jobs/job_system.h"
 #include "ps/world/frame.h"
 #include "ps/world/ids.h"
 
@@ -29,7 +30,22 @@ public:
 
     void clear_external_wrenches();
     void accumulate_external_wrench(ArticulationLinkRef ref, const ps::Pose& frame_world_pose, const ps::Wrench& wrench);
-    void step_all(const InstanceConfig& cfg, real tick_dt);
+    // PLAN.md D8/P1.5a ("one job per articulation in the vehicle-island
+    // stage"), delivered in PHYS-009 Step 1: instances_ is already in
+    // ArticulationId order (ids are assigned sequentially by create(), one
+    // per push_back below), so a plain parallel_for over it is "sorted by
+    // ArticulationId" for free. Each job touches only its own Instance's
+    // state - no shared mutable state between articulations, so no ordered
+    // gather step is needed the way force_elements/stage_gather need one
+    // (World::stage_vehicle_islands, world.cpp): stepping instance i can
+    // run concurrently with, before, or after instance j with an
+    // identical result, so the scatter+compute stage IS the whole
+    // operation. `grain` == 0 selects an automatic chunk size (same
+    // formula World::stage_force_elements uses) that keeps each job's
+    // work comfortably above D8's ~20us-per-job floor by batching several
+    // small articulations into one job rather than submitting one job per
+    // instance regardless of size.
+    void step_all(jobs::JobSystem& job_system, const InstanceConfig& cfg, real tick_dt, std::size_t grain = 0);
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
