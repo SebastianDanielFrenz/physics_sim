@@ -553,6 +553,13 @@ or asm routine. Check false sharing and the 5900X's two-CCX L3 split when
 placing per-worker data.
 Accept: both targets met; all earlier validation tests and thread-count
 determinism hashes unchanged; asm/intrinsic paths match scalar reference.
+Carried over from P1.5a (Sebastian, 2026-09-22: accept 3× now, the rest here):
+the articulation solver costs 13.5 µs per 960 Hz substep for 10 links (from
+40.6 µs; the goal was ≤ 8 µs). Known remaining levers: single-axis rank-1
+updates in ABA (U a single column, D a scalar), reusing kinematics across RK4
+stages, and the gravity forward-kinematics pass per stage. The substep rate
+stays at 960 Hz: at 480 Hz, a four-bar loop's energy drift is 0.85 % in 60 s
+(limit 0.5 %).
 
 Every phase P3–P8 additionally repeats the thread-count determinism test with
 its new components included.
