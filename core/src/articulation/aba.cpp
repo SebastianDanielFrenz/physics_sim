@@ -1,5 +1,6 @@
 #include "aba.h"
 
+#include <optional>
 #include <vector>
 
 namespace ps::articulation {
@@ -187,8 +188,19 @@ AbaOutput aba(const AbaInput& in, AbaScratch* scratch_in) {
     // checks, never run inside a job) fall back to a stack-local instance -
     // still one allocation for THIS call's fresh AbaOutput::qdd, acceptable
     // since these callers never run inside a job.
-    AbaScratch local;
-    AbaScratch& sc = scratch_in ? *scratch_in : local;
+    //
+    // `local` is a std::optional, only emplace()'d when scratch_in is null
+    // (PHYS-009 Step 3): an unconditionally-constructed plain AbaScratch
+    // local here would, on the MSVC debug STL (_ITERATOR_DEBUG_LEVEL=2),
+    // allocate a `_Container_proxy` for every one of AbaScratch's
+    // std::vector members even when scratch_in is non-null and `local` goes
+    // unused - see loop_closure.cpp's resolve_aba_scratch for the actual
+    // bug this pattern caused (there, with a non-null scratch on the
+    // hot path) and the debug_alloc backtrace that found it. No caller
+    // currently passes a non-null scratch_in here, but keep the same safe
+    // pattern rather than leave a latent trap for the next one that does.
+    std::optional<AbaScratch> local;
+    AbaScratch& sc = scratch_in ? *scratch_in : local.emplace();
     AbaOutput out;
     aba_into(in, sc, out.qdd);
     return out;
@@ -204,8 +216,8 @@ AbaOutput aba_reference(const AbaInput& in, AbaScratch* scratch_in) {
     // entry point (tests/unit/test_aba_fast_transform.cpp) for cross-
     // checking a full ABA run, not just the isolated transform function,
     // fast vs. reference on random trees.
-    AbaScratch local;
-    AbaScratch& sc = scratch_in ? *scratch_in : local;
+    std::optional<AbaScratch> local;
+    AbaScratch& sc = scratch_in ? *scratch_in : local.emplace();
     AbaOutput out;
     aba_core(in, sc, out.qdd, /*use_fast_transform=*/false);
     return out;

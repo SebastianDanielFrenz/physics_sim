@@ -228,10 +228,20 @@ TEST_CASE("Stepping many articulations (open-chain, floating-base, four-bar) acr
         cfg.substep_rate_hz = 960.0;
         constexpr real kTickDt = real(1.0) / real(240.0);
 
+        // warmup/measured are far smaller than the other two cases' (500/200):
+        // 30 articulations incl. two RK4 four-bar solves is real per-substep
+        // cost, not measurement noise to average out - the check itself is
+        // an exact equality now (not a statistical baseline comparison), so
+        // it needs only enough repeats to let every scratch buffer reach its
+        // steady-state capacity and to have a fair chance at catching a
+        // scheduling-dependent intermittent allocation, not hundreds of
+        // samples. Found to matter concretely: at the previous 500/200 this
+        // one test case alone cost ~20 s per debug-leg run (PHYS-009 Step 3
+        // debug-leg timing investigation).
         const std::uint64_t violations = measure_nested(js, [&sys, &js, &cfg, grain] {
             sys.step_all(js, cfg, kTickDt, grain);
             sys.clear_external_wrenches();
-        }, /*warmup_iters=*/500, /*measured_iters=*/200);
+        }, /*warmup_iters=*/30, /*measured_iters=*/30);
 
         INFO("workers=" << workers);
         REQUIRE(violations == 0);

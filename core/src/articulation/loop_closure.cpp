@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace ps::articulation {
 
@@ -388,18 +389,45 @@ void solve_projection_core(const ClosureLinearAlgebra& la, LoopClosureScratch& l
     apply_minv_jt_into(la, lc.mu, nv, lc.delta);
 }
 
+// Resolves to *scratch when given (the hot path - every Instance passes
+// its own preallocated scratch, never null); otherwise constructs a
+// fallback IN `storage`, ONLY here, for the non-hot-path callers that omit
+// it (cross-check tests, tools). PHYS-009 Step 3 (Windows leg): storage
+// must stay a std::optional<T>, not a plain T local declared unconditionally
+// at the top of the caller - MSVC's debug STL (_ITERATOR_DEBUG_LEVEL=2,
+// the default for a Debug-CRT build) allocates one heap block per
+// std::vector member for that vector's `_Container_proxy`, EVEN for a
+// default-constructed, zero-element vector; AbaScratch/LoopClosureScratch
+// have a dozen-plus vector members between them, so an unconditionally-
+// constructed "maybe unused" local allocated dozens of times per call on
+// that leg alone (invisible on Linux/libstdc++, which has no such proxy).
+// A disengaged std::optional<T> does not construct its T at all, so this
+// costs nothing when `scratch`/`lc_scratch` is non-null. Found via a
+// debug_alloc backtrace (Windows debug leg only) landing in
+// std::vector<double>::vector -> AbaScratch::AbaScratch, called from here.
+AbaScratch& resolve_aba_scratch(AbaScratch* scratch, std::optional<AbaScratch>& storage, std::size_t num_bodies) {
+    if (scratch) return *scratch;
+    storage.emplace();
+    storage->ensure(num_bodies);
+    return *storage;
+}
+LoopClosureScratch& resolve_lc_scratch(LoopClosureScratch* lc_scratch, std::optional<LoopClosureScratch>& storage,
+                                        const Model& model, std::size_t num_closures) {
+    if (lc_scratch) return *lc_scratch;
+    storage.emplace();
+    storage->ensure(model, num_closures);
+    return *storage;
+}
+
 } // namespace
 
 AbaOutput solve_constrained_dynamics(const Model& model, const ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
                                       const std::vector<real>& tau, const Vec3& gravity, const std::vector<SpatialVector>& ext_force,
                                       AbaScratch* scratch, LoopClosureScratch* lc_scratch) {
-    AbaScratch local_aba;
-    AbaScratch& aba_ref = scratch ? *scratch : local_aba;
-    if (!scratch) aba_ref.ensure(model.bodies.size());
-
-    LoopClosureScratch local_lc;
-    LoopClosureScratch& lc_ref = lc_scratch ? *lc_scratch : local_lc;
-    if (!lc_scratch) lc_ref.ensure(model, closures.size());
+    std::optional<AbaScratch> local_aba_storage;
+    AbaScratch& aba_ref = resolve_aba_scratch(scratch, local_aba_storage, model.bodies.size());
+    std::optional<LoopClosureScratch> local_lc_storage;
+    LoopClosureScratch& lc_ref = resolve_lc_scratch(lc_scratch, local_lc_storage, model, closures.size());
 
     AbaOutput out;
     solve_constrained_dynamics_core(model, state, closures, tau, gravity, ext_force, aba_ref, lc_ref, out.qdd);
@@ -415,12 +443,10 @@ void solve_constrained_dynamics_into(const Model& model, const ArticulationState
 void project_velocity_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
                                         AbaScratch* scratch, LoopClosureScratch* lc_scratch) {
     if (closures.empty()) return;
-    AbaScratch local_aba;
-    AbaScratch& aba_ref = scratch ? *scratch : local_aba;
-    if (!scratch) aba_ref.ensure(model.bodies.size());
-    LoopClosureScratch local_lc;
-    LoopClosureScratch& lc = lc_scratch ? *lc_scratch : local_lc;
-    if (!lc_scratch) lc.ensure(model, closures.size());
+    std::optional<AbaScratch> local_aba_storage;
+    AbaScratch& aba_ref = resolve_aba_scratch(scratch, local_aba_storage, model.bodies.size());
+    std::optional<LoopClosureScratch> local_lc_storage;
+    LoopClosureScratch& lc = resolve_lc_scratch(lc_scratch, local_lc_storage, model, closures.size());
 
     const int nv = model.num_v;
     build_linear_algebra(model, state, closures, aba_ref, lc);
@@ -439,12 +465,10 @@ void project_velocity_onto_constraints(const Model& model, ArticulationState& st
 void project_position_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
                                         AbaScratch* scratch, LoopClosureScratch* lc_scratch) {
     if (closures.empty()) return;
-    AbaScratch local_aba;
-    AbaScratch& aba_ref = scratch ? *scratch : local_aba;
-    if (!scratch) aba_ref.ensure(model.bodies.size());
-    LoopClosureScratch local_lc;
-    LoopClosureScratch& lc = lc_scratch ? *lc_scratch : local_lc;
-    if (!lc_scratch) lc.ensure(model, closures.size());
+    std::optional<AbaScratch> local_aba_storage;
+    AbaScratch& aba_ref = resolve_aba_scratch(scratch, local_aba_storage, model.bodies.size());
+    std::optional<LoopClosureScratch> local_lc_storage;
+    LoopClosureScratch& lc = resolve_lc_scratch(lc_scratch, local_lc_storage, model, closures.size());
 
     const int nv = model.num_v;
     build_linear_algebra(model, state, closures, aba_ref, lc);
