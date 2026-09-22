@@ -103,6 +103,26 @@ articulation::JointType read_articulation_joint_type(const std::string& s) {
     throw std::runtime_error("unknown articulation joint type '" + s + "' (expected revolute|prismatic|fixed)");
 }
 
+// PLAN.md P1.5b: per-link contact opt-in (ps::articulation::LinkContactDesc).
+// Absent "contact" object == disabled, matching LinkContactDesc's own
+// default (every pre-P1.5b scenario file is unaffected).
+articulation::LinkContactDesc read_link_contact(const json& j) {
+    articulation::LinkContactDesc lc;
+    lc.enabled = true; // presence of the "contact" object itself means enabled
+    if (j.contains("shape")) lc.shape = read_shape(j.at("shape"));
+    lc.shape_offset = read_pose(j.value("shape_offset", json()));
+    if (j.contains("material")) {
+        const json& m = j.at("material");
+        lc.material.stiffness = m.value("stiffness", lc.material.stiffness);
+        lc.material.stiffness_exponent = m.value("stiffness_exponent", lc.material.stiffness_exponent);
+        lc.material.damping = m.value("damping", lc.material.damping);
+        lc.material.friction = m.value("friction", lc.material.friction);
+        lc.material.friction_regularization_speed = m.value("friction_regularization_speed", lc.material.friction_regularization_speed);
+        lc.material.proxy_mass_scale = m.value("proxy_mass_scale", lc.material.proxy_mass_scale);
+    }
+    return lc;
+}
+
 articulation::LinkDesc read_link(const json& j) {
     articulation::LinkDesc ld;
     ld.parent = j.value("parent", -1);
@@ -126,7 +146,17 @@ articulation::LinkDesc read_link(const json& j) {
     }
     ld.q0 = j.value("q0", real(0.0));
     ld.qd0 = j.value("qd0", real(0.0));
+    if (j.contains("contact")) ld.contact = read_link_contact(j.at("contact"));
     return ld;
+}
+
+// PLAN.md P1.5b: ArticulationDesc::contact_strategy ("none" default, matches
+// every pre-P1.5b scenario file's behaviour unchanged).
+articulation::ContactStrategy read_contact_strategy(const std::string& s) {
+    if (s == "none" || s.empty()) return articulation::ContactStrategy::None;
+    if (s == "compliant") return articulation::ContactStrategy::Compliant;
+    if (s == "proxy_body") return articulation::ContactStrategy::ProxyBody;
+    throw std::runtime_error("unknown contact_strategy '" + s + "' (expected none|compliant|proxy_body)");
 }
 
 articulation::LoopClosureDesc read_loop_closure(const json& j) {
@@ -160,6 +190,7 @@ ScenarioArticulation read_articulation(const json& j) {
     if (j.contains("loop_closures")) {
         for (const auto& cj : j.at("loop_closures")) sa.desc.loop_closures.push_back(read_loop_closure(cj));
     }
+    sa.desc.contact_strategy = read_contact_strategy(j.value("contact_strategy", std::string("none")));
     return sa;
 }
 

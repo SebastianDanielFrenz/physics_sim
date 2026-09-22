@@ -201,6 +201,92 @@ std::uint64_t run_articulation_scenario(int workers, int ticks) {
     return world.state_hash();
 }
 
+// PLAN.md P1.5b measurement (g): System::step_all steps any contact-source-
+// bearing instance (Compliant only - contact_source.h) SEQUENTIALLY FIRST,
+// in fixed creation order, before the ordinary parallel_for over everything
+// else (system.cpp's own comment on why - apply_wrench to the SAME other
+// body from two different worker threads at once would race). That changes
+// this codebase's usual "one job per articulation" execution order relative
+// to every other determinism scenario in this file, so it needs its own
+// check: several Compliant AND ProxyBody contact-bearing rail rigs (offset
+// in x so they never touch each other or share a Jolt body, and dropped
+// from different heights so they are at different points of falling/first-
+// contact/settling by kTicks, exercising the actual contact code paths, not
+// just steady state) mixed with a few plain (contact_strategy == None)
+// chains so the parallel_for batch still has non-contact work to interleave
+// with the sequential contact pass.
+std::uint64_t run_contact_scenario(int workers, int ticks) {
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    cfg.gravity = Vec3{0, 0, -9.81};
+    cfg.job_workers = workers;
+    World world(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{50, 5, 0.5}};
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 0.8;
+    ground.pose.position = Vec3{0, 0, -0.5};
+    world.create_body(ground);
+
+    auto make_rail = [](articulation::ContactStrategy strategy, real x, real root_z) {
+        articulation::ArticulationDesc desc;
+        desc.root.floating = false;
+        desc.root.pose = Pose{Vec3{x, 0, root_z}, Quat::identity()};
+        desc.contact_strategy = strategy;
+
+        articulation::LinkDesc link;
+        link.parent = -1;
+        link.joint = articulation::JointType::Prismatic;
+        link.axis = Vec3::unit_z();
+        link.mass = 1.0;
+        link.com = Vec3::zero();
+        link.inertia = Mat3::diagonal(0.01, 0.01, 0.01);
+        link.contact.enabled = (strategy != articulation::ContactStrategy::None);
+        link.contact.shape = SphereShape{0.3};
+        link.contact.material.stiffness = 1.0e6;
+        link.contact.material.stiffness_exponent = 1.5;
+        link.contact.material.damping = 1.0e6;
+        link.contact.material.friction = 0.8;
+        desc.links.push_back(link);
+        return desc;
+    };
+
+    for (int a = 0; a < 3; ++a) {
+        world.create_articulation(make_rail(articulation::ContactStrategy::Compliant, static_cast<real>(a) * 3.0, 0.6 + 0.1 * static_cast<real>(a)));
+    }
+    for (int a = 0; a < 3; ++a) {
+        world.create_articulation(
+            make_rail(articulation::ContactStrategy::ProxyBody, 20.0 + static_cast<real>(a) * 3.0, 0.6 + 0.1 * static_cast<real>(a)));
+    }
+    // A few plain (non-contact) open chains mixed in, same shape as
+    // run_articulation_scenario above, so parallel_for's batch has ordinary
+    // work alongside the sequential contact pass.
+    for (int a = 0; a < 4; ++a) {
+        const int links = 1 + (a % 3);
+        articulation::ArticulationDesc desc;
+        desc.root.floating = false;
+        desc.root.pose = Pose{Vec3{40.0 + static_cast<double>(a) * 3.0, 0.0, 0.0}, Quat::identity()};
+        for (int i = 0; i < links; ++i) {
+            articulation::LinkDesc link;
+            link.parent = (i == 0) ? -1 : (i - 1);
+            link.joint = articulation::JointType::Revolute;
+            link.axis = Vec3::unit_y();
+            if (i > 0) link.joint_frame_in_parent.position = Vec3{0, 0, -0.6};
+            link.mass = 1.0;
+            link.com = Vec3{0, 0, -0.3};
+            link.inertia = Mat3::diagonal(0.02, 0.02, 0.02);
+            link.q0 = 0.3 + 0.05 * static_cast<double>(a) + 0.02 * static_cast<double>(i);
+            desc.links.push_back(link);
+        }
+        world.create_articulation(desc);
+    }
+
+    for (int t = 0; t < ticks; ++t) world.step();
+    return world.state_hash();
+}
+
 } // namespace
 
 TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation][heavy]") {
@@ -208,6 +294,16 @@ TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10
     const std::uint64_t reference = run_articulation_scenario(1, kTicks);
     for (int workers : {2, 4, 10, 24}) {
         const std::uint64_t h = run_articulation_scenario(workers, kTicks);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+TEST_CASE("State hash with contact-bearing articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation][contact][heavy]") {
+    constexpr int kTicks = 100;
+    const std::uint64_t reference = run_contact_scenario(1, kTicks);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_contact_scenario(workers, kTicks);
         INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
         REQUIRE(h == reference);
     }

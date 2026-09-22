@@ -1,0 +1,56 @@
+{
+  "name": "contact_articulation",
+  "duration_s": 8.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "bodies": [
+    {
+      "name": "ground",
+      "shape": {"type": "box", "half_extents": [50, 5, 0.5]},
+      "motion": "static",
+      "position": [0, 0, -0.5],
+      "friction": 0.8
+    }
+  ],
+  "articulations": [
+    {
+      "name": "rail_compliant",
+      "contact_strategy": "compliant",
+      "root": {"floating": false, "pose": {"position": [0, 0, 0.7]}},
+      "links": [
+        {
+          "parent": -1,
+          "joint": "prismatic",
+          "axis": [0, 0, 1],
+          "mass": 1.0,
+          "inertia_diag": [0.01, 0.01, 0.01],
+          "contact": {
+            "shape": {"type": "sphere", "radius": 0.3},
+            "material": {"stiffness": 1.0e6, "stiffness_exponent": 1.5, "damping": 1.0e6, "friction": 0.8}
+          }
+        }
+      ]
+    },
+    {
+      "name": "rail_proxy",
+      "contact_strategy": "proxy_body",
+      "root": {"floating": false, "pose": {"position": [3.0, 0, 0.8]}},
+      "links": [
+        {
+          "parent": -1,
+          "joint": "prismatic",
+          "axis": [0, 0, 1],
+          "mass": 1.0,
+          "inertia_diag": [0.01, 0.01, 0.01],
+          "contact": {
+            "shape": {"type": "sphere", "radius": 0.3},
+            "material": {"stiffness": 1.0e6, "stiffness_exponent": 1.5, "damping": 1.0e6, "friction": 0.8}
+          }
+        }
+      ]
+    }
+  ],
+  "telemetry_csv": "contact_articulation.csv"
+}
