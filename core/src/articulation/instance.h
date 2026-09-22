@@ -52,6 +52,12 @@ namespace ps::articulation {
 enum class IntegratorKind { SemiImplicitEuler, Rk4 };
 
 struct InstanceConfig {
+    // A uniform gravitational acceleration - wrapped in a GravityField
+    // (gravity.h) and applied per body at its own COM as an ordinary
+    // external spatial force, NOT Featherstone's a_0 base-acceleration
+    // trick (see gravity.h's file comment for why: a future non-uniform
+    // field, e.g. a curved-Earth P11 world, needs gravity resolved at
+    // each link's own position, which the trick cannot express).
     Vec3 gravity{0, 0, -9.81};
     real substep_rate_hz = 960.0;
     IntegratorKind integrator = IntegratorKind::Rk4; // chosen by measurement; see the comparison above

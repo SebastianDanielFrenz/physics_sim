@@ -1,5 +1,7 @@
 #include "instance.h"
 
+#include "gravity.h"
+
 #include <cstring>
 
 namespace ps::articulation {
@@ -7,6 +9,34 @@ namespace ps::articulation {
 using spatial::SpatialVector;
 
 namespace {
+
+// Adds each body's own gravity contribution (GravityField::at, evaluated
+// at that body's CURRENT world COM position/orientation - see gravity.h)
+// into a copy of base_ext_force, as an ordinary external spatial force
+// about the body's own origin, body-local axes - exactly the same
+// "moment about a reference point" conversion accumulate_external_wrench
+// already uses for force-element wrenches. Poses are recomputed fresh
+// from st (not Instance's body_world_pose_ cache, which is stale
+// mid-substep and, for RK4, does not exist at all for the intermediate
+// stage states) - cheap (one forward-kinematics pass, O(bodies)) relative
+// to the ABA call this feeds into.
+std::vector<SpatialVector> add_gravity(const Model& model, const ArticulationState& st, const std::vector<SpatialVector>& base_ext_force,
+                                        const GravityField& field) {
+    const std::vector<Pose> poses = forward_kinematics_poses(model, st);
+    std::vector<SpatialVector> out = base_ext_force;
+    if (out.empty()) out.assign(model.bodies.size(), SpatialVector{});
+    for (std::size_t i = 0; i < model.bodies.size(); ++i) {
+        const auto& b = model.bodies[i];
+        if (b.inertia.mass <= real(0.0)) continue;
+        const Vec3 com_local = b.inertia.mass > real(0.0) ? b.inertia.h / b.inertia.mass : Vec3::zero();
+        const Vec3 com_world = poses[i].transform_point(com_local);
+        const Vec3 g_world = field.at(com_world);
+        const Mat3 r_inv = poses[i].orientation.inverse().to_mat3();
+        const Vec3 f_local = r_inv * (g_world * b.inertia.mass);
+        out[i] += SpatialVector{cross(com_local, f_local), f_local};
+    }
+    return out;
+}
 
 // FNV-1a over a POD value's bytes, matching the convention
 // IRigidBackend::compute_state_hash uses (core/src/backend/jolt/jolt_backend.cpp)
@@ -164,7 +194,13 @@ void Instance::clamp_joint_limits() {
 
 void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h) {
     const std::vector<real> tau = compute_tau(state_.qd);
-    const AbaOutput aout = solve_constrained_dynamics(model_, state_, loop_closures_, tau, cfg.gravity, ext_force);
+    // Gravity applied per body as an external spatial force at its own
+    // COM (gravity.h), not Featherstone's a_0 base-acceleration trick -
+    // gravity=zero() below so aba()'s own (still-present, unused here)
+    // trick contributes nothing.
+    const GravityField field{cfg.gravity};
+    const std::vector<SpatialVector> ext_force_g = add_gravity(model_, state_, ext_force, field);
+    const AbaOutput aout = solve_constrained_dynamics(model_, state_, loop_closures_, tau, Vec3::zero(), ext_force_g);
 
     // Semi-implicit (symplectic) Euler: velocity first, then position using
     // the NEW velocity.
@@ -185,7 +221,9 @@ void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::ve
 
 Instance::Derivative Instance::evaluate_derivative(const ArticulationState& st, const std::vector<real>& tau,
                                                      const std::vector<SpatialVector>& ext_force, const Vec3& gravity) const {
-    const AbaOutput aout = solve_constrained_dynamics(model_, st, loop_closures_, tau, gravity, ext_force);
+    const GravityField field{gravity};
+    const std::vector<SpatialVector> ext_force_g = add_gravity(model_, st, ext_force, field);
+    const AbaOutput aout = solve_constrained_dynamics(model_, st, loop_closures_, tau, Vec3::zero(), ext_force_g);
 
     Derivative d;
     d.qdot.assign(static_cast<std::size_t>(model_.num_q), real(0.0));

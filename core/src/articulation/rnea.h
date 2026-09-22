@@ -26,6 +26,9 @@ struct RneaInput {
     const Model* model = nullptr;
     const ArticulationState* state = nullptr;
     std::vector<real> qdd;                              // size model->num_v
+    // Featherstone's a_0 base-acceleration trick; see aba.h's identical
+    // field comment for why Instance no longer routes production gravity
+    // through this (gravity.h) - still correct for a uniform field.
     Vec3 gravity = Vec3{0, 0, -9.81};                    // world-frame gravity ACCELERATION vector
     std::vector<spatial::SpatialVector> ext_force;       // size model->bodies.size(); external spatial force on each body, expressed in that body's OWN frame (moment first, then linear force) - zero-initialized if empty
 };

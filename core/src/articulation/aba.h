@@ -33,6 +33,12 @@ struct AbaInput {
     const Model* model = nullptr;
     const ArticulationState* state = nullptr;
     std::vector<real> tau;                          // size model->num_v, generalized applied force per DoF
+    // Featherstone's a_0 base-acceleration trick (ch. 3/7): correct only
+    // for a UNIFORM field. Instance (instance.cpp) no longer uses this -
+    // it applies gravity per body via ext_force instead (gravity.h), so it
+    // can support a future non-uniform field; this field stays available
+    // (and still correct) for direct callers, e.g. the ABA-vs-CRBA
+    // cross-check test.
     Vec3 gravity = Vec3{0, 0, -9.81};
     std::vector<spatial::SpatialVector> ext_force;   // size model->bodies.size() or empty; per-body external spatial force, body-local axes
 };
