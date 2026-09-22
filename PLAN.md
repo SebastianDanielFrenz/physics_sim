@@ -435,6 +435,18 @@ angular momentum to 1e-6 rel. over 60 s; four-bar linkage: closure error
 rad; a force-limited prismatic actuator stalls at its force limit; thread-count
 determinism and Windows = Linux hashes; cost of a 10-link articulation per
 960 Hz substep measured and reported.
+*Decided 2026-09-23 (measured, see vault PHYS-012/PHYS-013):* the default is
+**Compliant** — we compute contact forces ourselves (Hunt-Crossley plus
+regularised Coulomb friction), evaluated at each RK4 stage's own state, with
+Jolt as a pure collision query. Measured: settles within 0.01 cm gently and
+1 cm from 9.6 m/s, matches the analytic equilibrium under a 500 N load to
+2 mm, no tunnelling at 20 m/s, 10-100 µs per contact.
+ProxyBody (Jolt solves the contacts through a driven proxy body) stays in the
+code as a comparison and fallback, but is not the default: its one-tick delay
+cannot follow a step load (a 500 N step sent the arm into a 688 m fall), it
+leaves 11.5 cm penetration at a 20 m/s impact, and it needs `proxy_mass_scale`
+set by hand whenever the contact link rigidly carries more mass behind it.
+Both keep determinism across worker counts and Windows/Linux.
 *b) Coupling prototype:* at least two strategies for how articulation links
 interact with Jolt contacts (e.g. compliant contact force elements with Jolt
 as a pure collision query, and proxy Jolt bodies with contact impulses read
