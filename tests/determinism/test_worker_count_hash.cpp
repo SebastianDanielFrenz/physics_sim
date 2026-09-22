@@ -69,19 +69,75 @@ TEST_CASE("State hash is identical across 1, 2, 4, 10 and 24 workers", "[determi
 
 namespace {
 
-// PLAN.md P1.5a: "add articulations to the thread-count determinism test
-// (1/2/4/10/24 workers, several articulations at once)". Several
-// independent 3-link pendulum chains, mixed with the same
-// CounterForceElement Jolt bodies run_scenario above already uses, so both
-// subsystems are exercised together in one hash. Articulation stepping
-// itself never touches the job system (System::step_all is a plain
-// sequential loop, core/src/articulation/system.cpp) - deterministic by
-// construction independent of worker count - this test's job is to check
-// that mixing it into the same World/pipeline as the worker-count-
-// sensitive Jolt/force-element stages doesn't disturb THEIR determinism
-// (e.g. via any shared mutable state), not to re-prove articulation
-// determinism in isolation (test_articulation_core.cpp's ABA-vs-CRBA
-// check and the validation suite already do that).
+// PLAN.md P1.5a/D8, PHYS-009 Step 1 rule 3: "add articulations to the
+// thread-count determinism test (1/2/4/10/24 workers, several
+// articulations at once)". Several DIFFERENT-SIZED open chains (1..5
+// links), a floating-base chain, and a four-bar (loop-closure) linkage -
+// mixed with the same CounterForceElement Jolt bodies run_scenario above
+// already uses, so Jolt/force-element/articulation stages are all
+// exercised together in one hash. Unlike the original version of this
+// test, System::step_all (core/src/articulation/system.cpp) now runs one
+// job per articulation batch through ps::jobs::parallel_for - this test's
+// job is therefore no longer trivially true by construction: it actually
+// exercises articulation-stepping determinism under work-stealing
+// scheduling, in addition to checking that sharing a World/pipeline with
+// the worker-count-sensitive Jolt/force-element stages doesn't disturb
+// either side's determinism.
+using namespace ps::articulation;
+
+ArticulationDesc make_four_bar_desc(double x_offset, double q_crank) {
+    // Same Grashof crank-rocker geometry as
+    // tests/validation/test_articulation_four_bar_energy.cpp, offset in x
+    // so several instances don't overlap in space (irrelevant to the
+    // dynamics - articulations don't collide, PLAN.md P1.5a scope - but
+    // keeps scenario construction easy to reason about).
+    constexpr double kA = 2.0, kB = 5.0, kC = 4.0, kD = 4.0;
+    ArticulationDesc desc;
+    desc.root.floating = false;
+    desc.root.pose = Pose{Vec3{x_offset, 0, 0}, Quat::identity()};
+
+    LinkDesc crank;
+    crank.parent = -1;
+    crank.joint = articulation::JointType::Revolute;
+    crank.axis = Vec3::unit_y();
+    crank.mass = 1.0;
+    crank.com = Vec3{0, 0, -kA / 2.0};
+    crank.inertia = Mat3::diagonal(1.0 * kA * kA / 12.0, 1.0 * kA * kA / 12.0, 1e-4);
+    crank.q0 = q_crank;
+    desc.links.push_back(crank);
+
+    LinkDesc coupler;
+    coupler.parent = 0;
+    coupler.joint = articulation::JointType::Revolute;
+    coupler.joint_frame_in_parent.position = Vec3{0, 0, -kA};
+    coupler.axis = Vec3::unit_y();
+    coupler.mass = 1.5;
+    coupler.com = Vec3{0, 0, -kB / 2.0};
+    coupler.inertia = Mat3::diagonal(1.5 * kB * kB / 12.0, 1.5 * kB * kB / 12.0, 1e-4);
+    coupler.q0 = 1.0;
+    desc.links.push_back(coupler);
+
+    LinkDesc rocker;
+    rocker.parent = -1;
+    rocker.joint = articulation::JointType::Revolute;
+    rocker.joint_frame_in_parent.position = Vec3{kD, 0, 0};
+    rocker.axis = Vec3::unit_y();
+    rocker.mass = 1.0;
+    rocker.com = Vec3{0, 0, -kC / 2.0};
+    rocker.inertia = Mat3::diagonal(1.0 * kC * kC / 12.0, 1.0 * kC * kC / 12.0, 1e-4);
+    rocker.q0 = 1.8;
+    desc.links.push_back(rocker);
+
+    LoopClosureDesc lc;
+    lc.type = LoopClosureType::Point;
+    lc.link_a = 1;
+    lc.anchor_a = Vec3{0, 0, -kB};
+    lc.link_b = 2;
+    lc.anchor_b = Vec3{0, 0, -kC};
+    desc.loop_closures.push_back(lc);
+    return desc;
+}
+
 std::uint64_t run_articulation_scenario(int workers, int ticks) {
     WorldConfig cfg;
     cfg.tick_rate_hz = 240.0;
@@ -90,13 +146,15 @@ std::uint64_t run_articulation_scenario(int workers, int ticks) {
     cfg.job_workers = workers;
     World world(cfg);
 
-    constexpr int kNumArticulations = 5;
-    constexpr int kLinksPerChain = 3;
-    for (int a = 0; a < kNumArticulations; ++a) {
+    // Open chains of DIFFERENT sizes (1..5 links), so the parallel_for
+    // batches mix small and large instances across jobs.
+    constexpr int kNumChains = 8;
+    for (int a = 0; a < kNumChains; ++a) {
+        const int links = 1 + (a % 5);
         articulation::ArticulationDesc desc;
         desc.root.floating = false;
         desc.root.pose = Pose{Vec3{static_cast<double>(a) * 3.0, 0.0, 0.0}, Quat::identity()};
-        for (int i = 0; i < kLinksPerChain; ++i) {
+        for (int i = 0; i < links; ++i) {
             articulation::LinkDesc link;
             link.parent = (i == 0) ? -1 : (i - 1);
             link.joint = articulation::JointType::Revolute;
@@ -110,6 +168,34 @@ std::uint64_t run_articulation_scenario(int workers, int ticks) {
         }
         world.create_articulation(desc);
     }
+
+    // A floating-base chain (PHYS-009 Step 1 rule 3).
+    {
+        articulation::ArticulationDesc desc;
+        desc.root.floating = true;
+        desc.root.pose = Pose{Vec3{0.0, 6.0, 5.0}, Quat::identity()};
+        desc.root.velocity.angular = Vec3{0.1, 0.4, -0.2};
+        desc.root.velocity.linear = Vec3{0.0, 0.0, 0.5};
+        desc.root.mass = 2.0;
+        desc.root.com = Vec3::zero();
+        desc.root.inertia = Mat3::diagonal(0.08, 0.08, 0.08);
+        for (int i = 0; i < 2; ++i) {
+            articulation::LinkDesc link;
+            link.parent = i - 1;
+            link.joint = articulation::JointType::Revolute;
+            link.axis = Vec3::unit_x();
+            if (i > 0) link.joint_frame_in_parent.position = Vec3{0, 0, -0.5};
+            link.mass = 0.5;
+            link.com = Vec3{0, 0, -0.25};
+            link.inertia = Mat3::diagonal(0.01, 0.01, 0.01);
+            link.q0 = 0.1 * static_cast<double>(i + 1);
+            desc.links.push_back(link);
+        }
+        world.create_articulation(desc);
+    }
+
+    // A four-bar (loop-closure) linkage (PHYS-009 Step 1 rule 3).
+    world.create_articulation(make_four_bar_desc(30.0, 0.6));
 
     for (int t = 0; t < ticks; ++t) world.step();
     return world.state_hash();

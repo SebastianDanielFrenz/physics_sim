@@ -27,7 +27,7 @@ target_link_libraries(ps_unit_tests
 # (internal spatial algebra / RNEA / CRBA / ABA - not part of ps_core's
 # public API surface), so it needs core/src on its include path in
 # addition to the public core/include ps_core already exposes.
-target_include_directories(ps_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src)
+target_include_directories(ps_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src ${CMAKE_SOURCE_DIR}/tests/support)
 
 # test_scenario_articulation.cpp needs the repo root as an absolute path
 # baked in at configure time (see that file's own comment): the WSL/Linux
