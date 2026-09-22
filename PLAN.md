@@ -408,9 +408,29 @@ penetration, stability, energy, action = reaction, cost. Sebastian decides.
 thread, snapshot → Node3D transforms, input → sim controls, debug draw of
 force vectors, static mesh/heightmap → sim collision. Demo project with a flat
 test ground.
+Gamepad support (Sebastian, 2026-09-22): Xbox One / Series controllers via
+Godot's joypad input, also keyboard. Actions: steer (analog stick), throttle
+and brake (separate analog triggers), handbrake, shift up/down, clutch,
+camera, reset vehicle. All remappable; deadzone and steering curve
+configurable; rumble output as a hook (fed from tyre slip/ABS later). Input
+reaches the sim only as named control channels (e.g. `steer` −1…1,
+`throttle` 0…1) in ISO/SI terms, never as Godot types.
 Accept: P1 scenarios play back in Godot; the sim keeps 240 Hz with Godot at
 any frame rate; grep proves core has no Godot include; headless
-`godot --headless` smoke test passes.
+`godot --headless` smoke test passes; the input mapping (deadzone, curve,
+trigger axes) is tested with synthetic input events.
+
+**M1 — First test drive (after P3).** On the test ground (`data/tracks/
+test_ground`, see below): one car, P3 tyres and suspension, a placeholder
+drive of throttle → torque at the driven wheels from a torque curve (no gears,
+no clutch — they come in P4), brakes, steering, on the Xbox controller in
+Godot. Sebastian drives; subjective tuning is his.
+Test ground: a flat floor with a grid (speed reference), a straight asphalt
+strip, a skidpad (radius 40 m, for P3), grass and dirt surfaces, a split-μ
+strip (for P4), ramps at 5/10/15/30/50 % (15 % = the P3 parking test, steep
+ones for the tractor), a side slope, and a small asphalt circuit. Generated
+procedurally and deterministically; surfaces carry physical parameters (μ
+scale, rolling resistance) with the source noted; visually plain.
 
 **P3 — Chassis, suspension, tyres.** One passenger car and one tractor defined
 in JSON, with published or plausible `.tir` data (note the source).
