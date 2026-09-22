@@ -370,6 +370,15 @@ the terrain tiles from the start:
   scenario. Vehicle body frames stay ISO 8855 (D4).
 - The surface table is data (μ scale, rolling resistance, later soil
   parameters), shared by all sources.
+- `IWorldShape` (for optional planet curvature, P11): answers `gravity(p)`,
+  `up(p)`, `altitude(p)` and `local_frame(p)` for a world position. The flat
+  implementation returns constant gravity and z as the altitude; a WGS84
+  implementation comes with P11. From the terrain tiles on, new code never
+  assumes that −z is down or that z is the altitude: gravity is applied per
+  body/link from `gravity(p)`, and atmosphere, wind and suspension references
+  use the local frame. Tile keys are opaque (not raw planar x/y indices), so a
+  geodetic or cube-sphere tiling can replace the planar grid. The existing
+  constant `WorldConfig::gravity` becomes the flat world shape's parameter.
 
 ## 7. Phases and acceptance tests
 
@@ -558,9 +567,28 @@ Godot: the adapter only uploads render buffers the library builds.
   never parses OSM or GeoTIFF. Heavy geo libraries (GDAL/PROJ/osmium or Python
   equivalents) stay in the importer; which ones gets decided and approved when
   the phase starts.
-- Georeference: the scenario names an origin (lat, lon, height) and a
-  projection (UTM or local transverse Mercator; flat-earth approximation, with
-  scale and curvature error at ±50 km quantified and documented).
+- Georeference: the scenario names an origin (lat, lon, height) and a world
+  shape:
+  - *flat* (default): projection (UTM or local transverse Mercator),
+    constant gravity along −z. Scale and curvature error at ±50 km are
+    quantified and documented. Cheapest, and enough for most driving.
+  - *curved* (optional, Sebastian 2026-09-22): the WGS84 ellipsoid. Positions
+    are true 3D geometry in a local frame tangent at the origin (ECEF offset,
+    double precision), so the ground falls away with distance (about 196 m at
+    50 km) and the horizon is real. Gravity at each body and link points along
+    the local ellipsoid normal (normal gravity per WGS84/Somigliana, with
+    height dependence). "Up", altitude and heading are local quantities
+    everywhere: atmosphere (P5) uses height above the ellipsoid, and
+    suspension and aero use the local up. Terrain tiles lie on the ellipsoid
+    (geodetic tile grid or cube-sphere quadtree, decided in the phase).
+    Earth rotation effects (Coriolis, centrifugal) are an optional extra
+    term, off by default, and the aircraft phase may use them.
+  Accept (curved): gravity direction matches the ellipsoid normal to 1e-9 rad
+  at sample points; a ball resting on the ground 50 km away stays at rest (no
+  sliding from a mismatched "down"); a straight road drapes over the curvature
+  without steps at tile borders; a flight or drive over 50 km shows the
+  expected geometric horizon drop; results are deterministic and equal across
+  platforms, as in P1.
 - Licences: ODbL (OSM) requires attribution and share-alike for derived
   databases; Copernicus and WorldCover require attribution. The baked tiles
   carry their source and licence, and the adapter can display attributions.
