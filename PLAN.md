@@ -106,6 +106,25 @@ value; the backend seam keeps this possible later); using Jolt's built-in
 `VehicleConstraint` (arcade tyre model, not extensible enough).
 Build Jolt with `JPH_DOUBLE_PRECISION` (aircraft and large farm maps) and
 `CROSS_PLATFORM_DETERMINISTIC`.
+*Amended 2026-09-22 by D10:* joint chains of vehicles and machines are not
+solved by Jolt's joints but by our own reduced-coordinate solver. Jolt keeps
+collision detection, contacts and free bodies.
+
+**D10 — Articulated chains in joint coordinates (Featherstone).** Decided by
+Sebastian on 2026-09-22 after the P1 energy study (vault PHYS-003). Jolt, like
+every maximal-coordinate solver, pushes joints back together after each step.
+That discards energy (hinge chain at a 90° swing: −22 % in 60 s; finer steps
+only reach −18 %), and it lets joints give under large mass ratios (20 t on a
+10 kg link: 46 mm, and it goes unstable at 960 Hz). Our own solver works in
+joint coordinates (Featherstone's articulated-body algorithm), so joints
+cannot come apart by construction, and mass ratios don't matter. It runs in
+the 960 Hz vehicle-island stage (D3/D8). Every link exposes a `Frame`, so
+force elements attach unchanged. Closed loops (three-point linkage, hydraulic
+cylinders, parallel-linkage loaders) get loop-closure constraints.
+Rejected: replacing Jolt's whole solver with XPBD (little of D2 would remain,
+and energy is only better, not exact); staying on Jolt with mitigations (not a
+real fix). How articulations couple to Jolt contacts is settled by a measured
+prototype comparison in P1.5, not here.
 
 **D3 — Multi-rate fixed stepping.** Rigid-body tick 240 Hz. Vehicle internals
 (wheel spin, tyre slip states, drivetrain, hydraulics) sub-step at 4× = 960 Hz
@@ -359,6 +378,31 @@ debug allocator hook); free fall matches analytic to 1e-6 rel. over 10 s; pendul
 within 0.1 %; energy drift of a frictionless joint chain < 0.5 % over 60 s;
 box-on-slope sticks/slides at the right friction angle; determinism hash
 identical across 3 runs and across debug/release of the same compiler.
+
+**P1.5 — Articulation solver (D10).** Two steps.
+*a) Core:* `ps::articulation` with a fixed or floating (6-DoF) root;
+revolute, prismatic and fixed joints; joint forces/limits; ABA forward
+dynamics (Featherstone, "Rigid Body Dynamics Algorithms", 2008, ch. 7), CRBA
+and RNEA as cross-checks; loop-closure constraints; the integrator chosen by
+measurement; one job per articulation in the vehicle-island stage; a `Frame`
+per link.
+Accept: ABA accelerations equal CRBA solve M⁻¹(τ−C) to 1e-9 rel.; single
+pendulum at large amplitude matches the elliptic-integral period within 0.1 %;
+double pendulum at small amplitude matches its two normal-mode frequencies
+within 0.1 %; energy drift < 0.5 % over 60 s without damping (single link at
+90° and 170°, 3-link chain at 90°); 2000:1 mass ratio in both orders is stable
+with drift < 0.5 %; a floating base without gravity conserves momentum and
+angular momentum to 1e-6 rel. over 60 s; four-bar linkage: closure error
+< 0.1 mm, drift < 0.5 %, output angle matches closed-form kinematics to 1e-6
+rad; a force-limited prismatic actuator stalls at its force limit; thread-count
+determinism and Windows = Linux hashes; cost of a 10-link articulation per
+960 Hz substep measured and reported.
+*b) Coupling prototype:* at least two strategies for how articulation links
+interact with Jolt contacts (e.g. compliant contact force elements with Jolt
+as a pure collision query, and proxy Jolt bodies with contact impulses read
+back), measured on the same scenarios: arm bucket resting on the ground,
+pushing a 500 kg Jolt crate, articulated vehicle on the ground. Metrics:
+penetration, stability, energy, action = reaction, cost. Sebastian decides.
 
 **P2 — Minimal Godot adapter.** GDExtension exposing: load scenario, step
 thread, snapshot → Node3D transforms, input → sim controls, debug draw of
