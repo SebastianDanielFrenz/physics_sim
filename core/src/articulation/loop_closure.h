@@ -55,6 +55,22 @@
 // behaves as a Point closure (position-only), which is NOT what
 // PLAN.md P1.5a asks for; flagged clearly in the P1.5a report rather than
 // silently shipped as correct.
+//
+// PHYS-009 Step 3: every workspace vector this file's constraint solve
+// needs (ClosureLinearAlgebra's J/minv_jrow/A, plus the smaller per-call
+// buffers building them) used to be a fresh local, i.e. a closure-bearing
+// articulation (e.g. the four-bar) allocated on every substep even after
+// Step 1 preallocated the open-chain aba() scratch - flagged explicitly in
+// this file's older comments as out of that pass's scope. LoopClosureScratch
+// below is the analogous preallocation for this file: every buffer sized
+// once (LoopClosureScratch::ensure(), called from Instance's constructor,
+// same as AbaScratch::ensure()) and reused in place from then on. Passing
+// lc_scratch == nullptr (still the default on every function below that
+// takes it) falls back to a fresh stack-local LoopClosureScratch per call -
+// exactly the old allocating behaviour, kept for the non-hot-path callers
+// this file already had (tests/validation/test_articulation_four_bar_energy.cpp,
+// tests/unit/test_articulation_four_bar.cpp) that call these functions
+// directly, never from inside a job.
 
 #pragma once
 
@@ -71,6 +87,45 @@ struct LoopClosureRuntime {
     int body_b = -1;
     Vec3 anchor_a = Vec3::zero(); // body_a-local, or world-space if body_a == -1
     Vec3 anchor_b = Vec3::zero();
+};
+
+// Shared machinery build_linear_algebra (loop_closure.cpp) fills: J (m x nv,
+// row-major), minv_jrow (m x nv, row-major - row i is M^-1 * J_row_i, from
+// an aba() probe) and A = J * M^-1 * J^T (m x m). m == 3 * closures.size().
+struct ClosureLinearAlgebra {
+    int m = 0;
+    std::vector<real> J;
+    std::vector<real> minv_jrow;
+    std::vector<real> A;
+};
+
+// Preallocated workspace for the whole file's constraint solve (see this
+// header's top comment). Every vector is sized by ensure() and never
+// resized again for the rest of its owning Instance's lifetime.
+struct LoopClosureScratch {
+    ClosureLinearAlgebra la;
+    std::vector<Pose> poses;
+    std::vector<spatial::SpatialTransform> xup;
+    std::vector<Vec3> r_a, r_b;
+    std::vector<spatial::SpatialVector> v_probe;
+    std::vector<spatial::SpatialVector> v_real;
+    std::vector<spatial::SpatialVector> a_bias;
+    ArticulationState probe_state;   // q/qd sized like the owning Instance's state
+    ArticulationState zero_v_state;  // q/qd sized like the owning Instance's state
+    std::vector<real> j_row;         // size nv
+    std::vector<real> g;             // size m, constraint_error's output
+    std::vector<real> jdot_qd;       // size m
+    std::vector<real> free_qdd;      // size nv, the unconstrained aba_into() result
+    std::vector<real> probe_qdd;     // size nv, build_linear_algebra's per-row aba_into() probe output (distinct from free_qdd - must not alias it, build_linear_algebra runs AFTER free_qdd is computed and free_qdd is still needed afterwards)
+    std::vector<real> j_qdd_free;    // size m
+    std::vector<real> rhs;           // size m
+    std::vector<real> mu;            // size m, solve_spd's output (lambda, or a projection's mu)
+    std::vector<real> delta;         // size nv, M^-1*J^T*mu
+    std::vector<real> spd_a;         // size m*m, solve_spd's own mutated copy of A
+    std::vector<real> spd_b;         // size m,   solve_spd's own mutated copy of rhs
+
+    // n == model.bodies.size(), nv == model.num_v, nq == model.num_q.
+    void ensure(const Model& model, std::size_t num_closures);
 };
 
 // link_to_body maps ArticulationDesc::links index -> internal body index
@@ -90,33 +145,31 @@ void forward_kinematics_poses_into(const Model& model, const ArticulationState& 
 
 // Returns qdd satisfying every closure's acceleration-level constraint
 // (see file comment); falls back to a plain aba() call when closures is
-// empty (no cost added to the common, loop-free case). `scratch`, when
-// given, is forwarded to every internal aba() call (PHYS-009 Step 1 rule
-// 2: Instance passes its own preallocated AbaScratch so the open-chain
-// fast path never allocates inside a job; the loop-closure probe path
-// below still allocates its own J/minv_jrow/A buffers per call - out of
-// this pass's scope, see instance.h's Instance::aba_scratch_ comment).
+// empty (no cost added to the common, loop-free case). `scratch` is
+// forwarded to every internal aba() call; `lc_scratch` backs every other
+// workspace buffer this file's constraint solve needs - both are optional
+// (default nullptr: a fresh, allocating stack-local is used instead) for
+// the non-hot-path callers that never run inside a job.
 [[nodiscard]] AbaOutput solve_constrained_dynamics(const Model& model, const ArticulationState& state,
                                                      const std::vector<LoopClosureRuntime>& closures,
                                                      const std::vector<real>& tau, const Vec3& gravity,
                                                      const std::vector<spatial::SpatialVector>& ext_force,
-                                                     AbaScratch* scratch = nullptr);
+                                                     AbaScratch* scratch = nullptr, LoopClosureScratch* lc_scratch = nullptr);
 
 // Hot-path entry point: writes into a caller-owned qdd_out instead of
 // returning an AbaOutput by value. The open-chain case (closures.empty(),
 // the common one - PLAN.md D8 "the sub-step chain of a single vehicle is
 // sequential" applies equally to a single articulation instance) forwards
 // straight to aba_into and allocates nothing; a closure-bearing instance
-// (e.g. a four-bar linkage) still goes through the allocating
-// solve_constrained_dynamics path internally (see loop_closure.cpp) and
-// copies the result into qdd_out - PHYS-009 Step 1 left this path
-// unoptimised (out of scope: only the aba() scratch was required to move
-// off the hot path), flagged here rather than silently implied clean.
+// (e.g. a four-bar linkage) now goes entirely through `lc_scratch`'s
+// preallocated buffers too (PHYS-009 Step 3 - previously routed through the
+// allocating solve_constrained_dynamics path every substep, flagged as
+// out-of-scope by PHYS-009 Step 1; fixed here).
 void solve_constrained_dynamics_into(const Model& model, const ArticulationState& state,
                                       const std::vector<LoopClosureRuntime>& closures,
                                       const std::vector<real>& tau, const Vec3& gravity,
                                       const std::vector<spatial::SpatialVector>& ext_force,
-                                      AbaScratch& scratch, std::vector<real>& qdd_out);
+                                      AbaScratch& scratch, std::vector<real>& qdd_out, LoopClosureScratch& lc_scratch);
 
 // Mass-weighted position and velocity projection onto the constraint
 // manifold (drift stabilisation, see file comment); no-op when closures
@@ -129,18 +182,24 @@ void solve_constrained_dynamics_into(const Model& model, const ArticulationState
 // measured energy drift - see the P1.5a report's measurement of running
 // with/without each half.
 void project_velocity_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
-                                        AbaScratch* scratch = nullptr);
+                                        AbaScratch* scratch = nullptr, LoopClosureScratch* lc_scratch = nullptr);
 void project_position_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
-                                        AbaScratch* scratch = nullptr);
+                                        AbaScratch* scratch = nullptr, LoopClosureScratch* lc_scratch = nullptr);
 inline void project_onto_constraints(const Model& model, ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
-                                      AbaScratch* scratch = nullptr) {
-    project_velocity_onto_constraints(model, state, closures, scratch);
-    project_position_onto_constraints(model, state, closures, scratch);
+                                      AbaScratch* scratch = nullptr, LoopClosureScratch* lc_scratch = nullptr) {
+    project_velocity_onto_constraints(model, state, closures, scratch, lc_scratch);
+    project_position_onto_constraints(model, state, closures, scratch, lc_scratch);
 }
 
 // Constraint position error g(q) (3 per closure: anchor_a - anchor_b,
 // world axes), for tests/telemetry.
 [[nodiscard]] std::vector<real> constraint_error(const Model& model, const ArticulationState& state,
                                                    const std::vector<LoopClosureRuntime>& closures);
+// Same, writing into a caller-owned, already-sized `out` and reusing
+// `poses_scratch` for the forward-kinematics pass instead of allocating
+// either (PHYS-009 Step 3 hot-path variant, used by
+// project_position_onto_constraints when given an lc_scratch).
+void constraint_error_into(const Model& model, const ArticulationState& state, const std::vector<LoopClosureRuntime>& closures,
+                            std::vector<Pose>& poses_scratch, std::vector<real>& out);
 
 } // namespace ps::articulation

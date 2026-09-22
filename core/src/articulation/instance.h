@@ -175,6 +175,13 @@ private:
     // jobs" - System::step_all (system.cpp) now runs one job per
     // articulation, so everything step_tick touches must not allocate). ---
     AbaScratch aba_scratch_;
+    // PHYS-009 Step 3: backs every workspace buffer loop_closure.cpp's
+    // constraint solve needs (ClosureLinearAlgebra's J/minv_jrow/A and the
+    // smaller buffers building them) - sized once here, like aba_scratch_
+    // above, so a closure-bearing instance (e.g. the four-bar) no longer
+    // allocates every substep either. Harmless (zero-sized buffers) for the
+    // common open-chain case, same as loop_closures_ itself.
+    LoopClosureScratch loop_closure_scratch_;
     std::vector<spatial::SpatialVector> ext_force_scratch_;   // size bodies.size(), body-local, held constant across a tick's substeps
     std::vector<spatial::SpatialVector> ext_force_g_scratch_; // size bodies.size(), ext_force + gravity, reused per aba() evaluation
     std::vector<Pose> fk_pose_scratch_;                       // size bodies.size(), forward-kinematics scratch for add_gravity_into

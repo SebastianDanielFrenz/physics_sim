@@ -74,6 +74,7 @@ Instance::Instance(Model model, const articulation::ArticulationDesc& desc) : mo
     }
 
     loop_closures_ = build_loop_closure_runtime(model_, link_to_body_);
+    loop_closure_scratch_.ensure(model_, loop_closures_.size());
 
     // --- Preallocate every step_tick()-time scratch buffer HERE, on the
     // caller's thread at construction time - never inside a job (PHYS-009
@@ -173,7 +174,7 @@ void Instance::step_tick(const InstanceConfig& cfg, real tick_dt) {
         // measured (P1.5a report) against once-per-tick - per-substep
         // corrections are individually much smaller, which measured lower
         // energy drift overall despite the extra ABA-probe cost.
-        if (!loop_closures_.empty()) project_onto_constraints(model_, state_, loop_closures_, &aba_scratch_);
+        if (!loop_closures_.empty()) project_onto_constraints(model_, state_, loop_closures_, &aba_scratch_, &loop_closure_scratch_);
     }
 
     recompute_world_kinematics();
@@ -213,7 +214,8 @@ void Instance::step_semi_implicit_euler(const InstanceConfig& cfg, const std::ve
     // trick contributes nothing.
     const GravityField field{cfg.gravity};
     add_gravity_into(state_, ext_force, field, ext_force_g_scratch_);
-    solve_constrained_dynamics_into(model_, state_, loop_closures_, tau_scratch_, Vec3::zero(), ext_force_g_scratch_, aba_scratch_, qdd_scratch_);
+    solve_constrained_dynamics_into(model_, state_, loop_closures_, tau_scratch_, Vec3::zero(), ext_force_g_scratch_, aba_scratch_, qdd_scratch_,
+                                     loop_closure_scratch_);
 
     // Semi-implicit (symplectic) Euler: velocity first, then position using
     // the NEW velocity.
@@ -236,7 +238,7 @@ void Instance::evaluate_derivative_into(const ArticulationState& st, const std::
                                          const std::vector<SpatialVector>& ext_force, const Vec3& gravity, Derivative& out) {
     const GravityField field{gravity};
     add_gravity_into(st, ext_force, field, ext_force_g_scratch_);
-    solve_constrained_dynamics_into(model_, st, loop_closures_, tau, Vec3::zero(), ext_force_g_scratch_, aba_scratch_, out.qddot);
+    solve_constrained_dynamics_into(model_, st, loop_closures_, tau, Vec3::zero(), ext_force_g_scratch_, aba_scratch_, out.qddot, loop_closure_scratch_);
 
     for (const auto& b : model_.bodies) {
         if (b.ndof == 1) out.qdot[static_cast<std::size_t>(b.q_index)] = st.qd[static_cast<std::size_t>(b.dof_index)];
