@@ -9,7 +9,7 @@
 namespace ps {
 
 World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / config.tick_rate_hz) {
-    job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers);
+    job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers, config.job_queue_capacity);
     articulation_system_ = std::make_unique<articulation::System>();
     RigidBackendSettings backend_settings;
     backend_settings.baumgarte = config.baumgarte;
@@ -33,6 +33,7 @@ World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / confi
     for (int w = 0; w < job_system_->worker_count(); ++w) {
         worker_utilization_channels_.push_back(telemetry_->register_channel("jobs.worker" + std::to_string(w) + ".utilization"));
     }
+    queue_full_fallback_channel_ = telemetry_->register_channel("jobs.queue_full_fallbacks");
 }
 
 World::~World() {
@@ -178,12 +179,13 @@ void World::step() {
         1.0, std::chrono::duration<double, std::nano>(tick_t1 - tick_t0).count());
 
     std::vector<real> row;
-    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size());
+    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1);
     for (double ms : last_stage_ms_) row.push_back(real(ms));
     for (int w = 0; w < job_system_->worker_count(); ++w) {
         const double busy_ns = static_cast<double>(job_system_->worker_busy_ns(w));
         row.push_back(real(busy_ns / tick_ns));
     }
+    row.push_back(real(job_system_->queue_full_fallback_count())); // cumulative, P1.5b review item
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
     ++tick_;

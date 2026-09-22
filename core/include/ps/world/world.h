@@ -33,6 +33,11 @@ struct WorldConfig {
     real substep_rate_hz = 960.0;   // documented stub until P3 (vehicles).
     Vec3 gravity = Vec3{0.0, 0.0, -9.81};
     int job_workers = 0;            // 0 = auto (physical cores - 2, PLAN.md D8)
+    // 0 = auto (ps::jobs::JobSystem::kDefaultQueueCapacity, 4096 - every real
+    // workload in this codebase). A test may set a small explicit value to
+    // force the queue-full inline-execution fallback deliberately (P1.5b
+    // review item; see ps::jobs::JobSystem::queue_full_fallback_count).
+    std::size_t job_queue_capacity = 0;
     std::size_t max_bodies = 4096;
     // Chunk size for the force-element parallel_for stage; 0 = auto
     // (spreads elements evenly over the worker count).
@@ -163,6 +168,7 @@ private:
     // clock in the core" targets the deterministic stepping logic itself).
     std::vector<std::size_t> stage_timing_channels_;
     std::vector<std::size_t> worker_utilization_channels_;
+    std::size_t queue_full_fallback_channel_ = 0; // P1.5b review item
     std::vector<double> last_stage_ms_;
     std::vector<ContactEvent> last_contact_events_;
     // PHYS-009 Step 3: reused every tick by stage_snapshot() instead of

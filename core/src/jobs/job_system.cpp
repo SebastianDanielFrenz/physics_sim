@@ -12,27 +12,15 @@ namespace {
 thread_local int t_worker_index = -1; // -1: not a worker thread
 }
 
-void JobSystem::fail_queue_full(const char* which) {
-    // Deliberately not gated by NDEBUG/assert (PHYS-009 Step 3: "if capacity
-    // can be exceeded, fail loudly... don't silently allocate") - an assert
-    // alone would no-op in a release build, exactly where this matters most.
-    std::fprintf(stderr,
-                  "ps::jobs::JobSystem: %s queue is full (capacity %zu) - a workload submitted "
-                  "more concurrently-live jobs than PLAN.md D8's zero-allocation queues were sized "
-                  "for. Raise kQueueCapacity (job_system.h) rather than let this fall back to "
-                  "heap allocation.\n",
-                  which, kQueueCapacity);
-    std::fflush(stderr);
-    std::abort();
-}
-
-JobSystem::JobSystem(int num_workers) {
+JobSystem::JobSystem(int num_workers, std::size_t queue_capacity)
+    : injector_(queue_capacity != 0 ? queue_capacity : kDefaultQueueCapacity) {
     if (num_workers <= 0) {
         const int physical = physical_core_count();
         num_workers = std::max(1, physical - 2);
     }
+    const std::size_t cap = queue_capacity != 0 ? queue_capacity : kDefaultQueueCapacity;
     deques_.reserve(static_cast<std::size_t>(num_workers));
-    for (int i = 0; i < num_workers; ++i) deques_.push_back(std::make_unique<WorkerQueue>(kQueueCapacity));
+    for (int i = 0; i < num_workers; ++i) deques_.push_back(std::make_unique<WorkerQueue>(cap));
     stats_ = std::vector<WorkerStats>(static_cast<std::size_t>(num_workers));
     workers_.reserve(static_cast<std::size_t>(num_workers));
     for (int i = 0; i < num_workers; ++i) {
@@ -57,22 +45,28 @@ void JobSystem::submit(JobFn fn, WaitGroup* group) {
     if (group) group->remaining.fetch_add(1, std::memory_order_acq_rel);
     JobEntry entry{std::move(fn), group};
 
+    bool queued;
     if (t_worker_index >= 0) {
         auto& own = *deques_[static_cast<std::size_t>(t_worker_index)];
-        bool ok;
-        {
-            std::lock_guard<std::mutex> lock(own.m);
-            ok = own.q.push_back(std::move(entry));
-        }
-        if (!ok) fail_queue_full("worker");
+        std::lock_guard<std::mutex> lock(own.m);
+        queued = own.q.push_back(std::move(entry));
     } else {
-        bool ok;
-        {
-            std::lock_guard<std::mutex> lock(injector_m_);
-            ok = injector_.push_back(std::move(entry));
-        }
-        if (!ok) fail_queue_full("injector");
+        std::lock_guard<std::mutex> lock(injector_m_);
+        queued = injector_.push_back(std::move(entry));
     }
+
+    if (!queued) {
+        // Ring queue full (P1.5b review item - see queue_full_fallback_count's
+        // doc comment, job_system.h): RingQueue::push_back only moves from
+        // `entry` on the success path (job_system.h), so entry is still
+        // fully valid here. Run it inline, synchronously, right now, rather
+        // than aborting the process - this never went through pending_/the
+        // queues at all, so neither is touched below for this job.
+        queue_full_fallbacks_.fetch_add(1, std::memory_order_relaxed);
+        run_job(entry, /*counts_toward_pending=*/false);
+        return;
+    }
+
     pending_.fetch_add(1, std::memory_order_acq_rel);
     wake_cv_.notify_all();
 }
@@ -99,7 +93,7 @@ bool JobSystem::try_pop_injector(JobEntry& out) {
     return injector_.pop_front(out);
 }
 
-void JobSystem::run_job(JobEntry& job) {
+void JobSystem::run_job(JobEntry& job, bool counts_toward_pending) {
     const auto t0 = std::chrono::steady_clock::now();
     debug_alloc::enter_job();
     job.fn();
@@ -109,7 +103,13 @@ void JobSystem::run_job(JobEntry& job) {
         const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
         stats_[static_cast<std::size_t>(t_worker_index)].busy_ns.fetch_add(static_cast<std::uint64_t>(ns), std::memory_order_relaxed);
     }
-    pending_.fetch_sub(1, std::memory_order_acq_rel);
+    // counts_toward_pending is false only for the queue-full inline fallback
+    // in submit() below, which never incremented pending_ in the first
+    // place (it was never queued) - decrementing it here regardless would
+    // drive pending_ permanently negative and break drain_idle()'s "no work
+    // left in flight" contract (see JoltRigidBackend's destructor comment
+    // for why that must stay correct).
+    if (counts_toward_pending) pending_.fetch_sub(1, std::memory_order_acq_rel);
     if (job.group) {
         job.group->remaining.fetch_sub(1, std::memory_order_acq_rel);
     }

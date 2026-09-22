@@ -46,8 +46,12 @@ public:
 
     // num_workers == 0 selects PLAN.md's default: physical cores - 2 (room
     // for the caller's own main/render threads), clamped to >= 1 so a
-    // single-core / debugging configuration still works.
-    explicit JobSystem(int num_workers = 0);
+    // single-core / debugging configuration still works. queue_capacity == 0
+    // selects kDefaultQueueCapacity (every real workload in this codebase);
+    // a test can pass a small explicit value to force the queue-full inline
+    // fallback below without waiting for an unrealistic real workload to
+    // hit it (P1.5b review item).
+    explicit JobSystem(int num_workers = 0, std::size_t queue_capacity = 0);
     ~JobSystem();
     JobSystem(const JobSystem&) = delete;
     JobSystem& operator=(const JobSystem&) = delete;
@@ -100,6 +104,20 @@ public:
 
     // True if called from one of this pool's own worker threads.
     [[nodiscard]] bool on_worker_thread() const;
+
+    // P1.5b review item: a full ring queue (job_system.h's kDefaultQueueCapacity
+    // comment) used to abort the process (fail_queue_full). It now runs the
+    // job inline, synchronously, on the submitting thread instead - correct
+    // because the only ordering guarantee any caller in this codebase relies
+    // on is "every submitted chunk runs exactly once before wait() returns"
+    // (this header's own top comment), never which thread or when relative
+    // to other chunks, so pulling one chunk forward to run synchronously
+    // inside submit() is observationally identical to running it later on a
+    // worker for any correct D8 scatter->gather caller. Counted here
+    // (relaxed - profiling/telemetry only) so a chronically-undersized queue
+    // is still visible instead of silently degrading to serial execution.
+    [[nodiscard]] std::uint64_t queue_full_fallback_count() const { return queue_full_fallbacks_.load(std::memory_order_relaxed); }
+    void reset_queue_full_fallback_count() { queue_full_fallbacks_.store(0, std::memory_order_relaxed); }
 
     // Blocks until every job this pool has ever been handed - including
     // ones with no WaitGroup, i.e. fire-and-forget submissions such as the
@@ -188,18 +206,19 @@ private:
         RingQueue q;
     };
 
-    // Never exceeded by any workload in this codebase (see RingQueue's
+    // Never exceeded by any real workload in this codebase (see RingQueue's
     // comment); kept as one named constant so every queue - worker-owned or
-    // the shared injector - agrees on the same headroom.
-    static constexpr std::size_t kQueueCapacity = 4096;
-
-    [[noreturn]] static void fail_queue_full(const char* which);
+    // the shared injector - agrees on the same headroom by default. A test
+    // may construct a JobSystem with a smaller explicit queue_capacity to
+    // exercise the inline fallback (queue_full_fallback_count() above)
+    // deliberately, without needing an unrealistically large workload.
+    static constexpr std::size_t kDefaultQueueCapacity = 4096;
 
     void worker_loop(int index);
     bool try_pop_own(int index, JobEntry& out);
     bool try_steal(int index, JobEntry& out);
     bool try_pop_injector(JobEntry& out);
-    void run_job(JobEntry& job);
+    void run_job(JobEntry& job, bool counts_toward_pending = true);
 
     std::vector<std::thread> workers_;
     // unique_ptr indirection (not WorkerQueue directly): WorkerQueue holds a
@@ -212,11 +231,12 @@ private:
     // time, never inside a job.
     std::vector<std::unique_ptr<WorkerQueue>> deques_;
     std::mutex injector_m_;
-    RingQueue injector_{kQueueCapacity};
+    RingQueue injector_; // sized in the constructor's init list (queue_capacity)
     std::mutex wake_m_;
     std::condition_variable wake_cv_;
     std::atomic<long> pending_{0};
     std::atomic<bool> shutdown_{false};
+    std::atomic<std::uint64_t> queue_full_fallbacks_{0};
 
 #if defined(_MSC_VER)
 #pragma warning(push)

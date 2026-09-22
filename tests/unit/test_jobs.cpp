@@ -135,3 +135,60 @@ TEST_CASE("JobSystem worker_count respects explicit configuration", "[jobs]") {
     JobSystem js4(4);
     REQUIRE(js4.worker_count() == 4);
 }
+
+// P1.5b review item: a full ring queue used to abort() the process
+// (fail_queue_full). It must now run the overflowing job inline on the
+// submitting thread instead - checked here by forcing an unrealistically
+// small queue_capacity (job_system.h's second constructor argument) so a
+// modest parallel_for reliably overflows it, then asserting (a) every
+// index still gets written exactly once (correctness), (b) the fallback
+// counter actually saw it fire (the test is exercising what it claims to),
+// and (c) the result is identical regardless of worker count, i.e. running
+// some chunks inline instead of on a worker changes nothing a correct D8
+// scatter->gather caller can observe.
+TEST_CASE("A full job queue runs the overflowing job inline instead of aborting", "[jobs]") {
+    for (int workers : {1, 2, 4}) {
+        JobSystem js(workers, /*queue_capacity=*/4);
+        constexpr std::size_t kN = 2000; // many more chunks than the tiny queue can hold at once
+        std::vector<long> slots(kN, -1);
+
+        js.parallel_for(kN, 1, [&slots](std::size_t begin, std::size_t end) {
+            for (std::size_t i = begin; i < end; ++i) slots[i] = static_cast<long>(i * 3);
+        });
+
+        for (std::size_t i = 0; i < kN; ++i) REQUIRE(slots[i] == static_cast<long>(i * 3));
+
+        INFO("workers=" << workers << " fallbacks=" << js.queue_full_fallback_count());
+        REQUIRE(js.queue_full_fallback_count() > 0);
+    }
+}
+
+TEST_CASE("The queue-full inline fallback does not break determinism of the result", "[jobs][determinism]") {
+    constexpr std::size_t kN = 500;
+
+    auto run = [](int workers, std::size_t queue_capacity) {
+        JobSystem js(workers, queue_capacity);
+        std::vector<std::uint64_t> slots(kN, 0);
+        js.parallel_for(kN, 1, [&slots](std::size_t begin, std::size_t end) {
+            for (std::size_t i = begin; i < end; ++i) {
+                // A small deterministic hash of the index - not a plain
+                // copy, so a mis-ordered or duplicated write would show up.
+                std::uint64_t h = 14695981039346656037ULL ^ i;
+                h *= 1099511628211ULL;
+                slots[i] = h;
+            }
+        });
+        std::uint64_t hash = 0;
+        for (std::uint64_t v : slots) hash = (hash ^ v) * 1099511628211ULL;
+        return hash;
+    };
+
+    // A generous queue (default) never triggers the fallback; a tiny one
+    // (capacity 4) forces it on nearly every submit. Both must agree with
+    // each other and across worker counts.
+    const std::uint64_t reference = run(1, 0);
+    for (int workers : {1, 2, 4, 8}) {
+        REQUIRE(run(workers, 0) == reference);
+        REQUIRE(run(workers, 4) == reference);
+    }
+}
