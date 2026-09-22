@@ -112,7 +112,7 @@ public:
     // sampled/held constant across a whole substep's 4 RK4 stages can still
     // manufacture energy at a fast impact even though the substep rate
     // itself (960 Hz) is fine; see contact_source.h's header comment for the
-    // full argument and PHYS-011 for the numbers that pinned it down.
+    // full argument and PHYS-012 for the numbers that pinned it down.
     void step_tick(const InstanceConfig& cfg, real tick_dt);
 
     [[nodiscard]] real joint_position(int link_index) const;
@@ -125,7 +125,7 @@ public:
 private:
     void recompute_world_kinematics();
     // Same kinematics recompute_world_kinematics() does, but for an
-    // arbitrary state `st` (e.g. an RK4 stage's offset state, PHYS-011)
+    // arbitrary state `st` (e.g. an RK4 stage's offset state, PHYS-012)
     // instead of the member state_, writing into caller-owned,
     // already-sized pose_out/motion_out instead of body_world_pose_/
     // body_world_motion_ - used by evaluate_stage_ext_force_into below to
@@ -138,7 +138,7 @@ private:
     void compute_tau_into(const std::vector<real>& qd_for_actuators, std::vector<real>& out) const;
     // If contact_source_ is null: out := base_ext_force (cheap copy, no
     // extra cost for the common non-contact instance). Otherwise (PLAN.md
-    // P1.5b, PHYS-011): computes `st`'s own world kinematics
+    // P1.5b, PHYS-012): computes `st`'s own world kinematics
     // (compute_world_kinematics_into), temporarily points
     // body_world_pose_/body_world_motion_ at them (swap in, call, swap back -
     // safe: contact-bearing instances step strictly sequentially, never
@@ -232,7 +232,7 @@ private:
     std::vector<spatial::SpatialVector> ext_force_g_scratch_; // size bodies.size(), ext_force + gravity, reused per aba() evaluation
     // PLAN.md P1.5b (contact_source.h): only touched when contact_source_ is
     // set. contact_wrench_scratch_ is world-frame, refilled by the source at
-    // EVERY RK4 stage (PHYS-011: not once per substep any more - see
+    // EVERY RK4 stage (PHYS-012: not once per substep any more - see
     // evaluate_stage_ext_force_into); combined_ext_force_scratch_ is
     // ext_force_scratch_ plus that stage's contact contribution, body-local -
     // what actually gets passed to evaluate_derivative_into for a

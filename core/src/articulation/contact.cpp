@@ -146,7 +146,7 @@ void ContactCoupling::evaluate_substep_contacts(const Instance& inst, IRigidBack
             const real closing_speed = std::max(real(0.0), -vn);
             real fn_mag = std::max(real(0.0), lc.material.stiffness * xn + lc.material.damping * xn * closing_speed);
 
-            // PHYS-011: an earlier "energy-safety clamp" used to live here -
+            // PHYS-012: an earlier "energy-safety clamp" used to live here -
             // capping the impulse at 2*link_mass*closing_speed (the elastic
             // bound), using the INSTANT's own closing_speed. Removed: it was
             // never the fix for the real energy-gain bug (the handover

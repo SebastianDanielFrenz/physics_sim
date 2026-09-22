@@ -4,7 +4,7 @@
 // ContactStrategy::Compliant and ::ProxyBody. See out/handover_p15b.md and
 // tests/unit/test_articulation_contact.cpp for the simplest 1-DOF smoke
 // tests and the energy-gain/settle-error bugs those found and fixed
-// (PHYS-011/PHYS-012, vault) - this file is the actual measurement suite
+// (PHYS-012/PHYS-013, vault) - this file is the actual measurement suite
 // PLAN.md P1.5b asks for, run over real multi-link/floating-base rigs.
 //
 // Two rigs are reused across the measurements below:
@@ -42,7 +42,7 @@ namespace {
 constexpr real kGroundTopZ = 0.0;
 
 // Same tuned material as tests/unit/test_articulation_contact.cpp
-// (PHYS-011): damping raised from a "textbook" 5e3 (restitution ~0.995,
+// (PHYS-012): damping raised from a "textbook" 5e3 (restitution ~0.995,
 // needs hundreds of bounces to settle within 1 cm) to 1e6, which settles
 // within a few seconds without going unstable.
 ps::articulation::ContactMaterial default_material(real radius_scale = 1.0) {
@@ -207,7 +207,7 @@ ArticulationDesc make_vehicle_desc(ContactStrategy strategy, real chassis_root_z
     desc.root.inertia = Mat3::diagonal(2.0, 2.0, 2.0);
     desc.contact_strategy = strategy;
 
-    // PHYS-012 (see the vault): this "leg" is a FIXED (zero-DOF) attachment,
+    // PHYS-013 (see the vault): this "leg" is a FIXED (zero-DOF) attachment,
     // not an actuated/sprung suspension - a first attempt used an
     // unactuated PRISMATIC joint with only light joint_damping coupling it
     // to the chassis, which does not work for ANY strategy's contact model:
@@ -549,7 +549,7 @@ TEST_CASE("Rail rig (ProxyBody) impact at 5 m/s: no tunnelling, bounded penetrat
     run_impact_case(ContactStrategy::ProxyBody, 5.0, "ProxyBody@5");
 }
 
-// KNOWN OPEN ISSUE (PHYS-012, same family as
+// KNOWN OPEN ISSUE (PHYS-013, same family as
 // test_articulation_contact.cpp's ProxyBody-at-high-impact-speed case):
 // measured max_penetration ~11.5 cm at 20 m/s, well past the same 5 cm bound
 // every other impact case here meets - the one-tick-delayed impulse

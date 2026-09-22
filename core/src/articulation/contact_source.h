@@ -54,7 +54,7 @@ public:
     // backend body via IRigidBackend::apply_wrench (which accumulates once
     // per backend.step(), not once per substep).
     //
-    // Why per-STAGE, not just per-substep (found empirically - PHYS-011):
+    // Why per-STAGE, not just per-substep (found empirically - PHYS-012):
     // resampling a stiff Hunt-Crossley contact once per 960 Hz substep and
     // then freezing it across that substep's 4 RK4 stages is the exact same
     // "stiff force sampled/held too coarsely" failure the tick-rate ->

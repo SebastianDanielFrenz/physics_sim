@@ -291,7 +291,7 @@ void Instance::add_scaled_into(const ArticulationState& base, const Derivative& 
 void Instance::step_rk4(const InstanceConfig& cfg, const std::vector<SpatialVector>& ext_force, real h, real tick_dt) {
     compute_tau_into(state_.qd, tau_scratch_);
 
-    // PLAN.md P1.5b / PHYS-011: resample the contact contribution at EACH
+    // PLAN.md P1.5b / PHYS-012: resample the contact contribution at EACH
     // stage's own offset state (evaluate_stage_ext_force_into), not once for
     // the whole substep - see contact_source.h's header comment for why
     // freezing it across all 4 stages was the actual root cause of the

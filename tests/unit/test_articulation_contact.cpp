@@ -16,7 +16,7 @@
 // mirrors the "known resting geometry" shape of tests/validation/
 // test_resting_contact.cpp's Jolt-only equivalent.
 //
-// PHYS-011/PHYS-012 (see the vault): the original P1.5b handover
+// PHYS-012/PHYS-013 (see the vault): the original P1.5b handover
 // (out/handover_p15b.md) left both strategies failing here. Both are now
 // fixed:
 //  - Compliant's energy-gain bug (root cause: the contact force was frozen
@@ -90,7 +90,7 @@ ArticulationDesc make_rail_desc(ContactStrategy strategy, real root_z) {
     link.contact.shape = SphereShape{kContactRadius};
     link.contact.material.stiffness = 1.0e6;
     link.contact.material.stiffness_exponent = 1.5;
-    // PHYS-011: raised from the handover's 5e3 (see this file's header
+    // PHYS-012: raised from the handover's 5e3 (see this file's header
     // comment) - that value is a physically honest but very lightly damped
     // Hunt-Crossley contact (measured restitution ~0.995) that needs many
     // dozens of bounces to settle within 1 cm; 1e6 settles within 4 s at
@@ -168,9 +168,9 @@ TEST_CASE("Compliant strategy settles from a high impact speed", "[articulation]
     CHECK(std::abs(r.final_q - expected_q) < 0.01);
 }
 
-// KNOWN OPEN ISSUE (PHYS-012, see the vault): settles about 2.3 cm short of
+// KNOWN OPEN ISSUE (PHYS-013, see the vault): settles about 2.3 cm short of
 // the 1 cm target (measured final_q=-4.72276, expected_q=-4.7) - much
-// improved from the handover's ~15-16 cm (PHYS-012's gravity/impulse-readback
+// improved from the handover's ~15-16 cm (PHYS-013's gravity/impulse-readback
 // fix applies here too), but not fully inside the bound at this impact
 // speed (~9.6 m/s). Confirmed to be a steady-state offset, not a slow
 // transient (re-running with settle_s=12 instead of 4 gives the exact same
