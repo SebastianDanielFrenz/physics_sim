@@ -32,4 +32,16 @@ target_link_libraries(ps_validation_tests
 # tests/unit/CMakeLists.txt's identical comment.
 target_include_directories(ps_validation_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src)
 
-catch_discover_tests(ps_validation_tests)
+# ADD_TAGS_AS_LABELS: every Catch2 tag (e.g. [long], [sanitizer]) becomes a
+# CTest LABEL. tools/ci.ps1's default (fast) run selects tests via ctest -L/
+# -LE against these labels:
+#   - release legs (release, msvc-release, linux-release): "-LE long"
+#     (everything except [long]).
+#   - debug/asan/linux-asan-ubsan/linux-tsan legs: "-LE validation|long"
+#     (skips the whole validation suite except the short [sanitizer]
+#     variants, which are new test cases that deliberately do NOT carry the
+#     [validation] tag so this one exclusion regex routes them correctly -
+#     see e.g. test_joint_chain_energy.cpp's short variant).
+# tools/ci.ps1 -Full applies no label filter (every test, every leg, as
+# before this split). See CLAUDE.md "CI" for the full rationale.
+catch_discover_tests(ps_validation_tests ADD_TAGS_AS_LABELS)

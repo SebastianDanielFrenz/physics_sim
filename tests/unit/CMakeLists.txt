@@ -35,4 +35,9 @@ target_compile_definitions(ps_unit_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_D
 
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
-catch_discover_tests(ps_unit_tests)
+
+# ADD_TAGS_AS_LABELS: every Catch2 tag becomes a CTest LABEL, so tools/ci.ps1
+# can select by tag via ctest -L/-LE (see CLAUDE.md "CI" and tests/validation/
+# CMakeLists.txt for the fast/full split; unit tests are always fast, so no
+# selection is needed here, but the label wiring is shared).
+catch_discover_tests(ps_unit_tests ADD_TAGS_AS_LABELS)

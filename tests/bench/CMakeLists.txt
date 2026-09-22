@@ -17,6 +17,19 @@ target_link_libraries(bench_force_elements
 
 add_test(NAME bench_force_elements COMMAND bench_force_elements)
 
+# This is a wall-clock scaling benchmark (asserts >= 6x speedup 1->10
+# workers from busy_ns measurements) - it went from a comfortable pass in
+# isolation to an outright FAIL under tools/ci.ps1 -Full once ctest started
+# passing --parallel: CPU contention from sibling tests scheduled alongside
+# it corrupts its own timing measurements. Measured on this machine: 9.08x
+# isolated vs. 1.59x under a Windows --parallel 12 run and 4.54x under a
+# WSL --parallel 24 run, both well under the 6x bound, both on an otherwise
+# fully green run (every other test - including every [long]/[heavy]/
+# [sanitizer] one - passed). PROCESSORS is set above the highest --parallel
+# level tools/ci.ps1 uses (WSL's 24) so ctest's scheduler always runs this
+# test completely alone, regardless of leg.
+set_tests_properties(bench_force_elements PROPERTIES PROCESSORS 24)
+
 # ps_energy_study - Part A energy-loss measurement study (see
 # tests/bench/energy_study.cpp's header comment). Deliberately NOT
 # registered with add_test/CTest: it is a measurement tool whose table feeds
