@@ -67,6 +67,66 @@ TEST_CASE("State hash is identical across 1, 2, 4, 10 and 24 workers", "[determi
     }
 }
 
+namespace {
+
+// PLAN.md P1.5a: "add articulations to the thread-count determinism test
+// (1/2/4/10/24 workers, several articulations at once)". Several
+// independent 3-link pendulum chains, mixed with the same
+// CounterForceElement Jolt bodies run_scenario above already uses, so both
+// subsystems are exercised together in one hash. Articulation stepping
+// itself never touches the job system (System::step_all is a plain
+// sequential loop, core/src/articulation/system.cpp) - deterministic by
+// construction independent of worker count - this test's job is to check
+// that mixing it into the same World/pipeline as the worker-count-
+// sensitive Jolt/force-element stages doesn't disturb THEIR determinism
+// (e.g. via any shared mutable state), not to re-prove articulation
+// determinism in isolation (test_articulation_core.cpp's ABA-vs-CRBA
+// check and the validation suite already do that).
+std::uint64_t run_articulation_scenario(int workers, int ticks) {
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    cfg.gravity = Vec3{0, 0, -9.81};
+    cfg.job_workers = workers;
+    World world(cfg);
+
+    constexpr int kNumArticulations = 5;
+    constexpr int kLinksPerChain = 3;
+    for (int a = 0; a < kNumArticulations; ++a) {
+        articulation::ArticulationDesc desc;
+        desc.root.floating = false;
+        desc.root.pose = Pose{Vec3{static_cast<double>(a) * 3.0, 0.0, 0.0}, Quat::identity()};
+        for (int i = 0; i < kLinksPerChain; ++i) {
+            articulation::LinkDesc link;
+            link.parent = (i == 0) ? -1 : (i - 1);
+            link.joint = articulation::JointType::Revolute;
+            link.axis = Vec3::unit_y();
+            if (i > 0) link.joint_frame_in_parent.position = Vec3{0, 0, -0.6};
+            link.mass = 1.0;
+            link.com = Vec3{0, 0, -0.3};
+            link.inertia = Mat3::diagonal(0.02, 0.02, 0.02);
+            link.q0 = 0.3 + 0.05 * static_cast<double>(a) + 0.02 * static_cast<double>(i);
+            desc.links.push_back(link);
+        }
+        world.create_articulation(desc);
+    }
+
+    for (int t = 0; t < ticks; ++t) world.step();
+    return world.state_hash();
+}
+
+} // namespace
+
+TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation]") {
+    constexpr int kTicks = 100;
+    const std::uint64_t reference = run_articulation_scenario(1, kTicks);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_articulation_scenario(workers, kTicks);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress]") {
     constexpr std::size_t kBodies = 8;
     constexpr int kTicks = 10;

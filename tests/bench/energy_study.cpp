@@ -332,6 +332,125 @@ RunResult run_free_fall_energy_study(double duration_s, bool raise_velocity_cap)
     return r;
 }
 
+// --- PLAN.md P1.5a scope item 8: Jolt joints vs. articulation, side by
+// side, on the same Part A scenarios (single hinged link and the 3-link
+// chain, released at the same angles), plus a 10-link cost benchmark. ---
+
+// Builds the SAME geometry build_chain() does (pivot spacing, masses),
+// but as one ps::articulation chain instead of N Jolt bodies + hinges, so
+// the two energy-loss numbers are a fair side-by-side comparison.
+RunResult run_articulation_chain_study(int num_links, double release_deg, real substep_hz, double duration_s = 60.0) {
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = substep_hz;
+    cfg.gravity = Vec3{0, 0, -kG};
+    cfg.job_workers = 1;
+    World world(cfg);
+
+    constexpr double kLinkLength = 1.0; // matches build_chain's kLinkLength
+    const double theta0 = release_deg * kPi / 180.0;
+
+    articulation::ArticulationDesc desc;
+    desc.root.floating = false;
+    for (int i = 0; i < num_links; ++i) {
+        articulation::LinkDesc link;
+        link.parent = (i == 0) ? -1 : (i - 1);
+        link.joint = articulation::JointType::Revolute;
+        link.axis = Vec3::unit_y();
+        if (i > 0) link.joint_frame_in_parent.position = Vec3{0, 0, -kLinkLength};
+        link.mass = 1.0;
+        link.com = Vec3{0, 0, -kLinkLength / 2.0};
+        // A uniform slender rod about its own COM, perpendicular axes
+        // (matches the capsule's own approximate inertia closely enough
+        // for a fair side-by-side comparison, not an exact capsule match).
+        link.inertia = Mat3::diagonal(1.0 * kLinkLength * kLinkLength / 12.0, 1.0 * kLinkLength * kLinkLength / 12.0, 1e-4);
+        link.q0 = (i == 0) ? theta0 : 0.0;
+        desc.links.push_back(link);
+    }
+    const ArticulationId art = world.create_articulation(desc);
+
+    // z_ref: see test_joint_chain_energy.cpp's header comment - a fixed
+    // height comfortably below anything the chain can reach, purely so
+    // the relative energy_loss_pct below has a well-conditioned
+    // denominator. Released horizontally (theta0=90deg), a single link's
+    // PE relative to its own pivot is ~0 at t=0, which blew this up to a
+    // meaningless 873318% on the first run before z_ref was added here -
+    // not a dynamics bug, a bug in this benchmark's own energy accounting.
+    const double z_ref = -(num_links * kLinkLength + 2.0);
+
+    auto total_energy = [&]() {
+        double e = 0.0;
+        for (int i = 0; i < num_links; ++i) {
+            const Frame com_frame = world.link_frame(art, i, Pose{Vec3{0, 0, -kLinkLength / 2.0}, Quat::identity()});
+            const Pose com_pose = com_frame.world_pose(world.backend());
+            const Motion com_motion = com_frame.world_motion(world.backend());
+            const Pose link_pose = world.link_frame(art, i).world_pose(world.backend());
+            const Mat3 r = link_pose.orientation.to_mat3();
+            const Mat3 i_cm = Mat3::diagonal(1.0 / 12.0, 1.0 / 12.0, 1e-4);
+            const Mat3 i_world = r * i_cm * r.transposed();
+            e += 0.5 * 1.0 * com_motion.linear.length_squared();
+            e += 0.5 * dot(com_motion.angular, i_world * com_motion.angular);
+            e += 1.0 * kG * (com_pose.position.z - z_ref);
+        }
+        return e;
+    };
+
+    const double e_start = total_energy();
+    const std::uint64_t num_ticks = static_cast<std::uint64_t>(duration_s * cfg.tick_rate_hz + 0.5);
+    double step_ms_total = 0.0;
+    for (std::uint64_t i = 0; i < num_ticks; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        world.step();
+        const auto t1 = std::chrono::steady_clock::now();
+        step_ms_total += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
+    const double e_end = total_energy();
+
+    RunResult r;
+    r.energy_loss_pct = 100.0 * (e_start - e_end) / e_start;
+    r.max_anchor_sep_mm = 0.0; // zero by construction (reduced coordinates, PLAN.md D10)
+    r.monotonic = true; // not evaluated here
+    r.ms_per_tick = step_ms_total / static_cast<double>(num_ticks);
+    return r;
+}
+
+// Cost benchmark (PLAN.md P1.5a scope item 8): a 10-link articulation, per
+// 960 Hz substep, release/scalar/single-threaded (job_workers=1). No
+// target yet - reported for the record.
+double bench_10_link_cost_us_per_substep() {
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    cfg.gravity = Vec3{0, 0, -kG};
+    cfg.job_workers = 1;
+    World world(cfg);
+
+    constexpr int kLinks = 10;
+    articulation::ArticulationDesc desc;
+    desc.root.floating = false;
+    for (int i = 0; i < kLinks; ++i) {
+        articulation::LinkDesc link;
+        link.parent = (i == 0) ? -1 : (i - 1);
+        link.joint = (i % 2 == 0) ? articulation::JointType::Revolute : articulation::JointType::Prismatic;
+        link.axis = Vec3::unit_y();
+        if (i > 0) link.joint_frame_in_parent.position = Vec3{0, 0, -0.5};
+        link.mass = 1.0;
+        link.com = Vec3{0, 0, -0.25};
+        link.inertia = Mat3::diagonal(0.05, 0.05, 0.01);
+        link.q0 = 0.1 * static_cast<double>(i);
+        desc.links.push_back(link);
+    }
+    world.create_articulation(desc);
+
+    constexpr int kTicks = 2000; // 2000 ticks * 4 substeps/tick = 8000 substeps
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < kTicks; ++i) world.step();
+    const auto t1 = std::chrono::steady_clock::now();
+    const double total_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+    const double substeps = static_cast<double>(kTicks) * (cfg.substep_rate_hz / cfg.tick_rate_hz);
+    return total_us / substeps;
+}
+
 } // namespace
 
 int main() {
@@ -400,6 +519,35 @@ int main() {
     std::printf("# itself; a body exceeding it has kinetic energy silently removed every step the clamp is\n");
     std::printf("# active (see free_fall_default_500ms_cap rows above). Not relevant to the swinging-chain\n");
     std::printf("# scenarios above (peak speeds well under 500 m/s) but relevant to Part B's huge-force test.\n");
+
+    // --- PLAN.md P1.5a scope item 8: Jolt joints vs. articulation, side by side ---
+    std::printf("\n# PLAN.md P1.5a: Jolt joints vs. our own articulation solver, same Part A scenarios\n");
+    std::printf("CSV_ART,scenario,release_deg,integrator,substep_hz,energy_loss_pct,max_anchor_sep_mm,ms_per_tick\n");
+    for (double deg : {5.0, 45.0, 90.0, 170.0}) {
+        const RunResult r = run_articulation_chain_study(1, deg, 960.0);
+        std::printf("CSV_ART,single_link:rk4,%.1f,rk4,960,%.6f,%.6f,%.5f\n", deg, r.energy_loss_pct, r.max_anchor_sep_mm, r.ms_per_tick);
+    }
+    for (double deg : {5.0, 45.0, 90.0}) {
+        const RunResult r = run_articulation_chain_study(3, deg, 960.0);
+        std::printf("CSV_ART,chain3:rk4,%.1f,rk4,960,%.6f,%.6f,%.5f\n", deg, r.energy_loss_pct, r.max_anchor_sep_mm, r.ms_per_tick);
+    }
+    std::printf("# Compare against the CSV rows above (scenario=single_capsule:default / chain3:default,\n");
+    std::printf("# release_deg matching): Jolt's single hinged capsule at 90 deg loses several percent of its\n");
+    std::printf("# energy over 60 s (Baumgarte position stabilisation, PHYS-003); the articulation solver's\n");
+    std::printf("# max_anchor_sep_mm is 0.0 by construction (reduced/joint coordinates - PLAN.md D10's whole\n");
+    std::printf("# point) and its energy_loss_pct is the RK4 numbers already measured in the P1.5a validation\n");
+    std::printf("# suite (tests/validation/test_articulation_energy.cpp): ~1e-9 to 1e-13, i.e. orders of\n");
+    std::printf("# magnitude tighter than Jolt's joint solver on the identical released-chain scenario.\n");
+
+    // --- PLAN.md P1.5a scope item 8: 10-link articulation cost ---
+    const double us_per_substep = bench_10_link_cost_us_per_substep();
+    std::printf("\nCOST,10_link_articulation_rk4_scalar_1thread,us_per_960hz_substep=%.3f\n", us_per_substep);
+    std::printf("# No target set for this number yet (PLAN.md P1.5a scope item 8: \"report the number; no\n");
+    std::printf("# target yet\"). RK4 evaluates ABA four times per substep (instance.h's integrator comparison),\n");
+    std::printf("# so semi-implicit Euler's per-substep cost for the same chain is roughly this / 4 (not\n");
+    std::printf("# separately measured here - would need its own WorldConfig/InstanceConfig plumbing to select\n");
+    std::printf("# at runtime, which does not exist; instance.h's IntegratorKind is currently a compile-time\n");
+    std::printf("# default, see that file's header comment for why RK4 was chosen anyway).\n");
 
     return 0;
 }
