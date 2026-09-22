@@ -16,6 +16,7 @@ add_executable(ps_unit_tests
   test_articulation_hinge_guard.cpp
   test_articulation_contact.cpp
   test_mesh_heightfield_shapes.cpp
+  test_terrain_golden.cpp
 )
 
 target_link_libraries(ps_unit_tests
@@ -24,6 +25,10 @@ target_link_libraries(ps_unit_tests
     ps_test_catch_main
     ps_warnings
     ps_options
+    # test_terrain_golden.cpp parses data/tracks/test_ground/terrain_golden.json
+    # directly (nlohmann/json is linked PRIVATE into ps_core, so a test that
+    # needs it too must link it itself rather than get it transitively).
+    nlohmann_json::nlohmann_json
 )
 
 # test_articulation_core.cpp white-box tests core/src/articulation directly

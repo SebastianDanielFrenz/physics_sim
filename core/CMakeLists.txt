@@ -39,6 +39,9 @@ add_library(ps_core STATIC
 
   src/world/world.cpp
 
+  src/terrain/procedural_terrain_source.cpp
+  src/terrain/procedural_terrain.cpp
+
   src/io/telemetry.cpp
   src/io/scenario.cpp
 )
