@@ -16,6 +16,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
+#include <Jolt/Physics/Body/MotionQuality.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -155,6 +156,14 @@ JPH::EMotionType to_jph_motion(BodyMotionType m) {
     return JPH::EMotionType::Static;
 }
 
+JPH::EMotionQuality to_jph_motion_quality(MotionQuality q) {
+    switch (q) {
+        case MotionQuality::Discrete: return JPH::EMotionQuality::Discrete;
+        case MotionQuality::LinearCast: return JPH::EMotionQuality::LinearCast;
+    }
+    return JPH::EMotionQuality::Discrete;
+}
+
 // FNV-1a, folding raw bytes so the hash reflects the exact bit pattern of
 // every double (PLAN.md D7: bit-identical state, not merely numerically
 // close) - see ps/world/world.h's World::state_hash.
@@ -254,7 +263,8 @@ private:
 
 class JoltRigidBackend final : public IRigidBackend {
 public:
-    JoltRigidBackend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies) : pool_(job_system) {
+    JoltRigidBackend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies, const RigidBackendSettings& settings)
+        : pool_(job_system), collision_steps_(std::max(1, settings.collision_steps)) {
         ensure_jolt_registered();
 
         // Scale broadphase/contact/temp-allocator capacity with max_bodies
@@ -276,6 +286,22 @@ public:
                               bp_layer_interface_, bp_filter_, layer_filter_);
         physics_system_.SetGravity(to_vec3f(gravity));
         physics_system_.SetContactListener(&contact_listener_);
+
+        // Part A energy-loss study (PLAN.md): every field here defaults to
+        // Jolt's own PhysicsSettings default (RigidBackendSettings' own
+        // comments name the exact field), so a World built with a
+        // default-constructed WorldConfig gets an identical PhysicsSettings
+        // to before this seam existed.
+        JPH::PhysicsSettings physics_settings = physics_system_.GetPhysicsSettings();
+        physics_settings.mBaumgarte = static_cast<float>(settings.baumgarte);
+        physics_settings.mNumVelocitySteps = settings.num_velocity_steps;
+        physics_settings.mNumPositionSteps = settings.num_position_steps;
+        physics_settings.mPenetrationSlop = static_cast<float>(settings.penetration_slop);
+        physics_settings.mSpeculativeContactDistance = static_cast<float>(settings.speculative_contact_distance);
+        physics_settings.mMaxPenetrationDistance = static_cast<float>(settings.max_penetration_distance);
+        physics_settings.mLinearCastThreshold = static_cast<float>(settings.linear_cast_threshold);
+        physics_settings.mLinearCastMaxPenetration = static_cast<float>(settings.linear_cast_max_penetration);
+        physics_system_.SetPhysicsSettings(physics_settings);
     }
 
     ~JoltRigidBackend() override {
@@ -320,6 +346,9 @@ public:
         settings.mAngularDamping = static_cast<float>(desc.angular_damping);
         settings.mGravityFactor = desc.gravity_enabled ? 1.0f : 0.0f;
         settings.mAllowSleeping = desc.allow_sleep;
+        settings.mMotionQuality = to_jph_motion_quality(desc.motion_quality);
+        settings.mMaxAngularVelocity = static_cast<float>(desc.max_angular_velocity);
+        settings.mMaxLinearVelocity = static_cast<float>(desc.max_linear_velocity);
         if (desc.motion != BodyMotionType::Static) {
             settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
             settings.mMassPropertiesOverride.mMass = static_cast<float>(desc.mass);
@@ -423,7 +452,7 @@ public:
     }
 
     void step(real dt) override {
-        physics_system_.Update(static_cast<float>(dt), 1, temp_allocator_.get(), jolt_job_system_.get());
+        physics_system_.Update(static_cast<float>(dt), collision_steps_, temp_allocator_.get(), jolt_job_system_.get());
     }
 
     RayCastHit ray_cast(const Vec3& origin, const Vec3& direction, real max_distance) const override {
@@ -573,6 +602,7 @@ private:
     }
 
     jobs::JobSystem& pool_; // must be declared (and so initialised) first - see the destructor's drain_idle() call
+    int collision_steps_ = 1; // PhysicsSystem::Update's inCollisionSteps (Part A study, see RigidBackendSettings)
     BPLayerInterfaceImpl bp_layer_interface_;
     ObjectVsBroadPhaseLayerFilterImpl bp_filter_;
     ObjectLayerPairFilterImpl layer_filter_;
@@ -590,8 +620,9 @@ private:
 
 } // namespace
 
-std::unique_ptr<IRigidBackend> create_jolt_backend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies) {
-    return std::make_unique<JoltRigidBackend>(job_system, gravity, max_bodies);
+std::unique_ptr<IRigidBackend> create_jolt_backend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies,
+                                                     const RigidBackendSettings& settings) {
+    return std::make_unique<JoltRigidBackend>(job_system, gravity, max_bodies, settings);
 }
 
 } // namespace ps

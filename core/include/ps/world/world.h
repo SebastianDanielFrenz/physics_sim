@@ -30,6 +30,21 @@ struct WorldConfig {
     // Chunk size for the force-element parallel_for stage; 0 = auto
     // (spreads elements evenly over the worker count).
     std::size_t force_element_grain = 0;
+
+    // Jolt solver settings, exposed for the Part A energy-loss study
+    // (PLAN.md). Defaults equal Jolt's own defaults (see
+    // ps::RigidBackendSettings, i_rigid_backend.h, for the exact
+    // PhysicsSettings field each one maps to) - unless a caller sets one of
+    // these, behaviour is unchanged from before this field existed.
+    real baumgarte = 0.2;
+    unsigned num_velocity_steps = 10;
+    unsigned num_position_steps = 2;
+    int collision_steps = 1;
+    real penetration_slop = 0.02;
+    real speculative_contact_distance = 0.02;
+    real max_penetration_distance = 0.2;
+    real linear_cast_threshold = 0.75;
+    real linear_cast_max_penetration = 0.25;
 };
 
 class World {

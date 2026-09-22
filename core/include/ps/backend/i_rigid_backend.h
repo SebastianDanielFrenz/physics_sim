@@ -22,6 +22,15 @@ namespace ps {
 
 enum class BodyMotionType { Static, Kinematic, Dynamic };
 
+// Per-body continuous-collision-detection quality (JoltPhysics
+// EMotionQuality, Physics/Body/MotionQuality.h - kept as our own enum so no
+// Jolt type crosses the backend seam, PLAN.md D2). Discrete is Jolt's own
+// default (cheapest; can tunnel through thin shapes at high velocity);
+// LinearCast sweeps the shape from start to destination each step so it
+// cannot tunnel through thin static geometry (but a long thin body can still
+// tunnel via rotation - see Jolt's own doc comment on EMotionQuality).
+enum class MotionQuality { Discrete, LinearCast };
+
 struct BoxShape { Vec3 half_extents{0.5, 0.5, 0.5}; };
 struct SphereShape { real radius = 0.5; };
 struct CapsuleShape { real half_height = 0.5; real radius = 0.25; };
@@ -42,6 +51,29 @@ struct BodyDesc {
     // step bodies that may sit still (box on slope below the friction
       // angle) and must keep producing state, not silently stop updating.
     bool allow_sleep = false;
+
+    // Continuous collision detection quality (see MotionQuality above).
+    // Default matches JoltPhysics' own BodyCreationSettings default
+    // (Discrete) - additive field, existing behaviour unchanged.
+    MotionQuality motion_quality = MotionQuality::Discrete;
+
+    // Maximum angular speed this body can reach (rad/s); Jolt clamps to this
+    // every step (MotionProperties::mMaxAngularVelocity). Default equals
+    // JoltPhysics' own BodyCreationSettings default, 0.25*pi*60 rad/s
+    // (Physics/Body/BodyCreationSettings.h) - additive field, existing
+    // behaviour unchanged.
+    real max_angular_velocity = 47.123889803846896; // 0.25 * pi * 60
+
+    // Maximum linear speed this body can reach (m/s); Jolt silently clamps
+    // to this every step (MotionProperties::mMaxLinearVelocity). Default
+    // equals JoltPhysics' own BodyCreationSettings default, 500 m/s
+    // (Physics/Body/BodyCreationSettings.h) - additive field, existing
+    // behaviour unchanged. Found relevant during the Part A energy study: a
+    // body in free fall for long enough / hit hard enough exceeds 500 m/s
+    // and the clamp then silently removes kinetic energy every step it is
+    // active, which looks like unexplained energy loss unless traced back
+    // to this default.
+    real max_linear_velocity = 500.0;
 };
 
 enum class JointType { Fixed, Hinge };
@@ -134,10 +166,30 @@ public:
     [[nodiscard]] virtual std::vector<BodyId> live_body_ids() const = 0;
 };
 
+// Jolt solver settings exposed for the P1 Part A energy-loss study
+// (PLAN.md; see JoltPhysics v5.6.0's Physics/PhysicsSettings.h). Every
+// default below equals Jolt's own default, so a caller who does not touch
+// this struct gets today's behaviour unchanged. collision_steps is not a
+// PhysicsSettings field; it is PhysicsSystem::Update's own inCollisionSteps
+// parameter (substeps per World tick, each running the full velocity/
+// position solve at dt/collision_steps).
+struct RigidBackendSettings {
+    real baumgarte = 0.2;                       // PhysicsSettings::mBaumgarte
+    unsigned num_velocity_steps = 10;           // PhysicsSettings::mNumVelocitySteps
+    unsigned num_position_steps = 2;            // PhysicsSettings::mNumPositionSteps
+    int collision_steps = 1;                    // PhysicsSystem::Update's inCollisionSteps
+    real penetration_slop = 0.02;               // PhysicsSettings::mPenetrationSlop
+    real speculative_contact_distance = 0.02;   // PhysicsSettings::mSpeculativeContactDistance
+    real max_penetration_distance = 0.2;        // PhysicsSettings::mMaxPenetrationDistance
+    real linear_cast_threshold = 0.75;          // PhysicsSettings::mLinearCastThreshold
+    real linear_cast_max_penetration = 0.25;    // PhysicsSettings::mLinearCastMaxPenetration
+};
+
 // The only P1 implementation. job_system is the single pool Jolt's own
 // internal parallel work (broadphase/narrowphase/island solving) is
 // submitted to via a JPH::JobSystem bridge (core/src/jobs/jolt_job_system.h,
 // internal) - never a second thread pool (PLAN.md D8).
-std::unique_ptr<IRigidBackend> create_jolt_backend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies);
+std::unique_ptr<IRigidBackend> create_jolt_backend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies,
+                                                     const RigidBackendSettings& settings = {});
 
 } // namespace ps

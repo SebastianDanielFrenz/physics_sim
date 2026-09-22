@@ -8,7 +8,17 @@ namespace ps {
 
 World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / config.tick_rate_hz) {
     job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers);
-    backend_ = create_jolt_backend(*job_system_, config.gravity, config.max_bodies);
+    RigidBackendSettings backend_settings;
+    backend_settings.baumgarte = config.baumgarte;
+    backend_settings.num_velocity_steps = config.num_velocity_steps;
+    backend_settings.num_position_steps = config.num_position_steps;
+    backend_settings.collision_steps = config.collision_steps;
+    backend_settings.penetration_slop = config.penetration_slop;
+    backend_settings.speculative_contact_distance = config.speculative_contact_distance;
+    backend_settings.max_penetration_distance = config.max_penetration_distance;
+    backend_settings.linear_cast_threshold = config.linear_cast_threshold;
+    backend_settings.linear_cast_max_penetration = config.linear_cast_max_penetration;
+    backend_ = create_jolt_backend(*job_system_, config.gravity, config.max_bodies, backend_settings);
     snapshots_ = std::make_unique<SnapshotTripleBuffer>();
     telemetry_ = std::make_unique<io::TelemetryRegistry>();
 

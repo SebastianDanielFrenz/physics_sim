@@ -16,3 +16,19 @@ target_link_libraries(bench_force_elements
 )
 
 add_test(NAME bench_force_elements COMMAND bench_force_elements)
+
+# ps_energy_study - Part A energy-loss measurement study (see
+# tests/bench/energy_study.cpp's header comment). Deliberately NOT
+# registered with add_test/CTest: it is a measurement tool whose table feeds
+# a written report, not a pass/fail acceptance test.
+add_executable(ps_energy_study energy_study.cpp)
+
+target_include_directories(ps_energy_study PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+
+target_link_libraries(ps_energy_study
+  PRIVATE
+    ps_core
+    ps_headless_env
+    ps_warnings
+    ps_options
+)
