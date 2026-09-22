@@ -153,6 +153,13 @@ executes scenarios and writes CSV telemetry.
 
 **D7 — Determinism.** Same binary + same inputs → bit-identical state.
 A replay test hashes the full world state every N ticks.
+Transcendental functions (sin, cos, tan, atan2, asin, acos, exp, log, pow,
+...) are never called from the platform libm in the core: platform libms round
+differently (found in P1.5a: articulation hashes differed Windows vs Linux).
+The core uses `ps::math` versions ported from musl libm (MIT, fdlibm-derived;
+decided by Sebastian, 2026-09-22). `sqrt` is IEEE-exact and may stay. A CI grep
+enforces this, and CI compares the Windows and Linux scenario hashes
+automatically.
 
 **D8 — Multithreaded by design, and still deterministic.** Everything that can
 run in parallel does, from P1 on — it is not a late optimisation, because it
