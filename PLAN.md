@@ -408,6 +408,16 @@ penetration, stability, energy, action = reaction, cost. Sebastian decides.
 thread, snapshot → Node3D transforms, input → sim controls, debug draw of
 force vectors, static mesh/heightmap → sim collision. Demo project with a flat
 test ground.
+Large worlds: the sim works in double precision (D2/D4), but standard Godot
+renders in float32, which gives about 4 mm steps at 50 km, so the camera and
+car jitter. The adapter therefore uses origin rebasing: Godot positions are
+relative to a floating origin near the camera, moved in large steps; the
+adapter's single ISO→Godot conversion applies the offset. A double-precision
+custom Godot build is rejected for now (own engine build, godot-cpp must
+match). Accept: no visible jitter at ±50 km (camera-relative error < 0.1 mm,
+checked numerically).
+The adapter streams the terrain tiles' render meshes from the same tiles the
+sim uses (no second height source).
 Gamepad support (Sebastian, 2026-09-22): Xbox One / Series controllers via
 Godot's joypad input, also keyboard. Actions: steer (analog stick), throttle
 and brake (separate analog triggers), handbrake, shift up/down, clutch,
@@ -425,12 +435,29 @@ test_ground`, see below): one car, P3 tyres and suspension, a placeholder
 drive of throttle → torque at the driven wheels from a torque curve (no gears,
 no clutch — they come in P4), brakes, steering, on the Xbox controller in
 Godot. Sebastian drives; subjective tuning is his.
-Test ground: a flat floor with a grid (speed reference), a straight asphalt
-strip, a skidpad (radius 40 m, for P3), grass and dirt surfaces, a split-μ
-strip (for P4), ramps at 5/10/15/30/50 % (15 % = the P3 parking test, steep
-ones for the tractor), a side slope, and a small asphalt circuit. Generated
-procedurally and deterministically; surfaces carry physical parameters (μ
-scale, rolling resistance) with the source noted; visually plain.
+Test ground (Sebastian, 2026-09-22: must be large, ±50 km = 100 × 100 km):
+two parts.
+- *Procedural terrain* over the full extent, described by a spec
+  (`terrain.json`: seed, noise height function, flat zones, surface rules).
+  The core evaluates it deterministically at runtime, in tiles streamed around
+  active vehicles, as heightfield collision with per-cell surfaces. This is
+  the first piece of the P8 terrain system (heightfield tiles, material
+  layers, dirty regions), pulled forward; soil deformation stays in P8.
+  Golden sample points from the Python reference evaluator must match the C++
+  implementation bit for bit.
+- *Test features* as exact static meshes on flat zones (z = 0): a 1 km
+  asphalt strip, a 10 km top-speed straight, a skidpad (radius 40 m, for P3),
+  grass and dirt surfaces, a split-μ strip (for P4), ramps at 5/10/15/30/50 %
+  (15 % = the P3 parking test, steep ones for the tractor), a side slope, a
+  small asphalt circuit, and an airstrip, 1500 × 30 m, for P6.
+Surfaces carry physical parameters (μ scale, rolling resistance) as data with
+the source noted; visually plain; a world-space grid shader in Godot as the
+speed reference.
+Terrain-tile acceptance (before M1): golden points match; tiles stream around
+a vehicle driving 50 km without hitches in the 240 Hz tick (per-tick cost
+measured); no seams between tiles (a wheel crossing a tile border sees
+continuous height and normal); determinism across thread counts and
+Windows/Linux as in P1.
 
 **P3 — Chassis, suspension, tyres.** One passenger car and one tractor defined
 in JSON, with published or plausible `.tir` data (note the source).
