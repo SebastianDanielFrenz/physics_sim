@@ -42,6 +42,16 @@
 #include <execinfo.h>
 #include <unistd.h>
 #define PS_DEBUG_ALLOC_HAVE_BACKTRACE 1
+#define PS_DEBUG_ALLOC_BACKTRACE_LINUX 1
+#elif defined(_WIN32) && !defined(PS_DEBUG_ALLOC_HOOK_DISABLED)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <dbghelp.h>
+#include <cstdio>
+#pragma comment(lib, "dbghelp.lib")
+#define PS_DEBUG_ALLOC_HAVE_BACKTRACE 1
+#define PS_DEBUG_ALLOC_BACKTRACE_WINDOWS 1
 #endif
 
 namespace ps::jobs::debug_alloc {
@@ -61,12 +71,82 @@ thread_local bool g_in_hook = false;
 // every single allocation in the overwhelmingly common case this is unset.
 int backtrace_budget() {
     static const int budget = [] {
+#if defined(_WIN32)
+        // getenv() is flagged deprecated (-Werror) by the ucrt headers on
+        // this toolchain; _dupenv_s is the suggested replacement.
+        char* v = nullptr;
+        std::size_t len = 0;
+        if (_dupenv_s(&v, &len, "PS_DEBUG_ALLOC_BACKTRACE") != 0 || !v) return 0;
+        const int result = (*v) ? std::atoi(v) : 0;
+        std::free(v);
+        return result;
+#else
         const char* v = std::getenv("PS_DEBUG_ALLOC_BACKTRACE");
         return (v && *v) ? std::atoi(v) : 0;
+#endif
     }();
     return budget;
 }
 std::atomic<int> g_backtrace_dumped{0};
+
+void dump_backtrace(int violation_number) {
+    char header[64];
+    const int hlen = std::snprintf(header, sizeof(header), "--- debug_alloc violation #%d ---\n", violation_number);
+#if defined(PS_DEBUG_ALLOC_BACKTRACE_LINUX)
+    void* frames[32];
+    const int n = ::backtrace(frames, 32);
+    if (hlen > 0) (void)::write(STDERR_FILENO, header, static_cast<std::size_t>(hlen));
+    ::backtrace_symbols_fd(frames, n, STDERR_FILENO);
+#elif defined(PS_DEBUG_ALLOC_BACKTRACE_WINDOWS)
+    // SymInitialize/SymFromAddr (dbghelp.h): resolves symbol names directly
+    // from the process's own PDB (present on a Debug build) without an
+    // external addr2line-equivalent tool. Not thread-safe against another
+    // concurrent SymXxx call, but this whole path only runs under an
+    // explicitly-armed, single-scenario diagnostic run (PS_DEBUG_ALLOC_BACKTRACE),
+    // never in normal armed-but-not-tracing test runs.
+    static bool sym_ready = [] {
+        ::SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+        if (::SymInitialize(::GetCurrentProcess(), nullptr, TRUE) != FALSE) return true;
+        std::fprintf(stderr, "debug_alloc: SymInitialize failed, GetLastError=%lu\n", ::GetLastError());
+        return false;
+    }();
+    if (hlen > 0) std::fputs(header, stderr);
+    void* frames[32];
+    const USHORT n = ::CaptureStackBackTrace(0, 32, frames, nullptr);
+    if (sym_ready) {
+        alignas(SYMBOL_INFO) char sym_buf[sizeof(SYMBOL_INFO) + 256];
+        auto* sym = reinterpret_cast<SYMBOL_INFO*>(sym_buf);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 256;
+        for (USHORT i = 0; i < n; ++i) {
+            const DWORD64 addr = reinterpret_cast<DWORD64>(frames[i]);
+            DWORD64 displacement = 0;
+            const char* name = "?";
+            DWORD last_err = 0;
+            if (::SymFromAddr(::GetCurrentProcess(), addr, &displacement, sym)) {
+                name = sym->Name;
+            } else {
+                last_err = ::GetLastError();
+            }
+            DWORD line_disp = 0;
+            IMAGEHLP_LINE64 line{};
+            line.SizeOfStruct = sizeof(line);
+            const bool have_line = ::SymGetLineFromAddr64(::GetCurrentProcess(), addr, &line_disp, &line) != FALSE;
+            if (have_line) {
+                std::fprintf(stderr, "  %s (%s:%lu)\n", name, line.FileName, line.LineNumber);
+            } else if (last_err != 0) {
+                static const DWORD64 base = reinterpret_cast<DWORD64>(::GetModuleHandleW(nullptr));
+                std::fprintf(stderr, "  0x%p rva=0x%llx ?  [SymFromAddr err=%lu]\n", frames[i],
+                              static_cast<unsigned long long>(addr - base), last_err);
+            } else {
+                std::fprintf(stderr, "  %s (+0x%llx)\n", name, static_cast<unsigned long long>(displacement));
+            }
+        }
+    } else {
+        for (USHORT i = 0; i < n; ++i) std::fprintf(stderr, "  0x%p\n", frames[i]);
+    }
+#endif
+}
 #endif
 
 [[maybe_unused]] void note_allocation() {
@@ -75,14 +155,9 @@ std::atomic<int> g_backtrace_dumped{0};
         g_violations.fetch_add(1, std::memory_order_relaxed);
 #if defined(PS_DEBUG_ALLOC_HAVE_BACKTRACE)
         const int budget = backtrace_budget();
-        if (budget > 0 && g_backtrace_dumped.fetch_add(1, std::memory_order_relaxed) < budget) {
-            void* frames[32];
-            const int n = ::backtrace(frames, 32);
-            char header[64];
-            const int hlen = std::snprintf(header, sizeof(header), "--- debug_alloc violation #%d ---\n",
-                                            g_backtrace_dumped.load(std::memory_order_relaxed));
-            if (hlen > 0) (void)::write(STDERR_FILENO, header, static_cast<std::size_t>(hlen));
-            ::backtrace_symbols_fd(frames, n, STDERR_FILENO);
+        if (budget > 0) {
+            const int number = g_backtrace_dumped.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (number <= budget) dump_backtrace(number);
         }
 #endif
         g_in_hook = false;
