@@ -353,6 +353,24 @@ Build none of this now; just do not violate it.
 - Snapshots carry an optional per-body "deformation payload" blob so the
   adapter protocol does not need to change.
 
+Seams for later terrain sources (P11, real-world geodata). Build these into
+the terrain tiles from the start:
+- `ITerrainSource`: fills a tile (heights, per-cell surface ids) for a tile
+  key. The procedural `terrain.json` spec is one implementation; geodata will
+  be another. Streaming, caching, collision and the adapter's render meshes
+  sit above this interface and do not know the source.
+- `IStaticStructureSource`: supplies static geometry per tile (roads,
+  buildings, bridges) as engine-neutral meshes with a surface id per triangle.
+  The test features (straights, ramps, circuit) use the same path.
+- Render meshes for tiles and structures are built in the library as plain
+  vertex/index buffers; adapters only upload them. That keeps every front end
+  equal and never Godot-only.
+- World frame of a scene: local east-north-up (x east, y north, z up), with an
+  optional georeference (origin lat/lon/height plus projection) in the
+  scenario. Vehicle body frames stay ISO 8855 (D4).
+- The surface table is data (μ scale, rolling resistance, later soil
+  parameters), shared by all sources.
+
 ## 7. Phases and acceptance tests
 
 Each phase ends with: tests green, `CLAUDE.md` map updated, vault tickets
@@ -518,6 +536,38 @@ determinism hashes unchanged; asm/intrinsic paths match scalar reference.
 
 Every phase P3–P8 additionally repeats the thread-count determinism test with
 its new components included.
+
+**P11 — Real-world terrain from open geodata (optional module, later).**
+Requested by Sebastian on 2026-09-22: drive around real places. A separate,
+optional library target `ps_geo` (CMake option `PS_BUILD_GEO`, default OFF).
+The core never depends on it. It plugs in through the same interfaces as the
+procedural terrain (see the seams below), so any front end gets it, not only
+Godot: the adapter only uploads render buffers the library builds.
+- Elevation: Copernicus DEM GLO-30 or SRTM/NASADEM (30 m) worldwide; where
+  available, national 1 m lidar terrain models (e.g. the German states' open
+  DGM1).
+- Ground type: ESA WorldCover (10 m) and OSM landuse/natural/surface tags,
+  mapped to our surface table (μ scale, rolling resistance) and later to soil
+  parameters (SoilGrids, for P8).
+- Structures: OSM roads (width from tags/lanes, surface from `surface=*`,
+  draped onto and flattened into the terrain), buildings as extruded
+  footprints (height from `height`/`building:levels`, or LoD1/LoD2 city models
+  where openly available), bridges, water, forests as colliders/areas.
+- Pipeline: an offline importer bakes a bounding box into our own tile format
+  (heights, surface ids, road and building geometry, attributions), so runtime
+  never parses OSM or GeoTIFF. Heavy geo libraries (GDAL/PROJ/osmium or Python
+  equivalents) stay in the importer; which ones gets decided and approved when
+  the phase starts.
+- Georeference: the scenario names an origin (lat, lon, height) and a
+  projection (UTM or local transverse Mercator; flat-earth approximation, with
+  scale and curvature error at ±50 km quantified and documented).
+- Licences: ODbL (OSM) requires attribution and share-alike for derived
+  databases; Copernicus and WorldCover require attribution. The baked tiles
+  carry their source and licence, and the adapter can display attributions.
+Accept (defined in detail when scheduled): heights match the source DEM at
+sample points; roads are drivable without steps at road/terrain seams; building
+footprints match OSM within 0.1 m after projection; a 50 km drive streams
+without hitches as in M1.
 
 **P10 — Deformation (future, not scheduled).** Write a design proposal only
 when Sebastian asks: candidate approaches (node-beam, XPBD, corotational FEM,
