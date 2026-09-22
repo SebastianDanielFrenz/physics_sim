@@ -8,6 +8,18 @@ add_library(ps_core STATIC
   src/jolt_proof.cpp
 
   src/math/math_check.cpp
+  src/math/transcendental.cpp
+  src/math/detmath/common.h
+  src/math/detmath/rem_pio2.cpp
+  src/math/detmath/trig_kernel.cpp
+  src/math/detmath/trig.cpp
+  src/math/detmath/inverse_trig.cpp
+  src/math/detmath/exp_data.cpp
+  src/math/detmath/exp.cpp
+  src/math/detmath/log_data.cpp
+  src/math/detmath/log.cpp
+  src/math/detmath/pow_data.cpp
+  src/math/detmath/pow.cpp
 
   src/jobs/job_system.cpp
   src/jobs/task_graph.cpp

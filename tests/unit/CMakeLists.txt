@@ -10,6 +10,7 @@ add_executable(ps_unit_tests
   test_articulation_core.cpp
   test_articulation_four_bar.cpp
   test_scenario_articulation.cpp
+  test_detmath.cpp
 )
 
 target_link_libraries(ps_unit_tests

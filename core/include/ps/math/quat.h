@@ -6,9 +6,10 @@
 #pragma once
 
 #include "ps/math/mat3.h"
+#include "ps/math/transcendental.h"
 #include "ps/math/vec3.h"
 
-#include <cmath>
+#include <cmath> // std::sqrt only (IEEE-exact; PLAN.md D7 exempts it, see ps/math/transcendental.h)
 
 namespace ps {
 
@@ -26,8 +27,9 @@ struct Quat {
     static Quat from_axis_angle(const Vec3& axis, real angle_rad) {
         const Vec3 n = axis.normalized();
         const real half = angle_rad * real(0.5);
-        const real s = std::sin(half);
-        return Quat{n.x * s, n.y * s, n.z * s, std::cos(half)};
+        real s, c;
+        ps::math::sincos(half, s, c);
+        return Quat{n.x * s, n.y * s, n.z * s, c};
     }
 
     [[nodiscard]] constexpr real length_squared() const { return x * x + y * y + z * z + w * w; }
@@ -89,10 +91,10 @@ inline Quat slerp(const Quat& a, const Quat& b, real t) {
             a.w + (b2.w - a.w) * t,
         }.normalized();
     }
-    const real half_theta = std::acos(cos_half_theta);
-    const real sin_half_theta = std::sin(half_theta);
-    const real ra = std::sin((1 - t) * half_theta) / sin_half_theta;
-    const real rb = std::sin(t * half_theta) / sin_half_theta;
+    const real half_theta = ps::math::acos(cos_half_theta);
+    const real sin_half_theta = ps::math::sin(half_theta);
+    const real ra = ps::math::sin((1 - t) * half_theta) / sin_half_theta;
+    const real rb = ps::math::sin(t * half_theta) / sin_half_theta;
     return Quat{
         a.x * ra + b2.x * rb,
         a.y * ra + b2.y * rb,
