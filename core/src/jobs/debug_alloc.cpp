@@ -31,6 +31,19 @@
 #define PS_DEBUG_ALLOC_HOOK_DISABLED 1
 #endif
 
+// PHYS-009 Step 3 root-cause investigation only: an opt-in backtrace dump
+// for the first few violations, gated by the PS_DEBUG_ALLOC_BACKTRACE env
+// var so normal test runs (armed but not tracing) pay nothing extra. Linux
+// only (execinfo.h); temporary diagnostic, not part of the shipped hook's
+// public contract (debug_alloc.h declares none of this). Only meaningful
+// when the hook itself is actually compiled in (never under ASan/TSan).
+#if defined(__linux__) && !defined(PS_DEBUG_ALLOC_HOOK_DISABLED)
+#include <cstdio>
+#include <execinfo.h>
+#include <unistd.h>
+#define PS_DEBUG_ALLOC_HAVE_BACKTRACE 1
+#endif
+
 namespace ps::jobs::debug_alloc {
 namespace {
 std::atomic<bool> g_armed{false};
@@ -42,10 +55,36 @@ thread_local int g_job_depth = 0;
 // into something that does, which would otherwise recurse into operator new.
 thread_local bool g_in_hook = false;
 
+#if defined(PS_DEBUG_ALLOC_HAVE_BACKTRACE)
+// Lazily read once per process (env var never changes mid-run); avoids a
+// getenv() call - itself allocation-free, but still pointless overhead - on
+// every single allocation in the overwhelmingly common case this is unset.
+int backtrace_budget() {
+    static const int budget = [] {
+        const char* v = std::getenv("PS_DEBUG_ALLOC_BACKTRACE");
+        return (v && *v) ? std::atoi(v) : 0;
+    }();
+    return budget;
+}
+std::atomic<int> g_backtrace_dumped{0};
+#endif
+
 [[maybe_unused]] void note_allocation() {
     if (g_job_depth > 0 && g_armed.load(std::memory_order_relaxed) && !g_in_hook) {
         g_in_hook = true;
         g_violations.fetch_add(1, std::memory_order_relaxed);
+#if defined(PS_DEBUG_ALLOC_HAVE_BACKTRACE)
+        const int budget = backtrace_budget();
+        if (budget > 0 && g_backtrace_dumped.fetch_add(1, std::memory_order_relaxed) < budget) {
+            void* frames[32];
+            const int n = ::backtrace(frames, 32);
+            char header[64];
+            const int hlen = std::snprintf(header, sizeof(header), "--- debug_alloc violation #%d ---\n",
+                                            g_backtrace_dumped.load(std::memory_order_relaxed));
+            if (hlen > 0) (void)::write(STDERR_FILENO, header, static_cast<std::size_t>(hlen));
+            ::backtrace_symbols_fd(frames, n, STDERR_FILENO);
+        }
+#endif
         g_in_hook = false;
     }
 }

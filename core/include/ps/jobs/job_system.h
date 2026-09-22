@@ -24,7 +24,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -129,10 +129,71 @@ private:
         JobFn fn;
         WaitGroup* group = nullptr;
     };
-    struct WorkerQueue {
-        std::mutex m;
-        std::deque<JobEntry> q;
+
+    // Fixed-capacity double-ended queue backing every worker's own deque and
+    // the injector queue (PHYS-009 Step 3): a std::deque<JobEntry> here
+    // allocated a new internal node every time push_back crossed a block
+    // boundary that pop_front (a thief, or an injector-draining worker) had
+    // just vacated - proven with a debug_alloc backtrace landing in
+    // std::deque<JobEntry>::_M_push_back_aux, called from JobSystem::submit
+    // while running on a worker thread (i.e. exactly the "parallel_for
+    // called from inside a running job" nested-submission case). Because
+    // push_back (owner) and pop_front (thieves/injector consumers) act on
+    // opposite ends concurrently, this is not a one-time warm-up cost but a
+    // permanent per-block churn - reproduced identically by a no-op nested
+    // parallel_for with no articulation/World code involved at all. A
+    // fixed-size ring buffer, sized once at JobSystem construction time (on
+    // the constructing thread, never inside a job) and never resized again,
+    // removes the allocation entirely rather than merely amortising it.
+    // Capacity is generous relative to any known chunk count (parallel_for
+    // submits roughly 4x worker_count chunks by default, or as many as
+    // count/min_grain for an explicit small grain - bench_force_elements'
+    // 2000/20 = 100 is the largest in this codebase) so overflow should
+    // never happen from real workloads; if it ever does, push() fails
+    // loudly (fail_queue_full()) rather than silently allocating.
+    class RingQueue {
+    public:
+        explicit RingQueue(std::size_t capacity) : buf_(capacity) {}
+
+        [[nodiscard]] bool push_back(JobEntry&& e) {
+            if (size_ >= buf_.size()) return false;
+            buf_[(head_ + size_) % buf_.size()] = std::move(e);
+            ++size_;
+            return true;
+        }
+        bool pop_back(JobEntry& out) {
+            if (size_ == 0) return false;
+            --size_;
+            out = std::move(buf_[(head_ + size_) % buf_.size()]);
+            return true;
+        }
+        bool pop_front(JobEntry& out) {
+            if (size_ == 0) return false;
+            out = std::move(buf_[head_]);
+            head_ = (head_ + 1) % buf_.size();
+            --size_;
+            return true;
+        }
+        [[nodiscard]] bool empty() const { return size_ == 0; }
+
+    private:
+        std::vector<JobEntry> buf_; // sized once at construction, never resized
+        std::size_t head_ = 0;
+        std::size_t size_ = 0;
     };
+
+    struct WorkerQueue {
+        explicit WorkerQueue(std::size_t capacity) : q(capacity) {}
+        std::mutex m;
+        RingQueue q;
+    };
+
+    // Never exceeded by any workload in this codebase (see RingQueue's
+    // comment); kept as one named constant so every queue - worker-owned or
+    // the shared injector - agrees on the same headroom.
+    static constexpr std::size_t kQueueCapacity = 4096;
+
+    [[noreturn]] static void fail_queue_full(const char* which);
 
     void worker_loop(int index);
     bool try_pop_own(int index, JobEntry& out);
@@ -141,9 +202,17 @@ private:
     void run_job(JobEntry& job);
 
     std::vector<std::thread> workers_;
-    std::vector<WorkerQueue> deques_;
+    // unique_ptr indirection (not WorkerQueue directly): WorkerQueue holds a
+    // std::mutex, which is neither copyable nor movable, so a plain
+    // std::vector<WorkerQueue> cannot grow via reserve()/emplace_back() (the
+    // container must remain instantiable even though, in practice, every
+    // element is constructed once at JobSystem startup and the vector never
+    // reallocates after that). This indirection is itself an allocation,
+    // but - like the RingQueue buffers - only ever at JobSystem construction
+    // time, never inside a job.
+    std::vector<std::unique_ptr<WorkerQueue>> deques_;
     std::mutex injector_m_;
-    std::deque<JobEntry> injector_;
+    RingQueue injector_{kQueueCapacity};
     std::mutex wake_m_;
     std::condition_variable wake_cv_;
     std::atomic<long> pending_{0};

@@ -3,6 +3,8 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 
 namespace ps::jobs {
 
@@ -10,12 +12,27 @@ namespace {
 thread_local int t_worker_index = -1; // -1: not a worker thread
 }
 
+void JobSystem::fail_queue_full(const char* which) {
+    // Deliberately not gated by NDEBUG/assert (PHYS-009 Step 3: "if capacity
+    // can be exceeded, fail loudly... don't silently allocate") - an assert
+    // alone would no-op in a release build, exactly where this matters most.
+    std::fprintf(stderr,
+                  "ps::jobs::JobSystem: %s queue is full (capacity %zu) - a workload submitted "
+                  "more concurrently-live jobs than PLAN.md D8's zero-allocation queues were sized "
+                  "for. Raise kQueueCapacity (job_system.h) rather than let this fall back to "
+                  "heap allocation.\n",
+                  which, kQueueCapacity);
+    std::fflush(stderr);
+    std::abort();
+}
+
 JobSystem::JobSystem(int num_workers) {
     if (num_workers <= 0) {
         const int physical = physical_core_count();
         num_workers = std::max(1, physical - 2);
     }
-    deques_ = std::vector<WorkerQueue>(static_cast<std::size_t>(num_workers));
+    deques_.reserve(static_cast<std::size_t>(num_workers));
+    for (int i = 0; i < num_workers; ++i) deques_.push_back(std::make_unique<WorkerQueue>(kQueueCapacity));
     stats_ = std::vector<WorkerStats>(static_cast<std::size_t>(num_workers));
     workers_.reserve(static_cast<std::size_t>(num_workers));
     for (int i = 0; i < num_workers; ++i) {
@@ -41,49 +58,45 @@ void JobSystem::submit(JobFn fn, WaitGroup* group) {
     JobEntry entry{std::move(fn), group};
 
     if (t_worker_index >= 0) {
-        auto& own = deques_[static_cast<std::size_t>(t_worker_index)];
+        auto& own = *deques_[static_cast<std::size_t>(t_worker_index)];
+        bool ok;
         {
             std::lock_guard<std::mutex> lock(own.m);
-            own.q.push_back(std::move(entry));
+            ok = own.q.push_back(std::move(entry));
         }
+        if (!ok) fail_queue_full("worker");
     } else {
-        std::lock_guard<std::mutex> lock(injector_m_);
-        injector_.push_back(std::move(entry));
+        bool ok;
+        {
+            std::lock_guard<std::mutex> lock(injector_m_);
+            ok = injector_.push_back(std::move(entry));
+        }
+        if (!ok) fail_queue_full("injector");
     }
     pending_.fetch_add(1, std::memory_order_acq_rel);
     wake_cv_.notify_all();
 }
 
 bool JobSystem::try_pop_own(int index, JobEntry& out) {
-    auto& own = deques_[static_cast<std::size_t>(index)];
+    auto& own = *deques_[static_cast<std::size_t>(index)];
     std::lock_guard<std::mutex> lock(own.m);
-    if (own.q.empty()) return false;
-    out = std::move(own.q.back());
-    own.q.pop_back();
-    return true;
+    return own.q.pop_back(out);
 }
 
 bool JobSystem::try_steal(int index, JobEntry& out) {
     const int n = static_cast<int>(deques_.size());
     for (int off = 1; off < n; ++off) {
         const int victim = (index + off) % n;
-        auto& q = deques_[static_cast<std::size_t>(victim)];
+        auto& q = *deques_[static_cast<std::size_t>(victim)];
         std::lock_guard<std::mutex> lock(q.m);
-        if (!q.q.empty()) {
-            out = std::move(q.q.front());
-            q.q.pop_front();
-            return true;
-        }
+        if (q.q.pop_front(out)) return true;
     }
     return false;
 }
 
 bool JobSystem::try_pop_injector(JobEntry& out) {
     std::lock_guard<std::mutex> lock(injector_m_);
-    if (injector_.empty()) return false;
-    out = std::move(injector_.front());
-    injector_.pop_front();
-    return true;
+    return injector_.pop_front(out);
 }
 
 void JobSystem::run_job(JobEntry& job) {
