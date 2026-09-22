@@ -45,9 +45,9 @@ physics_sim/
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
     unit/                             target ps_unit_tests: test_hello, test_math, test_jobs, test_world_basic
-    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope
+    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail])
     determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test)
-    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling
+    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep, energy_study.cpp
   data/
     vehicles/ tyres/ aircraft/        empty (.gitkeep) until P3+
     scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json
@@ -80,6 +80,12 @@ physics_sim/
 - `bench_force_elements` (executable, `tests/bench`): plain `main()`
   (not Catch2, so its measured numbers are always on stdout); links
   `ps_core`, `ps_headless_env`. Registered with CTest via `add_test()`.
+- `ps_energy_study` (executable, `tests/bench/energy_study.cpp`): plain
+  `main()`; links `ps_core`, `ps_headless_env`. Deliberately NOT
+  registered with CTest - a measurement tool (Jolt solver-settings sweep
+  over hinged-capsule/3-link-chain release angles, plus candidate-cause
+  isolation runs) whose CSV output feeds a written report, run by hand on
+  the `release` preset.
 - `ps_warnings` (INTERFACE): warnings-as-errors, linked into every one of
   the above - never into third-party targets.
 - `ps_options` (INTERFACE): `/arch:AVX2` / `-mavx2 -mfma`, `/fp:precise`,
@@ -163,6 +169,28 @@ callbacks that print to stderr (Jolt's own defaults are silent and just
 trigger a bare breakpoint). Broadphase/contact-constraint capacity and the
 `TempAllocatorImpl` arena size scale with `max_bodies` rather than a fixed
 constant.
+
+`RigidBackendSettings` (`ps/backend/i_rigid_backend.h`, passed to
+`create_jolt_backend`) exposes `JPH::PhysicsSettings` fields (`baumgarte`,
+`num_velocity_steps`, `num_position_steps`, `penetration_slop`,
+`speculative_contact_distance`, `max_penetration_distance`,
+`linear_cast_threshold`, `linear_cast_max_penetration`) plus
+`collision_steps` (`PhysicsSystem::Update`'s own `inCollisionSteps`
+substep-count parameter, stored as `JoltRigidBackend::collision_steps_`
+and applied in `step()`). `World` forwards its own same-named
+`WorldConfig` fields into this struct in its constructor
+(`core/src/world/world.cpp`). Every default matches Jolt's own
+`PhysicsSettings`/`BodyCreationSettings` default, so a default-constructed
+`WorldConfig`/`BodyDesc` reproduces pre-existing behaviour exactly.
+
+`BodyDesc` additionally carries `motion_quality` (`ps::MotionQuality::
+Discrete`/`LinearCast`, mapped to `JPH::EMotionQuality`),
+`max_angular_velocity` (`MotionProperties::mMaxAngularVelocity`, default
+`0.25*pi*60` rad/s) and `max_linear_velocity`
+(`MotionProperties::mMaxLinearVelocity`, default 500 m/s - Jolt silently
+clamps to this every step; see the P1 Part A report for how this
+produced an apparent energy loss in a long free-fall scenario before it
+was traced back to the clamp).
 
 ## Building, testing, running
 
