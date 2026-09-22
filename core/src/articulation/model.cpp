@@ -1,6 +1,7 @@
 #include "model.h"
 
 #include <cassert>
+#include <stdexcept>
 
 namespace ps::articulation {
 
@@ -11,6 +12,23 @@ Model build_model(const articulation::ArticulationDesc& desc) {
     Model m;
     m.floating_root = desc.root.floating;
     m.loop_closures = desc.loop_closures;
+
+    // PLAN.md P1.5a / vault PHYS-009 Step 1 rule 5: LoopClosureType::Hinge
+    // has no axis-alignment rows implemented yet (loop_closure.cpp only
+    // builds the 3 point-constraint rows), so it would silently behave
+    // like a Point closure - a physically wrong result with no error.
+    // Fail loudly here instead, at build time, until it is implemented.
+    for (const LoopClosureDesc& lc : m.loop_closures) {
+        if (lc.type == LoopClosureType::Hinge) {
+            throw std::invalid_argument(
+                "articulation build: LoopClosureType::Hinge is not implemented "
+                "(only the 3 point-constraint rows exist; the 2 axis-alignment "
+                "rows are missing - see core/src/articulation/loop_closure.h's "
+                "file comment and vault ticket PHYS-009). Rejected rather than "
+                "silently built as a Point closure. Use LoopClosureType::Point, "
+                "or implement the Hinge rows first.");
+        }
+    }
 
     const int link_offset = m.floating_root ? 1 : 0;
     m.bodies.reserve(desc.links.size() + static_cast<std::size_t>(link_offset));
