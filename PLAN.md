@@ -384,6 +384,10 @@ the terrain tiles from the start:
 
 Each phase ends with: tests green, `CLAUDE.md` map updated, vault tickets
 written, one git commit (or a few) with clear messages. No pushing.
+CI has two levels (Sebastian, 2026-09-22): `tools/ci.ps1` is the fast
+everyday run (target < 5 min; long physics tests only in the release legs,
+short variants under the sanitizers). `tools/ci.ps1 -Full` runs everything in
+every leg, and is mandatory before a phase counts as done.
 
 **P0 — Toolchain and skeleton.** Installs (after approval), git init, CMake
 presets, FetchContent pins, empty targets, Catch2 hello test, CI script
