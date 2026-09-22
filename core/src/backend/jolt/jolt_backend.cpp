@@ -20,6 +20,10 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/PhysicsMaterial.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
@@ -119,6 +123,204 @@ JPH::Quat to_jph_quat(const Quat& q) {
 }
 Quat from_jph_quat(const JPH::Quat& q) { return Quat{real(q.GetX()), real(q.GetY()), real(q.GetZ()), real(q.GetW())}; }
 
+// ---------------------------------------------------------------------
+// Surface ids through Jolt materials (PLAN.md M1: "surface ids must
+// survive collision queries and contact events"). Jolt's own per-triangle
+// (MeshShape) and per-cell (HeightFieldShape) material index is 8 bits
+// (Array<uint8> mMaterialIndices - see HeightFieldShape.h), so this backend
+// shares ONE fixed, 256-entry PhysicsMaterialList across every mesh/
+// heightfield shape it ever creates, built once (not per shape, and
+// critically not inside JoltRigidBackend::update_heightfield_body, which
+// PLAN.md D8 requires to be allocation-free on its hot tile-streaming path -
+// see that method). Slot 255 is reserved to mean ps::kInvalidSurfaceId (the
+// "no surface id supplied" sentinel both ShapeDesc's own doc comments and
+// this file's callers use), never a real surface - so a real surface id
+// must be < 255 to survive a round trip through a Jolt mesh/heightfield;
+// this project never defines anywhere close to that many.
+class SurfaceMaterial final : public JPH::PhysicsMaterial {
+public:
+    SurfaceMaterial() = default;
+    explicit SurfaceMaterial(SurfaceId id) : surface_id(id) {}
+    SurfaceId surface_id = kInvalidSurfaceId;
+};
+
+constexpr std::size_t kMaxJoltSurfaceMaterials = 256;
+constexpr std::uint8_t kJoltInvalidSurfaceMaterialIndex = 255;
+
+const JPH::PhysicsMaterialList& shared_surface_material_list() {
+    static const JPH::PhysicsMaterialList list = [] {
+        JPH::PhysicsMaterialList l;
+        l.reserve(kMaxJoltSurfaceMaterials);
+        for (std::size_t i = 0; i + 1 < kMaxJoltSurfaceMaterials; ++i) {
+            l.push_back(new SurfaceMaterial(static_cast<SurfaceId>(i)));
+        }
+        l.push_back(new SurfaceMaterial(kInvalidSurfaceId)); // slot 255, see comment above
+        return l;
+    }();
+    return list;
+}
+
+// A real (non-sentinel) surface id above this is not representable in a
+// Jolt mesh/heightfield material index and is silently mapped to the
+// invalid slot instead of corrupting an unrelated surface's slot.
+std::uint8_t jolt_material_index_for_surface(SurfaceId id) {
+    if (id == kInvalidSurfaceId || id >= kMaxJoltSurfaceMaterials - 1) return kJoltInvalidSurfaceMaterialIndex;
+    return static_cast<std::uint8_t>(id);
+}
+
+SurfaceId surface_id_from_material(const JPH::PhysicsMaterial* mat) {
+    const auto* sm = dynamic_cast<const SurfaceMaterial*>(mat);
+    return sm ? sm->surface_id : kInvalidSurfaceId;
+}
+
+// Fixed rotation wrapping a Jolt HeightFieldShape (native Y-up: "position =
+// offset + scale*(x, height, y)", HeightFieldShapeSettings' own doc comment)
+// so it presents our own Z-up, body-local convention (HeightfieldShape's own
+// doc comment, shape_desc.h) at the ShapeDesc seam: local point
+// (ix*spacing, iy*spacing, height) rather than (ix*spacing, height,
+// iy*spacing). This is a rotation about local X by +90 degrees - (x,y,z) ->
+// (x,-z,y) - written as an exact constant (sin(45deg) == cos(45deg) for a
+// 90-degree rotation) rather than computed from a runtime trig call, both to
+// avoid PLAN.md D7's platform-libm grep entirely and because it is a fixed
+// geometric constant, not scenario data.
+//
+// Under this rotation alone, sample row iy_jolt lands at body-local
+// y = -(iy_jolt*spacing) - NEGATIVE of what we want. The first version of
+// this code "fixed" that by making the inner shape's mScale.z NEGATIVE
+// instead (so the sign cancelled) - wrong, found empirically (a raycast
+// straight down never hit the heightfield at all, while a narrowphase
+// CollideShape query against the exact same shape did): a negative scale
+// component mirrors the shape, which flips every triangle's winding and
+// therefore its normal. JPH::NarrowPhaseQuery::CastRay back-face-culls by
+// default, so every ray from above saw only back faces and reported no hit;
+// worse, a real contact (as opposed to a query with no side effects) would
+// have resolved penetration along the flipped (inward-pointing) normal.
+// The actual fix keeps the shape's own scale strictly positive (correct
+// winding) and instead reverses which SAMPLE ROW is stored at which Jolt
+// row index - see reverse_heightfield_rows_into below - compensated by a
+// constant position offset on the wrapping shape's translation (see
+// heightfield_wrapper_position, used by both create_body's heightfield
+// branch and make_heightfield_shape).
+const JPH::Quat kHeightfieldYupToZup(0.70710678118654752440f, 0.0f, 0.0f, 0.70710678118654752440f);
+
+// Position offset needed for the RotatedTranslatedShape wrapper so that,
+// combined with kHeightfieldYupToZup and the ROW-REVERSED sample layout
+// (see reverse_heightfield_rows_into), body-local sample (ix, iy) lands at
+// exactly origin + (ix, iy, 0)*spacing, height along +z - see this file's
+// header comment on kHeightfieldYupToZup for the derivation.
+JPH::Vec3 heightfield_wrapper_position(const HeightfieldShape& s) {
+    return to_vec3f(Vec3{s.origin.x, s.origin.y + static_cast<real>(s.sample_count - 1) * s.sample_spacing, s.origin.z});
+}
+
+// Copies `src` (our own row-major, y-major convention - row `our_iy` at
+// src[our_iy*n .. ]) into `dst` with rows reversed (Jolt row `iy` <- our row
+// `n-1-iy`) - see kHeightfieldYupToZup's comment for why. `dst` must already
+// be sized `n*n` (heights) or `n*n` cells for materials; this function does
+// not resize (PLAN.md D8: callers on the hot update path own their own
+// preallocated scratch).
+void reverse_heightfield_rows_into(const std::vector<real>& src, std::uint32_t n, float* dst) {
+    for (std::uint32_t iy = 0; iy < n; ++iy) {
+        const std::uint32_t src_row = n - 1 - iy;
+        for (std::uint32_t ix = 0; ix < n; ++ix) {
+            const std::size_t src_i = static_cast<std::size_t>(src_row) * n + ix;
+            dst[static_cast<std::size_t>(iy) * n + ix] = (src_i < src.size()) ? static_cast<float>(src[src_i]) : 0.0f;
+        }
+    }
+}
+void reverse_heightfield_material_rows_into(const std::vector<SurfaceId>& src, std::uint32_t cells, std::uint8_t* dst) {
+    for (std::uint32_t iy = 0; iy < cells; ++iy) {
+        const std::uint32_t src_row = cells - 1 - iy;
+        for (std::uint32_t ix = 0; ix < cells; ++ix) {
+            const std::size_t src_i = static_cast<std::size_t>(src_row) * cells + ix;
+            const SurfaceId sid = (src_i < src.size()) ? src[src_i] : kInvalidSurfaceId;
+            dst[static_cast<std::size_t>(iy) * cells + ix] = jolt_material_index_for_surface(sid);
+        }
+    }
+}
+
+// Unlike HeightFieldShape (256 materials, see shared_surface_material_list),
+// JPH::MeshShape caps out at 32 materials ("Supporting max 32 materials per
+// mesh" - MeshShape.cpp, found empirically when this used the shared
+// 256-entry list unconditionally). A per-mesh local list built from only the
+// DISTINCT ids this particular mesh actually uses is not on any hot path
+// (mesh creation happens once, e.g. the test-ground loader's static
+// geometry - PLAN.md M1 step 4), so this is a small one-time allocation,
+// unlike the heightfield's shared/fixed list (which exists specifically to
+// keep the HOT tile-update path allocation-free). data/tracks/test_ground's
+// own collision format groups triangles BY surface already (one surface per
+// mesh in practice), so this limit is generous, not a real constraint.
+JPH::RefConst<JPH::Shape> make_mesh_shape(const MeshShape& s) {
+    JPH::VertexList verts;
+    verts.reserve(s.vertices.size());
+    for (const Vec3& v : s.vertices) verts.push_back(JPH::Float3(static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)));
+
+    JPH::PhysicsMaterialList local_materials;
+    std::vector<SurfaceId> local_ids; // local_materials[i] <-> local_ids[i]
+    auto local_index_for = [&](SurfaceId sid) -> std::uint32_t {
+        for (std::size_t i = 0; i < local_ids.size(); ++i) {
+            if (local_ids[i] == sid) return static_cast<std::uint32_t>(i);
+        }
+        if (local_ids.size() >= 32) return 0; // clamp: see this function's header comment
+        local_ids.push_back(sid);
+        local_materials.push_back(new SurfaceMaterial(sid));
+        return static_cast<std::uint32_t>(local_ids.size() - 1);
+    };
+
+    const std::size_t tri_count = s.indices.size() / 3;
+    JPH::IndexedTriangleList tris;
+    tris.reserve(tri_count);
+    for (std::size_t t = 0; t < tri_count; ++t) {
+        const SurfaceId sid = (t < s.triangle_surface_ids.size()) ? s.triangle_surface_ids[t] : kInvalidSurfaceId;
+        tris.push_back(JPH::IndexedTriangle(s.indices[3 * t], s.indices[3 * t + 1], s.indices[3 * t + 2], local_index_for(sid)));
+    }
+
+    JPH::MeshShapeSettings settings(verts, tris, local_materials);
+    JPH::Shape::ShapeResult result = settings.Create();
+    if (result.HasError()) {
+        std::fprintf(stderr, "[ps] MeshShape creation failed: %s\n", result.GetError().c_str());
+        std::fflush(stderr);
+        return nullptr;
+    }
+    return result.Get();
+}
+
+// Builds the inner (native Y-up) HeightFieldShape only - see
+// kHeightfieldYupToZup's comment for the wrapping rotation applied by
+// make_heightfield_shape below. Shared between initial creation and
+// JoltRigidBackend::update_heightfield_body's re-creation path is
+// deliberately NOT shared (update mutates in place instead, see that
+// method) - this helper is create-only.
+JPH::RefConst<JPH::HeightFieldShape> make_inner_heightfield(const HeightfieldShape& s) {
+    assert(s.sample_count % 2 == 0 && s.sample_count >= 2 &&
+           "HeightfieldShape::sample_count must be even (see shape_desc.h's doc comment) so Jolt's own "
+           "block-size rounding never disagrees with update_heightfield_body's caller-supplied array sizes");
+    std::vector<float> heights(static_cast<std::size_t>(s.sample_count) * s.sample_count);
+    reverse_heightfield_rows_into(s.heights, s.sample_count, heights.data());
+
+    const std::size_t cell_count = (s.sample_count >= 1) ? static_cast<std::size_t>(s.sample_count - 1) * (s.sample_count - 1) : 0;
+    std::vector<std::uint8_t> material_indices(cell_count);
+    reverse_heightfield_material_rows_into(s.cell_surface_ids, s.sample_count >= 1 ? s.sample_count - 1 : 0, material_indices.data());
+
+    // Positive scale throughout (correct winding - see kHeightfieldYupToZup's
+    // comment for why a negative component here was the actual bug).
+    JPH::HeightFieldShapeSettings settings(heights.data(), JPH::Vec3::sZero(),
+                                            JPH::Vec3(static_cast<float>(s.sample_spacing), 1.0f, static_cast<float>(s.sample_spacing)),
+                                            s.sample_count, material_indices.empty() ? nullptr : material_indices.data(),
+                                            shared_surface_material_list());
+    JPH::Shape::ShapeResult result = settings.Create();
+    if (result.HasError()) {
+        std::fprintf(stderr, "[ps] HeightFieldShape creation failed: %s\n", result.GetError().c_str());
+        std::fflush(stderr);
+        return nullptr;
+    }
+    return JPH::RefConst<JPH::HeightFieldShape>(JPH::StaticCast<JPH::HeightFieldShape>(result.Get().GetPtr()));
+}
+
+JPH::RefConst<JPH::Shape> make_heightfield_shape(const HeightfieldShape& s) {
+    JPH::RefConst<JPH::HeightFieldShape> inner = make_inner_heightfield(s);
+    return JPH::RefConst<JPH::Shape>(new JPH::RotatedTranslatedShape(heightfield_wrapper_position(s), kHeightfieldYupToZup, inner.GetPtr()));
+}
+
 JPH::RefConst<JPH::Shape> make_shape(const ShapeDesc& desc) {
     return std::visit(
         [](auto&& s) -> JPH::RefConst<JPH::Shape> {
@@ -127,9 +329,13 @@ JPH::RefConst<JPH::Shape> make_shape(const ShapeDesc& desc) {
                 return JPH::RefConst<JPH::Shape>(new JPH::BoxShape(to_vec3f(s.half_extents)));
             } else if constexpr (std::is_same_v<T, SphereShape>) {
                 return JPH::RefConst<JPH::Shape>(new JPH::SphereShape(static_cast<float>(s.radius)));
-            } else {
-                static_assert(std::is_same_v<T, CapsuleShape>);
+            } else if constexpr (std::is_same_v<T, CapsuleShape>) {
                 return JPH::RefConst<JPH::Shape>(new JPH::CapsuleShape(static_cast<float>(s.half_height), static_cast<float>(s.radius)));
+            } else if constexpr (std::is_same_v<T, MeshShape>) {
+                return make_mesh_shape(s);
+            } else {
+                static_assert(std::is_same_v<T, HeightfieldShape>);
+                return make_heightfield_shape(s);
             }
         },
         desc);
@@ -262,6 +468,12 @@ private:
         ev.point = manifold.mRelativeContactPointsOn1.empty() ? Vec3::zero() : from_rvec3(manifold.GetWorldSpaceContactPointOn1(0));
         ev.normal = from_vec3f(manifold.mWorldSpaceNormal);
         ev.normal_impulse = 0.0; // not known at OnContactAdded time (see Jolt's own doc comment)
+        // PLAN.md M1: surface ids survive into ContactEvent via each body's
+        // own shape + the manifold's own per-body sub shape id (the same
+        // GetMaterial(SubShapeID) query collide_shape_into uses below) -
+        // kInvalidSurfaceId for a shape with no materials (Box/Sphere/Capsule).
+        ev.surface_a = surface_id_from_material(body1.GetShape()->GetMaterial(manifold.mSubShapeID1));
+        ev.surface_b = surface_id_from_material(body2.GetShape()->GetMaterial(manifold.mSubShapeID2));
         std::lock_guard<std::mutex> lock(m_);
         pending_.push_back(ev);
     }
@@ -342,7 +554,19 @@ public:
     }
 
     BodyId create_body(const BodyDesc& desc) override {
-        JPH::RefConst<JPH::Shape> shape = make_shape(desc.shape);
+        // HeightfieldShape needs its own path so the raw JPH::HeightFieldShape*
+        // can be stashed for update_heightfield_body (see Slot::heightfield's
+        // comment) - make_shape() alone only returns the fully-wrapped
+        // top-level JPH::Shape (a RotatedTranslatedShape for this variant).
+        JPH::HeightFieldShape* raw_heightfield = nullptr;
+        JPH::RefConst<JPH::Shape> shape;
+        if (const auto* hf = std::get_if<HeightfieldShape>(&desc.shape)) {
+            JPH::RefConst<JPH::HeightFieldShape> inner = make_inner_heightfield(*hf);
+            raw_heightfield = const_cast<JPH::HeightFieldShape*>(inner.GetPtr());
+            shape = JPH::RefConst<JPH::Shape>(new JPH::RotatedTranslatedShape(heightfield_wrapper_position(*hf), kHeightfieldYupToZup, inner.GetPtr()));
+        } else {
+            shape = make_shape(desc.shape);
+        }
         const JPH::EMotionType motion = to_jph_motion(desc.motion);
         const JPH::ObjectLayer layer = (desc.motion == BodyMotionType::Static) ? Layers::NON_MOVING : Layers::MOVING;
 
@@ -364,7 +588,7 @@ public:
         }
 
         const JPH::BodyID jph_id = body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
-        const BodyId id = alloc_slot(jph_id);
+        const BodyId id = alloc_slot(jph_id, raw_heightfield);
         body_interface().SetUserData(jph_id, pack_body_id(id));
         return id;
     }
@@ -438,6 +662,44 @@ public:
         body_interface().SetLinearAndAngularVelocity(lookup(id), to_vec3f(motion.linear), to_vec3f(motion.angular));
     }
 
+    // PLAN.md M1 tile streaming (see i_rigid_backend.h's doc comment for the
+    // full contract). Mutates the existing HeightFieldShape's samples via
+    // Jolt's own SetHeights/SetMaterials, both of which take a
+    // JPH::TempAllocator for their temporary working memory - passing this
+    // backend's own preallocated temp_allocator_ (the same arena
+    // IRigidBackend::step() hands to Jolt's Update(), never touched
+    // concurrently here since World's terrain_tiles pipeline stage runs
+    // strictly after backend_step within one tick, PLAN.md section 5) means
+    // this call's OWN temporary memory is a bump-pointer arena, not the
+    // heap. The float/uint8 conversion buffers below are the only other
+    // per-call storage; they are ordinary std::vector members that grow
+    // once to the largest tile seen and never shrink (the same "steady-
+    // state after warm-up" pattern as every other scratch buffer in this
+    // codebase, e.g. AbaScratch) - not allocation-free on the very first
+    // call for a given size, but zero-allocation for every call after that,
+    // which is what PLAN.md D8 measures (see test_terrain_tile_manager.cpp).
+    void update_heightfield_body(BodyId id, const std::vector<real>& heights, const std::vector<SurfaceId>& cell_surface_ids) override {
+        (void)lookup(id); // validates the id (asserts on stale/invalid)
+        JPH::HeightFieldShape* hf = slots_[id.index].heightfield;
+        assert(hf && "update_heightfield_body called on a body without a heightfield shape");
+        const std::uint32_t n = hf->GetSampleCount();
+        assert(heights.size() == static_cast<std::size_t>(n) * n);
+
+        // Row-reversed the same way as creation (reverse_heightfield_rows_into's
+        // comment / kHeightfieldYupToZup's comment) - content must keep
+        // matching the fixed wrapper rotation/position baked in at creation.
+        if (heightfield_height_scratch_.size() < heights.size()) heightfield_height_scratch_.resize(heights.size());
+        reverse_heightfield_rows_into(heights, n, heightfield_height_scratch_.data());
+        hf->SetHeights(0, 0, n, n, heightfield_height_scratch_.data(), static_cast<std::ptrdiff_t>(n), *temp_allocator_);
+
+        const std::size_t cell_count = (n >= 1) ? static_cast<std::size_t>(n - 1) * (n - 1) : 0;
+        if (heightfield_material_scratch_.size() < cell_count) heightfield_material_scratch_.resize(cell_count);
+        reverse_heightfield_material_rows_into(cell_surface_ids, n >= 1 ? n - 1 : 0, heightfield_material_scratch_.data());
+        if (cell_count > 0) {
+            hf->SetMaterials(0, 0, n - 1, n - 1, heightfield_material_scratch_.data(), static_cast<std::ptrdiff_t>(n - 1), nullptr, *temp_allocator_);
+        }
+    }
+
     real get_mass(BodyId id) const override {
         const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
         if (!body || body->IsStatic()) return 0.0;
@@ -496,6 +758,7 @@ public:
             out.normal = from_vec3f(-collector.mHit.mPenetrationAxis.Normalized());
             const JPH::Body* hit_body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(collector.mHit.mBodyID2);
             out.body = hit_body ? unpack_body_id(hit_body->GetUserData()) : BodyId{};
+            if (hit_body) out.surface = surface_id_from_material(hit_body->GetShape()->GetMaterial(collector.mHit.mSubShapeID2));
         }
         return out;
     }
@@ -535,6 +798,7 @@ public:
             // shape, matching ShapeContactHit::normal's documented direction.
             sch.normal = from_vec3f(-hit.mPenetrationAxis.Normalized());
             sch.penetration = real(hit.mPenetrationDepth);
+            sch.surface = surface_id_from_material(body->GetShape()->GetMaterial(hit.mSubShapeID2));
             out.push_back(sch);
         }
     }
@@ -573,6 +837,13 @@ private:
         JPH::BodyID jph_id;
         bool alive = false;
         id_generation_t generation = 0;
+        // Non-null only for a body created from a HeightfieldShape - a raw
+        // observer pointer (kept alive by the body's own shape reference
+        // chain: RotatedTranslatedShape holds a RefConst to it), so
+        // update_heightfield_body can mutate content in place without
+        // walking the DecoratedShape chain on every call (PLAN.md D8 hot
+        // tile-streaming path).
+        JPH::HeightFieldShape* heightfield = nullptr;
     };
     struct JointSlot {
         JPH::Ref<JPH::Constraint> constraint;
@@ -587,14 +858,14 @@ private:
         return slots_[id.index].jph_id;
     }
 
-    BodyId alloc_slot(JPH::BodyID jph_id) {
+    BodyId alloc_slot(JPH::BodyID jph_id, JPH::HeightFieldShape* heightfield = nullptr) {
         if (!free_list_.empty()) {
             const id_index_t idx = free_list_.back();
             free_list_.pop_back();
-            slots_[idx] = Slot{jph_id, true, slots_[idx].generation + 1};
+            slots_[idx] = Slot{jph_id, true, slots_[idx].generation + 1, heightfield};
             return BodyId{idx, slots_[idx].generation};
         }
-        slots_.push_back(Slot{jph_id, true, 1});
+        slots_.push_back(Slot{jph_id, true, 1, heightfield});
         return BodyId{static_cast<id_index_t>(slots_.size() - 1), 1};
     }
 
@@ -660,6 +931,11 @@ private:
     std::vector<id_index_t> free_list_;
     std::vector<JointSlot> joint_slots_;
     std::vector<id_index_t> joint_free_list_;
+
+    // update_heightfield_body's scratch conversion buffers - see that
+    // method's comment.
+    std::vector<float> heightfield_height_scratch_;
+    std::vector<std::uint8_t> heightfield_material_scratch_;
 };
 
 } // namespace

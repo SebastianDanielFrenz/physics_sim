@@ -102,6 +102,10 @@ struct ShapeCastHit {
     real fraction = 1.0;
     Vec3 point;
     Vec3 normal;
+    // Surface id of the hit triangle/cell of `body`'s shape (PLAN.md M1),
+    // kInvalidSurfaceId if that shape carries no surface ids or there was
+    // no hit.
+    SurfaceId surface = kInvalidSurfaceId;
 };
 
 struct ContactEvent {
@@ -110,6 +114,13 @@ struct ContactEvent {
     Vec3 point;
     Vec3 normal;
     real normal_impulse = 0.0;
+    // Surface id of the triangle/cell of a's shape (kInvalidSurfaceId if a's
+    // shape is not a MeshShape/HeightfieldShape, or carries no surface ids)
+    // and of b's shape, respectively - PLAN.md M1's "surface ids must survive
+    // collision queries and contact events, so the tyre/contact code can
+    // look up a surface".
+    SurfaceId surface_a = kInvalidSurfaceId;
+    SurfaceId surface_b = kInvalidSurfaceId;
 };
 
 // One overlap of a queried shape against a live body, from collide_shape_into
@@ -124,6 +135,10 @@ struct ShapeContactHit {
     Vec3 point;
     Vec3 normal;
     real penetration = 0.0;
+    // Surface id of the triangle/cell of `body`'s shape at `point`
+    // (kInvalidSurfaceId if that shape carries no surface ids, e.g. a plain
+    // Box/Sphere/Capsule) - PLAN.md M1.
+    SurfaceId surface = kInvalidSurfaceId;
 };
 
 class IRigidBackend {
@@ -140,6 +155,27 @@ public:
     [[nodiscard]] virtual Motion get_motion(BodyId id) const = 0;
     virtual void set_pose(BodyId id, const Pose& pose) = 0;
     virtual void set_motion(BodyId id, const Motion& motion) = 0;
+
+    // Updates an EXISTING HeightfieldShape-backed body's height/surface
+    // samples in place - PLAN.md M1's tile system reuses a fixed pool of
+    // bodies across many different tiles over a vehicle's lifetime
+    // (create_body/destroy_body per tile-crossing would allocate a brand
+    // new Jolt shape every time, which PLAN.md D8's "no allocation inside
+    // jobs" forbids on a path the 240 Hz tick can reach - see
+    // JoltRigidBackend's implementation for how this instead reuses the
+    // backend's own preallocated TempAllocator arena). `heights` and
+    // `cell_surface_ids` must match the sample_count the body's shape was
+    // originally created with (HeightfieldShape::sample_count) exactly -
+    // this call changes CONTENT only, never resolution or position;
+    // reposition the tile with set_pose (same call every caller already
+    // needs for a moved/reused body) and change resolution by
+    // destroy_body+create_body instead (an infrequent, off-hot-path
+    // operation - e.g. a config change, never a tile-streaming event).
+    // `cell_surface_ids` may be empty to mean kInvalidSurfaceId everywhere,
+    // same convention as HeightfieldShape itself. Must only be called for a
+    // body created with a HeightfieldShape; behaviour is otherwise
+    // undefined.
+    virtual void update_heightfield_body(BodyId id, const std::vector<real>& heights, const std::vector<SurfaceId>& cell_surface_ids) = 0;
 
     // Queried fresh every call, never cached by a caller (PLAN.md section 6:
     // mass properties come from the body every tick, ready for a future

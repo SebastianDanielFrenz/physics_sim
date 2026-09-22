@@ -15,6 +15,7 @@ add_executable(ps_unit_tests
   test_detmath.cpp
   test_articulation_hinge_guard.cpp
   test_articulation_contact.cpp
+  test_mesh_heightfield_shapes.cpp
 )
 
 target_link_libraries(ps_unit_tests
