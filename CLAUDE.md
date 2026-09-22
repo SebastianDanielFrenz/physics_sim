@@ -141,6 +141,26 @@ never under `/mnt/s`):
 | `linux-asan-ubsan` | Debug + AddressSanitizer + UndefinedBehaviorSanitizer |
 | `linux-tsan` | Debug + ThreadSanitizer |
 
+## Job system (`core/src/jobs/`, PLAN.md D8)
+
+`JobSystem` (`job_system.h`/`.cpp`): one injector queue plus one queue per
+worker, each a fixed-capacity ring buffer (`JobSystem::RingQueue`, private
+nested class) sized once at construction (`kQueueCapacity` = 4096) rather
+than a `std::deque` (PHYS-009 Step 3: a `std::deque<JobEntry>` allocated a
+new internal node on Linux/libstdc++ every time a worker's own queue's
+`push_back` crossed a block boundary a thief's `pop_front` had just
+vacated - reproducible with a no-op nested `parallel_for` alone, Windows
+unaffected). `submit()`'s `push_back` returns `false` on a full queue,
+which calls `JobSystem::fail_queue_full()` (prints to stderr, then
+`std::abort()` - unconditional, not gated by `NDEBUG`) instead of ever
+falling back to heap allocation. `deques_` is
+`std::vector<std::unique_ptr<WorkerQueue>>` (`WorkerQueue` holds a
+`std::mutex`, so it cannot live directly in a plain growable `std::vector`).
+`debug_alloc.cpp` additionally supports an opt-in backtrace dump on Linux
+(`PS_DEBUG_ALLOC_BACKTRACE=<n>` env var, `execinfo.h`) for the first `n`
+violations - a root-cause diagnostic, not part of `debug_alloc.h`'s public
+contract.
+
 ## World tick pipeline (`ps::World::step`, `core/src/world/world.cpp`)
 
 Built once (constructor) as a `jobs::TaskGraph` of barrier stages, re-run
@@ -219,15 +239,23 @@ P1.5b).
   construction - PHYS-009 Step 1) holds every `aba()` call's n-sized
   scratch, including a reusable `AbaInput` (`ain`), so the open-chain
   hot path (`Instance::step_tick` via `*_into` helpers) allocates nothing;
-  a loop-closure-bearing instance (e.g. a four-bar linkage) still allocates
-  in `loop_closure.cpp`'s constraint solve (`ClosureLinearAlgebra`),
-  unchanged by either pass.
+  a loop-closure-bearing instance (e.g. a four-bar linkage) also allocates
+  nothing as of PHYS-009 Step 3 (see `loop_closure.h` below).
 - `loop_closure.h`/`.cpp` - closed-loop constraints (ch. 8):
   acceleration-level Lagrange-multiplier solve via the Schur complement,
   reusing ABA as the `M^-1` operator, plus mass-weighted position/velocity
   drift-stabilisation projection (run every substep). Only
   `LoopClosureType::Point` is implemented; `Hinge` is parsed but not yet
-  given its axis-alignment rows.
+  given its axis-alignment rows. `ClosureLinearAlgebra` (J/minv_jrow/A,
+  flattened row-major) and every other workspace buffer this file's solve
+  needs live in `LoopClosureScratch`, owned per-`Instance`
+  (`Instance::loop_closure_scratch_`) and preallocated at construction
+  (`LoopClosureScratch::ensure`, PHYS-009 Step 3) - `solve_constrained_dynamics_into`/
+  `project_velocity_onto_constraints`/`project_position_onto_constraints`
+  take it by pointer/reference; passing `nullptr` (their default) falls
+  back to a fresh stack-local scratch for non-hot-path callers (the
+  `AbaOutput`-returning `solve_constrained_dynamics` compatibility
+  wrapper, and the white-box tests that call these functions directly).
 - `instance.h`/`.cpp` - one runtime articulation: state, direct/actuator
   joint forces, external-wrench accumulation, and the integrator. Default
   integrator is classical RK4 in joint coordinates (chosen by measurement
@@ -258,7 +286,16 @@ from each `JointDesc`'s body-local inputs at creation time; `body_b`
 invalid -> `JPH::Body::sFixedToWorld`). Every body's Jolt `UserData` field
 carries a packed `ps::BodyId` (index low 32 bits, generation high 32 bits)
 so ray/shape-cast and contact-listener results translate back to our own
-id in O(1). `ensure_jolt_registered()` installs `JPH::Trace`/`AssertFailed`
+id in O(1). `IRigidBackend::live_body_ids_into`/`drain_contact_events_into`
+(hot-path: write into a caller-owned, already-sized `out` - `World` reuses
+`live_body_ids_scratch_`/`last_contact_events_` every tick) back the
+by-value `live_body_ids()`/`drain_contact_events()` convenience wrappers
+(non-hot-path callers only, both now non-virtual base-class methods).
+`BackendContactListener::drain_into` copies `pending_` into `out` and then
+`clear()`s `pending_` in place (PHYS-009 Step 3: the previous `drain()`
+`swap()`'d `pending_`'s buffer away every tick, so the very next
+`OnContactAdded`/`OnContactPersisted` reallocated). `ensure_jolt_registered()`
+installs `JPH::Trace`/`AssertFailed`
 callbacks that print to stderr (Jolt's own defaults are silent and just
 trigger a bare breakpoint). Broadphase/contact-constraint capacity and the
 `TempAllocatorImpl` arena size scale with `max_bodies` rather than a fixed
