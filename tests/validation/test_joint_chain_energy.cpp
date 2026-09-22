@@ -2,8 +2,9 @@
 // (PLAN.md P1 acceptance).
 //
 // A 3-link chain of capsules, connected by frictionless hinges (the first
-// pivoted to the world), released from a horizontal start so it swings
-// with large-amplitude, energetic motion. Mechanical energy
+// pivoted to the world), released from a small angle (5 deg) from the
+// hanging-straight-down equilibrium - see the "released from a SMALL angle"
+// comment below for why, not a large-amplitude swing. Mechanical energy
 // E = sum_i [ 0.5*m*|v_com|^2 + 0.5*w.(I_world*w) + m*g*z ]
 // is measured at the start and after 60 s at 240 Hz; a symplectic
 // integrator (see test_free_fall.cpp's header comment on Jolt's
