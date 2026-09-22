@@ -10,6 +10,7 @@ add_executable(ps_unit_tests
   test_articulation_core.cpp
   test_articulation_four_bar.cpp
   test_articulation_parallel_alloc.cpp
+  test_aba_fast_transform.cpp
   test_scenario_articulation.cpp
   test_detmath.cpp
   test_articulation_hinge_guard.cpp

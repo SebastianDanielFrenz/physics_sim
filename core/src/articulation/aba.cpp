@@ -78,20 +78,108 @@ Mat6 Mat6::from_linear_map(const SpatialTransform& x, bool force_map) {
     return out;
 }
 
-namespace {
+Mat6Blocks blocks_of(const Mat6& m) {
+    Mat6Blocks out;
+    out.a = Mat3{
+        Vec3{m.m[0][0], m.m[0][1], m.m[0][2]},
+        Vec3{m.m[1][0], m.m[1][1], m.m[1][2]},
+        Vec3{m.m[2][0], m.m[2][1], m.m[2][2]},
+    };
+    out.b = Mat3{
+        Vec3{m.m[0][3], m.m[0][4], m.m[0][5]},
+        Vec3{m.m[1][3], m.m[1][4], m.m[1][5]},
+        Vec3{m.m[2][3], m.m[2][4], m.m[2][5]},
+    };
+    out.d = Mat3{
+        Vec3{m.m[3][3], m.m[3][4], m.m[3][5]},
+        Vec3{m.m[4][3], m.m[4][4], m.m[4][5]},
+        Vec3{m.m[5][3], m.m[5][4], m.m[5][5]},
+    };
+    return out;
+}
 
-// Transforms a child-frame Mat6 "inertia-like" operator up into the
-// parent's frame, given Xup (parent -> child, motion sense): M_A = Xf(A<-B) * M_B * Xm(A->B),
+Mat6 mat6_from_blocks(const Mat6Blocks& blocks) {
+    Mat6 out;
+    const Mat3 bt = blocks.b.transposed();
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            out.m[r][c] = blocks.a(r, c);
+            out.m[r][c + 3] = blocks.b(r, c);
+            out.m[r + 3][c] = bt(r, c);
+            out.m[r + 3][c + 3] = blocks.d(r, c);
+        }
+    }
+    return out;
+}
+
+// Reference implementation (PHYS-009 Step 2 rule 3): transforms a
+// child-frame Mat6 "inertia-like" operator up into the parent's frame,
+// given Xup (parent -> child, motion sense): M_A = Xf(A<-B) * M_B * Xm(A->B),
 // where Xf(A<-B) is the force map of Xup's inverse (child->parent) and
 // Xm(A->B) is Xup's own motion map (parent->child) - see aba.h's file
-// comment / model.h for the underlying Xup convention.
-Mat6 transform_inertia_to_parent(const SpatialTransform& xup, const Mat6& child) {
+// comment / model.h for the underlying Xup convention. Kept byte-identical
+// to what this file shipped before PHYS-009 Step 2, as a test-only
+// reference (tests/unit/test_aba_fast_transform.cpp) for
+// transform_inertia_to_parent_fast below - never called from aba_into's
+// own hot path any more (two dense 6x6 builds plus two dense 6x6*6x6
+// multiplies, profiled at ~70% of a whole aba() call, PHYS-009's
+// motivation for the fast version).
+Mat6 transform_inertia_to_parent_reference(const SpatialTransform& xup, const Mat6& child) {
     const Mat6 f_child_to_parent = Mat6::from_linear_map(xup.inverse(), /*force_map=*/true);
     const Mat6 m_parent_to_child = Mat6::from_linear_map(xup, /*force_map=*/false);
     return f_child_to_parent * child * m_parent_to_child;
 }
 
-} // namespace
+// Fast implementation (PHYS-009 Step 2): the SAME congruence, computed
+// directly from Xup's own (E, r) block structure instead of two dense 6x6
+// builds and multiplies.
+//
+// Derivation. Write Xup's motion map (parent->child) in block form, from
+// SpatialTransform::apply_motion's own formula (w_b = E*w_a; v_b = E*v_a -
+// E*rx*w_a, where E = xup.rot, r = xup.r, rx = skew(r)):
+//   Xm = [ E      0 ]
+//        [ -E*rx  E ]
+// The dense reference above computes Xf(A<-B) - the force map of
+// Xup.inverse() = {E^T, -E*r} (SpatialTransform::inverse) - which, expanded
+// the same way and simplified with the standard rotation identity
+// skew(E*v) = E*skew(v)*E^T, works out to exactly Xm^T:
+//   Xf(A<-B) = [ E^T    rx*E^T ]  =  Xm^T
+//              [ 0      E^T    ]
+// (this is the general fact that a Plucker force map is always its motion
+// map's inverse-transpose, Xforce = Xmotion^-T - so the "inverse-then-
+// force-map" the reference takes is just a roundabout way to reach Xm^T).
+// So the whole operation is the ordinary symmetric congruence transform
+//   M_parent = Xm^T * M_child * Xm.
+// Writing M_child in blocks [[A,B],[B^T,D]] (A, D symmetric - true for
+// every IA this recursion ever produces) and multiplying out M_child*Xm
+// then Xm^T*(...) in block form (each block product is a 3x3 Mat3
+// operation, not a dense 6x6 one) gives, with Arot=E^T*A*E, Brot=E^T*B*E,
+// Drot=E^T*D*E (three ordinary 3x3 congruences) and rx=skew(r):
+//   A' = Arot - Brot*rx + rx*Brot^T - rx*Drot*rx
+//   B' = Brot + rx*Drot
+//   D' = Drot
+// (D' symmetric since Drot is; A' symmetric by construction - verified
+// independently by the fast-vs-reference cross-check test, not just by
+// this derivation). About a third of the reference's multiply-add count:
+// 3 congruences (2 Mat3*Mat3 each) plus 4 more Mat3*Mat3 products for the
+// rx terms, vs. the reference's 24 SpatialTransform::apply_* calls (each
+// several cross products) to build two dense Mat6 plus two dense 6x6*6x6
+// multiplies (216 multiply-adds each).
+Mat6 transform_inertia_to_parent_fast(const SpatialTransform& xup, const Mat6& child) {
+    const Mat6Blocks m = blocks_of(child);
+    const Mat3 Et = xup.rot.transposed();
+    const Mat3 rx = skew(xup.r);
+
+    const Mat3 Arot = Et * m.a * xup.rot;
+    const Mat3 Brot = Et * m.b * xup.rot;
+    const Mat3 Drot = Et * m.d * xup.rot;
+
+    Mat6Blocks out;
+    out.d = Drot;
+    out.b = Brot + rx * Drot;
+    out.a = Arot - Brot * rx + rx * Brot.transposed() - rx * Drot * rx;
+    return mat6_from_blocks(out);
+}
 
 AbaOutput aba(const AbaInput& in, AbaScratch* scratch_in) {
     // See aba.h's AbaScratch comment: hot-path callers (Instance) always
@@ -107,6 +195,26 @@ AbaOutput aba(const AbaInput& in, AbaScratch* scratch_in) {
 }
 
 void aba_into(const AbaInput& in, AbaScratch& sc, std::vector<real>& qdd_out) {
+    aba_core(in, sc, qdd_out, /*use_fast_transform=*/true);
+}
+
+AbaOutput aba_reference(const AbaInput& in, AbaScratch* scratch_in) {
+    // PHYS-009 Step 2 rule 3: identical to aba() above, except pass 2 uses
+    // transform_inertia_to_parent_reference instead of _fast - a test-only
+    // entry point (tests/unit/test_aba_fast_transform.cpp) for cross-
+    // checking a full ABA run, not just the isolated transform function,
+    // fast vs. reference on random trees.
+    AbaScratch local;
+    AbaScratch& sc = scratch_in ? *scratch_in : local;
+    AbaOutput out;
+    aba_core(in, sc, out.qdd, /*use_fast_transform=*/false);
+    return out;
+}
+
+void aba_core(const AbaInput& in, AbaScratch& sc, std::vector<real>& qdd_out, bool use_fast_transform) {
+    Mat6 (*const transform)(const SpatialTransform&, const Mat6&) =
+        use_fast_transform ? transform_inertia_to_parent_fast : transform_inertia_to_parent_reference;
+
     const Model& m = *in.model;
     const ArticulationState& st = *in.state;
     const std::size_t n = m.bodies.size();
@@ -187,13 +295,13 @@ void aba_into(const AbaInput& in, AbaScratch& sc, std::vector<real>& qdd_out) {
             const SpatialVector pa = pA[idx] + Ia.apply(c[idx]) + u_term;
 
             if (b.parent >= 0) {
-                IA[static_cast<std::size_t>(b.parent)] = IA[static_cast<std::size_t>(b.parent)] + transform_inertia_to_parent(xup[idx], Ia);
+                IA[static_cast<std::size_t>(b.parent)] = IA[static_cast<std::size_t>(b.parent)] + transform(xup[idx], Ia);
                 pA[static_cast<std::size_t>(b.parent)] += xup[idx].apply_force_inverse(pa);
             }
         } else {
             // Fixed (0-DoF) joint: nothing to reduce, fold straight up.
             if (b.parent >= 0) {
-                IA[static_cast<std::size_t>(b.parent)] = IA[static_cast<std::size_t>(b.parent)] + transform_inertia_to_parent(xup[idx], IA[idx]);
+                IA[static_cast<std::size_t>(b.parent)] = IA[static_cast<std::size_t>(b.parent)] + transform(xup[idx], IA[idx]);
                 pA[static_cast<std::size_t>(b.parent)] += xup[idx].apply_force_inverse(pA[idx]);
             }
         }

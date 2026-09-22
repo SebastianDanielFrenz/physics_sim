@@ -143,6 +143,45 @@ struct AbaScratch {
     }
 };
 
+// The three 3x3 blocks of a Mat6 in the [angular;linear] (top;bottom)
+// convention this file uses throughout - PHYS-009 Step 2. A symmetric
+// spatial operator (every IA this recursion ever produces, ch. 7) has
+// bottom-left == top-right transposed, so it is fully described by these
+// three blocks; a and d are themselves symmetric (a rigid-body/articulated-
+// body inertia's angular and linear blocks are always symmetric), b need
+// not be.
+struct Mat6Blocks {
+    Mat3 a; // top-left (angular-angular)
+    Mat3 b; // top-right (angular-linear)
+    Mat3 d; // bottom-right (linear-linear)
+};
+[[nodiscard]] Mat6Blocks blocks_of(const Mat6& m);
+[[nodiscard]] Mat6 mat6_from_blocks(const Mat6Blocks& blocks);
+
+// Pass 2's per-body inertia congruence transform up into the parent (see
+// aba.h's top file comment) - two implementations, both public so
+// tests/unit/test_aba_fast_transform.cpp (PHYS-009 Step 2 rule 3: "keep
+// the old dense implementation as a test-only reference, add a test
+// comparing the fast ABA against it ... to 1e-12 relative on random
+// trees") can cross-check them directly on synthetic (xup, child) pairs,
+// not just indirectly through a full aba() call.
+//  - _reference: the original dense-Mat6 implementation (two full 6x6
+//    linear-map expansions, two 6x6*6x6 multiplies) - kept byte-identical
+//    to what shipped before this pass, never called from aba()'s own hot
+//    path any more.
+//  - _fast (used by aba_into): the SAME congruence M_parent = Xm^T * M_child * Xm
+//    (see aba.cpp's derivation comment for why the dense implementation's
+//    "force map of Xup.inverse()" is algebraically Xm^T, i.e. Featherstone's
+//    ordinary congruence-transform form), computed directly from Xm's own
+//    block structure [[E,0],[-E*rx,E]] via Mat3 operations instead of
+//    building two dense 6x6 matrices and doing two dense 6x6*6x6 multiplies.
+//    Bit-for-bit DIFFERENT from _reference (different floating-point
+//    operation order - the block form does a different sequence of
+//    multiply-adds than a generic dense multiply), but equal to it within
+//    ordinary rounding error (the cross-check test's 1e-12 relative bound).
+[[nodiscard]] Mat6 transform_inertia_to_parent_reference(const spatial::SpatialTransform& xup, const Mat6& child);
+[[nodiscard]] Mat6 transform_inertia_to_parent_fast(const spatial::SpatialTransform& xup, const Mat6& child);
+
 [[nodiscard]] AbaOutput aba(const AbaInput& in, AbaScratch* scratch = nullptr);
 
 // Same computation, writing into a caller-owned qdd_out instead of
@@ -156,5 +195,17 @@ struct AbaScratch {
 // see instance.h) see it stay at a stable capacity, so this resize is a
 // no-op after the first call, exactly like AbaScratch::ensure.
 void aba_into(const AbaInput& in, AbaScratch& scratch, std::vector<real>& qdd_out);
+
+// Test-only (PHYS-009 Step 2 rule 3): identical computation to aba(), but
+// pass 2 uses transform_inertia_to_parent_reference instead of the
+// production _fast version - lets tests/unit/test_aba_fast_transform.cpp
+// cross-check a full ABA run, fast vs. reference, on random trees (not just
+// the isolated transform function in isolation).
+[[nodiscard]] AbaOutput aba_reference(const AbaInput& in, AbaScratch* scratch = nullptr);
+
+// Shared implementation aba()/aba_into()/aba_reference() all forward to;
+// exposed only so the two callers above stay trivial wrappers. Not intended
+// to be called directly.
+void aba_core(const AbaInput& in, AbaScratch& scratch, std::vector<real>& qdd_out, bool use_fast_transform);
 
 } // namespace ps::articulation
