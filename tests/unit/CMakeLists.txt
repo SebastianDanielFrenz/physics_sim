@@ -26,6 +26,13 @@ target_link_libraries(ps_unit_tests
 # addition to the public core/include ps_core already exposes.
 target_include_directories(ps_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src)
 
+# test_scenario_articulation.cpp needs the repo root as an absolute path
+# baked in at configure time (see that file's own comment): the WSL/Linux
+# presets build outside the source tree entirely (~/build/physics_sim),
+# so no relative/CWD-based lookup of data/scenarios/articulation_chain.json
+# can work on every preset.
+target_compile_definitions(ps_unit_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(ps_unit_tests)

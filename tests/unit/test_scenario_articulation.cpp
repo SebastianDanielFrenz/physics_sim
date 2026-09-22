@@ -16,18 +16,22 @@
 
 using namespace ps;
 
+#ifndef PS_SOURCE_DIR
+#error "PS_SOURCE_DIR must be defined by CMake (tests/unit/CMakeLists.txt)"
+#endif
+
 TEST_CASE("data/scenarios/articulation_chain.json loads, builds and steps", "[unit][io][articulation]") {
-    // Resolve relative to this test binary's usual CTest working directory
-    // (the build tree) up to the repo root - CTest runs each executable
-    // with the build directory as CWD, so walk up looking for data/scenarios.
-    std::filesystem::path p = std::filesystem::current_path();
-    std::filesystem::path found;
-    for (int i = 0; i < 8 && found.empty(); ++i) {
-        const auto candidate = p / "data" / "scenarios" / "articulation_chain.json";
-        if (std::filesystem::exists(candidate)) found = candidate;
-        p = p.parent_path();
-    }
-    REQUIRE_FALSE(found.empty());
+    // PS_SOURCE_DIR (tests/unit/CMakeLists.txt, a compile definition) is
+    // the repo root as an absolute path baked in at configure time -
+    // walking up from the CTest working directory does NOT work here: the
+    // WSL/Linux presets build under ~/build/physics_sim (PLAN.md section
+    // 2, deliberately outside /mnt/s for speed), a wholly separate
+    // directory tree from the source checkout, so no number of ".." steps
+    // from the build tree ever reaches data/scenarios on those legs -
+    // found by actually running the Linux CI legs (they failed with this
+    // test unable to find the file), not by inspection.
+    const std::filesystem::path found = std::filesystem::path(PS_SOURCE_DIR) / "data" / "scenarios" / "articulation_chain.json";
+    REQUIRE(std::filesystem::exists(found));
 
     const io::Scenario scenario = io::load_scenario(found.string());
     REQUIRE(scenario.articulations.size() == 1);
