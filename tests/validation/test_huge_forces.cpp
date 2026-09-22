@@ -110,8 +110,6 @@ TEST_CASE("A 1500 kg box under huge forces does not tunnel, over-penetrate or ga
         return std::max(0.0, box_face_x - wall_inner_x);
     };
 
-    const double dt = world.dt();
-
     // --- Phase 1: settle under gravity alone. ---
     for (int i = 0; i < 480; ++i) world.step();
     REQUIRE(ground_penetration_m() < 0.01);
