@@ -725,9 +725,14 @@ internal-implementation seam. No Jolt type appears in any public header.
   (`ps::io::load_vehicle_json`) - negative is anti-Ackermann (outer wheel
   gets the larger-magnitude angle instead of the inner); see
   `vehicle_desc.h`'s `SteeringDesc::ackermann_fraction` comment and vault
-  PHYS-031 for the measured effect (car_sedan.json's Pacejka tyre
-  parameters: anti-Ackermann REDUCES, not increases, measured lateral g
-  at this vehicle's validated skidpad operating point).
+  PHYS-031 for the measured effect: a closed-loop (radius-holding,
+  quasi-steady speed ramp) skidpad limit test shows car_sedan.json is
+  REAR-limited at its cornering limit (front tyres still below their own
+  peak slip angle when the rear axle already exceeds it), so no front
+  steering geometry - Ackermann, parallel or anti-Ackermann - moves this
+  vehicle's true grip limit; a fixed-large-steer sweep (the first attempt)
+  falsely showed anti-Ackermann "reducing" grip only because it measured
+  every wheel well past peak slip angle (scrubbing), not a limit condition.
   Brake/drive torque are computed once per tick (not per substep) from
   each wheel's spin speed at tick start.
 - `system.h`/`.cpp` (`System`) - owns every `World` vehicle instance;
