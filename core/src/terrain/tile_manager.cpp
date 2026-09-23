@@ -5,6 +5,45 @@
 
 namespace ps::terrain {
 
+namespace {
+// A pool slot's Jolt HeightFieldShape is created ONCE (this constructor)
+// and its samples are mutated in place forever after via
+// IRigidBackend::update_heightfield_body (JPH::HeightFieldShape::
+// SetHeights) - never recreated. JoltPhysics's own HeightFieldShapeSettings
+// ::Create() bakes in a FIXED 16-bit quantization scale/offset derived from
+// the height data's min/max range AT CONSTRUCTION TIME (see
+// HeightFieldShapeSettings::DetermineMinAndMaxSample,
+// Jolt/Physics/Collision/Shape/HeightFieldShape.cpp) - SetHeights later
+// only rewrites the quantized SAMPLES using that already-fixed scale, it
+// does not re-derive it. A perfectly flat (all-equal-height) placeholder
+// therefore bakes in a DEGENERATE range: Jolt's own DetermineMinAndMaxSample
+// falls back to a 1e-6 epsilon height difference to avoid dividing by zero,
+// producing a quantization scale about 1e5 times finer than intended. Any
+// REAL terrain height set afterward via SetHeights (even an ordinary few
+// metres) then divides by that near-zero scale and overflows `int` on the
+// unclamped cast at HeightFieldShape.cpp's per-block min/max update - UB,
+// caught by UBSan (linux-asan-ubsan) as "outside the range of representable
+// values of type 'int'"; in a non-sanitized build this silently produces
+// garbage-but-clamped collision geometry instead of a crash, so this is a
+// real correctness bug, not merely a sanitizer nuisance.
+//
+// Fix: seed the placeholder with two sentinel corner heights spanning a
+// generous, fixed envelope (kPlaceholderHeightRangeM below) instead of a
+// literal flat 0, so Jolt's construction-time quantization is fitted to a
+// SANE, non-degenerate range from the start - one that then stays valid for
+// any real tile content this slot is ever assigned over its lifetime (see
+// this file's header comment on the zero-alloc/no-shape-rebuild design).
+// +-200 m is comfortably wider than any single tile's local relief this
+// project's terrain sources produce (data/tracks/test_ground's real spec's
+// steepest area varies by roughly 14 m over its ENTIRE ~13 km extent, not
+// per 256 m tile); the resulting quantization step is
+// 400 m / 65535 =~ 6 mm, well under every existing resting-contact
+// acceptance test's <1 cm penetration bound. If a future terrain source
+// ever needs more local relief than this within one tile, this constant is
+// the one place to revisit.
+constexpr real kPlaceholderHeightRangeM = 200.0;
+} // namespace
+
 TileManager::TileManager(std::shared_ptr<const ITerrainSource> source, const TerrainConfig& config, IRigidBackend& backend)
     : source_(std::move(source)), config_(config), backend_(backend) {
     const std::uint32_t n = source_->samples_per_tile();
@@ -22,7 +61,15 @@ TileManager::TileManager(std::shared_ptr<const ITerrainSource> source, const Ter
         hf.origin = Vec3::zero(); // repositioned per tile via backend_.set_pose, never via the shape's own origin
         hf.sample_spacing = spacing;
         hf.sample_count = n;
+        // Non-degenerate placeholder range (see the namespace-scope comment
+        // above) - not the real content, which every slot gets via
+        // update_heightfield_body before it is ever positioned somewhere a
+        // body could reach it (World::stage_terrain_tiles runs before any
+        // dynamic body's first tick can matter, and a never-assigned slot
+        // sits inert at the origin exactly as it always has).
         hf.heights.assign(static_cast<std::size_t>(n) * n, 0.0);
+        hf.heights.front() = -kPlaceholderHeightRangeM;
+        hf.heights.back() = kPlaceholderHeightRangeM;
         hf.cell_surface_ids.assign(static_cast<std::size_t>(n - 1) * (n - 1), kInvalidSurfaceId);
 
         BodyDesc desc;
