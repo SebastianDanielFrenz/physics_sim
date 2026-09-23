@@ -566,11 +566,21 @@ specified in a GUI (the GUI is not built yet). The engine is therefore
 defined by data, editable at runtime, with no GUI dependency in core:
 cylinder count (and possibly chamber shape), fuel type, bore and stroke per
 cylinder, ignition-timing strategies, turbo- and supercharging, ambient
-density (altitude, from the P5 atmosphere), rotary (Wankel) engines, and an
-open-ended list beyond that — so the model must be extensible. The same
+density (altitude, from the P5 atmosphere), rotary (Wankel) engines,
+hydrogen combustion (added 2026-09-23), and an open-ended list beyond that — so the model must be extensible. The same
 model must deliver both power (torque at the crank) and sound. engine-sim
 (github.com/ange-yaghi/engine-sim) is being assessed as a reference, sound
 source or code donor; the choice is recorded here and in the vault once made.
+
+Electric drive requirement (Sebastian, 2026-09-23): a parallel system for
+electric drives — battery electric, fuel cell, and other sources — alongside
+the combustion engine, equally data-defined. Consequence for the design: the
+drivetrain must not assume a combustion engine. Engines, electric machines,
+energy stores (fuel tank, hydrogen tank, battery) and converters (fuel cell,
+inverter) attach to shafts and energy buses through common interfaces, so
+series and parallel hybrids fall out of composition rather than special
+cases. The component set and interfaces are designed before either power
+source is implemented.
 
 Accept: 0–100 km/h and top speed within 3 % of a
 point-mass calculation from the torque curve, gearing, drag; clutch lock-up
