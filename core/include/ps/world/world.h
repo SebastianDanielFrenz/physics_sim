@@ -11,6 +11,8 @@
 #include "ps/io/telemetry.h"
 #include "ps/jobs/job_system.h"
 #include "ps/jobs/task_graph.h"
+#include "ps/terrain/terrain_config.h"
+#include "ps/terrain/terrain_source.h"
 #include "ps/world/force_element.h"
 #include "ps/world/ids.h"
 #include "ps/world/snapshot.h"
@@ -18,6 +20,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 // Forward-declared only: the articulation runtime (PLAN.md D10/P1.5a) is
@@ -25,6 +29,10 @@
 // header - World owns it through this incomplete-type pointer exactly the
 // way it owns IRigidBackend's Jolt implementation (PLAN.md D2's seam).
 namespace ps::articulation { class System; class ContactCoupling; } // ContactCoupling: PLAN.md P1.5b, core/src/articulation/contact.h
+// Forward-declared only: PLAN.md M1's tile system (core/src/terrain/tile_manager.h)
+// is internal for the same reason - World owns it via this incomplete-type
+// pointer, same pattern as articulation::System above.
+namespace ps::terrain { class TileManager; }
 
 namespace ps {
 
@@ -99,6 +107,30 @@ public:
     [[nodiscard]] Pose root_pose(ArticulationId id) const { return link_frame(id, -1).world_pose(*backend_); }
     [[nodiscard]] Motion root_motion(ArticulationId id) const { return link_frame(id, -1).world_motion(*backend_); }
 
+    // PLAN.md M1/section 6: the terrain-tile system. Installing a source
+    // (re)creates the tile pool per `config`; may only be called once per
+    // World (not a hot-path operation - setup time, like create_body).
+    // Interest points (one per vehicle/camera) drive which tiles stream in;
+    // radius_m is in metres. Wired into the "terrain_tiles" pipeline stage
+    // (World::stage_terrain_tiles) - a no-op tick if no source was set,
+    // exactly as before this feature existed.
+    void set_terrain_source(std::shared_ptr<const terrain::ITerrainSource> source, const terrain::TerrainConfig& config = {});
+    void set_terrain_interest_point(std::uint64_t id, const Vec3& world_xy, real stream_radius_m);
+    void remove_terrain_interest_point(std::uint64_t id);
+    [[nodiscard]] std::size_t terrain_resident_tile_count() const;
+    [[nodiscard]] std::size_t terrain_starved_tile_count() const;
+
+    // PLAN.md P2 adapter report / this task's step 3: named control
+    // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can
+    // reach vehicle code (P3+) without any Godot (or other front-end) type
+    // crossing into the core. A plain seam today - nothing in P1/M1 reads
+    // these yet; a future drivetrain/vehicle force element does.
+    void set_control(const std::string& channel, real value) { control_channels_[channel] = value; }
+    [[nodiscard]] real get_control(const std::string& channel) const {
+        const auto it = control_channels_.find(channel);
+        return it == control_channels_.end() ? real(0.0) : it->second;
+    }
+
     // Registration order is the element's fixed evaluation/gather id
     // (PLAN.md D8: deterministic ordered gather). Ownership stays with the
     // caller, who must keep the element alive (and remove it first if it
@@ -144,6 +176,7 @@ private:
     void stage_contact_coupling_pre();  // PLAN.md P1.5b; between solver_seam and backend_step
     void stage_backend_step();
     void stage_contact_coupling_post(); // PLAN.md P1.5b; between backend_step and terrain_tiles
+    void stage_terrain_tiles();         // PLAN.md M1; no-op until set_terrain_source is called
     void stage_snapshot();
 
     WorldConfig config_;
@@ -155,6 +188,8 @@ private:
     std::unique_ptr<IRigidBackend> backend_;
     std::unique_ptr<jobs::TaskGraph> pipeline_;
     std::unique_ptr<articulation::System> articulation_system_; // PLAN.md D10/P1.5a; forward-declared above
+    std::unique_ptr<terrain::TileManager> terrain_manager_;      // PLAN.md M1; forward-declared above; null until set_terrain_source
+    std::unordered_map<std::string, real> control_channels_;     // PLAN.md P2/M1 step 3
     // PLAN.md P1.5b; index i pairs with ArticulationId{i, 1} (articulations
     // are never destroyed, so index == id.index always); nullptr == that
     // articulation's contact_strategy was None. Declared after backend_

@@ -17,6 +17,7 @@ add_executable(ps_unit_tests
   test_articulation_contact.cpp
   test_mesh_heightfield_shapes.cpp
   test_terrain_golden.cpp
+  test_terrain_tile_manager.cpp
 )
 
 target_link_libraries(ps_unit_tests

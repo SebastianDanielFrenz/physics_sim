@@ -2,6 +2,7 @@
 
 #include "../articulation/contact.h" // internal; PLAN.md P1.5b
 #include "../articulation/system.h" // internal; World owns it via the forward-declared pointer (world.h)
+#include "../terrain/tile_manager.h" // internal; World owns it via the forward-declared pointer (world.h); PLAN.md M1
 
 #include <algorithm>
 #include <chrono>
@@ -76,7 +77,7 @@ void World::build_pipeline() {
     // change here and accumulates the resulting wrench for next tick
     // (Compliant is a no-op here, already fully applied above).
     const auto contact_post = pipeline_->add_stage("contact_coupling_post", timed(slot++, [this] { stage_contact_coupling_post(); }), {backend_step});
-    const auto terrain = pipeline_->add_stage("terrain_tiles", timed(slot++, [] {}), {contact_post});
+    const auto terrain = pipeline_->add_stage("terrain_tiles", timed(slot++, [this] { stage_terrain_tiles(); }), {contact_post});
     pipeline_->add_stage("snapshot", timed(slot++, [this] { stage_snapshot(); }), {terrain});
 
     last_stage_ms_.assign(slot, 0.0);
@@ -184,6 +185,11 @@ void World::stage_backend_step() {
     backend_->drain_contact_events_into(last_contact_events_);
 }
 
+void World::stage_terrain_tiles() {
+    if (!terrain_manager_) return; // PLAN.md M1: no-op until set_terrain_source is called
+    terrain_manager_->update(*job_system_);
+}
+
 void World::stage_snapshot() {
     WorldSnapshot& snap = snapshots_->write_slot();
     snap.tick = tick_;
@@ -267,6 +273,26 @@ void World::set_joint_force(ArticulationId id, int link_index, real tau) {
 
 Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) const {
     return articulation_system_->link_frame(id, link_index, local_offset);
+}
+
+void World::set_terrain_source(std::shared_ptr<const terrain::ITerrainSource> source, const terrain::TerrainConfig& config) {
+    terrain_manager_ = std::make_unique<terrain::TileManager>(std::move(source), config, *backend_);
+}
+
+void World::set_terrain_interest_point(std::uint64_t id, const Vec3& world_xy, real stream_radius_m) {
+    if (terrain_manager_) terrain_manager_->set_interest_point(id, world_xy, stream_radius_m);
+}
+
+void World::remove_terrain_interest_point(std::uint64_t id) {
+    if (terrain_manager_) terrain_manager_->remove_interest_point(id);
+}
+
+std::size_t World::terrain_resident_tile_count() const {
+    return terrain_manager_ ? terrain_manager_->resident_tile_count() : 0;
+}
+
+std::size_t World::terrain_starved_tile_count() const {
+    return terrain_manager_ ? terrain_manager_->starved_tile_count() : 0;
 }
 
 } // namespace ps
