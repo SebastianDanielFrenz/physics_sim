@@ -1,0 +1,116 @@
+{
+  "format": "physics_sim.vehicle/1",
+  "name": "tractor",
+  "source": "Geometry (wheelbase 2.80 m, track 1.90 m, front wheel radius 0.8 m, rear wheel radius 1.025 m) matches data/models/tractor/tractor.rig.json. Mass (6000 kg) and a rear-heavy 35/65 front/rear static split are plausible for a mid-size 2WD row-crop tractor per Wong, 'Theory of Ground Vehicles', 5th ed., ch. 1-2 (typical 2WD tractor static splits run roughly 35/65 to 40/60 rear-biased, driven by engine/transmission placement over the rear axle) - not a specific measured machine. PLAN.md 5.1 calls for 'rigid and pendulum axles for tractors' as a distinct suspension model; this file instead approximates a rigid axle with a very stiff, short-travel per-wheel spring within the existing independent-suspension framework (out/handover_p3.md's deferred list) rather than building the separate rigid/pendulum-axle model - a real tractor's front axle often pivots as a unit, which this does not capture. Front wheels reference data/tyres/tractor_front.json, rear data/tyres/tractor_rear.json. Placeholder drive (PLAN.md M1) uses a plausible mid-size diesel torque-curve shape and a single 'road gear' final drive ratio chosen to give a plausible ~55 km/h top road speed - not a specific published engine map or gearbox ratio set.",
+  "wheels": [
+    {
+      "name": "FL",
+      "attachment_local": [1.82, 0.95, -0.5],
+      "wheel_radius": 0.8,
+      "wheel_width": 0.48,
+      "wheel_mass": 80.0,
+      "wheel_inertia": 25.6,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.04,
+        "spring_rate": 515025.0,
+        "damper_bump_rate": 18600.0,
+        "damper_rebound_rate": 24000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../tyres/tractor_front.json",
+      "steered": true,
+      "driven": false,
+      "is_front": true
+    },
+    {
+      "name": "FR",
+      "attachment_local": [1.82, -0.95, -0.5],
+      "wheel_radius": 0.8,
+      "wheel_width": 0.48,
+      "wheel_mass": 80.0,
+      "wheel_inertia": 25.6,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.04,
+        "spring_rate": 515025.0,
+        "damper_bump_rate": 18600.0,
+        "damper_rebound_rate": 24000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../tyres/tractor_front.json",
+      "steered": true,
+      "driven": false,
+      "is_front": true
+    },
+    {
+      "name": "RL",
+      "attachment_local": [-0.98, 0.95, -0.725],
+      "wheel_radius": 1.025,
+      "wheel_width": 0.62,
+      "wheel_mass": 150.0,
+      "wheel_inertia": 78.8,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.04,
+        "spring_rate": 956475.0,
+        "damper_bump_rate": 34500.0,
+        "damper_rebound_rate": 45000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../tyres/tractor_rear.json",
+      "steered": false,
+      "driven": true,
+      "is_front": false
+    },
+    {
+      "name": "RR",
+      "attachment_local": [-0.98, -0.95, -0.725],
+      "wheel_radius": 1.025,
+      "wheel_width": 0.62,
+      "wheel_mass": 150.0,
+      "wheel_inertia": 78.8,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.04,
+        "spring_rate": 956475.0,
+        "damper_bump_rate": 34500.0,
+        "damper_rebound_rate": 45000.0,
+        "bump_stop_rate": 2000000.0,
+        "arb_rate": 0.0
+      },
+      "arb_partner": -1,
+      "tyre": "../tyres/tractor_rear.json",
+      "steered": false,
+      "driven": true,
+      "is_front": false
+    }
+  ],
+  "steering": {
+    "max_wheel_angle": 0.6,
+    "ackermann_fraction": 1.0,
+    "rear_steer_fraction": 0.0,
+    "steer_rate_limit": 0.0
+  },
+  "brakes": {
+    "max_torque_front": 3000.0,
+    "max_torque_rear": 8000.0,
+    "handbrake_rear_fraction": 1.0
+  },
+  "drive": {
+    "torque_curve_nm_vs_rpm": {
+      "x": [900, 1200, 1600, 2000, 2200],
+      "y": [350, 480, 550, 520, 450]
+    },
+    "final_drive_ratio": 15.0,
+    "rev_limit_rpm": 2200,
+    "idle_rpm": 900,
+    "drivetrain_efficiency": 0.85
+  }
+}
