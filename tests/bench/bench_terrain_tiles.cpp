@@ -278,16 +278,35 @@ int main() {
     // costs at most a further few x on top of the debug number; revisit
     // this bound if a CI leg's own margin ever looks tight rather than
     // assuming it will always hold.
+    //
+    // Sanitizer builds (PS_SANITIZER_BUILD=1, set explicitly by the asan /
+    // linux-asan-ubsan / linux-tsan presets - tests/bench/CMakeLists.txt):
+    // the timing bounds below are REPORTED but not asserted. The bench still
+    // runs in full there, because it is the only end-to-end race/memory
+    // coverage of the real test_ground streaming + suppression path.
+    // Instrumented wall-clock numbers do not measure this code's cost:
+    // linux-tsan exceeded both bounds even when run alone, on the pre-fix
+    // commit too. The bounds are deliberately NOT loosened to fit a
+    // sanitizer build.
+#ifndef PS_SANITIZER_BUILD
+#error "PS_SANITIZER_BUILD must be defined to 0 or 1 (see tests/bench/CMakeLists.txt)"
+#endif
+    constexpr bool kAssertTiming = (PS_SANITIZER_BUILD == 0);
+    constexpr double kDriveBoundMs = 250.0;
+    constexpr double kTeleportBoundMs = 12000.0;
     bool ok = true;
-    if (drive.worst_ms > 250.0) {
-        std::fprintf(stderr, "bench_terrain_tiles: phase 2 (drive) worst tick %.4f ms exceeds the 250 ms smoke bound\n", drive.worst_ms);
-        ok = false;
+    if (drive.worst_ms > kDriveBoundMs) {
+        std::fprintf(stderr, "bench_terrain_tiles: phase 2 (drive) worst tick %.4f ms exceeds the %.0f ms smoke bound%s\n", drive.worst_ms,
+                     kDriveBoundMs, kAssertTiming ? "" : " (sanitizer build: reported, not enforced)");
+        ok = ok && !kAssertTiming;
     }
-    if (teleport.worst_ms > 12000.0) {
-        std::fprintf(stderr, "bench_terrain_tiles: phase 1 (teleport) worst tick %.4f ms exceeds the 12000 ms smoke bound\n",
-                      teleport.worst_ms);
-        ok = false;
+    if (teleport.worst_ms > kTeleportBoundMs) {
+        std::fprintf(stderr, "bench_terrain_tiles: phase 1 (teleport) worst tick %.4f ms exceeds the %.0f ms smoke bound%s\n",
+                     teleport.worst_ms, kTeleportBoundMs, kAssertTiming ? "" : " (sanitizer build: reported, not enforced)");
+        ok = ok && !kAssertTiming;
     }
+    std::printf("bench_terrain_tiles: timing bounds %s\n",
+                kAssertTiming ? "ENFORCED (non-sanitizer build)" : "REPORTED ONLY (PS_SANITIZER_BUILD=1)");
     if (drive_starved != 0) {
         std::fprintf(stderr, "bench_terrain_tiles: phase 2 (drive) %zu starved tiles (pool too small for the stream radius)\n",
                       drive_starved);

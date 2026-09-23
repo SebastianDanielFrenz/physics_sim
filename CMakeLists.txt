@@ -90,6 +90,15 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PS_BUILD_TESTS "Build the Catch2 unit test suite" ON)
 option(PS_BUILD_GODOT_ADAPTER "Build the Godot GDExtension adapter (P2)" OFF)
+# Set ON explicitly by every sanitizer preset (asan, linux-asan-ubsan,
+# linux-tsan in CMakePresets.json). Wall-clock benches (tests/bench) still
+# run fully on such a build but report their timing without asserting it.
+option(PS_SANITIZER_BUILD "This build instruments code with a sanitizer (ASan/UBSan/TSan)" OFF)
+if(NOT PS_SANITIZER_BUILD AND CMAKE_CXX_FLAGS MATCHES "-fsanitize=")
+  message(WARNING "CMAKE_CXX_FLAGS contains -fsanitize= but PS_SANITIZER_BUILD is OFF - "
+                  "wall-clock bench bounds will be asserted on an instrumented build. "
+                  "Set PS_SANITIZER_BUILD=ON in the preset.")
+endif()
 
 # CMAKE_MSVC_RUNTIME_LIBRARY is set above, before project() - see the
 # comment there. Repeated here only as a note: every target in the build -

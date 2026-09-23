@@ -71,6 +71,15 @@ target_link_libraries(bench_terrain_tiles
 # tree, so no relative/CWD-based lookup works on every preset).
 target_compile_definitions(bench_terrain_tiles PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# Sanitizer bench policy: on a PS_SANITIZER_BUILD (set explicitly by the
+# asan / linux-asan-ubsan / linux-tsan presets, top-level CMakeLists.txt)
+# this bench still runs in full - real ASan/UBSan/TSan coverage of the
+# streaming + suppression path - but only REPORTS its wall-clock numbers;
+# the tick-time bounds are asserted on every other build. Non-timing
+# checks (no starved tiles) are asserted everywhere. Always defined (0/1)
+# so the source can #error if the definition is ever missing.
+target_compile_definitions(bench_terrain_tiles PRIVATE PS_SANITIZER_BUILD=$<BOOL:${PS_SANITIZER_BUILD}>)
+
 add_test(NAME bench_terrain_tiles COMMAND bench_terrain_tiles)
 
 # Same root cause and same fix as bench_force_elements above: this is a
