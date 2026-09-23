@@ -63,7 +63,23 @@ real VehicleInstance::ackermann_wheel_angle(std::size_t wheel_index, real delta_
     } else {
         const real R = wheelbase_ / tan_avg; // turn centre's lateral offset from the rear-axle line
         const real denom = R - dy;
-        delta_ackermann = std::abs(denom) < real(1e-6) ? delta_avg : ps::math::atan2(dx, denom);
+        // atan(dx / denom), NOT atan2(dx, denom): dx (a front wheel's x
+        // distance ahead of the rear axle) is ALWAYS POSITIVE, and
+        // atan2's result is confined to (0, pi) whenever its first
+        // argument is positive - it can never return a negative wheel
+        // angle, no matter how hard right lock (negative delta_avg, this
+        // project's ISO 8855 convention, +y = left) is applied. That
+        // produced a large POSITIVE (left-pointing) front wheel angle at
+        // full right lock instead of a small negative one, which yawed
+        // the car left, killed forward speed, and eventually drove it
+        // backwards - see tests/unit/test_vehicle_ackermann_symmetry.cpp
+        // and tests/validation/test_vehicle_steer_mirror.cpp for the
+        // regression coverage. atan(dx / denom) is the correct geometric
+        // Ackermann form (delta_i = atan(L / (R - dy))): dx > 0 always,
+        // so the quotient's sign already carries denom's sign and atan is
+        // odd, giving the correct signed small-angle result directly with
+        // no four-quadrant ambiguity to get wrong.
+        delta_ackermann = std::abs(denom) < real(1e-6) ? delta_avg : ps::math::atan(dx / denom);
     }
     const real f = desc_.steering.ackermann_fraction;
     return (real(1.0) - f) * delta_avg + f * delta_ackermann;
