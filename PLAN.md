@@ -582,6 +582,18 @@ series and parallel hybrids fall out of composition rather than special
 cases. The component set and interfaces are designed before either power
 source is implemented.
 
+Driver-assistance requirement (Sebastian, 2026-09-23): optional ABS,
+traction control, ESP/ESC, and an open-ended list beyond that (e.g. launch
+control, torque vectoring, hill hold). Each vehicle opts in per system via its
+data file, and each can be switched on or off at runtime through a control
+channel. Controllers are components like the powertrain's: they read only
+what a real ECU could measure (wheel speeds, yaw rate, accelerations, steering
+angle, pedal inputs) and act only through real actuators (per-wheel brake
+pressure, torque requests to the power sources), never by writing simulation
+state directly. They run inside the deterministic core at a fixed, stated rate.
+This is also where the carried-over braking gap (the real ABS above) and the
+M1 launch wheelspin (traction control) get closed.
+
 Accept: 0–100 km/h and top speed within 3 % of a
 point-mass calculation from the torque curve, gearing, drag; clutch lock-up
 without torque spikes > 5 % above steady value; open vs. locked diff on split-μ
