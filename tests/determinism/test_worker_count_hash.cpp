@@ -9,6 +9,7 @@
 // our own job-scheduled code, not just one of them.
 
 #include "counter_force_element.h"
+#include "ps/io/scenario.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/world.h"
 
@@ -16,6 +17,7 @@
 
 #include <cstdint>
 #include <random>
+#include <string>
 #include <vector>
 
 using namespace ps;
@@ -397,6 +399,31 @@ TEST_CASE("State hash with vehicles is identical across 1, 2, 4, 10 and 24 worke
     const std::uint64_t reference = run_vehicle_scenario(1, kTicks);
     for (int workers : {2, 4, 10, 24}) {
         const std::uint64_t h = run_vehicle_scenario(workers, kTicks);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+// data/scenarios/terrain_multi_interest.json (vault PHYS-026): TWO terrain
+// interest points streaming at once, a static pad that triggers terrain
+// suppression, dynamic balls on the streamed terrain. The same file is in
+// tools/ci.ps1's Windows-vs-Linux hash compare; this covers worker count.
+namespace {
+std::uint64_t run_scenario_file(const char* file, int workers) {
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/" + file);
+    sc.world_config.job_workers = workers;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    for (int i = 0; i < ticks; ++i) built.world->step();
+    return built.world->state_hash();
+}
+} // namespace
+
+TEST_CASE("State hash with two terrain interest points and suppression is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][terrain][heavy]") {
+    const std::uint64_t reference = run_scenario_file("terrain_multi_interest.json", 1);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("terrain_multi_interest.json", workers);
         INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
         REQUIRE(h == reference);
     }

@@ -1,0 +1,56 @@
+{
+  "name": "terrain_multi_interest",
+  "note": "PLAN.md D7 hash-compare/worker-count coverage for the tile system with TWO interest points streaming at once, static geometry that triggers terrain suppression (a static box on terrain_spec_small's height-0 spawn disc), and dynamic bodies on the streamed terrain. Guards the tile-slot assignment order: before the fix, TileManager iterated its interest points in std::unordered_map order, which differs between MSVC and libstdc++, so Windows and Linux assigned tiles to different pool bodies (vault PHYS-026).",
+  "duration_s": 3.0,
+  "tick_rate_hz": 240.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "bodies": [
+    {
+      "name": "pad",
+      "motion": "static",
+      "shape": {"type": "box", "half_extents": [3.0, 3.0, 0.1]},
+      "position": [0, 0, 0],
+      "friction": 0.8
+    },
+    {
+      "name": "ball_across_pad",
+      "motion": "dynamic",
+      "mass": 5.0,
+      "shape": {"type": "sphere", "radius": 0.3},
+      "position": [-6.5, 0.5, 0.6],
+      "linear_velocity": [3.0, 0.0, 0.0],
+      "allow_sleep": false
+    },
+    {
+      "name": "ball_near_origin",
+      "motion": "dynamic",
+      "mass": 2.0,
+      "shape": {"type": "sphere", "radius": 0.3},
+      "position": [7.0, -7.0, 3.0],
+      "linear_velocity": [0.0, 1.5, 0.0],
+      "allow_sleep": false
+    },
+    {
+      "name": "ball_second_area",
+      "motion": "dynamic",
+      "mass": 2.0,
+      "shape": {"type": "sphere", "radius": 0.3},
+      "position": [80.0, 40.0, 12.0],
+      "linear_velocity": [-1.0, 0.5, 0.0],
+      "allow_sleep": false
+    }
+  ],
+  "joints": [],
+  "terrain": {
+    "spec_path": "terrain_spec_small.json",
+    "samples_per_tile": 8,
+    "max_resident_tiles": 64,
+    "max_tile_fills_per_tick": 64,
+    "interest_points": [
+      { "id": 1, "world_xy": [0.0, 0.0], "radius_m": 24.0 },
+      { "id": 2, "world_xy": [80.0, 40.0], "radius_m": 24.0 }
+    ]
+  },
+  "telemetry_csv": "terrain_multi_interest.csv"
+}

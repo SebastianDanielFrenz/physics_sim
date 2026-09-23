@@ -7,6 +7,11 @@ add_executable(ps_determinism_tests
 
 target_include_directories(ps_determinism_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
 
+# The data/scenarios-driven worker-count case (terrain_multi_interest.json)
+# loads its scenario by absolute path, same convention as
+# tests/unit/CMakeLists.txt (Linux presets build outside the source tree).
+target_compile_definitions(ps_determinism_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 target_link_libraries(ps_determinism_tests
   PRIVATE
     ps_core
