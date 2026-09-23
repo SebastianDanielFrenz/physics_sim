@@ -24,13 +24,14 @@ physics_sim/
   core/
     include/ps/                       public API headers (no Jolt or Godot types); target ps_core (STATIC)
       version.h                       ps::version_string(), ps::jolt_backend_self_check()
-      types.h                         ps::real = double; id_index_t/id_generation_t
+      types.h                         ps::real = double; id_index_t/id_generation_t; SurfaceId (uint16_t) + kInvalidSurfaceId
       math/                           vec3.h, quat.h, mat3.h, pose.h (Pose/Motion/Wrench incl. Wrench::operator*(real)), simd.h (f64x4 skeleton)
       jobs/                           job_fn.h (JobFn), job_system.h (JobSystem, WaitGroup, parallel_for/parallel_batches), task_graph.h, debug_alloc.h
-      world/                          ids.h (BodyId/JointId/ForceElementId/ArticulationId), frame.h (Frame, ILinkStateSource, ArticulationLinkRef), force_element.h (IForceElement), snapshot.h (WorldSnapshot, SnapshotTripleBuffer), world.h (World, WorldConfig)
-      backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc, ShapeContactHit, ContactEvent, create_jolt_backend()); shape_desc.h (ShapeDesc/BoxShape/SphereShape/CapsuleShape - split out of i_rigid_backend.h so articulation_desc.h can use ShapeDesc without pulling in the backend's JointType)
+      world/                          ids.h (BodyId/JointId/ForceElementId/ArticulationId), frame.h (Frame, ILinkStateSource, ArticulationLinkRef), force_element.h (IForceElement), snapshot.h (WorldSnapshot incl. ArticulationSnapshot/contacts, SnapshotTripleBuffer), world.h (World, WorldConfig)
+      backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc, ShapeContactHit, ContactEvent, create_jolt_backend()); shape_desc.h (ShapeDesc/BoxShape/SphereShape/CapsuleShape/MeshShape/HeightfieldShape - split out of i_rigid_backend.h so articulation_desc.h can use ShapeDesc without pulling in the backend's JointType)
       articulation/                   articulation_desc.h (ArticulationDesc incl. contact_strategy, RootDesc, LinkDesc incl. contact, JointType, JointLimits, VelocityActuator, LoopClosureDesc/LoopClosureType, ContactStrategy, ContactMaterial, LinkContactDesc) - descriptors only, no algorithm code
-      io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario incl. ScenarioArticulation, load_scenario, build_scenario)
+      terrain/                        terrain_source.h (ITerrainSource, TileKey, TileSample), terrain_config.h (TerrainConfig - pool sizing only, NOT grid resolution, see "Terrain tile system" below), procedural_terrain.h (load_procedural_terrain_source() factory)
+      io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario incl. ScenarioArticulation/ScenarioTerrain, load_scenario, build_scenario), surface_table.h (SurfaceTable), test_ground_loader.h (load_test_ground_collision())
     src/                              implementation
       version.cpp, jolt_proof.cpp
       math/math_check.cpp             compiles every math header once + static_asserts (math/ is otherwise header-only)
@@ -40,20 +41,23 @@ physics_sim/
       world/world.cpp                 World's staged tick pipeline (built as a jobs::TaskGraph)
       backend/jolt/jolt_backend.cpp   the only P1 IRigidBackend implementation; every Jolt type is confined to this file + jolt_job_system.h
       articulation/                   INTERNAL (ps::articulation, not a public header); see "Articulation solver" below, incl. contact.h/.cpp (ContactCoupling) and contact_source.h (IContactSubstepSource)
-      io/telemetry.cpp, io/scenario.cpp
-      vehicle/ drivetrain/ aero/ machine/ terrain/   empty (.gitkeep) until P3+
+      terrain/                        INTERNAL; see "Terrain tile system" below: procedural_terrain_source.h/.cpp (TerrainSpec, ProceduralTerrainSource), procedural_terrain.cpp (factory impl), tile_manager.h/.cpp (TileManager)
+      io/telemetry.cpp, io/scenario.cpp, io/surface_table.cpp, io/test_ground_loader.cpp
+      vehicle/ drivetrain/ aero/ machine/   empty (.gitkeep) until P3+
   tests/
     support/                          test-only shared helpers (not part of ps_core)
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
-    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case)
+    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_world_snapshot (ArticulationSnapshot/contacts additions), test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case), test_mesh_heightfield_shapes (MeshShape/HeightfieldShape collision + surface ids), test_terrain_golden (ProceduralTerrainSource vs. terrain.py's golden points), test_terrain_tile_manager (white-box: seams, streaming, throttling, zero-alloc steady state), test_test_ground_loader (load_test_ground_collision + SurfaceTable)
     validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path), test_articulation_contact_measurements (Compliant/ProxyBody: a fixed-base arm resting on the ground, the same rig pressed with a known force, a rail rig pushing a dynamic crate, a floating-base vehicle drop, 5/20 m/s impacts; two [!mayfail] ProxyBody cases)
     determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario, one case mixes Compliant/ProxyBody contact-bearing rail rigs with plain chains)
-    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target bench_contact_coupling (plain main, also CTest-registered): cost per tick per contact strategy, scaling with contact count; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
+    bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target bench_contact_coupling (plain main, also CTest-registered): cost per tick per contact strategy, scaling with contact count; target bench_terrain_tiles (plain main, also CTest-registered): tile-streaming cost/tick against the real test_ground terrain spec, simulated 50 km drive; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
   data/
     vehicles/ tyres/ aircraft/        empty (.gitkeep) until P3+
-    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json, multi_articulation.json (several open chains of different sizes, a floating base, a four-bar loop closure - Windows/Linux hash-compare and worker-count determinism), contact_articulation.json (one Compliant and one ProxyBody rail rig - same hash-compare/determinism coverage for P1.5b contact coupling)
+    surfaces/surfaces.json            ps::io::SurfaceTable input: name -> {lambda_mu, crr} (shared, deterministic, alphabetically-assigned SurfaceId space)
+    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json, multi_articulation.json (several open chains of different sizes, a floating base, a four-bar loop closure - Windows/Linux hash-compare and worker-count determinism), contact_articulation.json (one Compliant and one ProxyBody rail rig - same hash-compare/determinism coverage for P1.5b contact coupling), terrain_tiles.json + terrain_spec_small.json (a small synthetic ITerrainSource + tile-manager scenario, distinct from data/tracks/test_ground - same hash-compare/worker-count-determinism coverage for the M1 tile system)
     models/                           Godot art assets (glb + rig.json); owned by a separate session, do not touch
+    tracks/test_ground/               owned by a separate session (trackgen), READ-ONLY from ps_core: terrain.json/terrain_golden.json (ProceduralTerrainSource's golden reference), test_ground_collision.json/.bin (ps::io::load_test_ground_collision's input - see "Test-ground static collision" below for the .bin's byte-offset layout)
   adapters/
     godot/                            empty (.gitkeep) until P2; built only when PS_BUILD_GODOT_ADAPTER=ON
 ```
@@ -84,7 +88,7 @@ physics_sim/
   `#include "articulation/..."` directly (internal, not part of `ps_core`'s
   public API) - `test_articulation_core.cpp`, `test_articulation_four_bar.cpp`,
   `test_articulation_four_bar_energy.cpp`, `test_articulation_parallel_alloc.cpp`,
-  `test_aba_fast_transform.cpp`.
+  `test_aba_fast_transform.cpp`, `test_terrain_tile_manager.cpp` (`ps::terrain::TileManager` is internal).
 - `bench_force_elements` (executable, `tests/bench`): plain `main()`
   (not Catch2, so its measured numbers are always on stdout); links
   `ps_core`, `ps_headless_env`. Registered with CTest via `add_test()`.
@@ -93,6 +97,17 @@ physics_sim/
   `add_test()` as a smoke check only (no scaling assertion, unlike
   `bench_force_elements`) - PLAN.md P1.5b measurement (f), cost per tick
   per contact strategy over 1/2/4/8/16 independent contact-bearing rigs.
+- `bench_terrain_tiles` (executable, `tests/bench`): plain `main()`; links
+  `ps_core`, `ps_headless_env`. Registered with CTest via `add_test()` as a
+  smoke check (250 ms/tick bound, deliberately loose - see the file's own
+  comment for measured numbers) against `data/tracks/test_ground/terrain.json`
+  loaded at `PS_SOURCE_DIR`, simulating a 50 km drive by advancing one
+  interest point 250 m/tick for 200 ticks. Like `bench_force_elements`,
+  a wall-clock measurement, so `PROCESSORS 24` (`tests/bench/CMakeLists.txt`)
+  keeps `ctest --parallel`'s scheduler from ever running it alongside
+  another test - contention alone pushed its worst tick well past the
+  bound under `tools/ci.ps1 -Full`'s WSL legs (338-530 ms measured vs.
+  55-90 ms run alone right after).
 - `ps_energy_study` (executable, `tests/bench/energy_study.cpp`): plain
   `main()`; links `ps_core`, `ps_headless_env`. Deliberately NOT
   registered with CTest - a measurement tool (Jolt solver-settings sweep
@@ -110,7 +125,7 @@ physics_sim/
 
 - `PS_BUILD_TESTS` (default `ON`): build `ps_unit_tests`,
   `ps_validation_tests`, `ps_determinism_tests`, `bench_force_elements`,
-  `bench_contact_coupling` and fetch Catch2.
+  `bench_contact_coupling`, `bench_terrain_tiles` and fetch Catch2.
 - `PS_BUILD_GODOT_ADAPTER` (default `OFF`): fetch godot-cpp and build
   `adapters/godot`.
 
@@ -120,7 +135,7 @@ physics_sim/
 |--------------|----------|-------|
 | JoltPhysics  | `v5.6.0` | `DOUBLE_PRECISION ON`, `CROSS_PLATFORM_DETERMINISTIC ON`, `USE_AVX2 ON`, `USE_FMADD OFF`, GPU-compute options OFF, sample/test/viewer targets OFF |
 | Catch2       | `v3.16.0`| only when `PS_BUILD_TESTS=ON` |
-| nlohmann/json| `v3.12.0`| linked `PRIVATE` into `ps_core` (scenario JSON parsing, confined to `core/src/io/scenario.cpp`) |
+| nlohmann/json| `v3.12.0`| linked `PRIVATE` into `ps_core` (JSON parsing, confined to `core/src/io/*.cpp` and `core/src/terrain/procedural_terrain_source.cpp`); also linked into `ps_unit_tests` for `test_terrain_golden.cpp`'s direct golden-file parse |
 | godot-cpp    | branch `4.5` | only when `PS_BUILD_GODOT_ADAPTER=ON` |
 
 ## CMake presets
@@ -184,7 +199,7 @@ freeze_tick_start_state (stub) -> scene_queries (stub) -> vehicle_islands_subste
   -> contact_coupling_pre (PLAN.md P1.5b: ProxyBody pose/velocity-syncs its proxy Jolt bodies; no-op for Compliant/None)
   -> backend_step (IRigidBackend::step, i.e. JoltPhysics PhysicsSystem::Update via the Jolt job-system bridge)
   -> contact_coupling_post (PLAN.md P1.5b: ProxyBody reads back each proxy's post-step velocity change and accumulates the resulting wrench for next tick; no-op for Compliant/None)
-  -> terrain_tiles (stub) -> snapshot (publishes to SnapshotTripleBuffer, records one telemetry row)
+  -> terrain_tiles (PLAN.md M1: TileManager::update, no-op until World::set_terrain_source is called) -> snapshot (publishes to SnapshotTripleBuffer, records one telemetry row)
 ```
 
 `vehicle_islands_substep` (`World::stage_vehicle_islands`) calls
@@ -210,6 +225,17 @@ order) and then `articulation::System::fold_state_hash` (same FNV-1a
 fold, every live articulation's q/qd and, if floating, root pose) -
 PLAN.md D7; a `World` with no articulations hashes bit-identically to
 before this field existed.
+
+`stage_snapshot` additionally fills `WorldSnapshot::articulations` (every
+live articulation's link poses/motions, root first then each public link -
+`ps::articulation::Instance::link_count()`/`System::count()`) and
+`WorldSnapshot::contacts` (a copy of `last_contact_events_` - see "Adapter
+seams" below for why this must be a copy, not a reference, for a
+cross-thread reader). Both reuse each `WorldSnapshot` triple-buffer slot's
+own existing capacity across ticks (`resize()`/`clear()`+`push_back()`,
+never rebuilt from scratch) to stay allocation-free in the job this stage
+runs in (PLAN.md D8) once warmed up - `tests/unit/test_articulation_parallel_alloc.cpp`
+checks this for a full pipeline including articulations/contacts.
 
 ## Articulation solver (`core/src/articulation/`, PLAN.md D10/P1.5a)
 
@@ -336,6 +362,132 @@ ordinary `parallel_for` over everything else - `apply_wrench` must never be
 called concurrently for the same body, which two different `Compliant`
 articulations both touching the same dynamic body could otherwise race on.
 
+## Terrain tile system (`core/src/terrain/`, PLAN.md M1/section 6)
+
+Collision shapes (`ps/backend/shape_desc.h`): `MeshShape` (vertices,
+`uint32` triangle indices, one `SurfaceId` per triangle or empty for
+`kInvalidSurfaceId` everywhere - static geometry only, `JPH::MeshShape::
+MustBeStatic()`) and `HeightfieldShape` (square `sample_count x
+sample_count` grid, `sample_count` must be even - Jolt's own
+`HeightFieldShape` rounds up to a multiple of its block size otherwise -
+row-major `heights`/`cell_surface_ids`, body-local Z-up). Both propagate
+their `SurfaceId`s through every collision query/event
+(`ShapeCastHit`/`ShapeContactHit`/`ContactEvent`'s `surface`/`surface_a`/
+`surface_b` fields, `ps/backend/i_rigid_backend.h`). Jolt-side
+implementation lives in `jolt_backend.cpp` (see "Jolt backend" below for
+the Y-up/Z-up axis fix-up and the shared material list this needs).
+
+`ITerrainSource` (`ps/terrain/terrain_source.h`): `TileKey` (opaque
+`int64_t`, PLAN.md section 6 - never a raw planar index, so a future
+geodetic/cube-sphere source, P11, can reuse the same interface),
+`TileSample` (heights + cell_surface_ids + `samples_per_tile` + tile
+origin), `tile_size_m()`/`samples_per_tile()`/`key_for_world_xy()`/
+`key_offset()`/`tile_origin_xy()`/`fill_tile()`. `samples_per_tile()` is
+fixed for a source's whole lifetime and is the ONLY source of truth for
+grid resolution - `TerrainConfig` (`ps/terrain/terrain_config.h`,
+`TileManager`'s pool-sizing knobs: `max_resident_tiles`,
+`max_tile_fills_per_tick`) deliberately does NOT carry its own resolution
+field, so a manager-side value can never disagree with the source's own
+(found the hard way: an earlier version had both, independently settable,
+and a mismatch overran a tile's sample buffer - see the knowledge vault
+for the write-up).
+
+`ProceduralTerrainSource` (internal, `core/src/terrain/
+procedural_terrain_source.h/.cpp`; public factory `ps::terrain::
+load_procedural_terrain_source(path, samples_per_tile = 64)`,
+`ps/terrain/procedural_terrain.h`): a line-for-line port of
+`tools/trackgen/trackgen/terrain.py` (read-only reference, owned by a
+separate session) - integer-hash value noise, disc/corridor flat zones,
+per-cell surface rules from a `terrain.json` spec. No platform-libm
+transcendental anywhere except two FIXED corridor headings resolved once
+at spec-load time via `ps::math::sincos` (PLAN.md D7).
+`tests/unit/test_terrain_golden.cpp` matches all of
+`data/tracks/test_ground/terrain_golden.json`'s points within 2e-4 m
+(dominated by the golden file's own independent coordinate rounding, not
+a formula tolerance - see that test's header comment).
+
+`TileManager` (internal, `core/src/terrain/tile_manager.h/.cpp`, owned by
+`World` via `terrain_manager_`): a fixed pool of `TerrainConfig::
+max_resident_tiles` heightfield bodies, all created up front
+(constructor, not lazily) so first-touch Jolt allocation never happens
+inside a job. Single fixed resolution, no LOD (PLAN.md explicitly allows
+this - "keep one resolution and say so"); adjacent tiles' shared border
+samples are the literal same world-coordinate evaluation, so
+`test_terrain_tile_manager.cpp`'s seam test checks EXACT equality, not a
+tolerance. `update()` per tick: compute needed keys for every interest
+point -> queue newly-needed keys -> process up to
+`max_tile_fills_per_tick` (bounded per-tick cost; a burst, e.g. a 50 km
+teleport, drains over several ticks) -> `jobs.parallel_batches` fills
+each newly-assigned slot's `TileSample` (allocation-free,
+`ITerrainSource::fill_tile` writes into the slot's own preallocated
+buffers) -> sequential `IRigidBackend::update_heightfield_body` +
+`set_pose` per changed slot. `starved_tile_count()` reports (never
+silently drops) tiles needed but with no free/reusable slot. Slot
+(re)assignment bookkeeping (`unordered_map` insert/erase) is the one
+explicitly-accepted exception to strict zero-alloc, bounded by
+`max_tile_fills_per_tick`/tick; the STEADY STATE (needed-tile-set
+unchanged, the common case while driving) is checked allocation-free.
+
+`World` wiring (additive, `ps/world/world.h`): `set_terrain_source`,
+`set_terrain_interest_point`/`remove_terrain_interest_point`,
+`terrain_resident_tile_count`/`terrain_starved_tile_count`; the
+`terrain_tiles` pipeline stage is a no-op tick until `set_terrain_source`
+is called. `bench_terrain_tiles` (`tests/bench/`) measures real cost
+against `data/tracks/test_ground/terrain.json`: release ~1.35 ms/tick avg
+(worst 1.96 ms) simulating a 50 km drive, well inside the 240 Hz/4.17 ms
+budget.
+
+## Test-ground static collision (`core/src/io/`, PLAN.md M1)
+
+`ps::io::SurfaceTable` (`ps/io/surface_table.h`/`surface_table.cpp`):
+loads a `surfaces.json`-shaped file (`data/surfaces/surfaces.json`: name
+-> `{lambda_mu, crr}`) and assigns each name a `SurfaceId` by
+ALPHABETICAL order (not raw file order - `nlohmann::json`'s default
+object type does not preserve a file's own key order, and PLAN.md D7
+needs this deterministic) - `asphalt=0, dirt=1, field=2, grass=3, kerb=4,
+low_mu=5` for the current file.
+
+`ps::io::load_test_ground_collision` (`ps/io/test_ground_loader.h`/
+`test_ground_loader.cpp`): reads a track directory's
+`test_ground_collision.json` + `.bin` (data-driven - only those two
+filenames are hardcoded, `track_dir` is a parameter) and creates one
+static `MeshShape` body per surface group. The .bin's `vertex_offset`/
+`index_offset` are absolute BYTE offsets into the file (not vertex/index
+counts) - confirmed by cross-checking that each group's positions+indices
+block ends exactly where the next group's `vertex_offset` begins, not
+merely from the JSON's own prose. Assumes a little-endian host (this
+project's only build targets, Windows/WSL, are both x86_64).
+`data/tracks/test_ground`'s own per-surface AABBs are much larger than
+that surface's actual triangles (a real winding track, not a filled
+rectangle) - do not pick test coordinates from the AABB alone; probe with
+`IRigidBackend::shape_cast` first (`tests/unit/test_test_ground_loader.cpp`'s
+header comment records the two points its own tests use and how they were
+found).
+
+## Adapter seams (`ps/world/snapshot.h`, `World::set_control`/`get_control`, PLAN.md P2)
+
+`World::set_control(name, value)`/`get_control(name)`: a `std::string`-keyed
+`real` map (`control_channels_`) - a plain seam, no consumer in core yet
+(a future drivetrain/vehicle force element reads it, P3+).
+
+`WorldSnapshot` (`ps/world/snapshot.h`) additive fields, filled by
+`World::stage_snapshot()`: `articulations` (`std::vector<ArticulationSnapshot>`
+- every live articulation's link poses/motions, root first
+(`link_index == -1`) then each public link in `ArticulationDesc::links`
+order) and `contacts` (`std::vector<ContactEvent>`, a COPY of this tick's
+contact events). Both exist because `World::last_contact_events()` and
+the link-pose accessors (`joint_position`/`link_frame`/...) are safe only
+from the sim's own thread - `WorldSnapshot` travels through
+`SnapshotTripleBuffer::publish`'s existing lock-free hand-off, so a reader
+on another thread (PLAN.md D3: "the adapter runs the sim on its own
+thread") only ever sees a complete, already-published tick's data, never
+a live reference the sim thread might be overwriting concurrently.
+
+Not yet done: the adapter itself (`adapters/godot/`, untouched/read-only
+for this task) still carries its own duplicate `control_channels_` map
+and snapshot type (`ps_simulation.h`/`triple_buffer.h`) and does not yet
+consume these `World`/`WorldSnapshot` additions.
+
 ## Jolt backend (`core/src/backend/jolt/jolt_backend.cpp`)
 
 `JoltRigidBackend : IRigidBackend`. Two-layer broadphase/object-layer setup
@@ -366,6 +518,37 @@ callbacks that print to stderr (Jolt's own defaults are silent and just
 trigger a bare breakpoint). Broadphase/contact-constraint capacity and the
 `TempAllocatorImpl` arena size scale with `max_bodies` rather than a fixed
 constant.
+
+`MeshShape`/`HeightfieldShape` (PLAN.md M1): `SurfaceMaterial :
+JPH::PhysicsMaterial` carries one `SurfaceId`; `shared_surface_material_list()`
+is a single 256-entry `JPH::PhysicsMaterialList` (slot 255 reserved for
+`kInvalidSurfaceId`) reused by every heightfield shape, so
+`update_heightfield_body` (the hot tile-streaming path) never builds a new
+material list. `make_mesh_shape` instead builds its OWN small local
+material list per mesh (`JPH::MeshShape` caps at 32 materials, unlike
+`HeightFieldShape`'s 256) from only the distinct surface ids that mesh
+actually uses. Jolt's native heightfield convention is Y-up
+(`pos = offset + scale*(x, height, y)`); this backend keeps `mScale`
+strictly POSITIVE on every axis (negating an axis to "flip" it also flips
+triangle winding/normals, which desyncs `ray_cast`, which back-face-culls,
+from `collide_shape_into`, which does not - a bug once caught by exactly
+that asymmetry) and instead REVERSES which sample row lands at which Jolt
+row index (`reverse_heightfield_rows_into`/
+`reverse_heightfield_material_rows_into`), compensated by a constant
+position offset on the wrapping `RotatedTranslatedShape`
+(`heightfield_wrapper_position`, `kHeightfieldYupToZup` - a fixed +90°
+about local X, written as an exact literal so the D7 transcendental grep
+never has to see a runtime trig call for a fixed geometric constant).
+`update_heightfield_body` (`IRigidBackend`) calls Jolt's own
+`HeightFieldShape::SetHeights`/`SetMaterials` through this backend's own
+`temp_allocator_` (safe to reuse: `terrain_tiles` runs strictly after
+`backend_step` in `World`'s pipeline) with grow-once-never-shrink
+float/uint8 scratch conversion buffers - zero-alloc once warmed up, same
+pattern as `AbaScratch` elsewhere in this codebase. `sample_count` must be
+EVEN (`HeightfieldShape`'s own doc comment, `ps/backend/shape_desc.h`):
+Jolt rounds `mSampleCount` up to a multiple of `mBlockSize` (default 2) at
+construction time, and `SetHeights`/`SetMaterials` require the caller's
+arrays to match that exact (possibly-rounded) count.
 
 `RigidBackendSettings` (`ps/backend/i_rigid_backend.h`, passed to
 `create_jolt_backend`) exposes `JPH::PhysicsSettings` fields (`baumgarte`,
