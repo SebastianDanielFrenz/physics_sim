@@ -17,7 +17,15 @@
           topics' scenarios. Adds the Linux legs only for determinism- or
           platform-sensitive changes (see $script:SensitivePatterns) or with
           -Linux. Foundational paths and ANY path the table does not know
-          fall back to the default fast run - never to nothing. Doc-only
+          fall back to the default fast run - never to nothing. A
+          tests/{unit,validation,determinism}/CMakeLists.txt edit that only
+          adds/removes a bare test_*.cpp/.h line (registering a new test
+          file) is the one CMakeLists.txt exception: it contributes no
+          topics of its own and does NOT force the default fast run - the
+          new test file's own Catch2 tags (matched via the ordinary
+          'testfile' rule) decide what runs. Any other change to that file
+          (target_link_libraries, add_executable(, compile definitions, ...)
+          still falls back like any other CMakeLists.txt edit. Doc-only
           changes run the greps only. Prints every decision and why.
           Target: well under 2 min for a single-topic change.
       tools\ci.ps1 -Topic terrain,vehicle     same as -Affected, topics by hand.
@@ -605,7 +613,13 @@ $script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'con
 # Path -> topics. First matching rule wins; paths are repo-relative with '/'.
 # Kind: 'topics' (run Topics), 'everything' (foundational: default fast run),
 # 'doc' (greps only), 'none' (outside core CI: build + greps only, with Note),
-# 'testfile' (topics read from the file's own Catch2 tags), 'scenario'.
+# 'testfile' (topics read from the file's own Catch2 tags), 'scenario',
+# 'cmake-test-registration' (a tests/{unit,validation,determinism}/CMakeLists.txt
+# edit that ONLY adds/removes a bare test_*.cpp/.h line in the executable's
+# source list - see Get-AffectedPlan's handler below - contributes no topics
+# of its own and does NOT escalate to 'everything'; any other change to that
+# file, e.g. target_link_libraries/add_executable(/compile definitions/
+# catch_discover_tests, still does).
 # A path matching NO rule makes the whole run fall back to the default fast
 # suite (never to nothing).
 $script:PathRules = @(
@@ -613,6 +627,7 @@ $script:PathRules = @(
     @{ Re = '^(\.gitignore|\.gitattributes|\.claude/)'; Kind = 'doc' },
     @{ Re = '^core/(include/ps|src)/(math|jobs|world|backend)/'; Kind = 'everything'; Why = 'foundational core (math/jobs/world/backend)' },
     @{ Re = '^core/include/ps/(types|version)\.h$|^core/src/(version|jolt_proof)\.cpp$'; Kind = 'everything'; Why = 'foundational core types' },
+    @{ Re = '^tests/(unit|validation|determinism)/CMakeLists\.txt$'; Kind = 'cmake-test-registration' },
     @{ Re = '(^|/)CMakeLists\.txt$|^CMakePresets\.json$'; Kind = 'everything'; Why = 'build system' },
     @{ Re = '^tools/ci\.ps1$|^tools/tsan_suppressions\.txt$'; Kind = 'everything'; Why = 'CI itself' },
     @{ Re = '^tools/common/|^tests/support/'; Kind = 'everything'; Why = 'linked into every test' },
@@ -644,6 +659,16 @@ $script:ScenarioTopics = @{
 }
 # Scenario inputs that are not themselves hash-compare scenarios.
 $script:ScenarioInputTopics = @{ 'terrain_spec_small.json' = @('terrain') }
+
+# 'cmake-test-registration' allow-list (see $script:PathRules above): a
+# changed line - diff-prefixed ('+'/'-', the normal tracked-file case) or
+# unprefixed (Get-ChangedText's Untracked/whole-file case) - passes only if
+# it is NOTHING BUT a bare test_*.cpp/.h source-list entry. Deliberately
+# narrow: it does not try to recognise a comment, a blank line already
+# filtered by Get-ChangedText, or anything else - one non-matching line
+# (target_link_libraries, add_executable(, a CMake comment, ...) sends the
+# whole file back to the ordinary 'everything' (build-system) treatment.
+$script:CmakeTestLineAllow = '^[+-]?\s*test_[A-Za-z0-9_]+\.(cpp|h)\s*$'
 
 # Diff-content patterns that make a change determinism- or platform-
 # sensitive (Linux legs added). Threading ones also add linux-tsan.
@@ -726,6 +751,18 @@ function Get-AffectedPlan {
                     $tt = Get-TestFileTopics -RelPath $path
                     if ($tt.Count -eq 0) { $plan.Mode = 'fallback'; $plan.Reasons.Add("  UNMAPPED: $path - test file with no topic tag (or deleted), falling back to the default fast run") }
                     else { Add-Topics $tt "$path (its own Catch2 tags)" }
+                }
+                'cmake-test-registration' {
+                    $codeSeen = $true
+                    $text = Get-ChangedText -RelPath $path -BaseRef $Base -Untracked ($untracked -contains $path)
+                    $lines = @($text -split "`n" | Where-Object { $_.Trim().Length -gt 0 })
+                    $bad = @($lines | Where-Object { $_ -notmatch $script:CmakeTestLineAllow })
+                    if ($lines.Count -eq 0 -or $bad.Count -gt 0) {
+                        if ($plan.Mode -ne 'fallback') { $plan.Mode = 'everything' }
+                        $plan.Reasons.Add("  FOUNDATIONAL: $path (test registration changed more than its test_*.cpp/.h source list, e.g. target_link_libraries/add_executable(/compile definitions) - default fast run; run -Full before calling it done")
+                    } else {
+                        $plan.Reasons.Add("  (cmake) $path - only test_*.cpp/.h source-list line(s) added/removed; topics come from that test file's own Catch2 tags")
+                    }
                 }
                 'scenario' {
                     $codeSeen = $true

@@ -981,9 +981,21 @@ math or threading, or with `-Linux`. Foundational paths (core
 `tests/support`) run the default fast run and ask for `-Full`; **a path no
 rule knows also falls back to the default fast run, never to nothing**;
 doc-only changes (`*.md`) run the greps only; `adapters/**` notes that
-`adapters/godot/smoke_test.ps1` is the check. Every decision is printed with
-the path that caused it. Adding a subsystem = add a topic tag to its tests,
-a `$script:PathRules` row, and (if it has scenarios) `$script:ScenarioTopics`.
+`adapters/godot/smoke_test.ps1` is the check. One narrow exception to the
+"any `CMakeLists.txt` is foundational" rule:
+`tests/{unit,validation,determinism}/CMakeLists.txt` gets its own
+`cmake-test-registration` path-rule `Kind`, checked ahead of the generic
+`CMakeLists.txt` rule - if the diff's added/removed lines are NOTHING BUT
+bare `test_*.cpp`/`.h` source-list entries (`$script:CmakeTestLineAllow`,
+registering a new test alongside adding its `.cpp` file), it contributes no
+topics of its own instead of forcing the default fast run; the sibling test
+file's own Catch2 tags (the ordinary `testfile` rule) decide what runs.
+Any other change to that file - `target_link_libraries`, `add_executable(`,
+compile definitions, `catch_discover_tests`, a plain comment edit, anything
+outside that narrow allow-list - still falls back like every other
+`CMakeLists.txt` edit. Every decision is printed with the path that caused
+it. Adding a subsystem = add a topic tag to its tests, a `$script:PathRules`
+row, and (if it has scenarios) `$script:ScenarioTopics`.
 
 **Default/Full layout (overlapped).** Phase A: the Windows lane (`release`,
 `debug`, `asan`, `msvc-release`, greps) runs in `ci.ps1` itself while the
