@@ -575,6 +575,11 @@ or asm routine. Check false sharing and the 5900X's two-CCX L3 split when
 placing per-worker data.
 Accept: both targets met; all earlier validation tests and thread-count
 determinism hashes unchanged; asm/intrinsic paths match scalar reference.
+Carried over from the terrain tiles (2026-09-23): the tile manager's slot
+bookkeeping (a hash map insert/erase when the visible tile set changes) is the
+one accepted exception to "no allocation inside jobs"; it is bounded per tick
+and the steady state while driving is allocation-free. Replace it with a fixed,
+preallocated slot table so the rule holds without exception.
 Carried over from P1.5a (Sebastian, 2026-09-22: accept 3× now, the rest here):
 the articulation solver costs 13.5 µs per 960 Hz substep for 10 links (from
 40.6 µs; the goal was ≤ 8 µs). Known remaining levers: single-axis rank-1
