@@ -109,6 +109,24 @@ struct BrakeDesc {
 // placeholder to be replaced in P4"). No gearbox/clutch: one fixed final
 // drive ratio from a single notional "engine" speed derived from the
 // driven wheels' own average angular speed.
+//
+// Because there is no clutch to slip/modulate torque during engagement,
+// full throttle commanded before a driven wheel's tyre contact has settled
+// to its load-bearing Fz (e.g. an instantaneous full-throttle command right
+// at vehicle spawn, before the suspension has compressed) can spin that
+// wheel up largely unopposed (reaction torque ~ Fx ~ Fz*mu, near zero while
+// Fz is near zero) into the tyre's deep post-peak slip region before real
+// grip develops - a genuine, understood limitation of this placeholder
+// (no clutch/traction-control model), not a numerical bug. Measured
+// (data/vehicles/car_sedan.json, out/handover_accel.md): self-recovers
+// within several seconds as the car's own speed catches up to the wheel's
+// surface speed (car keeps accelerating throughout, never stalls), but
+// during the excursion Fx/Fz sits well below the tyre's achievable peak
+// (~0.6 vs ~1.0 measured). A real full-throttle standing start from an
+// ALREADY-SETTLED rest (the common case - see
+// test_vehicle_accel_standing_start.cpp) does not trigger this. PLAN.md P4's
+// real drivetrain (clutch engagement / launch control) is where this
+// belongs properly; not addressed here.
 struct DriveDesc {
     Curve1D torque_curve_nm_vs_rpm; // engine torque (N*m) vs rpm; required, non-empty
     real final_drive_ratio = 3.7;   // engine-to-wheel ratio (no gearbox in this placeholder)

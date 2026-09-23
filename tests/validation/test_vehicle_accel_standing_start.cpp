@@ -44,6 +44,35 @@
 // margin for debug-vs-release/build differences while still catching a
 // regression anywhere near the original bug's magnitude (measured ~0.72
 // m/s^2, less than half the estimate).
+//
+// CAVEAT found re-checking this fix against a live demo run (flagged by the
+// task's coordinator, not this session's own testing - see
+// "Full-throttle from an UNSETTLED start..." below): the low-slip behaviour
+// above holds only when full throttle is commanded from an ALREADY-SETTLED
+// rest (tyre contact/Fz established first - exactly this test's own setup,
+// via settle() before set_control). Command full throttle INSTANTANEOUSLY
+// before the suspension has settled (Fz still near zero, so near-zero tyre
+// reaction torque) and the driven wheels spin up largely unopposed into the
+// tyre's deep post-peak slip region - measured slip_ratio pegged at the
+// +-3.0 safety clamp for several seconds, Fx/Fz ~0.6 instead of the ~1.0
+// achievable at low slip, omega settling almost exactly at the placeholder
+// drive's rev-limiter boundary (engine_rpm ~ rev_limit_rpm) - matching the
+// coordinator's own reported demo numbers (omega~67.8 rad/s, Fx/Fz~0.6)
+// closely enough to confirm the same mechanism. This is a genuine
+// consequence of the placeholder drive having no clutch/traction-control
+// model (vehicle_desc.h's DriveDesc comment has the full writeup), NOT a
+// numerical bug and NOT specific to final_drive_ratio=10.0 - the sweep in
+// out/handover_accel.md shows the same qualitative failure at every ratio
+// tried that gives more than about 1.2-1.5 m/s^2 of settled acceleration,
+// i.e. the tension is structural (enough low-end torque multiplication to
+// launch decently ALSO means enough torque to spin an unloaded wheel up
+// hard) and cannot be tuned away without either gutting the fix above or
+// adding real clutch/traction-control modelling (PLAN.md P4 scope,
+// deliberately not attempted here). The second TEST_CASE below
+// ("Full-throttle from an UNSETTLED start does not permanently strand the
+// car") documents and bounds this honestly: it does NOT assert low slip
+// (that would be false), it asserts the excursion is TRANSIENT (slip
+// recovers) and the car never stalls.
 
 #include "vehicle_test_helpers.h"
 
@@ -190,4 +219,60 @@ TEST_CASE("Full-throttle acceleration on grass/dirt is lower than on asphalt", "
     // wheelspin is expected there, unlike the asphalt case above).
     CHECK(speed_asphalt > speed_dirt);
     CHECK(speed_dirt > speed_grass);
+}
+
+// See this file's header comment ("CAVEAT found re-checking this fix
+// against a live demo run"). Deliberately does NOT assert low slip - full
+// throttle commanded before the suspension has settled DOES drive the
+// tyre deep past its peak (documented, understood, not fixed here - see
+// vehicle_desc.h's DriveDesc comment). What this asserts instead: the
+// excursion is bounded/transient (the whole point of the "does not
+// permanently strand the car" title) - slip ratio recovers to a small
+// value well before this test's window ends, and the car is continuously
+// gaining speed throughout, never stalling. Measured this session (see
+// out/handover_accel.md): slip pegged at the +-3.0 clamp until ~t=2 s,
+// recovers to <0.1 by t=6 s, car reaches ~21.7 m/s (its rev-limited top
+// speed on this single-ratio placeholder) by t=8 s having accelerated the
+// entire time. Bounds below are set with generous margin around those
+// measurements, not tuned to a specific number.
+TEST_CASE("Full-throttle from an UNSETTLED start does not permanently strand the car", "[validation][vehicle]") {
+    const real mass = 1500.0;
+    auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
+                                           Vec3{2.0, 0.4, 0.15}, 0.6);
+    // NO settle() call - full throttle from the very first tick, before the
+    // suspension/tyre contact has established its load-bearing Fz. This is
+    // the scenario the coordinator's live demo run actually exercises.
+    rig.world->set_control("throttle", 1.0);
+
+    real speed_1s = 0.0, speed_4s = 0.0, speed_8s = 0.0;
+    real slip_at_1s = 0.0, slip_at_8s = 0.0;
+    real min_speed_after_1s = 1e9;
+    const std::uint64_t max_ticks = static_cast<std::uint64_t>(8.0 / rig.world->dt() + 0.5);
+    for (std::uint64_t i = 0; i < max_ticks; ++i) {
+        rig.world->step();
+        const real t = (i + 1) * rig.world->dt();
+        const real speed = rig.world->get_motion(rig.chassis).linear.length();
+        const auto& w0 = rig.world->wheel_telemetry(rig.vehicle, 0);
+        if (t >= 1.0) min_speed_after_1s = std::min(min_speed_after_1s, speed);
+        if (std::abs(t - 1.0) < 1e-9) { speed_1s = speed; slip_at_1s = std::abs(w0.slip_ratio); }
+        if (std::abs(t - 4.0) < 1e-9) speed_4s = speed;
+        if (std::abs(t - 8.0) < 1e-9) { speed_8s = speed; slip_at_8s = std::abs(w0.slip_ratio); }
+    }
+
+    INFO("speed_1s=" << speed_1s << " speed_4s=" << speed_4s << " speed_8s=" << speed_8s << " slip_at_1s=" << slip_at_1s
+                      << " slip_at_8s=" << slip_at_8s);
+    // Confirms the excursion actually happens (documents it, rather than
+    // hiding it): heavy slip is expected in the first second here, unlike
+    // the settled-start test above.
+    CHECK(slip_at_1s > 1.0);
+    // The car must still be making real forward progress throughout - "the
+    // driven wheels must not spin up without moving the car" (this task's
+    // own acceptance wording), even while deep in the tyre's post-peak
+    // region: never stalled/rolled back once past the first second.
+    CHECK(min_speed_after_1s >= speed_1s - 0.1);
+    CHECK(speed_4s > speed_1s);
+    CHECK(speed_8s > speed_4s);
+    // And the wheelspin is TRANSIENT, not a permanent runaway: by t=8s slip
+    // has recovered to a small value (measured <0.1 well before t=6s).
+    CHECK(slip_at_8s < 0.5);
 }
