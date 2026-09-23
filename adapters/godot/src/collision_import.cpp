@@ -1,13 +1,15 @@
 // adapters/godot/src/collision_import.cpp — see collision_import.h.
 //
-// The test-ground flat-plane loader reads test_ground.json with
-// nlohmann::json - already a pinned FetchContent dependency of this
-// repository (core/src/io/scenario.cpp uses it the same way), so linking it
-// into the adapter is not a new dependency (PLAN.md P2 rule: "no new
-// dependencies beyond godot-cpp").
+// import_test_ground_real (PLAN.md M1) delegates the actual file parsing to
+// core's own loaders (ps::io::load_test_ground_collision, ps::terrain::
+// load_procedural_terrain_source, ps::io::SurfaceTable) - this file only
+// wires them into a World and reports the result to the Godot console.
 
 #include "collision_import.h"
 #include "frame_convert.h"
+
+#include "ps/io/test_ground_loader.h"
+#include "ps/terrain/procedural_terrain.h"
 
 #include <godot_cpp/classes/box_shape3d.hpp>
 #include <godot_cpp/classes/capsule_shape3d.hpp>
@@ -15,10 +17,6 @@
 #include <godot_cpp/classes/sphere_shape3d.hpp>
 #include <godot_cpp/classes/static_body3d.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
-
-#include <nlohmann/json.hpp>
-
-#include <fstream>
 
 using godot::BoxShape3D;
 using godot::CapsuleShape3D;
@@ -96,36 +94,53 @@ int import_static_collision_from_scene(Node* root, ps::World& world, const ps::V
     return created;
 }
 
-ps::BodyId import_test_ground_flat_plane(const std::string& track_dir, ps::World& world) {
-    const std::string path = track_dir + "/test_ground.json";
-    std::ifstream f(path);
-    if (!f.is_open()) {
-        godot::UtilityFunctions::print("ps_godot: import_test_ground_flat_plane could not open ", path.c_str());
-        return ps::BodyId{};
-    }
+TestGroundLoadResult import_test_ground_real(const std::string& track_dir,
+                                              ps::World& world,
+                                              std::shared_ptr<const ps::io::SurfaceTable>& out_surfaces,
+                                              const ps::terrain::TerrainConfig& terrain_config,
+                                              std::uint32_t samples_per_tile) {
+    TestGroundLoadResult result;
 
-    nlohmann::json j;
+    // data/tracks/<track>/ -> data/surfaces/surfaces.json (two levels up,
+    // then into surfaces/ - same relation data/tracks/README.md documents:
+    // "data/surfaces/surfaces.json is the *one* shared table ... referenced
+    // rather than embedding a copy").
+    const std::string surfaces_path = track_dir + "/../../surfaces/surfaces.json";
+    std::shared_ptr<ps::io::SurfaceTable> surfaces;
     try {
-        f >> j;
+        surfaces = std::make_shared<ps::io::SurfaceTable>(surfaces_path);
     } catch (const std::exception& e) {
-        godot::UtilityFunctions::print("ps_godot: import_test_ground_flat_plane failed to parse ", path.c_str(), ": ", e.what());
-        return ps::BodyId{};
+        result.error = std::string("SurfaceTable load failed (") + surfaces_path + "): " + e.what();
+        godot::UtilityFunctions::print("ps_godot: import_test_ground_real: ", result.error.c_str());
+        return result;
     }
 
-    const double half_extent_m = j.value("world", nlohmann::json::object()).value("half_extent_m", 50000.0);
+    try {
+        const std::vector<ps::BodyId> bodies = ps::io::load_test_ground_collision(world, track_dir, *surfaces);
+        result.collision_bodies = static_cast<int>(bodies.size());
+    } catch (const std::exception& e) {
+        result.error = std::string("load_test_ground_collision failed: ") + e.what();
+        godot::UtilityFunctions::print("ps_godot: import_test_ground_real: ", result.error.c_str());
+        return result;
+    }
 
-    ps::BodyDesc desc;
-    desc.motion = ps::BodyMotionType::Static;
-    // A thin slab at z=0 (world ENU/ISO 8855 z=up, same axes - see
-    // data/tracks/README.md's "Frame" section: no basis change is needed
-    // between the track's world frame and a vehicle's own ISO 8855 frame).
-    // half_height 0.05 m keeps the slab's top at z=0 (exact on every flat
-    // zone) without a visible step.
-    constexpr ps::real kSlabHalfHeight = 0.05;
-    desc.shape = ps::BoxShape{ps::Vec3{half_extent_m, half_extent_m, kSlabHalfHeight}};
-    desc.pose = ps::Pose{ps::Vec3{0.0, 0.0, -kSlabHalfHeight}, ps::Quat::identity()};
-    desc.friction = 1.0; // dry asphalt (surfaces.json lambda_mu reference value); see header comment for the coarser-than-README limitation
-    return world.create_body(desc);
+    std::shared_ptr<ps::terrain::ITerrainSource> terrain_source;
+    try {
+        terrain_source = ps::terrain::load_procedural_terrain_source(track_dir + "/terrain.json", samples_per_tile);
+    } catch (const std::exception& e) {
+        result.error = std::string("load_procedural_terrain_source failed: ") + e.what();
+        godot::UtilityFunctions::print("ps_godot: import_test_ground_real: ", result.error.c_str());
+        return result;
+    }
+
+    world.set_surface_table(surfaces);
+    world.set_terrain_source(terrain_source, terrain_config);
+
+    out_surfaces = std::move(surfaces);
+    result.ok = true;
+    godot::UtilityFunctions::print("ps_godot: import_test_ground_real: ", result.collision_bodies,
+                                    " collision body/bodies, terrain source installed from ", track_dir.c_str());
+    return result;
 }
 
 } // namespace ps_godot

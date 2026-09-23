@@ -49,6 +49,7 @@ public:
     [[nodiscard]] bool get_shift_down() const { return channels_.shift_down; }
     [[nodiscard]] bool get_camera() const { return channels_.camera; }
     [[nodiscard]] bool get_reset_vehicle() const { return channels_.reset_vehicle; }
+    [[nodiscard]] bool get_debug_toggle() const { return channels_.debug_toggle; }
 
     // Remap config (deadzone/curve/invert), PLAN.md P2 "configurable".
     void set_steer_deadzone(float v);

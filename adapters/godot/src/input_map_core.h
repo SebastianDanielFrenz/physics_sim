@@ -59,6 +59,10 @@ struct RawInput {
     bool shift_down_pressed = false;
     bool camera_pressed = false;
     bool reset_vehicle_pressed = false;
+    // PLAN.md M1 debug draw toggle (contact points / tyre force vectors /
+    // suspension travel) - additive, same edge-triggered convention as the
+    // other digital actions above.
+    bool debug_toggle_pressed = false;
 };
 
 // Shaped output: exactly the named control channels PLAN.md P2 lists
@@ -76,6 +80,7 @@ struct ControlChannels {
     bool shift_down = false;
     bool camera = false;
     bool reset_vehicle = false;
+    bool debug_toggle = false; // PLAN.md M1: debug draw on/off
 };
 
 // Per-channel remappable configuration (deadzone/curve/invert). Only the

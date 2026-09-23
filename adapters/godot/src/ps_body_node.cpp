@@ -1,4 +1,5 @@
 #include "ps_body_node.h"
+#include "frame_timing.h"
 #include "ps_simulation.h"
 
 #include <godot_cpp/core/class_db.hpp>
@@ -19,6 +20,7 @@ void PsBodyNode3D::_ready() {
 }
 
 void PsBodyNode3D::_process(double /*delta*/) {
+    const ScopedAdapterTimer timer; // frame_timing.h: this is adapter main-thread work
     PsSimulation* sim = resolve_simulation();
     if (sim == nullptr) return;
 

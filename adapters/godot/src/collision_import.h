@@ -5,11 +5,16 @@
 
 #pragma once
 
+#include "ps/io/surface_table.h"
+#include "ps/terrain/terrain_config.h"
 #include "ps/world/world.h"
 
 #include <godot_cpp/classes/node.hpp>
 
+#include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace ps_godot {
 
@@ -19,24 +24,43 @@ namespace ps_godot {
 // supports (ps/backend/shape_desc.h, PLAN.md D2's own-descriptor seam), so
 // this is a direct 1:1 mapping, not a mesh-decomposition heuristic. Any
 // other collision shape type (mesh, concave polygon, height map, ...) is
-// skipped and counted in `out_skipped` if non-null, since core has nowhere
-// to put it yet (see this adapter's report for the requested ShapeDesc
-// addition). Each created body's pose is the node's global transform,
-// converted through frame_convert.h's single conversion point using
-// `origin_m` (pass ps::Vec3::zero() at load time before any origin rebase
-// has happened, or the SimBridge's current origin if importing later).
-// Returns the number of bodies created.
+// skipped and counted in `out_skipped` if non-null. Each created body's
+// pose is the node's global transform, converted through frame_convert.h's
+// single conversion point using `origin_m` (pass ps::Vec3::zero() at load
+// time before any origin rebase has happened, or the SimBridge's current
+// origin if importing later). Returns the number of bodies created.
 int import_static_collision_from_scene(godot::Node* root, ps::World& world, const ps::Vec3& origin_m, int* out_skipped = nullptr);
 
-// PLAN.md P2's test-ground collision loader. KNOWN LIMITATION - see the
-// .cpp file's header comment and this adapter's final report: without a
-// mesh/heightfield ShapeDesc in core, this loads only a single large flat
-// static box at z=0 sized from `track_dir`/test_ground.json's
-// world.half_extent_m (exact over the flat zones every M1 test feature
-// sits on; not exact for ramps, the skidpad, kerb height, or the
-// procedural terrain outside the flat zones - PLAN.md's terrain-tile
-// system, P8/M1, is what eventually replaces this). Returns an invalid
-// BodyId if track_dir/test_ground.json could not be read.
-ps::BodyId import_test_ground_flat_plane(const std::string& track_dir, ps::World& world);
+// PLAN.md M1 step 1: the real test-ground loader, superseding the earlier
+// P2 flat-plane placeholder (core had no mesh/heightfield ShapeDesc at the
+// time - it now has MeshShape/HeightfieldShape, ps::io::load_test_ground_
+// collision and ps::terrain::load_procedural_terrain_source, PLAN.md M1).
+// Loads:
+//  1) `track_dir`'s SurfaceTable (data/surfaces/surfaces.json, resolved as
+//     `track_dir + "/../../surfaces/surfaces.json"` - the same relation
+//     data/tracks/README.md documents between a track dir and the shared
+//     surface table) and installs it on `world` (World::set_surface_table),
+//     so every vehicle's tyre model sees real lambda_mu/crr values.
+//  2) the exact static feature-mesh collision
+//     (`ps::io::load_test_ground_collision`, one MeshShape body per surface
+//     group) - replaces the old single flat slab.
+//  3) the procedural terrain source (`ps::terrain::load_procedural_terrain_
+//     source`, `track_dir + "/terrain.json"`) via World::set_terrain_source,
+//     with `terrain_config` (tile pool sizing/fill budget - see terrain_
+//     config.h) and `samples_per_tile` resolution.
+// Must be called before World::step() ever runs for `world` (setup time,
+// like every other set_terrain_source/create_body call in this codebase).
+// Returns false (and leaves world/out_surfaces untouched) if any file could
+// not be read/parsed; check `out_error` for the reason.
+struct TestGroundLoadResult {
+    bool ok = false;
+    int collision_bodies = 0;
+    std::string error;
+};
+TestGroundLoadResult import_test_ground_real(const std::string& track_dir,
+                                              ps::World& world,
+                                              std::shared_ptr<const ps::io::SurfaceTable>& out_surfaces,
+                                              const ps::terrain::TerrainConfig& terrain_config = {},
+                                              std::uint32_t samples_per_tile = 64);
 
 } // namespace ps_godot

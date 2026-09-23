@@ -70,6 +70,15 @@ public:
     // running() - set it before start().
     void set_post_step(std::function<void()> post_step) { post_step_ = std::move(post_step); }
 
+    // Called synchronously on the sim thread right BEFORE world_.step()
+    // runs each tick (PLAN.md M1: control-channel hand-off - see
+    // ps_simulation.h's set_control doc comment for why this needs to be a
+    // sim-thread-only write into ps::World's control channels rather than
+    // the Godot main thread calling World::set_control directly). Not
+    // thread-safe to change while running() - set it before start(), same
+    // rule as set_post_step above.
+    void set_pre_step(std::function<void()> pre_step) { pre_step_ = std::move(pre_step); }
+
     void start() {
         if (running_.exchange(true)) return; // already running
 #if defined(_WIN32)
@@ -117,6 +126,7 @@ private:
 
             int ran = 0;
             while (running_.load(std::memory_order_relaxed) && clock::now() >= next && ran < kMaxCatchUpTicksPerWakeup) {
+                if (pre_step_) pre_step_();
                 world_.step();
                 ticks_run_.fetch_add(1, std::memory_order_relaxed);
                 if (post_step_) post_step_();
@@ -138,6 +148,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> ticks_run_{0};
     std::function<void()> post_step_;
+    std::function<void()> pre_step_;
 };
 
 } // namespace ps_godot

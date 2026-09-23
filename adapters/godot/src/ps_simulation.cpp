@@ -10,6 +10,7 @@ using godot::D_METHOD;
 using godot::Dictionary;
 using godot::String;
 using godot::TypedArray;
+using godot::Vector3;
 
 namespace ps_godot {
 
@@ -17,6 +18,16 @@ namespace {
 std::string to_std_string(const String& s) {
     const godot::CharString utf8 = s.utf8();
     return std::string(utf8.get_data());
+}
+
+// vehicle_order_/articulation_order_ are both small (this demo has one car
+// and a handful of articulations at most); a linear scan avoids keeping a
+// second name->index map in sync with either.
+std::size_t index_in_order(const std::vector<std::string>& order, const std::string& name) {
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        if (order[i] == name) return i;
+    }
+    return static_cast<std::size_t>(-1);
 }
 } // namespace
 
@@ -39,40 +50,46 @@ bool PsSimulation::load_scenario(const String& absolute_json_path) {
             (void)id;
             articulation_order_.push_back(name);
         }
-        // Captured by the post_step lambda below via `this`
-        // (articulation_order_ + articulations_by_name_ + articulation_link_counts_),
-        // stashed as a member-sized parallel structure indexed the same
-        // way as articulation_order_.
-        std::vector<std::size_t> link_count_by_order;
-        link_count_by_order.reserve(articulation_order_.size());
-        for (const std::string& name : articulation_order_) {
-            link_count_by_order.push_back(articulation_link_counts_.count(name) ? articulation_link_counts_.at(name) : 0);
+
+        // PLAN.md M1: vehicles are spawned at runtime (spawn_vehicle, after
+        // a track dir resolves a spawn point), not from this scenario file
+        // - a fresh scenario load always starts with none.
+        vehicles_by_name_.clear();
+        vehicle_chassis_body_name_.clear();
+        vehicle_desc_by_name_.clear();
+        vehicle_order_.clear();
+        vehicle_terrain_interest_id_.clear();
+        vehicle_stream_radius_m_.clear();
+        next_terrain_interest_id_ = 1;
+        surface_table_.reset();
+        {
+            std::lock_guard<std::mutex> lock(pending_reset_mutex_);
+            pending_vehicle_resets_.clear();
+        }
+
+        // Pre-seed every control channel name this adapter's input map can
+        // drive (input_map_core.h's ControlChannels) so later set_control()
+        // calls from the Godot main thread only ever update an EXISTING
+        // atomic<float>, never insert into control_channels_ while the sim
+        // thread might be concurrently reading it in SimThread's pre_step
+        // hook (see ps_simulation.h's set_control doc comment).
+        control_channels_.clear();
+        for (const char* name : {"steer", "throttle", "brake", "handbrake", "clutch"}) {
+            control_channels_.emplace(name, 0.0f);
         }
 
         sim_thread_ = std::make_unique<SimThread>(*world_);
-        sim_thread_->set_post_step([this, link_count_by_order]() {
-            AdapterSnapshot snap;
-            snap.tick = world_->tick();
-            snap.contacts = world_->last_contact_events();
-            snap.articulations.reserve(articulation_order_.size());
-            for (std::size_t i = 0; i < articulation_order_.size(); ++i) {
-                const ps::ArticulationId id = articulations_by_name_.at(articulation_order_[i]);
-                ArticulationLinkPoseSet set;
-                set.root_pose = world_->link_frame(id, -1).world_pose(world_->backend());
-                set.link_poses.reserve(link_count_by_order[i]);
-                for (std::size_t link = 0; link < link_count_by_order[i]; ++link) {
-                    set.link_poses.push_back(world_->link_frame(id, static_cast<int>(link)).world_pose(world_->backend()));
-                }
-                snap.articulations.push_back(std::move(set));
-            }
-            adapter_snapshots_.write_slot() = std::move(snap);
-            adapter_snapshots_.publish();
-        });
+        // pre_step/post_step are installed by start() (rebuild_post_step_
+        // and_start), once every setup call (import_test_ground,
+        // create_body_dynamic, spawn_vehicle) has finished - see this
+        // class's header comment.
 
         origin_rebase_.set_origin(ps::Vec3::zero());
+        last_error_ = String();
         return true;
     } catch (const std::exception& e) {
         godot::UtilityFunctions::print("ps_godot: load_scenario failed: ", e.what());
+        last_error_ = String("load_scenario failed: ") + String(e.what());
         world_.reset();
         sim_thread_.reset();
         return false;
@@ -80,7 +97,99 @@ bool PsSimulation::load_scenario(const String& absolute_json_path) {
 }
 
 void PsSimulation::start() {
-    if (sim_thread_) sim_thread_->start();
+    if (!sim_thread_ || is_running()) return;
+    rebuild_post_step_and_start();
+}
+
+void PsSimulation::rebuild_post_step_and_start() {
+    sim_thread_->set_pre_step([this]() {
+        // Control channels: the only writer of VALUES from here on is the
+        // Godot main thread (set_control), the only writer of KEYS was
+        // load_scenario() before start() ran - see the header comment.
+        for (auto& kv : control_channels_) {
+            world_->set_control(kv.first, static_cast<ps::real>(kv.second.load(std::memory_order_relaxed)));
+        }
+
+        // PLAN.md M1 "reset vehicle" - applied here (sim thread, right
+        // before World::step()) so a live reset never races
+        // IRigidBackend::step() running concurrently with a main-thread
+        // backend write.
+        std::vector<PendingVehicleReset> resets;
+        {
+            std::lock_guard<std::mutex> lock(pending_reset_mutex_);
+            resets.swap(pending_vehicle_resets_);
+        }
+        for (const PendingVehicleReset& r : resets) {
+            const auto chassis_name_it = vehicle_chassis_body_name_.find(r.vehicle_name);
+            if (chassis_name_it == vehicle_chassis_body_name_.end()) continue;
+            const auto body_it = bodies_by_name_.find(chassis_name_it->second);
+            if (body_it == bodies_by_name_.end()) continue;
+            world_->backend().set_pose(body_it->second, r.pose);
+            world_->backend().set_motion(body_it->second, ps::Motion{});
+        }
+    });
+
+    sim_thread_->set_post_step([this]() {
+        AdapterSnapshot snap;
+        snap.tick = world_->tick();
+        snap.contacts = world_->last_contact_events();
+
+        snap.articulations.reserve(articulation_order_.size());
+        for (const std::string& name : articulation_order_) {
+            const ps::ArticulationId id = articulations_by_name_.at(name);
+            ArticulationLinkPoseSet set;
+            set.root_pose = world_->link_frame(id, -1).world_pose(world_->backend());
+            const std::size_t link_count = articulation_link_counts_.count(name) ? articulation_link_counts_.at(name) : 0;
+            set.link_poses.reserve(link_count);
+            for (std::size_t link = 0; link < link_count; ++link) {
+                set.link_poses.push_back(world_->link_frame(id, static_cast<int>(link)).world_pose(world_->backend()));
+            }
+            snap.articulations.push_back(std::move(set));
+        }
+
+        // PLAN.md M1 steps 1/5: per-vehicle wheel telemetry (race-free
+        // capture, see ps_simulation.h's WheelDynamicSnapshot comment) plus
+        // following each vehicle with its own terrain interest point so
+        // tiles stream around it while driving (PLAN.md M1: "the vehicle
+        // as the terrain interest point").
+        snap.vehicles.reserve(vehicle_order_.size());
+        for (const std::string& name : vehicle_order_) {
+            const ps::VehicleId vid = vehicles_by_name_.at(name);
+            VehicleDynamicSnapshot vs;
+            const std::size_t wheel_count = world_->vehicle_wheel_count(vid);
+            vs.wheels.reserve(wheel_count);
+            for (std::size_t w = 0; w < wheel_count; ++w) {
+                const ps::vehicle::WheelTelemetry& wt = world_->wheel_telemetry(vid, w);
+                WheelDynamicSnapshot ws;
+                ws.compression = wt.compression;
+                ws.omega = wt.omega;
+                ws.slip_ratio = wt.slip_ratio;
+                ws.slip_angle = wt.slip_angle;
+                ws.fx = wt.fx;
+                ws.fy = wt.fy;
+                ws.fz = wt.fz;
+                ws.surface = wt.surface;
+                vs.wheels.push_back(ws);
+            }
+            snap.vehicles.push_back(std::move(vs));
+
+            const auto chassis_name_it = vehicle_chassis_body_name_.find(name);
+            if (chassis_name_it != vehicle_chassis_body_name_.end()) {
+                const auto body_it = bodies_by_name_.find(chassis_name_it->second);
+                if (body_it != bodies_by_name_.end()) {
+                    const ps::Pose chassis_pose = world_->get_pose(body_it->second); // safe: sim thread, right after step()
+                    const auto radius_it = vehicle_stream_radius_m_.find(name);
+                    const ps::real radius = radius_it != vehicle_stream_radius_m_.end() ? static_cast<ps::real>(radius_it->second) : 500.0;
+                    world_->set_terrain_interest_point(vehicle_terrain_interest_id_.at(name), chassis_pose.position, radius);
+                }
+            }
+        }
+
+        adapter_snapshots_.write_slot() = std::move(snap);
+        adapter_snapshots_.publish();
+    });
+
+    sim_thread_->start();
 }
 
 void PsSimulation::stop() {
@@ -109,15 +218,22 @@ godot::Transform3D PsSimulation::get_body_transform(const String& body_name) con
     return godot::Transform3D();
 }
 
+float PsSimulation::get_body_speed_mps(const String& body_name) const {
+    if (!world_) return 0.0f;
+    const std::string name = to_std_string(body_name);
+    const auto it = bodies_by_name_.find(name);
+    if (it == bodies_by_name_.end()) return 0.0f;
+    const ps::BodyId id = it->second;
+    const ps::WorldSnapshot& snap = const_cast<ps::World*>(world_.get())->snapshots().read();
+    for (const ps::BodySnapshot& b : snap.bodies) {
+        if (b.id == id) return static_cast<float>(b.motion.linear.length());
+    }
+    return 0.0f;
+}
+
 godot::Transform3D PsSimulation::get_articulation_link_transform(const String& articulation_name, int link_index) const {
     const std::string name = to_std_string(articulation_name);
-    std::size_t order_index = static_cast<std::size_t>(-1);
-    for (std::size_t i = 0; i < articulation_order_.size(); ++i) {
-        if (articulation_order_[i] == name) {
-            order_index = i;
-            break;
-        }
-    }
+    const std::size_t order_index = index_in_order(articulation_order_, name);
     if (order_index == static_cast<std::size_t>(-1)) return godot::Transform3D();
 
     const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
@@ -147,11 +263,23 @@ std::int64_t PsSimulation::get_articulation_link_count(const String& articulatio
     return it == articulation_link_counts_.end() ? 0 : static_cast<std::int64_t>(it->second);
 }
 
-void PsSimulation::set_control(const String& channel, float value) { control_channels_[to_std_string(channel)] = value; }
+void PsSimulation::set_control(const String& channel, float value) {
+    const std::string name = to_std_string(channel);
+    const auto it = control_channels_.find(name);
+    if (it != control_channels_.end()) {
+        it->second.store(value, std::memory_order_relaxed);
+    } else if (!is_running()) {
+        // Not pre-seeded (an unexpected channel name) but the sim thread
+        // isn't running yet - inserting here is still single-threaded.
+        control_channels_.emplace(name, value);
+    } else {
+        godot::UtilityFunctions::print("ps_godot: set_control(\"", channel, "\") ignored - unknown channel, not pre-seeded before start()");
+    }
+}
 
 float PsSimulation::get_control(const String& channel) const {
     const auto it = control_channels_.find(to_std_string(channel));
-    return it == control_channels_.end() ? 0.0f : it->second;
+    return it == control_channels_.end() ? 0.0f : it->second.load(std::memory_order_relaxed);
 }
 
 TypedArray<Dictionary> PsSimulation::get_contact_events() const {
@@ -174,11 +302,255 @@ std::int64_t PsSimulation::import_static_collision(godot::Node* scene_root) {
     return created;
 }
 
-bool PsSimulation::import_test_ground(const String& track_dir_absolute_path) {
+bool PsSimulation::import_test_ground(const String& track_dir_absolute_path, std::int64_t max_resident_tiles, std::int64_t max_tile_fills_per_tick) {
+    if (!world_) {
+        last_error_ = "import_test_ground: no world (call load_scenario first)";
+        return false;
+    }
+    if (is_running()) {
+        last_error_ = "import_test_ground: must be called before start()";
+        return false;
+    }
+    const std::string track_dir = to_std_string(track_dir_absolute_path);
+    ps::terrain::TerrainConfig tcfg;
+    tcfg.max_resident_tiles = static_cast<std::size_t>(max_resident_tiles);
+    tcfg.max_tile_fills_per_tick = static_cast<std::size_t>(max_tile_fills_per_tick);
+
+    std::shared_ptr<const ps::io::SurfaceTable> surfaces;
+    const TestGroundLoadResult result = import_test_ground_real(track_dir, *world_, surfaces, tcfg);
+    if (!result.ok) {
+        last_error_ = String(result.error.c_str());
+        return false;
+    }
+    surface_table_ = std::move(surfaces);
+    return true;
+}
+
+bool PsSimulation::create_body_dynamic(const String& name, const Vector3& sim_position, float yaw_rad, float mass, const Vector3& half_extents) {
+    if (!world_) {
+        last_error_ = "create_body_dynamic: no world";
+        return false;
+    }
+    if (is_running()) {
+        last_error_ = "create_body_dynamic: must be called before start()";
+        return false;
+    }
+    const std::string body_name = to_std_string(name);
+    if (bodies_by_name_.count(body_name)) {
+        last_error_ = String("create_body_dynamic: a body named \"") + name + "\" already exists";
+        return false;
+    }
+
+    ps::BodyDesc desc;
+    desc.motion = ps::BodyMotionType::Dynamic;
+    desc.mass = static_cast<ps::real>(mass);
+    desc.shape = ps::BoxShape{ps::Vec3{static_cast<ps::real>(half_extents.x), static_cast<ps::real>(half_extents.y), static_cast<ps::real>(half_extents.z)}};
+    desc.pose = ps::Pose{
+        ps::Vec3{static_cast<ps::real>(sim_position.x), static_cast<ps::real>(sim_position.y), static_cast<ps::real>(sim_position.z)},
+        ps::Quat::from_axis_angle(ps::Vec3{0.0, 0.0, 1.0}, static_cast<ps::real>(yaw_rad))};
+    desc.friction = 0.5;
+    desc.allow_sleep = false;
+
+    const ps::BodyId id = world_->create_body(desc);
+    bodies_by_name_[body_name] = id;
+    return true;
+}
+
+bool PsSimulation::spawn_vehicle(const String& vehicle_name, const String& vehicle_json_absolute_path, const String& chassis_body_name, float stream_radius_m) {
+    if (!world_) {
+        last_error_ = "spawn_vehicle: no world";
+        return false;
+    }
+    if (is_running()) {
+        last_error_ = "spawn_vehicle: must be called before start()";
+        return false;
+    }
+    const std::string name = to_std_string(vehicle_name);
+    const std::string chassis_name = to_std_string(chassis_body_name);
+    const auto body_it = bodies_by_name_.find(chassis_name);
+    if (body_it == bodies_by_name_.end()) {
+        last_error_ = String("spawn_vehicle: unknown chassis body \"") + chassis_body_name + "\"";
+        return false;
+    }
+
+    try {
+        ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(to_std_string(vehicle_json_absolute_path));
+        const ps::VehicleId vid = world_->create_vehicle(desc, body_it->second);
+        vehicles_by_name_[name] = vid;
+        vehicle_chassis_body_name_[name] = chassis_name;
+        vehicle_order_.push_back(name);
+        vehicle_terrain_interest_id_[name] = next_terrain_interest_id_++;
+        vehicle_stream_radius_m_[name] = stream_radius_m;
+        vehicle_desc_by_name_[name] = std::move(desc);
+        return true;
+    } catch (const std::exception& e) {
+        last_error_ = String("spawn_vehicle failed: ") + String(e.what());
+        godot::UtilityFunctions::print("ps_godot: ", last_error_);
+        return false;
+    }
+}
+
+bool PsSimulation::reset_vehicle(const String& vehicle_name, const Vector3& sim_position, float yaw_rad) {
     if (!world_) return false;
-    track_dir_for_flat_plane_ = to_std_string(track_dir_absolute_path);
-    const ps::BodyId id = import_test_ground_flat_plane(track_dir_for_flat_plane_, *world_);
-    return id.valid();
+    const std::string name = to_std_string(vehicle_name);
+    const auto chassis_name_it = vehicle_chassis_body_name_.find(name);
+    if (chassis_name_it == vehicle_chassis_body_name_.end()) return false;
+    const auto body_it = bodies_by_name_.find(chassis_name_it->second);
+    if (body_it == bodies_by_name_.end()) return false;
+
+    const ps::Pose pose{
+        ps::Vec3{static_cast<ps::real>(sim_position.x), static_cast<ps::real>(sim_position.y), static_cast<ps::real>(sim_position.z)},
+        ps::Quat::from_axis_angle(ps::Vec3{0.0, 0.0, 1.0}, static_cast<ps::real>(yaw_rad))};
+
+    if (!is_running()) {
+        // Not running yet - single-threaded, safe to apply directly.
+        world_->backend().set_pose(body_it->second, pose);
+        world_->backend().set_motion(body_it->second, ps::Motion{});
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(pending_reset_mutex_);
+    pending_vehicle_resets_.push_back(PendingVehicleReset{name, pose});
+    return true;
+}
+
+godot::PackedStringArray PsSimulation::get_vehicle_names() const {
+    godot::PackedStringArray out;
+    for (const std::string& name : vehicle_order_) out.push_back(String(name.c_str()));
+    return out;
+}
+
+String PsSimulation::get_vehicle_chassis_body_name(const String& vehicle_name) const {
+    const auto it = vehicle_chassis_body_name_.find(to_std_string(vehicle_name));
+    return it == vehicle_chassis_body_name_.end() ? String() : String(it->second.c_str());
+}
+
+std::int64_t PsSimulation::get_vehicle_wheel_count(const String& vehicle_name) const {
+    const auto it = vehicles_by_name_.find(to_std_string(vehicle_name));
+    if (it == vehicles_by_name_.end() || !world_) return 0;
+    return static_cast<std::int64_t>(world_->vehicle_wheel_count(it->second));
+}
+
+String PsSimulation::get_wheel_name(const String& vehicle_name, int wheel_index) const {
+    const auto it = vehicles_by_name_.find(to_std_string(vehicle_name));
+    if (it == vehicles_by_name_.end() || !world_) return String();
+    if (static_cast<std::size_t>(wheel_index) >= world_->vehicle_wheel_count(it->second)) return String();
+    return String(world_->wheel_name(it->second, static_cast<std::size_t>(wheel_index)).c_str());
+}
+
+const ps::vehicle::WheelDesc* PsSimulation::wheel_desc(const std::string& vehicle_name, int wheel_index) const {
+    const auto it = vehicle_desc_by_name_.find(vehicle_name);
+    if (it == vehicle_desc_by_name_.end()) return nullptr;
+    if (wheel_index < 0 || static_cast<std::size_t>(wheel_index) >= it->second.wheels.size()) return nullptr;
+    return &it->second.wheels[static_cast<std::size_t>(wheel_index)];
+}
+
+Vector3 PsSimulation::get_wheel_attachment_local(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    if (w == nullptr) return Vector3();
+    return Vector3(static_cast<float>(w->attachment_local.x), static_cast<float>(w->attachment_local.y), static_cast<float>(w->attachment_local.z));
+}
+
+Vector3 PsSimulation::get_wheel_suspension_axis(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    if (w == nullptr) return Vector3(0, 0, 1);
+    return Vector3(static_cast<float>(w->suspension.axis.x), static_cast<float>(w->suspension.axis.y), static_cast<float>(w->suspension.axis.z));
+}
+
+float PsSimulation::get_wheel_radius(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->wheel_radius);
+}
+
+float PsSimulation::get_wheel_width(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->wheel_width);
+}
+
+float PsSimulation::get_wheel_travel_max(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->suspension.travel_max);
+}
+
+bool PsSimulation::get_wheel_steered(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    return w != nullptr && w->steered;
+}
+
+bool PsSimulation::get_wheel_driven(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    return w != nullptr && w->driven;
+}
+
+bool PsSimulation::get_wheel_is_front(const String& vehicle_name, int wheel_index) const {
+    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
+    return w != nullptr && w->is_front;
+}
+
+float PsSimulation::get_vehicle_max_wheel_angle(const String& vehicle_name) const {
+    const auto it = vehicle_desc_by_name_.find(to_std_string(vehicle_name));
+    return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.max_wheel_angle);
+}
+
+float PsSimulation::get_vehicle_ackermann_fraction(const String& vehicle_name) const {
+    const auto it = vehicle_desc_by_name_.find(to_std_string(vehicle_name));
+    return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.ackermann_fraction);
+}
+
+float PsSimulation::get_vehicle_rear_steer_fraction(const String& vehicle_name) const {
+    const auto it = vehicle_desc_by_name_.find(to_std_string(vehicle_name));
+    return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.rear_steer_fraction);
+}
+
+const WheelDynamicSnapshot* PsSimulation::dynamic_wheel(const std::string& vehicle_name, int wheel_index) const {
+    const std::size_t order_index = index_in_order(vehicle_order_, vehicle_name);
+    if (order_index == static_cast<std::size_t>(-1)) return nullptr;
+    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    if (order_index >= snap.vehicles.size()) return nullptr;
+    const std::vector<WheelDynamicSnapshot>& wheels = snap.vehicles[order_index].wheels;
+    if (wheel_index < 0 || static_cast<std::size_t>(wheel_index) >= wheels.size()) return nullptr;
+    return &wheels[static_cast<std::size_t>(wheel_index)];
+}
+
+float PsSimulation::get_wheel_compression(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->compression);
+}
+
+float PsSimulation::get_wheel_omega(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->omega);
+}
+
+float PsSimulation::get_wheel_slip_ratio(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->slip_ratio);
+}
+
+float PsSimulation::get_wheel_slip_angle(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->slip_angle);
+}
+
+float PsSimulation::get_wheel_load_n(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->fz);
+}
+
+float PsSimulation::get_wheel_fx(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->fx);
+}
+
+float PsSimulation::get_wheel_fy(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->fy);
+}
+
+String PsSimulation::get_wheel_surface_name(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    if (w == nullptr || surface_table_ == nullptr || w->surface == ps::kInvalidSurfaceId) return String();
+    return String(surface_table_->name_for(w->surface).c_str());
 }
 
 void PsSimulation::_bind_methods() {
@@ -195,12 +567,46 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_articulation_link_count", "articulation_name"), &PsSimulation::get_articulation_link_count);
     ClassDB::bind_method(D_METHOD("rebase_focus", "focus_godot_position"), &PsSimulation::rebase_focus);
     ClassDB::bind_method(D_METHOD("get_body_transform", "body_name"), &PsSimulation::get_body_transform);
+    ClassDB::bind_method(D_METHOD("get_body_speed_mps", "body_name"), &PsSimulation::get_body_speed_mps);
     ClassDB::bind_method(D_METHOD("get_articulation_link_transform", "articulation_name", "link_index"), &PsSimulation::get_articulation_link_transform);
     ClassDB::bind_method(D_METHOD("set_control", "channel", "value"), &PsSimulation::set_control);
     ClassDB::bind_method(D_METHOD("get_control", "channel"), &PsSimulation::get_control);
     ClassDB::bind_method(D_METHOD("get_contact_events"), &PsSimulation::get_contact_events);
     ClassDB::bind_method(D_METHOD("import_static_collision", "scene_root"), &PsSimulation::import_static_collision);
-    ClassDB::bind_method(D_METHOD("import_test_ground", "track_dir_absolute_path"), &PsSimulation::import_test_ground);
+    ClassDB::bind_method(D_METHOD("import_test_ground", "track_dir_absolute_path", "max_resident_tiles", "max_tile_fills_per_tick"), &PsSimulation::import_test_ground, DEFVAL(512), DEFVAL(16));
+    ClassDB::bind_method(D_METHOD("get_last_error"), &PsSimulation::get_last_error);
+    ClassDB::bind_method(D_METHOD("terrain_resident_tile_count"), &PsSimulation::terrain_resident_tile_count);
+    ClassDB::bind_method(D_METHOD("terrain_starved_tile_count"), &PsSimulation::terrain_starved_tile_count);
+
+    ClassDB::bind_method(D_METHOD("create_body_dynamic", "name", "sim_position", "yaw_rad", "mass", "half_extents"), &PsSimulation::create_body_dynamic);
+    ClassDB::bind_method(D_METHOD("spawn_vehicle", "vehicle_name", "vehicle_json_absolute_path", "chassis_body_name", "stream_radius_m"), &PsSimulation::spawn_vehicle);
+    ClassDB::bind_method(D_METHOD("reset_vehicle", "vehicle_name", "sim_position", "yaw_rad"), &PsSimulation::reset_vehicle);
+    ClassDB::bind_method(D_METHOD("get_vehicle_names"), &PsSimulation::get_vehicle_names);
+    ClassDB::bind_method(D_METHOD("get_vehicle_chassis_body_name", "vehicle_name"), &PsSimulation::get_vehicle_chassis_body_name);
+    ClassDB::bind_method(D_METHOD("get_vehicle_wheel_count", "vehicle_name"), &PsSimulation::get_vehicle_wheel_count);
+    ClassDB::bind_method(D_METHOD("get_wheel_name", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_name);
+    ClassDB::bind_method(D_METHOD("get_wheel_attachment_local", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_attachment_local);
+    ClassDB::bind_method(D_METHOD("get_wheel_suspension_axis", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_suspension_axis);
+    ClassDB::bind_method(D_METHOD("get_wheel_radius", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_radius);
+    ClassDB::bind_method(D_METHOD("get_wheel_width", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_width);
+    ClassDB::bind_method(D_METHOD("get_wheel_travel_max", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_travel_max);
+    ClassDB::bind_method(D_METHOD("get_wheel_steered", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_steered);
+    ClassDB::bind_method(D_METHOD("get_wheel_driven", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_driven);
+    ClassDB::bind_method(D_METHOD("get_wheel_is_front", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_is_front);
+    ClassDB::bind_method(D_METHOD("get_vehicle_max_wheel_angle", "vehicle_name"), &PsSimulation::get_vehicle_max_wheel_angle);
+    ClassDB::bind_method(D_METHOD("get_vehicle_ackermann_fraction", "vehicle_name"), &PsSimulation::get_vehicle_ackermann_fraction);
+    ClassDB::bind_method(D_METHOD("get_vehicle_rear_steer_fraction", "vehicle_name"), &PsSimulation::get_vehicle_rear_steer_fraction);
+    ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
+    ClassDB::bind_method(D_METHOD("get_wheel_omega", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_omega);
+    ClassDB::bind_method(D_METHOD("get_wheel_slip_ratio", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_slip_ratio);
+    ClassDB::bind_method(D_METHOD("get_wheel_slip_angle", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_slip_angle);
+    ClassDB::bind_method(D_METHOD("get_wheel_load_n", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_load_n);
+    ClassDB::bind_method(D_METHOD("get_wheel_fx", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_fx);
+    ClassDB::bind_method(D_METHOD("get_wheel_fy", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_fy);
+    ClassDB::bind_method(D_METHOD("get_wheel_surface_name", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_surface_name);
+
+    ClassDB::bind_method(D_METHOD("add_adapter_time_us", "us"), &PsSimulation::add_adapter_time_us);
+    ClassDB::bind_method(D_METHOD("consume_adapter_frame_time_us"), &PsSimulation::consume_adapter_frame_time_us);
 }
 
 } // namespace ps_godot

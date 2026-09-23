@@ -45,6 +45,7 @@ ControlChannels InputMapper::process(const RawInput& raw) const {
     out.shift_down = raw.shift_down_pressed;
     out.camera = raw.camera_pressed;
     out.reset_vehicle = raw.reset_vehicle_pressed;
+    out.debug_toggle = raw.debug_toggle_pressed;
     return out;
 }
 

@@ -1,4 +1,5 @@
 #include "input_map.h"
+#include "frame_timing.h"
 
 #include <godot_cpp/classes/input.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -57,11 +58,14 @@ RawInput PsInputMap::gather_raw_input() const {
         || input->is_action_just_pressed("ps_camera");
     raw.reset_vehicle_pressed = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_BACK)
         || input->is_action_just_pressed("ps_reset_vehicle");
+    raw.debug_toggle_pressed = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_B)
+        || input->is_action_just_pressed("ps_debug_toggle");
 
     return raw;
 }
 
 void PsInputMap::_process(double /*delta*/) {
+    const ScopedAdapterTimer timer; // frame_timing.h
     channels_ = mapper_.process(gather_raw_input());
 }
 
@@ -105,6 +109,7 @@ void PsInputMap::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_shift_down"), &PsInputMap::get_shift_down);
     ClassDB::bind_method(D_METHOD("get_camera"), &PsInputMap::get_camera);
     ClassDB::bind_method(D_METHOD("get_reset_vehicle"), &PsInputMap::get_reset_vehicle);
+    ClassDB::bind_method(D_METHOD("get_debug_toggle"), &PsInputMap::get_debug_toggle);
 
     ClassDB::bind_method(D_METHOD("set_steer_deadzone", "value"), &PsInputMap::set_steer_deadzone);
     ClassDB::bind_method(D_METHOD("get_steer_deadzone"), &PsInputMap::get_steer_deadzone);
