@@ -107,18 +107,28 @@ private:
     // that another STATIC body already covers to ps::kHeightfieldNoCollision,
     // in place, right before the tile's content is handed to the backend.
     // Called once per newly-filled tile (never for an already-resident
-    // one), from update()'s step 5, before update_heightfield_body.
+    // one), from update()'s step 5, before update_heightfield_body - see
+    // this .cpp file's own header comment for the cost fix (a per-TileKey
+    // cache and a coarse-to-fine probe) and for two alternatives that were
+    // tried and measured not to help on this workload.
     void suppress_covered_samples(Slot& slot);
     // True for any BodyId belonging to THIS pool - every slot's body,
     // whether currently assigned to a real tile or still an unused
-    // placeholder. Found the hard way (PHYS-021): an unused slot's body is
-    // never repositioned away from its construction-time default pose
-    // (world origin) until it is first assigned a real tile, so a probe
-    // for a tile NEAR the world origin (exactly where a scenario's main
-    // spawn usually sits) could otherwise see dozens of stacked,
-    // content-irrelevant sibling tile bodies and mistake them for a real
-    // static feature - suppress_covered_samples must only ever suppress
-    // terrain in favour of FOREIGN static geometry, never a sibling tile.
+    // placeholder. Found the hard way (PHYS-021): an unassigned slot's body
+    // used to sit at its construction-time default pose (world origin)
+    // until first assigned a real tile, so a probe for a tile NEAR the
+    // world origin (exactly where a scenario's main spawn usually sits)
+    // could otherwise see dozens of stacked, content-irrelevant sibling
+    // tile bodies and mistake them for a real static feature -
+    // suppress_covered_samples must only ever suppress terrain in favour of
+    // FOREIGN static geometry, never a sibling tile. tile_manager.cpp's
+    // constructor now additionally PARKS an unassigned slot's body far from
+    // world origin (kUnassignedSlotParkingZ) - a second, independent fix for
+    // the same root observation, since the stacked-siblings hazard turned
+    // out to be a real GAMEPLAY collision hazard (a bottomless hole exactly
+    // at world origin, not just a suppression-probe misclassification risk)
+    // - but this function still guards the classification regardless of
+    // where an unassigned body happens to sit, so it is kept as-is.
     [[nodiscard]] bool is_own_pool_body(BodyId id) const;
 
     std::shared_ptr<const ITerrainSource> source_;
@@ -146,15 +156,27 @@ private:
     std::vector<TileKey> needed_keys_scratch_;
     std::vector<TileKey> pending_fill_queue_;
     std::vector<std::size_t> this_tick_slots_scratch_;
-    // suppress_covered_samples' own scratch: the tile-footprint broad probe
-    // (one collide_shape_into call per newly-filled tile, PLAN.md D8 - this
-    // is on the sequential per-tick path, same budget as
-    // update_heightfield_body's own scratch, never inside a parallel_batches
-    // job).
+
+    // suppress_covered_samples' own per-TileKey cache (PLAN.md M1/PHYS-021
+    // tile-suppression cost fix): the world's static geometry never changes
+    // at runtime, so a TileKey's suppression result (which sample indices
+    // get holed) is a pure function of it and is computed at most once per
+    // key for this TileManager's whole lifetime, however many times that
+    // key's tile is streamed in and back out again. Populated only from the
+    // SEQUENTIAL part of update() (step 5) - never touched from inside
+    // jobs.parallel_batches - so an ordinary std::unordered_map is safe with
+    // no lock. A tile with nothing to suppress is cached too (an empty
+    // vector), so a revisit skips even the cheap level-1 broad probe.
+    std::unordered_map<std::int64_t, std::vector<std::uint32_t>> suppression_cache_;
+    // suppress_covered_samples' own scratch - the tile-footprint/coarse-block
+    // probes' hits and the per-quad coverage flags. TileManager-wide (not
+    // per-slot): suppress_covered_samples only ever runs from update()'s
+    // sequential step 5 (tile_manager.cpp's own header comment on that
+    // function explains why a parallel version was tried and rejected), so
+    // there is exactly one call in flight at a time and nothing here needs
+    // per-slot duplication. Every buffer grows once to the largest tile seen
+    // and is reused forever after, like every other scratch buffer here.
     std::vector<ShapeContactHit> coverage_probe_scratch_;
-    // Per-quad ((samples_per_tile-1)^2) coverage flags, reused across calls
-    // (grows once to the largest tile seen, like every other scratch buffer
-    // here - see this file's header comment).
     std::vector<bool> quad_covered_scratch_;
 };
 

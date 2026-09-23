@@ -202,6 +202,15 @@ public:
     // no wall clock is read here or anywhere in the backend).
     virtual void step(real dt) = 0;
 
+    // Pure narrowphase query (no side effects) - same concurrent-read-only
+    // safety as collide_shape_into below: safe to call from multiple threads
+    // at once as long as the backend is not concurrently stepping and no
+    // body is being created/destroyed/moved at the same time. (PLAN.md M1's
+    // tile-suppression fix, ps::terrain::TileManager::suppress_covered_samples,
+    // measured calling this from inside a parallel_batches job and found no
+    // benefit for its own workload - see that function's own header comment
+    // point (d) - but the safety guarantee itself held and may still be
+    // useful elsewhere.)
     [[nodiscard]] virtual RayCastHit ray_cast(const Vec3& origin, const Vec3& direction, real max_distance) const = 0;
     [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
 
