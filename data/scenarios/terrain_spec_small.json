@@ -1,0 +1,30 @@
+{
+  "format": "physics_sim.terrain/1",
+  "seed": 777,
+  "world": {
+    "half_extent_m": 500.0,
+    "note": "Small synthetic terrain spec for CI determinism/hash-compare coverage (data/scenarios/terrain_tiles.json) - NOT the M1 test_ground spec (data/tracks/test_ground/terrain.json, off-limits to this scenario set), kept tiny so the fast/hash-compare CI legs stay quick."
+  },
+  "height_noise": {
+    "rolling_octaves": [
+      { "wavelength": 40.0, "amplitude": 2.0, "seed_offset": 1 },
+      { "wavelength": 13.0, "amplitude": 0.5, "seed_offset": 2 }
+    ],
+    "hill_octave": { "wavelength": 90.0, "amplitude": 4.0, "seed_offset": 5 },
+    "roughness": { "near_radius_m": 1000000.0, "far_radius_m": 2000000.0 }
+  },
+  "flat_zones": {
+    "zones": [
+      { "kind": "disc", "name": "spawn_disc", "center": [0.0, 0.0], "radius": 5.0, "blend": 5.0 }
+    ]
+  },
+  "surface_rules": {
+    "default": "grass",
+    "rules": [
+      { "surface": "dirt", "wavelength": 20.0, "seed_offset": 101, "min": 0.5 }
+    ]
+  },
+  "tiling": {
+    "tile_size_m": 16.0
+  }
+}

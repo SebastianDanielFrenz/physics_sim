@@ -6,7 +6,7 @@
 //
 // Scope decision (PLAN.md M1 explicitly allows this: "keep one resolution
 // and say so"): SINGLE FIXED RESOLUTION, no LOD/mip system. Every resident
-// tile is TerrainConfig::samples_per_tile x samples_per_tile regardless of
+// tile is ITerrainSource::samples_per_tile() x samples_per_tile() regardless of
 // distance from an interest point. Rationale: a correct LOD scheme needs
 // seam-free stitching between differently-sampled neighbour tiles (skirts,
 // T-junction fixes, or a quadtree with matching-resolution borders) - real

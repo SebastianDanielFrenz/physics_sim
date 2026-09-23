@@ -10,6 +10,7 @@
 
 #include "ps/terrain/terrain_source.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -20,7 +21,13 @@ namespace ps::terrain {
 // data/tracks/test_ground/terrain.json for an example and
 // tools/trackgen/trackgen/terrain.py for the Python reference this must
 // match bit-for-bit) and returns a source that evaluates it exactly.
+// samples_per_tile fixes the returned source's grid resolution for its
+// whole lifetime (ITerrainSource::samples_per_tile()) - the caller (e.g.
+// ps::io::build_scenario) must be the one deciding it, since TileManager
+// sizes its entire pool from this same source (see
+// ps/terrain/terrain_config.h's header comment for the bug a decoupled,
+// separately-configured resolution caused).
 // Throws std::runtime_error on a malformed or unreadable file.
-std::shared_ptr<ITerrainSource> load_procedural_terrain_source(const std::string& terrain_json_path);
+std::shared_ptr<ITerrainSource> load_procedural_terrain_source(const std::string& terrain_json_path, std::uint32_t samples_per_tile = 64);
 
 } // namespace ps::terrain

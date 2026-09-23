@@ -1,7 +1,10 @@
 #include "ps/io/scenario.h"
 
+#include "ps/terrain/procedural_terrain.h"
+
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -194,6 +197,32 @@ ScenarioArticulation read_articulation(const json& j) {
     return sa;
 }
 
+// PLAN.md M1: terrain source + a fixed set of interest points.
+// scenario_dir is the scenario file's own directory, for resolving a
+// relative spec_path (see ScenarioTerrain's doc comment).
+ScenarioTerrain read_terrain(const json& j, const std::filesystem::path& scenario_dir) {
+    ScenarioTerrain t;
+    std::filesystem::path spec_path = j.at("spec_path").get<std::string>();
+    if (spec_path.is_relative()) spec_path = scenario_dir / spec_path;
+    t.spec_path = spec_path.lexically_normal().string();
+
+    t.samples_per_tile = j.value("samples_per_tile", t.samples_per_tile);
+    t.config.max_resident_tiles = j.value("max_resident_tiles", t.config.max_resident_tiles);
+    t.config.max_tile_fills_per_tick = j.value("max_tile_fills_per_tick", t.config.max_tile_fills_per_tick);
+
+    if (j.contains("interest_points")) {
+        for (const auto& ipj : j.at("interest_points")) {
+            ScenarioTerrainInterestPoint ip;
+            ip.id = ipj.at("id").get<std::uint64_t>();
+            const auto xy = ipj.at("world_xy");
+            ip.world_xy = Vec3{xy.at(0).get<real>(), xy.at(1).get<real>(), 0.0};
+            ip.radius_m = ipj.at("radius_m").get<real>();
+            t.interest_points.push_back(ip);
+        }
+    }
+    return t;
+}
+
 } // namespace
 
 Scenario load_scenario(const std::string& json_path) {
@@ -227,6 +256,10 @@ Scenario load_scenario(const std::string& json_path) {
         if (j.contains("articulations")) {
             for (const auto& aj : j.at("articulations")) s.articulations.push_back(read_articulation(aj));
         }
+        if (j.contains("terrain")) {
+            const std::filesystem::path scenario_dir = std::filesystem::path(json_path).parent_path();
+            s.terrain = read_terrain(j.at("terrain"), scenario_dir);
+        }
     } catch (const json::exception& e) {
         throw std::runtime_error("invalid scenario " + json_path + ": " + e.what());
     }
@@ -256,6 +289,13 @@ BuiltScenario build_scenario(const Scenario& scenario) {
     for (const auto& sa : scenario.articulations) {
         const ArticulationId id = built.world->create_articulation(sa.desc);
         built.articulations_by_name[sa.name] = id;
+    }
+    if (scenario.terrain) {
+        auto source = terrain::load_procedural_terrain_source(scenario.terrain->spec_path, scenario.terrain->samples_per_tile);
+        built.world->set_terrain_source(source, scenario.terrain->config);
+        for (const auto& ip : scenario.terrain->interest_points) {
+            built.world->set_terrain_interest_point(ip.id, ip.world_xy, ip.radius_m);
+        }
     }
     return built;
 }

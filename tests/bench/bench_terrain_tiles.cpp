@@ -43,15 +43,15 @@ int main() {
 #ifndef PS_SOURCE_DIR
 #error "PS_SOURCE_DIR must be defined (see tests/bench/CMakeLists.txt)"
 #endif
+    constexpr std::uint32_t kSamplesPerTile = 64; // representative resolution (256 m tile / 64 samples ~= 4 m spacing)
     const std::string terrain_json = std::string(PS_SOURCE_DIR) + "/data/tracks/test_ground/terrain.json";
-    auto source = ps::terrain::load_procedural_terrain_source(terrain_json);
+    auto source = ps::terrain::load_procedural_terrain_source(terrain_json, kSamplesPerTile);
 
     WorldConfig cfg;
     cfg.job_workers = 0; // auto (PLAN.md D8 default)
     World world(cfg);
 
     ps::terrain::TerrainConfig tc;
-    tc.samples_per_tile = 64;      // representative resolution (256 m tile / 64 samples ~= 4 m spacing)
     tc.max_resident_tiles = 400;   // covers the stream radius below with headroom
     tc.max_tile_fills_per_tick = 8;
     world.set_terrain_source(source, tc);
@@ -97,15 +97,15 @@ int main() {
     const std::size_t resident = world.terrain_resident_tile_count();
     const std::size_t starved = world.terrain_starved_tile_count();
     const double bytes_per_tile =
-        static_cast<double>(tc.samples_per_tile) * tc.samples_per_tile * (sizeof(real) + sizeof(std::uint16_t));
+        static_cast<double>(kSamplesPerTile) * kSamplesPerTile * (sizeof(real) + sizeof(std::uint16_t));
     const double pool_mb = bytes_per_tile * static_cast<double>(tc.max_resident_tiles) / (1024.0 * 1024.0);
 
     std::printf("bench_terrain_tiles: %d ticks, %.0f km driven (%.0f m/tick)\n", kTicks, kTicks * kStepM / 1000.0, kStepM);
     std::printf("  tick time (ms): avg=%.4f median=%.4f p99=%.4f worst=%.4f (tick #%d)\n", total_ms / kTicks, median_ms,
                  p99_ms, worst_ms, worst_tick);
     std::printf("  resident tiles at end: %zu, starved: %zu\n", resident, starved);
-    std::printf("  tile sample pool: %u x %u samples/tile, %zu tiles resident capacity, ~%.2f MB\n", tc.samples_per_tile,
-                 tc.samples_per_tile, tc.max_resident_tiles, pool_mb);
+    std::printf("  tile sample pool: %u x %u samples/tile, %zu tiles resident capacity, ~%.2f MB\n", kSamplesPerTile,
+                 kSamplesPerTile, tc.max_resident_tiles, pool_mb);
 
     // Smoke bound, not a PLAN.md-mandated number (see header comment) - and
     // deliberately generous rather than tuned to the 240 Hz/4.17 ms tick

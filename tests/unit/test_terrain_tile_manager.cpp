@@ -86,7 +86,6 @@ TEST_CASE("TileManager streams tiles around an interest point and reports reside
     World world(cfg);
 
     TerrainConfig tc;
-    tc.samples_per_tile = 8;
     tc.max_resident_tiles = 64;
     tc.max_tile_fills_per_tick = 100; // no throttling for this test - just check the end state
     TileManager mgr(source, tc, world.backend());
@@ -106,7 +105,6 @@ TEST_CASE("TileManager throttles fills per tick and streams in over several tick
     World world(cfg);
 
     TerrainConfig tc;
-    tc.samples_per_tile = 8;
     tc.max_resident_tiles = 64;
     tc.max_tile_fills_per_tick = 3;
     TileManager mgr(source, tc, world.backend());
@@ -132,7 +130,6 @@ TEST_CASE("World::set_terrain_source wires into the terrain_tiles pipeline stage
     World world(cfg);
 
     TerrainConfig tc;
-    tc.samples_per_tile = 8;
     tc.max_resident_tiles = 64;
     tc.max_tile_fills_per_tick = 25;
     world.set_terrain_source(source, tc);
@@ -182,7 +179,6 @@ TEST_CASE("TileManager::update allocates nothing when the needed tile set is unc
     World world(cfg);
 
     TerrainConfig tc;
-    tc.samples_per_tile = 8;
     tc.max_resident_tiles = 9;
     tc.max_tile_fills_per_tick = 9;
     TileManager mgr(source, tc, world.backend());

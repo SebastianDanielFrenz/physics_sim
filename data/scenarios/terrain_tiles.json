@@ -1,0 +1,29 @@
+{
+  "name": "terrain_tiles",
+  "duration_s": 2.0,
+  "tick_rate_hz": 240.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "bodies": [
+    {
+      "name": "ball",
+      "motion": "dynamic",
+      "mass": 1.0,
+      "shape": {"type": "sphere", "radius": 0.3},
+      "position": [3, 3, 20],
+      "gravity_enabled": true,
+      "allow_sleep": false
+    }
+  ],
+  "joints": [],
+  "terrain": {
+    "spec_path": "terrain_spec_small.json",
+    "samples_per_tile": 8,
+    "max_resident_tiles": 25,
+    "max_tile_fills_per_tick": 25,
+    "interest_points": [
+      { "id": 1, "world_xy": [0.0, 0.0], "radius_m": 24.0 }
+    ]
+  },
+  "telemetry_csv": "terrain_tiles.csv"
+}

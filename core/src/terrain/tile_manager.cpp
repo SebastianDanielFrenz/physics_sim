@@ -7,13 +7,13 @@ namespace ps::terrain {
 
 TileManager::TileManager(std::shared_ptr<const ITerrainSource> source, const TerrainConfig& config, IRigidBackend& backend)
     : source_(std::move(source)), config_(config), backend_(backend) {
-    assert(config_.samples_per_tile % 2 == 0 && config_.samples_per_tile >= 2 &&
-           "TerrainConfig::samples_per_tile must be even (see ps::HeightfieldShape's own doc comment)");
+    const std::uint32_t n = source_->samples_per_tile();
+    assert(n % 2 == 0 && n >= 2 && "ITerrainSource::samples_per_tile() must be even (see ps::HeightfieldShape's own doc comment)");
 
     slots_.resize(config_.max_resident_tiles);
     free_slots_.reserve(config_.max_resident_tiles);
 
-    const real spacing = source_->tile_size_m() / static_cast<real>(config_.samples_per_tile - 1);
+    const real spacing = source_->tile_size_m() / static_cast<real>(n - 1);
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& slot = slots_[i];
         ensure_slot_storage(slot);
@@ -21,10 +21,9 @@ TileManager::TileManager(std::shared_ptr<const ITerrainSource> source, const Ter
         HeightfieldShape hf;
         hf.origin = Vec3::zero(); // repositioned per tile via backend_.set_pose, never via the shape's own origin
         hf.sample_spacing = spacing;
-        hf.sample_count = config_.samples_per_tile;
-        hf.heights.assign(static_cast<std::size_t>(config_.samples_per_tile) * config_.samples_per_tile, 0.0);
-        hf.cell_surface_ids.assign(
-            static_cast<std::size_t>(config_.samples_per_tile - 1) * (config_.samples_per_tile - 1), kInvalidSurfaceId);
+        hf.sample_count = n;
+        hf.heights.assign(static_cast<std::size_t>(n) * n, 0.0);
+        hf.cell_surface_ids.assign(static_cast<std::size_t>(n - 1) * (n - 1), kInvalidSurfaceId);
 
         BodyDesc desc;
         desc.shape = hf;
@@ -42,7 +41,7 @@ TileManager::~TileManager() {
 }
 
 void TileManager::ensure_slot_storage(Slot& slot) {
-    const std::size_t n = config_.samples_per_tile;
+    const std::size_t n = source_->samples_per_tile();
     slot.sample.heights.assign(n * n, 0.0);
     slot.sample.cell_surface_ids.assign((n - 1) * (n - 1), kInvalidSurfaceId);
     slot.sample.samples_per_tile = static_cast<std::uint32_t>(n);
