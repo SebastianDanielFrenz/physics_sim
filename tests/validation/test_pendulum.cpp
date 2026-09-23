@@ -27,7 +27,7 @@
 
 using namespace ps;
 
-TEST_CASE("Pendulum period matches the physical-pendulum formula within 0.1%", "[validation][pendulum]") {
+TEST_CASE("Pendulum period matches the physical-pendulum formula within 0.1%", "[validation][pendulum][backend]") {
     constexpr double kPi = 3.14159265358979323846;
     const double g = 9.81;
     const double L = 2.0;     // pivot-to-COM distance (m)

@@ -27,7 +27,8 @@ else()
 endif()
 function(ps_mark_walltime_bench test_name asserts_timing)
   if(asserts_timing)
-    set_tests_properties(${test_name} PROPERTIES LABELS walltime PROCESSORS 24)
+    set_property(TEST ${test_name} APPEND PROPERTY LABELS walltime)
+    set_tests_properties(${test_name} PROPERTIES PROCESSORS 24)
   endif()
 endfunction()
 
@@ -46,6 +47,8 @@ target_link_libraries(bench_force_elements
 target_compile_definitions(bench_force_elements PRIVATE PS_BENCH_ASSERT_TIMING=${PS_BENCH_FORCE_ASSERTS_TIMING})
 
 add_test(NAME bench_force_elements COMMAND bench_force_elements)
+# Topic labels for tools/ci.ps1 -Affected/-Topic (CLAUDE.md "CI").
+set_tests_properties(bench_force_elements PROPERTIES LABELS "bench;jobs")
 
 # This is a wall-clock scaling benchmark (asserts >= 6x speedup 1->10
 # workers from busy_ns measurements) - it went from a comfortable pass in
@@ -78,6 +81,7 @@ target_link_libraries(bench_contact_coupling
 )
 
 add_test(NAME bench_contact_coupling COMMAND bench_contact_coupling)
+set_tests_properties(bench_contact_coupling PROPERTIES LABELS "bench;contact;articulation")
 
 # bench_terrain_tiles - PLAN.md M1 terrain-tile acceptance: per-tick/worst-
 # tick cost while streaming tiles around a moving interest point, using the
@@ -111,6 +115,7 @@ target_compile_definitions(bench_terrain_tiles PRIVATE PS_SOURCE_DIR="${CMAKE_SO
 target_compile_definitions(bench_terrain_tiles PRIVATE PS_SANITIZER_BUILD=$<BOOL:${PS_SANITIZER_BUILD}>)
 
 add_test(NAME bench_terrain_tiles COMMAND bench_terrain_tiles)
+set_tests_properties(bench_terrain_tiles PROPERTIES LABELS "bench;terrain;io")
 
 # Same root cause and same fix as bench_force_elements above: this is a
 # wall-clock timing bound (its own 250 ms smoke bound), and tools/ci.ps1

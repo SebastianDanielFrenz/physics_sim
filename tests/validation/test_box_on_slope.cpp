@@ -67,7 +67,7 @@ double slide_distance(double theta_rad, double mu, double duration_s) {
 
 } // namespace
 
-TEST_CASE("Box on a slope below the friction angle does not slide", "[validation][box_on_slope]") {
+TEST_CASE("Box on a slope below the friction angle does not slide", "[validation][box_on_slope][backend]") {
     const double mu = 0.5;                 // friction angle atan(0.5) = 26.57 deg
     const double theta = 15.0 * 3.14159265358979323846 / 180.0; // well below the friction angle
     const double dist = slide_distance(theta, mu, 1.5);
@@ -75,7 +75,7 @@ TEST_CASE("Box on a slope below the friction angle does not slide", "[validation
     REQUIRE(std::abs(dist) < 0.01); // < 1 cm of settling wobble, no sustained slide
 }
 
-TEST_CASE("Box on a slope above the friction angle slides", "[validation][box_on_slope]") {
+TEST_CASE("Box on a slope above the friction angle slides", "[validation][box_on_slope][backend]") {
     const double mu = 0.5;
     const double theta = 40.0 * 3.14159265358979323846 / 180.0; // well above the friction angle
     const double dist = slide_distance(theta, mu, 1.0);

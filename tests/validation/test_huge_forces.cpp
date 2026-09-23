@@ -59,7 +59,7 @@ double mechanical_energy(World& world, BodyId id, double z_ref) {
 
 } // namespace
 
-TEST_CASE("A 1500 kg box under huge forces does not tunnel, over-penetrate or gain energy", "[validation][huge_forces]") {
+TEST_CASE("A 1500 kg box under huge forces does not tunnel, over-penetrate or gain energy", "[validation][huge_forces][backend]") {
     WorldConfig cfg;
     cfg.tick_rate_hz = 240.0;
     cfg.gravity = Vec3{0, 0, -9.81};

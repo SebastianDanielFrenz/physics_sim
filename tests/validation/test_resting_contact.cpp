@@ -81,14 +81,14 @@ SettleResult drop_box_on_ground(const Vec3& half_extents, double mass, double dr
 
 } // namespace
 
-TEST_CASE("A 1500 kg car-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact][long]") {
+TEST_CASE("A 1500 kg car-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact][long][backend]") {
     const SettleResult r = drop_box_on_ground(Vec3{2.25, 0.9, 0.7}, 1500.0, 0.5);
     INFO("max_penetration_mm=" << (r.max_penetration_m * 1000.0) << " drift_mm=" << (r.drift_m * 1000.0));
     CHECK(r.max_penetration_m < 0.01);
     CHECK(r.drift_m < 0.01);
 }
 
-TEST_CASE("A 20 t combine-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact][long]") {
+TEST_CASE("A 20 t combine-sized box settles on the ground with < 1 cm penetration and no drift", "[validation][resting_contact][long][backend]") {
     const SettleResult r = drop_box_on_ground(Vec3{4.0, 2.0, 1.75}, 20000.0, 0.5);
     INFO("max_penetration_mm=" << (r.max_penetration_m * 1000.0) << " drift_mm=" << (r.drift_m * 1000.0));
     CHECK(r.max_penetration_m < 0.01);
@@ -102,7 +102,7 @@ TEST_CASE("A 20 t combine-sized box settles on the ground with < 1 cm penetratio
 // Runs on the debug/asan/linux-asan-ubsan/linux-tsan legs by default -
 // exercises Jolt resting contact under those sanitizers, which those legs
 // would otherwise skip entirely once the two tests above are [long].
-TEST_CASE("A 1500 kg car-sized box settles on the ground, short settle+tail (short)", "[resting_contact][sanitizer]") {
+TEST_CASE("A 1500 kg car-sized box settles on the ground, short settle+tail (short)", "[resting_contact][sanitizer][backend]") {
     const SettleResult r = drop_box_on_ground(Vec3{2.25, 0.9, 0.7}, 1500.0, 0.5, 1.0, 2.0);
     INFO("max_penetration_mm=" << (r.max_penetration_m * 1000.0) << " drift_mm=" << (r.drift_m * 1000.0));
     CHECK(r.max_penetration_m < 0.01);

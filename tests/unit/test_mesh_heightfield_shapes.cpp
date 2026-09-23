@@ -34,7 +34,7 @@ MeshShape flat_quad_mesh(real half_extent, SurfaceId surface) {
 
 } // namespace
 
-TEST_CASE("A body settles resting on a MeshShape", "[shapes][mesh]") {
+TEST_CASE("A body settles resting on a MeshShape", "[shapes][mesh][backend]") {
     WorldConfig cfg;
     cfg.job_workers = 1;
     cfg.gravity = Vec3{0, 0, -9.81};
@@ -61,7 +61,7 @@ TEST_CASE("A body settles resting on a MeshShape", "[shapes][mesh]") {
     REQUIRE(std::abs(z - 0.5) < 0.02); // settles within 2 cm of the analytic resting height
 }
 
-TEST_CASE("A body settles resting on a flat HeightfieldShape", "[shapes][heightfield]") {
+TEST_CASE("A body settles resting on a flat HeightfieldShape", "[shapes][heightfield][backend]") {
     WorldConfig cfg;
     cfg.job_workers = 1;
     cfg.gravity = Vec3{0, 0, -9.81};
@@ -102,7 +102,7 @@ TEST_CASE("A body settles resting on a flat HeightfieldShape", "[shapes][heightf
 // height would not track x the way it should, or the returned surface would
 // not track y the way it should (most likely: swapped, or the surface
 // reading back constant regardless of y).
-TEST_CASE("Heightfield shape cast reports the right height and surface for x and y", "[shapes][heightfield]") {
+TEST_CASE("Heightfield shape cast reports the right height and surface for x and y", "[shapes][heightfield][backend]") {
     WorldConfig cfg;
     cfg.job_workers = 1;
     World world(cfg);
@@ -151,7 +151,7 @@ TEST_CASE("Heightfield shape cast reports the right height and surface for x and
     }
 }
 
-TEST_CASE("update_heightfield_body allocates nothing once warmed up", "[shapes][heightfield][alloc]") {
+TEST_CASE("update_heightfield_body allocates nothing once warmed up", "[shapes][heightfield][alloc][backend]") {
     if (!ps::jobs::debug_alloc::hook_available()) {
         WARN("debug_alloc hook unavailable under this build (ASan/TSan) - skipping");
         return;

@@ -32,7 +32,7 @@
 
 using namespace ps;
 
-TEST_CASE("Free fall matches the symplectic-Euler analytic solution to 1e-6 relative", "[validation][free_fall]") {
+TEST_CASE("Free fall matches the symplectic-Euler analytic solution to 1e-6 relative", "[validation][free_fall][backend]") {
     const float dt_f = 1.0f / 240.0f;
     const double dt_used = double(dt_f);
     const float g_f = 9.81f;

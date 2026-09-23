@@ -173,7 +173,7 @@ std::size_t auto_grain(std::size_t n, int workers) {
 
 } // namespace
 
-TEST_CASE("A pure nested parallel_for allocates nothing at 1/2/4/10 workers", "[jobs][debug_alloc]") {
+TEST_CASE("A pure nested parallel_for allocates nothing at 1/2/4/10 workers", "[jobs][debug_alloc][articulation]") {
     if (!hook_available()) {
         WARN("debug_alloc's own operator new/delete overrides are compiled out under ASan/TSan - nothing to check here on this build.");
         return;
@@ -249,7 +249,7 @@ TEST_CASE("Stepping many articulations (open-chain, floating-base, four-bar) acr
 }
 
 TEST_CASE("A full World::step with articulations, force elements and Jolt bodies (incl. a resting contact) allocates nothing",
-          "[world][articulation][debug_alloc]") {
+          "[world][articulation][debug_alloc][jobs]") {
     if (!hook_available()) {
         WARN("debug_alloc's own operator new/delete overrides are compiled out under ASan/TSan - nothing to check here on this build.");
         return;

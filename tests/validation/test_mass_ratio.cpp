@@ -179,7 +179,7 @@ RunResult run_mass_ratio_chain(const std::vector<LinkSpec>& links, double durati
 // vs. 20 t box) rather than a discretization-error problem the usual
 // finer-step remedies fix - see the report for the full measurement table
 // and the caveat this is not yet root-caused enough to prescribe a fix.
-TEST_CASE("A 20 t box hanging through a 10 kg link holds without exploding", "[validation][mass_ratio][long][!mayfail]") {
+TEST_CASE("A 20 t box hanging through a 10 kg link holds without exploding", "[validation][mass_ratio][long][!mayfail][backend]") {
     const std::vector<LinkSpec> links = {
         LinkSpec{CapsuleShape{0.3, 0.05}, 10.0, 0.35},  // light link near the pivot
         LinkSpec{BoxShape{Vec3{1.0, 1.0, 1.0}}, 20000.0, 1.0}, // heavy box at the far end
@@ -193,7 +193,7 @@ TEST_CASE("A 20 t box hanging through a 10 kg link holds without exploding", "[v
     CHECK(r.energy_end <= r.energy_start * 1.01 + 1.0); // no energy gain (small numerical slack)
 }
 
-TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding", "[validation][mass_ratio][long]") {
+TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding", "[validation][mass_ratio][long][backend]") {
     const std::vector<LinkSpec> links = {
         LinkSpec{BoxShape{Vec3{1.0, 1.0, 1.0}}, 20000.0, 1.0}, // heavy box near the pivot
         LinkSpec{CapsuleShape{0.3, 0.05}, 10.0, 0.35},         // light link at the far end
@@ -217,7 +217,7 @@ TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding", "[va
 // the debug/asan/linux-asan-ubsan/linux-tsan legs by default - exercises
 // the same 2000:1-mass-ratio Jolt joint-solving path those legs would
 // otherwise skip entirely once the 30 s tests are excluded as [long].
-TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding, 3 s (short)", "[mass_ratio][sanitizer]") {
+TEST_CASE("A 10 kg body hanging below a 20 t body holds without exploding, 3 s (short)", "[mass_ratio][sanitizer][backend]") {
     const std::vector<LinkSpec> links = {
         LinkSpec{BoxShape{Vec3{1.0, 1.0, 1.0}}, 20000.0, 1.0}, // heavy box near the pivot
         LinkSpec{CapsuleShape{0.3, 0.05}, 10.0, 0.35},         // light link at the far end

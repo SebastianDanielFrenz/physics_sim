@@ -162,7 +162,7 @@ void run_joint_chain_energy_case(double duration_s, double max_rel_drift) {
 
 } // namespace
 
-TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 60 s", "[validation][joint_chain][long]") {
+TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 60 s", "[validation][joint_chain][long][backend]") {
     run_joint_chain_energy_case(60.0, 0.005);
 }
 
@@ -172,6 +172,6 @@ TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 60 s", "[v
 // default (tools/ci.ps1, not -Full) - exercises the Jolt hinge-joint plus
 // job-scheduled force-element path those legs would otherwise skip
 // entirely once the 60 s test is excluded as [long].
-TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 2 s (short)", "[joint_chain][sanitizer]") {
+TEST_CASE("Frictionless joint chain conserves energy within 0.5% over 2 s (short)", "[joint_chain][sanitizer][backend]") {
     run_joint_chain_energy_case(2.0, 0.005);
 }

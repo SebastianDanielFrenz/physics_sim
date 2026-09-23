@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-TEST_CASE("version_string reports the expected shape", "[hello]") {
+TEST_CASE("version_string reports the expected shape", "[hello][backend]") {
     const char* v = ps::version_string();
     REQUIRE(v != nullptr);
     REQUIRE(std::strlen(v) > 0);
@@ -20,6 +20,6 @@ TEST_CASE("version_string reports the expected shape", "[hello]") {
     REQUIRE(dots == 2);
 }
 
-TEST_CASE("Jolt backend self-check succeeds", "[hello][jolt]") {
+TEST_CASE("Jolt backend self-check succeeds", "[hello][jolt][backend]") {
     REQUIRE(ps::jolt_backend_self_check());
 }

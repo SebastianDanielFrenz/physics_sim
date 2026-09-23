@@ -270,11 +270,11 @@ void run_arm_resting_case(ContactStrategy strategy, const char* label) {
     CHECK(m.rms_joint_accel < 10.0);
 }
 
-TEST_CASE("Loader-arm rig (Compliant): bucket rests on the ground for 30 s", "[validation][contact][arm][long]") {
+TEST_CASE("Loader-arm rig (Compliant): bucket rests on the ground for 30 s", "[validation][contact][arm][long][articulation]") {
     run_arm_resting_case(ContactStrategy::Compliant, "Compliant");
 }
 
-TEST_CASE("Loader-arm rig (ProxyBody): bucket rests on the ground for 30 s", "[validation][contact][arm][long]") {
+TEST_CASE("Loader-arm rig (ProxyBody): bucket rests on the ground for 30 s", "[validation][contact][arm][long][articulation]") {
     run_arm_resting_case(ContactStrategy::ProxyBody, "ProxyBody");
 }
 
@@ -315,11 +315,11 @@ void run_press_case(ContactStrategy strategy, const char* label) {
     CHECK(std::abs(penetration - expected_penetration) < 0.002); // 2 mm - both against sub-cm penetrations
 }
 
-TEST_CASE("Rail rig pressed with a known force (Compliant) matches analytic Hunt-Crossley equilibrium", "[validation][contact][press]") {
+TEST_CASE("Rail rig pressed with a known force (Compliant) matches analytic Hunt-Crossley equilibrium", "[validation][contact][press][articulation]") {
     run_press_case(ContactStrategy::Compliant, "Compliant");
 }
 
-TEST_CASE("Rail rig pressed with a known force (ProxyBody) matches analytic Hunt-Crossley equilibrium", "[validation][contact][press][!mayfail]") {
+TEST_CASE("Rail rig pressed with a known force (ProxyBody) matches analytic Hunt-Crossley equilibrium", "[validation][contact][press][!mayfail][articulation]") {
     // ProxyBody's own contact comes from Jolt's solver (penetration_slop,
     // baumgarte - i_rigid_backend.h), not this codebase's Hunt-Crossley law,
     // so there is no reason to expect it to match the SAME analytic curve
@@ -421,11 +421,11 @@ void run_crate_push_case(ContactStrategy strategy, const char* label) {
     CHECK(std::abs(p_total - p0_total) < 0.05 * std::abs(p0_total));
 }
 
-TEST_CASE("Rail rig (Compliant) pushes a 500 kg dynamic crate: momentum conserved, no interpenetration", "[validation][contact][crate]") {
+TEST_CASE("Rail rig (Compliant) pushes a 500 kg dynamic crate: momentum conserved, no interpenetration", "[validation][contact][crate][articulation]") {
     run_crate_push_case(ContactStrategy::Compliant, "Compliant");
 }
 
-TEST_CASE("Rail rig (ProxyBody) pushes a 500 kg dynamic crate: momentum conserved, no interpenetration", "[validation][contact][crate]") {
+TEST_CASE("Rail rig (ProxyBody) pushes a 500 kg dynamic crate: momentum conserved, no interpenetration", "[validation][contact][crate][articulation]") {
     run_crate_push_case(ContactStrategy::ProxyBody, "ProxyBody");
 }
 
@@ -483,11 +483,11 @@ void run_vehicle_drop_case(ContactStrategy strategy, const char* label) {
     CHECK(rms_accel < 10.0);
 }
 
-TEST_CASE("Floating-base vehicle (Compliant) dropped 0.2 m settles within 1 cm, stable 30 s", "[validation][contact][vehicle][long]") {
+TEST_CASE("Floating-base vehicle (Compliant) dropped 0.2 m settles within 1 cm, stable 30 s", "[validation][contact][vehicle][long][articulation]") {
     run_vehicle_drop_case(ContactStrategy::Compliant, "Compliant");
 }
 
-TEST_CASE("Floating-base vehicle (ProxyBody) dropped 0.2 m settles within 1 cm, stable 30 s", "[validation][contact][vehicle][long]") {
+TEST_CASE("Floating-base vehicle (ProxyBody) dropped 0.2 m settles within 1 cm, stable 30 s", "[validation][contact][vehicle][long][articulation]") {
     run_vehicle_drop_case(ContactStrategy::ProxyBody, "ProxyBody");
 }
 
@@ -537,15 +537,15 @@ void run_impact_case(ContactStrategy strategy, real impact_speed, const char* la
     CHECK(max_penetration < max_penetration_bound);
 }
 
-TEST_CASE("Rail rig (Compliant) impact at 5 m/s: no tunnelling, bounded penetration", "[validation][contact][impact]") {
+TEST_CASE("Rail rig (Compliant) impact at 5 m/s: no tunnelling, bounded penetration", "[validation][contact][impact][articulation]") {
     run_impact_case(ContactStrategy::Compliant, 5.0, "Compliant@5");
 }
 
-TEST_CASE("Rail rig (Compliant) impact at 20 m/s: no tunnelling, bounded penetration", "[validation][contact][impact]") {
+TEST_CASE("Rail rig (Compliant) impact at 20 m/s: no tunnelling, bounded penetration", "[validation][contact][impact][articulation]") {
     run_impact_case(ContactStrategy::Compliant, 20.0, "Compliant@20");
 }
 
-TEST_CASE("Rail rig (ProxyBody) impact at 5 m/s: no tunnelling, bounded penetration", "[validation][contact][impact]") {
+TEST_CASE("Rail rig (ProxyBody) impact at 5 m/s: no tunnelling, bounded penetration", "[validation][contact][impact][articulation]") {
     run_impact_case(ContactStrategy::ProxyBody, 5.0, "ProxyBody@5");
 }
 
@@ -561,6 +561,6 @@ TEST_CASE("Rail rig (ProxyBody) impact at 5 m/s: no tunnelling, bounded penetrat
 // measured number rather than loosening the shared 5 cm bound the other
 // three impact cases in this file all meet.
 TEST_CASE("Rail rig (ProxyBody) impact at 20 m/s: no tunnelling, bounded penetration (known open issue)",
-          "[validation][contact][impact][!mayfail]") {
+          "[validation][contact][impact][!mayfail][articulation]") {
     run_impact_case(ContactStrategy::ProxyBody, 20.0, "ProxyBody@20");
 }

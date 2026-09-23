@@ -58,7 +58,7 @@ std::uint64_t run_scenario(int workers, std::size_t num_bodies, std::size_t grai
 
 } // namespace
 
-TEST_CASE("State hash is identical across 1, 2, 4, 10 and 24 workers", "[determinism][heavy]") {
+TEST_CASE("State hash is identical across 1, 2, 4, 10 and 24 workers", "[determinism][heavy][world][backend]") {
     constexpr std::size_t kBodies = 64;
     constexpr int kTicks = 40;
 
@@ -292,7 +292,7 @@ std::uint64_t run_contact_scenario(int workers, int ticks) {
 
 } // namespace
 
-TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation][heavy]") {
+TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation][heavy][world]") {
     constexpr int kTicks = 100;
     const std::uint64_t reference = run_articulation_scenario(1, kTicks);
     for (int workers : {2, 4, 10, 24}) {
@@ -302,7 +302,7 @@ TEST_CASE("State hash with several articulations is identical across 1, 2, 4, 10
     }
 }
 
-TEST_CASE("State hash with contact-bearing articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation][contact][heavy]") {
+TEST_CASE("State hash with contact-bearing articulations is identical across 1, 2, 4, 10 and 24 workers", "[determinism][articulation][contact][heavy][world]") {
     constexpr int kTicks = 100;
     const std::uint64_t reference = run_contact_scenario(1, kTicks);
     for (int workers : {2, 4, 10, 24}) {
@@ -394,7 +394,7 @@ std::uint64_t run_vehicle_scenario(int workers, int ticks) {
 
 } // namespace
 
-TEST_CASE("State hash with vehicles is identical across 1, 2, 4, 10 and 24 workers", "[determinism][vehicle][heavy]") {
+TEST_CASE("State hash with vehicles is identical across 1, 2, 4, 10 and 24 workers", "[determinism][vehicle][heavy][world]") {
     constexpr int kTicks = 150;
     const std::uint64_t reference = run_vehicle_scenario(1, kTicks);
     for (int workers : {2, 4, 10, 24}) {
@@ -420,7 +420,7 @@ std::uint64_t run_scenario_file(const char* file, int workers) {
 } // namespace
 
 TEST_CASE("State hash with two terrain interest points and suppression is identical across 1, 2, 4, 10 and 24 workers",
-          "[determinism][terrain][heavy]") {
+          "[determinism][terrain][heavy][world][io]") {
     const std::uint64_t reference = run_scenario_file("terrain_multi_interest.json", 1);
     for (int workers : {2, 4, 10, 24}) {
         const std::uint64_t h = run_scenario_file("terrain_multi_interest.json", workers);
@@ -429,7 +429,7 @@ TEST_CASE("State hash with two terrain interest points and suppression is identi
     }
 }
 
-TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress]") {
+TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {
     constexpr std::size_t kBodies = 8;
     constexpr int kTicks = 10;
 

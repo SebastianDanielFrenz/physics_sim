@@ -102,7 +102,7 @@ ShotResult fire_shot(double sphere_radius, double speed, double angle_deg, Motio
 
 } // namespace
 
-TEST_CASE("Fast spheres do not tunnel through a thin plate with LinearCast on", "[validation][tunnelling]") {
+TEST_CASE("Fast spheres do not tunnel through a thin plate with LinearCast on", "[validation][tunnelling][backend]") {
     const std::vector<double> radii = {0.05, 0.2, 0.5};
     const std::vector<double> speeds = {50.0, 100.0, 200.0, 300.0};
     const std::vector<double> angles = {0.0, 30.0};
