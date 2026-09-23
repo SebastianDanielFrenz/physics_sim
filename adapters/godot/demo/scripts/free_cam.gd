@@ -23,9 +23,11 @@ func _ready() -> void:
 		_simulation = get_node_or_null(simulation_path)
 
 func _process(delta: float) -> void:
+	var t0 := Time.get_ticks_usec()
 	_handle_movement(delta)
 	if _simulation != null:
 		position = _simulation.rebase_focus(position)
+		_simulation.add_adapter_time_us(Time.get_ticks_usec() - t0)
 
 func _handle_movement(delta: float) -> void:
 	var dir := Vector3.ZERO

@@ -1,0 +1,8 @@
+{
+  "name": "m1_test_drive_world",
+  "duration_s": 0.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0
+}

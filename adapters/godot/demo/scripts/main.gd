@@ -1,54 +1,132 @@
 extends Node3D
-# adapters/godot/demo/scripts/main.gd — PLAN.md P2 demo project entry point.
+# adapters/godot/demo/scripts/main.gd — PLAN.md M1 demo project entry point,
+# "first test drive".
 #
-# Builds the scene procedurally (lighting, ground plane with the
-# world-space speed grid, PsSimulation, free camera, HUD, debug draw, input
-# map) rather than hand-authoring a large .tscn, so the demo has one
-# obvious place to change which scenario/track it loads. Loads a P1
-# scenario (any file under data/scenarios/) to satisfy PLAN.md P2's "P1
-# scenarios play back in Godot" acceptance criterion, and spawns one
-# PsBodyNode3D per body and one per articulation link generically (no
-# hardcoded body/articulation names) via PsSimulation's
-# get_body_names()/get_articulation_names()/get_articulation_link_count().
+# Builds the scene procedurally: a fresh, empty World (scenarios/
+# m1_world.json - just WorldConfig, no bodies: this demo builds everything
+# else itself, unlike the P1/P2 demo which played back a pre-built P1
+# scenario file), the test ground's REAL collision + procedural terrain
+# (PsSimulation.import_test_ground), the P3 passenger car spawned on it
+# (PsSimulation.create_body_dynamic + spawn_vehicle, at data/tracks/
+# test_ground/test_ground.json's own "spawn_main" point - the vehicle is
+# also the terrain's streaming interest point, PLAN.md M1, updated
+# automatically every tick inside PsSimulation's post_step), shown with the
+# existing car_sedan.glb art (vehicle_visual.gd), a free-look camera and a
+# chase camera (toggled with the "camera" control action), a debug-draw
+# toggle, and the HUD (hud.gd). Xbox/keyboard input (PsInputMap) feeds the
+# vehicle only through named control channels (PsSimulation.set_control) -
+# PLAN.md P2/M1's own rule.
+#
+# --m1-autopilot (a Godot user cmdline arg, after "--" - see
+# adapters/godot/smoke_test.ps1): runs a scripted throttle/brake/steer
+# sequence instead of waiting for a human, measures distance travelled
+# (integral of speed - robust to origin rebasing/spawn point, unlike a
+# start/end position diff) and top speed, checks for NaN and that the
+# chassis stayed upright, prints one grep-able "ps_godot M1 smoke:" summary
+# line, then quits - this IS the M1 headless smoke test's driving check.
 
-@export var scenario_relative_path: String = "data/scenarios/articulation_chain.json"
-@export var load_test_ground: bool = true
+const VEHICLE_NAME := "car"
+const CHASSIS_BODY_NAME := "car_chassis"
+# Mirrors data/scenarios/vehicle_step_steer.json's own "chassis" body specs
+# (already validated by every P3 vehicle acceptance test, out/
+# handover_p3.md) rather than inventing new numbers - sized for
+# car_sedan.json's own wheel geometry (wheelbase 2.70 m, track 1.56 m,
+# wheel attachment z = -0.343 relative to chassis origin).
+const CHASSIS_MASS := 1500.0
+const CHASSIS_HALF_EXTENTS := Vector3(2.0, 0.4, 0.15)
+const CHASSIS_Z_OFFSET := 0.6
+
+@export var vehicle_relative_path: String = "data/vehicles/car_sedan.json"
+@export var track_relative_dir: String = "data/tracks/test_ground"
+@export var model_relative_path: String = "data/models/car_sedan/car_sedan.glb"
+@export var spawn_id: String = "spawn_main" # data/tracks/test_ground/test_ground.json's centre point - see this adapter's report for a finding at the paved "spawn_straight_car"/"spawn_ramp_*" points (the wheel's own reported surface flickers asphalt<->dirt within about a second of spawning there, even with zero/near-zero lateral movement - looks like a terrain-heightfield/feature-mesh collision overlap under the flat zones, not investigated further per this adapter's core-free lane). spawn_main sits on the open (unpaved, lower-traction "dirt") procedural terrain but is stable/consistent.
+@export var terrain_stream_radius_m: float = 700.0
+@export var terrain_max_resident_tiles: int = 512
+@export var terrain_max_tile_fills_per_tick: int = 16
 
 var simulation: Node
 var hud: CanvasLayer
+var debug_draw: Node
+var input_map: Node
+var free_camera: Camera3D
+var chase_camera: Camera3D
+var using_chase_camera: bool = true
+
+var _autopilot: bool = false
+var _autopilot_phase_t: float = 0.0
+var _autopilot_distance_m: float = 0.0
+var _autopilot_max_speed_kmh: float = 0.0
+var _autopilot_nan_seen: bool = false
+var _autopilot_done: bool = false
+var _autopilot_last_logged_second: int = -1
+
+var _screenshot_path: String = ""
+var _screenshot_t: float = 0.0
+var _screenshot_taken: bool = false
 
 func _repo_root() -> String:
 	# demo/ is adapters/godot/demo; the repo root is three levels up.
 	return ProjectSettings.globalize_path("res://").path_join("../../..")
 
 func _ready() -> void:
-	print("ps_godot main.gd: _ready start")
-	_setup_lighting_and_ground()
+	# Godot processes a parent's _process before its children's (pre-order
+	# tree traversal) unless process_priority says otherwise. This node's
+	# own _process reads PsInputMap's channels (a child, added below) and
+	# must see THIS frame's value, not last frame's - a high priority
+	# number forces it to run LAST among this frame's _process calls
+	# (lower priority number = earlier; every child below keeps the
+	# default priority 0).
+	set_process_priority(1000)
+
+	var user_args := OS.get_cmdline_user_args()
+	_autopilot = "--m1-autopilot" in user_args
+	# --m1-screenshot=<absolute_path.png>: saves one PNG of the running
+	# demo a few seconds in (viewport texture -> Image, no user interaction
+	# needed - only works when Godot actually has a rendering context, not
+	# under --headless; see this adapter's report).
+	for a in user_args:
+		if a.begins_with("--m1-screenshot="):
+			_screenshot_path = a.substr(len("--m1-screenshot="))
+	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path)
+	_setup_lighting()
 
 	simulation = ClassDB.instantiate("PsSimulation")
 	simulation.name = "PsSimulation"
 	add_child(simulation)
 
-	var scenario_path := _repo_root().path_join(scenario_relative_path)
-	print("ps_godot main.gd: loading scenario from: ", scenario_path)
-	var ok: bool = simulation.load_scenario(scenario_path)
-	print("ps_godot main.gd: load_scenario returned: ", ok)
-	if not ok:
-		push_error("PsSimulation.load_scenario failed for: " + scenario_path)
-	else:
-		if load_test_ground:
-			var track_dir := _repo_root().path_join("data/tracks/test_ground")
-			simulation.import_test_ground(track_dir)
-		simulation.start()
-		print("ps_godot main.gd: sim started, is_running=", simulation.is_running())
-		_spawn_body_nodes()
+	var repo_root := _repo_root()
+	var world_scenario_path := ProjectSettings.globalize_path("res://scenarios/m1_world.json")
+	print("ps_godot main.gd: loading empty world from: ", world_scenario_path)
+	var ok: bool = simulation.load_scenario(world_scenario_path)
+	print("ps_godot main.gd: load_scenario returned: ", ok, " err=", simulation.get_last_error())
 
-	_setup_camera()
+	var track_dir := repo_root.path_join(track_relative_dir)
+	var track_ok: bool = simulation.import_test_ground(track_dir, terrain_max_resident_tiles, terrain_max_tile_fills_per_tick)
+	print("ps_godot main.gd: import_test_ground returned: ", track_ok, " err=", simulation.get_last_error())
+
+	var spawn := _read_spawn(track_dir, spawn_id)
+	var spawn_pos: Vector3 = spawn["position"]
+	var spawn_yaw_rad: float = spawn["yaw_rad"]
+	print("ps_godot main.gd: spawn '", spawn_id, "' at ", spawn_pos, " yaw_rad=", spawn_yaw_rad)
+
+	var chassis_pos := spawn_pos + Vector3(0, 0, CHASSIS_Z_OFFSET)
+	var chassis_ok: bool = simulation.create_body_dynamic(CHASSIS_BODY_NAME, chassis_pos, spawn_yaw_rad, CHASSIS_MASS, CHASSIS_HALF_EXTENTS)
+	print("ps_godot main.gd: create_body_dynamic returned: ", chassis_ok, " err=", simulation.get_last_error())
+
+	var vehicle_path := repo_root.path_join(vehicle_relative_path)
+	var vehicle_ok: bool = simulation.spawn_vehicle(VEHICLE_NAME, vehicle_path, CHASSIS_BODY_NAME, terrain_stream_radius_m)
+	print("ps_godot main.gd: spawn_vehicle returned: ", vehicle_ok, " err=", simulation.get_last_error())
+
+	simulation.start()
+	print("ps_godot main.gd: sim started, is_running=", simulation.is_running())
+
+	_spawn_body_nodes(repo_root)
+	_setup_cameras()
 	_setup_debug_draw()
 	_setup_input_map()
 	_setup_hud()
 
-func _setup_lighting_and_ground() -> void:
+func _setup_lighting() -> void:
 	var light := DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-55, -30, 0)
 	light.shadow_enabled = false
@@ -61,17 +139,50 @@ func _setup_lighting_and_ground() -> void:
 	env.environment = e
 	add_child(env)
 
+	# A world-space grid shader (PLAN.md M1: "a world-space grid shader in
+	# Godot as the speed reference") - a large plane under the car; the
+	# REAL ground is the test-ground collision/terrain loaded into the sim
+	# (see import_test_ground above), this is purely a visual distance
+	# reference that tiles with world position, not a collider.
 	var ground := MeshInstance3D.new()
 	ground.name = "GroundGrid"
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(2000, 2000)
+	plane.size = Vector2(4000, 4000)
 	ground.mesh = plane
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/speed_grid.gdshader")
 	ground.material_override = mat
 	add_child(ground)
 
-func _spawn_body_nodes() -> void:
+func _read_spawn(track_dir: String, id: String) -> Dictionary:
+	# test_ground.json's own "spawns" array (PLAN.md M1's test ground) -
+	# read directly as data (GDScript's built-in JSON parser), no C++
+	# needed: this is a one-shot startup lookup, not a per-tick hot path.
+	var result := {"position": Vector3.ZERO, "yaw_rad": 0.0}
+	var path := track_dir.path_join("test_ground.json")
+	if not FileAccess.file_exists(path):
+		push_warning("main.gd: test_ground.json not found at " + path + " - defaulting spawn to world origin")
+		return result
+	var f := FileAccess.open(path, FileAccess.READ)
+	var text := f.get_as_text()
+	f.close()
+	var data = JSON.parse_string(text)
+	if data == null or not (data is Dictionary) or not data.has("spawns"):
+		push_warning("main.gd: could not parse spawns from " + path)
+		return result
+	for spawn in data["spawns"]:
+		if spawn.get("id", "") == id:
+			var p = spawn["position"]
+			# Raw sim-space (ISO 8855 / test-ground ENU - algebraically
+			# identical per data/tracks/README.md) numbers, NOT Godot-space
+			# - see PsSimulation::create_body_dynamic's doc comment.
+			result["position"] = Vector3(p[0], p[1], p[2])
+			result["yaw_rad"] = deg_to_rad(spawn.get("yaw_deg", 0.0))
+			return result
+	push_warning("main.gd: spawn id '" + id + "' not found in " + path + " - defaulting to world origin")
+	return result
+
+func _spawn_body_nodes(repo_root: String) -> void:
 	var sim_path := simulation.get_path()
 
 	for body_name in simulation.get_body_names():
@@ -79,13 +190,23 @@ func _spawn_body_nodes() -> void:
 		node.name = "Body_" + String(body_name)
 		node.simulation_path = sim_path
 		node.body_name = body_name
-		var mesh := MeshInstance3D.new()
-		var sphere := SphereMesh.new()
-		sphere.radius = 0.5
-		sphere.height = 1.0
-		mesh.mesh = sphere
-		node.add_child(mesh)
 		add_child(node)
+
+		if String(body_name) == CHASSIS_BODY_NAME:
+			# PLAN.md M1 step 3: show the car with the existing art.
+			var visual := Node3D.new()
+			visual.name = "VehicleVisual"
+			visual.set_script(load("res://scripts/vehicle_visual.gd"))
+			visual.set("simulation_path", sim_path)
+			visual.set("vehicle_name", VEHICLE_NAME)
+			visual.set("model_absolute_path", repo_root.path_join(model_relative_path))
+			node.add_child(visual)
+		else:
+			var mesh := MeshInstance3D.new()
+			var box := BoxMesh.new()
+			box.size = Vector3(1.0, 1.0, 1.0)
+			mesh.mesh = box
+			node.add_child(mesh)
 
 	for art_name in simulation.get_articulation_names():
 		var link_count: int = simulation.get_articulation_link_count(art_name)
@@ -102,24 +223,41 @@ func _spawn_body_nodes() -> void:
 			node.add_child(mesh)
 			add_child(node)
 
-func _setup_camera() -> void:
-	var cam := Camera3D.new()
-	cam.name = "FreeCamera"
-	cam.transform.origin = Vector3(8, 4, 8)
-	cam.current = true
-	cam.set_script(load("res://scripts/free_cam.gd"))
-	cam.set("simulation_path", simulation.get_path())
-	add_child(cam) # look_at() below needs the node inside the tree first
-	cam.look_at(Vector3.ZERO, Vector3.UP)
+func _setup_cameras() -> void:
+	free_camera = Camera3D.new()
+	free_camera.name = "FreeCamera"
+	free_camera.transform.origin = Vector3(8, 4, 8)
+	free_camera.set_script(load("res://scripts/free_cam.gd"))
+	free_camera.set("simulation_path", simulation.get_path())
+	add_child(free_camera) # look_at() below needs the node inside the tree first
+	free_camera.look_at(Vector3.ZERO, Vector3.UP)
+
+	# PLAN.md M1 step 7: a chase camera that works at 50 km from the origin
+	# (origin rebasing) and does not jitter - see chase_cam.gd.
+	chase_camera = Camera3D.new()
+	chase_camera.name = "ChaseCamera"
+	chase_camera.set_script(load("res://scripts/chase_cam.gd"))
+	chase_camera.set("simulation_path", simulation.get_path())
+	chase_camera.set("chassis_body_name", CHASSIS_BODY_NAME)
+	add_child(chase_camera)
+
+	using_chase_camera = true
+	chase_camera.current = true
+	free_camera.current = false
+
+func _toggle_camera() -> void:
+	using_chase_camera = not using_chase_camera
+	chase_camera.current = using_chase_camera
+	free_camera.current = not using_chase_camera
 
 func _setup_debug_draw() -> void:
-	var draw = ClassDB.instantiate("PsDebugDraw")
-	draw.name = "DebugDraw"
-	draw.simulation_path = simulation.get_path()
-	add_child(draw)
+	debug_draw = ClassDB.instantiate("PsDebugDraw")
+	debug_draw.name = "DebugDraw"
+	debug_draw.simulation_path = simulation.get_path()
+	add_child(debug_draw)
 
 func _setup_input_map() -> void:
-	var input_map = ClassDB.instantiate("PsInputMap")
+	input_map = ClassDB.instantiate("PsInputMap")
 	input_map.name = "InputMap"
 	add_child(input_map)
 
@@ -132,11 +270,113 @@ func _setup_hud() -> void:
 	hud.add_child(label)
 	# Script + exported properties must be set BEFORE add_child(): attaching
 	# a script to a node already inside the tree fires _ready() right away
-	# (Godot 4 behaviour), so setting simulation_path/input_map_path AFTER
-	# add_child() left hud.gd's _ready() resolving an empty NodePath and the
-	# HUD silently never finding PsSimulation - found by actually running
-	# the headless smoke test, not assumed.
+	# (Godot 4 behaviour), so setting properties AFTER add_child() would
+	# leave hud.gd's _ready() resolving empty paths (found the hard way in
+	# the P2 demo - see hud.gd's own history).
 	hud.set_script(load("res://scripts/hud.gd"))
 	hud.set("simulation_path", simulation.get_path())
 	hud.set("input_map_path", NodePath("../InputMap"))
+	hud.set("vehicle_name", VEHICLE_NAME)
 	add_child(hud)
+
+func _process(delta: float) -> void:
+	if input_map != null and simulation != null:
+		if input_map.get_camera():
+			_toggle_camera()
+		if input_map.get_debug_toggle() and debug_draw != null:
+			debug_draw.debug_enabled = not debug_draw.debug_enabled
+		if input_map.get_reset_vehicle():
+			_reset_vehicle()
+
+		# PLAN.md P2/M1: input reaches the sim only as named control
+		# channels, never a Godot type - see PsInputMap/input_map_core.h.
+		if not _autopilot:
+			simulation.set_control("steer", input_map.get_steer())
+			simulation.set_control("throttle", input_map.get_throttle())
+			simulation.set_control("brake", input_map.get_brake())
+			simulation.set_control("handbrake", input_map.get_handbrake())
+			simulation.set_control("clutch", input_map.get_clutch())
+
+	if _autopilot:
+		_run_autopilot(delta)
+
+	if _screenshot_path != "" and not _screenshot_taken:
+		_screenshot_t += delta
+		if not _autopilot:
+			simulation.set_control("throttle", 0.5) # so the screenshot shows the car actually driving, not sitting still
+		if _screenshot_t > 3.0:
+			_screenshot_taken = true
+			var img: Image = get_viewport().get_texture().get_image()
+			var err := img.save_png(_screenshot_path)
+			print("ps_godot main.gd: screenshot saved to ", _screenshot_path, " err=", err)
+			await get_tree().create_timer(0.2).timeout
+			get_tree().quit()
+
+func _reset_vehicle() -> void:
+	var spawn := _read_spawn(_repo_root().path_join(track_relative_dir), spawn_id)
+	var pos: Vector3 = spawn["position"] + Vector3(0, 0, CHASSIS_Z_OFFSET)
+	simulation.reset_vehicle(VEHICLE_NAME, pos, spawn["yaw_rad"])
+
+func _run_autopilot(delta: float) -> void:
+	if _autopilot_done:
+		return
+	_autopilot_phase_t += delta
+
+	# Scripted control sequence (this task's smoke-test spec): throttle for
+	# a few seconds, then brake, then a steer step.
+	if _autopilot_phase_t < 4.0:
+		simulation.set_control("throttle", 1.0)
+		simulation.set_control("brake", 0.0)
+		simulation.set_control("steer", 0.0)
+	elif _autopilot_phase_t < 6.0:
+		simulation.set_control("throttle", 0.0)
+		simulation.set_control("brake", 1.0)
+		simulation.set_control("steer", 0.0)
+	elif _autopilot_phase_t < 10.0:
+		simulation.set_control("throttle", 1.0)
+		simulation.set_control("brake", 0.0)
+		simulation.set_control("steer", 0.3)
+	else:
+		_finish_autopilot()
+		return
+
+	var speed_mps: float = simulation.get_body_speed_mps(CHASSIS_BODY_NAME)
+	if is_nan(speed_mps):
+		_autopilot_nan_seen = true
+	else:
+		_autopilot_distance_m += speed_mps * delta
+		_autopilot_max_speed_kmh = max(_autopilot_max_speed_kmh, speed_mps * 3.6)
+
+	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
+	var p := chassis_xform.origin
+	if is_nan(p.x) or is_nan(p.y) or is_nan(p.z):
+		_autopilot_nan_seen = true
+
+	# Diagnostic (cheap, autopilot-only): one FL-wheel telemetry line per
+	# second, so a smoke-test log always shows whether the driven wheel is
+	# actually touching the ground and producing longitudinal force.
+	var whole_second := int(_autopilot_phase_t)
+	if whole_second != _autopilot_last_logged_second:
+		_autopilot_last_logged_second = whole_second
+		var up: Vector3 = chassis_xform.basis.z
+		print("ps_godot M1 autopilot diag: t=%.1f speed_kmh=%.2f up_dot=%.3f FL{compression=%.4f omega=%.2f fz=%.1f fx=%.1f surface=%s}" % [
+			_autopilot_phase_t, speed_mps * 3.6, up.dot(Vector3.UP),
+			simulation.get_wheel_compression("car", 0), simulation.get_wheel_omega("car", 0),
+			simulation.get_wheel_load_n("car", 0), simulation.get_wheel_fx("car", 0),
+			simulation.get_wheel_surface_name("car", 0)])
+
+func _finish_autopilot() -> void:
+	_autopilot_done = true
+	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
+	# chassis_xform.basis's column i is the SIM's own local axis i (ISO
+	# 8855: x forward, y left, z UP) expressed in Godot space (frame_
+	# convert_core.h's iso_to_godot_basis) - so the car's own "up" is
+	# basis.z, not basis.y (see chase_cam.gd's fix comment for the same
+	# convention, found via the same bug there).
+	var up: Vector3 = chassis_xform.basis.z
+	var upright: bool = up.dot(Vector3.UP) > 0.5
+
+	print("ps_godot M1 smoke: distance_m=%.2f max_speed_kmh=%.2f upright=%s nan=%s" % [
+		_autopilot_distance_m, _autopilot_max_speed_kmh, upright, _autopilot_nan_seen])
+	await get_tree().create_timer(0.2).timeout
+	get_tree().quit()
