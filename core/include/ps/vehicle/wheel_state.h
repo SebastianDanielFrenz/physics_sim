@@ -11,7 +11,9 @@
 // PLAN.md P3 scope item 7) that a mesh-placement consumer does not need,
 // and carries neither of this type's two fields (steer_angle, the
 // integrated spin_angle - WheelTelemetry only ever had the spin SPEED,
-// omega, not the integrated angle).
+// omega, not the integrated angle). Design rationale (this type vs.
+// extending WheelTelemetry; excluding spin_angle/steer_angle from
+// WheelInstance::fold_state_hash) in the vault, PHYS-020.
 
 #pragma once
 

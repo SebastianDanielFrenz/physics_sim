@@ -119,7 +119,8 @@
 // model, not the tolerance") this is left failing rather than loosened;
 // a real ABS/proportioning-valve model (PLAN.md P4) that regulates
 // smoothly rather than via a per-tick slip-ratio P-loop is the natural
-// next step if this needs to close further.
+// next step if this needs to close further. Full write-up, including
+// every alternative tried, in the vault (PHYS-019) and out/handover_p3_fix.md.
 
 #include "vehicle_test_helpers.h"
 
