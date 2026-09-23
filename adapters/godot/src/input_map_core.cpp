@@ -36,7 +36,20 @@ float shape_unidirectional_axis(float raw, const TriggerConfig& cfg) {
 
 ControlChannels InputMapper::process(const RawInput& raw) const {
     ControlChannels out;
-    out.steer = shape_bidirectional_axis(raw.steer_axis, config_.steer);
+    // RawInput::steer_axis is documented (input_map_core.h) in the
+    // hardware/joystick convention shared by input_map.cpp's gamepad
+    // (JOY_AXIS_LEFT_X) and keyboard (get_axis("ps_steer_left",
+    // "ps_steer_right")) sources alike: -1 = full left, +1 = full right.
+    // The sim's "steer" control channel is ISO 8855 (PLAN.md D4: x forward,
+    // y left, z up) where + = steering LEFT (core/src/vehicle/
+    // vehicle_instance.cpp's Ackermann code, data/models/README.md's sign
+    // conventions). This file is the one place that converts RawInput to
+    // named ISO-convention control channels (see the header comment above),
+    // so the negation belongs here rather than in either input source or in
+    // a per-user "invert" preference (AxisConfig::invert, layered on top of
+    // this via shape_bidirectional_axis's own sign flip, stays a separate,
+    // independent toggle).
+    out.steer = -shape_bidirectional_axis(raw.steer_axis, config_.steer);
     out.throttle = shape_unidirectional_axis(raw.throttle_trigger, config_.throttle);
     out.brake = shape_unidirectional_axis(raw.brake_trigger, config_.brake);
     out.handbrake = shape_unidirectional_axis(raw.handbrake_trigger, config_.handbrake);

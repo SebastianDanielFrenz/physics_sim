@@ -88,7 +88,11 @@ int main() {
         raw.clutch_trigger = 0.3f;
         raw.shift_up_pressed = true;
         const ControlChannels ch = mapper.process(raw);
-        check(ch.steer > 0.0f && ch.steer < 1.0f, "process: steer channel in expected open range");
+        // raw.steer_axis follows the hardware convention (+ = right, see
+        // input_map_core.h); the sim's ISO 8855 "steer" channel is + = left
+        // (PLAN.md D4, vehicle_instance.cpp's Ackermann code), so a positive
+        // raw axis must come out negative here.
+        check(ch.steer < 0.0f && ch.steer > -1.0f, "process: steer channel in expected open range, sign-flipped from raw (+raw=right -> -channel)");
         check(ch.throttle > 0.0f, "process: throttle channel non-zero for pressed trigger");
         check(ch.brake == 0.0f, "process: brake channel zero for released trigger");
         check(close(ch.handbrake, 1.0f), "process: handbrake fully applied");
@@ -107,6 +111,31 @@ int main() {
         RawInput raw;
         raw.steer_axis = 0.3f; // now inside the widened deadzone
         check(mapper.process(raw).steer == 0.0f, "remap: widened deadzone swallows a value that used to pass through");
+    }
+
+    // --- Steer sign convention (bug regression: keyboard/gamepad steering
+    // reversed - PHYS report, M1) -----------------------------------------
+    // RawInput::steer_axis is hardware convention (+ = right: Godot's
+    // JOY_AXIS_LEFT_X for the gamepad, get_axis("ps_steer_left",
+    // "ps_steer_right") for the keyboard - both agree, physical_keycode 65
+    // 'A' = left = -1, 68 'D' = right = +1). The sim's "steer" control
+    // channel is ISO 8855, + = LEFT. InputMapper::process must convert
+    // between the two for BOTH input sources identically, so a synthetic
+    // frame standing in for either source must come out steering the
+    // correct way.
+    {
+        InputMapper mapper;
+        RawInput raw;
+        raw.steer_axis = 1.0f; // stick/D-key fully right (hardware convention)
+        const ControlChannels ch = mapper.process(raw);
+        check(close(ch.steer, -1.0f), "steer sign: raw full-right (hardware) -> channel -1 (ISO right)");
+    }
+    {
+        InputMapper mapper;
+        RawInput raw;
+        raw.steer_axis = -1.0f; // stick/A-key fully left (hardware convention)
+        const ControlChannels ch = mapper.process(raw);
+        check(close(ch.steer, 1.0f), "steer sign: raw full-left (hardware) -> channel +1 (ISO left)");
     }
 
     if (g_failures == 0) {
