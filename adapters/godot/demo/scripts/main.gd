@@ -27,6 +27,17 @@ extends Node3D
 # start/end position diff) and top speed, checks for NaN and that the
 # chassis stayed upright, prints one grep-able "ps_godot M1 smoke:" summary
 # line, then quits - this IS the M1 headless smoke test's driving check.
+#
+# --m1-force-rebase-test (combined with --m1-autopilot): verification for
+# the chase-cam origin-rebase bug (chase_cam.gd's header comment) - forces
+# one origin rebase, through the chase camera's own rebase_focus call,
+# partway through the autopilot run (the placeholder drive alone never
+# covers the 500 m a real rebase needs), then watches for a frame-to-frame
+# JUMP in camera-to-chassis distance (something a smooth exponential lag
+# can never produce on its own) and prints a grep-able "ps_godot M1 camera
+# check:" summary line with a pass/fail verdict - see
+# _run_camera_rebase_check's own comment for exactly how the rebase is
+# forced and why that specific signal was chosen.
 
 const VEHICLE_NAME := "car"
 const CHASSIS_BODY_NAME := "car_chassis"
@@ -103,6 +114,45 @@ var _autopilot_nan_seen: bool = false
 var _autopilot_done: bool = false
 var _autopilot_last_logged_second: int = -1
 
+# --m1-force-rebase-test: verification for the chase-cam origin-rebase bug
+# (adapters/godot/demo/scripts/chase_cam.gd's own header comment) - see
+# _run_camera_rebase_check's comment for why this forces a rebase (a
+# teleport far enough to make the chase cam's own rebase_focus call cross
+# OriginRebase's threshold) instead of waiting for the autopilot's
+# placeholder drive to cover 500 m, and for why the PRIMARY pass/fail
+# signal is a frame-to-frame DISCONTINUITY check, not a plain distance
+# bound: the teleport itself legitimately makes the chase cam's own
+# exponential lag take real, non-bug time to catch up (its target jumped
+# ~618 m), so a bound on the raw distance can't tell that apart from the
+# bug's own jump without very fragile timing assumptions. A single
+# exponential lag converging on a fixed (or slowly-moving, like a driving
+# car) target can only ever move the camera CLOSER to it, frame over
+# frame, up to sub-metre per-tick noise - it can never make
+# camera-to-chassis distance jump back UP by metres in one frame. The
+# origin-rebase bug does exactly that (chase_cam.gd's header comment):
+# `_smoothed_pos` stays in the OLD frame for one frame, then `position`
+# (read from the same, now-stale `_smoothed_pos`) is off by up to the
+# rebase's own delta - a discontinuity a smooth lag cannot produce.
+var _force_rebase_test: bool = false
+var _rebase_test_triggered: bool = false
+var _rebase_test_trigger_t: float = 0.0
+var _camera_check_max_dist_m: float = 0.0
+var _camera_check_max_dist_after_settle_m: float = 0.0
+var _camera_check_max_frame_jump_m: float = 0.0
+var _camera_check_prev_dist_m: float = -1.0
+var _camera_check_frame_count: int = 0
+# How long to give the chase cam's OWN, legitimate exponential lag
+# (chase_cam.gd's position_lag=6.0 -> ~0.17 s time constant) to finish
+# catching up to a teleport before this script starts holding the
+# post-trigger distance to the tight "parked" bound - informational only,
+# see the discontinuity check above for the actual pass/fail gate.
+const CAMERA_CHECK_SETTLE_S := 2.5
+# Skip this long right after the teleport before tracking frame-to-frame
+# jumps: the teleport's OWN first frame legitimately jumps `desired_pos`
+# (and therefore, after the lerp, `position` moves toward it) - that one
+# expected step must not be counted as the bug's discontinuity.
+const CAMERA_CHECK_JUMP_GRACE_S := 0.1
+
 var _screenshot_path: String = ""
 var _screenshot_t: float = 0.0
 var _screenshot_taken: bool = false
@@ -132,6 +182,9 @@ func _ready() -> void:
 
 	var user_args := OS.get_cmdline_user_args()
 	_autopilot = "--m1-autopilot" in user_args
+	# See the _force_rebase_test var declaration / _run_camera_rebase_check
+	# for what this does; only meaningful combined with --m1-autopilot.
+	_force_rebase_test = "--m1-force-rebase-test" in user_args
 	# --m1-screenshot=<absolute_path.png>: saves one PNG of the running
 	# demo a few seconds in (viewport texture -> Image, no user interaction
 	# needed - only works when Godot actually has a rendering context, not
@@ -483,6 +536,8 @@ func _process(delta: float) -> void:
 
 	if _autopilot:
 		_run_autopilot(delta)
+		if _force_rebase_test:
+			_run_camera_rebase_check(delta)
 
 	if _screenshot_path != "" and not _screenshot_taken:
 		_screenshot_t += delta
@@ -559,6 +614,76 @@ func _run_autopilot(delta: float) -> void:
 			simulation.get_wheel_load_n("car", 0), simulation.get_wheel_fx("car", 0),
 			simulation.get_wheel_surface_name("car", 0)])
 
+func _run_camera_rebase_check(_delta: float) -> void:
+	# Verification for the chase-cam origin-rebase bug (owner report: "the
+	# camera suddenly swings around as if the car had teleported" -
+	# chase_cam.gd's header comment has the full diagnosis). The P3
+	# placeholder drive covers only a few metres over the autopilot's ~10 s
+	# scripted sequence (see _finish_autopilot's own distance numbers) -
+	# nowhere near the 500 m OriginRebase threshold a real drive would
+	# eventually cross.
+	#
+	# IMPORTANT: this must trigger the origin snap THROUGH chase_cam.gd's
+	# OWN per-frame rebase_focus(position) call, not via some unrelated
+	# external call - an earlier version of this check called
+	# PsSimulation.rebase_focus directly with an arbitrary far-away point,
+	# which does move the origin, but chase_cam.gd's fix only ever reacts
+	# to a delta produced by ITS OWN call (matching the real bug: the
+	# origin always moves because the ACTIVE chase camera's own tracked
+	# position finally crossed the threshold, not because of some
+	# unrelated third party). That external-call version produced the
+	# EXACT SAME huge max distance whether or not the fix was applied -
+	# the very first post-rebase frame is unavoidably wrong in both cases
+	# (chase_cam hasn't run its own reactive code yet), which is not a
+	# useful regression signal. So instead: teleport the CHASSIS itself,
+	# with reset_vehicle (the same call keys 1/2/3 already use), from
+	# spawn_straight_car to spawn_skidpad_car - test_ground.json's own
+	# coordinates put those ~618 m apart, comfortably over the 500 m
+	# threshold. desired_pos then jumps by that same ~618 m, the chase
+	# cam's own exponential lag chases it (legitimate, expected - NOT the
+	# bug), and SOMEWHERE during that chase _smoothed_pos/`position`
+	# itself crosses 500 m from the pre-teleport origin, triggering
+	# chase_cam's OWN rebase_focus call - the actual real-world trigger
+	# path, exercising the actual fix.
+	if chase_camera == null or simulation == null:
+		return
+	if not _rebase_test_triggered and _autopilot_phase_t > 1.0:
+		_rebase_test_triggered = true
+		_rebase_test_trigger_t = _autopilot_phase_t
+		_reset_vehicle("spawn_skidpad_car")
+		print("ps_godot M1 camera check: teleported chassis to spawn_skidpad_car at t=%.2f (forces the chase cam's own rebase_focus call to cross threshold)" % _autopilot_phase_t)
+
+	_camera_check_frame_count += 1
+	if _camera_check_frame_count <= 1:
+		return # first observed frame - chase_cam.gd's own _initialized snap has no lag to measure yet
+
+	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
+	var dist: float = chassis_xform.origin.distance_to(chase_camera.global_position)
+	_camera_check_max_dist_m = max(_camera_check_max_dist_m, dist)
+
+	# Informational only (see the discontinuity check below for the actual
+	# gate): the legitimate lag needs real time to converge regardless of
+	# the fix, so this is just "how far off is it once that's had time to
+	# finish" - useful context in the printed summary, not proof either way
+	# on its own (a ~600 m teleport's own catch-up and the bug's own decay
+	# share close to the same ~0.17 s time constant, so a plain
+	# after-a-delay bound cannot cleanly tell them apart - see file header).
+	if _rebase_test_triggered and _autopilot_phase_t > _rebase_test_trigger_t + CAMERA_CHECK_SETTLE_S:
+		_camera_check_max_dist_after_settle_m = max(_camera_check_max_dist_after_settle_m, dist)
+
+	# PRIMARY signal: a frame-to-frame INCREASE in camera-to-chassis
+	# distance. A single exponential lag converging on a fixed (or
+	# slowly-moving) target only ever shrinks this distance, tick over
+	# tick, up to sub-metre noise - it cannot produce a multi-metre jump.
+	# The origin-rebase bug can and does (see the var declarations' own
+	# comment). Skipped for CAMERA_CHECK_JUMP_GRACE_S right after the
+	# teleport, which legitimately moves `desired_pos` in one step.
+	if _rebase_test_triggered and _autopilot_phase_t > _rebase_test_trigger_t + CAMERA_CHECK_JUMP_GRACE_S:
+		if _camera_check_prev_dist_m >= 0.0:
+			var jump: float = dist - _camera_check_prev_dist_m
+			_camera_check_max_frame_jump_m = max(_camera_check_max_frame_jump_m, jump)
+		_camera_check_prev_dist_m = dist
+
 func _finish_autopilot() -> void:
 	_autopilot_done = true
 	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
@@ -572,5 +697,24 @@ func _finish_autopilot() -> void:
 
 	print("ps_godot M1 smoke: distance_m=%.2f max_speed_kmh=%.2f upright=%s nan=%s" % [
 		_autopilot_distance_m, _autopilot_max_speed_kmh, upright, _autopilot_nan_seen])
+
+	if _force_rebase_test:
+		# PRIMARY gate: max_frame_jump_m (see _run_camera_rebase_check's
+		# comment) - a single-target exponential lag can only ever shrink
+		# camera-to-chassis distance tick over tick (up to sub-metre
+		# desired_pos drift from the chassis's own ongoing driving), so a
+		# multi-metre one-frame INCREASE is specifically the origin-rebase
+		# discontinuity, not ordinary catch-up lag. jump_bound_m is
+		# generous versus expected per-tick drift and far below the
+		# hundreds-of-metres jump the unfixed bug produces.
+		#
+		# The other two numbers are informational context only (both
+		# legitimately large right after any big teleport, fixed or not -
+		# see their own var declarations' comments).
+		var jump_bound_m := 3.0
+		var camera_ok: bool = _rebase_test_triggered and _camera_check_max_frame_jump_m <= jump_bound_m
+		print("ps_godot M1 camera check: rebase_forced=%s max_frame_jump_m=%.2f jump_bound_m=%.2f max_cam_chassis_dist_m=%.2f max_cam_chassis_dist_after_settle_m=%.2f pass=%s" % [
+			_rebase_test_triggered, _camera_check_max_frame_jump_m, jump_bound_m, _camera_check_max_dist_m, _camera_check_max_dist_after_settle_m, camera_ok])
+
 	await get_tree().create_timer(0.2).timeout
 	get_tree().quit()

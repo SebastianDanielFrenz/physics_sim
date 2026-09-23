@@ -221,7 +221,13 @@ if ($script:Failures.Count -eq 0) {
 
     $apStdout = Join-Path $buildDir 'smoke_test_m1_autopilot_stdout.log'
     $apStderr = Join-Path $buildDir 'smoke_test_m1_autopilot_stderr.log'
-    $apArgs = @('--headless', '--path', $demoDir, '--quit-after', '100000', '--', '--m1-autopilot')
+    # --m1-force-rebase-test: forces one origin rebase partway through the
+    # run and checks the chase camera never JUMPS toward/away from the
+    # chassis in a single frame afterward - regression coverage for the
+    # chase-cam origin-rebase bug (chase_cam.gd's header comment; the
+    # placeholder drive alone never covers the 500 m a real rebase needs,
+    # see main.gd's own comment on this flag).
+    $apArgs = @('--headless', '--path', $demoDir, '--quit-after', '100000', '--', '--m1-autopilot', '--m1-force-rebase-test')
 
     $proc = Start-Process -FilePath $godotExe -ArgumentList $apArgs `
         -RedirectStandardOutput $apStdout -RedirectStandardError $apStderr `
@@ -277,6 +283,39 @@ if ($script:Failures.Count -eq 0) {
             if ($upright) { Report-Ok "M1 autopilot: chassis stayed upright" } else { Report-Fail "M1 autopilot: chassis did not stay upright" }
             if ($distanceM -gt 4.0) { Report-Ok "M1 autopilot: distance travelled $distanceM m (> 4 m)" } else { Report-Fail "M1 autopilot: distance travelled only $distanceM m (expected > 4 m)" }
             if ($maxSpeedKmh -gt 3.0) { Report-Ok "M1 autopilot: reached $maxSpeedKmh km/h (> 3 km/h)" } else { Report-Fail "M1 autopilot: only reached $maxSpeedKmh km/h (expected > 3 km/h)" }
+        }
+    }
+
+    # Chase-cam origin-rebase regression check (main.gd's
+    # --m1-force-rebase-test, chase_cam.gd's header comment).
+    $cameraLine = $apLogContent | Select-String -Pattern 'ps_godot M1 camera check: rebase_forced=' | Select-Object -Last 1
+    if (-not $cameraLine) {
+        Report-Fail "M1 autopilot run: no 'ps_godot M1 camera check: rebase_forced=' summary line found - --m1-force-rebase-test may not have run"
+    } else {
+        Report-Ok "M1 camera check summary: $cameraLine"
+        $cm = [regex]::Match($cameraLine.ToString(), 'rebase_forced=(true|false)\s+max_frame_jump_m=([\-0-9.]+)\s+jump_bound_m=([\-0-9.]+)\s+max_cam_chassis_dist_m=([\-0-9.]+)\s+max_cam_chassis_dist_after_settle_m=([\-0-9.]+)\s+pass=(true|false)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $cm.Success) {
+            Report-Fail "M1 autopilot run: could not parse the camera check summary line: $cameraLine"
+        } else {
+            $rebaseForced = $cm.Groups[1].Value -eq 'True'
+            $maxFrameJumpM = [double]$cm.Groups[2].Value
+            $jumpBoundM = [double]$cm.Groups[3].Value
+            $maxCamDistM = [double]$cm.Groups[4].Value
+            $maxCamDistAfterSettleM = [double]$cm.Groups[5].Value
+            $cameraPass = $cm.Groups[6].Value -eq 'True'
+
+            if ($rebaseForced) { Report-Ok "M1 camera check: forced rebase fired (via a teleport far enough to make the chase cam's own rebase_focus call cross threshold)" } else { Report-Fail "M1 camera check: forced rebase never fired - test did not exercise the rebase path" }
+            # Primary signal: a single-target exponential lag can only ever
+            # shrink camera-to-chassis distance frame over frame (up to
+            # sub-metre drift) - a multi-metre one-frame INCREASE is
+            # specifically the origin-rebase discontinuity (main.gd's own
+            # comment on max_frame_jump_m), not the teleport's own
+            # (legitimate, expected) catch-up lag.
+            if ($cameraPass) {
+                Report-Ok "M1 camera check: no frame-to-frame camera jump beyond $maxFrameJumpM m (bound $jumpBoundM m) - raw peak distance during the teleport's own catch-up lag was $maxCamDistM m, settled to $maxCamDistAfterSettleM m"
+            } else {
+                Report-Fail "M1 camera check: chase camera jumped $maxFrameJumpM m in a single frame (bound $jumpBoundM m) - origin-rebase desync (chase_cam.gd's `_smoothed_pos` not shifted with the origin?); raw peak distance $maxCamDistM m, $maxCamDistAfterSettleM m after settling"
+            }
         }
     }
 }

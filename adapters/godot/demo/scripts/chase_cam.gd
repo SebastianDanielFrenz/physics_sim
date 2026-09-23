@@ -10,12 +10,23 @@ extends Camera3D
 # frame exactly like free_cam.gd - this IS the origin-rebasing loop PLAN.md
 # P2 asks for: once this camera (not the chassis - the camera's own Godot
 # position) drifts past OriginRebase's threshold, the origin snaps to it and
-# this script's position jumps by the exact opposite amount in the same
-# call, so the camera's on-screen position never visibly moves. Because the
-# camera always stays within follow_distance_m of the chassis, and that is
-# far under the 500 m rebase threshold, the origin effectively follows the
-# car around the whole 100x100 km world with no jitter at any distance from
-# the world's own (0,0,0).
+# rebase_focus's return value is `position` re-expressed in the new frame.
+# Because the camera always stays within follow_distance_m of the chassis,
+# and that is far under the 500 m rebase threshold, the origin effectively
+# follows the car around the whole 100x100 km world with no jitter at any
+# distance from the world's own (0,0,0) - PROVIDED every piece of this
+# script's own persistent Godot-space state is shifted by the same delta
+# rebase_focus applied to `position`, not just `position` itself. Below,
+# `_smoothed_pos` gets that same shift right after the rebase_focus call.
+# It didn't always: an earlier version left `_smoothed_pos` in the OLD
+# frame, so the very next frame's lerp target (`desired_pos`, freshly
+# re-derived from the chassis's own transform and therefore already correct
+# in the NEW frame) was up to ~threshold metres away from where
+# `_smoothed_pos` still thought the camera was - visibly "the camera swings
+# around as if the car had teleported", then drags back over about a second
+# as the lerp catches up. Owner-reported live-demo bug, happening every
+# ~500 m of driving; see this fix's commit for the smoke-test check that
+# catches a regression of it.
 
 @export var simulation_path: NodePath
 @export var chassis_body_name: String = ""
@@ -71,8 +82,15 @@ func _process(delta: float) -> void:
 
 	# Origin rebasing (see file comment) - keeps this camera's own position
 	# always well under float32's precision problems, at any distance from
-	# the sim's own absolute origin.
-	position = _simulation.rebase_focus(position)
+	# the sim's own absolute origin. _smoothed_pos is OUR OWN persistent
+	# state, not re-derived from the sim each frame the way chassis_pos/
+	# desired_pos are - it must be carried across the same delta the origin
+	# snap applies to `position`, or it silently keeps living in the old
+	# frame (see file comment for the resulting bug).
+	var rebased_pos: Vector3 = _simulation.rebase_focus(position)
+	var rebase_delta: Vector3 = rebased_pos - position
+	position = rebased_pos
+	_smoothed_pos += rebase_delta
 
 	var elapsed_us := Time.get_ticks_usec() - t0
 	_simulation.add_adapter_time_us(elapsed_us)
