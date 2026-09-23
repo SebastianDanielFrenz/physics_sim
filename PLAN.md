@@ -528,7 +528,14 @@ braking distance within 3 % of μ-based estimate incl. load transfer; car
 parked on a 15 % slope does not creep (< 1 mm over 30 s); step-steer response
 is stable, no oscillation growth.
 
-**P4 — Drivetrain.** Accept: 0–100 km/h and top speed within 3 % of a
+**P4 — Drivetrain.** Carried over from P3 (2026-09-23): the 100-0 km/h braking
+test still sits about 9 % above its μ-based estimate (43.8 → 41.1 m after the
+test's brake control was fixed to regulate both axles). Root cause is
+control-theoretic, not the tyre model: the peak-slip point is locally
+unstable and the wheel model's brake torque acts as a hard velocity clamp, so
+any fixed-rate slip loop oscillates around the peak and loses average grip.
+A real ABS and brake-proportioning model belongs here; re-measure then.
+Accept: 0–100 km/h and top speed within 3 % of a
 point-mass calculation from the torque curve, gearing, drag; clutch lock-up
 without torque spikes > 5 % above steady value; open vs. locked diff on split-μ
 behaves correctly (wheel speeds, yaw moment sign); engine braking and stall
