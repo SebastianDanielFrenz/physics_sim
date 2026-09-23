@@ -494,10 +494,15 @@ no-op tick until `set_terrain_source` is called. `World::create_body`/
 source is set (drops every cached suppression result). `bench_terrain_tiles`
 (`tests/bench/`) measures real cost against `data/tracks/test_ground`'s
 terrain AND static collision (demo config: 512-tile pool, 16 fills/tick,
-700 m radius): release drive ~3.8 ms/tick avg (worst ~5-6 ms), cold
-teleport onto split_mu worst tick ~6.8 ms; `set_terrain_source` ~305 ms
-release (~123 ms pool + ~185 ms precompute). Flags `--no-precompute` and
-`--workers N` are for A/B measurement only.
+700 m radius), Windows `release`, 3 runs each (2026-09-23, after the
+stale-cache fix - earlier figures were taken on an unoptimised build of
+our own code): drive avg 1.88-1.93 ms/tick (worst 2.7-3.3 ms); cold
+teleport onto split_mu worst tick 3.53-3.55 ms; `set_terrain_source`
+225-237 ms. With `--no-precompute`: teleport worst tick 263-310 ms (the
+lazy per-fill suppression cost lives almost entirely in Jolt's queries,
+which were optimised all along), drive avg 2.20-2.29 ms (worst 3.9-4.8 ms),
+`set_terrain_source` ~77 ms. Flags `--no-precompute` and `--workers N` are
+for A/B measurement only.
 
 ### Terrain/static-feature coincident-collision suppression (PHYS-021)
 
