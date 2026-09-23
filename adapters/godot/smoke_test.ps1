@@ -1,9 +1,12 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    PLAN.md P2 headless smoke test: builds the ps_godot_adapter GDExtension
-    and its two plain-C++ tests, runs them, then runs the demo Godot project
-    headless and fails if Godot prints any error.
+    PLAN.md P2/M1 headless smoke test: builds the ps_godot_adapter
+    GDExtension and its two plain-C++ tests, runs them, runs the demo Godot
+    project headless (fails if Godot prints any error), then runs it again
+    with --m1-autopilot (main.gd's scripted throttle/brake/steer sequence)
+    and asserts the car moved sensibly (distance, top speed, upright, no
+    NaN).
 
 .DESCRIPTION
     Deliberately NOT wired into tools/ci.ps1 (that file is another agent's
@@ -63,7 +66,19 @@ function Enter-VsDevShell {
     if (-not $vsPath) { throw "vswhere found no VS installation" }
     $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
     if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found under $vsPath" }
+    # vcvars64.bat internally makes its OWN vswhere.exe call inside a
+    # narrower cmd.exe PATH and prints a benign "vswhere.exe is not
+    # recognized" line to stderr when that inner call fails - cosmetic,
+    # vcvars64.bat still resolves the toolchain correctly afterward (see
+    # out/handover_p3.md's identical note for tools/ci.ps1's own copy of
+    # this same pattern). With this script's $ErrorActionPreference =
+    # 'Stop', that stderr line would otherwise be promoted to a terminating
+    # NativeCommandError and abort the whole build - redirect cmd.exe's
+    # stderr to $null so only the "set" output (stdout) is parsed below.
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $envLines = cmd.exe /c "`"$vcvars`" && set"
+    $ErrorActionPreference = $previousEap
     foreach ($line in $envLines) {
         if ($line -match '^([^=]+)=(.*)$') {
             [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
@@ -155,8 +170,19 @@ if ($script:Failures.Count -eq 0) {
     # stdout, so losing it silently would make this smoke test unreliable.
     $stdoutFile = Join-Path $buildDir 'smoke_test_godot_stdout.log'
     $stderrFile = Join-Path $buildDir 'smoke_test_godot_stderr.log'
+    # Godot routinely prints non-fatal WARNINGs to stderr (e.g. a
+    # colinear look_at() hint during a hard manoeuvre) - with this script's
+    # $ErrorActionPreference = 'Stop', PowerShell would otherwise promote
+    # any such stderr line into a terminating NativeCommandError even
+    # though it is redirected straight to a file, not a PowerShell stream.
+    # Below distinguishes real errors from warnings by TEXT PATTERN
+    # (ERROR/SCRIPT ERROR/...), same as this script already did before -
+    # this guard only stops PowerShell itself from aborting early.
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & $godotExe --headless --path $demoDir --quit-after $QuitAfterFrames 1>$stdoutFile 2>$stderrFile
     $godotExit = $LASTEXITCODE
+    $ErrorActionPreference = $previousEap
     $logContent = @(Get-Content $stdoutFile) + @(Get-Content $stderrFile)
     $logContent | ForEach-Object { Write-Host $_ }
 
@@ -177,6 +203,75 @@ if ($script:Failures.Count -eq 0) {
         Report-Ok "HUD reported the sim thread ticking: $tickLine"
     } else {
         Report-Fail "no tick-rate line found in Godot output - PsSimulation/HUD may not have started"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# PLAN.md M1 driving check: loads the test ground, spawns the car, applies
+# a scripted throttle/brake/steer sequence (main.gd's --m1-autopilot path)
+# and asserts the car moved sensibly. main.gd self-quits about 9.2 real
+# seconds after start (its own scripted sequence's length) - Start-Process
+# with a generous hard timeout is a safety net in case that self-quit ever
+# fails to fire (e.g. a crash before reaching it), so this script can never
+# hang indefinitely.
+# ---------------------------------------------------------------------------
+if ($script:Failures.Count -eq 0) {
+    $godotExe = Find-GodotConsoleExe
+    Write-Host "`n-- M1 driving check: $godotExe -- --m1-autopilot --" -ForegroundColor Cyan
+
+    $apStdout = Join-Path $buildDir 'smoke_test_m1_autopilot_stdout.log'
+    $apStderr = Join-Path $buildDir 'smoke_test_m1_autopilot_stderr.log'
+    $apArgs = @('--headless', '--path', $demoDir, '--quit-after', '100000', '--', '--m1-autopilot')
+
+    $proc = Start-Process -FilePath $godotExe -ArgumentList $apArgs `
+        -RedirectStandardOutput $apStdout -RedirectStandardError $apStderr `
+        -NoNewWindow -PassThru
+    $finished = $proc.WaitForExit(40000)
+    if (-not $finished) {
+        Report-Fail "M1 autopilot run did not quit within 40s - killing it (self-quit never fired?)"
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    $apLogContent = @(Get-Content $apStdout -ErrorAction SilentlyContinue) + @(Get-Content $apStderr -ErrorAction SilentlyContinue)
+    $apLogContent | ForEach-Object { Write-Host $_ }
+
+    $apErrorLines = $apLogContent | Select-String -Pattern 'ERROR|SCRIPT ERROR|Unhandled exception|Segmentation fault'
+    if ($apErrorLines) {
+        Report-Fail "M1 autopilot run printed error line(s):`n$($apErrorLines -join "`n")"
+    } else {
+        Report-Ok "M1 autopilot run: no ERROR/SCRIPT ERROR lines"
+    }
+
+    $summaryLine = $apLogContent | Select-String -Pattern 'ps_godot M1 smoke:' | Select-Object -Last 1
+    if (-not $summaryLine) {
+        Report-Fail "M1 autopilot run: no 'ps_godot M1 smoke:' summary line found - main.gd's autopilot path may not have run"
+    } else {
+        Report-Ok "M1 autopilot summary: $summaryLine"
+        $m = [regex]::Match($summaryLine.ToString(), 'distance_m=([\-0-9.]+)\s+max_speed_kmh=([\-0-9.]+)\s+upright=(true|false)\s+nan=(true|false)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $m.Success) {
+            Report-Fail "M1 autopilot run: could not parse the summary line: $summaryLine"
+        } else {
+            $distanceM = [double]$m.Groups[1].Value
+            $maxSpeedKmh = [double]$m.Groups[2].Value
+            $upright = $m.Groups[3].Value -eq 'True'
+            $hasNan = $m.Groups[4].Value -eq 'True'
+
+            # Thresholds are deliberately modest, not "a car should floor
+            # it" numbers: main.gd's default spawn point (test_ground.json
+            # "spawn_main") sits on the open procedural terrain's default
+            # ("dirt") surface, not a paved test feature (see main.gd's own
+            # comment on spawn_id for a found-but-not-investigated anomaly
+            # at the paved spawn points), and P3/M1's drive is an explicit
+            # torque-curve PLACEHOLDER (no gears/clutch, PLAN.md P4 replaces
+            # it) - measured on this exact setup: ~5.8 m travelled, peaking
+            # at ~4.9 km/h over the scripted throttle/brake/throttle+steer
+            # sequence. These thresholds catch a car that never moves at
+            # all (stuck/flipped/crashed), not a performance regression.
+            if ($hasNan) { Report-Fail "M1 autopilot: NaN observed in chassis state" } else { Report-Ok "M1 autopilot: no NaN observed" }
+            if ($upright) { Report-Ok "M1 autopilot: chassis stayed upright" } else { Report-Fail "M1 autopilot: chassis did not stay upright" }
+            if ($distanceM -gt 4.0) { Report-Ok "M1 autopilot: distance travelled $distanceM m (> 4 m)" } else { Report-Fail "M1 autopilot: distance travelled only $distanceM m (expected > 4 m)" }
+            if ($maxSpeedKmh -gt 3.0) { Report-Ok "M1 autopilot: reached $maxSpeedKmh km/h (> 3 km/h)" } else { Report-Fail "M1 autopilot: only reached $maxSpeedKmh km/h (expected > 3 km/h)" }
+        }
     }
 }
 
