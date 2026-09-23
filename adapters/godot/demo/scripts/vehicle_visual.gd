@@ -28,20 +28,32 @@ extends Node3D
 # steered) - handled below by falling back to susp_<corner> as the wheel
 # node's direct parent lookup, matching the rig's own hierarchy.
 #
-# FOUND, NOT FIXED HERE (data/models is a separate session's lane): car_
-# sedan.rig.json documents "the .glb itself uses glTF axes (+Y up, +Z
-# forward, +X left)", i.e. gltf(x,y,z) = iso(y,z,x) - but the actual
-# imported geometry renders lying on its SIDE (its 4.5 m length along
-# Godot's vertical +Y) unless rotated -90 deg about local X after loading,
-# which is exactly the standard "Z-up content loaded as if it were Y-up"
-# symptom. That means the FILE's real local axes match ISO 8855 directly
-# (x forward, y left, z up - a straight identity, not the documented y,z,x
-# permutation): every local-axis choice below (suspension bump on local Z,
-# not Y; wheel spin about local Y, not X; steer about local Z, not Y) was
-# picked to match that ACTUAL behaviour, confirmed by screenshotting the
-# corrected orientation - not by re-deriving it from the rig.json text,
-# which appears to describe what the pipeline intended rather than what it
-# produced. Report this to whoever owns tools/assetgen/the rig.json format.
+# MODEL-SPACE FIX (M1 visual pass, corrects the previous session's
+# workaround): the earlier "-90 deg about local X" rotation here was based
+# on a misdiagnosis. Verified directly against car_sedan.glb's own bytes
+# (parsed the glTF JSON+BIN chunks by hand, no Blender/Godot needed): both
+# every node's `translation` (e.g. susp_FL = glTF(0.78, 0.317, 1.35) vs.
+# rig.json's ISO pivot [1.35, 0.78, 0.317]) AND the root mesh's own vertex
+# bounding box (glTF-local min/max size [1.82, 1.339, 4.584] vs. the rig's
+# ISO body bounds size [4.584 fwd, 1.82 left, 1.338 up]) satisfy the rig's
+# documented gltf(x,y,z) = iso(y,z,x) permutation EXACTLY (matches to the
+# last digit). The asset is internally consistent and matches its own
+# rig.json; there is no Z-up/Y-up authoring bug here (nothing to report
+# upstream). "Lying on its side" was this adapter's own bug: a raw local
+# gltf offset must be re-permuted into ISO order (iso.x=gltf.z, iso.y=
+# gltf.x, iso.z=gltf.y) BEFORE the chassis's PsBodyNode3D applies its own
+# ISO->Godot basis change (frame_convert_core.h) to the whole subtree - an
+# extra ad hoc rotation on top of that (rather than exactly this
+# permutation) fights the parent's own conversion instead of feeding it
+# correctly-labelled axes. The fix below sets _model_root's basis directly
+# to that permutation matrix (columns = images of gltf's local x/y/z axes:
+# gltf+X/left -> iso+Y, gltf+Y/up -> iso+Z, gltf+Z/forward -> iso+X), and
+# every local axis used for animation below is likewise the RAW gltf axis
+# that the rig says carries that motion (bump/steer on gltf's own +Y - the
+# file's up axis; wheel spin about gltf's own +X - the file's left/right
+# axle axis) - child nodes' local translate/rotate stay in the file's own,
+# un-permuted axes; only _model_root's own basis needs the permutation, once.
+# Confirmed by screenshotting the corrected orientation (out/renders/).
 
 @export var simulation_path: NodePath
 @export var vehicle_name: String = ""
@@ -77,11 +89,13 @@ func _load_model() -> void:
 		push_warning("vehicle_visual.gd: GLTFDocument.generate_scene returned null for %s" % model_absolute_path)
 		return
 	add_child(_model_root)
-	# WORKAROUND, not a fix to the asset itself (see file header comment):
-	# the loaded geometry is authored Z-up, not the Y-up its own rig.json
-	# claims - rotate the whole model -90 deg about local X so it renders
-	# lying flat like a normal car instead of standing on its length axis.
-	_model_root.rotation.x = -PI / 2.0
+	# gltf-local -> ISO-local permutation (see file header comment):
+	# iso.x (fwd) = gltf.z, iso.y (left) = gltf.x, iso.z (up) = gltf.y.
+	# As a basis, column i is where gltf's local axis i (x,y,z) ends up:
+	# gltf+X (left) -> (0,1,0), gltf+Y (up) -> (0,0,1), gltf+Z (fwd) -> (1,0,0).
+	# A pure axis permutation (determinant +1: an even permutation of the
+	# three axes), so this never mirrors the mesh.
+	_model_root.transform.basis = Basis(Vector3(0, 1, 0), Vector3(0, 0, 1), Vector3(1, 0, 0))
 	_load_ok = true
 	print("ps_godot vehicle_visual.gd: loaded model ", model_absolute_path)
 
@@ -128,24 +142,26 @@ func _process(delta: float) -> void:
 
 		if w["susp"] != null:
 			# Suspension axis is ISO [0,0,1] (up) for every corner of this
-			# rig - the model's own local Z, given the file's ACTUAL axes
-			# (see file header comment: local axes match ISO directly, not
-			# the documented y,z,x permutation). Real simulated state
+			# rig. susp_*'s own local translation is a RAW gltf-local
+			# offset (child nodes keep the file's own, un-permuted axes -
+			# see _load_model's comment), and the file's up axis is its
+			# own +Y (gltf is Y-up; iso.z=gltf.y). Real simulated state
 			# (World::wheel_telemetry's compression).
-			w["susp"].position = w["rest_susp_pos"] + Vector3(0, 0, 1) * compression
+			w["susp"].position = w["rest_susp_pos"] + Vector3(0, 1, 0) * compression
 
 		if w["steer"] != null:
 			if w["steered"]:
 				# APPROXIMATION - see file header comment. Steer axis ISO
-				# [0,0,1] -> model-local Z.
-				w["steer"].rotation = Vector3(0, 0, steer_input * max_wheel_angle * ackermann_fraction)
+				# [0,0,1] (up) -> gltf-local +Y (see susp_* comment above).
+				w["steer"].rotation = Vector3(0, steer_input * max_wheel_angle * ackermann_fraction, 0)
 			elif not w["is_front"] and rear_steer_fraction != 0.0:
-				w["steer"].rotation = Vector3(0, 0, -steer_input * max_wheel_angle * ackermann_fraction * rear_steer_fraction)
+				w["steer"].rotation = Vector3(0, -steer_input * max_wheel_angle * ackermann_fraction * rear_steer_fraction, 0)
 
 		if w["wheel"] != null:
 			# Real simulated state (World::wheel_telemetry's omega,
 			# integrated here into a visual spin angle). Wheel joint axis
-			# ISO [0,1,0] ("+ = rolling forward") -> model-local Y.
-			w["wheel"].rotation = Vector3(0, w["spin_angle"], 0)
+			# ISO [0,1,0] (left/right axle axis, "+ = rolling forward") ->
+			# gltf-local +X (iso.y=gltf.x - see _load_model's comment).
+			w["wheel"].rotation = Vector3(w["spin_angle"], 0, 0)
 
 	_simulation.add_adapter_time_us(Time.get_ticks_usec() - t0)
