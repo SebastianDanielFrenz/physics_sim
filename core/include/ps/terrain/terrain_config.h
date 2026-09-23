@@ -61,6 +61,18 @@ struct TerrainConfig {
     // Default on; turn off only to measure pure tile-fill cost with zero
     // query overhead.
     bool suppress_terrain_under_static_geometry = true;
+
+    // PHYS-021 Task B: compute the suppression result for every tile that
+    // touches foreign static geometry ONCE, inside World::set_terrain_source
+    // (load time, parallel across tiles), instead of on the tick path the
+    // first time each tile streams in. A tile not precomputed still takes
+    // the lazy per-fill path. The result is bit-identical either way; this
+    // only moves where the cost is paid. Contract: static geometry should be
+    // complete before set_terrain_source (a Static body created or destroyed
+    // later through World drops every cached result, see
+    // TileManager::on_static_geometry_changed). Ignored when
+    // suppress_terrain_under_static_geometry is off.
+    bool precompute_suppression_at_load = true;
 };
 
 } // namespace ps::terrain

@@ -29,6 +29,7 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
@@ -36,6 +37,7 @@
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cmath>
@@ -660,6 +662,46 @@ public:
     bool is_static(BodyId id) const override {
         const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
         return body != nullptr && body->IsStatic();
+    }
+
+    // Load-time only (allocates) - see i_rigid_backend.h. Decorated/compound
+    // shapes (e.g. the heightfield's RotatedTranslatedShape wrapper) cannot
+    // be triangulated directly, so the body's shape is first flattened into
+    // its leaf TransformedShapes. Vertices are returned relative to the
+    // body's own COM (float precision stays good far from the world origin)
+    // and offset back into world space in double.
+    void body_triangle_xy_bounds_into(BodyId id, std::vector<XyBounds>& out) const override {
+        out.clear();
+        if (id.index >= slots_.size() || !slots_[id.index].alive || slots_[id.index].generation != id.generation) return;
+        const JPH::TransformedShape root = body_interface().GetTransformedShape(slots_[id.index].jph_id);
+        if (root.mShape == nullptr) return;
+        JPH::AllHitCollisionCollector<JPH::TransformedShapeCollector> leaves;
+        root.CollectTransformedShapes(JPH::AABox::sBiggest(), leaves);
+        const JPH::RVec3 base = root.mShapePositionCOM;
+        const Vec3 base_w = from_rvec3(base);
+        constexpr int kBatch = JPH::Shape::cGetTrianglesMinTrianglesRequested * 8;
+        std::vector<JPH::Float3> verts(static_cast<std::size_t>(kBatch) * 3);
+        for (const JPH::TransformedShape& leaf : leaves.mHits) {
+            JPH::Shape::GetTrianglesContext ctx;
+            leaf.GetTrianglesStart(ctx, JPH::AABox::sBiggest(), base);
+            for (;;) {
+                const int count = leaf.GetTrianglesNext(ctx, kBatch, verts.data());
+                if (count <= 0) break;
+                for (int t = 0; t < count; ++t) {
+                    XyBounds b{1e300, 1e300, -1e300, -1e300};
+                    for (int k = 0; k < 3; ++k) {
+                        const JPH::Float3& v = verts[static_cast<std::size_t>(t) * 3 + k];
+                        const real x = base_w.x + static_cast<real>(v.x);
+                        const real y = base_w.y + static_cast<real>(v.y);
+                        b.min_x = std::min(b.min_x, x);
+                        b.max_x = std::max(b.max_x, x);
+                        b.min_y = std::min(b.min_y, y);
+                        b.max_y = std::max(b.max_y, y);
+                    }
+                    out.push_back(b);
+                }
+            }
+        }
     }
 
     void set_pose(BodyId id, const Pose& pose) override {

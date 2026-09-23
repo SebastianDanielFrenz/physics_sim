@@ -406,6 +406,19 @@ vehicle::WheelState World::wheel_state(VehicleId id, std::size_t wheel_index) co
 
 void World::set_terrain_source(std::shared_ptr<const terrain::ITerrainSource> source, const terrain::TerrainConfig& config) {
     terrain_manager_ = std::make_unique<terrain::TileManager>(std::move(source), config, *backend_);
+    terrain_manager_->precompute_suppression(*job_system_); // PHYS-021 Task B: load time, off the tick path
+}
+
+BodyId World::create_body(const BodyDesc& desc) {
+    const BodyId id = backend_->create_body(desc);
+    if (terrain_manager_ && desc.motion == BodyMotionType::Static) terrain_manager_->on_static_geometry_changed();
+    return id;
+}
+
+void World::destroy_body(BodyId id) {
+    const bool was_static = terrain_manager_ && backend_->is_static(id);
+    backend_->destroy_body(id);
+    if (was_static) terrain_manager_->on_static_geometry_changed();
 }
 
 void World::set_terrain_interest_point(std::uint64_t id, const Vec3& world_xy, real stream_radius_m) {
@@ -422,6 +435,10 @@ std::size_t World::terrain_resident_tile_count() const {
 
 std::size_t World::terrain_starved_tile_count() const {
     return terrain_manager_ ? terrain_manager_->starved_tile_count() : 0;
+}
+
+std::size_t World::terrain_precomputed_tile_count() const {
+    return terrain_manager_ ? terrain_manager_->precomputed_tile_count() : 0;
 }
 
 } // namespace ps

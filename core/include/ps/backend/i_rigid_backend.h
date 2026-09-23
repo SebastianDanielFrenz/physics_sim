@@ -141,6 +141,15 @@ struct ShapeContactHit {
     SurfaceId surface = kInvalidSurfaceId;
 };
 
+// World-space XY bounding rectangle of one collision triangle - see
+// IRigidBackend::body_triangle_xy_bounds_into.
+struct XyBounds {
+    real min_x = 0.0;
+    real min_y = 0.0;
+    real max_x = 0.0;
+    real max_y = 0.0;
+};
+
 class IRigidBackend {
 public:
     virtual ~IRigidBackend() = default;
@@ -164,6 +173,16 @@ public:
     // through at query time - the latter must never be treated as
     // permanent ground coverage.
     [[nodiscard]] virtual bool is_static(BodyId id) const = 0;
+
+    // Appends, into caller-owned `out` (out.clear()'d first), the
+    // world-space XY bounding rectangle of every triangle of `id`'s
+    // collision shape at its current pose. Convex primitives are
+    // triangulated by the backend. Nothing is appended for an invalid/stale
+    // id. Load-time only (it allocates): ps::terrain::TileManager's
+    // suppression precompute uses it to bin static feature geometry to
+    // terrain tile keys from the actual triangles, not a body's overall
+    // AABB (one surface-grouped mesh body can span the whole world).
+    virtual void body_triangle_xy_bounds_into(BodyId id, std::vector<XyBounds>& out) const = 0;
 
     // Updates an EXISTING HeightfieldShape-backed body's height/surface
     // samples in place - PLAN.md M1's tile system reuses a fixed pool of

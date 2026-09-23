@@ -83,6 +83,40 @@ public:
     [[nodiscard]] std::size_t starved_tile_count() const { return last_starved_count_; }
     [[nodiscard]] const TerrainConfig& config() const { return config_; }
 
+    // PLAN.md M1 / PHYS-021 Task B - load-time suppression precompute.
+    // Enumerates every tile key touched by a foreign static body's actual
+    // triangles (IRigidBackend::body_triangle_xy_bounds_into, binned to
+    // tile keys - never a body's overall AABB) and computes each one's
+    // suppression hole list with the SAME function the lazy per-fill path
+    // uses (compute_suppression_holes), in parallel across tiles
+    // (jobs.parallel_for, one private scratch per batch), then stores the
+    // results in suppression_cache_ in ascending key order. A runtime fill
+    // of such a tile is then a cache hit: no probes on the tick path. Any
+    // tile NOT precomputed still takes the lazy path. Called by
+    // World::set_terrain_source right after construction; allocates (load
+    // time only). No-op when suppress_terrain_under_static_geometry or
+    // precompute_suppression_at_load is off.
+    void precompute_suppression(jobs::JobSystem& jobs);
+    // Static geometry changed after construction (World::create_body/
+    // destroy_body of a Static body while a terrain source is set): drops
+    // every cached suppression result, precomputed or lazily computed, so
+    // tiles filled from now on are probed against the new geometry.
+    // Already-resident tiles keep the holes they were filled with. Setup-
+    // time only; no current flow creates static bodies after
+    // set_terrain_source.
+    void on_static_geometry_changed();
+    [[nodiscard]] std::size_t precomputed_tile_count() const { return precomputed_keys_.size(); }
+    [[nodiscard]] const std::vector<TileKey>& precomputed_keys() const { return precomputed_keys_; }
+    // How many tile fills took the lazy (probing) suppression path rather
+    // than a cache hit, over this manager's lifetime.
+    [[nodiscard]] std::size_t lazy_suppression_count() const { return lazy_suppression_count_; }
+    // White-box test hooks (tests/unit/test_terrain_suppression_precompute.cpp):
+    // the cached hole list for `key` (nullptr if none), and the lazy path's
+    // result for `key` computed from scratch on a freshly filled sample,
+    // bypassing and not touching the cache.
+    [[nodiscard]] const std::vector<std::uint32_t>* cached_suppression(TileKey key) const;
+    [[nodiscard]] std::vector<std::uint32_t> compute_suppression_uncached(TileKey key) const;
+
 private:
     struct InterestPoint {
         Vec3 world_xy;
@@ -112,6 +146,25 @@ private:
     // cache and a coarse-to-fine probe) and for two alternatives that were
     // tried and measured not to help on this workload.
     void suppress_covered_samples(Slot& slot);
+
+    // Per-caller scratch for compute_suppression_holes: the lazy path owns
+    // one (lazy_scratch_, reused forever); the precompute gives each
+    // parallel batch its own.
+    struct SuppressionScratch {
+        std::vector<ShapeContactHit> hits;
+        std::vector<std::uint8_t> quad_covered;
+        std::vector<std::uint8_t> vertex_state;
+    };
+    // The suppression computation itself (see tile_manager.cpp's header
+    // comment on suppress_covered_samples): appends to `holes` (cleared
+    // first) the sample indices of `sample` - a tile's UNMODIFIED
+    // ITerrainSource::fill_tile output - to mark kHeightfieldNoCollision, in
+    // ascending index order. Reads only backend queries, `sample` and
+    // `scratch`; safe to run concurrently with distinct scratch while the
+    // backend is not stepping and no body is created/destroyed/moved.
+    void compute_suppression_holes(const TileSample& sample, SuppressionScratch& scratch, std::vector<std::uint32_t>& holes) const;
+    // A TileSample sized for this source (heights/cell ids allocated).
+    [[nodiscard]] TileSample make_sample_storage() const;
     // True for any BodyId belonging to THIS pool - every slot's body,
     // whether currently assigned to a real tile or still an unused
     // placeholder. Found the hard way (PHYS-021): an unassigned slot's body
@@ -167,29 +220,21 @@ private:
     // jobs.parallel_batches - so an ordinary std::unordered_map is safe with
     // no lock. A tile with nothing to suppress is cached too (an empty
     // vector), so a revisit skips even the cheap level-1 broad probe.
+    // Also filled at load time by precompute_suppression (PHYS-021 Task B),
+    // so a precomputed tile's first fill is already a hit.
     std::unordered_map<std::int64_t, std::vector<std::uint32_t>> suppression_cache_;
-    // suppress_covered_samples' own scratch - the tile-footprint/coarse-block
-    // probes' hits and the per-quad coverage flags. TileManager-wide (not
-    // per-slot): suppress_covered_samples only ever runs from update()'s
-    // sequential step 5 (tile_manager.cpp's own header comment on that
-    // function explains why a parallel version was tried and rejected), so
-    // there is exactly one call in flight at a time and nothing here needs
-    // per-slot duplication. Every buffer grows once to the largest tile seen
-    // and is reused forever after, like every other scratch buffer here.
-    std::vector<ShapeContactHit> coverage_probe_scratch_;
-    std::vector<bool> quad_covered_scratch_;
-    // A quad's "fully covered" test (see suppress_covered_samples' own
-    // header comment - the conservative-rule fix) needs a per-VERTEX
-    // collide_shape_into probe result (does foreign static geometry cover
-    // this exact grid vertex), and every interior vertex is shared by up to
-    // 4 quads - this cache computes each vertex's probe at most once per
-    // suppress_covered_samples call (reset per call, not carried across
-    // calls like suppression_cache_ above) rather than up to 4x over.
-    // Tri-state (kVertexUnknown and so on, tile_manager.cpp) rather than
-    // bool: "not yet probed" must be distinguishable from "probed, not
-    // covered" since a vertex at height != 0 is skipped without ever
-    // probing it at all (see that function).
-    std::vector<std::uint8_t> vertex_covered_scratch_;
+    std::vector<TileKey> precomputed_keys_; // ascending by TileKey::packed
+    std::size_t lazy_suppression_count_ = 0;
+    // The lazy path's scratch - TileManager-wide (not per-slot):
+    // suppress_covered_samples only ever runs from update()'s sequential
+    // step 5, so there is exactly one call in flight at a time. Every
+    // buffer grows once to the largest tile seen and is reused forever
+    // after. vertex_state is the per-VERTEX probe cache for the 5-point
+    // "fully covered" test (each interior vertex is shared by up to 4
+    // quads; reset per call) and is tri-state because "never probed"
+    // (height != 0) must differ from "probed, not covered".
+    SuppressionScratch lazy_scratch_;
+    std::vector<std::uint32_t> lazy_holes_scratch_;
 };
 
 } // namespace ps::terrain

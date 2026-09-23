@@ -21,6 +21,7 @@ add_executable(ps_unit_tests
   test_terrain_golden.cpp
   test_terrain_tile_manager.cpp
   test_terrain_static_overlap.cpp
+  test_terrain_suppression_precompute.cpp
   test_pacejka_tyre_model.cpp
   test_vehicle_ackermann_symmetry.cpp
 )

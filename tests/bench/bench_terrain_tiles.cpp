@@ -104,7 +104,7 @@ void print_stats(const char* label, const TickStats& s) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     ps_tools::install_headless_crt_handlers();
 
 #ifndef PS_SOURCE_DIR
@@ -114,7 +114,12 @@ int main() {
     constexpr std::uint32_t kSamplesPerTile = 64; // representative resolution (256 m tile / 64 samples ~= 4 m spacing) - matches adapters/godot/demo's own config
 
     WorldConfig cfg;
-    cfg.job_workers = 0; // auto (PLAN.md D8 default)
+    cfg.job_workers = 0; // auto (PLAN.md D8 default); `--workers N` overrides (measurement only, e.g. precompute scaling)
+    bool precompute = true; // `--no-precompute`: measurement-only A/B of TerrainConfig::precompute_suppression_at_load
+    for (int a = 1; a < argc; ++a) {
+        if (std::string(argv[a]) == "--workers" && a + 1 < argc) cfg.job_workers = std::atoi(argv[a + 1]);
+        if (std::string(argv[a]) == "--no-precompute") precompute = false;
+    }
     World world(cfg);
 
     // Setup (excluded from every per-tick statistic below - see header
@@ -137,13 +142,21 @@ int main() {
     ps::terrain::TerrainConfig tc;
     tc.max_resident_tiles = 512;
     tc.max_tile_fills_per_tick = 16;
+    tc.precompute_suppression_at_load = precompute;
+    // Includes the pool creation AND the PHYS-021 Task B load-time
+    // suppression precompute (TerrainConfig::precompute_suppression_at_load)
+    // - load cost, excluded from every per-tick statistic below.
+    const auto install_t0 = std::chrono::steady_clock::now();
     world.set_terrain_source(source, tc);
+    const double install_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - install_t0).count();
 
     constexpr real kStreamRadiusM = 700.0;
     constexpr std::uint64_t kInterestId = 1;
 
     std::printf("bench_terrain_tiles setup: static collision load=%.2f ms (%zu bodies), terrain source load=%.2f ms\n",
                 static_load_ms, static_bodies.size(), terrain_load_ms);
+    std::printf("bench_terrain_tiles setup: set_terrain_source (pool + suppression precompute%s) = %.2f ms, %zu tiles precomputed, job_workers=%d\n",
+                precompute ? "" : " DISABLED", install_ms, world.terrain_precomputed_tile_count(), cfg.job_workers);
 
     // --- Phase 1: a genuine, COLD teleport onto the split-mu strip ("the
     // slip test track", test_ground.json's own spawn_split_mu_car point)
@@ -256,6 +269,16 @@ int main() {
     // actually matters for a player teleporting around and then continuing
     // to play in the same area rather than teleporting to a brand new area
     // every few seconds.
+    //
+    // UPDATE, PHYS-021 Task B (load-time suppression precompute, see
+    // TerrainConfig::precompute_suppression_at_load): the burst above is no
+    // longer probing on the tick path at all - every tile touching static
+    // geometry is precomputed inside set_terrain_source. Measured A/B with
+    // this bench's own `--no-precompute` flag, release: teleport worst tick
+    // 304.4 ms -> 6.8 ms; debug: 3011.6 ms -> 198.2 ms. The remaining
+    // burst cost is the 16 tile fills + heightfield updates themselves.
+    // Load cost moves into set_terrain_source: ~185 ms release / ~1.7 s
+    // debug on top of pool creation (printed on the setup line above).
     //
     // Phase 2 (drive) measured on this machine, release, WITH the real
     // static collision loaded (previously - with no static collision at

@@ -314,7 +314,7 @@ void TileManager::update(jobs::JobSystem& jobs) {
 // "Fully covered" is tested by probing a quad's 4 corners AND its centre (5
 // points) and requiring all 5 to hit foreign static geometry - corners are
 // shared by up to 4 quads, so each vertex's ray is cached/computed at most
-// once per this function's call (vertex_covered_scratch_), not up to 4x
+// once per this function's call (SuppressionScratch::vertex_state), not up to 4x
 // over; the extra cost vs. the old centre-only rule is therefore roughly
 // (n^2 vertex probes + (n-1)^2 quad-centre probes) vs. the old (n-1)^2 alone -
 // about 2x the level-3 ray count, still gated behind the same level-1/2
@@ -401,6 +401,18 @@ void TileManager::update(jobs::JobSystem& jobs) {
 //      project's own code controls. Left sequential; a future session
 //      revisiting this should re-measure rather than assume either result
 //      still holds after a Jolt version bump.
+//      Reconciled (Task B, below): concurrent queries DO scale - the
+//      load-time precompute parallelises across tiles and goes from ~700 ms
+//      on 1 worker to ~185 ms on 4-10 workers (release, 78 test_ground
+//      tiles). What does not scale is the cost DISTRIBUTION: the single
+//      most expensive tile alone costs ~138 ms of the ~578 ms total, so
+//      wall time floors at that one tile no matter how many workers run.
+//      A teleport burst is dominated by exactly such a tile, which is why
+//      parallelising inside one tick showed no gain.
+//   e. Load-time precompute (PHYS-021 Task B, precompute_suppression):
+//      every tile touching static geometry is computed once inside
+//      World::set_terrain_source, so on the tick path it is always (a).
+//      The lazy path below stays as the fallback for any other tile.
 //
 // Three-level probe so this costs almost nothing for a tile with no static
 // feature anywhere near it (the overwhelming majority, in every scenario
@@ -434,16 +446,28 @@ void TileManager::update(jobs::JobSystem& jobs) {
 void TileManager::suppress_covered_samples(Slot& slot) {
     if (!config_.suppress_terrain_under_static_geometry) return;
 
-    // a. Cache lookup - a pure function of TileKey, see header comment.
+    // a. Cache lookup - a pure function of TileKey, see header comment. A
+    // tile precomputed at load time (precompute_suppression) is always a
+    // hit here; applying it is allocation-free.
     if (const auto it = suppression_cache_.find(slot.key.packed); it != suppression_cache_.end()) {
         for (const std::uint32_t idx : it->second) slot.sample.heights[idx] = kHeightfieldNoCollision;
         return;
     }
 
+    // b. Lazy fallback (any tile not precomputed): the same computation the
+    // precompute runs, then cached.
+    ++lazy_suppression_count_;
+    compute_suppression_holes(slot.sample, lazy_scratch_, lazy_holes_scratch_);
+    for (const std::uint32_t idx : lazy_holes_scratch_) slot.sample.heights[idx] = kHeightfieldNoCollision;
+    suppression_cache_.emplace(slot.key.packed, lazy_holes_scratch_);
+}
+
+void TileManager::compute_suppression_holes(const TileSample& sample, SuppressionScratch& scratch, std::vector<std::uint32_t>& holes) const {
+    holes.clear();
     const std::uint32_t n = source_->samples_per_tile();
     const std::uint32_t quads = (n >= 1) ? n - 1 : 0;
     const real ts = source_->tile_size_m();
-    const Vec3& origin = slot.sample.tile_origin_xy;
+    const Vec3& origin = sample.tile_origin_xy;
     const real spacing = ts / static_cast<real>(n > 0 ? n - 1 : 1);
     constexpr real kVerticalHalfExtentM = 50.0; // features sit within a few metres of height 0, not near this
 
@@ -451,66 +475,49 @@ void TileManager::suppress_covered_samples(Slot& slot) {
     const BoxShape probe_box{Vec3{ts * real(0.5), ts * real(0.5), kVerticalHalfExtentM}};
     Pose probe_pose;
     probe_pose.position = origin + Vec3{ts * real(0.5), ts * real(0.5), real(0.0)};
-    backend_.collide_shape_into(probe_box, probe_pose, coverage_probe_scratch_);
+    backend_.collide_shape_into(probe_box, probe_pose, scratch.hits);
     bool any_other_static = false;
-    for (const ShapeContactHit& hit : coverage_probe_scratch_) {
+    for (const ShapeContactHit& hit : scratch.hits) {
         if (!is_own_pool_body(hit.body) && backend_.is_static(hit.body)) {
             any_other_static = true;
             break;
         }
     }
-    if (!any_other_static) {
-        suppression_cache_.emplace(slot.key.packed, std::vector<std::uint32_t>{}); // cache the empty result too - skips even this broad probe on revisit
-        return;
-    }
+    if (!any_other_static) return; // nothing to suppress anywhere in this tile
 
-    if (quad_covered_scratch_.size() < static_cast<std::size_t>(quads) * quads) quad_covered_scratch_.resize(static_cast<std::size_t>(quads) * quads);
-    std::fill(quad_covered_scratch_.begin(), quad_covered_scratch_.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(quads) * quads), false);
+    const std::size_t quad_count = static_cast<std::size_t>(quads) * quads;
+    const std::size_t vertex_count = static_cast<std::size_t>(n) * n;
+    if (scratch.quad_covered.size() < quad_count) scratch.quad_covered.resize(quad_count);
+    std::fill(scratch.quad_covered.begin(), scratch.quad_covered.begin() + static_cast<std::ptrdiff_t>(quad_count), std::uint8_t{0});
 
-    // Per-VERTEX ray cache for the "fully covered" test's 4 corners - reset
-    // to "unknown" every call (unlike suppression_cache_ above, this is
-    // scratch for THIS tile's own computation only, not carried across
-    // calls). Tri-state: kVertexUnknown must be distinguishable from
-    // kVertexNotCovered so a vertex whose ray was never cast (height != 0,
-    // see vertex_covered() below) is not confused with one that WAS cast
-    // and missed.
+    // Per-VERTEX probe cache for the "fully covered" test's 4 corners -
+    // reset every call. Tri-state: kVertexUnknown must be distinguishable
+    // from kVertexNotCovered so a vertex whose probe was never made (height
+    // != 0, see vertex_covered() below) is not confused with one that WAS
+    // probed and missed.
     constexpr std::uint8_t kVertexUnknown = 0;
     constexpr std::uint8_t kVertexCovered = 1;
     constexpr std::uint8_t kVertexNotCovered = 2;
-    if (vertex_covered_scratch_.size() < static_cast<std::size_t>(n) * n) vertex_covered_scratch_.resize(static_cast<std::size_t>(n) * n);
-    std::fill(vertex_covered_scratch_.begin(), vertex_covered_scratch_.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(n) * n),
-              kVertexUnknown);
+    if (scratch.vertex_state.size() < vertex_count) scratch.vertex_state.resize(vertex_count);
+    std::fill(scratch.vertex_state.begin(), scratch.vertex_state.begin() + static_cast<std::ptrdiff_t>(vertex_count), kVertexUnknown);
 
     // Point-covered probe: collide_shape_into with a small vertical box, NOT
-    // ray_cast. Found necessary (not merely a style choice - see
-    // tests/unit/test_terrain_static_overlap.cpp's git history for the
-    // regression this replaced): a single-ray probe measurably
-    // back-face-culls this project's own static feature meshes at some
-    // points (confirmed directly - a plain ray_cast at several points under
-    // the real test_ground straight consistently missed a mesh that
-    // collide_shape_into, queried at the identical point, found in the same
-    // call) - a real, pre-existing backend asymmetry between ray_cast and
-    // collide_shape_into (see jolt_backend.cpp's own comment on the
-    // analogous winding/culling issue this project already found and fixed
-    // for HEIGHTFIELDS specifically; this is the same class of issue,
-    // apparently also reachable for a MeshShape, not fully characterised -
-    // see this task's own follow-up note on it). The single-centre-ray rule
-    // this function used before "got away with it" by sampling few, and
-    // evidently lucky, points; requiring 4-5 independent samples to ALL
-    // agree, per the marking-rule fix above, turned that latent fragility
-    // into an outright failure to hole large, solidly-interior areas -
-    // caught by test_terrain_static_overlap.cpp's existing vehicle-standing
-    // test, not a new one. collide_shape_into has no equivalent gap for a
-    // MeshShape (only for HeightFieldShape, which is irrelevant here - this
-    // probe only ever wants a FOREIGN, i.e. non-terrain, hit, so its
-    // inability to see this pool's own heightfields is not a loss).
+    // ray_cast (a plain ray_cast measurably misses this project's static
+    // feature MeshShapes at some interior points - vault PHYS-025 Part 3).
+    // Back-face caveat (PHYS-025 Part 4): Jolt's CollideShape ignores
+    // triangles whose plane lies beyond the query box's CENTRE, so this box
+    // (centred at z=0) only reports surfaces at or below z=0. It detects a
+    // flat z=0 feature mesh only because the centre lies exactly on that
+    // plane. Every miss this causes is in the SAFE direction (not covered
+    // -> no hole): a feature slightly above 0, or an elevated deck such as a
+    // ramp, is never treated as covering the ground below it.
     constexpr real kPointProbeHalfExtentM = 0.05;
     auto point_covered = [&](real wx, real wy) -> bool {
         const BoxShape point_box{Vec3{kPointProbeHalfExtentM, kPointProbeHalfExtentM, kVerticalHalfExtentM}};
         Pose point_pose;
         point_pose.position = Vec3{wx, wy, real(0.0)};
-        backend_.collide_shape_into(point_box, point_pose, coverage_probe_scratch_);
-        for (const ShapeContactHit& hit : coverage_probe_scratch_) {
+        backend_.collide_shape_into(point_box, point_pose, scratch.hits);
+        for (const ShapeContactHit& hit : scratch.hits) {
             if (!is_own_pool_body(hit.body) && backend_.is_static(hit.body)) return true;
         }
         return false;
@@ -521,9 +528,9 @@ void TileManager::suppress_covered_samples(Slot& slot) {
     // shares this corner - is an array lookup.
     auto vertex_covered = [&](std::uint32_t iy, std::uint32_t ix) -> bool {
         const std::size_t idx = static_cast<std::size_t>(iy) * n + ix;
-        std::uint8_t& state = vertex_covered_scratch_[idx];
+        std::uint8_t& state = scratch.vertex_state[idx];
         if (state == kVertexUnknown) {
-            if (slot.sample.heights[idx] != real(0.0)) {
+            if (sample.heights[idx] != real(0.0)) {
                 // Only a flat zone's interior is ever exactly 0.0 (see the
                 // function-level comment) - a non-zero vertex can never
                 // coincide with a feature mesh, so it is never covered and
@@ -540,7 +547,7 @@ void TileManager::suppress_covered_samples(Slot& slot) {
 
     // 2 + 3. Coarse block grid, refined to a per-quad "fully covered" probe
     // only inside a block level 2 actually found covered.
-    constexpr std::uint32_t kCoarseBlockQuads = 8; // 63 quads -> 8x8 = 64 coarse blocks at this project's samples_per_tile=64; measured against 4 (tuning sweep, tile_manager.cpp's own report/header comment) - 4 was slightly WORSE (more per-block collide_shape_into overhead, no extra quads skipped) at this project's own feature density near its most-covered tiles
+    constexpr std::uint32_t kCoarseBlockQuads = 8; // 63 quads -> 8x8 = 64 coarse blocks at this project's samples_per_tile=64; measured against 4 (tuning sweep) - 4 was slightly WORSE (more per-block collide_shape_into overhead, no extra quads skipped) at this project's own feature density near its most-covered tiles
     for (std::uint32_t by = 0; by * kCoarseBlockQuads < quads; ++by) {
         const std::uint32_t qy0 = by * kCoarseBlockQuads;
         const std::uint32_t qy1 = std::min(qy0 + kCoarseBlockQuads, quads); // exclusive
@@ -554,9 +561,9 @@ void TileManager::suppress_covered_samples(Slot& slot) {
             Pose block_pose;
             block_pose.position =
                 origin + Vec3{static_cast<real>(qx0) * spacing + block_w * real(0.5), static_cast<real>(qy0) * spacing + block_h * real(0.5), real(0.0)};
-            backend_.collide_shape_into(block_box, block_pose, coverage_probe_scratch_);
+            backend_.collide_shape_into(block_box, block_pose, scratch.hits);
             bool block_covered = false;
-            for (const ShapeContactHit& hit : coverage_probe_scratch_) {
+            for (const ShapeContactHit& hit : scratch.hits) {
                 if (!is_own_pool_body(hit.body) && backend_.is_static(hit.body)) {
                     block_covered = true;
                     break;
@@ -575,7 +582,7 @@ void TileManager::suppress_covered_samples(Slot& slot) {
                     }
                     const real wx = origin.x + (static_cast<real>(qx) + real(0.5)) * spacing;
                     const real wy = origin.y + (static_cast<real>(qy) + real(0.5)) * spacing;
-                    quad_covered_scratch_[qi] = point_covered(wx, wy);
+                    scratch.quad_covered[qi] = point_covered(wx, wy) ? 1 : 0;
                 }
             }
         }
@@ -585,7 +592,6 @@ void TileManager::suppress_covered_samples(Slot& slot) {
     // exists within this tile is fully covered (see the marking-rule
     // comment above) - a tile's own edge vertices simply have fewer
     // existing neighbours to require.
-    std::vector<std::uint32_t> holes;
     for (std::uint32_t iy = 0; iy < n; ++iy) {
         for (std::uint32_t ix = 0; ix < n; ++ix) {
             bool all_covered = true;
@@ -597,20 +603,104 @@ void TileManager::suppress_covered_samples(Slot& slot) {
                     const std::int32_t qx = static_cast<std::int32_t>(ix) + dqx;
                     if (qx < 0 || qx >= static_cast<std::int32_t>(quads)) continue;
                     any_quad = true;
-                    if (!quad_covered_scratch_[static_cast<std::size_t>(qy) * quads + static_cast<std::size_t>(qx)]) {
+                    if (scratch.quad_covered[static_cast<std::size_t>(qy) * quads + static_cast<std::size_t>(qx)] == 0) {
                         all_covered = false;
                         break;
                     }
                 }
             }
-            if (any_quad && all_covered) {
-                const std::size_t idx = static_cast<std::size_t>(iy) * n + ix;
-                slot.sample.heights[idx] = kHeightfieldNoCollision;
-                holes.push_back(static_cast<std::uint32_t>(idx));
+            if (any_quad && all_covered) holes.push_back(static_cast<std::uint32_t>(static_cast<std::size_t>(iy) * n + ix));
+        }
+    }
+}
+
+TileSample TileManager::make_sample_storage() const {
+    const std::size_t n = source_->samples_per_tile();
+    TileSample s;
+    s.heights.assign(n * n, 0.0);
+    s.cell_surface_ids.assign((n - 1) * (n - 1), kInvalidSurfaceId);
+    s.samples_per_tile = static_cast<std::uint32_t>(n);
+    return s;
+}
+
+// PHYS-021 Task B - see tile_manager.h. Tiles are enumerated from the
+// actual triangles of every foreign STATIC body (a surface-grouped mesh
+// body's own AABB spans nearly the whole world, so it cannot be used),
+// each triangle's XY bounds grown by kBinMarginM so a triangle lying
+// exactly on a tile boundary still bins into both neighbours. Precomputing
+// an extra tile is harmless (same function, same result); missing one
+// would only mean that tile takes the lazy path.
+void TileManager::precompute_suppression(jobs::JobSystem& jobs) {
+    if (!config_.suppress_terrain_under_static_geometry || !config_.precompute_suppression_at_load) return;
+
+    constexpr real kBinMarginM = 1.0;
+    const real ts = source_->tile_size_m();
+    std::vector<BodyId> ids;
+    backend_.live_body_ids_into(ids);
+    std::vector<XyBounds> tris;
+    std::unordered_map<std::int64_t, TileKey> keys;
+    for (const BodyId id : ids) {
+        if (is_own_pool_body(id) || !backend_.is_static(id)) continue;
+        backend_.body_triangle_xy_bounds_into(id, tris);
+        for (const XyBounds& b : tris) {
+            const TileKey k0 = source_->key_for_world_xy(b.min_x - kBinMarginM, b.min_y - kBinMarginM);
+            const Vec3 o0 = source_->tile_origin_xy(k0);
+            const auto nx = static_cast<std::int32_t>(std::floor((b.max_x + kBinMarginM - o0.x) / ts));
+            const auto ny = static_cast<std::int32_t>(std::floor((b.max_y + kBinMarginM - o0.y) / ts));
+            for (std::int32_t dy = 0; dy <= ny; ++dy) {
+                for (std::int32_t dx = 0; dx <= nx; ++dx) {
+                    const TileKey k = source_->key_offset(k0, dx, dy);
+                    keys.emplace(k.packed, k);
+                }
             }
         }
     }
-    suppression_cache_.emplace(slot.key.packed, std::move(holes));
+
+    std::vector<TileKey> todo;
+    todo.reserve(keys.size());
+    for (const auto& [packed, k] : keys) {
+        if (!suppression_cache_.count(packed)) todo.push_back(k);
+    }
+    std::sort(todo.begin(), todo.end(), [](const TileKey& a, const TileKey& b) { return a.packed < b.packed; });
+
+    // Parallel across tiles; each batch owns its scratch and sample buffer
+    // and writes only its own result slots (PLAN.md D8 scatter). The
+    // backend is idle here (setup time, nothing stepping), which is the
+    // documented condition for concurrent read-only queries.
+    std::vector<std::vector<std::uint32_t>> results(todo.size());
+    jobs.parallel_for(todo.size(), 1, [&](std::size_t begin, std::size_t end) {
+        SuppressionScratch scratch;
+        TileSample sample = make_sample_storage();
+        for (std::size_t i = begin; i < end; ++i) {
+            source_->fill_tile(todo[i], sample);
+            compute_suppression_holes(sample, scratch, results[i]);
+        }
+    });
+
+    // Sequential, ascending-key gather into the cache.
+    for (std::size_t i = 0; i < todo.size(); ++i) {
+        suppression_cache_.emplace(todo[i].packed, std::move(results[i]));
+        precomputed_keys_.push_back(todo[i]);
+    }
+}
+
+void TileManager::on_static_geometry_changed() {
+    suppression_cache_.clear();
+    precomputed_keys_.clear();
+}
+
+const std::vector<std::uint32_t>* TileManager::cached_suppression(TileKey key) const {
+    const auto it = suppression_cache_.find(key.packed);
+    return it == suppression_cache_.end() ? nullptr : &it->second;
+}
+
+std::vector<std::uint32_t> TileManager::compute_suppression_uncached(TileKey key) const {
+    SuppressionScratch scratch;
+    TileSample sample = make_sample_storage();
+    source_->fill_tile(key, sample);
+    std::vector<std::uint32_t> holes;
+    compute_suppression_holes(sample, scratch, holes);
+    return holes;
 }
 
 } // namespace ps::terrain

@@ -86,8 +86,11 @@ public:
     World(const World&) = delete;
     World& operator=(const World&) = delete;
 
-    BodyId create_body(const BodyDesc& desc) { return backend_->create_body(desc); }
-    void destroy_body(BodyId id) { backend_->destroy_body(id); }
+    // Creating/destroying a Static body after set_terrain_source also drops
+    // the terrain tile system's cached suppression results (see
+    // TerrainConfig::precompute_suppression_at_load).
+    BodyId create_body(const BodyDesc& desc);
+    void destroy_body(BodyId id);
     JointId create_joint(const JointDesc& desc) { return backend_->create_joint(desc); }
     void destroy_joint(JointId id) { backend_->destroy_joint(id); }
 
@@ -127,6 +130,9 @@ public:
     void remove_terrain_interest_point(std::uint64_t id);
     [[nodiscard]] std::size_t terrain_resident_tile_count() const;
     [[nodiscard]] std::size_t terrain_starved_tile_count() const;
+    // Tiles whose static-geometry suppression was precomputed inside
+    // set_terrain_source (TerrainConfig::precompute_suppression_at_load).
+    [[nodiscard]] std::size_t terrain_precomputed_tile_count() const;
 
     // PLAN.md P2 adapter report / this task's step 3: named control
     // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can
