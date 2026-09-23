@@ -49,6 +49,30 @@ target_link_libraries(bench_contact_coupling
 
 add_test(NAME bench_contact_coupling COMMAND bench_contact_coupling)
 
+# bench_terrain_tiles - PLAN.md M1 terrain-tile acceptance: per-tick/worst-
+# tick cost while streaming tiles around a moving interest point, using the
+# real data/tracks/test_ground/terrain.json. Registered as a smoke check
+# (see bench_terrain_tiles.cpp's header comment for the bound it asserts).
+add_executable(bench_terrain_tiles bench_terrain_tiles.cpp)
+
+target_include_directories(bench_terrain_tiles PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+
+target_link_libraries(bench_terrain_tiles
+  PRIVATE
+    ps_core
+    ps_headless_env
+    ps_warnings
+    ps_options
+)
+
+# Same reason as tests/unit/CMakeLists.txt's PS_SOURCE_DIR: this bench loads
+# data/tracks/test_ground/terrain.json by an absolute path baked in at
+# configure time (the WSL/Linux presets build entirely outside the source
+# tree, so no relative/CWD-based lookup works on every preset).
+target_compile_definitions(bench_terrain_tiles PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+add_test(NAME bench_terrain_tiles COMMAND bench_terrain_tiles)
+
 # ps_energy_study - Part A energy-loss measurement study (see
 # tests/bench/energy_study.cpp's header comment). Deliberately NOT
 # registered with add_test/CTest: it is a measurement tool whose table feeds
