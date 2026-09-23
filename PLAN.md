@@ -535,6 +535,32 @@ control-theoretic, not the tyre model: the peak-slip point is locally
 unstable and the wheel model's brake torque acts as a hard velocity clamp, so
 any fixed-rate slip loop oscillates around the peak and loses average grip.
 A real ABS and brake-proportioning model belongs here; re-measure then.
+
+Also carried over from P3 (2026-09-23), two findings from the near-standstill
+lateral oscillation fix:
+
+- *The tractor does not hold a cross slope.* On the 10 % cross slope
+  (`spawn_side_slope`) it slides about 18 m in 10 s, measured with the
+  standstill damping fix fully disabled, so this predates that fix and is
+  not caused by it (the fix takes it to about 21 m). No CTest has ever
+  covered tractor lateral slope holding — the parking-slope criterion above
+  is car-only and purely longitudinal. Give the tractor its own slope
+  acceptance test here and root-cause the sliding; the suspicion is the
+  tractor's much longer relaxation lengths (0.30/0.38 m vs the car's 0.15 m)
+  against the same lateral path, but that is untested.
+- *The standstill damping coefficient compensates for a numerical defect,
+  not a physical one.* It was demonstrated numerically, not physically: the
+  same yaw kick that grows at the 240 Hz tick decays at 4× that rate. The
+  cause is `VehicleInstance::step_tick` applying its substep-averaged wrench
+  once per tick against a chassis velocity frozen at tick start, which turns
+  the continuous system's zero damping margin negative at standstill. The
+  shipped damper buys back enough continuous-time margin to stay stable
+  despite that delay; it does not repair it. The real repair — applying the
+  wrench per substep against an updated chassis velocity, or integrating the
+  lateral relaxation implicitly — belongs in a drivetrain/solver pass here.
+  Whoever does it must re-derive the damping coefficient rather than leave it
+  stacked on top of a delay that no longer exists.
+
 Accept: 0–100 km/h and top speed within 3 % of a
 point-mass calculation from the torque curve, gearing, drag; clutch lock-up
 without torque spikes > 5 % above steady value; open vs. locked diff on split-μ
