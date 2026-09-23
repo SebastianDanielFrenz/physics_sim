@@ -51,7 +51,7 @@ physics_sim/
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
       vehicle_test_helpers.h          PLAN.md P3: VehicleTestRig/build_vehicle_rig()/settle() - a World with a static ground box (flat or tilted) plus one vehicle built directly from a data/vehicles/*.json file; see "Vehicle system" below for the chassis-half-extents-vs-wheel-shape-cast constraint documented on build_vehicle_rig()
-    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_world_snapshot (ArticulationSnapshot/contacts/vehicles additions), test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case), test_mesh_heightfield_shapes (MeshShape/HeightfieldShape collision + surface ids), test_terrain_golden (ProceduralTerrainSource vs. terrain.py's golden points), test_terrain_tile_manager (white-box: seams, streaming, throttling, zero-alloc steady state), test_test_ground_loader (load_test_ground_collision + SurfaceTable), test_pacejka_tyre_model (PLAN.md P3: MF5.2-subset pure/combined-slip curves, relaxation ODE, rolling resistance, cross-checked against an independent re-derivation and exact combined-slip-degeneracy identities)
+    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_world_snapshot (ArticulationSnapshot/contacts/vehicles additions), test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case), test_mesh_heightfield_shapes (MeshShape/HeightfieldShape collision + surface ids), test_terrain_golden (ProceduralTerrainSource vs. terrain.py's golden points), test_terrain_tile_manager (white-box: seams, streaming, throttling, zero-alloc steady state), test_test_ground_loader (load_test_ground_collision + SurfaceTable), test_terrain_static_overlap (PHYS-021: a parked vehicle's wheels and a sliding probe crossing the test_ground straight's edge - the terrain/static-feature coincident-collision fix, see "Terrain tile system"), test_pacejka_tyre_model (PLAN.md P3: MF5.2-subset pure/combined-slip curves, relaxation ODE, rolling resistance, cross-checked against an independent re-derivation and exact combined-slip-degeneracy identities)
     validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path), test_articulation_contact_measurements (Compliant/ProxyBody: a fixed-base arm resting on the ground, the same rig pressed with a known force, a rail rig pushing a dynamic crate, a floating-base vehicle drop, 5/20 m/s impacts; two [!mayfail] ProxyBody cases), test_vehicle_static (corner weights vs. hand calculation), test_vehicle_parking_slope (15% slope, <1mm creep in 30s), test_vehicle_step_steer (yaw-rate response does not grow after a step-steer input), test_vehicle_skidpad (steady lateral acceleration vs. a two-axle roll-stiffness-split tyre-limited estimate, within 0.4% - PASSES; an earlier estimate-formula bug that double-counted lateral load transfer put this 5.2% over the 3% tolerance, see the test's own header comment and vault PHYS-018), test_vehicle_braking ([!mayfail]: 100-0 km/h distance vs. a load-transfer-corrected mu estimate - a per-axle ABS emulation fix (was front-only) closed the gap from 16% to 9%, still over the 3% tolerance; the residual is root-caused to closed-loop slip regulation against a locally unstable target under the wheel spin model's hard velocity clamp, not a harness oversight - see the test's own header comment and vault PHYS-019)
     determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario, one case mixes Compliant/ProxyBody contact-bearing rail rigs with plain chains, one case adds two vehicles built directly from a VehicleDesc with a mid-run step-steer input)
     bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target bench_contact_coupling (plain main, also CTest-registered): cost per tick per contact strategy, scaling with contact count; target bench_terrain_tiles (plain main, also CTest-registered): tile-streaming cost/tick against the real test_ground terrain spec, simulated 50 km drive; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
@@ -454,6 +454,54 @@ against `data/tracks/test_ground/terrain.json`: release ~1.35 ms/tick avg
 (worst 1.96 ms) simulating a 50 km drive, well inside the 240 Hz/4.17 ms
 budget.
 
+### Terrain/static-feature coincident-collision suppression (PHYS-021)
+
+A track's static feature meshes (`load_test_ground_collision`, below)
+always sit on one of `terrain.json`'s flat zones, at height exactly 0 -
+the same height the terrain heightfield itself has there (`flat_mask` is
+exactly 1 inside a zone's interior). Left alone, this puts two STATIC
+bodies at the exact same point, and `IRigidBackend::shape_cast`'s
+`ClosestHitCollisionCollector` then reports either one depending on tiny,
+tick-to-tick Jolt-internal tie-breaking - a stationary wheel's reported
+surface (and friction) flickers. Fixed at the terrain/tile level, not by a
+query-side preference rule (a flat zone's own extent is much larger than
+the feature mesh inside it - e.g. `main_disc`'s 3 km radius holds many
+isolated small features with real open ground between them - so "inside a
+flat zone" cannot by itself mean "on the mesh"; see `out/handover_surface.md`
+for the full write-up of why the alternatives were rejected):
+
+`TileManager::suppress_covered_samples` (gated by the new
+`TerrainConfig::suppress_terrain_under_static_geometry`, default on) runs
+once per newly-(re)filled tile, right before `update_heightfield_body`.
+Two-level probe, negligible cost for any tile with no static feature
+nearby (the common case): (1) one `collide_shape_into` box query sized to
+the whole tile footprint; only if that finds a foreign STATIC body does
+(2) run - one ray per QUAD centre (only for quads whose two opposite
+corner samples are both exactly height 0.0, the flat-zone-interior
+invariant above), and a vertex is marked
+`ps::kHeightfieldNoCollision` (`ps/backend/shape_desc.h` - exactly Jolt's
+own `HeightFieldShapeConstants::cNoCollisionValue`, carried through the
+existing real->float sample cast byte-identically, no special-case
+backend code) only if EVERY quad touching it is itself confirmed covered.
+Marking based on hit VERTICES instead (the simpler-seeming alternative)
+leaks the hole one whole quad width past a feature's OUTER edge, because
+Jolt drops a quad's triangles if ANY corner is a hole - found via
+`tests/unit/test_terrain_static_overlap.cpp`'s edge-crossing test, which
+fell through 100+ m before this was corrected to the per-quad-centre/AND
+form; the accepted trade-off is a residual sub-quad-width sliver right at
+a feature's true edge that can still show the original flicker, never the
+whole footprint.
+
+`IRigidBackend::is_static` (new; `is_own_pool_body` on `TileManager`, using
+a set of every pool slot's `BodyId`, built once in the constructor) gate
+both probes above: a DYNAMIC body passing through at fill time must never
+be mistaken for permanent coverage, and neither must a SIBLING tile body -
+an unused pool slot sits inert at the world origin (its construction-time
+default pose) until first assigned, so a probe for a tile near the origin
+(exactly where a scenario's main spawn usually sits) would otherwise see a
+pile of stacked sibling bodies there and hollow out far more than
+intended (found the same way, before `is_own_pool_body` existed).
+
 ## Test-ground static collision (`core/src/io/`, PLAN.md M1)
 
 `ps::io::SurfaceTable` (`ps/io/surface_table.h`/`surface_table.cpp`):
@@ -668,6 +716,11 @@ callbacks that print to stderr (Jolt's own defaults are silent and just
 trigger a bare breakpoint). Broadphase/contact-constraint capacity and the
 `TempAllocatorImpl` arena size scale with `max_bodies` rather than a fixed
 constant.
+
+`IRigidBackend::is_static` (PLAN.md M1/PHYS-021 - see "Terrain/static-feature
+coincident-collision suppression" above): `body->IsStatic()` behind the
+same `TryGetBody(lookup(id))` null-safety pattern as `get_mass`/
+`get_inertia_world`.
 
 `MeshShape`/`HeightfieldShape` (PLAN.md M1): `SurfaceMaterial :
 JPH::PhysicsMaterial` carries one `SurfaceId`; `shared_surface_material_list()`

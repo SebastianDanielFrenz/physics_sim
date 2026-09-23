@@ -39,6 +39,28 @@ struct TerrainConfig {
     // instead. A steady-state drive needs far fewer than this per tick
     // (roughly the stream boundary's perimeter / tile size).
     std::size_t max_tile_fills_per_tick = 4;
+
+    // PLAN.md M1 / PHYS-021: whenever a newly-filled tile has a sample at
+    // exactly height 0 (terrain.json's own documented invariant - height is
+    // EXACTLY 0 inside a flat zone's interior, nowhere else), TileManager
+    // probes the backend for another STATIC body already occupying that
+    // exact point (e.g. a track's static feature mesh, which - by the same
+    // spec - only ever sits on a flat zone, at height 0) and, if found,
+    // marks that sample as HeightfieldShape's no-collision sentinel
+    // (ps::kHeightfieldNoCollision) instead of writing the terrain's own
+    // height there. Without this, a wheel/ray query can hit either the
+    // terrain heightfield or the feature mesh at the same point depending
+    // on tiny, tick-to-tick Jolt-internal tie-breaking - flickering the
+    // reported surface (and its friction) every tick. Detected by an actual
+    // physics query against whatever static geometry happens to be loaded,
+    // not by any hardcoded knowledge of a specific track, so it stays
+    // correct for any future static feature set on the same terrain source.
+    // A scenario with no flat zones (or no other static bodies near them)
+    // pays for exactly one extra broad-phase probe per newly-filled tile
+    // and nothing else (see tile_manager.cpp's suppress_covered_samples).
+    // Default on; turn off only to measure pure tile-fill cost with zero
+    // query overhead.
+    bool suppress_terrain_under_static_geometry = true;
 };
 
 } // namespace ps::terrain

@@ -215,6 +215,8 @@ ScenarioTerrain read_terrain(const json& j, const std::filesystem::path& scenari
     t.samples_per_tile = j.value("samples_per_tile", t.samples_per_tile);
     t.config.max_resident_tiles = j.value("max_resident_tiles", t.config.max_resident_tiles);
     t.config.max_tile_fills_per_tick = j.value("max_tile_fills_per_tick", t.config.max_tile_fills_per_tick);
+    t.config.suppress_terrain_under_static_geometry =
+        j.value("suppress_terrain_under_static_geometry", t.config.suppress_terrain_under_static_geometry);
 
     if (j.contains("interest_points")) {
         for (const auto& ipj : j.at("interest_points")) {

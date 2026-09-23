@@ -16,6 +16,7 @@
 #include "ps/types.h"
 
 #include <cstdint>
+#include <limits>
 #include <variant>
 #include <vector>
 
@@ -76,6 +77,22 @@ struct HeightfieldShape {
     std::vector<real> heights;              // sample_count^2
     std::vector<SurfaceId> cell_surface_ids; // (sample_count-1)^2, or empty
 };
+
+// A `HeightfieldShape::heights` sample exactly equal to this value has NO
+// collision at that grid vertex - every triangle touching it is dropped
+// (JoltPhysics' own JPH::HeightFieldShapeConstants::cNoCollisionValue,
+// FLT_MAX, and this is exactly that value widened to `real` - chosen so the
+// existing plain real->float sample cast in jolt_backend.cpp
+// (reverse_heightfield_rows_into, used by both initial shape construction
+// and the hot update_heightfield_body/SetHeights path) carries it through
+// byte-identically with no special-case code anywhere in the backend).
+// PLAN.md M1: ps::terrain::TileManager writes this into a tile's samples
+// wherever it detects (by an actual physics query, not a hardcoded rule)
+// that another STATIC body already occupies the exact same footprint - see
+// tile_manager.h's header comment and data/tracks/README.md's "a meshed
+// feature's own footprint always wins locally" - so the terrain and a
+// static feature mesh never both claim the same point at once.
+inline constexpr real kHeightfieldNoCollision = static_cast<real>(std::numeric_limits<float>::max());
 
 using ShapeDesc = std::variant<BoxShape, SphereShape, CapsuleShape, CylinderShape, MeshShape, HeightfieldShape>;
 

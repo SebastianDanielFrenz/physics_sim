@@ -156,6 +156,15 @@ public:
     virtual void set_pose(BodyId id, const Pose& pose) = 0;
     virtual void set_motion(BodyId id, const Motion& motion) = 0;
 
+    // True for a Static body (BodyDesc::motion at creation), false for
+    // Kinematic/Dynamic and for an invalid/stale id. PLAN.md M1: lets a
+    // caller distinguish "another STATIC body already covers this point"
+    // (ps::terrain::TileManager's terrain/static-feature coincident-
+    // collision fix) from a dynamic body that merely happens to be passing
+    // through at query time - the latter must never be treated as
+    // permanent ground coverage.
+    [[nodiscard]] virtual bool is_static(BodyId id) const = 0;
+
     // Updates an EXISTING HeightfieldShape-backed body's height/surface
     // samples in place - PLAN.md M1's tile system reuses a fixed pool of
     // bodies across many different tiles over a vehicle's lifetime

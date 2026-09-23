@@ -52,6 +52,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace ps::terrain {
@@ -101,6 +102,25 @@ private:
     // slot), or SIZE_MAX if the pool has no slot to give it.
     std::size_t acquire_slot_for(TileKey key);
 
+    // PLAN.md M1 / PHYS-021 (see TerrainConfig::suppress_terrain_under_static_geometry's
+    // doc comment): rewrites any exactly-height-0 sample of `slot.sample`
+    // that another STATIC body already covers to ps::kHeightfieldNoCollision,
+    // in place, right before the tile's content is handed to the backend.
+    // Called once per newly-filled tile (never for an already-resident
+    // one), from update()'s step 5, before update_heightfield_body.
+    void suppress_covered_samples(Slot& slot);
+    // True for any BodyId belonging to THIS pool - every slot's body,
+    // whether currently assigned to a real tile or still an unused
+    // placeholder. Found the hard way (PHYS-021): an unused slot's body is
+    // never repositioned away from its construction-time default pose
+    // (world origin) until it is first assigned a real tile, so a probe
+    // for a tile NEAR the world origin (exactly where a scenario's main
+    // spawn usually sits) could otherwise see dozens of stacked,
+    // content-irrelevant sibling tile bodies and mistake them for a real
+    // static feature - suppress_covered_samples must only ever suppress
+    // terrain in favour of FOREIGN static geometry, never a sibling tile.
+    [[nodiscard]] bool is_own_pool_body(BodyId id) const;
+
     std::shared_ptr<const ITerrainSource> source_;
     TerrainConfig config_;
     IRigidBackend& backend_;
@@ -108,6 +128,10 @@ private:
     std::vector<Slot> slots_;
     std::unordered_map<std::int64_t, std::size_t> key_to_slot_; // TileKey::packed -> slots_ index
     std::vector<std::size_t> free_slots_;                       // never-yet-assigned slot indices
+    // Every slot's BodyId (index, generation), packed - fixed for this
+    // TileManager's whole lifetime (see is_own_pool_body's doc comment).
+    // Built once in the constructor, right after every slot's body exists.
+    std::unordered_set<std::uint64_t> own_pool_body_ids_;
 
     std::unordered_map<std::uint64_t, InterestPoint> interest_points_;
 
@@ -122,6 +146,16 @@ private:
     std::vector<TileKey> needed_keys_scratch_;
     std::vector<TileKey> pending_fill_queue_;
     std::vector<std::size_t> this_tick_slots_scratch_;
+    // suppress_covered_samples' own scratch: the tile-footprint broad probe
+    // (one collide_shape_into call per newly-filled tile, PLAN.md D8 - this
+    // is on the sequential per-tick path, same budget as
+    // update_heightfield_body's own scratch, never inside a parallel_batches
+    // job).
+    std::vector<ShapeContactHit> coverage_probe_scratch_;
+    // Per-quad ((samples_per_tile-1)^2) coverage flags, reused across calls
+    // (grows once to the largest tile seen, like every other scratch buffer
+    // here - see this file's header comment).
+    std::vector<bool> quad_covered_scratch_;
 };
 
 } // namespace ps::terrain

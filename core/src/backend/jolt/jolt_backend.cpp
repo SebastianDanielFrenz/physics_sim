@@ -657,6 +657,11 @@ public:
         return Motion{from_vec3f(body_interface().GetLinearVelocity(jid)), from_vec3f(body_interface().GetAngularVelocity(jid))};
     }
 
+    bool is_static(BodyId id) const override {
+        const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
+        return body != nullptr && body->IsStatic();
+    }
+
     void set_pose(BodyId id, const Pose& pose) override {
         body_interface().SetPositionAndRotation(lookup(id), to_rvec3(pose.position), to_jph_quat(pose.orientation), JPH::EActivation::Activate);
     }
