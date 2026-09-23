@@ -29,6 +29,60 @@
 // synthetic spec - test_terrain_tile_manager.cpp already covers the tile
 // system in isolation) so this exercises precisely the M1 demo's own
 // setup.
+//
+// PHYS-021 follow-up (owner decision): the ORIGINAL fix above suppressed a
+// quad based on a single CENTRE ray, which turned out to over-drop -
+// wherever the true mesh edge fell in the outer half of a centre-covered
+// quad, the quad's shared vertex still got holed, and Jolt drops a
+// triangle if ANY of its corners is a hole - producing a genuine,
+// unsuppressed gap (no terrain, no mesh) up to half a quad wide, not just
+// the flicker this file's header above describes. Measured directly on the
+// real skidpad ring: 36-40% of its circumference had a floorless strip up
+// to ~2.05 m wide (predicted analytically at half a quad's spacing,
+// ~2.03 m at samples_per_tile=64). tile_manager.cpp's suppress_covered_samples
+// now requires a quad's 4 corners AND its centre (5 points) to ALL hit
+// foreign static geometry before calling it "fully covered", and a vertex
+// is holed only if EVERY quad touching it is fully covered - conservative
+// on purpose (over-drop is an unrecoverable fall out of the world;
+// under-drop is the already-accepted flicker residual - not a symmetric
+// trade, so the rule always resolves the per-quad-vs-arbitrary-mesh-edge
+// granularity mismatch toward more flicker, never toward a hole).
+//
+// THE TESTING LESSON, not just the fix: the second TEST_CASE above crosses
+// a STRAIGHT edge (the asphalt straight's start line). A straight edge's
+// quad-grid phase (where the true edge falls relative to a quad's own
+// corners) is constant along its ENTIRE length - vertex world positions are
+// exact multiples of the grid spacing everywhere, tile boundaries included
+// - so every possible crossing point on a straight edge gets the SAME
+// residual (here, flicker, never a gap), and no amount of re-running that
+// test at different points or speeds could ever have exposed the over-drop
+// above. A CURVED edge's local orientation sweeps through every possible
+// phase as the angle varies, so it is guaranteed to hit both residual types
+// somewhere - which is why the new TEST_CASE below tests the skidpad RING
+// (PLAN.md/tools/trackgen's only curved static feature) instead of another
+// straight one, and asserts the geometric invariant itself (no point along
+// the ring has NO collision at all) rather than driving a body across and
+// checking it did not fall - the invariant is what actually failed, and
+// unlike a fall-test it does not depend on choosing a crossing speed.
+//
+// A SECOND bug surfaced while landing the conservative rule above, caught
+// by the FIRST TEST_CASE below (not a new one): requiring 5 independent
+// samples per quad to all agree turned out to regress that test's straight-
+// line, dead-centre-of-the-mesh case (2 of 4 wheels stably read "dirt"
+// instead of "asphalt" - not a flicker, a stable wrong answer). Root cause:
+// suppress_covered_samples' point-coverage probe used to be `ray_cast`,
+// which measurably back-face-culls this project's own static feature
+// meshes at some points (confirmed directly - a plain ray_cast at several
+// points under the real straight consistently missed the asphalt mesh that
+// collide_shape_into, queried at the identical point in the same run,
+// found without trouble). The single-centre-ray rule this replaced "got
+// away with it" by sampling few, evidently lucky points; sampling 5 per
+// quad turned that latent fragility into an outright failure to hole large,
+// solidly-interior areas. Fixed by switching every point-coverage probe in
+// tile_manager.cpp's suppress_covered_samples to collide_shape_into (see
+// that function's own comment) - it has no equivalent gap for a MeshShape,
+// only for HeightFieldShape, which does not matter here since this probe
+// only ever wants a FOREIGN (non-terrain) hit anyway.
 
 #include "ps/io/surface_table.h"
 #include "ps/io/test_ground_loader.h"
@@ -254,4 +308,73 @@ TEST_CASE("A body sliding across the test_ground straight's edge at 10 m/s sees 
     // pre-existing, separate heightfield-tiling seam artifact, left open;
     // see the report).
     CHECK(max_abs_az < 250.0);
+}
+
+// PHYS-021 follow-up (see this file's own header comment for the full
+// story): the conservative "5 points, all must hit" marking rule replaces
+// the old centre-only rule specifically because centre-only over-dropped
+// along a CURVED edge - a straight edge's constant quad-grid phase can
+// never expose that direction of bug (see the header comment above), so
+// this test sweeps the skidpad ring (tools/trackgen/trackgen/layout.py's
+// SKIDPAD: center (0, 150), radius 40, width 10 - an annulus from r=35 to
+// r=45) instead of another straight feature, and asserts the INVARIANT the
+// old rule actually violated directly: a downward ray at EVERY point along
+// a fine sweep of both the ring's outer (r=45) and inner (r=35) edges must
+// hit SOMETHING (terrain or mesh, either is fine here - this test is about
+// "is there a floor", not which surface). Deliberately a geometric
+// assertion, not a body driven across the edge and watched for a fall -
+// the invariant is what the old rule broke, and unlike a fall-test this
+// does not depend on picking a crossing speed or a lucky (or unlucky)
+// crossing point.
+TEST_CASE("No point along the test_ground skidpad ring's edges has zero terrain/mesh collision",
+          "[terrain][test_ground][io][PHYS-021]") {
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.job_workers = 4;
+    World world(cfg);
+
+    terrain::TerrainConfig tc;
+    tc.max_resident_tiles = 64;
+    tc.max_tile_fills_per_tick = 32;
+
+    constexpr real kCenterX = 0.0, kCenterY = 150.0; // tools/trackgen/trackgen/layout.py SKIDPAD
+    constexpr real kOuterR = 45.0;                   // radius(40) + width(10)/2
+    constexpr real kInnerR = 35.0;                   // radius(40) - width(10)/2
+    auto surfaces = load_test_ground_world(world, tc, /*interest_id=*/1, Vec3{kCenterX, kCenterY, 0.0},
+                                            /*stream_radius_m=*/70.0);
+    (void)surfaces;
+
+    // Let tiles stream in fully before probing - REQUIRE, not CHECK: a
+    // starved tile would itself read back as a false "gap" below and this
+    // test would be testing pool sizing, not the marking rule.
+    for (std::uint64_t i = 0; i < static_cast<std::uint64_t>(2.0 * cfg.tick_rate_hz + 0.5); ++i) world.step();
+    REQUIRE(world.terrain_starved_tile_count() == 0);
+
+    const double kPi = 3.14159265358979323846;
+    std::size_t gap_count = 0;
+    real worst_angle_deg = -1.0, worst_radius = 0.0;
+    for (const real r_edge : {kOuterR, kInnerR}) {
+        constexpr int kAngleSteps = 360;      // 1 deg resolution - a curved edge's phase varies continuously,
+                                               // so this is dense enough to sample every phase at least once
+        constexpr real kBandHalfWidthM = 1.5; // comfortably wider than one quad's spacing (~4.06 m/2)
+        constexpr real kRadialStepM = 0.1;
+        for (int ai = 0; ai < kAngleSteps; ++ai) {
+            const double theta = (2.0 * kPi * ai) / kAngleSteps;
+            const real ct = static_cast<real>(std::cos(theta));
+            const real st = static_cast<real>(std::sin(theta));
+            for (real r = r_edge - kBandHalfWidthM; r <= r_edge + kBandHalfWidthM; r += kRadialStepM) {
+                const real x = kCenterX + r * ct;
+                const real y = kCenterY + r * st;
+                const RayCastHit hit = world.backend().ray_cast(Vec3{x, y, 60.0}, Vec3{0.0, 0.0, -1.0}, 120.0);
+                const bool gap = !hit.hit || std::abs(hit.point.z) > 5.0; // > 5.0 excludes a stray far-away hit, not a real floor here
+                if (gap) {
+                    ++gap_count;
+                    worst_angle_deg = static_cast<real>(ai);
+                    worst_radius = r;
+                }
+            }
+        }
+    }
+    INFO("gap_count=" << gap_count << " (0 expected); last gap at angle=" << worst_angle_deg << " deg, r=" << worst_radius);
+    CHECK(gap_count == 0);
 }

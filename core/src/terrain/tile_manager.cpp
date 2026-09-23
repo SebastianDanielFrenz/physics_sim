@@ -278,15 +278,72 @@ void TileManager::update(jobs::JobSystem& jobs) {
 // footprint made a wheel's shape_cast hit either one depending on tiny
 // Jolt-internal tie-breaking, flickering the reported surface/friction).
 //
+// MARKING RULE (owner decision, PHYS-021 follow-up): a terrain quad may
+// lose collision ONLY if it is judged ENTIRELY covered by foreign static
+// geometry, and (Jolt's own per-triangle dispatch, HeightFieldShape.cpp's
+// ProjectOntoSurface/narrowphase walk - a triangle is dropped if any ONE of
+// its 3 corners is a hole) a vertex may be marked kHeightfieldNoCollision
+// only if EVERY quad touching it is itself judged fully covered. This is
+// the conservative direction on purpose, chosen over the cheaper
+// centre-sample-only rule this function used to use, and the two directions
+// are NOT symmetric:
+//   - under-drop (a covered quad kept, both terrain and mesh present) =>
+//     the original PHYS-021 flicker: cosmetic-to-annoying surface/friction
+//     tie-breaking, nobody leaves the world.
+//   - over-drop (a partially-covered quad holed) => a REAL gap: no mesh
+//     (its true edge does not reach this far) and no terrain (holed) under
+//     that part of the quad. A body crossing it finds nothing at all.
+// The centre-sample-only rule over-dropped: measured directly (a
+// downward-ray sweep of the real test_ground skidpad ring's outer/inner
+// edges at 0.5 deg / 0.05 m resolution, see PHYS-021 vault follow-up),
+// 36-40% of the ring's circumference had a genuine floorless strip up to
+// ~2.05 m wide (predicted analytically as half a quad's spacing,
+// (256/63)/2 =~ 2.03 m at this source's samples_per_tile=64 - the two match
+// to the sweep's own 0.05 m resolution) - reproducing the owner's "fell
+// through the floor" report on a CURVED edge specifically (see this
+// function's own comment on why a straight edge's existing regression test,
+// tests/unit/test_terrain_static_overlap.cpp, could never have caught this -
+// a straight edge's quad-grid phase is constant along its whole length, so
+// every point on it gets the SAME residual; only a curved edge sweeps
+// through every possible phase and is guaranteed to hit both). Given that
+// asymmetry, the fix always resolves the per-quad granularity mismatch
+// (a 4.06 m quad against an arbitrary mesh edge is ALWAYS wrong by up to a
+// quad width somewhere - no binary per-quad rule avoids that) toward more
+// flicker, never toward a hole a body can fall through.
+//
+// "Fully covered" is tested by probing a quad's 4 corners AND its centre (5
+// points) and requiring all 5 to hit foreign static geometry - corners are
+// shared by up to 4 quads, so each vertex's ray is cached/computed at most
+// once per this function's call (vertex_covered_scratch_), not up to 4x
+// over; the extra cost vs. the old centre-only rule is therefore roughly
+// (n^2 vertex probes + (n-1)^2 quad-centre probes) vs. the old (n-1)^2 alone -
+// about 2x the level-3 ray count, still gated behind the same level-1/2
+// broad/coarse probes below so it costs nothing for the overwhelming
+// majority of tiles that touch no static feature at all. Be honest about
+// what 5 points proves: this is an APPROXIMATION of "fully covered", not a
+// proof - a sufficiently concave mesh boundary could still thread between
+// the 5 samples and leave a quad wrongly marked fully covered (an over-drop
+// this rule would then miss). It is conservative in the SAFE direction
+// relative to the rule it replaces (which sampled only 1 of these 5 points),
+// not an absolute guarantee; Task B (PLAN.md, load-time precompute) does not
+// change this trade-off, only where the cost is paid.
+//
+// Deferred, NOT done here (owner decision - fix the dangerous direction
+// first, then measure): narrowing the flicker band by biasing the
+// closest-hit query so the mesh deterministically wins ties, e.g. dropping
+// the boundary height check's tolerance a few cm. Left for a follow-up once
+// it is clear the wider flicker footprint this rule accepts does not itself
+// degrade driving.
+//
 // Cost fix (owner-reported: teleporting near a track feature stalled the
 // sim below 100 Hz for several seconds - a fresh teleport's whole streamed
 // set is newly-filled at once, and the original version of this function
 // ran up to (samples_per_tile-1)^2 sequential ray casts - 3969 at this
 // project's samples_per_tile=64 - for EVERY one of those tiles, entirely on
-// update()'s sequential step 5). Two changes below (a, b), both independent
-// and both still producing the EXACT SAME hole set as before (see
-// tests/unit/test_terrain_static_overlap.cpp, which must keep passing
-// unchanged) - plus two alternatives that were tried, measured and
+// update()'s sequential step 5). Two changes below (a, b) - the coarse-to-
+// fine structure they establish is unchanged by the marking-rule fix above,
+// only what level 3 computes inside a covered block changed - plus two
+// alternatives that were tried, measured and
 // REJECTED (c, d), kept here so a future session does not re-try them
 // without first reading why they did not work:
 //   a. Per-TileKey cache (suppression_cache_, owned by TileManager, read
@@ -362,38 +419,18 @@ void TileManager::update(jobs::JobSystem& jobs) {
 //      triangles near that block, correct regardless of how large the
 //      overall body's own bounding box is (see b. above). A block with no
 //      hit skips level 3 entirely for every quad in it.
-//   3. Only for a block level 2 found covered: one ray straight down
-//      through every QUAD's centre in that block (not its corners - see
-//      below) whose 4 corner samples are all EXACTLY height 0.0
-//      (terrain.json's own documented invariant - only a flat zone's
-//      interior is ever exactly 0, and a feature mesh only ever sits on a
-//      flat zone). A vertex is then marked ps::kHeightfieldNoCollision only
-//      if EVERY quad touching it (that exists within this tile) was itself
-//      found covered.
-//
-// Sampling at each QUAD's centre and requiring ALL of a vertex's
-// surrounding quads to be covered (an AND, not an OR) - rather than
-// raycasting the vertices themselves and dropping a quad if ANY corner
-// hit, the simpler thing to write - matters at the mesh's own edge: a quad
-// straddling the true boundary has exactly one of its two possible states
-// (covered by its centre sample, or not) and either way stays consistent
-// with its neighbours' own vertices, so a hole never extends into a quad
-// whose own centre sample found nothing. Marking based on corner hits
-// instead over-extended the hole by up to one whole quad width on the
-// OUTSIDE of a feature's leading edge (found the hard way, PHYS-021: a
-// hit right at/after the straight's own start line marked that vertex,
-// which - being a shared corner - also dropped the quad BEFORE the
-// straight, where neither the mesh nor the now-holed terrain collided any
-// more, and a body crossing there fell through). The trade-off this
-// accepts: a vertex just outside the true covered region can still end up
-// kept (not holed) even though its one covered neighbour quad's own
-// far corner is already on the mesh - i.e. a residual sliver up to one
-// quad wide right at a feature's edge can still see the original
-// coincident-collision flicker, never the whole footprint. Level 2's own
-// block boundaries add no further slop to this: a block is only ever used
-// to SKIP a quad range (never to mark one covered by itself), so the same
-// per-quad ray + per-vertex AND rule from the original single-level probe
-// still decides every hole exactly as before.
+//   3. Only for a block level 2 found covered: for every quad in it, probe
+//      its 4 corners AND its centre (5 point probes) and require ALL 5 to hit
+//      foreign static geometry before calling the quad "fully covered" -
+//      see the marking-rule comment above for why 5 points and why every
+//      one must hit. A corner probe is only ever made if that vertex's own
+//      height sample is EXACTLY 0.0 (terrain.json's own documented
+//      invariant - only a flat zone's interior is ever exactly 0, and a
+//      feature mesh only ever sits on a flat zone; any other vertex can
+//      never coincide with a feature mesh, so it is "not covered" with no
+//      probe at all - vertex_covered() below). A vertex is then marked
+//      ps::kHeightfieldNoCollision only if EVERY quad touching it (that
+//      exists within this tile) was itself found fully covered.
 void TileManager::suppress_covered_samples(Slot& slot) {
     if (!config_.suppress_terrain_under_static_geometry) return;
 
@@ -409,7 +446,6 @@ void TileManager::suppress_covered_samples(Slot& slot) {
     const Vec3& origin = slot.sample.tile_origin_xy;
     const real spacing = ts / static_cast<real>(n > 0 ? n - 1 : 1);
     constexpr real kVerticalHalfExtentM = 50.0; // features sit within a few metres of height 0, not near this
-    constexpr real kRayHalfLengthM = 50.0;      // matches the broad/block probes' own vertical extent
 
     // 1. Broad, whole-tile probe.
     const BoxShape probe_box{Vec3{ts * real(0.5), ts * real(0.5), kVerticalHalfExtentM}};
@@ -431,8 +467,79 @@ void TileManager::suppress_covered_samples(Slot& slot) {
     if (quad_covered_scratch_.size() < static_cast<std::size_t>(quads) * quads) quad_covered_scratch_.resize(static_cast<std::size_t>(quads) * quads);
     std::fill(quad_covered_scratch_.begin(), quad_covered_scratch_.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(quads) * quads), false);
 
-    // 2 + 3. Coarse block grid, refined to a per-quad ray probe only inside
-    // a block level 2 actually found covered.
+    // Per-VERTEX ray cache for the "fully covered" test's 4 corners - reset
+    // to "unknown" every call (unlike suppression_cache_ above, this is
+    // scratch for THIS tile's own computation only, not carried across
+    // calls). Tri-state: kVertexUnknown must be distinguishable from
+    // kVertexNotCovered so a vertex whose ray was never cast (height != 0,
+    // see vertex_covered() below) is not confused with one that WAS cast
+    // and missed.
+    constexpr std::uint8_t kVertexUnknown = 0;
+    constexpr std::uint8_t kVertexCovered = 1;
+    constexpr std::uint8_t kVertexNotCovered = 2;
+    if (vertex_covered_scratch_.size() < static_cast<std::size_t>(n) * n) vertex_covered_scratch_.resize(static_cast<std::size_t>(n) * n);
+    std::fill(vertex_covered_scratch_.begin(), vertex_covered_scratch_.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(n) * n),
+              kVertexUnknown);
+
+    // Point-covered probe: collide_shape_into with a small vertical box, NOT
+    // ray_cast. Found necessary (not merely a style choice - see
+    // tests/unit/test_terrain_static_overlap.cpp's git history for the
+    // regression this replaced): a single-ray probe measurably
+    // back-face-culls this project's own static feature meshes at some
+    // points (confirmed directly - a plain ray_cast at several points under
+    // the real test_ground straight consistently missed a mesh that
+    // collide_shape_into, queried at the identical point, found in the same
+    // call) - a real, pre-existing backend asymmetry between ray_cast and
+    // collide_shape_into (see jolt_backend.cpp's own comment on the
+    // analogous winding/culling issue this project already found and fixed
+    // for HEIGHTFIELDS specifically; this is the same class of issue,
+    // apparently also reachable for a MeshShape, not fully characterised -
+    // see this task's own follow-up note on it). The single-centre-ray rule
+    // this function used before "got away with it" by sampling few, and
+    // evidently lucky, points; requiring 4-5 independent samples to ALL
+    // agree, per the marking-rule fix above, turned that latent fragility
+    // into an outright failure to hole large, solidly-interior areas -
+    // caught by test_terrain_static_overlap.cpp's existing vehicle-standing
+    // test, not a new one. collide_shape_into has no equivalent gap for a
+    // MeshShape (only for HeightFieldShape, which is irrelevant here - this
+    // probe only ever wants a FOREIGN, i.e. non-terrain, hit, so its
+    // inability to see this pool's own heightfields is not a loss).
+    constexpr real kPointProbeHalfExtentM = 0.05;
+    auto point_covered = [&](real wx, real wy) -> bool {
+        const BoxShape point_box{Vec3{kPointProbeHalfExtentM, kPointProbeHalfExtentM, kVerticalHalfExtentM}};
+        Pose point_pose;
+        point_pose.position = Vec3{wx, wy, real(0.0)};
+        backend_.collide_shape_into(point_box, point_pose, coverage_probe_scratch_);
+        for (const ShapeContactHit& hit : coverage_probe_scratch_) {
+            if (!is_own_pool_body(hit.body) && backend_.is_static(hit.body)) return true;
+        }
+        return false;
+    };
+
+    // Probes (and caches) a single vertex's coverage on first use; every
+    // subsequent call for the same (iy, ix) - up to 4x, once per quad that
+    // shares this corner - is an array lookup.
+    auto vertex_covered = [&](std::uint32_t iy, std::uint32_t ix) -> bool {
+        const std::size_t idx = static_cast<std::size_t>(iy) * n + ix;
+        std::uint8_t& state = vertex_covered_scratch_[idx];
+        if (state == kVertexUnknown) {
+            if (slot.sample.heights[idx] != real(0.0)) {
+                // Only a flat zone's interior is ever exactly 0.0 (see the
+                // function-level comment) - a non-zero vertex can never
+                // coincide with a feature mesh, so it is never covered and
+                // no probe is made for it at all.
+                state = kVertexNotCovered;
+            } else {
+                const real wx = origin.x + static_cast<real>(ix) * spacing;
+                const real wy = origin.y + static_cast<real>(iy) * spacing;
+                state = point_covered(wx, wy) ? kVertexCovered : kVertexNotCovered;
+            }
+        }
+        return state == kVertexCovered;
+    };
+
+    // 2 + 3. Coarse block grid, refined to a per-quad "fully covered" probe
+    // only inside a block level 2 actually found covered.
     constexpr std::uint32_t kCoarseBlockQuads = 8; // 63 quads -> 8x8 = 64 coarse blocks at this project's samples_per_tile=64; measured against 4 (tuning sweep, tile_manager.cpp's own report/header comment) - 4 was slightly WORSE (more per-block collide_shape_into overhead, no extra quads skipped) at this project's own feature density near its most-covered tiles
     for (std::uint32_t by = 0; by * kCoarseBlockQuads < quads; ++by) {
         const std::uint32_t qy0 = by * kCoarseBlockQuads;
@@ -460,28 +567,24 @@ void TileManager::suppress_covered_samples(Slot& slot) {
             for (std::uint32_t qy = qy0; qy < qy1; ++qy) {
                 for (std::uint32_t qx = qx0; qx < qx1; ++qx) {
                     const std::size_t qi = static_cast<std::size_t>(qy) * quads + qx;
-                    const std::size_t v00 = static_cast<std::size_t>(qy) * n + qx;
-                    const std::size_t v11 = static_cast<std::size_t>(qy + 1) * n + (qx + 1);
-                    // Only a quad fully inside a flat zone's interior can
-                    // possibly coincide with a feature mesh (see this
-                    // function's own header comment) - checking two
-                    // opposite corners is enough given fill_tile's height
-                    // field is continuous (D7's smoothstep blending), never
-                    // exactly 0 on one side of a quad and far from 0 on the
-                    // other without also being non-zero at these corners.
-                    if (slot.sample.heights[v00] != real(0.0) || slot.sample.heights[v11] != real(0.0)) continue; // already false
+                    // 4 corners first (cheap array-lookup on a cache hit,
+                    // short-circuits before ever reaching the centre probe).
+                    if (!vertex_covered(qy, qx) || !vertex_covered(qy, qx + 1) || !vertex_covered(qy + 1, qx) ||
+                        !vertex_covered(qy + 1, qx + 1)) {
+                        continue; // already false
+                    }
                     const real wx = origin.x + (static_cast<real>(qx) + real(0.5)) * spacing;
                     const real wy = origin.y + (static_cast<real>(qy) + real(0.5)) * spacing;
-                    const RayCastHit hit = backend_.ray_cast(Vec3{wx, wy, kRayHalfLengthM}, Vec3{0.0, 0.0, -1.0}, kRayHalfLengthM * real(2.0));
-                    quad_covered_scratch_[qi] = hit.hit && !is_own_pool_body(hit.body) && backend_.is_static(hit.body);
+                    quad_covered_scratch_[qi] = point_covered(wx, wy);
                 }
             }
         }
     }
 
     // 4. A vertex becomes a hole only if EVERY quad touching it that
-    // exists within this tile is covered (see header comment) - a tile's
-    // own edge vertices simply have fewer existing neighbours to require.
+    // exists within this tile is fully covered (see the marking-rule
+    // comment above) - a tile's own edge vertices simply have fewer
+    // existing neighbours to require.
     std::vector<std::uint32_t> holes;
     for (std::uint32_t iy = 0; iy < n; ++iy) {
         for (std::uint32_t ix = 0; ix < n; ++ix) {

@@ -178,6 +178,18 @@ private:
     // and is reused forever after, like every other scratch buffer here.
     std::vector<ShapeContactHit> coverage_probe_scratch_;
     std::vector<bool> quad_covered_scratch_;
+    // A quad's "fully covered" test (see suppress_covered_samples' own
+    // header comment - the conservative-rule fix) needs a per-VERTEX
+    // collide_shape_into probe result (does foreign static geometry cover
+    // this exact grid vertex), and every interior vertex is shared by up to
+    // 4 quads - this cache computes each vertex's probe at most once per
+    // suppress_covered_samples call (reset per call, not carried across
+    // calls like suppression_cache_ above) rather than up to 4x over.
+    // Tri-state (kVertexUnknown and so on, tile_manager.cpp) rather than
+    // bool: "not yet probed" must be distinguishable from "probed, not
+    // covered" since a vertex at height != 0 is skipped without ever
+    // probing it at all (see that function).
+    std::vector<std::uint8_t> vertex_covered_scratch_;
 };
 
 } // namespace ps::terrain
