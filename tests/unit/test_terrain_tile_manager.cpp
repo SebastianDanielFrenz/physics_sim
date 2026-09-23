@@ -208,3 +208,112 @@ TEST_CASE("TileManager::update allocates nothing when the needed tile set is unc
     REQUIRE(violations == 0);
     REQUIRE(mgr.resident_tile_count() == 9); // unchanged - confirms nothing was reassigned during the measurement
 }
+
+// PLAN.md M1 / PHYS-021 second bug (owner-reported "fell through the
+// floor"): every pool slot's Jolt body is created UP FRONT, and an
+// unassigned slot used to sit at its BodyDesc::pose default - world
+// (0,0,0) - until first assigned a real tile. tile_manager.cpp's own
+// header comment records a direct A/B repro: with that default, a probe
+// as little as 2-6 m from world origin found a REAL (if fake, from the
+// placeholder's own non-degenerate sentinel corner) surface between z=-3.5
+// and z=0, immediately adjacent to a near-vertical drop - a hidden hazard
+// at exactly the point PLAN.md's own README calls "the main spawn point".
+// Fixed by parking an unassigned slot far below any reachable content
+// (kUnassignedSlotParkingZ) instead. This test keeps the interest point
+// away from world origin (most of a deliberately oversized pool - 64 slots
+// for the handful of tiles actually needed - stays unassigned, exactly the
+// failure condition) and checks that world origin's whole neighbourhood is
+// now UNIFORMLY "no collision" (honest streaming-lag absence, same as any
+// other never-streamed area of the world) rather than the old mix of a
+// fake floor next to a cliff.
+TEST_CASE("Unassigned pool slots do not leave a stray collision hazard near world origin", "[terrain][tiles][PHYS-021]") {
+    auto source = std::make_shared<ProceduralTerrainSource>(make_test_spec(), 8);
+    ps::jobs::JobSystem jobs(2);
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+
+    TerrainConfig tc;
+    tc.max_resident_tiles = 64; // deliberately oversized - most slots stay unassigned
+    tc.max_tile_fills_per_tick = 25;
+    TileManager mgr(source, tc, world.backend());
+
+    // Interest point far from world origin (tile_size_m=32 here) - origin's
+    // own tile, and every never-visited slot, stays unassigned.
+    mgr.set_interest_point(1, Vec3{1000.0, 1000.0, 0.0}, 32.0);
+    for (int i = 0; i < 4; ++i) mgr.update(jobs);
+    REQUIRE(mgr.resident_tile_count() > 0);
+    REQUIRE(mgr.resident_tile_count() < 64); // most of the pool is still unassigned - the condition this test needs
+
+    int hits = 0;
+    for (real offset = 0.5; offset <= 15.0; offset += 0.5) {
+        const RayCastHit hit = world.backend().ray_cast(Vec3{offset, offset, 50.0}, Vec3{0.0, 0.0, -1.0}, 100.0);
+        if (hit.hit) {
+            INFO("unexpected hit at offset " << offset << ": point.z=" << hit.point.z);
+            ++hits;
+        }
+    }
+    REQUIRE(hits == 0);
+}
+
+// Cache correctness (tile_manager.cpp's suppress_covered_samples, point a):
+// suppression_cache_ must reproduce EXACTLY the same hole set on a cache
+// hit as the fresh probe that first computed it - the world's static
+// geometry never changes at runtime, so this is a pure-function guarantee,
+// checked here via an OBSERVABLE effect (which body a query resolves
+// against) rather than reaching into TileManager's own private state.
+TEST_CASE("Suppression cache reproduces the same result on a forced re-fetch of the same tile", "[terrain][tiles][PHYS-021]") {
+    TerrainSpec spec = make_test_spec();
+    // A small flat zone at world origin, well within one 32 m tile, so
+    // suppress_covered_samples' "exactly height 0" gate actually fires here
+    // (make_test_spec() alone has no flat zone at all).
+    FlatZone zone;
+    zone.kind = FlatZone::Kind::Disc;
+    zone.center = Vec3{0.0, 0.0, 0.0};
+    zone.radius = 12.0;
+    zone.blend = 2.0;
+    spec.flat_zones.push_back(zone);
+    auto source = std::make_shared<ProceduralTerrainSource>(spec, 8);
+    ps::jobs::JobSystem jobs(2);
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+
+    // A static box sitting on the flat zone's centre, well inside the disc,
+    // so the tile covering world origin has real "foreign static" geometry
+    // to suppress terrain in favour of.
+    BodyDesc box;
+    box.shape = BoxShape{Vec3{4.0, 4.0, 0.1}};
+    box.motion = BodyMotionType::Static;
+    box.pose.position = Vec3{0.0, 0.0, 0.0};
+    const BodyId box_id = world.create_body(box);
+
+    TerrainConfig tc;
+    tc.max_resident_tiles = 1; // forces genuine eviction+re-fetch of the SAME key below, not just "already resident"
+    tc.max_tile_fills_per_tick = 1;
+    tc.suppress_terrain_under_static_geometry = true;
+    TileManager mgr(source, tc, world.backend());
+
+    const Vec3 kOnBox{0.0, 0.0, 0.0};   // under the box - should resolve to the box, not holed-out terrain
+    const Vec3 kElsewhere{500.0, 500.0, 0.0};
+
+    mgr.set_interest_point(1, kOnBox, 8.0);
+    for (int i = 0; i < 3; ++i) mgr.update(jobs);
+    REQUIRE(mgr.resident_tile_count() == 1);
+    const RayCastHit first = world.backend().ray_cast(Vec3{0.0, 0.0, 50.0}, Vec3{0.0, 0.0, -1.0}, 100.0);
+    REQUIRE(first.hit);
+    REQUIRE(first.body == box_id); // terrain is suppressed here - the box is the only thing left to hit
+
+    // Evict (move far away) then come straight back to the SAME TileKey -
+    // update()'s cache lookup should short-circuit the whole probe.
+    mgr.set_interest_point(1, kElsewhere, 8.0);
+    for (int i = 0; i < 3; ++i) mgr.update(jobs);
+    REQUIRE(mgr.resident_tile_count() == 1);
+    mgr.set_interest_point(1, kOnBox, 8.0);
+    for (int i = 0; i < 3; ++i) mgr.update(jobs);
+    REQUIRE(mgr.resident_tile_count() == 1);
+
+    const RayCastHit second = world.backend().ray_cast(Vec3{0.0, 0.0, 50.0}, Vec3{0.0, 0.0, -1.0}, 100.0);
+    REQUIRE(second.hit);
+    REQUIRE(second.body == box_id); // identical outcome via the cache path
+}
