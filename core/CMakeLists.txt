@@ -45,6 +45,8 @@ add_library(ps_core STATIC
 
   src/io/telemetry.cpp
   src/io/scenario.cpp
+  src/io/surface_table.cpp
+  src/io/test_ground_loader.cpp
 )
 
 target_include_directories(ps_core PUBLIC
