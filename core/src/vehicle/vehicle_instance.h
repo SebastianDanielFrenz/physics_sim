@@ -58,6 +58,13 @@ private:
     real rear_axle_x_ = 0.0;
 
     real prev_steer_avg_ = 0.0; // for SteeringDesc::steer_rate_limit
+
+    // PLAN.md P4 I0 (PHYS-033): preallocated at construction (outside any
+    // job), sized to wheels_.size() and never resized again - step_tick ran
+    // inside System::step_all's parallel_for job and used to heap-allocate
+    // a fresh std::vector<real> here every single tick (D8 violation, found
+    // by tests/unit/test_vehicle_parallel_alloc.cpp).
+    std::vector<real> brake_torque_scratch_;
 };
 
 } // namespace ps::vehicle

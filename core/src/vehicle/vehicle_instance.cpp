@@ -43,6 +43,10 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
     rear_axle_x_ = rear_n > 0 ? rear_sum / rear_n : 0.0;
     const real front_x = front_n > 0 ? front_sum / front_n : rear_axle_x_ + 2.5;
     wheelbase_ = std::max(real(0.5), front_x - rear_axle_x_);
+
+    // PLAN.md P4 I0: sized once here (construction runs on the sim thread,
+    // never inside a job), reused every tick by step_tick below.
+    brake_torque_scratch_.assign(wheels_.size(), real(0.0));
 }
 
 real VehicleInstance::ackermann_wheel_angle(std::size_t wheel_index, real delta_avg) const {
@@ -139,13 +143,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const ControlInputs& con
         drive_torque_per_wheel = wheel_torque_total / driven_n;
     }
 
-    std::vector<real> brake_torque(wheels_.size(), 0.0);
     for (std::size_t i = 0; i < wheels_.size(); ++i) {
         const WheelDesc& w = desc_.wheels[i];
         const BrakeDesc& b = desc_.brakes;
         real t = (w.is_front ? b.max_torque_front : b.max_torque_rear) * controls.brake;
         if (!w.is_front) t += b.max_torque_rear * b.handbrake_rear_fraction * controls.handbrake;
-        brake_torque[i] = t;
+        brake_torque_scratch_[i] = t;
     }
 
     const std::size_t num_substeps = std::max<std::size_t>(1, static_cast<std::size_t>(tick_dt * substep_rate_hz + real(0.5)));
@@ -174,7 +177,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const ControlInputs& con
             in.chassis_motion = motion0;
             in.chassis_com_world = com;
             in.steer_angle = delta;
-            in.brake_torque_cmd = brake_torque[i];
+            in.brake_torque_cmd = brake_torque_scratch_[i];
             in.drive_torque_cmd = w.driven ? drive_torque_per_wheel : 0.0;
             in.dt = substep_dt;
             in.partner_compression = w.arb_partner >= 0 ? wheels_[static_cast<std::size_t>(w.arb_partner)]->compression() : 0.0;
