@@ -24,8 +24,18 @@
 #include "ps/world/world.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <random>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace ps;
 
@@ -112,4 +122,119 @@ TEST_CASE("SurfaceTable assigns stable, distinct ids to every surfaces.json entr
     REQUIRE(surfaces.id_for("asphalt") != surfaces.id_for("grass"));
     REQUIRE(surfaces.id_for("does_not_exist") == kInvalidSurfaceId);
     REQUIRE(surfaces.name_for(surfaces.id_for("dirt")) == "dirt");
+}
+
+namespace {
+
+// A throwaway track directory holding a synthetic test_ground_collision.json
+// + .bin pair, so the loader's error paths can be exercised without touching
+// data/tracks (read-only). Removed on destruction.
+struct SyntheticTrackDir {
+    std::filesystem::path dir;
+
+    explicit SyntheticTrackDir(const std::string& tag) {
+        std::random_device rd;
+        dir = std::filesystem::temp_directory_path() /
+              ("ps_test_ground_loader_" + tag + "_" + std::to_string(rd()) + std::to_string(rd()));
+        std::filesystem::create_directories(dir);
+    }
+    ~SyntheticTrackDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    void write_json(std::size_t vertex_offset, std::size_t vertex_count, std::size_t index_offset,
+                    std::size_t index_count) const {
+        std::ofstream out(dir / "test_ground_collision.json");
+        out << R"({"surfaces":[{"surface":"asphalt","vertex_offset":)" << vertex_offset
+            << R"(,"vertex_count":)" << vertex_count << R"(,"index_offset":)" << index_offset
+            << R"(,"index_count":)" << index_count << "}]}";
+    }
+    void write_bin(const std::vector<unsigned char>& bytes) const {
+        std::ofstream out(dir / "test_ground_collision.bin", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+};
+
+// One triangle: 3 vertices (36 bytes) followed by 3 indices (12 bytes).
+std::vector<unsigned char> one_triangle_bin(std::uint32_t third_index = 2) {
+    const float vertices[9] = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const std::uint32_t indices[3] = {0, 1, third_index};
+    std::vector<unsigned char> bytes(sizeof(vertices) + sizeof(indices));
+    std::memcpy(bytes.data(), vertices, sizeof(vertices));
+    std::memcpy(bytes.data() + sizeof(vertices), indices, sizeof(indices));
+    return bytes;
+}
+
+// The loader's exception message, or "" if it did not throw. Caught here
+// rather than via REQUIRE_THROWS_WITH: on the clang-cl presets Catch2's own
+// library is built without /EHsc (ps_options only reaches this project's
+// targets), so Catch2 cannot translate an in-flight exception's message.
+std::string load_error(World& world, const SyntheticTrackDir& track, const io::SurfaceTable& surfaces) {
+    try {
+        io::load_test_ground_collision(world, track.dir.string(), surfaces);
+    } catch (const std::runtime_error& e) {
+        return e.what();
+    }
+    return "";
+}
+
+} // namespace
+
+TEST_CASE("load_test_ground_collision rejects a truncated or corrupt .bin loudly", "[io][test_ground]") {
+    io::SurfaceTable surfaces(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+    using Catch::Matchers::ContainsSubstring;
+
+    SECTION("a well-formed synthetic file loads (baseline for the cases below)") {
+        SyntheticTrackDir track("ok");
+        track.write_json(0, 3, 36, 3);
+        track.write_bin(one_triangle_bin());
+        REQUIRE(io::load_test_ground_collision(world, track.dir.string(), surfaces).size() == 1);
+    }
+    SECTION("index block cut short") {
+        SyntheticTrackDir track("truncated");
+        track.write_json(0, 3, 36, 3);
+        std::vector<unsigned char> bytes = one_triangle_bin();
+        bytes.resize(44);
+        track.write_bin(bytes);
+        REQUIRE_THAT(load_error(world, track, surfaces),
+                            ContainsSubstring("index block") && ContainsSubstring("truncated or corrupt"));
+    }
+    SECTION("empty .bin") {
+        SyntheticTrackDir track("empty");
+        track.write_json(0, 3, 36, 3);
+        track.write_bin({});
+        REQUIRE_THAT(load_error(world, track, surfaces),
+                            ContainsSubstring("vertex block") && ContainsSubstring("truncated or corrupt"));
+    }
+    SECTION("vertex offset past the end of the file") {
+        SyntheticTrackDir track("offset");
+        track.write_json(4096, 3, 36, 3);
+        track.write_bin(one_triangle_bin());
+        REQUIRE_THAT(load_error(world, track, surfaces),
+                            ContainsSubstring("vertex block") && ContainsSubstring("truncated or corrupt"));
+    }
+    SECTION("a count so large that offset + count * size would overflow") {
+        SyntheticTrackDir track("overflow");
+        track.write_json(0, std::numeric_limits<std::size_t>::max() / 4, 36, 3);
+        track.write_bin(one_triangle_bin());
+        REQUIRE_THAT(load_error(world, track, surfaces),
+                            ContainsSubstring("vertex block") && ContainsSubstring("truncated or corrupt"));
+    }
+    SECTION("a triangle index past the group's own vertex block") {
+        SyntheticTrackDir track("badindex");
+        track.write_json(0, 3, 36, 3);
+        track.write_bin(one_triangle_bin(3));
+        REQUIRE_THAT(load_error(world, track, surfaces),
+                            ContainsSubstring("triangle index 3") && ContainsSubstring("corrupt"));
+    }
+    SECTION("missing .bin") {
+        SyntheticTrackDir track("missing");
+        track.write_json(0, 3, 36, 3);
+        REQUIRE_THAT(load_error(world, track, surfaces),
+                            ContainsSubstring("cannot open"));
+    }
 }
