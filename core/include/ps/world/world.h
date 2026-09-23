@@ -15,6 +15,7 @@
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
 #include "ps/vehicle/vehicle_desc.h"
+#include "ps/vehicle/wheel_state.h"
 #include "ps/vehicle/wheel_telemetry.h"
 #include "ps/world/force_element.h"
 #include "ps/world/ids.h"
@@ -155,6 +156,12 @@ public:
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
     [[nodiscard]] const std::string& wheel_name(VehicleId id, std::size_t wheel_index) const;
+    // PLAN.md M1, task 2 of the P3 fix-up phase: steer angle, suspension
+    // travel, integrated spin angle, load and slip - everything a render/
+    // adapter thread needs to place and orient a wheel mesh (wheel_state.h).
+    // Same live-state-only caveat as wheel_telemetry above - a reader on
+    // another thread wants WorldSnapshot::vehicles instead (snapshot.h).
+    [[nodiscard]] vehicle::WheelState wheel_state(VehicleId id, std::size_t wheel_index) const;
 
     // Registration order is the element's fixed evaluation/gather id
     // (PLAN.md D8: deterministic ordered gather). Ownership stays with the

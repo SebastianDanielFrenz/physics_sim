@@ -244,6 +244,21 @@ void World::stage_snapshot() {
         }
     }
 
+    // PLAN.md M1, task 2 of the P3 fix-up phase: every live vehicle's
+    // per-wheel render state - same zero-alloc-once-warmed-up pattern as
+    // `articulations` above (outer resize(), inner clear()+push_back()).
+    const std::size_t vehicle_count = vehicle_system_->count();
+    snap.vehicles.resize(vehicle_count);
+    for (std::size_t vi = 0; vi < vehicle_count; ++vi) {
+        const VehicleId id{static_cast<id_index_t>(vi), 1};
+        const vehicle::VehicleInstance& vinst = vehicle_system_->at(id);
+        VehicleSnapshot& vsnap = snap.vehicles[vi];
+        vsnap.id = id;
+        vsnap.wheels.clear();
+        const std::size_t wc = vinst.wheel_count();
+        for (std::size_t w = 0; w < wc; ++w) vsnap.wheels.push_back(vinst.wheel_state(w));
+    }
+
     // PLAN.md P2 adapter seam (this task's step 3): a race-free copy of this
     // tick's contact events - see snapshot.h's own comment on why this must
     // be a copy, not a reference to last_contact_events_, for a cross-thread
@@ -383,6 +398,10 @@ const vehicle::WheelTelemetry& World::wheel_telemetry(VehicleId id, std::size_t 
 
 const std::string& World::wheel_name(VehicleId id, std::size_t wheel_index) const {
     return vehicle_system_->at(id).wheel_name(wheel_index);
+}
+
+vehicle::WheelState World::wheel_state(VehicleId id, std::size_t wheel_index) const {
+    return vehicle_system_->at(id).wheel_state(wheel_index);
 }
 
 void World::set_terrain_source(std::shared_ptr<const terrain::ITerrainSource> source, const terrain::TerrainConfig& config) {

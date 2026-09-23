@@ -133,6 +133,15 @@ WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
     out.contact_point_world = hit_ground_ ? contact_point_world_ : wheel_center_world;
     out.extra_torque_world = axis_world * mz + forward_world * mx;
 
+    // PLAN.md M1, task 2 of the P3 fix-up phase: integrate the render-only
+    // spin angle using THIS substep's start-of-step omega_ (still the old
+    // value here, before the spin-integration block below overwrites it) -
+    // a plain explicit-Euler accumulation is enough for a value nothing
+    // else ever reads back (wheel_instance.h's own comment on why this is
+    // excluded from fold_state_hash).
+    spin_angle_ += omega_ * in.dt;
+    last_steer_angle_ = in.steer_angle;
+
     // --- wheel spin integration (substep) ---
     const real tyre_spin_torque = -fx * desc_.wheel_radius; // reaction of Fx on the wheel's own rotation
     const real omega_dot = (in.drive_torque_cmd + tyre_spin_torque) / std::max(desc_.wheel_inertia, real(1e-6));

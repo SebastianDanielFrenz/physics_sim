@@ -13,6 +13,7 @@
 
 #include "ps/backend/i_rigid_backend.h" // ContactEvent - plain struct, no Jolt/Godot type (PLAN.md D2)
 #include "ps/math/pose.h"
+#include "ps/vehicle/wheel_state.h" // PLAN.md M1, task 2 of the P3 fix-up phase - see VehicleSnapshot below
 #include "ps/world/ids.h"
 
 #include <atomic>
@@ -50,6 +51,19 @@ struct ArticulationSnapshot {
     std::vector<ArticulationLinkSnapshot> links; // root first, then link 0, 1, 2, ...
 };
 
+// PLAN.md M1, task 2 of the P3 fix-up phase: one live vehicle's per-wheel
+// render state, additive to WorldSnapshot - the Godot (or other) adapter's
+// M1 wheel-mesh placement needs exactly this (steer/travel/spin/surface/
+// load/slip), race-free, the same reason ArticulationSnapshot exists above
+// (World::wheel_state, ps/world/world.h, is NOT safe to call from a reader
+// thread while the sim thread is stepping). `wheels[i]` is wheel index `i`
+// in the same order World::wheel_telemetry/wheel_state/wheel_name address
+// them (== VehicleDesc::wheels order).
+struct VehicleSnapshot {
+    VehicleId id;
+    std::vector<vehicle::WheelState> wheels;
+};
+
 struct WorldSnapshot {
     std::uint64_t tick = 0;
     real sim_time = 0.0;
@@ -64,6 +78,13 @@ struct WorldSnapshot {
     // like any other body; this is only the reduced-coordinate link poses
     // themselves, which have no IRigidBackend body at all).
     std::vector<ArticulationSnapshot> articulations;
+
+    // PLAN.md M1, task 2 of the P3 fix-up phase: every live vehicle's
+    // per-wheel render state, filled by World::stage_snapshot() from
+    // vehicle::System - additive; a World with no vehicles publishes an
+    // empty vector here exactly like `articulations` does for a World with
+    // no articulations.
+    std::vector<VehicleSnapshot> vehicles;
 
     // PLAN.md P2 adapter report, this task's step 3: a RACE-FREE copy of
     // this tick's contact events, filled by World::stage_snapshot() from

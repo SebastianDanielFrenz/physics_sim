@@ -39,6 +39,8 @@ public:
     [[nodiscard]] std::size_t wheel_count() const { return wheels_.size(); }
     [[nodiscard]] const WheelTelemetry& wheel_telemetry(std::size_t i) const { return wheels_[i]->telemetry(); }
     [[nodiscard]] const std::string& wheel_name(std::size_t i) const { return wheels_[i]->desc().name; }
+    // PLAN.md M1, task 2 of the P3 fix-up phase: see wheel_state.h.
+    [[nodiscard]] WheelState wheel_state(std::size_t i) const { return wheels_[i]->wheel_state(); }
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 

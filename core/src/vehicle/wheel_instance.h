@@ -11,6 +11,7 @@
 #include "ps/io/surface_table.h"
 #include "ps/vehicle/tyre_model.h"
 #include "ps/vehicle/vehicle_desc.h"
+#include "ps/vehicle/wheel_state.h"
 #include "ps/vehicle/wheel_telemetry.h"
 
 #include <cstdint>
@@ -57,6 +58,23 @@ public:
     [[nodiscard]] const WheelTelemetry& telemetry() const { return last_telemetry_; }
     [[nodiscard]] const WheelDesc& desc() const { return desc_; }
 
+    // PLAN.md M1, task 2 of the P3 fix-up phase: the render-facing subset
+    // (see wheel_state.h's own header comment for why this is a separate
+    // type from WheelTelemetry above). Computed on demand from state
+    // already held by this instance - no extra storage duplicating
+    // last_telemetry_'s fields.
+    [[nodiscard]] WheelState wheel_state() const {
+        WheelState s;
+        s.steer_angle = last_steer_angle_;
+        s.suspension_travel = x_;
+        s.spin_angle = spin_angle_;
+        s.load = last_telemetry_.fz;
+        s.slip_ratio = last_telemetry_.slip_ratio;
+        s.slip_angle = last_telemetry_.slip_angle;
+        s.surface = last_telemetry_.surface;
+        return s;
+    }
+
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
 private:
@@ -71,6 +89,16 @@ private:
 
     real omega_ = 0.0;
     SlipRelaxationState relax_;
+
+    // PLAN.md M1, task 2: render-only state, deliberately NOT folded into
+    // fold_state_hash() below (see wheel_instance.cpp's step() for why -
+    // both are write-only as far as the simulation itself is concerned,
+    // never read back by anything that affects future dynamics, so
+    // excluding them cannot hide a worker-count/scheduling-dependent
+    // divergence - and this task's own requirement is that every existing
+    // scenario's state_hash stays bit-identical).
+    real spin_angle_ = 0.0;
+    real last_steer_angle_ = 0.0;
 
     WheelTelemetry last_telemetry_;
 };

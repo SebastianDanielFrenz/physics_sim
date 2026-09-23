@@ -15,6 +15,9 @@
 
 #include "ps/world/world.h"
 
+#include "vehicle_test_helpers.h"
+
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 using namespace ps;
@@ -134,4 +137,77 @@ TEST_CASE("WorldSnapshot::contacts is a race-free copy of last_contact_events fo
         if (!live.empty()) saw_nonempty_contacts = true;
     }
     REQUIRE(saw_nonempty_contacts); // the ball must actually have landed on the ground within 1 s
+}
+
+// PLAN.md M1, task 2 of the P3 fix-up phase: WorldSnapshot::vehicles is the
+// Godot (or other) adapter's wheel-mesh-placement seam, additive exactly
+// like ArticulationSnapshot above.
+TEST_CASE("A World with no vehicles publishes an empty WorldSnapshot::vehicles (regression)", "[world][snapshot][vehicle]") {
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+
+    BodyDesc desc;
+    desc.shape = SphereShape{0.5};
+    desc.pose.position = Vec3{0, 0, 50.0};
+    desc.allow_sleep = false;
+    world.create_body(desc);
+
+    for (int i = 0; i < 5; ++i) world.step();
+
+    const WorldSnapshot& snap = world.snapshots().read();
+    REQUIRE(snap.vehicles.empty());
+}
+
+TEST_CASE("WorldSnapshot::vehicles mirrors World::wheel_state for the same tick", "[world][snapshot][vehicle]") {
+    auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
+                                           Vec3{2.0, 0.4, 0.15}, 0.6);
+    ps_test::settle(*rig.world, 0.5); // settle vertical suspension state before adding speed
+
+    rig.world->backend().set_motion(rig.chassis, Motion{Vec3{5.0, 0.0, 0.0}, Vec3::zero()});
+    rig.world->set_control("steer", 0.3);
+    rig.world->step();
+
+    const std::size_t wheel_count = rig.world->vehicle_wheel_count(rig.vehicle);
+    REQUIRE(wheel_count == 4);
+
+    const WorldSnapshot& snap = rig.world->snapshots().read();
+    REQUIRE(snap.vehicles.size() == 1);
+    const VehicleSnapshot& vsnap = snap.vehicles[0];
+    REQUIRE(vsnap.id == rig.vehicle);
+    REQUIRE(vsnap.wheels.size() == wheel_count);
+
+    for (std::size_t w = 0; w < wheel_count; ++w) {
+        const vehicle::WheelState expected = rig.world->wheel_state(rig.vehicle, w);
+        const vehicle::WheelState& got = vsnap.wheels[w];
+        REQUIRE(got.steer_angle == expected.steer_angle);
+        REQUIRE(got.suspension_travel == expected.suspension_travel);
+        REQUIRE(got.spin_angle == expected.spin_angle);
+        REQUIRE(got.load == expected.load);
+        REQUIRE(got.slip_ratio == expected.slip_ratio);
+        REQUIRE(got.slip_angle == expected.slip_angle);
+        REQUIRE(got.surface == expected.surface);
+    }
+}
+
+TEST_CASE("A steered, rolling wheel reports a changing spin angle and steer angle", "[world][snapshot][vehicle]") {
+    auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
+                                           Vec3{2.0, 0.4, 0.15}, 0.6);
+    ps_test::settle(*rig.world, 0.5);
+
+    // Wheel 0 (FL) is steered; the car is rolling forward, so its spin
+    // angle must accumulate every tick once a nonzero steer angle has been
+    // commanded.
+    rig.world->set_control("steer", 0.4);
+    rig.world->backend().set_motion(rig.chassis, Motion{Vec3{10.0, 0.0, 0.0}, Vec3::zero()});
+    rig.world->step(); // one tick for the steer command to reach the wheel (SteeringDesc::steer_rate_limit == 0 here, so this is immediate)
+
+    const vehicle::WheelState first = rig.world->wheel_state(rig.vehicle, 0);
+    REQUIRE(first.steer_angle != Catch::Approx(0.0).margin(1e-9));
+
+    for (int i = 0; i < 10; ++i) rig.world->step();
+    const vehicle::WheelState later = rig.world->wheel_state(rig.vehicle, 0);
+
+    REQUIRE(later.steer_angle == Catch::Approx(first.steer_angle).margin(1e-6)); // steer input held constant
+    REQUIRE(later.spin_angle != Catch::Approx(first.spin_angle).margin(1e-6));   // still rolling forward
 }
