@@ -592,31 +592,55 @@ internal-implementation seam. No Jolt type appears in any public header.
   the normal 240 Hz tick but decays cleanly at 4x finer tick rate -
   `VehicleInstance::step_tick`'s one-tick-delayed wrench application
   (chassis motion frozen at tick-start across all 4 substeps) turns zero
-  continuous damping margin negative. Fix gives the continuous system real
-  damping headroom instead: `c_lat = 2*zeta_min*(fz0/g)*sqrt(pky1*g/sigma_y)`
-  (fz0 the tyre's FIXED reference load, not live fz - see below), faded to
+  continuous damping margin negative. **This fix is a COMPENSATION for that
+  delay, not a repair of it** - the delay itself is untouched. `c_lat =
+  2*zeta_min*(fz0/g)*sqrt(pky1*g/sigma_y)` (fz0 the tyre's FIXED reference
+  load, not live fz - see below) gives the CONTINUOUS system enough real
+  damping margin that the delay can no longer tip it negative, faded to
   zero above 2 m/s TOTAL contact-patch speed (not just longitudinal - so a
-  genuinely fast lateral slide/spin/push is never damped). Two corrections
-  found only by measuring, not by the initial derivation alone: (1) the
-  damper's own stability bound is NOT the single-wheel check it first looks
-  like - all four wheels' damping torques sum onto the one shared YAW
-  degree of freedom, and because a real chassis's mass sits closer to the
-  CoM than "concentrated at the 4 wheels", the yaw mode is ~3x more
-  sensitive to this damper than the lateral-translation mode; a value the
-  single-wheel check called safe (`zeta_min=2.5`) made the wiggle WORSE
-  than no fix at all (see `wheel_instance.cpp`'s own comment for the
-  aggregate bound and the empirically-chosen `zeta_min=1.5`). (2) `c_lat`
-  must scale with the tyre's fixed `fz0`, not the live/instantaneous `fz`:
-  an earlier version tied to live `fz` created a positive-feedback loop
-  during hard-acceleration weight-transfer transients (measured `fz`
-  spiking to ~11x nominal on a FWD standing start) that briefly spun the
-  car out in `test_vehicle_accel_standing_start.cpp`'s asphalt case before
-  this was caught and fixed. Separately confirmed (not fixed, out of
+  genuinely fast lateral slide/spin/push is never damped). `zeta_min` is
+  sized against THIS SPECIFIC 240 Hz one-tick delay, not derived from tyre/
+  carcass physics - if `step_tick`'s application delay is ever fixed
+  properly (e.g. wrench applied per SUBSTEP against an updated chassis
+  velocity instead of once per tick against a tick-start snapshot, or an
+  implicit lateral-relaxation integration), THIS TERM MUST BE REVISITED,
+  not left stacked on top; that delay fix is plausibly the better long-term
+  repair but was judged too large in scope for this bug (touches the
+  tick/substep pipeline every vehicle validation test is measured against,
+  would very likely move every vehicle scenario's `state_hash`) - flagged
+  as its own PLAN.md item rather than attempted here. Two corrections found
+  only by measuring, not by the initial derivation alone: (1) the damper's
+  own stability bound is NOT the single-wheel check it first looks like -
+  all four wheels' damping torques sum onto the one shared YAW degree of
+  freedom, and because a real chassis's mass sits closer to the CoM than
+  "concentrated at the 4 wheels", the yaw mode is ~3x more sensitive to
+  this damper than the lateral-translation mode; a value the single-wheel
+  check called safe (`zeta_min=2.5`) made the wiggle WORSE than no fix at
+  all. The resulting aggregate bound (`wheel_instance.cpp`'s own comment)
+  puts `zeta_min=1.5` just past the ratio=1 line into the alternating-sign-
+  decay band - NOT the same as "marginal": the explicit-Euler decay
+  multiplier is smallest (fastest decay) right at ratio=1 and only becomes
+  slow/dangerous approaching ratio=2 (predicted, and measured, to diverge
+  at `zeta_min~=2.47`); at `zeta_min=1.5` the multiplier is -0.213, an
+  alternating correction shrinking ~79% every 4.17 ms tick, unmeasurable at
+  any observable timescale - confirmed empirically the cleanest of
+  {0.7, 1.0, 1.5, 2.5} actually tried (0.7 and 1.0 left a measurable slow
+  secondary regrowth bump over 12-24 s that this single-mode estimate does
+  not itself predict - real evidence of at least one further mode the
+  estimate does not capture; 1.5 decayed with no regrowth over 24 s; 2.5
+  diverged, matching the model almost exactly). (2) `c_lat` must scale with
+  the tyre's fixed `fz0`, not the live/instantaneous `fz`: an earlier
+  version tied to live `fz` created a positive-feedback loop during
+  hard-acceleration weight-transfer transients (measured `fz` spiking to
+  ~11x nominal on a FWD standing start) that briefly spun the car out in
+  `test_vehicle_accel_standing_start.cpp`'s asphalt case before this was
+  caught and fixed. Separately confirmed (not fixed, out of
   scope): the tractor on `test_ground.json`'s `spawn_side_slope` (10% cross
-  slope, handbrake) already slides materially (~18 m/10 s) with this term
-  fully disabled - a pre-existing, previously-unvalidated gap (no CTest
-  ever covered tractor lateral-slope holding) that this fix makes only
-  modestly worse (~21 m/10 s), not the cause.
+  slope, handbrake) already slides materially with this term fully
+  DISABLED (~18 m/10 s, A/B measured) - a pre-existing, previously-
+  unvalidated gap (no CTest ever covered tractor lateral-slope holding),
+  not caused by this fix; enabling the fix makes it only modestly worse
+  (~21 m/10 s).
 - `vehicle_instance.h`/`.cpp` (`VehicleInstance`) - `step_tick()` runs
   every substep within a 240 Hz tick (PLAN.md D3: chassis pose/motion
   extrapolated from tick-start via the quaternion exponential map, held

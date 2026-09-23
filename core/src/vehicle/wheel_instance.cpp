@@ -15,28 +15,47 @@ real sign(real x) { return x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0); }
 // Low-speed lateral carcass damping (PHYS wiggle fix, see CLAUDE.md's
 // vehicle-system section for the full derivation and measured numbers).
 //
-// step_slip_relaxation's own decay rate (a = vx_mag/sigma) is shared by
-// both slip channels and vanishes as the wheel's ROLLING speed -> 0. The
-// longitudinal channel is saved from the consequences of that by rolling
-// resistance (froll below - a genuine Coulomb-type drag along the SAME
-// axis as kappa's restoring force, still nonzero at vanishing speed); the
-// lateral channel has no equivalent. At standstill this makes the
-// alpha_eq/chassis-yaw-rate loop a marginally-stable (zeta -> 0) continuous
-// oscillator - real tyre carcasses have their own internal viscoelastic
-// damping this simplified model does not capture at all. Measured
-// (test_vehicle_standstill_wiggle.cpp): a plain yaw-rate kick at true
-// standstill, no steering, no forward motion, does NOT merely ring down
-// slowly - it GROWS into a saturated ~5.4 Hz / ~0.92 rad/s peak-to-peak
-// limit cycle by t~8s at the normal 240 Hz tick rate, but plainly DECAYS
-// under the identical initial condition at 4x finer tick rate. That
-// confirms the growth is a NUMERICAL instability, not a physical one: the
-// marginally-stable continuous model has zero damping margin, and
-// VehicleInstance::step_tick's one-tick-delayed force application (chassis
-// motion held at tick-start motion0 across all 4 substeps, wrench applied
-// once per 240 Hz tick) turns that zero margin negative. Giving the
-// continuous system genuine damping headroom before discretization fixes
-// both: the discretization's delay then eats into a real margin instead of
-// tipping a zero-margin system negative.
+// IMPORTANT - this is a COMPENSATION, not a repair. step_slip_relaxation's
+// own decay rate (a = vx_mag/sigma) is shared by both slip channels and
+// vanishes as the wheel's ROLLING speed -> 0. The longitudinal channel is
+// saved from the consequences of that by rolling resistance (froll below -
+// a genuine Coulomb-type drag along the SAME axis as kappa's restoring
+// force, still nonzero at vanishing speed); the lateral channel has no
+// equivalent, making the alpha_eq/chassis-yaw-rate loop a marginally-stable
+// (zeta -> 0) CONTINUOUS oscillator. Measured (test_vehicle_standstill_
+// wiggle.cpp): a plain yaw-rate kick at true standstill, no steering, no
+// forward motion, does NOT merely ring down slowly - it GROWS into a
+// saturated ~5.4 Hz / ~0.92 rad/s peak-to-peak limit cycle by t~8s at the
+// normal 240 Hz tick rate, but plainly DECAYS under the identical initial
+// condition at 4x finer tick rate. That confirms the growth is a NUMERICAL
+// instability, not a physical one: VehicleInstance::step_tick's
+// one-tick-delayed force application (chassis motion held at tick-start
+// motion0 across all 4 substeps, wrench applied once per 240 Hz tick) turns
+// the continuous system's zero damping margin negative.
+//
+// The term below does NOT fix that delay - the delay is still there. It
+// gives the CONTINUOUS system enough real damping margin that the same
+// delay can no longer tip it negative (delay eats into a real margin
+// instead of a zero one). kZetaMin (below) is therefore sized against THIS
+// SPECIFIC 240 Hz one-tick delay, not derived purely from tyre/carcass
+// physics - it is an empirically-bounded compensating constant, not a
+// measured physical damping coefficient. If VehicleInstance::step_tick's
+// application delay is ever fixed properly (e.g. applying the wrench once
+// per SUBSTEP against an updated chassis velocity instead of once per tick
+// against a tick-start snapshot, or integrating the lateral relaxation
+// implicitly), THIS TERM MUST BE REVISITED, not left stacked on top - a
+// properly-fixed delay may need little or none of this compensation, and
+// an unnecessarily strong damper left in place after that fix would still
+// cost the aggregate-yaw-mode stability margin derived below for no reason.
+// That delay fix was considered for this bug and rejected as too large in
+// scope here: it touches the tick/substep pipeline every vehicle validation
+// test (skidpad tuned to 0.34%, the braking [!mayfail] numbers, step-steer,
+// accel-standing-start) is measured against, would very likely move every
+// vehicle scenario's state_hash (not just near-standstill ones, unlike this
+// additive term), and is a substantially bigger, riskier change than a
+// time-boxed bug fix should carry. It is plausibly the better long-term
+// fix; flagged to the task's coordinator as its own PLAN.md item rather
+// than attempted here.
 //
 // c_lat is derived from a per-wheel single-DOF estimate of the
 // alpha_eq/lateral-force natural frequency: omega_n = sqrt(Ky/(m*sigma_y))
@@ -68,19 +87,35 @@ real sign(real x) { return x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0); }
 // AGGREGATE explicit-integration check for the yaw mode:
 //   (2*kZetaMin*omega_n*sum_i(m_corner_i*r_i^2) / I_yaw) * dt < threshold
 // For car_sedan (I_yaw estimated as a rectangular-plate approximation,
-// M*(wheelbase^2+track^2)/12 = 1215 kg*m^2): threshold=1 (clean,
-// non-oscillatory decay) at kZetaMin~=1.24; threshold=2 (bounded but
-// oscillatory; beyond this the damper itself diverges) at kZetaMin~=2.47 -
+// M*(wheelbase^2+track^2)/12 = 1215 kg*m^2): ratio=1 (explicit-Euler
+// multiplier 0, i.e. NO sign flip between ticks) at kZetaMin~=1.24;
+// ratio=2 (multiplier -1, i.e. true divergence) at kZetaMin~=2.47 -
 // matching the observed kZetaMin=2.5 blowup almost exactly. tractor's own
-// bound is looser (~2.27 at threshold=1, larger I_yaw/M for its size) so
+// bound is looser (~2.27 at ratio=1, larger I_yaw/M for its size) so
 // car_sedan is the binding case across the data files this repo ships
-// today; re-run this check for any future vehicle file. kZetaMin=1.5 sits
-// just past the clean-decay threshold into the bounded-oscillatory-but-
-// still-convergent region and was the best of {0.7, 1.0, 1.5, 2.5} actually
-// tried against test_vehicle_standstill_wiggle.cpp's telemetry (0.7 and
-// 1.0 left a slow secondary regrowth within the 12-24 s observation
-// window; 1.5 decayed cleanly; 2.5 diverged) - chosen empirically within
-// the analytically-bounded safe range, not fitted blind.
+// today; re-run this check for any future vehicle file.
+//
+// ratio=1 is NOT the line between "clean" and "marginal" - read the
+// explicit-Euler multiplier (1-ratio), not just which side of ratio=1 a
+// value falls on: |multiplier| (how much a tick's correction shrinks by)
+// is SMALLEST, i.e. decay is FASTEST, right at ratio=1, and only grows
+// toward the dangerous side as ratio approaches 2. kZetaMin=1.5 gives
+// ratio=1.213, multiplier=-0.213 - an alternating-sign correction decaying
+// by ~79% EVERY 4.17 ms TICK, invisible at any observable timescale and
+// still a materially faster theoretical decay than e.g. kZetaMin=0.7's
+// ratio=0.566/multiplier=+0.434 (monotonic, but slower). This single-mode
+// estimate also does not capture the whole real system - it is an
+// aggregate-YAW-ONLY linearization, and kZetaMin=1.0 (ratio=0.809, on the
+// "monotonic" side of this same estimate) measurably left a slow secondary
+// regrowth bump in test_vehicle_standstill_wiggle.cpp's telemetry that this
+// single mode does not predict, evidence of at least one further, more
+// weakly-damped mode this estimate does not model. kZetaMin=1.5 was the
+// best of {0.7, 1.0, 1.5, 2.5} actually tried against that telemetry (0.7
+// and 1.0 left a slow secondary regrowth within the 12-24 s observation
+// window; 1.5 decayed with NO regrowth at all, confirmed over 24 s; 2.5
+// diverged) - chosen from measurement, with the analytical bound used only
+// to sanity-check the ORDER of magnitude (it correctly flagged 2.5 as
+// unsafe) rather than to pick the exact value.
 //
 // Faded by TOTAL contact-patch speed (not just the longitudinal component)
 // down to zero by kFadeSpeedMps: a wheel with near-zero rolling speed but
