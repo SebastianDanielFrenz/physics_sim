@@ -36,8 +36,20 @@ public:
     [[nodiscard]] const std::string& name_for(SurfaceId id) const;
     [[nodiscard]] std::size_t size() const { return names_.size(); }
 
+    // PLAN.md section 6 / P3: the tyre model is the first consumer of the
+    // actual physical values (lambda_mu, crr) rather than just the
+    // name<->id assignment above. 1.0 / 0.0 (dry-asphalt-like, no rolling
+    // resistance) for kInvalidSurfaceId or an id this table never assigned,
+    // so a caller that gets no surface id from a collision query (e.g. a
+    // plain Box/Sphere shape with no per-triangle material) still gets a
+    // sane default rather than undefined behaviour.
+    [[nodiscard]] real lambda_mu_for(SurfaceId id) const;
+    [[nodiscard]] real crr_for(SurfaceId id) const;
+
 private:
     std::vector<std::string> names_;                      // index == SurfaceId
+    std::vector<real> lambda_mu_;                          // index == SurfaceId
+    std::vector<real> crr_;                                // index == SurfaceId
     std::unordered_map<std::string, SurfaceId> name_to_id_;
 };
 
