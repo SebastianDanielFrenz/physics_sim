@@ -73,6 +73,19 @@ target_compile_definitions(bench_terrain_tiles PRIVATE PS_SOURCE_DIR="${CMAKE_SO
 
 add_test(NAME bench_terrain_tiles COMMAND bench_terrain_tiles)
 
+# Same root cause and same fix as bench_force_elements above: this is a
+# wall-clock timing bound (its own 250 ms smoke bound), and tools/ci.ps1
+# -Full's WSL legs (ctest --parallel 24) schedule this bench alongside
+# many other tests, whose CPU contention corrupts the tick-time
+# measurement - found via -Full: worst tick 338.999 ms (linux-asan-ubsan)
+# / 529.608 ms (linux-tsan) under contention vs. 55.8 ms / 90.0 ms when run
+# alone immediately afterward on the same machine, both comfortably under
+# the 250 ms bound. PROCESSORS above the highest --parallel level
+# tools/ci.ps1 uses (WSL's 24) makes ctest's scheduler always run this test
+# completely alone, regardless of leg - not a loosened threshold, the
+# measurement itself needs to run uncontended to mean anything.
+set_tests_properties(bench_terrain_tiles PROPERTIES PROCESSORS 24)
+
 # ps_energy_study - Part A energy-loss measurement study (see
 # tests/bench/energy_study.cpp's header comment). Deliberately NOT
 # registered with add_test/CTest: it is a measurement tool whose table feeds
