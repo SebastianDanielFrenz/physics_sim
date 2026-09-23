@@ -395,6 +395,12 @@ CI has two levels (Sebastian, 2026-09-22): `tools/ci.ps1` is the fast
 everyday run (target < 5 min; long physics tests only in the release legs,
 short variants under the sanitizers). `tools/ci.ps1 -Full` runs everything in
 every leg, and is mandatory before a phase counts as done.
+Per-change testing (Sebastian, 2026-09-23: full CI after every change made
+development infeasibly slow): during development run only the tests for the
+topics a change touches (`tools/ci.ps1 -Affected`, which maps changed paths to
+subsystem test labels and falls back to the full fast suite for foundational
+or unmapped paths); the fast run at batch boundaries and before reporting work
+as done; `-Full` before a phase counts as done or after foundational changes.
 
 **P0 — Toolchain and skeleton.** Installs (after approval), git init, CMake
 presets, FetchContent pins, empty targets, Catch2 hello test, CI script
