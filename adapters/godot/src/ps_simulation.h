@@ -122,6 +122,18 @@ public:
     [[nodiscard]] godot::Vector3 rebase_focus(const godot::Vector3& focus_godot_position);
     [[nodiscard]] godot::Vector3 origin_as_godot_reference() const { return godot::Vector3(0, 0, 0); } // origin is always local (0,0,0) by construction
 
+    // Godot-space position of the sim's fixed ABSOLUTE (0, 0, 0) - the
+    // world's true origin (data/tracks/README.md: "Origin (0, 0, 0) is the
+    // main spawn point"), which is NOT the same point as the floating
+    // rebase origin above once that has moved. Pure query, no rebase side
+    // effects (unlike rebase_focus, which both reads AND moves the shared
+    // OriginRebase state) - for demo-only static world geometry whose own
+    // local origin already sits at this fixed point (M1 visual pass:
+    // terrain_visual.gd's test_ground.glb), so it can be re-placed every
+    // frame exactly like a body/camera without corrupting the one shared
+    // rebase focus (the vehicle/camera's own rebase_focus calls).
+    [[nodiscard]] godot::Vector3 get_world_origin_godot_position() const;
+
     // --- Body / articulation transforms (race-free: snapshot-backed) ---
     [[nodiscard]] godot::Transform3D get_body_transform(const godot::String& body_name) const;
     [[nodiscard]] godot::Transform3D get_articulation_link_transform(const godot::String& articulation_name, int link_index) const;

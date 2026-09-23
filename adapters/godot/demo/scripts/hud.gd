@@ -122,4 +122,5 @@ func _process(_delta: float) -> void:
 	lines.append("")
 	lines.append("controls: gamepad (steer/throttle/brake/handbrake) + WASD/space keyboard fallback")
 	lines.append("V camera(free/chase)  G debug draw  R reset vehicle  Back(joy)=reset")
+	lines.append("1 straight  2 skidpad  3 ramps (teleport)")
 	_label.text = "\n".join(lines)

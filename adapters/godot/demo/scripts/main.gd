@@ -8,14 +8,17 @@ extends Node3D
 # scenario file), the test ground's REAL collision + procedural terrain
 # (PsSimulation.import_test_ground), the P3 passenger car spawned on it
 # (PsSimulation.create_body_dynamic + spawn_vehicle, at data/tracks/
-# test_ground/test_ground.json's own "spawn_main" point - the vehicle is
+# test_ground/test_ground.json's own "spawn_straight_car" point - the paved
+# asphalt straight, not the open dirt disc at "spawn_main" (M1 visual pass:
+# spawning on dirt made the first drive feel sluggish) - the vehicle is
 # also the terrain's streaming interest point, PLAN.md M1, updated
 # automatically every tick inside PsSimulation's post_step), shown with the
 # existing car_sedan.glb art (vehicle_visual.gd), a free-look camera and a
 # chase camera (toggled with the "camera" control action), a debug-draw
 # toggle, and the HUD (hud.gd). Xbox/keyboard input (PsInputMap) feeds the
 # vehicle only through named control channels (PsSimulation.set_control) -
-# PLAN.md P2/M1's own rule.
+# PLAN.md P2/M1's own rule. Keys 1/2/3 teleport the vehicle to the straight/
+# skidpad/ramps (ZONE_SPAWNS below) for quick access without a long drive.
 #
 # --m1-autopilot (a Godot user cmdline arg, after "--" - see
 # adapters/godot/smoke_test.ps1): runs a scripted throttle/brake/steer
@@ -39,10 +42,19 @@ const CHASSIS_Z_OFFSET := 0.6
 @export var vehicle_relative_path: String = "data/vehicles/car_sedan.json"
 @export var track_relative_dir: String = "data/tracks/test_ground"
 @export var model_relative_path: String = "data/models/car_sedan/car_sedan.glb"
-@export var spawn_id: String = "spawn_main" # data/tracks/test_ground/test_ground.json's centre point - see this adapter's report for a finding at the paved "spawn_straight_car"/"spawn_ramp_*" points (the wheel's own reported surface flickers asphalt<->dirt within about a second of spawning there, even with zero/near-zero lateral movement - looks like a terrain-heightfield/feature-mesh collision overlap under the flat zones, not investigated further per this adapter's core-free lane). spawn_main sits on the open (unpaved, lower-traction "dirt") procedural terrain but is stable/consistent.
+@export var terrain_model_relative_path: String = "data/tracks/test_ground/test_ground.glb"
+@export var spawn_id: String = "spawn_straight_car" # M1 visual pass: spawn on the paved asphalt straight (data/tracks/test_ground/test_ground.json), not spawn_main's open dirt disc - the dirt's low traction made the very first drive feel sluggish. KNOWN ISSUE (not this adapter's lane - core/data, reported): the FL/FR/RL/RR wheel_surface_name readout still flickers asphalt<->dirt for about a second after spawning here, even with near-zero lateral movement; looks like a terrain-heightfield/feature-mesh collision overlap under the flat zone. Cosmetic on the HUD only - it settles and does not visibly affect handling.
 @export var terrain_stream_radius_m: float = 700.0
 @export var terrain_max_resident_tiles: int = 512
 @export var terrain_max_tile_fills_per_tick: int = 16
+
+# M1 visual pass: quick teleports so Sebastian can reach the skidpad/ramps
+# without a 2 km drive from the straight - keys 1/2/3 (see _process below).
+const ZONE_SPAWNS := {
+	KEY_1: "spawn_straight_car",
+	KEY_2: "spawn_skidpad_car",
+	KEY_3: "spawn_ramp_05_foot",
+}
 
 var simulation: Node
 var hud: CanvasLayer
@@ -63,6 +75,15 @@ var _autopilot_last_logged_second: int = -1
 var _screenshot_path: String = ""
 var _screenshot_t: float = 0.0
 var _screenshot_taken: bool = false
+var _screenshot_view: String = "drive"
+var _screenshot_delay_s: float = 3.0
+
+# rig.json's wheel_FL pivot (ISO-local, relative to the chassis origin) -
+# only used to frame the wheels-close-up screenshot view below, not a sim
+# value, so a hardcoded approximation is fine here.
+const WHEEL_FL_ISO_OFFSET := Vector3(1.35, 0.78, 0.317)
+
+var _zone_keys_prev: Dictionary = {}
 
 func _repo_root() -> String:
 	# demo/ is adapters/godot/demo; the repo root is three levels up.
@@ -87,7 +108,18 @@ func _ready() -> void:
 	for a in user_args:
 		if a.begins_with("--m1-screenshot="):
 			_screenshot_path = a.substr(len("--m1-screenshot="))
-	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path)
+		elif a.begins_with("--m1-screenshot-view="):
+			# Framing for the screenshot above: "drive" (default) leaves the
+			# normal chase camera running; "side"/"three_quarter"/"wheels"
+			# snap the free camera to a canned shot of the parked vehicle,
+			# for the M1 visual-pass report's reference screenshots.
+			_screenshot_view = a.substr(len("--m1-screenshot-view="))
+		elif a.begins_with("--m1-screenshot-delay="):
+			# How many simulated seconds to wait before capturing (default
+			# 3.0) - a "drive" shot further down the straight/at higher
+			# speed needs longer than the default lets the car crawl for.
+			_screenshot_delay_s = a.substr(len("--m1-screenshot-delay=")).to_float()
+	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path, " screenshot_view=", _screenshot_view)
 	_setup_lighting()
 
 	simulation = ClassDB.instantiate("PsSimulation")
@@ -120,22 +152,47 @@ func _ready() -> void:
 	simulation.start()
 	print("ps_godot main.gd: sim started, is_running=", simulation.is_running())
 
+	_setup_terrain_visual(repo_root)
 	_spawn_body_nodes(repo_root)
 	_setup_cameras()
+	_apply_screenshot_view(_screenshot_view)
 	_setup_debug_draw()
 	_setup_input_map()
 	_setup_hud()
 
 func _setup_lighting() -> void:
+	# M1 visual pass fix: the demo previously had a DirectionalLight3D but
+	# a flat Environment.BG_COLOR background with no ambient term set - the
+	# car_sedan.glb materials are proper PBR (baseColorFactor + embedded
+	# textures + normals, verified by reading the .glb's own glTF JSON),
+	# so the near-black renders (out/renders/m1_final2.png) were a lighting
+	# problem, not a material one: with zero ambient, every surface not
+	# directly facing the one directional light (most of the car body from
+	# a chase-cam angle) had nothing to reflect. Fix: a real sky (gives a
+	# physically-plausible ambient/reflection term for free, and the actual
+	# background pixels are barely different from the old flat colour) plus
+	# a brighter, warmer sun.
 	var light := DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-55, -30, 0)
+	light.light_energy = 1.3
+	light.light_color = Color(1.0, 0.98, 0.92)
 	light.shadow_enabled = false
 	add_child(light)
 
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color(0.35, 0.55, 0.85)
+	sky_material.sky_horizon_color = Color(0.75, 0.82, 0.9)
+	sky_material.ground_bottom_color = Color(0.3, 0.3, 0.3)
+	sky_material.ground_horizon_color = Color(0.55, 0.53, 0.5)
+	var sky := Sky.new()
+	sky.sky_material = sky_material
+
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.55, 0.65, 0.8)
+	e.background_mode = Environment.BG_SKY
+	e.sky = sky
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	e.ambient_light_energy = 1.0
 	env.environment = e
 	add_child(env)
 
@@ -182,6 +239,17 @@ func _read_spawn(track_dir: String, id: String) -> Dictionary:
 	push_warning("main.gd: spawn id '" + id + "' not found in " + path + " - defaulting to world origin")
 	return result
 
+func _setup_terrain_visual(repo_root: String) -> void:
+	# M1 visual pass problem 2: without this, the test ground's real
+	# surfaces (asphalt/grass/dirt/etc.) were never visible - see
+	# terrain_visual.gd's header comment.
+	var terrain_visual := Node3D.new()
+	terrain_visual.name = "TerrainVisual"
+	terrain_visual.set_script(load("res://scripts/terrain_visual.gd"))
+	terrain_visual.set("simulation_path", simulation.get_path())
+	terrain_visual.set("glb_absolute_path", repo_root.path_join(terrain_model_relative_path))
+	add_child(terrain_visual)
+
 func _spawn_body_nodes(repo_root: String) -> void:
 	var sim_path := simulation.get_path()
 
@@ -224,13 +292,24 @@ func _spawn_body_nodes(repo_root: String) -> void:
 			add_child(node)
 
 func _setup_cameras() -> void:
+	# M1 visual pass: the free camera used to start at a fixed (8,4,8)
+	# looking at the WORLD origin - fine for spawn_main (world origin) but
+	# left the camera looking at empty terrain 500+ m from the car once the
+	# default spawn moved to spawn_straight_car (see spawn_id above). Seed
+	# it from the chassis's own Godot transform instead (already computed
+	# by the one real ISO->Godot conversion, PsSimulation.get_body_transform)
+	# so it always starts near the vehicle, wherever it spawns.
+	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
+	var chassis_pos := chassis_xform.origin
+	var chassis_forward := chassis_xform.basis.x # car's own forward - see chase_cam.gd's comment on why it's .x, not .z
+
 	free_camera = Camera3D.new()
 	free_camera.name = "FreeCamera"
-	free_camera.transform.origin = Vector3(8, 4, 8)
+	free_camera.transform.origin = chassis_pos - chassis_forward.normalized() * 8.0 + Vector3.UP * 4.0
 	free_camera.set_script(load("res://scripts/free_cam.gd"))
 	free_camera.set("simulation_path", simulation.get_path())
 	add_child(free_camera) # look_at() below needs the node inside the tree first
-	free_camera.look_at(Vector3.ZERO, Vector3.UP)
+	free_camera.look_at(chassis_pos + Vector3.UP, Vector3.UP)
 
 	# PLAN.md M1 step 7: a chase camera that works at 50 km from the origin
 	# (origin rebasing) and does not jitter - see chase_cam.gd.
@@ -244,6 +323,39 @@ func _setup_cameras() -> void:
 	using_chase_camera = true
 	chase_camera.current = true
 	free_camera.current = false
+
+func _apply_screenshot_view(view: String) -> void:
+	if view == "" or view == "drive":
+		return # default chase-camera framing, already set up by _setup_cameras
+	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
+	var pos := chassis_xform.origin
+	# basis.x/y/z = the chassis's own forward/left/up, expressed in Godot
+	# space (frame_convert_core.h's iso_to_godot_basis - see chase_cam.gd's
+	# comment for why .z, not .y, is "up").
+	var fwd := chassis_xform.basis.x
+	var left := chassis_xform.basis.y
+	var up := chassis_xform.basis.z
+	var cam_pos: Vector3
+	var look_at_pos: Vector3
+	match view:
+		"side":
+			cam_pos = pos + left * 6.0 + up * 1.3
+			look_at_pos = pos + up * 0.6
+		"three_quarter":
+			cam_pos = pos - fwd * 4.5 + left * 4.5 + up * 2.3
+			look_at_pos = pos + up * 0.5
+		"wheels":
+			var wheel_pos: Vector3 = pos + chassis_xform.basis * WHEEL_FL_ISO_OFFSET
+			cam_pos = wheel_pos + fwd * 1.0 + left * 1.4 + up * 0.5
+			look_at_pos = wheel_pos
+		_:
+			push_warning("main.gd: unknown --m1-screenshot-view '%s' - ignoring" % view)
+			return
+	free_camera.transform.origin = cam_pos
+	free_camera.look_at(look_at_pos, up)
+	free_camera.current = true
+	chase_camera.current = false
+	using_chase_camera = false
 
 func _toggle_camera() -> void:
 	using_chase_camera = not using_chase_camera
@@ -287,6 +399,7 @@ func _process(delta: float) -> void:
 			debug_draw.debug_enabled = not debug_draw.debug_enabled
 		if input_map.get_reset_vehicle():
 			_reset_vehicle()
+		_handle_zone_keys()
 
 		# PLAN.md P2/M1: input reaches the sim only as named control
 		# channels, never a Godot type - see PsInputMap/input_map_core.h.
@@ -302,9 +415,9 @@ func _process(delta: float) -> void:
 
 	if _screenshot_path != "" and not _screenshot_taken:
 		_screenshot_t += delta
-		if not _autopilot:
-			simulation.set_control("throttle", 0.5) # so the screenshot shows the car actually driving, not sitting still
-		if _screenshot_t > 3.0:
+		if not _autopilot and _screenshot_view == "drive":
+			simulation.set_control("throttle", 0.5) # so the "drive" screenshot shows the car actually driving, not sitting still
+		if _screenshot_t > _screenshot_delay_s:
 			_screenshot_taken = true
 			var img: Image = get_viewport().get_texture().get_image()
 			var err := img.save_png(_screenshot_path)
@@ -312,10 +425,20 @@ func _process(delta: float) -> void:
 			await get_tree().create_timer(0.2).timeout
 			get_tree().quit()
 
-func _reset_vehicle() -> void:
-	var spawn := _read_spawn(_repo_root().path_join(track_relative_dir), spawn_id)
+func _reset_vehicle(target_spawn_id: String = spawn_id) -> void:
+	var spawn := _read_spawn(_repo_root().path_join(track_relative_dir), target_spawn_id)
 	var pos: Vector3 = spawn["position"] + Vector3(0, 0, CHASSIS_Z_OFFSET)
 	simulation.reset_vehicle(VEHICLE_NAME, pos, spawn["yaw_rad"])
+
+# M1 visual pass: 1/2/3 teleport straight to the straight/skidpad/ramps
+# (ZONE_SPAWNS above) instead of driving several km - manual edge-detection
+# since these are demo-only conveniences, not PsInputMap control channels.
+func _handle_zone_keys() -> void:
+	for key in ZONE_SPAWNS.keys():
+		var pressed := Input.is_key_pressed(key)
+		if pressed and not _zone_keys_prev.get(key, false):
+			_reset_vehicle(ZONE_SPAWNS[key])
+		_zone_keys_prev[key] = pressed
 
 func _run_autopilot(delta: float) -> void:
 	if _autopilot_done:

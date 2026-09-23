@@ -202,6 +202,10 @@ godot::Vector3 PsSimulation::rebase_focus(const godot::Vector3& focus_godot_posi
     return iso_to_godot(absolute, origin_rebase_.origin());
 }
 
+godot::Vector3 PsSimulation::get_world_origin_godot_position() const {
+    return iso_to_godot(ps::Vec3{0.0, 0.0, 0.0}, origin_rebase_.origin());
+}
+
 godot::Transform3D PsSimulation::get_body_transform(const String& body_name) const {
     if (!world_) return godot::Transform3D();
     const std::string name = to_std_string(body_name);
@@ -566,6 +570,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_articulation_names"), &PsSimulation::get_articulation_names);
     ClassDB::bind_method(D_METHOD("get_articulation_link_count", "articulation_name"), &PsSimulation::get_articulation_link_count);
     ClassDB::bind_method(D_METHOD("rebase_focus", "focus_godot_position"), &PsSimulation::rebase_focus);
+    ClassDB::bind_method(D_METHOD("get_world_origin_godot_position"), &PsSimulation::get_world_origin_godot_position);
     ClassDB::bind_method(D_METHOD("get_body_transform", "body_name"), &PsSimulation::get_body_transform);
     ClassDB::bind_method(D_METHOD("get_body_speed_mps", "body_name"), &PsSimulation::get_body_speed_mps);
     ClassDB::bind_method(D_METHOD("get_articulation_link_transform", "articulation_name", "link_index"), &PsSimulation::get_articulation_link_transform);
