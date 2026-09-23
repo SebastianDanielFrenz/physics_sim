@@ -222,7 +222,10 @@ if ($CheckOnly) {
             @{ Name = 'cmake';    Cmd = 'cmake --version' },
             @{ Name = 'ninja';    Cmd = 'ninja --version' },
             @{ Name = 'python3';  Cmd = 'python3 --version' },
-            @{ Name = 'git';      Cmd = 'git --version' }
+            @{ Name = 'git';      Cmd = 'git --version' },
+            # linux-tsan's test preset points TSAN_OPTIONS' external_symbolizer_path
+            # here (tools/tsan_suppressions.txt only matches symbolized frames).
+            @{ Name = 'addr2line'; Cmd = 'addr2line --version' }
         )
         foreach ($tool in $wslTools) {
             $out = wsl --cd ~ -- bash -lc "$($tool.Cmd) 2>&1 | head -n1"
@@ -289,7 +292,7 @@ $wslDistros = (wsl -l -q 2>$null) -replace "`0", ""
 if ($wslDistros -match 'Ubuntu') {
     Write-Host "Installing/verifying apt packages in WSL as root (idempotent)..."
     wsl -u root -- apt-get update
-    wsl -u root -- apt-get install -y clang lld cmake ninja-build python3 git
+    wsl -u root -- apt-get install -y clang lld cmake ninja-build python3 git binutils
     if ($LASTEXITCODE -ne 0) {
         throw "WSL apt-get install failed with exit code $LASTEXITCODE"
     }

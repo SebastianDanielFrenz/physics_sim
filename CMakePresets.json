@@ -156,6 +156,11 @@
     { "name": "msvc-release", "configurePreset": "msvc-release", "output": { "outputOnFailure": true } },
     { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } },
     { "name": "linux-asan-ubsan", "configurePreset": "linux-asan-ubsan", "output": { "outputOnFailure": true } },
-    { "name": "linux-tsan", "configurePreset": "linux-tsan", "output": { "outputOnFailure": true } }
+    {
+      "name": "linux-tsan", "configurePreset": "linux-tsan", "output": { "outputOnFailure": true },
+      "environment": {
+        "TSAN_OPTIONS": "$penv{TSAN_OPTIONS} suppressions=${sourceDir}/tools/tsan_suppressions.txt external_symbolizer_path=/usr/bin/addr2line"
+      }
+    }
   ]
 }

@@ -15,6 +15,7 @@ physics_sim/
   tools/
     setup_dev_env.ps1                 installs/verifies the dev toolchain (-CheckOnly to only verify)
     ci.ps1                            runs every CI leg (see below)
+    tsan_suppressions.txt             ThreadSanitizer suppressions, loaded only by the linux-tsan TEST preset's TSAN_OPTIONS (one entry: Jolt's debug-assert read in JPH::Mutex::try_lock)
     common/                           tools/tests-only helpers, never linked into ps_core; target ps_headless_env
       headless_env.h/.cpp             installs Windows headless-CRT handlers (no blocking assert/abort dialogs)
     ps_run/                           headless scenario runner (JSON scenario -> CSV, pure function); target ps_run
@@ -927,7 +928,11 @@ tools\ci.ps1 -Only debug,asan     # named legs only (matches preset names, plus 
 
 Legs: clang-cl `debug`, `release`, `asan`; cl `msvc-release`; a grep that
 fails the run if anything under `core/` includes a Godot/GDExtension header;
-WSL `linux-release`, `linux-asan-ubsan`, `linux-tsan`. Prints a per-leg
+WSL `linux-release`, `linux-asan-ubsan`, `linux-tsan` (its test preset sets
+`TSAN_OPTIONS` to load `tools/tsan_suppressions.txt` and to symbolize via
+`/usr/bin/addr2line` - TSan's own search finds a dangling
+`llvm-symbolizer-21` in WSL, and suppressions only match symbolized
+frames; applies to a hand-run `ctest --preset linux-tsan` too). Prints a per-leg
 PASS/FAIL summary with per-stage (configure/build/ctest) timing and a
 per-leg + total wall-clock line; exits non-zero on any failure. Every
 `ctest` invocation passes `--parallel` (12 on Windows, 24 in WSL - see

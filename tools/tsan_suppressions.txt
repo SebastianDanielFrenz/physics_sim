@@ -1,0 +1,39 @@
+# ThreadSanitizer suppressions for the linux-tsan preset ONLY.
+#
+# Loaded via TSAN_OPTIONS in CMakePresets.json's "linux-tsan" TEST preset, so
+# it applies to `ctest --preset linux-tsan` whether run by hand or by
+# tools/ci.ps1. Every entry here is a race TSan will never report again, so
+# keep each one scoped to a single function and document why it is safe.
+# Rationale and the proof that this entry is not over-broad: vault PHYS-027.
+#
+# TSan matches a race: pattern against every frame of both racing stacks
+# (^ and $ anchor the whole demangled name, the parameter list included).
+# That only works when TSan can symbolize. The preset therefore also sets
+# external_symbolizer_path=/usr/bin/addr2line (binutils, a dependency of the
+# clang package). On this machine TSan's own $PATH search finds a dangling
+# /usr/bin/llvm-symbolizer-21 (owned by no package, llvm-21 not installed),
+# gives up with "invalid path to external symbolizer" and never falls back to
+# addr2line, even with allow_addr2line=1. With no symbolizer every frame is
+# <null>, nothing matches, and the Jolt race below is reported again (the
+# failure is loud, not silent).
+
+# JoltPhysics v5.6.0, Jolt/Core/Mutex.h line 126, in JPH::Mutex::try_lock():
+#     JPH_ASSERT(mLockedThreadID != std::this_thread::get_id());
+# mLockedThreadID is debug bookkeeping that only exists when JPH_ENABLE_ASSERTS
+# is defined. Jolt defines it automatically in any build without NDEBUG
+# (Core.h: JPH_DEBUG -> IssueReporting.h: JPH_ENABLE_ASSERTS), which is the
+# case for linux-tsan (CMAKE_BUILD_TYPE Debug). The assert reads the field
+# BEFORE taking the lock, while another thread's lock()/unlock() writes it
+# under the lock. That read is a real data race, but harmless in intent:
+# - it only checks "am I re-locking a mutex I already hold";
+# - the value a thread compares against is its OWN id, which only it can
+#   ever write, so a torn or stale read of another thread's id can never
+#   produce a false "already held by me";
+# - no simulation state, and nothing outside the assert, reads the field.
+# It shows up whenever two Jolt jobs contend on the same body mutex, e.g.
+# BodyManager::GetActiveBodies vs ValidateActiveBodyBounds inside
+# PhysicsSystem::Update, and only under heavy scheduling pressure (seen once
+# in tests/determinism's 1000-run randomised-scheduling stress test).
+# Do not "fix" it by turning Jolt's asserts off: they are part of what the
+# Debug sanitizer legs are for.
+race:^JPH::Mutex::try_lock()$
