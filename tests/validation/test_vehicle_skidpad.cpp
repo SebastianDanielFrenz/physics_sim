@@ -1,16 +1,48 @@
 // Validation: steady-state skidpad lateral acceleration within 3% of the
 // tyre-limited estimate (PLAN.md P3 acceptance).
 //
-// "Tyre-limited estimate" here is a standard single-track/bicycle-model
-// bound: if every tyre reached its own peak lateral coefficient
-// simultaneously, a_lat_max = sum_i(Dy_i(Fz_i)) / mass, where Dy_i is the
-// Magic Formula's own peak-force term (tyre_desc.h's pdy1/pdy2, evaluated
-// at each wheel's OWN load) - refined once for lateral load transfer
-// (Milliken, "Race Car Vehicle Dynamics", ch. 18: dFz_axle =
-// m*a_lat*h_cg/track, applied +/- per side) since a real skidpad limit is
-// slightly below the naive mass*g*pdy1 bound (load sensitivity pdy2 < 0
-// means the loaded-up outer tyre gains less grip than the unloaded inner
-// tyre loses).
+// "Tyre-limited estimate" here is a two-axle load-transfer-corrected bound:
+// if every tyre reached its own peak lateral coefficient simultaneously,
+// a_lat_max = sum_i(Dy_i(Fz_i)) / mass, where Dy_i is the Magic Formula's
+// own peak-force term (tyre_desc.h's pdy1/pdy2, evaluated at each wheel's
+// OWN load) - refined for lateral load transfer (Milliken, "Race Car
+// Vehicle Dynamics", ch. 18). The TOTAL two-axle transfer moment is
+// m*a_lat*h_cg (standard rigid-body roll-moment balance about a ground-
+// level roll axis - this codebase has no separate roll-centre-height
+// model, PLAN.md section 6, so the elastic/geometric transfer distinction
+// collapses and the full moment is resisted by the springs+ARBs); that
+// moment is then split between the front and rear axles in proportion to
+// EACH AXLE'S OWN roll stiffness (spring + anti-roll-bar - car_sedan.json's
+// front/rear ARB rates deliberately differ, 15000 vs 10000 N/m), not
+// applied identically to both axles.
+//
+// This replaces an EARLIER version of this estimate that computed
+// dFz_axle = m*a_lat*h_cg/track (the TOTAL two-axle moment/track) and then
+// applied that FULL value, unsplit, to BOTH axles independently - i.e. it
+// implicitly assumed each axle alone resists the entire roll moment, which
+// double-counts the total transfer relative to the correct roll-stiffness-
+// weighted split derived above. Because the tyre's load sensitivity is
+// concave (pdy2 < 0: a loaded-up outer tyre gains less than an unloaded
+// inner tyre loses), overstating the load transfer overstates the grip
+// LOSS from cornering, so the old estimate (9.346 m/s^2) undershot the
+// measured value (9.837 m/s^2, +5.2%, outside the 3% tolerance) - see
+// out/handover_p3_fix.md and the vault (PHYS-018) for the full derivation
+// and the numeric comparison against the halved/roll-stiffness-split
+// forms. The corrected estimate (below) converges to ~9.80 m/s^2, within
+// 0.4% of measured.
+//
+// Combined slip: the front wheels are `driven` in car_sedan.json but the
+// test applies no throttle, and no wheel is braked, so at the cornering
+// equilibrium every wheel's own spin settles to (very close to) zero
+// longitudinal tyre force (undriven/unbraked wheels have no other torque
+// to balance against the tyre's own Fx - wheel_instance.cpp's spin
+// integration) - confirmed by telemetry: every wheel's slip_ratio stays
+// under 0.007 throughout the averaging window below. At kappa this close
+// to zero the Magic Formula's own combined-slip weighting Gyk(kappa) is,
+// by construction (its cosine form is normalised to 1 at the reference
+// slip - pacejka_tyre_model.cpp), within noise of 1.0, so no explicit
+// combined-slip discount is needed for THIS manoeuvre; the estimate would
+// need one for a skidpad test that also applied throttle or brake.
 //
 // The car is given an initial speed and a constant large steer angle
 // (no active speed control - PLAN.md's placeholder drive has no cruise
@@ -30,47 +62,56 @@ using namespace ps;
 
 namespace {
 
-// Sum_i Dy_i(Fz_i) / mass, with one load-transfer refinement pass (see this
-// file's header comment). fz0/pdy1/pdy2 come from
-// data/tyres/passenger_car_225_45r17.json; track/h_cg/mass/corner weight
-// from data/vehicles/car_sedan.json's own geometry/mass.
+// Sum_i Dy_i(Fz_i) / mass, iterated to convergence with the total transfer
+// moment split between axles by roll-stiffness fraction (see this file's
+// header comment). fz0/pdy1/pdy2 come from
+// data/tyres/passenger_car_225_45r17.json; track/h_cg/mass/corner weight/
+// spring_rate/arb_rate from data/vehicles/car_sedan.json's own geometry/
+// mass/suspension.
 real tyre_limited_lateral_g_estimate() {
     const real mass = 1500.0, g = 9.81;
     const real fz0 = 4200.0, pdy1 = 1.0, pdy2 = -0.12;
     const real corner_weight = mass * g / 4.0;
     const real track = 1.56, h_cg = 0.6;
 
-    auto dy_sum = [&](real a_lat) {
-        const real dFz_axle = (mass * a_lat * h_cg) / track;
+    // Roll stiffness per axle (this file's header comment): spring_rate is
+    // uniform across all 4 wheels; arb_rate differs front/rear. A wheel's
+    // ARB partner deflects oppositely under roll, so the ARB's relative-
+    // compression force (suspension.h's arb_force()) doubles its
+    // contribution to the effective per-wheel roll-resisting rate.
+    const real spring_rate = 61312.5, arb_front = 15000.0, arb_rear = 10000.0;
+    const real k_front = spring_rate + 2.0 * arb_front;
+    const real k_rear = spring_rate + 2.0 * arb_rear;
+    const real frac_front = k_front / (k_front + k_rear);
+    const real frac_rear = k_rear / (k_front + k_rear);
+
+    auto dy = [&](real fz) {
+        const real dfz = (fz - fz0) / fz0;
+        return fz * (pdy1 + pdy2 * dfz);
+    };
+    auto axle_dy_sum = [&](real dFz_axle) {
         const real outer = corner_weight + dFz_axle / 2.0;
         const real inner = corner_weight - dFz_axle / 2.0;
-        auto dy = [&](real fz) {
-            const real dfz = (fz - fz0) / fz0;
-            return fz * (pdy1 + pdy2 * dfz);
-        };
-        return 2.0 * (dy(outer) + dy(inner)); // both axles alike (symmetric car)
+        return dy(outer) + dy(inner);
     };
 
     real a_lat = pdy1 * g; // naive first guess
-    a_lat = dy_sum(a_lat) / mass; // one refinement pass
+    for (int i = 0; i < 8; ++i) { // fixed-point iteration to convergence
+        const real dFz_total = (mass * a_lat * h_cg) / track; // TOTAL two-axle transfer moment/track
+        const real dy_front = axle_dy_sum(dFz_total * frac_front);
+        const real dy_rear = axle_dy_sum(dFz_total * frac_rear);
+        a_lat = (dy_front + dy_rear) / mass;
+    }
     return a_lat;
 }
 
 } // namespace
 
-// [!mayfail]: measured steady_a_lat is ~5.2% above the estimate (9.84 vs
-// 9.35 m/s^2), not the required 3% - see out/handover_p3.md's acceptance
-// table. The estimate is a simplified single-track bicycle-model bound
-// (both axles given the SAME lateral load transfer); the simulated car's
-// front/rear anti-roll-bar split is deliberately uneven (car_sedan.json:
-// front arb_rate 15000, rear 10000, a plausible front-biased roll
-// stiffness split), which the estimate does not model, plus real
-// combined-slip coupling at the small residual longitudinal slip every
-// wheel carries while cornering. Per PLAN.md section 8 ("fix the model,
-// not the tolerance") this is left failing rather than loosened; a more
-// detailed two-axle load-transfer estimate is the natural next step if
-// this needs to close further.
-TEST_CASE("Skidpad lateral acceleration is within 3% of the tyre-limited estimate", "[validation][vehicle][long][!mayfail]") {
+// Was [!mayfail] (measured 9.84 vs the OLD estimate's 9.35 m/s^2, +5.2%):
+// root-caused to a bug in the estimate, not the model - see this file's
+// header comment. The corrected roll-stiffness-split estimate (~9.80
+// m/s^2) is within 0.4% of measured; tag removed.
+TEST_CASE("Skidpad lateral acceleration is within 3% of the tyre-limited estimate", "[validation][vehicle][long]") {
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
 
