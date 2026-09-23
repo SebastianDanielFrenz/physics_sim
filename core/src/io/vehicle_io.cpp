@@ -55,6 +55,22 @@ std::string resolve_path(const std::string& base_dir, const std::string& p) {
     return (std::filesystem::path(base_dir) / fp).string();
 }
 
+// PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: NO legacy support -
+// missing, unknown or outdated is a hard error, never a silent default).
+// `kind` is e.g. "vehicle" or "tyre"; `major` the only accepted major
+// version. Every standalone JSON file this loader reads goes through this
+// check exactly once, right after parsing.
+void require_format(const json& j, const std::string& kind, int major, const std::string& path) {
+    const std::string expected = "physics_sim." + kind + "/" + std::to_string(major);
+    if (!j.contains("format") || !j.at("format").is_string()) {
+        throw std::runtime_error(path + ": missing required 'format' field (expected \"" + expected + "\")");
+    }
+    const std::string actual = j.at("format").get<std::string>();
+    if (actual != expected) {
+        throw std::runtime_error(path + ": unsupported 'format' \"" + actual + "\" (expected \"" + expected + "\")");
+    }
+}
+
 TyreDesc read_tyre_object(const json& j) {
     TyreDesc d;
     d.name = j.value("name", std::string());
@@ -122,7 +138,12 @@ TyreDesc read_tyre_ref(const json& j, const std::string& base_dir) {
         if (path.size() >= 4 && path.substr(path.size() - 4) == ".tir") {
             return ps::vehicle::parse_tir_file(path, "Parsed from " + path);
         }
-        return read_tyre_object(read_json_file(path));
+        // A standalone tyre JSON file - carries its own "format", unlike an
+        // inline object (below), which has no independent version of its
+        // own and inherits its enclosing vehicle file's format instead.
+        const json tj = read_json_file(path);
+        require_format(tj, "tyre", 1, path);
+        return read_tyre_object(tj);
     }
     return read_tyre_object(j);
 }
@@ -209,11 +230,14 @@ DriveDesc read_drive(const json& j) {
 } // namespace
 
 vehicle::TyreDesc load_tyre_json(const std::string& path) {
-    return read_tyre_object(read_json_file(path));
+    const json j = read_json_file(path);
+    require_format(j, "tyre", 1, path);
+    return read_tyre_object(j);
 }
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
     const json j = read_json_file(path);
+    require_format(j, "vehicle", 1, path);
     const std::string base_dir = std::filesystem::path(path).parent_path().string();
 
     VehicleDesc v;

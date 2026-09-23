@@ -1,4 +1,5 @@
 {
+  "format": "physics_sim.scenario/1",
   "name": "m1_test_drive_world",
   "duration_s": 0.0,
   "tick_rate_hz": 240.0,

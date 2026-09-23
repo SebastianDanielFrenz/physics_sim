@@ -1,4 +1,5 @@
 {
+  "format": "physics_sim.scenario/1",
   "name": "terrain_multi_interest",
   "note": "PLAN.md D7 hash-compare/worker-count coverage for the tile system with TWO interest points streaming at once, static geometry that triggers terrain suppression (a static box on terrain_spec_small's height-0 spawn disc), and dynamic bodies on the streamed terrain. Guards the tile-slot assignment order: before the fix, TileManager iterated its interest points in std::unordered_map order, which differs between MSVC and libstdc++, so Windows and Linux assigned tiles to different pool bodies (vault PHYS-026).",
   "duration_s": 3.0,

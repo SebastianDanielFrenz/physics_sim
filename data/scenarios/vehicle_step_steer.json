@@ -1,4 +1,5 @@
 {
+  "format": "physics_sim.scenario/1",
   "name": "vehicle_step_steer",
   "duration_s": 4.0,
   "tick_rate_hz": 240.0,

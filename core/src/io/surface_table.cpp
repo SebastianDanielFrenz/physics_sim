@@ -19,6 +19,21 @@ SurfaceTable::SurfaceTable(const std::string& surfaces_json_path) {
         throw std::runtime_error("malformed JSON in " + surfaces_json_path + ": " + e.what());
     }
 
+    // PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: strict check,
+    // no legacy support).
+    {
+        const std::string expected = "physics_sim.surfaces/1";
+        if (!j.contains("format") || !j.at("format").is_string()) {
+            throw std::runtime_error("surface table " + surfaces_json_path +
+                                      ": missing required 'format' field (expected \"" + expected + "\")");
+        }
+        const std::string actual = j.at("format").get<std::string>();
+        if (actual != expected) {
+            throw std::runtime_error("surface table " + surfaces_json_path + ": unsupported 'format' \"" + actual +
+                                      "\" (expected \"" + expected + "\")");
+        }
+    }
+
     if (!j.contains("surfaces") || !j.at("surfaces").is_object()) {
         throw std::runtime_error("surface table " + surfaces_json_path + " has no 'surfaces' object");
     }

@@ -38,12 +38,16 @@
 #include <nlohmann/json.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
+#include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 using namespace ps;
@@ -106,6 +110,58 @@ TEST_CASE("Procedural terrain matches the Python reference evaluator's golden po
     // errors would be orders of magnitude above this coordinate-rounding
     // noise floor, not sub-millimetre.
     REQUIRE(max_abs_err < 2e-4);
+}
+
+// PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: strict "format"
+// checks, no legacy support). data/tracks/test_ground/terrain.json is
+// read-only (owned by trackgen) and already carries "physics_sim.terrain/1"
+// - exercised implicitly by the golden-point test above. These cases
+// rewrite ONLY the "format" line of a copy of that real file (not
+// data/tracks itself) into a scratch temp file, so the rejection paths are
+// covered without touching the read-only original.
+namespace {
+struct TempTerrainSpec {
+    std::filesystem::path path;
+    explicit TempTerrainSpec(const std::string& contents) {
+        path = std::filesystem::temp_directory_path() /
+               ("ps_test_terrain_format_" + std::to_string(std::random_device{}()) + ".json");
+        std::ofstream out(path);
+        out << contents;
+    }
+    ~TempTerrainSpec() {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+    }
+};
+
+std::string real_terrain_json_with_format(const std::string& format_line) {
+    std::ifstream f(terrain_dir() + "terrain.json");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string content = ss.str();
+    const std::string needle = R"("format": "physics_sim.terrain/1",)";
+    const std::size_t pos = content.find(needle);
+    REQUIRE(pos != std::string::npos); // sanity: the real file's own format field, unchanged
+    content.replace(pos, needle.size(), format_line);
+    return content;
+}
+} // namespace
+
+TEST_CASE("load_terrain_spec rejects a missing, unknown or outdated 'format'", "[terrain][format]") {
+    using Catch::Matchers::ContainsSubstring;
+
+    SECTION("missing entirely") {
+        TempTerrainSpec f(real_terrain_json_with_format(""));
+        REQUIRE_THROWS_WITH(load_terrain_spec(f.path.string()), ContainsSubstring("'format'"));
+    }
+    SECTION("wrong kind") {
+        TempTerrainSpec f(real_terrain_json_with_format(R"("format": "physics_sim.track/1",)"));
+        REQUIRE_THROWS_WITH(load_terrain_spec(f.path.string()), ContainsSubstring("unsupported 'format'"));
+    }
+    SECTION("outdated major") {
+        TempTerrainSpec f(real_terrain_json_with_format(R"("format": "physics_sim.terrain/0",)"));
+        REQUIRE_THROWS_WITH(load_terrain_spec(f.path.string()), ContainsSubstring("unsupported 'format'"));
+    }
 }
 
 // NOTE: no "does our own key_for_world_xy reproduce the golden file's

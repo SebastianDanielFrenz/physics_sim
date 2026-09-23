@@ -260,6 +260,22 @@ Scenario load_scenario(const std::string& json_path) {
 
     Scenario s;
     try {
+        // PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: strict
+        // check, no legacy support). Every data/scenarios/*.json file (and
+        // adapters/godot/demo/scenarios/m1_world.json) was given this field
+        // when the check was added; there is no prior "physics_sim.scenario"
+        // major to stay compatible with.
+        {
+            const std::string expected = "physics_sim.scenario/1";
+            if (!j.contains("format") || !j.at("format").is_string()) {
+                throw std::runtime_error(json_path + ": missing required 'format' field (expected \"" + expected + "\")");
+            }
+            const std::string actual = j.at("format").get<std::string>();
+            if (actual != expected) {
+                throw std::runtime_error(json_path + ": unsupported 'format' \"" + actual + "\" (expected \"" + expected + "\")");
+            }
+        }
+
         s.name = j.value("name", std::string("scenario"));
         s.duration_s = j.value("duration_s", real(1.0));
         s.world_config.tick_rate_hz = j.value("tick_rate_hz", real(240.0));

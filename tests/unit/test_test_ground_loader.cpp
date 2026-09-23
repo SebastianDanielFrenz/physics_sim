@@ -144,8 +144,14 @@ struct SyntheticTrackDir {
 
     void write_json(std::size_t vertex_offset, std::size_t vertex_count, std::size_t index_offset,
                     std::size_t index_count) const {
+        write_json_with_format(R"("format":"physics_sim.collision/1",)", vertex_offset, vertex_count, index_offset, index_count);
+    }
+    // PLAN.md P4 I0: lets the format-rejection cases below vary/omit the
+    // field independently of the well-formed baseline above.
+    void write_json_with_format(const std::string& format_field, std::size_t vertex_offset, std::size_t vertex_count,
+                                 std::size_t index_offset, std::size_t index_count) const {
         std::ofstream out(dir / "test_ground_collision.json");
-        out << R"({"surfaces":[{"surface":"asphalt","vertex_offset":)" << vertex_offset
+        out << "{" << format_field << R"("surfaces":[{"surface":"asphalt","vertex_offset":)" << vertex_offset
             << R"(,"vertex_count":)" << vertex_count << R"(,"index_offset":)" << index_offset
             << R"(,"index_count":)" << index_count << "}]}";
     }
@@ -222,5 +228,76 @@ TEST_CASE("load_test_ground_collision rejects a truncated or corrupt .bin loudly
         track.write_json(0, 3, 36, 3);
         REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
                             ContainsSubstring("cannot open"));
+    }
+}
+
+// PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: strict "format"
+// checks, no legacy support). data/tracks/test_ground/test_ground_collision.json
+// itself is read-only (owned by trackgen) and already carries
+// "physics_sim.collision/1" (see the "creates one static body per surface
+// group" case above, which exercises that real file's format field
+// implicitly) - these cases use the synthetic track dir to cover the
+// rejection paths without touching it.
+TEST_CASE("load_test_ground_collision rejects a missing, unknown or outdated 'format'", "[io][test_ground][format]") {
+    io::SurfaceTable surfaces(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+    using Catch::Matchers::ContainsSubstring;
+
+    SECTION("missing entirely") {
+        SyntheticTrackDir track("format_missing");
+        track.write_json_with_format("", 0, 3, 36, 3);
+        track.write_bin(one_triangle_bin());
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
+                            ContainsSubstring("'format'"));
+    }
+    SECTION("wrong kind") {
+        SyntheticTrackDir track("format_wrongkind");
+        track.write_json_with_format(R"("format":"physics_sim.track/1",)", 0, 3, 36, 3);
+        track.write_bin(one_triangle_bin());
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
+                            ContainsSubstring("unsupported 'format'"));
+    }
+    SECTION("outdated major") {
+        SyntheticTrackDir track("format_outdated");
+        track.write_json_with_format(R"("format":"physics_sim.collision/0",)", 0, 3, 36, 3);
+        track.write_bin(one_triangle_bin());
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
+                            ContainsSubstring("unsupported 'format'"));
+    }
+}
+
+// PLAN.md P4 I0: ps::io::SurfaceTable's own "format" check
+// (data/surfaces/surfaces.json already carries "physics_sim.surfaces/1",
+// exercised implicitly by every other TEST_CASE in this file).
+TEST_CASE("SurfaceTable rejects a missing, unknown or outdated 'format'", "[io][surface_table][format]") {
+    using Catch::Matchers::ContainsSubstring;
+
+    struct TempSurfacesJson {
+        std::filesystem::path path;
+        explicit TempSurfacesJson(const std::string& format_field) {
+            path = std::filesystem::temp_directory_path() /
+                   ("ps_test_surfaces_format_" + std::to_string(std::random_device{}()) + ".json");
+            std::ofstream out(path);
+            out << "{" << format_field << R"("surfaces":{"asphalt":{"lambda_mu":1.0,"crr":0.01}}})";
+        }
+        ~TempSurfacesJson() {
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
+    };
+
+    SECTION("missing entirely") {
+        TempSurfacesJson f("");
+        REQUIRE_THROWS_WITH(io::SurfaceTable(f.path.string()), ContainsSubstring("'format'"));
+    }
+    SECTION("wrong kind") {
+        TempSurfacesJson f(R"("format":"physics_sim.terrain/1",)");
+        REQUIRE_THROWS_WITH(io::SurfaceTable(f.path.string()), ContainsSubstring("unsupported 'format'"));
+    }
+    SECTION("outdated major") {
+        TempSurfacesJson f(R"("format":"physics_sim.surfaces/0",)");
+        REQUIRE_THROWS_WITH(io::SurfaceTable(f.path.string()), ContainsSubstring("unsupported 'format'"));
     }
 }

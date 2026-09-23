@@ -72,6 +72,21 @@ struct SurfaceGroup {
     std::size_t index_count = 0;   // uint32 indices (triangle_count * 3)
 };
 
+// PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: strict check, no
+// legacy support). data/tracks/test_ground/test_ground_collision.json is
+// owned by a separate session (trackgen) and read-only from here; it
+// already carries "physics_sim.collision/1" (checked, not edited).
+void require_format(const json& j, const std::string& json_path) {
+    const std::string expected = "physics_sim.collision/1";
+    if (!j.contains("format") || !j.at("format").is_string()) {
+        throw std::runtime_error(json_path + ": missing required 'format' field (expected \"" + expected + "\")");
+    }
+    const std::string actual = j.at("format").get<std::string>();
+    if (actual != expected) {
+        throw std::runtime_error(json_path + ": unsupported 'format' \"" + actual + "\" (expected \"" + expected + "\")");
+    }
+}
+
 std::vector<SurfaceGroup> read_groups(const json& j) {
     std::vector<SurfaceGroup> groups;
     for (const auto& sj : j.at("surfaces")) {
@@ -101,6 +116,7 @@ std::vector<BodyId> load_test_ground_collision(World& world, const std::string& 
     } catch (const json::parse_error& e) {
         throw std::runtime_error("malformed JSON in " + json_path.string() + ": " + e.what());
     }
+    require_format(j, json_path.string());
 
     const std::vector<unsigned char> bin = read_whole_file(bin_path);
 

@@ -161,6 +161,23 @@ TerrainSpec load_terrain_spec(const std::string& path) {
         throw std::runtime_error("terrain.json parse error in " + path + ": " + e.what());
     }
 
+    // PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: strict check, no
+    // legacy support). data/tracks/test_ground/terrain.json (read-only,
+    // owned by trackgen) already carries "physics_sim.terrain/1"; the
+    // editable data/scenarios/terrain_spec_small.json does too.
+    {
+        const std::string expected = "physics_sim.terrain/1";
+        if (!j.contains("format") || !j.at("format").is_string()) {
+            throw std::runtime_error("terrain spec " + path + ": missing required 'format' field (expected \"" +
+                                      expected + "\")");
+        }
+        const std::string actual = j.at("format").get<std::string>();
+        if (actual != expected) {
+            throw std::runtime_error("terrain spec " + path + ": unsupported 'format' \"" + actual +
+                                      "\" (expected \"" + expected + "\")");
+        }
+    }
+
     TerrainSpec spec;
     spec.seed = j.at("seed").get<std::uint32_t>();
 

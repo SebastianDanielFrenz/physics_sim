@@ -10,9 +10,14 @@
 #include "ps/io/scenario.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <random>
+#include <sstream>
+#include <string>
 
 using namespace ps;
 
@@ -46,4 +51,55 @@ TEST_CASE("data/scenarios/articulation_chain.json loads, builds and steps", "[un
     const real q0 = built.world->joint_position(art, 0);
     CHECK(std::isfinite(q0));
     CHECK(built.world->state_hash() != 0);
+}
+
+// PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: strict "format"
+// checks, no legacy support). Every data/scenarios/*.json file already
+// carries "physics_sim.scenario/1" (exercised implicitly by the test
+// above); these cases rewrite ONLY the "format" line of a copy of
+// articulation_chain.json into a scratch temp file.
+namespace {
+struct TempScenarioJson {
+    std::filesystem::path path;
+    explicit TempScenarioJson(const std::string& contents) {
+        path = std::filesystem::temp_directory_path() /
+               ("ps_test_scenario_format_" + std::to_string(std::random_device{}()) + ".json");
+        std::ofstream out(path);
+        out << contents;
+    }
+    ~TempScenarioJson() {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+    }
+};
+
+std::string real_scenario_json_with_format(const std::string& format_line) {
+    const std::filesystem::path src = std::filesystem::path(PS_SOURCE_DIR) / "data" / "scenarios" / "articulation_chain.json";
+    std::ifstream f(src);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string content = ss.str();
+    const std::string needle = R"("format": "physics_sim.scenario/1",)";
+    const std::size_t pos = content.find(needle);
+    REQUIRE(pos != std::string::npos); // sanity: the real file's own format field, unchanged
+    content.replace(pos, needle.size(), format_line);
+    return content;
+}
+} // namespace
+
+TEST_CASE("load_scenario rejects a missing, unknown or outdated 'format'", "[unit][io][format]") {
+    using Catch::Matchers::ContainsSubstring;
+
+    SECTION("missing entirely") {
+        TempScenarioJson f(real_scenario_json_with_format(""));
+        REQUIRE_THROWS_WITH(io::load_scenario(f.path.string()), ContainsSubstring("'format'"));
+    }
+    SECTION("wrong kind") {
+        TempScenarioJson f(real_scenario_json_with_format(R"("format": "physics_sim.vehicle/1",)"));
+        REQUIRE_THROWS_WITH(io::load_scenario(f.path.string()), ContainsSubstring("unsupported 'format'"));
+    }
+    SECTION("outdated major") {
+        TempScenarioJson f(real_scenario_json_with_format(R"("format": "physics_sim.scenario/0",)"));
+        REQUIRE_THROWS_WITH(io::load_scenario(f.path.string()), ContainsSubstring("unsupported 'format'"));
+    }
 }

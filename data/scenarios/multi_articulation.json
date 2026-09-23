@@ -1,4 +1,5 @@
 {
+  "format": "physics_sim.scenario/1",
   "name": "multi_articulation",
   "duration_s": 5.0,
   "tick_rate_hz": 240.0,
