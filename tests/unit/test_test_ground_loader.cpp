@@ -24,7 +24,6 @@
 #include "ps/world/world.h"
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstdint>
@@ -166,19 +165,6 @@ std::vector<unsigned char> one_triangle_bin(std::uint32_t third_index = 2) {
     return bytes;
 }
 
-// The loader's exception message, or "" if it did not throw. Caught here
-// rather than via REQUIRE_THROWS_WITH: on the clang-cl presets Catch2's own
-// library is built without /EHsc (ps_options only reaches this project's
-// targets), so Catch2 cannot translate an in-flight exception's message.
-std::string load_error(World& world, const SyntheticTrackDir& track, const io::SurfaceTable& surfaces) {
-    try {
-        io::load_test_ground_collision(world, track.dir.string(), surfaces);
-    } catch (const std::runtime_error& e) {
-        return e.what();
-    }
-    return "";
-}
-
 } // namespace
 
 TEST_CASE("load_test_ground_collision rejects a truncated or corrupt .bin loudly", "[io][test_ground]") {
@@ -200,41 +186,41 @@ TEST_CASE("load_test_ground_collision rejects a truncated or corrupt .bin loudly
         std::vector<unsigned char> bytes = one_triangle_bin();
         bytes.resize(44);
         track.write_bin(bytes);
-        REQUIRE_THAT(load_error(world, track, surfaces),
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
                             ContainsSubstring("index block") && ContainsSubstring("truncated or corrupt"));
     }
     SECTION("empty .bin") {
         SyntheticTrackDir track("empty");
         track.write_json(0, 3, 36, 3);
         track.write_bin({});
-        REQUIRE_THAT(load_error(world, track, surfaces),
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
                             ContainsSubstring("vertex block") && ContainsSubstring("truncated or corrupt"));
     }
     SECTION("vertex offset past the end of the file") {
         SyntheticTrackDir track("offset");
         track.write_json(4096, 3, 36, 3);
         track.write_bin(one_triangle_bin());
-        REQUIRE_THAT(load_error(world, track, surfaces),
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
                             ContainsSubstring("vertex block") && ContainsSubstring("truncated or corrupt"));
     }
     SECTION("a count so large that offset + count * size would overflow") {
         SyntheticTrackDir track("overflow");
         track.write_json(0, std::numeric_limits<std::size_t>::max() / 4, 36, 3);
         track.write_bin(one_triangle_bin());
-        REQUIRE_THAT(load_error(world, track, surfaces),
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
                             ContainsSubstring("vertex block") && ContainsSubstring("truncated or corrupt"));
     }
     SECTION("a triangle index past the group's own vertex block") {
         SyntheticTrackDir track("badindex");
         track.write_json(0, 3, 36, 3);
         track.write_bin(one_triangle_bin(3));
-        REQUIRE_THAT(load_error(world, track, surfaces),
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
                             ContainsSubstring("triangle index 3") && ContainsSubstring("corrupt"));
     }
     SECTION("missing .bin") {
         SyntheticTrackDir track("missing");
         track.write_json(0, 3, 36, 3);
-        REQUIRE_THAT(load_error(world, track, surfaces),
+        REQUIRE_THROWS_WITH(io::load_test_ground_collision(world, track.dir.string(), surfaces),
                             ContainsSubstring("cannot open"));
     }
 }

@@ -230,6 +230,46 @@ if(PS_BUILD_TESTS)
     GIT_TAG        v3.16.0
   )
   FetchContent_MakeAvailable(Catch2)
+
+  # Catch2's own library must be built with C++ exceptions ON, or its
+  # exception translator (what REQUIRE_THROWS_WITH/_MATCHES and "unexpected
+  # exception" reporting use) is compiled as a stub that aborts with
+  # "Attempted to translate active exception under
+  # CATCH_CONFIG_DISABLE_EXCEPTIONS!". Catch2 decides per TU from
+  # _CPPUNWIND/__cpp_exceptions. For clang-cl that means /EHsc must be on
+  # its command line, and nothing guarantees it: /EHsc lives only in
+  # CMake's default CMAKE_CXX_FLAGS, which any preset that sets
+  # CMAKE_CXX_FLAGS itself replaces (debug: /Z7; asan: -fsanitize=address),
+  # and ps_options' /EHsc reaches only this project's own targets. Added
+  # PRIVATE to exactly the two Catch2 targets, so it cannot leak into any
+  # other third-party code (Jolt strips /EHsc from its own flags anyway,
+  # CPP_EXCEPTIONS_ENABLED OFF). Real cl.exe gets the same flag
+  # harmlessly. Rationale: vault TOOL-019.
+  if(MSVC)
+    target_compile_options(Catch2 PRIVATE /EHsc)
+    target_compile_options(Catch2WithMain PRIVATE /EHsc)
+  endif()
+  # clang-cl 19.1.5 + -fsanitize=address + optimisation (the asan preset is
+  # RelWithDebInfo): ASan's STACK-variable instrumentation breaks the catch
+  # parameter of a function that catches by reference or by value. The
+  # MSVC EH runtime writes the exception object's address into the frame
+  # slot its EH tables name, but ASan has moved that variable into its own
+  # instrumented stack layout, so the handler reads garbage
+  # (access-violation at 0xffffffffffffffff). Reproduced with a 15-line
+  # two-file program and no project code: fine at /Od, fine without ASan,
+  # fine with -mllvm -asan-stack=0, still broken with use-after-return
+  # instrumentation off. It is decided purely on the CATCHING side.
+  # Catch2's exception translator catches std::exception by reference, so
+  # every REQUIRE_THROWS_WITH/_MATCHES would crash in the asan leg. Turn
+  # stack instrumentation off for the two Catch2 targets only: they are
+  # still ASan-built (heap/global checks and the STL annotation ABI match,
+  # so they still link against ASan objects), and our own code keeps full
+  # stack instrumentation. Linux ASan (Itanium EH) is unaffected. Vault
+  # TOOL-019.
+  if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_FLAGS MATCHES "-fsanitize=address")
+    target_compile_options(Catch2 PRIVATE "SHELL:-mllvm -asan-stack=0")
+    target_compile_options(Catch2WithMain PRIVATE "SHELL:-mllvm -asan-stack=0")
+  endif()
 endif()
 
 # --- godot-cpp — adapter only (P2). Only fetched when explicitly requested;

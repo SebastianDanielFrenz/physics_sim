@@ -150,9 +150,21 @@ physics_sim/
 | Dependency   | Pin      | Notes |
 |--------------|----------|-------|
 | JoltPhysics  | `v5.6.0` | `DOUBLE_PRECISION ON`, `CROSS_PLATFORM_DETERMINISTIC ON`, `USE_AVX2 ON`, `USE_FMADD OFF`, GPU-compute options OFF, sample/test/viewer targets OFF |
-| Catch2       | `v3.16.0`| only when `PS_BUILD_TESTS=ON` |
+| Catch2       | `v3.16.0`| only when `PS_BUILD_TESTS=ON`; its two targets get `/EHsc` PRIVATE under MSVC-family compilers (else clang-cl builds its exception translator as an aborting stub - REQUIRE_THROWS_WITH/_MATCHES would abort), plus `-mllvm -asan-stack=0` under clang-cl ASan only (clang-cl 19.1.5 ASan stack instrumentation corrupts an optimised function's catch parameter; see "Windows ASan caveat" below) |
 | nlohmann/json| `v3.12.0`| linked `PRIVATE` into `ps_core` (JSON parsing, confined to `core/src/io/*.cpp` and `core/src/terrain/procedural_terrain_source.cpp`); also linked into `ps_unit_tests` for `test_terrain_golden.cpp`'s direct golden-file parse |
 | godot-cpp    | branch `4.5` | only when `PS_BUILD_GODOT_ADAPTER=ON` |
+
+**Windows ASan caveat (clang-cl 19.1.5, vault TOOL-019):** in the `asan` preset
+(RelWithDebInfo + `-fsanitize=address`), any function that `catch`es an
+exception by reference or value and then touches it (`e.what()`) reads
+garbage and crashes (access-violation at `0xffffffffffffffff`) - ASan's
+stack instrumentation moves the catch parameter away from the slot MSVC's
+EH runtime writes. Catching only by type (`CHECK_THROWS_AS`, `catch (...)`)
+is fine. Catch2 is built with `-asan-stack=0` to avoid it (above). Our own
+`catch (const json::parse_error& e)` sites in `core/src/io/*.cpp`,
+`procedural_terrain_source.cpp` and `ps_run`'s top-level handler still hit it,
+so an error-path test for those would crash in this leg only; Linux ASan
+(Itanium EH) is unaffected.
 
 ## CMake presets
 
