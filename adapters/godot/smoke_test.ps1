@@ -52,50 +52,11 @@ function Report-Ok {
     Write-Host "ok: $Message" -ForegroundColor Green
 }
 
-# ---------------------------------------------------------------------------
-# VS 2022 Build Tools developer environment (same approach as tools/ci.ps1's
-# Enter-VsDevShell - duplicated here rather than dot-sourcing that file,
-# since ci.ps1 is the other agent's lane right now).
-# ---------------------------------------------------------------------------
-function Enter-VsDevShell {
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-                [Environment]::GetEnvironmentVariable('Path', 'User')
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found; VS 2022 Build Tools not installed" }
-    $vsPath = & $vswhere -products * -latest -property installationPath
-    if (-not $vsPath) { throw "vswhere found no VS installation" }
-    $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-    if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found under $vsPath" }
-    # vcvars64.bat internally makes its OWN vswhere.exe call inside a
-    # narrower cmd.exe PATH and prints a benign "vswhere.exe is not
-    # recognized" line to stderr when that inner call fails - cosmetic,
-    # vcvars64.bat still resolves the toolchain correctly afterward (see
-    # out/handover_p3.md's identical note for tools/ci.ps1's own copy of
-    # this same pattern). With this script's $ErrorActionPreference =
-    # 'Stop', that stderr line would otherwise be promoted to a terminating
-    # NativeCommandError and abort the whole build - redirect cmd.exe's
-    # stderr to $null so only the "set" output (stdout) is parsed below.
-    $previousEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $envLines = cmd.exe /c "`"$vcvars`" && set"
-    $ErrorActionPreference = $previousEap
-    foreach ($line in $envLines) {
-        if ($line -match '^([^=]+)=(.*)$') {
-            [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
-        }
-    }
-    if (-not (Get-Command clang-cl -ErrorAction SilentlyContinue)) {
-        throw "vcvars64.bat ran but clang-cl is still not on PATH"
-    }
-}
-
-function Find-GodotConsoleExe {
-    $candidates = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter "Godot_v*_console.exe" -ErrorAction SilentlyContinue
-    if (-not $candidates -or $candidates.Count -eq 0) {
-        throw "Godot console executable not found under WinGet packages (expected Godot_v4.7.2-stable_win64_console.exe)"
-    }
-    return $candidates[0].FullName
-}
+# Enter-VsDevShell / Find-GodotConsoleExe / cmake configure+build wrappers
+# now live in godot_common.ps1, shared with the repo-root drive.ps1 -
+# behaviour/output below is unchanged, only the duplicated function bodies
+# moved.
+. (Join-Path $PSScriptRoot 'godot_common.ps1')
 
 Write-Host "=== PLAN.md P2 headless smoke test ===" -ForegroundColor Cyan
 Write-Host "repo root: $repoRoot"
@@ -105,17 +66,13 @@ if (-not $SkipBuild) {
     Enter-VsDevShell
 
     Write-Host "`n-- configure --" -ForegroundColor Cyan
-    & cmake -S $repoRoot -B $buildDir -G Ninja `
-        -DCMAKE_CXX_COMPILER=clang-cl `
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-        -DPS_BUILD_TESTS=OFF `
-        -DPS_BUILD_GODOT_ADAPTER=ON
-    if ($LASTEXITCODE -ne 0) { Report-Fail "cmake configure failed (exit $LASTEXITCODE)"; }
+    $configureExitCode = Invoke-AdapterCMakeConfigure -RepoRoot $repoRoot -BuildDir $buildDir
+    if ($configureExitCode -ne 0) { Report-Fail "cmake configure failed (exit $configureExitCode)"; }
 
     if ($script:Failures.Count -eq 0) {
         Write-Host "`n-- build --" -ForegroundColor Cyan
-        & cmake --build $buildDir --target ps_godot_adapter ps_godot_test_input_map ps_godot_test_origin_rebase
-        if ($LASTEXITCODE -ne 0) { Report-Fail "cmake build failed (exit $LASTEXITCODE)" }
+        $buildExitCode = Invoke-AdapterCMakeBuild -BuildDir $buildDir -Targets @('ps_godot_adapter', 'ps_godot_test_input_map', 'ps_godot_test_origin_rebase')
+        if ($buildExitCode -ne 0) { Report-Fail "cmake build failed (exit $buildExitCode)" }
     }
 }
 

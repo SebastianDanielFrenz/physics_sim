@@ -12,6 +12,8 @@ physics_sim/
   README.md                           setup pointer
   CLAUDE.md                           this file
   PLAN.md                             design and phase plan
+  drive.ps1                           incremental adapter build + launch Godot on the demo ("build and go drive"); dot-sources adapters/godot/godot_common.ps1
+  drive.cmd                           thin cmd.exe wrapper around drive.ps1 (so `drive` works the same from cmd.exe, PowerShell or double-click)
   tools/
     setup_dev_env.ps1                 installs/verifies the dev toolchain (-CheckOnly to only verify)
     ci.ps1                            CI at three levels: -Affected/-Topic (per change), default fast, -Full (see "CI" below)
@@ -66,6 +68,7 @@ physics_sim/
     tracks/test_ground/               owned by a separate session (trackgen), READ-ONLY from ps_core: terrain.json/terrain_golden.json (ProceduralTerrainSource's golden reference), test_ground_collision.json/.bin (ps::io::load_test_ground_collision's input - see "Test-ground static collision" below for the .bin's byte-offset layout)
   adapters/
     godot/                            GDExtension adapter + demo project (P2/M1); built by its own adapters/godot/smoke_test.ps1 (own build dir out/build/godot-adapter) or with PS_BUILD_GODOT_ADAPTER=ON. src/fall_detector.h: Godot-free fall diagnostic called from PsSimulation's sim-thread post_step - prints ONE "ps_godot FALL DETECTED ... END FALL REPORT" block per event when a vehicle's chassis centre drops more than 2.0 m below the terrain source's own height at its XY (tick, sim time, chassis pose/velocity, tile key under the car, resident/starved/precomputed tile counts, static collision under the chassis, per-wheel contact/surface); smoke_test.ps1 fails if it fires during the --m1-autopilot drive
+      godot_common.ps1                shared helper (dot-sourced by smoke_test.ps1 and the root drive.ps1, never run directly): Enter-VsDevShell, Find-GodotConsoleExe/Find-GodotExe, Invoke-AdapterCMakeConfigure/Build (return cmake's exit code; their own stdout is piped through Out-Host, not left in the function's return value - concatenating the two silently broke `-ne 0` exit-code checks once, see the file's own comment), Test-AdapterConfigured, Test-DllLocked (drive.ps1's locked-DLL-before-build check)
 ```
 
 ## Targets
