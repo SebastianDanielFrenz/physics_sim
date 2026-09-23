@@ -57,6 +57,11 @@ public:
     }
 
     [[nodiscard]] bool empty() const { return instances_.empty(); }
+    // Number of live articulations - instances_ is indexed 0..count()-1 in
+    // ArticulationId order (create()'s own comment above), so this lets a
+    // caller enumerate every articulation by id without any other System
+    // internals (PLAN.md P2 adapter seam: World::stage_snapshot() below).
+    [[nodiscard]] std::size_t count() const { return instances_.size(); }
 
 private:
     std::vector<std::unique_ptr<Instance>> instances_;

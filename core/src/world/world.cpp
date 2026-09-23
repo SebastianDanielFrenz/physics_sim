@@ -201,6 +201,39 @@ void World::stage_snapshot() {
     for (BodyId id : live_body_ids_scratch_) {
         snap.bodies.push_back(BodySnapshot{id, backend_->get_pose(id), backend_->get_motion(id)});
     }
+
+    // PLAN.md D10/P1.5a + P2 adapter seam (this task's step 3): every live
+    // articulation's link poses, in ArticulationId order (System::count()'s
+    // own comment - instances_ is already indexed that way). This stage
+    // runs inside a job every tick (PLAN.md D8), so - exactly like `bodies`
+    // above - it must stay allocation-free once warmed up: resize() (not
+    // clear()+push_back on the outer vector) keeps each of the triple
+    // buffer's 3 WorldSnapshot slots' own `articulations` AND each
+    // ArticulationSnapshot's own `links` vector at their steady-state
+    // capacity across ticks, rather than destroying and rebuilding them
+    // fresh every tick (an earlier version of this stage did exactly that
+    // and tripped test_articulation_parallel_alloc.cpp's zero-alloc check).
+    const std::size_t articulation_count = articulation_system_->count();
+    snap.articulations.resize(articulation_count);
+    for (std::size_t i = 0; i < articulation_count; ++i) {
+        const ArticulationId id{static_cast<id_index_t>(i), 1};
+        const articulation::Instance& inst = articulation_system_->at(id);
+        ArticulationSnapshot& asnap = snap.articulations[i];
+        asnap.id = id;
+        asnap.links.clear();
+        asnap.links.push_back(ArticulationLinkSnapshot{-1, inst.link_world_pose(-1), inst.link_world_motion(-1)});
+        for (int link_index = 0; link_index < inst.link_count(); ++link_index) {
+            asnap.links.push_back(ArticulationLinkSnapshot{link_index, inst.link_world_pose(link_index), inst.link_world_motion(link_index)});
+        }
+    }
+
+    // PLAN.md P2 adapter seam (this task's step 3): a race-free copy of this
+    // tick's contact events - see snapshot.h's own comment on why this must
+    // be a copy, not a reference to last_contact_events_, for a cross-thread
+    // reader (PLAN.md D3). Assignment (not clear()+insert) so the slot's
+    // existing capacity is reused once warmed up, same reasoning as above.
+    snap.contacts = last_contact_events_;
+
     snapshots_->publish();
 }
 

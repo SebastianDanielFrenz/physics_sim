@@ -119,6 +119,12 @@ public:
     [[nodiscard]] real joint_velocity(int link_index) const;
     [[nodiscard]] Pose link_world_pose(int link_index) const; // link_index == -1 -> root
     [[nodiscard]] Motion link_world_motion(int link_index) const;
+    // Number of public links (ArticulationDesc::links.size(), i.e.
+    // link_to_body_'s size) - the root (link_index == -1) is not counted
+    // here. PLAN.md P2 adapter seam / this task's step 3: lets
+    // World::stage_snapshot() enumerate every link's pose/motion into
+    // WorldSnapshot without needing any other internal articulation type.
+    [[nodiscard]] int link_count() const { return static_cast<int>(link_to_body_.size()); }
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 

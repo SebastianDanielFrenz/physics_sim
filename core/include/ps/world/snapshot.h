@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "ps/backend/i_rigid_backend.h" // ContactEvent - plain struct, no Jolt/Godot type (PLAN.md D2)
 #include "ps/math/pose.h"
 #include "ps/world/ids.h"
 
@@ -27,10 +28,56 @@ struct BodySnapshot {
     Motion motion;
 };
 
+// PLAN.md D10/P1.5a + P2 adapter report / this task's step 3: one live
+// articulation's pose/motion, additive to WorldSnapshot. `links[0]` is
+// always the root (link_index == -1 in World::joint_position et al. -
+// meaningful pose/motion even for a fixed, non-floating root, since
+// Instance::link_world_pose(-1) returns the articulation's own held root
+// pose either way); `links[1 + i]` is public link index `i`
+// (ArticulationDesc::links[i]), in the same order World's own
+// joint_position(id, link_index)/link_frame(id, link_index) address them -
+// an adapter never needs to know the internal body numbering the solver
+// uses (PLAN.md D10's own scope: reduced-coordinate internals stay
+// internal).
+struct ArticulationLinkSnapshot {
+    int link_index = -1; // -1 == root, else the ArticulationDesc::links index
+    Pose pose;
+    Motion motion;
+};
+
+struct ArticulationSnapshot {
+    ArticulationId id;
+    std::vector<ArticulationLinkSnapshot> links; // root first, then link 0, 1, 2, ...
+};
+
 struct WorldSnapshot {
     std::uint64_t tick = 0;
     real sim_time = 0.0;
     std::vector<BodySnapshot> bodies;
+
+    // PLAN.md D10/P1.5a + P2 adapter report, this task's step 3: every live
+    // articulation's link poses, filled by World::stage_snapshot() from
+    // articulation::System - additive; a World with no articulations
+    // publishes an empty vector here exactly like it always has for
+    // `bodies` (an articulation's own Jolt-backed collision proxies, if
+    // any - PLAN.md P1.5b's ProxyBody strategy - already appear in `bodies`
+    // like any other body; this is only the reduced-coordinate link poses
+    // themselves, which have no IRigidBackend body at all).
+    std::vector<ArticulationSnapshot> articulations;
+
+    // PLAN.md P2 adapter report, this task's step 3: a RACE-FREE copy of
+    // this tick's contact events, filled by World::stage_snapshot() from
+    // World::last_contact_events() (itself filled earlier in the same
+    // tick's pipeline, stage_backend_step - see world.cpp). World::
+    // last_contact_events() returns a live reference that the NEXT tick's
+    // stage_backend_step overwrites in place; a reader on another thread
+    // (PLAN.md D3: "the adapter runs the sim on its own thread") calling
+    // that accessor between ticks would be racing the sim thread's next
+    // drain_contact_events_into call with no synchronisation at all. This
+    // field instead travels through the same SnapshotTripleBuffer::publish
+    // hand-off every other field here does, so a reader only ever sees a
+    // complete, stable, already-published tick's contacts.
+    std::vector<ContactEvent> contacts;
 
     // Deformation payload seam (PLAN.md section 6): empty in P1. A future
     // deformable body type can populate this per-body blob without changing

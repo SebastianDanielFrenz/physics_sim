@@ -7,6 +7,7 @@ add_executable(ps_unit_tests
   test_math.cpp
   test_jobs.cpp
   test_world_basic.cpp
+  test_world_snapshot.cpp
   test_articulation_core.cpp
   test_articulation_four_bar.cpp
   test_articulation_parallel_alloc.cpp
