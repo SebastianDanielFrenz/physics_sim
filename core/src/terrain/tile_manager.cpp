@@ -656,6 +656,9 @@ void TileManager::precompute_suppression(jobs::JobSystem& jobs) {
         }
     }
 
+    // `keys` is iterated in hash order, but only to collect; the sort below
+    // (by the unique TileKey::packed) fixes the order before anything
+    // depends on it (ordering rule, tile_manager.h / vault PHYS-026).
     std::vector<TileKey> todo;
     todo.reserve(keys.size());
     for (const auto& [packed, k] : keys) {

@@ -50,6 +50,7 @@
 #include "ps/terrain/terrain_source.h"
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -188,15 +189,27 @@ private:
     TerrainConfig config_;
     IRigidBackend& backend_;
 
+    // ORDERING RULE (PLAN.md D7, vault PHYS-026): nothing that decides
+    // simulation state, slot assignment or the order of backend calls may
+    // iterate an unordered container - MSVC's and libstdc++'s iteration
+    // orders differ, so Windows and Linux would diverge. The unordered
+    // containers below are lookup-only (find/count/insert/erase/size) and
+    // must stay that way; anything iterated is a vector, a std::map, or is
+    // sorted first.
     std::vector<Slot> slots_;
-    std::unordered_map<std::int64_t, std::size_t> key_to_slot_; // TileKey::packed -> slots_ index
+    std::unordered_map<std::int64_t, std::size_t> key_to_slot_; // TileKey::packed -> slots_ index (lookup only)
     std::vector<std::size_t> free_slots_;                       // never-yet-assigned slot indices
     // Every slot's BodyId (index, generation), packed - fixed for this
     // TileManager's whole lifetime (see is_own_pool_body's doc comment).
     // Built once in the constructor, right after every slot's body exists.
-    std::unordered_set<std::uint64_t> own_pool_body_ids_;
+    std::unordered_set<std::uint64_t> own_pool_body_ids_; // lookup only
 
-    std::unordered_map<std::uint64_t, InterestPoint> interest_points_;
+    // Iterated every update() to build the needed-key list, which decides
+    // fill-queue order and therefore which pool slot (BodyId) gets which
+    // tile: ordered by interest-point id, identical on every platform.
+    // Updating an existing id (e.g. a vehicle's point every tick) does not
+    // allocate; only adding a new id does (setup time).
+    std::map<std::uint64_t, InterestPoint> interest_points_;
 
     std::size_t resident_count_ = 0;
     std::size_t last_starved_count_ = 0;
@@ -222,7 +235,7 @@ private:
     // vector), so a revisit skips even the cheap level-1 broad probe.
     // Also filled at load time by precompute_suppression (PHYS-021 Task B),
     // so a precomputed tile's first fill is already a hit.
-    std::unordered_map<std::int64_t, std::vector<std::uint32_t>> suppression_cache_;
+    std::unordered_map<std::int64_t, std::vector<std::uint32_t>> suppression_cache_; // lookup only
     std::vector<TileKey> precomputed_keys_; // ascending by TileKey::packed
     std::size_t lazy_suppression_count_ = 0;
     // The lazy path's scratch - TileManager-wide (not per-slot):
