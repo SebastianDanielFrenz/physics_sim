@@ -31,7 +31,8 @@ physics_sim/
       backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc, ShapeContactHit, ContactEvent, create_jolt_backend()); shape_desc.h (ShapeDesc/BoxShape/SphereShape/CapsuleShape/MeshShape/HeightfieldShape - split out of i_rigid_backend.h so articulation_desc.h can use ShapeDesc without pulling in the backend's JointType)
       articulation/                   articulation_desc.h (ArticulationDesc incl. contact_strategy, RootDesc, LinkDesc incl. contact, JointType, JointLimits, VelocityActuator, LoopClosureDesc/LoopClosureType, ContactStrategy, ContactMaterial, LinkContactDesc) - descriptors only, no algorithm code
       terrain/                        terrain_source.h (ITerrainSource, TileKey, TileSample), terrain_config.h (TerrainConfig - pool sizing only, NOT grid resolution, see "Terrain tile system" below), procedural_terrain.h (load_procedural_terrain_source() factory)
-      io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario incl. ScenarioArticulation/ScenarioTerrain, load_scenario, build_scenario), surface_table.h (SurfaceTable), test_ground_loader.h (load_test_ground_collision())
+      vehicle/                        public, additive descriptors/seams only (PLAN.md 5.1/P3, no algorithm code - see "Vehicle system" below): vehicle_desc.h (VehicleDesc/WheelDesc/SuspensionDesc/SteeringDesc/BrakeDesc/DriveDesc/Curve1D), tyre_desc.h (TyreDesc, Pacejka MF5.2/6.1-subset coefficients), tyre_model.h (ITyreModel, TyreSlipInput/TyreForces, create_pacejka_tyre_model(), SlipRelaxationState/step_slip_relaxation()), wheel_telemetry.h (WheelTelemetry, returned by World::wheel_telemetry())
+      io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario incl. ScenarioArticulation/ScenarioTerrain/ScenarioVehicle/ScenarioControlEvent, load_scenario, build_scenario), surface_table.h (SurfaceTable), test_ground_loader.h (load_test_ground_collision()), vehicle_io.h (load_tyre_json(), load_vehicle_json())
     src/                              implementation
       version.cpp, jolt_proof.cpp
       math/math_check.cpp             compiles every math header once + static_asserts (math/ is otherwise header-only)
@@ -42,20 +43,24 @@ physics_sim/
       backend/jolt/jolt_backend.cpp   the only P1 IRigidBackend implementation; every Jolt type is confined to this file + jolt_job_system.h
       articulation/                   INTERNAL (ps::articulation, not a public header); see "Articulation solver" below, incl. contact.h/.cpp (ContactCoupling) and contact_source.h (IContactSubstepSource)
       terrain/                        INTERNAL; see "Terrain tile system" below: procedural_terrain_source.h/.cpp (TerrainSpec, ProceduralTerrainSource), procedural_terrain.cpp (factory impl), tile_manager.h/.cpp (TileManager)
-      io/telemetry.cpp, io/scenario.cpp, io/surface_table.cpp, io/test_ground_loader.cpp
-      vehicle/ drivetrain/ aero/ machine/   empty (.gitkeep) until P3+
+      io/telemetry.cpp, io/scenario.cpp, io/surface_table.cpp, io/test_ground_loader.cpp, io/vehicle_io.cpp
+      vehicle/                        INTERNAL (ps::vehicle, not a public header); see "Vehicle system" below: tyre_desc.h+tyre_model.h's implementation is pacejka_tyre_model.cpp, tir_parser.h/.cpp (.tir file parser), suspension.h (header-only spring/damper/bump-stop/ARB force functions), wheel_instance.h/.cpp (WheelInstance: contact measurement + tyre/suspension substep), vehicle_instance.h/.cpp (VehicleInstance: chassis extrapolation, Ackermann steering, brake/drive torque split), system.h/.cpp (System, mirrors articulation::System)
+      drivetrain/ aero/ machine/       empty (.gitkeep) until P4+
   tests/
     support/                          test-only shared helpers (not part of ps_core)
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
-    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_world_snapshot (ArticulationSnapshot/contacts additions), test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case), test_mesh_heightfield_shapes (MeshShape/HeightfieldShape collision + surface ids), test_terrain_golden (ProceduralTerrainSource vs. terrain.py's golden points), test_terrain_tile_manager (white-box: seams, streaming, throttling, zero-alloc steady state), test_test_ground_loader (load_test_ground_collision + SurfaceTable)
-    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path), test_articulation_contact_measurements (Compliant/ProxyBody: a fixed-base arm resting on the ground, the same rig pressed with a known force, a rail rig pushing a dynamic crate, a floating-base vehicle drop, 5/20 m/s impacts; two [!mayfail] ProxyBody cases)
-    determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario, one case mixes Compliant/ProxyBody contact-bearing rail rigs with plain chains)
+      vehicle_test_helpers.h          PLAN.md P3: VehicleTestRig/build_vehicle_rig()/settle() - a World with a static ground box (flat or tilted) plus one vehicle built directly from a data/vehicles/*.json file; see "Vehicle system" below for the chassis-half-extents-vs-wheel-shape-cast constraint documented on build_vehicle_rig()
+    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_world_snapshot (ArticulationSnapshot/contacts additions), test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case), test_mesh_heightfield_shapes (MeshShape/HeightfieldShape collision + surface ids), test_terrain_golden (ProceduralTerrainSource vs. terrain.py's golden points), test_terrain_tile_manager (white-box: seams, streaming, throttling, zero-alloc steady state), test_test_ground_loader (load_test_ground_collision + SurfaceTable), test_pacejka_tyre_model (PLAN.md P3: MF5.2-subset pure/combined-slip curves, relaxation ODE, rolling resistance, cross-checked against an independent re-derivation and exact combined-slip-degeneracy identities)
+    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path), test_articulation_contact_measurements (Compliant/ProxyBody: a fixed-base arm resting on the ground, the same rig pressed with a known force, a rail rig pushing a dynamic crate, a floating-base vehicle drop, 5/20 m/s impacts; two [!mayfail] ProxyBody cases), test_vehicle_static (corner weights vs. hand calculation), test_vehicle_parking_slope (15% slope, <1mm creep in 30s), test_vehicle_step_steer (yaw-rate response does not grow after a step-steer input), test_vehicle_skidpad ([!mayfail]: steady lateral acceleration vs. a tyre-limited estimate, 5.2% over the 3% tolerance - see the test's own header comment), test_vehicle_braking ([!mayfail]: 100-0 km/h distance vs. a load-transfer-corrected mu estimate, 16% over the 3% tolerance - see the test's own header comment)
+    determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario, one case mixes Compliant/ProxyBody contact-bearing rail rigs with plain chains, one case adds two vehicles built directly from a VehicleDesc with a mid-run step-steer input)
     bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target bench_contact_coupling (plain main, also CTest-registered): cost per tick per contact strategy, scaling with contact count; target bench_terrain_tiles (plain main, also CTest-registered): tile-streaming cost/tick against the real test_ground terrain spec, simulated 50 km drive; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
   data/
-    vehicles/ tyres/ aircraft/        empty (.gitkeep) until P3+
+    vehicles/                         JSON ps::vehicle::VehicleDesc files (ps::io::load_vehicle_json - see "Vehicle system" below): car_sedan.json, tractor.json - geometry derived from data/models/*/*.rig.json's wheel pivots, plausible/published parameters with source noted per PLAN.md section 8
+    tyres/                            JSON ps::vehicle::TyreDesc files (ps::io::load_tyre_json) referenced by data/vehicles/*.json: passenger_car_225_45r17.json, tractor_front.json, tractor_rear.json
+    aircraft/                         empty (.gitkeep) until P6+
     surfaces/surfaces.json            ps::io::SurfaceTable input: name -> {lambda_mu, crr} (shared, deterministic, alphabetically-assigned SurfaceId space)
-    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json, multi_articulation.json (several open chains of different sizes, a floating base, a four-bar loop closure - Windows/Linux hash-compare and worker-count determinism), contact_articulation.json (one Compliant and one ProxyBody rail rig - same hash-compare/determinism coverage for P1.5b contact coupling), terrain_tiles.json + terrain_spec_small.json (a small synthetic ITerrainSource + tile-manager scenario, distinct from data/tracks/test_ground - same hash-compare/worker-count-determinism coverage for the M1 tile system)
+    scenarios/                        JSON scenario files (ps::io::Scenario schema): free_fall.json, pendulum.json, joint_chain.json, articulation_chain.json, multi_articulation.json (several open chains of different sizes, a floating base, a four-bar loop closure - Windows/Linux hash-compare and worker-count determinism), contact_articulation.json (one Compliant and one ProxyBody rail rig - same hash-compare/determinism coverage for P1.5b contact coupling), terrain_tiles.json + terrain_spec_small.json (a small synthetic ITerrainSource + tile-manager scenario, distinct from data/tracks/test_ground - same hash-compare/worker-count-determinism coverage for the M1 tile system), vehicle_step_steer.json (car_sedan.json on a flat static ground box, a step-steer control_event - ps_run-drivable vehicle scenario per PLAN.md P3 scope item 7; same hash-compare/worker-count-determinism coverage for the vehicle system, see tools/ci.ps1's `$script:HashCheckScenarios`)
     models/                           Godot art assets (glb + rig.json); owned by a separate session, do not touch
     tracks/test_ground/               owned by a separate session (trackgen), READ-ONLY from ps_core: terrain.json/terrain_golden.json (ProceduralTerrainSource's golden reference), test_ground_collision.json/.bin (ps::io::load_test_ground_collision's input - see "Test-ground static collision" below for the .bin's byte-offset layout)
   adapters/
@@ -214,17 +219,29 @@ PHYS-009 Step 1) runs one job per articulation via `ps::jobs::parallel_for`
 (batched by `WorldConfig::articulation_grain`, default auto - same formula
 as `force_element_grain`); instances are already in `ArticulationId` order
 so no separate ordered-gather step is needed (each job touches only its
-own `Instance`'s state, PLAN.md D8's scatter/compute pattern).
+own `Instance`'s state, PLAN.md D8's scatter/compute pattern). The same
+stage then calls `vehicle::System::step_all` (PLAN.md 5.1/P3, see "Vehicle
+system" below) right after the articulation pass, with the current
+`World::set_control`/`get_control` channel values (global, not per-vehicle)
+- also a no-op when `World` has no vehicles.
 
 Each stage records its own wall-clock duration to a
 `stage.<name>.ms` telemetry channel; `World::step` also records one
 `jobs.worker<N>.utilization` channel per worker (busy time / tick wall
-time). `World::state_hash()` folds `IRigidBackend::compute_state_hash`
-(FNV-1a over every live body's pose+velocity bytes, in ascending `BodyId`
-order) and then `articulation::System::fold_state_hash` (same FNV-1a
-fold, every live articulation's q/qd and, if floating, root pose) -
-PLAN.md D7; a `World` with no articulations hashes bit-identically to
-before this field existed.
+time), and one set of six per-wheel channels (`vehicle<i>.<wheel
+name>.{slip_ratio,slip_angle,fx,fy,fz,surface}`) per wheel of every vehicle
+created via `World::create_vehicle`, registered up front in
+`create_vehicle` itself (PLAN.md P3 scope item 7) so the CSV header is
+complete before the first `record_row`. `World::state_hash()` folds
+`IRigidBackend::compute_state_hash` (FNV-1a over every live body's
+pose+velocity bytes, in ascending `BodyId` order), then
+`articulation::System::fold_state_hash` (same FNV-1a fold, every live
+articulation's q/qd and, if floating, root pose), then
+`vehicle::System::fold_state_hash` (same fold, every live vehicle's
+per-wheel compression/spin/relaxed-slip state - not otherwise observable
+from the chassis body alone) - PLAN.md D7; a `World` with no
+articulations/vehicles hashes bit-identically to before those fields
+existed.
 
 `stage_snapshot` additionally fills `WorldSnapshot::articulations` (every
 live articulation's link poses/motions, root first then each public link -
@@ -464,11 +481,119 @@ rectangle) - do not pick test coordinates from the AABB alone; probe with
 header comment records the two points its own tests use and how they were
 found).
 
+## Vehicle system (`core/src/vehicle/`, PLAN.md 5.1/P3)
+
+Per-corner suspension + tyre + steering + brakes + a placeholder drive, on
+an existing chassis rigid body. Entirely internal except the descriptors in
+`ps/vehicle/{vehicle_desc.h,tyre_desc.h,tyre_model.h}` and `ps/vehicle/
+wheel_telemetry.h`, plus the `World`/`ps/io/scenario.h`/`ps/io/vehicle_io.h`
+seams below - mirrors `ps::articulation`'s D2/D10 public-descriptor-plus-
+internal-implementation seam. No Jolt type appears in any public header.
+
+- `tyre_desc.h`/`tyre_model.h` (public) + `pacejka_tyre_model.cpp`
+  (internal) - Pacejka Magic Formula MF5.2/6.1-SUBSET: pure-slip
+  `Fx0(kappa, Fz, gamma)`/`Fy0(alpha, Fz, gamma)` (sine-arctangent B/C/D/E
+  form), combined-slip `Gxa`/`Gyk` cosine-weighted normalisation, a
+  simplified `Mz0` (its own B/C/D/E curve, NOT the full pneumatic-trail x
+  `Fy` decomposition) and `Mx` (reduced linear-in-camber form), rolling
+  resistance (`qsy1 + surface crr + qsy2*|Fx|/Fz0 + qsy4*(v/v0)^4`).
+  `create_pacejka_tyre_model()` is the only `ITyreModel` factory. Slip
+  relaxation (`step_slip_relaxation`, Pacejka ch. 7's transient model) is a
+  velocity-forced deflection ODE, `d(kappa_eq)/dt = (slip_velocity_x -
+  Vx*kappa_eq)/sigma_kappa` (and the analogous `alpha_eq`/`Vy` form),
+  integrated EXACTLY over a substep via the scalar exponential - degenerates
+  to plain integration of slip velocity at `Vx ~ 0` (a stiffness/deflection
+  model, needed so a parked tyre on a slope still builds a restoring force
+  instead of freezing at whatever slip ratio it last had) and recovers the
+  usual quasi-steady slip ratio at speed. `kappa_eq`/`alpha_eq` are
+  additionally clamped to `[-3, 3]`/`[-1.6, 1.6]` (`step_slip_relaxation`'s
+  own safety clamp) - found necessary when a stalled/reversing wheel with
+  `Vx ~ 0` combined with a persistent nonzero slip velocity (e.g. a brake
+  controller overshoot) left the ODE's decay term at zero, so pure
+  unbounded integration ran away to -7.9 and beyond well past the point
+  any real tyre's force curve means anything.
+- `tir_parser.h`/`.cpp` - reads a standard MF `.tir` file into a `TyreDesc`
+  via a key-name-to-pointer-to-member table (never commit a proprietary
+  `.tir` file - PLAN.md section 8; `data/tyres/*.json` are this project's
+  own JSON format instead, loaded via `ps::io::load_tyre_json`).
+- `suspension.h` (header-only) - spring (rate or `Curve1D`, plus preload),
+  damper (bump/rebound rates or `Curve1D`), bump-stop and anti-roll-bar
+  force functions from a measured compression `x`/rate `xdot`.
+- `wheel_instance.h`/`.cpp` (`WheelInstance`) - `measure_contact()`: wheel
+  vertical position is KINEMATIC, a `CylinderShape` shape-cast (PLAN.md
+  5.1: "not a ray") along `SuspensionDesc::axis` from full-bump toward full
+  extension, clamped to `[0, travel_max]` - not a separate unsprung-mass
+  ODE (deferred: no wheel-hop/unsprung-resonance mode; the shipped
+  acceptance tests don't need one). `step()`: suspension force from that
+  measured `x`/`xdot`, tyre force via `ITyreModel` at the measured
+  slip/load/camber, wheel spin integration from drive/brake/tyre-Fx torque.
+- `vehicle_instance.h`/`.cpp` (`VehicleInstance`) - `step_tick()` runs
+  every substep within a 240 Hz tick (PLAN.md D3: chassis pose/motion
+  extrapolated from tick-start via the quaternion exponential map, held
+  across substeps), computing every wheel's contact (pass 1, so the
+  anti-roll-bar's partner-compression read in pass 2 is fresh), then each
+  wheel's suspension+tyre+spin substep (pass 2); applies the
+  substep-AVERAGED wrench once per tick via `IRigidBackend::apply_wrench`
+  directly (not through `IForceElement`, whose `evaluate()` is const/
+  stateless by contract and cannot own wheel state) - mirrors
+  `articulation::ContactCoupling`'s existing "apply directly to the other
+  body from inside the substep stage" precedent. Ackermann steering
+  (`ackermann_wheel_angle()`): per-wheel angle from turn radius `R =
+  wheelbase/tan(delta_avg)` and each wheel's attachment point relative to
+  the rear axle (both derived from wheel attachment points at construction,
+  not stored in `SteeringDesc`), blended by `ackermann_fraction`; a rear-
+  steered wheel is proportional/opposite-sign only (no speed-dependent
+  phase reversal). Brake/drive torque are computed once per tick (not per
+  substep) from each wheel's spin speed at tick start.
+- `system.h`/`.cpp` (`System`) - owns every `World` vehicle instance;
+  mirrors `articulation::System`'s pattern exactly (one job per vehicle via
+  `parallel_for`, safe unparallelised because each vehicle owns a distinct
+  chassis body - no two jobs ever call `apply_wrench` on the same body,
+  unlike articulation's Compliant-contact case).
+
+`World` additions (additive, `ps/world/world.h`): `create_vehicle`,
+`vehicle_wheel_count`, `wheel_telemetry`, `wheel_name`. `ps/io/scenario.h`
+additions: `ScenarioVehicle` (a vehicle on an already-described chassis
+body, `vehicle_json_path` resolved relative to the scenario file, loaded
+via `ps::io::load_vehicle_json`), `ScenarioControlEvent` (`{t, channel,
+value}`, `World::set_control` applied once `sim_time` reaches `t` -
+`tools/ps_run/main.cpp` applies these in time order every tick),
+`Scenario::surface_table_path` (installs a `SurfaceTable` for every
+vehicle's tyre model to read `lambda_mu`/`crr` from). `ps/backend/
+shape_desc.h` addition: `CylinderShape` (added to the `ShapeDesc` variant
+for the wheel contact shape-cast above; every exhaustive `std::visit` over
+`ShapeDesc` - `jolt_backend.cpp::make_shape` - and `scenario.cpp`'s JSON
+shape reader (`"type": "cylinder"`) handle it).
+
+`tests/support/vehicle_test_helpers.h`'s `build_vehicle_rig()` documents a
+load-bearing constraint for anyone assembling a chassis body around this
+system: the chassis collision shape must stay narrower/higher than the
+wheels' full suspension-travel envelope by a margin bigger than one wheel
+radius (a STEERED wheel's query cylinder sweeps a cone-like footprint as it
+rotates, growing its effective margin need beyond the unrotated case) -
+`IRigidBackend::shape_cast` has no way to exclude a specific body from the
+query, and Jolt's `CastShape` reports an immediate fraction-0 "hit" against
+a shape the query already starts inside of, inconsistently depending on
+broadphase iteration order. An undersized chassis box produced wildly wrong
+per-wheel `Fz` (some wheels reading bottomed-out, others airborne) that fed
+a runaway tyre force and chassis roll/pitch - found and fixed during this
+phase's own validation-test debugging.
+
+Data files: `data/vehicles/car_sedan.json` + `data/tyres/
+passenger_car_225_45r17.json`, `data/vehicles/tractor.json` +
+`data/tyres/{tractor_front,tractor_rear}.json` - geometry derived from
+`data/models/*/*.rig.json`'s wheel pivots/radii, plausible/published
+parameters with source noted per PLAN.md section 8 (never a proprietary
+`.tir` file).
+
 ## Adapter seams (`ps/world/snapshot.h`, `World::set_control`/`get_control`, PLAN.md P2)
 
 `World::set_control(name, value)`/`get_control(name)`: a `std::string`-keyed
-`real` map (`control_channels_`) - a plain seam, no consumer in core yet
-(a future drivetrain/vehicle force element reads it, P3+).
+`real` map (`control_channels_`) - global, not per-vehicle (PLAN.md P3/M1's
+one-car scope; multi-vehicle channel namespacing, e.g. `"veh0.steer"`, is
+deferred). Consumed every tick by every vehicle created via
+`World::create_vehicle` (`"steer"`/`"throttle"`/`"brake"`/`"handbrake"`,
+see "Vehicle system" below) - the first consumer since this seam was added.
 
 `WorldSnapshot` (`ps/world/snapshot.h`) additive fields, filled by
 `World::stage_snapshot()`: `articulations` (`std::vector<ArticulationSnapshot>`
@@ -491,7 +616,9 @@ consume these `World`/`WorldSnapshot` additions.
 ## Jolt backend (`core/src/backend/jolt/jolt_backend.cpp`)
 
 `JoltRigidBackend : IRigidBackend`. Two-layer broadphase/object-layer setup
-(`NON_MOVING`/`MOVING`). Bodies: box/sphere/capsule shapes, mass via
+(`NON_MOVING`/`MOVING`). Bodies: box/sphere/capsule/cylinder shapes
+(`CylinderShape` added PLAN.md P3, for the vehicle system's wheel contact
+shape-cast - see "Vehicle system" above), mass via
 `EOverrideMassProperties::CalculateInertia`. Joints: `Fixed` and `Hinge`
 (`JPH::FixedConstraint`/`HingeConstraint`, world-space anchors/axes computed
 from each `JointDesc`'s body-local inputs at creation time; `body_b`

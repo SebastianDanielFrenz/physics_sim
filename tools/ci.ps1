@@ -313,7 +313,7 @@ function Test-TranscendentalGrepPattern {
 # so it runs in fast CI too, whenever both sides were actually built this
 # invocation (skipped with a note otherwise, e.g. -SkipWindows/-SkipWsl).
 # ---------------------------------------------------------------------------
-$script:HashCheckScenarios = @('free_fall.json', 'pendulum.json', 'joint_chain.json', 'articulation_chain.json', 'multi_articulation.json', 'contact_articulation.json', 'terrain_tiles.json')
+$script:HashCheckScenarios = @('free_fall.json', 'pendulum.json', 'joint_chain.json', 'articulation_chain.json', 'multi_articulation.json', 'contact_articulation.json', 'terrain_tiles.json', 'vehicle_step_steer.json')
 
 function Get-PsRunStateHash {
     param([string]$PsRunPath, [string]$ScenarioPath, [string]$CsvOutPath, [switch]$Wsl)

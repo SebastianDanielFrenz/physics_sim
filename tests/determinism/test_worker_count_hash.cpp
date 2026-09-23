@@ -9,6 +9,7 @@
 // our own job-scheduled code, not just one of them.
 
 #include "counter_force_element.h"
+#include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/world.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -304,6 +305,98 @@ TEST_CASE("State hash with contact-bearing articulations is identical across 1, 
     const std::uint64_t reference = run_contact_scenario(1, kTicks);
     for (int workers : {2, 4, 10, 24}) {
         const std::uint64_t h = run_contact_scenario(workers, kTicks);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+namespace {
+
+// PLAN.md P3 acceptance ("every phase P3-P8 additionally repeats the
+// thread-count determinism test with its new components included") +
+// out/handover_p3.md decision 3: vehicle::System::step_all runs one job per
+// vehicle via parallel_for, exactly like articulation::System::step_all
+// above, and each wheel's own internal state (compression, spin, relaxed
+// slip - not otherwise observable from the chassis body alone) folds into
+// World::state_hash() via vehicle::System::fold_state_hash. Two vehicles
+// (so the parallel_for batch has more than one job) built directly from a
+// VehicleDesc in code (not a data/vehicles/*.json file - this test only
+// needs a plausible wheel/tyre setup, not the shipped car/tractor data),
+// each on its own chassis body, driven straight then given a step-steer
+// input mid-run so the tyre model's slip-relaxation ODE and Ackermann
+// steering are actually exercised, not just a resting/idle vehicle.
+vehicle::VehicleDesc make_test_vehicle_desc() {
+    vehicle::VehicleDesc desc;
+    desc.name = "det_test_car";
+    desc.source = "test-only synthetic vehicle, not a real car - see this file's header comment";
+    desc.drive.torque_curve_nm_vs_rpm.x = {900.0, 6500.0};
+    desc.drive.torque_curve_nm_vs_rpm.y = {150.0, 150.0};
+
+    struct Corner { const char* name; real x, y; bool front, driven; };
+    const Corner corners[4] = {
+        {"FL", 1.35, 0.78, true, false}, {"FR", 1.35, -0.78, true, false},
+        {"RL", -1.35, 0.78, false, true}, {"RR", -1.35, -0.78, false, true},
+    };
+    for (const Corner& c : corners) {
+        vehicle::WheelDesc w;
+        w.name = c.name;
+        w.attachment_local = Vec3{c.x, c.y, -0.1};
+        w.is_front = c.front;
+        w.driven = c.driven;
+        w.steered = c.front;
+        w.tyre.name = std::string(c.name) + "_tyre";
+        w.tyre.source = "defaults from ps/vehicle/tyre_desc.h, test-only";
+        desc.wheels.push_back(w);
+    }
+    desc.wheels[0].arb_partner = 1; desc.wheels[1].arb_partner = 0;
+    desc.wheels[2].arb_partner = 3; desc.wheels[3].arb_partner = 2;
+    return desc;
+}
+
+std::uint64_t run_vehicle_scenario(int workers, int ticks) {
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    cfg.job_workers = workers;
+    World world(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{500, 500, 0.5}};
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 1.0;
+    ground.pose.position = Vec3{0, 0, -0.5};
+    world.create_body(ground);
+
+    const vehicle::VehicleDesc desc = make_test_vehicle_desc();
+    for (int v = 0; v < 2; ++v) {
+        BodyDesc chassis;
+        chassis.shape = BoxShape{Vec3{1.6, 0.5, 0.15}};
+        chassis.motion = BodyMotionType::Dynamic;
+        chassis.mass = 1400.0;
+        chassis.friction = 0.5;
+        chassis.allow_sleep = false;
+        chassis.pose.position = Vec3{0.0, static_cast<real>(v) * 6.0, 0.5};
+        chassis.velocity.linear = Vec3{15.0, 0.0, 0.0};
+        const BodyId body = world.create_body(chassis);
+        world.create_vehicle(desc, body);
+    }
+
+    for (int t = 0; t < ticks; ++t) {
+        const real time_s = static_cast<real>(t) * world.dt();
+        world.set_control("steer", time_s < 0.3 ? real(0.0) : real(0.2));
+        world.set_control("throttle", real(0.3));
+        world.step();
+    }
+    return world.state_hash();
+}
+
+} // namespace
+
+TEST_CASE("State hash with vehicles is identical across 1, 2, 4, 10 and 24 workers", "[determinism][vehicle][heavy]") {
+    constexpr int kTicks = 150;
+    const std::uint64_t reference = run_vehicle_scenario(1, kTicks);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_vehicle_scenario(workers, kTicks);
         INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
         REQUIRE(h == reference);
     }
