@@ -594,6 +594,23 @@ series and parallel hybrids fall out of composition rather than special
 cases. The component set and interfaces are designed before either power
 source is implemented.
 
+Tanks (Sebastian, 2026-09-24): fluids and gases in tanks get no detailed
+simulation; every store is a fill state plus a pressure given as data.
+N2O tanks and nitrous injection for combustion engines are required too.
+
+P4 design decided 2026-09-24 (vault PHYS-032 = decision record, PHYS-033 =
+full specification with the owner's rulings, which implementers follow):
+powertrain graph per vehicle in `ps::drivetrain`; reduced-coordinate,
+linearly-implicit shaft network per substep; exact Coulomb friction
+(box-LCP, capped pivoting); wheel spin moves into the network; the one-tick
+wrench delay is repaired first (shadow chassis per substep) and the standstill
+compensation replaced; no legacy data converter — existing data files are
+rewritten and loaders reject outdated formats. Increments: I0 housekeeping,
+I1 wrench-delay repair and tractor cross slope, I2 shaft network and friction,
+I3 first drivable (torque-map engine, clutch, manual gearbox, open diff,
+minimal drag), then I4 diffs/PTO, I5 ABS/TC, I6 ESC, I7 mean-value engine and
+fuel tank, N2O, I8 map generator, I9 electric and hybrids, I10 automatics.
+
 Driver-assistance requirement (Sebastian, 2026-09-23): optional ABS,
 traction control, ESP/ESC, and an open-ended list beyond that (e.g. launch
 control, torque vectoring, hill hold). Each vehicle opts in per system via its
