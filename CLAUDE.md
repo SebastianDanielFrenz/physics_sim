@@ -721,6 +721,13 @@ internal-implementation seam. No Jolt type appears in any public header.
   `atan2` could never return a negative (right-lock) wheel angle; see
   `tests/unit/test_vehicle_ackermann_symmetry.cpp`,
   `tests/validation/test_vehicle_steer_mirror.cpp` and vault PHYS-022.
+  `ackermann_fraction` accepts `[-1, 1]`, validated at load time
+  (`ps::io::load_vehicle_json`) - negative is anti-Ackermann (outer wheel
+  gets the larger-magnitude angle instead of the inner); see
+  `vehicle_desc.h`'s `SteeringDesc::ackermann_fraction` comment and vault
+  PHYS-031 for the measured effect (car_sedan.json's Pacejka tyre
+  parameters: anti-Ackermann REDUCES, not increases, measured lateral g
+  at this vehicle's validated skidpad operating point).
   Brake/drive torque are computed once per tick (not per substep) from
   each wheel's spin speed at tick start.
 - `system.h`/`.cpp` (`System`) - owns every `World` vehicle instance;
