@@ -44,7 +44,10 @@ ShapeDesc read_shape(const json& j) {
     if (type == "capsule") {
         return CapsuleShape{j.value("half_height", real(0.5)), j.value("radius", real(0.25))};
     }
-    throw std::runtime_error("unknown shape type '" + type + "' (expected box|sphere|capsule)");
+    if (type == "cylinder") {
+        return CylinderShape{j.value("half_height", real(0.5)), j.value("radius", real(0.3))};
+    }
+    throw std::runtime_error("unknown shape type '" + type + "' (expected box|sphere|capsule|cylinder)");
 }
 
 ScenarioBody read_body(const json& j) {

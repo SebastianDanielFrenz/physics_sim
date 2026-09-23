@@ -20,6 +20,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
@@ -331,6 +332,8 @@ JPH::RefConst<JPH::Shape> make_shape(const ShapeDesc& desc) {
                 return JPH::RefConst<JPH::Shape>(new JPH::SphereShape(static_cast<float>(s.radius)));
             } else if constexpr (std::is_same_v<T, CapsuleShape>) {
                 return JPH::RefConst<JPH::Shape>(new JPH::CapsuleShape(static_cast<float>(s.half_height), static_cast<float>(s.radius)));
+            } else if constexpr (std::is_same_v<T, CylinderShape>) {
+                return JPH::RefConst<JPH::Shape>(new JPH::CylinderShape(static_cast<float>(s.half_height), static_cast<float>(s.radius)));
             } else if constexpr (std::is_same_v<T, MeshShape>) {
                 return make_mesh_shape(s);
             } else {

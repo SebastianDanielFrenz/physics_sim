@@ -25,6 +25,16 @@ struct BoxShape { Vec3 half_extents{0.5, 0.5, 0.5}; };
 struct SphereShape { real radius = 0.5; };
 struct CapsuleShape { real half_height = 0.5; real radius = 0.25; };
 
+// PLAN.md 5.1/P3: wheel contact is a cylinder shape cast, not a single ray
+// or a capsule (a capsule's rounded ends bias the contact point/normal
+// versus a real tyre's flat-ish tread face at small camber). Same axis
+// convention as CapsuleShape above: local Y (JoltPhysics' own
+// JPH::CylinderShape axis, passed through unrotated - no wrapper shape is
+// added, exactly like CapsuleShape's own mapping in jolt_backend.cpp), so a
+// caller orients the wheel's own query pose to put local Y along the wheel
+// spin axis.
+struct CylinderShape { real half_height = 0.5; real radius = 0.3; };
+
 // Static triangle-mesh collision (PLAN.md M1 "static test-ground collision":
 // data/tracks/test_ground's own binary format is triangles grouped by
 // physical surface - see core/src/io/test_ground_loader.cpp). One surface id
@@ -67,6 +77,6 @@ struct HeightfieldShape {
     std::vector<SurfaceId> cell_surface_ids; // (sample_count-1)^2, or empty
 };
 
-using ShapeDesc = std::variant<BoxShape, SphereShape, CapsuleShape, MeshShape, HeightfieldShape>;
+using ShapeDesc = std::variant<BoxShape, SphereShape, CapsuleShape, CylinderShape, MeshShape, HeightfieldShape>;
 
 } // namespace ps
