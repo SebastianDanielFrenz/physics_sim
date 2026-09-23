@@ -56,6 +56,9 @@ struct TestGroundLoadResult {
     bool ok = false;
     int collision_bodies = 0;
     std::string error;
+    // The installed terrain source (null unless ok) - kept by PsSimulation
+    // for the fall detector's "where should the ground be" height lookup.
+    std::shared_ptr<const ps::terrain::ITerrainSource> terrain_source;
 };
 TestGroundLoadResult import_test_ground_real(const std::string& track_dir,
                                               ps::World& world,

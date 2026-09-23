@@ -241,6 +241,12 @@ if ($script:Failures.Count -eq 0) {
     } else {
         Report-Ok "M1 autopilot run: no ERROR/SCRIPT ERROR lines"
     }
+    # Fall diagnostic (src/fall_detector.h) must stay silent on a normal drive.
+    if ($apLogContent | Select-String -SimpleMatch 'ps_godot FALL DETECTED') {
+        Report-Fail "M1 autopilot run: fall detector fired on a normal drive"
+    } else {
+        Report-Ok "M1 autopilot run: fall detector silent"
+    }
 
     $summaryLine = $apLogContent | Select-String -Pattern 'ps_godot M1 smoke:' | Select-Object -Last 1
     if (-not $summaryLine) {

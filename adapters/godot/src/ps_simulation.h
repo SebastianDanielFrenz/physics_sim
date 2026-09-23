@@ -28,6 +28,7 @@
 #pragma once
 
 #include "collision_import.h"
+#include "fall_detector.h"
 #include "frame_convert.h"
 #include "frame_timing.h"
 #include "origin_rebase.h"
@@ -323,6 +324,11 @@ private:
     std::uint64_t next_terrain_interest_id_ = 1;
 
     std::shared_ptr<const ps::io::SurfaceTable> surface_table_; // set by import_test_ground; null == no surface names available
+    // Fall diagnostic (fall_detector.h): the installed terrain source (set
+    // by import_test_ground) and one detector per vehicle, created in
+    // start() and touched only by the sim thread's post_step afterwards.
+    std::shared_ptr<const ps::terrain::ITerrainSource> terrain_source_;
+    std::unordered_map<std::string, FallDetector> fall_detectors_;
 
     std::unique_ptr<SimThread> sim_thread_;
     OriginRebase origin_rebase_;

@@ -137,6 +137,7 @@ TestGroundLoadResult import_test_ground_real(const std::string& track_dir,
     world.set_terrain_source(terrain_source, terrain_config);
 
     out_surfaces = std::move(surfaces);
+    result.terrain_source = terrain_source;
     result.ok = true;
     godot::UtilityFunctions::print("ps_godot: import_test_ground_real: ", result.collision_bodies,
                                     " collision body/bodies, terrain source installed from ", track_dir.c_str());

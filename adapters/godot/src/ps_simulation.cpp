@@ -62,6 +62,8 @@ bool PsSimulation::load_scenario(const String& absolute_json_path) {
         vehicle_stream_radius_m_.clear();
         next_terrain_interest_id_ = 1;
         surface_table_.reset();
+        terrain_source_.reset();
+        fall_detectors_.clear();
         {
             std::lock_guard<std::mutex> lock(pending_reset_mutex_);
             pending_vehicle_resets_.clear();
@@ -102,6 +104,8 @@ void PsSimulation::start() {
 }
 
 void PsSimulation::rebuild_post_step_and_start() {
+    fall_detectors_.clear();
+    for (const std::string& name : vehicle_order_) fall_detectors_.emplace(name, FallDetector{}); // no insertion from the sim thread later
     sim_thread_->set_pre_step([this]() {
         // Control channels: the only writer of VALUES from here on is the
         // Godot main thread (set_control), the only writer of KEYS was
@@ -181,6 +185,13 @@ void PsSimulation::rebuild_post_step_and_start() {
                     const auto radius_it = vehicle_stream_radius_m_.find(name);
                     const ps::real radius = radius_it != vehicle_stream_radius_m_.end() ? static_cast<ps::real>(radius_it->second) : 500.0;
                     world_->set_terrain_interest_point(vehicle_terrain_interest_id_.at(name), chassis_pose.position, radius);
+
+                    // Fall diagnostic: ONE report block per fall event, then keep running.
+                    FallDetector& fall = fall_detectors_.at(name);
+                    if (fall.update(terrain_source_.get(), chassis_pose.position)) {
+                        const std::string report = fall.format_report(name, *world_, vid, body_it->second, terrain_source_.get(), surface_table_.get());
+                        godot::UtilityFunctions::print(String(report.c_str()));
+                    }
                 }
             }
         }
@@ -346,6 +357,7 @@ bool PsSimulation::import_test_ground(const String& track_dir_absolute_path, std
         return false;
     }
     surface_table_ = std::move(surfaces);
+    terrain_source_ = result.terrain_source;
     return true;
 }
 
