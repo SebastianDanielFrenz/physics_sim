@@ -14,7 +14,7 @@ physics_sim/
   PLAN.md                             design and phase plan
   tools/
     setup_dev_env.ps1                 installs/verifies the dev toolchain (-CheckOnly to only verify)
-    ci.ps1                            runs every CI leg (see below)
+    ci.ps1                            CI at three levels: -Affected/-Topic (per change), default fast, -Full (see "CI" below)
     tsan_suppressions.txt             ThreadSanitizer suppressions, loaded only by the linux-tsan TEST preset's TSAN_OPTIONS (one entry: Jolt's debug-assert read in JPH::Mutex::try_lock)
     common/                           tools/tests-only helpers, never linked into ps_core; target ps_headless_env
       headless_env.h/.cpp             installs Windows headless-CRT handlers (no blocking assert/abort dialogs)
@@ -98,6 +98,10 @@ physics_sim/
 - `bench_force_elements` (executable, `tests/bench`): plain `main()`
   (not Catch2, so its measured numbers are always on stdout); links
   `ps_core`, `ps_headless_env`. Registered with CTest via `add_test()`.
+  Asserts its >= 6x scaling on every non-Debug build type (explicit
+  `PS_BENCH_ASSERT_TIMING=0/1` compile definition from
+  `tests/bench/CMakeLists.txt`, which also gives exactly those instances
+  the `walltime` label + `PROCESSORS 24` - see "CI").
 - `bench_contact_coupling` (executable, `tests/bench`): plain `main()`;
   links `ps_core`, `ps_headless_env`. Registered with CTest via
   `add_test()` as a smoke check only (no scaling assertion, unlike
@@ -109,11 +113,11 @@ physics_sim/
   comment for measured numbers) against `data/tracks/test_ground/terrain.json`
   loaded at `PS_SOURCE_DIR`, simulating a 50 km drive by advancing one
   interest point 250 m/tick for 200 ticks. Like `bench_force_elements`,
-  a wall-clock measurement, so `PROCESSORS 24` (`tests/bench/CMakeLists.txt`)
-  keeps `ctest --parallel`'s scheduler from ever running it alongside
-  another test - contention alone pushed its worst tick well past the
-  bound under `tools/ci.ps1 -Full`'s WSL legs (338-530 ms measured vs.
-  55-90 ms run alone right after). Sanitizer policy: on a
+  a wall-clock measurement: wherever it asserts timing it carries the
+  `walltime` label + `PROCESSORS 24` and runs in `tools/ci.ps1`'s serial
+  phase B, never alongside other load - contention alone once pushed its
+  worst tick well past the bound under `-Full`'s WSL legs (338-530 ms
+  measured vs. 55-90 ms run alone right after). Sanitizer policy: on a
   `PS_SANITIZER_BUILD` it still runs in full but only REPORTS its timing
   bounds (250 ms drive / 12000 ms teleport worst tick); the no-starved-tile
   checks are asserted everywhere, the timing bounds on every non-sanitizer
@@ -930,13 +934,51 @@ ctest --preset linux-release --output-on-failure
 
 ## CI
 
+Three levels - use the smallest that fits (also at the top of `tools/ci.ps1`):
+
 ```powershell
-tools\ci.ps1                      # every leg, FAST test selection (default)
-tools\ci.ps1 -Full                # every leg, every test (pre-P1.5b behaviour)
+tools\ci.ps1 -Affected            # PER CHANGE: topics from the changed paths (vs HEAD), release leg only
+tools\ci.ps1 -Affected -Base HEAD~3   # ... covering the last 3 commits too
+tools\ci.ps1 -Topic terrain,vehicle   # ... topics picked by hand
+tools\ci.ps1 -Affected -PlanOnly  # print the decision only, build/test nothing
+tools\ci.ps1                      # DEFAULT FAST: every leg; batch boundaries / before reporting done (< 5 min)
+tools\ci.ps1 -Full                # every leg, every test: before a phase counts done, after foundational changes
 tools\ci.ps1 -SkipWsl             # Windows legs only
 tools\ci.ps1 -SkipWindows         # WSL legs only
 tools\ci.ps1 -Only debug,asan     # named legs only (matches preset names, plus msvc-release)
+tools\ci.ps1 -NoOverlap           # old strictly sequential layout (Windows lane, then WSL lane)
 ```
+
+**`-Affected` / `-Topic`** (`tools/ci.ps1`'s `$script:PathRules`,
+`$script:ScenarioTopics`, `$script:SensitivePatterns`): changed paths
+(`git diff --name-only <Base>` + untracked) map to test topics through an
+explicit, ordered path table; test files map through their own Catch2
+topic tags. Runs the `release` leg with `ctest -L '^(topics)$'`, the two
+greps, the topics' `walltime` benches (alone), and the hash compare for the
+topics' scenarios only (building just the Linux `ps_run` target for it).
+Adds `linux-release` (+ `linux-tsan` for threading) only when the changed
+core/tools lines touch unordered containers, sorting, libm/FP-contract
+math or threading, or with `-Linux`. Foundational paths (core
+`math`/`jobs`/`world`/`backend`, any `CMakeLists.txt`/`CMakePresets.json`,
+`tools/ci.ps1`, `tools/tsan_suppressions.txt`, `tools/common`,
+`tests/support`) run the default fast run and ask for `-Full`; **a path no
+rule knows also falls back to the default fast run, never to nothing**;
+doc-only changes (`*.md`) run the greps only; `adapters/**` notes that
+`adapters/godot/smoke_test.ps1` is the check. Every decision is printed with
+the path that caused it. Adding a subsystem = add a topic tag to its tests,
+a `$script:PathRules` row, and (if it has scenarios) `$script:ScenarioTopics`.
+
+**Default/Full layout (overlapped).** Phase A: the Windows lane (`release`,
+`debug`, `asan`, `msvc-release`, greps) runs in `ci.ps1` itself while the
+WSL lane runs in a child `powershell -File tools\ci.ps1 -WslLaneOnly`
+(results handed back as JSON under `%TEMP%`); inside the WSL lane,
+`linux-release` runs first, then `linux-asan-ubsan` and `linux-tsan` build
+one after the other and run their ctest side by side, `--parallel 12` each
+(scripts written to `out/ci_tmp/`, logs to `~/ps_ci_<preset>.log`). Every
+phase-A ctest excludes the `walltime` label. Phase B starts only after both
+lanes have exited: each built leg's `walltime` tests, one leg at a time,
+nothing else running. Then the cross-platform hash compare. The summary adds
+a per-phase wall-clock table.
 
 Legs: clang-cl `debug`, `release`, `asan`; cl `msvc-release`; a grep that
 fails the run if anything under `core/` includes a Godot/GDExtension header;
@@ -946,32 +988,43 @@ WSL `linux-release`, `linux-asan-ubsan`, `linux-tsan` (its test preset sets
 `llvm-symbolizer-21` in WSL, and suppressions only match symbolized
 frames; applies to a hand-run `ctest --preset linux-tsan` too). Prints a per-leg
 PASS/FAIL summary with per-stage (configure/build/ctest) timing and a
-per-leg + total wall-clock line; exits non-zero on any failure. Every
-`ctest` invocation passes `--parallel` (12 on Windows, 24 in WSL - see
-"Test tags" below for why heavy determinism tests are exempted from
-oversubscription). The PASS/FAIL lines exist only in the final summary
-(cmake/build output is swallowed by `Measure-Command`), so capture the
-whole run (`*>`) and let it finish. Wall-clock benches assert timing only
-on non-sanitizer legs (`PS_SANITIZER_BUILD`, see "CMake options"); the
-cross-platform hash compare runs `data/scenarios` only, none of which
+per-leg + total wall-clock line; exits non-zero on any failure. Windows
+ctest uses `--parallel 12`, `linux-release` 24. The PASS/FAIL lines exist
+only in the final summary (cmake/build output is swallowed by
+`Measure-Command`), so capture the whole run (`*>`) and let it finish.
+The cross-platform hash compare runs `data/scenarios` only, none of which
 loads `data/tracks/test_ground` (`terrain_multi_interest.json` covers
 multi-interest-point streaming plus suppression on the small synthetic
-spec instead).
+spec instead). A stale build-dir cache that lost its optimisation flags
+fails configure on purpose (top-level `CMakeLists.txt`; fix with
+`cmake --preset <name> --fresh`).
 
-**Test selection (default = FAST, target < 5 min wall clock on the dev
-machine).** `tools/ci.ps1` (no flag): the `release`, `msvc-release` and
-`linux-release` legs run every test except `[long]`-tagged ones
-(`ctest -LE long`); the `debug`, `asan`, `linux-asan-ubsan` and `linux-tsan`
-legs run only `ps_unit_tests` + `ps_determinism_tests` + `[sanitizer]`-tagged
-tests (`ctest -LE "validation|long"` - the whole `ps_validation_tests` suite
-is `[validation]`-tagged, and the `[sanitizer]` short variants deliberately
-omit that tag so this one exclusion routes them back in). `tools/ci.ps1
--Full`: no label filter, every test runs on every leg (the behaviour before
-this split; mandatory before a phase counts done per PLAN.md section 7).
+**Test selection.** Default FAST: the `release`, `msvc-release` and
+`linux-release` legs run every test except `[long]`-tagged ones; the
+`debug`, `asan`, `linux-asan-ubsan` and `linux-tsan` legs run only
+`ps_unit_tests` + `ps_determinism_tests` + `[sanitizer]`-tagged tests
+(`-LE "validation|long"` - the whole `ps_validation_tests` suite is
+`[validation]`-tagged, and the `[sanitizer]` short variants deliberately
+omit that tag so this one exclusion routes them back in). `-Full`: no
+long/validation filter, every test on every leg (mandatory before a phase
+counts done per PLAN.md section 7). `walltime` is excluded from phase A in
+both and run in phase B.
 
-**Test tags** (`tests/*/CMakeLists.txt` pass `ADD_TAGS_AS_LABELS` to
-`catch_discover_tests`, so every Catch2 tag becomes a CTest `LABEL`
-selectable via `ctest -L`/`-LE`):
+**Test tags / labels** (`tests/*/CMakeLists.txt` pass `ADD_TAGS_AS_LABELS`
+to `catch_discover_tests`, so every Catch2 tag becomes a CTest `LABEL`
+selectable via `ctest -L`/`-LE`; repeated `-L` are ANDed):
+- **Topic** (every test has at least one; the benches get theirs via
+  `add_test` `LABELS` in `tests/bench/CMakeLists.txt`): `[math]`, `[jobs]`,
+  `[world]`, `[backend]` (Jolt-backed rigid bodies, shapes, the `[hello]`
+  self-check), `[articulation]`, `[contact]`, `[terrain]`, `[vehicle]`,
+  `[io]`, `[determinism]`, `bench`. Multiple topics per test are normal.
+- `walltime` (CTest label, benches only): set by `tests/bench/CMakeLists.txt`
+  exactly where the bench ASSERTS timing on that build -
+  `bench_force_elements` on every non-Debug build type,
+  `bench_terrain_tiles` on every non-sanitizer build - together with
+  `PROCESSORS 24`. Resulting set: `release`/`msvc-release`/`linux-release`
+  both, `debug` `bench_terrain_tiles`, `asan` `bench_force_elements`, the
+  WSL sanitizer legs none.
 - `[long]`: a physics test that simulates tens of seconds (60 s energy-drift/
   momentum tests, 30-35 s mass-ratio/resting-contact tests) - cheap in a
   release build but 5-15x slower under a sanitizer, where it would blow the
@@ -989,9 +1042,10 @@ selectable via `ctest -L`/`-LE`):
   what the always-run white-box unit tests (`test_articulation_core.cpp`,
   `test_articulation_four_bar.cpp`) already give.
 - `[heavy]` (`tests/determinism`): a test that spins up its own `JobSystem`
-  with up to 24 workers; given CTest `PROCESSORS=24` so `ctest --parallel`
-  never schedules it alongside another test and oversubscribes the
-  machine's 24 logical threads.
+  with up to 24 workers; given CTest `PROCESSORS=24` so one ctest invocation
+  never schedules it alongside another of its own tests (the two WSL
+  sanitizer ctests do run side by side - that only slows these, their
+  hashes do not depend on scheduling).
 
 ## Dev environment setup
 
