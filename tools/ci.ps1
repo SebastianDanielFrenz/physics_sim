@@ -22,13 +22,36 @@
     tests; debug/asan/linux-asan-ubsan/linux-tsan skip the whole validation
     suite except the short [sanitizer]-tagged variants. See CLAUDE.md "CI"
     for the tag/label wiring (tests/*/CMakeLists.txt, ADD_TAGS_AS_LABELS).
+
+.PARAMETER NoOverlap
+    Run the WSL legs after the Windows legs in this process (the old,
+    strictly sequential layout) instead of overlapping the two lanes.
+
+.PARAMETER WslLaneOnly
+    INTERNAL. Used by this script to run the WSL lane as a child process:
+    phase A of the WSL legs only, results written to -LaneResultFile.
+
+.NOTES
+    Layout (default):
+      Phase A  Windows lane (release, debug, asan, msvc-release, greps) in
+               this process, overlapped with the WSL lane (linux-release,
+               linux-asan-ubsan, linux-tsan) in a child process. Every
+               ctest here excludes the "walltime" label.
+      Phase B  Serial wall-clock phase, started only after BOTH lanes have
+               finished: each leg's "walltime"-labelled tests (benches that
+               assert timing on that build, tests/bench/CMakeLists.txt), one
+               leg at a time, with nothing else running on the machine.
+      Then     the cross-platform state-hash compare.
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipWsl,
     [switch]$SkipWindows,
     [string[]]$Only,
-    [switch]$Full
+    [switch]$Full,
+    [switch]$NoOverlap,
+    [switch]$WslLaneOnly,
+    [string]$LaneResultFile
 )
 
 $ErrorActionPreference = 'Continue'
@@ -37,6 +60,13 @@ Set-Location $repoRoot
 
 $script:Results = New-Object System.Collections.Generic.List[object]
 $script:LegTimings = New-Object System.Collections.Generic.List[object]
+# Legs whose build succeeded this run, in run order: {Preset, Kind}. Phase B
+# (the serial wall-clock phase) runs exactly these.
+$script:BuiltLegs = New-Object System.Collections.Generic.List[object]
+
+# -Only a,b arrives as ONE string when this script is started with -File
+# (as the WSL-lane child process is), so accept comma-separated values too.
+if ($Only) { $Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
 
 function Add-Result {
     param([string]$Leg, [string]$Stage, [bool]$Pass, [string]$Detail = '', [double]$Seconds = 0)
@@ -57,13 +87,18 @@ function Should-Run {
 $script:WindowsParallel = 12
 $script:WslParallel = 24
 
-# CTest label selection for the FAST (default) mode. Empty string == no
-# filter (used for -Full and is also passed through unchanged).
+# CTest label selection for phase A. "walltime" is ALWAYS excluded here:
+# those tests run in phase B, alone on the machine (see .NOTES above and
+# tests/bench/CMakeLists.txt). FAST mode additionally excludes [long] (and,
+# on sanitizer legs, the whole [validation] suite).
 function Get-CtestLabelArgs {
     param([string]$LegKind) # 'release' or 'sanitizer'
-    if ($Full) { return @() }
-    if ($LegKind -eq 'sanitizer') { return @('-LE', 'validation|long') }
-    return @('-LE', 'long')
+    $excluded = @()
+    if (-not $Full) {
+        if ($LegKind -eq 'sanitizer') { $excluded += @('validation', 'long') } else { $excluded += 'long' }
+    }
+    $excluded += 'walltime'
+    return @('-LE', ($excluded -join '|'))
 }
 
 # ---------------------------------------------------------------------------
@@ -120,6 +155,7 @@ function Invoke-WindowsLeg {
     $buildOk = ($LASTEXITCODE -eq 0)
     Add-Result -Leg $Preset -Stage 'build' -Pass $buildOk -Seconds $t.TotalSeconds
     if (-not $buildOk) { return }
+    $script:BuiltLegs.Add([pscustomobject]@{ Preset = $Preset; Kind = 'windows' })
 
     $labelArgs = Get-CtestLabelArgs -LegKind $LegKind
     $ctestOut = $null
@@ -157,6 +193,7 @@ function Invoke-WslLeg {
     $buildOk = ($LASTEXITCODE -eq 0)
     Add-Result -Leg $Preset -Stage 'build' -Pass $buildOk -Seconds $t.TotalSeconds
     if (-not $buildOk) { return }
+    $script:BuiltLegs.Add([pscustomobject]@{ Preset = $Preset; Kind = 'wsl' })
 
     # Quote each arg for the bash -lc string below - the label regex itself
     # ("validation|long") contains a "|" that bash would otherwise parse as
@@ -307,6 +344,38 @@ function Test-TranscendentalGrepPattern {
 }
 
 # ---------------------------------------------------------------------------
+# Phase B: the serial wall-clock phase. Runs only after both lanes have been
+# joined, so the timing-asserting benches get the machine to themselves: one
+# leg at a time, one ctest invocation at a time, nothing else of this CI run
+# alive (the WSL-lane child process has exited before this is called).
+# ---------------------------------------------------------------------------
+function Invoke-WalltimePhase {
+    Write-Host ""
+    Write-Host "=== Phase B: serial wall-clock phase (walltime-labelled tests, one leg at a time, machine otherwise idle) ===" -ForegroundColor Cyan
+    Write-Host ("  started {0:HH:mm:ss} - both lanes finished, no other CI work running" -f (Get-Date))
+    foreach ($leg in $script:BuiltLegs) {
+        $preset = $leg.Preset
+        if ($leg.Kind -eq 'windows') {
+            $t = Measure-Command { $script:wtOut = & ctest --preset $preset --output-on-failure -L walltime 2>&1 }
+        } else {
+            $cmd = "cd /mnt/s/claude_code/physics_sim && ctest --preset $preset --output-on-failure -L walltime 2>&1"
+            $t = Measure-Command { $script:wtOut = wsl --cd ~ -- bash -lc $cmd }
+        }
+        $ok = ($LASTEXITCODE -eq 0)
+        $joined = ($script:wtOut -join "`n")
+        if ($joined -match 'No tests were found') {
+            Add-Result -Leg $preset -Stage 'walltime' -Pass $true -Detail 'no timing-asserting bench on this build' -Seconds $t.TotalSeconds
+            continue
+        }
+        $line = $script:wtOut | Select-String 'tests passed' | Select-Object -Last 1
+        $detail = if ($line) { $line.ToString() } else { 'no ctest summary line' }
+        Add-Result -Leg $preset -Stage 'walltime' -Pass $ok -Detail $detail -Seconds $t.TotalSeconds
+        if (-not $ok) { Write-Host $joined }
+    }
+    Write-Host ("  finished {0:HH:mm:ss}" -f (Get-Date))
+}
+
+# ---------------------------------------------------------------------------
 # Cross-platform state-hash comparison (PLAN.md D7 / vault PHYS-009 Step 1
 # rule 4): run ps_run on a fixed scenario set on both a Windows build and
 # the WSL/Linux build and compare state_hash. Cheap (a few seconds total),
@@ -384,7 +453,51 @@ $script:WallStart = Get-Date
 $releaseLegs = @('release')
 $sanitizerLegs = @('debug', 'asan')
 
+function Invoke-WslLane {
+    if (Should-Run 'linux-release') { Invoke-WslLeg -Preset 'linux-release' -LegKind 'release' }
+    if (Should-Run 'linux-asan-ubsan') { Invoke-WslLeg -Preset 'linux-asan-ubsan' -LegKind 'sanitizer' }
+    if (Should-Run 'linux-tsan') { Invoke-WslLeg -Preset 'linux-tsan' -LegKind 'sanitizer' }
+}
+
+# --- Child mode: the WSL lane only, results handed back through a file. ---
+if ($WslLaneOnly) {
+    Invoke-WslLane
+    [pscustomobject]@{
+        # .ToArray(): PowerShell 5.1 throws "Argument types do not match"
+        # for @() around a generic List inside a hashtable literal.
+        Results = $script:Results.ToArray()
+        LegTimings = $script:LegTimings.ToArray()
+        BuiltLegs = $script:BuiltLegs.ToArray()
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $LaneResultFile -Encoding UTF8
+    exit 0
+}
+
+$script:PhaseTimings = New-Object System.Collections.Generic.List[object]
+$overlap = (-not $SkipWindows) -and (-not $SkipWsl) -and (-not $NoOverlap)
+
+# --- Phase A, WSL lane: started first so it overlaps the Windows lane. ---
+$wslProc = $null
+if ($overlap) {
+    $laneTag = "ps_ci_wsl_lane_$PID"
+    $laneResultPath = Join-Path $env:TEMP "$laneTag.json"
+    $laneLogPath = Join-Path $env:TEMP "$laneTag.log"
+    $laneErrPath = Join-Path $env:TEMP "$laneTag.err.log"
+    Remove-Item -LiteralPath $laneResultPath, $laneLogPath, $laneErrPath -ErrorAction SilentlyContinue
+    $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-WslLaneOnly', '-LaneResultFile', "`"$laneResultPath`"")
+    if ($Full) { $childArgs += '-Full' }
+    if ($Only) { $childArgs += @('-Only', ($Only -join ',')) }
+    $wslLaneStart = Get-Date
+    $wslProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $childArgs -NoNewWindow -PassThru `
+        -RedirectStandardOutput $laneLogPath -RedirectStandardError $laneErrPath
+    # Touch the handle now: a Start-Process -PassThru object that never had
+    # its handle opened reports an empty ExitCode and no ExitTime after exit.
+    $null = $wslProc.Handle
+    Write-Host ("=== Phase A: WSL lane started in a child process (pid {0}) at {1:HH:mm:ss}, overlapping the Windows lane ===" -f $wslProc.Id, $wslLaneStart) -ForegroundColor Cyan
+}
+
+# --- Phase A, Windows lane (this process). ---
 if (-not $SkipWindows) {
+    $winLaneStart = Get-Date
     Enter-VsDevShell
 
     foreach ($preset in $releaseLegs) {
@@ -398,17 +511,43 @@ if (-not $SkipWindows) {
     Invoke-GodotIncludeGrep
     Test-TranscendentalGrepPattern
     Invoke-TranscendentalGrep
+    $script:PhaseTimings.Add([pscustomobject]@{ Phase = 'A: Windows lane'; TotalSeconds = ((Get-Date) - $winLaneStart).TotalSeconds })
 }
 
-if (-not $SkipWsl) {
-    if (Should-Run 'linux-release') { Invoke-WslLeg -Preset 'linux-release' -LegKind 'release' }
-    if (Should-Run 'linux-asan-ubsan') { Invoke-WslLeg -Preset 'linux-asan-ubsan' -LegKind 'sanitizer' }
-    if (Should-Run 'linux-tsan') { Invoke-WslLeg -Preset 'linux-tsan' -LegKind 'sanitizer' }
+# --- Phase A, WSL lane: join the child, or run it here without overlap. ---
+if ($overlap) {
+    $wslProc.WaitForExit()
+    $script:PhaseTimings.Add([pscustomobject]@{ Phase = 'A: WSL lane (overlapped)'; TotalSeconds = ($wslProc.ExitTime - $wslLaneStart).TotalSeconds })
+    Write-Host ""
+    Write-Host "=== WSL lane output (child process) ===" -ForegroundColor Cyan
+    if (Test-Path -LiteralPath $laneLogPath) { Get-Content -LiteralPath $laneLogPath | ForEach-Object { Write-Host $_ } }
+    if ((Test-Path -LiteralPath $laneErrPath) -and (Get-Item -LiteralPath $laneErrPath).Length -gt 0) {
+        Get-Content -LiteralPath $laneErrPath | ForEach-Object { Write-Host $_ }
+    }
+    if (Test-Path -LiteralPath $laneResultPath) {
+        $lane = Get-Content -LiteralPath $laneResultPath -Raw | ConvertFrom-Json
+        foreach ($r in @($lane.Results)) { if ($r) { Add-Result -Leg $r.Leg -Stage $r.Stage -Pass ([bool]$r.Pass) -Detail $r.Detail -Seconds ([double]$r.Seconds) } }
+        foreach ($l in @($lane.LegTimings)) { if ($l) { $script:LegTimings.Add([pscustomobject]@{ Leg = $l.Leg; TotalSeconds = [double]$l.TotalSeconds }) } }
+        foreach ($b in @($lane.BuiltLegs)) { if ($b) { $script:BuiltLegs.Add([pscustomobject]@{ Preset = $b.Preset; Kind = $b.Kind }) } }
+    } else {
+        Add-Result -Leg 'wsl-lane' -Stage 'child' -Pass $false -Detail "WSL-lane child process (exit code $($wslProc.ExitCode)) wrote no result file"
+    }
+} elseif (-not $SkipWsl) {
+    $wslLaneStart = Get-Date
+    Invoke-WslLane
+    $script:PhaseTimings.Add([pscustomobject]@{ Phase = 'A: WSL lane (sequential)'; TotalSeconds = ((Get-Date) - $wslLaneStart).TotalSeconds })
 }
+
+# --- Phase B: serial wall-clock phase (machine otherwise idle). ---
+$phaseBStart = Get-Date
+Invoke-WalltimePhase
+$script:PhaseTimings.Add([pscustomobject]@{ Phase = 'B: serial walltime'; TotalSeconds = ((Get-Date) - $phaseBStart).TotalSeconds })
 
 # Cheap, and meaningful only once both sides have actually been built this
 # run - PLAN.md D7 / vault PHYS-009 Step 1 rule 4 ("runs in the fast CI too").
+$hashStart = Get-Date
 Invoke-CrossPlatformHashCheck
+$script:PhaseTimings.Add([pscustomobject]@{ Phase = 'hash compare'; TotalSeconds = ((Get-Date) - $hashStart).TotalSeconds })
 
 $wallSeconds = ((Get-Date) - $script:WallStart).TotalSeconds
 
@@ -430,6 +569,12 @@ $script:LegTimings | ForEach-Object {
     Write-Host ("  {0,-20} {1,7:N1}s" -f $_.Leg, $_.TotalSeconds)
 }
 Write-Host ("  {0,-20} {1,7:N1}s" -f 'TOTAL', $wallSeconds) -ForegroundColor Cyan
+
+Write-Host ""
+Write-Host "=== Phase wall clock ===" -ForegroundColor Cyan
+$script:PhaseTimings | ForEach-Object {
+    Write-Host ("  {0,-26} {1,7:N1}s" -f $_.Phase, $_.TotalSeconds)
+}
 
 $failCount = ($script:Results | Where-Object { -not $_.Pass }).Count
 Write-Host ""
