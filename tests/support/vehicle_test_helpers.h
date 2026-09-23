@@ -17,6 +17,27 @@
 
 namespace ps_test {
 
+// A large flat MeshShape ground tagged with a single SurfaceId on every
+// triangle (mirrors tests/unit/test_mesh_heightfield_shapes.cpp's
+// flat_quad_mesh) - used where a test needs the wheel/tyre surface lookup
+// (SurfaceTable::lambda_mu_for/crr_for) to resolve to something other than
+// kInvalidSurfaceId (a plain BoxShape ground, as build_vehicle_rig below
+// uses by default, carries no Jolt material and so always reports
+// kInvalidSurfaceId - fine for tests that don't care about the surface, not
+// for one comparing behaviour across surfaces).
+inline ps::MeshShape flat_surface_mesh(ps::real half_extent, ps::SurfaceId surface) {
+    ps::MeshShape m;
+    m.vertices = {
+        ps::Vec3{-half_extent, -half_extent, 0.0},
+        ps::Vec3{half_extent, -half_extent, 0.0},
+        ps::Vec3{half_extent, half_extent, 0.0},
+        ps::Vec3{-half_extent, half_extent, 0.0},
+    };
+    m.indices = {0, 1, 2, 0, 2, 3}; // CCW viewed from +z, Jolt's MeshShapeSettings convention
+    m.triangle_surface_ids = {surface, surface};
+    return m;
+}
+
 struct VehicleTestRig {
     std::unique_ptr<ps::World> world;
     ps::BodyId chassis;
@@ -92,6 +113,50 @@ inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps
     rig.chassis = rig.world->create_body(chassis);
 
     rig.surfaces = std::make_shared<ps::io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
+    rig.world->set_surface_table(rig.surfaces);
+
+    const ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(vehicle_json_path);
+    rig.vehicle = rig.world->create_vehicle(desc, rig.chassis);
+
+    return rig;
+}
+
+// Same as build_vehicle_rig but for a FLAT ground tagged with a specific
+// SurfaceId (via flat_surface_mesh above) instead of a plain untagged
+// BoxShape - for tests that compare behaviour across surfaces (e.g. full-
+// throttle acceleration on asphalt vs. grass/dirt, which needs
+// SurfaceTable::lambda_mu_for/crr_for to resolve to something other than
+// kInvalidSurfaceId). No slope_grade parameter: a tilted MeshShape ground
+// is not needed by any current test.
+inline VehicleTestRig build_vehicle_rig_on_surface(const std::string& vehicle_json_path, ps::real chassis_mass,
+                                                     const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
+                                                     const std::string& surface_name, int job_workers = 4) {
+    VehicleTestRig rig;
+
+    ps::WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    cfg.job_workers = job_workers;
+    rig.world = std::make_unique<ps::World>(cfg);
+
+    rig.surfaces = std::make_shared<ps::io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
+    const ps::SurfaceId ground_surface = rig.surfaces->id_for(surface_name);
+
+    ps::BodyDesc ground;
+    ground.shape = flat_surface_mesh(1000.0, ground_surface); // see build_vehicle_rig's own comment on why 1000 m
+    ground.motion = ps::BodyMotionType::Static;
+    ground.friction = 1.0;
+    rig.world->create_body(ground);
+
+    ps::BodyDesc chassis;
+    chassis.shape = ps::BoxShape{chassis_half_extents};
+    chassis.motion = ps::BodyMotionType::Dynamic;
+    chassis.mass = chassis_mass;
+    chassis.friction = 0.5;
+    chassis.allow_sleep = false;
+    chassis.pose.position = ps::Vec3{0.0, 0.0, chassis_origin_height};
+    rig.chassis = rig.world->create_body(chassis);
+
     rig.world->set_surface_table(rig.surfaces);
 
     const ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(vehicle_json_path);
