@@ -206,6 +206,25 @@ godot::Vector3 PsSimulation::get_world_origin_godot_position() const {
     return iso_to_godot(ps::Vec3{0.0, 0.0, 0.0}, origin_rebase_.origin());
 }
 
+godot::Transform3D PsSimulation::get_world_origin_godot_transform() const {
+    return iso_to_godot_transform(ps::Pose::identity(), origin_rebase_.origin());
+}
+
+godot::Dictionary PsSimulation::probe_ground_height(float sim_x, float sim_y) const {
+    Dictionary out;
+    out["hit"] = false;
+    out["height_m"] = 0.0f;
+    if (!world_) return out;
+    const ps::real half_range = 4000.0; // generous: above the tallest test-ground feature, below the deepest
+    const ps::RayCastHit hit = world_->backend().ray_cast(
+        ps::Vec3{static_cast<ps::real>(sim_x), static_cast<ps::real>(sim_y), half_range},
+        ps::Vec3{0.0, 0.0, -1.0}, half_range * ps::real(2.0));
+    if (!hit.hit) return out;
+    out["hit"] = true;
+    out["height_m"] = static_cast<float>(hit.point.z);
+    return out;
+}
+
 godot::Transform3D PsSimulation::get_body_transform(const String& body_name) const {
     if (!world_) return godot::Transform3D();
     const std::string name = to_std_string(body_name);
@@ -571,6 +590,8 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_articulation_link_count", "articulation_name"), &PsSimulation::get_articulation_link_count);
     ClassDB::bind_method(D_METHOD("rebase_focus", "focus_godot_position"), &PsSimulation::rebase_focus);
     ClassDB::bind_method(D_METHOD("get_world_origin_godot_position"), &PsSimulation::get_world_origin_godot_position);
+    ClassDB::bind_method(D_METHOD("get_world_origin_godot_transform"), &PsSimulation::get_world_origin_godot_transform);
+    ClassDB::bind_method(D_METHOD("probe_ground_height", "sim_x", "sim_y"), &PsSimulation::probe_ground_height);
     ClassDB::bind_method(D_METHOD("get_body_transform", "body_name"), &PsSimulation::get_body_transform);
     ClassDB::bind_method(D_METHOD("get_body_speed_mps", "body_name"), &PsSimulation::get_body_speed_mps);
     ClassDB::bind_method(D_METHOD("get_articulation_link_transform", "articulation_name", "link_index"), &PsSimulation::get_articulation_link_transform);

@@ -63,6 +63,29 @@ var input_map: Node
 var free_camera: Camera3D
 var chase_camera: Camera3D
 var using_chase_camera: bool = true
+var ground_grid: MeshInstance3D
+
+# M1 visual pass bug fix: ground_grid used to be a fire-and-forget child with
+# an identity transform, fixed forever at Godot (0,0,0) - the speed_grid
+# shader's own header comment already assumed otherwise ("this ground plane
+# is itself repositioned relative to the origin like everything else the
+# adapter draws"), but nothing ever did that repositioning. As soon as the
+# floating origin rebases (chase_cam.gd's rebase_focus, e.g. teleporting to
+# a zone key or just driving past the 500 m threshold), every OTHER visual
+# (terrain_visual.gd, PsBodyNode3D bodies, both cameras) stays glued to the
+# car while this plane stayed exactly where it started - visually "flies
+# off" to wherever the old origin now maps in the new, rebased frame, which
+# can put it well above/behind the camera depending on the rebase direction.
+# Fixed the same way terrain_visual.gd tracks the origin: re-read
+# PsSimulation.get_world_origin_godot_position() every frame (_process
+# below). A small negative Y offset keeps it from z-fighting with
+# terrain_visual's feature meshes (also sitting at/near the ISO z=0 flat-zone
+# height) at a grazing viewing angle - an offset was chosen over drawing it
+# as a depth-tested-off overlay because the grid is meant to read as part of
+# the world (a ground-plane reference), not a HUD-like overlay floating in
+# front of everything; 2 cm is well under what's visible at this camera's
+# distances but enough to resolve the depth-buffer tie everywhere.
+const GRID_Y_OFFSET_M := -0.02
 
 var _autopilot: bool = false
 var _autopilot_phase_t: float = 0.0
@@ -119,7 +142,14 @@ func _ready() -> void:
 			# 3.0) - a "drive" shot further down the straight/at higher
 			# speed needs longer than the default lets the car crawl for.
 			_screenshot_delay_s = a.substr(len("--m1-screenshot-delay=")).to_float()
-	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path, " screenshot_view=", _screenshot_view)
+		elif a.begins_with("--m1-spawn="):
+			# Overrides the exported spawn_id default (spawn_straight_car) for
+			# report/debugging screenshots at another zone (e.g.
+			# spawn_skidpad_car, spawn_main) without touching the scene's own
+			# default - added for the M1 visual-pass bug report's "screenshot
+			# at the skidpad" requirement.
+			spawn_id = a.substr(len("--m1-spawn="))
+	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path, " screenshot_view=", _screenshot_view, " spawn_id=", spawn_id)
 	_setup_lighting()
 
 	simulation = ClassDB.instantiate("PsSimulation")
@@ -209,7 +239,9 @@ func _setup_lighting() -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/speed_grid.gdshader")
 	ground.material_override = mat
+	ground.position = Vector3(0, GRID_Y_OFFSET_M, 0) # re-placed every frame in _process once `simulation` exists
 	add_child(ground)
+	ground_grid = ground
 
 func _read_spawn(track_dir: String, id: String) -> Dictionary:
 	# test_ground.json's own "spawns" array (PLAN.md M1's test ground) -
@@ -392,6 +424,9 @@ func _setup_hud() -> void:
 	add_child(hud)
 
 func _process(delta: float) -> void:
+	if simulation != null and ground_grid != null:
+		ground_grid.position = simulation.get_world_origin_godot_position() + Vector3(0, GRID_Y_OFFSET_M, 0)
+
 	if input_map != null and simulation != null:
 		if input_map.get_camera():
 			_toggle_camera()

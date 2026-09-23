@@ -134,6 +134,31 @@ public:
     // rebase focus (the vehicle/camera's own rebase_focus calls).
     [[nodiscard]] godot::Vector3 get_world_origin_godot_position() const;
 
+    // Same fixed ISO-origin point as get_world_origin_godot_position(), but
+    // as a full Transform3D (rotation included, PLAN.md P2's "single
+    // ISO->Godot conversion" via frame_convert.h::iso_to_godot_transform,
+    // orientation = identity in ISO/ENU axes - see data/tracks/README.md's
+    // "Frame" section). A demo-authored asset whose OWN local axes are
+    // already ISO/ENU-aligned at rest (e.g. terrain_visual.gd's
+    // test_ground.glb, once its glTF-local axes are permuted into ISO order
+    // - see that script's header comment) needs this ROTATION applied too,
+    // not just the position offset get_world_origin_godot_position() alone
+    // gives: ISO/ENU axes are not the same as Godot's own axes (x forward/y
+    // left/z up vs. x right/y up/-z forward), so leaving out the rotation
+    // silently placed such an asset in the wrong orientation entirely (M1
+    // visual pass bug: the terrain visual and the real collision agreed on
+    // WHERE the ground was but not on which way was up).
+    [[nodiscard]] godot::Transform3D get_world_origin_godot_transform() const;
+
+    // Diagnostic-only (M1 visual pass bug 2 report): straight-down ray_cast
+    // (IRigidBackend::ray_cast, same pattern as core/src/terrain/
+    // tile_manager.cpp's own height probe) against the REAL sim collision at
+    // a given RAW ISO x/y - ground truth to compare a visual mesh's Godot-
+    // space height against. Returns {"hit": bool, "height_m": float} (ISO z
+    // of the hit point, NOT Godot-space - the caller applies its own
+    // iso_to_godot conversion so this stays a pure sim-side query).
+    [[nodiscard]] godot::Dictionary probe_ground_height(float sim_x, float sim_y) const;
+
     // --- Body / articulation transforms (race-free: snapshot-backed) ---
     [[nodiscard]] godot::Transform3D get_body_transform(const godot::String& body_name) const;
     [[nodiscard]] godot::Transform3D get_articulation_link_transform(const godot::String& articulation_name, int link_index) const;

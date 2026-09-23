@@ -23,11 +23,31 @@ extends Node3D
 # fixed absolute (0,0,0) (data/tracks/README.md: "Origin (0, 0, 0) is the
 # main spawn point") - it is not attached to any BodyId, so PsBodyNode3D
 # does not apply here. Instead this script re-places itself every frame
-# from PsSimulation.get_world_origin_godot_position() - a PURE query (see
+# from PsSimulation.get_world_origin_godot_transform() - a PURE query (see
 # that method's own comment) that tracks the shared floating origin the
 # same way a body/camera's transform does, without calling rebase_focus
 # (which has side effects on that shared state and would fight the
 # vehicle/cameras' own calls if aimed at an unrelated fixed point).
+#
+# M1 visual pass BUG FIX (misplaced-transform bug, found via measured ray-
+# cast probes - see this adapter's report): this script used to set only
+# `position` from PsSimulation.get_world_origin_godot_position(), a pure
+# position query with NO rotation - leaving _model_root's own basis (below)
+# as the final word on orientation. That basis is documented as the gltf-
+# local -> ISO-local permutation ONLY (exactly vehicle_visual.gd's
+# _model_root basis, which relies on being parented under a PsBodyNode3D
+# that applies the remaining ISO->Godot rotation via frame_convert_core.h -
+# see that script's header comment). This node has no such parent, so that
+# second rotation was simply never applied: the terrain was being rendered
+# in ISO-labelled axes directly reinterpreted as Godot axes (ISO's up axis,
+# z, is not Godot's up axis, y), which put the mesh in the wrong
+# orientation entirely, not merely offset. get_world_origin_godot_transform()
+# supplies exactly that missing rotation (frame_convert.h's
+# iso_to_godot_transform at ISO-identity orientation), so this node now
+# carries BOTH conversions between it and _model_root, the same two-stage
+# composition vehicle_visual.gd gets from (PsBodyNode3D parent, _model_root
+# child) - the only difference is this node's floating-origin position
+# comes from a pure query instead of a BodyId-backed snapshot.
 
 @export var simulation_path: NodePath
 @export var glb_absolute_path: String = ""
@@ -71,4 +91,4 @@ func _load_model() -> void:
 func _process(_delta: float) -> void:
 	if _simulation == null:
 		return
-	position = _simulation.get_world_origin_godot_position()
+	transform = _simulation.get_world_origin_godot_transform()
