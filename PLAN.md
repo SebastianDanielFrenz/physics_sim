@@ -565,7 +565,13 @@ lifting a mass shifts axle loads per hand calculation within 2 %; hydraulic
 cylinder stalls at the pressure-limited force; PTO load pulls engine rpm down
 per the torque curve.
 
-**P8 — Terrain and soil.** Accept: plate-sinkage test reproduces the Bekker
+**P8 — Terrain and soil.** Open from the terrain tiles (2026-09-23): a single
+tick shows a contact spike of about 159 m/s² when a body crosses a tile SEAM
+(measured at x = −512; unrelated to the feature-edge overlap fixed in
+`TileManager::suppress_covered_samples`). Heights and normals match across
+seams to 1e-9, so this looks like a generic tiled-heightfield contact
+artefact; root-cause it here, where terrain gets its own phase.
+Accept: plate-sinkage test reproduces the Bekker
 curve; drawbar pull vs. slip curve has the right shape and peak against a
 published Wong example within 10 %; second pass in the same rut sinks less;
 rut depth persists and is reported to the adapter; tractor performance
