@@ -173,6 +173,7 @@ void PsSimulation::rebuild_post_step_and_start() {
                 ws.fy = wt.fy;
                 ws.fz = wt.fz;
                 ws.surface = wt.surface;
+                ws.steer_angle = world_->wheel_state(vid, w).steer_angle; // real value, see WheelDynamicSnapshot's own comment
                 vs.wheels.push_back(ws);
             }
             snap.vehicles.push_back(std::move(vs));
@@ -527,11 +528,6 @@ float PsSimulation::get_vehicle_max_wheel_angle(const String& vehicle_name) cons
     return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.max_wheel_angle);
 }
 
-float PsSimulation::get_vehicle_ackermann_fraction(const String& vehicle_name) const {
-    const auto it = vehicle_desc_by_name_.find(to_std_string(vehicle_name));
-    return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.ackermann_fraction);
-}
-
 float PsSimulation::get_vehicle_rear_steer_fraction(const String& vehicle_name) const {
     const auto it = vehicle_desc_by_name_.find(to_std_string(vehicle_name));
     return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.rear_steer_fraction);
@@ -555,6 +551,11 @@ float PsSimulation::get_wheel_compression(const String& vehicle_name, int wheel_
 float PsSimulation::get_wheel_omega(const String& vehicle_name, int wheel_index) const {
     const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
     return w == nullptr ? 0.0f : static_cast<float>(w->omega);
+}
+
+float PsSimulation::get_wheel_steer_angle(const String& vehicle_name, int wheel_index) const {
+    const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
+    return w == nullptr ? 0.0f : static_cast<float>(w->steer_angle);
 }
 
 float PsSimulation::get_wheel_slip_ratio(const String& vehicle_name, int wheel_index) const {
@@ -632,10 +633,10 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_wheel_driven", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_driven);
     ClassDB::bind_method(D_METHOD("get_wheel_is_front", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_is_front);
     ClassDB::bind_method(D_METHOD("get_vehicle_max_wheel_angle", "vehicle_name"), &PsSimulation::get_vehicle_max_wheel_angle);
-    ClassDB::bind_method(D_METHOD("get_vehicle_ackermann_fraction", "vehicle_name"), &PsSimulation::get_vehicle_ackermann_fraction);
     ClassDB::bind_method(D_METHOD("get_vehicle_rear_steer_fraction", "vehicle_name"), &PsSimulation::get_vehicle_rear_steer_fraction);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_wheel_omega", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_omega);
+    ClassDB::bind_method(D_METHOD("get_wheel_steer_angle", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_steer_angle);
     ClassDB::bind_method(D_METHOD("get_wheel_slip_ratio", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_slip_ratio);
     ClassDB::bind_method(D_METHOD("get_wheel_slip_angle", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_slip_angle);
     ClassDB::bind_method(D_METHOD("get_wheel_load_n", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_load_n);

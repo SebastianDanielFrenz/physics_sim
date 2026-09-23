@@ -74,6 +74,14 @@ struct WheelDynamicSnapshot {
     ps::real slip_angle = 0.0;
     ps::real fx = 0.0, fy = 0.0, fz = 0.0;
     ps::SurfaceId surface = ps::kInvalidSurfaceId;
+    // Real per-wheel steer angle (World::wheel_state's steer_angle, not the
+    // wheel_telemetry fields above - see wheel_state.h). Added so
+    // vehicle_visual.gd can animate steering from the ACTUAL simulated
+    // Ackermann/anti-Ackermann/rear-steer result instead of recomputing an
+    // approximation client-side from SteeringDesc params (this struct's own
+    // earlier comment on why WheelState is a separate type from
+    // WheelTelemetry applies here too - vault PHYS-020).
+    ps::real steer_angle = 0.0;
 };
 
 struct VehicleDynamicSnapshot {
@@ -258,12 +266,12 @@ public:
     [[nodiscard]] bool get_wheel_driven(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] bool get_wheel_is_front(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_vehicle_max_wheel_angle(const godot::String& vehicle_name) const;
-    [[nodiscard]] float get_vehicle_ackermann_fraction(const godot::String& vehicle_name) const;
     [[nodiscard]] float get_vehicle_rear_steer_fraction(const godot::String& vehicle_name) const;
 
     // Dynamic per-wheel telemetry (race-free via AdapterSnapshot).
     [[nodiscard]] float get_wheel_compression(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_omega(const godot::String& vehicle_name, int wheel_index) const;
+    [[nodiscard]] float get_wheel_steer_angle(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_slip_ratio(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_slip_angle(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_load_n(const godot::String& vehicle_name, int wheel_index) const; // fz

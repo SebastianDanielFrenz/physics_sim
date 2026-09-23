@@ -5,21 +5,23 @@ extends Node3D
 # per this adapter's lane note, so loaded at RUNTIME via GLTFDocument
 # rather than importing it through the editor's res:// pipeline).
 #
-# Wheel visuals follow suspension travel and spin from the REAL simulated
-# per-tick state (World::wheel_telemetry's compression/omega, read via
-# PsSimulation.get_wheel_compression/get_wheel_omega). Steering does NOT
-# have a real per-wheel state to read - core exposes no per-wheel steer-
-# angle accessor (WheelTelemetry has slip_ratio/slip_angle/fx/fy/fz/omega/
-# compression/surface, but no steer_angle - see this adapter's report for
-# the exact API this needs, e.g. WheelTelemetry::steer_angle or a
-# World::wheel_steer_angle(VehicleId, wheel_index)). Steering below is
-# therefore an APPROXIMATION: it recomputes the same Ackermann formula the
-# core's own vehicle_instance.cpp uses (out/handover_p3.md), from the
-# vehicle's own SteeringDesc params (get_vehicle_max_wheel_angle/
-# get_vehicle_ackermann_fraction/get_vehicle_rear_steer_fraction) and the
-# live "steer" control channel - matches the real value whenever
-# steer_rate_limit is 0 (car_sedan.json's is), and is otherwise a lagged
-# approximation.
+# Wheel visuals follow suspension travel, spin AND steering from the REAL
+# simulated per-tick state: World::wheel_telemetry's compression/omega (via
+# PsSimulation.get_wheel_compression/get_wheel_omega) and World::wheel_state's
+# steer_angle (ps/vehicle/wheel_state.h, via PsSimulation.get_wheel_steer_angle
+# - added alongside this fix; previously core exposed no per-wheel steer-angle
+# accessor, so this script recomputed an APPROXIMATION of the Ackermann
+# formula client-side from the vehicle's SteeringDesc params, which (a) was
+# wrong for any ackermann_fraction other than 1 - a parallel-steer car
+# (fraction 0) showed its front wheels not turning at all, and an
+# anti-Ackermann car (fraction < 0) showed them turned the wrong way, both
+# just multiplying the same visual angle by ackermann_fraction regardless of
+# sign or magnitude - and (b) lagged the real value whenever
+# steer_rate_limit was nonzero (car_sedan.json's is 0, so this specific
+# lag never showed up in the shipped demo). get_wheel_steer_angle returns
+# ackermann_wheel_angle()'s actual per-wheel result (vehicle_instance.cpp) -
+# correct for every ackermann_fraction and steer_rate_limit value, front or
+# rear wheel, with no client-side recomputation.
 #
 # Node names below match data/models/car_sedan/car_sedan.rig.json exactly
 # ("susp_<corner>"/"steer_<corner>"/"wheel_<corner>", corner in
@@ -129,11 +131,6 @@ func _process(delta: float) -> void:
 		return
 	var t0 := Time.get_ticks_usec()
 
-	var max_wheel_angle: float = _simulation.get_vehicle_max_wheel_angle(vehicle_name)
-	var ackermann_fraction: float = _simulation.get_vehicle_ackermann_fraction(vehicle_name)
-	var rear_steer_fraction: float = _simulation.get_vehicle_rear_steer_fraction(vehicle_name)
-	var steer_input: float = _simulation.get_control("steer") # -1..1, same channel the vehicle itself reads
-
 	for i in range(_wheel_nodes.size()):
 		var w = _wheel_nodes[i]
 		var compression: float = _simulation.get_wheel_compression(vehicle_name, i)
@@ -149,13 +146,19 @@ func _process(delta: float) -> void:
 			# (World::wheel_telemetry's compression).
 			w["susp"].position = w["rest_susp_pos"] + Vector3(0, 1, 0) * compression
 
-		if w["steer"] != null:
-			if w["steered"]:
-				# APPROXIMATION - see file header comment. Steer axis ISO
-				# [0,0,1] (up) -> gltf-local +Y (see susp_* comment above).
-				w["steer"].rotation = Vector3(0, steer_input * max_wheel_angle * ackermann_fraction, 0)
-			elif not w["is_front"] and rear_steer_fraction != 0.0:
-				w["steer"].rotation = Vector3(0, -steer_input * max_wheel_angle * ackermann_fraction * rear_steer_fraction, 0)
+		if w["steer"] != null and w["steered"]:
+			# Real simulated per-wheel steer angle (World::wheel_state's
+			# steer_angle, ackermann_wheel_angle()'s actual result for THIS
+			# wheel - correct for any ackermann_fraction, front or rear,
+			# see file header comment). ackermann_wheel_angle() already
+			# returns 0 for a non-steered wheel, so this only needs the
+			# w["steered"] guard to skip the get_wheel_steer_angle call
+			# (and leave steer_*'s rotation at its rest value) for wheels
+			# with no steer_<corner> node's rotation to drive at all.
+			# Steer axis ISO [0,0,1] (up) -> gltf-local +Y (see susp_*
+			# comment above).
+			var steer_angle: float = _simulation.get_wheel_steer_angle(vehicle_name, i)
+			w["steer"].rotation = Vector3(0, steer_angle, 0)
 
 		if w["wheel"] != null:
 			# Real simulated state (World::wheel_telemetry's omega,
