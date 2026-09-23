@@ -87,7 +87,13 @@ int main() {
     const double speedup = t1 / t10;
     std::printf("bench_force_elements: 1-worker=%.4f ms, 10-worker=%.4f ms, speedup=%.2fx\n", t1, t10, speedup);
 
-#if defined(NDEBUG)
+#ifndef PS_BENCH_ASSERT_TIMING
+#error "PS_BENCH_ASSERT_TIMING must be defined to 0 or 1 (see tests/bench/CMakeLists.txt)"
+#endif
+    // Enforced exactly when CMake labels this test "walltime" (tests/bench/
+    // CMakeLists.txt: every non-Debug build type, i.e. wherever NDEBUG is
+    // defined), so tools/ci.ps1 runs it only in its serial, machine-exclusive phase.
+#if PS_BENCH_ASSERT_TIMING
     const double kRequiredSpeedup = 6.0;
     if (speedup < kRequiredSpeedup) {
         std::fprintf(stderr, "bench_force_elements: FAIL - speedup %.2fx < required %.2fx (release build)\n", speedup, kRequiredSpeedup);

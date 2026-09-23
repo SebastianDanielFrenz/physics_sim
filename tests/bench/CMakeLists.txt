@@ -3,6 +3,34 @@
 # measured numbers are always on stdout; run on the release preset for a
 # meaningful pass/fail (see bench_force_elements.cpp's header comment).
 
+# Which builds ASSERT wall-clock numbers (single source of truth for both
+# the benches' own #if and the ctest labels below):
+# - bench_force_elements: every non-Debug build type (where NDEBUG is set);
+# - bench_terrain_tiles:  every non-sanitizer build (PS_SANITIZER_BUILD OFF).
+# A bench that asserts timing on this build gets LABELS walltime and
+# PROCESSORS 24. tools/ci.ps1 excludes "walltime" from its parallel phase
+# (where Windows and WSL legs overlap) and runs those tests afterwards in a
+# serial phase with nothing else running, one leg at a time. PROCESSORS 24
+# additionally keeps a hand-run `ctest --parallel` from scheduling anything
+# beside them. A bench that only REPORTS timing on this build (sanitizer or
+# Debug) is an ordinary test: no label, default PROCESSORS, so it no longer
+# serialises the sanitizer legs for a number nobody checks.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(PS_BENCH_FORCE_ASSERTS_TIMING 0)
+else()
+  set(PS_BENCH_FORCE_ASSERTS_TIMING 1)
+endif()
+if(PS_SANITIZER_BUILD)
+  set(PS_BENCH_TERRAIN_ASSERTS_TIMING 0)
+else()
+  set(PS_BENCH_TERRAIN_ASSERTS_TIMING 1)
+endif()
+function(ps_mark_walltime_bench test_name asserts_timing)
+  if(asserts_timing)
+    set_tests_properties(${test_name} PROPERTIES LABELS walltime PROCESSORS 24)
+  endif()
+endfunction()
+
 add_executable(bench_force_elements bench_force_elements.cpp)
 
 target_include_directories(bench_force_elements PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
@@ -14,6 +42,8 @@ target_link_libraries(bench_force_elements
     ps_warnings
     ps_options
 )
+
+target_compile_definitions(bench_force_elements PRIVATE PS_BENCH_ASSERT_TIMING=${PS_BENCH_FORCE_ASSERTS_TIMING})
 
 add_test(NAME bench_force_elements COMMAND bench_force_elements)
 
@@ -27,8 +57,8 @@ add_test(NAME bench_force_elements COMMAND bench_force_elements)
 # fully green run (every other test - including every [long]/[heavy]/
 # [sanitizer] one - passed). PROCESSORS is set above the highest --parallel
 # level tools/ci.ps1 uses (WSL's 24) so ctest's scheduler always runs this
-# test completely alone, regardless of leg.
-set_tests_properties(bench_force_elements PROPERTIES PROCESSORS 24)
+# test completely alone - on every build where it asserts (see ps_mark_walltime_bench above).
+ps_mark_walltime_bench(bench_force_elements ${PS_BENCH_FORCE_ASSERTS_TIMING})
 
 # bench_contact_coupling - PLAN.md P1.5b measurement (f): cost per tick per
 # strategy, scaling with contact count (bench_contact_coupling.cpp's header
@@ -91,9 +121,9 @@ add_test(NAME bench_terrain_tiles COMMAND bench_terrain_tiles)
 # alone immediately afterward on the same machine, both comfortably under
 # the 250 ms bound. PROCESSORS above the highest --parallel level
 # tools/ci.ps1 uses (WSL's 24) makes ctest's scheduler always run this test
-# completely alone, regardless of leg - not a loosened threshold, the
+# completely alone wherever it asserts - not a loosened threshold, the
 # measurement itself needs to run uncontended to mean anything.
-set_tests_properties(bench_terrain_tiles PROPERTIES PROCESSORS 24)
+ps_mark_walltime_bench(bench_terrain_tiles ${PS_BENCH_TERRAIN_ASSERTS_TIMING})
 
 # ps_energy_study - Part A energy-loss measurement study (see
 # tests/bench/energy_study.cpp's header comment). Deliberately NOT
