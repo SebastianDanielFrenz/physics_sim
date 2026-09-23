@@ -22,8 +22,9 @@ Pose extrapolate_pose(const Pose& p0, const Motion& m0, real t) {
 
 } // namespace
 
-VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces)
-    : chassis_(chassis), surfaces_(surfaces), desc_(desc) {
+VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces,
+                                   const ControlChannelIndices& control_indices)
+    : chassis_(chassis), surfaces_(surfaces), control_indices_(control_indices), desc_(desc) {
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
         wheels_.push_back(std::make_unique<WheelInstance>(w, create_pacejka_tyre_model(w.tyre)));
@@ -107,7 +108,15 @@ real VehicleInstance::ackermann_wheel_angle(std::size_t wheel_index, real delta_
     return (real(1.0) - f) * delta_avg + f * delta_ackermann;
 }
 
-void VehicleInstance::step_tick(IRigidBackend& backend, const ControlInputs& controls, real tick_dt, real substep_rate_hz) {
+void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt, real substep_rate_hz) {
+    // PLAN.md P4 I0: built locally (stack, no allocation) from this
+    // vehicle's own pre-resolved indices - see ControlChannelIndices.
+    ControlInputs controls;
+    controls.steer = channel_values[control_indices_.steer];
+    controls.throttle = channel_values[control_indices_.throttle];
+    controls.brake = channel_values[control_indices_.brake];
+    controls.handbrake = channel_values[control_indices_.handbrake];
+
     const Pose pose0 = backend.get_pose(chassis_);
     const Motion motion0 = backend.get_motion(chassis_);
 

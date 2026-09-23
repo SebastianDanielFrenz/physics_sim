@@ -26,15 +26,26 @@ struct ControlInputs {
     real handbrake = 0.0; // 0..1
 };
 
+// PLAN.md P4 I0 (PHYS-033 section 8, Q4): this vehicle's four control
+// channels, resolved to indices into World's flat control_channel_values_
+// ONCE at create_vehicle (ps::World::create_vehicle, world.cpp) - plain
+// indices, so step_tick below never hashes a string or touches World's
+// std::unordered_map<std::string, ...> on the hot path.
+struct ControlChannelIndices {
+    std::size_t steer = 0, throttle = 0, brake = 0, handbrake = 0;
+};
+
 class VehicleInstance {
 public:
-    VehicleInstance(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces);
+    VehicleInstance(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces,
+                     const ControlChannelIndices& control_indices);
 
     // Runs every substep in this tick (PLAN.md D3: chassis state
     // extrapolated within the tick from its start pose/motion), then
     // applies the substep-averaged wrench once via backend.apply_wrench
-    // (out/handover_p3.md decision 3b).
-    void step_tick(IRigidBackend& backend, const ControlInputs& controls, real tick_dt, real substep_rate_hz);
+    // (out/handover_p3.md decision 3b). `channel_values` is World's flat
+    // control_channel_values_ array, indexed by control_indices_ below.
+    void step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt, real substep_rate_hz);
 
     [[nodiscard]] std::size_t wheel_count() const { return wheels_.size(); }
     [[nodiscard]] const WheelTelemetry& wheel_telemetry(std::size_t i) const { return wheels_[i]->telemetry(); }
@@ -49,6 +60,7 @@ private:
 
     BodyId chassis_;
     const io::SurfaceTable* surfaces_;
+    ControlChannelIndices control_indices_;
     VehicleDesc desc_;
     std::vector<std::unique_ptr<WheelInstance>> wheels_;
 

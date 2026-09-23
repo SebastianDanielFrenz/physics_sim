@@ -22,14 +22,20 @@ namespace ps::vehicle {
 
 class System {
 public:
-    VehicleId create(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces);
+    VehicleId create(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces,
+                      const ControlChannelIndices& control_indices);
 
     // One job per vehicle (PLAN.md D8), safe unparallelised-vs-shared-state
     // because each vehicle owns a distinct chassis body - no two jobs ever
     // call IRigidBackend::apply_wrench on the same body (unlike
     // articulation::System::step_all's Compliant-contact case, which needs
     // a sequential pass first for exactly that reason).
-    void step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const ControlInputs& controls,
+    //
+    // PLAN.md P4 I0 (PHYS-033 section 8, Q4): `channel_values` is World's
+    // flat control_channel_values_ array; each VehicleInstance reads it at
+    // its own pre-resolved indices (ControlChannelIndices, set at create())
+    // - no string lookup and no per-vehicle vector to build happens here.
+    void step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const std::vector<real>& channel_values,
                   real tick_dt, real substep_rate_hz);
 
     [[nodiscard]] bool empty() const { return instances_.empty(); }

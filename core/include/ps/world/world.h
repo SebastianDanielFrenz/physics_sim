@@ -137,14 +137,20 @@ public:
     // PLAN.md P2 adapter report / this task's step 3: named control
     // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can
     // reach vehicle code without any Godot (or other front-end) type
-    // crossing into the core. PLAN.md P3: the "steer"/"throttle"/"brake"/
-    // "handbrake" channels now feed every vehicle created via
-    // create_vehicle below (out/handover_p3.md decision 5: global, not
-    // per-vehicle - matches M1's one-car scope).
-    void set_control(const std::string& channel, real value) { control_channels_[channel] = value; }
+    // crossing into the core. PLAN.md P4 I0 (PHYS-033 section 8, Q4): a
+    // global name (e.g. "steer") addresses the designated input vehicle
+    // (vehicle index 0); a "v<i>." prefix (e.g. "v1.steer") addresses
+    // vehicle i. This API is unchanged for existing callers (ps_run
+    // scenarios' control_events, the Godot adapter) - only the internal
+    // storage is index-based now (see ensure_control_channel_index below),
+    // so per-vehicle resolution at create_vehicle need not hash a string
+    // every tick.
+    void set_control(const std::string& channel, real value) {
+        control_channel_values_[ensure_control_channel_index(channel)] = value;
+    }
     [[nodiscard]] real get_control(const std::string& channel) const {
-        const auto it = control_channels_.find(channel);
-        return it == control_channels_.end() ? real(0.0) : it->second;
+        const auto it = control_channel_index_.find(channel);
+        return it == control_channel_index_.end() ? real(0.0) : control_channel_values_[it->second];
     }
 
     // PLAN.md section 6 / P3: shared surface-parameter lookup (lambda_mu,
@@ -208,6 +214,12 @@ public:
 
 private:
     void build_pipeline();
+    // PLAN.md P4 I0 (PHYS-033 section 8, Q4): returns channel's index into
+    // control_channel_values_, creating a zero-valued slot the first time
+    // `channel` is named (by set_control or by a vehicle's channel-block
+    // resolution at create_vehicle) so the two can be called in either
+    // order. Never called from inside a job.
+    std::size_t ensure_control_channel_index(const std::string& channel);
     void stage_vehicle_islands();
     void stage_force_elements();
     void stage_gather();
@@ -229,7 +241,18 @@ private:
     std::unique_ptr<terrain::TileManager> terrain_manager_;      // PLAN.md M1; forward-declared above; null until set_terrain_source
     std::unique_ptr<vehicle::System> vehicle_system_;             // PLAN.md 5.1/P3; forward-declared above
     std::shared_ptr<const io::SurfaceTable> surface_table_;       // PLAN.md section 6/P3; null == every surface reads as lambda_mu=1, crr=0
-    std::unordered_map<std::string, real> control_channels_;     // PLAN.md P2/M1 step 3
+    // PLAN.md P2/M1 step 3, indexed since P4 I0 (PHYS-033 section 8, Q4):
+    // name -> index into control_channel_values_. Lookup/insert only,
+    // never iterated (D7) - set_control/get_control and per-vehicle
+    // channel-block resolution (create_vehicle) are the only callers, and
+    // none of this runs inside a job.
+    std::unordered_map<std::string, std::size_t> control_channel_index_;
+    // Index == a channel's resolved index (ensure_control_channel_index).
+    // vehicle::System::step_all reads this directly by each vehicle's own
+    // pre-resolved indices (set at create_vehicle) - see
+    // core/src/vehicle/vehicle_instance.h's ControlChannelIndices - so the
+    // vehicle job never hashes a string.
+    std::vector<real> control_channel_values_;
     // PLAN.md P1.5b; index i pairs with ArticulationId{i, 1} (articulations
     // are never destroyed, so index == id.index always); nullptr == that
     // articulation's contact_strategy was None. Declared after backend_

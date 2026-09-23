@@ -385,8 +385,18 @@ std::uint64_t run_vehicle_scenario(int workers, int ticks) {
 
     for (int t = 0; t < ticks; ++t) {
         const real time_s = static_cast<real>(t) * world.dt();
-        world.set_control("steer", time_s < 0.3 ? real(0.0) : real(0.2));
+        const real steer = time_s < 0.3 ? real(0.0) : real(0.2);
+        // PLAN.md P4 I0 (PHYS-033 section 8, Q4): a bare channel name now
+        // addresses only the designated input vehicle (index 0); vehicle 1
+        // needs its own "v1."-prefixed channel to keep receiving the same
+        // steer/throttle command both vehicles shared before per-vehicle
+        // channel resolution existed (this test's own header comment: both
+        // vehicles are meant to be "driven straight then given a step-steer
+        // input mid-run").
+        world.set_control("steer", steer);
+        world.set_control("v1.steer", steer);
         world.set_control("throttle", real(0.3));
+        world.set_control("v1.throttle", real(0.3));
         world.step();
     }
     return world.state_hash();

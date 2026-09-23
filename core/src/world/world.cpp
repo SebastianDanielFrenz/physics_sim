@@ -85,6 +85,15 @@ void World::build_pipeline() {
     last_stage_ms_.assign(slot, 0.0);
 }
 
+std::size_t World::ensure_control_channel_index(const std::string& channel) {
+    const auto it = control_channel_index_.find(channel);
+    if (it != control_channel_index_.end()) return it->second;
+    const std::size_t idx = control_channel_values_.size();
+    control_channel_values_.push_back(real(0.0));
+    control_channel_index_.emplace(channel, idx);
+    return idx;
+}
+
 ForceElementId World::add_force_element(const IForceElement* element) {
     force_elements_.push_back(element);
     force_element_wrenches_.push_back(Wrench{});
@@ -144,15 +153,13 @@ void World::stage_vehicle_islands() {
     // PLAN.md 5.1/P3 (out/handover_p3.md decision 3): vehicles step in the
     // same stage, right after articulations - both are "vehicle islands" in
     // PLAN.md D8's sense (per-instance internal state sub-stepped at
-    // substep_rate_hz, one job per instance). Control channels stay global
-    // for P3/M1's one-car scope (decision 5).
+    // substep_rate_hz, one job per instance). PLAN.md P4 I0 (PHYS-033
+    // section 8, Q4): each vehicle now reads its OWN pre-resolved channel
+    // indices (create_vehicle) out of control_channel_values_ - passed
+    // through unchanged here, so this stage does no per-tick string lookup
+    // and no allocation.
     if (!vehicle_system_->empty()) {
-        vehicle::ControlInputs controls;
-        controls.steer = get_control("steer");
-        controls.throttle = get_control("throttle");
-        controls.brake = get_control("brake");
-        controls.handbrake = get_control("handbrake");
-        vehicle_system_->step_all(*backend_, *job_system_, controls, dt_, config_.substep_rate_hz);
+        vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, dt_, config_.substep_rate_hz);
     }
 }
 
@@ -364,7 +371,27 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
 }
 
 VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis) {
-    const VehicleId id = vehicle_system_->create(desc, chassis, surface_table_.get());
+    // PLAN.md P4 I0 (PHYS-033 section 8, Q4): resolve this vehicle's four
+    // control channels to indices ONCE, here (setup time, off the tick
+    // path - never called from inside a job). Vehicle index 0 (the next
+    // instance's index, since vehicles are never destroyed - same
+    // invariant wheel_telemetry_channels_ below relies on) is the
+    // designated input vehicle and reads bare global names ("steer", ...);
+    // every other vehicle reads its own "v<i>." prefixed names. The
+    // string API (World::set_control/get_control) is unaffected - a
+    // caller may still set "v1.steer" etc. at any time, before or after
+    // this vehicle is created (ensure_control_channel_index handles both
+    // orders).
+    constexpr id_index_t kDesignatedInputVehicle = 0;
+    const id_index_t vehicle_index = static_cast<id_index_t>(vehicle_system_->count());
+    const std::string channel_prefix = vehicle_index == kDesignatedInputVehicle ? std::string() : ("v" + std::to_string(vehicle_index) + ".");
+    vehicle::ControlChannelIndices channel_indices;
+    channel_indices.steer = ensure_control_channel_index(channel_prefix + "steer");
+    channel_indices.throttle = ensure_control_channel_index(channel_prefix + "throttle");
+    channel_indices.brake = ensure_control_channel_index(channel_prefix + "brake");
+    channel_indices.handbrake = ensure_control_channel_index(channel_prefix + "handbrake");
+
+    const VehicleId id = vehicle_system_->create(desc, chassis, surface_table_.get(), channel_indices);
     // PLAN.md P3 scope item 7: register this vehicle's per-wheel telemetry
     // channels now (setup time, not a hot path) so the CSV header names
     // every wheel by its vehicle index and the wheel's own name (e.g.
