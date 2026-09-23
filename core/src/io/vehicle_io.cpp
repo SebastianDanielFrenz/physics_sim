@@ -168,6 +168,19 @@ SteeringDesc read_steering(const json& j) {
     if (j.is_null()) return s;
     s.max_wheel_angle = j.value("max_wheel_angle", s.max_wheel_angle);
     s.ackermann_fraction = j.value("ackermann_fraction", s.ackermann_fraction);
+    // [-1, 1]: 1 = full geometric Ackermann, -1 = full anti-Ackermann (see
+    // vehicle_desc.h's SteeringDesc::ackermann_fraction comment) - the two
+    // "full effect" endpoints in either direction. Anything further out
+    // overshoots the geometric correction the formula is built from by
+    // more than the geometry itself justifies and is far more likely a
+    // data-entry mistake (e.g. a stray extra digit, or degrees where
+    // radians/a unit fraction was meant) than an intentional setting; no
+    // vehicle file in this project needs more than +-1.
+    if (s.ackermann_fraction < real(-1.0) || s.ackermann_fraction > real(1.0)) {
+        throw std::runtime_error("steering.ackermann_fraction must be in [-1, 1] (1 = full geometric "
+                                  "Ackermann, -1 = full anti-Ackermann, 0 = parallel steer), got " +
+                                  std::to_string(s.ackermann_fraction));
+    }
     s.rear_steer_fraction = j.value("rear_steer_fraction", s.rear_steer_fraction);
     s.steer_rate_limit = j.value("steer_rate_limit", s.steer_rate_limit);
     return s;

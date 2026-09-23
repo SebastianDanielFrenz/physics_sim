@@ -93,7 +93,37 @@ struct WheelDesc {
 // (derived from wheel attachment points at build time, not stored here).
 struct SteeringDesc {
     real max_wheel_angle = 0.5236; // rad (30 deg) at full steer input
-    real ackermann_fraction = 1.0; // 0 = parallel steer, 1 = full (geometric) Ackermann
+    // Each steered wheel's angle is delta_avg + ackermann_fraction *
+    // (delta_ackermann_geometric - delta_avg) (core/src/vehicle/
+    // vehicle_instance.cpp's ackermann_wheel_angle): 0 = parallel steer
+    // (every steered wheel gets the same angle, delta_avg), 1 = full
+    // geometric Ackermann (each wheel's own turn centre coincides with the
+    // others', so the INNER wheel - closer to the turn centre - gets the
+    // larger-magnitude angle). NEGATIVE = anti-Ackermann, as used on some
+    // race cars (e.g. some F1 setups): the OUTER wheel gets the larger-
+    // magnitude angle instead, trading turn-centre coincidence for putting
+    // the more heavily loaded outer tyre (which carries extra load from
+    // cornering weight transfer) at a larger slip angle, closer to its own
+    // (load-shifted) peak lateral-force slip angle. The magnitude |f| is
+    // how far the wheel is pushed from parallel steer TOWARD (f>0) or AWAY
+    // FROM (f<0) the geometric-Ackermann angle - e.g. f=-1 gives the inner
+    // wheel the same angular offset from delta_avg as full Ackermann would,
+    // but with the sign of that offset reversed, so the OUTER wheel ends up
+    // with the larger magnitude. Validated/accepted range: [-1, 1]
+    // (ps::io::load_vehicle_json rejects anything outside it) - 1 and -1
+    // are each the "full" geometric effect in one direction or the other;
+    // going further (e.g. -2) would overshoot the geometric correction by
+    // more than the geometry itself justifies and is far more likely a
+    // data-entry mistake than an intentional setting (no vehicle in this
+    // project's data/vehicles/*.json needs more than +-1 - see
+    // out/handover_anti_ackermann.md / vault PHYS-025 for the measured
+    // effect on car_sedan.json's skidpad and limit-speed behaviour, and
+    // ackermann_wheel_angle's own comment for the geometric-singularity
+    // caveat this range does not remove: a vehicle with a very short
+    // wheelbase relative to track can still see the underlying geometric
+    // Ackermann term itself blow up near a tight-turn singularity,
+    // independent of this fraction's sign).
+    real ackermann_fraction = 1.0;
     real rear_steer_fraction = 0.0; // rear wheels steer this fraction of the equivalent front angle, opposite sign (0 = no rear steer)
     real steer_rate_limit = 0.0;    // rad/s; 0 == unlimited (instantaneous)
 };

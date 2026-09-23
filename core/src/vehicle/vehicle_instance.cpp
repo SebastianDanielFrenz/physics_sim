@@ -81,6 +81,24 @@ real VehicleInstance::ackermann_wheel_angle(std::size_t wheel_index, real delta_
         // no four-quadrant ambiguity to get wrong.
         delta_ackermann = std::abs(denom) < real(1e-6) ? delta_avg : ps::math::atan(dx / denom);
     }
+    // ackermann_fraction (f, validated to [-1, 1] by ps::io::load_vehicle_json
+    // - see vehicle_desc.h's SteeringDesc::ackermann_fraction comment) is
+    // negative for anti-Ackermann: rewriting as delta_avg + f*(delta_ackermann
+    // - delta_avg) makes it clear this only ever pushes a wheel's angle
+    // toward (f>0) or away from (f<0) delta_ackermann relative to the
+    // parallel-steer baseline delta_avg - it can flip which wheel (inner vs.
+    // outer) gets the larger magnitude, but for any f in the validated range
+    // it cannot flip a wheel's SIGN (turning direction) on its own; checked
+    // against car_sedan.json at full lock (out/handover_anti_ackermann.md /
+    // vault PHYS-025): f=-1 still turns both front wheels toward the
+    // commanded direction, it just makes the outer wheel's magnitude exceed
+    // the inner's instead of the reverse. The one caveat this does not
+    // remove is the SAME geometric singularity full (f=1) Ackermann already
+    // has, independent of f's sign: as R (this wheel's turn-centre offset)
+    // approaches dy, denom above approaches zero and delta_ackermann itself
+    // blows up (guarded by the abs(denom) check above) - an extremely
+    // short-wheelbase/wide-track vehicle at a very tight lock could still
+    // see large swings here, not specific to f<0.
     const real f = desc_.steering.ackermann_fraction;
     return (real(1.0) - f) * delta_avg + f * delta_ackermann;
 }

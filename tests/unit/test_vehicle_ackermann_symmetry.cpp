@@ -48,7 +48,89 @@ std::pair<real, real> front_steer_angles(ps_test::VehicleTestRig& rig, real stee
     rig.world->step();
     return {rig.world->wheel_state(rig.vehicle, kFL).steer_angle, rig.world->wheel_state(rig.vehicle, kFR).steer_angle};
 }
+
+// Builds the same rig as ps_test::build_vehicle_rig (car_sedan.json's own
+// geometry, same chassis box/mass/ride-height every other test in this
+// file uses) but with steering.ackermann_fraction overridden in memory -
+// data/vehicles/*.json is this project's real vehicle fleet (PLAN.md
+// section 8), not a place for one-off per-test fixture values, and
+// VehicleDesc is plain data (ps::io::load_vehicle_json returns it by
+// value), so mutating the loaded desc before World::create_vehicle is the
+// natural way to test a range of fractions against one vehicle's geometry.
+ps_test::VehicleTestRig build_rig_with_ackermann_fraction(real fraction) {
+    ps_test::VehicleTestRig rig;
+
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    cfg.job_workers = 4;
+    rig.world = std::make_unique<World>(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{1000.0, 1000.0, 0.5}}; // see build_vehicle_rig's own comment on why 1000 m
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 1.0;
+    rig.world->create_body(ground);
+
+    BodyDesc chassis;
+    chassis.shape = BoxShape{Vec3{2.0, 0.4, 0.15}}; // matches every other test in this file
+    chassis.motion = BodyMotionType::Dynamic;
+    chassis.mass = 1500.0;
+    chassis.friction = 0.5;
+    chassis.allow_sleep = false;
+    chassis.pose.position = Vec3{0.0, 0.0, 0.6};
+    rig.chassis = rig.world->create_body(chassis);
+
+    rig.surfaces = std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
+    rig.world->set_surface_table(rig.surfaces);
+
+    vehicle::VehicleDesc desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
+    desc.steering.ackermann_fraction = fraction;
+    rig.vehicle = rig.world->create_vehicle(desc, rig.chassis);
+
+    return rig;
+}
 } // namespace
+
+TEST_CASE("Anti-Ackermann (f<0) gives the outer front wheel the larger-magnitude angle", "[unit][vehicle]") {
+    auto rig = build_rig_with_ackermann_fraction(-1.0);
+
+    const auto [fl_left, fr_left] = front_steer_angles(rig, 1.0);    // full left lock: outer = FR
+    const auto [fl_right, fr_right] = front_steer_angles(rig, -1.0); // full right lock, mirror input: outer = FL
+
+    INFO("left lock:  FL=" << fl_left << " rad, FR=" << fr_left << " rad");
+    INFO("right lock: FL=" << fl_right << " rad, FR=" << fr_right << " rad");
+
+    // Every wheel still turns TOWARD the commanded direction - anti-Ackermann
+    // changes which wheel gets the bigger magnitude, not the turn direction.
+    CHECK(fl_left > 0.0);
+    CHECK(fr_left > 0.0);
+    CHECK(fl_right < 0.0);
+    CHECK(fr_right < 0.0);
+
+    // Exact mirror symmetry, same argument as the geometric-Ackermann case
+    // above: the vehicle's own geometry is left/right symmetric.
+    CHECK(fl_left == Catch::Approx(-fr_right).margin(1e-9));
+    CHECK(fr_left == Catch::Approx(-fl_right).margin(1e-9));
+
+    // Anti-Ackermann: the OUTER wheel (farther from the turn centre) now
+    // gets the larger-magnitude angle - the reverse of the f=1 case above.
+    // FR is outer at left lock, FL is outer at right lock.
+    CHECK(fr_left > fl_left);
+    CHECK(std::abs(fl_right) > std::abs(fr_right));
+}
+
+TEST_CASE("ackermann_fraction = 0 gives identical parallel-steer angles on both front wheels", "[unit][vehicle]") {
+    auto rig = build_rig_with_ackermann_fraction(0.0);
+
+    const auto [fl, fr] = front_steer_angles(rig, 0.7);
+
+    INFO("FL=" << fl << " rad, FR=" << fr << " rad");
+    CHECK(fl == Catch::Approx(fr).margin(1e-9));
+    // Parallel steer's angle is exactly delta_avg (car_sedan.json's
+    // max_wheel_angle=0.5236 rad, see ackermann_wheel_angle's f=0 case).
+    CHECK(fl == Catch::Approx(0.7 * 0.5236).margin(1e-9));
+}
 
 TEST_CASE("Ackermann front wheel angles are left/right mirror-symmetric", "[unit][vehicle]") {
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
