@@ -100,6 +100,29 @@ if(NOT PS_SANITIZER_BUILD AND CMAKE_CXX_FLAGS MATCHES "-fsanitize=")
                   "Set PS_SANITIZER_BUILD=ON in the preset.")
 endif()
 
+# An optimised build type must actually carry an optimisation flag. No preset
+# sets CMAKE_CXX_FLAGS_<CONFIG>; CMake seeds them ("/O2 /Ob2 /DNDEBUG",
+# "-O3 -DNDEBUG", ...) the FIRST time a build dir is configured and never
+# again. A cache that once got empty values (e.g. a manual
+# -DCMAKE_CXX_FLAGS_RELEASE=) keeps them forever, and `cmake --preset` does
+# not reset them. Found 2026-09-23: out/build/release had
+# CMAKE_CXX_FLAGS and CMAKE_CXX_FLAGS_RELEASE both empty, so the Windows
+# "release" CI leg built all of our own code (and Catch2) with no /O2 at all
+# (Jolt sets its own), while a fresh configure of the same preset gives the
+# normal defaults. Fail loudly rather than silently test an unoptimised
+# "release".
+if(CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" _ps_build_type_upper)
+  set(_ps_effective_flags " ${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_ps_build_type_upper}} ")
+  if(NOT _ps_effective_flags MATCHES " [-/]O[123sxz]")
+    message(FATAL_ERROR
+      "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} but neither CMAKE_CXX_FLAGS ('${CMAKE_CXX_FLAGS}') nor "
+      "CMAKE_CXX_FLAGS_${_ps_build_type_upper} ('${CMAKE_CXX_FLAGS_${_ps_build_type_upper}}') contains an "
+      "optimisation flag - this build dir's cache is stale or was overridden. Reconfigure it from scratch: "
+      "cmake --preset <name> --fresh")
+  endif()
+endif()
+
 # CMAKE_MSVC_RUNTIME_LIBRARY is set above, before project() - see the
 # comment there. Repeated here only as a note: every target in the build -
 # ours and Jolt's - ends up linking the same CRT this way. Jolt's own
