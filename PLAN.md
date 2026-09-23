@@ -569,8 +569,14 @@ cylinder, ignition-timing strategies, turbo- and supercharging, ambient
 density (altitude, from the P5 atmosphere), rotary (Wankel) engines,
 hydrogen combustion (added 2026-09-23), and an open-ended list beyond that — so the model must be extensible. The same
 model must deliver both power (torque at the crank) and sound. engine-sim
-(github.com/ange-yaghi/engine-sim) is being assessed as a reference, sound
-source or code donor; the choice is recorded here and in the vault once made.
+(github.com/ange-yaghi/engine-sim) was assessed; decided 2026-09-23 (Sebastian,
+vault PHYS-028): our own engine model, in three layers — a deterministic
+mean-value model in core running every substep for every vehicle, its maps
+generated from the engine data file by our own crank-angle-resolved cycle
+model at load/edit time (this is where rotary, hydrogen, forced induction and
+altitude come from), and our own sound synthesiser in the adapter.
+engine-sim is a reference and a source of example engines only: it fails
+D7/D10/D3 and the P9 budget and covers little of the list above.
 
 Electric drive requirement (Sebastian, 2026-09-23): a parallel system for
 electric drives — battery electric, fuel cell, and other sources — alongside
