@@ -3,6 +3,7 @@
 #include "../articulation/contact.h" // internal; PLAN.md P1.5b
 #include "../articulation/system.h" // internal; World owns it via the forward-declared pointer (world.h)
 #include "../terrain/tile_manager.h" // internal; World owns it via the forward-declared pointer (world.h); PLAN.md M1
+#include "../vehicle/system.h" // internal; World owns it via the forward-declared pointer (world.h); PLAN.md 5.1/P3
 
 #include <algorithm>
 #include <chrono>
@@ -13,6 +14,7 @@ namespace ps {
 World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / config.tick_rate_hz) {
     job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers, config.job_queue_capacity);
     articulation_system_ = std::make_unique<articulation::System>();
+    vehicle_system_ = std::make_unique<vehicle::System>();
     RigidBackendSettings backend_settings;
     backend_settings.baumgarte = config.baumgarte;
     backend_settings.num_velocity_steps = config.num_velocity_steps;
@@ -131,12 +133,27 @@ void World::stage_vehicle_islands() {
     // then force_elements/gather below compute this tick's wrenches for
     // the NEXT tick's islands stage), then clears them so stage_gather can
     // accumulate fresh ones for next tick.
-    if (articulation_system_->empty()) return;
-    articulation::InstanceConfig cfg;
-    cfg.gravity = config_.gravity;
-    cfg.substep_rate_hz = config_.substep_rate_hz;
-    articulation_system_->step_all(*job_system_, cfg, dt_, config_.articulation_grain);
-    articulation_system_->clear_external_wrenches();
+    if (!articulation_system_->empty()) {
+        articulation::InstanceConfig cfg;
+        cfg.gravity = config_.gravity;
+        cfg.substep_rate_hz = config_.substep_rate_hz;
+        articulation_system_->step_all(*job_system_, cfg, dt_, config_.articulation_grain);
+        articulation_system_->clear_external_wrenches();
+    }
+
+    // PLAN.md 5.1/P3 (out/handover_p3.md decision 3): vehicles step in the
+    // same stage, right after articulations - both are "vehicle islands" in
+    // PLAN.md D8's sense (per-instance internal state sub-stepped at
+    // substep_rate_hz, one job per instance). Control channels stay global
+    // for P3/M1's one-car scope (decision 5).
+    if (!vehicle_system_->empty()) {
+        vehicle::ControlInputs controls;
+        controls.steer = get_control("steer");
+        controls.throttle = get_control("throttle");
+        controls.brake = get_control("brake");
+        controls.handbrake = get_control("handbrake");
+        vehicle_system_->step_all(*backend_, *job_system_, controls, dt_, config_.substep_rate_hz);
+    }
 }
 
 void World::stage_gather() {
@@ -247,14 +264,34 @@ void World::step() {
     const double tick_ns = std::max(
         1.0, std::chrono::duration<double, std::nano>(tick_t1 - tick_t0).count());
 
+    std::size_t wheel_channel_count = 0;
+    for (const auto& channels : wheel_telemetry_channels_) wheel_channel_count += channels.size() * 6;
+
     std::vector<real> row;
-    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1);
+    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count);
     for (double ms : last_stage_ms_) row.push_back(real(ms));
     for (int w = 0; w < job_system_->worker_count(); ++w) {
         const double busy_ns = static_cast<double>(job_system_->worker_busy_ns(w));
         row.push_back(real(busy_ns / tick_ns));
     }
     row.push_back(real(job_system_->queue_full_fallback_count())); // cumulative, P1.5b review item
+    // PLAN.md P3 scope item 7: per-wheel telemetry. Pushed in exactly the
+    // same (vehicle index, wheel index, field) order create_vehicle
+    // registered the channels in above, so these push_backs land on the
+    // matching column without needing to index by channel number.
+    for (std::size_t vi = 0; vi < wheel_telemetry_channels_.size(); ++vi) {
+        const VehicleId vid{static_cast<id_index_t>(vi), 1};
+        const std::vector<WheelTelemetryChannels>& channels = wheel_telemetry_channels_[vi];
+        for (std::size_t w = 0; w < channels.size(); ++w) {
+            const vehicle::WheelTelemetry& t = vehicle_system_->at(vid).wheel_telemetry(w);
+            row.push_back(t.slip_ratio);
+            row.push_back(t.slip_angle);
+            row.push_back(t.fx);
+            row.push_back(t.fy);
+            row.push_back(t.fz);
+            row.push_back(real(t.surface));
+        }
+    }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
     ++tick_;
@@ -269,7 +306,10 @@ std::uint64_t World::state_hash() const {
     // PLAN.md D10/P1.5a: articulation joint state folds in too (D7: "same
     // binary + same inputs -> bit-identical state" applies to it exactly
     // as it does to every Jolt body).
-    return articulation_system_->fold_state_hash(h);
+    h = articulation_system_->fold_state_hash(h);
+    // PLAN.md 5.1/P3: every wheel's internal (not otherwise observable)
+    // state folds in too - see vehicle::System::fold_state_hash's comment.
+    return vehicle_system_->fold_state_hash(h);
 }
 
 ArticulationId World::create_articulation(const articulation::ArticulationDesc& desc) {
@@ -306,6 +346,43 @@ void World::set_joint_force(ArticulationId id, int link_index, real tau) {
 
 Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) const {
     return articulation_system_->link_frame(id, link_index, local_offset);
+}
+
+VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis) {
+    const VehicleId id = vehicle_system_->create(desc, chassis, surface_table_.get());
+    // PLAN.md P3 scope item 7: register this vehicle's per-wheel telemetry
+    // channels now (setup time, not a hot path) so the CSV header names
+    // every wheel by its vehicle index and the wheel's own name (e.g.
+    // "vehicle0.front_left.slip_ratio") before the first step() records a
+    // row - VehicleId.index doubles as wheel_telemetry_channels_'s outer
+    // index (vehicles are never destroyed, same invariant
+    // articulation_contacts_ relies on above).
+    if (wheel_telemetry_channels_.size() <= id.index) wheel_telemetry_channels_.resize(id.index + 1);
+    std::vector<WheelTelemetryChannels>& channels = wheel_telemetry_channels_[id.index];
+    const std::size_t n = vehicle_system_->at(id).wheel_count();
+    channels.resize(n);
+    for (std::size_t w = 0; w < n; ++w) {
+        const std::string prefix = "vehicle" + std::to_string(id.index) + "." + vehicle_system_->at(id).wheel_name(w) + ".";
+        channels[w].slip_ratio = telemetry_->register_channel(prefix + "slip_ratio");
+        channels[w].slip_angle = telemetry_->register_channel(prefix + "slip_angle");
+        channels[w].fx = telemetry_->register_channel(prefix + "fx");
+        channels[w].fy = telemetry_->register_channel(prefix + "fy");
+        channels[w].fz = telemetry_->register_channel(prefix + "fz");
+        channels[w].surface = telemetry_->register_channel(prefix + "surface");
+    }
+    return id;
+}
+
+std::size_t World::vehicle_wheel_count(VehicleId id) const {
+    return vehicle_system_->at(id).wheel_count();
+}
+
+const vehicle::WheelTelemetry& World::wheel_telemetry(VehicleId id, std::size_t wheel_index) const {
+    return vehicle_system_->at(id).wheel_telemetry(wheel_index);
+}
+
+const std::string& World::wheel_name(VehicleId id, std::size_t wheel_index) const {
+    return vehicle_system_->at(id).wheel_name(wheel_index);
 }
 
 void World::set_terrain_source(std::shared_ptr<const terrain::ITerrainSource> source, const terrain::TerrainConfig& config) {

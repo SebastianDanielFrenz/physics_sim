@@ -10,6 +10,7 @@
 #include "ps/articulation/articulation_desc.h"
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/terrain/terrain_config.h"
+#include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/world.h"
 
 #include <cstdint>
@@ -51,6 +52,19 @@ struct ScenarioTerrainInterestPoint {
     real radius_m = 0.0;
 };
 
+// Additive (PLAN.md 5.1/P3): a scenario may describe one or more vehicles
+// on top of an already-described body (the chassis). vehicle_json_path
+// (resolved relative to the scenario file's own directory, same convention
+// as ScenarioTerrain::spec_path) is loaded via ps::io::load_vehicle_json;
+// leave it empty and fill `desc` directly when building a scenario in
+// code (e.g. tests) instead of from a vehicle JSON file.
+struct ScenarioVehicle {
+    std::string name;
+    std::string chassis_body_name;
+    std::string vehicle_json_path;
+    vehicle::VehicleDesc desc;
+};
+
 struct ScenarioTerrain {
     // Resolved to an absolute path at load time, relative to the scenario
     // file's own directory if not already absolute (so a scenario is
@@ -69,6 +83,18 @@ struct ScenarioTerrain {
     std::vector<ScenarioTerrainInterestPoint> interest_points;
 };
 
+// Additive (PLAN.md P3 scope item 7: "control inputs from the scenario
+// file: e.g. a step-steer or a braking test"): World::set_control(channel,
+// value) applied once sim_time reaches time_s. ps_run (and any other
+// scenario-driving tool) applies these in time order as it steps; a
+// scenario with no control_events behaves exactly as before this field
+// existed (every control channel reads as its World default, 0).
+struct ScenarioControlEvent {
+    real time_s = 0.0;
+    std::string channel;
+    real value = 0.0;
+};
+
 struct Scenario {
     std::string name;
     real duration_s = 1.0;
@@ -76,7 +102,15 @@ struct Scenario {
     std::vector<ScenarioBody> bodies;
     std::vector<ScenarioJoint> joints;
     std::vector<ScenarioArticulation> articulations;
+    std::vector<ScenarioControlEvent> control_events; // kept sorted by time_s by load_scenario
+    std::vector<ScenarioVehicle> vehicles;
     std::optional<ScenarioTerrain> terrain;
+    // PLAN.md section 6/P3: shared surface-parameter lookup (lambda_mu,
+    // crr) for every vehicle's tyre model - resolved relative to the
+    // scenario file's own directory if not already absolute, same
+    // convention as ScenarioTerrain::spec_path. Empty == no SurfaceTable
+    // installed (every surface reads as lambda_mu=1, crr=0).
+    std::string surface_table_path;
     std::string telemetry_csv; // empty == "<name>.csv" next to the scenario file's caller (ps_run decides)
 };
 
@@ -88,6 +122,7 @@ struct BuiltScenario {
     std::unique_ptr<World> world;
     std::unordered_map<std::string, BodyId> bodies_by_name;
     std::unordered_map<std::string, ArticulationId> articulations_by_name; // additive, PLAN.md D10/P1.5a
+    std::unordered_map<std::string, VehicleId> vehicles_by_name;           // additive, PLAN.md 5.1/P3
 };
 
 // Builds bodies/joints from a Scenario into a fresh World.

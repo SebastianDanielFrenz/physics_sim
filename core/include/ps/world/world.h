@@ -11,8 +11,11 @@
 #include "ps/io/telemetry.h"
 #include "ps/jobs/job_system.h"
 #include "ps/jobs/task_graph.h"
+#include "ps/io/surface_table.h"
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
+#include "ps/vehicle/vehicle_desc.h"
+#include "ps/vehicle/wheel_telemetry.h"
 #include "ps/world/force_element.h"
 #include "ps/world/ids.h"
 #include "ps/world/snapshot.h"
@@ -33,6 +36,10 @@ namespace ps::articulation { class System; class ContactCoupling; } // ContactCo
 // is internal for the same reason - World owns it via this incomplete-type
 // pointer, same pattern as articulation::System above.
 namespace ps::terrain { class TileManager; }
+// Forward-declared only: the vehicle runtime (PLAN.md 5.1/P3,
+// core/src/vehicle/system.h) is internal for the same reason - World owns
+// it via this incomplete-type pointer, same pattern as articulation::System.
+namespace ps::vehicle { class System; }
 
 namespace ps {
 
@@ -122,14 +129,32 @@ public:
 
     // PLAN.md P2 adapter report / this task's step 3: named control
     // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can
-    // reach vehicle code (P3+) without any Godot (or other front-end) type
-    // crossing into the core. A plain seam today - nothing in P1/M1 reads
-    // these yet; a future drivetrain/vehicle force element does.
+    // reach vehicle code without any Godot (or other front-end) type
+    // crossing into the core. PLAN.md P3: the "steer"/"throttle"/"brake"/
+    // "handbrake" channels now feed every vehicle created via
+    // create_vehicle below (out/handover_p3.md decision 5: global, not
+    // per-vehicle - matches M1's one-car scope).
     void set_control(const std::string& channel, real value) { control_channels_[channel] = value; }
     [[nodiscard]] real get_control(const std::string& channel) const {
         const auto it = control_channels_.find(channel);
         return it == control_channels_.end() ? real(0.0) : it->second;
     }
+
+    // PLAN.md section 6 / P3: shared surface-parameter lookup (lambda_mu,
+    // crr) for every vehicle's tyre model. Setup-time only (like
+    // set_terrain_source); must be called before the first step() if any
+    // vehicle should see non-default (1.0/0.0) surface values.
+    void set_surface_table(std::shared_ptr<const io::SurfaceTable> table) { surface_table_ = std::move(table); }
+
+    // PLAN.md 5.1/P3: per-corner suspension + tyre + steering + brakes + a
+    // placeholder drive, on an existing chassis body (created separately,
+    // like an articulation's own body creation). Stepped in the
+    // "vehicle_islands_substep" stage, right after articulation stepping
+    // (out/handover_p3.md decision 3) - one job per vehicle.
+    VehicleId create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis);
+    [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
+    [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
+    [[nodiscard]] const std::string& wheel_name(VehicleId id, std::size_t wheel_index) const;
 
     // Registration order is the element's fixed evaluation/gather id
     // (PLAN.md D8: deterministic ordered gather). Ownership stays with the
@@ -189,6 +214,8 @@ private:
     std::unique_ptr<jobs::TaskGraph> pipeline_;
     std::unique_ptr<articulation::System> articulation_system_; // PLAN.md D10/P1.5a; forward-declared above
     std::unique_ptr<terrain::TileManager> terrain_manager_;      // PLAN.md M1; forward-declared above; null until set_terrain_source
+    std::unique_ptr<vehicle::System> vehicle_system_;             // PLAN.md 5.1/P3; forward-declared above
+    std::shared_ptr<const io::SurfaceTable> surface_table_;       // PLAN.md section 6/P3; null == every surface reads as lambda_mu=1, crr=0
     std::unordered_map<std::string, real> control_channels_;     // PLAN.md P2/M1 step 3
     // PLAN.md P1.5b; index i pairs with ArticulationId{i, 1} (articulations
     // are never destroyed, so index == id.index always); nullptr == that
@@ -213,6 +240,17 @@ private:
     std::vector<std::size_t> stage_timing_channels_;
     std::vector<std::size_t> worker_utilization_channels_;
     std::size_t queue_full_fallback_channel_ = 0; // P1.5b review item
+    // PLAN.md P3 scope item 7: one row of channel indices per wheel,
+    // registered in create_vehicle (so a scenario's CSV header names every
+    // wheel by its VehicleId/name before the first step() ever records a
+    // row) - fields are slip_ratio, slip_angle, fx, fy, fz (== load),
+    // surface (SurfaceId, numeric). Flat per-wheel struct rather than a
+    // nested map: World::step()'s row-building stays a tight loop, no
+    // per-tick allocation.
+    struct WheelTelemetryChannels {
+        std::size_t slip_ratio, slip_angle, fx, fy, fz, surface;
+    };
+    std::vector<std::vector<WheelTelemetryChannels>> wheel_telemetry_channels_; // outer index == VehicleId.index
     std::vector<double> last_stage_ms_;
     std::vector<ContactEvent> last_contact_events_;
     // PHYS-009 Step 3: reused every tick by stage_snapshot() instead of

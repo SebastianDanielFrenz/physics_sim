@@ -1,0 +1,178 @@
+// core/src/vehicle/pacejka_tyre_model.cpp — Pacejka Magic Formula (MF 5.2/
+// 6.1 subset), PLAN.md 5.1/P3.
+//
+// Source: Pacejka, "Tyre and Vehicle Dynamics", 3rd ed. (Butterworth-
+// Heinemann, 2012), ch. 4 ("Semi-Empirical Tyre Models"), specifically the
+// "Similarity method" / MF5.2 pure- and combined-slip equations (eq.
+// 4.E10-4.E20 for Fx0, 4.E21-4.E39 for Fy0, 4.E49-4.E58 for the combined-
+// slip weighting functions Gxa/Gyk). Implemented here as a SUBSET:
+//   - Fx0/Fy0 pure slip: full standard sine/arctangent Magic Formula shape
+//     (B, C, D, E, SH, SV) as in the book.
+//   - Combined-slip Gxa/Gyk: the standard cosine-weighted form (eq.
+//     4.E49/4.E56), normalised at zero cross-slip so Gxa(alpha=0)=1 and
+//     Gyk(kappa=0)=1 exactly (tested in test_pacejka_tyre_model.cpp).
+//   - Mz0: NOT the book's full pneumatic-trail x Fy0 + residual-torque
+//     decomposition (eq. 4.E70-4.E78, which needs its own combined-slip
+//     coupling and camber residual terms). Simplified here to its OWN
+//     Magic-Formula-shaped B/C/D/E curve in alpha (same functional family,
+//     its own coefficients qbz*/qcz1/qdz*/qez*/qhz*) - a deliberate,
+//     documented reduction (see tyre_desc.h's header comment and
+//     out/handover_p3.md's "deferred" list).
+//   - Mx: the book's simplified linear-in-camber-and-lateral-force case
+//     (a reduced form of eq. 4.E69), not the full expression.
+//   - Rolling resistance: eq. 4.E70's shape (qsy1 + qsy2*Fx/Fz0 +
+//     qsy4*(V/V0)^4), returned as out.crr_effective via the surface table
+//     (see step_rolling_resistance below) rather than folded into Fx here -
+//     the caller (core/src/vehicle/wheel_instance.cpp) applies it as an
+//     explicit drag force at the contact patch, matching
+//     data/surfaces/surfaces.json's own documented convention
+//     ("F_roll = crr * N").
+//
+// Every transcendental call goes through ps::math (PLAN.md D7 - platform
+// libm rounds differently between Windows and Linux, found in P1.5a).
+
+#include "ps/vehicle/tyre_model.h"
+
+#include "ps/math/transcendental.h"
+
+#include <algorithm> // std::max, std::clamp
+#include <cmath>     // std::abs only (exact, not a rounding-sensitive transcendental)
+#include <utility>   // std::move
+
+namespace ps::vehicle {
+namespace {
+
+real sign(real x) { return x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0); }
+
+// Standard Magic Formula sine/arctangent shape (Pacejka eq. 4.E10-ish core
+// term), shared by Fx0/Fy0/Mz0's own curves: y = D*sin(C*atan(B*x -
+// E*(B*x - atan(B*x)))).
+real magic_formula_core(real B, real C, real D, real E, real x) {
+    const real Bx = B * x;
+    return D * ps::math::sin(C * ps::math::atan(Bx - E * (Bx - ps::math::atan(Bx))));
+}
+
+class PacejkaTyreModel final : public ITyreModel {
+public:
+    explicit PacejkaTyreModel(TyreDesc desc) : desc_(std::move(desc)) {}
+
+    [[nodiscard]] const TyreDesc& desc() const override { return desc_; }
+
+    [[nodiscard]] TyreForces evaluate(const TyreSlipInput& in) const override {
+        const TyreDesc& p = desc_;
+        const real fz = std::max(in.fz, real(0.0));
+        if (fz <= 0.0) return TyreForces{}; // airborne wheel: no tyre force at all
+
+        const real dfz = (fz - p.fz0) / p.fz0;
+        const real gamma = in.gamma;
+        const real lambda_mux_eff = p.lambda_mux * in.lambda_mu;
+        const real lambda_muy_eff = p.lambda_muy * in.lambda_mu;
+
+        // --- Fx0(kappa, Fz, gamma), eq. 4.E10-4.E18 ---
+        const real Cx = p.pcx1;
+        const real Dx = fz * (p.pdx1 + p.pdx2 * dfz) * (real(1.0) - p.pdx3 * gamma * gamma) * lambda_mux_eff;
+        const real SHx = p.phx1 + p.phx2 * dfz;
+        const real kappa_x = in.kappa + SHx;
+        const real Ex = (p.pex1 + p.pex2 * dfz + p.pex3 * dfz * dfz) * (real(1.0) - p.pex4 * sign(kappa_x));
+        const real Kx = fz * (p.pkx1 + p.pkx2 * dfz) * ps::math::exp(p.pkx3 * dfz);
+        const real Bx = safe_div(Kx, Cx * Dx);
+        const real SVx = fz * (p.pvx1 + p.pvx2 * dfz) * lambda_mux_eff;
+        const real fx0 = magic_formula_core(Bx, Cx, Dx, Ex, kappa_x) + SVx;
+
+        // --- Fy0(alpha, Fz, gamma), eq. 4.E21-4.E39 (simplified Ky, see
+        // tyre_desc.h's header comment) ---
+        const real Cy = p.pcy1;
+        const real Dy = fz * (p.pdy1 + p.pdy2 * dfz) * (real(1.0) - p.pdy3 * gamma * gamma) * lambda_muy_eff;
+        const real SHy = p.phy1 + p.phy2 * dfz + p.phy3 * gamma;
+        const real alpha_y = in.alpha + SHy;
+        const real Ey = (p.pey1 + p.pey2 * dfz) * (real(1.0) - (p.pey3 + p.pey4 * gamma) * sign(alpha_y));
+        const real Ky = fz * (p.pky1 + p.pky2 * dfz);
+        const real By = safe_div(Ky, Cy * Dy);
+        const real SVy = fz * (p.pvy1 + p.pvy2 * dfz) * lambda_muy_eff + fz * (p.pvy3 + p.pvy4 * dfz) * gamma;
+        const real fy0 = magic_formula_core(By, Cy, Dy, Ey, alpha_y) + SVy;
+
+        // --- combined-slip weighting, eq. 4.E49/4.E56 ---
+        const real Bxa = p.rbx1 * ps::math::cos(ps::math::atan(p.rbx2 * in.kappa));
+        const real Cxa = p.rcx1;
+        const real Gxa = safe_div(ps::math::cos(Cxa * ps::math::atan(Bxa * (in.alpha + p.rhx1))),
+                                   ps::math::cos(Cxa * ps::math::atan(Bxa * p.rhx1)));
+
+        const real Byk = p.rby1 * ps::math::cos(ps::math::atan(p.rby2 * (in.alpha - p.rby3)));
+        const real Cyk = p.rcy1;
+        const real kappa_s = in.kappa + p.rhy1 + p.rhy2 * dfz;
+        const real Gyk = safe_div(ps::math::cos(Cyk * ps::math::atan(Byk * kappa_s)),
+                                   ps::math::cos(Cyk * ps::math::atan(Byk * p.rhy1)));
+        const real SVyk = fz * (p.rvy1 + p.rvy2 * dfz) * ps::math::cos(ps::math::atan(p.rvy3 * in.alpha)) *
+                           ps::math::sin(p.rvy4 * ps::math::atan(p.rvy5 * in.kappa) + p.rvy6);
+
+        TyreForces out;
+        out.fx_pure = fx0;
+        out.fy_pure = fy0;
+        out.fx = Gxa * fx0;
+        out.fy = Gyk * fy0 + SVyk;
+
+        // --- Mz0(alpha, Fz, gamma) - simplified own curve (see this
+        // file's header comment) ---
+        const real Cz = p.qcz1;
+        const real Dz = fz * p.unloaded_radius * (p.qdz1 + p.qdz2 * dfz);
+        const real Bz = p.qbz1 + p.qbz2 * dfz + p.qbz3 * gamma;
+        const real Ez = p.qez1 + p.qez2 * dfz;
+        const real SHz = p.qhz1 + p.qhz2 * dfz + p.qhz3 * gamma;
+        out.mz = magic_formula_core(Bz, Cz, Dz, Ez, in.alpha + SHz);
+
+        // --- Mx(Fz, gamma, Fy) - simplified linear form (reduced eq. 4.E69) ---
+        out.mx = fz * p.unloaded_radius * (p.qsx1 - p.qsx2 * gamma + p.qsx3 * (out.fy / p.fz0));
+
+        return out;
+    }
+
+private:
+    static real safe_div(real num, real den) {
+        constexpr real kEps = 1e-9;
+        if (std::abs(den) < kEps) return 0.0;
+        return num / den;
+    }
+
+    TyreDesc desc_;
+};
+
+} // namespace
+
+std::unique_ptr<ITyreModel> create_pacejka_tyre_model(const TyreDesc& desc) {
+    return std::make_unique<PacejkaTyreModel>(desc);
+}
+
+void step_slip_relaxation(SlipRelaxationState& state, real slip_velocity_x, real slip_velocity_y,
+                           real vx_mag, real relaxation_length_x, real relaxation_length_y, real dt) {
+    // d(kappa_eq)/dt = (slip_velocity_x - vx_mag*kappa_eq) / sigma_kappa,
+    // exact exponential solution over one substep (out/handover_p3.md
+    // decision 2): with a = vx_mag/sigma, b = slip_velocity_x/sigma,
+    // kappa_eq(t+dt) = kappa_eq(t)*exp(-a*dt) + (b/a)*(1-exp(-a*dt)); at
+    // a ~ 0 (vx_mag ~ 0) this degenerates to kappa_eq += b*dt (plain
+    // integration of slip velocity - the "damped stiffness" standstill
+    // model PLAN.md calls for), avoiding a 0/0 in b/a.
+    auto step_one = [dt](real x, real slip_velocity, real vx, real sigma) -> real {
+        const real a = vx / sigma;
+        const real b = slip_velocity / sigma;
+        constexpr real kTiny = 1e-6;
+        if (a < kTiny) return x + b * dt;
+        const real decay = ps::math::exp(-a * dt);
+        return x * decay + (b / a) * (real(1.0) - decay);
+    };
+    state.kappa_eq = step_one(state.kappa_eq, slip_velocity_x, vx_mag, relaxation_length_x);
+    state.alpha_eq = step_one(state.alpha_eq, slip_velocity_y, vx_mag, relaxation_length_y);
+
+    // Safety clamp, well past any physical peak/saturation slip (typically
+    // within +-0.3 for kappa, +-0.5 rad for alpha): the Magic Formula's
+    // coefficients are only fitted/meaningful within a bounded slip range,
+    // and at true standstill (vx_mag ~ 0, this function's exact-integration
+    // branch above) an extended period of wheel spin with no chassis
+    // motion - e.g. a locked-then-reversing brake command - would otherwise
+    // integrate kappa_eq/alpha_eq without bound (found running PLAN.md P3's
+    // braking validation test: an unclamped kappa_eq reached -7.9 and kept
+    // growing). This does not change any in-range behaviour.
+    state.kappa_eq = std::clamp(state.kappa_eq, real(-3.0), real(3.0));
+    state.alpha_eq = std::clamp(state.alpha_eq, real(-1.6), real(1.6));
+}
+
+} // namespace ps::vehicle

@@ -55,7 +55,19 @@ int main(int argc, char** argv) {
         world.telemetry().start_csv(csv_path);
 
         const std::uint64_t num_ticks = static_cast<std::uint64_t>(scenario.duration_s * scenario.world_config.tick_rate_hz + 0.5);
-        for (std::uint64_t i = 0; i < num_ticks; ++i) world.step();
+        std::size_t next_control_event = 0;
+        for (std::uint64_t i = 0; i < num_ticks; ++i) {
+            // PLAN.md P3 scope item 7: apply any due control_events before
+            // stepping, in time order (scenario.control_events is sorted by
+            // load_scenario).
+            while (next_control_event < scenario.control_events.size() &&
+                   scenario.control_events[next_control_event].time_s <= world.sim_time()) {
+                const auto& ev = scenario.control_events[next_control_event];
+                world.set_control(ev.channel, ev.value);
+                ++next_control_event;
+            }
+            world.step();
+        }
 
         world.telemetry().stop();
 

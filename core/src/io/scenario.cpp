@@ -1,9 +1,12 @@
 #include "ps/io/scenario.h"
 
+#include "ps/io/surface_table.h"
+#include "ps/io/vehicle_io.h"
 #include "ps/terrain/procedural_terrain.h"
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -226,6 +229,20 @@ ScenarioTerrain read_terrain(const json& j, const std::filesystem::path& scenari
     return t;
 }
 
+// PLAN.md 5.1/P3: vehicle_json_path resolved relative to the scenario
+// file's own directory, same convention as ScenarioTerrain::spec_path.
+ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenario_dir) {
+    ScenarioVehicle sv;
+    sv.name = j.at("name").get<std::string>();
+    sv.chassis_body_name = j.at("chassis_body").get<std::string>();
+    sv.vehicle_json_path = j.at("vehicle_json_path").get<std::string>();
+    std::filesystem::path p = sv.vehicle_json_path;
+    if (p.is_relative()) p = scenario_dir / p;
+    sv.vehicle_json_path = p.lexically_normal().string();
+    sv.desc = load_vehicle_json(sv.vehicle_json_path);
+    return sv;
+}
+
 } // namespace
 
 Scenario load_scenario(const std::string& json_path) {
@@ -263,6 +280,26 @@ Scenario load_scenario(const std::string& json_path) {
             const std::filesystem::path scenario_dir = std::filesystem::path(json_path).parent_path();
             s.terrain = read_terrain(j.at("terrain"), scenario_dir);
         }
+        if (j.contains("vehicles")) {
+            const std::filesystem::path scenario_dir = std::filesystem::path(json_path).parent_path();
+            for (const auto& vj : j.at("vehicles")) s.vehicles.push_back(read_vehicle(vj, scenario_dir));
+        }
+        if (j.contains("control_events")) {
+            for (const auto& cj : j.at("control_events")) {
+                ScenarioControlEvent ev;
+                ev.time_s = cj.at("t").get<real>();
+                ev.channel = cj.at("channel").get<std::string>();
+                ev.value = cj.at("value").get<real>();
+                s.control_events.push_back(ev);
+            }
+            std::sort(s.control_events.begin(), s.control_events.end(),
+                      [](const ScenarioControlEvent& a, const ScenarioControlEvent& b) { return a.time_s < b.time_s; });
+        }
+        if (j.contains("surface_table_path")) {
+            std::filesystem::path p = j.at("surface_table_path").get<std::string>();
+            if (p.is_relative()) p = std::filesystem::path(json_path).parent_path() / p;
+            s.surface_table_path = p.lexically_normal().string();
+        }
     } catch (const json::exception& e) {
         throw std::runtime_error("invalid scenario " + json_path + ": " + e.what());
     }
@@ -299,6 +336,15 @@ BuiltScenario build_scenario(const Scenario& scenario) {
         for (const auto& ip : scenario.terrain->interest_points) {
             built.world->set_terrain_interest_point(ip.id, ip.world_xy, ip.radius_m);
         }
+    }
+    if (!scenario.surface_table_path.empty()) {
+        built.world->set_surface_table(std::make_shared<SurfaceTable>(scenario.surface_table_path));
+    }
+    for (const auto& sv : scenario.vehicles) {
+        auto it = built.bodies_by_name.find(sv.chassis_body_name);
+        if (it == built.bodies_by_name.end()) throw std::runtime_error("vehicle '" + sv.name + "' references unknown chassis_body '" + sv.chassis_body_name + "'");
+        const VehicleId id = built.world->create_vehicle(sv.desc, it->second);
+        built.vehicles_by_name[sv.name] = id;
     }
     return built;
 }

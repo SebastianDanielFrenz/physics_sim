@@ -20,6 +20,7 @@ add_executable(ps_unit_tests
   test_mesh_heightfield_shapes.cpp
   test_terrain_golden.cpp
   test_terrain_tile_manager.cpp
+  test_pacejka_tyre_model.cpp
 )
 
 target_link_libraries(ps_unit_tests

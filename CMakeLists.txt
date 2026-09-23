@@ -246,7 +246,19 @@ add_library(ps_warnings INTERFACE)
 if(MSVC)
   target_compile_options(ps_warnings INTERFACE /W4 /WX)
 else()
-  target_compile_options(ps_warnings INTERFACE -Wall -Wextra -Wpedantic -Werror)
+  target_compile_options(ps_warnings INTERFACE -Wall -Wextra -Wpedantic -Werror
+    # nlohmann/json v3.12.0's serializer.hpp has
+    # `JSON_ASSERT(byte < utf8d.size())` where `byte` is a `std::uint8_t`
+    # (max 255) against the fixed constant 400 - always true, flagged by
+    # clang's -Wtautological-constant-out-of-range-compare (part of -Wall).
+    # JSON_ASSERT is a no-op under NDEBUG (release builds never hit this),
+    # so it only appears in a from-scratch DEBUG-preset build of any .cpp
+    # that includes <nlohmann/json.hpp> (io/scenario.cpp, io/vehicle_io.cpp
+    # etc., PLAN.md D6) - found doing exactly that for PLAN.md P3's vehicle
+    # JSON loading. Third-party header code, not fixable on our side;
+    # disabled for this one diagnostic only, everywhere ps_warnings is
+    # linked (our own code stays under every other -Wall/-Wextra check).
+    -Wno-tautological-constant-out-of-range-compare)
 endif()
 
 # ps_options: architecture and floating-point flags (PLAN.md section 2/D5).

@@ -39,6 +39,13 @@ add_library(ps_core STATIC
 
   src/world/world.cpp
 
+  src/vehicle/pacejka_tyre_model.cpp
+  src/vehicle/tir_parser.cpp
+  src/vehicle/wheel_instance.cpp
+  src/vehicle/vehicle_instance.cpp
+  src/vehicle/system.cpp
+  src/io/vehicle_io.cpp
+
   src/terrain/procedural_terrain_source.cpp
   src/terrain/procedural_terrain.cpp
   src/terrain/tile_manager.cpp
