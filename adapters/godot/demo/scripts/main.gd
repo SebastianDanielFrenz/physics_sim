@@ -267,6 +267,16 @@ func _read_spawn(track_dir: String, id: String) -> Dictionary:
 			# - see PsSimulation::create_body_dynamic's doc comment.
 			result["position"] = Vector3(p[0], p[1], p[2])
 			result["yaw_rad"] = deg_to_rad(spawn.get("yaw_deg", 0.0))
+			# A track spawn point sits at the very first metre of its own
+			# feature (spawn_straight_car is exactly the straight's x0), so a
+			# car placed there has its REAR axle behind the pavement: it
+			# starts with two wheels on dirt and the HUD reports mixed
+			# surfaces. Nudge forward along the spawn's own heading by more
+			# than half a wheelbase until the track data offsets its spawns
+			# itself (flagged there as its own task).
+			var nudge_m := 4.0
+			var yaw: float = result["yaw_rad"]
+			result["position"] += Vector3(cos(yaw), sin(yaw), 0.0) * nudge_m
 			return result
 	push_warning("main.gd: spawn id '" + id + "' not found in " + path + " - defaulting to world origin")
 	return result
