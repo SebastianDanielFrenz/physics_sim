@@ -12,6 +12,118 @@ namespace {
 
 real sign(real x) { return x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0); }
 
+// Low-speed lateral carcass damping (PHYS wiggle fix, see CLAUDE.md's
+// vehicle-system section for the full derivation and measured numbers).
+//
+// step_slip_relaxation's own decay rate (a = vx_mag/sigma) is shared by
+// both slip channels and vanishes as the wheel's ROLLING speed -> 0. The
+// longitudinal channel is saved from the consequences of that by rolling
+// resistance (froll below - a genuine Coulomb-type drag along the SAME
+// axis as kappa's restoring force, still nonzero at vanishing speed); the
+// lateral channel has no equivalent. At standstill this makes the
+// alpha_eq/chassis-yaw-rate loop a marginally-stable (zeta -> 0) continuous
+// oscillator - real tyre carcasses have their own internal viscoelastic
+// damping this simplified model does not capture at all. Measured
+// (test_vehicle_standstill_wiggle.cpp): a plain yaw-rate kick at true
+// standstill, no steering, no forward motion, does NOT merely ring down
+// slowly - it GROWS into a saturated ~5.4 Hz / ~0.92 rad/s peak-to-peak
+// limit cycle by t~8s at the normal 240 Hz tick rate, but plainly DECAYS
+// under the identical initial condition at 4x finer tick rate. That
+// confirms the growth is a NUMERICAL instability, not a physical one: the
+// marginally-stable continuous model has zero damping margin, and
+// VehicleInstance::step_tick's one-tick-delayed force application (chassis
+// motion held at tick-start motion0 across all 4 substeps, wrench applied
+// once per 240 Hz tick) turns that zero margin negative. Giving the
+// continuous system genuine damping headroom before discretization fixes
+// both: the discretization's delay then eats into a real margin instead of
+// tipping a zero-margin system negative.
+//
+// c_lat is derived from a per-wheel single-DOF estimate of the
+// alpha_eq/lateral-force natural frequency: omega_n = sqrt(Ky/(m*sigma_y))
+// with Ky = fz0*pky1 (pky2 == 0 for every tyre file in this repo today, so
+// Ky is EXACTLY linear in load - re-derive if a future tyre file gives
+// pky2 != 0). The reference mass is tied to the tyre's own FIXED nominal
+// load, m_corner = fz0/kGravityRef (kGravityRef is a fixed modelling
+// constant here, not the sim's actual gravity - no World access from this
+// file; fz0, not the live/instantaneous fz - see the function's own
+// comment below for why that distinction is load-bearing, found via a real
+// regression). omega_n and c_lat/m_corner are therefore fixed per tyre
+// file, independent of whatever the live fz happens to be doing at
+// runtime, including at a hard bump-stop impact.
+//
+// That single-wheel check is NOT the binding constraint, though, and
+// picking kZetaMin from it alone is unsafe - found empirically, not just
+// derived: kZetaMin=2.5 (which the single-wheel check alone still called
+// "comfortable") made the wiggle MUCH WORSE than no fix at all (amplitude
+// exceeding the original bug). Reason: all four wheels' damping FORCES sum
+// onto the same shared YAW degree of freedom as a TORQUE (each wheel's
+// contribution weighted by its own moment arm r_i from the chassis CoM),
+// so the aggregate rotational-mode damping is sum_i(c_lat_i * r_i^2), not
+// a single wheel's c_lat alone - and because a real chassis's mass sits
+// closer to the CoM than "concentrated at the 4 wheels" (r^2 = 2.43 m^2 vs
+// I_yaw/M = 0.81 m^2 for car_sedan, a factor of 3), the YAW mode is far
+// more sensitive to this damper than the lateral-TRANSLATION mode is (for
+// which the aggregate check collapses back to exactly the single-wheel
+// case, m_corner and M cancelling identically). The correct bound is the
+// AGGREGATE explicit-integration check for the yaw mode:
+//   (2*kZetaMin*omega_n*sum_i(m_corner_i*r_i^2) / I_yaw) * dt < threshold
+// For car_sedan (I_yaw estimated as a rectangular-plate approximation,
+// M*(wheelbase^2+track^2)/12 = 1215 kg*m^2): threshold=1 (clean,
+// non-oscillatory decay) at kZetaMin~=1.24; threshold=2 (bounded but
+// oscillatory; beyond this the damper itself diverges) at kZetaMin~=2.47 -
+// matching the observed kZetaMin=2.5 blowup almost exactly. tractor's own
+// bound is looser (~2.27 at threshold=1, larger I_yaw/M for its size) so
+// car_sedan is the binding case across the data files this repo ships
+// today; re-run this check for any future vehicle file. kZetaMin=1.5 sits
+// just past the clean-decay threshold into the bounded-oscillatory-but-
+// still-convergent region and was the best of {0.7, 1.0, 1.5, 2.5} actually
+// tried against test_vehicle_standstill_wiggle.cpp's telemetry (0.7 and
+// 1.0 left a slow secondary regrowth within the 12-24 s observation
+// window; 1.5 decayed cleanly; 2.5 diverged) - chosen empirically within
+// the analytically-bounded safe range, not fitted blind.
+//
+// Faded by TOTAL contact-patch speed (not just the longitudinal component)
+// down to zero by kFadeSpeedMps: a wheel with near-zero rolling speed but
+// real, fast LATERAL motion (sliding, spinning, being pushed sideways)
+// must not get this drag applied to a genuinely fast slide - keying the
+// fade on longitudinal speed alone would do exactly that. kFadeSpeedMps
+// (2 m/s) is well below every other vehicle validation test's operating
+// speed (skidpad/step-steer/braking all run well above it), so this term
+// is a strict no-op there.
+constexpr real kGravityRef = 9.81;
+constexpr real kZetaMin = 1.5;
+constexpr real kFadeSpeedMps = 2.0;
+
+// fz0 (the tyre's own FIXED reference/nominal load, TyreDesc::fz0), NOT the
+// live/instantaneous fz, feeds m_corner here - found necessary, not just a
+// simplification: an earlier version used the live fz (which does cancel
+// analytically out of Ky/m_corner for a QUASI-STATIC load, the "load-
+// independent" property this file used to claim), but c_lat then scaled
+// linearly with fz EVERY TICK, including mid-transient. A hard full-
+// throttle standing start on a FWD car transfers load violently between
+// front corners as the suspension reacts (measured: fz spiking to ~41 kN,
+// ~11x nominal, within a few ticks) - tying the damper's own strength to
+// that swinging live fz turned it into a positive-feedback loop (bigger
+// transient load -> stronger damper -> bigger force -> more roll -> bigger
+// load spike -> ...) that blew up test_vehicle_accel_standing_start.cpp's
+// asphalt case into a multi-rotation spin-out within ~0.3 s
+// (test_vehicle_standstill_wiggle.cpp's diagnostic reproduced this exactly
+// and confirmed causation by disabling the term). Using the FIXED fz0
+// instead breaks that feedback path entirely - the damper's strength no
+// longer depends on anything this force loop itself influences - at the
+// cost of the load-independence argument now only holding approximately
+// (fz0 is close to each wheel's typical static corner load for both
+// vehicle files in this repo, so kZetaMin's tuning against the near-static
+// standstill-wiggle telemetry still applies).
+real lateral_standstill_damping_force(real fz0, real pky1, real sigma_y, real vx_contact, real vy_contact) {
+    const real omega_n = std::sqrt(pky1 * kGravityRef / std::max(sigma_y, real(1e-6)));
+    const real m_corner = fz0 / kGravityRef;
+    const real c_lat = real(2.0) * kZetaMin * m_corner * omega_n;
+    const real speed_total = std::sqrt(vx_contact * vx_contact + vy_contact * vy_contact);
+    const real fade = std::clamp(real(1.0) - speed_total / kFadeSpeedMps, real(0.0), real(1.0));
+    return -c_lat * fade * vy_contact;
+}
+
 // FNV-1a over a POD value's bytes - same convention as
 // articulation::Instance::fold_state_hash (core/src/articulation/instance.cpp),
 // so World::state_hash's fold order is uniform across subsystems.
@@ -113,7 +225,8 @@ WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
         slip_in.crr_surface = crr_surface;
         const TyreForces f = tyre_->evaluate(slip_in);
         fx = f.fx;
-        fy = f.fy;
+        fy = f.fy + lateral_standstill_damping_force(tyre_->desc().fz0, tyre_->desc().pky1,
+                                                       tyre_->desc().relaxation_length_y, vx_contact, vy_contact);
         mz = f.mz;
         mx = f.mx;
 

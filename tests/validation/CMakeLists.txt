@@ -25,6 +25,7 @@ add_executable(ps_validation_tests
   test_vehicle_step_steer.cpp
   test_vehicle_accel_standing_start.cpp
   test_vehicle_steer_mirror.cpp
+  test_vehicle_standstill_wiggle.cpp
 )
 
 target_link_libraries(ps_validation_tests
