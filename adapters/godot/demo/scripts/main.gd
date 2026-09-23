@@ -43,7 +43,7 @@ const CHASSIS_Z_OFFSET := 0.6
 @export var track_relative_dir: String = "data/tracks/test_ground"
 @export var model_relative_path: String = "data/models/car_sedan/car_sedan.glb"
 @export var terrain_model_relative_path: String = "data/tracks/test_ground/test_ground.glb"
-@export var spawn_id: String = "spawn_straight_car" # M1 visual pass: spawn on the paved asphalt straight (data/tracks/test_ground/test_ground.json), not spawn_main's open dirt disc - the dirt's low traction made the very first drive feel sluggish. KNOWN ISSUE (not this adapter's lane - core/data, reported): the FL/FR/RL/RR wheel_surface_name readout still flickers asphalt<->dirt for about a second after spawning here, even with near-zero lateral movement; looks like a terrain-heightfield/feature-mesh collision overlap under the flat zone. Cosmetic on the HUD only - it settles and does not visibly affect handling.
+@export var spawn_id: String = "spawn_straight_car" # M1 visual pass: spawn on the paved asphalt straight (data/tracks/test_ground/test_ground.json), not spawn_main's open dirt disc - the dirt's low traction made the very first drive feel sluggish. The FL/FR/RL/RR wheel_surface_name asphalt<->dirt flicker once reported here was PHYS-021 (terrain/static-feature coincident-collision, see core's CLAUDE.md), fixed in core by 46275a8: a headless measurement under this demo's own load order, config and interest-point timing confirms FL/FR report "asphalt" with ZERO transitions over 1440 ticks, hitting the asphalt mesh body every tick from tick 0, terrain tiles resident by tick 5 (~21 ms). PHYS-021's own residual - a sub-quad-width sliver right at a feature's true edge, up to ~4 m at this resolution (CLAUDE.md) - can still show a brief flicker if a wheel sits exactly on that edge, so don't read a flicker here as this issue coming back; check whether the wheel is that close to the straight's edge first.
 @export var terrain_stream_radius_m: float = 700.0
 @export var terrain_max_resident_tiles: int = 512
 @export var terrain_max_tile_fills_per_tick: int = 16
@@ -54,6 +54,14 @@ const ZONE_SPAWNS := {
 	KEY_1: "spawn_straight_car",
 	KEY_2: "spawn_skidpad_car",
 	KEY_3: "spawn_ramp_05_foot",
+}
+
+# test_ground.json spawn "area" values that are a start-line spawn on a
+# narrow paved feature, where _read_spawn's forward nudge (see its own
+# comment) is needed and safe. Used by _read_spawn.
+const NUDGE_AREAS := {
+	"straight": true,
+	"split_mu": true,
 }
 
 var simulation: Node
@@ -267,16 +275,34 @@ func _read_spawn(track_dir: String, id: String) -> Dictionary:
 			# - see PsSimulation::create_body_dynamic's doc comment.
 			result["position"] = Vector3(p[0], p[1], p[2])
 			result["yaw_rad"] = deg_to_rad(spawn.get("yaw_deg", 0.0))
-			# A track spawn point sits at the very first metre of its own
-			# feature (spawn_straight_car is exactly the straight's x0), so a
-			# car placed there has its REAR axle behind the pavement: it
-			# starts with two wheels on dirt and the HUD reports mixed
-			# surfaces. Nudge forward along the spawn's own heading by more
-			# than half a wheelbase until the track data offsets its spawns
-			# itself (flagged there as its own task).
-			var nudge_m := 4.0
-			var yaw: float = result["yaw_rad"]
-			result["position"] += Vector3(cos(yaw), sin(yaw), 0.0) * nudge_m
+			# WORKAROUND, not a fix: some of test_ground.json's own spawn
+			# points sit at the very first metre of a LINEAR feature
+			# (spawn_straight_car is exactly the straight's x0), so a car
+			# placed there has its REAR axle behind the pavement and
+			# starts with two wheels on dirt. The proper fix is in the
+			# track data itself (trackgen re-anchoring these start-line
+			# spawns past a wheelbase's worth of margin) - that lane's task
+			# is currently UNOWNED (the session that was going to do it was
+			# deleted), so this nudge is load-bearing until someone picks
+			# it up.
+			#
+			# It must NOT apply to every spawn: most of test_ground.json's
+			# spawns sit at an AREA's centre (spawn_main, spawn_grass,
+			# spawn_dirt, spawn_side_slope), a short plateau
+			# (spawn_ramp_*_plateau - a forward nudge can push the car off
+			# the far end), or a point where "forward" isn't the axis that
+			# needs clearance (spawn_skidpad_* is yaw 90 deg, so nudging
+			# along heading just moves it off the intended centreline
+			# point). Scoped by the spawn's own "area" field rather than
+			# its "id" so it covers a spawn's car and tractor variants alike
+			# without naming each one - "straight" and "split_mu" are the
+			# areas confirmed (by measurement, commit 0716ecf) to be a
+			# start-line spawn on a narrow paved feature where this
+			# straddle actually happens.
+			if NUDGE_AREAS.has(spawn.get("area", "")):
+				var nudge_m := 4.0
+				var yaw: float = result["yaw_rad"]
+				result["position"] += Vector3(cos(yaw), sin(yaw), 0.0) * nudge_m
 			return result
 	push_warning("main.gd: spawn id '" + id + "' not found in " + path + " - defaulting to world origin")
 	return result
