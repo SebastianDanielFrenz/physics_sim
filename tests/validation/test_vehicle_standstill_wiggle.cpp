@@ -340,11 +340,13 @@ AccelResult asphalt_accel_case(real zeta) {
     const real froll_total = 0.023 * mass * 9.81;
     while (v < target_speed && t < 60.0) {
         const real wheel_rpm = std::abs(v) / 0.317 * real(60.0) / (real(2.0) * real(3.14159265358979323846));
-        const real engine_rpm_raw = wheel_rpm * 10.0;
+        // 8.5, not the pre-I1b 10.0 - matches car_sedan.json's own I1b
+        // commit C8 final_drive_ratio value (see that file's "source" field).
+        const real engine_rpm_raw = wheel_rpm * 8.5;
         const real engine_rpm = std::clamp(engine_rpm_raw, real(900.0), real(6500.0));
         real torque = curve_eval_local(rpm_x, torque_y, engine_rpm);
         if (engine_rpm_raw > 6500.0) torque = 0.0;
-        const real wheel_force_total = (torque * 10.0 * 0.9) / 0.317;
+        const real wheel_force_total = (torque * 8.5 * 0.9) / 0.317;
         const real a = (wheel_force_total - froll_total) / mass;
         v += a * rig.world->dt();
         t += rig.world->dt();

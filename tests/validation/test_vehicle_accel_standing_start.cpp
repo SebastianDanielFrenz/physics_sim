@@ -159,11 +159,15 @@ TEST_CASE("Full-throttle standing start on asphalt reaches a sensible accelerati
 
     // car_sedan.json's own drive block (duplicated - see this file's header
     // comment) and data/surfaces/surfaces.json's asphalt crr=0.013 +
-    // passenger_car_225_45r17.json's qsy1=0.010.
+    // passenger_car_225_45r17.json's qsy1=0.010. final_drive_ratio=8.5
+    // matches car_sedan.json's own I1b commit C8 value (PHYS-033 I1b's
+    // interim data fix for the physically-corrected load-transfer lever -
+    // see that file's "source" field for the full arithmetic), NOT the
+    // pre-I1b 10.0 this estimate used before.
     const std::vector<real> rpm_x = {900, 2000, 4000, 6000, 6500};
     const std::vector<real> torque_y = {120, 220, 250, 200, 150};
     const real estimate_time = point_mass_time_to_speed(target_speed, mass, /*wheel_radius=*/0.317,
-                                                          /*final_drive_ratio=*/10.0, /*drivetrain_efficiency=*/0.9,
+                                                          /*final_drive_ratio=*/8.5, /*drivetrain_efficiency=*/0.9,
                                                           /*idle_rpm=*/900.0, /*rev_limit_rpm=*/6500.0, rpm_x, torque_y,
                                                           /*crr_total=*/0.023, rig.world->dt());
     const real avg_accel_estimate = target_speed / estimate_time;
