@@ -100,9 +100,22 @@ struct TyreDesc {
 
     // --- [ALIGNING_COEFFICIENTS]: Mz0(alpha, Fz, gamma) - simplified own
     // B/C/D/E curve, see this file's top comment ---
-    real qbz1 = 8.0, qbz2 = 0.0, qbz3 = 0.0;
+    //
+    // PHYS-036 (2026-09-24): qdz1/qdz2 are NEGATIVE (opposite sign to
+    // pdy1/pdy2 above) so Mz0 = -t*Fy0 with trail t > 0 - Pacejka's own
+    // aligning-moment sign convention (ch. 4). The un-fixed defaults
+    // (+0.10/-0.02) gave Mz0 the SAME sign as Fy0, an aligning moment that
+    // steers further into a turn instead of resisting - see
+    // data/tyres/passenger_car_225_45r17.json's "aligning" source note and
+    // core/src/vehicle/pacejka_tyre_model.cpp's header comment. qbz1 = 43.4
+    // (not the un-fixed 8.0) makes the curve peak at ~4 deg of slip, matching
+    // this same source note's target range (real self-aligning-torque curves
+    // peak around 2-6 deg, well before Fy0's own ~9 deg peak at fz0) - qbz1
+    // alone sets the peak's alpha location at fixed qcz1/qez1 (same B-scaling
+    // property the Fx0/Fy0 curves share).
+    real qbz1 = 43.4, qbz2 = 0.0, qbz3 = 0.0;
     real qcz1 = 1.15;
-    real qdz1 = 0.10, qdz2 = -0.02;
+    real qdz1 = -0.10, qdz2 = 0.02;
     real qez1 = -1.0, qez2 = 0.0;
     real qhz1 = 0.0, qhz2 = 0.0, qhz3 = 0.0;
 

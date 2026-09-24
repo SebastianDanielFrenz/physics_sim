@@ -177,7 +177,14 @@ public:
         out.fy = Gyk * fy0 + SVyk;
 
         // --- Mz0(alpha, Fz, gamma) - simplified own curve (see this
-        // file's header comment) ---
+        // file's header comment). PHYS-036: the formula itself is
+        // unchanged from Fx0/Fy0's shape (same magic_formula_core), and
+        // deliberately carries no extra sign flip here - Pacejka's own
+        // convention (Mz0 = -t*Fy0, trail t > 0) is realised entirely
+        // through qdz1/qdz2's SIGN (opposite to pdy1/pdy2) in the shipped
+        // data (tyre_desc.h's own field comment, data/tyres/*.json's
+        // "aligning" source notes), the same way qbz1's magnitude alone
+        // (not a formula change) sets a realistic peak slip angle. ---
         const real Cz = p.qcz1;
         const real Dz = fz * p.unloaded_radius * (p.qdz1 + p.qdz2 * dfz);
         const real Bz = p.qbz1 + p.qbz2 * dfz + p.qbz3 * gamma;

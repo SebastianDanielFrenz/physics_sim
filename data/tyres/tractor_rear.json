@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.tyre/1",
   "name": "tractor_rear",
-  "source": "Plausible Magic Formula coefficients for a large radial agricultural rear/drive tyre (e.g. 620/70R42 class), same structure and reasoning as data/tyres/tractor_front.json (Pacejka MF5.2 equation form; Wong 'Theory of Ground Vehicles' 5th ed. for the agricultural-tyre friction/rolling-resistance trends). unloaded_radius=1.025 m matches data/models/tractor/tractor.rig.json's rear wheel radius. fz0 is higher than the front tyre's, reflecting a tractor's typical rear-heavy static load split (see data/vehicles/tractor.json's own corner-weight note).",
+  "source": "Plausible Magic Formula coefficients for a large radial agricultural rear/drive tyre (e.g. 620/70R42 class), same structure and reasoning as data/tyres/tractor_front.json (Pacejka MF5.2 equation form; Wong 'Theory of Ground Vehicles' 5th ed. for the agricultural-tyre friction/rolling-resistance trends). unloaded_radius=1.025 m matches data/models/tractor/tractor.rig.json's rear wheel radius. fz0 is higher than the front tyre's, reflecting a tractor's typical rear-heavy static load split (see data/vehicles/tractor.json's own corner-weight note). PHYS-036 (2026-09-24): same 'aligning' sign/shape fix as data/tyres/tractor_front.json (qdz1/qdz2 flipped from +0.11/-0.02 so Mz0 opposes Fy0 per Pacejka's own convention; qbz1 raised 6.0 -> 52.8 so the curve peaks at ~4.5 deg of slip instead of ~39.6 deg, see that file's source note for the full rationale).",
   "unloaded_radius": 1.025,
   "width": 0.62,
   "rim_radius": 0.533,
@@ -37,9 +37,9 @@
     "rvy1": 0.0, "rvy2": 0.0, "rvy3": 0.0, "rvy4": 20.0, "rvy5": 2.0, "rvy6": 0.0
   },
   "aligning": {
-    "qbz1": 6.0, "qbz2": 0.0, "qbz3": 0.0,
+    "qbz1": 52.8, "qbz2": 0.0, "qbz3": 0.0,
     "qcz1": 1.1,
-    "qdz1": 0.11, "qdz2": -0.02,
+    "qdz1": -0.11, "qdz2": 0.02,
     "qez1": -1.0, "qez2": 0.0,
     "qhz1": 0.0, "qhz2": 0.0, "qhz3": 0.0
   },

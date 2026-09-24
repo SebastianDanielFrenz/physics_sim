@@ -333,3 +333,117 @@ TEST_CASE("evaluate_with_slope: linearised Fx matches O(dkappa^2) against the tr
         }
     }
 }
+
+// --- PHYS-036: self-aligning moment Mz0 sign/shape ---
+//
+// Before this fix, Mz0 carried the SAME sign as Fy0 (an aligning moment
+// that steers further into a turn instead of resisting it) and peaked at
+// about 21.7 deg (passenger) / 39.6 deg (tractor) of slip, both well past
+// any plausible real tyre. The fix is entirely in data/tyres/*.json's
+// "aligning" block (qdz1/qdz2 sign flipped so Mz0 = -t*Fy0 per Pacejka's
+// own convention; qbz1 raised so the curve peaks at a realistic slip
+// angle) - pacejka_tyre_model.cpp's formula itself is unchanged. These
+// tests exercise every shipped tyre file so a future data edit that
+// reintroduces the wrong sign or an unrealistic peak location is caught
+// here, not just by the vehicle-level skidpad test.
+constexpr real kDegToRad = 0.017453292519943295;
+
+TEST_CASE("Pacejka self-aligning moment opposes lateral force for small slip angles (all shipped tyres)",
+          "[vehicle][tyre]") {
+    for (const std::string& path : shipped_tyre_paths()) {
+        const TyreDesc desc = ps::io::load_tyre_json(path);
+        auto model = create_pacejka_tyre_model(desc);
+        INFO("tyre=" << path);
+
+        for (real fz_mult : {0.5, 1.0, 1.5}) {
+            for (real alpha_deg : {0.5, 1.0, 2.0, -0.5, -1.0, -2.0}) {
+                TyreSlipInput in;
+                in.kappa = 0.0;
+                in.alpha = alpha_deg * kDegToRad;
+                in.fz = fz_mult * desc.fz0;
+                in.gamma = 0.0;
+                in.vx = 20.0;
+                const TyreForces f = model->evaluate(in);
+                INFO("fz_mult=" << fz_mult << " alpha_deg=" << alpha_deg << " fy=" << f.fy << " mz=" << f.mz);
+                // An aligning (restoring) moment: opposite sign to Fy, for
+                // both signs of slip angle.
+                CHECK(f.fy != 0.0);
+                CHECK((f.fy > 0.0) != (f.mz > 0.0));
+                CHECK(f.mz != 0.0);
+            }
+        }
+    }
+}
+
+TEST_CASE("Pacejka self-aligning moment peaks within a realistic slip-angle range (all shipped tyres)",
+          "[vehicle][tyre]") {
+    for (const std::string& path : shipped_tyre_paths()) {
+        const TyreDesc desc = ps::io::load_tyre_json(path);
+        auto model = create_pacejka_tyre_model(desc);
+        INFO("tyre=" << path);
+
+        for (real fz_mult : {0.3, 1.0, 2.0}) {
+            real peak_mz = 0.0;
+            real peak_alpha_deg = 0.0;
+            for (int i = 1; i <= 1800; ++i) { // 0.05 deg steps, up to 90 deg
+                const real alpha_deg = 0.05 * static_cast<real>(i);
+                TyreSlipInput in;
+                in.kappa = 0.0;
+                in.alpha = alpha_deg * kDegToRad;
+                in.fz = fz_mult * desc.fz0;
+                in.gamma = 0.0;
+                in.vx = 20.0;
+                const real mz = std::abs(model->evaluate(in).mz);
+                if (mz > peak_mz) {
+                    peak_mz = mz;
+                    peak_alpha_deg = alpha_deg;
+                }
+            }
+            INFO("fz_mult=" << fz_mult << " peak_alpha_deg=" << peak_alpha_deg << " peak_mz=" << peak_mz);
+            // Realistic passenger/agricultural self-aligning-torque peak
+            // range (Pacejka ch. 4; Milliken ch. 2's qualitative trail-vs-
+            // slip-angle curves): well before Fy0's own ~8-10 deg peak.
+            CHECK(peak_alpha_deg > 2.0);
+            CHECK(peak_alpha_deg < 6.0);
+        }
+    }
+}
+
+TEST_CASE("Pacejka self-aligning moment stays bounded and same-signed past its peak (all shipped tyres)",
+          "[vehicle][tyre]") {
+    // This project's Mz0 is a single simplified B/C/D/E curve (this file's
+    // top comment / pacejka_tyre_model.cpp's header comment), not the full
+    // pneumatic-trail decomposition - it does NOT decay back to zero at
+    // extreme slip the way a real tyre's Mz eventually does. The documented
+    // behaviour is a plateau near its own peak magnitude, same sign as the
+    // peak, never a runaway growth or a sign flip.
+    for (const std::string& path : shipped_tyre_paths()) {
+        const TyreDesc desc = ps::io::load_tyre_json(path);
+        auto model = create_pacejka_tyre_model(desc);
+        INFO("tyre=" << path);
+
+        auto eval_mz = [&](real alpha_deg) {
+            TyreSlipInput in;
+            in.kappa = 0.0;
+            in.alpha = alpha_deg * kDegToRad;
+            in.fz = desc.fz0;
+            in.gamma = 0.0;
+            in.vx = 20.0;
+            return model->evaluate(in).mz;
+        };
+
+        real peak_mz = 0.0;
+        for (int i = 1; i <= 200; ++i) { // 0.05 deg steps up to 10 deg brackets the peak
+            const real mz = std::abs(eval_mz(0.05 * static_cast<real>(i)));
+            peak_mz = std::max(peak_mz, mz);
+        }
+        const real peak_sign = eval_mz(4.0) > 0.0 ? real(1.0) : real(-1.0);
+
+        for (real alpha_deg : {20.0, 45.0, 80.0}) {
+            const real mz = eval_mz(alpha_deg);
+            INFO("alpha_deg=" << alpha_deg << " mz=" << mz << " peak_mz=" << peak_mz);
+            CHECK(std::abs(mz) <= peak_mz * 1.02);
+            CHECK(((mz > 0.0) == (peak_sign > 0.0)));
+        }
+    }
+}
