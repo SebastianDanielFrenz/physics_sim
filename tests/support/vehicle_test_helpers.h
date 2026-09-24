@@ -148,14 +148,20 @@ inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps
 // SurfaceTable::lambda_mu_for/crr_for to resolve to something other than
 // kInvalidSurfaceId). No slope_grade parameter: a tilted MeshShape ground
 // is not needed by any current test.
+// PHYS-033 I1b re-checks (a)/(b): tick_hz/substep_hz added as trailing
+// optional params (default 240/960, matching every existing caller exactly -
+// additive, hash-neutral) so a fine-tick reference run (e.g. 960/3840, the
+// same "does the result converge" technique build_vehicle_rig_from_desc
+// already offers) can also pick a non-asphalt surface.
 inline VehicleTestRig build_vehicle_rig_on_surface(const std::string& vehicle_json_path, ps::real chassis_mass,
                                                      const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
-                                                     const std::string& surface_name, int job_workers = 4) {
+                                                     const std::string& surface_name, int job_workers = 4,
+                                                     ps::real tick_hz = 240.0, ps::real substep_hz = 960.0) {
     VehicleTestRig rig;
 
     ps::WorldConfig cfg;
-    cfg.tick_rate_hz = 240.0;
-    cfg.substep_rate_hz = 960.0;
+    cfg.tick_rate_hz = tick_hz;
+    cfg.substep_rate_hz = substep_hz;
     cfg.job_workers = job_workers;
     rig.world = std::make_unique<ps::World>(cfg);
 

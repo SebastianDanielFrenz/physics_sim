@@ -80,8 +80,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 
 using namespace ps;
 
@@ -275,4 +277,84 @@ TEST_CASE("Full-throttle from an UNSETTLED start does not permanently strand the
     // And the wheelspin is TRANSIENT, not a permanent runaway: by t=8s slip
     // has recovered to a small value (measured <0.1 well before t=6s).
     CHECK(slip_at_8s < 0.5);
+}
+
+// PHYS-033 I1b re-check (a): I1 found that a 4x-finer-tick (960/3840)
+// reference run of the UNSETTLED full-throttle standing start on DIRT
+// flips the car (speed collapses to ~0 by t=2s) while the normal 240/960
+// tick does not - a discretisation-sensitivity flag on an already-
+// documented "no clutch/traction-control" excursion (this file's own header
+// comment), re-run here after I1b's contact-geometry fixes since the patch-
+// point lever change (C7) roughly doubles roll/pitch load-transfer gain,
+// which could plausibly make an already-marginal tip-over easier or harder.
+// [.][diag]: prints only, not gated (I1 did not gate this either - it is a
+// discretisation-sensitivity finding on a documented placeholder-drive
+// limitation, not a numerical-correctness regression this increment's own
+// pins cover).
+TEST_CASE("Diagnostic: full-throttle unsettled standing start on dirt, fine-tick reference (re-check a)",
+          "[.][diag][vehicle]") {
+    const real mass = 1500.0;
+    const Vec3 half_extents{2.0, 0.4, 0.15};
+    const real origin_height = 0.6;
+    const std::string vehicle_path = std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json";
+
+    auto run = [&](real tick_hz, real substep_hz) {
+        auto rig = ps_test::build_vehicle_rig_on_surface(vehicle_path, mass, half_extents, origin_height, "dirt", 4,
+                                                          tick_hz, substep_hz);
+        // NO settle() - full throttle from the very first tick, exactly the
+        // "UNSETTLED start" case above, on dirt instead of asphalt.
+        rig.world->set_control("throttle", 1.0);
+        const real dt = rig.world->dt();
+        const std::uint64_t n = static_cast<std::uint64_t>(3.0 / dt + 0.5);
+        bool flipped = false;
+        real min_up_z = 1.0;
+        real speed_at_2s = -1.0;
+        real max_roll_rate = 0.0, max_pitch_rate = 0.0;
+        real t_tip_started = -1.0;   // first time up.z < 0.9 (roll clearly under way)
+        real t_first_liftoff = -1.0; // first time any wheel's fz hits exactly 0 while others do not
+        int lifted_wheel = -1;
+        std::array<real, 4> fz_at_flip{};
+        for (std::uint64_t i = 0; i < n; ++i) {
+            rig.world->step();
+            const real t = static_cast<real>(i + 1) * dt;
+            const Pose pose = rig.world->get_pose(rig.chassis);
+            const Motion m = rig.world->get_motion(rig.chassis);
+            const Vec3 up = pose.orientation.rotate(Vec3::unit_z());
+            const Vec3 fwd = pose.orientation.rotate(Vec3::unit_x());
+            const Vec3 lat = pose.orientation.rotate(Vec3::unit_y());
+            max_roll_rate = std::max(max_roll_rate, std::abs(dot(m.angular, fwd)));
+            max_pitch_rate = std::max(max_pitch_rate, std::abs(dot(m.angular, lat)));
+            std::array<real, 4> fz{};
+            int n_zero = 0, n_nonzero = 0;
+            for (std::size_t w = 0; w < 4; ++w) {
+                fz[w] = rig.world->wheel_telemetry(rig.vehicle, w).fz;
+                if (fz[w] <= 0.0) ++n_zero; else ++n_nonzero;
+            }
+            if (t_first_liftoff < 0.0 && n_zero > 0 && n_nonzero > 0) {
+                t_first_liftoff = t;
+                for (std::size_t w = 0; w < 4; ++w)
+                    if (fz[w] <= 0.0) { lifted_wheel = static_cast<int>(w); break; }
+            }
+            if (t_tip_started < 0.0 && up.z < 0.9) t_tip_started = t;
+            if (up.z < min_up_z) {
+                min_up_z = up.z;
+                fz_at_flip = fz;
+            }
+            if (!flipped && up.z < 0.0) flipped = true;
+            if (std::abs(t - 2.0) < dt * 0.5) speed_at_2s = m.linear.length();
+        }
+        static const char* kWheelNames[4] = {"FL", "FR", "RL", "RR"};
+        std::printf("[diag re-check a] tick=%.0f/%.0f: flipped=%d min_up.z=%.4f speed@2s=%.4f max_roll_rate=%.3f "
+                    "max_pitch_rate=%.3f t_first_liftoff(%s)=%.4fs t_tip_started(up.z<0.9)=%.4fs "
+                    "Fz@min_up[FL,FR,RL,RR]=[%.1f,%.1f,%.1f,%.1f]\n",
+                    static_cast<double>(tick_hz), static_cast<double>(substep_hz), flipped ? 1 : 0,
+                    static_cast<double>(min_up_z), static_cast<double>(speed_at_2s), static_cast<double>(max_roll_rate),
+                    static_cast<double>(max_pitch_rate), lifted_wheel >= 0 ? kWheelNames[lifted_wheel] : "none",
+                    static_cast<double>(t_first_liftoff), static_cast<double>(t_tip_started),
+                    static_cast<double>(fz_at_flip[0]), static_cast<double>(fz_at_flip[1]),
+                    static_cast<double>(fz_at_flip[2]), static_cast<double>(fz_at_flip[3]));
+    };
+
+    run(240.0, 960.0);
+    run(960.0, 3840.0);
 }

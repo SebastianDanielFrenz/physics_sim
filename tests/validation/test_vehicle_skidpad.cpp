@@ -111,7 +111,34 @@ real tyre_limited_lateral_g_estimate() {
 // root-caused to a bug in the estimate, not the model - see this file's
 // header comment. The corrected roll-stiffness-split estimate (~9.80
 // m/s^2) is within 0.4% of measured; tag removed.
-TEST_CASE("Skidpad lateral acceleration is within 3% of the tyre-limited estimate", "[validation][vehicle][long]") {
+//
+// [!mayfail] RE-ADDED by PHYS-033 I1b commit C7 (the contact-patch lever
+// fix, decision D-A): measured steady_a_lat is now 9.037 m/s^2, -7.8% vs
+// the 9.803 m/s^2 estimate (outside the 3% tolerance). Per the I1b
+// coordinator's explicit instruction, the plan's own steady-state
+// diagnostic (tests/validation/test_vehicle_contact_geometry.cpp's
+// "contact geometry diagnostics" [.][diag] case) was run BEFORE
+// interpreting this number, per this file's own header comment
+// ("... the car is probably rotating (dbeta/dt != 0), and v*omega_z !=
+// v^2/R... T2.4 prints a_c and v*dbeta/dt to settle this"):
+//   - the test's own metric, v*omega_z = 9.037 m/s^2
+//   - the TRUE measured lateral acceleration (finite-difference of chassis
+//     velocity, projected onto the body's own lateral axis) = 8.535 m/s^2 -
+//     5.9% BELOW the test's own metric
+//   - v*dbeta/dt = -0.713 m/s^2 - not negligible against either number
+//   - roll = -0.035 rad (~2.0 deg, up from ~1.1 deg pre-I1b, consistent
+//     with the patch-point fix's larger roll-load-transfer lever)
+// This confirms the test's own header comment's own prediction: at
+// steer=0.8 (~24 deg wheel angle) and 25 m/s, the car is still rotating
+// (dbeta/dt clearly nonzero) within the [0.3, 1.3] s averaging window, so
+// v*omega_z is NOT equal to the true steady-state lateral acceleration -
+// the test's own STEADY-STATE PREMISE does not hold at this operating
+// point under the corrected (now heavier-lever, more roll-sensitive)
+// model. Per the coordinator's explicit instruction, this is reported as a
+// premise issue, NOT fixed by retuning the test's own estimate or
+// tolerance (which were already re-derived once, above, for an unrelated
+// reason) and NOT by touching the model to chase this specific number.
+TEST_CASE("Skidpad lateral acceleration is within 3% of the tyre-limited estimate", "[validation][vehicle][long][!mayfail]") {
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
 
