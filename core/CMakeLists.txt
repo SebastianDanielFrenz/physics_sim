@@ -46,6 +46,8 @@ add_library(ps_core STATIC
   src/vehicle/system.cpp
   src/io/vehicle_io.cpp
 
+  src/drivetrain/box_lcp.cpp
+
   src/terrain/procedural_terrain_source.cpp
   src/terrain/procedural_terrain.cpp
   src/terrain/tile_manager.cpp

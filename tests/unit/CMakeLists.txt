@@ -29,6 +29,7 @@ add_executable(ps_unit_tests
   test_vehicle_parallel_alloc.cpp
   test_wheel_contact_frame.cpp
   test_powertrain_network.cpp
+  test_powertrain_friction_lcp.cpp
 )
 
 target_link_libraries(ps_unit_tests
