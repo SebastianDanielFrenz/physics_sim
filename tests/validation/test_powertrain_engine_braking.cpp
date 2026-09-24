@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 
 using namespace ps;
 
@@ -36,31 +37,36 @@ real front_static_fraction_from_settle(ps::World& world, VehicleId vehicle) {
 // rule) rather than an independently-integrated launch, so the comparison
 // isolates the DECELERATION physics from any launch-transient mismatch.
 //
-// [!mayfail]: measured decel_sim=-0.7154 vs decel_ref=-0.6773 m/s^2, 5.63%
-// off - over the plan section 13.4 3% gate. Two attempts made (this
-// session's stop condition after two failed attempts at one problem):
-// (1) baseline RefCar::ref_locked_gear_step (tests/support/
-// powertrain_reference.h) as written - the 5.63% figure above, root-caused
-// to neither the reflected-inertia/torque-gain derivation (hand-checked
-// algebraically against the engine/clutch/gearbox/final-drive chain, and
-// against a direct per-substep curve evaluation - both agree with RefCar's
-// closed form) nor the rolling-resistance treatment being an obviously
-// wrong formula; (2) coupling rolling resistance into the driven hub's own
-// torque balance (reasoning from wheel_instance.cpp's fx_total = fx_lin +
-// pre_froll_, i.e. rolling resistance acting as an extra contact-patch
-// force that should also load the hub, not just the chassis) - measured
-// WORSE (14.1% off), reverted; RefCar's chassis-only rolling-resistance
-// treatment (matching its header comment) is the version kept. Neither
-// attempt found a bug in the sim itself (test_vehicle_parking_slope.cpp/
-// test_vehicle_tractor_cross_slope.cpp/test_wheel_contact_frame.cpp's own
-// established contact-patch-lever physics all still pass); the remaining
-// gap's root cause is undiagnosed - most likely RefCar's own documented
-// simplifications (no suspension/pitch dynamics, one-substep mesh-loss
-// lag, event quantisation) rather than the real vehicle, but not confirmed.
-// Documented, not forced, per this codebase's test_vehicle_braking.cpp
-// precedent for a similar measured-vs-gate gap.
-TEST_CASE("Engine braking in 4th decelerates within 3% of the reference model",
-          "[validation][vehicle][powertrain][!mayfail]") {
+// Measured: decel_sim=-0.7154 vs decel_ref=-0.7151 m/s^2 (0.05%).
+//
+// History: this case was [!mayfail] at 5.63% (decel_ref=-0.6773). The
+// cause was the REFERENCE, not the sim: RefCar applied the drive-direction
+// mesh efficiency (T_out = r*eta*T_m) on overrun too, which shrinks the
+// engine-braking torque at the wheels, when on overrun the loss adds to it
+// (T_out = r*(2-eta)*T_m, T_m < 0). The "Engine braking in 4th: term
+// breakdown diagnostic" case below attributes every term at t=3 s (3360
+// rpm, 25.56 m/s):
+//   chassis:  m*a = -1071.97 N vs Fx_front -649.37 + Fx_rear +12.87
+//             - F_roll 163.30 - F_aero 272.11 = -1071.91 N (closes);
+//             rotor reaction: every rotor axis is lateral (+-y), so it
+//             only adds pitch torque, zero longitudinal force;
+//   engine:   DFCO active the whole window, throttle_eff = 0 (idle PI off
+//             under DFCO), torque = M(3360 rpm) = -47.52 N*m, i.e. the
+//             motoring curve at the right rpm;
+//   driveline: |clutch lambda| = 45.95 = |M| - J_e*|omega_e'|, driveline
+//             -> engine (T_c < 0); hub torque 209.9 N*m = 1.0521 x the
+//             lossless demand = 1/(eta_k*eta_fd) = 1.0520 (overrun branch);
+//   ledger:   d(rotor_ke)/dt -1358.9 W = engine_out -11443.5 - wheel_out
+//             (-16270.5) - engine_friction 5278.2 - gear 827.8 - tyre 80.0
+//             - integrator 0.02 W (closes).
+// Engine force at the wheels at this rpm: drive branch 624.8 N (old
+// RefCar) vs overrun 690.6 N: 65.7 N, / m_eff ~1575 kg = 0.042 m/s^2, the
+// whole 0.038 m/s^2 gap (the inertia terms move 0.004 the other way).
+// Aero, rolling resistance and tyre slip loss agree between sim and
+// reference (neutral control case: sim 0.303 m/s^2 vs hand 0.301 m/s^2).
+// A 2nd, earlier attempt (rolling resistance coupled into the hub) chased a
+// term that was never wrong and was reverted.
+TEST_CASE("Engine braking in 4th decelerates within 3% of the reference model", "[validation][vehicle][powertrain]") {
     const real mass = 1500.0;
     const real chassis_origin_height = 0.6; // == h_cg (mass at the chassis body's own origin)
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
@@ -173,6 +179,109 @@ TEST_CASE("Engine braking in 4th decelerates within 3% of the reference model",
     const real delta_v_n = v_n_at_5p5 - v_n_at_0p5;
     INFO("delta_v_neutral=" << delta_v_n << " (expected magnitude < 60% of in-gear " << delta_v_sim << ")");
     CHECK(std::abs(delta_v_n) < 0.6 * std::abs(delta_v_sim));
+}
+
+// Diagnostic (not run by default): per-term force/torque/energy breakdown of
+// test 5's operating point, sim vs. reference, over the window [2.9, 3.1] s.
+TEST_CASE("Engine braking in 4th: term breakdown diagnostic", "[.][diag][validation][vehicle][powertrain]") {
+    const real mass = 1500.0;
+    const real h_cg = 0.6;
+    auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
+                                           Vec3{2.0, 0.4, 0.15}, h_cg, 0.0, 4);
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->backend().set_motion(rig.chassis, Motion{Vec3{27.78, 0.0, 0.0}, Vec3::zero()});
+    vehicle::VehicleResetOptions opts;
+    opts.gear = 4;
+    opts.clutch_locked = true;
+    opts.hubs_roll_with_chassis = true;
+    rig.world->reset_vehicle(rig.vehicle, opts);
+    rig.world->set_control("throttle", 0.0);
+    rig.world->set_control("clutch", 0.0);
+    rig.world->set_control("assist.auto_clutch", 0.0);
+    rig.world->set_control("assist.auto_blip", 0.0);
+    rig.world->set_control("assist.auto_shift", 0.0);
+
+    const vehicle::VehicleDesc desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
+    const ps_test::RefCar rc = ps_test::RefCar::build(desc);
+    const real eta_k = rc.forward_efficiency[3], eta_fd = rc.diff_efficiency;
+    const real g = rc.forward_ratios[3] * rc.diff_ratio;
+    const real R = rc.wheel_radius_m;
+
+    const real dt = rig.world->dt();
+    const std::uint64_t i0 = static_cast<std::uint64_t>(2.9 / dt + 0.5), i1 = static_cast<std::uint64_t>(3.1 / dt + 0.5);
+    real v0 = 0, v1 = 0;
+    drivetrain::PowertrainEnergy e0{}, e1{};
+    real s_rpm = 0, s_clutch = 0, s_gb = 0, s_diff = 0, s_hub = 0, s_fx_f = 0, s_fx_r = 0, s_fz = 0, s_fz_f = 0, s_v = 0,
+         s_kappa = 0, s_thr = 0;
+    int n = 0;
+    bool any_non_dfco = false;
+    for (std::uint64_t i = 1; i <= i1; ++i) {
+        rig.world->step();
+        if (i == i0) {
+            v0 = rig.world->get_motion(rig.chassis).linear.x;
+            e0 = rig.world->powertrain_energy(rig.vehicle);
+        }
+        if (i > i0) {
+            const auto& pt = rig.world->powertrain_state(rig.vehicle);
+            const auto dbg = rig.world->powertrain_debug(rig.vehicle);
+            s_rpm += pt.engine_rpm;
+            s_clutch += dbg.clutch_torque;
+            s_gb += dbg.gearbox_mesh_torque;
+            s_diff += dbg.diff_mesh_torque;
+            s_hub += dbg.hub_shaft_torque[0] + dbg.hub_shaft_torque[1];
+            s_thr += dbg.throttle_eff;
+            if (pt.engines.empty() || !pt.engines[0].dfco_active) any_non_dfco = true;
+            real fz = 0;
+            for (std::size_t w = 0; w < 4; ++w) fz += rig.world->wheel_telemetry(rig.vehicle, w).fz;
+            s_fz += fz;
+            s_fz_f += rig.world->wheel_telemetry(rig.vehicle, 0).fz + rig.world->wheel_telemetry(rig.vehicle, 1).fz;
+            s_fx_f += rig.world->wheel_telemetry(rig.vehicle, 0).fx + rig.world->wheel_telemetry(rig.vehicle, 1).fx;
+            s_fx_r += rig.world->wheel_telemetry(rig.vehicle, 2).fx + rig.world->wheel_telemetry(rig.vehicle, 3).fx;
+            s_kappa += rig.world->wheel_telemetry(rig.vehicle, 0).slip_ratio;
+            s_v += rig.world->get_motion(rig.chassis).linear.x;
+            ++n;
+        }
+    }
+    v1 = rig.world->get_motion(rig.chassis).linear.x;
+    e1 = rig.world->powertrain_energy(rig.vehicle);
+    const real T = static_cast<real>(i1 - i0) * dt;
+    const real a = (v1 - v0) / T;
+    const real inv = 1.0 / n;
+    const real rpm = s_rpm * inv, v = s_v * inv, fz = s_fz * inv, fx_f = s_fx_f * inv, fx_r = s_fx_r * inv;
+    const real tau_m = rc.motoring.evaluate(rpm);
+    const real f_aero = 0.5 * 1.225 * rc.drag_area_m2 * v * v;
+    const real crr = rc.tyre_desc.qsy1 + rc.tyre_desc.qsy4 * std::pow(v / rc.tyre_desc.v0, 4.0);
+    const real f_roll = crr * fz;
+    const real hub_sum = s_hub * inv;
+    std::printf("--- engine braking breakdown, window [2.9,3.1]s ---\n");
+    std::printf("v=%.4f rpm=%.1f a_chassis=%.5f m/s^2 throttle_eff=%.4f dfco_whole_window=%d kappa_FL=%.5f\n", v, rpm, a,
+                s_thr * inv, any_non_dfco ? 0 : 1, s_kappa * inv);
+    std::printf("engine M(rpm)=%.3f N*m  clutch_lambda=%.3f  gearbox_mesh=%.3f  diff_mesh=%.3f  hub_shaft_sum=%.3f N*m\n", tau_m,
+                s_clutch * inv, s_gb * inv, s_diff * inv, hub_sum);
+    std::printf("hub_sum/(g*M) = %.5f   drive-branch eta_k*eta_fd = %.5f   overrun 1/(eta_k*eta_fd) = %.5f\n",
+                hub_sum / (g * tau_m), eta_k * eta_fd, 1.0 / (eta_k * eta_fd));
+    std::printf("Fx_front(sum)=%.2f Fx_rear(sum)=%.2f F_roll(qsy, all 4)=%.2f F_aero=%.2f N  Fz_total=%.1f Fz_front=%.1f\n", fx_f,
+                fx_r, f_roll, f_aero, fz, s_fz_f * inv);
+    std::printf("chassis balance: m*a=%.2f  vs  Fx_f+Fx_r-F_roll-F_aero=%.2f N\n", mass * a, fx_f + fx_r - f_roll - f_aero);
+    std::printf("hub torque as wheel force: hub_sum/R=%.2f N (front Fx implied incl. hub inertia)\n", hub_sum / R);
+    auto rate = [&](real a1, real a0) { return (a1 - a0) / T; };
+    std::printf("ledger rates (W): engine_out=%.1f engine_friction_loss=%.1f gear_loss=%.1f tyre_loss=%.1f wheel_out=%.1f "
+                "integrator_loss=%.2f d(rotor_ke)/dt=%.1f clutch_loss=%.3f\n",
+                rate(e1.engine_out, e0.engine_out), rate(e1.engine_friction_loss, e0.engine_friction_loss),
+                rate(e1.gear_loss, e0.gear_loss), rate(e1.tyre_loss, e0.tyre_loss), rate(e1.wheel_out, e0.wheel_out),
+                rate(e1.integrator_loss, e0.integrator_loss), rate(e1.rotor_ke, e0.rotor_ke), rate(e1.clutch_loss, e0.clutch_loss));
+    // Reference-side engine-braking force at the wheels at the same rpm,
+    // inertia ignored: drive branch (the pre-fix RefCar), plan-literal
+    // overrun branch (2-eta), and 1/eta.
+    const ps_test::GearLossParams gp = ps_test::ref_gear_loss_params(rc, 3);
+    std::printf("engine force at wheels, |M| only: drive-branch 2*K_half*|M|/R=%.2f N, overrun (2-eta) %.2f N, overrun 1/eta %.2f N\n",
+                2.0 * gp.hub_torque_gain * std::abs(tau_m) / R, g * std::abs(tau_m) * (2.0 - eta_k) * (2.0 - eta_fd) / R,
+                g * std::abs(tau_m) / (eta_k * eta_fd) / R);
+    // Same, with the sim's own measured accelerations (inertia included):
+    const real a_hub = a / R;
+    std::printf("RefCar hub-accel solve at the sim's own state: a_hub(ref)=%.5f vs sim a/R=%.5f rad/s^2\n",
+                ps_test::ref_locked_hub_accel(gp, tau_m, R * fx_f / 2.0, rc.driven_wheel_inertia_kgm2), a_hub);
+    SUCCEED();
 }
 
 // PHYS-033 P4 I3 plan section 13.5(a): stall under load. Facing uphill on a

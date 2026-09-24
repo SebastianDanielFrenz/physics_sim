@@ -12,18 +12,43 @@
 // is an INDEPENDENT cross-check of the sim's own numbers, not a byte-exact
 // replica of its algorithm - see out/... test headers for the exact gates.
 //
-// Sign/efficiency convention (derived from the engine's own equation,
-// J_e*omega_e' = tau_e - T_c: T_c is "torque flowing from the engine to the
-// driveline through the clutch" and stays POSITIVE whenever the engine is
-// the net torque SOURCE for the driveline - true both in normal driving AND
-// in engine-braking/DFCO coast, where the engine's own negative motoring/
-// friction torque acts as a retarding DEMAND the driveline "pulls" through
-// the same positive-T_c direction. This reference therefore uses the single
-// "drive-direction" efficiency branch (T_out = r*eta*T_m) throughout - the
-// plan's literal T_out = r*(T_m - (1-eta)*|T_m|) collapses to exactly that
-// whenever T_m >= 0, which both this file's test 5 (engine braking) and
-// test 1 (launch/accel) scripts keep true throughout (checked, not merely
-// assumed - see each test's own precondition asserts).
+// Sign/efficiency convention (plan section 13's node equations with the
+// section 5.4 loss convention, which is symmetric in the direction of power
+// flow). From the engine's own equation J_e*omega_e' = tau_e - T_c, T_c is
+// the torque flowing from the engine INTO the driveline through the clutch.
+// It is POSITIVE in drive and NEGATIVE on overrun (engine braking / DFCO
+// coast): there tau_e = M(rpm) < 0, the engine is a torque SINK, and
+// T_c = tau_e - J_e*omega_e' ~ M(rpm) + J_e*|omega_e'| < 0 (the decelerating
+// engine inertia gives back a little). Measured, test 5's operating point
+// (3360 rpm, 25.56 m/s): M = -47.52 N*m, |clutch lambda| = 45.95 N*m =
+// |M| - J_e*|omega_e'|, driveline->engine.
+//
+// Each lossy mesh therefore uses the plan's literal
+//   T_out = r*(T_m - (1-eta)*|T_m|)  ==  r*eta*T_m      for T_m >= 0 (drive)
+//                                    ==  r*(2-eta)*T_m  for T_m <  0 (overrun)
+// i.e. on overrun the loss ADDS to the torque the wheels must deliver, it
+// does not reduce it. (An earlier version of this file used the drive branch
+// r*eta*T_m on overrun too, on the incorrect premise that T_c stays positive
+// when engine braking. That understated the engine-braking force at the
+// wheels by the factor eta_k*eta_fd / ((2-eta_k)*(2-eta_fd)) = 0.905 in 4th,
+// 624.8 N instead of 690.4 N at 3360 rpm. The sim's measured hub torque was
+// 1.0521 x the lossless demand, i.e. 1/(eta_k*eta_fd) = 1.0520, so the sim
+// applies the overrun branch correctly. That was the whole of test 5's 5.6%
+// gap.)
+//
+// (2-eta) vs 1/eta: the sim's gearbox loss is -(1-eta)*|lambda_prev| where
+// the reconstructed lambda_prev at N1 is the pre-loss input torque T_m,
+// which is exactly the (2-eta) form above. The sim's differential
+// reconstructs its lambda_prev at the left hub, i.e. the post-loss
+// transmitted torque, which gives 1/eta on overrun instead of (2-eta):
+// 1.0309 vs 1.0300 for eta_fd = 0.97, a 0.09% difference, well inside the
+// "<= 1%" budget below. The reference keeps the plan's literal formula.
+//
+// Because the branch depends on the sign of T_m and T_fd, which depend on
+// the unknown hub acceleration through the inertia terms, the locked-gear
+// step solves the (piecewise-linear, monotone) hub equation once per sign
+// case and keeps the self-consistent one - plan section 13's own "solve the
+// scalar linear equation for omega_d' per sign case".
 //
 // tests/support is test-only shared support (see counter_force_element.h,
 // vehicle_test_helpers.h in this same directory) - never included from
@@ -172,8 +197,15 @@ inline ps::real ref_engine_torque(const RefCar& rc, ps::real rpm, ps::real theta
 // symmetry - true for every I3 vehicle).
 struct GearLossParams {
     ps::real g = 1.0;             // overall ratio: omega_e = g * omega_hub
+    // Drive-branch (T_m, T_fd >= 0) closed forms only - valid for steady
+    // positive-torque use such as test 2's top-speed bisection. Anything
+    // that can go into overrun must use ref_locked_hub_accel() below.
     ps::real hub_torque_gain = 0.0;    // "K_half": engine torque -> ONE hub's drive torque, drive-direction efficiency
     ps::real hub_reflected_inertia = 0.0; // engine+input+output inertia, reflected to omega_hub' (drive-direction)
+    // Raw chain data for the per-sign-case solve.
+    ps::real r_k = 1.0, eta_k = 1.0, r_fd = 1.0, eta_fd = 1.0;
+    ps::real j_ei = 0.0; // engine + clutch-out + gearbox-in (locked clutch: one node)
+    ps::real j_o = 0.0;  // gearbox-out + diff carrier
 };
 
 inline GearLossParams ref_gear_loss_params(const RefCar& rc, std::size_t gear_index_zero_based) {
@@ -204,7 +236,46 @@ inline GearLossParams ref_gear_loss_params(const RefCar& rc, std::size_t gear_in
     const ps::real j_ei = rc.engine_inertia_kgm2 + rc.j_input_node();
     p.hub_reflected_inertia =
         ps::real(0.5) * r_fd * eta_fd * (r_k * eta_k * j_ei * p.g + rc.j_output_node() * r_fd);
+    p.r_k = r_k;
+    p.eta_k = eta_k;
+    p.r_fd = r_fd;
+    p.eta_fd = eta_fd;
+    p.j_ei = j_ei;
+    p.j_o = rc.j_output_node();
     return p;
+}
+
+// Locked clutch, fixed gear: one driven hub's angular acceleration a =
+// omega_hub' from the plan section 13 node chain with the direction-aware
+// loss (this file's header comment):
+//   T_m   = tau_e - J_ei*g*a                         (mesh input torque at N1)
+//   T_fd  = r_k*phi_k(T_m) - J_o*r_fd*a              (diff input torque at N2)
+//   J_w*a = 1/2*r_fd*phi_fd(T_fd) - R*Fx
+// with phi(x) = x - (1-eta)*|x| = e*x, e = eta (x >= 0) or 2-eta (x < 0).
+// Per sign case (e1, e2) the equation is linear:
+//   a*(J_w + 1/2*r_fd*e2*(r_k*e1*J_ei*g + J_o*r_fd)) = 1/2*r_fd*e2*r_k*e1*tau_e - R*Fx
+// The composed right-hand side is continuous and strictly monotone in a
+// (every phi is increasing), so exactly one case is self-consistent (two at
+// a shared boundary, where they agree); that one is returned.
+inline ps::real ref_locked_hub_accel(const GearLossParams& gp, ps::real tau_e, ps::real r_fx, ps::real j_w) {
+    const ps::real e1s[2] = {gp.eta_k, ps::real(2.0) - gp.eta_k};
+    const ps::real e2s[2] = {gp.eta_fd, ps::real(2.0) - gp.eta_fd};
+    ps::real fallback = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            const ps::real e1 = e1s[i], e2 = e2s[j];
+            const ps::real num = ps::real(0.5) * gp.r_fd * e2 * gp.r_k * e1 * tau_e - r_fx;
+            const ps::real den = j_w + ps::real(0.5) * gp.r_fd * e2 * (gp.r_k * e1 * gp.j_ei * gp.g + gp.j_o * gp.r_fd);
+            const ps::real a = num / den;
+            const ps::real t_m = tau_e - gp.j_ei * gp.g * a;
+            const ps::real t_fd = gp.r_k * e1 * t_m - gp.j_o * gp.r_fd * a;
+            const bool ok1 = (i == 0) ? (t_m >= ps::real(0.0)) : (t_m <= ps::real(0.0));
+            const bool ok2 = (j == 0) ? (t_fd >= ps::real(0.0)) : (t_fd <= ps::real(0.0));
+            if (ok1 && ok2) return a;
+            if (i == 0 && j == 0) fallback = a;
+        }
+    }
+    return fallback; // unreachable by the monotonicity argument above; kept total for safety
 }
 
 // Per-substep state for the locked-gear (no shifting, no clutch slip)
@@ -247,8 +318,7 @@ inline void ref_locked_gear_step(RefLockedGearState& s, const RefCar& rc, const 
     const ps::real engine_rpm = ref_rad_to_rpm(gp.g * s.omega_hub);
     const ps::real tau_e = ref_engine_torque(rc, engine_rpm, theta);
 
-    const ps::real omega_hub_dot =
-        (gp.hub_torque_gain * tau_e - rc.wheel_radius_m * fx) / (rc.driven_wheel_inertia_kgm2 + gp.hub_reflected_inertia);
+    const ps::real omega_hub_dot = ref_locked_hub_accel(gp, tau_e, rc.wheel_radius_m * fx, rc.driven_wheel_inertia_kgm2);
 
     // Rolling resistance (plan section 13's own vehicle-level formula: "Sum
     // Fz_i (qsy1 + qsy4 (v/v0)^4)") is applied here, at the CHASSIS level
