@@ -85,6 +85,33 @@ struct TyreDesc {
 
     // --- overturning moment Mx(Fz, gamma, Fy) - simplified linear form ---
     real qsx1 = 0.0, qsx2 = 0.05, qsx3 = 0.02;
+
+    // --- low-speed lateral carcass damping (PHYS-033 section 4.3, I1 plan
+    // section 3.6/4) ---
+    //
+    // A viscous force -c*fade*vy applied to the wheel's lateral contact
+    // velocity, faded out above low_speed_damping_vx (on TOTAL contact-patch
+    // speed, sqrt(vx^2+vy^2) - PHYS-024 found this load-bearing: a wheel
+    // with near-zero ROLLING speed but a real, fast lateral slide/spin must
+    // not get this term). c = 2*ratio*sqrt(k_lat*m_ref), with the lateral
+    // deflection stiffness k_lat = pky1*fz0/relaxation_length_y (at the
+    // NOMINAL load) and m_ref = fz0/9.81 - anchored to the tyre's FIXED
+    // fz0, never the live/instantaneous Fz (PHYS-024's positive-feedback
+    // lesson: tying this to live Fz turned a hard-acceleration weight-
+    // transfer transient into a runaway spin-out).
+    //
+    // This is NOT a compensation for VehicleInstance::step_tick's one-tick
+    // chassis-state delay (that delay is fully removed by the I1 W1 shadow
+    // chassis - see CLAUDE.md's "Vehicle system" section) - it is real
+    // carcass/relaxation damping the tyre model's own relaxation ODE does
+    // not otherwise supply at vanishing rolling speed (the longitudinal
+    // channel is saved by rolling resistance, a genuine Coulomb drag along
+    // the same axis at any speed; the lateral channel has none). See
+    // wheel_instance.cpp's low_speed_lateral_damping_force for the explicit-
+    // integration stability bound (PHYS-033 section 4.3) that caps a safe
+    // ratio, and CLAUDE.md for how the shipped default was measured.
+    real low_speed_damping_ratio = 1.5; // dimensionless; 0 disables the term entirely
+    real low_speed_damping_vx = 2.0;    // m/s; fade reaches 0 at this TOTAL contact speed
 };
 
 } // namespace ps::vehicle

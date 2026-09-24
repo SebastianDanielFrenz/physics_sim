@@ -91,6 +91,18 @@ TyreDesc read_tyre_object(const json& j) {
     d.lambda_mux = j.value("lambda_mux", d.lambda_mux);
     d.lambda_muy = j.value("lambda_muy", d.lambda_muy);
 
+    // PHYS-033 I1: additive fields, tyre/1 unchanged.
+    d.low_speed_damping_ratio = j.value("low_speed_damping_ratio", d.low_speed_damping_ratio);
+    d.low_speed_damping_vx = j.value("low_speed_damping_vx", d.low_speed_damping_vx);
+    if (d.low_speed_damping_ratio < real(0.0) || d.low_speed_damping_ratio > real(2.0)) {
+        throw std::runtime_error("tyre '" + d.name + "': low_speed_damping_ratio must be in [0, 2], got " +
+                                  std::to_string(d.low_speed_damping_ratio));
+    }
+    if (d.low_speed_damping_vx <= real(0.0)) {
+        throw std::runtime_error("tyre '" + d.name + "': low_speed_damping_vx must be > 0, got " +
+                                  std::to_string(d.low_speed_damping_vx));
+    }
+
     if (j.contains("longitudinal")) {
         const auto& g = j.at("longitudinal");
         d.pcx1 = g.value("pcx1", d.pcx1);

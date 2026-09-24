@@ -13,6 +13,8 @@
   "qsy4": 0.0003,
   "relaxation_length_x": 0.22,
   "relaxation_length_y": 0.30,
+  "low_speed_damping_ratio": 1.5,
+  "low_speed_damping_vx": 2.0,
   "lambda_mux": 1.0,
   "lambda_muy": 1.0,
   "longitudinal": {

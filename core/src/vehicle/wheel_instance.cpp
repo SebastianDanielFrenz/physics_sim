@@ -12,150 +12,57 @@ namespace {
 
 real sign(real x) { return x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0); }
 
-// Low-speed lateral carcass damping (PHYS wiggle fix, see CLAUDE.md's
-// vehicle-system section for the full derivation and measured numbers).
+// Low-speed lateral carcass damping (PHYS-033 section 4.3, I1 plan section
+// 3.6). Physical framing: real carcass/relaxation damping the tyre model's
+// relaxation ODE does not otherwise supply at vanishing ROLLING speed - the
+// longitudinal channel is saved by rolling resistance (froll below, a
+// genuine Coulomb-type drag along the SAME axis as kappa's restoring force,
+// nonzero at any speed); the lateral channel has no equivalent, so the
+// alpha_eq/chassis-yaw-rate loop is a marginally-stable (zeta -> 0)
+// continuous oscillator (PHYS-024's original finding: a plain yaw-rate kick
+// at true standstill GROWS into a saturated limit cycle at 240 Hz but
+// plainly decays at 4x finer tick rate).
 //
-// IMPORTANT - this is a COMPENSATION, not a repair. step_slip_relaxation's
-// own decay rate (a = vx_mag/sigma) is shared by both slip channels and
-// vanishes as the wheel's ROLLING speed -> 0. The longitudinal channel is
-// saved from the consequences of that by rolling resistance (froll below -
-// a genuine Coulomb-type drag along the SAME axis as kappa's restoring
-// force, still nonzero at vanishing speed); the lateral channel has no
-// equivalent, making the alpha_eq/chassis-yaw-rate loop a marginally-stable
-// (zeta -> 0) CONTINUOUS oscillator. Measured (test_vehicle_standstill_
-// wiggle.cpp): a plain yaw-rate kick at true standstill, no steering, no
-// forward motion, does NOT merely ring down slowly - it GROWS into a
-// saturated ~5.4 Hz / ~0.92 rad/s peak-to-peak limit cycle by t~8s at the
-// normal 240 Hz tick rate, but plainly DECAYS under the identical initial
-// condition at 4x finer tick rate. That confirms the growth is a NUMERICAL
-// instability, not a physical one: VehicleInstance::step_tick's
-// one-tick-delayed force application (chassis motion held at tick-start
-// motion0 across all 4 substeps, wrench applied once per 240 Hz tick) turns
-// the continuous system's zero damping margin negative.
+// NOT a compensation for a numerical delay (that framing is retired as of
+// PHYS-033 I1's W1 shadow chassis - see CLAUDE.md's "Vehicle system"
+// section for the current derivation of VehicleInstance::step_tick's
+// per-substep wrench). This term supplies the physical damping margin the
+// relaxation model itself is missing at low speed; TyreDesc's
+// low_speed_damping_ratio/low_speed_damping_vx set its strength and fade,
+// per tyre file (ps/vehicle/tyre_desc.h's own comment has the full
+// derivation and the explicit-integration stability bound below).
 //
-// The term below does NOT fix that delay - the delay is still there. It
-// gives the CONTINUOUS system enough real damping margin that the same
-// delay can no longer tip it negative (delay eats into a real margin
-// instead of a zero one). kZetaMin (below) is therefore sized against THIS
-// SPECIFIC 240 Hz one-tick delay, not derived purely from tyre/carcass
-// physics - it is an empirically-bounded compensating constant, not a
-// measured physical damping coefficient. If VehicleInstance::step_tick's
-// application delay is ever fixed properly (e.g. applying the wrench once
-// per SUBSTEP against an updated chassis velocity instead of once per tick
-// against a tick-start snapshot, or integrating the lateral relaxation
-// implicitly), THIS TERM MUST BE REVISITED, not left stacked on top - a
-// properly-fixed delay may need little or none of this compensation, and
-// an unnecessarily strong damper left in place after that fix would still
-// cost the aggregate-yaw-mode stability margin derived below for no reason.
-// That delay fix was considered for this bug and rejected as too large in
-// scope here: it touches the tick/substep pipeline every vehicle validation
-// test (skidpad tuned to 0.34%, the braking [!mayfail] numbers, step-steer,
-// accel-standing-start) is measured against, would very likely move every
-// vehicle scenario's state_hash (not just near-standstill ones, unlike this
-// additive term), and is a substantially bigger, riskier change than a
-// time-boxed bug fix should carry. It is plausibly the better long-term
-// fix; flagged to the task's coordinator as its own PLAN.md item rather
-// than attempted here.
+// c = 2*ratio*sqrt(k_lat*m_ref), k_lat = pky1*fz0/relaxation_length_y (at
+// the tyre's FIXED nominal load fz0, never the live/instantaneous fz -
+// PHYS-024's positive-feedback lesson: tying this to live fz turned a
+// hard-acceleration weight-transfer transient into a positive-feedback
+// spin-out). Faded to zero above low_speed_damping_vx on TOTAL contact-patch
+// speed (not just longitudinal) - a wheel with near-zero rolling speed but
+// real, fast lateral motion (sliding/spinning/being pushed sideways) must
+// not get this drag applied to a genuine fast slide.
 //
-// c_lat is derived from a per-wheel single-DOF estimate of the
-// alpha_eq/lateral-force natural frequency: omega_n = sqrt(Ky/(m*sigma_y))
-// with Ky = fz0*pky1 (pky2 == 0 for every tyre file in this repo today, so
-// Ky is EXACTLY linear in load - re-derive if a future tyre file gives
-// pky2 != 0). The reference mass is tied to the tyre's own FIXED nominal
-// load, m_corner = fz0/kGravityRef (kGravityRef is a fixed modelling
-// constant here, not the sim's actual gravity - no World access from this
-// file; fz0, not the live/instantaneous fz - see the function's own
-// comment below for why that distinction is load-bearing, found via a real
-// regression). omega_n and c_lat/m_corner are therefore fixed per tyre
-// file, independent of whatever the live fz happens to be doing at
-// runtime, including at a hard bump-stop impact.
+// Stability (PHYS-033 section 4.3): the damper is explicit (evaluated from
+// this substep's own twist), and all four wheels' damping torques sum onto
+// shared chassis DOFs (yaw most sensitive, per the section's derivation) -
+// a per-vehicle-file check (car_sedan and tractor) that
+// gamma = h*sum_i(c_i*(1/M + (r_i x y_i)^T I^-1 (r_i x y_i))) < 1 at the
+// configured ratio lives in test_vehicle_shadow_chassis.cpp.
 //
-// That single-wheel check is NOT the binding constraint, though, and
-// picking kZetaMin from it alone is unsafe - found empirically, not just
-// derived: kZetaMin=2.5 (which the single-wheel check alone still called
-// "comfortable") made the wiggle MUCH WORSE than no fix at all (amplitude
-// exceeding the original bug). Reason: all four wheels' damping FORCES sum
-// onto the same shared YAW degree of freedom as a TORQUE (each wheel's
-// contribution weighted by its own moment arm r_i from the chassis CoM),
-// so the aggregate rotational-mode damping is sum_i(c_lat_i * r_i^2), not
-// a single wheel's c_lat alone - and because a real chassis's mass sits
-// closer to the CoM than "concentrated at the 4 wheels" (r^2 = 2.43 m^2 vs
-// I_yaw/M = 0.81 m^2 for car_sedan, a factor of 3), the YAW mode is far
-// more sensitive to this damper than the lateral-TRANSLATION mode is (for
-// which the aggregate check collapses back to exactly the single-wheel
-// case, m_corner and M cancelling identically). The correct bound is the
-// AGGREGATE explicit-integration check for the yaw mode:
-//   (2*kZetaMin*omega_n*sum_i(m_corner_i*r_i^2) / I_yaw) * dt < threshold
-// For car_sedan (I_yaw estimated as a rectangular-plate approximation,
-// M*(wheelbase^2+track^2)/12 = 1215 kg*m^2): ratio=1 (explicit-Euler
-// multiplier 0, i.e. NO sign flip between ticks) at kZetaMin~=1.24;
-// ratio=2 (multiplier -1, i.e. true divergence) at kZetaMin~=2.47 -
-// matching the observed kZetaMin=2.5 blowup almost exactly. tractor's own
-// bound is looser (~2.27 at ratio=1, larger I_yaw/M for its size) so
-// car_sedan is the binding case across the data files this repo ships
-// today; re-run this check for any future vehicle file.
-//
-// ratio=1 is NOT the line between "clean" and "marginal" - read the
-// explicit-Euler multiplier (1-ratio), not just which side of ratio=1 a
-// value falls on: |multiplier| (how much a tick's correction shrinks by)
-// is SMALLEST, i.e. decay is FASTEST, right at ratio=1, and only grows
-// toward the dangerous side as ratio approaches 2. kZetaMin=1.5 gives
-// ratio=1.213, multiplier=-0.213 - an alternating-sign correction decaying
-// by ~79% EVERY 4.17 ms TICK, invisible at any observable timescale and
-// still a materially faster theoretical decay than e.g. kZetaMin=0.7's
-// ratio=0.566/multiplier=+0.434 (monotonic, but slower). This single-mode
-// estimate also does not capture the whole real system - it is an
-// aggregate-YAW-ONLY linearization, and kZetaMin=1.0 (ratio=0.809, on the
-// "monotonic" side of this same estimate) measurably left a slow secondary
-// regrowth bump in test_vehicle_standstill_wiggle.cpp's telemetry that this
-// single mode does not predict, evidence of at least one further, more
-// weakly-damped mode this estimate does not model. kZetaMin=1.5 was the
-// best of {0.7, 1.0, 1.5, 2.5} actually tried against that telemetry (0.7
-// and 1.0 left a slow secondary regrowth within the 12-24 s observation
-// window; 1.5 decayed with NO regrowth at all, confirmed over 24 s; 2.5
-// diverged) - chosen from measurement, with the analytical bound used only
-// to sanity-check the ORDER of magnitude (it correctly flagged 2.5 as
-// unsafe) rather than to pick the exact value.
-//
-// Faded by TOTAL contact-patch speed (not just the longitudinal component)
-// down to zero by kFadeSpeedMps: a wheel with near-zero rolling speed but
-// real, fast LATERAL motion (sliding, spinning, being pushed sideways)
-// must not get this drag applied to a genuinely fast slide - keying the
-// fade on longitudinal speed alone would do exactly that. kFadeSpeedMps
-// (2 m/s) is well below every other vehicle validation test's operating
-// speed (skidpad/step-steer/braking all run well above it), so this term
-// is a strict no-op there.
-constexpr real kGravityRef = 9.81;
-constexpr real kZetaMin = 1.5;
-constexpr real kFadeSpeedMps = 2.0;
+// low_speed_damping_ratio = 1.5 reproduces the old hard-coded kZetaMin
+// (I1 plan commit B: bit-for-bit, including every code-built desc such as
+// test_worker_count_hash's) - the expression below intentionally keeps the
+// OLD operation order (omega_n, then m_corner, then c) for that reason;
+// commit E ties the shipped default to a fresh measurement instead (see
+// CLAUDE.md).
+constexpr real kGravityRef = 9.81; // fixed modelling constant, not World::gravity - no World access from this file
 
-// fz0 (the tyre's own FIXED reference/nominal load, TyreDesc::fz0), NOT the
-// live/instantaneous fz, feeds m_corner here - found necessary, not just a
-// simplification: an earlier version used the live fz (which does cancel
-// analytically out of Ky/m_corner for a QUASI-STATIC load, the "load-
-// independent" property this file used to claim), but c_lat then scaled
-// linearly with fz EVERY TICK, including mid-transient. A hard full-
-// throttle standing start on a FWD car transfers load violently between
-// front corners as the suspension reacts (measured: fz spiking to ~41 kN,
-// ~11x nominal, within a few ticks) - tying the damper's own strength to
-// that swinging live fz turned it into a positive-feedback loop (bigger
-// transient load -> stronger damper -> bigger force -> more roll -> bigger
-// load spike -> ...) that blew up test_vehicle_accel_standing_start.cpp's
-// asphalt case into a multi-rotation spin-out within ~0.3 s
-// (test_vehicle_standstill_wiggle.cpp's diagnostic reproduced this exactly
-// and confirmed causation by disabling the term). Using the FIXED fz0
-// instead breaks that feedback path entirely - the damper's strength no
-// longer depends on anything this force loop itself influences - at the
-// cost of the load-independence argument now only holding approximately
-// (fz0 is close to each wheel's typical static corner load for both
-// vehicle files in this repo, so kZetaMin's tuning against the near-static
-// standstill-wiggle telemetry still applies).
-real lateral_standstill_damping_force(real fz0, real pky1, real sigma_y, real vx_contact, real vy_contact) {
-    const real omega_n = std::sqrt(pky1 * kGravityRef / std::max(sigma_y, real(1e-6)));
-    const real m_corner = fz0 / kGravityRef;
-    const real c_lat = real(2.0) * kZetaMin * m_corner * omega_n;
+real low_speed_lateral_damping_force(const TyreDesc& t, real vx_contact, real vy_contact) {
+    if (t.low_speed_damping_ratio <= real(0.0)) return 0.0;
+    const real omega_n = std::sqrt(t.pky1 * kGravityRef / std::max(t.relaxation_length_y, real(1e-6)));
+    const real m_corner = t.fz0 / kGravityRef;
+    const real c_lat = real(2.0) * t.low_speed_damping_ratio * m_corner * omega_n;
     const real speed_total = std::sqrt(vx_contact * vx_contact + vy_contact * vy_contact);
-    const real fade = std::clamp(real(1.0) - speed_total / kFadeSpeedMps, real(0.0), real(1.0));
+    const real fade = std::clamp(real(1.0) - speed_total / t.low_speed_damping_vx, real(0.0), real(1.0));
     return -c_lat * fade * vy_contact;
 }
 
@@ -260,8 +167,7 @@ WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
         slip_in.crr_surface = crr_surface;
         const TyreForces f = tyre_->evaluate(slip_in);
         fx = f.fx;
-        fy = f.fy + lateral_standstill_damping_force(tyre_->desc().fz0, tyre_->desc().pky1,
-                                                       tyre_->desc().relaxation_length_y, vx_contact, vy_contact);
+        fy = f.fy + low_speed_lateral_damping_force(tyre_->desc(), vx_contact, vy_contact);
         mz = f.mz;
         mx = f.mx;
 

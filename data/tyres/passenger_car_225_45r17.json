@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.tyre/1",
   "name": "passenger_car_225_45r17",
-  "source": "Plausible Magic Formula (MF5.2) coefficient magnitudes for a mid-size performance passenger tyre, following the coefficient naming and equation structure of Pacejka, 'Tyre and Vehicle Dynamics', 3rd ed. (Butterworth-Heinemann, 2012), ch. 4. NOT a measured/proprietary .tir for a specific commercial tyre - PLAN.md P3 explicitly allows 'published or plausible' data with the source noted. Peak friction coefficients (Dx1/Dy1 ~= 1.0-1.05) and cornering/longitudinal stiffness magnitudes (Kx/Ky ~= 16-18x Fz) are consistent with the typical ranges Pacejka's own Table 4.2 and Milliken, 'Race Car Vehicle Dynamics' (SAE, 1995) ch. 2 cite for radial passenger/performance tyres. Dimensions (unloaded_radius=0.317 m, width=0.205 m) match a 225/45R17 tyre's nominal geometry and data/models/car_sedan/car_sedan.rig.json's own wheel radius.",
+  "source": "Plausible Magic Formula (MF5.2) coefficient magnitudes for a mid-size performance passenger tyre, following the coefficient naming and equation structure of Pacejka, 'Tyre and Vehicle Dynamics', 3rd ed. (Butterworth-Heinemann, 2012), ch. 4. NOT a measured/proprietary .tir for a specific commercial tyre - PLAN.md P3 explicitly allows 'published or plausible' data with the source noted. Peak friction coefficients (Dx1/Dy1 ~= 1.0-1.05) and cornering/longitudinal stiffness magnitudes (Kx/Ky ~= 16-18x Fz) are consistent with the typical ranges Pacejka's own Table 4.2 and Milliken, 'Race Car Vehicle Dynamics' (SAE, 1995) ch. 2 cite for radial passenger/performance tyres. Dimensions (unloaded_radius=0.317 m, width=0.205 m) match a 225/45R17 tyre's nominal geometry and data/models/car_sedan/car_sedan.rig.json's own wheel radius. low_speed_damping_ratio/low_speed_damping_vx (PHYS-033 I1) were chosen by measurement against the standstill-wiggle telemetry (CLAUDE.md's Vehicle system section), not from a published tyre.",
   "unloaded_radius": 0.317,
   "width": 0.225,
   "rim_radius": 0.2159,
@@ -13,6 +13,8 @@
   "qsy4": 0.0002,
   "relaxation_length_x": 0.10,
   "relaxation_length_y": 0.15,
+  "low_speed_damping_ratio": 1.5,
+  "low_speed_damping_vx": 2.0,
   "lambda_mux": 1.0,
   "lambda_muy": 1.0,
   "longitudinal": {
