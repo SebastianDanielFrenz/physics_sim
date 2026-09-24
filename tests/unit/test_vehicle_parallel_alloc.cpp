@@ -23,9 +23,24 @@
 // Reallocate/AlignedAllocate to route through debug_alloc::
 // note_external_allocation(), counted in the SAME violation_count() this
 // test already asserts against, plus a separate external_violation_count()
-// for attribution). The REQUIRE below now also covers Jolt-internal
-// allocation (e.g. inside PhysicsSystem::Update itself), not just this
-// file's own vehicle code.
+// for attribution).
+//
+// PHYS-033 P4 I2 pre-step P1: wiring the Jolt route (above) made THIS
+// test's own strict REQUIRE blind - JPH::QuadTree::UpdatePrepare allocates
+// inside PhysicsSystem::Update itself (see the now-removed [!mayfail] note
+// this comment used to carry, and the P1 commit report for the measured
+// ~49-per-100-ticks figure), and that is not something this codebase
+// controls the timing of (PLAN.md P9 tracks it). Gating the whole test on
+// violation_count() (own + Jolt, folded together) therefore blinded it to
+// regressions in OUR OWN code for the entire time I1b's fix was in place.
+// P1 splits the two: own_violation_count() (this file's own operator
+// new/delete overrides only) is asserted STRICTLY zero below, while
+// external_violation_count() (Jolt-internal) is reported via WARN, ungated -
+// so this test is green again AND still catches a reintroduced allocation in
+// our own vehicle code (proved once, by hand, in the P1 commit: a
+// deliberately reintroduced `std::vector<real>` in
+// VehicleInstance::step_tick made own_violation_count() go strictly
+// positive, then was reverted - see the P1 commit message/report).
 
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
@@ -72,7 +87,7 @@ using ps::jobs::debug_alloc::hook_available;
 // green. The REQUIRE below is UNCHANGED (still exactly 0, not loosened) -
 // this tag documents a known, understood gap, it does not paper over it.
 TEST_CASE("A full World::step with a vehicle allocates nothing inside the vehicle job",
-          "[world][vehicle][debug_alloc][jobs][!mayfail]") {
+          "[world][vehicle][debug_alloc][jobs]") {
     if (!hook_available()) {
         WARN("debug_alloc's own operator new/delete overrides are compiled out under ASan/TSan - nothing to check here on this build.");
         return;
@@ -129,12 +144,13 @@ TEST_CASE("A full World::step with a vehicle allocates nothing inside the vehicl
         ps::jobs::debug_alloc::set_armed(true);
         for (int i = 0; i < 100; ++i) world.step();
         ps::jobs::debug_alloc::set_armed(false);
-        const std::uint64_t violations = ps::jobs::debug_alloc::violation_count();
+        const std::uint64_t own = ps::jobs::debug_alloc::own_violation_count();
+        const std::uint64_t external = ps::jobs::debug_alloc::external_violation_count();
         ps::jobs::debug_alloc::reset();
 
         INFO("workers=" << workers);
-        REQUIRE(violations == 0);
-        REQUIRE(ps::jobs::debug_alloc::external_violation_count() == 0);
+        WARN("external (Jolt-internal, ungated, PLAN.md P9) violation count=" << external);
+        REQUIRE(own == 0);
     }
 }
 

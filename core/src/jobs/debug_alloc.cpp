@@ -59,6 +59,7 @@ namespace {
 std::atomic<bool> g_armed{false};
 std::atomic<std::uint64_t> g_violations{0};
 std::atomic<std::uint64_t> g_external_violations{0};
+std::atomic<std::uint64_t> g_own_violations{0}; // P4 I2 pre-step P1: violations NOT tagged external
 thread_local int g_job_depth = 0;
 
 // Re-entrancy guard: the violation bookkeeping below (atomics only) does
@@ -162,6 +163,7 @@ void note_violation(bool external) {
         g_in_hook = true;
         g_violations.fetch_add(1, std::memory_order_relaxed);
         if (external) g_external_violations.fetch_add(1, std::memory_order_relaxed);
+        else g_own_violations.fetch_add(1, std::memory_order_relaxed);
 #if defined(PS_DEBUG_ALLOC_HAVE_BACKTRACE)
         const int budget = backtrace_budget();
         if (budget > 0) {
@@ -180,9 +182,11 @@ void set_armed(bool armed) { g_armed.store(armed, std::memory_order_relaxed); }
 bool is_armed() { return g_armed.load(std::memory_order_relaxed); }
 std::uint64_t violation_count() { return g_violations.load(std::memory_order_relaxed); }
 std::uint64_t external_violation_count() { return g_external_violations.load(std::memory_order_relaxed); }
+std::uint64_t own_violation_count() { return g_own_violations.load(std::memory_order_relaxed); }
 void reset() {
     g_violations.store(0, std::memory_order_relaxed);
     g_external_violations.store(0, std::memory_order_relaxed);
+    g_own_violations.store(0, std::memory_order_relaxed);
 }
 void note_external_allocation() { note_violation(/*external=*/true); }
 

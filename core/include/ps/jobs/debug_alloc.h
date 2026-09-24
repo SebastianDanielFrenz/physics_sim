@@ -34,6 +34,24 @@ void reset();
 void note_external_allocation();
 std::uint64_t external_violation_count();
 
+// PHYS-033 P4 I2 pre-step P1: violation_count() folds together OUR code's
+// own allocations (operator new, via note_allocation()) and Jolt-internal
+// ones (note_external_allocation()) - I1b's own test_vehicle_parallel_alloc.cpp
+// had to mark its whole strict guarantee [!mayfail] once the external route
+// was wired up, because Jolt's PhysicsSystem::Update itself allocates
+// (QuadTree::UpdatePrepare, ~49 per 100 ticks) for reasons outside this
+// codebase's control (PLAN.md P9). That blinded the test to regressions in
+// OUR OWN code for the whole vehicle job.
+//
+// own_violation_count() counts ONLY the non-external violations (i.e. hits
+// through this file's own operator new/delete overrides) - a test can
+// therefore assert own_violation_count() == 0 strictly (gating our code)
+// while still reporting external_violation_count() (Jolt's) ungated. The
+// two counters are independent tallies (not violation_count() minus
+// external_violation_count()) so each stays meaningful even if one is
+// reset independently.
+std::uint64_t own_violation_count();
+
 // False under an ASan/TSan build: those sanitizers install their own global
 // operator new/delete, so this hook's own overrides (debug_alloc.cpp) are
 // compiled out there to avoid a duplicate-symbol link error, and armed()
