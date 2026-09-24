@@ -285,6 +285,39 @@ int main() {
         check(close(ch.clutch, shape_unidirectional_axis(0.6f, TriggerConfig{})), "clutch: analog-only input passes through exactly as before");
     }
 
+    {
+        // Speed-sensitive steering assist: full stick maps to a wheel angle
+        // near the tyre's peak slip at speed, full lock at standstill, and
+        // does nothing when the speed is unknown or the assist is off.
+        InputMapConfig cfg;
+        cfg.steer_assist.wheelbase_m = 2.7f;
+        cfg.steer_assist.max_wheel_angle_rad = 0.6f;
+        auto run = [&](const InputMapConfig& c, float speed, float* limit_out) {
+            InputMapper m(c);
+            RawInput raw;
+            raw.steer_axis = 1.0f;
+            raw.vehicle_speed_mps = speed;
+            const ControlChannels ch = m.process(raw, kDt60);
+            if (limit_out != nullptr) *limit_out = m.last_steer_limit();
+            return ch.steer;
+        };
+        InputMapConfig off = cfg;
+        off.steer_assist.enabled = false;
+        const float base = run(off, 30.0f, nullptr);
+        check(std::fabs(base) > 0.0f, "steer assist: baseline full stick gives nonzero steer");
+        float lim = 0.0f;
+        check(close(run(cfg, -1.0f, &lim), base) && close(lim, 1.0f), "steer assist: unknown speed leaves steer untouched");
+        check(close(run(cfg, 0.0f, &lim), base) && close(lim, 1.0f), "steer assist: standstill allows full lock");
+        const float fast = run(cfg, 30.0f, &lim);
+        // delta_max = 2.7*9/900 + 1.3*0.0785398 = 0.12910 rad -> /0.6 = 0.21517
+        check(close(lim, 0.21517f, 1e-3f), "steer assist: 30 m/s limit matches L*a/v^2 + margin*alpha_peak");
+        check(close(fast, base * lim), "steer assist: steer is scaled by exactly the reported limit");
+        InputMapConfig tiny = cfg;
+        tiny.steer_assist.peak_slip_angle_rad = 0.0f;
+        (void)run(tiny, 500.0f, &lim);
+        check(close(lim, tiny.steer_assist.min_fraction), "steer assist: never below min_fraction");
+    }
+
     if (g_failures == 0) {
         std::printf("test_input_map: all checks passed\n");
         return 0;

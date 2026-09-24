@@ -54,6 +54,16 @@ ControlChannels InputMapper::process(const RawInput& raw, float dt) {
     // this via shape_bidirectional_axis's own sign flip, stays a separate,
     // independent toggle).
     out.steer = -shape_bidirectional_axis(raw.steer_axis, config_.steer);
+
+    // Speed-sensitive steering assist (SteerAssistConfig's comment).
+    last_steer_limit_ = 1.0f;
+    const SteerAssistConfig& sa = config_.steer_assist;
+    if (sa.enabled && sa.wheelbase_m > 0.0f && sa.max_wheel_angle_rad > 0.0f && raw.vehicle_speed_mps >= 0.0f) {
+        const float v2 = std::max(raw.vehicle_speed_mps * raw.vehicle_speed_mps, 1e-6f);
+        const float delta_max = sa.wheelbase_m * sa.lat_accel_limit_mps2 / v2 + sa.slip_margin * sa.peak_slip_angle_rad;
+        last_steer_limit_ = std::clamp(delta_max / sa.max_wheel_angle_rad, std::min(sa.min_fraction, 1.0f), 1.0f);
+        out.steer *= last_steer_limit_;
+    }
     out.throttle = shape_unidirectional_axis(raw.throttle_trigger, config_.throttle);
     out.brake = shape_unidirectional_axis(raw.brake_trigger, config_.brake);
     out.handbrake = shape_unidirectional_axis(raw.handbrake_trigger, config_.handbrake);

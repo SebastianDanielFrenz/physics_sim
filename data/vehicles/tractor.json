@@ -47,7 +47,7 @@
   "controllers": [
     { "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",
       "auto_clutch": { "enabled": true, "bite_rpm": 1000, "full_rpm_min": 1200, "full_rpm_max": 1700, "lock_slip_rpm": 60,
-                       "anti_stall_rpm": 900, "engage_rate_per_s": 2.0, "release_rate_per_s": 8.0, "open_time_s": 0.15, "close_time_s": 0.40 },
+                       "anti_stall_rpm": 800, "engage_rate_per_s": 2.0, "release_rate_per_s": 8.0, "open_time_s": 0.15, "close_time_s": 0.40 },
       "auto_blip":   { "enabled": false, "kp_per_rpm": 0.001, "max_throttle": 0.6, "upshift_cut": false },
       "auto_shift":  { "enabled": false, "up_rpm_at_zero_throttle": 1600, "up_rpm_at_full_throttle": 2150,
                        "down_rpm_at_zero_throttle": 1000, "down_rpm_at_full_throttle": 1400, "min_time_in_gear_s": 2.0 },

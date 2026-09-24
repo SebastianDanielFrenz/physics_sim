@@ -125,6 +125,42 @@ func _bind_wheel_nodes() -> void:
 			missing += 1
 	if missing > 0:
 		push_warning("vehicle_visual.gd: %d/%d wheel(s) missing a susp_*/wheel_* node in the model - those stay at their static rest position" % [missing, wheel_count])
+	_align_model_to_physics_wheels()
+
+# Mount the model so its wheel centres coincide with the PHYSICS wheel
+# centres. The rig's origin is the ground point below the wheel centres
+# (car_sedan.rig.json "origin"), but the chassis body's origin is wherever
+# main.gd put the chassis box - ~0.6 m up for car_sedan. Placing the model
+# origin there floated the whole car by that much (owner report
+# 2026-09-24). Physics: a wheel centre sits at attachment_local +
+# axis*compression (wheel_instance.cpp, axis = ISO +z here). Model: at
+# rest_susp_up + susp offset. So the model root drops by the mean of
+# (attachment_z - rest_susp_up) and each susp node carries its own small
+# residual bias, making every wheel exact even if the art and the vehicle
+# file disagree a little (the tractor's rear attachment, PHYS-033 G1).
+func _align_model_to_physics_wheels() -> void:
+	var diffs: Array = []
+	for i in range(_wheel_nodes.size()):
+		var w = _wheel_nodes[i]
+		if w["susp"] == null:
+			diffs.append(null)
+			continue
+		var attach: Vector3 = _simulation.get_wheel_attachment_local(vehicle_name, i)
+		# susp_* is a direct child of the model's body node at the origin,
+		# its position in the file's own gltf axes (gltf +Y = up).
+		diffs.append(attach.z - float(w["rest_susp_pos"].y))
+	var sum := 0.0
+	var n := 0
+	for d in diffs:
+		if d != null:
+			sum += d
+			n += 1
+	if n == 0:
+		return
+	var dz: float = sum / n
+	_model_root.position = Vector3(0, 0, dz) # ISO body-local, like the basis above
+	for i in range(_wheel_nodes.size()):
+		_wheel_nodes[i]["susp_bias"] = (diffs[i] - dz) if diffs[i] != null else 0.0
 
 func _process(delta: float) -> void:
 	if _simulation == null or vehicle_name == "" or _wheel_nodes.is_empty():
@@ -144,7 +180,7 @@ func _process(delta: float) -> void:
 			# see _load_model's comment), and the file's up axis is its
 			# own +Y (gltf is Y-up; iso.z=gltf.y). Real simulated state
 			# (World::wheel_telemetry's compression).
-			w["susp"].position = w["rest_susp_pos"] + Vector3(0, 1, 0) * compression
+			w["susp"].position = w["rest_susp_pos"] + Vector3(0, 1, 0) * (compression + float(w.get("susp_bias", 0.0)))
 
 		if w["steer"] != null and w["steered"]:
 			# Real simulated per-wheel steer angle (World::wheel_state's

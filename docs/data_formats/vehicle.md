@@ -294,6 +294,7 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 | `anti_stall_rpm` | real (rpm) | `950` | **must be `< bite_rpm`**, else `"<ctx>.auto_clutch: anti_stall_rpm must be < bite_rpm"` | below this and locked, falls back to the launch law |
 | `engage_rate_per_s` / `release_rate_per_s` | real | `4.0` / `12.0` | none | ordinary engagement ramp rates |
 | `anti_stall_release_rate_per_s` | real | `40.0` | none | faster release rate used only while releasing below `anti_stall_rpm` |
+| `rolling_reengage_rpm` | real (rpm) | `1300` | **must be `> anti_stall_rpm`**, else `"<ctx>.auto_clutch: rolling_reengage_rpm must be > anti_stall_rpm"` | after an anti-stall release, the clutch closes again on its own once the gearbox input shaft turns faster than this while in gear (engine braking resumes while coasting) |
 | `open_time_s` / `close_time_s` | real (s) | `0.08` / `0.20` | none | shift-mode reclose ramp durations |
 | `anti_stall_release_rate_per_s`, `launch_speed_threshold_mps` | real | `40.0`, `1.0` | none | see `ps/drivetrain/controller_desc.h`'s `AutoClutchDesc` comment for the launch-vs-shift distinction this threshold implements |
 

@@ -130,6 +130,13 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                                s.throttle_pedal * (desc_.auto_clutch.full_rpm_max - desc_.auto_clutch.full_rpm_min);
             const real denom = full - desc_.auto_clutch.bite_rpm;
             e_tgt = denom > real(0.0) ? std::clamp((rpm - desc_.auto_clutch.bite_rpm) / denom, real(0.0), real(1.0)) : real(1.0);
+            // Rolling re-engagement (AutoClutchDesc::rolling_reengage_rpm):
+            // in gear, not shifting, and the input shaft fast enough to
+            // carry the engine - close, like after any shift.
+            const real in_rpm = std::abs(s.gearbox_in_omega) * kRadPerSecToRpm;
+            if (s.gearbox_current != 0 && s.gearbox_phase == Gearbox::Phase::Idle && in_rpm > desc_.auto_clutch.rolling_reengage_rpm) {
+                e_tgt = real(1.0);
+            }
         }
         rate = (e_tgt >= e_auto_) ? desc_.auto_clutch.engage_rate_per_s : desc_.auto_clutch.release_rate_per_s;
         // Anti-stall panic dump (PHYS-033 P4 I3 C8 smoke-test finding, see

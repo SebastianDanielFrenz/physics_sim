@@ -125,13 +125,24 @@ TEST_CASE("Powertrain energy ledger balances within 1% end to end (plan section 
         rig.world->step();
         check_tick();
         const real rpm = rig.world->powertrain_state(rig.vehicle).engine_rpm;
-        if (rpm >= 5500.0 && !above_5500 && target_gear < 4) {
+        // Only press again once the previous shift has completed: with the
+        // clutch open mid-shift the engine flares back over 5500 rpm, and a
+        // second press there skipped a gear (1 -> 3 at ~9 m/s), which left
+        // the car too slow to reach 4th inside the budget.
+        const bool shift_done = rig.world->powertrain_state(rig.vehicle).gear == target_gear &&
+                                rig.world->powertrain_state(rig.vehicle).gear_target == target_gear;
+        if (rpm >= 5500.0 && !above_5500 && target_gear < 4 && shift_done) {
             above_5500 = true;
             ++target_gear;
             shift_up_count += 1.0;
             rig.world->set_control("shift_up_count", shift_up_count);
-        } else if (rpm < 5000.0) {
-            above_5500 = false; // hysteresis so a single dwell above 5500 can't double-fire
+        } else if (rpm < 5000.0 && shift_done) {
+            // Hysteresis so a single dwell above 5500 can't double-fire. Re-arm
+            // only once the new gear is in AND rpm has fallen: mid-shift the
+            // auto-blip dips rpm below 5000 and the open clutch then flares it
+            // back over 5500, so re-arming on the dip alone fired a second
+            // press the tick 2nd engaged (1 -> 2 -> 3 at ~8 m/s).
+            above_5500 = false;
         }
         if (rig.world->powertrain_state(rig.vehicle).gear == 4) break;
     }

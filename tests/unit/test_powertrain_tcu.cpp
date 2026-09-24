@@ -219,6 +219,57 @@ TEST_CASE("ManualTcu: anti-stall release uses the faster panic rate, not the ord
     CHECK(tcu_panic.e_auto() == Catch::Approx(0.0).margin(1e-6));
 }
 
+TEST_CASE("ManualTcu: after an anti-stall release the clutch re-closes while still rolling fast enough",
+          "[unit][drivetrain][tcu]") {
+    // Owner test drive (2026-09-24): "after braking hard, rpm is stuck at
+    // idle" - the Launch law alone kept the clutch open while coasting in
+    // gear off the throttle. AutoClutchDesc::rolling_reengage_rpm.
+    ManualTcu::Desc d;
+    d.auto_clutch.bite_rpm = 1100.0;
+    d.auto_clutch.full_rpm_min = 1600.0;
+    d.auto_clutch.full_rpm_max = 3000.0;
+    d.auto_clutch.lock_slip_rpm = 80.0;
+    d.auto_clutch.anti_stall_rpm = 950.0;
+    d.auto_clutch.engage_rate_per_s = 4.0;
+    d.auto_clutch.release_rate_per_s = 12.0;
+    d.auto_clutch.rolling_reengage_rpm = 1300.0;
+    ManualTcu tcu(d);
+    const real h = 1.0 / 960.0;
+
+    ManualTcu::Sensors s = base_sensors();
+    s.gearbox_current = 2;
+    s.gearbox_target = 2;
+    s.throttle_pedal = 0.0;
+    s.engine_omega = rpm_to_omega(1200.0);
+    s.gearbox_in_omega = rpm_to_omega(1170.0);
+    for (int i = 0; i < 400; ++i) (void)tcu.step(s, h, false);
+    REQUIRE(tcu.clutch_mode() == ManualTcu::ClutchMode::Locked);
+
+    // Hard braking drags the engine below anti_stall_rpm: the clutch opens.
+    s.engine_omega = rpm_to_omega(900.0);
+    s.gearbox_in_omega = rpm_to_omega(900.0);
+    for (int i = 0; i < 200; ++i) (void)tcu.step(s, h, false);
+    REQUIRE(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
+    REQUIRE(tcu.e_auto() == Catch::Approx(0.0).margin(1e-6));
+
+    // Engine back at idle, input shaft below rolling_reengage_rpm: stays open
+    // (closing now could stall the engine).
+    s.engine_omega = rpm_to_omega(800.0);
+    s.gearbox_in_omega = rpm_to_omega(1200.0);
+    for (int i = 0; i < 200; ++i) (void)tcu.step(s, h, false);
+    CHECK(tcu.e_auto() == Catch::Approx(0.0).margin(1e-6));
+
+    // Still rolling with the input shaft above rolling_reengage_rpm, driver
+    // off the throttle: the clutch closes (engage_rate 4/s -> 0.25 s).
+    s.gearbox_in_omega = rpm_to_omega(1800.0);
+    for (int i = 0; i < 300; ++i) (void)tcu.step(s, h, false);
+    CHECK(tcu.e_auto() == Catch::Approx(1.0).margin(1e-6));
+    // Once the engine is dragged up to the input shaft, it locks.
+    s.engine_omega = rpm_to_omega(1790.0);
+    (void)tcu.step(s, h, false);
+    CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Locked);
+}
+
 TEST_CASE("ManualTcu: blip and ignition-cut flags follow the shift phase", "[unit][drivetrain][tcu]") {
     ManualTcu::Desc d;
     d.auto_blip.enabled = true;

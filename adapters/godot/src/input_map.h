@@ -109,7 +109,7 @@ public:
     // this up.
     void set_simulation_path(const godot::NodePath& path) { simulation_path_ = path; simulation_ = nullptr; }
     [[nodiscard]] godot::NodePath get_simulation_path() const { return simulation_path_; }
-    void set_vehicle_name(const godot::String& name) { vehicle_name_ = name; }
+    void set_vehicle_name(const godot::String& name) { vehicle_name_ = name; steer_assist_configured_ = false; }
     [[nodiscard]] godot::String get_vehicle_name() const { return vehicle_name_; }
 
     // Enable toggle (owner request: "add an enable toggle on a free key") -
@@ -134,6 +134,7 @@ private:
 
     godot::NodePath simulation_path_;
     godot::String vehicle_name_;
+    bool steer_assist_configured_ = false;
     // Cached PsSimulation* - resolved lazily in update_haptics (godot-cpp
     // Node::get_node_or_null needs the node to already be inside the tree,
     // which is not guaranteed yet in _ready()/the constructor); re-resolved

@@ -46,6 +46,7 @@
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
+#include <godot_cpp/variant/vector2.hpp>
 
 #include <atomic>
 #include <cstdint>
@@ -323,6 +324,10 @@ public:
     // Dynamic per-wheel telemetry (race-free via AdapterSnapshot).
     [[nodiscard]] float get_wheel_compression(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_vehicle_ground_speed_mps(const godot::String& vehicle_name) const;
+    // x = wheelbase (m, mean front-axle x minus mean rear-axle x from the
+    // wheel attachments), y = SteeringDesc::max_wheel_angle (rad); zero
+    // vector if unknown. For the input mapper's steering assist.
+    [[nodiscard]] godot::Vector2 get_vehicle_steer_geometry(const godot::String& vehicle_name) const;
     [[nodiscard]] float get_wheel_omega(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_steer_angle(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_slip_ratio(const godot::String& vehicle_name, int wheel_index) const;

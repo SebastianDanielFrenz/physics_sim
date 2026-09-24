@@ -43,6 +43,16 @@ struct AutoClutchDesc {
     // unaffected. Default is intentionally aggressive (~0.025 s to fully
     // open) relative to release_rate_per_s's ~0.083 s.
     real anti_stall_release_rate_per_s = 40.0;
+    // Rolling re-engagement (owner test drive, 2026-09-24: "after braking
+    // hard, rpm is stuck at idle"). After an anti-stall release the Launch
+    // law only closes on ENGINE rpm (bite_rpm), so a car still rolling in
+    // gear with the driver off the throttle coasted with the clutch open
+    // forever: no engine braking, rpm at idle. Like a real automated
+    // clutch, Launch mode now also closes whenever the gearbox input shaft
+    // turns faster than this (rpm) with the gearbox idle in a gear: the
+    // driveline is then fast enough to carry the engine above anti_stall_rpm
+    // without stalling it. Must be > anti_stall_rpm (hysteresis).
+    real rolling_reengage_rpm = 1300.0;
     real open_time_s = 0.08, close_time_s = 0.20; // shift ramps
     // Owner ruling (PHYS-033 P4 I3, post-C6): a Neutral -> gear engagement
     // with the vehicle at or below this speed is a LAUNCH, not a mid-drive

@@ -32,6 +32,23 @@ PsInputMap::PsInputMap() {
     cfg.handbrake.deadzone = 0.02f;
     cfg.clutch.deadzone = 0.02f;
     mapper_.set_config(cfg);
+
+    // Demo rumble feel (owner, 2026-09-24: "the vibration is too
+    // aggressive"). haptics_core.h's defaults stay the unit-tested
+    // reference; the demo softens them: no buzz in ordinary cornering (light
+    // slip starts at 3 deg / 6 % instead of 1.5 deg / 4 %), bigger bumps
+    // needed for a body-G jolt, lower stage levels and 60 % overall.
+    HapticsTuning ht;
+    ht.slip_angle_threshold_rad = 0.0523599f; // 3 deg
+    ht.slip_angle_saturate_rad = 0.0872665f;  // 5 deg
+    ht.slip_ratio_threshold = 0.06f;
+    ht.slip_ratio_saturate = 0.15f;
+    ht.body_g_threshold_mps2 = 1.5f;
+    ht.body_g_saturate_mps2 = 20.0f;
+    ht.grip_limit_saturate_utilization = 3.5f;
+    ht.stage_levels = {0.0f, 0.12f, 0.30f, 0.50f, 0.75f};
+    ht.strength = 0.6f;
+    haptics_.set_tuning(ht);
 }
 
 RawInput PsInputMap::gather_raw_input() const {
@@ -104,7 +121,23 @@ RawInput PsInputMap::gather_raw_input() const {
 
 void PsInputMap::_process(double delta) {
     const ScopedAdapterTimer timer; // frame_timing.h
-    channels_ = mapper_.process(gather_raw_input(), static_cast<float>(delta));
+    RawInput raw = gather_raw_input();
+    // Steering assist (input_map_core.h's SteerAssistConfig): needs this
+    // vehicle's geometry once, and its ground speed every frame.
+    if (simulation_ != nullptr && !vehicle_name_.is_empty()) {
+        if (!steer_assist_configured_) {
+            const godot::Vector2 geo = simulation_->get_vehicle_steer_geometry(vehicle_name_);
+            if (geo.x > 0.0f && geo.y > 0.0f) {
+                InputMapConfig cfg = mapper_.config();
+                cfg.steer_assist.wheelbase_m = geo.x;
+                cfg.steer_assist.max_wheel_angle_rad = geo.y;
+                mapper_.set_config(cfg);
+                steer_assist_configured_ = true;
+            }
+        }
+        raw.vehicle_speed_mps = simulation_->get_vehicle_ground_speed_mps(vehicle_name_);
+    }
+    channels_ = mapper_.process(raw, static_cast<float>(delta));
 
     // Rumble enable toggle (owner request: "add an enable toggle on a free
     // key" - demo/project.godot's ps_rumble_toggle action, physical key H,

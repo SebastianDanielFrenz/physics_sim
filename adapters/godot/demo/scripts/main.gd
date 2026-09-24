@@ -309,6 +309,11 @@ func _setup_lighting() -> void:
 	ground.name = "GroundGrid"
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(4000, 4000)
+	# 20 m quads instead of one 4 km quad pair: over a single huge triangle
+	# the interpolated world position (and depth) loses precision near the
+	# camera, and the grid lines visibly swam (owner test drive 2026-09-24).
+	plane.subdivide_width = 199
+	plane.subdivide_depth = 199
 	ground.mesh = plane
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/speed_grid.gdshader")

@@ -63,6 +63,9 @@ struct RawInput {
     float brake_trigger = 0.0f;    // 0..1
     float handbrake_trigger = 0.0f; // 0..1 (analog) or 0/1 (digital button, keyboard)
     float clutch_trigger = 0.0f;   // 0..1, analog path - see clutch_button_held below for the digital path
+    // Vehicle ground speed for the steering assist (SteerAssistConfig),
+    // m/s; negative = unknown (no assist this frame).
+    float vehicle_speed_mps = -1.0f;
 
     // Digital LEVELS (true while the underlying key/button is held down,
     // every frame - NOT edge-triggered any more; PLAN.md P4 I3 section
@@ -135,9 +138,34 @@ struct ControlChannels {
     bool toggle_auto_blip = false;
 };
 
+// Speed-sensitive steering assist for sticks/keyboards (owner test drive,
+// 2026-09-24: "tire grip is complete and utter ass"). A stick maps linearly
+// to the full max_wheel_angle (30 deg on car_sedan.json) at ANY speed, so at
+// 60 km/h anything past ~30 % stick already puts the front tyres far beyond
+// their ~4.5 deg peak slip angle: the front washes out and the car feels
+// gripless although the tyre model reaches ~0.9 g (skidpad test). A
+// steering wheel and a real driver never do that; every console racing
+// game scales the pad's steering range with speed. The assist SCALES the
+// steer channel (full stick = the limit, so the whole stick travel stays
+// usable) to the angle a steady corner at the tyre's limit needs:
+//   delta_max(v) = wheelbase * lat_accel_limit / v^2 + slip_margin * peak_slip_angle
+// (kinematic Ackermann angle for the tightest radius v^2/a_lat, plus the
+// front slip angle at the grip peak), as a fraction of max_wheel_angle,
+// clamped to [min_fraction, 1]. Full lock stays available at parking speed.
+struct SteerAssistConfig {
+    bool enabled = true;
+    float wheelbase_m = 0.0f;          // <= 0: unknown -> assist inactive
+    float max_wheel_angle_rad = 0.0f;  // <= 0: unknown -> assist inactive
+    float lat_accel_limit_mps2 = 9.0f; // ~0.9 g, the car's measured asphalt limit
+    float peak_slip_angle_rad = 0.0785398f; // 4.5 deg (vault PHYS-036)
+    float slip_margin = 1.3f;          // lets the driver reach a bit past the peak on purpose
+    float min_fraction = 0.08f;
+};
+
 // Per-channel remappable configuration (deadzone/curve/invert). Only the
 // analog channels need shaping config; digital actions are pass-through.
 struct InputMapConfig {
+    SteerAssistConfig steer_assist{};
     AxisConfig steer{};
     TriggerConfig throttle{};
     TriggerConfig brake{};
@@ -163,9 +191,13 @@ public:
     // fields of the same name.
     [[nodiscard]] std::uint32_t shift_up_count() const { return shift_up_count_; }
     [[nodiscard]] std::uint32_t shift_down_count() const { return shift_down_count_; }
+    // Fraction of max_wheel_angle the last process() call allowed (1 = no
+    // assist limit); for the HUD and tests.
+    [[nodiscard]] float last_steer_limit() const { return last_steer_limit_; }
 
 private:
     InputMapConfig config_;
+    float last_steer_limit_ = 1.0f;
 
     bool prev_shift_up_ = false;
     bool prev_shift_down_ = false;

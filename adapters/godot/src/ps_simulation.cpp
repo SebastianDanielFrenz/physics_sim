@@ -10,6 +10,7 @@ using godot::D_METHOD;
 using godot::Dictionary;
 using godot::String;
 using godot::TypedArray;
+using godot::Vector2;
 using godot::Vector3;
 
 namespace ps_godot {
@@ -739,6 +740,20 @@ float PsSimulation::get_wheel_compression(const String& vehicle_name, int wheel_
     return w == nullptr ? 0.0f : static_cast<float>(w->compression);
 }
 
+Vector2 PsSimulation::get_vehicle_steer_geometry(const String& vehicle_name) const {
+    const auto it = vehicle_desc_by_name_.find(to_std_string(vehicle_name));
+    if (it == vehicle_desc_by_name_.end()) return Vector2();
+    ps::real front_x = 0.0, rear_x = 0.0;
+    int n_front = 0, n_rear = 0;
+    for (const auto& w : it->second.wheels) {
+        if (w.is_front) { front_x += w.attachment_local.x; ++n_front; }
+        else { rear_x += w.attachment_local.x; ++n_rear; }
+    }
+    if (n_front == 0 || n_rear == 0) return Vector2();
+    const ps::real wheelbase = front_x / n_front - rear_x / n_rear;
+    return Vector2(static_cast<float>(wheelbase), static_cast<float>(it->second.steering.max_wheel_angle));
+}
+
 float PsSimulation::get_vehicle_ground_speed_mps(const String& vehicle_name) const {
     const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
     if (order_index == static_cast<std::size_t>(-1)) return 0.0f;
@@ -837,6 +852,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_gauge_info", "vehicle_name"), &PsSimulation::get_vehicle_gauge_info);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
+    ClassDB::bind_method(D_METHOD("get_vehicle_steer_geometry", "vehicle_name"), &PsSimulation::get_vehicle_steer_geometry);
     ClassDB::bind_method(D_METHOD("get_vehicle_ground_speed_mps", "vehicle_name"), &PsSimulation::get_vehicle_ground_speed_mps);
     ClassDB::bind_method(D_METHOD("get_wheel_omega", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_omega);
     ClassDB::bind_method(D_METHOD("get_wheel_steer_angle", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_steer_angle);
