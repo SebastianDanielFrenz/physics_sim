@@ -39,6 +39,7 @@ add_library(ps_core STATIC
 
   src/world/world.cpp
 
+  src/vehicle/tyre_model.cpp
   src/vehicle/pacejka_tyre_model.cpp
   src/vehicle/tir_parser.cpp
   src/vehicle/wheel_instance.cpp

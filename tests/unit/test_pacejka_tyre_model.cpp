@@ -16,6 +16,7 @@
 //     == 1 (so Fy(0, alpha) == Fy0(alpha), given SVyk(kappa=0) == 0 for
 //     the default parameters below).
 
+#include "ps/io/vehicle_io.h"
 #include "ps/math/transcendental.h"
 #include "ps/vehicle/tyre_model.h"
 
@@ -24,6 +25,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
+
+#ifndef PS_SOURCE_DIR
+#error "PS_SOURCE_DIR must be defined by CMake (tests/unit/CMakeLists.txt)"
+#endif
 
 using Catch::Approx;
 using namespace ps;
@@ -194,4 +200,136 @@ TEST_CASE("Slip relaxation converges to the steady-state slip ratio at speed", "
     const real dt = 1.0 / 960.0;
     for (int i = 0; i < 20000; ++i) step_slip_relaxation(s, slip_velocity_x, 0.0, vx, sigma, sigma, dt);
     CHECK(s.kappa_eq == Approx(slip_velocity_x / vx).margin(1e-6));
+}
+
+// --- Case (h): relaxation_step_axis matches step_slip_relaxation per axis ---
+TEST_CASE("relaxation_step_axis matches step_slip_relaxation bit-exactly, including the a<1e-6 branch",
+          "[vehicle][tyre]") {
+    for (real vx_mag : {0.0, 1e-8, 0.5, 20.0}) {
+        for (real slip_velocity : {-3.0, -0.01, 0.0, 0.01, 3.0}) {
+            SlipRelaxationState s;
+            s.kappa_eq = 0.037;
+            s.alpha_eq = -0.021;
+            const real dt = 1.0 / 960.0;
+            const real sigma_x = 0.10, sigma_y = 0.15;
+
+            SlipRelaxationState reference = s;
+            step_slip_relaxation(reference, slip_velocity, slip_velocity, vx_mag, sigma_x, sigma_y, dt);
+
+            const RelaxStep rx = relaxation_step_axis(s.kappa_eq, slip_velocity, vx_mag, sigma_x, dt);
+            const RelaxStep ry = relaxation_step_axis(s.alpha_eq, slip_velocity, vx_mag, sigma_y, dt);
+            const real expected_kappa = std::clamp(rx.x_unclamped, real(-3.0), real(3.0));
+            const real expected_alpha = std::clamp(ry.x_unclamped, real(-1.6), real(1.6));
+            CHECK(reference.kappa_eq == expected_kappa);
+            CHECK(reference.alpha_eq == expected_alpha);
+        }
+    }
+}
+
+namespace {
+// Case (e)/(e2) fixture: every shipped tyre file, loaded exactly as
+// VehicleInstance would (ps::io::load_tyre_json).
+std::vector<std::string> shipped_tyre_paths() {
+    const std::string dir = std::string(PS_SOURCE_DIR) + "/data/tyres/";
+    return {dir + "passenger_car_225_45r17.json", dir + "tractor_front.json", dir + "tractor_rear.json"};
+}
+} // namespace
+
+// --- Case (e): evaluate_with_slope analytic vs central FD, all 3 tyre files ---
+TEST_CASE("evaluate_with_slope: analytic dFx/dkappa matches central FD on a grid (all shipped tyres)",
+          "[vehicle][tyre]") {
+    for (const std::string& path : shipped_tyre_paths()) {
+        const TyreDesc desc = ps::io::load_tyre_json(path);
+        auto model = create_pacejka_tyre_model(desc);
+        INFO("tyre=" << path);
+
+        for (real kappa = -1.0; kappa <= 1.0001; kappa += 0.05) {
+            for (real alpha : {0.0, 0.05, -0.05, 0.2, -0.2, 0.5, -0.5}) {
+                for (real fz_mult : {0.5, 1.0, 2.0}) {
+                    for (real lambda_mu : {0.4, 1.0}) {
+                        TyreSlipInput in;
+                        in.kappa = kappa;
+                        in.alpha = alpha;
+                        in.fz = fz_mult * desc.fz0;
+                        in.gamma = 0.0;
+                        in.vx = 20.0;
+                        in.lambda_mu = lambda_mu;
+
+                        const TyreForcesWithSlope ws = model->evaluate_with_slope(in);
+                        const TyreForces direct = model->evaluate(in);
+                        CHECK(ws.forces.fx == direct.fx);
+                        CHECK(ws.forces.fy == direct.fy);
+
+                        constexpr real h = 1e-6;
+                        TyreSlipInput plus = in;
+                        plus.kappa += h;
+                        TyreSlipInput minus = in;
+                        minus.kappa -= h;
+                        const real fd = (model->evaluate(plus).fx - model->evaluate(minus).fx) / (2.0 * h);
+
+                        const real tol = 1e-6 * std::max(real(1.0), std::abs(fd));
+                        INFO("kappa=" << kappa << " alpha=" << alpha << " fz_mult=" << fz_mult << " lambda_mu=" << lambda_mu);
+                        CHECK(std::abs(ws.dfx_dkappa - fd) <= tol);
+                    }
+                }
+            }
+        }
+
+        // Sanity: at kappa=0, alpha=0, the slope equals Kx exactly (all
+        // three shipped tyre files have phx1=phx2=0, so SHx=0 and this
+        // operating point is exactly x=0 - see pacejka_tyre_model.cpp's
+        // evaluate_with_slope for the derivation).
+        TyreSlipInput in0;
+        in0.kappa = 0.0;
+        in0.alpha = 0.0;
+        in0.fz = desc.fz0;
+        in0.gamma = 0.0;
+        in0.vx = 20.0;
+        const real dfz = 0.0;
+        const real Kx = desc.fz0 * (desc.pkx1 + desc.pkx2 * dfz) * ps::math::exp(desc.pkx3 * dfz);
+        const TyreForcesWithSlope ws0 = model->evaluate_with_slope(in0);
+        CHECK(ws0.dfx_dkappa == Approx(Kx).epsilon(1e-12));
+    }
+}
+
+// --- Case (e2): implicit tyre linearisation consistency ---
+TEST_CASE("evaluate_with_slope: linearised Fx matches O(dkappa^2) against the true curve", "[vehicle][tyre]") {
+    const TyreDesc desc = ps::io::load_tyre_json(shipped_tyre_paths()[0]);
+    auto model = create_pacejka_tyre_model(desc);
+
+    TyreSlipInput in;
+    in.kappa = 0.05;
+    in.alpha = 0.0;
+    in.fz = desc.fz0;
+    in.gamma = 0.0;
+    in.vx = 10.0;
+
+    const TyreForcesWithSlope ws = model->evaluate_with_slope(in);
+    const real kappa0 = in.kappa;
+    const real fx0 = ws.forces.fx;
+    const real slope = ws.dfx_dkappa;
+
+    // Central second difference for F'' at kappa0 (independent of the
+    // analytic slope above).
+    constexpr real h = 1e-4;
+    TyreSlipInput p2 = in, m2 = in;
+    p2.kappa += h;
+    m2.kappa -= h;
+    const real f_plus = model->evaluate(p2).fx;
+    const real f_minus = model->evaluate(m2).fx;
+    const real f_second = (f_plus - 2.0 * fx0 + f_minus) / (h * h);
+
+    for (real dk : {0.01, -0.01, 0.02, -0.02}) {
+        TyreSlipInput probe = in;
+        probe.kappa = kappa0 + dk;
+        const real f_true = model->evaluate(probe).fx;
+        const real fx_lin = fx0 + slope * dk;
+        const real actual_error = f_true - fx_lin;
+        const real predicted_error = 0.5 * f_second * dk * dk;
+        if (std::abs(predicted_error) > 1e-6) {
+            const real ratio = actual_error / predicted_error;
+            INFO("dk=" << dk << " actual=" << actual_error << " predicted=" << predicted_error);
+            CHECK(ratio == Approx(1.0).margin(0.10)); // within 10%, plan section 11.2(e2)
+        }
+    }
 }

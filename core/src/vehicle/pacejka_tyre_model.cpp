@@ -58,6 +58,71 @@ public:
 
     [[nodiscard]] const TyreDesc& desc() const override { return desc_; }
 
+    // PHYS-033 P4 I2 plan section 5.7: analytic dFx/dkappa at the combined-
+    // slip operating point. Calls evaluate() unchanged for `.forces` (so
+    // its bits stay identical - test 13e's own bit-identity check), then
+    // computes the derivative separately by recomputing the same
+    // intermediates evaluate() itself uses.
+    [[nodiscard]] TyreForcesWithSlope evaluate_with_slope(const TyreSlipInput& in) const override {
+        TyreForcesWithSlope out;
+        out.forces = evaluate(in);
+
+        const TyreDesc& p = desc_;
+        const real fz = std::max(in.fz, real(0.0));
+        if (fz <= 0.0) return out; // airborne: slope 0 (forces are already all-zero)
+
+        const real dfz = (fz - p.fz0) / p.fz0;
+        const real gamma = in.gamma;
+        const real lambda_mux_eff = p.lambda_mux * in.lambda_mu;
+
+        // --- Fx0 part (evaluate()'s own Bx/Cx/Dx/Ex/SHx, Ex's sign(x)
+        // branch treated as a CONSTANT at this operating point, exactly as
+        // evaluate() itself does via sign()). ---
+        const real Cx = p.pcx1;
+        const real Dx = fz * (p.pdx1 + p.pdx2 * dfz) * (real(1.0) - p.pdx3 * gamma * gamma) * lambda_mux_eff;
+        const real SHx = p.phx1 + p.phx2 * dfz;
+        const real x = in.kappa + SHx;
+        const real Ex = (p.pex1 + p.pex2 * dfz + p.pex3 * dfz * dfz) * (real(1.0) - p.pex4 * sign(x));
+        const real Kx = fz * (p.pkx1 + p.pkx2 * dfz) * ps::math::exp(p.pkx3 * dfz);
+        const real Bx = safe_div(Kx, Cx * Dx);
+
+        const real u = Bx * x;
+        const real phi = u - Ex * (u - ps::math::atan(u));
+        const real dFx0_dkappa =
+            Dx * Cx * ps::math::cos(Cx * ps::math::atan(phi)) * Bx * (real(1.0) - Ex + Ex / (real(1.0) + u * u)) / (real(1.0) + phi * phi);
+        const real SVx = fz * (p.pvx1 + p.pvx2 * dfz) * lambda_mux_eff;
+        const real Fx0 = magic_formula_core(Bx, Cx, Dx, Ex, x) + SVx;
+
+        // --- Gxa part (evaluate()'s own Bxa/Cxa, a1 = alpha + rhx1). ---
+        const real a1 = in.alpha + p.rhx1;
+        const real z = p.rbx2 * in.kappa;
+        const real one_plus_z2 = real(1.0) + z * z;
+        const real Bxa = p.rbx1 * ps::math::cos(ps::math::atan(z));
+        // cos(atan(z)) = 1/sqrt(1+z^2) (algebraic form, std::sqrt per D7).
+        const real dBxa_dkappa = -p.rbx1 * p.rbx2 * z / (one_plus_z2 * std::sqrt(one_plus_z2));
+        const real Cxa = p.rcx1;
+        const real Bxa_a1 = Bxa * a1;
+        const real Bxa_rhx1 = Bxa * p.rhx1;
+        const real N = ps::math::cos(Cxa * ps::math::atan(Bxa_a1));
+        const real dN_dBxa = -ps::math::sin(Cxa * ps::math::atan(Bxa_a1)) * Cxa * a1 / (real(1.0) + Bxa_a1 * Bxa_a1);
+        const real Dn = ps::math::cos(Cxa * ps::math::atan(Bxa_rhx1));
+        const real dDn_dBxa = -ps::math::sin(Cxa * ps::math::atan(Bxa_rhx1)) * Cxa * p.rhx1 / (real(1.0) + Bxa_rhx1 * Bxa_rhx1);
+
+        real dGxa_dkappa = 0.0;
+        real Gxa = 0.0;
+        constexpr real kEps = 1e-9;
+        if (std::abs(Dn) >= kEps) {
+            Gxa = N / Dn;
+            dGxa_dkappa = (dN_dBxa * Dn - N * dDn_dBxa) / (Dn * Dn) * dBxa_dkappa;
+        }
+        // (Gxa == 0 here mirrors evaluate()'s safe_div returning 0 when
+        // |Dn| < eps; dGxa_dkappa stays 0 too - "mirrors evaluate's
+        // safe_div returning 0", plan section 5.7.)
+
+        out.dfx_dkappa = Gxa * dFx0_dkappa + Fx0 * dGxa_dkappa;
+        return out;
+    }
+
     [[nodiscard]] TyreForces evaluate(const TyreSlipInput& in) const override {
         const TyreDesc& p = desc_;
         const real fz = std::max(in.fz, real(0.0));
@@ -142,25 +207,26 @@ std::unique_ptr<ITyreModel> create_pacejka_tyre_model(const TyreDesc& desc) {
     return std::make_unique<PacejkaTyreModel>(desc);
 }
 
+RelaxStep relaxation_step_axis(real x, real slip_velocity, real v_mag, real sigma, real dt) {
+    // PHYS-033 P4 I2 plan section 5.6: same expressions, same branch, same
+    // threshold as the (now-delegating) step_slip_relaxation above.
+    const real a = v_mag / sigma;
+    const real b = slip_velocity / sigma;
+    constexpr real kTiny = 1e-6;
+    if (a < kTiny) return {x + b * dt, dt / sigma};
+    const real decay = ps::math::exp(-a * dt);
+    return {x * decay + (b / a) * (real(1.0) - decay), (real(1.0) - decay) / v_mag};
+}
+
 void step_slip_relaxation(SlipRelaxationState& state, real slip_velocity_x, real slip_velocity_y,
                            real vx_mag, real relaxation_length_x, real relaxation_length_y, real dt) {
     // d(kappa_eq)/dt = (slip_velocity_x - vx_mag*kappa_eq) / sigma_kappa,
     // exact exponential solution over one substep (out/handover_p3.md
-    // decision 2): with a = vx_mag/sigma, b = slip_velocity_x/sigma,
-    // kappa_eq(t+dt) = kappa_eq(t)*exp(-a*dt) + (b/a)*(1-exp(-a*dt)); at
-    // a ~ 0 (vx_mag ~ 0) this degenerates to kappa_eq += b*dt (plain
-    // integration of slip velocity - the "damped stiffness" standstill
-    // model PLAN.md calls for), avoiding a 0/0 in b/a.
-    auto step_one = [dt](real x, real slip_velocity, real vx, real sigma) -> real {
-        const real a = vx / sigma;
-        const real b = slip_velocity / sigma;
-        constexpr real kTiny = 1e-6;
-        if (a < kTiny) return x + b * dt;
-        const real decay = ps::math::exp(-a * dt);
-        return x * decay + (b / a) * (real(1.0) - decay);
-    };
-    state.kappa_eq = step_one(state.kappa_eq, slip_velocity_x, vx_mag, relaxation_length_x);
-    state.alpha_eq = step_one(state.alpha_eq, slip_velocity_y, vx_mag, relaxation_length_y);
+    // decision 2) - delegates to relaxation_step_axis (PHYS-033 P4 I2 plan
+    // section 5.6) so the two are bit-for-bit identical BY CONSTRUCTION
+    // (same code path), not merely by matching expressions independently.
+    state.kappa_eq = relaxation_step_axis(state.kappa_eq, slip_velocity_x, vx_mag, relaxation_length_x, dt).x_unclamped;
+    state.alpha_eq = relaxation_step_axis(state.alpha_eq, slip_velocity_y, vx_mag, relaxation_length_y, dt).x_unclamped;
 
     // Safety clamp, well past any physical peak/saturation slip (typically
     // within +-0.3 for kappa, +-0.5 rad for alpha): the Magic Formula's

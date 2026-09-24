@@ -46,11 +46,27 @@ struct TyreForces {
     real fy_pure = 0.0; // Fy0(alpha, Fz, gamma) before combined-slip weighting - exposed for validation/tests only
 };
 
+// PHYS-033 P4 I2 plan section 5.7: Fx together with its slope d(Fx)/d(kappa)
+// at the given (combined-slip) operating point, needed by the implicit
+// wheel-hub coupling (section 5.6) to linearise the tyre's torque law.
+struct TyreForcesWithSlope {
+    TyreForces forces;
+    real dfx_dkappa = 0.0;
+};
+
 class ITyreModel {
 public:
     virtual ~ITyreModel() = default;
     [[nodiscard]] virtual TyreForces evaluate(const TyreSlipInput& in) const = 0;
     [[nodiscard]] virtual const TyreDesc& desc() const = 0;
+
+    // Non-pure, default implementation (core/src/vehicle/tyre_model.cpp):
+    // central finite difference on kappa (fixed step 1e-6) around
+    // evaluate(). A model can override this with an analytic derivative
+    // (the Pacejka implementation does - pacejka_tyre_model.cpp); either
+    // way, `.forces` must equal evaluate(in) exactly (same values, not
+    // independently recomputed).
+    [[nodiscard]] virtual TyreForcesWithSlope evaluate_with_slope(const TyreSlipInput& in) const;
 };
 
 // The one P3 implementation (PLAN.md 5.1: Pacejka Magic Formula, MF 5.2/6.1
@@ -79,5 +95,19 @@ struct SlipRelaxationState {
 // directly).
 void step_slip_relaxation(SlipRelaxationState& state, real slip_velocity_x, real slip_velocity_y,
                            real vx_mag, real relaxation_length_x, real relaxation_length_y, real dt);
+
+// PHYS-033 P4 I2 plan section 5.6: the same one-axis relaxation step as
+// step_slip_relaxation above (which now delegates to this, guaranteeing
+// bit-for-bit equality - see pacejka_tyre_model.cpp), but also returning
+// the derivative of the new (unclamped) state with respect to
+// `slip_velocity` - needed by the implicit wheel-hub coupling, which
+// treats kappa's predictor as linear in the hub's own new angular
+// velocity (slip_velocity = omega*R - vx, so d(kappa)/d(omega) =
+// R * dx_dslipvel).
+struct RelaxStep {
+    real x_unclamped = 0.0;
+    real dx_dslipvel = 0.0;
+};
+RelaxStep relaxation_step_axis(real x, real slip_velocity, real v_mag, real sigma, real dt);
 
 } // namespace ps::vehicle
