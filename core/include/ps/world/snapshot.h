@@ -12,6 +12,7 @@
 #pragma once
 
 #include "ps/backend/i_rigid_backend.h" // ContactEvent - plain struct, no Jolt/Godot type (PLAN.md D2)
+#include "ps/drivetrain/powertrain_state.h" // PHYS-033 P4 I3 plan section 4.3 - see VehicleSnapshot below
 #include "ps/math/pose.h"
 #include "ps/vehicle/wheel_state.h" // PLAN.md M1, task 2 of the P3 fix-up phase - see VehicleSnapshot below
 #include "ps/world/ids.h"
@@ -62,6 +63,11 @@ struct ArticulationSnapshot {
 struct VehicleSnapshot {
     VehicleId id;
     std::vector<vehicle::WheelState> wheels;
+    // PHYS-033 P4 I3 plan section 4.3 commit 5: the adapter-facing
+    // powertrain snapshot (gear, engine state, clutch/assist state, sound
+    // payloads) - additive, filled with defaults only until commit 6 wires
+    // VehicleInstance's real engine/clutch/gearbox/TCU state into it.
+    drivetrain::PowertrainSnapshot powertrain;
 };
 
 struct WorldSnapshot {

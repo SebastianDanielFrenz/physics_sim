@@ -283,6 +283,7 @@ Scenario load_scenario(const std::string& json_path) {
         s.world_config.gravity = read_vec3(j.value("gravity", json::array({0, 0, -9.81})));
         s.world_config.job_workers = j.value("job_workers", 0);
         s.world_config.max_bodies = j.value("max_bodies", std::size_t(4096));
+        s.world_config.air_density = j.value("air_density", real(1.225));
         s.telemetry_csv = j.value("telemetry_csv", std::string());
 
         if (j.contains("bodies")) {

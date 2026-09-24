@@ -85,11 +85,11 @@ void World::build_pipeline() {
     last_stage_ms_.assign(slot, 0.0);
 }
 
-std::size_t World::ensure_control_channel_index(const std::string& channel) {
+std::size_t World::ensure_control_channel_index(const std::string& channel, real default_value) {
     const auto it = control_channel_index_.find(channel);
     if (it != control_channel_index_.end()) return it->second;
     const std::size_t idx = control_channel_values_.size();
-    control_channel_values_.push_back(real(0.0));
+    control_channel_values_.push_back(default_value);
     control_channel_index_.emplace(channel, idx);
     return idx;
 }
@@ -162,7 +162,7 @@ void World::stage_vehicle_islands() {
         // PHYS-033 I1 W1: the shadow chassis needs gravity to build its own
         // per-substep acceleration estimate (it never talks to World
         // otherwise) - see vehicle::VehicleTickEnv.
-        const vehicle::VehicleTickEnv env{config_.gravity};
+        const vehicle::VehicleTickEnv env{config_.gravity, config_.air_density};
         vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz);
     }
 }
@@ -273,6 +273,10 @@ void World::stage_snapshot() {
         vsnap.wheels.clear();
         const std::size_t wc = vinst.wheel_count();
         for (std::size_t w = 0; w < wc; ++w) vsnap.wheels.push_back(vinst.wheel_state(w));
+        // PHYS-033 P4 I3 plan section 4.3 commit 5: default-constructed
+        // until commit 6 wires real engine/clutch/gearbox/TCU state into
+        // VehicleInstance::powertrain_state_.
+        vsnap.powertrain = vinst.powertrain_state();
     }
 
     // PLAN.md P2 adapter seam (this task's step 3): a race-free copy of this
@@ -424,6 +428,22 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     channel_indices.throttle = ensure_control_channel_index(channel_prefix + "throttle");
     channel_indices.brake = ensure_control_channel_index(channel_prefix + "brake");
     channel_indices.handbrake = ensure_control_channel_index(channel_prefix + "handbrake");
+    // PHYS-033 P4 I3 plan section 7.1: the shaft-network powertrain's
+    // clutch/gearshift/ignition/assist channels - not yet read by
+    // VehicleInstance::step_tick anywhere (commit 6 consumes them), but
+    // resolved here now so a later scenario/adapter can start driving them
+    // before commit 6 lands, same "either order" reasoning as the four
+    // channels above. Plan section 7.1's defaults table; if a vehicle has
+    // no manual_tcu, the assist channels are still created (ignored).
+    channel_indices.clutch = ensure_control_channel_index(channel_prefix + "clutch");
+    channel_indices.shift_up_count = ensure_control_channel_index(channel_prefix + "shift_up_count");
+    channel_indices.shift_down_count = ensure_control_channel_index(channel_prefix + "shift_down_count");
+    channel_indices.gear_request = ensure_control_channel_index(channel_prefix + "gear_request", drivetrain::kGearRequestNone);
+    channel_indices.ignition = ensure_control_channel_index(channel_prefix + "ignition", real(1.0));
+    channel_indices.starter = ensure_control_channel_index(channel_prefix + "starter");
+    channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", real(1.0));
+    channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", real(1.0));
+    channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift");
 
     // Parking-slope creep fix (defect D2): opt the chassis body in to
     // IRigidBackend::set_integrate_sub_threshold_rotation - see that
@@ -511,6 +531,14 @@ real World::wheel_omega(VehicleId id, std::size_t wheel_index) const {
 
 const drivetrain::PowertrainEnergy& World::powertrain_energy(VehicleId id) const {
     return vehicle_system_->at(id).powertrain_energy();
+}
+
+const drivetrain::PowertrainSnapshot& World::powertrain_state(VehicleId id) const {
+    return vehicle_system_->at(id).powertrain_state();
+}
+
+drivetrain::PowertrainDebug World::powertrain_debug(VehicleId id) const {
+    return vehicle_system_->at(id).powertrain_debug();
 }
 
 real World::vehicle_shadow_dv_error(VehicleId id) const {

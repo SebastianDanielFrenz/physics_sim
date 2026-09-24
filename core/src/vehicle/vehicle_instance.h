@@ -8,6 +8,7 @@
 #include "../drivetrain/powertrain.h"
 #include "wheel_instance.h"
 
+#include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/surface_table.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/ids.h"
@@ -34,6 +35,17 @@ struct ControlInputs {
 // std::unordered_map<std::string, ...> on the hot path.
 struct ControlChannelIndices {
     std::size_t steer = 0, throttle = 0, brake = 0, handbrake = 0;
+    // PHYS-033 P4 I3 plan section 7.1: additive channels for the shaft-
+    // network powertrain's clutch/gearshift/ignition/assist controls. Not
+    // yet read by step_tick anywhere (commit 6 consumes them) - resolved to
+    // real indices in World::create_vehicle exactly like the four fields
+    // above; these zero defaults are only this struct's own pre-resolution
+    // placeholder.
+    std::size_t clutch = 0;
+    std::size_t shift_up_count = 0, shift_down_count = 0;
+    std::size_t gear_request = 0;
+    std::size_t ignition = 0, starter = 0;
+    std::size_t assist_auto_clutch = 0, assist_auto_blip = 0, assist_auto_shift = 0;
 };
 
 // PHYS-033 I1 W1: environment inputs step_tick's shadow chassis needs but
@@ -41,6 +53,10 @@ struct ControlChannelIndices {
 // to IRigidBackend, never World) - just World::config_.gravity today.
 struct VehicleTickEnv {
     Vec3 gravity = Vec3{0.0, 0.0, -9.81};
+    // PHYS-033 P4 I3 plan section 4.5: kg/m^3, mirrors WorldConfig::
+    // air_density's default. Unused until commit 6c wires aero drag into
+    // step_tick.
+    real air_density = 1.225;
 };
 
 class VehicleInstance {
@@ -82,6 +98,13 @@ public:
     [[nodiscard]] int powertrain_friction_cap_hits() const { return powertrain_.friction_cap_hits(); }
     [[nodiscard]] int powertrain_nonspd_hits() const { return powertrain_.nonspd_hits(); }
     [[nodiscard]] int powertrain_lcp_stage3_hits() const { return powertrain_.lcp_stage3_hits(); }
+    // PHYS-033 P4 I3 plan section 4.3/4.5: the adapter-facing snapshot and a
+    // by-value debug payload, both currently default-constructed stubs -
+    // commit 6 wires VehicleInstance's real engine/clutch/gearbox/TCU state
+    // into powertrain_state_ and this debug accessor's return value. Backs
+    // World::powertrain_state/powertrain_debug.
+    [[nodiscard]] const drivetrain::PowertrainSnapshot& powertrain_state() const { return powertrain_state_; }
+    [[nodiscard]] drivetrain::PowertrainDebug powertrain_debug() const { return drivetrain::PowertrainDebug{}; }
 
     [[nodiscard]] BodyId chassis() const { return chassis_; }
     // PHYS-033 I1 W1: called ONLY from vehicle::System::note_body_wrench,
@@ -123,6 +146,11 @@ private:
     // a data error).
     drivetrain::Powertrain powertrain_;
     std::vector<std::unique_ptr<WheelInstance>> wheels_;
+
+    // PHYS-033 P4 I3 plan section 4.3/4.5: default-constructed until commit
+    // 6 fills it from the real engine/clutch/gearbox/TCU state - see
+    // powertrain_state() above.
+    drivetrain::PowertrainSnapshot powertrain_state_;
 
     // Ackermann geometry, cached at construction from wheel attachment
     // points (vehicle_desc.h's SteeringDesc comment).

@@ -9,6 +9,7 @@
 #include "ps/articulation/articulation_desc.h"
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/drivetrain/energy_ledger.h"
+#include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/telemetry.h"
 #include "ps/jobs/job_system.h"
 #include "ps/jobs/task_graph.h"
@@ -49,6 +50,11 @@ struct WorldConfig {
     real tick_rate_hz = 240.0;      // PLAN.md D3: rigid-body tick.
     real substep_rate_hz = 960.0;   // documented stub until P3 (vehicles).
     Vec3 gravity = Vec3{0.0, 0.0, -9.81};
+    // kg/m^3, ISA sea level at 15 degC. Unused until commit 6c wires aero
+    // drag into the vehicle system (PHYS-033 P4 I3 plan section 4.5);
+    // Scenario JSON reads it as an optional "air_density" key
+    // (ps::io::load_scenario, scenario.cpp).
+    real air_density = 1.225;
     int job_workers = 0;            // 0 = auto (physical cores - 2, PLAN.md D8)
     // 0 = auto (ps::jobs::JobSystem::kDefaultQueueCapacity, 4096 - every real
     // workload in this codebase). A test may set a small explicit value to
@@ -187,6 +193,14 @@ public:
     // accessors, same contract as wheel_telemetry above.
     [[nodiscard]] real wheel_omega(VehicleId id, std::size_t wheel_index) const;
     [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy(VehicleId id) const;
+    // PHYS-033 P4 I3 plan section 4.5: the adapter-facing per-vehicle
+    // powertrain snapshot and a by-value debug payload for tests. Both are
+    // filled with defaults only until commit 6 wires VehicleInstance's real
+    // engine/clutch/gearbox/TCU state into them (powertrain_state.h's own
+    // comment). Sim-thread-only live accessors, same contract as
+    // wheel_telemetry above.
+    [[nodiscard]] const drivetrain::PowertrainSnapshot& powertrain_state(VehicleId id) const;
+    [[nodiscard]] drivetrain::PowertrainDebug powertrain_debug(VehicleId id) const;
     // PHYS-033 I1 W1 (section 3.5): sim-thread-only live accessors, same
     // contract as wheel_telemetry above - see VehicleInstance::
     // shadow_dv_error's own comment for what these mean and their one-tick
@@ -234,11 +248,14 @@ public:
 private:
     void build_pipeline();
     // PLAN.md P4 I0 (PHYS-033 section 8, Q4): returns channel's index into
-    // control_channel_values_, creating a zero-valued slot the first time
-    // `channel` is named (by set_control or by a vehicle's channel-block
-    // resolution at create_vehicle) so the two can be called in either
-    // order. Never called from inside a job.
-    std::size_t ensure_control_channel_index(const std::string& channel);
+    // control_channel_values_, creating a slot the first time `channel` is
+    // named (by set_control or by a vehicle's channel-block resolution at
+    // create_vehicle) so the two can be called in either order. `default_value`
+    // (PHYS-033 P4 I3 plan section 7.1) seeds a newly-created slot only - it
+    // is ignored when the channel already exists, so calling this again for
+    // an already-resolved channel never changes its current value. Never
+    // called from inside a job.
+    std::size_t ensure_control_channel_index(const std::string& channel, real default_value = real(0.0));
     void stage_vehicle_islands();
     void stage_force_elements();
     void stage_gather();
