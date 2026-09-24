@@ -48,8 +48,8 @@ physics_sim/
       articulation/                   INTERNAL (ps::articulation, not a public header); see "Articulation solver" below, incl. contact.h/.cpp (ContactCoupling) and contact_source.h (IContactSubstepSource)
       terrain/                        INTERNAL; see "Terrain tile system" below: procedural_terrain_source.h/.cpp (TerrainSpec, ProceduralTerrainSource), procedural_terrain.cpp (factory impl), tile_manager.h/.cpp (TileManager)
       io/telemetry.cpp, io/scenario.cpp, io/surface_table.cpp, io/test_ground_loader.cpp, io/vehicle_io.cpp
-      vehicle/                        INTERNAL (ps::vehicle, not a public header); see "Vehicle system" below: tyre_desc.h+tyre_model.h's implementation is pacejka_tyre_model.cpp, tir_parser.h/.cpp (.tir file parser), suspension.h (header-only spring/damper/bump-stop/ARB force functions), wheel_instance.h/.cpp (WheelInstance: contact measurement + tyre/suspension substep), vehicle_instance.h/.cpp (VehicleInstance: chassis extrapolation, Ackermann steering, brake/drive torque split - PHYS-033 I2 commit 5a adds VehicleInstance::P3Shim/build_p3_shim, TEMPORARY, deleted in commit 5b), system.h/.cpp (System, mirrors articulation::System)
-      drivetrain/                     INTERNAL (ps::drivetrain, not a public header); PHYS-033 P4 I2 shaft-network powertrain, see "Vehicle system" below: dense.h (SmallVec/SmallMat, Cholesky), box_lcp.h/.cpp (F1 box-LCP: block principal pivoting + Murty fallback), nullspace.h (build_nullspace), network.h/.cpp (NetworkBuilder, Assembly, ShaftNetwork - the Powertrain wrapper class in PHYS-033 P4 I2 plan section 3's powertrain.h/.cpp is not yet built, I2 commit 5b)
+      vehicle/                        INTERNAL (ps::vehicle, not a public header); see "Vehicle system" below: tyre_desc.h+tyre_model.h's implementation is pacejka_tyre_model.cpp, tir_parser.h/.cpp (.tir file parser), suspension.h (header-only spring/damper/bump-stop/ARB force functions), wheel_instance.h/.cpp (WheelInstance: contact measurement (measure_contact) + a pre_solve/post_solve split around the drivetrain network's solve - PHYS-033 I2 commit 5b, wheel spin moved to the network's hub node), vehicle_instance.h/.cpp (VehicleInstance: chassis extrapolation, Ackermann steering, owns one drivetrain::Powertrain - commit 5b replaced the TEMPORARY P3Shim/build_p3_shim from commit 5a), system.h/.cpp (System, mirrors articulation::System)
+      drivetrain/                     INTERNAL (ps::drivetrain, not a public header); PHYS-033 P4 I2 shaft-network powertrain, see "Vehicle system" below and the "Drivetrain" section: dense.h (SmallVec/SmallMat, Cholesky), box_lcp.h/.cpp (F1 box-LCP: block principal pivoting + Murty fallback), nullspace.h (build_nullspace), network.h/.cpp (NetworkBuilder, Assembly, ShaftNetwork), components.h/.cpp (IComponent, TorqueMapEngine, GearPair, OpenDifferential, DirectTorqueBrakes - I2 commit 5b), powertrain.h/.cpp (Powertrain - builds the node/rigid-row/friction-row graph from a vehicle's PowertrainDesc/BrakeSystemDesc/WheelDesc list, drives the per-substep pre_solve/solve/post_solve sequence, owns the PowertrainEnergy ledger - I2 commit 5b)
       aero/ machine/                  empty (.gitkeep) until P4+
   tests/
     support/                          test-only shared helpers (not part of ps_core)
@@ -276,18 +276,27 @@ system" below) right after the articulation pass, with the current
 Each stage records its own wall-clock duration to a
 `stage.<name>.ms` telemetry channel; `World::step` also records one
 `jobs.worker<N>.utilization` channel per worker (busy time / tick wall
-time), and one set of six per-wheel channels (`vehicle<i>.<wheel
-name>.{slip_ratio,slip_angle,fx,fy,fz,surface}`) per wheel of every vehicle
-created via `World::create_vehicle`, registered up front in
-`create_vehicle` itself (PLAN.md P3 scope item 7) so the CSV header is
-complete before the first `record_row`. `World::state_hash()` folds
-`IRigidBackend::compute_state_hash` (FNV-1a over every live body's
-pose+velocity bytes, in ascending `BodyId` order), then
-`articulation::System::fold_state_hash` (same FNV-1a fold, every live
+time), and one set of seven per-wheel channels (`vehicle<i>.<wheel
+name>.{slip_ratio,slip_angle,fx,fy,fz,surface,omega}` - `omega` added
+PHYS-033 P4 I2 commit 5b, the drivetrain hub's own angular velocity) per
+wheel of every vehicle created via `World::create_vehicle`, plus (also
+commit 5b) one set of eleven per-vehicle channels right after that
+vehicle's chassis channels: `vehicle<i>.energy.{engine_out,wheel_out,
+tyre_loss,brake_loss,gear_loss,integrator_loss,stored,balance_error}` (the
+`drivetrain::PowertrainEnergy` ledger, `stored` = `rotor_ke`) and
+`vehicle<i>.powertrain.{friction_cap_hits,nonspd_hits,lcp_stage3_hits}` -
+all registered up front in `create_vehicle` itself (PLAN.md P3 scope item
+7) so the CSV header is complete before the first `record_row`.
+`World::state_hash()` folds `IRigidBackend::compute_state_hash` (FNV-1a
+over every live body's pose+velocity bytes, in ascending `BodyId` order),
+then `articulation::System::fold_state_hash` (same FNV-1a fold, every live
 articulation's q/qd and, if floating, root pose), then
 `vehicle::System::fold_state_hash` (same fold, every live vehicle's
-per-wheel compression/spin/relaxed-slip state - not otherwise observable
-from the chassis body alone) - PLAN.md D7; a `World` with no
+per-wheel compression/relaxed-slip state plus, PHYS-033 P4 I2 commit 5b,
+`drivetrain::Powertrain::fold_state_hash` - the shaft network's own state
+(every node's omega, friction-row stick flags/LCP sets, topology state)
+and each lossy gear's `lambda_mesh_prev_` - not otherwise observable from
+the chassis body alone) - PLAN.md D7; a `World` with no
 articulations/vehicles hashes bit-identically to before those fields
 existed.
 
@@ -623,15 +632,15 @@ internal-implementation seam. No Jolt type appears in any public header.
 `DriveDesc`/`WheelDesc::driven` (physics_sim.vehicle/2, `core/src/io/
 vehicle_io.cpp`'s loader rejects `/1` and the old `driven`/`drive`/`brakes`
 keys - PHYS-033 Q7, no converter); `data/vehicles/{car_sedan,tractor}.json`
-are `/2`. `ps::drivetrain::Powertrain` (plan section 3's `powertrain.h/.cpp`,
-I2 commit 5b) does not exist yet - `VehicleInstance`'s constructor instead
-builds a private, TEMPORARY `P3Shim` (`vehicle_instance.cpp`'s
-`build_p3_shim`) that walks the `/2` graph to recover the old
-DriveDesc/BrakeDesc-shaped numbers `step_tick` still runs on, so commit 5a's
-data rewrite is bit-identical to pre-I2 P3 before commit 5b's real solve
-lands. `World::wheel_is_driven(VehicleId, wheel_index)` (backed by the
-shim) is the replacement for the deleted `WheelDesc::driven` field for
-read-only callers (e.g. the Godot adapter's `get_wheel_driven`).
+are `/2`. `VehicleInstance` owns one `drivetrain::Powertrain` (commit 5b;
+see the "Drivetrain" section below), replacing commit 5a's TEMPORARY
+`P3Shim`/`build_p3_shim`. `World::wheel_is_driven(VehicleId, wheel_index)`
+(now backed by `Powertrain::wheel_is_driven` - a hub is driven iff its
+shaft port was connected to anything) is the replacement for the deleted
+`WheelDesc::driven` field for read-only callers (e.g. the Godot adapter's
+`get_wheel_driven`). `World::wheel_omega`/`::powertrain_energy` (also
+commit 5b) expose the hub's own angular velocity and the vehicle's
+`drivetrain::PowertrainEnergy` ledger.
 
 - `tyre_desc.h`/`tyre_model.h` (public) + `pacejka_tyre_model.cpp`
   (internal) - Pacejka Magic Formula MF5.2/6.1-SUBSET: pure-slip
@@ -667,10 +676,23 @@ read-only callers (e.g. the Godot adapter's `get_wheel_driven`).
   5.1: "not a ray") along `SuspensionDesc::axis` from full-bump toward full
   extension, clamped to `[0, travel_max]` - not a separate unsprung-mass
   ODE (deferred: no wheel-hop/unsprung-resonance mode; the shipped
-  acceptance tests don't need one). `step()`: suspension force from that
-  measured `x`/`xdot`, tyre force via `ITyreModel` at the measured
-  slip/load/camber, wheel spin integration from drive/brake/tyre-Fx torque.
-  `step()` also adds `low_speed_lateral_damping_force` (a low-speed-only
+  acceptance tests don't need one). PHYS-033 P4 I2 commit 5b: the old single
+  `step()` is now `pre_solve()`/`post_solve()`, split around the drivetrain
+  network's own solve (`ps::drivetrain::ShaftNetwork::solve`, called by
+  `VehicleInstance::step_tick` between the two) - wheel spin (`omega_`) is
+  gone from `WheelInstance` entirely, now the network's own hub-node state.
+  `pre_solve()`: suspension force from the measured `x`/`xdot`; alpha's
+  relaxation step (explicit, final for the substep); kappa's relaxation
+  PREDICTOR (linear in the hub's still-unknown new omega,
+  `ITyreModel::evaluate_with_slope`/`relaxation_step_axis`); returns this
+  wheel's `HubTerms{tau0, d}` for the network's `Assembly` (`tau0 =
+  -R*Fx(kappa_pred)`, `d = R*max(dFx/dkappa,0)*d(kappa_pred)/d(omega)`).
+  `post_solve(omega_new)`: finishes kappa/Fx at the hub's actual new speed
+  (still linear, so the wheel's own torque balance and the chassis force
+  agree exactly), assembles the contact wrench and this substep's
+  `wheel_out`/`tyre_loss` energy-ledger deltas (`ps/drivetrain/
+  energy_ledger.h`). `pre_solve()`/`post_solve()` also add
+  `low_speed_lateral_damping_force` (a low-speed-only
   viscous term on `fy`, `TyreDesc::low_speed_damping_ratio`/
   `low_speed_damping_vx` - PHYS-033 I1, `ps/vehicle/tyre_desc.h`'s own field
   comment): `c = 2*ratio*sqrt(k_lat*m_ref)`,
@@ -819,8 +841,12 @@ read-only callers (e.g. the Godot adapter's `get_wheel_driven`).
   vehicle's true grip limit; a fixed-large-steer sweep (the first attempt)
   falsely showed anti-Ackermann "reducing" grip only because it measured
   every wheel well past peak slip angle (scrubbing), not a limit condition.
-  Brake/drive torque are computed once per tick (not per substep) from
-  each wheel's spin speed at tick start.
+  PHYS-033 P4 I2 commit 5b: brake/drive torque is no longer computed here at
+  all - `step_tick` instead calls `Powertrain::pre_solve_components`,
+  collects each wheel's `HubTerms` from `WheelInstance::pre_solve` into the
+  shaft network's `Assembly`, calls `Powertrain::solve` (one implicit solve
+  per substep, not per tick), then `Powertrain::post_solve_components` and
+  each wheel's `WheelInstance::post_solve` - see "Drivetrain" below.
 - `system.h`/`.cpp` (`System`) - owns every `World` vehicle instance;
   mirrors `articulation::System`'s pattern exactly (one job per vehicle via
   `parallel_for`, safe unparallelised because each vehicle owns a distinct
@@ -836,9 +862,13 @@ suspension_travel, spin_angle, load, slip_ratio, slip_angle, surface}` -
 `wheel_telemetry`'s own contract) and `WorldSnapshot::vehicles` (race-free,
 see "Adapter seams" below) both return it. `WheelInstance` (`wheel_instance.h`)
 gained two members feeding it: `spin_angle_` (plain explicit-Euler
-integration of `omega_ * dt` each substep, in `step()`) and
-`last_steer_angle_` (the `steer_angle` `WheelSubstepInput` already carried
-in, now also stored). Both are deliberately EXCLUDED from
+integration of the hub's OLD omega times `dt` each substep, in
+`post_solve()` - PHYS-033 P4 I2 commit 5b: `omega_` itself moved out of
+`WheelInstance` into the drivetrain network's hub-node state, see
+"Drivetrain" below; `spin_angle_` still lives here since nothing else reads
+it back into dynamics) and `last_steer_angle_` (the `steer_angle`
+`WheelPreSolveInput` already carried in, now also stored). Both are
+deliberately EXCLUDED from
 `fold_state_hash()` - neither is ever read back by anything that feeds into
 future dynamics (write-only as far as the simulation itself is concerned),
 so excluding them cannot hide a worker-count-dependent divergence, and every
@@ -849,7 +879,8 @@ workers, matching the value recorded before this field existed).
 `World` additions (additive, `ps/world/world.h`): `create_vehicle`,
 `vehicle_wheel_count`, `wheel_telemetry`, `wheel_name`, `wheel_state`,
 `vehicle_shadow_dv_error`, `vehicle_shadow_dw_error` (PHYS-033 I1 W1, see
-above).
+above), `wheel_omega`, `powertrain_energy` (PHYS-033 P4 I2 commit 5b, see
+"Drivetrain" below).
 `ps/io/scenario.h`
 additions: `ScenarioVehicle` (a vehicle on an already-described chassis
 body, `vehicle_json_path` resolved relative to the scenario file, loaded
@@ -891,6 +922,118 @@ field). Both vehicle files are `physics_sim.vehicle/2` (PHYS-033 I2 commit
 5a): each `wheels[]` entry lost its `driven` flag, and the top-level
 `brakes`/`drive` blocks are replaced by `brake_system`/`powertrain` (see
 "Vehicle system" above).
+
+### Drivetrain (`ps::drivetrain`, `core/src/drivetrain/`, PHYS-033 P4 I2)
+
+A reduced-coordinate shaft network (one scalar DOF per node: an angular
+velocity) shared by every vehicle's engine/gearing/differential/brakes,
+replacing the P3 `P3Shim`'s direct torque-to-wheel wiring (commit 5a) with
+an implicit per-substep linear solve (commit 5b) that also owns wheel spin
+itself (moved out of `WheelInstance`, see "Vehicle system" above). Public
+descriptors only in `ps/drivetrain/{powertrain_desc.h,brake_system_desc.h,
+energy_ledger.h}`; everything below is internal (`core/src/drivetrain/`,
+not on `ps_core`'s public include path).
+
+- `dense.h` - header-only small dense linear algebra (`SmallVec`/`SmallMat`,
+  Cholesky decomposition) sized for a single vehicle's network (at most a
+  handful of nodes/rows), not a general sparse solver.
+- `box_lcp.h`/`.cpp` - exact box-constrained LCP solve for Coulomb friction
+  rows (a row's Lagrange multiplier is bounded to `[-capacity, capacity]`,
+  the static/kinetic switch commit 5b uses for brakes instead of a hard
+  torque clamp): three-stage fallback - block principal pivoting first,
+  then Murty's least-index scheme, then exhaustive complementary-basis
+  enumeration for the (rare, small) cases neither converges on. Exercised
+  directly by a brute-force unit test sweeping ~10⁴ random small problems
+  against a reference solve.
+- `nullspace.h` (`build_nullspace`) - reduces a rigid constraint row (a gear
+  mesh ratio, a differential's Willis equation) to a null-space basis at
+  graph-build time, so the runtime solve never carries redundant DOFs for a
+  ratio that never changes.
+- `network.h`/`.cpp` (`NetworkBuilder`, `Assembly`, `ShaftNetwork`) - the
+  generic solver: `NetworkBuilder` assigns `NodeId`s and rigid/friction rows
+  from a graph description; `Assembly` is the per-substep scratch a
+  component's `pre_solve` writes `tau0`/`d` (linear torque-vs-omega) terms
+  into per node; `ShaftNetwork::solve(h)` does one linearly-implicit-Euler
+  step of the whole coupled system (rigid rows eliminated via the
+  precomputed null-space basis, friction rows resolved via `box_lcp`),
+  returning each node's new omega. `node_inertia`/`friction_row_a`/
+  `friction_row_b` are small additive read accessors `components.cpp`'s
+  `GearPair::post_solve` and `Powertrain::solve` use to reconstruct
+  per-component quantities (mesh-loss torque, ledger terms) the generic
+  solver itself does not track.
+- `components.h`/`.cpp` (`IComponent` and four concrete types, commit 5b) -
+  `IComponent`: `pre_solve(ctx, network, assembly)` (write this substep's
+  `tau0`/`d` terms), `post_solve(ctx, network, ledger)` (read back the
+  solved omegas, accumulate this component's energy-ledger contribution),
+  `fold_state_hash` (default no-op; only a component with its own
+  persistent state beyond the network's node omegas overrides it).
+  - `TorqueMapEngine` - `wot_torque_nm_vs_rpm` curve times `ctx.throttle`,
+    clamped to `[idle_rpm, limiter.rpm]` and zeroed above the limiter;
+    `d` (the linearised damping term the implicit solve needs) comes from
+    the curve's own local slope, not a separate tuning constant.
+  - `GearPair` - a fixed-ratio mesh, realised as one of `network.h`'s rigid
+    rows; carries `lambda_mesh_prev_` (the previous substep's reconstructed
+    mesh-loss multiplier, folded into the state hash - the one `IComponent`
+    that overrides `fold_state_hash`) so a lossy mesh's dissipation is a
+    lagged reconstruction from momentum balance rather than an extra
+    implicit unknown.
+  - `OpenDifferential` - stateless, no-op `pre_solve`/`post_solve`: an open
+    differential's Willis constraint is itself one of `NetworkBuilder`'s
+    rigid rows (built once, at graph-build time), so there is nothing left
+    for the component to do at solve time.
+  - `DirectTorqueBrakes` - one friction row per corner (`Row{row,
+    corner_max_nm, handbrake_max_nm}`, service and handbrake capacities
+    merged per hub at graph-build time) - the exact-Coulomb replacement for
+    P3's hard brake-torque clamp; commit 5b's stop condition 5 tracks how
+    often a row's capacity is actually hit (`friction_cap_hits`) versus the
+    LCP falling back past stage 1 (`nonspd_hits`/`lcp_stage3_hits`, folded
+    up from `box_lcp`'s three-stage fallback above).
+- `powertrain.h`/`.cpp` (`Powertrain`, one per `VehicleInstance`) - built
+  once at vehicle-construction time from `PowertrainDesc`/
+  `BrakeSystemDesc`/the wheel list (constructor throws `std::runtime_error`
+  on a malformed graph): assigns each component's ports plus one hub port
+  per wheel, unions them into shafts (union-find, rejecting duplicate/
+  unknown port references), rejects any non-wheel port left unconnected,
+  sums each union's inertia, numbers `NodeId`s in first-appearance order,
+  builds rigid rows for every `gear_pair`/`differential` (validating a
+  lossy gear has exactly one rigid row at its input port) and friction rows
+  for the brake system, then constructs the `IComponent` objects
+  (engine/gear/differential in `PowertrainDesc::components` order,
+  `DirectTorqueBrakes` appended last) - all of this is graph-build-time
+  work, never repeated per tick/substep. Per substep,
+  `VehicleInstance::step_tick` drives: `begin_substep()` ->
+  `pre_solve_components(ctx)` -> per-wheel `WheelInstance::pre_solve` into
+  `add_hub_terms` -> `solve(h)` (one `ShaftNetwork::solve` call) ->
+  `post_solve_components(ctx)` -> per-wheel `WheelInstance::post_solve`
+  reading the hub's new omega back via `hub_omega(i)`, its `wheel_out`/
+  `tyre_loss` energy fed back in via `add_wheel_energy`. `begin_tick()`/
+  `end_tick()` bracket the whole substep loop once per tick:
+  `end_tick()` computes `balance_error` (this tick's ledger closure
+  residual - measured ~1e-16 relative on `vehicle_step_steer.json`, far
+  under the 1e-9 PLAN.md bound) and resets the running ledger for the next
+  tick. `hub_node`/`hub_omega`/`seed_hub_omega`/`wheel_is_driven` are the
+  per-wheel read/seed seam `WheelInstance` and `World::wheel_is_driven`/
+  `wheel_omega` use; `friction_cap_hits`/`nonspd_hits`/`lcp_stage3_hits`
+  and `fold_state_hash` are the counters/hash-fold described under "World
+  tick pipeline" above. Every buffer `pre_solve_components`/`solve`/
+  `post_solve_components` touches (`Assembly`, the omega snapshots, the
+  ledger accumulators) is preallocated at construction
+  (`tests/unit/test_vehicle_parallel_alloc.cpp`'s debug_alloc-armed
+  braking-only/full-throttle-only/mixed-control phases all check this, PLAN.md D8).
+
+`drivetrain::PowertrainEnergy` (`ps/drivetrain/energy_ledger.h`): the
+mechanical-energy ledger a `Powertrain` accumulates every substep and
+exposes per tick via `World::powertrain_energy` -
+`engine_out`/`wheel_out`/`tyre_loss`/`brake_loss`/`gear_loss` (component
+contributions), `integrator_loss` (the linearly-implicit Euler step's own
+`1/2 * delta_omega^T * J * delta_omega` dissipation - not a physical loss
+channel, an artifact of the integrator itself), `rotor_ke` (instantaneous
+stored rotational kinetic energy, not cumulative), `balance_error` (see
+`end_tick()` above). Surfaced as CSV telemetry per vehicle,
+`vehicle<i>.energy.*` (eight channels) and `vehicle<i>.powertrain.*`
+(`friction_cap_hits`/`nonspd_hits`/`lcp_stage3_hits`, three channels) -
+see "World tick pipeline" above for exactly when these are registered/
+recorded.
 
 ## Adapter seams (`ps/world/snapshot.h`, `World::set_control`/`get_control`, PLAN.md P2)
 
