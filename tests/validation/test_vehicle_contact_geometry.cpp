@@ -114,7 +114,7 @@ TEST_CASE("A car whose chassis sits pitched at rest does not self-propel", "[val
 // the derivation). Positive steer turns the car toward +y (ISO 8855,
 // PLAN.md D4), so for steer > 0 the RIGHT-side wheels (FR/RR, y=-0.78) are
 // the OUTER (loaded-up) pair.
-TEST_CASE("Steady cornering: lateral load transfer matches statics", "[validation][vehicle][long][!mayfail]") {
+TEST_CASE("Steady cornering: lateral load transfer matches statics", "[validation][vehicle][long]") {
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
     ps_test::settle(*rig.world, 0.5);
@@ -145,7 +145,7 @@ TEST_CASE("Steady cornering: lateral load transfer matches statics", "[validatio
 }
 
 // --- Case 3: (1)'s pin - straight braking longitudinal load transfer matches statics ---
-TEST_CASE("Straight braking: longitudinal load transfer matches statics", "[validation][vehicle][long][!mayfail]") {
+TEST_CASE("Straight braking: longitudinal load transfer matches statics", "[validation][vehicle][long]") {
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
     ps_test::settle(*rig.world, 0.5);
@@ -190,6 +190,7 @@ TEST_CASE("contact geometry diagnostics", "[.][diag][vehicle]") {
         rig.world->set_control("steer", 0.8);
 
         real prev_beta = 0.0;
+        Vec3 prev_velocity = Vec3::zero();
         bool have_prev = false;
         real sum_metric = 0.0, sum_ac = 0.0, sum_beta_rate_v = 0.0, sum_roll = 0.0;
         std::size_t count = 0;
@@ -206,9 +207,18 @@ TEST_CASE("contact geometry diagnostics", "[.][diag][vehicle]") {
             const real vx_body = dot(m.linear, fwd);
             const real vy_body = dot(m.linear, lat);
             const real beta = ps::math::atan2(vy_body, vx_body);
+            // a_c: the TRUE measured lateral acceleration (finite difference
+            // of chassis velocity, projected onto the body's own current
+            // lateral axis) - deliberately NOT the same quantity as the
+            // test's own v*omega_z metric, so this is an independent check
+            // of whether they agree (planar vehicle dynamics identity:
+            // a_y_body = v_x*omega_z + dv_y_body/dt, so a_y_body ~= v*omega_z
+            // only in a true steady state where the body-frame lateral
+            // velocity - and hence beta - has stopped changing).
+            const Vec3 a_vec = have_prev ? (m.linear - prev_velocity) / dt : Vec3::zero();
+            const real a_c = dot(a_vec, lat);
             if (t >= 0.3 && t < 1.3) {
                 const real metric = speed * m.angular.z;
-                const real a_c = speed * m.angular.z; // same quantity as the test's own metric today
                 const real beta_rate = have_prev ? (beta - prev_beta) / dt : 0.0;
                 sum_metric += metric;
                 sum_ac += a_c;
@@ -220,6 +230,7 @@ TEST_CASE("contact geometry diagnostics", "[.][diag][vehicle]") {
                 ++count;
             }
             prev_beta = beta;
+            prev_velocity = m.linear;
             have_prev = true;
         }
         const real n_c = static_cast<real>(count);

@@ -158,47 +158,79 @@ TEST_CASE("Shadow chassis negative control: a chassis in contact with an obstacl
     CHECK(max_dv > 1e-2);
 }
 
+namespace {
+
 // I1 plan section 4.3: the low-speed lateral damper is explicit, and all
 // four wheels' damping torques sum onto shared chassis DOFs - a per-vehicle-
 // file check that the (loose, cheap-upper-bound) explicit-integration
 // stability quantity gamma stays under 1 at the configured
-// low_speed_damping_ratio. r_i is approximated as the wheel's chassis-local
-// attachment point (COM is close to the chassis body's local origin for
-// every rig here) and y_i as the wheel's UNSTEERED lateral axis (unit_y) -
-// adequate for this order-of-magnitude sanity bound, not a claim of
-// per-wheel steer-angle exactness.
-TEST_CASE("Low-speed damping explicit-integration stability bound (car, tractor)", "[validation][vehicle]") {
-    auto check_rig = [](const std::string& path, real mass, Vec3 half_extents, real origin_height, const char* label) {
-        const vehicle::VehicleDesc desc = io::load_vehicle_json(path);
-        auto rig = ps_test::build_vehicle_rig_from_desc(desc, mass, half_extents, origin_height);
-        ps_test::settle(*rig.world, 1.0);
+// low_speed_damping_ratio.
+//
+// PHYS-033 I1b commit C7 (plan section 3.7): r_i now uses the wheel's
+// CONTACT-PATCH lever (z = -origin_height, i.e. -h_cg: the patch sits
+// directly below the chassis origin at rest), not the wheel-centre
+// attachment point the damper's OWN force is still evaluated relative to a
+// contact-plane frame at - the damper acts at the contact point since I1b's
+// commit C6 (WheelInstance::step's ContactFrame), so this bound's own lever
+// must match or it silently under-estimates gamma (measured: using the
+// wheel-centre lever here under-estimated gamma by ~1.94x for the car
+// (0.490 -> 0.950) and ~1.96x for the tractor (0.333 -> 0.652)). y_i stays
+// the wheel's UNSTEERED
+// lateral axis (unit_y) - adequate for this order-of-magnitude sanity
+// bound, not a claim of per-wheel steer-angle exactness.
+real low_speed_damping_gamma(const std::string& path, real mass, Vec3 half_extents, real origin_height) {
+    const vehicle::VehicleDesc desc = io::load_vehicle_json(path);
+    auto rig = ps_test::build_vehicle_rig_from_desc(desc, mass, half_extents, origin_height);
+    ps_test::settle(*rig.world, 1.0);
 
-        const BodyIntegrationParams ip = rig.world->backend().get_integration_params(rig.chassis);
-        // The damper is evaluated and applied once per SUBSTEP
-        // (WheelInstance::step, called from the substep loop), not once per
-        // tick - the explicit-integration stability step is therefore the
-        // substep dt (960 Hz default), not the 240 Hz tick dt.
-        const real h = real(1.0) / real(960.0);
-        real gamma = 0.0;
-        for (const vehicle::WheelDesc& w : desc.wheels) {
-            const vehicle::TyreDesc& t = w.tyre;
-            if (t.low_speed_damping_ratio <= 0.0) continue;
-            const real omega_n = std::sqrt(t.pky1 * 9.81 / std::max(t.relaxation_length_y, real(1e-6)));
-            const real m_corner = t.fz0 / 9.81;
-            const real c = real(2.0) * t.low_speed_damping_ratio * m_corner * omega_n;
-            const Vec3 r = w.attachment_local;
-            const Vec3 y_local = Vec3::unit_y();
-            const Vec3 r_cross_y = cross(r, y_local);
-            const real quad_term = ip.inv_inertia_world.rows[0].x * r_cross_y.x * r_cross_y.x +
-                                    ip.inv_inertia_world.rows[1].y * r_cross_y.y * r_cross_y.y +
-                                    ip.inv_inertia_world.rows[2].z * r_cross_y.z * r_cross_y.z;
-            gamma += c * (ip.inv_mass + quad_term);
-        }
-        gamma *= h;
-        INFO(label << ": gamma=" << gamma);
-        CHECK(gamma < 1.0);
-    };
+    const BodyIntegrationParams ip = rig.world->backend().get_integration_params(rig.chassis);
+    // The damper is evaluated and applied once per SUBSTEP
+    // (WheelInstance::step, called from the substep loop), not once per
+    // tick - the explicit-integration stability step is therefore the
+    // substep dt (960 Hz default), not the 240 Hz tick dt.
+    const real h = real(1.0) / real(960.0);
+    real gamma = 0.0;
+    for (const vehicle::WheelDesc& w : desc.wheels) {
+        const vehicle::TyreDesc& t = w.tyre;
+        if (t.low_speed_damping_ratio <= 0.0) continue;
+        const real omega_n = std::sqrt(t.pky1 * 9.81 / std::max(t.relaxation_length_y, real(1e-6)));
+        const real m_corner = t.fz0 / 9.81;
+        const real c = real(2.0) * t.low_speed_damping_ratio * m_corner * omega_n;
+        const Vec3 r{w.attachment_local.x, w.attachment_local.y, -origin_height}; // I1b C7: the patch lever, not the wheel centre
+        const Vec3 y_local = Vec3::unit_y();
+        const Vec3 r_cross_y = cross(r, y_local);
+        const real quad_term = ip.inv_inertia_world.rows[0].x * r_cross_y.x * r_cross_y.x +
+                                ip.inv_inertia_world.rows[1].y * r_cross_y.y * r_cross_y.y +
+                                ip.inv_inertia_world.rows[2].z * r_cross_y.z * r_cross_y.z;
+        gamma += c * (ip.inv_mass + quad_term);
+    }
+    return gamma * h;
+}
 
-    check_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0, Vec3{2.0, 0.4, 0.15}, 0.6, "car_sedan");
-    check_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json", 6000.0, Vec3{1.2, 0.35, 0.9}, 1.28, "tractor");
+} // namespace
+
+// PHYS-033 I1b commit C7: with the patch lever, car_sedan's gamma rises from
+// 0.490 (wheel-centre lever) to 0.950 - close to, but still under, 1
+// (the I1b plan's own back-of-envelope arithmetic, gamma ~= 0.17 +
+// 0.633*zeta = 1.12 at zeta=1.5, over-estimated the rise: that formula
+// scaled the OLD gamma by a single z-only lever ratio, while the real r_i
+// used here is the full 3D patch offset (x, y AND z), whose cross product
+// with the wheel's lateral axis does not scale as simply). S7 ("gamma >= 1")
+// does NOT trigger - re-run the zeta sweep diagnostic anyway
+// (test_vehicle_standstill_wiggle.cpp's "zeta sweep diagnostic") and see the
+// I1b report: the ACTUAL yaw/lateral-kick decay behaviour still does not
+// regrow at zeta=1.5 with the patch-point fix in place, consistent with
+// this bound (now much closer to 1, but not over it).
+TEST_CASE("Low-speed damping explicit-integration stability bound (car_sedan)", "[validation][vehicle]") {
+    const real gamma = low_speed_damping_gamma(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
+                                                Vec3{2.0, 0.4, 0.15}, 0.6);
+    INFO("car_sedan: gamma=" << gamma);
+    CHECK(gamma < 1.0);
+}
+
+TEST_CASE("Low-speed damping explicit-integration stability bound (tractor)", "[validation][vehicle]") {
+    const real gamma = low_speed_damping_gamma(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json", 6000.0,
+                                                Vec3{1.2, 0.35, 0.9}, 1.28);
+    INFO("tractor: gamma=" << gamma);
+    CHECK(gamma < 1.0);
 }

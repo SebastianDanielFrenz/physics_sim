@@ -193,7 +193,7 @@ TEST_CASE("Wheel contact frame: a bottomed start is robust (fallback normal, fin
 // the centre necessarily fails today. Removed at C7 with no other change to
 // this file needed - the setups already probe exactly what D-A specifies.
 TEST_CASE("Wheel contact frame: the contact point is the ground patch, not the wheel centre",
-          "[vehicle][contact][!mayfail]") {
+          "[vehicle][contact]") {
     const WheelDesc wd = fl_wheel_desc_at_origin();
     constexpr real kR = 0.317; // wd.wheel_radius, spelled out for the arithmetic comments below
 

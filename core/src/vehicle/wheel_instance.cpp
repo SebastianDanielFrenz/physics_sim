@@ -168,7 +168,25 @@ void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, 
         cf.normal_fallback = !trusted;
         cf.long_dir = cross(spin, n).normalized(); // |spin x n| = |n_perp| >= kMinInPlane whenever trusted, or exactly 1 in the fallback
         cf.lat_dir = cross(n, cf.long_dir);
-        cf.point = centre; // I1b commit C7 (decision D-A) replaces this with the true contact-patch point
+
+        // PHYS-033 I1b commit C7 (defect 1 fix, decision D-A): the contact
+        // PATCH, not the wheel centre - a mid-plane disc point, snapped to
+        // the hit surface's tangent plane. `radial` is the ground normal
+        // projected into the wheel's own mid-plane (already computed above
+        // as n_perp, before normalizing); `centre - R*radial` is the lowest
+        // point of the wheel's mid-plane circle toward the ground. When the
+        // normal is trusted, Jolt's own `hit.contact_point` (unambiguous
+        // only along its normal component - see ShapeCastHit's own comment
+        // on a line/face contact) nudges the patch along n by at most
+        // +-w/2, removing the (w/2)*sin(roll) float of a rim contact without
+        // touching the in-plane position.
+        const Vec3 radial = n_perp.normalized();
+        Vec3 p = centre - radial * desc_.wheel_radius;
+        if (trusted) {
+            const real off = std::clamp(dot(hit.contact_point - p, n), -real(0.5) * desc_.wheel_width, real(0.5) * desc_.wheel_width);
+            p += n * off;
+        }
+        cf.point = p;
         assert(dot(cf.long_dir, query_pose.orientation.rotate(Vec3::unit_x())) > real(0.0)); // sign follows from y x z = x
         contact_frame_ = cf;
     } else {
