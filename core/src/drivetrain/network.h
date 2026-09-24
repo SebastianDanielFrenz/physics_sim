@@ -135,17 +135,34 @@ public:
     void begin_substep_rows(int row_count) {
         cap_static_.set_size(static_cast<std::size_t>(row_count));
         cap_kinetic_.set_size(static_cast<std::size_t>(row_count));
+        ratio_b_.set_size(static_cast<std::size_t>(row_count));
         cap_static_.zero();
         cap_kinetic_.zero();
+        // PHYS-033 I3 (plan section 5.5): default 1.0 reproduces every I2
+        // friction row's "v = omega(a) - omega(b)" definition exactly (a
+        // gear/synchro row's caller overrides this per substep before
+        // solve() - Assembly::begin_substep_rows always runs before any
+        // component's pre_solve, plan section 7.2 step 4).
+        for (std::size_t i = 0; i < ratio_b_.size(); ++i) ratio_b_[i] = real(1.0);
     }
     [[nodiscard]] real cap_static(FrictionRowId r) const { return cap_static_[r.index]; }
     [[nodiscard]] real cap_kinetic(FrictionRowId r) const { return cap_kinetic_[r.index]; }
+
+    // PHYS-033 I3 (plan section 5.5): a synchro row's relative velocity is
+    // omega(a) - ratio*omega(b), not omega(a) - omega(b) - the gearbox
+    // updates `ratio` to the candidate gear's r_target each substep it is
+    // in Synchronising. Every OTHER row (clutch, brakes, engine-to-ground)
+    // never calls this, so its ratio stays the begin_substep_rows() default
+    // of 1.0.
+    void set_friction_row_ratio(FrictionRowId r, real ratio_b) { ratio_b_[r.index] = ratio_b; }
+    [[nodiscard]] real ratio_b(FrictionRowId r) const { return ratio_b_[r.index]; }
 
 private:
     SmallVec<kMaxNetworkNodes> tau0_;
     SmallVec<kMaxNetworkNodes> d_;
     SmallVec<kMaxNetworkFrictionRows> cap_static_;
     SmallVec<kMaxNetworkFrictionRows> cap_kinetic_;
+    SmallVec<kMaxNetworkFrictionRows> ratio_b_;
 };
 
 // Build-time-only descriptor for one friction row (plan section 4.2): the

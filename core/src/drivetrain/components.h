@@ -42,6 +42,21 @@ struct ComponentSubstepCtx {
     real handbrake = 0.0;
 };
 
+// PHYS-033 I3 (plan section 5.4, generalised from I2's GearPair-only inline
+// form): reconstructs a lossy rigid row's own mesh torque (row units - the
+// row's reaction on `recon_node` is `coef_at_recon_node * lambda`) from
+// `recon_node`'s own momentum balance THIS substep. `recon_node` must be a
+// node that carries no OTHER rigid row in any topology state where this row
+// is present (the "reconstruction node" rule) - for I2's GearPair this is
+// always its own `in` node with coef 1.0 (dividing by exactly 1.0 is exact
+// in IEEE754, so this refactor is bit-identical to the old inline form).
+// `loss_tau_already_applied` is the caller's own mesh-loss torque, already
+// folded into `assembly.tau0(recon_node)` by its own pre_solve with d == 0
+// (subtracted back out here, exactly as the I2 form did) - pass 0 if no
+// loss torque was applied this substep.
+[[nodiscard]] real reconstruct_mesh_torque(NodeId recon_node, real coef_at_recon_node, real loss_tau_already_applied,
+                                            const ShaftNetwork& net, const Assembly& assembly, real omega_old_at_recon, real h);
+
 class IComponent {
 public:
     virtual ~IComponent() = default;

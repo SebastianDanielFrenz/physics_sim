@@ -32,6 +32,29 @@ real curve_slope_at(const vehicle::Curve1D& c, real rpm) {
 
 } // namespace
 
+real reconstruct_mesh_torque(NodeId recon_node, real coef_at_recon_node, real loss_tau_already_applied, const ShaftNetwork& net,
+                              const Assembly& assembly, real omega_old_at_recon, real h) {
+    const real omega_new = net.omega(recon_node);
+    const real J = net.node_inertia(recon_node);
+    // "others" excludes the caller's own loss term, which its pre_solve
+    // added with d == 0 - so the assembled d at recon_node is already
+    // all-others, and only tau0 needs the subtraction (plan section 5.4).
+    const real tau0_others = assembly.tau0(recon_node) - loss_tau_already_applied;
+    const real d_others = assembly.d(recon_node);
+
+    real row_sum = real(0.0);
+    for (int r = 0; r < net.friction_row_count(); ++r) {
+        const FrictionRowId rid{static_cast<std::uint16_t>(r)};
+        if (net.friction_row_a(rid) == recon_node) row_sum += net.row_lambda(rid);
+        const NodeId rb = net.friction_row_b(rid);
+        if (rb.valid() && rb == recon_node) row_sum -= net.row_lambda(rid);
+    }
+
+    const real balance =
+        J * (omega_new - omega_old_at_recon) / h - (tau0_others - d_others * (omega_new - omega_old_at_recon)) - row_sum;
+    return balance / coef_at_recon_node;
+}
+
 // --- TorqueMapEngine -------------------------------------------------------
 
 void TorqueMapEngine::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) {
@@ -81,23 +104,7 @@ void GearPair::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& ne
     }
 
     const real omega_new = net.omega(in_);
-    const real J_a = net.node_inertia(in_);
-    // "others" excludes THIS gear's own loss term, which pre_solve added
-    // with d == 0 - so the assembled d at `in_` is already all-others, and
-    // only tau0 needs the subtraction (plan section 5.4).
-    const real tau0_others = assembly.tau0(in_) - own_loss_tau_;
-    const real d_others = assembly.d(in_);
-
-    real row_sum = real(0.0);
-    for (int r = 0; r < net.friction_row_count(); ++r) {
-        const FrictionRowId rid{static_cast<std::uint16_t>(r)};
-        if (net.friction_row_a(rid) == in_) row_sum += net.row_lambda(rid);
-        const NodeId rb = net.friction_row_b(rid);
-        if (rb.valid() && rb == in_) row_sum -= net.row_lambda(rid);
-    }
-
-    const real lambda_mesh =
-        J_a * (omega_new - omega_old_in_) / ctx.h - (tau0_others - d_others * (omega_new - omega_old_in_)) - row_sum;
+    const real lambda_mesh = reconstruct_mesh_torque(in_, real(1.0), own_loss_tau_, net, assembly, omega_old_in_, ctx.h);
     lambda_mesh_prev_ = lambda_mesh;
 
     // The loss torque actually applied THIS substep (own_loss_tau_, stashed

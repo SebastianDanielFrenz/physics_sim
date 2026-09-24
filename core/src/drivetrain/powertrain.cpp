@@ -324,8 +324,16 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
 void Powertrain::end_tick() {
     const PowertrainEnergy L = ledger_;
     const PowertrainEnergy& L0 = ledger_tick_start_;
-    ledger_.balance_error = (L.rotor_ke - L0.rotor_ke) - (L.engine_out - L0.engine_out) + (L.wheel_out - L0.wheel_out) +
+    // PHYS-033 I3 plan section 7.3 extends I2's identity with the new loss
+    // terms (clutch/synchro/engine-friction/engagement) and the new input
+    // terms (starter_in, external_reset) - every I2 graph never books any of
+    // these (no clutch/gearbox/engine component exists yet), so every new
+    // delta below is exactly 0.0 and this is bit-identical to I2's formula.
+    ledger_.balance_error = (L.rotor_ke - L0.rotor_ke) - (L.engine_out - L0.engine_out) - (L.starter_in - L0.starter_in) -
+                             (L.external_reset - L0.external_reset) + (L.wheel_out - L0.wheel_out) +
                              (L.tyre_loss - L0.tyre_loss) + (L.brake_loss - L0.brake_loss) + (L.gear_loss - L0.gear_loss) +
+                             (L.clutch_loss - L0.clutch_loss) + (L.synchro_loss - L0.synchro_loss) +
+                             (L.engine_friction_loss - L0.engine_friction_loss) + (L.engagement_loss - L0.engagement_loss) +
                              (L.integrator_loss - L0.integrator_loss);
 }
 

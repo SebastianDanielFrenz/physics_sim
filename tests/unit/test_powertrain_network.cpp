@@ -422,3 +422,212 @@ TEST_CASE("network: topology switch conserves momentum and books the exact engag
         CHECK(net.omega(n1) == Catch::Approx(net.omega(n2)).epsilon(1e-12));
     }
 }
+
+// --- PHYS-033 I3 plan section 5.5: a friction row's b-side ratio -----------
+// A synchro row's relative velocity is omega(a) - ratio*omega(b), not
+// omega(a) - omega(b). Derivation of the quantity this test checks: with no
+// rigid rows in this 2-node cluster, the basis is identity (n=2), so
+// B = [1, -ratio] and Y = A^-1 B^T = [1/J1, -ratio/J2]^T (A = diag(J1,J2),
+// d=0 here). So one substep's impulse gives J1*Domega1 = h*lambda and
+// J2*Domega2 = -ratio*h*lambda, i.e. J2*Domega2 = -ratio*J1*Domega1: the
+// row's own action alone (no external torque) conserves
+// M_r := ratio*J1*omega1 + J2*omega2, NOT the plain momentum J1*w1+J2*w2
+// (that formula is the special case ratio=1, matching the existing "two
+// inertias lock" test above).
+TEST_CASE("network: a friction row's ratio generalises its coupling (synchro row shape)", "[unit][drivetrain][network]") {
+    NetworkBuilder nb;
+    const NodeId n1 = nb.add_node(0.014); // gearbox input shaft, plan section 10.1's sedan_6mt J1
+    const NodeId n2 = nb.add_node(0.905); // a hub-sized inertia standing in for the gearbox output
+    const FrictionRowId row = nb.add_friction_row(n1, n2);
+    ShaftNetwork net = nb.build("test-ratio");
+
+    const real J1 = 0.014, J2 = 0.905, ratio = 2.05, cap = 500.0; // ratio = sedan_6mt's own 2nd-gear ratio
+    const real w1_0 = 0.0, w2_0 = 200.0;                          // engine idle-ish input, wheel-side spinning
+    net.set_omega(n1, w1_0);
+    net.set_omega(n2, w2_0);
+    const real M_r = ratio * J1 * w1_0 + J2 * w2_0;
+
+    const real h = 1.0 / 960.0;
+    Assembly assembly;
+    bool locked = false;
+    for (int s = 0; s < 2000; ++s) {
+        assembly.begin_substep(net.node_count());
+        assembly.begin_substep_rows(net.friction_row_count());
+        assembly.set_friction_row_ratio(row, ratio);
+        assembly.set_friction_capacity(row, cap, cap);
+
+        net.solve(h, assembly);
+
+        const real m_now = ratio * J1 * net.omega(n1) + J2 * net.omega(n2);
+        CHECK(std::abs(m_now - M_r) <= 1e-9 * std::max(real(1.0), std::abs(M_r)));
+
+        // The row's own reported velocity must be the RATIO'd relative
+        // velocity (plan section 5.5), not the plain difference.
+        const real v_expected = net.omega(n1) - ratio * net.omega(n2);
+        CHECK(net.row_velocity(row) == Catch::Approx(v_expected).margin(1e-9));
+
+        if (net.row_stuck(row)) { locked = true; break; }
+    }
+    REQUIRE(locked);
+
+    // Locked: omega1 == ratio*omega2 (NOT omega1 == omega2 - that would be
+    // the ratio=1 default, and catching a regression to it is this test's
+    // whole point), and the closed form from M_r above.
+    const real w2_expected = M_r / (ratio * ratio * J1 + J2);
+    const real w1_expected = ratio * w2_expected;
+    CHECK(net.omega(n2) == Catch::Approx(w2_expected).epsilon(1e-9));
+    CHECK(net.omega(n1) == Catch::Approx(w1_expected).epsilon(1e-9));
+    CHECK(net.omega(n1) == Catch::Approx(ratio * net.omega(n2)).epsilon(1e-9));
+
+    // Stays locked, still ratio'd, for more substeps.
+    for (int s = 0; s < 20; ++s) {
+        assembly.begin_substep(net.node_count());
+        assembly.begin_substep_rows(net.friction_row_count());
+        assembly.set_friction_row_ratio(row, ratio);
+        assembly.set_friction_capacity(row, cap, cap);
+        net.solve(h, assembly);
+        REQUIRE(net.row_stuck(row));
+        CHECK(net.omega(n1) == Catch::Approx(ratio * net.omega(n2)).epsilon(1e-9));
+    }
+
+    // A DEFAULT (un-set) row still behaves as ratio == 1.0 exactly (I2
+    // compatibility - begin_substep_rows' own default, not this test
+    // re-asserting it): build a fresh, otherwise-identical network and never
+    // call set_friction_row_ratio.
+    NetworkBuilder nb2;
+    const NodeId m1 = nb2.add_node(J1);
+    const NodeId m2 = nb2.add_node(J2);
+    const FrictionRowId row2 = nb2.add_friction_row(m1, m2);
+    ShaftNetwork net2 = nb2.build("test-ratio-default");
+    net2.set_omega(m1, w1_0);
+    net2.set_omega(m2, w2_0);
+    Assembly assembly2;
+    for (int s = 0; s < 2000 && !net2.row_stuck(row2); ++s) {
+        assembly2.begin_substep(net2.node_count());
+        assembly2.begin_substep_rows(net2.friction_row_count());
+        assembly2.set_friction_capacity(row2, cap, cap);
+        net2.solve(h, assembly2);
+    }
+    REQUIRE(net2.row_stuck(row2));
+    CHECK(net2.omega(m1) == Catch::Approx(net2.omega(m2)).epsilon(1e-9)); // ratio 1.0, not 2.05
+}
+
+// --- PHYS-033 I3 plan section 13.3(a): clutch lock-up, literal criterion ---
+// Engine node (J=0.16) under a constant drive torque, load node (J=30)
+// under an implicit viscous load (d=2 N*m*s/rad, torque = -d*omega,
+// linearised around the substep's own omega_old exactly as a real
+// component's pre_solve would), coupled by a friction row whose KINETIC
+// capacity ramps linearly (c(t) = 300*t) and static = 1.15*kinetic - the
+// literal setup the plan's coordinator ruling Q-I3-1 asks for at network
+// level ("no torque spike above capacity or steady").
+TEST_CASE("network: clutch lock-up under a ramping capacity - no spike above capacity or steady",
+          "[unit][drivetrain][network]") {
+    NetworkBuilder nb;
+    const NodeId engine = nb.add_node(0.16);
+    const NodeId load = nb.add_node(30.0);
+    // a = load, b = engine (not the other way around): with coefficient +1
+    // on the "a" side (network.cpp's B-matrix build), this makes the row's
+    // lambda enter the ENGINE's own balance as "J_e*wdot_e = others - lambda"
+    // (coefficient -1 on the "b" side) - i.e. lambda is "torque the row
+    // REMOVES from the engine", matching the plan's own sign convention for
+    // its lambda_ref = tau - J_e*wdot formula (section 13.3) exactly.
+    const FrictionRowId row = nb.add_friction_row(load, engine);
+    ShaftNetwork net = nb.build("test-lockup");
+
+    const real J_e = 0.16, J_L = 30.0, tau_e = 100.0, d_load = 2.0;
+    net.set_omega(engine, 314.0);
+    net.set_omega(load, 0.0);
+
+    const real h = 1.0 / 960.0;
+    Assembly assembly;
+    int lock_substep = -1;
+    real t = 0.0;
+    real max_lambda_pre_lock = 0.0;
+    for (int s = 0; s < 20000 && lock_substep < 0; ++s) {
+        t += h;
+        const real cap_kinetic = 300.0 * t;
+        const real cap_static = 1.15 * cap_kinetic;
+
+        assembly.begin_substep(net.node_count());
+        assembly.begin_substep_rows(net.friction_row_count());
+        assembly.set_friction_capacity(row, cap_static, cap_kinetic);
+        assembly.torque(engine, tau_e, 0.0);
+        const real wl_old = net.omega(load);
+        assembly.torque(load, -d_load * wl_old, d_load); // tau0 - d*(w'-w_old) = -d*w' at the implicit solution
+
+        net.solve(h, assembly);
+
+        // Exact LCP property (plan section 13.3): while slipping, |lambda|
+        // sits exactly at the currently-active capacity - static on the
+        // first substep after a stuck one, kinetic otherwise; here the row
+        // starts Free (never stuck yet), so it is kinetic throughout the
+        // slipping phase.
+        if (!net.row_stuck(row)) {
+            CHECK(std::abs(net.row_lambda(row)) <= cap_static * (1.0 + 1e-9));
+            CHECK(std::abs(std::abs(net.row_lambda(row)) - cap_kinetic) <= 1e-12 * std::max(real(1.0), cap_kinetic));
+            max_lambda_pre_lock = std::max(max_lambda_pre_lock, std::abs(net.row_lambda(row)));
+        } else {
+            lock_substep = s;
+        }
+    }
+    REQUIRE(lock_substep >= 0);
+    REQUIRE(lock_substep > 0); // did not lock instantly (cap(0) == 0)
+
+    const real lambda_at_lock = std::abs(net.row_lambda(row));
+    // No spike ON the lock substep itself, relative to the capacity level
+    // that was active going into it (Q-I3-1's literal 1.05x ratio).
+    CHECK(lambda_at_lock <= 1.05 * max_lambda_pre_lock);
+
+    // Post-lock: an INDEPENDENT scalar recursion of the exact same discrete
+    // linearly-implicit-Euler update ShaftNetwork::solve applies (plain
+    // arithmetic here, no call into network.h/box_lcp.h/dense.h) - the
+    // plan's own reference (section 13.3), but evaluated discretely rather
+    // than from the continuous ODE's closed form, since the plan's 1e-9
+    // tolerance is tight enough that it can only mean "matches this
+    // substep's own implicit solve", not a continuous approximation of it:
+    //   m_load = J_L + h*d_load           (A's load entry, d_engine == 0)
+    //   nu_free_load   = J_L*w_load_old/m_load     (tau0_load==d_load*w_load_old cancels exactly)
+    //   nu_free_engine = w_engine_old + h*tau_e/J_e
+    //   w_scalar = h*(1/m_load + 1/J_e)   ("row a"=load: +1, "row b"=engine: -1)
+    //   lambda_ref = (nu_free_load - nu_free_engine) / w_scalar
+    //   w_load_new_ref   = nu_free_load   + h*lambda_ref/m_load
+    //   w_engine_new_ref = nu_free_engine - h*lambda_ref/J_e
+    real max_lambda_post_lock = lambda_at_lock;
+    real w_engine_ref = net.omega(engine), w_load_ref = net.omega(load); // == each other: just locked
+    for (int s = 0; s < 960; ++s) { // 1 s at h = 1/960
+        t += h;
+        const real cap_kinetic = 300.0 * t;
+        const real cap_static = 1.15 * cap_kinetic; // capacity keeps ramping but is now far above what's needed
+
+        assembly.begin_substep(net.node_count());
+        assembly.begin_substep_rows(net.friction_row_count());
+        assembly.set_friction_capacity(row, cap_static, cap_kinetic);
+        assembly.torque(engine, tau_e, 0.0);
+        const real wl_old = net.omega(load);
+        assembly.torque(load, -d_load * wl_old, d_load);
+
+        net.solve(h, assembly);
+        REQUIRE(net.row_stuck(row)); // never unlocks again in this test
+
+        const real m_load = J_L + h * d_load;
+        const real nu_free_load = J_L * w_load_ref / m_load;
+        const real nu_free_engine = w_engine_ref + h * tau_e / J_e;
+        const real w_scalar = h * (real(1.0) / m_load + real(1.0) / J_e);
+        // box_lcp.h's own convention: v = W*lambda + q, v == 0 (stuck) means
+        // lambda = -q/W, not +q/W (box_lcp.h:6-9).
+        const real lambda_ref = -(nu_free_load - nu_free_engine) / w_scalar;
+        w_load_ref = nu_free_load + h * lambda_ref / m_load;
+        w_engine_ref = nu_free_engine - h * lambda_ref / J_e;
+
+        CHECK(net.omega(engine) == Catch::Approx(w_engine_ref).epsilon(1e-9));
+        CHECK(net.omega(load) == Catch::Approx(w_load_ref).epsilon(1e-9));
+        const real lambda_now = net.row_lambda(row);
+        CHECK(std::abs(lambda_now - lambda_ref) <= 1e-9 * std::max(real(1.0), std::abs(lambda_ref)));
+        max_lambda_post_lock = std::max(max_lambda_post_lock, std::abs(lambda_now));
+    }
+    // Q-I3-1's literal criterion: after lock, torque never exceeds 1.05x
+    // the level at the moment of lock (which is itself >= the eventual
+    // steady value here, since the engine decelerates into lock - the
+    // "drop, then ring" shape plan section 13.3 describes, not a spike).
+    CHECK(max_lambda_post_lock <= 1.05 * lambda_at_lock);
+}

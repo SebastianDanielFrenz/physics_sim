@@ -271,8 +271,14 @@ void ShaftNetwork::solve(real h, const Assembly& assembly) {
                 const int local_a = node_local_[fd.a.index];
                 for (int col = 0; col < n; ++col) c.B(static_cast<std::size_t>(a), static_cast<std::size_t>(col)) += basis.at(local_a, col);
                 if (fd.b.valid()) {
+                    // PHYS-033 I3 (plan section 5.5): a synchro row's b-side
+                    // carries a per-substep ratio (v = omega(a) -
+                    // ratio*omega(b)); every I2 row's ratio defaults to
+                    // exactly 1.0 (Assembly::begin_substep_rows), so this is
+                    // bit-identical to the old unconditional "-=" for them.
+                    const real ratio = assembly.ratio_b(rid);
                     const int local_b = node_local_[fd.b.index];
-                    for (int col = 0; col < n; ++col) c.B(static_cast<std::size_t>(a), static_cast<std::size_t>(col)) -= basis.at(local_b, col);
+                    for (int col = 0; col < n; ++col) c.B(static_cast<std::size_t>(a), static_cast<std::size_t>(col)) -= ratio * basis.at(local_b, col);
                 }
             }
 
@@ -348,7 +354,7 @@ void ShaftNetwork::solve(real h, const Assembly& assembly) {
             const FrictionRowDesc& fd = friction_row_desc_[rid.index];
             const int local_a = node_local_[fd.a.index];
             real v = c.w_new_local[static_cast<std::size_t>(local_a)];
-            if (fd.b.valid()) v -= c.w_new_local[static_cast<std::size_t>(node_local_[fd.b.index])];
+            if (fd.b.valid()) v -= assembly.ratio_b(rid) * c.w_new_local[static_cast<std::size_t>(node_local_[fd.b.index])];
             row_velocity_[rid.index] = v;
         }
     }
