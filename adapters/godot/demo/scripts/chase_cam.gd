@@ -35,11 +35,35 @@ extends Camera3D
 @export var look_height_m: float = 1.0
 @export var position_lag: float = 6.0 # higher = snappier
 @export var rotation_lag: float = 4.0
+# Right-stick look-around: the stick's POSITION sets the orbit angle (not a
+# rate). The camera looks the way the stick points - up = normal chase view,
+# right = look right, down = look back - scaled by deflection past the
+# deadzone, so releasing the stick returns to the chase view. Pure camera
+# presentation, deliberately not a PsInputMap channel (nothing in the sim
+# reads it).
+@export var orbit_deadzone: float = 0.2
+@export var orbit_lag: float = 14.0 # higher = snappier; <= 0 = no smoothing
 
 var _simulation: Node
 var _smoothed_pos: Vector3 = Vector3.ZERO
 var _smoothed_basis: Basis = Basis.IDENTITY
 var _initialized: bool = false
+var _orbit_yaw: float = 0.0 # radians, + = looking right of the car's heading
+
+func _target_orbit_yaw() -> float:
+	var pads := Input.get_connected_joypads()
+	if pads.is_empty():
+		return 0.0
+	# Godot's stick Y is +down, so "up" is -Y.
+	var stick := Vector2(Input.get_joy_axis(pads[0], JOY_AXIS_RIGHT_X),
+			-Input.get_joy_axis(pads[0], JOY_AXIS_RIGHT_Y))
+	var mag: float = min(stick.length(), 1.0)
+	if mag <= orbit_deadzone:
+		return 0.0
+	# Continuous everywhere: weight grows from 0 at the deadzone to 1 at full
+	# deflection, and +-PI (straight down) is the same view either way.
+	var weight: float = smoothstep(orbit_deadzone, 1.0, mag)
+	return atan2(stick.x, stick.y) * weight
 
 func _ready() -> void:
 	if simulation_path != NodePath():
@@ -77,7 +101,20 @@ func _process(delta: float) -> void:
 	var pos_alpha: float = 1.0 - exp(-position_lag * delta)
 	_smoothed_pos = _smoothed_pos.lerp(desired_pos, pos_alpha)
 
-	position = _smoothed_pos
+	# Orbit AFTER the chase smoothing, about the chassis's vertical axis:
+	# swinging the smoothed offset keeps the camera on a circle around the
+	# car instead of lerping straight through it on a 180 deg look-back.
+	# _smoothed_pos itself stays the plain chase position (the rebase shift
+	# below applies to it unchanged).
+	var target_yaw := _target_orbit_yaw()
+	if orbit_lag <= 0.0:
+		_orbit_yaw = target_yaw
+	else:
+		_orbit_yaw = lerp_angle(_orbit_yaw, target_yaw, 1.0 - exp(-orbit_lag * delta))
+	var offset := _smoothed_pos - chassis_pos
+	# Rotating about +UP by a positive angle turns toward the car's left, so
+	# looking right (+yaw) means rotating the camera's offset by -yaw.
+	position = chassis_pos + offset.rotated(Vector3.UP, -_orbit_yaw)
 	look_at(desired_look_at, Vector3.UP)
 
 	# Origin rebasing (see file comment) - keeps this camera's own position
