@@ -173,7 +173,7 @@
   .axis-row { display: flex; gap: 8px; }
   .axis-row .field { flex: 1; margin-bottom: 0; }
   .axis-row label { font-weight: 400; color: var(--muted); }
-  .curves-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .curves-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
   @media (max-width: 720px) { .curves-wrap { grid-template-columns: 1fr; } }
   .curve-box { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel-2); }
   .curve-box h3 { margin: 0 0 6px; font-size: 12.5px; font-weight: 700; }
@@ -188,12 +188,50 @@
   .curve-box .rowbtns { margin-top: 6px; display: flex; justify-content: space-between; align-items: center; }
   .curve-box .err { font-size: 11.5px; color: var(--error); margin-top: 6px; min-height: 14px; }
 
-  .plot-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  .curve-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .curve-toggle { display: inline-flex; gap: 2px; }
+  .curve-toggle-btn {
+    background: var(--panel-2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 600;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .curve-toggle-btn:hover { border-color: var(--accent); }
+  .curve-toggle-btn[data-which="wot"].active { color: var(--text); background: var(--panel); box-shadow: inset 0 -3px 0 0 var(--wot); border-color: var(--wot); }
+  .curve-toggle-btn[data-which="motoring"].active { color: var(--text); background: var(--panel); box-shadow: inset 0 -3px 0 0 var(--motoring); border-color: var(--motoring); }
+  .curve-toolbar-actions { display: flex; gap: 6px; }
+
+  .plot-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 8px 0 10px; }
   .plot-legend span.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
   .plot-legend .line { display: inline-block; width: 14px; height: 0; border-top: 2px dashed currentColor; margin-right: 5px; vertical-align: middle; }
-  canvas#plot { width: 100%; height: 420px; display: block; touch-action: none; cursor: default; }
+  canvas#plot {
+    width: 100%;
+    height: min(60vh, 640px);
+    min-height: 380px;
+    display: block;
+    touch-action: none;
+    cursor: default;
+    border-radius: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+  }
+  .curve-status { font-size: 11.5px; color: var(--error); min-height: 15px; margin-top: 6px; }
   .stats-row { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
   .stats-row b { color: var(--text); }
+
+  details.table-details { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+  details.table-details > summary {
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--muted);
+    user-select: none;
+  }
+  details.table-details > summary:hover { color: var(--text); }
 
   #dropOverlay {
     display: none;
@@ -245,18 +283,19 @@
   <!-- LEFT: scalar form -->
   <div id="formPanel"></div>
 
-  <!-- RIGHT: curves + plot + placeholder -->
+  <!-- RIGHT: plot (primary editing surface) + collapsible tables + placeholder -->
   <div>
     <div class="panel">
       <h2>Torque curves</h2>
-      <div class="curves-wrap">
-        <div class="curve-box">
-          <h3><span class="swatch" style="background:var(--wot)"></span>WOT torque vs. rpm</h3>
-          <div id="wotTableWrap"></div>
+
+      <div class="curve-toolbar">
+        <div class="curve-toggle" role="tablist" aria-label="Curve being edited">
+          <button type="button" id="toggleWot" class="curve-toggle-btn active" data-which="wot" role="tab" aria-selected="true">WOT torque</button>
+          <button type="button" id="toggleMotoring" class="curve-toggle-btn" data-which="motoring" role="tab" aria-selected="false">Motoring torque</button>
         </div>
-        <div class="curve-box">
-          <h3><span class="swatch" style="background:var(--motoring)"></span>Motoring torque vs. rpm</h3>
-          <div id="motoringTableWrap"></div>
+        <div class="curve-toolbar-actions">
+          <button type="button" id="btnUndo" class="small" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+          <button type="button" id="btnRedo" class="small" title="Redo (Ctrl+Y or Ctrl+Shift+Z)" disabled>↷ Redo</button>
         </div>
       </div>
 
@@ -268,12 +307,29 @@
         <span style="color:var(--limiter)"><span class="line"></span>Limiter rpm</span>
       </div>
       <canvas id="plot"></canvas>
+      <div id="curveStatus" class="curve-status"></div>
       <div class="stats-row" id="statsRow"></div>
       <p class="help" style="color:var(--muted); font-size:11.5px; margin-top:8px;">
-        Drag a point to edit it directly on the plot (rpm is clamped to stay strictly ascending within its curve;
-        the motoring curve's first point is pinned at rpm 0 and every motoring point is clamped to torque ≤ 0).
-        Edit exact values in the tables above, or add/remove rows there.
+        Drag a point on the <b>active</b> curve (pick it above, or click its line) — it moves in both rpm and
+        torque, clamped strictly between its neighbours and to that curve's own rules (motoring stays ≤ 0; the
+        motoring curve's rpm-0 first point stays pinned). Snaps to 50 rpm / 1 N·m; hold <b>Shift</b> for free
+        movement. Click an empty spot on or near the active curve to insert a point there; double-click or
+        right-click a point to delete it. <b>Ctrl+Z</b> / <b>Ctrl+Y</b> (or Ctrl+Shift+Z) undo/redo.
       </p>
+
+      <details class="table-details" id="tableDetails">
+        <summary>Edit as table</summary>
+        <div class="curves-wrap">
+          <div class="curve-box">
+            <h3><span class="swatch" style="background:var(--wot)"></span>WOT torque vs. rpm</h3>
+            <div id="wotTableWrap"></div>
+          </div>
+          <div class="curve-box">
+            <h3><span class="swatch" style="background:var(--motoring)"></span>Motoring torque vs. rpm</h3>
+            <div id="motoringTableWrap"></div>
+          </div>
+        </div>
+      </details>
     </div>
 
     <div class="panel">
@@ -409,7 +465,9 @@ let currentFilename = null;
 let dirty = false;
 let lastErrors = {};
 let lastTransform = null; // set by renderCanvas(); used to convert a drag's pixel delta back to data space
-let dragging = null; // {which:'wot'|'motoring', index}
+let dragging = null; // {which:'wot'|'motoring', index, pointerId, moved}
+let hoverPoint = null; // {which, index} for the point under the pointer (hover or active drag)
+let activeCurve = "wot"; // the one curve the plot lets you drag/insert/delete on
 
 const ERROR_KEYS = [
   "inertia_kgm2", "breakaway_torque_nm",
@@ -422,6 +480,8 @@ const ERROR_KEYS = [
 ];
 
 function curveOf(which) { return which === "wot" ? doc.wot_torque_nm_vs_rpm : doc.motoring_torque_nm_vs_rpm; }
+function otherCurveName() { return activeCurve === "wot" ? "motoring" : "wot"; }
+function curveLabel(which) { return which === "wot" ? "WOT torque" : "Motoring torque"; }
 
 // The motoring curve's x[0] must be exactly 0 (read_engine_fields);
 // there is never a legitimate reason for it to be anything else, so we
@@ -502,6 +562,83 @@ function validateAll(d) {
   }
 
   return errors;
+}
+
+// ---------------------------------------------------------------------
+// Undo/redo — a bounded stack of whole-document snapshots. An edit is
+// "begun" (snapshotting the pre-edit doc) at drag-start / field-focus /
+// button-click, and "committed" (pushed onto the undo stack, iff the doc
+// actually changed) at drag-end / field-blur / right after the button's
+// mutation. Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) drive it globally, across
+// both curve (canvas + table) and scalar-form edits.
+// ---------------------------------------------------------------------
+
+let undoStack = [];
+let redoStack = [];
+let pendingSnapshot = null;
+const MAX_HISTORY = 100;
+
+function cloneDoc(d) { return JSON.parse(JSON.stringify(d)); }
+
+function beginHistoryEntry() {
+  if (!doc) return;
+  if (pendingSnapshot === null) pendingSnapshot = cloneDoc(doc);
+}
+
+function commitHistoryEntry() {
+  if (pendingSnapshot === null) return;
+  const before = pendingSnapshot;
+  pendingSnapshot = null;
+  if (!doc) return;
+  if (JSON.stringify(before) === JSON.stringify(doc)) return; // no actual change: skip
+  undoStack.push(before);
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  redoStack.length = 0;
+  updateUndoRedoUI();
+}
+
+function restoreDoc(newDoc) {
+  doc = newDoc;
+  normalizeDoc();
+  dirty = true;
+  dragging = null;
+  hoverPoint = null;
+  syncFormValues();
+  rebuildCurveTable("wot");
+  rebuildCurveTable("motoring");
+  afterChange();
+  updateUndoRedoUI();
+}
+
+function undo() {
+  if (pendingSnapshot !== null) commitHistoryEntry();
+  if (undoStack.length === 0) return;
+  redoStack.push(cloneDoc(doc));
+  if (redoStack.length > MAX_HISTORY) redoStack.shift();
+  const prev = undoStack.pop();
+  restoreDoc(prev);
+}
+
+function redo() {
+  if (redoStack.length === 0) return;
+  undoStack.push(cloneDoc(doc));
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  const next = redoStack.pop();
+  restoreDoc(next);
+}
+
+function resetHistory() {
+  undoStack = [];
+  redoStack = [];
+  pendingSnapshot = null;
+  updateUndoRedoUI();
+}
+
+function updateUndoRedoUI() {
+  const bu = document.getElementById("btnUndo");
+  const br = document.getElementById("btnRedo");
+  if (bu) bu.disabled = undoStack.length === 0;
+  if (br) br.disabled = redoStack.length === 0;
 }
 
 // ---------------------------------------------------------------------
@@ -637,6 +774,9 @@ function buildFieldEl(f) {
       inp.type = "number";
       inp.step = "0.01";
       inp.id = "input-" + f.key + "-" + axisName;
+      inp.addEventListener("focus", beginHistoryEntry);
+      inp.addEventListener("blur", commitHistoryEntry);
+      inp.addEventListener("change", commitHistoryEntry);
       inp.addEventListener("input", () => {
         const v = f.get(doc).slice();
         v[i] = parseFloat(inp.value);
@@ -658,15 +798,19 @@ function buildFieldEl(f) {
       o.textContent = opt;
       sel.appendChild(o);
     }
+    sel.addEventListener("focus", beginHistoryEntry);
     sel.addEventListener("change", () => {
       f.set(doc, sel.value);
       markDirty();
       afterChange();
+      commitHistoryEntry();
     });
     wrap.appendChild(sel);
   } else if (f.type === "textarea") {
     const ta = document.createElement("textarea");
     ta.id = "input-" + f.key;
+    ta.addEventListener("focus", beginHistoryEntry);
+    ta.addEventListener("blur", commitHistoryEntry);
     ta.addEventListener("input", () => { f.set(doc, ta.value); markDirty(); afterChange(); });
     wrap.appendChild(ta);
   } else {
@@ -674,6 +818,9 @@ function buildFieldEl(f) {
     inp.type = f.type === "number" ? "number" : "text";
     if (f.step) inp.step = f.step;
     inp.id = "input-" + f.key;
+    inp.addEventListener("focus", beginHistoryEntry);
+    inp.addEventListener("blur", commitHistoryEntry);
+    inp.addEventListener("change", commitHistoryEntry);
     inp.addEventListener("input", () => {
       const v = f.type === "number" ? parseFloat(inp.value) : inp.value;
       f.set(doc, v);
@@ -722,7 +869,6 @@ function updateValidationUI(errors) {
     if (fieldEl) fieldEl.classList.toggle("has-error", !!msg);
   }
   const wrapWot = document.getElementById("wotTableWrap");
-  const wrapMot = document.getElementById("motoringTableWrap");
   if (wrapWot) wrapWot.querySelectorAll("input.rpm-x").forEach((el, i) => {
     el.classList.toggle("row-x-error", !!errors.wot_curve && errors.wot_curve.indexOf("ascending") >= 0);
   });
@@ -734,7 +880,9 @@ function updateValidationUI(errors) {
 function markDirty() { dirty = true; }
 
 // ---------------------------------------------------------------------
-// Curve tables
+// Curve tables ("Edit as table") — precise numeric entry, always fully
+// editable for both curves regardless of which one the plot has active,
+// and kept in sync with the plot via the same doc.
 // ---------------------------------------------------------------------
 
 function rebuildCurveTable(which) {
@@ -765,6 +913,9 @@ function rebuildCurveTable(which) {
       inX.readOnly = true;
       inX.title = "motoring_torque_nm_vs_rpm: x[0] must be exactly 0 (pinned)";
     } else {
+      inX.addEventListener("focus", beginHistoryEntry);
+      inX.addEventListener("blur", commitHistoryEntry);
+      inX.addEventListener("change", commitHistoryEntry);
       inX.addEventListener("input", () => {
         curve.x[i] = parseFloat(inX.value);
         markDirty();
@@ -779,6 +930,9 @@ function rebuildCurveTable(which) {
     inY.type = "number";
     inY.step = "1";
     inY.value = curve.y[i];
+    inY.addEventListener("focus", beginHistoryEntry);
+    inY.addEventListener("blur", commitHistoryEntry);
+    inY.addEventListener("change", commitHistoryEntry);
     inY.addEventListener("input", () => {
       curve.y[i] = parseFloat(inY.value);
       markDirty();
@@ -833,8 +987,10 @@ function addPoint(which) {
     newX = curve.x[n - 1] + Math.max(gap, 100);
     newY = curve.y[n - 1];
   }
+  beginHistoryEntry();
   curve.x.push(newX);
   curve.y.push(newY);
+  commitHistoryEntry();
   markDirty();
   rebuildCurveTable(which);
   afterChange();
@@ -842,17 +998,32 @@ function addPoint(which) {
 
 function removePoint(which, idx) {
   const curve = curveOf(which);
-  if (curve.x.length <= 1) return;
+  if (curve.x.length <= 1) {
+    showCurveStatus("Can't delete — " + curveLabel(which) + " needs at least 1 point (the loader's minimum).");
+    return;
+  }
+  beginHistoryEntry();
   curve.x.splice(idx, 1);
   curve.y.splice(idx, 1);
+  commitHistoryEntry();
   markDirty();
   rebuildCurveTable(which);
   afterChange();
 }
 
+function showCurveStatus(msg) {
+  const el = document.getElementById("curveStatus");
+  if (!el) return;
+  el.textContent = msg;
+  if (showCurveStatus._t) clearTimeout(showCurveStatus._t);
+  showCurveStatus._t = setTimeout(() => { el.textContent = ""; }, 4000);
+}
+
 // ---------------------------------------------------------------------
 // Canvas plot: torque (left axis) + derived power (right axis), peak
-// markers, idle/limiter markers, drag-to-edit.
+// markers, idle/limiter markers — the primary editing surface. Pointer
+// Events (mouse/pen/touch) with setPointerCapture drive drag/insert/
+// delete/select; a small live tooltip tracks the dragged/hovered point.
 // ---------------------------------------------------------------------
 
 const canvas = document.getElementById("plot");
@@ -860,13 +1031,23 @@ const ctx = canvas.getContext("2d");
 let dpr = window.devicePixelRatio || 1;
 let hitPoints = []; // [{which, index, px, py}] from the most recent render, for hit-testing
 
+const SNAP_RPM = 50;
+const SNAP_TORQUE = 1;
+const EPS = 1; // minimum rpm gap kept between adjacent points
+const POINT_HIT_MOUSE = 12, POINT_HIT_TOUCH = 22;
+const LINE_HIT_MOUSE = 10, LINE_HIT_TOUCH = 20;
+
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
+function snap(v, step) { return Math.round(v / step) * step; }
 
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(420 * dpr));
+  const w = Math.max(1, Math.round(rect.width * dpr));
+  const h = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
 }
 
 function computePeaks() {
@@ -962,10 +1143,13 @@ function renderCanvas() {
   drawVLine(doc.idle_rpm, cssVar("--idle"), "idle", xToPx, padT, plotH);
   drawVLine(doc.limiter.rpm, cssVar("--limiter"), "limiter", xToPx, padT, plotH);
 
-  // curves
+  // curves — the active one drawn opaque and on top, the other dimmed
   hitPoints = [];
-  drawCurve(wot, cssVar("--wot"), xToPx, tToPy, "wot");
-  drawCurve(mot, cssVar("--motoring"), xToPx, tToPy, "motoring");
+  const order = activeCurve === "wot" ? ["motoring", "wot"] : ["wot", "motoring"];
+  for (const which of order) {
+    const curve = which === "wot" ? wot : mot;
+    drawCurve(curve, cssVar(which === "wot" ? "--wot" : "--motoring"), xToPx, tToPy, which, which === activeCurve);
+  }
 
   // power curve (derived from WOT only)
   if (wot.x.length >= 2 && wot.x.every(isNum) && wot.y.every(isNum)) {
@@ -990,6 +1174,16 @@ function renderCanvas() {
     peakTorque.torque.toFixed(0) + " N·m @ " + Math.round(peakTorque.rpm) + " rpm");
   if (peakPower) drawPeakMarker(peakPower.rpm, peakPower.power, xToPx, pToPy, cssVar("--power"),
     peakPower.power.toFixed(1) + " kW @ " + Math.round(peakPower.rpm) + " rpm");
+
+  // live tooltip: dragged point takes priority, else the hovered one
+  const tipTarget = dragging || hoverPoint;
+  if (tipTarget) {
+    const c = curveOf(tipTarget.which);
+    const i = tipTarget.index;
+    if (c.x[i] !== undefined && isNum(c.x[i]) && isNum(c.y[i])) {
+      drawTooltip(xToPx(c.x[i]), tToPy(c.y[i]), tipTarget.which, c.x[i], c.y[i], W, H);
+    }
+  }
 
   // stats row
   const stats = document.getElementById("statsRow");
@@ -1029,12 +1223,13 @@ function drawVLine(rpm, color, label, xToPx, padT, plotH) {
   ctx.restore();
 }
 
-function drawCurve(curve, color, xToPx, tToPy, which) {
+function drawCurve(curve, color, xToPx, tToPy, which, isActive) {
   if (!curve.x.length) return;
   const valid = curve.x.every(isNum) && curve.y.every(isNum);
+  const alpha = isActive ? 1 : 0.32;
   ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = isActive ? 2.2 : 1.6;
+  ctx.globalAlpha = alpha;
   if (valid && curve.x.length > 1) {
     ctx.beginPath();
     for (let i = 0; i < curve.x.length; i++) {
@@ -1046,11 +1241,31 @@ function drawCurve(curve, color, xToPx, tToPy, which) {
   for (let i = 0; i < curve.x.length; i++) {
     if (!isNum(curve.x[i]) || !isNum(curve.y[i])) continue;
     const px = xToPx(curve.x[i]), py = tToPy(curve.y[i]);
+    const isDragged = !!(dragging && dragging.which === which && dragging.index === i);
+    const isHovered = !dragging && hoverPoint && hoverPoint.which === which && hoverPoint.index === i;
+    if (isHovered || isDragged) {
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(px, py, isDragged ? 10 : 8.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(px, py, dragging && dragging.which === which && dragging.index === i ? 6 : 4.5, 0, Math.PI * 2);
+    ctx.arc(px, py, isDragged ? 6.5 : (isHovered ? 6 : 4.5), 0, Math.PI * 2);
     ctx.fill();
+    if (isActive) {
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = cssVar("--panel");
+      ctx.beginPath();
+      ctx.arc(px, py, isDragged ? 6.5 : (isHovered ? 6 : 4.5), 0, Math.PI * 2);
+      ctx.stroke();
+    }
     hitPoints.push({ which, index: i, px, py });
   }
+  ctx.globalAlpha = 1;
 }
 
 function drawPeakMarker(rpm, val, xToPx, yToPy, color, text) {
@@ -1068,10 +1283,78 @@ function drawPeakMarker(rpm, val, xToPx, yToPy, color, text) {
   ctx.fillText(text, tx, py - 17);
 }
 
-// --- drag interaction ---------------------------------------------------
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
-function pickPoint(mx, my) {
-  let best = null, bestD = 12; // px hit radius
+function drawTooltip(px, py, which, rpm, torque, W, H) {
+  const lines = [Math.round(rpm) + " rpm", torque.toFixed(1) + " N·m"];
+  if (which === "wot") {
+    const kw = (torque * rpm * 2 * Math.PI / 60) / 1000;
+    lines.push(kw.toFixed(1) + " kW");
+  }
+  ctx.font = "11.5px -apple-system, Segoe UI, sans-serif";
+  const padding = 7, lineH = 14;
+  let w = 0;
+  for (const l of lines) w = Math.max(w, ctx.measureText(l).width);
+  w += padding * 2;
+  const h = lines.length * lineH + padding * 2 - 2;
+  let tx = px + 12, ty = py - h - 10;
+  if (tx + w > W - 4) tx = px - w - 12;
+  if (tx < 4) tx = 4;
+  if (ty < 4) ty = py + 14;
+  if (ty + h > H - 4) ty = H - h - 4;
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = cssVar("--panel");
+  ctx.strokeStyle = cssVar("--border");
+  ctx.lineWidth = 1;
+  roundRect(tx, ty, w, h, 5);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = cssVar("--text");
+  lines.forEach((l, i) => ctx.fillText(l, tx + padding, ty + padding + 10 + i * lineH));
+}
+
+// --- geometry helpers for hit-testing a curve's polyline ---------------
+
+function pointSegDist(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq > 0 ? ((px - x1) * dx + (py - y1) * dy) / lenSq : 0;
+  t = clamp(t, 0, 1);
+  const cx = x1 + t * dx, cy = y1 + t * dy;
+  return { dist: Math.hypot(px - cx, py - cy), t };
+}
+
+function nearestOnCurve(curve, mx, my) {
+  if (!lastTransform || !curve || curve.x.length === 0) return null;
+  const { xToPx, tToPy } = lastTransform;
+  if (curve.x.length === 1) {
+    if (!isNum(curve.x[0]) || !isNum(curve.y[0])) return null;
+    const px = xToPx(curve.x[0]), py = tToPy(curve.y[0]);
+    return { dist: Math.hypot(px - mx, py - my), x: curve.x[0] };
+  }
+  let best = null;
+  for (let i = 1; i < curve.x.length; i++) {
+    const x1 = curve.x[i - 1], y1 = curve.y[i - 1], x2 = curve.x[i], y2 = curve.y[i];
+    if (!isNum(x1) || !isNum(y1) || !isNum(x2) || !isNum(y2)) continue;
+    const p1x = xToPx(x1), p1y = tToPy(y1);
+    const p2x = xToPx(x2), p2y = tToPy(y2);
+    const r = pointSegDist(mx, my, p1x, p1y, p2x, p2y);
+    if (!best || r.dist < best.dist) best = { dist: r.dist, x: x1 + r.t * (x2 - x1) };
+  }
+  return best;
+}
+
+function pickPoint(mx, my, touchLike) {
+  let best = null, bestD = touchLike ? POINT_HIT_TOUCH : POINT_HIT_MOUSE;
   for (const p of hitPoints) {
     const d = Math.hypot(p.px - mx, p.py - my);
     if (d < bestD) { bestD = d; best = p; }
@@ -1079,50 +1362,66 @@ function pickPoint(mx, my) {
   return best;
 }
 
-canvas.addEventListener("mousedown", (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-  const hit = pickPoint(mx, my);
-  if (hit) {
-    dragging = { which: hit.which, index: hit.index };
-    canvas.style.cursor = "grabbing";
-    renderCanvas();
+// --- point insert / delete on the active curve --------------------------
+
+function xBoundsForDrag(which, curve, i) {
+  const lo = i > 0 ? curve.x[i - 1] + EPS : (which === "wot" ? 0 : -Infinity);
+  const hi = i < curve.x.length - 1 ? curve.x[i + 1] - EPS : Infinity;
+  return { lo, hi };
+}
+
+function insertPointAt(which, mx, my, freeMode) {
+  if (!lastTransform) return;
+  const curve = curveOf(which);
+  const { pxToX, pyToT } = lastTransform;
+  const rawX = pxToX(mx);
+  const rawY = pyToT(my);
+
+  if (curve.x.length === 0) {
+    let x = which === "motoring" ? 0 : Math.max(0, freeMode ? rawX : snap(rawX, SNAP_RPM));
+    let y = freeMode ? rawY : snap(rawY, SNAP_TORQUE);
+    if (which === "motoring") y = Math.min(y, 0);
+    beginHistoryEntry();
+    curve.x.push(x);
+    curve.y.push(y);
+    commitHistoryEntry();
+    markDirty();
+    rebuildCurveTable(which);
+    afterChange();
+    return;
   }
-});
 
-window.addEventListener("mousemove", (e) => {
-  if (!dragging || !lastTransform) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-  const curve = curveOf(dragging.which);
-  const i = dragging.index;
-  let newX = lastTransform.pxToX(mx);
-  let newY = lastTransform.pyToT(my);
+  let idx = curve.x.findIndex((xv) => xv > rawX);
+  if (idx === -1) idx = curve.x.length;
+  if (which === "motoring" && idx === 0) idx = 1; // never insert before the pinned rpm-0 point
 
-  const EPS = 1;
-  const pinnedX = dragging.which === "motoring" && i === 0;
-  if (!pinnedX) {
-    let lo = i > 0 ? curve.x[i - 1] + EPS : (dragging.which === "wot" ? 0 : -Infinity);
-    let hi = i < curve.x.length - 1 ? curve.x[i + 1] - EPS : Infinity;
-    if (lo > hi) lo = hi;
-    newX = Math.min(Math.max(newX, lo), hi);
-    curve.x[i] = newX;
+  const lo = idx > 0 ? curve.x[idx - 1] + EPS : (which === "wot" ? 0 : 0);
+  const hi = idx < curve.x.length ? curve.x[idx] - EPS : Infinity;
+  if (lo >= hi) {
+    showCurveStatus("No room to insert a point there — nearby points are too close together.");
+    return;
   }
-  if (dragging.which === "motoring") newY = Math.min(newY, 0);
-  curve.y[i] = newY;
+  let x = clamp(rawX, lo, hi);
+  if (!freeMode) x = clamp(snap(x, SNAP_RPM), lo, hi);
+  let y = curveEvaluate(curve, x);
+  if (!freeMode) y = snap(y, SNAP_TORQUE);
+  if (which === "motoring") y = Math.min(y, 0);
 
+  beginHistoryEntry();
+  curve.x.splice(idx, 0, x);
+  curve.y.splice(idx, 0, y);
+  commitHistoryEntry();
   markDirty();
-  updateCurveRowInputs(dragging.which, i);
+  rebuildCurveTable(which);
   afterChange();
-});
+}
 
-window.addEventListener("mouseup", () => {
-  if (dragging) {
-    dragging = null;
-    canvas.style.cursor = "default";
-    renderCanvas();
-  }
-});
+// --- pointer interaction -------------------------------------------------
+
+function relCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  return { mx: e.clientX - rect.left, my: e.clientY - rect.top };
+}
 
 function updateCurveRowInputs(which, idx) {
   const wrapId = which === "wot" ? "wotTableWrap" : "motoringTableWrap";
@@ -1135,7 +1434,149 @@ function updateCurveRowInputs(which, idx) {
   inputs[1].value = curve.y[idx];
 }
 
+function handleDragMove(e, mx, my) {
+  if (!lastTransform || !dragging) return;
+  dragging.moved = true;
+  const curve = curveOf(dragging.which);
+  const i = dragging.index;
+  const freeMode = e.shiftKey;
+  let newX = lastTransform.pxToX(mx);
+  let newY = lastTransform.pyToT(my);
+
+  const pinnedX = dragging.which === "motoring" && i === 0;
+  if (!pinnedX) {
+    const { lo, hi } = xBoundsForDrag(dragging.which, curve, i);
+    newX = clamp(newX, lo, hi);
+    if (!freeMode) newX = clamp(snap(newX, SNAP_RPM), lo, hi);
+    curve.x[i] = newX;
+  }
+  if (!freeMode) newY = snap(newY, SNAP_TORQUE);
+  if (dragging.which === "motoring") newY = Math.min(newY, 0);
+  curve.y[i] = newY;
+
+  markDirty();
+  updateCurveRowInputs(dragging.which, i);
+  hoverPoint = { which: dragging.which, index: i };
+  afterChange();
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  if (!doc || !lastTransform) return;
+  if (e.pointerType === "mouse" && e.button !== 0) return; // primary button only
+  const { mx, my } = relCoords(e);
+  const touchLike = e.pointerType === "touch";
+  const hit = pickPoint(mx, my, touchLike);
+
+  if (hit && hit.which === activeCurve) {
+    beginHistoryEntry();
+    dragging = { which: hit.which, index: hit.index, pointerId: e.pointerId, moved: false };
+    hoverPoint = { which: hit.which, index: hit.index };
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* e.g. a synthetic pointerId */ }
+    canvas.style.cursor = "grabbing";
+    renderCanvas();
+    e.preventDefault();
+    return;
+  }
+  if (hit && hit.which !== activeCurve) {
+    activeCurve = hit.which;
+    updateCurveToggleUI();
+    renderCanvas();
+    e.preventDefault();
+    return;
+  }
+
+  const lineHit = touchLike ? LINE_HIT_TOUCH : LINE_HIT_MOUSE;
+  const nearActive = nearestOnCurve(curveOf(activeCurve), mx, my);
+  if (nearActive && nearActive.dist < lineHit) {
+    insertPointAt(activeCurve, mx, my, e.shiftKey);
+    e.preventDefault();
+    return;
+  }
+  const other = otherCurveName();
+  const nearOther = nearestOnCurve(curveOf(other), mx, my);
+  if (nearOther && nearOther.dist < lineHit) {
+    activeCurve = other;
+    updateCurveToggleUI();
+    renderCanvas();
+    e.preventDefault();
+  }
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!doc) return;
+  const { mx, my } = relCoords(e);
+  if (dragging && dragging.pointerId === e.pointerId) {
+    handleDragMove(e, mx, my);
+    e.preventDefault();
+    return;
+  }
+  if (!lastTransform) return;
+  const touchLike = e.pointerType === "touch";
+  const hit = pickPoint(mx, my, touchLike);
+  hoverPoint = hit;
+  if (hit) {
+    canvas.style.cursor = hit.which === activeCurve ? "grab" : "pointer";
+  } else {
+    const lineHit = touchLike ? LINE_HIT_TOUCH : LINE_HIT_MOUSE;
+    const nearActive = nearestOnCurve(curveOf(activeCurve), mx, my);
+    const nearOther = nearestOnCurve(curveOf(otherCurveName()), mx, my);
+    if (nearActive && nearActive.dist < lineHit) canvas.style.cursor = "copy";
+    else if (nearOther && nearOther.dist < lineHit) canvas.style.cursor = "pointer";
+    else canvas.style.cursor = "default";
+  }
+  renderCanvas();
+});
+
+function onPointerUp(e) {
+  if (dragging && dragging.pointerId === e.pointerId) {
+    try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+    commitHistoryEntry();
+    dragging = null;
+    canvas.style.cursor = "default";
+    renderCanvas();
+  }
+}
+canvas.addEventListener("pointerup", onPointerUp);
+canvas.addEventListener("pointercancel", onPointerUp);
+canvas.addEventListener("pointerleave", () => {
+  if (!dragging) {
+    hoverPoint = null;
+    canvas.style.cursor = "default";
+    renderCanvas();
+  }
+});
+
+canvas.addEventListener("dblclick", (e) => {
+  e.preventDefault();
+  if (!doc) return;
+  const { mx, my } = relCoords(e);
+  const hit = pickPoint(mx, my, false);
+  if (hit && hit.which === activeCurve) removePoint(hit.which, hit.index);
+});
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  if (!doc) return;
+  const { mx, my } = relCoords(e);
+  const hit = pickPoint(mx, my, false);
+  if (hit && hit.which === activeCurve) removePoint(hit.which, hit.index);
+});
+
+function updateCurveToggleUI() {
+  const wotBtn = document.getElementById("toggleWot");
+  const motBtn = document.getElementById("toggleMotoring");
+  if (wotBtn) { wotBtn.classList.toggle("active", activeCurve === "wot"); wotBtn.setAttribute("aria-selected", activeCurve === "wot" ? "true" : "false"); }
+  if (motBtn) { motBtn.classList.toggle("active", activeCurve === "motoring"); motBtn.setAttribute("aria-selected", activeCurve === "motoring" ? "true" : "false"); }
+}
+
 window.addEventListener("resize", () => { if (doc) renderCanvas(); });
+
+window.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  const key = e.key.toLowerCase();
+  if (key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); redo(); }
+});
 
 // ---------------------------------------------------------------------
 // Orchestration
@@ -1163,12 +1604,17 @@ function loadDocFromObject(parsed, filename) {
   doc = parsed;
   currentFilename = filename;
   dirty = false;
+  dragging = null;
+  hoverPoint = null;
+  activeCurve = "wot";
+  resetHistory();
   if (notes.length) showBanner(notes.join(" ")); else hideBanner();
 
   buildForm();
   syncFormValues();
   rebuildCurveTable("wot");
   rebuildCurveTable("motoring");
+  updateCurveToggleUI();
   document.getElementById("filename").textContent = filename || "(new file, unsaved)";
   afterChange();
 }
@@ -1238,6 +1684,10 @@ document.getElementById("fileInput").addEventListener("change", (e) => {
 });
 document.getElementById("btnSave").addEventListener("click", saveFile);
 document.getElementById("bannerClose").addEventListener("click", hideBanner);
+document.getElementById("btnUndo").addEventListener("click", undo);
+document.getElementById("btnRedo").addEventListener("click", redo);
+document.getElementById("toggleWot").addEventListener("click", () => { activeCurve = "wot"; updateCurveToggleUI(); renderCanvas(); });
+document.getElementById("toggleMotoring").addEventListener("click", () => { activeCurve = "motoring"; updateCurveToggleUI(); renderCanvas(); });
 
 const dropOverlay = document.getElementById("dropOverlay");
 let dragDepth = 0;
@@ -1259,9 +1709,14 @@ window.__engineEditor = {
   getDoc: () => doc,
   getErrors: () => lastErrors,
   newEngine,
+  undo,
+  redo,
+  getActiveCurve: () => activeCurve,
+  setActiveCurve: (w) => { activeCurve = w; updateCurveToggleUI(); renderCanvas(); },
   _debugHitPoints: () => hitPoints,
   _debugTransform: () => lastTransform,
-  _debugCanvasRect: () => canvas.getBoundingClientRect()
+  _debugCanvasRect: () => canvas.getBoundingClientRect(),
+  _debugHistory: () => ({ undo: undoStack.length, redo: redoStack.length })
 };
 
 // Start with a fresh, valid, editable default engine.
