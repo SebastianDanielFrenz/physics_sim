@@ -296,11 +296,13 @@ void World::step() {
         1.0, std::chrono::duration<double, std::nano>(tick_t1 - tick_t0).count());
 
     std::size_t wheel_channel_count = 0;
-    for (const auto& channels : wheel_telemetry_channels_) wheel_channel_count += channels.size() * 6;
+    for (const auto& channels : wheel_telemetry_channels_) wheel_channel_count += channels.size() * 7; // +omega, PHYS-033 P4 I2 commit 5b
     const std::size_t chassis_channel_count = chassis_telemetry_channels_.size() * 2; // PHYS-033 I1 W1
+    const std::size_t energy_channel_count = energy_telemetry_channels_.size() * 11;  // PHYS-033 P4 I2 commit 5b
 
     std::vector<real> row;
-    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count + chassis_channel_count);
+    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count +
+                chassis_channel_count + energy_channel_count);
     for (double ms : last_stage_ms_) row.push_back(real(ms));
     for (int w = 0; w < job_system_->worker_count(); ++w) {
         const double busy_ns = static_cast<double>(job_system_->worker_busy_ns(w));
@@ -322,11 +324,29 @@ void World::step() {
             row.push_back(t.fy);
             row.push_back(t.fz);
             row.push_back(real(t.surface));
+            row.push_back(t.omega); // PHYS-033 P4 I2 commit 5b
         }
         // PHYS-033 I1 W1 (section 3.5): right after this vehicle's wheel
         // values, matching the registration order in create_vehicle above.
         row.push_back(vehicle_system_->at(vid).shadow_dv_error());
         row.push_back(vehicle_system_->at(vid).shadow_dw_error());
+
+        // PHYS-033 P4 I2 commit 5b (plan section 8): right after this
+        // vehicle's chassis values, matching create_vehicle's registration
+        // order.
+        const vehicle::VehicleInstance& vehicle_instance = vehicle_system_->at(vid);
+        const drivetrain::PowertrainEnergy& e = vehicle_instance.powertrain_energy();
+        row.push_back(e.engine_out);
+        row.push_back(e.wheel_out);
+        row.push_back(e.tyre_loss);
+        row.push_back(e.brake_loss);
+        row.push_back(e.gear_loss);
+        row.push_back(e.integrator_loss);
+        row.push_back(e.rotor_ke);
+        row.push_back(e.balance_error);
+        row.push_back(real(vehicle_instance.powertrain_friction_cap_hits()));
+        row.push_back(real(vehicle_instance.powertrain_nonspd_hits()));
+        row.push_back(real(vehicle_instance.powertrain_lcp_stage3_hits()));
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
@@ -425,6 +445,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         channels[w].fy = telemetry_->register_channel(prefix + "fy");
         channels[w].fz = telemetry_->register_channel(prefix + "fz");
         channels[w].surface = telemetry_->register_channel(prefix + "surface");
+        channels[w].omega = telemetry_->register_channel(prefix + "omega"); // PHYS-033 P4 I2 commit 5b
     }
 
     // PHYS-033 I1 W1 (section 3.5): right after this vehicle's wheel
@@ -435,6 +456,24 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     const std::string chassis_prefix = "vehicle" + std::to_string(id.index) + ".chassis.";
     chassis_telemetry_channels_[id.index].shadow_dv_error = telemetry_->register_channel(chassis_prefix + "shadow_dv_error");
     chassis_telemetry_channels_[id.index].shadow_dw_error = telemetry_->register_channel(chassis_prefix + "shadow_dw_error");
+
+    // PHYS-033 P4 I2 commit 5b (plan section 8): right after this vehicle's
+    // chassis channels, same reasoning.
+    if (energy_telemetry_channels_.size() <= id.index) energy_telemetry_channels_.resize(id.index + 1);
+    EnergyTelemetryChannels& ec = energy_telemetry_channels_[id.index];
+    const std::string energy_prefix = "vehicle" + std::to_string(id.index) + ".energy.";
+    ec.engine_out = telemetry_->register_channel(energy_prefix + "engine_out");
+    ec.wheel_out = telemetry_->register_channel(energy_prefix + "wheel_out");
+    ec.tyre_loss = telemetry_->register_channel(energy_prefix + "tyre_loss");
+    ec.brake_loss = telemetry_->register_channel(energy_prefix + "brake_loss");
+    ec.gear_loss = telemetry_->register_channel(energy_prefix + "gear_loss");
+    ec.integrator_loss = telemetry_->register_channel(energy_prefix + "integrator_loss");
+    ec.stored = telemetry_->register_channel(energy_prefix + "stored");
+    ec.balance_error = telemetry_->register_channel(energy_prefix + "balance_error");
+    const std::string powertrain_prefix = "vehicle" + std::to_string(id.index) + ".powertrain.";
+    ec.friction_cap_hits = telemetry_->register_channel(powertrain_prefix + "friction_cap_hits");
+    ec.nonspd_hits = telemetry_->register_channel(powertrain_prefix + "nonspd_hits");
+    ec.lcp_stage3_hits = telemetry_->register_channel(powertrain_prefix + "lcp_stage3_hits");
 
     return id;
 }
@@ -457,6 +496,14 @@ vehicle::WheelState World::wheel_state(VehicleId id, std::size_t wheel_index) co
 
 bool World::wheel_is_driven(VehicleId id, std::size_t wheel_index) const {
     return vehicle_system_->at(id).wheel_is_driven(wheel_index);
+}
+
+real World::wheel_omega(VehicleId id, std::size_t wheel_index) const {
+    return vehicle_system_->at(id).wheel_omega(wheel_index);
+}
+
+const drivetrain::PowertrainEnergy& World::powertrain_energy(VehicleId id) const {
+    return vehicle_system_->at(id).powertrain_energy();
 }
 
 real World::vehicle_shadow_dv_error(VehicleId id) const {

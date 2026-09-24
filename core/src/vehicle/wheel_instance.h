@@ -19,16 +19,31 @@
 
 namespace ps::vehicle {
 
-struct WheelSubstepInput {
+// PHYS-033 P4 I2 commit 5b (plan section 5.6): wheel spin moved OUT of
+// WheelInstance into the drivetrain network's hub node - pre_solve/
+// post_solve replace the old single step(), split around
+// ps::drivetrain::ShaftNetwork::solve() the way every other drivetrain
+// component's pre_solve/post_solve is (core/src/drivetrain/components.h).
+// drive_torque_cmd/brake_torque_cmd are gone (the hub's torque now comes
+// from the network's own implicit solve, not a value computed once per
+// tick outside it).
+struct WheelPreSolveInput {
     Pose chassis_pose;
     Motion chassis_motion;
     Vec3 chassis_com_world = Vec3::zero();
     real steer_angle = 0.0;
-    real brake_torque_cmd = 0.0; // N*m, magnitude, opposes spin (see .cpp for the lock-to-zero clamp)
-    real drive_torque_cmd = 0.0; // N*m, signed, applied directly to wheel spin
     real dt = 0.0;
     real partner_compression = 0.0;
     const io::SurfaceTable* surfaces = nullptr;
+};
+
+// The hub's implicit torque-law terms this wheel contributes THIS substep
+// (plan section 5.6 point 5): tau(w') ~= tau0 - d*(w' - w_old), d >= 0. The
+// caller (VehicleInstance::step_tick) forwards these straight into
+// Powertrain::add_hub_terms.
+struct HubTerms {
+    real tau0 = 0.0;
+    real d = 0.0;
 };
 
 // PHYS-033 I1b (defect 2 fix, decision D-B): the ground-plane contact frame
@@ -61,6 +76,12 @@ struct WheelSubstepOutput {
     Vec3 contact_force_world = Vec3::zero();
     Vec3 contact_point_world = Vec3::zero(); // where contact_force_world (and extra_torque_world below) act
     Vec3 extra_torque_world = Vec3::zero();  // Mz*n + Mx*t_x, a pure couple (no torque-arm needed)
+    // PHYS-033 P4 I2 commit 5b (plan section 8): this substep's own
+    // contribution to the powertrain energy ledger's wheel_out/tyre_loss
+    // terms (0 while airborne or fz <= 0) - VehicleInstance::step_tick
+    // forwards these into Powertrain::add_wheel_energy.
+    real wheel_out_j = 0.0;
+    real tyre_loss_j = 0.0;
 };
 
 class WheelInstance {
@@ -68,16 +89,24 @@ public:
     WheelInstance(WheelDesc desc, std::unique_ptr<ITyreModel> tyre_model);
 
     [[nodiscard]] real compression() const { return x_; }
-    [[nodiscard]] real spin_speed() const { return omega_; }
 
-    // Pass 1 (every substep, before step() below - ARB needs every wheel's
-    // fresh measurement first): cylinder shape cast along the suspension
-    // axis to find ground contact and this substep's compression.
+    // Pass 1 (every substep, before pre_solve() below - ARB needs every
+    // wheel's fresh measurement first): cylinder shape cast along the
+    // suspension axis to find ground contact and this substep's compression.
     void measure_contact(const Pose& chassis_pose, real steer_angle, const IRigidBackend& backend);
 
-    // Pass 2: suspension force from the measured compression, tyre force
-    // from relaxed slip, wheel spin integration.
-    [[nodiscard]] WheelSubstepOutput step(const WheelSubstepInput& in);
+    // Pass 2 (plan section 5.6): suspension force from the measured
+    // compression, tyre force PREDICTOR from relaxed slip (final alpha,
+    // predictor kappa - final only after post_solve), and this wheel's
+    // linearised hub torque-law terms for the network solve. `omega_old` is
+    // this substep's hub speed BEFORE the network solve (Powertrain::
+    // hub_omega, read by the caller before calling ShaftNetwork::solve).
+    [[nodiscard]] HubTerms pre_solve(const WheelPreSolveInput& in, real omega_old);
+    // Pass 2, after the network's solve: finishes kappa/Fx at the hub's NEW
+    // speed (still linear in omega_new, so the wheel's own torque balance
+    // and the chassis force stay consistent - plan section 5.6 point 2/3),
+    // assembles this substep's contact wrench and energy-ledger deltas.
+    [[nodiscard]] WheelSubstepOutput post_solve(real omega_new);
 
     [[nodiscard]] const WheelTelemetry& telemetry() const { return last_telemetry_; }
     [[nodiscard]] const WheelDesc& desc() const { return desc_; }
@@ -117,8 +146,24 @@ private:
     ContactFrame contact_frame_;
     SurfaceId contact_surface_ = kInvalidSurfaceId;
 
-    real omega_ = 0.0;
     SlipRelaxationState relax_;
+
+    // PHYS-033 P4 I2 commit 5b: stashed by pre_solve, consumed by
+    // post_solve - one substep's worth of scratch (plan section 5.6 point
+    // 4), never allocated (plain members). `pre_airborne_` is
+    // !(hit_ground_ && fz > 0) at pre_solve time, i.e. whether the tyre/
+    // hub-coupling branch ran at all this substep.
+    real pre_dt_ = 0.0;
+    real pre_fz_ = 0.0;
+    real pre_fx_pred_ = 0.0;
+    real pre_C_ = 0.0;     // max(dFx/dkappa, 0), 0 if the kappa predictor clamped
+    real pre_dk_dw_ = 0.0; // R * (d kappa_predictor / d slip_velocity)
+    RelaxStep pre_rs_{};   // kappa's own relaxation_step_axis result this substep
+    real pre_omega_old_ = 0.0;
+    real pre_vx_contact_ = 0.0, pre_vy_contact_ = 0.0;
+    real pre_fy_ = 0.0, pre_mz_ = 0.0, pre_mx_ = 0.0, pre_froll_ = 0.0;
+    bool pre_airborne_ = true;
+    Vec3 pre_wheel_center_world_ = Vec3::zero();
 
     // PLAN.md M1, task 2: render-only state, deliberately NOT folded into
     // fold_state_hash() below (see wheel_instance.cpp's step() for why -

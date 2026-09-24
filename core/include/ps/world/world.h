@@ -8,6 +8,7 @@
 
 #include "ps/articulation/articulation_desc.h"
 #include "ps/backend/i_rigid_backend.h"
+#include "ps/drivetrain/energy_ledger.h"
 #include "ps/io/telemetry.h"
 #include "ps/jobs/job_system.h"
 #include "ps/jobs/task_graph.h"
@@ -180,6 +181,12 @@ public:
     // get_wheel_driven, adapters/godot/src/ps_simulation.cpp). Sim-thread-
     // only, same live-state contract as wheel_telemetry above.
     [[nodiscard]] bool wheel_is_driven(VehicleId id, std::size_t wheel_index) const;
+    // PHYS-033 P4 I2 commit 5b (plan section 2): the drivetrain hub's own
+    // angular velocity (network state) and the vehicle's cumulative/
+    // instantaneous mechanical energy ledger. Sim-thread-only live
+    // accessors, same contract as wheel_telemetry above.
+    [[nodiscard]] real wheel_omega(VehicleId id, std::size_t wheel_index) const;
+    [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy(VehicleId id) const;
     // PHYS-033 I1 W1 (section 3.5): sim-thread-only live accessors, same
     // contract as wheel_telemetry above - see VehicleInstance::
     // shadow_dv_error's own comment for what these mean and their one-tick
@@ -297,8 +304,23 @@ private:
     // per-tick allocation.
     struct WheelTelemetryChannels {
         std::size_t slip_ratio, slip_angle, fx, fy, fz, surface;
+        // PHYS-033 P4 I2 commit 5b (plan section 8): the hub's own angular
+        // velocity - the network's state now, previously WheelInstance's
+        // own omega_ (see wheel_instance.cpp's post_solve, which still
+        // fills WheelTelemetry::omega from the network's omega_new).
+        std::size_t omega;
     };
     std::vector<std::vector<WheelTelemetryChannels>> wheel_telemetry_channels_; // outer index == VehicleId.index
+
+    // PHYS-033 P4 I2 commit 5b (plan section 8): one row per vehicle,
+    // registered right after that vehicle's chassis channels in
+    // create_vehicle (same "CSV header complete before the first
+    // record_row" reasoning as WheelTelemetryChannels above).
+    struct EnergyTelemetryChannels {
+        std::size_t engine_out, wheel_out, tyre_loss, brake_loss, gear_loss, integrator_loss, stored, balance_error;
+        std::size_t friction_cap_hits, nonspd_hits, lcp_stage3_hits;
+    };
+    std::vector<EnergyTelemetryChannels> energy_telemetry_channels_; // outer index == VehicleId.index
 
     // PHYS-033 I1 W1 (section 3.5): one row per vehicle, registered right
     // after that vehicle's wheel channels in create_vehicle (same

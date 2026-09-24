@@ -198,22 +198,34 @@ void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, 
     }
 }
 
-WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
+HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) {
     const SuspensionDesc& susp = desc_.suspension;
     const Vec3 axis_local = susp.axis.normalized();
 
+    pre_dt_ = in.dt;
+    pre_omega_old_ = omega_old;
+
     const real xdot = in.dt > 0.0 ? (x_ - x_prev_) / in.dt : 0.0;
     const real fz = hit_ground_ ? total_suspension_force(susp, x_, xdot, in.partner_compression) : 0.0;
+    pre_fz_ = fz;
 
     const Vec3 wheel_center_local = desc_.attachment_local + axis_local * x_;
-    const Vec3 wheel_center_world = in.chassis_pose.transform_point(wheel_center_local);
+    pre_wheel_center_world_ = in.chassis_pose.transform_point(wheel_center_local);
 
     const real gamma = desc_.static_camber + susp.camber_vs_travel.evaluate(x_);
 
-    real fx = 0.0, fy = 0.0, mz = 0.0, mx = 0.0, froll = 0.0;
-    real vx_contact = 0.0, vy_contact = 0.0;
+    pre_fx_pred_ = 0.0;
+    pre_C_ = 0.0;
+    pre_dk_dw_ = 0.0;
+    pre_fy_ = 0.0;
+    pre_mz_ = 0.0;
+    pre_mx_ = 0.0;
+    pre_froll_ = 0.0;
+    pre_vx_contact_ = 0.0;
+    pre_vy_contact_ = 0.0;
+    pre_airborne_ = !(hit_ground_ && fz > 0.0);
 
-    if (hit_ground_ && fz > 0.0) {
+    if (!pre_airborne_) {
         // PHYS-033 I1b defect 2 fix: contact velocity resolved along the
         // GROUND-plane contact frame (measure_contact's own pass 1), not the
         // chassis-fixed forward/lateral axes the old code used - see
@@ -221,87 +233,123 @@ WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
         const ContactFrame& cf = contact_frame_;
         const Vec3 r = cf.point - in.chassis_pose.position;
         const Vec3 contact_velocity = in.chassis_motion.velocity_at(r);
-        vx_contact = dot(contact_velocity, cf.long_dir);
-        vy_contact = dot(contact_velocity, cf.lat_dir);
-
-        const real slip_velocity_x = omega_ * desc_.wheel_radius - vx_contact;
-        const real slip_velocity_y = -vy_contact; // out/handover_p3.md: sign chosen so the relaxed alpha matches the SAE/Pacejka convention (restoring Fy)
+        const real vx_contact = dot(contact_velocity, cf.long_dir);
+        const real vy_contact = dot(contact_velocity, cf.lat_dir);
+        pre_vx_contact_ = vx_contact;
+        pre_vy_contact_ = vy_contact;
         const real vx_mag = std::abs(vx_contact);
-        step_slip_relaxation(relax_, slip_velocity_x, slip_velocity_y, vx_mag,
-                              tyre_->desc().relaxation_length_x, tyre_->desc().relaxation_length_y, in.dt);
+
+        // alpha: explicit and final for this substep (plan section 5.6
+        // point 1 - the lateral channel does not couple into the hub's own
+        // implicit torque law, so there is no predictor/final split here).
+        const real slip_velocity_y = -vy_contact; // out/handover_p3.md: sign chosen so the relaxed alpha matches the SAE/Pacejka convention (restoring Fy)
+        const RelaxStep rs_alpha = relaxation_step_axis(relax_.alpha_eq, slip_velocity_y, vx_mag, tyre_->desc().relaxation_length_y, in.dt);
+        relax_.alpha_eq = std::clamp(rs_alpha.x_unclamped, real(-1.6), real(1.6));
+
+        // kappa PREDICTOR (point 2): linear in the hub's still-unknown new
+        // omega - relax_.kappa_eq itself is NOT updated here; post_solve
+        // finalises it once omega_new is known.
+        const real slip_velocity_x = omega_old * desc_.wheel_radius - vx_contact;
+        const RelaxStep rs = relaxation_step_axis(relax_.kappa_eq, slip_velocity_x, vx_mag, tyre_->desc().relaxation_length_x, in.dt);
+        pre_rs_ = rs;
+        const real kappa_pred = std::clamp(rs.x_unclamped, real(-3.0), real(3.0));
+        const bool clamped = std::abs(rs.x_unclamped) > real(3.0);
+        pre_dk_dw_ = desc_.wheel_radius * rs.dx_dslipvel;
 
         const real lambda_mu = in.surfaces ? in.surfaces->lambda_mu_for(contact_surface_) : real(1.0);
         const real crr_surface = in.surfaces ? in.surfaces->crr_for(contact_surface_) : real(0.0);
 
         TyreSlipInput slip_in;
-        slip_in.kappa = relax_.kappa_eq;
+        slip_in.kappa = kappa_pred;
         slip_in.alpha = relax_.alpha_eq;
         slip_in.fz = fz;
         slip_in.gamma = gamma;
         slip_in.vx = vx_contact;
         slip_in.lambda_mu = lambda_mu;
         slip_in.crr_surface = crr_surface;
-        const TyreForces f = tyre_->evaluate(slip_in);
-        fx = f.fx;
-        fy = f.fy + low_speed_lateral_damping_force(tyre_->desc(), vx_contact, vy_contact);
-        mz = f.mz;
-        mx = f.mx;
+        const TyreForcesWithSlope tw = tyre_->evaluate_with_slope(slip_in);
+        pre_fx_pred_ = tw.forces.fx;
+        pre_C_ = clamped ? real(0.0) : std::max(tw.dfx_dkappa, real(0.0));
+        pre_fy_ = tw.forces.fy + low_speed_lateral_damping_force(tyre_->desc(), vx_contact, vy_contact);
+        pre_mz_ = tw.forces.mz;
+        pre_mx_ = tw.forces.mx;
 
         // Rolling resistance: a drag FORCE at the contact patch (matches
         // data/surfaces/surfaces.json's own documented convention,
-        // "F_roll = crr * N"), not folded into the slip-based Fx above -
-        // it is a hysteresis loss, not a slip force, and vanishes at
-        // standstill (sign(0) = 0) rather than fighting the kappa_eq
-        // deflection spring that already holds a parked car (see
-        // out/handover_p3.md decision 2).
-        const real crr_total = tyre_->desc().qsy1 + crr_surface + tyre_->desc().qsy2 * std::abs(f.fx_pure) / tyre_->desc().fz0 +
+        // "F_roll = crr * N"), not folded into the slip-based Fx above, and
+        // OUTSIDE the network ledger (PHYS-033 P4 I2 plan section 5.6: "not
+        // in the hub torque") - a hysteresis loss, not a slip force, and
+        // vanishes at standstill (sign(0) = 0) rather than fighting the
+        // kappa_eq deflection spring that already holds a parked car.
+        const real crr_total = tyre_->desc().qsy1 + crr_surface + tyre_->desc().qsy2 * std::abs(tw.forces.fx_pure) / tyre_->desc().fz0 +
                                 tyre_->desc().qsy4 * ps::math::pow(vx_contact / tyre_->desc().v0, real(4.0));
-        froll = -sign(vx_contact) * fz * crr_total;
+        pre_froll_ = -sign(vx_contact) * fz * crr_total;
+    }
+    // Airborne or fz <= 0 (plan section 5.6 point 6): {0, 0}, and the
+    // relaxation step above is skipped entirely (kappa_eq/alpha_eq hold).
+
+    last_steer_angle_ = in.steer_angle;
+
+    return HubTerms{-desc_.wheel_radius * pre_fx_pred_, desc_.wheel_radius * pre_C_ * pre_dk_dw_};
+}
+
+WheelSubstepOutput WheelInstance::post_solve(real omega_new) {
+    real fx_lin = 0.0;
+    real fx_total = 0.0;
+
+    if (!pre_airborne_) {
+        // Finalise kappa at the network's actual omega_new (plan section 5.6
+        // post_solve point 1) - exactly the relaxation evaluated there,
+        // because relaxation_step_axis's result is linear in slip velocity.
+        const real kappa_final = pre_rs_.x_unclamped + pre_rs_.dx_dslipvel * desc_.wheel_radius * (omega_new - pre_omega_old_);
+        relax_.kappa_eq = std::clamp(kappa_final, real(-3.0), real(3.0));
+
+        // Linearised force (point 2): identical to what the hub's implicit
+        // torque law used, so the wheel's own torque balance and the
+        // chassis force agree exactly (action == reaction, PHYS-033 P4 I2
+        // plan section 3.4).
+        fx_lin = pre_fx_pred_ + pre_C_ * pre_dk_dw_ * (omega_new - pre_omega_old_);
+        fx_total = fx_lin + pre_froll_;
+    }
+
+    WheelSubstepOutput out =
+        assemble_contact_wrench(contact_frame_, hit_ground_, pre_fz_, fx_total, pre_fy_, pre_mz_, pre_mx_, pre_wheel_center_world_);
+
+    if (!pre_airborne_) {
+        // PHYS-033 P4 I2 plan section 8's hub/tyre boundary terms.
+        out.wheel_out_j = pre_dt_ * fx_lin * pre_vx_contact_;
+        out.tyre_loss_j = pre_dt_ * fx_lin * (omega_new * desc_.wheel_radius - pre_vx_contact_);
     }
 
     // PLAN.md M1, task 2 of the P3 fix-up phase: integrate the render-only
-    // spin angle using THIS substep's start-of-step omega_ (still the old
-    // value here, before the spin-integration block below overwrites it) -
-    // a plain explicit-Euler accumulation is enough for a value nothing
-    // else ever reads back (wheel_instance.h's own comment on why this is
+    // spin angle using the START-of-substep omega (plan section 5.6 post_
+    // solve point 4: "spin_angle_ += omega_old*h, render only, as now") - a
+    // plain explicit-Euler accumulation is enough for a value nothing else
+    // ever reads back (wheel_instance.h's own comment on why this is
     // excluded from fold_state_hash).
-    spin_angle_ += omega_ * in.dt;
-    last_steer_angle_ = in.steer_angle;
-
-    // --- wheel spin integration (substep) ---
-    const real tyre_spin_torque = -fx * desc_.wheel_radius; // reaction of Fx on the wheel's own rotation
-    const real omega_dot = (in.drive_torque_cmd + tyre_spin_torque) / std::max(desc_.wheel_inertia, real(1e-6));
-    real omega_after = omega_ + omega_dot * in.dt;
-    const real max_brake_delta = in.brake_torque_cmd * in.dt / std::max(desc_.wheel_inertia, real(1e-6));
-    if (std::abs(omega_after) <= max_brake_delta) {
-        omega_after = 0.0;
-    } else {
-        omega_after -= sign(omega_after) * max_brake_delta;
-    }
-    omega_ = omega_after;
-
-    x_prev_ = x_;
+    spin_angle_ += pre_omega_old_ * pre_dt_;
 
     last_telemetry_.slip_ratio = relax_.kappa_eq;
     last_telemetry_.slip_angle = relax_.alpha_eq;
-    last_telemetry_.fx = fx;
-    last_telemetry_.fy = fy;
-    last_telemetry_.fz = fz;
-    last_telemetry_.omega = omega_;
+    last_telemetry_.fx = fx_lin;
+    last_telemetry_.fy = pre_fy_;
+    last_telemetry_.fz = pre_fz_;
+    last_telemetry_.omega = omega_new;
     last_telemetry_.compression = x_;
     last_telemetry_.surface = contact_surface_;
 
-    // Bilateral in n_load (fz, even when <= 0 - see assemble_contact_wrench's
-    // own comment): matches the old axis_world*fz-whenever-hit_ground_
-    // behaviour exactly (:tyre terms fx/fy/mz/mx/froll are already zero
-    // unless fz > 0, from the `if` above, as before).
-    return assemble_contact_wrench(contact_frame_, hit_ground_, fz, fx + froll, fy, mz, mx, wheel_center_world);
+    x_prev_ = x_;
+
+    return out;
 }
 
 std::uint64_t WheelInstance::fold_state_hash(std::uint64_t seed) const {
+    // omega_ is gone (PHYS-033 P4 I2 commit 5b) - the hub's spin is now
+    // ps::drivetrain::ShaftNetwork state, folded in by
+    // Powertrain::fold_state_hash (VehicleInstance::fold_state_hash calls
+    // both this and that).
     std::uint64_t h = seed;
     h = fnv1a(h, x_);
-    h = fnv1a(h, omega_);
     h = fnv1a(h, relax_.kappa_eq);
     h = fnv1a(h, relax_.alpha_eq);
     return h;

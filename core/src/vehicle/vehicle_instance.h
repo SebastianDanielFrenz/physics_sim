@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "../drivetrain/powertrain.h"
 #include "wheel_instance.h"
 
 #include "ps/io/surface_table.h"
@@ -68,9 +69,19 @@ public:
     // actually drives (WheelDesc::driven is gone - see vehicle_desc.h's
     // VehicleDesc comment). Backs World::wheel_is_driven, the adapter's
     // replacement for the old WheelDesc::driven read (ps_simulation.cpp's
-    // get_wheel_driven). Survives the 5b runtime switch unchanged (only
-    // the shim producing it is temporary).
-    [[nodiscard]] bool wheel_is_driven(std::size_t i) const { return p3_shim_.driven[i]; }
+    // get_wheel_driven). Commit 5b: now answered by the real
+    // drivetrain::Powertrain (a hub is driven iff its shaft port was
+    // connected at all - powertrain.h's own comment) instead of the P3 shim.
+    [[nodiscard]] bool wheel_is_driven(std::size_t i) const { return powertrain_.wheel_is_driven(i); }
+    // PHYS-033 P4 I2 commit 5b (plan section 2): the drivetrain hub's own
+    // angular velocity (network state - WheelInstance no longer has one)
+    // and the cumulative/instantaneous mechanical energy ledger. Sim-
+    // thread-only live accessors, same contract as wheel_telemetry above.
+    [[nodiscard]] real wheel_omega(std::size_t i) const { return powertrain_.hub_omega(i); }
+    [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy() const { return powertrain_.ledger(); }
+    [[nodiscard]] int powertrain_friction_cap_hits() const { return powertrain_.friction_cap_hits(); }
+    [[nodiscard]] int powertrain_nonspd_hits() const { return powertrain_.nonspd_hits(); }
+    [[nodiscard]] int powertrain_lcp_stage3_hits() const { return powertrain_.lcp_stage3_hits(); }
 
     [[nodiscard]] BodyId chassis() const { return chassis_; }
     // PHYS-033 I1 W1: called ONLY from vehicle::System::note_body_wrench,
@@ -97,36 +108,20 @@ public:
 private:
     [[nodiscard]] real ackermann_wheel_angle(std::size_t wheel_index, real delta_avg) const;
 
-    // PHYS-033 P4 I2 commit 5a: TEMPORARY P3 shim (deleted in commit 5b,
-    // plan section 13's row 5b). Derives exactly the P3-shaped numbers
-    // step_tick still consumes (a single notional-engine torque curve/
-    // idle/limiter/final-drive-ratio/efficiency, a driven flag and a
-    // brake/handbrake max torque per wheel) from the /2
-    // VehicleDesc::powertrain graph and ::brake_system, so the /2 data
-    // rewrite can be proven bit-identical (plan row 5a's own check)
-    // before commit 5b replaces step_tick's math with the real
-    // ps::drivetrain::Powertrain solve.
-    struct P3Shim {
-        vehicle::Curve1D torque_curve;
-        real final_drive_ratio = 0.0; // gear_pair.ratio * differential.ratio
-        real rev_limit_rpm = 0.0;     // engine.limiter.rpm
-        real idle_rpm = 0.0;          // engine.idle_rpm
-        real efficiency = 0.0;        // gear_pair.efficiency (differential efficiency is always 1 in I2)
-        std::vector<bool> driven;        // per wheel, WheelDesc order: under the open diff's left/right ports
-        std::vector<real> brake_max;     // per wheel: brake_system corner max_torque_nm (0 if none)
-        std::vector<real> handbrake_max; // per wheel: brake_system.handbrake.max_torque_nm if listed there, else 0
-    };
-    [[nodiscard]] static P3Shim build_p3_shim(const VehicleDesc& desc);
-
     BodyId chassis_;
     const io::SurfaceTable* surfaces_;
     ControlChannelIndices control_indices_;
     VehicleDesc desc_;
     // Declared AFTER desc_ (built FROM desc_ in the member-init list, and
     // member-init order follows DECLARATION order regardless of the list's
-    // own order - reordering desc_/p3_shim_ here would silently read a
-    // not-yet-constructed desc_).
-    P3Shim p3_shim_;
+    // own order - reordering desc_/powertrain_ here would silently read a
+    // not-yet-constructed desc_). PHYS-033 P4 I2 commit 5b: replaces the
+    // TEMPORARY P3 shim (commit 5a) - the real shaft-network drivetrain,
+    // built once here from desc_.powertrain/desc_.brake_system/desc_.wheels
+    // (ps::drivetrain::Powertrain's constructor throws std::runtime_error
+    // on any graph error, exactly like ps::io::load_vehicle_json throws on
+    // a data error).
+    drivetrain::Powertrain powertrain_;
     std::vector<std::unique_ptr<WheelInstance>> wheels_;
 
     // Ackermann geometry, cached at construction from wheel attachment
@@ -135,13 +130,6 @@ private:
     real rear_axle_x_ = 0.0;
 
     real prev_steer_avg_ = 0.0; // for SteeringDesc::steer_rate_limit
-
-    // PLAN.md P4 I0 (PHYS-033): preallocated at construction (outside any
-    // job), sized to wheels_.size() and never resized again - step_tick ran
-    // inside System::step_all's parallel_for job and used to heap-allocate
-    // a fresh std::vector<real> here every single tick (D8 violation, found
-    // by tests/unit/test_vehicle_parallel_alloc.cpp).
-    std::vector<real> brake_torque_scratch_;
 
     // PHYS-033 I1 W1 (section 3.2/3.3). ext_wrench_accum_ is written ONLY by
     // add_external_wrench above (World::stage_gather, sequential) and

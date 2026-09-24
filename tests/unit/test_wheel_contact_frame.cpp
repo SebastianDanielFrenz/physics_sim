@@ -66,14 +66,26 @@ std::unique_ptr<WheelInstance> make_wheel(const WheelDesc& desc) {
 
 // Zero motion, zero relaxation state, dt = 1/960 - exactly the plan's "then
 // Fx=Fy=Mz=Mx=Froll=0 EXACTLY" setup.
-WheelSubstepInput zero_motion_input(const Pose& pose, real steer = 0.0) {
-    WheelSubstepInput in;
+WheelPreSolveInput zero_motion_input(const Pose& pose, real steer = 0.0) {
+    WheelPreSolveInput in;
     in.chassis_pose = pose;
     in.chassis_motion = Motion{};
     in.chassis_com_world = pose.position;
     in.steer_angle = steer;
     in.dt = real(1.0) / real(960.0);
     return in;
+}
+
+// PHYS-033 P4 I2 commit 5b: WheelInstance::step() split into pre_solve/
+// post_solve around the drivetrain network's own solve (which does not
+// exist in this file's purely-kinematic, no-World::step() setup) - omega
+// stays at 0 (a fresh wheel's initial hub speed) across both calls, exactly
+// reproducing the old step()'s behaviour when drive_torque_cmd/
+// brake_torque_cmd were both 0 (their unconditional default before this
+// commit removed them).
+WheelSubstepOutput pre_and_post_solve_at_rest(WheelInstance& wheel, const WheelPreSolveInput& in) {
+    (void)wheel.pre_solve(in, real(0.0));
+    return wheel.post_solve(real(0.0));
 }
 
 } // namespace
@@ -139,9 +151,9 @@ TEST_CASE("Wheel contact frame: pitched chassis at rest produces no spurious hor
         wheel->measure_contact(pose, 0.0, world.backend());
         REQUIRE(wheel->hit_ground());
 
-        WheelSubstepInput in = zero_motion_input(pose);
+        WheelPreSolveInput in = zero_motion_input(pose);
         in.chassis_com_world = pose.position;
-        const WheelSubstepOutput out = wheel->step(in);
+        const WheelSubstepOutput out = pre_and_post_solve_at_rest(*wheel, in);
 
         const real fz = out.contact_force_world.length() > 0.0 ? dot(out.contact_force_world, wheel->contact_frame().normal) : 0.0;
         INFO("x_sign=" << x_sign << " R=" << out.contact_force_world.x << "," << out.contact_force_world.y << ","
@@ -218,8 +230,8 @@ TEST_CASE("Wheel contact frame: the contact point is the ground patch, not the w
         // patch lies on the ground plane (through the world origin here).
         CHECK(std::abs(dot(cf.point, expected_n)) < 1e-5);
 
-        WheelSubstepInput in = zero_motion_input(pose);
-        const WheelSubstepOutput out = wheel->step(in);
+        WheelPreSolveInput in = zero_motion_input(pose);
+        const WheelSubstepOutput out = pre_and_post_solve_at_rest(*wheel, in);
         CHECK(out.contact_point_world == cf.point);
         const real fz = out.contact_force_world.length();
         if (fz > 1e-6) {

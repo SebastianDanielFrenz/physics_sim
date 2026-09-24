@@ -2,12 +2,22 @@
 // (VehicleInstance::step_tick, run inside System::step_all's parallel_for -
 // same debug_alloc "in job" context as World::step's other stages) used to
 // heap-allocate a fresh std::vector<real> brake_torque every single tick
-// (core/src/vehicle/vehicle_instance.cpp:142, now brake_torque_scratch_,
-// preallocated once at construction). test_articulation_parallel_alloc.cpp
-// established this pattern (debug_alloc armed, warm-up then an exact-zero
-// assertion) but never covered a World with a vehicle in it - this is the
-// first time it does (PHYS-033 section 1's own note: "The zero-alloc test
-// does not cover vehicles").
+// (core/src/vehicle/vehicle_instance.cpp:142, since I2 commit 5b replaced by
+// the drivetrain::Powertrain's own fixed-capacity Assembly/ShaftNetwork
+// scratch, all sized once at construction - core/src/drivetrain/network.h's
+// Cluster). test_articulation_parallel_alloc.cpp established this pattern
+// (debug_alloc armed, warm-up then an exact-zero assertion) but never
+// covered a World with a vehicle in it - this is the first time it does
+// (PHYS-033 section 1's own note: "The zero-alloc test does not cover
+// vehicles").
+//
+// PHYS-033 P4 I2 plan section 11.4 (commit 5b): extended with a braking-only
+// phase (brake 0.5, handbrake 1, throttle 0) and a full-throttle-only phase
+// (throttle 1, brake/handbrake 0), both still under the armed allocator, so
+// the box-LCP friction-row path (DirectTorqueBrakes, active only when a
+// braking demand exists) and the engine/open-differential coupled solve
+// (most active at full throttle) are BOTH exercised here, not just the
+// original steady mixed-control phase.
 //
 // Confirmed to fail before the vehicle_instance.cpp:142 fix and pass after
 // (see this increment's report) - not asserted here (a "does the OLD code
@@ -136,13 +146,32 @@ TEST_CASE("A full World::step with a vehicle allocates nothing inside the vehicl
         world.set_control("handbrake", 0.0);
 
         // Warm-up: lets the car actually settle onto the ground and every
-        // scratch/ring-buffer/queue (incl. brake_torque_scratch_ above)
-        // reach its stable capacity.
+        // scratch/ring-buffer/queue (incl. the drivetrain network's own
+        // Assembly/Cluster scratch above) reach its stable capacity.
         for (int i = 0; i < 500; ++i) world.step();
 
         ps::jobs::debug_alloc::reset();
         ps::jobs::debug_alloc::set_armed(true);
+
+        // Phase 1: the original mixed steer/throttle/brake/handbrake steady
+        // state.
         for (int i = 0; i < 100; ++i) world.step();
+
+        // Phase 2 (plan section 11.4): braking only - exercises the
+        // box-LCP/friction-row path (DirectTorqueBrakes) at full demand.
+        world.set_control("throttle", 0.0);
+        world.set_control("brake", 0.5);
+        world.set_control("handbrake", 1.0);
+        for (int i = 0; i < 100; ++i) world.step();
+
+        // Phase 3 (plan section 11.4): full throttle only - exercises the
+        // engine's torque-map/limiter path and the open differential's
+        // coupled solve with no friction rows active.
+        world.set_control("throttle", 1.0);
+        world.set_control("brake", 0.0);
+        world.set_control("handbrake", 0.0);
+        for (int i = 0; i < 100; ++i) world.step();
+
         ps::jobs::debug_alloc::set_armed(false);
         const std::uint64_t own = ps::jobs::debug_alloc::own_violation_count();
         const std::uint64_t external = ps::jobs::debug_alloc::external_violation_count();

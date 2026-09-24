@@ -49,6 +49,8 @@ add_library(ps_core STATIC
 
   src/drivetrain/box_lcp.cpp
   src/drivetrain/network.cpp
+  src/drivetrain/components.cpp
+  src/drivetrain/powertrain.cpp
 
   src/terrain/procedural_terrain_source.cpp
   src/terrain/procedural_terrain.cpp

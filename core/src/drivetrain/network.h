@@ -159,6 +159,12 @@ struct FrictionRowDesc {
 class ShaftNetwork {
 public:
     [[nodiscard]] real omega(NodeId n) const { return omega_[n.index]; }
+    // Build-time-constant node inertia J_i (PHYS-033 P4 I2 commit 5b): read
+    // by Powertrain/components.cpp for the energy ledger's integrator_loss/
+    // rotor_ke terms (plan section 8) and by GearPair's mesh-loss
+    // reconstruction (section 5.4), neither of which has any other way to
+    // see a node's own J.
+    [[nodiscard]] real node_inertia(NodeId n) const { return node_inertia_[n.index]; }
     // Initial-condition / test seeding only (never called mid-substep from
     // inside the job on the hot path - Powertrain seeds hub omega once at
     // construction from the wheel's existing spin state, commit 5b).
@@ -170,6 +176,13 @@ public:
     [[nodiscard]] real row_lambda(FrictionRowId r) const { return row_lambda_[r.index]; }
     [[nodiscard]] real row_velocity(FrictionRowId r) const { return row_velocity_[r.index]; }
     [[nodiscard]] bool row_stuck(FrictionRowId r) const { return row_stuck_[r.index]; }
+    // A friction row's own (a, b) endpoints (b == kGround for a wheel brake
+    // row) - commit 5b's GearPair::post_solve needs this to find the
+    // "Sigma(rows at a) coef*lambda_row" term in its mesh-torque
+    // reconstruction (plan section 5.4); every other I2 caller only ever
+    // needs row_lambda/row_velocity/row_stuck above.
+    [[nodiscard]] NodeId friction_row_a(FrictionRowId r) const { return friction_row_desc_[r.index].a; }
+    [[nodiscard]] NodeId friction_row_b(FrictionRowId r) const { return friction_row_desc_[r.index].b; }
     [[nodiscard]] int nonspd_hits() const {
         int total = 0;
         for (const Cluster& c : clusters_) total += c.nonspd_hits;
