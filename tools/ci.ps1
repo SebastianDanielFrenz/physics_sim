@@ -70,7 +70,7 @@
 .PARAMETER Topic
     Per-change run with hand-picked topics, e.g. -Topic terrain,vehicle.
     Known topics: math jobs world backend articulation contact terrain
-    vehicle io determinism bench.
+    vehicle drivetrain io determinism bench.
 
 .PARAMETER Linux
     With -Affected/-Topic: also run the linux-release leg (topic tests).
@@ -608,7 +608,7 @@ function Invoke-WslLane {
 # ===========================================================================
 # -Affected / -Topic: per-change runs
 # ===========================================================================
-$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'io', 'determinism', 'bench')
+$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'determinism', 'bench')
 
 # Path -> topics. First matching rule wins; paths are repo-relative with '/'.
 # Kind: 'topics' (run Topics), 'everything' (foundational: default fast run),
@@ -634,6 +634,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/articulation/'; Kind = 'topics'; Topics = @('articulation', 'contact') },
     @{ Re = '^core/(include/ps|src)/terrain/'; Kind = 'topics'; Topics = @('terrain') },
     @{ Re = '^core/(include/ps|src)/vehicle/'; Kind = 'topics'; Topics = @('vehicle') },
+    @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain') },
     @{ Re = '^core/(include/ps|src)/io/'; Kind = 'topics'; Topics = @('io'); AllScenarios = $true },
     @{ Re = '^data/(vehicles|tyres)/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^data/surfaces/'; Kind = 'topics'; Topics = @('vehicle', 'terrain', 'io') },
