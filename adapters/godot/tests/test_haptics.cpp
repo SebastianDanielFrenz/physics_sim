@@ -313,6 +313,42 @@ int main() {
         check(identical, "determinism: two fresh cores fed the same input sequence produce bit-identical output");
     }
 
+    // --- Standstill: large relaxed slip on a car at rest (e.g. stalled in
+    //     gear) is carcass deflection, not sliding - no rumble. A burnout at
+    //     rest (wheel surface moving) still rumbles. Owner bug 2026-09-24. --
+    {
+        auto build_rest = [](float ground, float wheel_surface) {
+            return [ground, wheel_surface](int) {
+                HapticsInput in = make_input(kDt);
+                for (int w = 0; w < 4; ++w) {
+                    in.wheels[w].normal_load_n = 3700.0f;
+                    in.wheels[w].in_contact = true;
+                    in.wheels[w].slip_ratio = 0.6f;
+                    in.wheels[w].slip_angle_rad = 0.3f;
+                    in.wheels[w].ground_speed_mps = ground;
+                    in.wheels[w].wheel_surface_speed_mps = wheel_surface;
+                }
+                in.wheel_count = 4;
+                return in;
+            };
+        };
+        const int frames = static_cast<int>(2.0f / kDt);
+        HapticsCore core_rest;
+        auto rest = run_frames(core_rest, frames, build_rest(0.0f, 0.0f));
+        check(rest.back().strong == 0.0f && rest.back().weak == 0.0f,
+              "standstill with large relaxed slip and nothing moving: no rumble at all");
+
+        HapticsCore core_burnout;
+        auto burnout = run_frames(core_burnout, frames, build_rest(0.0f, 10.0f));
+        check(burnout.back().strong > 0.15f,
+              "burnout at rest (wheel surface 10 m/s, ground 0): strong motor still rumbles from the slip ratio");
+
+        HapticsCore core_moving;
+        auto moving = run_frames(core_moving, frames, build_rest(5.0f, 5.0f));
+        check(moving.back().strong >= burnout.back().strong,
+              "same slip while moving at 5 m/s: slip angle adds back in, at least as strong as the burnout");
+    }
+
     if (g_failures == 0) {
         std::printf("test_haptics: all checks passed\n");
         return 0;

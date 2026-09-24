@@ -107,6 +107,9 @@ struct VehicleDynamicSnapshot {
     // usually slower than 240 Hz, so the same value is read more than
     // once per new tick).
     ps::Vec3 accel_local = ps::Vec3::zero();
+    // |chassis linear velocity|, m/s (haptics: slip only vibrates while
+    // something moves over the ground).
+    ps::real ground_speed_mps = 0.0;
 };
 
 struct AdapterSnapshot {
@@ -319,6 +322,7 @@ public:
 
     // Dynamic per-wheel telemetry (race-free via AdapterSnapshot).
     [[nodiscard]] float get_wheel_compression(const godot::String& vehicle_name, int wheel_index) const;
+    [[nodiscard]] float get_vehicle_ground_speed_mps(const godot::String& vehicle_name) const;
     [[nodiscard]] float get_wheel_omega(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_steer_angle(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_slip_ratio(const godot::String& vehicle_name, int wheel_index) const;

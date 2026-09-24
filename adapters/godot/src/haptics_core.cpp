@@ -19,6 +19,13 @@ float threshold_saturate(float x, float t0, float t1) {
     return (x - t0) / (t1 - t0);
 }
 
+// Speed fade for the slip sources: 1 when the speed is unknown (< 0),
+// otherwise a linear ramp from lo to hi (see HapticsWheelInput).
+float speed_fade(float speed_mps, float lo, float hi) {
+    if (speed_mps < 0.0f) return 1.0f;
+    return threshold_saturate(speed_mps, lo, hi);
+}
+
 // Exponential approach toward `target` over time constant `tau` (s).
 float exp_decay_toward(float current, float target, float dt, float tau) {
     if (tau <= 0.0f || dt <= 0.0f) return target;
@@ -132,22 +139,29 @@ HapticsOutput HapticsCore::update(const HapticsInput& in) {
 
         const float load_weight = w.in_contact ? (std::max(0.0f, w.normal_load_n) / load_denom) : 0.0f;
 
+        // Slip means sliding only while something moves over the ground
+        // (HapticsWheelInput::ground_speed_mps).
+        const float ratio_fade = speed_fade(std::max(w.ground_speed_mps, w.wheel_surface_speed_mps),
+                                            tuning_.slip_speed_fade_lo_mps, tuning_.slip_speed_fade_hi_mps);
+        const float angle_fade = speed_fade(w.ground_speed_mps, tuning_.slip_speed_fade_lo_mps, tuning_.slip_speed_fade_hi_mps);
+
         // Source 4: light slip buzz, well below the real grip-limit peak.
-        const float ratio_light = threshold_saturate(std::fabs(w.slip_ratio), tuning_.slip_ratio_threshold, tuning_.slip_ratio_saturate);
-        const float angle_light = threshold_saturate(std::fabs(w.slip_angle_rad), tuning_.slip_angle_threshold_rad, tuning_.slip_angle_saturate_rad);
+        const float ratio_light = ratio_fade * threshold_saturate(std::fabs(w.slip_ratio), tuning_.slip_ratio_threshold, tuning_.slip_ratio_saturate);
+        const float angle_light = angle_fade * threshold_saturate(std::fabs(w.slip_angle_rad), tuning_.slip_angle_threshold_rad, tuning_.slip_angle_saturate_rad);
         const float wheel_light_slip = w.in_contact ? std::max(ratio_light, angle_light) : 0.0f;
         light_slip_intensity += wheel_light_slip * load_weight;
 
         // Source 2: sustained grip-limit - utilisation = |slip| / peak,
         // whichever slip mode is further past its own peak dominates
         // (combined-slip-style "whichever runs out first").
-        float utilization = 0.0f;
+        float wheel_grip_limit = 0.0f;
         if (w.in_contact) {
             const float ratio_u = tuning_.peak_slip_ratio > 0.0f ? std::fabs(w.slip_ratio) / tuning_.peak_slip_ratio : 0.0f;
             const float angle_u = tuning_.peak_slip_angle_rad > 0.0f ? std::fabs(w.slip_angle_rad) / tuning_.peak_slip_angle_rad : 0.0f;
-            utilization = std::max(ratio_u, angle_u);
+            wheel_grip_limit = std::max(
+                ratio_fade * threshold_saturate(ratio_u, 1.0f, tuning_.grip_limit_saturate_utilization),
+                angle_fade * threshold_saturate(angle_u, 1.0f, tuning_.grip_limit_saturate_utilization));
         }
-        const float wheel_grip_limit = threshold_saturate(utilization, 1.0f, tuning_.grip_limit_saturate_utilization);
         grip_limit_intensity += wheel_grip_limit * load_weight;
 
         // Source 5: landing edge (any wheel, no-contact -> contact).

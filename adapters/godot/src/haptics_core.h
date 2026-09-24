@@ -94,6 +94,16 @@ struct HapticsWheelInput {
     float slip_ratio = 0.0f;       // dimensionless, signed
     float slip_angle_rad = 0.0f;   // radians, signed
     bool in_contact = false;
+    // Speeds that make the slip values physically meaningful (owner bug,
+    // 2026-09-24: a stalled car at rest kept rumbling). At (near) standstill
+    // the tyre's relaxed slip ratio/angle are carcass DEFLECTION states, not
+    // sliding - nothing is scrubbing, so nothing should vibrate. The
+    // slip-ratio sources fade in with max(ground, wheel surface) speed (a
+    // burnout at rest still rumbles: the wheel surface is moving); the
+    // slip-angle sources fade in with ground speed only. Negative = unknown,
+    // no fade (keeps callers that don't supply speeds working unchanged).
+    float ground_speed_mps = -1.0f;        // |chassis velocity|, m/s
+    float wheel_surface_speed_mps = -1.0f; // |omega * R|, m/s
 };
 
 // Engine/gearbox flags (PowertrainSnapshot subset, ps/drivetrain/
@@ -180,6 +190,10 @@ struct HapticsTuning {
     // strength - 1.0 is exactly at the peak (start of rumble), so this is
     // "how far past the peak until it's maxed out".
     float grip_limit_saturate_utilization = 2.5f;
+    // Slip sources (2 and 4) fade in between these speeds - see
+    // HapticsWheelInput::ground_speed_mps for why.
+    float slip_speed_fade_lo_mps = 0.5f;
+    float slip_speed_fade_hi_mps = 2.0f;
 
     // --- Source 3: road texture / load noise (WEAK, some STRONG bleed) ---
     float load_highpass_fc_hz = 3.0f;   // rejects slow load-transfer trends, keeps fast texture

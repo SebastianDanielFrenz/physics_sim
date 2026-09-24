@@ -239,3 +239,17 @@ func _draw() -> void:
 	var speed_pos := Vector2(center.x - radius * 1.55, center.y)
 	_draw_centered_text(font, speed_pos + Vector2(0, -font_size_speed * 0.35), "%d" % int(round(speed_kmh)), font_size_speed, COLOR_SPEED_TEXT)
 	_draw_centered_text(font, speed_pos + Vector2(0, font_size_speed * 0.55), "km/h", font_size_speed_unit, COLOR_TICK_MINOR)
+
+	# --- engine warning banner above the gauge (owner: "the engine has
+	# stalled without telling me" - a dimmed gear digit alone was not enough) ---
+	var warning: String = ""
+	if engine_state == "stalled":
+		warning = "ENGINE STALLED - hold Start / K to restart"
+	elif engine_state == "off":
+		warning = "IGNITION OFF - press D-pad Up / I"
+	elif grind_active:
+		warning = "GRIND!"
+	var slow_blink_on: bool = fmod(Time.get_ticks_msec() / 1000.0, 1.0) < 0.7
+	if warning != "" and (engine_state == "off" or (slow_blink_on if engine_state == "stalled" else blink_on)):
+		var banner_pos := Vector2(center.x - radius * 0.5, center.y - radius * 1.35)
+		_draw_centered_text(font, banner_pos, warning, int(round(24.0 * scale)), COLOR_NEEDLE_REDLINE)

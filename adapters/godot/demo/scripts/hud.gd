@@ -124,9 +124,9 @@ func _process(_delta: float) -> void:
 
 	lines.append("")
 	lines.append("controls: gamepad (steer/throttle/brake/handbrake) + WASD/space keyboard fallback")
-	lines.append("E/Q or RB/LB shift up/down   C or X clutch (hold)")
+	lines.append("E/Q or B/X(joy) shift up/down   C or LB(joy) clutch (hold)")
 	lines.append("I or D-pad Up ignition   K or Start(joy) starter (hold)")
 	lines.append("F5/D-pad Left auto-shift   F6/D-pad Down auto-clutch   F7/D-pad Right auto-blip")
-	lines.append("V camera(free/chase)  G debug draw  R reset vehicle  Back(joy)=reset  H rumble on/off")
+	lines.append("V or Y(joy) camera(free/chase)  G or R3(joy) debug draw  R or Back(joy) reset  H rumble on/off")
 	lines.append("1 straight  2 skidpad  3 ramps (teleport)")
 	_label.text = "\n".join(lines)

@@ -67,18 +67,20 @@ RawInput PsInputMap::gather_raw_input() const {
     // detection against a `prev` bitset, identically for every source. The
     // digital clutch button is a level too (clutch_button_held), smoothed on
     // release inside InputMapper rather than snapped to 0/1 here.
-    const bool joy_clutch = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_X);
+    // Owner remap (2026-09-24): B = upshift, X = downshift, LB = clutch
+    // (hold), right stick click = debug draw (below). RB is unbound.
+    const bool joy_clutch = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_LEFT_SHOULDER);
     raw.clutch_button_held = joy_clutch || input->is_action_pressed("ps_clutch_button");
 
-    raw.shift_up_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_RIGHT_SHOULDER)
+    raw.shift_up_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_B)
         || input->is_action_pressed("ps_shift_up");
-    raw.shift_down_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_LEFT_SHOULDER)
+    raw.shift_down_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_X)
         || input->is_action_pressed("ps_shift_down");
     raw.camera_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_Y)
         || input->is_action_pressed("ps_camera");
     raw.reset_vehicle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_BACK)
         || input->is_action_pressed("ps_reset_vehicle");
-    raw.debug_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_B)
+    raw.debug_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_RIGHT_STICK)
         || input->is_action_pressed("ps_debug_toggle");
 
     // New bindings (PLAN.md P4 I3 section 12.2): Menu/Start = starter
@@ -164,6 +166,7 @@ void PsInputMap::update_haptics(float dt) {
 
     const int wheel_count = std::min(static_cast<int>(simulation_->get_vehicle_wheel_count(vehicle_name_)), kMaxHapticsWheels);
     in.wheel_count = wheel_count;
+    const float ground_speed = simulation_->get_vehicle_ground_speed_mps(vehicle_name_);
     for (int w = 0; w < wheel_count; ++w) {
         HapticsWheelInput& hw = in.wheels[static_cast<std::size_t>(w)];
         hw.normal_load_n = simulation_->get_wheel_load_n(vehicle_name_, w);
@@ -175,6 +178,9 @@ void PsInputMap::update_haptics(float dt) {
         // wheel_state.h: load == WheelTelemetry::fz). A small epsilon
         // avoids treating float noise around exactly 0 as "in contact".
         hw.in_contact = hw.normal_load_n > 1.0f;
+        hw.ground_speed_mps = ground_speed;
+        hw.wheel_surface_speed_mps = std::fabs(simulation_->get_wheel_omega(vehicle_name_, w)
+                                               * simulation_->get_wheel_radius(vehicle_name_, w));
     }
 
     const Dictionary pt = simulation_->get_vehicle_powertrain(vehicle_name_);

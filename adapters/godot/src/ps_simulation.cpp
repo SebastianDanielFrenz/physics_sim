@@ -298,6 +298,7 @@ void PsSimulation::rebuild_post_step_and_start() {
                     // to snap.vehicles between the two), not the now-moved-
                     // from local `vs`.
                     snap.vehicles.back().accel_local = accel_local;
+                    snap.vehicles.back().ground_speed_mps = chassis_motion.linear.length();
 
                     const auto radius_it = vehicle_stream_radius_m_.find(name);
                     const ps::real radius = radius_it != vehicle_stream_radius_m_.end() ? static_cast<ps::real>(radius_it->second) : 500.0;
@@ -738,6 +739,14 @@ float PsSimulation::get_wheel_compression(const String& vehicle_name, int wheel_
     return w == nullptr ? 0.0f : static_cast<float>(w->compression);
 }
 
+float PsSimulation::get_vehicle_ground_speed_mps(const String& vehicle_name) const {
+    const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
+    if (order_index == static_cast<std::size_t>(-1)) return 0.0f;
+    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    if (order_index >= snap.vehicles.size()) return 0.0f;
+    return static_cast<float>(snap.vehicles[order_index].ground_speed_mps);
+}
+
 float PsSimulation::get_wheel_omega(const String& vehicle_name, int wheel_index) const {
     const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
     return w == nullptr ? 0.0f : static_cast<float>(w->omega);
@@ -828,6 +837,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_gauge_info", "vehicle_name"), &PsSimulation::get_vehicle_gauge_info);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
+    ClassDB::bind_method(D_METHOD("get_vehicle_ground_speed_mps", "vehicle_name"), &PsSimulation::get_vehicle_ground_speed_mps);
     ClassDB::bind_method(D_METHOD("get_wheel_omega", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_omega);
     ClassDB::bind_method(D_METHOD("get_wheel_steer_angle", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_steer_angle);
     ClassDB::bind_method(D_METHOD("get_wheel_slip_ratio", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_slip_ratio);
