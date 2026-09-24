@@ -601,6 +601,24 @@ the sliding velocity at the patch; recorded or synthesised layers per surface
 blended by those parameters, not fixed loops. The core only publishes state;
 all audio stays in the adapter.
 
+Engine mounts, interior sound and propagation (Sebastian, 2026-09-24):
+- Engine mounts: the engine block sits on mounts with stiffness and damping,
+  so the crank reaction torque and firing pulses reach the chassis through
+  them. Low frequencies pass through and audibly and visibly rock the car;
+  higher ones are isolated. Physics side: model the block as its own degree of
+  freedom (roll about the crank axis, later more) on mount spring-dampers
+  between drivetrain and chassis, replacing the direct rotor-reaction torque
+  of Q11 where a vehicle defines mounts; publish the mount forces. This also
+  gives real engine rock in vehicle dynamics.
+- Interior vs exterior: the adapter renders two listener paths. Exterior:
+  exhaust, intake, tyres and wind as sources with distance, direction and
+  Doppler. Interior: structure-borne sound from the published mount forces
+  (and suspension forces) through a cabin transfer model, plus airborne sound
+  through firewall and glazing as filtered transmission.
+- Propagation: later, geometric or ray-traced audio (reflections, occlusion,
+  tunnels, walls) in the adapter; evaluate an existing open-source spatial
+  audio library before writing one.
+
 Data format documentation and an engine editor (Sebastian, 2026-09-24): a
 human-readable description of every data file format, kept in the repo next
 to the data, and a GUI for creating engines — for now an out-of-game web page
