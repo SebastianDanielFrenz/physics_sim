@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engine Editor — physics_sim</title>
+<style>
+  :root {
+    --bg: #f3f4f6;
+    --panel: #ffffff;
+    --panel-2: #f9fafb;
+    --text: #1b1f24;
+    --muted: #5b6573;
+    --border: #d7dbe0;
+    --accent: #2563eb;
+    --accent-contrast: #ffffff;
+    --error: #c62828;
+    --error-bg: #fdecec;
+    --grid: #e2e5ea;
+    --wot: #2563eb;
+    --motoring: #c2610a;
+    --power: #16a34a;
+    --idle: #16a34a;
+    --limiter: #c62828;
+    --input-bg: #ffffff;
+    --shadow: 0 1px 2px rgba(20, 22, 26, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c;
+      --panel: #1b1f26;
+      --panel-2: #20242c;
+      --text: #e7e9ec;
+      --muted: #93a0b0;
+      --border: #2d333d;
+      --accent: #6ea1f7;
+      --accent-contrast: #0b0e13;
+      --error: #ff6b6b;
+      --error-bg: #3a1d1d;
+      --grid: #2a2f38;
+      --wot: #6ea1f7;
+      --motoring: #f0a94d;
+      --power: #4ade80;
+      --idle: #4ade80;
+      --limiter: #ff6b6b;
+      --input-bg: #171a20;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+  }
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 12px 0 0;
+    white-space: nowrap;
+  }
+  header .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+  button {
+    font: inherit;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary {
+    background: var(--accent);
+    color: var(--accent-contrast);
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  #filename { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #errorCount { font-size: 12px; color: var(--error); font-weight: 600; }
+  #banner {
+    display: none;
+    padding: 8px 16px;
+    background: var(--error-bg);
+    color: var(--error);
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--border);
+  }
+  #banner button { float: right; margin-left: 8px; }
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(340px, 400px) 1fr;
+    gap: 18px;
+    padding: 18px;
+    max-width: 1600px;
+    margin: 0 auto;
+    align-items: start;
+  }
+  @media (max-width: 980px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 10px 0;
+    font-weight: 700;
+  }
+  fieldset {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 0 0 14px 0;
+    padding: 10px 12px 12px;
+  }
+  fieldset legend {
+    padding: 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .field { margin-bottom: 10px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 600;
+    margin-bottom: 3px;
+  }
+  .field .unit { font-weight: 400; color: var(--muted); }
+  .field input[type=text],
+  .field input[type=number],
+  .field select,
+  .field textarea {
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    color: var(--text);
+    font: inherit;
+  }
+  .field textarea { resize: vertical; min-height: 46px; }
+  .field .help { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+  .field .err { font-size: 11.5px; color: var(--error); margin-top: 3px; min-height: 0; }
+  .field.has-error input,
+  .field.has-error select { border-color: var(--error); background: var(--error-bg); }
+  .axis-row { display: flex; gap: 8px; }
+  .axis-row .field { flex: 1; margin-bottom: 0; }
+  .axis-row label { font-weight: 400; color: var(--muted); }
+  .curves-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  @media (max-width: 720px) { .curves-wrap { grid-template-columns: 1fr; } }
+  .curve-box { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel-2); }
+  .curve-box h3 { margin: 0 0 6px; font-size: 12.5px; font-weight: 700; }
+  .curve-box h3 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  table.curve-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.curve-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 4px; border-bottom: 1px solid var(--border); }
+  table.curve-table td { padding: 2px 3px; }
+  table.curve-table input { width: 100%; padding: 4px 5px; border-radius: 5px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); font: inherit; }
+  table.curve-table input.row-x-error { border-color: var(--error); }
+  table.curve-table input[readonly] { opacity: 0.6; }
+  table.curve-table td.rm { width: 26px; text-align: center; }
+  .curve-box .rowbtns { margin-top: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .curve-box .err { font-size: 11.5px; color: var(--error); margin-top: 6px; min-height: 14px; }
+
+  .plot-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  .plot-legend span.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .plot-legend .line { display: inline-block; width: 14px; height: 0; border-top: 2px dashed currentColor; margin-right: 5px; vertical-align: middle; }
+  canvas#plot { width: 100%; height: 420px; display: block; touch-action: none; cursor: default; }
+  .stats-row { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  .stats-row b { color: var(--text); }
+
+  #dropOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(37, 99, 235, 0.12);
+    border: 3px dashed var(--accent);
+    z-index: 50;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+    pointer-events: none;
+  }
+  #dropOverlay.active { display: flex; }
+
+  .placeholder-section {
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    color: var(--muted);
+    font-size: 12.5px;
+    background: repeating-linear-gradient(45deg, transparent, transparent 10px, var(--panel-2) 10px, var(--panel-2) 20px);
+  }
+  .placeholder-section h3 { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
+
+  footer { text-align: center; color: var(--muted); font-size: 11px; padding: 10px; }
+</style>
+</head>
+<body>
+
+<div id="dropOverlay">Drop an engine .json file to open it</div>
+
+<header>
+  <h1>Engine Editor <span style="font-weight:400; color:var(--muted);">— physics_sim.engine/1</span></h1>
+  <button id="btnNew">New</button>
+  <button id="btnOpen">Open…</button>
+  <input type="file" id="fileInput" accept=".json,application/json" style="display:none">
+  <button id="btnSave" class="primary">Save</button>
+  <div class="sep"></div>
+  <span id="filename">(no file loaded)</span>
+  <span id="errorCount"></span>
+</header>
+
+<div id="banner"><span id="bannerText"></span><button id="bannerClose" class="small">Dismiss</button></div>
+
+<div class="layout">
+  <!-- LEFT: scalar form -->
+  <div id="formPanel"></div>
+
+  <!-- RIGHT: curves + plot + placeholder -->
+  <div>
+    <div class="panel">
+      <h2>Torque curves</h2>
+      <div class="curves-wrap">
+        <div class="curve-box">
+          <h3><span class="swatch" style="background:var(--wot)"></span>WOT torque vs. rpm</h3>
+          <div id="wotTableWrap"></div>
+        </div>
+        <div class="curve-box">
+          <h3><span class="swatch" style="background:var(--motoring)"></span>Motoring torque vs. rpm</h3>
+          <div id="motoringTableWrap"></div>
+        </div>
+      </div>
+
+      <div class="plot-legend">
+        <span><span class="dot" style="background:var(--wot)"></span>WOT torque (N·m)</span>
+        <span><span class="dot" style="background:var(--motoring)"></span>Motoring torque (N·m)</span>
+        <span style="color:var(--power)"><span class="line"></span>Power (kW, right axis)</span>
+        <span style="color:var(--idle)"><span class="line"></span>Idle rpm</span>
+        <span style="color:var(--limiter)"><span class="line"></span>Limiter rpm</span>
+      </div>
+      <canvas id="plot"></canvas>
+      <div class="stats-row" id="statsRow"></div>
+      <p class="help" style="color:var(--muted); font-size:11.5px; margin-top:8px;">
+        Drag a point to edit it directly on the plot (rpm is clamped to stay strictly ascending within its curve;
+        the motoring curve's first point is pinned at rpm 0 and every motoring point is clamped to torque ≤ 0).
+        Edit exact values in the tables above, or add/remove rows there.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>Parametric engine <span style="text-transform:none; font-weight:400;">(planned)</span></h2>
+      <div class="placeholder-section">
+        <h3>Parametric engine (bore/stroke/cylinders/…) — planned for P4 I8</h3>
+        <p>Not implemented. The owner has not decided this schema's scope yet — nothing is invented here.
+        This section is a placeholder only; the torque-map engine above is the only kind this editor
+        (and the current loader) supports.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>physics_sim engine editor — a static, offline page. Nothing is uploaded anywhere; Open/Save work entirely on your local files.</footer>
+
+<script>
+(function () {
+"use strict";
+
+// ---------------------------------------------------------------------
+// Defaults mirror ps::drivetrain::TorqueMapEngineDesc's own compiled-in
+// defaults (core/include/ps/drivetrain/powertrain_desc.h) and the field
+// rules enforced by read_engine_fields (core/src/io/vehicle_io.cpp).
+// ---------------------------------------------------------------------
+
+function emptyCurve() { return { x: [], y: [] }; }
+
+function defaultEngineDoc() {
+  return {
+    format: "physics_sim.engine/1",
+    name: "new_engine",
+    kind: "torque_map",
+    source: "TODO: describe the source/provenance of this data (see docs/data_formats/README.md's \"source\" convention — a plausible engine class, not a specific product, unless verified).",
+    wot_torque_nm_vs_rpm: { x: [800, 2000, 4000, 6000, 7000], y: [90, 160, 190, 175, 130] },
+    motoring_torque_nm_vs_rpm: { x: [0, 2000, 4000, 6000], y: [-15, -30, -45, -65] },
+    inertia_kgm2: 0.15,
+    breakaway_torque_nm: 40.0,
+    idle_rpm: 800, stall_rpm: 400, fire_rpm: 250, start_complete_rpm: 550,
+    dfco_enable_rpm: 1300, dfco_reenable_rpm: 1000,
+    idle_control: { kp_per_rpm: 0.0018, ki_per_rpm_s: 0.009, max_throttle: 0.3 },
+    limiter: { type: "fuel_cut", rpm: 6800, hysteresis_rpm: 150, band_rpm: 200 },
+    starter: { stall_torque_nm: 140.0, free_speed_rpm: 400.0, interlock: "clutch_or_neutral" },
+    crank_axis_local: [0, 1, 0],
+    initial_state: "running"
+  };
+}
+
+// Ensures every field read_engine_fields touches exists on `d`, using the
+// SAME defaults the C++ loader itself would apply (j.value(key, default)).
+// A required-but-missing field (e.g. inertia_kgm2) is hydrated to its
+// loader default even when that default is itself invalid (inertia 0) —
+// this deliberately reproduces "the loader would accept the JSON but then
+// reject the resulting value", surfaced immediately as a validation error
+// instead of a silent NaN.
+function hydrate(d) {
+  if (typeof d.name !== "string") d.name = "";
+  if (typeof d.source !== "string") d.source = "";
+  if (!d.wot_torque_nm_vs_rpm || !Array.isArray(d.wot_torque_nm_vs_rpm.x) || !Array.isArray(d.wot_torque_nm_vs_rpm.y)) {
+    d.wot_torque_nm_vs_rpm = emptyCurve();
+  }
+  if (!d.motoring_torque_nm_vs_rpm || !Array.isArray(d.motoring_torque_nm_vs_rpm.x) || !Array.isArray(d.motoring_torque_nm_vs_rpm.y)) {
+    d.motoring_torque_nm_vs_rpm = emptyCurve();
+  }
+  if (typeof d.inertia_kgm2 !== "number") d.inertia_kgm2 = 0.0;
+  if (typeof d.breakaway_torque_nm !== "number") d.breakaway_torque_nm = 0.0;
+  if (typeof d.idle_rpm !== "number") d.idle_rpm = 800;
+  if (typeof d.stall_rpm !== "number") d.stall_rpm = 400;
+  if (typeof d.fire_rpm !== "number") d.fire_rpm = 250;
+  if (typeof d.start_complete_rpm !== "number") d.start_complete_rpm = 550;
+  if (typeof d.dfco_enable_rpm !== "number") d.dfco_enable_rpm = 1300;
+  if (typeof d.dfco_reenable_rpm !== "number") d.dfco_reenable_rpm = 1000;
+  if (!d.idle_control || typeof d.idle_control !== "object") d.idle_control = {};
+  if (typeof d.idle_control.kp_per_rpm !== "number") d.idle_control.kp_per_rpm = 0.0018;
+  if (typeof d.idle_control.ki_per_rpm_s !== "number") d.idle_control.ki_per_rpm_s = 0.009;
+  if (typeof d.idle_control.max_throttle !== "number") d.idle_control.max_throttle = 0.3;
+  if (!d.limiter || typeof d.limiter !== "object") d.limiter = {};
+  if (d.limiter.type !== "fuel_cut" && d.limiter.type !== "soft_cut") d.limiter.type = "fuel_cut";
+  if (typeof d.limiter.rpm !== "number") d.limiter.rpm = 6800;
+  if (typeof d.limiter.hysteresis_rpm !== "number") d.limiter.hysteresis_rpm = 150;
+  if (typeof d.limiter.band_rpm !== "number") d.limiter.band_rpm = 200;
+  if (!d.starter || typeof d.starter !== "object") d.starter = {};
+  if (typeof d.starter.stall_torque_nm !== "number") d.starter.stall_torque_nm = 140.0;
+  if (typeof d.starter.free_speed_rpm !== "number") d.starter.free_speed_rpm = 400.0;
+  if (d.starter.interlock !== "clutch_or_neutral" && d.starter.interlock !== "none") d.starter.interlock = "clutch_or_neutral";
+  if (!Array.isArray(d.crank_axis_local) || d.crank_axis_local.length !== 3) d.crank_axis_local = [0, 0, 0];
+  if (d.initial_state !== "running" && d.initial_state !== "off") d.initial_state = "running";
+}
+
+// ---------------------------------------------------------------------
+// Curve helpers — mirror ps::vehicle::Curve1D exactly (core/include/ps/
+// vehicle/curve1d.h): piecewise-linear, clamped (not extrapolated)
+// outside [x.front(), x.back()].
+// ---------------------------------------------------------------------
+
+function curveEvaluate(curve, xv) {
+  const x = curve.x, y = curve.y;
+  if (!x.length) return 0;
+  if (xv <= x[0]) return y[0];
+  if (xv >= x[x.length - 1]) return y[y.length - 1];
+  for (let i = 1; i < x.length; i++) {
+    if (xv <= x[i]) {
+      const t = (xv - x[i - 1]) / (x[i] - x[i - 1]);
+      return y[i - 1] + t * (y[i] - y[i - 1]);
+    }
+  }
+  return y[y.length - 1];
+}
+
+function isNum(v) { return typeof v === "number" && Number.isFinite(v); }
+
+// Mirrors read_curve + require_ascending (vehicle_io.cpp): non-empty,
+// numeric, strictly ascending x. Returns an error string or null.
+function validateCurveShape(curve) {
+  if (!curve || !Array.isArray(curve.x) || !Array.isArray(curve.y)) return "curve object needs 'x' and 'y' arrays";
+  if (curve.x.length !== curve.y.length) return "'x'/'y' arrays must be the same length";
+  if (curve.x.length === 0) return "must be non-empty";
+  for (let i = 0; i < curve.x.length; i++) {
+    if (!isNum(curve.x[i]) || !isNum(curve.y[i])) return "every x/y value must be a number";
+  }
+  for (let i = 1; i < curve.x.length; i++) {
+    if (!(curve.x[i] > curve.x[i - 1])) return "x values must be strictly ascending";
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------
+
+let doc = null;
+let currentFilename = null;
+let dirty = false;
+let lastErrors = {};
+let lastTransform = null; // set by renderCanvas(); used to convert a drag's pixel delta back to data space
+let dragging = null; // {which:'wot'|'motoring', index}
+
+const ERROR_KEYS = [
+  "inertia_kgm2", "breakaway_torque_nm",
+  "idle_rpm", "stall_rpm", "fire_rpm", "start_complete_rpm",
+  "dfco_enable_rpm", "dfco_reenable_rpm",
+  "idle_kp", "idle_ki", "idle_max_throttle",
+  "limiter_rpm", "limiter_hysteresis_rpm", "limiter_band_rpm",
+  "starter_stall_torque_nm", "starter_free_speed_rpm",
+  "crank_axis_local", "wot_curve", "motoring_curve"
+];
+
+function curveOf(which) { return which === "wot" ? doc.wot_torque_nm_vs_rpm : doc.motoring_torque_nm_vs_rpm; }
+
+// The motoring curve's x[0] must be exactly 0 (read_engine_fields);
+// there is never a legitimate reason for it to be anything else, so we
+// pin it silently rather than let the user hit that error repeatedly.
+function normalizeDoc() {
+  if (doc.motoring_torque_nm_vs_rpm.x.length > 0) doc.motoring_torque_nm_vs_rpm.x[0] = 0;
+}
+
+// ---------------------------------------------------------------------
+// Validation — mirrors read_engine_fields (core/src/io/vehicle_io.cpp)
+// field-for-field. See docs/data_formats/engine.md for the prose version
+// of every one of these rules.
+// ---------------------------------------------------------------------
+
+function validateAll(d) {
+  const errors = {};
+  const req = (key, val) => { if (!isNum(val)) errors[key] = "must be a number"; };
+
+  req("inertia_kgm2", d.inertia_kgm2);
+  if (!errors.inertia_kgm2 && !(d.inertia_kgm2 > 0)) {
+    errors.inertia_kgm2 = "must be > 0 in I3 (the crank node needs real inertia)";
+  }
+
+  req("breakaway_torque_nm", d.breakaway_torque_nm);
+  req("idle_rpm", d.idle_rpm);
+  req("stall_rpm", d.stall_rpm);
+  req("fire_rpm", d.fire_rpm);
+  req("start_complete_rpm", d.start_complete_rpm);
+  req("dfco_enable_rpm", d.dfco_enable_rpm);
+  req("dfco_reenable_rpm", d.dfco_reenable_rpm);
+  req("idle_kp", d.idle_control.kp_per_rpm);
+  req("idle_ki", d.idle_control.ki_per_rpm_s);
+  req("idle_max_throttle", d.idle_control.max_throttle);
+  req("limiter_rpm", d.limiter.rpm);
+  req("limiter_hysteresis_rpm", d.limiter.hysteresis_rpm);
+  req("limiter_band_rpm", d.limiter.band_rpm);
+  req("starter_stall_torque_nm", d.starter.stall_torque_nm);
+  req("starter_free_speed_rpm", d.starter.free_speed_rpm);
+
+  const wotErr = validateCurveShape(d.wot_torque_nm_vs_rpm);
+  if (wotErr) errors.wot_curve = "wot_torque_nm_vs_rpm: " + wotErr;
+  else if (d.wot_torque_nm_vs_rpm.x[0] < 0) errors.wot_curve = "wot_torque_nm_vs_rpm: x[0] must be >= 0";
+
+  const motErr = validateCurveShape(d.motoring_torque_nm_vs_rpm);
+  if (motErr) errors.motoring_curve = "motoring_torque_nm_vs_rpm: " + motErr;
+  else if (d.motoring_torque_nm_vs_rpm.x[0] !== 0) errors.motoring_curve = "motoring_torque_nm_vs_rpm: x[0] must be exactly 0";
+  else if (d.motoring_torque_nm_vs_rpm.y.some((y) => y > 0)) errors.motoring_curve = "motoring_torque_nm_vs_rpm: every y must be <= 0";
+
+  if (!errors.breakaway_torque_nm && !errors.motoring_curve) {
+    const motoringAt0 = d.motoring_torque_nm_vs_rpm.y[0];
+    if (d.breakaway_torque_nm < -motoringAt0) {
+      errors.breakaway_torque_nm = "must be >= -motoring_torque_nm_vs_rpm(0) (currently " + (-motoringAt0).toFixed(3) + ")";
+    }
+  }
+
+  if (!errors.stall_rpm && !errors.start_complete_rpm && !errors.idle_rpm && !errors.limiter_rpm) {
+    if (!(d.stall_rpm < d.start_complete_rpm && d.start_complete_rpm <= d.idle_rpm && d.idle_rpm < d.limiter.rpm)) {
+      const msg = "engine rpm thresholds must satisfy stall_rpm < start_complete_rpm <= idle_rpm < limiter.rpm";
+      errors.stall_rpm = errors.start_complete_rpm = errors.idle_rpm = errors.limiter_rpm = msg;
+    }
+  }
+
+  if (!errors.dfco_enable_rpm && !errors.dfco_reenable_rpm) {
+    if (!(d.dfco_reenable_rpm < d.dfco_enable_rpm)) {
+      const msg = "dfco_reenable_rpm must be < dfco_enable_rpm";
+      errors.dfco_enable_rpm = errors.dfco_reenable_rpm = msg;
+    }
+  }
+
+  const ax = d.crank_axis_local;
+  if (!Array.isArray(ax) || ax.length !== 3 || !ax.every(isNum)) {
+    errors.crank_axis_local = "must be a 3-element array of numbers";
+  } else {
+    const len = Math.hypot(ax[0], ax[1], ax[2]);
+    if (len > 1e-6 && Math.abs(len - 1) > 1e-6) {
+      errors.crank_axis_local = "must be zero or a unit vector, got length " + len.toFixed(6);
+    }
+  }
+
+  return errors;
+}
+
+// ---------------------------------------------------------------------
+// Form (scalar fields) — built once per New/Open so typing never loses
+// focus; afterChange() only touches error text/classes and derived
+// displays (canvas, stats, Save button), never the input elements
+// themselves, except when the change originated from outside the form
+// (New/Open/drag/add-remove row), where syncFormValues() refreshes them.
+// ---------------------------------------------------------------------
+
+const SCALAR_FIELDS = [
+  { section: "Identity", key: "name", label: "Name", type: "text",
+    get: (d) => d.name, set: (d, v) => { d.name = v; },
+    help: "Free text, not validated by the loader." },
+  { section: "Identity", key: "source", label: "Source", type: "textarea",
+    get: (d) => d.source, set: (d, v) => { d.source = v; },
+    help: "Provenance note. Not enforced by the engine loader, but every shipped file has one — cite a class of hardware, not a specific product, unless verified (docs/data_formats/README.md)." },
+
+  { section: "Core", key: "inertia_kgm2", label: "Inertia", unit: "kg·m²", type: "number", step: "0.001",
+    get: (d) => d.inertia_kgm2, set: (d, v) => { d.inertia_kgm2 = v; }, errKey: "inertia_kgm2",
+    help: "Crank + flywheel + clutch-cover rotational inertia. Must be > 0 in I3." },
+  { section: "Core", key: "breakaway_torque_nm", label: "Breakaway torque", unit: "N·m", type: "number", step: "1",
+    get: (d) => d.breakaway_torque_nm, set: (d, v) => { d.breakaway_torque_nm = v; }, errKey: "breakaway_torque_nm",
+    help: "Static Coulomb breakaway capacity near zero rpm. Must be >= -(motoring torque at 0 rpm)." },
+  { section: "Core", key: "initial_state", label: "Initial state", type: "select", options: ["running", "off"],
+    get: (d) => d.initial_state, set: (d, v) => { d.initial_state = v; },
+    help: "Engine state at scenario start." },
+  { section: "Core", key: "crank_axis", label: "Crank axis (local)", type: "vec3", errKey: "crank_axis_local",
+    get: (d) => d.crank_axis_local, set: (d, v) => { d.crank_axis_local = v; },
+    help: "Chassis-local direction of positive crank ω, ISO 8855 (X forward, Y left, Z up). Zero vector = no rotor-reaction torque on the chassis; otherwise must be unit length." },
+
+  { section: "RPM thresholds", key: "idle_rpm", label: "Idle rpm", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.idle_rpm, set: (d, v) => { d.idle_rpm = v; }, errKey: "idle_rpm",
+    help: "Target idle speed. Must satisfy stall < start_complete <= idle < limiter.rpm." },
+  { section: "RPM thresholds", key: "stall_rpm", label: "Stall rpm", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.stall_rpm, set: (d, v) => { d.stall_rpm = v; }, errKey: "stall_rpm",
+    help: "Engine speed below which it stalls." },
+  { section: "RPM thresholds", key: "fire_rpm", label: "Fire rpm", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.fire_rpm, set: (d, v) => { d.fire_rpm = v; }, errKey: "fire_rpm",
+    help: "Speed at which the starter hand-off to combustion is considered to have caught." },
+  { section: "RPM thresholds", key: "start_complete_rpm", label: "Start-complete rpm", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.start_complete_rpm, set: (d, v) => { d.start_complete_rpm = v; }, errKey: "start_complete_rpm",
+    help: "Speed at which starting is considered finished." },
+
+  { section: "DFCO (fuel cut-off)", key: "dfco_enable_rpm", label: "DFCO enable rpm", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.dfco_enable_rpm, set: (d, v) => { d.dfco_enable_rpm = v; }, errKey: "dfco_enable_rpm",
+    help: "Deceleration fuel cut-off engages above this rpm. Must be > dfco_reenable_rpm." },
+  { section: "DFCO (fuel cut-off)", key: "dfco_reenable_rpm", label: "DFCO re-enable rpm", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.dfco_reenable_rpm, set: (d, v) => { d.dfco_reenable_rpm = v; }, errKey: "dfco_reenable_rpm",
+    help: "Fuel re-enables below this rpm (hysteresis band). Must be < dfco_enable_rpm." },
+
+  { section: "Idle control (PI)", key: "idle_kp", label: "Kp", unit: "throttle / rpm", type: "number", step: "0.0001",
+    get: (d) => d.idle_control.kp_per_rpm, set: (d, v) => { d.idle_control.kp_per_rpm = v; }, errKey: "idle_kp",
+    help: "Proportional gain, idle air-bypass loop." },
+  { section: "Idle control (PI)", key: "idle_ki", label: "Ki", unit: "throttle / (rpm·s)", type: "number", step: "0.0001",
+    get: (d) => d.idle_control.ki_per_rpm_s, set: (d, v) => { d.idle_control.ki_per_rpm_s = v; }, errKey: "idle_ki",
+    help: "Integral gain, idle air-bypass loop." },
+  { section: "Idle control (PI)", key: "idle_max_throttle", label: "Max throttle", unit: "0..1", type: "number", step: "0.01",
+    get: (d) => d.idle_control.max_throttle, set: (d, v) => { d.idle_control.max_throttle = v; }, errKey: "idle_max_throttle",
+    help: "Ceiling the idle controller may command on its own." },
+
+  { section: "Limiter", key: "limiter_type", label: "Type", type: "select", options: ["fuel_cut", "soft_cut"],
+    get: (d) => d.limiter.type, set: (d, v) => { d.limiter.type = v; },
+    help: "fuel_cut: hard cut at rpm, restores at rpm - hysteresis. soft_cut: fuel tapers to zero over [rpm - band, rpm] (governor droop)." },
+  { section: "Limiter", key: "limiter_rpm", label: "Limiter rpm", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.limiter.rpm, set: (d, v) => { d.limiter.rpm = v; }, errKey: "limiter_rpm",
+    help: "Must be > idle_rpm (see RPM thresholds)." },
+  { section: "Limiter", key: "limiter_hysteresis_rpm", label: "Hysteresis", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.limiter.hysteresis_rpm, set: (d, v) => { d.limiter.hysteresis_rpm = v; }, errKey: "limiter_hysteresis_rpm",
+    help: "fuel_cut only: fuel restores at rpm - hysteresis. Always read, ignored if type is soft_cut." },
+  { section: "Limiter", key: "limiter_band_rpm", label: "Band", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.limiter.band_rpm, set: (d, v) => { d.limiter.band_rpm = v; }, errKey: "limiter_band_rpm",
+    help: "soft_cut only: linear taper width below the limiter rpm. Always read, ignored if type is fuel_cut." },
+
+  { section: "Starter", key: "starter_stall_torque_nm", label: "Stall torque", unit: "N·m", type: "number", step: "1",
+    get: (d) => d.starter.stall_torque_nm, set: (d, v) => { d.starter.stall_torque_nm = v; }, errKey: "starter_stall_torque_nm",
+    help: "Starter torque at 0 rpm." },
+  { section: "Starter", key: "starter_free_speed_rpm", label: "Free speed", unit: "rpm", type: "number", step: "10",
+    get: (d) => d.starter.free_speed_rpm, set: (d, v) => { d.starter.free_speed_rpm = v; }, errKey: "starter_free_speed_rpm",
+    help: "Torque falls linearly to 0 at this speed." },
+  { section: "Starter", key: "starter_interlock", label: "Interlock", type: "select", options: ["clutch_or_neutral", "none"],
+    get: (d) => d.starter.interlock, set: (d, v) => { d.starter.interlock = v; },
+    help: "Whether the starter is inhibited unless the clutch is open or the gearbox is in neutral." }
+];
+
+function buildForm() {
+  const panel = document.getElementById("formPanel");
+  panel.innerHTML = "";
+  const sections = [];
+  const bySection = {};
+  for (const f of SCALAR_FIELDS) {
+    if (!bySection[f.section]) { bySection[f.section] = []; sections.push(f.section); }
+    bySection[f.section].push(f);
+  }
+  for (const sec of sections) {
+    const box = document.createElement("div");
+    box.className = "panel";
+    const h2 = document.createElement("h2");
+    h2.textContent = sec;
+    box.appendChild(h2);
+    for (const f of bySection[sec]) {
+      box.appendChild(buildFieldEl(f));
+    }
+    panel.appendChild(box);
+  }
+}
+
+function buildFieldEl(f) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  wrap.id = "field-" + (f.errKey || f.key);
+
+  const label = document.createElement("label");
+  label.setAttribute("for", "input-" + f.key);
+  label.textContent = f.label + (f.unit ? "" : "");
+  if (f.unit) {
+    const u = document.createElement("span");
+    u.className = "unit";
+    u.textContent = " (" + f.unit + ")";
+    label.appendChild(u);
+  }
+  wrap.appendChild(label);
+
+  if (f.type === "vec3") {
+    const row = document.createElement("div");
+    row.className = "axis-row";
+    ["x", "y", "z"].forEach((axisName, i) => {
+      const fld = document.createElement("div");
+      fld.className = "field";
+      const l = document.createElement("label");
+      l.textContent = axisName;
+      const inp = document.createElement("input");
+      inp.type = "number";
+      inp.step = "0.01";
+      inp.id = "input-" + f.key + "-" + axisName;
+      inp.addEventListener("input", () => {
+        const v = f.get(doc).slice();
+        v[i] = parseFloat(inp.value);
+        f.set(doc, v);
+        markDirty();
+        afterChange();
+      });
+      fld.appendChild(l);
+      fld.appendChild(inp);
+      row.appendChild(fld);
+    });
+    wrap.appendChild(row);
+  } else if (f.type === "select") {
+    const sel = document.createElement("select");
+    sel.id = "input-" + f.key;
+    for (const opt of f.options) {
+      const o = document.createElement("option");
+      o.value = opt;
+      o.textContent = opt;
+      sel.appendChild(o);
+    }
+    sel.addEventListener("change", () => {
+      f.set(doc, sel.value);
+      markDirty();
+      afterChange();
+    });
+    wrap.appendChild(sel);
+  } else if (f.type === "textarea") {
+    const ta = document.createElement("textarea");
+    ta.id = "input-" + f.key;
+    ta.addEventListener("input", () => { f.set(doc, ta.value); markDirty(); afterChange(); });
+    wrap.appendChild(ta);
+  } else {
+    const inp = document.createElement("input");
+    inp.type = f.type === "number" ? "number" : "text";
+    if (f.step) inp.step = f.step;
+    inp.id = "input-" + f.key;
+    inp.addEventListener("input", () => {
+      const v = f.type === "number" ? parseFloat(inp.value) : inp.value;
+      f.set(doc, v);
+      markDirty();
+      afterChange();
+    });
+    wrap.appendChild(inp);
+  }
+
+  if (f.help) {
+    const help = document.createElement("div");
+    help.className = "help";
+    help.textContent = f.help;
+    wrap.appendChild(help);
+  }
+  if (f.errKey) {
+    const err = document.createElement("div");
+    err.className = "err";
+    err.id = "err-" + f.errKey;
+    wrap.appendChild(err);
+  }
+  return wrap;
+}
+
+function syncFormValues() {
+  for (const f of SCALAR_FIELDS) {
+    if (f.type === "vec3") {
+      const v = f.get(doc);
+      ["x", "y", "z"].forEach((axisName, i) => {
+        const el = document.getElementById("input-" + f.key + "-" + axisName);
+        if (el) el.value = v[i];
+      });
+    } else {
+      const el = document.getElementById("input-" + f.key);
+      if (el) el.value = f.get(doc);
+    }
+  }
+}
+
+function updateValidationUI(errors) {
+  for (const key of ERROR_KEYS) {
+    const msg = errors[key] || "";
+    const errEl = document.getElementById("err-" + key);
+    if (errEl) errEl.textContent = msg;
+    const fieldEl = document.getElementById("field-" + key);
+    if (fieldEl) fieldEl.classList.toggle("has-error", !!msg);
+  }
+  const wrapWot = document.getElementById("wotTableWrap");
+  const wrapMot = document.getElementById("motoringTableWrap");
+  if (wrapWot) wrapWot.querySelectorAll("input.rpm-x").forEach((el, i) => {
+    el.classList.toggle("row-x-error", !!errors.wot_curve && errors.wot_curve.indexOf("ascending") >= 0);
+  });
+  const n = Object.keys(errors).length;
+  document.getElementById("errorCount").textContent = n ? (n + " error" + (n > 1 ? "s" : "")) : "";
+  document.getElementById("btnSave").disabled = n > 0;
+}
+
+function markDirty() { dirty = true; }
+
+// ---------------------------------------------------------------------
+// Curve tables
+// ---------------------------------------------------------------------
+
+function rebuildCurveTable(which) {
+  normalizeDoc();
+  const wrapId = which === "wot" ? "wotTableWrap" : "motoringTableWrap";
+  const wrap = document.getElementById(wrapId);
+  const curve = curveOf(which);
+  wrap.innerHTML = "";
+
+  const table = document.createElement("table");
+  table.className = "curve-table";
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>rpm</th><th>N·m</th><th></th></tr>";
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+
+  for (let i = 0; i < curve.x.length; i++) {
+    const tr = document.createElement("tr");
+
+    const tdX = document.createElement("td");
+    const inX = document.createElement("input");
+    inX.type = "number";
+    inX.step = "1";
+    inX.className = "rpm-x";
+    inX.value = curve.x[i];
+    const pinned = which === "motoring" && i === 0;
+    if (pinned) {
+      inX.readOnly = true;
+      inX.title = "motoring_torque_nm_vs_rpm: x[0] must be exactly 0 (pinned)";
+    } else {
+      inX.addEventListener("input", () => {
+        curve.x[i] = parseFloat(inX.value);
+        markDirty();
+        afterChange();
+      });
+    }
+    tdX.appendChild(inX);
+    tr.appendChild(tdX);
+
+    const tdY = document.createElement("td");
+    const inY = document.createElement("input");
+    inY.type = "number";
+    inY.step = "1";
+    inY.value = curve.y[i];
+    inY.addEventListener("input", () => {
+      curve.y[i] = parseFloat(inY.value);
+      markDirty();
+      afterChange();
+    });
+    tdY.appendChild(inY);
+    tr.appendChild(tdY);
+
+    const tdRm = document.createElement("td");
+    tdRm.className = "rm";
+    const rmBtn = document.createElement("button");
+    rmBtn.className = "small";
+    rmBtn.textContent = "✕";
+    rmBtn.title = "Remove point";
+    rmBtn.disabled = curve.x.length <= 1;
+    rmBtn.addEventListener("click", () => removePoint(which, i));
+    tdRm.appendChild(rmBtn);
+    tr.appendChild(tdRm);
+
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  const rowbtns = document.createElement("div");
+  rowbtns.className = "rowbtns";
+  const addBtn = document.createElement("button");
+  addBtn.className = "small";
+  addBtn.textContent = "+ Add point";
+  addBtn.addEventListener("click", () => addPoint(which));
+  rowbtns.appendChild(addBtn);
+  wrap.appendChild(rowbtns);
+
+  const err = document.createElement("div");
+  err.className = "err";
+  err.id = "err-" + which + "_curve";
+  wrap.appendChild(err);
+}
+
+function addPoint(which) {
+  const curve = curveOf(which);
+  const n = curve.x.length;
+  let newX, newY;
+  if (n === 0) {
+    newX = which === "motoring" ? 0 : 800;
+    newY = 0;
+  } else if (n === 1) {
+    newX = curve.x[0] + 500;
+    newY = curve.y[0];
+  } else {
+    const gap = curve.x[n - 1] - curve.x[n - 2];
+    newX = curve.x[n - 1] + Math.max(gap, 100);
+    newY = curve.y[n - 1];
+  }
+  curve.x.push(newX);
+  curve.y.push(newY);
+  markDirty();
+  rebuildCurveTable(which);
+  afterChange();
+}
+
+function removePoint(which, idx) {
+  const curve = curveOf(which);
+  if (curve.x.length <= 1) return;
+  curve.x.splice(idx, 1);
+  curve.y.splice(idx, 1);
+  markDirty();
+  rebuildCurveTable(which);
+  afterChange();
+}
+
+// ---------------------------------------------------------------------
+// Canvas plot: torque (left axis) + derived power (right axis), peak
+// markers, idle/limiter markers, drag-to-edit.
+// ---------------------------------------------------------------------
+
+const canvas = document.getElementById("plot");
+const ctx = canvas.getContext("2d");
+let dpr = window.devicePixelRatio || 1;
+let hitPoints = []; // [{which, index, px, py}] from the most recent render, for hit-testing
+
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(rect.width * dpr));
+  canvas.height = Math.max(1, Math.round(420 * dpr));
+}
+
+function computePeaks() {
+  const wot = doc.wot_torque_nm_vs_rpm;
+  let peakTorque = null, peakPower = null;
+  if (wot.x.length && wot.x.every(isNum) && wot.y.every(isNum)) {
+    let bestTi = 0;
+    for (let i = 1; i < wot.y.length; i++) if (wot.y[i] > wot.y[bestTi]) bestTi = i;
+    peakTorque = { rpm: wot.x[bestTi], torque: wot.y[bestTi] };
+
+    const x0 = wot.x[0], x1 = wot.x[wot.x.length - 1];
+    const steps = 400;
+    let bestP = -Infinity, bestPr = x0;
+    for (let s = 0; s <= steps; s++) {
+      const rpm = x0 + (x1 - x0) * (s / steps);
+      const t = curveEvaluate(wot, rpm);
+      const p = (t * rpm * 2 * Math.PI / 60) / 1000; // kW
+      if (p > bestP) { bestP = p; bestPr = rpm; }
+    }
+    peakPower = { rpm: bestPr, power: bestP };
+  }
+  return { peakTorque, peakPower };
+}
+
+function renderCanvas() {
+  resizeCanvas();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = canvas.width / dpr, H = canvas.height / dpr;
+  ctx.clearRect(0, 0, W, H);
+
+  const wot = doc.wot_torque_nm_vs_rpm;
+  const mot = doc.motoring_torque_nm_vs_rpm;
+  const allX = [].concat(wot.x, mot.x, [doc.limiter.rpm, doc.idle_rpm]).filter(isNum);
+  const allYt = [].concat(wot.y, mot.y).filter(isNum);
+  let xMax = allX.length ? Math.max(...allX) : 7000;
+  let xMin = 0;
+  xMax = Math.max(xMax * 1.06, 100);
+  let yMax = allYt.length ? Math.max(...allYt, 0) : 100;
+  let yMin = allYt.length ? Math.min(...allYt, 0) : -50;
+  yMax *= 1.15; yMin = yMin < 0 ? yMin * 1.15 : yMin - 10;
+  if (yMax - yMin < 10) yMax = yMin + 10;
+
+  const { peakTorque, peakPower } = computePeaks();
+  let pMax = peakPower ? peakPower.power * 1.2 : 100;
+  if (pMax <= 0) pMax = 100;
+
+  const padL = 56, padR = 56, padT = 18, padB = 34;
+  const plotW = Math.max(10, W - padL - padR);
+  const plotH = Math.max(10, H - padT - padB);
+
+  const xToPx = (rpm) => padL + (rpm - xMin) / (xMax - xMin) * plotW;
+  const pxToX = (px) => xMin + (px - padL) / plotW * (xMax - xMin);
+  const tToPy = (t) => padT + (yMax - t) / (yMax - yMin) * plotH;
+  const pyToT = (py) => yMax - (py - padT) / plotH * (yMax - yMin);
+  const pToPy = (p) => padT + (pMax - p) / pMax * plotH;
+
+  lastTransform = { xToPx, pxToX, tToPy, pyToT, pMax, plotW, plotH, padL, padT };
+
+  // grid
+  ctx.strokeStyle = cssVar("--grid");
+  ctx.lineWidth = 1;
+  ctx.font = "11px -apple-system, Segoe UI, sans-serif";
+  ctx.fillStyle = cssVar("--muted");
+  const xStep = niceStep(xMax - xMin, 8);
+  for (let v = 0; v <= xMax; v += xStep) {
+    const px = xToPx(v);
+    ctx.beginPath(); ctx.moveTo(px, padT); ctx.lineTo(px, padT + plotH); ctx.stroke();
+    ctx.fillText(String(Math.round(v)), px - 10, padT + plotH + 16);
+  }
+  const yStep = niceStep(yMax - yMin, 6);
+  for (let v = Math.ceil(yMin / yStep) * yStep; v <= yMax; v += yStep) {
+    const py = tToPy(v);
+    ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(padL + plotW, py); ctx.stroke();
+    ctx.fillText(String(Math.round(v)), 6, py + 4);
+  }
+  // right axis (power) ticks
+  const pStep = niceStep(pMax, 5);
+  for (let v = 0; v <= pMax; v += pStep) {
+    const py = pToPy(v);
+    ctx.fillStyle = cssVar("--power");
+    ctx.fillText(String(Math.round(v)), padL + plotW + 8, py + 4);
+  }
+  ctx.fillStyle = cssVar("--muted");
+  ctx.fillText("rpm", padL + plotW / 2 - 10, H - 4);
+
+  // zero line
+  if (yMin < 0 && yMax > 0) {
+    ctx.strokeStyle = cssVar("--border");
+    ctx.beginPath(); ctx.moveTo(padL, tToPy(0)); ctx.lineTo(padL + plotW, tToPy(0)); ctx.stroke();
+  }
+
+  // idle / limiter vertical markers
+  drawVLine(doc.idle_rpm, cssVar("--idle"), "idle", xToPx, padT, plotH);
+  drawVLine(doc.limiter.rpm, cssVar("--limiter"), "limiter", xToPx, padT, plotH);
+
+  // curves
+  hitPoints = [];
+  drawCurve(wot, cssVar("--wot"), xToPx, tToPy, "wot");
+  drawCurve(mot, cssVar("--motoring"), xToPx, tToPy, "motoring");
+
+  // power curve (derived from WOT only)
+  if (wot.x.length >= 2 && wot.x.every(isNum) && wot.y.every(isNum)) {
+    ctx.strokeStyle = cssVar("--power");
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    const steps = 120;
+    for (let s = 0; s <= steps; s++) {
+      const rpm = wot.x[0] + (wot.x[wot.x.length - 1] - wot.x[0]) * (s / steps);
+      const t = curveEvaluate(wot, rpm);
+      const p = (t * rpm * 2 * Math.PI / 60) / 1000;
+      const px = xToPx(rpm), py = pToPy(p);
+      if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // peak markers
+  if (peakTorque) drawPeakMarker(peakTorque.rpm, peakTorque.torque, xToPx, tToPy, cssVar("--wot"),
+    peakTorque.torque.toFixed(0) + " N·m @ " + Math.round(peakTorque.rpm) + " rpm");
+  if (peakPower) drawPeakMarker(peakPower.rpm, peakPower.power, xToPx, pToPy, cssVar("--power"),
+    peakPower.power.toFixed(1) + " kW @ " + Math.round(peakPower.rpm) + " rpm");
+
+  // stats row
+  const stats = document.getElementById("statsRow");
+  stats.innerHTML =
+    "<span>Peak torque: <b>" + (peakTorque ? peakTorque.torque.toFixed(1) + " N·m @ " + Math.round(peakTorque.rpm) + " rpm" : "—") + "</b></span>" +
+    "<span>Peak power: <b>" + (peakPower ? peakPower.power.toFixed(1) + " kW @ " + Math.round(peakPower.rpm) + " rpm" : "—") + "</b></span>" +
+    "<span>Idle: <b>" + Math.round(doc.idle_rpm) + " rpm</b></span>" +
+    "<span>Limiter: <b>" + Math.round(doc.limiter.rpm) + " rpm</b></span>";
+}
+
+function niceStep(range, targetCount) {
+  if (!(range > 0)) return 1;
+  const raw = range / targetCount;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  let step;
+  if (norm < 1.5) step = 1;
+  else if (norm < 3.5) step = 2;
+  else if (norm < 7.5) step = 5;
+  else step = 10;
+  return step * mag;
+}
+
+function drawVLine(rpm, color, label, xToPx, padT, plotH) {
+  if (!isNum(rpm)) return;
+  const px = xToPx(rpm);
+  ctx.strokeStyle = color;
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(px, padT); ctx.lineTo(px, padT + plotH); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = color;
+  ctx.font = "10.5px -apple-system, Segoe UI, sans-serif";
+  ctx.save();
+  ctx.translate(px + 3, padT + 10);
+  ctx.fillText(label, 0, 0);
+  ctx.restore();
+}
+
+function drawCurve(curve, color, xToPx, tToPy, which) {
+  if (!curve.x.length) return;
+  const valid = curve.x.every(isNum) && curve.y.every(isNum);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2;
+  if (valid && curve.x.length > 1) {
+    ctx.beginPath();
+    for (let i = 0; i < curve.x.length; i++) {
+      const px = xToPx(curve.x[i]), py = tToPy(curve.y[i]);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+  for (let i = 0; i < curve.x.length; i++) {
+    if (!isNum(curve.x[i]) || !isNum(curve.y[i])) continue;
+    const px = xToPx(curve.x[i]), py = tToPy(curve.y[i]);
+    ctx.beginPath();
+    ctx.arc(px, py, dragging && dragging.which === which && dragging.index === i ? 6 : 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    hitPoints.push({ which, index: i, px, py });
+  }
+}
+
+function drawPeakMarker(rpm, val, xToPx, yToPy, color, text) {
+  const px = xToPx(rpm), py = yToPy(val);
+  ctx.strokeStyle = color;
+  ctx.setLineDash([2, 3]);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - 14); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = color;
+  ctx.font = "10.5px -apple-system, Segoe UI, sans-serif";
+  const tw = ctx.measureText(text).width;
+  let tx = px - tw / 2;
+  tx = Math.max(4, Math.min(tx, canvas.width / dpr - tw - 4));
+  ctx.fillText(text, tx, py - 17);
+}
+
+// --- drag interaction ---------------------------------------------------
+
+function pickPoint(mx, my) {
+  let best = null, bestD = 12; // px hit radius
+  for (const p of hitPoints) {
+    const d = Math.hypot(p.px - mx, p.py - my);
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+canvas.addEventListener("mousedown", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const hit = pickPoint(mx, my);
+  if (hit) {
+    dragging = { which: hit.which, index: hit.index };
+    canvas.style.cursor = "grabbing";
+    renderCanvas();
+  }
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!dragging || !lastTransform) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const curve = curveOf(dragging.which);
+  const i = dragging.index;
+  let newX = lastTransform.pxToX(mx);
+  let newY = lastTransform.pyToT(my);
+
+  const EPS = 1;
+  const pinnedX = dragging.which === "motoring" && i === 0;
+  if (!pinnedX) {
+    let lo = i > 0 ? curve.x[i - 1] + EPS : (dragging.which === "wot" ? 0 : -Infinity);
+    let hi = i < curve.x.length - 1 ? curve.x[i + 1] - EPS : Infinity;
+    if (lo > hi) lo = hi;
+    newX = Math.min(Math.max(newX, lo), hi);
+    curve.x[i] = newX;
+  }
+  if (dragging.which === "motoring") newY = Math.min(newY, 0);
+  curve.y[i] = newY;
+
+  markDirty();
+  updateCurveRowInputs(dragging.which, i);
+  afterChange();
+});
+
+window.addEventListener("mouseup", () => {
+  if (dragging) {
+    dragging = null;
+    canvas.style.cursor = "default";
+    renderCanvas();
+  }
+});
+
+function updateCurveRowInputs(which, idx) {
+  const wrapId = which === "wot" ? "wotTableWrap" : "motoringTableWrap";
+  const rows = document.querySelectorAll("#" + wrapId + " tbody tr");
+  const row = rows[idx];
+  if (!row) return;
+  const inputs = row.querySelectorAll("input");
+  const curve = curveOf(which);
+  inputs[0].value = curve.x[idx];
+  inputs[1].value = curve.y[idx];
+}
+
+window.addEventListener("resize", () => { if (doc) renderCanvas(); });
+
+// ---------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------
+
+function afterChange() {
+  if (!doc) return;
+  normalizeDoc();
+  lastErrors = validateAll(doc);
+  updateValidationUI(lastErrors);
+  renderCanvas();
+}
+
+function loadDocFromObject(parsed, filename) {
+  const notes = [];
+  if (parsed.format !== "physics_sim.engine/1") {
+    notes.push("format was " + JSON.stringify(parsed.format) + "; will be saved as \"physics_sim.engine/1\".");
+  }
+  parsed.format = "physics_sim.engine/1";
+  if (parsed.kind !== "torque_map") {
+    notes.push("kind was " + JSON.stringify(parsed.kind) + "; this editor only supports \"torque_map\" and set it accordingly.");
+  }
+  parsed.kind = "torque_map";
+  hydrate(parsed);
+  doc = parsed;
+  currentFilename = filename;
+  dirty = false;
+  if (notes.length) showBanner(notes.join(" ")); else hideBanner();
+
+  buildForm();
+  syncFormValues();
+  rebuildCurveTable("wot");
+  rebuildCurveTable("motoring");
+  document.getElementById("filename").textContent = filename || "(new file, unsaved)";
+  afterChange();
+}
+
+function newEngine() {
+  if (dirty && !confirm("Discard unsaved changes?")) return;
+  loadDocFromObject(defaultEngineDoc(), null);
+}
+
+function openFile(file) {
+  if (dirty && !confirm("Discard unsaved changes?")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch (e) {
+      showBanner("Could not parse " + file.name + " as JSON: " + e.message);
+      return;
+    }
+    loadDocFromObject(parsed, file.name);
+  };
+  reader.onerror = () => showBanner("Could not read " + file.name + ".");
+  reader.readAsText(file);
+}
+
+function buildOutputText() {
+  return JSON.stringify(doc, null, 2) + "\n";
+}
+
+function sanitizeFilename(s) {
+  return (s || "engine").trim().replace(/[^a-zA-Z0-9_.-]+/g, "_") || "engine";
+}
+
+function saveFile() {
+  if (!doc) return;
+  const errors = validateAll(doc);
+  if (Object.keys(errors).length > 0) return;
+  const text = buildOutputText();
+  const name = currentFilename || (sanitizeFilename(doc.name) + ".json");
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  dirty = false;
+}
+
+function showBanner(text) {
+  document.getElementById("bannerText").textContent = text;
+  document.getElementById("banner").style.display = "block";
+}
+function hideBanner() { document.getElementById("banner").style.display = "none"; }
+
+// --- wiring ---------------------------------------------------------
+
+document.getElementById("btnNew").addEventListener("click", newEngine);
+document.getElementById("btnOpen").addEventListener("click", () => document.getElementById("fileInput").click());
+document.getElementById("fileInput").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (f) openFile(f);
+  e.target.value = "";
+});
+document.getElementById("btnSave").addEventListener("click", saveFile);
+document.getElementById("bannerClose").addEventListener("click", hideBanner);
+
+const dropOverlay = document.getElementById("dropOverlay");
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; dropOverlay.classList.add("active"); });
+window.addEventListener("dragover", (e) => { e.preventDefault(); });
+window.addEventListener("dragleave", (e) => { dragDepth = Math.max(0, dragDepth - 1); if (dragDepth === 0) dropOverlay.classList.remove("active"); });
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.classList.remove("active");
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) openFile(f);
+});
+
+// Expose a small test/debug surface (no effect on normal use).
+window.__engineEditor = {
+  loadDocFromObject,
+  buildOutputText,
+  getDoc: () => doc,
+  getErrors: () => lastErrors,
+  newEngine,
+  _debugHitPoints: () => hitPoints,
+  _debugTransform: () => lastTransform,
+  _debugCanvasRect: () => canvas.getBoundingClientRect()
+};
+
+// Start with a fresh, valid, editable default engine.
+newEngine();
+
+})();
+</script>
+</body>
+</html>
