@@ -64,6 +64,14 @@ bool PsSimulation::load_scenario(const String& absolute_json_path) {
         articulation_link_counts_.clear();
         for (const ps::io::ScenarioArticulation& sa : scenario.articulations) articulation_link_counts_[sa.name] = sa.desc.links.size();
 
+        // Gamepad rumble (haptics_core.h): cache this World's actual
+        // gravity vector (ps::io::Scenario::world_config is already a
+        // public field - no core change) so the chassis proper-acceleration
+        // computation in post_step removes exactly what this World applies,
+        // not an assumed constant.
+        gravity_ = scenario.world_config.gravity;
+        chassis_accel_state_.clear();
+
         ps::io::BuiltScenario built = ps::io::build_scenario(scenario);
         world_ = std::move(built.world);
         bodies_by_name_ = std::move(built.bodies_by_name);
@@ -175,6 +183,11 @@ void PsSimulation::rebuild_post_step_and_start() {
             if (body_it == bodies_by_name_.end()) continue;
             world_->backend().set_pose(body_it->second, r.pose);
             world_->backend().set_motion(body_it->second, ps::Motion{});
+            // Gamepad rumble: a teleport is a discontinuous velocity jump,
+            // not a real acceleration - drop the previous-velocity sample so
+            // post_step treats the next tick as the first one again (accel
+            // 0) instead of reading a huge spurious spike.
+            chassis_accel_state_.erase(r.vehicle_name);
 
             // PHYS-033 P4 I3 plan section 12.1: also reset the drivetrain
             // network itself (right after the chassis pose/velocity above,
@@ -249,6 +262,43 @@ void PsSimulation::rebuild_post_step_and_start() {
                 const auto body_it = bodies_by_name_.find(chassis_name_it->second);
                 if (body_it != bodies_by_name_.end()) {
                     const ps::Pose chassis_pose = world_->get_pose(body_it->second); // safe: sim thread, right after step()
+
+                    // Gamepad rumble (haptics_core.h): chassis PROPER
+                    // (gravity-removed) linear acceleration, CHASSIS frame -
+                    // finite-difference the chassis's own world-frame linear
+                    // velocity (World::get_motion) between this tick and the
+                    // previous one, at the World's fixed tick dt (post_step
+                    // runs exactly once per World::step(), so the sample
+                    // spacing is exactly world_->dt() - the SIM's own 240 Hz,
+                    // not whatever rate a reader happens to poll at). Proper
+                    // acceleration = coordinate acceleration (dv/dt) minus
+                    // the gravity vector (what an accelerometer bolted to the
+                    // chassis reads: ~0 in free fall, ~+9.81 upward at rest -
+                    // matches haptics_core.h's HapticsInput::accel_x/y/z
+                    // contract), then rotated from world into the chassis's
+                    // OWN frame (orientation.inverse().rotate, world->local)
+                    // using this tick's orientation. First tick after a fresh
+                    // spawn or a reset_vehicle teleport (chassis_accel_state_
+                    // erased there) has no previous sample - accel_local
+                    // stays zero rather than reading a bogus spike.
+                    ChassisAccelState& accel_state = chassis_accel_state_[name];
+                    const ps::Motion chassis_motion = world_->get_motion(body_it->second);
+                    ps::Vec3 accel_local = ps::Vec3::zero();
+                    if (accel_state.valid) {
+                        const ps::Vec3 accel_coord_world = (chassis_motion.linear - accel_state.prev_velocity_world) / world_->dt();
+                        const ps::Vec3 accel_proper_world = accel_coord_world - gravity_;
+                        accel_local = chassis_pose.orientation.inverse().rotate(accel_proper_world);
+                    }
+                    accel_state.prev_velocity_world = chassis_motion.linear;
+                    accel_state.valid = true;
+                    // NOTE: `vs` was already moved into snap.vehicles above
+                    // (push_back(std::move(vs))) - write through the pushed
+                    // element itself (snap.vehicles' last entry is exactly
+                    // this vehicle's, single-threaded, nothing else pushes
+                    // to snap.vehicles between the two), not the now-moved-
+                    // from local `vs`.
+                    snap.vehicles.back().accel_local = accel_local;
+
                     const auto radius_it = vehicle_stream_radius_m_.find(name);
                     const ps::real radius = radius_it != vehicle_stream_radius_m_.end() ? static_cast<ps::real>(radius_it->second) : 500.0;
                     world_->set_terrain_interest_point(vehicle_terrain_interest_id_.at(name), chassis_pose.position, radius);
@@ -644,6 +694,15 @@ const WheelDynamicSnapshot* PsSimulation::dynamic_wheel(const std::string& vehic
     return &wheels[static_cast<std::size_t>(wheel_index)];
 }
 
+Vector3 PsSimulation::get_vehicle_chassis_accel_local(const String& vehicle_name) const {
+    const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
+    if (order_index == static_cast<std::size_t>(-1)) return Vector3();
+    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    if (order_index >= snap.vehicles.size()) return Vector3();
+    const ps::Vec3& a = snap.vehicles[order_index].accel_local;
+    return Vector3(static_cast<float>(a.x), static_cast<float>(a.y), static_cast<float>(a.z));
+}
+
 float PsSimulation::get_wheel_compression(const String& vehicle_name, int wheel_index) const {
     const WheelDynamicSnapshot* w = dynamic_wheel(to_std_string(vehicle_name), wheel_index);
     return w == nullptr ? 0.0f : static_cast<float>(w->compression);
@@ -736,6 +795,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_max_wheel_angle", "vehicle_name"), &PsSimulation::get_vehicle_max_wheel_angle);
     ClassDB::bind_method(D_METHOD("get_vehicle_rear_steer_fraction", "vehicle_name"), &PsSimulation::get_vehicle_rear_steer_fraction);
     ClassDB::bind_method(D_METHOD("get_vehicle_powertrain", "vehicle_name"), &PsSimulation::get_vehicle_powertrain);
+    ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_wheel_omega", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_omega);
     ClassDB::bind_method(D_METHOD("get_wheel_steer_angle", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_steer_angle);

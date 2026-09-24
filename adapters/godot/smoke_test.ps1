@@ -2,7 +2,8 @@
 <#
 .SYNOPSIS
     PLAN.md P2/M1 headless smoke test: builds the ps_godot_adapter
-    GDExtension and its two plain-C++ tests, runs them, runs the demo Godot
+    GDExtension and its plain-C++ tests (input mapping, origin rebasing,
+    haptics rumble shaping), runs them, runs the demo Godot
     project headless (fails if Godot prints any error), then runs it again
     with --m1-autopilot (main.gd's scripted throttle/brake/steer sequence)
     and asserts the car moved sensibly (distance, top speed, upright, no
@@ -71,7 +72,7 @@ if (-not $SkipBuild) {
 
     if ($script:Failures.Count -eq 0) {
         Write-Host "`n-- build --" -ForegroundColor Cyan
-        $buildExitCode = Invoke-AdapterCMakeBuild -BuildDir $buildDir -Targets @('ps_godot_adapter', 'ps_godot_test_input_map', 'ps_godot_test_origin_rebase')
+        $buildExitCode = Invoke-AdapterCMakeBuild -BuildDir $buildDir -Targets @('ps_godot_adapter', 'ps_godot_test_input_map', 'ps_godot_test_origin_rebase', 'ps_godot_test_haptics')
         if ($buildExitCode -ne 0) { Report-Fail "cmake build failed (exit $buildExitCode)" }
     }
 }
@@ -85,7 +86,7 @@ if ($script:Failures.Count -eq 0) {
 # synthetic input - see adapters/godot/tests/).
 # ---------------------------------------------------------------------------
 if ($script:Failures.Count -eq 0) {
-    foreach ($testName in @('ps_godot_test_input_map', 'ps_godot_test_origin_rebase')) {
+    foreach ($testName in @('ps_godot_test_input_map', 'ps_godot_test_origin_rebase', 'ps_godot_test_haptics')) {
         $exe = Get-ChildItem -Path $buildDir -Recurse -Filter "$testName.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $exe) {
             Report-Fail "$testName.exe not found under $buildDir"

@@ -18,6 +18,7 @@ add_library(ps_godot_adapter SHARED
   src/frame_convert_core.cpp
   src/input_map_core.cpp
   src/input_map.cpp
+  src/haptics_core.cpp
   src/ps_simulation.cpp
   src/ps_body_node.cpp
   src/debug_draw.cpp
@@ -82,6 +83,13 @@ add_executable(ps_godot_test_origin_rebase tests/test_origin_rebase.cpp src/fram
 target_include_directories(ps_godot_test_origin_rebase PRIVATE src)
 target_link_libraries(ps_godot_test_origin_rebase PRIVATE ps_core ps_warnings ps_options)
 
+# Multi-stage gamepad rumble core (haptics_core.h/.cpp) - Godot-free like
+# input_map_core.h, so this stays a plain-C++ test with no godot-cpp/ps_core
+# dependency, same reasoning as ps_godot_test_input_map above.
+add_executable(ps_godot_test_haptics tests/test_haptics.cpp src/haptics_core.cpp)
+target_include_directories(ps_godot_test_haptics PRIVATE src)
+target_link_libraries(ps_godot_test_haptics PRIVATE ps_warnings ps_options)
+
 # Registered unconditionally (independent of PS_BUILD_TESTS, which governs
 # the other agent's tests/ suite only): include(CTest) calls enable_testing()
 # itself if it has not already run, so these register whenever
@@ -89,3 +97,4 @@ target_link_libraries(ps_godot_test_origin_rebase PRIVATE ps_core ps_warnings ps
 include(CTest)
 add_test(NAME ps_godot_test_input_map COMMAND ps_godot_test_input_map)
 add_test(NAME ps_godot_test_origin_rebase COMMAND ps_godot_test_origin_rebase)
+add_test(NAME ps_godot_test_haptics COMMAND ps_godot_test_haptics)

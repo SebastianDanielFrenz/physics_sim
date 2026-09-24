@@ -94,6 +94,19 @@ struct VehicleDynamicSnapshot {
     // as the wheels above (World::powertrain_state is sim-thread-only live
     // state, same contract as wheel_telemetry).
     ps::drivetrain::PowertrainSnapshot powertrain;
+    // Gamepad rumble (haptics_core.h): the chassis's PROPER (gravity-
+    // removed) linear acceleration, CHASSIS frame (x fwd, y left, z up),
+    // computed once per SIM TICK (240 Hz) in post_step by finite-
+    // differencing the chassis's own world-frame linear velocity between
+    // consecutive ticks (World::get_motion, right after step() - safe,
+    // same sim-thread contract as the chassis pose read just below this
+    // struct's use in ps_simulation.cpp) and rotating the result into the
+    // chassis's current orientation - see ps_simulation.cpp's post_step
+    // lambda for the exact derivation and PsInputMap::_process for how
+    // often a reader actually picks up a new value (render rate, which is
+    // usually slower than 240 Hz, so the same value is read more than
+    // once per new tick).
+    ps::Vec3 accel_local = ps::Vec3::zero();
 };
 
 struct AdapterSnapshot {
@@ -280,6 +293,13 @@ public:
     [[nodiscard]] float get_vehicle_max_wheel_angle(const godot::String& vehicle_name) const;
     [[nodiscard]] float get_vehicle_rear_steer_fraction(const godot::String& vehicle_name) const;
 
+    // Gamepad rumble (haptics_core.h): chassis proper (gravity-removed)
+    // linear acceleration, CHASSIS frame, race-free via AdapterSnapshot -
+    // see VehicleDynamicSnapshot::accel_local's own comment for exactly how
+    // this is derived. Zero for an unknown vehicle or before the second
+    // tick (no previous velocity sample yet).
+    [[nodiscard]] godot::Vector3 get_vehicle_chassis_accel_local(const godot::String& vehicle_name) const;
+
     // Dynamic per-wheel telemetry (race-free via AdapterSnapshot).
     [[nodiscard]] float get_wheel_compression(const godot::String& vehicle_name, int wheel_index) const;
     [[nodiscard]] float get_wheel_omega(const godot::String& vehicle_name, int wheel_index) const;
@@ -342,6 +362,23 @@ private:
     std::unordered_map<std::string, std::uint64_t> vehicle_terrain_interest_id_;
     std::unordered_map<std::string, float> vehicle_stream_radius_m_;
     std::uint64_t next_terrain_interest_id_ = 1;
+
+    // Gamepad rumble (haptics_core.h): one previous world-frame chassis
+    // linear-velocity sample per vehicle, for the finite-difference
+    // acceleration computed once per tick in post_step (see
+    // VehicleDynamicSnapshot::accel_local's comment) - `valid` is false
+    // until the second sample (or right after a reset_vehicle teleport,
+    // which would otherwise read as a huge spurious accel spike).
+    struct ChassisAccelState {
+        ps::Vec3 prev_velocity_world = ps::Vec3::zero();
+        bool valid = false;
+    };
+    std::unordered_map<std::string, ChassisAccelState> chassis_accel_state_;
+    // Cached from the loaded scenario's own WorldConfig::gravity
+    // (ps::io::Scenario::world_config, already a public field - no core
+    // change needed) so accel_local above can remove EXACTLY the gravity
+    // this World was actually built with, not an assumed constant.
+    ps::Vec3 gravity_ = ps::Vec3{0.0, 0.0, -9.81};
 
     std::shared_ptr<const ps::io::SurfaceTable> surface_table_; // set by import_test_ground; null == no surface names available
     // Fall diagnostic (fall_detector.h): the installed terrain source (set

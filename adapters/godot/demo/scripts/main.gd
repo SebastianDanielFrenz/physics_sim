@@ -505,6 +505,11 @@ func _setup_input_map() -> void:
 	input_map = ClassDB.instantiate("PsInputMap")
 	input_map.name = "InputMap"
 	add_child(input_map)
+	# Gamepad rumble (haptics_core.h): lets PsInputMap reach the running
+	# vehicle's own telemetry through PsSimulation's race-free getters -
+	# same NodePath-export pattern hud.gd already uses for simulation_path.
+	input_map.set("simulation_path", simulation.get_path())
+	input_map.set("vehicle_name", VEHICLE_NAME)
 
 func _setup_hud() -> void:
 	hud = CanvasLayer.new()
