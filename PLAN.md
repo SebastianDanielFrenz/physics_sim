@@ -583,6 +583,14 @@ model at load/edit time (this is where rotary, hydrogen, forced induction and
 altitude come from), and our own sound synthesiser in the adapter.
 engine-sim is a reference and a source of example engines only: it fails
 D7/D10/D3 and the P9 budget and covers little of the list above.
+Refined 2026-09-24 by measurement (vault PHYS-038), on Sebastian's rule "live
+if the performance allows it, otherwise lookup tables": a live crank-angle
+model for every vehicle costs 1.4–2.3× the whole P9(a) budget, so power stays
+on maps in core. Audio does not come from the maps: the same cycle model runs
+live in the adapter, speed-slaved to the core (about 4 % of one core per
+audible V8), with crank-angle tables from the map generator as a fallback. The
+generator integrates with a fixed time step (the model is stiff), not a fixed
+crank angle.
 
 Electric drive requirement (Sebastian, 2026-09-23): a parallel system for
 electric drives — battery electric, fuel cell, and other sources — alongside
