@@ -520,9 +520,11 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             components_.push_back(std::make_unique<GearPair>(node_for_key(component_port_key(c.id, "in")),
                                                                node_for_key(component_port_key(c.id, "out")), *g));
         } else if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
-            components_.push_back(std::make_unique<OpenDifferential>(node_for_key(component_port_key(c.id, "carrier")),
-                                                                       node_for_key(component_port_key(c.id, "left")),
-                                                                       node_for_key(component_port_key(c.id, "right")), *d));
+            auto diff = std::make_unique<OpenDifferential>(node_for_key(component_port_key(c.id, "carrier")),
+                                                             node_for_key(component_port_key(c.id, "left")),
+                                                             node_for_key(component_port_key(c.id, "right")), *d);
+            diff_ = diff.get(); // PHYS-033 P4 I3 commit 7: powertrain_debug's diff/hub torque reads (powertrain.h)
+            components_.push_back(std::move(diff));
         }
     }
     components_.push_back(std::make_unique<DirectTorqueBrakes>(std::move(brake_rows), brakes.static_factor));

@@ -88,11 +88,18 @@ struct VehicleTestRig {
 // default, matching the old behaviour exactly) a longitudinal slope that
 // DESCENDS in +X (the direction this comment used to get backwards - i.e.
 // +X is downhill, not uphill).
+// `ground_half_extent` (PHYS-033 P4 I3 plan section 13's own request,
+// default 1000 - matches every existing caller exactly): the accel/top-speed
+// validation tests (13.1/13.2) drive far enough (their own 2000/4000 m
+// callers) that the old hardcoded 1000 m half-extent would run the car off
+// the edge exactly like the original 60x60 m box did (see the comment
+// below).
 inline VehicleTestRig build_vehicle_rig_from_desc(const ps::vehicle::VehicleDesc& desc, ps::real chassis_mass,
                                                    const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
                                                    ps::real slope_grade = 0.0, int job_workers = 4,
                                                    ps::Vec3 tilt_axis = ps::Vec3::unit_y(),
-                                                   ps::real tick_hz = 240.0, ps::real substep_hz = 960.0) {
+                                                   ps::real tick_hz = 240.0, ps::real substep_hz = 960.0,
+                                                   ps::real ground_half_extent = 1000.0) {
     VehicleTestRig rig;
 
     ps::WorldConfig cfg;
@@ -105,12 +112,13 @@ inline VehicleTestRig build_vehicle_rig_from_desc(const ps::vehicle::VehicleDesc
     const ps::Quat tilt = ps::Quat::from_axis_angle(tilt_axis.normalized(), theta);
 
     ps::BodyDesc ground;
-    // 1000 x 1000 m: comfortably larger than any distance a validation test
-    // drives (found the hard way - PLAN.md P3's braking test drove a car
-    // off the edge of an earlier 60x60 m ground box at ~57 m into an 8 s
-    // run, sending it into free fall - which looked like a runaway
-    // instability in "speed" until traced to vz, not a physics bug at all).
-    ground.shape = ps::BoxShape{ps::Vec3{1000.0, 1000.0, 0.5}};
+    // ground_half_extent x ground_half_extent m (default 1000): comfortably
+    // larger than any distance a validation test drives (found the hard way
+    // - PLAN.md P3's braking test drove a car off the edge of an earlier
+    // 60x60 m ground box at ~57 m into an 8 s run, sending it into free fall
+    // - which looked like a runaway instability in "speed" until traced to
+    // vz, not a physics bug at all).
+    ground.shape = ps::BoxShape{ps::Vec3{ground_half_extent, ground_half_extent, 0.5}};
     ground.motion = ps::BodyMotionType::Static;
     ground.friction = 1.0;
     // Placed so the point directly "above" world (0,0,0) along the box's
@@ -140,10 +148,12 @@ inline VehicleTestRig build_vehicle_rig_from_desc(const ps::vehicle::VehicleDesc
 
 inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps::real chassis_mass,
                                          const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
-                                         ps::real slope_grade = 0.0, int job_workers = 4) {
+                                         ps::real slope_grade = 0.0, int job_workers = 4,
+                                         ps::Vec3 tilt_axis = ps::Vec3::unit_y(), ps::real tick_hz = 240.0,
+                                         ps::real substep_hz = 960.0, ps::real ground_half_extent = 1000.0) {
     const ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(vehicle_json_path);
-    return build_vehicle_rig_from_desc(desc, chassis_mass, chassis_half_extents, chassis_origin_height,
-                                        slope_grade, job_workers);
+    return build_vehicle_rig_from_desc(desc, chassis_mass, chassis_half_extents, chassis_origin_height, slope_grade,
+                                        job_workers, tilt_axis, tick_hz, substep_hz, ground_half_extent);
 }
 
 // Same as build_vehicle_rig but for a FLAT ground tagged with a specific

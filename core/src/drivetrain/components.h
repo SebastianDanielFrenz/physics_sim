@@ -133,6 +133,20 @@ public:
                      PowertrainEnergy& ledger) override;
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
 
+    // PHYS-033 P4 I3 commit 7: World::powertrain_debug's diff_mesh_torque/
+    // hub_shaft_torque read-only accessors. Reuses lambda_mesh_prev_ AS-IS
+    // (already reconstructed every substep for both shipped vehicles, whose
+    // diffs are both efficiency < 1 - car_sedan 0.97, tractor 0.94 - see
+    // this class's own post_solve) rather than adding any new hashed state
+    // or changing when/how it is computed.
+    [[nodiscard]] real lambda_mesh() const { return lambda_mesh_prev_; }
+    [[nodiscard]] NodeId left_node() const { return left_; }
+    [[nodiscard]] NodeId right_node() const { return right_; }
+    // hub_shaft_torque[i] = hub_coef() * lambda_mesh() for i in {left, right}
+    // (plan section 4.5's own formula, "coef*lambda_diff"; both hubs share
+    // the same coefficient - an open diff always splits torque 50/50).
+    [[nodiscard]] real hub_coef() const { return -desc_.ratio / real(2.0); }
+
 private:
     NodeId carrier_, left_, right_;
     DifferentialDesc desc_;

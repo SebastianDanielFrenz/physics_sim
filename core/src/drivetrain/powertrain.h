@@ -36,6 +36,7 @@
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/vehicle/vehicle_reset.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -173,6 +174,36 @@ public:
     // needs grind_active; only meaningful when has_gearbox().
     [[nodiscard]] const Gearbox::StepResult& last_gearbox_result() const { return last_gearbox_result_; }
 
+    // PHYS-033 P4 I3 commit 7: World::powertrain_debug's read-only
+    // accessors (ps/drivetrain/powertrain_state.h's PowertrainDebug). Every
+    // one of these reads state that was ALREADY being computed and
+    // hashed for real (gearbox_lambda_mesh_prev_/OpenDifferential's own
+    // lambda_mesh_prev_, both car_sedan.json and tractor.json's gearbox/
+    // diff being efficiency < 1) - none of these accessors change what is
+    // computed, only expose it; none is itself hashed (plain reads).
+    [[nodiscard]] real clutch_cap_kinetic() const { return last_clutch_result_.cap_kinetic; }
+    [[nodiscard]] real clutch_cap_static() const { return last_clutch_result_.cap_static; }
+    [[nodiscard]] bool clutch_stuck() const { return has_clutch() ? network_.row_stuck(clutch_row_) : false; }
+    [[nodiscard]] real gearbox_mesh_torque_debug() const { return gearbox_lambda_mesh_prev_; }
+    [[nodiscard]] real diff_mesh_torque_debug() const { return diff_ ? diff_->lambda_mesh() : real(0.0); }
+    [[nodiscard]] real synchro_torque_debug() const {
+        return has_gearbox() ? network_.row_lambda(gearbox_synchro_row_) : real(0.0);
+    }
+    [[nodiscard]] real throttle_eff() const { return last_engine_result_.throttle_eff; }
+    [[nodiscard]] real idle_integrator() const { return has_engine() ? engine_->idle_integrator() : real(0.0); }
+    // Fills out[wheel_index] with the diff row's torque on that hub
+    // (coef*lambda, plan section 4.5), 0 for every undriven/non-diff hub;
+    // out's remaining entries (beyond hub_nodes_.size()) are left at 0.
+    void fill_hub_shaft_torque_debug(std::array<real, 8>& out) const {
+        out.fill(real(0.0));
+        if (diff_ == nullptr) return;
+        const real coef = diff_->hub_coef();
+        const real lambda = diff_->lambda_mesh();
+        for (std::size_t i = 0; i < hub_nodes_.size() && i < out.size(); ++i) {
+            if (hub_nodes_[i] == diff_->left_node() || hub_nodes_[i] == diff_->right_node()) out[i] = coef * lambda;
+        }
+    }
+
     // Network omega/stick-sets/topology-state (ShaftNetwork::fold_state_hash)
     // plus every component's own additional state (GearPair/OpenDifferential's
     // lambda_mesh_prev_, engine's state machine, gearbox's phase machine, the
@@ -200,6 +231,11 @@ private:
     Assembly assembly_;
     Assembly projection_assembly_; // dedicated scratch for apply_topology_switch, never touches assembly_
     std::vector<std::unique_ptr<IComponent>> components_; // gear_pair(s), differential(s), then brakes (appended last)
+    // Non-owning alias into components_ (nullptr if this vehicle's
+    // powertrain has no differential) - PHYS-033 P4 I3 commit 7's
+    // diff_mesh_torque_debug/fill_hub_shaft_torque_debug read it directly
+    // rather than scanning components_ by dynamic_cast every call.
+    OpenDifferential* diff_ = nullptr;
     std::vector<NodeId> hub_nodes_;
     std::vector<std::uint8_t> driven_; // parallel to hub_nodes_, WheelDesc order
     real driven_wheel_mean_radius_ = 0.0; // mean radius of driven wheels, computed once at construction

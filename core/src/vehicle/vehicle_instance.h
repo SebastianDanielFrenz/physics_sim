@@ -110,12 +110,28 @@ public:
     [[nodiscard]] int powertrain_nonspd_hits() const { return powertrain_.nonspd_hits(); }
     [[nodiscard]] int powertrain_lcp_stage3_hits() const { return powertrain_.lcp_stage3_hits(); }
     // PHYS-033 P4 I3 plan section 4.3/4.5: the adapter-facing snapshot and a
-    // by-value debug payload, both currently default-constructed stubs -
-    // commit 6 wires VehicleInstance's real engine/clutch/gearbox/TCU state
-    // into powertrain_state_ and this debug accessor's return value. Backs
-    // World::powertrain_state/powertrain_debug.
+    // by-value debug payload. Commit 6 wired powertrain_state_; commit 7
+    // wires this debug accessor (powertrain_state_ itself stays a snapshot
+    // filled once per tick by step_tick, this reads the Powertrain's live
+    // per-substep-cached state directly - both are sim-thread-only, same
+    // contract as wheel_telemetry). Backs World::powertrain_state/
+    // powertrain_debug.
     [[nodiscard]] const drivetrain::PowertrainSnapshot& powertrain_state() const { return powertrain_state_; }
-    [[nodiscard]] drivetrain::PowertrainDebug powertrain_debug() const { return drivetrain::PowertrainDebug{}; }
+    [[nodiscard]] drivetrain::PowertrainDebug powertrain_debug() const {
+        drivetrain::PowertrainDebug dbg;
+        dbg.clutch_torque = powertrain_.clutch_torque();
+        dbg.clutch_slip = powertrain_.clutch_slip();
+        dbg.clutch_cap_kinetic = powertrain_.clutch_cap_kinetic();
+        dbg.clutch_cap_static = powertrain_.clutch_cap_static();
+        dbg.clutch_stuck = powertrain_.clutch_stuck();
+        dbg.gearbox_mesh_torque = powertrain_.gearbox_mesh_torque_debug();
+        dbg.diff_mesh_torque = powertrain_.diff_mesh_torque_debug();
+        powertrain_.fill_hub_shaft_torque_debug(dbg.hub_shaft_torque);
+        dbg.throttle_eff = powertrain_.throttle_eff();
+        dbg.idle_integrator = powertrain_.idle_integrator();
+        dbg.synchro_torque = powertrain_.synchro_torque_debug();
+        return dbg;
+    }
 
     [[nodiscard]] BodyId chassis() const { return chassis_; }
     // PHYS-033 I1 W1: called ONLY from vehicle::System::note_body_wrench,
