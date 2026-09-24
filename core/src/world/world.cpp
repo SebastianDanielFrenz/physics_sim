@@ -541,6 +541,10 @@ drivetrain::PowertrainDebug World::powertrain_debug(VehicleId id) const {
     return vehicle_system_->at(id).powertrain_debug();
 }
 
+void World::reset_vehicle(VehicleId id, const vehicle::VehicleResetOptions& opts) {
+    vehicle_system_->at(id).reset(opts, *backend_);
+}
+
 real World::vehicle_shadow_dv_error(VehicleId id) const {
     return vehicle_system_->at(id).shadow_dv_error();
 }

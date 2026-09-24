@@ -193,6 +193,95 @@ TEST_CASE("ManualTcu: blip and ignition-cut flags follow the shift phase", "[uni
     }
 }
 
+// Owner ruling (PHYS-033 P4 I3, post-C6): a Neutral -> gear engagement at
+// low speed is a LAUNCH, not a mid-drive shift - it must follow the
+// rpm-gated Launch law, not the fast forced Shift-mode ClutchClosing
+// reclose (which locks the clutch in close_time_s regardless of engine rpm
+// and produced a ~1.7 peak slip wheelspin on every drive-off, measured in
+// test_vehicle_accel_standing_start.cpp before this fix).
+TEST_CASE("ManualTcu: launching from Neutral at low speed uses the Launch law, not a forced Shift reclose",
+          "[unit][drivetrain][tcu]") {
+    ManualTcu::Desc d;
+    d.auto_clutch.bite_rpm = 1100.0;
+    d.auto_clutch.full_rpm_min = 1600.0;
+    d.auto_clutch.full_rpm_max = 3000.0;
+    d.auto_clutch.lock_slip_rpm = 80.0;
+    d.auto_clutch.anti_stall_rpm = 950.0;
+    d.auto_clutch.engage_rate_per_s = 4.0;
+    d.auto_clutch.release_rate_per_s = 12.0;
+    // Deliberately fast: if launching from Neutral wrongly went through
+    // Shift mode, e_auto would snap most of the way to 1 within this test's
+    // own ~0.1 s fast-forward below, rpm be damned - that is exactly the
+    // failure this test guards against.
+    d.auto_clutch.open_time_s = 0.08;
+    d.auto_clutch.close_time_s = 0.20;
+    d.auto_clutch.launch_speed_threshold_mps = 1.0;
+    ManualTcu tcu(d);
+    const real h = 1.0 / 960.0;
+
+    ManualTcu::Sensors s = base_sensors();
+    s.gearbox_current = 0;
+    s.gearbox_target = 0;
+    s.gearbox_phase = Gearbox::Phase::Idle;
+    s.approx_speed_mps = 0.2; // near standstill
+    s.engine_omega = rpm_to_omega(800.0); // idle, below bite_rpm(1100)
+    (void)tcu.step(s, h, true); // baseline at rest: clutch closed in N (Launch law's own N rule)
+    CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
+    CHECK(tcu.e_auto() == Catch::Approx(1.0).margin(1e-3));
+
+    // Request 1st gear at near-standstill.
+    s.gear_request = 1.0;
+    const auto out = tcu.step(s, h, true);
+    CHECK(out.gearbox_target == 1);
+    CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch); // NOT Shift
+
+    // The gearbox itself now chases the new target (Powertrain's own
+    // set_target/phase_step, outside the TCU) - simulate it having started
+    // (phase no longer Idle, current still 0 until dog-in) while rpm stays
+    // at idle (well below bite_rpm): the Launch law's e_tgt is 0 here, so
+    // e_auto must RELEASE toward 0, not snap toward 1 via a forced reclose.
+    s.gear_request = kGearRequestNone;
+    s.gearbox_phase = Gearbox::Phase::Synchronising;
+    for (int i = 0; i < 100; ++i) (void)tcu.step(s, h, false); // ~0.1s - well along a 0.2s forced reclose, if it fired
+    CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
+    CHECK(tcu.e_auto() < real(0.5));
+
+    // Dog engages (current -> 1, phase -> Idle), rpm rises with throttle:
+    // the Launch law now ramps e_auto up as rpm climbs past bite, exactly
+    // as it would after any OTHER Launch-mode engagement.
+    s.gearbox_current = 1;
+    s.gearbox_target = 1;
+    s.gearbox_phase = Gearbox::Phase::Idle;
+    s.engine_omega = rpm_to_omega(1350.0); // (1350-1100)/(1600-1100) = 0.5
+    s.gearbox_in_omega = 0.0;              // large slip: input shaft not yet synced, stays Launch (not Locked)
+    for (int i = 0; i < 2000; ++i) (void)tcu.step(s, h, false);
+    CHECK(tcu.e_auto() == Catch::Approx(0.5).margin(0.02));
+    CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
+}
+
+TEST_CASE("ManualTcu: launching from Neutral ABOVE the speed threshold still uses the ordinary Shift-mode reclose",
+          "[unit][drivetrain][tcu]") {
+    ManualTcu::Desc d;
+    d.auto_clutch.launch_speed_threshold_mps = 1.0;
+    d.auto_clutch.open_time_s = 0.08;
+    d.auto_clutch.close_time_s = 0.20;
+    ManualTcu tcu(d);
+    const real h = 1.0 / 960.0;
+
+    ManualTcu::Sensors s = base_sensors();
+    s.gearbox_current = 0;
+    s.gearbox_target = 0;
+    s.gearbox_phase = Gearbox::Phase::Idle;
+    s.approx_speed_mps = 5.0; // well above the launch threshold - e.g. coasting in N, then selecting a gear
+    s.engine_omega = rpm_to_omega(800.0);
+    (void)tcu.step(s, h, true); // baseline
+
+    s.gear_request = 1.0;
+    const auto out = tcu.step(s, h, true);
+    CHECK(out.gearbox_target == 1);
+    CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Shift); // unchanged behaviour above the threshold
+}
+
 TEST_CASE("ManualTcu: auto-shift thresholds and hysteresis", "[unit][drivetrain][tcu]") {
     ManualTcu::Desc d;
     d.auto_shift.enabled = true;

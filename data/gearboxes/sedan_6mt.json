@@ -1,0 +1,21 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "sedan_6mt",
+  "type": "manual",
+  "source": "Plausible 6-speed manual transaxle for a 2.0 L front-drive sedan, NOT a specific gearbox. Ratios within the typical passenger-car range (1st 3.5-3.8, top 0.7-0.8, near-geometric progression; Naunheimer et al., Automotive Transmissions, 2nd ed., Springer 2011, ch. 3-4 - verify chapter before citing). Mesh efficiency 0.96-0.98 per gear (same source class). Synchro capacities are input-shaft-referred cone-synchro torques sized so a 1-2 upshift syncs in ~0.06 s; reverse has no synchro (it grinds if selected while rolling). Axis signs follow the mesh-reversal chain of a transverse transaxle (input +y, output -y). PHYS-033 I3.",
+  "forward_ratios":     [3.54, 2.05, 1.40, 1.08, 0.87, 0.72],
+  "forward_efficiency": [0.96, 0.97, 0.975, 0.98, 0.98, 0.975],
+  "reverse_ratios":     [-3.55],
+  "reverse_efficiency": [0.95],
+  "input_inertia_kgm2": 0.010,
+  "output_inertia_kgm2": 0.015,
+  "input_axis_local": [0, 1, 0],
+  "output_axis_local": [0, -1, 0],
+  "synchro": { "forward_capacity_nm": [80, 70, 60, 50, 50, 50], "reverse_capacity_nm": [0],
+               "static_factor": 1.0, "max_dog_mismatch_rad_s": 5.0 },
+  "neutral_phase_s": 0.06,
+  "dog_release_torque_nm": 60.0,
+  "grind_after_s": 0.25,
+  "abort_after_s": 1.0,
+  "initial_gear": 0
+}

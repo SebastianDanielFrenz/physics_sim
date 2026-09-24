@@ -1,0 +1,21 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "tractor_12f4r",
+  "type": "sequential",
+  "source": "I3 stand-in for a 3-range x 4-gear synchro-shuttle tractor gearbox (12F/12R class, e.g. the SyncShuttle-type boxes of 75-100 kW tractors - brochure class, not a specific product), flattened to one sequential list ordered by speed so shift_up/shift_down walk it: forward ratios are a geometric progression from 21.0 to 1.07 (step 1.31), giving 2.0-39.7 km/h at 2200 rpm with the 20.0 rear final drive and 1.025 m rear tyres; 4 reverse ratios (1.8-9.3 km/h). All positions synchronised (a real range change is usually unsynchronised: the range/shuttle selector structure, park lock and governor land in I4 - PHYS-033 section 9 'Tractor specifics'). Efficiency 0.95 per position (multi-stage spur train; Wong, Theory of Ground Vehicles, ch. 3 overall tractor transmission efficiencies ~0.85-0.92 - verify). PHYS-033 I3.",
+  "forward_ratios":     [21.0, 16.0, 12.2, 9.32, 7.11, 5.42, 4.14, 3.16, 2.41, 1.84, 1.40, 1.07],
+  "forward_efficiency": [0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95],
+  "reverse_ratios":     [-23.1, -13.4, -7.8, -4.55],
+  "reverse_efficiency": [0.94, 0.94, 0.94, 0.94],
+  "input_inertia_kgm2": 0.06,
+  "output_inertia_kgm2": 0.25,
+  "input_axis_local": [-1, 0, 0],
+  "output_axis_local": [-1, 0, 0],
+  "synchro": { "forward_capacity_nm": [250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250],
+               "reverse_capacity_nm": [250, 250, 250, 250], "static_factor": 1.0, "max_dog_mismatch_rad_s": 3.0 },
+  "neutral_phase_s": 0.12,
+  "dog_release_torque_nm": 150.0,
+  "grind_after_s": 0.30,
+  "abort_after_s": 1.5,
+  "initial_gear": 0
+}

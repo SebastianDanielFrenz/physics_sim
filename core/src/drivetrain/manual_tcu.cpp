@@ -85,7 +85,19 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // --- 6.5.2: auto-clutch ---------------------------------------------------
     const real rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
     const bool gearbox_shifting_now = !(s.gearbox_phase == Gearbox::Phase::Idle && s.gearbox_current == desired_target);
-    if (desired_target != s.gearbox_target || (s.gearbox_target != s.gearbox_current && mode_ != ClutchMode::Shift)) {
+    // Owner ruling: a Neutral -> gear engagement at or below
+    // launch_speed_threshold_mps is a LAUNCH, not a mid-drive shift - keep
+    // the TCU in (or move it to) Launch mode instead of forcing Shift, so
+    // the clutch follows the rpm-gated Launch law (this function's own
+    // Launch-mode block below) through the gearbox's own Selecting/
+    // Synchronising phases and into lockup, rather than the fast, rpm-blind
+    // Shift-mode ClutchClosing reclose. The gearbox's own phase_step is
+    // unaffected (it chases desired_target regardless of TCU mode).
+    const bool launching_from_neutral =
+        s.gearbox_current == 0 && desired_target != 0 && std::abs(s.approx_speed_mps) < desc_.auto_clutch.launch_speed_threshold_mps;
+    if (launching_from_neutral) {
+        if (mode_ == ClutchMode::Shift) mode_ = ClutchMode::Launch; // e.g. re-requesting 1st before an old shift settled
+    } else if (desired_target != s.gearbox_target || (s.gearbox_target != s.gearbox_current && mode_ != ClutchMode::Shift)) {
         // A new shift just got requested (this tick's own desired_target
         // differs from what the gearbox is currently chasing), or the
         // gearbox is already mid-shift from a PRIOR tick's request and the

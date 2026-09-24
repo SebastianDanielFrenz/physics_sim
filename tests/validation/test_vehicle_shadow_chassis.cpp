@@ -61,6 +61,18 @@ TEST_CASE("Shadow chassis: settled car + step steer at speed matches Jolt within
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
     ps_test::settle(*rig.world, 1.0);
     rig.world->backend().set_motion(rig.chassis, Motion{Vec3{20.0, 0.0, 0.0}, Vec3::zero()});
+    // PHYS-033 P4 I3 plan section 11: drop straight into an already-driving
+    // 3rd-gear state (gear_request alone only starts a shift from Neutral,
+    // which would spend several ticks slipping the clutch and desync the
+    // shadow from Jolt for reasons that have nothing to do with what this
+    // test checks) - reset_vehicle sets the network directly, no shift, no
+    // projection loss, matching the now-20 m/s chassis speed set above via
+    // its own hub-speed resolution (VehicleInstance::reset).
+    rig.world->set_control("gear_request", 3.0);
+    vehicle::VehicleResetOptions reset_opts;
+    reset_opts.gear = 3;
+    reset_opts.clutch_locked = true;
+    rig.world->reset_vehicle(rig.vehicle, reset_opts);
     rig.world->set_control("steer", 0.3);
     rig.world->set_control("throttle", 0.3);
 

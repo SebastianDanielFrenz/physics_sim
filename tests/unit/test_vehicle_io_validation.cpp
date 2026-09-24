@@ -16,6 +16,7 @@
 
 #include "ps/io/vehicle_io.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -24,6 +25,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <variant>
 
 using namespace ps;
 
@@ -178,19 +180,20 @@ TEST_CASE("load_vehicle_json rejects legacy /1 fields under /2", "[unit][vehicle
     }
 }
 
-// PHYS-033 P4 I2 plan section 5.4's build-time rule ("differential
-// efficiency must be 1.0 in I2, loader error otherwise") - enforced at
-// PARSE time (core/src/io/vehicle_io.cpp's read_powertrain), not deferred
-// to the Powertrain constructor (I2 commit 5b), so it is already testable
-// through the loader in commit 5a.
-TEST_CASE("load_vehicle_json rejects differential efficiency != 1 (I2 limitation)", "[unit][vehicle][io][drivetrain]") {
-    const std::string json = R"({
+// PHYS-033 P4 I3 plan section 5.4/9.1: I3 LIFTS I2's "differential
+// efficiency must be exactly 1" ban - any value in (0, 1] is now accepted
+// (the old I2-only test this replaced asserted the opposite and is
+// obsolete). Still rejects out-of-range values.
+TEST_CASE("load_vehicle_json accepts differential efficiency < 1 (I2 ban lifted) but rejects out-of-range", "[unit][vehicle][io][drivetrain]") {
+    auto json_with_eff = [](double eff) {
+        return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
   "wheels": [ { "name": "FL" }, { "name": "FR" } ],
   "powertrain": {
     "components": [
-      { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0, "efficiency": 0.9 }
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0, "efficiency": )") +
+               std::to_string(eff) + R"( }
     ],
     "shafts": [
       { "ports": ["diff.left", "wheel:FL"] },
@@ -198,8 +201,186 @@ TEST_CASE("load_vehicle_json rejects differential efficiency != 1 (I2 limitation
     ]
   }
 })";
-    TempJsonFile f(json, "vehicle_diff_eff");
-    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("efficiency"));
+    };
+    SECTION("0.9 is accepted") {
+        TempJsonFile f(json_with_eff(0.9), "vehicle_diff_eff_ok");
+        REQUIRE_NOTHROW(io::load_vehicle_json(f.path.string()));
+    }
+    SECTION("0 is rejected") {
+        TempJsonFile f(json_with_eff(0.0), "vehicle_diff_eff_zero");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("efficiency"));
+    }
+    SECTION("above 1 is rejected") {
+        TempJsonFile f(json_with_eff(1.1), "vehicle_diff_eff_over");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("efficiency"));
+    }
+}
+
+// --- PHYS-033 P4 I3 plan section 9.2 ----------------------------------------
+
+namespace {
+// A minimal but otherwise-complete I3 powertrain block (inline engine/
+// clutch/gearbox/differential, no external refs) - every one of section
+// 9.2's rejection cases below starts from this and breaks exactly one rule.
+std::string minimal_i3_engine_json() {
+    return R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+      "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+      "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+      "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0 })";
+}
+std::string minimal_i3_vehicle_json(const std::string& engine_component, const std::string& gearbox_component,
+                                     const std::string& extra_controller_fields = std::string()) {
+    return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      )") + engine_component + R"(,
+      { "id": "clutch", "type": "clutch", "capacity_nm": 300.0,
+        "engagement_vs_pedal": { "x": [0.0, 1.0], "y": [1.0, 0.0] } },
+      )" + gearbox_component + R"(,
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 3.7 }
+    ],
+    "shafts": [
+      { "ports": ["engine.crank", "clutch.in"] },
+      { "ports": ["clutch.out", "gearbox.in"] },
+      { "ports": ["gearbox.out", "diff.carrier"] },
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ]
+  })" + (extra_controller_fields.empty() ? std::string() : (",\n  \"controllers\": [ " + extra_controller_fields + " ]")) +
+           R"(
+})";
+}
+std::string minimal_i3_gearbox_json() {
+    return R"({ "id": "gearbox", "type": "gearbox", "forward_ratios": [3.0, 1.6, 1.0],
+      "forward_efficiency": [1.0, 1.0, 1.0] })";
+}
+// A gearbox is normally 'ref'd to a standalone physics_sim.gearbox/1 file
+// (both shipped vehicles do this - inline gearbox components are not a
+// real usage pattern the loader needs to support losslessly, since the
+// gearbox's OWN "type": "manual"|"sequential" field would collide with the
+// component-dispatch "type": "gearbox" key on the very same inline JSON
+// object). `gearbox_body` is the CONTENTS between the {} of a
+// physics_sim.gearbox/1 file (type/forward_ratios/forward_efficiency/...).
+struct RefGearbox {
+    TempJsonFile file;
+    std::string component_json;
+    RefGearbox(const std::string& gearbox_body, const char* tag)
+        : file(std::string(R"({ "format": "physics_sim.gearbox/1", "name": "fixture", )") + gearbox_body + "}", tag),
+          component_json(std::string(R"({ "id": "gearbox", "type": "gearbox", "ref": ")") + file.path.filename().string() + R"(" })") {}
+};
+} // namespace
+
+TEST_CASE("load_vehicle_json rejects an I2-style engine (no motoring curve, or hard_cut limiter)", "[unit][vehicle][io][drivetrain]") {
+    SECTION("missing motoring_torque_nm_vs_rpm") {
+        const std::string engine = R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+          "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] }, "inertia_kgm2": 0.16 })";
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_i2_engine_no_motoring");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("motoring_torque_nm_vs_rpm"));
+    }
+    SECTION("hard_cut limiter") {
+        const std::string engine = R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+          "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+          "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+          "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0, "limiter": { "type": "hard_cut", "rpm": 6500 } })";
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_i2_engine_hard_cut");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("hard_cut"));
+    }
+}
+
+TEST_CASE("load_vehicle_json rejects a component ref object with an extra key", "[unit][vehicle][io][drivetrain]") {
+    const std::string engine = R"({ "id": "engine", "type": "engine", "ref": "does_not_matter.json", "kind": "torque_map" })";
+    const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+    TempJsonFile f(json, "vehicle_ref_extra_key");
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("ref"));
+}
+
+TEST_CASE("load_vehicle_json rejects a ref to a /2 engine format file", "[unit][vehicle][io][drivetrain]") {
+    // An engine ref file with the WRONG format string (mimicking a future/
+    // unsupported major version) - require_format's own generic message.
+    const std::string bad_engine_file = R"({ "format": "physics_sim.engine/2", "name": "bad", "kind": "torque_map",
+      "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+      "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] }, "inertia_kgm2": 0.16 })";
+    TempJsonFile engine_file(bad_engine_file, "engine_v2_ref_target");
+    const std::string engine = std::string(R"({ "id": "engine", "type": "engine", "ref": ")") +
+                                engine_file.path.filename().string() + R"(" })";
+    const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+    TempJsonFile f(json, "vehicle_ref_v2_engine");
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("format"));
+}
+
+TEST_CASE("load_vehicle_json rejects non-monotone gearbox ratios", "[unit][vehicle][io][drivetrain]") {
+    // 3.0 -> 3.5 is NOT strictly decreasing.
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 3.5, 1.0], "forward_efficiency": [1.0, 1.0, 1.0])",
+                  "gearbox_nonmonotone_ref");
+    const std::string json = minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json);
+    TempJsonFile f(json, "vehicle_gearbox_nonmonotone");
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("forward_ratios"));
+}
+
+TEST_CASE("load_vehicle_json rejects mismatched gearbox array lengths", "[unit][vehicle][io][drivetrain]") {
+    // forward_efficiency length 2, forward_ratios length 3.
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0])",
+                  "gearbox_mismatched_len_ref");
+    const std::string json = minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json);
+    TempJsonFile f(json, "vehicle_gearbox_mismatched_len");
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("forward_efficiency"));
+}
+
+TEST_CASE("load_vehicle_json rejects a manual_tcu naming an unknown gearbox", "[unit][vehicle][io][drivetrain]") {
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0])",
+                  "gearbox_tcu_unknown_ref");
+    const std::string controller = R"({ "id": "tcu", "type": "manual_tcu", "gearbox": "no_such_gearbox",
+      "clutch": "clutch", "engine": "engine" })";
+    const std::string json = minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json, controller);
+    TempJsonFile f(json, "vehicle_tcu_unknown_gearbox");
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("no_such_gearbox"));
+}
+
+TEST_CASE("load_vehicle_json rejects a gearbox initial_gear out of range", "[unit][vehicle][io][drivetrain]") {
+    // Only 3 forward gears exist; initial_gear 5 is out of range.
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0], "initial_gear": 5)",
+                  "gearbox_initial_gear_oob_ref");
+    const std::string json = minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json);
+    TempJsonFile f(json, "vehicle_gearbox_initial_gear_oob");
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("initial_gear"));
+}
+
+TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehicle][io][drivetrain]") {
+    SECTION("car_sedan.json") {
+        const vehicle::VehicleDesc v = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
+        CHECK(v.name == "car_sedan");
+        CHECK(v.wheels.size() == 4);
+        // C6 staging (plan section commit table): aero block present but
+        // drag_area_m2 temporarily 0; C6c sets it to the final 0.68.
+        CHECK(v.aero.drag_area_m2 == Catch::Approx(0.0));
+        CHECK(v.controllers.size() == 1);
+        REQUIRE(v.powertrain.components.size() == 4);
+        const auto* engine = std::get_if<drivetrain::TorqueMapEngineDesc>(&v.powertrain.components[0].params);
+        REQUIRE(engine != nullptr);
+        CHECK(engine->inertia_kgm2 == Catch::Approx(0.16));
+        const auto* diff = std::get_if<drivetrain::DifferentialDesc>(&v.powertrain.components[3].params);
+        REQUIRE(diff != nullptr);
+        CHECK(diff->ratio == Catch::Approx(4.06));
+    }
+    SECTION("tractor.json") {
+        const vehicle::VehicleDesc v = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+        CHECK(v.name == "tractor");
+        CHECK(v.wheels.size() == 4);
+        // C6 staging (plan section commit table): aero block present but
+        // drag_area_m2 temporarily 0; C6c sets it to the final 4.0.
+        CHECK(v.aero.drag_area_m2 == Catch::Approx(0.0));
+        CHECK(v.controllers.size() == 1);
+        REQUIRE(v.powertrain.components.size() == 4);
+        const auto* gearbox = std::get_if<drivetrain::GearboxDesc>(&v.powertrain.components[2].params);
+        REQUIRE(gearbox != nullptr);
+        CHECK(gearbox->forward_ratios.size() == 12);
+        CHECK(gearbox->reverse_ratios.size() == 4);
+    }
 }
 
 std::string tyre_json_with_format(const std::string& format_field) {

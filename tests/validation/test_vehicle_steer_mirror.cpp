@@ -45,6 +45,7 @@ SteerRunResult drive_full_throttle_with_steer(real steer_control) {
                                        // test_vehicle_accel_standing_start.cpp's well-behaved (not the
                                        // documented unsettled-launch caveat) case.
 
+    rig.world->set_control("gear_request", 1.0); // engage 1st (auto-clutch is on by default, plan section 8)
     rig.world->set_control("steer", steer_control);
     rig.world->set_control("throttle", 1.0);
 

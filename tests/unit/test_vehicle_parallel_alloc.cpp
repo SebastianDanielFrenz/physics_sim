@@ -133,7 +133,7 @@ TEST_CASE("A full World::step with a vehicle allocates nothing inside the vehicl
         world.set_surface_table(surfaces);
 
         const vehicle::VehicleDesc desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
-        world.create_vehicle(desc, chassis_id);
+        const VehicleId vehicle_id = world.create_vehicle(desc, chassis_id);
 
         // Exercise steer/throttle/brake/handbrake together (every channel
         // VehicleInstance::step_tick reads via its ControlChannelIndices),
@@ -154,7 +154,12 @@ TEST_CASE("A full World::step with a vehicle allocates nothing inside the vehicl
         ps::jobs::debug_alloc::set_armed(true);
 
         // Phase 1: the original mixed steer/throttle/brake/handbrake steady
-        // state.
+        // state, now with a 1st-gear launch (PHYS-033 P4 I3 plan section 11's
+        // test_vehicle_parallel_alloc row) - exercises the gearbox's own
+        // Selecting/Synchronising phase_step path and the topology-state
+        // switch (Powertrain::apply_topology_switch) for zero-alloc, not
+        // just a steady already-in-gear or Neutral tick.
+        world.set_control("gear_request", 1.0);
         for (int i = 0; i < 100; ++i) world.step();
 
         // Phase 2 (plan section 11.4): braking only - exercises the
@@ -167,19 +172,77 @@ TEST_CASE("A full World::step with a vehicle allocates nothing inside the vehicl
         // Phase 3 (plan section 11.4): full throttle only - exercises the
         // engine's torque-map/limiter path and the open differential's
         // coupled solve with no friction rows active.
+        world.set_control("brake", 0.0);
+        world.set_control("handbrake", 0.0);
         world.set_control("throttle", 1.0);
+        for (int i = 0; i < 100; ++i) world.step();
+
+        // Phase 4 (plan section 11): two shifts - each one exercises the
+        // SAME gearbox phase_step/topology-switch path as the launch above,
+        // now from an already-moving, already-in-gear state (a different
+        // code path through Gearbox::phase_step's Releasing branch, which
+        // the launch above - starting from Neutral - never takes).
+        world.set_control("gear_request", 2.0);
+        for (int i = 0; i < 100; ++i) world.step();
+        world.set_control("gear_request", 3.0);
+        for (int i = 0; i < 100; ++i) world.step();
+
+        // Phase 5 (plan section 11): a grind - requesting Reverse while
+        // still rolling forward refuses the synchro (dog_release_torque_nm/
+        // grind_after_s/abort_after_s, gearbox.cpp) and fires a grind event;
+        // exercises that abort/grind bookkeeping path for zero-alloc too.
+        world.set_control("gear_request", -1.0);
+        for (int i = 0; i < 100; ++i) world.step();
+
+        // Phase 6 (plan section 11): a stall and restart. Auto-clutch off,
+        // clutch pedal dumped (0 == fully engaged) with the brakes on and no
+        // throttle loads the idling engine below stall_rpm (EngineTorqueMap
+        // ::pre_solve's Running -> Stalled transition); then starter cranks
+        // it back to Running - exercises both engine state-machine
+        // transitions (and the starter's own friction-capped torque path)
+        // for zero-alloc.
+        world.set_control("gear_request", 1.0);
+        world.set_control("assist.auto_clutch", 0.0);
+        world.set_control("clutch", 0.0);
+        world.set_control("throttle", 0.0);
+        world.set_control("brake", 1.0);
+        world.set_control("handbrake", 1.0);
+        for (int i = 0; i < 60; ++i) world.step();
+        world.set_control("starter", 1.0);
+        for (int i = 0; i < 40; ++i) world.step();
+        world.set_control("starter", 0.0);
+        world.set_control("clutch", 1.0); // release the pedal again
+        world.set_control("assist.auto_clutch", 1.0);
         world.set_control("brake", 0.0);
         world.set_control("handbrake", 0.0);
         for (int i = 0; i < 100; ++i) world.step();
 
         ps::jobs::debug_alloc::set_armed(false);
-        const std::uint64_t own = ps::jobs::debug_alloc::own_violation_count();
-        const std::uint64_t external = ps::jobs::debug_alloc::external_violation_count();
+        const std::uint64_t own1 = ps::jobs::debug_alloc::own_violation_count();
+        const std::uint64_t external1 = ps::jobs::debug_alloc::external_violation_count();
+        ps::jobs::debug_alloc::reset();
+
+        // Between armed windows (plan section 11): World::reset_vehicle
+        // itself is called between ticks, never from a job, so it is
+        // deliberately NOT armed-checked here (same reasoning the existing
+        // world.set_control() calls above already document) - only the
+        // driving that follows it, inside a FRESH armed window, is.
+        world.reset_vehicle(vehicle_id, vehicle::VehicleResetOptions{});
+
+        ps::jobs::debug_alloc::set_armed(true);
+        world.set_control("gear_request", 1.0);
+        world.set_control("throttle", 0.6);
+        for (int i = 0; i < 100; ++i) world.step();
+        ps::jobs::debug_alloc::set_armed(false);
+        const std::uint64_t own2 = ps::jobs::debug_alloc::own_violation_count();
+        const std::uint64_t external2 = ps::jobs::debug_alloc::external_violation_count();
         ps::jobs::debug_alloc::reset();
 
         INFO("workers=" << workers);
-        WARN("external (Jolt-internal, ungated, PLAN.md P9) violation count=" << external);
-        REQUIRE(own == 0);
+        WARN("external (Jolt-internal, ungated, PLAN.md P9) violation count, window 1=" << external1 << " window 2="
+                                                                                          << external2);
+        REQUIRE(own1 == 0);
+        REQUIRE(own2 == 0);
     }
 }
 

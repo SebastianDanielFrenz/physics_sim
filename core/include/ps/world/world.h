@@ -17,6 +17,7 @@
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
 #include "ps/vehicle/vehicle_desc.h"
+#include "ps/vehicle/vehicle_reset.h"
 #include "ps/vehicle/wheel_state.h"
 #include "ps/vehicle/wheel_telemetry.h"
 #include "ps/world/force_element.h"
@@ -201,6 +202,10 @@ public:
     // wheel_telemetry above.
     [[nodiscard]] const drivetrain::PowertrainSnapshot& powertrain_state(VehicleId id) const;
     [[nodiscard]] drivetrain::PowertrainDebug powertrain_debug(VehicleId id) const;
+    // PHYS-033 P4 I3 plan section 4.5: an out-of-band "teleport" of a
+    // vehicle's drivetrain state (vehicle_reset.h's own header comment) -
+    // call only between ticks, never from a job.
+    void reset_vehicle(VehicleId id, const vehicle::VehicleResetOptions& opts);
     // PHYS-033 I1 W1 (section 3.5): sim-thread-only live accessors, same
     // contract as wheel_telemetry above - see VehicleInstance::
     // shadow_dv_error's own comment for what these mean and their one-tick

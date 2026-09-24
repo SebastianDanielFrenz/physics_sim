@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -56,11 +57,11 @@ std::string resolve_path(const std::string& base_dir, const std::string& p) {
     return (std::filesystem::path(base_dir) / fp).string();
 }
 
-// PLAN.md P4 I0 (PHYS-033 section 9 / owner ruling Q7: NO legacy support -
+// PHYS-033 P4 I3 plan section 9.1 (owner ruling Q7: NO legacy support -
 // missing, unknown or outdated is a hard error, never a silent default).
-// `kind` is e.g. "vehicle" or "tyre"; `major` the only accepted major
-// version. Every standalone JSON file this loader reads goes through this
-// check exactly once, right after parsing.
+// `kind` is e.g. "vehicle", "tyre", "engine" or "gearbox"; `major` the only
+// accepted major version. Every standalone JSON file this loader reads goes
+// through this check exactly once, right after parsing.
 void require_format(const json& j, const std::string& kind, int major, const std::string& path) {
     const std::string expected = "physics_sim." + kind + "/" + std::to_string(major);
     if (!j.contains("format") || !j.at("format").is_string()) {
@@ -300,135 +301,247 @@ BrakeSystemDesc read_brake_system(const json& j) {
     return b;
 }
 
-// PHYS-033 P4 I2 plan section 9.1. Optional; absent means every wheel is
-// free (no powertrain at all). Graph validation (unknown ports, double-
-// connected ports, a zero-inertia unconnected hub, ...) is NOT done here -
-// it happens in drivetrain::Powertrain's constructor (plan section 4),
-// which does not exist yet in I2 commit 5a (temporary P3 shim only,
-// vehicle_instance.cpp) - added in commit 5b.
-PowertrainDesc read_powertrain(const json& j) {
-    PowertrainDesc p;
-    if (j.is_null()) return p;
+// --- PHYS-033 P4 I3 (plan section 9.1) --------------------------------------
 
-    if (j.contains("components")) {
-        std::vector<std::string> ids;
-        for (const auto& cj : j.at("components")) {
-            if (!cj.contains("id") || !cj.at("id").is_string() || cj.at("id").get<std::string>().empty()) {
-                throw std::runtime_error("powertrain.components[]: 'id' is required and must be a non-empty string");
-            }
-            const std::string id = cj.at("id").get<std::string>();
-            if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
-                throw std::runtime_error("powertrain.components[]: duplicate id '" + id + "'");
-            }
-            ids.push_back(id);
-            if (!cj.contains("type") || !cj.at("type").is_string()) {
-                throw std::runtime_error("powertrain.components['" + id + "']: 'type' is required");
-            }
-            const std::string type = cj.at("type").get<std::string>();
+void require_ascending(const Curve1D& c, const std::string& what) {
+    if (c.x.empty()) throw std::runtime_error(what + " must be non-empty");
+    for (std::size_t i = 1; i < c.x.size(); ++i) {
+        if (!(c.x[i] > c.x[i - 1])) throw std::runtime_error(what + ": x values must be strictly ascending");
+    }
+}
 
-            if (type == "engine") {
-                if (cj.value("kind", std::string()) != "torque_map") {
-                    throw std::runtime_error("powertrain.components['" + id + "']: engine 'kind' must be \"torque_map\" (I2's only kind)");
-                }
-                ps::drivetrain::TorqueMapEngineDesc e;
-                if (!cj.contains("wot_torque_nm_vs_rpm")) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: 'wot_torque_nm_vs_rpm' is required");
-                }
-                e.wot_torque_nm_vs_rpm = read_curve(cj.at("wot_torque_nm_vs_rpm"));
-                if (e.wot_torque_nm_vs_rpm.x.empty()) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: 'wot_torque_nm_vs_rpm' must be non-empty");
-                }
-                e.inertia_kgm2 = cj.value("inertia_kgm2", e.inertia_kgm2);
-                if (e.inertia_kgm2 < real(0.0)) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: inertia_kgm2 must be >= 0");
-                }
-                e.idle_rpm = cj.value("idle_rpm", e.idle_rpm);
-                if (e.idle_rpm <= real(0.0)) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: idle_rpm must be > 0");
-                }
-                if (cj.contains("limiter")) {
-                    const auto& lj = cj.at("limiter");
-                    e.limiter.type = lj.value("type", std::string("hard_cut"));
-                    if (e.limiter.type != "hard_cut") {
-                        throw std::runtime_error("powertrain.components['" + id + "']: limiter.type must be \"hard_cut\" (I2's only type)");
-                    }
-                    e.limiter.rpm = lj.value("rpm", e.limiter.rpm);
-                }
-                if (e.limiter.rpm <= e.idle_rpm) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: limiter.rpm must be > idle_rpm");
-                }
-                p.components.push_back({id, e});
-            } else if (type == "gear_pair") {
-                ps::drivetrain::GearPairDesc g;
-                g.ratio = cj.value("ratio", g.ratio);
-                if (g.ratio == real(0.0)) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: gear_pair 'ratio' must be != 0");
-                }
-                g.efficiency = cj.value("efficiency", g.efficiency);
-                if (g.efficiency <= real(0.0) || g.efficiency > real(1.0)) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: gear_pair 'efficiency' must be in (0, 1]");
-                }
-                g.inertia_in_kgm2 = cj.value("inertia_in_kgm2", g.inertia_in_kgm2);
-                g.inertia_out_kgm2 = cj.value("inertia_out_kgm2", g.inertia_out_kgm2);
-                p.components.push_back({id, g});
-            } else if (type == "differential") {
-                ps::drivetrain::DifferentialDesc d;
-                if (cj.value("kind", std::string()) != "open") {
-                    throw std::runtime_error("powertrain.components['" + id + "']: differential 'kind' must be \"open\" (I4 adds others)");
-                }
-                d.kind = ps::drivetrain::DifferentialKind::Open;
-                d.ratio = cj.value("ratio", d.ratio);
-                if (d.ratio == real(0.0)) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: differential 'ratio' must be != 0");
-                }
-                d.efficiency = cj.value("efficiency", d.efficiency);
-                if (d.efficiency != real(1.0)) {
-                    throw std::runtime_error("powertrain.components['" + id + "']: differential 'efficiency' must be exactly 1 in I2 (I4 adds losses)");
-                }
-                p.components.push_back({id, d});
-            } else {
-                throw std::runtime_error("powertrain.components['" + id + "']: unknown type \"" + type + "\"");
-            }
+// Zero or unit length (+-1e-6) - plan section 9.1's axis validation.
+void require_zero_or_unit(const Vec3& v, const std::string& what) {
+    const real len = v.length();
+    if (len <= real(1e-6)) return; // zero (== no rotor reaction for this port)
+    if (std::abs(len - real(1.0)) > real(1e-6)) {
+        throw std::runtime_error(what + " must be zero or a unit vector, got length " + std::to_string(len));
+    }
+}
+
+ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std::string& ctx) {
+    ps::drivetrain::TorqueMapEngineDesc e;
+    if (j.value("kind", std::string()) != "torque_map") {
+        throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" (I3's only kind)");
+    }
+    if (!j.contains("wot_torque_nm_vs_rpm")) throw std::runtime_error(ctx + ": 'wot_torque_nm_vs_rpm' is required");
+    e.wot_torque_nm_vs_rpm = read_curve(j.at("wot_torque_nm_vs_rpm"));
+    require_ascending(e.wot_torque_nm_vs_rpm, ctx + ".wot_torque_nm_vs_rpm");
+    if (e.wot_torque_nm_vs_rpm.x.front() < real(0.0)) {
+        throw std::runtime_error(ctx + ".wot_torque_nm_vs_rpm: x[0] must be >= 0");
+    }
+
+    if (!j.contains("motoring_torque_nm_vs_rpm")) {
+        throw std::runtime_error(ctx + ": 'motoring_torque_nm_vs_rpm' is required (PHYS-033 I3 - an I2-era engine "
+                                  "block without it is no longer accepted)");
+    }
+    e.motoring_torque_nm_vs_rpm = read_curve(j.at("motoring_torque_nm_vs_rpm"));
+    require_ascending(e.motoring_torque_nm_vs_rpm, ctx + ".motoring_torque_nm_vs_rpm");
+    if (e.motoring_torque_nm_vs_rpm.x.front() != real(0.0)) {
+        throw std::runtime_error(ctx + ".motoring_torque_nm_vs_rpm: x[0] must be exactly 0");
+    }
+    for (real y : e.motoring_torque_nm_vs_rpm.y) {
+        if (y > real(0.0)) throw std::runtime_error(ctx + ".motoring_torque_nm_vs_rpm: every y must be <= 0");
+    }
+
+    e.inertia_kgm2 = j.value("inertia_kgm2", real(0.0));
+    if (e.inertia_kgm2 <= real(0.0)) {
+        throw std::runtime_error(ctx + ": inertia_kgm2 must be > 0 in I3 (PHYS-033 I3 - the crank node needs real "
+                                  "inertia; an I2-era engine block with inertia_kgm2 <= 0 is no longer accepted)");
+    }
+
+    e.breakaway_torque_nm = j.value("breakaway_torque_nm", real(0.0));
+    const real motoring_at_0 = e.motoring_torque_nm_vs_rpm.evaluate(real(0.0));
+    if (e.breakaway_torque_nm < -motoring_at_0) {
+        throw std::runtime_error(ctx + ": breakaway_torque_nm must be >= -motoring_torque_nm_vs_rpm(0)");
+    }
+
+    e.idle_rpm = j.value("idle_rpm", e.idle_rpm);
+    e.stall_rpm = j.value("stall_rpm", e.stall_rpm);
+    e.fire_rpm = j.value("fire_rpm", e.fire_rpm);
+    e.start_complete_rpm = j.value("start_complete_rpm", e.start_complete_rpm);
+    e.dfco_enable_rpm = j.value("dfco_enable_rpm", e.dfco_enable_rpm);
+    e.dfco_reenable_rpm = j.value("dfco_reenable_rpm", e.dfco_reenable_rpm);
+
+    if (j.contains("idle_control")) {
+        const auto& ij = j.at("idle_control");
+        e.idle.kp_per_rpm = ij.value("kp_per_rpm", e.idle.kp_per_rpm);
+        e.idle.ki_per_rpm_s = ij.value("ki_per_rpm_s", e.idle.ki_per_rpm_s);
+        e.idle.max_throttle = ij.value("max_throttle", e.idle.max_throttle);
+    }
+
+    if (j.contains("limiter")) {
+        const auto& lj = j.at("limiter");
+        const std::string type = lj.value("type", std::string("fuel_cut"));
+        if (type == "fuel_cut") e.limiter.type = ps::drivetrain::LimiterType::FuelCut;
+        else if (type == "soft_cut") e.limiter.type = ps::drivetrain::LimiterType::SoftCut;
+        else if (type == "hard_cut") {
+            throw std::runtime_error(ctx + ": limiter.type \"hard_cut\" was the I2 placeholder; use \"fuel_cut\" or "
+                                      "\"soft_cut\" (PHYS-033 I3)");
+        } else {
+            throw std::runtime_error(ctx + ": limiter.type must be \"fuel_cut\" or \"soft_cut\", got \"" + type + "\"");
+        }
+        e.limiter.rpm = lj.value("rpm", e.limiter.rpm);
+        e.limiter.hysteresis_rpm = lj.value("hysteresis_rpm", e.limiter.hysteresis_rpm);
+        e.limiter.band_rpm = lj.value("band_rpm", e.limiter.band_rpm);
+    }
+
+    if (j.contains("starter")) {
+        const auto& sj = j.at("starter");
+        e.starter.stall_torque_nm = sj.value("stall_torque_nm", e.starter.stall_torque_nm);
+        e.starter.free_speed_rpm = sj.value("free_speed_rpm", e.starter.free_speed_rpm);
+        const std::string interlock = sj.value("interlock", std::string("clutch_or_neutral"));
+        if (interlock == "clutch_or_neutral") e.starter.interlock = ps::drivetrain::StarterDesc::Interlock::ClutchOrNeutral;
+        else if (interlock == "none") e.starter.interlock = ps::drivetrain::StarterDesc::Interlock::None;
+        else throw std::runtime_error(ctx + ": starter.interlock must be \"clutch_or_neutral\" or \"none\", got \"" + interlock + "\"");
+    }
+
+    e.crank_axis_local = read_vec3(j.value("crank_axis_local", json()), Vec3::zero());
+    require_zero_or_unit(e.crank_axis_local, ctx + ".crank_axis_local");
+
+    const std::string initial_state = j.value("initial_state", std::string("running"));
+    if (initial_state == "running") e.initial_state = ps::drivetrain::EngineInitialState::Running;
+    else if (initial_state == "off") e.initial_state = ps::drivetrain::EngineInitialState::Off;
+    else throw std::runtime_error(ctx + ": initial_state must be \"running\" or \"off\", got \"" + initial_state + "\"");
+
+    if (!(e.stall_rpm < e.start_complete_rpm && e.start_complete_rpm <= e.idle_rpm && e.idle_rpm < e.limiter.rpm)) {
+        throw std::runtime_error(ctx + ": engine rpm thresholds must satisfy stall_rpm < start_complete_rpm <= "
+                                  "idle_rpm < limiter.rpm");
+    }
+    if (!(e.dfco_reenable_rpm < e.dfco_enable_rpm)) {
+        throw std::runtime_error(ctx + ": dfco_reenable_rpm must be < dfco_enable_rpm");
+    }
+    return e;
+}
+
+ps::drivetrain::ClutchDesc read_clutch_fields(const json& cj, const std::string& ctx) {
+    ps::drivetrain::ClutchDesc c;
+    c.capacity_nm = cj.value("capacity_nm", c.capacity_nm);
+    if (c.capacity_nm <= real(0.0)) throw std::runtime_error(ctx + ": clutch capacity_nm must be > 0");
+    c.static_factor = cj.value("static_factor", c.static_factor);
+    if (c.static_factor < real(1.0)) throw std::runtime_error(ctx + ": clutch static_factor must be >= 1");
+    if (!cj.contains("engagement_vs_pedal")) throw std::runtime_error(ctx + ": clutch 'engagement_vs_pedal' is required");
+    c.engagement_vs_pedal = read_curve(cj.at("engagement_vs_pedal"));
+    require_ascending(c.engagement_vs_pedal, ctx + ".engagement_vs_pedal");
+    if (c.engagement_vs_pedal.x.front() < real(0.0) || c.engagement_vs_pedal.x.back() > real(1.0)) {
+        throw std::runtime_error(ctx + ".engagement_vs_pedal: x must be within [0, 1]");
+    }
+    for (std::size_t i = 1; i < c.engagement_vs_pedal.y.size(); ++i) {
+        if (c.engagement_vs_pedal.y[i] > c.engagement_vs_pedal.y[i - 1]) {
+            throw std::runtime_error(ctx + ".engagement_vs_pedal: y must be non-increasing");
         }
     }
+    for (real y : c.engagement_vs_pedal.y) {
+        if (y < real(0.0) || y > real(1.0)) throw std::runtime_error(ctx + ".engagement_vs_pedal: y must be within [0, 1]");
+    }
+    c.in_inertia_kgm2 = cj.value("in_inertia_kgm2", c.in_inertia_kgm2);
+    c.out_inertia_kgm2 = cj.value("out_inertia_kgm2", c.out_inertia_kgm2);
+    c.axis_local = read_vec3(cj.value("axis_local", json()), Vec3::zero());
+    require_zero_or_unit(c.axis_local, ctx + ".axis_local");
+    return c;
+}
 
-    if (j.contains("shafts")) {
-        for (const auto& sj : j.at("shafts")) {
-            ps::drivetrain::ShaftDesc s;
-            if (!sj.contains("ports")) throw std::runtime_error("powertrain.shafts[]: 'ports' is required");
-            for (const auto& pj : sj.at("ports")) {
-                const std::string ref = pj.get<std::string>();
-                ps::drivetrain::PortRef pr;
-                if (ref.rfind("wheel:", 0) == 0) {
-                    pr.is_wheel = true;
-                    pr.component = ref.substr(6);
-                    if (pr.component.empty()) throw std::runtime_error("powertrain.shafts[]: bad port ref \"" + ref + "\"");
-                } else {
-                    const auto dot = ref.find('.');
-                    if (dot == std::string::npos || dot == 0 || dot + 1 == ref.size()) {
-                        throw std::runtime_error("powertrain.shafts[]: bad port ref \"" + ref +
-                                                  "\" (expected \"<id>.<port>\" or \"wheel:<name>\")");
-                    }
-                    pr.component = ref.substr(0, dot);
-                    pr.port = ref.substr(dot + 1);
-                }
-                s.ports.push_back(pr);
-            }
-            s.stiffness = sj.value("stiffness", real(0.0));
-            if (s.stiffness != real(0.0)) {
-                throw std::runtime_error("powertrain.shafts[]: 'stiffness' must be 0 in I2 (I4 adds compliant shafts)");
-            }
-            s.damping = sj.value("damping", real(0.0));
-            p.shafts.push_back(s);
+ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string& ctx) {
+    ps::drivetrain::GearboxDesc g;
+    const std::string type = j.value("type", std::string("manual"));
+    if (type == "manual") g.type = ps::drivetrain::GearboxType::Manual;
+    else if (type == "sequential") g.type = ps::drivetrain::GearboxType::Sequential;
+    else throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\" or \"sequential\", got \"" + type + "\"");
+
+    if (!j.contains("forward_ratios")) throw std::runtime_error(ctx + ": 'forward_ratios' is required");
+    for (const auto& v : j.at("forward_ratios")) g.forward_ratios.push_back(v.get<real>());
+    for (std::size_t i = 0; i < g.forward_ratios.size(); ++i) {
+        if (g.forward_ratios[i] <= real(0.0)) throw std::runtime_error(ctx + ".forward_ratios: every ratio must be > 0");
+        if (i > 0 && !(g.forward_ratios[i] < g.forward_ratios[i - 1])) {
+            throw std::runtime_error(ctx + ".forward_ratios: must be strictly decreasing (1st first)");
         }
     }
-
-    if (j.contains("compliance")) {
-        const std::string c = j.at("compliance").get<std::string>();
-        if (c != "rigid") throw std::runtime_error("powertrain.compliance must be \"rigid\" in I2 (I4 adds \"compliant\"), got \"" + c + "\"");
-        p.compliance = ps::drivetrain::Compliance::Rigid;
+    if (j.contains("reverse_ratios")) {
+        for (const auto& v : j.at("reverse_ratios")) g.reverse_ratios.push_back(v.get<real>());
     }
-    return p;
+    for (real r : g.reverse_ratios) {
+        if (r >= real(0.0)) throw std::runtime_error(ctx + ".reverse_ratios: every ratio must be < 0");
+    }
+
+    if (!j.contains("forward_efficiency")) throw std::runtime_error(ctx + ": 'forward_efficiency' is required");
+    for (const auto& v : j.at("forward_efficiency")) g.forward_efficiency.push_back(v.get<real>());
+    if (j.contains("reverse_efficiency")) {
+        for (const auto& v : j.at("reverse_efficiency")) g.reverse_efficiency.push_back(v.get<real>());
+    }
+    if (g.forward_efficiency.size() != g.forward_ratios.size()) {
+        throw std::runtime_error(ctx + ": forward_efficiency must have the same length as forward_ratios");
+    }
+    if (g.reverse_efficiency.size() != g.reverse_ratios.size()) {
+        throw std::runtime_error(ctx + ": reverse_efficiency must have the same length as reverse_ratios");
+    }
+    for (real e : g.forward_efficiency) {
+        if (e <= real(0.0) || e > real(1.0)) throw std::runtime_error(ctx + ".forward_efficiency: every value must be in (0, 1]");
+    }
+    for (real e : g.reverse_efficiency) {
+        if (e <= real(0.0) || e > real(1.0)) throw std::runtime_error(ctx + ".reverse_efficiency: every value must be in (0, 1]");
+    }
+
+    g.input_inertia_kgm2 = j.value("input_inertia_kgm2", g.input_inertia_kgm2);
+    g.output_inertia_kgm2 = j.value("output_inertia_kgm2", g.output_inertia_kgm2);
+    g.input_axis_local = read_vec3(j.value("input_axis_local", json()), Vec3::zero());
+    require_zero_or_unit(g.input_axis_local, ctx + ".input_axis_local");
+    g.output_axis_local = read_vec3(j.value("output_axis_local", json()), Vec3::zero());
+    require_zero_or_unit(g.output_axis_local, ctx + ".output_axis_local");
+
+    if (j.contains("synchro")) {
+        const auto& sj = j.at("synchro");
+        if (sj.contains("forward_capacity_nm")) {
+            for (const auto& v : sj.at("forward_capacity_nm")) g.synchro.forward_capacity_nm.push_back(v.get<real>());
+        }
+        if (sj.contains("reverse_capacity_nm")) {
+            for (const auto& v : sj.at("reverse_capacity_nm")) g.synchro.reverse_capacity_nm.push_back(v.get<real>());
+        }
+        g.synchro.static_factor = sj.value("static_factor", g.synchro.static_factor);
+        g.synchro.max_dog_mismatch_rad_s = sj.value("max_dog_mismatch_rad_s", g.synchro.max_dog_mismatch_rad_s);
+    }
+    if (!g.synchro.forward_capacity_nm.empty() && g.synchro.forward_capacity_nm.size() != g.forward_ratios.size()) {
+        throw std::runtime_error(ctx + ": synchro.forward_capacity_nm must have the same length as forward_ratios");
+    }
+    if (!g.synchro.reverse_capacity_nm.empty() && g.synchro.reverse_capacity_nm.size() != g.reverse_ratios.size()) {
+        throw std::runtime_error(ctx + ": synchro.reverse_capacity_nm must have the same length as reverse_ratios");
+    }
+    // Gearbox::synchro_capacity_kinetic_for_position indexes these arrays
+    // directly and expects them sized to match the ratio arrays exactly
+    // (0 entries meaning "dog only" are fine, an EMPTY array is not, unless
+    // this gearbox genuinely has zero forward/reverse gears in that
+    // direction) - pad with zeros rather than require every file to spell
+    // them out.
+    if (g.synchro.forward_capacity_nm.empty()) g.synchro.forward_capacity_nm.assign(g.forward_ratios.size(), real(0.0));
+    if (g.synchro.reverse_capacity_nm.empty()) g.synchro.reverse_capacity_nm.assign(g.reverse_ratios.size(), real(0.0));
+
+    g.neutral_phase_s = j.value("neutral_phase_s", g.neutral_phase_s);
+    g.dog_release_torque_nm = j.value("dog_release_torque_nm", g.dog_release_torque_nm);
+    g.grind_after_s = j.value("grind_after_s", g.grind_after_s);
+    g.abort_after_s = j.value("abort_after_s", g.abort_after_s);
+    g.initial_gear = j.value("initial_gear", g.initial_gear);
+    if (g.initial_gear < -static_cast<int>(g.reverse_ratios.size()) || g.initial_gear > static_cast<int>(g.forward_ratios.size())) {
+        throw std::runtime_error(ctx + ": initial_gear is out of range");
+    }
+    return g;
+}
+
+// PHYS-033 I3 plan section 9.1: {"id", "type": "engine"|"gearbox", "ref":
+// "<relative path>"} - a ref'd object may contain ONLY id/type/ref (no
+// merging with inline fields). Returns the resolved json object to read
+// fields from (either the external file's own top-level object, format-
+// checked, or `cj` itself for an inline component).
+json resolve_component_ref(const json& cj, const std::string& kind, const std::string& base_dir, const std::string& ctx) {
+    if (!cj.contains("ref")) return cj;
+    for (auto it = cj.begin(); it != cj.end(); ++it) {
+        if (it.key() != "id" && it.key() != "type" && it.key() != "ref") {
+            throw std::runtime_error(ctx + ": a component with 'ref' may only contain 'id', 'type' and 'ref' "
+                                      "(found extra field '" + it.key() + "')");
+        }
+    }
+    const std::string path = resolve_path(base_dir, cj.at("ref").get<std::string>());
+    const json fj = read_json_file(path);
+    require_format(fj, kind, 1, path);
+    return fj;
 }
 
 } // namespace
@@ -467,7 +580,196 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
 
     v.steering = read_steering(j.value("steering", json()));
     v.brake_system = read_brake_system(j.value("brake_system", json()));
-    v.powertrain = read_powertrain(j.value("powertrain", json()));
+
+    // --- aero (plan section 4.4/9.1) ---------------------------------------
+    if (j.contains("aero")) {
+        const auto& aj = j.at("aero");
+        v.aero.drag_area_m2 = aj.value("drag_area_m2", real(0.0));
+        if (v.aero.drag_area_m2 < real(0.0)) throw std::runtime_error("vehicle '" + v.name + "': aero.drag_area_m2 must be >= 0");
+    }
+
+    // --- powertrain (plan section 9.1) --------------------------------------
+    PowertrainDesc p;
+    std::vector<std::string> component_ids;
+    if (j.contains("powertrain")) {
+        const auto& pj = j.at("powertrain");
+        if (pj.contains("components")) {
+            for (const auto& cj : pj.at("components")) {
+                if (!cj.contains("id") || !cj.at("id").is_string() || cj.at("id").get<std::string>().empty()) {
+                    throw std::runtime_error("vehicle '" + v.name + "': powertrain.components[]: 'id' is required and must be a non-empty string");
+                }
+                const std::string id = cj.at("id").get<std::string>();
+                if (std::find(component_ids.begin(), component_ids.end(), id) != component_ids.end()) {
+                    throw std::runtime_error("vehicle '" + v.name + "': powertrain.components[]: duplicate id '" + id + "'");
+                }
+                component_ids.push_back(id);
+                if (!cj.contains("type") || !cj.at("type").is_string()) {
+                    throw std::runtime_error("vehicle '" + v.name + "': powertrain.components['" + id + "']: 'type' is required");
+                }
+                const std::string type = cj.at("type").get<std::string>();
+                const std::string ctx = "vehicle '" + v.name + "': powertrain.components['" + id + "']";
+
+                if (type == "engine") {
+                    const json ej = resolve_component_ref(cj, "engine", base_dir, ctx);
+                    p.components.push_back({id, read_engine_fields(ej, ctx)});
+                } else if (type == "clutch") {
+                    if (cj.contains("ref")) throw std::runtime_error(ctx + ": 'clutch' components are always inline in I3 (no 'ref')");
+                    p.components.push_back({id, read_clutch_fields(cj, ctx)});
+                } else if (type == "gearbox") {
+                    const json gj = resolve_component_ref(cj, "gearbox", base_dir, ctx);
+                    p.components.push_back({id, read_gearbox_fields(gj, ctx)});
+                } else if (type == "gear_pair") {
+                    ps::drivetrain::GearPairDesc g;
+                    g.ratio = cj.value("ratio", g.ratio);
+                    if (g.ratio == real(0.0)) throw std::runtime_error(ctx + ": gear_pair 'ratio' must be != 0");
+                    g.efficiency = cj.value("efficiency", g.efficiency);
+                    if (g.efficiency <= real(0.0) || g.efficiency > real(1.0)) {
+                        throw std::runtime_error(ctx + ": gear_pair 'efficiency' must be in (0, 1]");
+                    }
+                    g.inertia_in_kgm2 = cj.value("inertia_in_kgm2", g.inertia_in_kgm2);
+                    g.inertia_out_kgm2 = cj.value("inertia_out_kgm2", g.inertia_out_kgm2);
+                    g.in_axis_local = read_vec3(cj.value("in_axis_local", json()), Vec3::zero());
+                    require_zero_or_unit(g.in_axis_local, ctx + ".in_axis_local");
+                    g.out_axis_local = read_vec3(cj.value("out_axis_local", json()), Vec3::zero());
+                    require_zero_or_unit(g.out_axis_local, ctx + ".out_axis_local");
+                    p.components.push_back({id, g});
+                } else if (type == "differential") {
+                    ps::drivetrain::DifferentialDesc d;
+                    if (cj.value("kind", std::string()) != "open") {
+                        throw std::runtime_error(ctx + ": differential 'kind' must be \"open\" (I4 adds others)");
+                    }
+                    d.kind = ps::drivetrain::DifferentialKind::Open;
+                    d.ratio = cj.value("ratio", d.ratio);
+                    if (d.ratio == real(0.0)) throw std::runtime_error(ctx + ": differential 'ratio' must be != 0");
+                    d.efficiency = cj.value("efficiency", d.efficiency);
+                    if (d.efficiency <= real(0.0) || d.efficiency > real(1.0)) {
+                        throw std::runtime_error(ctx + ": differential 'efficiency' must be in (0, 1]");
+                    }
+                    d.carrier_inertia_kgm2 = cj.value("carrier_inertia_kgm2", d.carrier_inertia_kgm2);
+                    d.carrier_axis_local = read_vec3(cj.value("carrier_axis_local", json()), Vec3::zero());
+                    require_zero_or_unit(d.carrier_axis_local, ctx + ".carrier_axis_local");
+                    p.components.push_back({id, d});
+                } else {
+                    throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
+                }
+            }
+        }
+
+        if (pj.contains("shafts")) {
+            for (const auto& sj : pj.at("shafts")) {
+                ps::drivetrain::ShaftDesc s;
+                if (!sj.contains("ports")) throw std::runtime_error("vehicle '" + v.name + "': powertrain.shafts[]: 'ports' is required");
+                for (const auto& prj : sj.at("ports")) {
+                    const std::string ref = prj.get<std::string>();
+                    ps::drivetrain::PortRef pr;
+                    if (ref.rfind("wheel:", 0) == 0) {
+                        pr.is_wheel = true;
+                        pr.component = ref.substr(6);
+                        if (pr.component.empty()) throw std::runtime_error("vehicle '" + v.name + "': powertrain.shafts[]: bad port ref \"" + ref + "\"");
+                    } else {
+                        const auto dot = ref.find('.');
+                        if (dot == std::string::npos || dot == 0 || dot + 1 == ref.size()) {
+                            throw std::runtime_error("vehicle '" + v.name + "': powertrain.shafts[]: bad port ref \"" + ref +
+                                                      "\" (expected \"<id>.<port>\" or \"wheel:<name>\")");
+                        }
+                        pr.component = ref.substr(0, dot);
+                        pr.port = ref.substr(dot + 1);
+                    }
+                    s.ports.push_back(pr);
+                }
+                s.stiffness = sj.value("stiffness", real(0.0));
+                if (s.stiffness != real(0.0)) {
+                    throw std::runtime_error("vehicle '" + v.name + "': powertrain.shafts[]: 'stiffness' must be 0 in I3 (I4 adds compliant shafts)");
+                }
+                s.damping = sj.value("damping", real(0.0));
+                p.shafts.push_back(s);
+            }
+        }
+
+        if (pj.contains("compliance")) {
+            const std::string c = pj.at("compliance").get<std::string>();
+            if (c != "rigid") throw std::runtime_error("vehicle '" + v.name + "': powertrain.compliance must be \"rigid\" in I3 (I4 adds \"compliant\"), got \"" + c + "\"");
+            p.compliance = ps::drivetrain::Compliance::Rigid;
+        }
+        p.rotor_reaction = pj.value("rotor_reaction", true);
+    }
+    v.powertrain = p;
+
+    // --- controllers (plan section 4.2/9.1) ---------------------------------
+    if (j.contains("controllers")) {
+        for (const auto& cj : j.at("controllers")) {
+            if (!cj.contains("id") || !cj.at("id").is_string() || cj.at("id").get<std::string>().empty()) {
+                throw std::runtime_error("vehicle '" + v.name + "': controllers[]: 'id' is required and must be a non-empty string");
+            }
+            const std::string id = cj.at("id").get<std::string>();
+            if (!cj.contains("type") || !cj.at("type").is_string()) {
+                throw std::runtime_error("vehicle '" + v.name + "': controllers['" + id + "']: 'type' is required");
+            }
+            const std::string type = cj.at("type").get<std::string>();
+            const std::string ctx = "vehicle '" + v.name + "': controllers['" + id + "']";
+            if (type != "manual_tcu") throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
+
+            ps::drivetrain::ManualTcuDesc md;
+            if (!cj.contains("gearbox") || !cj.contains("clutch") || !cj.contains("engine")) {
+                throw std::runtime_error(ctx + ": 'gearbox', 'clutch' and 'engine' (component id references) are all required");
+            }
+            md.gearbox = cj.at("gearbox").get<std::string>();
+            md.clutch = cj.at("clutch").get<std::string>();
+            md.engine = cj.at("engine").get<std::string>();
+            if (std::find(component_ids.begin(), component_ids.end(), md.gearbox) == component_ids.end()) {
+                throw std::runtime_error(ctx + ": references unknown component '" + md.gearbox + "'");
+            }
+            if (std::find(component_ids.begin(), component_ids.end(), md.clutch) == component_ids.end()) {
+                throw std::runtime_error(ctx + ": references unknown component '" + md.clutch + "'");
+            }
+            if (std::find(component_ids.begin(), component_ids.end(), md.engine) == component_ids.end()) {
+                throw std::runtime_error(ctx + ": references unknown component '" + md.engine + "'");
+            }
+
+            if (cj.contains("auto_clutch")) {
+                const auto& acj = cj.at("auto_clutch");
+                md.auto_clutch.enabled = acj.value("enabled", md.auto_clutch.enabled);
+                md.auto_clutch.bite_rpm = acj.value("bite_rpm", md.auto_clutch.bite_rpm);
+                md.auto_clutch.full_rpm_min = acj.value("full_rpm_min", md.auto_clutch.full_rpm_min);
+                md.auto_clutch.full_rpm_max = acj.value("full_rpm_max", md.auto_clutch.full_rpm_max);
+                md.auto_clutch.lock_slip_rpm = acj.value("lock_slip_rpm", md.auto_clutch.lock_slip_rpm);
+                md.auto_clutch.anti_stall_rpm = acj.value("anti_stall_rpm", md.auto_clutch.anti_stall_rpm);
+                md.auto_clutch.engage_rate_per_s = acj.value("engage_rate_per_s", md.auto_clutch.engage_rate_per_s);
+                md.auto_clutch.release_rate_per_s = acj.value("release_rate_per_s", md.auto_clutch.release_rate_per_s);
+                md.auto_clutch.open_time_s = acj.value("open_time_s", md.auto_clutch.open_time_s);
+                md.auto_clutch.close_time_s = acj.value("close_time_s", md.auto_clutch.close_time_s);
+                if (!(md.auto_clutch.bite_rpm < md.auto_clutch.full_rpm_min && md.auto_clutch.full_rpm_min <= md.auto_clutch.full_rpm_max)) {
+                    throw std::runtime_error(ctx + ".auto_clutch: must satisfy bite_rpm < full_rpm_min <= full_rpm_max");
+                }
+                if (!(md.auto_clutch.anti_stall_rpm < md.auto_clutch.bite_rpm)) {
+                    throw std::runtime_error(ctx + ".auto_clutch: anti_stall_rpm must be < bite_rpm");
+                }
+            }
+            if (cj.contains("auto_blip")) {
+                const auto& abj = cj.at("auto_blip");
+                md.auto_blip.enabled = abj.value("enabled", md.auto_blip.enabled);
+                md.auto_blip.kp_per_rpm = abj.value("kp_per_rpm", md.auto_blip.kp_per_rpm);
+                md.auto_blip.max_throttle = abj.value("max_throttle", md.auto_blip.max_throttle);
+                md.auto_blip.upshift_cut = abj.value("upshift_cut", md.auto_blip.upshift_cut);
+            }
+            if (cj.contains("auto_shift")) {
+                const auto& asj = cj.at("auto_shift");
+                md.auto_shift.enabled = asj.value("enabled", md.auto_shift.enabled);
+                md.auto_shift.up_rpm_at_zero_throttle = asj.value("up_rpm_at_zero_throttle", md.auto_shift.up_rpm_at_zero_throttle);
+                md.auto_shift.up_rpm_at_full_throttle = asj.value("up_rpm_at_full_throttle", md.auto_shift.up_rpm_at_full_throttle);
+                md.auto_shift.down_rpm_at_zero_throttle = asj.value("down_rpm_at_zero_throttle", md.auto_shift.down_rpm_at_zero_throttle);
+                md.auto_shift.down_rpm_at_full_throttle = asj.value("down_rpm_at_full_throttle", md.auto_shift.down_rpm_at_full_throttle);
+                md.auto_shift.min_time_in_gear_s = asj.value("min_time_in_gear_s", md.auto_shift.min_time_in_gear_s);
+            }
+            md.max_pending_steps = cj.value("max_pending_steps", md.max_pending_steps);
+
+            v.controllers.push_back({id, md});
+        }
+    }
+    if (v.controllers.size() > 1) {
+        throw std::runtime_error("vehicle '" + v.name + "': at most one controller (manual_tcu) is supported in I3");
+    }
+
     return v;
 }
 

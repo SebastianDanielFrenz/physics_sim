@@ -352,39 +352,67 @@ vehicle::VehicleDesc make_test_vehicle_desc() {
     desc.wheels[0].arb_partner = 1; desc.wheels[1].arb_partner = 0;
     desc.wheels[2].arb_partner = 3; desc.wheels[3].arb_partner = 2;
 
-    // PHYS-033 P4 I2 plan section 9.4: the /2 graph equivalent of the old
-    // DriveDesc/BrakeDesc defaults this fixture relied on before the
-    // /2 rewrite (owner ruling Q7: no converter) - rear-driven (RL/RR)
-    // through an open diff, flat 150 N*m curve, final drive 3.7 @ 0.9
-    // efficiency (DriveDesc's own defaults, vehicle_desc.h pre-I2), and
-    // BrakeDesc's own default corner/handbrake torques.
+    // PHYS-033 P4 I3 plan section 11: migrated from I2's engine/final_drive/
+    // diff-only graph to the full I3 chain (engine -> clutch -> gearbox ->
+    // open diff -> RL/RR), so this determinism fixture actually exercises
+    // the clutch/gearbox/TCU state this increment adds - a bare engine-plus-
+    // final-drive graph (I2's shape) would never touch any of that new
+    // state. Motoring curve reused verbatim from data/engines/i4_2l_na.json
+    // (plan section 10.1); everything else is a plausible round number, not
+    // meant to match any shipped vehicle.
     drivetrain::TorqueMapEngineDesc engine;
     engine.wot_torque_nm_vs_rpm.x = {900.0, 6500.0};
     engine.wot_torque_nm_vs_rpm.y = {150.0, 150.0};
-    engine.inertia_kgm2 = 0.0;
+    engine.motoring_torque_nm_vs_rpm.x = {0.0, 500.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 7000.0};
+    engine.motoring_torque_nm_vs_rpm.y = {-15.0, -28.0, -32.0, -38.0, -45.0, -52.0, -61.0, -72.0, -85.0};
+    engine.inertia_kgm2 = 0.16;
+    engine.breakaway_torque_nm = 20.0;
     engine.idle_rpm = 900.0;
-    engine.limiter.type = "hard_cut";
+    engine.stall_rpm = 400.0;
+    engine.fire_rpm = 250.0;
+    engine.start_complete_rpm = 550.0;
+    engine.limiter.type = drivetrain::LimiterType::FuelCut;
     engine.limiter.rpm = 6500.0;
+    engine.limiter.hysteresis_rpm = 150.0;
 
-    drivetrain::GearPairDesc final_drive;
-    final_drive.ratio = 3.7;
-    final_drive.efficiency = 0.9;
+    drivetrain::ClutchDesc clutch;
+    clutch.capacity_nm = 300.0;
+    clutch.static_factor = 1.15;
+    clutch.engagement_vs_pedal.x = {0.0, 1.0};
+    clutch.engagement_vs_pedal.y = {1.0, 0.0};
+    // Non-zero: in Neutral, the gearbox's own gear row is not registered,
+    // so N1 (clutch.out + gearbox.in, joined by the same shaft) becomes a
+    // FREE reduced coordinate - it needs SOME inertia or the cluster's
+    // reduced mass matrix in state N is singular (NetworkBuilder::build's
+    // own Cholesky check, plan section 4.3).
+    clutch.out_inertia_kgm2 = 0.004;
+
+    drivetrain::GearboxDesc gearbox;
+    gearbox.type = drivetrain::GearboxType::Manual;
+    gearbox.forward_ratios = {3.0, 1.6, 1.0};
+    gearbox.forward_efficiency = {1.0, 1.0, 1.0};
 
     drivetrain::DifferentialDesc diff;
     diff.kind = drivetrain::DifferentialKind::Open;
-    diff.ratio = 1.0;
+    diff.ratio = 3.7;
     diff.efficiency = 1.0;
 
     desc.powertrain.components = {
-        {"engine", engine}, {"final_drive", final_drive}, {"diff", diff},
+        {"engine", engine}, {"clutch", clutch}, {"gearbox", gearbox}, {"diff", diff},
     };
     desc.powertrain.shafts = {
-        {{{"engine", "crank", false}, {"final_drive", "in", false}}},
-        {{{"final_drive", "out", false}, {"diff", "carrier", false}}},
+        {{{"engine", "crank", false}, {"clutch", "in", false}}},
+        {{{"clutch", "out", false}, {"gearbox", "in", false}}},
+        {{{"gearbox", "out", false}, {"diff", "carrier", false}}},
         {{{"diff", "left", false}, {"RL", "", true}}},
         {{{"diff", "right", false}, {"RR", "", true}}},
     };
     desc.powertrain.compliance = drivetrain::Compliance::Rigid;
+    desc.powertrain.rotor_reaction = true;
+
+    desc.controllers = {
+        {"tcu", drivetrain::ManualTcuDesc{"gearbox", "clutch", "engine", {}, {}, {}, 2}},
+    };
 
     desc.brake_system.type = drivetrain::BrakeSystemType::DirectTorque;
     desc.brake_system.corners = {
@@ -438,6 +466,20 @@ std::uint64_t run_vehicle_scenario(int workers, int ticks) {
         world.set_control("v1.steer", steer);
         world.set_control("throttle", real(0.3));
         world.set_control("v1.throttle", real(0.3));
+        // PHYS-033 P4 I3 plan section 11: engage 1st at the start, then
+        // upshift to 2nd partway through, on both vehicles - exercises the
+        // gearbox's phase machine and a topology-state switch under the
+        // determinism harness. The plan's own text says "tick 240"; this
+        // fixture's kTicks is 150, so the upshift is moved to tick 60
+        // (still well clear of the launch transient) to actually fire
+        // within the run.
+        if (t == 0) {
+            world.set_control("gear_request", real(1.0));
+            world.set_control("v1.gear_request", real(1.0));
+        } else if (t == 60) {
+            world.set_control("gear_request", real(2.0));
+            world.set_control("v1.gear_request", real(2.0));
+        }
         world.step();
     }
     return world.state_hash();

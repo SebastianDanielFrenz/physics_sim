@@ -1,0 +1,18 @@
+{
+  "format": "physics_sim.engine/1",
+  "name": "diesel_i4_4l5_turbo",
+  "kind": "torque_map",
+  "source": "Plausible 4.5 L 4-cylinder turbo-diesel of the mid-size tractor class, NOT a specific engine: rated about 100 kW at 2200 rpm, peak 580 N*m at 1500 rpm (torque rise ~32%), matching published brochure ranges for this class (rated 90-105 kW at 2100-2300 rpm, 520-600 N*m at 1400-1600 rpm; e.g. the John Deere PowerTech 4045 / Deutz TCD 4.1 class - verify before citing). In I3 the throttle channel is direct fuel demand; the governor droop above rated speed is modelled with the soft_cut limiter (full fuel at 2200, zero fuel at 2400 high idle, ~9% regulation). The all-speed governor with hand_throttle arrives in I4 (PHYS-033 section 5.3). Motoring = friction only (unthrottled diesel), fmep ~1.2-2.0 bar scaled by V_d/(4*pi) = 35.8 N*m/bar. Inertia 1.2 kg*m^2 incl. heavy flywheel. PHYS-033 I3.",
+  "wot_torque_nm_vs_rpm":      { "x": [500, 800, 1000, 1200, 1400, 1500, 1600, 1800, 2000, 2200, 2400],
+                                 "y": [300, 420, 500, 550, 575, 580, 575, 555, 515, 440, 400] },
+  "motoring_torque_nm_vs_rpm": { "x": [0, 800, 1400, 2000, 2400, 2600], "y": [-40, -52, -60, -70, -78, -82] },
+  "inertia_kgm2": 1.2,
+  "breakaway_torque_nm": 150.0,
+  "idle_rpm": 850, "stall_rpm": 450, "fire_rpm": 180, "start_complete_rpm": 500,
+  "dfco_enable_rpm": 1100, "dfco_reenable_rpm": 950,
+  "idle_control": { "kp_per_rpm": 0.003, "ki_per_rpm_s": 0.01, "max_throttle": 0.25 },
+  "limiter": { "type": "soft_cut", "rpm": 2400, "band_rpm": 200 },
+  "starter": { "stall_torque_nm": 450.0, "free_speed_rpm": 350.0, "interlock": "clutch_or_neutral" },
+  "crank_axis_local": [-1, 0, 0],
+  "initial_state": "running"
+}

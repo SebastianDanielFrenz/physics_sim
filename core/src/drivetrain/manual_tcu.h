@@ -11,34 +11,12 @@
 
 #include "gearbox.h" // Gearbox::Phase only
 
+#include "ps/drivetrain/controller_desc.h" // AutoClutchDesc/AutoBlipDesc/AutoShiftDesc (public, plan section 4.2)
 #include "ps/types.h"
 
 #include <cstdint>
 
 namespace ps::drivetrain {
-
-struct AutoClutchDesc {
-    bool enabled = true;
-    real bite_rpm = 1100.0;      // engagement 0 at or below this engine speed (launch law)
-    real full_rpm_min = 1600.0;  // engagement 1 at this rpm with throttle 0 ...
-    real full_rpm_max = 3000.0;  // ... and at this rpm with throttle 1
-    real lock_slip_rpm = 80.0;   // |engine - input| below this (and rpm > bite) -> Locked
-    real anti_stall_rpm = 950.0; // Locked and rpm below this -> back to the launch law
-    real engage_rate_per_s = 4.0, release_rate_per_s = 12.0;
-    real open_time_s = 0.08, close_time_s = 0.20; // shift ramps
-};
-struct AutoBlipDesc {
-    bool enabled = true;
-    real kp_per_rpm = 0.002;
-    real max_throttle = 1.0;
-    bool upshift_cut = true;
-};
-struct AutoShiftDesc {
-    bool enabled = false;
-    real up_rpm_at_zero_throttle = 2500.0, up_rpm_at_full_throttle = 6300.0;
-    real down_rpm_at_zero_throttle = 1300.0, down_rpm_at_full_throttle = 2800.0;
-    real min_time_in_gear_s = 1.0;
-};
 
 class ManualTcu {
 public:
@@ -57,6 +35,7 @@ public:
     // first_substep_of_tick parameter, which gates the arbitration itself).
     struct Sensors {
         real engine_omega = 0.0, gearbox_in_omega = 0.0, gearbox_out_omega = 0.0;
+        real approx_speed_mps = 0.0; // vehicle road speed proxy (gearbox_out_omega/|r_fd|*R_mean) - launch-vs-shift detection
         real throttle_pedal = 0.0;
         real gear_request = real(-100.0); // compare against ps::drivetrain::kGearRequestNone
         real shift_up_count = 0.0, shift_down_count = 0.0;
@@ -87,6 +66,25 @@ public:
     [[nodiscard]] int pending() const { return pending_; }
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
+
+    // World::reset_vehicle (plan section 4.5): puts the TCU in Idle (no
+    // pending shift/request; re-baselines the counter arbitration so a
+    // stale shift_up_count/shift_down_count delta is not replayed on the
+    // next step) and sets the auto-clutch mode to Locked (clutch_locked)
+    // or Launch, matching VehicleResetOptions::clutch_locked. e_auto is set
+    // to match (1 when Locked, 0 when Launch - the caller has already set
+    // every network node's omega directly, so there is no slip transient
+    // for the Launch law to chase on the very next step).
+    void reset(bool clutch_locked) {
+        seeded_ = false;
+        last_up_ = 0;
+        last_dn_ = 0;
+        pending_ = 0;
+        last_target_seen_valid_ = false;
+        time_in_gear_ = real(0.0);
+        mode_ = clutch_locked ? ClutchMode::Locked : ClutchMode::Launch;
+        e_auto_ = clutch_locked ? real(1.0) : real(0.0);
+    }
 
 private:
     Desc desc_;

@@ -63,7 +63,7 @@ real Gearbox::synchro_capacity_kinetic_for_position(int position) const {
 
 int Gearbox::next_step_position() const {
     if (target_ == current_ && target_ == walk_base_) return current_;
-    if (desc_.type == GearboxType::Sequential) {
+    if (desc_.type == GearboxKind::Sequential) {
         if (target_ == walk_base_) return walk_base_;
         return walk_base_ + (target_ > walk_base_ ? 1 : -1);
     }

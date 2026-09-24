@@ -28,6 +28,7 @@
 
 #include "ps/types.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -229,6 +230,23 @@ public:
     // 3.2) with no extra code.
     void set_topology_state(int state) { current_state_ = state; }
     [[nodiscard]] int topology_state() const { return current_state_; }
+
+    // World::reset_vehicle (plan section 4.5): clears every friction row's
+    // stick flags and LCP warm-start set back to their build-time defaults
+    // (row_lambda_/row_velocity_ to 0, row_stuck_/row_stuck_prev_ to false,
+    // row_set_ to LcpSet::Free - matches NetworkBuilder::build's own initial
+    // values). Writes into already-sized vectors: no allocation. Does NOT
+    // touch omega_ (the caller sets whichever nodes it wants directly via
+    // set_omega) or the topology state (set separately via
+    // set_topology_state) or the cumulative friction_cap_hits_/
+    // lcp_stage3_hits_ diagnostic counters (not "stick flags/sets").
+    void clear_friction_row_state() {
+        std::fill(row_lambda_.begin(), row_lambda_.end(), real(0.0));
+        std::fill(row_velocity_.begin(), row_velocity_.end(), real(0.0));
+        std::fill(row_stuck_.begin(), row_stuck_.end(), false);
+        std::fill(row_stuck_prev_.begin(), row_stuck_prev_.end(), false);
+        std::fill(row_set_.begin(), row_set_.end(), LcpSet::Free);
+    }
 
     // Solves every cluster (ascending order, plan section 4.4) for one
     // substep of size h, using `asm`'s per-node tau0/d and per-row

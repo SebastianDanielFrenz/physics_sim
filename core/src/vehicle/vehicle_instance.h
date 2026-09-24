@@ -11,6 +11,7 @@
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/surface_table.h"
 #include "ps/vehicle/vehicle_desc.h"
+#include "ps/vehicle/vehicle_reset.h"
 #include "ps/world/ids.h"
 
 #include <cstdint>
@@ -75,6 +76,16 @@ public:
     // array, indexed by control_indices_ below.
     void step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                     real tick_dt, real substep_rate_hz);
+
+    // World::reset_vehicle (plan section 4.5). Call only between ticks,
+    // never from a job (same contract as World::reset_vehicle itself).
+    // Reads the chassis's CURRENT pose/motion from `backend` (for
+    // opts.hubs_roll_with_chassis's per-wheel hub speed - chassis-local +x
+    // forward speed / wheel_radius, same wheels for every corner regardless
+    // of steer angle, a reasonable approximation for a teleport), clears
+    // every wheel's own tyre relaxation state, then hands off to
+    // Powertrain::reset for the network/gearbox/engine/TCU side.
+    void reset(const vehicle::VehicleResetOptions& opts, const IRigidBackend& backend);
 
     [[nodiscard]] std::size_t wheel_count() const { return wheels_.size(); }
     [[nodiscard]] const WheelTelemetry& wheel_telemetry(std::size_t i) const { return wheels_[i]->telemetry(); }
@@ -146,6 +157,11 @@ private:
     // a data error).
     drivetrain::Powertrain powertrain_;
     std::vector<std::unique_ptr<WheelInstance>> wheels_;
+    // PHYS-033 P4 I3 plan section 6.7 (rotor reaction on the chassis): each
+    // wheel hub's omega just BEFORE this substep's powertrain_.solve() call,
+    // sized once at construction (zero-alloc scratch, PLAN.md D8) - wheels_
+    // is never resized after the constructor, same invariant this reuses.
+    std::vector<real> hub_omega_old_scratch_;
 
     // PHYS-033 P4 I3 plan section 4.3/4.5: default-constructed until commit
     // 6 fills it from the real engine/clutch/gearbox/TCU state - see

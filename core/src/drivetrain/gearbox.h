@@ -18,9 +18,9 @@
 
 namespace ps::drivetrain {
 
-enum class GearboxType : std::uint8_t { Manual, Sequential };
+enum class GearboxKind : std::uint8_t { Manual, Sequential };
 
-struct SynchroDesc {
+struct GearboxSynchroDesc {
     std::vector<real> forward_capacity_nm; // per forward gear, input-shaft torque; 0 = no synchro (dog only)
     std::vector<real> reverse_capacity_nm; // per reverse gear
     real static_factor = 1.0;
@@ -30,12 +30,12 @@ struct SynchroDesc {
 class Gearbox {
 public:
     struct Desc {
-        GearboxType type = GearboxType::Manual;
+        GearboxKind type = GearboxKind::Manual;
         std::vector<real> forward_ratios;    // > 0, strictly decreasing (1st first). w_in = ratio * w_out
         std::vector<real> reverse_ratios;    // < 0, R1 first (the slowest reverse)
         std::vector<real> forward_efficiency, reverse_efficiency; // (0, 1], same lengths as the ratios above
         real input_inertia_kgm2 = 0.0, output_inertia_kgm2 = 0.0;
-        SynchroDesc synchro;
+        GearboxSynchroDesc synchro;
         real neutral_phase_s = 0.06;       // selector travel through neutral (minimum time dog-out -> synchro)
         real dog_release_torque_nm = 60.0; // |mesh torque at input| must be below this to pull a gear out
         real grind_after_s = 0.25;         // synchronising longer than this -> grind event
@@ -93,6 +93,20 @@ public:
 
     [[nodiscard]] const Desc& desc() const { return desc_; }
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
+
+    // World::reset_vehicle (plan section 4.5): forces this gearbox directly
+    // into `gear` with phase Idle - no shift sequence, no grind event
+    // (grind_events_ is a lifetime stat, left untouched).
+    void reset_to(int gear) {
+        current_ = gear;
+        target_ = gear;
+        phase_ = Phase::Idle;
+        t_phase_ = real(0.0);
+        grind_flag_ = false;
+        grind_active_ = false;
+        synchronising_step_ = 0;
+        walk_base_ = gear;
+    }
 
 private:
     Desc desc_;

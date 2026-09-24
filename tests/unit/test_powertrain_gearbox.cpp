@@ -30,7 +30,7 @@ namespace {
 // directly here (this class tests the gearbox alone, not the diff).
 Gearbox::Desc make_manual_desc() {
     Gearbox::Desc d;
-    d.type = GearboxType::Manual;
+    d.type = GearboxKind::Manual;
     d.forward_ratios = {3.0, 1.6, 1.0};
     d.forward_efficiency = {0.96, 0.97, 0.98};
     d.reverse_ratios = {-3.2};
@@ -203,7 +203,7 @@ TEST_CASE("Gearbox: engaging reverse while rolling grinds then aborts to N, neve
 
 TEST_CASE("Gearbox: Sequential walks one position at a time toward a far target", "[unit][drivetrain][gearbox]") {
     Gearbox::Desc d = make_manual_desc();
-    d.type = GearboxType::Sequential;
+    d.type = GearboxKind::Sequential;
     Gearbox gb(d);
     const real h = 1.0 / 960.0;
     Gearbox::StepInput in{0.0, 0.0, 0.0, h}; // omega1==omega2==0 throughout: every synchronising step engages instantly

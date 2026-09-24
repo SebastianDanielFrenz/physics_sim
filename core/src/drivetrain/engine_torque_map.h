@@ -106,6 +106,19 @@ public:
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
+    // World::reset_vehicle (plan section 4.5): forces the engine directly
+    // into `state` (bypassing the ordinary state-machine transitions of
+    // pre_solve - see this file's own comment on why a state == Running
+    // engine cannot bootstrap itself from omega == 0), clearing the idle
+    // integrator and the limiter/DFCO latches. The crank's own network
+    // omega is set separately by the caller (ShaftNetwork::set_omega).
+    void reset(EngineState state) {
+        state_ = state;
+        idle_integrator_ = real(0.0);
+        limiter_cut_ = false;
+        dfco_active_ = false;
+    }
+
 private:
     Desc desc_;
     real theta_ff_ = 0.0; // build-time idle feedforward (plan section 6.1.4), computed once in the constructor

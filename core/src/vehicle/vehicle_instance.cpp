@@ -27,11 +27,12 @@ Quat integrate_orientation(const Quat& q, const Vec3& w, real h) {
 VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces,
                                    const ControlChannelIndices& control_indices)
     : chassis_(chassis), surfaces_(surfaces), control_indices_(control_indices), desc_(desc),
-      powertrain_(desc_.powertrain, desc_.brake_system, desc_.wheels, desc_.name) {
+      powertrain_(desc_.powertrain, desc_.brake_system, desc_.wheels, desc_.controllers, desc_.name) {
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
         wheels_.push_back(std::make_unique<WheelInstance>(w, create_pacejka_tyre_model(w.tyre)));
     }
+    hub_omega_old_scratch_.assign(desc_.wheels.size(), real(0.0));
 
     // Ackermann geometry reference (vehicle_desc.h's SteeringDesc comment):
     // rear axle x = average x of non-front wheels; wheelbase = average
@@ -117,6 +118,21 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     controls.brake = channel_values[control_indices_.brake];
     controls.handbrake = channel_values[control_indices_.handbrake];
 
+    // PHYS-033 P4 I3 plan section 7.1: the shaft-network powertrain's own
+    // channels, read once per tick (their per-substep CONSUMPTION is gated
+    // by ComponentSubstepCtx::first_substep_of_tick inside Powertrain::
+    // pre_solve_components - plan section 6.5.1 - so re-reading the same
+    // tick-granularity values every substep here is harmless).
+    const real clutch_pedal = channel_values[control_indices_.clutch];
+    const real gear_request = channel_values[control_indices_.gear_request];
+    const real shift_up_count = channel_values[control_indices_.shift_up_count];
+    const real shift_down_count = channel_values[control_indices_.shift_down_count];
+    const real ignition = channel_values[control_indices_.ignition];
+    const real starter = channel_values[control_indices_.starter];
+    const bool assist_auto_clutch = channel_values[control_indices_.assist_auto_clutch] > real(0.5);
+    const bool assist_auto_blip = channel_values[control_indices_.assist_auto_blip] > real(0.5);
+    const bool assist_auto_shift = channel_values[control_indices_.assist_auto_shift] > real(0.5);
+
     const Pose pose0 = backend.get_pose(chassis_);
     const Motion motion0 = backend.get_motion(chassis_);
     // PHYS-033 I1 W1: read ONCE per tick, at the tick-start rotation - Jolt
@@ -192,7 +208,21 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         // WheelDesc order (each wheel's hub torque-law terms feed straight
         // into the network's Assembly via add_hub_terms).
         powertrain_.begin_substep();
-        const drivetrain::ComponentSubstepCtx ctx{substep_dt, controls.throttle, controls.brake, controls.handbrake};
+        drivetrain::ComponentSubstepCtx ctx;
+        ctx.h = substep_dt;
+        ctx.throttle = controls.throttle;
+        ctx.brake = controls.brake;
+        ctx.handbrake = controls.handbrake;
+        ctx.clutch_pedal = clutch_pedal;
+        ctx.gear_request = gear_request;
+        ctx.shift_up_count = shift_up_count;
+        ctx.shift_down_count = shift_down_count;
+        ctx.ignition = ignition;
+        ctx.starter = starter;
+        ctx.assist_auto_clutch = assist_auto_clutch;
+        ctx.assist_auto_blip = assist_auto_blip;
+        ctx.assist_auto_shift = assist_auto_shift;
+        ctx.first_substep_of_tick = (s == 0);
         powertrain_.pre_solve_components(ctx);
         for (std::size_t i = 0; i < wheels_.size(); ++i) {
             const WheelDesc& w = desc_.wheels[i];
@@ -207,12 +237,13 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             in.surfaces = surfaces_;
 
             const real omega_old = powertrain_.hub_omega(i);
+            hub_omega_old_scratch_[i] = omega_old; // PHYS-033 P4 I3 plan section 6.7: needed after solve() below
             const HubTerms ht = wheels_[i]->pre_solve(in, omega_old);
             powertrain_.add_hub_terms(i, ht.tau0, ht.d);
         }
 
-        // step 5: the network solve (also folds in integrator_loss/rotor_ke,
-        // powertrain.h's own comment).
+        // step 5: the network solve (also folds in integrator_loss/rotor_ke
+        // and captures each rotor port's alpha, powertrain.h's own comment).
         powertrain_.solve(substep_dt);
 
         // step 6: post_solve - components in ARRAY order, then wheels in
@@ -235,7 +266,39 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             // chassis' own (possibly tilted-relative-to-ground) axes.
             force_s += out.contact_force_world;
             torque_s += cross(out.contact_point_world - com, out.contact_force_world) + out.extra_torque_world;
+
+            // PHYS-033 P4 I3 plan section 6.7: this hub's own rotor-reaction
+            // contribution, using the wheel's WORLD spin axis (unlike the
+            // fixed chassis-local axes powertrain_'s own rotor_ports_ use) -
+            // Powertrain::rotor_port_* never sees wheel hubs (Phase M of its
+            // constructor skips them, always-zero axis).
+            if (powertrain_.rotor_reaction_enabled()) {
+                const real alpha = (omega_new - hub_omega_old_scratch_[i]) / substep_dt;
+                torque_s += -powertrain_.hub_inertia(i) * alpha * wheels_[i]->spin_axis_world();
+            }
         }
+
+        // PHYS-033 P4 I3 plan section 6.6: aero drag, a single bluff element
+        // at the chassis CoM (F_drag = -0.5*rho*CdA*|v|*v) - added directly
+        // here (not an IForceElement, this file's own top area / plan
+        // section 6.6's "why" note) so it is exact within the W1 shadow.
+        if (desc_.aero.drag_area_m2 > real(0.0)) {
+            const Vec3 v = twist_s.linear;
+            const real speed = v.length();
+            force_s += v * (-real(0.5) * env.air_density * desc_.aero.drag_area_m2 * speed);
+        }
+
+        // PHYS-033 P4 I3 plan section 6.7: rotor reaction from every non-hub
+        // rotating port (engine crank, clutch in/out, gearbox in/out, diff
+        // carrier) - fixed chassis-local axes, rotated to world here.
+        if (powertrain_.rotor_reaction_enabled()) {
+            Vec3 t_react_local = Vec3::zero();
+            for (std::size_t i = 0; i < powertrain_.rotor_port_count(); ++i) {
+                t_react_local += -powertrain_.rotor_port_inertia(i) * powertrain_.rotor_port_alpha(i) * powertrain_.rotor_port_axis_local(i);
+            }
+            torque_s += pose_s.orientation.rotate(t_react_local);
+        }
+
         force_sum += force_s;
         torque_sum += torque_s;
 
@@ -255,6 +318,106 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     // from the ledger deltas since begin_tick() above.
     powertrain_.end_tick();
 
+    // PHYS-033 P4 I3 plan section 4.3/6.1.8/6.5.2/7.6 (commit 6 scope: "...
+    // telemetry, snapshot fill"): fill this tick's PowertrainSnapshot from
+    // the powertrain's real state (last substep's cached results - the whole
+    // tick already agrees on gear/clutch/engine state by construction, since
+    // gear_request/counters are consumed only once per tick, plan section
+    // 6.5.1). World::powertrain_state/WorldSnapshot::vehicles[i].powertrain
+    // both read this. World::powertrain_debug() stays a stub (last_engine_
+    // result()'s throttle_eff/idle_integrator and the gearbox/diff mesh
+    // torques are commit 7's job per powertrain.h's own comment).
+    {
+        drivetrain::PowertrainSnapshot& snap = powertrain_state_;
+        if (powertrain_.has_gearbox()) {
+            const auto& gb = powertrain_.gearbox();
+            snap.gear = static_cast<std::int8_t>(gb.current_position());
+            snap.gear_target = static_cast<std::int8_t>(gb.target());
+            if (powertrain_.has_tcu() && powertrain_.tcu_clutch_mode() == drivetrain::ManualTcu::ClutchMode::Shift) {
+                switch (gb.phase()) {
+                    case drivetrain::Gearbox::Phase::Idle:
+                        // ClutchOpening precedes the gearbox's own phases
+                        // (waiting for e_auto -> 0); ClutchClosing follows
+                        // them (dog-in already done, current == target,
+                        // e_auto ramping back to 1) - plan section 6.5.2.
+                        snap.shift_phase = (gb.current_position() != gb.target()) ? drivetrain::ShiftPhase::ClutchOpening
+                                                                                   : drivetrain::ShiftPhase::ClutchClosing;
+                        break;
+                    case drivetrain::Gearbox::Phase::Releasing:
+                        snap.shift_phase = drivetrain::ShiftPhase::Releasing;
+                        break;
+                    case drivetrain::Gearbox::Phase::Selecting:
+                        snap.shift_phase = drivetrain::ShiftPhase::Selecting;
+                        break;
+                    case drivetrain::Gearbox::Phase::Synchronising:
+                        snap.shift_phase = drivetrain::ShiftPhase::Synchronising;
+                        break;
+                }
+            } else {
+                snap.shift_phase = drivetrain::ShiftPhase::Idle;
+            }
+        } else {
+            snap.gear = 0;
+            snap.gear_target = 0;
+            snap.shift_phase = drivetrain::ShiftPhase::Idle;
+        }
+
+        if (powertrain_.has_engine()) {
+            const auto& pre = powertrain_.last_engine_result();
+            snap.engine_rpm = std::abs(powertrain_.engine_omega()) * (real(60.0) / (real(2.0) * real(3.14159265358979323846)));
+            switch (pre.state) {
+                case drivetrain::EngineTorqueMap::EngineState::Off: snap.engine_state = drivetrain::EngineState::Off; break;
+                case drivetrain::EngineTorqueMap::EngineState::Stalled: snap.engine_state = drivetrain::EngineState::Stalled; break;
+                case drivetrain::EngineTorqueMap::EngineState::Cranking: snap.engine_state = drivetrain::EngineState::Cranking; break;
+                case drivetrain::EngineTorqueMap::EngineState::Running: snap.engine_state = drivetrain::EngineState::Running; break;
+            }
+        } else {
+            snap.engine_rpm = real(0.0);
+            snap.engine_state = drivetrain::EngineState::Off;
+        }
+
+        // Speedo (plan section 7.6): gearbox-output-derived, mean radius of
+        // the diff's driven hubs (not the chassis' own velocity - it reads
+        // the transmission output, like a real speedometer, and keeps
+        // turning with the wheels in Neutral). Same formula the TCU uses as
+        // its launch-vs-shift speed proxy (powertrain.h's approx_speed_mps).
+        snap.speedo_mps = powertrain_.approx_speed_mps();
+
+        snap.clutch_engagement = powertrain_.has_clutch() ? powertrain_.clutch_engagement() : real(1.0);
+        snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u);
+
+        snap.engines.clear();
+        if (powertrain_.has_engine()) {
+            const auto& eng = powertrain_.engine();
+            const auto& pre = powertrain_.last_engine_result();
+            drivetrain::EngineSoundState ess;
+            ess.crank_angle = eng.crank_angle();
+            ess.omega = powertrain_.engine_omega();
+            // Approximation (audio-only, no test depends on exact fidelity):
+            // the engine's own theta_c (combustion-gated effective throttle,
+            // engine_torque_map.cpp's private combustion condition) is not
+            // itself exposed by PreSolveResult - DFCO-gated throttle_eff is
+            // the closest available proxy.
+            ess.load = pre.dfco_active ? real(0.0) : pre.throttle_eff;
+            ess.cut_mask = pre.limiter_active || pre.dfco_active ? ~std::uint64_t(0) : std::uint64_t(0);
+            ess.engine_state = snap.engine_state;
+            ess.starter_active = pre.starter_active;
+            ess.limiter_active = pre.limiter_active;
+            ess.dfco_active = pre.dfco_active;
+            snap.engines.push_back(ess);
+        }
+
+        drivetrain::DrivelineSoundState& dl = snap.driveline;
+        dl.gearbox_in_omega = powertrain_.gearbox_in_omega();
+        dl.gearbox_out_omega = powertrain_.gearbox_out_omega();
+        dl.gear_load_torque = real(0.0); // deferred with PowertrainDebug's mesh torques (commit 7)
+        dl.clutch_slip = powertrain_.has_clutch() ? powertrain_.clutch_slip() : real(0.0);
+        dl.clutch_torque = powertrain_.clutch_torque();
+        dl.gear = snap.gear;
+        dl.grind_active = powertrain_.has_gearbox() ? powertrain_.last_gearbox_result().grind_active : false;
+        dl.grind_events = powertrain_.has_gearbox() ? powertrain_.gearbox().grind_events() : 0u;
+    }
+
     // Predict what Jolt will report as this chassis's velocity next tick
     // (diagnostic only, section 3.5) - includes Jolt's own end-of-step
     // damping factor (F6: applied ONCE, after the force update), which the
@@ -267,6 +430,27 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     const real n = static_cast<real>(num_substeps);
     backend.apply_wrench(chassis_, Wrench{force_sum / n, torque_sum / n});
+}
+
+void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRigidBackend& backend) {
+    real hub_speed_common = real(0.0);
+    if (opts.hubs_roll_with_chassis) {
+        const Pose pose = backend.get_pose(chassis_);
+        const Motion motion = backend.get_motion(chassis_);
+        // Chassis-local +x forward speed (this project's own convention,
+        // e.g. test_vehicle_accel_standing_start.cpp's own forward-speed
+        // reads) - same value for every wheel regardless of steer angle, a
+        // reasonable approximation for a teleport (this file's own header
+        // comment on VehicleInstance::reset).
+        hub_speed_common = pose.orientation.inverse().rotate(motion.linear).x;
+    }
+    std::vector<real> hub_speeds(desc_.wheels.size(), real(0.0));
+    for (std::size_t i = 0; i < desc_.wheels.size(); ++i) {
+        const real radius = desc_.wheels[i].wheel_radius;
+        hub_speeds[i] = radius > real(0.0) ? hub_speed_common / radius : real(0.0);
+        wheels_[i]->reset_relaxation();
+    }
+    powertrain_.reset(opts, hub_speeds);
 }
 
 std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {

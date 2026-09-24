@@ -135,6 +135,12 @@ void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, 
     const Vec3 sweep_world = -axis_world * susp.travel_max;
     const ShapeCastHit hit = backend.shape_cast(shape, query_pose, sweep_world, susp.travel_max);
 
+    // PHYS-033 P4 I3 plan section 6.7: computed unconditionally (steer_q
+    // already applied to query_pose above, independent of hit/miss) so a
+    // rotor-reaction caller always has this substep's real spin axis, even
+    // while airborne.
+    spin_axis_world_ = query_pose.orientation.rotate(Vec3::unit_y());
+
     if (hit.hit) {
         hit_ground_ = true;
         x_ = std::clamp(susp.travel_max * (real(1.0) - hit.fraction), real(0.0), susp.travel_max);
@@ -151,7 +157,7 @@ void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, 
         // in-plane component even when the hit normal itself is unusable.
         constexpr real kMinNormalDotAxis = real(0.25); // |angle(n, suspension axis)| <= ~75.5 deg; beyond that n is a wall/side hit
         constexpr real kMinInPlane = real(0.2);        // |n projected into the wheel mid-plane|; below it, n is (nearly) the spin axis
-        const Vec3 spin = query_pose.orientation.rotate(Vec3::unit_y());
+        const Vec3 spin = spin_axis_world_; // computed unconditionally above (PHYS-033 P4 I3 plan section 6.7)
         const Vec3 centre = hit.point; // the swept cylinder's own centre at the hit
         ContactFrame cf;
         Vec3 n = hit.normal;

@@ -6,29 +6,7 @@
 namespace ps::drivetrain {
 namespace {
 
-constexpr real kPi = 3.14159265358979323846;
-constexpr real kRadPerSecToRpm = real(60.0) / (real(2.0) * kPi);
-
 real sign(real x) { return x > real(0.0) ? real(1.0) : (x < real(0.0) ? real(-1.0) : real(0.0)); }
-
-// Slope (d torque / d rpm) of the SAME bracket TorqueMapEngineDesc::
-// wot_torque_nm_vs_rpm::evaluate(rpm) would use, i.e. the segment
-// x[i-1] < rpm <= x[i] (Curve1D's own bracket rule, ps/vehicle/curve1d.h) -
-// zero outside the curve's own range, where evaluate() clamps and the
-// engine's own pre_solve never calls this anyway (rpm is always clamped to
-// [idle_rpm, limiter.rpm], both required to be within the curve's domain by
-// the loader).
-real curve_slope_at(const vehicle::Curve1D& c, real rpm) {
-    if (c.x.size() < 2) return real(0.0);
-    if (rpm <= c.x.front() || rpm >= c.x.back()) return real(0.0);
-    for (std::size_t i = 1; i < c.x.size(); ++i) {
-        if (rpm <= c.x[i]) {
-            const real dx = c.x[i] - c.x[i - 1];
-            return dx > real(0.0) ? (c.y[i] - c.y[i - 1]) / dx : real(0.0);
-        }
-    }
-    return real(0.0);
-}
 
 } // namespace
 
@@ -53,35 +31,6 @@ real reconstruct_mesh_torque(NodeId recon_node, real coef_at_recon_node, real lo
     const real balance =
         J * (omega_new - omega_old_at_recon) / h - (tau0_others - d_others * (omega_new - omega_old_at_recon)) - row_sum;
     return balance / coef_at_recon_node;
-}
-
-// --- TorqueMapEngine -------------------------------------------------------
-
-void TorqueMapEngine::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) {
-    const real omega_old = net.omega(crank_);
-    omega_old_ = omega_old;
-
-    const real rpm_raw = std::abs(omega_old) * kRadPerSecToRpm;
-    const real rpm = std::clamp(rpm_raw, desc_.idle_rpm, desc_.limiter.rpm);
-    real tau = ctx.throttle * desc_.wot_torque_nm_vs_rpm.evaluate(rpm);
-    if (rpm_raw > desc_.limiter.rpm) tau = real(0.0); // hard_cut (plan section 6 / powertrain_desc.h's EngineLimiterDesc comment)
-
-    real dtau_domega = real(0.0);
-    if (rpm_raw > desc_.idle_rpm && rpm_raw < desc_.limiter.rpm) {
-        const real slope_per_rpm = curve_slope_at(desc_.wot_torque_nm_vs_rpm, rpm);
-        dtau_domega = ctx.throttle * slope_per_rpm * kRadPerSecToRpm * sign(omega_old);
-    }
-
-    tau0_ = tau;
-    d_ = std::max(-dtau_domega, real(0.0));
-    assembly.torque(crank_, tau0_, d_);
-}
-
-void TorqueMapEngine::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly&,
-                                  PowertrainEnergy& ledger) {
-    const real omega_new = net.omega(crank_);
-    const real tau_lin = tau0_ - d_ * (omega_new - omega_old_);
-    ledger.engine_out += ctx.h * omega_new * tau_lin;
 }
 
 // --- GearPair ---------------------------------------------------------------
@@ -114,6 +63,55 @@ void GearPair::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& ne
 }
 
 std::uint64_t GearPair::fold_state_hash(std::uint64_t seed) const {
+    std::uint64_t h = seed;
+    const auto* bytes = reinterpret_cast<const unsigned char*>(&lambda_mesh_prev_);
+    for (std::size_t i = 0; i < sizeof(lambda_mesh_prev_); ++i) {
+        h ^= bytes[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+// --- OpenDifferential ---------------------------------------------------------
+
+void OpenDifferential::pre_solve(const ComponentSubstepCtx&, const ShaftNetwork& net, Assembly& assembly) {
+    omega_old_carrier_ = net.omega(carrier_);
+    omega_old_left_ = net.omega(left_); // needed by post_solve's reconstruction (recon node is `left_`, not `carrier_`)
+    if (desc_.efficiency < real(1.0)) {
+        // Applied at the CARRIER (the row's input node, plan section 5.4's
+        // "loss application... at the row's input node" rule) - NOT at the
+        // reconstruction node (left_) below, mirroring GearPair's own
+        // in-node-is-both pattern except the two nodes differ here.
+        own_loss_tau_ = -(real(1.0) - desc_.efficiency) * std::abs(lambda_mesh_prev_) * sign(omega_old_carrier_);
+        assembly.torque(carrier_, own_loss_tau_, real(0.0));
+    } else {
+        own_loss_tau_ = real(0.0);
+    }
+}
+
+void OpenDifferential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
+                                   PowertrainEnergy& ledger) {
+    if (desc_.efficiency >= real(1.0)) {
+        lambda_mesh_prev_ = real(0.0);
+        return;
+    }
+    // Reconstruction node: the LEFT hub (plan section 5.1's graph table -
+    // the diff row's coefficient there is -ratio/2, and it is the lowest-
+    // index node the row touches that carries no OTHER rigid row). The
+    // loss torque itself was applied at carrier_ (a different node), so
+    // `loss_tau_already_applied` here is 0 - left_'s own assembly.tau0
+    // never received it.
+    const real coef_at_left = -desc_.ratio / real(2.0);
+    const real lambda_mesh = reconstruct_mesh_torque(left_, coef_at_left, real(0.0), net, assembly, omega_old_left_, ctx.h);
+    lambda_mesh_prev_ = lambda_mesh;
+
+    const real omega_new_carrier = net.omega(carrier_);
+    // Shared with GearPair/Gearbox in the ledger (plan section 5.4: "Ledger:
+    // gear_loss sums both").
+    ledger.gear_loss += -ctx.h * omega_new_carrier * own_loss_tau_;
+}
+
+std::uint64_t OpenDifferential::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = seed;
     const auto* bytes = reinterpret_cast<const unsigned char*>(&lambda_mesh_prev_);
     for (std::size_t i = 0; i < sizeof(lambda_mesh_prev_); ++i) {

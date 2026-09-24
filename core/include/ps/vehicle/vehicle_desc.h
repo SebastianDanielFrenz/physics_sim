@@ -10,6 +10,7 @@
 #pragma once
 
 #include "ps/drivetrain/brake_system_desc.h"
+#include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/math/pose.h"
 #include "ps/math/vec3.h"
@@ -130,6 +131,14 @@ struct SteeringDesc {
 // (core/include/ps/drivetrain/powertrain_desc.h's EngineLimiterDesc
 // comment: "I2 semantics == the P3 placeholder") - I3's real drivetrain is
 // where it is finally addressed.
+// PHYS-033 P4 I3 plan section 4.4/6.6: a single bluff-body drag element at
+// the chassis CoM, F_drag = -0.5*rho*CdA*|v|*v (VehicleInstance::step_tick,
+// plan section 6.6) - drag_area_m2 IS CdA (Cd already folded in), not a
+// separate Cd/frontal-area pair. 0 == no aero drag (I2/P3 behaviour).
+struct AeroDesc {
+    real drag_area_m2 = 0.0;
+};
+
 struct VehicleDesc {
     std::string name;
     std::string source; // mass/geometry provenance (PLAN.md section 8)
@@ -137,6 +146,13 @@ struct VehicleDesc {
     SteeringDesc steering;
     drivetrain::BrakeSystemDesc brake_system;
     drivetrain::PowertrainDesc powertrain;
+    AeroDesc aero;
+    // PHYS-033 P4 I3 plan section 4.2/9.1: at most one manual_tcu in I3
+    // (loader-enforced). Empty == no controller at all (e.g. a future
+    // AI-driven or scripted vehicle) - VehicleInstance then leaves the
+    // gearbox at its data-file initial_gear forever (no gear_request/
+    // counter channel has any effect without a TCU to arbitrate them).
+    std::vector<drivetrain::ControllerDesc> controllers;
 };
 
 } // namespace ps::vehicle

@@ -130,11 +130,24 @@ public:
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
+    // World::reset_vehicle (plan section 4.5): clears this wheel's tyre
+    // slip relaxation state (kappa_eq/alpha_eq) back to zero - the wheel's
+    // own spin speed IS the drivetrain network's hub omega (no separate
+    // copy here to reset; the caller sets that directly via
+    // ShaftNetwork::set_omega).
+    void reset_relaxation() { relax_ = SlipRelaxationState{}; }
+
     // White-box test access (tests/unit/test_wheel_contact_frame.cpp, core/src
     // on its include path per tests/unit/CMakeLists.txt) - see ContactFrame's
     // own comment for why this is not part of fold_state_hash.
     [[nodiscard]] const ContactFrame& contact_frame() const { return contact_frame_; }
     [[nodiscard]] bool hit_ground() const { return hit_ground_; }
+    // PHYS-033 P4 I3 plan section 6.7 (rotor reaction on the chassis): the
+    // wheel's own world spin axis this substep (measure_contact's local
+    // `spin`, computed unconditionally - steer rotates it even when
+    // airborne, so a rotor-reaction caller always has a sane axis).
+    // Derived each substep from pose/steer, like ContactFrame - not hashed.
+    [[nodiscard]] Vec3 spin_axis_world() const { return spin_axis_world_; }
 
 private:
     WheelDesc desc_;
@@ -144,6 +157,7 @@ private:
     real x_prev_ = 0.0;
     bool hit_ground_ = false;
     ContactFrame contact_frame_;
+    Vec3 spin_axis_world_ = Vec3::unit_y();
     SurfaceId contact_surface_ = kInvalidSurfaceId;
 
     SlipRelaxationState relax_;
