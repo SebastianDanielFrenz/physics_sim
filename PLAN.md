@@ -681,6 +681,12 @@ bookkeeping (a hash map insert/erase when the visible tile set changes) is the
 one accepted exception to "no allocation inside jobs"; it is bounded per tick
 and the steady state while driving is allocation-free. Replace it with a fixed,
 preallocated slot table so the rule holds without exception.
+Carried over from P4 I1b (2026-09-24): with Jolt's allocator now hooked into
+the debug allocation check, Jolt itself allocates inside `PhysicsSystem::Update`
+(`QuadTree::UpdatePrepare`'s `new NodeID[mNumBodies]`, about 49 allocations per
+100 ticks with a vehicle). Our own code is checked separately and must stay at
+zero; Jolt's internal allocations need a fix here (e.g. an arena behind
+`JPH::Allocate`, or broadphase settings that avoid the rebuild).
 Carried over from P1.5a (Sebastian, 2026-09-22: accept 3× now, the rest here):
 the articulation solver costs 13.5 µs per 960 Hz substep for 10 links (from
 40.6 µs; the goal was ≤ 8 µs). Known remaining levers: single-axis rank-1
