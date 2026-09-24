@@ -72,19 +72,32 @@ struct VehicleTestRig {
 // real chassis "belly" sits well above and inboard of the wheels. This is
 // not merely a test convenience: any scenario author assembling a real
 // chassis body around this vehicle system has the same obligation.
-inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps::real chassis_mass,
-                                         const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
-                                         ps::real slope_grade = 0.0, int job_workers = 4) {
+// PLAN.md P4 I1 (PHYS-033): the VehicleDesc-taking core of build_vehicle_rig
+// below, split out so a test can mutate a loaded desc (e.g. zeta = 0,
+// qsy = 0, an attachment z) before building the rig, and so a test can run
+// at a finer tick/substep rate (tick_hz/substep_hz) for the "does the W1
+// result move toward the converged solution" check (I1 plan section 5.1) -
+// never committed as a test's normal rate, just used locally to produce a
+// reference number. `tilt_axis` generalises the old hard-coded world-Y tilt
+// (a vehicle facing +X driving up/down a longitudinal grade) to an
+// arbitrary axis - unit_x() gives a CROSS slope for a vehicle facing +X
+// (rises in +Y), unit_y() (the default, matching the old behaviour exactly)
+// a longitudinal slope (rises in +X).
+inline VehicleTestRig build_vehicle_rig_from_desc(const ps::vehicle::VehicleDesc& desc, ps::real chassis_mass,
+                                                   const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
+                                                   ps::real slope_grade = 0.0, int job_workers = 4,
+                                                   ps::Vec3 tilt_axis = ps::Vec3::unit_y(),
+                                                   ps::real tick_hz = 240.0, ps::real substep_hz = 960.0) {
     VehicleTestRig rig;
 
     ps::WorldConfig cfg;
-    cfg.tick_rate_hz = 240.0;
-    cfg.substep_rate_hz = 960.0;
+    cfg.tick_rate_hz = tick_hz;
+    cfg.substep_rate_hz = substep_hz;
     cfg.job_workers = job_workers;
     rig.world = std::make_unique<ps::World>(cfg);
 
     const ps::real theta = ps::math::atan(slope_grade);
-    const ps::Quat tilt = ps::Quat::from_axis_angle(ps::Vec3::unit_y(), theta);
+    const ps::Quat tilt = ps::Quat::from_axis_angle(tilt_axis.normalized(), theta);
 
     ps::BodyDesc ground;
     // 1000 x 1000 m: comfortably larger than any distance a validation test
@@ -115,10 +128,17 @@ inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps
     rig.surfaces = std::make_shared<ps::io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
     rig.world->set_surface_table(rig.surfaces);
 
-    const ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(vehicle_json_path);
     rig.vehicle = rig.world->create_vehicle(desc, rig.chassis);
 
     return rig;
+}
+
+inline VehicleTestRig build_vehicle_rig(const std::string& vehicle_json_path, ps::real chassis_mass,
+                                         const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
+                                         ps::real slope_grade = 0.0, int job_workers = 4) {
+    const ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(vehicle_json_path);
+    return build_vehicle_rig_from_desc(desc, chassis_mass, chassis_half_extents, chassis_origin_height,
+                                        slope_grade, job_workers);
 }
 
 // Same as build_vehicle_rig but for a FLAT ground tagged with a specific
