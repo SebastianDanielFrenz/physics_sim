@@ -95,6 +95,14 @@ and hands static collision geometry to the sim. Rejected: Unreal (binary
 assets, agent can't drive the editor, Chaos Vehicles too simple); driving
 Godot rigid bodies from GDScript (ties the sim to one engine, no headless
 tests, wrong step rates).
+*Amended 2026-09-24 (Sebastian):* a port to Unreal Engine 5 stays possible, so
+every piece of logic that is not rendering, input plumbing or audio-device
+output lives in engine-neutral C++ libraries (no Godot or Unreal types), and
+each game-engine adapter stays thin. This includes audio synthesis and
+propagation (`ps_audio`, below), the engine cycle model, input mapping and
+driver aids; the adapter only feeds samples to the engine's audio output,
+reports listener and source poses, and supplies scene geometry through an
+interface.
 
 **D2 — Jolt is embedded as the rigid-body/collision backend, hidden behind our
 own interfaces.** No Jolt type appears in any public header. Jolt does
@@ -580,26 +588,38 @@ vault PHYS-028): our own engine model, in three layers — a deterministic
 mean-value model in core running every substep for every vehicle, its maps
 generated from the engine data file by our own crank-angle-resolved cycle
 model at load/edit time (this is where rotary, hydrogen, forced induction and
-altitude come from), and our own sound synthesiser in the adapter.
+altitude come from), and our own sound synthesiser (in `ps_audio`, see
+below; originally written as "in the adapter").
 engine-sim is a reference and a source of example engines only: it fails
 D7/D10/D3 and the P9 budget and covers little of the list above.
 Refined 2026-09-24 by measurement (vault PHYS-038), on Sebastian's rule "live
 if the performance allows it, otherwise lookup tables": a live crank-angle
 model for every vehicle costs 1.4–2.3× the whole P9(a) budget, so power stays
 on maps in core. Audio does not come from the maps: the same cycle model runs
-live in the adapter, speed-slaved to the core (about 4 % of one core per
+live in `ps_audio` (hosted by the adapter), speed-slaved to the core (about 4 % of one core per
 audible V8), with crank-angle tables from the map generator as a fallback. The
 generator integrates with a fixed time step (the model is stiff), not a fixed
 crank angle.
 
 Tyre audio requirement (Sebastian, 2026-09-24): tyre sounds that depend on
 compound, surface, slip angle, slip ratio, load and speed. Approach: parametric
-synthesis in the adapter driven by per-wheel physics state the core already
+synthesis in `ps_audio` driven by per-wheel physics state the core already
 publishes (slip ratio/angle, load, surface, speed), plus a tyre compound id and
 the sliding velocity at the patch; recorded or synthesised layers per surface
 (rolling roar, squeal near and past the grip peak, scrub/skid, gravel crunch)
 blended by those parameters, not fixed loops. The core only publishes state;
-all audio stays in the adapter.
+all audio lives in `ps_audio`.
+
+Audio library `ps_audio` (Sebastian, 2026-09-24: no Godot-specific logic, a
+UE5 port must stay possible): a separate engine-neutral C++ library target,
+never linked into `ps_core` and never read by the simulation (so D7 and the
+P9 budget are unaffected). Input: published `WorldSnapshot` state (engine
+sound state, per-wheel tyre state, mount forces), listener pose, and scene
+geometry through an interface. Output: PCM buffers per listener. It owns the
+engine cycle model instance for audio, tyre synthesis, the interior/exterior
+paths and propagation. Adapters (Godot now, possibly Unreal later) only pump
+buffers to the audio device and forward poses and geometry. Unit-tested
+headlessly like the core.
 
 Engine mounts, interior sound and propagation (Sebastian, 2026-09-24):
 - Engine mounts: the engine block sits on mounts with stiffness and damping,
@@ -610,14 +630,15 @@ Engine mounts, interior sound and propagation (Sebastian, 2026-09-24):
   between drivetrain and chassis, replacing the direct rotor-reaction torque
   of Q11 where a vehicle defines mounts; publish the mount forces. This also
   gives real engine rock in vehicle dynamics.
-- Interior vs exterior: the adapter renders two listener paths. Exterior:
+- Interior vs exterior: `ps_audio` renders two listener paths. Exterior:
   exhaust, intake, tyres and wind as sources with distance, direction and
   Doppler. Interior: structure-borne sound from the published mount forces
   (and suspension forces) through a cabin transfer model, plus airborne sound
   through firewall and glazing as filtered transmission.
 - Propagation: later, geometric or ray-traced audio (reflections, occlusion,
-  tunnels, walls) in the adapter; evaluate an existing open-source spatial
-  audio library before writing one.
+  tunnels, walls) in `ps_audio`, with scene geometry supplied by the adapter
+  through an interface; evaluate an existing open-source, engine-neutral
+  spatial audio library before writing one.
 
 Data format documentation and an engine editor (Sebastian, 2026-09-24): a
 human-readable description of every data file format, kept in the repo next
