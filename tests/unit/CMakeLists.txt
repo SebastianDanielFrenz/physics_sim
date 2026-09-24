@@ -31,6 +31,7 @@ add_executable(ps_unit_tests
   test_powertrain_network.cpp
   test_powertrain_friction_lcp.cpp
   test_powertrain_engine.cpp
+  test_powertrain_gearbox.cpp
   test_sub_threshold_rotation.cpp
 )
 

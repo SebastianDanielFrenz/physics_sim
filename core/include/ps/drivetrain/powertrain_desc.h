@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "ps/math/vec3.h"
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h" // Curve1D (NOT vehicle_desc.h: VehicleDesc::powertrain
                                  // is a PowertrainDesc, so that include would be circular)
@@ -68,6 +69,12 @@ struct DifferentialDesc {
     DifferentialKind kind = DifferentialKind::Open;
     real ratio = 1.0;
     real efficiency = 1.0; // I2: must be exactly 1 (loader error otherwise - section 5.4's single-rigid-row-per-lossy-node limitation)
+    // PHYS-033 I3 (plan section 4.1): additive, defaults reproduce I2 exactly
+    // (carrier had no inertia field at all - Powertrain's constructor still
+    // passes a hardcoded 0.0 for it, not these - and no rotor-reaction code
+    // exists yet to read the axis). Both are wired in by commit 6.
+    real carrier_inertia_kgm2 = 0.0;
+    Vec3 carrier_axis_local = Vec3::zero();
 };
 
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
