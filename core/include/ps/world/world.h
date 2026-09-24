@@ -174,6 +174,12 @@ public:
     // Same live-state-only caveat as wheel_telemetry above - a reader on
     // another thread wants WorldSnapshot::vehicles instead (snapshot.h).
     [[nodiscard]] vehicle::WheelState wheel_state(VehicleId id, std::size_t wheel_index) const;
+    // PHYS-033 P4 I2 commit 5a: WheelDesc::driven is gone (which wheels are
+    // driven is now the /2 powertrain graph's own shape) - this replaces
+    // it for callers that only need the bool (e.g. the Godot adapter's
+    // get_wheel_driven, adapters/godot/src/ps_simulation.cpp). Sim-thread-
+    // only, same live-state contract as wheel_telemetry above.
+    [[nodiscard]] bool wheel_is_driven(VehicleId id, std::size_t wheel_index) const;
     // PHYS-033 I1 W1 (section 3.5): sim-thread-only live accessors, same
     // contract as wheel_telemetry above - see VehicleInstance::
     // shadow_dv_error's own comment for what these mean and their one-tick

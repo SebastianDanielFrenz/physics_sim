@@ -9,6 +9,8 @@
 // our own job-scheduled code, not just one of them.
 
 #include "counter_force_element.h"
+#include "ps/drivetrain/brake_system_desc.h"
+#include "ps/drivetrain/powertrain_desc.h"
 #include "ps/io/scenario.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/world.h"
@@ -331,20 +333,17 @@ vehicle::VehicleDesc make_test_vehicle_desc() {
     vehicle::VehicleDesc desc;
     desc.name = "det_test_car";
     desc.source = "test-only synthetic vehicle, not a real car - see this file's header comment";
-    desc.drive.torque_curve_nm_vs_rpm.x = {900.0, 6500.0};
-    desc.drive.torque_curve_nm_vs_rpm.y = {150.0, 150.0};
 
-    struct Corner { const char* name; real x, y; bool front, driven; };
+    struct Corner { const char* name; real x, y; bool front; };
     const Corner corners[4] = {
-        {"FL", 1.35, 0.78, true, false}, {"FR", 1.35, -0.78, true, false},
-        {"RL", -1.35, 0.78, false, true}, {"RR", -1.35, -0.78, false, true},
+        {"FL", 1.35, 0.78, true}, {"FR", 1.35, -0.78, true},
+        {"RL", -1.35, 0.78, false}, {"RR", -1.35, -0.78, false},
     };
     for (const Corner& c : corners) {
         vehicle::WheelDesc w;
         w.name = c.name;
         w.attachment_local = Vec3{c.x, c.y, -0.1};
         w.is_front = c.front;
-        w.driven = c.driven;
         w.steered = c.front;
         w.tyre.name = std::string(c.name) + "_tyre";
         w.tyre.source = "defaults from ps/vehicle/tyre_desc.h, test-only";
@@ -352,6 +351,48 @@ vehicle::VehicleDesc make_test_vehicle_desc() {
     }
     desc.wheels[0].arb_partner = 1; desc.wheels[1].arb_partner = 0;
     desc.wheels[2].arb_partner = 3; desc.wheels[3].arb_partner = 2;
+
+    // PHYS-033 P4 I2 plan section 9.4: the /2 graph equivalent of the old
+    // DriveDesc/BrakeDesc defaults this fixture relied on before the
+    // /2 rewrite (owner ruling Q7: no converter) - rear-driven (RL/RR)
+    // through an open diff, flat 150 N*m curve, final drive 3.7 @ 0.9
+    // efficiency (DriveDesc's own defaults, vehicle_desc.h pre-I2), and
+    // BrakeDesc's own default corner/handbrake torques.
+    drivetrain::TorqueMapEngineDesc engine;
+    engine.wot_torque_nm_vs_rpm.x = {900.0, 6500.0};
+    engine.wot_torque_nm_vs_rpm.y = {150.0, 150.0};
+    engine.inertia_kgm2 = 0.0;
+    engine.idle_rpm = 900.0;
+    engine.limiter.type = "hard_cut";
+    engine.limiter.rpm = 6500.0;
+
+    drivetrain::GearPairDesc final_drive;
+    final_drive.ratio = 3.7;
+    final_drive.efficiency = 0.9;
+
+    drivetrain::DifferentialDesc diff;
+    diff.kind = drivetrain::DifferentialKind::Open;
+    diff.ratio = 1.0;
+    diff.efficiency = 1.0;
+
+    desc.powertrain.components = {
+        {"engine", engine}, {"final_drive", final_drive}, {"diff", diff},
+    };
+    desc.powertrain.shafts = {
+        {{{"engine", "crank", false}, {"final_drive", "in", false}}},
+        {{{"final_drive", "out", false}, {"diff", "carrier", false}}},
+        {{{"diff", "left", false}, {"RL", "", true}}},
+        {{{"diff", "right", false}, {"RR", "", true}}},
+    };
+    desc.powertrain.compliance = drivetrain::Compliance::Rigid;
+
+    desc.brake_system.type = drivetrain::BrakeSystemType::DirectTorque;
+    desc.brake_system.corners = {
+        {"FL", 2200.0}, {"FR", 2200.0}, {"RL", 1400.0}, {"RR", 1400.0},
+    };
+    desc.brake_system.handbrake = {{"RL", "RR"}, 1400.0};
+    desc.brake_system.static_factor = 1.0;
+
     return desc;
 }
 

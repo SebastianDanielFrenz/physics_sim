@@ -9,37 +9,19 @@
 
 #pragma once
 
+#include "ps/drivetrain/brake_system_desc.h"
+#include "ps/drivetrain/powertrain_desc.h"
 #include "ps/math/pose.h"
 #include "ps/math/vec3.h"
 #include "ps/types.h"
+#include "ps/vehicle/curve1d.h" // Curve1D (moved to its own header, PHYS-033 I2 commit 5a, to
+                                 // break the vehicle_desc.h <-> powertrain_desc.h cycle below)
 #include "ps/vehicle/tyre_desc.h"
 
 #include <string>
 #include <vector>
 
 namespace ps::vehicle {
-
-// A piecewise-linear table, e.g. damper force vs. velocity or camber vs.
-// suspension travel (PLAN.md 5.1: "a kinematic table interface for camber/
-// toe/track change vs travel"). Points must be sorted by x (ascending);
-// evaluate() clamps outside the given range rather than extrapolating.
-struct Curve1D {
-    std::vector<real> x;
-    std::vector<real> y;
-
-    [[nodiscard]] real evaluate(real xv) const {
-        if (x.empty()) return 0.0;
-        if (xv <= x.front()) return y.front();
-        if (xv >= x.back()) return y.back();
-        for (std::size_t i = 1; i < x.size(); ++i) {
-            if (xv <= x[i]) {
-                const real t = (xv - x[i - 1]) / (x[i] - x[i - 1]);
-                return y[i - 1] + t * (y[i] - y[i - 1]);
-            }
-        }
-        return y.back();
-    }
-};
 
 // Suspension travel is a scalar `x` in [0, travel_max] along `axis`
 // (chassis-local): x = 0 is full extension (spring free length), x =
@@ -82,8 +64,13 @@ struct WheelDesc {
     TyreDesc tyre;
 
     bool steered = false;
-    bool driven = false;
-    bool is_front = true;  // picks BrakeDesc's front/rear split, SteeringDesc's Ackermann-vs-rear-steer formula, and telemetry grouping
+    // PHYS-033 I2 (owner ruling Q7): "driven" is gone - which wheels are
+    // driven is now determined by VehicleDesc::powertrain's graph (which
+    // wheel hubs a differential/gear_pair/engine chain reaches), not a
+    // per-wheel flag. See core/src/vehicle/vehicle_instance.cpp's P3 shim
+    // (temporary, deleted in I2 commit 5b) for how the runtime still
+    // derives an equivalent bool from the graph.
+    bool is_front = true;  // picks brake_system's corner match, SteeringDesc's Ackermann-vs-rear-steer formula, and telemetry grouping
 };
 
 // Ackermann steering geometry (PLAN.md 5.1). A single steer control channel
@@ -128,50 +115,28 @@ struct SteeringDesc {
     real steer_rate_limit = 0.0;    // rad/s; 0 == unlimited (instantaneous)
 };
 
-struct BrakeDesc {
-    real max_torque_front = 2200.0; // N*m, per front wheel at brake=1
-    real max_torque_rear = 1400.0;  // N*m, per rear wheel at brake=1
-    real handbrake_rear_fraction = 1.0; // fraction of max_torque_rear the "handbrake" control channel commands
-};
-
-// Placeholder drive (PLAN.md M1: "throttle -> torque at the driven wheels
-// from a simple torque curve, with a rev-like limit... clearly marked as a
-// placeholder to be replaced in P4"). No gearbox/clutch: one fixed final
-// drive ratio from a single notional "engine" speed derived from the
-// driven wheels' own average angular speed.
-//
-// Because there is no clutch to slip/modulate torque during engagement,
-// full throttle commanded before a driven wheel's tyre contact has settled
-// to its load-bearing Fz (e.g. an instantaneous full-throttle command right
-// at vehicle spawn, before the suspension has compressed) can spin that
-// wheel up largely unopposed (reaction torque ~ Fx ~ Fz*mu, near zero while
-// Fz is near zero) into the tyre's deep post-peak slip region before real
-// grip develops - a genuine, understood limitation of this placeholder
-// (no clutch/traction-control model), not a numerical bug. Measured
-// (data/vehicles/car_sedan.json, out/handover_accel.md): self-recovers
-// within several seconds as the car's own speed catches up to the wheel's
-// surface speed (car keeps accelerating throughout, never stalls), but
-// during the excursion Fx/Fz sits well below the tyre's achievable peak
-// (~0.6 vs ~1.0 measured). A real full-throttle standing start from an
-// ALREADY-SETTLED rest (the common case - see
-// test_vehicle_accel_standing_start.cpp) does not trigger this. PLAN.md P4's
-// real drivetrain (clutch engagement / launch control) is where this
-// belongs properly; not addressed here.
-struct DriveDesc {
-    Curve1D torque_curve_nm_vs_rpm; // engine torque (N*m) vs rpm; required, non-empty
-    real final_drive_ratio = 3.7;   // engine-to-wheel ratio (no gearbox in this placeholder)
-    real rev_limit_rpm = 6500.0;    // torque is clamped to 0 above this (crude limiter, P4 replaces with a real one)
-    real idle_rpm = 900.0;
-    real drivetrain_efficiency = 0.9; // simple constant loss factor
-};
-
+// PHYS-033 I2 (owner ruling Q7, no legacy converter): the P3 placeholder
+// BrakeDesc (front/rear split) and DriveDesc (one notional-engine torque
+// curve + a single final-drive ratio, "throttle -> torque at the driven
+// wheels", PLAN.md M1) are both gone as of the /2 data format. They are
+// replaced by drivetrain::BrakeSystemDesc (direct-torque friction rows per
+// corner) and drivetrain::PowertrainDesc (the P4 I2 shaft-network graph -
+// engine/gear_pair/differential components joined by shafts, PHYS-033 P4
+// I2 plan section 2) below. DriveDesc's documented placeholder-drive
+// limitation (no clutch/traction-control: an instantaneous full-throttle
+// command before a driven wheel's tyre contact has settled can spin that
+// wheel up largely unopposed into deep post-peak slip before recovering,
+// out/handover_accel.md) still applies to I2's own torque_map engine kind
+// (core/include/ps/drivetrain/powertrain_desc.h's EngineLimiterDesc
+// comment: "I2 semantics == the P3 placeholder") - I3's real drivetrain is
+// where it is finally addressed.
 struct VehicleDesc {
     std::string name;
     std::string source; // mass/geometry provenance (PLAN.md section 8)
     std::vector<WheelDesc> wheels;
     SteeringDesc steering;
-    BrakeDesc brakes;
-    DriveDesc drive;
+    drivetrain::BrakeSystemDesc brake_system;
+    drivetrain::PowertrainDesc powertrain;
 };
 
 } // namespace ps::vehicle

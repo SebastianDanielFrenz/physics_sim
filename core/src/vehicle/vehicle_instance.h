@@ -64,6 +64,13 @@ public:
     [[nodiscard]] const std::string& wheel_name(std::size_t i) const { return wheels_[i]->desc().name; }
     // PLAN.md M1, task 2 of the P3 fix-up phase: see wheel_state.h.
     [[nodiscard]] WheelState wheel_state(std::size_t i) const { return wheels_[i]->wheel_state(); }
+    // PHYS-033 P4 I2 commit 5a: which wheels the /2 powertrain graph
+    // actually drives (WheelDesc::driven is gone - see vehicle_desc.h's
+    // VehicleDesc comment). Backs World::wheel_is_driven, the adapter's
+    // replacement for the old WheelDesc::driven read (ps_simulation.cpp's
+    // get_wheel_driven). Survives the 5b runtime switch unchanged (only
+    // the shim producing it is temporary).
+    [[nodiscard]] bool wheel_is_driven(std::size_t i) const { return p3_shim_.driven[i]; }
 
     [[nodiscard]] BodyId chassis() const { return chassis_; }
     // PHYS-033 I1 W1: called ONLY from vehicle::System::note_body_wrench,
@@ -90,10 +97,36 @@ public:
 private:
     [[nodiscard]] real ackermann_wheel_angle(std::size_t wheel_index, real delta_avg) const;
 
+    // PHYS-033 P4 I2 commit 5a: TEMPORARY P3 shim (deleted in commit 5b,
+    // plan section 13's row 5b). Derives exactly the P3-shaped numbers
+    // step_tick still consumes (a single notional-engine torque curve/
+    // idle/limiter/final-drive-ratio/efficiency, a driven flag and a
+    // brake/handbrake max torque per wheel) from the /2
+    // VehicleDesc::powertrain graph and ::brake_system, so the /2 data
+    // rewrite can be proven bit-identical (plan row 5a's own check)
+    // before commit 5b replaces step_tick's math with the real
+    // ps::drivetrain::Powertrain solve.
+    struct P3Shim {
+        vehicle::Curve1D torque_curve;
+        real final_drive_ratio = 0.0; // gear_pair.ratio * differential.ratio
+        real rev_limit_rpm = 0.0;     // engine.limiter.rpm
+        real idle_rpm = 0.0;          // engine.idle_rpm
+        real efficiency = 0.0;        // gear_pair.efficiency (differential efficiency is always 1 in I2)
+        std::vector<bool> driven;        // per wheel, WheelDesc order: under the open diff's left/right ports
+        std::vector<real> brake_max;     // per wheel: brake_system corner max_torque_nm (0 if none)
+        std::vector<real> handbrake_max; // per wheel: brake_system.handbrake.max_torque_nm if listed there, else 0
+    };
+    [[nodiscard]] static P3Shim build_p3_shim(const VehicleDesc& desc);
+
     BodyId chassis_;
     const io::SurfaceTable* surfaces_;
     ControlChannelIndices control_indices_;
     VehicleDesc desc_;
+    // Declared AFTER desc_ (built FROM desc_ in the member-init list, and
+    // member-init order follows DECLARATION order regardless of the list's
+    // own order - reordering desc_/p3_shim_ here would silently read a
+    // not-yet-constructed desc_).
+    P3Shim p3_shim_;
     std::vector<std::unique_ptr<WheelInstance>> wheels_;
 
     // Ackermann geometry, cached at construction from wheel attachment

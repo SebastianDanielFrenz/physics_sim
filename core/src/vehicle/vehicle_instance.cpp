@@ -4,8 +4,129 @@
 
 #include <algorithm>
 #include <cmath>
+#include <variant>
 
 namespace ps::vehicle {
+namespace {
+
+// PHYS-033 P4 I2 commit 5a: does shaft `shaft`'s port list contain exactly
+// one occurrence of component `id`'s port `port`, and if so, what is the
+// OTHER end (I2 shafts always join exactly two ports - the loader accepts
+// more, but P3's own shape - and every /2 file this shim needs to read -
+// never uses more than two)?
+const drivetrain::PortRef* other_end(const drivetrain::ShaftDesc& shaft, const std::string& id, const std::string& port) {
+    if (shaft.ports.size() != 2) return nullptr;
+    for (std::size_t i = 0; i < 2; ++i) {
+        const drivetrain::PortRef& p = shaft.ports[i];
+        if (!p.is_wheel && p.component == id && p.port == port) return &shaft.ports[1 - i];
+    }
+    return nullptr;
+}
+
+const drivetrain::PortRef* find_shaft_partner(const drivetrain::PowertrainDesc& pt, const std::string& id, const std::string& port) {
+    for (const drivetrain::ShaftDesc& s : pt.shafts) {
+        if (const drivetrain::PortRef* other = other_end(s, id, port)) return other;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+VehicleInstance::P3Shim VehicleInstance::build_p3_shim(const VehicleDesc& desc) {
+    P3Shim shim;
+    shim.driven.assign(desc.wheels.size(), false);
+    shim.brake_max.assign(desc.wheels.size(), real(0.0));
+    shim.handbrake_max.assign(desc.wheels.size(), real(0.0));
+
+    // brake_system -> per-wheel corner/handbrake max torques (P3's
+    // BrakeDesc::max_torque_front/rear/handbrake_rear_fraction, now
+    // resolved per named wheel instead of by is_front).
+    for (const drivetrain::BrakeCornerDesc& corner : desc.brake_system.corners) {
+        for (std::size_t i = 0; i < desc.wheels.size(); ++i) {
+            if (desc.wheels[i].name == corner.wheel) shim.brake_max[i] = corner.max_torque_nm;
+        }
+    }
+    for (const std::string& wn : desc.brake_system.handbrake.wheels) {
+        for (std::size_t i = 0; i < desc.wheels.size(); ++i) {
+            if (desc.wheels[i].name == wn) shim.handbrake_max[i] = desc.brake_system.handbrake.max_torque_nm;
+        }
+    }
+
+    // powertrain graph -> engine curve/idle/limiter, final_drive_ratio,
+    // efficiency and which wheels are driven. Finds the single
+    // TorqueMapEngineDesc, follows its crank port through one gear_pair to
+    // one differential, and marks that differential's left/right wheels
+    // driven - the only topology I2's own data (car_sedan, tractor, the
+    // determinism fixture) uses. Absent powertrain (or a shape this shim
+    // does not recognise) leaves every wheel free, matching the loader's
+    // own "absent powertrain means all wheels free" contract.
+    const drivetrain::TorqueMapEngineDesc* engine = nullptr;
+    std::string engine_id;
+    for (const drivetrain::ComponentDesc& c : desc.powertrain.components) {
+        if (const auto* e = std::get_if<drivetrain::TorqueMapEngineDesc>(&c.params)) {
+            engine = e;
+            engine_id = c.id;
+            break; // I2 data has exactly one engine
+        }
+    }
+    if (engine == nullptr) return shim;
+
+    shim.torque_curve = engine->wot_torque_nm_vs_rpm;
+    shim.idle_rpm = engine->idle_rpm;
+    shim.rev_limit_rpm = engine->limiter.rpm;
+
+    const drivetrain::PortRef* crank_partner = find_shaft_partner(desc.powertrain, engine_id, "crank");
+    const drivetrain::GearPairDesc* gear = nullptr;
+    std::string gear_id;
+    if (crank_partner != nullptr && !crank_partner->is_wheel) {
+        for (const drivetrain::ComponentDesc& c : desc.powertrain.components) {
+            if (c.id == crank_partner->component) {
+                if (const auto* g = std::get_if<drivetrain::GearPairDesc>(&c.params)) { gear = g; gear_id = c.id; }
+            }
+        }
+    }
+    if (gear == nullptr) return shim; // not P3's shape: engine.crank isn't joined to a single gear_pair
+
+    const drivetrain::PortRef* gear_out_partner = find_shaft_partner(desc.powertrain, gear_id, "out");
+    const drivetrain::DifferentialDesc* diff = nullptr;
+    std::string diff_id;
+    if (gear_out_partner != nullptr && !gear_out_partner->is_wheel) {
+        for (const drivetrain::ComponentDesc& c : desc.powertrain.components) {
+            if (c.id == gear_out_partner->component) {
+                if (const auto* d = std::get_if<drivetrain::DifferentialDesc>(&c.params)) { diff = d; diff_id = c.id; }
+            }
+        }
+    }
+
+    real diff_ratio = real(1.0);
+    if (diff != nullptr) {
+        // omega_carrier = diff.ratio * avg(omega_left, omega_right) (plan
+        // section 4.2's row [carrier: 1, left: -ratio/2, right: -ratio/2]),
+        // and omega_in(gear) = gear.ratio * omega_out(gear) = gear.ratio *
+        // omega_carrier, so the P3-equivalent single ratio is the product.
+        diff_ratio = diff->ratio;
+        const drivetrain::PortRef* left = find_shaft_partner(desc.powertrain, diff_id, "left");
+        const drivetrain::PortRef* right = find_shaft_partner(desc.powertrain, diff_id, "right");
+        for (const drivetrain::PortRef* side : {left, right}) {
+            if (side != nullptr && side->is_wheel) {
+                for (std::size_t i = 0; i < desc.wheels.size(); ++i) {
+                    if (desc.wheels[i].name == side->component) shim.driven[i] = true;
+                }
+            }
+        }
+    } else if (gear_out_partner != nullptr && gear_out_partner->is_wheel) {
+        // A gear feeding a single hub directly, no differential: not a
+        // shape P3's own data uses, handled for robustness only.
+        for (std::size_t i = 0; i < desc.wheels.size(); ++i) {
+            if (desc.wheels[i].name == gear_out_partner->component) shim.driven[i] = true;
+        }
+    }
+
+    shim.final_drive_ratio = gear->ratio * diff_ratio;
+    shim.efficiency = gear->efficiency; // differential efficiency is always 1 in I2 (loader-enforced)
+    return shim;
+}
+
 namespace {
 
 // PHYS-033 I1 W1 (section 3.2): advances an orientation by one substep's
@@ -25,7 +146,8 @@ Quat integrate_orientation(const Quat& q, const Vec3& w, real h) {
 
 VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces,
                                    const ControlChannelIndices& control_indices)
-    : chassis_(chassis), surfaces_(surfaces), control_indices_(control_indices), desc_(desc) {
+    : chassis_(chassis), surfaces_(surfaces), control_indices_(control_indices), desc_(desc),
+      p3_shim_(build_p3_shim(desc_)) {
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
         wheels_.push_back(std::make_unique<WheelInstance>(w, create_pacejka_tyre_model(w.tyre)));
@@ -164,26 +286,21 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     real driven_omega_sum = 0.0;
     int driven_n = 0;
     for (std::size_t i = 0; i < wheels_.size(); ++i) {
-        if (desc_.wheels[i].driven) { driven_omega_sum += wheels_[i]->spin_speed(); ++driven_n; }
+        if (p3_shim_.driven[i]) { driven_omega_sum += wheels_[i]->spin_speed(); ++driven_n; }
     }
     real drive_torque_per_wheel = 0.0;
     if (driven_n > 0) {
-        const DriveDesc& d = desc_.drive;
         const real wheel_rpm_avg = (driven_omega_sum / driven_n) * real(60.0) / (real(2.0) * real(3.14159265358979323846));
-        const real engine_rpm_raw = std::abs(wheel_rpm_avg) * d.final_drive_ratio;
-        const real engine_rpm = std::clamp(engine_rpm_raw, d.idle_rpm, d.rev_limit_rpm);
-        real engine_torque = d.torque_curve_nm_vs_rpm.evaluate(engine_rpm) * controls.throttle;
-        if (engine_rpm_raw > d.rev_limit_rpm) engine_torque = 0.0; // crude rev limiter, PLAN.md M1's placeholder drive
-        const real wheel_torque_total = engine_torque * d.final_drive_ratio * d.drivetrain_efficiency;
+        const real engine_rpm_raw = std::abs(wheel_rpm_avg) * p3_shim_.final_drive_ratio;
+        const real engine_rpm = std::clamp(engine_rpm_raw, p3_shim_.idle_rpm, p3_shim_.rev_limit_rpm);
+        real engine_torque = p3_shim_.torque_curve.evaluate(engine_rpm) * controls.throttle;
+        if (engine_rpm_raw > p3_shim_.rev_limit_rpm) engine_torque = 0.0; // crude rev limiter, PLAN.md M1's placeholder drive
+        const real wheel_torque_total = engine_torque * p3_shim_.final_drive_ratio * p3_shim_.efficiency;
         drive_torque_per_wheel = wheel_torque_total / driven_n;
     }
 
     for (std::size_t i = 0; i < wheels_.size(); ++i) {
-        const WheelDesc& w = desc_.wheels[i];
-        const BrakeDesc& b = desc_.brakes;
-        real t = (w.is_front ? b.max_torque_front : b.max_torque_rear) * controls.brake;
-        if (!w.is_front) t += b.max_torque_rear * b.handbrake_rear_fraction * controls.handbrake;
-        brake_torque_scratch_[i] = t;
+        brake_torque_scratch_[i] = p3_shim_.brake_max[i] * controls.brake + p3_shim_.handbrake_max[i] * controls.handbrake;
     }
 
     const std::size_t num_substeps = std::max<std::size_t>(1, static_cast<std::size_t>(tick_dt * substep_rate_hz + real(0.5)));
@@ -224,7 +341,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             in.chassis_com_world = com;
             in.steer_angle = delta;
             in.brake_torque_cmd = brake_torque_scratch_[i];
-            in.drive_torque_cmd = w.driven ? drive_torque_per_wheel : 0.0;
+            in.drive_torque_cmd = p3_shim_.driven[i] ? drive_torque_per_wheel : 0.0;
             in.dt = substep_dt;
             in.partner_compression = w.arb_partner >= 0 ? wheels_[static_cast<std::size_t>(w.arb_partner)]->compression() : 0.0;
             in.surfaces = surfaces_;

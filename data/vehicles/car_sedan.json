@@ -1,7 +1,7 @@
 {
-  "format": "physics_sim.vehicle/1",
+  "format": "physics_sim.vehicle/2",
   "name": "car_sedan",
-  "source": "Geometry (wheelbase 2.70 m, track 1.56 m, wheel radius 0.317 m) matches data/models/car_sedan/car_sedan.rig.json. Mass (1500 kg curb weight) and a symmetric 50/50 front/rear static split are plausible round-number choices for a mid-size sedan (Genta, 'Motor Vehicle Dynamics', ch. 1 cites typical passenger-car curb weights of 1200-1700 kg and front/rear splits of roughly 50/50 to 60/40 - not a specific measured car). Suspension spring rates are chosen so the static-equilibrium compression sits at 1/3 of travel_max under this weight (see out/handover_p3.md's static-corner-weight note); damper rates target a ~0.35 damping ratio about that operating point via the usual 2*m*omega_n relation (Milliken, 'Race Car Vehicle Dynamics', ch. 16). All 4 wheels reference data/tyres/passenger_car_225_45r17.json. Placeholder drive torque curve (PLAN.md M1) is a plausible shape for a ~2.0 L naturally aspirated engine, not a specific published curve. final_drive_ratio=10.0 (out/handover_accel.md): DriveDesc has no separate gearbox/clutch stage (vehicle_desc.h's own header comment - 'no gearbox in this placeholder'), so this single ratio must stand in for a real car's launch (1st) gear times its differential, not the differential alone. The value originally here (3.7) was only a plausible standalone differential ratio (matching data/vehicles/tractor.json's own final_drive_ratio=15.0, which DOES already fold in the tractor's low working-gear reduction, for contrast) - with no gearbox multiplying it further, a stationary/idle-rpm launch only ever produced the torque curve's WEAKEST point (120 N*m at idle_rpm=900) times 3.7, giving a measured full-throttle standing-start acceleration of about 0.72 m/s^2 on asphalt (test_vehicle_accel_standing_start.cpp's diagnostic run), an order of magnitude below what this torque curve can deliver. 10.0 = a plausible 1st-gear ratio (~2.7, within the typical 2.9-3.8 range Genta ch. 6 cites for a 5/6-speed passenger-car gearbox's 1st gear, chosen at the low end here since it is multiplying an already-plausible 3.7 differential) times that same 3.7 differential ratio; a higher value (13.0, i.e. a 1st gear of ~3.5) was tried first and measured to push commanded wheel torque past the front tyres' peak Fx once engine rpm climbs off idle, producing a genuine (but undesired as this placeholder's baseline case) open-differential-style runaway wheelspin on one front wheel while the other stayed gripped - 10.0 stays torque-limited (not traction-limited) through the whole 0-50 km/h range, both front wheels tracking symmetrically, and measures ~3.2 m/s^2 average acceleration 0-50 km/h, matching a point-mass estimate from this same torque curve to within a few percent (test_vehicle_accel_standing_start.cpp). CAVEAT found while re-checking this fix against a live demo run: this 10.0 ratio is only low-slip/well-behaved when full throttle is commanded from an ALREADY-SETTLED rest (tyre contact/Fz established first, exactly test_vehicle_accel_standing_start.cpp's setup) - an INSTANTANEOUS full-throttle command issued before the suspension has settled (near-zero Fz, so near-zero tyre reaction torque) lets the wheel spin up essentially unopposed into deep post-peak slip, self-recovering over several seconds as the car's own speed catches up (never stalls, but runs at degraded Fx/Fz ~0.6 instead of ~1.0 during the excursion) - see vehicle_desc.h's DriveDesc comment and out/handover_accel.md for the full measured numbers and why this is treated as a documented placeholder (no clutch/traction-control) limitation rather than re-tuned away. PHYS-033 I1b commit C8: final_drive_ratio lowered from 10.0 to 8.5 (interim data change, coordinator-directed - deleted in I3 once a real gearbox/clutch replaces this placeholder). I1b commits C6/C7 fixed the tyre-force application point (the true ground contact patch, ~0.6 m lever, instead of the wheel centre, ~0.283 m) and its force decomposition (the ground plane, not the chassis-fixed axes) - moving load-transfer statics onto a physically correct footing raised the FRONT axle's own dynamic unload under acceleration enough that 10.0 pushes the settled full-throttle standing start on asphalt (test_vehicle_accel_standing_start.cpp, an ALREADY-SETTLED start, not the unsettled caveat above) into sustained wheelspin: measured max_abs_slip=1.39, far past the test's own < 0.3 bound, because at 10.0 the commanded per-wheel Fx (torque*final_drive_ratio*drivetrain_efficiency/(driven_wheel_count*wheel_radius) = 250*10.0*0.9/(2*0.317) = 3549 N at peak torque, already 3195 N by 225 N*m/~28 km/h) exceeds the front axle's own physically-corrected per-wheel traction limit (~3200 N, from the corrected load transfer) almost from the start of the run, not just in a transient. At 8.5: peak demand = 250*8.5*0.9/(2*0.317) = 3017 N <= 0.95*3200 N, back under the same limit with the same 5% margin the original 3.7->10.0 fix used. This is the SAME structural tension the DriveDesc comment above already documents (a placeholder drive with no clutch/traction control cannot both launch decently AND stay under a hard traction ceiling) - lowering the ratio trades some peak acceleration for staying torque- rather than traction-limited on asphalt from an already-settled rest; a real gearbox (PLAN.md P4/I3) removes the tension by letting 1st gear multiply torque without also being the ONLY ratio available at 50 km/h.",
+  "source": "Geometry (wheelbase 2.70 m, track 1.56 m, wheel radius 0.317 m) matches data/models/car_sedan/car_sedan.rig.json. Mass (1500 kg curb weight) and a symmetric 50/50 front/rear static split are plausible round-number choices for a mid-size sedan (Genta, 'Motor Vehicle Dynamics', ch. 1 cites typical passenger-car curb weights of 1200-1700 kg and front/rear splits of roughly 50/50 to 60/40 - not a specific measured car). Suspension spring rates are chosen so the static-equilibrium compression sits at 1/3 of travel_max under this weight (see out/handover_p3.md's static-corner-weight note); damper rates target a ~0.35 damping ratio about that operating point via the usual 2*m*omega_n relation (Milliken, 'Race Car Vehicle Dynamics', ch. 16). All 4 wheels reference data/tyres/passenger_car_225_45r17.json. Placeholder drive torque curve (PLAN.md M1) is a plausible shape for a ~2.0 L naturally aspirated engine, not a specific published curve. final_drive_ratio=10.0 (out/handover_accel.md): DriveDesc has no separate gearbox/clutch stage (vehicle_desc.h's own header comment - 'no gearbox in this placeholder'), so this single ratio must stand in for a real car's launch (1st) gear times its differential, not the differential alone. The value originally here (3.7) was only a plausible standalone differential ratio (matching data/vehicles/tractor.json's own final_drive_ratio=15.0, which DOES already fold in the tractor's low working-gear reduction, for contrast) - with no gearbox multiplying it further, a stationary/idle-rpm launch only ever produced the torque curve's WEAKEST point (120 N*m at idle_rpm=900) times 3.7, giving a measured full-throttle standing-start acceleration of about 0.72 m/s^2 on asphalt (test_vehicle_accel_standing_start.cpp's diagnostic run), an order of magnitude below what this torque curve can deliver. 10.0 = a plausible 1st-gear ratio (~2.7, within the typical 2.9-3.8 range Genta ch. 6 cites for a 5/6-speed passenger-car gearbox's 1st gear, chosen at the low end here since it is multiplying an already-plausible 3.7 differential) times that same 3.7 differential ratio; a higher value (13.0, i.e. a 1st gear of ~3.5) was tried first and measured to push commanded wheel torque past the front tyres' peak Fx once engine rpm climbs off idle, producing a genuine (but undesired as this placeholder's baseline case) open-differential-style runaway wheelspin on one front wheel while the other stayed gripped - 10.0 stays torque-limited (not traction-limited) through the whole 0-50 km/h range, both front wheels tracking symmetrically, and measures ~3.2 m/s^2 average acceleration 0-50 km/h, matching a point-mass estimate from this same torque curve to within a few percent (test_vehicle_accel_standing_start.cpp). CAVEAT found while re-checking this fix against a live demo run: this 10.0 ratio is only low-slip/well-behaved when full throttle is commanded from an ALREADY-SETTLED rest (tyre contact/Fz established first, exactly test_vehicle_accel_standing_start.cpp's setup) - an INSTANTANEOUS full-throttle command issued before the suspension has settled (near-zero Fz, so near-zero tyre reaction torque) lets the wheel spin up essentially unopposed into deep post-peak slip, self-recovering over several seconds as the car's own speed catches up (never stalls, but runs at degraded Fx/Fz ~0.6 instead of ~1.0 during the excursion) - see vehicle_desc.h's DriveDesc comment and out/handover_accel.md for the full measured numbers and why this is treated as a documented placeholder (no clutch/traction-control) limitation rather than re-tuned away. PHYS-033 I1b commit C8: final_drive_ratio lowered from 10.0 to 8.5 (interim data change, coordinator-directed - deleted in I3 once a real gearbox/clutch replaces this placeholder). I1b commits C6/C7 fixed the tyre-force application point (the true ground contact patch, ~0.6 m lever, instead of the wheel centre, ~0.283 m) and its force decomposition (the ground plane, not the chassis-fixed axes) - moving load-transfer statics onto a physically correct footing raised the FRONT axle's own dynamic unload under acceleration enough that 10.0 pushes the settled full-throttle standing start on asphalt (test_vehicle_accel_standing_start.cpp, an ALREADY-SETTLED start, not the unsettled caveat above) into sustained wheelspin: measured max_abs_slip=1.39, far past the test's own < 0.3 bound, because at 10.0 the commanded per-wheel Fx (torque*final_drive_ratio*drivetrain_efficiency/(driven_wheel_count*wheel_radius) = 250*10.0*0.9/(2*0.317) = 3549 N at peak torque, already 3195 N by 225 N*m/~28 km/h) exceeds the front axle's own physically-corrected per-wheel traction limit (~3200 N, from the corrected load transfer) almost from the start of the run, not just in a transient. At 8.5: peak demand = 250*8.5*0.9/(2*0.317) = 3017 N <= 0.95*3200 N, back under the same limit with the same 5% margin the original 3.7->10.0 fix used. This is the SAME structural tension the DriveDesc comment above already documents (a placeholder drive with no clutch/traction control cannot both launch decently AND stay under a hard traction ceiling) - lowering the ratio trades some peak acceleration for staying torque- rather than traction-limited on asphalt from an already-settled rest; a real gearbox (PLAN.md P4/I3) removes the tension by letting 1st gear multiply torque without also being the ONLY ratio available at 50 km/h. PHYS-033 I2 commit 5a (owner ruling Q7, no converter): rewritten to physics_sim.vehicle/2 - the /1 'drive'/'brakes' blocks and each wheel's 'driven' flag are replaced by 'powertrain' (a torque_map engine of zero inertia and P3 semantics, a final_drive gear pair at the same 8.5:1 ratio and 0.9 efficiency, and an open differential across FL/FR - the driven wheels, matching every /1 wheel's own now-deleted 'driven' flag) and 'brake_system' (direct-torque friction rows with the same per-corner/handbrake capacities as the old BrakeDesc). Every number is unchanged from the /1 file; commit 5a's own check is that this rewrite reproduces P3 bit-for-bit (state_hash unchanged) via a temporary shim in VehicleInstance's constructor, deleted in commit 5b once the real shaft-network runtime replaces it.",
   "wheels": [
     {
       "name": "FL",
@@ -22,7 +22,6 @@
       "arb_partner": 1,
       "tyre": "../tyres/passenger_car_225_45r17.json",
       "steered": true,
-      "driven": true,
       "is_front": true
     },
     {
@@ -44,7 +43,6 @@
       "arb_partner": 0,
       "tyre": "../tyres/passenger_car_225_45r17.json",
       "steered": true,
-      "driven": true,
       "is_front": true
     },
     {
@@ -66,7 +64,6 @@
       "arb_partner": 3,
       "tyre": "../tyres/passenger_car_225_45r17.json",
       "steered": false,
-      "driven": false,
       "is_front": false
     },
     {
@@ -88,7 +85,6 @@
       "arb_partner": 2,
       "tyre": "../tyres/passenger_car_225_45r17.json",
       "steered": false,
-      "driven": false,
       "is_front": false
     }
   ],
@@ -98,19 +94,31 @@
     "rear_steer_fraction": 0.0,
     "steer_rate_limit": 0.0
   },
-  "brakes": {
-    "max_torque_front": 2800.0,
-    "max_torque_rear": 1600.0,
-    "handbrake_rear_fraction": 1.0
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      { "wheel": "FL", "max_torque_nm": 2800.0 },
+      { "wheel": "FR", "max_torque_nm": 2800.0 },
+      { "wheel": "RL", "max_torque_nm": 1600.0 },
+      { "wheel": "RR", "max_torque_nm": 1600.0 }
+    ],
+    "handbrake": { "wheels": ["RL", "RR"], "max_torque_nm": 1600.0 }
   },
-  "drive": {
-    "torque_curve_nm_vs_rpm": {
-      "x": [900, 2000, 4000, 6000, 6500],
-      "y": [120, 220, 250, 200, 150]
-    },
-    "final_drive_ratio": 8.5,
-    "rev_limit_rpm": 6500,
-    "idle_rpm": 900,
-    "drivetrain_efficiency": 0.9
+  "powertrain": {
+    "components": [
+      { "id": "engine", "type": "engine", "kind": "torque_map",
+        "wot_torque_nm_vs_rpm": { "x": [900, 2000, 4000, 6000, 6500], "y": [120, 220, 250, 200, 150] },
+        "inertia_kgm2": 0.0, "idle_rpm": 900,
+        "limiter": { "type": "hard_cut", "rpm": 6500 } },
+      { "id": "final_drive", "type": "gear_pair", "ratio": 8.5, "efficiency": 0.9 },
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0, "efficiency": 1.0 }
+    ],
+    "shafts": [
+      { "ports": ["engine.crank", "final_drive.in"] },
+      { "ports": ["final_drive.out", "diff.carrier"] },
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ],
+    "compliance": "rigid"
   }
 }

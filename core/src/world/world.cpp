@@ -455,6 +455,10 @@ vehicle::WheelState World::wheel_state(VehicleId id, std::size_t wheel_index) co
     return vehicle_system_->at(id).wheel_state(wheel_index);
 }
 
+bool World::wheel_is_driven(VehicleId id, std::size_t wheel_index) const {
+    return vehicle_system_->at(id).wheel_is_driven(wheel_index);
+}
+
 real World::vehicle_shadow_dv_error(VehicleId id) const {
     return vehicle_system_->at(id).shadow_dv_error();
 }

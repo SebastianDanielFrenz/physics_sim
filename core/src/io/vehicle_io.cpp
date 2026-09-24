@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -18,8 +19,8 @@ using ps::vehicle::VehicleDesc;
 using ps::vehicle::WheelDesc;
 using ps::vehicle::SuspensionDesc;
 using ps::vehicle::SteeringDesc;
-using ps::vehicle::BrakeDesc;
-using ps::vehicle::DriveDesc;
+using ps::drivetrain::BrakeSystemDesc;
+using ps::drivetrain::PowertrainDesc;
 
 json read_json_file(const std::string& path) {
     std::ifstream in(path);
@@ -68,6 +69,29 @@ void require_format(const json& j, const std::string& kind, int major, const std
     const std::string actual = j.at("format").get<std::string>();
     if (actual != expected) {
         throw std::runtime_error(path + ": unsupported 'format' \"" + actual + "\" (expected \"" + expected + "\")");
+    }
+}
+
+// PHYS-033 P4 I2 plan section 9.1: a /1 vehicle file must fail with a
+// pointer to the /2 layout, not just the generic require_format message.
+// Deliberately does NOT wrap require_format() in a try/catch that rethrows
+// off e.what() (an earlier version did; it access-violated under the asan
+// preset - std::runtime_error's storage is not guaranteed to survive a
+// rethrow-with-appended-text the way that pattern assumed) - duplicates
+// its small amount of logic instead.
+void require_vehicle_format(const json& j, const std::string& path) {
+    const std::string expected = "physics_sim.vehicle/2";
+    if (!j.contains("format") || !j.at("format").is_string()) {
+        throw std::runtime_error(path + ": missing required 'format' field (expected \"" + expected + "\")");
+    }
+    const std::string actual = j.at("format").get<std::string>();
+    if (actual != expected) {
+        std::string msg = path + ": unsupported 'format' \"" + actual + "\" (expected \"" + expected + "\")";
+        if (actual == "physics_sim.vehicle/1") {
+            msg += " (physics_sim.vehicle/1 is no longer supported - PHYS-033 Q7; "
+                   "see data/vehicles/car_sedan.json for the /2 layout)";
+        }
+        throw std::runtime_error(msg);
     }
 }
 
@@ -191,7 +215,14 @@ WheelDesc read_wheel(const json& j, const std::string& base_dir) {
     w.arb_partner = j.value("arb_partner", w.arb_partner);
     if (j.contains("tyre")) w.tyre = read_tyre_ref(j.at("tyre"), base_dir);
     w.steered = j.value("steered", w.steered);
-    w.driven = j.value("driven", w.driven);
+    // PHYS-033 I2 (owner ruling Q7, plan section 9.1): "driven" is a /1
+    // field. Which wheels are driven is now determined by the vehicle's
+    // "powertrain" graph (which hubs a differential/gear reaches).
+    if (j.contains("driven")) {
+        throw std::runtime_error("wheel '" + w.name + "': 'driven' is no longer a wheel field "
+                                  "(physics_sim.vehicle/2) - which wheels are driven is now determined "
+                                  "by the 'powertrain' graph (PHYS-033 Q7)");
+    }
     w.is_front = j.value("is_front", w.is_front);
     return w;
 }
@@ -219,24 +250,180 @@ SteeringDesc read_steering(const json& j) {
     return s;
 }
 
-BrakeDesc read_brakes(const json& j) {
-    BrakeDesc b;
+// PHYS-033 P4 I2 plan section 9.1. Optional (no brakes at all if absent).
+BrakeSystemDesc read_brake_system(const json& j) {
+    BrakeSystemDesc b;
     if (j.is_null()) return b;
-    b.max_torque_front = j.value("max_torque_front", b.max_torque_front);
-    b.max_torque_rear = j.value("max_torque_rear", b.max_torque_rear);
-    b.handbrake_rear_fraction = j.value("handbrake_rear_fraction", b.handbrake_rear_fraction);
+    const std::string type = j.value("type", std::string("direct_torque"));
+    if (type != "direct_torque") {
+        throw std::runtime_error("brake_system.type must be \"direct_torque\" (I5 adds \"hydraulic\"), got \"" + type + "\"");
+    }
+    b.type = ps::drivetrain::BrakeSystemType::DirectTorque;
+    if (j.contains("corners")) {
+        std::vector<std::string> seen;
+        for (const auto& cj : j.at("corners")) {
+            ps::drivetrain::BrakeCornerDesc c;
+            if (!cj.contains("wheel") || !cj.at("wheel").is_string() || cj.at("wheel").get<std::string>().empty()) {
+                throw std::runtime_error("brake_system.corners[]: 'wheel' is required and must be a non-empty string");
+            }
+            c.wheel = cj.at("wheel").get<std::string>();
+            if (std::find(seen.begin(), seen.end(), c.wheel) != seen.end()) {
+                throw std::runtime_error("brake_system.corners[]: duplicate wheel '" + c.wheel + "'");
+            }
+            seen.push_back(c.wheel);
+            c.max_torque_nm = cj.value("max_torque_nm", real(0.0));
+            if (c.max_torque_nm < real(0.0)) {
+                throw std::runtime_error("brake_system.corners['" + c.wheel + "'].max_torque_nm must be >= 0");
+            }
+            b.corners.push_back(c);
+        }
+    }
+    if (j.contains("handbrake")) {
+        const auto& hj = j.at("handbrake");
+        if (hj.contains("wheels")) {
+            for (const auto& wn : hj.at("wheels")) b.handbrake.wheels.push_back(wn.get<std::string>());
+        }
+        b.handbrake.max_torque_nm = hj.value("max_torque_nm", real(0.0));
+        if (b.handbrake.max_torque_nm < real(0.0)) {
+            throw std::runtime_error("brake_system.handbrake.max_torque_nm must be >= 0");
+        }
+    }
+    b.static_factor = j.value("static_factor", real(1.0));
+    if (b.static_factor < real(1.0)) {
+        throw std::runtime_error("brake_system.static_factor must be >= 1, got " + std::to_string(b.static_factor));
+    }
     return b;
 }
 
-DriveDesc read_drive(const json& j) {
-    DriveDesc d;
-    if (j.is_null()) return d;
-    if (j.contains("torque_curve_nm_vs_rpm")) d.torque_curve_nm_vs_rpm = read_curve(j.at("torque_curve_nm_vs_rpm"));
-    d.final_drive_ratio = j.value("final_drive_ratio", d.final_drive_ratio);
-    d.rev_limit_rpm = j.value("rev_limit_rpm", d.rev_limit_rpm);
-    d.idle_rpm = j.value("idle_rpm", d.idle_rpm);
-    d.drivetrain_efficiency = j.value("drivetrain_efficiency", d.drivetrain_efficiency);
-    return d;
+// PHYS-033 P4 I2 plan section 9.1. Optional; absent means every wheel is
+// free (no powertrain at all). Graph validation (unknown ports, double-
+// connected ports, a zero-inertia unconnected hub, ...) is NOT done here -
+// it happens in drivetrain::Powertrain's constructor (plan section 4),
+// which does not exist yet in I2 commit 5a (temporary P3 shim only,
+// vehicle_instance.cpp) - added in commit 5b.
+PowertrainDesc read_powertrain(const json& j) {
+    PowertrainDesc p;
+    if (j.is_null()) return p;
+
+    if (j.contains("components")) {
+        std::vector<std::string> ids;
+        for (const auto& cj : j.at("components")) {
+            if (!cj.contains("id") || !cj.at("id").is_string() || cj.at("id").get<std::string>().empty()) {
+                throw std::runtime_error("powertrain.components[]: 'id' is required and must be a non-empty string");
+            }
+            const std::string id = cj.at("id").get<std::string>();
+            if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
+                throw std::runtime_error("powertrain.components[]: duplicate id '" + id + "'");
+            }
+            ids.push_back(id);
+            if (!cj.contains("type") || !cj.at("type").is_string()) {
+                throw std::runtime_error("powertrain.components['" + id + "']: 'type' is required");
+            }
+            const std::string type = cj.at("type").get<std::string>();
+
+            if (type == "engine") {
+                if (cj.value("kind", std::string()) != "torque_map") {
+                    throw std::runtime_error("powertrain.components['" + id + "']: engine 'kind' must be \"torque_map\" (I2's only kind)");
+                }
+                ps::drivetrain::TorqueMapEngineDesc e;
+                if (!cj.contains("wot_torque_nm_vs_rpm")) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: 'wot_torque_nm_vs_rpm' is required");
+                }
+                e.wot_torque_nm_vs_rpm = read_curve(cj.at("wot_torque_nm_vs_rpm"));
+                if (e.wot_torque_nm_vs_rpm.x.empty()) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: 'wot_torque_nm_vs_rpm' must be non-empty");
+                }
+                e.inertia_kgm2 = cj.value("inertia_kgm2", e.inertia_kgm2);
+                if (e.inertia_kgm2 < real(0.0)) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: inertia_kgm2 must be >= 0");
+                }
+                e.idle_rpm = cj.value("idle_rpm", e.idle_rpm);
+                if (e.idle_rpm <= real(0.0)) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: idle_rpm must be > 0");
+                }
+                if (cj.contains("limiter")) {
+                    const auto& lj = cj.at("limiter");
+                    e.limiter.type = lj.value("type", std::string("hard_cut"));
+                    if (e.limiter.type != "hard_cut") {
+                        throw std::runtime_error("powertrain.components['" + id + "']: limiter.type must be \"hard_cut\" (I2's only type)");
+                    }
+                    e.limiter.rpm = lj.value("rpm", e.limiter.rpm);
+                }
+                if (e.limiter.rpm <= e.idle_rpm) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: limiter.rpm must be > idle_rpm");
+                }
+                p.components.push_back({id, e});
+            } else if (type == "gear_pair") {
+                ps::drivetrain::GearPairDesc g;
+                g.ratio = cj.value("ratio", g.ratio);
+                if (g.ratio == real(0.0)) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: gear_pair 'ratio' must be != 0");
+                }
+                g.efficiency = cj.value("efficiency", g.efficiency);
+                if (g.efficiency <= real(0.0) || g.efficiency > real(1.0)) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: gear_pair 'efficiency' must be in (0, 1]");
+                }
+                g.inertia_in_kgm2 = cj.value("inertia_in_kgm2", g.inertia_in_kgm2);
+                g.inertia_out_kgm2 = cj.value("inertia_out_kgm2", g.inertia_out_kgm2);
+                p.components.push_back({id, g});
+            } else if (type == "differential") {
+                ps::drivetrain::DifferentialDesc d;
+                if (cj.value("kind", std::string()) != "open") {
+                    throw std::runtime_error("powertrain.components['" + id + "']: differential 'kind' must be \"open\" (I4 adds others)");
+                }
+                d.kind = ps::drivetrain::DifferentialKind::Open;
+                d.ratio = cj.value("ratio", d.ratio);
+                if (d.ratio == real(0.0)) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: differential 'ratio' must be != 0");
+                }
+                d.efficiency = cj.value("efficiency", d.efficiency);
+                if (d.efficiency != real(1.0)) {
+                    throw std::runtime_error("powertrain.components['" + id + "']: differential 'efficiency' must be exactly 1 in I2 (I4 adds losses)");
+                }
+                p.components.push_back({id, d});
+            } else {
+                throw std::runtime_error("powertrain.components['" + id + "']: unknown type \"" + type + "\"");
+            }
+        }
+    }
+
+    if (j.contains("shafts")) {
+        for (const auto& sj : j.at("shafts")) {
+            ps::drivetrain::ShaftDesc s;
+            if (!sj.contains("ports")) throw std::runtime_error("powertrain.shafts[]: 'ports' is required");
+            for (const auto& pj : sj.at("ports")) {
+                const std::string ref = pj.get<std::string>();
+                ps::drivetrain::PortRef pr;
+                if (ref.rfind("wheel:", 0) == 0) {
+                    pr.is_wheel = true;
+                    pr.component = ref.substr(6);
+                    if (pr.component.empty()) throw std::runtime_error("powertrain.shafts[]: bad port ref \"" + ref + "\"");
+                } else {
+                    const auto dot = ref.find('.');
+                    if (dot == std::string::npos || dot == 0 || dot + 1 == ref.size()) {
+                        throw std::runtime_error("powertrain.shafts[]: bad port ref \"" + ref +
+                                                  "\" (expected \"<id>.<port>\" or \"wheel:<name>\")");
+                    }
+                    pr.component = ref.substr(0, dot);
+                    pr.port = ref.substr(dot + 1);
+                }
+                s.ports.push_back(pr);
+            }
+            s.stiffness = sj.value("stiffness", real(0.0));
+            if (s.stiffness != real(0.0)) {
+                throw std::runtime_error("powertrain.shafts[]: 'stiffness' must be 0 in I2 (I4 adds compliant shafts)");
+            }
+            s.damping = sj.value("damping", real(0.0));
+            p.shafts.push_back(s);
+        }
+    }
+
+    if (j.contains("compliance")) {
+        const std::string c = j.at("compliance").get<std::string>();
+        if (c != "rigid") throw std::runtime_error("powertrain.compliance must be \"rigid\" in I2 (I4 adds \"compliant\"), got \"" + c + "\"");
+        p.compliance = ps::drivetrain::Compliance::Rigid;
+    }
+    return p;
 }
 
 } // namespace
@@ -249,7 +436,7 @@ vehicle::TyreDesc load_tyre_json(const std::string& path) {
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
     const json j = read_json_file(path);
-    require_format(j, "vehicle", 1, path);
+    require_vehicle_format(j, path);
     const std::string base_dir = std::filesystem::path(path).parent_path().string();
 
     VehicleDesc v;
@@ -257,17 +444,25 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
     v.source = j.value("source", std::string());
     if (v.source.empty()) throw std::runtime_error("vehicle '" + v.name + "': 'source' is required (PLAN.md section 8)");
 
+    // PHYS-033 I2 (owner ruling Q7): the /1 top-level "drive"/"brakes"
+    // blocks are gone - "powertrain"/"brake_system" replace them.
+    if (j.contains("drive")) {
+        throw std::runtime_error("vehicle " + path + ": 'drive' is no longer a vehicle field "
+                                  "(physics_sim.vehicle/2) - see 'powertrain' (PHYS-033 Q7)");
+    }
+    if (j.contains("brakes")) {
+        throw std::runtime_error("vehicle " + path + ": 'brakes' is no longer a vehicle field "
+                                  "(physics_sim.vehicle/2) - see 'brake_system' (PHYS-033 Q7)");
+    }
+
     if (!j.contains("wheels") || !j.at("wheels").is_array() || j.at("wheels").empty()) {
         throw std::runtime_error("vehicle " + path + " has no 'wheels' array");
     }
     for (const auto& wj : j.at("wheels")) v.wheels.push_back(read_wheel(wj, base_dir));
 
     v.steering = read_steering(j.value("steering", json()));
-    v.brakes = read_brakes(j.value("brakes", json()));
-    v.drive = read_drive(j.value("drive", json()));
-    if (v.drive.torque_curve_nm_vs_rpm.x.empty()) {
-        throw std::runtime_error("vehicle " + path + ": drive.torque_curve_nm_vs_rpm is required (PLAN.md M1 placeholder drive)");
-    }
+    v.brake_system = read_brake_system(j.value("brake_system", json()));
+    v.powertrain = read_powertrain(j.value("powertrain", json()));
     return v;
 }
 

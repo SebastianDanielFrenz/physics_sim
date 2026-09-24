@@ -514,8 +514,15 @@ bool PsSimulation::get_wheel_steered(const String& vehicle_name, int wheel_index
 }
 
 bool PsSimulation::get_wheel_driven(const String& vehicle_name, int wheel_index) const {
-    const ps::vehicle::WheelDesc* w = wheel_desc(to_std_string(vehicle_name), wheel_index);
-    return w != nullptr && w->driven;
+    // PHYS-033 P4 I2 commit 5a: WheelDesc::driven is gone - which wheels
+    // are driven is now the /2 powertrain graph's own shape, so this reads
+    // it from World (ps::World::wheel_is_driven) instead of the cached
+    // WheelDesc wheel_desc() above still serves for the other, still-
+    // static wheel fields (radius, width, travel_max, steered, is_front).
+    const auto it = vehicles_by_name_.find(to_std_string(vehicle_name));
+    if (it == vehicles_by_name_.end() || !world_) return false;
+    if (static_cast<std::size_t>(wheel_index) >= world_->vehicle_wheel_count(it->second)) return false;
+    return world_->wheel_is_driven(it->second, static_cast<std::size_t>(wheel_index));
 }
 
 bool PsSimulation::get_wheel_is_front(const String& vehicle_name, int wheel_index) const {

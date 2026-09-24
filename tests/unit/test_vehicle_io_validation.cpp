@@ -30,19 +30,19 @@ using namespace ps;
 namespace {
 
 // Minimal vehicle JSON satisfying every OTHER load_vehicle_json requirement
-// (non-empty 'source', a non-empty 'wheels' array, a non-empty
-// drive.torque_curve_nm_vs_rpm) so a thrown error can only be attributed to
-// the ackermann_fraction check under test.
+// (non-empty 'source', a non-empty 'wheels' array) so a thrown error can
+// only be attributed to the ackermann_fraction check under test.
+// PHYS-033 P4 I2 commit 5a: /2 - no 'drive'/'brakes' block needed, both are
+// gone and 'powertrain'/'brake_system' are optional (no powertrain at all).
 std::string minimal_vehicle_json(double ackermann_fraction) {
     return R"({
-  "format": "physics_sim.vehicle/1",
+  "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
   "wheels": [
     { "name": "FL", "steered": true, "is_front": true },
     { "name": "FR", "steered": true, "is_front": true }
   ],
-  "steering": { "ackermann_fraction": )" + std::to_string(ackermann_fraction) + R"( },
-  "drive": { "torque_curve_nm_vs_rpm": { "x": [900.0], "y": [100.0] } }
+  "steering": { "ackermann_fraction": )" + std::to_string(ackermann_fraction) + R"( }
 })";
 }
 
@@ -108,12 +108,11 @@ std::string vehicle_json_with_format(const std::string& format_field) {
     return std::string(R"({
 )") + format_field + R"(
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
-  "drive": { "torque_curve_nm_vs_rpm": { "x": [900.0], "y": [100.0] } }
+  "wheels": [ { "name": "FL" } ]
 })";
 }
 
-TEST_CASE("load_vehicle_json rejects a missing, unknown or outdated 'format'", "[unit][vehicle][io][format]") {
+TEST_CASE("load_vehicle_json rejects a missing, outdated or unknown 'format'", "[unit][vehicle][io][format]") {
     using Catch::Matchers::ContainsSubstring;
 
     SECTION("missing entirely") {
@@ -124,14 +123,83 @@ TEST_CASE("load_vehicle_json rejects a missing, unknown or outdated 'format'", "
         TempJsonFile f(vehicle_json_with_format(R"("format": "physics_sim.tyre/1",)"), "vehicle_wrongkind");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("unsupported 'format'"));
     }
-    SECTION("outdated major") {
-        TempJsonFile f(vehicle_json_with_format(R"("format": "physics_sim.vehicle/0",)"), "vehicle_outdated");
+    SECTION("outdated major (v0)") {
+        TempJsonFile f(vehicle_json_with_format(R"("format": "physics_sim.vehicle/0",)"), "vehicle_outdated0");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("unsupported 'format'"));
     }
-    SECTION("unknown future major") {
-        TempJsonFile f(vehicle_json_with_format(R"("format": "physics_sim.vehicle/2",)"), "vehicle_future");
+    // PHYS-033 P4 I2 plan section 9.1/13 row 5a's own check: "a /1 file
+    // rejected" - v1 is now the outdated legacy format (owner ruling Q7,
+    // no converter), and the loader appends a pointer to the /2 layout.
+    SECTION("v1 rejected (PHYS-033 Q7: no legacy converter)") {
+        TempJsonFile f(vehicle_json_with_format(R"("format": "physics_sim.vehicle/1",)"), "vehicle_v1");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("unsupported 'format'"));
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("no longer supported"));
+    }
+    SECTION("unknown future major (v3)") {
+        TempJsonFile f(vehicle_json_with_format(R"("format": "physics_sim.vehicle/3",)"), "vehicle_future");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("unsupported 'format'"));
     }
+}
+
+// PHYS-033 P4 I2 plan section 9.1/13 row 5a's own check: the /1 fields the
+// /2 loader now rejects outright (owner ruling Q7: no converter, no silent
+// default - "driven"/"drive"/"brakes" are hard errors, not ignored keys).
+TEST_CASE("load_vehicle_json rejects legacy /1 fields under /2", "[unit][vehicle][io][format]") {
+    using Catch::Matchers::ContainsSubstring;
+
+    SECTION("wheel 'driven' is rejected") {
+        const std::string json = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL", "driven": true } ]
+})";
+        TempJsonFile f(json, "vehicle_driven");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("driven"));
+    }
+    SECTION("top-level 'drive' is rejected") {
+        const std::string json = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "drive": { "final_drive_ratio": 3.7 }
+})";
+        TempJsonFile f(json, "vehicle_drive_key");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("'drive'"));
+    }
+    SECTION("top-level 'brakes' is rejected") {
+        const std::string json = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "brakes": { "max_torque_front": 2200.0 }
+})";
+        TempJsonFile f(json, "vehicle_brakes_key");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("'brakes'"));
+    }
+}
+
+// PHYS-033 P4 I2 plan section 5.4's build-time rule ("differential
+// efficiency must be 1.0 in I2, loader error otherwise") - enforced at
+// PARSE time (core/src/io/vehicle_io.cpp's read_powertrain), not deferred
+// to the Powertrain constructor (I2 commit 5b), so it is already testable
+// through the loader in commit 5a.
+TEST_CASE("load_vehicle_json rejects differential efficiency != 1 (I2 limitation)", "[unit][vehicle][io][drivetrain]") {
+    const std::string json = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0, "efficiency": 0.9 }
+    ],
+    "shafts": [
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ]
+  }
+})";
+    TempJsonFile f(json, "vehicle_diff_eff");
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("efficiency"));
 }
 
 std::string tyre_json_with_format(const std::string& format_field) {
@@ -164,10 +232,9 @@ TEST_CASE("load_vehicle_json accepts a 'format'-less inline tyre object (not a s
     // version of its own (section 9: only FILES carry "format") - only a
     // standalone tyre JSON referenced by path does.
     const std::string json = R"({
-  "format": "physics_sim.vehicle/1",
+  "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL", "tyre": { "name": "inline_tyre", "source": "inline fixture" } } ],
-  "drive": { "torque_curve_nm_vs_rpm": { "x": [900.0], "y": [100.0] } }
+  "wheels": [ { "name": "FL", "tyre": { "name": "inline_tyre", "source": "inline fixture" } } ]
 })";
     TempJsonFile f(json, "vehicle_inline_tyre");
     REQUIRE_NOTHROW(io::load_vehicle_json(f.path.string()));

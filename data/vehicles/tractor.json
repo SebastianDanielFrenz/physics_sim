@@ -1,7 +1,7 @@
 {
-  "format": "physics_sim.vehicle/1",
+  "format": "physics_sim.vehicle/2",
   "name": "tractor",
-  "source": "Geometry (wheelbase 2.80 m, track 1.90 m, front wheel radius 0.8 m, rear wheel radius 1.025 m) matches data/models/tractor/tractor.rig.json. Mass (6000 kg) and a rear-heavy 35/65 front/rear static split are plausible for a mid-size 2WD row-crop tractor per Wong, 'Theory of Ground Vehicles', 5th ed., ch. 1-2 (typical 2WD tractor static splits run roughly 35/65 to 40/60 rear-biased, driven by engine/transmission placement over the rear axle) - not a specific measured machine. PLAN.md 5.1 calls for 'rigid and pendulum axles for tractors' as a distinct suspension model; this file instead approximates a rigid axle with a very stiff, short-travel per-wheel spring within the existing independent-suspension framework (out/handover_p3.md's deferred list) rather than building the separate rigid/pendulum-axle model - a real tractor's front axle often pivots as a unit, which this does not capture. Front wheels reference data/tyres/tractor_front.json, rear data/tyres/tractor_rear.json. Placeholder drive (PLAN.md M1) uses a plausible mid-size diesel torque-curve shape and a single 'road gear' final drive ratio chosen to give a plausible ~55 km/h top road speed - not a specific published engine map or gearbox ratio set. PHYS-033 I1 fix (was: rear attachment z = -0.725): data/models/tractor/tractor.rig.json places wheel_FL/FR's pivot at z=0.8 (== the front wheel radius) and wheel_RL/RR's pivot at z=1.025 (== the rear wheel radius), both measured from the rig's own ground plane at rest - i.e. a level chassis's front and rear 'ground contact' offsets (attachment.z - wheel_radius) must be equal. The old rear z gave -0.5-0.8=-1.30 (front) vs. -0.725-1.025=-1.75 (rear), a 0.45 m mismatch that put the tractor about atan(0.45/2.80)=9.1 deg nose-down at rest and caused it to self-propel forward at ~1.2-1.4 m/s^2 on flat ground with no throttle (the suspension force, applied along the tilted chassis-fixed axis, gets a spurious horizontal component under that pitch - see CLAUDE.md's F16 finding). Confirmed by measurement (tests/validation/test_vehicle_tractor_cross_slope.cpp's A/B diagnostic): with only this single-field fix, the flat-ground self-propulsion drops from ~1.29 m/s^2 to ~0.0001 m/s^2, and the 10% cross-slope handbrake-only drift drops from 0.186 m/10s to 0.0001 m/10s (>1000x). New rear z = -0.5 + (1.025-0.8) = -0.275, matching the front's -1.30 ground-contact offset exactly (-0.275-1.025=-1.30).",
+  "source": "Geometry (wheelbase 2.80 m, track 1.90 m, front wheel radius 0.8 m, rear wheel radius 1.025 m) matches data/models/tractor/tractor.rig.json. Mass (6000 kg) and a rear-heavy 35/65 front/rear static split are plausible for a mid-size 2WD row-crop tractor per Wong, 'Theory of Ground Vehicles', 5th ed., ch. 1-2 (typical 2WD tractor static splits run roughly 35/65 to 40/60 rear-biased, driven by engine/transmission placement over the rear axle) - not a specific measured machine. PLAN.md 5.1 calls for 'rigid and pendulum axles for tractors' as a distinct suspension model; this file instead approximates a rigid axle with a very stiff, short-travel per-wheel spring within the existing independent-suspension framework (out/handover_p3.md's deferred list) rather than building the separate rigid/pendulum-axle model - a real tractor's front axle often pivots as a unit, which this does not capture. Front wheels reference data/tyres/tractor_front.json, rear data/tyres/tractor_rear.json. Placeholder drive (PLAN.md M1) uses a plausible mid-size diesel torque-curve shape and a single 'road gear' final drive ratio chosen to give a plausible ~55 km/h top road speed - not a specific published engine map or gearbox ratio set. PHYS-033 I1 fix (was: rear attachment z = -0.725): data/models/tractor/tractor.rig.json places wheel_FL/FR's pivot at z=0.8 (== the front wheel radius) and wheel_RL/RR's pivot at z=1.025 (== the rear wheel radius), both measured from the rig's own ground plane at rest - i.e. a level chassis's front and rear 'ground contact' offsets (attachment.z - wheel_radius) must be equal. The old rear z gave -0.5-0.8=-1.30 (front) vs. -0.725-1.025=-1.75 (rear), a 0.45 m mismatch that put the tractor about atan(0.45/2.80)=9.1 deg nose-down at rest and caused it to self-propel forward at ~1.2-1.4 m/s^2 on flat ground with no throttle (the suspension force, applied along the tilted chassis-fixed axis, gets a spurious horizontal component under that pitch - see CLAUDE.md's F16 finding). Confirmed by measurement (tests/validation/test_vehicle_tractor_cross_slope.cpp's A/B diagnostic): with only this single-field fix, the flat-ground self-propulsion drops from ~1.29 m/s^2 to ~0.0001 m/s^2, and the 10% cross-slope handbrake-only drift drops from 0.186 m/10s to 0.0001 m/10s (>1000x). New rear z = -0.5 + (1.025-0.8) = -0.275, matching the front's -1.30 ground-contact offset exactly (-0.275-1.025=-1.30). PHYS-033 I2 commit 5a (owner ruling Q7, no converter): rewritten to physics_sim.vehicle/2 - the /1 'drive'/'brakes' blocks and each wheel's 'driven' flag are replaced by 'powertrain' (a torque_map engine of zero inertia and P3 semantics, a final_drive gear pair at the same 15:1 ratio and 0.85 efficiency, and an open differential across RL/RR - the driven wheels, matching every /1 wheel's own now-deleted 'driven' flag) and 'brake_system' (direct-torque friction rows with the same per-corner/handbrake capacities as the old BrakeDesc). Every number is unchanged from the /1 file; commit 5a's own check is that this rewrite reproduces P3 bit-for-bit (state_hash unchanged) via a temporary shim in VehicleInstance's constructor, deleted in commit 5b once the real shaft-network runtime replaces it.",
   "wheels": [
     {
       "name": "FL",
@@ -22,7 +22,6 @@
       "arb_partner": -1,
       "tyre": "../tyres/tractor_front.json",
       "steered": true,
-      "driven": false,
       "is_front": true
     },
     {
@@ -44,7 +43,6 @@
       "arb_partner": -1,
       "tyre": "../tyres/tractor_front.json",
       "steered": true,
-      "driven": false,
       "is_front": true
     },
     {
@@ -66,7 +64,6 @@
       "arb_partner": -1,
       "tyre": "../tyres/tractor_rear.json",
       "steered": false,
-      "driven": true,
       "is_front": false
     },
     {
@@ -88,7 +85,6 @@
       "arb_partner": -1,
       "tyre": "../tyres/tractor_rear.json",
       "steered": false,
-      "driven": true,
       "is_front": false
     }
   ],
@@ -98,19 +94,31 @@
     "rear_steer_fraction": 0.0,
     "steer_rate_limit": 0.0
   },
-  "brakes": {
-    "max_torque_front": 3000.0,
-    "max_torque_rear": 8000.0,
-    "handbrake_rear_fraction": 1.0
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      { "wheel": "FL", "max_torque_nm": 3000.0 },
+      { "wheel": "FR", "max_torque_nm": 3000.0 },
+      { "wheel": "RL", "max_torque_nm": 8000.0 },
+      { "wheel": "RR", "max_torque_nm": 8000.0 }
+    ],
+    "handbrake": { "wheels": ["RL", "RR"], "max_torque_nm": 8000.0 }
   },
-  "drive": {
-    "torque_curve_nm_vs_rpm": {
-      "x": [900, 1200, 1600, 2000, 2200],
-      "y": [350, 480, 550, 520, 450]
-    },
-    "final_drive_ratio": 15.0,
-    "rev_limit_rpm": 2200,
-    "idle_rpm": 900,
-    "drivetrain_efficiency": 0.85
+  "powertrain": {
+    "components": [
+      { "id": "engine", "type": "engine", "kind": "torque_map",
+        "wot_torque_nm_vs_rpm": { "x": [900, 1200, 1600, 2000, 2200], "y": [350, 480, 550, 520, 450] },
+        "inertia_kgm2": 0.0, "idle_rpm": 900,
+        "limiter": { "type": "hard_cut", "rpm": 2200 } },
+      { "id": "final_drive", "type": "gear_pair", "ratio": 15.0, "efficiency": 0.85 },
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0, "efficiency": 1.0 }
+    ],
+    "shafts": [
+      { "ports": ["engine.crank", "final_drive.in"] },
+      { "ports": ["final_drive.out", "diff.carrier"] },
+      { "ports": ["diff.left", "wheel:RL"] },
+      { "ports": ["diff.right", "wheel:RR"] }
+    ],
+    "compliance": "rigid"
   }
 }
