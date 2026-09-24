@@ -22,6 +22,18 @@ bool is_armed();
 std::uint64_t violation_count();
 void reset();
 
+// PHYS-033 I1b (D-D): for a third-party allocator routed AROUND the global
+// operator new/delete this file overrides below (Jolt's own JPH::Allocate/
+// Reallocate/AlignedAllocate, wired up from jolt_backend.cpp's
+// JoltGlobalRegistration) - counted under the SAME armed/in-job/re-entrancy
+// rules as note_allocation() above, and folded into violation_count() too
+// (so every EXISTING zero-alloc test now also sees a Jolt allocation it
+// could not see before), plus this separate counter for attribution (the T3
+// negative control proves the hook is actually wired, independent of
+// operator new).
+void note_external_allocation();
+std::uint64_t external_violation_count();
+
 // False under an ASan/TSan build: those sanitizers install their own global
 // operator new/delete, so this hook's own overrides (debug_alloc.cpp) are
 // compiled out there to avoid a duplicate-symbol link error, and armed()

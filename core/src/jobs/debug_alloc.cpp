@@ -58,6 +58,7 @@ namespace ps::jobs::debug_alloc {
 namespace {
 std::atomic<bool> g_armed{false};
 std::atomic<std::uint64_t> g_violations{0};
+std::atomic<std::uint64_t> g_external_violations{0};
 thread_local int g_job_depth = 0;
 
 // Re-entrancy guard: the violation bookkeeping below (atomics only) does
@@ -149,10 +150,18 @@ void dump_backtrace(int violation_number) {
 }
 #endif
 
-[[maybe_unused]] void note_allocation() {
+// Shared by note_allocation() (our own global operator new/delete overrides,
+// below) and the public note_external_allocation() (PHYS-033 I1b D-D: a
+// third-party allocator routed around operator new entirely, e.g. Jolt's own
+// JPH::Allocate/Reallocate/AlignedAllocate once jolt_backend.cpp's
+// JoltGlobalRegistration wires them through this - see debug_alloc.h).
+// `external` also bumps g_external_violations, for attribution and the T3
+// negative control that proves the Jolt route is actually wired.
+void note_violation(bool external) {
     if (g_job_depth > 0 && g_armed.load(std::memory_order_relaxed) && !g_in_hook) {
         g_in_hook = true;
         g_violations.fetch_add(1, std::memory_order_relaxed);
+        if (external) g_external_violations.fetch_add(1, std::memory_order_relaxed);
 #if defined(PS_DEBUG_ALLOC_HAVE_BACKTRACE)
         const int budget = backtrace_budget();
         if (budget > 0) {
@@ -163,12 +172,19 @@ void dump_backtrace(int violation_number) {
         g_in_hook = false;
     }
 }
+
+[[maybe_unused]] void note_allocation() { note_violation(/*external=*/false); }
 } // namespace
 
 void set_armed(bool armed) { g_armed.store(armed, std::memory_order_relaxed); }
 bool is_armed() { return g_armed.load(std::memory_order_relaxed); }
 std::uint64_t violation_count() { return g_violations.load(std::memory_order_relaxed); }
-void reset() { g_violations.store(0, std::memory_order_relaxed); }
+std::uint64_t external_violation_count() { return g_external_violations.load(std::memory_order_relaxed); }
+void reset() {
+    g_violations.store(0, std::memory_order_relaxed);
+    g_external_violations.store(0, std::memory_order_relaxed);
+}
+void note_external_allocation() { note_violation(/*external=*/true); }
 
 void enter_job() { ++g_job_depth; }
 void exit_job() { --g_job_depth; }

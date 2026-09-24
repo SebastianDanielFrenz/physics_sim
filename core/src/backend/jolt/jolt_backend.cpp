@@ -4,11 +4,13 @@
 // exposes only create_jolt_backend() returning the abstract interface.
 
 #include "ps/backend/i_rigid_backend.h"
+#include "ps/jobs/debug_alloc.h"
 #include "../../jobs/jolt_job_system.h"
 
 #include <Jolt/Jolt.h>
 
 #include <Jolt/Core/Factory.h>
+#include <Jolt/Core/Memory.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/RegisterTypes.h>
 
@@ -452,12 +454,73 @@ bool assert_failed_impl(const char* expression, const char* message, const char*
 }
 #endif
 
+// PHYS-033 I1b (D-D): debug_alloc's own global operator new/delete overrides
+// cannot see Jolt's allocations - Jolt shapes use JPH_OVERRIDE_NEW_DELETE
+// (Core/Memory.h), which routes through JPH::Allocate/Reallocate/
+// AlignedAllocate (defaulted to plain malloc/_aligned_malloc by
+// RegisterDefaultAllocator() below), never through operator new. Wrapping
+// those three function pointers - AFTER RegisterDefaultAllocator() installs
+// the defaults we then save and chain to, BEFORE any Jolt allocation can
+// happen (the Factory just below is the first) - makes every allocation
+// Jolt itself makes on a job's stack (shape construction, its own internal
+// job-body allocations, PhysicsSystem::Update's own arrays) visible to
+// debug_alloc, same rules as any other job-body allocation (armed/in-job/
+// re-entrancy). Free/AlignedFree are left untouched: pairing an allocation
+// made through the (possibly wrapped) Allocate with Jolt's own unwrapped
+// Free is exactly what Jolt itself always does internally, so nothing here
+// needs to intercept the free side at all.
+//
+// #ifndef JPH_DISABLE_CUSTOM_ALLOCATOR: Jolt only ever defines that macro for
+// its own ReleaseASAN/ReleaseTSAN CMake configurations (Jolt.cmake), never
+// for any preset this project builds - guarded anyway so a future change to
+// that would fail to compile loudly here rather than silently reference
+// symbols Jolt no longer exports in that mode (Memory.h's own #else branch
+// declares Allocate/Reallocate/etc. as plain non-overridable functions, not
+// variables this file could point elsewhere).
+#ifndef JPH_DISABLE_CUSTOM_ALLOCATOR
+JPH::AllocateFunction g_jolt_alloc = nullptr;
+JPH::ReallocateFunction g_jolt_realloc = nullptr;
+JPH::AlignedAllocateFunction g_jolt_aligned_alloc = nullptr;
+
+void* counting_allocate(size_t n) {
+    ps::jobs::debug_alloc::note_external_allocation();
+    return g_jolt_alloc(n);
+}
+void* counting_reallocate(void* p, size_t old_size, size_t new_size) {
+    ps::jobs::debug_alloc::note_external_allocation();
+    return g_jolt_realloc(p, old_size, new_size);
+}
+void* counting_aligned_allocate(size_t n, size_t alignment) {
+    ps::jobs::debug_alloc::note_external_allocation();
+    return g_jolt_aligned_alloc(n, alignment);
+}
+
+void install_counting_jolt_allocator() {
+    g_jolt_alloc = JPH::Allocate;
+    g_jolt_realloc = JPH::Reallocate;
+    g_jolt_aligned_alloc = JPH::AlignedAllocate;
+    JPH::Allocate = counting_allocate;
+    JPH::Reallocate = counting_reallocate;
+    JPH::AlignedAllocate = counting_aligned_allocate;
+}
+#endif // !JPH_DISABLE_CUSTOM_ALLOCATOR
+
 class JoltGlobalRegistration {
 public:
     JoltGlobalRegistration() {
         JPH::Trace = trace_impl;
         JPH_IF_ENABLE_ASSERTS(JPH::AssertFailed = assert_failed_impl;)
         JPH::RegisterDefaultAllocator();
+#ifndef JPH_DISABLE_CUSTOM_ALLOCATOR
+        // hook_available() is false under ASan/TSan (debug_alloc.cpp's own
+        // operator new/delete overrides are compiled out there to avoid a
+        // duplicate-symbol link error) - installing this wrapper anyway
+        // would be harmless (note_external_allocation() would just never be
+        // called with the hook armed) but there's no reason to pay even the
+        // one indirect-call layer's cost on a build that can never observe
+        // it.
+        if (ps::jobs::debug_alloc::hook_available()) install_counting_jolt_allocator();
+#endif
         factory_ = new JPH::Factory();
         JPH::Factory::sInstance = factory_;
         JPH::RegisterTypes();
