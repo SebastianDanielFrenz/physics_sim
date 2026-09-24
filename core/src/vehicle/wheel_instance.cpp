@@ -11,14 +11,14 @@
 namespace ps::vehicle {
 namespace {
 
-real sign(real x) { return x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0); }
-
 // Low-speed lateral carcass damping (PHYS-033 section 4.3, I1 plan section
 // 3.6). Physical framing: real carcass/relaxation damping the tyre model's
 // relaxation ODE does not otherwise supply at vanishing ROLLING speed - the
 // longitudinal channel is saved by rolling resistance (froll below, a
-// genuine Coulomb-type drag along the SAME axis as kappa's restoring force,
-// nonzero at any speed); the lateral channel has no equivalent, so the
+// genuine drag along the SAME axis as kappa's restoring force that ramps
+// continuously up to its full Coulomb magnitude within
+// TyreDesc::rolling_resistance_v_eps of standstill, rather than being zero
+// everywhere except exactly v=0); the lateral channel has no equivalent, so the
 // alpha_eq/chassis-yaw-rate loop is a marginally-stable (zeta -> 0)
 // continuous oscillator (PHYS-024's original finding: a plain yaw-rate kick
 // at true standstill GROWS into a saturated limit cycle at 240 Hz but
@@ -279,11 +279,27 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
         // "F_roll = crr * N"), not folded into the slip-based Fx above, and
         // OUTSIDE the network ledger (PHYS-033 P4 I2 plan section 5.6: "not
         // in the hub torque") - a hysteresis loss, not a slip force, and
-        // vanishes at standstill (sign(0) = 0) rather than fighting the
-        // kappa_eq deflection spring that already holds a parked car.
+        // fades to zero at standstill rather than fighting the kappa_eq
+        // deflection spring that already holds a parked car.
+        //
+        // Parking-slope creep fix (defect D1): a plain -sign(vx_contact)*...
+        // never actually settles at v=0 - vx_contact is a substep-sampled
+        // contact velocity that is essentially never bit-exact zero (float/
+        // double noise, plus Jolt integrating position with the end-of-tick
+        // velocity while the tyre samples substep-start velocities, which
+        // average slightly different), so sign(vx_contact) flipped every
+        // substep: a period-2 limit cycle at 960 Hz on all four wheels that
+        // combined with a separate Jolt defect (dropped sub-threshold
+        // rotation - see CLAUDE.md's "Jolt backend" section) to make a
+        // parked, handbraked car creep uphill. Regularised: the drag ramps
+        // LINEARLY from 0 at vx_contact = 0 to its full Coulomb magnitude at
+        // |vx_contact| = rolling_resistance_v_eps, instead of switching sign
+        // discontinuously through v=0 - physically, rolling resistance is a
+        // hysteresis loss that must fade continuously to zero with speed.
         const real crr_total = tyre_->desc().qsy1 + crr_surface + tyre_->desc().qsy2 * std::abs(tw.forces.fx_pure) / tyre_->desc().fz0 +
                                 tyre_->desc().qsy4 * ps::math::pow(vx_contact / tyre_->desc().v0, real(4.0));
-        pre_froll_ = -sign(vx_contact) * fz * crr_total;
+        const real froll_ramp = std::clamp(vx_contact / tyre_->desc().rolling_resistance_v_eps, real(-1.0), real(1.0));
+        pre_froll_ = -froll_ramp * fz * crr_total;
     }
     // Airborne or fz <= 0 (plan section 5.6 point 6): {0, 0}, and the
     // relaxation step above is skipped entirely (kappa_eq/alpha_eq hold).

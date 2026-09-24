@@ -110,6 +110,11 @@ TyreDesc read_tyre_object(const json& j) {
     d.qsy1 = j.value("qsy1", d.qsy1);
     d.qsy2 = j.value("qsy2", d.qsy2);
     d.qsy4 = j.value("qsy4", d.qsy4);
+    d.rolling_resistance_v_eps = j.value("rolling_resistance_v_eps", d.rolling_resistance_v_eps);
+    if (d.rolling_resistance_v_eps <= real(0.0)) {
+        throw std::runtime_error("tyre '" + d.name + "': rolling_resistance_v_eps must be > 0, got " +
+                                  std::to_string(d.rolling_resistance_v_eps));
+    }
     d.relaxation_length_x = j.value("relaxation_length_x", d.relaxation_length_x);
     d.relaxation_length_y = j.value("relaxation_length_y", d.relaxation_length_y);
     d.lambda_mux = j.value("lambda_mux", d.lambda_mux);

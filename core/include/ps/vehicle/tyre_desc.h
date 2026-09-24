@@ -44,6 +44,29 @@ struct TyreDesc {
     real qsy2 = 0.0;  // Fx-dependent rolling resistance term
     real qsy4 = 0.0002; // speed^4 term coefficient
 
+    // Parking-slope creep fix (defect D1): wheel_instance.cpp's pre_solve
+    // used to scale rolling resistance by sign(vx_contact), which never
+    // settles at true standstill - vx_contact is a substep-sampled contact
+    // velocity that is never exactly 0.0 (float/double noise, plus Jolt
+    // itself integrating position with the end-of-tick velocity while the
+    // tyre samples substep-start velocities), so the sign flipped every
+    // substep: a period-2 limit cycle at 960 Hz that, together with a
+    // separate Jolt defect (see CLAUDE.md's "Jolt backend" section on
+    // IRigidBackend::set_integrate_sub_threshold_rotation), made a parked,
+    // handbraked car creep uphill. Fix: rolling resistance now ramps
+    // LINEARLY from 0 at vx_contact = 0 to its full sign(vx)*crr_total*fz
+    // magnitude at |vx_contact| = rolling_resistance_v_eps
+    // (std::clamp(vx_contact / rolling_resistance_v_eps, -1, 1) in place of
+    // sign(vx_contact) - wheel_instance.cpp's pre_solve), i.e. a regularised
+    // Coulomb drag - a real hysteresis-loss force must fade continuously to
+    // zero with speed, not switch sign discontinuously through it. Stability:
+    // this adds an effective viscous rate c ~= crr*Fz/rolling_resistance_v_eps
+    // per wheel (~780 N*s/m for a car wheel at the default) - h*sum(c)/m is
+    // far below the explicit-integration stability bound for the tick rates
+    // this project uses.
+    real rolling_resistance_v_eps = 0.05; // m/s; the sign(vx) ramp's half-width
+
+
     // --- relaxation lengths (Pacejka ch. 7's transient model; see
     // out/handover_p3.md decision 2 for the exact ODE) ---
     real relaxation_length_x = 0.10; // m
@@ -105,8 +128,10 @@ struct TyreDesc {
     // chassis - see CLAUDE.md's "Vehicle system" section) - it is real
     // carcass/relaxation damping the tyre model's own relaxation ODE does
     // not otherwise supply at vanishing rolling speed (the longitudinal
-    // channel is saved by rolling resistance, a genuine Coulomb drag along
-    // the same axis at any speed; the lateral channel has none). See
+    // channel is saved by rolling resistance, a genuine drag along the same
+    // axis that ramps continuously up to its full Coulomb magnitude within
+    // rolling_resistance_v_eps of standstill rather than vanishing outright
+    // like this term does; the lateral channel has none). See
     // wheel_instance.cpp's low_speed_lateral_damping_force for the explicit-
     // integration stability bound (PHYS-033 section 4.3) that caps a safe
     // ratio, and CLAUDE.md for how the shipped default was measured.
