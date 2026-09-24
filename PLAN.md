@@ -592,6 +592,21 @@ audible V8), with crank-angle tables from the map generator as a fallback. The
 generator integrates with a fixed time step (the model is stiff), not a fixed
 crank angle.
 
+Tyre audio requirement (Sebastian, 2026-09-24): tyre sounds that depend on
+compound, surface, slip angle, slip ratio, load and speed. Approach: parametric
+synthesis in the adapter driven by per-wheel physics state the core already
+publishes (slip ratio/angle, load, surface, speed), plus a tyre compound id and
+the sliding velocity at the patch; recorded or synthesised layers per surface
+(rolling roar, squeal near and past the grip peak, scrub/skid, gravel crunch)
+blended by those parameters, not fixed loops. The core only publishes state;
+all audio stays in the adapter.
+
+Data format documentation and an engine editor (Sebastian, 2026-09-24): a
+human-readable description of every data file format, kept in the repo next
+to the data, and a GUI for creating engines — for now an out-of-game web page
+that reads and writes the same JSON files the sim loads, with its fields
+checked against what the loaders accept.
+
 Electric drive requirement (Sebastian, 2026-09-23): a parallel system for
 electric drives — battery electric, fuel cell, and other sources — alongside
 the combustion engine, equally data-defined. Consequence for the design: the
