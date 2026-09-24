@@ -106,11 +106,16 @@ void run_acceptance_case(real slope_grade, const Vec3& tilt_axis, const char* la
 
 } // namespace
 
-TEST_CASE("Tractor holds a 10% cross slope on the handbrake alone", "[validation][vehicle][long][!mayfail]") {
+// PHYS-033 I1 commit G1 fixed data/vehicles/tractor.json's rear attachment z
+// (F15/H0 - see that commit's message and the file's own updated "source"
+// field). [!mayfail] removed: measured drift is now 5.3e-5 m (cross slope)
+// and 2.7e-4 m (longitudinal), both comfortably under the 1 mm/1e-3 rad
+// bounds.
+TEST_CASE("Tractor holds a 10% cross slope on the handbrake alone", "[validation][vehicle][long]") {
     run_acceptance_case(0.10, Vec3::unit_x(), "10% cross slope");
 }
 
-TEST_CASE("Tractor holds a 15% longitudinal slope on the handbrake alone", "[validation][vehicle][long][!mayfail]") {
+TEST_CASE("Tractor holds a 15% longitudinal slope on the handbrake alone", "[validation][vehicle][long]") {
     run_acceptance_case(0.15, Vec3::unit_y(), "15% longitudinal slope");
 }
 

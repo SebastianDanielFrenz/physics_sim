@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.vehicle/1",
   "name": "tractor",
-  "source": "Geometry (wheelbase 2.80 m, track 1.90 m, front wheel radius 0.8 m, rear wheel radius 1.025 m) matches data/models/tractor/tractor.rig.json. Mass (6000 kg) and a rear-heavy 35/65 front/rear static split are plausible for a mid-size 2WD row-crop tractor per Wong, 'Theory of Ground Vehicles', 5th ed., ch. 1-2 (typical 2WD tractor static splits run roughly 35/65 to 40/60 rear-biased, driven by engine/transmission placement over the rear axle) - not a specific measured machine. PLAN.md 5.1 calls for 'rigid and pendulum axles for tractors' as a distinct suspension model; this file instead approximates a rigid axle with a very stiff, short-travel per-wheel spring within the existing independent-suspension framework (out/handover_p3.md's deferred list) rather than building the separate rigid/pendulum-axle model - a real tractor's front axle often pivots as a unit, which this does not capture. Front wheels reference data/tyres/tractor_front.json, rear data/tyres/tractor_rear.json. Placeholder drive (PLAN.md M1) uses a plausible mid-size diesel torque-curve shape and a single 'road gear' final drive ratio chosen to give a plausible ~55 km/h top road speed - not a specific published engine map or gearbox ratio set.",
+  "source": "Geometry (wheelbase 2.80 m, track 1.90 m, front wheel radius 0.8 m, rear wheel radius 1.025 m) matches data/models/tractor/tractor.rig.json. Mass (6000 kg) and a rear-heavy 35/65 front/rear static split are plausible for a mid-size 2WD row-crop tractor per Wong, 'Theory of Ground Vehicles', 5th ed., ch. 1-2 (typical 2WD tractor static splits run roughly 35/65 to 40/60 rear-biased, driven by engine/transmission placement over the rear axle) - not a specific measured machine. PLAN.md 5.1 calls for 'rigid and pendulum axles for tractors' as a distinct suspension model; this file instead approximates a rigid axle with a very stiff, short-travel per-wheel spring within the existing independent-suspension framework (out/handover_p3.md's deferred list) rather than building the separate rigid/pendulum-axle model - a real tractor's front axle often pivots as a unit, which this does not capture. Front wheels reference data/tyres/tractor_front.json, rear data/tyres/tractor_rear.json. Placeholder drive (PLAN.md M1) uses a plausible mid-size diesel torque-curve shape and a single 'road gear' final drive ratio chosen to give a plausible ~55 km/h top road speed - not a specific published engine map or gearbox ratio set. PHYS-033 I1 fix (was: rear attachment z = -0.725): data/models/tractor/tractor.rig.json places wheel_FL/FR's pivot at z=0.8 (== the front wheel radius) and wheel_RL/RR's pivot at z=1.025 (== the rear wheel radius), both measured from the rig's own ground plane at rest - i.e. a level chassis's front and rear 'ground contact' offsets (attachment.z - wheel_radius) must be equal. The old rear z gave -0.5-0.8=-1.30 (front) vs. -0.725-1.025=-1.75 (rear), a 0.45 m mismatch that put the tractor about atan(0.45/2.80)=9.1 deg nose-down at rest and caused it to self-propel forward at ~1.2-1.4 m/s^2 on flat ground with no throttle (the suspension force, applied along the tilted chassis-fixed axis, gets a spurious horizontal component under that pitch - see CLAUDE.md's F16 finding). Confirmed by measurement (tests/validation/test_vehicle_tractor_cross_slope.cpp's A/B diagnostic): with only this single-field fix, the flat-ground self-propulsion drops from ~1.29 m/s^2 to ~0.0001 m/s^2, and the 10% cross-slope handbrake-only drift drops from 0.186 m/10s to 0.0001 m/10s (>1000x). New rear z = -0.5 + (1.025-0.8) = -0.275, matching the front's -1.30 ground-contact offset exactly (-0.275-1.025=-1.30).",
   "wheels": [
     {
       "name": "FL",
@@ -49,7 +49,7 @@
     },
     {
       "name": "RL",
-      "attachment_local": [-0.98, 0.95, -0.725],
+      "attachment_local": [-0.98, 0.95, -0.275],
       "wheel_radius": 1.025,
       "wheel_width": 0.62,
       "wheel_mass": 150.0,
@@ -71,7 +71,7 @@
     },
     {
       "name": "RR",
-      "attachment_local": [-0.98, -0.95, -0.725],
+      "attachment_local": [-0.98, -0.95, -0.275],
       "wheel_radius": 1.025,
       "wheel_width": 0.62,
       "wheel_mass": 150.0,
