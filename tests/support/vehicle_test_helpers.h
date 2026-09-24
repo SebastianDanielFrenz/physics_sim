@@ -46,7 +46,10 @@ struct VehicleTestRig {
 };
 
 // slope_grade: rise/run (0 == flat). The ground box is tilted about world
-// Y so the surface rises in +X; chassis_origin_height is the vehicle's own
+// Y so the surface DESCENDS in +X (i.e. +X is downhill - found the hard
+// way analysing the parking-slope creep tests, where the sign of this
+// tilt matters: see test_vehicle_parking_slope.cpp's own comment);
+// chassis_origin_height is the vehicle's own
 // chassis-local origin height above the LOCAL ground normal at x=0
 // (matches the vehicle JSON's own attachment_local.z convention - see
 // data/vehicles/car_sedan.json's header comment for how it was derived).
@@ -81,8 +84,10 @@ struct VehicleTestRig {
 // reference number. `tilt_axis` generalises the old hard-coded world-Y tilt
 // (a vehicle facing +X driving up/down a longitudinal grade) to an
 // arbitrary axis - unit_x() gives a CROSS slope for a vehicle facing +X
-// (rises in +Y), unit_y() (the default, matching the old behaviour exactly)
-// a longitudinal slope (rises in +X).
+// (rises in +Y - this direction was already correct), unit_y() (the
+// default, matching the old behaviour exactly) a longitudinal slope that
+// DESCENDS in +X (the direction this comment used to get backwards - i.e.
+// +X is downhill, not uphill).
 inline VehicleTestRig build_vehicle_rig_from_desc(const ps::vehicle::VehicleDesc& desc, ps::real chassis_mass,
                                                    const ps::Vec3& chassis_half_extents, ps::real chassis_origin_height,
                                                    ps::real slope_grade = 0.0, int job_workers = 4,

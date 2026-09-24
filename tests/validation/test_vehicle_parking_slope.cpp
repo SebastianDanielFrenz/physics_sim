@@ -12,23 +12,32 @@
 // [long]: settles for 2 s then watches for 30 s of simulated time (a
 // release build cost, not a debug/sanitizer one - CLAUDE.md's "Test tags").
 //
-// [!mayfail] since PHYS-033 I1b commit C7 (the contact-patch lever fix,
-// decision D-A): measured drift grew from 0.000837 m (pre-I1b baseline,
-// well inside the 1 mm gate) to 0.00253 m (post-C7, over it) at the normal
-// 240 Hz tick. The plan's own section 5.2 table predicted this test "holds"
-// despite the larger downhill-axle load-transfer asymmetry the patch lever
-// introduces - measured, it does not, contradicting that prediction. This
-// is the SAME "elastic hold" mechanism (a static tyre-deflection spring,
-// not an exact Coulomb friction constraint) already flagged as marginal
-// pre-I1b - re-check (b) below (I1's own 4x-finer-tick reference already
-// measured 0.004879 m, i.e. already over 1 mm, before I1b touched anything)
-// confirms the underlying holding mechanism was already only borderline
-// adequate at 240 Hz specifically because of tick-rate discretisation, and
-// I1b's larger lever pushed the 240 Hz number over the same edge the fine-
-// tick number had already crossed. Per PLAN.md's "fix the model, not the
-// tolerance" and CLAUDE.md's own note ("I2 replaces the brake clamp with
-// exact Coulomb friction rows, which is meant to fix holding") this is
-// reported, not patched here - the 1 mm bound is UNCHANGED.
+// REAL MECHANISM (found after the [!mayfail] history below turned out to
+// be chasing the wrong cause): the drift was never the tyre's "elastic
+// hold" being too weak - the two locked rear wheels' Fx exactly balances
+// the slope force (an exact Coulomb equilibrium), and the car crept
+// UPHILL, which a weak tyre spring cannot explain at all. Two numerical
+// defects, both present since P3, combined to defeat that equilibrium:
+// (D1) wheel_instance.cpp's rolling resistance used to scale by
+// sign(vx_contact), which never settles at true standstill (vx_contact is
+// a substep-sampled contact velocity essentially never bit-exact zero) -
+// the sign flipped every substep, a period-2 limit cycle at 960 Hz; (D2)
+// Jolt's own Body::AddRotationStep (Jolt/Physics/Body/Body.inl) silently
+// drops any rotation step with |omega*dt_substep| <= 1e-6 rad, so the
+// chassis kept a small, real, steady pitch rate that never integrated
+// into its orientation - a "rolling without rotating" mode whose
+// contact-patch velocity (v + omega x r) cancelled the tyre-visible
+// translation, so no tyre force ever opposed it. See
+// core/include/ps/vehicle/tyre_desc.h's rolling_resistance_v_eps comment
+// and ps/backend/i_rigid_backend.h's set_integrate_sub_threshold_rotation
+// comment for the two fixes; CLAUDE.md's "Vehicle system"/"Jolt backend"
+// sections have the full writeup. Neither fix alone was enough (measured
+// ~0.95 mm/D1 only, ~1.82 mm/D2 only, both still over the 1 mm gate) -
+// only both together closed it, to 2.5e-6 m measured here, five orders of
+// magnitude under the bound. The [!mayfail] history that used to follow
+// this comment (I1b's contact-patch lever fix apparently regressing an
+// "elastic hold" margin) was a plausible-looking but wrong diagnosis of
+// the same underlying bug; removed now that the real cause is fixed.
 #include "vehicle_test_helpers.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -38,7 +47,7 @@
 
 using namespace ps;
 
-TEST_CASE("Car on a 15% slope with the handbrake on does not creep", "[validation][vehicle][long][!mayfail]") {
+TEST_CASE("Car on a 15% slope with the handbrake on does not creep", "[validation][vehicle][long]") {
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
                                            Vec3{2.0, 0.4, 0.15}, 0.6, /*slope_grade=*/0.15);
 

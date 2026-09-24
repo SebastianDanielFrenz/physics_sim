@@ -113,26 +113,29 @@ void run_acceptance_case(real slope_grade, const Vec3& tilt_axis, const char* la
 // rad bounds.
 //
 // [!mayfail] RE-ADDED by PHYS-033 I1b commit C7 (the contact-patch lever
-// fix, decision D-A): measured drift is now 0.0108 m (cross slope) and
-// 0.0113 m (longitudinal) - both roughly 11x over the 1 mm bound. Every
-// OTHER assertion in run_acceptance_case (max|alpha|, max|kappa|, min_fz per
-// wheel, yaw_change) still passes; only the position-drift CHECK fails. The
-// I1b plan's own section 5.2 table predicted this test still "holds"
-// despite the tractor's much larger lever (~1.29 m vs ~0.5 m, a ~2.6x
-// downhill load-transfer factor) - measured, it does not, contradicting
-// that prediction. This is the same "elastic hold" (static tyre-deflection
-// spring, not exact Coulomb friction) mechanism flagged as marginal for the
-// CAR's own parking-slope test too (test_vehicle_parking_slope.cpp's own
-// updated comment, and re-check (b)) - the tractor's much larger lever and
-// much stiffer springs make it more sensitive to the same underlying
-// weakness. Reported per PLAN.md's "fix the model, not the tolerance" and
-// CLAUDE.md's note that I2's exact Coulomb friction rows are meant to fix
-// holding - the 1 mm bound is UNCHANGED, and this is not attempted here.
-TEST_CASE("Tractor holds a 10% cross slope on the handbrake alone", "[validation][vehicle][long][!mayfail]") {
+// fix, decision D-A): measured drift grew to 0.0108 m (cross slope) and
+// 0.0113 m (longitudinal), both roughly 11x over the 1 mm bound. That was
+// diagnosed at the time as the tractor's larger lever (~1.29 m vs ~0.5 m)
+// weakening the same "elastic hold" margin already marginal on the car's
+// own parking-slope test - WRONG, see test_vehicle_parking_slope.cpp's own
+// updated comment for the real mechanism: two numerical defects (D1, a
+// standstill rolling-resistance sign(vx) limit cycle; D2, Jolt's own
+// Body::AddRotationStep silently dropping a small steady chassis angular
+// velocity below its 1e-6 rad dead zone) combined to defeat what is
+// otherwise an exact Coulomb equilibrium at the locked wheels, on EVERY
+// vehicle, not something specific to lever length or spring stiffness -
+// the tractor was simply more sensitive to the same bug, not sensitive to
+// a different one. [!mayfail] REMOVED again now both defects are fixed:
+// measured drift is 3.9e-6 m (10% cross slope) and 1.3e-4 m (15%
+// longitudinal), both far under the 1 mm/1e-3 rad bounds. Every other
+// assertion in run_acceptance_case (max|alpha|, max|kappa|, min_fz per
+// wheel, yaw_change) was passing throughout this history; only the
+// position-drift CHECK was ever the issue.
+TEST_CASE("Tractor holds a 10% cross slope on the handbrake alone", "[validation][vehicle][long]") {
     run_acceptance_case(0.10, Vec3::unit_x(), "10% cross slope");
 }
 
-TEST_CASE("Tractor holds a 15% longitudinal slope on the handbrake alone", "[validation][vehicle][long][!mayfail]") {
+TEST_CASE("Tractor holds a 15% longitudinal slope on the handbrake alone", "[validation][vehicle][long]") {
     run_acceptance_case(0.15, Vec3::unit_y(), "15% longitudinal slope");
 }
 
