@@ -941,6 +941,13 @@ public:
                 const JPH::Body* hit_body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(collector.mHit.mBodyID2);
                 out.body = hit_body ? unpack_body_id(hit_body->GetUserData()) : BodyId{};
                 if (hit_body) out.surface = surface_id_from_material(hit_body->GetShape()->GetMaterial(collector.mHit.mSubShapeID2));
+                // PHYS-033 I1b C4, additive: same base-offset convention as
+                // collide_shape_into's own mContactPointOn2 use below
+                // (base offset = start_pose.position, matching the CastShape
+                // call's own inBaseOffset argument just above).
+                out.contact_point = start_pose.position + from_vec3f(collector.mHit.mContactPointOn2);
+                out.penetration_depth = real(collector.mHit.mPenetrationDepth);
+                out.started_penetrating = collector.mHit.mFraction <= 0.0f;
             }
             return out;
         });

@@ -100,12 +100,33 @@ struct ShapeCastHit {
     bool hit = false;
     BodyId body;
     real fraction = 1.0;
+    // The cast shape's ORIGIN (its centre of mass for Box/Sphere/Capsule/
+    // Cylinder) at the hit: start + fraction*sweep. NOT a surface point
+    // (PHYS-033 I1b) - kept exactly as before for every existing caller
+    // (ps::vehicle::WheelInstance::measure_contact and
+    // tests/unit/test_mesh_heightfield_shapes.cpp both rely on this meaning).
     Vec3 point;
+    // Contact normal pointing from the hit body toward the cast shape
+    // (-penetration axis). Unreliable when started_penetrating below is true.
     Vec3 normal;
     // Surface id of the hit triangle/cell of `body`'s shape (PLAN.md M1),
     // kInvalidSurfaceId if that shape carries no surface ids or there was
     // no hit.
     SurfaceId surface = kInvalidSurfaceId;
+    // PHYS-033 I1b, additive: a point on the HIT body's surface at impact
+    // (Jolt's mContactPointOn2 + the cast's own base offset). For a line or
+    // face contact this is ONE point of the contact set, arbitrary along it
+    // (Jolt's GJK does not guarantee which) - only its component along
+    // `normal` is well defined, which is all ps::vehicle's D-A patch-point
+    // computation relies on.
+    Vec3 contact_point;
+    real penetration_depth = 0.0; // > 0 only when started_penetrating below
+    // True when the cast shape already overlapped the hit body at the start
+    // of the sweep (Jolt's own mFraction <= 0): `normal`/`contact_point` come
+    // from GJK without an EPA pass in that case and are not trustworthy -
+    // callers should fall back to a known-good direction (e.g. the sweep's
+    // own axis) instead of trusting them.
+    bool started_penetrating = false;
 };
 
 struct ContactEvent {
@@ -263,6 +284,14 @@ public:
     // the backend is not concurrently stepping (World's pipeline only calls
     // this between vehicle_islands_substep and backend_step, PLAN.md section
     // 5 - never overlapping with IRigidBackend::step()).
+    //
+    // PHYS-033 I1b: a Box/Sphere/Capsule/Cylinder `shape` is now built on the
+    // stack (jolt_backend.cpp's with_query_shape), so the QUERY SHAPE itself
+    // no longer allocates either - only Mesh/Heightfield still fall back to a
+    // heap-allocated shape (never used as a query shape on any hot path).
+    // The COLLECTOR still allocates on any call that finds >= 1 hit (its
+    // internal JPH::Array grows on first push_back) - a known follow-up, not
+    // fixed by I1b (see the I1b report's handover list).
     virtual void collide_shape_into(const ShapeDesc& shape, const Pose& pose, std::vector<ShapeContactHit>& out) const = 0;
 
     // Contact events observed during the most recent step(), drained (and

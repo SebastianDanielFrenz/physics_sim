@@ -151,6 +151,43 @@ TEST_CASE("Heightfield shape cast reports the right height and surface for x and
     }
 }
 
+// PHYS-033 I1b commit C4: ShapeCastHit's new contact_point/penetration_depth/
+// started_penetrating fields, on the same flat heightfield the test above
+// already builds - contact_point should land ON the surface (unlike `point`,
+// the swept sphere's own centre, which sits one radius above it).
+TEST_CASE("Heightfield shape cast: contact_point sits on the surface, point does not",
+          "[shapes][heightfield][backend]") {
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+
+    constexpr std::uint32_t kN = 4;
+    constexpr real kSpacing = 10.0;
+    HeightfieldShape hf;
+    hf.sample_spacing = kSpacing;
+    hf.sample_count = kN;
+    hf.heights.assign(static_cast<std::size_t>(kN) * kN, 0.0); // flat, height 0 everywhere
+    hf.cell_surface_ids.assign(static_cast<std::size_t>(kN - 1) * (kN - 1), kInvalidSurfaceId);
+    hf.origin = Vec3::zero();
+
+    BodyDesc ground;
+    ground.shape = hf;
+    ground.motion = BodyMotionType::Static;
+    world.create_body(ground);
+
+    IRigidBackend& backend = world.backend();
+    constexpr real kRadius = 0.05;
+    const Pose start{Vec3{15.0, 15.0, 100.0}, Quat::identity()};
+    const ShapeCastHit hit = backend.shape_cast(SphereShape{kRadius}, start, Vec3{0, 0, -1}, 200.0);
+    REQUIRE(hit.hit);
+    REQUIRE_FALSE(hit.started_penetrating);
+    INFO("point.z=" << hit.point.z << " contact_point.z=" << hit.contact_point.z);
+    CHECK(std::abs(hit.contact_point.z - 0.0) < 1e-3);
+    // A speculative-contact/float-precision margin (measured ~1.2 mm) keeps
+    // this a hair looser than kRadius's own 1e-3 check above.
+    CHECK(std::abs(hit.point.z - hit.contact_point.z - kRadius) < 2e-3);
+}
+
 TEST_CASE("update_heightfield_body allocates nothing once warmed up", "[shapes][heightfield][alloc][backend]") {
     if (!ps::jobs::debug_alloc::hook_available()) {
         WARN("debug_alloc hook unavailable under this build (ASan/TSan) - skipping");
