@@ -355,9 +355,7 @@ TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehi
         const vehicle::VehicleDesc v = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
         CHECK(v.name == "car_sedan");
         CHECK(v.wheels.size() == 4);
-        // C6 staging (plan section commit table): aero block present but
-        // drag_area_m2 temporarily 0; C6c sets it to the final 0.68.
-        CHECK(v.aero.drag_area_m2 == Catch::Approx(0.0));
+        CHECK(v.aero.drag_area_m2 == Catch::Approx(0.68));
         CHECK(v.controllers.size() == 1);
         REQUIRE(v.powertrain.components.size() == 4);
         const auto* engine = std::get_if<drivetrain::TorqueMapEngineDesc>(&v.powertrain.components[0].params);
@@ -371,9 +369,7 @@ TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehi
         const vehicle::VehicleDesc v = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
         CHECK(v.name == "tractor");
         CHECK(v.wheels.size() == 4);
-        // C6 staging (plan section commit table): aero block present but
-        // drag_area_m2 temporarily 0; C6c sets it to the final 4.0.
-        CHECK(v.aero.drag_area_m2 == Catch::Approx(0.0));
+        CHECK(v.aero.drag_area_m2 == Catch::Approx(4.0));
         CHECK(v.controllers.size() == 1);
         REQUIRE(v.powertrain.components.size() == 4);
         const auto* gearbox = std::get_if<drivetrain::GearboxDesc>(&v.powertrain.components[2].params);

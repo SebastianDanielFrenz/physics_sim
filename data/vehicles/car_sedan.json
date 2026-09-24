@@ -23,7 +23,7 @@
                  { "wheel": "RL", "max_torque_nm": 1600.0 }, { "wheel": "RR", "max_torque_nm": 1600.0 } ],
     "handbrake": { "wheels": ["RL", "RR"], "max_torque_nm": 1600.0 }
   },
-  "aero": { "drag_area_m2": 0.0 },
+  "aero": { "drag_area_m2": 0.68 },
   "powertrain": {
     "components": [
       { "id": "engine",  "type": "engine",  "ref": "../engines/i4_2l_na.json" },

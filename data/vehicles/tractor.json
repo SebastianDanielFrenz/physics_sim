@@ -23,7 +23,7 @@
                  { "wheel": "RL", "max_torque_nm": 8000.0 }, { "wheel": "RR", "max_torque_nm": 8000.0 } ],
     "handbrake": { "wheels": ["RL", "RR"], "max_torque_nm": 8000.0 }
   },
-  "aero": { "drag_area_m2": 0.0 },
+  "aero": { "drag_area_m2": 4.0 },
   "powertrain": {
     "components": [
       { "id": "engine",  "type": "engine",  "ref": "../engines/diesel_i4_4l5_turbo.json" },
