@@ -27,6 +27,7 @@ add_executable(ps_unit_tests
   test_vehicle_ackermann_symmetry.cpp
   test_vehicle_io_validation.cpp
   test_vehicle_parallel_alloc.cpp
+  test_wheel_contact_frame.cpp
 )
 
 target_link_libraries(ps_unit_tests

@@ -5,6 +5,7 @@
 #include "ps/math/transcendental.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace ps::vehicle {
@@ -70,6 +71,32 @@ real low_speed_lateral_damping_force(const TyreDesc& t, real vx_contact, real vy
     return -c_lat * fade * vy_contact;
 }
 
+// PHYS-033 I1b defect 2 fix (decision D-B): assembles the ONE force vector
+// (plus a pure couple) the chassis receives from this wheel, replacing the
+// old separate suspension-force-along-chassis-axis + tyre-force-along-
+// chassis-forward/lateral assembly. `n_load` is the suspension force's
+// MAGNITUDE (still measured along the chassis-fixed suspension axis - only
+// its point of application and the axis it acts along toward the chassis
+// change here, not how it is computed); `f_long`/`f_lat` are Fx+F_roll/Fy.
+// Kept BILATERAL exactly like the code this replaces (`axis_world * fz`
+// applied whenever hit_ground_, wheel_instance.cpp's old :229): a negative
+// n_load (the rebound damper) still pulls the chassis toward the ground
+// along -n, so this must not clamp n_load to >= 0 (PHYS-033 I1b plan
+// section 9 item 3 flags making this a proper max(F_s, 0) lift-off rule as
+// a separate, out-of-scope follow-up).
+WheelSubstepOutput assemble_contact_wrench(const ContactFrame& cf, bool hit, real n_load, real f_long, real f_lat,
+                                            real mz, real mx, const Vec3& airborne_point) {
+    WheelSubstepOutput o;
+    if (!hit) {
+        o.contact_point_world = airborne_point;
+        return o;
+    }
+    o.contact_force_world = cf.normal * n_load + cf.long_dir * f_long + cf.lat_dir * f_lat;
+    o.contact_point_world = cf.point;
+    o.extra_torque_world = cf.normal * mz + cf.long_dir * mx;
+    return o;
+}
+
 // FNV-1a over a POD value's bytes - same convention as
 // articulation::Instance::fold_state_hash (core/src/articulation/instance.cpp),
 // so World::state_hash's fold order is uniform across subsystems.
@@ -111,24 +138,51 @@ void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, 
     if (hit.hit) {
         hit_ground_ = true;
         x_ = std::clamp(susp.travel_max * (real(1.0) - hit.fraction), real(0.0), susp.travel_max);
-        contact_point_world_ = hit.point;
         contact_surface_ = hit.surface;
+
+        // PHYS-033 I1b defect 2 fix (decision D-B): the ground-plane contact
+        // frame this wheel's forces resolve along, built here (pass 1) and
+        // consumed by step() (pass 2/assemble_contact_wrench below). `spin`
+        // (the CylinderShape's local Y, ps/backend/shape_desc.h's own
+        // convention) is ALWAYS perpendicular to axis_world by construction
+        // (steer_q only rotates about axis_local, so it can never rotate the
+        // wheel's spin axis to have a component along axis_local) - the
+        // fallback branches below rely on that to guarantee a non-degenerate
+        // in-plane component even when the hit normal itself is unusable.
+        constexpr real kMinNormalDotAxis = real(0.25); // |angle(n, suspension axis)| <= ~75.5 deg; beyond that n is a wall/side hit
+        constexpr real kMinInPlane = real(0.2);        // |n projected into the wheel mid-plane|; below it, n is (nearly) the spin axis
+        const Vec3 spin = query_pose.orientation.rotate(Vec3::unit_y());
+        const Vec3 centre = hit.point; // the swept cylinder's own centre at the hit
+        ContactFrame cf;
+        Vec3 n = hit.normal;
+        bool trusted = !hit.started_penetrating && std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z) &&
+                       std::abs(n.length() - real(1)) < real(1e-3) && dot(n, axis_world) >= kMinNormalDotAxis;
+        if (!trusted) n = axis_world; // fallback 1: bottomed, self-hit, wall
+        Vec3 n_perp = n - spin * dot(n, spin);
+        if (n_perp.length() < kMinInPlane) { // fallback 2: side-wall contact
+            trusted = false;
+            n = axis_world;
+            n_perp = n - spin * dot(n, spin); // axis_world _|_ spin by construction, so this is never degenerate
+        }
+        cf.normal = n;
+        cf.normal_fallback = !trusted;
+        cf.long_dir = cross(spin, n).normalized(); // |spin x n| = |n_perp| >= kMinInPlane whenever trusted, or exactly 1 in the fallback
+        cf.lat_dir = cross(n, cf.long_dir);
+        cf.point = centre; // I1b commit C7 (decision D-A) replaces this with the true contact-patch point
+        assert(dot(cf.long_dir, query_pose.orientation.rotate(Vec3::unit_x())) > real(0.0)); // sign follows from y x z = x
+        contact_frame_ = cf;
     } else {
         hit_ground_ = false;
         x_ = 0.0;
         contact_surface_ = kInvalidSurfaceId;
+        // contact_frame_ is left stale on a miss - step() never reads it
+        // unless hit_ground_ is true.
     }
 }
 
 WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
     const SuspensionDesc& susp = desc_.suspension;
     const Vec3 axis_local = susp.axis.normalized();
-    const Vec3 axis_world = in.chassis_pose.orientation.rotate(axis_local);
-    const Quat steer_q = Quat::from_axis_angle(axis_local, in.steer_angle);
-    const Vec3 forward_local = steer_q.rotate(Vec3::unit_x());
-    const Vec3 lateral_local = steer_q.rotate(Vec3::unit_y());
-    const Vec3 forward_world = in.chassis_pose.orientation.rotate(forward_local);
-    const Vec3 lateral_world = in.chassis_pose.orientation.rotate(lateral_local);
 
     const real xdot = in.dt > 0.0 ? (x_ - x_prev_) / in.dt : 0.0;
     const real fz = hit_ground_ ? total_suspension_force(susp, x_, xdot, in.partner_compression) : 0.0;
@@ -136,21 +190,21 @@ WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
     const Vec3 wheel_center_local = desc_.attachment_local + axis_local * x_;
     const Vec3 wheel_center_world = in.chassis_pose.transform_point(wheel_center_local);
 
-    WheelSubstepOutput out;
-    out.suspension_force_world = axis_world * fz;
-    out.attachment_point_world = wheel_center_world;
-
     const real gamma = desc_.static_camber + susp.camber_vs_travel.evaluate(x_);
 
     real fx = 0.0, fy = 0.0, mz = 0.0, mx = 0.0, froll = 0.0;
     real vx_contact = 0.0, vy_contact = 0.0;
 
     if (hit_ground_ && fz > 0.0) {
-        const Vec3 contact_point = contact_point_world_;
-        const Vec3 r = contact_point - in.chassis_pose.position;
+        // PHYS-033 I1b defect 2 fix: contact velocity resolved along the
+        // GROUND-plane contact frame (measure_contact's own pass 1), not the
+        // chassis-fixed forward/lateral axes the old code used - see
+        // ContactFrame's own comment.
+        const ContactFrame& cf = contact_frame_;
+        const Vec3 r = cf.point - in.chassis_pose.position;
         const Vec3 contact_velocity = in.chassis_motion.velocity_at(r);
-        vx_contact = dot(contact_velocity, forward_world);
-        vy_contact = dot(contact_velocity, lateral_world);
+        vx_contact = dot(contact_velocity, cf.long_dir);
+        vy_contact = dot(contact_velocity, cf.lat_dir);
 
         const real slip_velocity_x = omega_ * desc_.wheel_radius - vx_contact;
         const real slip_velocity_y = -vy_contact; // out/handover_p3.md: sign chosen so the relaxed alpha matches the SAE/Pacejka convention (restoring Fy)
@@ -187,10 +241,6 @@ WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
         froll = -sign(vx_contact) * fz * crr_total;
     }
 
-    out.tyre_force_world = forward_world * (fx + froll) + lateral_world * fy;
-    out.contact_point_world = hit_ground_ ? contact_point_world_ : wheel_center_world;
-    out.extra_torque_world = axis_world * mz + forward_world * mx;
-
     // PLAN.md M1, task 2 of the P3 fix-up phase: integrate the render-only
     // spin angle using THIS substep's start-of-step omega_ (still the old
     // value here, before the spin-integration block below overwrites it) -
@@ -223,7 +273,11 @@ WheelSubstepOutput WheelInstance::step(const WheelSubstepInput& in) {
     last_telemetry_.compression = x_;
     last_telemetry_.surface = contact_surface_;
 
-    return out;
+    // Bilateral in n_load (fz, even when <= 0 - see assemble_contact_wrench's
+    // own comment): matches the old axis_world*fz-whenever-hit_ground_
+    // behaviour exactly (:tyre terms fx/fy/mz/mx/froll are already zero
+    // unless fz > 0, from the `if` above, as before).
+    return assemble_contact_wrench(contact_frame_, hit_ground_, fz, fx + froll, fy, mz, mx, wheel_center_world);
 }
 
 std::uint64_t WheelInstance::fold_state_hash(std::uint64_t seed) const {

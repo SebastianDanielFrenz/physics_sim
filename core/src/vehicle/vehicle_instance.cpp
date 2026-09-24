@@ -230,10 +230,15 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             in.surfaces = surfaces_;
 
             const WheelSubstepOutput out = wheels_[i]->step(in);
-            force_s += out.suspension_force_world + out.tyre_force_world;
-            torque_s += cross(out.attachment_point_world - com, out.suspension_force_world);
-            torque_s += cross(out.contact_point_world - com, out.tyre_force_world);
-            torque_s += out.extra_torque_world;
+            // PHYS-033 I1b defect 2 fix (decision D-B): ONE force vector per
+            // wheel (already resolved along the ground-plane contact frame,
+            // WheelInstance::step's own assemble_contact_wrench), acting at
+            // ONE point - replaces the old separate suspension-force-at-
+            // attachment + tyre-force-at-contact-point assembly, which
+            // double-counted nothing but resolved both along the chassis'
+            // own (possibly tilted-relative-to-ground) axes.
+            force_s += out.contact_force_world;
+            torque_s += cross(out.contact_point_world - com, out.contact_force_world) + out.extra_torque_world;
         }
         force_sum += force_s;
         torque_sum += torque_s;

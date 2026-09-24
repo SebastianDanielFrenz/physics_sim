@@ -31,12 +31,36 @@ struct WheelSubstepInput {
     const io::SurfaceTable* surfaces = nullptr;
 };
 
+// PHYS-033 I1b (defect 2 fix, decision D-B): the ground-plane contact frame
+// at this wheel's measured contact, computed in pass 1 (measure_contact) and
+// consumed in pass 2 (step()). Recomputed from the pose every substep, like
+// x_ - deliberately NOT folded into fold_state_hash (see wheel_instance.h's
+// own top-level comment on why render-only/derived-each-substep state stays
+// out of the hash).
+struct ContactFrame {
+    // Where the contact force acts: the wheel centre at the hit (I1b commit
+    // C6), replaced by the true ground contact patch (commit C7, decision
+    // D-A) once landed.
+    Vec3 point = Vec3::zero();
+    Vec3 normal = Vec3::unit_z();   // n: points from the ground toward the wheel
+    Vec3 long_dir = Vec3::unit_x(); // t_x = normalize(spin_axis x n): the wheel's rolling direction, in the contact plane
+    Vec3 lat_dir = Vec3::unit_y();  // t_y = n x t_x
+    // True when `normal` had to be replaced by the suspension axis (a
+    // bottomed/self-hit/wall/side-wall contact - see measure_contact's own
+    // comment for the exact fallback conditions). Diagnostic only, not
+    // hashed.
+    bool normal_fallback = false;
+};
+
 struct WheelSubstepOutput {
-    Vec3 suspension_force_world = Vec3::zero();
-    Vec3 attachment_point_world = Vec3::zero(); // where suspension_force_world acts
-    Vec3 tyre_force_world = Vec3::zero();       // Fx (incl. rolling resistance) + Fy, ground plane
-    Vec3 contact_point_world = Vec3::zero();    // where tyre_force_world (and Mz/Mx below) act
-    Vec3 extra_torque_world = Vec3::zero();     // Mz + Mx as a pure couple (no torque-arm needed)
+    // R = N*n + (Fx+F_roll)*t_x + Fy*t_y (decision D-B): ONE force vector
+    // per wheel, replacing the old separate suspension_force_world (along
+    // the chassis-fixed suspension axis) + tyre_force_world (along chassis-
+    // fixed forward/lateral axes) - both used to ignore the ground normal
+    // entirely (PHYS-033 I1b defect 2).
+    Vec3 contact_force_world = Vec3::zero();
+    Vec3 contact_point_world = Vec3::zero(); // where contact_force_world (and extra_torque_world below) act
+    Vec3 extra_torque_world = Vec3::zero();  // Mz*n + Mx*t_x, a pure couple (no torque-arm needed)
 };
 
 class WheelInstance {
@@ -77,6 +101,12 @@ public:
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
+    // White-box test access (tests/unit/test_wheel_contact_frame.cpp, core/src
+    // on its include path per tests/unit/CMakeLists.txt) - see ContactFrame's
+    // own comment for why this is not part of fold_state_hash.
+    [[nodiscard]] const ContactFrame& contact_frame() const { return contact_frame_; }
+    [[nodiscard]] bool hit_ground() const { return hit_ground_; }
+
 private:
     WheelDesc desc_;
     std::unique_ptr<ITyreModel> tyre_;
@@ -84,7 +114,7 @@ private:
     real x_ = 0.0;
     real x_prev_ = 0.0;
     bool hit_ground_ = false;
-    Vec3 contact_point_world_ = Vec3::zero();
+    ContactFrame contact_frame_;
     SurfaceId contact_surface_ = kInvalidSurfaceId;
 
     real omega_ = 0.0;

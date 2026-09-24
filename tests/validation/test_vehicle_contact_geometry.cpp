@@ -51,6 +51,10 @@ real chassis_pitch(const Pose& pose) {
 
 // --- Case 1: (2)'s pin - a pitched-at-rest chassis must not self-propel ---
 //
+// [!mayfail] REMOVED at commit C6 (defect 2's force-decomposition fix):
+// measured horizontal_drift dropped from 5.92 m (before any fix, 5 s
+// window) to 0.000122 m (after C6) - comfortably inside the 0.01 m gate.
+//
 // The rear wheels' attachment_local.z is moved from -0.343 to -0.443 (0.1 m
 // lower than the front), which by itself (pure suspension geometry, before
 // any dynamic settling) tilts the chassis nose-down by
@@ -66,7 +70,7 @@ real chassis_pitch(const Pose& pose) {
 // horizontal drift by itself (it only changes the LEVER for torques, not
 // the direction of the linear force sum), so this case is expected to pass
 // at C6 already and stay passing through C7.
-TEST_CASE("A car whose chassis sits pitched at rest does not self-propel", "[validation][vehicle][long][!mayfail]") {
+TEST_CASE("A car whose chassis sits pitched at rest does not self-propel", "[validation][vehicle][long]") {
     vehicle::VehicleDesc desc =
         io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
     for (auto& w : desc.wheels) {
