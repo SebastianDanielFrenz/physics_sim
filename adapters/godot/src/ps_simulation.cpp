@@ -684,6 +684,36 @@ Dictionary PsSimulation::get_vehicle_powertrain(const String& vehicle_name) cons
     return d;
 }
 
+Dictionary PsSimulation::get_vehicle_gauge_info(const String& vehicle_name) const {
+    Dictionary d;
+    const auto it = vehicle_desc_by_name_.find(to_std_string(vehicle_name));
+    if (it == vehicle_desc_by_name_.end()) return d;
+
+    // ComponentParams (ps/drivetrain/powertrain_desc.h) is a closed variant
+    // visited exhaustively elsewhere in core; here we only need the first
+    // engine/gearbox component present - PHYS-033 I3's vehicle files each
+    // carry exactly one of each (see data/vehicles/*.json's own
+    // "powertrain.components").
+    ps::real idle_rpm = 0.0, limiter_rpm = 0.0;
+    std::int64_t gear_count = 0;
+    for (const ps::drivetrain::ComponentDesc& c : it->second.powertrain.components) {
+        if (const auto* engine = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params)) {
+            idle_rpm = engine->idle_rpm;
+            limiter_rpm = engine->limiter.rpm;
+        } else if (const auto* gearbox = std::get_if<ps::drivetrain::GearboxDesc>(&c.params)) {
+            gear_count = static_cast<std::int64_t>(gearbox->forward_ratios.size());
+        }
+    }
+
+    d["idle_rpm"] = static_cast<float>(idle_rpm);
+    d["limiter_rpm"] = static_cast<float>(limiter_rpm);
+    d["gear_count"] = gear_count;
+    // Data-driven and empty today on purpose - see this method's header
+    // comment (ps_simulation.h) for why.
+    d["fitted_assists"] = godot::PackedStringArray();
+    return d;
+}
+
 const WheelDynamicSnapshot* PsSimulation::dynamic_wheel(const std::string& vehicle_name, int wheel_index) const {
     const std::size_t order_index = index_in_order(vehicle_order_, vehicle_name);
     if (order_index == static_cast<std::size_t>(-1)) return nullptr;
@@ -795,6 +825,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_max_wheel_angle", "vehicle_name"), &PsSimulation::get_vehicle_max_wheel_angle);
     ClassDB::bind_method(D_METHOD("get_vehicle_rear_steer_fraction", "vehicle_name"), &PsSimulation::get_vehicle_rear_steer_fraction);
     ClassDB::bind_method(D_METHOD("get_vehicle_powertrain", "vehicle_name"), &PsSimulation::get_vehicle_powertrain);
+    ClassDB::bind_method(D_METHOD("get_vehicle_gauge_info", "vehicle_name"), &PsSimulation::get_vehicle_gauge_info);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_wheel_omega", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_omega);

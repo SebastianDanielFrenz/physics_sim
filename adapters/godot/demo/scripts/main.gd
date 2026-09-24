@@ -262,6 +262,7 @@ func _ready() -> void:
 	_setup_debug_draw()
 	_setup_input_map()
 	_setup_hud()
+	_setup_tach_gauge()
 
 func _setup_lighting() -> void:
 	# M1 visual pass fix: the demo previously had a DirectionalLight3D but
@@ -528,6 +529,20 @@ func _setup_hud() -> void:
 	hud.set("input_map_path", NodePath("../InputMap"))
 	hud.set("vehicle_name", VEHICLE_NAME)
 	add_child(hud)
+
+func _setup_tach_gauge() -> void:
+	# PLAN.md P4 "Driver HUD" (owner hand sketch, 2026-09-24): the round
+	# tachometer/gear/assist-lamps/speed gauge - a Control drawn on the same
+	# HUD CanvasLayer as hud.gd's text readout (_setup_hud above), on top of
+	# it (added after, so it draws last / on top). Same NodePath-export
+	# wiring pattern as hud.gd/PsInputMap.
+	var gauge := Control.new()
+	gauge.name = "TachGauge"
+	gauge.set_script(load("res://scripts/tach_gauge.gd"))
+	gauge.set("simulation_path", simulation.get_path())
+	gauge.set("input_map_path", NodePath("../../InputMap")) # gauge's parent is the HUD CanvasLayer, whose own parent is Main (where InputMap lives) - one level deeper than hud.gd's own "../InputMap"
+	gauge.set("vehicle_name", VEHICLE_NAME)
+	hud.add_child(gauge)
 
 func _process(delta: float) -> void:
 	if simulation != null and ground_grid != null:

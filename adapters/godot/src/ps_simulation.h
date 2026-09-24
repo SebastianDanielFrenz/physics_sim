@@ -274,6 +274,23 @@ public:
     // assist_auto_shift, from the race-free per-tick snapshot (same path as
     // the wheel getters below) - empty Dictionary for an unknown vehicle.
     [[nodiscard]] godot::Dictionary get_vehicle_powertrain(const godot::String& vehicle_name) const;
+    // Driver HUD tachometer gauge (PLAN.md P4 "Driver HUD"): static, per-
+    // vehicle scale data the gauge needs but get_vehicle_powertrain's
+    // per-tick PowertrainSnapshot does not carry - idle_rpm/limiter_rpm read
+    // off the vehicle's own TorqueMapEngineDesc (whichever "engine" component
+    // its powertrain graph has, PHYS-033 I3's ComponentParams variant),
+    // gear_count off its GearboxDesc::forward_ratios (the "gearbox"
+    // component) - so the same gauge script draws car_sedan.json's 6-speed/
+    // 6800 rpm limiter and tractor.json's 12-speed/2400 rpm governor from one
+    // formula, never a per-car constant. fitted_assists is a PackedStringArray,
+    // empty until a future increment adds a driver-assist system with its own
+    // fitted flag (ABS/TC/ESP/LC/HILL do not exist in core yet) - present now
+    // so hud/tach_gauge code has one stable place to read it from later
+    // without another adapter change. Sourced entirely from the cached
+    // VehicleDesc (vehicle_desc_by_name_, already read by
+    // get_vehicle_max_wheel_angle et al. above) - no core change. Empty
+    // Dictionary for an unknown vehicle.
+    [[nodiscard]] godot::Dictionary get_vehicle_gauge_info(const godot::String& vehicle_name) const;
 
     [[nodiscard]] godot::PackedStringArray get_vehicle_names() const;
     [[nodiscard]] godot::String get_vehicle_chassis_body_name(const godot::String& vehicle_name) const;

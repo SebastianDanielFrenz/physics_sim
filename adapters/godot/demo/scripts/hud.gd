@@ -1,9 +1,12 @@
 extends CanvasLayer
-# adapters/godot/demo/scripts/hud.gd — on-screen readout (PLAN.md P2: "an
-# on-screen readout (tick rate, sim time, controls)"; PLAN.md M1 step 5:
-# "speed (km/h), throttle/brake/steer bars, per-wheel load and slip if
+# adapters/godot/demo/scripts/hud.gd — on-screen debug/diagnostic readout
+# (PLAN.md P2: "an on-screen readout (tick rate, sim time, controls)";
+# PLAN.md M1 step 5: "throttle/brake/steer bars, per-wheel load and slip if
 # available, sim tick rate, render fps, adapter main-thread time per frame,
 # resident terrain tiles, and the surface under each wheel if available").
+# PLAN.md P4 "Driver HUD": speed/gear/rpm/assist-lamp status moved to the
+# round gauge (tach_gauge.gd) once that landed - this text HUD keeps the
+# debug/diagnostic lines and the controls help line only.
 #
 # Reads this frame's adapter main-thread time via
 # PsSimulation.consume_adapter_frame_time_us() - see frame_timing.h's
@@ -96,54 +99,14 @@ func _process(_delta: float) -> void:
 	lines.append("")
 
 	if vehicle_name != "" and _simulation.get_vehicle_names().has(vehicle_name):
-		var chassis_body: String = _simulation.get_vehicle_chassis_body_name(vehicle_name)
-		var speed_mps: float = _simulation.get_body_speed_mps(chassis_body)
-		lines.append("speed: %6.1f km/h" % (speed_mps * 3.6))
-
-		# PHYS-033 P4 I3 (C8) section 12.3: gear/rpm/clutch/assist readout.
-		var pt: Dictionary = _simulation.get_vehicle_powertrain(vehicle_name)
-		if pt.size() > 0:
-			var gear: int = int(pt.get("gear", 0))
-			var gear_target: int = int(pt.get("gear_target", gear))
-			var shift_phase: String = String(pt.get("shift_phase", "idle"))
-			var rpm: float = pt.get("rpm", 0.0)
-			# HUD scale only (no dedicated limiter-rpm getter) - loose visual
-			# bound wide enough for every I3 engine curve (data/engines/*.json).
-			var rpm_bar_max := 7000.0
-			var engine_state: String = String(pt.get("engine_state", "off"))
-			var gear_str: String = str(gear)
-			if gear_target != gear:
-				gear_str = "%d (->%d %s)" % [gear, gear_target, shift_phase]
-			var limiter_suffix: String = "   LIMITER" if bool(pt.get("limiter", false)) else ""
-			lines.append("gear  %-16s rpm %5.0f %s %d   engine %s%s" % [
-				gear_str, rpm, _bar(rpm / rpm_bar_max), int(rpm_bar_max), engine_state.to_upper(), limiter_suffix])
-
-			var clutch_engagement: float = pt.get("clutch_engagement", 0.0)
-			var assist_bits := PackedStringArray()
-			if bool(pt.get("assist_auto_clutch", false)):
-				assist_bits.append("AUTO-CLUTCH")
-			if bool(pt.get("assist_auto_blip", false)):
-				assist_bits.append("AUTO-BLIP")
-			var assist_str: String = "  ".join(assist_bits)
-			if not bool(pt.get("assist_auto_shift", false)):
-				assist_str += "  (auto-shift off)"
-			else:
-				assist_str += "  AUTO-SHIFT"
-			lines.append("clutch %4.2f %s   assists: %s" % [clutch_engagement, _bar(clutch_engagement), assist_str])
-
-			if bool(pt.get("grind_active", false)):
-				lines.append("GRIND!")
-			if engine_state == "stalled" and _simulation.get_control("ignition") > 0.5:
-				lines.append("STALLED - hold Start (Menu) / K to crank")
-			if engine_state == "off":
-				lines.append("IGNITION OFF - D-pad Up / I")
-
+		# Gear/rpm/speed/assist-lamp status now lives in the driver HUD gauge
+		# (tach_gauge.gd, PLAN.md P4 "Driver HUD") - this text HUD keeps only
+		# the raw driver-input diagnostics and the per-wheel table below.
 		if _input_map != null:
 			lines.append("steer     %+.2f %s" % [_input_map.get_steer(), _bar((_input_map.get_steer() + 1.0) * 0.5)])
 			lines.append("throttle  %5.2f %s" % [_input_map.get_throttle(), _bar(_input_map.get_throttle())])
 			lines.append("brake     %5.2f %s" % [_input_map.get_brake(), _bar(_input_map.get_brake())])
 			lines.append("handbrake %5.2f  clutch %5.2f" % [_input_map.get_handbrake(), _input_map.get_clutch()])
-			lines.append("Rumble: %s (H)" % ("on" if _input_map.get_rumble_enabled() else "off"))
 		lines.append("")
 		var wheel_count: int = _simulation.get_vehicle_wheel_count(vehicle_name)
 		lines.append("wheel  load(N)  slip_ratio  slip_angle(deg)  surface")
