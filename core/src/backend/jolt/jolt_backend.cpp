@@ -768,6 +768,33 @@ public:
         return inv_inertia.inverse();
     }
 
+    // PHYS-033 I1 W1: reuses get_mass/get_inertia_world's TryGetBody
+    // null-safety pattern. Unlike get_inertia_world (which returns the
+    // backend's own -inverted- convention for callers that want the
+    // inertia itself), this returns the RAW inverse Jolt's own integrator
+    // uses directly, at the CURRENT rotation - the I1 plan's own condition 1
+    // notes Jolt applies the whole tick's accumulated torque with the
+    // rotation at STEP START, so a caller that wants bit-for-bit agreement
+    // must read this once per tick, before backend_step runs, not re-read
+    // it mid-tick.
+    BodyIntegrationParams get_integration_params(BodyId id) const override {
+        BodyIntegrationParams out;
+        const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
+        if (!body || body->IsStatic()) return out;
+        const JPH::MotionProperties* mp = body->GetMotionProperties();
+        out.inv_mass = real(mp->GetInverseMassUnchecked());
+        const JPH::Mat44 inv_i = body->GetInverseInertia();
+        const Vec3 c0 = from_vec3f(inv_i.GetColumn3(0));
+        const Vec3 c1 = from_vec3f(inv_i.GetColumn3(1));
+        const Vec3 c2 = from_vec3f(inv_i.GetColumn3(2));
+        out.inv_inertia_world = Mat3{Vec3{c0.x, c1.x, c2.x}, Vec3{c0.y, c1.y, c2.y}, Vec3{c0.z, c1.z, c2.z}};
+        out.gravity_factor = real(mp->GetGravityFactor());
+        out.linear_damping = real(mp->GetLinearDamping());
+        out.angular_damping = real(mp->GetAngularDamping());
+        out.gyroscopic = body->GetApplyGyroscopicForce();
+        return out;
+    }
+
     void apply_wrench(BodyId id, const Wrench& wrench_at_com) override {
         body_interface().AddForceAndTorque(lookup(id), to_vec3f(wrench_at_com.force), to_vec3f(wrench_at_com.torque), JPH::EActivation::Activate);
     }

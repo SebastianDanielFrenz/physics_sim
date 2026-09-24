@@ -150,6 +150,17 @@ struct XyBounds {
     real max_y = 0.0;
 };
 
+// See IRigidBackend::get_integration_params below. Zero inverse mass for a
+// static/missing body.
+struct BodyIntegrationParams {
+    real inv_mass = 0.0;
+    Mat3 inv_inertia_world = Mat3::zero(); // at the body's CURRENT rotation (Jolt uses the rotation at step START)
+    real gravity_factor = 1.0;
+    real linear_damping = 0.0;
+    real angular_damping = 0.0;
+    bool gyroscopic = false;
+};
+
 class IRigidBackend {
 public:
     virtual ~IRigidBackend() = default;
@@ -216,6 +227,15 @@ public:
     // World's sequential, fixed-order gather stage (PLAN.md D8) - never
     // concurrently for the same body.
     virtual void apply_wrench(BodyId id, const Wrench& wrench_at_com) = 0;
+
+    // Exactly what the backend's own velocity integrator will apply to this
+    // body in the NEXT step() (PHYS-033 I1 W1: VehicleInstance's shadow
+    // chassis reproduces Jolt's own tick-start-inertia, no-gyroscopic-term,
+    // gravity-factor/damping-aware velocity update - see the I1 plan
+    // section 2's numbered conditions and jolt_backend.cpp's implementation
+    // for the exact fields each one maps to). Read-only, no side effects -
+    // safe to call from the vehicle job like get_mass/get_inertia_world.
+    [[nodiscard]] virtual BodyIntegrationParams get_integration_params(BodyId id) const = 0;
 
     // Advances the backend by exactly dt (PLAN.md D3: fixed-rate stepping;
     // no wall clock is read here or anywhere in the backend).
