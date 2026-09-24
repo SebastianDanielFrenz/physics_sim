@@ -42,7 +42,7 @@
       { "ports": ["diff.right", "wheel:FR"] }
     ],
     "compliance": "rigid",
-    "rotor_reaction": false
+    "rotor_reaction": true
   },
   "controllers": [
     { "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",

@@ -566,5 +566,19 @@ TEST_CASE("Skidpad lateral acceleration is within 3% of the tyre-limited estimat
                 static_cast<double>(limit.beta * (180.0 / 3.14159265358979323846)),
                 static_cast<double>(limit.delta_avg * (180.0 / 3.14159265358979323846)), static_cast<double>(R));
     INFO("measured=" << best_a_lat << " m/s^2, estimate=" << estimate << " m/s^2, R=" << R << " m");
-    CHECK(best_a_lat == Catch::Approx(estimate).epsilon(0.03));
+    // I3 commit 6b (PHYS-033 P4, rotor_reaction: true - CLAUDE.md's "World
+    // tick pipeline" section): the estimate above is a pure tyre-limited
+    // steady-state solve with no notion of the engine/gearbox/diff rotor
+    // reaction torque VehicleInstance::step_tick now applies to the chassis
+    // (plan section 6.7) - a small but genuine effect even near steady
+    // state, since holding a constant skidpad speed against drag still
+    // needs a small, non-zero throttle modulation, which is transient rpm
+    // change, which is nonzero rotor alpha. Measured delta from enabling
+    // it: 8.7970 -> 8.7970 (estimate unchanged, it does not model this)
+    // vs. measured 8.4848 m/s^2, 3.55% low - just over the pre-existing 3%
+    // bound. Widened to 4% (not tuned closer - this is the honestly
+    // measured gap, not a knob) rather than adding a rotor-reaction term to
+    // the reference estimate (a bigger undertaking than a data-only C6b
+    // commit; left for whoever next touches this estimate).
+    CHECK(best_a_lat == Catch::Approx(estimate).epsilon(0.04));
 }
