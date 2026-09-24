@@ -8,16 +8,17 @@
 namespace ps::vehicle {
 namespace {
 
-Pose extrapolate_pose(const Pose& p0, const Motion& m0, real t) {
-    Pose out;
-    out.position = p0.position + m0.linear * t;
-    const real w = m0.angular.length();
-    if (w > real(1e-9)) {
-        out.orientation = (Quat::from_axis_angle(m0.angular / w, w * t) * p0.orientation).normalized();
-    } else {
-        out.orientation = p0.orientation;
+// PHYS-033 I1 W1 (section 3.2): advances an orientation by one substep's
+// angular velocity, exactly Jolt's own AddRotationStep form (and this
+// file's old extrapolate_pose's rotation half) - used here with the NEW
+// (post-update) angular velocity, matching Jolt's own symplectic order
+// (F8: position/orientation integrated AFTER the velocity solve).
+Quat integrate_orientation(const Quat& q, const Vec3& w, real h) {
+    const real wlen = w.length();
+    if (wlen > real(1e-9)) {
+        return (Quat::from_axis_angle(w / wlen, wlen * h) * q).normalized();
     }
-    return out;
+    return q;
 }
 
 } // namespace
@@ -108,7 +109,8 @@ real VehicleInstance::ackermann_wheel_angle(std::size_t wheel_index, real delta_
     return (real(1.0) - f) * delta_avg + f * delta_ackermann;
 }
 
-void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, real tick_dt, real substep_rate_hz) {
+void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
+                                 real tick_dt, real substep_rate_hz) {
     // PLAN.md P4 I0: built locally (stack, no allocation) from this
     // vehicle's own pre-resolved indices - see ControlChannelIndices.
     ControlInputs controls;
@@ -119,6 +121,30 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     const Pose pose0 = backend.get_pose(chassis_);
     const Motion motion0 = backend.get_motion(chassis_);
+    // PHYS-033 I1 W1: read ONCE per tick, at the tick-start rotation - Jolt
+    // itself applies the whole tick's accumulated torque with the inverse
+    // inertia at the rotation at STEP START (I1 plan section 2, condition
+    // 1), so re-reading this mid-tick (e.g. at each substep's own rotated
+    // pose) would silently break the exact-agreement claim below.
+    const BodyIntegrationParams ip = backend.get_integration_params(chassis_);
+
+    // Diagnostic only (section 3.5): how far did Jolt's actual chassis
+    // velocity end up from the shadow's prediction made at the end of last
+    // tick? Zero on the very first tick (no prior prediction exists yet).
+    if (shadow_valid_) {
+        shadow_dv_error_ = (motion0.linear - shadow_end_pred_.linear).length();
+        shadow_dw_error_ = (motion0.angular - shadow_end_pred_.angular).length();
+    }
+
+    // External acceleration estimate, held CONSTANT over this whole tick's
+    // substeps (F12: World::stage_gather runs after this vehicle's stage,
+    // so this is always last tick's gathered force-element wrench - the
+    // same one-tick lag today's real apply_wrench-based external forces
+    // already have).
+    const Wrench ext = ext_wrench_accum_;
+    ext_wrench_accum_ = Wrench{};
+    const Vec3 a_ext = env.gravity * ip.gravity_factor + ext.force * ip.inv_mass;
+    const Vec3 alpha_ext = ip.inv_inertia_world * ext.torque;
 
     // Steer target, rate-limited (SteeringDesc::steer_rate_limit == 0 means
     // unlimited) - computed once per tick, held across this tick's
@@ -166,24 +192,35 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     Vec3 force_sum = Vec3::zero();
     Vec3 torque_sum = Vec3::zero();
 
+    // PHYS-033 I1 W1 (section 3.3): the shadow chassis. pose_s/twist_s is
+    // this vehicle's OWN local estimate of the chassis pose/twist at the
+    // START of substep s - seeded from this tick's real start state and
+    // never read back from the backend mid-tick. Ordering within a substep
+    // is load-bearing (I1 plan section 2, claim B): wheels see twist_s
+    // (their alpha/kappa relaxation updates using it inside
+    // WheelInstance::step), and only AFTER their forces are assembled does
+    // the twist advance - do not reorder pass 1/pass 2, and do not update
+    // twist per wheel.
+    Pose pose_s = pose0;
+    Motion twist_s = motion0;
     for (std::size_t s = 0; s < num_substeps; ++s) {
-        const real t = static_cast<real>(s) * substep_dt;
-        const Pose chassis_pose = extrapolate_pose(pose0, motion0, t);
-        const Vec3 com = chassis_pose.position;
+        const Vec3 com = pose_s.position;
 
         // Pass 1: every wheel's ground contact, before pass 2 (ARB needs
         // the partner's fresh measurement - wheel_instance.h's comment).
         for (std::size_t i = 0; i < wheels_.size(); ++i) {
             const real delta = ackermann_wheel_angle(i, delta_avg);
-            wheels_[i]->measure_contact(chassis_pose, delta, backend);
+            wheels_[i]->measure_contact(pose_s, delta, backend);
         }
 
+        Vec3 force_s = Vec3::zero();
+        Vec3 torque_s = Vec3::zero();
         for (std::size_t i = 0; i < wheels_.size(); ++i) {
             const WheelDesc& w = desc_.wheels[i];
             const real delta = ackermann_wheel_angle(i, delta_avg);
             WheelSubstepInput in;
-            in.chassis_pose = chassis_pose;
-            in.chassis_motion = motion0;
+            in.chassis_pose = pose_s;
+            in.chassis_motion = twist_s;
             in.chassis_com_world = com;
             in.steer_angle = delta;
             in.brake_torque_cmd = brake_torque_scratch_[i];
@@ -193,12 +230,35 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             in.surfaces = surfaces_;
 
             const WheelSubstepOutput out = wheels_[i]->step(in);
-            force_sum += out.suspension_force_world + out.tyre_force_world;
-            torque_sum += cross(out.attachment_point_world - com, out.suspension_force_world);
-            torque_sum += cross(out.contact_point_world - com, out.tyre_force_world);
-            torque_sum += out.extra_torque_world;
+            force_s += out.suspension_force_world + out.tyre_force_world;
+            torque_s += cross(out.attachment_point_world - com, out.suspension_force_world);
+            torque_s += cross(out.contact_point_world - com, out.tyre_force_world);
+            torque_s += out.extra_torque_world;
         }
+        force_sum += force_s;
+        torque_sum += torque_s;
+
+        // Shadow update (I1 plan section 3.3, step 8): velocity FIRST, from
+        // THIS substep's own wrench, then pose with the NEW velocity - the
+        // same symplectic order Jolt itself uses (F8). Tick-start inv_mass/
+        // inv_inertia_world/gravity_factor throughout (ip, read once above);
+        // no gyroscopic term (I1 plan section 2, claim A item 2 - Jolt
+        // applies none by default and this backend never enables it).
+        twist_s.linear += substep_dt * (force_s * ip.inv_mass + a_ext);
+        twist_s.angular += substep_dt * (ip.inv_inertia_world * torque_s + alpha_ext);
+        pose_s.position += twist_s.linear * substep_dt;
+        pose_s.orientation = integrate_orientation(pose_s.orientation, twist_s.angular, substep_dt);
     }
+
+    // Predict what Jolt will report as this chassis's velocity next tick
+    // (diagnostic only, section 3.5) - includes Jolt's own end-of-step
+    // damping factor (F6: applied ONCE, after the force update), which the
+    // shadow otherwise ignores intra-tick (I1 plan section 2, claim A item
+    // 4: an O(c*dt) error, negligible for any damping coefficient this
+    // project's data uses).
+    shadow_end_pred_.linear = twist_s.linear * std::max(real(0.0), real(1.0) - ip.linear_damping * tick_dt);
+    shadow_end_pred_.angular = twist_s.angular * std::max(real(0.0), real(1.0) - ip.angular_damping * tick_dt);
+    shadow_valid_ = true;
 
     const real n = static_cast<real>(num_substeps);
     backend.apply_wrench(chassis_, Wrench{force_sum / n, torque_sum / n});

@@ -35,13 +35,26 @@ public:
     // flat control_channel_values_ array; each VehicleInstance reads it at
     // its own pre-resolved indices (ControlChannelIndices, set at create())
     // - no string lookup and no per-vehicle vector to build happens here.
+    // PHYS-033 I1 W1: `env` (gravity) is forwarded to every instance's
+    // shadow chassis unchanged.
     void step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const std::vector<real>& channel_values,
-                  real tick_dt, real substep_rate_hz);
+                  const VehicleTickEnv& env, real tick_dt, real substep_rate_hz);
 
     [[nodiscard]] bool empty() const { return instances_.empty(); }
     [[nodiscard]] std::size_t count() const { return instances_.size(); }
     [[nodiscard]] VehicleInstance& at(VehicleId id) { return *instances_[id.index]; }
     [[nodiscard]] const VehicleInstance& at(VehicleId id) const { return *instances_[id.index]; }
+
+    // PHYS-033 I1 W1 (section 3.4): called from World::stage_gather (the
+    // `else` branch, i.e. a force element attached to a plain body frame,
+    // not an articulation link), sequential in fixed element order - never
+    // concurrently for the same body, so no lock is needed here. Looks
+    // `body` up in vehicle_for_body_index_ (built in create(), grown to
+    // body.index + 1) and forwards to that vehicle's
+    // VehicleInstance::add_external_wrench if it is in fact this vehicle's
+    // own chassis (generation-checked) - a no-op for any body that is not a
+    // vehicle chassis.
+    void note_body_wrench(BodyId body, const Wrench& w);
 
     // PLAN.md D7: folds every wheel's compression/spin/relaxed-slip state
     // into World::state_hash(), same reasoning as
@@ -54,6 +67,11 @@ public:
 
 private:
     std::vector<std::unique_ptr<VehicleInstance>> instances_;
+    // PHYS-033 I1 W1: index == BodyId::index -> that vehicle's index into
+    // instances_, or -1 if that body is not a vehicle chassis. Built/grown
+    // only in create() (sim thread, setup time); note_body_wrench's lookup
+    // is then a plain array read, no allocation, no string/map lookup.
+    std::vector<std::int32_t> vehicle_for_body_index_;
 };
 
 } // namespace ps::vehicle

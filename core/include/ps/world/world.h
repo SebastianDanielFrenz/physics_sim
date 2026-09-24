@@ -174,6 +174,12 @@ public:
     // Same live-state-only caveat as wheel_telemetry above - a reader on
     // another thread wants WorldSnapshot::vehicles instead (snapshot.h).
     [[nodiscard]] vehicle::WheelState wheel_state(VehicleId id, std::size_t wheel_index) const;
+    // PHYS-033 I1 W1 (section 3.5): sim-thread-only live accessors, same
+    // contract as wheel_telemetry above - see VehicleInstance::
+    // shadow_dv_error's own comment for what these mean and their one-tick
+    // offset.
+    [[nodiscard]] real vehicle_shadow_dv_error(VehicleId id) const;
+    [[nodiscard]] real vehicle_shadow_dw_error(VehicleId id) const;
 
     // Registration order is the element's fixed evaluation/gather id
     // (PLAN.md D8: deterministic ordered gather). Ownership stays with the
@@ -287,6 +293,17 @@ private:
         std::size_t slip_ratio, slip_angle, fx, fy, fz, surface;
     };
     std::vector<std::vector<WheelTelemetryChannels>> wheel_telemetry_channels_; // outer index == VehicleId.index
+
+    // PHYS-033 I1 W1 (section 3.5): one row per vehicle, registered right
+    // after that vehicle's wheel channels in create_vehicle (same
+    // "CSV header complete before the first record_row" reasoning as
+    // WheelTelemetryChannels above). The value recorded in tick k is the
+    // error of the prediction MADE in tick k-1 (a one-tick offset, section
+    // 3.3's own comment) - 0 on a vehicle's first tick.
+    struct ChassisTelemetryChannels {
+        std::size_t shadow_dv_error, shadow_dw_error;
+    };
+    std::vector<ChassisTelemetryChannels> chassis_telemetry_channels_; // outer index == VehicleId.index
     std::vector<double> last_stage_ms_;
     std::vector<ContactEvent> last_contact_events_;
     // PHYS-009 Step 3: reused every tick by stage_snapshot() instead of

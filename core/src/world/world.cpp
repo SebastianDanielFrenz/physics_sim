@@ -159,7 +159,11 @@ void World::stage_vehicle_islands() {
     // through unchanged here, so this stage does no per-tick string lookup
     // and no allocation.
     if (!vehicle_system_->empty()) {
-        vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, dt_, config_.substep_rate_hz);
+        // PHYS-033 I1 W1: the shadow chassis needs gravity to build its own
+        // per-substep acceleration estimate (it never talks to World
+        // otherwise) - see vehicle::VehicleTickEnv.
+        const vehicle::VehicleTickEnv env{config_.gravity};
+        vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz);
     }
 }
 
@@ -180,6 +184,11 @@ void World::stage_gather() {
                 frame.articulation_link(), frame.world_pose(*backend_), force_element_wrenches_[i]);
         } else {
             backend_->apply_wrench(frame.body(), force_element_wrenches_[i]);
+            // PHYS-033 I1 W1 (section 3.4): a no-op for any body that is not
+            // a vehicle chassis (System::note_body_wrench's own array
+            // lookup). Sequential, fixed element order - same determinism
+            // guarantee as the apply_wrench call above.
+            vehicle_system_->note_body_wrench(frame.body(), force_element_wrenches_[i]);
         }
     }
 }
@@ -288,9 +297,10 @@ void World::step() {
 
     std::size_t wheel_channel_count = 0;
     for (const auto& channels : wheel_telemetry_channels_) wheel_channel_count += channels.size() * 6;
+    const std::size_t chassis_channel_count = chassis_telemetry_channels_.size() * 2; // PHYS-033 I1 W1
 
     std::vector<real> row;
-    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count);
+    row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count + chassis_channel_count);
     for (double ms : last_stage_ms_) row.push_back(real(ms));
     for (int w = 0; w < job_system_->worker_count(); ++w) {
         const double busy_ns = static_cast<double>(job_system_->worker_busy_ns(w));
@@ -313,6 +323,10 @@ void World::step() {
             row.push_back(t.fz);
             row.push_back(real(t.surface));
         }
+        // PHYS-033 I1 W1 (section 3.5): right after this vehicle's wheel
+        // values, matching the registration order in create_vehicle above.
+        row.push_back(vehicle_system_->at(vid).shadow_dv_error());
+        row.push_back(vehicle_system_->at(vid).shadow_dw_error());
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
@@ -412,6 +426,16 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         channels[w].fz = telemetry_->register_channel(prefix + "fz");
         channels[w].surface = telemetry_->register_channel(prefix + "surface");
     }
+
+    // PHYS-033 I1 W1 (section 3.5): right after this vehicle's wheel
+    // channels, so World::step's row-building loop below can push these two
+    // values immediately after that vehicle's wheel values and land on the
+    // matching columns purely by push order.
+    if (chassis_telemetry_channels_.size() <= id.index) chassis_telemetry_channels_.resize(id.index + 1);
+    const std::string chassis_prefix = "vehicle" + std::to_string(id.index) + ".chassis.";
+    chassis_telemetry_channels_[id.index].shadow_dv_error = telemetry_->register_channel(chassis_prefix + "shadow_dv_error");
+    chassis_telemetry_channels_[id.index].shadow_dw_error = telemetry_->register_channel(chassis_prefix + "shadow_dw_error");
+
     return id;
 }
 
@@ -429,6 +453,14 @@ const std::string& World::wheel_name(VehicleId id, std::size_t wheel_index) cons
 
 vehicle::WheelState World::wheel_state(VehicleId id, std::size_t wheel_index) const {
     return vehicle_system_->at(id).wheel_state(wheel_index);
+}
+
+real World::vehicle_shadow_dv_error(VehicleId id) const {
+    return vehicle_system_->at(id).shadow_dv_error();
+}
+
+real World::vehicle_shadow_dw_error(VehicleId id) const {
+    return vehicle_system_->at(id).shadow_dw_error();
 }
 
 void World::set_terrain_source(std::shared_ptr<const terrain::ITerrainSource> source, const terrain::TerrainConfig& config) {
