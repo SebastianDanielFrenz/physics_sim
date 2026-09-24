@@ -685,6 +685,18 @@ state directly. They run inside the deterministic core at a fixed, stated rate.
 This is also where the carried-over braking gap (the real ABS above) and the
 M1 launch wheelspin (traction control) get closed.
 
+Driver HUD (Sebastian, 2026-09-24, hand sketch): bottom right, a round
+tachometer (rpm x1000 around the arc, redline zone, needle) with the gear in a
+circle at its centre and the assist lamps around it (ABS, TC, ESP, LC = launch
+control, HILL = hill hold; later systems add lamps the same way), and a
+digital km/h readout beside it. A lamp shows three states: not fitted
+(hidden), fitted but off, and on/intervening (lit, flashing while it acts).
+One generic HUD, scaled per vehicle from its own data (idle, limiter and max
+rpm from the engine, the gearbox's gear list), not a hand-made HUD per car.
+The car stays centred in the chase view. A mini map is for later games, not
+this testbed. Rendering lives in the adapter; the values come from the
+engine-neutral PowertrainSnapshot and vehicle data.
+
 Accept: 0–100 km/h and top speed within 3 % of a
 point-mass calculation from the torque curve, gearing, drag; clutch lock-up
 without torque spikes > 5 % above steady value; open vs. locked diff on split-μ
