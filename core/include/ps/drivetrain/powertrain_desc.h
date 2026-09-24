@@ -88,6 +88,12 @@ struct ComponentDesc {
 
 enum class Compliance { Rigid }; // I4 adds Compliant
 
+// PHYS-033 I3 (plan section 4.1): the gear_request channel's "no request"
+// sentinel. Public because the adapter/scenario layer needs it too once
+// wired (commit 6+) - out of forward AND reverse gear range for any
+// gearbox this project ships (car: -1..6, tractor: -4..12).
+inline constexpr real kGearRequestNone = real(-100.0);
+
 struct PowertrainDesc {
     std::vector<ComponentDesc> components; // ARRAY order == evaluation order (PLAN.md D7)
     std::vector<ShaftDesc> shafts;

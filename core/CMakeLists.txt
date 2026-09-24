@@ -53,6 +53,7 @@ add_library(ps_core STATIC
   src/drivetrain/powertrain.cpp
   src/drivetrain/engine_torque_map.cpp
   src/drivetrain/gearbox.cpp
+  src/drivetrain/manual_tcu.cpp
 
   src/terrain/procedural_terrain_source.cpp
   src/terrain/procedural_terrain.cpp
