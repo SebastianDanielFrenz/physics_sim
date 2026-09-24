@@ -48,12 +48,16 @@ real sign(real x) { return x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0); }
 // gamma = h*sum_i(c_i*(1/M + (r_i x y_i)^T I^-1 (r_i x y_i))) < 1 at the
 // configured ratio lives in test_vehicle_shadow_chassis.cpp.
 //
-// low_speed_damping_ratio = 1.5 reproduces the old hard-coded kZetaMin
-// (I1 plan commit B: bit-for-bit, including every code-built desc such as
-// test_worker_count_hash's) - the expression below intentionally keeps the
-// OLD operation order (omega_n, then m_corner, then c) for that reason;
-// commit E ties the shipped default to a fresh measurement instead (see
-// CLAUDE.md).
+// commit B set low_speed_damping_ratio = 1.5 to reproduce the old
+// hard-coded kZetaMin bit-for-bit (the expression below intentionally keeps
+// that OLD operation order - omega_n, then m_corner, then c - for that
+// reason). Commit E re-measured against the W1 shadow chassis (the delay
+// kZetaMin was originally sized against no longer exists) and RETAINED 1.5
+// - see tyre_desc.h's own field comment and test_vehicle_standstill_
+// wiggle.cpp's "zeta sweep diagnostic" for why: two existing acceptance
+// tests (full-throttle standing start, parking slope) turned out to be
+// non-monotonic in this ratio over [0, 1.5], and 1.5 was the only value
+// tried that kept both green simultaneously.
 constexpr real kGravityRef = 9.81; // fixed modelling constant, not World::gravity - no World access from this file
 
 real low_speed_lateral_damping_force(const TyreDesc& t, real vx_contact, real vy_contact) {

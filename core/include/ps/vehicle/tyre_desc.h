@@ -110,6 +110,36 @@ struct TyreDesc {
     // wheel_instance.cpp's low_speed_lateral_damping_force for the explicit-
     // integration stability bound (PHYS-033 section 4.3) that caps a safe
     // ratio, and CLAUDE.md for how the shipped default was measured.
+    // 1.5 (PHYS-033 I1 commit E): RETAINED at the commit B value after a
+    // {0, 0.1, ..., 1.5} sweep (run after the I1 W1 shadow chassis removed
+    // the numerical delay this term originally compensated for) found no
+    // SMALLER value that keeps every existing acceptance test passing.
+    // Two existing tests turned out to depend on this ratio in the fade
+    // band (vx < low_speed_damping_vx), and both are non-monotonic/
+    // near-chaotic in it over [0, 1.5], not smoothly improving as the plan
+    // anticipated:
+    //   - the full-throttle asphalt standing-start test's peak longitudinal
+    //     slip (max|kappa|, existing bound < 0.3) sits around 0.70-0.80 for
+    //     most ratios in [0, 1.5] but drops to ~0.12 at isolated points
+    //     (1.0, 1.4, 1.5) - a threshold in the standing-start transient's
+    //     alpha/Gxa/kappa feedback loop (residual lateral slip discounts
+    //     the combined-slip Gxa weighting on Fx, which the closed-loop
+    //     wheel-spin dynamics answers with more kappa), not a smooth
+    //     function of the ratio.
+    //   - the parking-slope test's 30 s creep (existing bound < 1 mm) is
+    //     similarly non-monotonic (measured 0.4-2.6 mm across the same
+    //     sweep, passing at some ratios and failing at others with no
+    //     visible trend).
+    //   Of the ratios tried, only 1.5 (and, by luck, a couple of isolated
+    //   points like 1.0/1.4 for the first test alone) passed the first
+    //   test, and only 1.5 passed BOTH simultaneously. See
+    //   test_vehicle_standstill_wiggle.cpp's "zeta sweep diagnostic" for
+    //   the full table. Given two acceptance-tested scenarios are not
+    //   smooth in this parameter here, further trial-and-error narrowing is
+    //   not principled - the spec's own suggested next step (an eigenvalue/
+    //   linearised stability tool, PHYS-033 section 4.3's "ps_linearize")
+    //   would characterise this properly; not built in I1 (out of scope,
+    //   flagged to the coordinator).
     real low_speed_damping_ratio = 1.5; // dimensionless; 0 disables the term entirely
     real low_speed_damping_vx = 2.0;    // m/s; fade reaches 0 at this TOTAL contact speed
 };
