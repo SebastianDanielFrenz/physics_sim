@@ -817,6 +817,12 @@ public:
         body_interface().SetLinearAndAngularVelocity(lookup(id), to_vec3f(motion.linear), to_vec3f(motion.angular));
     }
 
+    // See i_rigid_backend.h's comment; applied in step() below.
+    void set_integrate_sub_threshold_rotation(BodyId id, bool enable) override {
+        assert(id.index < slots_.size() && slots_[id.index].alive && slots_[id.index].generation == id.generation && "stale or invalid BodyId");
+        slots_[id.index].integrate_sub_threshold_rotation = enable;
+    }
+
     // PLAN.md M1 tile streaming (see i_rigid_backend.h's doc comment for the
     // full contract). Mutates the existing HeightFieldShape's samples via
     // Jolt's own SetHeights/SetMaterials, both of which take a
@@ -906,6 +912,56 @@ public:
 
     void step(real dt) override {
         physics_system_.Update(static_cast<float>(dt), collision_steps_, temp_allocator_.get(), jolt_job_system_.get());
+        integrate_sub_threshold_rotation(dt);
+    }
+
+    // Parking-slope creep fix (defect D2, i_rigid_backend.h's own comment on
+    // set_integrate_sub_threshold_rotation). Reproduces exactly what Jolt's
+    // own Body::AddRotationStep (Jolt/Physics/Body/Body.inl) would have
+    // applied this Update, had it not silently dropped any sub-step whose
+    // |omega * dt_substep| <= 1.0e-6f rad: PhysicsSystem::Update calls
+    // AddRotationStep once per collision step, each time with
+    // GetAngularVelocity() * dt_substep (PhysicsSystem.cpp's own
+    // JobIntegrateVelocity, "body.AddRotationStep(body.GetAngularVelocity()
+    // * delta_time)"). Single-threaded, right after Update and before any
+    // query/job can observe an in-between state - see the header comment
+    // for why this must never run inside a job.
+    //
+    // Approximation: omega is read ONCE (its post-Update value) and treated
+    // as constant across all collision_steps_ sub-steps, so the total
+    // missed rotation is just that one sub-step's dropped angle times
+    // collision_steps_, about the same fixed axis - exact whenever omega
+    // does not change during the Update (the common case this fix targets:
+    // a body sitting at a small, steady angular velocity with no net
+    // torque), and a good approximation otherwise since only sub-threshold
+    // (near-zero) angular velocities are affected at all.
+    void integrate_sub_threshold_rotation(real dt) {
+        bool any = false;
+        for (const Slot& s : slots_) {
+            if (s.alive && s.integrate_sub_threshold_rotation) { any = true; break; }
+        }
+        if (!any) return;
+
+        const float dt_s = static_cast<float>(dt) / static_cast<float>(collision_steps_);
+        for (const Slot& s : slots_) {
+            if (!s.alive || !s.integrate_sub_threshold_rotation) continue;
+
+            const JPH::Vec3 omega = body_interface().GetAngularVelocity(s.jph_id);
+            const JPH::Vec3 av_dt_s = omega * dt_s; // exactly Jolt's own AddRotationStep argument, per sub-step
+            const float len = av_dt_s.Length();
+            if (!(len > 0.0f && len <= 1.0e-6f)) continue; // 0: no rotation to apply; > 1e-6f: Jolt already integrated it itself
+
+            const JPH::Quat delta = JPH::Quat::sRotation(av_dt_s / len, len * static_cast<float>(collision_steps_));
+            const JPH::Quat q_old = body_interface().GetRotation(s.jph_id);
+            const JPH::Quat q_new = (delta * q_old).Normalized();
+
+            const JPH::RVec3 com = body_interface().GetCenterOfMassPosition(s.jph_id);
+            const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(s.jph_id);
+            const JPH::Vec3 local_com = body != nullptr ? body->GetShape()->GetCenterOfMass() : JPH::Vec3::sZero();
+            const JPH::RVec3 new_origin = com - (q_new * local_com); // RVec3 - Vec3 is defined directly (Jolt Math/DVec3.h)
+
+            body_interface().SetPositionAndRotation(s.jph_id, new_origin, q_new, JPH::EActivation::DontActivate);
+        }
     }
 
     RayCastHit ray_cast(const Vec3& origin, const Vec3& direction, real max_distance) const override {
@@ -1035,6 +1091,12 @@ private:
         // walking the DecoratedShape chain on every call (PLAN.md D8 hot
         // tile-streaming path).
         JPH::HeightFieldShape* heightfield = nullptr;
+        // Parking-slope creep fix (defect D2, i_rigid_backend.h's own
+        // comment on set_integrate_sub_threshold_rotation): off by default,
+        // reset to off whenever a slot is (re)allocated (alloc_slot below
+        // always aggregate-inits a Slot, so a reused index never inherits
+        // the previous occupant's opt-in).
+        bool integrate_sub_threshold_rotation = false;
     };
     struct JointSlot {
         JPH::Ref<JPH::Constraint> constraint;

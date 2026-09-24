@@ -197,6 +197,32 @@ public:
     virtual void set_pose(BodyId id, const Pose& pose) = 0;
     virtual void set_motion(BodyId id, const Motion& motion) = 0;
 
+    // Parking-slope creep fix (defect D2): Jolt's own Body::AddRotationStep
+    // (Jolt/Physics/Body/Body.inl) silently DROPS any rotation step whose
+    // angular displacement this sub-step, |omega * dt_substep|, is <=
+    // 1.0e-6f rad - at a 240 Hz tick with the default 1 collision step per
+    // Update, that is any |omega| <~ 2.4e-4 rad/s. A body can then carry a
+    // small but real, steady angular velocity (as reported by
+    // get_motion/GetAngularVelocity) that never actually integrates into
+    // its orientation - a "rolling without rotating" mode nothing else in
+    // the pipeline resists (a vehicle's own shadow-chassis kinematics and
+    // tyre contact-velocity sampling DO use the real omega, so a small
+    // steady chassis pitch/roll rate can cancel a wheel's translational
+    // contact-patch velocity and make a parked car creep with no tyre force
+    // ever opposing it).
+    //
+    // Default OFF for every body (existing behaviour, and every existing
+    // resting-body scenario hash, is unchanged). A caller that opts a body
+    // in gets JoltRigidBackend::step() reapplying the exact rotation Jolt's
+    // own AddRotationStep would have applied absent the 1e-6f dead zone,
+    // computed with Jolt's own Quat::sRotation right after
+    // PhysicsSystem::Update and before any query - single-threaded, never
+    // from inside a job (moving a body from inside vehicle_islands_
+    // substep's parallel_for while another vehicle instance's job might
+    // shape-cast against it would risk worker-count nondeterminism).
+    // World::create_vehicle opts the chassis body in; nothing else does.
+    virtual void set_integrate_sub_threshold_rotation(BodyId id, bool enable) = 0;
+
     // True for a Static body (BodyDesc::motion at creation), false for
     // Kinematic/Dynamic and for an invalid/stale id. PLAN.md M1: lets a
     // caller distinguish "another STATIC body already covers this point"

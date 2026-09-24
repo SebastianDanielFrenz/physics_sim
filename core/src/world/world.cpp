@@ -425,6 +425,13 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     channel_indices.brake = ensure_control_channel_index(channel_prefix + "brake");
     channel_indices.handbrake = ensure_control_channel_index(channel_prefix + "handbrake");
 
+    // Parking-slope creep fix (defect D2): opt the chassis body in to
+    // IRigidBackend::set_integrate_sub_threshold_rotation - see that
+    // method's own comment (i_rigid_backend.h) and CLAUDE.md's "Jolt
+    // backend" section. Every other body (ground, terrain, non-vehicle
+    // bodies) stays opted out, unchanged from before this fix existed.
+    backend_->set_integrate_sub_threshold_rotation(chassis, true);
+
     const VehicleId id = vehicle_system_->create(desc, chassis, surface_table_.get(), channel_indices);
     // PLAN.md P3 scope item 7: register this vehicle's per-wheel telemetry
     // channels now (setup time, not a hot path) so the CSV header names

@@ -30,6 +30,7 @@ add_executable(ps_unit_tests
   test_wheel_contact_frame.cpp
   test_powertrain_network.cpp
   test_powertrain_friction_lcp.cpp
+  test_sub_threshold_rotation.cpp
 )
 
 target_link_libraries(ps_unit_tests
