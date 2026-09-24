@@ -454,7 +454,7 @@ function Invoke-WalltimePhase {
 # so it runs in fast CI too, whenever both sides were actually built this
 # invocation (skipped with a note otherwise, e.g. -SkipWindows/-SkipWsl).
 # ---------------------------------------------------------------------------
-$script:HashCheckScenarios = @('free_fall.json', 'pendulum.json', 'joint_chain.json', 'articulation_chain.json', 'multi_articulation.json', 'contact_articulation.json', 'terrain_tiles.json', 'terrain_multi_interest.json', 'vehicle_step_steer.json')
+$script:HashCheckScenarios = @('free_fall.json', 'pendulum.json', 'joint_chain.json', 'articulation_chain.json', 'multi_articulation.json', 'contact_articulation.json', 'terrain_tiles.json', 'terrain_multi_interest.json', 'vehicle_step_steer.json', 'vehicle_powertrain.json')
 
 function Get-PsRunStateHash {
     param([string]$PsRunPath, [string]$ScenarioPath, [string]$CsvOutPath, [switch]$Wsl)
@@ -636,7 +636,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/vehicle/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain') },
     @{ Re = '^core/(include/ps|src)/io/'; Kind = 'topics'; Topics = @('io'); AllScenarios = $true },
-    @{ Re = '^data/(vehicles|tyres)/'; Kind = 'topics'; Topics = @('vehicle') },
+    @{ Re = '^data/(vehicles|tyres|engines|gearboxes)/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^data/surfaces/'; Kind = 'topics'; Topics = @('vehicle', 'terrain', 'io') },
     @{ Re = '^data/tracks/'; Kind = 'topics'; Topics = @('terrain', 'io') },
     @{ Re = '^data/scenarios/'; Kind = 'scenario' },
@@ -656,7 +656,7 @@ $script:ScenarioTopics = @{
     'articulation_chain.json' = @('articulation'); 'multi_articulation.json' = @('articulation')
     'contact_articulation.json' = @('articulation', 'contact')
     'terrain_tiles.json' = @('terrain'); 'terrain_multi_interest.json' = @('terrain')
-    'vehicle_step_steer.json' = @('vehicle')
+    'vehicle_step_steer.json' = @('vehicle'); 'vehicle_powertrain.json' = @('vehicle')
 }
 # Scenario inputs that are not themselves hash-compare scenarios.
 $script:ScenarioInputTopics = @{ 'terrain_spec_small.json' = @('terrain') }

@@ -497,6 +497,91 @@ TEST_CASE("State hash with vehicles is identical across 1, 2, 4, 10 and 24 worke
     }
 }
 
+namespace {
+// PHYS-033 P4 I3 plan section 13.9: the same migrated-vehicle fixture
+// (make_test_vehicle_desc), but with assist.auto_shift = 1 (the TCU's own
+// RPM-threshold upshift path, not this test's own gear_request stepping)
+// and full throttle to force at least one auto-triggered shift, run long
+// enough that its own gearbox.synchro (make_test_vehicle_desc never sets
+// GearboxDesc::synchro, so forward_capacity_nm is empty - "0 = no synchro
+// (dog only)" per SynchroDesc's own field comment) cannot speed-match
+// within Gearbox::StepResult's grind_after_s window, so the shift GRINDS
+// (DrivelineSoundState::grind_events > 0) - the plan's own explicit ask,
+// exercising the LCP/topology-switch code path under a grind, which the
+// original vehicle case (gear_request stepping, no auto-shift, presumably
+// clean synchronisation) never touched. grind_events itself is sound-only
+// (not hashed, powertrain_state.h's own comment), so the CHECK below is a
+// scenario-sanity precondition (this fixture must actually grind, or it
+// tests nothing new), not part of the hash-equality gate itself.
+std::uint64_t run_vehicle_scenario_auto_shift_grind(int workers, int ticks, std::uint32_t* grind_events_out) {
+    WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    cfg.job_workers = workers;
+    World world(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{500, 500, 0.5}};
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 1.0;
+    ground.pose.position = Vec3{0, 0, -0.5};
+    world.create_body(ground);
+
+    const vehicle::VehicleDesc desc = make_test_vehicle_desc();
+    VehicleId vid0{};
+    for (int v = 0; v < 2; ++v) {
+        BodyDesc chassis;
+        chassis.shape = BoxShape{Vec3{1.6, 0.5, 0.15}};
+        chassis.motion = BodyMotionType::Dynamic;
+        chassis.mass = 1400.0;
+        chassis.friction = 0.5;
+        chassis.allow_sleep = false;
+        chassis.pose.position = Vec3{0.0, static_cast<real>(v) * 6.0, 0.5};
+        chassis.velocity.linear = Vec3{15.0, 0.0, 0.0}; // rolling start, matches run_vehicle_scenario above -
+                                                          // a dead-stop full-throttle launch produced extreme
+                                                          // wheelspin that crashed Jolt's own Quat::sRotation
+                                                          // axis-normalize assert, not this fixture's intent
+        const BodyId body = world.create_body(chassis);
+        const VehicleId vid = world.create_vehicle(desc, body);
+        if (v == 0) vid0 = vid;
+    }
+
+    world.set_control("gear_request", real(1.0));
+    world.set_control("v1.gear_request", real(1.0));
+    world.set_control("assist.auto_shift", real(1.0));
+    world.set_control("v1.assist.auto_shift", real(1.0));
+    world.set_control("throttle", real(1.0));
+    world.set_control("v1.throttle", real(1.0));
+    for (int t = 0; t < ticks; ++t) {
+        if (t == 1) {
+            // Hand off to the TCU's own auto-shift path (manual_tcu.cpp's
+            // arbitration: an in-range gear_request permanently overrides
+            // the counter/auto-shift path, same rule
+            // test_powertrain_energy_balance.cpp's own comment documents).
+            world.set_control("gear_request", real(drivetrain::kGearRequestNone));
+            world.set_control("v1.gear_request", real(drivetrain::kGearRequestNone));
+        }
+        world.step();
+    }
+    if (grind_events_out != nullptr) *grind_events_out = world.powertrain_state(vid0).driveline.grind_events;
+    return world.state_hash();
+}
+} // namespace
+
+TEST_CASE("State hash with an auto-shift-triggered gearbox grind is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][vehicle][heavy][world]") {
+    constexpr int kTicks = 200;
+    std::uint32_t grind_events_reference = 0;
+    const std::uint64_t reference = run_vehicle_scenario_auto_shift_grind(1, kTicks, &grind_events_reference);
+    INFO("reference grind_events=" << grind_events_reference);
+    CHECK(grind_events_reference > 0); // scenario-sanity precondition, see this fixture's own comment
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_vehicle_scenario_auto_shift_grind(workers, kTicks, nullptr);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
 // data/scenarios/terrain_multi_interest.json (vault PHYS-026): TWO terrain
 // interest points streaming at once, a static pad that triggers terrain
 // suppression, dynamic balls on the streamed terrain. The same file is in
