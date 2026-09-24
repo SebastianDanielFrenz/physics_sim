@@ -346,6 +346,48 @@ JPH::RefConst<JPH::Shape> make_shape(const ShapeDesc& desc) {
         desc);
 }
 
+// Builds a query-only shape WITHOUT heap allocation for the convex
+// primitives (PHYS-033 I1b D-C; Jolt's own VehicleCollisionTesterCastCylinder
+// pattern - see that file's Collide() implementation). SAME constructor
+// arguments as make_shape above, so the geometry is bit-identical to what
+// make_shape would have built (this is what keeps shape_cast/
+// collide_shape_into's own output byte-for-byte unchanged - the only thing
+// that changes is where the Shape object itself lives, not its content).
+// SetEmbedded() is mandatory: a stray JPH::Ref/RefConst taken on the stack
+// object inside `fn` must never call delete on it (JPH::RefTarget::
+// SetEmbedded, Core/Reference.h - AddRef/Release become no-ops).
+// Mesh/Heightfield fall back to make_shape (heap-allocates; these are never
+// used as a wheel/query cast shape on any hot path in this codebase, so the
+// allocation there is not a concern D-C is trying to remove).
+template <class Fn>
+decltype(auto) with_query_shape(const ShapeDesc& desc, Fn&& fn) {
+    return std::visit(
+        [&](auto&& s) -> decltype(auto) {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, BoxShape>) {
+                JPH::BoxShape sh(to_vec3f(s.half_extents));
+                sh.SetEmbedded();
+                return fn(static_cast<const JPH::Shape&>(sh));
+            } else if constexpr (std::is_same_v<T, SphereShape>) {
+                JPH::SphereShape sh(static_cast<float>(s.radius));
+                sh.SetEmbedded();
+                return fn(static_cast<const JPH::Shape&>(sh));
+            } else if constexpr (std::is_same_v<T, CapsuleShape>) {
+                JPH::CapsuleShape sh(static_cast<float>(s.half_height), static_cast<float>(s.radius));
+                sh.SetEmbedded();
+                return fn(static_cast<const JPH::Shape&>(sh));
+            } else if constexpr (std::is_same_v<T, CylinderShape>) {
+                JPH::CylinderShape sh(static_cast<float>(s.half_height), static_cast<float>(s.radius));
+                sh.SetEmbedded();
+                return fn(static_cast<const JPH::Shape&>(sh));
+            } else {
+                JPH::RefConst<JPH::Shape> ref = make_shape(desc);
+                return fn(*ref);
+            }
+        },
+        desc);
+}
+
 // Jolt's own BodyID is an internal slot index/generation we don't control
 // (and don't want to leak as ps::BodyId, whose slot scheme is ours - see
 // JoltRigidBackend::alloc_slot). Every body's Jolt user-data field instead
@@ -818,26 +860,27 @@ public:
     }
 
     ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const override {
-        JPH::RefConst<JPH::Shape> jph_shape = make_shape(shape);
-        JPH::RMat44 start = JPH::RMat44::sRotationTranslation(to_jph_quat(start_pose.orientation), to_rvec3(start_pose.position));
-        JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(jph_shape, JPH::Vec3::sReplicate(1.0f), start, to_vec3f(sweep_world.normalized() * max_distance));
-        JPH::ShapeCastSettings settings;
-        JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-        physics_system_.GetNarrowPhaseQuery().CastShape(cast, settings, to_rvec3(start_pose.position), collector);
-        ShapeCastHit out;
-        if (collector.HadHit()) {
-            const Vec3 start_w = from_rvec3(cast.mCenterOfMassStart.GetTranslation());
-            const Vec3 dir_w = from_vec3f(cast.mDirection);
-            out.hit = true;
-            out.fraction = real(collector.mHit.mFraction);
-            out.point = start_w + dir_w * out.fraction;
-            // "You can use -mPenetrationAxis.Normalized() as contact normal" (Jolt's own CollideShapeResult doc comment).
-            out.normal = from_vec3f(-collector.mHit.mPenetrationAxis.Normalized());
-            const JPH::Body* hit_body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(collector.mHit.mBodyID2);
-            out.body = hit_body ? unpack_body_id(hit_body->GetUserData()) : BodyId{};
-            if (hit_body) out.surface = surface_id_from_material(hit_body->GetShape()->GetMaterial(collector.mHit.mSubShapeID2));
-        }
-        return out;
+        return with_query_shape(shape, [&](const JPH::Shape& jsh) -> ShapeCastHit {
+            JPH::RMat44 start = JPH::RMat44::sRotationTranslation(to_jph_quat(start_pose.orientation), to_rvec3(start_pose.position));
+            JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(&jsh, JPH::Vec3::sReplicate(1.0f), start, to_vec3f(sweep_world.normalized() * max_distance));
+            JPH::ShapeCastSettings settings;
+            JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+            physics_system_.GetNarrowPhaseQuery().CastShape(cast, settings, to_rvec3(start_pose.position), collector);
+            ShapeCastHit out;
+            if (collector.HadHit()) {
+                const Vec3 start_w = from_rvec3(cast.mCenterOfMassStart.GetTranslation());
+                const Vec3 dir_w = from_vec3f(cast.mDirection);
+                out.hit = true;
+                out.fraction = real(collector.mHit.mFraction);
+                out.point = start_w + dir_w * out.fraction;
+                // "You can use -mPenetrationAxis.Normalized() as contact normal" (Jolt's own CollideShapeResult doc comment).
+                out.normal = from_vec3f(-collector.mHit.mPenetrationAxis.Normalized());
+                const JPH::Body* hit_body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(collector.mHit.mBodyID2);
+                out.body = hit_body ? unpack_body_id(hit_body->GetUserData()) : BodyId{};
+                if (hit_body) out.surface = surface_id_from_material(hit_body->GetShape()->GetMaterial(collector.mHit.mSubShapeID2));
+            }
+            return out;
+        });
     }
 
     void drain_contact_events_into(std::vector<ContactEvent>& out) override { contact_listener_.drain_into(out); }
@@ -850,34 +893,35 @@ public:
     // the physically correct thing to do, not just the closest one.
     void collide_shape_into(const ShapeDesc& shape, const Pose& pose, std::vector<ShapeContactHit>& out) const override {
         out.clear();
-        JPH::RefConst<JPH::Shape> jph_shape = make_shape(shape);
-        JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(to_jph_quat(pose.orientation), to_rvec3(pose.position));
-        JPH::CollideShapeSettings settings;
-        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
-        physics_system_.GetNarrowPhaseQuery().CollideShape(jph_shape, JPH::Vec3::sReplicate(1.0f), transform, settings,
-                                                             to_rvec3(pose.position), collector);
-        out.reserve(collector.mHits.size());
-        for (const auto& hit : collector.mHits) {
-            const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(hit.mBodyID2);
-            if (!body) continue;
-            ShapeContactHit sch;
-            sch.body = unpack_body_id(body->GetUserData());
-            // mContactPointOn2 is relative to inBaseOffset (passed as
-            // pose.position above) - Jolt's convention for keeping contact
-            // points precise far from the origin even though the query
-            // itself runs in float (Jolt/Physics/Collision/NarrowPhaseQuery.h).
-            sch.point = pose.position + from_vec3f(hit.mContactPointOn2);
-            // Same convention as shape_cast above ("You can use
-            // -mPenetrationAxis.Normalized() as contact normal", Jolt's own
-            // CollideShapeResult doc comment) - mPenetrationAxis points from
-            // shape 1 (the query shape, `pose`) to shape 2 (`body`), so its
-            // negation points away from body's surface toward the query
-            // shape, matching ShapeContactHit::normal's documented direction.
-            sch.normal = from_vec3f(-hit.mPenetrationAxis.Normalized());
-            sch.penetration = real(hit.mPenetrationDepth);
-            sch.surface = surface_id_from_material(body->GetShape()->GetMaterial(hit.mSubShapeID2));
-            out.push_back(sch);
-        }
+        with_query_shape(shape, [&](const JPH::Shape& jsh) -> void {
+            JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(to_jph_quat(pose.orientation), to_rvec3(pose.position));
+            JPH::CollideShapeSettings settings;
+            JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+            physics_system_.GetNarrowPhaseQuery().CollideShape(&jsh, JPH::Vec3::sReplicate(1.0f), transform, settings,
+                                                                 to_rvec3(pose.position), collector);
+            out.reserve(collector.mHits.size());
+            for (const auto& hit : collector.mHits) {
+                const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(hit.mBodyID2);
+                if (!body) continue;
+                ShapeContactHit sch;
+                sch.body = unpack_body_id(body->GetUserData());
+                // mContactPointOn2 is relative to inBaseOffset (passed as
+                // pose.position above) - Jolt's convention for keeping contact
+                // points precise far from the origin even though the query
+                // itself runs in float (Jolt/Physics/Collision/NarrowPhaseQuery.h).
+                sch.point = pose.position + from_vec3f(hit.mContactPointOn2);
+                // Same convention as shape_cast above ("You can use
+                // -mPenetrationAxis.Normalized() as contact normal", Jolt's own
+                // CollideShapeResult doc comment) - mPenetrationAxis points from
+                // shape 1 (the query shape, `pose`) to shape 2 (`body`), so its
+                // negation points away from body's surface toward the query
+                // shape, matching ShapeContactHit::normal's documented direction.
+                sch.normal = from_vec3f(-hit.mPenetrationAxis.Normalized());
+                sch.penetration = real(hit.mPenetrationDepth);
+                sch.surface = surface_id_from_material(body->GetShape()->GetMaterial(hit.mSubShapeID2));
+                out.push_back(sch);
+            }
+        });
     }
 
     std::uint64_t compute_state_hash(std::uint64_t seed) const override {
