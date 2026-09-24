@@ -31,7 +31,28 @@ enum class LcpSet : std::uint8_t { Lo, Free, Hi };
 
 struct LcpResult {
     int iterations = 0;
+    // true only if stage 3 (exhaustive active-set enumeration, the final
+    // fallback - see solve_box_lcp's own comment) ALSO fails to find a
+    // feasible partition. Mathematically this should be unreachable for an
+    // SPD W (build_regularized_problem's epsilon regularisation guarantees
+    // this): stage 3 enumerates every one of the 3^k possible partitions in
+    // a fixed order and returns the first feasible one, and for an SPD W
+    // the box-LCP solution is unique, so at least one partition must
+    // qualify. Reaching cap_hit==true is therefore a genuine "report, do
+    // not force" signal (PHYS-033 P4 I2 plan section 14 stop condition 1),
+    // not an expected/accepted outcome the way stage-1/stage-2 cap hits
+    // were before stage 3 existed.
     bool cap_hit = false;
+    // Which stage actually produced the returned lambda: 1 = block
+    // principal pivoting converged within its own 2k+2 cap; 2 = stage 1's
+    // cap was exceeded but Murty's least-index fallback converged within
+    // its own 2^k cap; 3 = stage 2's cap was ALSO exceeded and exhaustive
+    // enumeration (stage 3) had to run. Lets callers/telemetry
+    // (ps::drivetrain::ShaftNetwork::lcp_stage3_hits, surfaced as the
+    // World telemetry channel `powertrain.lcp_stage3` once the network is
+    // wired into World - PHYS-033 P4 I2 commit 5b) count stage-3 usage
+    // precisely instead of inferring it from `iterations` alone.
+    int stage_used = 1;
 };
 
 // Per-cluster (or per-test-case) scratch, sized to kMaxLcpK - a member of
@@ -72,11 +93,36 @@ void build_regularized_problem(const real* W, const real* q, const real* c, int 
 // v_i > +ws.tol_v.
 int evaluate_partition(const real* q, const real* c, int k, const LcpSet* sets, LcpWorkspace& ws, int* infeasible_out);
 
-// Finite capped block principal pivoting (section 5.5). `sets_inout` is
-// both the warm start (previous substep's sets; a new/reactivated row
-// should be passed in as Free) and, on return, the sets the solution
-// settled in. `lambda_out` receives the solution, always box-feasible
-// (clamped to [-c, c]) whether or not the pivot cap (2k+2) was hit.
+// Three-stage solve (section 5.5; stage 3 added per coordinator ruling on
+// PHYS-033 P4 I2 commit 2's cap-hit finding - the standard-LCP
+// reformulation of a BOX LCP is only P0, not P, so Murty's finite-
+// termination guarantee does not carry over to stage 2 either, and a
+// cap-hit "last feasible iterate" is not an acceptable production answer:
+// it can violate the stick/slip complementarity conditions the solver
+// exists to enforce). `sets_inout` is both the warm start (previous
+// substep's sets; a new/reactivated row should be passed in as Free) and,
+// on return, the sets the solution settled in. `lambda_out` receives the
+// solution, always box-feasible (clamped to [-c, c]).
+//   Stage 1: block principal pivoting (Judice-Pires), capped at 2k+2.
+//   Stage 2: Murty's LEAST-index single-pivot method, capped at 2^k
+//            further pivots (finite for a P-matrix; not a full guarantee
+//            here, see above, but resolves the vast majority of stage-1
+//            cap hits in practice).
+//   Stage 3: exhaustive active-set enumeration - every one of the 3^k
+//            {Lo, Free, Hi} partitions in a FIXED (row-index-major,
+//            ternary-counter) order, returning the FIRST one that
+//            satisfies evaluate_partition's feasibility check. For an SPD
+//            W (guaranteed by build_regularized_problem's epsilon
+//            regularisation) the box-LCP solution is unique up to the
+//            same tolerances evaluate_partition already uses, so exactly
+//            one partition qualifies (mod tie-breaks) and the fixed order
+//            makes the result deterministic. Allocates nothing (plain
+//            stack-local fixed-size scratch, reusing `ws`'s existing
+//            SmallMat/SmallVec-backed Cholesky) - k <= kMaxLcpK (8) means
+//            at most 3^8 = 6561 candidates, each one Cholesky solve of at
+//            most an 8x8 system, so this is a bounded but not cheap
+//            fallback - stage 3 running at all is itself the signal
+//            something upstream needs attention, not routine.
 LcpResult solve_box_lcp(const real* W, const real* q, const real* c, int k, LcpSet* sets_inout, real* lambda_out,
                          LcpWorkspace& ws);
 

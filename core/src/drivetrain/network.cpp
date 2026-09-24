@@ -314,6 +314,7 @@ void ShaftNetwork::solve(real h, const Assembly& assembly) {
             const LcpResult lr_result =
                 solve_box_lcp(c.w_packed.data(), c.q_packed.data(), c.cap_packed.data(), k, c.lcp_sets.data(), c.lambda_packed.data(), c.lcp_ws);
             if (lr_result.cap_hit) ++friction_cap_hits_;
+            if (lr_result.stage_used >= 3) ++lcp_stage3_hits_;
 
             for (int col = 0; col < n; ++col) {
                 real s = c.nu_free[static_cast<std::size_t>(col)];

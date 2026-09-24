@@ -180,7 +180,16 @@ real max_c(const Problem& p) {
     return m;
 }
 
-void run_and_check(const Problem& p, real tol, int trial, std::array<int, 9>& max_iters_by_k, int batch = -1) {
+// stage2_count / stage3_count: how many cases needed solve_box_lcp's stage
+// 2 (Murty least-index fallback) / stage 3 (exhaustive active-set
+// enumeration) respectively - see box_lcp.h's LcpResult::stage_used. Since
+// stage 3 was added (coordinator's second ruling: a box LCP's standard-LCP
+// reformulation is only P0, not P, so stage 2's Murty fallback is not
+// itself guaranteed finite), cap_hit should be mathematically unreachable
+// for these SPD-Wr problems, so EVERY case - no exceptions - is asserted
+// to match brute force exactly again, restoring the original test contract.
+void run_and_check(const Problem& p, real tol, int trial, std::array<int, 9>& max_iters_by_k, int& stage2_count, int& stage3_count,
+                    int batch = -1) {
     const BruteForceResult bf = brute_force(p);
     INFO("trial=" << trial << " k=" << p.k << " batch=" << batch);
     REQUIRE(!bf.feasible_lambdas.empty());
@@ -199,9 +208,17 @@ void run_and_check(const Problem& p, real tol, int trial, std::array<int, 9>& ma
     sets.fill(LcpSet::Free);
     std::array<real, kMaxLcpK> lambda_out{};
     const LcpResult r = solve_box_lcp(p.W.data(), p.q.data(), p.c.data(), p.k, sets.data(), lambda_out.data(), ws);
-
-    CHECK_FALSE(r.cap_hit);
     max_iters_by_k[static_cast<std::size_t>(p.k)] = std::max(max_iters_by_k[static_cast<std::size_t>(p.k)], r.iterations);
+
+    // With stage 3 (exhaustive enumeration) in place, cap_hit means EVERY
+    // one of the 3^k fixed-order partitions failed evaluate_partition's
+    // feasibility check for an SPD Wr - mathematically impossible (the
+    // box-LCP solution is unique and must be one of them) - so this is a
+    // hard assertion again, not a WARN-and-skip: if it ever fires, stop
+    // and report exactly like this comment's history did for stage 1/2.
+    CHECK_FALSE(r.cap_hit);
+    if (r.stage_used >= 2) ++stage2_count;
+    if (r.stage_used >= 3) ++stage3_count;
 
     for (int i = 0; i < p.k; ++i) {
         CHECK(std::abs(lambda_out[static_cast<std::size_t>(i)] - bf.feasible_lambdas[0][static_cast<std::size_t>(i)]) <= tol * (1.0 + max_c(p)));
@@ -210,30 +227,42 @@ void run_and_check(const Problem& p, real tol, int trial, std::array<int, 9>& ma
 
 } // namespace
 
-// FINDING (PHYS-033 P4 I2 plan section 14, stop condition 1 - "the LCP cap
-// is hit ... report with the failing seed, do not raise the cap silently"):
-// the fixed pivot cap (2k+2, owner ruling Q1/F1) is occasionally
-// insufficient even for batch 1 (well-conditioned: W = M*M^T + 1e-3*I) at
-// the smallest tested q-scale (s=1e-3) - measured ~0.25% of batch-1 cases
-// at n=1e5 (125/~50000). Batch 2 ("physical", its own case below) is far
-// worse (~11%). This was root-caused, NOT left as an open question:
-// re-running every cap-hit case found here with the IDENTICAL pivoting
-// loop but a cap of 5000 always converged (worst observed: 69 iterations
-// at k=6 against the specified cap of 14) and always then matched the
-// brute-force lambda within tolerance - i.e. the block-principal-pivoting
-// + Murty-fallback implementation is finitely convergent and correct (no
-// cycling, no wrong answer), it is simply slower than 2k+2 pivots for a
-// non-negligible fraction of these randomly generated instances. Per the
-// plan's explicit instruction this is reported, not silently worked around
-// by raising the cap or by loosening pivoting parameters (pbar is also
-// plan-specified, section 5.5) - see the CI/report for exact counts. Every
-// case below is tagged [!mayfail] for this reason; the underlying
-// cap_hit/lambda-match assertions are UNCHANGED (not loosened).
-TEST_CASE("box-LCP: block principal pivoting matches brute force (batches 1/3/4)", "[unit][drivetrain][lcp][!mayfail]") {
+// FINDING HISTORY (PHYS-033 P4 I2, coordinator ruling on commit 2's cap-hit
+// finding, in three rounds):
+//   1. The fixed single-stage pivot cap (2k+2, owner ruling Q1/F1) was
+//      found occasionally insufficient by itself - measured ~0.25% of
+//      batch-1 cases at n=1e5, far worse for batch 2 (its own case below,
+//      ~11%). Root-caused as NOT a cycling/correctness bug (a large-cap
+//      re-solve of every affected case always converged and always
+//      matched brute force). Coordinator's fix: add stage 2, Murty's
+//      LEAST-index single-pivot method, for up to a further 2^k pivots
+//      (finite for a P-matrix - Wr is SPD after epsilon regularisation).
+//   2. Own diagnosis while wiring stage 2 up: the first version pivoted on
+//      the LARGEST infeasible index (copy-pasted from stage 1's own
+//      fallback rule) instead of the LEAST index Murty's method actually
+//      requires - see box_lcp.cpp's own comment on the exact case (seed
+//      0xFEEDFACE5EEDULL, trial 79244, k=3) that caught it as a genuine
+//      cycle. Fixing the pivot rule drastically cut the cap-hit rate but
+//      did not make it exactly zero - a small residual remained (measured
+//      locally: 0/10000 fast case, 2/100000 long case, 3/4000 batch 2).
+//   3. Coordinator's second ruling explained why: a box LCP's standard-LCP
+//      reformulation is only P0, not P, so Murty's finite-termination
+//      guarantee never actually covered stage 2 here - and a cap-hit
+//      "last feasible iterate" is not an acceptable production answer
+//      (can violate stick/slip complementarity - the clutch lock-up spike
+//      this solver exists to prevent). Fix: add stage 3, exhaustive
+//      active-set enumeration (all 3^k partitions in a fixed order,
+//      return the first feasible one - box_lcp.cpp's own comment). With
+//      stage 3 in place cap_hit is mathematically unreachable for an SPD
+//      Wr, so the test contract is restored: EVERY case (no exceptions)
+//      is asserted to match brute force exactly, and stage2_count/
+//      stage3_count report how many cases needed which fallback.
+TEST_CASE("box-LCP: block principal pivoting matches brute force (batches 1/3/4)", "[unit][drivetrain][lcp]") {
     SplitMix64 rng(0x5EED1234ABCDULL);
     constexpr int kCases = 10000;
     std::array<int, 9> max_iters_by_k{};
-    int cap_hits = 0;
+    int stage2_count = 0;
+    int stage3_count = 0;
 
     for (int trial = 0; trial < kCases; ++trial) {
         const int k = 1 + static_cast<int>(rng.next_u64() % 6); // 1..6
@@ -242,12 +271,9 @@ TEST_CASE("box-LCP: block principal pivoting matches brute force (batches 1/3/4)
         const real s = s_choices[rng.next_u64() % s_choices.size()];
 
         if (batch == 0) {
-            Problem p = make_batch1(rng, k, s);
-            LcpWorkspace ws_probe; std::array<LcpSet, kMaxLcpK> sp{}; sp.fill(LcpSet::Free); std::array<real, kMaxLcpK> lp{};
-            if (solve_box_lcp(p.W.data(), p.q.data(), p.c.data(), p.k, sp.data(), lp.data(), ws_probe).cap_hit) ++cap_hits;
-            run_and_check(p, 1e-12, trial, max_iters_by_k, batch);
+            run_and_check(make_batch1(rng, k, s), 1e-12, trial, max_iters_by_k, stage2_count, stage3_count, batch);
         } else if (batch == 1) {
-            run_and_check(make_batch1(rng, k, s, /*duplicate_row1=*/true), 1e-6, trial, max_iters_by_k, batch);
+            run_and_check(make_batch1(rng, k, s, /*duplicate_row1=*/true), 1e-6, trial, max_iters_by_k, stage2_count, stage3_count, batch);
         } else {
             // Batch 4: warm-start stress - solve once from all-Free, then
             // again from the first solution's sets with q perturbed 1%.
@@ -259,33 +285,44 @@ TEST_CASE("box-LCP: block principal pivoting matches brute force (batches 1/3/4)
             const LcpResult r1 = solve_box_lcp(p.W.data(), p.q.data(), p.c.data(), p.k, sets.data(), lambda1.data(), ws);
             CHECK_FALSE(r1.cap_hit);
             max_iters_by_k[static_cast<std::size_t>(p.k)] = std::max(max_iters_by_k[static_cast<std::size_t>(p.k)], r1.iterations);
+            if (r1.stage_used >= 2) ++stage2_count;
+            if (r1.stage_used >= 3) ++stage3_count;
 
             Problem p2 = p;
             for (int i = 0; i < p2.k; ++i) p2.q[static_cast<std::size_t>(i)] *= 1.01;
-            run_and_check(p2, 1e-12, trial, max_iters_by_k); // sets already warm from r1 (kept in `sets`)
+            run_and_check(p2, 1e-12, trial, max_iters_by_k, stage2_count, stage3_count); // sets already warm from r1 (kept in `sets`)
 
             std::array<real, kMaxLcpK> lambda2{};
             const LcpResult r2 = solve_box_lcp(p2.W.data(), p2.q.data(), p2.c.data(), p2.k, sets.data(), lambda2.data(), ws);
             CHECK_FALSE(r2.cap_hit);
+            max_iters_by_k[static_cast<std::size_t>(p2.k)] = std::max(max_iters_by_k[static_cast<std::size_t>(p2.k)], r2.iterations);
+            if (r2.stage_used >= 2) ++stage2_count;
+            if (r2.stage_used >= 3) ++stage3_count;
         }
     }
 
-    WARN("batch1 cap hits: " << cap_hits << "/" << (kCases / 3));
+    WARN("cases reaching stage 2 (Murty fallback): " << stage2_count << "/" << kCases);
+    WARN("cases reaching stage 3 (exhaustive enumeration): " << stage3_count << "/" << kCases);
     for (int k = 1; k <= 6; ++k) {
-        WARN("max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (cap=" << (2 * k + 2) << ")");
+        WARN("max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (stage-1 cap=" << (2 * k + 2)
+                                      << ", stage-2 adds up to " << (1 << k) << " more)");
     }
 }
 
 // [long]: the spec's own 10^5-case size (plan section 11.1), batches 1/3
 // only (batch 2 is its own, separately-tagged case below - see the finding
-// comment above). [!mayfail] for the same reason. 3^6=729 enumerations per
-// k=6 case makes this too slow for the debug/sanitizer legs (CLAUDE.md
+// history above). No longer [!mayfail]: with stage 3 in place, every case
+// must agree with brute force exactly, no exceptions. 3^6=729 enumerations
+// per k=6 case (stage-3-only cost; ordinarily stage 1/2 resolve it far
+// sooner) makes this too slow for the debug/sanitizer legs (CLAUDE.md
 // "Test selection" - [long] is excluded there and on the release-style
 // fast legs, run only under -Full).
-TEST_CASE("box-LCP: block principal pivoting matches brute force (10^5 cases)", "[unit][drivetrain][lcp][long][!mayfail]") {
+TEST_CASE("box-LCP: block principal pivoting matches brute force (10^5 cases)", "[unit][drivetrain][lcp][long]") {
     SplitMix64 rng(0xFEEDFACE5EEDULL);
     constexpr int kCases = 100000;
     std::array<int, 9> max_iters_by_k{};
+    int stage2_count = 0;
+    int stage3_count = 0;
 
     for (int trial = 0; trial < kCases; ++trial) {
         const int k = 1 + static_cast<int>(rng.next_u64() % 6);
@@ -293,37 +330,33 @@ TEST_CASE("box-LCP: block principal pivoting matches brute force (10^5 cases)", 
         const std::array<real, 3> s_choices = {1e-3, 1.0, 1e3};
         const real s = s_choices[rng.next_u64() % s_choices.size()];
 
-        if (batch == 0) run_and_check(make_batch1(rng, k, s), 1e-12, trial, max_iters_by_k, 0);
-        else run_and_check(make_batch1(rng, k, s, /*duplicate_row1=*/true), 1e-6, trial, max_iters_by_k, 2);
+        if (batch == 0) run_and_check(make_batch1(rng, k, s), 1e-12, trial, max_iters_by_k, stage2_count, stage3_count, 0);
+        else run_and_check(make_batch1(rng, k, s, /*duplicate_row1=*/true), 1e-6, trial, max_iters_by_k, stage2_count, stage3_count, 2);
     }
+    WARN("[long] cases reaching stage 2 (Murty fallback): " << stage2_count << "/" << kCases);
+    WARN("[long] cases reaching stage 3 (exhaustive enumeration): " << stage3_count << "/" << kCases);
     for (int k = 1; k <= 6; ++k) {
-        WARN("[long] max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (cap=" << (2 * k + 2) << ")");
+        WARN("[long] max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (stage-1 cap=" << (2 * k + 2) << ")");
     }
 }
 
 // Batch 2 ("physical": W = h*B*A^-1*B^T, plan section 11.1.1) is its OWN
-// case, tagged [!mayfail] - PHYS-033 P4 I2 plan section 14, stop condition
-// 1 ("the LCP cap is hit ... report with the failing seed, do not raise
-// the cap silently"). FINDING: with k up to 6 and A's dimension n capped
-// at 4 (the plan's own construction), B is frequently rank-deficient for
-// the LCP's k, and combined with the smallest q-scale (s=1e-3) this
-// produces box-LCP instances where the specified cap (2k+2, owner ruling
-// Q1/F1) is genuinely insufficient - measured ~11% of s=1e-3 batch-2 cases
-// hit the cap (e.g. 326/3000 in one run). This was verified NOT to be a
-// cycling/implementation bug: re-running every cap-hit case with the exact
-// same pivoting loop but a cap of 5000 always converged (worst case
-// observed: 69 iterations at k=6, cap=14) and always then matched the
-// brute-force lambda within tolerance. So the finite-termination property
-// itself holds; the fixed cap 2k+2 is simply too tight for this generator/
-// scale combination. Per the plan's stop condition, the cap is NOT raised
-// here (that is the owner's call, not silently applied); this case is
-// [!mayfail] and reports the observed hit rate.
+// case - PHYS-033 P4 I2, coordinator ruling on commit 2's cap-hit finding
+// (see the finding history above the batches-1/3/4 case). FINDING: with k
+// up to 6 and A's dimension n capped at 4 (the plan's own construction), B
+// is frequently rank-deficient for the LCP's k, and combined with the
+// smallest q-scale (s=1e-3) this produced the worst cap-hit rates of any
+// batch at every stage (~11% hit stage 1's cap; a residual ~0.075% still
+// hit stage 2's cap even with the least-index fix). With stage 3
+// (exhaustive enumeration) in place, every case - no exceptions - is
+// asserted to match brute force exactly again.
 TEST_CASE("box-LCP: block principal pivoting matches brute force (batch 2: physical)",
-          "[unit][drivetrain][lcp][!mayfail]") {
+          "[unit][drivetrain][lcp]") {
     SplitMix64 rng(0xB2B2B2B2ULL);
     constexpr int kCases = 4000;
     std::array<int, 9> max_iters_by_k{};
-    int cap_hits = 0;
+    int stage2_count = 0;
+    int stage3_count = 0;
 
     for (int trial = 0; trial < kCases; ++trial) {
         const int k = 1 + static_cast<int>(rng.next_u64() % 6);
@@ -331,18 +364,13 @@ TEST_CASE("box-LCP: block principal pivoting matches brute force (batch 2: physi
         const real s = s_choices[rng.next_u64() % s_choices.size()];
         Problem p = make_batch2(rng, k, s);
 
-        LcpWorkspace ws;
-        std::array<LcpSet, kMaxLcpK> sets{};
-        sets.fill(LcpSet::Free);
-        std::array<real, kMaxLcpK> lambda_out{};
-        const LcpResult r = solve_box_lcp(p.W.data(), p.q.data(), p.c.data(), p.k, sets.data(), lambda_out.data(), ws);
-        max_iters_by_k[static_cast<std::size_t>(p.k)] = std::max(max_iters_by_k[static_cast<std::size_t>(p.k)], r.iterations);
-        if (r.cap_hit) { ++cap_hits; continue; } // don't brute-force-compare a cap-hit case here; already root-caused above
-
-        run_and_check(p, 1e-12, trial, max_iters_by_k, /*batch=*/1);
+        run_and_check(p, 1e-12, trial, max_iters_by_k, stage2_count, stage3_count, /*batch=*/1);
     }
-    WARN("batch 2 cap hits: " << cap_hits << "/" << kCases);
-    CHECK(cap_hits == 0);
+    WARN("batch 2 cases reaching stage 2 (Murty fallback): " << stage2_count << "/" << kCases);
+    WARN("batch 2 cases reaching stage 3 (exhaustive enumeration): " << stage3_count << "/" << kCases);
+    for (int k = 1; k <= 6; ++k) {
+        WARN("batch 2 max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (stage-1 cap=" << (2 * k + 2) << ")");
+    }
 }
 
 TEST_CASE("box-LCP: k=1 closed form and c=0 caller-level filtering", "[unit][drivetrain][lcp]") {

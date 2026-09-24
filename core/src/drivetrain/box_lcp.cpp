@@ -116,20 +116,23 @@ LcpResult solve_box_lcp(const real* W, const real* q, const real* c, int k, LcpS
                          LcpWorkspace& ws) {
     build_regularized_problem(W, q, c, k, ws);
 
-    const int cap = 2 * k + 2;
+    // Stage 1 (fast path): block principal pivoting with the plan's own
+    // cap (2k+2) and limited block-pivot retries (pbar). Unchanged from
+    // the original F1 implementation.
+    const int cap1 = 2 * k + 2;
     const int pbar = 3;
     int p = pbar;
     int ninf = k + 1;
 
     std::array<int, kMaxLcpK> infeasible{};
     int iterations = 0;
-    for (int it = 1; it <= cap; ++it) {
+    for (int it = 1; it <= cap1; ++it) {
         iterations = it;
         const int ni = evaluate_partition(q, c, k, sets_inout, ws, infeasible.data());
 
         if (ni == 0) {
             for (int i = 0; i < k; ++i) lambda_out[i] = std::clamp(ws.lam[static_cast<std::size_t>(i)], -c[i], c[i]);
-            return {iterations, false};
+            return {iterations, false, 1};
         }
 
         if (ni < ninf) {
@@ -145,8 +148,96 @@ LcpResult solve_box_lcp(const real* W, const real* q, const real* c, int k, LcpS
         }
     }
 
+    // Stage 2 (fallback, coordinator ruling on PHYS-033 P4 I2 commit 2's
+    // cap-hit finding): Wr is SPD (epsilon-regularised), hence a P-matrix,
+    // for which Murty's LEAST-index single-pivot method terminates finitely
+    // - no cycling, though it can take many pivots. Continues from stage
+    // 1's CURRENT partition (not reset) using ONLY single-index pivots (no
+    // more block pivoting/ninf bookkeeping), for up to 2^k pivots.
+    //
+    // BUG FOUND AND FIXED HERE (own diagnosis, not the coordinator's): the
+    // first version of this stage pivoted on the LARGEST infeasible index
+    // (`infeasible[ni-1]`), copy-pasted from stage 1's own tie-breaking
+    // fallback. That is NOT Murty's rule - Murty's finite-termination proof
+    // for a P-matrix specifically requires pivoting on the LEAST index
+    // (`infeasible[0]`, since evaluate_partition appends in ascending index
+    // order), analogous to Bland's rule for the simplex method. Using the
+    // largest index instead discards the termination guarantee, and this
+    // was caught empirically: the 10^5-case brute-force test (batches 1/3)
+    // found a real case (seed 0xFEEDFACE5EEDULL, trial 79244, k=3, batch=0)
+    // that cycled through all 2^3=8 stage-2 pivots without converging.
+    // Switching to the least-index rule below fixed it (re-ran the same
+    // 10^5-case seed afterward with zero cap hits - see the test's own
+    // WARN output for exact fallback-usage counts). Left this note instead
+    // of silently "just fixing a typo" because it is exactly the kind of
+    // reasoning a later reader debugging a new cap-hit report needs: if
+    // stage 2 ever hits its cap again, check the pivot-selection rule
+    // FIRST, not the cap size.
+    const int cap2 = 1 << k; // k <= kMaxLcpK (8) -> at most 256
+    for (int it2 = 1; it2 <= cap2; ++it2) {
+        ++iterations;
+        const int ni = evaluate_partition(q, c, k, sets_inout, ws, infeasible.data());
+        if (ni == 0) {
+            for (int i = 0; i < k; ++i) lambda_out[i] = std::clamp(ws.lam[static_cast<std::size_t>(i)], -c[i], c[i]);
+            return {iterations, false, 2};
+        }
+        const int istar = infeasible[static_cast<std::size_t>(0)]; // LEAST index - Murty's rule, required for the P-matrix finite-termination guarantee
+        flip(sets_inout, istar, ws.lam, c);
+    }
+
+    // Stage 3 (coordinator ruling, second round): exhaustive active-set
+    // enumeration. A BOX LCP's standard-LCP reformulation is only P0 (not
+    // P) - splitting each bounded variable into two nonnegative
+    // complementary parts does not preserve the strict row/column
+    // dominance a genuine P-matrix pivoting proof needs - so stage 2's
+    // Murty fallback, while it resolves the overwhelming majority of
+    // stage-1 cap hits in practice (see the [long] test's own measured
+    // rates), is not actually guaranteed finite here, and stage 2 can
+    // itself exhaust its cap (found empirically: 2/100000 batch-1/3 cases,
+    // 3/4000 batch-2 cases in the pre-stage-3 test run). A cap-hit "last
+    // feasible iterate" is not an acceptable production answer - it can
+    // violate stick/slip complementarity, which is exactly the clutch
+    // lock-up spike this solver exists to prevent. So: enumerate every
+    // 3^k {Lo, Free, Hi} partition in a FIXED order (row-index-major
+    // ternary counter, digit 0/1/2 -> Lo/Free/Hi - the SAME digit
+    // convention tests/unit/test_powertrain_friction_lcp.cpp's own
+    // brute_force() uses, so a stage-3 result and a brute-force cross-
+    // check enumerate identically) and return the FIRST partition
+    // evaluate_partition reports feasible. For an SPD Wr (guaranteed by
+    // build_regularized_problem's own epsilon regularisation above) the
+    // box-LCP solution is unique up to evaluate_partition's own
+    // tolerances, so exactly one partition should qualify (mod
+    // tie-breaks near a bound) and the fixed enumeration order makes which
+    // one is found first deterministic. No allocation: `codes`/`digit`
+    // are plain locals and `ws` is the same fixed-capacity
+    // SmallMat/SmallVec-backed workspace stage 1/2 already used. k <=
+    // kMaxLcpK (8) bounds this at 3^8 = 6561 candidate Cholesky solves -
+    // stage 3 running at all is the real "report, do not force" signal
+    // (ShaftNetwork::lcp_stage3_hits telemetry, network.cpp), not this
+    // loop's own cost.
+    int pow3 = 1;
+    for (int i = 0; i < k; ++i) pow3 *= 3;
+    for (int code = 0; code < pow3; ++code) {
+        ++iterations;
+        int rem = code;
+        for (int i = 0; i < k; ++i) {
+            const int digit = rem % 3;
+            rem /= 3;
+            sets_inout[i] = digit == 0 ? LcpSet::Lo : (digit == 1 ? LcpSet::Free : LcpSet::Hi);
+        }
+        const int ni = evaluate_partition(q, c, k, sets_inout, ws, infeasible.data());
+        if (ni == 0) {
+            for (int i = 0; i < k; ++i) lambda_out[i] = std::clamp(ws.lam[static_cast<std::size_t>(i)], -c[i], c[i]);
+            return {iterations, false, 3};
+        }
+    }
+
+    // Truly stuck: mathematically unreachable for an SPD Wr (see above) -
+    // report it rather than force a plausible-looking answer. `lambda_out`
+    // keeps the last enumerated (infeasible) candidate's clamped lam,
+    // which callers must treat as uncertified given cap_hit=true.
     for (int i = 0; i < k; ++i) lambda_out[i] = std::clamp(ws.lam[static_cast<std::size_t>(i)], -c[i], c[i]);
-    return {iterations, true};
+    return {iterations, true, 3};
 }
 
 } // namespace ps::drivetrain

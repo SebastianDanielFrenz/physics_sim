@@ -176,6 +176,18 @@ public:
         return total;
     }
     [[nodiscard]] int friction_cap_hits() const { return friction_cap_hits_; }
+    // Cumulative count of box_lcp.cpp's stage 3 (exhaustive active-set
+    // enumeration) being invoked - i.e. LcpResult::stage_used >= 3 -
+    // across every cluster's solve() calls (PHYS-033 P4 I2, coordinator
+    // ruling: stage 3 exists because a box LCP's standard-LCP
+    // reformulation is only P0, so stage 2's Murty fallback is not itself
+    // guaranteed finite). Should stay 0 in ordinary operation - reaching
+    // stage 3 at all is the "report, do not force" signal, not friction_
+    // cap_hits (which now only fires if stage 3 ALSO fails, mathematically
+    // unreachable for an SPD Wr). Surfaced as the World telemetry channel
+    // `powertrain.lcp_stage3` once ShaftNetwork is wired into World
+    // (commit 5b/6 - not yet done as of this commit).
+    [[nodiscard]] int lcp_stage3_hits() const { return lcp_stage3_hits_; }
 
     // Topology switch (I3+; exercised here only by the test-only two-state
     // builder in test 11.2(d)). Clusters/bases for every declared state are
@@ -212,6 +224,7 @@ private:
     std::vector<bool> row_stuck_;
     std::vector<LcpSet> row_set_; // warm start (previous substep's BPP partition) per friction row
     int friction_cap_hits_ = 0;
+    int lcp_stage3_hits_ = 0;
     int current_state_ = 0; // I2: always 0
 };
 
