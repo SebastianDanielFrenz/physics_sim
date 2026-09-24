@@ -22,6 +22,27 @@ struct AutoClutchDesc {
     real lock_slip_rpm = 80.0;   // |engine - input| below this (and rpm > bite) -> Locked
     real anti_stall_rpm = 950.0; // Locked and rpm below this -> back to the launch law
     real engage_rate_per_s = 4.0, release_rate_per_s = 12.0;
+    // PHYS-033 P4 I3 (C8 smoke-test finding): while releasing BELOW
+    // anti_stall_rpm specifically, the clutch opens at at least this rate
+    // instead of the ordinary release_rate_per_s. Found via the M1 smoke
+    // test's scripted hard-brake-in-gear phase (data/vehicles/car_sedan.json,
+    // 2nd gear, full brake from ~20 km/h): at release_rate_per_s alone, the
+    // clutch's kinetic capacity (curve capacity_nm * e_auto) stays well above
+    // the small torque needed to keep a light crank+flywheel (~0.16 kg*m^2)
+    // decelerating in lockstep with the gear-ratio-amplified wheel deceleration
+    // for most of the release ramp - by the time capacity finally drops low
+    // enough to let the engine slip free, hard braking has already dragged it
+    // from anti_stall_rpm past stall_rpm. A real automated-clutch anti-stall
+    // system dumps line pressure near-instantly (a fast solenoid, not the
+    // smooth modulated release used for an ordinary gear shift's ClutchClosing
+    // or Launch-law bite ramp) specifically because it exists to catch this
+    // same "still connected while decelerating hard" case - this field is
+    // that same distinction. Applies ONLY below anti_stall_rpm (the ordinary,
+    // smoother release_rate_per_s still governs the bite_rpm..anti_stall_rpm
+    // band and every other release), so normal launch/shift feel is
+    // unaffected. Default is intentionally aggressive (~0.025 s to fully
+    // open) relative to release_rate_per_s's ~0.083 s.
+    real anti_stall_release_rate_per_s = 40.0;
     real open_time_s = 0.08, close_time_s = 0.20; // shift ramps
     // Owner ruling (PHYS-033 P4 I3, post-C6): a Neutral -> gear engagement
     // with the vehicle at or below this speed is a LAUNCH, not a mid-drive

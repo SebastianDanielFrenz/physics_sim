@@ -216,7 +216,12 @@ if ($script:Failures.Count -eq 0) {
         Report-Fail "M1 autopilot run: no 'ps_godot M1 smoke:' summary line found - main.gd's autopilot path may not have run"
     } else {
         Report-Ok "M1 autopilot summary: $summaryLine"
-        $m = [regex]::Match($summaryLine.ToString(), 'distance_m=([\-0-9.]+)\s+max_speed_kmh=([\-0-9.]+)\s+upright=(true|false)\s+nan=(true|false)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        # PHYS-033 P4 I3 (C8) section 12.4: new fields appended after nan=
+        # (max_gear/stalled/engine_state) - the old prefix (distance_m/
+        # max_speed_kmh/upright/nan) keeps its meaning, so this regex still
+        # matches a summary line from before this change if one ever shows
+        # up (e.g. a bisect), just without the new groups.
+        $m = [regex]::Match($summaryLine.ToString(), 'distance_m=([\-0-9.]+)\s+max_speed_kmh=([\-0-9.]+)\s+upright=(true|false)\s+nan=(true|false)\s+max_gear=([\-0-9]+)\s+stalled=(true|false)\s+engine_state=(\w+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if (-not $m.Success) {
             Report-Fail "M1 autopilot run: could not parse the summary line: $summaryLine"
         } else {
@@ -224,22 +229,29 @@ if ($script:Failures.Count -eq 0) {
             $maxSpeedKmh = [double]$m.Groups[2].Value
             $upright = $m.Groups[3].Value -eq 'True'
             $hasNan = $m.Groups[4].Value -eq 'True'
+            $maxGear = [int]$m.Groups[5].Value
+            $stalled = $m.Groups[6].Value -eq 'True'
+            $engineState = $m.Groups[7].Value
 
             # Thresholds are deliberately modest, not "a car should floor
             # it" numbers: main.gd's default spawn point (test_ground.json
             # "spawn_main") sits on the open procedural terrain's default
             # ("dirt") surface, not a paved test feature (see main.gd's own
             # comment on spawn_id for a found-but-not-investigated anomaly
-            # at the paved spawn points), and P3/M1's drive is an explicit
-            # torque-curve PLACEHOLDER (no gears/clutch, PLAN.md P4 replaces
-            # it) - measured on this exact setup: ~5.8 m travelled, peaking
-            # at ~4.9 km/h over the scripted throttle/brake/throttle+steer
-            # sequence. These thresholds catch a car that never moves at
-            # all (stuck/flipped/crashed), not a performance regression.
+            # at the paved spawn points). distance/speed>3 predate the I3
+            # drivetrain (PLAN.md P3's torque-curve placeholder) and are
+            # kept as a loose "the car moved at all" floor; max_speed_kmh>15
+            # and the max_gear/stalled/engine_state checks below are I3's
+            # own drivetrain gates (PLAN.md 12.4: "1st at 0.7 throttle on
+            # asphalt reaches ~40 km/h by 2.5 s").
             if ($hasNan) { Report-Fail "M1 autopilot: NaN observed in chassis state" } else { Report-Ok "M1 autopilot: no NaN observed" }
             if ($upright) { Report-Ok "M1 autopilot: chassis stayed upright" } else { Report-Fail "M1 autopilot: chassis did not stay upright" }
             if ($distanceM -gt 4.0) { Report-Ok "M1 autopilot: distance travelled $distanceM m (> 4 m)" } else { Report-Fail "M1 autopilot: distance travelled only $distanceM m (expected > 4 m)" }
             if ($maxSpeedKmh -gt 3.0) { Report-Ok "M1 autopilot: reached $maxSpeedKmh km/h (> 3 km/h)" } else { Report-Fail "M1 autopilot: only reached $maxSpeedKmh km/h (expected > 3 km/h)" }
+            if ($maxSpeedKmh -gt 15.0) { Report-Ok "M1 autopilot: reached $maxSpeedKmh km/h (> 15 km/h, I3 drivetrain gate)" } else { Report-Fail "M1 autopilot: only reached $maxSpeedKmh km/h (expected > 15 km/h with the real drivetrain)" }
+            if ($maxGear -ge 2) { Report-Ok "M1 autopilot: reached gear $maxGear (>= 2)" } else { Report-Fail "M1 autopilot: never got past gear $maxGear (expected >= 2)" }
+            if (-not $stalled) { Report-Ok "M1 autopilot: engine never stalled" } else { Report-Fail "M1 autopilot: engine entered Stalled during the run" }
+            if ($engineState -eq 'running') { Report-Ok "M1 autopilot: engine state at end = running" } else { Report-Fail "M1 autopilot: engine state at end was '$engineState', expected 'running'" }
         }
     }
 

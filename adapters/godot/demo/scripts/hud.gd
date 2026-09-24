@@ -99,6 +99,45 @@ func _process(_delta: float) -> void:
 		var chassis_body: String = _simulation.get_vehicle_chassis_body_name(vehicle_name)
 		var speed_mps: float = _simulation.get_body_speed_mps(chassis_body)
 		lines.append("speed: %6.1f km/h" % (speed_mps * 3.6))
+
+		# PHYS-033 P4 I3 (C8) section 12.3: gear/rpm/clutch/assist readout.
+		var pt: Dictionary = _simulation.get_vehicle_powertrain(vehicle_name)
+		if pt.size() > 0:
+			var gear: int = int(pt.get("gear", 0))
+			var gear_target: int = int(pt.get("gear_target", gear))
+			var shift_phase: String = String(pt.get("shift_phase", "idle"))
+			var rpm: float = pt.get("rpm", 0.0)
+			# HUD scale only (no dedicated limiter-rpm getter) - loose visual
+			# bound wide enough for every I3 engine curve (data/engines/*.json).
+			var rpm_bar_max := 7000.0
+			var engine_state: String = String(pt.get("engine_state", "off"))
+			var gear_str: String = str(gear)
+			if gear_target != gear:
+				gear_str = "%d (->%d %s)" % [gear, gear_target, shift_phase]
+			var limiter_suffix: String = "   LIMITER" if bool(pt.get("limiter", false)) else ""
+			lines.append("gear  %-16s rpm %5.0f %s %d   engine %s%s" % [
+				gear_str, rpm, _bar(rpm / rpm_bar_max), int(rpm_bar_max), engine_state.to_upper(), limiter_suffix])
+
+			var clutch_engagement: float = pt.get("clutch_engagement", 0.0)
+			var assist_bits := PackedStringArray()
+			if bool(pt.get("assist_auto_clutch", false)):
+				assist_bits.append("AUTO-CLUTCH")
+			if bool(pt.get("assist_auto_blip", false)):
+				assist_bits.append("AUTO-BLIP")
+			var assist_str: String = "  ".join(assist_bits)
+			if not bool(pt.get("assist_auto_shift", false)):
+				assist_str += "  (auto-shift off)"
+			else:
+				assist_str += "  AUTO-SHIFT"
+			lines.append("clutch %4.2f %s   assists: %s" % [clutch_engagement, _bar(clutch_engagement), assist_str])
+
+			if bool(pt.get("grind_active", false)):
+				lines.append("GRIND!")
+			if engine_state == "stalled" and _simulation.get_control("ignition") > 0.5:
+				lines.append("STALLED - hold Start (Menu) / K to crank")
+			if engine_state == "off":
+				lines.append("IGNITION OFF - D-pad Up / I")
+
 		if _input_map != null:
 			lines.append("steer     %+.2f %s" % [_input_map.get_steer(), _bar((_input_map.get_steer() + 1.0) * 0.5)])
 			lines.append("throttle  %5.2f %s" % [_input_map.get_throttle(), _bar(_input_map.get_throttle())])
@@ -121,6 +160,9 @@ func _process(_delta: float) -> void:
 
 	lines.append("")
 	lines.append("controls: gamepad (steer/throttle/brake/handbrake) + WASD/space keyboard fallback")
+	lines.append("E/Q or RB/LB shift up/down   C or X clutch (hold)")
+	lines.append("I or D-pad Up ignition   K or Start(joy) starter (hold)")
+	lines.append("F5/D-pad Left auto-shift   F6/D-pad Down auto-clutch   F7/D-pad Right auto-blip")
 	lines.append("V camera(free/chase)  G debug draw  R reset vehicle  Back(joy)=reset")
 	lines.append("1 straight  2 skidpad  3 ramps (teleport)")
 	_label.text = "\n".join(lines)

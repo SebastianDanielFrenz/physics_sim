@@ -738,6 +738,8 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 md.auto_clutch.release_rate_per_s = acj.value("release_rate_per_s", md.auto_clutch.release_rate_per_s);
                 md.auto_clutch.open_time_s = acj.value("open_time_s", md.auto_clutch.open_time_s);
                 md.auto_clutch.close_time_s = acj.value("close_time_s", md.auto_clutch.close_time_s);
+                md.auto_clutch.anti_stall_release_rate_per_s =
+                    acj.value("anti_stall_release_rate_per_s", md.auto_clutch.anti_stall_release_rate_per_s);
                 if (!(md.auto_clutch.bite_rpm < md.auto_clutch.full_rpm_min && md.auto_clutch.full_rpm_min <= md.auto_clutch.full_rpm_max)) {
                     throw std::runtime_error(ctx + ".auto_clutch: must satisfy bite_rpm < full_rpm_min <= full_rpm_max");
                 }

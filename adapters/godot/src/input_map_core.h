@@ -9,8 +9,21 @@
 // in plain SI/ISO terms (steer -1..1, throttle/brake/clutch/handbrake
 // 0..1), exactly what PLAN.md P2 requires reaches the sim: "never as
 // Godot types".
+//
+// PHYS-033 P4 I3 section 12.2: edge detection, shift counters, the ignition
+// toggle and the clutch-button release ramp all moved INTO this file (were
+// previously input_map.cpp's job, done with Godot's own
+// is_action_just_pressed - a bug source, since a gamepad button read via
+// is_joy_button_pressed has no such built-in edge helper, so RB/LB/Y/B/Back
+// used to be read as levels while camera/debug/reset were pressed-edges from
+// keyboard actions only - see this section's "existing, fixed" table).
+// RawInput now carries plain LEVELS for every digital action; InputMapper
+// keeps its own previous-frame bitset and does the edge detection itself,
+// identically for gamepad and keyboard sources alike.
 
 #pragma once
+
+#include <cstdint>
 
 namespace ps_godot {
 
@@ -49,38 +62,77 @@ struct RawInput {
     float throttle_trigger = 0.0f; // 0..1
     float brake_trigger = 0.0f;    // 0..1
     float handbrake_trigger = 0.0f; // 0..1 (analog) or 0/1 (digital button, keyboard)
-    float clutch_trigger = 0.0f;   // 0..1
+    float clutch_trigger = 0.0f;   // 0..1, analog path - see clutch_button_held below for the digital path
 
-    // Digital, edge-triggered actions (true only on the tick they were
-    // pressed - input_map.h is responsible for turning a held key/button
-    // into a single edge using Godot's own Input::is_action_just_pressed,
-    // or a test can set these directly for a synthetic single-frame press).
-    bool shift_up_pressed = false;
-    bool shift_down_pressed = false;
-    bool camera_pressed = false;
-    bool reset_vehicle_pressed = false;
+    // Digital LEVELS (true while the underlying key/button is held down,
+    // every frame - NOT edge-triggered any more; PLAN.md P4 I3 section
+    // 12.2). InputMapper below owns edge detection against its own `prev`
+    // bitset, identically for every source, so a synthetic test can drive
+    // these directly frame by frame instead of hand-rolling a single-frame
+    // pulse.
+    bool shift_up_held = false;
+    bool shift_down_held = false;
+    bool camera_held = false;
+    bool reset_vehicle_held = false;
     // PLAN.md M1 debug draw toggle (contact points / tyre force vectors /
-    // suspension travel) - additive, same edge-triggered convention as the
-    // other digital actions above.
-    bool debug_toggle_pressed = false;
+    // suspension travel) - additive, same level-held convention as the
+    // other digital actions here.
+    bool debug_toggle_held = false;
+
+    // Digital clutch button (e.g. gamepad X) - an ALTERNATIVE input path to
+    // clutch_trigger above, smoothed on release inside InputMapper::process
+    // (PLAN.md 12.2: "clutch = held ? 1 : max(0, clutch_prev - dt/0.35)").
+    // The two paths are combined by taking whichever is larger, same merge
+    // convention input_map.cpp already uses for the analog axes, so a
+    // vehicle with only an analog clutch pedal (clutch_trigger, this field
+    // left false) behaves exactly as before.
+    bool clutch_button_held = false;
+
+    // PHYS-033 P4 I3 section 12.2 additions: ignition/starter/assist
+    // channels.
+    bool ignition_toggle_held = false; // toggles ControlChannels::ignition on a rising edge
+    bool starter_held = false;         // level, passed straight through as ControlChannels::starter
+    bool auto_shift_toggle_held = false;  // tri-state toggle request, see ControlChannels::toggle_auto_shift
+    bool auto_clutch_toggle_held = false; // ditto, assist.auto_clutch
+    bool auto_blip_toggle_held = false;   // ditto, assist.auto_blip
 };
 
-// Shaped output: exactly the named control channels PLAN.md P2 lists
-// (steer, throttle, brake, handbrake, shift up/down, clutch, camera, reset
-// vehicle). Consumed today by PsSimulation's control-channel registry (see
-// ps_simulation.h's report-flagged request: core has no such registry yet
-// for a real vehicle to read from, since no vehicle exists before P3).
+// Shaped output: exactly the named control channels PLAN.md P2/P4 I3 list
+// (steer, throttle, brake, handbrake, clutch, shift up/down counters,
+// camera, reset vehicle, debug toggle, ignition, starter, assist toggles).
+// Consumed by main.gd, which forwards most of these 1:1 to
+// PsSimulation.set_control (PLAN.md section 12.2's own bullet list).
 struct ControlChannels {
     float steer = 0.0f;      // -1..1
     float throttle = 0.0f;   // 0..1
     float brake = 0.0f;      // 0..1
     float handbrake = 0.0f;  // 0..1
     float clutch = 0.0f;     // 0..1
-    bool shift_up = false;
-    bool shift_down = false;
+
+    // Monotonic counters (PLAN.md 6.5.1: the TCU consumes DIFFERENCES
+    // between ticks, never resets these to 0 itself) - +1 per rising edge
+    // of shift_up_held/shift_down_held. Exact up to 2^24 presses as a
+    // float once forwarded through World::set_control (PLAN.md 12.1).
+    std::uint32_t shift_up_count = 0;
+    std::uint32_t shift_down_count = 0;
+
+    // Real edges now (rising edge of the corresponding *_held level) -
+    // PLAN.md 12.2: "Camera, reset and debug become real edges."
     bool camera = false;
     bool reset_vehicle = false;
     bool debug_toggle = false; // PLAN.md M1: debug draw on/off
+
+    float ignition = 1.0f; // toggled on ignition_toggle_held's rising edge; starts ON (Q-I3-4: spawn with the engine running)
+    float starter = 0.0f;  // level pass-through of starter_held
+
+    // Tri-state "no change / toggle" (PLAN.md 12.2): true only on the frame
+    // the corresponding toggle button's rising edge fires. InputMapper does
+    // NOT track the assist's actual on/off state - the caller (main.gd)
+    // reads the current value via World::get_control("assist.x") and flips
+    // it with set_control("assist.x", 1 - that) on a true here.
+    bool toggle_auto_shift = false;
+    bool toggle_auto_clutch = false;
+    bool toggle_auto_blip = false;
 };
 
 // Per-channel remappable configuration (deadzone/curve/invert). Only the
@@ -97,13 +149,41 @@ class InputMapper {
 public:
     explicit InputMapper(InputMapConfig config = {}) : config_(config) {}
 
-    [[nodiscard]] ControlChannels process(const RawInput& raw) const;
+    // Stateful (PLAN.md P4 I3 section 12.2): `dt` drives the clutch-button
+    // release ramp; internal previous-frame state drives edge detection for
+    // shift_up/shift_down/camera/reset_vehicle/debug_toggle/ignition_toggle/
+    // auto_*_toggle. No longer `const` - each call mutates the mapper.
+    [[nodiscard]] ControlChannels process(const RawInput& raw, float dt);
 
     [[nodiscard]] const InputMapConfig& config() const { return config_; }
     void set_config(const InputMapConfig& config) { config_ = config; }
 
+    // Exposed for input_map.h (PLAN.md: "PsInputMap keeps uint32 counters")
+    // and for tests; mirrors the last process() call's ControlChannels
+    // fields of the same name.
+    [[nodiscard]] std::uint32_t shift_up_count() const { return shift_up_count_; }
+    [[nodiscard]] std::uint32_t shift_down_count() const { return shift_down_count_; }
+
 private:
     InputMapConfig config_;
+
+    bool prev_shift_up_ = false;
+    bool prev_shift_down_ = false;
+    bool prev_camera_ = false;
+    bool prev_reset_vehicle_ = false;
+    bool prev_debug_toggle_ = false;
+    bool prev_ignition_toggle_ = false;
+    bool prev_auto_shift_toggle_ = false;
+    bool prev_auto_clutch_toggle_ = false;
+    bool prev_auto_blip_toggle_ = false;
+
+    std::uint32_t shift_up_count_ = 0;
+    std::uint32_t shift_down_count_ = 0;
+    float ignition_ = 1.0f;
+
+    // Digital clutch-button smoothing state (PLAN.md 12.2), independent of
+    // the analog clutch_trigger path - see RawInput::clutch_button_held.
+    float clutch_button_level_ = 0.0f;
 };
 
 } // namespace ps_godot

@@ -132,6 +132,14 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             e_tgt = denom > real(0.0) ? std::clamp((rpm - desc_.auto_clutch.bite_rpm) / denom, real(0.0), real(1.0)) : real(1.0);
         }
         rate = (e_tgt >= e_auto_) ? desc_.auto_clutch.engage_rate_per_s : desc_.auto_clutch.release_rate_per_s;
+        // Anti-stall panic dump (PHYS-033 P4 I3 C8 smoke-test finding, see
+        // AutoClutchDesc::anti_stall_release_rate_per_s's own comment):
+        // releasing below anti_stall_rpm specifically opens at LEAST this
+        // fast, on top of whatever release_rate_per_s already gives - never
+        // slower than the ordinary rate.
+        if (e_tgt < e_auto_ && rpm < desc_.auto_clutch.anti_stall_rpm) {
+            rate = std::max(rate, desc_.auto_clutch.anti_stall_release_rate_per_s);
+        }
         const real slip_rpm = std::abs(s.engine_omega - s.gearbox_in_omega) * kRadPerSecToRpm;
         if (slip_rpm < desc_.auto_clutch.lock_slip_rpm && rpm > desc_.auto_clutch.bite_rpm && s.gearbox_current != 0) {
             mode_ = ClutchMode::Locked;

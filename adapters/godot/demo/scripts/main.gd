@@ -113,6 +113,18 @@ var _autopilot_max_speed_kmh: float = 0.0
 var _autopilot_nan_seen: bool = false
 var _autopilot_done: bool = false
 var _autopilot_last_logged_second: int = -1
+# PHYS-033 P4 I3 (C8) section 12.4: the autopilot now drives the real
+# engine/clutch/gearbox chain via the monotonic shift_up_count/
+# shift_down_count channels (same path a human driver's PsInputMap/
+# InputMapper uses - see _setup_input_map/_process below), not gear_request
+# directly - exercises the adapter's new counter-based channel path end to
+# end. These track the absolute counter VALUES sent so far (never reset,
+# matching PLAN.md 6.5.1's "consumed as differences" contract).
+var _autopilot_shift_up_count: float = 0.0
+var _autopilot_shift_down_count: float = 0.0
+var _autopilot_max_gear: int = 0
+var _autopilot_stalled_seen: bool = false
+var _autopilot_final_engine_state: String = ""
 
 # --m1-force-rebase-test: verification for the chase-cam origin-rebase bug
 # (adapters/godot/demo/scripts/chase_cam.gd's own header comment) - see
@@ -533,6 +545,20 @@ func _process(delta: float) -> void:
 			simulation.set_control("brake", input_map.get_brake())
 			simulation.set_control("handbrake", input_map.get_handbrake())
 			simulation.set_control("clutch", input_map.get_clutch())
+			# PHYS-033 P4 I3 (C8) section 12.2: shift_up_count/
+			# shift_down_count are monotonic counters, forwarded as-is
+			# every frame (the TCU consumes DIFFERENCES between ticks,
+			# PLAN.md 6.5.1 - never write gear_request directly here).
+			simulation.set_control("shift_up_count", input_map.get_shift_up_count())
+			simulation.set_control("shift_down_count", input_map.get_shift_down_count())
+			simulation.set_control("ignition", input_map.get_ignition())
+			simulation.set_control("starter", input_map.get_starter())
+			if input_map.get_toggle_auto_shift():
+				simulation.set_control("assist.auto_shift", 1.0 - simulation.get_control("assist.auto_shift"))
+			if input_map.get_toggle_auto_clutch():
+				simulation.set_control("assist.auto_clutch", 1.0 - simulation.get_control("assist.auto_clutch"))
+			if input_map.get_toggle_auto_blip():
+				simulation.set_control("assist.auto_blip", 1.0 - simulation.get_control("assist.auto_blip"))
 
 	if _autopilot:
 		_run_autopilot(delta)
@@ -542,6 +568,11 @@ func _process(delta: float) -> void:
 	if _screenshot_path != "" and not _screenshot_taken:
 		_screenshot_t += delta
 		if not _autopilot and _screenshot_view == "drive":
+			# PHYS-033 P4 I3 (C8) section 12.4: the drivetrain sits in
+			# Neutral until a gear is requested - a single shift_up_count=1
+			# (edge-triggered, so setting it repeatedly every frame is
+			# harmless) plus throttle is enough for auto-clutch to pull away.
+			simulation.set_control("shift_up_count", 1.0)
 			simulation.set_control("throttle", 0.5) # so the "drive" screenshot shows the car actually driving, not sitting still
 		if _screenshot_t > _screenshot_delay_s:
 			_screenshot_taken = true
@@ -570,11 +601,39 @@ func _run_autopilot(delta: float) -> void:
 	if _autopilot_done:
 		return
 	_autopilot_phase_t += delta
+	# PHYS-033 P4 I3 (C8) section 12.4: the real engine/clutch/gearbox chain
+	# sits in Neutral until something requests a gear (C6 "turns the smoke
+	# autopilot red: the car sits in N"). Drive it the same way a human
+	# would: the monotonic shift_up_count/shift_down_count channels (NOT
+	# gear_request directly - PLAN.md 12.4's own schedule), so this run also
+	# exercises the adapter's new counter-based channel path end to end.
+	# Auto-clutch is on by default (data/vehicles/car_sedan.json), so a
+	# requested gear change alone is enough to get moving.
+	var pt: Dictionary = simulation.get_vehicle_powertrain(VEHICLE_NAME)
+	var rpm: float = pt.get("rpm", 0.0)
 
-	# Scripted control sequence (this task's smoke-test spec): throttle for
-	# a few seconds, then brake, then a steer step.
-	if _autopilot_phase_t < 4.0:
-		simulation.set_control("throttle", 1.0)
+	if _autopilot_phase_t >= 0.2 and _autopilot_shift_up_count < 1.0:
+		_autopilot_shift_up_count = 1.0
+		simulation.set_control("shift_up_count", _autopilot_shift_up_count)
+	if _autopilot_shift_up_count >= 1.0 and _autopilot_shift_up_count < 2.0 \
+			and (_autopilot_phase_t >= 2.5 or rpm > 5500.0):
+		_autopilot_shift_up_count = 2.0
+		simulation.set_control("shift_up_count", _autopilot_shift_up_count)
+	if _autopilot_phase_t >= 6.0 and _autopilot_shift_down_count < 1.0:
+		_autopilot_shift_down_count = 1.0
+		simulation.set_control("shift_down_count", _autopilot_shift_down_count)
+
+	# Scripted throttle/brake/steer sequence (PLAN.md 12.4's own schedule):
+	# a short settle after the launch shift, throttle to build speed and
+	# shift to 2nd, brake to a near-stop (auto-clutch anti-stall must keep
+	# the engine running), downshift back to 1st, then throttle + a steer
+	# step.
+	if _autopilot_phase_t < 0.5:
+		simulation.set_control("throttle", 0.0)
+		simulation.set_control("brake", 0.0)
+		simulation.set_control("steer", 0.0)
+	elif _autopilot_phase_t < 4.0:
+		simulation.set_control("throttle", 0.7)
 		simulation.set_control("brake", 0.0)
 		simulation.set_control("steer", 0.0)
 	elif _autopilot_phase_t < 6.0:
@@ -582,12 +641,20 @@ func _run_autopilot(delta: float) -> void:
 		simulation.set_control("brake", 1.0)
 		simulation.set_control("steer", 0.0)
 	elif _autopilot_phase_t < 10.0:
-		simulation.set_control("throttle", 1.0)
+		simulation.set_control("throttle", 0.7)
 		simulation.set_control("brake", 0.0)
 		simulation.set_control("steer", 0.3)
 	else:
 		_finish_autopilot()
 		return
+
+	var gear: int = int(pt.get("gear", 0))
+	_autopilot_max_gear = max(_autopilot_max_gear, gear)
+	var engine_state: String = String(pt.get("engine_state", ""))
+	_autopilot_final_engine_state = engine_state
+	if engine_state == "stalled":
+		_autopilot_stalled_seen = true
+
 
 	var speed_mps: float = simulation.get_body_speed_mps(CHASSIS_BODY_NAME)
 	if is_nan(speed_mps):
@@ -608,8 +675,8 @@ func _run_autopilot(delta: float) -> void:
 	if whole_second != _autopilot_last_logged_second:
 		_autopilot_last_logged_second = whole_second
 		var up: Vector3 = chassis_xform.basis.z
-		print("ps_godot M1 autopilot diag: t=%.1f speed_kmh=%.2f up_dot=%.3f FL{compression=%.4f omega=%.2f fz=%.1f fx=%.1f surface=%s}" % [
-			_autopilot_phase_t, speed_mps * 3.6, up.dot(Vector3.UP),
+		print("ps_godot M1 autopilot diag: t=%.1f speed_kmh=%.2f up_dot=%.3f gear=%d rpm=%.0f engine=%s FL{compression=%.4f omega=%.2f fz=%.1f fx=%.1f surface=%s}" % [
+			_autopilot_phase_t, speed_mps * 3.6, up.dot(Vector3.UP), gear, rpm, engine_state,
 			simulation.get_wheel_compression("car", 0), simulation.get_wheel_omega("car", 0),
 			simulation.get_wheel_load_n("car", 0), simulation.get_wheel_fx("car", 0),
 			simulation.get_wheel_surface_name("car", 0)])
@@ -695,8 +762,14 @@ func _finish_autopilot() -> void:
 	var up: Vector3 = chassis_xform.basis.z
 	var upright: bool = up.dot(Vector3.UP) > 0.5
 
-	print("ps_godot M1 smoke: distance_m=%.2f max_speed_kmh=%.2f upright=%s nan=%s" % [
-		_autopilot_distance_m, _autopilot_max_speed_kmh, upright, _autopilot_nan_seen])
+	# PHYS-033 P4 I3 (C8) section 12.4: new fields appended, old ones keep
+	# their meaning so smoke_test.ps1's existing regex still matches the
+	# common prefix - max_gear/stalled/engine_state are the new drivetrain
+	# gates (the car must reach 2nd, never stall, and still be running at
+	# the end of the scripted sequence).
+	print("ps_godot M1 smoke: distance_m=%.2f max_speed_kmh=%.2f upright=%s nan=%s max_gear=%d stalled=%s engine_state=%s" % [
+		_autopilot_distance_m, _autopilot_max_speed_kmh, upright, _autopilot_nan_seen,
+		_autopilot_max_gear, _autopilot_stalled_seen, _autopilot_final_engine_state])
 
 	if _force_rebase_test:
 		# PRIMARY gate: max_frame_jump_m (see _run_camera_rebase_check's

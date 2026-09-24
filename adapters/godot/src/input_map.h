@@ -25,6 +25,8 @@
 
 #include <godot_cpp/classes/node.hpp>
 
+#include <cstdint>
+
 namespace godot {
 class InputEvent;
 }
@@ -45,11 +47,19 @@ public:
     [[nodiscard]] float get_brake() const { return channels_.brake; }
     [[nodiscard]] float get_handbrake() const { return channels_.handbrake; }
     [[nodiscard]] float get_clutch() const { return channels_.clutch; }
-    [[nodiscard]] bool get_shift_up() const { return channels_.shift_up; }
-    [[nodiscard]] bool get_shift_down() const { return channels_.shift_down; }
+    // PHYS-033 P4 I3 section 12.2: shift_up/shift_down are now monotonic
+    // counters (edge-detected inside InputMapper, PLAN.md 6.5.1's own
+    // "consumed as differences" contract), not per-frame booleans.
+    [[nodiscard]] std::int64_t get_shift_up_count() const { return static_cast<std::int64_t>(channels_.shift_up_count); }
+    [[nodiscard]] std::int64_t get_shift_down_count() const { return static_cast<std::int64_t>(channels_.shift_down_count); }
     [[nodiscard]] bool get_camera() const { return channels_.camera; }
     [[nodiscard]] bool get_reset_vehicle() const { return channels_.reset_vehicle; }
     [[nodiscard]] bool get_debug_toggle() const { return channels_.debug_toggle; }
+    [[nodiscard]] float get_ignition() const { return channels_.ignition; }
+    [[nodiscard]] float get_starter() const { return channels_.starter; }
+    [[nodiscard]] bool get_toggle_auto_shift() const { return channels_.toggle_auto_shift; }
+    [[nodiscard]] bool get_toggle_auto_clutch() const { return channels_.toggle_auto_clutch; }
+    [[nodiscard]] bool get_toggle_auto_blip() const { return channels_.toggle_auto_blip; }
 
     // Remap config (deadzone/curve/invert), PLAN.md P2 "configurable".
     void set_steer_deadzone(float v);

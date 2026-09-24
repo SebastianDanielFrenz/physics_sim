@@ -146,6 +146,79 @@ TEST_CASE("ManualTcu: auto-clutch launch law gives e(rpm), then Launch -> Locked
     CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
 }
 
+// PHYS-033 P4 I3 (C8 smoke-test finding): hard braking in gear at moderate
+// speed dropped engine rpm from well above anti_stall_rpm to a full stall in
+// well under a second, even though the anti-stall transition (Locked ->
+// Launch once rpm < anti_stall_rpm) fired immediately - AutoClutchDesc's own
+// release_rate_per_s (tuned for an ordinary Launch-law release, ~0.083 s to
+// fully open) still leaves enough clutch CAPACITY for several ticks to keep
+// dragging a light engine (~0.16 kg*m^2 crank+flywheel) down at the same
+// gear-ratio-amplified rate as the decelerating wheel, right through
+// stall_rpm, before capacity finally drops low enough to let it slip free.
+// AutoClutchDesc::anti_stall_release_rate_per_s (its own comment has the
+// full mechanism) is a faster floor applied ONLY while releasing below
+// anti_stall_rpm - this pins that it actually takes effect and opens the
+// clutch materially faster than release_rate_per_s alone would.
+TEST_CASE("ManualTcu: anti-stall release uses the faster panic rate, not the ordinary release_rate_per_s",
+          "[unit][drivetrain][tcu]") {
+    auto build = [](real anti_stall_release_rate_per_s) {
+        ManualTcu::Desc d;
+        d.auto_clutch.bite_rpm = 1100.0;
+        d.auto_clutch.full_rpm_min = 1600.0;
+        d.auto_clutch.full_rpm_max = 3000.0;
+        d.auto_clutch.lock_slip_rpm = 80.0;
+        d.auto_clutch.anti_stall_rpm = 950.0;
+        d.auto_clutch.engage_rate_per_s = 4.0;
+        d.auto_clutch.release_rate_per_s = 12.0; // ordinary release: ~0.083s to fully open
+        d.auto_clutch.anti_stall_release_rate_per_s = anti_stall_release_rate_per_s;
+        return d;
+    };
+    const real h = 1.0 / 960.0;
+
+    // Drive both variants to Locked at full engagement first (same setup as
+    // the launch-law test above), then trigger anti-stall the same way.
+    auto lock_up = [&](ManualTcu& tcu) {
+        ManualTcu::Sensors s = base_sensors();
+        s.gearbox_current = 1;
+        s.gearbox_target = 1;
+        s.throttle_pedal = 0.0;
+        s.engine_omega = rpm_to_omega(1200.0);
+        s.gearbox_in_omega = rpm_to_omega(1200.0 - 30.0); // small slip -> locks quickly
+        for (int i = 0; i < 400; ++i) (void)tcu.step(s, h, false);
+        REQUIRE(tcu.clutch_mode() == ManualTcu::ClutchMode::Locked);
+        REQUIRE(tcu.e_auto() == Catch::Approx(1.0).margin(1e-6));
+        return s;
+    };
+
+    // Variant A: anti_stall_release_rate_per_s == release_rate_per_s (no
+    // panic boost - isolates the ordinary rate's own behaviour).
+    ManualTcu tcu_ordinary(build(/*anti_stall_release_rate_per_s=*/12.0));
+    ManualTcu::Sensors sa = lock_up(tcu_ordinary);
+    sa.engine_omega = rpm_to_omega(700.0); // below anti_stall_rpm(950): triggers the transition
+    sa.gearbox_in_omega = rpm_to_omega(700.0);
+    (void)tcu_ordinary.step(sa, h, false);
+    CHECK(tcu_ordinary.clutch_mode() == ManualTcu::ClutchMode::Launch);
+    // One substep at release_rate_per_s(12/s): e_auto drops by 12*h.
+    CHECK(tcu_ordinary.e_auto() == Catch::Approx(1.0 - 12.0 * h).margin(1e-6));
+
+    // Variant B: this file's shipped-style panic rate (40/s), well above
+    // release_rate_per_s - must open FASTER than variant A on the very same
+    // first substep after the anti-stall trigger.
+    ManualTcu tcu_panic(build(/*anti_stall_release_rate_per_s=*/40.0));
+    ManualTcu::Sensors sb = lock_up(tcu_panic);
+    sb.engine_omega = rpm_to_omega(700.0);
+    sb.gearbox_in_omega = rpm_to_omega(700.0);
+    (void)tcu_panic.step(sb, h, false);
+    CHECK(tcu_panic.clutch_mode() == ManualTcu::ClutchMode::Launch);
+    CHECK(tcu_panic.e_auto() == Catch::Approx(1.0 - 40.0 * h).margin(1e-6));
+    CHECK(tcu_panic.e_auto() < tcu_ordinary.e_auto()); // strictly faster than the ordinary rate
+
+    // Fully open well within the panic rate's own ~0.025s budget (24
+    // substeps at 960 Hz), unlike the ordinary rate's ~0.083s (80 substeps).
+    for (int i = 0; i < 24; ++i) (void)tcu_panic.step(sb, h, false);
+    CHECK(tcu_panic.e_auto() == Catch::Approx(0.0).margin(1e-6));
+}
+
 TEST_CASE("ManualTcu: blip and ignition-cut flags follow the shift phase", "[unit][drivetrain][tcu]") {
     ManualTcu::Desc d;
     d.auto_blip.enabled = true;

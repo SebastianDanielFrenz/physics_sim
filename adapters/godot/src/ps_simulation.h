@@ -35,10 +35,12 @@
 #include "sim_thread.h"
 #include "triple_buffer.h"
 
+#include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/scenario.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/vehicle/vehicle_desc.h"
+#include "ps/vehicle/vehicle_reset.h"
 #include "ps/world/world.h"
 
 #include <godot_cpp/classes/node.hpp>
@@ -86,6 +88,12 @@ struct WheelDynamicSnapshot {
 
 struct VehicleDynamicSnapshot {
     std::vector<WheelDynamicSnapshot> wheels; // index == wheel index, matches vehicle_desc_by_name_'s wheels
+    // PHYS-033 P4 I3 plan section 12.1: the adapter-facing powertrain
+    // snapshot (gear/rpm/clutch/assist state, ...), copied from
+    // World::powertrain_state(vid) in post_step - the same race-free path
+    // as the wheels above (World::powertrain_state is sim-thread-only live
+    // state, same contract as wheel_telemetry).
+    ps::drivetrain::PowertrainSnapshot powertrain;
 };
 
 struct AdapterSnapshot {
@@ -240,15 +248,19 @@ public:
     bool spawn_vehicle(const godot::String& vehicle_name, const godot::String& vehicle_json_absolute_path, const godot::String& chassis_body_name, float stream_radius_m);
     // Teleports the vehicle's chassis body back to sim_position/yaw_rad
     // with zero velocity (IRigidBackend::set_pose/set_motion - PLAN.md M1
-    // "reset vehicle" control). KNOWN LIMITATION: only the chassis rigid
-    // body is reset; per-wheel internal state (tyre relaxation deflection,
-    // wheel spin rate) has no public reset API (see this adapter's report
-    // for the exact API this needs, e.g. a World::reset_vehicle(VehicleId)
-    // that zeroes vehicle::Instance's internal wheel state) - in practice
-    // this settles within well under a second once the chassis stops
-    // moving, since the wheel state relaxes toward the (now zero) chassis
-    // motion every substep.
+    // "reset vehicle" control), THEN calls ps::World::reset_vehicle (plan
+    // section 4.5/12.1) with hubs_roll_with_chassis=false and
+    // clutch_locked=false (the chassis is now at rest, gear kept as-is) -
+    // closes the KNOWN LIMITATION this comment used to carry: per-wheel
+    // tyre relaxation state and the drivetrain network's own omega are now
+    // reset too, not left to relax toward zero over the following second.
     bool reset_vehicle(const godot::String& vehicle_name, const godot::Vector3& sim_position, float yaw_rad);
+    // PHYS-033 P4 I3 plan section 12.1: gear/gear_target/shift_phase(str)/
+    // rpm/engine_state(str)/speedo_kmh/clutch_engagement/limiter/
+    // grind_active/starter_active/dfco/assist_auto_clutch/assist_auto_blip/
+    // assist_auto_shift, from the race-free per-tick snapshot (same path as
+    // the wheel getters below) - empty Dictionary for an unknown vehicle.
+    [[nodiscard]] godot::Dictionary get_vehicle_powertrain(const godot::String& vehicle_name) const;
 
     [[nodiscard]] godot::PackedStringArray get_vehicle_names() const;
     [[nodiscard]] godot::String get_vehicle_chassis_body_name(const godot::String& vehicle_name) const;

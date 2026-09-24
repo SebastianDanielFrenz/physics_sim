@@ -29,6 +29,30 @@ std::size_t index_in_order(const std::vector<std::string>& order, const std::str
     }
     return static_cast<std::size_t>(-1);
 }
+
+// PHYS-033 P4 I3 plan section 12.1's get_vehicle_powertrain: string forms
+// for the HUD/getter Dictionary (a GDScript caller has no access to the
+// core's C++ enum types).
+const char* shift_phase_name(ps::drivetrain::ShiftPhase p) {
+    switch (p) {
+        case ps::drivetrain::ShiftPhase::Idle: return "idle";
+        case ps::drivetrain::ShiftPhase::ClutchOpening: return "clutch_opening";
+        case ps::drivetrain::ShiftPhase::Releasing: return "releasing";
+        case ps::drivetrain::ShiftPhase::Selecting: return "selecting";
+        case ps::drivetrain::ShiftPhase::Synchronising: return "synchronising";
+        case ps::drivetrain::ShiftPhase::ClutchClosing: return "clutch_closing";
+    }
+    return "idle";
+}
+const char* engine_state_name(ps::drivetrain::EngineState s) {
+    switch (s) {
+        case ps::drivetrain::EngineState::Off: return "off";
+        case ps::drivetrain::EngineState::Stalled: return "stalled";
+        case ps::drivetrain::EngineState::Cranking: return "cranking";
+        case ps::drivetrain::EngineState::Running: return "running";
+    }
+    return "off";
+}
 } // namespace
 
 bool PsSimulation::load_scenario(const String& absolute_json_path) {
@@ -104,6 +128,27 @@ void PsSimulation::start() {
 }
 
 void PsSimulation::rebuild_post_step_and_start() {
+    // PHYS-033 P4 I3 plan section 12.1: seed every I3 drivetrain channel
+    // this adapter did NOT already pre-seed in load_scenario() (steer/
+    // throttle/brake/handbrake/clutch, still 0) with the CORE's OWN default
+    // (World::create_vehicle's ensure_control_channel_index calls, resolved
+    // once spawn_vehicle has run - so this must happen here, after every
+    // setup call and before the sim thread starts, not in load_scenario()
+    // where no vehicle exists yet). So ignition = 1, gear_request = "none"
+    // and the assists come from the core's own defaults unless the user (or
+    // a scenario's own control_channels block) has already touched them -
+    // finding 0.4's fix (a naive 0.0f seed switched the engine off on the
+    // very first adapter-driven tick).
+    if (world_) {
+        for (const char* name :
+             {"shift_up_count", "shift_down_count", "gear_request", "ignition", "starter", "assist.auto_clutch",
+              "assist.auto_blip", "assist.auto_shift"}) {
+            if (control_channels_.find(name) == control_channels_.end()) {
+                control_channels_.emplace(name, static_cast<float>(world_->get_control(name)));
+            }
+        }
+    }
+
     fall_detectors_.clear();
     for (const std::string& name : vehicle_order_) fall_detectors_.emplace(name, FallDetector{}); // no insertion from the sim thread later
     sim_thread_->set_pre_step([this]() {
@@ -130,6 +175,26 @@ void PsSimulation::rebuild_post_step_and_start() {
             if (body_it == bodies_by_name_.end()) continue;
             world_->backend().set_pose(body_it->second, r.pose);
             world_->backend().set_motion(body_it->second, ps::Motion{});
+
+            // PHYS-033 P4 I3 plan section 12.1: also reset the drivetrain
+            // network itself (right after the chassis pose/velocity above,
+            // same tick, same pre_step call - no intervening World::step()
+            // sees the stale pre-reset state) - closes ps_simulation.h's own
+            // former KNOWN LIMITATION comment on reset_vehicle. Keeps
+            // whatever gear the vehicle was in (kKeepGear); the chassis is
+            // now at rest, so hubs_roll_with_chassis=false (zero hub omega,
+            // not whatever the pre-reset chassis velocity was) and
+            // clutch_locked=false (Launch mode, not locked at a stale gear
+            // ratio's speed).
+            const auto vid_it = vehicles_by_name_.find(r.vehicle_name);
+            if (vid_it != vehicles_by_name_.end()) {
+                ps::vehicle::VehicleResetOptions opts;
+                opts.gear = ps::vehicle::VehicleResetOptions::kKeepGear;
+                opts.engine_state = ps::drivetrain::EngineState::Running;
+                opts.hubs_roll_with_chassis = false;
+                opts.clutch_locked = false;
+                world_->reset_vehicle(vid_it->second, opts);
+            }
         }
     });
 
@@ -176,6 +241,7 @@ void PsSimulation::rebuild_post_step_and_start() {
                 ws.steer_angle = world_->wheel_state(vid, w).steer_angle; // real value, see WheelDynamicSnapshot's own comment
                 vs.wheels.push_back(ws);
             }
+            vs.powertrain = world_->powertrain_state(vid); // plan section 12.1, same race-free path as the wheels above
             snap.vehicles.push_back(std::move(vs));
 
             const auto chassis_name_it = vehicle_chassis_body_name_.find(name);
@@ -540,6 +606,34 @@ float PsSimulation::get_vehicle_rear_steer_fraction(const String& vehicle_name) 
     return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.rear_steer_fraction);
 }
 
+Dictionary PsSimulation::get_vehicle_powertrain(const String& vehicle_name) const {
+    Dictionary d;
+    const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
+    if (order_index == static_cast<std::size_t>(-1)) return d;
+    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    if (order_index >= snap.vehicles.size()) return d;
+    const ps::drivetrain::PowertrainSnapshot& p = snap.vehicles[order_index].powertrain;
+
+    d["gear"] = static_cast<int>(p.gear);
+    d["gear_target"] = static_cast<int>(p.gear_target);
+    d["shift_phase"] = String(shift_phase_name(p.shift_phase));
+    d["rpm"] = static_cast<float>(p.engine_rpm);
+    d["engine_state"] = String(engine_state_name(p.engine_state));
+    d["speedo_kmh"] = static_cast<float>(p.speedo_mps * 3.6);
+    d["clutch_engagement"] = static_cast<float>(p.clutch_engagement);
+    // 0 or 1 engine in I3 (powertrain_state.h's own comment on
+    // PowertrainSnapshot::engines) - the limiter/starter/dfco flags live on
+    // the engine sound-state entry, not on PowertrainSnapshot itself.
+    d["limiter"] = !p.engines.empty() && p.engines[0].limiter_active;
+    d["starter_active"] = !p.engines.empty() && p.engines[0].starter_active;
+    d["dfco"] = !p.engines.empty() && p.engines[0].dfco_active;
+    d["grind_active"] = p.driveline.grind_active;
+    d["assist_auto_clutch"] = (p.assist_active_bits & 1u) != 0;
+    d["assist_auto_blip"] = (p.assist_active_bits & 2u) != 0;
+    d["assist_auto_shift"] = (p.assist_active_bits & 4u) != 0;
+    return d;
+}
+
 const WheelDynamicSnapshot* PsSimulation::dynamic_wheel(const std::string& vehicle_name, int wheel_index) const {
     const std::size_t order_index = index_in_order(vehicle_order_, vehicle_name);
     if (order_index == static_cast<std::size_t>(-1)) return nullptr;
@@ -641,6 +735,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_wheel_is_front", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_is_front);
     ClassDB::bind_method(D_METHOD("get_vehicle_max_wheel_angle", "vehicle_name"), &PsSimulation::get_vehicle_max_wheel_angle);
     ClassDB::bind_method(D_METHOD("get_vehicle_rear_steer_fraction", "vehicle_name"), &PsSimulation::get_vehicle_rear_steer_fraction);
+    ClassDB::bind_method(D_METHOD("get_vehicle_powertrain", "vehicle_name"), &PsSimulation::get_vehicle_powertrain);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_wheel_omega", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_omega);
     ClassDB::bind_method(D_METHOD("get_wheel_steer_angle", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_steer_angle);

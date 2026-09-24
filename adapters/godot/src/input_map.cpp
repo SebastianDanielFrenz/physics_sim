@@ -47,26 +47,48 @@ RawInput PsInputMap::gather_raw_input() const {
     const bool joy_handbrake = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_A);
     raw.handbrake_trigger = (joy_handbrake || input->is_action_pressed("ps_handbrake_button")) ? 1.0f : 0.0f;
 
+    // PHYS-033 P4 I3 section 12.2: every digital action below is now read as
+    // a plain LEVEL (is_joy_button_pressed / is_action_pressed), not an edge
+    // - InputMapper::process (input_map_core.cpp) does its own edge
+    // detection against a `prev` bitset, identically for every source. The
+    // digital clutch button is a level too (clutch_button_held), smoothed on
+    // release inside InputMapper rather than snapped to 0/1 here.
     const bool joy_clutch = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_X);
-    raw.clutch_trigger = (joy_clutch || input->is_action_pressed("ps_clutch_button")) ? 1.0f : 0.0f;
+    raw.clutch_button_held = joy_clutch || input->is_action_pressed("ps_clutch_button");
 
-    raw.shift_up_pressed = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_RIGHT_SHOULDER)
-        || input->is_action_just_pressed("ps_shift_up");
-    raw.shift_down_pressed = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_LEFT_SHOULDER)
-        || input->is_action_just_pressed("ps_shift_down");
-    raw.camera_pressed = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_Y)
-        || input->is_action_just_pressed("ps_camera");
-    raw.reset_vehicle_pressed = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_BACK)
-        || input->is_action_just_pressed("ps_reset_vehicle");
-    raw.debug_toggle_pressed = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_B)
-        || input->is_action_just_pressed("ps_debug_toggle");
+    raw.shift_up_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_RIGHT_SHOULDER)
+        || input->is_action_pressed("ps_shift_up");
+    raw.shift_down_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_LEFT_SHOULDER)
+        || input->is_action_pressed("ps_shift_down");
+    raw.camera_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_Y)
+        || input->is_action_pressed("ps_camera");
+    raw.reset_vehicle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_BACK)
+        || input->is_action_pressed("ps_reset_vehicle");
+    raw.debug_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_B)
+        || input->is_action_pressed("ps_debug_toggle");
+
+    // New bindings (PLAN.md P4 I3 section 12.2): Menu/Start = starter
+    // (hold), D-pad Up/Left/Down/Right = ignition/auto-shift/auto-clutch/
+    // auto-blip toggles. Keyboard: I/K/F5/F6/F7 (demo/project.godot
+    // [input]'s ps_ignition/ps_starter/ps_toggle_auto_shift/
+    // ps_toggle_auto_clutch/ps_toggle_auto_blip actions).
+    raw.starter_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_START)
+        || input->is_action_pressed("ps_starter");
+    raw.ignition_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_DPAD_UP)
+        || input->is_action_pressed("ps_ignition");
+    raw.auto_shift_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_DPAD_LEFT)
+        || input->is_action_pressed("ps_toggle_auto_shift");
+    raw.auto_clutch_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_DPAD_DOWN)
+        || input->is_action_pressed("ps_toggle_auto_clutch");
+    raw.auto_blip_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_DPAD_RIGHT)
+        || input->is_action_pressed("ps_toggle_auto_blip");
 
     return raw;
 }
 
-void PsInputMap::_process(double /*delta*/) {
+void PsInputMap::_process(double delta) {
     const ScopedAdapterTimer timer; // frame_timing.h
-    channels_ = mapper_.process(gather_raw_input());
+    channels_ = mapper_.process(gather_raw_input(), static_cast<float>(delta));
 }
 
 void PsInputMap::set_steer_deadzone(float v) {
@@ -105,11 +127,16 @@ void PsInputMap::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_brake"), &PsInputMap::get_brake);
     ClassDB::bind_method(D_METHOD("get_handbrake"), &PsInputMap::get_handbrake);
     ClassDB::bind_method(D_METHOD("get_clutch"), &PsInputMap::get_clutch);
-    ClassDB::bind_method(D_METHOD("get_shift_up"), &PsInputMap::get_shift_up);
-    ClassDB::bind_method(D_METHOD("get_shift_down"), &PsInputMap::get_shift_down);
+    ClassDB::bind_method(D_METHOD("get_shift_up_count"), &PsInputMap::get_shift_up_count);
+    ClassDB::bind_method(D_METHOD("get_shift_down_count"), &PsInputMap::get_shift_down_count);
     ClassDB::bind_method(D_METHOD("get_camera"), &PsInputMap::get_camera);
     ClassDB::bind_method(D_METHOD("get_reset_vehicle"), &PsInputMap::get_reset_vehicle);
     ClassDB::bind_method(D_METHOD("get_debug_toggle"), &PsInputMap::get_debug_toggle);
+    ClassDB::bind_method(D_METHOD("get_ignition"), &PsInputMap::get_ignition);
+    ClassDB::bind_method(D_METHOD("get_starter"), &PsInputMap::get_starter);
+    ClassDB::bind_method(D_METHOD("get_toggle_auto_shift"), &PsInputMap::get_toggle_auto_shift);
+    ClassDB::bind_method(D_METHOD("get_toggle_auto_clutch"), &PsInputMap::get_toggle_auto_clutch);
+    ClassDB::bind_method(D_METHOD("get_toggle_auto_blip"), &PsInputMap::get_toggle_auto_blip);
 
     ClassDB::bind_method(D_METHOD("set_steer_deadzone", "value"), &PsInputMap::set_steer_deadzone);
     ClassDB::bind_method(D_METHOD("get_steer_deadzone"), &PsInputMap::get_steer_deadzone);
