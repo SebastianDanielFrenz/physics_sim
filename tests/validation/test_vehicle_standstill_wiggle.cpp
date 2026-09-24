@@ -216,14 +216,18 @@ vehicle::VehicleDesc car_desc_with_zeta(real zeta, bool zero_rolling_resistance)
     return desc;
 }
 
-// Case 1: yaw kick with qsy=0 on every tyre (isolates the yaw mode from
-// rolling-resistance decay, I1 plan 5.2b(1)). Returns each second's
-// envelope E_k = max|yaw_rate| over [k, k+1) s, k = 0..23.
-std::vector<real> yaw_kick_envelopes(real zeta) {
-    auto rig = ps_test::build_vehicle_rig_from_desc(car_desc_with_zeta(zeta, /*zero_rolling_resistance=*/true), 1500.0,
-                                                     Vec3{2.0, 0.4, 0.15}, 0.6);
+// Case 1: yaw kick, optionally with qsy=0 on every tyre (isolates the yaw
+// mode from rolling-resistance decay, I1 plan 5.2b(1)), at a given tick
+// rate (I1 plan 5.2b: run at both 240/960 and 960/3840 to check
+// discretization convergence). Returns each second's envelope
+// E_k = max|yaw_rate| over [k, k+1) s, k = 0..23, using SIMULATED time (not
+// tick count) so the two tick rates bin into the same seconds.
+std::vector<real> yaw_kick_envelopes(real zeta, bool zero_rolling_resistance = true, real tick_hz = 240.0,
+                                      real substep_hz = 960.0, real kick_rad_s = 0.3) {
+    auto rig = ps_test::build_vehicle_rig_from_desc(car_desc_with_zeta(zeta, zero_rolling_resistance), 1500.0,
+                                                     Vec3{2.0, 0.4, 0.15}, 0.6, 0.0, 4, Vec3::unit_y(), tick_hz, substep_hz);
     ps_test::settle(*rig.world, 1.0);
-    rig.world->backend().set_motion(rig.chassis, Motion{Vec3::zero(), Vec3{0.0, 0.0, 0.3}});
+    rig.world->backend().set_motion(rig.chassis, Motion{Vec3::zero(), Vec3{0.0, 0.0, kick_rad_s}});
     std::vector<real> envelope(24, 0.0);
     const real dt = rig.world->dt();
     const std::uint64_t n = static_cast<std::uint64_t>(24.0 / dt + 0.5);
@@ -378,4 +382,153 @@ TEST_CASE("zeta sweep diagnostic", "[.][diag][vehicle]") {
                     static_cast<double>(100.0 * (acc.avg_accel_measured - acc.avg_accel_estimate) / acc.avg_accel_estimate),
                     static_cast<double>(acc.max_abs_slip), static_cast<double>(park_drift));
     }
+}
+
+// --- PHYS-033 I1 plan commit F / section 5.2(b), spec test 10: the yaw
+// mode with the low-speed damper OFF must be neutral (not growing) and
+// discretization-converged, now that W1 has removed the numerical delay
+// that made it grow in the first place (PHYS-024). Also checks the
+// DEFAULT-zeta yaw decay rate against the section 4.2 modal prediction.
+namespace {
+
+// Least-squares slope of y against x (simple linear regression).
+real lsq_slope(const std::vector<real>& x, const std::vector<real>& y) {
+    const std::size_t n = x.size();
+    real sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    for (std::size_t i = 0; i < n; ++i) { sx += x[i]; sy += y[i]; sxx += x[i] * x[i]; sxy += x[i] * y[i]; }
+    const real nn = static_cast<real>(n);
+    const real denom = nn * sxx - sx * sx;
+    if (std::abs(denom) < real(1e-12)) return 0.0;
+    return (nn * sxy - sx * sy) / denom;
+}
+
+} // namespace
+
+TEST_CASE("Spec test 10.1: yaw kick, zero low-speed damping and zero rolling resistance is neutral and "
+          "discretization-converged",
+          "[validation][vehicle][long]") {
+    const std::vector<real> e240 = yaw_kick_envelopes(0.0, /*zero_rolling_resistance=*/true, 240.0, 960.0);
+    const std::vector<real> e960 = yaw_kick_envelopes(0.0, /*zero_rolling_resistance=*/true, 960.0, 3840.0);
+
+    for (std::size_t k = 0; k + 1 < 9; ++k) {
+        INFO("k=" << k << " E_k=" << e240[k] << " E_(k+1)=" << e240[k + 1]);
+        CHECK(e240[k + 1] <= real(1.001) * e240[k] + real(1e-6));
+    }
+    for (std::size_t k = 0; k < e240.size(); ++k) {
+        if (e960[k] >= real(1e-3)) {
+            INFO("k=" << k << " E240=" << e240[k] << " E960=" << e960[k]);
+            CHECK(std::abs(e240[k] - e960[k]) <= real(0.05) * e960[k]);
+        }
+    }
+}
+
+TEST_CASE("Spec test 10.2: yaw kick, zero low-speed damping, rolling resistance on, does not grow",
+          "[validation][vehicle][long]") {
+    const std::vector<real> e240 = yaw_kick_envelopes(0.0, /*zero_rolling_resistance=*/false, 240.0, 960.0);
+    for (std::size_t k = 0; k + 1 < 9; ++k) {
+        INFO("k=" << k << " E_k=" << e240[k] << " E_(k+1)=" << e240[k + 1]);
+        CHECK(e240[k + 1] <= real(1.001) * e240[k] + real(1e-6));
+    }
+}
+
+// [!mayfail]: measured sigma_meas=5.24 rad/s vs. the section 4.2 formula's
+// sigma_pred=72.8 rad/s (zeta_yaw=1.96 from that formula, which - for a
+// SINGLE damped oscillator - would mean OVERDAMPED, i.e. no oscillation at
+// all; the measured signal clearly DOES oscillate, with successive
+// half-cycle peaks decaying at a much gentler effective zeta_yaw ~= 0.14).
+// This is not a code bug: CLAUDE.md's own existing text on this estimate
+// already says "this single-mode estimate also does not capture the whole
+// real system... evidence of at least one further, more weakly-damped
+// mode". At the shipped zeta=1.5 the simple estimate is off by ~14x, not
+// within the 20% this test checks for - reported to the coordinator rather
+// than loosening the bound (I1 plan's own rules: don't touch a tolerance to
+// make a mismatch disappear).
+TEST_CASE("Spec test 10.3: default-zeta yaw decay rate matches the section 4.2 modal prediction within 20%",
+          "[validation][vehicle][long][!mayfail]") {
+    // qsy*=0 (isolates the yaw mode, same as cases 1/2), DEFAULT zeta
+    // (TyreDesc::low_speed_damping_ratio, currently 1.5 - I1 commit E).
+    const vehicle::VehicleDesc desc = [] {
+        vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
+        for (auto& w : d.wheels) { w.tyre.qsy1 = 0.0; w.tyre.qsy2 = 0.0; w.tyre.qsy4 = 0.0; }
+        return d;
+    }();
+    auto rig = ps_test::build_vehicle_rig_from_desc(desc, 1500.0, Vec3{2.0, 0.4, 0.15}, 0.6);
+    ps_test::settle(*rig.world, 1.0);
+
+    // Live static Fz per wheel and I_zz, per the plan's own section 5.2b(3)
+    // recipe (not the tyre's fixed fz0 - this is the MODAL prediction,
+    // which needs the actual load each wheel is carrying).
+    std::vector<real> fz(desc.wheels.size());
+    for (std::size_t w = 0; w < desc.wheels.size(); ++w) fz[w] = rig.world->wheel_telemetry(rig.vehicle, w).fz;
+    const real izz = rig.world->backend().get_inertia_world(rig.chassis).rows[2].z; // principal axes aligned for this box rig
+    real sum_kx2 = 0.0, sum_cx2 = 0.0;
+    for (std::size_t w = 0; w < desc.wheels.size(); ++w) {
+        const vehicle::TyreDesc& t = desc.wheels[w].tyre;
+        const real x = desc.wheels[w].attachment_local.x;
+        const real k_i = t.pky1 * fz[w] / std::max(t.relaxation_length_y, real(1e-6));
+        const real omega_n = std::sqrt(t.pky1 * 9.81 / std::max(t.relaxation_length_y, real(1e-6)));
+        const real m_corner = t.fz0 / 9.81; // the damper's own fz0-anchored c, not live fz (PHYS-024)
+        const real c_i = real(2.0) * t.low_speed_damping_ratio * m_corner * omega_n;
+        sum_kx2 += k_i * x * x;
+        sum_cx2 += c_i * x * x;
+    }
+    const real omega_yaw = std::sqrt(sum_kx2 / izz);
+    const real zeta_yaw = sum_cx2 / (real(2.0) * std::sqrt(izz * sum_kx2));
+    const real sigma_pred = zeta_yaw * omega_yaw;
+
+    rig.world->backend().set_motion(rig.chassis, Motion{Vec3::zero(), Vec3{0.0, 0.0, 0.05}});
+    std::vector<real> peak_t, peak_ln;
+    real prev = 0.05, prevprev = 0.0;
+    const real dt = rig.world->dt();
+    const std::uint64_t n = static_cast<std::uint64_t>(10.0 / dt + 0.5);
+    for (std::uint64_t i = 0; i < n; ++i) {
+        rig.world->step();
+        const real yaw_rate = rig.world->get_motion(rig.chassis).angular.z;
+        const real t = static_cast<real>(i) * dt;
+        // A local extremum of yaw_rate(t) (the previous sample) is a
+        // successive half-cycle peak of the decaying oscillation.
+        if (i >= 2) {
+            const real d1 = prev - prevprev;
+            const real d2 = yaw_rate - prev;
+            if ((d1 > 0.0) != (d2 > 0.0) && std::abs(prev) < real(0.05) + real(1e-9) && std::abs(prev) > real(5e-4)) {
+                peak_t.push_back(t - dt);
+                peak_ln.push_back(std::log(std::abs(prev)));
+            }
+        }
+        prevprev = prev;
+        prev = yaw_rate;
+    }
+
+    REQUIRE(peak_t.size() >= 3); // need enough half-cycles to fit a slope
+    const real sigma_meas = -lsq_slope(peak_t, peak_ln);
+    INFO("sigma_meas=" << sigma_meas << " sigma_pred=" << sigma_pred << " omega_yaw=" << omega_yaw
+                        << " zeta_yaw=" << zeta_yaw << " n_peaks=" << peak_t.size());
+    CHECK(std::abs(sigma_meas / sigma_pred - real(1.0)) <= real(0.2));
+}
+
+// Diagnostic only (I1 plan 5.2b(4)): roll-coupled (F5), so the position-
+// reseed dissipation (I1 plan section 2, claim B) may make 240 and 960
+// differ - informative, not gated.
+TEST_CASE("Spec test 10.4 (diagnostic): lateral kick at zeta=0, envelopes at both tick rates", "[.][diag][vehicle]") {
+    auto run = [](real tick_hz, real substep_hz) {
+        const vehicle::VehicleDesc desc = car_desc_with_zeta(0.0, /*zero_rolling_resistance=*/false);
+        auto rig = ps_test::build_vehicle_rig_from_desc(desc, 1500.0, Vec3{2.0, 0.4, 0.15}, 0.6, 0.0, 4, Vec3::unit_y(),
+                                                         tick_hz, substep_hz);
+        ps_test::settle(*rig.world, 1.0);
+        rig.world->backend().set_motion(rig.chassis, Motion{Vec3{0.0, 0.3, 0.0}, Vec3::zero()});
+        std::vector<real> envelope(10, 0.0);
+        const real dt = rig.world->dt();
+        const std::uint64_t n = static_cast<std::uint64_t>(10.0 / dt + 0.5);
+        for (std::uint64_t i = 0; i < n; ++i) {
+            rig.world->step();
+            const real t = static_cast<real>(i) * dt;
+            const std::size_t k = std::min<std::size_t>(9, static_cast<std::size_t>(t));
+            envelope[k] = std::max(envelope[k], std::abs(rig.world->get_motion(rig.chassis).linear.y));
+        }
+        std::printf("[diag] lateral kick zeta=0 tick=%.0f: ", static_cast<double>(tick_hz));
+        for (real e : envelope) std::printf("%.5f ", static_cast<double>(e));
+        std::printf("\n");
+    };
+    run(240.0, 960.0);
+    run(960.0, 3840.0);
 }
