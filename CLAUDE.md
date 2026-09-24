@@ -31,10 +31,10 @@ physics_sim/
       math/                           vec3.h, quat.h, mat3.h, pose.h (Pose/Motion/Wrench incl. Wrench::operator*(real)), simd.h (f64x4 skeleton)
       jobs/                           job_fn.h (JobFn), job_system.h (JobSystem, WaitGroup, parallel_for/parallel_batches), task_graph.h, debug_alloc.h
       world/                          ids.h (BodyId/JointId/ForceElementId/ArticulationId), frame.h (Frame, ILinkStateSource, ArticulationLinkRef), force_element.h (IForceElement), snapshot.h (WorldSnapshot incl. ArticulationSnapshot/contacts, SnapshotTripleBuffer), world.h (World, WorldConfig)
-      backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc, ShapeContactHit, ContactEvent, create_jolt_backend()); shape_desc.h (ShapeDesc/BoxShape/SphereShape/CapsuleShape/MeshShape/HeightfieldShape - split out of i_rigid_backend.h so articulation_desc.h can use ShapeDesc without pulling in the backend's JointType)
+      backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc, ShapeContactHit, ContactEvent, BodyIntegrationParams (PHYS-033 I1), create_jolt_backend()); shape_desc.h (ShapeDesc/BoxShape/SphereShape/CapsuleShape/MeshShape/HeightfieldShape - split out of i_rigid_backend.h so articulation_desc.h can use ShapeDesc without pulling in the backend's JointType)
       articulation/                   articulation_desc.h (ArticulationDesc incl. contact_strategy, RootDesc, LinkDesc incl. contact, JointType, JointLimits, VelocityActuator, LoopClosureDesc/LoopClosureType, ContactStrategy, ContactMaterial, LinkContactDesc) - descriptors only, no algorithm code
       terrain/                        terrain_source.h (ITerrainSource, TileKey, TileSample), terrain_config.h (TerrainConfig - pool sizing only, NOT grid resolution, see "Terrain tile system" below), procedural_terrain.h (load_procedural_terrain_source() factory)
-      vehicle/                        public, additive descriptors/seams only (PLAN.md 5.1/P3, no algorithm code - see "Vehicle system" below): vehicle_desc.h (VehicleDesc/WheelDesc/SuspensionDesc/SteeringDesc/BrakeDesc/DriveDesc/Curve1D), tyre_desc.h (TyreDesc, Pacejka MF5.2/6.1-subset coefficients), tyre_model.h (ITyreModel, TyreSlipInput/TyreForces, create_pacejka_tyre_model(), SlipRelaxationState/step_slip_relaxation()), wheel_telemetry.h (WheelTelemetry, returned by World::wheel_telemetry()), wheel_state.h (WheelState, returned by World::wheel_state() and carried in WorldSnapshot::vehicles - PLAN.md M1)
+      vehicle/                        public, additive descriptors/seams only (PLAN.md 5.1/P3, no algorithm code - see "Vehicle system" below): vehicle_desc.h (VehicleDesc/WheelDesc/SuspensionDesc/SteeringDesc/BrakeDesc/DriveDesc/Curve1D), tyre_desc.h (TyreDesc, Pacejka MF5.2/6.1-subset coefficients, low_speed_damping_ratio/low_speed_damping_vx - PHYS-033 I1), tyre_model.h (ITyreModel, TyreSlipInput/TyreForces, create_pacejka_tyre_model(), SlipRelaxationState/step_slip_relaxation()), wheel_telemetry.h (WheelTelemetry, returned by World::wheel_telemetry()), wheel_state.h (WheelState, returned by World::wheel_state() and carried in WorldSnapshot::vehicles - PLAN.md M1)
       io/                             telemetry.h (TelemetryRegistry, CSV via IO thread), scenario.h (Scenario incl. ScenarioArticulation/ScenarioTerrain/ScenarioVehicle/ScenarioControlEvent, load_scenario, build_scenario), surface_table.h (SurfaceTable), test_ground_loader.h (load_test_ground_collision()), vehicle_io.h (load_tyre_json(), load_vehicle_json())
     src/                              implementation
       version.cpp, jolt_proof.cpp
@@ -53,9 +53,9 @@ physics_sim/
     support/                          test-only shared helpers (not part of ps_core)
       counter_force_element.h         deterministic counter-hash IForceElement used by determinism/bench tests
       catch_main.cpp                  custom Catch2 entry point installing headless CRT handlers; target ps_test_catch_main
-      vehicle_test_helpers.h          PLAN.md P3: VehicleTestRig/build_vehicle_rig()/settle() - a World with a static ground box (flat or tilted) plus one vehicle built directly from a data/vehicles/*.json file; see "Vehicle system" below for the chassis-half-extents-vs-wheel-shape-cast constraint documented on build_vehicle_rig(). Also build_vehicle_rig_on_surface()/flat_surface_mesh() - same, but a flat MeshShape ground tagged with a named data/surfaces/surfaces.json SurfaceId instead of an untagged BoxShape, for tests comparing behaviour across surfaces (a plain BoxShape has no Jolt material and always resolves to kInvalidSurfaceId)
-    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_world_snapshot (ArticulationSnapshot/contacts/vehicles additions), test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case), test_mesh_heightfield_shapes (MeshShape/HeightfieldShape collision + surface ids), test_terrain_golden (ProceduralTerrainSource vs. terrain.py's golden points), test_terrain_tile_manager (white-box: seams, streaming, throttling, zero-alloc steady state), test_test_ground_loader (load_test_ground_collision + SurfaceTable), test_terrain_static_overlap (PHYS-021: a parked vehicle's wheels and a sliding probe crossing the test_ground straight's edge, plus a zero-gap sweep of both skidpad ring edges - the terrain/static-feature coincident-collision fix, see "Terrain tile system"), test_terrain_suppression_precompute (white-box, real test_ground data: load-time suppression precompute is bit-identical to the lazy path for every tile, worker-count invariant, and hit at runtime), test_pacejka_tyre_model (PLAN.md P3: MF5.2-subset pure/combined-slip curves, relaxation ODE, rolling resistance, cross-checked against an independent re-derivation and exact combined-slip-degeneracy identities), test_vehicle_ackermann_symmetry (front wheel Ackermann steer angles are exact left/right mirror images at +-full lock, and each wheel turns toward the commanded direction - see "Vehicle system" below and vault PHYS-022), test_vehicle_parallel_alloc (PLAN.md P4 I0: a full World::step with a vehicle, debug_alloc-armed), test_vehicle_io_validation (load_vehicle_json/load_tyre_json error paths: ackermann_fraction range, "format" field)
-    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path), test_articulation_contact_measurements (Compliant/ProxyBody: a fixed-base arm resting on the ground, the same rig pressed with a known force, a rail rig pushing a dynamic crate, a floating-base vehicle drop, 5/20 m/s impacts; two [!mayfail] ProxyBody cases), test_vehicle_static (corner weights vs. hand calculation), test_vehicle_parking_slope (15% slope, <1mm creep in 30s), test_vehicle_step_steer (yaw-rate response does not grow after a step-steer input), test_vehicle_skidpad (steady lateral acceleration vs. a two-axle roll-stiffness-split tyre-limited estimate, within 0.4% - PASSES; an earlier estimate-formula bug that double-counted lateral load transfer put this 5.2% over the 3% tolerance, see the test's own header comment and vault PHYS-018), test_vehicle_braking ([!mayfail]: 100-0 km/h distance vs. a load-transfer-corrected mu estimate - a per-axle ABS emulation fix (was front-only) closed the gap from 16% to 9%, still over the 3% tolerance; the residual is root-caused to closed-loop slip regulation against a locally unstable target under the wheel spin model's hard velocity clamp, not a harness oversight - see the test's own header comment and vault PHYS-019), test_vehicle_accel_standing_start (full-throttle 0-50 km/h average acceleration from an ALREADY-SETTLED rest vs. a point-mass estimate from car_sedan.json's own torque curve, within 15%, driven-wheel slip bounded (no runaway wheelspin); acceleration on dirt/grass lower than on asphalt; a third case documents that full throttle commanded before the suspension has settled DOES drive the tyre past its peak (Fx/Fz~0.6 vs ~1.0) but recovers within the test's own window and never stalls the car - see the file's own header comment, vehicle_desc.h's DriveDesc comment, and out/handover_accel.md for the final_drive_ratio root cause and this no-clutch-model caveat), test_vehicle_steer_mirror (full-throttle-from-settled-rest steering response is left/right mirror-symmetric: yaw rate opposite sign but equal magnitude, forward speed gained equally in both directions - see "Vehicle system" below and vault PHYS-022), test_vehicle_standstill_wiggle (a car arriving at near-standstill with residual yaw rate and/or steering settles instead of oscillating - the live-demo skidpad "wiggle" bug; two driven-then-braked cases plus a clean pure-yaw-rate-kick isolation, all asserting decaying not growing/holding amplitude, plus a worker-count state_hash check for the new low-speed code path - see "Vehicle system" below)
+      vehicle_test_helpers.h          PLAN.md P3: VehicleTestRig/build_vehicle_rig()/settle() - a World with a static ground box (flat or tilted) plus one vehicle built directly from a data/vehicles/*.json file; see "Vehicle system" below for the chassis-half-extents-vs-wheel-shape-cast constraint documented on build_vehicle_rig(). build_vehicle_rig_from_desc() (PHYS-033 I1) is the VehicleDesc-taking core build_vehicle_rig() wraps - takes an already-loaded (test-mutable) desc plus a tilt_axis (unit_y() default = longitudinal slope, unit_x() = cross slope) and tick_hz/substep_hz (for a fine-tick reference run). Also build_vehicle_rig_on_surface()/flat_surface_mesh() - same, but a flat MeshShape ground tagged with a named data/surfaces/surfaces.json SurfaceId instead of an untagged BoxShape, for tests comparing behaviour across surfaces (a plain BoxShape has no Jolt material and always resolves to kInvalidSurfaceId)
+    unit/                             target ps_unit_tests: test_hello, test_math, test_jobs (incl. the queue-full inline-fallback cases), test_world_basic, test_world_snapshot (ArticulationSnapshot/contacts/vehicles additions), test_articulation_core (white-box, core/src on its include path), test_articulation_four_bar (white-box), test_articulation_parallel_alloc (white-box: System::step_all is one job per articulation, debug_alloc-armed), test_aba_fast_transform (white-box: fast vs. reference ABA congruence transform, 1e-12 relative), test_scenario_articulation, test_articulation_contact (Compliant/ProxyBody smoke tests on a single-DOF rail rig, incl. a ProxyBody-at-high-speed [!mayfail] case), test_mesh_heightfield_shapes (MeshShape/HeightfieldShape collision + surface ids), test_terrain_golden (ProceduralTerrainSource vs. terrain.py's golden points), test_terrain_tile_manager (white-box: seams, streaming, throttling, zero-alloc steady state), test_test_ground_loader (load_test_ground_collision + SurfaceTable), test_terrain_static_overlap (PHYS-021: a parked vehicle's wheels and a sliding probe crossing the test_ground straight's edge, plus a zero-gap sweep of both skidpad ring edges - the terrain/static-feature coincident-collision fix, see "Terrain tile system"), test_terrain_suppression_precompute (white-box, real test_ground data: load-time suppression precompute is bit-identical to the lazy path for every tile, worker-count invariant, and hit at runtime), test_pacejka_tyre_model (PLAN.md P3: MF5.2-subset pure/combined-slip curves, relaxation ODE, rolling resistance, cross-checked against an independent re-derivation and exact combined-slip-degeneracy identities), test_vehicle_ackermann_symmetry (front wheel Ackermann steer angles are exact left/right mirror images at +-full lock, and each wheel turns toward the commanded direction - see "Vehicle system" below and vault PHYS-022), test_vehicle_parallel_alloc (PLAN.md P4 I0: a full World::step with a vehicle, debug_alloc-armed), test_vehicle_io_validation (load_vehicle_json/load_tyre_json error paths: ackermann_fraction range, "format" field), test_body_integration_params (PHYS-033 I1: IRigidBackend::get_integration_params vs. the box-inertia formula, damping/gravity-flag round-trip)
+    validation/                       target ps_validation_tests: test_free_fall, test_pendulum, test_joint_chain_energy, test_box_on_slope, test_tunnelling, test_resting_contact, test_huge_forces, test_mass_ratio (one case [!mayfail]), test_articulation_pendulum, test_articulation_double_pendulum, test_articulation_energy, test_articulation_mass_ratio, test_articulation_floating_base, test_articulation_actuator, test_articulation_four_bar_energy (white-box, core/src on its include path), test_articulation_contact_measurements (Compliant/ProxyBody: a fixed-base arm resting on the ground, the same rig pressed with a known force, a rail rig pushing a dynamic crate, a floating-base vehicle drop, 5/20 m/s impacts; two [!mayfail] ProxyBody cases), test_vehicle_static (corner weights vs. hand calculation), test_vehicle_parking_slope (15% slope, <1mm creep in 30s), test_vehicle_step_steer (yaw-rate response does not grow after a step-steer input), test_vehicle_skidpad (steady lateral acceleration vs. a two-axle roll-stiffness-split tyre-limited estimate, within 0.4% - PASSES; an earlier estimate-formula bug that double-counted lateral load transfer put this 5.2% over the 3% tolerance, see the test's own header comment and vault PHYS-018), test_vehicle_braking ([!mayfail]: 100-0 km/h distance vs. a load-transfer-corrected mu estimate - a per-axle ABS emulation fix (was front-only) closed the gap from 16% to 9%, still over the 3% tolerance; the residual is root-caused to closed-loop slip regulation against a locally unstable target under the wheel spin model's hard velocity clamp, not a harness oversight - see the test's own header comment and vault PHYS-019), test_vehicle_accel_standing_start (full-throttle 0-50 km/h average acceleration from an ALREADY-SETTLED rest vs. a point-mass estimate from car_sedan.json's own torque curve, within 15%, driven-wheel slip bounded (no runaway wheelspin); acceleration on dirt/grass lower than on asphalt; a third case documents that full throttle commanded before the suspension has settled DOES drive the tyre past its peak (Fx/Fz~0.6 vs ~1.0) but recovers within the test's own window and never stalls the car - see the file's own header comment, vehicle_desc.h's DriveDesc comment, and out/handover_accel.md for the final_drive_ratio root cause and this no-clutch-model caveat), test_vehicle_steer_mirror (full-throttle-from-settled-rest steering response is left/right mirror-symmetric: yaw rate opposite sign but equal magnitude, forward speed gained equally in both directions - see "Vehicle system" below and vault PHYS-022), test_vehicle_standstill_wiggle (a car arriving at near-standstill with residual yaw rate and/or steering settles instead of oscillating - the live-demo skidpad "wiggle" bug; two driven-then-braked cases plus a clean pure-yaw-rate-kick isolation, all asserting decaying not growing/holding amplitude, a worker-count state_hash check for the low-speed code path, a [.][diag] "zeta sweep diagnostic" (PHYS-033 I1 commit E), and PHYS-033 spec test 10 - a yaw kick with zero low-speed damping is neutral and discretization-converged (240 vs. 960 Hz), the same with rolling resistance on, and a [!mayfail] check of the default-zeta decay rate against the section 4.2 modal estimate (measured off by ~14x, a known limitation of that single-mode estimate, not a code bug) - see "Vehicle system" below), test_vehicle_shadow_chassis (PHYS-033 I1 W1: shadow_dv_error/dw_error stay within 1e-4 - measured ~1e-6/1e-7 - for a settled car under step steer, a constant force element and an alternating one matching the predicted one-tick-lag estimate; a chassis forced into contact shows dv_error > 1e-2; a per-vehicle-file low-speed-damper stability bound gamma < 1), test_vehicle_tractor_cross_slope (PHYS-033 I1 spec test 11: a tractor holds a 10% cross slope / 15% longitudinal slope on the handbrake alone - was [!mayfail] until commit G1's data fix; a [.][diag] A/B harness against the H0-H6 cross-slope hypotheses, confirming H0 (data/vehicles/tractor.json's inconsistent rear attachment z) as the root cause)
     determinism/                      target ps_determinism_tests: test_worker_count_hash (1/2/4/10/24 workers + 1000-run randomised-scheduling stress test; one case adds several articulations to the same scenario, one case mixes Compliant/ProxyBody contact-bearing rail rigs with plain chains, one case adds two vehicles built directly from a VehicleDesc with a mid-run step-steer input, one case loads data/scenarios/terrain_multi_interest.json from PS_SOURCE_DIR - two interest points plus suppression)
     bench/                            target bench_force_elements (plain main, also CTest-registered): 2000-force-element worker scaling; target bench_contact_coupling (plain main, also CTest-registered): cost per tick per contact strategy, scaling with contact count; target bench_terrain_tiles (plain main, also CTest-registered): tile-streaming cost/tick against the real test_ground terrain spec, simulated 50 km drive; target ps_energy_study (plain main, NOT CTest-registered): Part A solver-settings energy-loss sweep plus the P1.5a Jolt-vs-articulation table and 10-link cost benchmark, energy_study.cpp
   data/
@@ -637,84 +637,56 @@ internal-implementation seam. No Jolt type appears in any public header.
   acceptance tests don't need one). `step()`: suspension force from that
   measured `x`/`xdot`, tyre force via `ITyreModel` at the measured
   slip/load/camber, wheel spin integration from drive/brake/tyre-Fx torque.
-  `step()` also adds `lateral_standstill_damping_force` (a low-speed-only
-  viscous term on `fy`) - the skidpad "wiggle" fix (owner-reported live-demo
-  bug: a car settles into a persistent lateral/yaw oscillation after driving
-  onto the skidpad and slowing to near-standstill). Root cause, measured via
-  `test_vehicle_standstill_wiggle.cpp`'s pure-yaw-rate-kick isolation: the
-  relaxation ODE's own decay rate (`step_slip_relaxation`'s
-  `a = vx_mag/sigma`) is shared by the longitudinal and lateral slip
-  channels and vanishes as a wheel's ROLLING speed -> 0; the longitudinal
-  channel is saved by rolling resistance (a genuine drag along the same
-  axis, nonzero at any speed - why `test_vehicle_parking_slope` already
-  passed), but the lateral channel has no equivalent, so the
-  `alpha_eq`/chassis-yaw-rate loop is a marginally-stable (`zeta -> 0`)
-  continuous oscillator. Confirmed NUMERICAL (not physical): the same
-  initial kick grows into a saturated ~5.4 Hz/~0.92 rad/s limit cycle at
-  the normal 240 Hz tick but decays cleanly at 4x finer tick rate -
-  `VehicleInstance::step_tick`'s one-tick-delayed wrench application
-  (chassis motion frozen at tick-start across all 4 substeps) turns zero
-  continuous damping margin negative. **This fix is a COMPENSATION for that
-  delay, not a repair of it** - the delay itself is untouched. `c_lat =
-  2*zeta_min*(fz0/g)*sqrt(pky1*g/sigma_y)` (fz0 the tyre's FIXED reference
-  load, not live fz - see below) gives the CONTINUOUS system enough real
-  damping margin that the delay can no longer tip it negative, faded to
-  zero above 2 m/s TOTAL contact-patch speed (not just longitudinal - so a
-  genuinely fast lateral slide/spin/push is never damped). `zeta_min` is
-  sized against THIS SPECIFIC 240 Hz one-tick delay, not derived from tyre/
-  carcass physics - if `step_tick`'s application delay is ever fixed
-  properly (e.g. wrench applied per SUBSTEP against an updated chassis
-  velocity instead of once per tick against a tick-start snapshot, or an
-  implicit lateral-relaxation integration), THIS TERM MUST BE REVISITED,
-  not left stacked on top; that delay fix is plausibly the better long-term
-  repair but was judged too large in scope for this bug (touches the
-  tick/substep pipeline every vehicle validation test is measured against,
-  would very likely move every vehicle scenario's `state_hash`) - flagged
-  as its own PLAN.md item rather than attempted here. Two corrections found
-  only by measuring, not by the initial derivation alone: (1) the damper's
-  own stability bound is NOT the single-wheel check it first looks like -
-  all four wheels' damping torques sum onto the one shared YAW degree of
-  freedom, and because a real chassis's mass sits closer to the CoM than
-  "concentrated at the 4 wheels", the yaw mode is ~3x more sensitive to
-  this damper than the lateral-translation mode; a value the single-wheel
-  check called safe (`zeta_min=2.5`) made the wiggle WORSE than no fix at
-  all. The resulting aggregate bound (`wheel_instance.cpp`'s own comment)
-  puts `zeta_min=1.5` just past the ratio=1 line into the alternating-sign-
-  decay band - NOT the same as "marginal": the explicit-Euler decay
-  multiplier is smallest (fastest decay) right at ratio=1 and only becomes
-  slow/dangerous approaching ratio=2 (predicted, and measured, to diverge
-  at `zeta_min~=2.47`); at `zeta_min=1.5` the multiplier is -0.213, an
-  alternating correction shrinking ~79% every 4.17 ms tick, unmeasurable at
-  any observable timescale - confirmed empirically the cleanest of
-  {0.7, 1.0, 1.5, 2.5} actually tried (0.7 and 1.0 left a measurable slow
-  secondary regrowth bump over 12-24 s that this single-mode estimate does
-  not itself predict - real evidence of at least one further mode the
-  estimate does not capture; 1.5 decayed with no regrowth over 24 s; 2.5
-  diverged, matching the model almost exactly). (2) `c_lat` must scale with
-  the tyre's fixed `fz0`, not the live/instantaneous `fz`: an earlier
-  version tied to live `fz` created a positive-feedback loop during
-  hard-acceleration weight-transfer transients (measured `fz` spiking to
-  ~11x nominal on a FWD standing start) that briefly spun the car out in
-  `test_vehicle_accel_standing_start.cpp`'s asphalt case before this was
-  caught and fixed. Separately confirmed (not fixed, out of
-  scope): the tractor on `test_ground.json`'s `spawn_side_slope` (10% cross
-  slope, handbrake) already slides materially with this term fully
-  DISABLED (~18 m/10 s, A/B measured) - a pre-existing, previously-
-  unvalidated gap (no CTest ever covered tractor lateral-slope holding),
-  not caused by this fix; enabling the fix makes it only modestly worse
-  (~21 m/10 s).
-- `vehicle_instance.h`/`.cpp` (`VehicleInstance`) - `step_tick()` runs
-  every substep within a 240 Hz tick (PLAN.md D3: chassis pose/motion
-  extrapolated from tick-start via the quaternion exponential map, held
-  across substeps), computing every wheel's contact (pass 1, so the
-  anti-roll-bar's partner-compression read in pass 2 is fresh), then each
-  wheel's suspension+tyre+spin substep (pass 2); applies the
-  substep-AVERAGED wrench once per tick via `IRigidBackend::apply_wrench`
-  directly (not through `IForceElement`, whose `evaluate()` is const/
-  stateless by contract and cannot own wheel state) - mirrors
-  `articulation::ContactCoupling`'s existing "apply directly to the other
-  body from inside the substep stage" precedent. Ackermann steering
-  (`ackermann_wheel_angle()`): per-wheel angle from turn radius `R =
+  `step()` also adds `low_speed_lateral_damping_force` (a low-speed-only
+  viscous term on `fy`, `TyreDesc::low_speed_damping_ratio`/
+  `low_speed_damping_vx` - PHYS-033 I1, `ps/vehicle/tyre_desc.h`'s own field
+  comment): `c = 2*ratio*sqrt(k_lat*m_ref)`,
+  `k_lat = pky1*fz0/relaxation_length_y`, `m_ref = fz0/9.81` (the tyre's
+  FIXED nominal load, never the live/instantaneous `fz` - PHYS-024), faded
+  to zero above `low_speed_damping_vx` on TOTAL contact-patch speed (not
+  just longitudinal). Physical carcass/relaxation damping the tyre model's
+  own relaxation ODE is missing at vanishing rolling speed - NOT a
+  compensation for any tick-level delay (that delay is removed outright by
+  the W1 shadow chassis below; see PHYS-024/PHYS-033 in the vault for the
+  full history of both). Shipped default `low_speed_damping_ratio = 1.5`
+  for every `data/tyres/*.json` file: a `{0, 0.1, ..., 1.5}` sweep run
+  against the W1 shadow chassis (`test_vehicle_standstill_wiggle.cpp`'s
+  `"zeta sweep diagnostic"`, `[.][diag]`) found every value neutral for the
+  yaw/lateral modes themselves, but the full-throttle standing-start and
+  parking-slope acceptance tests are both non-monotonic in this ratio over
+  `[0, 1.5]` - 1.5 is the only value tried that keeps both passing
+  simultaneously. A per-vehicle-file explicit-integration stability bound
+  (`gamma < 1`) on this term lives in `test_vehicle_shadow_chassis.cpp`.
+- `vehicle_instance.h`/`.cpp` (`VehicleInstance`) - `step_tick()` runs a
+  per-substep SHADOW chassis (PHYS-033 I1 W1): a local pose/twist,
+  seeded from the tick's real start pose/motion, integrated substep-by-
+  substep using `IRigidBackend::get_integration_params(chassis)` (inverse
+  mass/inertia at the TICK-START rotation, gravity factor, no gyroscopic
+  term) exactly the way the backend's own velocity integrator will apply
+  the tick's substep-averaged wrench in the next `backend_step` - within a
+  substep the wheels see the shadow's own CURRENT twist (not a tick-start
+  value held constant across all substeps, the previous scheme), so their
+  relaxation state (`alpha_eq`/`kappa_eq`) advances against real intra-tick
+  velocity. `shadow_dv_error()`/`shadow_dw_error()` (also
+  `World::vehicle_shadow_dv_error`/`_dw_error` and two telemetry channels
+  per vehicle, `vehicle<i>.chassis.shadow_dv_error`/`_dw_error`) report the
+  gap between the shadow's prediction made last tick and the backend's
+  actual chassis velocity this tick - near the float noise floor
+  (~1e-6/1e-7) whenever nothing outside the shadow's model (a contact, a
+  constraint, a changing external wrench) touches the chassis; see
+  `test_vehicle_shadow_chassis.cpp`. `VehicleTickEnv{gravity}` carries the
+  one piece of `World` state the shadow needs; the external wrench it uses
+  is last tick's gathered force-element wrench on the chassis body
+  (`vehicle::System::note_body_wrench`, called from `World::stage_gather`'s
+  `else` branch - an O(1) array lookup, no allocation). Still computes
+  every wheel's contact (pass 1, so the anti-roll-bar's partner-compression
+  read in pass 2 is fresh), then each wheel's suspension+tyre+spin substep
+  (pass 2); still applies the substep-AVERAGED wrench once per tick via
+  `IRigidBackend::apply_wrench` directly (not through `IForceElement`,
+  whose `evaluate()` is const/stateless by contract and cannot own wheel
+  state) - mirrors `articulation::ContactCoupling`'s existing "apply
+  directly to the other body from inside the substep stage" precedent.
+  Ackermann steering (`ackermann_wheel_angle()`): per-wheel angle from turn radius `R =
   wheelbase/tan(delta_avg)` and each wheel's attachment point relative to
   the rear axle (both derived from wheel attachment points at construction,
   not stored in `SteeringDesc`), blended by `ackermann_fraction`; a rear-
@@ -764,7 +736,9 @@ existing scenario's `state_hash` had to stay bit-identical (confirmed:
 workers, matching the value recorded before this field existed).
 
 `World` additions (additive, `ps/world/world.h`): `create_vehicle`,
-`vehicle_wheel_count`, `wheel_telemetry`, `wheel_name`, `wheel_state`.
+`vehicle_wheel_count`, `wheel_telemetry`, `wheel_name`, `wheel_state`,
+`vehicle_shadow_dv_error`, `vehicle_shadow_dw_error` (PHYS-033 I1 W1, see
+above).
 `ps/io/scenario.h`
 additions: `ScenarioVehicle` (a vehicle on an already-described chassis
 body, `vehicle_json_path` resolved relative to the scenario file, loaded
@@ -797,7 +771,12 @@ passenger_car_225_45r17.json`, `data/vehicles/tractor.json` +
 `data/tyres/{tractor_front,tractor_rear}.json` - geometry derived from
 `data/models/*/*.rig.json`'s wheel pivots/radii, plausible/published
 parameters with source noted per PLAN.md section 8 (never a proprietary
-`.tir` file).
+`.tir` file). `data/tyres/*.json` each set `low_speed_damping_ratio`/
+`low_speed_damping_vx` explicitly (PHYS-033 I1, see above).
+`data/vehicles/tractor.json`'s rear wheel attachment z is `-0.275` (PHYS-033
+I1 commit G1 - was `-0.725`, inconsistent with the front/rear wheel radii
+`data/models/tractor/tractor.rig.json` implies; see the file's own `source`
+field).
 
 ## Adapter seams (`ps/world/snapshot.h`, `World::set_control`/`get_control`, PLAN.md P2)
 
@@ -872,6 +851,16 @@ constant.
 coincident-collision suppression" above): `body->IsStatic()` behind the
 same `TryGetBody(lookup(id))` null-safety pattern as `get_mass`/
 `get_inertia_world`.
+
+`IRigidBackend::get_integration_params` (PHYS-033 I1 W1, `BodyIntegrationParams`
+in `ps/backend/i_rigid_backend.h`): `inv_mass`, `inv_inertia_world` (at the
+body's CURRENT rotation - Jolt itself uses the rotation at step START),
+`gravity_factor`, `linear_damping`/`angular_damping`, `gyroscopic`
+(`GetApplyGyroscopicForce()`) - same `TryGetBody`/null-safety pattern as
+`get_mass`/`get_inertia_world` above. Read-only, no side effects. Consumed
+by `VehicleInstance::step_tick`'s shadow chassis (see "Vehicle system"
+above); `tests/unit/test_body_integration_params.cpp` cross-checks it
+against the box-inertia formula.
 
 `IRigidBackend::body_triangle_xy_bounds_into` (PHYS-021 Task B, load-time
 only - allocates): flattens the body's shape into leaf `TransformedShape`s
