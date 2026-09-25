@@ -635,10 +635,29 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     p.components.push_back({id, g});
                 } else if (type == "differential") {
                     ps::drivetrain::DifferentialDesc d;
-                    if (cj.value("kind", std::string()) != "open") {
-                        throw std::runtime_error(ctx + ": differential 'kind' must be \"open\" (I4 adds others)");
+                    // PHYS-033 P4 I4 C6 (plan section 3.1): "open"/"locked"/
+                    // "viscous" are implemented; "active" and "clutch_lsd"/
+                    // "torsen" are named-but-rejected placeholders (clear,
+                    // kind-specific messages instead of falling through to
+                    // the generic "unknown kind" case) so a vehicle file
+                    // written against a later increment's kind fails loudly
+                    // here, not silently as "open".
+                    const std::string kind_str = cj.value("kind", std::string());
+                    if (kind_str == "open") {
+                        d.kind = ps::drivetrain::DifferentialKind::Open;
+                    } else if (kind_str == "locked") {
+                        d.kind = ps::drivetrain::DifferentialKind::Locked;
+                    } else if (kind_str == "viscous") {
+                        d.kind = ps::drivetrain::DifferentialKind::Viscous;
+                    } else if (kind_str == "active") {
+                        throw std::runtime_error(ctx + ": differential kind \"active\" is not supported until a "
+                                                        "torque-vectoring controller exists");
+                    } else if (kind_str == "clutch_lsd" || kind_str == "torsen") {
+                        throw std::runtime_error(ctx + ": differential kind \"" + kind_str +
+                                                  "\" is not supported yet (I4 commit C7 will add it)");
+                    } else {
+                        throw std::runtime_error(ctx + ": differential 'kind' must be \"open\", \"locked\" or \"viscous\"");
                     }
-                    d.kind = ps::drivetrain::DifferentialKind::Open;
                     d.ratio = cj.value("ratio", d.ratio);
                     if (d.ratio == real(0.0)) throw std::runtime_error(ctx + ": differential 'ratio' must be != 0");
                     d.efficiency = cj.value("efficiency", d.efficiency);
@@ -648,8 +667,30 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     d.carrier_inertia_kgm2 = cj.value("carrier_inertia_kgm2", d.carrier_inertia_kgm2);
                     d.carrier_axis_local = read_vec3(cj.value("carrier_axis_local", json()), Vec3::zero());
                     require_zero_or_unit(d.carrier_axis_local, ctx + ".carrier_axis_local");
+                    // PHYS-033 P4 I4 C6: viscous_nm_s_rad is only meaningful
+                    // (and required > 0) for kind == "viscous" - the implicit
+                    // L-R coupling coefficient (powertrain_desc.h's own field
+                    // comment).
+                    if (cj.contains("viscous_nm_s_rad")) {
+                        if (d.kind != ps::drivetrain::DifferentialKind::Viscous) {
+                            throw std::runtime_error(ctx +
+                                                      ": differential 'viscous_nm_s_rad' is only valid for kind \"viscous\"");
+                        }
+                        d.viscous_nm_s_rad = cj.value("viscous_nm_s_rad", d.viscous_nm_s_rad);
+                    }
+                    if (d.kind == ps::drivetrain::DifferentialKind::Viscous && !(d.viscous_nm_s_rad > real(0.0))) {
+                        throw std::runtime_error(ctx + ": differential kind \"viscous\" requires 'viscous_nm_s_rad' > 0");
+                    }
                     // PHYS-033 P4 I4 C5 (plan section 3.1): lockable + optional lock block.
                     d.lockable = cj.value("lockable", false);
+                    // PHYS-033 P4 I4 C6: kind "locked" is already always
+                    // locked (an unconditional row, powertrain.cpp's
+                    // always_locked_diffs_) - "lockable" (togglable at
+                    // runtime) is meaningless on it.
+                    if (d.lockable && d.kind == ps::drivetrain::DifferentialKind::Locked) {
+                        throw std::runtime_error(ctx + ": differential 'lockable' is redundant on kind \"locked\" "
+                                                        "(already always locked)");
+                    }
                     if (cj.contains("lock")) {
                         if (!d.lockable) throw std::runtime_error(ctx + ": differential 'lock' requires \"lockable\": true");
                         const auto& lj = cj.at("lock");

@@ -326,6 +326,12 @@ private:
     int gear_state_count_ = 1;                // n_g
     std::vector<DiffLock> locks_;             // lockable diffs, component order (bit i)
     std::vector<std::uint8_t> lock_pending_;  // parallel to locks_, sized once at construction; NOT hashed
+    // I4 C6: kind == Locked diffs' L/R node pairs - the row is unconditional/
+    // state-independent (not a locks_/lock_pending_ entry, no channel, no
+    // bit), but reset() still needs to force L/R to their mean so the
+    // post-reset state satisfies this row exactly, same reasoning as the
+    // ENGAGED-lock averaging below (reset step 3.5) applied unconditionally.
+    std::vector<std::pair<NodeId, NodeId>> always_locked_diffs_;
     std::vector<NodeId> hub_nodes_;
     std::vector<std::uint8_t> driven_; // parallel to hub_nodes_, WheelDesc order
     real driven_wheel_mean_radius_ = 0.0; // mean radius of driven wheels, computed once at construction

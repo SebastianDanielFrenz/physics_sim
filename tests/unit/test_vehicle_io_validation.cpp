@@ -278,6 +278,84 @@ TEST_CASE("load_vehicle_json parses a lockable differential and rejects a bad 'l
     }
 }
 
+// PHYS-033 P4 I4 C6 (plan section 3.1): differential "kind" gains "locked"
+// and "viscous" alongside "open"; "active"/"clutch_lsd"/"torsen" are named-
+// but-rejected placeholders with their own clear messages (not the generic
+// "unknown kind" case), and viscous_nm_s_rad is validated against the kind
+// it's attached to.
+TEST_CASE("load_vehicle_json validates differential 'kind' (I4 C6: locked/viscous)", "[unit][vehicle][io][drivetrain]") {
+    using Catch::Matchers::ContainsSubstring;
+    auto json_with_diff_fields = [](const std::string& kind, const std::string& extra) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "diff", "type": "differential", "kind": ")") +
+               kind + R"(", "ratio": 1.0)" + extra + R"( }
+    ],
+    "shafts": [
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ]
+  }
+})";
+    };
+    auto only_diff = [](const vehicle::VehicleDesc& d) -> const drivetrain::DifferentialDesc& {
+        REQUIRE(d.powertrain.components.size() == 1);
+        const auto* diff = std::get_if<drivetrain::DifferentialDesc>(&d.powertrain.components[0].params);
+        REQUIRE(diff != nullptr);
+        return *diff;
+    };
+
+    SECTION("kind \"locked\" is accepted, no viscous_nm_s_rad needed") {
+        TempJsonFile f(json_with_diff_fields("locked", ""), "vehicle_diff_kind_locked");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        CHECK(only_diff(d).kind == drivetrain::DifferentialKind::Locked);
+    }
+    SECTION("kind \"viscous\" with a positive viscous_nm_s_rad is accepted") {
+        TempJsonFile f(json_with_diff_fields("viscous", R"(, "viscous_nm_s_rad": 50.0)"), "vehicle_diff_kind_viscous_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::DifferentialDesc& diff = only_diff(d);
+        CHECK(diff.kind == drivetrain::DifferentialKind::Viscous);
+        CHECK(diff.viscous_nm_s_rad == 50.0);
+    }
+    SECTION("unknown kind is rejected") {
+        TempJsonFile f(json_with_diff_fields("torque_vectoring_magic", ""), "vehicle_diff_kind_unknown");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("kind"));
+    }
+    SECTION("kind \"active\" is rejected with its own message") {
+        TempJsonFile f(json_with_diff_fields("active", ""), "vehicle_diff_kind_active");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                            ContainsSubstring("torque-vectoring controller"));
+    }
+    SECTION("kind \"clutch_lsd\" is rejected as not supported yet") {
+        TempJsonFile f(json_with_diff_fields("clutch_lsd", ""), "vehicle_diff_kind_clutch_lsd");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("not supported yet"));
+    }
+    SECTION("kind \"torsen\" is rejected as not supported yet") {
+        TempJsonFile f(json_with_diff_fields("torsen", ""), "vehicle_diff_kind_torsen");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("not supported yet"));
+    }
+    SECTION("kind \"viscous\" without viscous_nm_s_rad is rejected") {
+        TempJsonFile f(json_with_diff_fields("viscous", ""), "vehicle_diff_kind_viscous_missing");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("viscous_nm_s_rad"));
+    }
+    SECTION("kind \"viscous\" with viscous_nm_s_rad <= 0 is rejected") {
+        TempJsonFile f(json_with_diff_fields("viscous", R"(, "viscous_nm_s_rad": 0.0)"), "vehicle_diff_kind_viscous_zero");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("viscous_nm_s_rad"));
+    }
+    SECTION("viscous_nm_s_rad on a non-viscous kind is rejected") {
+        TempJsonFile f(json_with_diff_fields("open", R"(, "viscous_nm_s_rad": 50.0)"), "vehicle_diff_kind_open_viscous_field");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("viscous_nm_s_rad"));
+    }
+    SECTION("lockable: true on kind \"locked\" is rejected") {
+        TempJsonFile f(json_with_diff_fields("locked", R"(, "lockable": true)"), "vehicle_diff_kind_locked_lockable");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("lockable"));
+    }
+}
+
 // --- PHYS-033 P4 I3 plan section 9.2 ----------------------------------------
 
 namespace {

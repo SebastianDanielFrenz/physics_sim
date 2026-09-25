@@ -188,6 +188,15 @@ public:
         children_right_ = std::move(children_right);
     }
 
+    // PHYS-033 P4 I4 C6: build-time only, called once by Powertrain's
+    // constructor for a kind == Viscous diff (never for Open/Locked - a
+    // default-constructed CouplingId{index=0} is a real, valid id, so
+    // has_viscous_coupling_ is the only safe "none assigned" sentinel).
+    void set_viscous_coupling(CouplingId id) {
+        has_viscous_coupling_ = true;
+        viscous_coupling_id_ = id;
+    }
+
     void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
     void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
                      PowertrainEnergy& ledger) override;
@@ -231,6 +240,9 @@ private:
     real omega_old_carrier_ = 0.0;
     real omega_old_left_ = 0.0;
     real omega_old_right_ = 0.0;
+    // PHYS-033 P4 I4 C6: kind == Viscous only (see set_viscous_coupling above).
+    bool has_viscous_coupling_ = false;
+    CouplingId viscous_coupling_id_{};
 };
 
 // direct_torque brakes (plan section 4.2/6): one friction row per wheel hub

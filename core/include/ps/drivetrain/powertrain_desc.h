@@ -116,7 +116,11 @@ struct GearPairDesc {
     Vec3 in_axis_local = Vec3::zero(), out_axis_local = Vec3::zero(); // plan section 6.7
 };
 
-enum class DifferentialKind { Open }; // I4 adds Locked, ClutchLsd, Viscous, Torsen, Active
+// PHYS-033 P4 I4 C6 (plan section 3.1) adds Locked (spool: an unconditional,
+// state-independent omega_L == omega_R row alongside the diff's own row) and
+// Viscous (the open row plus an implicit L-R coupling, `viscous_nm_s_rad`
+// below). ClutchLsd/Torsen/Active remain unimplemented (C7+).
+enum class DifferentialKind { Open, Locked, Viscous }; // I4 C7 adds ClutchLsd, Torsen, Active
 
 // PHYS-033 P4 I4 C5 (plan section 2.6/3.1): a lockable diff's L-R lock
 // (omega_L == omega_R rigid row, present only in composed topology states
@@ -136,6 +140,11 @@ struct DifferentialDesc {
     Vec3 carrier_axis_local = Vec3::zero();
     bool lockable = false; // I4 C5: must be a leaf diff (its L/R carry no other rigid row)
     DiffLockDesc lock;     // only meaningful when lockable
+    // I4 C6: only meaningful (and required > 0) when kind == Viscous - the
+    // implicit L-R coupling's viscous coefficient (N*m*s/rad), applied every
+    // substep via NetworkBuilder::add_coupling/Assembly::set_coupling(id, 1,
+    // 1, viscous_nm_s_rad) alongside the diff's own (open) row.
+    real viscous_nm_s_rad = 0.0;
 };
 
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
