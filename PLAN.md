@@ -673,6 +673,35 @@ I3 first drivable (torque-map engine, clutch, manual gearbox, open diff,
 minimal drag), then I4 diffs/PTO, I5 ABS/TC, I6 ESC, I7 mean-value engine and
 fuel tank, N2O, I8 map generator, I9 electric and hybrids, I10 automatics.
 
+Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
+type:
+- Manual: the pedal requests 0-100 % of the engine's gross (indicated) torque
+  available at the current rpm, before losses. Friction, pumping and engine
+  braking are subtracted in full at every pedal position:
+  `T = motoring(rpm) + pedal * (wot(rpm) - motoring(rpm))`.
+  `EngineTorqueMap` has implemented exactly this since I3. The adapter adds no
+  pedal curve (trigger exponent 1.0). Consequence: 30 % pedal at 3000 rpm
+  gives 0.3 * (187 + 45) - 45 = 25 N*m net on car_sedan, about 13 % of WOT.
+- Automatic, CVT or DCT (I10): the pedal is a power request. The
+  transmission/engine controller chooses the gear (or ratio) and the engine
+  torque to deliver that power, the way a real drive-by-wire powertrain
+  interprets the pedal.
+- Driving modes (at least for automatics, later): each vehicle file lists the
+  modes that model offers (e.g. eco, comfort, sport, track), selectable at
+  runtime through a control channel. Each mode maps pedal 0..1 to a raw power
+  request 0..1 (fraction of peak engine power) with its own monotonic curve.
+  Example: pedal 0.5 -> 0.35 in eco, 0.70 in sport. Every curve must satisfy
+  f(0) = 0 and f(1) = 1, so flooring the pedal requests peak power in every
+  mode; eco therefore rises steeply near full pedal. The loader validates the
+  endpoints and monotonicity. A mode can later carry more than the pedal map
+  (shift points, damping, steering weight).
+
+Mass distribution (Sebastian, 2026-09-25): car_sedan moves from 50/50 to about
+60/40 front/rear, typical for a FWD sedan. This is an interim data change.
+Later, a vehicle's total mass, CoM and inertia should be computed from its
+parts (engine, gearbox, body, fuel, occupants), as part of the parametric
+vehicle editor, instead of being hand-entered.
+
 Driver-assistance requirement (Sebastian, 2026-09-23): optional ABS,
 traction control, ESP/ESC, and an open-ended list beyond that (e.g. launch
 control, torque vectoring, hill hold). Each vehicle opts in per system via its
