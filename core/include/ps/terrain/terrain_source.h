@@ -40,6 +40,23 @@ struct TileKey {
 // same row-major convention. tile_origin_xy is the world-space (x, y) of
 // sample (0, 0) (z is not meaningful for the origin - height comes from the
 // samples themselves).
+//
+// heights are always ABSOLUTE world-space elevation (e.g. real-world
+// terrain fed through this interface can sit anywhere from roughly
+// 90-880 m ASL) - this contract does not change. ps::terrain::TileManager
+// (core/src/terrain/tile_manager.h/.cpp, internal) is the ONLY thing that
+// ever shifts a tile vertically: it subtracts a per-tile datum (each tile's
+// own absolute height range snapped to a multiple of 128 m) before handing
+// the sample to the collision backend, and adds the datum back via the
+// tile's own body pose - because JoltPhysics' HeightFieldShape fixes its
+// 16-bit quantisation range once, at first construction, to a generous but
+// FIXED +-200 m window, which real-world absolute elevation does not fit on
+// its own. A tile whose own local relief alone exceeds that +-200 m window
+// is still uploaded (clamped, not dropped) and counted - see TileManager::
+// relief_overflow_count() - far more relief than any real terrain needs at
+// this project's tile sizes and sample spacing. Nothing that reads
+// ITerrainSource directly (e.g. a caller's own fill_tile probe) ever sees
+// anything but the real, absolute height.
 struct TileSample {
     std::vector<real> heights;
     std::vector<SurfaceId> cell_surface_ids;

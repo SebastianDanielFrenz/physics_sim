@@ -26,6 +26,17 @@
 // session if a much larger radius or much finer near-field resolution is
 // ever needed simultaneously.
 //
+// Per-tile vertical datum (R1, PLAN.md M1 follow-up): ITerrainSource::
+// fill_tile always produces ABSOLUTE heights (real-world terrain can sit
+// anywhere from ~90-880 m ASL); TileManager subtracts each tile's OWN
+// snapped-to-128 m datum before uploading it to the backend and adds the
+// datum back via the tile body's pose z, so Jolt's fixed +-200 m
+// quantisation range (see kPlaceholderHeightRangeM's comment in
+// tile_manager.cpp) only ever has to cover one tile's local relief, never
+// the source's whole elevation range. See update()'s own comment for the
+// computation and relief_overflow_count() above for what happens when a
+// tile's relief alone exceeds that range.
+//
 // Zero-allocation-in-jobs scope (PLAN.md D8): TileSample generation
 // (ITerrainSource::fill_tile) runs inside ps::jobs::parallel_for, into a
 // slot's OWN preallocated, never-resized heights/cell_surface_ids buffers -
@@ -84,6 +95,20 @@ public:
     [[nodiscard]] std::size_t starved_tile_count() const { return last_starved_count_; }
     [[nodiscard]] const TerrainConfig& config() const { return config_; }
 
+    // R1 (real-world terrain, 90-880 m ASL): how many times a newly-filled
+    // tile's own local relief (post-datum, see tile_manager.cpp's update())
+    // exceeded the pool's fixed +-kPlaceholderHeightRangeM quantisation
+    // range minus a small margin - see tile_manager.cpp for the exact bound.
+    // Such a tile is still uploaded (clamped by Jolt's own SetHeights, see
+    // shape_desc.h's HeightfieldShape doc comment) so the car has SOME
+    // ground rather than none; this counter is how a caller notices instead
+    // of it happening silently. Lifetime total, like lazy_suppression_count().
+    [[nodiscard]] std::size_t relief_overflow_count() const { return relief_overflow_count_; }
+    // White-box test hook: the datum currently applied to `key`'s resident
+    // tile (0.0 if `key` is not resident) - see tile_manager.cpp's update()
+    // for how it is computed and applied.
+    [[nodiscard]] real resident_tile_datum(TileKey key) const;
+
     // PLAN.md M1 / PHYS-021 Task B - load-time suppression precompute.
     // Enumerates every tile key touched by a foreign static body's actual
     // triangles (IRigidBackend::body_triangle_xy_bounds_into, binned to
@@ -130,6 +155,10 @@ private:
         TileKey key{};
         BodyId body{};
         TileSample sample; // preallocated once (ensure_slot_storage), never resized after
+        // Per-tile vertical datum (R1) currently baked into `sample.heights`
+        // (subtracted) and `body`'s own pose z (added back) - see
+        // tile_manager.cpp's update(). 0.0 for every slot until first filled.
+        real datum = 0.0;
     };
 
     void ensure_slot_storage(Slot& slot);
@@ -213,6 +242,7 @@ private:
 
     std::size_t resident_count_ = 0;
     std::size_t last_starved_count_ = 0;
+    std::size_t relief_overflow_count_ = 0;
 
     // Scratch reused across update() calls (PLAN.md D8: no per-tick
     // allocation once warmed up) - the set of keys needed this tick and the

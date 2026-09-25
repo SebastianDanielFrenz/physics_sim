@@ -141,6 +141,12 @@ public:
     // Tiles whose static-geometry suppression was precomputed inside
     // set_terrain_source (TerrainConfig::precompute_suppression_at_load).
     [[nodiscard]] std::size_t terrain_precomputed_tile_count() const;
+    // R1 (real-world terrain, 90-880 m ASL): how many newly-filled tiles had
+    // local relief exceeding TileManager's per-tile datum window (see
+    // ps/terrain/terrain_source.h's TileSample doc comment) - such a tile is
+    // still uploaded, clamped, not dropped, so this is a "notice", not an
+    // error return.
+    [[nodiscard]] std::size_t terrain_relief_overflow_count() const;
 
     // PLAN.md P2 adapter report / this task's step 3: named control
     // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can

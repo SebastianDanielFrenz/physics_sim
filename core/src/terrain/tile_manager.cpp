@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace ps::terrain {
@@ -44,6 +45,24 @@ namespace {
 // ever needs more local relief than this within one tile, this constant is
 // the one place to revisit.
 constexpr real kPlaceholderHeightRangeM = 200.0;
+
+// R1 (real-world terrain, 90-880 m ASL fed through ITerrainSource): a tile's
+// own datum (see update()'s comment below) is the tile's own absolute
+// mid-height snapped to the nearest multiple of this. 128 m is arbitrary
+// but convenient (a power of two, so the snap is exact in binary floating
+// point) and comfortably coarser than any real tile's local relief at this
+// project's sample spacing, so neighbouring tiles usually share one datum.
+constexpr real kTileDatumStepM = 128.0;
+
+// relief_overflow_count() fires once a tile's own POST-DATUM relief (see
+// update()) gets within this margin of kPlaceholderHeightRangeM - not only
+// once it actually exceeds it. JoltPhysics' own HeightFieldShape::
+// SetHeights silently CLAMPS any value outside [GetMinHeightValue(),
+// GetMaxHeightValue()] (HeightFieldShape.h's own doc comment) rather than
+// erroring, so a tile sitting exactly at the edge is one float rounding
+// away from a silent clamp; this margin catches it before that happens
+// rather than only after.
+constexpr real kReliefOverflowMarginM = 2.0;
 
 // PLAN.md M1 / PHYS-021 (owner-reported "fell through the floor", second of
 // two bugs this fix addresses - see this file's git history/PR description
@@ -266,10 +285,62 @@ void TileManager::update(jobs::JobSystem& jobs) {
     for (std::size_t idx : this_tick_slots_scratch_) {
         Slot& slot = slots_[idx];
         suppress_covered_samples(slot);
+
+        // R1 (real-world terrain, 90-880 m ASL): ITerrainSource::fill_tile
+        // always produces ABSOLUTE heights, but the pool's placeholder
+        // seeding (kPlaceholderHeightRangeM above) fixes Jolt's 16-bit
+        // quantisation range at +-200 m for this slot's whole lifetime -
+        // real-world elevation does not fit that on its own. Fix: pick a
+        // per-tile DATUM from this tile's own absolute sample range
+        // (computed AFTER suppression, so a holed sample is excluded the
+        // same way it is excluded from collision), snapped to a multiple of
+        // kTileDatumStepM; subtract it from every non-hole sample before
+        // upload and add it back via the tile body's own pose z. Collision
+        // then lands at the same absolute height as before, and Jolt's
+        // fixed range only ever has to cover this one tile's local relief.
+        // An all-holes tile (any_non_hole false) gets datum 0 - there is no
+        // real geometry left to place, and 0 is as good as anything else.
+        // datum == 0.0 skips the subtraction loop entirely so a source
+        // whose every tile already snaps to 0 (this project's own
+        // data/tracks/test_ground and terrain_spec_small.json, both well
+        // under +-64 m) uploads the EXACT SAME bytes as before this feature
+        // existed - h - 0.0 is an exact no-op in IEEE 754, but skipping it
+        // outright also skips the loop's own float compare/branch per
+        // sample, and keeps this change bit-for-bit invisible to every
+        // existing scenario's state_hash/hash-compare.
+        real min_h = std::numeric_limits<real>::max();
+        real max_h = std::numeric_limits<real>::lowest();
+        bool any_non_hole = false;
+        for (const real h : slot.sample.heights) {
+            if (h == kHeightfieldNoCollision) continue;
+            any_non_hole = true;
+            if (h < min_h) min_h = h;
+            if (h > max_h) max_h = h;
+        }
+        real datum = 0.0;
+        if (any_non_hole) {
+            const real mid = (min_h + max_h) * real(0.5);
+            datum = std::round(mid / kTileDatumStepM) * kTileDatumStepM;
+            const real relief = std::max(max_h - datum, datum - min_h);
+            if (relief > kPlaceholderHeightRangeM - kReliefOverflowMarginM) ++relief_overflow_count_;
+        }
+        slot.datum = datum;
+        if (datum != real(0.0)) {
+            for (real& h : slot.sample.heights) {
+                if (h == kHeightfieldNoCollision) continue;
+                h -= datum;
+            }
+        }
+
         backend_.update_heightfield_body(slot.body, slot.sample.heights, slot.sample.cell_surface_ids);
-        backend_.set_pose(slot.body, Pose{slot.sample.tile_origin_xy, Quat::identity()});
+        backend_.set_pose(slot.body, Pose{Vec3{slot.sample.tile_origin_xy.x, slot.sample.tile_origin_xy.y, datum}, Quat::identity()});
         slot.ever_assigned = true;
     }
+}
+
+real TileManager::resident_tile_datum(TileKey key) const {
+    const auto it = key_to_slot_.find(key.packed);
+    return (it != key_to_slot_.end()) ? slots_[it->second].datum : real(0.0);
 }
 
 // PLAN.md M1 / PHYS-021 - see terrain_config.h's

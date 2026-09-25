@@ -621,4 +621,8 @@ std::size_t World::terrain_precomputed_tile_count() const {
     return terrain_manager_ ? terrain_manager_->precomputed_tile_count() : 0;
 }
 
+std::size_t World::terrain_relief_overflow_count() const {
+    return terrain_manager_ ? terrain_manager_->relief_overflow_count() : 0;
+}
+
 } // namespace ps
