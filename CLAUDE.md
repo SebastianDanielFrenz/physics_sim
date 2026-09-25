@@ -287,8 +287,12 @@ commit 5b) one set of eleven per-vehicle channels right after that
 vehicle's chassis channels: `vehicle<i>.energy.{engine_out,wheel_out,
 tyre_loss,brake_loss,gear_loss,integrator_loss,stored,balance_error}` (the
 `drivetrain::PowertrainEnergy` ledger, `stored` = `rotor_ke`) and
-`vehicle<i>.powertrain.{friction_cap_hits,nonspd_hits,lcp_stage3_hits}` -
-all registered up front in `create_vehicle` itself (PLAN.md P3 scope item
+`vehicle<i>.powertrain.{friction_cap_hits,nonspd_hits,lcp_stage3_hits}`,
+followed by seven CSV-only powertrain state channels (2026-09-25 wheelspin
+diagnosis) `vehicle<i>.powertrain.{gear,engine_rpm,clutch_engagement,
+clutch_slip,clutch_torque,shift_phase,engine_state}` (plain reads of the
+tick's `PowertrainSnapshot`/`PowertrainDebug`, enums as their integer
+value, never hashed) - all registered up front in `create_vehicle` itself (PLAN.md P3 scope item
 7) so the CSV header is complete before the first `record_row`.
 `World::state_hash()` folds `IRigidBackend::compute_state_hash` (FNV-1a
 over every live body's pose+velocity bytes, in ascending `BodyId` order),

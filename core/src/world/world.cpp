@@ -302,7 +302,7 @@ void World::step() {
     std::size_t wheel_channel_count = 0;
     for (const auto& channels : wheel_telemetry_channels_) wheel_channel_count += channels.size() * 7; // +omega, PHYS-033 P4 I2 commit 5b
     const std::size_t chassis_channel_count = chassis_telemetry_channels_.size() * 2; // PHYS-033 I1 W1
-    const std::size_t energy_channel_count = energy_telemetry_channels_.size() * 11;  // PHYS-033 P4 I2 commit 5b
+    const std::size_t energy_channel_count = energy_telemetry_channels_.size() * 18;  // PHYS-033 P4 I2 commit 5b (11) + powertrain state (7)
 
     std::vector<real> row;
     row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count +
@@ -351,6 +351,17 @@ void World::step() {
         row.push_back(real(vehicle_instance.powertrain_friction_cap_hits()));
         row.push_back(real(vehicle_instance.powertrain_nonspd_hits()));
         row.push_back(real(vehicle_instance.powertrain_lcp_stage3_hits()));
+        // Powertrain state channels (EnergyTelemetryChannels::gear..
+        // engine_state, same registration order) - plain reads, never hashed.
+        const drivetrain::PowertrainSnapshot& ps_snap = vehicle_instance.powertrain_state();
+        const drivetrain::PowertrainDebug ps_dbg = vehicle_instance.powertrain_debug();
+        row.push_back(real(ps_snap.gear));
+        row.push_back(ps_snap.engine_rpm);
+        row.push_back(ps_snap.clutch_engagement);
+        row.push_back(ps_dbg.clutch_slip);
+        row.push_back(ps_dbg.clutch_torque);
+        row.push_back(real(static_cast<int>(ps_snap.shift_phase)));
+        row.push_back(real(static_cast<int>(ps_snap.engine_state)));
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
@@ -501,6 +512,13 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     ec.friction_cap_hits = telemetry_->register_channel(powertrain_prefix + "friction_cap_hits");
     ec.nonspd_hits = telemetry_->register_channel(powertrain_prefix + "nonspd_hits");
     ec.lcp_stage3_hits = telemetry_->register_channel(powertrain_prefix + "lcp_stage3_hits");
+    ec.gear = telemetry_->register_channel(powertrain_prefix + "gear");
+    ec.engine_rpm = telemetry_->register_channel(powertrain_prefix + "engine_rpm");
+    ec.clutch_engagement = telemetry_->register_channel(powertrain_prefix + "clutch_engagement");
+    ec.clutch_slip = telemetry_->register_channel(powertrain_prefix + "clutch_slip");
+    ec.clutch_torque = telemetry_->register_channel(powertrain_prefix + "clutch_torque");
+    ec.shift_phase = telemetry_->register_channel(powertrain_prefix + "shift_phase");
+    ec.engine_state = telemetry_->register_channel(powertrain_prefix + "engine_state");
 
     return id;
 }

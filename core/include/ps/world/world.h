@@ -341,6 +341,14 @@ private:
     struct EnergyTelemetryChannels {
         std::size_t engine_out, wheel_out, tyre_loss, brake_loss, gear_loss, integrator_loss, stored, balance_error;
         std::size_t friction_cap_hits, nonspd_hits, lcp_stage3_hits;
+        // Owner test-drive wheelspin diagnosis (2026-09-25): CSV-only reads
+        // of the tick's PowertrainSnapshot/PowertrainDebug, registered right
+        // after lcp_stage3_hits. gear = current gearbox position (-m..n),
+        // shift_phase/engine_state = the ps::drivetrain enum's integer value,
+        // clutch_slip = omega(clutch.in) - omega(clutch.out) in rad/s,
+        // clutch_torque = the clutch friction row's lambda (N*m). Never
+        // hashed; recording them changes no simulation state.
+        std::size_t gear, engine_rpm, clutch_engagement, clutch_slip, clutch_torque, shift_phase, engine_state;
     };
     std::vector<EnergyTelemetryChannels> energy_telemetry_channels_; // outer index == VehicleId.index
 
