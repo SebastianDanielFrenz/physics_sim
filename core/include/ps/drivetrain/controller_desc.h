@@ -52,6 +52,11 @@ struct AutoClutchDesc {
     // turns faster than this (rpm) with the gearbox idle in a gear: the
     // driveline is then fast enough to carry the engine above anti_stall_rpm
     // without stalling it. Must be > anti_stall_rpm (hysteresis).
+    // Also the post-shift launch-vs-shift decision (owner test drive
+    // 2026-09-25): once a shift's dog is in, an input shaft BELOW this rpm
+    // cannot carry the engine, so the TCU hands the engagement to the Launch
+    // law instead of the Shift-mode reclose (which stalled the engine when
+    // 2nd was selected at walking pace - manual_tcu.cpp's own comment).
     real rolling_reengage_rpm = 1300.0;
     real open_time_s = 0.08, close_time_s = 0.20; // shift ramps
     // Owner ruling (PHYS-033 P4 I3, post-C6): a Neutral -> gear engagement

@@ -1,0 +1,130 @@
+// tests/validation/test_powertrain_auto_clutch_shifts.cpp — auto-clutch
+// behaviour around upshifts on the real car (data/vehicles/car_sedan.json,
+// auto-clutch/auto-blip ON, the gamepad defaults). Owner test drive
+// 2026-09-25: "a lot of wheel spin in 2nd", plus two engagement bugs found
+// while diagnosing it:
+//   - selecting 2nd at walking pace stalled the engine and left the car
+//     coasting with the throttle pressed (the Shift-mode reclose was
+//     rpm-blind and dragged the engine down to a ~350 rpm input shaft);
+//   - after an upshift the clutch could sit partially engaged for seconds.
+// Every case drives the whole vehicle through World's public controls and
+// reads World::powertrain_state/powertrain_debug/wheel_telemetry per tick.
+
+#include "vehicle_test_helpers.h"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <string>
+
+using namespace ps;
+
+namespace {
+
+constexpr real kPi = 3.14159265358979323846;
+real rad_s_to_rpm(real w) { return w * real(60.0) / (real(2.0) * kPi); }
+
+ps_test::VehicleTestRig make_sedan() {
+    return ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0, Vec3{2.0, 0.4, 0.15}, 0.6,
+                                      0.0, 4, Vec3::unit_y(), 240.0, 960.0, 3000.0);
+}
+
+real speed(const ps_test::VehicleTestRig& rig) { return rig.world->get_motion(rig.chassis).linear.length(); }
+
+// Steps until speed >= v_target (m/s) or timeout; returns true if reached.
+bool drive_until_speed(ps_test::VehicleTestRig& rig, real v_target, real timeout_s) {
+    const std::uint64_t n = static_cast<std::uint64_t>(timeout_s / rig.world->dt() + 0.5);
+    for (std::uint64_t i = 0; i < n; ++i) {
+        rig.world->step();
+        if (speed(rig) >= v_target) return true;
+    }
+    return false;
+}
+
+// Per-tick observations shared by every case.
+struct Watch {
+    bool stalled = false;
+    real max_driven_abs_kappa = 0.0; // FL/FR (the driven front axle)
+    real t_lock = -1.0;              // first time (s since the watch started) the clutch is stuck with |slip| < 80 rpm in the target gear
+    int final_gear = 0;
+};
+
+void run_watch(ps_test::VehicleTestRig& rig, real seconds, int target_gear, Watch& w, const std::function<void(real)>& per_tick = {}) {
+    const real dt = rig.world->dt();
+    const std::uint64_t n = static_cast<std::uint64_t>(seconds / dt + 0.5);
+    for (std::uint64_t i = 0; i < n; ++i) {
+        const real t = static_cast<real>(i + 1) * dt;
+        rig.world->step();
+        const auto& pt = rig.world->powertrain_state(rig.vehicle);
+        if (pt.engine_state == drivetrain::EngineState::Stalled) w.stalled = true;
+        for (std::size_t wi = 0; wi < 2; ++wi) {
+            w.max_driven_abs_kappa = std::max(w.max_driven_abs_kappa, std::abs(rig.world->wheel_telemetry(rig.vehicle, wi).slip_ratio));
+        }
+        const auto dbg = rig.world->powertrain_debug(rig.vehicle);
+        if (w.t_lock < 0.0 && pt.gear == target_gear && dbg.clutch_stuck && std::abs(rad_s_to_rpm(dbg.clutch_slip)) < 80.0) w.t_lock = t;
+        w.final_gear = pt.gear;
+        if (per_tick) per_tick(t);
+    }
+}
+
+} // namespace
+
+// Secondary robustness case (owner: 1->2 at 5 km/h is unrealistically low,
+// but must never leave the car silently disconnected). Before the fix the
+// engine stalled ~0.25 s after the request (rpm 391 -> 0) and the car
+// coasted at -0.1 m/s^2 for the rest of the run, WOT included.
+TEST_CASE("Auto-clutch: selecting 2nd at walking pace never stalls and pulls away on throttle", "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.3);
+    REQUIRE(drive_until_speed(rig, 5.0 / 3.6, 15.0));
+
+    rig.world->set_control("gear_request", 2.0);
+    rig.world->set_control("throttle", 0.25);
+    Watch w;
+    const real v_request = speed(rig);
+    run_watch(rig, 4.0, 2, w);
+    const real v_part = speed(rig);
+    INFO("v_request_kmh=" << v_request * 3.6 << " v_after_part_throttle_kmh=" << v_part * 3.6);
+    CHECK(w.final_gear == 2);
+    CHECK_FALSE(w.stalled);
+    CHECK(v_part > v_request); // still pulling (slowly) at part throttle, not coasting
+
+    rig.world->set_control("throttle", 1.0);
+    run_watch(rig, 3.0, 2, w);
+    const real v_wot = speed(rig);
+    INFO("v_after_3s_wot_kmh=" << v_wot * 3.6 << " t_lock=" << w.t_lock << " max|kappa|=" << w.max_driven_abs_kappa);
+    CHECK_FALSE(w.stalled);
+    CHECK(v_wot - v_part > 5.0); // > 1.67 m/s^2 mean over 3 s: actually driving, not disconnected
+    CHECK(w.t_lock > 0.0);       // and the clutch closed during the WOT pull
+}
+
+// Primary case (owner): a part-throttle 1->2 upshift at a realistic ~15 km/h
+// (2nd ~1050 rpm): the clutch must lock within a bounded time, the engine
+// must not stall and the driven wheels must not spin.
+TEST_CASE("Auto-clutch: part-throttle 1->2 upshift at 15 km/h locks promptly without wheelspin", "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.6);
+    REQUIRE(drive_until_speed(rig, 15.0 / 3.6, 15.0));
+    REQUIRE(rig.world->powertrain_state(rig.vehicle).gear == 1);
+
+    rig.world->set_control("throttle", 0.3);
+    rig.world->set_control("gear_request", 2.0);
+    Watch w;
+    const real v_request = speed(rig);
+    run_watch(rig, 3.0, 2, w);
+    INFO("v_request_kmh=" << v_request * 3.6 << " t_lock=" << w.t_lock << " max|kappa|=" << w.max_driven_abs_kappa
+                          << " v_end_kmh=" << speed(rig) * 3.6);
+    CHECK(w.final_gear == 2);
+    CHECK_FALSE(w.stalled);
+    CHECK(w.t_lock > 0.0);
+    CHECK(w.t_lock < 1.0);
+    CHECK(w.max_driven_abs_kappa < 0.1);
+    CHECK(speed(rig) > v_request);
+}

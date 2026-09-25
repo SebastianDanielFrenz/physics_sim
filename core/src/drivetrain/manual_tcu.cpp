@@ -105,6 +105,25 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
         mode_ = ClutchMode::Shift;
     }
 
+    // Post-shift engagement onto a driveline too slow to carry the engine
+    // (owner test drive 2026-09-25, "drive off in 2nd from walking pace"):
+    // once the dog is in, a Shift-mode reclose is rpm-blind - it closes the
+    // clutch at 1/close_time_s whatever the engine does. Selecting 2nd at
+    // ~5 km/h puts the gearbox input at ~350 rpm, below stall_rpm, so the
+    // forced reclose dragged the engine down to the input shaft's speed and
+    // stalled it; the Launch law then held the clutch open (rpm 0 < bite)
+    // and the car coasted with a dead engine whatever the throttle said.
+    // The same threshold the Launch law already uses to decide the
+    // driveline CAN carry the engine (rolling_reengage_rpm) now also
+    // decides the opposite: below it, the post-shift engagement is a
+    // launch (rpm-gated slip law, anti-stall), not a shift. Also a direct
+    // anti-stall net for the closing phase itself. Neutral (current == 0)
+    // is unaffected (the Launch law closes fully in N anyway).
+    if (mode_ == ClutchMode::Shift && !gearbox_shifting_now && s.gearbox_current != 0) {
+        const real in_rpm = std::abs(s.gearbox_in_omega) * kRadPerSecToRpm;
+        if (in_rpm < desc_.auto_clutch.rolling_reengage_rpm || rpm < desc_.auto_clutch.anti_stall_rpm) mode_ = ClutchMode::Launch;
+    }
+
     real e_tgt = e_auto_;
     real rate = desc_.auto_clutch.release_rate_per_s;
     if (mode_ == ClutchMode::Shift) {
