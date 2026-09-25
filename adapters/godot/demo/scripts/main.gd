@@ -120,6 +120,7 @@ var _autopilot_max_speed_kmh: float = 0.0
 var _autopilot_nan_seen: bool = false
 var _autopilot_done: bool = false
 var _autopilot_last_logged_second: int = -1
+var _autopilot_diag_wheel_index: int = -1 # resolved lazily via get_wheel_driven; -1 = not yet resolved
 # PHYS-033 P4 I3 (C8) section 12.4: the autopilot now drives the real
 # engine/clutch/gearbox chain via the monotonic shift_up_count/
 # shift_down_count channels (same path a human driver's PsInputMap/
@@ -305,7 +306,11 @@ func _ready() -> void:
 			# default - added for the M1 visual-pass bug report's "screenshot
 			# at the skidpad" requirement.
 			spawn_id = a.substr(len("--m1-spawn="))
-	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path, " screenshot_view=", _screenshot_view, " spawn_id=", spawn_id)
+		elif a.begins_with("--m1-vehicle="):
+			# Picks data/vehicles/<name>.json instead of the exported default -
+			# e.g. car_sedan (FWD reference), car_sedan_rwd (RWD reference).
+			vehicle_relative_path = "data/vehicles/%s.json" % a.substr(len("--m1-vehicle="))
+	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path, " screenshot_view=", _screenshot_view, " spawn_id=", spawn_id, " vehicle=", vehicle_relative_path)
 	_setup_lighting()
 
 	simulation = ClassDB.instantiate("PsSimulation")
@@ -779,18 +784,31 @@ func _run_autopilot(delta: float) -> void:
 	if is_nan(p.x) or is_nan(p.y) or is_nan(p.z):
 		_autopilot_nan_seen = true
 
-	# Diagnostic (cheap, autopilot-only): one FL-wheel telemetry line per
+	# Diagnostic (cheap, autopilot-only): one driven-wheel telemetry line per
 	# second, so a smoke-test log always shows whether the driven wheel is
-	# actually touching the ground and producing longitudinal force.
+	# actually touching the ground and producing longitudinal force. Engine-
+	# neutral: the driven wheel index is resolved via get_wheel_driven, never
+	# assumed to be FL/index 0 (car_sedan.json's drive layout - FWD, RWD, or
+	# any future AWD reference variant - is not this adapter's business).
+	if _autopilot_diag_wheel_index < 0:
+		_autopilot_diag_wheel_index = 0
+		var wheel_count: int = simulation.get_vehicle_wheel_count(VEHICLE_NAME)
+		for w in range(wheel_count):
+			if simulation.get_wheel_driven(VEHICLE_NAME, w):
+				_autopilot_diag_wheel_index = w
+				break
 	var whole_second := int(_autopilot_phase_t)
 	if whole_second != _autopilot_last_logged_second:
 		_autopilot_last_logged_second = whole_second
 		var up: Vector3 = chassis_xform.basis.z
-		print("ps_godot M1 autopilot diag: t=%.1f speed_kmh=%.2f up_dot=%.3f gear=%d rpm=%.0f engine=%s FL{compression=%.4f omega=%.2f fz=%.1f fx=%.1f surface=%s}" % [
+		print("ps_godot M1 autopilot diag: t=%.1f speed_kmh=%.2f up_dot=%.3f gear=%d rpm=%.0f engine=%s driven_wheel[%d]{compression=%.4f omega=%.2f fz=%.1f fx=%.1f surface=%s}" % [
 			_autopilot_phase_t, speed_mps * 3.6, up.dot(Vector3.UP), gear, rpm, engine_state,
-			simulation.get_wheel_compression("car", 0), simulation.get_wheel_omega("car", 0),
-			simulation.get_wheel_load_n("car", 0), simulation.get_wheel_fx("car", 0),
-			simulation.get_wheel_surface_name("car", 0)])
+			_autopilot_diag_wheel_index,
+			simulation.get_wheel_compression(VEHICLE_NAME, _autopilot_diag_wheel_index),
+			simulation.get_wheel_omega(VEHICLE_NAME, _autopilot_diag_wheel_index),
+			simulation.get_wheel_load_n(VEHICLE_NAME, _autopilot_diag_wheel_index),
+			simulation.get_wheel_fx(VEHICLE_NAME, _autopilot_diag_wheel_index),
+			simulation.get_wheel_surface_name(VEHICLE_NAME, _autopilot_diag_wheel_index)])
 
 func _run_haptics_cruise(delta: float) -> void:
 	# See _haptics_cruise's own var-block comment above for the full
