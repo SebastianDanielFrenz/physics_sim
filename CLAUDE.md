@@ -974,7 +974,12 @@ not on `ps_core`'s public include path).
   `friction_row_b` are small additive read accessors `components.cpp`'s
   `GearPair::post_solve` and `Powertrain::solve` use to reconstruct
   per-component quantities (mesh-loss torque, ledger terms) the generic
-  solver itself does not track.
+  solver itself does not track. `NetworkBuilder::add_coupling(a, b)`/
+  `Assembly::set_coupling(id, ra, rb, c)` (PHYS-033 P4 I4 C2): implicit
+  two-node viscous couplings on `v = ra*w_a - rb*w_b` (merge the two nodes'
+  clusters, add `h*c*gt*gt^T` to the reduced matrix, rhs unchanged, skipped
+  at `c == 0`); `coupling_velocity(id)` returns `v_new` for the caller's
+  `h*c*v^2` ledger booking.
 - `components.h`/`.cpp` (`IComponent` and four concrete types, commit 5b) -
   `IComponent`: `pre_solve(ctx, network, assembly)` (write this substep's
   `tau0`/`d` terms), `post_solve(ctx, network, ledger)` (read back the

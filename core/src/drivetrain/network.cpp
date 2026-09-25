@@ -56,6 +56,16 @@ ShaftNetwork NetworkBuilder::build(const std::string& vehicle_name) const {
                                   std::to_string(friction_rows_.size()) + " friction rows, exceeding kMaxNetworkFrictionRows (" +
                                   std::to_string(kMaxNetworkFrictionRows) + ")");
     }
+    if (static_cast<int>(couplings_.size()) > kMaxNetworkCouplings) {
+        throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain network has " + std::to_string(couplings_.size()) +
+                                  " couplings, exceeding kMaxNetworkCouplings (" + std::to_string(kMaxNetworkCouplings) + ")");
+    }
+    for (const CouplingDesc& cd : couplings_) {
+        if (!cd.a.valid() || !cd.b.valid() || cd.a.index >= node_count || cd.b.index >= node_count || cd.a == cd.b) {
+            throw std::runtime_error("vehicle '" + vehicle_name +
+                                      "': a powertrain coupling must join two distinct existing nodes (not ground)");
+        }
+    }
 
     // Union nodes: every rigid row of EVERY state (plan 4.4 - clusters
     // never change with topology), plus friction rows between two
@@ -71,6 +81,10 @@ ShaftNetwork NetworkBuilder::build(const std::string& vehicle_name) const {
     for (const FrictionRowDesc& fd : friction_rows_) {
         if (fd.b.valid()) uf.unite(fd.a.index, fd.b.index);
     }
+    // Couplings merge clusters too (plan I4 section 2.3). UnionFind's root is
+    // the smallest node index of each component whatever the union order,
+    // so a graph with no couplings partitions and numbers exactly as before.
+    for (const CouplingDesc& cd : couplings_) uf.unite(cd.a.index, cd.b.index);
 
     // Group nodes by cluster root, name each cluster by its lowest node
     // (plan 4.4), solve in ascending order - achieved here by sorting
@@ -203,6 +217,23 @@ ShaftNetwork NetworkBuilder::build(const std::string& vehicle_name) const {
         ++c.row_count;
     }
 
+    // Couplings: assign each to its (merged) cluster, in declaration order.
+    net.coupling_desc_ = couplings_;
+    net.coupling_velocity_.assign(couplings_.size(), real(0.0));
+    for (std::size_t kid = 0; kid < couplings_.size(); ++kid) {
+        const CouplingDesc& cd = couplings_[kid];
+        Cluster& c = net.clusters_[static_cast<std::size_t>(net.node_cluster_[cd.a.index])];
+        if (c.coupling_count >= kMaxClusterCouplings) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': a powertrain cluster exceeds kMaxClusterCouplings (" +
+                                      std::to_string(kMaxClusterCouplings) + ") couplings");
+        }
+        Cluster::LocalCoupling& lc = c.couplings[static_cast<std::size_t>(c.coupling_count)];
+        lc.id = CouplingId{static_cast<std::uint16_t>(kid)};
+        lc.local_a = net.node_local_[cd.a.index];
+        lc.local_b = net.node_local_[cd.b.index];
+        ++c.coupling_count;
+    }
+
     return net;
 }
 
@@ -237,6 +268,35 @@ void ShaftNetwork::solve(real h, const Assembly& assembly) {
                 c.r[static_cast<std::size_t>(a)] += rhs[static_cast<std::size_t>(local)] * ta;
                 for (int b = 0; b < n; ++b) {
                     c.A(static_cast<std::size_t>(a), static_cast<std::size_t>(b)) += m[static_cast<std::size_t>(local)] * ta * basis.at(local, b);
+                }
+            }
+        }
+
+        // Implicit couplings (PHYS-033 P4 I4 plan section 2.3). Full-
+        // coordinate equation per substep, with g = ra*e_a - rb*e_b:
+        //   (J + h*D + h*c*g*g^T) w' = J*w_old + h*(tau0 + D*w_old)
+        // - linearising tau_c(w) = -c*g*g^T*w about w_old gives
+        // tau_c(w_old) - c*g*g^T*(w' - w_old) = -c*g*g^T*w', whose w_old
+        // terms cancel, so the rhs is untouched. Reduced (w' = T*nu):
+        // A += h*c*gt*gt^T with gt = T^T*g, in the CURRENT state's basis -
+        // so it holds in every topology state. A c == 0 coupling is skipped,
+        // so it (and a cluster with none) is bit-identical to no coupling.
+        for (int kc = 0; kc < c.coupling_count; ++kc) {
+            const Cluster::LocalCoupling& lc = c.couplings[static_cast<std::size_t>(kc)];
+            const real cc = assembly.coupling_c(lc.id);
+            if (!(cc > real(0.0))) continue;
+            const real ra = assembly.coupling_ra(lc.id);
+            const real rb = assembly.coupling_rb(lc.id);
+            std::array<real, kMaxDofs> gt{};
+            for (int a = 0; a < n; ++a) gt[static_cast<std::size_t>(a)] = ra * basis.at(lc.local_a, a) - rb * basis.at(lc.local_b, a);
+            const real hc = h * cc;
+            for (int a = 0; a < n; ++a) {
+                const real sa = hc * gt[static_cast<std::size_t>(a)];
+                if (sa == real(0.0)) continue;
+                for (int b = 0; b <= a; ++b) {
+                    const real add = sa * gt[static_cast<std::size_t>(b)];
+                    c.A(static_cast<std::size_t>(a), static_cast<std::size_t>(b)) += add;
+                    if (b != a) c.A(static_cast<std::size_t>(b), static_cast<std::size_t>(a)) += add;
                 }
             }
         }
@@ -356,6 +416,11 @@ void ShaftNetwork::solve(real h, const Assembly& assembly) {
             real v = c.w_new_local[static_cast<std::size_t>(local_a)];
             if (fd.b.valid()) v -= assembly.ratio_b(rid) * c.w_new_local[static_cast<std::size_t>(node_local_[fd.b.index])];
             row_velocity_[rid.index] = v;
+        }
+        for (int kc = 0; kc < c.coupling_count; ++kc) {
+            const Cluster::LocalCoupling& lc = c.couplings[static_cast<std::size_t>(kc)];
+            coupling_velocity_[lc.id.index] = assembly.coupling_ra(lc.id) * c.w_new_local[static_cast<std::size_t>(lc.local_a)] -
+                                               assembly.coupling_rb(lc.id) * c.w_new_local[static_cast<std::size_t>(lc.local_b)];
         }
     }
 

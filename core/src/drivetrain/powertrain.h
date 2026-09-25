@@ -69,7 +69,7 @@ public:
 
     // Per-substep sequence (plan section 7.2), called in this exact order by
     // VehicleInstance::step_tick:
-    void begin_substep(); // Assembly::begin_substep(_rows) - zeroes this substep's tau0/d/capacities
+    void begin_substep(); // Assembly::begin_substep(_rows/_couplings) - zeroes this substep's tau0/d/capacities/couplings
     void add_hub_terms(std::size_t wheel_index, real tau0, real d) { assembly_.torque(hub_nodes_[wheel_index], tau0, d); }
     // Controllers (gearbox.phase_step, a possible topology-state switch,
     // tcu.step) then engine/clutch/gearbox-mesh-loss/synchro-row THEN every

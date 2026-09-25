@@ -540,6 +540,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
 void Powertrain::begin_substep() {
     assembly_.begin_substep(network_.node_count());
     assembly_.begin_substep_rows(network_.friction_row_count());
+    assembly_.begin_substep_couplings(network_.coupling_count());
 }
 
 void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
@@ -646,6 +647,7 @@ real Powertrain::apply_topology_switch(int new_state, real h) {
     network_.set_topology_state(new_state);
     projection_assembly_.begin_substep(n);
     projection_assembly_.begin_substep_rows(network_.friction_row_count());
+    projection_assembly_.begin_substep_couplings(network_.coupling_count()); // c = 0: couplings skipped, pure projection
     // Zero tau0/d/friction-caps: algebraically exactly the momentum-
     // conserving projection T_newT*J*T_new*nu = T_newT*J*w_old for ANY h
     // (see this method's declaration comment, powertrain.h).

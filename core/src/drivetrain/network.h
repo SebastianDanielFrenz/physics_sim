@@ -50,6 +50,10 @@ constexpr int kMaxStates = 128;
 // practical limit before I4/I5 (more components, more brakes/rows).
 constexpr int kMaxNetworkNodes = 48;
 constexpr int kMaxNetworkFrictionRows = 24;
+// PHYS-033 P4 I4 plan section 2.3: implicit two-node couplings (viscous
+// diffs, compliant shafts' implicit part). Sized like the friction rows.
+constexpr int kMaxClusterCouplings = 12;
+constexpr int kMaxNetworkCouplings = 24;
 
 struct NodeId {
     std::uint16_t index = 0xFFFFu;
@@ -63,6 +67,13 @@ struct NodeId {
 inline constexpr NodeId kGround{};
 
 struct FrictionRowId {
+    std::uint16_t index = 0;
+};
+
+// PHYS-033 P4 I4 plan section 2.3: an implicit linear two-node coupling,
+// declared at build time (NetworkBuilder::add_coupling), parameterised per
+// substep (Assembly::set_coupling).
+struct CouplingId {
     std::uint16_t index = 0;
 };
 
@@ -88,6 +99,17 @@ struct Cluster {
 
     std::array<FrictionRowId, kMaxRows> local_rows{};
     int row_count = 0;
+
+    // Couplings whose two nodes lie in this cluster (always both - the
+    // union-find merges them), with cluster-local node indices. A cluster
+    // with coupling_count == 0 never touches the coupling path in solve().
+    struct LocalCoupling {
+        CouplingId id;
+        int local_a = 0;
+        int local_b = 0;
+    };
+    std::array<LocalCoupling, kMaxClusterCouplings> couplings{};
+    int coupling_count = 0;
 
     // --- per-substep scratch (touched inside the job; fixed capacity,
     // never resized after construction - PLAN.md D8). ---
@@ -158,12 +180,55 @@ public:
     void set_friction_row_ratio(FrictionRowId r, real ratio_b) { ratio_b_[r.index] = ratio_b; }
     [[nodiscard]] real ratio_b(FrictionRowId r) const { return ratio_b_[r.index]; }
 
+    // PHYS-033 P4 I4 plan section 2.3: implicit linear coupling between the
+    // two nodes NetworkBuilder::add_coupling declared for `k`. Relative
+    // velocity v = ra*omega(a) - rb*omega(b); torque -c*ra*v on a, +c*rb*v
+    // on b, evaluated fully implicitly at omega_new (solve() adds
+    // h*c*gt*gt^T to the reduced matrix; the rhs is unchanged because the
+    // torque is homogeneous in omega). The caller books h*c*v_new^2
+    // (ShaftNetwork::coupling_velocity) as its dissipation; any EXPLICIT
+    // part (e.g. a compliant shaft's k*theta_old) goes through torque().
+    // c < 0 is clamped to 0 (like torque()'s d); c == 0 skips the coupling
+    // entirely, bit-identical to not declaring it. Cleared to c = 0,
+    // ra = rb = 1 by begin_substep_couplings().
+    void begin_substep_couplings(int coupling_count) {
+        coupling_ra_.set_size(static_cast<std::size_t>(coupling_count));
+        coupling_rb_.set_size(static_cast<std::size_t>(coupling_count));
+        coupling_c_.set_size(static_cast<std::size_t>(coupling_count));
+        for (std::size_t i = 0; i < coupling_c_.size(); ++i) {
+            coupling_ra_[i] = real(1.0);
+            coupling_rb_[i] = real(1.0);
+            coupling_c_[i] = real(0.0);
+        }
+    }
+    void set_coupling(CouplingId k, real ra, real rb, real c) {
+        coupling_ra_[k.index] = ra;
+        coupling_rb_[k.index] = rb;
+        coupling_c_[k.index] = std::max(c, real(0.0));
+    }
+    // An id beyond the last begin_substep_couplings() count reads as an
+    // inactive coupling (c = 0, ra = rb = 1) - an Assembly that never calls
+    // begin_substep_couplings (e.g. a pure-projection scratch) couples
+    // nothing.
+    [[nodiscard]] real coupling_ra(CouplingId k) const { return k.index < coupling_ra_.size() ? coupling_ra_[k.index] : real(1.0); }
+    [[nodiscard]] real coupling_rb(CouplingId k) const { return k.index < coupling_rb_.size() ? coupling_rb_[k.index] : real(1.0); }
+    [[nodiscard]] real coupling_c(CouplingId k) const { return k.index < coupling_c_.size() ? coupling_c_[k.index] : real(0.0); }
+
 private:
     SmallVec<kMaxNetworkNodes> tau0_;
     SmallVec<kMaxNetworkNodes> d_;
     SmallVec<kMaxNetworkFrictionRows> cap_static_;
     SmallVec<kMaxNetworkFrictionRows> cap_kinetic_;
     SmallVec<kMaxNetworkFrictionRows> ratio_b_;
+    SmallVec<kMaxNetworkCouplings> coupling_ra_;
+    SmallVec<kMaxNetworkCouplings> coupling_rb_;
+    SmallVec<kMaxNetworkCouplings> coupling_c_;
+};
+
+// Build-time-only descriptor for one coupling (plan section 2.3).
+struct CouplingDesc {
+    NodeId a;
+    NodeId b;
 };
 
 // Build-time-only descriptor for one friction row (plan section 4.2): the
@@ -201,6 +266,20 @@ public:
     // needs row_lambda/row_velocity/row_stuck above.
     [[nodiscard]] NodeId friction_row_a(FrictionRowId r) const { return friction_row_desc_[r.index].a; }
     [[nodiscard]] NodeId friction_row_b(FrictionRowId r) const { return friction_row_desc_[r.index].b; }
+
+    // Couplings (PHYS-033 P4 I4 plan section 2.3). coupling_velocity is
+    // ra*omega_new(a) - rb*omega_new(b) with the ra/rb of the Assembly
+    // passed to the most recent solve() - the v_new a caller books h*c*v^2
+    // from (closes exactly against the omega_new work accounting).
+    [[nodiscard]] int coupling_count() const { return static_cast<int>(coupling_desc_.size()); }
+    [[nodiscard]] NodeId coupling_a(CouplingId k) const { return coupling_desc_[k.index].a; }
+    [[nodiscard]] NodeId coupling_b(CouplingId k) const { return coupling_desc_[k.index].b; }
+    [[nodiscard]] real coupling_velocity(CouplingId k) const { return coupling_velocity_[k.index]; }
+
+    // Cluster structure (build-time constant; white-box tests).
+    [[nodiscard]] int cluster_count() const { return static_cast<int>(clusters_.size()); }
+    [[nodiscard]] int node_cluster(NodeId n) const { return node_cluster_[n.index]; }
+
     [[nodiscard]] int nonspd_hits() const {
         int total = 0;
         for (const Cluster& c : clusters_) total += c.nonspd_hits;
@@ -271,6 +350,8 @@ private:
     std::vector<bool> row_stuck_prev_;
     std::vector<bool> row_stuck_;
     std::vector<LcpSet> row_set_; // warm start (previous substep's BPP partition) per friction row
+    std::vector<CouplingDesc> coupling_desc_; // global coupling id -> (a,b)
+    std::vector<real> coupling_velocity_;     // global coupling id -> v_new of the last solve() (derived, not hashed)
     int friction_cap_hits_ = 0;
     int lcp_stage3_hits_ = 0;
     int current_state_ = 0; // I2: always 0
@@ -302,6 +383,16 @@ public:
         return id;
     }
 
+    // Declares an implicit coupling between two distinct nodes (PHYS-033
+    // P4 I4 plan section 2.3; see Assembly::set_coupling for its per-substep
+    // parameters). build() merges a's and b's clusters. Graphs that declare
+    // none build and solve exactly as before.
+    CouplingId add_coupling(NodeId a, NodeId b) {
+        CouplingId id{static_cast<std::uint16_t>(couplings_.size())};
+        couplings_.push_back(CouplingDesc{a, b});
+        return id;
+    }
+
     // Builds the ShaftNetwork: unions nodes into clusters (every state's
     // rigid rows, plus friction rows between two non-ground nodes),
     // computes each cluster's null-space basis per state, and validates
@@ -314,6 +405,7 @@ private:
     std::vector<real> node_inertia_;
     std::vector<std::vector<RigidRow>> rows_by_state_;
     std::vector<FrictionRowDesc> friction_rows_;
+    std::vector<CouplingDesc> couplings_;
     int num_states_ = 1;
 };
 
