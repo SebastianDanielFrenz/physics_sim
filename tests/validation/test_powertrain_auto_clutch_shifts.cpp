@@ -357,7 +357,7 @@ struct UpshiftObs {
     real t_lock = -1.0;
     real v_neutral = 0.0, v_cut_end = 0.0;
     real a_close_max = -1e9;        // max 50 ms-window accel between dog-in and the cut's end (the ClutchClosing hold)
-    real max_clutch_excess = -1e9;  // max |T_clutch| - (T_demand + max_sync_torque_nm) after the cut's end
+    real max_clutch_excess = -1e9;  // max |T_clutch| - max(0, T_demand + max_sync_torque_nm) after the cut's end
     real max_driven_abs_kappa = 0.0;
     bool stalled = false;
     int final_gear = 0;
@@ -399,7 +399,11 @@ UpshiftObs watch_upshift(ps_test::VehicleTestRig& rig, int target_gear, real sec
         if (o.t_cut_end > 0.0) {
             const real t_clutch = std::abs(dbg.clutch_torque);
             if (o.t_hole_end < 0.0 && dbg.throttle_ceiling >= 1.0 && t_clutch >= dbg.engine_torque_demand) o.t_hole_end = t;
-            o.max_clutch_excess = std::max(o.max_clutch_excess, t_clutch - (dbg.engine_torque_demand + kMaxSyncTorqueNm));
+            // The close law is T = max(0, T_demand + min(sync, max_sync_torque_nm)), so its ceiling is
+            // max(0, T_demand + max_sync_torque_nm). Without the max(0, .) a motoring (negative) demand
+            // below -50 N*m made even a fully open clutch (T = 0) read as "excess" (60/40 split, auto 2->3).
+            o.max_clutch_excess = std::max(o.max_clutch_excess,
+                                           t_clutch - std::max(real(0.0), dbg.engine_torque_demand + kMaxSyncTorqueNm));
         }
         if (o.t_lock < 0.0 && o.t_dog_in > 0.0 && dbg.clutch_stuck && std::abs(rad_s_to_rpm(dbg.clutch_slip)) < 80.0) o.t_lock = t;
         o.final_gear = pt.gear;
