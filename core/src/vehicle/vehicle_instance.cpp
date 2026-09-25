@@ -435,6 +435,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         dl.gear = snap.gear;
         dl.grind_active = powertrain_.has_gearbox() ? powertrain_.last_gearbox_result().grind_active : false;
         dl.grind_events = powertrain_.has_gearbox() ? powertrain_.gearbox().grind_events() : 0u;
+
+        snap.diff_count = powertrain_.fill_diff_snapshot(snap.diffs); // PHYS-033 P4 I4 C8
     }
 
     // Predict what Jolt will report as this chassis's velocity next tick

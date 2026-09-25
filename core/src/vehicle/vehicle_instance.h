@@ -133,6 +133,7 @@ public:
         dbg.gearbox_mesh_torque = powertrain_.gearbox_mesh_torque_debug();
         dbg.diff_mesh_torque = powertrain_.diff_mesh_torque_debug();
         powertrain_.fill_hub_shaft_torque_debug(dbg.hub_shaft_torque);
+        powertrain_.fill_diff_transfer_torque_debug(dbg.diff_transfer_torque); // PHYS-033 P4 I4 C8
         dbg.throttle_eff = powertrain_.throttle_eff();
         dbg.idle_integrator = powertrain_.idle_integrator();
         dbg.synchro_torque = powertrain_.synchro_torque_debug();

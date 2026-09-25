@@ -315,10 +315,12 @@ void World::step() {
     for (const auto& channels : wheel_telemetry_channels_) wheel_channel_count += channels.size() * 7; // +omega, PHYS-033 P4 I2 commit 5b
     const std::size_t chassis_channel_count = chassis_telemetry_channels_.size() * 2; // PHYS-033 I1 W1
     const std::size_t energy_channel_count = energy_telemetry_channels_.size() * 18;  // PHYS-033 P4 I2 commit 5b (11) + powertrain state (7)
+    std::size_t diff_channel_count = 0; // PHYS-033 P4 I4 C8: bias + locked per registered (non-plain-open) diff
+    for (const auto& channels : diff_telemetry_channels_) diff_channel_count += channels.size() * 2;
 
     std::vector<real> row;
     row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count +
-                chassis_channel_count + energy_channel_count);
+                chassis_channel_count + energy_channel_count + diff_channel_count);
     for (double ms : last_stage_ms_) row.push_back(real(ms));
     for (int w = 0; w < job_system_->worker_count(); ++w) {
         const double busy_ns = static_cast<double>(job_system_->worker_busy_ns(w));
@@ -374,6 +376,17 @@ void World::step() {
         row.push_back(ps_dbg.clutch_torque);
         row.push_back(real(static_cast<int>(ps_snap.shift_phase)));
         row.push_back(real(static_cast<int>(ps_snap.engine_state)));
+
+        // PHYS-033 P4 I4 C8 (plan section 3.1): per-diff bias/locked, right
+        // after the powertrain-state values, matching create_vehicle's
+        // registration order. Empty for a plain-open-only vehicle (every
+        // shipped vehicle today) - reuses the already-read ps_snap above.
+        if (vi < diff_telemetry_channels_.size()) {
+            for (const DiffTelemetryChannels& dc : diff_telemetry_channels_[vi]) {
+                row.push_back(ps_snap.diffs[dc.diff_index].bias);
+                row.push_back(ps_snap.diffs[dc.diff_index].locked ? real(1.0) : real(0.0));
+            }
+        }
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
@@ -560,6 +573,36 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     ec.clutch_torque = telemetry_->register_channel(powertrain_prefix + "clutch_torque");
     ec.shift_phase = telemetry_->register_channel(powertrain_prefix + "shift_phase");
     ec.engine_state = telemetry_->register_channel(powertrain_prefix + "engine_state");
+
+    // PHYS-033 P4 I4 C8 (plan section 3.1): one <diff id>.bias/.locked
+    // channel pair per differential that is NOT plain open (kind != Open,
+    // or lockable - a lockable Open diff still needs its own "am I
+    // currently locked" telemetry even though its kind reads Open),
+    // registered in desc.powertrain.components array order - the same
+    // order Powertrain builds diffs_/PowertrainSnapshot::diffs in, so
+    // diff_index here matches PowertrainSnapshot::diffs[diff_index]. A
+    // plain-open-only vehicle (both shipped car_sedan/tractor diffs today)
+    // registers nothing here, so its CSV header stays byte-identical to
+    // before this existed.
+    if (diff_telemetry_channels_.size() <= id.index) diff_telemetry_channels_.resize(id.index + 1);
+    std::vector<DiffTelemetryChannels>& diff_channels = diff_telemetry_channels_[id.index];
+    diff_channels.clear();
+    std::size_t diff_component_index = 0;
+    for (const drivetrain::ComponentDesc& component : desc.powertrain.components) {
+        const auto* diff_desc = std::get_if<drivetrain::DifferentialDesc>(&component.params);
+        if (diff_desc != nullptr) {
+            const bool plain_open = diff_desc->kind == drivetrain::DifferentialKind::Open && !diff_desc->lockable;
+            if (!plain_open) {
+                const std::string diff_prefix = "vehicle" + std::to_string(id.index) + "." + component.id + ".";
+                DiffTelemetryChannels dc;
+                dc.diff_index = diff_component_index;
+                dc.bias_channel = telemetry_->register_channel(diff_prefix + "bias");
+                dc.locked_channel = telemetry_->register_channel(diff_prefix + "locked");
+                diff_channels.push_back(dc);
+            }
+            ++diff_component_index;
+        }
+    }
 
     return id;
 }

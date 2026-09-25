@@ -32,10 +32,12 @@
 #include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/energy_ledger.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/drivetrain/powertrain_state.h"
 #include "ps/math/vec3.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/vehicle/vehicle_reset.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -237,15 +239,61 @@ public:
     // hub no diff output drives directly (undriven, or a centre diff's
     // outputs, which are carriers, not hubs); out's remaining entries
     // (beyond hub_nodes_.size()) are left at 0.
+    // PHYS-033 P4 I4 C8: extended to fold in each diff's lock/LSD/viscous
+    // transfer_torque() (added at the left hub, subtracted at the right,
+    // Differential::transfer_torque's own convention) - this is now the
+    // REAL total shaft torque on each hub, not just the diff row's mesh-
+    // torque share (which is all a plain Open diff ever had anyway, so this
+    // is bit-identical there: transfer_torque() reads ~0).
     void fill_hub_shaft_torque_debug(std::array<real, 8>& out) const {
         out.fill(real(0.0));
         for (const Differential* d : diffs_) {
             const real coef = d->hub_coef();
             const real lambda = d->lambda_mesh();
+            const real transfer = d->transfer_torque();
             for (std::size_t i = 0; i < hub_nodes_.size() && i < out.size(); ++i) {
-                if (hub_nodes_[i] == d->left_node() || hub_nodes_[i] == d->right_node()) out[i] = coef * lambda;
+                if (hub_nodes_[i] == d->left_node()) out[i] = coef * lambda + transfer;
+                else if (hub_nodes_[i] == d->right_node()) out[i] = coef * lambda - transfer;
             }
         }
+    }
+
+    // PHYS-033 P4 I4 C8 (plan section 3.1): PowertrainSnapshot::diffs' fill,
+    // component-array order (same index diffs_ uses / diff_lock_diff_index
+    // maps into). bias = signed (T_left-T_right)/(|T_left|+|T_right|) using
+    // the same true per-hub torque fill_hub_shaft_torque_debug computes
+    // (coef*lambda_mesh +- transfer_torque); locked = kind Locked, or a
+    // lockable diff whose bit is set in the network's current composed
+    // state (diff_lock_engaged); lock_pending mirrors diff_lock_pending.
+    // Returns the number of diffs filled (== diffs_.size(), capped at
+    // out.size()).
+    std::uint8_t fill_diff_snapshot(std::array<DiffSnapshot, kMaxPowertrainDiffs>& out) const {
+        const std::size_t n = std::min(diffs_.size(), out.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            const Differential& d = *diffs_[i];
+            const real t_left = d.hub_coef() * d.lambda_mesh() + d.transfer_torque();
+            const real t_right = d.hub_coef() * d.lambda_mesh() - d.transfer_torque();
+            const real denom = std::abs(t_left) + std::abs(t_right);
+            out[i].bias = denom > real(0.0) ? (t_left - t_right) / denom : real(0.0);
+            out[i].locked = d.kind() == DifferentialKind::Locked;
+            out[i].lock_pending = false;
+            for (std::size_t li = 0; li < locks_.size(); ++li) {
+                if (locks_[li].diff_index == i) {
+                    out[i].locked = out[i].locked || diff_lock_engaged(li);
+                    out[i].lock_pending = diff_lock_pending(li);
+                    break;
+                }
+            }
+        }
+        return static_cast<std::uint8_t>(n);
+    }
+
+    // PHYS-033 P4 I4 C8: PowertrainDebug::diff_transfer_torque's fill, same
+    // component-array order as fill_diff_snapshot.
+    void fill_diff_transfer_torque_debug(std::array<real, kMaxPowertrainDiffs>& out) const {
+        out.fill(real(0.0));
+        const std::size_t n = std::min(diffs_.size(), out.size());
+        for (std::size_t i = 0; i < n; ++i) out[i] = diffs_[i]->transfer_torque();
     }
 
     // --- PHYS-033 P4 I4 C4 white-box accessors (tests only) ---------------

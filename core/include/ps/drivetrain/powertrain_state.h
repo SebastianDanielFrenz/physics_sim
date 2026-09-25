@@ -38,6 +38,26 @@ struct DrivelineSoundState {
     std::uint32_t grind_events = 0; // sound only, not hashed
 };
 
+// PHYS-033 P4 I4 C8 (plan section 3.1): one differential's adapter-facing
+// torque-split summary. bias = signed (T_left - T_right)/(|T_left| +
+// |T_right|), 0 when both are 0 (an open diff at rest/zero-torque reads 0,
+// not NaN). locked = a rigid lock is currently active (kind Locked, or a
+// lockable diff with its topology-state bit set). lock_pending = C5's
+// engagement-requested-but-mismatch-too-large flag. Debug/telemetry only -
+// never hashed.
+struct DiffSnapshot {
+    real bias = 0.0;
+    bool locked = false;
+    bool lock_pending = false;
+};
+
+// Up to 4 differentials per vehicle (plan section 3.1's own cap - every
+// shipped/test vehicle has at most 3, car_sedan_awd's centre+2 axle diffs).
+// A fixed array, not a vector, so PowertrainSnapshot stays a flat, capacity-
+// free-to-copy value type (D8: no allocation in the triple-buffer publish
+// path this rides along with).
+inline constexpr std::size_t kMaxPowertrainDiffs = 4;
+
 // The adapter-facing per-vehicle powertrain snapshot (additive to
 // VehicleSnapshot, ps/world/snapshot.h). Filled with defaults only until
 // commit 6 wires VehicleInstance's real engine/clutch/gearbox/TCU state
@@ -52,6 +72,11 @@ struct PowertrainSnapshot {
     std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift
     std::vector<EngineSoundState> engines; // 0 or 1 in I3; capacity reused per snapshot slot (D8)
     DrivelineSoundState driveline;
+    // PHYS-033 P4 I4 C8: per-differential torque-split summary, component-
+    // array order (same index as World::create_vehicle's diff telemetry
+    // channel registration). Filled by Powertrain::fill_diff_snapshot.
+    std::array<DiffSnapshot, kMaxPowertrainDiffs> diffs{};
+    std::uint8_t diff_count = 0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled
@@ -68,6 +93,13 @@ struct PowertrainDebug {
     real engine_torque_demand = 0.0;
     bool ignition_cut = false;
     real throttle_ceiling = 1.0;
+    // PHYS-033 P4 I4 C8 (plan section 3.1): each differential's lock/LSD/
+    // viscous transfer torque (Differential::transfer_torque, component-
+    // array order) - see Powertrain::fill_diff_transfer_torque_debug and
+    // powertrain.h's fill_hub_shaft_torque_debug, which now folds this in so
+    // hub_shaft_torque[] is the REAL total shaft torque, not just the diff
+    // row's own mesh-torque share.
+    std::array<real, kMaxPowertrainDiffs> diff_transfer_torque{};
 };
 
 } // namespace ps::drivetrain

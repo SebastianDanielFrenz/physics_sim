@@ -397,6 +397,22 @@ private:
         std::size_t shadow_dv_error, shadow_dw_error;
     };
     std::vector<ChassisTelemetryChannels> chassis_telemetry_channels_; // outer index == VehicleId.index
+
+    // PHYS-033 P4 I4 C8 (plan section 3.1): one entry per differential that
+    // is NOT plain open (kind != Open, or lockable) - registered right after
+    // that vehicle's powertrain-state channels in create_vehicle, so a
+    // plain-open-only vehicle's CSV header (car_sedan.json etc.) stays
+    // byte-identical to before this existed. diff_index indexes both
+    // PowertrainSnapshot::diffs[] and Powertrain::diff(i)/diffs_, in
+    // desc.powertrain.components array order (same order Powertrain builds
+    // diffs_ in).
+    struct DiffTelemetryChannels {
+        std::size_t diff_index;
+        std::size_t bias_channel;
+        std::size_t locked_channel;
+    };
+    std::vector<std::vector<DiffTelemetryChannels>> diff_telemetry_channels_; // outer index == VehicleId.index
+
     std::vector<double> last_stage_ms_;
     std::vector<ContactEvent> last_contact_events_;
     // PHYS-009 Step 3: reused every tick by stage_snapshot() instead of

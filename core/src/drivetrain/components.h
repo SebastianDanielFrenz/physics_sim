@@ -257,7 +257,31 @@ public:
     [[nodiscard]] real lsd_cap_kinetic() const { return lsd_cap_kinetic_; }
     [[nodiscard]] bool lsd_drive() const { return lsd_drive_; }
 
+    // PHYS-033 P4 I4 C8 (plan section 3.1): this substep's lock/LSD/viscous
+    // TRANSFER torque (added to the left hub, subtracted from the right) -
+    // debug/telemetry only, not hashed. computed once in post_solve, cached
+    // here for World::powertrain_debug/PowertrainSnapshot to read back.
+    [[nodiscard]] real transfer_torque() const { return transfer_torque_prev_; }
+    // "Is this diff currently a rigid lock" for the DiffSnapshot::locked
+    // telemetry field: kind == Locked (unconditional) or a lockable diff
+    // whose bit is set in the network's current composed topology state.
+    // Powertrain::fill_diff_snapshot uses its own diff_lock_engaged()
+    // instead (no need to touch this diff's own lock_bit_/gear_state_count_
+    // for that); this accessor exists for anything else that wants it
+    // straight off the component.
+    [[nodiscard]] DifferentialKind kind() const { return desc_.kind; }
+    [[nodiscard]] bool lockable() const { return desc_.lockable; }
+
 private:
+    // PHYS-033 P4 I4 C8: the lock/LSD/viscous transfer torque, reconstructed
+    // from the (b_left - b_right)/2 antisymmetric-residual pair (see
+    // reconstruct_lock_torque_pair in components.cpp) plus, for a
+    // ClutchLsd/Torsen row (whose own reaction node_b DOES subtract, unlike
+    // a rigid lock row or the viscous coupling), the row's own lambda added
+    // back. Works uniformly for Locked/lockable-Open/Viscous/ClutchLsd/
+    // Torsen and reads ~0 for a plain Open diff - see post_solve.
+    [[nodiscard]] real compute_transfer_torque(const ShaftNetwork& net, const Assembly& assembly, real h) const;
+
     NodeId carrier_, left_, right_;
     DifferentialDesc desc_;
     ReconMode mode_ = ReconMode::Leaf;
@@ -287,6 +311,7 @@ private:
     int gear_state_count_ = 1;
     real lsd_cap_kinetic_ = 0.0;
     bool lsd_drive_ = false;
+    real transfer_torque_prev_ = 0.0; // PHYS-033 P4 I4 C8: debug/telemetry only, not hashed (see transfer_torque() above)
 };
 
 // direct_torque brakes (plan section 4.2/6): one friction row per wheel hub
