@@ -134,12 +134,26 @@ func _bind_wheel_nodes() -> void:
 # origin there floated the whole car by that much (owner report
 # 2026-09-24). Physics: a wheel centre sits at attachment_local +
 # axis*compression (wheel_instance.cpp, axis = ISO +z here). Model: at
-# rest_susp_up + susp offset. So the model root drops by the mean of
-# (attachment_z - rest_susp_up) and each susp node carries its own small
-# residual bias, making every wheel exact even if the art and the vehicle
-# file disagree a little (the tractor's rear attachment, PHYS-033 G1).
+# rest_susp_up + susp offset. So the model root shifts by the mean of
+# (attach - rest_susp_pos, re-permuted into ISO) per axis, and each susp
+# node carries its own small residual bias, making every wheel exact even
+# if the art and the vehicle file disagree a little.
+#
+# X/Y generalisation (PHYS-033 P4 I5 prep, car_sedan 60/40 static-split
+# data change, 2026-09-25): this used to compute Z only, because
+# car_sedan.json's wheel attachment_local x/y always matched the rig's own
+# susp_* pivots exactly. Moving car_sedan.json's front/rear attachment_local
+# x (wheelbase kept, only the split relative to the chassis body origin/CoM
+# changed - see that file's own "source" field) broke that assumption, so
+# this now aligns all three axes the same way Z always was: the model root
+# (body mesh + every wheel arch together) shifts by the mean per-axis
+# offset, and wheels stay in their own (unmoved) wheel arches; only the
+# invisible Jolt collision box can now sit very slightly off the visible
+# mesh (already documented as coarser than the visible geometry - see
+# vehicle_test_helpers.h's build_vehicle_rig doc comment). The tractor's
+# rear attachment (PHYS-033 G1, Z-only) is the precedent this generalises.
 func _align_model_to_physics_wheels() -> void:
-	var diffs: Array = []
+	var diffs: Array = [] # ISO-local (dx, dy, dz) per wheel, or null
 	for i in range(_wheel_nodes.size()):
 		var w = _wheel_nodes[i]
 		if w["susp"] == null:
@@ -147,9 +161,13 @@ func _align_model_to_physics_wheels() -> void:
 			continue
 		var attach: Vector3 = _simulation.get_wheel_attachment_local(vehicle_name, i)
 		# susp_* is a direct child of the model's body node at the origin,
-		# its position in the file's own gltf axes (gltf +Y = up).
-		diffs.append(attach.z - float(w["rest_susp_pos"].y))
-	var sum := 0.0
+		# its position in the file's own gltf axes. gltf(x,y,z) = iso(y,z,x)
+		# (car_sedan.rig.json "frame"), so re-permuting rest_susp_pos back
+		# into ISO gives (rest_susp_pos.z, rest_susp_pos.x, rest_susp_pos.y).
+		var rest_susp_pos: Vector3 = w["rest_susp_pos"]
+		var rest_iso := Vector3(rest_susp_pos.z, rest_susp_pos.x, rest_susp_pos.y)
+		diffs.append(attach - rest_iso)
+	var sum := Vector3.ZERO
 	var n := 0
 	for d in diffs:
 		if d != null:
@@ -157,10 +175,10 @@ func _align_model_to_physics_wheels() -> void:
 			n += 1
 	if n == 0:
 		return
-	var dz: float = sum / n
-	_model_root.position = Vector3(0, 0, dz) # ISO body-local, like the basis above
+	var d_mean: Vector3 = sum / n
+	_model_root.position = d_mean # ISO body-local, like the basis above
 	for i in range(_wheel_nodes.size()):
-		_wheel_nodes[i]["susp_bias"] = (diffs[i] - dz) if diffs[i] != null else 0.0
+		_wheel_nodes[i]["susp_bias"] = (diffs[i] - d_mean) if diffs[i] != null else Vector3.ZERO
 
 func _process(delta: float) -> void:
 	if _simulation == null or vehicle_name == "" or _wheel_nodes.is_empty():
@@ -179,8 +197,18 @@ func _process(delta: float) -> void:
 			# offset (child nodes keep the file's own, un-permuted axes -
 			# see _load_model's comment), and the file's up axis is its
 			# own +Y (gltf is Y-up; iso.z=gltf.y). Real simulated state
-			# (World::wheel_telemetry's compression).
-			w["susp"].position = w["rest_susp_pos"] + Vector3(0, 1, 0) * (compression + float(w.get("susp_bias", 0.0)))
+			# (World::wheel_telemetry's compression), plus this wheel's own
+			# residual (dx, dy, dz) bias left over after
+			# _align_model_to_physics_wheels' common per-axis mean was
+			# removed (usually exactly zero - see that function's own
+			# comment - but not for a rig whose art and vehicle-file
+			# attachment points disagree per-wheel, e.g. PHYS-033 G1),
+			# re-permuted from ISO back into the file's own gltf-local axes
+			# (inverse of the iso(x,y,z)=gltf(z,x,y) permutation used when
+			# the bias was computed: gltf.x=iso.y, gltf.y=iso.z, gltf.z=iso.x).
+			var bias_iso: Vector3 = w.get("susp_bias", Vector3.ZERO)
+			var bias_gltf := Vector3(bias_iso.y, bias_iso.z, bias_iso.x)
+			w["susp"].position = w["rest_susp_pos"] + Vector3(0, compression, 0) + bias_gltf
 
 		if w["steer"] != null and w["steered"]:
 			# Real simulated per-wheel steer angle (World::wheel_state's
