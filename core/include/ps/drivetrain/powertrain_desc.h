@@ -119,8 +119,13 @@ struct GearPairDesc {
 // PHYS-033 P4 I4 C6 (plan section 3.1) adds Locked (spool: an unconditional,
 // state-independent omega_L == omega_R row alongside the diff's own row) and
 // Viscous (the open row plus an implicit L-R coupling, `viscous_nm_s_rad`
-// below). ClutchLsd/Torsen/Active remain unimplemented (C7+).
-enum class DifferentialKind { Open, Locked, Viscous }; // I4 C7 adds ClutchLsd, Torsen, Active
+// below). PHYS-033 P4 I4 C7 (plan section 3.2) adds ClutchLsd and Torsen:
+// the open row plus ONE Coulomb friction row between L and R (a = L, b = R,
+// ratio_b = 1; +lambda on L, -lambda on R, so T_high - T_low = 2|lambda|),
+// present in every topology state, whose capacity is set every substep from
+// the PREVIOUS substep's axle torque (a one-substep lag, see the fields
+// below). Active remains unimplemented (the loader rejects it).
+enum class DifferentialKind { Open, Locked, Viscous, ClutchLsd, Torsen };
 
 // PHYS-033 P4 I4 C5 (plan section 2.6/3.1): a lockable diff's L-R lock
 // (omega_L == omega_R rigid row, present only in composed topology states
@@ -145,6 +150,18 @@ struct DifferentialDesc {
     // substep via NetworkBuilder::add_coupling/Assembly::set_coupling(id, 1,
     // 1, viscous_nm_s_rad) alongside the diff's own (open) row.
     real viscous_nm_s_rad = 0.0;
+    // I4 C7, kind == ClutchLsd only: the L-R friction row's kinetic capacity
+    // is (preload_nm + f*T_axle)/2 (so T_high - T_low <= preload_nm +
+    // f*T_axle), f = drive_factor while the carrier's input power last
+    // substep was > 0, else coast_factor; static capacity = static_factor *
+    // kinetic. T_axle = |ratio * lambda_row| of the PREVIOUS substep.
+    real preload_nm = 0.0;    // >= 0
+    real drive_factor = 0.0;  // [0, 1), required for clutch_lsd
+    real coast_factor = 0.0;  // [0, 1), required for clutch_lsd
+    real static_factor = 1.0; // >= 1, optional
+    // I4 C7, kind == Torsen only (required > 1): capacity (T_axle/2)*(TBR-1)/
+    // (TBR+1), static == kinetic, so T_high/T_low <= torque_bias_ratio.
+    real torque_bias_ratio = 0.0;
 };
 
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component

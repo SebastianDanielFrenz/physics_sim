@@ -209,30 +209,58 @@ rigid coupling" leaf rule this depends on.
 
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
-| `kind` | string | **effectively required** (defaults to `""`, which fails the check below — must be given explicitly) | `""` | **must be `"open"`, `"locked"` or `"viscous"`** (I4 C6), else `"<ctx>: differential 'kind' must be \"open\", \"locked\" or \"viscous\""`; `"active"` throws `"<ctx>: differential kind \"active\" is not supported until a torque-vectoring controller exists"`; `"clutch_lsd"`/`"torsen"` throw `"<ctx>: differential kind \"<kind>\" is not supported yet (I4 commit C7 will add it)"` | differential type — `open` (free, Willis-constrained split), `locked` (spool: an unconditional `omega_left == omega_right` row alongside the diff row, present in every topology state — never spends a composed-state bit, see `lockable` below for the togglable equivalent), `viscous` (the open row plus an implicit `L-R` coupling of rate `viscous_nm_s_rad`) |
+| `kind` | string | **effectively required** (defaults to `""`, which fails the check below — must be given explicitly) | `""` | **must be `"open"`, `"locked"`, `"viscous"`, `"clutch_lsd"` or `"torsen"`** (I4 C6/C7), else `"<ctx>: differential 'kind' must be \"open\", \"locked\", \"viscous\", \"clutch_lsd\" or \"torsen\""`; `"active"` throws `"<ctx>: differential kind \"active\" is not supported until a torque-vectoring controller exists"` | differential type — `open` (free, Willis-constrained split), `locked` (spool: an unconditional `omega_left == omega_right` row alongside the diff row, present in every topology state — never spends a composed-state bit, see `lockable` below for the togglable equivalent), `viscous` (the open row plus an implicit `L-R` coupling of rate `viscous_nm_s_rad`), `clutch_lsd` / `torsen` (I4 C7: the open row plus one Coulomb friction row between `left` and `right`, present in every topology state, whose capacity limits `T_high - T_low`; see [clutch_lsd / torsen](#clutch_lsd--torsen-i4-c7) below) |
 | `ratio` | real | optional | `1.0` | **must be != 0**, else `"<ctx>: differential 'ratio' must be != 0"` | final-drive ratio; the carrier's Willis constraint is `omega_carrier = (ratio/2) * (omega_left + omega_right)` |
 | `efficiency` | real | optional | `1.0` | must be in `(0, 1]`, else `"<ctx>: differential 'efficiency' must be in (0, 1]"` | mesh efficiency (I3 lifts the earlier "must be exactly 1" restriction) |
 | `carrier_inertia_kgm2` | real (kg·m²) | optional | `0` | none | inertia at `carrier` |
 | `carrier_axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length, same rule as above | rotor-reaction axis |
 | `viscous_nm_s_rad` | real (N·m·s/rad) | optional, **only valid for `kind: "viscous"`** | `0` | present on a non-`viscous` kind throws `"<ctx>: differential 'viscous_nm_s_rad' is only valid for kind \"viscous\""`; on `kind: "viscous"` **must be > 0**, else `"<ctx>: differential kind \"viscous\" requires 'viscous_nm_s_rad' > 0"` | the coupling's implicit viscous rate `c`: reaction torque `c * (omega_left - omega_right)`, booked every substep as `diff_loss += h * c * v^2` (`PowertrainEnergy::diff_loss`, I4 C6) |
-| `lockable` | bool | optional | `false` | **must not be combined with `kind: "locked"`**, else `"<ctx>: differential 'lockable' is redundant on kind \"locked\" (already always locked)"` | I4 C5: a *runtime-togglable* lock — adds one composed-state bit and a `{L:+1, R:-1}` lock row only in the states where the bit is set (unlike `kind: "locked"`'s unconditional row); must be a leaf diff (its `left`/`right` carry no other rigid row) |
+| `preload_nm` | real (N·m) | optional, **only valid for `kind: "clutch_lsd"`** | `0` | present on another kind throws `"<ctx>: differential 'preload_nm' is only valid for kind \"clutch_lsd\""`; **must be >= 0**, else `"<ctx>: differential 'preload_nm' must be >= 0"` | I4 C7: clutch-pack preload — the locking torque `T_high - T_low` available at zero axle torque |
+| `ramp` | object `{drive_factor, coast_factor}` | **required for `kind: "clutch_lsd"`**, invalid on every other kind | — | present on another kind throws `"<ctx>: differential 'ramp' is only valid for kind \"clutch_lsd\""`; missing on `clutch_lsd` throws `"<ctx>: differential kind \"clutch_lsd\" requires a 'ramp' block {\"drive_factor\", \"coast_factor\"}"`; either key missing throws `"<ctx>: differential 'ramp' requires both 'drive_factor' and 'coast_factor'"`; each **must be in [0, 1)**, else `"<ctx>: differential ramp.drive_factor must be in [0, 1)"` / `"... ramp.coast_factor must be in [0, 1)"` | I4 C7: ramp-angle locking factors `f` — `T_high - T_low <= preload_nm + f * T_axle`, `f = drive_factor` while the carrier's input power was positive last substep (drive), else `coast_factor` (coast/overrun) |
+| `static_factor` | real | optional, **only valid for `kind: "clutch_lsd"`** | `1.0` | present on another kind throws `"<ctx>: differential 'static_factor' is only valid for kind \"clutch_lsd\""`; **must be >= 1**, else `"<ctx>: differential 'static_factor' must be >= 1"` | I4 C7: stuck (static) capacity = `static_factor` × kinetic capacity |
+| `torque_bias_ratio` | real | **required for `kind: "torsen"`**, invalid on every other kind | — | present on another kind throws `"<ctx>: differential 'torque_bias_ratio' is only valid for kind \"torsen\""`; missing on `torsen` throws `"<ctx>: differential kind \"torsen\" requires 'torque_bias_ratio' > 1"`; **must be > 1**, else `"<ctx>: differential 'torque_bias_ratio' must be > 1"` | I4 C7: TBR — `T_high / T_low <= torque_bias_ratio` |
+| `lockable` | bool | optional | `false` | **must not be combined with `kind: "locked"`**, else `"<ctx>: differential 'lockable' is redundant on kind \"locked\" (already always locked)"` | I4 C5: a *runtime-togglable* lock — adds one composed-state bit and a `{L:+1, R:-1}` lock row only in the states where the bit is set (unlike `kind: "locked"`'s unconditional row); must be a leaf diff (its `left`/`right` carry no other rigid row). Allowed on `open`, `viscous`, `clutch_lsd` and `torsen` (I4 C7: a lockable `clutch_lsd`/`torsen` diff's friction row gets capacity 0 while the lock is engaged) |
 | `lock` | object (`DiffLockDesc`) | optional, **only valid with `lockable: true`** | `{max_engage_mismatch_rad_s: 2.0, channel: "diff_lock"}` | present without `lockable: true` throws `"<ctx>: differential 'lock' requires \"lockable\": true"`; `max_engage_mismatch_rad_s` **must be >= 0**, else `"<ctx>: differential lock.max_engage_mismatch_rad_s must be >= 0"`; `channel` **must be non-empty**, else `"<ctx>: differential lock.channel must be non-empty"` | I4 C5: `max_engage_mismatch_rad_s` — the lock only engages while `|omega_left - omega_right|` is at or below this (else stays pending, retried every substep); `channel` — the declared control channel (default value 0) whose value `>= 0.5` requests the lock; releases the substep it reads `< 0.5` |
 
 Ports: `<id>.carrier`, `<id>.left`, `<id>.right` (`left`/`right` carry zero
 inertia of their own — they exist purely so a shaft can name them).
 
-**Reconstruction/leaf rule (I4 C4/C5/C6, plan section 2.7):** a diff of any
+**Reconstruction/leaf rule (I4 C4/C5/C6/C7, plan section 2.7):** a diff of any
 kind whose `efficiency < 1` (a lossy mesh) must be a **leaf** — its `left`
 and `right` ports may carry no other rigid row (discounting the diff's own
 `left`/`right` rows, e.g. a `locked`/`lockable` diff's own lock row), or the
 graph builder throws `"vehicle '<v>': differential '<id>' of kind <k> must
 drive nodes with no other rigid coupling (centre LSD/Torsen is not
 supported in I4)"` (a `lockable: true` diff gets the same rejection with
-`"of kind lockable open"` instead of the plain kind name). A **lossless**
-(`efficiency == 1`) diff of any kind may instead be a **centre** diff —
-`left`/`right` feeding two child diffs' `carrier` ports — reconstructed
-from both children's own row lambdas. Plain `open` diffs are unaffected by
-any of this (same leaf/centre rules and float ops as before I4).
+`"of kind lockable <k>"`, e.g. `"of kind lockable open"`, instead of the
+plain kind name). A `clutch_lsd`/`torsen` diff (I4 C7) must be a leaf
+**whatever its efficiency** — same message. A **lossless**
+(`efficiency == 1`) diff of kind `open`/`locked`/`viscous` may instead be a
+**centre** diff — `left`/`right` feeding two child diffs' `carrier` ports —
+reconstructed from both children's own row lambdas. Plain `open` diffs are
+unaffected by any of this (same leaf/centre rules and float ops as before I4).
+
+#### clutch_lsd / torsen (I4 C7)
+
+Both add one Coulomb friction row between `left` and `right` (reaction
+`+lambda` on `left`, `-lambda` on `right`, so `T_high - T_low = 2|lambda|`)
+alongside the diff's own open row, in every topology state. Its capacity
+(half the allowed torque difference) is set every substep from `T_axle =
+|ratio * lambda_diff|`, the diff row's reconstructed multiplier:
+
+- `clutch_lsd`: kinetic capacity `(preload_nm + f * T_axle) / 2`, `f =
+  drive_factor` if `T_hub * omega_hub` summed over both hubs (the diff row's
+  own share of each hub torque, equal to the carrier's input power) was
+  `> 0` last substep, else `coast_factor`; static capacity `static_factor *
+  kinetic`.
+- `torsen`: capacity `(T_axle / 2) * (TBR - 1) / (TBR + 1)`, static ==
+  kinetic, so `T_high / T_low <= torque_bias_ratio`.
+
+**One-substep lag:** `T_axle` and the drive/coast sign come from the
+**previous** substep's solve (1.04 ms at the default 960 Hz substep rate),
+so the capacity is a known number when the substep's friction LCP runs —
+no fixed-point iteration. The slip dissipation `-h * v * lambda` is booked
+as `PowertrainEnergy::diff_loss` (same channel as `viscous`).
 
 ### Ports, by component type (fixed names)
 

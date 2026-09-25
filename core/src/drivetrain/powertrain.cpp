@@ -21,6 +21,8 @@ const char* diff_kind_name(DifferentialKind k) {
     case DifferentialKind::Open: return "open";
     case DifferentialKind::Locked: return "locked";
     case DifferentialKind::Viscous: return "viscous";
+    case DifferentialKind::ClutchLsd: return "clutch_lsd"; // I4 C7
+    case DifferentialKind::Torsen: return "torsen";        // I4 C7
     }
     return "unknown";
 }
@@ -502,15 +504,25 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             visiting[di] = 1;
             const DiffBuild& db = diff_builds[di];
             int mode = kModeNone;
-            if (db.lockable) {
+            // I4 C7: clutch_lsd/torsen take their capacity from T_axle =
+            // |ratio*lambda_row| (components.cpp), which is only available
+            // as an exact pair reconstruction on a LEAF diff - so both are
+            // leaf-only, lossy or not (plan section 3.2: centre LSD/Torsen
+            // is not supported in I4).
+            const bool leaf_only_kind = db.kind == DifferentialKind::ClutchLsd || db.kind == DifferentialKind::Torsen;
+            if (db.lockable || leaf_only_kind) {
                 // I4 C5 (plan section 2.7 / owner ruling Q3): a lockable diff
                 // must be a LEAF - L and R each touched only by its own diff
                 // row (its own lock row is uncounted, see above). LeafPair,
                 // not Leaf: the left-only balance would include the lock
-                // reaction while locked; the pair sum cancels it.
+                // reaction while locked; the pair sum cancels it. I4 C7: the
+                // same for clutch_lsd/torsen - their L-R friction row's
+                // +-mu reaction cancels in the pair sum exactly like a lock
+                // row's (friction rows never count as rigid touches).
                 if (db.left == db.right || touches(db.left) != num_states || touches(db.right) != num_states) {
-                    throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + db.id +
-                                              "' of kind lockable open must drive nodes with no other rigid coupling "
+                    throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + db.id + "' of kind " +
+                                              (db.lockable ? "lockable " : "") + diff_kind_name(db.kind) +
+                                              " must drive nodes with no other rigid coupling "
                                               "(centre LSD/Torsen is not supported in I4)");
                 }
                 mode = static_cast<int>(Differential::ReconMode::LeafPair);
@@ -636,6 +648,19 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         const auto hit = hand_max_of.find(wn);
         row.handbrake_max_nm = hit == hand_max_of.end() ? real(0.0) : hit->second;
         brake_rows.push_back(row);
+    }
+
+    // --- Phase H2 (PHYS-033 P4 I4 C7, plan section 3.2): one L-R friction
+    // row per clutch_lsd/torsen diff (a = L, b = R, ratio_b = 1), component
+    // order, present in every topology state (friction rows are never
+    // per-state). Added AFTER every clutch/engine/synchro/brake row so every
+    // pre-C7 vehicle's friction-row ids - and with them its hashed row_stuck_
+    // /row_set_ byte order - are unchanged.
+    std::vector<int> diff_lsd_row(diff_builds.size(), -1); // FrictionRowId::index, or -1
+    for (std::size_t di = 0; di < diff_builds.size(); ++di) {
+        const DiffBuild& db = diff_builds[di];
+        if (db.kind != DifferentialKind::ClutchLsd && db.kind != DifferentialKind::Torsen) continue;
+        diff_lsd_row[di] = builder.add_friction_row(db.left, db.right).index;
     }
 
     // --- Phase I: build the network (validates every cluster's reduced mass
@@ -926,6 +951,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         // so diff_builds[di]'s coupling_id (Phase A, kind == Viscous only)
         // wires straight onto diffs_[di].
         if (diff_builds[di].kind == DifferentialKind::Viscous) diffs_[di]->set_viscous_coupling(diff_builds[di].coupling_id);
+        // PHYS-033 P4 I4 C7: same component-order pairing for Phase H2's
+        // clutch_lsd/torsen friction rows.
+        if (diff_lsd_row[di] >= 0) diffs_[di]->set_lsd_row(FrictionRowId{static_cast<std::uint16_t>(diff_lsd_row[di])});
     }
     // PHYS-033 P4 I4 C5: one DiffLock per lockable diff, bit i in component
     // order (the same order the lock-row loop above used). channel_slot is
@@ -947,6 +975,11 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 for (std::size_t k = 0; k < decls.size(); ++k) {
                     if (decls[k].name == d->lock.channel) lk.channel_slot = static_cast<int>(k);
                 }
+                // PHYS-033 P4 I4 C7 (plan section 2.6, "a lockable LSD row
+                // gets capacity 0 while locked"): the diff reads its own bit
+                // (== locks_.size() before this push, the lock-row loop's
+                // bit order) straight from the network's composed state.
+                if (diffs_[di]->has_lsd_row()) diffs_[di]->set_lock_bit(static_cast<int>(locks_.size()), gear_state_count_);
                 locks_.push_back(lk);
             } else if (d->kind == DifferentialKind::Locked) {
                 // PHYS-033 P4 I4 C6: kind == Locked - unconditional, not a
