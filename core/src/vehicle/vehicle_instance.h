@@ -47,6 +47,12 @@ struct ControlChannelIndices {
     std::size_t gear_request = 0;
     std::size_t ignition = 0, starter = 0;
     std::size_t assist_auto_clutch = 0, assist_auto_blip = 0, assist_auto_shift = 0;
+    // PHYS-033 P4 I4 C3 (plan section 2.4): one resolved World control-
+    // channel index per drivetrain::Powertrain::declare_control_channels(...)
+    // entry, same order - resolved in World::create_vehicle exactly like the
+    // fields above. Empty for every shipped vehicle today (no component
+    // declares a channel yet).
+    std::vector<std::size_t> component;
 };
 
 // PHYS-033 I1 W1: environment inputs step_tick's shadow chassis needs but
@@ -156,6 +162,14 @@ public:
     [[nodiscard]] real shadow_dv_error() const { return shadow_dv_error_; }
     [[nodiscard]] real shadow_dw_error() const { return shadow_dw_error_; }
 
+    // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
+    // generic component-declared control channel's value, control_indices_.
+    // component order - the exact buffer ComponentSubstepCtx::channels
+    // points at each substep. White-box test hook (same "plain public
+    // accessor" pattern as e.g. TileManager::precomputed_keys()); also a
+    // legitimate read for a future adapter/debug consumer.
+    [[nodiscard]] const std::vector<real>& component_channel_values() const { return component_channel_values_; }
+
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
 private:
@@ -181,6 +195,14 @@ private:
     // sized once at construction (zero-alloc scratch, PLAN.md D8) - wheels_
     // is never resized after the constructor, same invariant this reuses.
     std::vector<real> hub_omega_old_scratch_;
+
+    // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
+    // generic component-declared control channel's value, control_indices_.
+    // component order - sized ONCE at construction (never resized after,
+    // PLAN.md D8), refilled once per tick (step_tick, not per substep) from
+    // `channel_values`, then pointed to by ComponentSubstepCtx::channels
+    // each substep.
+    std::vector<real> component_channel_values_;
 
     // PHYS-033 P4 I3 plan section 4.3/4.5: default-constructed until commit
     // 6 fills it from the real engine/clutch/gearbox/TCU state - see

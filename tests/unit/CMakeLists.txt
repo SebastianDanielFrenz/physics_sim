@@ -33,6 +33,7 @@ add_executable(ps_unit_tests
   test_powertrain_engine.cpp
   test_powertrain_gearbox.cpp
   test_powertrain_tcu.cpp
+  test_powertrain_control_channels.cpp
   test_sub_threshold_rotation.cpp
 )
 

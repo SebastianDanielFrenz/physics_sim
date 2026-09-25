@@ -29,6 +29,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // Forward-declared only: the articulation runtime (PLAN.md D10/P1.5a) is
@@ -160,6 +161,13 @@ public:
         const auto it = control_channel_index_.find(channel);
         return it == control_channel_index_.end() ? real(0.0) : control_channel_values_[it->second];
     }
+    // PHYS-033 P4 I4 C3: every control channel name World currently knows,
+    // in unspecified (hash-map) enumeration order - introspection/testing
+    // only (e.g. "did create_vehicle add exactly the channels I expect",
+    // compared as a set). Never call this to decide anything about
+    // simulation state or order (control_channel_index_'s own "never
+    // iterated" comment, PLAN.md D7, still governs the hot path).
+    [[nodiscard]] std::vector<std::string> control_channel_names() const;
 
     // PLAN.md section 6 / P3: shared surface-parameter lookup (lambda_mu,
     // crr) for every vehicle's tyre model. Setup-time only (like
@@ -172,7 +180,20 @@ public:
     // like an articulation's own body creation). Stepped in the
     // "vehicle_islands_substep" stage, right after articulation stepping
     // (out/handover_p3.md decision 3) - one job per vehicle.
-    VehicleId create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis);
+    // `test_only_extra_channels` (PHYS-033 P4 I4 C3, plan section 2.4):
+    // {name, default_value} pairs merged into this vehicle's own
+    // drivetrain::Powertrain::declare_control_channels() call (after its
+    // PowertrainDesc's own declarations, duplicates merged the same way) -
+    // the only way to reach a non-empty ControlChannelIndices::component
+    // through the real create_vehicle path before a real declaring
+    // component (C5's diff_lock) exists, so a unit test can exercise
+    // declare -> ensure_control_channel_index -> VehicleInstance::
+    // component_channel_values_ -> ComponentSubstepCtx::channels end to
+    // end. Plain {string, real} pairs, not drivetrain::ChannelDecl
+    // (internal, core/src/drivetrain/powertrain.h - not in any public
+    // header). Always empty for every production caller.
+    VehicleId create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
+                              const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {});
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
     [[nodiscard]] const std::string& wheel_name(VehicleId id, std::size_t wheel_index) const;
@@ -194,6 +215,14 @@ public:
     // accessors, same contract as wheel_telemetry above.
     [[nodiscard]] real wheel_omega(VehicleId id, std::size_t wheel_index) const;
     [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy(VehicleId id) const;
+    // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
+    // generic component-declared control channel's value for this vehicle
+    // (VehicleInstance::component_channel_values(), Powertrain::declare_
+    // control_channels' own order) - same live-state-only, sim-thread-only
+    // contract as wheel_telemetry above. Empty for every vehicle today (no
+    // shipped component declares a channel yet) unless create_vehicle's
+    // test_only_extra_channels was used.
+    [[nodiscard]] const std::vector<real>& vehicle_component_channel_values(VehicleId id) const;
     // PHYS-033 P4 I3 plan section 4.5: the adapter-facing per-vehicle
     // powertrain snapshot and a by-value debug payload for tests. Both are
     // filled with defaults only until commit 6 wires VehicleInstance's real

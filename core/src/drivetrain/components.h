@@ -62,6 +62,15 @@ struct ComponentSubstepCtx {
     real tcu_throttle_floor = 0.0; // LAGGED one substep (engine_torque_map.h's TcuRequest, plan section 7.2's order-independence)
     bool tcu_ignition_cut = false; // LAGGED one substep
     real tcu_throttle_ceiling = 1.0; // LAGGED one substep
+
+    // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
+    // control channel's current value, in Powertrain::declare_control_
+    // channels' own order (== VehicleInstance::component_channel_values_'s
+    // order, copied once per tick, not per substep - PLAN.md D8). Points
+    // into a per-vehicle buffer that outlives the substep; never null, even
+    // when channel_count == 0 (every shipped vehicle today).
+    const real* channels = nullptr;
+    int channel_count = 0;
 };
 
 // PHYS-033 I3 (plan section 5.4, generalised from I2's GearPair-only inline
