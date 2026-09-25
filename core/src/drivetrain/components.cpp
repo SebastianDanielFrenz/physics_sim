@@ -79,16 +79,40 @@ std::uint64_t GearPair::fold_state_hash(std::uint64_t seed) const {
     return h;
 }
 
-// --- OpenDifferential ---------------------------------------------------------
+real reconstruct_mesh_torque_pair(NodeId left, NodeId right, real coef_sum, real loss_tau_left, real loss_tau_right,
+                                   real other_rigid_reaction_left, real other_rigid_reaction_right, const ShaftNetwork& net,
+                                   const Assembly& assembly, real omega_old_left, real omega_old_right, real h) {
+    auto node_b = [&](NodeId node, real loss_tau, real other_rigid, real omega_old) {
+        const real omega_new = net.omega(node);
+        const real dw = omega_new - omega_old;
+        const real J = net.node_inertia(node);
+        const real tau0_others = assembly.tau0(node) - loss_tau;
+        const real d_others = assembly.d(node);
+        real row_sum = real(0.0);
+        for (int r = 0; r < net.friction_row_count(); ++r) {
+            const FrictionRowId rid{static_cast<std::uint16_t>(r)};
+            if (net.friction_row_a(rid) == node) row_sum += net.row_lambda(rid);
+            const NodeId rb = net.friction_row_b(rid);
+            if (rb.valid() && rb == node) row_sum -= assembly.ratio_b(rid) * net.row_lambda(rid);
+        }
+        return J * dw / h - (tau0_others - d_others * dw) - row_sum - other_rigid;
+    };
+    const real b_left = node_b(left, loss_tau_left, other_rigid_reaction_left, omega_old_left);
+    const real b_right = node_b(right, loss_tau_right, other_rigid_reaction_right, omega_old_right);
+    return (b_left + b_right) / coef_sum;
+}
 
-void OpenDifferential::pre_solve(const ComponentSubstepCtx&, const ShaftNetwork& net, Assembly& assembly) {
+// --- Differential ---------------------------------------------------------
+
+void Differential::pre_solve(const ComponentSubstepCtx&, const ShaftNetwork& net, Assembly& assembly) {
     omega_old_carrier_ = net.omega(carrier_);
-    omega_old_left_ = net.omega(left_); // needed by post_solve's reconstruction (recon node is `left_`, not `carrier_`)
+    omega_old_left_ = net.omega(left_); // needed by the leaf reconstruction (recon node is `left_`, not `carrier_`)
+    omega_old_right_ = net.omega(right_); // needed by the nested (pair) reconstruction only
     if (desc_.efficiency < real(1.0)) {
         // Applied at the CARRIER (the row's input node, plan section 5.4's
         // "loss application... at the row's input node" rule) - NOT at the
-        // reconstruction node (left_) below, mirroring GearPair's own
-        // in-node-is-both pattern except the two nodes differ here.
+        // reconstruction node(s) (left_/right_), mirroring GearPair's own
+        // in-node-is-both pattern except the nodes differ here.
         own_loss_tau_ = -(real(1.0) - desc_.efficiency) * std::abs(lambda_mesh_prev_) * sign(omega_old_carrier_);
         assembly.torque(carrier_, own_loss_tau_, real(0.0));
     } else {
@@ -96,21 +120,43 @@ void OpenDifferential::pre_solve(const ComponentSubstepCtx&, const ShaftNetwork&
     }
 }
 
-void OpenDifferential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
-                                   PowertrainEnergy& ledger) {
+real Differential::compute_row_lambda(const ShaftNetwork& net, const Assembly& assembly, real h) const {
+    switch (mode_) {
+    case ReconMode::Leaf: {
+        // Reconstruction node: the LEFT node (plan section 5.1's graph table
+        // - the diff row's coefficient there is -ratio/2, and it carries no
+        // OTHER rigid row). The loss torque itself was applied at carrier_
+        // (a different node), so `loss_tau_already_applied` here is 0 -
+        // left_'s own assembly.tau0 never received it. I3-literal: these are
+        // exactly I3 OpenDifferential::post_solve's float operations.
+        const real coef_at_left = -desc_.ratio / real(2.0);
+        return reconstruct_mesh_torque(left_, coef_at_left, real(0.0), net, assembly, omega_old_left_, h);
+    }
+    case ReconMode::Nested: {
+        // Each child's row reacts on its own carrier (== our L or R) with
+        // coefficient +1.0, so its known reaction there is 1.0*lambda_child.
+        real other_left = real(0.0), other_right = real(0.0);
+        for (const Differential* c : children_left_) other_left += c->compute_row_lambda(net, assembly, h);
+        for (const Differential* c : children_right_) other_right += c->compute_row_lambda(net, assembly, h);
+        return reconstruct_mesh_torque_pair(left_, right_, -desc_.ratio, real(0.0), real(0.0), other_left, other_right, net, assembly,
+                                            omega_old_left_, omega_old_right_, h);
+    }
+    case ReconMode::None:
+    default:
+        return real(0.0);
+    }
+}
+
+void Differential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
+                               PowertrainEnergy& ledger) {
     if (desc_.efficiency >= real(1.0)) {
-        lambda_mesh_prev_ = real(0.0);
+        lambda_mesh_prev_ = real(0.0); // I3 rule: no loss element, nothing hashed beyond 0
+        lambda_row_ = compute_row_lambda(net, assembly, ctx.h); // debug only
         return;
     }
-    // Reconstruction node: the LEFT hub (plan section 5.1's graph table -
-    // the diff row's coefficient there is -ratio/2, and it is the lowest-
-    // index node the row touches that carries no OTHER rigid row). The
-    // loss torque itself was applied at carrier_ (a different node), so
-    // `loss_tau_already_applied` here is 0 - left_'s own assembly.tau0
-    // never received it.
-    const real coef_at_left = -desc_.ratio / real(2.0);
-    const real lambda_mesh = reconstruct_mesh_torque(left_, coef_at_left, real(0.0), net, assembly, omega_old_left_, ctx.h);
+    const real lambda_mesh = compute_row_lambda(net, assembly, ctx.h);
     lambda_mesh_prev_ = lambda_mesh;
+    lambda_row_ = lambda_mesh;
 
     const real omega_new_carrier = net.omega(carrier_);
     // Shared with GearPair/Gearbox in the ledger (plan section 5.4: "Ledger:
@@ -118,7 +164,7 @@ void OpenDifferential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNet
     ledger.gear_loss += -ctx.h * omega_new_carrier * own_loss_tau_;
 }
 
-std::uint64_t OpenDifferential::fold_state_hash(std::uint64_t seed) const {
+std::uint64_t Differential::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = seed;
     const auto* bytes = reinterpret_cast<const unsigned char*>(&lambda_mesh_prev_);
     for (std::size_t i = 0; i < sizeof(lambda_mesh_prev_); ++i) {

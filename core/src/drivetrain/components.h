@@ -1,5 +1,5 @@
 // core/src/drivetrain/components.h — the component catalogue (PHYS-033 P4
-// I2/I3 plan section 6): GearPair, OpenDifferential, DirectTorqueBrakes.
+// I2/I3 plan section 6): GearPair, Differential, DirectTorqueBrakes.
 // engine/clutch/gearbox are I3 additions (engine_torque_map.h, clutch.h,
 // gearbox.h) but are deliberately NOT IComponent subclasses living in this
 // file's catalogue - Powertrain (powertrain.h/.cpp) owns them as typed
@@ -80,14 +80,14 @@ struct ComponentSubstepCtx {
 // `recon_node`'s own momentum balance THIS substep. `recon_node` must be a
 // node that carries no OTHER rigid row in any topology state where this row
 // is present (the "reconstruction node" rule) - for GearPair/Gearbox this is
-// always their own `in` node with coef 1.0, for OpenDifferential it is the
+// always their own `in` node with coef 1.0, for a leaf Differential it is the
 // `left` hub node with coef -ratio/2 (dividing by exactly 1.0 for the
 // gear case is exact in IEEE754, so GearPair's use of this stays
 // bit-identical to the old inline form). `loss_tau_already_applied` is the
 // caller's own mesh-loss torque, already folded into `assembly.tau0(recon_
 // node)` by ITS OWN pre_solve with d == 0 IF that loss was applied AT
 // recon_node itself (subtracted back out here) - pass 0 if no loss torque
-// was applied to recon_node this substep (e.g. OpenDifferential applies its
+// was applied to recon_node this substep (e.g. Differential applies its
 // loss at the CARRIER node, not at the left-hub reconstruction node, so its
 // call passes 0 here).
 [[nodiscard]] real reconstruct_mesh_torque(NodeId recon_node, real coef_at_recon_node, real loss_tau_already_applied,
@@ -127,32 +127,87 @@ private:
     real omega_old_in_ = 0.0;
 };
 
+// PHYS-033 P4 I4 plan section 2.7: pair reconstruction of a diff row's own
+// multiplier from BOTH output nodes' momentum balances. For node i in {L, R}:
+//   b_i = J_i*dw_i/h - (tau0_i - loss_tau_i - d_i*dw_i) - sum_friction_rows_at_i
+//         - other_rigid_reaction_i
+// and b_L + b_R = coef_sum * lambda (coef_sum = -ratio for a diff row, whose
+// L/R coefficients are -ratio/2 each). A reaction that acts equal-and-
+// opposite on L and R (a future lock row, an LSD friction row, an equal-
+// ratio L-R coupling) cancels in the sum; `other_rigid_reaction_*` is every
+// OTHER rigid row's KNOWN reaction at that node (e.g. a child diff's
+// 1.0*lambda_child when L/R is that child's carrier - the non-leaf case).
+// Separate from reconstruct_mesh_torque above, which stays untouched (the
+// leaf path's float operations are hashed via lambda_mesh_prev_).
+[[nodiscard]] real reconstruct_mesh_torque_pair(NodeId left, NodeId right, real coef_sum, real loss_tau_left, real loss_tau_right,
+                                                 real other_rigid_reaction_left, real other_rigid_reaction_right,
+                                                 const ShaftNetwork& net, const Assembly& assembly, real omega_old_left,
+                                                 real omega_old_right, real h);
+
 // differential (kind open): carrier = ratio * avg(left, right) (rigid row,
 // registered by Powertrain's constructor). PHYS-033 I3 (plan section 5.4)
 // lifts I2's "efficiency must be exactly 1" ban: a lossy diff's mesh-loss
-// torque is applied at the CARRIER (input) node and reconstructed from the
-// LEFT hub node (coefficient -ratio/2, the lowest-index node the diff's own
-// row touches that carries no other rigid row - plan section 5.1's graph
-// table).
-class OpenDifferential final : public IComponent {
+// torque is applied at the CARRIER (input) node.
+//
+// PHYS-033 P4 I4 C4 (plan sections 2.5/2.7, multi-diff): the row multiplier
+// is reconstructed one of two ways, chosen once at build time by Powertrain
+// (configure_reconstruction):
+//  - Leaf: the LEFT node carries no other rigid row in any topology state.
+//    The I3 path, literally (reconstruct_mesh_torque at `left` with coef
+//    -ratio/2, loss 0) - every shipped vehicle's diff.
+//  - Nested: L and/or R also carry child diffs' rows (they ARE those
+//    children's carriers, coef +1.0 there) and nothing else rigid - an open
+//    centre diff feeding axle diffs. Pair reconstruction with each child's
+//    own row multiplier (child->compute_row_lambda, recursive, pure) as the
+//    known other-rigid reaction. The child's own loss torque at its carrier
+//    is an applied torque already in tau0 there and correctly stays in.
+//  - None: anything else; Powertrain's constructor rejects it when
+//    efficiency < 1 (no reconstruction available), else lambda reads 0.
+class Differential final : public IComponent {
 public:
-    OpenDifferential(NodeId carrier, NodeId left, NodeId right, DifferentialDesc desc)
+    enum class ReconMode : std::uint8_t { Leaf, Nested, None };
+
+    Differential(NodeId carrier, NodeId left, NodeId right, DifferentialDesc desc)
         : carrier_(carrier), left_(left), right_(right), desc_(desc) {}
+
+    // Build-time only (Powertrain's constructor, after every Differential is
+    // constructed). `children_*` are the diffs whose carrier is this diff's
+    // left/right node (Nested mode only; non-owning, owned by the same
+    // Powertrain's components_).
+    void configure_reconstruction(ReconMode mode, std::vector<const Differential*> children_left,
+                                  std::vector<const Differential*> children_right) {
+        mode_ = mode;
+        children_left_ = std::move(children_left);
+        children_right_ = std::move(children_right);
+    }
 
     void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
     void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
                      PowertrainEnergy& ledger) override;
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
 
-    // PHYS-033 P4 I3 commit 7: World::powertrain_debug's diff_mesh_torque/
-    // hub_shaft_torque read-only accessors. Reuses lambda_mesh_prev_ AS-IS
-    // (already reconstructed every substep for both shipped vehicles, whose
-    // diffs are both efficiency < 1 - car_sedan 0.97, tractor 0.94 - see
-    // this class's own post_solve) rather than adding any new hashed state
-    // or changing when/how it is computed.
-    [[nodiscard]] real lambda_mesh() const { return lambda_mesh_prev_; }
+    // This substep's row multiplier (row units: reaction on carrier = 1.0*
+    // lambda, on each of L/R = -ratio/2*lambda), a PURE function of the
+    // solved network/assembly and this diff's own pre_solve captures - valid
+    // only between Powertrain::solve and the next begin_substep. Callable by
+    // a parent diff before or after this diff's own post_solve (same value
+    // either way). Returns 0 in ReconMode::None.
+    [[nodiscard]] real compute_row_lambda(const ShaftNetwork& net, const Assembly& assembly, real h) const;
+
+    // PHYS-033 P4 I3 commit 7 / I4 C4: World::powertrain_debug's
+    // diff_mesh_torque/hub_shaft_torque read-only accessors. lambda_row_ is
+    // this substep's row multiplier (NOT hashed): bit-identical to the hashed
+    // lambda_mesh_prev_ whenever efficiency < 1 (both shipped vehicles), and
+    // additionally filled for an efficiency-1 diff (where lambda_mesh_prev_
+    // stays 0, the I3 rule) so a lossless centre diff still reports its
+    // torque.
+    [[nodiscard]] real lambda_mesh() const { return lambda_row_; }
+    [[nodiscard]] real lambda_mesh_prev() const { return lambda_mesh_prev_; } // hashed state (tests)
+    [[nodiscard]] NodeId carrier_node() const { return carrier_; }
     [[nodiscard]] NodeId left_node() const { return left_; }
     [[nodiscard]] NodeId right_node() const { return right_; }
+    [[nodiscard]] real ratio() const { return desc_.ratio; }
+    [[nodiscard]] ReconMode recon_mode() const { return mode_; }
     // hub_shaft_torque[i] = hub_coef() * lambda_mesh() for i in {left, right}
     // (plan section 4.5's own formula, "coef*lambda_diff"; both hubs share
     // the same coefficient - an open diff always splits torque 50/50).
@@ -161,10 +216,14 @@ public:
 private:
     NodeId carrier_, left_, right_;
     DifferentialDesc desc_;
+    ReconMode mode_ = ReconMode::Leaf;
+    std::vector<const Differential*> children_left_, children_right_;
     real lambda_mesh_prev_ = 0.0; // STATE: persists substep to substep, like GearPair's
+    real lambda_row_ = 0.0;       // this substep's row multiplier (debug only, not hashed)
     real own_loss_tau_ = 0.0;
     real omega_old_carrier_ = 0.0;
     real omega_old_left_ = 0.0;
+    real omega_old_right_ = 0.0;
 };
 
 // direct_torque brakes (plan section 4.2/6): one friction row per wheel hub
