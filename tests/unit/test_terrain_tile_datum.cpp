@@ -15,6 +15,7 @@
 // and known analytically - the point here is the datum arithmetic and
 // Jolt's own collision quantisation, not terrain generation.
 
+#include "terrain/procedural_terrain_source.h"
 #include "terrain/tile_manager.h"
 
 #include "ps/world/world.h"
@@ -25,6 +26,8 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
+#include <string>
 #include <utility>
 
 using namespace ps;
@@ -381,5 +384,86 @@ TEST_CASE("Collision height resolution at 1 m sample spacing (R1)", "[terrain][t
         auto step_fn800 = [](real x, real) { return (x < kStepX ? real(0.0) : real(0.005)) + real(800.0); };
         REQUIRE(measure("5 mm step, datum 0", 0.0, step_fn0) < 0.01);
         REQUIRE(measure("5 mm step, datum ~768", 800.0, step_fn800) < 0.01);
+    }
+}
+
+// Diagnostic only ([.][diag], same convention as e.g.
+// test_vehicle_standstill_wiggle.cpp's "zeta sweep diagnostic" - not run by
+// default). Measures, with real numbers rather than amplitude arithmetic
+// alone, the actual height range of this project's two existing
+// ProceduralTerrainSource specs, to state whether their tiles snap to
+// datum 0 (an exact no-op subtraction).
+//
+// Measured (100 m grid over the full +-50000 m world,
+// data/tracks/test_ground/terrain.json): min=-83.16 m, max=78.28 m. This
+// EXCEEDS a single +-64 m half-window, so NOT every test_ground tile snaps
+// to datum 0 - specifically tiles far from the origin, where the roughness
+// term ramps the 55 m-amplitude hill octave in (0 at/inside
+// roughness.near_radius_m=8000, full strength at/beyond far_radius_m=30000;
+// world half_extent_m=50000 reaches well past that), can get a real nonzero
+// datum. This is fine and expected, not a bug: test_ground's own height
+// range was already comfortably inside Jolt's original fixed +-200 m window
+// even before this feature (the datum feature exists for real-world terrain
+// at 90-880 m ASL, far outside that window, not for this synthetic spec),
+// and every test_ground-based test (test_terrain_tile_manager.cpp,
+// test_terrain_static_overlap.cpp, test_terrain_suppression_precompute.cpp,
+// bench_terrain_tiles) still passes unchanged with a real per-tile datum
+// now applying on some of its tiles - the datum/pose-z round trip preserves
+// absolute height regardless of whether the datum happens to be 0. None of
+// these tests hash-compare, so this is a functional (ctest pass), not a
+// bit-identity, guarantee.
+//
+// Measured (2 m grid over the full +-500 m world,
+// data/scenarios/terrain_spec_small.json): min=-2.35 m, max=2.41 m - by
+// construction (rolling-octave amplitude budget 2.0+0.5=2.5 m; the hill
+// octave's roughness term is 0 everywhere in this 500 m-radius world since
+// roughness.near_radius_m=1e6 is never reached), comfortably inside +-64 m
+// with wide margin. EVERY tile this spec can ever produce therefore snaps
+// to datum 0 - an exact no-op subtraction (see the `datum == 0.0` skip in
+// TileManager::update) - which is what matters for bit-identity:
+// data/scenarios/terrain_tiles.json and terrain_multi_interest.json (the
+// two state_hash-checked scenarios, 0x5afffd7d796d4f34 / 0x6275dc6d271a8906
+// per this feature's own commit message) are BOTH built on this spec, never
+// on test_ground.
+TEST_CASE("Diagnostic: real terrain.json / terrain_spec_small.json height range", "[terrain][.][diag]") {
+#ifndef PS_SOURCE_DIR
+#error "PS_SOURCE_DIR must be defined (see tests/unit/CMakeLists.txt)"
+#endif
+    auto scan_range = [](const std::string& path, real half_extent, real step) {
+        const TerrainSpec spec = load_terrain_spec(path);
+        real min_h = std::numeric_limits<real>::max();
+        real max_h = std::numeric_limits<real>::lowest();
+        for (real x = -half_extent; x <= half_extent; x += step) {
+            for (real y = -half_extent; y <= half_extent; y += step) {
+                const real h = terrain_height(spec, x, y);
+                min_h = std::min(min_h, h);
+                max_h = std::max(max_h, h);
+            }
+        }
+        return std::make_pair(min_h, max_h);
+    };
+
+    // data/tracks/test_ground/terrain.json: world half_extent_m=50000, tile
+    // 256 m - a 100 m-spaced grid covers every tile at least once. Only
+    // sanity-checked against Jolt's ORIGINAL fixed +-200 m window (true
+    // regardless of this feature) - see the comment above for why this one
+    // is not expected to stay inside +-64 m everywhere.
+    {
+        const auto [min_h, max_h] = scan_range(std::string(PS_SOURCE_DIR) + "/data/tracks/test_ground/terrain.json", 50000.0, 100.0);
+        WARN("data/tracks/test_ground/terrain.json: min=" << min_h << " m, max=" << max_h << " m, mid=" << (min_h + max_h) * 0.5
+                                                            << " m");
+        CHECK(min_h > -200.0);
+        CHECK(max_h < 200.0);
+    }
+    // data/scenarios/terrain_spec_small.json: world half_extent_m=500, tile
+    // 16 m - a 2 m-spaced grid covers every tile many times over. Backs
+    // BOTH state-hash-checked scenarios, so this one IS asserted to stay
+    // inside +-64 m everywhere (every tile snaps to datum 0).
+    {
+        const auto [min_h, max_h] = scan_range(std::string(PS_SOURCE_DIR) + "/data/scenarios/terrain_spec_small.json", 500.0, 2.0);
+        WARN("data/scenarios/terrain_spec_small.json: min=" << min_h << " m, max=" << max_h << " m, mid=" << (min_h + max_h) * 0.5
+                                                              << " m");
+        CHECK(min_h > -64.0);
+        CHECK(max_h < 64.0);
     }
 }
