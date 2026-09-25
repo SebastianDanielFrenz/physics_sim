@@ -37,6 +37,7 @@ add_executable(ps_unit_tests
   test_powertrain_control_channels.cpp
   test_powertrain_multi_diff.cpp
   test_powertrain_topology.cpp
+  test_powertrain_diff.cpp
   test_sub_threshold_rotation.cpp
 )
 

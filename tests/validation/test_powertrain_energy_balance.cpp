@@ -21,7 +21,7 @@ real sum_abs_terms(const drivetrain::PowertrainEnergy& e) {
     return std::abs(e.engine_out) + std::abs(e.wheel_out) + std::abs(e.tyre_loss) + std::abs(e.brake_loss) +
            std::abs(e.gear_loss) + std::abs(e.integrator_loss) + std::abs(e.clutch_loss) + std::abs(e.synchro_loss) +
            std::abs(e.engine_friction_loss) + std::abs(e.engagement_loss) + std::abs(e.starter_in) +
-           std::abs(e.external_reset);
+           std::abs(e.external_reset) + std::abs(e.diff_loss); // I4 C6: diff_loss added, 0 (car_sedan.json's diff is open)
 }
 } // namespace
 

@@ -118,6 +118,12 @@ void Differential::pre_solve(const ComponentSubstepCtx&, const ShaftNetwork& net
     } else {
         own_loss_tau_ = real(0.0);
     }
+    // PHYS-033 P4 I4 C6: kind == Viscous - the open row above still holds;
+    // this is an ADDITIONAL implicit L-R coupling (ra = rb = 1, the plain
+    // omega_L - omega_R relative speed), parameterised fresh every substep
+    // (Assembly::set_coupling's own contract - couplings default to c=0/
+    // inert if never set, so this call is required every substep it applies).
+    if (has_viscous_coupling_) assembly.set_coupling(viscous_coupling_id_, real(1.0), real(1.0), desc_.viscous_nm_s_rad);
 }
 
 real Differential::compute_row_lambda(const ShaftNetwork& net, const Assembly& assembly, real h) const {
@@ -157,16 +163,24 @@ void Differential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork
     if (desc_.efficiency >= real(1.0)) {
         lambda_mesh_prev_ = real(0.0); // I3 rule: no loss element, nothing hashed beyond 0
         lambda_row_ = compute_row_lambda(net, assembly, ctx.h); // debug only
-        return;
-    }
-    const real lambda_mesh = compute_row_lambda(net, assembly, ctx.h);
-    lambda_mesh_prev_ = lambda_mesh;
-    lambda_row_ = lambda_mesh;
+    } else {
+        const real lambda_mesh = compute_row_lambda(net, assembly, ctx.h);
+        lambda_mesh_prev_ = lambda_mesh;
+        lambda_row_ = lambda_mesh;
 
-    const real omega_new_carrier = net.omega(carrier_);
-    // Shared with GearPair/Gearbox in the ledger (plan section 5.4: "Ledger:
-    // gear_loss sums both").
-    ledger.gear_loss += -ctx.h * omega_new_carrier * own_loss_tau_;
+        const real omega_new_carrier = net.omega(carrier_);
+        // Shared with GearPair/Gearbox in the ledger (plan section 5.4: "Ledger:
+        // gear_loss sums both").
+        ledger.gear_loss += -ctx.h * omega_new_carrier * own_loss_tau_;
+    }
+    // PHYS-033 P4 I4 C6: kind == Viscous - booked regardless of the
+    // efficiency branch above (an independent dissipation channel; a
+    // lossless (efficiency == 1) Viscous diff still dissipates through its
+    // coupling). coupling_velocity is this substep's SOLVED v = w_L - w_R.
+    if (has_viscous_coupling_) {
+        const real v = net.coupling_velocity(viscous_coupling_id_);
+        ledger.diff_loss += ctx.h * desc_.viscous_nm_s_rad * v * v;
+    }
 }
 
 std::uint64_t Differential::fold_state_hash(std::uint64_t seed) const {

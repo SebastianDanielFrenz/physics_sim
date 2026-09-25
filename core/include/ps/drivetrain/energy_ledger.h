@@ -30,6 +30,12 @@ struct PowertrainEnergy {
     real engagement_loss = 0.0;      // 1/2*(w_old-w_proj)^T*J*(w_old-w_proj) at a topology-state switch, cumulative, >= 0
     real starter_in = 0.0;           // h*omega'*(tau_start - d_start*Delta(omega)), cumulative (mechanical work the starter puts in)
     real external_reset = 0.0;       // Delta(rotor_ke) booked by World::reset_vehicle setting network omega directly, cumulative (can be any sign)
+
+    // PHYS-033 P4 I4 C6 (plan section 3.1): a Viscous differential's implicit
+    // L-R coupling dissipation, h*c*coupling_velocity^2 per substep,
+    // cumulative, >= 0. 0 for every vehicle with no viscous diff (every
+    // shipped vehicle today) - hash-neutral, same as clutch_loss et al. above.
+    real diff_loss = 0.0;
 };
 
 } // namespace ps::drivetrain

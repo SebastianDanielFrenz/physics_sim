@@ -13,6 +13,18 @@ namespace {
 
 real sign(real x) { return x > real(0.0) ? real(1.0) : (x < real(0.0) ? real(-1.0) : real(0.0)); }
 
+// PHYS-033 P4 I4 C6: lowercase names matching the loader's own accepted JSON
+// "kind" strings (vehicle_io.cpp) - used only in the reconstruction-mode
+// rejection message below, for kind != Open (Open never reaches it).
+const char* diff_kind_name(DifferentialKind k) {
+    switch (k) {
+    case DifferentialKind::Open: return "open";
+    case DifferentialKind::Locked: return "locked";
+    case DifferentialKind::Viscous: return "viscous";
+    }
+    return "unknown";
+}
+
 constexpr real kPi = 3.14159265358979323846;
 // rpm -> rad/s (inverse of engine_torque_map.cpp's own kRadPerSecToRpm).
 real rpm_to_rad_per_s(real rpm) { return rpm * (real(2.0) * kPi) / real(60.0); }
@@ -327,6 +339,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         real ratio = 1.0;
         real efficiency = 1.0;
         bool lockable = false;
+        DifferentialKind kind = DifferentialKind::Open; // I4 C6
+        real viscous_nm_s_rad = 0.0;                    // I4 C6, kind == Viscous only
+        CouplingId coupling_id{};                        // I4 C6, kind == Viscous only (see has_viscous_coupling_)
         NodeId carrier, left, right;
     };
     std::vector<DiffBuild> diff_builds;
@@ -337,9 +352,15 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             b.ratio = d->ratio;
             b.efficiency = d->efficiency;
             b.lockable = d->lockable;
+            b.kind = d->kind;
+            b.viscous_nm_s_rad = d->viscous_nm_s_rad;
             b.carrier = node_for_key(component_port_key(c.id, "carrier"));
             b.left = node_for_key(component_port_key(c.id, "left"));
             b.right = node_for_key(component_port_key(c.id, "right"));
+            // I4 C6: viscous diffs get an implicit L-R coupling ALONGSIDE
+            // their own (open) rigid row below - declared once here (build
+            // time), parameterised every substep by Differential::pre_solve.
+            if (b.kind == DifferentialKind::Viscous) b.coupling_id = builder.add_coupling(b.left, b.right);
             diff_builds.push_back(std::move(b));
         }
     }
@@ -387,6 +408,27 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 row.terms.emplace_back(out_n.index, -g->ratio);
                 register_rigid_row(state, std::move(row));
             }
+        }
+    }
+
+    // PHYS-033 P4 I4 C6 (plan section 3.1): kind == Locked (spool) rows
+    // omega_L - omega_R = 0, UNCONDITIONAL - every topology state, not gated
+    // by any composed-state bit (a Locked diff spends no bit; it is not a
+    // "lockable" diff, it is always locked). Ordered here, BEFORE C5's own
+    // per-state lock rows below (both live in the "lock rows" section, after
+    // every diff/gearbox/gear_pair row) - a stable, documented order: kind-
+    // Locked rows first, then C5's lockable-diff bit rows. Same
+    // rigid_row_touch_count exclusion as C5's rows below, for the same
+    // reason (a Locked diff's own row reaction must read as "the only rigid
+    // coupling on its L/R" for the leaf-pattern check further down).
+    for (int state = 0; state < num_states; ++state) {
+        for (const DiffBuild& db : diff_builds) {
+            if (db.kind != DifferentialKind::Locked) continue;
+            RigidRow row;
+            row.terms.emplace_back(db.left.index, real(1.0));
+            row.terms.emplace_back(db.right.index, real(-1.0));
+            build_rigid_rows_.emplace_back(state, row);
+            builder.add_rigid_row(state, std::move(row));
         }
     }
 
@@ -473,7 +515,14 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 }
                 mode = static_cast<int>(Differential::ReconMode::LeafPair);
             } else if (db.left != db.right && touches(db.left) == num_states) {
-                mode = static_cast<int>(Differential::ReconMode::Leaf);
+                // I4 C6: a Locked/Viscous diff's own L-R mechanism (the
+                // unconditional lock row, or the viscous coupling) is an
+                // "other rigid coupling"-shaped reaction on L/R exactly like
+                // C5's lockable case above - LeafPair, not Leaf, so the pair
+                // sum cancels it. A plain Open diff keeps Leaf (I3-literal,
+                // unchanged).
+                mode = db.kind == DifferentialKind::Open ? static_cast<int>(Differential::ReconMode::Leaf)
+                                                          : static_cast<int>(Differential::ReconMode::LeafPair);
             } else if (db.left != db.right) {
                 std::vector<int> cl, cr;
                 for (std::size_t dj = 0; dj < diff_builds.size(); ++dj) {
@@ -484,6 +533,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 const bool counts_ok = touches(db.left) == num_states * (1 + static_cast<int>(cl.size())) &&
                                        touches(db.right) == num_states * (1 + static_cast<int>(cr.size()));
                 if (counts_ok && !(cl.empty() && cr.empty())) {
+                    // I4 C6: a lossy centre (Nested-pattern) Locked/Viscous
+                    // diff is rejected outright, same wording as C5's own
+                    // lockable-diff rejection above - a LOSSLESS Locked/
+                    // Viscous diff MAY be a centre diff (the L-R reaction
+                    // still cancels in reconstruct_mesh_torque_pair's sum),
+                    // so only the lossy case is refused here.
+                    if (db.kind != DifferentialKind::Open && db.efficiency < real(1.0)) {
+                        throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + db.id +
+                                                  "' of kind " + diff_kind_name(db.kind) +
+                                                  " must drive nodes with no other rigid coupling (centre LSD/Torsen is "
+                                                  "not supported in I4)");
+                    }
                     bool children_ok = true;
                     for (int dj : cl) children_ok = children_ok && resolve(static_cast<std::size_t>(dj)) != kModeNone;
                     for (int dj : cr) children_ok = children_ok && resolve(static_cast<std::size_t>(dj)) != kModeNone;
@@ -495,6 +556,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 }
             }
             if (mode == kModeNone && db.efficiency < real(1.0)) {
+                // I4 C6: a Locked/Viscous diff that reaches here (neither the
+                // leaf nor the Nested-candidate pattern matched at all, e.g.
+                // its L/R also touch an unrelated rigid row) gets the same
+                // kind-specific message as the two cases above; a plain Open
+                // diff keeps the exact pre-C6 wording (tested verbatim).
+                if (db.kind != DifferentialKind::Open) {
+                    throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + db.id +
+                                              "' of kind " + diff_kind_name(db.kind) +
+                                              " must drive nodes with no other rigid coupling (centre LSD/Torsen is not "
+                                              "supported in I4)");
+                }
                 throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + db.id +
                                           "' has efficiency < 1 but its output nodes carry rigid couplings other than child "
                                           "differentials' carriers - mesh-loss reconstruction is not available there");
@@ -849,6 +921,11 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         for (int dj : diff_children_left[di]) cl.push_back(diffs_[static_cast<std::size_t>(dj)]);
         for (int dj : diff_children_right[di]) cr.push_back(diffs_[static_cast<std::size_t>(dj)]);
         diffs_[di]->configure_reconstruction(static_cast<Differential::ReconMode>(diff_mode[di]), std::move(cl), std::move(cr));
+        // PHYS-033 P4 I4 C6: diff_builds is in the same component order as
+        // diffs_ (both built by iterating pt.components once - Phase A/N),
+        // so diff_builds[di]'s coupling_id (Phase A, kind == Viscous only)
+        // wires straight onto diffs_[di].
+        if (diff_builds[di].kind == DifferentialKind::Viscous) diffs_[di]->set_viscous_coupling(diff_builds[di].coupling_id);
     }
     // PHYS-033 P4 I4 C5: one DiffLock per lockable diff, bit i in component
     // order (the same order the lock-row loop above used). channel_slot is
@@ -871,6 +948,11 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                     if (decls[k].name == d->lock.channel) lk.channel_slot = static_cast<int>(k);
                 }
                 locks_.push_back(lk);
+            } else if (d->kind == DifferentialKind::Locked) {
+                // PHYS-033 P4 I4 C6: kind == Locked - unconditional, not a
+                // locks_/lock_pending_ entry (no bit, no channel; see
+                // always_locked_diffs_'s own comment in powertrain.h).
+                always_locked_diffs_.emplace_back(diffs_[di]->left_node(), diffs_[di]->right_node());
             }
             ++di;
         }
@@ -1112,7 +1194,7 @@ void Powertrain::end_tick() {
                              (L.tyre_loss - L0.tyre_loss) + (L.brake_loss - L0.brake_loss) + (L.gear_loss - L0.gear_loss) +
                              (L.clutch_loss - L0.clutch_loss) + (L.synchro_loss - L0.synchro_loss) +
                              (L.engine_friction_loss - L0.engine_friction_loss) + (L.engagement_loss - L0.engagement_loss) +
-                             (L.integrator_loss - L0.integrator_loss);
+                             (L.integrator_loss - L0.integrator_loss) + (L.diff_loss - L0.diff_loss);
 }
 
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
@@ -1159,6 +1241,15 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         const real w = (network_.omega(locks_[i].left) + network_.omega(locks_[i].right)) / real(2.0);
         network_.set_omega(locks_[i].left, w);
         network_.set_omega(locks_[i].right, w);
+    }
+    //    I4 C6: a kind == Locked diff's row is UNCONDITIONAL (every topology
+    //    state, no bit) - so, unlike the lock_bits-gated loop above, this one
+    //    always runs, for the same reason (the reset state must satisfy the
+    //    row exactly before the carrier derivations below read L/R).
+    for (const auto& [left, right] : always_locked_diffs_) {
+        const real w = (network_.omega(left) + network_.omega(right)) / real(2.0);
+        network_.set_omega(left, w);
+        network_.set_omega(right, w);
     }
 
     // 4. Derived nodes, leaves up (PHYS-033 P4 I4 C4, plan section 2.5 -

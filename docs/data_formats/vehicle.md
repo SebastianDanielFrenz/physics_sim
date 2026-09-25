@@ -154,10 +154,16 @@ significant for scenario determinism. Each entry:
   and `differential` components are **always inline** — `{"ref": ...}` on a
   clutch throws `"<ctx>: 'clutch' components are always inline in I3 (no
   'ref')"`.
-- **At most one** `engine`, one `clutch`, one `gearbox`, one `differential`
-  component is allowed (checked in `powertrain.cpp`): a second one throws
-  `"more than one <kind> component - I3 supports at most one"`. Any number
-  of `gear_pair` components is fine.
+- **At most one** `engine`, one `clutch`, one `gearbox` component is allowed
+  (checked in `powertrain.cpp`): a second one throws `"more than one <kind>
+  component - I3 supports at most one"`. Any number of `gear_pair` **or**
+  `differential` components is fine (I4 C4 lifted the earlier "at most one
+  differential" limit) - a centre diff feeding two axle diffs, or any other
+  multi-diff topology, is built by wiring their `carrier`/`left`/`right`
+  ports together with ordinary shafts (see [Ports, by component
+  type](#ports-by-component-type-fixed-names) and [What the graph builder
+  additionally rejects](#what-the-graph-builder-additionally-rejects)
+  below).
 
 Field tables for `engine` and `gearbox` components (inline or `ref`'d) are
 in [`engine.md`](engine.md) and [`gearbox.md`](gearbox.md) — the same
@@ -195,18 +201,38 @@ Ports: `<id>.in`, `<id>.out`.
 
 #### `differential` component fields
 
-`DifferentialDesc`. Always inline.
+`DifferentialDesc`. Always inline. Any number of `differential` components
+is allowed (I4 C4) — wiring more than one together via shafts builds a
+centre/axle topology; see [What the graph builder additionally
+rejects](#what-the-graph-builder-additionally-rejects) for the "no other
+rigid coupling" leaf rule this depends on.
 
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
-| `kind` | string | **effectively required** (defaults to `""`, which fails the check below — must be given explicitly) | `""` | **must be `"open"`** (the only kind in I3; "I4 adds others"), else `"<ctx>: differential 'kind' must be \"open\" (I4 adds others)"` | differential type |
+| `kind` | string | **effectively required** (defaults to `""`, which fails the check below — must be given explicitly) | `""` | **must be `"open"`, `"locked"` or `"viscous"`** (I4 C6), else `"<ctx>: differential 'kind' must be \"open\", \"locked\" or \"viscous\""`; `"active"` throws `"<ctx>: differential kind \"active\" is not supported until a torque-vectoring controller exists"`; `"clutch_lsd"`/`"torsen"` throw `"<ctx>: differential kind \"<kind>\" is not supported yet (I4 commit C7 will add it)"` | differential type — `open` (free, Willis-constrained split), `locked` (spool: an unconditional `omega_left == omega_right` row alongside the diff row, present in every topology state — never spends a composed-state bit, see `lockable` below for the togglable equivalent), `viscous` (the open row plus an implicit `L-R` coupling of rate `viscous_nm_s_rad`) |
 | `ratio` | real | optional | `1.0` | **must be != 0**, else `"<ctx>: differential 'ratio' must be != 0"` | final-drive ratio; the carrier's Willis constraint is `omega_carrier = (ratio/2) * (omega_left + omega_right)` |
 | `efficiency` | real | optional | `1.0` | must be in `(0, 1]`, else `"<ctx>: differential 'efficiency' must be in (0, 1]"` | mesh efficiency (I3 lifts the earlier "must be exactly 1" restriction) |
 | `carrier_inertia_kgm2` | real (kg·m²) | optional | `0` | none | inertia at `carrier` |
 | `carrier_axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length, same rule as above | rotor-reaction axis |
+| `viscous_nm_s_rad` | real (N·m·s/rad) | optional, **only valid for `kind: "viscous"`** | `0` | present on a non-`viscous` kind throws `"<ctx>: differential 'viscous_nm_s_rad' is only valid for kind \"viscous\""`; on `kind: "viscous"` **must be > 0**, else `"<ctx>: differential kind \"viscous\" requires 'viscous_nm_s_rad' > 0"` | the coupling's implicit viscous rate `c`: reaction torque `c * (omega_left - omega_right)`, booked every substep as `diff_loss += h * c * v^2` (`PowertrainEnergy::diff_loss`, I4 C6) |
+| `lockable` | bool | optional | `false` | **must not be combined with `kind: "locked"`**, else `"<ctx>: differential 'lockable' is redundant on kind \"locked\" (already always locked)"` | I4 C5: a *runtime-togglable* lock — adds one composed-state bit and a `{L:+1, R:-1}` lock row only in the states where the bit is set (unlike `kind: "locked"`'s unconditional row); must be a leaf diff (its `left`/`right` carry no other rigid row) |
+| `lock` | object (`DiffLockDesc`) | optional, **only valid with `lockable: true`** | `{max_engage_mismatch_rad_s: 2.0, channel: "diff_lock"}` | present without `lockable: true` throws `"<ctx>: differential 'lock' requires \"lockable\": true"`; `max_engage_mismatch_rad_s` **must be >= 0**, else `"<ctx>: differential lock.max_engage_mismatch_rad_s must be >= 0"`; `channel` **must be non-empty**, else `"<ctx>: differential lock.channel must be non-empty"` | I4 C5: `max_engage_mismatch_rad_s` — the lock only engages while `|omega_left - omega_right|` is at or below this (else stays pending, retried every substep); `channel` — the declared control channel (default value 0) whose value `>= 0.5` requests the lock; releases the substep it reads `< 0.5` |
 
 Ports: `<id>.carrier`, `<id>.left`, `<id>.right` (`left`/`right` carry zero
 inertia of their own — they exist purely so a shaft can name them).
+
+**Reconstruction/leaf rule (I4 C4/C5/C6, plan section 2.7):** a diff of any
+kind whose `efficiency < 1` (a lossy mesh) must be a **leaf** — its `left`
+and `right` ports may carry no other rigid row (discounting the diff's own
+`left`/`right` rows, e.g. a `locked`/`lockable` diff's own lock row), or the
+graph builder throws `"vehicle '<v>': differential '<id>' of kind <k> must
+drive nodes with no other rigid coupling (centre LSD/Torsen is not
+supported in I4)"` (a `lockable: true` diff gets the same rejection with
+`"of kind lockable open"` instead of the plain kind name). A **lossless**
+(`efficiency == 1`) diff of any kind may instead be a **centre** diff —
+`left`/`right` feeding two child diffs' `carrier` ports — reconstructed
+from both children's own row lambdas. Plain `open` diffs are unaffected by
+any of this (same leaf/centre rules and float ops as before I4).
 
 ### Ports, by component type (fixed names)
 
@@ -258,9 +284,16 @@ Beyond the per-field checks above, `Powertrain::Powertrain`
 vehicle-construction time and additionally rejects:
 
 - A wheel with `wheel_inertia <= 0` (see the [wheel table](#wheel) above).
-- More than one engine/clutch/gearbox/differential component (duplicated
-  check from the field-level notes above — this is where it's actually
-  enforced).
+- More than one engine/clutch/gearbox component (duplicated check from the
+  field-level notes above — this is where it's actually enforced; any
+  number of `differential`/`gear_pair` components is fine, see above).
+- A lossy (`efficiency < 1`) or `lockable: true` differential that is not a
+  leaf (its `left`/`right` carry another rigid row) — the exact rejection
+  message is under the [differential field table](#differential-component-fields)
+  above.
+- More `lockable: true` differentials than the composed-topology-state
+  budget allows (I4 C5: `kMaxStates` = 128 — `num_gear_states * 2^(number
+  of lockable diffs)` must not exceed it).
 - A `brake_system` corner or handbrake wheel name that doesn't match any
   wheel, or a duplicate corner for the same wheel.
 - A controller (see [below](#controllers)) referencing a component id that
