@@ -45,6 +45,15 @@
 
 namespace ps::drivetrain {
 
+// PHYS-033 P4 I4 C3 (plan section 2.4): one control channel a powertrain
+// component wants World::create_vehicle to resolve for it, through the same
+// ensure_control_channel_index/prefix mechanism steer/throttle/.../assist.*
+// already use (world.cpp).
+struct ChannelDecl {
+    std::string name;
+    real default_value = 0.0;
+};
+
 class Powertrain {
 public:
     // Throws std::runtime_error (naming vehicle_name) on any graph/topology
@@ -66,6 +75,24 @@ public:
     // section 4.1) - an unconnected hub is a free wheel. Backs
     // World::wheel_is_driven.
     [[nodiscard]] bool wheel_is_driven(std::size_t wheel_index) const { return driven_[wheel_index] != 0; }
+
+    // PHYS-033 P4 I4 C3 (plan section 2.4): every control channel this
+    // vehicle's powertrain components want, in pt.components array order,
+    // duplicate names merged (first occurrence's default wins). Build-time
+    // only - called once per vehicle by World::create_vehicle, never per
+    // tick/substep (PLAN.md D8 governs the hot path, not this). No shipped
+    // ComponentParams type declares a channel yet (the first is C5's
+    // diff_lock), so this returns {} for car_sedan.json/tractor.json today.
+    // `test_only_extra` (default empty, merged in AFTER pt.components' own
+    // declarations by the same rule) is the least-invasive test hook this
+    // commit adds (I4 C3 report): it lets a white-box unit test exercise the
+    // declare/merge/resolve/per-tick-copy/ComponentSubstepCtx::channels
+    // pipeline end-to-end without adding a throwaway IComponent kind to the
+    // closed ComponentParams variant (which would also need ps::io::
+    // load_vehicle_json's component-type dispatch to reject it explicitly)
+    // and without touching any public header.
+    [[nodiscard]] static std::vector<ChannelDecl> declare_control_channels(const PowertrainDesc& pt,
+                                                                             const std::vector<ChannelDecl>& test_only_extra = {});
 
     // Per-substep sequence (plan section 7.2), called in this exact order by
     // VehicleInstance::step_tick:

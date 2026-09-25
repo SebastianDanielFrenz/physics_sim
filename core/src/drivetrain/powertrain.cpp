@@ -109,6 +109,24 @@ Gearbox::Desc to_gearbox_desc(const GearboxDesc& g) {
 
 } // namespace
 
+std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDesc& pt, const std::vector<ChannelDecl>& test_only_extra) {
+    std::vector<ChannelDecl> out;
+    auto add = [&](const ChannelDecl& decl) {
+        for (const ChannelDecl& existing : out) {
+            if (existing.name == decl.name) return; // duplicate name: first occurrence's default wins
+        }
+        out.push_back(decl);
+    };
+    // No shipped ComponentParams alternative declares a channel yet (I4 C3);
+    // this loop is the future extension point (C5's diff_lock etc. will
+    // std::get_if their own desc type here, array order preserved).
+    for (const ComponentDesc& c : pt.components) {
+        (void)c;
+    }
+    for (const ChannelDecl& decl : test_only_extra) add(decl);
+    return out;
+}
+
 Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, const std::vector<vehicle::WheelDesc>& wheels,
                         const std::vector<ControllerDesc>& controllers, const std::string& vehicle_name) {
     rotor_reaction_ = pt.rotor_reaction;

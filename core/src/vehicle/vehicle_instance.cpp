@@ -33,6 +33,10 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
         wheels_.push_back(std::make_unique<WheelInstance>(w, create_pacejka_tyre_model(w.tyre)));
     }
     hub_omega_old_scratch_.assign(desc_.wheels.size(), real(0.0));
+    // PHYS-033 P4 I4 C3: sized once here (control_indices_.component's size
+    // is fixed for this vehicle's whole lifetime), never resized again -
+    // step_tick's per-tick refill below is then allocation-free.
+    component_channel_values_.assign(control_indices_.component.size(), real(0.0));
 
     // Ackermann geometry reference (vehicle_desc.h's SteeringDesc comment):
     // rear axle x = average x of non-front wheels; wheelbase = average
@@ -133,6 +137,15 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     const bool assist_auto_blip = channel_values[control_indices_.assist_auto_blip] > real(0.5);
     const bool assist_auto_shift = channel_values[control_indices_.assist_auto_shift] > real(0.5);
 
+    // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
+    // channel's value, copied once per tick (not per substep, same
+    // granularity as the reads just above) - component_channel_values_ is
+    // already sized to control_indices_.component.size() from the
+    // constructor, so this never allocates.
+    for (std::size_t i = 0; i < control_indices_.component.size(); ++i) {
+        component_channel_values_[i] = channel_values[control_indices_.component[i]];
+    }
+
     const Pose pose0 = backend.get_pose(chassis_);
     const Motion motion0 = backend.get_motion(chassis_);
     // PHYS-033 I1 W1: read ONCE per tick, at the tick-start rotation - Jolt
@@ -223,6 +236,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         ctx.assist_auto_blip = assist_auto_blip;
         ctx.assist_auto_shift = assist_auto_shift;
         ctx.first_substep_of_tick = (s == 0);
+        // PHYS-033 P4 I4 C3: points at this tick's already-copied component-
+        // channel buffer (see the per-tick copy above) - rebuilt each
+        // substep alongside the rest of ctx, but the buffer itself is only
+        // refilled once per tick.
+        ctx.channels = component_channel_values_.data();
+        ctx.channel_count = static_cast<int>(component_channel_values_.size());
         powertrain_.pre_solve_components(ctx);
         for (std::size_t i = 0; i < wheels_.size(); ++i) {
             const WheelDesc& w = desc_.wheels[i];

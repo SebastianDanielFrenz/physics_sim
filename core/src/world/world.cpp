@@ -2,6 +2,7 @@
 
 #include "../articulation/contact.h" // internal; PLAN.md P1.5b
 #include "../articulation/system.h" // internal; World owns it via the forward-declared pointer (world.h)
+#include "../drivetrain/powertrain.h" // internal; PHYS-033 P4 I4 C3's declare_control_channels (create_vehicle)
 #include "../terrain/tile_manager.h" // internal; World owns it via the forward-declared pointer (world.h); PLAN.md M1
 #include "../vehicle/system.h" // internal; World owns it via the forward-declared pointer (world.h); PLAN.md 5.1/P3
 
@@ -93,6 +94,16 @@ std::size_t World::ensure_control_channel_index(const std::string& channel, real
     control_channel_values_.push_back(default_value);
     control_channel_index_.emplace(channel, idx);
     return idx;
+}
+
+std::vector<std::string> World::control_channel_names() const {
+    std::vector<std::string> names;
+    names.reserve(control_channel_index_.size());
+    for (const auto& [name, idx] : control_channel_index_) {
+        (void)idx;
+        names.push_back(name);
+    }
+    return names;
 }
 
 ForceElementId World::add_force_element(const IForceElement* element) {
@@ -420,7 +431,8 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
     return articulation_system_->link_frame(id, link_index, local_offset);
 }
 
-VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis) {
+VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
+                                 const std::vector<std::pair<std::string, real>>& test_only_extra_channels) {
     // PLAN.md P4 I0 (PHYS-033 section 8, Q4): resolve this vehicle's four
     // control channels to indices ONCE, here (setup time, off the tick
     // path - never called from inside a job). Vehicle index 0 (the next
@@ -468,6 +480,22 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", assist_clutch_default);
     channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", assist_blip_default);
     channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift", assist_shift_default);
+
+    // PHYS-033 P4 I4 C3 (plan section 2.4): resolve every control channel
+    // this vehicle's powertrain components declare, same prefix convention
+    // as every channel above - {} for every shipped vehicle today (no
+    // component declares one yet). test_only_extra_channels (see world.h's
+    // own comment) is the test-only path to a non-empty list before a real
+    // declaring component exists.
+    std::vector<drivetrain::ChannelDecl> test_only_extra;
+    test_only_extra.reserve(test_only_extra_channels.size());
+    for (const auto& [name, default_value] : test_only_extra_channels) test_only_extra.push_back({name, default_value});
+    const std::vector<drivetrain::ChannelDecl> declared_component_channels =
+        drivetrain::Powertrain::declare_control_channels(desc.powertrain, test_only_extra);
+    channel_indices.component.reserve(declared_component_channels.size());
+    for (const drivetrain::ChannelDecl& decl : declared_component_channels) {
+        channel_indices.component.push_back(ensure_control_channel_index(channel_prefix + decl.name, decl.default_value));
+    }
 
     // Parking-slope creep fix (defect D2): opt the chassis body in to
     // IRigidBackend::set_integrate_sub_threshold_rotation - see that
@@ -562,6 +590,10 @@ real World::wheel_omega(VehicleId id, std::size_t wheel_index) const {
 
 const drivetrain::PowertrainEnergy& World::powertrain_energy(VehicleId id) const {
     return vehicle_system_->at(id).powertrain_energy();
+}
+
+const std::vector<real>& World::vehicle_component_channel_values(VehicleId id) const {
+    return vehicle_system_->at(id).component_channel_values();
 }
 
 const drivetrain::PowertrainSnapshot& World::powertrain_state(VehicleId id) const {
