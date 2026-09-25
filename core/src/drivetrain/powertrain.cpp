@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <numeric>
 #include <stdexcept>
 #include <unordered_map>
@@ -290,20 +291,29 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             (void)coef;
             ++rigid_row_touch_count[static_cast<std::uint16_t>(node_index)];
         }
+        build_rigid_rows_.emplace_back(state, row); // white-box record (tests), build time only
         builder.add_rigid_row(state, std::move(row));
     };
 
-    NodeId diff_carrier_n{}, diff_left_n{}, diff_right_n{};
-    bool has_diff = false;
-    real diff_ratio = real(1.0);
+    // PHYS-033 P4 I4 C4 (plan section 2.5): every differential, in
+    // pt.components array order - I3's "at most one" limit is gone.
+    struct DiffBuild {
+        std::string id;
+        real ratio = 1.0;
+        real efficiency = 1.0;
+        NodeId carrier, left, right;
+    };
+    std::vector<DiffBuild> diff_builds;
     for (const ComponentDesc& c : pt.components) {
         if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
-            if (has_diff) throw std::runtime_error("vehicle '" + vehicle_name + "': more than one differential component - I3 supports at most one");
-            has_diff = true;
-            diff_ratio = d->ratio;
-            diff_carrier_n = node_for_key(component_port_key(c.id, "carrier"));
-            diff_left_n = node_for_key(component_port_key(c.id, "left"));
-            diff_right_n = node_for_key(component_port_key(c.id, "right"));
+            DiffBuild b;
+            b.id = c.id;
+            b.ratio = d->ratio;
+            b.efficiency = d->efficiency;
+            b.carrier = node_for_key(component_port_key(c.id, "carrier"));
+            b.left = node_for_key(component_port_key(c.id, "left"));
+            b.right = node_for_key(component_port_key(c.id, "right"));
+            diff_builds.push_back(std::move(b));
         }
     }
 
@@ -314,11 +324,14 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     }
 
     for (int state = 0; state < num_states; ++state) {
-        if (has_diff) {
+        // Every diff row, in component order, BEFORE the gearbox row (plan
+        // section 2.5) - a single-diff vehicle's per-state row list is
+        // exactly I3's [diff, gearbox].
+        for (const DiffBuild& db : diff_builds) {
             RigidRow row;
-            row.terms.emplace_back(diff_carrier_n.index, real(1.0));
-            row.terms.emplace_back(diff_left_n.index, -diff_ratio / real(2.0));
-            row.terms.emplace_back(diff_right_n.index, -diff_ratio / real(2.0));
+            row.terms.emplace_back(db.carrier.index, real(1.0));
+            row.terms.emplace_back(db.left.index, -db.ratio / real(2.0));
+            row.terms.emplace_back(db.right.index, -db.ratio / real(2.0));
             register_rigid_row(state, std::move(row));
         }
         if (gearbox_desc) {
@@ -364,6 +377,68 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                                       "' has efficiency < 1 but its input node carries another rigid row - "
                                       "gear efficiency needs a single rigid coupling at its input node");
         }
+    }
+
+    // PHYS-033 P4 I4 C4 (plan section 2.7): each diff's row-multiplier
+    // reconstruction mode (components.h's Differential::ReconMode). Rigid-
+    // row term counts per node are summed over EVERY state, so "carries no
+    // other rigid row" == "touched exactly num_states times" (its own row,
+    // present in every state).
+    //  - Leaf: left touched only by this diff's own row (I3's path, literal).
+    //  - Nested: L and R are touched only by this row plus the rows of child
+    //    diffs whose CARRIER they are (coef +1.0 there), >= 1 child, every
+    //    child itself resolvable - an open centre diff feeding axle diffs.
+    //  - None: anything else; rejected when efficiency < 1.
+    constexpr int kModeNone = static_cast<int>(Differential::ReconMode::None);
+    std::vector<int> diff_mode(diff_builds.size(), -1); // -1 unresolved, else static_cast<int>(Differential::ReconMode)
+    std::vector<std::vector<int>> diff_children_left(diff_builds.size()), diff_children_right(diff_builds.size());
+    {
+        auto touches = [&](NodeId n) -> int {
+            const auto it = rigid_row_touch_count.find(n.index);
+            return it == rigid_row_touch_count.end() ? 0 : it->second;
+        };
+        std::vector<std::uint8_t> visiting(diff_builds.size(), 0);
+        std::function<int(std::size_t)> resolve = [&](std::size_t di) -> int {
+            if (diff_mode[di] >= 0) return diff_mode[di];
+            if (visiting[di]) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + diff_builds[di].id +
+                                          "' is part of a cycle of differentials feeding each other's carriers");
+            }
+            visiting[di] = 1;
+            const DiffBuild& db = diff_builds[di];
+            int mode = kModeNone;
+            if (db.left != db.right && touches(db.left) == num_states) {
+                mode = static_cast<int>(Differential::ReconMode::Leaf);
+            } else if (db.left != db.right) {
+                std::vector<int> cl, cr;
+                for (std::size_t dj = 0; dj < diff_builds.size(); ++dj) {
+                    if (dj == di) continue;
+                    if (diff_builds[dj].carrier == db.left) cl.push_back(static_cast<int>(dj));
+                    if (diff_builds[dj].carrier == db.right) cr.push_back(static_cast<int>(dj));
+                }
+                const bool counts_ok = touches(db.left) == num_states * (1 + static_cast<int>(cl.size())) &&
+                                       touches(db.right) == num_states * (1 + static_cast<int>(cr.size()));
+                if (counts_ok && !(cl.empty() && cr.empty())) {
+                    bool children_ok = true;
+                    for (int dj : cl) children_ok = children_ok && resolve(static_cast<std::size_t>(dj)) != kModeNone;
+                    for (int dj : cr) children_ok = children_ok && resolve(static_cast<std::size_t>(dj)) != kModeNone;
+                    if (children_ok) {
+                        mode = static_cast<int>(Differential::ReconMode::Nested);
+                        diff_children_left[di] = std::move(cl);
+                        diff_children_right[di] = std::move(cr);
+                    }
+                }
+            }
+            if (mode == kModeNone && db.efficiency < real(1.0)) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + db.id +
+                                          "' has efficiency < 1 but its output nodes carry rigid couplings other than child "
+                                          "differentials' carriers - mesh-loss reconstruction is not available there");
+            }
+            visiting[di] = 0;
+            diff_mode[di] = mode;
+            return mode;
+        };
+        for (std::size_t di = 0; di < diff_builds.size(); ++di) (void)resolve(di);
     }
 
     // --- Phase G: friction rows (clutch, engine-to-ground, gearbox synchro) ---
@@ -453,6 +528,110 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         }
         driven_wheel_mean_radius_ = driven_count > 0 ? radius_sum / static_cast<real>(driven_count) : real(0.0);
     }
+    diff_ratio_ = diff_builds.empty() ? real(1.0) : diff_builds.front().ratio;
+
+    // PHYS-033 P4 I4 C4 (plan section 2.5): speedo path. Walk the rigid
+    // kinematic tree DOWN from gearbox.out computing K(n) = omega(n)/v under
+    // straight-line no-slip rolling (v = ground speed):
+    //  - a node holding wheel hubs: K = 1/r (mean radius of the hubs there);
+    //  - a diff whose carrier is n: K = ratio*((K(L)+K(R))/2), the diff's own
+    //    row; each branch's path ratio is multiplied by `ratio`;
+    //  - a gear_pair whose `in` is n: K = ratio*K(out), path ratio *ratio;
+    //  - several of these at one node (e.g. two axle diffs sharing a rigid
+    //    carrier shaft) are each a complete, kinematically consistent
+    //    estimate of the same K: their mean is used, never their sum.
+    // Rule: if every reached hub-leaf's path ratio is EXACTLY equal (R) and
+    // every reached hub's radius is exactly equal, speedo_ratio_ = |R| and
+    // speedo_radius_ = the arithmetic mean of the reached hubs' radii in
+    // wheel-index order - I3's own expression for a single diff (bit-
+    // identical: same summation order as driven_wheel_mean_radius_) and
+    // exact for an open centre diff (ratio 1) over two equal axle diffs
+    // (1.0*4.06 on every path, K = 4.06/r). Otherwise the exact no-slip
+    // form: speedo_ratio_ = 1, speedo_radius_ = 1/|K(gearbox.out)|. No
+    // gearbox, or no hub reached: I3's |first diff ratio| (or 1) and the
+    // driven mean radius. (A transfer case - I4 C9 - restricts the walk to
+    // its rear output, plan section 2.5.)
+    speedo_ratio_ = std::abs(diff_ratio_);
+    speedo_radius_ = driven_wheel_mean_radius_;
+    if (gearbox_desc) {
+        std::vector<NodeId> gp_in, gp_out;
+        std::vector<real> gp_ratio;
+        for (const ComponentDesc& c : pt.components) {
+            if (const auto* g = std::get_if<GearPairDesc>(&c.params)) {
+                gp_in.push_back(node_for_key(component_port_key(c.id, "in")));
+                gp_out.push_back(node_for_key(component_port_key(c.id, "out")));
+                gp_ratio.push_back(g->ratio);
+            }
+        }
+        std::vector<std::uint8_t> reached(hub_nodes_.size(), 0);
+        std::vector<real> leaf_path_ratios;
+        struct KResult {
+            bool ok = false;
+            real k = 0.0;
+        };
+        constexpr int kMaxSpeedoDepth = 32; // guards against a malformed cyclic graph
+        std::function<KResult(NodeId, real, int)> k_of = [&](NodeId n, real path_ratio, int depth) -> KResult {
+            if (depth > kMaxSpeedoDepth) return {};
+            real est_sum = real(0.0);
+            int est_count = 0;
+            real r_sum = real(0.0);
+            int r_count = 0;
+            for (std::size_t wi = 0; wi < hub_nodes_.size(); ++wi) {
+                if (hub_nodes_[wi] != n) continue;
+                r_sum += wheels[wi].wheel_radius;
+                ++r_count;
+                reached[wi] = 1;
+            }
+            if (r_count > 0) {
+                est_sum += real(1.0) / (r_sum / static_cast<real>(r_count));
+                ++est_count;
+                leaf_path_ratios.push_back(path_ratio);
+            }
+            for (const DiffBuild& db : diff_builds) {
+                if (db.carrier != n) continue;
+                const KResult kl = k_of(db.left, path_ratio * db.ratio, depth + 1);
+                const KResult kr = k_of(db.right, path_ratio * db.ratio, depth + 1);
+                if (kl.ok && kr.ok) {
+                    est_sum += db.ratio * ((kl.k + kr.k) / real(2.0));
+                    ++est_count;
+                }
+            }
+            for (std::size_t gi = 0; gi < gp_in.size(); ++gi) {
+                if (gp_in[gi] != n) continue;
+                const KResult ko = k_of(gp_out[gi], path_ratio * gp_ratio[gi], depth + 1);
+                if (ko.ok) {
+                    est_sum += gp_ratio[gi] * ko.k;
+                    ++est_count;
+                }
+            }
+            if (est_count == 0) return {};
+            return {true, est_sum / static_cast<real>(est_count)};
+        };
+        const KResult k_root = k_of(gearbox_out_n, real(1.0), 0);
+
+        if (k_root.ok && !leaf_path_ratios.empty()) {
+            bool same_ratio = true;
+            for (real pr : leaf_path_ratios) same_ratio = same_ratio && pr == leaf_path_ratios.front();
+            bool same_radius = true;
+            real first_radius = real(-1.0);
+            real radius_sum = real(0.0);
+            int reached_count = 0;
+            for (std::size_t wi = 0; wi < hub_nodes_.size(); ++wi) {
+                if (reached[wi] == 0) continue;
+                if (first_radius < real(0.0)) first_radius = wheels[wi].wheel_radius;
+                same_radius = same_radius && wheels[wi].wheel_radius == first_radius;
+                radius_sum += wheels[wi].wheel_radius;
+                ++reached_count;
+            }
+            if (same_ratio && same_radius) {
+                speedo_ratio_ = std::abs(leaf_path_ratios.front());
+                speedo_radius_ = radius_sum / static_cast<real>(reached_count);
+            } else if (k_root.k != real(0.0)) {
+                speedo_ratio_ = real(1.0);
+                speedo_radius_ = real(1.0) / std::abs(k_root.k);
+            }
+        }
+    }
     omega_old_.assign(static_cast<std::size_t>(network_.node_count()), real(0.0));
     topo_switch_scratch_.assign(static_cast<std::size_t>(network_.node_count()), real(0.0));
 
@@ -483,12 +662,58 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     if (gearbox_desc) {
         gearbox_synchro_row_ = synchro_row; // gearbox_ itself was already constructed above (Phase F), before the state loop
     }
-    diff_ratio_ = diff_ratio;
-    has_diff_ = has_diff;
-    if (has_diff_) {
-        diff_carrier_ = diff_carrier_n;
-        diff_left_ = diff_left_n;
-        diff_right_ = diff_right_n;
+    // PHYS-033 P4 I4 C4 (plan section 2.5): reset derivations, leaves up.
+    // Each diff's carrier = ratio*((w_L+w_R)/2) and each gear_pair's in =
+    // ratio*out, ordered so every source node is final before a derivation
+    // reads it (repeated passes in component order: an entry is ready once
+    // no still-pending entry targets one of its sources). A malformed
+    // cyclic graph stops making progress; the rest is appended in component
+    // order rather than throwing (reset stays best-effort there).
+    {
+        std::vector<ResetDerivation> pending;
+        for (const ComponentDesc& c : pt.components) {
+            if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
+                ResetDerivation r;
+                r.is_diff = true;
+                r.target = node_for_key(component_port_key(c.id, "carrier"));
+                r.a = node_for_key(component_port_key(c.id, "left"));
+                r.b = node_for_key(component_port_key(c.id, "right"));
+                r.ratio = d->ratio;
+                pending.push_back(r);
+            } else if (const auto* g = std::get_if<GearPairDesc>(&c.params)) {
+                ResetDerivation r;
+                r.is_diff = false;
+                r.target = node_for_key(component_port_key(c.id, "in"));
+                r.a = node_for_key(component_port_key(c.id, "out"));
+                r.b = r.a;
+                r.ratio = g->ratio;
+                pending.push_back(r);
+            }
+        }
+        std::vector<std::uint8_t> done(pending.size(), 0);
+        std::size_t remaining = pending.size();
+        while (remaining > 0) {
+            bool progress = false;
+            for (std::size_t i = 0; i < pending.size(); ++i) {
+                if (done[i]) continue;
+                bool ready = true;
+                for (std::size_t j = 0; j < pending.size() && ready; ++j) {
+                    if (j == i || done[j]) continue;
+                    if (pending[j].target == pending[i].a || pending[j].target == pending[i].b) ready = false;
+                }
+                if (!ready) continue;
+                reset_derivations_.push_back(pending[i]);
+                done[i] = 1;
+                --remaining;
+                progress = true;
+            }
+            if (!progress) {
+                for (std::size_t i = 0; i < pending.size(); ++i) {
+                    if (!done[i]) reset_derivations_.push_back(pending[i]);
+                }
+                break;
+            }
+        }
     }
 
     // --- Phase L: controllers (plan section 4.2/9.1) -------------------------
@@ -545,12 +770,20 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             components_.push_back(std::make_unique<GearPair>(node_for_key(component_port_key(c.id, "in")),
                                                                node_for_key(component_port_key(c.id, "out")), *g));
         } else if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
-            auto diff = std::make_unique<OpenDifferential>(node_for_key(component_port_key(c.id, "carrier")),
-                                                             node_for_key(component_port_key(c.id, "left")),
-                                                             node_for_key(component_port_key(c.id, "right")), *d);
-            diff_ = diff.get(); // PHYS-033 P4 I3 commit 7: powertrain_debug's diff/hub torque reads (powertrain.h)
+            auto diff = std::make_unique<Differential>(node_for_key(component_port_key(c.id, "carrier")),
+                                                         node_for_key(component_port_key(c.id, "left")),
+                                                         node_for_key(component_port_key(c.id, "right")), *d);
+            diffs_.push_back(diff.get()); // powertrain_debug's diff/hub torque reads (powertrain.h), component order
             components_.push_back(std::move(diff));
         }
+    }
+    // Reconstruction modes resolved in Phase F (diffs_ is in the same
+    // component order as diff_builds).
+    for (std::size_t di = 0; di < diffs_.size(); ++di) {
+        std::vector<const Differential*> cl, cr;
+        for (int dj : diff_children_left[di]) cl.push_back(diffs_[static_cast<std::size_t>(dj)]);
+        for (int dj : diff_children_right[di]) cr.push_back(diffs_[static_cast<std::size_t>(dj)]);
+        diffs_[di]->configure_reconstruction(static_cast<Differential::ReconMode>(diff_mode[di]), std::move(cl), std::move(cr));
     }
     components_.push_back(std::make_unique<DirectTorqueBrakes>(std::move(brake_rows), brakes.static_factor));
 }
@@ -788,22 +1021,20 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         network_.set_omega(hub_nodes_[i], hub_speeds[i]);
     }
 
-    // 4. Differential carrier (== gearbox.out, shaft-merged - plan section
-    //    4.1's port graph): matches the diff's own rigid row exactly
-    //    (carrier = diff_ratio_/2 * (left + right), this file's constructor)
-    //    via the average of every DRIVEN wheel's hub speed (order-independent,
-    //    so it does not matter which driven wheel is "left" vs "right").
-    if (has_diff_) {
-        real sum = real(0.0);
-        int count = 0;
-        for (std::size_t i = 0; i < hub_nodes_.size() && i < hub_speeds.size(); ++i) {
-            if (driven_[i] != 0) {
-                sum += hub_speeds[i];
-                ++count;
-            }
+    // 4. Derived nodes, leaves up (PHYS-033 P4 I4 C4, plan section 2.5 -
+    //    reset_derivations_, ordered at construction): every diff carrier
+    //    (== gearbox.out for the outermost one, shaft-merged) from its own
+    //    two outputs, matching its rigid row exactly, and every gear_pair
+    //    input from its output. A nested (centre) diff's outputs are its
+    //    children's carriers, derived earlier in the list.
+    for (const ResetDerivation& r : reset_derivations_) {
+        if (r.is_diff) {
+            const real w_l = network_.omega(r.a);
+            const real w_r = network_.omega(r.b);
+            network_.set_omega(r.target, r.ratio * ((w_l + w_r) / real(2.0)));
+        } else {
+            network_.set_omega(r.target, r.ratio * network_.omega(r.a));
         }
-        const real driven_avg = count > 0 ? sum / static_cast<real>(count) : real(0.0);
-        network_.set_omega(diff_carrier_, diff_ratio_ * driven_avg);
     }
 
     // 5. Engine crank (== clutch.in, shaft-merged): idle when Off or not yet
@@ -858,7 +1089,7 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
     ledger_.external_reset += ke_after - ke_before;
 }
 
-real Powertrain::gearbox_output_ratio_magnitude() const { return std::abs(diff_ratio_); }
+real Powertrain::gearbox_output_ratio_magnitude() const { return speedo_ratio_; }
 
 real Powertrain::clutch_slip() const {
     if (!clutch_) return real(0.0);

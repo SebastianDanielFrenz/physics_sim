@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ps::drivetrain {
@@ -175,18 +176,25 @@ public:
     [[nodiscard]] bool has_clutch() const { return clutch_ != nullptr; }
     [[nodiscard]] bool has_gearbox() const { return gearbox_ != nullptr; }
     [[nodiscard]] const Gearbox& gearbox() const { return *gearbox_; }
-    [[nodiscard]] real gearbox_output_ratio_magnitude() const; // |diff.ratio| for the speedo (plan section 7.6)
+    // Speedo ratio (plan section 7.6, generalised by I4 C4 section 2.5 -
+    // powertrain.cpp's constructor documents the path rule): |diff.ratio|
+    // for a single diff, |product of ratios| along an equal-ratio diff tree,
+    // 1 when the exact no-slip form is used.
+    [[nodiscard]] real gearbox_output_ratio_magnitude() const;
     [[nodiscard]] real gearbox_out_omega() const { return gearbox_ ? network_.omega(gearbox_out_) : real(0.0); }
     [[nodiscard]] real gearbox_in_omega() const { return gearbox_ ? network_.omega(gearbox_in_) : real(0.0); }
     [[nodiscard]] real engine_omega() const { return engine_ ? network_.omega(engine_crank_) : real(0.0); }
     [[nodiscard]] real driven_wheel_mean_radius() const { return driven_wheel_mean_radius_; }
     // Speedo-formula (plan section 7.6) road-speed proxy, fed to the TCU as
     // Sensors::approx_speed_mps for launch-vs-shift detection; 0 without a
-    // gearbox (no r_fd) or with no driven wheels.
+    // gearbox (no r_fd) or with no driven wheels. speedo_radius_ is the mean
+    // radius of the hubs reached from gearbox.out (== driven_wheel_mean_
+    // radius_ for every single-diff vehicle), see powertrain.cpp.
     [[nodiscard]] real approx_speed_mps() const {
         const real r_fd = gearbox_output_ratio_magnitude();
-        return r_fd > real(0.0) ? std::abs(gearbox_out_omega()) / r_fd * driven_wheel_mean_radius_ : real(0.0);
+        return r_fd > real(0.0) ? std::abs(gearbox_out_omega()) / r_fd * speedo_radius_ : real(0.0);
     }
+    [[nodiscard]] real speedo_radius() const { return speedo_radius_; }
     [[nodiscard]] real diff_ratio() const { return diff_ratio_; }
     [[nodiscard]] real clutch_engagement() const { return last_clutch_result_.engagement; }
     [[nodiscard]] real clutch_slip() const; // omega(clutch.in) - omega(clutch.out)
@@ -212,7 +220,8 @@ public:
     [[nodiscard]] real clutch_cap_static() const { return last_clutch_result_.cap_static; }
     [[nodiscard]] bool clutch_stuck() const { return has_clutch() ? network_.row_stuck(clutch_row_) : false; }
     [[nodiscard]] real gearbox_mesh_torque_debug() const { return gearbox_lambda_mesh_prev_; }
-    [[nodiscard]] real diff_mesh_torque_debug() const { return diff_ ? diff_->lambda_mesh() : real(0.0); }
+    // The FIRST differential in pt.components order (I3's only one).
+    [[nodiscard]] real diff_mesh_torque_debug() const { return diffs_.empty() ? real(0.0) : diffs_.front()->lambda_mesh(); }
     [[nodiscard]] real synchro_torque_debug() const {
         return has_gearbox() ? network_.row_lambda(gearbox_synchro_row_) : real(0.0);
     }
@@ -221,21 +230,39 @@ public:
     // The TCU request the engine will read NEXT substep (tests only).
     [[nodiscard]] const EngineTorqueMap::TcuRequest& tcu_request_debug() const { return tcu_prev_request_; }
     [[nodiscard]] real idle_integrator() const { return has_engine() ? engine_->idle_integrator() : real(0.0); }
-    // Fills out[wheel_index] with the diff row's torque on that hub
-    // (coef*lambda, plan section 4.5), 0 for every undriven/non-diff hub;
-    // out's remaining entries (beyond hub_nodes_.size()) are left at 0.
+    // Fills out[wheel_index] with the torque of the diff row driving that
+    // hub (coef*lambda, plan section 4.5), per diff (I4 C4), 0 for every
+    // hub no diff output drives directly (undriven, or a centre diff's
+    // outputs, which are carriers, not hubs); out's remaining entries
+    // (beyond hub_nodes_.size()) are left at 0.
     void fill_hub_shaft_torque_debug(std::array<real, 8>& out) const {
         out.fill(real(0.0));
-        if (diff_ == nullptr) return;
-        const real coef = diff_->hub_coef();
-        const real lambda = diff_->lambda_mesh();
-        for (std::size_t i = 0; i < hub_nodes_.size() && i < out.size(); ++i) {
-            if (hub_nodes_[i] == diff_->left_node() || hub_nodes_[i] == diff_->right_node()) out[i] = coef * lambda;
+        for (const Differential* d : diffs_) {
+            const real coef = d->hub_coef();
+            const real lambda = d->lambda_mesh();
+            for (std::size_t i = 0; i < hub_nodes_.size() && i < out.size(); ++i) {
+                if (hub_nodes_[i] == d->left_node() || hub_nodes_[i] == d->right_node()) out[i] = coef * lambda;
+            }
         }
     }
 
+    // --- PHYS-033 P4 I4 C4 white-box accessors (tests only) ---------------
+    [[nodiscard]] std::size_t diff_count() const { return diffs_.size(); }
+    [[nodiscard]] const Differential& diff(std::size_t i) const { return *diffs_[i]; }
+    [[nodiscard]] const ShaftNetwork& network() const { return network_; }
+    // Every rigid row in NetworkBuilder::add_rigid_row call order, with its
+    // topology state - recorded once at construction.
+    [[nodiscard]] const std::vector<std::pair<int, RigidRow>>& build_rigid_rows() const { return build_rigid_rows_; }
+    // World::reset_vehicle's derived-node order (powertrain.cpp, reset step 4).
+    struct ResetDerivation {
+        bool is_diff = true; // diff: target = ratio*((w(a)+w(b))/2); gear_pair: target = ratio*w(a)
+        NodeId target, a, b;
+        real ratio = 1.0;
+    };
+    [[nodiscard]] const std::vector<ResetDerivation>& reset_derivations() const { return reset_derivations_; }
+
     // Network omega/stick-sets/topology-state (ShaftNetwork::fold_state_hash)
-    // plus every component's own additional state (GearPair/OpenDifferential's
+    // plus every component's own additional state (GearPair/Differential's
     // lambda_mesh_prev_, engine's state machine, gearbox's phase machine, the
     // TCU's arbitration/auto-clutch state, each lossy row's lambda_prev) -
     // plan section 7.7's full hash list.
@@ -261,11 +288,13 @@ private:
     Assembly assembly_;
     Assembly projection_assembly_; // dedicated scratch for apply_topology_switch, never touches assembly_
     std::vector<std::unique_ptr<IComponent>> components_; // gear_pair(s), differential(s), then brakes (appended last)
-    // Non-owning alias into components_ (nullptr if this vehicle's
-    // powertrain has no differential) - PHYS-033 P4 I3 commit 7's
-    // diff_mesh_torque_debug/fill_hub_shaft_torque_debug read it directly
-    // rather than scanning components_ by dynamic_cast every call.
-    OpenDifferential* diff_ = nullptr;
+    // Non-owning aliases into components_, pt.components order (empty if
+    // this vehicle's powertrain has no differential) - the debug reads and
+    // white-box accessors use them directly rather than scanning
+    // components_ by dynamic_cast every call.
+    std::vector<Differential*> diffs_;
+    std::vector<std::pair<int, RigidRow>> build_rigid_rows_; // white-box record, build time only
+    std::vector<ResetDerivation> reset_derivations_;         // leaves up, built once at construction
     std::vector<NodeId> hub_nodes_;
     std::vector<std::uint8_t> driven_; // parallel to hub_nodes_, WheelDesc order
     real driven_wheel_mean_radius_ = 0.0; // mean radius of driven wheels, computed once at construction
@@ -295,15 +324,11 @@ private:
     real gearbox_omega_old_in_ = 0.0;
     Gearbox::StepResult last_gearbox_result_{}; // this substep's phase_step output, cached for the TCU's sensors next substep
 
-    // --- differential's ratio, cached for the speedo (plan section 7.6) ---
-    // and (has_diff_/diff_carrier_/diff_left_/diff_right_) for
-    // World::reset_vehicle (plan section 4.5), which needs to set every
-    // node's omega directly in a way consistent with the diff's own rigid
-    // row (carrier = diff_ratio_/2 * (left + right), powertrain.cpp's
-    // constructor) without running a network solve.
+    // --- speedo path (plan section 7.6 / I4 section 2.5), cached at build
+    // time; diff_ratio_ is the FIRST diff's ratio (1 without one). ----------
     real diff_ratio_ = 1.0;
-    bool has_diff_ = false;
-    NodeId diff_carrier_{}, diff_left_{}, diff_right_{};
+    real speedo_ratio_ = 1.0;
+    real speedo_radius_ = 0.0;
 
     // --- TCU (nullptr if this vehicle has no manual_tcu controller) -------
     std::unique_ptr<ManualTcu> tcu_;
