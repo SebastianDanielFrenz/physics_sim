@@ -145,22 +145,35 @@ TEST_CASE("Steady cornering: lateral load transfer matches statics", "[validatio
 }
 
 // --- Case 3: (1)'s pin - straight braking longitudinal load transfer matches statics ---
-// [!mayfail] since 2026-09-25 (60/40 split, 8bf7eb9): LTR_long measured 1.149 against the 1.02 +- 0.12 gate.
-// NOT caused by the split: at be36545 (50/50) it was already 1.122, up from ~1.02 at I1b C7. The excess is
-// steady-state, not a pitch transient: Fz_front and pitch settle by t~0.8 s and stay flat through t=2.7 s,
-// total Fz tracks m*g, and chassis z (0.5999 m) matches h_cg. Root cause undiagnosed, under investigation.
-// The expected 1.02 is statics m*a*h/L plus ~2.4% from the four wheels' spin inertia (ground Fx = m*a + 4*J*a/R^2).
-TEST_CASE("Straight braking: longitudinal load transfer matches statics", "[validation][vehicle][long][!mayfail]") {
-    auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
-                                           Vec3{2.0, 0.4, 0.15}, 0.6);
+//
+// LTR_long = mean(Fz_front - Fz_front_static) * L / (m * a_x * h_cg). The static reference is the ANALYTIC
+// static front axle load m*g*|x_rear|/L from the rig's own VehicleDesc (test_vehicle_static.cpp pins that the
+// settled sim matches it), not a telemetry sample: the previous single sample, taken 0.5 s after the rig is
+// built, is not settled (8614 N vs. 8829 N at 240/960 Hz, 10965 N at 240/240 Hz) and biased LTR_long by a
+// constant load offset that scaled as 1/a_x (1.149 at brake 0.25, 1.259 at 0.125) - that bias, not a missing
+// torque, was the whole excess this case reported from I1b C7 (1.125) onward.
+// Expected ~1.01 for this model: the rigid-car value 1, +1.3% from the four hub rotors' reaction torque on the
+// chassis (4*J*a/R, lever-free couple), -1.3% from aero drag acting at the CoM (it decelerates without adding
+// pitch moment), +1.0% from the nose-down pitch (~0.0098 rad) moving the patches relative to the CoM.
+// The wheels have no translational mass, so the chassis obeys F = m*a exactly - no 4*J*a/R^2 term in Fx.
+// Measured 1.010 at 240/960, 960/960, 240/240 and 1920/1920 Hz and at brake 0.125/0.25/0.5.
+TEST_CASE("Straight braking: longitudinal load transfer matches statics", "[validation][vehicle][long]") {
+    const vehicle::VehicleDesc desc =
+        io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
+    auto rig = ps_test::build_vehicle_rig_from_desc(desc, 1500.0, Vec3{2.0, 0.4, 0.15}, 0.6);
     ps_test::settle(*rig.world, 0.5);
     rig.world->backend().set_motion(rig.chassis, Motion{Vec3{20.0, 0.0, 0.0}, Vec3::zero()});
-
-    const real fz_front_static = rig.world->wheel_telemetry(rig.vehicle, 0).fz + rig.world->wheel_telemetry(rig.vehicle, 1).fz;
     rig.world->set_control("brake", 0.25);
 
+    // Axle positions relative to the chassis CoM (the body origin, car_sedan.json's "source" field).
+    real x_front = 0.0, x_rear = 0.0;
+    for (const auto& w : desc.wheels) (w.is_front ? x_front : x_rear) = w.attachment_local.x;
+    const real L = x_front - x_rear;
     const real mass = rig.world->get_mass(rig.chassis);
-    const real L = 2.70, h_cg = 0.6;
+    const real g = -WorldConfig{}.gravity.z; // build_vehicle_rig_from_desc uses the default gravity
+    const real fz_front_static = mass * g * (-x_rear) / L;
+    const real h_cg = 0.6;
+
     real sum_num = 0.0, sum_den = 0.0;
     real speed_at_0_5 = 0.0, speed_at_1_5 = 0.0;
     const real dt = rig.world->dt();
@@ -177,8 +190,8 @@ TEST_CASE("Straight braking: longitudinal load transfer matches statics", "[vali
     }
     const real a_x = (speed_at_0_5 - speed_at_1_5) / real(1.0); // net speed change / window length == the average deceleration
     const real ltr_long = (sum_den > 0.0 && a_x != 0.0) ? (sum_num / sum_den) / (mass * a_x * h_cg) : 0.0;
-    INFO("LTR_long=" << ltr_long << " a_x=" << a_x << " (expected ~1.02 after C7, ~0.49 before)");
-    CHECK(ltr_long == Catch::Approx(1.02).margin(0.12));
+    INFO("LTR_long=" << ltr_long << " a_x=" << a_x << " fz_front_static=" << fz_front_static << " (expected ~1.01)");
+    CHECK(ltr_long == Catch::Approx(1.01).margin(0.12));
 }
 
 // --- Case 4: diagnostics only, printed at every commit from C1 onward ---
