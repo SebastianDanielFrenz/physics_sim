@@ -197,6 +197,25 @@ public:
         viscous_coupling_id_ = id;
     }
 
+    // PHYS-033 P4 I4 C7 (plan section 3.2): build-time only, called once by
+    // Powertrain's constructor for a kind == ClutchLsd/Torsen diff - its own
+    // L-R friction row (a = left, b = right, ratio_b = 1), present in every
+    // topology state. Same "has_" sentinel reason as set_viscous_coupling.
+    void set_lsd_row(FrictionRowId id) {
+        has_lsd_row_ = true;
+        lsd_row_ = id;
+    }
+    // Build-time only, a LOCKABLE ClutchLsd/Torsen diff: its lock bit in the
+    // network's composed topology state (s = g + n_g * sum_i lock_i*2^i,
+    // powertrain.cpp Phase F), read back from net.topology_state() in
+    // pre_solve - the LSD row gets capacity 0 while locked (plan section
+    // 2.6: a friction row on a relative velocity the lock row already pins
+    // at exactly 0 would only add a singular W column).
+    void set_lock_bit(int bit, int gear_state_count) {
+        lock_bit_ = bit;
+        gear_state_count_ = gear_state_count;
+    }
+
     void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
     void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
                      PowertrainEnergy& ledger) override;
@@ -228,6 +247,15 @@ public:
     // (plan section 4.5's own formula, "coef*lambda_diff"; both hubs share
     // the same coefficient - an open diff always splits torque 50/50).
     [[nodiscard]] real hub_coef() const { return -desc_.ratio / real(2.0); }
+    // PHYS-033 P4 I4 C7 (tests/debug): the LSD/Torsen row and the capacity
+    // pre_solve set on it THIS substep (kinetic; static = static_factor *
+    // kinetic for ClutchLsd, == kinetic for Torsen), plus whether it used
+    // drive_factor (true) or coast_factor (false). Zero/false for every
+    // other kind.
+    [[nodiscard]] bool has_lsd_row() const { return has_lsd_row_; }
+    [[nodiscard]] FrictionRowId lsd_row() const { return lsd_row_; }
+    [[nodiscard]] real lsd_cap_kinetic() const { return lsd_cap_kinetic_; }
+    [[nodiscard]] bool lsd_drive() const { return lsd_drive_; }
 
 private:
     NodeId carrier_, left_, right_;
@@ -235,7 +263,14 @@ private:
     ReconMode mode_ = ReconMode::Leaf;
     std::vector<const Differential*> children_left_, children_right_;
     real lambda_mesh_prev_ = 0.0; // STATE: persists substep to substep, like GearPair's
-    real lambda_row_ = 0.0;       // this substep's row multiplier (debug only, not hashed)
+    // This substep's row multiplier. Debug only and NOT hashed for kind Open/
+    // Locked/Viscous (unchanged since C4). PHYS-033 P4 I4 C7: for kind
+    // ClutchLsd/Torsen it is also STATE - the next substep's pre_solve reads
+    // it as the previous substep's axle torque (T_axle = |ratio*lambda_row_|)
+    // and drive/coast sign - so fold_state_hash folds it for exactly those
+    // two kinds (not lambda_mesh_prev_, which the I3 rule forces to 0 for a
+    // lossless diff).
+    real lambda_row_ = 0.0;
     real own_loss_tau_ = 0.0;
     real omega_old_carrier_ = 0.0;
     real omega_old_left_ = 0.0;
@@ -243,6 +278,15 @@ private:
     // PHYS-033 P4 I4 C6: kind == Viscous only (see set_viscous_coupling above).
     bool has_viscous_coupling_ = false;
     CouplingId viscous_coupling_id_{};
+    // PHYS-033 P4 I4 C7: kind == ClutchLsd/Torsen only (see set_lsd_row/
+    // set_lock_bit above). lsd_cap_kinetic_/lsd_drive_ are this substep's
+    // pre_solve outputs (derived from hashed state, not hashed themselves).
+    bool has_lsd_row_ = false;
+    FrictionRowId lsd_row_{};
+    int lock_bit_ = -1; // -1: not lockable
+    int gear_state_count_ = 1;
+    real lsd_cap_kinetic_ = 0.0;
+    bool lsd_drive_ = false;
 };
 
 // direct_torque brakes (plan section 4.2/6): one friction row per wheel hub

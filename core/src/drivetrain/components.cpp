@@ -124,6 +124,42 @@ void Differential::pre_solve(const ComponentSubstepCtx&, const ShaftNetwork& net
     // (Assembly::set_coupling's own contract - couplings default to c=0/
     // inert if never set, so this call is required every substep it applies).
     if (has_viscous_coupling_) assembly.set_coupling(viscous_coupling_id_, real(1.0), real(1.0), desc_.viscous_nm_s_rad);
+
+    // PHYS-033 P4 I4 C7 (plan section 3.2): kind == ClutchLsd/Torsen - the
+    // L-R friction row's capacity from the PREVIOUS substep's row multiplier
+    // (lambda_row_, set by the last post_solve and hashed for these kinds).
+    // A one-substep lag (1.04 ms at 960 Hz, owner-approved, no fixed-point
+    // iteration): the capacity is a known number when the box-LCP runs, so
+    // the solve stays one LCP per substep.
+    //   T_axle = |ratio * lambda_prev|  (= |sum of the diff row's reaction on
+    //            L and R|, each -ratio/2*lambda)
+    //   drive  <=> P_prev = hub_coef*lambda_prev*(w_L,old + w_R,old) > 0,
+    //            i.e. sum_hubs T_hub,prev*omega_hub,old with T_hub,prev the
+    //            diff ROW's share of each hub torque (== the carrier's input
+    //            power, -lambda_prev*w_carrier) - a pure function of hashed
+    //            state (network omegas + lambda_row_), so no extra flag.
+    //            The LSD row's own antisymmetric +-mu reaction is left out on
+    //            purpose: the ramp responds to the direction torque flows
+    //            through the carrier, not to the slip-power it dissipates.
+    if (has_lsd_row_) {
+        const bool locked = lock_bit_ >= 0 && (((net.topology_state() / gear_state_count_) >> lock_bit_) & 1) != 0;
+        const real t_axle = std::abs(desc_.ratio * lambda_row_);
+        real cap_kinetic = real(0.0), cap_static = real(0.0);
+        if (desc_.kind == DifferentialKind::ClutchLsd) {
+            const real p_prev = hub_coef() * lambda_row_ * (omega_old_left_ + omega_old_right_);
+            lsd_drive_ = p_prev > real(0.0);
+            const real f = lsd_drive_ ? desc_.drive_factor : desc_.coast_factor;
+            cap_kinetic = (desc_.preload_nm + f * t_axle) / real(2.0);
+            cap_static = desc_.static_factor * cap_kinetic;
+        } else { // Torsen
+            lsd_drive_ = false;
+            cap_kinetic = (t_axle / real(2.0)) * (desc_.torque_bias_ratio - real(1.0)) / (desc_.torque_bias_ratio + real(1.0));
+            cap_static = cap_kinetic;
+        }
+        if (locked) cap_kinetic = cap_static = real(0.0); // plan section 2.6: capacity 0 while the lock row holds
+        lsd_cap_kinetic_ = cap_kinetic;
+        assembly.set_friction_capacity(lsd_row_, cap_static, cap_kinetic);
+    }
 }
 
 real Differential::compute_row_lambda(const ShaftNetwork& net, const Assembly& assembly, real h) const {
@@ -162,7 +198,7 @@ void Differential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork
                                PowertrainEnergy& ledger) {
     if (desc_.efficiency >= real(1.0)) {
         lambda_mesh_prev_ = real(0.0); // I3 rule: no loss element, nothing hashed beyond 0
-        lambda_row_ = compute_row_lambda(net, assembly, ctx.h); // debug only
+        lambda_row_ = compute_row_lambda(net, assembly, ctx.h); // debug only - except ClutchLsd/Torsen (I4 C7: next substep's T_axle)
     } else {
         const real lambda_mesh = compute_row_lambda(net, assembly, ctx.h);
         lambda_mesh_prev_ = lambda_mesh;
@@ -181,15 +217,26 @@ void Differential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork
         const real v = net.coupling_velocity(viscous_coupling_id_);
         ledger.diff_loss += ctx.h * desc_.viscous_nm_s_rad * v * v;
     }
+    // PHYS-033 P4 I4 C7: the LSD/Torsen friction row's slip dissipation,
+    // DirectTorqueBrakes' own -h*v*lambda form (v = w_L - w_R solved, lambda
+    // its multiplier; >= 0 whenever the row slips, 0 while stuck).
+    if (has_lsd_row_) ledger.diff_loss += -ctx.h * net.row_velocity(lsd_row_) * net.row_lambda(lsd_row_);
 }
 
 std::uint64_t Differential::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = seed;
-    const auto* bytes = reinterpret_cast<const unsigned char*>(&lambda_mesh_prev_);
-    for (std::size_t i = 0; i < sizeof(lambda_mesh_prev_); ++i) {
-        h ^= bytes[i];
-        h *= 1099511628211ULL;
-    }
+    auto fold = [&h](const real& value) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(&value);
+        for (std::size_t i = 0; i < sizeof(value); ++i) {
+            h ^= bytes[i];
+            h *= 1099511628211ULL;
+        }
+    };
+    fold(lambda_mesh_prev_);
+    // PHYS-033 P4 I4 C7: only ClutchLsd/Torsen read lambda_row_ back into
+    // dynamics (next substep's capacity/drive-coast), so only they fold it -
+    // every Open/Locked/Viscous diff hashes byte-identically to C6.
+    if (has_lsd_row_) fold(lambda_row_);
     return h;
 }
 

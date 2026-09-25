@@ -279,10 +279,11 @@ TEST_CASE("load_vehicle_json parses a lockable differential and rejects a bad 'l
 }
 
 // PHYS-033 P4 I4 C6 (plan section 3.1): differential "kind" gains "locked"
-// and "viscous" alongside "open"; "active"/"clutch_lsd"/"torsen" are named-
-// but-rejected placeholders with their own clear messages (not the generic
-// "unknown kind" case), and viscous_nm_s_rad is validated against the kind
-// it's attached to.
+// and "viscous" alongside "open"; "active" is a named-but-rejected
+// placeholder with its own clear message (not the generic "unknown kind"
+// case), and viscous_nm_s_rad is validated against the kind it's attached
+// to. ("clutch_lsd"/"torsen" were placeholders here too until I4 C7 - see
+// the next test case.)
 TEST_CASE("load_vehicle_json validates differential 'kind' (I4 C6: locked/viscous)", "[unit][vehicle][io][drivetrain]") {
     using Catch::Matchers::ContainsSubstring;
     auto json_with_diff_fields = [](const std::string& kind, const std::string& extra) {
@@ -330,14 +331,6 @@ TEST_CASE("load_vehicle_json validates differential 'kind' (I4 C6: locked/viscou
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
                             ContainsSubstring("torque-vectoring controller"));
     }
-    SECTION("kind \"clutch_lsd\" is rejected as not supported yet") {
-        TempJsonFile f(json_with_diff_fields("clutch_lsd", ""), "vehicle_diff_kind_clutch_lsd");
-        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("not supported yet"));
-    }
-    SECTION("kind \"torsen\" is rejected as not supported yet") {
-        TempJsonFile f(json_with_diff_fields("torsen", ""), "vehicle_diff_kind_torsen");
-        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("not supported yet"));
-    }
     SECTION("kind \"viscous\" without viscous_nm_s_rad is rejected") {
         TempJsonFile f(json_with_diff_fields("viscous", ""), "vehicle_diff_kind_viscous_missing");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("viscous_nm_s_rad"));
@@ -353,6 +346,110 @@ TEST_CASE("load_vehicle_json validates differential 'kind' (I4 C6: locked/viscou
     SECTION("lockable: true on kind \"locked\" is rejected") {
         TempJsonFile f(json_with_diff_fields("locked", R"(, "lockable": true)"), "vehicle_diff_kind_locked_lockable");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("lockable"));
+    }
+}
+
+// PHYS-033 P4 I4 C7 (plan section 3.2): "clutch_lsd" (preload_nm >= 0,
+// required ramp {drive_factor, coast_factor} each in [0, 1), optional
+// static_factor >= 1) and "torsen" (required torque_bias_ratio > 1); every
+// one of those fields is rejected on any other kind.
+TEST_CASE("load_vehicle_json validates clutch_lsd/torsen differential fields (I4 C7)", "[unit][vehicle][io][drivetrain]") {
+    using Catch::Matchers::ContainsSubstring;
+    auto json_with_diff_fields = [](const std::string& kind, const std::string& extra) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "diff", "type": "differential", "kind": ")") +
+               kind + R"(", "ratio": 1.0)" + extra + R"( }
+    ],
+    "shafts": [
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ]
+  }
+})";
+    };
+    auto only_diff = [](const vehicle::VehicleDesc& d) -> const drivetrain::DifferentialDesc& {
+        REQUIRE(d.powertrain.components.size() == 1);
+        const auto* diff = std::get_if<drivetrain::DifferentialDesc>(&d.powertrain.components[0].params);
+        REQUIRE(diff != nullptr);
+        return *diff;
+    };
+    auto rejects = [](const std::string& text, const char* tag, const std::string& needle) {
+        TempJsonFile f(text, tag);
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring(needle));
+    };
+    const std::string ramp = R"(, "ramp": { "drive_factor": 0.4, "coast_factor": 0.2 })";
+
+    SECTION("clutch_lsd with every field is accepted and round-trips") {
+        TempJsonFile f(json_with_diff_fields("clutch_lsd", R"(, "preload_nm": 60.0, "static_factor": 1.2)" + ramp),
+                       "vehicle_diff_lsd_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::DifferentialDesc& diff = only_diff(d);
+        CHECK(diff.kind == drivetrain::DifferentialKind::ClutchLsd);
+        CHECK(diff.preload_nm == 60.0);
+        CHECK(diff.drive_factor == 0.4);
+        CHECK(diff.coast_factor == 0.2);
+        CHECK(diff.static_factor == 1.2);
+    }
+    SECTION("clutch_lsd defaults: preload_nm 0, static_factor 1") {
+        TempJsonFile f(json_with_diff_fields("clutch_lsd", ramp), "vehicle_diff_lsd_defaults");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        CHECK(only_diff(d).preload_nm == 0.0);
+        CHECK(only_diff(d).static_factor == 1.0);
+    }
+    SECTION("clutch_lsd may be lockable") {
+        TempJsonFile f(json_with_diff_fields("clutch_lsd", ramp + R"(, "lockable": true)"), "vehicle_diff_lsd_lockable");
+        CHECK(only_diff(io::load_vehicle_json(f.path.string())).lockable);
+    }
+    SECTION("clutch_lsd without a ramp block is rejected") {
+        rejects(json_with_diff_fields("clutch_lsd", R"(, "preload_nm": 60.0)"), "vehicle_diff_lsd_no_ramp", "requires a 'ramp' block");
+    }
+    SECTION("clutch_lsd ramp missing coast_factor is rejected") {
+        rejects(json_with_diff_fields("clutch_lsd", R"(, "ramp": { "drive_factor": 0.4 })"), "vehicle_diff_lsd_ramp_half",
+                "requires both 'drive_factor' and 'coast_factor'");
+    }
+    SECTION("clutch_lsd ramp factors outside [0, 1) are rejected") {
+        rejects(json_with_diff_fields("clutch_lsd", R"(, "ramp": { "drive_factor": 1.0, "coast_factor": 0.2 })"),
+                "vehicle_diff_lsd_drive_1", "ramp.drive_factor must be in [0, 1)");
+        rejects(json_with_diff_fields("clutch_lsd", R"(, "ramp": { "drive_factor": 0.4, "coast_factor": -0.1 })"),
+                "vehicle_diff_lsd_coast_neg", "ramp.coast_factor must be in [0, 1)");
+    }
+    SECTION("clutch_lsd negative preload / static_factor < 1 are rejected") {
+        rejects(json_with_diff_fields("clutch_lsd", R"(, "preload_nm": -1.0)" + ramp), "vehicle_diff_lsd_preload_neg",
+                "'preload_nm' must be >= 0");
+        rejects(json_with_diff_fields("clutch_lsd", R"(, "static_factor": 0.9)" + ramp), "vehicle_diff_lsd_static_lt1",
+                "'static_factor' must be >= 1");
+    }
+    SECTION("torsen with torque_bias_ratio > 1 is accepted") {
+        TempJsonFile f(json_with_diff_fields("torsen", R"(, "torque_bias_ratio": 3.0)"), "vehicle_diff_torsen_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        CHECK(only_diff(d).kind == drivetrain::DifferentialKind::Torsen);
+        CHECK(only_diff(d).torque_bias_ratio == 3.0);
+    }
+    SECTION("torsen without / with torque_bias_ratio <= 1 is rejected") {
+        rejects(json_with_diff_fields("torsen", ""), "vehicle_diff_torsen_missing", "requires 'torque_bias_ratio' > 1");
+        rejects(json_with_diff_fields("torsen", R"(, "torque_bias_ratio": 1.0)"), "vehicle_diff_torsen_eq1",
+                "'torque_bias_ratio' must be > 1");
+    }
+    SECTION("fields of another kind are rejected") {
+        rejects(json_with_diff_fields("clutch_lsd", ramp + R"(, "torque_bias_ratio": 3.0)"), "vehicle_diff_lsd_tbr",
+                "'torque_bias_ratio' is only valid for kind \"torsen\"");
+        rejects(json_with_diff_fields("open", R"(, "torque_bias_ratio": 3.0)"), "vehicle_diff_open_tbr",
+                "'torque_bias_ratio' is only valid for kind \"torsen\"");
+        rejects(json_with_diff_fields("torsen", R"(, "torque_bias_ratio": 3.0, "viscous_nm_s_rad": 5.0)"),
+                "vehicle_diff_torsen_visc", "'viscous_nm_s_rad' is only valid for kind \"viscous\"");
+        rejects(json_with_diff_fields("torsen", R"(, "torque_bias_ratio": 3.0)" + ramp), "vehicle_diff_torsen_ramp",
+                "'ramp' is only valid for kind \"clutch_lsd\"");
+        rejects(json_with_diff_fields("open", R"(, "preload_nm": 10.0)"), "vehicle_diff_open_preload",
+                "'preload_nm' is only valid for kind \"clutch_lsd\"");
+        rejects(json_with_diff_fields("viscous", R"(, "viscous_nm_s_rad": 5.0, "static_factor": 1.1)"),
+                "vehicle_diff_visc_static", "'static_factor' is only valid for kind \"clutch_lsd\"");
+        rejects(json_with_diff_fields("clutch_lsd", ramp + R"(, "viscous_nm_s_rad": 5.0)"), "vehicle_diff_lsd_visc",
+                "'viscous_nm_s_rad' is only valid for kind \"viscous\"");
     }
 }
 

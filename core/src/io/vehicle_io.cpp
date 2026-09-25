@@ -635,13 +635,13 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     p.components.push_back({id, g});
                 } else if (type == "differential") {
                     ps::drivetrain::DifferentialDesc d;
-                    // PHYS-033 P4 I4 C6 (plan section 3.1): "open"/"locked"/
-                    // "viscous" are implemented; "active" and "clutch_lsd"/
-                    // "torsen" are named-but-rejected placeholders (clear,
-                    // kind-specific messages instead of falling through to
-                    // the generic "unknown kind" case) so a vehicle file
-                    // written against a later increment's kind fails loudly
-                    // here, not silently as "open".
+                    // PHYS-033 P4 I4 C6/C7 (plan sections 3.1/3.2): "open"/
+                    // "locked"/"viscous"/"clutch_lsd"/"torsen" are
+                    // implemented; "active" is a named-but-rejected
+                    // placeholder (a clear, kind-specific message instead of
+                    // falling through to the generic "unknown kind" case) so
+                    // a vehicle file written against a later increment's
+                    // kind fails loudly here, not silently as "open".
                     const std::string kind_str = cj.value("kind", std::string());
                     if (kind_str == "open") {
                         d.kind = ps::drivetrain::DifferentialKind::Open;
@@ -649,14 +649,16 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                         d.kind = ps::drivetrain::DifferentialKind::Locked;
                     } else if (kind_str == "viscous") {
                         d.kind = ps::drivetrain::DifferentialKind::Viscous;
+                    } else if (kind_str == "clutch_lsd") {
+                        d.kind = ps::drivetrain::DifferentialKind::ClutchLsd;
+                    } else if (kind_str == "torsen") {
+                        d.kind = ps::drivetrain::DifferentialKind::Torsen;
                     } else if (kind_str == "active") {
                         throw std::runtime_error(ctx + ": differential kind \"active\" is not supported until a "
                                                         "torque-vectoring controller exists");
-                    } else if (kind_str == "clutch_lsd" || kind_str == "torsen") {
-                        throw std::runtime_error(ctx + ": differential kind \"" + kind_str +
-                                                  "\" is not supported yet (I4 commit C7 will add it)");
                     } else {
-                        throw std::runtime_error(ctx + ": differential 'kind' must be \"open\", \"locked\" or \"viscous\"");
+                        throw std::runtime_error(ctx + ": differential 'kind' must be \"open\", \"locked\", \"viscous\", "
+                                                        "\"clutch_lsd\" or \"torsen\"");
                     }
                     d.ratio = cj.value("ratio", d.ratio);
                     if (d.ratio == real(0.0)) throw std::runtime_error(ctx + ": differential 'ratio' must be != 0");
@@ -680,6 +682,53 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     }
                     if (d.kind == ps::drivetrain::DifferentialKind::Viscous && !(d.viscous_nm_s_rad > real(0.0))) {
                         throw std::runtime_error(ctx + ": differential kind \"viscous\" requires 'viscous_nm_s_rad' > 0");
+                    }
+                    // PHYS-033 P4 I4 C7 (plan section 3.2): clutch_lsd's
+                    // preload_nm/ramp/static_factor and torsen's
+                    // torque_bias_ratio - each only valid on its own kind
+                    // (same "field of another kind is an error" rule as
+                    // viscous_nm_s_rad above), so a typo'd kind cannot
+                    // silently ignore the parameters the author wrote.
+                    const bool is_lsd = d.kind == ps::drivetrain::DifferentialKind::ClutchLsd;
+                    const bool is_torsen = d.kind == ps::drivetrain::DifferentialKind::Torsen;
+                    for (const char* key : {"preload_nm", "ramp", "static_factor"}) {
+                        if (cj.contains(key) && !is_lsd) {
+                            throw std::runtime_error(ctx + ": differential '" + key + "' is only valid for kind \"clutch_lsd\"");
+                        }
+                    }
+                    if (cj.contains("torque_bias_ratio") && !is_torsen) {
+                        throw std::runtime_error(ctx + ": differential 'torque_bias_ratio' is only valid for kind \"torsen\"");
+                    }
+                    if (is_lsd) {
+                        d.preload_nm = cj.value("preload_nm", d.preload_nm);
+                        if (!(d.preload_nm >= real(0.0))) throw std::runtime_error(ctx + ": differential 'preload_nm' must be >= 0");
+                        if (!cj.contains("ramp")) {
+                            throw std::runtime_error(ctx + ": differential kind \"clutch_lsd\" requires a 'ramp' block "
+                                                            "{\"drive_factor\", \"coast_factor\"}");
+                        }
+                        const auto& rj = cj.at("ramp");
+                        if (!rj.is_object() || !rj.contains("drive_factor") || !rj.contains("coast_factor")) {
+                            throw std::runtime_error(ctx + ": differential 'ramp' requires both 'drive_factor' and 'coast_factor'");
+                        }
+                        d.drive_factor = rj.at("drive_factor").get<real>();
+                        d.coast_factor = rj.at("coast_factor").get<real>();
+                        if (!(d.drive_factor >= real(0.0) && d.drive_factor < real(1.0))) {
+                            throw std::runtime_error(ctx + ": differential ramp.drive_factor must be in [0, 1)");
+                        }
+                        if (!(d.coast_factor >= real(0.0) && d.coast_factor < real(1.0))) {
+                            throw std::runtime_error(ctx + ": differential ramp.coast_factor must be in [0, 1)");
+                        }
+                        d.static_factor = cj.value("static_factor", d.static_factor);
+                        if (!(d.static_factor >= real(1.0))) throw std::runtime_error(ctx + ": differential 'static_factor' must be >= 1");
+                    }
+                    if (is_torsen) {
+                        if (!cj.contains("torque_bias_ratio")) {
+                            throw std::runtime_error(ctx + ": differential kind \"torsen\" requires 'torque_bias_ratio' > 1");
+                        }
+                        d.torque_bias_ratio = cj.at("torque_bias_ratio").get<real>();
+                        if (!(d.torque_bias_ratio > real(1.0))) {
+                            throw std::runtime_error(ctx + ": differential 'torque_bias_ratio' must be > 1");
+                        }
                     }
                     // PHYS-033 P4 I4 C5 (plan section 3.1): lockable + optional lock block.
                     d.lockable = cj.value("lockable", false);
