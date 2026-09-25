@@ -40,10 +40,10 @@ namespace ps::drivetrain {
 // D8 fixed capacities (PHYS-033 P4 I2 plan section 3). Exceeding any of
 // these is a build-time error in Powertrain's constructor, naming the
 // vehicle - never a silent truncation.
-constexpr int kMaxDofs = 8;
+constexpr int kMaxDofs = 12;
 constexpr int kMaxClusterNodes = 16;
-constexpr int kMaxRows = 8;
-constexpr int kMaxStates = 32;
+constexpr int kMaxRows = 12;
+constexpr int kMaxStates = 128;
 // Additive to the plan's own table: bounds on the WHOLE network (every
 // cluster's nodes/rows combined) - generous relative to car/tractor's
 // actual 6-8 nodes and <=6 friction rows, so this is not expected to be a

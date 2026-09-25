@@ -6,8 +6,8 @@
 // file table requires.
 //
 // Every cluster's per-substep workspace (network.h's Cluster) is sized to
-// the network's own fixed capacities (kMaxDofs = 8, kMaxClusterNodes = 16,
-// kMaxRows = 8 - see network.h) at CONSTRUCTION time (Powertrain's
+// the network's own fixed capacities (kMaxDofs = 12, kMaxClusterNodes = 16,
+// kMaxRows = 12 - see network.h) at CONSTRUCTION time (Powertrain's
 // constructor, sim thread, outside any job) and never resized inside a
 // job - SmallVec<N>/SmallMat<R,C> below exist so that sizing is a compile-
 // time template parameter (std::array storage) while the RUNTIME
@@ -61,7 +61,7 @@ struct SmallMat {
 
 // Cholesky factorisation of an n x n SPD (or nearly-SPD) matrix A into a
 // lower-triangular L with A = L*L^T - PHYS-033 P4 I2 plan section 5.3, no
-// pivoting, fixed loop order (n <= N <= 8 in every caller, so this is a
+// pivoting, fixed loop order (n <= N <= 12 in every caller, so this is a
 // few dozen flops). `A` and `L` may alias different SmallMat<N,N> objects
 // only (never the same object - L is written strictly after A(j,k) for
 // k <= j is read, so aliasing A into L in place would corrupt later rows'

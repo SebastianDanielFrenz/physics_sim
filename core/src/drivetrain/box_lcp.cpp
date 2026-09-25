@@ -173,7 +173,7 @@ LcpResult solve_box_lcp(const real* W, const real* q, const real* c, int k, LcpS
     // reasoning a later reader debugging a new cap-hit report needs: if
     // stage 2 ever hits its cap again, check the pivot-selection rule
     // FIRST, not the cap size.
-    const int cap2 = 1 << k; // k <= kMaxLcpK (8) -> at most 256
+    const int cap2 = 1 << k; // k <= kMaxLcpK (12) -> at most 4096
     for (int it2 = 1; it2 <= cap2; ++it2) {
         ++iterations;
         const int ni = evaluate_partition(q, c, k, sets_inout, ws, infeasible.data());
@@ -211,8 +211,8 @@ LcpResult solve_box_lcp(const real* W, const real* q, const real* c, int k, LcpS
     // one is found first deterministic. No allocation: `codes`/`digit`
     // are plain locals and `ws` is the same fixed-capacity
     // SmallMat/SmallVec-backed workspace stage 1/2 already used. k <=
-    // kMaxLcpK (8) bounds this at 3^8 = 6561 candidate Cholesky solves -
-    // stage 3 running at all is the real "report, do not force" signal
+    // kMaxLcpK (12) bounds this at 3^12 = 531441 candidate Cholesky solves
+    // - stage 3 running at all is the real "report, do not force" signal
     // (ShaftNetwork::lcp_stage3_hits telemetry, network.cpp), not this
     // loop's own cost.
     int pow3 = 1;

@@ -25,7 +25,14 @@ real reconstruct_mesh_torque(NodeId recon_node, real coef_at_recon_node, real lo
         const FrictionRowId rid{static_cast<std::uint16_t>(r)};
         if (net.friction_row_a(rid) == recon_node) row_sum += net.row_lambda(rid);
         const NodeId rb = net.friction_row_b(rid);
-        if (rb.valid() && rb == recon_node) row_sum -= net.row_lambda(rid);
+        // PHYS-033 P4 I4 plan section 2.2: a row's b-side reaction is
+        // -ratio_b*lambda (network.cpp's own B-matrix/velocity convention,
+        // "v = omega(a) - ratio_b*omega(b)"), not the old unconditional
+        // -lambda. Every I2/I3 row's ratio_b defaults to exactly 1.0
+        // (Assembly::begin_substep_rows), so this is bit-identical to the
+        // old expression for them - only a future non-1.0 row touching a
+        // reconstruction node (I4's PTO/MFWD friction rows) needs it.
+        if (rb.valid() && rb == recon_node) row_sum -= assembly.ratio_b(rid) * net.row_lambda(rid);
     }
 
     const real balance =

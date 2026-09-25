@@ -188,7 +188,10 @@ real max_c(const Problem& p) {
 // itself guaranteed finite), cap_hit should be mathematically unreachable
 // for these SPD-Wr problems, so EVERY case - no exceptions - is asserted
 // to match brute force exactly again, restoring the original test contract.
-void run_and_check(const Problem& p, real tol, int trial, std::array<int, 9>& max_iters_by_k, int& stage2_count, int& stage3_count,
+// Sized to 13 (0..12) so callers testing PHYS-033 P4 I4's raised
+// kMaxLcpK=12 (plan section 2.1) can index by k directly, same as every
+// existing caller that only ever uses indices up to 6.
+void run_and_check(const Problem& p, real tol, int trial, std::array<int, 13>& max_iters_by_k, int& stage2_count, int& stage3_count,
                     int batch = -1) {
     const BruteForceResult bf = brute_force(p);
     INFO("trial=" << trial << " k=" << p.k << " batch=" << batch);
@@ -260,7 +263,7 @@ void run_and_check(const Problem& p, real tol, int trial, std::array<int, 9>& ma
 TEST_CASE("box-LCP: block principal pivoting matches brute force (batches 1/3/4)", "[unit][drivetrain][lcp]") {
     SplitMix64 rng(0x5EED1234ABCDULL);
     constexpr int kCases = 10000;
-    std::array<int, 9> max_iters_by_k{};
+    std::array<int, 13> max_iters_by_k{};
     int stage2_count = 0;
     int stage3_count = 0;
 
@@ -320,7 +323,7 @@ TEST_CASE("box-LCP: block principal pivoting matches brute force (batches 1/3/4)
 TEST_CASE("box-LCP: block principal pivoting matches brute force (10^5 cases)", "[unit][drivetrain][lcp][long]") {
     SplitMix64 rng(0xFEEDFACE5EEDULL);
     constexpr int kCases = 100000;
-    std::array<int, 9> max_iters_by_k{};
+    std::array<int, 13> max_iters_by_k{};
     int stage2_count = 0;
     int stage3_count = 0;
 
@@ -354,7 +357,7 @@ TEST_CASE("box-LCP: block principal pivoting matches brute force (batch 2: physi
           "[unit][drivetrain][lcp]") {
     SplitMix64 rng(0xB2B2B2B2ULL);
     constexpr int kCases = 4000;
-    std::array<int, 9> max_iters_by_k{};
+    std::array<int, 13> max_iters_by_k{};
     int stage2_count = 0;
     int stage3_count = 0;
 
@@ -370,6 +373,71 @@ TEST_CASE("box-LCP: block principal pivoting matches brute force (batch 2: physi
     WARN("batch 2 cases reaching stage 3 (exhaustive enumeration): " << stage3_count << "/" << kCases);
     for (int k = 1; k <= 6; ++k) {
         WARN("batch 2 max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (stage-1 cap=" << (2 * k + 2) << ")");
+    }
+}
+
+// PHYS-033 P4 I4 plan section 2.1 (capacity increase, owner ruling 5):
+// kMaxRows/kMaxLcpK raised 8 -> 12 so the tractor's 11-row main cluster
+// (clutch, engine-to-ground, synchro, RL, RR, FL, FR, park lock, MFWD
+// clutch, PTO clutch, dyno) fits. A brute-force cross-check right at the
+// new ceiling (k=11, one row of slack below the cap; k=12, at the cap
+// exactly) - a handful of trials, not a full random sweep (see the
+// [long] k=9-12 sweep below, which the plan's own test table also asks
+// for), just enough to catch an off-by-one in kMaxRows/kMaxLcpK/kMaxDofs
+// or their SmallMat/SmallVec storage now that k can reach 12.
+TEST_CASE("box-LCP: block principal pivoting matches brute force (k=11, k=12 - I4 capacity increase)",
+          "[unit][drivetrain][lcp]") {
+    SplitMix64 rng(0xCAFEC0DEULL);
+    std::array<int, 13> max_iters_by_k{};
+    int stage2_count = 0;
+    int stage3_count = 0;
+    constexpr int kTrialsPerK = 5;
+
+    for (const int k : {11, 12}) {
+        for (int trial = 0; trial < kTrialsPerK; ++trial) {
+            const std::array<real, 3> s_choices = {1e-3, 1.0, 1e3};
+            const real s = s_choices[rng.next_u64() % s_choices.size()];
+            const bool degenerate = (trial % 2) == 1; // alternate plain / batch-3 duplicate-row degenerate case
+            run_and_check(make_batch1(rng, k, s, degenerate), degenerate ? real(1e-6) : real(1e-12), trial, max_iters_by_k,
+                          stage2_count, stage3_count, degenerate ? 1 : 0);
+        }
+    }
+
+    WARN("k=11/12 cases reaching stage 2 (Murty fallback): " << stage2_count << "/" << (2 * kTrialsPerK));
+    WARN("k=11/12 cases reaching stage 3 (exhaustive enumeration): " << stage3_count << "/" << (2 * kTrialsPerK));
+    for (const int k : {11, 12}) {
+        WARN("max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (stage-1 cap=" << (2 * k + 2)
+                                      << ", stage-2 adds up to " << (1 << k) << " more)");
+    }
+}
+
+// [long]: random SPD sweep across the new k=9-12 range (plan section 4's
+// own test table entry for this file: "Random SPD problems with k = 9-12:
+// stage usage histogram and zero cap_hit"). 3^12=531441 enumerations for
+// a single k=12 trial makes even a modest trial count expensive (compare
+// the existing 10^5-case [long] test's own comment on 3^6=729 at k=6) -
+// kept far below that test's 100000 cases, enough to exercise every k in
+// the new range without blowing the -Full budget.
+TEST_CASE("box-LCP: block principal pivoting matches brute force (k=9-12 sweep)", "[unit][drivetrain][lcp][long]") {
+    SplitMix64 rng(0x90A12BC3ULL);
+    constexpr int kCases = 40;
+    std::array<int, 13> max_iters_by_k{};
+    int stage2_count = 0;
+    int stage3_count = 0;
+
+    for (int trial = 0; trial < kCases; ++trial) {
+        const int k = 9 + static_cast<int>(rng.next_u64() % 4); // 9..12
+        const int batch = static_cast<int>(rng.next_u64() % 2); // 0=batch1, 1=batch3(degenerate)
+        const std::array<real, 3> s_choices = {1e-3, 1.0, 1e3};
+        const real s = s_choices[rng.next_u64() % s_choices.size()];
+
+        if (batch == 0) run_and_check(make_batch1(rng, k, s), 1e-12, trial, max_iters_by_k, stage2_count, stage3_count, 0);
+        else run_and_check(make_batch1(rng, k, s, /*duplicate_row1=*/true), 1e-6, trial, max_iters_by_k, stage2_count, stage3_count, 1);
+    }
+    WARN("[long] k=9-12 cases reaching stage 2 (Murty fallback): " << stage2_count << "/" << kCases);
+    WARN("[long] k=9-12 cases reaching stage 3 (exhaustive enumeration): " << stage3_count << "/" << kCases);
+    for (int k = 9; k <= 12; ++k) {
+        WARN("[long] max iterations for k=" << k << ": " << max_iters_by_k[static_cast<std::size_t>(k)] << " (stage-1 cap=" << (2 * k + 2) << ")");
     }
 }
 

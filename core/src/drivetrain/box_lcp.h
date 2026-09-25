@@ -25,7 +25,7 @@
 
 namespace ps::drivetrain {
 
-constexpr int kMaxLcpK = 8; // matches network.h's kMaxRows
+constexpr int kMaxLcpK = 12; // matches network.h's kMaxRows
 
 enum class LcpSet : std::uint8_t { Lo, Free, Hi };
 
@@ -118,9 +118,9 @@ int evaluate_partition(const real* q, const real* c, int k, const LcpSet* sets, 
 //            one partition qualifies (mod tie-breaks) and the fixed order
 //            makes the result deterministic. Allocates nothing (plain
 //            stack-local fixed-size scratch, reusing `ws`'s existing
-//            SmallMat/SmallVec-backed Cholesky) - k <= kMaxLcpK (8) means
-//            at most 3^8 = 6561 candidates, each one Cholesky solve of at
-//            most an 8x8 system, so this is a bounded but not cheap
+//            SmallMat/SmallVec-backed Cholesky) - k <= kMaxLcpK (12) means
+//            at most 3^12 = 531441 candidates, each one Cholesky solve of
+//            at most a 12x12 system, so this is a bounded but not cheap
 //            fallback - stage 3 running at all is itself the signal
 //            something upstream needs attention, not routine.
 LcpResult solve_box_lcp(const real* W, const real* q, const real* c, int k, LcpSet* sets_inout, real* lambda_out,
