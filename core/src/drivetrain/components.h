@@ -163,9 +163,16 @@ private:
 //    is an applied torque already in tau0 there and correctly stays in.
 //  - None: anything else; Powertrain's constructor rejects it when
 //    efficiency < 1 (no reconstruction available), else lambda reads 0.
+//  - LeafPair (I4 C5): a LOCKABLE leaf diff (L and R carry no other rigid
+//    row apart from this diff's own lock row). The left-only path is wrong
+//    while locked (the lock row's reaction also acts at L), so it always
+//    uses the pair path with zero other-rigid reactions: the lock reaction
+//    (+mu at L, -mu at R) cancels in b_L + b_R, and unlocked the pair sum is
+//    exact too - one path for both states, no switch in the hashed float ops
+//    at engage/release. Plain (non-lockable) leaf diffs keep Leaf.
 class Differential final : public IComponent {
 public:
-    enum class ReconMode : std::uint8_t { Leaf, Nested, None };
+    enum class ReconMode : std::uint8_t { Leaf, Nested, None, LeafPair };
 
     Differential(NodeId carrier, NodeId left, NodeId right, DifferentialDesc desc)
         : carrier_(carrier), left_(left), right_(right), desc_(desc) {}

@@ -118,11 +118,12 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
         }
         out.push_back(decl);
     };
-    // No shipped ComponentParams alternative declares a channel yet (I4 C3);
-    // this loop is the future extension point (C5's diff_lock etc. will
-    // std::get_if their own desc type here, array order preserved).
+    // Array order preserved. I4 C5: every lockable differential declares its
+    // lock channel (default 0 = unlocked). Nothing else declares one yet.
     for (const ComponentDesc& c : pt.components) {
-        (void)c;
+        if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
+            if (d->lockable) add(ChannelDecl{d->lock.channel, real(0.0)});
+        }
     }
     for (const ChannelDecl& decl : test_only_extra) add(decl);
     return out;
@@ -278,8 +279,32 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     // Sorted order R_m..R_1, N, F_1..F_n (Gearbox::state_index_for_position's
     // own convention: index = reverse_ratios.size() + position). No gearbox
     // -> exactly one state (I2's shape).
+    //
+    // PHYS-033 P4 I4 C5 (plan section 2.6): COMPOSED states. The network's
+    // state index is s = g + n_g * sum_i lock_i*2^i - g the gearbox state
+    // above, n_g its state count (1 without a gearbox), i over LOCKABLE
+    // diffs in component order. No lockable diff -> s == g, and every loop
+    // below emits exactly the pre-C5 row list (the sedan's hashes).
     const GearboxDesc* gearbox_desc = gearbox_component_index >= 0 ? std::get_if<GearboxDesc>(&pt.components[static_cast<std::size_t>(gearbox_component_index)].params) : nullptr;
-    const int num_states = gearbox_desc ? static_cast<int>(gearbox_desc->reverse_ratios.size()) + 1 + static_cast<int>(gearbox_desc->forward_ratios.size()) : 1;
+    const int num_gear_states = gearbox_desc ? static_cast<int>(gearbox_desc->reverse_ratios.size()) + 1 + static_cast<int>(gearbox_desc->forward_ratios.size()) : 1;
+    int lockable_count = 0;
+    for (const ComponentDesc& c : pt.components) {
+        if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) lockable_count += d->lockable ? 1 : 0;
+    }
+    // Validated here, before any row is built, with the composition spelled
+    // out (NetworkBuilder::build's own kMaxStates throw is generic).
+    {
+        long long composed = num_gear_states;
+        for (int i = 0; i < lockable_count && composed <= kMaxStates; ++i) composed *= 2;
+        if (composed > kMaxStates) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain has " + std::to_string(num_gear_states) +
+                                      " gearbox states x 2^" + std::to_string(lockable_count) +
+                                      " diff-lock combinations - more than kMaxStates (" + std::to_string(kMaxStates) +
+                                      ") composed topology states");
+        }
+    }
+    const int num_states = num_gear_states << lockable_count;
+    gear_state_count_ = num_gear_states;
     // Built here (not Phase K below) so the state loop just below can call
     // ratio_for_position directly instead of constructing a throwaway
     // Gearbox per state.
@@ -301,6 +326,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         std::string id;
         real ratio = 1.0;
         real efficiency = 1.0;
+        bool lockable = false;
         NodeId carrier, left, right;
     };
     std::vector<DiffBuild> diff_builds;
@@ -310,6 +336,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             b.id = c.id;
             b.ratio = d->ratio;
             b.efficiency = d->efficiency;
+            b.lockable = d->lockable;
             b.carrier = node_for_key(component_port_key(c.id, "carrier"));
             b.left = node_for_key(component_port_key(c.id, "left"));
             b.right = node_for_key(component_port_key(c.id, "right"));
@@ -335,7 +362,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             register_rigid_row(state, std::move(row));
         }
         if (gearbox_desc) {
-            const int position = state - static_cast<int>(gearbox_desc->reverse_ratios.size());
+            const int g = state % num_gear_states; // == state without a lockable diff
+            const int position = g - static_cast<int>(gearbox_desc->reverse_ratios.size());
             if (position != 0) {
                 const real ratio = gearbox_->ratio_for_position(position);
                 RigidRow row;
@@ -359,6 +387,31 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 row.terms.emplace_back(out_n.index, -g->ratio);
                 register_rigid_row(state, std::move(row));
             }
+        }
+    }
+
+    // PHYS-033 P4 I4 C5 (plan section 2.6): lock rows omega_L - omega_R = 0,
+    // LAST in each state's list and only in states whose bit is set. Always
+    // L-R (no carrier lock). Deliberately NOT counted in
+    // rigid_row_touch_count: the reconstruction-mode rule below must discount
+    // a diff's OWN lock row (its reaction cancels in the pair sum), so a
+    // lockable diff's L/R still read as "touched only by its own diff row".
+    // A lock row only ever touches a lockable diff's L/R, which the leaf rule
+    // below requires to carry nothing else rigid - so no OTHER diff's mode
+    // can depend on these uncounted terms.
+    for (int state = 0; state < num_states; ++state) {
+        const int bits = state / num_gear_states;
+        int lock_i = 0;
+        for (const DiffBuild& db : diff_builds) {
+            if (!db.lockable) continue;
+            if (((bits >> lock_i) & 1) != 0) {
+                RigidRow row;
+                row.terms.emplace_back(db.left.index, real(1.0));
+                row.terms.emplace_back(db.right.index, real(-1.0));
+                build_rigid_rows_.emplace_back(state, row);
+                builder.add_rigid_row(state, std::move(row));
+            }
+            ++lock_i;
         }
     }
 
@@ -407,7 +460,19 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             visiting[di] = 1;
             const DiffBuild& db = diff_builds[di];
             int mode = kModeNone;
-            if (db.left != db.right && touches(db.left) == num_states) {
+            if (db.lockable) {
+                // I4 C5 (plan section 2.7 / owner ruling Q3): a lockable diff
+                // must be a LEAF - L and R each touched only by its own diff
+                // row (its own lock row is uncounted, see above). LeafPair,
+                // not Leaf: the left-only balance would include the lock
+                // reaction while locked; the pair sum cancels it.
+                if (db.left == db.right || touches(db.left) != num_states || touches(db.right) != num_states) {
+                    throw std::runtime_error("vehicle '" + vehicle_name + "': differential '" + db.id +
+                                              "' of kind lockable open must drive nodes with no other rigid coupling "
+                                              "(centre LSD/Torsen is not supported in I4)");
+                }
+                mode = static_cast<int>(Differential::ReconMode::LeafPair);
+            } else if (db.left != db.right && touches(db.left) == num_states) {
                 mode = static_cast<int>(Differential::ReconMode::Leaf);
             } else if (db.left != db.right) {
                 std::vector<int> cl, cr;
@@ -785,6 +850,32 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         for (int dj : diff_children_right[di]) cr.push_back(diffs_[static_cast<std::size_t>(dj)]);
         diffs_[di]->configure_reconstruction(static_cast<Differential::ReconMode>(diff_mode[di]), std::move(cl), std::move(cr));
     }
+    // PHYS-033 P4 I4 C5: one DiffLock per lockable diff, bit i in component
+    // order (the same order the lock-row loop above used). channel_slot is
+    // the lock channel's index in declare_control_channels(pt) - the order
+    // World::create_vehicle resolves into ComponentSubstepCtx::channels (any
+    // test_only_extra channels are appended AFTER, so these slots are stable).
+    {
+        const std::vector<ChannelDecl> decls = declare_control_channels(pt);
+        std::size_t di = 0;
+        for (const ComponentDesc& c : pt.components) {
+            const auto* d = std::get_if<DifferentialDesc>(&c.params);
+            if (d == nullptr) continue;
+            if (d->lockable) {
+                DiffLock lk;
+                lk.diff_index = di;
+                lk.left = diffs_[di]->left_node();
+                lk.right = diffs_[di]->right_node();
+                lk.max_mismatch = d->lock.max_engage_mismatch_rad_s;
+                for (std::size_t k = 0; k < decls.size(); ++k) {
+                    if (decls[k].name == d->lock.channel) lk.channel_slot = static_cast<int>(k);
+                }
+                locks_.push_back(lk);
+            }
+            ++di;
+        }
+        lock_pending_.assign(locks_.size(), 0);
+    }
     components_.push_back(std::make_unique<DirectTorqueBrakes>(std::move(brake_rows), brakes.static_factor));
 }
 
@@ -842,11 +933,17 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         gin.h = ctx.h;
         last_gearbox_result_ = gearbox_->phase_step(gin);
         ctx.gearbox_in_neutral = (last_gearbox_result_.current == 0);
+    }
 
-        // --- step 3b: a possible topology-state switch (plan section 5.3) ---
-        if (last_gearbox_result_.state_index != network_.topology_state()) {
-            ledger_.engagement_loss += apply_topology_switch(last_gearbox_result_.state_index, ctx.h);
-        }
+    // --- step 3b: a possible topology-state switch (plan section 5.3; I4 C5
+    // section 2.6: the COMPOSED s = g + n_g*lock_bits, lock requests decided
+    // after phase_step). One projection covers a simultaneous gear change and
+    // lock engage. No gearbox and no lockable diff: s == 0 always, never a
+    // switch (the pre-C5 code did not compare at all there). ---
+    {
+        const int g = gearbox_ ? last_gearbox_result_.state_index : 0;
+        const int s = g + gear_state_count_ * update_lock_bits(ctx);
+        if (s != network_.topology_state()) ledger_.engagement_loss += apply_topology_switch(s, ctx.h);
     }
 
     if (clutch_) {
@@ -889,6 +986,36 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     }
 
     for (auto& c : components_) c->pre_solve(ctx, network_, assembly_);
+}
+
+int Powertrain::update_lock_bits(const ComponentSubstepCtx& ctx) {
+    int bits = network_.topology_state() / gear_state_count_; // 0 without a lockable diff
+    for (std::size_t i = 0; i < locks_.size(); ++i) {
+        const DiffLock& lk = locks_[i];
+        const real cmd = (ctx.channels != nullptr && lk.channel_slot >= 0 && lk.channel_slot < ctx.channel_count)
+                             ? ctx.channels[lk.channel_slot]
+                             : real(0.0);
+        const int bit = 1 << i;
+        if (cmd >= real(0.5)) {
+            if ((bits & bit) == 0) {
+                // Engage only near speed match (omega_old, before this
+                // substep's solve); otherwise pending, retried next substep.
+                const real mismatch = std::abs(network_.omega(lk.left) - network_.omega(lk.right));
+                if (mismatch <= lk.max_mismatch) {
+                    bits |= bit;
+                    lock_pending_[i] = 0;
+                } else {
+                    lock_pending_[i] = 1;
+                }
+            } else {
+                lock_pending_[i] = 0;
+            }
+        } else {
+            bits &= ~bit; // release: lossless (dropping a row projects omega onto itself)
+            lock_pending_[i] = 0;
+        }
+    }
+    return bits;
 }
 
 real Powertrain::apply_topology_switch(int new_state, real h) {
@@ -1005,20 +1132,33 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
     // 2. Resolve the target gear and force the gearbox/topology-state
     //    directly (reset_to: current==target==gear, phase Idle, no shift
     //    sequence, no grind event; set_topology_state: no projection loss).
+    //    I4 C5: the COMPOSED state - the current lock bits are kept (a reset
+    //    is not a lock request; the next substep's channel read decides).
+    const int lock_bits = network_.topology_state() / gear_state_count_;
     int gear = opts.gear;
     if (gearbox_) {
         if (gear == vehicle::VehicleResetOptions::kKeepGear) gear = gearbox_->current_position();
         gear = std::clamp(gear, -static_cast<int>(gearbox_->desc().reverse_ratios.size()),
                            static_cast<int>(gearbox_->desc().forward_ratios.size()));
         gearbox_->reset_to(gear);
-        network_.set_topology_state(gearbox_->state_index_for_position(gear));
+        network_.set_topology_state(gearbox_->state_index_for_position(gear) + gear_state_count_ * lock_bits);
     }
+    std::fill(lock_pending_.begin(), lock_pending_.end(), std::uint8_t{0});
 
     // 3. Hub omegas - directly as given (VehicleInstance already resolved
     //    hubs_roll_with_chassis vs. 0 per wheel; Powertrain never touches
     //    the chassis itself).
     for (std::size_t i = 0; i < hub_nodes_.size() && i < hub_speeds.size(); ++i) {
         network_.set_omega(hub_nodes_[i], hub_speeds[i]);
+    }
+    //    I4 C5: an ENGAGED lock's L/R take their mean, so the reset state
+    //    satisfies the lock row exactly (before the carrier derivations
+    //    below read them).
+    for (std::size_t i = 0; i < locks_.size(); ++i) {
+        if (((lock_bits >> i) & 1) == 0) continue;
+        const real w = (network_.omega(locks_[i].left) + network_.omega(locks_[i].right)) / real(2.0);
+        network_.set_omega(locks_[i].left, w);
+        network_.set_omega(locks_[i].right, w);
     }
 
     // 4. Derived nodes, leaves up (PHYS-033 P4 I4 C4, plan section 2.5 -

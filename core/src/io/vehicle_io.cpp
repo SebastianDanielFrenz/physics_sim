@@ -648,6 +648,18 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     d.carrier_inertia_kgm2 = cj.value("carrier_inertia_kgm2", d.carrier_inertia_kgm2);
                     d.carrier_axis_local = read_vec3(cj.value("carrier_axis_local", json()), Vec3::zero());
                     require_zero_or_unit(d.carrier_axis_local, ctx + ".carrier_axis_local");
+                    // PHYS-033 P4 I4 C5 (plan section 3.1): lockable + optional lock block.
+                    d.lockable = cj.value("lockable", false);
+                    if (cj.contains("lock")) {
+                        if (!d.lockable) throw std::runtime_error(ctx + ": differential 'lock' requires \"lockable\": true");
+                        const auto& lj = cj.at("lock");
+                        d.lock.max_engage_mismatch_rad_s = lj.value("max_engage_mismatch_rad_s", d.lock.max_engage_mismatch_rad_s);
+                        if (!(d.lock.max_engage_mismatch_rad_s >= real(0.0))) {
+                            throw std::runtime_error(ctx + ": differential lock.max_engage_mismatch_rad_s must be >= 0");
+                        }
+                        d.lock.channel = lj.value("channel", d.lock.channel);
+                        if (d.lock.channel.empty()) throw std::runtime_error(ctx + ": differential lock.channel must be non-empty");
+                    }
                     p.components.push_back({id, d});
                 } else {
                     throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");

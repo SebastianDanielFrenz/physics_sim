@@ -141,6 +141,11 @@ real Differential::compute_row_lambda(const ShaftNetwork& net, const Assembly& a
         return reconstruct_mesh_torque_pair(left_, right_, -desc_.ratio, real(0.0), real(0.0), other_left, other_right, net, assembly,
                                             omega_old_left_, omega_old_right_, h);
     }
+    case ReconMode::LeafPair:
+        // I4 C5: a lockable leaf - the lock row's equal-and-opposite L/R
+        // reaction cancels in the pair sum, so this is exact locked or not.
+        return reconstruct_mesh_torque_pair(left_, right_, -desc_.ratio, real(0.0), real(0.0), real(0.0), real(0.0), net, assembly,
+                                            omega_old_left_, omega_old_right_, h);
     case ReconMode::None:
     default:
         return real(0.0);

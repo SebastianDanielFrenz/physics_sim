@@ -118,12 +118,24 @@ struct GearPairDesc {
 
 enum class DifferentialKind { Open }; // I4 adds Locked, ClutchLsd, Viscous, Torsen, Active
 
+// PHYS-033 P4 I4 C5 (plan section 2.6/3.1): a lockable diff's L-R lock
+// (omega_L == omega_R rigid row, present only in composed topology states
+// whose lock bit is set). Engages when `channel` reads >= 0.5 AND
+// |omega_L - omega_R| <= max_engage_mismatch_rad_s (else stays pending,
+// retried every substep); releases the substep the channel reads < 0.5.
+struct DiffLockDesc {
+    real max_engage_mismatch_rad_s = 2.0; // >= 0
+    std::string channel = "diff_lock";    // declared (default 0) via Powertrain::declare_control_channels
+};
+
 struct DifferentialDesc {
     DifferentialKind kind = DifferentialKind::Open;
     real ratio = 1.0;
     real efficiency = 1.0; // (0, 1] - I3 lifts I2's "must be exactly 1" ban (section 5.4's reconstruction node)
     real carrier_inertia_kgm2 = 0.0;
     Vec3 carrier_axis_local = Vec3::zero();
+    bool lockable = false; // I4 C5: must be a leaf diff (its L/R carry no other rigid row)
+    DiffLockDesc lock;     // only meaningful when lockable
 };
 
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component

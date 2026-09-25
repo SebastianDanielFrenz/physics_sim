@@ -216,6 +216,68 @@ TEST_CASE("load_vehicle_json accepts differential efficiency < 1 (I2 ban lifted)
     }
 }
 
+// PHYS-033 P4 I4 C5 (plan section 3.1): "lockable" (default false) and the
+// optional "lock" block. A "lock" block on a non-lockable diff and a
+// negative engage mismatch are both load-time errors.
+TEST_CASE("load_vehicle_json parses a lockable differential and rejects a bad 'lock' block", "[unit][vehicle][io][drivetrain]") {
+    using Catch::Matchers::ContainsSubstring;
+    auto json_with_diff_fields = [](const std::string& extra) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0)") +
+               extra + R"( }
+    ],
+    "shafts": [
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ]
+  }
+})";
+    };
+    auto only_diff = [](const vehicle::VehicleDesc& d) -> const drivetrain::DifferentialDesc& {
+        REQUIRE(d.powertrain.components.size() == 1);
+        const auto* diff = std::get_if<drivetrain::DifferentialDesc>(&d.powertrain.components[0].params);
+        REQUIRE(diff != nullptr);
+        return *diff;
+    };
+
+    SECTION("defaults: not lockable") {
+        TempJsonFile f(json_with_diff_fields(""), "vehicle_diff_lock_default");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        CHECK_FALSE(only_diff(d).lockable);
+    }
+    SECTION("lockable with a full lock block is accepted") {
+        TempJsonFile f(json_with_diff_fields(R"(, "lockable": true, "lock": { "max_engage_mismatch_rad_s": 0.5, "channel": "rear_lock" })"),
+                       "vehicle_diff_lock_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::DifferentialDesc& diff = only_diff(d);
+        CHECK(diff.lockable);
+        CHECK(diff.lock.max_engage_mismatch_rad_s == 0.5);
+        CHECK(diff.lock.channel == "rear_lock");
+    }
+    SECTION("lockable without a lock block takes the defaults") {
+        TempJsonFile f(json_with_diff_fields(R"(, "lockable": true)"), "vehicle_diff_lock_defaults");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::DifferentialDesc& diff = only_diff(d);
+        CHECK(diff.lockable);
+        CHECK(diff.lock.max_engage_mismatch_rad_s == 2.0);
+        CHECK(diff.lock.channel == "diff_lock");
+    }
+    SECTION("'lock' without 'lockable': true is rejected") {
+        TempJsonFile f(json_with_diff_fields(R"(, "lock": { "max_engage_mismatch_rad_s": 2.0 })"), "vehicle_diff_lock_not_lockable");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("lockable"));
+    }
+    SECTION("negative max_engage_mismatch_rad_s is rejected") {
+        TempJsonFile f(json_with_diff_fields(R"(, "lockable": true, "lock": { "max_engage_mismatch_rad_s": -0.1 })"),
+                       "vehicle_diff_lock_negative");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("max_engage_mismatch_rad_s"));
+    }
+}
+
 // --- PHYS-033 P4 I3 plan section 9.2 ----------------------------------------
 
 namespace {

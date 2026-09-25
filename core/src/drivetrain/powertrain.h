@@ -62,7 +62,8 @@ public:
     // ports, an unconnected non-wheel port, a non-rigid shaft, a lossy gear
     // sharing its input node with another rigid row, a non-positive wheel
     // hub inertia, a cluster whose reduced mass matrix is not invertible, a
-    // controller naming an unknown or wrong-typed component).
+    // controller naming an unknown or wrong-typed component, a lockable diff
+    // that is not a leaf, more than kMaxStates composed topology states).
     Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, const std::vector<vehicle::WheelDesc>& wheels,
                const std::vector<ControllerDesc>& controllers, const std::string& vehicle_name);
 
@@ -81,9 +82,10 @@ public:
     // vehicle's powertrain components want, in pt.components array order,
     // duplicate names merged (first occurrence's default wins). Build-time
     // only - called once per vehicle by World::create_vehicle, never per
-    // tick/substep (PLAN.md D8 governs the hot path, not this). No shipped
-    // ComponentParams type declares a channel yet (the first is C5's
-    // diff_lock), so this returns {} for car_sedan.json/tractor.json today.
+    // tick/substep (PLAN.md D8 governs the hot path, not this). I4 C5: a
+    // lockable differential declares its lock channel (default 0); no
+    // shipped vehicle has one, so this returns {} for car_sedan.json/
+    // tractor.json today.
     // `test_only_extra` (default empty, merged in AFTER pt.components' own
     // declarations by the same rule) is the least-invasive test hook this
     // commit adds (I4 C3 report): it lets a white-box unit test exercise the
@@ -261,6 +263,21 @@ public:
     };
     [[nodiscard]] const std::vector<ResetDerivation>& reset_derivations() const { return reset_derivations_; }
 
+    // --- PHYS-033 P4 I4 C5: composed topology states / diff locks (plan
+    // section 2.6). s = g + n_g * lock_bits; lock bit i is the i-th LOCKABLE
+    // diff in component order. The lock bits live ONLY in the network's
+    // topology state (hashed there); pending is recomputed every substep from
+    // the channel and the locked bit, so it is not state and not hashed. ---
+    [[nodiscard]] int gear_state_count() const { return gear_state_count_; } // n_g (1 without a gearbox)
+    [[nodiscard]] int composed_state(int gear_state, int lock_bits) const { return gear_state + gear_state_count_ * lock_bits; }
+    [[nodiscard]] int state_gear_index(int s) const { return s % gear_state_count_; }
+    [[nodiscard]] int state_lock_bits(int s) const { return s / gear_state_count_; }
+    [[nodiscard]] std::size_t diff_lock_count() const { return locks_.size(); }
+    [[nodiscard]] std::size_t diff_lock_diff_index(std::size_t i) const { return locks_[i].diff_index; } // into diff(i)
+    [[nodiscard]] int diff_lock_channel_slot(std::size_t i) const { return locks_[i].channel_slot; }
+    [[nodiscard]] bool diff_lock_engaged(std::size_t i) const { return ((state_lock_bits(network_.topology_state()) >> i) & 1) != 0; }
+    [[nodiscard]] bool diff_lock_pending(std::size_t i) const { return lock_pending_[i] != 0; }
+
     // Network omega/stick-sets/topology-state (ShaftNetwork::fold_state_hash)
     // plus every component's own additional state (GearPair/Differential's
     // lambda_mesh_prev_, engine's state machine, gearbox's phase machine, the
@@ -283,6 +300,10 @@ private:
     // affects which active-set guess box_lcp.cpp tries first, never the
     // solved answer) but a deviation worth flagging if ever revisited.
     [[nodiscard]] real apply_topology_switch(int new_state, real h);
+    // I4 C5: this substep's lock bits from the lock channels (engage within
+    // max_mismatch of speed match, else pending; release when < 0.5);
+    // updates lock_pending_. Allocation-free.
+    [[nodiscard]] int update_lock_bits(const ComponentSubstepCtx& ctx);
 
     ShaftNetwork network_;
     Assembly assembly_;
@@ -295,6 +316,16 @@ private:
     std::vector<Differential*> diffs_;
     std::vector<std::pair<int, RigidRow>> build_rigid_rows_; // white-box record, build time only
     std::vector<ResetDerivation> reset_derivations_;         // leaves up, built once at construction
+    // --- I4 C5 composed states / diff locks --------------------------------
+    struct DiffLock {
+        std::size_t diff_index = 0; // into diffs_
+        NodeId left, right;
+        real max_mismatch = 2.0;    // rad/s, |omega_L - omega_R| engage threshold
+        int channel_slot = -1;      // into ComponentSubstepCtx::channels
+    };
+    int gear_state_count_ = 1;                // n_g
+    std::vector<DiffLock> locks_;             // lockable diffs, component order (bit i)
+    std::vector<std::uint8_t> lock_pending_;  // parallel to locks_, sized once at construction; NOT hashed
     std::vector<NodeId> hub_nodes_;
     std::vector<std::uint8_t> driven_; // parallel to hub_nodes_, WheelDesc order
     real driven_wheel_mean_radius_ = 0.0; // mean radius of driven wheels, computed once at construction
