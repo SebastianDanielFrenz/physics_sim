@@ -370,6 +370,40 @@ TEST_CASE("load_vehicle_json rejects a non-positive auto_clutch sync_time_s or m
     }
 }
 
+TEST_CASE("load_vehicle_json validates the auto_blip upshift-cut hold and torque-ramp fields", "[unit][vehicle][io][drivetrain]") {
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0])",
+                  "gearbox_tcu_cut_params");
+    const auto controller = [](const char* auto_blip_fields) {
+        return std::string(R"({ "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",
+      "auto_blip": { )") + auto_blip_fields + " } }";
+    };
+    const struct {
+        const char* fields;
+        const char* file;
+        const char* message;
+    } bad[] = {
+        {R"("upshift_cut_release_slip_rpm": 0.0)", "vehicle_tcu_cut_slip_zero", "upshift_cut_release_slip_rpm must be > 0"},
+        {R"("upshift_cut_max_hold_s": -1.0)", "vehicle_tcu_cut_hold_negative", "upshift_cut_max_hold_s must be > 0"},
+        {R"("upshift_torque_ramp_s": -0.1)", "vehicle_tcu_cut_ramp_negative", "upshift_torque_ramp_s must be >= 0"},
+    };
+    for (const auto& b : bad) {
+        INFO(b.fields);
+        TempJsonFile f(minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json, controller(b.fields)), b.file);
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring(b.message));
+    }
+    {
+        TempJsonFile f(minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json,
+                                               controller(R"("upshift_cut_release_slip_rpm": 250, "upshift_cut_max_hold_s": 0.8, "upshift_torque_ramp_s": 0.0)")),
+                       "vehicle_tcu_cut_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        REQUIRE(d.controllers.size() == 1);
+        const auto& tcu = std::get<drivetrain::ManualTcuDesc>(d.controllers[0].params);
+        CHECK(tcu.auto_blip.upshift_cut_release_slip_rpm == 250.0);
+        CHECK(tcu.auto_blip.upshift_cut_max_hold_s == 0.8);
+        CHECK(tcu.auto_blip.upshift_torque_ramp_s == 0.0); // 0 = step, allowed
+    }
+}
+
 TEST_CASE("load_vehicle_json rejects a gearbox initial_gear out of range", "[unit][vehicle][io][drivetrain]") {
     // Only 3 forward gears exist; initial_gear 5 is out of range.
     RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0], "initial_gear": 5)",

@@ -92,6 +92,19 @@ struct AutoBlipDesc {
     real kp_per_rpm = 0.002;
     real max_throttle = 1.0;
     bool upshift_cut = true;
+    // Speed-matched upshift (owner test drive 2026-09-25; manual_tcu.cpp has
+    // the mechanism). With the auto-clutch on, the upshift cut is held
+    // through the post-shift clutch close until the engine is within
+    // upshift_cut_release_slip_rpm of the new gear's input shaft (engine
+    // faster), so the car coasts through the shift instead of being pushed
+    // by a flaring engine through the slipping clutch; at most
+    // upshift_cut_max_hold_s after the dog is in (a stuck close never holds
+    // the cut forever). Afterwards the pedal comes back through a ceiling
+    // ramped 0 -> 1 over upshift_torque_ramp_s (0 = step). vehicle_io.cpp
+    // validates: release slip and max hold > 0, ramp >= 0.
+    real upshift_cut_release_slip_rpm = 300.0;
+    real upshift_cut_max_hold_s = 0.6;
+    real upshift_torque_ramp_s = 0.10;
 };
 
 struct AutoShiftDesc {

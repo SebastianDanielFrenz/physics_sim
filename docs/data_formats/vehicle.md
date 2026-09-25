@@ -307,7 +307,10 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 | `enabled` | bool | `true` | default of the runtime `assist.auto_blip` channel |
 | `kp_per_rpm` | real | `0.002` | throttle-blip gain |
 | `max_throttle` | real | `1.0` | blip ceiling |
-| `upshift_cut` | bool | `true` | cut throttle momentarily on an upshift |
+| `upshift_cut` | bool | `true` | cut ignition on an upshift: through the whole gearbox shift and, with the auto-clutch on, through the post-shift clutch close until the engine is speed-matched (below) |
+| `upshift_cut_release_slip_rpm` | real (rpm) | `300` | with the auto-clutch on, the cut is held after the dog is in until engine rpm minus the new gear's input-shaft rpm drops to this; the car coasts while it holds. **Must be `> 0`**, else `"<ctx>.auto_blip: upshift_cut_release_slip_rpm must be > 0"` |
+| `upshift_cut_max_hold_s` | real (s) | `0.6` | the cut is released at the latest this long after the dog is in (a close that never synchronises cannot hold it forever). **Must be `> 0`**, else `"<ctx>.auto_blip: upshift_cut_max_hold_s must be > 0"` |
+| `upshift_torque_ramp_s` | real (s) | `0.10` | after an upshift cut ends, the driver's pedal comes back through a ceiling ramped 0 -> 1 over this time (the blip floor is not capped); `0` = step. **Must be `>= 0`**, else `"<ctx>.auto_blip: upshift_torque_ramp_s must be >= 0"` |
 
 #### `auto_shift`
 
@@ -318,8 +321,9 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 | `down_rpm_at_zero_throttle` / `down_rpm_at_full_throttle` | real (rpm) | `1300` / `2800` | downshift rpm thresholds |
 | `min_time_in_gear_s` | real (s) | `1.0` | shift-hysteresis timer |
 
-None of the numeric sub-fields inside `auto_blip`/`auto_shift` are
-range-validated by the loader beyond the defaults shown.
+Apart from the three `upshift_*` fields above, none of the numeric
+sub-fields inside `auto_blip`/`auto_shift` are range-validated by the
+loader beyond the defaults shown.
 
 ## Control channels a vehicle reads
 

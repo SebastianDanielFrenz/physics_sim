@@ -158,9 +158,11 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // what the driveline needs, so the last step is jerk-free). e_auto
     // follows the target at 1/close_time_s (the existing shift-close rate)
     // in both directions. Rejected alternatives (see the design record):
-    // extending the upshift ignition cut through ClutchClosing (a torque
-    // hole of up to ~0.7 s per shift; the flywheel energy still has to go
-    // somewhere), an uncapped sync term (J*|slip|/tau alone reaches 235 Nm
+    // extending the upshift ignition cut through ClutchClosing INSTEAD of
+    // this law (the flywheel energy still has to go somewhere - but the two
+    // combine: since the owner's "speed ticking through the shift" report
+    // the cut is held until the engine is speed-matched and this law then
+    // finishes the close, see the upshift-cut block below), an uncapped sync term (J*|slip|/tau alone reaches 235 Nm
     // at a 4000 rpm flare - the same dump), and a slip-proportional
     // e = k*slip law (no notion of engine torque: under-carries at WOT, so
     // the engine flares to the limiter, and over-carries off-throttle).
@@ -274,17 +276,56 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // shift and flared to the limiter (measured: 5888 -> 6717 rpm in 0.1 s
     // on a 1->2 at 31 km/h), which the post-shift close then had to dump
     // into the driven wheels.
-    if (!gearbox_shifting_now) upshift_cut_armed_ = false;
+    //
+    // Speed-matched upshift (owner test drive 2026-09-25: "I still see the
+    // speed ticking throughout the entire shift"): with the auto-clutch on,
+    // the cut also stays on through the post-shift close (Shift mode, dog
+    // in) until the engine has fallen to within
+    // AutoBlipDesc::upshift_cut_release_slip_rpm of the new gear's input
+    // shaft, like an AMT's ECU. Ending it with the gearbox phase left the
+    // engine at full power for the whole ~0.8 s close: the torque-following
+    // clutch carried engine torque + the sync term (~245 Nm vs. the 200 Nm
+    // peak), so the car pulled at 3.5-4 m/s^2 - harder than locked 2nd -
+    // and the driver felt no shift at all. While the cut holds, the close
+    // law's target is max(0, motoring + T_sync) ~ 0, so the car coasts and
+    // the engine loses the gear step on its own motoring torque. A stuck
+    // close cannot hold the cut forever: upshift_cut_max_hold_s after the
+    // dog is in the cut is released regardless. Once released (or if the
+    // TCU hands the engagement to Launch/Locked) the cut never re-arms
+    // within the same shift, and the throttle comes back through a ceiling
+    // ramped 0 -> 1 over upshift_torque_ramp_s instead of a step, which the
+    // torque-following close follows (its feed-forward is the engine's
+    // demand, ramp included). Manual clutch (assist.auto_clutch off): the
+    // cut still ends with the gearbox phase - the driver's own pedal, not
+    // the TCU, decides when the engine is re-connected.
+    bool cut_now = false;
     if (desc_.auto_blip.upshift_cut) {
         const bool upshifting = (desired_target > s.gearbox_current && s.gearbox_current > 0) || upshift_cut_armed_;
-        ignition_cut = upshifting && gearbox_shifting_now;
+        if (upshifting && gearbox_shifting_now) {
+            cut_now = true;
+            upshift_cut_hold_t_ = real(0.0);
+        } else if (upshift_cut_armed_ && s.assist_auto_clutch && mode_ == ClutchMode::Shift) {
+            upshift_cut_hold_t_ += h;
+            const real flare_rpm = (s.engine_omega - s.gearbox_in_omega) * kRadPerSecToRpm;
+            cut_now = flare_rpm > desc_.auto_blip.upshift_cut_release_slip_rpm && upshift_cut_hold_t_ <= desc_.auto_blip.upshift_cut_max_hold_s;
+        }
     }
+    if (!cut_now && !gearbox_shifting_now) upshift_cut_armed_ = false; // released, or never armed: one cut per shift
+    if (cut_now) {
+        throttle_ceiling_ = real(0.0);
+    } else {
+        throttle_ceiling_ = desc_.auto_blip.upshift_torque_ramp_s > real(0.0)
+                                ? move_toward(throttle_ceiling_, real(1.0), h / desc_.auto_blip.upshift_torque_ramp_s)
+                                : real(1.0);
+    }
+    ignition_cut = cut_now;
 
     ManualTcu::Outputs out;
     out.gearbox_target = desired_target;
     out.e_auto = s.assist_auto_clutch ? e_auto_ : real(1.0);
     out.throttle_floor = s.assist_auto_blip ? throttle_floor : real(0.0);
     out.ignition_cut = s.assist_auto_blip && ignition_cut;
+    out.throttle_ceiling = s.assist_auto_blip ? throttle_ceiling_ : real(1.0);
     return out;
 }
 
@@ -307,6 +348,8 @@ std::uint64_t ManualTcu::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, e_auto_);
     h = fnv1a(h, time_in_gear_);
     h = fnv1a(h, upshift_cut_armed_);
+    h = fnv1a(h, upshift_cut_hold_t_);
+    h = fnv1a(h, throttle_ceiling_);
     return h;
 }
 

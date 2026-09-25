@@ -84,7 +84,8 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     const bool starter_active = (state_ == EngineState::Cranking);
 
     // --- 6.1.4: throttle path -------------------------------------------------
-    const real theta_req = tcu.ignition_cut ? real(0.0) : std::max(sensors.pedal_throttle, tcu.throttle_floor);
+    const real theta_req =
+        tcu.ignition_cut ? real(0.0) : std::max(std::min(sensors.pedal_throttle, tcu.throttle_ceiling), tcu.throttle_floor);
 
     if (state_ == EngineState::Running && theta_req < real(0.01) && rpm > desc_.dfco_enable_rpm) {
         dfco_active_ = true;

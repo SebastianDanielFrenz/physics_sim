@@ -190,6 +190,9 @@ public:
         return has_gearbox() ? network_.row_lambda(gearbox_synchro_row_) : real(0.0);
     }
     [[nodiscard]] real throttle_eff() const { return last_engine_result_.throttle_eff; }
+    [[nodiscard]] real engine_torque_demand() const { return last_engine_result_.torque_demand; }
+    // The TCU request the engine will read NEXT substep (tests only).
+    [[nodiscard]] const EngineTorqueMap::TcuRequest& tcu_request_debug() const { return tcu_prev_request_; }
     [[nodiscard]] real idle_integrator() const { return has_engine() ? engine_->idle_integrator() : real(0.0); }
     // Fills out[wheel_index] with the diff row's torque on that hub
     // (coef*lambda, plan section 4.5), 0 for every undriven/non-diff hub;

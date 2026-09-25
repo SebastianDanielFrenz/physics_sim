@@ -65,6 +65,10 @@ public:
         real e_auto = 1.0;        // feed into Clutch::pre_solve's e_auto
         real throttle_floor = 0.0;
         bool ignition_cut = false;
+        // Cap on the driver's pedal (the auto-blip floor is not capped),
+        // ramped 0 -> 1 over AutoBlipDesc::upshift_torque_ramp_s after an
+        // upshift cut ends; 1 otherwise.
+        real throttle_ceiling = 1.0;
     };
 
     explicit ManualTcu(Desc desc) : desc_(desc) {}
@@ -97,6 +101,8 @@ public:
         last_target_seen_valid_ = false;
         time_in_gear_ = real(0.0);
         upshift_cut_armed_ = false;
+        upshift_cut_hold_t_ = real(0.0);
+        throttle_ceiling_ = real(1.0);
         mode_ = clutch_locked ? ClutchMode::Locked : ClutchMode::Launch;
         e_auto_ = clutch_locked ? real(1.0) : real(0.0);
     }
@@ -127,6 +133,11 @@ private:
 
     // The shift in progress started as an upshift (6.5.3's upshift cut).
     bool upshift_cut_armed_ = false;
+    // Time since the dog went in while the cut is held through the
+    // post-shift close (AutoBlipDesc::upshift_cut_max_hold_s).
+    real upshift_cut_hold_t_ = 0.0;
+    // Pedal ceiling after an upshift cut (Outputs::throttle_ceiling).
+    real throttle_ceiling_ = 1.0;
 };
 
 } // namespace ps::drivetrain

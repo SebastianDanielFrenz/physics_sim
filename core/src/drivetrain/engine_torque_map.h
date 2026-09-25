@@ -74,6 +74,7 @@ public:
     struct TcuRequest {
         real throttle_floor = 0.0; // auto-blip
         bool ignition_cut = false; // upshift cut
+        real throttle_ceiling = 1.0; // caps the pedal (not the blip floor) - the torque ramp-in after an upshift cut
     };
 
     struct PreSolveResult {

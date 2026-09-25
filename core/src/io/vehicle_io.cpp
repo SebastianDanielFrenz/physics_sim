@@ -765,6 +765,18 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 md.auto_blip.kp_per_rpm = abj.value("kp_per_rpm", md.auto_blip.kp_per_rpm);
                 md.auto_blip.max_throttle = abj.value("max_throttle", md.auto_blip.max_throttle);
                 md.auto_blip.upshift_cut = abj.value("upshift_cut", md.auto_blip.upshift_cut);
+                md.auto_blip.upshift_cut_release_slip_rpm = abj.value("upshift_cut_release_slip_rpm", md.auto_blip.upshift_cut_release_slip_rpm);
+                md.auto_blip.upshift_cut_max_hold_s = abj.value("upshift_cut_max_hold_s", md.auto_blip.upshift_cut_max_hold_s);
+                md.auto_blip.upshift_torque_ramp_s = abj.value("upshift_torque_ramp_s", md.auto_blip.upshift_torque_ramp_s);
+                if (!(md.auto_blip.upshift_cut_release_slip_rpm > 0.0)) {
+                    throw std::runtime_error(ctx + ".auto_blip: upshift_cut_release_slip_rpm must be > 0");
+                }
+                if (!(md.auto_blip.upshift_cut_max_hold_s > 0.0)) {
+                    throw std::runtime_error(ctx + ".auto_blip: upshift_cut_max_hold_s must be > 0");
+                }
+                if (!(md.auto_blip.upshift_torque_ramp_s >= 0.0)) {
+                    throw std::runtime_error(ctx + ".auto_blip: upshift_torque_ramp_s must be >= 0");
+                }
             }
             if (cj.contains("auto_shift")) {
                 const auto& asj = cj.at("auto_shift");

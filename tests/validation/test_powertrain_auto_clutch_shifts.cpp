@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 using namespace ps;
 
@@ -335,4 +336,177 @@ TEST_CASE("Auto-shift: the assist.auto_shift channel alone enables it; WOT upshi
     CHECK(rpm_at_2_3 > 6000.0);
     CHECK(rpm_at_2_3 < 6600.0);
     CHECK(pt.gear >= 3);
+}
+
+// Owner test drive 2026-09-25: "You said you would cut ignition during the
+// upshift, but I still see the speed ticking throughout the entire shift
+// process." The upshift cut ended with the gearbox phase, so for the whole
+// post-shift close (~0.8 s) the engine ran at full power through the
+// torque-following clutch (engine torque + the sync term, ~245 Nm vs. the
+// 200 Nm peak) and the car pulled at 3.5-4 m/s^2 - harder than locked 2nd.
+// With the cut held through the close until the engine is within
+// AutoBlipDesc::upshift_cut_release_slip_rpm of the new gear, the car coasts
+// through the shift, then the torque ramps back in over
+// upshift_torque_ramp_s. Per tick, from the shift request:
+namespace {
+struct UpshiftObs {
+    real t_neutral = -1.0;  // first tick the gearbox reports neutral (clutch open, dog out)
+    real t_dog_in = -1.0;   // first tick in the target gear
+    real t_cut_end = -1.0;  // first tick (after dog-in) the engine no longer reads the cut, pedal ceiling back to 1
+    real t_hole_end = -1.0; // first tick after t_cut_end with the clutch carrying at least the engine's torque demand
+    real t_lock = -1.0;
+    real v_neutral = 0.0, v_cut_end = 0.0;
+    real a_close_max = -1e9;        // max 50 ms-window accel between dog-in and the cut's end (the ClutchClosing hold)
+    real max_clutch_excess = -1e9;  // max |T_clutch| - (T_demand + max_sync_torque_nm) after the cut's end
+    real max_driven_abs_kappa = 0.0;
+    bool stalled = false;
+    int final_gear = 0;
+};
+
+constexpr real kMaxSyncTorqueNm = 50.0; // car_sedan.json auto_clutch.max_sync_torque_nm
+
+UpshiftObs watch_upshift(ps_test::VehicleTestRig& rig, int target_gear, real seconds) {
+    UpshiftObs o;
+    const real dt = rig.world->dt();
+    const int n = static_cast<int>(seconds / dt + 0.5);
+    std::vector<real> v_hist; // speed per tick, index i = after tick i+1
+    v_hist.reserve(static_cast<std::size_t>(n));
+    int i_dog_in = -1, i_cut_end = -1;
+    for (int i = 0; i < n; ++i) {
+        const real t = static_cast<real>(i + 1) * dt;
+        rig.world->step();
+        const auto& pt = rig.world->powertrain_state(rig.vehicle);
+        const auto dbg = rig.world->powertrain_debug(rig.vehicle);
+        const real v = speed(rig);
+        v_hist.push_back(v);
+        if (pt.engine_state == drivetrain::EngineState::Stalled) o.stalled = true;
+        for (std::size_t wi = 0; wi < 2; ++wi) {
+            o.max_driven_abs_kappa = std::max(o.max_driven_abs_kappa, std::abs(rig.world->wheel_telemetry(rig.vehicle, wi).slip_ratio));
+        }
+        if (o.t_neutral < 0.0 && pt.gear == 0) {
+            o.t_neutral = t;
+            o.v_neutral = v;
+        }
+        if (o.t_dog_in < 0.0 && o.t_neutral > 0.0 && pt.gear == target_gear) {
+            o.t_dog_in = t;
+            i_dog_in = i;
+        }
+        if (o.t_dog_in > 0.0 && o.t_cut_end < 0.0 && !dbg.ignition_cut) {
+            o.t_cut_end = t;
+            o.v_cut_end = v;
+            i_cut_end = i;
+        }
+        if (o.t_cut_end > 0.0) {
+            const real t_clutch = std::abs(dbg.clutch_torque);
+            if (o.t_hole_end < 0.0 && dbg.throttle_ceiling >= 1.0 && t_clutch >= dbg.engine_torque_demand) o.t_hole_end = t;
+            o.max_clutch_excess = std::max(o.max_clutch_excess, t_clutch - (dbg.engine_torque_demand + kMaxSyncTorqueNm));
+        }
+        if (o.t_lock < 0.0 && o.t_dog_in > 0.0 && dbg.clutch_stuck && std::abs(rad_s_to_rpm(dbg.clutch_slip)) < 80.0) o.t_lock = t;
+        o.final_gear = pt.gear;
+    }
+    const int win = static_cast<int>(0.05 / dt + 0.5);
+    if (i_dog_in >= 0 && i_cut_end > i_dog_in) {
+        for (int j = i_dog_in; j + win <= i_cut_end; ++j) {
+            o.a_close_max = std::max(o.a_close_max, (v_hist[static_cast<std::size_t>(j + win)] - v_hist[static_cast<std::size_t>(j)]) / (win * dt));
+        }
+    }
+    return o;
+}
+
+void check_upshift(const UpshiftObs& o, int target_gear, real max_kappa, real hole_max_s) {
+    const real a_coast = (o.t_cut_end > o.t_neutral) ? (o.v_cut_end - o.v_neutral) / (o.t_cut_end - o.t_neutral) : 1e9;
+    INFO("t_neutral=" << o.t_neutral << " t_dog_in=" << o.t_dog_in << " t_cut_end=" << o.t_cut_end << " t_hole_end=" << o.t_hole_end
+                      << " t_lock=" << o.t_lock << " a_coast_mean=" << a_coast << " a_close_max(50ms)=" << o.a_close_max
+                      << " max_clutch_excess=" << o.max_clutch_excess << " max|kappa|=" << o.max_driven_abs_kappa
+                      << " final_gear=" << o.final_gear);
+    CHECK(o.final_gear == target_gear);
+    CHECK_FALSE(o.stalled);
+    REQUIRE(o.t_dog_in > 0.0);
+    REQUIRE(o.t_cut_end > o.t_dog_in); // the cut outlives the gearbox phase
+    // The car coasts from the moment the clutch is open until the torque
+    // comes back (the synchro's brief input-shaft kick included in the mean).
+    CHECK(a_coast < 0.3);
+    CHECK(o.a_close_max < 0.3);
+    // Torque hole: shift request -> pedal ceiling back at 1 and the clutch
+    // carrying the engine's full torque demand again. Its length is set by
+    // the engine's own motoring decay (car_sedan.json's i4_2l_na: ~61 Nm at
+    // 5000 rpm on 0.16 kg*m^2, ~3300-3600 rpm/s) over the gear step, plus
+    // the gearbox shift (~0.17 s) and the torque ramp (0.10 s) - per-case
+    // bound from the measured value with ~10% margin.
+    CHECK(o.t_hole_end > 0.3);
+    CHECK(o.t_hole_end < hole_max_s);
+    CHECK(o.max_clutch_excess < 5.0);
+    CHECK(o.max_driven_abs_kappa < max_kappa);
+    CHECK(o.t_lock > 0.0);
+    CHECK(o.t_lock < 1.5);
+}
+
+// Waits (stepping) until the gearbox is commanded past `from_gear`; false on timeout.
+bool wait_for_upshift_request(ps_test::VehicleTestRig& rig, int from_gear, real timeout_s) {
+    const int n = static_cast<int>(timeout_s / rig.world->dt() + 0.5);
+    for (int i = 0; i < n; ++i) {
+        rig.world->step();
+        if (rig.world->powertrain_state(rig.vehicle).gear_target > from_gear) return true;
+    }
+    return false;
+}
+} // namespace
+
+// The owner's case (coordinator trace upshift_trace.json): 1st at WOT, 1->2
+// at ~44 km/h / ~6300 rpm. Before: no coasting phase at all (a 3.5-4.1 m/s^2
+// pull through the whole 0.78 s ClutchClosing).
+TEST_CASE("Upshift cut: WOT 1->2 near the shift point coasts through the shift, then the torque ramps back in",
+          "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.5);
+    REQUIRE(drive_until_speed(rig, 30.0 / 3.6, 15.0));
+    rig.world->set_control("throttle", 1.0);
+    REQUIRE(drive_until_speed(rig, 44.0 / 3.6, 10.0));
+    INFO("rpm_at_request=" << rig.world->powertrain_state(rig.vehicle).engine_rpm);
+    rig.world->set_control("gear_request", 2.0);
+    const UpshiftObs o = watch_upshift(rig, 2, 3.0);
+    check_upshift(o, 2, 0.2, 0.85); // measured 0.78 s (6033 rpm, a 2560 rpm step)
+}
+
+TEST_CASE("Upshift cut: WOT 2->3 near the shift point coasts through the shift, then the torque ramps back in",
+          "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.6);
+    REQUIRE(drive_until_speed(rig, 15.0 / 3.6, 15.0));
+    rig.world->set_control("gear_request", 2.0);
+    rig.world->set_control("throttle", 1.0);
+    REQUIRE(drive_until_speed(rig, 85.0 / 3.6, 30.0)); // 2nd at ~5900 rpm
+    REQUIRE(rig.world->powertrain_state(rig.vehicle).gear == 2);
+    INFO("rpm_at_request=" << rig.world->powertrain_state(rig.vehicle).engine_rpm);
+    rig.world->set_control("gear_request", 3.0);
+    const UpshiftObs o = watch_upshift(rig, 3, 3.0);
+    check_upshift(o, 3, 0.15, 0.65); // measured 0.57 s (6151 rpm, a 1950 rpm step)
+}
+
+// The same speed-matched cut on the auto-shift path (assist.auto_shift=1 at
+// WOT: the TCU itself requests 1->2 and 2->3 near up_rpm_at_full_throttle).
+// Pulls away in 1st at part throttle first: a WOT launch from rest spins
+// the front tyres (a TC topic, I5), and auto-shift reads ENGINE rpm, so it
+// would then upshift at a road speed whose 2nd-gear rpm is below its own
+// down_rpm_at_full_throttle.
+TEST_CASE("Upshift cut: auto-shift WOT upshifts coast through the shift too", "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("shift_up_count", 1.0);
+    rig.world->set_control("throttle", 0.5);
+    REQUIRE(drive_until_speed(rig, 30.0 / 3.6, 15.0));
+    REQUIRE(rig.world->powertrain_state(rig.vehicle).gear == 1);
+    rig.world->set_control("assist.auto_shift", 1.0);
+    rig.world->set_control("throttle", 1.0);
+    for (const int from : {1, 2}) {
+        INFO("auto upshift from " << from);
+        REQUIRE(wait_for_upshift_request(rig, from, 30.0));
+        INFO("rpm_at_request=" << rig.world->powertrain_state(rig.vehicle).engine_rpm);
+        const UpshiftObs o = watch_upshift(rig, from + 1, 1.5);
+        check_upshift(o, from + 1, from == 1 ? real(0.2) : real(0.15), from == 1 ? real(0.85) : real(0.65));
+    }
 }

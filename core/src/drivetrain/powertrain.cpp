@@ -577,8 +577,10 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             // overwritten with THIS substep's for next time.
             ctx.tcu_throttle_floor = tcu_prev_request_.throttle_floor;
             ctx.tcu_ignition_cut = tcu_prev_request_.ignition_cut;
+            ctx.tcu_throttle_ceiling = tcu_prev_request_.throttle_ceiling;
             tcu_prev_request_.throttle_floor = out.throttle_floor;
             tcu_prev_request_.ignition_cut = out.ignition_cut;
+            tcu_prev_request_.throttle_ceiling = out.throttle_ceiling;
         }
 
         Gearbox::StepInput gin;
@@ -610,7 +612,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         s.starter = ctx.starter;
         s.clutch_engaged_fraction = ctx.clutch_engaged_fraction;
         s.gearbox_in_neutral = ctx.gearbox_in_neutral;
-        const EngineTorqueMap::TcuRequest req{ctx.tcu_throttle_floor, ctx.tcu_ignition_cut};
+        const EngineTorqueMap::TcuRequest req{ctx.tcu_throttle_floor, ctx.tcu_ignition_cut, ctx.tcu_throttle_ceiling};
         last_engine_result_ = engine_->pre_solve(s, req, ctx.h);
         const auto& pre = last_engine_result_;
         assembly_.torque(engine_crank_, pre.tau0, pre.d);
@@ -820,6 +822,7 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         network_.set_omega(clutch_out_, clutch_out_target);
     }
     if (tcu_) tcu_->reset(opts.clutch_locked);
+    tcu_prev_request_ = {};
 
     // 7. Clear every friction row's stick flags/warm-start set (no shift, no
     //    stale LCP active-set guess carried across the teleport).

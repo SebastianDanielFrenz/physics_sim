@@ -130,6 +130,9 @@ public:
         dbg.throttle_eff = powertrain_.throttle_eff();
         dbg.idle_integrator = powertrain_.idle_integrator();
         dbg.synchro_torque = powertrain_.synchro_torque_debug();
+        dbg.engine_torque_demand = powertrain_.engine_torque_demand();
+        dbg.ignition_cut = powertrain_.tcu_request_debug().ignition_cut;
+        dbg.throttle_ceiling = powertrain_.tcu_request_debug().throttle_ceiling;
         return dbg;
     }
 

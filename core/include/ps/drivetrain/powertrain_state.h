@@ -62,6 +62,12 @@ struct PowertrainDebug {
     real gearbox_mesh_torque = 0.0, diff_mesh_torque = 0.0;
     std::array<real, 8> hub_shaft_torque{};
     real throttle_eff = 0.0, idle_integrator = 0.0, synchro_torque = 0.0;
+    // The engine's demanded net crank torque this substep (rev limiter
+    // ignored - the torque-following clutch close's feed-forward) and the
+    // TCU request it was computed with (upshift cut / pedal ceiling).
+    real engine_torque_demand = 0.0;
+    bool ignition_cut = false;
+    real throttle_ceiling = 1.0;
 };
 
 } // namespace ps::drivetrain

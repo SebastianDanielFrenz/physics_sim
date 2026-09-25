@@ -317,6 +317,98 @@ TEST_CASE("ManualTcu: blip and ignition-cut flags follow the shift phase", "[uni
     }
 }
 
+// Speed-matched upshift (owner test drive 2026-09-25: "I still see the
+// speed ticking throughout the entire shift"): with the auto-clutch on, the
+// upshift cut outlives the gearbox phase until the engine is within
+// upshift_cut_release_slip_rpm of the new gear's input shaft (or
+// upshift_cut_max_hold_s after dog-in), then the pedal comes back through a
+// ceiling ramped over upshift_torque_ramp_s.
+TEST_CASE("ManualTcu: the upshift cut is held through the post-shift close until the engine is speed-matched",
+          "[unit][drivetrain][tcu]") {
+    ManualTcu::Desc d;
+    d.auto_blip.upshift_cut = true;
+    d.auto_blip.upshift_cut_release_slip_rpm = 300.0;
+    d.auto_blip.upshift_cut_max_hold_s = 0.5;
+    d.auto_blip.upshift_torque_ramp_s = 0.1;
+    d.engine_inertia = 0.16; // torque-following close (as wired by Powertrain)
+    d.clutch_capacity_nm = 300.0;
+    const real h = 1.0 / 960.0;
+
+    // 2nd at WOT, 1->2 already commanded, gearbox mid-shift.
+    auto mid_shift = [] {
+        ManualTcu::Sensors s = base_sensors();
+        s.throttle_pedal = 1.0;
+        s.gearbox_current = 1;
+        s.gearbox_target = 2;
+        s.gearbox_phase = Gearbox::Phase::Selecting;
+        s.engine_omega = rpm_to_omega(6000.0);
+        s.gearbox_in_omega = rpm_to_omega(6000.0);
+        return s;
+    };
+    // Dog in (Idle in 2nd), engine flaring above the 2nd-gear input shaft.
+    auto dog_in = [](ManualTcu::Sensors s, real engine_rpm) {
+        s.gearbox_current = 2;
+        s.gearbox_target = 2;
+        s.gearbox_phase = Gearbox::Phase::Idle;
+        s.engine_omega = rpm_to_omega(engine_rpm);
+        s.gearbox_in_omega = rpm_to_omega(3500.0);
+        return s;
+    };
+
+    SECTION("held while the flare exceeds the release slip, released below it, then the ceiling ramps 0 -> 1") {
+        ManualTcu tcu(d);
+        auto out = tcu.step(mid_shift(), h, true);
+        CHECK(out.ignition_cut);
+        CHECK(out.throttle_ceiling == real(0.0));
+        out = tcu.step(dog_in(mid_shift(), 5000.0), h, false);
+        CHECK(out.ignition_cut); // 1500 rpm flare: still cut
+        out = tcu.step(dog_in(mid_shift(), 3900.0), h, false);
+        CHECK(out.ignition_cut); // 400 rpm
+        out = tcu.step(dog_in(mid_shift(), 3750.0), h, false);
+        CHECK_FALSE(out.ignition_cut); // 250 rpm < 300: released
+        CHECK(out.throttle_ceiling == Catch::Approx(h / 0.1));
+        // Never re-arms within the same shift, even if the engine flares again.
+        out = tcu.step(dog_in(mid_shift(), 4500.0), h, false);
+        CHECK_FALSE(out.ignition_cut);
+        for (int i = 0; i < 200; ++i) out = tcu.step(dog_in(mid_shift(), 3600.0), h, false);
+        CHECK(out.throttle_ceiling == real(1.0));
+    }
+
+    SECTION("a close that never synchronises releases the cut after upshift_cut_max_hold_s") {
+        ManualTcu tcu(d);
+        (void)tcu.step(mid_shift(), h, true);
+        ManualTcu::Outputs out;
+        int n_cut = 0;
+        for (int i = 0; i < 960; ++i) {
+            out = tcu.step(dog_in(mid_shift(), 5000.0), h, false);
+            if (out.ignition_cut) ++n_cut;
+        }
+        CHECK_FALSE(out.ignition_cut);
+        CHECK(n_cut >= 479); // 0.5 s at 960 Hz
+        CHECK(n_cut <= 481);
+    }
+
+    SECTION("manual clutch (assist.auto_clutch off): the cut still ends with the gearbox phase") {
+        ManualTcu tcu(d);
+        ManualTcu::Sensors s = mid_shift();
+        s.assist_auto_clutch = false;
+        CHECK(tcu.step(s, h, true).ignition_cut);
+        ManualTcu::Sensors s2 = dog_in(s, 5000.0);
+        const auto out = tcu.step(s2, h, false);
+        CHECK_FALSE(out.ignition_cut);
+        CHECK(out.throttle_ceiling < real(0.05)); // the ramp still applies
+    }
+
+    SECTION("assist.auto_blip off: no cut and no ceiling reach the engine") {
+        ManualTcu tcu(d);
+        ManualTcu::Sensors s = mid_shift();
+        s.assist_auto_blip = false;
+        const auto out = tcu.step(s, h, true);
+        CHECK_FALSE(out.ignition_cut);
+        CHECK(out.throttle_ceiling == real(1.0));
+    }
+}
+
 // Owner ruling (PHYS-033 P4 I3, post-C6): a Neutral -> gear engagement at
 // low speed is a LAUNCH, not a mid-drive shift - it must follow the
 // rpm-gated Launch law, not the fast forced Shift-mode ClutchClosing

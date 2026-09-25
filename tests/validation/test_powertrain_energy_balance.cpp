@@ -116,11 +116,14 @@ TEST_CASE("Powertrain energy ledger balances within 1% end to end (plan section 
     real shift_up_count = 0.0;
     int target_gear = 1;
     bool above_5500 = false;
-    // 16s (not 10s, this test's own original budget): measured 3 shifts (1st
-    // to 4th) takes close to 10s at throttle 0.8 from car_sedan.json's own
-    // gearing/torque curve - a setup-time budget, not a tolerance question
-    // (see the REQUIRE below), so widened rather than tuned.
-    const std::uint64_t phase2_ticks = static_cast<std::uint64_t>(17.5 / dt + 0.5);
+    // 21s (not 10s, this test's own original budget): a setup-time budget,
+    // not a tolerance question (see the REQUIRE below), so widened rather
+    // than tuned. Measured at throttle 0.8 from car_sedan.json's own
+    // gearing/torque curve: 4th at ~16.1 s with the upshift cut ending at
+    // dog-in; 17.6 s since the cut is held through the post-shift close
+    // (AutoBlipDesc::upshift_cut_release_slip_rpm - the car coasts ~0.4-0.5 s
+    // longer per shift, and 3rd alone takes ~8 s to climb to 5500 rpm).
+    const std::uint64_t phase2_ticks = static_cast<std::uint64_t>(21.0 / dt + 0.5);
     for (std::uint64_t i = 0; i < phase2_ticks; ++i) {
         rig.world->step();
         check_tick();
