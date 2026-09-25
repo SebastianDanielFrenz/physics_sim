@@ -370,20 +370,27 @@ TEST_CASE("Collision height resolution at 1 m sample spacing (R1)", "[terrain][t
         return std::max(max_err_samples, max_err_centres);
     };
 
+    // Bounds are the measured values (2026-09-25) plus margin: flat 0, 30% slope
+    // <= 1.15 mm, 5 mm step 4.9 um on BOTH sides of the step - i.e. the step
+    // height itself survives quantisation to ~10 um. Jolt stores each block's
+    // min/max as 16 bits over the shape's +-200 m range but every sample as
+    // 8 bits within its own block's range, so a flat or step-flat block is
+    // exact and only local relief within a block costs precision - far finer
+    // than the naive 400 m / 65536 = 6.1 mm.
     SECTION("flat ground") {
-        REQUIRE(measure("flat, datum 0", 0.0, [](real, real) { return real(0.0); }) < 0.01);
-        REQUIRE(measure("flat, datum ~768", 800.0, [](real, real) { return real(800.0); }) < 0.01);
+        REQUIRE(measure("flat, datum 0", 0.0, [](real, real) { return real(0.0); }) < 1e-4);
+        REQUIRE(measure("flat, datum ~768", 800.0, [](real, real) { return real(800.0); }) < 1e-4);
     }
     SECTION("30% slope") {
-        REQUIRE(measure("30% slope, datum 0", 0.0, [](real x, real) { return real(0.30) * x; }) < 0.01);
-        REQUIRE(measure("30% slope, datum ~768/~896", 800.0, [](real x, real) { return real(800.0) + real(0.30) * x; }) < 0.01);
+        REQUIRE(measure("30% slope, datum 0", 0.0, [](real x, real) { return real(0.30) * x; }) < 2e-3);
+        REQUIRE(measure("30% slope, datum ~768/~896", 800.0, [](real x, real) { return real(800.0) + real(0.30) * x; }) < 2e-3);
     }
     SECTION("5 mm step") {
         constexpr real kStepX = 127.5; // mid-tile, on a whole-metre sample boundary
         auto step_fn0 = [](real x, real) { return x < kStepX ? real(0.0) : real(0.005); };
         auto step_fn800 = [](real x, real) { return (x < kStepX ? real(0.0) : real(0.005)) + real(800.0); };
-        REQUIRE(measure("5 mm step, datum 0", 0.0, step_fn0) < 0.01);
-        REQUIRE(measure("5 mm step, datum ~768", 800.0, step_fn800) < 0.01);
+        REQUIRE(measure("5 mm step, datum 0", 0.0, step_fn0) < 1e-4);
+        REQUIRE(measure("5 mm step, datum ~768", 800.0, step_fn800) < 1e-4);
     }
 }
 
