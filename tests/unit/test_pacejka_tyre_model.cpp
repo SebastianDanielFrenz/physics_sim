@@ -447,3 +447,56 @@ TEST_CASE("Pacejka self-aligning moment stays bounded and same-signed past its p
         }
     }
 }
+
+// Longitudinal slide-to-peak shape (2026-09-25 refit, owner report "a lot of
+// wheel spin in 2nd"): past its peak a dry-asphalt tyre keeps most of its
+// drive (Wong, "Theory of Ground Vehicles" 5th ed., Table 1.3: mu_slide ~0.75
+// vs mu_peak 0.8-0.9). The previous pcx1 (1.65/1.6) put the large-slip
+// asymptote sin(C*pi/2) at 0.52-0.59 of peak, so a wheel that went past its
+// peak lost up to half its drive and latched in wheelspin. Pinned at fz0 and
+// 0.75*fz0 on the pure-slip curve (fx_pure, alpha = 0).
+TEST_CASE("Pacejka longitudinal slide-to-peak ratios stay realistic (all shipped tyres)", "[vehicle][tyre]") {
+    for (const std::string& path : shipped_tyre_paths()) {
+        const TyreDesc desc = ps::io::load_tyre_json(path);
+        auto model = create_pacejka_tyre_model(desc);
+        const bool tractor = path.find("tractor") != std::string::npos;
+        for (real fz_mult : {1.0, 0.75}) {
+            const real fz = fz_mult * desc.fz0;
+            auto fx = [&](real kappa) {
+                TyreSlipInput in;
+                in.kappa = kappa;
+                in.fz = fz;
+                in.vx = 20.0;
+                return model->evaluate(in).fx_pure;
+            };
+            real peak = 0.0;
+            real kappa_peak = 0.0;
+            for (int i = 1; i <= 6000; ++i) { // 5e-4 steps up to kappa = 3
+                const real kappa = 5e-4 * static_cast<real>(i);
+                const real f = fx(kappa);
+                if (f > peak) {
+                    peak = f;
+                    kappa_peak = kappa;
+                }
+            }
+            const real dfz = (fz - desc.fz0) / desc.fz0;
+            const real dx = fz * (desc.pdx1 + desc.pdx2 * dfz); // peak magnitude D (shape refit leaves it alone)
+            const real r1 = fx(1.0) / peak;
+            const real r3 = fx(3.0) / peak;
+            INFO("tyre=" << path << " fz_mult=" << fz_mult << " kappa_peak=" << kappa_peak << " peak/D=" << peak / dx
+                         << " Fx(1)/peak=" << r1 << " Fx(3)/peak=" << r3);
+            CHECK(peak == Approx(dx).epsilon(1e-4));
+            CHECK(kappa_peak >= 0.08);
+            // Passenger tyre: 0.08..0.15. An agricultural tyre peaks at or a
+            // little above a passenger tyre's slip (data/tyres/tractor_*.json's
+            // own source note: its refit kept the pre-refit peak slip).
+            CHECK(kappa_peak <= (tractor ? 0.16 : 0.15));
+            CHECK(r1 == Approx(0.85).margin(0.03));
+            CHECK(r3 >= 0.78);
+            CHECK(r3 <= 0.82);
+            // Monotone approach to the asymptote past the peak: no second hump.
+            CHECK(fx(2.0) <= fx(1.0));
+            CHECK(fx(3.0) <= fx(2.0));
+        }
+    }
+}

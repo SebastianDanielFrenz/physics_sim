@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.tyre/1",
   "name": "tractor_rear",
-  "source": "Plausible Magic Formula coefficients for a large radial agricultural rear/drive tyre (e.g. 620/70R42 class), same structure and reasoning as data/tyres/tractor_front.json (Pacejka MF5.2 equation form; Wong 'Theory of Ground Vehicles' 5th ed. for the agricultural-tyre friction/rolling-resistance trends). unloaded_radius=1.025 m matches data/models/tractor/tractor.rig.json's rear wheel radius. fz0 is higher than the front tyre's, reflecting a tractor's typical rear-heavy static load split (see data/vehicles/tractor.json's own corner-weight note). PHYS-036 (2026-09-24): same 'aligning' sign/shape fix as data/tyres/tractor_front.json (qdz1/qdz2 flipped from +0.11/-0.02 so Mz0 opposes Fy0 per Pacejka's own convention; qbz1 raised 6.0 -> 52.8 so the curve peaks at ~4.5 deg of slip instead of ~39.6 deg, see that file's source note for the full rationale).",
+  "source": "Plausible Magic Formula coefficients for a large radial agricultural rear/drive tyre (e.g. 620/70R42 class), same structure and reasoning as data/tyres/tractor_front.json (Pacejka MF5.2 equation form; Wong 'Theory of Ground Vehicles' 5th ed. for the agricultural-tyre friction/rolling-resistance trends). unloaded_radius=1.025 m matches data/models/tractor/tractor.rig.json's rear wheel radius. fz0 is higher than the front tyre's, reflecting a tractor's typical rear-heavy static load split (see data/vehicles/tractor.json's own corner-weight note). PHYS-036 (2026-09-24): same 'aligning' sign/shape fix as data/tyres/tractor_front.json (qdz1/qdz2 flipped from +0.11/-0.02 so Mz0 opposes Fy0 per Pacejka's own convention; qbz1 raised 6.0 -> 52.8 so the curve peaks at ~4.5 deg of slip instead of ~39.6 deg, see that file's source note for the full rationale). Longitudinal shape refit (2026-09-25, alongside data/tyres/passenger_car_225_45r17.json's): pcx1 1.6 -> 1.42 and pex1 0.05 -> -0.55; pdx*/pkx* unchanged. The old C put the Fx0 large-slip asymptote at sin(C*pi/2) = 0.59 of peak (Fx(kappa=1)/peak 0.71, Fx(kappa=3)/peak 0.63), inconsistent with this file's own lateral block (pcy1 1.3, asymptote 0.89) and with agricultural drive tyres' measured traction-vs-slip curves, which on firm ground fall only mildly past the peak and on soil keep rising toward 100% slip (Wong ch. 2/Brixius-type net-traction curves) - an ag tyre that loses 40% of its drive once it slips is the wrong direction. Same target band as the passenger tyre (Fx(kappa=1)/peak ~0.84, Fx(kappa=3)/peak ~0.81); E=-0.55 rather than -0.45 keeps peak slip at 0.148 at fz0, no later than before (an ag tyre's peak slip is expected at or a little above a passenger tyre's, so not pulled lower).",
   "unloaded_radius": 1.025,
   "width": 0.62,
   "rim_radius": 0.533,
@@ -18,8 +18,8 @@
   "lambda_mux": 1.0,
   "lambda_muy": 1.0,
   "longitudinal": {
-    "pcx1": 1.6, "pdx1": 0.88, "pdx2": -0.08, "pdx3": 0.0,
-    "pex1": 0.05, "pex2": 0.0, "pex3": 0.0, "pex4": 0.0,
+    "pcx1": 1.42, "pdx1": 0.88, "pdx2": -0.08, "pdx3": 0.0,
+    "pex1": -0.55, "pex2": 0.0, "pex3": 0.0, "pex4": 0.0,
     "pkx1": 14.0, "pkx2": 0.0, "pkx3": 0.04,
     "phx1": 0.0, "phx2": 0.0,
     "pvx1": 0.0, "pvx2": 0.0
