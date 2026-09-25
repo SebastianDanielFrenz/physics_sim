@@ -148,7 +148,7 @@ GearTopSpeedResult solve_gear_top_speed(const ps_test::RefCar& rc, const ps_test
 // steady-state-per-gear reference (bisection, not an integrator - no
 // launch/shift transient to model, which is exactly why this test is
 // tractable where test 1 is not, see this file's own header comment).
-TEST_CASE("Top speed is within 3% of the steady-state-per-gear reference", "[validation][vehicle][powertrain][long]") {
+TEST_CASE("Top speed is within 3% of the steady-state-per-gear reference", "[validation][vehicle][powertrain][drivetrain][long]") {
     const real mass = 1500.0;
     const real chassis_origin_height = 0.6;
     auto settle_rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,

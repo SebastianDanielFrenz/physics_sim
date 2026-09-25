@@ -144,7 +144,7 @@ void run_and_check_lockup(World& world, VehicleId vehicle, real seconds, const c
 // start (from rest the lock-up either stalls the engine or spins the tyres
 // [A] - the plan's own reason for the rolling start).
 TEST_CASE("Clutch lock-up (manual, rolling start) shows no spike above capacity or the pre-lock/steady level",
-          "[validation][vehicle][powertrain]") {
+          "[validation][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
@@ -226,7 +226,7 @@ TEST_CASE("Clutch lock-up (manual, rolling start) shows no spike above capacity 
 // session's two-failed-attempts stop condition - this is the sibling finding
 // to test_powertrain_engine_braking.cpp's 3% gate).
 TEST_CASE("Clutch lock-up (auto-clutch launch from rest) shows no spike above capacity or the pre-lock/steady level",
-          "[validation][vehicle][powertrain][!mayfail]") {
+          "[validation][vehicle][powertrain][drivetrain][!mayfail]") {
     const real mass = 1500.0;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);

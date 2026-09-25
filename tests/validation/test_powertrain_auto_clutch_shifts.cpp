@@ -77,7 +77,7 @@ void run_watch(ps_test::VehicleTestRig& rig, real seconds, int target_gear, Watc
 // but must never leave the car silently disconnected). Before the fix the
 // engine stalled ~0.25 s after the request (rpm 391 -> 0) and the car
 // coasted at -0.1 m/s^2 for the rest of the run, WOT included.
-TEST_CASE("Auto-clutch: selecting 2nd at walking pace never stalls and pulls away on throttle", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch: selecting 2nd at walking pace never stalls and pulls away on throttle", "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -107,7 +107,7 @@ TEST_CASE("Auto-clutch: selecting 2nd at walking pace never stalls and pulls awa
 // Primary case (owner): a part-throttle 1->2 upshift at a realistic ~15 km/h
 // (2nd ~1050 rpm): the clutch must lock within a bounded time, the engine
 // must not stall and the driven wheels must not spin.
-TEST_CASE("Auto-clutch: part-throttle 1->2 upshift at 15 km/h locks promptly without wheelspin", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch: part-throttle 1->2 upshift at 15 km/h locks promptly without wheelspin", "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -146,7 +146,7 @@ void hold_speed(ps_test::VehicleTestRig& rig, real v_target, real seconds) {
 // the full 300 Nm clutch capacity plus the flywheel's slip energy into the
 // front axle: FL/FR kappa ~1.0 for ~1 s right after the shift (probe
 // wot23: 1->2 at 30 km/h WOT).
-TEST_CASE("Auto-clutch: WOT 1->2 upshift from a non-spinning 1st keeps the driven wheels below peak slip", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch: WOT 1->2 upshift from a non-spinning 1st keeps the driven wheels below peak slip", "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -179,7 +179,7 @@ TEST_CASE("Auto-clutch: WOT 1->2 upshift from a non-spinning 1st keeps the drive
     CHECK(speed(rig2) - v_request > 3.0 * 2.0); // > 2 m/s^2 mean: pulling hard, not a torque hole
 }
 
-TEST_CASE("Auto-clutch: WOT in 2nd from a steady 20 km/h does not spin the driven wheels", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch: WOT in 2nd from a steady 20 km/h does not spin the driven wheels", "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -207,7 +207,7 @@ TEST_CASE("Auto-clutch: WOT in 2nd from a steady 20 km/h does not spin the drive
 }
 
 // Owner's primary case at full throttle: 1->2 at a realistic 15 km/h.
-TEST_CASE("Auto-clutch: full-throttle 1->2 upshift at 15 km/h locks promptly without wheelspin", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch: full-throttle 1->2 upshift at 15 km/h locks promptly without wheelspin", "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -231,7 +231,7 @@ TEST_CASE("Auto-clutch: full-throttle 1->2 upshift at 15 km/h locks promptly wit
 // Haptics agent's report (unverified, adapter-side): after a 2->3 upshift at
 // part throttle the clutch sat at ~0.07 engagement for seconds. From a
 // realistic shift point (2nd at ~2500 rpm) the clutch must lock within 1 s.
-TEST_CASE("Auto-clutch: part-throttle 2->3 upshift from a realistic shift point locks within 1 s", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch: part-throttle 2->3 upshift from a realistic shift point locks within 1 s", "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -267,7 +267,7 @@ TEST_CASE("Auto-clutch: part-throttle 2->3 upshift from a realistic shift point 
 // as a rolling shift and opened the clutch (gear in after ~0.65 s); uphill
 // the gearbox aborted after abort_after_s and left the car in Neutral with
 // the engine on the limiter indefinitely.
-TEST_CASE("Auto-clutch: N->1 requested at WOT from rest engages and drives away", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch: N->1 requested at WOT from rest engages and drives away", "[validation][vehicle][powertrain][drivetrain]") {
     for (const real grade : {real(0.0), real(-0.15)}) { // -0.15: 15% uphill (+X is downhill, see build_vehicle_rig)
         auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
                                               Vec3{2.0, 0.4, 0.15}, 0.6, grade, 4, Vec3::unit_y(), 240.0, 960.0, 3000.0);
@@ -300,7 +300,7 @@ TEST_CASE("Auto-clutch: N->1 requested at WOT from rest engages and drives away"
 // The channel is the switch (plan section 7.1); the desc flag is only its
 // default. car_sedan.json: up_rpm_at_full_throttle 6300.
 TEST_CASE("Auto-shift: the assist.auto_shift channel alone enables it; WOT upshifts near up_rpm_at_full_throttle",
-          "[validation][vehicle][powertrain]") {
+          "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     REQUIRE(rig.world->get_control("assist.auto_shift") == 0.0); // desc default (enabled: false)
@@ -460,7 +460,7 @@ bool wait_for_upshift_request(ps_test::VehicleTestRig& rig, int from_gear, real 
 // at ~44 km/h / ~6300 rpm. Before: no coasting phase at all (a 3.5-4.1 m/s^2
 // pull through the whole 0.78 s ClutchClosing).
 TEST_CASE("Upshift cut: WOT 1->2 near the shift point coasts through the shift, then the torque ramps back in",
-          "[validation][vehicle][powertrain]") {
+          "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -475,7 +475,7 @@ TEST_CASE("Upshift cut: WOT 1->2 near the shift point coasts through the shift, 
 }
 
 TEST_CASE("Upshift cut: WOT 2->3 near the shift point coasts through the shift, then the torque ramps back in",
-          "[validation][vehicle][powertrain]") {
+          "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("gear_request", 1.0);
@@ -497,7 +497,7 @@ TEST_CASE("Upshift cut: WOT 2->3 near the shift point coasts through the shift, 
 // the front tyres (a TC topic, I5), and auto-shift reads ENGINE rpm, so it
 // would then upshift at a road speed whose 2nd-gear rpm is below its own
 // down_rpm_at_full_throttle.
-TEST_CASE("Upshift cut: auto-shift WOT upshifts coast through the shift too", "[validation][vehicle][powertrain]") {
+TEST_CASE("Upshift cut: auto-shift WOT upshifts coast through the shift too", "[validation][vehicle][powertrain][drivetrain]") {
     auto rig = make_sedan();
     ps_test::settle(*rig.world, 1.0);
     rig.world->set_control("shift_up_count", 1.0);

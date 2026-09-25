@@ -25,7 +25,7 @@ real sum_abs_terms(const drivetrain::PowertrainEnergy& e) {
 }
 } // namespace
 
-TEST_CASE("Powertrain energy ledger balances within 1% end to end (plan section 13.6 script)", "[validation][vehicle][powertrain]") {
+TEST_CASE("Powertrain energy ledger balances within 1% end to end (plan section 13.6 script)", "[validation][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                            Vec3{2.0, 0.4, 0.15}, 0.6, 0.0, 4, Vec3::unit_y(), 240.0, 960.0,

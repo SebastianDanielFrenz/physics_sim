@@ -66,7 +66,7 @@ real front_static_fraction_from_settle(ps::World& world, VehicleId vehicle) {
 // reference (neutral control case: sim 0.303 m/s^2 vs hand 0.301 m/s^2).
 // A 2nd, earlier attempt (rolling resistance coupled into the hub) chased a
 // term that was never wrong and was reverted.
-TEST_CASE("Engine braking in 4th decelerates within 3% of the reference model", "[validation][vehicle][powertrain]") {
+TEST_CASE("Engine braking in 4th decelerates within 3% of the reference model", "[validation][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     const real chassis_origin_height = 0.6; // == h_cg (mass at the chassis body's own origin)
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
@@ -183,7 +183,7 @@ TEST_CASE("Engine braking in 4th decelerates within 3% of the reference model", 
 
 // Diagnostic (not run by default): per-term force/torque/energy breakdown of
 // test 5's operating point, sim vs. reference, over the window [2.9, 3.1] s.
-TEST_CASE("Engine braking in 4th: term breakdown diagnostic", "[.][diag][validation][vehicle][powertrain]") {
+TEST_CASE("Engine braking in 4th: term breakdown diagnostic", "[.][diag][validation][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     const real h_cg = 0.6;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
@@ -289,7 +289,7 @@ TEST_CASE("Engine braking in 4th: term breakdown diagnostic", "[.][diag][validat
 // shift), then the clutch is DUMPED (0) in one tick with no throttle -
 // auto-clutch off (manual dump). The driveline, rigidly loaded against the
 // handbraked wheels via the slope, must stall the engine.
-TEST_CASE("Stall under load: dumping the clutch against a handbraked uphill load stalls the engine", "[validation][vehicle][powertrain]") {
+TEST_CASE("Stall under load: dumping the clutch against a handbraked uphill load stalls the engine", "[validation][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                            Vec3{2.0, 0.4, 0.15}, 0.6, /*slope_grade=*/0.30);
@@ -363,7 +363,7 @@ TEST_CASE("Stall under load: dumping the clutch against a handbraked uphill load
 // PHYS-033 P4 I3 plan section 13.5(b): gentle launch, idle control only -
 // engagement kept below the idle engine's surplus torque must NOT stall it,
 // and the car creeps away on idle alone.
-TEST_CASE("Gentle idle-only launch creeps away without stalling", "[validation][vehicle][powertrain]") {
+TEST_CASE("Gentle idle-only launch creeps away without stalling", "[validation][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
@@ -443,7 +443,7 @@ TEST_CASE("Gentle idle-only launch creeps away without stalling", "[validation][
 // stop in 1st with auto-clutch on must never stall (this is also the exact
 // scenario the C8 smoke test's own anti-stall panic-release fix targets,
 // CLAUDE.md's "Vehicle system"/manual_tcu.cpp's own comment).
-TEST_CASE("Auto-clutch anti-stall never lets the engine stall while braking to a stop", "[validation][vehicle][powertrain]") {
+TEST_CASE("Auto-clutch anti-stall never lets the engine stall while braking to a stop", "[validation][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
