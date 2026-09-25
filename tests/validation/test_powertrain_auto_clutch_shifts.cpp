@@ -290,3 +290,49 @@ TEST_CASE("Auto-clutch: N->1 requested at WOT from rest engages and drives away"
         CHECK(speed(rig) > 10.0 / 3.6); // actually driving away within the 3 s
     }
 }
+
+// Coordinator report 2026-09-25: with the runtime assist.auto_shift channel
+// switched on (the HUD/gamepad toggle) 1st gear at WOT sat on the 6800 rpm
+// limiter for 25 s - ManualTcu gated auto-shift on AutoShiftDesc::enabled
+// (false in car_sedan.json), never on the channel, while
+// PowertrainSnapshot::assist_active_bits reported bit2 from the channel.
+// The channel is the switch (plan section 7.1); the desc flag is only its
+// default. car_sedan.json: up_rpm_at_full_throttle 6300.
+TEST_CASE("Auto-shift: the assist.auto_shift channel alone enables it; WOT upshifts near up_rpm_at_full_throttle",
+          "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    REQUIRE(rig.world->get_control("assist.auto_shift") == 0.0); // desc default (enabled: false)
+    rig.world->set_control("assist.auto_shift", 1.0);
+    rig.world->set_control("throttle", 1.0); // auto-shift itself selects 1st from N (throttle > 0.05 at rest)
+    int prev_gear = rig.world->powertrain_state(rig.vehicle).gear;
+    real prev_rpm = rig.world->powertrain_state(rig.vehicle).engine_rpm;
+    real rpm_at_1_2 = -1.0, rpm_at_2_3 = -1.0, t_1 = -1.0;
+    bool stalled = false;
+    const real dt = rig.world->dt();
+    for (int i = 1; i <= static_cast<int>(20.0 / dt); ++i) {
+        const auto& pt = rig.world->powertrain_state(rig.vehicle);
+        prev_gear = pt.gear;
+        prev_rpm = pt.engine_rpm;
+        const int target_before = pt.gear_target;
+        rig.world->step();
+        const auto& now = rig.world->powertrain_state(rig.vehicle);
+        if (now.engine_state == drivetrain::EngineState::Stalled) stalled = true;
+        if (t_1 < 0.0 && now.gear == 1) t_1 = i * dt;
+        // the rpm at which the TCU commanded the upshift (target moved past the current gear)
+        if (now.gear_target == 2 && target_before == 1 && rpm_at_1_2 < 0.0) rpm_at_1_2 = prev_rpm;
+        if (now.gear_target == 3 && target_before == 2 && rpm_at_2_3 < 0.0) rpm_at_2_3 = prev_rpm;
+    }
+    (void)prev_gear;
+    const auto& pt = rig.world->powertrain_state(rig.vehicle);
+    INFO("t_in_1st=" << t_1 << " rpm_at_1_2=" << rpm_at_1_2 << " rpm_at_2_3=" << rpm_at_2_3 << " final_gear=" << int(pt.gear)
+                     << " v_end_kmh=" << speed(rig) * 3.6 << " assist_bits=" << pt.assist_active_bits);
+    CHECK_FALSE(stalled);
+    CHECK((pt.assist_active_bits & 4u) != 0u);
+    CHECK(t_1 > 0.0);
+    CHECK(rpm_at_1_2 > 6000.0);
+    CHECK(rpm_at_1_2 < 6600.0);
+    CHECK(rpm_at_2_3 > 6000.0);
+    CHECK(rpm_at_2_3 < 6600.0);
+    CHECK(pt.gear >= 3);
+}

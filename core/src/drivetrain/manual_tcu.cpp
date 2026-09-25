@@ -54,7 +54,13 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                 const int step = pending_ > 0 ? 1 : -1;
                 desired_target = std::clamp(s.gearbox_current + step, s.min_gear, s.max_gear);
                 pending_ -= step;
-            } else if (desc_.auto_shift.enabled && pending_ == 0 && s.gearbox_phase == Gearbox::Phase::Idle) {
+            } else if (s.assist_auto_shift && pending_ == 0 && s.gearbox_phase == Gearbox::Phase::Idle) {
+                // Gated on the runtime assist.auto_shift channel (plan
+                // section 7.1; AutoShiftDesc::enabled is only that channel's
+                // default, applied by World::create_vehicle). Gating on the
+                // desc flag left the HUD's auto-shift toggle (and
+                // assist_active_bits bit2) ON while nothing shifted: 1st at
+                // WOT sat on the limiter for 25 s.
                 // 6.5.4: auto-shift driver aid.
                 if (d_up != 0 || d_dn != 0) time_in_gear_ = real(0.0); // a manual press overrides / resets the timer
                 const real engine_rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
@@ -242,12 +248,13 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             mode_ = (slip_rpm < desc_.auto_clutch.lock_slip_rpm) ? ClutchMode::Locked : ClutchMode::Launch;
         }
     }
-    if (!desc_.auto_clutch.enabled) e_auto_ = real(1.0);
+    // (AutoClutchDesc/AutoBlipDesc::enabled are likewise only the default of
+    // their assist.* channels; the outputs below are gated on the channels.)
 
     // --- 6.5.3: auto-blip and upshift cut --------------------------------------
     real throttle_floor = real(0.0);
     bool ignition_cut = false;
-    if (desc_.auto_blip.enabled) {
+    {
         const bool downshifting = desired_target < s.gearbox_current && desired_target > 0;
         const bool blip_window = downshifting &&
                                   (s.gearbox_phase == Gearbox::Phase::Selecting || s.gearbox_phase == Gearbox::Phase::Synchronising ||

@@ -286,7 +286,7 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 
 | Field | Type | Default | Validation | Meaning |
 |---|---|---|---|---|
-| `enabled` | bool | `true` | — | master on/off |
+| `enabled` | bool | `true` | — | default of the runtime `assist.auto_clutch` channel (the channel is the on/off switch, see below) |
 | `bite_rpm` | real (rpm) | `1100` | must satisfy `bite_rpm < full_rpm_min` (see below) | engagement 0 at/below this engine speed (launch law) |
 | `full_rpm_min` | real (rpm) | `1600` | `bite_rpm < full_rpm_min <= full_rpm_max`, else `"<ctx>.auto_clutch: must satisfy bite_rpm < full_rpm_min <= full_rpm_max"` | engagement 1 at this rpm with throttle 0 |
 | `full_rpm_max` | real (rpm) | `3000` | see above | engagement 1 at this rpm with throttle 1 |
@@ -304,7 +304,7 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `enabled` | bool | `true` | master on/off |
+| `enabled` | bool | `true` | default of the runtime `assist.auto_blip` channel |
 | `kp_per_rpm` | real | `0.002` | throttle-blip gain |
 | `max_throttle` | real | `1.0` | blip ceiling |
 | `upshift_cut` | bool | `true` | cut throttle momentarily on an upshift |
@@ -313,7 +313,7 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `enabled` | bool | `false` | master on/off |
+| `enabled` | bool | `false` | default of the runtime `assist.auto_shift` channel |
 | `up_rpm_at_zero_throttle` / `up_rpm_at_full_throttle` | real (rpm) | `2500` / `6300` | upshift rpm thresholds, interpolated by throttle |
 | `down_rpm_at_zero_throttle` / `down_rpm_at_full_throttle` | real (rpm) | `1300` / `2800` | downshift rpm thresholds |
 | `min_time_in_gear_s` | real (s) | `1.0` | shift-hysteresis timer |
@@ -332,6 +332,10 @@ at vehicle-creation time (`core/src/world/world.cpp`) — `"steer"`,
 `"assist.auto_clutch"`, `"assist.auto_blip"`, `"assist.auto_shift"`. The
 first vehicle created in a `World` reads the bare names; every subsequent
 vehicle reads a `"v<index>."`-prefixed version (e.g. `"v1.steer"`).
+The three `assist.*` channels (> 0.5 means on) are the runtime on/off
+switches for the `manual_tcu` driver aids; each one's value when the
+vehicle is created is its controller block's `enabled` flag (0 if the
+vehicle has no `manual_tcu`).
 
 ## Minimal complete example
 

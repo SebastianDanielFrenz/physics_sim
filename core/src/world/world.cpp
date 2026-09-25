@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <string>
+#include <variant>
 
 namespace ps {
 
@@ -452,9 +453,21 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     channel_indices.gear_request = ensure_control_channel_index(channel_prefix + "gear_request", drivetrain::kGearRequestNone);
     channel_indices.ignition = ensure_control_channel_index(channel_prefix + "ignition", real(1.0));
     channel_indices.starter = ensure_control_channel_index(channel_prefix + "starter");
-    channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", real(1.0));
-    channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", real(1.0));
-    channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift");
+    // assist.*: the RUNTIME switch for each driver aid (plan section 7.1 -
+    // toggled from the gamepad/HUD); the TCU desc's own `enabled` flags are
+    // only these channels' defaults. No manual_tcu: created, default 0,
+    // ignored.
+    real assist_clutch_default = real(0.0), assist_blip_default = real(0.0), assist_shift_default = real(0.0);
+    for (const drivetrain::ControllerDesc& cd : desc.controllers) {
+        if (const auto* tcu = std::get_if<drivetrain::ManualTcuDesc>(&cd.params)) {
+            assist_clutch_default = tcu->auto_clutch.enabled ? real(1.0) : real(0.0);
+            assist_blip_default = tcu->auto_blip.enabled ? real(1.0) : real(0.0);
+            assist_shift_default = tcu->auto_shift.enabled ? real(1.0) : real(0.0);
+        }
+    }
+    channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", assist_clutch_default);
+    channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", assist_blip_default);
+    channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift", assist_shift_default);
 
     // Parking-slope creep fix (defect D2): opt the chassis body in to
     // IRigidBackend::set_integrate_sub_threshold_rotation - see that

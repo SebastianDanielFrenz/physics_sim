@@ -15,7 +15,7 @@
 namespace ps::drivetrain {
 
 struct AutoClutchDesc {
-    bool enabled = true;
+    bool enabled = true; // default of the runtime assist.* channel (World::create_vehicle); the channel is the switch
     real bite_rpm = 1100.0;      // engagement 0 at or below this engine speed (launch law)
     real full_rpm_min = 1600.0;  // engagement 1 at this rpm with throttle 0 ...
     real full_rpm_max = 3000.0;  // ... and at this rpm with throttle 1
@@ -88,14 +88,14 @@ struct AutoClutchDesc {
 };
 
 struct AutoBlipDesc {
-    bool enabled = true;
+    bool enabled = true; // default of the runtime assist.* channel (World::create_vehicle); the channel is the switch
     real kp_per_rpm = 0.002;
     real max_throttle = 1.0;
     bool upshift_cut = true;
 };
 
 struct AutoShiftDesc {
-    bool enabled = false;
+    bool enabled = false; // default of the runtime assist.* channel (World::create_vehicle); the channel is the switch
     real up_rpm_at_zero_throttle = 2500.0, up_rpm_at_full_throttle = 6300.0;
     real down_rpm_at_zero_throttle = 1300.0, down_rpm_at_full_throttle = 2800.0;
     real min_time_in_gear_s = 1.0;
