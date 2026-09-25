@@ -744,6 +744,14 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 if (!(md.auto_clutch.rolling_reengage_rpm > md.auto_clutch.anti_stall_rpm)) {
                     throw std::runtime_error(ctx + ".auto_clutch: rolling_reengage_rpm must be > anti_stall_rpm");
                 }
+                md.auto_clutch.sync_time_s = acj.value("sync_time_s", md.auto_clutch.sync_time_s);
+                md.auto_clutch.max_sync_torque_nm = acj.value("max_sync_torque_nm", md.auto_clutch.max_sync_torque_nm);
+                if (!(md.auto_clutch.sync_time_s > 0.0)) {
+                    throw std::runtime_error(ctx + ".auto_clutch: sync_time_s must be > 0");
+                }
+                if (!(md.auto_clutch.max_sync_torque_nm > 0.0)) {
+                    throw std::runtime_error(ctx + ".auto_clutch: max_sync_torque_nm must be > 0");
+                }
                 if (!(md.auto_clutch.bite_rpm < md.auto_clutch.full_rpm_min && md.auto_clutch.full_rpm_min <= md.auto_clutch.full_rpm_max)) {
                     throw std::runtime_error(ctx + ".auto_clutch: must satisfy bite_rpm < full_rpm_min <= full_rpm_max");
                 }

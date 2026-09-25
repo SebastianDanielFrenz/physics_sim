@@ -25,6 +25,14 @@ public:
         AutoBlipDesc auto_blip;
         AutoShiftDesc auto_shift;
         int max_pending_steps = 2;
+        // Filled by Powertrain from the network (not from the loader): the
+        // engine-side clutch node's inertia (kg*m^2) and the clutch's
+        // kinetic capacity at engagement 1 (Nm). The torque-following close
+        // (AutoClutchDesc::sync_time_s) needs both; if either is <= 0 (a
+        // bare ManualTcu, e.g. a unit test) the TCU falls back to the
+        // legacy fixed-rate close (e_auto -> 1 at 1/close_time_s).
+        real engine_inertia = 0.0;
+        real clutch_capacity_nm = 0.0;
     };
 
     enum class ClutchMode : std::uint8_t { Launch, Locked, Shift };
@@ -44,6 +52,12 @@ public:
         Gearbox::Phase gearbox_phase = Gearbox::Phase::Idle;
         real synchro_target_ratio = 0.0; // Gearbox::StepResult::synchro_target_ratio, 0 if not Synchronising
         int min_gear = -1, max_gear = 1; // this vehicle's gearbox bounds (-m..n)
+        // Net crank torque the engine's throttle demand asks for, excluding
+        // the clutch and ignoring the rev limiter (EngineTorqueMap::
+        // PreSolveResult::torque_demand; Nm, positive = driving), from the
+        // engine's PREVIOUS substep (one substep lagged, like every other
+        // engine<->TCU exchange - plan section 7.2).
+        real engine_torque_nm = 0.0;
     };
 
     struct Outputs {
@@ -82,11 +96,19 @@ public:
         pending_ = 0;
         last_target_seen_valid_ = false;
         time_in_gear_ = real(0.0);
+        upshift_cut_armed_ = false;
         mode_ = clutch_locked ? ClutchMode::Locked : ClutchMode::Launch;
         e_auto_ = clutch_locked ? real(1.0) : real(0.0);
     }
 
 private:
+    // The torque-following close's engagement target (AutoClutchDesc::
+    // sync_time_s), in [0, 1]. Pure function of the sensors.
+    [[nodiscard]] real sync_close_target(const Sensors& s) const;
+    [[nodiscard]] bool torque_following_close() const {
+        return desc_.engine_inertia > real(0.0) && desc_.clutch_capacity_nm > real(0.0);
+    }
+
     Desc desc_;
 
     // Request arbitration state (plan section 6.5.1).
@@ -102,6 +124,9 @@ private:
 
     // Auto-shift state (plan section 6.5.4).
     real time_in_gear_ = 0.0;
+
+    // The shift in progress started as an upshift (6.5.3's upshift cut).
+    bool upshift_cut_armed_ = false;
 };
 
 } // namespace ps::drivetrain

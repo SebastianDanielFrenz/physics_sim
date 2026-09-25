@@ -84,6 +84,14 @@ public:
         real throttle_eff = 0.0;
         bool limiter_active = false, dfco_active = false, starter_active = false;
         real torque_estimate = 0.0; // tau_smooth + tau_comb (HUD/telemetry, plan section 6.1.8)
+        // Net crank torque (Coulomb row included) the current throttle demand
+        // (pedal/blip/idle governor) asks for at this rpm, IGNORING the rev
+        // limiter: motoring + theta_eff * (wot - motoring). The TCU's
+        // torque-following clutch close uses it as its feed-forward - the
+        // limiter is a speed governor that answers the clutch's own load,
+        // so feeding its (clutch-dependent) output back into the clutch
+        // target held a flared engine on the limiter indefinitely.
+        real torque_demand = 0.0;
     };
 
     struct PostSolveResult {

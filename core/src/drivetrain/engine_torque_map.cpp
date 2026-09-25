@@ -158,6 +158,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.dfco_active = dfco_active_;
     r.starter_active = starter_active;
     r.torque_estimate = tau_smooth_ + tau_comb_;
+    r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
     return r;
 }
 

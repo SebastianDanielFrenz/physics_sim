@@ -499,6 +499,13 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         md.auto_blip = tcu_desc->auto_blip;
         md.auto_shift = tcu_desc->auto_shift;
         md.max_pending_steps = tcu_desc->max_pending_steps;
+        // Torque-following close inputs (AutoClutchDesc::sync_time_s): the
+        // engine-side clutch node's inertia and the clutch's capacity at
+        // engagement 1 (check_ref above guarantees both components exist).
+        if (clutch_) {
+            md.engine_inertia = network_.node_inertia(clutch_in_);
+            md.clutch_capacity_nm = clutch_->desc().capacity_nm;
+        }
         tcu_ = std::make_unique<ManualTcu>(md);
     }
 
@@ -559,6 +566,9 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.synchro_target_ratio = last_gearbox_result_.synchro_target_ratio;
             s.min_gear = -static_cast<int>(gearbox_->desc().reverse_ratios.size());
             s.max_gear = static_cast<int>(gearbox_->desc().forward_ratios.size());
+            // Engine's demanded net crank torque (limiter ignored), from its
+            // previous substep - EngineTorqueMap::PreSolveResult::torque_demand.
+            if (engine_) s.engine_torque_nm = last_engine_result_.torque_demand;
             const ManualTcu::Outputs out = tcu_->step(s, ctx.h, ctx.first_substep_of_tick);
             gearbox_->set_target(out.gearbox_target);
             ctx.e_auto = out.e_auto;

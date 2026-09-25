@@ -128,3 +128,129 @@ TEST_CASE("Auto-clutch: part-throttle 1->2 upshift at 15 km/h locks promptly wit
     CHECK(w.max_driven_abs_kappa < 0.1);
     CHECK(speed(rig) > v_request);
 }
+
+// Holds the car near v_target (m/s) in the current gear with a simple
+// proportional throttle law for `seconds`.
+void hold_speed(ps_test::VehicleTestRig& rig, real v_target, real seconds) {
+    const std::uint64_t n = static_cast<std::uint64_t>(seconds / rig.world->dt() + 0.5);
+    for (std::uint64_t i = 0; i < n; ++i) {
+        rig.world->set_control("throttle", std::clamp(real(0.15) + real(0.5) * (v_target - speed(rig)), real(0.0), real(1.0)));
+        rig.world->step();
+    }
+}
+
+// Task D (torque-following post-shift close, AutoClutchDesc::sync_time_s).
+// Before it, a WOT 1->2 left the engine flaring to the limiter during the
+// shift (the upshift cut ended at Selecting) and the fixed-rate reclose put
+// the full 300 Nm clutch capacity plus the flywheel's slip energy into the
+// front axle: FL/FR kappa ~1.0 for ~1 s right after the shift (probe
+// wot23: 1->2 at 30 km/h WOT).
+TEST_CASE("Auto-clutch: WOT 1->2 upshift from a non-spinning 1st keeps the driven wheels below peak slip", "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.45);
+    Watch w1;
+    bool reached = false;
+    run_watch(rig, 20.0, 1, w1, [&](real) { reached = reached || speed(rig) >= 35.0 / 3.6; });
+    // (run_watch has no early exit; the pull to 35 km/h is well inside 20 s)
+    INFO("1st-gear max|kappa|=" << w1.max_driven_abs_kappa);
+    REQUIRE(reached);
+    REQUIRE(w1.max_driven_abs_kappa < 0.2); // precondition: 1st gear itself was not spinning
+
+    auto rig2 = make_sedan();
+    ps_test::settle(*rig2.world, 1.0);
+    rig2.world->set_control("gear_request", 1.0);
+    rig2.world->set_control("throttle", 0.45);
+    REQUIRE(drive_until_speed(rig2, 35.0 / 3.6, 20.0));
+    rig2.world->set_control("gear_request", 2.0);
+    rig2.world->set_control("throttle", 1.0);
+    const real v_request = speed(rig2);
+    Watch w;
+    run_watch(rig2, 3.0, 2, w);
+    INFO("v_request_kmh=" << v_request * 3.6 << " t_lock=" << w.t_lock << " max|kappa|=" << w.max_driven_abs_kappa
+                          << " v_end_kmh=" << speed(rig2) * 3.6);
+    CHECK(w.final_gear == 2);
+    CHECK_FALSE(w.stalled);
+    CHECK(w.max_driven_abs_kappa < 0.2);
+    CHECK(w.t_lock > 0.0);
+    CHECK(w.t_lock < 2.0);
+    CHECK(speed(rig2) - v_request > 3.0 * 2.0); // > 2 m/s^2 mean: pulling hard, not a torque hole
+}
+
+TEST_CASE("Auto-clutch: WOT in 2nd from a steady 20 km/h does not spin the driven wheels", "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.5);
+    REQUIRE(drive_until_speed(rig, 15.0 / 3.6, 15.0));
+    rig.world->set_control("gear_request", 2.0);
+    rig.world->set_control("throttle", 0.3);
+    Watch wshift;
+    run_watch(rig, 2.0, 2, wshift);
+    hold_speed(rig, 20.0 / 3.6, 4.0);
+    const auto dbg0 = rig.world->powertrain_debug(rig.vehicle);
+    INFO("steady: v_kmh=" << speed(rig) * 3.6 << " clutch_stuck=" << dbg0.clutch_stuck);
+    REQUIRE(rig.world->powertrain_state(rig.vehicle).gear == 2);
+    REQUIRE(std::abs(speed(rig) * 3.6 - 20.0) < 2.0);
+    REQUIRE(dbg0.clutch_stuck);
+
+    rig.world->set_control("throttle", 1.0);
+    const real v0 = speed(rig);
+    Watch w;
+    run_watch(rig, 3.0, 2, w);
+    INFO("max|kappa|=" << w.max_driven_abs_kappa << " v_end_kmh=" << speed(rig) * 3.6);
+    CHECK_FALSE(w.stalled);
+    CHECK(w.max_driven_abs_kappa < 0.15);
+    CHECK(speed(rig) - v0 > 3.0 * 1.5);
+}
+
+// Owner's primary case at full throttle: 1->2 at a realistic 15 km/h.
+TEST_CASE("Auto-clutch: full-throttle 1->2 upshift at 15 km/h locks promptly without wheelspin", "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.6);
+    REQUIRE(drive_until_speed(rig, 15.0 / 3.6, 15.0));
+    rig.world->set_control("throttle", 1.0);
+    rig.world->set_control("gear_request", 2.0);
+    const real v_request = speed(rig);
+    Watch w;
+    run_watch(rig, 3.0, 2, w);
+    INFO("v_request_kmh=" << v_request * 3.6 << " t_lock=" << w.t_lock << " max|kappa|=" << w.max_driven_abs_kappa
+                          << " v_end_kmh=" << speed(rig) * 3.6);
+    CHECK(w.final_gear == 2);
+    CHECK_FALSE(w.stalled);
+    CHECK(w.t_lock > 0.0);
+    CHECK(w.t_lock < 1.0);
+    CHECK(w.max_driven_abs_kappa < 0.2);
+    CHECK(speed(rig) - v_request > 3.0 * 1.5);
+}
+
+// Haptics agent's report (unverified, adapter-side): after a 2->3 upshift at
+// part throttle the clutch sat at ~0.07 engagement for seconds. From a
+// realistic shift point (2nd at ~2500 rpm) the clutch must lock within 1 s.
+TEST_CASE("Auto-clutch: part-throttle 2->3 upshift from a realistic shift point locks within 1 s", "[validation][vehicle][powertrain]") {
+    auto rig = make_sedan();
+    ps_test::settle(*rig.world, 1.0);
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.6);
+    REQUIRE(drive_until_speed(rig, 15.0 / 3.6, 15.0));
+    rig.world->set_control("gear_request", 2.0);
+    rig.world->set_control("throttle", 0.5);
+    REQUIRE(drive_until_speed(rig, 36.0 / 3.6, 20.0)); // 2nd at ~2500 rpm
+    REQUIRE(rig.world->powertrain_state(rig.vehicle).gear == 2);
+
+    rig.world->set_control("throttle", 0.3);
+    rig.world->set_control("gear_request", 3.0);
+    const real v_request = speed(rig);
+    Watch w;
+    run_watch(rig, 3.0, 3, w);
+    INFO("v_request_kmh=" << v_request * 3.6 << " t_lock=" << w.t_lock << " max|kappa|=" << w.max_driven_abs_kappa
+                          << " v_end_kmh=" << speed(rig) * 3.6);
+    CHECK(w.final_gear == 3);
+    CHECK_FALSE(w.stalled);
+    CHECK(w.t_lock > 0.0);
+    CHECK(w.t_lock < 1.0);
+    CHECK(w.max_driven_abs_kappa < 0.1);
+}

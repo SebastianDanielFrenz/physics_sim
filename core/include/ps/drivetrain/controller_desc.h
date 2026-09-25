@@ -59,6 +59,22 @@ struct AutoClutchDesc {
     // 2nd was selected at walking pace - manual_tcu.cpp's own comment).
     real rolling_reengage_rpm = 1300.0;
     real open_time_s = 0.08, close_time_s = 0.20; // shift ramps
+    // Torque-following close onto a MOVING driveline (owner test drive
+    // 2026-09-25, "a lot of wheel spin in 2nd"): after an upshift's dog is
+    // in, and for the Launch law's rolling re-engagement, the clutch no
+    // longer ramps to full capacity at a fixed rate whatever the engine
+    // does (that dumped up to capacity_nm - 300 Nm on car_sedan.json, 1.5x
+    // the engine's own peak - plus the flywheel's slip energy into the
+    // driven wheels). Instead the clutch's kinetic capacity follows
+    //   T = max(0, sign(slip) * T_engine + min(J_engine * |slip| / sync_time_s, max_sync_torque_nm))
+    // so it carries the engine's own torque plus a bounded synchronising
+    // torque that pulls the engine onto the input shaft's speed with time
+    // constant sync_time_s; once |slip| < lock_slip_rpm the clutch locks
+    // (Locked mode, engage_rate_per_s up to full capacity, as before). Both
+    // must be > 0 (vehicle_io.cpp validates). manual_tcu.cpp has the full
+    // derivation and the rejected alternatives.
+    real sync_time_s = 0.30;
+    real max_sync_torque_nm = 50.0;
     // Owner ruling (PHYS-033 P4 I3, post-C6): a Neutral -> gear engagement
     // with the vehicle at or below this speed is a LAUNCH, not a mid-drive
     // shift - it uses the rpm-gated Launch law (bite_rpm/full_rpm_*) instead

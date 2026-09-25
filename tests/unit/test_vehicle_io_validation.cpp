@@ -341,6 +341,35 @@ TEST_CASE("load_vehicle_json rejects a manual_tcu naming an unknown gearbox", "[
     REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("no_such_gearbox"));
 }
 
+TEST_CASE("load_vehicle_json rejects a non-positive auto_clutch sync_time_s or max_sync_torque_nm", "[unit][vehicle][io][drivetrain]") {
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0])",
+                  "gearbox_tcu_sync_params");
+    const auto controller = [](const char* auto_clutch_fields) {
+        return std::string(R"({ "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",
+      "auto_clutch": { )") + auto_clutch_fields + " } }";
+    };
+    {
+        TempJsonFile f(minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json, controller(R"("sync_time_s": 0.0)")),
+                       "vehicle_tcu_sync_time_zero");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("sync_time_s must be > 0"));
+    }
+    {
+        TempJsonFile f(minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json, controller(R"("max_sync_torque_nm": -5.0)")),
+                       "vehicle_tcu_sync_torque_negative");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("max_sync_torque_nm must be > 0"));
+    }
+    {
+        TempJsonFile f(minimal_i3_vehicle_json(minimal_i3_engine_json(), gb.component_json,
+                                               controller(R"("sync_time_s": 0.25, "max_sync_torque_nm": 40.0)")),
+                       "vehicle_tcu_sync_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        REQUIRE(d.controllers.size() == 1);
+        const auto& tcu = std::get<drivetrain::ManualTcuDesc>(d.controllers[0].params);
+        CHECK(tcu.auto_clutch.sync_time_s == 0.25);
+        CHECK(tcu.auto_clutch.max_sync_torque_nm == 40.0);
+    }
+}
+
 TEST_CASE("load_vehicle_json rejects a gearbox initial_gear out of range", "[unit][vehicle][io][drivetrain]") {
     // Only 3 forward gears exist; initial_gear 5 is out of range.
     RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0], "initial_gear": 5)",

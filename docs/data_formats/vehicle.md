@@ -295,7 +295,9 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 | `engage_rate_per_s` / `release_rate_per_s` | real | `4.0` / `12.0` | none | ordinary engagement ramp rates |
 | `anti_stall_release_rate_per_s` | real | `40.0` | none | faster release rate used only while releasing below `anti_stall_rpm` |
 | `rolling_reengage_rpm` | real (rpm) | `1300` | **must be `> anti_stall_rpm`**, else `"<ctx>.auto_clutch: rolling_reengage_rpm must be > anti_stall_rpm"` | after an anti-stall release, the clutch closes again on its own once the gearbox input shaft turns faster than this while in gear (engine braking resumes while coasting) |
-| `open_time_s` / `close_time_s` | real (s) | `0.08` / `0.20` | none | shift-mode reclose ramp durations |
+| `open_time_s` / `close_time_s` | real (s) | `0.08` / `0.20` | none | shift-mode open ramp duration / the rate the post-shift close (and a rolling re-engagement) follows its target at; with the torque-following close below that target is a torque, not engagement 1 |
+| `sync_time_s` | real (s) | `0.30` | **must be `> 0`**, else `"<ctx>.auto_clutch: sync_time_s must be > 0"` | torque-following close after a shift and on a rolling re-engagement: the clutch capacity is set to `max(0, sign(slip)*T_engine + min(J_engine*|slip|/sync_time_s, max_sync_torque_nm))` (engine demand torque, rev limiter ignored), so the engine speed converges on the input shaft with this time constant and the wheels never get more than engine torque plus `max_sync_torque_nm` through the slipping clutch; the clutch locks once `|slip| < lock_slip_rpm` |
+| `max_sync_torque_nm` | real (N*m) | `50` | **must be `> 0`**, else `"<ctx>.auto_clutch: max_sync_torque_nm must be > 0"` | cap on the synchronising term above |
 | `anti_stall_release_rate_per_s`, `launch_speed_threshold_mps` | real | `40.0`, `1.0` | none | see `ps/drivetrain/controller_desc.h`'s `AutoClutchDesc` comment for the launch-vs-shift distinction this threshold implements |
 
 #### `auto_blip`
