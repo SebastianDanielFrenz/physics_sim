@@ -8,6 +8,51 @@ namespace {
 
 real sign(real x) { return x > real(0.0) ? real(1.0) : (x < real(0.0) ? real(-1.0) : real(0.0)); }
 
+// PHYS-033 P4 I4 C8 (plan section 3.1): the antisymmetric counterpart of
+// reconstruct_mesh_torque_pair's SUM below - (b_left - b_right)/2 instead of
+// (b_left + b_right)/coef_sum, using the SAME per-node residual b_i (a rigid
+// row that reacts +coef at left and -coef*(ratio_b/ratio_a analog) ... at
+// right cancels in the SUM but survives, doubled, in the DIFFERENCE). For a
+// Differential's own open row (coefficient -ratio/2 at BOTH left and right -
+// symmetric, not antisymmetric) the difference is exactly 0, so this isolates
+// whatever OTHER antisymmetric reaction acts equal-and-opposite on left/
+// right: an active {L:+1,R:-1} lock row (kind Locked, or a lockable diff
+// currently engaged) or the kind-Viscous L-R coupling (its reaction, -c*v at
+// left and +c*v at right, is never subtracted here - node_b only subtracts
+// FRICTION rows, and a coupling is neither a friction row nor eliminated via
+// the rigid null-space, so it shows up in the residual exactly like an
+// unknown rigid reaction would). A ClutchLsd/Torsen row IS a friction row, so
+// node_b's own loop already subtracts its reaction out of b_left/b_right -
+// Differential::compute_transfer_torque adds net.row_lambda(lsd_row_) back
+// separately for those two kinds. Scope: exact for a Leaf/LeafPair diff
+// (left_/right_ carry no OTHER rigid row - true of every diff kind reachable
+// this way, C4-C7's own build-time checks enforce it); not meaningful for a
+// hypothetical Nested (centre) diff of kind != Open, which nothing sheds
+// today (centre LSD/Torsen is rejected, and a lossy centre Locked/Viscous is
+// rejected too - only a lossless one may be Nested, and that path never
+// calls this function).
+real reconstruct_lock_torque_pair(NodeId left, NodeId right, const ShaftNetwork& net, const Assembly& assembly,
+                                   real omega_old_left, real omega_old_right, real h) {
+    auto node_b = [&](NodeId node, real omega_old) {
+        const real omega_new = net.omega(node);
+        const real dw = omega_new - omega_old;
+        const real J = net.node_inertia(node);
+        const real tau0_others = assembly.tau0(node); // this diff's own loss torque lives at carrier_, never left_/right_
+        const real d_others = assembly.d(node);
+        real row_sum = real(0.0);
+        for (int r = 0; r < net.friction_row_count(); ++r) {
+            const FrictionRowId rid{static_cast<std::uint16_t>(r)};
+            if (net.friction_row_a(rid) == node) row_sum += net.row_lambda(rid);
+            const NodeId rb = net.friction_row_b(rid);
+            if (rb.valid() && rb == node) row_sum -= assembly.ratio_b(rid) * net.row_lambda(rid);
+        }
+        return J * dw / h - (tau0_others - d_others * dw) - row_sum;
+    };
+    const real b_left = node_b(left, omega_old_left);
+    const real b_right = node_b(right, omega_old_right);
+    return (b_left - b_right) / real(2.0);
+}
+
 } // namespace
 
 real reconstruct_mesh_torque(NodeId recon_node, real coef_at_recon_node, real loss_tau_already_applied, const ShaftNetwork& net,
@@ -221,6 +266,20 @@ void Differential::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork
     // DirectTorqueBrakes' own -h*v*lambda form (v = w_L - w_R solved, lambda
     // its multiplier; >= 0 whenever the row slips, 0 while stuck).
     if (has_lsd_row_) ledger.diff_loss += -ctx.h * net.row_velocity(lsd_row_) * net.row_lambda(lsd_row_);
+
+    // PHYS-033 P4 I4 C8 (plan section 3.1): the lock/LSD/viscous transfer
+    // torque, cached for World::powertrain_debug/PowertrainSnapshot. Debug/
+    // telemetry only - never read back into dynamics, never hashed.
+    transfer_torque_prev_ = compute_transfer_torque(net, assembly, ctx.h);
+}
+
+real Differential::compute_transfer_torque(const ShaftNetwork& net, const Assembly& assembly, real h) const {
+    // See reconstruct_lock_torque_pair's own header comment: generic across
+    // Locked/lockable-Open/Viscous/ClutchLsd/Torsen, reads ~0 for a plain
+    // Open diff (no antisymmetric reaction to find).
+    real transfer = reconstruct_lock_torque_pair(left_, right_, net, assembly, omega_old_left_, omega_old_right_, h);
+    if (has_lsd_row_) transfer += net.row_lambda(lsd_row_); // subtracted out of the residual above; add it back
+    return transfer;
 }
 
 std::uint64_t Differential::fold_state_hash(std::uint64_t seed) const {

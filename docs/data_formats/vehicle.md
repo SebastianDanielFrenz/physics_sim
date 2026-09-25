@@ -402,6 +402,31 @@ switches for the `manual_tcu` driver aids; each one's value when the
 vehicle is created is its controller block's `enabled` flag (0 if the
 vehicle has no `manual_tcu`).
 
+## Telemetry channels a differential exposes
+
+PHYS-033 P4 I4 C8 (plan section 3.1): every differential component whose
+`kind` is not plain `"open"` — or that has `lockable: true` (a lockable
+`"open"` diff still needs its own "am I currently locked" telemetry even
+though its `kind` reads `open`) — registers two extra CSV/telemetry
+channels, in `powertrain.components[]` array order:
+
+| Channel | Meaning |
+|---|---|
+| `vehicle<i>.<diff id>.bias` | signed `(T_left - T_right) / (\|T_left\| + \|T_right\|)`, in `[-1, 1]`; `0` at zero axle torque (never NaN) |
+| `vehicle<i>.<diff id>.locked` | `1` while a rigid lock is currently active (`kind: "locked"`, or a `lockable` diff with its lock bit set this substep), else `0` |
+
+`<i>` is the vehicle index (see ["Control channels a vehicle reads"](#control-channels-a-vehicle-reads)
+above for the same first-vehicle-is-bare-name / later-vehicles-`v<i>.`-prefixed
+convention — the diff channels instead always carry the `vehicle<i>.` prefix,
+matching the existing `vehicle<i>.energy.*`/`vehicle<i>.powertrain.*`
+channels' own naming). A vehicle whose only differential(s) are plain
+non-lockable `open` (both shipped `car_sedan.json`/`tractor.json` diffs)
+registers none of these — its CSV header is byte-identical to before this
+existed. Up to 4 differentials per vehicle are supported
+(`ps::drivetrain::kMaxPowertrainDiffs`, `ps/drivetrain/powertrain_state.h`);
+this is a snapshot/debug-only addition — no new hashed simulation state, no
+change to `World::state_hash()`.
+
 ## Minimal complete example
 
 A single driven axle, no clutch/gearbox (the engine drives the differential
