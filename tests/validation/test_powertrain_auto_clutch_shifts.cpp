@@ -254,3 +254,39 @@ TEST_CASE("Auto-clutch: part-throttle 2->3 upshift from a realistic shift point 
     CHECK(w.t_lock < 1.0);
     CHECK(w.max_driven_abs_kappa < 0.1);
 }
+
+// Haptics agent's scripted demo drive (coordinator report): N->1st requested
+// (shift_up_count, the gamepad's own path) in the SAME tick as full throttle,
+// from rest, auto-clutch on. Before the fix the rpm-gated Launch law closed
+// the clutch as soon as the flaring engine passed bite_rpm, while the
+// gearbox was still Selecting/Synchronising 1st: the loaded input shaft held
+// the synchro off (it can only drag the car through its own slip), so the
+// dog never went in. On the flat the synchro's drag happened to pull the
+// car past launch_speed_threshold_mps, which re-classified the engagement
+// as a rolling shift and opened the clutch (gear in after ~0.65 s); uphill
+// the gearbox aborted after abort_after_s and left the car in Neutral with
+// the engine on the limiter indefinitely.
+TEST_CASE("Auto-clutch: N->1 requested at WOT from rest engages and drives away", "[validation][vehicle][powertrain]") {
+    for (const real grade : {real(0.0), real(-0.15)}) { // -0.15: 15% uphill (+X is downhill, see build_vehicle_rig)
+        auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", 1500.0,
+                                              Vec3{2.0, 0.4, 0.15}, 0.6, grade, 4, Vec3::unit_y(), 240.0, 960.0, 3000.0);
+        rig.world->set_control("handbrake", 1.0); // hold the car on the slope while settling
+        ps_test::settle(*rig.world, 1.0);
+        rig.world->set_control("handbrake", 0.0);
+        rig.world->set_control("shift_up_count", 1.0);
+        rig.world->set_control("throttle", 1.0);
+        real t_engaged = -1.0;
+        Watch w;
+        run_watch(rig, 3.0, 1, w, [&](real t) {
+            if (t_engaged < 0.0 && rig.world->powertrain_state(rig.vehicle).gear == 1) t_engaged = t;
+        });
+        const auto& pt = rig.world->powertrain_state(rig.vehicle);
+        INFO("grade=" << grade << " t_engaged=" << t_engaged << " t_lock=" << w.t_lock << " gear=" << int(pt.gear)
+                      << " rpm=" << pt.engine_rpm << " v_end_kmh=" << speed(rig) * 3.6 << " max|kappa|=" << w.max_driven_abs_kappa);
+        CHECK_FALSE(w.stalled);
+        CHECK(w.final_gear == 1);
+        CHECK(t_engaged > 0.0);
+        CHECK(t_engaged < 1.5);
+        CHECK(speed(rig) > 10.0 / 3.6); // actually driving away within the 3 s
+    }
+}

@@ -177,9 +177,26 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
         }
     }
     bool sync_closing = false; // Launch-mode rolling re-engagement under the torque-following close
+    bool engaging_from_neutral = false;
     if (mode_ == ClutchMode::Launch) {
         if (s.gearbox_current == 0 && s.gearbox_phase == Gearbox::Phase::Idle) {
             e_tgt = real(1.0);
+        } else if (s.gearbox_current == 0) {
+            // The gearbox is still Selecting/Synchronising the launch gear
+            // (current == 0, not Idle): hold the clutch OPEN until the dog
+            // is in. The rpm-gated law below used to close it as soon as a
+            // throttle-flared engine passed bite_rpm (N->1 requested at WOT,
+            // the gamepad's natural "hold throttle, press shift"), so the
+            // synchro had to fight the engine through the clutch: it never
+            // matched speeds, only dragged the car through its own slip,
+            // and unless that drag happened to push the car past
+            // launch_speed_threshold_mps (re-classifying the engagement as a
+            // rolling shift, which opens the clutch) the gearbox aborted
+            // after abort_after_s and left the car in Neutral with the
+            // engine on the limiter. A real driver launches with the pedal
+            // down until the gear is in, whatever the rpm.
+            e_tgt = real(0.0);
+            engaging_from_neutral = true;
         } else {
             const real full = desc_.auto_clutch.full_rpm_min +
                                s.throttle_pedal * (desc_.auto_clutch.full_rpm_max - desc_.auto_clutch.full_rpm_min);
@@ -198,6 +215,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
         }
         rate = (e_tgt >= e_auto_) ? desc_.auto_clutch.engage_rate_per_s : desc_.auto_clutch.release_rate_per_s;
         if (sync_closing) rate = real(1.0) / desc_.auto_clutch.close_time_s;
+        if (engaging_from_neutral) rate = std::max(rate, real(1.0) / desc_.auto_clutch.open_time_s);
         // Anti-stall panic dump (PHYS-033 P4 I3 C8 smoke-test finding, see
         // AutoClutchDesc::anti_stall_release_rate_per_s's own comment):
         // releasing below anti_stall_rpm specifically opens at LEAST this

@@ -383,6 +383,53 @@ TEST_CASE("ManualTcu: launching from Neutral at low speed uses the Launch law, n
     CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
 }
 
+// Coordinator/haptics report 2026-09-25: N->1 requested together with full
+// throttle. The engine flares past bite_rpm while the gearbox is still
+// Selecting/Synchronising; the clutch must stay OPEN until the dog is in
+// (the synchro cannot match speeds against a loaded input shaft), then the
+// ordinary Launch law takes over.
+TEST_CASE("ManualTcu: launching from Neutral holds the clutch open while the gearbox engages, whatever the rpm",
+          "[unit][drivetrain][tcu]") {
+    ManualTcu::Desc d;
+    d.auto_clutch.bite_rpm = 1100.0;
+    d.auto_clutch.full_rpm_min = 1600.0;
+    d.auto_clutch.full_rpm_max = 3000.0;
+    d.auto_clutch.lock_slip_rpm = 80.0;
+    d.auto_clutch.anti_stall_rpm = 750.0;
+    d.auto_clutch.engage_rate_per_s = 4.0;
+    d.auto_clutch.release_rate_per_s = 12.0;
+    d.auto_clutch.open_time_s = 0.08;
+    d.auto_clutch.launch_speed_threshold_mps = 1.0;
+    ManualTcu tcu(d);
+    const real h = 1.0 / 960.0;
+
+    ManualTcu::Sensors s = base_sensors();
+    s.approx_speed_mps = 0.0;
+    s.engine_omega = rpm_to_omega(800.0);
+    (void)tcu.step(s, h, true);
+    REQUIRE(tcu.e_auto() == Catch::Approx(1.0).margin(1e-3)); // closed in N
+
+    s.gear_request = 1.0;
+    s.throttle_pedal = 1.0;
+    (void)tcu.step(s, h, true);
+    s.gear_request = kGearRequestNone;
+    s.gearbox_target = 1;
+    s.engine_omega = rpm_to_omega(4000.0); // flared well past full_rpm_max: the Launch law alone would say e = 1
+    for (Gearbox::Phase ph : {Gearbox::Phase::Selecting, Gearbox::Phase::Synchronising}) {
+        s.gearbox_phase = ph;
+        for (int i = 0; i < 96; ++i) (void)tcu.step(s, h, false); // 0.1 s each
+        CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
+        CHECK(tcu.e_auto() == Catch::Approx(0.0).margin(1e-9)); // fully open within open_time_s
+    }
+
+    // Dog in: the Launch law closes on rpm again.
+    s.gearbox_current = 1;
+    s.gearbox_phase = Gearbox::Phase::Idle;
+    s.gearbox_in_omega = 0.0;
+    for (int i = 0; i < 96; ++i) (void)tcu.step(s, h, false);
+    CHECK(tcu.e_auto() == Catch::Approx(0.4).margin(0.01)); // engage_rate_per_s 4 x 0.1 s
+}
+
 TEST_CASE("ManualTcu: launching from Neutral ABOVE the speed threshold still uses the ordinary Shift-mode reclose",
           "[unit][drivetrain][tcu]") {
     ManualTcu::Desc d;
