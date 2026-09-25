@@ -247,6 +247,7 @@ TEST_CASE("A body sliding across the test_ground straight's edge at 10 m/s sees 
     // does not, and must not fail this test on its own.
     real min_z = world.backend().get_pose(probe_id).position.z;
     real max_abs_az = 0.0;
+    real max_abs_az_x = 0.0;
     real prev_vz = world.backend().get_motion(probe_id).linear.z;
     real first_transition_x = 0.0, last_transition_x = 0.0;
     std::size_t transition_count = 0;
@@ -258,7 +259,11 @@ TEST_CASE("A body sliding across the test_ground straight's edge at 10 m/s sees 
         const Pose p = world.backend().get_pose(probe_id);
         const Motion m = world.backend().get_motion(probe_id);
         min_z = std::min(min_z, p.position.z);
-        max_abs_az = std::max(max_abs_az, std::abs((m.linear.z - prev_vz) * cfg.tick_rate_hz));
+        const real az = std::abs((m.linear.z - prev_vz) * cfg.tick_rate_hz);
+        if (az > max_abs_az) {
+            max_abs_az = az;
+            max_abs_az_x = p.position.x;
+        }
         prev_vz = m.linear.z;
 
         for (const ContactEvent& ev : world.last_contact_events()) {
@@ -279,7 +284,7 @@ TEST_CASE("A body sliding across the test_ground straight's edge at 10 m/s sees 
         }
     }
 
-    INFO("max |vertical accel| = " << max_abs_az << " m/s^2; min z = " << min_z << " m; " << transition_count
+    INFO("max |vertical accel| = " << max_abs_az << " m/s^2 at x = " << max_abs_az_x << "; min z = " << min_z << " m; " << transition_count
                                     << " surface transition(s), spanning x in [" << first_transition_x << ", "
                                     << last_transition_x << "]");
     REQUIRE(seen_any);
@@ -302,11 +307,13 @@ TEST_CASE("A body sliding across the test_ground straight's edge at 10 m/s sees 
     // pre-pool-exclusion-fix version of this run, which fell over 100 m).
     CHECK(min_z > 0.2);
     // Generous bound: not free-fall-level (~9.81 m/s^2 sustained across
-    // many ticks would indicate an actual unsupported drop), and wide
-    // enough to tolerate the tile-seam contact blip at x = -512 (~159 m/s^2
-    // for a single tick, unrelated to this test's own boundary - a
-    // pre-existing, separate heightfield-tiling seam artifact, left open;
-    // see the report).
+    // many ticks would indicate an actual unsupported drop). The former
+    // tile-seam blip at x = -512 (158.5 m/s^2) is gone since the backend's
+    // cross-tile edge weld (jolt_backend.cpp, TerrainSeamWeldingCollector;
+    // test_terrain_seam_crossing.cpp). The remaining single-tick peak,
+    // 162 m/s^2 at x = -500, is this test's own holed-heightfield ->
+    // asphalt-MeshShape boundary (176 m/s^2 pre-weld from the same
+    // approach), a different body pair the weld does not cover.
     CHECK(max_abs_az < 250.0);
 }
 

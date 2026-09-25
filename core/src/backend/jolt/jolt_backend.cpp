@@ -33,6 +33,9 @@
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/CollisionDispatch.h>
+#include <Jolt/Core/QuickSort.h>
+#include <Jolt/Core/STLLocalAllocator.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
@@ -592,6 +595,143 @@ private:
     std::vector<ContactEvent> pending_;
 };
 
+// Terrain tile seams (PLAN.md P8, vault PHYS-021): Jolt's HeightFieldShape
+// marks every edge on its own outer border ACTIVE (it cannot see the
+// neighbouring tile), so a body sliding from tile A onto tile B picks up a
+// speculative contact against B's first border edge whose normal tilts back
+// against the motion - a one-tick vertical kick of O(100-1000) m/s^2 that a
+// single seamless heightfield never shows. Fix: every body-vs-heightfield
+// pair runs Jolt's own enhanced internal-edge removal (Terdiman's algorithm,
+// JPH::InternalEdgeRemovingCollector - CollideWithAll + void every vertex of
+// a face contact, drop edge/vertex contacts whose feature is fully voided),
+// but with the dynamic body collided against EVERY heightfield body its
+// bounds overlap, in ascending BodyID order, so a face contact on A voids
+// the shared seam vertices of B's border edge. Only hits on the pair's own
+// body2 are forwarded; the neighbours' hits only void features. This is a
+// line-for-line copy of Jolt v5.6.0's InternalEdgeRemovingCollector (its
+// AddHit/Flush) plus that forwarding flag - the stock class has no way to
+// see a second body. Vertex tolerance is 1 cm, not Jolt's default 0.1 mm:
+// the two tiles quantise the same seam sample against different per-block
+// height ranges (8 bits/sample), so a shared vertex can differ by a few mm;
+// distinct grid vertices are always >= one sample spacing (~1 m+) apart.
+constexpr float kTerrainSeamVertexToleranceSq = 1.0e-4f; // (1 cm)^2
+
+class TerrainSeamWeldingCollector final : public JPH::CollideShapeCollector {
+    static constexpr JPH::uint kMaxLocalDelayed = 32;
+    static constexpr JPH::uint kMaxLocalVoided = 128;
+
+public:
+    TerrainSeamWeldingCollector(JPH::CollideShapeCollector& chained, float vertex_tolerance_sq)
+        : JPH::CollideShapeCollector(chained), chained_(chained), vertex_tolerance_sq_(vertex_tolerance_sq) {
+        voided_.reserve(kMaxLocalVoided);
+        delayed_.reserve(kMaxLocalDelayed);
+    }
+
+    // true while the hits being added belong to the pair's own body2 (the
+    // only ones ever passed on); false while colliding a neighbour tile.
+    void set_forward(bool forward) { forward_ = forward; }
+
+    void AddHit(const JPH::CollideShapeResult& r) override {
+        if (r.mShape2Face.size() < 3) return chain_and_void(r, forward_);
+        const JPH::Vec3 tri_n = (r.mShape2Face[1] - r.mShape2Face[0]).Cross(r.mShape2Face[2] - r.mShape2Face[0]);
+        const float tri_n_len = tri_n.Length();
+        if (tri_n_len < 1e-6f) return chain_and_void(r, forward_);
+        // Face contact: contact normal within 1 degree of the triangle normal.
+        const float contact_n_len = r.mPenetrationAxis.Length();
+        if (tri_n.Dot(-r.mPenetrationAxis) > 0.999848f * contact_n_len * tri_n_len) return chain_and_void(r, forward_);
+        delayed_.push_back(Delayed{r, forward_});
+    }
+
+    // Must be called once after every body has been collided.
+    void flush() {
+        JPH::Array<JPH::uint, JPH::STLLocalAllocator<JPH::uint, kMaxLocalDelayed>> order;
+        order.resize(delayed_.size());
+        for (JPH::uint i = 0; i < JPH::uint(delayed_.size()); ++i) order[i] = i;
+        JPH::QuickSort(order.begin(), order.end(), [this](JPH::uint a, JPH::uint b) {
+            return delayed_[a].result.mPenetrationDepth > delayed_[b].result.mPenetrationDepth;
+        });
+        for (JPH::uint i = 0; i < JPH::uint(delayed_.size()); ++i) {
+            const Delayed& d = delayed_[order[i]];
+            const JPH::CollideShapeResult& r = d.result;
+            // Closest vertex or edge of the face to the contact point.
+            float best_dist_sq = FLT_MAX;
+            JPH::uint best_v1 = 0;
+            JPH::uint best_v2 = 0;
+            const JPH::uint num_v = JPH::uint(r.mShape2Face.size());
+            JPH::uint v1_idx = num_v - 1;
+            JPH::Vec3 v1 = r.mShape2Face[v1_idx] - r.mContactPointOn2;
+            for (JPH::uint v2_idx = 0; v2_idx < num_v; ++v2_idx) {
+                const JPH::Vec3 v2 = r.mShape2Face[v2_idx] - r.mContactPointOn2;
+                const JPH::Vec3 v1_v2 = v2 - v1;
+                const float denom = v1_v2.LengthSq();
+                if (denom < JPH::Square(FLT_EPSILON)) {
+                    const float d1 = v1.LengthSq();
+                    if (d1 < best_dist_sq) { best_dist_sq = d1; best_v1 = v1_idx; best_v2 = v1_idx; }
+                } else {
+                    const float fraction = -v1.Dot(v1_v2) / denom;
+                    if (fraction < 1.0e-6f) {
+                        const float d1 = v1.LengthSq();
+                        if (d1 < best_dist_sq) { best_dist_sq = d1; best_v1 = v1_idx; best_v2 = v1_idx; }
+                    } else if (fraction < 1.0f - 1.0e-6f) {
+                        const float dc = (v1 + fraction * v1_v2).LengthSq();
+                        if (dc < best_dist_sq) { best_dist_sq = dc; best_v1 = v1_idx; best_v2 = v2_idx; }
+                    }
+                }
+                v1_idx = v2_idx;
+                v1 = v2;
+            }
+            const bool voided = is_voided(r.mSubShapeID1, r.mShape2Face[best_v1]) &&
+                                (best_v1 == best_v2 || is_voided(r.mSubShapeID1, r.mShape2Face[best_v2]));
+            if (!voided && d.forward) chain(r);
+            void_features(r);
+        }
+        voided_.clear();
+        delayed_.clear();
+    }
+
+private:
+    struct Voided {
+        JPH::Float3 feature; // read with sLoadFloat3Unsafe, so must not be the last member
+        JPH::SubShapeID sub_shape_id;
+    };
+    struct Delayed {
+        JPH::CollideShapeResult result;
+        bool forward;
+    };
+
+    bool is_voided(const JPH::SubShapeID& id, JPH::Vec3 v) const {
+        for (const Voided& vf : voided_) {
+            if (vf.sub_shape_id == id && v.IsClose(JPH::Vec3::sLoadFloat3Unsafe(vf.feature), vertex_tolerance_sq_)) return true;
+        }
+        return false;
+    }
+    void void_features(const JPH::CollideShapeResult& r) {
+        for (const JPH::Vec3& v : r.mShape2Face) {
+            if (!is_voided(r.mSubShapeID1, v)) {
+                Voided vf;
+                v.StoreFloat3(&vf.feature);
+                vf.sub_shape_id = r.mSubShapeID1;
+                voided_.push_back(vf);
+            }
+        }
+    }
+    void chain(const JPH::CollideShapeResult& r) {
+        chained_.SetContext(GetContext());
+        chained_.AddHit(r);
+        UpdateEarlyOutFraction(chained_.GetEarlyOutFraction());
+    }
+    void chain_and_void(const JPH::CollideShapeResult& r, bool forward) {
+        if (forward) chain(r);
+        void_features(r);
+    }
+
+    JPH::CollideShapeCollector& chained_;
+    JPH::Array<Voided, JPH::STLLocalAllocator<Voided, kMaxLocalVoided>> voided_;
+    JPH::Array<Delayed, JPH::STLLocalAllocator<Delayed, kMaxLocalDelayed>> delayed_;
+    float vertex_tolerance_sq_;
+    bool forward_ = true;
+};
+
 class JoltRigidBackend final : public IRigidBackend {
 public:
     JoltRigidBackend(jobs::JobSystem& job_system, const Vec3& gravity, std::size_t max_bodies, const RigidBackendSettings& settings)
@@ -617,6 +757,11 @@ public:
                               bp_layer_interface_, bp_filter_, layer_filter_);
         physics_system_.SetGravity(to_vec3f(gravity));
         physics_system_.SetContactListener(&contact_listener_);
+        // Tile-seam welding for every body-vs-heightfield pair (see
+        // TerrainSeamWeldingCollector); every other pair keeps Jolt's default.
+        physics_system_.SetSimCollideBodyVsBody(
+            [this](const JPH::Body& b1, const JPH::Body& b2, JPH::Mat44Arg t1, JPH::Mat44Arg t2, JPH::CollideShapeSettings& s,
+                   JPH::CollideShapeCollector& c, const JPH::ShapeFilter& f) { collide_body_vs_body(b1, b2, t1, t2, s, c, f); });
 
         // Part A energy-loss study (PLAN.md): every field here defaults to
         // Jolt's own PhysicsSettings default (RigidBackendSettings' own
@@ -700,11 +845,18 @@ public:
         const JPH::BodyID jph_id = body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
         const BodyId id = alloc_slot(jph_id, raw_heightfield);
         body_interface().SetUserData(jph_id, pack_body_id(id));
+        if (raw_heightfield != nullptr) {
+            heightfield_body_ids_.insert(std::lower_bound(heightfield_body_ids_.begin(), heightfield_body_ids_.end(), jph_id), jph_id);
+        }
         return id;
     }
 
     void destroy_body(BodyId id) override {
         const JPH::BodyID jid = lookup(id);
+        if (slots_[id.index].heightfield != nullptr) {
+            const auto it = std::lower_bound(heightfield_body_ids_.begin(), heightfield_body_ids_.end(), jid);
+            if (it != heightfield_body_ids_.end() && *it == jid) heightfield_body_ids_.erase(it);
+        }
         body_interface().RemoveBody(jid);
         body_interface().DestroyBody(jid);
         free_slot(id);
@@ -1103,6 +1255,57 @@ private:
         bool alive = false;
     };
 
+    // PhysicsSystem's SimCollideBodyVsBody hook (installed in the
+    // constructor), called from Jolt's narrow-phase jobs during Update.
+    // heightfield_body_ids_ and every static body's pose/bounds are only
+    // mutated outside Update (create/destroy/set_pose/update_heightfield_body
+    // run in World stages other than backend_step), so reading them here
+    // unlocked is race-free. t1/t2 are relative to body1's COM
+    // (PhysicsSystem::ProcessBodyPair); neighbours use the same convention.
+    void collide_body_vs_body(const JPH::Body& b1, const JPH::Body& b2, JPH::Mat44Arg t1, JPH::Mat44Arg t2, JPH::CollideShapeSettings& settings,
+                              JPH::CollideShapeCollector& collector, const JPH::ShapeFilter& filter) const {
+        if (!std::binary_search(heightfield_body_ids_.begin(), heightfield_body_ids_.end(), b2.GetID())) {
+            JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody(b1, b2, t1, t2, settings, collector, filter);
+            return;
+        }
+        settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideWithAll; // required by the internal-edge algorithm
+        TerrainSeamWeldingCollector weld(collector, kTerrainSeamVertexToleranceSq);
+        const JPH::Vec3 one = JPH::Vec3::sOne();
+
+        JPH::AABox query = b1.GetWorldSpaceBounds();
+        query.ExpandBy(JPH::Vec3::sReplicate(settings.mMaxSeparationDistance));
+        const JPH::AABox own = b2.GetWorldSpaceBounds();
+        // Fast path: query footprint strictly inside body2's XY footprint -
+        // no other (non-overlapping) tile can touch it.
+        const bool inside_xy = query.mMin.GetX() > own.mMin.GetX() && query.mMax.GetX() < own.mMax.GetX() &&
+                               query.mMin.GetY() > own.mMin.GetY() && query.mMax.GetY() < own.mMax.GetY();
+        if (inside_xy) {
+            JPH::SubShapeIDCreator p1, p2;
+            weld.set_forward(true);
+            JPH::CollisionDispatch::sCollideShapeVsShape(b1.GetShape(), b2.GetShape(), one, one, t1, t2, p1, p2, settings, weld, filter);
+            weld.flush();
+            return;
+        }
+
+        // Ascending BodyID order, so the pairs (b1, A) and (b1, B) both see
+        // the identical hit sequence and make identical voiding decisions.
+        const JPH::RVec3 offset = b1.GetCenterOfMassPosition();
+        const JPH::BodyLockInterfaceNoLock& bodies = physics_system_.GetBodyLockInterfaceNoLock();
+        const JPH::ShapeFilter accept_all;
+        for (const JPH::BodyID id : heightfield_body_ids_) {
+            const bool self = (id == b2.GetID());
+            const JPH::Body* other = self ? &b2 : bodies.TryGetBody(id);
+            if (!self && (other == nullptr || !other->IsInBroadPhase() || !other->GetWorldSpaceBounds().Overlaps(query))) continue;
+            const JPH::Mat44 t_other = self ? JPH::Mat44(t2) : other->GetCenterOfMassTransform().PostTranslated(-offset).ToMat44();
+            JPH::SubShapeIDCreator p1, p2;
+            weld.set_forward(self);
+            JPH::CollisionDispatch::sCollideShapeVsShape(b1.GetShape(), other->GetShape(), one, one, t1, t_other, p1, p2, settings, weld,
+                                                         self ? filter : accept_all);
+            if (weld.ShouldEarlyOut()) break;
+        }
+        weld.flush();
+    }
+
     JPH::BodyInterface& body_interface() { return physics_system_.GetBodyInterface(); }
     const JPH::BodyInterface& body_interface() const { return physics_system_.GetBodyInterface(); }
 
@@ -1184,6 +1387,9 @@ private:
     std::vector<id_index_t> free_list_;
     std::vector<JointSlot> joint_slots_;
     std::vector<id_index_t> joint_free_list_;
+    // Every live HeightfieldShape body, ascending - collide_body_vs_body's
+    // seam-welding candidate set and its canonical collide order.
+    std::vector<JPH::BodyID> heightfield_body_ids_;
 
     // update_heightfield_body's scratch conversion buffers - see that
     // method's comment.

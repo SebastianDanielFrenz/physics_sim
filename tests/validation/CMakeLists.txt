@@ -34,6 +34,7 @@ add_executable(ps_validation_tests
   test_powertrain_energy_balance.cpp
   test_powertrain_accel_topspeed.cpp
   test_powertrain_auto_clutch_shifts.cpp
+  test_terrain_seam_crossing.cpp
 )
 
 target_link_libraries(ps_validation_tests
