@@ -119,6 +119,24 @@ func _process(_delta: float) -> void:
 			if surface == "":
 				surface = "?"
 			lines.append("%-5s  %7.0f     %+.3f          %+6.2f          %s" % [wname, load_n, slip_ratio, slip_angle_deg, surface])
+
+		# Haptics per-source debug readout (owner requirement, 2026-09-25:
+		# "stays useful for the owner's future reports" - haptics_core.h's
+		# HapticsSourceDebug, PsInputMap.get_haptics_debug()). Raw per-source
+		# intensity BEFORE stage/smoothing, so it's obvious which source(s)
+		# are actually firing this frame instead of only the two combined
+		# motor outputs below.
+		if _input_map != null:
+			var hd: Dictionary = _input_map.get_haptics_debug()
+			if hd.size() > 0:
+				lines.append("")
+				lines.append("haptics  1:bodyG %.2f  2:grip %.2f  3:load %.2f  4:slip %.2f  5:land %.2f  6:eng %.2f  7:surf %.2f" % [
+					hd.get("source1_body_g", 0.0), hd.get("source2_grip_limit", 0.0), hd.get("source3_load_noise", 0.0),
+					hd.get("source4_light_slip", 0.0), hd.get("source5_landing", 0.0), hd.get("source6_engine", 0.0),
+					hd.get("source7_surface_texture", 0.0)])
+				lines.append("haptics  strong %.2f %s  weak %.2f %s" % [
+					hd.get("strong_out", 0.0), _bar(hd.get("strong_out", 0.0)),
+					hd.get("weak_out", 0.0), _bar(hd.get("weak_out", 0.0))])
 	else:
 		lines.append("(no vehicle spawned)")
 

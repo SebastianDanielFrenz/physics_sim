@@ -7,6 +7,8 @@
 #include <godot_cpp/variant/dictionary.hpp>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 using godot::ClassDB;
 using godot::D_METHOD;
@@ -22,6 +24,22 @@ namespace {
 // frames stop") - called every active frame regardless, so this only
 // matters if the render loop itself stalls.
 constexpr float kRumbleDurationS = 0.1f;
+
+// Bounded, allocation-free copy into HapticsWheelInput::surface_name's fixed
+// buffer (haptics_core.h's own "allocation-free per call" contract) - the
+// one piece of glue this task allows (PsSimulation::get_wheel_surface_name
+// already exists and returns a plain godot::String; ps_simulation.h/.cpp
+// itself is not touched). Truncates to the buffer's capacity minus the NUL
+// terminator; every name in data/surfaces/surfaces.json ("asphalt", "kerb",
+// "dirt", "field", "grass", "low_mu") is well under that.
+void copy_surface_name(const String& s, std::array<char, 16>& out) {
+    out.fill('\0');
+    const godot::CharString utf8 = s.utf8();
+    const char* data = utf8.get_data();
+    std::size_t i = 0;
+    for (; i < out.size() - 1 && data[i] != '\0'; ++i) out[i] = data[i];
+    out[i] = '\0';
+}
 } // namespace
 
 PsInputMap::PsInputMap() {
@@ -35,14 +53,15 @@ PsInputMap::PsInputMap() {
 
     // Demo rumble feel (owner, 2026-09-24: "the vibration is too
     // aggressive"). haptics_core.h's defaults stay the unit-tested
-    // reference; the demo softens them: no buzz in ordinary cornering (light
-    // slip starts at 3 deg / 6 % instead of 1.5 deg / 4 %), bigger bumps
-    // needed for a body-G jolt, lower stage levels and 60 % overall.
+    // reference; the demo softens the body-G/grip-limit/stage feel on top
+    // of them. The light-slip thresholds (slip_ratio/slip_angle_threshold)
+    // used to be overridden here too, but as of the 2026-09-25 "good
+    // asphalt doesn't cause rumble" fix the CORE defaults are themselves
+    // the correct, measured-against-real-telemetry values (haptics_core.h's
+    // own top comment, sources 3/4) - overriding them here again would
+    // just make the demo MORE sensitive than the tuning that was actually
+    // measured against, so this constructor no longer touches them.
     HapticsTuning ht;
-    ht.slip_angle_threshold_rad = 0.0523599f; // 3 deg
-    ht.slip_angle_saturate_rad = 0.0872665f;  // 5 deg
-    ht.slip_ratio_threshold = 0.06f;
-    ht.slip_ratio_saturate = 0.15f;
     ht.body_g_threshold_mps2 = 1.5f;
     ht.body_g_saturate_mps2 = 20.0f;
     ht.grip_limit_saturate_utilization = 3.5f;
@@ -214,26 +233,71 @@ void PsInputMap::update_haptics(float dt) {
         hw.ground_speed_mps = ground_speed;
         hw.wheel_surface_speed_mps = std::fabs(simulation_->get_wheel_omega(vehicle_name_, w)
                                                * simulation_->get_wheel_radius(vehicle_name_, w));
+        // Bug B (owner, 2026-09-25: "didn't feel the kerbs at all") - source
+        // 7's surface-texture match (haptics_core.h) needs the ground surface
+        // name under this wheel; PsSimulation already exposes it.
+        copy_surface_name(simulation_->get_wheel_surface_name(vehicle_name_, w), hw.surface_name);
     }
 
     const Dictionary pt = simulation_->get_vehicle_powertrain(vehicle_name_);
     if (pt.size() > 0) {
         in.engine.rpm = static_cast<float>(pt.get("rpm", 0.0));
-        in.engine.limiter_active = static_cast<bool>(pt.get("limiter", false));
         in.engine.grind_active = static_cast<bool>(pt.get("grind_active", false));
         in.engine.stalled = String(pt.get("engine_state", "")) == String("stalled");
-        // limiter_rpm intentionally left at 0 (HapticsEngineInput's own
-        // "unknown/not applicable" default): PsSimulation exposes only the
-        // discrete `limiter` bool (get_vehicle_powertrain's "limiter" key),
-        // not the numeric limiter RPM itself, so the "faint buzz
-        // approaching the limiter" ramp (HapticsTuning::
-        // engine_limiter_margin_rpm) never activates - only the sharp
-        // limiter_active edge does. Adding a numeric getter would be a
-        // small additive PsSimulation change if a future pass wants the
-        // ramp too; not needed for this task's acceptance.
+        // Deliberately not reading the "limiter" key into HapticsEngineInput
+        // (owner requirement, 2026-09-25 - see haptics_core.h's own top
+        // comment on source 6): a bare rev-limiter flag must not drive
+        // rumble on its own, and HapticsEngineInput no longer has a field
+        // for it at all.
     }
 
     const HapticsOutput out = haptics_.update(in);
+
+    // PS_HAPTICS_LOG debug readout (haptics_core.h's own top comment) -
+    // gated on an env var so a normal run pays nothing beyond one cached
+    // bool check per frame; read once (std::getenv is a linear scan of the
+    // environment block, not something to repeat every frame) and logged
+    // at most once a second so a multi-minute drive's log stays readable.
+    if (!haptics_log_checked_) {
+        haptics_log_checked_ = true;
+#if defined(_WIN32)
+        // getenv() is flagged deprecated (-Werror on this toolchain's ucrt
+        // headers) - _dupenv_s is the suggested replacement, same pattern
+        // as core/src/jobs/debug_alloc.cpp's own backtrace_budget().
+        char* env = nullptr;
+        std::size_t env_len = 0;
+        if (_dupenv_s(&env, &env_len, "PS_HAPTICS_LOG") == 0 && env != nullptr) {
+            haptics_log_enabled_ = env[0] != '\0' && env[0] != '0';
+            std::free(env);
+        }
+#else
+        const char* env = std::getenv("PS_HAPTICS_LOG");
+        haptics_log_enabled_ = env != nullptr && env[0] != '\0' && env[0] != '0';
+#endif
+    }
+    if (haptics_log_enabled_) {
+        haptics_log_accum_s_ += dt;
+        if (haptics_log_accum_s_ >= 1.0f) {
+            haptics_log_accum_s_ = 0.0f;
+            const HapticsSourceDebug& d = haptics_.debug();
+            const int gear = pt.size() > 0 ? static_cast<int>(pt.get("gear", 0)) : 0;
+            std::printf(
+                "PS_HAPTICS_LOG t=%.2f speed_kmh=%.1f gear=%d src1_body_g=%.4f src2_grip=%.4f "
+                "src3_load=%.4f src3_load_rms_raw=%.5f src4_slip=%.4f src5_land=%.4f src6_eng=%.4f src7_surf=%.4f "
+                "strong_raw=%.4f weak_raw=%.4f strong_out=%.4f weak_out=%.4f\n",
+                static_cast<double>(simulation_->get_sim_time()),
+                static_cast<double>(ground_speed * 3.6f),
+                gear,
+                static_cast<double>(d.source1_body_g), static_cast<double>(d.source2_grip_limit),
+                static_cast<double>(d.source3_load_noise), static_cast<double>(d.source3_load_noise_rms_raw),
+                static_cast<double>(d.source4_light_slip),
+                static_cast<double>(d.source5_landing), static_cast<double>(d.source6_engine),
+                static_cast<double>(d.source7_surface_texture),
+                static_cast<double>(d.strong_raw), static_cast<double>(d.weak_raw),
+                static_cast<double>(d.strong_out), static_cast<double>(d.weak_out));
+        }
+    }
+
     Input* input = Input::get_singleton();
     if (input != nullptr) {
         input->start_joy_vibration(joy_device_, out.weak, out.strong, kRumbleDurationS);
@@ -272,6 +336,24 @@ void PsInputMap::set_trigger_deadzone(float v) {
     cfg.handbrake.deadzone = v;
     cfg.clutch.deadzone = v;
     mapper_.set_config(cfg);
+}
+
+Dictionary PsInputMap::get_haptics_debug() const {
+    Dictionary d;
+    const HapticsSourceDebug& hd = haptics_.debug();
+    d["source1_body_g"] = hd.source1_body_g;
+    d["source2_grip_limit"] = hd.source2_grip_limit;
+    d["source3_load_noise"] = hd.source3_load_noise;
+    d["source3_load_noise_rms_raw"] = hd.source3_load_noise_rms_raw;
+    d["source4_light_slip"] = hd.source4_light_slip;
+    d["source5_landing"] = hd.source5_landing;
+    d["source6_engine"] = hd.source6_engine;
+    d["source7_surface_texture"] = hd.source7_surface_texture;
+    d["strong_raw"] = hd.strong_raw;
+    d["weak_raw"] = hd.weak_raw;
+    d["strong_out"] = hd.strong_out;
+    d["weak_out"] = hd.weak_out;
+    return d;
 }
 
 void PsInputMap::rumble(float low_frequency, float high_frequency, float duration_s) {
@@ -321,6 +403,7 @@ void PsInputMap::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_name"), &PsInputMap::get_vehicle_name);
     ClassDB::bind_method(D_METHOD("set_rumble_enabled", "enabled"), &PsInputMap::set_rumble_enabled);
     ClassDB::bind_method(D_METHOD("get_rumble_enabled"), &PsInputMap::get_rumble_enabled);
+    ClassDB::bind_method(D_METHOD("get_haptics_debug"), &PsInputMap::get_haptics_debug);
 
     ClassDB::add_property("PsInputMap", godot::PropertyInfo(godot::Variant::FLOAT, "steer_deadzone"), "set_steer_deadzone", "get_steer_deadzone");
     ClassDB::add_property("PsInputMap", godot::PropertyInfo(godot::Variant::FLOAT, "steer_curve"), "set_steer_curve", "get_steer_curve");

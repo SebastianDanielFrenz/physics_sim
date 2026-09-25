@@ -72,6 +72,7 @@ float HapticsCore::Highpass1::step(float x, float dt, float fc) {
 }
 
 void HapticsCore::reset() {
+    debug_ = HapticsSourceDebug{};
     accel_hp_x_ = Highpass1{};
     accel_hp_y_ = Highpass1{};
     accel_hp_z_ = Highpass1{};
@@ -110,8 +111,10 @@ HapticsOutput HapticsCore::update(const HapticsInput& in) {
     const float load_denom = std::max(total_contact_load, 1.0f);
 
     float load_noise_intensity = 0.0f;   // source 3, WEAK - dominant wheel (max), a single kerb tap is enough
+    float load_noise_rms_raw = 0.0f;     // source 3 debug - dominant wheel's pre-threshold RMS(load_rel)
     float light_slip_intensity = 0.0f;   // source 4, WEAK - load-share-weighted sum
     float grip_limit_intensity = 0.0f;   // source 2, STRONG (sustained) - load-share-weighted sum
+    float surface_texture_intensity = 0.0f; // source 7, WEAK - load-share-weighted sum
     bool landing_edge = false;
 
     for (int i = 0; i < wheel_count; ++i) {
@@ -134,10 +137,28 @@ HapticsOutput HapticsCore::update(const HapticsInput& in) {
             wf.ac_ms2 += (load_rel * load_rel - wf.ac_ms2) * alpha;
         }
         const float rms = std::sqrt(std::max(wf.ac_ms2, 0.0f));
-        const float wheel_load_noise = threshold_saturate(rms, tuning_.load_noise_threshold, tuning_.load_noise_saturate);
+        load_noise_rms_raw = std::max(load_noise_rms_raw, rms);
+        // Fades in with ground speed (owner bug, 2026-09-25: a launch's own
+        // load-transfer transient was maxing this source out under ~1 m/s -
+        // see this file's header comment on source 3).
+        const float load_noise_fade = speed_fade(w.ground_speed_mps, tuning_.load_noise_speed_fade_lo_mps, tuning_.load_noise_speed_fade_hi_mps);
+        const float wheel_load_noise = load_noise_fade * threshold_saturate(rms, tuning_.load_noise_threshold, tuning_.load_noise_saturate);
         load_noise_intensity = std::max(load_noise_intensity, wheel_load_noise);
 
         const float load_weight = w.in_contact ? (std::max(0.0f, w.normal_load_n) / load_denom) : 0.0f;
+
+        // Source 7: surface texture / rumble strip - exact name match against
+        // the tuning table, fades in with ground speed the same way, weighted
+        // by this wheel's load share (this file's header comment, source 7).
+        if (w.in_contact) {
+            for (const SurfaceTextureRule& rule : tuning_.surface_texture_rules) {
+                if (rule.name[0] == '\0') continue;
+                if (rule.name != w.surface_name) continue;
+                const float texture_fade = speed_fade(w.ground_speed_mps, tuning_.surface_texture_speed_fade_lo_mps, tuning_.surface_texture_speed_fade_hi_mps);
+                surface_texture_intensity += rule.strength * texture_fade * load_weight;
+                break;
+            }
+        }
 
         // Slip means sliding only while something moves over the ground
         // (HapticsWheelInput::ground_speed_mps).
@@ -172,6 +193,7 @@ HapticsOutput HapticsCore::update(const HapticsInput& in) {
     prev_contact_init_ = true;
     light_slip_intensity = clamp01(light_slip_intensity);
     grip_limit_intensity = clamp01(grip_limit_intensity);
+    surface_texture_intensity = clamp01(surface_texture_intensity);
 
     // --- Source 5 continued: pulse level (set on the edge, exponential decay otherwise) ---
     if (landing_edge) {
@@ -182,14 +204,12 @@ HapticsOutput HapticsCore::update(const HapticsInput& in) {
         landing_pulse_level_ *= std::exp(-dt / tuning_.landing_pulse_decay_s);
     }
 
-    // --- Source 6: engine (optional, small) ---
+    // --- Source 6: engine (optional, small) - grind/stall only; deliberately
+    //     no rev-limiter buzz here (owner requirement, 2026-09-25 - see this
+    //     file's header comment on source 6: only a physically-derived
+    //     engine-motion channel may rumble near the limiter, and none exists
+    //     in this codebase yet). ---
     float engine_weak = 0.0f;
-    if (in.engine.limiter_rpm > 0.0f) {
-        const float t0 = in.engine.limiter_rpm - tuning_.engine_limiter_margin_rpm;
-        const float buzz = threshold_saturate(in.engine.rpm, t0, in.engine.limiter_rpm);
-        engine_weak = std::max(engine_weak, buzz * tuning_.engine_limiter_weight);
-    }
-    if (in.engine.limiter_active) engine_weak = std::max(engine_weak, tuning_.engine_limiter_weight);
 
     if (in.engine.grind_active) {
         engine_grind_level_ = tuning_.engine_grind_weak;
@@ -216,8 +236,8 @@ HapticsOutput HapticsCore::update(const HapticsInput& in) {
     const float strong_sum = body_g_intensity + landing_pulse_level_ + grip_limit_intensity;
     const float strong_raw = clamp01(strong_max + 0.25f * std::max(0.0f, strong_sum - strong_max));
 
-    const float weak_max = std::max({load_noise_intensity, light_slip_intensity, engine_weak});
-    const float weak_sum = load_noise_intensity + light_slip_intensity + engine_weak;
+    const float weak_max = std::max({load_noise_intensity, light_slip_intensity, engine_weak, surface_texture_intensity});
+    const float weak_sum = load_noise_intensity + light_slip_intensity + engine_weak + surface_texture_intensity;
     const float weak_raw = clamp01(weak_max + 0.30f * std::max(0.0f, weak_sum - weak_max));
 
     // --- Stage quantisation (hysteresis) + attack/release smoothing ---
@@ -236,6 +256,23 @@ HapticsOutput HapticsCore::update(const HapticsInput& in) {
         out.weak = 0.0f;
         out.strong = 0.0f;
     }
+
+    // --- Debug readout (haptics_core.h's own top comment) - every raw
+    //     per-source value computed above, plus the final combined/output
+    //     values, snapshotted for a caller/report to inspect. ---
+    debug_.source1_body_g = body_g_intensity;
+    debug_.source2_grip_limit = grip_limit_intensity;
+    debug_.source3_load_noise = load_noise_intensity;
+    debug_.source3_load_noise_rms_raw = load_noise_rms_raw;
+    debug_.source4_light_slip = light_slip_intensity;
+    debug_.source5_landing = landing_pulse_level_;
+    debug_.source6_engine = engine_weak;
+    debug_.source7_surface_texture = surface_texture_intensity;
+    debug_.strong_raw = strong_raw;
+    debug_.weak_raw = weak_raw;
+    debug_.strong_out = out.strong;
+    debug_.weak_out = out.weak;
+
     return out;
 }
 

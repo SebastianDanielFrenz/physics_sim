@@ -1,0 +1,46 @@
+{
+  "format": "physics_sim.surfaces/1",
+  "description": "TESTING ONLY (Godot demo, main.gd's test_grip_everywhere): same surface names as surfaces.json (SurfaceTable assigns ids alphabetically, so the names must match exactly), but the open procedural terrain's grass/dirt/field use dry-asphalt lambda_mu/crr so handling can be judged anywhere on the terrain. Never used by tests or scenarios.",
+  "fields": {
+    "lambda_mu": "Pacejka-style friction scale relative to dry asphalt = 1.0.",
+    "crr": "Rolling-resistance coefficient (dimensionless, F_roll = crr * N)."
+  },
+  "surfaces": {
+    "asphalt": {
+      "display_name": "Dry asphalt",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "Reference surface (lambda_mu=1.0 by definition). Crr for dry asphalt/concrete roads: Wong, Theory of Ground Vehicles, 5th ed., Table 1.3 (typical range 0.010-0.015; midpoint used)."
+    },
+    "kerb": {
+      "display_name": "Painted concrete kerb",
+      "lambda_mu": 0.9,
+      "crr": 0.013,
+      "source": "Painted concrete: base Crr as asphalt (Wong Table 1.3); lambda_mu reduced ~10% from dry asphalt for the paint film, especially when wet -- illustrative test-ground estimate, not a measured value."
+    },
+    "grass": {
+      "display_name": "Dry grass on firm soil",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "TESTING OVERRIDE: dry-asphalt values copied from 'asphalt'; real values in surfaces.json."
+    },
+    "dirt": {
+      "display_name": "Dry compact dirt / gravel road",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "TESTING OVERRIDE: dry-asphalt values copied from 'asphalt'; real values in surfaces.json."
+    },
+    "low_mu": {
+      "display_name": "Polished ice (unstudded tyre)",
+      "lambda_mu": 0.1,
+      "crr": 0.01,
+      "source": "Generic vehicle-dynamics references (e.g. SAE / SAE-adjacent tables cited by Milliken, Race Car Vehicle Dynamics, ch. 1) give unstudded-tyre-on-ice peak mu ~ 0.05-0.15; midpoint used. Crr assumed close to dry asphalt (smooth, hard surface) -- plausible range, not a specific measurement."
+    },
+    "field": {
+      "display_name": "Cultivated field / tilled soil",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "TESTING OVERRIDE: dry-asphalt values copied from 'asphalt'; real values in surfaces.json."
+    }
+  }
+}

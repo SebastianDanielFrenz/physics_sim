@@ -297,7 +297,6 @@ int main() {
             in.wheels[1].slip_angle_rad = 0.15f;
             in.wheel_count = 2;
             in.engine.rpm = 5000.0f + 1000.0f * std::sin(0.5f * t);
-            in.engine.limiter_rpm = 6500.0f;
             in.engine.grind_active = (i % 53) == 0;
             return in;
         };
@@ -347,6 +346,224 @@ int main() {
         auto moving = run_frames(core_moving, frames, build_rest(5.0f, 5.0f));
         check(moving.back().strong >= burnout.back().strong,
               "same slip while moving at 5 m/s: slip angle adds back in, at least as strong as the burnout");
+    }
+
+    // --- Bug A pin (owner, 2026-09-25: "accelerating in 3rd gear is enough
+    //     to get the controller to vibrate"). Real ps_run telemetry traced
+    //     this to a LAUNCH transient (a fast front-wheel Fz swing under
+    //     ~2 m/s), not steady WOT accel in any particular gear - see this
+    //     file's header comment and haptics_core.h's source-3 doc comment.
+    //     This pins the actual owner-reported symptom: already-at-speed,
+    //     already-settled full-throttle acceleration in 3rd (representative
+    //     measured numbers: ~20 m/s cruise, accel_x ~1.7 m/s^2, front Fz
+    //     ~3300-3700N with only small ripple - no launch transient, no
+    //     wheelspin) produces ~0 from both motors. ------------------------
+    {
+        HapticsCore core;
+        const int frames = static_cast<int>(3.0f / kDt);
+        auto out = run_frames(core, frames, [](int i) {
+            HapticsInput in = make_input(kDt);
+            const float t = static_cast<float>(i) * kDt;
+            in.accel_x = 1.7f; // steady WOT acceleration, ISO chassis-frame forward
+            const float fz_ripple = 60.0f * std::sin(2.0f * 3.14159265f * 4.0f * t); // small road-noise ripple, NOT a launch swing
+            in.wheels[0].normal_load_n = 3500.0f + fz_ripple; // FL
+            in.wheels[1].normal_load_n = 3500.0f - fz_ripple; // FR
+            in.wheels[2].normal_load_n = 3300.0f;             // RL
+            in.wheels[3].normal_load_n = 3300.0f;              // RR
+            for (int w = 0; w < 4; ++w) {
+                in.wheels[w].in_contact = true;
+                in.wheels[w].slip_ratio = 0.03f; // small, well below peak_slip_ratio (0.10)
+                in.wheels[w].ground_speed_mps = 20.0f; // already-at-speed cruise, well past every fade threshold
+                in.wheels[w].wheel_surface_speed_mps = 20.0f;
+            }
+            in.wheel_count = 4;
+            return in;
+        });
+        const HapticsOutput& last = out.back();
+        check(last.strong < 0.02f, "steady 3rd-gear WOT accel (already settled, no launch transient): strong motor ~0");
+        check(last.weak < 0.02f, "steady 3rd-gear WOT accel (already settled, no launch transient): weak motor ~0");
+    }
+
+    // --- Bug B (owner, 2026-09-25: "didn't feel the curbs on the asphalt
+    //     straight at all") - source 7, surface texture / rumble strip.
+    //     Kerb at speed -> clear rumble; kerb at ~0 speed -> none (not
+    //     rolling over the strip yet); asphalt (or any unmatched surface)
+    //     -> none regardless of speed. ---------------------------------------
+    {
+        auto build_surface = [](const std::array<char, 16>& name, float speed) {
+            return [name, speed](int) {
+                HapticsInput in = make_input(kDt);
+                in.wheels[0].normal_load_n = 4000.0f;
+                in.wheels[0].in_contact = true;
+                in.wheels[0].ground_speed_mps = speed;
+                in.wheels[0].wheel_surface_speed_mps = speed;
+                in.wheels[0].surface_name = name;
+                in.wheel_count = 1;
+                return in;
+            };
+        };
+        const std::array<char, 16> kerb_name{'k', 'e', 'r', 'b'};
+        const std::array<char, 16> asphalt_name{'a', 's', 'p', 'h', 'a', 'l', 't'};
+        const int frames = static_cast<int>(1.0f / kDt);
+
+        HapticsCore core_kerb_moving;
+        auto kerb_moving = run_frames(core_kerb_moving, frames, build_surface(kerb_name, 10.0f));
+        check(kerb_moving.back().weak > 0.1f, "kerb at speed: weak motor rumbles clearly");
+
+        HapticsCore core_kerb_still;
+        auto kerb_still = run_frames(core_kerb_still, frames, build_surface(kerb_name, 0.0f));
+        check(kerb_still.back().weak < 0.01f, "kerb at ~0 speed: no rumble (not rolling over the strip yet)");
+
+        HapticsCore core_asphalt;
+        auto asphalt = run_frames(core_asphalt, frames, build_surface(asphalt_name, 10.0f));
+        check(asphalt.back().weak < 0.01f, "asphalt at speed: no rumble from the surface-texture source");
+    }
+
+    // --- Regression: a rev limiter must not cause rumble on its own (owner
+    //     requirement, 2026-09-25) - HapticsEngineInput no longer even has a
+    //     limiter field, so a caller cannot wire one in; this pins that a
+    //     high/pinned rpm alone (no grind, no stall) contributes nothing
+    //     from source 6. ------------------------------------------------
+    {
+        HapticsCore core;
+        const int frames = static_cast<int>(1.0f / kDt);
+        auto out = run_frames(core, frames, [](int) {
+            HapticsInput in = make_input(kDt);
+            in.engine.rpm = 6800.0f; // pinned at/above a typical limiter rpm
+            in.wheel_count = 0;
+            return in;
+        });
+        check(out.back().weak == 0.0f, "engine pinned at limiter rpm, no grind/stall: weak motor stays exactly 0");
+    }
+
+    // --- Owner requirement, 2026-09-25: "good asphalt doesn't cause
+    //     rumble" - steady cruise on the asphalt straight at 50/100/150
+    //     km/h, part throttle in whichever gear that speed lands in, is
+    //     silent. Representative numbers from the demo's own
+    //     --m1-haptics-cruise scripted drive (PS_HAPTICS_LOG=1) on
+    //     data/tracks/test_ground's real (triangulated-mesh) asphalt
+    //     straight - see haptics_core.h's own top comment (source 3) for
+    //     the measured settled-cruise RMS ceiling this pins against. -----
+    {
+        auto build_cruise = [](float speed_mps, float slip_ratio) {
+            return [speed_mps, slip_ratio](int i) {
+                HapticsInput in = make_input(kDt);
+                const float t = static_cast<float>(i) * kDt;
+                // Small ambient ripple representative of a real (mesh, not
+                // mathematically flat) asphalt surface at steady speed -
+                // comfortably under the measured settled-cruise ceiling.
+                const float fz_ripple = 40.0f * std::sin(2.0f * 3.14159265f * 6.0f * t);
+                const std::array<char, 16> asphalt_name{'a', 's', 'p', 'h', 'a', 'l', 't'};
+                for (int w = 0; w < 4; ++w) {
+                    in.wheels[w].normal_load_n = 3500.0f + (w < 2 ? fz_ripple : -fz_ripple);
+                    in.wheels[w].in_contact = true;
+                    in.wheels[w].slip_ratio = slip_ratio;
+                    in.wheels[w].ground_speed_mps = speed_mps;
+                    in.wheels[w].wheel_surface_speed_mps = speed_mps;
+                    in.wheels[w].surface_name = asphalt_name;
+                }
+                in.wheel_count = 4;
+                return in;
+            };
+        };
+        const int settle_frames = static_cast<int>(3.0f / kDt);
+        for (float kmh : {50.0f, 100.0f, 150.0f}) {
+            HapticsCore core;
+            auto out = run_frames(core, settle_frames, build_cruise(kmh / 3.6f, 0.04f));
+            const HapticsOutput& last = out.back();
+            char label[128];
+            std::snprintf(label, sizeof(label), "asphalt steady cruise at %.0f km/h (part throttle): both motors ~0", kmh);
+            check(last.strong < 0.02f && last.weak < 0.02f, label);
+        }
+    }
+
+    // --- Normal-traction slip (0.04, well within a FWD car's ordinary
+    //     ~0.03-0.05 under-throttle band) is silent from source 4 - the
+    //     threshold that used to sit INSIDE this band (owner bug,
+    //     2026-09-25) is now clearly above it (haptics_core.h's own top
+    //     comment, source 4). --------------------------------------------
+    {
+        HapticsCore core;
+        const int frames = static_cast<int>(2.0f / kDt);
+        auto out = run_frames(core, frames, [](int) {
+            HapticsInput in = make_input(kDt);
+            for (int w = 0; w < 4; ++w) {
+                in.wheels[w].normal_load_n = 3500.0f;
+                in.wheels[w].in_contact = true;
+                in.wheels[w].slip_ratio = 0.04f;
+                in.wheels[w].ground_speed_mps = 15.0f;
+                in.wheels[w].wheel_surface_speed_mps = 15.0f;
+            }
+            in.wheel_count = 4;
+            return in;
+        });
+        check(out.back().weak < 0.01f, "normal-traction slip_ratio 0.04 under throttle: weak motor stays silent");
+        check(out.back().strong < 0.01f, "normal-traction slip_ratio 0.04 under throttle: strong motor stays silent");
+    }
+
+    // --- Source 7 generalised (owner requirement, 2026-09-25): dirt/grass
+    //     texture is felt (asphalt/kerb already pinned by the "Bug B" test
+    //     above) - every data/surfaces/surfaces.json name now has a table
+    //     entry (haptics_core.h's own HapticsTuning::surface_texture_rules
+    //     field comment). ----------------------------------------------
+    {
+        auto build_surface = [](const std::array<char, 16>& name, float speed) {
+            return [name, speed](int) {
+                HapticsInput in = make_input(kDt);
+                in.wheels[0].normal_load_n = 4000.0f;
+                in.wheels[0].in_contact = true;
+                in.wheels[0].ground_speed_mps = speed;
+                in.wheels[0].wheel_surface_speed_mps = speed;
+                in.wheels[0].surface_name = name;
+                in.wheel_count = 1;
+                return in;
+            };
+        };
+        const int frames = static_cast<int>(1.0f / kDt);
+        const std::array<char, 16> dirt_name{'d', 'i', 'r', 't'};
+        const std::array<char, 16> grass_name{'g', 'r', 'a', 's', 's'};
+        const std::array<char, 16> field_name{'f', 'i', 'e', 'l', 'd'};
+        const std::array<char, 16> low_mu_name{'l', 'o', 'w', '_', 'm', 'u'};
+
+        HapticsCore core_dirt;
+        check(run_frames(core_dirt, frames, build_surface(dirt_name, 10.0f)).back().weak > 0.05f,
+              "dirt texture at speed: weak motor is clearly non-zero");
+        HapticsCore core_grass;
+        check(run_frames(core_grass, frames, build_surface(grass_name, 10.0f)).back().weak > 0.05f,
+              "grass texture at speed: weak motor is clearly non-zero");
+        HapticsCore core_field;
+        check(run_frames(core_field, frames, build_surface(field_name, 10.0f)).back().weak > 0.05f,
+              "field texture at speed: weak motor is clearly non-zero");
+        // low_mu is smooth (haptics_core.h's surface table): no texture
+        // rumble while rolling without slip, exactly like asphalt.
+        HapticsCore core_low_mu;
+        const HapticsOutput low_mu_out = run_frames(core_low_mu, frames, build_surface(low_mu_name, 10.0f)).back();
+        check(low_mu_out.weak == 0.0f && low_mu_out.strong == 0.0f, "low_mu at speed without slip: silent (smooth surface)");
+    }
+
+    // --- Grip limit still rumbles even on asphalt (owner requirement,
+    //     2026-09-25 kept: "loss of grip (wheelspin/lockup/slide past
+    //     peak) does rumble") - a wheelspin-level slip ratio well past
+    //     peak_slip_ratio on asphalt produces sustained STRONG rumble
+    //     despite this task's silencing fixes above. -------------------
+    {
+        const std::array<char, 16> asphalt_name{'a', 's', 'p', 'h', 'a', 'l', 't'};
+        HapticsCore core;
+        const int frames = static_cast<int>(2.0f / kDt);
+        auto out = run_frames(core, frames, [&](int) {
+            HapticsInput in = make_input(kDt);
+            for (int w = 0; w < 2; ++w) {
+                in.wheels[w].normal_load_n = 3500.0f;
+                in.wheels[w].in_contact = true;
+                in.wheels[w].slip_ratio = 0.35f; // well past peak_slip_ratio (0.10) - wheelspin
+                in.wheels[w].ground_speed_mps = 15.0f;
+                in.wheels[w].wheel_surface_speed_mps = 20.0f;
+                in.wheels[w].surface_name = asphalt_name;
+            }
+            in.wheel_count = 2;
+            return in;
+        });
+        check(out.back().strong > 0.3f, "wheelspin-level slip on asphalt: strong motor rumbles clearly (grip loss is still felt)");
     }
 
     if (g_failures == 0) {

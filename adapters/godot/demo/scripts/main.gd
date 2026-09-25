@@ -58,6 +58,13 @@ const CHASSIS_Z_OFFSET := 0.6
 @export var terrain_stream_radius_m: float = 700.0
 @export var terrain_max_resident_tiles: int = 512
 @export var terrain_max_tile_fills_per_tick: int = 16
+# Testing aid (owner request): load data/surfaces/surfaces_test_grip.json
+# instead of the shared surfaces.json - the open procedural terrain's grass/
+# dirt/field (everything under the plain grid) grips like dry asphalt, so
+# handling can be judged anywhere. Kerb and low_mu keep their real values.
+# Set false for the real surfaces.
+@export var test_grip_everywhere: bool = true
+const TEST_GRIP_SURFACES_RELATIVE_PATH := "data/surfaces/surfaces_test_grip.json"
 
 # M1 visual pass: quick teleports so Sebastian can reach the skidpad/ramps
 # without a 2 km drive from the straight - keys 1/2/3 (see _process below).
@@ -126,6 +133,67 @@ var _autopilot_max_gear: int = 0
 var _autopilot_stalled_seen: bool = false
 var _autopilot_final_engine_state: String = ""
 
+# --m1-haptics-cruise: a scripted steady-speed drive on the asphalt straight
+# for MEASURING haptics_core.h's per-source debug readout (owner task,
+# 2026-09-25: "measure first - find out WHICH source(s) fire while driving
+# along the asphalt straight ... at steady speeds"), separate from
+# --m1-autopilot's own short launch/brake/steer placeholder drive (that one
+# never holds a steady speed long enough to be useful for this). Combine
+# with --m1-spawn=spawn_long_straight_car (test_ground.json's 10 km
+# top-speed straight, area "long_straight" - plenty of room to accelerate
+# to and hold 150 km/h, unlike the ~1000 m "straight" area
+# spawn_straight_car itself sits on) and PS_HAPTICS_LOG=1 (input_map.cpp) to
+# get one stdout line/second of every source's raw intensity while this
+# drives. A simple proportional throttle controller holds each of
+# _HAPTICS_CRUISE_TARGETS_KMH in turn (naturally landing at part throttle in
+# whichever gear auto-shift picks for that speed - task's "also under part
+# throttle in 3rd-4th"), settles, holds for
+# HAPTICS_CRUISE_HOLD_S, prints a phase marker, then moves to the next
+# target; _finish_haptics_cruise() below quits the run once every target
+# has been held (or timed out).
+const HAPTICS_CRUISE_TARGETS_KMH: Array[float] = [50.0, 100.0, 150.0]
+const HAPTICS_CRUISE_TOLERANCE_MPS := 0.5 # +-1.8 km/h counts as "settled"
+const HAPTICS_CRUISE_HOLD_S := 4.0        # settled time required before logging + advancing
+const HAPTICS_CRUISE_PHASE_TIMEOUT_S := 90.0 # safety: advance anyway if a phase never settles
+# PHYS-033 P4 I3 section 12.4 / test_powertrain_gearbox: a dog-clutch gear
+# engagement is refused while the input shaft is under load ("dog release
+# refused while loaded then releasing once torque drops"). Requesting the
+# launch shift_up_count=1 and letting the P controller's initial (large)
+# error slam full throttle in the SAME tick races the engagement so it
+# never completes - the car free-revs in Neutral forever (measured: gear
+# stayed 0, rpm pinned ~6700-6800 near the limiter, for the whole run before
+# this fix). _run_autopilot avoids this by holding throttle at 0 for its
+# first 0.5s while the launch shift lands; _run_haptics_cruise does the same
+# via this grace window (phase 0 only, throttle forced to 0 until gear > 0
+# or the window elapses).
+const HAPTICS_CRUISE_LAUNCH_GRACE_S := 1.5
+# Measured (this session): setting the "assist.auto_shift" control channel
+# does NOT make the car upshift - ps::drivetrain::ManualTcu's auto-shift
+# up/down decision (core/src/drivetrain/manual_tcu.cpp step(), the
+# `desc_.auto_shift.enabled && ...` branch) reads the STATIC per-vehicle
+# AutoShiftDesc::enabled field from data/vehicles/car_sedan.json (currently
+# "false"), never the runtime Sensors::assist_auto_shift the control channel
+# maps to - that field is set (core/src/drivetrain/powertrain.cpp) but never
+# read anywhere in manual_tcu.cpp. First haptics-cruise run confirmed this:
+# with the channel set, the car launched into 1st but then held WOT at the
+# 6800 rpm fuel-cut limiter for the full 90s phase timeout, never
+# upshifting, so "100/150 km/h steady cruise" was never reached. This is a
+# core/src/drivetrain gap outside adapters/godot/** scope, so instead of
+# relying on the (currently no-op) assist, this script upshifts itself via
+# the same shift_up_count channel a human driver/the autopilot use, at
+# HAPTICS_CRUISE_UPSHIFT_RPM (car_sedan.json's own auto_shift.
+# up_rpm_at_full_throttle=6300, comfortably under the 6800 rpm limiter).
+const HAPTICS_CRUISE_UPSHIFT_RPM := 6300.0
+const HAPTICS_CRUISE_SHIFT_COOLDOWN_S := 1.2 # >= one gearbox shift's worst-case dwell, avoids re-triggering mid-shift
+var _haptics_cruise: bool = false
+var _haptics_cruise_launched: bool = false
+var _haptics_cruise_done: bool = false
+var _haptics_cruise_phase: int = 0
+var _haptics_cruise_phase_t: float = 0.0
+var _haptics_cruise_hold_t: float = 0.0
+var _haptics_cruise_shift_up_count: float = 1.0 # mirrors the literal 1.0 sent by the launch shift below
+var _haptics_cruise_shift_cooldown_t: float = 0.0
+
 # --m1-force-rebase-test: verification for the chase-cam origin-rebase bug
 # (adapters/godot/demo/scripts/chase_cam.gd's own header comment) - see
 # _run_camera_rebase_check's comment for why this forces a rebase (a
@@ -153,6 +221,16 @@ var _camera_check_max_dist_after_settle_m: float = 0.0
 var _camera_check_max_frame_jump_m: float = 0.0
 var _camera_check_prev_dist_m: float = -1.0
 var _camera_check_frame_count: int = 0
+# Rendered-vs-current chassis desync: the chassis PsBodyNode3D's drawn
+# position vs. a fresh get_body_transform read later in the same frame.
+# The two differ by at most a tick or two of motion, EXCEPT when the
+# floating origin moved in between (a node that placed itself before the
+# rebase is then off by the whole rebase delta, ~500 m, for one frame -
+# the "car bugs back and bounces back" glitch; fixed by the cameras'
+# process_priority, see chase_cam.gd's _ready). The teleport frame itself
+# is skipped (fresh ABSOLUTE position jumped).
+var _camera_check_max_render_desync_m: float = 0.0
+var _camera_check_prev_abs: Vector3 = Vector3.INF
 # How long to give the chase cam's OWN, legitimate exponential lag
 # (chase_cam.gd's position_lag=6.0 -> ~0.17 s time constant) to finish
 # catching up to a teleport before this script starts holding the
@@ -197,6 +275,11 @@ func _ready() -> void:
 	# See the _force_rebase_test var declaration / _run_camera_rebase_check
 	# for what this does; only meaningful combined with --m1-autopilot.
 	_force_rebase_test = "--m1-force-rebase-test" in user_args
+	# See _haptics_cruise's var declaration above - a separate scripted
+	# drive from --m1-autopilot, mutually exclusive with it (the branch in
+	# _process below only checks _autopilot first, so pass one or the
+	# other, not both, on the command line).
+	_haptics_cruise = "--m1-haptics-cruise" in user_args
 	# --m1-screenshot=<absolute_path.png>: saves one PNG of the running
 	# demo a few seconds in (viewport texture -> Image, no user interaction
 	# needed - only works when Godot actually has a rendering context, not
@@ -236,7 +319,8 @@ func _ready() -> void:
 	print("ps_godot main.gd: load_scenario returned: ", ok, " err=", simulation.get_last_error())
 
 	var track_dir := repo_root.path_join(track_relative_dir)
-	var track_ok: bool = simulation.import_test_ground(track_dir, terrain_max_resident_tiles, terrain_max_tile_fills_per_tick)
+	var surfaces_override := repo_root.path_join(TEST_GRIP_SURFACES_RELATIVE_PATH) if test_grip_everywhere else ""
+	var track_ok: bool = simulation.import_test_ground(track_dir, terrain_max_resident_tiles, terrain_max_tile_fills_per_tick, surfaces_override)
 	print("ps_godot main.gd: import_test_ground returned: ", track_ok, " err=", simulation.get_last_error())
 
 	var spawn := _read_spawn(track_dir, spawn_id)
@@ -589,6 +673,8 @@ func _process(delta: float) -> void:
 		_run_autopilot(delta)
 		if _force_rebase_test:
 			_run_camera_rebase_check(delta)
+	elif _haptics_cruise:
+		_run_haptics_cruise(delta)
 
 	if _screenshot_path != "" and not _screenshot_taken:
 		_screenshot_t += delta
@@ -706,6 +792,90 @@ func _run_autopilot(delta: float) -> void:
 			simulation.get_wheel_load_n("car", 0), simulation.get_wheel_fx("car", 0),
 			simulation.get_wheel_surface_name("car", 0)])
 
+func _run_haptics_cruise(delta: float) -> void:
+	# See _haptics_cruise's own var-block comment above for the full
+	# rationale. Launch (leave Neutral) exactly once via shift_up_count=1
+	# (auto-clutch path, same as the ordinary autopilot). "assist.auto_shift"
+	# is still set for completeness/forward-compat, but (see
+	# HAPTICS_CRUISE_UPSHIFT_RPM's comment) it currently has no effect on
+	# this vehicle, so this function also drives every later upshift itself.
+	if _haptics_cruise_done:
+		return
+	if not _haptics_cruise_launched:
+		_haptics_cruise_launched = true
+		simulation.set_control("assist.auto_shift", 1.0)
+		simulation.set_control("shift_up_count", 1.0)
+		print("ps_godot M1 haptics cruise: launched, targets_kmh=", HAPTICS_CRUISE_TARGETS_KMH)
+
+	_haptics_cruise_phase_t += delta
+	if _haptics_cruise_phase >= HAPTICS_CRUISE_TARGETS_KMH.size():
+		_finish_haptics_cruise()
+		return
+
+	var target_kmh: float = HAPTICS_CRUISE_TARGETS_KMH[_haptics_cruise_phase]
+	var target_mps: float = target_kmh / 3.6
+	var speed_mps: float = simulation.get_body_speed_mps(CHASSIS_BODY_NAME)
+	var error_mps: float = target_mps - speed_mps
+
+	var pt: Dictionary = simulation.get_vehicle_powertrain(VEHICLE_NAME)
+	var gear: int = int(pt.get("gear", 0))
+	var rpm: float = pt.get("rpm", 0.0)
+
+	# Manual upshift emulation (see HAPTICS_CRUISE_UPSHIFT_RPM's comment for
+	# why this script drives it instead of the assist). Cooldown-gated so a
+	# shift already in flight (gearbox phase Selecting/Synchronising) isn't
+	# re-triggered every frame while rpm is still above threshold.
+	_haptics_cruise_shift_cooldown_t = max(0.0, _haptics_cruise_shift_cooldown_t - delta)
+	if gear >= 1 and rpm > HAPTICS_CRUISE_UPSHIFT_RPM and _haptics_cruise_shift_cooldown_t <= 0.0:
+		_haptics_cruise_shift_up_count += 1.0
+		simulation.set_control("shift_up_count", _haptics_cruise_shift_up_count)
+		_haptics_cruise_shift_cooldown_t = HAPTICS_CRUISE_SHIFT_COOLDOWN_S
+
+	var throttle: float
+	if _haptics_cruise_phase == 0 and gear == 0 and _haptics_cruise_phase_t < HAPTICS_CRUISE_LAUNCH_GRACE_S:
+		# See HAPTICS_CRUISE_LAUNCH_GRACE_S's own comment: let the launch
+		# shift land before applying any throttle.
+		throttle = 0.0
+	else:
+		# Simple proportional controller with a small baseline (asphalt rolling
+		# resistance/drag alone would otherwise let speed decay slightly under
+		# pure P control right at the target) - not trying to be a precise
+		# cruise control, just steady and settled enough to measure a real
+		# "part throttle, steady speed" telemetry window. No braking: letting
+		# off throttle is enough to bleed off the modest overshoot a plain P
+		# controller produces at these accelerations.
+		throttle = clamp(0.12 + error_mps * 0.10, 0.0, 1.0)
+	simulation.set_control("throttle", throttle)
+	simulation.set_control("brake", 0.0)
+	simulation.set_control("steer", 0.0)
+
+	if abs(error_mps) <= HAPTICS_CRUISE_TOLERANCE_MPS:
+		_haptics_cruise_hold_t += delta
+	else:
+		_haptics_cruise_hold_t = 0.0
+
+	var settled: bool = _haptics_cruise_hold_t >= HAPTICS_CRUISE_HOLD_S
+	var timed_out: bool = _haptics_cruise_phase_t >= HAPTICS_CRUISE_PHASE_TIMEOUT_S
+	if settled or timed_out:
+		# Re-fetch: gear/rpm may have advanced (auto_shift upshifting) since
+		# the throttle calc above.
+		var pt_now: Dictionary = simulation.get_vehicle_powertrain(VEHICLE_NAME)
+		var hd: Dictionary = input_map.get_haptics_debug() if input_map != null else {}
+		var fl_surface: String = simulation.get_wheel_surface_name(VEHICLE_NAME, 0)
+		print("ps_godot M1 haptics cruise: phase=%d target_kmh=%.0f speed_kmh=%.2f settled=%s gear=%d rpm=%.0f throttle=%.2f FL_surface=%s src3_load=%.4f src4_slip=%.4f src7_surf=%.4f strong_out=%.4f weak_out=%.4f" % [
+			_haptics_cruise_phase, target_kmh, speed_mps * 3.6, settled, int(pt_now.get("gear", 0)), pt_now.get("rpm", 0.0), throttle, fl_surface,
+			hd.get("source3_load_noise", 0.0), hd.get("source4_light_slip", 0.0), hd.get("source7_surface_texture", 0.0),
+			hd.get("strong_out", 0.0), hd.get("weak_out", 0.0)])
+		_haptics_cruise_phase += 1
+		_haptics_cruise_phase_t = 0.0
+		_haptics_cruise_hold_t = 0.0
+
+func _finish_haptics_cruise() -> void:
+	_haptics_cruise_done = true
+	print("ps_godot M1 haptics cruise: done")
+	await get_tree().create_timer(0.2).timeout
+	get_tree().quit()
+
 func _run_camera_rebase_check(_delta: float) -> void:
 	# Verification for the chase-cam origin-rebase bug (owner report: "the
 	# camera suddenly swings around as if the car had teleported" -
@@ -751,6 +921,13 @@ func _run_camera_rebase_check(_delta: float) -> void:
 
 	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
 	var dist: float = chassis_xform.origin.distance_to(chase_camera.global_position)
+	var chassis_node := get_node_or_null("Body_" + CHASSIS_BODY_NAME) as Node3D
+	var fresh_abs: Vector3 = chassis_xform.origin - simulation.get_world_origin_godot_position()
+	var teleported: bool = _camera_check_prev_abs != Vector3.INF and fresh_abs.distance_to(_camera_check_prev_abs) > 5.0
+	_camera_check_prev_abs = fresh_abs
+	if chassis_node != null and not teleported:
+		_camera_check_max_render_desync_m = max(_camera_check_max_render_desync_m,
+				chassis_node.global_position.distance_to(chassis_xform.origin))
 	_camera_check_max_dist_m = max(_camera_check_max_dist_m, dist)
 
 	# Informational only (see the discontinuity check below for the actual
@@ -810,9 +987,10 @@ func _finish_autopilot() -> void:
 		# legitimately large right after any big teleport, fixed or not -
 		# see their own var declarations' comments).
 		var jump_bound_m := 3.0
-		var camera_ok: bool = _rebase_test_triggered and _camera_check_max_frame_jump_m <= jump_bound_m
-		print("ps_godot M1 camera check: rebase_forced=%s max_frame_jump_m=%.2f jump_bound_m=%.2f max_cam_chassis_dist_m=%.2f max_cam_chassis_dist_after_settle_m=%.2f pass=%s" % [
-			_rebase_test_triggered, _camera_check_max_frame_jump_m, jump_bound_m, _camera_check_max_dist_m, _camera_check_max_dist_after_settle_m, camera_ok])
+		var desync_bound_m := 3.0
+		var camera_ok: bool = _rebase_test_triggered and _camera_check_max_frame_jump_m <= jump_bound_m and _camera_check_max_render_desync_m <= desync_bound_m
+		print("ps_godot M1 camera check: rebase_forced=%s max_frame_jump_m=%.2f jump_bound_m=%.2f max_cam_chassis_dist_m=%.2f max_cam_chassis_dist_after_settle_m=%.2f pass=%s max_render_desync_m=%.2f desync_bound_m=%.2f" % [
+			_rebase_test_triggered, _camera_check_max_frame_jump_m, jump_bound_m, _camera_check_max_dist_m, _camera_check_max_dist_after_settle_m, camera_ok, _camera_check_max_render_desync_m, desync_bound_m])
 
 	await get_tree().create_timer(0.2).timeout
 	get_tree().quit()

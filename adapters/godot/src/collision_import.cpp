@@ -98,14 +98,15 @@ TestGroundLoadResult import_test_ground_real(const std::string& track_dir,
                                               ps::World& world,
                                               std::shared_ptr<const ps::io::SurfaceTable>& out_surfaces,
                                               const ps::terrain::TerrainConfig& terrain_config,
-                                              std::uint32_t samples_per_tile) {
+                                              std::uint32_t samples_per_tile,
+                                              const std::string& surfaces_path_override) {
     TestGroundLoadResult result;
 
     // data/tracks/<track>/ -> data/surfaces/surfaces.json (two levels up,
     // then into surfaces/ - same relation data/tracks/README.md documents:
     // "data/surfaces/surfaces.json is the *one* shared table ... referenced
     // rather than embedding a copy").
-    const std::string surfaces_path = track_dir + "/../../surfaces/surfaces.json";
+    const std::string surfaces_path = surfaces_path_override.empty() ? track_dir + "/../../surfaces/surfaces.json" : surfaces_path_override;
     std::shared_ptr<ps::io::SurfaceTable> surfaces;
     try {
         surfaces = std::make_shared<ps::io::SurfaceTable>(surfaces_path);

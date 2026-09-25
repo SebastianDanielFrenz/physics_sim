@@ -83,6 +83,13 @@ add_executable(ps_godot_test_origin_rebase tests/test_origin_rebase.cpp src/fram
 target_include_directories(ps_godot_test_origin_rebase PRIVATE src)
 target_link_libraries(ps_godot_test_origin_rebase PRIVATE ps_core ps_warnings ps_options)
 
+# Render-time interpolation (render_interp.h, PLAN.md D3 judder fix) -
+# header-only and Godot-free like origin_rebase.h, so this needs only
+# ps_core for ps::Pose/Quat/slerp - no extra .cpp to compile alongside it.
+add_executable(ps_godot_test_render_interp tests/test_render_interp.cpp)
+target_include_directories(ps_godot_test_render_interp PRIVATE src)
+target_link_libraries(ps_godot_test_render_interp PRIVATE ps_core ps_warnings ps_options)
+
 # Multi-stage gamepad rumble core (haptics_core.h/.cpp) - Godot-free like
 # input_map_core.h, so this stays a plain-C++ test with no godot-cpp/ps_core
 # dependency, same reasoning as ps_godot_test_input_map above.
@@ -98,3 +105,4 @@ include(CTest)
 add_test(NAME ps_godot_test_input_map COMMAND ps_godot_test_input_map)
 add_test(NAME ps_godot_test_origin_rebase COMMAND ps_godot_test_origin_rebase)
 add_test(NAME ps_godot_test_haptics COMMAND ps_godot_test_haptics)
+add_test(NAME ps_godot_test_render_interp COMMAND ps_godot_test_render_interp)

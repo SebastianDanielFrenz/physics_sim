@@ -72,7 +72,7 @@ if (-not $SkipBuild) {
 
     if ($script:Failures.Count -eq 0) {
         Write-Host "`n-- build --" -ForegroundColor Cyan
-        $buildExitCode = Invoke-AdapterCMakeBuild -BuildDir $buildDir -Targets @('ps_godot_adapter', 'ps_godot_test_input_map', 'ps_godot_test_origin_rebase', 'ps_godot_test_haptics')
+        $buildExitCode = Invoke-AdapterCMakeBuild -BuildDir $buildDir -Targets @('ps_godot_adapter', 'ps_godot_test_input_map', 'ps_godot_test_origin_rebase', 'ps_godot_test_haptics', 'ps_godot_test_render_interp')
         if ($buildExitCode -ne 0) { Report-Fail "cmake build failed (exit $buildExitCode)" }
     }
 }
@@ -86,7 +86,7 @@ if ($script:Failures.Count -eq 0) {
 # synthetic input - see adapters/godot/tests/).
 # ---------------------------------------------------------------------------
 if ($script:Failures.Count -eq 0) {
-    foreach ($testName in @('ps_godot_test_input_map', 'ps_godot_test_origin_rebase', 'ps_godot_test_haptics')) {
+    foreach ($testName in @('ps_godot_test_input_map', 'ps_godot_test_origin_rebase', 'ps_godot_test_haptics', 'ps_godot_test_render_interp')) {
         $exe = Get-ChildItem -Path $buildDir -Recurse -Filter "$testName.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $exe) {
             Report-Fail "$testName.exe not found under $buildDir"
@@ -281,6 +281,15 @@ if ($script:Failures.Count -eq 0) {
             # specifically the origin-rebase discontinuity (main.gd's own
             # comment on max_frame_jump_m), not the teleport's own
             # (legitimate, expected) catch-up lag.
+            $dm = [regex]::Match($cameraLine.ToString(), 'max_render_desync_m=([\-0-9.]+)\s+desync_bound_m=([\-0-9.]+)')
+            if ($dm.Success) {
+                # Drawn chassis vs. its current pose in the same frame - a
+                # ~500 m value means a node placed itself before the frame's
+                # origin rebase (cameras must process first, chase_cam.gd).
+                Report-Ok "M1 camera check: max rendered-vs-current chassis desync $($dm.Groups[1].Value) m (bound $($dm.Groups[2].Value) m; folded into pass=)"
+            } else {
+                Report-Fail "M1 camera check: no max_render_desync_m field in: $cameraLine"
+            }
             if ($cameraPass) {
                 Report-Ok "M1 camera check: no frame-to-frame camera jump beyond $maxFrameJumpM m (bound $jumpBoundM m) - raw peak distance during the teleport's own catch-up lag was $maxCamDistM m, settled to $maxCamDistAfterSettleM m"
             } else {

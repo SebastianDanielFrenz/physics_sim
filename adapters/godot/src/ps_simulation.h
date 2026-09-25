@@ -32,6 +32,7 @@
 #include "frame_convert.h"
 #include "frame_timing.h"
 #include "origin_rebase.h"
+#include "render_interp.h"
 #include "sim_thread.h"
 #include "triple_buffer.h"
 
@@ -49,6 +50,7 @@
 #include <godot_cpp/variant/vector2.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -58,9 +60,14 @@
 
 namespace ps_godot {
 
+// render_interp.h's InterpolatedPose (prev tick's pose + this tick's pose)
+// is what every pose-bearing field below now carries, instead of a single
+// ps::Pose - see this file's own "Render-time interpolation" section
+// further down and render_interp.h's header comment for why (PLAN.md D3
+// judder fix).
 struct ArticulationLinkPoseSet {
-    ps::Pose root_pose; // World::link_frame(id, -1)
-    std::vector<ps::Pose> link_poses; // index == link_index
+    InterpolatedPose root; // World::link_frame(id, -1)
+    std::vector<InterpolatedPose> links; // index == link_index
 };
 
 // PLAN.md M1 step 3/5: one wheel's DYNAMIC state (World::wheel_telemetry is
@@ -121,7 +128,26 @@ struct AdapterSnapshot {
     // Indexed the same way as vehicle_order_ (registration order at
     // spawn_vehicle time, finalised when start() is called).
     std::vector<VehicleDynamicSnapshot> vehicles;
+    // Render-time interpolation (render_interp.h, PLAN.md D3 judder fix):
+    // every body PsSimulation exposes by name (bodies_by_name_), indexed
+    // the same way as PsSimulation::body_order_ (registration order,
+    // finalised when start() is called - same pattern as vehicle_order_/
+    // articulation_order_ above). Each entry carries both this tick's pose
+    // and the previous tick's (InterpolatedPose), NOT just the latest -
+    // get_body_transform() blends between them instead of snapping to the
+    // latest one every render frame.
+    std::vector<InterpolatedPose> bodies;
     std::uint64_t tick = 0;
+    // Wall-clock time this snapshot was published (sim thread,
+    // std::chrono::steady_clock - the same clock domain
+    // ensure_render_frame_cached() reads via steady_clock::now() when
+    // computing a render frame's blend factor). Default-constructed
+    // (clock epoch) before the first tick ever publishes - harmless: every
+    // pose vector above is also still empty at that point, so
+    // get_body_transform/get_articulation_link_transform's own bounds
+    // checks return an identity transform regardless of the resulting
+    // (huge, but clamped) alpha.
+    std::chrono::steady_clock::time_point publish_time;
 };
 
 class PsSimulation : public godot::Node {
@@ -236,8 +262,9 @@ public:
     // replaces the old P2 flat-plane placeholder now that core has
     // MeshShape/HeightfieldShape and the loaders it needs. Must be called
     // before start(). Returns false (see get_last_error()) on any load
-    // failure.
-    bool import_test_ground(const godot::String& track_dir_absolute_path, std::int64_t max_resident_tiles = 512, std::int64_t max_tile_fills_per_tick = 16);
+    // failure. surfaces_path_override: see import_test_ground_real (empty =
+    // the shared surfaces.json).
+    bool import_test_ground(const godot::String& track_dir_absolute_path, std::int64_t max_resident_tiles = 512, std::int64_t max_tile_fills_per_tick = 16, const godot::String& surfaces_path_override = godot::String());
     [[nodiscard]] const godot::String& get_last_error() const { return last_error_; }
     [[nodiscard]] std::int64_t terrain_resident_tile_count() const { return world_ ? static_cast<std::int64_t>(world_->terrain_resident_tile_count()) : 0; }
     [[nodiscard]] std::int64_t terrain_starved_tile_count() const { return world_ ? static_cast<std::int64_t>(world_->terrain_starved_tile_count()) : 0; }
@@ -357,6 +384,33 @@ private:
     [[nodiscard]] const WheelDynamicSnapshot* dynamic_wheel(const std::string& vehicle_name, int wheel_index) const;
     void rebuild_post_step_and_start(); // start()'s helper: finalises vehicle/articulation ordering, installs pre/post_step, starts SimThread
 
+    // Render-time interpolation (render_interp.h, PLAN.md D3 judder fix).
+    // Refreshes the frame-local cache below at most once per Godot frame
+    // (keyed by Engine::get_singleton()->get_process_frames(), not by
+    // "whichever node's _process happens to run first this frame" - the
+    // camera (chase_cam.gd, process_priority -1000), PsBodyNode3D per body/
+    // link, and any future reader each have their own place in the scene
+    // tree's process order, and PLAN.md gives none of them priority over
+    // the others) so every get_body_transform/get_articulation_link_
+    // transform call within the SAME frame reads the SAME published
+    // (prev, latest) snapshot at the SAME alpha - the task's own "camera,
+    // car and wheels use the same interpolation time" requirement. Callable
+    // from any const method; safe to call redundantly (idempotent within a
+    // frame).
+    void ensure_render_frame_cached() const;
+    mutable std::uint64_t cached_render_frame_ = ~static_cast<std::uint64_t>(0); // sentinel: no frame cached yet
+    mutable const AdapterSnapshot* cached_render_snapshot_ = nullptr;
+    mutable double cached_render_alpha_ = 1.0;
+    // The ONLY way main-thread code reads adapter_snapshots_: every getter
+    // must go through the same once-per-frame sample. A second read() in
+    // the same frame could swap the triple buffer's read slot and hand the
+    // slot cached_render_snapshot_ still points at back to the sim thread's
+    // writer (a torn read), besides mixing two ticks within one frame.
+    const AdapterSnapshot& render_snapshot() const {
+        ensure_render_frame_cached();
+        return *cached_render_snapshot_;
+    }
+
     // PLAN.md M1 "reset vehicle" control - see reset_vehicle()'s doc
     // comment: applied on the sim thread (SimThread::set_pre_step) rather
     // than directly from here, so a live reset while driving never races
@@ -376,6 +430,37 @@ private:
     std::unordered_map<std::string, ps::ArticulationId> articulations_by_name_;
     std::vector<std::string> articulation_order_; // registration index -> name, matches AdapterSnapshot::articulations
     std::unordered_map<std::string, std::size_t> articulation_link_counts_;
+
+    // Render-time interpolation (render_interp.h): bodies_by_name_'s own
+    // stable per-tick order, matching AdapterSnapshot::bodies - built once
+    // in rebuild_post_step_and_start() (same "finalised when start() runs"
+    // rule as vehicle_order_/articulation_order_ above; bodies_by_name_
+    // itself is only ever populated before start(), by create_body_dynamic).
+    std::vector<std::string> body_order_;
+    std::unordered_map<std::string, std::size_t> body_order_index_; // name -> body_order_ index, mirrors index_in_order() for O(1) lookup on the hot get_body_transform path
+
+    // Sim-thread-only (post_step/pre_step): the previous tick's pose per
+    // body_order_ index, and per articulation per articulation_order_
+    // index - what post_step blends this tick's freshly-read pose against
+    // to build AdapterSnapshot's InterpolatedPose fields. Both are (re)sized
+    // and seeded with each tracked body/link's CURRENT pose in
+    // rebuild_post_step_and_start() (single-threaded, before the sim thread
+    // starts), so the very first published tick already has a real (if
+    // trivial - prev == latest, see render_interp.h's InterpolatedPose
+    // comment) previous pose rather than needing a separate "first tick"
+    // flag.
+    std::vector<ps::Pose> prev_body_pose_;
+    // Set (by index into body_order_) in the pre_step reset-vehicle handler
+    // for the tick a teleport lands on, consumed and cleared again in that
+    // same tick's post_step - see reset_vehicle()'s doc comment and
+    // render_interp.h's header comment on why a teleport forces prev :=
+    // latest instead of blending through it.
+    std::vector<bool> body_teleported_this_tick_;
+    struct ArticulationPrevPose {
+        ps::Pose root;
+        std::vector<ps::Pose> links; // index == link_index, sized to articulation_link_counts_ at rebuild_post_step_and_start() time
+    };
+    std::vector<ArticulationPrevPose> prev_articulation_poses_; // index == articulation_order_'s index
 
     // PLAN.md M1: vehicles (see spawn_vehicle above). vehicle_order_ is
     // finalised (captured into the post_step lambda) when start() runs -

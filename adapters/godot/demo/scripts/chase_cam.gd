@@ -49,6 +49,9 @@ var _smoothed_pos: Vector3 = Vector3.ZERO
 var _smoothed_basis: Basis = Basis.IDENTITY
 var _initialized: bool = false
 var _orbit_yaw: float = 0.0 # radians, + = looking right of the car's heading
+# Godot-space position of the sim's absolute origin as of this camera's
+# previous frame - see free_cam.gd's _follow_origin_shift.
+var _last_origin_godot: Vector3 = Vector3.ZERO
 
 func _target_orbit_yaw() -> float:
 	var pads := Input.get_connected_joypads()
@@ -66,6 +69,16 @@ func _target_orbit_yaw() -> float:
 	return atan2(stick.x, stick.y) * weight
 
 func _ready() -> void:
+	# Run BEFORE every other node that reads a pose this frame (PsBodyNode3D,
+	# terrain_visual.gd, vehicle_visual.gd, main.gd's grid - all default or
+	# higher priority): rebase_focus below may move the shared floating
+	# origin, and anything that already placed itself this frame with the
+	# OLD origin is then drawn up to the rebase threshold (500 m) away from
+	# this camera for exactly one frame - the owner-reported "car bugs back
+	# and bounces back" glitch, measured as a 500 m chassis/camera desync on
+	# every rebase frame (once per ~500 m driven). Camera-first means every
+	# later reader in the frame sees the post-rebase origin.
+	set_process_priority(-1000)
 	if simulation_path != NodePath():
 		_simulation = get_node_or_null(simulation_path)
 
@@ -73,6 +86,12 @@ func _process(delta: float) -> void:
 	var t0 := Time.get_ticks_usec()
 	if _simulation == null or chassis_body_name == "":
 		return
+
+	# Follow an origin shift made by someone else (the free camera, while
+	# it is the current one) so _smoothed_pos stays in the current frame.
+	var origin_now: Vector3 = _simulation.get_world_origin_godot_position()
+	if _initialized:
+		_smoothed_pos += origin_now - _last_origin_godot
 
 	var chassis_xform: Transform3D = _simulation.get_body_transform(chassis_body_name)
 	var chassis_pos: Vector3 = chassis_xform.origin
@@ -124,10 +143,13 @@ func _process(delta: float) -> void:
 	# desired_pos are - it must be carried across the same delta the origin
 	# snap applies to `position`, or it silently keeps living in the old
 	# frame (see file comment for the resulting bug).
-	var rebased_pos: Vector3 = _simulation.rebase_focus(position)
-	var rebase_delta: Vector3 = rebased_pos - position
-	position = rebased_pos
-	_smoothed_pos += rebase_delta
+	# Only the CURRENT camera drives the floating origin (see free_cam.gd).
+	if current:
+		var rebased_pos: Vector3 = _simulation.rebase_focus(position)
+		var rebase_delta: Vector3 = rebased_pos - position
+		position = rebased_pos
+		_smoothed_pos += rebase_delta
+	_last_origin_godot = _simulation.get_world_origin_godot_position()
 
 	var elapsed_us := Time.get_ticks_usec() - t0
 	_simulation.add_adapter_time_us(elapsed_us)

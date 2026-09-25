@@ -64,6 +64,13 @@ TestGroundLoadResult import_test_ground_real(const std::string& track_dir,
                                               ps::World& world,
                                               std::shared_ptr<const ps::io::SurfaceTable>& out_surfaces,
                                               const ps::terrain::TerrainConfig& terrain_config = {},
-                                              std::uint32_t samples_per_tile = 64);
+                                              std::uint32_t samples_per_tile = 64,
+                                              // Empty = the shared data/surfaces/surfaces.json.
+                                              // Otherwise a surfaces-format file with the SAME
+                                              // surface names (ids are assigned alphabetically,
+                                              // so the names must match or the track's per-
+                                              // triangle ids would shift) - e.g. the demo's
+                                              // all-asphalt-grip test table.
+                                              const std::string& surfaces_path_override = {});
 
 } // namespace ps_godot

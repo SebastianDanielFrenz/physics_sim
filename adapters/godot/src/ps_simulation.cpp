@@ -1,5 +1,6 @@
 #include "ps_simulation.h"
 
+#include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/typed_array.hpp>
@@ -160,6 +161,42 @@ void PsSimulation::rebuild_post_step_and_start() {
 
     fall_detectors_.clear();
     for (const std::string& name : vehicle_order_) fall_detectors_.emplace(name, FallDetector{}); // no insertion from the sim thread later
+
+    // Render-time interpolation (render_interp.h): finalise body_order_/
+    // body_order_index_ from bodies_by_name_ (same "finalised when start()
+    // runs" point as vehicle_order_/articulation_order_ above - every
+    // create_body_dynamic call happens before this), then seed
+    // prev_body_pose_/prev_articulation_poses_ with each tracked body's/
+    // link's CURRENT pose (single-threaded here, sim thread not started
+    // yet) so the first published tick's InterpolatedPose already has a
+    // real (prev == latest) pair instead of needing a separate first-tick
+    // flag - see render_interp.h's InterpolatedPose comment.
+    body_order_.clear();
+    body_order_index_.clear();
+    for (const auto& [name, id] : bodies_by_name_) {
+        (void)id;
+        body_order_index_[name] = body_order_.size();
+        body_order_.push_back(name);
+    }
+    prev_body_pose_.resize(body_order_.size());
+    for (std::size_t i = 0; i < body_order_.size(); ++i) {
+        prev_body_pose_[i] = world_->get_pose(bodies_by_name_.at(body_order_[i]));
+    }
+    body_teleported_this_tick_.assign(body_order_.size(), false);
+
+    prev_articulation_poses_.resize(articulation_order_.size());
+    for (std::size_t i = 0; i < articulation_order_.size(); ++i) {
+        const std::string& name = articulation_order_[i];
+        const ps::ArticulationId id = articulations_by_name_.at(name);
+        ArticulationPrevPose& prev = prev_articulation_poses_[i];
+        prev.root = world_->link_frame(id, -1).world_pose(world_->backend());
+        const std::size_t link_count = articulation_link_counts_.count(name) ? articulation_link_counts_.at(name) : 0;
+        prev.links.resize(link_count);
+        for (std::size_t link = 0; link < link_count; ++link) {
+            prev.links[link] = world_->link_frame(id, static_cast<int>(link)).world_pose(world_->backend());
+        }
+    }
+
     sim_thread_->set_pre_step([this]() {
         // Control channels: the only writer of VALUES from here on is the
         // Godot main thread (set_control), the only writer of KEYS was
@@ -189,6 +226,16 @@ void PsSimulation::rebuild_post_step_and_start() {
             // post_step treats the next tick as the first one again (accel
             // 0) instead of reading a huge spurious spike.
             chassis_accel_state_.erase(r.vehicle_name);
+            // Render-time interpolation (render_interp.h): a real prev/
+            // latest blend across THIS tick would render a smear sweeping
+            // from the old position to the teleport target over the next
+            // frame or two - mark this body so post_step forces prev :=
+            // latest for it this tick instead of blending through the jump
+            // (render_interp.h's InterpolatedPose comment).
+            const auto order_it = body_order_index_.find(chassis_name_it->second);
+            if (order_it != body_order_index_.end() && order_it->second < body_teleported_this_tick_.size()) {
+                body_teleported_this_tick_[order_it->second] = true;
+            }
 
             // PHYS-033 P4 I3 plan section 12.1: also reset the drivetrain
             // network itself (right after the chassis pose/velocity above,
@@ -215,19 +262,47 @@ void PsSimulation::rebuild_post_step_and_start() {
     sim_thread_->set_post_step([this]() {
         AdapterSnapshot snap;
         snap.tick = world_->tick();
+        // Render-time interpolation (render_interp.h): stamp the moment
+        // THIS tick's pose data becomes the new "latest" - ensure_render_
+        // frame_cached() measures a render frame's alpha against this.
+        snap.publish_time = std::chrono::steady_clock::now();
         snap.contacts = world_->last_contact_events();
 
         snap.articulations.reserve(articulation_order_.size());
-        for (const std::string& name : articulation_order_) {
+        for (std::size_t i = 0; i < articulation_order_.size(); ++i) {
+            const std::string& name = articulation_order_[i];
             const ps::ArticulationId id = articulations_by_name_.at(name);
+            ArticulationPrevPose& prev = prev_articulation_poses_[i];
+
             ArticulationLinkPoseSet set;
-            set.root_pose = world_->link_frame(id, -1).world_pose(world_->backend());
+            const ps::Pose latest_root = world_->link_frame(id, -1).world_pose(world_->backend());
+            set.root = InterpolatedPose{prev.root, latest_root};
+            prev.root = latest_root;
+
             const std::size_t link_count = articulation_link_counts_.count(name) ? articulation_link_counts_.at(name) : 0;
-            set.link_poses.reserve(link_count);
+            set.links.reserve(link_count);
             for (std::size_t link = 0; link < link_count; ++link) {
-                set.link_poses.push_back(world_->link_frame(id, static_cast<int>(link)).world_pose(world_->backend()));
+                const ps::Pose latest_link = world_->link_frame(id, static_cast<int>(link)).world_pose(world_->backend());
+                set.links.push_back(InterpolatedPose{prev.links[link], latest_link});
+                prev.links[link] = latest_link;
             }
             snap.articulations.push_back(std::move(set));
+        }
+
+        // Render-time interpolation (render_interp.h): every named body
+        // (body_order_, see rebuild_post_step_and_start's own comment) -
+        // blend source for get_body_transform. A teleported body
+        // (body_teleported_this_tick_, set in this tick's pre_step reset
+        // handler above) forces prev := latest instead of carrying over
+        // last tick's pose, so it renders at the teleport target
+        // immediately rather than smearing across the jump.
+        snap.bodies.reserve(body_order_.size());
+        for (std::size_t i = 0; i < body_order_.size(); ++i) {
+            const ps::Pose latest = world_->get_pose(bodies_by_name_.at(body_order_[i])); // safe: sim thread, right after step()
+            const ps::Pose prev = body_teleported_this_tick_[i] ? latest : prev_body_pose_[i];
+            snap.bodies.push_back(InterpolatedPose{prev, latest});
+            prev_body_pose_[i] = latest;
+            body_teleported_this_tick_[i] = false; // consumed for this tick
         }
 
         // PLAN.md M1 steps 1/5: per-vehicle wheel telemetry (race-free
@@ -358,17 +433,18 @@ godot::Dictionary PsSimulation::probe_ground_height(float sim_x, float sim_y) co
 godot::Transform3D PsSimulation::get_body_transform(const String& body_name) const {
     if (!world_) return godot::Transform3D();
     const std::string name = to_std_string(body_name);
-    const auto it = bodies_by_name_.find(name);
-    if (it == bodies_by_name_.end()) return godot::Transform3D();
-    const ps::BodyId id = it->second;
+    const auto it = body_order_index_.find(name);
+    if (it == body_order_index_.end()) return godot::Transform3D();
 
-    // Race-free: World's own lock-free snapshot triple buffer, published by
-    // the sim thread's snapshot stage every tick (ps/world/snapshot.h).
-    const ps::WorldSnapshot& snap = const_cast<ps::World*>(world_.get())->snapshots().read();
-    for (const ps::BodySnapshot& b : snap.bodies) {
-        if (b.id == id) return iso_to_godot_transform(b.pose, origin_rebase_.origin());
-    }
-    return godot::Transform3D();
+    // Render-time interpolation (render_interp.h): race-free via
+    // PsSimulation's OWN triple buffer (adapter_snapshots_, see
+    // ensure_render_frame_cached()'s doc comment) rather than World's own
+    // snapshot triple buffer - the core one only ever carries the latest
+    // tick's pose, not the (prev, latest, publish_time) this needs to blend.
+    ensure_render_frame_cached();
+    if (cached_render_snapshot_ == nullptr || it->second >= cached_render_snapshot_->bodies.size()) return godot::Transform3D();
+    const ps::Pose pose = interpolate_pose(cached_render_snapshot_->bodies[it->second], cached_render_alpha_);
+    return iso_to_godot_transform(pose, origin_rebase_.origin());
 }
 
 float PsSimulation::get_body_speed_mps(const String& body_name) const {
@@ -389,11 +465,31 @@ godot::Transform3D PsSimulation::get_articulation_link_transform(const String& a
     const std::size_t order_index = index_in_order(articulation_order_, name);
     if (order_index == static_cast<std::size_t>(-1)) return godot::Transform3D();
 
-    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
-    if (order_index >= snap.articulations.size()) return godot::Transform3D();
-    const ArticulationLinkPoseSet& set = snap.articulations[order_index];
-    const ps::Pose& pose = (link_index < 0) ? set.root_pose : (static_cast<std::size_t>(link_index) < set.link_poses.size() ? set.link_poses[static_cast<std::size_t>(link_index)] : set.root_pose);
+    // Render-time interpolation (render_interp.h) - see get_body_transform's
+    // comment; same frame-cached (snapshot, alpha) pair as every other pose
+    // read this frame.
+    ensure_render_frame_cached();
+    if (cached_render_snapshot_ == nullptr || order_index >= cached_render_snapshot_->articulations.size()) return godot::Transform3D();
+    const ArticulationLinkPoseSet& set = cached_render_snapshot_->articulations[order_index];
+    const InterpolatedPose& ip = (link_index < 0) ? set.root : (static_cast<std::size_t>(link_index) < set.links.size() ? set.links[static_cast<std::size_t>(link_index)] : set.root);
+    const ps::Pose pose = interpolate_pose(ip, cached_render_alpha_);
     return iso_to_godot_transform(pose, origin_rebase_.origin());
+}
+
+void PsSimulation::ensure_render_frame_cached() const {
+    // Engine::get_singleton() is always valid once godot-cpp's own
+    // extension entry point has run (register_types.cpp) - PsSimulation is
+    // a godot::Node, which cannot exist before that - so no null check is
+    // needed here for the normal running case; this function is only ever
+    // called from get_body_transform/get_articulation_link_transform,
+    // never from a plain-C++ test (those exercise render_interp.h directly,
+    // Godot-free - see adapters/godot/tests/test_render_interp.cpp).
+    const std::uint64_t frame = godot::Engine::get_singleton()->get_process_frames();
+    if (cached_render_snapshot_ != nullptr && frame == cached_render_frame_) return; // already sampled this Godot frame
+    cached_render_frame_ = frame;
+    cached_render_snapshot_ = &const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    const double tick_dt_s = world_ ? world_->dt() : 0.0;
+    cached_render_alpha_ = render_interp_alpha(cached_render_snapshot_->publish_time, std::chrono::steady_clock::now(), tick_dt_s);
 }
 
 godot::PackedStringArray PsSimulation::get_body_names() const {
@@ -437,7 +533,7 @@ float PsSimulation::get_control(const String& channel) const {
 
 TypedArray<Dictionary> PsSimulation::get_contact_events() const {
     TypedArray<Dictionary> out;
-    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    const AdapterSnapshot& snap = render_snapshot();
     for (const ps::ContactEvent& c : snap.contacts) {
         Dictionary d;
         d["point"] = iso_to_godot(c.point, origin_rebase_.origin());
@@ -455,7 +551,7 @@ std::int64_t PsSimulation::import_static_collision(godot::Node* scene_root) {
     return created;
 }
 
-bool PsSimulation::import_test_ground(const String& track_dir_absolute_path, std::int64_t max_resident_tiles, std::int64_t max_tile_fills_per_tick) {
+bool PsSimulation::import_test_ground(const String& track_dir_absolute_path, std::int64_t max_resident_tiles, std::int64_t max_tile_fills_per_tick, const String& surfaces_path_override) {
     if (!world_) {
         last_error_ = "import_test_ground: no world (call load_scenario first)";
         return false;
@@ -470,7 +566,7 @@ bool PsSimulation::import_test_ground(const String& track_dir_absolute_path, std
     tcfg.max_tile_fills_per_tick = static_cast<std::size_t>(max_tile_fills_per_tick);
 
     std::shared_ptr<const ps::io::SurfaceTable> surfaces;
-    const TestGroundLoadResult result = import_test_ground_real(track_dir, *world_, surfaces, tcfg);
+    const TestGroundLoadResult result = import_test_ground_real(track_dir, *world_, surfaces, tcfg, 64, to_std_string(surfaces_path_override));
     if (!result.ok) {
         last_error_ = String(result.error.c_str());
         return false;
@@ -662,7 +758,7 @@ Dictionary PsSimulation::get_vehicle_powertrain(const String& vehicle_name) cons
     Dictionary d;
     const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
     if (order_index == static_cast<std::size_t>(-1)) return d;
-    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    const AdapterSnapshot& snap = render_snapshot();
     if (order_index >= snap.vehicles.size()) return d;
     const ps::drivetrain::PowertrainSnapshot& p = snap.vehicles[order_index].powertrain;
 
@@ -719,7 +815,7 @@ Dictionary PsSimulation::get_vehicle_gauge_info(const String& vehicle_name) cons
 const WheelDynamicSnapshot* PsSimulation::dynamic_wheel(const std::string& vehicle_name, int wheel_index) const {
     const std::size_t order_index = index_in_order(vehicle_order_, vehicle_name);
     if (order_index == static_cast<std::size_t>(-1)) return nullptr;
-    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    const AdapterSnapshot& snap = render_snapshot();
     if (order_index >= snap.vehicles.size()) return nullptr;
     const std::vector<WheelDynamicSnapshot>& wheels = snap.vehicles[order_index].wheels;
     if (wheel_index < 0 || static_cast<std::size_t>(wheel_index) >= wheels.size()) return nullptr;
@@ -729,7 +825,7 @@ const WheelDynamicSnapshot* PsSimulation::dynamic_wheel(const std::string& vehic
 Vector3 PsSimulation::get_vehicle_chassis_accel_local(const String& vehicle_name) const {
     const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
     if (order_index == static_cast<std::size_t>(-1)) return Vector3();
-    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    const AdapterSnapshot& snap = render_snapshot();
     if (order_index >= snap.vehicles.size()) return Vector3();
     const ps::Vec3& a = snap.vehicles[order_index].accel_local;
     return Vector3(static_cast<float>(a.x), static_cast<float>(a.y), static_cast<float>(a.z));
@@ -757,7 +853,7 @@ Vector2 PsSimulation::get_vehicle_steer_geometry(const String& vehicle_name) con
 float PsSimulation::get_vehicle_ground_speed_mps(const String& vehicle_name) const {
     const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
     if (order_index == static_cast<std::size_t>(-1)) return 0.0f;
-    const AdapterSnapshot& snap = const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
+    const AdapterSnapshot& snap = render_snapshot();
     if (order_index >= snap.vehicles.size()) return 0.0f;
     return static_cast<float>(snap.vehicles[order_index].ground_speed_mps);
 }
@@ -826,7 +922,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_control", "channel"), &PsSimulation::get_control);
     ClassDB::bind_method(D_METHOD("get_contact_events"), &PsSimulation::get_contact_events);
     ClassDB::bind_method(D_METHOD("import_static_collision", "scene_root"), &PsSimulation::import_static_collision);
-    ClassDB::bind_method(D_METHOD("import_test_ground", "track_dir_absolute_path", "max_resident_tiles", "max_tile_fills_per_tick"), &PsSimulation::import_test_ground, DEFVAL(512), DEFVAL(16));
+    ClassDB::bind_method(D_METHOD("import_test_ground", "track_dir_absolute_path", "max_resident_tiles", "max_tile_fills_per_tick", "surfaces_path_override"), &PsSimulation::import_test_ground, DEFVAL(512), DEFVAL(16), DEFVAL(String()));
     ClassDB::bind_method(D_METHOD("get_last_error"), &PsSimulation::get_last_error);
     ClassDB::bind_method(D_METHOD("terrain_resident_tile_count"), &PsSimulation::terrain_resident_tile_count);
     ClassDB::bind_method(D_METHOD("terrain_starved_tile_count"), &PsSimulation::terrain_starved_tile_count);

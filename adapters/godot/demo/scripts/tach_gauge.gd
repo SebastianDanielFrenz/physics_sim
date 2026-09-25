@@ -36,6 +36,10 @@ extends Control
 const GaugeLogic := preload("res://scripts/gauge_logic.gd")
 
 var _simulation: Node
+# Testing aid: the chassis's true speed over ground (|linear velocity|,
+# world frame), drawn small above the indicated speed so the speedo's own
+# gearbox-output-derived value can be compared against it.
+var _gps_kmh: float = 0.0
 var _input_map: Node
 
 # Cached once per vehicle (static data: idle/limiter rpm, gear count, fitted
@@ -85,6 +89,7 @@ func _process(delta: float) -> void:
 		if _gauge_info.is_empty():
 			_gauge_info = _simulation.get_vehicle_gauge_info(vehicle_name)
 		_last_pt = _simulation.get_vehicle_powertrain(vehicle_name)
+		_gps_kmh = _simulation.get_vehicle_ground_speed_mps(vehicle_name) * 3.6
 		var target_rpm: float = _last_pt.get("rpm", 0.0)
 		_display_rpm = GaugeLogic.smooth_towards(_display_rpm, target_rpm, NEEDLE_SMOOTH_RATE_PER_S, delta)
 	else:
@@ -238,6 +243,7 @@ func _draw() -> void:
 	var speed_kmh: float = float(_last_pt.get("speedo_kmh", 0.0))
 	var speed_pos := Vector2(center.x - radius * 1.55, center.y)
 	_draw_centered_text(font, speed_pos + Vector2(0, -font_size_speed * 0.35), "%d" % int(round(speed_kmh)), font_size_speed, COLOR_SPEED_TEXT)
+	_draw_centered_text(font, speed_pos + Vector2(0, -font_size_speed * 1.15), "GPS %d" % int(round(_gps_kmh)), font_size_speed_unit, COLOR_TICK_MINOR)
 	_draw_centered_text(font, speed_pos + Vector2(0, font_size_speed * 0.55), "km/h", font_size_speed_unit, COLOR_TICK_MINOR)
 
 	# --- engine warning banner above the gauge (owner: "the engine has

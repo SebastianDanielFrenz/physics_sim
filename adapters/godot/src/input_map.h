@@ -38,6 +38,7 @@
 #include "input_map_core.h"
 
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/node_path.hpp>
 
 #include <cstdint>
@@ -121,6 +122,13 @@ public:
     [[nodiscard]] bool get_rumble_enabled() const { return rumble_enabled_; }
     void set_rumble_enabled(bool v);
 
+    // Debug readout (haptics_core.h's own top comment, owner requirement
+    // 2026-09-25 "stays useful for the owner's future reports") - every
+    // HapticsSourceDebug field from the most recent update_haptics() call,
+    // for the demo HUD (hud.gd) to display. Empty Dictionary before the
+    // first haptics update (no vehicle/simulation wired up yet).
+    [[nodiscard]] godot::Dictionary get_haptics_debug() const;
+
 protected:
     static void _bind_methods();
 
@@ -146,6 +154,15 @@ private:
     bool rumble_enabled_ = true;
     bool prev_rumble_toggle_held_ = false;
     bool rumble_was_active_ = false; // whether the last call actually started vibration (so stop_joy_vibration is called at most once per "stop" transition, not every idle frame)
+
+    // PS_HAPTICS_LOG debug readout (haptics_core.h's own top comment) -
+    // read once (std::getenv is not per-frame-cheap and never changes at
+    // runtime) and cached; logs HapticsSourceDebug to stdout at most once a
+    // second so a long drive's log stays readable instead of one line per
+    // frame.
+    bool haptics_log_enabled_ = false;
+    bool haptics_log_checked_ = false;
+    float haptics_log_accum_s_ = 0.0f;
 };
 
 } // namespace ps_godot
