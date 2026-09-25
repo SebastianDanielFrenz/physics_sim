@@ -342,20 +342,28 @@ TEST_CASE("Full-throttle acceleration on grass/dirt is lower than on asphalt", "
 }
 
 // See this file's header comment ("CAVEAT found re-checking this fix
-// against a live demo run"). Deliberately does NOT assert low slip - full
-// throttle commanded before the suspension has settled DOES drive the
-// tyre deep past its peak (documented, understood, not fixed here - see
-// vehicle_desc.h's DriveDesc comment). What this asserts instead: the
-// excursion is bounded/transient (the whole point of the "does not
-// permanently strand the car" title) - slip ratio recovers to a small
-// value well before this test's window ends, and the car is continuously
-// gaining speed throughout, never stalling. Measured this session (see
-// out/handover_accel.md): slip pegged at the +-3.0 clamp until ~t=2 s,
-// recovers to <0.1 by t=6 s, car reaches ~21.7 m/s (its rev-limited top
-// speed on this single-ratio placeholder) by t=8 s having accelerated the
-// entire time. Bounds below are set with generous margin around those
-// measurements, not tuned to a specific number.
-TEST_CASE("Full-throttle from an UNSETTLED start does not permanently strand the car", "[validation][vehicle]") {
+// against a live demo run") for the ORIGINAL failure mode this test
+// documented: full throttle commanded before the suspension has settled
+// used to drive the tyre deep past its peak (slip pegged at the +-3.0
+// safety clamp for several seconds, Fx/Fz ~0.6 instead of ~1.0).
+//
+// PHYS-033 P4 I5, 2026-09-25: that premise is now obsolete, in the good
+// direction, from two independent changes landed the same day - the
+// longitudinal slide-to-peak tyre refit (commit 5064b8b: pcx1/pex1 refit so
+// a driven wheel past its peak keeps ~0.8x peak Fx instead of ~0.6x, letting
+// it pull itself back instead of latching into deep slip) and car_sedan.json's
+// 60/40 front/rear static split (this increment: more static Fz on the driven
+// front axle at an unsettled start means more available Fx before the tyre's
+// peak is reached at all). Re-measured with both changes in: slip_at_1s drops
+// from the old ~3.0-clamp excursion to 0.393328, and the run's own
+// max_abs_kappa (peak |slip ratio| anywhere in the 8 s window) is 0.461412 -
+// the tyre's peak slip (~0.14) is exceeded only briefly and by a modest
+// factor, never a deep post-peak excursion. The test below now asserts this
+// directly (bounded slip, not just "eventually recovers") with generous
+// margin over the measured 0.461412, and keeps the original progress/
+// transient checks (continuous forward progress, no stall).
+TEST_CASE("Full-throttle from an UNSETTLED start stays bounded and does not stall (tyre refit 5064b8b + 60/40 split)",
+          "[validation][vehicle]") {
     const real mass = 1500.0;
     auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                            Vec3{2.0, 0.4, 0.15}, 0.6);
@@ -363,16 +371,19 @@ TEST_CASE("Full-throttle from an UNSETTLED start does not permanently strand the
     // suspension/tyre contact has established its load-bearing Fz. This is
     // the scenario the coordinator's live demo run actually exercises.
     // PHYS-033 P4 I3 plan section 13.8, case 3: gear_request=1 together
-    // with throttle 1.0 (both at t=0) - the assertions below are
-    // deliberately UNCHANGED (the plan's own instruction: "if slip_at_1s <=
-    // 1, report, do not edit" - the clutch's launch law can change this
-    // case's premise; see this increment's report for the measured
-    // outcome).
+    // with throttle 1.0 (both at t=0). PHYS-033 P4 I5, 2026-09-25: the
+    // coordinator reviewed this case after the tyre refit (5064b8b) + 60/40
+    // split landed and, since the original "drives the tyre past its peak"
+    // premise no longer holds (see this file's header comment above), is
+    // overriding the earlier "report, do not edit" instruction (from the I3
+    // plan) - the assertions below now assert the bounded-slip behaviour
+    // directly instead of only documenting the old excursion.
     rig.world->set_control("gear_request", 1.0);
     rig.world->set_control("throttle", 1.0);
 
     real speed_1s = 0.0, speed_4s = 0.0, speed_8s = 0.0;
     real slip_at_1s = 0.0, slip_at_8s = 0.0;
+    real max_abs_kappa = 0.0;
     real min_speed_after_1s = 1e9;
     const std::uint64_t max_ticks = static_cast<std::uint64_t>(8.0 / rig.world->dt() + 0.5);
     for (std::uint64_t i = 0; i < max_ticks; ++i) {
@@ -380,6 +391,7 @@ TEST_CASE("Full-throttle from an UNSETTLED start does not permanently strand the
         const real t = (i + 1) * rig.world->dt();
         const real speed = rig.world->get_motion(rig.chassis).linear.length();
         const auto& w0 = rig.world->wheel_telemetry(rig.vehicle, 0);
+        max_abs_kappa = std::max(max_abs_kappa, std::abs(w0.slip_ratio));
         if (t >= 1.0) min_speed_after_1s = std::min(min_speed_after_1s, speed);
         if (std::abs(t - 1.0) < 1e-9) { speed_1s = speed; slip_at_1s = std::abs(w0.slip_ratio); }
         if (std::abs(t - 4.0) < 1e-9) speed_4s = speed;
@@ -387,11 +399,16 @@ TEST_CASE("Full-throttle from an UNSETTLED start does not permanently strand the
     }
 
     INFO("speed_1s=" << speed_1s << " speed_4s=" << speed_4s << " speed_8s=" << speed_8s << " slip_at_1s=" << slip_at_1s
-                      << " slip_at_8s=" << slip_at_8s);
-    // Confirms the excursion actually happens (documents it, rather than
-    // hiding it): heavy slip is expected in the first second here, unlike
-    // the settled-start test above.
-    CHECK(slip_at_1s > 1.0);
+                      << " slip_at_8s=" << slip_at_8s << " max_abs_kappa=" << max_abs_kappa);
+    // Bounded slip, not a deep post-peak excursion: the tyre refit
+    // (5064b8b) plus the 60/40 split together keep the driven wheels from
+    // ever latching into the +-3.0 safety clamp the way they used to.
+    // Measured this session: max_abs_kappa=0.461412 (well past the tyre's
+    // own peak slip of ~0.14, so this is still a genuine, non-trivial
+    // excursion - just no longer a deep one). 0.8 leaves generous margin
+    // above the measured value while still catching a regression back
+    // toward the old clamped-slip failure mode.
+    CHECK(max_abs_kappa < 0.8);
     // The car must still be making real forward progress throughout - "the
     // driven wheels must not spin up without moving the car" (this task's
     // own acceptance wording), even while deep in the tyre's post-peak
