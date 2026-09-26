@@ -241,20 +241,36 @@ rigid coupling" leaf rule this depends on.
 Ports: `<id>.carrier`, `<id>.left`, `<id>.right` (`left`/`right` carry zero
 inertia of their own — they exist purely so a shaft can name them).
 
-**Reconstruction/leaf rule (I4 C4/C5/C6/C7, plan section 2.7):** a diff of any
-kind whose `efficiency < 1` (a lossy mesh) must be a **leaf** — its `left`
-and `right` ports may carry no other rigid row (discounting the diff's own
-`left`/`right` rows, e.g. a `locked`/`lockable` diff's own lock row), or the
-graph builder throws `"vehicle '<v>': differential '<id>' of kind <k> must
-drive nodes with no other rigid coupling (centre LSD/Torsen is not
-supported in I4)"` (a `lockable: true` diff gets the same rejection with
-`"of kind lockable <k>"`, e.g. `"of kind lockable open"`, instead of the
-plain kind name). A `clutch_lsd`/`torsen` diff (I4 C7) must be a leaf
-**whatever its efficiency** — same message. A **lossless**
-(`efficiency == 1`) diff of kind `open`/`locked`/`viscous` may instead be a
-**centre** diff — `left`/`right` feeding two child diffs' `carrier` ports —
-reconstructed from both children's own row lambdas. Plain `open` diffs are
-unaffected by any of this (same leaf/centre rules and float ops as before I4).
+**Reconstruction/leaf rule (I4 C4/C5/C6/C7, plan section 2.7):** a `lockable:
+true` diff, or any `clutch_lsd`/`torsen` diff **whatever its efficiency**,
+must be a **leaf** — its `left` and `right` ports may carry no other rigid
+row (discounting the diff's own `left`/`right` rows, e.g. a `locked`/
+`lockable` diff's own lock row), or the graph builder throws `"vehicle '<v>':
+differential '<id>' of kind <k> must drive nodes with no other rigid
+coupling (centre LSD/Torsen is not supported in I4)"` (a `lockable: true`
+diff gets the same rejection with `"of kind lockable <k>"`, e.g. `"of kind
+lockable open"`, instead of the plain kind name). A plain (non-lockable)
+`open` diff may be a **leaf** or a **centre** diff — `left`/`right` feeding
+two child diffs' `carrier` ports, reconstructed from both children's own row
+lambdas — at **any** efficiency, lossy or not (the mesh-loss torque is
+applied at `carrier`, so it does not care whether `left`/`right` also drive
+child diffs). A non-lockable `locked`/`viscous` diff may likewise be a leaf
+or a centre diff, but a **lossy** (`efficiency < 1`) `locked`/`viscous`
+*centre* diff is rejected with the same "must drive nodes with no other
+rigid coupling" message above — only a **lossless** (`efficiency == 1`)
+`locked`/`viscous` diff may be a centre diff. A diff whose `left`/`right`
+pattern matches neither the leaf nor the centre shape at all, and whose
+`efficiency < 1`, throws instead `"vehicle '<v>': differential '<id>' has
+efficiency < 1 but its output nodes carry rigid couplings other than child
+differentials' carriers - mesh-loss reconstruction is not available there"`
+(this exact wording only for a plain `open` diff — every other kind reaching
+this point already threw the "no other rigid coupling" message above at the
+centre-diff check). A diff graph that loops back on itself while resolving
+centre diffs (`left`/`right` feeding a chain of carriers that eventually
+feeds back to the same diff) throws `"vehicle '<v>': differential '<id>' is
+part of a cycle of differentials feeding each other's carriers"`. Plain
+`open` diffs are otherwise unaffected by any of this (same leaf/centre rules
+and float ops as before I4).
 
 #### clutch_lsd / torsen (I4 C7)
 
@@ -527,6 +543,9 @@ vehicle uses it.
   differential's `left`/`right` have none, so only `clutch.out`–`gearbox.in`
   (0.004/0.010 kg·m²) and `gearbox.out`–`diff.carrier` (0.015/0.02 kg·m²)
   can be made compliant without adding inertia.
+- At most `kMaxCompliantShafts` (8, `ps/drivetrain/powertrain_state.h`)
+  compliant shafts per vehicle, else `"vehicle '<name>': at most 8 compliant
+  shafts are supported, got <n>"` (also at build).
 
 Model: twist `theta = ∫(omega_a - omega_b) dt`, shaft torque
 `tau_s = k*theta + c*(omega_a - omega_b)`, acting `-tau_s` on `a` and
@@ -578,13 +597,20 @@ vehicle-construction time and additionally rejects:
   (duplicated check from the field-level notes above — `park_lock` and `pto`
   are additionally rejected earlier, at load time; any number of
   `differential`/`gear_pair`/`load_dyno` components is fine, see above).
-- A lossy (`efficiency < 1`) or `lockable: true` differential that is not a
-  leaf (its `left`/`right` carry another rigid row) — the exact rejection
-  message is under the [differential field table](#differential-component-fields)
-  above.
+- A differential whose `left`/`right` ports don't match a resolvable
+  leaf/centre pattern for its kind and efficiency (a `lockable: true` or
+  `clutch_lsd`/`torsen` diff that isn't a leaf; a lossy `locked`/`viscous`
+  centre diff; a plain lossy `open` diff whose ports match neither shape at
+  all) — the exact rejection messages are under the ["Reconstruction/leaf
+  rule"](#differential-component-fields) above.
+- A cycle of differentials feeding each other's carriers (resolving centre
+  diffs loops back on itself) — see the same section above.
 - More `lockable: true` differentials than the composed-topology-state
   budget allows (I4 C5: `kMaxStates` = 128 — `num_gear_states * 2^(number
   of lockable diffs)` must not exceed it).
+- More than `kMaxCompliantShafts` (8) compliant (`stiffness > 0` under
+  `"compliance": "compliant"`) shafts (I4 C13, see [Compliant
+  shafts](#compliant-shafts-i4-c13) above).
 - A `brake_system` corner or handbrake wheel name that doesn't match any
   wheel, or a duplicate corner for the same wheel.
 - A controller (see [below](#controllers)) referencing a component id that
@@ -665,6 +691,21 @@ switches for the `manual_tcu` driver aids; each one's value when the
 vehicle is created is its controller block's `enabled` flag (0 if the
 vehicle has no `manual_tcu`).
 
+**Component-declared channels (I4 C3):** beyond the fixed list above, each
+powertrain component that needs one declares its own channel name and
+default value (`Powertrain::declare_control_channels`, resolved through the
+same `channel_prefix` convention) — a `differential`'s `lock.channel`
+(default `"diff_lock"`, default value `0`), a `transfer_case`'s `channel`
+(default `"awd"`, `0`), a `park_lock`'s `channel` (default `"park_lock"`,
+`0`), a `pto`'s `channel`/`speed_channel` (default `"pto"`/`"pto_speed"`,
+`0`/`540.0`), an engine `governor`'s `channel` (default `"hand_throttle"`,
+`0`), and a `load_dyno`'s optional `scale_channel` (no default name — empty
+means no channel is declared at all, and the load scale is fixed at `1.0`).
+See each component's own field table above for its exact channel field and
+default. `data/vehicles/tractor.json` declares `diff_lock`, `awd`,
+`park_lock`, `pto`, `pto_speed` and `hand_throttle`; `car_sedan.json` and its
+variants declare none (no component that declares a channel).
+
 ## Telemetry channels a differential exposes
 
 PHYS-033 P4 I4 C8 (plan section 3.1): every differential component whose
@@ -685,10 +726,15 @@ matching the existing `vehicle<i>.energy.*`/`vehicle<i>.powertrain.*`
 channels' own naming). A vehicle whose only differential(s) are plain
 non-lockable `open` (both shipped `car_sedan.json`/`tractor.json` diffs)
 registers none of these — its CSV header is byte-identical to before this
-existed. Up to 4 differentials per vehicle are supported
-(`ps::drivetrain::kMaxPowertrainDiffs`, `ps/drivetrain/powertrain_state.h`);
-this is a snapshot/debug-only addition — no new hashed simulation state, no
-change to `World::state_hash()`.
+existed. A vehicle may have any number of `differential` components (see
+["Components"](#components) above); only the **snapshot/debug** view of
+them is capped — `PowertrainSnapshot::diffs`/`PowertrainDebug::
+diff_transfer_torque` hold at most `kMaxPowertrainDiffs` (4,
+`ps/drivetrain/powertrain_state.h`) entries, in `powertrain.components[]`
+order, so a 5th-or-later differential's `bias`/`locked`/
+`diff_transfer_torque` reads are simply not exposed there (silently
+truncated, not an error). This is a snapshot/debug-only addition — no new
+hashed simulation state, no change to `World::state_hash()`.
 
 ## Minimal complete example
 

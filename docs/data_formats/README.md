@@ -180,13 +180,15 @@ an `[x, y, z, w]` quaternion.
 ## The powertrain graph, in brief
 
 A vehicle's `powertrain` block describes a small graph of rotating shafts:
-named **components** (engine, clutch, gearbox, gear_pair, differential),
-each exposing one or more **ports**; **shafts**, each a list of port
-references that are rigidly joined into one node; and each wheel implicitly
-exposes one more port, `wheel:<name>`. Full details, every component's port
-names, and the exact rules the graph builder (`core/src/drivetrain/
-powertrain.cpp`) enforces (every non-wheel port must be connected exactly
-once; ids must be unique; at most one engine/clutch/gearbox/differential)
+named **components** (engine, clutch, gearbox, gear_pair, differential,
+transfer_case, park_lock, pto, load_dyno), each exposing one or more
+**ports**; **shafts**, each a list of port references that are rigidly
+joined into one node; and each wheel implicitly exposes one more port,
+`wheel:<name>`. Full details, every component's port names, and the exact
+rules the graph builder (`core/src/drivetrain/powertrain.cpp`) enforces
+(every non-wheel port except `pto.out` must be connected exactly once; ids
+must be unique; at most one engine/clutch/gearbox/transfer_case/park_lock/
+pto, but any number of differential/gear_pair/load_dyno components, I4 C4)
 are in [`vehicle.md`](vehicle.md#powertrain-graph).
 
 ## Discrepancies found
