@@ -134,7 +134,7 @@ from).
 significant for scenario determinism. Each entry:
 
 ```json
-{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case" | "park_lock", ... }
+{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case" | "park_lock" | "pto" | "load_dyno", ... }
 ```
 
 - `id`: required, non-empty, unique across `components[]`
@@ -151,25 +151,30 @@ significant for scenario determinism. Each entry:
   key alongside `ref` throws `"<ctx>: a component with 'ref' may only
   contain 'id', 'type' and 'ref' (found extra field '<key>')"`; there is no
   merging of inline overrides on top of a ref'd file. `clutch`, `gear_pair`,
-  `differential`, `transfer_case` and `park_lock` components are **always
-  inline** — `{"ref": ...}` on a clutch throws `"<ctx>: 'clutch' components
-  are always inline in I3 (no 'ref')"`.
+  `differential`, `transfer_case`, `park_lock`, `pto` and `load_dyno`
+  components are **always inline** — `{"ref": ...}` on a clutch throws
+  `"<ctx>: 'clutch' components are always inline in I3 (no 'ref')"`.
 - **At most one** `engine`, one `clutch`, one `gearbox`, one `transfer_case`,
-  one `park_lock` component is allowed (checked in `powertrain.cpp`): a
-  second `engine`/`clutch`/`gearbox` throws `"more than one <kind> component
-  - I3 supports at most one"`; a second `transfer_case` throws `"vehicle
-  '<v>': more than one transfer_case component - I4 C9 supports at most
-  one"` (I4 C9 - a second transfer case would need per-instance channel/hash
-  disambiguation the plan never specifies). A second `park_lock` is rejected
-  **at load time** (`ps::io::load_vehicle_json`, not just later at
-  `Powertrain` graph-build time like the other single-instance components
-  above) — `"<ctx>: more than one park_lock component - at most one is
-  supported"` — since a real vehicle only ever has one park pawl and I4 C10's
-  own loader-validation tests exercise `load_vehicle_json` directly (see
-  [`park_lock` component fields](#park_lock-component-fields-i4-c10) below).
-  Any number of `gear_pair` **or** `differential`
+  one `park_lock`, one `pto` component is allowed (checked in
+  `powertrain.cpp`): a second `engine`/`clutch`/`gearbox` throws `"more than
+  one <kind> component - I3 supports at most one"`; a second `transfer_case`
+  throws `"vehicle '<v>': more than one transfer_case component - I4 C9
+  supports at most one"` (I4 C9 - a second transfer case would need
+  per-instance channel/hash disambiguation the plan never specifies). A
+  second `park_lock` **or `pto`** is rejected **at load time**
+  (`ps::io::load_vehicle_json`, not just later at `Powertrain` graph-build
+  time like the other single-instance components above) —
+  `"<ctx>: more than one park_lock component - at most one is supported"` /
+  `"<ctx>: more than one pto component - at most one is supported"` — since a
+  real vehicle only ever has one park pawl or one PTO shaft, and both I4
+  C10's and I4 C11's own loader-validation tests exercise `load_vehicle_json`
+  directly (see [`park_lock` component fields](#park_lock-component-fields-i4-c10)
+  and [`pto` component fields](#pto-component-fields-i4-c11) below).
+  Any number of `gear_pair`, `differential` **or `load_dyno`**
   components is fine (I4 C4 lifted the earlier "at most one differential"
-  limit) - a centre diff feeding two axle diffs, or any other multi-diff
+  limit; `load_dyno` never had one — it is a test/bench-only load, see
+  [`load_dyno` component fields](#load_dyno-component-fields-i4-c11) below) -
+  a centre diff feeding two axle diffs, or any other multi-diff
   topology, is built by wiring their `carrier`/`left`/`right` ports together
   with ordinary shafts (see [Ports, by component
   type](#ports-by-component-type-fixed-names) and [What the graph builder
@@ -357,6 +362,88 @@ wheel slip even though the network's own kinematics are satisfied. See
 `tests/validation/test_vehicle_tractor_cross_slope.cpp`'s park-lock cases
 for the measured numbers this produces on `data/vehicles/tractor.json`.
 
+#### `pto` component fields (I4 C11)
+
+`PtoDesc`. Always inline; at most one per vehicle (rejected at load time,
+same mechanism as `park_lock` above). Models a power take-off: a single
+Coulomb friction row from the engine/crank-side `in` port to the PTO-side
+`out` port, with a fixed **ratio** applied at that row (`out` spins at
+`in / ratio` once the row is stuck, per the vehicle's chosen 540/1000 rpm
+mode) — the tractor's real PTO shaft is usually tapped straight off the
+crank ahead of the clutch/gearbox entirely (see `data/vehicles/tractor.json`'s
+own `shafts[]`), so `in` is typically unioned onto the same node as
+`engine.crank`, making the PTO branch's dynamics independent of
+`gear_request`/`park_lock`.
+
+| Field | Type | Req./opt. | Default | Validation | Meaning |
+|---|---|---|---|---|---|
+| `ratios` | object, keys `"540"`/`"1000"` | **required, non-empty** | — | must be a non-empty object, else `"<ctx>: pto requires a non-empty 'ratios' object with key(s) \"540\" and/or \"1000\""`; an unrecognised key throws `"<ctx>: pto ratios key '<key>' is not \"540\" or \"1000\""`; each value **must be > 0**, else `"<ctx>: pto ratios['<key>'] must be > 0"` | `omega_in = ratio * omega_out` while the row is stuck; at least one of `"540"`/`"1000"` must be given, both may be |
+| `capacity_nm` | real (N·m) | optional | `0` | **must be > 0**, else `"<ctx>: pto 'capacity_nm' must be > 0"` | kinetic friction-row capacity while engaged |
+| `static_factor` | real | optional | `1.2` | **must be >= 1**, else `"<ctx>: pto 'static_factor' must be >= 1"` | static capacity = `static_factor * capacity_nm` |
+| `engage_time_s` | real (s) | optional | `1.5` | **must be >= 0**, else `"<ctx>: pto 'engage_time_s' must be >= 0"` | engagement ramps toward the channel's target (1 if channel value `>= 0.5`, else 0) at rate `1 / engage_time_s`; `0` = instant |
+| `efficiency` | real | optional | `1.0` | must be in `(0, 1]`, else `"<ctx>: pto 'efficiency' must be in (0, 1]"` | mesh efficiency; `< 1` books an efficiency-loss torque at `in` (same lagged-reconstruction pattern as `gear_pair`/`differential`) |
+| `out_inertia_kgm2` | real (kg·m²) | optional | `0` | **must be >= 0**, else `"<ctx>: pto 'out_inertia_kgm2' must be >= 0"` | inertia at `out` (the PTO shaft/stub itself, before whatever implement is attached) |
+| `disengaged_brake_time_s` | real (s) | optional | `1.0` | **must be > 0**, else `"<ctx>: pto 'disengaged_brake_time_s' must be > 0"` | while fully disengaged (`e == 0` exactly), the `out` node is given an implicit stub-brake damping term sized so its own free-spin-down time constant is this value — a disengaged PTO shaft simply drifts to rest instead of coasting forever |
+| `channel` | string | optional | `"pto"` | **must be non-empty**, else `"<ctx>: pto 'channel' must be non-empty"` | declared control channel (default value `0`) whose value `>= 0.5` requests engagement |
+| `speed_channel` | string | optional | `"pto_speed"` | **must be non-empty**, else `"<ctx>: pto 'speed_channel' must be non-empty"` | declared control channel (default value `540.0`) selecting the mode: `>= 750` selects `"1000"`, else `"540"` — read only while eligible to switch (see below) |
+| `axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length, same rule/message as clutch `axis_local` | rotor-reaction axis shared by `in` and `out` (one physical shaft) |
+
+Ports: `<id>.in`, `<id>.out`. Unlike every other component's ports, `<id>.out`
+is **exempt** from the "every port must be connected by exactly one shaft"
+rule below (`in` is not) — a PTO stub is routinely left unconnected in a
+vehicle file, with a test/bench `load_dyno` or a future implement model
+wired onto it only in a test or a specific scenario, not in the shipped
+vehicle data itself.
+
+**Mode switching:** a `speed_channel` change is only honoured while the PTO
+is disengaged (`engagement == 0` exactly) **and** `|omega_out| < 1 rad/s` —
+requesting a mode change at any other time is simply ignored (the PTO stays
+in its current mode) until both conditions are true, so a mode never changes
+out from under a spinning implement.
+
+Telemetry/debug: `PowertrainSnapshot::{pto_engagement, pto_mode, pto_rpm}`
+(`pto_mode` is `540.0`/`1000.0` as a `real`; `pto_rpm` is always
+non-negative — magnitude only) and `PowertrainDebug::{pto_clutch_torque,
+pto_clutch_slip}` (tests only). Dissipation (both the friction row's own
+slip and the disengaged stub-brake's) is booked as
+`PowertrainEnergy::pto_clutch_loss`, included in `end_tick()`'s
+`balance_error`. `engagement_`, `mode_1000_` and (only when `efficiency < 1`)
+the previous substep's row lambda are the PTO's persistent per-substep
+state and are folded into `Powertrain::fold_state_hash` — a vehicle with no
+`pto` component hashes bit-identically to before this component existed.
+
+#### `load_dyno` component fields (I4 C11)
+
+`LoadDynoDesc`. Always inline; **any number** per vehicle is allowed (no
+"at most one" rule — see above). A test/bench-only load on a single `shaft`
+port: **no shipped vehicle carries one.** `tests/unit/test_powertrain_pto.cpp`
+and `tests/validation/test_powertrain_pto.cpp` both add one to a
+`VehicleDesc` mutated in code (never in a `data/vehicles/*.json` file) to
+give the `pto` component above something to drive.
+
+| Field | Type | Req./opt. | Default | Validation | Meaning |
+|---|---|---|---|---|---|
+| `mode` | string | optional | `"brake"` | must be `"brake"`, `"viscous"` or `"quadratic"`, else `"<ctx>: load_dyno 'mode' must be \"brake\", \"viscous\" or \"quadratic\""` | load law — `brake` (a fixed Coulomb friction row to GROUND), `viscous` (`tau = -viscous_nm_s_rad * omega`), `quadratic` (`tau = -quadratic_nm_s2_rad2 * omega * \|omega\|`) |
+| `torque_nm` | real (N·m) | **required for `mode: "brake"`**, invalid on every other mode | `0` | present on another mode throws `"<ctx>: load_dyno 'torque_nm' is only valid for mode \"brake\""`; on `"brake"` **must be > 0**, else `"<ctx>: load_dyno 'torque_nm' must be > 0 for mode \"brake\""` | the friction row's fixed capacity (both static and kinetic) |
+| `viscous_nm_s_rad` | real (N·m·s/rad) | **required for `mode: "viscous"`**, invalid on every other mode | `0` | present on another mode throws `"<ctx>: load_dyno 'viscous_nm_s_rad' is only valid for mode \"viscous\""`; on `"viscous"` **must be > 0**, else `"<ctx>: load_dyno 'viscous_nm_s_rad' must be > 0 for mode \"viscous\""` | the viscous coefficient `c` above |
+| `quadratic_nm_s2_rad2` | real (N·m·s²/rad²) | **required for `mode: "quadratic"`**, invalid on every other mode | `0` | present on another mode throws `"<ctx>: load_dyno 'quadratic_nm_s2_rad2' is only valid for mode \"quadratic\""`; on `"quadratic"` **must be > 0**, else `"<ctx>: load_dyno 'quadratic_nm_s2_rad2' must be > 0 for mode \"quadratic\""` | the quadratic (aerodynamic-like) coefficient above |
+| `inertia_kgm2` | real (kg·m²) | optional | `0` | **must be >= 0**, else `"<ctx>: load_dyno 'inertia_kgm2' must be >= 0"` | inertia at `shaft` |
+| `scale_channel` | string | optional | `""` (empty) | none | **optional** declared control channel (default value `1.0`) multiplying the load; empty (the default) means a fixed scale of `1.0` and declares no channel at all — unlike every `channel`/`speed_channel` field elsewhere in this document, an empty `scale_channel` is valid, not rejected |
+| `axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length, same rule/message as clutch `axis_local` | rotor-reaction axis at `shaft` |
+
+Port: `<id>.shaft` — **not** exempt from the "every port must be connected by
+exactly one shaft" rule (unlike `pto.out` above): a `load_dyno` with nothing
+wired to it would be pointless, so it is held to the ordinary rule.
+
+Telemetry/debug: `PowertrainDebug::dyno_torque` (tests only, the row's/law's
+own current torque). Mechanical work this component absorbs is booked as
+`PowertrainEnergy::external_absorbed` (cumulative since the vehicle was
+created, always `>= 0` — brake: `-h * v * lambda`; viscous/quadratic:
+`-h * tau_applied * omega'`), included in `end_tick()`'s `balance_error`.
+Stateless otherwise — no `fold_state_hash` override, so adding a `load_dyno`
+to a vehicle changes nothing else that is hashed beyond the network's own
+(already-hashed) node omegas.
+
 ### Ports, by component type (fixed names)
 
 | Component | Ports |
@@ -368,6 +455,8 @@ for the measured numbers this produces on `data/vehicles/tractor.json`.
 | `differential` | `carrier`, `left`, `right` |
 | `transfer_case` | `in`, `rear`, `front` |
 | `park_lock` | `shaft` |
+| `pto` | `in`, `out` (`out` exempt from the "must be connected" rule, see above) |
+| `load_dyno` | `shaft` |
 | a wheel (implicit, one per entry in the top-level `wheels[]`) | `wheel:<wheel name>` |
 
 A port reference string is written `"<component id>.<port>"` (e.g.
@@ -391,9 +480,11 @@ throws the same message.
 **Every non-wheel port must be connected by exactly one shaft.** A port
 that belongs to no shaft at all throws `"powertrain port '<key>' is not
 connected by any shaft"` — this applies to `engine.crank`, every
-`clutch`/`gearbox`/`gear_pair`/`differential` port, but **not** to a wheel
-port (`wheel:<name>` may be left unconnected — that wheel is simply
-free-rolling/undriven).
+`clutch`/`gearbox`/`gear_pair`/`differential`/`transfer_case`/`park_lock`/
+`load_dyno` port and `pto.in`, but **not** to a wheel port (`wheel:<name>`
+may be left unconnected — that wheel is simply free-rolling/undriven) nor
+to `pto.out` (I4 C11 — see the [`pto` component fields](#pto-component-fields-i4-c11)
+section above).
 
 Top-level powertrain fields beyond `components`/`shafts`:
 
@@ -409,10 +500,10 @@ Beyond the per-field checks above, `Powertrain::Powertrain`
 vehicle-construction time and additionally rejects:
 
 - A wheel with `wheel_inertia <= 0` (see the [wheel table](#wheel) above).
-- More than one engine/clutch/gearbox/transfer_case/park_lock component
-  (duplicated check from the field-level notes above — `park_lock` is
-  additionally rejected earlier, at load time; any number of
-  `differential`/`gear_pair` components is fine, see above).
+- More than one engine/clutch/gearbox/transfer_case/park_lock/pto component
+  (duplicated check from the field-level notes above — `park_lock` and `pto`
+  are additionally rejected earlier, at load time; any number of
+  `differential`/`gear_pair`/`load_dyno` components is fine, see above).
 - A lossy (`efficiency < 1`) or `lockable: true` differential that is not a
   leaf (its `left`/`right` carry another rigid row) — the exact rejection
   message is under the [differential field table](#differential-component-fields)
