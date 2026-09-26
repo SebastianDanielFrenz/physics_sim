@@ -236,17 +236,33 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
     // (the single assembly.torque call this substep), so the starter's own
     // share is tau_start_/tau0_.
     const real frac_starter = tau0_ != real(0.0) ? tau_start_ / tau0_ : real(0.0);
-    // PHYS-033 P4 I7a C5: combustion's own share, additively alongside the
-    // starter split above (engine_out_delta's own computation below is
-    // untouched) - tau0_ == tau_smooth_ + tau_comb_ + tau_start_ exactly
-    // (see pre_solve), so frac_comb is the same proportional-split
-    // construction as frac_starter.
-    const real frac_comb = tau0_ != real(0.0) ? tau_comb_ / tau0_ : real(0.0);
 
     PostSolveResult r;
     r.starter_in_delta = work * frac_starter;
     r.engine_out_delta = work - r.starter_in_delta;
-    r.indicated_work_delta = work * frac_comb;
+
+    // PHYS-033 P4 I7a C5 review fix: indicated_work_delta used to be a
+    // proportional split of `work` by tau_comb_/tau0_ (the same construction
+    // as frac_starter above). That ratio is singular whenever tau0_ -> 0
+    // while tau_comb_ and d(omega)/dt stay nonzero - e.g. the idle PI
+    // refilling torque right after a DFCO cut, with rpm still falling and a
+    // non-flat motoring curve so tau_smooth_ + tau_start_ happens to cancel
+    // tau_comb_ at that instant. A near-zero denominator there blows the
+    // split up arbitrarily, producing a spurious negative engine_heat and
+    // false (or hidden) fuel_efficiency_violations. Compute combustion's own
+    // work directly instead - h*omega_new*tau_comb_, the same "work over
+    // this substep at the solved omega_new" construction engine_out's own
+    // `work` uses, just for tau_comb_ alone rather than tau_lin - which is
+    // well-defined regardless of tau0_. Owner ruling (post-review): computed
+    // and booked for EVERY torque_map engine, fuel map or not - an engine
+    // with no fuel map still models combustion mechanically (its own
+    // wot/motoring curves fire regardless of has_fuel_map), so
+    // indicated_work is meaningful there too and will feed a future cruder
+    // no-map fuel estimate; only fuel_mass/fuel_energy_in/engine_heat/
+    // fuel_efficiency_violations (which need an actual mass/LHV to convert
+    // against) stay gated on desc_.has_fuel_map, in Powertrain::
+    // post_solve_components.
+    r.indicated_work_delta = h * omega_new * tau_comb_;
 
     if (desc_.has_fuel_map) {
         r.fuel_mass_delta = h * mdot_kg_s_;

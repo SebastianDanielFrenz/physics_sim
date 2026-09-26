@@ -1750,14 +1750,17 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         const auto post = engine_->post_solve(omega_new, ctx.h);
         ledger_.engine_out += post.engine_out_delta;
         ledger_.starter_in += post.starter_in_delta;
-        // PHYS-033 P4 I7a C5: indicated_work is combustion's own share of
-        // engine_out above (an always-meaningful mechanical split, not fuel-
-        // map-dependent - see engine.h's PostSolveResult comment); the fuel/
-        // heat sub-ledger below needs an actual fuel model to mean anything,
-        // so it is gated on engine_has_fuel_map_ (post.fuel_mass_delta/
-        // fuel_energy_in_delta are exactly 0.0 from any engine without one,
-        // but indicated_work_delta is NOT - gating on it here would silently
-        // and incorrectly attribute all indicated work as "negative heat").
+        // PHYS-033 P4 I7a C5 (owner ruling, post-review): indicated_work is
+        // combustion's own mechanical work this substep (see
+        // PostSolveResult::indicated_work_delta's own comment) and is
+        // booked UNCONDITIONALLY - an engine without a fuel map still fires
+        // combustion mechanically and this quantity is meaningful for it
+        // too (it will feed a future cruder no-map fuel estimate, a separate
+        // commit once that model is designed). Only the mass/LHV-derived
+        // terms below - which need an actual fuel model to convert a mass
+        // into energy - are gated on engine_has_fuel_map_ (post.
+        // fuel_mass_delta/fuel_energy_in_delta are exactly 0.0 from any
+        // engine without one).
         ledger_.indicated_work += post.indicated_work_delta;
         if (engine_has_fuel_map_) {
             ledger_.fuel_mass += post.fuel_mass_delta;

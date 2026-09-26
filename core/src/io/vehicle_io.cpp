@@ -580,6 +580,15 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
                                           " must have one value per 'load' point (" + std::to_string(t.y.size()) + ")");
             }
             for (std::size_t iy = 0; iy < row.size(); ++iy) {
+                // PHYS-033 P4 I7a C5 review fix: check the JSON value's own
+                // type before .get<real>() - nlohmann::json::type_error (e.g.
+                // a string or null entry) would otherwise propagate uncaught,
+                // unlike every other rejection in this loader which throws a
+                // clean std::runtime_error with context.
+                if (!row[iy].is_number()) {
+                    throw std::runtime_error(ctx + ".fuel_map: fuel_flow_g_s[" + std::to_string(ix) + "][" +
+                                              std::to_string(iy) + "] must be a number");
+                }
                 const real val = row[iy].get<real>();
                 if (!(val >= real(0.0)) || !std::isfinite(val)) {
                     throw std::runtime_error(ctx + ".fuel_map: fuel_flow_g_s[" + std::to_string(ix) + "][" +
@@ -649,6 +658,14 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
 // "simulated" (a full MVEM engine, I7b) is parsed nowhere yet and is
 // rejected by name rather than silently falling through to torque_map.
 ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir) {
+    // Default "torque_map" (rather than requiring the field) is deliberate,
+    // not an oversight: every shipped data/engines/*.json file happens to
+    // set "kind" explicitly today, but nothing REQUIRES a hand-authored or
+    // future engine file to - "torque_map" is the only kind that predates
+    // this field, so an absent "kind" means exactly that, and this default
+    // keeps such a file loading rather than rejecting it - see F5's "kind
+    // absent defaults to torque_map" pin test (the only place this default
+    // path is actually exercised, since no shipped file omits it).
     const std::string kind = j.value("kind", std::string("torque_map"));
     if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir);
     if (kind == "simulated") {

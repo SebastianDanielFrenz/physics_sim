@@ -120,11 +120,18 @@ struct PreSolveResult {
 struct PostSolveResult {
     real engine_out_delta = 0.0; // ledger.engine_out += this
     real starter_in_delta = 0.0; // ledger.starter_in += this
-    // PHYS-033 P4 I7a C5: combustion's OWN share of engine_out_delta above -
-    // additive, alongside (not instead of) the starter/engine split above
-    // (engine_out_delta's own computation is untouched byte-for-byte).
-    // 0 for any substep with no combustion (tau_comb == 0) or an engine type
-    // that never sets it. ledger.indicated_work += this.
+    // PHYS-033 P4 I7a C5 (review-fixed): combustion's own work this substep,
+    // h*omega_new*tau_comb - the same "work at the solved omega_new"
+    // construction engine_out_delta's own `work` uses, just for tau_comb_
+    // alone (NOT a proportional split of `work` by tau_comb_/tau0_, which is
+    // singular when tau0_ -> 0 with tau_comb_ and d(omega)/dt still nonzero -
+    // see EngineTorqueMap::post_solve's own comment). Computed for EVERY
+    // torque_map engine, fuel map or not (owner ruling: an engine without a
+    // map still models combustion mechanically, and this quantity will feed
+    // a future cruder no-map fuel estimate). ledger.indicated_work += this,
+    // UNCONDITIONALLY, in Powertrain::post_solve_components - only the
+    // mass/LHV-derived fuel_mass/fuel_energy_in/engine_heat/
+    // fuel_efficiency_violations fields stay gated on has_fuel_map.
     real indicated_work_delta = 0.0;
     // PHYS-033 P4 I7a C5: fuel burned this substep, evaluated at pre_solve's
     // substep-start rpm/load against an optional fuel map - both exactly

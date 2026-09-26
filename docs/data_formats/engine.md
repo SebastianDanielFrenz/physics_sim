@@ -31,9 +31,14 @@ gained an optional fuel model in C5: [`fuel`](#fuel) and
 
 Before C5, `kind` was required and had to equal `"torque_map"` literally
 (omitting it was a load error). C5 relaxed this to "absent means
-`torque_map`" — every existing engine file already sets `kind` explicitly
-and is unaffected either way (checked byte-for-byte against every
-determinism scenario's `state_hash`).
+`torque_map`" so a test fixture (or a future hand-written file) can omit
+the field entirely — every shipped `data/engines/*.json` file already sets
+`kind` explicitly and is unaffected either way, and `kind` never enters
+`fold_state_hash` regardless. This default is pinned by
+`tests/unit/test_engine_fuel_map.cpp`'s "kind absent defaults to
+torque_map" case, not re-verified against every determinism scenario's
+`state_hash` (no shipped scenario exercises the absent-`kind` path, since
+every shipped engine file sets it).
 
 ## Fields
 
@@ -233,12 +238,13 @@ book EXACTLY zero fuel: each of those substeps has `theta_c == 0` (`ess.load
 clamped-bilinear lookup — no floating-point residue for a zero-tolerance
 test to trip on.
 
-**Efficiency check** (plan section 2.3): the map must never imply more than
-100% thermal efficiency — `theta * (w(rpm) - m(rpm)) * omega <= mdot *
-LHV` for every `(rpm, theta)` a caller can query, where `w`/`m` are this
-engine's own `wot_torque_nm_vs_rpm`/`motoring_torque_nm_vs_rpm` curves,
-`omega = rpm * 2*pi/60`, `mdot = fuel_map.value(rpm, theta) / 1000` (kg/s),
-and `LHV` is the referenced fuel's `lhv_j_kg`. Checked at:
+**Efficiency check** (plan section 2.3): a load-time check that the map does
+not imply more than 100% thermal efficiency — `theta * (w(rpm) - m(rpm)) *
+omega <= mdot * LHV`, where `w`/`m` are this engine's own
+`wot_torque_nm_vs_rpm`/`motoring_torque_nm_vs_rpm` curves, `omega = rpm *
+2*pi/60`, `mdot = fuel_map.value(rpm, theta) / 1000` (kg/s), and `LHV` is
+the referenced fuel's `lhv_j_kg`. This is **sampled, not exhaustive**: it is
+checked only at
 
 1. every map node `(rpm[ix], load[iy])`;
 2. every map-CELL MIDPOINT (the average of each adjacent pair of `rpm`/
@@ -249,10 +255,23 @@ and `LHV` is the referenced fuel's `lhv_j_kg`. Checked at:
    `w(rpm) - m(rpm)`'s own slope can kink, the worst case for a fixed-load
    power line between two map rpm nodes.
 
-A violation throws `"<ctx>.fuel_map: implies >100% thermal efficiency at
-rpm=<r>, load=<l> (mechanical <p1> W > fuel <p2> W)"`. `rpm <= 0` is
-skipped (zero mechanical power at any load, never a violation — avoids a
-spurious check at the table's own `x.front()` clamp when `rpm[0] == 0`).
+Between these sample points the check does not guarantee anything — a
+pathological map could still exceed 100% efficiency strictly between a
+node, its cell midpoint and a curve breakpoint. The **runtime safety net**
+is `PowertrainEnergy::fuel_efficiency_violations`
+(`core/include/ps/drivetrain/energy_ledger.h`): every substep where the
+booked `engine_heat` delta (`fuel_energy_in_delta - indicated_work_delta`)
+comes out negative — i.e. the map claimed more energy converted to work
+than was burned, wherever in `(rpm, theta)` space that substep actually
+landed — increments this counter instead of throwing, so a load-time gap
+in the sampled check is still observable (and testable) at runtime rather
+than silently producing negative heat.
+
+A load-time violation throws `"<ctx>.fuel_map: implies >100% thermal
+efficiency at rpm=<r>, load=<l> (mechanical <p1> W > fuel <p2> W)"`. `rpm <=
+0` is skipped (zero mechanical power at any load, never a violation —
+avoids a spurious check at the table's own `x.front()` clamp when
+`rpm[0] == 0`).
 
 ## Minimal complete example
 

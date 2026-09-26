@@ -4,24 +4,42 @@
 // indicated_work/engine_heat/fuel_efficiency_violations). No tank exists yet
 // (C6) - fuel_external_added stays 0 everywhere below.
 //
-// F2/F3/F4 drive core/src/drivetrain/engine_torque_map.h's EngineTorqueMap
+// F2/F3 drive core/src/drivetrain/engine_torque_map.h's EngineTorqueMap
 // directly (core/src is on this target's include path, like
 // test_throttle_control.cpp/test_powertrain_engine.cpp) with a small
 // synthetic engine: FLAT wot/motoring curves (100 / -20 N*m everywhere) make
 // tau_smooth_ = s*(m_rpm + c_k_) exactly 0 at every rpm (c_k_ = -motoring(0)
 // = 20 cancels the constant -20 exactly), so frac_comb = tau_comb_/tau0_ is
 // exactly 1 whenever combustion fires (no starter) and exactly 0 otherwise -
-// see engine_torque_map.cpp's post_solve. Combined with a minimal 2x2 fuel
-// map (rpm [500,7000], load [0,1], values [[0,3],[0,12]] g/s), the modelled
-// thermal efficiency stays 4.76%-16.7% over the whole rpm domain independent
-// of load, so F4's "no efficiency violation" bound can never be hit by
-// construction, whatever the driven trajectory.
+// see engine_torque_map.cpp's post_solve.
 //
-// F6/F9 drive a real World + Powertrain (tests/support/fixtures/
-// vehicle_fuel_map_sedan.json, a car_sedan.json clone with the engine
-// inlined and a synthetic fuel map/fuel reference added) to prove the fuel
-// sub-ledger is entirely a spectator: no state_hash bit moves, no CSV column
-// is added to a vehicle with no fuel map, and balance_error is undisturbed.
+// F6/F9 (and, since the review fixes below, F4 too) drive a real World +
+// Powertrain (tests/support/fixtures/vehicle_fuel_map_sedan.json, a
+// car_sedan.json clone with the engine inlined and a synthetic fuel map/fuel
+// reference added) - F6/F9 to prove the fuel sub-ledger is entirely a
+// spectator (no state_hash bit moves, no CSV column is added to a vehicle
+// with no fuel map, balance_error is undisturbed), F4 so the gating/
+// summation Powertrain::post_solve_components itself performs is actually
+// exercised, not just hand-replicated at the engine level.
+//
+// Post-review additions (owner ruling: indicated_work is booked for EVERY
+// torque_map engine, fuel map or not - see energy_ledger.h/engine.h's own
+// comments): the flat synthetic engine above makes tau_smooth_ exactly 0 at
+// every rpm, which makes the OLD indicated_work_delta formula's tau0_ -> 0
+// singularity structurally unreachable - exactly why that defect escaped
+// the original F4's coverage (a hand-replicated ledger over that same flat
+// engine, since replaced by the real-Powertrain version above). The
+// "car_sedan without a fuel map" test below uses car_sedan's own REAL,
+// non-flat i4_2l_na.json engine curves (loaded via ps_test::
+// load_sedan_desc(), never a data file mutated): car_sedan_engine_public_
+// desc()/to_engine_desc_for_test() build a bare EngineTorqueMap from them
+// (to_engine_desc_for_test duplicates core/src/drivetrain/powertrain.cpp's
+// own internal, unexported to_engine_desc field-for-field, since that
+// function is deliberately anonymous-namespace). The "Fix 1" DFCO test
+// further down deliberately does NOT use a bare EngineTorqueMap - see that
+// test's own header comment for why a bare engine cannot discriminate the
+// defect it targets, and drives the real WorldRig/vehicle_fuel_map_sedan.json
+// Powertrain instead.
 
 #include "drivetrain/engine_torque_map.h"
 #include "drivetrain/powertrain.h"
@@ -36,6 +54,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -44,8 +63,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace ps;
@@ -111,52 +132,128 @@ ThrottleCommand throttle_of(real command, real floor = 0.0, real ceiling = 1.0) 
 
 TcuRequest no_ignition_cut() { return TcuRequest{false}; }
 
+Sensors sensors_at_omega(real omega) {
+    Sensors s;
+    s.omega = omega;
+    s.ignition = 1.0;
+    s.starter = 0.0;
+    s.clutch_engaged_fraction = 1.0;
+    s.gearbox_in_neutral = true;
+    return s;
+}
+
 // ---------------------------------------------------------------------------
-// F2: fuel integral at a speed-held dyno point - "idealized perfect dyno":
-// since tau_smooth_ == 0 exactly (see file header) and there is no starter,
-// tau0_ == tau_comb_ whenever combustion fires, so holding omega EXACTLY
-// constant every substep (feed Sensors.omega == target, then post_solve
-// (target, h) - no ODE/inertia integration needed at all) makes every
-// substep's fuel draw identical: sum(fuel_mass_delta) over N substeps ==
-// N*h*(fuel_map.value(rpm, theta_c)/1000) in closed form.
+// Post-review helpers: car_sedan's own REAL, non-flat engine curves (see the
+// file header comment above) - needed because the flat synthetic engine
+// above makes tau_smooth_ == 0 identically, which structurally hides the
+// tau0_ -> 0 singularity fix 1 targets.
 // ---------------------------------------------------------------------------
-TEST_CASE("F2: fuel integral at a speed-held dyno point matches the map in closed form", "[unit][drivetrain][fuel]") {
+
+// Extracts the real i4_2l_na.json engine descriptor car_sedan.json ships
+// with, via ps_test::load_sedan_desc() (no data file read/mutated directly).
+TorqueMapEngineDesc car_sedan_engine_public_desc() {
+    const vehicle::VehicleDesc desc = ps_test::load_sedan_desc();
+    for (const auto& c : desc.powertrain.components) {
+        if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) return *e;
+    }
+    throw std::runtime_error("car_sedan_engine_public_desc: no TorqueMapEngineDesc component in car_sedan.json");
+}
+
+// Mirrors core/src/drivetrain/powertrain.cpp's own to_engine_desc field-for-
+// field. Duplicated here rather than exposed from production code, since
+// that function is deliberately anonymous-namespace/internal (powertrain.cpp's
+// own header comment on why EngineTorqueMap::Desc and TorqueMapEngineDesc are
+// named differently) - this test needs to build a bare EngineTorqueMap
+// directly from car_sedan's public VehicleDesc, without going through a full
+// Powertrain/World for the DFCO test below (F4's real-Powertrain rewrite,
+// further down, covers that path instead).
+EngineTorqueMap::Desc to_engine_desc_for_test(const TorqueMapEngineDesc& e) {
+    EngineTorqueMap::Desc d;
+    d.wot_torque_nm_vs_rpm = e.wot_torque_nm_vs_rpm;
+    d.motoring_torque_nm_vs_rpm = e.motoring_torque_nm_vs_rpm;
+    d.inertia_kgm2 = e.inertia_kgm2;
+    d.breakaway_torque_nm = e.breakaway_torque_nm;
+    d.idle_rpm = e.idle_rpm;
+    d.stall_rpm = e.stall_rpm;
+    d.fire_rpm = e.fire_rpm;
+    d.start_complete_rpm = e.start_complete_rpm;
+    d.dfco_enable_rpm = e.dfco_enable_rpm;
+    d.dfco_reenable_rpm = e.dfco_reenable_rpm;
+    d.idle.kp_per_rpm = e.idle.kp_per_rpm;
+    d.idle.ki_per_rpm_s = e.idle.ki_per_rpm_s;
+    d.idle.max_throttle = e.idle.max_throttle;
+    d.limiter.type =
+        e.limiter.type == LimiterType::FuelCut ? EngineTorqueMap::LimiterType::FuelCut : EngineTorqueMap::LimiterType::SoftCut;
+    d.limiter.rpm = e.limiter.rpm;
+    d.limiter.hysteresis_rpm = e.limiter.hysteresis_rpm;
+    d.limiter.band_rpm = e.limiter.band_rpm;
+    d.starter.stall_torque_nm = e.starter.stall_torque_nm;
+    d.starter.free_speed_rpm = e.starter.free_speed_rpm;
+    d.starter.interlock = e.starter.interlock == StarterDesc::Interlock::None ? EngineTorqueMap::StarterInterlock::None
+                                                                               : EngineTorqueMap::StarterInterlock::ClutchOrNeutral;
+    d.initial_state =
+        e.initial_state == EngineInitialState::Running ? EngineTorqueMap::InitialState::Running : EngineTorqueMap::InitialState::Off;
+    d.has_governor = e.has_governor;
+    d.governor.high_idle_rpm = e.governor.high_idle_rpm;
+    d.governor.rated_rpm = e.governor.rated_rpm;
+    d.governor.droop = e.governor.droop;
+    d.has_fuel_map = e.has_fuel_map;
+    d.fuel = e.fuel;
+    d.fuel_map = e.fuel_map;
+    return d;
+}
+
+// ---------------------------------------------------------------------------
+// F2 (review-fixed): the original version held omega EXACTLY constant with a
+// fixed nonzero throttle command, which made theta_c == command every
+// substep by construction (nothing else could move it) and pre-solve rpm ==
+// post-solve rpm trivially (omega never moved) - it could not tell "fuel is
+// drawn at theta_c" from "fuel is drawn at the raw command", nor "at
+// pre-solve rpm" from "at post-solve rpm", apart. This version commands a
+// constant throttle of 0.0 from a BELOW-idle rpm, so the idle PI (not the
+// zero pedal) is what drives theta_c > 0 - a direct, cheap precondition that
+// theta_c != command - and free-integrates omega via an explicit dyno-less
+// implicit-Euler step (same construction as the DFCO/no-map tests below) so
+// omega genuinely changes substep to substep, making pre-solve rpm diverge
+// from post-solve rpm. fuel_mass_sum is checked against an INDEPENDENT
+// per-substep recomputation from pre_solve's own outputs
+// (fuel_map.value(pre.rpm, pre.theta_c)), so a production bug that instead
+// read post-solve rpm or the raw command would be caught - see this fix's
+// own discrimination demo (temporarily swap each in production, report the
+// failure, revert).
+// ---------------------------------------------------------------------------
+TEST_CASE("F2: fuel integral matches the map at pre-solve rpm/theta_c, not post-solve rpm or the raw throttle command",
+          "[unit][drivetrain][fuel]") {
     EngineTorqueMap engine(synthetic_engine_desc());
-    constexpr real kTargetRpm = 3000.0;
-    const real omega = rpm_to_omega(kTargetRpm);
-    constexpr real kThrottle = 0.6;
-    constexpr int kSubsteps = 100;
+    const real J = engine.desc().inertia_kgm2;
+    real omega = rpm_to_omega(700.0); // below idle_rpm (800): the idle PI, not the zero pedal, drives theta_c
+    constexpr int kSubsteps = 500;
 
     real fuel_mass_sum = 0.0;
-    real fuel_energy_sum = 0.0;
-    real last_theta_c = -1.0;
-    real last_rpm = -1.0;
+    real expected_mass_sum = 0.0; // independently re-derived from the SAME pre_solve outputs each substep
+    bool saw_theta_c_ne_command = false;
+    const real omega_start = omega;
+    bool saw_omega_change = false;
+
     for (int i = 0; i < kSubsteps; ++i) {
-        const PreSolveResult pre = engine.pre_solve(running_sensors(kTargetRpm), throttle_of(kThrottle), no_ignition_cut(), kSubstepH);
-        // Held-rpm design: theta_c/rpm must be identical every substep (the
-        // idle PI has no `e`-dependent memory here since e = idle_rpm - rpm
-        // is a constant -2200 every call, clamping theta_idle to 0 - see the
-        // file header's "idle clamps to 0 well above idle" analysis).
-        if (i == 0) {
-            last_theta_c = pre.theta_c;
-            last_rpm = pre.rpm;
-        } else {
-            REQUIRE(pre.theta_c == last_theta_c);
-            REQUIRE(pre.rpm == last_rpm);
-        }
-        const PostSolveResult post = engine.post_solve(omega, kSubstepH);
+        const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(0.0), no_ignition_cut(), kSubstepH);
+        const real omega_new = omega + kSubstepH * pre.tau0 / (J + kSubstepH * pre.d);
+        const PostSolveResult post = engine.post_solve(omega_new, kSubstepH);
+
+        if (pre.theta_c != 0.0) saw_theta_c_ne_command = true; // command is always 0.0 here
         fuel_mass_sum += post.fuel_mass_delta;
-        fuel_energy_sum += post.fuel_energy_in_delta;
+        expected_mass_sum += kSubstepH * (engine.desc().fuel_map.value(pre.rpm, pre.theta_c) / 1000.0);
+
+        omega = omega_new;
+        if (std::abs(omega - omega_start) > rpm_to_omega(1.0)) saw_omega_change = true;
     }
 
-    REQUIRE(last_theta_c > 0.0); // non-vacuous: combustion really fired at nonzero load
-    const EngineTorqueMap::Desc& d = engine.desc();
-    const real mdot_g_s = d.fuel_map.value(last_rpm, last_theta_c);
-    const real expected_mass = kSubsteps * kSubstepH * (mdot_g_s / 1000.0);
-    const real expected_energy = expected_mass * d.fuel.lhv_j_kg;
+    REQUIRE(saw_theta_c_ne_command); // precondition: theta_c really differs from the commanded 0.0 (idle PI)
+    REQUIRE(saw_omega_change);       // precondition: omega really varies across the run, not held constant
 
-    CHECK(std::abs(fuel_mass_sum - expected_mass) <= 1e-12 * expected_mass);
-    CHECK(std::abs(fuel_energy_sum - expected_energy) <= 1e-12 * expected_energy);
+    CHECK(fuel_mass_sum > 0.0);
+    const real rel_err = std::abs(fuel_mass_sum - expected_mass_sum) / std::max(expected_mass_sum, 1e-12);
+    CHECK(rel_err <= 1e-12);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,45 +332,372 @@ TEST_CASE("F3: fuel flow is exactly zero whenever combustion cannot be firing, n
     }
 }
 
+std::string fuel_map_sedan_path() { return std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicle_fuel_map_sedan.json"; }
+
+// Mirrors test_throttle_control.cpp's WorldRig/make_world_rig exactly (same
+// ground/chassis geometry as data/scenarios/vehicle_powertrain.json's own
+// bodies) - a fresh copy here rather than a shared header, since that
+// helper lives in an anonymous namespace in test_throttle_control.cpp.
+// Moved up from below F5 (where F6/F9 still find it, unchanged) so the
+// review-fixed F4 below can drive a REAL Powertrain too.
+struct WorldRig {
+    std::unique_ptr<World> world;
+    VehicleId vehicle;
+};
+
+WorldRig make_world_rig(const vehicle::VehicleDesc& desc) {
+    WorldRig rig;
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    rig.world = std::make_unique<World>(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{1000.0, 1000.0, 0.5}};
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 1.0;
+    ground.pose.position = Vec3{0.0, 0.0, -0.5};
+    rig.world->create_body(ground);
+
+    BodyDesc chassis;
+    chassis.shape = BoxShape{Vec3{2.0, 0.4, 0.15}};
+    chassis.motion = BodyMotionType::Dynamic;
+    chassis.mass = 1500.0;
+    chassis.friction = 0.5;
+    chassis.allow_sleep = false;
+    chassis.pose.position = Vec3{0.0, 0.0, 0.6};
+    const BodyId chassis_id = rig.world->create_body(chassis);
+
+    rig.world->set_surface_table(std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json"));
+    rig.vehicle = rig.world->create_vehicle(desc, chassis_id);
+
+    rig.world->set_control("assist.auto_clutch", 0.0);
+    rig.world->set_control("assist.auto_blip", 0.0);
+    rig.world->set_control("assist.auto_shift", 0.0);
+    rig.world->set_control("clutch", 0.0);
+    vehicle::VehicleResetOptions o;
+    o.gear = 0;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = true;
+    rig.world->reset_vehicle(rig.vehicle, o);
+    return rig;
+}
+
 // ---------------------------------------------------------------------------
-// F4: engine_heat >= 0 (no >100%-efficiency violation) every substep over a
-// WOT launch + overrun, replicating Powertrain::post_solve_components'
-// exact fuel-ledger booking rule (powertrain.cpp) by hand at the engine
-// level. Single-inertia implicit-Euler dyno ODE: omega_new = omega_old +
-// h*tau0/(J + h*d) (Assembly::torque's own per-substep linearisation).
+// F4 (review-fixed): the original version hand-replicated Powertrain::
+// post_solve_components' exact booking rule (ledger.engine_heat +=
+// fuel_energy_in_delta - indicated_work_delta) directly on a bare
+// EngineTorqueMap - it could never catch a bug in the GATING or SUMMATION
+// that function itself performs (e.g. indicated_work booked only when a map
+// is present, or a fuel field left un-gated for a no-map engine). This
+// version instead drives a REAL Powertrain (WorldRig/make_world_rig above,
+// tests/support/fixtures/vehicle_fuel_map_sedan.json - the same fuel-mapped
+// fixture F6/F9 use) through a full World::step WOT-launch-then-lift
+// sequence, reading World::powertrain_energy() every TICK (the ledger is a
+// per-tick-published cumulative snapshot, not a per-substep one) and
+// checking the tick-over-tick engine_heat delta never goes negative.
 // ---------------------------------------------------------------------------
-TEST_CASE("F4: engine_heat never goes negative (no >100% efficiency) over a WOT launch + overrun", "[unit][drivetrain][fuel]") {
-    EngineTorqueMap engine(synthetic_engine_desc());
+TEST_CASE("F4: engine_heat never goes negative (no >100% efficiency) over a WOT launch + overrun, driven through a real Powertrain",
+          "[unit][drivetrain][fuel]") {
+    const vehicle::VehicleDesc fueled_desc = io::load_vehicle_json(fuel_map_sedan_path());
+    WorldRig rig = make_world_rig(fueled_desc);
+
+    vehicle::VehicleResetOptions o;
+    o.gear = 1;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = true;
+    rig.world->reset_vehicle(rig.vehicle, o);
+
+    for (int settle_tick = 0; settle_tick < 240; ++settle_tick) rig.world->step(); // 1 s settle, mirrors F9
+
+    real prev_engine_heat = rig.world->powertrain_energy(rig.vehicle).engine_heat;
+    constexpr int kLaunchTicks = 480;  // 2 s WOT at 240 Hz
+    constexpr int kOverrunTicks = 480; // 2 s lift
+    for (int tick = 0; tick < kLaunchTicks + kOverrunTicks; ++tick) {
+        rig.world->set_control("throttle", tick < kLaunchTicks ? 1.0 : 0.0);
+        rig.world->step();
+        const drivetrain::PowertrainEnergy& e = rig.world->powertrain_energy(rig.vehicle);
+        const real heat_delta = e.engine_heat - prev_engine_heat;
+        INFO("tick " << tick << " heat_delta=" << heat_delta << " engine_heat=" << e.engine_heat);
+        CHECK(heat_delta >= -1e-9);
+        prev_engine_heat = e.engine_heat;
+    }
+
+    const drivetrain::PowertrainEnergy& final_ledger = rig.world->powertrain_energy(rig.vehicle);
+    CHECK(final_ledger.fuel_efficiency_violations == 0);
+    CHECK(final_ledger.fuel_mass > 0.0);   // non-vacuous: fuel really flowed
+    CHECK(final_ledger.engine_heat > 0.0); // non-vacuous: real (imperfect) combustion heat was booked
+}
+
+// ---------------------------------------------------------------------------
+// Fix 1 (redesigned - see this file's own history/PR notes): a BARE
+// EngineTorqueMap cannot discriminate the defect fix 1 targets. In that
+// setup omega_new is derived directly from the SAME tau0_/d_ pair
+// (omega_new = omega + h*tau0_/(J + h*d_)), so tau_lin = tau0_ -
+// d_*(omega_new-omega_old) never actually diverges from tau0_ even as
+// tau0_ crosses 0 - confirmed empirically (restoring the old formula on the
+// bare-engine version of this test left min_heat_delta at exactly 0 across
+// 6000 substeps, zero violations: it could not fail). The old formula's
+// singularity (work*tau_comb_/tau0_, tau0_ -> 0 with tau_comb_ and
+// domega/dt still nonzero) needs the crank genuinely coupled to something
+// OTHER than its own tau0_/d_ - a real Powertrain/ShaftNetwork::solve,
+// where omega_new comes from the WHOLE network (engine + clutch + gearbox +
+// diff + wheel hub terms from tyre/aero road load), not from the engine's
+// isolated ODE alone - so tau_lin can diverge sharply from tau0_ exactly at
+// a tau0_ ~= 0 crossing.
+//
+// Drives the real fuel-mapped fixture (WorldRig/vehicle_fuel_map_sedan.json,
+// same fixture F4/F6/F9 use) through an auto-clutch WOT launch in 1st from
+// settled rest (assist.auto_clutch=1, the same anti-stall launch law
+// test_powertrain_auto_clutch_shifts.cpp/test_powertrain_engine_braking.cpp
+// already rely on) to build rpm well above dfco_enable_rpm (1300) with the
+// vehicle actually rolling and the clutch fully locked, then lifts to
+// throttle 0 and coasts through DFCO -> recovery -> a long idle-speed
+// settling tail - real engine braking coupled through the now-moving
+// vehicle's own inertia, the tau0_ ~= 0-with-nonzero-domega/dt window fix 1
+// targets. An earlier version of this test set o.clutch_locked = true
+// directly (an instant clutch dump from a dead stop in 1st) - exactly the
+// scenario test_powertrain_engine_braking.cpp's own "stall under load"
+// case documents as stalling the engine; diagnostic instrumentation (now
+// removed) confirmed this test's engine stalled at tick 0 and stayed at
+// 0 rpm for the rest of the run, leaving the DFCO/recovery assertions
+// unreachable. Checks World::powertrain_energy's engine_heat over
+// TICK-level deltas (the granularity World actually publishes - each tick
+// is 4 substeps at 960 Hz) never goes negative, and that
+// fuel_efficiency_violations stays 0. See this test's own discrimination
+// demo (temporarily restore the old formula, rebuild, rerun, report the
+// failure, revert).
+// ---------------------------------------------------------------------------
+TEST_CASE("Fix 1: engine_heat never goes negative through a DFCO cut and recovery, driven through a real Powertrain",
+          "[unit][drivetrain][fuel]") {
+    const vehicle::VehicleDesc fueled_desc = io::load_vehicle_json(fuel_map_sedan_path());
+    WorldRig rig = make_world_rig(fueled_desc);
+
+    rig.world->set_control("assist.auto_clutch", 1.0); // anti-stall WOT-from-rest launch law
+
+    vehicle::VehicleResetOptions o;
+    o.gear = 1;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = false; // let the auto-clutch launch law manage engagement from open
+    rig.world->reset_vehicle(rig.vehicle, o);
+
+    for (int settle_tick = 0; settle_tick < 240; ++settle_tick) rig.world->step(); // 1 s settle, mirrors F4/F9
+
+    constexpr int kBuildTicks = 480;  // 2 s WOT: clears dfco_enable_rpm (1300) well before lift
+    constexpr int kCoastTicks = 3600; // 15 s coast: DFCO latch, recovery, and settle toward idle
+    bool saw_dfco = false;
+    bool saw_recovery_while_falling = false;
+    real prev_engine_heat = rig.world->powertrain_energy(rig.vehicle).engine_heat;
+    real prev_rpm = rig.world->powertrain_state(rig.vehicle).engine_rpm;
+    for (int tick = 0; tick < kBuildTicks + kCoastTicks; ++tick) {
+        rig.world->set_control("throttle", tick < kBuildTicks ? 1.0 : 0.0);
+        rig.world->step();
+
+        const drivetrain::PowertrainSnapshot& snap = rig.world->powertrain_state(rig.vehicle);
+        const real rpm_new = snap.engine_rpm;
+        const bool dfco_active = !snap.engines.empty() && snap.engines[0].dfco_active;
+        const real theta_c = snap.engines.empty() ? 0.0 : snap.engines[0].load;
+        if (dfco_active) saw_dfco = true;
+        // "recovery while falling": DFCO has already fired at least once, is
+        // no longer active (fuel/idle PI refilling), theta_c is really
+        // nonzero (combustion firing again), and rpm is still decreasing -
+        // the exact window the old formula's tau0_ -> 0 crossing lives in.
+        if (saw_dfco && !dfco_active && theta_c > 0.0 && rpm_new < prev_rpm) saw_recovery_while_falling = true;
+
+        const drivetrain::PowertrainEnergy& e = rig.world->powertrain_energy(rig.vehicle);
+        const real heat_delta = e.engine_heat - prev_engine_heat;
+        INFO("tick " << tick << " rpm=" << rpm_new << " dfco=" << dfco_active << " theta_c=" << theta_c
+                      << " heat_delta=" << heat_delta << " engine_heat=" << e.engine_heat);
+        CHECK(heat_delta >= -1e-9);
+
+        prev_engine_heat = e.engine_heat;
+        prev_rpm = rpm_new;
+    }
+
+    const drivetrain::PowertrainEnergy& final_ledger = rig.world->powertrain_energy(rig.vehicle);
+    CHECK(saw_dfco);                   // non-vacuous: DFCO really latched
+    CHECK(saw_recovery_while_falling); // non-vacuous: the targeted window really occurred
+    CHECK(final_ledger.fuel_efficiency_violations == 0);
+    // Non-vacuous guard against the earlier version of this test's own
+    // failure mode (an instant-clutch-dump launch stalled the engine at
+    // tick 0, leaving heat_delta's per-tick check vacuously satisfied - see
+    // this test's own header comment): the engine must have actually burned
+    // fuel and produced heat over the whole run, like F4's own checks.
+    CHECK(final_ledger.fuel_mass > 0.0);
+    CHECK(final_ledger.engine_heat > 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// New (owner ruling replacing fix 2): car_sedan's own engine, loaded WITHOUT
+// adding a fuel map (car_sedan_engine_public_desc() alone, via
+// to_engine_desc_for_test() - car_sedan.json ships with no fuel_map field at
+// all). indicated_work must still be computed and booked (owner ruling: an
+// engine without a map still models combustion mechanically), while the
+// fuel_mass/fuel_energy_in/engine_heat fields - which need an actual mass/
+// LHV to convert against - stay exactly 0 until a future no-map fuel model
+// lands. indicated_work is cross-checked against an INDEPENDENT
+// recomputation from PUBLIC data alone (pre.theta_c/pre.rpm plus the
+// public Desc's own wot/motoring Curve1D's), never engine-internal state.
+// ---------------------------------------------------------------------------
+TEST_CASE("New: car_sedan without a fuel map still books indicated_work, fuel fields stay 0", "[unit][drivetrain][fuel]") {
+    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    REQUIRE_FALSE(desc.has_fuel_map); // precondition: car_sedan really ships with no fuel map
+    EngineTorqueMap engine(desc);
     engine.reset(EngineState::Running);
     const real J = engine.desc().inertia_kgm2;
 
-    real omega = rpm_to_omega(800.0); // start above stall_rpm (400) so Running does not immediately drop to Stalled
+    real omega = rpm_to_omega(900.0);
     PowertrainEnergy ledger;
-    std::uint64_t violations = 0;
-    constexpr int kSubsteps = 2000; // ~2.08 s at 960 Hz
+    real recomputed_sum = 0.0;
+    constexpr int kSubsteps = 2000; // ~2.08 s at 960 Hz: WOT launch then lift
     for (int i = 0; i < kSubsteps; ++i) {
-        const real throttle_cmd = (i < kSubsteps / 2) ? 1.0 : 0.0; // first half WOT launch, second half overrun (lift)
-        const PreSolveResult pre = engine.pre_solve(Sensors{omega, 1.0, 0.0, 1.0, true}, throttle_of(throttle_cmd), no_ignition_cut(), kSubstepH);
+        const real throttle_cmd = (i < kSubsteps / 2) ? 1.0 : 0.0;
+        const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(throttle_cmd), no_ignition_cut(), kSubstepH);
         const real omega_new = omega + kSubstepH * pre.tau0 / (J + kSubstepH * pre.d);
         const PostSolveResult post = engine.post_solve(omega_new, kSubstepH);
-        omega = omega_new;
 
-        // Powertrain::post_solve_components' exact booking rule (powertrain.cpp).
+        // Powertrain::post_solve_components' exact booking rule:
+        // indicated_work is unconditional (fix 1/owner ruling); fuel_mass/
+        // fuel_energy_in/engine_heat/fuel_efficiency_violations stay gated
+        // on has_fuel_map (always false here) - engine_heat must NOT be
+        // booked from indicated_work_delta alone or it would wrongly go
+        // negative every substep (caught by this test itself before this
+        // gate was added: engine_heat read -72354.67 instead of 0).
         ledger.indicated_work += post.indicated_work_delta;
-        ledger.fuel_mass += post.fuel_mass_delta;
-        ledger.fuel_energy_in += post.fuel_energy_in_delta;
-        const real heat_delta = post.fuel_energy_in_delta - post.indicated_work_delta;
-        ledger.engine_heat += heat_delta;
-        if (heat_delta < 0.0) ++violations;
+        if (desc.has_fuel_map) {
+            ledger.fuel_mass += post.fuel_mass_delta;
+            ledger.fuel_energy_in += post.fuel_energy_in_delta;
+            ledger.engine_heat += post.fuel_energy_in_delta - post.indicated_work_delta;
+        }
 
-        INFO("substep " << i << " heat_delta=" << heat_delta << " engine_heat=" << ledger.engine_heat);
-        REQUIRE(ledger.engine_heat >= -1e-15); // float-noise tolerant "never negative"
+        // Public-data-only re-derivation: tau_comb = theta_c*(wot(rpm) -
+        // motoring(rpm)), and indicated_work_delta = h*omega_new*tau_comb -
+        // fix 1's own formula, recomputed here from PreSolveResult::theta_c/
+        // rpm plus the public Desc's curves alone (no access to the
+        // engine's private tau_comb_ member).
+        const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
+        recomputed_sum += kSubstepH * omega_new * tau_comb;
+
+        omega = omega_new;
     }
-    CHECK(violations == 0);
-    ledger.fuel_efficiency_violations = violations;
-    CHECK(ledger.fuel_efficiency_violations == 0);
-    CHECK(ledger.fuel_mass > 0.0);   // non-vacuous: fuel really flowed
-    CHECK(ledger.engine_heat > 0.0); // non-vacuous: real (imperfect) combustion heat was booked
+
+    CHECK(ledger.indicated_work > 0.0); // non-vacuous: real combustion work really accumulated
+    const real rel_err = std::abs(ledger.indicated_work - recomputed_sum) / std::max(std::abs(recomputed_sum), 1e-12);
+    CHECK(rel_err <= 1e-9);
+
+    CHECK(ledger.fuel_mass == 0.0);
+    CHECK(ledger.fuel_energy_in == 0.0);
+    CHECK(ledger.engine_heat == 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Fix 1 discrimination demo (formula-level, deterministic): the whole-vehicle
+// "Fix 1" DFCO/recovery test above (real World + Powertrain, an auto-clutch
+// WOT launch then a long coast) is genuine, non-vacuous regression coverage,
+// but empirically does NOT drive tau0_ close enough to exactly 0 while
+// tau_comb_ stays meaningfully nonzero to trip the old formula's singularity
+// at TICK granularity (confirmed by hand: temporarily restoring the old
+// formula in engine_torque_map.cpp and rerunning that test still passes,
+// 4085/4085 assertions - the coasting trajectory's tau0_ zero-crossings
+// during recovery happen to coincide with small |domega|, so `work` itself
+// stays small there too). This test instead pins the actual mathematical
+// property directly: using car_sedan's real (non-flat) engine curves, it
+// finds an (rpm, throttle) operating point where the real EngineTorqueMap's
+// own PreSolveResult::tau0 is very small while combustion is clearly firing
+// (theta_c > 0, tau_comb sizeable), then evaluates post_solve at an omega_new
+// chosen INDEPENDENTLY of the engine's own local tau0_/d_ ODE - exactly what
+// a real ShaftNetwork::solve does when the crank is coupled to something
+// else (a vehicle's own inertia via a locked clutch/gearbox/diff, feeding
+// engine braking back through the driveline even as the engine's own net
+// torque nets near zero). It compares the CURRENT production formula
+// (h*omega_new*tau_comb, called for real through EngineTorqueMap::
+// post_solve) against a hand-computed OLD formula (work*tau_comb/tau0,
+// built from the same PreSolveResult::tau0/d, the public curves' own
+// tau_comb, and the same omega_new) - no production code is touched for
+// this test to run every time; the numbers below were captured once by
+// hand with the old formula temporarily restored in production and
+// reported in this commit's message.
+// ---------------------------------------------------------------------------
+TEST_CASE("Fix 1 discrimination demo: the old proportional-split formula is singular where the new formula stays bounded",
+          "[unit][drivetrain][fuel]") {
+    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+
+    // Search a grid of (rpm, throttle command) for the operating point with
+    // the smallest |tau0| among those where combustion is clearly firing
+    // (|tau_comb| > 5 N*m) and the engine is genuinely Running - a fresh
+    // EngineTorqueMap per trial so no idle-integrator/DFCO/limiter history
+    // from a previous trial leaks in.
+    real best_abs_tau0 = std::numeric_limits<real>::infinity();
+    real best_rpm = 0.0, best_throttle = 0.0;
+    PreSolveResult best_pre{};
+    for (real rpm = 700.0; rpm <= 6500.0; rpm += 25.0) {
+        for (real throttle_cmd = 0.0; throttle_cmd <= 1.0; throttle_cmd += 0.02) {
+            EngineTorqueMap probe(desc);
+            probe.reset(EngineState::Running);
+            const PreSolveResult pre =
+                probe.pre_solve(sensors_at_omega(rpm_to_omega(rpm)), throttle_of(throttle_cmd), no_ignition_cut(), kSubstepH);
+            if (pre.state != EngineState::Running) continue;
+            const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
+            const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
+            const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
+            if (std::abs(tau_comb) <= 5.0) continue;
+            if (std::abs(pre.tau0) < best_abs_tau0) {
+                best_abs_tau0 = std::abs(pre.tau0);
+                best_rpm = rpm;
+                best_throttle = throttle_cmd;
+                best_pre = pre;
+            }
+        }
+    }
+    REQUIRE(best_abs_tau0 < std::numeric_limits<real>::infinity()); // the search actually found a candidate
+    INFO("best rpm=" << best_rpm << " throttle=" << best_throttle << " tau0=" << best_pre.tau0 << " theta_c=" << best_pre.theta_c
+                      << " d=" << best_pre.d);
+
+    // Re-run the winning (rpm, throttle) on a fresh engine to get a clean
+    // PreSolveResult, then post_solve at an omega_new offset from omega_old
+    // by an EXTERNALLY-imposed deceleration (-3 rad/s over this substep,
+    // ~-28.6 rpm - a plausible engine-braking-through-a-locked-driveline
+    // rate), i.e. NOT the value the isolated tau0_/d_ ODE would produce -
+    // the one condition a bare/self-consistent EngineTorqueMap test can
+    // never manufacture (see this file's "Fix 1" test header comment).
+    EngineTorqueMap engine(desc);
+    engine.reset(EngineState::Running);
+    const real omega_old = rpm_to_omega(best_rpm);
+    const PreSolveResult pre =
+        engine.pre_solve(sensors_at_omega(omega_old), throttle_of(best_throttle), no_ignition_cut(), kSubstepH);
+    REQUIRE(pre.state == EngineState::Running);
+    const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
+    const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
+    const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
+    REQUIRE(std::abs(tau_comb) > 5.0);
+
+    constexpr real kExternalDomega = -3.0; // rad/s, imposed by "the network", not this engine's own tau0_/d_
+    const real omega_new = omega_old + kExternalDomega;
+
+    const PostSolveResult post = engine.post_solve(omega_new, kSubstepH); // the REAL production formula
+    const real new_formula_value = post.indicated_work_delta;
+    const real new_formula_expected = kSubstepH * omega_new * tau_comb;
+    CHECK(new_formula_value == Catch::Approx(new_formula_expected).margin(1e-9)); // production matches the documented formula
+
+    // Hand-computed OLD formula (engine_torque_map.cpp's pre-review code):
+    // work*tau_comb/tau0, from the SAME pre.tau0/pre.d/tau_comb/omega_new.
+    const real tau_lin = pre.tau0 - pre.d * (omega_new - omega_old);
+    const real work = kSubstepH * omega_new * tau_lin;
+    const real frac_comb_old = pre.tau0 != real(0.0) ? tau_comb / pre.tau0 : real(0.0);
+    const real old_formula_value = work * frac_comb_old;
+
+    INFO("tau0=" << pre.tau0 << " tau_comb=" << tau_comb << " d=" << pre.d << " domega=" << kExternalDomega
+                 << " new_formula=" << new_formula_value << " old_formula=" << old_formula_value);
+    // The new formula is bounded by the physically sane combustion-work
+    // scale (h*omega*tau_comb); the old formula, built from a near-zero
+    // tau0 denominator, is not - assert its MAGNITUDE is an order of
+    // magnitude larger than the new formula's (the discrimination itself).
+    // Measured on this grid: new_formula=40.51 N*m*s, old_formula=2304.85
+    // N*m*s (~57x) - the 10x bound below leaves ample margin.
+    CHECK(std::abs(old_formula_value) > 10.0 * std::abs(new_formula_value));
 }
 
 } // namespace (F2/F3/F4 helpers)
@@ -455,63 +879,39 @@ TEST_CASE("F5: loader rejects every malformed engine/fuel/fuel_map field with it
         e["fuel_map"]["fuel_flow_g_s"] = {{0.0, 3.0}, {0.0, 0.01}}; // at rpm=7000, load=1: far too little fuel for the mechanical power
         expect_rejected(e, "implies >100% thermal efficiency");
     }
+    // Review fix 4: "a missing kind defaulting to torque_map stays" - pin it
+    // with a test, since every shipped engine file sets "kind" explicitly
+    // (this is the only place the default path itself is exercised).
+    SECTION("kind absent defaults to torque_map (pin)") {
+        nlohmann::json e = base_engine_component();
+        e.erase("kind");
+        const f5::TempJsonFile f(f5::vehicle_with_engine(e));
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        bool found = false;
+        for (const auto& c : d.powertrain.components) {
+            if (std::holds_alternative<TorqueMapEngineDesc>(c.params)) found = true;
+        }
+        CHECK(found);
+    }
+    // Review fix 4: a non-numeric fuel_flow_g_s entry (e.g. a JSON string)
+    // must give the same pinned std::runtime_error every other rejection
+    // gives, not let nlohmann::json::type_error propagate uncaught from
+    // .get<real>() - core/src/io/vehicle_io.cpp's is_number() check.
+    SECTION("fuel_map fuel_flow_g_s non-numeric entry is rejected") {
+        nlohmann::json e = base_engine_component();
+        e["fuel_map"]["fuel_flow_g_s"] = {{0.0, "not_a_number"}, {0.0, 12.0}};
+        expect_rejected(e, "fuel_flow_g_s[0][1] must be a number");
+    }
 }
 
 // ---------------------------------------------------------------------------
 // F6/F9: whole-World checks with tests/support/fixtures/vehicle_fuel_map_sedan.json
 // (a car_sedan.json clone, engine inlined, a synthetic fuel map/fuel added).
+// fuel_map_sedan_path()/WorldRig/make_world_rig() now live above (moved up
+// so the review-fixed F4 can use them too) - only the F6-only helper stays
+// here.
 // ---------------------------------------------------------------------------
 namespace {
-
-std::string fuel_map_sedan_path() { return std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicle_fuel_map_sedan.json"; }
-
-// Mirrors test_throttle_control.cpp's WorldRig/make_world_rig exactly (same
-// ground/chassis geometry as data/scenarios/vehicle_powertrain.json's own
-// bodies) - a fresh copy here rather than a shared header, since that
-// helper lives in an anonymous namespace in test_throttle_control.cpp.
-struct WorldRig {
-    std::unique_ptr<World> world;
-    VehicleId vehicle;
-};
-
-WorldRig make_world_rig(const vehicle::VehicleDesc& desc) {
-    WorldRig rig;
-    WorldConfig cfg;
-    cfg.job_workers = 1;
-    cfg.tick_rate_hz = 240.0;
-    cfg.substep_rate_hz = 960.0;
-    rig.world = std::make_unique<World>(cfg);
-
-    BodyDesc ground;
-    ground.shape = BoxShape{Vec3{1000.0, 1000.0, 0.5}};
-    ground.motion = BodyMotionType::Static;
-    ground.friction = 1.0;
-    ground.pose.position = Vec3{0.0, 0.0, -0.5};
-    rig.world->create_body(ground);
-
-    BodyDesc chassis;
-    chassis.shape = BoxShape{Vec3{2.0, 0.4, 0.15}};
-    chassis.motion = BodyMotionType::Dynamic;
-    chassis.mass = 1500.0;
-    chassis.friction = 0.5;
-    chassis.allow_sleep = false;
-    chassis.pose.position = Vec3{0.0, 0.0, 0.6};
-    const BodyId chassis_id = rig.world->create_body(chassis);
-
-    rig.world->set_surface_table(std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json"));
-    rig.vehicle = rig.world->create_vehicle(desc, chassis_id);
-
-    rig.world->set_control("assist.auto_clutch", 0.0);
-    rig.world->set_control("assist.auto_blip", 0.0);
-    rig.world->set_control("assist.auto_shift", 0.0);
-    rig.world->set_control("clutch", 0.0);
-    vehicle::VehicleResetOptions o;
-    o.gear = 0;
-    o.engine_state = EngineState::Running;
-    o.clutch_locked = true;
-    rig.world->reset_vehicle(rig.vehicle, o);
-    return rig;
-}
 
 bool any_channel_contains(const std::vector<std::string>& names, const std::string& substr) {
     return std::any_of(names.begin(), names.end(), [&](const std::string& n) { return n.find(substr) != std::string::npos; });
