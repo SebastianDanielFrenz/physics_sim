@@ -314,6 +314,38 @@ private:
     real transfer_torque_prev_ = 0.0; // PHYS-033 P4 I4 C8: debug/telemetry only, not hashed (see transfer_torque() above)
 };
 
+// transfer_case (PHYS-033 P4 I4 C9, plan section 3.3): mechanical front-
+// wheel-drive (MFWD). Rigid row omega_in = rear_ratio*omega_rear (registered
+// by Powertrain's constructor, present in EVERY topology state, exactly like
+// a gear_pair's own row); ONE Coulomb friction row (a = in, b = front,
+// ratio_b = front_ratio) whose capacity ramps with `engagement_` (e in
+// [0,1], persistent substep-to-substep STATE - the only per-component state
+// this component folds into fold_state_hash, since the sedan has no transfer
+// case and its hashed bytes must stay unchanged). `Assembly::
+// begin_substep_rows` resets every row's ratio_b to 1.0 each substep, so
+// pre_solve re-asserts front_ratio_ unconditionally (a BUILD-TIME constant
+// here, unlike the gearbox synchro row's per-gear ratio).
+class TransferCase final : public IComponent {
+public:
+    TransferCase(NodeId in, NodeId front, FrictionRowId row, TransferCaseDesc desc, int channel_slot)
+        : in_(in), front_(front), row_(row), desc_(std::move(desc)), channel_slot_(channel_slot) {}
+
+    void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
+    void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
+                     PowertrainEnergy& ledger) override;
+    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
+
+    [[nodiscard]] real engagement() const { return engagement_; }
+    [[nodiscard]] real front_ratio() const { return desc_.front_ratio; }
+
+private:
+    NodeId in_, front_;
+    FrictionRowId row_;
+    TransferCaseDesc desc_;
+    int channel_slot_ = -1; // into ComponentSubstepCtx::channels
+    real engagement_ = 0.0; // STATE: persists substep to substep (ramped toward the channel's target)
+};
+
 // direct_torque brakes (plan section 4.2/6): one friction row per wheel hub
 // that has a service-brake corner or is in the handbrake list (service +
 // handbrake MERGED into one row per hub at build time - two Coulomb rows on

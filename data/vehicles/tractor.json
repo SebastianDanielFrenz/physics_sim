@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.vehicle/2",
   "name": "tractor",
-  "source": "Geometry (wheelbase 2.80 m, track 1.90 m, front wheel radius 0.8 m, rear wheel radius 1.025 m) matches data/models/tractor/tractor.rig.json. Mass (6000 kg) and a rear-heavy 35/65 front/rear static split are plausible for a mid-size 2WD row-crop tractor per Wong, 'Theory of Ground Vehicles', 5th ed., ch. 1-2 - not a specific measured machine. Rigid axles are approximated by very stiff, short-travel per-wheel springs (PLAN.md 5.1's rigid/pendulum axle model is deferred). Front tyres data/tyres/tractor_front.json, rear data/tyres/tractor_rear.json. Powertrain (PHYS-033 I3): data/engines/diesel_i4_4l5_turbo.json -> dry clutch -> data/gearboxes/tractor_12f4r.json -> open rear differential with final drive 20.0 (bevel ~4.1 x planetary final ~4.9, typical tractor range) -> RL/RR; replaces the P3 placeholder's single final_drive_ratio = 15.0. Clutch 900 N*m kinetic (~1.55 x engine peak), static factor 1.2. Aero drag_area 4.0 m^2 (Cd ~0.8 x ~5 m^2 frontal area; minor at tractor speeds). Front-wheel drive (MFWD), diff lock, PTO, park lock and the all-speed governor arrive in I4. Rear attachment z = -0.275 (PHYS-033 I1 fix, kept as-is per I3 plan section 10.2's own note - see the pre-I3 revision of this file for the derivation): matches the front's ground-contact offset exactly, not the -0.725 a level reproduction from I2 HEAD alone would suggest.",
+  "source": "Geometry (wheelbase 2.80 m, track 1.90 m, front wheel radius 0.8 m, rear wheel radius 1.025 m) matches data/models/tractor/tractor.rig.json. Mass (6000 kg) and a rear-heavy 35/65 front/rear static split are plausible for a mid-size 2WD row-crop tractor per Wong, 'Theory of Ground Vehicles', 5th ed., ch. 1-2 - not a specific measured machine. Rigid axles are approximated by very stiff, short-travel per-wheel springs (PLAN.md 5.1's rigid/pendulum axle model is deferred). Front tyres data/tyres/tractor_front.json, rear data/tyres/tractor_rear.json. Powertrain (PHYS-033 I3): data/engines/diesel_i4_4l5_turbo.json -> dry clutch -> data/gearboxes/tractor_12f4r.json -> transfer case -> open rear differential with final drive 20.0 (bevel ~4.1 x planetary final ~4.9, typical tractor range) -> RL/RR; replaces the P3 placeholder's single final_drive_ratio = 15.0. Clutch 900 N*m kinetic (~1.55 x engine peak), static factor 1.2. Aero drag_area 4.0 m^2 (Cd ~0.8 x ~5 m^2 frontal area; minor at tractor speeds). PTO, park lock and the all-speed governor arrive in a later increment. Rear attachment z = -0.275 (PHYS-033 I1 fix, kept as-is per I3 plan section 10.2's own note - see the pre-I3 revision of this file for the derivation): matches the front's ground-contact offset exactly, not the -0.725 a level reproduction from I2 HEAD alone would suggest. PHYS-033 P4 I4 C9 (MFWD, mechanical front-wheel drive, default OFF via the 'awd' control channel defaulting to 0): a 'transfer' transfer_case component sits between gearbox.out and the rear differential's carrier (transfer.in <- gearbox.out, transfer.rear -> diff.carrier, unchanged ratio/efficiency), with a new 'front_diff' open differential (transfer.front -> front_diff.carrier -> FL/FR) providing a standard tractor MFWD ~2% front-axle speed lead: front_diff.ratio = 15.30 = (diff.ratio * r_F) / (transfer.front_ratio * r_R) = (20.0 * 0.8) / (1.0 * 1.025) / 1.02 (r_F/r_R = front/rear rolling radius 0.8/1.025 m, transfer.front_ratio = 1.0 pure passthrough, the whole lead realized via the front diff's own ratio vs. the rear diff's 20.0) - lead check: (20.0*0.8)/(15.30*1.025) = 1.0202, i.e. 2.02% front lead, matching the class-typical 1-3% MFWD lead that keeps the front axle in light drive (never overrunning the rear) on a straight line. front_diff carrier inertia 0.2 kg*m^2 (lighter duty than the rear diff's 0.5 - the front axle differential on a 2WD-converted tractor is a smaller unit). Transfer case clutch capacity_nm 2500 N*m, static_factor 1.2, engage_time_s 0.3 s - plausible for a hydraulically-actuated multi-plate MFWD clutch pack on this class of tractor, deliberately well under the driveline's own peak torque (engine 580 N*m x gearbox 1st-gear ratio 21.0 x 0.95 efficiency ~ 11.6 kN*m at gearbox.out) so the clutch slips rather than shock-loading the front axle when engaged at a large front/rear speed mismatch (e.g. a tight turn). test_powertrain_mfwd.cpp (tests/validation) is this component's acceptance test.",
   "wheels": [
     { "name": "FL", "attachment_local": [1.82, 0.95, -0.5], "wheel_radius": 0.8, "wheel_width": 0.48, "wheel_mass": 80.0, "wheel_inertia": 25.6,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 515025.0, "damper_bump_rate": 18600.0, "damper_rebound_rate": 24000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
@@ -31,15 +31,24 @@
         "engagement_vs_pedal": { "x": [0.0, 0.35, 0.55, 0.70, 1.0], "y": [1.0, 1.0, 0.4, 0.0, 0.0] },
         "out_inertia_kgm2": 0.03, "axis_local": [-1, 0, 0] },
       { "id": "gearbox", "type": "gearbox", "ref": "../gearboxes/tractor_12f4r.json" },
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 2500.0, "static_factor": 1.2, "engage_time_s": 0.3 },
+        "channel": "awd", "in_inertia_kgm2": 0.02, "front_inertia_kgm2": 0.05, "axis_local": [-1, 0, 0] },
       { "id": "diff",    "type": "differential", "kind": "open", "ratio": 20.0, "efficiency": 0.94,
-        "carrier_inertia_kgm2": 0.5, "carrier_axis_local": [0, 1, 0] }
+        "carrier_inertia_kgm2": 0.5, "carrier_axis_local": [0, 1, 0] },
+      { "id": "front_diff", "type": "differential", "kind": "open", "ratio": 15.30, "efficiency": 0.94,
+        "carrier_inertia_kgm2": 0.2, "carrier_axis_local": [0, 1, 0] }
     ],
     "shafts": [
       { "ports": ["engine.crank", "clutch.in"] },
       { "ports": ["clutch.out", "gearbox.in"] },
-      { "ports": ["gearbox.out", "diff.carrier"] },
+      { "ports": ["gearbox.out", "transfer.in"] },
+      { "ports": ["transfer.rear", "diff.carrier"] },
       { "ports": ["diff.left", "wheel:RL"] },
-      { "ports": ["diff.right", "wheel:RR"] }
+      { "ports": ["diff.right", "wheel:RR"] },
+      { "ports": ["transfer.front", "front_diff.carrier"] },
+      { "ports": ["front_diff.left", "wheel:FL"] },
+      { "ports": ["front_diff.right", "wheel:FR"] }
     ],
     "compliance": "rigid",
     "rotor_reaction": true

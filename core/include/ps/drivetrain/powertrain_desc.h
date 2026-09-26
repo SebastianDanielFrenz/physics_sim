@@ -164,9 +164,33 @@ struct DifferentialDesc {
     real torque_bias_ratio = 0.0;
 };
 
+// PHYS-033 P4 I4 C9 (plan section 3.3): mechanical front-wheel-drive (MFWD)
+// transfer case - ports `in` (from the gearbox), `rear` (rigid, ratio
+// `rear_ratio`: omega_in = rear_ratio*omega_rear, present in every topology
+// state) and `front` (a Coulomb friction row: a = in, b = front, ratio_b =
+// front_ratio, so slip v = omega_in - front_ratio*omega_front). `engagement`
+// (e in [0,1]) ramps toward the channel's target (1 when the channel reads
+// >= 0.5, else 0) at rate 1/engage_time_s (engage_time_s == 0: instant);
+// kinetic capacity = e*capacity_nm, static = static_factor*kinetic - the same
+// mechanism DirectTorqueBrakes/Clutch already use. `channel` is declared via
+// Powertrain::declare_control_channels (default 0 = disengaged).
+struct TransferCaseClutchDesc {
+    real capacity_nm = 0.0;    // KINETIC capacity at engagement 1, > 0
+    real static_factor = 1.15; // static = static_factor*kinetic, >= 1
+    real engage_time_s = 0.3;  // >= 0; 0 = instant engagement
+};
+struct TransferCaseDesc {
+    real rear_ratio = 1.0;  // != 0; omega_in = rear_ratio*omega_rear (rigid row)
+    real front_ratio = 1.0; // != 0; friction row's ratio_b (slip v = omega_in - front_ratio*omega_front)
+    TransferCaseClutchDesc clutch;
+    std::string channel = "awd"; // declared (default 0) via Powertrain::declare_control_channels; non-empty
+    real in_inertia_kgm2 = 0.0, front_inertia_kgm2 = 0.0;
+    Vec3 axis_local = Vec3::zero(); // shared by `in`/`front` ports (one physical shaft), plan section 6.7
+};
+
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
 // type is a compile-checked change plus a data-format minor bump.
-using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc>;
+using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty

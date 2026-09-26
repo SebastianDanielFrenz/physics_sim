@@ -134,7 +134,7 @@ from).
 significant for scenario determinism. Each entry:
 
 ```json
-{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential", ... }
+{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case", ... }
 ```
 
 - `id`: required, non-empty, unique across `components[]`
@@ -150,17 +150,21 @@ significant for scenario determinism. Each entry:
   file. A `ref`'d entry may contain **only** `id`, `type`, `ref` — any other
   key alongside `ref` throws `"<ctx>: a component with 'ref' may only
   contain 'id', 'type' and 'ref' (found extra field '<key>')"`; there is no
-  merging of inline overrides on top of a ref'd file. `clutch`, `gear_pair`
-  and `differential` components are **always inline** — `{"ref": ...}` on a
-  clutch throws `"<ctx>: 'clutch' components are always inline in I3 (no
-  'ref')"`.
-- **At most one** `engine`, one `clutch`, one `gearbox` component is allowed
-  (checked in `powertrain.cpp`): a second one throws `"more than one <kind>
-  component - I3 supports at most one"`. Any number of `gear_pair` **or**
-  `differential` components is fine (I4 C4 lifted the earlier "at most one
-  differential" limit) - a centre diff feeding two axle diffs, or any other
-  multi-diff topology, is built by wiring their `carrier`/`left`/`right`
-  ports together with ordinary shafts (see [Ports, by component
+  merging of inline overrides on top of a ref'd file. `clutch`, `gear_pair`,
+  `differential` and `transfer_case` components are **always inline** —
+  `{"ref": ...}` on a clutch throws `"<ctx>: 'clutch' components are always
+  inline in I3 (no 'ref')"`.
+- **At most one** `engine`, one `clutch`, one `gearbox`, one `transfer_case`
+  component is allowed (checked in `powertrain.cpp`): a second `engine`/
+  `clutch`/`gearbox` throws `"more than one <kind> component - I3 supports
+  at most one"`; a second `transfer_case` throws `"vehicle '<v>': more than
+  one transfer_case component - I4 C9 supports at most one"` (I4 C9 - a
+  second transfer case would need per-instance channel/hash disambiguation
+  the plan never specifies). Any number of `gear_pair` **or** `differential`
+  components is fine (I4 C4 lifted the earlier "at most one differential"
+  limit) - a centre diff feeding two axle diffs, or any other multi-diff
+  topology, is built by wiring their `carrier`/`left`/`right` ports together
+  with ordinary shafts (see [Ports, by component
   type](#ports-by-component-type-fixed-names) and [What the graph builder
   additionally rejects](#what-the-graph-builder-additionally-rejects)
   below).
@@ -262,6 +266,47 @@ so the capacity is a known number when the substep's friction LCP runs —
 no fixed-point iteration. The slip dissipation `-h * v * lambda` is booked
 as `PowertrainEnergy::diff_loss` (same channel as `viscous`).
 
+#### `transfer_case` component fields (I4 C9)
+
+`TransferCaseDesc`. Always inline; at most one per vehicle. Models a
+mechanical-front-wheel-drive (MFWD) transfer case: a **rigid** kinematic
+coupling from `in` to `rear` (present in every topology state, exactly like
+a `gear_pair`'s own rigid row), plus a **friction** (Coulomb, box-LCP) row
+between `in` and `front` — the AWD clutch pack a driver/controller engages
+to add front-axle drive. Unlike a `differential`, `front` is not
+constrained to follow `in` at all when the clutch capacity is 0 (fully
+disengaged) — it simply free-wheels at whatever speed its own downstream
+inertia carries it to.
+
+| Field | Type | Req./opt. | Default | Validation | Meaning |
+|---|---|---|---|---|---|
+| `rear_ratio` | real | optional | `1.0` | **must be != 0**, else `"<ctx>: transfer_case 'rear_ratio' must be != 0"` | the rigid row: `omega_in = rear_ratio * omega_rear` |
+| `front_ratio` | real | optional | `1.0` | **must be != 0**, else `"<ctx>: transfer_case 'front_ratio' must be != 0"` | the friction row's `ratio_b`: slip velocity `v = omega_in - front_ratio * omega_front` |
+| `clutch` | object (`TransferCaseClutchDesc`) | **required** | — | must be present, else `"<ctx>: transfer_case requires a 'clutch' block {\"capacity_nm\", \"static_factor\", \"engage_time_s\"}"` | the AWD clutch pack's own parameters, see below |
+| `clutch.capacity_nm` | real (N·m) | optional | `0` | **must be > 0**, else `"<ctx>: transfer_case clutch.capacity_nm must be > 0"` | kinetic torque capacity at engagement `e = 1` |
+| `clutch.static_factor` | real | optional | `1.15` | **must be >= 1**, else `"<ctx>: transfer_case clutch.static_factor must be >= 1"` | static capacity = `static_factor * kinetic` (same mechanism as `clutch.static_factor` / `Assembly::set_friction_capacity`) |
+| `clutch.engage_time_s` | real (s) | optional | `0.3` | **must be >= 0**, else `"<ctx>: transfer_case clutch.engage_time_s must be >= 0"` | engagement `e` ramps toward the channel's target (1 if channel value `>= 0.5`, else 0) at rate `1 / engage_time_s`; `0` = instant |
+| `channel` | string | optional | `"awd"` | **must be non-empty**, else `"<ctx>: transfer_case 'channel' must be non-empty"` | declared control channel (default value `0`, via `Powertrain::declare_control_channels`) whose value `>= 0.5` requests engagement |
+| `in_inertia_kgm2` / `front_inertia_kgm2` | real (kg·m²) | optional | `0` | none | inertia at `in` / `front` (`rear` always carries zero, a pure kinematic passthrough port) |
+| `axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length, same rule/message as clutch `axis_local` | rotor-reaction axis shared by `in` and `front` (one physical shaft) |
+
+Ports: `<id>.in`, `<id>.rear`, `<id>.front`.
+
+Telemetry/debug: `PowertrainSnapshot::awd_engagement` (the clutch's current
+`e`, 0 for a vehicle with no transfer case) and `PowertrainDebug::
+awd_clutch_torque`/`awd_clutch_slip` (the friction row's own lambda/
+velocity, tests only). Dissipation is booked as `PowertrainEnergy::
+awd_clutch_loss` (`-h * v * lambda` per substep, same form as `clutch_loss`/
+`diff_loss`), included in `end_tick()`'s `balance_error`. `e` is the
+transfer case's only persistent per-substep state and is folded into
+`Powertrain::fold_state_hash` — a vehicle with no `transfer_case` component
+hashes bit-identically to before this component existed.
+
+**Speedo interaction:** the gearbox-output speedo walk (see
+`powertrain.cpp`'s `speedo_ratio_`/`speedo_radius_`) follows a transfer
+case's `in -> rear` edge only, never `in -> front` — adding a front axle
+behind a transfer case cannot change a vehicle's speedo reading.
+
 ### Ports, by component type (fixed names)
 
 | Component | Ports |
@@ -271,6 +316,7 @@ as `PowertrainEnergy::diff_loss` (same channel as `viscous`).
 | `gearbox` | `in`, `out` |
 | `gear_pair` | `in`, `out` |
 | `differential` | `carrier`, `left`, `right` |
+| `transfer_case` | `in`, `rear`, `front` |
 | a wheel (implicit, one per entry in the top-level `wheels[]`) | `wheel:<wheel name>` |
 
 A port reference string is written `"<component id>.<port>"` (e.g.
@@ -312,9 +358,10 @@ Beyond the per-field checks above, `Powertrain::Powertrain`
 vehicle-construction time and additionally rejects:
 
 - A wheel with `wheel_inertia <= 0` (see the [wheel table](#wheel) above).
-- More than one engine/clutch/gearbox component (duplicated check from the
-  field-level notes above — this is where it's actually enforced; any
-  number of `differential`/`gear_pair` components is fine, see above).
+- More than one engine/clutch/gearbox/transfer_case component (duplicated
+  check from the field-level notes above — this is where it's actually
+  enforced; any number of `differential`/`gear_pair` components is fine, see
+  above).
 - A lossy (`efficiency < 1`) or `lockable: true` differential that is not a
   leaf (its `left`/`right` carry another rigid row) — the exact rejection
   message is under the [differential field table](#differential-component-fields)

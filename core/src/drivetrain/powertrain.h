@@ -203,6 +203,15 @@ public:
     [[nodiscard]] real clutch_engagement() const { return last_clutch_result_.engagement; }
     [[nodiscard]] real clutch_slip() const; // omega(clutch.in) - omega(clutch.out)
     [[nodiscard]] real clutch_torque() const { return has_clutch() ? network_.row_lambda(clutch_row_) : real(0.0); }
+
+    // PHYS-033 P4 I4 C9 (plan section 3.3): MFWD transfer case. nullptr/0 for
+    // every vehicle without one (car_sedan.json and every other pre-C9 file) -
+    // mirrors clutch_engagement()/clutch_slip()/clutch_torque()'s own pattern.
+    [[nodiscard]] bool has_transfer_case() const { return transfer_case_ != nullptr; }
+    [[nodiscard]] real awd_engagement() const { return transfer_case_ ? transfer_case_->engagement() : real(0.0); }
+    [[nodiscard]] real awd_clutch_torque() const { return transfer_case_ ? network_.row_lambda(transfer_row_) : real(0.0); }
+    [[nodiscard]] real awd_clutch_slip() const { return transfer_case_ ? network_.row_velocity(transfer_row_) : real(0.0); }
+
     [[nodiscard]] bool has_tcu() const { return tcu_ != nullptr; }
     // Only meaningful when has_tcu() - PowertrainSnapshot's shift_phase
     // derivation (plan section 6.5.2's ClutchOpening/ClutchClosing bracket
@@ -414,6 +423,15 @@ private:
     real diff_ratio_ = 1.0;
     real speedo_ratio_ = 1.0;
     real speedo_radius_ = 0.0;
+
+    // --- transfer case (I4 C9, plan section 3.3): nullptr/default FrictionRowId
+    // if this vehicle's powertrain has no transfer_case component. Non-owning
+    // alias into components_ (mirrors diffs_'s pattern); transfer_row_ is
+    // cached directly on Powertrain (mirrors clutch_row_/gearbox_synchro_row_
+    // above) rather than exposed via a TransferCase::row() accessor, since
+    // only Powertrain's own awd_clutch_torque()/awd_clutch_slip() need it. ---
+    TransferCase* transfer_case_ = nullptr;
+    FrictionRowId transfer_row_{};
 
     // --- TCU (nullptr if this vehicle has no manual_tcu controller) -------
     std::unique_ptr<ManualTcu> tcu_;
