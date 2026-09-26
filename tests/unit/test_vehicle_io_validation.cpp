@@ -817,11 +817,26 @@ TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehi
         CHECK(v.wheels.size() == 4);
         CHECK(v.aero.drag_area_m2 == Catch::Approx(4.0));
         CHECK(v.controllers.size() == 1);
-        REQUIRE(v.powertrain.components.size() == 4);
+        // engine, clutch, gearbox, transfer (MFWD transfer_case, PHYS-033 P4
+        // I4 C9), diff (rear), front_diff - up from 4 once the transfer case
+        // and front axle differential were added.
+        REQUIRE(v.powertrain.components.size() == 6);
         const auto* gearbox = std::get_if<drivetrain::GearboxDesc>(&v.powertrain.components[2].params);
         REQUIRE(gearbox != nullptr);
         CHECK(gearbox->forward_ratios.size() == 12);
         CHECK(gearbox->reverse_ratios.size() == 4);
+        const auto* transfer = std::get_if<drivetrain::TransferCaseDesc>(&v.powertrain.components[3].params);
+        REQUIRE(transfer != nullptr);
+        CHECK(transfer->rear_ratio == Catch::Approx(1.0));
+        CHECK(transfer->front_ratio == Catch::Approx(1.0));
+        CHECK(transfer->channel == "awd");
+        CHECK(transfer->clutch.capacity_nm == Catch::Approx(2500.0));
+        const auto* rear_diff = std::get_if<drivetrain::DifferentialDesc>(&v.powertrain.components[4].params);
+        REQUIRE(rear_diff != nullptr);
+        CHECK(rear_diff->ratio == Catch::Approx(20.0));
+        const auto* front_diff = std::get_if<drivetrain::DifferentialDesc>(&v.powertrain.components[5].params);
+        REQUIRE(front_diff != nullptr);
+        CHECK(front_diff->ratio == Catch::Approx(15.30));
     }
 }
 

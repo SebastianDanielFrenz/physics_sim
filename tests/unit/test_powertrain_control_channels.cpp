@@ -114,6 +114,17 @@ const std::set<std::string> kExpectedBaseChannels = {
     "assist.auto_clutch", "assist.auto_blip", "assist.auto_shift",
 };
 
+// tractor.json additionally declares a "transfer_case" component (PHYS-033
+// P4 I4 C9, MFWD) whose default channel name is "awd" - the one shipped
+// vehicle today with a non-empty declare_control_channels() result. Every
+// other entry is identical to kExpectedBaseChannels; car_sedan.json (no
+// transfer case) must still resolve to kExpectedBaseChannels UNCHANGED.
+std::set<std::string> expected_tractor_channels() {
+    std::set<std::string> s = kExpectedBaseChannels;
+    s.insert("awd");
+    return s;
+}
+
 } // namespace
 
 TEST_CASE("car_sedan.json's declared control-channel list is unchanged by C3's plumbing", "[unit][vehicle][world]") {
@@ -160,7 +171,7 @@ TEST_CASE("tractor.json's declared control-channel list is unchanged by C3's plu
     // std::vector, not two separate control_channel_names() calls.
     const std::vector<std::string> names = rig.world->control_channel_names();
     const std::set<std::string> after(names.begin(), names.end());
-    CHECK(after == kExpectedBaseChannels);
+    CHECK(after == expected_tractor_channels());
 }
 
 TEST_CASE("Powertrain::declare_control_channels merges duplicate names, first default wins", "[unit][drivetrain]") {
