@@ -24,6 +24,7 @@ add_executable(ps_validation_tests
   test_vehicle_braking.cpp
   test_vehicle_step_steer.cpp
   test_vehicle_accel_standing_start.cpp
+  test_vehicle_flat_surface_mesh.cpp
   test_vehicle_steer_mirror.cpp
   test_vehicle_standstill_wiggle.cpp
   test_vehicle_tractor_cross_slope.cpp

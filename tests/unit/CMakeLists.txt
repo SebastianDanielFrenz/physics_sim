@@ -10,6 +10,7 @@ add_executable(ps_unit_tests
   test_body_integration_params.cpp
   test_world_snapshot.cpp
   test_test_ground_loader.cpp
+  test_test_ground_edge_lengths.cpp
   test_articulation_core.cpp
   test_articulation_four_bar.cpp
   test_articulation_parallel_alloc.cpp

@@ -283,17 +283,15 @@ TEST_CASE("Diagnostic: full-throttle standing start on asphalt, WOT wheelspin tr
     }
 }
 
-// [!mayfail] added by the parking-slope creep fix (D1: regularised rolling
-// resistance near standstill, TyreDesc::rolling_resistance_v_eps; D2:
-// IRigidBackend::set_integrate_sub_threshold_rotation - see
-// test_vehicle_parking_slope.cpp's updated comment for the full mechanism).
-// This test's own diagnosis found it CHAOTIC at HEAD, independent of D1/D2:
-// both front (driven) wheels sit at the kappa = +-3.0 safety clamp with
-// runaway spin and no clutch/traction-control model (this file's own header
-// comment on the placeholder drive's structural launch-vs-wheelspin
-// tension), so a 2 s speed reading swings with any small change to the
-// early-transient dynamics - its previous pass was luck, not a property
-// this fix broke. Measured variants (speed at t=2s, m/s):
+// [!mayfail] was added by the parking-slope creep fix (D1: regularised
+// rolling resistance near standstill, TyreDesc::rolling_resistance_v_eps;
+// D2: IRigidBackend::set_integrate_sub_threshold_rotation - see
+// test_vehicle_parking_slope.cpp's updated comment for the full mechanism),
+// diagnosed at the time as CHAOTIC and independent of D1/D2: both front
+// (driven) wheels sit at the kappa = +-3.0 safety clamp with runaway spin
+// and no clutch/traction-control model, so a 2 s speed reading swung with
+// any small change to the early-transient dynamics. Measured variants from
+// that diagnosis (speed at t=2s, m/s):
 //
 //   Variant   | Grass | Dirt
 //   ----------|-------|------
@@ -302,11 +300,29 @@ TEST_CASE("Diagnostic: full-throttle standing start on asphalt, WOT wheelspin tr
 //   D1 only   | 1.52  | 2.32
 //   Both      | 2.42  | 1.62
 //
-// Do not tune D1/D2 or this test's thresholds to make it pass again - it is
-// re-enabled once a real clutch model (I3) and/or traction control (I5)
-// exists to give the standing start a physical launch instead of an
-// unregulated kappa-clamped spin.
-TEST_CASE("Full-throttle acceleration on grass/dirt is lower than on asphalt", "[validation][vehicle][!mayfail]") {
+// REMOVED (PHYS-047, 2026-09-26): that swing's real cause was never the
+// kappa clamp itself - it was tests/support/vehicle_test_helpers.h's
+// build_vehicle_rig_on_surface() spawning the chassis at exactly
+// Vec3{0,0,origin_height} (see its own chassis.pose.position line), which
+// sat directly ON the OLD flat_surface_mesh()'s 2-triangle diagonal seam
+// (its only edge ran corner-to-corner through the world origin). Every
+// wheel's suspension CylinderShape cast near that seam hit Jolt's
+// large-triangle CastShape artefact (phantom fraction-0 hits ~0.12 m above
+// the plane, wrong-side surface ids, fraction errors up to 0.23 - the same
+// mechanism test_powertrain_split_mu.cpp's own C8 "diff hop" diagnosis
+// found and fixed first), so this test's Fz/surface reads near t=0 were
+// themselves corrupted - a ground-query bug, not chaos in the vehicle
+// dynamics. flat_surface_mesh() is now tessellated into <=20 m cells
+// (tests/validation/test_vehicle_flat_surface_mesh.cpp's probe finds 0 bad
+// casts over its whole footprint, vs. 31/160801 for the old mesh at the
+// same probe density); with that fix this test passes bit-identically
+// across 3 reruns (speed_asphalt=4.71432, speed_dirt=4.28872,
+// speed_grass=2.07442 m/s after 2 s). The structural clutch/traction-
+// control gap this comment used to invoke is real (see the file's own
+// header comment) but is not what made THIS test unstable; the launch is
+// still traction-limited (some wheelspin, see the CHECK comment below),
+// just no longer riding a corrupted ground read.
+TEST_CASE("Full-throttle acceleration on grass/dirt is lower than on asphalt", "[validation][vehicle]") {
     const real mass = 1500.0;
     const Vec3 half_extents{2.0, 0.4, 0.15};
     const real origin_height = 0.6;
