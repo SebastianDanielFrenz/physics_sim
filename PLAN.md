@@ -719,6 +719,12 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
 - Compressor surge (Sebastian, 2026-09-26): I7d only flags surge and counts
   events for the sound system. A real surge model stays an optional later
   item, taken up only if the results turn out unsatisfactory.
+- Shift logic and the pedal (Sebastian, 2026-09-26): on a manual gearbox the
+  auto-shift, auto-clutch and auto-blip are game driver assists for players
+  who do not want to shift, not a gear controller; auto-shift is not a
+  requirement (the existing assist stays). A future automatic gearbox's
+  controller acts on the torque request (after the pedal map), not the raw
+  pedal.
 
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
