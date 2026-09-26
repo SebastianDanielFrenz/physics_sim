@@ -44,6 +44,7 @@ add_executable(ps_unit_tests
   test_powertrain_pto.cpp
   test_powertrain_compliance.cpp
   test_sub_threshold_rotation.cpp
+  test_table2d.cpp
 )
 
 target_link_libraries(ps_unit_tests
