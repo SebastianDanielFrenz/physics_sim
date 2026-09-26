@@ -77,8 +77,12 @@
 // (the governor lever) 1, foot throttle 0; settle at zero drawbar load until
 // the mean chassis speed of consecutive 1 s windows changes by < 0.1 % (a
 // 60 s timeout fails the test), v0 = the last window's mean; then the same
-// 100 N/s ramp, limit = the force at the start of the first trailing 1 s
-// window whose mean speed is < 0.5*v0. Slip is left free. The analytic
+// 100 N/s ramp. C12 REVIEW ROUND 3: the limit is the traction SATURATION
+// point - the drawbar force where the driven tyres' summed fx (trailing
+// 0.25 s mean) peaks during the ramp. The first trailing 1 s window whose
+// mean speed is < 0.5*v0 only STOPS the ramp: a 6000 kg chassis needs ~2 s
+// of ramp to lose half its speed after saturation, so a limit read there
+// is biased high by a ramp-rate-dependent ~210 N. Slip is left free. The analytic
 // sanity band (drawbar_force_estimate()) uses the REAL Pacejka tyre model (via
 // create_pacejka_tyre_model(), mirroring test_vehicle_skidpad.cpp's
 // TyreLimitedSteadyStateSolver pattern: real VehicleDesc/TyreDesc data
@@ -89,15 +93,14 @@
 // (wheel_instance.cpp's own crr formula, reproduced here since ITyreModel::
 // evaluate() itself never includes it). Fz_driven is the MEASURED static
 // per-wheel load (a settled rig, zero throttle/rearward force) rather than
-// a hand geometric calculation - not corrected for drawbar-force load
-// transfer at the RearwardForce's own application height (the chassis CoM):
-// that correction would need this file to duplicate the exact same
-// roll/pitch load-transfer model test_vehicle_skidpad.cpp's solver already
-// implements for a different (cornering) geometry, and the chosen +-25%
-// band already comfortably covers a quasi-static longitudinal load-transfer
-// term of that size at this vehicle's modest CoM height. See "tractor MFWD
-// on low_mu: engaged drawbar-pull limit..." below for the measured
-// values/estimates/ratio.
+// a hand geometric calculation - deliberately NOT corrected for load
+// transfer: the ground traction force X acts at the contact patches, a CoM
+// height h below the RearwardForce (applied AT the CoM), so it moves X*h/L
+// from the front to the rear axle. The test case below measures that
+// transfer and each other term of the remaining gap to F_est at the
+// saturation point, instead of folding a modelled correction into the
+// estimate. See "tractor MFWD on low_mu: engaged drawbar-pull limit..."
+// below for the measured values/estimates/ratio.
 
 #include "vehicle_test_helpers.h"
 
@@ -791,10 +794,9 @@ struct StaticAxleLoads {
 // no rearward force), then read each axle's own per-wheel Fz straight from
 // wheel_telemetry - the sim's own settled corner weights, matching whatever
 // this vehicle file's suspension/geometry actually produces. NOT corrected
-// for drawbar-force load transfer at RearwardForce's own application height
-// (the chassis CoM) - see the file header's "C9 REVIEW ROUND 2" comment for
-// why that correction is left out (the +-25% band already covers a
-// quasi-static longitudinal load-transfer term of this vehicle's size).
+// for load transfer (the ground traction force acting a CoM height below
+// RearwardForce's own application point) - see the file header's "C9 REVIEW
+// ROUND 2" comment and the measured transfer in the drawbar test case.
 StaticAxleLoads measure_static_axle_loads(const vehicle::VehicleDesc& desc) {
     MfwdRig rig = build_mfwd_rig(desc, "low_mu");
     World& w = *rig.world;
@@ -833,17 +835,39 @@ struct DrawbarResult {
     real v0 = 0.0;              // m/s, mean chassis speed over the last zero-load 1 s window
     real rpm_v0 = 0.0;          // mean engine rpm over that window
     real theta_gov_v0 = 0.0;    // mean governor rack over that window
-    bool reached_limit = false; // the speed gate failed before kMaxForce
-    real limit_force = 0.0;     // N, force at the start of the first failing window
-    real mean_speed_at_limit = 0.0;
-    real mean_kappa_rear_at_limit = 0.0;  // mean |slip_ratio| of RL/RR over the failing window
-    real mean_kappa_front_at_limit = 0.0; // mean |slip_ratio| of FL/FR over the failing window
-    real mean_rpm_at_limit = 0.0;
-    real min_rpm_at_limit = 0.0;
-    real mean_theta_gov_at_limit = 0.0;
+    bool reached_stop = false; // the speed gate failed before kMaxForce
     int not_running_ticks = 0; // ramp ticks with engine_state != Running
-    real peak_driven_fx = 0.0;          // N, largest per-tick sum of driven-wheel telemetry fx during the ramp
-    real force_at_peak_driven_fx = 0.0; // N, drawbar force at that tick (where the driven tyres saturate)
+
+    // The reported LIMIT: traction saturation, where the sum of the driven
+    // wheels' telemetry fx (pure tyre force, no rolling resistance) peaks
+    // during the ramp. Taken on a trailing kSatMeanSeconds mean of that sum,
+    // not the raw per-tick value: with MFWD engaged the per-tick signal
+    // carries single-tick spikes (see the measured-results comment). Every
+    // "_at_sat" quantity is a mean over that same window.
+    real limit_force = 0.0;    // N, mean drawbar force over the window (its centre - the ramp is linear)
+    real peak_driven_fx = 0.0; // N, the maximum window mean itself
+    real chassis_speed_at_sat = 0.0;
+    real chassis_height_at_sat = 0.0; // m, chassis CoM z above the z = 0 ground
+    real accel_at_sat = 0.0;          // m/s^2, chassis (v_last - v_first)/(n-1)/dt over the window
+    real kappa_at_sat[4] = {};        // |slip_ratio| per wheel (FL, FR, RL, RR)
+    real fx_at_sat[4] = {};           // N, telemetry fx per wheel
+    real fz_at_sat[4] = {};           // N, telemetry fz per wheel
+    real min_rpm_at_sat = 0.0;
+    real max_theta_gov_at_sat = 0.0;
+    // Noise check: the argmax of the raw per-tick sum.
+    real limit_force_per_tick = 0.0;
+    real peak_driven_fx_per_tick = 0.0;
+    real fz_per_tick_at_peak[4] = {}; // N, per-wheel fz at that single tick
+
+    // The ramp's STOP condition (not the limit): the first trailing 1 s
+    // window whose mean chassis speed is below 0.5*v0. Means over that window.
+    real stop_force = 0.0; // N, force at the start of the failing window
+    real mean_speed_at_stop = 0.0;
+    real mean_kappa_rear_at_stop = 0.0;  // mean |slip_ratio| of RL/RR
+    real mean_kappa_front_at_stop = 0.0; // mean |slip_ratio| of FL/FR
+    real mean_rpm_at_stop = 0.0;
+    real min_rpm_at_stop = 0.0;
+    real mean_theta_gov_at_stop = 0.0;
 };
 
 real mean_of_deque(const std::deque<real>& d) {
@@ -878,8 +902,11 @@ real gear1_high_idle_speed(const vehicle::VehicleDesc& d) {
 // settle at zero drawbar load until the mean chassis speed of consecutive
 // 1 s windows changes by less than 0.1 % (v0 = the last window's mean); a
 // timeout returns settled = false, which the caller REQUIREs. Phase 2 ramps
-// the rearward force at 100 N/s; the limit is the force at the start of
-// the first trailing 1 s window whose mean speed falls below 0.5 * v0.
+// the rearward force at 100 N/s. The LIMIT is the drawbar force at the tick
+// where the summed driven-wheel fx peaks (traction saturation); the ramp
+// STOPS at the first trailing 1 s window whose mean speed falls below
+// 0.5 * v0 (a speed collapse that, with a 6000 kg chassis, lags the
+// saturation by a ramp-rate-dependent amount, so it is not the limit).
 DrawbarResult drawbar_pull_limit(bool awd_on) {
     constexpr real kSettleWindowSeconds = 1.0;
     constexpr real kSettleDriftFraction = 0.001; // consecutive window means within 0.1 %
@@ -888,6 +915,7 @@ DrawbarResult drawbar_pull_limit(bool awd_on) {
     constexpr real kMaxForce = 8000.0;         // N
     constexpr real kWindowSeconds = 1.0;       // trailing window for the stop condition/reported means
     constexpr real kMinMeanSpeedFraction = 0.5;
+    constexpr real kSatMeanSeconds = 0.25; // trailing mean for the saturation-argmax noise check
 
     const vehicle::VehicleDesc desc = load_tractor();
     const drivetrain::TorqueMapEngineDesc& eng = engine_desc(desc);
@@ -939,11 +967,18 @@ DrawbarResult drawbar_pull_limit(bool awd_on) {
 
     // Phase 2: ramp the drawbar force.
     const std::size_t window_n = static_cast<std::size_t>(std::lround(kWindowSeconds / dt));
+    const std::size_t sat_mean_n = static_cast<std::size_t>(std::lround(kSatMeanSeconds / dt));
     std::deque<real> speed_w, kappa_rear_w, kappa_front_w, rpm_w, theta_w;
-    auto push = [window_n](std::deque<real>& q, real v) {
+    // Trailing kSatMeanSeconds windows for the saturation point.
+    std::deque<real> sat_fx_sum_w, sat_force_w, sat_speed_w, sat_h_w, sat_rpm_w, sat_theta_w;
+    std::deque<real> sat_kappa_w[4], sat_fx_w[4], sat_fz_w[4];
+    auto push_n = [](std::deque<real>& q, real v, std::size_t n) {
         q.push_back(v);
-        if (q.size() > window_n) q.pop_front();
+        if (q.size() > n) q.pop_front();
     };
+    auto push = [&](std::deque<real>& q, real v) { push_n(q, v, window_n); };
+    auto push_sat = [&](std::deque<real>& q, real v) { push_n(q, v, sat_mean_n); };
+    constexpr std::size_t kWheels[4] = {kFL, kFR, kRL, kRR};
     real force = 0.0;
     while (force < kMaxForce) {
         force += kRampRatePerSecond * dt;
@@ -951,33 +986,63 @@ DrawbarResult drawbar_pull_limit(bool awd_on) {
         w.step();
         const PowertrainSnapshot& snap = w.powertrain_state(rig.vehicle);
         if (snap.engine_state != EngineState::Running) ++result.not_running_ticks;
-        push(speed_w, w.get_motion(rig.chassis).linear.x);
+        const real speed = w.get_motion(rig.chassis).linear.x;
+        push(speed_w, speed);
         push(kappa_rear_w, 0.5 * (std::abs(w.wheel_telemetry(rig.vehicle, kRL).slip_ratio) +
                                   std::abs(w.wheel_telemetry(rig.vehicle, kRR).slip_ratio)));
         push(kappa_front_w, 0.5 * (std::abs(w.wheel_telemetry(rig.vehicle, kFL).slip_ratio) +
                                    std::abs(w.wheel_telemetry(rig.vehicle, kFR).slip_ratio)));
         push(rpm_w, snap.engine_rpm);
         push(theta_w, theta_gov(snap));
+
         real driven_fx = w.wheel_telemetry(rig.vehicle, kRL).fx + w.wheel_telemetry(rig.vehicle, kRR).fx;
         if (awd_on) driven_fx += w.wheel_telemetry(rig.vehicle, kFL).fx + w.wheel_telemetry(rig.vehicle, kFR).fx;
-        if (driven_fx > result.peak_driven_fx) {
-            result.peak_driven_fx = driven_fx;
-            result.force_at_peak_driven_fx = force;
+        if (driven_fx > result.peak_driven_fx_per_tick) {
+            result.peak_driven_fx_per_tick = driven_fx;
+            result.limit_force_per_tick = force;
+            for (int k = 0; k < 4; ++k) result.fz_per_tick_at_peak[k] = w.wheel_telemetry(rig.vehicle, kWheels[k]).fz;
+        }
+        push_sat(sat_fx_sum_w, driven_fx);
+        push_sat(sat_force_w, force);
+        push_sat(sat_speed_w, speed);
+        push_sat(sat_h_w, w.get_pose(rig.chassis).position.z);
+        push_sat(sat_rpm_w, snap.engine_rpm);
+        push_sat(sat_theta_w, theta_gov(snap));
+        for (int k = 0; k < 4; ++k) {
+            const auto& t = w.wheel_telemetry(rig.vehicle, kWheels[k]);
+            push_sat(sat_kappa_w[k], std::abs(t.slip_ratio));
+            push_sat(sat_fx_w[k], t.fx);
+            push_sat(sat_fz_w[k], t.fz);
+        }
+        if (sat_fx_sum_w.size() >= sat_mean_n && mean_of_deque(sat_fx_sum_w) > result.peak_driven_fx) {
+            result.peak_driven_fx = mean_of_deque(sat_fx_sum_w);
+            result.limit_force = mean_of_deque(sat_force_w);
+            result.chassis_speed_at_sat = mean_of_deque(sat_speed_w);
+            result.chassis_height_at_sat = mean_of_deque(sat_h_w);
+            result.accel_at_sat =
+                (sat_speed_w.back() - sat_speed_w.front()) / (static_cast<real>(sat_speed_w.size() - 1) * dt);
+            for (int k = 0; k < 4; ++k) {
+                result.kappa_at_sat[k] = mean_of_deque(sat_kappa_w[k]);
+                result.fx_at_sat[k] = mean_of_deque(sat_fx_w[k]);
+                result.fz_at_sat[k] = mean_of_deque(sat_fz_w[k]);
+            }
+            result.min_rpm_at_sat = *std::min_element(sat_rpm_w.begin(), sat_rpm_w.end());
+            result.max_theta_gov_at_sat = *std::max_element(sat_theta_w.begin(), sat_theta_w.end());
         }
 
         if (speed_w.size() >= window_n && mean_of_deque(speed_w) < kMinMeanSpeedFraction * result.v0) {
-            result.reached_limit = true;
-            result.limit_force = force - kRampRatePerSecond * kWindowSeconds; // force at the start of the failing window
-            result.mean_speed_at_limit = mean_of_deque(speed_w);
-            result.mean_kappa_rear_at_limit = mean_of_deque(kappa_rear_w);
-            result.mean_kappa_front_at_limit = mean_of_deque(kappa_front_w);
-            result.mean_rpm_at_limit = mean_of_deque(rpm_w);
-            result.min_rpm_at_limit = *std::min_element(rpm_w.begin(), rpm_w.end());
-            result.mean_theta_gov_at_limit = mean_of_deque(theta_w);
+            result.reached_stop = true;
+            result.stop_force = force - kRampRatePerSecond * kWindowSeconds; // force at the start of the failing window
+            result.mean_speed_at_stop = mean_of_deque(speed_w);
+            result.mean_kappa_rear_at_stop = mean_of_deque(kappa_rear_w);
+            result.mean_kappa_front_at_stop = mean_of_deque(kappa_front_w);
+            result.mean_rpm_at_stop = mean_of_deque(rpm_w);
+            result.min_rpm_at_stop = *std::min_element(rpm_w.begin(), rpm_w.end());
+            result.mean_theta_gov_at_stop = mean_of_deque(theta_w);
             return result;
         }
     }
-    result.limit_force = force;
+    result.stop_force = force;
     return result;
 }
 } // namespace
@@ -1020,30 +1085,50 @@ TEST_CASE("tractor MFWD off at WOT with zero drawbar load on low_mu: discriminat
     CHECK(max_mean_abs_kappa_driven > 0.0); // sanity: actually slipping under WOT, not stalled/airborne
 }
 
-// Measured (C12 review round 2, 2026-09-26, release, 240/960):
+// Measured (C12 review round 3, 2026-09-26, release, 240/960; static loads
+// 10300.6 N front / 19131.2 N rear per wheel, wheelbase 2.8 m, h_cg 1.280 m):
 //  - Zero-load settle: v0 = 0.6024 m/s (off, gate passed after 8 s) and
 //    0.6044 m/s (on, 6 s), engine 2366 rpm, theta_gov 0.170 - governed in the
 //    droop band at the rolling-resistance load. Kinematic prediction at
 //    2400 rpm high idle 0.6134 m/s; at the measured 2366 rpm 0.6047 m/s, the
 //    rest being rear-tyre slip.
-//  - Limit (0.5*v0 speed gate): off 1882.1 N vs. estimate 1564.6 N (+20.3 %),
-//    on 3352.9 N vs. 3338.6 N (+0.4 %), ratio 1.781. C9's speed-PI version
-//    gave 1740.4 / 3227.9 N, ratio 1.855 (estimates 1564.2 / 3338.2 N).
-//  - Where the driven tyres saturate (largest summed driven fx during the
-//    ramp): off at 1670.8 N drawbar (+6.8 % vs. its estimate; peak rear fx
-//    3468.2 N), on at 3130.0 N (-6.2 %; peak driven fx 5073.1 N). The speed
-//    gate trips 211 / 223 N later: the time a 6000 kg tractor needs to lose
-//    half its speed while the ramp keeps rising. With MFWD engaged the 2 %
-//    kinematic lead already puts the front tyres past their low_mu peak slip
-//    at zero load (measured kappa_F ~0.021 vs. peak 0.015 - lambda_mu 0.1
-//    lowers the peak slip tenfold because the slip stiffness is unscaled),
-//    so the engaged axle pair saturates below the sum of both peaks.
-//  - Traction discriminator at the limit: mean |kappa| rear 0.551 (off),
-//    0.525 rear / 0.619 front (on), vs. a model peak slip of 0.015 at static
-//    Fz (sweep resolution 0.0075); engine Running on every ramp tick,
-//    2363-2365 rpm over the limit window with theta_gov 0.175 / 0.183 -
-//    torque in reserve, far above the 1500 rpm WOT-curve peak. The limit is
-//    traction, not engine.
+//  - Limit (traction saturation, argmax of the trailing 0.25 s mean of the
+//    driven fx sum): off 1666.9 N vs. estimate 1564.6 N (+6.5 %), on
+//    3141.9 N vs. 3338.6 N (-5.9 %), ratio 1.885. Why a window mean, not the
+//    raw per-tick sum: the per-tick argmax lands 4 N (off) / 12 N (on) away,
+//    but with MFWD engaged the per-tick signal spikes - at its argmax tick RL
+//    fz reads 21373 N against a 19907 N window mean and the driven fx sum
+//    5073 N against 4963 N - so single-tick force/Fz values do not close the
+//    chassis force balance there; the window means do (below).
+//  - Saturation -> stop (0.5*v0 speed gate at 1882.1 / 3352.9 N): 215.2 N
+//    (off) and 211.0 N (on), i.e. ~2.1 s of the 100 N/s ramp.
+//  - Gap to the static-Fz estimate, term by term at the saturation window:
+//    off, +102.3 N = +59.4 N load transfer (rear axle +742.5 N vs. the
+//    quasi-static X*h/L 742.6 N; both rear tyres' peak fx 1703.5 -> 1733.9 N)
+//    + 42.9 N chassis inertia (X - F = -42.4 N vs. m*dv/dt -43.5 N at
+//    dv/dt -0.0072 m/s^2 - ramp-rate dependent). The rear tyres deliver
+//    3467.1 N of their 3467.9 N peak at the measured Fz: saturated.
+//    On, -196.7 N = +3.3 N load transfer (front axle -1429.5 N vs. X*h/L
+//    1424.5 N; per-wheel peak fx front 887.0 -> 830.4/829.8 N, rear
+//    1703.5 -> 1766.9/1762.0 N nearly cancel) - 225.8 N of driven tyres
+//    below their peak + 25.8 N inertia (X - F -25.8 N vs. m*dv/dt -29.8 N).
+//    The shortfall is the front axle (1444.3 N delivered vs. 1660.2 N peak;
+//    the rear is 9.9 N short): the 2 % kinematic lead pins the open front
+//    diff's MEAN slip at 0.0344 (rear 0.0135 + 0.0209, desc lead 0.0202),
+//    past the 0.015 low_mu peak slip, and the open diff splits it into FL
+//    |kappa| 0.061 on the falling side and FR 0.0075 below the peak at equal
+//    force (722 N each) - the axle carries twice the falling-side force, not
+//    two peaks. So the off gap is load transfer plus inertia; the on gap is
+//    the kinematic lead, which a static peak-sum estimate does not model.
+//  - Traction discriminator: at saturation engine rpm >= 2362.5 and
+//    theta_gov <= 0.187 over the window (torque in reserve, far above the
+//    1500 rpm WOT-curve peak); over the stop window mean |kappa| rear 0.551
+//    (off), 0.525 rear / 0.619 front (on), vs. a model peak slip of 0.015 at
+//    static Fz (sweep resolution 0.0075), engine Running on every ramp tick,
+//    2363-2365 rpm, theta_gov 0.175 / 0.183. The limit is traction, not
+//    engine.
+//  - C9's speed-PI version gave 1740.4 / 3227.9 N, ratio 1.855 (estimates
+//    1564.2 / 3338.2 N).
 TEST_CASE("tractor MFWD on low_mu: engaged drawbar-pull limit is at least 1.2x the rear-only limit",
           "[validation][vehicle][powertrain][drivetrain]") {
     const vehicle::VehicleDesc desc = load_tractor();
@@ -1061,33 +1146,100 @@ TEST_CASE("tractor MFWD on low_mu: engaged drawbar-pull limit is at least 1.2x t
     const vehicle::Curve1D& wot = engine_desc(desc).wot_torque_nm_vs_rpm;
     const real wot_peak_rpm =
         wot.x[static_cast<std::size_t>(std::distance(wot.y.begin(), std::max_element(wot.y.begin(), wot.y.end())))];
+    const real wheelbase = desc.wheels[kFL].attachment_local.x - desc.wheels[kRL].attachment_local.x;
+
+    // Load-transfer bookkeeping at the saturation window (reported, not
+    // asserted): the per-wheel Fz the sim measured there; the quasi-static
+    // axle transfer X*h/L that the ground longitudinal force X (every wheel's
+    // fx minus its rolling resistance at its measured Fz) predicts about the
+    // chassis CoM at its measured height h - RearwardForce acts AT the CoM,
+    // so it adds no pitch moment of its own; the "hitch height" is the CoM
+    // height; the F_est formula of drawbar_force_estimate() re-evaluated at
+    // the measured per-wheel Fz; and the chassis force balance X - F = m*a.
+    struct SatAnalysis {
+        real peak_static[4] = {};         // N, each tyre's peak fx at its static Fz
+        real peak_at_sat_fz[4] = {};      // N, each tyre's peak fx at its measured saturation Fz
+        real driven_peak_static = 0.0;    // N, sum over driven tyres
+        real driven_peak_at_sat_fz = 0.0; // N, sum over driven tyres
+        real roll_static = 0.0;           // N, every wheel's rolling resistance at its static Fz
+        real roll_at_sat_fz = 0.0;        // N, same at its measured Fz
+        real est_at_sat_fz = 0.0;         // N, F_est at the measured per-wheel Fz
+        real x_ground = 0.0;              // N, sum of (fx - rolling resistance) over all four wheels
+        real fz_total = 0.0;              // N, all four wheels
+        real rear_fz_gain = 0.0;          // N, rear axle minus static
+        real front_fz_loss = 0.0;         // N, static minus front axle
+        real fz_transfer_pred = 0.0;      // N, X*h/L
+    };
+    auto analyse = [&](const DrawbarResult& r, bool awd_on) {
+        SatAnalysis a;
+        const real v = r.chassis_speed_at_sat;
+        for (int k = 0; k < 4; ++k) {
+            const bool front = k < 2;
+            const vehicle::TyreDesc& tyre = desc.wheels[front ? kFL : kRL].tyre;
+            const real fz_static = front ? loads.front_fz_per_wheel : loads.rear_fz_per_wheel;
+            const real roll = tyre_rolling_resistance(tyre, r.fz_at_sat[k], 0.0, v, crr_surface);
+            a.roll_static += tyre_rolling_resistance(tyre, fz_static, 0.0, v, crr_surface);
+            a.roll_at_sat_fz += roll;
+            a.x_ground += r.fx_at_sat[k] - roll;
+            a.peak_static[k] = tyre_peak(tyre, fz_static, lambda_mu, v).fx;
+            a.peak_at_sat_fz[k] = tyre_peak(tyre, r.fz_at_sat[k], lambda_mu, v).fx;
+            if (!front || awd_on) {
+                a.driven_peak_static += a.peak_static[k];
+                a.driven_peak_at_sat_fz += a.peak_at_sat_fz[k];
+            }
+            a.fz_total += r.fz_at_sat[k];
+        }
+        a.est_at_sat_fz = a.driven_peak_at_sat_fz - a.roll_at_sat_fz;
+        a.rear_fz_gain = r.fz_at_sat[2] + r.fz_at_sat[3] - 2.0 * loads.rear_fz_per_wheel;
+        a.front_fz_loss = 2.0 * loads.front_fz_per_wheel - r.fz_at_sat[0] - r.fz_at_sat[1];
+        a.fz_transfer_pred = a.x_ground * r.chassis_height_at_sat / wheelbase;
+        return a;
+    };
 
     // INFO lines placed BEFORE the guard REQUIREs so a guard failure still
     // prints the measured fields that explain it (Catch2 only prints INFO
     // messages active at the point of failure).
     INFO("static loads: front_fz_per_wheel=" << loads.front_fz_per_wheel << " N rear_fz_per_wheel="
                                               << loads.rear_fz_per_wheel << " N (lambda_mu=" << lambda_mu
-                                              << " crr=" << crr_surface << ")");
+                                              << " crr=" << crr_surface << "), wheelbase " << wheelbase << " m");
     INFO("zero-load settle: off v0=" << off.v0 << " m/s after " << off.settle_time_s << " s (rpm " << off.rpm_v0
                                      << ", theta_gov " << off.theta_gov_v0 << "), on v0=" << on.v0 << " m/s after "
                                      << on.settle_time_s << " s (rpm " << on.rpm_v0 << ", theta_gov " << on.theta_gov_v0
                                      << "); gear-1 high-idle kinematic speed " << v_high_idle << " m/s");
-    auto describe = [](const DrawbarResult& r) {
+    auto describe = [&](const DrawbarResult& r, bool awd_on) {
+        const SatAnalysis a = analyse(r, awd_on);
+        auto four = [](const real (&x)[4]) {
+            std::ostringstream q;
+            q << x[0] << "/" << x[1] << "/" << x[2] << "/" << x[3];
+            return q.str();
+        };
         std::ostringstream o;
-        o << "limit=" << r.limit_force << " N, mean speed@limit=" << r.mean_speed_at_limit
-          << " m/s, mean|kappa| rear=" << r.mean_kappa_rear_at_limit << " front=" << r.mean_kappa_front_at_limit
-          << ", rpm mean=" << r.mean_rpm_at_limit << " min=" << r.min_rpm_at_limit
-          << ", theta_gov mean=" << r.mean_theta_gov_at_limit << ", not-running ticks=" << r.not_running_ticks
-          << "; driven tyres saturate at drawbar force " << r.force_at_peak_driven_fx << " N (peak driven fx "
-          << r.peak_driven_fx << " N)";
+        o << "SATURATION limit=" << r.limit_force << " N (window-mean driven fx " << r.peak_driven_fx
+          << " N; per-tick argmax at " << r.limit_force_per_tick << " N, driven fx " << r.peak_driven_fx_per_tick
+          << " N, fz " << four(r.fz_per_tick_at_peak) << "), speed " << r.chassis_speed_at_sat << " m/s, dv/dt "
+          << r.accel_at_sat << " m/s^2, h_cg " << r.chassis_height_at_sat << " m, rpm min " << r.min_rpm_at_sat
+          << ", theta_gov max " << r.max_theta_gov_at_sat << "; FL/FR/RL/RR |kappa| " << four(r.kappa_at_sat)
+          << " fx " << four(r.fx_at_sat) << " fz " << four(r.fz_at_sat) << "; tyre peak fx at static Fz "
+          << four(a.peak_static) << ", at measured Fz " << four(a.peak_at_sat_fz) << "; total Fz " << a.fz_total
+          << " vs. static " << 2.0 * (loads.front_fz_per_wheel + loads.rear_fz_per_wheel)
+          << " N; rear-axle Fz gain " << a.rear_fz_gain << " N, front-axle loss " << a.front_fz_loss
+          << " N vs. X*h/L " << a.fz_transfer_pred << " N; driven peak sum static " << a.driven_peak_static
+          << " N, at measured Fz " << a.driven_peak_at_sat_fz << " N; roll static " << a.roll_static
+          << " N, at measured Fz " << a.roll_at_sat_fz << " N; F_est at measured Fz " << a.est_at_sat_fz
+          << " N; X - F " << a.x_ground - r.limit_force << " N vs. m*dv/dt " << kChassisMass * r.accel_at_sat
+          << " N | STOP (0.5*v0 gate) at " << r.stop_force << " N (gap " << r.stop_force - r.limit_force
+          << " N), mean speed " << r.mean_speed_at_stop << " m/s, mean|kappa| rear " << r.mean_kappa_rear_at_stop
+          << " front " << r.mean_kappa_front_at_stop << ", rpm mean " << r.mean_rpm_at_stop << " min "
+          << r.min_rpm_at_stop << ", theta_gov mean " << r.mean_theta_gov_at_stop << "; not-running ticks "
+          << r.not_running_ticks;
         return o.str();
     };
-    INFO("MFWD off: " << describe(off));
-    INFO("MFWD on:  " << describe(on));
+    INFO("MFWD off: " << describe(off, false));
+    INFO("MFWD on:  " << describe(on, true));
     REQUIRE(off.settled);
     REQUIRE(on.settled);
-    REQUIRE(off.reached_limit);
-    REQUIRE(on.reached_limit);
+    REQUIRE(off.reached_stop);
+    REQUIRE(on.reached_stop);
 
     const real est_off = drawbar_force_estimate(desc, loads, lambda_mu, crr_surface, false, off.v0);
     const real est_on = drawbar_force_estimate(desc, loads, lambda_mu, crr_surface, true, on.v0);
@@ -1105,18 +1257,28 @@ TEST_CASE("tractor MFWD on low_mu: engaged drawbar-pull limit is at least 1.2x t
     CHECK(std::abs(on.limit_force - est_on) <= 0.25 * std::abs(est_on));
     CHECK(ratio >= 1.2);
 
-    // Traction discriminator: at the limit the driven tyres are past their
-    // own peak slip and the engine is running, not lugged below its
-    // WOT-curve peak.
-    CHECK(off.mean_kappa_rear_at_limit > rear_peak.kappa);
-    CHECK(on.mean_kappa_rear_at_limit > rear_peak.kappa);
-    CHECK(on.mean_kappa_front_at_limit > front_peak.kappa);
+    // The traction saturation comes before the speed collapse that stops the
+    // ramp (a limit read after the stop would be measuring something else).
+    CHECK(off.limit_force < off.stop_force);
+    CHECK(on.limit_force < on.stop_force);
+
+    // Traction discriminator. At saturation the engine is running on its
+    // governor with torque in reserve (theta_gov < 1, rpm above the
+    // WOT-curve peak); after it the driven tyres run past their own peak slip
+    // while the engine stays there - the collapse is wheelspin, not a lug.
     CHECK(off.not_running_ticks == 0);
     CHECK(on.not_running_ticks == 0);
-    CHECK(off.min_rpm_at_limit >= wot_peak_rpm);
-    CHECK(on.min_rpm_at_limit >= wot_peak_rpm);
-    CHECK(off.mean_theta_gov_at_limit < 1.0); // governor below full rack: engine torque in reserve
-    CHECK(on.mean_theta_gov_at_limit < 1.0);
+    CHECK(off.max_theta_gov_at_sat < 1.0);
+    CHECK(on.max_theta_gov_at_sat < 1.0);
+    CHECK(off.min_rpm_at_sat >= wot_peak_rpm);
+    CHECK(on.min_rpm_at_sat >= wot_peak_rpm);
+    CHECK(off.mean_kappa_rear_at_stop > rear_peak.kappa);
+    CHECK(on.mean_kappa_rear_at_stop > rear_peak.kappa);
+    CHECK(on.mean_kappa_front_at_stop > front_peak.kappa);
+    CHECK(off.min_rpm_at_stop >= wot_peak_rpm);
+    CHECK(on.min_rpm_at_stop >= wot_peak_rpm);
+    CHECK(off.mean_theta_gov_at_stop < 1.0); // governor below full rack: engine torque in reserve
+    CHECK(on.mean_theta_gov_at_stop < 1.0);
 }
 
 // REVIEW C9 (item 3): 1-vs-10-worker state_hash equality with "awd" switched
