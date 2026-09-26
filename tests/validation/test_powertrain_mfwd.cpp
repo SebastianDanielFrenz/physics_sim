@@ -46,6 +46,54 @@
 //    switched on then off while driving (tagged [determinism]), and a
 //    debug_alloc-armed zero-allocation check toggling "awd" while stepping
 //    a full World (run against the debug preset).
+//
+// C9 REVIEW ROUND 2 (5th commit, 2026-09-26): the drawbar-pull limit above
+// (fixed WOT + a "mean driven |slip| > 0.6" stop condition) measured
+// off=150.417 N vs. on=3383.75 N, ratio 22.5x - REJECTED as unphysical: with
+// MFWD off, tractor.json's rear axle alone carries most of the vehicle's
+// weight, so its low_mu traction limit (lambda_mu * tyre peak mu * static
+// rear Fz) should be thousands of newtons, and the physically-expected
+// on/off ratio (roughly 1/rear-weight-share) is ~1.4-1.8x, not 22.5x. The
+// 22.5x explanation (a "transient vs. sustained limit" methodology
+// difference) is RETRACTED - it was never verified and does not survive
+// the discriminating measurement below.
+// Root cause, CONFIRMED by "tractor MFWD off at WOT with zero drawbar load
+// on low_mu..." further down: at fixed WOT with zero rearward load on
+// low_mu, the rear-only driveline spins its tyres well past |kappa|=0.6
+// almost immediately (measured max mean|kappa_driven| far above 0.6 - see
+// that case's own INFO line for the exact number) - the old test's
+// slip-based stop condition tripped on ordinary WOT wheelspin ONSET, before
+// any real rearward load had accumulated on the 100 N/s ramp. It was
+// measuring "how much force had ramped on by the time WOT wheelspin
+// begins", not a sustained traction/pull limit.
+// Redesign: a throttle PI (same kp/ki as the item-1 steady-state case
+// above) holds a LOW target ground speed (1 m/s) in gear 1, settling there
+// under its own throttle BEFORE any rearward load is applied; only then
+// does RearwardForce ramp slowly (100 N/s). Driven-wheel slip is left
+// completely FREE this round (no slip-based stop - that is how the tyre
+// reaches its own peak); the sole stop condition is the trailing 1 s
+// window's mean speed dropping below half the target (0.5 m/s) - the
+// throttle PI (pinned near its own ceiling under load) can no longer hold
+// the tractor moving against the drawbar force. The analytic sanity band
+// (drawbar_force_estimate()) uses the REAL Pacejka tyre model (via
+// create_pacejka_tyre_model(), mirroring test_vehicle_skidpad.cpp's
+// TyreLimitedSteadyStateSolver pattern: real VehicleDesc/TyreDesc data
+// through the real tyre model, not a hand-approximated mu*Fz formula) to
+// find each driven tyre's own peak Fx at its measured static Fz and the
+// low_mu surface's lambda_mu (passed straight into the model exactly like
+// wheel_instance.cpp's own wiring), minus every wheel's rolling resistance
+// (wheel_instance.cpp's own crr formula, reproduced here since ITyreModel::
+// evaluate() itself never includes it). Fz_driven is the MEASURED static
+// per-wheel load (a settled rig, zero throttle/rearward force) rather than
+// a hand geometric calculation - not corrected for drawbar-force load
+// transfer at the RearwardForce's own application height (the chassis CoM):
+// that correction would need this file to duplicate the exact same
+// roll/pitch load-transfer model test_vehicle_skidpad.cpp's solver already
+// implements for a different (cornering) geometry, and the chosen +-25%
+// band already comfortably covers a quasi-static longitudinal load-transfer
+// term of that size at this vehicle's modest CoM height. See "tractor MFWD
+// on low_mu: engaged drawbar-pull limit..." below for the measured
+// values/estimates/ratio.
 
 #include "vehicle_test_helpers.h"
 
@@ -53,6 +101,7 @@
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/debug_alloc.h"
+#include "ps/vehicle/tyre_model.h"
 #include "ps/world/force_element.h"
 #include "ps/world/world.h"
 
@@ -479,88 +528,175 @@ TEST_CASE("tractor MFWD energy ledger balances and awd_clutch_loss is never nega
     CHECK(prev_awd_clutch_loss > 0.0); // the clutch did slip at some point before locking
 }
 
-// REVIEW C9 (item 2): drawbar-pull LIMIT, not a WOT-launch mean Fx (a
-// transient-dependent quantity - how far into its own launch transient each
-// config gets in a fixed 1s window depends on config-specific dynamics, not
-// just its steady-state limit). This ramps a rearward horizontal force on
-// the chassis (RearwardForce above) slowly at a FIXED gear/throttle and
-// finds the highest force the tractor still sustains.
-//
-// CRITERION (the thing this test actually measures): at each instant, judge
-// the tractor "still pulling" iff BOTH, over a trailing 0.5 s window:
-//   (a) mean forward speed (chassis local +x) > kMinProgressSpeed (0.05 m/s)
-//       - it has not been dragged to a standstill/stall by the load;
-//   (b) mean |slip_ratio| over every DRIVEN wheel (World::wheel_is_driven,
-//       so this automatically covers 2 wheels off / 4 wheels on) stays
-//       below kMaxDrivenSlip (0.6) - the driven tyres are doing useful work,
-//       not just spinning in place (well inside the tyre model's own +-3
-//       relaxation safety clamp, which is a numerical bound, not a traction
-//       definition).
-// The reported "limit" is the ramp force at the first sample where either
-// gate fails, i.e. the highest force sustained through both gates.
+// REVIEW C9 ROUND 2 (item 2, 5th commit): drawbar-pull LIMIT via a
+// throttle-PI-held LOW target speed, not a fixed-WOT ramp - see the file
+// header's "C9 REVIEW ROUND 2" comment for why the fixed-WOT version was
+// rejected (its slip-based stop condition tripped on ordinary WOT wheelspin
+// onset, confirmed by the discriminating diagnostic further down) and for
+// the analytic sanity-band methodology below.
 namespace {
-class RampCriterionState {
-public:
-    void reset(std::size_t window_n) { window_n_ = window_n; }
-    void push(real speed, real driven_slip) {
-        speed_.push_back(speed);
-        slip_.push_back(driven_slip);
-        if (speed_.size() > window_n_) speed_.pop_front();
-        if (slip_.size() > window_n_) slip_.pop_front();
-    }
-    [[nodiscard]] bool full() const { return speed_.size() >= window_n_; }
-    [[nodiscard]] real mean_speed() const { return mean_of_deque(speed_); }
-    [[nodiscard]] real mean_slip() const { return mean_of_deque(slip_); }
 
-private:
-    static real mean_of_deque(const std::deque<real>& d) {
-        real s = 0.0;
-        for (real v : d) s += v;
-        return s / static_cast<real>(d.size());
+// A discriminating measurement, not a hand-approximated formula: the REAL
+// Pacejka tyre model's own peak longitudinal force at a fixed load/surface,
+// found by sweeping kappa at alpha=gamma=0 (mirrors
+// test_vehicle_skidpad.cpp's TyreLimitedSteadyStateSolver - real
+// VehicleDesc/TyreDesc data through the real create_pacejka_tyre_model(),
+// not mu*Fz by hand). lambda_mu is passed straight into TyreSlipInput
+// exactly like wheel_instance.cpp's own wiring, so the surface's friction
+// scale is applied by the model itself, not multiplied in afterward.
+real tyre_peak_fx(const vehicle::TyreDesc& tyre_desc, real fz, real lambda_mu, real vx_for_model) {
+    const std::unique_ptr<vehicle::ITyreModel> tm = vehicle::create_pacejka_tyre_model(tyre_desc);
+    real best = 0.0;
+    constexpr int kSteps = 400;
+    constexpr real kKappaMax = 3.0; // the tyre model's own relaxation safety clamp (tyre_model.h)
+    for (int i = 1; i <= kSteps; ++i) {
+        vehicle::TyreSlipInput in;
+        in.kappa = kKappaMax * static_cast<real>(i) / static_cast<real>(kSteps);
+        in.alpha = 0.0;
+        in.fz = fz;
+        in.gamma = 0.0;
+        in.vx = vx_for_model;
+        in.lambda_mu = lambda_mu;
+        in.crr_surface = 0.0; // ITyreModel::evaluate() never applies rolling resistance - see wheel_instance.cpp
+        best = std::max(best, tm->evaluate(in).fx);
     }
-    std::deque<real> speed_, slip_;
-    std::size_t window_n_ = 1;
+    return best;
+}
+
+// Rolling-resistance drag at one wheel - reproduces wheel_instance.cpp's own
+// crr_total/froll_ramp formula exactly (ITyreModel::evaluate() itself never
+// includes this term, see tyre_peak_fx's comment above), using plain
+// std::pow (test-only analytic estimate, not simulated state - the D7
+// platform-libm-determinism rule applies to core/src, not to this sanity
+// check). fx_pure_for_qsy2 is 0 here: both data/tyres/tractor_{front,rear}
+// .json ship qsy2=0.0, so this term is exactly zero for the current data
+// regardless of what is passed - kept symbolic (rather than dropped) so a
+// future tyre file with qsy2 != 0 is still handled correctly.
+real tyre_rolling_resistance(const vehicle::TyreDesc& tyre_desc, real fz, real fx_pure_for_qsy2, real vx,
+                             real crr_surface) {
+    const real ramp = std::clamp(vx / tyre_desc.rolling_resistance_v_eps, real(-1.0), real(1.0));
+    const real crr_total = tyre_desc.qsy1 + crr_surface + tyre_desc.qsy2 * std::abs(fx_pure_for_qsy2) / tyre_desc.fz0 +
+                            tyre_desc.qsy4 * std::pow(vx / tyre_desc.v0, real(4.0));
+    return ramp * fz * crr_total;
+}
+
+struct StaticAxleLoads {
+    real front_fz_per_wheel = 0.0;
+    real rear_fz_per_wheel = 0.0;
 };
 
-// Returns {limit_force, final_speed} - final_speed is reported for
-// diagnostics (e.g. to see whether the run ended by stalling vs. by hitting
-// kMaxForce without ever failing the gates).
-std::pair<real, real> drawbar_pull_limit(bool awd_on) {
-    constexpr real kMinProgressSpeed = 0.05; // m/s
-    constexpr real kMaxDrivenSlip = 0.6;     // dimensionless (|kappa|)
-    constexpr real kWindowSeconds = 0.5;
-    constexpr real kWarmupSeconds = 2.0; // let it start moving before the ramp's gates are evaluated
-    constexpr real kRampRatePerSecond = 100.0; // N/s - slow relative to the vehicle's own response time
-    constexpr real kMaxForce = 8000.0;         // N - generous headroom over the measured off/on limits
+// Fz_driven, MEASURED (not a hand geometric calculation): settle a rig on
+// the same low_mu surface with every control at its default (throttle 0,
+// no rearward force), then read each axle's own per-wheel Fz straight from
+// wheel_telemetry - the sim's own settled corner weights, matching whatever
+// this vehicle file's suspension/geometry actually produces. NOT corrected
+// for drawbar-force load transfer at RearwardForce's own application height
+// (the chassis CoM) - see the file header's "C9 REVIEW ROUND 2" comment for
+// why that correction is left out (the +-25% band already covers a
+// quasi-static longitudinal load-transfer term of this vehicle's size).
+StaticAxleLoads measure_static_axle_loads(const vehicle::VehicleDesc& desc) {
+    MfwdRig rig = build_mfwd_rig(desc, "low_mu");
+    World& w = *rig.world;
+    ps_test::settle(w, 1.0);
+    for (int i = 0; i < static_cast<int>(std::lround(1.0 / w.dt())); ++i) w.step(); // let any residual settle die out
+    StaticAxleLoads out;
+    out.front_fz_per_wheel = 0.5 * (w.wheel_telemetry(rig.vehicle, kFL).fz + w.wheel_telemetry(rig.vehicle, kFR).fz);
+    out.rear_fz_per_wheel = 0.5 * (w.wheel_telemetry(rig.vehicle, kRL).fz + w.wheel_telemetry(rig.vehicle, kRR).fz);
+    return out;
+}
+
+// F_est = (sum of each driven axle's peak Fx, from the real tyre model at
+// its own measured static Fz and the surface's lambda_mu) - (rolling
+// resistance at EVERY wheel, driven or not - wheel_instance.cpp's own
+// pre_froll_ term is independent of the drivetrain).
+real drawbar_force_estimate(const vehicle::VehicleDesc& desc, const StaticAxleLoads& loads, real lambda_mu,
+                             real crr_surface, bool awd_on, real target_speed) {
+    const vehicle::TyreDesc& front_tyre = desc.wheels[kFL].tyre;
+    const vehicle::TyreDesc& rear_tyre = desc.wheels[kRL].tyre;
+
+    const real rear_peak_per_wheel = tyre_peak_fx(rear_tyre, loads.rear_fz_per_wheel, lambda_mu, target_speed);
+    real driven_peak_total = 2.0 * rear_peak_per_wheel;
+    if (awd_on) {
+        const real front_peak_per_wheel = tyre_peak_fx(front_tyre, loads.front_fz_per_wheel, lambda_mu, target_speed);
+        driven_peak_total += 2.0 * front_peak_per_wheel;
+    }
+
+    const real roll_total = 2.0 * tyre_rolling_resistance(front_tyre, loads.front_fz_per_wheel, 0.0, target_speed, crr_surface) +
+                             2.0 * tyre_rolling_resistance(rear_tyre, loads.rear_fz_per_wheel, 0.0, target_speed, crr_surface);
+    return driven_peak_total - roll_total;
+}
+
+struct DrawbarResult {
+    real limit_force = 0.0;
+    real throttle_at_limit = 0.0;
+    real mean_kappa_driven_at_limit = 0.0;
+    real final_speed = 0.0;
+};
+
+real mean_of_deque(const std::deque<real>& d) {
+    if (d.empty()) return 0.0;
+    real s = 0.0;
+    for (real v : d) s += v;
+    return s / static_cast<real>(d.size());
+}
+
+// Speed-controlled drawbar-pull limit search (REVIEW C9 round 2): a
+// throttle PI (same kp/ki as the item-1 steady-state case above) holds
+// kTargetSpeed in gear 1, settling there under its OWN throttle before any
+// rearward load is applied; only then does RearwardForce ramp slowly.
+// Driven-wheel slip is left completely FREE (no slip-based stop - "that is
+// how the tyre reaches its peak"); the sole stop condition is the trailing
+// window's mean speed collapsing below half the target.
+DrawbarResult drawbar_pull_limit(bool awd_on) {
+    constexpr real kTargetSpeed = 1.0; // m/s - low, held speed
+    constexpr real kp = 0.08, ki = 0.05;
+    constexpr real kThrottleMax = 1.0;
+    constexpr real kSettleAtZeroLoadSeconds = 5.0; // hold target speed under zero load before ramping
+    constexpr real kRampRatePerSecond = 100.0;     // N/s - slow relative to the vehicle's own response time
+    constexpr real kMaxForce = 8000.0;             // N - generous headroom over the estimated off/on limits
+    constexpr real kWindowSeconds = 1.0;           // trailing window for the stop condition/reported means
+    constexpr real kMinMeanSpeedFraction = 0.5;    // stop once trailing mean speed < this * target
 
     const vehicle::VehicleDesc desc = load_tractor();
     MfwdRig rig = build_mfwd_rig(desc, "low_mu");
     World& w = *rig.world;
     ps_test::settle(w, 1.0);
-    w.set_control("gear_request", 1.0); // fixed gear/throttle for the whole ramp, per the brief
-    w.set_control("throttle", 1.0);
+    w.set_control("gear_request", 1.0);
     w.set_control("awd", awd_on ? 1.0 : 0.0);
 
     RearwardForce rf(Frame(rig.chassis));
     w.add_force_element(&rf);
 
     const real dt = w.dt();
-    const std::size_t window_n = static_cast<std::size_t>(std::lround(kWindowSeconds / dt));
-    const int warmup_ticks = static_cast<int>(std::lround(kWarmupSeconds / dt));
+    real integral = 0.0;
+    auto step_with_speed_control = [&]() -> real {
+        const real speed = w.get_motion(rig.chassis).linear.x;
+        const real err = kTargetSpeed - speed;
+        integral = std::clamp(integral + err * dt, -20.0, 20.0);
+        const real throttle = std::clamp(kp * err + ki * integral, 0.0, kThrottleMax);
+        w.set_control("throttle", throttle);
+        w.step();
+        return throttle;
+    };
 
-    RampCriterionState state;
-    state.reset(window_n);
+    // Phase 1: settle at ZERO rearward load - the tractor must already be
+    // holding its target speed under its own throttle before any drawbar
+    // load is applied.
+    const int settle_ticks = static_cast<int>(std::lround(kSettleAtZeroLoadSeconds / dt));
+    for (int i = 0; i < settle_ticks; ++i) step_with_speed_control();
+
+    // Phase 2: ramp the rearward force slowly.
+    const std::size_t window_n = static_cast<std::size_t>(std::lround(kWindowSeconds / dt));
+    std::deque<real> speed_window, kappa_window, throttle_window;
+    const std::vector<std::size_t> wheel_indices{kFL, kFR, kRL, kRR};
+
     real force = 0.0;
-    real limit = 0.0;
-    real last_speed = 0.0;
-    int tick = 0;
+    DrawbarResult result;
     while (force < kMaxForce) {
         force += kRampRatePerSecond * dt;
         rf.set_magnitude(force);
-        w.step();
-        ++tick;
+        const real throttle = step_with_speed_control();
 
-        const std::vector<std::size_t> wheel_indices{kFL, kFR, kRL, kRR};
         real slip_sum = 0.0;
         int driven_count = 0;
         for (std::size_t i : wheel_indices) {
@@ -570,36 +706,103 @@ std::pair<real, real> drawbar_pull_limit(bool awd_on) {
         }
         const real driven_slip = driven_count > 0 ? slip_sum / static_cast<real>(driven_count) : 0.0;
         const real speed = w.get_motion(rig.chassis).linear.x;
-        last_speed = speed;
-        state.push(speed, driven_slip);
+        result.final_speed = speed;
 
-        if (tick > warmup_ticks && state.full()) {
-            if (state.mean_speed() < kMinProgressSpeed || state.mean_slip() > kMaxDrivenSlip) {
-                limit = force - kRampRatePerSecond * kWindowSeconds; // force at the start of the failing window
-                break;
-            }
+        speed_window.push_back(speed);
+        if (speed_window.size() > window_n) speed_window.pop_front();
+        kappa_window.push_back(driven_slip);
+        if (kappa_window.size() > window_n) kappa_window.pop_front();
+        throttle_window.push_back(throttle);
+        if (throttle_window.size() > window_n) throttle_window.pop_front();
+
+        if (speed_window.size() >= window_n && mean_of_deque(speed_window) < kMinMeanSpeedFraction * kTargetSpeed) {
+            result.limit_force = force - kRampRatePerSecond * kWindowSeconds; // force at the start of the failing window
+            result.mean_kappa_driven_at_limit = mean_of_deque(kappa_window);
+            result.throttle_at_limit = mean_of_deque(throttle_window);
+            return result;
         }
-        limit = force;
+        result.limit_force = force;
     }
-    return {limit, last_speed};
+    // Reached kMaxForce without ever failing the speed gate - report the
+    // trailing window state at the cap for diagnostics.
+    result.mean_kappa_driven_at_limit = mean_of_deque(kappa_window);
+    result.throttle_at_limit = mean_of_deque(throttle_window);
+    return result;
 }
 } // namespace
 
+// Confirms the root cause of the rejected round-1 result (see the file
+// header's "C9 REVIEW ROUND 2" comment): at fixed WOT with ZERO rearward
+// load on low_mu, the rear-only driveline's own tyres spin well past the
+// old |kappa| > 0.6 stop condition almost immediately - i.e. the round-1
+// test's "150.417 N" was the ramp force accumulated by the time ordinary
+// WOT wheelspin began, not a sustained traction/pull limit. Reported, not
+// asserted against a specific bound - the printed max|kappa_driven| value
+// itself, compared against the old 0.6 threshold, IS the discriminating
+// result.
+TEST_CASE("tractor MFWD off at WOT with zero drawbar load on low_mu: discriminating measurement for the "
+          "rejected round-1 drawbar-pull result",
+          "[validation][vehicle][powertrain][drivetrain][.][diag]") {
+    const vehicle::VehicleDesc desc = load_tractor();
+    MfwdRig rig = build_mfwd_rig(desc, "low_mu");
+    World& w = *rig.world;
+    ps_test::settle(w, 1.0);
+    w.set_control("gear_request", 1.0);
+    w.set_control("throttle", 1.0);
+    w.set_control("awd", 0.0); // MFWD off: rear-only driveline
+
+    real max_mean_abs_kappa_driven = 0.0;
+    const int ticks = static_cast<int>(std::lround(3.0 / w.dt()));
+    for (int i = 0; i < ticks; ++i) {
+        w.step();
+        real slip_sum = 0.0;
+        int n = 0;
+        for (std::size_t idx : {kFL, kFR, kRL, kRR}) {
+            if (!w.wheel_is_driven(rig.vehicle, idx)) continue;
+            slip_sum += std::abs(w.wheel_telemetry(rig.vehicle, idx).slip_ratio);
+            ++n;
+        }
+        if (n > 0) max_mean_abs_kappa_driven = std::max(max_mean_abs_kappa_driven, slip_sum / static_cast<real>(n));
+    }
+    INFO("max mean|driven slip_ratio| over 3s at WOT/zero drawbar load on low_mu = " << max_mean_abs_kappa_driven
+         << " (round-1's stop condition tripped at 0.6)");
+    CHECK(max_mean_abs_kappa_driven > 0.0); // sanity: actually slipping under WOT, not stalled/airborne
+}
+
 TEST_CASE("tractor MFWD on low_mu: engaged drawbar-pull limit is at least 1.2x the rear-only limit",
           "[validation][vehicle][powertrain][drivetrain]") {
-    const auto [off, off_final_speed] = drawbar_pull_limit(false);
-    const auto [on, on_final_speed] = drawbar_pull_limit(true);
-    REQUIRE(off > 1.0); // guard the ratio below against a near-zero denominator
-    const real ratio = on / off;
-    INFO("drawbar-pull limit: MFWD off=" << off << " N (final speed " << off_final_speed << " m/s), MFWD on=" << on
-                                          << " N (final speed " << on_final_speed << " m/s), ratio=" << ratio);
-    // Compare against the earlier (rejected) WOT-launch-mean-Fx proxy's 1.51
-    // ratio (off=2733.96 N, on=4132.64 N) once this test's own numbers are
-    // known - see the 4th commit's report for the measured values and, if
-    // they differ substantially, the explanation (a genuine limit search
-    // reaches each config's own true traction ceiling rather than sampling
-    // a fixed-duration transient, so the two numbers are not expected to
-    // agree exactly).
+    constexpr real kTargetSpeed = 1.0; // must match drawbar_pull_limit's own kTargetSpeed
+    const vehicle::VehicleDesc desc = load_tractor();
+
+    auto surfaces = std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
+    const SurfaceId low_mu_id = surfaces->id_for("low_mu");
+    const real lambda_mu = surfaces->lambda_mu_for(low_mu_id);
+    const real crr_surface = surfaces->crr_for(low_mu_id);
+
+    const StaticAxleLoads loads = measure_static_axle_loads(desc);
+    const real est_off = drawbar_force_estimate(desc, loads, lambda_mu, crr_surface, false, kTargetSpeed);
+    const real est_on = drawbar_force_estimate(desc, loads, lambda_mu, crr_surface, true, kTargetSpeed);
+
+    const DrawbarResult off = drawbar_pull_limit(false);
+    const DrawbarResult on = drawbar_pull_limit(true);
+
+    REQUIRE(off.limit_force > 1.0); // guard the ratio below against a near-zero denominator
+    REQUIRE(est_off > 1.0);         // guard the relative-error checks below
+    const real ratio = on.limit_force / off.limit_force;
+
+    INFO("static loads: front_fz_per_wheel=" << loads.front_fz_per_wheel << " N rear_fz_per_wheel="
+                                              << loads.rear_fz_per_wheel << " N (lambda_mu=" << lambda_mu
+                                              << " crr=" << crr_surface << ")");
+    INFO("MFWD off: measured limit=" << off.limit_force << " N, estimate=" << est_off << " N, throttle@limit="
+                                      << off.throttle_at_limit << ", mean driven kappa@limit="
+                                      << off.mean_kappa_driven_at_limit << ", final speed=" << off.final_speed << " m/s");
+    INFO("MFWD on:  measured limit=" << on.limit_force << " N, estimate=" << est_on << " N, throttle@limit="
+                                      << on.throttle_at_limit << ", mean driven kappa@limit="
+                                      << on.mean_kappa_driven_at_limit << ", final speed=" << on.final_speed << " m/s");
+    INFO("ratio (on/off) = " << ratio);
+
+    CHECK(std::abs(off.limit_force - est_off) <= 0.25 * std::abs(est_off));
+    CHECK(std::abs(on.limit_force - est_on) <= 0.25 * std::abs(est_on));
     CHECK(ratio >= 1.2);
 }
 
