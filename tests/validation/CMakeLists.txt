@@ -30,6 +30,7 @@ add_executable(ps_validation_tests
   test_vehicle_tractor_cross_slope.cpp
   test_vehicle_shadow_chassis.cpp
   test_vehicle_contact_geometry.cpp
+  test_vehicle_787b_shuffle.cpp
   test_powertrain_engine_braking.cpp
   test_powertrain_clutch_lockup.cpp
   test_powertrain_energy_balance.cpp
