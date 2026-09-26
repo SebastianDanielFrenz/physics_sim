@@ -469,13 +469,16 @@ throws the same message.
 ### Shafts
 
 `"shafts"` is an array of `{ "ports": ["<ref>", ...], "stiffness": 0,
-"damping": 0 }`. Each shaft rigidly joins every port it lists into one node.
+"damping": 0 }`. Each shaft rigidly joins every port it lists into one node
+— unless the powertrain is `"compliance": "compliant"` and the shaft has
+`stiffness > 0`, in which case it is a torsional spring-damper between two
+nodes instead (see [Compliant shafts](#compliant-shafts-i4-c13) below).
 
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
 | `ports` | array of port-ref strings | **required** | — | must be present (`"powertrain.shafts[]: 'ports' is required"`); each ref must resolve to a real port, else `"powertrain shaft references unknown port '<key>'"`; a port referenced by more than one shaft, or twice within the same shaft, throws `"powertrain port '<key>' is connected by more than one shaft, or twice in one shaft"` | which ports are rigidly joined |
-| `stiffness` | real (N·m/rad) | optional | `0` | **must be exactly `0`** in I3, else `"powertrain.shafts[]: 'stiffness' must be 0 in I3 (I4 adds compliant shafts)"` | shaft torsional stiffness; compliant shafts are not yet implemented |
-| `damping` | real (N·m·s/rad) | optional | `0` | none (unused while `stiffness == 0`) | shaft damping |
+| `stiffness` | real (N·m/rad) | optional | `0` | **must be `>= 0`**, else `"vehicle '<name>': powertrain.shafts[<i>]: 'stiffness' must be >= 0"` (checked whatever `compliance` is) | torsional stiffness `k`; only used when `compliance` is `"compliant"` — under `"rigid"` it is read, validated and ignored |
+| `damping` | real (N·m·s/rad) | optional | `0` | **must be `>= 0`**, else `"...: 'damping' must be >= 0"`; `damping > 0` with `stiffness == 0` throws `"...: 'damping' > 0 requires 'stiffness' > 0 (a pure damper shaft is not supported)"` | torsional damping `c` on the twist rate; same "only when compliant" rule as `stiffness` |
 
 **Every non-wheel port must be connected by exactly one shaft.** A port
 that belongs to no shaft at all throws `"powertrain port '<key>' is not
@@ -490,8 +493,79 @@ Top-level powertrain fields beyond `components`/`shafts`:
 
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
-| `compliance` | string | optional | `"rigid"` | must be `"rigid"` in I3, else `"powertrain.compliance must be \"rigid\" in I3 (I4 adds \"compliant\"), got \"<value>\""` | shaft-network compliance model |
+| `compliance` | string | optional | `"rigid"` | must be `"rigid"` or `"compliant"`, else `"vehicle '<name>': powertrain.compliance must be \"rigid\" or \"compliant\", got \"<value>\""`; `"compliant"` with no shaft at `stiffness > 0` throws `"...: powertrain.compliance is \"compliant\" but no shaft has stiffness > 0"` | shaft-network compliance model: `"rigid"` = every shaft is a rigid join (every shipped vehicle); `"compliant"` = shafts with `stiffness > 0` become spring-dampers, see below |
 | `rotor_reaction` | bool | optional | `true` | none | whether spinning components apply a reaction torque back onto the chassis about their own axis; `false` only for a temporary data-migration step |
+
+### Compliant shafts (I4 C13)
+
+With `"compliance": "compliant"`, every shaft with `stiffness > 0` is a
+torsional spring-damper between two separate network nodes instead of a
+rigid join; shafts with `stiffness == 0` stay rigid joins. No shipped
+vehicle uses it.
+
+```json
+"powertrain": {
+  "compliance": "compliant",
+  "shafts": [
+    { "ports": ["engine.crank", "clutch.in"] },
+    { "ports": ["clutch.out", "gearbox.in"], "stiffness": 600, "damping": 2 }
+  ]
+}
+```
+
+- A compliant shaft must list **exactly 2 ports**, else `"vehicle '<name>':
+  powertrain.shafts[<i>]: a compliant shaft (stiffness > 0) must list
+  exactly 2 ports, got <n>"`. `ports[0]` is end `a`, `ports[1]` end `b`.
+- Its two ends must end up on **different** nodes (other rigid shafts
+  must not already join them): else `"...: compliant shaft's two ports
+  '<a>' and '<b>' are already rigidly joined by other shafts (a compliant
+  shaft must join two distinct nodes)"` (thrown when the vehicle is built,
+  not at load).
+- Both ends need **inertia > 0** on their node, else `"...: compliant shaft
+  endpoint '<port>' has zero inertia (...)"` (also at build). In
+  `car_sedan.json`, `clutch.in` has no inertia of its own and a
+  differential's `left`/`right` have none, so only `clutch.out`–`gearbox.in`
+  (0.004/0.010 kg·m²) and `gearbox.out`–`diff.carrier` (0.015/0.02 kg·m²)
+  can be made compliant without adding inertia.
+
+Model: twist `theta = ∫(omega_a - omega_b) dt`, shaft torque
+`tau_s = k*theta + c*(omega_a - omega_b)`, acting `-tau_s` on `a` and
+`+tau_s` on `b`. It is solved implicitly with the rest of the network (one
+two-node coupling per compliant shaft, after any viscous-diff couplings).
+The integrator is **trapezoidal** by default; with `c = 0` this is the
+implicit midpoint rule, so kinetic plus spring energy is conserved exactly
+and the discrete oscillation frequency is `(2/h)*atan(omega_n*h/2)`. The
+period is about `(omega_n*h)^2/12` longer than `2*pi/omega_n` (about 0.02 %
+at 50 rad/s and 960 Hz; about 1.9 % for the sedan's `clutch.out`–
+`gearbox.in` pair at `k = 600`, `omega_n` = 458 rad/s).
+
+The **first substep after a mode change** uses **backward Euler**
+instead, which damps any step the change introduced rather than letting it
+ring. A mode change is a topology switch (gear or diff-lock change), any
+friction row's stick/slip flag changing in a substep's solve, or a
+`reset()`.
+
+A reset (`World::reset_vehicle`) relaxes every compliant shaft to
+`theta = 0` and equal end speeds. If the reset sets exactly one end itself
+(hubs, derived diff carriers/gear inputs, the engine crank), the other end
+takes that end's speed. If it sets neither, `b` takes `a`'s speed. If it
+sets both (e.g. `clutch.out` and `gearbox.in`, which it sets to the same
+speed), neither is changed.
+
+Energy ledger (`PowertrainEnergy`): `shaft_pe` (`sum 1/2*k*theta^2`,
+instantaneous, stored like `rotor_ke`) and `shaft_damping_loss`
+(cumulative `c`-term work). Whatever the discrete step adds or removes
+beyond those, including backward Euler's own dissipation, is booked into
+`integrator_loss`, so `balance_error` still closes. The
+`vehicle<i>.energy.stored` telemetry channel is `rotor_ke + shaft_pe` for a
+compliant vehicle.
+
+`PowertrainDebug::shaft_twist_rad[i]`/`shaft_torque[i]` (tests only) give
+the i-th compliant shaft's `theta` and last `tau_s`. The state hash folds
+each compliant shaft's `theta` plus the pending-backward-Euler flag. A
+`"rigid"` vehicle, including one whose shafts carry `stiffness`/`damping`
+values, gets no coupling, no ledger term and no hash byte, so it is
+bit-identical to before C13.
 
 ### What the graph builder additionally rejects
 
