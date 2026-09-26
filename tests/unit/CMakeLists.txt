@@ -40,6 +40,7 @@ add_executable(ps_unit_tests
   test_powertrain_topology.cpp
   test_powertrain_diff.cpp
   test_powertrain_transfer_case.cpp
+  test_powertrain_park_lock.cpp
   test_sub_threshold_rotation.cpp
 )
 
