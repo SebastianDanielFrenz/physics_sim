@@ -1382,6 +1382,67 @@ TEST_CASE("load_vehicle_json validates the auto_blip upshift-cut hold and torque
     }
 }
 
+TEST_CASE("load_vehicle_json rejects auto_blip.enabled on a manual_tcu whose engine has a mechanical throttle",
+          "[unit][vehicle][io][drivetrain][throttle]") {
+    // PHYS-033 P4 I7a C3 (plan section 3.4.5, "which TCU intervention lives
+    // where"): ManualTcu's blip (kp_per_rpm) and the post-upshift pedal-
+    // ceiling ramp only ever reach the engine via ctx.tcu_throttle_floor/
+    // tcu_throttle_ceiling, which ThrottleStage::evaluate ignores outright
+    // for a Mechanical stage (floor/ceiling are fixed at 0/1 there - see
+    // core/src/drivetrain/throttle_stage.h). So enabling auto_blip at all
+    // on a mechanical-throttle engine is rejected outright by
+    // core/src/io/vehicle_io.cpp's effective_throttle_kind check rather
+    // than silently doing nothing. The upshift ignition cut
+    // (auto_blip.upshift_cut) is UNAFFECTED - TcuRequest::ignition_cut
+    // reaches the engine directly, never through ThrottleCommand - see
+    // test_throttle_control.cpp's P4 for that behaviour exercised
+    // white-box; this test only covers the loader-level rejection.
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0])",
+                  "gearbox_tcu_blip_mechanical");
+    const std::string throttle_control =
+        R"({ "id": "throttle", "type": "throttle_control", "engine": "engine", "kind": "mechanical_linkage" })";
+    const auto vehicle_json = [&](const char* auto_blip_fields) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      )") + minimal_i3_engine_json() + R"(,
+      { "id": "clutch", "type": "clutch", "capacity_nm": 300.0,
+        "engagement_vs_pedal": { "x": [0.0, 1.0], "y": [1.0, 0.0] } },
+      )" + gb.component_json + R"(,
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 3.7 },
+      )" + throttle_control + R"(
+    ],
+    "shafts": [
+      { "ports": ["engine.crank", "clutch.in"] },
+      { "ports": ["clutch.out", "gearbox.in"] },
+      { "ports": ["gearbox.out", "diff.carrier"] },
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ]
+  },
+  "controllers": [ { "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",
+      "auto_blip": { )" + std::string(auto_blip_fields) + R"( } } ]
+})";
+    };
+    SECTION("enabled: true is rejected") {
+        TempJsonFile f(vehicle_json(R"("enabled": true, "upshift_cut_release_slip_rpm": 250, "upshift_cut_max_hold_s": 0.8)"),
+                       "vehicle_tcu_blip_mechanical_rejected");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("auto_blip: 'enabled' requires an electronic throttle"));
+    }
+    SECTION("enabled: false round-trips (upshift ignition cut alone is fine on a mechanical engine)") {
+        TempJsonFile f(vehicle_json(R"("enabled": false, "upshift_cut_release_slip_rpm": 250, "upshift_cut_max_hold_s": 0.8)"),
+                       "vehicle_tcu_blip_mechanical_disabled_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        REQUIRE(d.controllers.size() == 1);
+        const auto& tcu = std::get<drivetrain::ManualTcuDesc>(d.controllers[0].params);
+        CHECK_FALSE(tcu.auto_blip.enabled);
+    }
+}
+
 TEST_CASE("load_vehicle_json rejects a gearbox initial_gear out of range", "[unit][vehicle][io][drivetrain]") {
     // Only 3 forward gears exist; initial_gear 5 is out of range.
     RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0], "initial_gear": 5)",

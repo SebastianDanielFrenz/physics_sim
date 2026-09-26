@@ -86,6 +86,18 @@ struct GovernorDesc {
     std::string channel = "hand_throttle"; // declared (default 0) via Powertrain::declare_control_channels; non-empty
 };
 
+// PHYS-033 P4 I7a C3 (plan section 3.4): how an engine's throttle command
+// physically reaches it - an electronic throttle body (a pedal position
+// SENSOR, an ECU can intervene: auto-blip floor, post-upshift-cut ceiling,
+// ignition cut) or a mechanical linkage/cable (direct physical connection -
+// only ignition cut, which acts on the engine's ignition directly rather
+// than through the throttle path, still applies; see throttle_stage.h's
+// header comment and docs/data_formats/vehicle.md's throttle_control
+// section for the full "which intervention lives where" table). Also
+// ThrottleControlDesc::kind below (the same two values, reused rather than
+// a second identical enum).
+enum class ThrottleInput { Electronic, Mechanical };
+
 struct TorqueMapEngineDesc {
     vehicle::Curve1D wot_torque_nm_vs_rpm;       // required; x ascending, x[0] >= 0
     vehicle::Curve1D motoring_torque_nm_vs_rpm;  // required (I3); y <= 0; x[0] == 0 (its y[0] is the Coulomb part)
@@ -100,6 +112,13 @@ struct TorqueMapEngineDesc {
     EngineInitialState initial_state = EngineInitialState::Running;
     bool has_governor = false; // I4 C12: only meaningful (and validated) when true
     GovernorDesc governor;
+    // PHYS-033 P4 I7a C3: how the throttle command physically reaches this
+    // engine - drives the IMPLICIT throttle_control stage when no vehicle
+    // (PowertrainDesc::components) explicit throttle_control component
+    // names this engine. Optional for a torque_map engine (default
+    // Electronic, matching every engine shipped before this commit); a
+    // future simulated engine type is expected to require it explicitly.
+    ThrottleInput throttle_input = ThrottleInput::Electronic;
 };
 
 struct ClutchDesc {
@@ -292,10 +311,30 @@ struct LoadDynoDesc {
     Vec3 axis_local = Vec3::zero();
 };
 
+// PHYS-033 P4 I7a C3 (plan section 3.4): the throttle-command stage between
+// the pedal and an engine - a pure control-signal seam (no shaft-network
+// port, no node, no rows; Powertrain constructs it as a TYPED member,
+// throttle_stage.h's ThrottleStage, not a generic IComponent). At most one
+// per vehicle; `engine` must name the vehicle's one engine component. When
+// no vehicle declares one, Powertrain builds an IMPLICIT default stage
+// instead: kind = the named engine's own throttle_input, no pedal_map/
+// linkage_curve, and a hand lever exactly when that engine has a governor
+// (then using the governor's own channel) - see throttle_stage.h and
+// docs/data_formats/vehicle.md's throttle_control section for the full
+// arithmetic and the loader's rejection list (which TCU interventions a
+// mechanical linkage cannot carry, and why).
+struct ThrottleControlDesc {
+    std::string engine;     // required; must name a TorqueMapEngineDesc component in the same PowertrainDesc
+    ThrottleInput kind = ThrottleInput::Electronic;
+    bool has_curve = false; // true iff pedal_map (electronic) / linkage_curve (mechanical) was given
+    vehicle::Curve1D curve; // pedal/lever position -> effective position; only meaningful when has_curve
+    std::string hand_lever_channel; // optional; empty = no hand lever for this stage
+};
+
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
 // type is a compile-checked change plus a data-format minor bump.
 using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc,
-                                      ParkLockDesc, PtoDesc, LoadDynoDesc>;
+                                      ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty

@@ -172,6 +172,13 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             // fixed scale 1, no channel declared at all) - test/bench only,
             // no shipped vehicle has one.
             if (!dyno->scale_channel.empty()) add(ChannelDecl{dyno->scale_channel, real(1.0)});
+        } else if (const auto* tcd = std::get_if<ThrottleControlDesc>(&c.params)) {
+            // I7a C3: an EXPLICIT throttle_control component's own hand-lever
+            // channel (default 0), if it names one - the IMPLICIT default
+            // stage's hand lever (an engine's own governor channel, when it
+            // has one) is already declared by the TorqueMapEngineDesc branch
+            // above, so no separate declaration is needed for that case.
+            if (!tcd->hand_lever_channel.empty()) add(ChannelDecl{tcd->hand_lever_channel, real(0.0)});
         }
     }
     for (const ChannelDecl& decl : test_only_extra) add(decl);
@@ -212,6 +219,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     int transfer_case_component_index = -1; // I4 C9
     int park_lock_component_index = -1;     // I4 C10
     int pto_component_index = -1;           // I4 C11
+    int throttle_control_component_index = -1; // I7a C3
     std::string pto_out_port_key;           // I4 C11: exempt from the "not connected" check below
     for (std::size_t ci = 0; ci < pt.components.size(); ++ci) {
         const ComponentDesc& c = pt.components[ci];
@@ -296,7 +304,19 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             // load_dyno with nothing wired to it would be pointless and is
             // almost certainly a test typo.
             add_port(component_port_key(c.id, "shaft"), dyno->inertia_kgm2, dyno->axis_local);
+        } else if (std::get_if<ThrottleControlDesc>(&c.params)) {
+            // I7a C3 (plan section 3.4): at most one throttle_control per
+            // vehicle - a pure control-signal seam (throttle_stage.h), no
+            // shaft-network port/node of its own, so nothing to add_port()
+            // here. Phase K below resolves it against engine_component_index.
+            if (throttle_control_component_index >= 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': more than one throttle_control component - I7a C3 supports at most one");
+            }
+            throttle_control_component_index = static_cast<int>(ci);
         }
+    }
+    if (throttle_control_component_index >= 0 && engine_component_index < 0) {
+        throw std::runtime_error("vehicle '" + vehicle_name + "': throttle_control component requires an engine component");
     }
 
     std::vector<int> wheel_port_index(wheels.size(), -1);
@@ -1060,6 +1080,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     // --- Phase K: engine/clutch/gearbox typed members -----------------------
     if (engine_component_index >= 0) {
         const auto& e = std::get<TorqueMapEngineDesc>(pt.components[static_cast<std::size_t>(engine_component_index)].params);
+        const std::string& e_id = pt.components[static_cast<std::size_t>(engine_component_index)].id;
         engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(e));
         engine_friction_row_ = engine_row;
         // Bootstrap fix: EngineTorqueMap::pre_solve's own state machine can
@@ -1075,17 +1096,43 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         if (e.initial_state == EngineInitialState::Running) {
             network_.set_omega(engine_crank_, rpm_to_rad_per_s(e.idle_rpm));
         }
-        // I4 C12: the governor's hand-throttle channel_slot, resolved the
-        // same way as transfer_case/park_lock/pto above.
-        if (e.has_governor) {
-            const std::vector<ChannelDecl> gov_decls = declare_control_channels(pt);
-            for (std::size_t i = 0; i < gov_decls.size(); ++i) {
-                if (gov_decls[i].name == e.governor.channel) {
-                    engine_governor_channel_slot_ = static_cast<int>(i);
+        // --- PHYS-033 P4 I7a C3: the throttle-command stage --------------
+        // An explicit throttle_control component (validated above: at most
+        // one, and only when there is an engine) configures the stage;
+        // otherwise the IMPLICIT default takes the engine's own declared
+        // throttle_input, no pedal_map/linkage_curve, and a hand lever
+        // exactly when the engine has a governor (its own channel) - the
+        // same hand-lever channel the pre-C3 code resolved directly below
+        // (engine_governor_channel_slot_, now folded into throttle_stage_).
+        ThrottleInput throttle_kind = e.throttle_input;
+        bool throttle_has_curve = false;
+        vehicle::Curve1D throttle_curve;
+        std::string hand_lever_channel;
+        if (throttle_control_component_index >= 0) {
+            const auto& tcd = std::get<ThrottleControlDesc>(pt.components[static_cast<std::size_t>(throttle_control_component_index)].params);
+            if (tcd.engine != e_id) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': throttle_control component '" +
+                                          pt.components[static_cast<std::size_t>(throttle_control_component_index)].id +
+                                          "' names engine '" + tcd.engine + "', which is not this vehicle's engine ('" + e_id + "')");
+            }
+            throttle_kind = tcd.kind;
+            throttle_has_curve = tcd.has_curve;
+            throttle_curve = tcd.curve;
+            hand_lever_channel = tcd.hand_lever_channel;
+        } else if (e.has_governor) {
+            hand_lever_channel = e.governor.channel;
+        }
+        int hand_lever_channel_slot = -1;
+        if (!hand_lever_channel.empty()) {
+            const std::vector<ChannelDecl> hand_lever_decls = declare_control_channels(pt);
+            for (std::size_t i = 0; i < hand_lever_decls.size(); ++i) {
+                if (hand_lever_decls[i].name == hand_lever_channel) {
+                    hand_lever_channel_slot = static_cast<int>(i);
                     break;
                 }
             }
         }
+        throttle_stage_.configure(throttle_kind, throttle_has_curve, throttle_curve, hand_lever_channel_slot);
     }
     if (clutch_component_index >= 0) {
         const auto& c = std::get<ClutchDesc>(pt.components[static_cast<std::size_t>(clutch_component_index)].params);
@@ -1494,23 +1541,22 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         assembly_.set_friction_capacity(clutch_row_, last_clutch_result_.cap_static, last_clutch_result_.cap_kinetic);
     }
 
-    // --- step 4: engine ------------------------------------------------------
+    // --- step 4: throttle-command stage + engine (I7a C3: the stage sits
+    // strictly before the engine's own pre_solve, plan section 7.2 step 4)
+    // ------------------------------------------------------------------------
     if (engine_) {
+        const ThrottleCommand throttle_cmd = throttle_stage_.evaluate(ctx);
+        last_throttle_command_ = throttle_cmd;
+        last_throttle_hand_lever_raw_ = throttle_stage_.raw_hand_lever(ctx);
+
         EngineTorqueMap::Sensors s;
         s.omega = network_.omega(engine_crank_);
-        s.pedal_throttle = ctx.throttle;
         s.ignition = ctx.ignition;
         s.starter = ctx.starter;
         s.clutch_engaged_fraction = ctx.clutch_engaged_fraction;
         s.gearbox_in_neutral = ctx.gearbox_in_neutral;
-        // I4 C12: 0 without a governor (engine_governor_channel_slot_ stays -1
-        // when the desc has none, same guarded-read pattern as every other
-        // component's channel read above).
-        s.hand_throttle = (ctx.channels != nullptr && engine_governor_channel_slot_ >= 0 && engine_governor_channel_slot_ < ctx.channel_count)
-                               ? ctx.channels[engine_governor_channel_slot_]
-                               : real(0.0);
-        const EngineTorqueMap::TcuRequest req{ctx.tcu_throttle_floor, ctx.tcu_ignition_cut, ctx.tcu_throttle_ceiling};
-        last_engine_result_ = engine_->pre_solve(s, req, ctx.h);
+        const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut};
+        last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
         const auto& pre = last_engine_result_;
         assembly_.torque(engine_crank_, pre.tau0, pre.d);
         assembly_.set_friction_capacity(engine_friction_row_, pre.friction_cap_static, pre.friction_cap_kinetic);

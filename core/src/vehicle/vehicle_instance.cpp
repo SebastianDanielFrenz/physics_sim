@@ -422,6 +422,9 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             ess.starter_active = pre.starter_active;
             ess.limiter_active = pre.limiter_active;
             ess.dfco_active = pre.dfco_active;
+            // PHYS-033 P4 I7a C3: the throttle-command stage's combined
+            // command this tick - sound only, never hashed.
+            ess.throttle_command = powertrain_.throttle_command();
             snap.engines.push_back(ess);
         }
 

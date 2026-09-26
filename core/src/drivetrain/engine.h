@@ -39,26 +39,39 @@ namespace ps::drivetrain {
 
 // ECU inputs, by value (spec's "controllers get sensors only"). omega is
 // the crank node's omega_old (network state at THIS substep's start).
-// Hoisted, unchanged, from EngineTorqueMap::Sensors (engine_torque_map.h).
+// Hoisted, unchanged except pedal_throttle/hand_throttle's removal, from
+// EngineTorqueMap::Sensors (engine_torque_map.h) - PHYS-033 P4 I7a C3: the
+// pedal/hand-lever combination now happens in the throttle_stage.h stage
+// BEFORE the engine ever sees a value (see ThrottleCommand below); the
+// engine never reads the pedal directly.
 struct Sensors {
     real omega = 0.0;
-    real pedal_throttle = 0.0;
     real ignition = 0.0;                // > 0.5 == on
     real starter = 0.0;                 // > 0.5 == pressed
     real clutch_engaged_fraction = 1.0; // the clutch's current effective engagement e
     bool gearbox_in_neutral = true;
-    // I4 C12: the governor's hand-throttle channel value (0 when there is
-    // no governor - Powertrain::pre_solve_components only ever reads a
-    // real channel value into this when desc().has_governor).
-    real hand_throttle = 0.0;
+};
+// PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
+// combined command plus the TCU-forwarded (electronic) or fixed (mechanical)
+// floor/ceiling the engine applies AFTER its own governor (see this file's
+// header comment / throttle_stage.h for why floor/ceiling stay in the
+// engine rather than moving into the stage). Replaces Sensors::
+// pedal_throttle/hand_throttle and TcuRequest::throttle_floor/
+// throttle_ceiling below.
+struct ThrottleCommand {
+    real command = 0.0; // pedal (through an optional pedal_map/linkage_curve), maxed with an optional hand lever
+    real floor = 0.0;   // electronic: the TCU's lagged auto-blip floor; mechanical: 0 (fixed, no auto-blip)
+    real ceiling = 1.0; // electronic: the TCU's lagged post-upshift-cut ceiling; mechanical: 1 (fixed)
 };
 // From the TCU (one substep lagged - plan section 7.2's deliberate order
-// independence). Both default to "no request". Hoisted, unchanged, from
+// independence). Trimmed to ignition_cut only (PHYS-033 P4 I7a C3):
+// throttle_floor/throttle_ceiling moved into ThrottleCommand above - a
+// mechanical linkage carries ignition_cut (the upshift cut, which acts on
+// the engine's ignition directly) but not the auto-blip floor/pedal-ceiling
+// ramp (electronic-only, plan section 3.4.5's rejection list). Hoisted from
 // EngineTorqueMap::TcuRequest.
 struct TcuRequest {
-    real throttle_floor = 0.0; // auto-blip
     bool ignition_cut = false; // upshift cut
-    real throttle_ceiling = 1.0; // caps the pedal (not the blip floor) - the torque ramp-in after an upshift cut
 };
 
 // Hoisted, unchanged except the new theta_c field (PHYS-033 P4 I7a C2, see
@@ -72,11 +85,12 @@ struct PreSolveResult {
     bool limiter_active = false, dfco_active = false, starter_active = false;
     real torque_estimate = 0.0; // tau_smooth + tau_comb (HUD/telemetry, plan section 6.1.8)
     // I4 C12: the governor's own no-load setpoint n_nl this substep (0
-    // without a governor), and the hand_throttle sensor value it read
-    // (0 without a governor) - PowertrainSnapshot::governor_setpoint_rpm/
-    // hand_throttle, never hashed.
+    // without a governor) - PowertrainSnapshot::governor_setpoint_rpm,
+    // never hashed. PHYS-033 P4 I7a C3: the hand-lever value itself moved
+    // to the throttle_stage.h stage (Powertrain::governor_hand_throttle()
+    // now reads the stage's own cached raw hand-lever value, not this
+    // struct).
     real governor_setpoint_rpm = 0.0;
-    real hand_throttle = 0.0;
     // Net crank torque (Coulomb row included) the current throttle demand
     // (pedal/blip/idle governor) asks for at this rpm, IGNORING the rev
     // limiter: motoring + theta_eff * (wot - motoring). The TCU's
@@ -123,7 +137,11 @@ public:
 
     // Evaluated first each substep (plan sections 6.1.3-6.1.7). Must be
     // followed by exactly one post_solve() call before the next pre_solve().
-    [[nodiscard]] virtual PreSolveResult pre_solve(const Sensors& sensors, const TcuRequest& tcu, real h) = 0;
+    // PHYS-033 P4 I7a C3: `throttle` is the throttle_stage.h stage's own
+    // output (pedal/hand-lever already combined, floor/ceiling forwarded
+    // electronic or fixed mechanical) - the engine never reads the pedal
+    // directly.
+    [[nodiscard]] virtual PreSolveResult pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) = 0;
     // omega_new: the crank node's omega after the network solve.
     [[nodiscard]] virtual PostSolveResult post_solve(real omega_new, real h) = 0;
 

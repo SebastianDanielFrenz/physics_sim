@@ -28,6 +28,10 @@ struct EngineSoundState {
     std::uint64_t cut_mask = 0; // all ones while the limiter cuts or DFCO is active
     EngineState engine_state = EngineState::Off;
     bool starter_active = false, limiter_active = false, dfco_active = false;
+    // PHYS-033 P4 I7a C3: the throttle-command stage's combined command this
+    // tick (pedal, through an optional pedal_map/linkage_curve, maxed with an
+    // optional hand lever) - sound only, NOT hashed, like crank_angle above.
+    real throttle_command = 0.0;
 };
 
 struct DrivelineSoundState {
