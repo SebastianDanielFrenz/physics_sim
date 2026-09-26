@@ -1072,8 +1072,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         // engine already idling" - so the crank's network state must be
         // seeded to idle speed directly here, once, at construction, not left
         // for the physics to bootstrap from omega=0.
-        if (engine_->desc().initial_state == EngineTorqueMap::InitialState::Running) {
-            network_.set_omega(engine_crank_, rpm_to_rad_per_s(engine_->desc().idle_rpm));
+        if (e.initial_state == EngineInitialState::Running) {
+            network_.set_omega(engine_crank_, rpm_to_rad_per_s(e.idle_rpm));
         }
         // I4 C12: the governor's hand-throttle channel_slot, resolved the
         // same way as transfer_case/park_lock/pto above.
@@ -1806,7 +1806,7 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
     //    through the gear ratio, magnitude-floored at idle (spec's own
     //    wording) so a reset into a low driveline speed cannot leave the
     //    engine below idle.
-    const real idle_omega = engine_ ? rpm_to_rad_per_s(engine_->desc().idle_rpm) : real(0.0);
+    const real idle_omega = engine_ ? rpm_to_rad_per_s(engine_->idle_rpm()) : real(0.0);
     const real gearbox_out_omega_now = gearbox_ ? network_.omega(gearbox_out_) : real(0.0);
     const real driveline_in_omega = (gearbox_ && gear != 0) ? gearbox_->ratio_for_position(gear) * gearbox_out_omega_now : real(0.0);
     real engine_omega_target = real(0.0);

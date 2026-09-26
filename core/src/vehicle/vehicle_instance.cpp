@@ -412,12 +412,11 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             drivetrain::EngineSoundState ess;
             ess.crank_angle = eng.crank_angle();
             ess.omega = powertrain_.engine_omega();
-            // Approximation (audio-only, no test depends on exact fidelity):
-            // the engine's own theta_c (combustion-gated effective throttle,
-            // engine_torque_map.cpp's private combustion condition) is not
-            // itself exposed by PreSolveResult - DFCO-gated throttle_eff is
-            // the closest available proxy.
-            ess.load = pre.dfco_active ? real(0.0) : pre.throttle_eff;
+            // PHYS-033 P4 I7a C2: theta_c (the post-limiter combustion
+            // fraction, engine_torque_map.cpp's own `theta_c = comb ?
+            // theta_eff*f_lim : 0`) is now published directly on
+            // PreSolveResult - no more DFCO-gated throttle_eff proxy.
+            ess.load = pre.theta_c;
             ess.cut_mask = pre.limiter_active || pre.dfco_active ? ~std::uint64_t(0) : std::uint64_t(0);
             ess.engine_state = snap.engine_state;
             ess.starter_active = pre.starter_active;

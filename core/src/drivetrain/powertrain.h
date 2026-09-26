@@ -171,7 +171,7 @@ public:
     // exists as a stub returning a default PowertrainDebug - this class
     // does not build one itself yet in commit 6, only exposes the pieces).
     [[nodiscard]] bool has_engine() const { return engine_ != nullptr; }
-    [[nodiscard]] const EngineTorqueMap& engine() const { return *engine_; }
+    [[nodiscard]] const IEngine& engine() const { return *engine_; }
     // This substep's engine pre_solve() result, cached (mirrors
     // last_clutch_result_/last_gearbox_result_) - PowertrainSnapshot's
     // EngineSoundState fill (commit 6: load/limiter/dfco/starter flags,
@@ -480,7 +480,7 @@ private:
     PowertrainEnergy ledger_tick_start_{};
 
     // --- engine (nullptr if this vehicle's powertrain has none) -----------
-    std::unique_ptr<EngineTorqueMap> engine_;
+    std::unique_ptr<IEngine> engine_;
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached
