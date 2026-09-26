@@ -23,6 +23,13 @@ What is physical and what is not:
   (a fast-rise/exponential-decay blowdown pulse plus one damped pipe
   resonance), the per-rotor amplitude pattern, the load-to-loudness map and
   the overrun floor.
+
+EXAGGERATED, NOT PHYSICAL (off by default): --fm-reference REF.csv
+--fm-exaggerate G replaces the rpm by ref + G*(rpm - ref), with ref the
+reference trace's engine_rpm interpolated at each sample time (typically the
+matching Rigid control CSV). G > 1 magnifies only the compliant-minus-rigid
+difference (the shuffle) so it can be heard; it is a listening aid, never a
+simulation result. Without --fm-reference the output is unchanged.
 """
 
 import argparse
@@ -129,8 +136,22 @@ def main():
     ap.add_argument("--rotors", type=int, default=4)
     ap.add_argument("--pre-hold", type=float, default=1.0, help="seconds of the first sample held before the trace starts")
     ap.add_argument("--rate", type=int, default=44100)
+    ap.add_argument("--fm-reference", help="EXAGGERATION ONLY: reference CSV (e.g. the Rigid control) for --fm-exaggerate")
+    ap.add_argument("--fm-exaggerate", type=float, default=1.0,
+                    help="EXAGGERATION ONLY: rpm := ref + G*(rpm - ref); needs --fm-reference; not physical")
     args = ap.parse_args()
     t, rpm, load = read_trace(args.csv)
+    if args.fm_reference is not None:
+        rt, rrpm, _ = read_trace(args.fm_reference)
+        hint = 0
+        exaggerated = []
+        for tk, r in zip(t, rpm):
+            ref, hint = interp(rt, rrpm, tk, hint)
+            exaggerated.append(ref + args.fm_exaggerate * (r - ref))
+        rpm = exaggerated
+        print("EXAGGERATED (not physical): rpm = ref + %.2f*(rpm - ref), ref = %s" % (args.fm_exaggerate, args.fm_reference))
+    elif args.fm_exaggerate != 1.0:
+        raise SystemExit("--fm-exaggerate needs --fm-reference")
     wav = args.wav
     if wav is None:
         repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
