@@ -27,6 +27,7 @@
 #include "gearbox.h"
 #include "manual_tcu.h"
 #include "network.h"
+#include "throttle_stage.h"
 
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/controller_desc.h"
@@ -55,6 +56,20 @@ namespace ps::drivetrain {
 struct ChannelDecl {
     std::string name;
     real default_value = 0.0;
+};
+
+// PHYS-033 P4 I7a C3: the TCU's own lagged Outputs (throttle_floor/
+// ignition_cut/throttle_ceiling), cached one substep so
+// ComponentSubstepCtx::tcu_throttle_floor/tcu_ignition_cut/
+// tcu_throttle_ceiling (which ThrottleStage::evaluate reads) stay order-
+// independent (plan section 7.2). Distinct from the engine's own TcuRequest
+// (engine.h), which now carries only ignition_cut - floor/ceiling moved into
+// ThrottleCommand instead (see throttle_stage.h's "which TCU intervention
+// lives where" table).
+struct TcuThrottleLimits {
+    real throttle_floor = 0.0;
+    bool ignition_cut = false;
+    real throttle_ceiling = 1.0;
 };
 
 class Powertrain {
@@ -268,9 +283,25 @@ public:
     // default to 0 when desc_.has_governor is false - see EngineTorqueMap::
     // pre_solve). PowertrainSnapshot::governor_setpoint_rpm/hand_throttle.
     [[nodiscard]] real governor_setpoint_rpm() const { return last_engine_result_.governor_setpoint_rpm; }
-    [[nodiscard]] real governor_hand_throttle() const { return last_engine_result_.hand_throttle; }
-    // The TCU request the engine will read NEXT substep (tests only).
-    [[nodiscard]] const EngineTorqueMap::TcuRequest& tcu_request_debug() const { return tcu_prev_request_; }
+    // PHYS-033 P4 I7a C3: the hand-lever value itself moved into the
+    // throttle_stage.h stage (last_throttle_hand_lever_raw_ below) - this
+    // accessor's meaning/callers (PowertrainSnapshot::hand_throttle) are
+    // unchanged, only its source.
+    [[nodiscard]] real governor_hand_throttle() const { return last_throttle_hand_lever_raw_; }
+    // The stage's combined command this substep (EngineSoundState::
+    // throttle_command, sound-only, never hashed).
+    [[nodiscard]] real throttle_command() const { return last_throttle_command_.command; }
+    // The whole ThrottleCommand (command/floor/ceiling) the engine received
+    // this substep (tests only - test_throttle_control.cpp's P4).
+    [[nodiscard]] const ThrottleCommand& throttle_command_debug() const { return last_throttle_command_; }
+    // The TCU's own lagged Outputs the stage/engine will read NEXT substep
+    // (tests only). PowertrainDebug::throttle_ceiling reads
+    // tcu_request_debug().throttle_ceiling directly (vehicle_instance.h),
+    // matching dbg.ignition_cut's own timing - both are the TCU's cached
+    // request the stage/engine will apply NEXT substep, not the stage's own
+    // already-applied output (last_throttle_command_ above, a different
+    // quantity: EngineSoundState::throttle_command only).
+    [[nodiscard]] const TcuThrottleLimits& tcu_request_debug() const { return tcu_prev_request_; }
     [[nodiscard]] real idle_integrator() const { return has_engine() ? engine_->idle_integrator() : real(0.0); }
     // Fills out[wheel_index] with the torque of the diff row driving that
     // hub (coef*lambda, plan section 4.5), per diff (I4 C4), 0 for every
@@ -484,11 +515,19 @@ private:
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached
-    // I4 C12: -1 without a governor (or when the governor's declared channel
-    // is somehow absent from declare_control_channels(pt) - never happens in
-    // practice, add() always includes it), same nullable-slot pattern as
-    // TransferCase/ParkLock/Pto's own channel_slot_ members.
-    int engine_governor_channel_slot_ = -1;
+    // PHYS-033 P4 I7a C3: the throttle-command stage between the pedal and
+    // the engine (throttle_stage.h) - built from either an explicit
+    // ThrottleControlDesc component or (no such component) the IMPLICIT
+    // default (the engine's own throttle_input, no curve, a hand lever ==
+    // the governor's channel iff the engine has_governor). Replaces the old
+    // engine_governor_channel_slot_ (the hand-lever channel slot now lives
+    // inside throttle_stage_ itself). last_throttle_command_/
+    // last_throttle_hand_lever_raw_ cache this substep's stage output for
+    // the same-substep engine pre_solve call and for the accessors above
+    // (throttle_command/governor_hand_throttle).
+    ThrottleStage throttle_stage_;
+    ThrottleCommand last_throttle_command_{};
+    real last_throttle_hand_lever_raw_ = 0.0;
 
     // --- clutch --------------------------------------------------------
     std::unique_ptr<Clutch> clutch_;
@@ -546,8 +585,14 @@ private:
     std::vector<LoadDyno*> load_dynos_;
 
     // --- TCU (nullptr if this vehicle has no manual_tcu controller) -------
+    // PHYS-033 P4 I7a C3: tcu_prev_request_ used to be an EngineTorqueMap::
+    // TcuRequest, but that type lost throttle_floor/throttle_ceiling (moved
+    // into ThrottleCommand, engine.h - only ignition_cut still goes to the
+    // engine directly, see the "which TCU intervention lives where" table in
+    // throttle_stage.h); TcuThrottleLimits (namespace scope, above) is the
+    // DIFFERENT thing this always was: the TCU's own lagged Outputs.
     std::unique_ptr<ManualTcu> tcu_;
-    EngineTorqueMap::TcuRequest tcu_prev_request_{}; // LAGGED one substep, fed into the engine (plan section 7.2)
+    TcuThrottleLimits tcu_prev_request_{}; // LAGGED one substep, fed into the engine (plan section 7.2)
 
     // --- rotor reaction (plan section 6.7) --------------------------------
     struct RotorPort {

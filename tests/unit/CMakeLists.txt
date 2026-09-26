@@ -46,6 +46,7 @@ add_executable(ps_unit_tests
   test_sub_threshold_rotation.cpp
   test_table2d.cpp
   test_fuel_io.cpp
+  test_throttle_control.cpp
 )
 
 target_link_libraries(ps_unit_tests

@@ -36,6 +36,7 @@ namespace ps::drivetrain {
 class EngineTorqueMap final : public IEngine {
 public:
     using Sensors = ps::drivetrain::Sensors;
+    using ThrottleCommand = ps::drivetrain::ThrottleCommand;
     using TcuRequest = ps::drivetrain::TcuRequest;
     using PreSolveResult = ps::drivetrain::PreSolveResult;
     using PostSolveResult = ps::drivetrain::PostSolveResult;
@@ -90,7 +91,10 @@ public:
 
     // Evaluated first each substep (plan sections 6.1.3-6.1.7). Must be
     // followed by exactly one post_solve() call before the next pre_solve().
-    [[nodiscard]] PreSolveResult pre_solve(const Sensors& sensors, const TcuRequest& tcu, real h) override;
+    // PHYS-033 P4 I7a C3: `throttle` is the throttle_stage.h stage's own
+    // output (pedal/hand-lever already combined) - the engine never reads
+    // the pedal directly.
+    [[nodiscard]] PreSolveResult pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) override;
     // omega_new: the crank node's omega after the network solve.
     [[nodiscard]] PostSolveResult post_solve(real omega_new, real h) override;
 

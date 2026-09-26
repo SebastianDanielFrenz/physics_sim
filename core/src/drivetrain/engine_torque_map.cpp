@@ -43,7 +43,7 @@ EngineTorqueMap::EngineTorqueMap(Desc desc) : desc_(std::move(desc)) {
     state_ = desc_.initial_state == InitialState::Running ? EngineState::Running : EngineState::Off;
 }
 
-EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensors, const TcuRequest& tcu, real h) {
+EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) {
     const real omega_old = sensors.omega;
     omega_old_ = omega_old;
     const real rpm = std::abs(omega_old) * kRadPerSecToRpm;
@@ -85,29 +85,33 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
 
     // --- 6.1.4: throttle path -------------------------------------------------
     // PHYS-033 P4 I4 C12 (plan section 3.6): an all-speed diesel governor
-    // with droop REPLACES the pedal in the request expression below when
-    // present - no governor block means req_input == sensors.pedal_throttle
-    // exactly, so the rest of this function is byte-identical to before this
-    // commit (governor_setpoint_rpm/theta_gov both stay 0.0).
+    // with droop REPLACES the throttle command in the request expression
+    // below when present - no governor block means req_input ==
+    // throttle.command exactly, so the rest of this function is
+    // byte-identical to before this commit (governor_setpoint_rpm/theta_gov
+    // both stay 0.0).
     //
-    // lever = max(hand_throttle, pedal), each clamped to [0,1]; n_nl =
+    // PHYS-033 P4 I7a C3: the lever = max(hand_throttle, pedal) combination
+    // (and any pedal_map/linkage_curve) now happens in the throttle_stage.h
+    // stage BEFORE this function ever runs - throttle.command is already
+    // that combined value, so the governor's own lever here is simply
+    // throttle.command (no separate max()/clamp() left to do). n_nl =
     // idle_rpm + lever*(high_idle_rpm - idle_rpm) is the governor's no-load
     // setpoint; band = droop*rated_rpm (ISO 3046-4 steady-state droop
     // referred to rated speed); theta_gov = clamp((n_nl - rpm)/band, 0, 1).
     real theta_gov = real(0.0);
     real governor_setpoint_rpm = real(0.0);
     real governor_band = real(0.0);
-    real req_input = sensors.pedal_throttle;
+    real req_input = throttle.command;
     if (desc_.has_governor) {
-        const real lever = std::max(std::clamp(sensors.hand_throttle, real(0.0), real(1.0)),
-                                     std::clamp(sensors.pedal_throttle, real(0.0), real(1.0)));
+        const real lever = throttle.command;
         governor_setpoint_rpm = desc_.idle_rpm + lever * (desc_.governor.high_idle_rpm - desc_.idle_rpm);
         governor_band = desc_.governor.droop * desc_.governor.rated_rpm;
         theta_gov = std::clamp((governor_setpoint_rpm - rpm) / governor_band, real(0.0), real(1.0));
         req_input = theta_gov;
     }
 
-    const real theta_req = tcu.ignition_cut ? real(0.0) : std::max(std::min(req_input, tcu.throttle_ceiling), tcu.throttle_floor);
+    const real theta_req = tcu.ignition_cut ? real(0.0) : std::max(std::min(req_input, throttle.ceiling), throttle.floor);
 
     if (state_ == EngineState::Running && theta_req < real(0.01) && rpm > desc_.dfco_enable_rpm) {
         dfco_active_ = true;
@@ -208,7 +212,6 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.starter_active = starter_active;
     r.torque_estimate = tau_smooth_ + tau_comb_;
     r.governor_setpoint_rpm = governor_setpoint_rpm;
-    r.hand_throttle = desc_.has_governor ? sensors.hand_throttle : real(0.0);
     r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
     r.theta_c = theta_c;
     return r;
