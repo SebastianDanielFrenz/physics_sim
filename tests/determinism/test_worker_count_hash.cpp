@@ -607,6 +607,51 @@ TEST_CASE("State hash with two terrain interest points and suppression is identi
     }
 }
 
+// data/scenarios/vehicle_tractor_i4.json (PHYS-033 P4 I4 C15): a single
+// tractor exercising every tractor-only control channel in one 10 s run -
+// hand_throttle, pto, three incremental shift_up_count steps (N->1->2->3),
+// awd, the new C15 diff_lock on/off, brake to a stop, then park_lock.
+// Unlike run_scenario_file above (whose only caller, terrain_multi_interest,
+// has no control_events), this scenario's whole point is control-event-
+// driven state under worker-count variation, so this helper also applies
+// scenario.control_events in time order exactly the way tools/ps_run/
+// main.cpp's own tick loop does - run_scenario_file alone would silently
+// skip every event and hash a tractor that never leaves Neutral idle. Pins
+// the literal hash recorded when the scenario file was authored (ps_run at
+// 1/2/4/10 workers all agreed before this test existed).
+namespace {
+std::uint64_t run_tractor_i4_scenario(int workers) {
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_tractor_i4.json");
+    sc.world_config.job_workers = workers;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    std::size_t next_control_event = 0;
+    for (int i = 0; i < ticks; ++i) {
+        while (next_control_event < sc.control_events.size() && sc.control_events[next_control_event].time_s <= world.sim_time()) {
+            const auto& ev = sc.control_events[next_control_event];
+            world.set_control(ev.channel, ev.value);
+            ++next_control_event;
+        }
+        world.step();
+    }
+    return world.state_hash();
+}
+} // namespace
+
+TEST_CASE("State hash for the tractor I4 control-channel exercise scenario is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][vehicle][drivetrain][heavy][world]") {
+    constexpr std::uint64_t kRecorded = 0xac386af7129b9ffeULL;
+    const std::uint64_t reference = run_tractor_i4_scenario(1);
+    INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
+    REQUIRE(reference == kRecorded);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_tractor_i4_scenario(workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {
     constexpr std::size_t kBodies = 8;
     constexpr int kTicks = 10;
