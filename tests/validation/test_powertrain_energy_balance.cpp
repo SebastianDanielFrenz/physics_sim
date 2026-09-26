@@ -8,11 +8,15 @@
 
 #include "vehicle_test_helpers.h"
 
+#include "ps/drivetrain/powertrain_desc.h"
+#include "ps/io/vehicle_io.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 using namespace ps;
 
@@ -22,6 +26,38 @@ real sum_abs_terms(const drivetrain::PowertrainEnergy& e) {
            std::abs(e.gear_loss) + std::abs(e.integrator_loss) + std::abs(e.clutch_loss) + std::abs(e.synchro_loss) +
            std::abs(e.engine_friction_loss) + std::abs(e.engagement_loss) + std::abs(e.starter_in) +
            std::abs(e.external_reset) + std::abs(e.diff_loss); // I4 C6: diff_loss added, 0 (car_sedan.json's diff is open)
+}
+
+// Same identity as sum_abs_terms above, extended with the ledger terms that
+// only exist once a vehicle actually has a transfer case / pto (tractor.json
+// with MFWD + a pto load_dyno attached) - awd_clutch_loss (I4 C9),
+// pto_clutch_loss and external_absorbed (I4 C11). car_sedan.json's own case
+// above is left untouched (those three terms are always 0 for it, so adding
+// them there would have been a no-op, but this is a SEPARATE function rather
+// than editing the shared one - the two tests must stay independently
+// readable and neither should have to know about the other's vehicle).
+real sum_abs_terms_tractor(const drivetrain::PowertrainEnergy& e) {
+    return sum_abs_terms(e) + std::abs(e.awd_clutch_loss) + std::abs(e.pto_clutch_loss) + std::abs(e.external_absorbed);
+}
+
+// tractor.json (I4 C11 pattern, test_powertrain_pto.cpp's own
+// load_tractor_with_pto_dyno()) with an extra load_dyno component (Viscous,
+// so no control channel is needed) shafted onto pto.out - a test/bench
+// harness attached IN CODE, never in a shipped data file.
+vehicle::VehicleDesc load_tractor_with_pto_dyno_for_energy_test() {
+    vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+    drivetrain::LoadDynoDesc dyno_desc;
+    dyno_desc.mode = drivetrain::LoadDynoMode::Viscous;
+    dyno_desc.viscous_nm_s_rad = 5.0;
+    dyno_desc.inertia_kgm2 = 0.02;
+    drivetrain::ComponentDesc dyno_component;
+    dyno_component.id = "dyno";
+    dyno_component.params = dyno_desc;
+    d.powertrain.components.push_back(dyno_component);
+    drivetrain::ShaftDesc shaft;
+    shaft.ports = {drivetrain::PortRef{"pto", "out", false}, drivetrain::PortRef{"dyno", "shaft", false}};
+    d.powertrain.shafts.push_back(shaft);
+    return d;
 }
 } // namespace
 
@@ -214,6 +250,123 @@ TEST_CASE("Powertrain energy ledger balances within 1% end to end (plan section 
     // tyre_loss's own global (not per-tick, see check_tick's comment above)
     // sanity: ends up non-negative and clearly nonzero (real slip losses
     // occurred over this script's launch/shift/brake sequence).
+    CHECK(final_energy.tyre_loss >= 0.0);
+    CHECK(final_energy.tyre_loss > 1.0);
+}
+
+// PHYS-033 P4 I4 C15: the same plan section 13.6 identity, but on
+// tractor.json with every non-shipped-vehicle ledger term actually nonzero
+// at once - MFWD (awd) engaged, a pto load_dyno absorbing real work, and the
+// new C15 lockable rear differential toggled on/off while driving (a
+// composed-topology-state switch, exactly like a gear shift, so it also
+// books into engagement_loss - see core/src/drivetrain/powertrain.cpp's
+// apply_topology_switch call site). No gear shifting here (car_sedan's case
+// above already covers the shift-driven engagement_loss path in full); this
+// script's own point is awd_clutch_loss/pto_clutch_loss/external_absorbed/
+// diff_loss/engagement_loss(from a diff lock) all being simultaneously
+// nonzero and still closing the same balance identity.
+TEST_CASE("Powertrain energy ledger balances within 1% end to end on a tractor with MFWD, a pto load, "
+          "and a diff-lock toggle",
+          "[validation][vehicle][powertrain][drivetrain]") {
+    auto rig = ps_test::build_vehicle_rig_from_desc(load_tractor_with_pto_dyno_for_energy_test(), 6000.0,
+                                                     Vec3{1.2, 0.35, 0.9}, 1.28, 0.0, 4);
+    ps_test::settle(*rig.world, 1.0);
+    const real dt = rig.world->dt();
+
+    drivetrain::PowertrainEnergy prev = rig.world->powertrain_energy(rig.vehicle);
+    real prev_engagement_loss = prev.engagement_loss;
+    real max_engagement_loss_delta = 0.0;
+    auto check_tick = [&]() {
+        const drivetrain::PowertrainEnergy& e = rig.world->powertrain_energy(rig.vehicle);
+        const real denom = sum_abs_terms_tractor(e);
+        // Same 5e-8 margin as the car_sedan case above - see that check_tick's
+        // own comment for why this is a measured-with-margin bound, not the
+        // literal plan section 8 aspiration.
+        if (denom > 1e-9) {
+            CHECK(std::abs(e.balance_error) <= 5e-8 * denom);
+        }
+        // Every cumulative loss term is non-decreasing, tyre_loss excluded
+        // for the same "steady sign, not unconditional" reason documented on
+        // the car_sedan check_tick above.
+        CHECK(e.brake_loss >= prev.brake_loss - 1e-9);
+        CHECK(e.gear_loss >= prev.gear_loss - 1e-9);
+        CHECK(e.integrator_loss >= prev.integrator_loss - 1e-9);
+        CHECK(e.clutch_loss >= prev.clutch_loss - 1e-9);
+        CHECK(e.synchro_loss >= prev.synchro_loss - 1e-9);
+        CHECK(e.engine_friction_loss >= prev.engine_friction_loss - 1e-9);
+        CHECK(e.diff_loss >= prev.diff_loss - 1e-9);
+        CHECK(e.awd_clutch_loss >= prev.awd_clutch_loss - 1e-9);
+        CHECK(e.pto_clutch_loss >= prev.pto_clutch_loss - 1e-9);
+        CHECK(e.external_absorbed >= prev.external_absorbed - 1e-9);
+        CHECK(e.engagement_loss >= prev.engagement_loss - 1e-9);
+        max_engagement_loss_delta = std::max(max_engagement_loss_delta, e.engagement_loss - prev_engagement_loss);
+        prev_engagement_loss = e.engagement_loss;
+        prev = e;
+    };
+
+    // 1. Launch in 1st with MFWD engaged.
+    rig.world->set_control("gear_request", 1.0);
+    rig.world->set_control("throttle", 0.6);
+    rig.world->set_control("awd", 1.0);
+    for (std::uint64_t i = 0; i < static_cast<std::uint64_t>(2.0 / dt + 0.5); ++i) {
+        rig.world->step();
+        check_tick();
+    }
+
+    // 2. Engage the pto (its load_dyno starts absorbing real work).
+    rig.world->set_control("pto", 1.0);
+    for (std::uint64_t i = 0; i < static_cast<std::uint64_t>(2.0 / dt + 0.5); ++i) {
+        rig.world->step();
+        check_tick();
+    }
+
+    // 3. Lock the rear diff while still driving (a composed-topology-state
+    // switch - exercises engagement_loss via the diff-lock path, not a gear
+    // shift), then release it.
+    rig.world->set_control("diff_lock", 1.0);
+    for (std::uint64_t i = 0; i < static_cast<std::uint64_t>(2.0 / dt + 0.5); ++i) {
+        rig.world->step();
+        check_tick();
+    }
+    rig.world->set_control("diff_lock", 0.0);
+    for (std::uint64_t i = 0; i < static_cast<std::uint64_t>(1.0 / dt + 0.5); ++i) {
+        rig.world->step();
+        check_tick();
+    }
+
+    // 4. Brake to a stop (pto and awd stay engaged through this).
+    rig.world->set_control("throttle", 0.0);
+    rig.world->set_control("brake", 1.0);
+    {
+        const std::uint64_t max_ticks = static_cast<std::uint64_t>(15.0 / dt + 0.5);
+        for (std::uint64_t i = 0; i < max_ticks; ++i) {
+            rig.world->step();
+            check_tick();
+            if (rig.world->get_motion(rig.chassis).linear.length() <= 0.05) break;
+        }
+    }
+
+    const drivetrain::PowertrainEnergy& final_energy = rig.world->powertrain_energy(rig.vehicle);
+    const real balance_bound = 0.01 * (std::abs(final_energy.engine_out) + std::abs(final_energy.starter_in));
+    INFO("engine_out=" << final_energy.engine_out << " wheel_out=" << final_energy.wheel_out
+                        << " tyre_loss=" << final_energy.tyre_loss << " brake_loss=" << final_energy.brake_loss
+                        << " gear_loss=" << final_energy.gear_loss << " integrator_loss=" << final_energy.integrator_loss
+                        << " clutch_loss=" << final_energy.clutch_loss << " synchro_loss=" << final_energy.synchro_loss
+                        << " engine_friction_loss=" << final_energy.engine_friction_loss
+                        << " engagement_loss=" << final_energy.engagement_loss << " starter_in=" << final_energy.starter_in
+                        << " external_reset=" << final_energy.external_reset << " diff_loss=" << final_energy.diff_loss
+                        << " awd_clutch_loss=" << final_energy.awd_clutch_loss
+                        << " pto_clutch_loss=" << final_energy.pto_clutch_loss
+                        << " external_absorbed=" << final_energy.external_absorbed
+                        << " balance_error=" << final_energy.balance_error << " bound=" << balance_bound
+                        << " max_engagement_loss_delta(single tick)=" << max_engagement_loss_delta);
+    CHECK(std::abs(final_energy.balance_error) <= balance_bound);
+    // Every one of the terms this script's own point is to exercise actually
+    // fired (a nonzero-work sanity check, not a tolerance question) -
+    // otherwise the balance check above would be vacuous for this vehicle.
+    CHECK(final_energy.awd_clutch_loss > 0.0);
+    CHECK(final_energy.pto_clutch_loss > 0.0);
+    CHECK(final_energy.external_absorbed > 0.0);
     CHECK(final_energy.tyre_loss >= 0.0);
     CHECK(final_energy.tyre_loss > 1.0);
 }
