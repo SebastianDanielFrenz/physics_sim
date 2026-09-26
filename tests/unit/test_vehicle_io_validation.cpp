@@ -690,6 +690,310 @@ TEST_CASE("load_vehicle_json validates park_lock fields (I4 C10)", "[unit][vehic
     }
 }
 
+// PHYS-033 P4 I4 C11 (plan section 3.5): the pto (power take-off) component -
+// a friction row from the engine/crank-side "in" port to the PTO-side "out"
+// port, with a per-mode (540/1000 rpm) ratio. Mirrors the park_lock/
+// transfer_case validation tests above: a minimal standalone powertrain
+// block, "in" wired to a wheel so "every port must be connected by exactly
+// one shaft" is satisfied - "out" is deliberately left UNCONNECTED, since
+// core/src/drivetrain/powertrain.cpp exempts pto's own "out" port from that
+// check (pto_out_port_key) the same way it exempts nothing else, precisely so
+// a round-trip test like this one does not also have to build a load_dyno.
+TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io][drivetrain]") {
+    using Catch::Matchers::ContainsSubstring;
+    auto json_with_pto_fields = [](const std::string& extra) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [
+      { "id": "pto", "type": "pto", "ratios": { "540": 3.61 }, "capacity_nm": 500.0)") +
+               extra + R"( }
+    ],
+    "shafts": [
+      { "ports": ["pto.in", "wheel:FL"] }
+    ]
+  }
+})";
+    };
+    auto only_pto = [](const vehicle::VehicleDesc& d) -> const drivetrain::PtoDesc& {
+        REQUIRE(d.powertrain.components.size() == 1);
+        const auto* pto = std::get_if<drivetrain::PtoDesc>(&d.powertrain.components[0].params);
+        REQUIRE(pto != nullptr);
+        return *pto;
+    };
+    auto rejects = [](const std::string& text, const char* tag, const std::string& needle) {
+        TempJsonFile f(text, tag);
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring(needle));
+    };
+
+    SECTION("a well-formed pto (540 only) round-trips with its defaults") {
+        TempJsonFile f(json_with_pto_fields(""), "vehicle_pto_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::PtoDesc& pto = only_pto(d);
+        CHECK(pto.has_540);
+        CHECK(pto.ratio_540 == 3.61);
+        CHECK_FALSE(pto.has_1000);
+        CHECK(pto.capacity_nm == 500.0);
+        CHECK(pto.static_factor == 1.2);
+        CHECK(pto.engage_time_s == 1.5);
+        CHECK(pto.efficiency == 1.0);
+        CHECK(pto.out_inertia_kgm2 == 0.0);
+        CHECK(pto.disengaged_brake_time_s == 1.0);
+        CHECK(pto.channel == "pto");
+        CHECK(pto.speed_channel == "pto_speed");
+    }
+    SECTION("both 540 and 1000 ratios may be given, and other fields override the defaults") {
+        std::string ok = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [
+      { "id": "pto", "type": "pto", "ratios": { "540": 3.61, "1000": 1.95 }, "capacity_nm": 500.0,
+        "static_factor": 1.1, "engage_time_s": 2.0, "efficiency": 0.95, "out_inertia_kgm2": 0.05,
+        "disengaged_brake_time_s": 0.5, "channel": "my_pto", "speed_channel": "my_pto_speed" }
+    ],
+    "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
+  }
+})";
+        TempJsonFile f(ok, "vehicle_pto_both_ratios");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::PtoDesc& pto = only_pto(d);
+        CHECK(pto.has_540);
+        CHECK(pto.ratio_540 == 3.61);
+        CHECK(pto.has_1000);
+        CHECK(pto.ratio_1000 == 1.95);
+        CHECK(pto.static_factor == 1.1);
+        CHECK(pto.engage_time_s == 2.0);
+        CHECK(pto.efficiency == 0.95);
+        CHECK(pto.out_inertia_kgm2 == 0.05);
+        CHECK(pto.disengaged_brake_time_s == 0.5);
+        CHECK(pto.channel == "my_pto");
+        CHECK(pto.speed_channel == "my_pto_speed");
+    }
+    SECTION("a missing 'ratios' object is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [ { "id": "pto", "type": "pto", "capacity_nm": 500.0 } ],
+    "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pto_no_ratios", "pto requires a non-empty 'ratios' object");
+    }
+    SECTION("an empty 'ratios' object is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [ { "id": "pto", "type": "pto", "ratios": {}, "capacity_nm": 500.0 } ],
+    "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pto_empty_ratios", "pto requires a non-empty 'ratios' object");
+    }
+    SECTION("an unknown ratios key is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [ { "id": "pto", "type": "pto", "ratios": { "750": 2.0 }, "capacity_nm": 500.0 } ],
+    "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pto_bad_ratio_key", "pto ratios key '750' is not \"540\" or \"1000\"");
+    }
+    SECTION("a non-positive ratio is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [ { "id": "pto", "type": "pto", "ratios": { "540": 0.0 }, "capacity_nm": 500.0 } ],
+    "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pto_ratio_zero", "pto ratios['540'] must be > 0");
+    }
+    SECTION("capacity_nm <= 0 is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [ { "id": "pto", "type": "pto", "ratios": { "540": 3.61 }, "capacity_nm": 0.0 } ],
+    "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pto_cap_zero", "pto 'capacity_nm' must be > 0");
+    }
+    SECTION("static_factor < 1 is rejected") {
+        rejects(json_with_pto_fields(R"(, "static_factor": 0.9)"), "vehicle_pto_static_lt1", "pto 'static_factor' must be >= 1");
+    }
+    SECTION("engage_time_s < 0 is rejected") {
+        rejects(json_with_pto_fields(R"(, "engage_time_s": -0.1)"), "vehicle_pto_engage_neg", "pto 'engage_time_s' must be >= 0");
+    }
+    SECTION("efficiency outside (0, 1] is rejected") {
+        rejects(json_with_pto_fields(R"(, "efficiency": 0.0)"), "vehicle_pto_eff_zero", "pto 'efficiency' must be in (0, 1]");
+        rejects(json_with_pto_fields(R"(, "efficiency": 1.1)"), "vehicle_pto_eff_gt1", "pto 'efficiency' must be in (0, 1]");
+    }
+    SECTION("out_inertia_kgm2 < 0 is rejected") {
+        rejects(json_with_pto_fields(R"(, "out_inertia_kgm2": -0.01)"), "vehicle_pto_inertia_neg",
+                "pto 'out_inertia_kgm2' must be >= 0");
+    }
+    SECTION("disengaged_brake_time_s <= 0 is rejected") {
+        rejects(json_with_pto_fields(R"(, "disengaged_brake_time_s": 0.0)"), "vehicle_pto_brake_time_zero",
+                "pto 'disengaged_brake_time_s' must be > 0");
+    }
+    SECTION("empty channel is rejected") {
+        rejects(json_with_pto_fields(R"(, "channel": "")"), "vehicle_pto_channel_empty", "pto 'channel' must be non-empty");
+    }
+    SECTION("empty speed_channel is rejected") {
+        rejects(json_with_pto_fields(R"(, "speed_channel": "")"), "vehicle_pto_speed_channel_empty",
+                "pto 'speed_channel' must be non-empty");
+    }
+    SECTION("a second pto component is rejected at load time") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "pto",  "type": "pto", "ratios": { "540": 3.61 }, "capacity_nm": 500.0 },
+      { "id": "pto2", "type": "pto", "ratios": { "540": 3.61 }, "capacity_nm": 500.0 }
+    ],
+    "shafts": [ { "ports": ["pto.in", "wheel:FL"] }, { "ports": ["pto2.in", "wheel:FR"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pto_duplicate", "more than one pto component");
+    }
+}
+
+// PHYS-033 P4 I4 C11: the load_dyno component - a test/bench-only load
+// (brake/viscous/quadratic) on port "shaft". No shipped vehicle carries one
+// (see CLAUDE.md's "Drivetrain" section), so every fixture here builds its
+// own minimal standalone powertrain block, same pattern as pto above -
+// "shaft" wired to a wheel (load_dyno's own port gets NO connectivity
+// exemption, unlike pto's "out": core/src/drivetrain/powertrain.cpp's own
+// comment on the point). Any number of load_dyno components is allowed (no
+// "at most one" rule, unlike pto/park_lock).
+TEST_CASE("load_vehicle_json validates load_dyno fields (I4 C11)", "[unit][vehicle][io][drivetrain]") {
+    using Catch::Matchers::ContainsSubstring;
+    auto json_with_dyno_fields = [](const std::string& extra) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [
+      { "id": "dyno", "type": "load_dyno")") +
+               extra + R"( }
+    ],
+    "shafts": [
+      { "ports": ["dyno.shaft", "wheel:FL"] }
+    ]
+  }
+})";
+    };
+    auto only_dyno = [](const vehicle::VehicleDesc& d) -> const drivetrain::LoadDynoDesc& {
+        REQUIRE(d.powertrain.components.size() == 1);
+        const auto* dyno = std::get_if<drivetrain::LoadDynoDesc>(&d.powertrain.components[0].params);
+        REQUIRE(dyno != nullptr);
+        return *dyno;
+    };
+    auto rejects = [](const std::string& text, const char* tag, const std::string& needle) {
+        TempJsonFile f(text, tag);
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring(needle));
+    };
+
+    SECTION("mode defaults to \"brake\", and torque_nm/inertia_kgm2 round-trip") {
+        TempJsonFile f(json_with_dyno_fields(R"(, "torque_nm": 120.0, "inertia_kgm2": 0.03)"), "vehicle_dyno_brake_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::LoadDynoDesc& dyno = only_dyno(d);
+        CHECK(dyno.mode == drivetrain::LoadDynoMode::Brake);
+        CHECK(dyno.torque_nm == 120.0);
+        CHECK(dyno.inertia_kgm2 == 0.03);
+        CHECK(dyno.scale_channel.empty()); // default: no channel -> fixed scale 1.0
+    }
+    SECTION("viscous mode round-trips") {
+        TempJsonFile f(json_with_dyno_fields(R"(, "mode": "viscous", "viscous_nm_s_rad": 5.0)"), "vehicle_dyno_viscous_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::LoadDynoDesc& dyno = only_dyno(d);
+        CHECK(dyno.mode == drivetrain::LoadDynoMode::Viscous);
+        CHECK(dyno.viscous_nm_s_rad == 5.0);
+    }
+    SECTION("quadratic mode round-trips, and scale_channel may be set") {
+        TempJsonFile f(json_with_dyno_fields(R"(, "mode": "quadratic", "quadratic_nm_s2_rad2": 0.2, "scale_channel": "load")"),
+                       "vehicle_dyno_quadratic_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::LoadDynoDesc& dyno = only_dyno(d);
+        CHECK(dyno.mode == drivetrain::LoadDynoMode::Quadratic);
+        CHECK(dyno.quadratic_nm_s2_rad2 == 0.2);
+        CHECK(dyno.scale_channel == "load");
+    }
+    SECTION("an invalid mode string is rejected") {
+        rejects(json_with_dyno_fields(R"(, "mode": "motor")"), "vehicle_dyno_bad_mode",
+                "load_dyno 'mode' must be \"brake\", \"viscous\" or \"quadratic\"");
+    }
+    SECTION("brake mode requires torque_nm > 0") {
+        rejects(json_with_dyno_fields(""), "vehicle_dyno_brake_no_torque",
+                "load_dyno 'torque_nm' must be > 0 for mode \"brake\"");
+        rejects(json_with_dyno_fields(R"(, "torque_nm": 0.0)"), "vehicle_dyno_brake_torque_zero",
+                "load_dyno 'torque_nm' must be > 0 for mode \"brake\"");
+    }
+    SECTION("torque_nm is only valid for mode \"brake\"") {
+        rejects(json_with_dyno_fields(R"(, "mode": "viscous", "viscous_nm_s_rad": 5.0, "torque_nm": 10.0)"),
+                "vehicle_dyno_torque_wrong_mode", "load_dyno 'torque_nm' is only valid for mode \"brake\"");
+    }
+    SECTION("viscous mode requires viscous_nm_s_rad > 0") {
+        rejects(json_with_dyno_fields(R"(, "mode": "viscous")"), "vehicle_dyno_viscous_missing",
+                "load_dyno 'viscous_nm_s_rad' must be > 0 for mode \"viscous\"");
+        rejects(json_with_dyno_fields(R"(, "mode": "viscous", "viscous_nm_s_rad": 0.0)"), "vehicle_dyno_viscous_zero",
+                "load_dyno 'viscous_nm_s_rad' must be > 0 for mode \"viscous\"");
+    }
+    SECTION("viscous_nm_s_rad is only valid for mode \"viscous\"") {
+        rejects(json_with_dyno_fields(R"(, "torque_nm": 10.0, "viscous_nm_s_rad": 5.0)"), "vehicle_dyno_viscous_wrong_mode",
+                "load_dyno 'viscous_nm_s_rad' is only valid for mode \"viscous\"");
+    }
+    SECTION("quadratic mode requires quadratic_nm_s2_rad2 > 0") {
+        rejects(json_with_dyno_fields(R"(, "mode": "quadratic")"), "vehicle_dyno_quadratic_missing",
+                "load_dyno 'quadratic_nm_s2_rad2' must be > 0 for mode \"quadratic\"");
+        rejects(json_with_dyno_fields(R"(, "mode": "quadratic", "quadratic_nm_s2_rad2": 0.0)"), "vehicle_dyno_quadratic_zero",
+                "load_dyno 'quadratic_nm_s2_rad2' must be > 0 for mode \"quadratic\"");
+    }
+    SECTION("quadratic_nm_s2_rad2 is only valid for mode \"quadratic\"") {
+        rejects(json_with_dyno_fields(R"(, "torque_nm": 10.0, "quadratic_nm_s2_rad2": 0.2)"), "vehicle_dyno_quadratic_wrong_mode",
+                "load_dyno 'quadratic_nm_s2_rad2' is only valid for mode \"quadratic\"");
+    }
+    SECTION("inertia_kgm2 < 0 is rejected") {
+        rejects(json_with_dyno_fields(R"(, "torque_nm": 10.0, "inertia_kgm2": -0.01)"), "vehicle_dyno_inertia_neg",
+                "load_dyno 'inertia_kgm2' must be >= 0");
+    }
+    SECTION("more than one load_dyno component is allowed") {
+        std::string ok = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "dyno1", "type": "load_dyno", "torque_nm": 10.0 },
+      { "id": "dyno2", "type": "load_dyno", "mode": "viscous", "viscous_nm_s_rad": 5.0 }
+    ],
+    "shafts": [ { "ports": ["dyno1.shaft", "wheel:FL"] }, { "ports": ["dyno2.shaft", "wheel:FR"] } ]
+  }
+})";
+        TempJsonFile f(ok, "vehicle_dyno_multiple_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        REQUIRE(d.powertrain.components.size() == 2);
+    }
+}
+
 // --- PHYS-033 P4 I3 plan section 9.2 ----------------------------------------
 
 namespace {
@@ -910,9 +1214,10 @@ TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehi
         CHECK(v.controllers.size() == 1);
         // engine, clutch, gearbox, transfer (MFWD transfer_case, PHYS-033 P4
         // I4 C9), diff (rear), front_diff, park (park_lock, PHYS-033 P4
-        // I4 C10) - up from 4 once the transfer case, front axle
-        // differential and park lock were added.
-        REQUIRE(v.powertrain.components.size() == 7);
+        // I4 C10), pto (power take-off, PHYS-033 P4 I4 C11) - up from 4 once
+        // the transfer case, front axle differential, park lock and PTO were
+        // added.
+        REQUIRE(v.powertrain.components.size() == 8);
         const auto* gearbox = std::get_if<drivetrain::GearboxDesc>(&v.powertrain.components[2].params);
         REQUIRE(gearbox != nullptr);
         CHECK(gearbox->forward_ratios.size() == 12);
@@ -935,6 +1240,16 @@ TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehi
         CHECK(park->static_factor == Catch::Approx(1.0));
         CHECK(park->max_engage_speed_rad_s == Catch::Approx(5.0));
         CHECK(park->channel == "park_lock");
+        const auto* pto = std::get_if<drivetrain::PtoDesc>(&v.powertrain.components[7].params);
+        REQUIRE(pto != nullptr);
+        CHECK(pto->has_540);
+        CHECK(pto->ratio_540 == Catch::Approx(3.61));
+        CHECK(pto->has_1000);
+        CHECK(pto->ratio_1000 == Catch::Approx(1.95));
+        CHECK(pto->capacity_nm == Catch::Approx(700.0));
+        CHECK(pto->efficiency == Catch::Approx(0.96));
+        CHECK(pto->channel == "pto");
+        CHECK(pto->speed_channel == "pto_speed");
     }
 }
 
