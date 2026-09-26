@@ -14,6 +14,7 @@ not what the example files under `data/` happen to contain. The loaders are:
 | tyre | `core/src/io/vehicle_io.cpp` (`load_tyre_json`, `read_tyre_object`) | `ps/vehicle/tyre_desc.h` (`TyreDesc`) |
 | surfaces | `core/src/io/surface_table.cpp` (`SurfaceTable::SurfaceTable`) | `ps/io/surface_table.h` |
 | scenario | `core/src/io/scenario.cpp` (`load_scenario`, `build_scenario`) | `ps/io/scenario.h` |
+| fuel | `core/src/io/fuel_io.cpp` (`load_fuel_json`) | `ps/drivetrain/fuel_desc.h` (`FuelDesc`) |
 
 The powertrain **graph itself** (which ports may connect, what gets
 rejected) is additionally validated by `core/src/drivetrain/powertrain.cpp`
@@ -35,6 +36,7 @@ the end of this file under "Discrepancies found".
 - [`tyre.md`](tyre.md) — `physics_sim.tyre/1`, `data/tyres/*.json` (also embeddable inline in a wheel, or a `.tir` file).
 - [`surfaces.md`](surfaces.md) — `physics_sim.surfaces/1`, `data/surfaces/surfaces.json`.
 - [`scenario.md`](scenario.md) — `physics_sim.scenario/1`, `data/scenarios/*.json`.
+- [`fuel.md`](fuel.md) — `physics_sim.fuel/1`, `data/fuels/*.json`. Lower heating value, stoichiometric AFR, density — cited fuel properties, no combustion model.
 
 ## Format versioning
 
@@ -71,10 +73,11 @@ data sheets are written; the field name always says `_rpm`). Angles are
 radians; wherever a data file's comment gives a value "in degrees" for
 readability, the JSON number itself is still radians.
 
-Every vehicle, tyre, engine and gearbox file requires a `"source"` string
-(vehicle/tyre: enforced by the loader, `"'source' is required"`; engine/
-gearbox: not currently loader-enforced, see "Discrepancies found" below, but
-every shipped file has one and new ones should too). The project convention
+Every vehicle, tyre, fuel, engine and gearbox file requires a `"source"`
+string (vehicle/tyre/fuel: enforced by the loader, `"'source' is required"`;
+engine/gearbox: not currently loader-enforced, see "Discrepancies found"
+below, but every shipped file has one and new ones should too). The project
+convention
 (PLAN.md section 8, restated in every `source` field currently shipped) is:
 
 - Cite a **class** of real hardware ("a plausible 2.0 L naturally aspirated
