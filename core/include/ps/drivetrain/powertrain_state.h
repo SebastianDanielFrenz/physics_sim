@@ -84,6 +84,13 @@ struct PowertrainSnapshot {
     // PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): the park pawl's
     // own engaged state (1 = holding, 0 = released or no park_lock at all).
     real park_lock_engaged = 0.0;
+    // PHYS-033 P4 I4 C11 (plan section 3.5): the pto's own engagement (e in
+    // [0,1]), current mode as a real (540.0 or 1000.0), and out-node speed
+    // in rpm - all 0 for every vehicle with no pto (car_sedan.json,
+    // tractor.json pre-C11).
+    real pto_engagement = 0.0;
+    real pto_mode = 0.0;
+    real pto_rpm = 0.0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled
@@ -114,6 +121,11 @@ struct PowertrainDebug {
     // PHYS-033 P4 I4 C10: the park pawl's own friction row torque, 0 for
     // every vehicle with no park_lock.
     real park_lock_torque = 0.0;
+    // PHYS-033 P4 I4 C11: the pto's own friction row torque/slip, 0 for
+    // every vehicle with no pto. dyno_torque is the first load_dyno
+    // component's own applied torque (test/bench only, 0 with none).
+    real pto_clutch_torque = 0.0, pto_clutch_slip = 0.0;
+    real dyno_torque = 0.0;
 };
 
 } // namespace ps::drivetrain

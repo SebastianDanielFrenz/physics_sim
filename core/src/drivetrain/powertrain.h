@@ -219,6 +219,23 @@ public:
     [[nodiscard]] real park_lock_engaged() const { return (park_lock_ && park_lock_->engaged()) ? real(1.0) : real(0.0); }
     [[nodiscard]] real park_lock_torque() const { return park_lock_ ? network_.row_lambda(park_lock_row_) : real(0.0); }
 
+    // PHYS-033 P4 I4 C11 (plan section 3.5): power take-off. nullptr/0 for
+    // every vehicle without one - same nullable-pointer pattern as
+    // transfer_case_/park_lock_ above.
+    [[nodiscard]] bool has_pto() const { return pto_ != nullptr; }
+    [[nodiscard]] real pto_engagement() const { return pto_ ? pto_->engagement() : real(0.0); }
+    [[nodiscard]] real pto_mode() const { return pto_ ? (pto_->mode_1000() ? real(1000.0) : real(540.0)) : real(0.0); }
+    [[nodiscard]] real pto_rpm() const {
+        if (!pto_) return real(0.0);
+        constexpr real kPi = 3.14159265358979323846;
+        return std::abs(network_.omega(pto_->out_node())) * real(60.0) / (real(2.0) * kPi);
+    }
+    [[nodiscard]] real pto_clutch_torque() const { return pto_ ? network_.row_lambda(pto_row_) : real(0.0); }
+    [[nodiscard]] real pto_clutch_slip() const { return pto_ ? network_.row_velocity(pto_row_) : real(0.0); }
+    // The FIRST load_dyno in component order (test/bench only - no shipped
+    // vehicle has one), mirrors diff_mesh_torque_debug()'s own "first" rule.
+    [[nodiscard]] real dyno_torque() const { return load_dynos_.empty() ? real(0.0) : load_dynos_.front()->torque(); }
+
     [[nodiscard]] bool has_tcu() const { return tcu_ != nullptr; }
     // Only meaningful when has_tcu() - PowertrainSnapshot's shift_phase
     // derivation (plan section 6.5.2's ClutchOpening/ClutchClosing bracket
@@ -445,6 +462,17 @@ private:
     // non-owning-alias-into-components_ pattern as transfer_case_ above. ---
     ParkLock* park_lock_ = nullptr;
     FrictionRowId park_lock_row_{};
+
+    // --- pto (I4 C11, plan section 3.5): nullptr/default FrictionRowId if
+    // this vehicle's powertrain has no pto component. Same non-owning-alias-
+    // into-components_ pattern as transfer_case_/park_lock_ above. ---
+    Pto* pto_ = nullptr;
+    FrictionRowId pto_row_{};
+
+    // --- load_dyno(s) (I4 C11, plan section 3.5, test/bench only): every
+    // load_dyno component, component order. Empty for every shipped vehicle
+    // (car_sedan.json, tractor.json) - only a test rig adds one in code. ---
+    std::vector<LoadDyno*> load_dynos_;
 
     // --- TCU (nullptr if this vehicle has no manual_tcu controller) -------
     std::unique_ptr<ManualTcu> tcu_;

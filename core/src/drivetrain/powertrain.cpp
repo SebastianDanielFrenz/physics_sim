@@ -148,6 +148,18 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             // (default 0 = released) - tractor.json's channel list gains
             // "park_lock"; car_sedan.json's stays unchanged (no park_lock).
             add(ChannelDecl{pl->channel, real(0.0)});
+        } else if (const auto* pto = std::get_if<PtoDesc>(&c.params)) {
+            // I4 C11 (plan section 3.5): the pto's own engagement channel
+            // (default 0 = disengaged) and mode-select channel (default 540
+            // rpm) - tractor.json's channel list gains "pto"/"pto_speed";
+            // car_sedan.json's stays unchanged (no pto).
+            add(ChannelDecl{pto->channel, real(0.0)});
+            add(ChannelDecl{pto->speed_channel, real(540.0)});
+        } else if (const auto* dyno = std::get_if<LoadDynoDesc>(&c.params)) {
+            // I4 C11: a load_dyno's scale channel is OPTIONAL (empty name =
+            // fixed scale 1, no channel declared at all) - test/bench only,
+            // no shipped vehicle has one.
+            if (!dyno->scale_channel.empty()) add(ChannelDecl{dyno->scale_channel, real(1.0)});
         }
     }
     for (const ChannelDecl& decl : test_only_extra) add(decl);
@@ -187,6 +199,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     int engine_component_index = -1, clutch_component_index = -1, gearbox_component_index = -1;
     int transfer_case_component_index = -1; // I4 C9
     int park_lock_component_index = -1;     // I4 C10
+    int pto_component_index = -1;           // I4 C11
+    std::string pto_out_port_key;           // I4 C11: exempt from the "not connected" check below
     for (std::size_t ci = 0; ci < pt.components.size(); ++ci) {
         const ComponentDesc& c = pt.components[ci];
         if (c.id.empty()) throw std::runtime_error("vehicle '" + vehicle_name + "': a powertrain component has an empty id");
@@ -247,6 +261,29 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             // (it never carries a physical inertia beyond whatever port it
             // shares its shaft with).
             add_port(component_port_key(c.id, "shaft"), real(0.0), Vec3::zero());
+        } else if (const auto* pto = std::get_if<PtoDesc>(&c.params)) {
+            // I4 C11 (plan section 3.5): at most one pto per vehicle - same
+            // reasoning as transfer_case/park_lock above (no per-instance
+            // channel/hash disambiguation for a second one). `in` carries no
+            // inertia of its own (a pure connection point on the crank
+            // shaft, like a differential's left/right ports); `out` carries
+            // `out_inertia_kgm2` and is EXEMPT from the "not connected by
+            // any shaft" check below - it may stand alone (disengaged stub
+            // brake only) or be shafted to an external load (e.g. a test's
+            // load_dyno).
+            if (pto_component_index >= 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': more than one pto component - I4 C11 supports at most one");
+            }
+            pto_component_index = static_cast<int>(ci);
+            add_port(component_port_key(c.id, "in"), real(0.0), pto->axis_local);
+            const int pto_out_idx = add_port(component_port_key(c.id, "out"), pto->out_inertia_kgm2, pto->axis_local);
+            pto_out_port_key = port_key[static_cast<std::size_t>(pto_out_idx)];
+        } else if (const auto* dyno = std::get_if<LoadDynoDesc>(&c.params)) {
+            // I4 C11: test/bench only, any number per vehicle. Its `shaft`
+            // port gets NO connectivity exemption (unlike pto.out) - a
+            // load_dyno with nothing wired to it would be pointless and is
+            // almost certainly a test typo.
+            add_port(component_port_key(c.id, "shaft"), dyno->inertia_kgm2, dyno->axis_local);
         }
     }
 
@@ -294,7 +331,10 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
 
     for (int p = 0; p < port_count; ++p) {
         const bool is_wheel_port = port_key[static_cast<std::size_t>(p)].rfind("wheel:", 0) == 0;
-        if (!is_wheel_port && !port_in_any_shaft[static_cast<std::size_t>(p)]) {
+        // I4 C11 (plan section 3.5): the pto's own `out` port is exempt - it
+        // may stand alone (disengaged stub brake only, no external load).
+        const bool is_pto_out_port = !pto_out_port_key.empty() && port_key[static_cast<std::size_t>(p)] == pto_out_port_key;
+        if (!is_wheel_port && !is_pto_out_port && !port_in_any_shaft[static_cast<std::size_t>(p)]) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain port '" + port_key[static_cast<std::size_t>(p)] +
                                       "' is not connected by any shaft");
         }
@@ -683,6 +723,28 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         const std::string& plid = pt.components[static_cast<std::size_t>(park_lock_component_index)].id;
         const NodeId pl_shaft_n = node_for_key(component_port_key(plid, "shaft"));
         park_lock_row_ = builder.add_friction_row(pl_shaft_n, kGround);
+    }
+    // I4 C11 (plan section 3.5): the pto's own friction row (engine/crank-
+    // side `in`, PTO-side `out`), appended AFTER park_lock above so no
+    // pre-existing vehicle's friction-row ids shift (car_sedan.json has no
+    // pto at all; tractor.json gains this row at I4 C11).
+    if (pto_component_index >= 0) {
+        const std::string& pid = pt.components[static_cast<std::size_t>(pto_component_index)].id;
+        const NodeId pto_in_n = node_for_key(component_port_key(pid, "in"));
+        const NodeId pto_out_n = node_for_key(component_port_key(pid, "out"));
+        pto_row_ = builder.add_friction_row(pto_in_n, pto_out_n);
+    }
+    // I4 C11: each load_dyno component in Brake mode gets its own friction
+    // row to GROUND, appended in component order right after the pto row
+    // above - test/bench only, so this never fires for any shipped vehicle
+    // as of I4 C11 (a test rig adds a load_dyno to a mutated VehicleDesc in
+    // code, never via a data file).
+    std::unordered_map<std::string, int> dyno_brake_row_of_id; // component id -> FrictionRowId::index, Brake mode only
+    for (const ComponentDesc& c : pt.components) {
+        const auto* dyno = std::get_if<LoadDynoDesc>(&c.params);
+        if (dyno == nullptr || dyno->mode != LoadDynoMode::Brake) continue;
+        const NodeId shaft_n = node_for_key(component_port_key(c.id, "shaft"));
+        dyno_brake_row_of_id[c.id] = builder.add_friction_row(shaft_n, kGround).index;
     }
 
     // --- Phase H: brake friction rows --------------------------------------
@@ -1077,6 +1139,45 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             auto park = std::make_unique<ParkLock>(node_for_key(component_port_key(c.id, "shaft")), park_lock_row_, *pl, channel_slot);
             park_lock_ = park.get(); // non-owning alias, mirrors transfer_case_'s pattern
             components_.push_back(std::move(park));
+        } else if (const auto* pto = std::get_if<PtoDesc>(&c.params)) {
+            // I4 C11: channel_slot/speed_channel_slot resolved the same way
+            // as transfer_case/park_lock above - pto_row_ was already
+            // assigned in Phase G.
+            const std::vector<ChannelDecl> pto_decls = declare_control_channels(pt);
+            int channel_slot = -1, speed_channel_slot = -1;
+            for (std::size_t i = 0; i < pto_decls.size(); ++i) {
+                if (pto_decls[i].name == pto->channel) channel_slot = static_cast<int>(i);
+                if (pto_decls[i].name == pto->speed_channel) speed_channel_slot = static_cast<int>(i);
+            }
+            const NodeId pto_in_n = node_for_key(component_port_key(c.id, "in"));
+            const NodeId pto_out_n = node_for_key(component_port_key(c.id, "out"));
+            auto pto_comp = std::make_unique<Pto>(pto_in_n, pto_out_n, pto_row_, *pto, channel_slot, speed_channel_slot,
+                                                   network_.node_inertia(pto_out_n));
+            pto_ = pto_comp.get(); // non-owning alias, mirrors transfer_case_/park_lock_'s pattern
+            components_.push_back(std::move(pto_comp));
+        } else if (const auto* dyno = std::get_if<LoadDynoDesc>(&c.params)) {
+            // I4 C11: test/bench only. scale_channel_slot resolved the same
+            // way, but only when the desc actually names a channel (empty =
+            // fixed scale 1, no channel declared at all - declare_control_
+            // channels never emits one for this dyno in that case).
+            int scale_channel_slot = -1;
+            if (!dyno->scale_channel.empty()) {
+                const std::vector<ChannelDecl> dyno_decls = declare_control_channels(pt);
+                for (std::size_t i = 0; i < dyno_decls.size(); ++i) {
+                    if (dyno_decls[i].name == dyno->scale_channel) {
+                        scale_channel_slot = static_cast<int>(i);
+                        break;
+                    }
+                }
+            }
+            const NodeId shaft_n = node_for_key(component_port_key(c.id, "shaft"));
+            FrictionRowId row{};
+            if (dyno->mode == LoadDynoMode::Brake) {
+                row = FrictionRowId{static_cast<std::uint16_t>(dyno_brake_row_of_id.at(c.id))};
+            }
+            auto dyno_comp = std::make_unique<LoadDyno>(shaft_n, row, *dyno, scale_channel_slot);
+            load_dynos_.push_back(dyno_comp.get());
+            components_.push_back(std::move(dyno_comp));
         }
     }
     // Reconstruction modes resolved in Phase F (diffs_ is in the same
@@ -1368,7 +1469,8 @@ void Powertrain::end_tick() {
                              (L.clutch_loss - L0.clutch_loss) + (L.synchro_loss - L0.synchro_loss) +
                              (L.engine_friction_loss - L0.engine_friction_loss) + (L.engagement_loss - L0.engagement_loss) +
                              (L.integrator_loss - L0.integrator_loss) + (L.diff_loss - L0.diff_loss) +
-                             (L.awd_clutch_loss - L0.awd_clutch_loss);
+                             (L.awd_clutch_loss - L0.awd_clutch_loss) + (L.pto_clutch_loss - L0.pto_clutch_loss) +
+                             (L.external_absorbed - L0.external_absorbed);
 }
 
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
@@ -1464,6 +1566,20 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         network_.set_omega(engine_crank_, engine_omega_target);
         engine_->reset(opts.engine_state == EngineState::Off ? EngineTorqueMap::EngineState::Off
                                                                : EngineTorqueMap::EngineState::Running);
+    }
+
+    // I4 C11 (plan section 3.5): pto.out - "stuck/e==1: crank/ratio; else
+    // leave it" (spec's own wording; pto.in is used here rather than
+    // engine_crank_ directly - they are the SAME node whenever the pto sits
+    // on the crank shaft as the spec intends, and reading pto.in's own
+    // omega keeps this correct without assuming an engine exists at all).
+    // Every other node this function touches is set unconditionally;
+    // pto.out is deliberately left untouched in the "else" branch, so a
+    // disengaged pto's out node simply retains whatever omega it already
+    // had across the reset (its own disengaged stub brake decays it on the
+    // very next substep regardless).
+    if (pto_ && (network_.row_stuck(pto_row_) || pto_->engagement() >= real(1.0))) {
+        network_.set_omega(pto_->out_node(), network_.omega(pto_->in_node()) / pto_->current_ratio());
     }
 
     // 6. Clutch.out (== gearbox.in, shaft-merged): in gear, ALWAYS the

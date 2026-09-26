@@ -42,6 +42,19 @@ struct PowertrainEnergy {
     // >= 0. 0 for every vehicle with no transfer case (car_sedan.json and
     // every other pre-C9 file) - hash-neutral, same as diff_loss et al. above.
     real awd_clutch_loss = 0.0;
+
+    // PHYS-033 P4 I4 C11 (plan section 3.5): the PTO's own friction row
+    // dissipation - both its clutch slip (-h*v*lambda) and the disengaged-
+    // stub-brake viscous term (-h*omega'*tau_stub) - per substep, cumulative,
+    // >= 0. 0 for every vehicle with no pto (car_sedan.json, tractor.json
+    // pre-C11) - hash-neutral, same as diff_loss/awd_clutch_loss above.
+    real pto_clutch_loss = 0.0;
+    // PHYS-033 P4 I4 C11: mechanical work absorbed by a test/bench load_dyno
+    // component (brake: -h*v*lambda; viscous/quadratic: -h*tau_applied*
+    // omega'), per substep, cumulative, >= 0. No shipped vehicle carries a
+    // load_dyno, so this stays exactly 0 everywhere except a test that adds
+    // one in code - hash-neutral (load_dyno itself is stateless, not hashed).
+    real external_absorbed = 0.0;
 };
 
 } // namespace ps::drivetrain
