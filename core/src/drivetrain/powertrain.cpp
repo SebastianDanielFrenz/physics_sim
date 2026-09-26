@@ -1118,7 +1118,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             throttle_kind = tcd.kind;
             throttle_has_curve = tcd.has_curve;
             throttle_curve = tcd.curve;
+            // PHYS-033 P4 I7a C3 review: an explicit stage that does not name
+            // its own hand_lever_channel still falls back to a governed
+            // engine's governor.channel (the loader rejects any OTHER
+            // explicit channel on a governed engine - vehicle_io.cpp - so
+            // this is the only case left: no channel named at all). Without
+            // this, naming an explicit electronic/mechanical stage on the
+            // tractor's governed diesel would silently drop its hand lever.
             hand_lever_channel = tcd.hand_lever_channel;
+            if (hand_lever_channel.empty() && e.has_governor) {
+                hand_lever_channel = e.governor.channel;
+            }
         } else if (e.has_governor) {
             hand_lever_channel = e.governor.channel;
         }

@@ -310,6 +310,29 @@ void require_ascending(const Curve1D& c, const std::string& what) {
     }
 }
 
+// PHYS-033 P4 I7a C3 review item 4: a pedal_map/linkage_curve must cover the
+// WHOLE [0, 1] pedal domain exactly (no clamped extrapolation past an
+// interior endpoint - Curve1D's own edge-clamp semantics would otherwise let
+// x.front() > 0 or x.back() < 1 silently flatten part of the pedal travel)
+// and must be non-decreasing (a throttle command must not go DOWN as the
+// pedal goes further down) - each with its own message. Assumes
+// require_ascending(c, ...) already ran (strictly ascending x, non-empty).
+// y within [0, 1] is checked separately at each call site (pre-existing).
+void require_unit_domain_covered_nondecreasing(const Curve1D& c, const std::string& what) {
+    if (c.x.front() != real(0.0)) {
+        throw std::runtime_error(what + ": x.front() must be exactly 0 (the curve must cover the whole pedal range)");
+    }
+    if (c.x.back() != real(1.0)) {
+        throw std::runtime_error(what + ": x.back() must be exactly 1 (the curve must cover the whole pedal range)");
+    }
+    for (real y : c.y) {
+        if (y < real(0.0) || y > real(1.0)) throw std::runtime_error(what + ": y must be within [0, 1]");
+    }
+    for (std::size_t i = 1; i < c.y.size(); ++i) {
+        if (c.y[i] < c.y[i - 1]) throw std::runtime_error(what + ": y must be non-decreasing");
+    }
+}
+
 // PHYS-033 P4 I7a C3 (plan section 3.4.5): an engine's effective throttle
 // kind is either an explicit throttle_control component naming it (that
 // component's own 'kind' wins), or - with none - the engine's own
@@ -1011,17 +1034,12 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                         throw std::runtime_error(ctx + ": throttle_control 'engine' (a component id reference) is required");
                     }
                     tcd.engine = cj.at("engine").get<std::string>();
-                    // component_ids only contains ids seen UP TO AND INCLUDING
-                    // this one - a throttle_control naming an engine declared
-                    // LATER in the components array would wrongly fail this
-                    // check, but every shipped vehicle file declares its
-                    // engine first, and Powertrain's constructor does the
-                    // real existence+type cross-check regardless (it needs
-                    // engine_component_index anyway) - this is a best-effort
-                    // early diagnostic for the common case, not the only gate.
-                    if (std::find(component_ids.begin(), component_ids.end(), tcd.engine) == component_ids.end()) {
-                        throw std::runtime_error(ctx + ": throttle_control references unknown component '" + tcd.engine + "'");
-                    }
+                    // Existence, type (must be a torque_map engine) and
+                    // kind-vs-throttle_input agreement are all checked
+                    // ORDER-INDEPENDENTLY after the full components array has
+                    // been parsed (below, near 'v.powertrain = p;') - a
+                    // throttle_control naming an engine declared LATER in the
+                    // array must still load (PHYS-033 P4 I7a C3 review item 5).
                     // "electronic" | "mechanical_linkage" - deliberately NOT
                     // the same string set as TorqueMapEngineDesc::
                     // throttle_input's "electronic"|"mechanical" (see this
@@ -1050,12 +1068,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                         tcd.has_curve = true;
                         tcd.curve = read_curve(cj.at("pedal_map"));
                         require_ascending(tcd.curve, ctx + ".pedal_map");
-                        if (tcd.curve.x.front() < real(0.0) || tcd.curve.x.back() > real(1.0)) {
-                            throw std::runtime_error(ctx + ".pedal_map: x must be within [0, 1]");
-                        }
-                        for (const real y : tcd.curve.y) {
-                            if (y < real(0.0) || y > real(1.0)) throw std::runtime_error(ctx + ".pedal_map: y must be within [0, 1]");
-                        }
+                        require_unit_domain_covered_nondecreasing(tcd.curve, ctx + ".pedal_map");
                     }
                     if (cj.contains("linkage_curve")) {
                         if (tcd.kind != ps::drivetrain::ThrottleInput::Mechanical) {
@@ -1065,17 +1078,75 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                         tcd.has_curve = true;
                         tcd.curve = read_curve(cj.at("linkage_curve"));
                         require_ascending(tcd.curve, ctx + ".linkage_curve");
-                        if (tcd.curve.x.front() < real(0.0) || tcd.curve.x.back() > real(1.0)) {
-                            throw std::runtime_error(ctx + ".linkage_curve: x must be within [0, 1]");
-                        }
-                        for (const real y : tcd.curve.y) {
-                            if (y < real(0.0) || y > real(1.0)) throw std::runtime_error(ctx + ".linkage_curve: y must be within [0, 1]");
-                        }
+                        require_unit_domain_covered_nondecreasing(tcd.curve, ctx + ".linkage_curve");
                     }
                     tcd.hand_lever_channel = cj.value("hand_lever_channel", std::string());
                     p.components.push_back({id, tcd});
                 } else {
                     throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
+                }
+            }
+        }
+
+        // PHYS-033 P4 I7a C3 review items 2/3(b)/5: order-independent
+        // throttle_control cross-checks, run once every component has been
+        // parsed (so a stage listed BEFORE its engine in the array still
+        // loads - the ordering-dependent early check this replaced is gone,
+        // see the throttle_control parser above).
+        {
+            const ps::drivetrain::ThrottleControlDesc* tcd_ptr = nullptr;
+            std::string tcd_id;
+            for (const auto& c : p.components) {
+                if (const auto* t = std::get_if<ps::drivetrain::ThrottleControlDesc>(&c.params)) {
+                    tcd_ptr = t;
+                    tcd_id = c.id;
+                }
+            }
+            if (tcd_ptr != nullptr) {
+                const std::string tctx = "vehicle '" + v.name + "': powertrain.components['" + tcd_id + "']";
+                const ps::drivetrain::TorqueMapEngineDesc* engine_ptr = nullptr;
+                for (const auto& c : p.components) {
+                    if (c.id == tcd_ptr->engine) {
+                        engine_ptr = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params);
+                        break;
+                    }
+                }
+                // Item 5: the ref must name an actual torque_map engine
+                // component - covers both "unknown id" and "a vehicle with
+                // no engine component at all" (engine_ptr stays nullptr
+                // either way), and "id exists but is some other type".
+                if (engine_ptr == nullptr) {
+                    throw std::runtime_error(tctx + ": 'engine' (\"" + tcd_ptr->engine +
+                                              "\") must name a \"torque_map\" engine component in this vehicle's powertrain");
+                }
+                // Item 2: the stage's own 'kind' must agree with the engine's
+                // 'throttle_input' - both directions (an implicit stage
+                // always agrees by construction, since it just copies
+                // throttle_input; only an EXPLICIT stage can disagree).
+                if (tcd_ptr->kind != engine_ptr->throttle_input) {
+                    const char* stage_kind = tcd_ptr->kind == ps::drivetrain::ThrottleInput::Electronic ? "electronic" : "mechanical_linkage";
+                    const char* engine_kind = engine_ptr->throttle_input == ps::drivetrain::ThrottleInput::Electronic ? "electronic" : "mechanical";
+                    throw std::runtime_error(tctx + ": 'kind' (\"" + std::string(stage_kind) + "\") does not match engine '" +
+                                              tcd_ptr->engine + "'.throttle_input (\"" + std::string(engine_kind) +
+                                              "\") - an explicit throttle_control component must agree with its engine, "
+                                              "it no longer silently overrides it");
+                }
+                // Item 3(b): an explicit hand_lever_channel on a GOVERNED
+                // engine must either be empty (falls back to
+                // governor.channel, Powertrain Phase K) or equal
+                // governor.channel itself - a different channel would mean
+                // the governor and the throttle stage read two different
+                // hand levers, which makes no physical sense on one engine.
+                // An explicit hand_lever_channel on an UNGOVERNED engine is
+                // always allowed (a hand lever on the same linkage/ECU is
+                // physical) and combines by max() as usual.
+                if (!tcd_ptr->hand_lever_channel.empty() && engine_ptr->has_governor &&
+                    tcd_ptr->hand_lever_channel != engine_ptr->governor.channel) {
+                    throw std::runtime_error(tctx + ": 'hand_lever_channel' (\"" + tcd_ptr->hand_lever_channel +
+                                              "\") differs from engine '" + tcd_ptr->engine + "'.governor.channel (\"" +
+                                              engine_ptr->governor.channel +
+                                              "\") - a governed engine has one hand lever; leave hand_lever_channel "
+                                              "unset to use the governor's own channel, or set it to that same channel");
                 }
             }
         }
@@ -1229,28 +1300,35 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 if (!(md.auto_blip.upshift_torque_ramp_s >= 0.0)) {
                     throw std::runtime_error(ctx + ".auto_blip: upshift_torque_ramp_s must be >= 0");
                 }
-                // PHYS-033 P4 I7a C3 (plan section 3.4.5, "which TCU
-                // intervention lives where"): a mechanical-linkage engine has
-                // no wire back to the pedal, so ManualTcu's blip
-                // (kp_per_rpm) and the post-upshift pedal-ceiling ramp -
-                // both only ever reach the engine as ctx.tcu_throttle_floor/
-                // tcu_throttle_ceiling, which ThrottleStage::evaluate
-                // ignores outright for a Mechanical stage (floor/ceiling are
-                // fixed at 0/1) - cannot be carried. In this codebase both
-                // live behind the SAME auto_blip.enabled/assist.auto_blip
-                // gate as ManualTcu::Outputs::throttle_floor/
-                // throttle_ceiling (manual_tcu.cpp), so enabling auto_blip
-                // at all is rejected outright rather than silently doing
-                // nothing. The upshift ignition cut (auto_blip.upshift_cut)
-                // is UNAFFECTED - TcuRequest::ignition_cut reaches the
-                // engine directly (never through ThrottleCommand) and the
-                // engine applies it the same way regardless of throttle
-                // kind, so it still works on both.
-                if (md.auto_blip.enabled && effective_throttle_kind(p, md.engine) == ps::drivetrain::ThrottleInput::Mechanical) {
-                    throw std::runtime_error(ctx + ".auto_blip: 'enabled' requires an electronic throttle - engine '" + md.engine +
-                                              "' has a mechanical linkage, which cannot carry a blip or a post-shift "
-                                              "pedal-ceiling ramp (only the upshift ignition cut works on both kinds)");
-                }
+            }
+            // PHYS-033 P4 I7a C3 (plan section 3.4.5, "which TCU
+            // intervention lives where"): a mechanical-linkage engine has no
+            // wire back to the pedal, so ManualTcu's blip (kp_per_rpm) and
+            // the post-upshift pedal-ceiling ramp/floor (max_throttle,
+            // upshift_torque_ramp_s) - all three only ever reach the engine
+            // as ctx.tcu_throttle_floor/tcu_throttle_ceiling, which
+            // ThrottleStage::evaluate ignores outright for a Mechanical
+            // stage (floor/ceiling are fixed at 0/1) - cannot be carried.
+            // The check is on the EFFECTIVE VALUES (post-default, whether or
+            // not an 'auto_blip' block was present at all - md.auto_blip is
+            // already default-constructed with kp_per_rpm=0.002,
+            // max_throttle=1.0, upshift_torque_ramp_s=0.10, see
+            // controller_desc.h's AutoBlipDesc), NOT on 'enabled': a
+            // mechanical vehicle with 'enabled: true' but all three zeroed
+            // is perfectly valid (it does nothing, same as if the block were
+            // absent on an electronic engine with those zeroed) and MUST
+            // load. The upshift ignition cut (auto_blip.upshift_cut) is
+            // UNAFFECTED - TcuRequest::ignition_cut reaches the engine
+            // directly (never through ThrottleCommand) and the engine
+            // applies it the same way regardless of throttle kind, so it
+            // still works on both.
+            if (effective_throttle_kind(p, md.engine) == ps::drivetrain::ThrottleInput::Mechanical &&
+                (md.auto_blip.kp_per_rpm > real(0.0) || md.auto_blip.max_throttle > real(0.0) ||
+                 md.auto_blip.upshift_torque_ramp_s > real(0.0))) {
+                throw std::runtime_error(
+                    ctx + ".auto_blip: engine '" + md.engine +
+                    "' has a mechanical throttle - a mechanical throttle cannot open the plate (blip) or close it "
+                    "against the driver (ceiling/ramp); the upshift ignition cut stays available (set those three to 0)");
             }
             if (cj.contains("auto_shift")) {
                 const auto& asj = cj.at("auto_shift");

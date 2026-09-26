@@ -6,36 +6,75 @@
 // (core/src/drivetrain/engine_torque_map.h) are internal, not part of
 // ps_core's public API.
 //
-// P1-P6 below follow the C3 task briefing's own enumeration:
+// P1 and P5 below follow the C3 task briefing's own enumeration and are
+// unchanged from the original commit:
 //   P1 static_assert: ThrottleCommand/Sensors carry no raw pedal field.
-//   P2 white-box: EngineTorqueMap's response is a pure function of
+//   P5 the loader's own throttle_control rejection list (plan section
+//      3.4.5), each pinned to its exact message (the C3 REVIEW's items 2-5
+//      added a further, more complete set of P5 sections to
+//      test_vehicle_io_validation.cpp instead - kind-mismatch both
+//      directions, hand_lever_channel vs. governor.channel, curve endpoint/
+//      monotonicity, engine-ref order-independence and the no-engine
+//      rejection - since that is this project's usual home for
+//      load_vehicle_json rejection tests).
+//
+// The C3 REVIEW (a follow-up after the original commit) requires P2/P3/P4/P6
+// to each be a Powertrain-level (not ThrottleStage-level) test - see the
+// TEST_CASEs below tagged P2/P3/P4/P6 for the real deliverables. The
+// ORIGINAL stage-level P2/P3/P4/P6 white-box cases are kept (the review said
+// "keep or drop... as you like") but retagged S2/S4/S3/S6 so the P-numbered
+// tags refer only to the review's own spec'd tests:
+//   S2 white-box: EngineTorqueMap's response is a pure function of
 //      ThrottleCommand (+ TcuRequest/Sensors), never of anything else that
 //      might smuggle a pedal value through.
-//   P3 ThrottleStage's own output (pedal_map/linkage_curve, hand lever,
+//   S3 ThrottleStage's own output (pedal_map/linkage_curve, hand lever,
 //      floor/ceiling) reaches EngineTorqueMap unchanged.
-//   P4 a mechanical-linkage fixture: linkage_curve applied, floor/ceiling
+//   S4 a mechanical-linkage fixture: linkage_curve applied, floor/ceiling
 //      fixed 0/1 regardless of what the TCU/ctx asks for, upshift ignition
 //      cut still works (it never goes through the throttle path at all).
-//   P5 the loader's own throttle_control rejection list (plan section
-//      3.4.5), each pinned to its exact message.
-//   P6 a tractor-governor-path regression: the ThrottleStage + governed-
+//   S6 a tractor-governor-path regression: the ThrottleStage + governed-
 //      engine composition reproduces the pre-C3 monolithic max(hand,pedal)
 //      formula bit-for-bit.
+//
+// The review's own P2/P3/P4/P6 (Powertrain-level, appended at the end of
+// this file):
+//   P2 car_sedan Powertrain, an explicit electronic stage with a flat
+//      pedal_map plateau: two different pedal values inside the plateau
+//      produce bit-identical PreSolveResult/torque/state hashes.
+//   P3 dyno-held rpm: throttle_eff/engine_torque_demand match the pedal_map-
+//      reshaped command exactly (1e-12).
+//   P4 a mechanical graph-engine fixture (tests/support/): the implicit AND
+//      an explicit mechanical stage both apply the linkage curve, floor/
+//      ceiling reaching the engine are exactly 0/1, and theta_c is 0 during
+//      a real TCU upshift cut.
+//   P6 master-vs-branch: PowertrainDebug/snapshot fields recorded from
+//      master over data/scenarios/vehicle_tractor_i4.json's control events,
+//      compared EXACTLY (==) against this branch.
 
+#include "drivetrain/components.h"
 #include "drivetrain/engine_torque_map.h"
+#include "drivetrain/powertrain.h"
 #include "drivetrain/throttle_stage.h"
 
+#include "ps/io/scenario.h"
+#include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
+#include "ps/vehicle/vehicle_reset.h"
+#include "ps/world/world.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <type_traits>
+#include <variant>
+#include <vector>
 
 using namespace ps;
 using namespace ps::drivetrain;
@@ -147,7 +186,7 @@ ComponentSubstepCtx make_ctx(real throttle, real tcu_floor = 0.0, real tcu_ceili
 // only this class of test) is the one that would catch that specific class
 // of bug. The sabotage was then reverted and the full suite re-confirmed
 // green before this file was committed.
-TEST_CASE("P2: EngineTorqueMap's response is a pure function of ThrottleCommand (white-box)", "[unit][drivetrain][throttle]") {
+TEST_CASE("S2: EngineTorqueMap's response is a pure function of ThrottleCommand (white-box, stage-level)", "[unit][drivetrain][throttle]") {
     EngineTorqueMap eng(make_test_desc());
     const real omega = rpm_to_omega(2500.0); // well above idle_rpm(900): idle PI clamps to 0, no DFCO, no limiter
     TcuRequest tcu;
@@ -217,7 +256,7 @@ TEST_CASE("P2: EngineTorqueMap's response is a pure function of ThrottleCommand 
 }
 
 // --- P3: ThrottleStage's output reaches EngineTorqueMap correctly -----------
-TEST_CASE("P3: ThrottleStage output (curve/hand-lever/floor/ceiling) reaches EngineTorqueMap unchanged",
+TEST_CASE("S3: ThrottleStage output (curve/hand-lever/floor/ceiling) reaches EngineTorqueMap unchanged (stage-level)",
           "[unit][drivetrain][throttle]") {
     const real omega = rpm_to_omega(2500.0); // idle PI inactive, no DFCO/limiter at this test's throttle levels
     TcuRequest tcu;
@@ -292,7 +331,7 @@ TEST_CASE("P3: ThrottleStage output (curve/hand-lever/floor/ceiling) reaches Eng
 }
 
 // --- P4: a mechanical-linkage engine fixture --------------------------------
-TEST_CASE("P4: mechanical-linkage stage - linkage_curve applied, floor/ceiling fixed 0/1, upshift cut still works",
+TEST_CASE("S4: mechanical-linkage stage - linkage_curve applied, floor/ceiling fixed 0/1, upshift cut still works (stage-level)",
           "[unit][drivetrain][throttle]") {
     const real omega = rpm_to_omega(2500.0);
 
@@ -424,7 +463,7 @@ TEST_CASE("P5: load_vehicle_json rejects a malformed throttle_control component"
         const std::string tc = R"({ "id": "tc", "type": "throttle_control", "engine": "no_such_component", "kind": "electronic" })";
         TempJsonFile f(minimal_vehicle_json_with_components(minimal_engine_json() + ", " + tc), "unknown_engine");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
-                             Catch::Matchers::ContainsSubstring("throttle_control references unknown component 'no_such_component'"));
+                             Catch::Matchers::ContainsSubstring("must name a \"torque_map\" engine component"));
     }
     SECTION("missing 'kind' is rejected") {
         const std::string tc = R"({ "id": "tc", "type": "throttle_control", "engine": "engine" })";
@@ -452,12 +491,16 @@ TEST_CASE("P5: load_vehicle_json rejects a malformed throttle_control component"
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
                              Catch::Matchers::ContainsSubstring("throttle_control 'linkage_curve' is only valid for kind \"mechanical_linkage\""));
     }
-    SECTION("pedal_map.x outside [0, 1] is rejected") {
+    SECTION("pedal_map.x not ending exactly at 1 is rejected") {
+        // PHYS-033 P4 I7a C3 review item 4: x.back() must be exactly 1 (this
+        // superseded the old generic "x must be within [0, 1]" range check -
+        // see test_vehicle_io_validation.cpp's dedicated curve-rules test for
+        // the full set of endpoint/monotonicity rejections).
         const std::string tc = R"({ "id": "tc", "type": "throttle_control", "engine": "engine", "kind": "electronic",
           "pedal_map": { "x": [0, 1.5], "y": [0, 1] } })";
         TempJsonFile f(minimal_vehicle_json_with_components(minimal_engine_json() + ", " + tc), "pedal_map_x_range");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
-                             Catch::Matchers::ContainsSubstring("pedal_map: x must be within [0, 1]"));
+                             Catch::Matchers::ContainsSubstring("x.back() must be exactly 1"));
     }
     SECTION("pedal_map.y outside [0, 1] is rejected") {
         const std::string tc = R"({ "id": "tc", "type": "throttle_control", "engine": "engine", "kind": "electronic",
@@ -466,12 +509,16 @@ TEST_CASE("P5: load_vehicle_json rejects a malformed throttle_control component"
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
                              Catch::Matchers::ContainsSubstring("pedal_map: y must be within [0, 1]"));
     }
-    SECTION("linkage_curve.x outside [0, 1] is rejected") {
+    SECTION("linkage_curve.x not starting exactly at 0 is rejected") {
+        // PHYS-033 P4 I7a C3 review item 4: x.front() must be exactly 0 (see
+        // the pedal_map SECTION above for the same supersession note).
         const std::string tc = R"({ "id": "tc", "type": "throttle_control", "engine": "engine", "kind": "mechanical_linkage",
           "linkage_curve": { "x": [-0.1, 1], "y": [0, 1] } })";
-        TempJsonFile f(minimal_vehicle_json_with_components(minimal_engine_json() + ", " + tc), "linkage_x_range");
+        TempJsonFile f(minimal_vehicle_json_with_components(
+                           minimal_engine_json(R"(, "throttle_input": "mechanical")") + ", " + tc),
+                       "linkage_x_range");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
-                             Catch::Matchers::ContainsSubstring("linkage_curve: x must be within [0, 1]"));
+                             Catch::Matchers::ContainsSubstring("x.front() must be exactly 0"));
     }
     SECTION("linkage_curve.y outside [0, 1] is rejected") {
         const std::string tc = R"({ "id": "tc", "type": "throttle_control", "engine": "engine", "kind": "mechanical_linkage",
@@ -510,7 +557,13 @@ TEST_CASE("P5: load_vehicle_json rejects a malformed throttle_control component"
     SECTION("a well-formed mechanical throttle_control with a linkage_curve round-trips") {
         const std::string tc = R"({ "id": "tc", "type": "throttle_control", "engine": "engine", "kind": "mechanical_linkage",
           "linkage_curve": { "x": [0, 1], "y": [0, 0.6] } })";
-        TempJsonFile f(minimal_vehicle_json_with_components(minimal_engine_json() + ", " + tc), "well_formed_mechanical");
+        // PHYS-033 P4 I7a C3 review item 2: an explicit stage's 'kind' must
+        // agree with its engine's throttle_input, so this fixture's engine
+        // must declare "mechanical" too (minimal_engine_json() defaults to
+        // "electronic").
+        TempJsonFile f(minimal_vehicle_json_with_components(
+                           minimal_engine_json(R"(, "throttle_input": "mechanical")") + ", " + tc),
+                       "well_formed_mechanical");
         const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
         const auto& tcd = std::get<ThrottleControlDesc>(d.powertrain.components[1].params);
         CHECK(tcd.kind == ThrottleInput::Mechanical);
@@ -550,7 +603,7 @@ TEST_CASE("P5: load_vehicle_json rejects a malformed throttle_control component"
 // worktree's unchanged vehicle_tractor_i4.json state_hash
 // (0xac386af7129b9ffe at 1/2/4/10/24 workers) recorded in this commit's
 // handback report.
-TEST_CASE("P6: ThrottleStage + governed EngineTorqueMap reproduces the pre-C3 max(hand,pedal) governor formula",
+TEST_CASE("S6: ThrottleStage + governed EngineTorqueMap reproduces the pre-C3 max(hand,pedal) governor formula (stage-level)",
           "[unit][drivetrain][throttle][governor]") {
     // Mirrors tractor.json's diesel_i4_4l5_turbo.json governor constants
     // exactly (high_idle_rpm/rated_rpm/droop), on the synthetic

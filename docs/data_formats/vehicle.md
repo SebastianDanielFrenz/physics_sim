@@ -483,11 +483,11 @@ engine itself never reads a raw pedal value.
 
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
-| `engine` | string (component id) | **required** | — | must be present and non-empty (`"<ctx>: throttle_control 'engine' (a component id reference) is required"`); must reference an existing component (`"<ctx>: throttle_control references unknown component '<id>'"` at load time; `Powertrain`'s constructor re-checks it names THIS vehicle's actual engine component, `"vehicle '<v>': throttle_control component '<id>' names engine '<engine>', which is not this vehicle's engine ('<actual>')"`) | which engine component this stage feeds |
-| `kind` | string | **required** | — | must be `"electronic"` or `"mechanical_linkage"`, else `"<ctx>: throttle_control 'kind' must be \"electronic\" or \"mechanical_linkage\", got \"<value>\""` — **note**: deliberately NOT the same string set as the engine's own [`throttle_input`](engine.md) field (`"electronic"`/`"mechanical"`) — the two fields name different things (the engine's own wiring vs. this stage's kind) and the plan spec gives them different literal strings on purpose | electronic (pedal map, TCU-forwarded floor/ceiling) or mechanical linkage (fixed floor 0/ceiling 1, no TCU intervention beyond the upshift ignition cut) |
-| `pedal_map` | Curve1D | optional, **only valid when `kind: "electronic"`** | none (pedal passes through unmodified) | present with the wrong `kind` throws `"<ctx>: throttle_control 'pedal_map' is only valid for kind \"electronic\" (a mechanical linkage uses 'linkage_curve' instead)"`; `x` strictly ascending; `x` and every `y` within `[0, 1]`, else `"<ctx>.pedal_map: x must be within [0, 1]"` / `"<ctx>.pedal_map: y must be within [0, 1]"` | reshapes the raw pedal 0..1 before it reaches the stage's `max()` with any hand lever |
-| `linkage_curve` | Curve1D | optional, **only valid when `kind: "mechanical_linkage"`** | none (pedal passes through unmodified) | present with the wrong `kind` throws `"<ctx>: throttle_control 'linkage_curve' is only valid for kind \"mechanical_linkage\" (electronic uses 'pedal_map' instead)"`; same `x`/`y` range/ascending validation as `pedal_map` | same role as `pedal_map`, for a mechanical (cable/rod) linkage's own non-linear travel curve |
-| `hand_lever_channel` | string | optional | `""` (no hand lever) | none | declared control channel this stage reads as a hand-throttle lever, `max()`-combined with the (curve-mapped) pedal — see below |
+| `engine` | string (component id) | **required** | — | must be present and non-empty (`"<ctx>: throttle_control 'engine' (a component id reference) is required"`); once every `powertrain.components` entry has been parsed (order-independent — a `throttle_control` listed BEFORE its engine in the array still loads), must name a `torque_map` engine component in this vehicle's powertrain, else `"vehicle '<v>': powertrain.components['<id>']: 'engine' (\"<ref>\") must name a \"torque_map\" engine component in this vehicle's powertrain"` (covers an unknown id, a non-engine component, and a vehicle with no engine component at all); `Powertrain`'s constructor re-checks it names THIS vehicle's actual engine component, `"vehicle '<v>': throttle_control component '<id>' names engine '<engine>', which is not this vehicle's engine ('<actual>')"` | which engine component this stage feeds |
+| `kind` | string | **required** | — | must be `"electronic"` or `"mechanical_linkage"`, else `"<ctx>: throttle_control 'kind' must be \"electronic\" or \"mechanical_linkage\", got \"<value>\""` — **note**: deliberately NOT the same string set as the engine's own [`throttle_input`](engine.md) field (`"electronic"`/`"mechanical"`) — the two fields name different things (the engine's own wiring vs. this stage's kind) and the plan spec gives them different literal strings on purpose. Once the named engine is resolved (see `engine` above), `kind` must AGREE with that engine's own `throttle_input` (`"electronic"` <-> `"electronic"`, `"mechanical_linkage"` <-> `"mechanical"`) in both directions, else `"vehicle '<v>': powertrain.components['<id>']: 'kind' (\"<stage-kind>\") does not match engine '<engine>'.throttle_input (\"<engine-kind>\") - an explicit throttle_control component must agree with its engine, it no longer silently overrides it"` (PHYS-033 P4 I7a C3 review item 2 — an earlier revision let an explicit stage silently win over a disagreeing `throttle_input`; that is now rejected instead) | electronic (pedal map, TCU-forwarded floor/ceiling) or mechanical linkage (fixed floor 0/ceiling 1, no TCU intervention beyond the upshift ignition cut) |
+| `pedal_map` | Curve1D | optional, **only valid when `kind: "electronic"`** | none (pedal passes through unmodified) | present with the wrong `kind` throws `"<ctx>: throttle_control 'pedal_map' is only valid for kind \"electronic\" (a mechanical linkage uses 'linkage_curve' instead)"`; `x` strictly ascending (`require_ascending`); additionally `x.front()` must be exactly `0` and `x.back()` exactly `1` (the curve must cover the whole pedal range — `"<ctx>.pedal_map: x.front() must be exactly 0 ..."` / `"... x.back() must be exactly 1 ..."`), every `y` within `[0, 1]` (`"<ctx>.pedal_map: y must be within [0, 1]"`) and `y` non-decreasing (`"<ctx>.pedal_map: y must be non-decreasing"`) | reshapes the raw pedal 0..1 before it reaches the stage's `max()` with any hand lever |
+| `linkage_curve` | Curve1D | optional, **only valid when `kind: "mechanical_linkage"`** | none (pedal passes through unmodified) | present with the wrong `kind` throws `"<ctx>: throttle_control 'linkage_curve' is only valid for kind \"mechanical_linkage\" (electronic uses 'pedal_map' instead)"`; same `x`/`y` ascending/endpoint/monotonicity validation as `pedal_map` | same role as `pedal_map`, for a mechanical (cable/rod) linkage's own non-linear travel curve |
+| `hand_lever_channel` | string | optional | `""` (no hand lever) | none, UNLESS the named engine has a `governor` block (`engine.md`'s `governor` section): then a non-empty `hand_lever_channel` must equal that engine's `governor.channel` exactly, else `"vehicle '<v>': powertrain.components['<id>']: 'hand_lever_channel' (\"<channel>\") differs from engine '<engine>'.governor.channel (\"<gov-channel>\") - a governed engine has one hand lever; leave hand_lever_channel unset to use the governor's own channel, or set it to that same channel"` — a governed engine has exactly one physical hand lever, so a stage naming a DIFFERENT channel makes no sense; leaving it empty on a governed engine falls back to `governor.channel` (see "Implicit default stage" below). An explicit `hand_lever_channel` on an UNGOVERNED engine is always allowed (a hand lever on the same linkage/ECU as an electronic/mechanical throttle is physical) | declared control channel this stage reads as a hand-throttle lever, `max()`-combined with the (curve-mapped) pedal — see below |
 
 Port: none (see above — `throttle_control` never appears in `shafts[]`).
 
@@ -518,18 +518,38 @@ behaviour changed). Every shipped vehicle (`car_sedan.json` and its
 variants, `tractor.json`) relies on this implicit stage — none declares an
 explicit `throttle_control` component.
 
-**Which TCU intervention lives where** (plan section 3.4.5): the codebase's
-`ManualTcuDesc::auto_blip` groups the "blip" and the post-upshift
-pedal-ceiling ramp behind a single `enabled` flag, so one rejection covers
-both rather than two separate ones as the plan's table lists them:
+**Explicit stage on a governed engine.** An explicit `throttle_control`
+component that does not set its own `hand_lever_channel` behaves the same
+way as the implicit stage above when its engine has a `governor` block:
+`Powertrain` (Phase K) falls back to that engine's `governor.channel`
+rather than leaving the stage with no hand lever at all — a governed
+tractor engine keeps its hand throttle even if an explicit stage is later
+added to give it a `pedal_map`/`linkage_curve`. See `hand_lever_channel`'s
+own row above for the (only remaining) rejection this interacts with: an
+explicit channel that names something OTHER than that same
+`governor.channel`.
+
+**Which TCU intervention lives where** (plan section 3.4.5):
 
 | Intervention | Lives in | Mechanical linkage |
 |---|---|---|
 | Pedal map / linkage curve | this stage component | works (that is the point of `linkage_curve`) |
 | Hand lever | this stage component | works |
-| Blip **and** post-upshift pedal-ceiling ramp (`auto_blip.kp_per_rpm`/`max_throttle`/`upshift_torque_ramp_s`) | TCU → forwarded through `floor`/`ceiling`, applied by an electronic stage only | **rejected at load time**: `md.auto_blip.enabled` with the effective throttle kind (this component if present, else the engine's `throttle_input`) resolving to Mechanical throws `"<ctx>.auto_blip: 'enabled' requires an electronic throttle - engine '<id>' has a mechanical linkage, which cannot carry a blip or a post-shift pedal-ceiling ramp (only the upshift ignition cut works on both kinds)"` |
+| Blip **and** post-upshift pedal-ceiling ramp (`auto_blip.kp_per_rpm`/`max_throttle`/`upshift_torque_ramp_s`) | TCU → forwarded through `floor`/`ceiling`, applied by an electronic stage only | **rejected at load time**, on the EFFECTIVE VALUES rather than `auto_blip.enabled` (PHYS-033 P4 I7a C3 review item 1 — an earlier revision checked `enabled`, which wrongly rejected `enabled: true` with all three values already zeroed, a no-op configuration that must load): once every controller's `auto_blip` block has its defaults applied (`AutoBlipDesc`'s own defaults — `kp_per_rpm 0.002`, `max_throttle 1.0`, `upshift_torque_ramp_s 0.10` — apply even when the JSON has no `auto_blip` block at all), the effective throttle kind (this component if present, else the engine's `throttle_input`) resolving to Mechanical with `kp_per_rpm > 0 \|\| max_throttle > 0 \|\| upshift_torque_ramp_s > 0` throws `"<ctx>.auto_blip: engine '<id>' has a mechanical throttle - a mechanical throttle cannot open the plate (blip) or close it against the driver (ceiling/ramp); the upshift ignition cut stays available (set those three to 0)"`. A mechanical vehicle must therefore set all three to `0` explicitly (`enabled` itself is irrelevant to this check either way) |
 | Upshift ignition cut (`auto_blip.upshift_cut`) | forwarded directly to the engine as `TcuRequest::ignition_cut`, never through `ThrottleCommand` | works on both kinds |
 | Idle PI / limiter / DFCO / governor / starter | engine, unchanged | works on both kinds |
+
+**Open design question — the TCU still reads the raw pedal.** `ManualTcu`
+(the launch law, the auto-shift up/down rpm thresholds) reads the pedal
+value `World`/the adapter sets on the `"throttle"` control channel
+directly, NOT this stage's `pedal_map`-reshaped `command` — the pedal map
+only reshapes what reaches the engine's fuelling, not what the TCU uses to
+decide when to shift or how to launch. For every shipped vehicle this is
+moot (neither `car_sedan.json`/its variants nor `tractor.json` declares a
+`pedal_map`), but a vehicle that DOES add one would see the TCU's shift
+points keyed to the raw pedal position while the engine itself sees the
+reshaped value. Left as-is for now (PHYS-033 P4 I7a C3 review item 7) —
+not attempted in this commit.
 
 `EngineSoundState::throttle_command` (sound-only, never hashed) publishes
 this stage's `command` for a listening/telemetry consumer, alongside the

@@ -98,11 +98,20 @@ struct PowertrainSnapshot {
     real pto_engagement = 0.0;
     real pto_mode = 0.0;
     real pto_rpm = 0.0;
-    // PHYS-033 P4 I4 C12: the all-speed governor's own no-load setpoint n_nl
-    // this tick, and the hand_throttle channel value it read - both 0 for
-    // every vehicle with no governor (car_sedan.json, every pre-C12 file).
-    // Never hashed (plain reads of Powertrain::governor_setpoint_rpm/
-    // governor_hand_throttle).
+    // PHYS-033 P4 I4 C12 (governor_setpoint_rpm); PHYS-033 P4 I7a C3
+    // (hand_throttle reworked to read the throttle-command stage's own raw
+    // hand lever, ThrottleStage::raw_hand_lever via
+    // Powertrain::governor_hand_throttle - not literally the governor's
+    // channel any more, despite the name): governor_setpoint_rpm is the
+    // all-speed governor's own no-load setpoint n_nl this tick, 0 for every
+    // vehicle with no governor (car_sedan.json, every pre-C12 file).
+    // hand_throttle is 0 when the throttle stage has no hand lever (no
+    // explicit hand_lever_channel and no governor to fall back to) -
+    // nonzero for a governed engine (the governor's own channel, whether or
+    // not an explicit throttle_control stage is also present) OR an
+    // ungoverned engine whose explicit stage declares its own
+    // hand_lever_channel. Never hashed (plain reads of
+    // Powertrain::governor_setpoint_rpm/governor_hand_throttle).
     real governor_setpoint_rpm = 0.0;
     real hand_throttle = 0.0;
 };

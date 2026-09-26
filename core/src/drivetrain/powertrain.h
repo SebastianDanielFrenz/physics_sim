@@ -291,12 +291,13 @@ public:
     // The stage's combined command this substep (EngineSoundState::
     // throttle_command, sound-only, never hashed).
     [[nodiscard]] real throttle_command() const { return last_throttle_command_.command; }
-    // PHYS-033 P4 I7a C3: PowertrainDebug::throttle_ceiling's replacement
-    // source - TcuRequest lost throttle_ceiling (moved into ThrottleCommand,
-    // engine.h), so this reads the cached stage output instead.
-    [[nodiscard]] real throttle_ceiling_debug() const { return last_throttle_command_.ceiling; }
     // The TCU's own lagged Outputs the stage/engine will read NEXT substep
-    // (tests only).
+    // (tests only). PowertrainDebug::throttle_ceiling reads
+    // tcu_request_debug().throttle_ceiling directly (vehicle_instance.h),
+    // matching dbg.ignition_cut's own timing - both are the TCU's cached
+    // request the stage/engine will apply NEXT substep, not the stage's own
+    // already-applied output (last_throttle_command_ above, a different
+    // quantity: EngineSoundState::throttle_command only).
     [[nodiscard]] const TcuThrottleLimits& tcu_request_debug() const { return tcu_prev_request_; }
     [[nodiscard]] real idle_integrator() const { return has_engine() ? engine_->idle_integrator() : real(0.0); }
     // Fills out[wheel_index] with the torque of the diff row driving that
@@ -520,7 +521,7 @@ private:
     // inside throttle_stage_ itself). last_throttle_command_/
     // last_throttle_hand_lever_raw_ cache this substep's stage output for
     // the same-substep engine pre_solve call and for the accessors above
-    // (throttle_command/governor_hand_throttle/throttle_ceiling_debug).
+    // (throttle_command/governor_hand_throttle).
     ThrottleStage throttle_stage_;
     ThrottleCommand last_throttle_command_{};
     real last_throttle_hand_lever_raw_ = 0.0;

@@ -141,10 +141,7 @@ public:
         dbg.synchro_torque = powertrain_.synchro_torque_debug();
         dbg.engine_torque_demand = powertrain_.engine_torque_demand();
         dbg.ignition_cut = powertrain_.tcu_request_debug().ignition_cut;
-        // PHYS-033 P4 I7a C3: the ceiling the engine actually used this
-        // substep (the throttle-command stage's own cached output) -
-        // TcuRequest no longer carries throttle_ceiling itself.
-        dbg.throttle_ceiling = powertrain_.throttle_ceiling_debug();
+        dbg.throttle_ceiling = powertrain_.tcu_request_debug().throttle_ceiling;
         dbg.awd_clutch_torque = powertrain_.awd_clutch_torque(); // PHYS-033 P4 I4 C9
         dbg.awd_clutch_slip = powertrain_.awd_clutch_slip();
         dbg.park_lock_torque = powertrain_.park_lock_torque(); // PHYS-033 P4 I4 C10
