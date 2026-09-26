@@ -673,6 +673,18 @@ I3 first drivable (torque-map engine, clutch, manual gearbox, open diff,
 minimal drag), then I4 diffs/PTO, I5 ABS/TC, I6 ESC, I7 mean-value engine and
 fuel tank, N2O, I8 map generator, I9 electric and hybrids, I10 automatics.
 
+Engine options and order (Sebastian, 2026-09-26): I7 moves up to come right
+after I4 closes, before the tractor demo. Two generic engine types must exist
+side by side, selected per engine data file:
+- Graph engine: a lookup table mapping rpm to maximum torque (the existing
+  torque-map engine), plus an optional fuel consumption map. Meant for users
+  and developers who want to test and experiment without dealing with real
+  combustion-engine engineering trade-offs.
+- Simulated engine: the full physically simulated engine (PHYS-028/038: a
+  mean-value runtime model in core fed by the cycle-model map generator).
+A vehicle file using the graph engine without a fuel map must behave exactly
+as before.
+
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
 - Manual: the pedal requests 0-100 % of the engine's gross (indicated) torque
