@@ -673,6 +673,11 @@ I3 first drivable (torque-map engine, clutch, manual gearbox, open diff,
 minimal drag), then I4 diffs/PTO, I5 ABS/TC, I6 ESC, I7 mean-value engine and
 fuel tank, N2O, I8 map generator, I9 electric and hybrids, I10 automatics.
 
+Status 2026-09-26: I0-I4 done. I4 (C1-C16) closed by `tools\ci.ps1 -Full`
+(7 legs, all 11 cross-platform scenario hashes equal); the only failing test
+on every leg is the pre-existing Spec test 10.1 (vault PHYS-037, fails
+identically at be36545, root cause not diagnosed). Next: I7 (below).
+
 Engine options and order (Sebastian, 2026-09-26): I7 moves up to come right
 after I4 closes, before the tractor demo. Two generic engine types must exist
 side by side, selected per engine data file:
