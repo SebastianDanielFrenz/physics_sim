@@ -444,6 +444,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.pto_engagement = powertrain_.pto_engagement();
         snap.pto_mode = powertrain_.pto_mode();
         snap.pto_rpm = powertrain_.pto_rpm();
+        // PHYS-033 P4 I4 C12: the governor's no-load setpoint/hand_throttle,
+        // both 0.0 for every vehicle with no governor.
+        snap.governor_setpoint_rpm = powertrain_.governor_setpoint_rpm();
+        snap.hand_throttle = powertrain_.governor_hand_throttle();
     }
 
     // Predict what Jolt will report as this chassis's velocity next tick

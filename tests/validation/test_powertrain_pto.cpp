@@ -88,6 +88,39 @@
 // values are not comparable to each other at all - neither test asserts an
 // inequality between them, only that each individually reaches a genuine,
 // measured steady state.
+//
+// PHYS-033 P4 I4 C12 (2026-09-26): tractor.json's engine gained a real
+// all-speed governor (docs/data_formats/engine.md's "governor" section),
+// so "throttle" (the "throttle" control channel, which the governor's
+// lever = max(hand_throttle, pedal) formula still reads) no longer sets
+// fuel directly - it sets the governor's no-load speed TARGET, n_nl =
+// idle_rpm + lever*(high_idle_rpm - idle_rpm) = 850 + lever*1550, which the
+// governor then holds (within its droop band) against load. This is a
+// genuine, expected change in operating point, re-measured (not tuned to
+// pass) rather than assumed: at throttle 0.35, n_nl = 1392.5 rpm no-load,
+// and the 540-mode case now settles at engine_rpm=1355.6 (droop pulling it
+// ~37 rpm below the no-load target under the dyno's load) instead of the
+// pre-C12 2213.70 rpm (that old figure came from WOT fuelling hitting the
+// soft_cut-as-governor band directly, a fundamentally different mechanism -
+// see the history above). pto.out settles at 39.3234 rad/s (375.511 rpm,
+// ratio 3.610000000 exact, slip 2.64e-12 rad/s), power 7731.66 W (predicted
+// c*mean(omega_out^2) also 7731.66 W), gear_loss 309.266 W (predicted the
+// same), worst relative balance_error 2.12e-15 - still bit-exactly steady
+// (window_drift_omega_out/window_drift_engine_rpm both measure exactly
+// 0.0). At throttle 1.0 (lever 1.0, n_nl = high_idle_rpm = 2400 rpm exactly,
+// the governor's ceiling), the 1000-mode case settles at engine_rpm=2243.49
+// - essentially UNCHANGED from the pre-C12 2243.47 rpm, because full lever
+// is the one operating point where the new all-speed-governor model and the
+// old soft_cut-as-governor idiom coincide (both regulate toward the same
+// ~2400 rpm ceiling under load). pto.out settles at 120.481 rad/s (1150.51
+// rpm, ratio 1.950000000 exact, slip 5.20e-12 rad/s), power 72578 W
+// (predicted also 72578 W), gear_loss 2903.12 W (predicted the same), worst
+// relative balance_error 4.56e-16 - also still bit-exactly steady. Both
+// modes' window-drift/ratio/slip/power/balance-error assertions (none of
+// which hard-code an absolute rpm) pass unchanged; only the absolute
+// engine_rpm/pto_rpm figures quoted in comments above and here moved, and
+// only for the 540-mode (partial-lever) case, exactly as the governor model
+// predicts.
 
 #include "vehicle_test_helpers.h"
 

@@ -264,6 +264,11 @@ public:
     }
     [[nodiscard]] real throttle_eff() const { return last_engine_result_.throttle_eff; }
     [[nodiscard]] real engine_torque_demand() const { return last_engine_result_.torque_demand; }
+    // I4 C12: 0 without a governor (last_engine_result_'s own fields already
+    // default to 0 when desc_.has_governor is false - see EngineTorqueMap::
+    // pre_solve). PowertrainSnapshot::governor_setpoint_rpm/hand_throttle.
+    [[nodiscard]] real governor_setpoint_rpm() const { return last_engine_result_.governor_setpoint_rpm; }
+    [[nodiscard]] real governor_hand_throttle() const { return last_engine_result_.hand_throttle; }
     // The TCU request the engine will read NEXT substep (tests only).
     [[nodiscard]] const EngineTorqueMap::TcuRequest& tcu_request_debug() const { return tcu_prev_request_; }
     [[nodiscard]] real idle_integrator() const { return has_engine() ? engine_->idle_integrator() : real(0.0); }
@@ -426,6 +431,11 @@ private:
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached
+    // I4 C12: -1 without a governor (or when the governor's declared channel
+    // is somehow absent from declare_control_channels(pt) - never happens in
+    // practice, add() always includes it), same nullable-slot pattern as
+    // TransferCase/ParkLock/Pto's own channel_slot_ members.
+    int engine_governor_channel_slot_ = -1;
 
     // --- clutch --------------------------------------------------------
     std::unique_ptr<Clutch> clutch_;

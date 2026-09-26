@@ -63,6 +63,24 @@ struct StarterDesc { // ideal DC starter referred to the crank (I9 puts it on th
 
 enum class EngineInitialState { Running, Off };
 
+// PHYS-033 P4 I4 C12 (plan section 3.6): an all-speed diesel governor with
+// droop, inside the engine's own ECU - REPLACES the pedal in the throttle-
+// request expression (engine_torque_map.cpp's theta_req) whenever present.
+// lever = max(hand_throttle channel, pedal_throttle), each clamped to
+// [0, 1]. n_nl = idle_rpm + lever*(high_idle_rpm - idle_rpm) is the no-load
+// setpoint; band = droop*rated_rpm (ISO 3046-4 steady-state speed droop
+// referred to rated speed); theta_gov = clamp((n_nl - n)/band, 0, 1). See
+// docs/data_formats/engine.md for the full derivation (including the
+// implicit dtau/domega slope contribution) and engine_torque_map.cpp for
+// the implementation. Optional - no governor block means engine_torque_map.
+// cpp's throttle path is byte-identical to before this commit.
+struct GovernorDesc {
+    real high_idle_rpm = 2400.0; // > idle_rpm; the no-load setpoint at full lever
+    real rated_rpm = 2200.0;     // in (idle_rpm, high_idle_rpm]; droop reference speed (ISO 3046-4)
+    real droop = 0.0909;         // in (0, 0.3]; steady-state speed droop referred to rated_rpm
+    std::string channel = "hand_throttle"; // declared (default 0) via Powertrain::declare_control_channels; non-empty
+};
+
 struct TorqueMapEngineDesc {
     vehicle::Curve1D wot_torque_nm_vs_rpm;       // required; x ascending, x[0] >= 0
     vehicle::Curve1D motoring_torque_nm_vs_rpm;  // required (I3); y <= 0; x[0] == 0 (its y[0] is the Coulomb part)
@@ -75,6 +93,8 @@ struct TorqueMapEngineDesc {
     StarterDesc starter;
     Vec3 crank_axis_local = Vec3::zero(); // chassis frame, direction of +omega; zero = no rotor reaction (plan section 6.7)
     EngineInitialState initial_state = EngineInitialState::Running;
+    bool has_governor = false; // I4 C12: only meaningful (and validated) when true
+    GovernorDesc governor;
 };
 
 struct ClutchDesc {

@@ -11,6 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace ps;
@@ -61,6 +62,26 @@ EngineTorqueMap::Sensors running_sensors(real omega, real pedal = 0.0) {
     s.starter = 0.0;
     s.clutch_engaged_fraction = 1.0;
     s.gearbox_in_neutral = true;
+    return s;
+}
+
+// PHYS-033 P4 I4 C12: the same synthetic desc, with an all-speed governor
+// added. high_idle_rpm/rated_rpm/droop are chosen (not copied from any real
+// engine file) so the droop band [2200, 2400] sits well inside both curves'
+// [1000,6000]/[0,6000] domains and away from idle_rpm(900)/the limiter
+// (6000) - nothing but the governor itself is exercised.
+EngineTorqueMap::Desc make_governed_desc() {
+    EngineTorqueMap::Desc d = make_test_desc();
+    d.has_governor = true;
+    d.governor.high_idle_rpm = 2400.0;
+    d.governor.rated_rpm = 2000.0;
+    d.governor.droop = 0.1; // band = 0.1*2000 = 200 rpm
+    return d;
+}
+
+EngineTorqueMap::Sensors governed_sensors(real omega, real hand_throttle, real pedal = 0.0) {
+    EngineTorqueMap::Sensors s = running_sensors(omega, pedal);
+    s.hand_throttle = hand_throttle;
     return s;
 }
 
@@ -409,4 +430,333 @@ TEST_CASE("EngineTorqueMap: cranking equilibrium (starter vs. Coulomb+smooth fri
     }
     const real rpm_ref = 0.5 * (lo + hi);
     CHECK(rpm_eq == Catch::Approx(rpm_ref).margin(2.0));
+}
+
+// PHYS-033 P4 I4 C12 (plan section 3.6): all-speed diesel governor with
+// droop. theta_gov = clamp((n_nl - rpm)/band, 0, 1), n_nl = idle_rpm +
+// lever*(high_idle_rpm - idle_rpm), band = droop*rated_rpm, lever =
+// max(hand_throttle, pedal). theta_gov REPLACES the pedal in theta_req, so
+// with no ceiling/floor clamp and rpm far enough above idle_rpm that the
+// idle PI clamps to 0, r.throttle_eff == theta_gov exactly - checked
+// directly against hand-computed values rather than a private accessor.
+TEST_CASE("EngineTorqueMap: governor theta_gov matches hand-computed values at a lever/rpm grid",
+          "[unit][drivetrain][engine][governor]") {
+    const EngineTorqueMap::Desc desc = make_governed_desc(); // high_idle 2400, rated 2000, droop 0.1 -> band 200
+    EngineTorqueMap::TcuRequest tcu;
+    const real h = 1.0 / 960.0;
+
+    SECTION("full lever (1.0): n_nl = 2400, band [2200, 2400]") {
+        // rpm = 2300 -> theta_gov = (2400-2300)/200 = 0.5
+        EngineTorqueMap eng(desc);
+        const auto r = eng.pre_solve(governed_sensors(rpm_to_omega(2300.0), 1.0), tcu, h);
+        CHECK(r.governor_setpoint_rpm == Catch::Approx(2400.0).epsilon(1e-9));
+        CHECK(r.hand_throttle == Catch::Approx(1.0).epsilon(1e-9));
+        CHECK(r.throttle_eff == Catch::Approx(0.5).epsilon(1e-9));
+
+        // rpm = 2200 -> theta_gov = (2400-2200)/200 = 1.0 (band's own lower edge)
+        EngineTorqueMap eng2(desc);
+        const auto r2 = eng2.pre_solve(governed_sensors(rpm_to_omega(2200.0), 1.0), tcu, h);
+        CHECK(r2.throttle_eff == Catch::Approx(1.0).epsilon(1e-9));
+
+        // rpm = 2100 -> (2400-2100)/200 = 1.5, clamped to 1.0
+        EngineTorqueMap eng3(desc);
+        const auto r3 = eng3.pre_solve(governed_sensors(rpm_to_omega(2100.0), 1.0), tcu, h);
+        CHECK(r3.throttle_eff == Catch::Approx(1.0).epsilon(1e-9));
+
+        // rpm = 2400 -> theta_gov = 0 (band's own upper edge, at setpoint)
+        EngineTorqueMap eng4(desc);
+        const auto r4 = eng4.pre_solve(governed_sensors(rpm_to_omega(2400.0), 1.0), tcu, h);
+        CHECK(r4.throttle_eff == Catch::Approx(0.0).epsilon(1e-9));
+
+        // rpm = 2500 -> above n_nl, clamped to 0 (never negative)
+        EngineTorqueMap eng5(desc);
+        const auto r5 = eng5.pre_solve(governed_sensors(rpm_to_omega(2500.0), 1.0), tcu, h);
+        CHECK(r5.throttle_eff == Catch::Approx(0.0).epsilon(1e-9));
+    }
+
+    SECTION("half lever (0.5): n_nl = 900 + 0.5*(2400-900) = 1650, band [1450, 1650]") {
+        // rpm = 1550 -> theta_gov = (1650-1550)/200 = 0.5
+        EngineTorqueMap eng(desc);
+        const auto r = eng.pre_solve(governed_sensors(rpm_to_omega(1550.0), 0.5), tcu, h);
+        CHECK(r.governor_setpoint_rpm == Catch::Approx(1650.0).epsilon(1e-9));
+        CHECK(r.throttle_eff == Catch::Approx(0.5).epsilon(1e-9));
+    }
+}
+
+TEST_CASE("EngineTorqueMap: governor hand_throttle/pedal combine as max(), independent of argument order",
+          "[unit][drivetrain][engine][governor]") {
+    const EngineTorqueMap::Desc desc = make_governed_desc();
+    EngineTorqueMap::TcuRequest tcu;
+    const real h = 1.0 / 960.0;
+    const real rpm0 = 2300.0; // strictly inside the full-lever band, same point as the grid test above
+
+    EngineTorqueMap eng_a(desc);
+    const auto r_a = eng_a.pre_solve(governed_sensors(rpm_to_omega(rpm0), /*hand=*/0.3, /*pedal=*/0.7), tcu, h);
+    EngineTorqueMap eng_b(desc);
+    const auto r_b = eng_b.pre_solve(governed_sensors(rpm_to_omega(rpm0), /*hand=*/0.7, /*pedal=*/0.3), tcu, h);
+    EngineTorqueMap eng_c(desc);
+    const auto r_c = eng_c.pre_solve(governed_sensors(rpm_to_omega(rpm0), /*hand=*/0.7, /*pedal=*/0.0), tcu, h);
+
+    // max(0.3, 0.7) == max(0.7, 0.3) == max(0.7, 0.0) == 0.7 -> identical
+    // n_nl/theta_gov in all three orderings.
+    CHECK(r_a.governor_setpoint_rpm == Catch::Approx(r_b.governor_setpoint_rpm).epsilon(1e-12));
+    CHECK(r_a.governor_setpoint_rpm == Catch::Approx(r_c.governor_setpoint_rpm).epsilon(1e-12));
+    CHECK(r_a.throttle_eff == Catch::Approx(r_b.throttle_eff).epsilon(1e-12));
+    CHECK(r_a.throttle_eff == Catch::Approx(r_c.throttle_eff).epsilon(1e-12));
+    CHECK(r_a.tau0 == Catch::Approx(r_b.tau0).epsilon(1e-12));
+
+    // sanity: the composed lever really is 0.7, not e.g. a sum (1.0, which
+    // would saturate theta_gov to 1.0 at this rpm - not what's measured).
+    CHECK(r_a.governor_setpoint_rpm == Catch::Approx(900.0 + 0.7 * (2400.0 - 900.0)).epsilon(1e-9));
+}
+
+TEST_CASE("EngineTorqueMap: with no governor block, sensors.hand_throttle has zero effect (byte-identical to pre-C12)",
+          "[unit][drivetrain][engine][governor]") {
+    const EngineTorqueMap::Desc desc = make_test_desc(); // has_governor == false (default)
+    EngineTorqueMap::TcuRequest tcu;
+    const real h = 1.0 / 960.0;
+    const real omega = rpm_to_omega(2500.0);
+    const real pedal = 0.6;
+
+    EngineTorqueMap eng_zero(desc);
+    const auto r_zero = eng_zero.pre_solve(governed_sensors(omega, /*hand=*/0.0, pedal), tcu, h);
+    EngineTorqueMap eng_half(desc);
+    const auto r_half = eng_half.pre_solve(governed_sensors(omega, /*hand=*/0.5, pedal), tcu, h);
+    EngineTorqueMap eng_full(desc);
+    const auto r_full = eng_full.pre_solve(governed_sensors(omega, /*hand=*/1.0, pedal), tcu, h);
+
+    for (const auto* r : {&r_zero, &r_half, &r_full}) {
+        CHECK(r->governor_setpoint_rpm == real(0.0));
+        CHECK(r->hand_throttle == real(0.0)); // desc_.has_governor is false -> never copied from sensors
+    }
+    CHECK(r_zero.tau0 == r_half.tau0);
+    CHECK(r_zero.tau0 == r_full.tau0);
+    CHECK(r_zero.d == r_half.d);
+    CHECK(r_zero.d == r_full.d);
+    CHECK(r_zero.throttle_eff == r_half.throttle_eff);
+    CHECK(r_zero.throttle_eff == Catch::Approx(pedal).epsilon(1e-9)); // pure pedal path, as before C12
+}
+
+TEST_CASE("EngineTorqueMap: governor dtau/domega slope matches a central finite difference, "
+          "and contributes nothing when not the active argument",
+          "[unit][drivetrain][engine][governor]") {
+    const EngineTorqueMap::Desc desc = make_governed_desc();
+    EngineTorqueMap::TcuRequest tcu;
+    const real h = 1.0 / 960.0;
+    const real eps_rpm = 0.5;
+    const real eps = rpm_to_omega(eps_rpm); // same scale factor as a delta, matches the existing slope test above
+
+    SECTION("governor active (interior of the droop band): matches finite difference to 1e-6 relative") {
+        const real rpm0 = 2300.0; // theta_gov = 0.5, strictly inside (2200, 2400) - not at either clamp edge
+        const real omega0 = rpm_to_omega(rpm0);
+        EngineTorqueMap e_minus(desc), e_plus(desc), e_mid(desc);
+        const real tau_minus = e_minus.pre_solve(governed_sensors(omega0 - eps, 1.0), tcu, h).tau0;
+        const real tau_plus = e_plus.pre_solve(governed_sensors(omega0 + eps, 1.0), tcu, h).tau0;
+        const auto mid = e_mid.pre_solve(governed_sensors(omega0, 1.0), tcu, h);
+
+        const real central_diff = (tau_plus - tau_minus) / (real(2.0) * eps);
+        const real expected_d = std::max(-central_diff, real(0.0));
+        CHECK(mid.d == Catch::Approx(expected_d).epsilon(1e-6));
+
+        // Cross-check: the SAME point with no governor (has_governor = false,
+        // pedal pinned to the governor's own theta_eff at this point, 0.5)
+        // must give a DIFFERENT (smaller-magnitude) slope - the governor's
+        // own -1/band term is a genuine, nonzero addition here, not a no-op.
+        EngineTorqueMap::Desc ungoverned = desc;
+        ungoverned.has_governor = false;
+        EngineTorqueMap e_pedal(ungoverned);
+        const auto pedal_mid = e_pedal.pre_solve(running_sensors(omega0, mid.throttle_eff), tcu, h);
+        CHECK(pedal_mid.throttle_eff == Catch::Approx(mid.throttle_eff).epsilon(1e-9)); // same theta_eff this substep...
+        CHECK(mid.d > pedal_mid.d + real(1.0)); // ...but a materially larger d thanks to the governor's own slope term
+    }
+
+    SECTION("governor not active (saturated at the band's upper edge, theta_gov == 0): no contribution") {
+        // lever = 0 -> n_nl = idle_rpm (900), far below rpm0 -> theta_gov
+        // clamps to exactly 0 (the outer edge, per the implementation's own
+        // documented convention of "no contribution at either clamp edge").
+        // theta_req is then 0 exactly whether or not a governor is present
+        // (governed lever=0 vs. an ungoverned pedal=0), so the two engines
+        // must produce IDENTICAL tau0/d - the cleanest possible check that
+        // an inactive governor adds nothing.
+        const real rpm0 = 2300.0;
+        const real omega0 = rpm_to_omega(rpm0);
+        EngineTorqueMap e_governed(desc);
+        const auto r_governed = e_governed.pre_solve(governed_sensors(omega0, /*hand=*/0.0, /*pedal=*/0.0), tcu, h);
+
+        EngineTorqueMap::Desc ungoverned = desc;
+        ungoverned.has_governor = false;
+        EngineTorqueMap e_plain(ungoverned);
+        const auto r_plain = e_plain.pre_solve(running_sensors(omega0, /*pedal=*/0.0), tcu, h);
+
+        CHECK(r_governed.throttle_eff == real(0.0));
+        CHECK(r_governed.tau0 == Catch::Approx(r_plain.tau0).epsilon(1e-12));
+        CHECK(r_governed.d == Catch::Approx(r_plain.d).epsilon(1e-12));
+    }
+
+    // PHYS-033 P4 I4 C12 review round 2, fix 1: the two SECTIONs below were
+    // missing from round 1. The original `governor_engaged` guard read
+    // `theta_eff >= theta_req`, which - since theta_eff = std::max(theta_req,
+    // theta_idle) BY DEFINITION - is a tautology, always true, and could
+    // therefore never detect "the idle PI actually won this substep, not the
+    // governor". The fix changes it to `theta_eff == theta_req` (a tie counts
+    // as "not beaten", matching this function's own pre-existing comment,
+    // which already documented the intended `==` semantics even though the
+    // code implemented `>=`). SECTION "idle PI wins" below reproduces the
+    // exact scenario the review named ("lever=0 with rpm just below idle")
+    // and is confirmed (round 2 report) to FAIL on the unfixed `>=` code and
+    // PASS on the fixed `==` code. SECTION "TCU floor wins" is added as
+    // companion coverage for the OTHER exclusion in the same guard
+    // (`theta_req == theta_gov`, guarding against the TCU ceiling/floor
+    // clipping req_input) - that guard was already correct before this fix
+    // (unaffected by the `>=`/`==` defect) and this SECTION passes
+    // identically on both the unfixed and fixed code; it closes a real gap
+    // in coverage (no existing test exercised the floor clipping the
+    // governor's own request) without itself demonstrating the bug.
+    SECTION("idle PI wins strictly inside the droop band: theta_eff != theta_req, "
+            "so the governor must NOT be engaged even though theta_gov is strictly "
+            "inside (0,1) - the exact scenario the round-2 review named") {
+        // lever = 0 (hand_throttle = pedal = 0) -> n_nl = idle_rpm (900);
+        // governor_band = droop*rated_rpm = 200 -> the droop band is
+        // [700, 900] - the SAME range the idle PI's own kp term is reacting
+        // over (e = idle_rpm - rpm > 0 there too). At rpm0 = 890:
+        //   theta_gov  = (900 - 890) / 200 = 0.05  (strictly inside (0,1))
+        //   theta_idle = clamp(theta_ff + kp*10, 0, max_throttle) ~= 0.1377
+        // theta_idle > theta_gov - the idle PI, not the governor, is the
+        // actual argument reaching theta_c this substep. The buggy
+        // `theta_eff >= theta_req` (true by theta_eff's own definition,
+        // whichever branch wins) could never detect this; the fixed
+        // `theta_eff == theta_req` correctly reads false (0.1377 != 0.05).
+        const real rpm0 = 890.0;
+        const real omega0 = rpm_to_omega(rpm0);
+        EngineTorqueMap e_minus(desc), e_plus(desc), e_mid(desc);
+        const real tau_minus = e_minus.pre_solve(governed_sensors(omega0 - eps, /*hand=*/0.0, /*pedal=*/0.0), tcu, h).tau0;
+        const real tau_plus = e_plus.pre_solve(governed_sensors(omega0 + eps, /*hand=*/0.0, /*pedal=*/0.0), tcu, h).tau0;
+        const auto mid = e_mid.pre_solve(governed_sensors(omega0, /*hand=*/0.0, /*pedal=*/0.0), tcu, h);
+
+        // Confirm the setup: theta_idle, not theta_gov (0.05), is the winner.
+        CHECK(mid.governor_setpoint_rpm == Catch::Approx(900.0).epsilon(1e-9));
+        CHECK(mid.throttle_eff > real(0.1));      // the idle PI's ~0.1377
+        CHECK(mid.throttle_eff != Catch::Approx(0.05).epsilon(1e-6)); // not theta_gov
+
+        // PRIMARY discriminator (mirrors the "not active" SECTION above): a
+        // plain, ungoverned engine fed the SAME theta_eff as a fixed pedal
+        // must produce IDENTICAL tau0/d, since with the governor correctly
+        // not engaged, theta_c/dtau_domega are computed by an IDENTICAL
+        // formula in both engines. On the unfixed code the governor's own
+        // -kRadPerSecToRpm/band slope term is (incorrectly) added on top of
+        // mid.d here, and d diverges from pedal_mid.d by roughly two orders
+        // of magnitude (measured - see this fix's own commit message).
+        EngineTorqueMap::Desc ungoverned = desc;
+        ungoverned.has_governor = false;
+        EngineTorqueMap e_pedal(ungoverned);
+        const auto pedal_mid = e_pedal.pre_solve(running_sensors(omega0, mid.throttle_eff), tcu, h);
+        CHECK(pedal_mid.throttle_eff == Catch::Approx(mid.throttle_eff).epsilon(1e-9));
+        CHECK(mid.tau0 == Catch::Approx(pedal_mid.tau0).epsilon(1e-12));
+        CHECK(mid.d == Catch::Approx(pedal_mid.d).epsilon(1e-12));
+
+        // SECONDARY cross-check: central finite difference of tau0(omega).
+        // NOTE (measured fact, not tuned to pass): unlike the "governor
+        // active" SECTION above, this does NOT match `d` to a tight
+        // (1e-6-class) relative tolerance even on the FIXED code, because
+        // the idle PI's own d(theta_idle)/domega slope is a REAL, non-small
+        // contribution here (theta_idle is the active, non-saturated branch)
+        // that dtau_domega has never modelled - a separate, pre-existing
+        // simplification of this engine model (present before C12's governor
+        // existed at all: the idle path has never had a domega slope term),
+        // not a consequence of the governor_engaged bug. See this fix's
+        // commit message for the measured central-difference value and the
+        // hand-derived missing-term estimate. A loose sanity bound is kept
+        // here so a future change to the idle/governor interaction that
+        // makes `d` wildly wrong (not just "missing the idle slope") still
+        // fails; the tight, bug-discriminating check is the pair above.
+        const real central_diff = (tau_plus - tau_minus) / (real(2.0) * eps);
+        const real expected_d_no_idle_slope = std::max(-central_diff, real(0.0));
+        CAPTURE(central_diff, expected_d_no_idle_slope, mid.d);
+        CHECK(mid.d < expected_d_no_idle_slope); // d under-estimates the true slope (idle's own term is missing, never negative-signed)
+        CHECK(mid.d > real(0.0));
+    }
+
+    SECTION("TCU floor wins strictly inside the droop band: theta_req != theta_gov, "
+            "so the governor must NOT be engaged - regression coverage for the "
+            "theta_req == theta_gov guard (already correct pre-fix, unaffected by "
+            "the theta_eff bug; passes identically before and after this fix)") {
+        const real rpm0 = 2300.0; // same operating point as "governor active" above - theta_gov = 0.5
+        const real omega0 = rpm_to_omega(rpm0);
+        EngineTorqueMap::TcuRequest tcu_floor;
+        tcu_floor.throttle_floor = 0.7; // > theta_gov(0.5) -> theta_req clips up to 0.7 != theta_gov
+        EngineTorqueMap e_minus(desc), e_plus(desc), e_mid(desc);
+        const real tau_minus = e_minus.pre_solve(governed_sensors(omega0 - eps, 1.0), tcu_floor, h).tau0;
+        const real tau_plus = e_plus.pre_solve(governed_sensors(omega0 + eps, 1.0), tcu_floor, h).tau0;
+        const auto mid = e_mid.pre_solve(governed_sensors(omega0, 1.0), tcu_floor, h);
+
+        CHECK(mid.throttle_eff == Catch::Approx(0.7).epsilon(1e-9)); // the floor, not theta_gov(0.5)
+
+        // rpm0 is well inside both curves' domains (idle contributes exactly
+        // 0 here, rpm >> idle_rpm) so this cross-check is clean - matches
+        // the "governor active" SECTION's own tight FD tolerance.
+        const real central_diff = (tau_plus - tau_minus) / (real(2.0) * eps);
+        const real expected_d = std::max(-central_diff, real(0.0));
+        CHECK(mid.d == Catch::Approx(expected_d).epsilon(1e-6));
+
+        EngineTorqueMap::Desc ungoverned = desc;
+        ungoverned.has_governor = false;
+        EngineTorqueMap e_pedal(ungoverned);
+        const auto pedal_mid = e_pedal.pre_solve(running_sensors(omega0, mid.throttle_eff), tcu_floor, h);
+        CHECK(pedal_mid.throttle_eff == Catch::Approx(mid.throttle_eff).epsilon(1e-9));
+        CHECK(mid.tau0 == Catch::Approx(pedal_mid.tau0).epsilon(1e-12));
+        CHECK(mid.d == Catch::Approx(pedal_mid.d).epsilon(1e-12));
+    }
+}
+
+TEST_CASE("EngineTorqueMap: a single governed engine inertia under constant load settles to the "
+          "bisected equilibrium of m(n)+c_k + theta_gov(n)*(w(n)-m(n)) == load, within 0.1 rpm",
+          "[unit][drivetrain][engine][governor]") {
+    const EngineTorqueMap::Desc desc = make_governed_desc(); // full lever: n_nl=2400, band [2200,2400]
+    EngineTorqueMap::TcuRequest tcu;
+    const real h = 1.0 / 960.0;
+    const real load_nm = 100.0; // chosen so equilibrium falls strictly inside the droop band (see below)
+    const real c_k = -desc.motoring_torque_nm_vs_rpm.evaluate(real(0.0));
+
+    // Independent equilibrium, computed directly from the desc's own curves
+    // (no call into EngineTorqueMap) - the same style as the cranking-
+    // equilibrium test above. At full lever, theta_gov(n) = clamp((2400-n)/
+    // 200, 0, 1).
+    auto tau_at = [&](real rpm) {
+        const real n_nl = desc.idle_rpm + real(1.0) * (desc.governor.high_idle_rpm - desc.idle_rpm);
+        const real band = desc.governor.droop * desc.governor.rated_rpm;
+        const real theta_gov = std::clamp((n_nl - rpm) / band, real(0.0), real(1.0));
+        const real m = desc.motoring_torque_nm_vs_rpm.evaluate(rpm);
+        const real w = desc.wot_torque_nm_vs_rpm.evaluate(rpm);
+        return (m + c_k) + theta_gov * (w - m);
+    };
+    // tau_at is monotonically decreasing with rpm over this range (rising
+    // rpm both droops theta_gov toward 0 and moves the WOT/motoring curves
+    // the wrong way for net torque) - bisect for tau_at(n) == load_nm.
+    real lo = 2200.0, hi = 2400.0; // the droop band itself
+    REQUIRE(tau_at(lo) > load_nm);
+    REQUIRE(tau_at(hi) < load_nm);
+    for (int i = 0; i < 100; ++i) {
+        const real mid_rpm = 0.5 * (lo + hi);
+        if (tau_at(mid_rpm) > load_nm) lo = mid_rpm; else hi = mid_rpm;
+    }
+    const real rpm_ref = 0.5 * (lo + hi);
+    REQUIRE(rpm_ref > 2200.0); // sanity: truly settles inside the band, not at a clamp edge
+    REQUIRE(rpm_ref < 2400.0);
+
+    // Simulate a lone engine node against the same constant load
+    // (semi-implicit Euler via the linearised tau0/d pre_solve gives every
+    // substep, same pattern as the idle-PI test's make_step above, with an
+    // external load subtracted): J*(w_new-w_old) = h*(tau0 - d*(w_new-w_old) - load)
+    // => w_new = (J*w_old + h*tau0 + h*d*w_old - h*load) / (J + h*d).
+    EngineTorqueMap eng(desc);
+    real omega = rpm_to_omega(2200.0); // start at the band's own lower edge
+    for (int i = 0; i < 200000; ++i) {
+        const auto r = eng.pre_solve(governed_sensors(omega, /*hand=*/1.0), tcu, h);
+        const real w_new =
+            (desc.inertia_kgm2 * omega + h * r.tau0 + h * r.d * omega - h * load_nm) / (desc.inertia_kgm2 + h * r.d);
+        (void)eng.post_solve(w_new, h);
+        omega = w_new;
+    }
+    const real rpm_final = std::abs(omega) * kRadPerSecToRpm;
+    CHECK(rpm_final == Catch::Approx(rpm_ref).margin(0.1));
 }

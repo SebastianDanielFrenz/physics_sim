@@ -1049,6 +1049,19 @@ struct RefGearbox {
         : file(std::string(R"({ "format": "physics_sim.gearbox/1", "name": "fixture", )") + gearbox_body + "}", tag),
           component_json(std::string(R"({ "id": "gearbox", "type": "gearbox", "ref": ")") + file.path.filename().string() + R"(" })") {}
 };
+
+// PHYS-033 P4 I4 C12: minimal_i3_engine_json() plus a "governor" block (and,
+// for the limiter-overlap case, an overridden "limiter" block too) - the
+// default idle_rpm (800) and default limiter (fuel_cut at 6800) from
+// engine_torque_map.h's Desc defaults are otherwise untouched, so each
+// SECTION below breaks exactly one governor rule at a time.
+std::string engine_with_governor(const std::string& governor_fields, const std::string& extra_engine_fields = std::string()) {
+    return std::string(R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+      "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+      "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+      "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0,
+      "governor": { )") + governor_fields + " }" + extra_engine_fields + " }";
+}
 } // namespace
 
 TEST_CASE("load_vehicle_json rejects an I2-style engine (no motoring curve, or hard_cut limiter)", "[unit][vehicle][io][drivetrain]") {
@@ -1068,6 +1081,104 @@ TEST_CASE("load_vehicle_json rejects an I2-style engine (no motoring curve, or h
         TempJsonFile f(json, "vehicle_i2_engine_hard_cut");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), Catch::Matchers::ContainsSubstring("hard_cut"));
     }
+}
+
+// PHYS-033 P4 I4 C12: the six self-contained "governor" block rejections
+// (core/src/io/vehicle_io.cpp lines ~395-421) plus the cross-field overlap
+// check against a soft_cut limiter (~453-463) - see docs/data_formats/
+// engine.md's "governor" section for the documented model these mirror.
+TEST_CASE("load_vehicle_json rejects a malformed governor block", "[unit][vehicle][io][drivetrain][governor]") {
+    SECTION("type is not \"all_speed\"") {
+        const std::string engine = engine_with_governor(
+            R"("type": "constant_speed", "high_idle_rpm": 2400, "rated_rpm": 2200, "droop": 0.09, "channel": "hand_throttle")");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_bad_type");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor.type must be \"all_speed\""));
+    }
+    SECTION("high_idle_rpm <= idle_rpm") {
+        // idle_rpm defaults to 800 (unset above); 700 <= 800.
+        const std::string engine = engine_with_governor(R"("high_idle_rpm": 700, "rated_rpm": 600, "droop": 0.09, "channel": "hand_throttle")");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_high_idle_le_idle");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor.high_idle_rpm must be > idle_rpm"));
+    }
+    SECTION("droop outside (0, 0.3]") {
+        const std::string engine = engine_with_governor(R"("droop": 0.35, "channel": "hand_throttle")");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_droop_too_high");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor.droop must be in (0, 0.3]"));
+    }
+    SECTION("droop == 0") {
+        const std::string engine = engine_with_governor(R"("droop": 0.0, "channel": "hand_throttle")");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_droop_zero");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor.droop must be in (0, 0.3]"));
+    }
+    SECTION("rated_rpm outside (idle_rpm, high_idle_rpm] - above high_idle_rpm") {
+        const std::string engine = engine_with_governor(R"("high_idle_rpm": 2400, "rated_rpm": 2500, "droop": 0.09, "channel": "hand_throttle")");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_rated_above_high_idle");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor.rated_rpm must be in (idle_rpm, high_idle_rpm]"));
+    }
+    SECTION("rated_rpm outside (idle_rpm, high_idle_rpm] - at or below idle_rpm") {
+        const std::string engine = engine_with_governor(R"("high_idle_rpm": 2400, "rated_rpm": 800, "droop": 0.09, "channel": "hand_throttle")");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_rated_le_idle");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor.rated_rpm must be in (idle_rpm, high_idle_rpm]"));
+    }
+    SECTION("channel is empty") {
+        const std::string engine = engine_with_governor(R"("channel": "")");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_empty_channel");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor.channel must not be empty"));
+    }
+    SECTION("combined with a soft_cut limiter whose band overlaps the droop band") {
+        // Default governor: high_idle_rpm 2400, droop 0.0909, rated_rpm 2200
+        // -> droop band [2400 - 0.0909*2200, 2400] = [2200.02, 2400]. A
+        // soft_cut limiter at rpm=2350/band_rpm=100 -> [2250, 2350], which
+        // overlaps.
+        const std::string engine = engine_with_governor(
+            R"("channel": "hand_throttle")",
+            R"(, "limiter": { "type": "soft_cut", "rpm": 2350, "band_rpm": 100 })");
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_governor_overlaps_soft_cut_limiter");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("governor combined with a soft_cut limiter"));
+    }
+}
+
+TEST_CASE("load_vehicle_json accepts a well-formed governor block and round-trips its fields", "[unit][vehicle][io][drivetrain][governor]") {
+    // NOTE: an INLINE gearbox component (minimal_i3_gearbox_json()) cannot be
+    // used for a case that must actually SUCCEED all the way through - its
+    // dispatch-level "type": "gearbox" is the same JSON object
+    // read_gearbox_fields() then re-reads as the manual/sequential
+    // discriminator, so an inline gearbox component always throws "gearbox
+    // 'type' must be \"manual\" or \"sequential\", got \"gearbox\"". Every
+    // OTHER use of minimal_i3_gearbox_json() in this file is inside a case
+    // that throws earlier (while validating a deliberately-broken engine),
+    // so this pre-existing quirk never surfaces there. Use a ref'd
+    // RefGearbox (its own file's "type" field is independent) instead.
+    RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0])",
+                  "gearbox_governor_well_formed_ref");
+    const std::string engine = engine_with_governor(
+        R"("type": "all_speed", "high_idle_rpm": 2400, "rated_rpm": 2200, "droop": 0.0909, "channel": "hand_throttle")");
+    const std::string json = minimal_i3_vehicle_json(engine, gb.component_json);
+    TempJsonFile f(json, "vehicle_governor_well_formed");
+    const vehicle::VehicleDesc desc = io::load_vehicle_json(f.path.string());
+    const auto* engine_desc = std::get_if<drivetrain::TorqueMapEngineDesc>(&desc.powertrain.components.at(0).params);
+    REQUIRE(engine_desc != nullptr);
+    REQUIRE(engine_desc->has_governor);
+    CHECK(engine_desc->governor.high_idle_rpm == Catch::Approx(2400.0));
+    CHECK(engine_desc->governor.rated_rpm == Catch::Approx(2200.0));
+    CHECK(engine_desc->governor.droop == Catch::Approx(0.0909));
+    CHECK(engine_desc->governor.channel == "hand_throttle");
 }
 
 TEST_CASE("load_vehicle_json rejects a component ref object with an extra key", "[unit][vehicle][io][drivetrain]") {

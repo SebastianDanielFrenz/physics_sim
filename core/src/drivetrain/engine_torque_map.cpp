@@ -84,8 +84,30 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     const bool starter_active = (state_ == EngineState::Cranking);
 
     // --- 6.1.4: throttle path -------------------------------------------------
-    const real theta_req =
-        tcu.ignition_cut ? real(0.0) : std::max(std::min(sensors.pedal_throttle, tcu.throttle_ceiling), tcu.throttle_floor);
+    // PHYS-033 P4 I4 C12 (plan section 3.6): an all-speed diesel governor
+    // with droop REPLACES the pedal in the request expression below when
+    // present - no governor block means req_input == sensors.pedal_throttle
+    // exactly, so the rest of this function is byte-identical to before this
+    // commit (governor_setpoint_rpm/theta_gov both stay 0.0).
+    //
+    // lever = max(hand_throttle, pedal), each clamped to [0,1]; n_nl =
+    // idle_rpm + lever*(high_idle_rpm - idle_rpm) is the governor's no-load
+    // setpoint; band = droop*rated_rpm (ISO 3046-4 steady-state droop
+    // referred to rated speed); theta_gov = clamp((n_nl - rpm)/band, 0, 1).
+    real theta_gov = real(0.0);
+    real governor_setpoint_rpm = real(0.0);
+    real governor_band = real(0.0);
+    real req_input = sensors.pedal_throttle;
+    if (desc_.has_governor) {
+        const real lever = std::max(std::clamp(sensors.hand_throttle, real(0.0), real(1.0)),
+                                     std::clamp(sensors.pedal_throttle, real(0.0), real(1.0)));
+        governor_setpoint_rpm = desc_.idle_rpm + lever * (desc_.governor.high_idle_rpm - desc_.idle_rpm);
+        governor_band = desc_.governor.droop * desc_.governor.rated_rpm;
+        theta_gov = std::clamp((governor_setpoint_rpm - rpm) / governor_band, real(0.0), real(1.0));
+        req_input = theta_gov;
+    }
+
+    const real theta_req = tcu.ignition_cut ? real(0.0) : std::max(std::min(req_input, tcu.throttle_ceiling), tcu.throttle_floor);
 
     if (state_ == EngineState::Running && theta_req < real(0.01) && rpm > desc_.dfco_enable_rpm) {
         dfco_active_ = true;
@@ -121,6 +143,21 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     const bool comb = (state_ == EngineState::Running || state_ == EngineState::Cranking) && rpm >= desc_.fire_rpm && omega_old > real(0.0);
     const real theta_c = comb ? theta_eff * f_lim : real(0.0);
 
+    // PHYS-033 P4 I4 C12: is the governor the ACTIVE argument all the way
+    // through to theta_c this substep? theta_gov must flow through UNCHANGED
+    // to theta_c - not clipped by the TCU's ceiling/floor (theta_req ==
+    // theta_gov, an exact compare: std::min/std::max are no-ops when the
+    // value is already within range), not beaten by the idle PI (theta_eff
+    // == theta_req; a TIE is treated as "not beaten", i.e. still governor-
+    // active - the chosen convention at that kink), strictly inside the
+    // droop band (0 < theta_gov < 1 - AT either edge the clamp's own zero
+    // slope wins, the chosen convention there, consistent with theta_gov's
+    // own clamp() above), combustion firing (comb - tau_comb is identically
+    // 0 otherwise, so its derivative through theta_eff is 0 too), and no
+    // ignition cut (theta_req is then a constant 0, independent of omega).
+    const bool governor_engaged = desc_.has_governor && comb && !tcu.ignition_cut && theta_req == theta_gov &&
+                                   theta_eff == theta_req && theta_gov > real(0.0) && theta_gov < real(1.0);
+
     // --- 6.1.7: node torque (without the Coulomb row) ---------------------------
     const real s = sign(omega_old);
     const real m_rpm = desc_.motoring_torque_nm_vs_rpm.evaluate(rpm);
@@ -141,6 +178,17 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
         const real dflim_domega = in_band ? -kRadPerSecToRpm / desc_.limiter.band_rpm : real(0.0);
         dtau_domega += theta_eff * (w_rpm - m_rpm) * dflim_domega;
     }
+    // PHYS-033 P4 I4 C12: tau_comb = theta_eff*f_lim*(w-m); when the governor
+    // is the active argument (governor_engaged), theta_eff == theta_gov and
+    // d(theta_gov)/drpm = -1/governor_band strictly inside the droop band,
+    // drpm/domega = kRadPerSecToRpm (same no-sign-factor convention as
+    // m_slope/w_slope above) => d(theta_gov)/domega = -kRadPerSecToRpm/band.
+    // Contribution to dtau/domega: f_lim*(w_rpm-m_rpm)*d(theta_gov)/domega -
+    // exactly the spec's own formula.
+    if (governor_engaged) {
+        const real dgov_domega = -kRadPerSecToRpm / governor_band;
+        dtau_domega += f_lim * (w_rpm - m_rpm) * dgov_domega;
+    }
     if (starter_in_speed_range) dtau_domega -= desc_.starter.stall_torque_nm / omega_s0;
     const real d = std::max(-dtau_domega, real(0.0));
 
@@ -159,6 +207,8 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.dfco_active = dfco_active_;
     r.starter_active = starter_active;
     r.torque_estimate = tau_smooth_ + tau_comb_;
+    r.governor_setpoint_rpm = governor_setpoint_rpm;
+    r.hand_throttle = desc_.has_governor ? sensors.hand_throttle : real(0.0);
     r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
     return r;
 }

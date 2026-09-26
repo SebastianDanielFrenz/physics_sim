@@ -39,6 +39,7 @@ add_executable(ps_validation_tests
   test_powertrain_split_mu.cpp
   test_powertrain_mfwd.cpp
   test_powertrain_pto.cpp
+  test_powertrain_pto_governor.cpp
   test_reference_cars.cpp
   test_terrain_seam_crossing.cpp
 )

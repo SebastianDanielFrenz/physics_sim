@@ -91,6 +91,13 @@ struct PowertrainSnapshot {
     real pto_engagement = 0.0;
     real pto_mode = 0.0;
     real pto_rpm = 0.0;
+    // PHYS-033 P4 I4 C12: the all-speed governor's own no-load setpoint n_nl
+    // this tick, and the hand_throttle channel value it read - both 0 for
+    // every vehicle with no governor (car_sedan.json, every pre-C12 file).
+    // Never hashed (plain reads of Powertrain::governor_setpoint_rpm/
+    // governor_hand_throttle).
+    real governor_setpoint_rpm = 0.0;
+    real hand_throttle = 0.0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled
