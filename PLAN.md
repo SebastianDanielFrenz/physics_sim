@@ -712,6 +712,13 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   constant as fuel burns; engine type chosen by "kind": "simulated" plus
   an architecture field; generated maps never committed; the graph engine
   ignores altitude; refuelling only through a test/game hook.
+- Cable throttle and the pedal law (Sebastian, 2026-09-26): an engine whose
+  throttle input is mechanical is exempt from the 2026-09-25 torque-fraction
+  pedal semantics below - the cable sets the throttle position directly.
+  The simulated R26B for the 787B declares an electronic throttle.
+- Compressor surge (Sebastian, 2026-09-26): I7d only flags surge and counts
+  events for the sound system. A real surge model stays an optional later
+  item, taken up only if the results turn out unsatisfactory.
 
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
