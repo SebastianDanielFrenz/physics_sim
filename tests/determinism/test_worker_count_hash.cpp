@@ -15,6 +15,7 @@
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/world.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
@@ -587,41 +588,14 @@ TEST_CASE("State hash with an auto-shift-triggered gearbox grind is identical ac
 // suppression, dynamic balls on the streamed terrain. The same file is in
 // tools/ci.ps1's Windows-vs-Linux hash compare; this covers worker count.
 namespace {
+// Applies scenario.control_events in time order exactly the way
+// tools/ps_run/main.cpp's own tick loop does, so a scenario file with
+// control_events (e.g. vehicle_tractor_i4.json) hashes the same driven
+// state here as it does under ps_run - a scenario with none (e.g.
+// terrain_multi_interest.json) sees this loop never fire, unchanged from
+// the pre-control-events version of this helper.
 std::uint64_t run_scenario_file(const char* file, int workers) {
     ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/" + file);
-    sc.world_config.job_workers = workers;
-    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
-    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
-    for (int i = 0; i < ticks; ++i) built.world->step();
-    return built.world->state_hash();
-}
-} // namespace
-
-TEST_CASE("State hash with two terrain interest points and suppression is identical across 1, 2, 4, 10 and 24 workers",
-          "[determinism][terrain][heavy][world][io]") {
-    const std::uint64_t reference = run_scenario_file("terrain_multi_interest.json", 1);
-    for (int workers : {2, 4, 10, 24}) {
-        const std::uint64_t h = run_scenario_file("terrain_multi_interest.json", workers);
-        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
-        REQUIRE(h == reference);
-    }
-}
-
-// data/scenarios/vehicle_tractor_i4.json (PHYS-033 P4 I4 C15): a single
-// tractor exercising every tractor-only control channel in one 10 s run -
-// hand_throttle, pto, three incremental shift_up_count steps (N->1->2->3),
-// awd, the new C15 diff_lock on/off, brake to a stop, then park_lock.
-// Unlike run_scenario_file above (whose only caller, terrain_multi_interest,
-// has no control_events), this scenario's whole point is control-event-
-// driven state under worker-count variation, so this helper also applies
-// scenario.control_events in time order exactly the way tools/ps_run/
-// main.cpp's own tick loop does - run_scenario_file alone would silently
-// skip every event and hash a tractor that never leaves Neutral idle. Pins
-// the literal hash recorded when the scenario file was authored (ps_run at
-// 1/2/4/10 workers all agreed before this test existed).
-namespace {
-std::uint64_t run_tractor_i4_scenario(int workers) {
-    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_tractor_i4.json");
     sc.world_config.job_workers = workers;
     ps::io::BuiltScenario built = ps::io::build_scenario(sc);
     ps::World& world = *built.world;
@@ -639,16 +613,135 @@ std::uint64_t run_tractor_i4_scenario(int workers) {
 }
 } // namespace
 
+TEST_CASE("State hash with two terrain interest points and suppression is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][terrain][heavy][world][io]") {
+    const std::uint64_t reference = run_scenario_file("terrain_multi_interest.json", 1);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("terrain_multi_interest.json", workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+// data/scenarios/vehicle_tractor_i4.json (PHYS-033 P4 I4 C15): a single
+// tractor exercising every tractor-only control channel in one 10 s run -
+// hand_throttle, pto, three incremental shift_up_count steps (N->1->2->3),
+// awd, the C15 diff_lock on/off, brake to a stop, then park_lock. Pins the
+// literal hash recorded when the scenario file was authored (ps_run at
+// 1/2/4/10 workers all agreed before this test existed).
 TEST_CASE("State hash for the tractor I4 control-channel exercise scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
     constexpr std::uint64_t kRecorded = 0xac386af7129b9ffeULL;
-    const std::uint64_t reference = run_tractor_i4_scenario(1);
+    const std::uint64_t reference = run_scenario_file("vehicle_tractor_i4.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     REQUIRE(reference == kRecorded);
     for (int workers : {2, 4, 10, 24}) {
-        const std::uint64_t h = run_tractor_i4_scenario(workers);
+        const std::uint64_t h = run_scenario_file("vehicle_tractor_i4.json", workers);
         INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
         REQUIRE(h == reference);
+    }
+}
+
+// C15a review companion: the hash-equality case above proves the tractor's
+// end state is reproducible across worker counts, but reproducibility alone
+// is not evidence any individual control event actually did anything - a
+// scenario that silently ignored every event would hash just as
+// reproducibly. This runs vehicle_tractor_i4.json once (1 worker) and reads
+// World's live powertrain/chassis state at points between successive
+// events, asserting each event's expected effect directly rather than
+// inferring it from telemetry deltas.
+TEST_CASE("Tractor I4 scenario's control events produce the expected live powertrain state",
+          "[determinism][vehicle][drivetrain][world]") {
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_tractor_i4.json");
+    sc.world_config.job_workers = 1;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    const ps::VehicleId vehicle = built.vehicles_by_name.at("tractor");
+    const ps::BodyId chassis = built.bodies_by_name.at("chassis");
+
+    std::size_t next_control_event = 0;
+    auto step_until = [&](ps::real t_target) {
+        while (world.sim_time() < t_target) {
+            while (next_control_event < sc.control_events.size() && sc.control_events[next_control_event].time_s <= world.sim_time()) {
+                const auto& ev = sc.control_events[next_control_event];
+                world.set_control(ev.channel, ev.value);
+                ++next_control_event;
+            }
+            world.step();
+        }
+    };
+
+    // Just before the first shift (t=1.0): the pto event fired at t=0.3 and
+    // tractor.json's pto engage_time_s is 1.5 s, so full engagement isn't
+    // guaranteed yet here - only check it has started ramping.
+    step_until(0.9);
+    {
+        const auto& state = world.powertrain_state(vehicle);
+        CHECK(state.pto_engagement > 0.0);
+        INFO("t=0.9 pto_engagement=" << state.pto_engagement);
+    }
+
+    // Just before the awd event (t=4.0): three shift_up_count events (at
+    // t=1,2,3) and tractor.json's pto ramp (fully engaged by t=1.8) have
+    // both had time to complete.
+    step_until(3.9);
+    {
+        const auto& state = world.powertrain_state(vehicle);
+        CHECK(state.gear == 3);
+        CHECK(state.pto_engagement == Catch::Approx(1.0).margin(1e-6));
+        CHECK(state.pto_rpm > 0.0);
+        INFO("t=3.9 gear=" << int(state.gear) << " pto_engagement=" << state.pto_engagement
+                            << " pto_rpm=" << state.pto_rpm);
+    }
+
+    // Just before the diff_lock-on event (t=5.0): the awd event at t=4.0 has
+    // had the transfer case's 0.3 s engage_time_s to fully ramp.
+    step_until(4.9);
+    {
+        const auto& state = world.powertrain_state(vehicle);
+        CHECK(state.awd_engagement == Catch::Approx(1.0).margin(1e-6));
+        INFO("t=4.9 awd_engagement=" << state.awd_engagement);
+    }
+
+    // Just before the diff_lock-off event (t=6.0): the rear diff (component
+    // index 0, PowertrainSnapshot::diffs' component-array order) should be
+    // locked.
+    step_until(5.9);
+    {
+        const auto& state = world.powertrain_state(vehicle);
+        REQUIRE(state.diff_count >= 1);
+        CHECK(state.diffs[0].locked);
+        INFO("t=5.9 diffs[0].locked=" << state.diffs[0].locked);
+    }
+
+    // Just before the brake event (t=7.0): the diff_lock-off event at t=6.0
+    // releases immediately (components.h's own comment), so the rear diff
+    // should be unlocked again.
+    step_until(6.9);
+    {
+        const auto& state = world.powertrain_state(vehicle);
+        CHECK_FALSE(state.diffs[0].locked);
+        INFO("t=6.9 diffs[0].locked=" << state.diffs[0].locked);
+    }
+
+    // End of run (t=10): braking since t=7.0 should have brought the
+    // tractor to a stop, and the park_lock event at t=9.0 should have
+    // engaged (ParkLock's own max_engage_speed_rad_s gate needs the
+    // gearbox-output shaft slow enough, which a stopped vehicle in gear
+    // satisfies).
+    step_until(10.0);
+    {
+        const auto& state = world.powertrain_state(vehicle);
+        const ps::real speed = world.get_motion(chassis).linear.length();
+        INFO("t=10 speed=" << speed << " park_lock_engaged=" << state.park_lock_engaged
+                            << " engine_state=" << static_cast<int>(state.engine_state));
+        CHECK(speed < 0.1);
+        CHECK(state.park_lock_engaged == Catch::Approx(1.0).margin(1e-6));
+        // Reported, not silently assumed: braking a tractor in gear 3 to a
+        // standstill with no neutral/clutch event beforehand risks stalling
+        // the engine unless the auto-clutch opens fast enough. See this
+        // test's own commit message for the measured engine_state value.
+        CHECK(state.engine_state != drivetrain::EngineState::Stalled);
     }
 }
 
