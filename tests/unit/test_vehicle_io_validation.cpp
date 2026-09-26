@@ -994,6 +994,95 @@ TEST_CASE("load_vehicle_json validates load_dyno fields (I4 C11)", "[unit][vehic
     }
 }
 
+// PHYS-033 P4 I4 C13: compliant drivetrain shafts. powertrain.compliance
+// ("rigid" default / "compliant") plus per-shaft stiffness/damping. Same
+// minimal standalone powertrain block as the transfer_case cases above (the
+// loader validates the shaft block syntactically; no graph is built here).
+TEST_CASE("load_vehicle_json validates compliant shaft fields (I4 C13)", "[unit][vehicle][io][drivetrain][compliance]") {
+    using Catch::Matchers::ContainsSubstring;
+    // `compliance` is the whole "compliance": ... member (or empty), `rear_shaft`
+    // the whole rear shaft object's extra fields, `rear_ports` its port list.
+    auto json_with = [](const std::string& compliance, const std::string& rear_extra,
+                        const std::string& rear_ports = R"("transfer.rear", "wheel:FL")") {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" }, { "name": "RL" } ],
+  "powertrain": {)") +
+               compliance + R"(
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 2500.0 } }
+    ],
+    "shafts": [
+      { "ports": [)" + rear_ports + "]" + rear_extra + R"( },
+      { "ports": ["transfer.front", "wheel:FR"] }
+    ]
+  }
+})";
+    };
+    auto rejects = [](const std::string& text, const char* tag, const std::string& needle) {
+        TempJsonFile f(text, tag);
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring(needle));
+    };
+    const std::string compliant = R"( "compliance": "compliant",)";
+    const std::string rigid = R"( "compliance": "rigid",)";
+
+    SECTION("default is rigid, stiffness/damping default to 0") {
+        TempJsonFile f(json_with("", ""), "vehicle_c13_default");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        CHECK(d.powertrain.compliance == drivetrain::Compliance::Rigid);
+        REQUIRE(d.powertrain.shafts.size() == 2);
+        CHECK(d.powertrain.shafts[0].stiffness == 0.0);
+        CHECK(d.powertrain.shafts[0].damping == 0.0);
+    }
+    SECTION("a well-formed compliant shaft round-trips") {
+        TempJsonFile f(json_with(compliant, R"(, "stiffness": 600.0, "damping": 2.0)"), "vehicle_c13_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        CHECK(d.powertrain.compliance == drivetrain::Compliance::Compliant);
+        CHECK(d.powertrain.shafts[0].stiffness == 600.0);
+        CHECK(d.powertrain.shafts[0].damping == 2.0);
+        CHECK(d.powertrain.shafts[1].stiffness == 0.0);
+    }
+    SECTION("rigid parses and keeps stiffness/damping (ignored at graph build)") {
+        TempJsonFile f(json_with(rigid, R"(, "stiffness": 600.0, "damping": 2.0)"), "vehicle_c13_rigid");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        CHECK(d.powertrain.compliance == drivetrain::Compliance::Rigid);
+        CHECK(d.powertrain.shafts[0].stiffness == 600.0);
+    }
+    SECTION("rigid with a 3-port stiff shaft is fine (the 2-port rule is compliant-only)") {
+        TempJsonFile f(json_with(rigid, R"(, "stiffness": 600.0)", R"("transfer.rear", "wheel:FL", "wheel:RL")"),
+                       "vehicle_c13_rigid_3port");
+        REQUIRE_NOTHROW(io::load_vehicle_json(f.path.string()));
+    }
+    SECTION("stiffness < 0 is rejected") {
+        rejects(json_with(compliant, R"(, "stiffness": -1.0)"), "vehicle_c13_k_neg", "'stiffness' must be >= 0");
+    }
+    SECTION("damping < 0 is rejected") {
+        rejects(json_with(compliant, R"(, "stiffness": 600.0, "damping": -0.5)"), "vehicle_c13_c_neg",
+                "'damping' must be >= 0");
+    }
+    SECTION("damping > 0 with stiffness 0 is rejected (no pure damper shaft)") {
+        rejects(json_with(compliant, R"(, "damping": 2.0)"), "vehicle_c13_pure_damper",
+                "'damping' > 0 requires 'stiffness' > 0");
+    }
+    SECTION("\"compliant\" with no stiff shaft is rejected") {
+        rejects(json_with(compliant, ""), "vehicle_c13_no_stiff", "no shaft has stiffness > 0");
+    }
+    SECTION("a compliant stiff shaft with 3 ports is rejected") {
+        rejects(json_with(compliant, R"(, "stiffness": 600.0)", R"("transfer.rear", "wheel:FL", "wheel:RL")"),
+                "vehicle_c13_3port", "must list exactly 2 ports, got 3");
+    }
+    SECTION("a compliant stiff shaft with 1 port is rejected") {
+        rejects(json_with(compliant, R"(, "stiffness": 600.0)", R"("transfer.rear")"), "vehicle_c13_1port",
+                "must list exactly 2 ports, got 1");
+    }
+    SECTION("an unknown compliance string is rejected") {
+        rejects(json_with(R"( "compliance": "elastic",)", R"(, "stiffness": 600.0)"), "vehicle_c13_unknown",
+                "powertrain.compliance must be \"rigid\" or \"compliant\", got \"elastic\"");
+    }
+}
+
 // --- PHYS-033 P4 I3 plan section 9.2 ----------------------------------------
 
 namespace {

@@ -968,7 +968,9 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
         }
 
         if (pj.contains("shafts")) {
+            std::size_t shaft_index = 0;
             for (const auto& sj : pj.at("shafts")) {
+                const std::string sctx = "vehicle '" + v.name + "': powertrain.shafts[" + std::to_string(shaft_index++) + "]";
                 ps::drivetrain::ShaftDesc s;
                 if (!sj.contains("ports")) throw std::runtime_error("vehicle '" + v.name + "': powertrain.shafts[]: 'ports' is required");
                 for (const auto& prj : sj.at("ports")) {
@@ -989,19 +991,44 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     }
                     s.ports.push_back(pr);
                 }
+                // PHYS-033 P4 I4 C13: stiffness/damping are validated here
+                // whatever the compliance (a negative value is a data error
+                // either way); under "rigid" they are then simply ignored.
                 s.stiffness = sj.value("stiffness", real(0.0));
-                if (s.stiffness != real(0.0)) {
-                    throw std::runtime_error("vehicle '" + v.name + "': powertrain.shafts[]: 'stiffness' must be 0 in I3 (I4 adds compliant shafts)");
-                }
                 s.damping = sj.value("damping", real(0.0));
+                if (!(s.stiffness >= real(0.0))) throw std::runtime_error(sctx + ": 'stiffness' must be >= 0");
+                if (!(s.damping >= real(0.0))) throw std::runtime_error(sctx + ": 'damping' must be >= 0");
+                if (s.damping > real(0.0) && s.stiffness == real(0.0)) {
+                    throw std::runtime_error(sctx + ": 'damping' > 0 requires 'stiffness' > 0 (a pure damper shaft is not supported)");
+                }
                 p.shafts.push_back(s);
             }
         }
 
         if (pj.contains("compliance")) {
             const std::string c = pj.at("compliance").get<std::string>();
-            if (c != "rigid") throw std::runtime_error("vehicle '" + v.name + "': powertrain.compliance must be \"rigid\" in I3 (I4 adds \"compliant\"), got \"" + c + "\"");
-            p.compliance = ps::drivetrain::Compliance::Rigid;
+            if (c == "rigid") {
+                p.compliance = ps::drivetrain::Compliance::Rigid;
+            } else if (c == "compliant") {
+                p.compliance = ps::drivetrain::Compliance::Compliant;
+            } else {
+                throw std::runtime_error("vehicle '" + v.name + "': powertrain.compliance must be \"rigid\" or \"compliant\", got \"" + c + "\"");
+            }
+        }
+        if (p.compliance == ps::drivetrain::Compliance::Compliant) {
+            bool any_stiff = false;
+            for (std::size_t si = 0; si < p.shafts.size(); ++si) {
+                if (p.shafts[si].stiffness <= real(0.0)) continue;
+                any_stiff = true;
+                if (p.shafts[si].ports.size() != 2) {
+                    throw std::runtime_error("vehicle '" + v.name + "': powertrain.shafts[" + std::to_string(si) +
+                                             "]: a compliant shaft (stiffness > 0) must list exactly 2 ports, got " +
+                                             std::to_string(p.shafts[si].ports.size()));
+                }
+            }
+            if (!any_stiff) {
+                throw std::runtime_error("vehicle '" + v.name + "': powertrain.compliance is \"compliant\" but no shaft has stiffness > 0");
+            }
         }
         p.rotor_reaction = pj.value("rotor_reaction", true);
     }

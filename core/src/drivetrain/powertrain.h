@@ -364,6 +364,59 @@ public:
     [[nodiscard]] bool diff_lock_engaged(std::size_t i) const { return ((state_lock_bits(network_.topology_state()) >> i) & 1) != 0; }
     [[nodiscard]] bool diff_lock_pending(std::size_t i) const { return lock_pending_[i] != 0; }
 
+    // --- PHYS-033 P4 I4 C13: compliant shafts (PowertrainDesc::compliance ==
+    // Compliant, ShaftDesc::stiffness > 0). Each is a spring-damper coupling
+    // between two distinct nodes a (ports[0]) and b (ports[1]); twist
+    // theta = integral(omega_a - omega_b), shaft torque tau_s acts -tau_s on
+    // a and +tau_s on b. Per substep (pre_solve_components' tail, after
+    // every component's pre_solve and after any topology switch):
+    //   trapezoidal (default):  c_impl = c/2 + k*h/4,
+    //                           tau_expl = k*theta + c_impl*v_old,
+    //                           theta' = theta + h*(v_old + v_new)/2
+    //   backward Euler (the first substep after a mode change - a topology
+    //   switch or any friction-row stick-flag change in the PREVIOUS
+    //   substep, or a reset()):  c_impl = c + k*h, tau_expl = k*theta,
+    //                           theta' = theta + h*v_new
+    // with c_impl applied implicitly via Assembly::set_coupling and tau_expl
+    // via Assembly::torque; tau_s = tau_expl + c_impl*v_new. Ledger (solve()):
+    // shaft_pe = sum 1/2*k*theta'^2 (instantaneous), shaft_damping_loss +=
+    // h*c*v_d^2 (v_d = (v_old+v_new)/2 trapezoidal, v_new BE), and the
+    // spring's discretisation residual h*tau_s*v_new - dPE - dD goes into
+    // integrator_loss (trapezoidal: (h/2)*tau_s*(v_new - v_old), any sign;
+    // BE: 1/2*k*h^2*v_new^2 >= 0). A Rigid vehicle has none of this: no
+    // coupling, no term, no hash byte, no ledger change.
+    struct CompliantShaft {
+        NodeId a, b;
+        real k = 0.0;
+        real c = 0.0;
+        int shaft_index = 0; // into PowertrainDesc::shafts
+        CouplingId coupling{};
+        real theta = 0.0;    // STATE (hashed): twist, rad
+        real v_old = 0.0;    // this substep's omega_a - omega_b before the solve (scratch)
+        real c_impl = 0.0;   // this substep's implicit damping coefficient (scratch)
+        real tau_expl = 0.0; // this substep's explicit torque (scratch)
+        real tau_last = 0.0; // last substep's total shaft torque tau_s (debug only, not hashed)
+        std::uint8_t reset_mode = 0; // reset(): 0 leave (both ends set elsewhere), 1 omega_b = omega_a, 2 omega_a = omega_b
+    };
+    [[nodiscard]] bool has_compliant_shafts() const { return !compliant_.empty(); }
+    [[nodiscard]] const std::vector<CompliantShaft>& compliant_shafts() const { return compliant_; }
+    // true when the NEXT substep will integrate the compliant shafts with
+    // backward Euler (a mode change happened last substep, or a reset()).
+    [[nodiscard]] bool compliant_be_next() const { return be_next_; }
+    // true when the LAST completed substep used backward Euler.
+    [[nodiscard]] bool compliant_be_last() const { return be_this_; }
+    // PowertrainDebug fill: the i-th COMPLIANT shaft (shafts[] order, rigid
+    // shafts skipped) in slot i; unused slots 0.
+    void fill_shaft_debug(std::array<real, kMaxCompliantShafts>& twist, std::array<real, kMaxCompliantShafts>& torque) const {
+        twist.fill(real(0.0));
+        torque.fill(real(0.0));
+        const std::size_t n = std::min(compliant_.size(), twist.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            twist[i] = compliant_[i].theta;
+            torque[i] = compliant_[i].tau_last;
+        }
+    }
+
     // Network omega/stick-sets/topology-state (ShaftNetwork::fold_state_hash)
     // plus every component's own additional state (GearPair/Differential's
     // lambda_mesh_prev_, engine's state machine, gearbox's phase machine, the
@@ -478,6 +531,14 @@ private:
     // into-components_ pattern as transfer_case_/park_lock_ above. ---
     Pto* pto_ = nullptr;
     FrictionRowId pto_row_{};
+
+    // --- compliant shafts (I4 C13, see CompliantShaft above). Every member
+    // below stays empty/false/unused for a Rigid vehicle. ---
+    std::vector<CompliantShaft> compliant_;          // shafts[] order, built once at construction
+    bool be_next_ = true;                            // STATE (hashed when compliant): next substep is backward Euler
+    bool be_this_ = false;                           // this/last substep's scheme (scratch)
+    bool topo_switched_this_substep_ = false;        // set in pre_solve_components, read by solve()
+    std::vector<std::uint8_t> compliant_stuck_before_; // per friction row, sized once at construction (compliant only)
 
     // --- load_dyno(s) (I4 C11, plan section 3.5, test/bench only): every
     // load_dyno component, component order. Empty for every shipped vehicle

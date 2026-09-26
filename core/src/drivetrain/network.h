@@ -214,7 +214,33 @@ public:
     [[nodiscard]] real coupling_rb(CouplingId k) const { return k.index < coupling_rb_.size() ? coupling_rb_[k.index] : real(1.0); }
     [[nodiscard]] real coupling_c(CouplingId k) const { return k.index < coupling_c_.size() ? coupling_c_[k.index] : real(0.0); }
 
+    // PHYS-033 P4 I4 C13: a coupling's IMPLICIT reaction (-c*ra*v_new on a,
+    // +c*rb*v_new on b) is in neither tau0() nor d(), so a node-balance
+    // reconstruction (components.h's reconstruct_mesh_torque et al.) would
+    // otherwise read it as part of the unknown rigid reaction. Opt-in, per
+    // substep: Powertrain calls begin_substep_implicit() only when the
+    // vehicle has compliant shafts and fills these with each compliant
+    // shaft's implicit part AFTER the solve (v_new is only known then); the
+    // reconstruction adds implicit_reaction(node) to its tau0 read only when
+    // has_implicit_reactions() - an Assembly that never opts in (every Rigid
+    // vehicle, every test scratch Assembly) keeps its reconstruction
+    // arithmetic literally unchanged. The C6 viscous-diff coupling is NOT
+    // routed through here (its reaction cancels in its own LeafPair sum by
+    // design, see test_powertrain_diff.cpp).
+    void begin_substep_implicit(int node_count) {
+        implicit_reaction_.set_size(static_cast<std::size_t>(node_count));
+        implicit_reaction_.zero();
+        implicit_active_ = true;
+    }
+    void add_implicit_reaction(NodeId n, real tau) { implicit_reaction_[n.index] += tau; }
+    [[nodiscard]] bool has_implicit_reactions() const { return implicit_active_; }
+    [[nodiscard]] real implicit_reaction(NodeId n) const {
+        return n.index < implicit_reaction_.size() ? implicit_reaction_[n.index] : real(0.0);
+    }
+
 private:
+    SmallVec<kMaxNetworkNodes> implicit_reaction_;
+    bool implicit_active_ = false;
     SmallVec<kMaxNetworkNodes> tau0_;
     SmallVec<kMaxNetworkNodes> d_;
     SmallVec<kMaxNetworkFrictionRows> cap_static_;

@@ -15,7 +15,8 @@ struct PowertrainEnergy {
     real tyre_loss = 0.0;       // h*Fx_lin*(omega'*R - vx), cumulative (slip loss, >= 0 in steady sign)
     real brake_loss = 0.0;      // -h*v'*lambda, cumulative, >= 0
     real gear_loss = 0.0;       // -h*omega'_in*tau_loss, cumulative, >= 0
-    real integrator_loss = 0.0; // 1/2*Delta(omega)^T*J*Delta(omega), cumulative, >= 0 (linearly-implicit Euler's own dissipation)
+    real integrator_loss = 0.0; // 1/2*Delta(omega)^T*J*Delta(omega), cumulative, >= 0 (linearly-implicit Euler's own dissipation;
+                                // with compliant shafts it also carries their spring residual and may then decrease - see shaft_pe)
     real rotor_ke = 0.0;        // 1/2*sum(J_i*omega_i^2), instantaneous (NOT cumulative - "stored" in the plan's own naming)
     real balance_error = 0.0;   // per-tick closure residual (plan section 8); should stay near 0 (< 1e-9 relative)
 
@@ -55,6 +56,19 @@ struct PowertrainEnergy {
     // load_dyno, so this stays exactly 0 everywhere except a test that adds
     // one in code - hash-neutral (load_dyno itself is stateless, not hashed).
     real external_absorbed = 0.0;
+
+    // PHYS-033 P4 I4 C13: compliant shafts (PowertrainDesc::compliance ==
+    // Compliant). shaft_pe = sum(1/2*k*theta^2) over every compliant shaft,
+    // instantaneous (stored, like rotor_ke - written by solve(), not by a
+    // reset); shaft_damping_loss = the damper's h*c*v^2 per substep
+    // (v = the trapezoidal mid-step twist rate, or v' on a backward-Euler
+    // substep), cumulative, >= 0. The spring's own discretisation residual
+    // goes into integrator_loss (it can be negative there, see
+    // Powertrain::solve). Both stay exactly 0 for a Rigid vehicle (every
+    // shipped vehicle) - hash-neutral, and end_tick() only adds them to the
+    // balance when the vehicle has at least one compliant shaft.
+    real shaft_pe = 0.0;
+    real shaft_damping_loss = 0.0;
 };
 
 } // namespace ps::drivetrain

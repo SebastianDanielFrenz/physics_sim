@@ -360,7 +360,9 @@ void World::step() {
         row.push_back(e.brake_loss);
         row.push_back(e.gear_loss);
         row.push_back(e.integrator_loss);
-        row.push_back(e.rotor_ke);
+        // PHYS-033 P4 I4 C13: "stored" includes the compliant shafts' spring
+        // energy - only for a vehicle that has any (Rigid: literally rotor_ke).
+        row.push_back(vehicle_instance.powertrain_has_compliant_shafts() ? e.rotor_ke + e.shaft_pe : e.rotor_ke);
         row.push_back(e.balance_error);
         row.push_back(real(vehicle_instance.powertrain_friction_cap_hits()));
         row.push_back(real(vehicle_instance.powertrain_nonspd_hits()));
