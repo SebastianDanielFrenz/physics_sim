@@ -7,8 +7,8 @@
 // I3 replaces I2's placeholder engine/limiter shapes wholesale (no legacy
 // converter - PHYS-033 owner ruling Q7's precedent, plan section 9.1's
 // "physics_sim.vehicle/2 stays /2, loud failure instead"). engine, clutch,
-// gearbox, differential, gear_pair are the I3 component catalogue; I4 adds
-// compliant shafts/LSD/locked diffs.
+// gearbox, differential, gear_pair are the I3 component catalogue; I4 added
+// LSD/locked diffs, transfer case, park lock, pto and (C13) compliant shafts.
 
 #pragma once
 
@@ -31,12 +31,17 @@ struct PortRef {
     bool is_wheel = false;
 };
 
-// Joins ports into one rigid node (I3: stiffness must be 0 - a compliant
-// shaft is I4). PHYS-033 P4 I2 plan section 2.3.
+// Joins ports into one rigid node (PHYS-033 P4 I2 plan section 2.3). Under
+// PowertrainDesc::compliance == Compliant (PHYS-033 P4 I4 C13), a shaft with
+// stiffness > 0 instead joins EXACTLY two ports through a torsional spring-
+// damper: the two ports stay separate nodes (each must carry inertia > 0),
+// twist theta = integral(omega_a - omega_b), torque tau_s = k*theta + c*
+// (omega_a - omega_b) acts -tau_s on ports[0] and +tau_s on ports[1]. Under
+// Rigid every shaft is rigid and stiffness/damping are ignored.
 struct ShaftDesc {
     std::vector<PortRef> ports;
-    real stiffness = 0.0; // N*m/rad; I3 requires exactly 0 (rigid)
-    real damping = 0.0;   // N*m*s/rad; unused while stiffness == 0
+    real stiffness = 0.0; // N*m/rad, >= 0; > 0 makes the shaft compliant (Compliant only)
+    real damping = 0.0;   // N*m*s/rad, >= 0; > 0 requires stiffness > 0
 };
 
 // PHYS-033 I3 plan section 4.1: I2's "hard_cut" placeholder is gone - the
@@ -297,7 +302,10 @@ struct ComponentDesc {
     ComponentParams params;
 };
 
-enum class Compliance { Rigid }; // I4 adds Compliant
+// PHYS-033 P4 I4 C13: Rigid - every shaft merges its ports into one node;
+// Compliant - shafts with stiffness > 0 become two-node spring-dampers (see
+// ShaftDesc), every other shaft stays rigid.
+enum class Compliance { Rigid, Compliant };
 
 // PHYS-033 I3 (plan section 4.1): the gear_request channel's "no request"
 // sentinel. Public because the adapter/scenario layer needs it too - out of

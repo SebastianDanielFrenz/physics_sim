@@ -57,6 +57,9 @@ struct DiffSnapshot {
 // free-to-copy value type (D8: no allocation in the triple-buffer publish
 // path this rides along with).
 inline constexpr std::size_t kMaxPowertrainDiffs = 4;
+// PHYS-033 P4 I4 C13: at most this many compliant shafts per vehicle (the
+// Powertrain constructor rejects more) - PowertrainDebug's shaft_* arrays.
+inline constexpr std::size_t kMaxCompliantShafts = 8;
 
 // The adapter-facing per-vehicle powertrain snapshot (additive to
 // VehicleSnapshot, ps/world/snapshot.h). Filled with defaults only until
@@ -133,6 +136,13 @@ struct PowertrainDebug {
     // component's own applied torque (test/bench only, 0 with none).
     real pto_clutch_torque = 0.0, pto_clutch_slip = 0.0;
     real dyno_torque = 0.0;
+    // PHYS-033 P4 I4 C13: each COMPLIANT shaft's twist theta (rad) and last
+    // substep's shaft torque tau_s (N*m, acting -tau_s on ports[0]'s node and
+    // +tau_s on ports[1]'s), slot i = the i-th compliant shaft in shafts[]
+    // order (rigid shafts are skipped); all 0 for a Rigid vehicle. Tests
+    // only, never hashed (theta itself is hashed by Powertrain).
+    std::array<real, kMaxCompliantShafts> shaft_twist_rad{};
+    std::array<real, kMaxCompliantShafts> shaft_torque{};
 };
 
 } // namespace ps::drivetrain

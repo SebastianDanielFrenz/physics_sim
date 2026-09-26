@@ -323,9 +323,34 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         return it->second;
     };
 
-    for (const ShaftDesc& shaft : pt.shafts) {
-        if (shaft.stiffness != real(0.0)) {
-            throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain shaft has non-zero stiffness (I4 adds compliant shafts)");
+    // PHYS-033 P4 I4 C13: compliant shafts. Validated here as well as in the
+    // loader (vehicle_io.cpp) because a test may mutate a loaded desc in
+    // code. Under Rigid, stiffness/damping are ignored (every shaft merges
+    // its ports exactly as before); under Compliant, a shaft with stiffness
+    // > 0 must list exactly 2 ports, which are NOT merged - they become two
+    // nodes joined by a spring-damper (compliant_pending below, turned into
+    // a network coupling in Phase I).
+    struct CompliantPending {
+        int port_a;
+        int port_b;
+        real k;
+        real c;
+        int shaft_index;
+    };
+    std::vector<CompliantPending> compliant_pending;
+    const bool compliance_on = pt.compliance == drivetrain::Compliance::Compliant;
+    for (std::size_t si = 0; si < pt.shafts.size(); ++si) {
+        const ShaftDesc& shaft = pt.shafts[si];
+        const std::string sctx = "vehicle '" + vehicle_name + "': powertrain.shafts[" + std::to_string(si) + "]";
+        if (!(shaft.stiffness >= real(0.0))) throw std::runtime_error(sctx + ": stiffness must be >= 0");
+        if (!(shaft.damping >= real(0.0))) throw std::runtime_error(sctx + ": damping must be >= 0");
+        if (shaft.damping > real(0.0) && shaft.stiffness == real(0.0)) {
+            throw std::runtime_error(sctx + ": damping > 0 requires stiffness > 0 (a pure damper shaft is not supported)");
+        }
+        const bool is_compliant = compliance_on && shaft.stiffness > real(0.0);
+        if (is_compliant && shaft.ports.size() != 2) {
+            throw std::runtime_error(sctx + ": a compliant shaft (stiffness > 0) must list exactly 2 ports, got " +
+                                     std::to_string(shaft.ports.size()));
         }
         std::vector<int> ports_here;
         ports_here.reserve(shaft.ports.size());
@@ -338,7 +363,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             port_in_any_shaft[static_cast<std::size_t>(idx)] = 1;
             ports_here.push_back(idx);
         }
+        if (is_compliant) {
+            compliant_pending.push_back(CompliantPending{ports_here[0], ports_here[1], shaft.stiffness, shaft.damping, static_cast<int>(si)});
+            continue; // not merged: two nodes, coupled in Phase I
+        }
         for (std::size_t i = 1; i < ports_here.size(); ++i) uf.unite(ports_here[0], ports_here[i]);
+    }
+    if (compliance_on && compliant_pending.empty()) {
+        throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain.compliance is \"compliant\" but no shaft has stiffness > 0");
+    }
+    if (compliant_pending.size() > kMaxCompliantShafts) {
+        throw std::runtime_error("vehicle '" + vehicle_name + "': at most " + std::to_string(kMaxCompliantShafts) +
+                                 " compliant shafts are supported, got " + std::to_string(compliant_pending.size()));
     }
 
     for (int p = 0; p < port_count; ++p) {
@@ -813,6 +849,36 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         diff_lsd_row[di] = builder.add_friction_row(db.left, db.right).index;
     }
 
+    // --- Phase H3 (PHYS-033 P4 I4 C13): one implicit coupling per compliant
+    // shaft, shafts[] order, AFTER every C6 viscous-diff coupling (so no
+    // existing coupling id moves). A Rigid vehicle adds none.
+    compliant_.reserve(compliant_pending.size());
+    for (const CompliantPending& cp : compliant_pending) {
+        const std::string sctx = "vehicle '" + vehicle_name + "': powertrain.shafts[" + std::to_string(cp.shaft_index) + "]";
+        const NodeId na = node_of_port[static_cast<std::size_t>(cp.port_a)];
+        const NodeId nb = node_of_port[static_cast<std::size_t>(cp.port_b)];
+        if (na == nb) {
+            throw std::runtime_error(sctx + ": compliant shaft's two ports '" + port_key[static_cast<std::size_t>(cp.port_a)] + "' and '" +
+                                     port_key[static_cast<std::size_t>(cp.port_b)] +
+                                     "' are already rigidly joined by other shafts (a compliant shaft must join two distinct nodes)");
+        }
+        for (const int pp : {cp.port_a, cp.port_b}) {
+            if (!(root_inertia[uf.find(pp)] > real(0.0))) {
+                throw std::runtime_error(sctx + ": compliant shaft endpoint '" + port_key[static_cast<std::size_t>(pp)] +
+                                         "' has zero inertia (both ends of a compliant shaft need inertia > 0 - give the component's port an "
+                                         "inertia, or make that shaft rigid)");
+            }
+        }
+        CompliantShaft cs;
+        cs.a = na;
+        cs.b = nb;
+        cs.k = cp.k;
+        cs.c = cp.c;
+        cs.shaft_index = cp.shaft_index;
+        cs.coupling = builder.add_coupling(na, nb);
+        compliant_.push_back(cs);
+    }
+
     // --- Phase I: build the network (validates every cluster's reduced mass
     // matrix, for every state) -----------------------------------------------
     network_ = builder.build(vehicle_name);
@@ -892,8 +958,10 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             real k = 0.0;
         };
         constexpr int kMaxSpeedoDepth = 32; // guards against a malformed cyclic graph
+        std::vector<NodeId> speedo_stack; // C13: current walk path, compliant-shaft crossings only
         std::function<KResult(NodeId, real, int)> k_of = [&](NodeId n, real path_ratio, int depth) -> KResult {
             if (depth > kMaxSpeedoDepth) return {};
+            if (!compliant_.empty()) speedo_stack.push_back(n); // C13, popped below
             real est_sum = real(0.0);
             int est_count = 0;
             real r_sum = real(0.0);
@@ -936,6 +1004,27 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                     ++est_count;
                 }
             }
+            // PHYS-033 P4 I4 C13: a compliant shaft is kinematically a ratio-1
+            // shaft at steady no-slip rolling (constant twist), so the walk
+            // crosses it like a rigid join - in either port order, but never
+            // back onto a node already on the current walk path (a compliant
+            // shaft has no "down" direction of its own). No compliant shaft
+            // -> this loop is empty and the walk is literally unchanged.
+            if (!compliant_.empty()) {
+                for (const CompliantShaft& cs : compliant_) {
+                    NodeId other{};
+                    if (cs.a == n) other = cs.b;
+                    else if (cs.b == n) other = cs.a;
+                    else continue;
+                    if (std::find(speedo_stack.begin(), speedo_stack.end(), other) != speedo_stack.end()) continue;
+                    const KResult ko = k_of(other, path_ratio, depth + 1);
+                    if (ko.ok) {
+                        est_sum += ko.k;
+                        ++est_count;
+                    }
+                }
+                speedo_stack.pop_back();
+            }
             if (est_count == 0) return {};
             return {true, est_sum / static_cast<real>(est_count)};
         };
@@ -966,6 +1055,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     }
     omega_old_.assign(static_cast<std::size_t>(network_.node_count()), real(0.0));
     topo_switch_scratch_.assign(static_cast<std::size_t>(network_.node_count()), real(0.0));
+    if (!compliant_.empty()) compliant_stuck_before_.assign(static_cast<std::size_t>(network_.friction_row_count()), 0);
 
     // --- Phase K: engine/clutch/gearbox typed members -----------------------
     if (engine_component_index >= 0) {
@@ -1044,6 +1134,54 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 pending.push_back(r);
             }
         }
+        // PHYS-033 P4 I4 C13: a compliant shaft reachable from the hubs
+        // through diff/gear_pair/transfer-case(in-rear) derivation edges and
+        // other compliant shafts (e.g. a compliant propshaft gearbox.out ->
+        // diff.carrier) is derived like a ratio-1 gear_pair: target = the
+        // endpoint FARTHER from the hubs (BFS hop count), source = the nearer
+        // one, so it slots into the same leaves-up ordering and the reset
+        // state has zero twist rate across it. Rigid vehicle: skipped.
+        if (!compliant_.empty()) {
+            const std::size_t node_n = static_cast<std::size_t>(network_.node_count());
+            std::vector<int> dist(node_n, -1);
+            std::vector<NodeId> queue;
+            for (const NodeId hn : hub_nodes_) {
+                if (dist[hn.index] < 0) {
+                    dist[hn.index] = 0;
+                    queue.push_back(hn);
+                }
+            }
+            std::vector<std::pair<NodeId, NodeId>> edges;
+            for (const ResetDerivation& r : pending) {
+                edges.emplace_back(r.target, r.a);
+                if (r.is_diff) edges.emplace_back(r.target, r.b);
+            }
+            for (const CompliantShaft& cs : compliant_) edges.emplace_back(cs.a, cs.b);
+            for (std::size_t qi = 0; qi < queue.size(); ++qi) {
+                const NodeId u = queue[qi];
+                for (const auto& [x, y] : edges) {
+                    NodeId v{};
+                    if (x == u) v = y;
+                    else if (y == u) v = x;
+                    else continue;
+                    if (dist[v.index] >= 0) continue;
+                    dist[v.index] = dist[u.index] + 1;
+                    queue.push_back(v);
+                }
+            }
+            for (const CompliantShaft& cs : compliant_) {
+                const int da = dist[cs.a.index];
+                const int db = dist[cs.b.index];
+                if (da < 0 || db < 0 || da == db) continue;
+                ResetDerivation r;
+                r.is_diff = false;
+                r.target = da > db ? cs.a : cs.b;
+                r.a = da > db ? cs.b : cs.a;
+                r.b = r.a;
+                r.ratio = real(1.0);
+                pending.push_back(r);
+            }
+        }
         std::vector<std::uint8_t> done(pending.size(), 0);
         std::size_t remaining = pending.size();
         while (remaining > 0) {
@@ -1067,6 +1205,27 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 }
                 break;
             }
+        }
+    }
+
+    // PHYS-033 P4 I4 C13: per compliant shaft, what reset() does after its
+    // own steps 4-6. "Owned" = a node reset() already sets: every hub, every
+    // derivation target (incl. the compliant ones above), the engine crank,
+    // clutch.out and gearbox.in (step 6 sets both). Exactly one end owned:
+    // the other end takes its speed; neither: b takes a's; both: nothing.
+    if (!compliant_.empty()) {
+        std::vector<std::uint8_t> owned(static_cast<std::size_t>(network_.node_count()), 0);
+        for (const NodeId hn : hub_nodes_) owned[hn.index] = 1;
+        for (const ResetDerivation& r : reset_derivations_) owned[r.target.index] = 1;
+        if (engine_) owned[engine_crank_.index] = 1;
+        if (gearbox_) {
+            if (clutch_) owned[clutch_out_.index] = 1;
+            owned[gearbox_in_.index] = 1;
+        }
+        for (CompliantShaft& cs : compliant_) {
+            const bool oa = owned[cs.a.index] != 0;
+            const bool ob = owned[cs.b.index] != 0;
+            cs.reset_mode = (oa && ob) ? std::uint8_t{0} : (ob ? std::uint8_t{2} : std::uint8_t{1});
         }
     }
 
@@ -1262,6 +1421,7 @@ void Powertrain::begin_substep() {
     assembly_.begin_substep(network_.node_count());
     assembly_.begin_substep_rows(network_.friction_row_count());
     assembly_.begin_substep_couplings(network_.coupling_count());
+    if (!compliant_.empty()) assembly_.begin_substep_implicit(network_.node_count());
 }
 
 void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
@@ -1322,7 +1482,10 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     {
         const int g = gearbox_ ? last_gearbox_result_.state_index : 0;
         const int s = g + gear_state_count_ * update_lock_bits(ctx);
-        if (s != network_.topology_state()) ledger_.engagement_loss += apply_topology_switch(s, ctx.h);
+        if (s != network_.topology_state()) {
+            ledger_.engagement_loss += apply_topology_switch(s, ctx.h);
+            topo_switched_this_substep_ = true; // C13: makes the NEXT substep backward Euler (read by solve())
+        }
     }
 
     if (clutch_) {
@@ -1371,6 +1534,27 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     }
 
     for (auto& c : components_) c->pre_solve(ctx, network_, assembly_);
+
+    // --- PHYS-033 P4 I4 C13: compliant shafts (see CompliantShaft in
+    // powertrain.h). After any topology switch above, so v_old is the
+    // post-projection twist rate the solve actually starts from. ---
+    if (!compliant_.empty()) {
+        be_this_ = be_next_;
+        const real h = ctx.h;
+        for (CompliantShaft& cs : compliant_) {
+            cs.v_old = network_.omega(cs.a) - network_.omega(cs.b);
+            if (be_this_) {
+                cs.c_impl = cs.c + cs.k * h;
+                cs.tau_expl = cs.k * cs.theta;
+            } else {
+                cs.c_impl = cs.c / real(2.0) + cs.k * h / real(4.0);
+                cs.tau_expl = cs.k * cs.theta + cs.c_impl * cs.v_old;
+            }
+            assembly_.set_coupling(cs.coupling, real(1.0), real(1.0), cs.c_impl);
+            assembly_.torque(cs.a, -cs.tau_expl, real(0.0));
+            assembly_.torque(cs.b, cs.tau_expl, real(0.0));
+        }
+    }
 }
 
 int Powertrain::update_lock_bits(const ComponentSubstepCtx& ctx) {
@@ -1433,12 +1617,52 @@ void Powertrain::solve(real h) {
         for (std::size_t i = 0; i < rotor_ports_.size(); ++i) rotor_port_omega_old_[i] = network_.omega(rotor_ports_[i].node);
     }
 
+    if (!compliant_.empty()) {
+        for (int r = 0; r < network_.friction_row_count(); ++r) {
+            compliant_stuck_before_[static_cast<std::size_t>(r)] =
+                network_.row_stuck(FrictionRowId{static_cast<std::uint16_t>(r)}) ? std::uint8_t{1} : std::uint8_t{0};
+        }
+    }
+
     network_.solve(h, assembly_);
 
     if (rotor_reaction_) {
         for (std::size_t i = 0; i < rotor_ports_.size(); ++i) {
             rotor_port_alpha_[i] = (network_.omega(rotor_ports_[i].node) - rotor_port_omega_old_[i]) / h;
         }
+    }
+
+    // PHYS-033 P4 I4 C13: advance each compliant shaft's twist, book its
+    // ledger terms, expose its implicit coupling reaction to the post_solve
+    // reconstructions, and decide the next substep's scheme.
+    real shaft_residual = real(0.0);
+    if (!compliant_.empty()) {
+        real pe = real(0.0);
+        for (CompliantShaft& cs : compliant_) {
+            const real v_new = network_.coupling_velocity(cs.coupling);
+            const real theta_old = cs.theta;
+            const real v_d = be_this_ ? v_new : (cs.v_old + v_new) / real(2.0);
+            cs.theta = theta_old + h * v_d;
+            const real tau_s = cs.tau_expl + cs.c_impl * v_new;
+            cs.tau_last = tau_s;
+            const real d_pe = real(0.5) * cs.k * (cs.theta * cs.theta - theta_old * theta_old);
+            const real d_damp = h * cs.c * v_d * v_d;
+            ledger_.shaft_damping_loss += d_damp;
+            // The shaft's work on the network this substep is -h*tau_s*v_new;
+            // whatever of it is not dPE + damping is the scheme's own residual.
+            shaft_residual += h * tau_s * v_new - d_pe - d_damp;
+            pe += real(0.5) * cs.k * cs.theta * cs.theta;
+            assembly_.add_implicit_reaction(cs.a, -cs.c_impl * v_new);
+            assembly_.add_implicit_reaction(cs.b, cs.c_impl * v_new);
+        }
+        ledger_.shaft_pe = pe;
+        bool stick_changed = false;
+        for (int r = 0; r < network_.friction_row_count() && !stick_changed; ++r) {
+            const std::uint8_t now = network_.row_stuck(FrictionRowId{static_cast<std::uint16_t>(r)}) ? std::uint8_t{1} : std::uint8_t{0};
+            stick_changed = now != compliant_stuck_before_[static_cast<std::size_t>(r)];
+        }
+        be_next_ = topo_switched_this_substep_ || stick_changed;
+        topo_switched_this_substep_ = false;
     }
 
     real integrator_loss_substep = real(0.0);
@@ -1452,6 +1676,7 @@ void Powertrain::solve(real h) {
         integrator_loss_substep += real(0.5) * J * dw * dw;
         rotor_ke += real(0.5) * J * w_new * w_new;
     }
+    if (!compliant_.empty()) integrator_loss_substep += shaft_residual;
     ledger_.integrator_loss += integrator_loss_substep;
     ledger_.rotor_ke = rotor_ke;
 }
@@ -1500,6 +1725,9 @@ void Powertrain::end_tick() {
                              (L.integrator_loss - L0.integrator_loss) + (L.diff_loss - L0.diff_loss) +
                              (L.awd_clutch_loss - L0.awd_clutch_loss) + (L.pto_clutch_loss - L0.pto_clutch_loss) +
                              (L.external_absorbed - L0.external_absorbed);
+    if (!compliant_.empty()) {
+        ledger_.balance_error += (L.shaft_pe - L0.shaft_pe) + (L.shaft_damping_loss - L0.shaft_damping_loss);
+    }
 }
 
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
@@ -1621,9 +1849,28 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         const real clutch_out_target =
             gear != 0 ? driveline_in_omega : (opts.clutch_locked ? engine_omega_target : real(0.0));
         network_.set_omega(clutch_out_, clutch_out_target);
+        // C13: with a compliant clutch.out-gearbox.in shaft they are two
+        // nodes - both take the same value (the shaft starts relaxed).
+        if (gearbox_in_ != clutch_out_) network_.set_omega(gearbox_in_, clutch_out_target);
     }
     if (tcu_) tcu_->reset(opts.clutch_locked);
     tcu_prev_request_ = {};
+
+    // 6b. PHYS-033 P4 I4 C13: compliant shafts not already set at both ends
+    //     (reset_mode, built at construction), then zero twist and force the
+    //     next substep to backward Euler (a reset is a mode change).
+    real pe_before = real(0.0);
+    if (!compliant_.empty()) {
+        for (CompliantShaft& cs : compliant_) {
+            if (cs.reset_mode == 1) network_.set_omega(cs.b, network_.omega(cs.a));
+            else if (cs.reset_mode == 2) network_.set_omega(cs.a, network_.omega(cs.b));
+            pe_before += real(0.5) * cs.k * cs.theta * cs.theta;
+            cs.theta = real(0.0);
+            cs.tau_last = real(0.0);
+        }
+        be_next_ = true;
+        topo_switched_this_substep_ = false;
+    }
 
     // 7. Clear every friction row's stick flags/warm-start set (no shift, no
     //    stale LCP active-set guess carried across the teleport).
@@ -1636,7 +1883,14 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         const real w = network_.omega(nid);
         ke_after += real(0.5) * network_.node_inertia(nid) * w * w;
     }
-    ledger_.external_reset += ke_after - ke_before;
+    if (!compliant_.empty()) {
+        // C13: the dropped twist energy is part of the same signed teleport
+        // (ledger_.shaft_pe itself, like rotor_ke, is only rewritten by the
+        // next solve()).
+        ledger_.external_reset += (ke_after - ke_before) - pe_before;
+    } else {
+        ledger_.external_reset += ke_after - ke_before;
+    }
 }
 
 real Powertrain::gearbox_output_ratio_magnitude() const { return speedo_ratio_; }
@@ -1658,6 +1912,19 @@ std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
             h ^= bytes[i];
             h *= 1099511628211ULL;
         }
+    }
+    // PHYS-033 P4 I4 C13: each compliant shaft's twist, then the pending
+    // backward-Euler flag - only for a vehicle that has compliant shafts.
+    if (!compliant_.empty()) {
+        for (const CompliantShaft& cs : compliant_) {
+            const auto* bytes = reinterpret_cast<const unsigned char*>(&cs.theta);
+            for (std::size_t i = 0; i < sizeof(cs.theta); ++i) {
+                h ^= bytes[i];
+                h *= 1099511628211ULL;
+            }
+        }
+        h ^= static_cast<unsigned char>(be_next_ ? 1 : 0);
+        h *= 1099511628211ULL;
     }
     return h;
 }

@@ -113,6 +113,8 @@ public:
     [[nodiscard]] real wheel_omega(std::size_t i) const { return powertrain_.hub_omega(i); }
     [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy() const { return powertrain_.ledger(); }
     [[nodiscard]] int powertrain_friction_cap_hits() const { return powertrain_.friction_cap_hits(); }
+    // PHYS-033 P4 I4 C13: whether telemetry "stored" adds shaft_pe (only then).
+    [[nodiscard]] bool powertrain_has_compliant_shafts() const { return powertrain_.has_compliant_shafts(); }
     [[nodiscard]] int powertrain_nonspd_hits() const { return powertrain_.nonspd_hits(); }
     [[nodiscard]] int powertrain_lcp_stage3_hits() const { return powertrain_.lcp_stage3_hits(); }
     // PHYS-033 P4 I3 plan section 4.3/4.5: the adapter-facing snapshot and a
@@ -149,6 +151,7 @@ public:
         dbg.pto_clutch_torque = powertrain_.pto_clutch_torque();
         dbg.pto_clutch_slip = powertrain_.pto_clutch_slip();
         dbg.dyno_torque = powertrain_.dyno_torque();
+        powertrain_.fill_shaft_debug(dbg.shaft_twist_rad, dbg.shaft_torque); // PHYS-033 P4 I4 C13
         return dbg;
     }
 

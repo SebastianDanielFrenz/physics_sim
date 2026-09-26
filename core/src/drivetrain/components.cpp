@@ -37,7 +37,11 @@ real reconstruct_lock_torque_pair(NodeId left, NodeId right, const ShaftNetwork&
         const real omega_new = net.omega(node);
         const real dw = omega_new - omega_old;
         const real J = net.node_inertia(node);
-        const real tau0_others = assembly.tau0(node); // this diff's own loss torque lives at carrier_, never left_/right_
+        real tau0_others = assembly.tau0(node); // this diff's own loss torque lives at carrier_, never left_/right_
+        // PHYS-033 P4 I4 C13: a compliant shaft's implicit coupling reaction
+        // (network.h's Assembly::implicit_reaction) - opt-in, absent for
+        // every Rigid vehicle, so this line leaves their arithmetic unchanged.
+        if (assembly.has_implicit_reactions()) tau0_others += assembly.implicit_reaction(node);
         const real d_others = assembly.d(node);
         real row_sum = real(0.0);
         for (int r = 0; r < net.friction_row_count(); ++r) {
@@ -62,7 +66,12 @@ real reconstruct_mesh_torque(NodeId recon_node, real coef_at_recon_node, real lo
     // "others" excludes the caller's own loss term, which its pre_solve
     // added with d == 0 - so the assembled d at recon_node is already
     // all-others, and only tau0 needs the subtraction (plan section 5.4).
-    const real tau0_others = assembly.tau0(recon_node) - loss_tau_already_applied;
+    real tau0_others = assembly.tau0(recon_node) - loss_tau_already_applied;
+    // PHYS-033 P4 I4 C13: a compliant shaft's implicit coupling reaction at
+    // this node (e.g. the clutch.out-gearbox.in shaft's at gearbox.in) is in
+    // neither tau0 nor d - without it the balance would read the shaft
+    // torque as mesh reaction. Opt-in (Rigid vehicles never set it).
+    if (assembly.has_implicit_reactions()) tau0_others += assembly.implicit_reaction(recon_node);
     const real d_others = assembly.d(recon_node);
 
     real row_sum = real(0.0);
@@ -131,7 +140,8 @@ real reconstruct_mesh_torque_pair(NodeId left, NodeId right, real coef_sum, real
         const real omega_new = net.omega(node);
         const real dw = omega_new - omega_old;
         const real J = net.node_inertia(node);
-        const real tau0_others = assembly.tau0(node) - loss_tau;
+        real tau0_others = assembly.tau0(node) - loss_tau;
+        if (assembly.has_implicit_reactions()) tau0_others += assembly.implicit_reaction(node); // C13, see reconstruct_mesh_torque
         const real d_others = assembly.d(node);
         real row_sum = real(0.0);
         for (int r = 0; r < net.friction_row_count(); ++r) {
