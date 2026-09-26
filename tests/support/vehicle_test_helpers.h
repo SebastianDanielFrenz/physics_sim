@@ -12,6 +12,8 @@
 #include "ps/math/transcendental.h"
 #include "ps/world/world.h"
 
+#include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -25,16 +27,49 @@ namespace ps_test {
 // uses by default, carries no Jolt material and so always reports
 // kInvalidSurfaceId - fine for tests that don't care about the surface, not
 // for one comparing behaviour across surfaces).
+//
+// PHYS-047 (vault; tests/validation/test_powertrain_split_mu.cpp's
+// split_surface_mesh() has the full measurement writeup): Jolt's CastShape -
+// the wheel's own suspension CylinderShape cast, WheelInstance::
+// measure_contact - gives WRONG results near the edge of a very large
+// triangle (phantom fraction-0 hits ~0.12 m above the plane, fraction
+// errors up to 0.23), and the error count grows with edge length. The
+// original 2-triangle version of this mesh had a ~2828 m diagonal edge
+// (its CCW split from (-he,-he) to (he,he)) - the same defect
+// split_surface_mesh's old 4-triangle version had, just along the diagonal
+// instead of an axis-aligned seam. Tessellated here into a regular grid of
+// at most `kMaxCellSize` m per cell (a 2000 m square gives 100x100 cells,
+// 20000 triangles - split_surface_mesh's own 20 m cells gave 0 bad casts
+// over 28471 probes, vs. 0/6/80/276 for 4-triangle grounds of half-extent
+// 100/300/500/1000 m). See tests/validation/test_vehicle_flat_surface_
+// mesh.cpp for the cast-probe pin. Same extent/height/surface tagging/
+// signature as before, so every caller is unaffected at the API level.
 inline ps::MeshShape flat_surface_mesh(ps::real half_extent, ps::SurfaceId surface) {
+    constexpr ps::real kMaxCellSize = 20.0;
+    const int cells = std::max(2, static_cast<int>(std::ceil(2.0 * half_extent / kMaxCellSize)));
+    const ps::real cell = 2.0 * half_extent / static_cast<ps::real>(cells);
+    const int nv = cells + 1;
+
     ps::MeshShape m;
-    m.vertices = {
-        ps::Vec3{-half_extent, -half_extent, 0.0},
-        ps::Vec3{half_extent, -half_extent, 0.0},
-        ps::Vec3{half_extent, half_extent, 0.0},
-        ps::Vec3{-half_extent, half_extent, 0.0},
-    };
-    m.indices = {0, 1, 2, 0, 2, 3}; // CCW viewed from +z, Jolt's MeshShapeSettings convention
-    m.triangle_surface_ids = {surface, surface};
+    m.vertices.reserve(static_cast<std::size_t>(nv) * static_cast<std::size_t>(nv));
+    for (int j = 0; j < nv; ++j) {
+        for (int i = 0; i < nv; ++i) {
+            m.vertices.push_back(ps::Vec3{-half_extent + i * cell, -half_extent + j * cell, 0.0});
+        }
+    }
+    m.indices.reserve(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells) * 6);
+    m.triangle_surface_ids.reserve(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells) * 2);
+    for (int j = 0; j < cells; ++j) {
+        for (int i = 0; i < cells; ++i) {
+            const auto a = static_cast<std::uint32_t>(j * nv + i);
+            const std::uint32_t b = a + 1;
+            const std::uint32_t c = a + static_cast<std::uint32_t>(nv) + 1;
+            const std::uint32_t d = a + static_cast<std::uint32_t>(nv);
+            m.indices.insert(m.indices.end(), {a, b, c, a, c, d}); // CCW viewed from +z, Jolt's MeshShapeSettings convention
+            m.triangle_surface_ids.push_back(surface);
+            m.triangle_surface_ids.push_back(surface);
+        }
+    }
     return m;
 }
 
