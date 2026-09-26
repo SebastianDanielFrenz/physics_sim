@@ -130,6 +130,7 @@ std::set<std::string> expected_tractor_channels() {
     s.insert("pto");
     s.insert("pto_speed");
     s.insert("hand_throttle");
+    s.insert("diff_lock");
     return s;
 }
 
