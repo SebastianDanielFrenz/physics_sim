@@ -140,6 +140,8 @@ public:
         dbg.engine_torque_demand = powertrain_.engine_torque_demand();
         dbg.ignition_cut = powertrain_.tcu_request_debug().ignition_cut;
         dbg.throttle_ceiling = powertrain_.tcu_request_debug().throttle_ceiling;
+        dbg.awd_clutch_torque = powertrain_.awd_clutch_torque(); // PHYS-033 P4 I4 C9
+        dbg.awd_clutch_slip = powertrain_.awd_clutch_slip();
         return dbg;
     }
 

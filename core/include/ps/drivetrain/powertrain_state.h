@@ -77,6 +77,10 @@ struct PowertrainSnapshot {
     // channel registration). Filled by Powertrain::fill_diff_snapshot.
     std::array<DiffSnapshot, kMaxPowertrainDiffs> diffs{};
     std::uint8_t diff_count = 0;
+    // PHYS-033 P4 I4 C9 (plan section 3.3): the MFWD transfer case's clutch
+    // engagement (e in [0,1]), or 0 for every vehicle with no transfer case
+    // (car_sedan.json and every other pre-C9 file).
+    real awd_engagement = 0.0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled
@@ -100,6 +104,10 @@ struct PowertrainDebug {
     // hub_shaft_torque[] is the REAL total shaft torque, not just the diff
     // row's own mesh-torque share.
     std::array<real, kMaxPowertrainDiffs> diff_transfer_torque{};
+    // PHYS-033 P4 I4 C9: the MFWD transfer case's own `front` friction row
+    // torque/slip (Powertrain::awd_clutch_torque/awd_clutch_slip), 0 for
+    // every vehicle with no transfer case.
+    real awd_clutch_torque = 0.0, awd_clutch_slip = 0.0;
 };
 
 } // namespace ps::drivetrain

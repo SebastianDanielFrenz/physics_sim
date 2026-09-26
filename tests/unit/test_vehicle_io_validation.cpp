@@ -453,6 +453,152 @@ TEST_CASE("load_vehicle_json validates clutch_lsd/torsen differential fields (I4
     }
 }
 
+// PHYS-033 P4 I4 C9 (plan section 3.3): the MFWD transfer_case component -
+// a rigid `rear` row plus a friction `front` row (the AWD clutch). Mirrors
+// the differential validation tests above: a minimal standalone powertrain
+// block (no engine/gearbox needed - Powertrain's graph-build only needs the
+// component's own ports to resolve, and every rejection here fires before
+// any cross-component wiring is checked).
+TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][vehicle][io][drivetrain]") {
+    using Catch::Matchers::ContainsSubstring;
+    auto json_with_tc_fields = [](const std::string& extra) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 2500.0, "static_factor": 1.2, "engage_time_s": 0.3 })") +
+               extra + R"( }
+    ],
+    "shafts": [
+      { "ports": ["transfer.rear", "wheel:FL"] },
+      { "ports": ["transfer.front", "wheel:FR"] }
+    ]
+  }
+})";
+    };
+    auto only_tc = [](const vehicle::VehicleDesc& d) -> const drivetrain::TransferCaseDesc& {
+        REQUIRE(d.powertrain.components.size() == 1);
+        const auto* tc = std::get_if<drivetrain::TransferCaseDesc>(&d.powertrain.components[0].params);
+        REQUIRE(tc != nullptr);
+        return *tc;
+    };
+    auto rejects = [](const std::string& text, const char* tag, const std::string& needle) {
+        TempJsonFile f(text, tag);
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring(needle));
+    };
+
+    SECTION("a well-formed transfer_case round-trips") {
+        TempJsonFile f(json_with_tc_fields(""), "vehicle_tc_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::TransferCaseDesc& tc = only_tc(d);
+        CHECK(tc.rear_ratio == 1.0);
+        CHECK(tc.front_ratio == 1.0);
+        CHECK(tc.clutch.capacity_nm == 2500.0);
+        CHECK(tc.clutch.static_factor == 1.2);
+        CHECK(tc.clutch.engage_time_s == 0.3);
+        CHECK(tc.channel == "awd");
+    }
+    SECTION("channel defaults to \"awd\" and may be overridden") {
+        TempJsonFile f(json_with_tc_fields(R"(, "channel": "my_awd")"), "vehicle_tc_channel");
+        CHECK(only_tc(io::load_vehicle_json(f.path.string())).channel == "my_awd");
+    }
+    SECTION("rear_ratio == 0 is rejected") {
+        rejects(std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 0.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 2500.0 } }
+    ],
+    "shafts": [ { "ports": ["transfer.rear", "wheel:FL"] }, { "ports": ["transfer.front", "wheel:FR"] } ]
+  }
+})"),
+                "vehicle_tc_rear_ratio_zero", "'rear_ratio' must be != 0");
+    }
+    SECTION("front_ratio == 0 is rejected") {
+        rejects(std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 0.0,
+        "clutch": { "capacity_nm": 2500.0 } }
+    ],
+    "shafts": [ { "ports": ["transfer.rear", "wheel:FL"] }, { "ports": ["transfer.front", "wheel:FR"] } ]
+  }
+})"),
+                "vehicle_tc_front_ratio_zero", "'front_ratio' must be != 0");
+    }
+    SECTION("missing 'clutch' block is rejected") {
+        rejects(std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0 }
+    ],
+    "shafts": [ { "ports": ["transfer.rear", "wheel:FL"] }, { "ports": ["transfer.front", "wheel:FR"] } ]
+  }
+})"),
+                "vehicle_tc_no_clutch", "requires a 'clutch' block");
+    }
+    SECTION("clutch.capacity_nm <= 0 is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 0.0 } }
+    ],
+    "shafts": [ { "ports": ["transfer.rear", "wheel:FL"] }, { "ports": ["transfer.front", "wheel:FR"] } ]
+  }
+})";
+        rejects(bad, "vehicle_tc_cap_zero", "clutch.capacity_nm must be > 0");
+    }
+    SECTION("clutch.static_factor < 1 is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 2500.0, "static_factor": 0.9 } }
+    ],
+    "shafts": [ { "ports": ["transfer.rear", "wheel:FL"] }, { "ports": ["transfer.front", "wheel:FR"] } ]
+  }
+})";
+        rejects(bad, "vehicle_tc_static_lt1", "clutch.static_factor must be >= 1");
+    }
+    SECTION("clutch.engage_time_s < 0 is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 2500.0, "engage_time_s": -0.1 } }
+    ],
+    "shafts": [ { "ports": ["transfer.rear", "wheel:FL"] }, { "ports": ["transfer.front", "wheel:FR"] } ]
+  }
+})";
+        rejects(bad, "vehicle_tc_engage_neg", "clutch.engage_time_s must be >= 0");
+    }
+    SECTION("empty channel is rejected") {
+        rejects(json_with_tc_fields(R"(, "channel": "")"), "vehicle_tc_channel_empty", "'channel' must be non-empty");
+    }
+}
+
 // --- PHYS-033 P4 I3 plan section 9.2 ----------------------------------------
 
 namespace {

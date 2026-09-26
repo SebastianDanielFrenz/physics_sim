@@ -36,6 +36,12 @@ struct PowertrainEnergy {
     // cumulative, >= 0. 0 for every vehicle with no viscous diff (every
     // shipped vehicle today) - hash-neutral, same as clutch_loss et al. above.
     real diff_loss = 0.0;
+
+    // PHYS-033 P4 I4 C9 (plan section 3.3): the MFWD transfer case's own
+    // `front` friction row dissipation, -h*v*lambda per substep, cumulative,
+    // >= 0. 0 for every vehicle with no transfer case (car_sedan.json and
+    // every other pre-C9 file) - hash-neutral, same as diff_loss et al. above.
+    real awd_clutch_loss = 0.0;
 };
 
 } // namespace ps::drivetrain

@@ -299,6 +299,54 @@ std::uint64_t Differential::fold_state_hash(std::uint64_t seed) const {
     return h;
 }
 
+// --- TransferCase (PHYS-033 P4 I4 C9) --------------------------------------
+
+void TransferCase::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork&, Assembly& assembly) {
+    // Ramp engagement_ toward the channel's target (>= 0.5 -> 1, else 0) at
+    // rate 1/engage_time_s; engage_time_s == 0 is instant (mirrors Clutch's
+    // own engagement-vs-pedal shape, but as a simple ramp - plan section 3.3
+    // has no curve here, just a rate).
+    const real cmd = (ctx.channels != nullptr && channel_slot_ >= 0 && channel_slot_ < ctx.channel_count)
+                         ? ctx.channels[channel_slot_]
+                         : real(0.0);
+    const real target = cmd >= real(0.5) ? real(1.0) : real(0.0);
+    if (desc_.clutch.engage_time_s <= real(0.0)) {
+        engagement_ = target;
+    } else {
+        const real rate = real(1.0) / desc_.clutch.engage_time_s;
+        const real max_step = rate * ctx.h;
+        if (target > engagement_) engagement_ = std::min(target, engagement_ + max_step);
+        else if (target < engagement_) engagement_ = std::max(target, engagement_ - max_step);
+    }
+
+    // Assembly::begin_substep_rows resets every row's ratio_b to 1.0 each
+    // substep (network.h) - front_ratio_ is a build-time constant, so it must
+    // be re-asserted every substep (unlike the gearbox synchro row, whose
+    // ratio changes per gear and is set conditionally).
+    assembly.set_friction_row_ratio(row_, desc_.front_ratio);
+    const real cap_kinetic = engagement_ * desc_.clutch.capacity_nm;
+    const real cap_static = desc_.clutch.static_factor * cap_kinetic;
+    assembly.set_friction_capacity(row_, cap_static, cap_kinetic);
+}
+
+void TransferCase::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly&, PowertrainEnergy& ledger) {
+    const real v = net.row_velocity(row_);
+    const real lambda = net.row_lambda(row_);
+    // Same -h*v*lambda dissipation form as every other friction row in this
+    // file (clutch/brakes/LSD) - PowertrainEnergy::awd_clutch_loss.
+    ledger.awd_clutch_loss += -ctx.h * v * lambda;
+}
+
+std::uint64_t TransferCase::fold_state_hash(std::uint64_t seed) const {
+    std::uint64_t h = seed;
+    const auto* bytes = reinterpret_cast<const unsigned char*>(&engagement_);
+    for (std::size_t i = 0; i < sizeof(engagement_); ++i) {
+        h ^= bytes[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 // --- DirectTorqueBrakes ------------------------------------------------------
 
 void DirectTorqueBrakes::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork&, Assembly& assembly) {

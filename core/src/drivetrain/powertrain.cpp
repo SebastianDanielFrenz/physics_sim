@@ -137,6 +137,12 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
     for (const ComponentDesc& c : pt.components) {
         if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
             if (d->lockable) add(ChannelDecl{d->lock.channel, real(0.0)});
+        } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
+            // I4 C9 (plan section 3.3): the MFWD transfer case's own engagement
+            // channel (default 0 = disengaged) - no shipped vehicle declared
+            // one before this, so tractor.json's channel list gains "awd" and
+            // car_sedan.json's stays empty (it has no transfer_case).
+            add(ChannelDecl{tc->channel, real(0.0)});
         }
     }
     for (const ChannelDecl& decl : test_only_extra) add(decl);
@@ -174,6 +180,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
 
     std::unordered_map<std::string, int> component_index_of; // component id -> index into pt.components
     int engine_component_index = -1, clutch_component_index = -1, gearbox_component_index = -1;
+    int transfer_case_component_index = -1; // I4 C9
     for (std::size_t ci = 0; ci < pt.components.size(); ++ci) {
         const ComponentDesc& c = pt.components[ci];
         if (c.id.empty()) throw std::runtime_error("vehicle '" + vehicle_name + "': a powertrain component has an empty id");
@@ -207,6 +214,21 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             add_port(component_port_key(c.id, "carrier"), d->carrier_inertia_kgm2, d->carrier_axis_local);
             add_port(component_port_key(c.id, "left"), real(0.0), Vec3::zero());
             add_port(component_port_key(c.id, "right"), real(0.0), Vec3::zero());
+        } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
+            // I4 C9 (plan section 3.3): one transfer_case per vehicle, like
+            // engine/clutch/gearbox above (not gear_pair/differential, which
+            // may repeat) - a second one would need per-instance channel/hash
+            // disambiguation the plan never specifies.
+            if (transfer_case_component_index >= 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': more than one transfer_case component - I4 C9 supports at most one");
+            }
+            transfer_case_component_index = static_cast<int>(ci);
+            // `rear` gets zero inertia (a pure kinematic passthrough port,
+            // mirroring a differential's zero-inertia left/right ports) -
+            // `in`/`front` share axis_local (one physical shaft, plan section 6.7).
+            add_port(component_port_key(c.id, "in"), tc->in_inertia_kgm2, tc->axis_local);
+            add_port(component_port_key(c.id, "rear"), real(0.0), Vec3::zero());
+            add_port(component_port_key(c.id, "front"), tc->front_inertia_kgm2, tc->axis_local);
         }
     }
 
@@ -413,6 +435,24 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         }
     }
 
+    // transfer_case (I4 C9, plan section 3.3): the `rear` rigid row,
+    // omega(in) = rear_ratio*omega(rear), replicated across EVERY state -
+    // exactly gear_pair's own pattern above (a mechanical rigid coupling that
+    // holds regardless of the gearbox's position/any diff lock bit). Only
+    // `rear` is a rigid row; `front` is the friction row built in Phase G below.
+    for (const ComponentDesc& c : pt.components) {
+        if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
+            const NodeId in_n = node_for_key(component_port_key(c.id, "in"));
+            const NodeId rear_n = node_for_key(component_port_key(c.id, "rear"));
+            for (int state = 0; state < num_states; ++state) {
+                RigidRow row;
+                row.terms.emplace_back(in_n.index, real(1.0));
+                row.terms.emplace_back(rear_n.index, -tc->rear_ratio);
+                register_rigid_row(state, std::move(row));
+            }
+        }
+    }
+
     // PHYS-033 P4 I4 C6 (plan section 3.1): kind == Locked (spool) rows
     // omega_L - omega_R = 0, UNCONDITIONAL - every topology state, not gated
     // by any composed-state bit (a Locked diff spends no bit; it is not a
@@ -608,6 +648,15 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         gearbox_out_ = gearbox_out_n;
         synchro_row = builder.add_friction_row(gearbox_in_, gearbox_out_);
     }
+    // I4 C9 (plan section 3.3): the transfer_case's own `front` friction row,
+    // appended AFTER clutch/engine/synchro above so no pre-existing vehicle's
+    // friction-row ids shift (car_sedan.json has no transfer_case at all).
+    if (transfer_case_component_index >= 0) {
+        const std::string& tcid = pt.components[static_cast<std::size_t>(transfer_case_component_index)].id;
+        const NodeId tc_in_n = node_for_key(component_port_key(tcid, "in"));
+        const NodeId tc_front_n = node_for_key(component_port_key(tcid, "front"));
+        transfer_row_ = builder.add_friction_row(tc_in_n, tc_front_n);
+    }
 
     // --- Phase H: brake friction rows --------------------------------------
     std::unordered_map<std::string, std::size_t> wheel_index_of_name;
@@ -718,11 +767,21 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     if (gearbox_desc) {
         std::vector<NodeId> gp_in, gp_out;
         std::vector<real> gp_ratio;
+        // I4 C9 (plan section 2.5): a transfer_case restricts the speedo walk
+        // to its `rear` output only - `front` (MFWD) never contributes a K
+        // estimate, so adding the front axle cannot change the tractor's
+        // speedo (bit-identical before/after, confirmed by the test).
+        std::vector<NodeId> tc_in, tc_rear;
+        std::vector<real> tc_rear_ratio;
         for (const ComponentDesc& c : pt.components) {
             if (const auto* g = std::get_if<GearPairDesc>(&c.params)) {
                 gp_in.push_back(node_for_key(component_port_key(c.id, "in")));
                 gp_out.push_back(node_for_key(component_port_key(c.id, "out")));
                 gp_ratio.push_back(g->ratio);
+            } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
+                tc_in.push_back(node_for_key(component_port_key(c.id, "in")));
+                tc_rear.push_back(node_for_key(component_port_key(c.id, "rear")));
+                tc_rear_ratio.push_back(tc->rear_ratio);
             }
         }
         std::vector<std::uint8_t> reached(hub_nodes_.size(), 0);
@@ -763,6 +822,16 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 const KResult ko = k_of(gp_out[gi], path_ratio * gp_ratio[gi], depth + 1);
                 if (ko.ok) {
                     est_sum += gp_ratio[gi] * ko.k;
+                    ++est_count;
+                }
+            }
+            // I4 C9: a transfer_case's `in` recurses ONLY into `rear` (never
+            // `front`) - see this block's own top comment.
+            for (std::size_t ti = 0; ti < tc_in.size(); ++ti) {
+                if (tc_in[ti] != n) continue;
+                const KResult kr = k_of(tc_rear[ti], path_ratio * tc_rear_ratio[ti], depth + 1);
+                if (kr.ok) {
+                    est_sum += tc_rear_ratio[ti] * kr.k;
                     ++est_count;
                 }
             }
@@ -849,6 +918,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 r.a = node_for_key(component_port_key(c.id, "out"));
                 r.b = r.a;
                 r.ratio = g->ratio;
+                pending.push_back(r);
+            } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
+                // I4 C9: transfer.in = rear_ratio*omega(rear) - the rigid row's
+                // own relation, same is_diff=false shape as a gear_pair's
+                // target=ratio*a (mirrors that branch exactly).
+                ResetDerivation r;
+                r.is_diff = false;
+                r.target = node_for_key(component_port_key(c.id, "in"));
+                r.a = node_for_key(component_port_key(c.id, "rear"));
+                r.b = r.a;
+                r.ratio = tc->rear_ratio;
                 pending.push_back(r);
             }
         }
@@ -937,6 +1017,25 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                                                          node_for_key(component_port_key(c.id, "right")), *d);
             diffs_.push_back(diff.get()); // powertrain_debug's diff/hub torque reads (powertrain.h), component order
             components_.push_back(std::move(diff));
+        } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
+            // I4 C9: channel_slot resolved from declare_control_channels(pt)'s
+            // own array-order/dedup rules (same mechanism as the diff-lock
+            // block just below) - transfer_row_ was already assigned in
+            // Phase G above (the front friction row, appended after clutch/
+            // engine/synchro so no pre-existing vehicle's row ids shift).
+            const std::vector<ChannelDecl> tc_decls = declare_control_channels(pt);
+            int channel_slot = -1;
+            for (std::size_t i = 0; i < tc_decls.size(); ++i) {
+                if (tc_decls[i].name == tc->channel) {
+                    channel_slot = static_cast<int>(i);
+                    break;
+                }
+            }
+            auto transfer = std::make_unique<TransferCase>(node_for_key(component_port_key(c.id, "in")),
+                                                             node_for_key(component_port_key(c.id, "front")), transfer_row_, *tc,
+                                                             channel_slot);
+            transfer_case_ = transfer.get(); // non-owning alias, mirrors diffs_'s pattern
+            components_.push_back(std::move(transfer));
         }
     }
     // Reconstruction modes resolved in Phase F (diffs_ is in the same
@@ -1227,7 +1326,8 @@ void Powertrain::end_tick() {
                              (L.tyre_loss - L0.tyre_loss) + (L.brake_loss - L0.brake_loss) + (L.gear_loss - L0.gear_loss) +
                              (L.clutch_loss - L0.clutch_loss) + (L.synchro_loss - L0.synchro_loss) +
                              (L.engine_friction_loss - L0.engine_friction_loss) + (L.engagement_loss - L0.engagement_loss) +
-                             (L.integrator_loss - L0.integrator_loss) + (L.diff_loss - L0.diff_loss);
+                             (L.integrator_loss - L0.integrator_loss) + (L.diff_loss - L0.diff_loss) +
+                             (L.awd_clutch_loss - L0.awd_clutch_loss);
 }
 
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {

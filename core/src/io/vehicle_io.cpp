@@ -751,6 +751,40 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                         if (d.lock.channel.empty()) throw std::runtime_error(ctx + ": differential lock.channel must be non-empty");
                     }
                     p.components.push_back({id, d});
+                } else if (type == "transfer_case") {
+                    // PHYS-033 P4 I4 C9 (plan section 3.3): the MFWD transfer
+                    // case - a rigid `rear` row (omega_in = rear_ratio*omega_rear)
+                    // plus a friction `front` row (the AWD clutch, ratio_b =
+                    // front_ratio) - see components.h's TransferCase.
+                    ps::drivetrain::TransferCaseDesc t;
+                    t.rear_ratio = cj.value("rear_ratio", t.rear_ratio);
+                    if (t.rear_ratio == real(0.0)) throw std::runtime_error(ctx + ": transfer_case 'rear_ratio' must be != 0");
+                    t.front_ratio = cj.value("front_ratio", t.front_ratio);
+                    if (t.front_ratio == real(0.0)) throw std::runtime_error(ctx + ": transfer_case 'front_ratio' must be != 0");
+                    if (!cj.contains("clutch")) {
+                        throw std::runtime_error(ctx + ": transfer_case requires a 'clutch' block "
+                                                        "{\"capacity_nm\", \"static_factor\", \"engage_time_s\"}");
+                    }
+                    const auto& tcj = cj.at("clutch");
+                    t.clutch.capacity_nm = tcj.value("capacity_nm", t.clutch.capacity_nm);
+                    if (!(t.clutch.capacity_nm > real(0.0))) {
+                        throw std::runtime_error(ctx + ": transfer_case clutch.capacity_nm must be > 0");
+                    }
+                    t.clutch.static_factor = tcj.value("static_factor", t.clutch.static_factor);
+                    if (!(t.clutch.static_factor >= real(1.0))) {
+                        throw std::runtime_error(ctx + ": transfer_case clutch.static_factor must be >= 1");
+                    }
+                    t.clutch.engage_time_s = tcj.value("engage_time_s", t.clutch.engage_time_s);
+                    if (!(t.clutch.engage_time_s >= real(0.0))) {
+                        throw std::runtime_error(ctx + ": transfer_case clutch.engage_time_s must be >= 0");
+                    }
+                    t.channel = cj.value("channel", t.channel);
+                    if (t.channel.empty()) throw std::runtime_error(ctx + ": transfer_case 'channel' must be non-empty");
+                    t.in_inertia_kgm2 = cj.value("in_inertia_kgm2", t.in_inertia_kgm2);
+                    t.front_inertia_kgm2 = cj.value("front_inertia_kgm2", t.front_inertia_kgm2);
+                    t.axis_local = read_vec3(cj.value("axis_local", json()), Vec3::zero());
+                    require_zero_or_unit(t.axis_local, ctx + ".axis_local");
+                    p.components.push_back({id, t});
                 } else {
                     throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
                 }
