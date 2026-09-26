@@ -12,8 +12,19 @@
 // those names are still the PUBLIC I2 shapes in ps/drivetrain/powertrain_desc.h
 // until commit 6 replaces them, and both cannot exist in ps::drivetrain at
 // once. Commit 6 renames these into the public section 4.1 shapes.
+//
+// PHYS-033 P4 I7a C2: Sensors/TcuRequest/PreSolveResult/PostSolveResult (and
+// EngineState, reusing the already-public ps::drivetrain::EngineState - see
+// engine.h's header comment) moved to namespace scope in the new engine.h,
+// which also declares the IEngine interface EngineTorqueMap now implements.
+// The `using` aliases below keep every existing EngineTorqueMap::Sensors/
+// ::TcuRequest/::PreSolveResult/::PostSolveResult/::EngineState call site
+// (this file's own pre_solve/post_solve/reset, powertrain.cpp,
+// tests/unit/test_powertrain_engine.cpp) compiling unchanged.
 
 #pragma once
+
+#include "engine.h"
 
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h"
@@ -22,8 +33,14 @@
 
 namespace ps::drivetrain {
 
-class EngineTorqueMap {
+class EngineTorqueMap final : public IEngine {
 public:
+    using Sensors = ps::drivetrain::Sensors;
+    using TcuRequest = ps::drivetrain::TcuRequest;
+    using PreSolveResult = ps::drivetrain::PreSolveResult;
+    using PostSolveResult = ps::drivetrain::PostSolveResult;
+    using EngineState = ps::drivetrain::EngineState;
+
     enum class LimiterType : std::uint8_t { FuelCut, SoftCut };
     struct LimiterDesc {
         LimiterType type = LimiterType::FuelCut;
@@ -69,73 +86,21 @@ public:
         GovernorDesc governor;
     };
 
-    enum class EngineState : std::uint8_t { Off, Stalled, Cranking, Running };
-
-    // ECU inputs, by value (spec's "controllers get sensors only"). omega is
-    // the crank node's omega_old (network state at THIS substep's start).
-    struct Sensors {
-        real omega = 0.0;
-        real pedal_throttle = 0.0;
-        real ignition = 0.0;                // > 0.5 == on
-        real starter = 0.0;                 // > 0.5 == pressed
-        real clutch_engaged_fraction = 1.0; // the clutch's current effective engagement e
-        bool gearbox_in_neutral = true;
-        // I4 C12: the governor's hand-throttle channel value (0 when there is
-        // no governor - Powertrain::pre_solve_components only ever reads a
-        // real channel value into this when desc().has_governor).
-        real hand_throttle = 0.0;
-    };
-    // From the TCU (one substep lagged - plan section 7.2's deliberate order
-    // independence). Both default to "no request".
-    struct TcuRequest {
-        real throttle_floor = 0.0; // auto-blip
-        bool ignition_cut = false; // upshift cut
-        real throttle_ceiling = 1.0; // caps the pedal (not the blip floor) - the torque ramp-in after an upshift cut
-    };
-
-    struct PreSolveResult {
-        real tau0 = 0.0, d = 0.0;                                      // for Assembly::torque(crank, tau0, d)
-        real friction_cap_static = 0.0, friction_cap_kinetic = 0.0;    // for the engine's own Coulomb-to-ground row
-        EngineState state = EngineState::Off;
-        real rpm = 0.0; // |omega| in rpm, UNCLAMPED (Curve1D::evaluate clamps its own domain)
-        real throttle_eff = 0.0;
-        bool limiter_active = false, dfco_active = false, starter_active = false;
-        real torque_estimate = 0.0; // tau_smooth + tau_comb (HUD/telemetry, plan section 6.1.8)
-        // I4 C12: the governor's own no-load setpoint n_nl this substep (0
-        // without a governor), and the hand_throttle sensor value it read
-        // (0 without a governor) - PowertrainSnapshot::governor_setpoint_rpm/
-        // hand_throttle, never hashed.
-        real governor_setpoint_rpm = 0.0;
-        real hand_throttle = 0.0;
-        // Net crank torque (Coulomb row included) the current throttle demand
-        // (pedal/blip/idle governor) asks for at this rpm, IGNORING the rev
-        // limiter: motoring + theta_eff * (wot - motoring). The TCU's
-        // torque-following clutch close uses it as its feed-forward - the
-        // limiter is a speed governor that answers the clutch's own load,
-        // so feeding its (clutch-dependent) output back into the clutch
-        // target held a flared engine on the limiter indefinitely.
-        real torque_demand = 0.0;
-    };
-
-    struct PostSolveResult {
-        real engine_out_delta = 0.0; // ledger.engine_out += this
-        real starter_in_delta = 0.0; // ledger.starter_in += this
-    };
-
     explicit EngineTorqueMap(Desc desc);
 
     // Evaluated first each substep (plan sections 6.1.3-6.1.7). Must be
     // followed by exactly one post_solve() call before the next pre_solve().
-    [[nodiscard]] PreSolveResult pre_solve(const Sensors& sensors, const TcuRequest& tcu, real h);
+    [[nodiscard]] PreSolveResult pre_solve(const Sensors& sensors, const TcuRequest& tcu, real h) override;
     // omega_new: the crank node's omega after the network solve.
-    [[nodiscard]] PostSolveResult post_solve(real omega_new, real h);
+    [[nodiscard]] PostSolveResult post_solve(real omega_new, real h) override;
 
     [[nodiscard]] EngineState state() const { return state_; }
-    [[nodiscard]] real idle_integrator() const { return idle_integrator_; }
-    [[nodiscard]] real crank_angle() const { return crank_angle_; } // NOT hashed (sound only, plan section 6.1.9)
+    [[nodiscard]] real idle_integrator() const override { return idle_integrator_; }
+    [[nodiscard]] real crank_angle() const override { return crank_angle_; } // NOT hashed (sound only, plan section 6.1.9)
     [[nodiscard]] const Desc& desc() const { return desc_; }
+    [[nodiscard]] real idle_rpm() const override { return desc_.idle_rpm; }
 
-    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
+    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
 
     // World::reset_vehicle (plan section 4.5): forces the engine directly
     // into `state` (bypassing the ordinary state-machine transitions of
@@ -143,7 +108,7 @@ public:
     // engine cannot bootstrap itself from omega == 0), clearing the idle
     // integrator and the limiter/DFCO latches. The crank's own network
     // omega is set separately by the caller (ShaftNetwork::set_omega).
-    void reset(EngineState state) {
+    void reset(EngineState state) override {
         state_ = state;
         idle_integrator_ = real(0.0);
         limiter_cut_ = false;

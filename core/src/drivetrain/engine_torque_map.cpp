@@ -210,6 +210,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.governor_setpoint_rpm = governor_setpoint_rpm;
     r.hand_throttle = desc_.has_governor ? sensors.hand_throttle : real(0.0);
     r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
+    r.theta_c = theta_c;
     return r;
 }
 

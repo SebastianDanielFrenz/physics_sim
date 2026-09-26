@@ -24,7 +24,7 @@ enum class ShiftPhase : std::uint8_t { Idle, ClutchOpening, Releasing, Selecting
 // spec section 5.5, I3 subset (additive later).
 struct EngineSoundState {
     real crank_angle = 0.0; // rad, mod 4*pi. NOT hashed (like WheelInstance::spin_angle_)
-    real omega = 0.0, load = 0.0; // load = effective combustion throttle theta_c (0..1)
+    real omega = 0.0, load = 0.0; // load = post-limiter combustion fraction theta_c (0..1)
     std::uint64_t cut_mask = 0; // all ones while the limiter cuts or DFCO is active
     EngineState engine_state = EngineState::Off;
     bool starter_active = false, limiter_active = false, dfco_active = false;
