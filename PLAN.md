@@ -685,6 +685,24 @@ side by side, selected per engine data file:
 A vehicle file using the graph engine without a fuel map must behave exactly
 as before.
 
+I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
+- One simulated-engine track: I7a graph-engine fuel map, fuel files and fuel
+  tank; I7b mean-value runtime; I7c cycle-model map generator for NA petrol
+  engines plus the first simulated engine; I7d turbo (wastegate, blow-off
+  valve, intercooler) plus anti-lag; I7e rotary cycle model and a simulated
+  R26B for the 787B; N2O after that. The former I8 generator is absorbed.
+- The tractor demo starts after the whole I7 track, not after I7a.
+- Throttle path: the engine never reads the pedal directly. A separate
+  system passes the driver's input on to it - a mechanical linkage (pedal
+  cable to the throttle bodies) or an ECU (drive-by-wire). The engine data
+  file only declares whether its throttle takes that input mechanically or
+  electronically.
+- Taken as recommended: fuel map as mass flow over rpm x load; no existing
+  data file edited in I7 (fuel goes into new variant files); chassis mass
+  constant as fuel burns; engine type chosen by "kind": "simulated" plus
+  an architecture field; generated maps never committed; the graph engine
+  ignores altitude; refuelling only through a test/game hook.
+
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
 - Manual: the pedal requests 0-100 % of the engine's gross (indicated) torque
