@@ -386,6 +386,40 @@ ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std:
         e.limiter.band_rpm = lj.value("band_rpm", e.limiter.band_rpm);
     }
 
+    // PHYS-033 P4 I4 C12 (plan section 3.6): the optional all-speed diesel
+    // governor with droop - see docs/data_formats/engine.md for the full
+    // model. Self-contained field checks live here; the cross-field check
+    // against a soft_cut limiter band (needs e.idle_rpm from above and
+    // e.limiter from just above) lives with the other cross-field rpm-
+    // threshold checks near the end of this function.
+    if (j.contains("governor")) {
+        const auto& gj = j.at("governor");
+        const std::string type = gj.value("type", std::string("all_speed"));
+        if (type != "all_speed") {
+            throw std::runtime_error(ctx + ": governor.type must be \"all_speed\", got \"" + type + "\"");
+        }
+        e.has_governor = true;
+        e.governor.high_idle_rpm = gj.value("high_idle_rpm", e.governor.high_idle_rpm);
+        e.governor.rated_rpm = gj.value("rated_rpm", e.governor.rated_rpm);
+        e.governor.droop = gj.value("droop", e.governor.droop);
+        e.governor.channel = gj.value("channel", e.governor.channel);
+
+        if (e.governor.high_idle_rpm <= e.idle_rpm) {
+            throw std::runtime_error(ctx + ": governor.high_idle_rpm must be > idle_rpm, got " +
+                                      std::to_string(e.governor.high_idle_rpm) + " <= " + std::to_string(e.idle_rpm));
+        }
+        if (!(e.governor.droop > real(0.0) && e.governor.droop <= real(0.3))) {
+            throw std::runtime_error(ctx + ": governor.droop must be in (0, 0.3], got " + std::to_string(e.governor.droop));
+        }
+        if (!(e.governor.rated_rpm > e.idle_rpm && e.governor.rated_rpm <= e.governor.high_idle_rpm)) {
+            throw std::runtime_error(ctx + ": governor.rated_rpm must be in (idle_rpm, high_idle_rpm], got " +
+                                      std::to_string(e.governor.rated_rpm));
+        }
+        if (e.governor.channel.empty()) {
+            throw std::runtime_error(ctx + ": governor.channel must not be empty");
+        }
+    }
+
     if (j.contains("starter")) {
         const auto& sj = j.at("starter");
         e.starter.stall_torque_nm = sj.value("stall_torque_nm", e.starter.stall_torque_nm);
@@ -410,6 +444,23 @@ ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std:
     }
     if (!(e.dfco_reenable_rpm < e.dfco_enable_rpm)) {
         throw std::runtime_error(ctx + ": dfco_reenable_rpm must be < dfco_enable_rpm");
+    }
+    // PHYS-033 P4 I4 C12: a governor plus a soft_cut limiter would apply
+    // droop twice if their bands overlap - a soft_cut limiter IS itself a
+    // (fixed, no-droop-scaling) governor at full lever, so overlapping the
+    // two double-counts the taper. Reject; point at fuel_cut instead (an
+    // overspeed cutoff, not a second governor).
+    if (e.has_governor && e.limiter.type == ps::drivetrain::LimiterType::SoftCut) {
+        const real gov_lo = e.governor.high_idle_rpm - e.governor.droop * e.governor.rated_rpm;
+        const real gov_hi = e.governor.high_idle_rpm;
+        const real lim_lo = e.limiter.rpm - e.limiter.band_rpm;
+        const real lim_hi = e.limiter.rpm;
+        if (lim_lo <= gov_hi && gov_lo <= lim_hi) {
+            throw std::runtime_error(ctx + ": governor combined with a soft_cut limiter whose band [" +
+                                      std::to_string(lim_lo) + ", " + std::to_string(lim_hi) +
+                                      "] overlaps the governor's own droop band [" + std::to_string(gov_lo) + ", " +
+                                      std::to_string(gov_hi) + "] - use a fuel_cut overspeed limiter instead");
+        }
     }
     return e;
 }

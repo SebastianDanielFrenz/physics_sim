@@ -44,6 +44,16 @@ public:
     };
     enum class InitialState : std::uint8_t { Running, Off };
 
+    // PHYS-033 P4 I4 C12 (plan section 3.6): all-speed diesel governor with
+    // droop - see ps/drivetrain/powertrain_desc.h's GovernorDesc (the public
+    // shape this is copied field-for-field from, powertrain.cpp's
+    // to_engine_desc) for the full model description.
+    struct GovernorDesc {
+        real high_idle_rpm = 2400.0;
+        real rated_rpm = 2200.0;
+        real droop = 0.0909;
+    };
+
     struct Desc {
         vehicle::Curve1D wot_torque_nm_vs_rpm;      // required; x ascending, x[0] >= 0
         vehicle::Curve1D motoring_torque_nm_vs_rpm; // required; y <= 0; x[0] == 0 (its y[0] is the Coulomb part)
@@ -55,6 +65,8 @@ public:
         LimiterDesc limiter;
         StarterDesc starter;
         InitialState initial_state = InitialState::Running;
+        bool has_governor = false;
+        GovernorDesc governor;
     };
 
     enum class EngineState : std::uint8_t { Off, Stalled, Cranking, Running };
@@ -68,6 +80,10 @@ public:
         real starter = 0.0;                 // > 0.5 == pressed
         real clutch_engaged_fraction = 1.0; // the clutch's current effective engagement e
         bool gearbox_in_neutral = true;
+        // I4 C12: the governor's hand-throttle channel value (0 when there is
+        // no governor - Powertrain::pre_solve_components only ever reads a
+        // real channel value into this when desc().has_governor).
+        real hand_throttle = 0.0;
     };
     // From the TCU (one substep lagged - plan section 7.2's deliberate order
     // independence). Both default to "no request".
@@ -85,6 +101,12 @@ public:
         real throttle_eff = 0.0;
         bool limiter_active = false, dfco_active = false, starter_active = false;
         real torque_estimate = 0.0; // tau_smooth + tau_comb (HUD/telemetry, plan section 6.1.8)
+        // I4 C12: the governor's own no-load setpoint n_nl this substep (0
+        // without a governor), and the hand_throttle sensor value it read
+        // (0 without a governor) - PowertrainSnapshot::governor_setpoint_rpm/
+        // hand_throttle, never hashed.
+        real governor_setpoint_rpm = 0.0;
+        real hand_throttle = 0.0;
         // Net crank torque (Coulomb row included) the current throttle demand
         // (pedal/blip/idle governor) asks for at this rpm, IGNORING the rev
         // limiter: motoring + theta_eff * (wot - motoring). The TCU's

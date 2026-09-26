@@ -88,6 +88,13 @@ EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     d.starter.interlock = e.starter.interlock == StarterDesc::Interlock::None ? EngineTorqueMap::StarterInterlock::None
                                                                                : EngineTorqueMap::StarterInterlock::ClutchOrNeutral;
     d.initial_state = e.initial_state == EngineInitialState::Running ? EngineTorqueMap::InitialState::Running : EngineTorqueMap::InitialState::Off;
+    // I4 C12: the governor's channel string is resolved to a slot index
+    // separately (Powertrain::declare_control_channels/Phase K below), so
+    // only the three numeric fields are copied here.
+    d.has_governor = e.has_governor;
+    d.governor.high_idle_rpm = e.governor.high_idle_rpm;
+    d.governor.rated_rpm = e.governor.rated_rpm;
+    d.governor.droop = e.governor.droop;
     return d;
 }
 
@@ -135,7 +142,12 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
     // Array order preserved. I4 C5: every lockable differential declares its
     // lock channel (default 0 = unlocked). Nothing else declares one yet.
     for (const ComponentDesc& c : pt.components) {
-        if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
+        if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+            // I4 C12: the governor's hand-throttle channel (default 0) -
+            // car_sedan/no-governor vehicles declare nothing extra here;
+            // tractor.json's channel list gains "hand_throttle".
+            if (e->has_governor) add(ChannelDecl{e->governor.channel, real(0.0)});
+        } else if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
             if (d->lockable) add(ChannelDecl{d->lock.channel, real(0.0)});
         } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
             // I4 C9 (plan section 3.3): the MFWD transfer case's own engagement
@@ -973,6 +985,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         if (engine_->desc().initial_state == EngineTorqueMap::InitialState::Running) {
             network_.set_omega(engine_crank_, rpm_to_rad_per_s(engine_->desc().idle_rpm));
         }
+        // I4 C12: the governor's hand-throttle channel_slot, resolved the
+        // same way as transfer_case/park_lock/pto above.
+        if (e.has_governor) {
+            const std::vector<ChannelDecl> gov_decls = declare_control_channels(pt);
+            for (std::size_t i = 0; i < gov_decls.size(); ++i) {
+                if (gov_decls[i].name == e.governor.channel) {
+                    engine_governor_channel_slot_ = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
     }
     if (clutch_component_index >= 0) {
         const auto& c = std::get<ClutchDesc>(pt.components[static_cast<std::size_t>(clutch_component_index)].params);
@@ -1317,6 +1340,12 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         s.starter = ctx.starter;
         s.clutch_engaged_fraction = ctx.clutch_engaged_fraction;
         s.gearbox_in_neutral = ctx.gearbox_in_neutral;
+        // I4 C12: 0 without a governor (engine_governor_channel_slot_ stays -1
+        // when the desc has none, same guarded-read pattern as every other
+        // component's channel read above).
+        s.hand_throttle = (ctx.channels != nullptr && engine_governor_channel_slot_ >= 0 && engine_governor_channel_slot_ < ctx.channel_count)
+                               ? ctx.channels[engine_governor_channel_slot_]
+                               : real(0.0);
         const EngineTorqueMap::TcuRequest req{ctx.tcu_throttle_floor, ctx.tcu_ignition_cut, ctx.tcu_throttle_ceiling};
         last_engine_result_ = engine_->pre_solve(s, req, ctx.h);
         const auto& pre = last_engine_result_;
