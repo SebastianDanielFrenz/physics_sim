@@ -725,6 +725,10 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   requirement (the existing assist stays). A future automatic gearbox's
   controller acts on the torque request (after the pedal map), not the raw
   pedal.
+  The manual gearbox's assists switch to the same torque request (the
+  throttle stage's command) in I7a, right after the fuel map (C5): sedans
+  stay bit-identical, the tractor's auto-clutch starts to see its hand
+  throttle, so vehicle_tractor_i4's hash is re-recorded in that commit.
 
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
