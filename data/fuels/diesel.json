@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.fuel/1",
+  "name": "diesel",
+  "phase": "liquid",
+  "lhv_j_kg": 42000000.0,
+  "afr_stoich": 14.925373,
+  "density_kg_m3": 830.0,
+  "source": "Heywood, John B., Internal Combustion Engine Fundamentals, McGraw-Hill, 1988, Chapter 4 'Properties of Working Fluids', Problem 4.12, p. 157: 'Diesel fuel has a heating value of 42 MJ/kg and stoichiometric fuel/air ratio of 0.067.' afr_stoich = 1/0.067 = 14.925373 (Appendix D Table D.4 'Data on fuel properties', the book's own dedicated fuel-property table, could not be used: it is not recoverable from either the DjVu OCR text, which garbles its columns beyond use, or the archive.org 'Text PDF' scan, whose text layer skips straight from the 'TABLE D3' heading to the book's index - Table D.4 is a raster image insert with no embedded text in that scan). Density: EN 590 (as amended through Directive 2023/2413), Table 3 'Climate-related requirements - Temperate climates', density at 15 degC across the temperate grades: min 815.0-820.0 / max 845.0 kg/m^3 (test method EN ISO 12185), cross-checked via dieselnet.com's standards summary; 830.0 kg/m^3 taken as the arithmetic midpoint of the overall temperate-grade range, since the standard itself gives a range, not a single value."
+}
