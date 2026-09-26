@@ -1,0 +1,49 @@
+{
+  "format": "physics_sim.scenario/1",
+  "name": "vehicle_tractor_i4",
+  "duration_s": 10.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "surface_table_path": "../surfaces/surfaces.json",
+  "bodies": [
+    {
+      "name": "ground",
+      "motion": "static",
+      "shape": {"type": "box", "half_extents": [1000.0, 1000.0, 0.5]},
+      "position": [0, 0, -0.5],
+      "friction": 1.0
+    },
+    {
+      "name": "chassis",
+      "motion": "dynamic",
+      "mass": 6000.0,
+      "shape": {"type": "box", "half_extents": [1.2, 0.35, 0.9]},
+      "position": [0, 0, 1.28],
+      "friction": 0.5,
+      "allow_sleep": false
+    }
+  ],
+  "vehicles": [
+    {
+      "name": "tractor",
+      "chassis_body": "chassis",
+      "vehicle_json_path": "../vehicles/tractor.json"
+    }
+  ],
+  "control_events": [
+    { "t": 0.2, "channel": "hand_throttle", "value": 0.6 },
+    { "t": 0.3, "channel": "pto", "value": 1.0 },
+    { "t": 1.0, "channel": "shift_up_count", "value": 1.0 },
+    { "t": 2.0, "channel": "shift_up_count", "value": 2.0 },
+    { "t": 3.0, "channel": "shift_up_count", "value": 3.0 },
+    { "t": 4.0, "channel": "awd", "value": 1.0 },
+    { "t": 5.0, "channel": "diff_lock", "value": 1.0 },
+    { "t": 6.0, "channel": "diff_lock", "value": 0.0 },
+    { "t": 6.5, "channel": "hand_throttle", "value": 0.0 },
+    { "t": 7.0, "channel": "brake", "value": 1.0 },
+    { "t": 9.0, "channel": "park_lock", "value": 1.0 }
+  ],
+  "telemetry_csv": "vehicle_tractor_i4.csv"
+}
