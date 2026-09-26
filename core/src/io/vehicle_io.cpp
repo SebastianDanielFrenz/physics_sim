@@ -1105,6 +1105,13 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
             if (tcd_ptr != nullptr) {
                 const std::string tctx = "vehicle '" + v.name + "': powertrain.components['" + tcd_id + "']";
                 const ps::drivetrain::TorqueMapEngineDesc* engine_ptr = nullptr;
+                bool vehicle_has_engine = false;
+                for (const auto& c : p.components) {
+                    if (std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params) != nullptr) vehicle_has_engine = true;
+                }
+                if (!vehicle_has_engine) {
+                    throw std::runtime_error(tctx + ": a throttle_control component in a vehicle with no engine component");
+                }
                 for (const auto& c : p.components) {
                     if (c.id == tcd_ptr->engine) {
                         engine_ptr = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params);
@@ -1112,9 +1119,9 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     }
                 }
                 // Item 5: the ref must name an actual torque_map engine
-                // component - covers both "unknown id" and "a vehicle with
-                // no engine component at all" (engine_ptr stays nullptr
-                // either way), and "id exists but is some other type".
+                // component - covers "unknown id" and "id exists but is some
+                // other type" (a vehicle with no engine at all is rejected
+                // just above with its own message).
                 if (engine_ptr == nullptr) {
                     throw std::runtime_error(tctx + ": 'engine' (\"" + tcd_ptr->engine +
                                               "\") must name a \"torque_map\" engine component in this vehicle's powertrain");

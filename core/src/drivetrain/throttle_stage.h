@@ -75,10 +75,19 @@ public:
     }
 
     [[nodiscard]] ThrottleCommand evaluate(const ComponentSubstepCtx& ctx) const {
+        real unused_raw_hand_lever = real(0.0);
+        return evaluate(ctx, unused_raw_hand_lever);
+    }
+
+    // Same as evaluate(ctx), additionally writing raw_hand_lever(ctx) into
+    // out_raw_hand_lever (0 without a hand lever) - one read of the channel
+    // serving both the command and Powertrain's published hand_throttle.
+    [[nodiscard]] ThrottleCommand evaluate(const ComponentSubstepCtx& ctx, real& out_raw_hand_lever) const {
         const real pedal_prime = has_curve_ ? curve_.evaluate(ctx.throttle) : ctx.throttle;
         real command = pedal_prime;
+        out_raw_hand_lever = raw_hand_lever(ctx);
         if (has_hand_lever()) {
-            const real hand = raw_hand_lever(ctx);
+            const real hand = out_raw_hand_lever;
             command = std::max(std::clamp(hand, real(0.0), real(1.0)), std::clamp(pedal_prime, real(0.0), real(1.0)));
         }
         ThrottleCommand out;

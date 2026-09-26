@@ -1555,9 +1555,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     // strictly before the engine's own pre_solve, plan section 7.2 step 4)
     // ------------------------------------------------------------------------
     if (engine_) {
-        const ThrottleCommand throttle_cmd = throttle_stage_.evaluate(ctx);
+        const ThrottleCommand throttle_cmd = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
         last_throttle_command_ = throttle_cmd;
-        last_throttle_hand_lever_raw_ = throttle_stage_.raw_hand_lever(ctx);
 
         EngineTorqueMap::Sensors s;
         s.omega = network_.omega(engine_crank_);

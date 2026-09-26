@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.vehicle/2",
   "name": "test_mechanical_throttle_sedan",
-  "source": "PHYS-033 P4 I7a C3 review, item 11 (P4): a car_sedan.json clone for the C3 throttle-command stage's Powertrain-level mechanical-path test (test_throttle_control.cpp). Identical to data/vehicles/car_sedan.json except: (1) the engine component is INLINED (not 'ref') with the same fields as data/engines/i4_2l_na.json plus 'throttle_input': 'mechanical' (a component with 'ref' may carry no other field - vehicle_io.cpp's resolve_component_ref - so an inline copy is the only way to add throttle_input to a real engine's own torque curves); (2) the manual_tcu's auto_blip kp_per_rpm/max_throttle/upshift_torque_ramp_s are zeroed per the C3 review's item 1 ruling (a mechanical throttle cannot open the plate or close it against the driver; the upshift ignition cut alone stays available and is left enabled). Test fixture only, never loaded by production code - lives under tests/, not data/.",
+  "source": "PHYS-033 P4 I7a C3 review, item 11 (P4): a car_sedan.json clone for the C3 throttle-command stage's Powertrain-level mechanical-path test (test_throttle_control.cpp). Identical to data/vehicles/car_sedan.json except: (1) the engine component is INLINED (not 'ref') with the same fields as data/engines/i4_2l_na.json plus 'throttle_input': 'mechanical' (a component with 'ref' may carry no other field - vehicle_io.cpp's resolve_component_ref - so an inline copy is the only way to add throttle_input to a real engine's own torque curves); (2) the manual_tcu's auto_blip kp_per_rpm/max_throttle/upshift_torque_ramp_s are zeroed per the C3 review's item 1 ruling (a mechanical throttle cannot open the plate or close it against the driver; the upshift ignition cut alone stays available and is left enabled); (3) an explicit mechanical_linkage throttle_control with plan section 3.4's example linkage_curve {x [0, 0.3, 1], y [0, 0.12, 1]} (the test removes it in code for the implicit-stage case). Test fixture only, never loaded by production code - lives under tests/, not data/.",
   "wheels": [
     { "name": "FL", "attachment_local": [1.08, 0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 73575.0, "damper_bump_rate": 4000.0, "damper_rebound_rate": 5900.0, "bump_stop_rate": 400000.0, "arb_rate": 15000.0 },
@@ -45,7 +45,9 @@
         "out_inertia_kgm2": 0.004, "axis_local": [0, 1, 0] },
       { "id": "gearbox", "type": "gearbox", "ref": "../../../data/gearboxes/sedan_6mt.json" },
       { "id": "diff",    "type": "differential", "kind": "open", "ratio": 4.06, "efficiency": 0.97,
-        "carrier_inertia_kgm2": 0.02, "carrier_axis_local": [0, 1, 0] }
+        "carrier_inertia_kgm2": 0.02, "carrier_axis_local": [0, 1, 0] },
+      { "id": "throttle", "type": "throttle_control", "engine": "engine", "kind": "mechanical_linkage",
+        "linkage_curve": { "x": [0, 0.3, 1], "y": [0, 0.12, 1] } }
     ],
     "shafts": [
       { "ports": ["engine.crank", "clutch.in"] },

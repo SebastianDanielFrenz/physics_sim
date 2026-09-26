@@ -43,10 +43,12 @@
 //      produce bit-identical PreSolveResult/torque/state hashes.
 //   P3 dyno-held rpm: throttle_eff/engine_torque_demand match the pedal_map-
 //      reshaped command exactly (1e-12).
-//   P4 a mechanical graph-engine fixture (tests/support/): the implicit AND
-//      an explicit mechanical stage both apply the linkage curve, floor/
-//      ceiling reaching the engine are exactly 0/1, and theta_c is 0 during
-//      a real TCU upshift cut.
+//   P4 a mechanical graph-engine fixture (tests/support/fixtures/): the
+//      explicit mechanical_linkage stage applies its linkage_curve, the
+//      IMPLICIT stage (fixture component erased in code) passes the pedal
+//      through unshaped (plan section 3.4: no curve), floor/ceiling reaching
+//      the engine are exactly 0/1 even while the TCU requests ceiling 0, and
+//      theta_c is 0 during a real TCU upshift cut.
 //   P6 master-vs-branch: PowertrainDebug/snapshot fields recorded from
 //      master over data/scenarios/vehicle_tractor_i4.json's control events,
 //      compared EXACTLY (==) against this branch.
@@ -55,6 +57,8 @@
 #include "drivetrain/engine_torque_map.h"
 #include "drivetrain/powertrain.h"
 #include "drivetrain/throttle_stage.h"
+
+#include "powertrain_multi_diff_desc.h"
 
 #include "ps/io/scenario.h"
 #include "ps/io/surface_table.h"
@@ -67,12 +71,16 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -669,5 +677,478 @@ TEST_CASE("S6: ThrottleStage + governed EngineTorqueMap reproduces the pre-C3 ma
             // negative), so this is an exact check.
             CHECK(r.throttle_eff == Catch::Approx(theta_gov_ref).epsilon(1e-9));
         }
+    }
+}
+
+// ===========================================================================
+// C3 REVIEW: Powertrain-level P2/P3/P4/P6, plus review item 13 (a
+// "hand_throttle" channel on car_sedan has no effect). Every case below
+// drives a real Powertrain (or a real World), never a bare ThrottleStage.
+// ===========================================================================
+namespace {
+
+constexpr real kSubstepH = 1.0 / 960.0;
+
+Powertrain build_pt(const vehicle::VehicleDesc& d) { return Powertrain(d.powertrain, d.brake_system, d.wheels, d.controllers, d.name); }
+
+const TorqueMapEngineDesc& engine_desc_of(const vehicle::VehicleDesc& d) {
+    for (const auto& c : d.powertrain.components) {
+        if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) return *e;
+    }
+    throw std::runtime_error("engine_desc_of: no torque_map engine component");
+}
+
+const ThrottleControlDesc* stage_desc_of(const vehicle::VehicleDesc& d) {
+    for (const auto& c : d.powertrain.components) {
+        if (const auto* t = std::get_if<ThrottleControlDesc>(&c.params)) return t;
+    }
+    return nullptr;
+}
+
+// car_sedan.json plus an explicit electronic throttle_control stage with the
+// given pedal_map (car_sedan.json itself has none - its implicit stage is
+// the identity).
+vehicle::VehicleDesc sedan_with_pedal_map(std::vector<real> x, std::vector<real> y) {
+    vehicle::VehicleDesc d = ps_test::load_sedan_desc();
+    ThrottleControlDesc t;
+    t.engine = "engine";
+    t.kind = ThrottleInput::Electronic;
+    t.has_curve = true;
+    t.curve.x = std::move(x);
+    t.curve.y = std::move(y);
+    d.powertrain.components.push_back(ComponentDesc{"throttle", t});
+    return d;
+}
+
+vehicle::VehicleDesc load_mechanical_fixture() {
+    return io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicle_mechanical_throttle.json");
+}
+
+void reset_running_in_gear(Powertrain& pt, int gear, real hub_omega) {
+    vehicle::VehicleResetOptions o;
+    o.gear = gear;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = true;
+    pt.reset(o, std::vector<real>(4, hub_omega));
+}
+
+// Drives a Powertrain one 960 Hz substep at a time with every hub held at
+// hub_target by a stiff implicit "dyno" (Assembly::torque semantics
+// tau(w') = tau0 - d*(w' - w_old): tau0 = -K*(w_old - target), d = K), so
+// the engine sits at a fixed, known rpm whatever torque it makes.
+struct DynoDriver {
+    Powertrain& pt;
+    ComponentSubstepCtx ctx;
+    real hub_target;
+    real k = 5000.0;
+    long substep = 0;
+
+    DynoDriver(Powertrain& p, real target) : pt(p), hub_target(target) {
+        ctx.h = kSubstepH;
+        ctx.ignition = 1.0;
+        ctx.clutch_pedal = 0.0;
+        ctx.gear_request = kGearRequestNone;
+        ctx.assist_auto_clutch = false;
+        ctx.assist_auto_blip = false;
+        ctx.assist_auto_shift = false;
+    }
+    void step() {
+        ctx.first_substep_of_tick = (substep % 4) == 0;
+        pt.begin_substep();
+        pt.pre_solve_components(ctx);
+        for (std::size_t i = 0; i < 4; ++i) {
+            const real w_old = pt.hub_omega(i);
+            pt.add_hub_terms(i, -k * (w_old - hub_target), k);
+        }
+        pt.solve(ctx.h);
+        pt.post_solve_components(ctx);
+        ++substep;
+    }
+};
+
+bool same_bits(real a, real b) { return std::memcmp(&a, &b, sizeof(real)) == 0; }
+
+// Name of the first PreSolveResult field that differs BITWISE, or "".
+std::string first_differing_field(const PreSolveResult& a, const PreSolveResult& b) {
+    const std::pair<const char*, std::pair<real, real>> reals[] = {
+        {"tau0", {a.tau0, b.tau0}},
+        {"d", {a.d, b.d}},
+        {"friction_cap_static", {a.friction_cap_static, b.friction_cap_static}},
+        {"friction_cap_kinetic", {a.friction_cap_kinetic, b.friction_cap_kinetic}},
+        {"rpm", {a.rpm, b.rpm}},
+        {"throttle_eff", {a.throttle_eff, b.throttle_eff}},
+        {"torque_estimate", {a.torque_estimate, b.torque_estimate}},
+        {"governor_setpoint_rpm", {a.governor_setpoint_rpm, b.governor_setpoint_rpm}},
+        {"torque_demand", {a.torque_demand, b.torque_demand}},
+        {"theta_c", {a.theta_c, b.theta_c}},
+    };
+    for (const auto& [name, v] : reals) {
+        if (!same_bits(v.first, v.second)) return name;
+    }
+    if (a.state != b.state) return "state";
+    if (a.limiter_active != b.limiter_active) return "limiter_active";
+    if (a.dfco_active != b.dfco_active) return "dfco_active";
+    if (a.starter_active != b.starter_active) return "starter_active";
+    return {};
+}
+
+// A World with a static ground box and a car_sedan-sized chassis (the shape
+// test_powertrain_control_channels.cpp's make_minimal_rig uses), one vehicle
+// created with the given test-only extra channels, 1 worker, reset Running
+// in neutral.
+struct WorldRig {
+    std::unique_ptr<World> world;
+    VehicleId vehicle;
+};
+
+WorldRig make_world_rig(const vehicle::VehicleDesc& desc, const std::vector<std::pair<std::string, real>>& extra_channels = {}) {
+    WorldRig rig;
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    rig.world = std::make_unique<World>(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{1000.0, 1000.0, 0.5}};
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 1.0;
+    ground.pose.position = Vec3{0.0, 0.0, -0.5};
+    rig.world->create_body(ground);
+
+    BodyDesc chassis;
+    chassis.shape = BoxShape{Vec3{2.0, 0.4, 0.15}};
+    chassis.motion = BodyMotionType::Dynamic;
+    chassis.mass = 1500.0;
+    chassis.friction = 0.5;
+    chassis.allow_sleep = false;
+    chassis.pose.position = Vec3{0.0, 0.0, 0.6};
+    const BodyId chassis_id = rig.world->create_body(chassis);
+
+    rig.world->set_surface_table(std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json"));
+    rig.vehicle = rig.world->create_vehicle(desc, chassis_id, extra_channels);
+
+    // Every TCU assist off and the clutch pedal released: the ManualTcu
+    // reads the RAW pedal (docs/data_formats/vehicle.md, review item 7), and
+    // only its auto-clutch launch law acts on it - with the assists off its
+    // outputs cannot depend on the pedal.
+    rig.world->set_control("assist.auto_clutch", 0.0);
+    rig.world->set_control("assist.auto_blip", 0.0);
+    rig.world->set_control("assist.auto_shift", 0.0);
+    rig.world->set_control("clutch", 0.0);
+    vehicle::VehicleResetOptions o;
+    o.gear = 0;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = true;
+    rig.world->reset_vehicle(rig.vehicle, o);
+    return rig;
+}
+
+} // namespace
+
+TEST_CASE("P2: two pedal values on a flat pedal_map plateau are indistinguishable at the Powertrain level", "[unit][drivetrain][throttle]") {
+    // pedal_map plateau: every pedal in [0.4, 0.6] maps to exactly 0.3
+    // (Curve1D: y0 + t*(y1 - y0) with y1 == y0 is exactly y0).
+    const vehicle::VehicleDesc d = sedan_with_pedal_map({0.0, 0.4, 0.6, 1.0}, {0.0, 0.3, 0.3, 1.0});
+    constexpr real kPedalA = 0.45;
+    constexpr real kPedalB = 0.55;
+
+    SECTION("white-box: every engine output, the engine's own state hash and the Powertrain hash, per substep") {
+        // Gear 1 (3.54 * 4.06), hubs held at 18 rad/s: engine ~2470 rpm.
+        constexpr real kHub = 18.0;
+        Powertrain pa = build_pt(d);
+        Powertrain pb = build_pt(d);
+        reset_running_in_gear(pa, 1, kHub);
+        reset_running_in_gear(pb, 1, kHub);
+        DynoDriver da(pa, kHub);
+        DynoDriver db(pb, kHub);
+        da.ctx.throttle = kPedalA;
+        db.ctx.throttle = kPedalB;
+
+        constexpr int kSubsteps = 1920; // 2 s
+        constexpr std::uint64_t kSeed = 14695981039346656037ULL;
+        int tcu_not_neutral = 0;
+        int mismatches = 0;
+        int first_mismatch_substep = -1;
+        std::string first_mismatch_field;
+        for (int s = 0; s < kSubsteps; ++s) {
+            // What the engine sees THIS substep (the TCU output is lagged one
+            // substep): no floor, no ceiling, no cut - the stage's own output
+            // is the only throttle input the engine gets.
+            for (const Powertrain* p : {&pa, &pb}) {
+                const TcuThrottleLimits& r = p->tcu_request_debug();
+                if (r.throttle_floor != 0.0 || r.throttle_ceiling != 1.0 || r.ignition_cut) ++tcu_not_neutral;
+            }
+            da.step();
+            db.step();
+            std::string f = first_differing_field(pa.last_engine_result(), pb.last_engine_result());
+            if (f.empty() && !same_bits(pa.throttle_command_debug().command, pb.throttle_command_debug().command)) f = "throttle_command.command";
+            if (f.empty() && !same_bits(pa.throttle_eff(), pb.throttle_eff())) f = "throttle_eff()";
+            if (f.empty() && !same_bits(pa.engine_torque_demand(), pb.engine_torque_demand())) f = "engine_torque_demand()";
+            if (f.empty() && pa.engine().fold_state_hash(kSeed) != pb.engine().fold_state_hash(kSeed)) f = "engine().fold_state_hash";
+            if (f.empty() && pa.fold_state_hash(kSeed) != pb.fold_state_hash(kSeed)) f = "Powertrain::fold_state_hash";
+            if (!f.empty() && mismatches++ == 0) {
+                first_mismatch_substep = s;
+                first_mismatch_field = f;
+            }
+        }
+        INFO("first mismatch at substep " << first_mismatch_substep << ": " << first_mismatch_field << " (" << mismatches << " of "
+                                          << kSubsteps << " substeps differ)");
+        CHECK(tcu_not_neutral == 0);
+        CHECK(mismatches == 0);
+        // Non-vacuous: both pedals really went through the plateau, and the
+        // engine ran on it (not idling, not cut, not on the limiter).
+        CHECK(pa.throttle_command_debug().command == 0.3);
+        CHECK(pa.throttle_eff() == 0.3);
+        CHECK(pa.last_engine_result().state == EngineState::Running);
+        CHECK(pa.last_engine_result().rpm > 2000.0);
+        CHECK(pa.last_engine_result().rpm < 3000.0);
+        CHECK_FALSE(pa.last_engine_result().limiter_active);
+    }
+
+    SECTION("whole World: state_hash per tick (neutral, engine free-revving on the plateau)") {
+        WorldRig ra = make_world_rig(d);
+        WorldRig rb = make_world_rig(d);
+        ra.world->set_control("throttle", kPedalA);
+        rb.world->set_control("throttle", kPedalB);
+        int mismatches = 0;
+        int first = -1;
+        for (int t = 0; t < 480; ++t) {
+            ra.world->step();
+            rb.world->step();
+            if (ra.world->state_hash() != rb.world->state_hash() && mismatches++ == 0) first = t;
+        }
+        INFO("first differing tick " << first << " (" << mismatches << " of 480)");
+        CHECK(mismatches == 0);
+        CHECK(ra.world->powertrain_state(ra.vehicle).engine_rpm > 3000.0); // non-vacuous: the engine revved on the plateau
+    }
+}
+
+TEST_CASE("P3: dyno-held rpm - throttle_eff and engine_torque_demand follow the pedal_map-reshaped command (1e-12)", "[unit][drivetrain][throttle]") {
+    const vehicle::VehicleDesc d = sedan_with_pedal_map({0.0, 0.5, 1.0}, {0.0, 0.2, 1.0});
+    const TorqueMapEngineDesc& e = engine_desc_of(d);
+    const ThrottleControlDesc* stage = stage_desc_of(d);
+    REQUIRE(stage != nullptr);
+
+    // Reference idle PI, from the desc (engine_torque_map.cpp's own formula):
+    // theta_idle = clamp(theta_ff + kp*(idle_rpm - rpm) + I, 0, max_throttle).
+    const real w_idle = e.wot_torque_nm_vs_rpm.evaluate(e.idle_rpm);
+    const real m_idle = e.motoring_torque_nm_vs_rpm.evaluate(e.idle_rpm);
+    const real theta_ff = std::clamp(-m_idle / (w_idle - m_idle), real(0.0), e.idle.max_throttle);
+
+    constexpr real kHub = 18.0; // gear 1: ~2470 rpm
+    Powertrain pt = build_pt(d);
+    reset_running_in_gear(pt, 1, kHub);
+    DynoDriver drv(pt, kHub);
+
+    for (const real pedal : {0.25, 0.5, 0.8}) {
+        INFO("pedal " << pedal);
+        const real mapped = stage->curve.evaluate(pedal);
+        REQUIRE(std::abs(mapped - pedal) > 0.05); // the map genuinely reshapes: a raw-pedal leak would show
+        drv.ctx.throttle = pedal;
+        real worst_eff = 0.0;
+        real worst_demand_rel = 0.0;
+        for (int s = 0; s < 480; ++s) {
+            const real integrator_before = pt.idle_integrator();
+            drv.step();
+            const PreSolveResult& r = pt.last_engine_result();
+            REQUIRE(r.state == EngineState::Running);
+            REQUIRE_FALSE(r.limiter_active);
+            REQUIRE_FALSE(r.dfco_active);
+            const real theta_idle =
+                std::clamp(theta_ff + e.idle.kp_per_rpm * (e.idle_rpm - r.rpm) + integrator_before, real(0.0), e.idle.max_throttle);
+            const real theta_eff_ref = std::max(mapped, theta_idle); // floor 0, ceiling 1, no cut (assists off)
+            const real m = e.motoring_torque_nm_vs_rpm.evaluate(r.rpm);
+            const real w = e.wot_torque_nm_vs_rpm.evaluate(r.rpm);
+            const real demand_ref = m + theta_eff_ref * (w - m);
+            worst_eff = std::max(worst_eff, std::abs(pt.throttle_eff() - theta_eff_ref));
+            worst_demand_rel =
+                std::max(worst_demand_rel, std::abs(pt.engine_torque_demand() - demand_ref) / std::max(real(1.0), std::abs(demand_ref)));
+        }
+        CHECK(pt.last_engine_result().rpm > 2000.0);
+        CHECK(pt.last_engine_result().rpm < 3000.0);
+        CHECK(worst_eff <= 1e-12);
+        CHECK(worst_demand_rel <= 1e-12);
+        CHECK(pt.throttle_eff() == mapped); // theta_idle is 0 this far above idle_rpm
+    }
+}
+
+TEST_CASE("P4: mechanical fixture - linkage_curve (explicit) or identity (implicit), fixed 0/1 floor/ceiling, theta_c 0 during a real upshift cut",
+          "[unit][drivetrain][throttle]") {
+    const vehicle::VehicleDesc explicit_desc = load_mechanical_fixture();
+    REQUIRE(engine_desc_of(explicit_desc).throttle_input == ThrottleInput::Mechanical);
+    const ThrottleControlDesc* stage = stage_desc_of(explicit_desc);
+    REQUIRE(stage != nullptr);
+    REQUIRE(stage->kind == ThrottleInput::Mechanical);
+    REQUIRE(stage->has_curve);
+
+    // The implicit stage: same fixture with its throttle_control component
+    // erased in code (plan section 3.4: a mechanical engine with no stage
+    // gets an implicit mechanical stage with NO curve - the identity).
+    vehicle::VehicleDesc implicit_desc = explicit_desc;
+    auto& comps = implicit_desc.powertrain.components;
+    comps.erase(std::remove_if(comps.begin(), comps.end(),
+                               [](const ComponentDesc& c) { return std::holds_alternative<ThrottleControlDesc>(c.params); }),
+                comps.end());
+    REQUIRE(stage_desc_of(implicit_desc) == nullptr);
+
+    struct Variant {
+        const char* name;
+        const vehicle::VehicleDesc* desc;
+        bool linkage;
+    };
+    for (const Variant& v : {Variant{"explicit mechanical_linkage stage", &explicit_desc, true},
+                             Variant{"implicit mechanical stage", &implicit_desc, false}}) {
+        INFO(v.name);
+        Powertrain pt = build_pt(*v.desc);
+        // Gear 1, hubs held at 36 rad/s: ~4940 rpm; 2nd would be ~2860 rpm.
+        constexpr real kHub = 36.0;
+        reset_running_in_gear(pt, 1, kHub);
+        DynoDriver drv(pt, kHub);
+        drv.ctx.assist_auto_clutch = true;
+        drv.ctx.assist_auto_blip = true;
+
+        int bad_command = 0, bad_floor_ceiling = 0, cut_substeps = 0, tcu_ceiling_below_one = 0, cut_with_combustion = 0;
+        for (int s = 0; s < 1920; ++s) {
+            drv.ctx.throttle = s < 240 ? 0.3 : 0.65;
+            if (s == 240) drv.ctx.gear_request = 2.0; // a real TCU upshift 1 -> 2
+            const TcuThrottleLimits req = pt.tcu_request_debug(); // what the engine sees this substep (lagged)
+            drv.step();
+            const ThrottleCommand& cmd = pt.throttle_command_debug();
+            const real expected = v.linkage ? stage->curve.evaluate(drv.ctx.throttle) : drv.ctx.throttle;
+            if (cmd.command != expected) ++bad_command;
+            if (cmd.floor != 0.0 || cmd.ceiling != 1.0) ++bad_floor_ceiling;
+            if (req.throttle_ceiling < 1.0) ++tcu_ceiling_below_one;
+            if (req.ignition_cut) {
+                ++cut_substeps;
+                if (pt.last_engine_result().theta_c != 0.0) ++cut_with_combustion;
+            }
+        }
+        CHECK(bad_command == 0);
+        CHECK(bad_floor_ceiling == 0);
+        CHECK(cut_substeps > 0);          // the upshift cut really happened
+        CHECK(tcu_ceiling_below_one > 0); // ... and the TCU asked for a ceiling < 1 that the mechanical stage ignored
+        CHECK(cut_with_combustion == 0);
+        CHECK(pt.gearbox().current_position() == 2);
+    }
+    // The linkage curve genuinely reshapes (a raw-pedal pass-through in the
+    // explicit variant would have failed bad_command above).
+    CHECK(stage->curve.evaluate(0.3) == 0.12);
+    CHECK(std::abs(stage->curve.evaluate(0.65) - 0.65) > 0.05);
+}
+
+TEST_CASE("P6: tractor governor path over vehicle_tractor_i4.json's control events matches the pre-C3 master recording exactly",
+          "[unit][drivetrain][throttle][vehicle]") {
+    // The expected values below were recorded on master ba0f486 (pre-C3) by
+    // a throwaway TEST_CASE in a scratch worktree (never committed), running
+    // EXACTLY this loop: load data/scenarios/vehicle_tractor_i4.json, 1 job
+    // worker, build_scenario, and each tick apply every control event with
+    // time_s <= sim_time() (ps_run's own rule) before World::step(); after
+    // the step fold the five doubles {snapshot.hand_throttle,
+    // snapshot.governor_setpoint_rpm, debug.throttle_eff,
+    // debug.engine_torque_demand, debug.idle_integrator} byte-wise into one
+    // FNV-1a hash over all fields and one per field, and print ticks
+    // 300/1200/2000 as hex floats. Compared with == (hash equality is bit
+    // equality of every value on every one of the 2400 ticks).
+    auto fnv = [](std::uint64_t h, double v) {
+        unsigned char b[8];
+        std::memcpy(b, &v, 8);
+        for (const unsigned char c : b) {
+            h ^= c;
+            h *= 1099511628211ULL;
+        }
+        return h;
+    };
+    io::Scenario sc = io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_tractor_i4.json");
+    sc.world_config.job_workers = 1;
+    io::BuiltScenario built = io::build_scenario(sc);
+    World& world = *built.world;
+    const VehicleId vehicle = built.vehicles_by_name.at("tractor");
+    const int ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    std::size_t next_event = 0;
+    std::uint64_t h_all = 14695981039346656037ULL;
+    std::uint64_t h_field[5] = {h_all, h_all, h_all, h_all, h_all};
+    double spot[3][5] = {};
+    for (int i = 0; i < ticks; ++i) {
+        while (next_event < sc.control_events.size() && sc.control_events[next_event].time_s <= world.sim_time()) {
+            world.set_control(sc.control_events[next_event].channel, sc.control_events[next_event].value);
+            ++next_event;
+        }
+        world.step();
+        const auto& s = world.powertrain_state(vehicle);
+        const auto dbg = world.powertrain_debug(vehicle);
+        const double v[5] = {s.hand_throttle, s.governor_setpoint_rpm, dbg.throttle_eff, dbg.engine_torque_demand, dbg.idle_integrator};
+        for (int k = 0; k < 5; ++k) {
+            h_all = fnv(h_all, v[k]);
+            h_field[k] = fnv(h_field[k], v[k]);
+        }
+        const int slot = i == 300 ? 0 : i == 1200 ? 1 : i == 2000 ? 2 : -1;
+        if (slot >= 0) std::memcpy(spot[slot], v, sizeof v);
+    }
+    REQUIRE(ticks == 2400);
+    CHECK(h_field[0] == 0x09c190b1bd78f7f9ULL); // hand_throttle
+    CHECK(h_field[1] == 0x1ece9dfdcfa3ddecULL); // governor_setpoint_rpm
+    CHECK(h_field[2] == 0x6443ff93d68468d5ULL); // throttle_eff
+    CHECK(h_field[3] == 0xd6ab85ab58668bdeULL); // engine_torque_demand
+    CHECK(h_field[4] == 0x3d3d46be580ce397ULL); // idle_integrator
+    CHECK(h_all == 0x5342f8c7ba48dfe9ULL);
+    const double expected[3][5] = {
+        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.ff2169a8cdd91p-3, 0x1.6c6bc04ec3802p+6, -0x1.b5de0d29ea85bp-4},
+        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.e344502230825p-4, 0x1.f57fc23bceb90p+2, -0x1.b5de0d29ea85bp-4},
+        {0x0.0000000000000p+0, 0x1.a900000000000p+9, 0x1.a60fe0719d98ap-4, -0x1.cf94c04e5b960p+0, 0x1.5f2e95bc232ccp-8},
+    };
+    for (int t = 0; t < 3; ++t) {
+        for (int k = 0; k < 5; ++k) {
+            INFO("spot tick " << (t == 0 ? 300 : t == 1 ? 1200 : 2000) << " field " << k);
+            CHECK(spot[t][k] == expected[t][k]);
+        }
+    }
+}
+
+TEST_CASE("car_sedan: a \"hand_throttle\" control channel has no effect (its implicit stage has no hand lever)",
+          "[unit][drivetrain][throttle][vehicle]") {
+    // The channel is registered as a real component channel (World::
+    // create_vehicle's test-only extra-channel hook), so it genuinely reaches
+    // ComponentSubstepCtx::channels - only the stage's own configuration (no
+    // hand_lever_channel; car_sedan's engine has no governor) keeps it out.
+    const vehicle::VehicleDesc d = ps_test::load_sedan_desc();
+    REQUIRE(stage_desc_of(d) == nullptr);
+    REQUIRE_FALSE(engine_desc_of(d).has_governor);
+
+    struct Trace {
+        std::vector<std::uint64_t> hash;
+        std::vector<real> eff, demand, integrator;
+        int snapshot_hand_nonzero = 0;
+        std::vector<real> channel_values;
+    };
+    auto run = [&d](real hand) {
+        WorldRig rig = make_world_rig(d, {{"hand_throttle", 0.0}});
+        rig.world->set_control("throttle", 0.2);
+        rig.world->set_control("hand_throttle", hand);
+        Trace tr;
+        for (int t = 0; t < 480; ++t) {
+            rig.world->step();
+            const auto dbg = rig.world->powertrain_debug(rig.vehicle);
+            tr.hash.push_back(rig.world->state_hash());
+            tr.eff.push_back(dbg.throttle_eff);
+            tr.demand.push_back(dbg.engine_torque_demand);
+            tr.integrator.push_back(dbg.idle_integrator);
+            if (rig.world->powertrain_state(rig.vehicle).hand_throttle != 0.0) ++tr.snapshot_hand_nonzero;
+        }
+        tr.channel_values = rig.world->vehicle_component_channel_values(rig.vehicle);
+        return tr;
+    };
+    const Trace base = run(0.0);
+    CHECK(base.snapshot_hand_nonzero == 0);
+    for (const real hand : {0.5, 1.0}) {
+        INFO("hand_throttle " << hand);
+        const Trace tr = run(hand);
+        REQUIRE(tr.channel_values.size() == 1);
+        CHECK(tr.channel_values[0] == hand); // it did reach the component channel buffer
+        CHECK(tr.hash == base.hash);
+        CHECK(tr.eff == base.eff);
+        CHECK(tr.demand == base.demand);
+        CHECK(tr.integrator == base.integrator);
+        CHECK(tr.snapshot_hand_nonzero == 0);
     }
 }

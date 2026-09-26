@@ -291,6 +291,9 @@ public:
     // The stage's combined command this substep (EngineSoundState::
     // throttle_command, sound-only, never hashed).
     [[nodiscard]] real throttle_command() const { return last_throttle_command_.command; }
+    // The whole ThrottleCommand (command/floor/ceiling) the engine received
+    // this substep (tests only - test_throttle_control.cpp's P4).
+    [[nodiscard]] const ThrottleCommand& throttle_command_debug() const { return last_throttle_command_; }
     // The TCU's own lagged Outputs the stage/engine will read NEXT substep
     // (tests only). PowertrainDebug::throttle_ceiling reads
     // tcu_request_debug().throttle_ceiling directly (vehicle_instance.h),

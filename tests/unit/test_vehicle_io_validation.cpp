@@ -1444,7 +1444,7 @@ TEST_CASE("load_vehicle_json rejects nonzero auto_blip blip/ramp values on a man
     ]
   },
   "controllers": [ { "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",
-      "auto_blip": { )" + std::string(auto_blip_fields) + R"( } } ]
+      )" + (auto_blip_fields != nullptr ? std::string(R"("auto_blip": { )") + auto_blip_fields + " }" : std::string(R"("auto_clutch": { "enabled": false })")) + R"( } ]
 })";
     };
     SECTION("enabled: true with default (nonzero) blip/ramp values is rejected") {
@@ -1453,6 +1453,33 @@ TEST_CASE("load_vehicle_json rejects nonzero auto_blip blip/ramp values on a man
         REQUIRE_THROWS_WITH(
             io::load_vehicle_json(f.path.string()),
             Catch::Matchers::ContainsSubstring("has a mechanical throttle - a mechanical throttle cannot open the plate"));
+    }
+    SECTION("no auto_blip block at all is rejected (the defaults kp 0.002/max 1.0/ramp 0.10 apply)") {
+        TempJsonFile f(vehicle_json(nullptr), "vehicle_tcu_blip_mechanical_no_block");
+        REQUIRE_THROWS_WITH(
+            io::load_vehicle_json(f.path.string()),
+            Catch::Matchers::ContainsSubstring("has a mechanical throttle - a mechanical throttle cannot open the plate"));
+    }
+    SECTION("enabled: false with the default (nonzero) values is still rejected - the check is on values") {
+        TempJsonFile f(vehicle_json(R"("enabled": false)"), "vehicle_tcu_blip_mechanical_disabled_defaults");
+        REQUIRE_THROWS_WITH(
+            io::load_vehicle_json(f.path.string()),
+            Catch::Matchers::ContainsSubstring("has a mechanical throttle - a mechanical throttle cannot open the plate"));
+    }
+    SECTION("each of kp_per_rpm / max_throttle / upshift_torque_ramp_s nonzero alone is rejected") {
+        const char* const cases[] = {
+            R"("kp_per_rpm": 0.001, "max_throttle": 0.0, "upshift_torque_ramp_s": 0.0)",
+            R"("kp_per_rpm": 0.0, "max_throttle": 0.5, "upshift_torque_ramp_s": 0.0)",
+            R"("kp_per_rpm": 0.0, "max_throttle": 0.0, "upshift_torque_ramp_s": 0.05)",
+        };
+        const char* const tags[] = {"vehicle_tcu_blip_mech_kp", "vehicle_tcu_blip_mech_max", "vehicle_tcu_blip_mech_ramp"};
+        for (int i = 0; i < 3; ++i) {
+            const char* fields = cases[i];
+            TempJsonFile f(vehicle_json(fields), tags[i]);
+            REQUIRE_THROWS_WITH(
+                io::load_vehicle_json(f.path.string()),
+                Catch::Matchers::ContainsSubstring("has a mechanical throttle - a mechanical throttle cannot open the plate"));
+        }
     }
     SECTION("enabled: true with kp_per_rpm/max_throttle/upshift_torque_ramp_s all zeroed loads "
             "(upshift ignition cut alone is fine on a mechanical engine)") {
@@ -1607,23 +1634,24 @@ TEST_CASE("load_vehicle_json validates throttle_control pedal_map/linkage_curve 
     // exactly, and y non-decreasing - each with its own rejection message.
     RefGearbox gb(R"("type": "manual", "forward_ratios": [3.0, 1.6, 1.0], "forward_efficiency": [1.0, 1.0, 1.0])",
                   "gearbox_pedal_map_rules");
-    const auto vehicle_json = [&](const char* curve_json) {
+    const auto curve_vehicle_json = [&](const char* engine_input, const char* stage_kind, const char* curve_key,
+                                        const char* curve_json) {
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
   "wheels": [ { "name": "FL" }, { "name": "FR" } ],
   "powertrain": {
     "components": [
-      { "id": "engine", "type": "engine", "kind": "torque_map",
+      { "id": "engine", "type": "engine", "kind": "torque_map", )") + engine_input + R"(
         "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
         "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
         "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0 },
       { "id": "clutch", "type": "clutch", "capacity_nm": 300.0,
         "engagement_vs_pedal": { "x": [0.0, 1.0], "y": [1.0, 0.0] } },
-      )") + gb.component_json + R"(,
+      )" + gb.component_json + R"(,
       { "id": "diff", "type": "differential", "kind": "open", "ratio": 3.7 },
-      { "id": "throttle", "type": "throttle_control", "engine": "engine", "kind": "electronic",
-        "pedal_map": )" + curve_json + R"( }
+      { "id": "throttle", "type": "throttle_control", "engine": "engine", "kind": ")" + std::string(stage_kind) + R"(",
+        ")" + std::string(curve_key) + R"(": )" + curve_json + R"( }
     ],
     "shafts": [
       { "ports": ["engine.crank", "clutch.in"] },
@@ -1634,6 +1662,12 @@ TEST_CASE("load_vehicle_json validates throttle_control pedal_map/linkage_curve 
     ]
   }
 })";
+    };
+    const auto vehicle_json = [&](const char* curve_json) {
+        return curve_vehicle_json("", "electronic", "pedal_map", curve_json);
+    };
+    const auto linkage_vehicle_json = [&](const char* curve_json) {
+        return curve_vehicle_json(R"("throttle_input": "mechanical",)", "mechanical_linkage", "linkage_curve", curve_json);
     };
     SECTION("x.front() != 0 is rejected") {
         TempJsonFile f(vehicle_json(R"({ "x": [0.1, 1.0], "y": [0.0, 1.0] })"), "vehicle_pedal_map_front_nonzero");
@@ -1660,6 +1694,34 @@ TEST_CASE("load_vehicle_json validates throttle_control pedal_map/linkage_curve 
         TempJsonFile f(vehicle_json(R"({ "x": [0.0, 0.4, 0.6, 1.0], "y": [0.0, 0.3, 0.3, 1.0] })"),
                        "vehicle_pedal_map_valid");
         REQUIRE_NOTHROW(io::load_vehicle_json(f.path.string()));
+    }
+    SECTION("linkage_curve: the same rules apply (x.back() != 1, decreasing y, y out of range) and a valid one loads") {
+        TempJsonFile f1(linkage_vehicle_json(R"({ "x": [0.0, 0.9], "y": [0.0, 1.0] })"), "vehicle_linkage_back_nonone");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f1.path.string()),
+                             Catch::Matchers::ContainsSubstring("linkage_curve") &&
+                                 Catch::Matchers::ContainsSubstring("x.back() must be exactly 1"));
+        TempJsonFile f2(linkage_vehicle_json(R"({ "x": [0.0, 0.5, 1.0], "y": [0.0, 0.6, 0.3] })"),
+                        "vehicle_linkage_y_decreasing");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f2.path.string()),
+                             Catch::Matchers::ContainsSubstring("linkage_curve") &&
+                                 Catch::Matchers::ContainsSubstring("y must be non-decreasing"));
+        TempJsonFile f3(linkage_vehicle_json(R"({ "x": [0.0, 1.0], "y": [-0.1, 1.0] })"), "vehicle_linkage_y_oob");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f3.path.string()),
+                             Catch::Matchers::ContainsSubstring("linkage_curve") &&
+                                 Catch::Matchers::ContainsSubstring("y must be within [0, 1]"));
+        TempJsonFile f4(linkage_vehicle_json(R"({ "x": [0.0, 0.5, 1.0], "y": [0.0, 0.2, 1.0] })"), "vehicle_linkage_valid");
+        REQUIRE_NOTHROW(io::load_vehicle_json(f4.path.string()));
+    }
+    SECTION("a curve under the other kind's key is rejected") {
+        TempJsonFile f1(curve_vehicle_json(R"("throttle_input": "mechanical",)", "mechanical_linkage", "pedal_map",
+                                           R"({ "x": [0.0, 1.0], "y": [0.0, 1.0] })"),
+                        "vehicle_pedal_map_on_mechanical");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f1.path.string()),
+                             Catch::Matchers::ContainsSubstring("'pedal_map' is only valid for kind"));
+        TempJsonFile f2(curve_vehicle_json("", "electronic", "linkage_curve", R"({ "x": [0.0, 1.0], "y": [0.0, 1.0] })"),
+                        "vehicle_linkage_on_electronic");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f2.path.string()),
+                             Catch::Matchers::ContainsSubstring("'linkage_curve' is only valid for kind"));
     }
 }
 
@@ -1730,6 +1792,36 @@ TEST_CASE("load_vehicle_json throttle_control engine reference cross-checks (ord
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
                              Catch::Matchers::ContainsSubstring("must name a \"torque_map\" engine component"));
     }
+    SECTION("throttle_control naming a component that is not an engine (the clutch) is rejected") {
+        const std::string json = std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "engine", "type": "engine", "kind": "torque_map",
+        "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+        "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+        "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0 },
+      { "id": "clutch", "type": "clutch", "capacity_nm": 300.0,
+        "engagement_vs_pedal": { "x": [0.0, 1.0], "y": [1.0, 0.0] } },
+      )") + gb.component_json + R"(,
+      { "id": "diff", "type": "differential", "kind": "open", "ratio": 3.7 },
+      { "id": "throttle", "type": "throttle_control", "engine": "clutch", "kind": "electronic" }
+    ],
+    "shafts": [
+      { "ports": ["engine.crank", "clutch.in"] },
+      { "ports": ["clutch.out", "gearbox.in"] },
+      { "ports": ["gearbox.out", "diff.carrier"] },
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ]
+  }
+})";
+        TempJsonFile f(json, "vehicle_throttle_names_clutch");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("'engine' (\"clutch\") must name a \"torque_map\" engine component"));
+    }
     SECTION("throttle_control in a vehicle with no engine component at all is rejected") {
         const std::string json = std::string(R"({
   "format": "physics_sim.vehicle/2",
@@ -1744,7 +1836,7 @@ TEST_CASE("load_vehicle_json throttle_control engine reference cross-checks (ord
 })");
         TempJsonFile f(json, "vehicle_throttle_no_engine");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
-                             Catch::Matchers::ContainsSubstring("must name a \"torque_map\" engine component"));
+                             Catch::Matchers::ContainsSubstring("a throttle_control component in a vehicle with no engine component"));
     }
 }
 
