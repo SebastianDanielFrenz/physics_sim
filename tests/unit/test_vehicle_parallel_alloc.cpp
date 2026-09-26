@@ -52,6 +52,9 @@
 // VehicleInstance::step_tick made own_violation_count() go strictly
 // positive, then was reverted - see the P1 commit message/report).
 
+#include "vehicle_test_helpers.h"
+
+#include "ps/drivetrain/powertrain_desc.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/debug_alloc.h"
@@ -277,4 +280,90 @@ TEST_CASE("debug_alloc sees allocations made through Jolt's allocator", "[debug_
     ps::jobs::debug_alloc::reset();
     INFO("external_violation_count=" << external);
     REQUIRE(external >= 1);
+}
+
+// PHYS-033 P4 I4 C15: a tractor with a pto load_dyno attached in code
+// (test_powertrain_pto.cpp's own load_tractor_with_pto_dyno() pattern -
+// LoadDyno is test/bench only, never shipped in a data/vehicles/*.json file)
+// driven while toggling awd, pto and the new C15 diff_lock channel, then
+// braked to a stop and finally park_lock-ed - the same D8 zero-alloc
+// guarantee test_powertrain_pto.cpp's own "pto toggled" case checks, now
+// covering all four of tractor.json's toggle-able channels together in one
+// armed window instead of pto alone.
+namespace {
+vehicle::VehicleDesc load_tractor_with_pto_dyno_for_alloc_test() {
+    vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+    drivetrain::LoadDynoDesc dyno_desc;
+    dyno_desc.mode = drivetrain::LoadDynoMode::Viscous;
+    dyno_desc.viscous_nm_s_rad = 5.0;
+    dyno_desc.inertia_kgm2 = 0.02;
+    drivetrain::ComponentDesc dyno_component;
+    dyno_component.id = "dyno";
+    dyno_component.params = dyno_desc;
+    d.powertrain.components.push_back(dyno_component);
+    drivetrain::ShaftDesc shaft;
+    shaft.ports = {drivetrain::PortRef{"pto", "out", false}, drivetrain::PortRef{"dyno", "shaft", false}};
+    d.powertrain.shafts.push_back(shaft);
+    return d;
+}
+} // namespace
+
+TEST_CASE("a tractor with a pto load_dyno, driven while toggling awd/pto/diff_lock and finally "
+          "park_lock after braking to a stop, allocates nothing (own) while stepping",
+          "[world][vehicle][drivetrain][debug_alloc][jobs]") {
+    if (!hook_available()) {
+        WARN("debug_alloc's own operator new/delete overrides are compiled out under ASan/TSan "
+             "- nothing to check here on this build.");
+        return;
+    }
+
+    auto rig = ps_test::build_vehicle_rig_from_desc(load_tractor_with_pto_dyno_for_alloc_test(), 6000.0,
+                                                     Vec3{1.2, 0.35, 0.9}, 1.28, 0.0, 1);
+    World& world = *rig.world;
+
+    // Warm-up: settle onto the ground, launch in 1st, let every scratch
+    // buffer (Assembly/Cluster, the dyno's own row) reach steady capacity.
+    world.set_control("gear_request", 1.0);
+    world.set_control("throttle", 0.6);
+    for (int i = 0; i < 300; ++i) world.step();
+
+    ps::jobs::debug_alloc::reset();
+    ps::jobs::debug_alloc::set_armed(true);
+
+    // Toggle awd (transfer case engagement/disengagement ramp).
+    world.set_control("awd", 1.0);
+    for (int i = 0; i < 60; ++i) world.step();
+    world.set_control("awd", 0.0);
+    for (int i = 0; i < 60; ++i) world.step();
+
+    // Toggle pto (with the dyno attached, so its friction row and the
+    // engine-side lagged mesh-loss term are both actually exercised, not
+    // just the disengaged stub brake).
+    world.set_control("pto", 1.0);
+    for (int i = 0; i < 60; ++i) world.step();
+    world.set_control("pto", 0.0);
+    for (int i = 0; i < 60; ++i) world.step();
+
+    // Toggle the new C15 diff_lock channel (Differential's LeafPair
+    // reconstruction path, the lock row itself).
+    world.set_control("diff_lock", 1.0);
+    for (int i = 0; i < 60; ++i) world.step();
+    world.set_control("diff_lock", 0.0);
+    for (int i = 0; i < 60; ++i) world.step();
+
+    // Brake to a stop, then engage park_lock - only valid once the
+    // gearbox-output shaft is below its own max_engage_speed_rad_s.
+    world.set_control("throttle", 0.0);
+    world.set_control("brake", 1.0);
+    for (int i = 0; i < 200; ++i) world.step();
+    world.set_control("park_lock", 1.0);
+    for (int i = 0; i < 60; ++i) world.step();
+
+    ps::jobs::debug_alloc::set_armed(false);
+    const std::uint64_t own = ps::jobs::debug_alloc::own_violation_count();
+    const std::uint64_t external = ps::jobs::debug_alloc::external_violation_count();
+    ps::jobs::debug_alloc::reset();
+
+    WARN("external (Jolt-internal, pre-existing broadphase-rebuild gap) violation count=" << external);
+    CHECK(own == 0);
 }
