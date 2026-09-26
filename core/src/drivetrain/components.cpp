@@ -391,6 +391,165 @@ std::uint64_t ParkLock::fold_state_hash(std::uint64_t seed) const {
     return h;
 }
 
+// --- Pto ---------------------------------------------------------------------
+
+void Pto::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) {
+    omega_old_in_ = net.omega(in_);
+    omega_old_out_ = net.omega(out_);
+
+    // Mode switch (plan section 3.5): only while currently disengaged (e ==
+    // 0, checked at the PRE-ramp value - so a same-substep engage+mode-
+    // change request switches mode first, then starts ramping up under the
+    // new ratio) and the out node is nearly at rest. If the requested mode's
+    // ratio is not present in this file, the current mode is held.
+    const real speed_cmd = (ctx.channels != nullptr && speed_channel_slot_ >= 0 && speed_channel_slot_ < ctx.channel_count)
+                                ? ctx.channels[speed_channel_slot_]
+                                : real(540.0);
+    const bool want_1000 = speed_cmd >= real(770.0);
+    if (engagement_ == real(0.0) && std::abs(omega_old_out_) < real(1.0)) {
+        if (want_1000 && desc_.has_1000) mode_1000_ = true;
+        else if (!want_1000 && desc_.has_540) mode_1000_ = false;
+    }
+
+    // Engagement ramp (TransferCase's own pattern).
+    const real cmd = (ctx.channels != nullptr && channel_slot_ >= 0 && channel_slot_ < ctx.channel_count)
+                          ? ctx.channels[channel_slot_]
+                          : real(0.0);
+    const real target = cmd >= real(0.5) ? real(1.0) : real(0.0);
+    if (desc_.engage_time_s <= real(0.0)) {
+        engagement_ = target;
+    } else {
+        const real rate = real(1.0) / desc_.engage_time_s;
+        const real max_step = rate * ctx.h;
+        if (target > engagement_) engagement_ = std::min(target, engagement_ + max_step);
+        else if (target < engagement_) engagement_ = std::max(target, engagement_ - max_step);
+    }
+
+    // Assembly::begin_substep_rows resets ratio_b to 1.0 every substep - the
+    // current mode's ratio must be re-asserted unconditionally.
+    assembly.set_friction_row_ratio(row_, current_ratio());
+    const real cap_kinetic = engagement_ * desc_.capacity_nm;
+    const real cap_static = desc_.static_factor * cap_kinetic;
+    assembly.set_friction_capacity(row_, cap_static, cap_kinetic);
+
+    // Optional lagged efficiency loss at `in_` (GearPair's own pattern).
+    if (desc_.efficiency < real(1.0)) {
+        own_loss_tau_ = -(real(1.0) - desc_.efficiency) * std::abs(lambda_row_prev_) * sign(omega_old_in_);
+        assembly.torque(in_, own_loss_tau_, real(0.0));
+    } else {
+        own_loss_tau_ = real(0.0);
+    }
+
+    // Disengaged stub brake at `out_` (owner-approved coordinator decision,
+    // plan section 3.5): only while e == 0 EXACTLY this substep (the POST-
+    // ramp value - the actual capacity the solve will see), an implicit
+    // viscous drag c = J_out_node/disengaged_brake_time_s so an unconnected
+    // `out` decays instead of spinning forever (otherwise a mode change
+    // could never become eligible again after disengagement).
+    if (engagement_ == real(0.0)) {
+        const real c = out_node_inertia_ / desc_.disengaged_brake_time_s;
+        stub_tau0_ = -c * omega_old_out_;
+        stub_d_ = c;
+        assembly.torque(out_, stub_tau0_, stub_d_);
+    } else {
+        stub_tau0_ = real(0.0);
+        stub_d_ = real(0.0);
+    }
+}
+
+void Pto::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly&, PowertrainEnergy& ledger) {
+    const real v = net.row_velocity(row_);
+    const real lambda = net.row_lambda(row_);
+    ledger.pto_clutch_loss += -ctx.h * v * lambda;
+
+    // Disengaged stub brake's own dissipation (0 when not applied this
+    // substep, since stub_tau0_/stub_d_ are both 0 then).
+    const real omega_new_out = net.omega(out_);
+    const real tau_applied = stub_tau0_ - stub_d_ * (omega_new_out - omega_old_out_);
+    ledger.pto_clutch_loss += -ctx.h * tau_applied * omega_new_out;
+
+    lambda_row_prev_ = lambda;
+    if (desc_.efficiency < real(1.0)) {
+        ledger.gear_loss += -ctx.h * net.omega(in_) * own_loss_tau_;
+    }
+}
+
+std::uint64_t Pto::fold_state_hash(std::uint64_t seed) const {
+    // Fold engagement_ (real, byte-exact) and mode_1000_ (bool); lambda_row_
+    // prev_ only when efficiency < 1 (GearPair's lambda_mesh_prev_ pattern).
+    std::uint64_t h = seed;
+    {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(&engagement_);
+        for (std::size_t i = 0; i < sizeof(engagement_); ++i) {
+            h ^= bytes[i];
+            h *= 1099511628211ULL;
+        }
+    }
+    h ^= mode_1000_ ? std::uint64_t(1) : std::uint64_t(0);
+    h *= 1099511628211ULL;
+    if (desc_.efficiency < real(1.0)) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(&lambda_row_prev_);
+        for (std::size_t i = 0; i < sizeof(lambda_row_prev_); ++i) {
+            h ^= bytes[i];
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
+
+// --- LoadDyno ------------------------------------------------------------
+
+void LoadDyno::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) {
+    const real scale = (ctx.channels != nullptr && scale_channel_slot_ >= 0 && scale_channel_slot_ < ctx.channel_count)
+                            ? ctx.channels[scale_channel_slot_]
+                            : real(1.0);
+    omega_old_ = net.omega(shaft_);
+    tau0_ = real(0.0);
+    d_ = real(0.0);
+    debug_torque_ = real(0.0);
+    switch (desc_.mode) {
+        case LoadDynoMode::Brake: {
+            const real cap = desc_.torque_nm * scale;
+            assembly.set_friction_capacity(row_, cap, cap); // exact Coulomb: static == kinetic
+            break;
+        }
+        case LoadDynoMode::Viscous: {
+            const real c = desc_.viscous_nm_s_rad * scale;
+            tau0_ = -c * omega_old_;
+            d_ = c;
+            assembly.torque(shaft_, tau0_, d_);
+            break;
+        }
+        case LoadDynoMode::Quadratic: {
+            const real k = desc_.quadratic_nm_s2_rad2 * scale;
+            tau0_ = -k * omega_old_ * std::abs(omega_old_);
+            d_ = real(2.0) * k * std::abs(omega_old_);
+            assembly.torque(shaft_, tau0_, d_);
+            break;
+        }
+    }
+}
+
+void LoadDyno::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly&, PowertrainEnergy& ledger) {
+    const real omega_new = net.omega(shaft_);
+    switch (desc_.mode) {
+        case LoadDynoMode::Brake: {
+            const real v = net.row_velocity(row_);
+            const real lambda = net.row_lambda(row_);
+            ledger.external_absorbed += -ctx.h * v * lambda;
+            debug_torque_ = lambda;
+            break;
+        }
+        case LoadDynoMode::Viscous:
+        case LoadDynoMode::Quadratic: {
+            const real tau_applied = tau0_ - d_ * (omega_new - omega_old_);
+            ledger.external_absorbed += -ctx.h * tau_applied * omega_new;
+            debug_torque_ = tau_applied;
+            break;
+        }
+    }
+}
+
 // --- DirectTorqueBrakes ------------------------------------------------------
 
 void DirectTorqueBrakes::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork&, Assembly& assembly) {

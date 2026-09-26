@@ -143,6 +143,12 @@ public:
         dbg.awd_clutch_torque = powertrain_.awd_clutch_torque(); // PHYS-033 P4 I4 C9
         dbg.awd_clutch_slip = powertrain_.awd_clutch_slip();
         dbg.park_lock_torque = powertrain_.park_lock_torque(); // PHYS-033 P4 I4 C10
+        // PHYS-033 P4 I4 C11 (plan section 3.5): the pto's own friction-row
+        // torque/slip, and the first load_dyno's own applied torque - 0 for
+        // every vehicle with neither.
+        dbg.pto_clutch_torque = powertrain_.pto_clutch_torque();
+        dbg.pto_clutch_slip = powertrain_.pto_clutch_slip();
+        dbg.dyno_torque = powertrain_.dyno_torque();
         return dbg;
     }
 

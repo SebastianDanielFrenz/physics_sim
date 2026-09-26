@@ -378,6 +378,82 @@ private:
     bool engaged_ = false;  // STATE: persists substep to substep
 };
 
+// pto (PHYS-033 P4 I4 C11, plan section 3.5): power take-off. Ports `in`
+// (live, ahead of the main clutch) and `out` (external, may stand alone).
+// One Coulomb friction row (a = in, b = out, ratio_b = the current mode's
+// ratio, re-asserted every substep like TransferCase's front_ratio_).
+// `engagement_`/`mode_1000_` are the only persistent, hash-relevant state;
+// `lambda_row_prev_` is additionally hashed only when efficiency < 1 (same
+// shape as GearPair's lambda_mesh_prev_).
+class Pto final : public IComponent {
+public:
+    Pto(NodeId in, NodeId out, FrictionRowId row, PtoDesc desc, int channel_slot, int speed_channel_slot, real out_node_inertia)
+        : in_(in), out_(out), row_(row), desc_(std::move(desc)), channel_slot_(channel_slot),
+          speed_channel_slot_(speed_channel_slot), out_node_inertia_(out_node_inertia) {
+        // Initial mode: "540" if present, else the only key (loader
+        // guarantees at least one of has_540/has_1000).
+        mode_1000_ = !desc_.has_540;
+    }
+
+    void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
+    void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
+                     PowertrainEnergy& ledger) override;
+    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
+
+    [[nodiscard]] real engagement() const { return engagement_; }
+    [[nodiscard]] bool mode_1000() const { return mode_1000_; }
+    [[nodiscard]] real current_ratio() const { return mode_1000_ ? desc_.ratio_1000 : desc_.ratio_540; }
+    [[nodiscard]] NodeId out_node() const { return out_; }
+    [[nodiscard]] NodeId in_node() const { return in_; }
+
+private:
+    NodeId in_, out_;
+    FrictionRowId row_;
+    PtoDesc desc_;
+    int channel_slot_ = -1;       // into ComponentSubstepCtx::channels ("pto")
+    int speed_channel_slot_ = -1; // into ComponentSubstepCtx::channels ("pto_speed")
+    real out_node_inertia_ = 0.0; // J of the `out` node, fixed at build time (disengaged stub-brake coefficient)
+
+    real engagement_ = 0.0;      // STATE: persists substep to substep (ramped toward the channel's target)
+    bool mode_1000_ = false;     // STATE: current mode (false = "540", true = "1000")
+    real lambda_row_prev_ = 0.0; // STATE (hashed only when efficiency < 1): previous substep's row lambda
+
+    // this substep's pre_solve outputs, stashed for post_solve
+    real own_loss_tau_ = 0.0;   // efficiency loss torque applied at `in_`, 0 unless efficiency < 1
+    real stub_tau0_ = 0.0;      // disengaged stub-brake tau0 applied at `out_`, 0 unless e == 0 exactly
+    real stub_d_ = 0.0;         // disengaged stub-brake d applied at `out_`
+    real omega_old_in_ = 0.0;
+    real omega_old_out_ = 0.0;
+};
+
+// load_dyno (PHYS-033 P4 I4 C11, plan section 3.5): a test/bench load on
+// port `shaft`. Stateless - no fold_state_hash override (the default
+// no-op is correct: nothing here persists beyond the network's own omega,
+// already hashed).
+class LoadDyno final : public IComponent {
+public:
+    LoadDyno(NodeId shaft, FrictionRowId row, LoadDynoDesc desc, int scale_channel_slot)
+        : shaft_(shaft), row_(row), desc_(std::move(desc)), scale_channel_slot_(scale_channel_slot) {}
+
+    void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
+    void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
+                     PowertrainEnergy& ledger) override;
+
+    [[nodiscard]] real torque() const { return debug_torque_; }
+
+private:
+    NodeId shaft_;
+    FrictionRowId row_; // only meaningful (and only added to the network) when desc_.mode == Brake
+    LoadDynoDesc desc_;
+    int scale_channel_slot_ = -1; // into ComponentSubstepCtx::channels; -1 = fixed scale 1.0
+
+    // this substep's pre_solve outputs (Viscous/Quadratic only), stashed for post_solve
+    real omega_old_ = 0.0;
+    real tau0_ = 0.0;
+    real d_ = 0.0;
+    real debug_torque_ = 0.0; // not hashed; PowertrainDebug::dyno_torque
+};
+
 // direct_torque brakes (plan section 4.2/6): one friction row per wheel hub
 // that has a service-brake corner or is in the handbrake list (service +
 // handbrake MERGED into one row per hub at build time - two Coulomb rows on

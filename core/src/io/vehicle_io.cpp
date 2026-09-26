@@ -814,6 +814,102 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     pl.channel = cj.value("channel", pl.channel);
                     if (pl.channel.empty()) throw std::runtime_error(ctx + ": park_lock 'channel' must be non-empty");
                     p.components.push_back({id, pl});
+                } else if (type == "pto") {
+                    // PHYS-033 P4 I4 C11 (plan section 3.5): the power take-off
+                    // - a friction row (in = engine/crank-side, out = PTO-
+                    // side) with a per-mode ratio, see components.h's Pto. At
+                    // most one per vehicle - checked here at parse time, like
+                    // park_lock above.
+                    for (const auto& existing : p.components) {
+                        if (std::get_if<ps::drivetrain::PtoDesc>(&existing.params) != nullptr) {
+                            throw std::runtime_error(ctx + ": more than one pto component - at most one is supported");
+                        }
+                    }
+                    ps::drivetrain::PtoDesc pto;
+                    if (!cj.contains("ratios") || !cj.at("ratios").is_object() || cj.at("ratios").empty()) {
+                        throw std::runtime_error(ctx + ": pto requires a non-empty 'ratios' object with key(s) \"540\" and/or \"1000\"");
+                    }
+                    for (const auto& [rkey, rval] : cj.at("ratios").items()) {
+                        const real ratio = rval.get<real>();
+                        if (!(ratio > real(0.0))) throw std::runtime_error(ctx + ": pto ratios['" + rkey + "'] must be > 0");
+                        if (rkey == "540") {
+                            pto.has_540 = true;
+                            pto.ratio_540 = ratio;
+                        } else if (rkey == "1000") {
+                            pto.has_1000 = true;
+                            pto.ratio_1000 = ratio;
+                        } else {
+                            throw std::runtime_error(ctx + ": pto ratios key '" + rkey + "' is not \"540\" or \"1000\"");
+                        }
+                    }
+                    pto.capacity_nm = cj.value("capacity_nm", pto.capacity_nm);
+                    if (!(pto.capacity_nm > real(0.0))) throw std::runtime_error(ctx + ": pto 'capacity_nm' must be > 0");
+                    pto.static_factor = cj.value("static_factor", pto.static_factor);
+                    if (!(pto.static_factor >= real(1.0))) throw std::runtime_error(ctx + ": pto 'static_factor' must be >= 1");
+                    pto.engage_time_s = cj.value("engage_time_s", pto.engage_time_s);
+                    if (!(pto.engage_time_s >= real(0.0))) throw std::runtime_error(ctx + ": pto 'engage_time_s' must be >= 0");
+                    pto.efficiency = cj.value("efficiency", pto.efficiency);
+                    if (!(pto.efficiency > real(0.0) && pto.efficiency <= real(1.0))) {
+                        throw std::runtime_error(ctx + ": pto 'efficiency' must be in (0, 1]");
+                    }
+                    pto.out_inertia_kgm2 = cj.value("out_inertia_kgm2", pto.out_inertia_kgm2);
+                    if (!(pto.out_inertia_kgm2 >= real(0.0))) throw std::runtime_error(ctx + ": pto 'out_inertia_kgm2' must be >= 0");
+                    pto.disengaged_brake_time_s = cj.value("disengaged_brake_time_s", pto.disengaged_brake_time_s);
+                    if (!(pto.disengaged_brake_time_s > real(0.0))) {
+                        throw std::runtime_error(ctx + ": pto 'disengaged_brake_time_s' must be > 0");
+                    }
+                    pto.channel = cj.value("channel", pto.channel);
+                    if (pto.channel.empty()) throw std::runtime_error(ctx + ": pto 'channel' must be non-empty");
+                    pto.speed_channel = cj.value("speed_channel", pto.speed_channel);
+                    if (pto.speed_channel.empty()) throw std::runtime_error(ctx + ": pto 'speed_channel' must be non-empty");
+                    pto.axis_local = read_vec3(cj.value("axis_local", json()), Vec3::zero());
+                    require_zero_or_unit(pto.axis_local, ctx + ".axis_local");
+                    p.components.push_back({id, pto});
+                } else if (type == "load_dyno") {
+                    // PHYS-033 P4 I4 C11: test/bench only - the loader supports
+                    // it, but no shipped vehicle uses it. See components.h's
+                    // LoadDyno. Any number per vehicle (no "at most one" rule).
+                    ps::drivetrain::LoadDynoDesc dyno;
+                    const std::string mode_str = cj.value("mode", std::string("brake"));
+                    if (mode_str == "brake") {
+                        dyno.mode = ps::drivetrain::LoadDynoMode::Brake;
+                    } else if (mode_str == "viscous") {
+                        dyno.mode = ps::drivetrain::LoadDynoMode::Viscous;
+                    } else if (mode_str == "quadratic") {
+                        dyno.mode = ps::drivetrain::LoadDynoMode::Quadratic;
+                    } else {
+                        throw std::runtime_error(ctx + ": load_dyno 'mode' must be \"brake\", \"viscous\" or \"quadratic\"");
+                    }
+                    dyno.inertia_kgm2 = cj.value("inertia_kgm2", dyno.inertia_kgm2);
+                    if (!(dyno.inertia_kgm2 >= real(0.0))) throw std::runtime_error(ctx + ": load_dyno 'inertia_kgm2' must be >= 0");
+                    if (dyno.mode == ps::drivetrain::LoadDynoMode::Brake) {
+                        dyno.torque_nm = cj.value("torque_nm", dyno.torque_nm);
+                        if (!(dyno.torque_nm > real(0.0))) {
+                            throw std::runtime_error(ctx + ": load_dyno 'torque_nm' must be > 0 for mode \"brake\"");
+                        }
+                    } else if (cj.contains("torque_nm")) {
+                        throw std::runtime_error(ctx + ": load_dyno 'torque_nm' is only valid for mode \"brake\"");
+                    }
+                    if (dyno.mode == ps::drivetrain::LoadDynoMode::Viscous) {
+                        dyno.viscous_nm_s_rad = cj.value("viscous_nm_s_rad", dyno.viscous_nm_s_rad);
+                        if (!(dyno.viscous_nm_s_rad > real(0.0))) {
+                            throw std::runtime_error(ctx + ": load_dyno 'viscous_nm_s_rad' must be > 0 for mode \"viscous\"");
+                        }
+                    } else if (cj.contains("viscous_nm_s_rad")) {
+                        throw std::runtime_error(ctx + ": load_dyno 'viscous_nm_s_rad' is only valid for mode \"viscous\"");
+                    }
+                    if (dyno.mode == ps::drivetrain::LoadDynoMode::Quadratic) {
+                        dyno.quadratic_nm_s2_rad2 = cj.value("quadratic_nm_s2_rad2", dyno.quadratic_nm_s2_rad2);
+                        if (!(dyno.quadratic_nm_s2_rad2 > real(0.0))) {
+                            throw std::runtime_error(ctx + ": load_dyno 'quadratic_nm_s2_rad2' must be > 0 for mode \"quadratic\"");
+                        }
+                    } else if (cj.contains("quadratic_nm_s2_rad2")) {
+                        throw std::runtime_error(ctx + ": load_dyno 'quadratic_nm_s2_rad2' is only valid for mode \"quadratic\"");
+                    }
+                    dyno.scale_channel = cj.value("scale_channel", dyno.scale_channel);
+                    dyno.axis_local = read_vec3(cj.value("axis_local", json()), Vec3::zero());
+                    require_zero_or_unit(dyno.axis_local, ctx + ".axis_local");
+                    p.components.push_back({id, dyno});
                 } else {
                     throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
                 }

@@ -209,10 +209,68 @@ struct ParkLockDesc {
     std::string channel = "park_lock";   // declared (default 0) via Powertrain::declare_control_channels; non-empty
 };
 
+// PHYS-033 P4 I4 C11 (plan section 3.5): power take-off - ports `in`
+// (shafted, e.g. to engine.crank/clutch.in - "live", ahead of the main
+// clutch) and `out` (external; EXEMPT from Powertrain's "port not connected
+// by any shaft" check, so it may stand alone carrying only
+// out_inertia_kgm2, or be shafted to an external load such as a
+// load_dyno). One Coulomb friction row (a = in, b = out, ratio_b =
+// ratios[mode] - 3.61 for "540", 1.95 for "1000") re-set every substep via
+// Assembly::set_friction_row_ratio (TransferCase's pattern). `engagement`
+// (e in [0,1]) ramps toward the channel's target (>= 0.5 -> 1) at rate
+// 1/engage_time_s; kinetic capacity = e*capacity_nm, static =
+// static_factor*kinetic. `speed_channel` (>= 770 selects "1000", else
+// "540") only takes effect while e == 0 AND |omega_out| < 1 rad/s, else the
+// current mode is held (recomputed every substep, not hashed). Optional
+// `efficiency` in (0,1] (default 1): a lagged loss torque at `in`,
+// -(1-efficiency)*|lambda_row_prev|*sign(omega_in_old), booked into
+// gear_loss. While e == 0 EXACTLY, an implicit viscous drag at `out`
+// (c = J_out_node/disengaged_brake_time_s, J_out_node fixed at build time)
+// so a disengaged/unconnected `out` decays instead of spinning forever -
+// booked into pto_clutch_loss (as is the row's own clutch-slip loss). At
+// most one pto per vehicle.
+struct PtoDesc {
+    bool has_540 = false;
+    real ratio_540 = 3.61;  // > 0, required when has_540
+    bool has_1000 = false;
+    real ratio_1000 = 1.95; // > 0, required when has_1000
+    real capacity_nm = 0.0;                  // KINETIC capacity at engagement 1, > 0
+    real static_factor = 1.2;                // static = static_factor*kinetic, >= 1
+    real engage_time_s = 1.5;                // >= 0; 0 = instant engagement
+    real efficiency = 1.0;                   // (0, 1]
+    real out_inertia_kgm2 = 0.0;             // >= 0
+    real disengaged_brake_time_s = 1.0;      // > 0
+    std::string channel = "pto";             // declared (default 0) via Powertrain::declare_control_channels; non-empty
+    std::string speed_channel = "pto_speed"; // declared (default 540) via same; non-empty
+    Vec3 axis_local = Vec3::zero();          // shared by `in`/`out` ports (one physical shaft), plan section 6.7
+};
+
+// PHYS-033 P4 I4 C11: a test/bench load on a single port `shaft` - no
+// shipped vehicle uses this (test rigs add one in code), but the loader
+// supports it. `mode` selects the load law: Brake (an exact-Coulomb
+// friction row to ground, kinetic capacity = torque_nm*scale, static =
+// kinetic, holds at rest), Viscous (implicit tau0 = -c*omega_old, d = c,
+// c = viscous_nm_s_rad*scale) or Quadratic (implicit tau0 =
+// -k*omega_old*|omega_old|, d = 2*k*|omega_old|, linearised about
+// omega_old, k = quadratic_nm_s2_rad2*scale). `scale_channel`, if
+// non-empty, is declared (default 1.0) via Powertrain::declare_control_
+// channels and multiplies the mode's own coefficient every substep; empty
+// means a fixed scale of 1. Stateless (no fold_state_hash override).
+enum class LoadDynoMode { Brake, Viscous, Quadratic };
+struct LoadDynoDesc {
+    LoadDynoMode mode = LoadDynoMode::Brake;
+    real inertia_kgm2 = 0.0;            // >= 0
+    real torque_nm = 0.0;               // required > 0 for Brake
+    real viscous_nm_s_rad = 0.0;        // required > 0 for Viscous
+    real quadratic_nm_s2_rad2 = 0.0;    // required > 0 for Quadratic
+    std::string scale_channel;          // empty = fixed scale 1.0
+    Vec3 axis_local = Vec3::zero();
+};
+
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
 // type is a compile-checked change plus a data-format minor bump.
-using ComponentParams =
-    std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc, ParkLockDesc>;
+using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc,
+                                      ParkLockDesc, PtoDesc, LoadDynoDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty
