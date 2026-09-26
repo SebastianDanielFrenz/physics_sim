@@ -156,7 +156,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     // 0 otherwise, so its derivative through theta_eff is 0 too), and no
     // ignition cut (theta_req is then a constant 0, independent of omega).
     const bool governor_engaged = desc_.has_governor && comb && !tcu.ignition_cut && theta_req == theta_gov &&
-                                   theta_eff >= theta_req && theta_gov > real(0.0) && theta_gov < real(1.0);
+                                   theta_eff == theta_req && theta_gov > real(0.0) && theta_gov < real(1.0);
 
     // --- 6.1.7: node torque (without the Coulomb row) ---------------------------
     const real s = sign(omega_old);
