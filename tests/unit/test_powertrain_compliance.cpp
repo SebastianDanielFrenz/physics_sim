@@ -683,6 +683,184 @@ TEST_CASE("compliant sedan state hash is worker-count invariant (1 vs 10 workers
     CHECK(h1 == h10);
 }
 
+// --- guard: the compliant shaft's implicit reaction in the mesh reconstructions
+//
+// The ledger cannot catch a wrong mesh reconstruction (gear_loss is booked
+// from the reconstructed lambda itself, so the ledger balances whatever
+// lambda is). These two cases check the reconstructed gearbox mesh torque
+// against things it must equal.
+//
+// Case 1 (white-box, per substep, transient): gearbox.in's own node balance.
+// gearbox.in (the shaft's port b) sees exactly +tau_s from the shaft (read
+// back from CompliantShaft::tau_last, i.e. from the shaft's own solved
+// velocity - not from the Assembly), any friction row on it (the synchro
+// row, idle in gear) and the mesh. gearbox_mesh_torque is the mesh's WHOLE
+// torque on gearbox.in - rigid-row reaction plus the lagged own mesh-loss
+// torque (reconstruct_mesh_torque subtracts the loss from "others"), so
+//   lambda_truth = J_gbin*(omega_new - omega_old)/h - tau_s - rows.
+// The reconstruction must reproduce it at rounding level. Without the
+// implicit-reaction term the reconstruction reads tau_expl instead of tau_s,
+// i.e. is off by exactly c_impl*v_new - zero at a steady state (v = 0), so
+// only a transient with real twist rate sees it at full size: throttle
+// steps 0.2 -> 0.9 -> 0.0 -> 0.6 in gear 1, clutch locked, a linear road
+// load.
+// Measured 2026-09-26 (release): with the fix max|lambda - truth| =
+// 7.1e-15 N*m (max|lambda| 23.74, max|c_impl*v| 7.14, max|v| 6.18 rad/s,
+// c_impl 1.1562). With all three implicit_reaction adds in components.cpp
+// disabled: max|lambda - truth| = 7.063 N*m (= max|c_impl*v| 7.063 exactly,
+// 30% of max|lambda| 23.60) against the 1e-9*max|lambda| = 2.4e-8 bound.
+TEST_CASE("compliant sedan: gearbox mesh torque closes gearbox.in's node balance with the shaft torque, per substep through throttle steps",
+          "[unit][drivetrain][compliance]") {
+    Powertrain pt = build(compliant_sedan(1, 600.0, 2.0));
+    vehicle::VehicleResetOptions opts;
+    opts.gear = 1;
+    opts.engine_state = EngineState::Running;
+    opts.clutch_locked = true;
+    pt.reset(opts, {20.0, 20.0, 20.0, 20.0});
+    Driver drv(pt);
+    drv.ctx.ignition = 1.0;
+    const real h = drv.ctx.h;
+
+    REQUIRE(pt.compliant_shafts().size() == 1);
+    const Powertrain::CompliantShaft& cs = pt.compliant_shafts()[0];
+    const ShaftNetwork& net = pt.network();
+    const NodeId gbin = cs.b;
+    const real j_gbin = net.node_inertia(gbin);
+
+    real max_err = 0.0, max_lambda = 0.0, max_defect = 0.0, max_twist_rate = 0.0;
+    int ticks_in_gear = 0;
+    for (int tick = 0; tick < 960; ++tick) {
+        drv.ctx.throttle = tick < 120 ? 0.2 : (tick < 360 ? 0.9 : (tick < 600 ? 0.0 : 0.6));
+        for (int s = 0; s < 4; ++s) {
+            const real w_old = net.omega(gbin);
+            drv.step({-60.0, -60.0, 0.0, 0.0}, {4.0, 4.0, 0.0, 0.0});
+            const int pos = pt.gearbox().current_position();
+            REQUIRE(pos == 1);
+            REQUIRE(pt.gearbox().efficiency_for_position(pos) < 1.0); // else the gearbox mesh is not reconstructed at all
+            real rows = 0.0;
+            for (int r = 0; r < net.friction_row_count(); ++r) {
+                const FrictionRowId rid{static_cast<std::uint16_t>(r)};
+                if (net.friction_row_a(rid) == gbin) rows += net.row_lambda(rid);
+                if (net.friction_row_b(rid) == gbin) REQUIRE(net.row_lambda(rid) == 0.0); // ratio_b not visible here; none carries load
+            }
+            const real w_new = net.omega(gbin);
+            const real truth = j_gbin * (w_new - w_old) / h - cs.tau_last - rows;
+            const real got = pt.gearbox_mesh_torque_debug();
+            const real v_new = net.omega(cs.a) - net.omega(cs.b);
+            max_err = std::max(max_err, std::abs(got - truth));
+            max_lambda = std::max(max_lambda, std::abs(truth));
+            max_defect = std::max(max_defect, std::abs(cs.c_impl * v_new));
+            max_twist_rate = std::max(max_twist_rate, std::abs(v_new));
+        }
+        ++ticks_in_gear;
+    }
+    std::printf("[compliance guard node] max|lambda_mesh - truth|=%.3e max|lambda|=%.3f max|c_impl*v|=%.3f max|v|=%.3f rad/s c_impl=%.4f\n",
+                static_cast<double>(max_err), static_cast<double>(max_lambda), static_cast<double>(max_defect),
+                static_cast<double>(max_twist_rate), static_cast<double>(cs.c_impl));
+    INFO("max_err=" << max_err << " max_lambda=" << max_lambda << " max_defect=" << max_defect);
+    CHECK(ticks_in_gear == 960);
+    CHECK(max_defect > 1.0); // the run genuinely exercises the implicit part
+    CHECK(max_err <= 1e-9 * max_lambda);
+}
+
+// Case 2 (World, quasi-steady, the coordinator's comparison): compliant
+// (k 600, c 2 on clutch.out - gearbox.in) against the rigid sedan, same
+// settled-rest part-throttle drive in gear 1 (auto-clutch launch, locked
+// well before the window), means over the last 0.5 s (60 tick-end samples)
+// of a gentle acceleration (throttle 0.4, 3.88 m/s at 4 s, max |kappa|
+// 0.0104). Gearbox and diff mesh torques must agree, and the compliant
+// gearbox mesh torque must match the shaft torque through gearbox.in's node
+// balance: lambda = J_gbin*alpha - tau_s (alpha from the window's endpoint
+// gearbox.in speeds; J_gbin*alpha = 0.43 N*m here).
+// Measured 2026-09-26 (release), with the fix:
+//   gearbox mesh rigid -37.588556 / compliant -37.590229 (4.45e-5 rel),
+//   diff mesh -123.610580 / -123.616234 (4.57e-5 rel), speeds 3.882215 /
+//   3.882633 m/s (1.1e-4 rel - the compliant car is a different dynamical
+//   system with one more torsional mode, so its trajectory, and with it its
+//   mesh torques, differ at that order). Bound 5e-4 relative (~10x).
+//   Node balance: predicted -37.590164 vs -37.590229 (1.74e-6 rel - the
+//   tick-end sampling of the mean). Bound 1e-5 relative (~6x).
+// With the three implicit_reaction adds disabled: rigid-vs-compliant
+// 3.30e-5 / 4.66e-5 (passes - at quasi-steady state the defect only acts
+// through the (1-eta) mesh-loss lag, so this comparison alone does NOT
+// discriminate); node balance 8.01e-5 relative (3.01e-3 N*m, FAILS the 1e-5
+// bound by 8x), matching the defect's own window-mean c_impl*mean(v) =
+// 1.1562 * 2.51e-3 rad/s = 2.90e-3 N*m (the twist still grows as the drive
+// torque rises). Case 1 above is the full-size discriminator.
+TEST_CASE("compliant vs rigid sedan: quasi-steady gearbox/diff mesh torques agree and match the shaft torque",
+          "[unit][vehicle][world][drivetrain][compliance]") {
+    struct Result {
+        real gb_mesh = 0.0, diff_mesh = 0.0, shaft = 0.0, speed = 0.0, max_kappa = 0.0, alpha_gbin = 0.0, twist_rate_mean = 0.0;
+        bool locked = true;
+    };
+    const real throttle = 0.4;
+    auto run = [&](bool compliant) {
+        auto rig = ps_test::build_vehicle_rig_from_desc(compliant ? compliant_sedan(1, 600.0, 2.0) : ps_test::load_sedan_desc(), 1500.0,
+                                                        Vec3{2.0, 0.4, 0.15}, 0.6, 0.0, 4);
+        World& w = *rig.world;
+        ps_test::settle(w, 0.5);
+        w.set_control("gear_request", 1.0);
+        w.set_control("throttle", throttle);
+        const int ticks = static_cast<int>(4.0 / w.dt() + 0.5);
+        const int window = static_cast<int>(0.5 / w.dt() + 0.5);
+        Result r;
+        real w_start = 0.0, twist_start = 0.0;
+        for (int i = 0; i < ticks; ++i) {
+            w.step();
+            if (i < ticks - window) continue;
+            const PowertrainDebug dbg = w.powertrain_debug(rig.vehicle);
+            const PowertrainSnapshot st = w.powertrain_state(rig.vehicle);
+            if (i == ticks - window) {
+                w_start = st.driveline.gearbox_in_omega;
+                twist_start = dbg.shaft_twist_rad[0];
+            }
+            r.gb_mesh += dbg.gearbox_mesh_torque / window;
+            r.diff_mesh += dbg.diff_mesh_torque / window;
+            r.shaft += dbg.shaft_torque[0] / window;
+            r.locked = r.locked && dbg.clutch_stuck && st.gear == 1;
+            for (std::size_t k = 0; k < 2; ++k)
+                r.max_kappa = std::max(r.max_kappa, std::abs(w.wheel_telemetry(rig.vehicle, k).slip_ratio));
+            if (i == ticks - 1) {
+                r.alpha_gbin = (st.driveline.gearbox_in_omega - w_start) / (static_cast<real>(window - 1) * w.dt());
+                r.twist_rate_mean = (dbg.shaft_twist_rad[0] - twist_start) / (static_cast<real>(window - 1) * w.dt());
+            }
+        }
+        r.speed = w.get_motion(rig.chassis).linear.length();
+        return r;
+    };
+    const Result rigid = run(false);
+    const Result comp = run(true);
+
+    const vehicle::VehicleDesc desc = compliant_sedan(1, 600.0, 2.0);
+    Powertrain probe = build(desc);
+    const real j_gbin = probe.network().node_inertia(probe.compliant_shafts()[0].b);
+    const real predicted = -(comp.shaft - j_gbin * comp.alpha_gbin);
+    // The window-mean of what the implicit reaction contributes, c_impl*v
+    // (trapezoidal c_impl = c/2 + k*h/4), from the twist's own change.
+    const real c_impl = 2.0 / 2.0 + 600.0 * kH / 4.0;
+    std::printf("[compliance guard steady] mean twist rate=%.6e rad/s -> c_impl*v mean=%.6e N*m (rel to predicted %.3e)\n",
+                static_cast<double>(comp.twist_rate_mean), static_cast<double>(c_impl * comp.twist_rate_mean),
+                static_cast<double>(std::abs(c_impl * comp.twist_rate_mean / predicted)));
+
+    std::printf("[compliance guard steady] speed rigid=%.6f comp=%.6f | gb_mesh rigid=%.6f comp=%.6f (rel %.3e) | diff_mesh rigid=%.6f "
+                "comp=%.6f (rel %.3e) | shaft=%.6f alpha_gbin=%.4f predicted_gb_mesh=%.6f (rel %.3e) | max_kappa rigid=%.4f comp=%.4f "
+                "locked %d/%d\n",
+                static_cast<double>(rigid.speed), static_cast<double>(comp.speed), static_cast<double>(rigid.gb_mesh),
+                static_cast<double>(comp.gb_mesh), static_cast<double>(std::abs(comp.gb_mesh - rigid.gb_mesh) / std::abs(rigid.gb_mesh)),
+                static_cast<double>(rigid.diff_mesh), static_cast<double>(comp.diff_mesh),
+                static_cast<double>(std::abs(comp.diff_mesh - rigid.diff_mesh) / std::abs(rigid.diff_mesh)), static_cast<double>(comp.shaft),
+                static_cast<double>(comp.alpha_gbin), static_cast<double>(predicted),
+                static_cast<double>(std::abs(comp.gb_mesh - predicted) / std::abs(predicted)), static_cast<double>(rigid.max_kappa),
+                static_cast<double>(comp.max_kappa), rigid.locked ? 1 : 0, comp.locked ? 1 : 0);
+    CHECK(rigid.locked);
+    CHECK(comp.locked);
+    CHECK(rigid.max_kappa < 0.1);
+    CHECK(comp.max_kappa < 0.1);
+    CHECK(std::abs(comp.gb_mesh - rigid.gb_mesh) <= 5e-4 * std::abs(rigid.gb_mesh));
+    CHECK(std::abs(comp.diff_mesh - rigid.diff_mesh) <= 5e-4 * std::abs(rigid.diff_mesh));
+    CHECK(std::abs(comp.gb_mesh - predicted) <= 1e-5 * std::abs(predicted));
+}
+
 TEST_CASE("compliant sedan WOT launch: speed against shaft stiffness (diagnostic)", "[.][diag][unit][vehicle][drivetrain][compliance]") {
     // clutch.out (0.004) / gearbox.in (0.010): mu = 350; zeta held at
     // c*mu/(2*omega_n) = 0.764 (the shipped test's k 600 / c 2 pair).
