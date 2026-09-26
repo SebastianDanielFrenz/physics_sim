@@ -111,6 +111,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <memory>
 #include <stdexcept>
@@ -414,63 +415,224 @@ TEST_CASE("tractor MFWD engaged in gear 6 at ~3 m/s: measured slip-ratio lead ma
     CHECK(loss_rate < 1.0); // W - ~0 dissipation while the clutch is stuck (a locked row carries torque, not slip)
 }
 
-// MFWD off (default state, "awd" channel defaults to 0): the front axle must
-// carry no drive torque and no phantom drag - adding the transfer_case/
-// front_diff hardware to the graph must not load the front wheels just by
-// existing.
-TEST_CASE("tractor MFWD off (default): front axle carries no drive torque and no drag",
-          "[validation][vehicle][powertrain][drivetrain]") {
+// ---------------------------------------------------------------------------
+// MFWD-off front-axle torque balance (C12 review round 2, fix 2): shared by
+// the acceptance case and the [.][diag] CSV dump below.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct FrontAxleRow {
+    real t = 0.0;
+    real fx[2]{}, fz[2]{}, kappa[2]{}, omega[2]{};
+    real j_alpha[2]{}; // J_hub * domega/dt (this tick)
+    real r_fx[2]{};    // wheel_radius * fx
+    real t_shaft[2]{}; // PowertrainDebug::hub_shaft_torque
+    real resid[2]{};   // J_hub*domega/dt - (t_shaft - r*fx)
+    real t_pred[2]{};  // coef*(J_c*alpha_c - loss_tau): reflected carrier + transfer.front inertia (+ lagged mesh loss)
+    real fx_inertial[2]{}; // -(J_hub*alpha_k + (ratio^2/4)*J_c*(alpha_L+alpha_R))/r: pure inertia, no mesh loss
+    real ax = 0.0, pitch_rate = 0.0, speed = 0.0, rpm = 0.0, theta_gov = 0.0, throttle_eff = 0.0;
+    real awd_e = 0.0, awd_torque = 0.0, clutch_engagement = 0.0;
+};
+
+struct FrontAxleDiag {
+    std::vector<FrontAxleRow> rows;
+    std::size_t peak = 0; // index of the row with the largest max(|fx_FL|, |fx_FR|)
+    real j_hub = 0.0, j_carrier = 0.0, ratio = 0.0, efficiency = 0.0, radius = 0.0;
+};
+
+// Rig and controls: settle 1 s, gear_request 1, throttle 0.6, "awd" left at
+// its default 0 (never set), 3 s run. At tick_hz == substep_hz every
+// per-tick read is the ONLY substep's value, so the hub/carrier balances
+// below close exactly; at 240/960 (the default rig rates) they are tick-mean
+// vs. last-substep and only approximate.
+FrontAxleDiag run_mfwd_off_front_axle_diag(real tick_hz, real substep_hz) {
     const vehicle::VehicleDesc desc = load_tractor();
-    MfwdRig rig = build_mfwd_rig(desc, "asphalt");
+    MfwdRig rig = build_mfwd_rig(desc, "asphalt", tick_hz, substep_hz);
     World& w = *rig.world;
     ps_test::settle(w, 1.0);
-
     w.set_control("gear_request", 1.0);
     w.set_control("throttle", 0.6);
-    // "awd" left at its default (0) - never set here on purpose.
 
-    real max_abs_fx_front = 0.0;
-    real max_speed = 0.0;
-    real max_engine_rpm = 0.0;
-    const int ticks = static_cast<int>(std::lround(3.0 / w.dt()));
+    FrontAxleDiag d;
+    const drivetrain::DifferentialDesc fd = diff_desc(desc, "front_diff");
+    real transfer_front_inertia = 0.0;
+    for (const auto& c : desc.powertrain.components) {
+        if (c.id == "transfer") transfer_front_inertia = std::get<drivetrain::TransferCaseDesc>(c.params).front_inertia_kgm2;
+    }
+    d.j_hub = desc.wheels[kFL].wheel_inertia;
+    d.radius = desc.wheels[kFL].wheel_radius;
+    d.j_carrier = fd.carrier_inertia_kgm2 + transfer_front_inertia; // the one node "transfer.front"+"front_diff.carrier"
+    d.ratio = fd.ratio;
+    d.efficiency = fd.efficiency;
+    const real coef = -fd.ratio / 2.0; // Differential::hub_coef()
+
+    const real dt = w.dt();
+    real omega_prev[2] = {w.wheel_omega(rig.vehicle, kFL), w.wheel_omega(rig.vehicle, kFR)};
+    real speed_prev = w.get_motion(rig.chassis).linear.x;
+    real lambda_prev = w.powertrain_debug(rig.vehicle).hub_shaft_torque[kFL] / coef; // front_diff row multiplier
+    const int ticks = static_cast<int>(std::lround(3.0 / dt));
+    real max_abs = -1.0;
     for (int i = 0; i < ticks; ++i) {
         w.step();
         const PowertrainDebug dbg = w.powertrain_debug(rig.vehicle);
-        CHECK(dbg.awd_clutch_torque == 0.0);
         const PowertrainSnapshot& snap = w.powertrain_state(rig.vehicle);
-        CHECK(snap.awd_engagement == 0.0);
-        max_abs_fx_front =
-            std::max({max_abs_fx_front, std::abs(w.wheel_telemetry(rig.vehicle, kFL).fx), std::abs(w.wheel_telemetry(rig.vehicle, kFR).fx)});
-        max_speed = std::max(max_speed, w.get_motion(rig.chassis).linear.x);
-        max_engine_rpm = std::max(max_engine_rpm, snap.engine_rpm);
+        const Motion m = w.get_motion(rig.chassis);
+        FrontAxleRow r;
+        r.t = (i + 1) * dt;
+        real alpha[2];
+        for (int k = 0; k < 2; ++k) {
+            const std::size_t wi = k == 0 ? kFL : kFR;
+            const vehicle::WheelTelemetry& tel = w.wheel_telemetry(rig.vehicle, wi);
+            r.fx[k] = tel.fx;
+            r.fz[k] = tel.fz;
+            r.kappa[k] = tel.slip_ratio;
+            r.omega[k] = w.wheel_omega(rig.vehicle, wi);
+            alpha[k] = (r.omega[k] - omega_prev[k]) / dt;
+            r.j_alpha[k] = d.j_hub * alpha[k];
+            r.r_fx[k] = d.radius * tel.fx;
+            r.t_shaft[k] = dbg.hub_shaft_torque[wi];
+            r.resid[k] = r.j_alpha[k] - (r.t_shaft[k] - r.r_fx[k]);
+            omega_prev[k] = r.omega[k];
+        }
+        // Carrier node: J_c*alpha_c = lambda + loss_tau, alpha_c = ratio*(alpha_L+alpha_R)/2
+        // (the open diff's own rigid row), loss_tau = -(1-eta)*|lambda_prev|*sign(omega_c,old)
+        // (Differential::pre_solve). Per-hub prediction = coef*lambda.
+        const real alpha_c = d.ratio * 0.5 * (alpha[0] + alpha[1]);
+        const real omega_c_old = d.ratio * 0.5 * ((r.omega[0] - alpha[0] * dt) + (r.omega[1] - alpha[1] * dt));
+        const real loss_tau = -(1.0 - d.efficiency) * std::abs(lambda_prev) * (omega_c_old > 0.0 ? 1.0 : (omega_c_old < 0.0 ? -1.0 : 0.0));
+        const real lambda_pred = d.j_carrier * alpha_c - loss_tau;
+        r.t_pred[0] = r.t_pred[1] = coef * lambda_pred;
+        for (int k = 0; k < 2; ++k) {
+            r.fx_inertial[k] = -(d.j_hub * alpha[k] + coef * coef * d.j_carrier * (alpha[0] + alpha[1])) / d.radius;
+        }
+        lambda_prev = dbg.hub_shaft_torque[kFL] / coef;
+
+        r.speed = m.linear.x;
+        r.ax = (m.linear.x - speed_prev) / dt;
+        speed_prev = m.linear.x;
+        r.pitch_rate = m.angular.y;
+        r.rpm = snap.engine_rpm;
+        const real band = 0.0909 * 2200.0; // diesel_i4_4l5_turbo.json governor droop*rated_rpm
+        r.theta_gov = std::clamp((snap.governor_setpoint_rpm - snap.engine_rpm) / band, 0.0, 1.0);
+        r.throttle_eff = dbg.throttle_eff;
+        r.awd_e = snap.awd_engagement;
+        r.awd_torque = dbg.awd_clutch_torque;
+        r.clutch_engagement = snap.clutch_engagement;
+        const real a = std::max(std::abs(r.fx[0]), std::abs(r.fx[1]));
+        if (a > max_abs) {
+            max_abs = a;
+            d.peak = d.rows.size();
+        }
+        d.rows.push_back(r);
     }
-    INFO("max |fx| over either front wheel = " << max_abs_fx_front << " N (pure rolling resistance, no drive torque), "
-         << "max chassis speed = " << max_speed << " m/s, max engine rpm = " << max_engine_rpm);
-    // Rolling resistance alone (TyreDesc::qsy1 + surface crr + the qsy4*(v/v0)^4
-    // term) on an undriven, lightly-loaded front axle - nowhere near a driven
-    // wheel's traction force (thousands of N at this throttle, see the
-    // locked-lead case above's rear wheels).
-    //
-    // PHYS-033 P4 I4 C12 (2026-09-26, re-measured, not tuned to pass): the
-    // engine's new all-speed governor makes "throttle"=0.6 deliver FULL WOT
-    // torque (theta_gov saturates to 1) for as long as engine rpm sits more
-    // than one droop band (200 rpm) below its speed target n_nl = idle_rpm +
-    // 0.6*(high_idle_rpm - idle_rpm) = 1780 rpm - a real diesel governor's
-    // job is exactly this ("floor it until you approach the requested
-    // speed"). Pre-governor, throttle=0.6 mapped directly to ~60% of the WOT
-    // torque curve the whole time instead. The tractor therefore accelerates
-    // harder over this test's 3 s window than before (measured max engine
-    // rpm=1765.9, essentially AT the 1780 rpm target - governed, not
-    // open-loop - by the end) and reaches a higher chassis speed (measured
-    // max=0.682 m/s), and the front tyre's rolling resistance has a
-    // qsy4*(v/v0)^4 term that grows steeply with that speed. The measured
-    // max |fx|=817.97 N is still two orders of magnitude below a driven
-    // wheel's traction force and is pure rolling resistance throughout (the
-    // awd_clutch_torque/awd_engagement checks above confirm zero front
-    // drive torque every tick) - the bound below is raised with headroom to
-    // match this genuine, governor-driven operating-point change, not
-    // loosened to paper over a regression.
-    CHECK(max_abs_fx_front < 1000.0);
+    return d;
+}
+
+void print_front_axle_diag(const FrontAxleDiag& d, const char* label) {
+    std::printf("=== %s: J_hub=%.4g J_carrier=%.4g ratio=%.4g eta=%.4g r=%.4g peak at t=%.5f s ===\n", label, d.j_hub, d.j_carrier,
+                d.ratio, d.efficiency, d.radius, d.rows[d.peak].t);
+    std::printf("t,fx_FL,fx_FR,fz_FL,kappa_FL,omega_FL,Jalpha_FL,rfx_FL,Tshaft_FL,resid_FL,Tpred_FL,resid_FR,ax,pitch_rate,speed,"
+                "rpm,theta_gov,throttle_eff,clutch_e,awd_e,awd_T,fxI_FL,fxI_FR,dT_FL\n");
+    for (std::size_t i = 0; i < d.rows.size(); ++i) {
+        const FrontAxleRow& r = d.rows[i];
+        std::printf("%.5f,%.3f,%.3f,%.1f,%.5f,%.5f,%.3f,%.3f,%.3f,%.3e,%.3f,%.3e,%.4f,%.5f,%.5f,%.1f,%.4f,%.4f,%.4f,%.3g,%.3g,%.3f,%.3f,%.3e\n", r.t,
+                    r.fx[0], r.fx[1], r.fz[0], r.kappa[0], r.omega[0], r.j_alpha[0], r.r_fx[0], r.t_shaft[0], r.resid[0],
+                    r.t_pred[0], r.resid[1], r.ax, r.pitch_rate, r.speed, r.rpm, r.theta_gov, r.throttle_eff, r.clutch_engagement,
+                    r.awd_e, r.awd_torque, r.fx_inertial[0], r.fx_inertial[1], r.t_pred[0] - r.t_shaft[0]);
+    }
+}
+
+} // namespace
+
+// MFWD off (default state, "awd" channel defaults to 0): the front axle must
+// carry no drive torque and no phantom drag - adding the transfer_case/
+// front_diff hardware to the graph must not load the front wheels just by
+// existing. The front hubs are not free wheels, though: with the transfer
+// clutch open they still back-drive their open front_diff and the transfer
+// case's front output (one shaft node, J_c = carrier 0.2 + transfer.front
+// 0.05 = 0.25 kg*m^2, i.e. (ratio^2/2)*J_c = 29.3 kg*m^2 reflected onto each
+// front wheel when both turn together, beside the hub's own 25.6), so every
+// change of front wheel speed costs a torque
+// that only the tyre can supply - as fx.
+//
+// C12 review round 2 (2026-09-26), measured with the diagnostic case below
+// (same rig and controls, 240/960 and 960/960):
+//  - The peak front |fx| is a launch transient, not rolling resistance
+//    (WheelTelemetry::fx does not include rolling resistance) and not a drag.
+//    The launch in gear 1 runs at full rack (theta_gov = 1 until the engine
+//    is within one droop band of its 1780 rpm setpoint): chassis ax peaks at
+//    5.3 m/s^2 and front Fz falls from ~10.3 kN to 1.9 kN. That excites the
+//    front wheels' torsional mode - hub plus reflected front-driveline
+//    inertia against the tyre's longitudinal relaxation compliance, lightly
+//    damped at ~0.7 m/s (period ~0.08 s). Peak 817.95 N (FR) at
+//    t = 0.346 s after gear_request at 240/960 (960/960: 838.11 N at
+//    t = 0.345 s), clutch still slipping (engagement 0.46), engine 1745 rpm;
+//    below 12 N from t = 2 s on.
+//  - Hub balance J_hub*domega/dt = hub_shaft_torque - r*fx closes to
+//    1.1e-11 N*m at 960/960 (only approximately at 240/960, whose per-tick
+//    reads are the last substep's while domega/dt is the tick mean).
+//  - hub_shaft_torque = coef*(J_c*alpha_c - loss_tau) (coef = -ratio/2,
+//    alpha_c = ratio*(alpha_L + alpha_R)/2, loss_tau the diff's lagged
+//    -(1-eta)*|lambda_prev|*sign(omega_c) mesh loss) to 2.3e-11 N*m: nothing
+//    else acts on the front driveline node, and awd_clutch_torque is exactly
+//    0 every tick.
+//  - At the peak fx/fx_inertial = 1.033 (FR, 960/960), with fx_inertial =
+//    -(J_hub*alpha_k + (ratio^2/4)*J_c*(alpha_L + alpha_R))/r (pure inertia,
+//    no loss); the remainder is that lagged mesh loss.
+//  - Pre-C12 (8fca97c, the same diagnostic run in a temporary worktree): peak
+//    465.74 N at t = 0.183 s, same mechanism (fx/fx_inertial 1.034 at
+//    960/960, both closures <= 2.7e-11 N*m) with a softer launch - throttle
+//    0.6 then meant 60% of the WOT curve (ax up to 4.45 m/s^2, front Fz down
+//    to 3.3 kN). The governor gives full rack at the same pedal, so the
+//    launch and its front-wheel transient are harder.
+// This case therefore asserts the mechanism, not a magnitude, at 960/960
+// where every per-tick read is the tick's only substep: (1) zero transfer
+// clutch torque and engagement every tick; (2) both balances close to
+// 1e-9 N*m (measured <= 2.3e-11) - a drag torque anywhere on the front axle
+// would show up as a residual; (3) at the peak |fx/fx_inertial - 1| <=
+// 1 - eta = 0.06: r*(fx - fx_inertial) = -coef*loss_tau, of magnitude
+// (1-eta)*|coef*lambda_prev|, i.e. (1-eta) times the shaft share of r*fx
+// when lambda_prev ~ lambda (measured 0.033, shaft share 0.57).
+TEST_CASE("tractor MFWD off (default): front axle carries no drive torque and no drag",
+          "[validation][vehicle][powertrain][drivetrain]") {
+    const FrontAxleDiag d = run_mfwd_off_front_axle_diag(960.0, 960.0);
+    REQUIRE(!d.rows.empty());
+
+    int awd_active_ticks = 0;
+    real worst_hub_resid = 0.0;
+    real worst_driveline_resid = 0.0;
+    for (const FrontAxleRow& r : d.rows) {
+        if (r.awd_torque != 0.0 || r.awd_e != 0.0) ++awd_active_ticks;
+        for (int k = 0; k < 2; ++k) {
+            worst_hub_resid = std::max(worst_hub_resid, std::abs(r.resid[k]));
+            worst_driveline_resid = std::max(worst_driveline_resid, std::abs(r.t_pred[k] - r.t_shaft[k]));
+        }
+    }
+    const FrontAxleRow& pk = d.rows[d.peak];
+    const int k = std::abs(pk.fx[0]) >= std::abs(pk.fx[1]) ? 0 : 1;
+    INFO("peak front |fx| = " << std::abs(pk.fx[k]) << " N (" << (k == 0 ? "FL" : "FR") << ") at t = " << pk.t
+                              << " s, fx_inertial = " << pk.fx_inertial[k] << " N, J_hub*alpha = " << pk.j_alpha[k]
+                              << " N*m, hub_shaft_torque = " << pk.t_shaft[k] << " N*m, clutch engagement = "
+                              << pk.clutch_engagement << ", engine rpm = " << pk.rpm);
+    INFO("worst hub balance residual = " << worst_hub_resid << " N*m, worst front-driveline residual = "
+                                         << worst_driveline_resid << " N*m, ticks with transfer-clutch torque or "
+                                         << "engagement = " << awd_active_ticks);
+    CHECK(awd_active_ticks == 0);
+    CHECK(worst_hub_resid <= 1e-9);
+    CHECK(worst_driveline_resid <= 1e-9);
+    REQUIRE(std::abs(pk.fx_inertial[k]) > 100.0); // the peak is a real transient, so the ratio below is meaningful
+    const real peak_ratio = pk.fx[k] / pk.fx_inertial[k];
+    INFO("fx / fx_inertial at the peak = " << peak_ratio << " (bound: within 1 - eta = " << (1.0 - d.efficiency) << ")");
+    CHECK(std::abs(peak_ratio - 1.0) <= 1.0 - d.efficiency);
+}
+
+TEST_CASE("tractor MFWD off: front-axle torque-balance diagnostic for the peak front |fx|",
+          "[validation][vehicle][powertrain][drivetrain][.][diag]") {
+    const FrontAxleDiag a = run_mfwd_off_front_axle_diag(240.0, 960.0);
+    print_front_axle_diag(a, "240/960");
+    const FrontAxleDiag b = run_mfwd_off_front_axle_diag(960.0, 960.0);
+    print_front_axle_diag(b, "960/960");
+    CHECK(!a.rows.empty());
 }
 
 // Ramp rate: engagement e(t) must track min(1, t/engage_time_s) (0.3 s,
