@@ -214,6 +214,17 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.governor_setpoint_rpm = governor_setpoint_rpm;
     r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
     r.theta_c = theta_c;
+
+    // PHYS-033 P4 I7a C5: fuel flow at this substep-start rpm/theta_c (the
+    // map's own "load" axis - see docs/data_formats/engine.md). Table2D
+    // clamps at its own domain edges, same as Curve1D above; theta_c is
+    // already in [0, 1] by construction (theta_eff clamped, f_lim clamped).
+    // Exactly 0.0 (mdot_kg_s_ never touched otherwise) when there is no map.
+    if (desc_.has_fuel_map) {
+        const real mdot_g_s = desc_.fuel_map.value(rpm, theta_c);
+        mdot_kg_s_ = mdot_g_s / real(1000.0);
+        r.fuel_flow_g_s = mdot_g_s;
+    }
     return r;
 }
 
@@ -225,10 +236,22 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
     // (the single assembly.torque call this substep), so the starter's own
     // share is tau_start_/tau0_.
     const real frac_starter = tau0_ != real(0.0) ? tau_start_ / tau0_ : real(0.0);
+    // PHYS-033 P4 I7a C5: combustion's own share, additively alongside the
+    // starter split above (engine_out_delta's own computation below is
+    // untouched) - tau0_ == tau_smooth_ + tau_comb_ + tau_start_ exactly
+    // (see pre_solve), so frac_comb is the same proportional-split
+    // construction as frac_starter.
+    const real frac_comb = tau0_ != real(0.0) ? tau_comb_ / tau0_ : real(0.0);
 
     PostSolveResult r;
     r.starter_in_delta = work * frac_starter;
     r.engine_out_delta = work - r.starter_in_delta;
+    r.indicated_work_delta = work * frac_comb;
+
+    if (desc_.has_fuel_map) {
+        r.fuel_mass_delta = h * mdot_kg_s_;
+        r.fuel_energy_in_delta = r.fuel_mass_delta * desc_.fuel.lhv_j_kg;
+    }
 
     crank_angle_ = std::fmod(crank_angle_ + omega_new * h, real(4.0) * kPi);
     return r;

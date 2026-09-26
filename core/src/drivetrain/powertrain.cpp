@@ -95,6 +95,12 @@ EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     d.governor.high_idle_rpm = e.governor.high_idle_rpm;
     d.governor.rated_rpm = e.governor.rated_rpm;
     d.governor.droop = e.governor.droop;
+    // PHYS-033 P4 I7a C5: optional fuel map, copied field-for-field (Table2D/
+    // FuelDesc are both plain value types - the same copy-in pattern as
+    // wot_torque_nm_vs_rpm/motoring_torque_nm_vs_rpm above).
+    d.has_fuel_map = e.has_fuel_map;
+    d.fuel = e.fuel;
+    d.fuel_map = e.fuel_map;
     return d;
 }
 
@@ -1083,6 +1089,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         const std::string& e_id = pt.components[static_cast<std::size_t>(engine_component_index)].id;
         engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(e));
         engine_friction_row_ = engine_row;
+        engine_has_fuel_map_ = e.has_fuel_map; // PHYS-033 P4 I7a C5: gates fuel/heat booking below
+
         // Bootstrap fix: EngineTorqueMap::pre_solve's own state machine can
         // only ENTER Running via a bump-start (omega already > 0, see plan
         // section 6.1.3) or a completed crank - it never spins the crank up
@@ -1742,6 +1750,22 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         const auto post = engine_->post_solve(omega_new, ctx.h);
         ledger_.engine_out += post.engine_out_delta;
         ledger_.starter_in += post.starter_in_delta;
+        // PHYS-033 P4 I7a C5: indicated_work is combustion's own share of
+        // engine_out above (an always-meaningful mechanical split, not fuel-
+        // map-dependent - see engine.h's PostSolveResult comment); the fuel/
+        // heat sub-ledger below needs an actual fuel model to mean anything,
+        // so it is gated on engine_has_fuel_map_ (post.fuel_mass_delta/
+        // fuel_energy_in_delta are exactly 0.0 from any engine without one,
+        // but indicated_work_delta is NOT - gating on it here would silently
+        // and incorrectly attribute all indicated work as "negative heat").
+        ledger_.indicated_work += post.indicated_work_delta;
+        if (engine_has_fuel_map_) {
+            ledger_.fuel_mass += post.fuel_mass_delta;
+            ledger_.fuel_energy_in += post.fuel_energy_in_delta;
+            const real heat_delta = post.fuel_energy_in_delta - post.indicated_work_delta;
+            ledger_.engine_heat += heat_delta;
+            if (heat_delta < real(0.0)) ++ledger_.fuel_efficiency_violations;
+        }
         const real v = network_.row_velocity(engine_friction_row_);
         const real lambda = network_.row_lambda(engine_friction_row_);
         ledger_.engine_friction_loss += -ctx.h * v * lambda;

@@ -47,6 +47,7 @@ add_executable(ps_unit_tests
   test_table2d.cpp
   test_fuel_io.cpp
   test_throttle_control.cpp
+  test_engine_fuel_map.cpp
 )
 
 target_link_libraries(ps_unit_tests

@@ -7,6 +7,8 @@
 
 #include "ps/types.h"
 
+#include <cstdint>
+
 namespace ps::drivetrain {
 
 struct PowertrainEnergy {
@@ -69,6 +71,29 @@ struct PowertrainEnergy {
     // balance when the vehicle has at least one compliant shaft.
     real shaft_pe = 0.0;
     real shaft_damping_loss = 0.0;
+
+    // PHYS-033 P4 I7a C5: the fuel energy sub-ledger, entirely separate from
+    // balance_error above (a fuel map's own energy split, not a mechanical
+    // term any node-balance/momentum identity constrains) and NEVER folded
+    // into fold_state_hash - a vehicle whose engine has a fuel map but no
+    // tank (this commit; the tank is C6) hashes bit-identically to the same
+    // vehicle with no fuel map at all. `indicated_work` is booked
+    // UNCONDITIONALLY (EngineTorqueMap::post_solve computes it as
+    // combustion's own proportional share of `work`, the same split
+    // construction as `starter_in`'s, whether or not the engine has a fuel
+    // map) and is therefore generally NONZERO for every combustion-firing
+    // engine, fuel map or not - it is simply meaningless (never read) without
+    // one. `fuel_mass`/`fuel_energy_in`/`engine_heat`/
+    // `fuel_efficiency_violations` are gated on `has_fuel_map` (there is no
+    // mass/LHV to convert without a map) and stay exactly 0 for every engine
+    // with no fuel map (every engine shipped through this commit) -
+    // hash- and value-neutral for those.
+    real fuel_mass = 0.0;             // kg, cumulative (h*mdot per substep, mdot from the fuel map); 0 without a map
+    real fuel_energy_in = 0.0;        // J, cumulative (fuel_mass_delta*LHV per substep); 0 without a map
+    real indicated_work = 0.0;        // J, cumulative - combustion's own share of engine_out above (see PostSolveResult); booked unconditionally
+    real engine_heat = 0.0;           // J, cumulative = fuel_energy_in - indicated_work (rejected/unconverted heat); 0 without a map
+    real fuel_external_added = 0.0;   // J, cumulative; stays 0 until C6's refuel hook books into it
+    std::uint64_t fuel_efficiency_violations = 0; // count of substeps where engine_heat's own delta was < 0 (map claims >100% efficiency); 0 without a map
 };
 
 } // namespace ps::drivetrain

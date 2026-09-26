@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include "ps/drivetrain/fuel_desc.h" // FuelDesc (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel)
+#include "ps/drivetrain/table2d.h"   // Table2D (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel_map)
 #include "ps/math/vec3.h"
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h" // Curve1D (NOT vehicle_desc.h: VehicleDesc::powertrain
@@ -119,6 +121,15 @@ struct TorqueMapEngineDesc {
     // Electronic, matching every engine shipped before this commit); a
     // future simulated engine type is expected to require it explicitly.
     ThrottleInput throttle_input = ThrottleInput::Electronic;
+    // PHYS-033 P4 I7a C5: an optional fuel map (rpm x load(theta_c) ->
+    // fuel_flow_g_s), plus the FuelDesc (LHV) it needs to turn a booked
+    // mass into energy. has_fuel_map false (default) means NO fuel
+    // computation happens anywhere downstream - byte-identical to every
+    // engine shipped before this commit (no data/vehicles/data/engines file
+    // sets this yet; C7 ships the first). See docs/data_formats/engine.md.
+    bool has_fuel_map = false;
+    FuelDesc fuel;
+    Table2D fuel_map; // x = rpm (ascending), y = load in [0, 1] (ascending), values in g/s
 };
 
 struct ClutchDesc {
