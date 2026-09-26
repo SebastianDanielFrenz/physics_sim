@@ -188,9 +188,31 @@ struct TransferCaseDesc {
     Vec3 axis_local = Vec3::zero(); // shared by `in`/`front` ports (one physical shaft), plan section 6.7
 };
 
+// PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): a park pawl on a
+// single port `shaft` - one Coulomb friction row, node `shaft` to GROUND
+// (no rigid row, no topology-state bit - it never changes network
+// topology, only a friction row's capacity, exactly like DirectTorqueBrakes'
+// per-wheel rows or TransferCaseClutchDesc's own capacity ramp). Engages
+// (kinetic capacity = capacity_nm, static = static_factor*kinetic) the
+// first substep `channel` reads >= 0.5 AND |omega| (of the `shaft` node,
+// read BEFORE this substep's solve) <= max_engage_speed_rad_s; above that
+// speed the request stays pending, retried every substep (same shape as
+// DiffLockDesc's pending mechanism, but no topology switch is involved so
+// no momentum-projection/engagement-loss bookkeeping is needed either).
+// Releases (capacity 0) the first substep `channel` reads < 0.5 - no ramp,
+// a pawl either holds or it doesn't. `channel` is declared (default 0) via
+// Powertrain::declare_control_channels; at most one park_lock per vehicle.
+struct ParkLockDesc {
+    real capacity_nm = 0.0;              // KINETIC capacity while engaged, > 0
+    real static_factor = 1.0;            // static = static_factor*kinetic, >= 1
+    real max_engage_speed_rad_s = 5.0;   // >= 0; pawl can only engage at or below this speed
+    std::string channel = "park_lock";   // declared (default 0) via Powertrain::declare_control_channels; non-empty
+};
+
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
 // type is a compile-checked change plus a data-format minor bump.
-using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc>;
+using ComponentParams =
+    std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc, ParkLockDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty

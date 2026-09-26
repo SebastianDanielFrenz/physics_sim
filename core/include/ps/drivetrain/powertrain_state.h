@@ -81,6 +81,9 @@ struct PowertrainSnapshot {
     // engagement (e in [0,1]), or 0 for every vehicle with no transfer case
     // (car_sedan.json and every other pre-C9 file).
     real awd_engagement = 0.0;
+    // PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): the park pawl's
+    // own engaged state (1 = holding, 0 = released or no park_lock at all).
+    real park_lock_engaged = 0.0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled
@@ -108,6 +111,9 @@ struct PowertrainDebug {
     // torque/slip (Powertrain::awd_clutch_torque/awd_clutch_slip), 0 for
     // every vehicle with no transfer case.
     real awd_clutch_torque = 0.0, awd_clutch_slip = 0.0;
+    // PHYS-033 P4 I4 C10: the park pawl's own friction row torque, 0 for
+    // every vehicle with no park_lock.
+    real park_lock_torque = 0.0;
 };
 
 } // namespace ps::drivetrain

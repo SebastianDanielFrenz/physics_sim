@@ -599,6 +599,97 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
     }
 }
 
+// PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): the park_lock
+// component - a single friction row from its own `shaft` port to GROUND (no
+// rigid row, unlike transfer_case's `rear` row). Mirrors the transfer_case
+// validation tests above: a minimal standalone powertrain block, one port
+// wired to a wheel so "every port must be connected by exactly one shaft"
+// is satisfied.
+TEST_CASE("load_vehicle_json validates park_lock fields (I4 C10)", "[unit][vehicle][io][drivetrain]") {
+    using Catch::Matchers::ContainsSubstring;
+    auto json_with_pl_fields = [](const std::string& extra) {
+        return std::string(R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [
+      { "id": "park", "type": "park_lock", "capacity_nm": 30000.0, "static_factor": 1.0,
+        "max_engage_speed_rad_s": 5.0)") +
+               extra + R"( }
+    ],
+    "shafts": [
+      { "ports": ["park.shaft", "wheel:FL"] }
+    ]
+  }
+})";
+    };
+    auto only_pl = [](const vehicle::VehicleDesc& d) -> const drivetrain::ParkLockDesc& {
+        REQUIRE(d.powertrain.components.size() == 1);
+        const auto* pl = std::get_if<drivetrain::ParkLockDesc>(&d.powertrain.components[0].params);
+        REQUIRE(pl != nullptr);
+        return *pl;
+    };
+    auto rejects = [](const std::string& text, const char* tag, const std::string& needle) {
+        TempJsonFile f(text, tag);
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring(needle));
+    };
+
+    SECTION("a well-formed park_lock round-trips") {
+        TempJsonFile f(json_with_pl_fields(""), "vehicle_pl_ok");
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        const drivetrain::ParkLockDesc& pl = only_pl(d);
+        CHECK(pl.capacity_nm == 30000.0);
+        CHECK(pl.static_factor == 1.0);
+        CHECK(pl.max_engage_speed_rad_s == 5.0);
+        CHECK(pl.channel == "park_lock");
+    }
+    SECTION("channel defaults to \"park_lock\" and may be overridden") {
+        TempJsonFile f(json_with_pl_fields(R"(, "channel": "my_park")"), "vehicle_pl_channel");
+        CHECK(only_pl(io::load_vehicle_json(f.path.string())).channel == "my_park");
+    }
+    SECTION("capacity_nm <= 0 is rejected") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" } ],
+  "powertrain": {
+    "components": [
+      { "id": "park", "type": "park_lock", "capacity_nm": 0.0 }
+    ],
+    "shafts": [ { "ports": ["park.shaft", "wheel:FL"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pl_cap_zero", "park_lock 'capacity_nm' must be > 0");
+    }
+    SECTION("static_factor < 1 is rejected") {
+        rejects(json_with_pl_fields(R"(, "static_factor": 0.9)"), "vehicle_pl_static_lt1",
+                "park_lock 'static_factor' must be >= 1");
+    }
+    SECTION("max_engage_speed_rad_s < 0 is rejected") {
+        rejects(json_with_pl_fields(R"(, "max_engage_speed_rad_s": -0.1)"), "vehicle_pl_engage_neg",
+                "park_lock 'max_engage_speed_rad_s' must be >= 0");
+    }
+    SECTION("empty channel is rejected") {
+        rejects(json_with_pl_fields(R"(, "channel": "")"), "vehicle_pl_channel_empty", "park_lock 'channel' must be non-empty");
+    }
+    SECTION("a second park_lock component is rejected at load time") {
+        std::string bad = R"({
+  "format": "physics_sim.vehicle/2",
+  "source": "test fixture, not a real vehicle",
+  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "powertrain": {
+    "components": [
+      { "id": "park",  "type": "park_lock", "capacity_nm": 30000.0 },
+      { "id": "park2", "type": "park_lock", "capacity_nm": 30000.0 }
+    ],
+    "shafts": [ { "ports": ["park.shaft", "wheel:FL"] }, { "ports": ["park2.shaft", "wheel:FR"] } ]
+  }
+})";
+        rejects(bad, "vehicle_pl_duplicate", "more than one park_lock component");
+    }
+}
+
 // --- PHYS-033 P4 I3 plan section 9.2 ----------------------------------------
 
 namespace {
@@ -818,9 +909,10 @@ TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehi
         CHECK(v.aero.drag_area_m2 == Catch::Approx(4.0));
         CHECK(v.controllers.size() == 1);
         // engine, clutch, gearbox, transfer (MFWD transfer_case, PHYS-033 P4
-        // I4 C9), diff (rear), front_diff - up from 4 once the transfer case
-        // and front axle differential were added.
-        REQUIRE(v.powertrain.components.size() == 6);
+        // I4 C9), diff (rear), front_diff, park (park_lock, PHYS-033 P4
+        // I4 C10) - up from 4 once the transfer case, front axle
+        // differential and park lock were added.
+        REQUIRE(v.powertrain.components.size() == 7);
         const auto* gearbox = std::get_if<drivetrain::GearboxDesc>(&v.powertrain.components[2].params);
         REQUIRE(gearbox != nullptr);
         CHECK(gearbox->forward_ratios.size() == 12);
@@ -837,6 +929,12 @@ TEST_CASE("load_vehicle_json round-trips both shipped I3 vehicles", "[unit][vehi
         const auto* front_diff = std::get_if<drivetrain::DifferentialDesc>(&v.powertrain.components[5].params);
         REQUIRE(front_diff != nullptr);
         CHECK(front_diff->ratio == Catch::Approx(15.30));
+        const auto* park = std::get_if<drivetrain::ParkLockDesc>(&v.powertrain.components[6].params);
+        REQUIRE(park != nullptr);
+        CHECK(park->capacity_nm == Catch::Approx(30000.0));
+        CHECK(park->static_factor == Catch::Approx(1.0));
+        CHECK(park->max_engage_speed_rad_s == Catch::Approx(5.0));
+        CHECK(park->channel == "park_lock");
     }
 }
 

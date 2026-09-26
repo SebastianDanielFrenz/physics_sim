@@ -785,6 +785,35 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                     t.axis_local = read_vec3(cj.value("axis_local", json()), Vec3::zero());
                     require_zero_or_unit(t.axis_local, ctx + ".axis_local");
                     p.components.push_back({id, t});
+                } else if (type == "park_lock") {
+                    // PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): the
+                    // park pawl - a single friction row from its `shaft` port
+                    // to GROUND, see components.h's ParkLock. At most one per
+                    // vehicle - checked here at parse time (unlike engine/
+                    // clutch/gearbox/transfer_case, whose own "at most one"
+                    // rule is only enforced later, at Powertrain graph-build
+                    // time) so a duplicate is a plain load_vehicle_json error.
+                    for (const auto& existing : p.components) {
+                        if (std::get_if<ps::drivetrain::ParkLockDesc>(&existing.params) != nullptr) {
+                            throw std::runtime_error(ctx + ": more than one park_lock component - at most one is supported");
+                        }
+                    }
+                    ps::drivetrain::ParkLockDesc pl;
+                    pl.capacity_nm = cj.value("capacity_nm", pl.capacity_nm);
+                    if (!(pl.capacity_nm > real(0.0))) {
+                        throw std::runtime_error(ctx + ": park_lock 'capacity_nm' must be > 0");
+                    }
+                    pl.static_factor = cj.value("static_factor", pl.static_factor);
+                    if (!(pl.static_factor >= real(1.0))) {
+                        throw std::runtime_error(ctx + ": park_lock 'static_factor' must be >= 1");
+                    }
+                    pl.max_engage_speed_rad_s = cj.value("max_engage_speed_rad_s", pl.max_engage_speed_rad_s);
+                    if (!(pl.max_engage_speed_rad_s >= real(0.0))) {
+                        throw std::runtime_error(ctx + ": park_lock 'max_engage_speed_rad_s' must be >= 0");
+                    }
+                    pl.channel = cj.value("channel", pl.channel);
+                    if (pl.channel.empty()) throw std::runtime_error(ctx + ": park_lock 'channel' must be non-empty");
+                    p.components.push_back({id, pl});
                 } else {
                     throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
                 }

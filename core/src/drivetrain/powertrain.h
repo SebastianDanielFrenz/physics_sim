@@ -212,6 +212,13 @@ public:
     [[nodiscard]] real awd_clutch_torque() const { return transfer_case_ ? network_.row_lambda(transfer_row_) : real(0.0); }
     [[nodiscard]] real awd_clutch_slip() const { return transfer_case_ ? network_.row_velocity(transfer_row_) : real(0.0); }
 
+    // PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): park pawl.
+    // nullptr/0/false for every vehicle without one - same nullable-pointer
+    // pattern as transfer_case_ above.
+    [[nodiscard]] bool has_park_lock() const { return park_lock_ != nullptr; }
+    [[nodiscard]] real park_lock_engaged() const { return (park_lock_ && park_lock_->engaged()) ? real(1.0) : real(0.0); }
+    [[nodiscard]] real park_lock_torque() const { return park_lock_ ? network_.row_lambda(park_lock_row_) : real(0.0); }
+
     [[nodiscard]] bool has_tcu() const { return tcu_ != nullptr; }
     // Only meaningful when has_tcu() - PowertrainSnapshot's shift_phase
     // derivation (plan section 6.5.2's ClutchOpening/ClutchClosing bracket
@@ -432,6 +439,12 @@ private:
     // only Powertrain's own awd_clutch_torque()/awd_clutch_slip() need it. ---
     TransferCase* transfer_case_ = nullptr;
     FrictionRowId transfer_row_{};
+
+    // --- park lock (I4 C10, plan section 3.4): nullptr/default FrictionRowId
+    // if this vehicle's powertrain has no park_lock component. Same
+    // non-owning-alias-into-components_ pattern as transfer_case_ above. ---
+    ParkLock* park_lock_ = nullptr;
+    FrictionRowId park_lock_row_{};
 
     // --- TCU (nullptr if this vehicle has no manual_tcu controller) -------
     std::unique_ptr<ManualTcu> tcu_;
