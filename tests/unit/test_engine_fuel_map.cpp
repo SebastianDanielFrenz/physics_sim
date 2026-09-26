@@ -384,6 +384,142 @@ WorldRig make_world_rig(const vehicle::VehicleDesc& desc) {
     return rig;
 }
 
+// Same body/ground/vehicle-creation as make_world_rig() above, but with
+// tick_rate_hz == substep_rate_hz (1:1) so exactly one Powertrain substep
+// runs per World::step() call - the ordinary 4:1 WorldRig above only ever
+// exposes per-TICK (4-substeps-averaged) state through World::powertrain_
+// state()/powertrain_energy(), which cannot support a genuine per-substep
+// cross-check. `gear` is passed straight through to VehicleResetOptions -
+// 0 (Neutral) for "Fix 3" F2's free-rev test below (no wheel/tyre/road-load
+// coupling to obscure the engine's own pre/post-solve rpm split, but still
+// a REAL Powertrain: clutch + gearbox input inertia + engine, network-
+// solved every substep), a driven gear for "Fix 3" F4's per-substep ledger
+// cross-check (real wheel/tyre coupling, so indicated_work/engine_heat
+// actually move).
+WorldRig make_world_rig_1to1(const vehicle::VehicleDesc& desc, int gear) {
+    WorldRig rig;
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    cfg.tick_rate_hz = 960.0;
+    cfg.substep_rate_hz = 960.0; // 1:1
+    rig.world = std::make_unique<World>(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{1000.0, 1000.0, 0.5}};
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 1.0;
+    ground.pose.position = Vec3{0.0, 0.0, -0.5};
+    rig.world->create_body(ground);
+
+    BodyDesc chassis;
+    chassis.shape = BoxShape{Vec3{2.0, 0.4, 0.15}};
+    chassis.motion = BodyMotionType::Dynamic;
+    chassis.mass = 1500.0;
+    chassis.friction = 0.5;
+    chassis.allow_sleep = false;
+    chassis.pose.position = Vec3{0.0, 0.0, 0.6};
+    const BodyId chassis_id = rig.world->create_body(chassis);
+
+    rig.world->set_surface_table(std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json"));
+    rig.vehicle = rig.world->create_vehicle(desc, chassis_id);
+
+    rig.world->set_control("assist.auto_clutch", 0.0);
+    rig.world->set_control("assist.auto_blip", 0.0);
+    rig.world->set_control("assist.auto_shift", 0.0);
+    rig.world->set_control("clutch", 0.0);
+    rig.world->set_control("throttle", 0.0);
+    vehicle::VehicleResetOptions o;
+    o.gear = gear;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = true;
+    rig.world->reset_vehicle(rig.vehicle, o);
+    return rig;
+}
+
+TorqueMapEngineDesc fueled_engine_public_desc(const vehicle::VehicleDesc& desc) {
+    for (const auto& c : desc.powertrain.components) {
+        if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) return *e;
+    }
+    throw std::runtime_error("fueled_engine_public_desc: no TorqueMapEngineDesc component");
+}
+
+// ---------------------------------------------------------------------------
+// "Fix 3" F2 (coordinator spec): the review-fixed F2 above (bare
+// EngineTorqueMap, hand-rolled implicit-Euler omega update) cannot
+// discriminate a production mistake that looked up the fuel map with the
+// POST-solve rpm or the raw throttle command instead of theta_c - omega_new
+// there is derived directly from THAT SAME pre_solve call's own tau0_/d_
+// pair, so the hand-rolled loop's own coupling can mask exactly the two
+// mistakes this test targets. This version drives a REAL Powertrain
+// (make_world_rig_1to1_neutral() above, 1:1 tick:substep ratio so one
+// World::step() call is exactly one Powertrain substep) through the same
+// fuel-mapped fixture (vehicle_fuel_map_sedan.json) F4/F6/F9/Fix 1 use, in
+// Neutral with a deliberate free-rev-then-lift: WOT for 0.2 s (no wheel
+// load, so rpm climbs fast purely on engine inertia - a real, non-flat
+// pre/post-solve rpm split every substep), then throttle 0 for ~3 s so the
+// engine coasts down through DFCO and settles at idle via the idle PI -
+// theta_c genuinely != the commanded 0.0 there.
+//
+// Each tick: rpm_before is read from World::powertrain_state().engine_rpm
+// BEFORE calling step() - this is the value the UPCOMING substep's
+// pre_solve will use as its own omega_old (engine_torque_map.cpp computes
+// `rpm = abs(omega_old)*kRadPerSecToRpm`; vehicle_instance.cpp fills
+// engine_rpm as `abs(engine_omega())*(60/(2*pi))` - the identical formula
+// applied to the identical stored omega, confirmed by direct comparison of
+// both source lines). theta_c/fuel_flow_g_s are read AFTER step() -
+// PreSolveResult fields cached from the substep that just ran, at that same
+// rpm_before/omega_old. Both are compared against an INDEPENDENT
+// fuel_map.value(rpm_before, theta_c) lookup on the REAL Table2D pulled
+// from the loaded VehicleDesc (never a hand-duplicated formula) - a
+// production bug that instead read the post-solve rpm, or the raw command
+// in place of theta_c, moves this comparison far outside its tight
+// tolerance every substep it is wrong. See this test's own discrimination
+// demo (temporarily make each mistake in production code, rebuild, rerun,
+// report the two failure numbers, revert).
+// ---------------------------------------------------------------------------
+TEST_CASE("Fix 3 F2: fuel flow matches the map at pre-solve rpm/theta_c through a real Powertrain, not post-solve rpm or the raw command",
+          "[unit][drivetrain][fuel]") {
+    const vehicle::VehicleDesc fueled_desc = io::load_vehicle_json(fuel_map_sedan_path());
+    const TorqueMapEngineDesc engine_desc = fueled_engine_public_desc(fueled_desc);
+    REQUIRE(engine_desc.has_fuel_map);
+
+    WorldRig rig = make_world_rig_1to1(fueled_desc, /*gear=*/0);
+
+    constexpr int kRevTicks = 200;    // ~0.208 s WOT free-rev (no wheel load)
+    constexpr int kSettleTicks = 3000; // ~3.125 s coast: DFCO then idle-PI settle
+    const real rpm_start = rig.world->powertrain_state(rig.vehicle).engine_rpm;
+
+    bool saw_theta_c_ne_command = false;
+    bool saw_omega_change = false;
+    real max_rel_err = 0.0;
+
+    for (int tick = 0; tick < kRevTicks + kSettleTicks; ++tick) {
+        rig.world->set_control("throttle", tick < kRevTicks ? 1.0 : 0.0);
+        const real rpm_before = rig.world->powertrain_state(rig.vehicle).engine_rpm;
+        rig.world->step();
+        const drivetrain::PowertrainSnapshot& snap = rig.world->powertrain_state(rig.vehicle);
+        REQUIRE(snap.engines.size() == 1);
+        const real theta_c = snap.engines[0].load;
+        const real fuel_flow_g_s = snap.engines[0].fuel_flow_g_s;
+        const real command = tick < kRevTicks ? 1.0 : 0.0;
+
+        if (theta_c != command) saw_theta_c_ne_command = true;
+        if (std::abs(snap.engine_rpm - rpm_start) > 1.0) saw_omega_change = true;
+
+        const real expected_g_s = engine_desc.fuel_map.value(rpm_before, theta_c);
+        const real denom = std::max(std::abs(expected_g_s), 1e-9);
+        const real rel_err = std::abs(fuel_flow_g_s - expected_g_s) / denom;
+        max_rel_err = std::max(max_rel_err, rel_err);
+        INFO("tick " << tick << " rpm_before=" << rpm_before << " theta_c=" << theta_c << " command=" << command
+                      << " fuel_flow_g_s=" << fuel_flow_g_s << " expected_g_s=" << expected_g_s << " rel_err=" << rel_err);
+        CHECK(rel_err <= 1e-9);
+    }
+
+    INFO("max_rel_err over the whole run = " << max_rel_err);
+    REQUIRE(saw_theta_c_ne_command); // precondition: theta_c really differs from the commanded throttle (idle PI, post-lift)
+    REQUIRE(saw_omega_change);       // precondition: omega really varies across the run (free rev + coast-down)
+}
+
 // ---------------------------------------------------------------------------
 // F4 (review-fixed): the original version hand-replicated Powertrain::
 // post_solve_components' exact booking rule (ledger.engine_heat +=
@@ -428,6 +564,85 @@ TEST_CASE("F4: engine_heat never goes negative (no >100% efficiency) over a WOT 
     CHECK(final_ledger.fuel_efficiency_violations == 0);
     CHECK(final_ledger.fuel_mass > 0.0);   // non-vacuous: fuel really flowed
     CHECK(final_ledger.engine_heat > 0.0); // non-vacuous: real (imperfect) combustion heat was booked
+}
+
+// ---------------------------------------------------------------------------
+// "Fix 3" F4 (coordinator spec): F4/F9/F6 above all check coarse PROPERTIES
+// of the ledger (monotonicity, a bound, bit-identity) - none of them
+// independently RECOMPUTES fuel_mass/fuel_energy_in/engine_heat from their
+// own defining per-substep sums and compares against Powertrain::
+// post_solve_components' actual booking, so a mistake in THAT function's own
+// gating or summation (e.g. dropping one of its three `ledger_.fuel_* +=`/
+// `ledger_.engine_heat +=` lines) would not necessarily be caught. This test
+// drives a REAL Powertrain (make_world_rig_1to1() above, 1:1 tick:substep
+// ratio, gear 1 - real wheel/tyre/road-load coupling so fuel flow and
+// indicated_work genuinely vary) through a WOT launch from rest, and every
+// tick (== one substep) independently accumulates:
+//   - expected_fuel_mass      += h * mdot_kg_s        (mdot read back from
+//     World::powertrain_state().engines[0].fuel_flow_g_s / 1000, the SAME
+//     substep's cached PreSolveResult - not a hand-duplicated formula)
+//   - expected_fuel_energy_in += (h * mdot_kg_s) * fuel.lhv_j_kg (LHV pulled
+//     from the loaded VehicleDesc's own FuelDesc, never a hand-typed number)
+//   - expected_engine_heat    += (h * mdot_kg_s * lhv) - indicated_work_delta
+//     (indicated_work_delta read directly off World::powertrain_energy()'s
+//     own cumulative indicated_work field, since indicated_work's OWN
+//     booking is unconditional/untested here - see the "New: car_sedan
+//     without a fuel map..." test above for that one - this test isolates
+//     Powertrain::post_solve_components' fuel_mass/fuel_energy_in/
+//     engine_heat gating and summation specifically)
+// and compares each final cumulative sum against World::powertrain_energy()'s
+// actual fuel_mass/fuel_energy_in/engine_heat to a tight relative tolerance.
+// Dropping any ONE of post_solve_components' three booking lines leaves that
+// one ledger field at (or near) 0 while this test's independent sum for it
+// stays large and positive - see this test's own discrimination demo.
+// ---------------------------------------------------------------------------
+TEST_CASE("Fix 3 F4: fuel_mass/fuel_energy_in/engine_heat match independent per-substep sums through a real Powertrain",
+          "[unit][drivetrain][fuel]") {
+    const vehicle::VehicleDesc fueled_desc = io::load_vehicle_json(fuel_map_sedan_path());
+    const TorqueMapEngineDesc engine_desc = fueled_engine_public_desc(fueled_desc);
+    REQUIRE(engine_desc.has_fuel_map);
+    const real lhv = engine_desc.fuel.lhv_j_kg;
+    REQUIRE(lhv > 0.0);
+
+    WorldRig rig = make_world_rig_1to1(fueled_desc, /*gear=*/1);
+    rig.world->set_control("throttle", 1.0); // WOT launch from settled rest
+
+    constexpr int kTicks = 2000; // ~2.08 s at 960 Hz, one substep per tick
+
+    real prev_indicated_work = rig.world->powertrain_energy(rig.vehicle).indicated_work;
+    real expected_fuel_mass = 0.0;
+    real expected_fuel_energy_in = 0.0;
+    real expected_engine_heat = 0.0;
+
+    for (int tick = 0; tick < kTicks; ++tick) {
+        rig.world->step();
+        const drivetrain::PowertrainSnapshot& snap = rig.world->powertrain_state(rig.vehicle);
+        REQUIRE(snap.engines.size() == 1);
+        const real mdot_kg_s = snap.engines[0].fuel_flow_g_s / real(1000.0);
+        const real fuel_mass_delta = kSubstepH * mdot_kg_s;
+        const real fuel_energy_in_delta = fuel_mass_delta * lhv;
+
+        const drivetrain::PowertrainEnergy& e = rig.world->powertrain_energy(rig.vehicle);
+        const real indicated_work_delta = e.indicated_work - prev_indicated_work;
+        prev_indicated_work = e.indicated_work;
+
+        expected_fuel_mass += fuel_mass_delta;
+        expected_fuel_energy_in += fuel_energy_in_delta;
+        expected_engine_heat += fuel_energy_in_delta - indicated_work_delta;
+    }
+
+    const drivetrain::PowertrainEnergy& final_ledger = rig.world->powertrain_energy(rig.vehicle);
+    REQUIRE(expected_fuel_mass > 0.0);              // non-vacuous: fuel really flowed
+    REQUIRE(final_ledger.indicated_work > 0.0);      // non-vacuous: real combustion work was booked (WOT launch)
+
+    auto rel_err = [](real actual, real expected) { return std::abs(actual - expected) / std::max(std::abs(expected), 1e-9); };
+    INFO("fuel_mass actual=" << final_ledger.fuel_mass << " expected=" << expected_fuel_mass);
+    CHECK(rel_err(final_ledger.fuel_mass, expected_fuel_mass) <= 1e-9);
+    INFO("fuel_energy_in actual=" << final_ledger.fuel_energy_in << " expected=" << expected_fuel_energy_in);
+    CHECK(rel_err(final_ledger.fuel_energy_in, expected_fuel_energy_in) <= 1e-9);
+    INFO("engine_heat actual=" << final_ledger.engine_heat << " expected=" << expected_engine_heat);
+    CHECK(rel_err(final_ledger.engine_heat, expected_engine_heat) <= 1e-9);
+    CHECK(final_ledger.fuel_efficiency_violations == 0);
 }
 
 // ---------------------------------------------------------------------------
