@@ -697,6 +697,11 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   cable to the throttle bodies) or an ECU (drive-by-wire). The engine data
   file only declares whether its throttle takes that input mechanically or
   electronically.
+- Turbo sound state (Sebastian, 2026-09-26): the sound system later needs
+  the turbo's state to generate noises. I7d publishes it race-free in the
+  powertrain snapshot (shaft speed, boost, wastegate, blow-off and anti-lag
+  events with counters, surge), sound-only fields unhashed, no audio code in
+  core.
 - Taken as recommended: fuel map as mass flow over rpm x load; no existing
   data file edited in I7 (fuel goes into new variant files); chassis mass
   constant as fuel burns; engine type chosen by "kind": "simulated" plus
