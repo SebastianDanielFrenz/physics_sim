@@ -134,7 +134,7 @@ from).
 significant for scenario determinism. Each entry:
 
 ```json
-{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case", ... }
+{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case" | "park_lock", ... }
 ```
 
 - `id`: required, non-empty, unique across `components[]`
@@ -151,16 +151,23 @@ significant for scenario determinism. Each entry:
   key alongside `ref` throws `"<ctx>: a component with 'ref' may only
   contain 'id', 'type' and 'ref' (found extra field '<key>')"`; there is no
   merging of inline overrides on top of a ref'd file. `clutch`, `gear_pair`,
-  `differential` and `transfer_case` components are **always inline** —
-  `{"ref": ...}` on a clutch throws `"<ctx>: 'clutch' components are always
-  inline in I3 (no 'ref')"`.
-- **At most one** `engine`, one `clutch`, one `gearbox`, one `transfer_case`
-  component is allowed (checked in `powertrain.cpp`): a second `engine`/
-  `clutch`/`gearbox` throws `"more than one <kind> component - I3 supports
-  at most one"`; a second `transfer_case` throws `"vehicle '<v>': more than
-  one transfer_case component - I4 C9 supports at most one"` (I4 C9 - a
-  second transfer case would need per-instance channel/hash disambiguation
-  the plan never specifies). Any number of `gear_pair` **or** `differential`
+  `differential`, `transfer_case` and `park_lock` components are **always
+  inline** — `{"ref": ...}` on a clutch throws `"<ctx>: 'clutch' components
+  are always inline in I3 (no 'ref')"`.
+- **At most one** `engine`, one `clutch`, one `gearbox`, one `transfer_case`,
+  one `park_lock` component is allowed (checked in `powertrain.cpp`): a
+  second `engine`/`clutch`/`gearbox` throws `"more than one <kind> component
+  - I3 supports at most one"`; a second `transfer_case` throws `"vehicle
+  '<v>': more than one transfer_case component - I4 C9 supports at most
+  one"` (I4 C9 - a second transfer case would need per-instance channel/hash
+  disambiguation the plan never specifies). A second `park_lock` is rejected
+  **at load time** (`ps::io::load_vehicle_json`, not just later at
+  `Powertrain` graph-build time like the other single-instance components
+  above) — `"<ctx>: more than one park_lock component - at most one is
+  supported"` — since a real vehicle only ever has one park pawl and I4 C10's
+  own loader-validation tests exercise `load_vehicle_json` directly (see
+  [`park_lock` component fields](#park_lock-component-fields-i4-c10) below).
+  Any number of `gear_pair` **or** `differential`
   components is fine (I4 C4 lifted the earlier "at most one differential"
   limit) - a centre diff feeding two axle diffs, or any other multi-diff
   topology, is built by wiring their `carrier`/`left`/`right` ports together
@@ -307,6 +314,49 @@ hashes bit-identically to before this component existed.
 case's `in -> rear` edge only, never `in -> front` — adding a front axle
 behind a transfer case cannot change a vehicle's speedo reading.
 
+#### `park_lock` component fields (I4 C10)
+
+`ParkLockDesc`. Always inline; at most one per vehicle (rejected at load
+time, see above). Models a park pawl: a single Coulomb friction row from
+its own `shaft` port to GROUND (no rigid row, no topology-state bit — it
+never changes network topology, only a friction row's capacity, exactly
+like a `DirectTorqueBrakes` corner row). The port is wired to wherever the
+pawl physically clamps (e.g. `gearbox.out`) via an ordinary shaft entry
+alongside that port's other connections (a port may belong to only one
+shaft — extend the existing shaft's `ports` array rather than adding a new
+one).
+
+| Field | Type | Req./opt. | Default | Validation | Meaning |
+|---|---|---|---|---|---|
+| `capacity_nm` | real (N·m) | optional | `0` | **must be > 0**, else `"<ctx>: park_lock 'capacity_nm' must be > 0"` | kinetic friction-row capacity while engaged |
+| `static_factor` | real | optional | `1.0` | **must be >= 1**, else `"<ctx>: park_lock 'static_factor' must be >= 1"` | static capacity = `static_factor * capacity_nm`; `1.0` (unlike a clutch's `1.15`) because a pawl tooth has no separate static/kinetic friction regime — it holds or it shears |
+| `max_engage_speed_rad_s` | real (rad/s) | optional | `5.0` | **must be >= 0**, else `"<ctx>: park_lock 'max_engage_speed_rad_s' must be >= 0"` | the pawl can only engage while `|omega|` at its `shaft` node (read **before** the current substep's solve — the value the previous substep's solve left behind) is at or below this; above it the request stays pending, retried every substep |
+| `channel` | string | optional | `"park_lock"` | **must be non-empty**, else `"<ctx>: park_lock 'channel' must be non-empty"` | declared control channel (default value `0`, via `Powertrain::declare_control_channels`) whose value `>= 0.5` requests engagement; releases (capacity 0, no ramp) the first substep it reads `< 0.5` |
+
+Port: `<id>.shaft`.
+
+Engagement is a simple two-state latch, unlike the transfer case's ramped
+`e`: released capacity is always exactly `0`; engaged capacity is always
+exactly `capacity_nm`/`static_factor * capacity_nm` (no ramp — "a pawl
+either holds or it shears"). Slip dissipation (`-h * v * lambda`, same form
+as every other friction row) is booked into `PowertrainEnergy::brake_loss`
+(a park pawl is a brake, and I4 C10 adds no new ledger channel). Telemetry:
+`PowertrainSnapshot::park_lock_engaged` (1 = holding, 0 = released or no
+`park_lock` at all) and `PowertrainDebug::park_lock_torque` (the row's own
+lambda, tests only). Only the engaged/released latch is hashed (the pending
+state, like a diff lock's `lock_pending_`, is recomputed every substep from
+the channel plus the network's own already-hashed omega) — a vehicle with
+no `park_lock` hashes bit-identically to before this component existed.
+
+**Only holds through an open differential when nothing else does:** a
+`park_lock` clamps one shaft-network node, not the wheel hubs directly — an
+`open` differential downstream still lets its two output hubs counter-rotate
+while the clamped node's own average stays at rest, so on a *cross* slope
+(not a straight climb) a park-lock-only hold can let the vehicle creep via
+wheel slip even though the network's own kinematics are satisfied. See
+`tests/validation/test_vehicle_tractor_cross_slope.cpp`'s park-lock cases
+for the measured numbers this produces on `data/vehicles/tractor.json`.
+
 ### Ports, by component type (fixed names)
 
 | Component | Ports |
@@ -317,6 +367,7 @@ behind a transfer case cannot change a vehicle's speedo reading.
 | `gear_pair` | `in`, `out` |
 | `differential` | `carrier`, `left`, `right` |
 | `transfer_case` | `in`, `rear`, `front` |
+| `park_lock` | `shaft` |
 | a wheel (implicit, one per entry in the top-level `wheels[]`) | `wheel:<wheel name>` |
 
 A port reference string is written `"<component id>.<port>"` (e.g.
@@ -358,10 +409,10 @@ Beyond the per-field checks above, `Powertrain::Powertrain`
 vehicle-construction time and additionally rejects:
 
 - A wheel with `wheel_inertia <= 0` (see the [wheel table](#wheel) above).
-- More than one engine/clutch/gearbox/transfer_case component (duplicated
-  check from the field-level notes above — this is where it's actually
-  enforced; any number of `differential`/`gear_pair` components is fine, see
-  above).
+- More than one engine/clutch/gearbox/transfer_case/park_lock component
+  (duplicated check from the field-level notes above — `park_lock` is
+  additionally rejected earlier, at load time; any number of
+  `differential`/`gear_pair` components is fine, see above).
 - A lossy (`efficiency < 1`) or `lockable: true` differential that is not a
   leaf (its `left`/`right` carry another rigid row) — the exact rejection
   message is under the [differential field table](#differential-component-fields)

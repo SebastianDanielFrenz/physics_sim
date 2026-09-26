@@ -438,6 +438,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
         snap.diff_count = powertrain_.fill_diff_snapshot(snap.diffs); // PHYS-033 P4 I4 C8
         snap.awd_engagement = powertrain_.awd_engagement(); // PHYS-033 P4 I4 C9
+        snap.park_lock_engaged = powertrain_.park_lock_engaged(); // PHYS-033 P4 I4 C10
     }
 
     // Predict what Jolt will report as this chassis's velocity next tick

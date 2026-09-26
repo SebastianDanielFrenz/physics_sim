@@ -139,6 +139,97 @@ TEST_CASE("Tractor holds a 15% longitudinal slope on the handbrake alone", "[val
     run_acceptance_case(0.15, Vec3::unit_y(), "15% longitudinal slope");
 }
 
+// --- PHYS-033 P4 I4 C10 (park_lock, owner ruling) -------------------------
+//
+// The park pawl clamps gearbox.out, upstream of the transfer case and both
+// differentials (see data/vehicles/tractor.json's own "source" field and
+// docs/data_formats/vehicle.md's park_lock section) - it holds the shaft
+// network's own gearbox.out/transfer.in node at rest, NOT each wheel hub
+// individually the way DirectTorqueBrakes' handbrake rows do. On a straight
+// LONGITUDINAL slope (no cross tilt) the two rear wheels are physically
+// symmetric, so nothing in the open rear differential's Willis constraint
+// (carrier = (w_L + w_R)/2) favours L != R - holding the carrier at 0 is
+// the same as holding both wheels at 0, exactly like the handbrake case.
+// On a CROSS slope the two sides are NOT symmetric, so an open diff can
+// satisfy carrier == 0 with w_L == -w_R (counter-rotating) while the car
+// still slides/yaws - the negative control and the longitudinal case below
+// are the discriminating pair required to tell these two situations apart
+// (PLAN.md's "never explain away a surprising number without a
+// discriminating measurement" rule) rather than just asserting a bound and
+// hoping.
+namespace {
+
+struct ParkLockCaseResult { real drift = 0.0; real yaw_change = 0.0; };
+
+// gearbox stays in Neutral throughout (VehicleDesc::powertrain's
+// initial_gear == 0 default - never requested otherwise here), matching
+// the spec's "gearbox in neutral" wording: with no rigid coupling into
+// gearbox.out from the engine/clutch/gearbox side, the pawl is being tested
+// purely against gravity acting through the driveline's own inertia and
+// the wheels' contact-patch reaction, not against any engine torque path.
+ParkLockCaseResult run_park_lock_case(real slope_grade, const Vec3& tilt_axis, real handbrake, real park_lock,
+                                       real settle_s, real hold_s, const char* label) {
+    const vehicle::VehicleDesc desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+    auto rig = ps_test::build_vehicle_rig_from_desc(desc, 6000.0, Vec3{1.2, 0.35, 0.9}, 1.28, slope_grade, 4, tilt_axis);
+    rig.world->set_control("handbrake", handbrake);
+    rig.world->set_control("park_lock", park_lock);
+    ps_test::settle(*rig.world, settle_s);
+
+    const Pose p0 = rig.world->get_pose(rig.chassis);
+    const Quat tilt = ground_tilt_for(slope_grade, tilt_axis);
+    const Attitude att0 = attitude_relative_to_ground(p0, tilt);
+
+    const real dt = rig.world->dt();
+    const std::uint64_t n = static_cast<std::uint64_t>(hold_s / dt + 0.5);
+    for (std::uint64_t i = 0; i < n; ++i) rig.world->step();
+
+    const Pose p1 = rig.world->get_pose(rig.chassis);
+    const Attitude att1 = attitude_relative_to_ground(p1, tilt);
+    const ParkLockCaseResult r{(p1.position - p0.position).length(), att1.yaw - att0.yaw};
+    std::printf("[park_lock] %-58s drift=%.6e m yaw_change=%.6e rad (handbrake=%.0f park_lock=%.0f)\n", label,
+                static_cast<double>(r.drift), static_cast<double>(r.yaw_change), static_cast<double>(handbrake),
+                static_cast<double>(park_lock));
+    return r;
+}
+
+} // namespace
+
+// Required NEW case: 15% longitudinal slope, park_lock alone (no brakes, no
+// handbrake, gearbox neutral) - symmetric L/R case, expected (per the design
+// rationale above) to hold like the handbrake-only case does.
+TEST_CASE("Tractor holds a 15% longitudinal slope on park_lock alone (no brakes/handbrake, gearbox neutral)",
+          "[validation][vehicle][long]") {
+    const ParkLockCaseResult r =
+        run_park_lock_case(0.15, Vec3::unit_y(), /*handbrake=*/0.0, /*park_lock=*/1.0, 2.0, 30.0,
+                            "15% longitudinal, park_lock only, no brakes");
+    CHECK(r.drift < 0.001);
+}
+
+// Required discriminating NEGATIVE CONTROL: same rig, park_lock OFF, no
+// brakes at all - must roll away. Without this, a passing park-lock-only
+// case above would be unfalsifiable (e.g. if the tractor simply doesn't
+// roll away on this slope at all without ANY holding force, the first case
+// passing would prove nothing about the pawl).
+TEST_CASE("Negative control: tractor rolls away on a 15% longitudinal slope with park_lock off and no brakes",
+          "[validation][vehicle][long]") {
+    const ParkLockCaseResult r =
+        run_park_lock_case(0.15, Vec3::unit_y(), /*handbrake=*/0.0, /*park_lock=*/0.0, 2.0, 30.0,
+                            "15% longitudinal, NO park_lock, NO brakes (negative control)");
+    CHECK(r.drift > 0.5);
+}
+
+// Required: the existing 10% cross-slope case, now WITH park_lock alongside
+// the handbrake. The two existing handbrake-only TEST_CASEs above are left
+// untouched as the regression baseline (3.9e-6 m / 1.3e-4 m); this is an
+// ADDITIONAL case, not a replacement, so a regression in the baseline can
+// never be masked by park_lock picking up the slack.
+TEST_CASE("Tractor holds a 10% cross slope on handbrake + park_lock together", "[validation][vehicle][long]") {
+    const ParkLockCaseResult r =
+        run_park_lock_case(0.10, Vec3::unit_x(), /*handbrake=*/1.0, /*park_lock=*/1.0, 2.0, 30.0,
+                            "10% cross slope, handbrake + park_lock");
+    CHECK(r.drift < 0.001);
+}
+
 // Control: the CAR on the same 10% cross slope with its handbrake. If this
 // also slides, the cause is generic to the vehicle system (e.g. F16's
 // chassis-axis suspension force, or the wheel-centre contact point, F5),

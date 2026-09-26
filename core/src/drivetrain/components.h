@@ -346,6 +346,38 @@ private:
     real engagement_ = 0.0; // STATE: persists substep to substep (ramped toward the channel's target)
 };
 
+// PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): park pawl on a
+// single node (`shaft`), one friction row to GROUND. No rigid row, no
+// topology-state bit - only the row's capacity ever changes, exactly like
+// DirectTorqueBrakes' rows or TransferCase's clutch capacity ramp. State is
+// a plain bool (`engaged_`): engages the first substep the channel reads
+// >= 0.5 AND |omega(shaft)| (read from `net` BEFORE this substep's solve -
+// i.e. the value the shaft actually had at the end of the PREVIOUS
+// substep) is <= max_engage_speed_rad_s; while requested-but-too-fast the
+// request stays pending (recomputed every substep from the channel and the
+// live omega, not itself hashed - same reasoning as DiffLockDesc's
+// lock_pending_). Releases (capacity 0) the instant the channel reads
+// < 0.5, no ramp - a pawl does not partially disengage.
+class ParkLock final : public IComponent {
+public:
+    ParkLock(NodeId shaft, FrictionRowId row, ParkLockDesc desc, int channel_slot)
+        : shaft_(shaft), row_(row), desc_(std::move(desc)), channel_slot_(channel_slot) {}
+
+    void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
+    void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
+                     PowertrainEnergy& ledger) override;
+    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
+
+    [[nodiscard]] bool engaged() const { return engaged_; }
+
+private:
+    NodeId shaft_;
+    FrictionRowId row_;
+    ParkLockDesc desc_;
+    int channel_slot_ = -1; // into ComponentSubstepCtx::channels
+    bool engaged_ = false;  // STATE: persists substep to substep
+};
+
 // direct_torque brakes (plan section 4.2/6): one friction row per wheel hub
 // that has a service-brake corner or is in the handbrake list (service +
 // handbrake MERGED into one row per hub at build time - two Coulomb rows on

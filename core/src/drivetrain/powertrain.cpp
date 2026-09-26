@@ -143,6 +143,11 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             // one before this, so tractor.json's channel list gains "awd" and
             // car_sedan.json's stays empty (it has no transfer_case).
             add(ChannelDecl{tc->channel, real(0.0)});
+        } else if (const auto* pl = std::get_if<ParkLockDesc>(&c.params)) {
+            // I4 C10 (plan section 3.4): the park pawl's own request channel
+            // (default 0 = released) - tractor.json's channel list gains
+            // "park_lock"; car_sedan.json's stays unchanged (no park_lock).
+            add(ChannelDecl{pl->channel, real(0.0)});
         }
     }
     for (const ChannelDecl& decl : test_only_extra) add(decl);
@@ -181,6 +186,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     std::unordered_map<std::string, int> component_index_of; // component id -> index into pt.components
     int engine_component_index = -1, clutch_component_index = -1, gearbox_component_index = -1;
     int transfer_case_component_index = -1; // I4 C9
+    int park_lock_component_index = -1;     // I4 C10
     for (std::size_t ci = 0; ci < pt.components.size(); ++ci) {
         const ComponentDesc& c = pt.components[ci];
         if (c.id.empty()) throw std::runtime_error("vehicle '" + vehicle_name + "': a powertrain component has an empty id");
@@ -229,6 +235,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             add_port(component_port_key(c.id, "in"), tc->in_inertia_kgm2, tc->axis_local);
             add_port(component_port_key(c.id, "rear"), real(0.0), Vec3::zero());
             add_port(component_port_key(c.id, "front"), tc->front_inertia_kgm2, tc->axis_local);
+        } else if (std::get_if<ParkLockDesc>(&c.params)) {
+            // I4 C10 (plan section 3.4): at most one park_lock per vehicle -
+            // same reasoning as transfer_case above (no per-instance channel/
+            // hash disambiguation for a second one).
+            if (park_lock_component_index >= 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': more than one park_lock component - I4 C10 supports at most one");
+            }
+            park_lock_component_index = static_cast<int>(ci);
+            // A pure friction-row node, no rotor-reaction axis of its own
+            // (it never carries a physical inertia beyond whatever port it
+            // shares its shaft with).
+            add_port(component_port_key(c.id, "shaft"), real(0.0), Vec3::zero());
         }
     }
 
@@ -657,6 +675,15 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         const NodeId tc_front_n = node_for_key(component_port_key(tcid, "front"));
         transfer_row_ = builder.add_friction_row(tc_in_n, tc_front_n);
     }
+    // I4 C10 (plan section 3.4): the park pawl's own friction row (shaft to
+    // GROUND), appended AFTER the transfer_case row above so no pre-existing
+    // vehicle's friction-row ids shift (car_sedan.json has no park_lock at
+    // all; tractor.json has no hash gate yet to preserve).
+    if (park_lock_component_index >= 0) {
+        const std::string& plid = pt.components[static_cast<std::size_t>(park_lock_component_index)].id;
+        const NodeId pl_shaft_n = node_for_key(component_port_key(plid, "shaft"));
+        park_lock_row_ = builder.add_friction_row(pl_shaft_n, kGround);
+    }
 
     // --- Phase H: brake friction rows --------------------------------------
     std::unordered_map<std::string, std::size_t> wheel_index_of_name;
@@ -1036,6 +1063,20 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                                                              channel_slot);
             transfer_case_ = transfer.get(); // non-owning alias, mirrors diffs_'s pattern
             components_.push_back(std::move(transfer));
+        } else if (const auto* pl = std::get_if<ParkLockDesc>(&c.params)) {
+            // I4 C10: channel_slot resolved the same way as transfer_case
+            // above - park_lock_row_ was already assigned in Phase G.
+            const std::vector<ChannelDecl> pl_decls = declare_control_channels(pt);
+            int channel_slot = -1;
+            for (std::size_t i = 0; i < pl_decls.size(); ++i) {
+                if (pl_decls[i].name == pl->channel) {
+                    channel_slot = static_cast<int>(i);
+                    break;
+                }
+            }
+            auto park = std::make_unique<ParkLock>(node_for_key(component_port_key(c.id, "shaft")), park_lock_row_, *pl, channel_slot);
+            park_lock_ = park.get(); // non-owning alias, mirrors transfer_case_'s pattern
+            components_.push_back(std::move(park));
         }
     }
     // Reconstruction modes resolved in Phase F (diffs_ is in the same

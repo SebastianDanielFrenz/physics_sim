@@ -115,13 +115,16 @@ const std::set<std::string> kExpectedBaseChannels = {
 };
 
 // tractor.json additionally declares a "transfer_case" component (PHYS-033
-// P4 I4 C9, MFWD) whose default channel name is "awd" - the one shipped
-// vehicle today with a non-empty declare_control_channels() result. Every
-// other entry is identical to kExpectedBaseChannels; car_sedan.json (no
-// transfer case) must still resolve to kExpectedBaseChannels UNCHANGED.
+// P4 I4 C9, MFWD) whose default channel name is "awd", and (I4 C10) a
+// "park_lock" component whose default channel name is "park_lock" - the one
+// shipped vehicle today with a non-empty declare_control_channels() result.
+// Every other entry is identical to kExpectedBaseChannels; car_sedan.json
+// (no transfer case, no park_lock) must still resolve to
+// kExpectedBaseChannels UNCHANGED.
 std::set<std::string> expected_tractor_channels() {
     std::set<std::string> s = kExpectedBaseChannels;
     s.insert("awd");
+    s.insert("park_lock");
     return s;
 }
 

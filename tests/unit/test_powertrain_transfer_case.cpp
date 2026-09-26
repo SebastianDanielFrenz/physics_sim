@@ -235,8 +235,14 @@ TEST_CASE("tractor.json's speedo path is bit-identical before and after the MFWD
         }
         if (!touches_removed) kept_shafts.push_back(s);
     }
+    // PHYS-033 P4 I4 C10: tractor.json's "park" park_lock component now
+    // shares this same physical shaft point ("park.shaft", alongside
+    // "gearbox.out"/"transfer.in") - carried over unchanged into the
+    // replacement direct shaft below so this pre-C9 reconstruction doesn't
+    // leave "park.shaft" dangling (unrelated to what this test itself
+    // measures: C9's own transfer_case/front_diff addition).
     drivetrain::ShaftDesc direct;
-    direct.ports = {{"gearbox", "out"}, {"diff", "carrier"}};
+    direct.ports = {{"gearbox", "out"}, {"diff", "carrier"}, {"park", "shaft"}};
     kept_shafts.push_back(direct);
     baseline.powertrain.shafts = kept_shafts;
 

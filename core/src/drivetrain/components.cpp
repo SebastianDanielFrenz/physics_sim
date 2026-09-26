@@ -347,6 +347,50 @@ std::uint64_t TransferCase::fold_state_hash(std::uint64_t seed) const {
     return h;
 }
 
+// --- ParkLock ----------------------------------------------------------------
+
+void ParkLock::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) {
+    const real cmd = (ctx.channels != nullptr && channel_slot_ >= 0 && channel_slot_ < ctx.channel_count)
+                         ? ctx.channels[channel_slot_]
+                         : real(0.0);
+    if (cmd < real(0.5)) {
+        engaged_ = false; // release is immediate, no ramp
+    } else if (!engaged_) {
+        // net.omega(shaft_) is the value ShaftNetwork::solve() left behind
+        // LAST substep (solve() has not run yet this substep) - "omega_old"
+        // in the spec's own words. Above max_engage_speed_rad_s the pawl
+        // ratchets: the request stays pending, re-checked every substep.
+        if (std::abs(net.omega(shaft_)) <= desc_.max_engage_speed_rad_s) {
+            engaged_ = true;
+        }
+    }
+    // else: already engaged and still requested - holds regardless of the
+    // speed the solve computes (the pawl is now clamping the shaft itself;
+    // it cannot spontaneously pop out mid-hold).
+
+    const real cap_kinetic = engaged_ ? desc_.capacity_nm : real(0.0);
+    const real cap_static = desc_.static_factor * cap_kinetic;
+    assembly.set_friction_capacity(row_, cap_static, cap_kinetic);
+}
+
+void ParkLock::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly&, PowertrainEnergy& ledger) {
+    const real v = net.row_velocity(row_);
+    const real lambda = net.row_lambda(row_);
+    // Same -h*v*lambda dissipation form as every other friction row in this
+    // file; booked into brake_loss per the spec (a park pawl is a brake).
+    ledger.brake_loss += -ctx.h * v * lambda;
+}
+
+std::uint64_t ParkLock::fold_state_hash(std::uint64_t seed) const {
+    // Only `engaged_` is persistent, hash-relevant state - pending is
+    // recomputed every substep from the channel + the network's own
+    // (already-hashed) omega, exactly like DiffLockDesc's lock_pending_.
+    std::uint64_t h = seed;
+    h ^= engaged_ ? std::uint64_t(1) : std::uint64_t(0);
+    h *= 1099511628211ULL;
+    return h;
+}
+
 // --- DirectTorqueBrakes ------------------------------------------------------
 
 void DirectTorqueBrakes::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork&, Assembly& assembly) {
