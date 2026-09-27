@@ -10,6 +10,7 @@ namespace ps::jobs {
 
 namespace {
 thread_local int t_worker_index = -1; // -1: not a worker thread
+thread_local const JobSystem* t_lane_owner = nullptr; // non-null: a background-lane thread of that pool
 }
 
 JobSystem::JobSystem(int num_workers, std::size_t queue_capacity)
@@ -19,6 +20,7 @@ JobSystem::JobSystem(int num_workers, std::size_t queue_capacity)
         num_workers = std::max(1, physical - 2);
     }
     const std::size_t cap = queue_capacity != 0 ? queue_capacity : kDefaultQueueCapacity;
+    queue_capacity_ = cap;
     deques_.reserve(static_cast<std::size_t>(num_workers));
     for (int i = 0; i < num_workers; ++i) deques_.push_back(std::make_unique<WorkerQueue>(cap));
     stats_ = std::vector<WorkerStats>(static_cast<std::size_t>(num_workers));
@@ -29,6 +31,9 @@ JobSystem::JobSystem(int num_workers, std::size_t queue_capacity)
 }
 
 JobSystem::~JobSystem() {
+    // Lane first: a lane job may (in principle) submit tick work to the
+    // workers; stopping the lane before the workers keeps that well-defined.
+    stop_background_lane();
     shutdown_.store(true, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(wake_m_);
@@ -94,6 +99,10 @@ bool JobSystem::try_pop_injector(JobEntry& out) {
 }
 
 void JobSystem::run_job(JobEntry& job, bool counts_toward_pending) {
+    run_job_counted(job, counts_toward_pending ? &pending_ : nullptr);
+}
+
+void JobSystem::run_job_counted(JobEntry& job, std::atomic<long>* pending_counter) {
     const auto t0 = std::chrono::steady_clock::now();
     debug_alloc::enter_job();
     job.fn();
@@ -109,7 +118,7 @@ void JobSystem::run_job(JobEntry& job, bool counts_toward_pending) {
     // drive pending_ permanently negative and break drain_idle()'s "no work
     // left in flight" contract (see JoltRigidBackend's destructor comment
     // for why that must stay correct).
-    if (counts_toward_pending) pending_.fetch_sub(1, std::memory_order_acq_rel);
+    if (pending_counter) pending_counter->fetch_sub(1, std::memory_order_acq_rel);
     if (job.group) {
         job.group->remaining.fetch_sub(1, std::memory_order_acq_rel);
     }
@@ -210,6 +219,70 @@ std::uint64_t JobSystem::worker_busy_ns(int worker_index) const {
 
 void JobSystem::reset_worker_stats() {
     for (auto& s : stats_) s.busy_ns.store(0, std::memory_order_relaxed);
+}
+
+void JobSystem::start_background_lane(int num_threads) {
+    if (!bg_threads_.empty()) return;
+    if (num_threads <= 0) num_threads = 1;
+    bg_queue_ = std::make_unique<RingQueue>(queue_capacity_);
+    bg_threads_.reserve(static_cast<std::size_t>(num_threads));
+    for (int i = 0; i < num_threads; ++i) {
+        bg_threads_.emplace_back([this] { background_loop(); });
+    }
+}
+
+bool JobSystem::submit_background(JobFn fn) {
+    if (bg_threads_.empty()) return false;
+    JobEntry entry{std::move(fn), nullptr};
+    // Counted before it becomes visible to a lane thread, so
+    // drain_background() can never observe 0 while this job is queued.
+    bg_pending_.fetch_add(1, std::memory_order_acq_rel);
+    bool queued;
+    {
+        std::lock_guard<std::mutex> lock(bg_m_);
+        queued = !bg_shutdown_ && bg_queue_->push_back(std::move(entry));
+    }
+    if (!queued) {
+        bg_pending_.fetch_sub(1, std::memory_order_acq_rel);
+        return false;
+    }
+    bg_cv_.notify_one();
+    return true;
+}
+
+void JobSystem::background_loop() {
+    t_lane_owner = this;
+    JobEntry job;
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(bg_m_);
+            bg_cv_.wait(lock, [this] { return bg_shutdown_ || !bg_queue_->empty(); });
+            if (bg_shutdown_) return; // queued jobs are discarded, see the header
+            (void)bg_queue_->pop_front(job);
+        }
+        run_job_counted(job, &bg_pending_);
+    }
+}
+
+void JobSystem::drain_background() {
+    assert(!on_background_lane() && "drain_background() from a lane thread would wait on itself");
+    while (bg_pending_.load(std::memory_order_acquire) > 0) {
+        std::this_thread::yield();
+    }
+}
+
+bool JobSystem::on_background_lane() const { return t_lane_owner == this; }
+
+void JobSystem::stop_background_lane() {
+    if (bg_threads_.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(bg_m_);
+        bg_shutdown_ = true;
+    }
+    bg_cv_.notify_all();
+    for (auto& t : bg_threads_) {
+        if (t.joinable()) t.join();
+    }
 }
 
 } // namespace ps::jobs

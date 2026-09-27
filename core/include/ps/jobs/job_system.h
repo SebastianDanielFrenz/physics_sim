@@ -142,6 +142,44 @@ public:
     [[nodiscard]] std::uint64_t worker_busy_ns(int worker_index) const;
     void reset_worker_stats();
 
+    // --- Background lane (terrain prefetch ring, PLAN.md D8) ---------------
+    // A separate set of lane threads, owned by this JobSystem (so the core
+    // still creates no threads of its own outside ps::jobs), that runs ONLY
+    // jobs handed to submit_background(). The lane has its own queue: a
+    // worker, a nested wait() and parallel_for never pop, steal or run a
+    // lane job, so a multi-millisecond background build can never land
+    // inside a tick's critical path, and lane threads never run tick jobs.
+    // Lane threads are not counted in worker_count() and do not feed
+    // worker_busy_ns(). Lane jobs go through the same run_job path as tick
+    // jobs, so debug_alloc sees an allocation inside one exactly like one
+    // inside a worker job. drain_idle() ignores the lane (separate pending
+    // counter); drain_background() is its lane-side counterpart.
+    //
+    // start_background_lane: setup only (allocates the lane queue and
+    // threads) - call it before the first submit_background, never while
+    // lane jobs could be in flight. A second call is a no-op. n <= 0 -> 1.
+    void start_background_lane(int num_threads = 1);
+    [[nodiscard]] bool background_lane_started() const { return !bg_threads_.empty(); }
+    [[nodiscard]] int background_lane_thread_count() const { return static_cast<int>(bg_threads_.size()); }
+    // Queues fn on the lane. Allocation-free (fixed ring, capacity = this
+    // pool's queue capacity). Returns false - and does NOT run fn - if the
+    // lane was never started or its queue is full; the caller keeps
+    // ownership of whatever work fn stood for (unlike submit(), there is no
+    // inline fallback: a background job must never run on the tick thread
+    // by surprise).
+    [[nodiscard]] bool submit_background(JobFn fn);
+    // Blocks (spin + yield, like wait()) until every lane job submitted so
+    // far has finished executing. Must not be called from a lane thread.
+    // Returns immediately if the lane was never started.
+    void drain_background();
+    // True if called from one of this pool's background-lane threads.
+    [[nodiscard]] bool on_background_lane() const;
+    // Destruction: the lane is stopped first (before the workers). A lane
+    // job already running finishes; lane jobs still QUEUED are discarded
+    // unrun (JobFn is trivially copyable, so discarding one frees nothing).
+    // Owners of lane work (TileManager) drain_background() before their own
+    // teardown, so nothing they own is ever referenced by a discarded job.
+
 private:
     struct JobEntry {
         JobFn fn;
@@ -219,6 +257,12 @@ private:
     bool try_steal(int index, JobEntry& out);
     bool try_pop_injector(JobEntry& out);
     void run_job(JobEntry& job, bool counts_toward_pending = true);
+    // run_job's core: decrements *pending_counter (if non-null) once the job
+    // has finished - &pending_ for tick jobs, &bg_pending_ for lane jobs,
+    // nullptr for submit()'s queue-full inline fallback.
+    void run_job_counted(JobEntry& job, std::atomic<long>* pending_counter);
+    void background_loop();
+    void stop_background_lane();
 
     std::vector<std::thread> workers_;
     // unique_ptr indirection (not WorkerQueue directly): WorkerQueue holds a
@@ -247,6 +291,16 @@ private:
 #pragma warning(pop)
 #endif
     std::vector<WorkerStats> stats_;
+
+    // Background lane (start_background_lane). bg_queue_ is created by
+    // start_background_lane and guarded by bg_m_; bg_cv_ wakes lane threads.
+    std::size_t queue_capacity_ = kDefaultQueueCapacity;
+    std::vector<std::thread> bg_threads_;
+    std::unique_ptr<RingQueue> bg_queue_;
+    std::mutex bg_m_;
+    std::condition_variable bg_cv_;
+    std::atomic<long> bg_pending_{0};
+    bool bg_shutdown_ = false; // guarded by bg_m_
 };
 
 } // namespace ps::jobs

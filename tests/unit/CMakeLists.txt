@@ -6,6 +6,7 @@ add_executable(ps_unit_tests
   test_hello.cpp
   test_math.cpp
   test_jobs.cpp
+  test_job_background_lane.cpp
   test_world_basic.cpp
   test_body_integration_params.cpp
   test_world_snapshot.cpp
