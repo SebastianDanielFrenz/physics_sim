@@ -253,10 +253,14 @@ function Invoke-WindowsLeg {
     Add-Result -Leg $Preset -Stage 'configure' -Pass $configOk -Seconds $t.TotalSeconds
     if (-not $configOk) { return }
 
-    $t = Measure-Command { & cmake --build --preset $Preset }
+    $t = Measure-Command { $script:buildOut = & cmake --build --preset $Preset 2>&1 }
     $buildOk = ($LASTEXITCODE -eq 0)
     Add-Result -Leg $Preset -Stage 'build' -Pass $buildOk -Seconds $t.TotalSeconds
-    if (-not $buildOk) { return }
+    if (-not $buildOk) {
+        Write-Host "  build FAILED - last 60 lines of its output:" -ForegroundColor Red
+        Write-Host (($script:buildOut | Select-Object -Last 60) -join "`n")
+        return
+    }
     if ($BuildOnly) {
         # Compiler coverage only (msvc-release in the default run): no ctest,
         # and not in $script:BuiltLegs, so phase B skips it too.
@@ -297,11 +301,15 @@ function Invoke-WslLeg {
     Add-Result -Leg $Preset -Stage 'configure' -Pass $configOk -Seconds $t.TotalSeconds
     if (-not $configOk) { return }
 
-    $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --build --preset $Preset"
-    $t = Measure-Command { wsl --cd ~ -- bash -lc $cmd }
+    $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --build --preset $Preset 2>&1"
+    $t = Measure-Command { $script:buildOut = wsl --cd ~ -- bash -lc $cmd }
     $buildOk = ($LASTEXITCODE -eq 0)
     Add-Result -Leg $Preset -Stage 'build' -Pass $buildOk -Seconds $t.TotalSeconds
-    if (-not $buildOk) { return }
+    if (-not $buildOk) {
+        Write-Host "  build FAILED - last 60 lines of its output:" -ForegroundColor Red
+        Write-Host (($script:buildOut | Select-Object -Last 60) -join "`n")
+        return
+    }
     $script:BuiltLegs.Add([pscustomobject]@{ Preset = $Preset; Kind = 'wsl' })
 
     # Quote each arg for the bash -lc string below - the label regex itself
@@ -516,6 +524,13 @@ function Invoke-CrossPlatformHashCheck {
     Write-Host ""
     Write-Host "=== Cross-platform state-hash comparison (Windows vs Linux, PLAN.md D7) ===" -ForegroundColor Cyan
 
+    # A failed release/linux-release build (or ps_run-only build) this run
+    # leaves an OLD ps_run on disk: comparing it would "pass" on stale code.
+    $staleSide = $script:Results | Where-Object { $_.Leg -in @('release', 'linux-release') -and $_.Stage -in @('configure', 'build', 'ps_run') -and -not $_.Pass } | Select-Object -First 1
+    if ($staleSide) {
+        Add-Result -Leg 'hash-compare' -Stage 'compare' -Pass $false -Detail "not run: $($staleSide.Leg) $($staleSide.Stage) failed this run, its ps_run would be stale"
+        return
+    }
     $winPsRun = Join-Path $repoRoot 'out\build\release\tools\ps_run\ps_run.exe'
     if (-not (Test-Path $winPsRun)) {
         Add-Result -Leg 'hash-compare' -Stage 'compare' -Pass $true -Detail 'skipped: no Windows release ps_run.exe (leg not built this run)'
@@ -601,11 +616,15 @@ function Invoke-WslSanitizerPair {
         $ok = ($LASTEXITCODE -eq 0)
         Add-Result -Leg $preset -Stage 'configure' -Pass $ok -Seconds $t.TotalSeconds
         if (-not $ok) { continue }
-        $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --build --preset $preset"
-        $t = Measure-Command { wsl --cd ~ -- bash -lc $cmd }
+        $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --build --preset $preset 2>&1"
+        $t = Measure-Command { $script:buildOut = wsl --cd ~ -- bash -lc $cmd }
         $ok = ($LASTEXITCODE -eq 0)
         Add-Result -Leg $preset -Stage 'build' -Pass $ok -Seconds $t.TotalSeconds
-        if (-not $ok) { continue }
+        if (-not $ok) {
+            Write-Host "  build FAILED - last 60 lines of its output:" -ForegroundColor Red
+            Write-Host (($script:buildOut | Select-Object -Last 60) -join "`n")
+            continue
+        }
         $script:BuiltLegs.Add([pscustomobject]@{ Preset = $preset; Kind = 'wsl' })
         $ready += $preset
         $prep[$preset] = ((Get-Date) - $legStart).TotalSeconds
