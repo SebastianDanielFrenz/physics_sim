@@ -485,6 +485,16 @@ TEST_CASE("Fix 3 F2: fuel flow matches the map at pre-solve rpm/theta_c through 
 
     WorldRig rig = make_world_rig_1to1(fueled_desc, /*gear=*/0);
 
+    // Prime the snapshot: World::powertrain_state()'s engine_rpm/load/fuel_flow_g_s
+    // fields are all default-constructed (0) until stage_snapshot() has run at least
+    // once, so reading engine_rpm BEFORE any step() at all would see 0 regardless of
+    // the real initial crank omega VehicleResetOptions/Powertrain construction set up
+    // - not "the omega the upcoming substep's pre_solve will actually use". One
+    // throttle-0 warm-up step (not part of the measured loop/its saw_*/max_rel_err
+    // bookkeeping) makes the very first measured iteration's "rpm_before" read valid.
+    rig.world->set_control("throttle", 0.0);
+    rig.world->step();
+
     constexpr int kRevTicks = 200;    // ~0.208 s WOT free-rev (no wheel load)
     constexpr int kSettleTicks = 3000; // ~3.125 s coast: DFCO then idle-PI settle
     const real rpm_start = rig.world->powertrain_state(rig.vehicle).engine_rpm;
