@@ -228,6 +228,58 @@ void run_for_n(std::uint32_t n, int kSamples) {
     Stats ii = summarize(update_ms);
     std::printf("  U (proxy, create_body median) - I (update_heightfield_body median) = %.4f ms\n",
                 u.median - ii.median);
+
+    // C2: the Option A install path, measured in a world holding a 7x7
+    // resident set of pool heightfield bodies built from TileManager's own
+    // +-200 m placeholder (the pool a swap targets in production):
+    //   (u) update_heightfield_body + set_pose - today's in-tick upload
+    //   (k) build_heightfield_spare            - moves to the background lane
+    //   (l) swap_heightfield_spare + set_pose  - the new in-tick install
+    ps::HeightfieldShape pool_hf = placeholder;
+    pool_hf.heights.front() = -200.0;
+    pool_hf.heights.back() = 200.0;
+    ps::BodyDesc pool7_desc;
+    pool7_desc.shape = pool_hf;
+    pool7_desc.motion = ps::BodyMotionType::Static;
+    std::vector<ps::BodyId> pool7;
+    for (int gy = 0; gy < 7; ++gy) {
+        for (int gx = 0; gx < 7; ++gx) {
+            pool7_desc.pose.position = ps::Vec3{gx * 255.0, gy * 255.0, 0.0};
+            pool7.push_back(backend->create_body(pool7_desc));
+        }
+    }
+    const ps::HeightfieldSpareId spare = backend->create_heightfield_spare(pool_hf);
+    auto ctx = backend->create_heightfield_build_context(n);
+    std::vector<double> u_ms, k_ms, l_ms;
+    for (int i = 0; i < kSamples; ++i) {
+        auto key = source.key_offset(source.key_for_world_xy(0, 0), i, 0);
+        source.fill_tile(key, sample);
+        const std::size_t slot = static_cast<std::size_t>(i) % pool7.size();
+        const ps::BodyId target = pool7[slot];
+        ps::Pose pose;
+        pose.position = ps::Vec3{static_cast<double>(slot % 7) * 255.0, static_cast<double>(slot / 7) * 255.0, 0.0};
+
+        auto t0 = Clock::now();
+        backend->update_heightfield_body(target, sample.heights, sample.cell_surface_ids);
+        backend->set_pose(target, pose);
+        u_ms.push_back(ms_since(t0));
+
+        t0 = Clock::now();
+        backend->build_heightfield_spare(spare, sample.heights, sample.cell_surface_ids, *ctx);
+        k_ms.push_back(ms_since(t0));
+
+        t0 = Clock::now();
+        backend->swap_heightfield_spare(target, spare);
+        backend->set_pose(target, pose);
+        l_ms.push_back(ms_since(t0));
+    }
+    backend->destroy_heightfield_spare(spare);
+    for (auto id : pool7) backend->destroy_body(id);
+    print_row("(u) update_heightfield_body+set_pose, 49 pool", summarize(u_ms));
+    print_row("(k) build_heightfield_spare (off-tick)", summarize(k_ms));
+    print_row("(l) swap_heightfield_spare+set_pose (in-tick)", summarize(l_ms));
+    std::printf("  in-tick saving per tile (median u - median l) = %.4f ms\n",
+                summarize(u_ms).median - summarize(l_ms).median);
 }
 
 } // namespace

@@ -182,6 +182,19 @@ struct BodyIntegrationParams {
     bool gyroscopic = false;
 };
 
+// Terrain prefetch ring (IRigidBackend's heightfield spare API below): an
+// opaque handle to a detached HeightfieldShape (no body references it while
+// it is a spare) and an opaque per-builder-thread scratch context.
+struct HeightfieldSpareId {
+    std::uint32_t index = 0xFFFFFFFFu;
+    [[nodiscard]] constexpr bool valid() const { return index != 0xFFFFFFFFu; }
+    constexpr bool operator==(const HeightfieldSpareId&) const = default;
+};
+class IHeightfieldBuildContext {
+public:
+    virtual ~IHeightfieldBuildContext() = default;
+};
+
 class IRigidBackend {
 public:
     virtual ~IRigidBackend() = default;
@@ -262,6 +275,53 @@ public:
     // body created with a HeightfieldShape; behaviour is otherwise
     // undefined.
     virtual void update_heightfield_body(BodyId id, const std::vector<real>& heights, const std::vector<SurfaceId>& cell_surface_ids) = 0;
+
+    // Terrain prefetch ring (owner-approved 2026-09-27): build a tile's
+    // heightfield content OFF the tick, then install it in the tick with a
+    // pointer swap instead of update_heightfield_body's in-tick upload.
+    //
+    // A SPARE is a detached heightfield shape, created at load time
+    // (allocates) from a desc that must be identical to the one the pool
+    // bodies it will be swapped into were created from (same sample_count,
+    // sample_spacing, origin and placeholder heights - the placeholder fixes
+    // Jolt's quantisation range, see ps/terrain/terrain_source.h's TileSample
+    // comment). create/destroy_heightfield_spare must not run concurrently
+    // with any build_heightfield_spare call.
+    //
+    // build_heightfield_spare writes `heights`/`cell_surface_ids` into the
+    // spare exactly like update_heightfield_body writes into a body's shape
+    // (same row reversal, same SetHeights/SetMaterials calls), using only the
+    // caller's own build context - safe on ANY thread, concurrently with the
+    // backend's own step and with builds of OTHER spares, as long as the
+    // spare is not being swapped at the same time. Allocation-free once the
+    // context exists. The result is a pure function of the inputs (the
+    // spare's previous content does not matter - tests/unit/
+    // test_heightfield_spare.cpp pins this through debug_heightfield_digest).
+    //
+    // swap_heightfield_spare(body, spare) (sim thread, between steps or in
+    // the terrain_tiles stage, never during step) exchanges the body's
+    // heightfield with the spare's: the body now carries the freshly built
+    // shape, the spare handle now holds the body's previous shape (kept
+    // alive, never freed here - no deallocation in the tick). It does NOT
+    // notify the broadphase; the caller must follow it with set_pose (the
+    // same call update_heightfield_body's callers already make), which
+    // recomputes the world bounds and notifies once - exactly today's
+    // update_heightfield_body + set_pose sequence, so state_hash, contact
+    // order and every query result are identical to the in-tick upload.
+    [[nodiscard]] virtual HeightfieldSpareId create_heightfield_spare(const HeightfieldShape& desc) = 0;
+    virtual void destroy_heightfield_spare(HeightfieldSpareId spare) = 0;
+    // One per builder thread; owns its own Jolt temp allocator and conversion
+    // scratch for tiles of `sample_count` samples per edge (allocates).
+    [[nodiscard]] virtual std::unique_ptr<IHeightfieldBuildContext> create_heightfield_build_context(std::uint32_t sample_count) = 0;
+    virtual void build_heightfield_spare(HeightfieldSpareId spare, const std::vector<real>& heights, const std::vector<SurfaceId>& cell_surface_ids,
+                                         IHeightfieldBuildContext& ctx) = 0;
+    virtual void swap_heightfield_spare(BodyId id, HeightfieldSpareId spare) = 0;
+    // Test-only (allocation-free, but not meant for the tick): FNV-1a over
+    // Jolt's own binary serialisation of the body's (or spare's) inner
+    // HeightFieldShape - every quantised sample, range block, active-edge
+    // bit and material index - plus its material list's surface ids.
+    [[nodiscard]] virtual std::uint64_t debug_heightfield_digest(BodyId id) const = 0;
+    [[nodiscard]] virtual std::uint64_t debug_heightfield_spare_digest(HeightfieldSpareId spare) const = 0;
 
     // Queried fresh every call, never cached by a caller (PLAN.md section 6:
     // mass properties come from the body every tick, ready for a future

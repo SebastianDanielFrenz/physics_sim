@@ -20,6 +20,7 @@ add_executable(ps_unit_tests
   test_articulation_hinge_guard.cpp
   test_articulation_contact.cpp
   test_mesh_heightfield_shapes.cpp
+  test_heightfield_spare.cpp
   test_terrain_golden.cpp
   test_terrain_tile_manager.cpp
   test_terrain_static_overlap.cpp

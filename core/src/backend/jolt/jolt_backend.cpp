@@ -12,6 +12,7 @@
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/Memory.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Core/StreamOut.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -436,6 +437,77 @@ std::uint64_t fnv1a(std::uint64_t h, const void* data, std::size_t n) {
 }
 template <typename T>
 std::uint64_t fnv1a_val(std::uint64_t h, const T& v) { return fnv1a(h, &v, sizeof(T)); }
+
+// A JPH::StreamOut that folds every written byte into an FNV-1a hash instead
+// of storing it - debug_heightfield_digest's allocation-free sink for Jolt's
+// own HeightFieldShape::SaveBinaryState.
+class FnvStreamOut final : public JPH::StreamOut {
+public:
+    explicit FnvStreamOut(std::uint64_t seed) : h_(seed) {}
+    void WriteBytes(const void* data, std::size_t n) override { h_ = fnv1a(h_, data, n); }
+    bool IsFailed() const override { return false; }
+    std::uint64_t hash() const { return h_; }
+
+private:
+    std::uint64_t h_;
+};
+
+// Digest of one inner HeightFieldShape: Jolt's own binary serialisation
+// (offset/scale/sample count/quantisation range, every range block, height
+// sample and active-edge bit, the material index bits) plus the surface id
+// behind each entry of its material list, in list order.
+std::uint64_t heightfield_digest(const JPH::HeightFieldShape& hf) {
+    FnvStreamOut out(1469598103934665603ULL);
+    hf.SaveBinaryState(out);
+    std::uint64_t h = out.hash();
+    const JPH::PhysicsMaterialList& mats = hf.GetMaterialList();
+    h = fnv1a_val(h, static_cast<std::uint64_t>(mats.size()));
+    for (const JPH::PhysicsMaterial* m : mats) h = fnv1a_val(h, surface_id_from_material(m));
+    return h;
+}
+
+// The one content-write sequence for a heightfield shape, shared by
+// update_heightfield_body (in-tick, backend scratch + temp allocator) and
+// build_heightfield_spare (any thread, the caller's own build context), so
+// the two paths cannot drift apart. `height_scratch`/`material_scratch`
+// grow once to the tile size and never shrink.
+void write_heightfield_content(JPH::HeightFieldShape& hf, const std::vector<real>& heights, const std::vector<SurfaceId>& cell_surface_ids,
+                               std::vector<float>& height_scratch, std::vector<std::uint8_t>& material_scratch, JPH::TempAllocator& temp) {
+    const std::uint32_t n = hf.GetSampleCount();
+    assert(heights.size() == static_cast<std::size_t>(n) * n);
+
+    // Row-reversed the same way as creation (reverse_heightfield_rows_into's
+    // comment / kHeightfieldYupToZup's comment) - content must keep
+    // matching the fixed wrapper rotation/position baked in at creation.
+    if (height_scratch.size() < heights.size()) height_scratch.resize(heights.size());
+    reverse_heightfield_rows_into(heights, n, height_scratch.data());
+    hf.SetHeights(0, 0, n, n, height_scratch.data(), static_cast<std::ptrdiff_t>(n), temp);
+
+    const std::size_t cell_count = (n >= 1) ? static_cast<std::size_t>(n - 1) * (n - 1) : 0;
+    if (material_scratch.size() < cell_count) material_scratch.resize(cell_count);
+    reverse_heightfield_material_rows_into(cell_surface_ids, n >= 1 ? n - 1 : 0, material_scratch.data());
+    if (cell_count > 0) {
+        hf.SetMaterials(0, 0, n - 1, n - 1, material_scratch.data(), static_cast<std::ptrdiff_t>(n - 1), nullptr, temp);
+    }
+}
+
+// IRigidBackend::create_heightfield_build_context's concrete type: one per
+// builder thread. The temp allocator only ever serves SetHeights'
+// active-edge normals block (<= 2*45*45*sizeof(Vec3), ~64 KB, see Jolt's
+// HeightFieldShape::CalculateActiveEdges) and SetMaterials' 256-byte remap
+// table - never a full-tile temp copy, since a whole-tile SetHeights has no
+// neighbouring block to re-read - so 256 KB covers every sample count with
+// a wide margin.
+class JoltHeightfieldBuildContext final : public IHeightfieldBuildContext {
+public:
+    explicit JoltHeightfieldBuildContext(std::uint32_t sample_count)
+        : temp(256 * 1024),
+          heights(static_cast<std::size_t>(sample_count) * sample_count),
+          materials(sample_count >= 1 ? static_cast<std::size_t>(sample_count - 1) * (sample_count - 1) : 0) {}
+    JPH::TempAllocatorImpl temp;
+    std::vector<float> heights;
+    std::vector<std::uint8_t> materials;
+};
 
 // Registered exactly once per process (RegisterTypes touches process-global
 // Jolt state); every JoltRigidBackend instance shares it.
@@ -995,22 +1067,84 @@ public:
         (void)lookup(id); // validates the id (asserts on stale/invalid)
         JPH::HeightFieldShape* hf = slots_[id.index].heightfield;
         assert(hf && "update_heightfield_body called on a body without a heightfield shape");
-        const std::uint32_t n = hf->GetSampleCount();
-        assert(heights.size() == static_cast<std::size_t>(n) * n);
+        write_heightfield_content(*hf, heights, cell_surface_ids, heightfield_height_scratch_, heightfield_material_scratch_, *temp_allocator_);
+    }
 
-        // Row-reversed the same way as creation (reverse_heightfield_rows_into's
-        // comment / kHeightfieldYupToZup's comment) - content must keep
-        // matching the fixed wrapper rotation/position baked in at creation.
-        if (heightfield_height_scratch_.size() < heights.size()) heightfield_height_scratch_.resize(heights.size());
-        reverse_heightfield_rows_into(heights, n, heightfield_height_scratch_.data());
-        hf->SetHeights(0, 0, n, n, heightfield_height_scratch_.data(), static_cast<std::ptrdiff_t>(n), *temp_allocator_);
-
-        const std::size_t cell_count = (n >= 1) ? static_cast<std::size_t>(n - 1) * (n - 1) : 0;
-        if (heightfield_material_scratch_.size() < cell_count) heightfield_material_scratch_.resize(cell_count);
-        reverse_heightfield_material_rows_into(cell_surface_ids, n >= 1 ? n - 1 : 0, heightfield_material_scratch_.data());
-        if (cell_count > 0) {
-            hf->SetMaterials(0, 0, n - 1, n - 1, heightfield_material_scratch_.data(), static_cast<std::ptrdiff_t>(n - 1), nullptr, *temp_allocator_);
+    // --- Terrain prefetch ring: detached spare heightfields (see
+    // i_rigid_backend.h's doc comment on create_heightfield_spare). ---
+    HeightfieldSpareId create_heightfield_spare(const HeightfieldShape& desc) override {
+        // Exactly create_body's heightfield branch minus the body, so a
+        // spare's inner shape is byte-identical to a pool body's created
+        // from the same desc (same quantisation range, same material list).
+        JPH::RefConst<JPH::HeightFieldShape> inner = make_inner_heightfield(desc);
+        Spare sp;
+        sp.inner = const_cast<JPH::HeightFieldShape*>(inner.GetPtr());
+        sp.wrapper = JPH::RefConst<JPH::Shape>(new JPH::RotatedTranslatedShape(heightfield_wrapper_position(desc), kHeightfieldYupToZup, inner.GetPtr()));
+        sp.alive = true;
+        if (!spare_free_list_.empty()) {
+            const std::uint32_t idx = spare_free_list_.back();
+            spare_free_list_.pop_back();
+            spares_[idx] = std::move(sp);
+            return HeightfieldSpareId{idx};
         }
+        spares_.push_back(std::move(sp));
+        return HeightfieldSpareId{static_cast<std::uint32_t>(spares_.size() - 1)};
+    }
+
+    void destroy_heightfield_spare(HeightfieldSpareId spare) override {
+        assert(spare.index < spares_.size() && spares_[spare.index].alive && "stale or invalid HeightfieldSpareId");
+        spares_[spare.index] = Spare{};
+        spare_free_list_.push_back(spare.index);
+    }
+
+    std::unique_ptr<IHeightfieldBuildContext> create_heightfield_build_context(std::uint32_t sample_count) override {
+        return std::make_unique<JoltHeightfieldBuildContext>(sample_count);
+    }
+
+    // Reads only spares_[spare.index] (never resized while builds run - see
+    // the interface's contract) and the caller's own context: no other
+    // backend member is touched, so this is safe on any thread concurrently
+    // with step() and with other spares' builds.
+    void build_heightfield_spare(HeightfieldSpareId spare, const std::vector<real>& heights, const std::vector<SurfaceId>& cell_surface_ids,
+                                 IHeightfieldBuildContext& ctx) override {
+        assert(spare.index < spares_.size() && spares_[spare.index].alive && "stale or invalid HeightfieldSpareId");
+        auto& c = static_cast<JoltHeightfieldBuildContext&>(ctx);
+        write_heightfield_content(*spares_[spare.index].inner, heights, cell_surface_ids, c.heights, c.materials, c.temp);
+    }
+
+    void swap_heightfield_spare(BodyId id, HeightfieldSpareId spare) override {
+        const JPH::BodyID jid = lookup(id);
+        Slot& slot = slots_[id.index];
+        assert(spare.index < spares_.size() && spares_[spare.index].alive && "stale or invalid HeightfieldSpareId");
+        Spare& sp = spares_[spare.index];
+        assert(slot.heightfield && "swap_heightfield_spare called on a body without a heightfield shape");
+        assert(slot.heightfield->GetSampleCount() == sp.inner->GetSampleCount());
+        JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(jid);
+        assert(body != nullptr);
+        // Keep the body's current wrapper alive in the spare (a refcount
+        // bump, no allocation, nothing freed here).
+        JPH::RefConst<JPH::Shape> previous(body->GetShape());
+        // Every wrapper built from the same desc has the same centre of
+        // mass (the wrapper position), so SetShapeInternal moves nothing;
+        // no mass update (static body), no broadphase notify - the
+        // caller's set_pose recomputes bounds and notifies once, exactly as
+        // after update_heightfield_body.
+        assert(previous->GetCenterOfMass() == sp.wrapper->GetCenterOfMass() && "spare built from a different HeightfieldShape desc than the body");
+        body->SetShapeInternal(sp.wrapper.GetPtr(), false);
+        sp.wrapper = std::move(previous);
+        std::swap(slot.heightfield, sp.inner);
+    }
+
+    std::uint64_t debug_heightfield_digest(BodyId id) const override {
+        (void)lookup(id);
+        const JPH::HeightFieldShape* hf = slots_[id.index].heightfield;
+        assert(hf && "debug_heightfield_digest called on a body without a heightfield shape");
+        return heightfield_digest(*hf);
+    }
+
+    std::uint64_t debug_heightfield_spare_digest(HeightfieldSpareId spare) const override {
+        assert(spare.index < spares_.size() && spares_[spare.index].alive && "stale or invalid HeightfieldSpareId");
+        return heightfield_digest(*spares_[spare.index].inner);
     }
 
     real get_mass(BodyId id) const override {
@@ -1254,6 +1388,14 @@ private:
         JPH::Ref<JPH::Constraint> constraint;
         bool alive = false;
     };
+    // A detached heightfield (create_heightfield_spare): `wrapper` owns the
+    // RotatedTranslatedShape (and through it `inner`); after a swap it holds
+    // whichever shape the body carried before.
+    struct Spare {
+        JPH::RefConst<JPH::Shape> wrapper;
+        JPH::HeightFieldShape* inner = nullptr;
+        bool alive = false;
+    };
 
     // PhysicsSystem's SimCollideBodyVsBody hook (installed in the
     // constructor), called from Jolt's narrow-phase jobs during Update.
@@ -1395,6 +1537,12 @@ private:
     // method's comment.
     std::vector<float> heightfield_height_scratch_;
     std::vector<std::uint8_t> heightfield_material_scratch_;
+
+    // Terrain prefetch ring spares (create_heightfield_spare). Declared
+    // after physics_system_, so destroyed before it - they are plain shapes
+    // no body references, independent of the physics system.
+    std::vector<Spare> spares_;
+    std::vector<std::uint32_t> spare_free_list_;
 };
 
 } // namespace
