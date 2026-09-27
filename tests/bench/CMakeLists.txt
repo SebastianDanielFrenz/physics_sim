@@ -160,3 +160,19 @@ target_link_libraries(bench_audio_voice
     ps_warnings
     ps_options
 )
+
+# diag_terrain_build_split - PHYS terrain-prefetch-ring plan, commit C0's
+# measurement gate (see diag_terrain_build_split.cpp's own header comment).
+# Deliberately NOT registered with add_test/CTest, same reason as
+# ps_energy_study above: a one-shot measurement tool, not a pass/fail test.
+add_executable(diag_terrain_build_split diag_terrain_build_split.cpp)
+
+target_include_directories(diag_terrain_build_split PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+
+target_link_libraries(diag_terrain_build_split
+  PRIVATE
+    ps_core
+    ps_headless_env
+    ps_warnings
+    ps_options
+)
