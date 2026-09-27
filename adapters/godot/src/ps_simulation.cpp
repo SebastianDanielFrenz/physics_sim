@@ -779,6 +779,29 @@ Dictionary PsSimulation::get_vehicle_powertrain(const String& vehicle_name) cons
     d["assist_auto_clutch"] = (p.assist_active_bits & 1u) != 0;
     d["assist_auto_blip"] = (p.assist_active_bits & 2u) != 0;
     d["assist_auto_shift"] = (p.assist_active_bits & 4u) != 0;
+
+    // Tractor demo (2026-09-28): fields that are 0/empty for a vehicle with
+    // no such drivetrain component (car_sedan) - see CLAUDE.md's "Adapter
+    // seams" for each field's own PowertrainSnapshot contract.
+    d["awd_engagement"] = static_cast<float>(p.awd_engagement);
+    d["park_lock_engaged"] = p.park_lock_engaged != 0.0;
+    d["pto_engagement"] = static_cast<float>(p.pto_engagement);
+    d["pto_mode"] = static_cast<float>(p.pto_mode);
+    d["pto_rpm"] = static_cast<float>(p.pto_rpm);
+    d["governor_setpoint_rpm"] = static_cast<float>(p.governor_setpoint_rpm);
+    d["hand_throttle"] = static_cast<float>(p.hand_throttle);
+
+    TypedArray<Dictionary> diffs;
+    for (int i = 0; i < static_cast<int>(p.diff_count); ++i) {
+        const ps::drivetrain::DiffSnapshot& ds = p.diffs[static_cast<std::size_t>(i)];
+        Dictionary dd;
+        dd["bias"] = static_cast<float>(ds.bias);
+        dd["locked"] = ds.locked;
+        dd["lock_pending"] = ds.lock_pending;
+        diffs.push_back(dd);
+    }
+    d["diffs"] = diffs;
+    d["diff_count"] = static_cast<int>(p.diff_count);
     return d;
 }
 

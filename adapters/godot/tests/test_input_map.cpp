@@ -318,6 +318,69 @@ int main() {
         check(close(lim, tiny.steer_assist.min_fraction), "steer assist: never below min_fraction");
     }
 
+    // --- Tractor demo (2026-09-28): tri-state drivetrain toggles ------------
+    {
+        InputMapper mapper;
+        RawInput raw;
+        raw.toggle_awd_held = true;
+        raw.toggle_diff_lock_held = true;
+        raw.toggle_pto_held = true;
+        raw.toggle_pto_speed_held = true;
+        raw.toggle_park_lock_held = true;
+        const ControlChannels first = mapper.process(raw, kDt60);
+        check(first.toggle_awd && first.toggle_diff_lock && first.toggle_pto && first.toggle_pto_speed && first.toggle_park_lock,
+              "tractor toggles: rising edge requests a toggle");
+        const ControlChannels held = mapper.process(raw, kDt60);
+        check(!held.toggle_awd && !held.toggle_diff_lock && !held.toggle_pto && !held.toggle_pto_speed && !held.toggle_park_lock,
+              "tractor toggles: holding does not repeat the request");
+        raw.toggle_awd_held = false;
+        raw.toggle_diff_lock_held = false;
+        raw.toggle_pto_held = false;
+        raw.toggle_pto_speed_held = false;
+        raw.toggle_park_lock_held = false;
+        (void)mapper.process(raw, kDt60); // release
+        const ControlChannels second = mapper.process(raw, kDt60);
+        check(!second.toggle_awd && !second.toggle_diff_lock && !second.toggle_pto && !second.toggle_pto_speed && !second.toggle_park_lock,
+              "tractor toggles: no new edge while released");
+    }
+
+    // --- Tractor demo: hand-throttle ramp (1.0 s to full at dt = 1/60) ------
+    {
+        InputMapper mapper;
+        RawInput raw;
+        check(mapper.process(raw, kDt60).hand_throttle == 0.0f, "hand throttle: starts at 0 with neither key held");
+
+        raw.hand_throttle_up_held = true;
+        const int ramp_frames = static_cast<int>(std::lround(1.0 / kDt60));
+        ControlChannels last{};
+        for (int i = 0; i < ramp_frames; ++i) {
+            last = mapper.process(raw, kDt60);
+        }
+        check(close(last.hand_throttle, 1.0f, 1e-3f), "hand throttle: ramps to ~1.0 after 1.0 s held up");
+
+        raw.hand_throttle_up_held = false;
+        raw.hand_throttle_down_held = true;
+        for (int i = 0; i < ramp_frames; ++i) {
+            last = mapper.process(raw, kDt60);
+        }
+        check(close(last.hand_throttle, 0.0f, 1e-3f), "hand throttle: ramps back to ~0.0 after 1.0 s held down");
+
+        // Holding neither (or both) leaves the level exactly where it was.
+        InputMapper mapper2;
+        RawInput raw2;
+        raw2.hand_throttle_up_held = true;
+        (void)mapper2.process(raw2, kDt60);
+        const ControlChannels one_frame_in = mapper2.process(raw2, kDt60);
+        check(one_frame_in.hand_throttle > 0.0f && one_frame_in.hand_throttle < 1.0f, "hand throttle: one frame into the ramp is strictly between 0 and 1");
+        raw2.hand_throttle_up_held = false;
+        const ControlChannels held_steady = mapper2.process(raw2, kDt60);
+        check(close(held_steady.hand_throttle, one_frame_in.hand_throttle), "hand throttle: releasing both keys holds the current level");
+        raw2.hand_throttle_up_held = true;
+        raw2.hand_throttle_down_held = true;
+        const ControlChannels both_held = mapper2.process(raw2, kDt60);
+        check(close(both_held.hand_throttle, held_steady.hand_throttle), "hand throttle: holding both keys holds the current level");
+    }
+
     if (g_failures == 0) {
         std::printf("test_input_map: all checks passed\n");
         return 0;

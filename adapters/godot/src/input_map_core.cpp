@@ -12,6 +12,11 @@ float clamp11(float v) { return std::clamp(v, -1.0f, 1.0f); }
 // Shared clutch-button release ramp (PLAN.md P4 I3 section 12.2): 0.35 s
 // linear decay from 1 to 0 once the button is released.
 constexpr float kClutchButtonReleaseTimeS = 0.35f;
+
+// Tractor demo (2026-09-28): hand-throttle ramp rate - 1.0 s to go from 0 to
+// full, matching a real hand-throttle lever's deliberate, non-instant feel
+// (unlike the pedal, which is analog and instant).
+constexpr float kHandThrottleRampPerSecond = 1.0f;
 } // namespace
 
 float shape_bidirectional_axis(float raw, const AxisConfig& cfg) {
@@ -105,6 +110,25 @@ ControlChannels InputMapper::process(const RawInput& raw, float dt) {
     out.toggle_auto_clutch = raw.auto_clutch_toggle_held && !prev_auto_clutch_toggle_;
     out.toggle_auto_blip = raw.auto_blip_toggle_held && !prev_auto_blip_toggle_;
 
+    // Tractor demo (2026-09-28): same tri-state rising-edge pattern as the
+    // assist toggles above.
+    out.toggle_awd = raw.toggle_awd_held && !prev_toggle_awd_;
+    out.toggle_diff_lock = raw.toggle_diff_lock_held && !prev_toggle_diff_lock_;
+    out.toggle_pto = raw.toggle_pto_held && !prev_toggle_pto_;
+    out.toggle_pto_speed = raw.toggle_pto_speed_held && !prev_toggle_pto_speed_;
+    out.toggle_park_lock = raw.toggle_park_lock_held && !prev_toggle_park_lock_;
+
+    // Tractor demo: hand-throttle ramp - up/down held keys move it at
+    // kHandThrottleRampPerSecond/s, clamped to [0, 1]; holding neither (or
+    // both) leaves it exactly where it was, matching a real lever that
+    // stays put when released.
+    if (raw.hand_throttle_up_held && !raw.hand_throttle_down_held) {
+        hand_throttle_ = std::min(1.0f, hand_throttle_ + dt * kHandThrottleRampPerSecond);
+    } else if (raw.hand_throttle_down_held && !raw.hand_throttle_up_held) {
+        hand_throttle_ = std::max(0.0f, hand_throttle_ - dt * kHandThrottleRampPerSecond);
+    }
+    out.hand_throttle = hand_throttle_;
+
     prev_shift_up_ = raw.shift_up_held;
     prev_shift_down_ = raw.shift_down_held;
     prev_camera_ = raw.camera_held;
@@ -114,6 +138,11 @@ ControlChannels InputMapper::process(const RawInput& raw, float dt) {
     prev_auto_shift_toggle_ = raw.auto_shift_toggle_held;
     prev_auto_clutch_toggle_ = raw.auto_clutch_toggle_held;
     prev_auto_blip_toggle_ = raw.auto_blip_toggle_held;
+    prev_toggle_awd_ = raw.toggle_awd_held;
+    prev_toggle_diff_lock_ = raw.toggle_diff_lock_held;
+    prev_toggle_pto_ = raw.toggle_pto_held;
+    prev_toggle_pto_speed_ = raw.toggle_pto_speed_held;
+    prev_toggle_park_lock_ = raw.toggle_park_lock_held;
 
     return out;
 }
