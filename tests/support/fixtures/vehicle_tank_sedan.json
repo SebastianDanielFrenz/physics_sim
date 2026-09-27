@@ -1,0 +1,305 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "tank_sedan",
+  "source": "PHYS-033 P4 I7a C6 test fixture (tests/unit/test_fuel_tank.cpp). Identical to data/vehicles/car_sedan.json (relative paths rebased to ../../../data/) plus a fuel_tank component (capacity 40 kg, initial 30 kg) and one fluid link tank.out -> engine.fuel. Tank fuel E5 = fuels[0] of data/engines/i4_2l_na.json, so the burnt fuel is the same as without a tank.",
+  "wheels": [
+    {
+      "name": "FL",
+      "attachment_local": [
+        1.08,
+        0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 1,
+      "tyre": "../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "FR",
+      "attachment_local": [
+        1.08,
+        -0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 0,
+      "tyre": "../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "RL",
+      "attachment_local": [
+        -1.62,
+        0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 3,
+      "tyre": "../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    },
+    {
+      "name": "RR",
+      "attachment_local": [
+        -1.62,
+        -0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 2,
+      "tyre": "../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    }
+  ],
+  "steering": {
+    "max_wheel_angle": 0.5236,
+    "ackermann_fraction": 1.0,
+    "rear_steer_fraction": 0.0,
+    "steer_rate_limit": 0.0
+  },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      {
+        "wheel": "FL",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "FR",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "RL",
+        "max_torque_nm": 1600.0
+      },
+      {
+        "wheel": "RR",
+        "max_torque_nm": 1600.0
+      }
+    ],
+    "handbrake": {
+      "wheels": [
+        "RL",
+        "RR"
+      ],
+      "max_torque_nm": 1600.0
+    }
+  },
+  "aero": {
+    "drag_area_m2": 0.68
+  },
+  "powertrain": {
+    "components": [
+      {
+        "id": "engine",
+        "type": "engine",
+        "ref": "../../../data/engines/i4_2l_na.json"
+      },
+      {
+        "id": "clutch",
+        "type": "clutch",
+        "capacity_nm": 300.0,
+        "static_factor": 1.15,
+        "engagement_vs_pedal": {
+          "x": [
+            0.0,
+            0.3,
+            0.45,
+            0.6,
+            0.75,
+            1.0
+          ],
+          "y": [
+            1.0,
+            1.0,
+            0.55,
+            0.15,
+            0.0,
+            0.0
+          ]
+        },
+        "out_inertia_kgm2": 0.004,
+        "axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "gearbox",
+        "type": "gearbox",
+        "ref": "../../../data/gearboxes/sedan_6mt.json"
+      },
+      {
+        "id": "diff",
+        "type": "differential",
+        "kind": "open",
+        "ratio": 4.06,
+        "efficiency": 0.97,
+        "carrier_inertia_kgm2": 0.02,
+        "carrier_axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "tank",
+        "type": "fuel_tank",
+        "fuel": "../../../data/fuels/e5.json",
+        "capacity_kg": 40.0,
+        "initial_kg": 30.0
+      }
+    ],
+    "shafts": [
+      {
+        "ports": [
+          "engine.crank",
+          "clutch.in"
+        ]
+      },
+      {
+        "ports": [
+          "clutch.out",
+          "gearbox.in"
+        ]
+      },
+      {
+        "ports": [
+          "gearbox.out",
+          "diff.carrier"
+        ]
+      },
+      {
+        "ports": [
+          "diff.left",
+          "wheel:FL"
+        ]
+      },
+      {
+        "ports": [
+          "diff.right",
+          "wheel:FR"
+        ]
+      }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true,
+    "fluid": [
+      [
+        "tank.out",
+        "engine.fuel"
+      ]
+    ]
+  },
+  "controllers": [
+    {
+      "id": "tcu",
+      "type": "manual_tcu",
+      "gearbox": "gearbox",
+      "clutch": "clutch",
+      "engine": "engine",
+      "auto_clutch": {
+        "enabled": true,
+        "bite_rpm": 1100,
+        "full_rpm_min": 1600,
+        "full_rpm_max": 3000,
+        "lock_slip_rpm": 80,
+        "anti_stall_rpm": 750,
+        "engage_rate_per_s": 4.0,
+        "release_rate_per_s": 12.0,
+        "open_time_s": 0.08,
+        "close_time_s": 0.1,
+        "sync_time_s": 0.3,
+        "max_sync_torque_nm": 50.0
+      },
+      "auto_blip": {
+        "enabled": true,
+        "kp_per_rpm": 0.002,
+        "max_throttle": 1.0,
+        "upshift_cut": true,
+        "upshift_cut_release_slip_rpm": 300,
+        "upshift_cut_max_hold_s": 0.6,
+        "upshift_torque_ramp_s": 0.1
+      },
+      "auto_shift": {
+        "enabled": false,
+        "up_rpm_at_zero_throttle": 2500,
+        "up_rpm_at_full_throttle": 6300,
+        "down_rpm_at_zero_throttle": 1300,
+        "down_rpm_at_full_throttle": 2800,
+        "min_time_in_gear_s": 1.0
+      },
+      "max_pending_steps": 2
+    }
+  ]
+}
