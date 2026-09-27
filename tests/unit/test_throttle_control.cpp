@@ -1294,14 +1294,25 @@ TEST_CASE("C5b: the tractor's hand_throttle reaches the auto-clutch launch law (
 
     REQUIRE(pt.tcu_clutch_mode() == ManualTcu::ClutchMode::Launch); // still slipping in, not locked/aborted
     const real rpm = pt.last_engine_result().rpm;
-    REQUIRE(rpm > ac.bite_rpm);
-    REQUIRE(rpm < full_old); // strictly-linear region for BOTH candidate "full" values (see comment above)
+    // Honest PRECONDITIONS only - these establish the strictly-linear region
+    // for both candidate "full" values (see comment above) and do not
+    // themselves examine ManualTcu's output. The rpm > bite_rpm + 30 margin
+    // keeps us safely clear of the bite-point clamp corner, where a small
+    // rpm difference between the correct and sabotaged runs (the auto-clutch
+    // engagement feeds back into engine load under the governor's droop -
+    // see the sabotage-demo numbers in this test's own history) could
+    // otherwise push one run's e_tgt to 0 and mask the discriminating gap.
+    REQUIRE(rpm > ac.bite_rpm + 30);
+    REQUIRE(rpm < full_old);
 
     const real e_tgt_old = std::clamp((rpm - ac.bite_rpm) / (full_old - ac.bite_rpm), real(0.0), real(1.0));
     const real e_tgt_new = std::clamp((rpm - ac.bite_rpm) / (full_new - ac.bite_rpm), real(0.0), real(1.0));
     INFO("engine rpm=" << rpm << " e_auto=" << pt.clutch_engagement() << " e_tgt(raw pedal)=" << e_tgt_old
                         << " e_tgt(command)=" << e_tgt_new);
-    REQUIRE(e_tgt_new < e_tgt_old - 0.1); // the discriminating gap the sabotage run below is checked against
-    CHECK(pt.clutch_engagement() == Catch::Approx(e_tgt_new).margin(0.05));
-    CHECK(pt.clutch_engagement() < e_tgt_old - 0.05); // would fail if ManualTcu had instead used the raw pedal (0)
+    // The actual discriminators: ManualTcu's own output, not an arithmetic
+    // stand-in for it. Both are REQUIREs (not CHECKs) so a sabotaged build
+    // (TCU fed ctx.throttle instead of the throttle-command stage's request)
+    // fails HERE, not on an unrelated precondition above.
+    REQUIRE(pt.clutch_engagement() == Catch::Approx(e_tgt_new).margin(0.05));
+    REQUIRE(pt.clutch_engagement() < e_tgt_old - 0.05); // would fail if ManualTcu had instead used the raw pedal (0)
 }

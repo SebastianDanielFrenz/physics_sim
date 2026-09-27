@@ -629,27 +629,36 @@ TEST_CASE("State hash with two terrain interest points and suppression is identi
 // awd, the C15 diff_lock on/off, brake to a stop, then park_lock. Pins the
 // literal hash recorded when the scenario file was authored (ps_run at
 // 1/2/4/10 workers all agreed before this test existed).
-// PHYS-033 P4 I7a C5b (owner ruling 2026-09-26, 2026-09-27): this scenario's
-// hash was checked and confirmed UNCHANGED by C5b's reorder (ManualTcu now
-// reads the throttle-command stage's command - here max(hand_throttle,
-// pedal) via the engine's governor hand lever - instead of the raw pedal,
-// which is 0 throughout this scenario). The launch law (N->1st at t=1.0 s)
-// is the one place a tractor's ManualTcu reads the throttle signal
-// substep-by-substep (auto_shift is off here, so the up/down-threshold
-// reads are dead); it computes
-//   full = full_rpm_min + throttle_request * (full_rpm_max - full_rpm_min)
-// and clamps e_tgt to 1 once rpm >= full. tractor.json's auto_clutch has
-// full_rpm_min=1200, full_rpm_max=1700; the engine's all-speed governor
-// (independent of this reorder - the engine has read the stage's command
-// since I7a C3, before and after C5b) holds the crank at its no-load
-// setpoint idle + hand_throttle*(high_idle - idle) = 850 + 0.6*(2400-850)
-// = 1780 rpm while sitting in Neutral before the shift. 1780 rpm exceeds
-// BOTH the old full=1200 (throttle_request=0, raw pedal) and the new
-// full=1500 (throttle_request=0.6, the command) - e_tgt saturates to 1.0
-// identically either way, so this specific scripted run cannot discriminate
-// the two orderings. (test_throttle_control.cpp's dedicated tractor
-// hand-throttle-launch test below uses a lower hand_throttle so the two
-// thresholds bracket the engine rpm and the difference is observable.)
+// PHYS-033 P4 I7a C5b (owner ruling 2026-09-26; reviewer-measured 2026-09-27):
+// this scenario's hash was checked and confirmed UNCHANGED by C5b's reorder
+// (ManualTcu now reads the throttle-command stage's command - here
+// max(hand_throttle, pedal) via the engine's governor hand lever - instead
+// of the raw pedal). Instrumented over the full run (ps_run --workers 1,
+// 9600 substeps at 960 Hz over the scenario's 10 s): assist_auto_clutch is
+// on for all 9600 substeps and auto_shift is off; the TCU sits in Launch
+// mode for 3556 of those substeps, not just at the N->1st shift. Of those,
+// throttle_request differs from the raw pedal only for one substep at EACH
+// of the three gear engagements (N->1, 1->2, 2->3) - three substeps total.
+// At each of those three substeps the engine is settled on the governor's
+// no-load setpoint under the pto's load, ~1758 rpm (droop-reduced from the
+// unloaded idle + hand_throttle*(high_idle - idle) = 850 + 0.6*(2400-850) =
+// 1780 rpm quoted in an earlier draft of this comment - the pto load pulls
+// it down via the droop band), which exceeds BOTH candidate full-engagement
+// thresholds (full_rpm_min=1200, raw pedal=0; full_rpm_min + 0.6*(1700-1200)
+// = 1500, the command) - e_tgt = clamp((rpm-bite)/(full-bite), 0, 1)
+// saturates to 1.0 identically either way, and slip is already under
+// lock_slip_rpm, so each engagement locks immediately regardless of which
+// full-rpm hypothesis fed it. The remaining ~2237 Launch substeps are the
+// post-stop anti-stall re-entry after t~6.5 s, where hand_throttle reads 0
+// (the scenario has already dropped it), so throttle_request == the raw
+// pedal there too - no divergence. Net: 3 substeps see the underlying
+// signal actually differ, 0 differences in ManualTcu's outputs or the TCU's
+// own state, hence the hash is bit-identical. See
+// tests/unit/test_throttle_control.cpp's "C5b: the tractor's hand_throttle
+// reaches the auto-clutch launch law" test for a scripted case with a lower
+// hand_throttle where the two full-rpm thresholds bracket the engine rpm
+// and the difference IS observable (used there as C5b's actual behavioural
+// discriminator).
 // Left at the pre-C5b recorded value - do not re-record without first
 // re-deriving this saturation argument for the new build.
 TEST_CASE("State hash for the tractor I4 control-channel exercise scenario is identical across 1, 2, 4, 10 and 24 workers",
