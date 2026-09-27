@@ -59,11 +59,18 @@ private:
 std::string component_port_key(const std::string& id, const std::string& port) { return id + "." + port; }
 std::string wheel_port_key(const std::string& name) { return "wheel:" + name; }
 
+} // namespace
+
 // EngineTorqueMap/Clutch/Gearbox live in core/src/drivetrain (framework-
 // agnostic classes, commits 2-4) with their OWN Desc types, deliberately
 // named differently from the public plan section 4.1 descriptors (that
 // file's own top comment). Converts field-for-field; every field name below
 // matches 1:1 (commit 6 renames were confined to the public header only).
+//
+// PHYS-033 P4 I7a C5d review fix (B2): moved out of the anonymous namespace
+// above (and declared in powertrain.h) so tests can call this, the REAL
+// production resolver, instead of a hand-duplicated copy that cannot catch a
+// bug introduced here.
 EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     EngineTorqueMap::Desc d;
     d.wot_torque_nm_vs_rpm = e.wot_torque_nm_vs_rpm;
@@ -110,13 +117,30 @@ EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     if (!e.has_fuel_map && !e.fuels.empty()) {
         d.fuel = e.fuels.front(); // crude path: fuels[0] is the ACTIVE fuel (order matters)
         // Heywood, John B., Internal Combustion Engine Fundamentals,
-        // McGraw-Hill, 1988: indicated (gross) thermal efficiency is
-        // typically ~0.3-0.35 for SI (p.827, Fig. 15-1's ~30-38% brake
-        // range plus the pumping/friction margin already folded into this
-        // model's own separate motoring curve) and higher for CI (p.859,
-        // ~0.45-0.5) - single-point defaults for a model this crude, not a
-        // load/speed map. indicated_efficiency (loader-validated to (0,1))
+        // McGraw-Hill, 1988 - two DIFFERENT kinds of operating point, an
+        // acknowledged inconsistency between the two defaults, not hidden:
+        //   SI: Sec. 15.2, p.827, full load: "indicated fuel conversion
+        //   efficiency increases by about 10 percent from 0.31 to 0.34 over
+        //   the speed range 1000 to 4000 rev/min." 0.325 is the DERIVED
+        //   midpoint of [0.31, 0.34], not a direct quote.
+        //   CI: Sec. 15.5.1 "Load and Speed", p.859, at the minimum-bsfc
+        //   operating point (220 g/kWh, 1600 rev/min, 580 kPa bmep, medium-
+        //   swirl NA DI diesel): "The gross indicated fuel conversion
+        //   efficiency would be about 48 percent."
+        // Both are single-point defaults for a model this crude, not a
+        // load/speed map; indicated_efficiency (loader-validated to (0,1))
         // overrides either when the file sets it.
+        //
+        // Sabotage demonstrations run during the B2/B3/N7 review pass
+        // (each: edit here, rebuild, run the affected test, capture the
+        // failing numbers, then revert exactly - see out/c5d_progress.md):
+        //  - fuels.back() instead of fuels.front(): wrong "active" fuel
+        //    whenever fuels.size() > 1.
+        //  - swapping kEtaSparkDefault/kEtaCompressionDefault's values:
+        //    every spark engine gets the diesel default and vice versa.
+        //  - unconditionally using the ignition default (ignoring an
+        //    explicit indicated_efficiency override): a file-level eta_i
+        //    override becomes silently unreachable.
         constexpr real kEtaSparkDefault = real(0.325);
         constexpr real kEtaCompressionDefault = real(0.48);
         d.eta_i = e.indicated_efficiency > real(0.0)
@@ -125,6 +149,8 @@ EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     }
     return d;
 }
+
+namespace {
 
 Clutch::Desc to_clutch_desc(const ClutchDesc& c) {
     Clutch::Desc d;
@@ -1806,8 +1832,10 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         // PostSolveResult::indicated_work_delta's own comment) and is
         // booked UNCONDITIONALLY - an engine without a fuel map still fires
         // combustion mechanically and this quantity is meaningful for it
-        // too (it will feed a future cruder no-map fuel estimate, a separate
-        // commit once that model is designed). Only the mass/LHV-derived
+        // too (N10 review fix: it now DOES feed the crude no-map fuel
+        // estimate shipped in C5d, engine_torque_map.cpp's has_fuel_model
+        // branch - indicated_work itself is booked the same way regardless
+        // of which fuel path, if any, exists). Only the mass/LHV-derived
         // terms below - which need an actual fuel model to convert a mass
         // into energy - are gated on engine_has_fuel_model_ (post.
         // fuel_mass_delta/fuel_energy_in_delta are exactly 0.0 from any

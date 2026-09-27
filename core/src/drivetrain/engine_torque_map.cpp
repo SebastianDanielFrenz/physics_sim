@@ -32,6 +32,27 @@ real curve_slope_at(const vehicle::Curve1D& c, real rpm) {
 } // namespace
 
 EngineTorqueMap::EngineTorqueMap(Desc desc) : desc_(std::move(desc)) {
+    // N12 review fix: validate the fuel-model desc invariants here rather
+    // than trusting every caller (to_engine_desc is the only one today, but
+    // this is the class's own construction-time contract, same as the
+    // breakaway_torque_nm check right below). has_fuel_map without
+    // has_fuel_model would leave the map wired up but the ledger's own
+    // has_fuel_model gate off downstream in Powertrain::post_solve_components -
+    // a silent no-op fuel model, not a loud construction-time error.
+    if (desc_.has_fuel_map && !desc_.has_fuel_model) {
+        throw std::runtime_error("EngineTorqueMap: has_fuel_map requires has_fuel_model");
+    }
+    if (desc_.has_fuel_model && !desc_.has_fuel_map) {
+        // crude no-map path: eta_i must be a valid (open) probability and
+        // the active fuel's LHV must be positive, or mdot's division below
+        // is meaningless/NaN/infinite.
+        if (!(desc_.eta_i > real(0.0)) || !(desc_.eta_i < real(1.0))) {
+            throw std::runtime_error("EngineTorqueMap: eta_i must be in (0, 1) for the crude no-map fuel model");
+        }
+        if (!(desc_.fuel.lhv_j_kg > real(0.0))) {
+            throw std::runtime_error("EngineTorqueMap: fuel.lhv_j_kg must be > 0 for the crude no-map fuel model");
+        }
+    }
     c_k_ = -desc_.motoring_torque_nm_vs_rpm.evaluate(real(0.0));
     if (desc_.breakaway_torque_nm < c_k_) {
         throw std::runtime_error("EngineTorqueMap: breakaway_torque_nm must be >= -motoring_torque_nm_vs_rpm(0)");
@@ -272,10 +293,12 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
     // and booked for EVERY torque_map engine, fuel map or not - an engine
     // with no fuel map still models combustion mechanically (its own
     // wot/motoring curves fire regardless of has_fuel_map), so
-    // indicated_work is meaningful there too and will feed a future cruder
-    // no-map fuel estimate; only fuel_mass/fuel_energy_in/engine_heat/
+    // indicated_work is meaningful there too (N10 review fix: as of C5d it
+    // DOES feed the crude no-map fuel estimate below, not merely "a future"
+    // one); only fuel_mass/fuel_energy_in/engine_heat/
     // fuel_efficiency_violations (which need an actual mass/LHV to convert
-    // against) stay gated on desc_.has_fuel_map, in Powertrain::
+    // against) stay gated on desc_.has_fuel_model (broadened from
+    // has_fuel_map by C5d - see below), in Powertrain::
     // post_solve_components.
     r.indicated_work_delta = h * omega_new * tau_comb_;
 

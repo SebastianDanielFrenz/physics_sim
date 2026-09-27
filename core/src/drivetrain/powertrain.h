@@ -72,6 +72,15 @@ struct TcuThrottleLimits {
     real throttle_ceiling = 1.0;
 };
 
+// PHYS-033 P4 I7a C5d review fix (B2): the field-for-field TorqueMapEngineDesc
+// -> EngineTorqueMap::Desc resolver, including the crude no-map fuel model's
+// active-fuel/eta_i resolution (fuels[0] wins, ignition-based default unless
+// indicated_efficiency overrides it). Declared here (defined in powertrain.cpp,
+// no longer in an anonymous namespace) so tests can call the REAL production
+// resolver instead of maintaining their own hand-duplicated copy - a duplicate
+// cannot catch a bug introduced in this function itself.
+EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e);
+
 class Powertrain {
 public:
     // Throws std::runtime_error (naming vehicle_name) on any graph/topology

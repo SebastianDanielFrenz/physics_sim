@@ -94,7 +94,14 @@ struct PowertrainEnergy {
     real indicated_work = 0.0;        // J, cumulative - combustion's own share of engine_out above (see PostSolveResult); booked for every torque_map engine, fuel model or not
     real engine_heat = 0.0;           // J, cumulative = fuel_energy_in - indicated_work (rejected/unconverted heat); 0 without a fuel model
     real fuel_external_added = 0.0;   // kg, cumulative fuel MASS added externally (e.g. a refuel); stays 0 until C6's tank hook books into it - not energy, despite living next to the energy fields above
-    std::uint64_t fuel_efficiency_violations = 0; // count of substeps where engine_heat's own delta was < 0 (map claims >100% efficiency); always 0 for the crude no-map estimate (constant eta_i by construction), 0 without a fuel model
+    // Count of substeps where engine_heat's own delta was < 0 (the fuel
+    // model claims >100% efficiency). Not always 0 for the crude no-map
+    // estimate despite its constant eta_i: with tau_comb > 0, the delta is
+    // h*tau_comb*(omega_old/eta_i - omega_new), negative exactly when
+    // omega_new/omega_old > 1/eta_i (N6 review fix - a prior version of this
+    // comment incorrectly claimed the crude model can never violate). 0
+    // without a fuel model.
+    std::uint64_t fuel_efficiency_violations = 0;
 };
 
 } // namespace ps::drivetrain

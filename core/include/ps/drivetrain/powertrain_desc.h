@@ -153,21 +153,33 @@ struct TorqueMapEngineDesc {
     // load time (a hypothetical per-entry blend weight, C5e, was cancelled/
     // dropped per owner ruling 2026-09-27: no blending, just a list).
     // fuels[0] is the ACTIVE fuel whose lhv_j_kg/afr_stoich feed the crude
-    // model - order matters. Mutually exclusive with "fuel"/"fuel_map": a
-    // calibrated fuel_map is keyed to exactly the one fuel named by the
-    // singular `fuel` field above, while `fuels` is for an engine with NO
-    // map that simply lists what it can run on. Empty (default) means this
-    // engine has no crude fuel model either - has_fuel_map is then the only
-    // source of fuel computation (see TorqueMapEngineDesc's own
+    // model - order matters. At the JSON level, "fuels" and the singular
+    // "fuel"/"fuel_map" keys are mutually exclusive (a calibrated fuel_map
+    // is keyed to exactly one fuel). Internally, though (review fix B1),
+    // singular "fuel" is TRUE SHORTHAND for a one-entry fuels list: the
+    // loader (vehicle_io.cpp) always sets `fuels = {fuel}` whenever "fuel"
+    // is present, whether or not "fuel_map" is ALSO present alongside it -
+    // so this field is never left empty just because an engine happened to
+    // spell its fuel reference as "fuel" instead of "fuels": [...]. When a
+    // fuel_map exists, to_engine_desc's crude-model branch is gated off
+    // anyway (the map path wins), so populating this vector unconditionally
+    // is harmless. Empty (default, only for an engine naming no fuel at
+    // all) means this engine has no crude fuel model - has_fuel_map is then
+    // the only source of fuel computation (see TorqueMapEngineDesc's own
     // has_fuel_model() free function below).
     std::vector<FuelDesc> fuels;
     // PHYS-033 P4 I7a C5d: override for the crude no-map model's assumed
     // indicated thermal efficiency eta_i (mdot = max(0, tau_comb*omega) /
     // (eta_i * LHV)). 0.0 (default, sentinel - valid values are in (0, 1)
     // exclusive) means use the Heywood (1988) ignition-type default: 0.325
-    // spark (p.827), 0.48 compression (p.859). Ignored by the fuel_map
-    // path (has_fuel_map uses the map's own measured flow, not an assumed
-    // efficiency) - the loader rejects setting this without a fuel model.
+    // spark (derived midpoint, p.827), 0.48 compression (p.859) - see
+    // powertrain.cpp's to_engine_desc for the full citations, which cover
+    // two DIFFERENT kinds of operating point (an acknowledged
+    // inconsistency, not hidden). Ignored by the fuel_map path (has_fuel_map
+    // uses the map's own measured flow, not an assumed efficiency) - the
+    // loader rejects setting this both without any fuel model AND (review
+    // fix N9) alongside a fuel_map specifically, since the map would never
+    // consult it.
     real indicated_efficiency = 0.0;
 };
 

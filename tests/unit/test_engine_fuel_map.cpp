@@ -32,14 +32,14 @@
 // "car_sedan without a fuel map" test below uses car_sedan's own REAL,
 // non-flat i4_2l_na.json engine curves (loaded via ps_test::
 // load_sedan_desc(), never a data file mutated): car_sedan_engine_public_
-// desc()/to_engine_desc_for_test() build a bare EngineTorqueMap from them
-// (to_engine_desc_for_test duplicates core/src/drivetrain/powertrain.cpp's
-// own internal, unexported to_engine_desc field-for-field, since that
-// function is deliberately anonymous-namespace). The "Fix 1" DFCO test
-// further down deliberately does NOT use a bare EngineTorqueMap - see that
-// test's own header comment for why a bare engine cannot discriminate the
-// defect it targets, and drives the real WorldRig/vehicle_fuel_map_sedan.json
-// Powertrain instead.
+// desc()/ps::drivetrain::to_engine_desc() (the real production resolver,
+// core/src/drivetrain/powertrain.cpp/.h - PHYS-033 P4 I7a C5d review fix B2
+// moved it out of that file's anonymous namespace specifically so tests can
+// call it directly instead of a hand-duplicated copy) build a bare
+// EngineTorqueMap from them. The "Fix 1" DFCO test further down deliberately
+// does NOT use a bare EngineTorqueMap - see that test's own header comment
+// for why a bare engine cannot discriminate the defect it targets, and
+// drives the real WorldRig/vehicle_fuel_map_sedan.json Powertrain instead.
 
 #include "drivetrain/engine_torque_map.h"
 #include "drivetrain/powertrain.h"
@@ -170,63 +170,16 @@ TorqueMapEngineDesc car_sedan_engine_public_desc() {
     throw std::runtime_error("car_sedan_engine_public_desc: no TorqueMapEngineDesc component in car_sedan.json");
 }
 
-// Mirrors core/src/drivetrain/powertrain.cpp's own to_engine_desc field-for-
-// field. Duplicated here rather than exposed from production code, since
-// that function is deliberately anonymous-namespace/internal (powertrain.cpp's
-// own header comment on why EngineTorqueMap::Desc and TorqueMapEngineDesc are
-// named differently) - this test needs to build a bare EngineTorqueMap
-// directly from car_sedan's public VehicleDesc, without going through a full
-// Powertrain/World for the DFCO test below (F4's real-Powertrain rewrite,
-// further down, covers that path instead).
-EngineTorqueMap::Desc to_engine_desc_for_test(const TorqueMapEngineDesc& e) {
-    EngineTorqueMap::Desc d;
-    d.wot_torque_nm_vs_rpm = e.wot_torque_nm_vs_rpm;
-    d.motoring_torque_nm_vs_rpm = e.motoring_torque_nm_vs_rpm;
-    d.inertia_kgm2 = e.inertia_kgm2;
-    d.breakaway_torque_nm = e.breakaway_torque_nm;
-    d.idle_rpm = e.idle_rpm;
-    d.stall_rpm = e.stall_rpm;
-    d.fire_rpm = e.fire_rpm;
-    d.start_complete_rpm = e.start_complete_rpm;
-    d.dfco_enable_rpm = e.dfco_enable_rpm;
-    d.dfco_reenable_rpm = e.dfco_reenable_rpm;
-    d.idle.kp_per_rpm = e.idle.kp_per_rpm;
-    d.idle.ki_per_rpm_s = e.idle.ki_per_rpm_s;
-    d.idle.max_throttle = e.idle.max_throttle;
-    d.limiter.type =
-        e.limiter.type == LimiterType::FuelCut ? EngineTorqueMap::LimiterType::FuelCut : EngineTorqueMap::LimiterType::SoftCut;
-    d.limiter.rpm = e.limiter.rpm;
-    d.limiter.hysteresis_rpm = e.limiter.hysteresis_rpm;
-    d.limiter.band_rpm = e.limiter.band_rpm;
-    d.starter.stall_torque_nm = e.starter.stall_torque_nm;
-    d.starter.free_speed_rpm = e.starter.free_speed_rpm;
-    d.starter.interlock = e.starter.interlock == StarterDesc::Interlock::None ? EngineTorqueMap::StarterInterlock::None
-                                                                               : EngineTorqueMap::StarterInterlock::ClutchOrNeutral;
-    d.initial_state =
-        e.initial_state == EngineInitialState::Running ? EngineTorqueMap::InitialState::Running : EngineTorqueMap::InitialState::Off;
-    d.has_governor = e.has_governor;
-    d.governor.high_idle_rpm = e.governor.high_idle_rpm;
-    d.governor.rated_rpm = e.governor.rated_rpm;
-    d.governor.droop = e.governor.droop;
-    d.has_fuel_map = e.has_fuel_map;
-    d.fuel = e.fuel;
-    d.fuel_map = e.fuel_map;
-    // PHYS-033 P4 I7a C5d: mirrors to_engine_desc()'s own has_fuel_model/eta_i
-    // resolution - a fuel map wins outright (d.fuel/d.fuel_map above already
-    // cover it); otherwise the first entry of a nonempty "fuels" list is the
-    // crude estimate's fuel, with eta_i defaulting by ignition kind (Heywood
-    // 1988: SI ~0.325, CI ~0.48) unless indicated_efficiency overrides it.
-    d.has_fuel_model = has_fuel_model(e);
-    if (!e.has_fuel_map && !e.fuels.empty()) {
-        d.fuel = e.fuels.front();
-        constexpr real kEtaSparkDefault = real(0.325);
-        constexpr real kEtaCompressionDefault = real(0.48);
-        d.eta_i = e.indicated_efficiency > real(0.0)
-                      ? e.indicated_efficiency
-                      : (e.ignition == EngineIgnition::Compression ? kEtaCompressionDefault : kEtaSparkDefault);
-    }
-    return d;
-}
+// PHYS-033 P4 I7a C5d review fix (B2): this file used to hand-duplicate
+// core/src/drivetrain/powertrain.cpp's own to_engine_desc() field-for-field
+// (as to_engine_desc_for_test()), kept here because that function was
+// anonymous-namespace/internal. It has since been moved out of the anonymous
+// namespace and declared in powertrain.h specifically so tests exercise the
+// REAL production resolver instead of a copy that cannot catch a bug
+// introduced in the real one - see every "C5d Test N" call site below, which
+// now calls ps::drivetrain::to_engine_desc(...) directly (reachable
+// unqualified here via the file's own `using namespace ps::drivetrain;` and
+// its #include "drivetrain/powertrain.h").
 
 // ---------------------------------------------------------------------------
 // F2 (review-fixed): the original version held omega EXACTLY constant with a
@@ -801,7 +754,8 @@ TEST_CASE("Fix 1: engine_heat never goes negative through a DFCO cut and recover
 // ---------------------------------------------------------------------------
 // New (I7a C5d supersedes the owner ruling this test originally covered):
 // car_sedan's own engine, loaded via car_sedan_engine_public_desc() alone
-// (via to_engine_desc_for_test()) - car_sedan.json/i4_2l_na.json still ship
+// (via ps::drivetrain::to_engine_desc(), the real production resolver) -
+// car_sedan.json/i4_2l_na.json still ship
 // with no "fuel_map" field, but i4_2l_na.json now carries a "fuels" list
 // (I7a C5d), so has_fuel_model is true even though has_fuel_map stays false:
 // the crude constant-efficiency estimate is active. indicated_work is booked
@@ -815,7 +769,7 @@ TEST_CASE("Fix 1: engine_heat never goes negative through a DFCO cut and recover
 // ---------------------------------------------------------------------------
 TEST_CASE("New: car_sedan's crude no-map fuel model (I7a C5d) books fuel_mass/fuel_energy_in/engine_heat via has_fuel_model",
           "[unit][drivetrain][fuel]") {
-    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
     REQUIRE_FALSE(desc.has_fuel_map); // precondition: car_sedan/i4_2l_na.json still ship with no fuel_map
     REQUIRE(desc.has_fuel_model);     // precondition: i4_2l_na.json's "fuels" list (I7a C5d) makes the crude estimate active
     EngineTorqueMap engine(desc);
@@ -879,7 +833,17 @@ TEST_CASE("New: car_sedan's crude no-map fuel model (I7a C5d) books fuel_mass/fu
     CHECK(rel_err_work <= 1e-9);
 
     CHECK(ledger.fuel_mass > 0.0); // non-vacuous: the crude model really burned fuel during the WOT half
-    CHECK(ledger.fuel_efficiency_violations == 0); // I7a C5d: always 0 for the crude no-map estimate (constant eta_i by construction)
+    // PHYS-033 P4 I7a C5d review fix (N6): NOT "always 0 by construction" (a
+    // prior version of this comment claimed exactly that) - a substep whose
+    // omega accelerated by more than 1/eta_i (~3.08x here) within one substep
+    // while combusting could in principle still show heat_delta < 0 even with
+    // constant eta_i (fuel_energy_in_delta = tau_comb*omega_old/eta_i,
+    // indicated_work_delta = tau_comb*omega_new unconditionally - see
+    // Powertrain::post_solve_components' booking rule above). This test's own
+    // WOT-launch scenario never accelerates anywhere near that fast in one
+    // substep, so 0 is what is actually observed here, not a guaranteed
+    // mathematical identity - see energy_ledger.h's own corrected comment.
+    CHECK(ledger.fuel_efficiency_violations == 0);
     const real rel_err_mass = std::abs(ledger.fuel_mass - recomputed_fuel_mass) / std::max(std::abs(recomputed_fuel_mass), 1e-12);
     CHECK(rel_err_mass <= 1e-9);
     const real rel_err_energy =
@@ -919,7 +883,7 @@ TEST_CASE("New: car_sedan's crude no-map fuel model (I7a C5d) books fuel_mass/fu
 // ---------------------------------------------------------------------------
 TEST_CASE("Fix 1 discrimination demo: the old proportional-split formula is singular where the new formula stays bounded",
           "[unit][drivetrain][fuel]") {
-    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
 
     // Search a grid of (rpm, throttle command) for the operating point with
     // the smallest |tau0| among those where combustion is clearly firing
@@ -1061,6 +1025,38 @@ nlohmann::json vehicle_with_engine(const nlohmann::json& engine_component) {
 void expect_rejected(const nlohmann::json& engine_component, const std::string& substring) {
     const TempJsonFile f(vehicle_with_engine(engine_component));
     REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring(substring));
+}
+
+// PHYS-033 P4 I7a C5d review-fix bugfix (found running the F5 suite for the
+// first time after the review): nlohmann::json has no JSON representation
+// for a non-finite double, so `e["indicated_efficiency"] =
+// std::numeric_limits<double>::infinity()` followed by `dump()` silently
+// serializes it as the JSON literal `null` (documented nlohmann behaviour,
+// not a bug in that library) - it never round-trips back to a number at
+// all, so the "must be finite - rejects Infinity" SECTION below was
+// actually exercising vehicle_io.cpp's `is_number()` check ("must be a
+// number"), not its `std::isfinite` check ("must be in (0, 1)") as its own
+// name and the N9 review comment intended. A raw, hand-written JSON literal
+// `1e400` sidesteps this: it IS a syntactically valid JSON number (digits
+// plus exponent), so `is_number()` sees it as a number, but nlohmann's own
+// double conversion overflows it to +Infinity when parsed back - exactly
+// the "survives is_number() but must still fail isfinite()" case the N9
+// fix was meant to cover. Written directly (bypassing TempJsonFile's
+// nlohmann-object dump) so the literal reaches the file as text, not as a
+// re-serialized double.
+std::filesystem::path write_raw_temp_json(const std::string& text) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() /
+        ("ps_test_fuel_map_raw_" + std::to_string(std::hash<std::string>{}(text)) + ".json");
+    std::ofstream out(path);
+    out << text;
+    return path;
+}
+
+void expect_rejected_raw_text(const std::string& json_text, const std::string& substring) {
+    const std::filesystem::path path = write_raw_temp_json(json_text);
+    REQUIRE_THROWS_WITH(io::load_vehicle_json(path.string()), ContainsSubstring(substring));
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
 }
 
 } // namespace f5
@@ -1314,20 +1310,128 @@ TEST_CASE("F5: loader rejects every malformed engine/fuel/fuel_map field with it
         e["indicated_efficiency"] = 0.35;
         expect_rejected(e, "indicated_efficiency requires a fuel model");
     }
+    // N9 review fix: indicated_efficiency is also rejected outright when a
+    // fuel_map is present (the map is never gated by eta_i) - base_engine_
+    // component() has both "fuel" and "fuel_map" set, so has_fuel_map is
+    // true here and this must be the message reached, ahead of the number/
+    // range checks below (which is exactly why those three SECTIONs below
+    // switch to "fuels"-only fixtures instead of the fuel_map-bearing base).
+    SECTION("indicated_efficiency is rejected when a fuel_map is present") {
+        nlohmann::json e = base_engine_component();
+        e["indicated_efficiency"] = 0.35;
+        expect_rejected(e, "indicated_efficiency is meaningless with a 'fuel_map' present");
+    }
+    // The number/range checks below only run once has_fuel_map is false, so
+    // each of these three SECTIONs must drop "fuel"/"fuel_map" and use
+    // "fuels" instead (a fixture with fuel_map present would hit the
+    // "meaningless with a 'fuel_map' present" rejection above first, not the
+    // check this SECTION means to exercise).
     SECTION("indicated_efficiency must be a number") {
         nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
         e["indicated_efficiency"] = "0.35";
         expect_rejected(e, "indicated_efficiency must be a number");
     }
     SECTION("indicated_efficiency must be in (0, 1) - rejects 0") {
         nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
         e["indicated_efficiency"] = 0.0;
         expect_rejected(e, "indicated_efficiency must be in (0, 1)");
     }
     SECTION("indicated_efficiency must be in (0, 1) - rejects 1") {
         nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
         e["indicated_efficiency"] = 1.0;
         expect_rejected(e, "indicated_efficiency must be in (0, 1)");
+    }
+    // N9 review fix: non-finite indicated_efficiency (NaN/Infinity survive
+    // is_number() but must still fail the isfinite() check, not silently
+    // pass through as a "valid" out-of-(0,1) number) - vehicle_io.cpp's own
+    // combined `!std::isfinite(...) || !(... > 0) || !(... < 1)` check
+    // (single "must be in (0, 1)" message for all three).
+    //
+    // PHYS-033 P4 I7a C5d review-fix bugfix (found running this SECTION for
+    // the first time after the review): neither half of "NaN/Infinity
+    // survive is_number()" is actually reachable through load_vehicle_json's
+    // real file+nlohmann::json::parse() path, for two independent reasons,
+    // so this SECTION cannot exercise vehicle_io.cpp's isfinite() branch at
+    // all - it is DEFENSIVE, UNREACHABLE code as far as this loader's public
+    // entry point goes:
+    //   1. Going through THIS file's ordinary TempJsonFile/expect_rejected
+    //      path (assign std::numeric_limits<double>::infinity() into an
+    //      nlohmann::json value, then dump()) does not even produce a JSON
+    //      Infinity - JSON itself has no such literal, and nlohmann's
+    //      dump() silently replaces a non-finite double with `null`, which
+    //      then fails the EARLIER is_number() check ("must be a number")
+    //      instead.
+    //   2. Bypassing dump() with a hand-written raw JSON literal that IS
+    //      syntactically a valid number and overflows a double once parsed
+    //      (e.g. `1e400`) does not work either: nlohmann::json::parse()
+    //      itself detects the overflow during its own number scan and
+    //      throws `out_of_range.406` ("number overflow parsing '1e400'")
+    //      before the value ever becomes a stored double our field-level
+    //      code could inspect - confirmed empirically (this exact message
+    //      is what a first attempt at this SECTION using `1e400` produced).
+    // Neither NaN/Infinity (invalid JSON syntax - a parse_error) nor an
+    // overflowing-but-syntactically-valid literal (nlohmann's own
+    // out_of_range.406) can reach vehicle_io.cpp's isfinite() check via any
+    // real file, so this SECTION instead pins the ACTUAL, reachable
+    // behaviour: nlohmann's own overflow guard rejects it one layer up,
+    // with its own message - the vehicle is still safely never loaded,
+    // just not via our "(0, 1)" message. vehicle_io.cpp's isfinite() check
+    // is kept as a harmless safety net (e.g. against a hypothetical future
+    // in-memory construction path that skips nlohmann::json::parse()), not
+    // because this test can prove it fires.
+    SECTION("indicated_efficiency must be finite - rejects Infinity") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
+        e["indicated_efficiency"] = 0.0; // placeholder, replaced by raw text below
+        nlohmann::json v = f5::vehicle_with_engine(e);
+        std::string text = v.dump(2);
+        const std::string needle = "\"indicated_efficiency\": 0.0";
+        const auto pos = text.find(needle);
+        REQUIRE(pos != std::string::npos);
+        text.replace(pos, needle.size(), "\"indicated_efficiency\": 1e400");
+        f5::expect_rejected_raw_text(text, "number overflow parsing");
+    }
+    // N12 review fix: an object-typed "fuels" entry (not merely a number)
+    // must give the same rejection every non-string entry gives.
+    SECTION("fuels rejects an object-typed entry") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({nlohmann::json::object({{"path", f5::fuel_json_path()}})});
+        expect_rejected(e, "'fuels' entries must be non-empty path strings");
+    }
+    // N12 review fix: "fuels" given as a non-array value entirely (not an
+    // empty array) must hit the same "non-empty array" rejection.
+    SECTION("fuels rejects a non-array value") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = f5::fuel_json_path(); // a bare string, not wrapped in an array
+        expect_rejected(e, "'fuels' must be a non-empty array of path strings");
+    }
+    // N12 review fix: the new std::filesystem::equivalent-based duplicate
+    // check must catch a textually-different path that still names the same
+    // file (a "./"-prefixed detour), not just a byte-identical string repeat
+    // (already covered by "fuels rejects a duplicate fuel reference" above).
+    SECTION("fuels rejects a duplicate fuel reference reached via a different relative path") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        const std::filesystem::path direct = f5::fuel_json_path();
+        const std::filesystem::path detour = direct.parent_path() / "." / direct.filename();
+        e["fuels"] = nlohmann::json::array({direct.generic_string(), detour.generic_string()});
+        expect_rejected(e, "'fuels' contains a duplicate fuel reference");
     }
 }
 
@@ -1338,13 +1442,10 @@ TEST_CASE("F5: loader rejects every malformed engine/fuel/fuel_map field with it
 // so the review-fixed F4 can use them too) - only the F6-only helper stays
 // here.
 // ---------------------------------------------------------------------------
-namespace {
-
-bool any_channel_contains(const std::vector<std::string>& names, const std::string& substr) {
-    return std::any_of(names.begin(), names.end(), [&](const std::string& n) { return n.find(substr) != std::string::npos; });
-}
-
-} // namespace
+// PHYS-033 P4 I7a C5d review fix (N11): any_channel_contains() (a substring
+// helper) used to live here for F6's old substring-only CSV-header check;
+// removed along with that check - see F6's own comment below for the
+// exact-equality/exact-position replacement.
 
 // I7a C5d note: "plain" below (ps_test::load_sedan_desc(), i.e. car_sedan.json)
 // is no longer an engine with NO fuel model at all - i4_2l_na.json's "fuels"
@@ -1397,12 +1498,35 @@ TEST_CASE("F6: a fuel map with no tank is bit-identical to the crude no-map esti
 
     const auto& plain_names = ra.world->telemetry().channel_names();
     const auto& fueled_names = rb.world->telemetry().channel_names();
-    // I7a C5d: both worlds now have SOME fuel model (plain = car_sedan's real
-    // crude-estimate engine, fueled = the fixture's calibrated map), so both
-    // register `.fuel.` telemetry channels - has_fuel_model, not has_fuel_map,
-    // gates the registration.
-    CHECK(any_channel_contains(plain_names, ".fuel."));
-    CHECK(any_channel_contains(fueled_names, ".fuel."));
+    // PHYS-033 P4 I7a C5d review fix (N11): re-pinned from a substring check
+    // (any_channel_contains(..., ".fuel.")) to exact channel-list equality
+    // plus the exact names at their correct position - a substring check
+    // would pass even if the fuel channels moved, were misnamed, or a
+    // completely unrelated channel merely happened to contain ".fuel." in
+    // its name. Both worlds now have SOME fuel model (plain = car_sedan's
+    // real crude-estimate engine, fueled = the fixture's calibrated map),
+    // and neither vehicle has a non-open differential (World::create_vehicle
+    // only emits `.<diff id>.{bias,locked}` channels for those - see
+    // CLAUDE.md's "World tick pipeline"), so the two CSV headers must be
+    // byte-for-byte IDENTICAL, not merely each containing a fuel channel.
+    CHECK(plain_names == fueled_names);
+
+    // World::create_vehicle registers vehicle0.fuel.{flow_g_s,energy_in,heat}
+    // (FuelTelemetryChannels, world.cpp) as the LAST block for a vehicle,
+    // immediately after its powertrain state channels
+    // (vehicle0.powertrain.engine_state) and only when that vehicle has no
+    // non-open differential (true for both car_sedan and this fixture) - so
+    // the three fuel channels must appear immediately after engine_state, in
+    // this exact order, in BOTH worlds.
+    for (const auto* names : {&plain_names, &fueled_names}) {
+        const auto it = std::find(names->begin(), names->end(), std::string("vehicle0.powertrain.engine_state"));
+        REQUIRE(it != names->end());
+        const auto idx = static_cast<std::size_t>(std::distance(names->begin(), it));
+        REQUIRE(idx + 3 < names->size());
+        CHECK((*names)[idx + 1] == "vehicle0.fuel.flow_g_s");
+        CHECK((*names)[idx + 2] == "vehicle0.fuel.energy_in");
+        CHECK((*names)[idx + 3] == "vehicle0.fuel.heat");
+    }
 }
 
 TEST_CASE("F9: balance_error stays within bound with a fuel map over a WOT launch", "[unit][drivetrain][fuel]") {
@@ -1466,8 +1590,9 @@ TEST_CASE("F9: balance_error stays within bound with a fuel map over a WOT launc
 // PHYS-033 P4 I7a C5d: the crude no-map fuel model (owner-amended plan,
 // out/c5d_brief.md). TorqueMapEngineDesc::fuels/ignition/indicated_efficiency
 // are resolved into EngineTorqueMap::Desc::has_fuel_model/fuel/eta_i by
-// to_engine_desc_for_test() above (mirrors production to_engine_desc()) -
-// every test below drives that resolved Desc directly, exactly like F2/F3/F4
+// ps::drivetrain::to_engine_desc() (the REAL production resolver, called
+// directly - see the "B2 review fix" comment above car_sedan_engine_public_
+// desc()) - every test below drives that resolved Desc directly, exactly like F2/F3/F4
 // above, or a real World/Powertrain built from a VehicleDesc whose engine
 // carries "fuels" (car_sedan.json's i4_2l_na.json, tractor.json's
 // diesel_i4_4l5_turbo.json). Test 8 (every loader rejection) is F5 above,
@@ -1495,7 +1620,7 @@ FuelDesc c5d_test_fuel_desc(real lhv_j_kg = 44.0e6) {
 // torque_map.cpp) that F3 never exercises.
 TEST_CASE("C5d Test 3: the crude no-map fuel model is exactly zero whenever combustion cannot be firing",
           "[unit][drivetrain][fuel]") {
-    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
     REQUIRE(desc.has_fuel_model);
     REQUIRE_FALSE(desc.has_fuel_map);
 
@@ -1550,7 +1675,7 @@ TEST_CASE("C5d Test 3: the crude no-map fuel model is exactly zero whenever comb
 // brief's own formula exactly, no deviation from the plan needed here.
 TEST_CASE("C5d Test 2: the crude no-map fuel model at settled idle matches the net-torque-zero identity within 2%",
           "[unit][drivetrain][fuel]") {
-    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
     REQUIRE(desc.has_fuel_model);
     REQUIRE_FALSE(desc.has_fuel_map);
 
@@ -1588,11 +1713,34 @@ TEST_CASE("C5d Test 2: the crude no-map fuel model at settled idle matches the n
 // substep), fuel_mass == sum h*max(0,theta_c*(w-m)*omega_old)/(eta*LHV) to
 // 1e-12. Uses car_sedan's real engine at a mid-range rpm/throttle where
 // combustion is firing and neither DFCO nor the limiter can engage.
+//
+// PHYS-033 P4 I7a C5d review fix (B2/N7): the recomputation below uses the
+// LITERAL spark eta_i (0.325) and i4_2l_na.json's active fuel e5.json's
+// literal LHV (43089334.0 J/kg), not desc.eta_i/desc.fuel.lhv_j_kg read back
+// from the very Desc under test - reading them back would let a resolver bug
+// that corrupts BOTH the production value and this test's expectation
+// together (e.g. B2's fuels.back()/swapped-eta-default/ignored-override
+// sabotages) still pass this identity, since both sides would move together.
+//
+// N7 review fix (owner-acknowledged, not fixed): because omega is
+// dyno-held EXACTLY constant, omega_old == omega_new == omega on every
+// substep, so this test's own recomputation (using `omega`, the dyno-held
+// value) is IDENTICAL whether the production formula's mech_power term is
+// `tau_comb * omega_old` (correct) or a hypothetical `tau_comb * omega_new`
+// substitution bug - both read the same number here. This test therefore
+// CANNOT discriminate that substitution; only a transient (accelerating)
+// case can, which is why the sabotage below is executed against "C5d Test 4"
+// (crank-to-overrun, genuinely transient) instead, not this test.
 TEST_CASE("C5d Test 1: the crude no-map fuel model integral matches an independent recomputation at a dyno-held point",
           "[unit][drivetrain][fuel]") {
-    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
     REQUIRE(desc.has_fuel_model);
     REQUIRE_FALSE(desc.has_fuel_map);
+    // Pin the literals used below against the real resolved Desc (a sanity
+    // check on the literals themselves, not part of the discrimination this
+    // test performs - the recomputation itself never reads these two fields).
+    REQUIRE(desc.eta_i == Catch::Approx(0.325));
+    REQUIRE(desc.fuel.lhv_j_kg == Catch::Approx(43089334.0));
 
     EngineTorqueMap engine(desc);
     engine.reset(EngineState::Running);
@@ -1600,6 +1748,8 @@ TEST_CASE("C5d Test 1: the crude no-map fuel model integral matches an independe
     constexpr real kHeldRpm = 3000.0;
     const real omega = rpm_to_omega(kHeldRpm);
     constexpr int kSubsteps = 1000;
+    constexpr real kEtaSparkDefault = real(0.325);   // Heywood 1988 SI default, literal - see header comment
+    constexpr real kE5LhvJKg = real(43089334.0);     // data/fuels/e5.json's own lhv_j_kg, literal
 
     real fuel_mass_sum = 0.0;
     real recomputed_sum = 0.0;
@@ -1614,7 +1764,7 @@ TEST_CASE("C5d Test 1: the crude no-map fuel model integral matches an independe
         const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
         const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
         const real mech_power = std::max(real(0.0), tau_comb * omega); // omega_old == omega (dyno-held)
-        const real mdot_kg_s = mech_power / (desc.eta_i * desc.fuel.lhv_j_kg);
+        const real mdot_kg_s = mech_power / (kEtaSparkDefault * kE5LhvJKg);
         recomputed_sum += kSubstepH * mdot_kg_s;
     }
 
@@ -1634,7 +1784,7 @@ TEST_CASE("C5d Test 1: the crude no-map fuel model integral matches an independe
 // not a separate plan/code mismatch, just the same inequality restated).
 TEST_CASE("C5d Test 4: the crude no-map fuel model never reports negative heat or >100% efficiency, crank to overrun",
           "[unit][drivetrain][fuel]") {
-    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
     REQUIRE(desc.has_fuel_model);
     REQUIRE_FALSE(desc.has_fuel_map);
     EngineTorqueMap engine(desc);
@@ -1689,13 +1839,30 @@ TEST_CASE("C5d Test 4: the crude no-map fuel model never reports negative heat o
     CHECK(saw_overrun);
 }
 
-// Brief test 5: tractor's compression-ignition engine, fuel_energy_in*0.48 ==
+// Brief test 5: tractor's compression-ignition engine, fuel_mass*0.48*LHV ==
 // sum h*tau_comb*omega_old at a WOT dyno-held point (catches an SI/CI default
 // swap or a diesel-LHV bug - if either default were swapped, this identity
-// would be off by 0.48/0.325 ~ 1.48x). No shared test helper loads tractor.json's
+// would be off by 0.48/0.325 ~ 1.48x, or by diesel's/e5's LHV ratio if the
+// wrong fuel's LHV were fed in). No shared test helper loads tractor.json's
 // engine (only car_sedan's has one, load_sedan_desc() in powertrain_multi_diff_
 // desc.h) - loaded directly here instead.
-TEST_CASE("C5d Test 5: tractor's compression-ignition crude fuel model matches fuel_energy_in*eta_i == sum h*tau_comb*omega_old",
+//
+// PHYS-033 P4 I7a C5d review fix (B3): the identity below uses LITERAL
+// eta_i (0.48, Heywood 1988's CI default) and diesel.json's literal LHV
+// (42.0e6 J/kg exactly, per that file's own lhv_j_kg), never desc.eta_i/
+// desc.fuel.lhv_j_kg read back from the Desc under test - same rationale as
+// "C5d Test 1"'s header comment: reading them back would let a resolver bug
+// move both sides of the identity together. fuel_mass_sum (not merely
+// fuel_energy_in_sum, which folds the LHV in already) is tracked
+// independently so the LHV multiplication happens ONLY in this test's own
+// literal-driven expected-value computation, not by re-using
+// post.fuel_energy_in_delta (itself computed from desc.fuel.lhv_j_kg in
+// production - see engine_torque_map.cpp's post_solve). The active fuel's
+// name is also checked against the literal "diesel" (FuelDesc::name) so a
+// test that silently started reading car_sedan's e5/e10 fuel (or any other
+// fuel file) instead of tractor's own would be caught even before the LHV
+// identity below is checked.
+TEST_CASE("C5d Test 5: tractor's compression-ignition crude fuel model matches fuel_mass*eta_i*LHV == sum h*tau_comb*omega_old",
           "[unit][drivetrain][fuel]") {
     const vehicle::VehicleDesc tractor_desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
     TorqueMapEngineDesc tractor_engine_public;
@@ -1711,10 +1878,14 @@ TEST_CASE("C5d Test 5: tractor's compression-ignition crude fuel model matches f
     REQUIRE(tractor_engine_public.has_ignition);
     REQUIRE(tractor_engine_public.ignition == EngineIgnition::Compression);
 
-    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(tractor_engine_public);
+    const EngineTorqueMap::Desc desc = to_engine_desc(tractor_engine_public);
     REQUIRE(desc.has_fuel_model);
     REQUIRE_FALSE(desc.has_fuel_map);
+    // Sanity pins on the literals used below (not part of the discrimination
+    // itself - the identity below never reads these two fields back).
     CHECK(desc.eta_i == Catch::Approx(0.48));
+    CHECK(desc.fuel.lhv_j_kg == Catch::Approx(42000000.0));
+    CHECK(desc.fuel.name == "diesel"); // B3: the active fuel really is tractor's own diesel, not e5/e10
 
     EngineTorqueMap engine(desc);
     engine.reset(EngineState::Running);
@@ -1725,13 +1896,15 @@ TEST_CASE("C5d Test 5: tractor's compression-ignition crude fuel model matches f
     constexpr real kHeldRpm = 1800.0;
     const real omega = rpm_to_omega(kHeldRpm);
     constexpr int kSubsteps = 1000;
+    constexpr real kEtaCompressionDefault = real(0.48);  // Heywood 1988 CI default, literal - see header comment
+    constexpr real kDieselLhvJKg = real(42000000.0);     // data/fuels/diesel.json's own lhv_j_kg, literal
 
-    real fuel_energy_in_sum = 0.0;
+    real fuel_mass_sum = 0.0;
     real work_sum = 0.0;
     for (int i = 0; i < kSubsteps; ++i) {
         const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(1.0), no_ignition_cut(), kSubstepH);
         const PostSolveResult post = engine.post_solve(omega, kSubstepH); // dyno holds omega exactly constant
-        fuel_energy_in_sum += post.fuel_energy_in_delta;
+        fuel_mass_sum += post.fuel_mass_delta;
 
         const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
         const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
@@ -1741,8 +1914,8 @@ TEST_CASE("C5d Test 5: tractor's compression-ignition crude fuel model matches f
     }
 
     REQUIRE(work_sum > 0.0);
-    const real rel_err = std::abs(fuel_energy_in_sum * desc.eta_i - work_sum) / work_sum;
-    CHECK(rel_err <= 1e-9);
+    const real rel_err = std::abs(fuel_mass_sum * kEtaCompressionDefault * kDieselLhvJKg - work_sum) / work_sum;
+    CHECK(rel_err <= 1e-12);
 }
 
 // Brief test 6: an explicit indicated_efficiency (0.40) scales fuel by
@@ -1751,7 +1924,7 @@ TEST_CASE("C5d Test 5: tractor's compression-ignition crude fuel model matches f
 TEST_CASE("C5d Test 6: an explicit indicated_efficiency scales fuel by exactly the default/override ratio",
           "[unit][drivetrain][fuel]") {
     auto build = [](real eta_i) {
-        EngineTorqueMap::Desc d = to_engine_desc_for_test(car_sedan_engine_public_desc());
+        EngineTorqueMap::Desc d = to_engine_desc(car_sedan_engine_public_desc());
         REQUIRE(d.has_fuel_model);
         d.eta_i = eta_i;
         return d;
@@ -1835,6 +2008,143 @@ TEST_CASE("C5d Test 7: car_sedan's state_hash is bit-identical whether the engin
     INFO("first differing tick " << first_mismatch << " (" << mismatches << " of " << kTicks << ")");
     CHECK(mismatches == 0);
     CHECK(next_event == events.size());
+}
+
+namespace {
+
+// PHYS-033 P4 I7a C5d review fix (B2): the three World-level tests below
+// exercise ps::drivetrain::to_engine_desc() (the real production resolver)
+// through a REAL Powertrain, not a bare EngineTorqueMap - "C5d Test 6" above
+// already covers the indicated_efficiency-override ratio at the bare-engine
+// level, but B2 additionally wants it (plus two more resolver knobs: fuels
+// order and ignition kind) proven through the full World/Powertrain/
+// VehicleInstance stack, where a resolver mistake could in principle be
+// masked or amplified by everything downstream of to_engine_desc().
+//
+// All three drive car_sedan.json's own real i4_2l_na.json engine curves
+// (via ps_test::load_sedan_desc(), mutated in code - never a data file on
+// disk) through an identical WOT free-rev in Neutral (make_world_rig_1to1,
+// gear 0 - no wheel/tyre/road load, so the two variants' torque/omega
+// trajectories are dynamically IDENTICAL: none of fuels/ignition/
+// indicated_efficiency ever feeds back into tau0/d, only scales the fuel
+// sub-ledger's output - see "C5d Test 6"'s own comment). Because the
+// trajectories are identical, the ratio of the two runs' cumulative
+// World::powertrain_energy(...).fuel_mass is EXACTLY the ratio of whatever
+// scalar (LHV or eta_i) differs between them, to floating-point rounding
+// only - hence the tight 1e-12 tolerance (vs. "C5d Test 6"'s looser 1e-9,
+// which additionally drives a real WheelInstance/tyre-coupled substep loop
+// by hand rather than through World::step()).
+TorqueMapEngineDesc& sedan_engine_ref(vehicle::VehicleDesc& desc) {
+    for (auto& c : desc.powertrain.components) {
+        if (auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) return *e;
+    }
+    throw std::runtime_error("sedan_engine_ref: no TorqueMapEngineDesc component");
+}
+
+// Drives `rig` at WOT in Neutral for kRevTicks substeps (1:1 tick:substep,
+// make_world_rig_1to1's own contract) and returns the cumulative fuel_mass
+// booked by the end of the run.
+real run_wot_free_rev_fuel_mass(WorldRig& rig) {
+    constexpr int kRevTicks = 300; // ~0.3125 s WOT free-rev, no wheel load
+    rig.world->set_control("throttle", 1.0);
+    for (int tick = 0; tick < kRevTicks; ++tick) {
+        rig.world->step();
+    }
+    return rig.world->powertrain_energy(rig.vehicle).fuel_mass;
+}
+
+} // namespace
+
+// B2 new test (a): reordering the engine's "fuels" list to [e10, e5] makes
+// e10 (not e5) the active fuel (fuels[0] wins - see docs/data_formats/
+// engine.md), so the fuel_mass ratio vs. the baseline (fuels[0] == e5) must
+// equal e5's LHV / e10's LHV EXACTLY (mass = work/(eta_i*LHV), eta_i
+// unchanged in both variants - both stay spark/no override).
+TEST_CASE("B2 new test: reordering the engine's fuels list scales fuel_mass by exactly the swapped fuels' LHV ratio",
+          "[unit][drivetrain][fuel]") {
+    vehicle::VehicleDesc baseline_desc = ps_test::load_sedan_desc();
+    vehicle::VehicleDesc reordered_desc = ps_test::load_sedan_desc();
+
+    TorqueMapEngineDesc& baseline_engine = sedan_engine_ref(baseline_desc);
+    REQUIRE(baseline_engine.fuels.size() == 2);
+    REQUIRE(baseline_engine.fuels[0].name == "e5");
+    REQUIRE(baseline_engine.fuels[1].name == "e10");
+
+    TorqueMapEngineDesc& reordered_engine = sedan_engine_ref(reordered_desc);
+    std::swap(reordered_engine.fuels[0], reordered_engine.fuels[1]);
+    REQUIRE(reordered_engine.fuels[0].name == "e10");
+
+    constexpr real kE5LhvJKg = real(43089334.0);  // data/fuels/e5.json's own lhv_j_kg, literal
+    constexpr real kE10LhvJKg = real(42184298.0); // data/fuels/e10.json's own lhv_j_kg, literal
+    REQUIRE(baseline_engine.fuels[0].lhv_j_kg == Catch::Approx(kE5LhvJKg));
+    REQUIRE(reordered_engine.fuels[0].lhv_j_kg == Catch::Approx(kE10LhvJKg));
+
+    WorldRig baseline_rig = make_world_rig_1to1(baseline_desc, /*gear=*/0);
+    WorldRig reordered_rig = make_world_rig_1to1(reordered_desc, /*gear=*/0);
+    const real mass_baseline = run_wot_free_rev_fuel_mass(baseline_rig);
+    const real mass_reordered = run_wot_free_rev_fuel_mass(reordered_rig);
+    REQUIRE(mass_baseline > 0.0);
+    REQUIRE(mass_reordered > 0.0);
+
+    const real expected_ratio = kE5LhvJKg / kE10LhvJKg;
+    const real actual_ratio = mass_reordered / mass_baseline;
+    CHECK(actual_ratio == Catch::Approx(expected_ratio).epsilon(1e-12));
+}
+
+// B2 new test (b): an explicit indicated_efficiency override (0.40) through
+// a real World/Powertrain scales fuel_mass by exactly the spark
+// default/override ratio - "C5d Test 6" above already pins this at the
+// bare-EngineTorqueMap level; this is the same knob through the full stack.
+TEST_CASE("B2 new test: an explicit indicated_efficiency through a real Powertrain scales fuel_mass by exactly the default/override ratio",
+          "[unit][drivetrain][fuel]") {
+    vehicle::VehicleDesc default_desc = ps_test::load_sedan_desc();
+    vehicle::VehicleDesc override_desc = ps_test::load_sedan_desc();
+
+    TorqueMapEngineDesc& default_engine = sedan_engine_ref(default_desc);
+    REQUIRE(default_engine.indicated_efficiency == 0.0); // 0.0 sentinel: no override, ignition-default wins
+
+    TorqueMapEngineDesc& override_engine = sedan_engine_ref(override_desc);
+    override_engine.indicated_efficiency = real(0.40);
+
+    WorldRig default_rig = make_world_rig_1to1(default_desc, /*gear=*/0);
+    WorldRig override_rig = make_world_rig_1to1(override_desc, /*gear=*/0);
+    const real mass_default = run_wot_free_rev_fuel_mass(default_rig);
+    const real mass_override = run_wot_free_rev_fuel_mass(override_rig);
+    REQUIRE(mass_default > 0.0);
+    REQUIRE(mass_override > 0.0);
+
+    const real expected_ratio = real(0.325) / real(0.40);
+    const real actual_ratio = mass_override / mass_default;
+    CHECK(actual_ratio == Catch::Approx(expected_ratio).epsilon(1e-12));
+}
+
+// B2 new test (c): flipping the engine's ignition from spark to compression
+// (with no indicated_efficiency override) scales fuel_mass by exactly the
+// spark/compression default ratio (0.325/0.48) - catches a resolver bug
+// that used the wrong ignition-type default, or ignored ignition entirely.
+TEST_CASE("B2 new test: flipping ignition from spark to compression through a real Powertrain scales fuel_mass by exactly the default ratio",
+          "[unit][drivetrain][fuel]") {
+    vehicle::VehicleDesc spark_desc = ps_test::load_sedan_desc();
+    vehicle::VehicleDesc compression_desc = ps_test::load_sedan_desc();
+
+    TorqueMapEngineDesc& spark_engine = sedan_engine_ref(spark_desc);
+    REQUIRE(spark_engine.has_ignition);
+    REQUIRE(spark_engine.ignition == EngineIgnition::Spark);
+    REQUIRE(spark_engine.indicated_efficiency == 0.0); // no override on either variant
+
+    TorqueMapEngineDesc& compression_engine = sedan_engine_ref(compression_desc);
+    compression_engine.ignition = EngineIgnition::Compression;
+
+    WorldRig spark_rig = make_world_rig_1to1(spark_desc, /*gear=*/0);
+    WorldRig compression_rig = make_world_rig_1to1(compression_desc, /*gear=*/0);
+    const real mass_spark = run_wot_free_rev_fuel_mass(spark_rig);
+    const real mass_compression = run_wot_free_rev_fuel_mass(compression_rig);
+    REQUIRE(mass_spark > 0.0);
+    REQUIRE(mass_compression > 0.0);
+
+    const real expected_ratio = real(0.325) / real(0.48);
+    const real actual_ratio = mass_compression / mass_spark;
+    CHECK(actual_ratio == Catch::Approx(expected_ratio).epsilon(1e-12));
 }
 
 // Mirrors make_world_rig() above but with a caller-chosen worker count, for

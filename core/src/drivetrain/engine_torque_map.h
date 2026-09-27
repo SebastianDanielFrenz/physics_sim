@@ -158,8 +158,13 @@ private:
     real tau_smooth_ = 0.0, tau_comb_ = 0.0, tau_start_ = 0.0;
     // PHYS-033 P4 I7a C5: this substep's fuel flow, evaluated in pre_solve at
     // the substep-start rpm/theta_c against desc_.fuel_map, consumed by
-    // post_solve. Stays exactly 0.0 forever when !desc_.has_fuel_map. NOT
-    // hashed (fold_state_hash is unchanged by this commit).
+    // post_solve. PHYS-033 P4 I7a C5d review fix (N10): a prior version of
+    // this comment claimed it "stays exactly 0.0 forever when
+    // !desc_.has_fuel_map" - false as of C5d, which ALSO computes a nonzero
+    // mdot_kg_s_ via the crude no-map estimate whenever has_fuel_model is
+    // true and has_fuel_map is false (mech_power/(eta_i*LHV), see pre_solve).
+    // It stays exactly 0.0 only when neither has_fuel_map nor has_fuel_model
+    // is set. NOT hashed (fold_state_hash is unchanged by either commit).
     real mdot_kg_s_ = 0.0;
 };
 
