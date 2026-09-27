@@ -629,6 +629,29 @@ TEST_CASE("State hash with two terrain interest points and suppression is identi
 // awd, the C15 diff_lock on/off, brake to a stop, then park_lock. Pins the
 // literal hash recorded when the scenario file was authored (ps_run at
 // 1/2/4/10 workers all agreed before this test existed).
+// PHYS-033 P4 I7a C5b (owner ruling 2026-09-26, 2026-09-27): this scenario's
+// hash was checked and confirmed UNCHANGED by C5b's reorder (ManualTcu now
+// reads the throttle-command stage's command - here max(hand_throttle,
+// pedal) via the engine's governor hand lever - instead of the raw pedal,
+// which is 0 throughout this scenario). The launch law (N->1st at t=1.0 s)
+// is the one place a tractor's ManualTcu reads the throttle signal
+// substep-by-substep (auto_shift is off here, so the up/down-threshold
+// reads are dead); it computes
+//   full = full_rpm_min + throttle_request * (full_rpm_max - full_rpm_min)
+// and clamps e_tgt to 1 once rpm >= full. tractor.json's auto_clutch has
+// full_rpm_min=1200, full_rpm_max=1700; the engine's all-speed governor
+// (independent of this reorder - the engine has read the stage's command
+// since I7a C3, before and after C5b) holds the crank at its no-load
+// setpoint idle + hand_throttle*(high_idle - idle) = 850 + 0.6*(2400-850)
+// = 1780 rpm while sitting in Neutral before the shift. 1780 rpm exceeds
+// BOTH the old full=1200 (throttle_request=0, raw pedal) and the new
+// full=1500 (throttle_request=0.6, the command) - e_tgt saturates to 1.0
+// identically either way, so this specific scripted run cannot discriminate
+// the two orderings. (test_throttle_control.cpp's dedicated tractor
+// hand-throttle-launch test below uses a lower hand_throttle so the two
+// thresholds bracket the engine rpm and the difference is observable.)
+// Left at the pre-C5b recorded value - do not re-record without first
+// re-deriving this saturation argument for the new build.
 TEST_CASE("State hash for the tractor I4 control-channel exercise scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
     constexpr std::uint64_t kRecorded = 0xac386af7129b9ffeULL;
