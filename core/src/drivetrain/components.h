@@ -24,6 +24,7 @@
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/energy_ledger.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/world/ambient.h"
 
 #include <cstdint>
 #include <vector>
@@ -41,6 +42,10 @@ struct ComponentSubstepCtx {
     real throttle = 0.0;
     real brake = 0.0;
     real handbrake = 0.0;
+    // PHYS-033 P4 I7b C9: ambient atmospheric sample (ps/world/ambient.h),
+    // from VehicleTickEnv::ambient - copied once per tick like the channel
+    // inputs below. Never hashed (an environment input, not sim state).
+    AmbientSample ambient{};
 
     // --- raw per-tick channel inputs (VehicleInstance fills these; consumed
     // by Powertrain::pre_solve_components's controller-orchestration phase,

@@ -1723,6 +1723,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         s.clutch_engaged_fraction = ctx.clutch_engaged_fraction;
         s.gearbox_in_neutral = ctx.gearbox_in_neutral;
         if (fuel_tank_) s.fuel_available_kg = fuel_tank_->content(); // PHYS-033 P4 I7a C6: else +infinity (never starves)
+        s.ambient = ctx.ambient; // PHYS-033 P4 I7b C9; EngineTorqueMap ignores it
+        last_engine_sensors_ambient_ = ctx.ambient; // test-only white-box hook
         const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut};
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
         const auto& pre = last_engine_result_;

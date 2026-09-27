@@ -32,6 +32,7 @@
 
 #include "ps/drivetrain/powertrain_state.h" // ps::drivetrain::EngineState
 #include "ps/types.h"
+#include "ps/world/ambient.h"
 
 #include <cstdint>
 #include <limits>
@@ -58,6 +59,12 @@ struct Sensors {
     // (and every direct pre_solve call site) behaves exactly as before C6.
     // See EngineTorqueMap::pre_solve's starvation step.
     real fuel_available_kg = std::numeric_limits<real>::infinity();
+    // PHYS-033 P4 I7b C9: ambient atmospheric sample (ps/world/ambient.h),
+    // from ComponentSubstepCtx::ambient. An environment INPUT, not an ECU
+    // sensor derived from engine state - the graph engine (EngineTorqueMap)
+    // ignores it entirely (owner ruling Q10); a future simulated engine
+    // (I7b C11+) reads it to model altitude effects on power. Never hashed.
+    AmbientSample ambient{};
 };
 // PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
 // combined command plus the TCU-forwarded (electronic) or fixed (mechanical)

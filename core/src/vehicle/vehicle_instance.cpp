@@ -226,6 +226,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         ctx.throttle = controls.throttle;
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
+        ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9
         ctx.clutch_pedal = clutch_pedal;
         ctx.gear_request = gear_request;
         ctx.shift_up_count = shift_up_count;
