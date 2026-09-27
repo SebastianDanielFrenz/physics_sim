@@ -11,17 +11,41 @@ independent format check — it inherits the enclosing vehicle file's `/2`).
 Public descriptor: `ps::drivetrain::TorqueMapEngineDesc`
 (`core/include/ps/drivetrain/powertrain_desc.h`).
 
-I3 has exactly one engine `kind`: `"torque_map"` — a WOT torque curve, a
+I3 shipped exactly one engine `kind`: `"torque_map"` — a WOT torque curve, a
 motoring (closed-throttle/engine-braking) torque curve, plus idle control,
 a rev limiter, a starter model and rpm thresholds for the engine's own
-state machine (off → firing → idle → running).
+state machine (off → firing → idle → running). PHYS-033 P4 I7a C5 turned
+`read_engine_fields` into a thin dispatcher on `kind` so a second kind
+(`"simulated"`, a full MVEM engine) can sit next to `torque_map` once it
+exists (I7b) — see the [`kind`](#kind) section below. `torque_map` also
+gained an optional fuel model in C5: [`fuel`](#fuel) and
+[`fuel_map`](#fuel_map) below.
+
+### `kind`
+
+| Value | Status | Meaning |
+|---|---|---|
+| absent, or `"torque_map"` | shipped | the `torque_map` engine documented in this file |
+| `"simulated"` | rejected — `"<ctx>: engine kind \"simulated\" is not yet supported (PHYS-033 I7b)"` | reserved for a future full MVEM engine |
+| anything else | rejected — `"<ctx>: engine 'kind' must be \"torque_map\" or \"simulated\", got \"<value>\""` | — |
+
+Before C5, `kind` was required and had to equal `"torque_map"` literally
+(omitting it was a load error). C5 relaxed this to "absent means
+`torque_map`" so a test fixture (or a future hand-written file) can omit
+the field entirely — every shipped `data/engines/*.json` file already sets
+`kind` explicitly and is unaffected either way, and `kind` never enters
+`fold_state_hash` regardless. This default is pinned by
+`tests/unit/test_engine_fuel_map.cpp`'s "kind absent defaults to
+torque_map" case, not re-verified against every determinism scenario's
+`state_hash` (no shipped scenario exercises the absent-`kind` path, since
+every shipped engine file sets it).
 
 ## Fields
 
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
 | `format` | string | required (standalone file only) | — | must equal `"physics_sim.engine/1"` | see README |
-| `kind` | string | **required** | — | must equal `"torque_map"`, else `"<ctx>: engine 'kind' must be \"torque_map\" (I3's only kind)"` | engine model kind |
+| `kind` | string | optional (PHYS-033 P4 I7a C5; was required before C5) | `"torque_map"` | see [`kind`](#kind) above | engine model kind |
 | `wot_torque_nm_vs_rpm` | Curve1D (N·m vs. rpm) | **required** | — | must be present (`"<ctx>: 'wot_torque_nm_vs_rpm' is required"`); `x` strictly ascending and non-empty; `x[0] >= 0` (`"<ctx>.wot_torque_nm_vs_rpm: x[0] must be >= 0"`) | wide-open-throttle torque vs. engine speed; scaled by throttle 0..1 to get commanded torque |
 | `motoring_torque_nm_vs_rpm` | Curve1D (N·m vs. rpm) | **required** (I3; an I2-era file without it is rejected) | — | must be present, else `"<ctx>: 'motoring_torque_nm_vs_rpm' is required (PHYS-033 I3 - an I2-era engine block without it is no longer accepted)"`; `x` strictly ascending and non-empty; `x[0] == 0` exactly (`"<ctx>.motoring_torque_nm_vs_rpm: x[0] must be exactly 0"`); every `y <= 0` (`"<ctx>.motoring_torque_nm_vs_rpm: every y must be <= 0"`) | closed-throttle (engine-braking/friction) torque vs. rpm, always ≤ 0; `y[0]` (at rpm 0) is the Coulomb/static-friction part |
 | `inertia_kgm2` | real (kg·m²) | **required** in I3 | `0` | **must be > 0**, else `"<ctx>: inertia_kgm2 must be > 0 in I3 (...the crank node needs real inertia...)"` | crank + flywheel + clutch-cover rotational inertia; also this component's drivetrain-node inertia |
@@ -39,6 +63,8 @@ state machine (off → firing → idle → running).
 | `crank_axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length (±1e-6), else `"<ctx>.crank_axis_local must be zero or a unit vector, got length <len>"` | chassis-local direction of positive crank ω, for the optional rotor-reaction torque on the chassis; zero = no rotor reaction |
 | `initial_state` | string | optional | `"running"` | must be `"running"` or `"off"`, else `"<ctx>: initial_state must be \"running\" or \"off\", got \"<value>\""` | engine state at scenario start |
 | `throttle_input` | string | optional (PHYS-033 P4 I7a C3; a simulated MVEM engine, out of this commit's scope, will require it explicitly) | `"electronic"` | must be `"electronic"` or `"mechanical"`, else `"<ctx>: throttle_input must be \"electronic\" or \"mechanical\", got \"<value>\""` | which throttle-command stage kind this engine expects when no explicit `throttle_control` powertrain component names it (see `vehicle.md`'s ["`throttle_control` component fields (I7a C3)"](vehicle.md#throttle_control-component-fields-i7a-c3) section) — an explicit `throttle_control` component naming this engine must declare the SAME `kind` as this field, both directions checked at load time; a mismatch is rejected (`"<ctx>: throttle_control 'kind' ... does not match engine '<id>'s throttle_input ..."`), it is never silently overridden |
+| `fuel` | string (path) | optional; **required if `fuel_map` present** | absent (no fuel model) | non-empty string, else `"<ctx>: 'fuel' must be a non-empty path string"`; must resolve and load via `ps::io::load_fuel_json` | path to a `physics_sim.fuel/1` file (see `fuel.md`), resolved relative to THIS engine JSON's own directory — the referenced engine file's own directory when the engine itself was reached via a vehicle's `{"ref": ...}`, else the vehicle file's directory for an inline engine block |
+| `fuel_map` | object, see [below](#fuel_map) | optional | absent (`has_fuel_map = false`, no fuel computation anywhere) | see below | fuel flow (g/s) vs. (rpm, load) — `load` is `theta_c`, the post-limiter combustion fraction |
 
 **rpm ordering rule** (checked as one combined condition): `stall_rpm <
 start_complete_rpm <= idle_rpm < limiter.rpm`, else `"<ctx>: engine rpm
@@ -181,6 +207,71 @@ with a `tests/unit/test_vehicle_io_validation.cpp` case:
 | `stall_torque_nm` | real (N·m) | `140.0` | none | starter torque at 0 rpm |
 | `free_speed_rpm` | real (rpm) | `400.0` | none | torque falls linearly to 0 at this speed |
 | `interlock` | string | `"clutch_or_neutral"` | must be `"clutch_or_neutral"` or `"none"`, else `"<ctx>: starter.interlock must be \"clutch_or_neutral\" or \"none\", got \"<value>\""` | whether the starter is inhibited unless the clutch is open or the gearbox is in neutral |
+
+### `fuel_map`
+
+PHYS-033 P4 I7a C5 (plan section 2.3). A bilinear-interpolated 2D table
+(`ps::drivetrain::Table2D`, `x` = rpm, `y` = load) of fuel flow in g/s,
+requiring a sibling `fuel` reference (above) to turn a booked mass into
+energy. `load` is exactly `theta_c` — the engine's own post-limiter
+combustion fraction (`ess.load`/`EngineSoundState::load`), i.e. the SAME
+value already published for sound — not the raw pedal, not the pre-limiter
+throttle request. At runtime `mdot = fuel_map.value(rpm, theta_c)` is
+evaluated once per substep in `pre_solve` at the substep-START rpm/theta_c
+(no starvation factor yet — a fuel tank/pump model is C6), and the booked
+mass is `h * mdot` in `post_solve`.
+
+| Field | Type | Req./opt. | Validation | Meaning |
+|---|---|---|---|---|
+| `rpm` | array of real | **required** | ≥ 2 points, strictly ascending (`"<ctx>.fuel_map: 'rpm' must be strictly ascending"`) | table's `x` axis |
+| `load` | array of real | **required** | ≥ 2 points, strictly ascending; **must start at exactly `0.0`** and **end at exactly `1.0`** (`"<ctx>.fuel_map: 'load' must start at exactly 0.0"` / `"...end at exactly 1.0"`) | table's `y` axis — `theta_c` |
+| `fuel_flow_g_s` | array of arrays of real | **required** | outer length == `rpm.size()`, each inner row length == `load.size()` (`"<ctx>.fuel_map: 'fuel_flow_g_s' must have one row per 'rpm' point (...)"` / `"...row <i> must have one value per 'load' point (...)"`); every value finite and `>= 0` (`"<ctx>.fuel_map: fuel_flow_g_s[i][j] must be >= 0 and finite, got <v>"`) | `values[ix][iy]` = fuel flow at `(rpm[ix], load[iy])`, g/s |
+| `source` | string | **required** | non-empty (`"<ctx>.fuel_map: 'source' is required (PLAN.md section 8)"`) | citation/derivation note, same convention as everywhere else in this codebase |
+
+**The `load == 0` column must be exactly `0.0`.** Every row's
+`fuel_flow_g_s[ix][0]` must equal `0.0` exactly (not merely near-zero):
+`"<ctx>.fuel_map: fuel_flow_g_s[<ix>][0] (load 0) must be exactly 0.0, got
+<v>"`. This is what makes DFCO, ignition cut, a fuel-cut limiter, a
+pedal-0/idle-PI-floor-0 substep, and the `Stalled`/`Off` engine states all
+book EXACTLY zero fuel: each of those substeps has `theta_c == 0` (`ess.load
+== 0`), which lands exactly on this column via `Table2D::value`'s own
+clamped-bilinear lookup — no floating-point residue for a zero-tolerance
+test to trip on.
+
+**Efficiency check** (plan section 2.3): a load-time check that the map does
+not imply more than 100% thermal efficiency — `theta * (w(rpm) - m(rpm)) *
+omega <= mdot * LHV`, where `w`/`m` are this engine's own
+`wot_torque_nm_vs_rpm`/`motoring_torque_nm_vs_rpm` curves, `omega = rpm *
+2*pi/60`, `mdot = fuel_map.value(rpm, theta) / 1000` (kg/s), and `LHV` is
+the referenced fuel's `lhv_j_kg`. This is **sampled, not exhaustive**: it is
+checked only at
+
+1. every map node `(rpm[ix], load[iy])`;
+2. every map-CELL MIDPOINT (the average of each adjacent pair of `rpm`/
+   `load` nodes) — bilinear interpolation can under/overshoot a saturating
+   `w - m` curve between nodes, so the nodes alone are not sufficient;
+3. every `wot_torque_nm_vs_rpm`/`motoring_torque_nm_vs_rpm` curve
+   breakpoint crossed with every map `load` node — a curve knot is where
+   `w(rpm) - m(rpm)`'s own slope can kink, the worst case for a fixed-load
+   power line between two map rpm nodes.
+
+Between these sample points the check does not guarantee anything — a
+pathological map could still exceed 100% efficiency strictly between a
+node, its cell midpoint and a curve breakpoint. The **runtime safety net**
+is `PowertrainEnergy::fuel_efficiency_violations`
+(`core/include/ps/drivetrain/energy_ledger.h`): every substep where the
+booked `engine_heat` delta (`fuel_energy_in_delta - indicated_work_delta`)
+comes out negative — i.e. the map claimed more energy converted to work
+than was burned, wherever in `(rpm, theta)` space that substep actually
+landed — increments this counter instead of throwing, so a load-time gap
+in the sampled check is still observable (and testable) at runtime rather
+than silently producing negative heat.
+
+A load-time violation throws `"<ctx>.fuel_map: implies >100% thermal
+efficiency at rpm=<r>, load=<l> (mechanical <p1> W > fuel <p2> W)"`. `rpm <=
+0` is skipped (zero mechanical power at any load, never a violation —
+avoids a spurious check at the table's own `x.front()` clamp when
+`rpm[0] == 0`).
 
 ## Minimal complete example
 

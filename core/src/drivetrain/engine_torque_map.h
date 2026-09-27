@@ -26,6 +26,8 @@
 
 #include "engine.h"
 
+#include "ps/drivetrain/fuel_desc.h" // FuelDesc (PHYS-033 P4 I7a C5)
+#include "ps/drivetrain/table2d.h"   // Table2D (PHYS-033 P4 I7a C5, the optional fuel map)
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h"
 
@@ -85,6 +87,14 @@ public:
         InitialState initial_state = InitialState::Running;
         bool has_governor = false;
         GovernorDesc governor;
+        // PHYS-033 P4 I7a C5: optional fuel map (rpm x load -> g/s), copied
+        // field-for-field from TorqueMapEngineDesc by powertrain.cpp's
+        // to_engine_desc, same pattern as governor above. has_fuel_map false
+        // (default) means pre_solve/post_solve never touch mdot_kg_s_ or any
+        // PostSolveResult fuel field - byte-identical to before this commit.
+        bool has_fuel_map = false;
+        FuelDesc fuel;
+        Table2D fuel_map;
     };
 
     explicit EngineTorqueMap(Desc desc);
@@ -135,6 +145,11 @@ private:
     // Stashed by pre_solve, read back by post_solve.
     real tau0_ = 0.0, d_ = 0.0, omega_old_ = 0.0;
     real tau_smooth_ = 0.0, tau_comb_ = 0.0, tau_start_ = 0.0;
+    // PHYS-033 P4 I7a C5: this substep's fuel flow, evaluated in pre_solve at
+    // the substep-start rpm/theta_c against desc_.fuel_map, consumed by
+    // post_solve. Stays exactly 0.0 forever when !desc_.has_fuel_map. NOT
+    // hashed (fold_state_hash is unchanged by this commit).
+    real mdot_kg_s_ = 0.0;
 };
 
 } // namespace ps::drivetrain

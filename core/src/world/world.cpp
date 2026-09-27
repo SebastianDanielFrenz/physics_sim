@@ -317,10 +317,12 @@ void World::step() {
     const std::size_t energy_channel_count = energy_telemetry_channels_.size() * 18;  // PHYS-033 P4 I2 commit 5b (11) + powertrain state (7)
     std::size_t diff_channel_count = 0; // PHYS-033 P4 I4 C8: bias + locked per registered (non-plain-open) diff
     for (const auto& channels : diff_telemetry_channels_) diff_channel_count += channels.size() * 2;
+    std::size_t fuel_channel_count = 0; // PHYS-033 P4 I7a C5: flow_g_s + energy_in + heat, only for a fuel-mapped engine
+    for (const auto& channels : fuel_telemetry_channels_) fuel_channel_count += channels.size() * 3;
 
     std::vector<real> row;
     row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count +
-                chassis_channel_count + energy_channel_count + diff_channel_count);
+                chassis_channel_count + energy_channel_count + diff_channel_count + fuel_channel_count);
     for (double ms : last_stage_ms_) row.push_back(real(ms));
     for (int w = 0; w < job_system_->worker_count(); ++w) {
         const double busy_ns = static_cast<double>(job_system_->worker_busy_ns(w));
@@ -388,6 +390,16 @@ void World::step() {
                 row.push_back(ps_snap.diffs[dc.diff_index].bias);
                 row.push_back(ps_snap.diffs[dc.diff_index].locked ? real(1.0) : real(0.0));
             }
+        }
+
+        // PHYS-033 P4 I7a C5 (plan section 5): fuel flow/energy_in/heat,
+        // right after this vehicle's diff values, matching create_vehicle's
+        // registration order. Empty for every vehicle with no fuel map
+        // (every vehicle shipped before this commit) - reuses ps_snap/e above.
+        if (vi < fuel_telemetry_channels_.size() && !fuel_telemetry_channels_[vi].empty()) {
+            row.push_back(ps_snap.fuel_flow_g_s);
+            row.push_back(e.fuel_energy_in);
+            row.push_back(e.engine_heat);
         }
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
@@ -603,6 +615,28 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
                 diff_channels.push_back(dc);
             }
             ++diff_component_index;
+        }
+    }
+
+    // PHYS-033 P4 I7a C5 (plan section 5): vehicle<i>.fuel.{flow_g_s,
+    // energy_in, heat}, registered ONLY for a vehicle whose engine has a
+    // fuel map, right after this vehicle's diff-telemetry channels - a
+    // vehicle with no fuel map (every vehicle shipped before this commit)
+    // registers nothing here, so its CSV header stays byte-identical.
+    // tank_kg telemetry comes with C6.
+    if (fuel_telemetry_channels_.size() <= id.index) fuel_telemetry_channels_.resize(id.index + 1);
+    std::vector<FuelTelemetryChannels>& fuel_channels = fuel_telemetry_channels_[id.index];
+    fuel_channels.clear();
+    for (const drivetrain::ComponentDesc& component : desc.powertrain.components) {
+        const auto* engine_desc = std::get_if<drivetrain::TorqueMapEngineDesc>(&component.params);
+        if (engine_desc != nullptr && engine_desc->has_fuel_map) {
+            const std::string fuel_prefix = "vehicle" + std::to_string(id.index) + ".fuel.";
+            FuelTelemetryChannels fc;
+            fc.flow_g_s = telemetry_->register_channel(fuel_prefix + "flow_g_s");
+            fc.energy_in = telemetry_->register_channel(fuel_prefix + "energy_in");
+            fc.heat = telemetry_->register_channel(fuel_prefix + "heat");
+            fuel_channels.push_back(fc);
+            break; // at most one engine per vehicle
         }
     }
 

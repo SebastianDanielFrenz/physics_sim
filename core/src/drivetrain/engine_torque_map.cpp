@@ -214,6 +214,17 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.governor_setpoint_rpm = governor_setpoint_rpm;
     r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
     r.theta_c = theta_c;
+
+    // PHYS-033 P4 I7a C5: fuel flow at this substep-start rpm/theta_c (the
+    // map's own "load" axis - see docs/data_formats/engine.md). Table2D
+    // clamps at its own domain edges, same as Curve1D above; theta_c is
+    // already in [0, 1] by construction (theta_eff clamped, f_lim clamped).
+    // Exactly 0.0 (mdot_kg_s_ never touched otherwise) when there is no map.
+    if (desc_.has_fuel_map) {
+        const real mdot_g_s = desc_.fuel_map.value(rpm, theta_c);
+        mdot_kg_s_ = mdot_g_s / real(1000.0);
+        r.fuel_flow_g_s = mdot_g_s;
+    }
     return r;
 }
 
@@ -229,6 +240,34 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
     PostSolveResult r;
     r.starter_in_delta = work * frac_starter;
     r.engine_out_delta = work - r.starter_in_delta;
+
+    // PHYS-033 P4 I7a C5 review fix: indicated_work_delta used to be a
+    // proportional split of `work` by tau_comb_/tau0_ (the same construction
+    // as frac_starter above). That ratio is singular whenever tau0_ -> 0
+    // while tau_comb_ and d(omega)/dt stay nonzero - e.g. the idle PI
+    // refilling torque right after a DFCO cut, with rpm still falling and a
+    // non-flat motoring curve so tau_smooth_ + tau_start_ happens to cancel
+    // tau_comb_ at that instant. A near-zero denominator there blows the
+    // split up arbitrarily, producing a spurious negative engine_heat and
+    // false (or hidden) fuel_efficiency_violations. Compute combustion's own
+    // work directly instead - h*omega_new*tau_comb_, the same "work over
+    // this substep at the solved omega_new" construction engine_out's own
+    // `work` uses, just for tau_comb_ alone rather than tau_lin - which is
+    // well-defined regardless of tau0_. Owner ruling (post-review): computed
+    // and booked for EVERY torque_map engine, fuel map or not - an engine
+    // with no fuel map still models combustion mechanically (its own
+    // wot/motoring curves fire regardless of has_fuel_map), so
+    // indicated_work is meaningful there too and will feed a future cruder
+    // no-map fuel estimate; only fuel_mass/fuel_energy_in/engine_heat/
+    // fuel_efficiency_violations (which need an actual mass/LHV to convert
+    // against) stay gated on desc_.has_fuel_map, in Powertrain::
+    // post_solve_components.
+    r.indicated_work_delta = h * omega_new * tau_comb_;
+
+    if (desc_.has_fuel_map) {
+        r.fuel_mass_delta = h * mdot_kg_s_;
+        r.fuel_energy_in_delta = r.fuel_mass_delta * desc_.fuel.lhv_j_kg;
+    }
 
     crank_angle_ = std::fmod(crank_angle_ + omega_new * h, real(4.0) * kPi);
     return r;

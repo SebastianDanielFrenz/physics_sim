@@ -283,6 +283,10 @@ public:
     // default to 0 when desc_.has_governor is false - see EngineTorqueMap::
     // pre_solve). PowertrainSnapshot::governor_setpoint_rpm/hand_throttle.
     [[nodiscard]] real governor_setpoint_rpm() const { return last_engine_result_.governor_setpoint_rpm; }
+    // PHYS-033 P4 I7a C5: 0 for an engine with no fuel map (pre_solve never
+    // touches PreSolveResult::fuel_flow_g_s in that case).
+    // PowertrainSnapshot::fuel_flow_g_s/EngineSoundState::fuel_flow_g_s.
+    [[nodiscard]] real fuel_flow_g_s() const { return last_engine_result_.fuel_flow_g_s; }
     // PHYS-033 P4 I7a C3: the hand-lever value itself moved into the
     // throttle_stage.h stage (last_throttle_hand_lever_raw_ below) - this
     // accessor's meaning/callers (PowertrainSnapshot::hand_throttle) are
@@ -515,6 +519,12 @@ private:
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached
+    // PHYS-033 P4 I7a C5: true iff this vehicle's engine has a fuel map -
+    // gates ledger_.fuel_mass/fuel_energy_in/engine_heat/
+    // fuel_efficiency_violations booking in post_solve_components (indicated_work
+    // itself is booked unconditionally - see that function). false (default)
+    // for every engine without one, so those ledger fields never move.
+    bool engine_has_fuel_map_ = false;
     // PHYS-033 P4 I7a C3: the throttle-command stage between the pedal and
     // the engine (throttle_stage.h) - built from either an explicit
     // ThrottleControlDesc component or (no such component) the IMPLICIT

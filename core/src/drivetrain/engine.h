@@ -106,12 +106,39 @@ struct PreSolveResult {
     // PowertrainSnapshot::EngineSoundState::load publishes it for sound
     // (vehicle_instance.cpp), never hashed.
     real theta_c = 0.0;
+    // PHYS-033 P4 I7a C5: this substep's fuel flow rate in g/s (0 without a
+    // fuel map), evaluated at this same substep-start rpm/theta_c. Write-only
+    // for physics (post_solve's fuel_mass_delta is its own independent
+    // computation, not derived from this): published for
+    // PowertrainSnapshot::fuel_flow_g_s/EngineSoundState::fuel_flow_g_s,
+    // never hashed.
+    real fuel_flow_g_s = 0.0;
 };
 
-// Hoisted, unchanged, from EngineTorqueMap::PostSolveResult.
+// Hoisted, unchanged except the three PHYS-033 P4 I7a C5 fields below, from
+// EngineTorqueMap::PostSolveResult.
 struct PostSolveResult {
     real engine_out_delta = 0.0; // ledger.engine_out += this
     real starter_in_delta = 0.0; // ledger.starter_in += this
+    // PHYS-033 P4 I7a C5 (review-fixed): combustion's own work this substep,
+    // h*omega_new*tau_comb - the same "work at the solved omega_new"
+    // construction engine_out_delta's own `work` uses, just for tau_comb_
+    // alone (NOT a proportional split of `work` by tau_comb_/tau0_, which is
+    // singular when tau0_ -> 0 with tau_comb_ and d(omega)/dt still nonzero -
+    // see EngineTorqueMap::post_solve's own comment). Computed for EVERY
+    // torque_map engine, fuel map or not (owner ruling: an engine without a
+    // map still models combustion mechanically, and this quantity will feed
+    // a future cruder no-map fuel estimate). ledger.indicated_work += this,
+    // UNCONDITIONALLY, in Powertrain::post_solve_components - only the
+    // mass/LHV-derived fuel_mass/fuel_energy_in/engine_heat/
+    // fuel_efficiency_violations fields stay gated on has_fuel_map.
+    real indicated_work_delta = 0.0;
+    // PHYS-033 P4 I7a C5: fuel burned this substep, evaluated at pre_solve's
+    // substep-start rpm/load against an optional fuel map - both exactly
+    // 0.0 for an engine/vehicle with no map (default, every engine shipped
+    // before this commit). ledger.fuel_mass/fuel_energy_in += these.
+    real fuel_mass_delta = 0.0;      // kg this substep (h * mdot)
+    real fuel_energy_in_delta = 0.0; // J this substep (fuel_mass_delta * LHV)
 };
 
 // The engine/ECU seam (PHYS-033 P4 I7a plan): exactly the operations

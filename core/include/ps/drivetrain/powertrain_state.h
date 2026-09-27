@@ -32,6 +32,10 @@ struct EngineSoundState {
     // tick (pedal, through an optional pedal_map/linkage_curve, maxed with an
     // optional hand lever) - sound only, NOT hashed, like crank_angle above.
     real throttle_command = 0.0;
+    // PHYS-033 P4 I7a C5: this substep's fuel flow (g/s), read from
+    // PreSolveResult::fuel_flow_g_s - 0 for an engine with no fuel map
+    // (every vehicle shipped before this commit). NOT hashed.
+    real fuel_flow_g_s = 0.0;
 };
 
 struct DrivelineSoundState {
@@ -114,6 +118,10 @@ struct PowertrainSnapshot {
     // Powertrain::governor_setpoint_rpm/governor_hand_throttle).
     real governor_setpoint_rpm = 0.0;
     real hand_throttle = 0.0;
+    // PHYS-033 P4 I7a C5: this tick's fuel flow (g/s), mirroring
+    // EngineSoundState::fuel_flow_g_s above (same value - the adapter-facing
+    // copy) - 0 for an engine with no fuel map. Never hashed.
+    real fuel_flow_g_s = 0.0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled

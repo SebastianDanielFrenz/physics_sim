@@ -1,6 +1,8 @@
 #include "ps/io/vehicle_io.h"
 
 #include "../vehicle/tir_parser.h"
+#include "ps/drivetrain/table2d.h"
+#include "ps/io/fuel_io.h"
 
 #include <nlohmann/json.hpp>
 
@@ -362,11 +364,12 @@ void require_zero_or_unit(const Vec3& v, const std::string& what) {
     }
 }
 
-ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std::string& ctx) {
+// PHYS-033 P4 I7a C5: renamed from read_engine_fields (I3-I7a C4's only
+// engine kind) - read_engine_fields below is now a thin dispatcher on
+// "kind" so a second engine kind ("simulated", I7b) can sit next to this
+// one. Every torque_map-specific field/check is unchanged.
+ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const std::string& ctx, const std::string& engine_dir) {
     ps::drivetrain::TorqueMapEngineDesc e;
-    if (j.value("kind", std::string()) != "torque_map") {
-        throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" (I3's only kind)");
-    }
     if (!j.contains("wot_torque_nm_vs_rpm")) throw std::runtime_error(ctx + ": 'wot_torque_nm_vs_rpm' is required");
     e.wot_torque_nm_vs_rpm = read_curve(j.at("wot_torque_nm_vs_rpm"));
     require_ascending(e.wot_torque_nm_vs_rpm, ctx + ".wot_torque_nm_vs_rpm");
@@ -513,7 +516,162 @@ ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std:
                                       std::to_string(gov_hi) + "] - use a fuel_cut overspeed limiter instead");
         }
     }
+
+    // PHYS-033 P4 I7a C5 (plan section 2.3): optional fuel map. "fuel" is a
+    // path (relative to this engine JSON's own directory - engine_dir,
+    // component_ref_dir's result above - the referenced engine file's own
+    // directory when this engine block itself came from a "ref", else the
+    // vehicle file's own directory) to a fuel JSON, loaded via
+    // ps::io::load_fuel_json. "fuel_map" is {rpm, load, fuel_flow_g_s
+    // (rows=rpm, columns=load), source}. Neither is required; has_fuel_map
+    // stays false (default) unless a full, valid fuel_map is present - a
+    // 'fuel' reference with no map is accepted as a no-op (may matter once
+    // C6's tank exists) but 'fuel_map' with no 'fuel' is rejected outright
+    // (a fuel map with no LHV cannot be turned into energy).
+    if (j.contains("fuel_map") && !j.contains("fuel")) {
+        throw std::runtime_error(ctx + ": 'fuel_map' requires a 'fuel' reference (a fuel map with no LHV cannot be "
+                                  "turned into energy)");
+    }
+    if (j.contains("fuel")) {
+        if (!j.at("fuel").is_string() || j.at("fuel").get<std::string>().empty()) {
+            throw std::runtime_error(ctx + ": 'fuel' must be a non-empty path string");
+        }
+        const std::string fuel_path = resolve_path(engine_dir, j.at("fuel").get<std::string>());
+        e.fuel = ps::io::load_fuel_json(fuel_path);
+    }
+    if (j.contains("fuel_map")) {
+        const auto& fmj = j.at("fuel_map");
+        if (!fmj.contains("rpm") || !fmj.at("rpm").is_array()) {
+            throw std::runtime_error(ctx + ".fuel_map: 'rpm' array is required");
+        }
+        if (!fmj.contains("load") || !fmj.at("load").is_array()) {
+            throw std::runtime_error(ctx + ".fuel_map: 'load' array is required");
+        }
+        if (!fmj.contains("fuel_flow_g_s") || !fmj.at("fuel_flow_g_s").is_array()) {
+            throw std::runtime_error(ctx + ".fuel_map: 'fuel_flow_g_s' array is required");
+        }
+        const std::string source = fmj.value("source", std::string());
+        if (source.empty()) throw std::runtime_error(ctx + ".fuel_map: 'source' is required (PLAN.md section 8)");
+
+        ps::drivetrain::Table2D t;
+        for (const auto& v : fmj.at("rpm")) t.x.push_back(v.get<real>());
+        for (const auto& v : fmj.at("load")) t.y.push_back(v.get<real>());
+        if (t.x.size() < 2) throw std::runtime_error(ctx + ".fuel_map: 'rpm' needs at least 2 points");
+        if (t.y.size() < 2) throw std::runtime_error(ctx + ".fuel_map: 'load' needs at least 2 points");
+        for (std::size_t i = 1; i < t.x.size(); ++i) {
+            if (!(t.x[i] > t.x[i - 1])) throw std::runtime_error(ctx + ".fuel_map: 'rpm' must be strictly ascending");
+        }
+        for (std::size_t i = 1; i < t.y.size(); ++i) {
+            if (!(t.y[i] > t.y[i - 1])) throw std::runtime_error(ctx + ".fuel_map: 'load' must be strictly ascending");
+        }
+        if (t.y.front() != real(0.0)) throw std::runtime_error(ctx + ".fuel_map: 'load' must start at exactly 0.0");
+        if (t.y.back() != real(1.0)) throw std::runtime_error(ctx + ".fuel_map: 'load' must end at exactly 1.0");
+
+        const auto& rows = fmj.at("fuel_flow_g_s");
+        if (rows.size() != t.x.size()) {
+            throw std::runtime_error(ctx + ".fuel_map: 'fuel_flow_g_s' must have one row per 'rpm' point (" +
+                                      std::to_string(t.x.size()) + "), got " + std::to_string(rows.size()));
+        }
+        t.values.reserve(t.x.size() * t.y.size());
+        for (std::size_t ix = 0; ix < rows.size(); ++ix) {
+            const auto& row = rows[ix];
+            if (!row.is_array() || row.size() != t.y.size()) {
+                throw std::runtime_error(ctx + ".fuel_map: 'fuel_flow_g_s' row " + std::to_string(ix) +
+                                          " must have one value per 'load' point (" + std::to_string(t.y.size()) + ")");
+            }
+            for (std::size_t iy = 0; iy < row.size(); ++iy) {
+                // PHYS-033 P4 I7a C5 review fix: check the JSON value's own
+                // type before .get<real>() - nlohmann::json::type_error (e.g.
+                // a string or null entry) would otherwise propagate uncaught,
+                // unlike every other rejection in this loader which throws a
+                // clean std::runtime_error with context.
+                if (!row[iy].is_number()) {
+                    throw std::runtime_error(ctx + ".fuel_map: fuel_flow_g_s[" + std::to_string(ix) + "][" +
+                                              std::to_string(iy) + "] must be a number");
+                }
+                const real val = row[iy].get<real>();
+                if (!(val >= real(0.0)) || !std::isfinite(val)) {
+                    throw std::runtime_error(ctx + ".fuel_map: fuel_flow_g_s[" + std::to_string(ix) + "][" +
+                                              std::to_string(iy) + "] must be >= 0 and finite, got " + std::to_string(val));
+                }
+                // load == 0 must burn exactly 0 fuel - DFCO/ignition-cut/
+                // pedal-0 substeps need an EXACT zero, not merely near-zero
+                // (F3's discrimination check reads it as an equality).
+                if (iy == 0 && val != real(0.0)) {
+                    throw std::runtime_error(ctx + ".fuel_map: fuel_flow_g_s[" + std::to_string(ix) +
+                                              "][0] (load 0) must be exactly 0.0, got " + std::to_string(val));
+                }
+                t.values.push_back(val);
+            }
+        }
+        const std::string table_err = t.validate();
+        if (!table_err.empty()) throw std::runtime_error(ctx + ".fuel_map: " + table_err);
+
+        // Efficiency check (plan section 2.3): theta*(w(rpm)-m(rpm))*omega
+        // must never exceed mdot*LHV, or the map implies >100% thermal
+        // efficiency. Sampled at every map node, every map-cell midpoint
+        // (bilinear interpolation can under/overshoot a saturating curve
+        // between nodes) and every WOT/motoring curve breakpoint crossed
+        // with every map load node (a curve knot is where w(rpm)-m(rpm)'s
+        // own slope can kink, the worst case for a fixed-load line).
+        constexpr real kTwoPiOver60 = real(2.0) * real(3.14159265358979323846) / real(60.0);
+        auto check_point = [&](real rpm, real load) {
+            if (rpm <= real(0.0)) return; // omega == 0: zero mechanical power at any load, never a violation
+            const real w = e.wot_torque_nm_vs_rpm.evaluate(rpm);
+            const real m = e.motoring_torque_nm_vs_rpm.evaluate(rpm);
+            const real omega = rpm * kTwoPiOver60;
+            const real mech_power_w = load * (w - m) * omega;
+            const real mdot_kg_s = t.value(rpm, load) / real(1000.0);
+            const real fuel_power_w = mdot_kg_s * e.fuel.lhv_j_kg;
+            if (mech_power_w > fuel_power_w) {
+                throw std::runtime_error(ctx + ".fuel_map: implies >100% thermal efficiency at rpm=" +
+                                          std::to_string(rpm) + ", load=" + std::to_string(load) + " (mechanical " +
+                                          std::to_string(mech_power_w) + " W > fuel " + std::to_string(fuel_power_w) +
+                                          " W)");
+            }
+        };
+        for (real rpm_node : t.x) {
+            for (real load_node : t.y) check_point(rpm_node, load_node);
+        }
+        for (std::size_t ix = 1; ix < t.x.size(); ++ix) {
+            const real rpm_mid = (t.x[ix - 1] + t.x[ix]) * real(0.5);
+            for (std::size_t iy = 1; iy < t.y.size(); ++iy) {
+                check_point(rpm_mid, (t.y[iy - 1] + t.y[iy]) * real(0.5));
+            }
+        }
+        for (real rpm_bp : e.wot_torque_nm_vs_rpm.x) {
+            for (real load_node : t.y) check_point(rpm_bp, load_node);
+        }
+        for (real rpm_bp : e.motoring_torque_nm_vs_rpm.x) {
+            for (real load_node : t.y) check_point(rpm_bp, load_node);
+        }
+
+        e.fuel_map = std::move(t);
+        e.has_fuel_map = true;
+    }
+
     return e;
+}
+
+// PHYS-033 P4 I7a C5: thin dispatcher on "kind" - "torque_map" (or absent,
+// the only kind before this commit) is the shipped implementation above;
+// "simulated" (a full MVEM engine, I7b) is parsed nowhere yet and is
+// rejected by name rather than silently falling through to torque_map.
+ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir) {
+    // Default "torque_map" (rather than requiring the field) is deliberate,
+    // not an oversight: every shipped data/engines/*.json file happens to
+    // set "kind" explicitly today, but nothing REQUIRES a hand-authored or
+    // future engine file to - "torque_map" is the only kind that predates
+    // this field, so an absent "kind" means exactly that, and this default
+    // keeps such a file loading rather than rejecting it - see F5's "kind
+    // absent defaults to torque_map" pin test (the only place this default
+    // path is actually exercised, since no shipped file omits it).
+    const std::string kind = j.value("kind", std::string("torque_map"));
+    if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir);
+    if (kind == "simulated") {
+        throw std::runtime_error(ctx + ": engine kind \"simulated\" is not yet supported (PHYS-033 I7b)");
+    }
+    throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" or \"simulated\", got \"" + kind + "\"");
 }
 
 ps::drivetrain::ClutchDesc read_clutch_fields(const json& cj, const std::string& ctx) {
@@ -646,6 +804,17 @@ json resolve_component_ref(const json& cj, const std::string& kind, const std::s
     return fj;
 }
 
+// PHYS-033 P4 I7a C5: the directory a component's OWN further relative paths
+// (an engine's "fuel" field) resolve against - the referenced file's own
+// directory when `cj` uses "ref", else `base_dir` (the vehicle file's own
+// directory) for an inline component. Mirrors resolve_component_ref's own
+// "ref" check without re-reading/re-parsing the file.
+std::string component_ref_dir(const json& cj, const std::string& base_dir) {
+    if (!cj.contains("ref")) return base_dir;
+    const std::string path = resolve_path(base_dir, cj.at("ref").get<std::string>());
+    return std::filesystem::path(path).parent_path().string();
+}
+
 } // namespace
 
 vehicle::TyreDesc load_tyre_json(const std::string& path) {
@@ -713,7 +882,8 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
 
                 if (type == "engine") {
                     const json ej = resolve_component_ref(cj, "engine", base_dir, ctx);
-                    p.components.push_back({id, read_engine_fields(ej, ctx)});
+                    const std::string engine_dir = component_ref_dir(cj, base_dir);
+                    p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir)});
                 } else if (type == "clutch") {
                     if (cj.contains("ref")) throw std::runtime_error(ctx + ": 'clutch' components are always inline in I3 (no 'ref')");
                     p.components.push_back({id, read_clutch_fields(cj, ctx)});
