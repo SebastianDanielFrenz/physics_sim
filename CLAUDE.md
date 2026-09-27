@@ -1565,11 +1565,13 @@ ctest --preset linux-release --output-on-failure
 Three levels - use the smallest that fits (also at the top of `tools/ci.ps1`):
 
 ```powershell
-tools\ci.ps1 -Affected            # PER CHANGE: topics from the changed paths (vs HEAD), release leg only
+tools\ci.ps1 -Affected            # PER CHANGE: topics from the changed paths (vs HEAD), release leg only, unit + determinism tests only
 tools\ci.ps1 -Affected -Base HEAD~3   # ... covering the last 3 commits too
 tools\ci.ps1 -Topic terrain,vehicle   # ... topics picked by hand
+tools\ci.ps1 -Topic drivetrain -WithValidation   # ... plus the topics' non-[long] validation tests
 tools\ci.ps1 -Affected -PlanOnly  # print the decision only, build/test nothing
-tools\ci.ps1                      # DEFAULT FAST: every leg; batch boundaries / before reporting done (< 5 min)
+tools\ci.ps1                      # DEFAULT FAST: release + msvc build + linux-release unit/determinism + hash compare; per merge batch (< 3 min)
+tools\ci.ps1 -Sanitizers          # default + debug, asan, linux-asan-ubsan, linux-tsan: batches touching threading/memory, and before -Full
 tools\ci.ps1 -Full                # every leg, every test: before a phase counts done, after foundational changes
 tools\ci.ps1 -SkipWsl             # Windows legs only
 tools\ci.ps1 -SkipWindows         # WSL legs only
@@ -1581,17 +1583,19 @@ tools\ci.ps1 -NoOverlap           # old strictly sequential layout (Windows lane
 `$script:ScenarioTopics`, `$script:SensitivePatterns`): changed paths
 (`git diff --name-only <Base>` + untracked) map to test topics through an
 explicit, ordered path table; test files map through their own Catch2
-topic tags. Runs the `release` leg with `ctest -L '^(topics)$'`, the two
+topic tags. Runs the `release` leg with `ctest -L '^(topics)$'` and
+`-LE 'validation|long|walltime'` (unit + determinism tests only;
+`-WithValidation` drops `validation` from the exclusion), the two
 greps, the topics' `walltime` benches (alone), and the hash compare for the
 topics' scenarios only (building just the Linux `ps_run` target for it).
-Adds `linux-release` (+ `linux-tsan` for threading) only when the changed
+Adds `linux-release` (unit + determinism) (+ `linux-tsan` for threading) only when the changed
 core/tools lines touch unordered containers, sorting, libm/FP-contract
 math or threading, or with `-Linux`. Foundational paths (core
 `math`/`jobs`/`world`/`backend`, any `CMakeLists.txt`/`CMakePresets.json`,
 `tools/ci.ps1`, `tools/tsan_suppressions.txt`, `tools/common`,
 `tests/support`) run the default fast run and ask for `-Full`; **a path no
 rule knows also falls back to the default fast run, never to nothing**;
-doc-only changes (`*.md`) run the greps only; `adapters/**` notes that
+doc-only changes (`*.md`, plus stray root `*.csv` / `backup_*/` files) run the greps only; `adapters/**` notes that
 `adapters/godot/smoke_test.ps1` is the check. One narrow exception to the
 "any `CMakeLists.txt` is foundational" rule:
 `tests/{unit,validation,determinism}/CMakeLists.txt` gets its own
@@ -1609,10 +1613,11 @@ it. Adding a subsystem = add a topic tag to its tests, a `$script:PathRules`
 row, and (if it has scenarios) `$script:ScenarioTopics`.
 
 **Default/Full layout (overlapped).** Phase A: the Windows lane (`release`,
-`debug`, `asan`, `msvc-release`, greps) runs in `ci.ps1` itself while the
-WSL lane runs in a child `powershell -File tools\ci.ps1 -WslLaneOnly`
-(results handed back as JSON under `%TEMP%`); inside the WSL lane,
-`linux-release` runs first, then `linux-asan-ubsan` and `linux-tsan` build
+`msvc-release`, greps; `debug` and `asan` only with `-Sanitizers`/`-Full`)
+runs in `ci.ps1` itself while the WSL lane runs in a child `powershell -File
+tools\ci.ps1 -WslLaneOnly` (results handed back as JSON under `%TEMP%`);
+inside the WSL lane, `linux-release` runs first, then (with `-Sanitizers`/
+`-Full`) `linux-asan-ubsan` and `linux-tsan` build
 one after the other and run their ctest side by side, `--parallel 12` each
 (scripts written to `out/ci_tmp/`, logs to `~/ps_ci_<preset>.log`). Every
 phase-A ctest excludes the `walltime` label. Phase B starts only after both
@@ -1639,16 +1644,23 @@ spec instead). A stale build-dir cache that lost its optimisation flags
 fails configure on purpose (top-level `CMakeLists.txt`; fix with
 `cmake --preset <name> --fresh`).
 
-**Test selection.** Default FAST: the `release`, `msvc-release` and
-`linux-release` legs run every test except `[long]`-tagged ones; the
-`debug`, `asan`, `linux-asan-ubsan` and `linux-tsan` legs run only
-`ps_unit_tests` + `ps_determinism_tests` + `[sanitizer]`-tagged tests
-(`-LE "validation|long"` - the whole `ps_validation_tests` suite is
-`[validation]`-tagged, and the `[sanitizer]` short variants deliberately
-omit that tag so this one exclusion routes them back in). `-Full`: no
-long/validation filter, every test on every leg (mandatory before a phase
-counts done per PLAN.md section 7). `walltime` is excluded from phase A in
-both and run in phase B.
+**Test selection** (2026-09-27 cut, owner request "cut down stronger on the
+amount of tests run frequently"). Default FAST: `release` runs every test
+except `[long]`; `msvc-release` is BUILT only (compiler coverage, no ctest,
+no phase-B walltime); `linux-release` runs `ps_unit_tests` +
+`ps_determinism_tests` only (`-LE "validation|long"`; what Linux adds is
+the compiler/libstdc++ and the hash compare, the physics is the same code);
+the `debug`, `asan`, `linux-asan-ubsan` and `linux-tsan` legs do not run
+(`-Sanitizers` adds them; `-Only <leg>` naming one runs it too). When they
+run they take only `ps_unit_tests` + `ps_determinism_tests` +
+`[sanitizer]`-tagged tests (`-LE "validation|long"` - the whole
+`ps_validation_tests` suite is `[validation]`-tagged, and the `[sanitizer]`
+short variants deliberately omit that tag so this one exclusion routes them
+back in). `-Affected`/`-Topic`: the topics' unit + determinism tests only
+(`-WithValidation` adds validation). `-Full`: no long/validation filter,
+every test on every leg (mandatory before a phase counts done per PLAN.md
+section 7). `walltime` is excluded from phase A in all modes and run in
+phase B.
 
 **Test tags / labels** (`tests/*/CMakeLists.txt` pass `ADD_TAGS_AS_LABELS`
 to `catch_discover_tests`, so every Catch2 tag becomes a CTest `LABEL`
@@ -1669,6 +1681,11 @@ selectable via `ctest -L`/`-LE`; repeated `-L` are ANDed):
   momentum tests, 30-35 s mass-ratio/resting-contact tests) - cheap in a
   release build but 5-15x slower under a sanitizer, where it would blow the
   fast-CI budget. Never used on a test needing under about 2 s in release.
+  Also every non-determinism test taking >= 5 s in release (2026-09-27: the
+  two terrain seam-crossing cases, the compliant clutch lock-up, split-mu
+  braking open and the hub-torque cross-check, the tractor MFWD drawbar pull,
+  the PTO governor load sweep) - they set the release ctest's wall time;
+  they run under `-Full` only.
 - `[sanitizer]`: a short (1-3 s simulated) hand-written variant of a
   `[long]` Jolt/job-system-backed test (`test_joint_chain_energy.cpp`,
   `test_mass_ratio.cpp`, `test_resting_contact.cpp`), reusing the same

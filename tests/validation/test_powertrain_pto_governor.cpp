@@ -293,7 +293,7 @@ GovernorPoint measure_governor_point(World& w, VehicleId vehicle, real settle_se
 
 TEST_CASE("tractor diesel governor: PTO dynamometer load sweep (0/25/50/75/100/120% of full-rack torque) "
           "matches an independent bisection reference, rpm strictly decreasing with load, 120% genuinely lugs",
-          "[validation][vehicle][powertrain][drivetrain]") {
+          "[validation][long][vehicle][powertrain][drivetrain]") {
     const vehicle::VehicleDesc desc = build_governed_pto_rig_desc();
     const TorqueMapEngineDesc engine = engine_desc_of(desc);
     const PtoDesc pto = pto_desc_of(desc);

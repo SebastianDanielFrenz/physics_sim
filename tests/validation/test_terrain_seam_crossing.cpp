@@ -395,7 +395,7 @@ constexpr real kBodyAbsBound = 120.0;
 
 } // namespace
 
-TEST_CASE("terrain tile seams: sliding bodies cross seams without a contact spike", "[terrain][validation]") {
+TEST_CASE("terrain tile seams: sliding bodies cross seams without a contact spike", "[terrain][validation][long]") {
     GroundParams gp;
     for (TerrainShape shape : {TerrainShape::Flat, TerrainShape::Wavy}) {
         for (BodyKind kind : {BodyKind::SlidingSphere, BodyKind::SlidingBox}) {
@@ -428,7 +428,7 @@ TEST_CASE("terrain tile seams: original 256 m / 64-sample repro at x = -512", "[
     }
 }
 
-TEST_CASE("terrain tile seams: a car crosses seams like a seamless heightfield", "[terrain][vehicle][validation]") {
+TEST_CASE("terrain tile seams: a car crosses seams like a seamless heightfield", "[terrain][vehicle][validation][long]") {
     GroundParams gp;
     for (TerrainShape shape : {TerrainShape::Flat, TerrainShape::Slope, TerrainShape::Wavy}) {
         for (real v : {5.0, 20.0, 40.0}) {

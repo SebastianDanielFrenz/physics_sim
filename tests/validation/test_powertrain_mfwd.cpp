@@ -1130,7 +1130,7 @@ TEST_CASE("tractor MFWD off at WOT with zero drawbar load on low_mu: discriminat
 //  - C9's speed-PI version gave 1740.4 / 3227.9 N, ratio 1.855 (estimates
 //    1564.2 / 3338.2 N).
 TEST_CASE("tractor MFWD on low_mu: engaged drawbar-pull limit is at least 1.2x the rear-only limit",
-          "[validation][vehicle][powertrain][drivetrain]") {
+          "[validation][long][vehicle][powertrain][drivetrain]") {
     const vehicle::VehicleDesc desc = load_tractor();
 
     auto surfaces = std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");

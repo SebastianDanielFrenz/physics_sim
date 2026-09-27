@@ -612,7 +612,7 @@ TEST_CASE("split-mu launch, differential kind locked: plan's telemetry yaw-momen
 }
 
 TEST_CASE("split-mu braking from 15 m/s, open: yaw moment favours the higher-mu (asphalt) side",
-          "[validation][vehicle][powertrain][drivetrain]") {
+          "[validation][long][vehicle][powertrain][drivetrain]") {
     const real mz_open = mean_mz_during_braking(DifferentialKind::Open);
     INFO("mean Mz (open, braking, first 0.5 s) = " << mz_open);
     CHECK(mz_open > 100.0);
@@ -753,7 +753,7 @@ TEST_CASE("split-mu launch, viscous(25 Nm.s/rad): torque split difference equals
 // efficiency 1).
 TEST_CASE("split-mu launch, hub-torque cross-check at one substep per tick (all kinds): "
           "T=J*domega/dt+r*fx matches debug hub_shaft_torque within 2%",
-          "[validation][vehicle][powertrain][drivetrain]") {
+          "[validation][long][vehicle][powertrain][drivetrain]") {
     for (const DifferentialKind kind : {DifferentialKind::Open, DifferentialKind::Locked, DifferentialKind::Viscous,
                                         DifferentialKind::ClutchLsd, DifferentialKind::Torsen}) {
         const vehicle::VehicleDesc desc = load_sedan(kind);

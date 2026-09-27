@@ -855,7 +855,7 @@ TEST_CASE("Clutch lock-up (auto-clutch launch from rest) shows no spike above ca
 //   J1 J2/(J1 + J2)) - a coincidence, its frequency is 3.6x off - and 0.111
 //   with the mass.
 TEST_CASE("Clutch lock-up (manual, rolling start) compliant variant (test 3): torsional mode vs. reference",
-          "[validation][vehicle][powertrain][drivetrain]") {
+          "[validation][long][vehicle][powertrain][drivetrain]") {
     const real mass = 1500.0;
     const real k = 600.0;
     const real c = 2.0;

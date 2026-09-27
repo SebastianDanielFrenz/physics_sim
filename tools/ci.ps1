@@ -27,13 +27,23 @@
           (target_link_libraries, add_executable(, compile definitions, ...)
           still falls back like any other CMakeLists.txt edit. Doc-only
           changes run the greps only. Prints every decision and why.
-          Target: well under 2 min for a single-topic change.
+          Runs only the topics' UNIT + DETERMINISM tests (validation and
+          [long] excluded); -WithValidation adds the topics' non-[long]
+          validation tests. Target: about 1 min for a single-topic change.
       tools\ci.ps1 -Topic terrain,vehicle     same as -Affected, topics by hand.
-      tools\ci.ps1                            DEFAULT FAST run, every leg. At
-          batch boundaries and before reporting work as done. Target < 5 min.
-      tools\ci.ps1 -Full                      every test on every leg. Only
-          before a phase counts done, or after a foundational change
-          (core math/jobs/world/backend, CMake, presets, ci.ps1, test support).
+      tools\ci.ps1                            DEFAULT FAST run, at batch
+          boundaries and before reporting work as done: release (every
+          non-[long] test), msvc-release BUILD ONLY, linux-release unit +
+          determinism only, the greps, walltime and the full hash compare.
+          No sanitizer/debug legs (-Sanitizers adds them). Target < 3 min.
+      tools\ci.ps1 -Sanitizers                default run plus debug, asan,
+          linux-asan-ubsan, linux-tsan (unit + determinism + [sanitizer]).
+          Once per merge batch that touched threading, memory ownership or
+          allocation, and before -Full.
+      tools\ci.ps1 -Full                      every test on every leg (all
+          seven legs, [long] and validation included). Only before a phase
+          counts done, or after a foundational change (core
+          math/jobs/world/backend, CMake, presets, ci.ps1, test support).
 
 .PARAMETER SkipWsl
     Skip the three WSL/Linux legs (linux-release, linux-asan-ubsan, linux-tsan).
@@ -46,11 +56,22 @@
     preset names used below (see the $legs definitions).
 
 .PARAMETER Full
-    Run every test in every leg (the pre-P1.5b behaviour). Default is FAST:
-    release legs (release, msvc-release, linux-release) skip [long]-tagged
-    tests; debug/asan/linux-asan-ubsan/linux-tsan skip the whole validation
-    suite except the short [sanitizer]-tagged variants. See CLAUDE.md "CI"
-    for the tag/label wiring (tests/*/CMakeLists.txt, ADD_TAGS_AS_LABELS).
+    Run every test in every leg, all seven legs. Default is FAST: release
+    runs every test except [long]; msvc-release is built but not tested;
+    linux-release runs unit + determinism only (no validation, no [long]);
+    debug/asan/linux-asan-ubsan/linux-tsan are not run at all unless
+    -Sanitizers (then: unit + determinism + the short [sanitizer] variants).
+    See CLAUDE.md "CI" for the tag/label wiring (tests/*/CMakeLists.txt,
+    ADD_TAGS_AS_LABELS).
+
+.PARAMETER Sanitizers
+    Default run plus the four sanitizer/debug legs (debug, asan,
+    linux-asan-ubsan, linux-tsan). Implied by -Full. -Only naming one of
+    those legs runs it without this switch.
+
+.PARAMETER WithValidation
+    With -Affected/-Topic: also run the topics' non-[long] validation tests
+    (default: unit + determinism only).
 
 .PARAMETER NoOverlap
     Run the WSL legs after the Windows legs in this process (the old,
@@ -81,9 +102,10 @@
 
 .NOTES
     Layout (default):
-      Phase A  Windows lane (release, debug, asan, msvc-release, greps) in
-               this process, overlapped with the WSL lane (linux-release,
-               linux-asan-ubsan, linux-tsan) in a child process. Every
+      Phase A  Windows lane (release, msvc-release build, greps; plus debug
+               and asan with -Sanitizers/-Full) in this process, overlapped
+               with the WSL lane (linux-release; plus linux-asan-ubsan and
+               linux-tsan with -Sanitizers/-Full) in a child process. Every
                ctest here excludes the "walltime" label.
       Phase B  Serial wall-clock phase, started only after BOTH lanes have
                finished: each leg's "walltime"-labelled tests (benches that
@@ -108,7 +130,9 @@ param(
     [string]$Base = 'HEAD',
     [string[]]$Topic,
     [switch]$Linux,
-    [switch]$PlanOnly
+    [switch]$PlanOnly,
+    [switch]$Sanitizers,
+    [switch]$WithValidation
 )
 
 $ErrorActionPreference = 'Continue'
@@ -131,7 +155,7 @@ if ($Topic) { $Topic = @($Topic | ForEach-Object { $_ -split ',' } | ForEach-Obj
 # all of $script:HashCheckScenarios).
 $script:TopicRegex = $null
 $script:HashScenarioSelection = $null
-$script:RunMode = if ($Full) { 'FULL' } else { 'FAST' }
+$script:RunMode = if ($Full) { 'FULL' } elseif ($Sanitizers) { 'FAST+SANITIZERS' } else { 'FAST' }
 
 function Add-Result {
     param([string]$Leg, [string]$Stage, [bool]$Pass, [string]$Detail = '', [double]$Seconds = 0)
@@ -146,6 +170,14 @@ function Should-Run {
     return $Only -contains $Name
 }
 
+# The four sanitizer/debug legs run with -Full or -Sanitizers, or when -Only
+# names them explicitly.
+function Should-RunSanitizerLeg {
+    param([string]$Name)
+    if ($Only -and $Only.Count -gt 0) { return $Only -contains $Name }
+    return ($Full -or $Sanitizers)
+}
+
 # Windows physical-core count (avoid oversubscribing when tests themselves
 # spin up worker pools - see tests/determinism/CMakeLists.txt's PROCESSORS
 # note). WSL sees 24 logical threads (PLAN.md section 2).
@@ -155,12 +187,14 @@ $script:WslParallel = 24
 # CTest label selection for phase A. "walltime" is ALWAYS excluded here:
 # those tests run in phase B, alone on the machine (see .NOTES above and
 # tests/bench/CMakeLists.txt). FAST mode additionally excludes [long] (and,
-# on sanitizer legs, the whole [validation] suite).
+# on 'sanitizer' and 'unit' legs, the whole [validation] suite - 'unit' is
+# linux-release in the default run and every per-change leg without
+# -WithValidation).
 function Get-CtestLabelArgs {
-    param([string]$LegKind) # 'release' or 'sanitizer'
+    param([string]$LegKind) # 'release', 'unit' or 'sanitizer'
     $excluded = @()
     if (-not $Full) {
-        if ($LegKind -eq 'sanitizer') { $excluded += @('validation', 'long') } else { $excluded += 'long' }
+        if ($LegKind -in @('sanitizer', 'unit')) { $excluded += @('validation', 'long') } else { $excluded += 'long' }
     }
     $excluded += 'walltime'
     # ($args is a PowerShell automatic variable - never assign to it.)
@@ -208,7 +242,7 @@ function Enter-VsDevShell {
 # One Windows leg: cmake --preset / --build / ctest, each stage timed.
 # ---------------------------------------------------------------------------
 function Invoke-WindowsLeg {
-    param([string]$Preset, [string]$LegKind = 'release')
+    param([string]$Preset, [string]$LegKind = 'release', [switch]$BuildOnly)
 
     Write-Host ""
     Write-Host "=== Windows leg: $Preset ===" -ForegroundColor Cyan
@@ -223,6 +257,13 @@ function Invoke-WindowsLeg {
     $buildOk = ($LASTEXITCODE -eq 0)
     Add-Result -Leg $Preset -Stage 'build' -Pass $buildOk -Seconds $t.TotalSeconds
     if (-not $buildOk) { return }
+    if ($BuildOnly) {
+        # Compiler coverage only (msvc-release in the default run): no ctest,
+        # and not in $script:BuiltLegs, so phase B skips it too.
+        Add-Result -Leg $Preset -Stage 'ctest' -Pass $true -Detail 'skipped: build-only in this mode (-Full runs its tests)'
+        $script:LegTimings.Add([pscustomobject]@{ Leg = $Preset; TotalSeconds = ((Get-Date) - $legStart).TotalSeconds })
+        return
+    }
     $script:BuiltLegs.Add([pscustomobject]@{ Preset = $Preset; Kind = 'windows' })
 
     $labelArgs = Get-CtestLabelArgs -LegKind $LegKind
@@ -526,7 +567,8 @@ function Invoke-CrossPlatformHashCheck {
 $script:WallStart = Get-Date
 
 # release-kind legs run everything except [long]; sanitizer-kind legs run
-# only unit+determinism+[sanitizer] (see Get-CtestLabelArgs).
+# only unit+determinism+[sanitizer], and only with -Sanitizers/-Full
+# (see Get-CtestLabelArgs / Should-RunSanitizerLeg).
 $releaseLegs = @('release')
 $sanitizerLegs = @('debug', 'asan')
 
@@ -596,8 +638,12 @@ function Invoke-WslSanitizerPair {
 }
 
 function Invoke-WslLane {
-    if (Should-Run 'linux-release') { Invoke-WslLeg -Preset 'linux-release' -LegKind 'release' }
-    $pair = @('linux-asan-ubsan', 'linux-tsan') | Where-Object { Should-Run $_ }
+    # Default run: linux-release runs unit + determinism only - the physics
+    # is the same code as the Windows release leg; what Linux adds is the
+    # compiler/libstdc++ and the cross-platform hash compare.
+    $linuxKind = if ($Full) { 'release' } else { 'unit' }
+    if (Should-Run 'linux-release') { Invoke-WslLeg -Preset 'linux-release' -LegKind $linuxKind }
+    $pair = @('linux-asan-ubsan', 'linux-tsan') | Where-Object { Should-RunSanitizerLeg $_ }
     if (@($pair).Count -eq 2) {
         Invoke-WslSanitizerPair -Presets $pair
     } else {
@@ -625,6 +671,7 @@ $script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'con
 $script:PathRules = @(
     @{ Re = '\.md$'; Kind = 'doc' },
     @{ Re = '^(\.gitignore|\.gitattributes|\.claude/)'; Kind = 'doc' },
+    @{ Re = '^[^/]+\.csv$|^backup_[^/]*/'; Kind = 'doc' },  # stray ps_run output / owner backups in the repo root, never built
     @{ Re = '^core/(include/ps|src)/(math|jobs|world|backend)/'; Kind = 'everything'; Why = 'foundational core (math/jobs/world/backend)' },
     @{ Re = '^core/include/ps/(types|version)\.h$|^core/src/(version|jolt_proof)\.cpp$'; Kind = 'everything'; Why = 'foundational core types' },
     @{ Re = '^tests/(unit|validation|determinism)/CMakeLists\.txt$'; Kind = 'cmake-test-registration' },
@@ -815,12 +862,12 @@ function Invoke-AffectedRun {
     $Plan.Notes | ForEach-Object { Write-Host "  NOTE: $_" -ForegroundColor Yellow }
 
     if ($Plan.Mode -in @('fallback', 'everything')) {
-        Write-Host "  => default fast run (all legs)" -ForegroundColor Yellow
+        Write-Host "  => default fast run (release, msvc build, linux-release unit/determinism, full hash compare)" -ForegroundColor Yellow
         if ($PlanOnly) { exit 0 }
         return $false   # caller continues with the normal full-leg flow
     }
     if ($PlanOnly) {
-        Write-Host ("  => mode={0} topics=[{1}] scenarios=[{2}] linux={3} tsan={4}" -f $Plan.Mode, ($Plan.Topics -join ','), ($Plan.Scenarios -join ','), $Plan.Linux, $Plan.Tsan) -ForegroundColor Yellow
+        Write-Host ("  => mode={0} topics=[{1}] tests={5} scenarios=[{2}] linux={3} tsan={4}" -f $Plan.Mode, ($Plan.Topics -join ','), ($Plan.Scenarios -join ','), $Plan.Linux, $Plan.Tsan, $(if ($WithValidation) { 'unit+determinism+validation' } else { 'unit+determinism' })) -ForegroundColor Yellow
         exit 0
     }
     $script:RunMode = "AFFECTED: $(if ($Plan.Topics.Count) { $Plan.Topics -join ',' } else { $Plan.Mode })"
@@ -839,14 +886,16 @@ function Invoke-AffectedRun {
         Write-Host "  => hash compare: $(if ($Plan.Scenarios.Count) { $Plan.Scenarios -join ', ' } else { 'none' })" -ForegroundColor Yellow
         Write-Host "  => Linux legs: $(if ($Plan.Linux) { 'linux-release' + $(if ($Plan.Tsan) { ' + linux-tsan' } else { '' }) } else { 'no (not determinism/platform-sensitive; -Linux forces linux-release)' })" -ForegroundColor Yellow
 
+        $topicKind = if ($WithValidation) { 'release' } else { 'unit' }
+        Write-Host "  => tests: $(if ($WithValidation) { 'unit + determinism + validation (non-[long])' } else { 'unit + determinism only (-WithValidation adds validation)' })" -ForegroundColor Yellow
         if ($Plan.Topics.Count -gt 0) {
-            Invoke-WindowsLeg -Preset 'release' -LegKind 'release'
+            Invoke-WindowsLeg -Preset 'release' -LegKind $topicKind
         } else {
             $t = Measure-Command { & cmake --preset release; if ($LASTEXITCODE -eq 0) { & cmake --build --preset release } }
             Add-Result -Leg 'release' -Stage 'build' -Pass ($LASTEXITCODE -eq 0) -Seconds $t.TotalSeconds
         }
         if ($Plan.Linux -and $Plan.Topics.Count -gt 0) {
-            Invoke-WslLeg -Preset 'linux-release' -LegKind 'release'
+            Invoke-WslLeg -Preset 'linux-release' -LegKind 'unit'
             if ($Plan.Tsan) { Invoke-WslLeg -Preset 'linux-tsan' -LegKind 'sanitizer' }
         } elseif ($Plan.Scenarios.Count -gt 0) {
             # The hash compare needs a CURRENT Linux ps_run; build just that target.
@@ -903,6 +952,7 @@ if ($overlap) {
     Remove-Item -LiteralPath $laneResultPath, $laneLogPath, $laneErrPath -ErrorAction SilentlyContinue
     $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-WslLaneOnly', '-LaneResultFile', "`"$laneResultPath`"")
     if ($Full) { $childArgs += '-Full' }
+    if ($Sanitizers) { $childArgs += '-Sanitizers' }
     if ($Only) { $childArgs += @('-Only', ($Only -join ',')) }
     $wslLaneStart = Get-Date
     $wslProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $childArgs -NoNewWindow -PassThru `
@@ -922,9 +972,9 @@ if (-not $SkipWindows) {
         if (Should-Run $preset) { Invoke-WindowsLeg -Preset $preset -LegKind 'release' }
     }
     foreach ($preset in $sanitizerLegs) {
-        if (Should-Run $preset) { Invoke-WindowsLeg -Preset $preset -LegKind 'sanitizer' }
+        if (Should-RunSanitizerLeg $preset) { Invoke-WindowsLeg -Preset $preset -LegKind 'sanitizer' }
     }
-    if (Should-Run 'msvc-release') { Invoke-WindowsLeg -Preset 'msvc-release' -LegKind 'release' }
+    if (Should-Run 'msvc-release') { Invoke-WindowsLeg -Preset 'msvc-release' -LegKind 'release' -BuildOnly:(-not $Full) }
 
     Invoke-GodotIncludeGrep
     Test-TranscendentalGrepPattern
