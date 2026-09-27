@@ -1673,6 +1673,24 @@ TEST_CASE("C5d Test 3: the crude no-map fuel model is exactly zero whenever comb
 // (m(rpm)+c_k_), c_k_ = -motoring(0); at settled idle the fixed point has
 // tau0_ ~ 0, so tau_comb_ ~ -tau_smooth_ = -(m(rpm)+c_k_)) - matches the
 // brief's own formula exactly, no deviation from the plan needed here.
+//
+// N8 review-fix note: this SECTION already calls the real to_engine_desc()
+// resolver (so it is not a B2-style resolver-duplication case), but it
+// still settles a BARE EngineTorqueMap via a hand-rolled single-DOF
+// implicit-Euler loop (omega_new = omega + h*tau0/(J + h*d)) rather than the
+// real ShaftNetwork::solve a real vehicle drives through - the same class
+// of gap this file's make_world_rig_1to1 header comment already documents
+// for "Fix 3" F2 above. Kept as-is because it is still a genuinely useful,
+// decoupled check of the crude fuel model's OWN closed-form formula (does
+// pre_solve/post_solve compute -(m(rpm)+c_k)*omega/(eta*LHV) correctly at
+// all, independent of how any particular network solve arrives at that
+// omega) - not a check of the resolver or of Powertrain/network wiring.
+// The companion "C5d Test 2b" below (N8) re-runs the same identity through
+// a REAL World/Powertrain (car_sedan.json, Neutral) so a regression in the
+// real per-substep integration path that a hand-rolled loop could mask
+// (e.g. the network feeding the engine a post-solve rather than pre-solve
+// rpm) is still caught end to end, mirroring F2's own real-Powertrain
+// companion above.
 TEST_CASE("C5d Test 2: the crude no-map fuel model at settled idle matches the net-torque-zero identity within 2%",
           "[unit][drivetrain][fuel]") {
     const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
@@ -1706,6 +1724,92 @@ TEST_CASE("C5d Test 2: the crude no-map fuel model at settled idle matches the n
     INFO("actual fuel_flow_g_s=" << settled_pre.fuel_flow_g_s << " expected=" << expected_g_s << " tau0=" << settled_pre.tau0);
     REQUIRE(expected_g_s > 0.0);
     const real rel_err = std::abs(settled_pre.fuel_flow_g_s - expected_g_s) / expected_g_s;
+    CHECK(rel_err <= 0.02);
+}
+
+// N8 review fix: "C5d Test 2b" - the same idle-balance identity as
+// "C5d Test 2" above, but settled through a REAL World/Powertrain
+// (car_sedan.json via ps_test::load_sedan_desc(), Neutral, 1:1 tick:substep
+// ratio via make_world_rig_1to1 so each World::step() call is exactly one
+// Powertrain substep) instead of a bare EngineTorqueMap plus a hand-rolled
+// single-DOF Euler loop. Driving Neutral through the real vehicle exercises
+// the actual production per-substep path end to end (crank + clutch/gearbox-
+// input inertia, the real ShaftNetwork::solve, the real pre_solve/post_solve
+// split VehicleInstance::step_tick drives) - a regression that fed the
+// engine a post-solve rpm or the raw throttle command instead of theta_c
+// (exactly the class of mistake "Fix 3" F2's own header comment discusses)
+// would still show up here even though it could hide behind Test 2's own
+// hand-rolled loop's tight coupling to the SAME pre_solve call's tau0/d.
+//
+// IMPORTANT: the expected-value formula here is NOT "C5d Test 2"'s
+// -(m(rpm)+c_k) - that identity only holds for a BARE EngineTorqueMap driven
+// directly off its own tau0 (Test 2's hand-rolled loop does exactly that,
+// with no other torque path). The real Powertrain (powertrain.cpp's
+// build_network) wires the crank node with TWO separate contributions, not
+// one: Assembly::torque(engine_crank_, pre.tau0, pre.d) - tau0 already
+// contains tau_smooth_ = sign(omega)*(m(rpm)+c_k_), i.e. the "+c_k_" is
+// baked in - AND a SEPARATE crank-to-ground friction row (`engine_row =
+// add_friction_row(engine_crank_, kGround)`, capacity pre.friction_cap_
+// kinetic == c_k_) applied to the SAME node. At idle the crank is clearly
+// spinning (not stuck against ground), so that row is kinetic and
+// contributes an ADDITIONAL -sign(omega)*c_k_ on top of tau0. Net steady-
+// state balance (tau0 + friction_row_reaction == 0):
+//   [sign(omega)*(m(rpm)+c_k) + tau_comb] + [-sign(omega)*c_k] == 0
+//   => sign(omega)*m(rpm) + tau_comb == 0  =>  tau_comb == -sign(omega)*m(rpm)
+// The two c_k terms cancel exactly - c_k drops out of the real-network
+// identity entirely. Confirmed numerically while diagnosing this test: at
+// settled idle (omega > 0, so sign==+1), m(rpm)=-30.4 N*m, c_k=15 N*m;
+// -(m(rpm)+c_k) predicts tau_comb=15.4 N*m (2x too small), while -m(rpm)
+// predicts 30.4 N*m, matching the actual fuel flow's back-solved tau_comb
+// (~30.41 N*m) to <0.3%. This is a genuine, reportable modelling subtlety
+// (not a production bug): the bare-engine formula in "C5d Test 2" is only
+// valid in the absence of the network's own separate Coulomb-friction row,
+// which the real vehicle always has.
+//
+// The expected value still reads the motoring curve/eta_i/LHV back off the
+// resolved Desc (to_engine_desc(car_sedan_engine_public_desc())) rather than
+// off independent literals - unlike B2's tests, this SECTION is not
+// checking whether the resolver picked the RIGHT eta_i/LHV (B2 owns that),
+// only whether pre_solve/post_solve's fuel-flow formula is followed
+// correctly given whatever values the resolver produced, so reading them
+// back from the Desc under test is appropriate here (see "C5d Test 2"'s own
+// header comment for the same reasoning).
+TEST_CASE("C5d Test 2b (N8 review fix): the crude no-map fuel model at settled idle through a real World/Powertrain matches the idle-balance identity within 2%",
+          "[unit][drivetrain][fuel]") {
+    const EngineTorqueMap::Desc desc = to_engine_desc(car_sedan_engine_public_desc());
+    REQUIRE(desc.has_fuel_model);
+    REQUIRE_FALSE(desc.has_fuel_map);
+
+    const vehicle::VehicleDesc sedan_desc = ps_test::load_sedan_desc();
+    WorldRig rig = make_world_rig_1to1(sedan_desc, /*gear=*/0); // Neutral; throttle 0.0 already set by make_world_rig_1to1
+
+    constexpr int kSettleTicks = 4800; // 5 s at 960 Hz (1:1) - same settle duration as the bare-engine "C5d Test 2" above
+    for (int i = 0; i < kSettleTicks; ++i) {
+        rig.world->step();
+    }
+
+    const drivetrain::PowertrainSnapshot& snap = rig.world->powertrain_state(rig.vehicle);
+    REQUIRE(snap.engine_state == EngineState::Running);
+    REQUIRE(snap.engines.size() == 1);
+
+    const real settled_rpm = snap.engine_rpm;
+    INFO("settled_rpm=" << settled_rpm << " idle_rpm=" << desc.idle_rpm);
+    CHECK(std::abs(settled_rpm - static_cast<real>(desc.idle_rpm)) < 5.0);
+
+    // Real-network idle-balance identity (see this TEST_CASE's own header
+    // comment for the derivation): tau_comb == -sign(omega)*m(rpm), NOT
+    // -(m(rpm)+c_k) - the crank-to-ground friction row's own kinetic
+    // reaction cancels the tau0 side's "+c_k" term exactly.
+    const real omega = snap.engines[0].omega;
+    const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(settled_rpm);
+    const real expected_tau_comb = omega >= real(0.0) ? -m_rpm : m_rpm;
+    const real expected_mdot_kg_s = std::max(real(0.0), expected_tau_comb * omega) / (desc.eta_i * desc.fuel.lhv_j_kg);
+    const real expected_g_s = expected_mdot_kg_s * real(1000.0);
+
+    const real actual_g_s = snap.engines[0].fuel_flow_g_s;
+    INFO("actual fuel_flow_g_s=" << actual_g_s << " expected=" << expected_g_s << " omega=" << omega << " m_rpm=" << m_rpm);
+    REQUIRE(expected_g_s > 0.0);
+    const real rel_err = std::abs(actual_g_s - expected_g_s) / expected_g_s;
     CHECK(rel_err <= 0.02);
 }
 
