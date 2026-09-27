@@ -100,6 +100,16 @@ EngineTorqueMap::Desc synthetic_engine_desc(bool with_fuel_map = true) {
     d.initial_state = EngineTorqueMap::InitialState::Running;
     if (with_fuel_map) {
         d.has_fuel_map = true;
+        // PHYS-033 P4 I7a C5d: has_fuel_model is a separate field from
+        // has_fuel_map (EngineTorqueMap::Desc's own comment) - production's
+        // to_engine_desc() always sets it via has_fuel_model(e), which is
+        // true whenever has_fuel_map is true regardless of "fuels". This
+        // hand-built test descriptor bypasses to_engine_desc, so it must set
+        // the same invariant itself or post_solve()'s has_fuel_model-gated
+        // fuel_mass_delta/fuel_energy_in_delta booking never fires even
+        // though has_fuel_map is true (found by F2: fuel_mass_sum stayed
+        // exactly 0.0 instead of matching the independently re-derived sum).
+        d.has_fuel_model = true;
         d.fuel.name = "test fuel";
         d.fuel.phase = FuelPhase::Liquid;
         d.fuel.lhv_j_kg = 44.0e6;
@@ -1553,7 +1563,7 @@ TEST_CASE("C5d Test 2: the crude no-map fuel model at settled idle matches the n
     for (int i = 0; i < kSubsteps; ++i) {
         const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(0.0), no_ignition_cut(), kSubstepH);
         const real omega_new = omega + kSubstepH * pre.tau0 / (J + kSubstepH * pre.d);
-        engine.post_solve(omega_new, kSubstepH);
+        (void)engine.post_solve(omega_new, kSubstepH);
         omega = omega_new;
     }
 

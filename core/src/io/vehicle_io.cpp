@@ -517,6 +517,53 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
         }
     }
 
+    // PHYS-033 P4 I7a C5d: "fuels" - a plain list of fuel path strings for
+    // the crude no-map estimate (no per-entry blend weight; a hypothetical
+    // C5e was cancelled/dropped per owner ruling 2026-09-27). Mutually
+    // exclusive with "fuel"/"fuel_map": a calibrated map is keyed to exactly
+    // the one fuel named by "fuel" above, while "fuels" is for an engine
+    // with no map that simply lists what it can run on. fuels[0] is the
+    // ACTIVE fuel (order matters, no blending) - resolved the same way as
+    // "fuel" above (relative to engine_dir). Checked and loaded BEFORE the
+    // "fuel"/"fuel_map" block below so its own mutual-exclusion messages
+    // fire instead of "fuel_map" block's generic "'fuel_map' requires a
+    // 'fuel'" rejection when both "fuels" and "fuel_map" are present with
+    // no "fuel" shorthand.
+    if (j.contains("fuels")) {
+        if (j.contains("fuel")) {
+            throw std::runtime_error(ctx + ": 'fuels' and 'fuel' are mutually exclusive (a calibrated fuel_map is "
+                                      "keyed to one fuel via 'fuel'; 'fuels' is for an engine with no map)");
+        }
+        if (j.contains("fuel_map")) {
+            throw std::runtime_error(ctx + ": 'fuels' and 'fuel_map' are mutually exclusive (a fuel map needs a "
+                                      "single calibrated 'fuel', not a list)");
+        }
+        if (!j.at("fuels").is_array() || j.at("fuels").empty()) {
+            throw std::runtime_error(ctx + ": 'fuels' must be a non-empty array of path strings");
+        }
+        std::vector<std::string> canon_paths;
+        for (const auto& v : j.at("fuels")) {
+            if (!v.is_string() || v.get<std::string>().empty()) {
+                throw std::runtime_error(ctx + ": 'fuels' entries must be non-empty path strings");
+            }
+            const std::string fuel_path = resolve_path(engine_dir, v.get<std::string>());
+            std::string canon;
+            try {
+                canon = std::filesystem::weakly_canonical(fuel_path).string();
+            } catch (const std::filesystem::filesystem_error&) {
+                canon = fuel_path; // fall through to load_fuel_json's own "cannot open" error below
+            }
+            for (const std::string& seen : canon_paths) {
+                if (seen == canon) {
+                    throw std::runtime_error(ctx + ": 'fuels' contains a duplicate fuel reference (" +
+                                              v.get<std::string>() + ")");
+                }
+            }
+            canon_paths.push_back(canon);
+            e.fuels.push_back(ps::io::load_fuel_json(fuel_path));
+        }
+    }
+
     // PHYS-033 P4 I7a C5 (plan section 2.3): optional fuel map. "fuel" is a
     // path (relative to this engine JSON's own directory - engine_dir,
     // component_ref_dir's result above - the referenced engine file's own
@@ -648,49 +695,6 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
 
         e.fuel_map = std::move(t);
         e.has_fuel_map = true;
-    }
-
-    // PHYS-033 P4 I7a C5d: "fuels" - a plain list of fuel path strings for
-    // the crude no-map estimate (no per-entry blend weight; a hypothetical
-    // C5e was cancelled/dropped per owner ruling 2026-09-27). Mutually
-    // exclusive with "fuel"/"fuel_map": a calibrated map is keyed to exactly
-    // the one fuel named by "fuel" above, while "fuels" is for an engine
-    // with no map that simply lists what it can run on. fuels[0] is the
-    // ACTIVE fuel (order matters, no blending) - resolved the same way as
-    // "fuel" above (relative to engine_dir).
-    if (j.contains("fuels")) {
-        if (j.contains("fuel")) {
-            throw std::runtime_error(ctx + ": 'fuels' and 'fuel' are mutually exclusive (a calibrated fuel_map is "
-                                      "keyed to one fuel via 'fuel'; 'fuels' is for an engine with no map)");
-        }
-        if (j.contains("fuel_map")) {
-            throw std::runtime_error(ctx + ": 'fuels' and 'fuel_map' are mutually exclusive (a fuel map needs a "
-                                      "single calibrated 'fuel', not a list)");
-        }
-        if (!j.at("fuels").is_array() || j.at("fuels").empty()) {
-            throw std::runtime_error(ctx + ": 'fuels' must be a non-empty array of path strings");
-        }
-        std::vector<std::string> canon_paths;
-        for (const auto& v : j.at("fuels")) {
-            if (!v.is_string() || v.get<std::string>().empty()) {
-                throw std::runtime_error(ctx + ": 'fuels' entries must be non-empty path strings");
-            }
-            const std::string fuel_path = resolve_path(engine_dir, v.get<std::string>());
-            std::string canon;
-            try {
-                canon = std::filesystem::weakly_canonical(fuel_path).string();
-            } catch (const std::filesystem::filesystem_error&) {
-                canon = fuel_path; // fall through to load_fuel_json's own "cannot open" error below
-            }
-            for (const std::string& seen : canon_paths) {
-                if (seen == canon) {
-                    throw std::runtime_error(ctx + ": 'fuels' contains a duplicate fuel reference (" +
-                                              v.get<std::string>() + ")");
-                }
-            }
-            canon_paths.push_back(canon);
-            e.fuels.push_back(ps::io::load_fuel_json(fuel_path));
-        }
     }
 
     // PHYS-033 P4 I7a C5d: "ignition" - spark vs. compression (an ENGINE
