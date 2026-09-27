@@ -88,8 +88,11 @@ struct Rig {
 
 // Same ground/chassis bodies as data/scenarios/vehicle_powertrain.json (and
 // test_engine_fuel_map.cpp's make_world_rig), configurable rates/gear/workers.
-// Manual clutch (pedal 0 = engaged, reset locked), no assists, throttle 0.
-Rig make_rig(const vehicle::VehicleDesc& desc, real tick_hz, real substep_hz, int gear, int workers = 1) {
+// Manual clutch (pedal 0 = engaged, reset locked), no assists, throttle 0 -
+// or, with auto_clutch_launch, the auto-clutch launch law from an open
+// clutch (an instant clutch dump from rest in 1st stalls the engine, see
+// test_engine_fuel_map.cpp's "Fix 1" comment).
+Rig make_rig(const vehicle::VehicleDesc& desc, real tick_hz, real substep_hz, int gear, int workers = 1, bool auto_clutch_launch = false) {
     Rig rig;
     WorldConfig cfg;
     cfg.job_workers = workers;
@@ -116,7 +119,7 @@ Rig make_rig(const vehicle::VehicleDesc& desc, real tick_hz, real substep_hz, in
     rig.world->set_surface_table(std::make_shared<io::SurfaceTable>(data_path("surfaces/surfaces.json")));
     rig.vehicle = rig.world->create_vehicle(desc, rig.chassis);
 
-    rig.world->set_control("assist.auto_clutch", 0.0);
+    rig.world->set_control("assist.auto_clutch", auto_clutch_launch ? 1.0 : 0.0);
     rig.world->set_control("assist.auto_blip", 0.0);
     rig.world->set_control("assist.auto_shift", 0.0);
     rig.world->set_control("clutch", 0.0);
@@ -124,7 +127,7 @@ Rig make_rig(const vehicle::VehicleDesc& desc, real tick_hz, real substep_hz, in
     vehicle::VehicleResetOptions o;
     o.gear = gear;
     o.engine_state = EngineState::Running;
-    o.clutch_locked = true;
+    o.clutch_locked = !auto_clutch_launch;
     rig.world->reset_vehicle(rig.vehicle, o);
     return rig;
 }
@@ -217,7 +220,7 @@ TEST_CASE("C6 T1: a never-empty tank is bit-identical to car_sedan over the vehi
 // ---------------------------------------------------------------------------
 TEST_CASE("C6 T2: tank mass is conserved against the fuel ledger every tick (WOT, DFCO, idle)", "[unit][drivetrain][fuel]") {
     const vehicle::VehicleDesc desc = io::load_vehicle_json(tank_sedan_path());
-    Rig rig = make_rig(desc, 240.0, 960.0, 1);
+    Rig rig = make_rig(desc, 240.0, 960.0, 1, 1, /*auto_clutch_launch=*/true);
     World& w = *rig.world;
     const real initial = 30.0;
     REQUIRE(w.fuel_tank_mass(rig.vehicle) == initial);
@@ -821,7 +824,10 @@ TEST_CASE("C6 T7: the loader rejects every malformed fuel_tank / fluid link with
             std::ofstream out(raw);
             out << text;
         }
-        REQUIRE_THROWS_WITH(io::load_vehicle_json(raw.string()), ContainsSubstring(tctx + "fuel_tank 'capacity_kg' must be finite"));
+        // nlohmann v3.12 refuses the literal itself (out_of_range.406, "number
+        // overflow"), so the loader's own isfinite() check is a backstop no
+        // JSON text can reach; pinned here so a parser change is noticed.
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(raw.string()), ContainsSubstring("number overflow parsing '1e400'"));
         std::error_code ec;
         std::filesystem::remove(raw, ec);
     }
@@ -949,7 +955,7 @@ namespace {
 void run_balance_starvation(const std::string& fixture, const char* label) {
     vehicle::VehicleDesc desc = io::load_vehicle_json(fixture);
     tank_of(desc).initial_kg = 0.004;
-    Rig rig = make_rig(desc, 240.0, 960.0, 1);
+    Rig rig = make_rig(desc, 240.0, 960.0, 1, 1, /*auto_clutch_launch=*/true);
     World& w = *rig.world;
     for (int t = 0; t < 240; ++t) w.step(); // settle 1 s (idle in gear 1)
     REQUIRE(w.fuel_tank_mass(rig.vehicle) > 0.0);
@@ -990,7 +996,7 @@ namespace {
 std::uint64_t run_t9(int workers, bool arm_alloc, real* tank_out) {
     vehicle::VehicleDesc desc = io::load_vehicle_json(tank_sedan_path());
     tank_of(desc).initial_kg = 0.003;
-    Rig rig = make_rig(desc, 240.0, 960.0, 1, workers);
+    Rig rig = make_rig(desc, 240.0, 960.0, 1, workers, /*auto_clutch_launch=*/true);
     World& w = *rig.world;
     for (int t = 0; t < 240; ++t) w.step(); // warm-up + settle
     namespace da = ps::jobs::debug_alloc;
@@ -1003,7 +1009,9 @@ std::uint64_t run_t9(int workers, bool arm_alloc, real* tank_out) {
     for (int t = 0; t < 480; ++t) w.step();
     const bool emptied = w.fuel_tank_mass(rig.vehicle) == 0.0;
     w.set_fuel_tank_mass(rig.vehicle, 0.5);
-    w.set_control("throttle", 0.3);
+    w.set_control("throttle", 0.0);
+    w.set_control("brake", 1.0);
+    w.set_control("starter", 1.0); // restart the dry-stalled engine on the new fuel
     for (int t = 0; t < 240; ++t) w.step();
     if (arm) {
         da::set_armed(false);
