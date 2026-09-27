@@ -697,6 +697,17 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   valve, intercooler) plus anti-lag; I7e rotary cycle model and a simulated
   R26B for the 787B; N2O after that. The former I8 generator is absorbed.
 - The tractor demo starts after the whole I7 track, not after I7a.
+  Superseded 2026-09-27 (night): the tractor demo moves back to run in
+  parallel with I7b/I7c, at low priority - a car with a simulated engine by
+  the morning takes precedence over the tractor being ready.
+- I7c's first simulated engine (Sebastian, 2026-09-27): the Toyota 2.5 L
+  A25A-FKS, whose EPA NVFEL test-cell data (C7) is the dyno reference; the
+  held-out second engine is the Mazda 2.0 L SkyActiv-G (EPA benchmark data).
+  Public-domain EPA/data.gov packages and open-access papers may be
+  downloaded for it without asking each time.
+- Overnight working mode (Sebastian, 2026-09-27): decisions that would need
+  an owner ruling take the recommended option and are recorded here as
+  PROVISIONAL for confirmation; reviewed, CI-green commits are merged.
 - Throttle path: the engine never reads the pedal directly. A separate
   system passes the driver's input on to it - a mechanical linkage (pedal
   cable to the throttle bodies) or an ECU (drive-by-wire). The engine data
