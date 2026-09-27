@@ -729,6 +729,24 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   throttle stage's command) in I7a, right after the fuel map (C5): sedans
   stay bit-identical, the tractor's auto-clutch starts to see its hand
   throttle, so vehicle_tractor_i4's hash is re-recorded in that commit.
+- Fuel (Sebastian, 2026-09-26/27):
+  - An engine without a fuel map still models fuel use, crudely: constant
+    indicated efficiency (petrol 0.325, diesel 0.48, Heywood), so fuel flow =
+    positive combustion power / (efficiency x heating value).
+  - The fuel is referenced by a plain relative file path (moddability).
+  - Ship ethanol blends E5, E10, E25 and E85, derived from the E0 gasoline and
+    an ethanol file by a cited mixing rule. The existing petrol engines burn
+    E5.
+  - Each engine lists the fuels it accepts: the 2 l four-cylinders E5 and
+    E10, the R26B E5, the tractor diesel. The fuel actually burnt comes from
+    the tank.
+  - A graph engine never makes different power on different fuels; the fuel
+    only changes the bookkeeping. E85's extra power is a calibration effect
+    (knock margin) and belongs to the simulated engine only.
+  - Exception to "no existing data file edited in I7": the shipped engine
+    files gain their fuels list. CSV headers may grow by the fuel channels.
+  - Order: C5 fuel map, C5b assists on the torque request, C5c blend data,
+    C5d fuels list plus crude model, then C6 tank, C7 cited data, C8 docs.
 
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
