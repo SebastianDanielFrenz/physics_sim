@@ -585,8 +585,10 @@ initial_kg <= capacity_kg"`, `"vehicle '<v>': engine '<e>' has no fuel
 model - fuel_tank '<id>' cannot feed it"`, `"vehicle '<v>': tank fuel
 '<name>' is not in engine '<e>''s fuels list"`).
 
-The tank's mass does **not** change the chassis mass: the chassis body keeps
-its `chassis.mass` whatever the tank holds.
+In I7a the fuel mass does not change the chassis mass (the chassis body
+keeps its `chassis.mass` whatever the tank holds); a later increment adds it
+as a point mass at the tank position (PLAN.md "Fuel mass moves the
+chassis").
 
 ### Fluid links (I7a C6)
 
@@ -618,6 +620,13 @@ Loader rejections (`<lctx>` = `vehicle '<v>': powertrain.fluid[<n>]`):
 
 A tank on a map-less engine (the [crude fuel model](engine.md)) is allowed.
 
+The loader's same-fuel check compares **file paths**
+(`std::filesystem::equivalent`), not contents: a byte-identical copy of
+`e5.json` under another name is rejected. The `Powertrain` constructor's
+backstop for a code-built `VehicleDesc` has no paths and compares **values**
+instead (name, phase, `lhv_j_kg`, `afr_stoich`, `density_kg_m3`, all
+exact).
+
 **Which fuel burns.** With a tank, the engine burns the tank's fuel (which
 must be one of its `fuels`); without one, it burns `fuels[0]`. The choice is
 fixed when the vehicle is built and is not hashed.
@@ -632,7 +641,10 @@ s = clamp(m_tank / m_demand, 0, 1)      (s = 1 when m_demand == 0)
 
 The combustion torque `tau_comb`, its share of the linearised damping `d`,
 the combustion fraction `theta_c` (published as `EngineSoundState::load`)
-and the booked fuel mass all scale by `s`; the tank loses exactly the
+and the booked fuel mass all scale by `s` (held constant within the
+substep: on the emptying substep `d` omits the `ds/domega` term by design,
+since `s` depends on `omega` only through that substep's demand); the tank
+loses exactly the
 booked mass and is clamped at `0`. At `s == 1` the result is bit-identical
 to the same vehicle without a tank (the engine's torque demand, the ECU's
 request, is not scaled). An empty tank gives `tau_comb = 0`: a running

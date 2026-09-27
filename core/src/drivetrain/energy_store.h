@@ -7,8 +7,9 @@
 // content - a store is a fill state (plus, for a gas/liquefied-gas store, a
 // pressure as a simple function of fill, which a liquid fuel tank feeding a
 // pumped injection system does not need and does not carry). No sloshing,
-// no temperature dynamics, and the content's mass never feeds back into the
-// chassis mass.
+// no temperature dynamics. In I7a the fuel mass does not change the chassis
+// mass; a later increment adds it as a point mass at the tank position
+// (PLAN.md "Fuel mass moves the chassis").
 //
 // Hot-path contract (PLAN.md D8): withdraw()/set_content() allocate nothing.
 // Determinism (PLAN.md D7): content() is simulation state - Powertrain folds

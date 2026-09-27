@@ -229,8 +229,9 @@ public:
     // booked signed (new - old) into PowertrainEnergy::fuel_external_added.
     // A later call before that step replaces an earlier one. Throws
     // std::runtime_error for a vehicle without a fuel_tank or a NaN mass.
-    // Call between steps only (never from a job). The chassis mass never
-    // changes with the fuel mass.
+    // Call between steps only (never from a job). In I7a the fuel mass does
+    // not change the chassis mass; a later increment adds it as a point mass
+    // at the tank position (PLAN.md "Fuel mass moves the chassis").
     void set_fuel_tank_mass(VehicleId id, real kg);
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value for this vehicle

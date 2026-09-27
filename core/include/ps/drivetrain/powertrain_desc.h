@@ -414,8 +414,9 @@ struct ThrottleControlDesc {
 // engine's `fuels` (the loader compares file paths with
 // std::filesystem::equivalent) and becomes the fuel that engine burns (see
 // docs/data_formats/vehicle.md). initial_kg in [0, capacity_kg],
-// capacity_kg > 0, both finite. The fuel's mass never feeds back into the
-// chassis mass (constant chassis mass by design, C6 brief).
+// capacity_kg > 0, both finite. In I7a the fuel mass does not change the
+// chassis mass; a later increment adds it as a point mass at the tank
+// position (PLAN.md "Fuel mass moves the chassis").
 struct FuelTankDesc {
     FuelDesc fuel;
     real capacity_kg = 0.0;

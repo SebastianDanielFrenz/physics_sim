@@ -16,10 +16,14 @@
 // Every test drives the production path (load_vehicle_json -> World ->
 // VehicleInstance -> Powertrain -> EngineTorqueMap). Expected values are
 // literals or recomputed here from the loaded public descs (curves,
-// inertias, LHVs read through ps::io::load_fuel_json), never read back from
-// the code under test.
+// inertias) or literal data-file numbers (LHVs, curve knots), never read
+// back from the code under test. T10 is the one white-box case: it calls
+// EngineTorqueMap::pre_solve directly on an engine built by the production
+// to_engine_desc resolver.
 
-#include "powertrain_multi_diff_desc.h" // ps_test::load_sedan_desc()
+#include "drivetrain/engine_torque_map.h" // T10: white-box pre_solve (core/src on the include path)
+#include "drivetrain/powertrain.h"        // T10: the production to_engine_desc resolver
+#include "powertrain_multi_diff_desc.h"   // ps_test::load_sedan_desc()
 
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/io/fuel_io.h"
@@ -277,10 +281,13 @@ TEST_CASE("C6 T2: tank mass is conserved against the fuel ledger every tick (WOT
 //   t_lower = J_lo (w0 - w_s) / max|m|,   t_upper = J_hi (w0 - w_s) / min|m| + 2h
 //   t_pred  = integral_{w_s}^{w0} J_hi / |m(w)| dw   (midpoint rule, 20000 steps)
 // and the measured t = (k_stall - k_empty - 1) h must lie inside
-// [t_lower, t_upper] and within 2 % + 2h of t_pred (linearly-implicit Euler
-// plus the one-substep detection lag).
+// [t_lower, t_upper] (a loose sanity check) and within 0.3 % + 2h of t_pred
+// (linearly-implicit Euler plus the one-substep detection lag; measured
+// +0.050 % crude, +0.035 % map, +0.35 % = 0.9 ms at idle, i.e. inside 2h).
 // ---------------------------------------------------------------------------
 namespace {
+
+constexpr real kStallPredTol = 0.003; // relative, plus 2h - see above
 
 struct StallBounds {
     real t_lower, t_upper, t_pred, J_lo, J_hi, max_m, min_m;
@@ -393,7 +400,7 @@ void run_empty_tank_case(const std::string& fixture, const char* label) {
                << " N*m); idle integrator max while starving " << max_integrator_running);
     CHECK(t_meas >= b.t_lower);
     CHECK(t_meas <= b.t_upper);
-    CHECK(std::abs(t_meas - b.t_pred) <= 0.02 * b.t_pred + 2.0 * h);
+    CHECK(std::abs(t_meas - b.t_pred) <= kStallPredTol * b.t_pred + 2.0 * h);
 
     // --- 3. the starter cannot restart a dry engine --------------------------
     w.set_control("throttle", 0.0);
@@ -524,20 +531,20 @@ TEST_CASE("C6 T3b: an engine starving at idle winds its idle integrator up to at
     CHECK(max_integrator <= clamp_hi);
     CHECK(t_meas >= b.t_lower);
     CHECK(t_meas <= b.t_upper);
-    CHECK(std::abs(t_meas - b.t_pred) <= 0.02 * b.t_pred + 2.0 * h);
+    CHECK(std::abs(t_meas - b.t_pred) <= kStallPredTol * b.t_pred + 2.0 * h);
 }
 
 // ---------------------------------------------------------------------------
 // T4: the tank selects the burnt fuel. E10 tank (fuels[1]) vs E5 tank
 // (fuels[0]) over the same WOT free rev: identical torque/rpm trajectory
 // (the crude model derives fuel FROM torque), fuel mass in the ratio
-// LHV_E5/LHV_E10 (LHVs read from data/fuels through load_fuel_json); the E5
+// LHV_E5/LHV_E10 (literal LHVs, docs/data_formats/fuel.md's blend table =
+// data/fuels/e5.json / e10.json: 43,089,334 and 42,184,298 J/kg); the E5
 // tank burns exactly what car_sedan (no tank, fuels[0]) burns.
 // ---------------------------------------------------------------------------
 TEST_CASE("C6 T4: an E10 tank burns LHV_E5/LHV_E10 times the E5 tank's fuel mass", "[unit][drivetrain][fuel]") {
-    const real lhv_e5 = io::load_fuel_json(data_path("fuels/e5.json")).lhv_j_kg;
-    const real lhv_e10 = io::load_fuel_json(data_path("fuels/e10.json")).lhv_j_kg;
-    REQUIRE(lhv_e5 != lhv_e10);
+    const real lhv_e5 = 43089334.0;  // J/kg, fuel.md
+    const real lhv_e10 = 42184298.0; // J/kg, fuel.md
 
     Rig r5 = make_rig(io::load_vehicle_json(tank_sedan_path()), 960.0, 960.0, 0);
     Rig r10 = make_rig(io::load_vehicle_json(tank_sedan_e10_path()), 960.0, 960.0, 0);
@@ -567,7 +574,8 @@ TEST_CASE("C6 T4: an E10 tank burns LHV_E5/LHV_E10 times the E5 tank's fuel mass
 // T6: World::set_fuel_tank_mass - applied at the next tick boundary, clamped
 // to [0, capacity], the last request before a step wins, booked SIGNED into
 // fuel_external_added; conservation still closes; NaN and a tank-less
-// vehicle throw; the chassis mass never changes; the telemetry channel sits
+// vehicle throw; the chassis mass does not change (I7a - a later increment
+// adds the fuel as a point mass); the telemetry channel sits
 // right after vehicle0.fuel.heat, only with a tank.
 // ---------------------------------------------------------------------------
 TEST_CASE("C6 T6: set_fuel_tank_mass is applied at the tick boundary, clamped and booked signed", "[unit][drivetrain][fuel]") {
@@ -660,6 +668,43 @@ TEST_CASE("C6 T6: set_fuel_tank_mass is applied at the tick boundary, clamped an
     CHECK(std::find(pnames.begin(), pnames.end(), "vehicle0.fuel.heat") != pnames.end());
     CHECK(std::find(pnames.begin(), pnames.end(), "vehicle0.fuel.tank_kg") == pnames.end());
     CHECK(pnames.size() + 1 == names.size());
+}
+
+// ---------------------------------------------------------------------------
+// T6b: World::reset_vehicle does NOT refill the tank. Burn fuel, reset, and
+// the tank content and fuel_external_added are exactly the pre-reset values
+// (literal compare, not a tolerance) - both right after the reset and after
+// a step with the ignition off (nothing burns, and no refill was queued for
+// the next tick boundary).
+// ---------------------------------------------------------------------------
+TEST_CASE("C6 T6b: World::reset_vehicle leaves the tank content and fuel_external_added unchanged", "[unit][drivetrain][fuel]") {
+    Rig rig = make_rig(io::load_vehicle_json(tank_sedan_path()), 240.0, 960.0, 0);
+    World& w = *rig.world;
+    const VehicleId v = rig.vehicle;
+    w.set_control("throttle", 0.5);
+    for (int t = 0; t < 240; ++t) w.step();
+    const real m_before = w.fuel_tank_mass(v);
+    const real ext_before = w.powertrain_energy(v).fuel_external_added;
+    REQUIRE(m_before < 30.0); // fuel was burnt
+    REQUIRE(m_before > 29.0);
+    REQUIRE(ext_before == 0.0);
+
+    w.set_control("throttle", 0.0);
+    w.set_control("ignition", 0.0);
+    vehicle::VehicleResetOptions o;
+    o.gear = 0;
+    o.engine_state = EngineState::Off;
+    o.clutch_locked = true;
+    w.reset_vehicle(v, o);
+    CHECK(w.fuel_tank_mass(v) == m_before);
+    CHECK(w.powertrain_energy(v).fuel_external_added == ext_before);
+
+    w.step();
+    REQUIRE(w.powertrain_state(v).engine_state == EngineState::Off);
+    CHECK(w.fuel_tank_mass(v) == m_before);
+    CHECK(w.powertrain_state(v).fuel_mass_kg == m_before);
+    CHECK(w.powertrain_energy(v).fuel_external_added == ext_before);
+    WARN("T6b: tank " << m_before << " kg before and after reset_vehicle (initial 30 kg)");
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,4 +1093,157 @@ TEST_CASE("C6 T9: a tank run dry and refilled hashes identically on 1 and 10 wor
     }
     CHECK(ra.world->powertrain_state(ra.vehicle).engine_rpm == rb.world->powertrain_state(rb.vehicle).engine_rpm);
     CHECK(ra.world->state_hash() != rb.world->state_hash());
+}
+
+// ---------------------------------------------------------------------------
+// T10 (review S1): starvation scales EVERY combustion term of the engine's
+// linearisation d by s, not only tau_comb. White-box EngineTorqueMap::
+// pre_solve on the production engine (to_engine_desc over the loaded
+// TorqueMapEngineDesc), one fresh engine per call, with the tank able to
+// deliver +inf (s = 1), 0 (s = 0) and half the substep demand (s = 1/2).
+// Three regimes, each exercising one of pre_solve's three s-scaled d terms:
+//   (a) i4_2l_na at WOT, 5250 rpm           - the WOT-slope term
+//   (b) i4_2l_na with its limiter turned into a soft cut (6800 rpm, band
+//       400) at WOT, 6600 rpm (f_lim = 1/2)  - the soft-cut term
+//   (c) tractor diesel, governor lever 1, 2300 rpm (theta_gov = 100/199.98)
+//                                            - the governor term
+// Expected tau0 and d come from the curves' LITERAL knots (the data files'
+// numbers, repeated here), K = 60/(2 pi), c_k = -motoring(0):
+//   tau0 = (m + c_k) + s*theta_c*(w - m)
+//   d    = -[K*m' + s*theta_c*K*(w' - m') + s*theta_eff*(w - m)*dflim/domega
+//            + s*f_lim*(w - m)*dtheta_gov/domega]
+// The demand (crude model, the only model these engines have) is
+// h*tau_comb*omega/(eta_i*LHV) with the literal Heywood defaults and LHVs.
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr real kK = 9.5492965855137201461; // 60/(2 pi), rpm per rad/s
+
+struct T10Case {
+    const char* label = "";
+    EngineTorqueMap::Desc desc;
+    real rpm = 0.0;
+    real m = 0.0, w = 0.0, m_slope = 0.0, w_slope = 0.0; // curves at rpm, N*m and N*m/rpm (literal)
+    real c_k = 0.0;                                      // -motoring(0), literal
+    real theta_eff = 0.0, f_lim = 0.0, theta_c = 0.0;
+    real dflim_domega = 0.0; // soft-cut term, 0 when not in band
+    real dgov_domega = 0.0;  // governor term, 0 when not engaged
+    real eta_lhv = 0.0;      // eta_i * LHV, J/kg
+};
+
+void run_t10(const T10Case& c) {
+    const real h = 1.0 / 960.0;
+    const real omega = c.rpm / kK;
+    const real tau_comb_demand = c.theta_c * (c.w - c.m);
+    const real m_demand = h * tau_comb_demand * omega / c.eta_lhv;
+    REQUIRE(m_demand > 0.0);
+
+    struct Supply {
+        real available_kg;
+        real s;
+    };
+    const Supply supplies[] = {
+        {std::numeric_limits<real>::infinity(), 1.0},
+        {0.0, 0.0},
+        {0.5 * m_demand, 0.5},
+    };
+    for (const Supply& sup : supplies) {
+        EngineTorqueMap eng(c.desc);
+        Sensors sens;
+        sens.omega = omega;
+        sens.ignition = 1.0;
+        sens.starter = 0.0;
+        sens.clutch_engaged_fraction = 1.0;
+        sens.gearbox_in_neutral = true;
+        sens.fuel_available_kg = sup.available_kg;
+        ThrottleCommand thr;
+        thr.command = 1.0;
+        const PreSolveResult r = eng.pre_solve(sens, thr, TcuRequest{}, h);
+
+        const real s = sup.s;
+        const real tau0_exp = (c.m + c.c_k) + s * tau_comb_demand;
+        const real dtau = kK * c.m_slope + s * c.theta_c * kK * (c.w_slope - c.m_slope) + s * c.theta_eff * (c.w - c.m) * c.dflim_domega +
+                          s * c.f_lim * (c.w - c.m) * c.dgov_domega;
+        const real d_exp = std::max(-dtau, real(0.0));
+        INFO(c.label << ": available " << sup.available_kg << " kg (demand " << m_demand << " kg), s " << s << ": tau0 " << r.tau0
+                     << " vs " << tau0_exp << ", d " << r.d << " vs " << d_exp);
+        REQUIRE(r.state == EngineState::Running);
+        CHECK(r.fuel_supply_fraction == Catch::Approx(s).margin(1e-12));
+        CHECK(r.theta_c == Catch::Approx(s * c.theta_c).margin(1e-12));
+        CHECK(r.tau0 == Catch::Approx(tau0_exp).epsilon(1e-10));
+        CHECK(r.d == Catch::Approx(d_exp).epsilon(1e-10));
+        WARN(c.label << ": s " << s << " tau0 " << r.tau0 << " (exp " << tau0_exp << "), d " << r.d << " (exp " << d_exp << ")");
+    }
+}
+
+} // namespace
+
+TEST_CASE("C6 T10: starvation scales tau_comb and every combustion d term by s (white-box pre_solve)", "[unit][drivetrain][fuel]") {
+    const real kEtaLhvE5 = 0.325 * 43089334.0;    // spark default * LHV_E5 (fuel.md)
+    const real kEtaLhvDiesel = 0.48 * 42000000.0; // compression default * LHV_diesel (data/fuels/diesel.json)
+
+    vehicle::VehicleDesc sedan = io::load_vehicle_json(tank_sedan_path());
+    const TorqueMapEngineDesc& i4 = component_of<TorqueMapEngineDesc>(sedan);
+    const FuelTankDesc& tank = tank_of(sedan);
+    const vehicle::VehicleDesc tractor = io::load_vehicle_json(data_path("vehicles/tractor.json"));
+    const TorqueMapEngineDesc& diesel = component_of<TorqueMapEngineDesc>(tractor);
+    REQUIRE(i4.limiter.type == LimiterType::FuelCut);
+    REQUIRE(diesel.has_governor);
+
+    SECTION("(a) WOT slope: i4_2l_na at 5250 rpm") {
+        T10Case c;
+        c.label = "(a) i4 WOT 5250 rpm";
+        c.desc = to_engine_desc(i4, &tank);
+        c.rpm = 5250.0;
+        c.w = 195.0;  // 198 + 0.5*(192 - 198)
+        c.m = -63.75; // -61 + 0.25*(-72 + 61)
+        c.w_slope = -6.0 / 500.0;
+        c.m_slope = -11.0 / 1000.0;
+        c.c_k = 15.0;
+        c.theta_eff = 1.0;
+        c.f_lim = 1.0;
+        c.theta_c = 1.0;
+        c.eta_lhv = kEtaLhvE5;
+        run_t10(c);
+    }
+    SECTION("(b) soft cut: i4_2l_na, limiter soft_cut 6800/400, WOT at 6600 rpm") {
+        TorqueMapEngineDesc e = i4;
+        e.limiter.type = LimiterType::SoftCut;
+        e.limiter.rpm = 6800.0;
+        e.limiter.band_rpm = 400.0;
+        T10Case c;
+        c.label = "(b) i4 soft cut 6600 rpm";
+        c.desc = to_engine_desc(e, &tank);
+        c.rpm = 6600.0;
+        c.w = 160.8; // 166 + 0.2*(140 - 166)
+        c.m = -79.8; // -72 + 0.6*(-85 + 72)
+        c.w_slope = -26.0 / 500.0;
+        c.m_slope = -13.0 / 1000.0;
+        c.c_k = 15.0;
+        c.theta_eff = 1.0;
+        c.f_lim = 0.5; // (6800 - 6600)/400
+        c.theta_c = 0.5;
+        c.dflim_domega = -kK / 400.0;
+        c.eta_lhv = kEtaLhvE5;
+        run_t10(c);
+    }
+    SECTION("(c) governor: tractor diesel, lever 1 (n_nl 2400), 2300 rpm") {
+        const real band = 0.0909 * 2200.0; // droop * rated
+        const real theta_gov = (2400.0 - 2300.0) / band;
+        T10Case c;
+        c.label = "(c) diesel governor 2300 rpm";
+        c.desc = to_engine_desc(diesel);
+        c.rpm = 2300.0;
+        c.w = 420.0; // 440 + 0.5*(400 - 440)
+        c.m = -76.0; // -70 + 0.75*(-78 + 70)
+        c.w_slope = -40.0 / 200.0;
+        c.m_slope = -8.0 / 400.0;
+        c.c_k = 40.0;
+        c.theta_eff = theta_gov;
+        c.f_lim = 1.0;
+        c.theta_c = theta_gov;
+        c.dgov_domega = -kK / band;
+        c.eta_lhv = kEtaLhvDiesel;
+        run_t10(c);
+    }
 }
