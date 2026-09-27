@@ -73,6 +73,33 @@ struct TerrainConfig {
     // TileManager::on_static_geometry_changed). Ignored when
     // suppress_terrain_under_static_geometry is off.
     bool precompute_suppression_at_load = true;
+
+    // Terrain prefetch ring (owner-approved 2026-09-27): how many tiles
+    // beyond the needed square TileManager builds ahead of time on a
+    // background lane, so the tile a moving interest point is about to need
+    // is already built (fill_tile + datum, and - gated on the C0 gate's
+    // Option A/B outcome - the Jolt-side shape upload too) by the
+    // DETERMINISTIC tick it actually enters the needed set, instead of
+    // being built synchronously in that tick (today's only path, and the
+    // one that costs several 240 Hz ticks at a 256^2-sample row crossing -
+    // see bench_terrain_tiles/the session report's before/after numbers).
+    // 0 (default) == prefetch OFF: TileManager's behaviour, timing and
+    // every existing state_hash are exactly today's - this field does not
+    // exist as far as any pre-existing scenario/test is concerned. A
+    // nonzero value only ever WIDENS the set of keys built ahead of time;
+    // it never changes WHEN a tile is installed (still the deterministic
+    // tick the key enters the needed set, never "whenever the build
+    // finishes" - see TileManager's own header comment on the ticket
+    // install protocol) or which pool BodyId a key lands on, so prefetch
+    // on vs off must hash identically at every worker count.
+    std::uint32_t prefetch_margin_tiles = 0;
+
+    // Fixed size of the background-build ticket pool (one ticket can be
+    // in flight per prefetch-ring key at a time). 0 (default) == prefetch
+    // OFF, same as prefetch_margin_tiles == 0 - both must be nonzero to
+    // enable the background lane; TileManager rejects (clamps to 0/off) a
+    // nonzero margin with a zero ticket pool rather than guessing a size.
+    std::uint32_t prefetch_max_tiles = 0;
 };
 
 } // namespace ps::terrain

@@ -217,6 +217,11 @@ ScenarioTerrain read_terrain(const json& j, const std::filesystem::path& scenari
     t.config.max_tile_fills_per_tick = j.value("max_tile_fills_per_tick", t.config.max_tile_fills_per_tick);
     t.config.suppress_terrain_under_static_geometry =
         j.value("suppress_terrain_under_static_geometry", t.config.suppress_terrain_under_static_geometry);
+    // Terrain prefetch ring (both default 0 == off, TerrainConfig's own
+    // doc comment) - additive, no behaviour change for any scenario file
+    // that does not set them.
+    t.config.prefetch_margin_tiles = j.value("prefetch_margin_tiles", t.config.prefetch_margin_tiles);
+    t.config.prefetch_max_tiles = j.value("prefetch_max_tiles", t.config.prefetch_max_tiles);
 
     if (j.contains("interest_points")) {
         for (const auto& ipj : j.at("interest_points")) {
