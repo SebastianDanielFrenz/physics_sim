@@ -112,6 +112,11 @@ public:
     // thread-only live accessors, same contract as wheel_telemetry above.
     [[nodiscard]] real wheel_omega(std::size_t i) const { return powertrain_.hub_omega(i); }
     [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy() const { return powertrain_.ledger(); }
+    // PHYS-033 P4 I7a C6: backs World::fuel_tank_mass/set_fuel_tank_mass
+    // (the set is applied at the next tick boundary - Powertrain::begin_tick).
+    [[nodiscard]] bool has_fuel_tank() const { return powertrain_.has_fuel_tank(); }
+    [[nodiscard]] real fuel_tank_mass() const { return powertrain_.fuel_tank_mass(); }
+    void request_fuel_tank_mass(real kg) { powertrain_.request_fuel_tank_mass(kg); }
     [[nodiscard]] int powertrain_friction_cap_hits() const { return powertrain_.friction_cap_hits(); }
     // PHYS-033 P4 I4 C13: whether telemetry "stored" adds shaft_pe (only then).
     [[nodiscard]] bool powertrain_has_compliant_shafts() const { return powertrain_.has_compliant_shafts(); }

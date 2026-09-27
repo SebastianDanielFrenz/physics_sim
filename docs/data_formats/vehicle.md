@@ -134,7 +134,7 @@ from).
 significant for scenario determinism. Each entry:
 
 ```json
-{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case" | "park_lock" | "pto" | "load_dyno" | "throttle_control", ... }
+{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case" | "park_lock" | "pto" | "load_dyno" | "throttle_control" | "fuel_tank", ... }
 ```
 
 - `id`: required, non-empty, unique across `components[]`
@@ -151,8 +151,8 @@ significant for scenario determinism. Each entry:
   key alongside `ref` throws `"<ctx>: a component with 'ref' may only
   contain 'id', 'type' and 'ref' (found extra field '<key>')"`; there is no
   merging of inline overrides on top of a ref'd file. `clutch`, `gear_pair`,
-  `differential`, `transfer_case`, `park_lock`, `pto`, `load_dyno` and
-  `throttle_control` components are **always inline** — `{"ref": ...}` on a
+  `differential`, `transfer_case`, `park_lock`, `pto`, `load_dyno`,
+  `throttle_control` and `fuel_tank` components are **always inline** — `{"ref": ...}` on a
   clutch throws `"<ctx>: 'clutch' components are always inline in I3 (no
   'ref')"`.
 - **At most one** `engine`, one `clutch`, one `gearbox`, one `transfer_case`,
@@ -555,6 +555,112 @@ not attempted in this commit.
 this stage's `command` for a listening/telemetry consumer, alongside the
 engine's existing `load`/`throttle_eff` fields.
 
+#### `fuel_tank` component fields (I7a C6)
+
+`FuelTankDesc`. Always inline (`{"ref": ...}` throws `"<ctx>: 'fuel_tank'
+components are always inline (no 'ref')"`). A fuel store, not a shaft
+component: it has **no shaft port** and adds no node, row or inertia to the
+network. It is reached only through a [fluid link](#fluid-links-i7a-c6).
+Internally it is a `FuelTank` behind the generic `IEnergyStore` interface
+(`core/src/drivetrain/energy_store.h`), so a later battery or hydrogen
+store can use the same seam.
+
+```json
+{ "id": "tank", "type": "fuel_tank", "fuel": "../fuels/e5.json", "capacity_kg": 40.0, "initial_kg": 30.0 }
+```
+
+| Field | Type | Req./opt. | Validation | Meaning |
+|---|---|---|---|---|
+| `fuel` | string (path) | **required** | non-empty string, else `"<ctx>: fuel_tank 'fuel' is required and must be a non-empty path string"`. Resolved relative to the **vehicle file's** directory (like every inline component path), then loaded with `load_fuel_json` ([fuel.md](fuel.md) rejections apply) | the fuel the tank holds |
+| `capacity_kg` | real (kg) | **required** | a number (`"<ctx>: fuel_tank 'capacity_kg' is required and must be a number"`), finite (`"... must be finite"`, a backstop only: nlohmann rejects an overflowing literal such as `1e400` itself with `"number overflow parsing '1e400'"`), not negative (`"<ctx>: fuel_tank 'capacity_kg' must not be negative, got <v>"`) and `> 0` (`"<ctx>: fuel_tank 'capacity_kg' must be > 0"`) | usable capacity |
+| `initial_kg` | real (kg) | **required** | a number, finite, not negative (same messages with `'initial_kg'`), and `<= capacity_kg` (`"<ctx>: fuel_tank 'initial_kg' (<v>) must not exceed 'capacity_kg' (<c>)"`) | content at vehicle creation (`World::reset_vehicle` leaves the tank as it is; refill with `World::set_fuel_tank_mass`) |
+
+At load time a tank must also feed something: a tank with no fluid link from
+its `out` port throws `"vehicle '<v>': powertrain.components['<id>']:
+fuel_tank has no consumer (no powertrain.fluid link from \"<id>.out\")"`.
+`Powertrain`'s constructor re-checks every rule above for a code-built
+`VehicleDesc` (`"vehicle '<v>': fuel_tank '<id>' has no consumer"`,
+`"vehicle '<v>': fuel_tank '<id>' needs finite capacity_kg > 0 and 0 <=
+initial_kg <= capacity_kg"`, `"vehicle '<v>': engine '<e>' has no fuel
+model - fuel_tank '<id>' cannot feed it"`, `"vehicle '<v>': tank fuel
+'<name>' is not in engine '<e>''s fuels list"`).
+
+In I7a the fuel mass does not change the chassis mass (the chassis body
+keeps its `chassis.mass` whatever the tank holds); a later increment adds it
+as a point mass at the tank position (PLAN.md "Fuel mass moves the
+chassis").
+
+### Fluid links (I7a C6)
+
+`"fluid"` (optional, inside `"powertrain"`, stored as
+`PowertrainDesc::fluid`) is an array of `["<tank>.out", "<engine>.fuel"]`
+pairs. It is separate from `shafts[]`: a fluid link carries fuel mass, not
+torque, and never creates a network node.
+
+```json
+"fluid": [["tank.out", "engine.fuel"]]
+```
+
+Loader rejections (`<lctx>` = `vehicle '<v>': powertrain.fluid[<n>]`):
+
+| Case | Message |
+|---|---|
+| `fluid` is not an array | `"vehicle '<v>': powertrain.fluid must be an array of [\"<tank>.out\", \"<engine>.fuel\"] pairs"` |
+| an entry is not a pair of strings | `"<lctx>: must be a [\"<tank>.out\", \"<engine>.fuel\"] pair of port strings"` |
+| a malformed port ref (no `.`, or `.` first/last) | `"<lctx>: bad port ref \"<ref>\" - must be a ..."` |
+| unknown component on either side | `"<lctx>: unknown component '<id>'"` |
+| source is not a `fuel_tank` | `"<lctx>: '<id>' is not a fuel_tank (a fluid link must start at \"<tank>.out\")"` |
+| source port is not `out` | `"<lctx>: unknown port \"<ref>\" (a fuel_tank's only fluid port is \"out\")"` |
+| target is not an engine | `"<lctx>: '<id>' is not an engine (a fluid link must end at \"<engine>.fuel\")"` |
+| target port is not `fuel` | `"<lctx>: unknown port \"<ref>\" (an engine's only fluid port is \"fuel\")"` |
+| target engine has no fuel model | `"<lctx>: engine '<e>' has no fuel model (no 'fuels', 'fuel' or 'fuel_map') - a fluid link cannot feed it"` |
+| the same link twice | `"<lctx>: duplicate fluid link \"<from>\" -> \"<to>\""` |
+| two tanks feed one engine | `"<lctx>: engine '<e>' fuel port is fed by two tanks ('<a>' and '<b>')"` |
+| the tank's fuel file is not one of the engine's fuel files (`std::filesystem::equivalent`) | `"<lctx>: tank fuel \"<path as written>\" is not in engine \"<e>\"'s fuels list"` |
+
+A tank on a map-less engine (the [crude fuel model](engine.md)) is allowed.
+
+The loader's same-fuel check compares **file paths**
+(`std::filesystem::equivalent`), not contents: a byte-identical copy of
+`e5.json` under another name is rejected. The `Powertrain` constructor's
+backstop for a code-built `VehicleDesc` has no paths and compares **values**
+instead (name, phase, `lhv_j_kg`, `afr_stoich`, `density_kg_m3`, all
+exact).
+
+**Which fuel burns.** With a tank, the engine burns the tank's fuel (which
+must be one of its `fuels`); without one, it burns `fuels[0]`. The choice is
+fixed when the vehicle is built and is not hashed.
+
+**Starvation.** Each substep the engine computes its fuel demand
+`m_demand = h * mdot_demand` (fuel map or crude model) and the supply
+fraction
+
+```
+s = clamp(m_tank / m_demand, 0, 1)      (s = 1 when m_demand == 0)
+```
+
+The combustion torque `tau_comb`, its share of the linearised damping `d`,
+the combustion fraction `theta_c` (published as `EngineSoundState::load`)
+and the booked fuel mass all scale by `s` (held constant within the
+substep: on the emptying substep `d` omits the `ds/domega` term by design,
+since `s` depends on `omega` only through that substep's demand); the tank
+loses exactly the
+booked mass and is clamped at `0`. At `s == 1` the result is bit-identical
+to the same vehicle without a tank (the engine's torque demand, the ECU's
+request, is not scaled). An empty tank gives `tau_comb = 0`: a running
+engine coasts down on its motoring torque to `Stalled`, and cranking with an
+empty tank never reaches the fire speed. The idle PI integrator winds up to
+its upper clamp while the engine starves at idle and is reset to `0` when
+the engine stalls.
+
+**Runtime access.** `PowertrainSnapshot::fuel_mass_kg` (the tank content, 0
+without a tank); `World::fuel_tank_mass(vehicle)`; `World::set_fuel_tank_mass(
+vehicle, kg)` - applied at the next tick boundary, clamped to
+`[0, capacity_kg]`, and booked signed (`new - old`) into
+`PowertrainEnergy::fuel_external_added` (throws for a vehicle without a tank
+or a NaN mass). The tank content is folded into `World::state_hash()` only
+when the vehicle has a tank, so every tank-less vehicle hashes as before.
+
 ### Ports, by component type (fixed names)
 
 | Component | Ports |
@@ -568,6 +674,7 @@ engine's existing `load`/`throttle_eff` fields.
 | `park_lock` | `shaft` |
 | `pto` | `in`, `out` (`out` exempt from the "must be connected" rule, see above) |
 | `load_dyno` | `shaft` |
+| `fuel_tank` | none (fluid port `out`, used only in [`fluid`](#fluid-links-i7a-c6)); an engine's fluid port is `fuel` |
 | a wheel (implicit, one per entry in the top-level `wheels[]`) | `wheel:<wheel name>` |
 
 A port reference string is written `"<component id>.<port>"` (e.g.
@@ -710,6 +817,12 @@ vehicle-construction time and additionally rejects:
   wheel, or a duplicate corner for the same wheel.
 - A controller (see [below](#controllers)) referencing a component id that
   doesn't exist, or that exists but is the wrong component type.
+- A malformed fluid link or fuel tank in a code-built `VehicleDesc` (the
+  backstops listed under [`fuel_tank`](#fuel_tank-component-fields-i7a-c6)
+  and `"vehicle '<v>': fluid link source '<ref>' is not a fuel_tank's
+  \"out\" port"` / `"... fluid link target '<ref>' is not an engine's
+  \"fuel\" port"` / `"vehicle '<v>': engine '<e>' fuel port is fed by more
+  than one fluid link"`).
 
 ## Controllers
 
@@ -830,6 +943,14 @@ order, so a 5th-or-later differential's `bias`/`locked`/
 `diff_transfer_torque` reads are simply not exposed there (silently
 truncated, not an error). This is a snapshot/debug-only addition — no new
 hashed simulation state, no change to `World::state_hash()`.
+
+## Telemetry channel a fuel tank exposes
+
+PHYS-033 P4 I7a C6: a vehicle with a `fuel_tank` adds
+`vehicle<i>.fuel.tank_kg` (the tank content in kg) right after its
+`vehicle<i>.fuel.{flow_g_s,energy_in,heat}` channels. A vehicle without a
+tank registers no such channel, so every shipped vehicle's CSV header is
+unchanged.
 
 ## Minimal complete example
 

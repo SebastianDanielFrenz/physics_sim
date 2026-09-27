@@ -34,6 +34,7 @@
 #include "ps/types.h"
 
 #include <cstdint>
+#include <limits>
 
 namespace ps::drivetrain {
 
@@ -50,6 +51,13 @@ struct Sensors {
     real starter = 0.0;                 // > 0.5 == pressed
     real clutch_engaged_fraction = 1.0; // the clutch's current effective engagement e
     bool gearbox_in_neutral = true;
+    // PHYS-033 P4 I7a C6: NOT an ECU sensor - the physical supply limit, the
+    // fuel mass (kg) the feeding tank can deliver this substep (its whole
+    // content; Powertrain sets it only when a fuel_tank feeds this engine).
+    // The default +infinity never starves, so every engine without a tank
+    // (and every direct pre_solve call site) behaves exactly as before C6.
+    // See EngineTorqueMap::pre_solve's starvation step.
+    real fuel_available_kg = std::numeric_limits<real>::infinity();
 };
 // PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
 // combined command plus the TCU-forwarded (electronic) or fixed (mechanical)
@@ -113,6 +121,12 @@ struct PreSolveResult {
     // PowertrainSnapshot::fuel_flow_g_s/EngineSoundState::fuel_flow_g_s,
     // never hashed.
     real fuel_flow_g_s = 0.0;
+    // PHYS-033 P4 I7a C6: the starvation factor s_starve in [0, 1] applied
+    // this substep - clamp(fuel_available_kg / (h*mdot_demand), 0, 1), 1
+    // when the demand is 0 or the supply covers it. tau_comb, its share of
+    // d, theta_c above and the booked fuel mass are all multiplied by it.
+    // Never hashed (a function of hashed state and the tank content).
+    real fuel_supply_fraction = 1.0;
 };
 
 // Hoisted, unchanged except the three PHYS-033 P4 I7a C5 fields below, from

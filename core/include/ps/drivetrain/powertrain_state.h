@@ -123,6 +123,10 @@ struct PowertrainSnapshot {
     // EngineSoundState::fuel_flow_g_s above (same value - the adapter-facing
     // copy) - 0 only for an engine with no fuel model at all. Never hashed.
     real fuel_flow_g_s = 0.0;
+    // PHYS-033 P4 I7a C6: the fuel tank's content (kg) at the end of this
+    // tick - 0 for a vehicle without a fuel_tank. A read-only copy (the
+    // hashed state lives in the Powertrain's tank).
+    real fuel_mass_kg = 0.0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled

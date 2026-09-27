@@ -281,6 +281,8 @@ avoids a spurious check at the table's own `x.front()` clamp when
 
 ### `fuels`, `ignition`, `indicated_efficiency`
 
+**Active fuel (I7a C6):** a vehicle `fuel_tank` fluid-linked to this engine selects the burnt fuel (the tank's fuel, which must be one of `fuels`); without a tank `fuels[0]` burns - see [vehicle.md, fluid links](vehicle.md#fluid-links-i7a-c6).
+
 PHYS-033 P4 I7a C5d (plan sections 2.1/4/4.1/4.2). For an engine that burns
 fuel but has no calibrated `fuel_map` — every shipped engine as of this
 commit — a crude constant-efficiency estimate replaces the map lookup:

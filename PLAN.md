@@ -709,7 +709,7 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   core.
 - Taken as recommended: fuel map as mass flow over rpm x load; no existing
   data file edited in I7 (fuel goes into new variant files); chassis mass
-  constant as fuel burns; engine type chosen by "kind": "simulated" plus
+  constant as fuel burns in I7a (superseded later, see "Fuel" below); engine type chosen by "kind": "simulated" plus
   an architecture field; generated maps never committed; the graph engine
   ignores altitude; refuelling only through a test/game hook.
 - Cable throttle and the pedal law (Sebastian, 2026-09-26): an engine whose
@@ -753,6 +753,20 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
     the knock/autoignition model (I7c+), their first consumer.
   - Order: C5 fuel map, C5b assists on the torque request, C5c blend data,
     C5d fuels list plus crude model, then C6 tank, C7 cited data, C8 docs.
+  - Fuel mass moves the chassis (2026-09-27, later - not part of C6/I7a):
+    the tank's fuel mass will feed back into the chassis physics. C6 keeps
+    the chassis mass constant and only tracks m_tank; the follow-up adds
+    the coupling. Rulings (2026-09-27): the fuel is a POINT MASS at a tank
+    position given in the vehicle file (additive field); the chassis mass
+    properties are updated EVERY TICK by offsetting them with the fuel burnt
+    (or refuelled) that tick - an O(1) point-mass update (mass, CoM shift,
+    parallel-axis inertia term), no recomputation of the whole body. To keep
+    rounding from accumulating, the offset is applied as dry chassis + the
+    current m_tank point mass (same O(1) cost). Open for the plan: how the
+    backend changes a body's mass/inertia and CoM at a tick boundary without
+    allocating (Jolt's CoM comes from the shape), the shadow chassis and
+    static suspension loads picking it up, hash impact (vehicles with a tank
+    only). Sloshing is out of scope unless asked for.
 
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
