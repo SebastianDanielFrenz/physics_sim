@@ -66,11 +66,11 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                 const real engine_rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
                 const real out_rpm = std::abs(s.gearbox_out_omega) * kRadPerSecToRpm;
                 if (s.gearbox_current == 0) {
-                    if (s.throttle_pedal > real(0.05) && out_rpm < real(100.0)) desired_target = 1;
+                    if (s.throttle_request > real(0.05) && out_rpm < real(100.0)) desired_target = 1;
                 } else if (s.gearbox_current >= 1 && time_in_gear_ >= desc_.auto_shift.min_time_in_gear_s) {
-                    const real up_th = lerp(desc_.auto_shift.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_full_throttle, s.throttle_pedal);
+                    const real up_th = lerp(desc_.auto_shift.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_full_throttle, s.throttle_request);
                     const real down_th =
-                        lerp(desc_.auto_shift.down_rpm_at_zero_throttle, desc_.auto_shift.down_rpm_at_full_throttle, s.throttle_pedal);
+                        lerp(desc_.auto_shift.down_rpm_at_zero_throttle, desc_.auto_shift.down_rpm_at_full_throttle, s.throttle_request);
                     if (engine_rpm > up_th && s.gearbox_current < s.max_gear) desired_target = s.gearbox_current + 1;
                     else if (engine_rpm < down_th && s.gearbox_current > 1) desired_target = s.gearbox_current - 1;
                 }
@@ -207,7 +207,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             engaging_from_neutral = true;
         } else {
             const real full = desc_.auto_clutch.full_rpm_min +
-                               s.throttle_pedal * (desc_.auto_clutch.full_rpm_max - desc_.auto_clutch.full_rpm_min);
+                               s.throttle_request * (desc_.auto_clutch.full_rpm_max - desc_.auto_clutch.full_rpm_min);
             const real denom = full - desc_.auto_clutch.bite_rpm;
             e_tgt = denom > real(0.0) ? std::clamp((rpm - desc_.auto_clutch.bite_rpm) / denom, real(0.0), real(1.0)) : real(1.0);
             // Rolling re-engagement (AutoClutchDesc::rolling_reengage_rpm):

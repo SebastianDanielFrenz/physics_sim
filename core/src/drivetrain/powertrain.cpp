@@ -1495,12 +1495,42 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     // --- plan section 7.2 step 3: controllers -------------------------------
     if (gearbox_) {
         if (tcu_) {
+            // Engine reads LAST substep's TCU request (lagged - plan section
+            // 7.2's deliberate order independence); the cache is then
+            // overwritten with THIS substep's for next time. This assignment
+            // depends only on tcu_prev_request_ (set last substep), never on
+            // `out` below, so it is safe to read here, BEFORE tcu_->step().
+            ctx.tcu_throttle_floor = tcu_prev_request_.throttle_floor;
+            ctx.tcu_ignition_cut = tcu_prev_request_.ignition_cut;
+            ctx.tcu_throttle_ceiling = tcu_prev_request_.throttle_ceiling;
+
+            // PHYS-033 P4 I7a C5b (owner ruling 2026-09-26): the throttle-
+            // command stage is evaluated HERE, before the TCU, so the TCU's
+            // launch law / auto-shift thresholds / auto-blip act on the
+            // stage's torque REQUEST (pedal_map/hand-lever applied), not the
+            // raw pedal. This is a pure reorder of a stateless computation:
+            // the stage has no state of its own and reads only ctx.throttle,
+            // ctx.channels (hand lever) and ctx.tcu_throttle_floor/
+            // tcu_throttle_ceiling - all already available above (the lagged
+            // TCU limits assigned just now) - never anything the TCU writes
+            // this same substep. Moving this earlier does not change its
+            // result (see throttle_stage.h's own header comment for what the
+            // stage depends on).
+            if (engine_) {
+                last_throttle_command_ = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
+            }
+
             ManualTcu::Sensors s;
             s.engine_omega = engine_ ? network_.omega(engine_crank_) : real(0.0);
             s.gearbox_in_omega = network_.omega(gearbox_in_);
             s.gearbox_out_omega = network_.omega(gearbox_out_);
             s.approx_speed_mps = approx_speed_mps();
-            s.throttle_pedal = ctx.throttle;
+            // PHYS-033 P4 I7a C5b: the torque REQUEST (throttle_stage_'s
+            // command - pedal_map/hand-lever already applied), not the raw
+            // pedal - see Sensors::throttle_request's own comment
+            // (manual_tcu.h). Without an engine there is no throttle stage
+            // to speak of; fall back to the raw pedal exactly as before.
+            s.throttle_request = engine_ ? last_throttle_command_.command : ctx.throttle;
             s.gear_request = ctx.gear_request;
             s.shift_up_count = ctx.shift_up_count;
             s.shift_down_count = ctx.shift_down_count;
@@ -1519,12 +1549,6 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             const ManualTcu::Outputs out = tcu_->step(s, ctx.h, ctx.first_substep_of_tick);
             gearbox_->set_target(out.gearbox_target);
             ctx.e_auto = out.e_auto;
-            // Engine reads LAST substep's TCU request (lagged - plan section
-            // 7.2's deliberate order independence); the cache is then
-            // overwritten with THIS substep's for next time.
-            ctx.tcu_throttle_floor = tcu_prev_request_.throttle_floor;
-            ctx.tcu_ignition_cut = tcu_prev_request_.ignition_cut;
-            ctx.tcu_throttle_ceiling = tcu_prev_request_.throttle_ceiling;
             tcu_prev_request_.throttle_floor = out.throttle_floor;
             tcu_prev_request_.ignition_cut = out.ignition_cut;
             tcu_prev_request_.throttle_ceiling = out.throttle_ceiling;
@@ -1560,11 +1584,16 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     }
 
     // --- step 4: throttle-command stage + engine (I7a C3: the stage sits
-    // strictly before the engine's own pre_solve, plan section 7.2 step 4)
-    // ------------------------------------------------------------------------
+    // strictly before the engine's own pre_solve, plan section 7.2 step 4;
+    // I7a C5b: already evaluated above, ahead of the TCU, whenever a
+    // gearbox_+tcu_ pair exists - only a vehicle with an engine but no
+    // manual transmission at all (none shipped, but structurally possible)
+    // still needs it evaluated here) ------------------------------------
     if (engine_) {
-        const ThrottleCommand throttle_cmd = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
-        last_throttle_command_ = throttle_cmd;
+        if (!(gearbox_ && tcu_)) {
+            last_throttle_command_ = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
+        }
+        const ThrottleCommand& throttle_cmd = last_throttle_command_;
 
         EngineTorqueMap::Sensors s;
         s.omega = network_.omega(engine_crank_);

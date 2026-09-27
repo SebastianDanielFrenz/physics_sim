@@ -117,7 +117,7 @@ TEST_CASE("ManualTcu: auto-clutch launch law gives e(rpm), then Launch -> Locked
     ManualTcu::Sensors s = base_sensors();
     s.gearbox_current = 1;
     s.gearbox_target = 1;
-    s.throttle_pedal = 0.0; // full(0) == full_rpm_min == 1600
+    s.throttle_request = 0.0; // full(0) == full_rpm_min == 1600
     s.engine_omega = rpm_to_omega(1100.0);
     s.gearbox_in_omega = 0.0; // large slip: input shaft not yet moving
 
@@ -181,7 +181,7 @@ TEST_CASE("ManualTcu: anti-stall release uses the faster panic rate, not the ord
         ManualTcu::Sensors s = base_sensors();
         s.gearbox_current = 1;
         s.gearbox_target = 1;
-        s.throttle_pedal = 0.0;
+        s.throttle_request = 0.0;
         s.engine_omega = rpm_to_omega(1200.0);
         s.gearbox_in_omega = rpm_to_omega(1200.0 - 30.0); // small slip -> locks quickly
         for (int i = 0; i < 400; ++i) (void)tcu.step(s, h, false);
@@ -239,7 +239,7 @@ TEST_CASE("ManualTcu: after an anti-stall release the clutch re-closes while sti
     ManualTcu::Sensors s = base_sensors();
     s.gearbox_current = 2;
     s.gearbox_target = 2;
-    s.throttle_pedal = 0.0;
+    s.throttle_request = 0.0;
     s.engine_omega = rpm_to_omega(1200.0);
     s.gearbox_in_omega = rpm_to_omega(1170.0);
     for (int i = 0; i < 400; ++i) (void)tcu.step(s, h, false);
@@ -337,7 +337,7 @@ TEST_CASE("ManualTcu: the upshift cut is held through the post-shift close until
     // 2nd at WOT, 1->2 already commanded, gearbox mid-shift.
     auto mid_shift = [] {
         ManualTcu::Sensors s = base_sensors();
-        s.throttle_pedal = 1.0;
+        s.throttle_request = 1.0;
         s.gearbox_current = 1;
         s.gearbox_target = 2;
         s.gearbox_phase = Gearbox::Phase::Selecting;
@@ -502,7 +502,7 @@ TEST_CASE("ManualTcu: launching from Neutral holds the clutch open while the gea
     REQUIRE(tcu.e_auto() == Catch::Approx(1.0).margin(1e-3)); // closed in N
 
     s.gear_request = 1.0;
-    s.throttle_pedal = 1.0;
+    s.throttle_request = 1.0;
     (void)tcu.step(s, h, true);
     s.gear_request = kGearRequestNone;
     s.gearbox_target = 1;
@@ -560,7 +560,7 @@ TEST_CASE("ManualTcu: auto-shift thresholds and hysteresis", "[unit][drivetrain]
     s.assist_auto_shift = true;
     s.gearbox_current = 1;
     s.gearbox_target = 1;
-    s.throttle_pedal = 0.0;
+    s.throttle_request = 0.0;
     s.engine_omega = rpm_to_omega(2000.0); // below up(0)=2500: no upshift yet
     s.gearbox_out_omega = rpm_to_omega(1000.0);
 
