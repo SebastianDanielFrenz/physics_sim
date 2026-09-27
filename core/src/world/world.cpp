@@ -174,7 +174,7 @@ void World::stage_vehicle_islands() {
         // PHYS-033 I1 W1: the shadow chassis needs gravity to build its own
         // per-substep acceleration estimate (it never talks to World
         // otherwise) - see vehicle::VehicleTickEnv.
-        const vehicle::VehicleTickEnv env{config_.gravity, config_.air_density};
+        const vehicle::VehicleTickEnv env{config_.gravity, config_.air_density, ambient_};
         vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz);
     }
 }

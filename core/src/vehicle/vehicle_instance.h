@@ -12,6 +12,7 @@
 #include "ps/io/surface_table.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/vehicle/vehicle_reset.h"
+#include "ps/world/ambient.h"
 #include "ps/world/ids.h"
 
 #include <cstdint>
@@ -64,6 +65,11 @@ struct VehicleTickEnv {
     // air_density's default. Unused until commit 6c wires aero drag into
     // step_tick.
     real air_density = 1.225;
+    // PHYS-033 P4 I7b C9: ambient atmospheric sample (ps/world/ambient.h),
+    // mirrors World::ambient() - see that header's comment. Plumbed through
+    // to drivetrain::ComponentSubstepCtx::ambient (below) for a future
+    // simulated engine; the graph engine ignores it.
+    AmbientSample ambient{};
 };
 
 class VehicleInstance {

@@ -229,6 +229,11 @@ public:
     // EngineSoundState fill (commit 6: load/limiter/dfco/starter flags,
     // crank_angle) needs it; only meaningful when has_engine().
     [[nodiscard]] const EngineTorqueMap::PreSolveResult& last_engine_result() const { return last_engine_result_; }
+    // PHYS-033 P4 I7b C9: the ambient sample handed to the engine's Sensors
+    // this substep (test-only white-box hook, mirrors last_engine_result()'s
+    // pattern - not part of any hashed/snapshot state, see ps/world/
+    // ambient.h). Only meaningful when has_engine().
+    [[nodiscard]] const AmbientSample& last_engine_sensors_ambient() const { return last_engine_sensors_ambient_; }
     [[nodiscard]] bool has_clutch() const { return clutch_ != nullptr; }
     [[nodiscard]] bool has_gearbox() const { return gearbox_ != nullptr; }
     [[nodiscard]] const Gearbox& gearbox() const { return *gearbox_; }
@@ -557,6 +562,7 @@ private:
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached
+    AmbientSample last_engine_sensors_ambient_{}; // PHYS-033 P4 I7b C9; test-only white-box hook, never hashed
     // PHYS-033 P4 I7a C5, broadened C5d: true iff this vehicle's engine has
     // ANY fuel model (a calibrated fuel_map OR the crude no-map estimate,
     // see ps::drivetrain::has_fuel_model in powertrain_desc.h) - gates

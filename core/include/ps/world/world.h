@@ -20,6 +20,7 @@
 #include "ps/vehicle/vehicle_reset.h"
 #include "ps/vehicle/wheel_state.h"
 #include "ps/vehicle/wheel_telemetry.h"
+#include "ps/world/ambient.h"
 #include "ps/world/force_element.h"
 #include "ps/world/ids.h"
 #include "ps/world/snapshot.h"
@@ -175,6 +176,15 @@ public:
     // iterated" comment, PLAN.md D7, still governs the hot path).
     [[nodiscard]] std::vector<std::string> control_channel_names() const;
 
+    // PHYS-033 P4 I7b C9 (ps/world/ambient.h): the ambient atmospheric
+    // sample every vehicle's engine Sensors sees. Sim-thread-only, like
+    // set_terrain_source/set_surface_table - call between steps; takes
+    // effect at the next tick's vehicle::VehicleTickEnv (World::step reads
+    // ambient_ once per tick, not mid-step). Never hashed (an ECU/
+    // environment input, like a control channel, not simulation state).
+    void set_ambient(const AmbientSample& a) { ambient_ = a; }
+    [[nodiscard]] const AmbientSample& ambient() const { return ambient_; }
+
     // PLAN.md section 6 / P3: shared surface-parameter lookup (lambda_mu,
     // crr) for every vehicle's tyre model. Setup-time only (like
     // set_terrain_source); must be called before the first step() if any
@@ -321,6 +331,7 @@ private:
     real dt_;
     std::uint64_t tick_ = 0;
     real sim_time_ = 0.0;
+    AmbientSample ambient_; // PHYS-033 P4 I7b C9; never hashed, see set_ambient/ambient() above
 
     std::unique_ptr<jobs::JobSystem> job_system_;
     std::unique_ptr<IRigidBackend> backend_;
