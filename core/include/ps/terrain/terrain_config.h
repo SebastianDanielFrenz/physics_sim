@@ -102,4 +102,28 @@ struct TerrainConfig {
     std::uint32_t prefetch_max_tiles = 0;
 };
 
+// Terrain prefetch ring counters (TileManager::prefetch_stats(), World::
+// terrain_prefetch_stats()), lifetime totals. Diagnostics only - none of
+// them feeds back into the simulation, and every one stays 0 with prefetch
+// off. "Late" means a key reached its install tick while its background
+// build had not finished: late_sync = the build had not started yet, so it
+// was cancelled and the tile filled synchronously exactly as with prefetch
+// off; late_wait = the build was running, so the tick waited for it
+// (late_wait_ns_total/max = how long). stale_inputs = a Snapshot source's
+// inputs changed after capture, so the background result was discarded and
+// the tile filled synchronously. skipped_suppression = enqueue attempts
+// skipped because the key's suppression holes were neither cached nor
+// provably empty (see TileManager's enqueue rule).
+struct PrefetchStats {
+    std::uint64_t enqueued = 0;
+    std::uint64_t installed = 0; // tiles installed from a background build (a spare swap)
+    std::uint64_t late_sync = 0;
+    std::uint64_t late_wait = 0;
+    std::uint64_t late_wait_ns_total = 0;
+    std::uint64_t late_wait_ns_max = 0;
+    std::uint64_t stale_inputs = 0;
+    std::uint64_t cancelled = 0;
+    std::uint64_t skipped_suppression = 0;
+};
+
 } // namespace ps::terrain

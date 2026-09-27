@@ -760,6 +760,9 @@ real World::vehicle_shadow_dw_error(VehicleId id) const {
 void World::set_terrain_source(std::shared_ptr<const terrain::ITerrainSource> source, const terrain::TerrainConfig& config) {
     terrain_manager_ = std::make_unique<terrain::TileManager>(std::move(source), config, *backend_);
     terrain_manager_->precompute_suppression(*job_system_); // PHYS-021 Task B: load time, off the tick path
+    // Terrain prefetch ring: after the precompute (its enqueue rule relies on
+    // it); a no-op unless config enables it and the source supports it.
+    terrain_manager_->start_prefetch(*job_system_);
 }
 
 BodyId World::create_body(const BodyDesc& desc) {
@@ -796,6 +799,10 @@ std::size_t World::terrain_precomputed_tile_count() const {
 
 std::size_t World::terrain_relief_overflow_count() const {
     return terrain_manager_ ? terrain_manager_->relief_overflow_count() : 0;
+}
+
+terrain::PrefetchStats World::terrain_prefetch_stats() const {
+    return terrain_manager_ ? terrain_manager_->prefetch_stats() : terrain::PrefetchStats{};
 }
 
 } // namespace ps

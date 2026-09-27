@@ -60,6 +60,7 @@
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -143,6 +144,50 @@ public:
     [[nodiscard]] const std::vector<std::uint32_t>* cached_suppression(TileKey key) const;
     [[nodiscard]] std::vector<std::uint32_t> compute_suppression_uncached(TileKey key) const;
 
+    // --- Terrain prefetch ring (owner-approved 2026-09-27) -----------------
+    // Setup-time: enables the prefetch ring when config().prefetch_margin_tiles
+    // and prefetch_max_tiles are both nonzero and the source's
+    // prefetch_support() is not TickOnly; otherwise a no-op and update()
+    // stays exactly the pre-prefetch path. Starts `jobs`' background lane
+    // (JobSystem::start_background_lane), creates one build context +
+    // TileSample per lane thread and one heightfield spare per ticket
+    // (allocates). `jobs` must outlive this TileManager (the destructor
+    // drains its lane). World::set_terrain_source calls this right after
+    // precompute_suppression; call precompute_suppression FIRST - the
+    // enqueue rule below relies on it (precompute_complete_).
+    //
+    // Ticket protocol (see update()): at the end of every update() the ring
+    // keys (every interest point's square widened by prefetch_margin_tiles,
+    // pending-fill keys first) that are not resident and not ticketed get a
+    // Free ticket and a lane job that fills the tile, applies its cached
+    // suppression holes, computes its datum and builds the ticket's spare.
+    // A key is installed ONLY at the tick today's path would install it
+    // (steps 1-3 are unchanged, so slot, BodyId and install tick per key
+    // are identical with prefetch on or off): a Done ticket is installed by
+    // swap_heightfield_spare + set_pose; a still-Queued one is cancelled and
+    // the tile filled synchronously (late_sync); a Running one is waited for
+    // (late_wait). Right after that partition, tickets for keys that left
+    // both the ring and the pending queue are cancelled.
+    //
+    // Suppression rule at enqueue: suppression off -> no holes; a cached
+    // hole list -> the ticket points at it (unordered_map values never move;
+    // entries are erased only by on_static_geometry_changed, which drains
+    // every ticket first); no cache entry but precompute_complete_ -> no
+    // holes, because the load-time precompute covers EVERY tile a foreign
+    // static triangle touches (1 m binning margin) and compute_suppression_
+    // holes returns nothing for any other tile (its whole-tile probe finds
+    // no foreign static body); otherwise the key is skipped
+    // (skipped_suppression) and filled synchronously when needed.
+    void start_prefetch(jobs::JobSystem& jobs);
+    [[nodiscard]] bool prefetch_enabled() const { return lane_jobs_ != nullptr; }
+    [[nodiscard]] const PrefetchStats& prefetch_stats() const { return prefetch_stats_; }
+    // White-box test hooks: the state of `key`'s live ticket (1 Queued,
+    // 2 Running, 3 Done; -1 if none), the number of Free tickets, and the
+    // pool body currently holding `key` (invalid if not resident).
+    [[nodiscard]] int prefetch_ticket_state(TileKey key) const;
+    [[nodiscard]] std::size_t prefetch_free_ticket_count() const;
+    [[nodiscard]] BodyId resident_body(TileKey key) const;
+
 private:
     struct InterestPoint {
         Vec3 world_xy;
@@ -176,6 +221,13 @@ private:
     // cache and a coarse-to-fine probe) and for two alternatives that were
     // tried and measured not to help on this workload.
     void suppress_covered_samples(Slot& slot);
+    // update()'s step 5 for one synchronously filled slot: suppression,
+    // datum, update_heightfield_body, set_pose.
+    void install_sync_slot(Slot& slot);
+    // update()'s tail (after steps 1-3) when the prefetch ring is on.
+    void update_with_prefetch(jobs::JobSystem& jobs);
+    // `in` without repeated slot indices, first-occurrence order.
+    static void unique_slots_into(const std::vector<std::size_t>& in, std::vector<std::size_t>& out);
 
     // Per-caller scratch for compute_suppression_holes: the lazy path owns
     // one (lazy_scratch_, reused forever); the precompute gives each
@@ -228,6 +280,54 @@ private:
     // - but this function still guards the classification regardless of
     // where an unassigned body happens to sit, so it is kept as-is.
     [[nodiscard]] bool is_own_pool_body(BodyId id) const;
+
+    // The placeholder heightfield every pool body (and every prefetch spare)
+    // is created from - see kPlaceholderHeightRangeM in tile_manager.cpp.
+    [[nodiscard]] HeightfieldShape make_placeholder_shape() const;
+
+    // Terrain prefetch ring (see start_prefetch's doc comment).
+    enum TicketState : std::uint8_t { kTicketFree = 0, kTicketQueued = 1, kTicketRunning = 2, kTicketDone = 3, kTicketCancelled = 4 };
+    struct PrefetchTicket {
+        // Free -> Queued (tick, then submit) -> Running (lane CAS) -> Done
+        // (lane) -> Free (tick, after install or cancel). Queued ->
+        // Cancelled (tick CAS) -> Free (the lane, when it pops the job).
+        // The tick only ever writes the fields below while the ticket is
+        // Free (inputs: also right after its own Queued->Cancelled CAS,
+        // after which the lane never reads it); the lane writes the result
+        // fields only while Running. The release/acquire pairs on `state`
+        // publish them.
+        std::atomic<std::uint8_t> state{kTicketFree};
+        TileKey key{};
+        HeightfieldSpareId spare{};                      // owned for this TileManager's lifetime
+        std::shared_ptr<const void> inputs;              // Snapshot sources only; tick thread only
+        bool snapshot = false;                           // fill via fill_tile_from(inputs)
+        const std::vector<std::uint32_t>* holes = nullptr; // into suppression_cache_; nullptr = none
+        // Results (lane, published by Done).
+        Vec3 origin{};
+        real datum = 0.0;
+        bool relief_overflow = false;
+    };
+    struct PrefetchBuilder {
+        std::atomic<bool> busy{false};
+        TileSample sample;
+        std::unique_ptr<IHeightfieldBuildContext> ctx;
+    };
+    static constexpr std::size_t kNoTicket = static_cast<std::size_t>(-1);
+    // Lane side of one ticket's build.
+    void run_prefetch_job(std::size_t ticket_index);
+    // Index of the Queued/Running/Done ticket for `key`, or kNoTicket.
+    [[nodiscard]] std::size_t find_live_ticket(TileKey key) const;
+    [[nodiscard]] bool key_in_ring_or_pending(TileKey key) const;
+    // Cancels/frees Queued/Done tickets whose key left both the ring and the
+    // pending-fill queue, except the ones in `claimed` (installing this tick).
+    void prefetch_cancel_stale(const std::vector<std::size_t>& claimed);
+    // Install-tick claim: kNoTicket -> fill synchronously; else a Done
+    // ticket to install from.
+    std::size_t prefetch_claim_for_install(TileKey key);
+    void prefetch_enqueue();
+    void release_ticket(PrefetchTicket& t);
+    // Cancels every Queued ticket, drains the lane, frees every Done one.
+    void prefetch_quiesce();
 
     std::shared_ptr<const ITerrainSource> source_;
     TerrainConfig config_;
@@ -293,6 +393,21 @@ private:
     // (height != 0) must differ from "probed, not covered".
     SuppressionScratch lazy_scratch_;
     std::vector<std::uint32_t> lazy_holes_scratch_;
+    // True once precompute_suppression ran with suppression + precompute on
+    // and no static geometry changed since (see start_prefetch's suppression
+    // rule).
+    bool precompute_complete_ = false;
+
+    // Terrain prefetch ring state (all empty/null with prefetch off).
+    jobs::JobSystem* lane_jobs_ = nullptr;
+    std::unique_ptr<PrefetchTicket[]> tickets_;
+    std::size_t ticket_count_ = 0;
+    std::unique_ptr<PrefetchBuilder[]> builders_;
+    std::size_t builder_count_ = 0;
+    PrefetchStats prefetch_stats_;
+    std::vector<TileKey> ring_keys_scratch_;        // step 1's order (interest id, dy, dx), margin-widened
+    std::vector<std::size_t> sync_slots_scratch_;   // this tick's slots filled synchronously
+    std::vector<std::size_t> slot_ticket_scratch_;  // per this_tick_slots_scratch_ entry: ticket or kNoTicket
 };
 
 } // namespace ps::terrain

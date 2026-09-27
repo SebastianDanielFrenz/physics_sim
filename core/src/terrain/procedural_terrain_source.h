@@ -104,6 +104,9 @@ public:
     [[nodiscard]] TileKey key_offset(TileKey key, std::int32_t dx, std::int32_t dy) const override;
     [[nodiscard]] Vec3 tile_origin_xy(TileKey key) const override;
     void fill_tile(TileKey key, TileSample& out) const override;
+    // A pure function of the fixed spec: fill_tile is safe on TileManager's
+    // background prefetch lane for any key (terrain prefetch ring).
+    [[nodiscard]] PrefetchSupportKind prefetch_support() const override { return PrefetchSupportKind::Immutable; }
 
     [[nodiscard]] const TerrainSpec& spec() const { return spec_; }
 

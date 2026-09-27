@@ -151,6 +151,9 @@ public:
     // still uploaded, clamped, not dropped, so this is a "notice", not an
     // error return.
     [[nodiscard]] std::size_t terrain_relief_overflow_count() const;
+    // Terrain prefetch ring counters (TerrainConfig::prefetch_margin_tiles/
+    // prefetch_max_tiles; all 0 with prefetch off or no source).
+    [[nodiscard]] terrain::PrefetchStats terrain_prefetch_stats() const;
 
     // PLAN.md P2 adapter report / this task's step 3: named control
     // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can

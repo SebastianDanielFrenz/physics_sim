@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <thread>
 #include <utility>
 
 namespace ps::terrain {
@@ -116,33 +118,17 @@ constexpr real kUnassignedSlotParkingZ = -1.0e6;
 
 TileManager::TileManager(std::shared_ptr<const ITerrainSource> source, const TerrainConfig& config, IRigidBackend& backend)
     : source_(std::move(source)), config_(config), backend_(backend) {
-    const std::uint32_t n = source_->samples_per_tile();
+    [[maybe_unused]] const std::uint32_t n = source_->samples_per_tile();
     assert(n % 2 == 0 && n >= 2 && "ITerrainSource::samples_per_tile() must be even (see ps::HeightfieldShape's own doc comment)");
 
     slots_.resize(config_.max_resident_tiles);
     free_slots_.reserve(config_.max_resident_tiles);
+    sync_slots_scratch_.reserve(config_.max_resident_tiles);
 
-    const real spacing = source_->tile_size_m() / static_cast<real>(n - 1);
+    const HeightfieldShape hf = make_placeholder_shape();
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& slot = slots_[i];
         ensure_slot_storage(slot);
-
-        HeightfieldShape hf;
-        hf.origin = Vec3::zero(); // repositioned per tile via backend_.set_pose, never via the shape's own origin
-        hf.sample_spacing = spacing;
-        hf.sample_count = n;
-        // Non-degenerate placeholder range (see the namespace-scope comment
-        // above) - not the real content, which every slot gets via
-        // update_heightfield_body before it is ever positioned somewhere a
-        // body could reach it (a never-assigned slot sits parked at
-        // kUnassignedSlotParkingZ, far below anything reachable, until
-        // then - see that constant's own comment for why the ORIGIN default
-        // this project used before was a real, reproduced hazard, not just
-        // a suppression-probe classification concern).
-        hf.heights.assign(static_cast<std::size_t>(n) * n, 0.0);
-        hf.heights.front() = -kPlaceholderHeightRangeM;
-        hf.heights.back() = kPlaceholderHeightRangeM;
-        hf.cell_surface_ids.assign(static_cast<std::size_t>(n - 1) * (n - 1), kInvalidSurfaceId);
 
         BodyDesc desc;
         desc.shape = hf;
@@ -156,9 +142,40 @@ TileManager::TileManager(std::shared_ptr<const ITerrainSource> source, const Ter
 }
 
 TileManager::~TileManager() {
+    // Prefetch lane first: no lane job may still reference a ticket, a
+    // builder, the source or a spare once teardown starts.
+    if (lane_jobs_ != nullptr) {
+        prefetch_quiesce();
+        for (std::size_t i = 0; i < ticket_count_; ++i) {
+            if (tickets_[i].spare.valid()) backend_.destroy_heightfield_spare(tickets_[i].spare);
+        }
+    }
     for (Slot& slot : slots_) {
         if (slot.body.valid()) backend_.destroy_body(slot.body);
     }
+}
+
+HeightfieldShape TileManager::make_placeholder_shape() const {
+    const std::uint32_t n = source_->samples_per_tile();
+    HeightfieldShape hf;
+    hf.origin = Vec3::zero(); // repositioned per tile via backend_.set_pose, never via the shape's own origin
+    hf.sample_spacing = source_->tile_size_m() / static_cast<real>(n - 1);
+    hf.sample_count = n;
+    // Non-degenerate placeholder range (see the namespace-scope comment
+    // above) - not the real content, which every slot gets via
+    // update_heightfield_body before it is ever positioned somewhere a
+    // body could reach it (a never-assigned slot sits parked at
+    // kUnassignedSlotParkingZ, far below anything reachable, until
+    // then - see that constant's own comment for why the ORIGIN default
+    // this project used before was a real, reproduced hazard, not just
+    // a suppression-probe classification concern). Every prefetch spare
+    // (start_prefetch) is created from this same shape, so a spare's
+    // quantisation range is always the pool's own.
+    hf.heights.assign(static_cast<std::size_t>(n) * n, 0.0);
+    hf.heights.front() = -kPlaceholderHeightRangeM;
+    hf.heights.back() = kPlaceholderHeightRangeM;
+    hf.cell_surface_ids.assign(static_cast<std::size_t>(n - 1) * (n - 1), kInvalidSurfaceId);
+    return hf;
 }
 
 bool TileManager::is_own_pool_body(BodyId id) const {
@@ -267,13 +284,24 @@ void TileManager::update(jobs::JobSystem& jobs) {
     last_starved_count_ = starved_this_tick;
     resident_count_ = key_to_slot_.size();
 
+    if (lane_jobs_ != nullptr) {
+        update_with_prefetch(jobs);
+        return;
+    }
+
     if (this_tick_slots_scratch_.empty()) return;
 
     // 4. Generate content (scatter: each job writes only to its own slot's
     // preallocated TileSample - PLAN.md D8; ITerrainSource::fill_tile does
-    // not allocate, see terrain_source.h's contract).
-    jobs.parallel_batches(this_tick_slots_scratch_.size(), [this](std::size_t i) {
-        Slot& slot = slots_[this_tick_slots_scratch_[i]];
+    // not allocate, see terrain_source.h's contract). Each slot is filled
+    // ONCE: step 3 can list a slot twice in one tick (it may hand a slot it
+    // just assigned to a pending key that is no longer needed to a later
+    // pending key - both entries then carry the later key), and two jobs
+    // filling the same slot's sample would be a data race. Step 5 still
+    // installs every entry, exactly as before.
+    unique_slots_into(this_tick_slots_scratch_, sync_slots_scratch_);
+    jobs.parallel_batches(sync_slots_scratch_.size(), [this](std::size_t i) {
+        Slot& slot = slots_[sync_slots_scratch_[i]];
         source_->fill_tile(slot.key, slot.sample);
     });
 
@@ -282,39 +310,360 @@ void TileManager::update(jobs::JobSystem& jobs) {
     // this is allocation-free in steady state. suppress_covered_samples
     // (PLAN.md M1/PHYS-021, see its own header comment for the cost fix and
     // for two rejected alternatives) runs here too.
-    for (std::size_t idx : this_tick_slots_scratch_) {
-        Slot& slot = slots_[idx];
-        suppress_covered_samples(slot);
+    for (std::size_t idx : this_tick_slots_scratch_) install_sync_slot(slots_[idx]);
+}
 
-        // R1 (real-world terrain, 90-880 m ASL): ITerrainSource::fill_tile
-        // always produces ABSOLUTE heights, but the pool's placeholder
-        // seeding (kPlaceholderHeightRangeM above) fixes Jolt's 16-bit
-        // quantisation range at +-200 m for this slot's whole lifetime -
-        // real-world elevation does not fit that on its own. Fix: pick a
-        // per-tile DATUM from this tile's own absolute sample range
-        // (computed AFTER suppression, so a holed sample is excluded the
-        // same way it is excluded from collision), snapped to a multiple of
-        // kTileDatumStepM; subtract it from every non-hole sample before
-        // upload and add it back via the tile body's own pose z. Collision
-        // then lands at the same absolute height as before, and Jolt's
-        // fixed range only ever has to cover this one tile's local relief.
-        // An all-holes tile (any_non_hole false) gets datum 0 - there is no
-        // real geometry left to place, and 0 is as good as anything else.
-        // datum == 0.0 skips the subtraction loop entirely so a source
-        // whose every tile already snaps to 0 (this project's own
-        // data/tracks/test_ground and terrain_spec_small.json, both well
-        // under +-64 m) uploads the EXACT SAME bytes as before this feature
-        // existed - h - 0.0 is an exact no-op in IEEE 754, but skipping it
-        // outright also skips the loop's own float compare/branch per
-        // sample, and keeps this change bit-for-bit invisible to every
-        // existing scenario's state_hash/hash-compare.
-        const real datum = compute_tile_datum(slot.sample, &relief_overflow_count_);
-        slot.datum = datum;
-
-        backend_.update_heightfield_body(slot.body, slot.sample.heights, slot.sample.cell_surface_ids);
-        backend_.set_pose(slot.body, Pose{Vec3{slot.sample.tile_origin_xy.x, slot.sample.tile_origin_xy.y, datum}, Quat::identity()});
-        slot.ever_assigned = true;
+void TileManager::unique_slots_into(const std::vector<std::size_t>& in, std::vector<std::size_t>& out) {
+    out.clear();
+    for (const std::size_t idx : in) {
+        if (std::find(out.begin(), out.end(), idx) == out.end()) out.push_back(idx);
     }
+}
+
+void TileManager::install_sync_slot(Slot& slot) {
+    suppress_covered_samples(slot);
+
+    // R1 (real-world terrain, 90-880 m ASL): ITerrainSource::fill_tile
+    // always produces ABSOLUTE heights, but the pool's placeholder
+    // seeding (kPlaceholderHeightRangeM above) fixes Jolt's 16-bit
+    // quantisation range at +-200 m for this slot's whole lifetime -
+    // real-world elevation does not fit that on its own. Fix: pick a
+    // per-tile DATUM from this tile's own absolute sample range
+    // (computed AFTER suppression, so a holed sample is excluded the
+    // same way it is excluded from collision), snapped to a multiple of
+    // kTileDatumStepM; subtract it from every non-hole sample before
+    // upload and add it back via the tile body's own pose z. Collision
+    // then lands at the same absolute height as before, and Jolt's
+    // fixed range only ever has to cover this one tile's local relief.
+    // An all-holes tile (any_non_hole false) gets datum 0 - there is no
+    // real geometry left to place, and 0 is as good as anything else.
+    // datum == 0.0 skips the subtraction loop entirely so a source
+    // whose every tile already snaps to 0 (this project's own
+    // data/tracks/test_ground and terrain_spec_small.json, both well
+    // under +-64 m) uploads the EXACT SAME bytes as before this feature
+    // existed - h - 0.0 is an exact no-op in IEEE 754, but skipping it
+    // outright also skips the loop's own float compare/branch per
+    // sample, and keeps this change bit-for-bit invisible to every
+    // existing scenario's state_hash/hash-compare.
+    const real datum = compute_tile_datum(slot.sample, &relief_overflow_count_);
+    slot.datum = datum;
+
+    backend_.update_heightfield_body(slot.body, slot.sample.heights, slot.sample.cell_surface_ids);
+    backend_.set_pose(slot.body, Pose{Vec3{slot.sample.tile_origin_xy.x, slot.sample.tile_origin_xy.y, datum}, Quat::identity()});
+    slot.ever_assigned = true;
+}
+
+// ---------------------------------------------------------------------------
+// Terrain prefetch ring - see tile_manager.h's start_prefetch doc comment.
+// ---------------------------------------------------------------------------
+
+void TileManager::start_prefetch(jobs::JobSystem& jobs) {
+    if (lane_jobs_ != nullptr) return;
+    if (config_.prefetch_margin_tiles == 0 || config_.prefetch_max_tiles == 0) return;
+    if (source_->prefetch_support() == PrefetchSupportKind::TickOnly) return;
+
+    jobs.start_background_lane();
+    builder_count_ = static_cast<std::size_t>(std::max(1, jobs.background_lane_thread_count()));
+    builders_ = std::make_unique<PrefetchBuilder[]>(builder_count_);
+    for (std::size_t i = 0; i < builder_count_; ++i) {
+        builders_[i].sample = make_sample_storage();
+        builders_[i].ctx = backend_.create_heightfield_build_context(source_->samples_per_tile());
+    }
+    ticket_count_ = config_.prefetch_max_tiles;
+    tickets_ = std::make_unique<PrefetchTicket[]>(ticket_count_);
+    const HeightfieldShape hf = make_placeholder_shape();
+    for (std::size_t i = 0; i < ticket_count_; ++i) tickets_[i].spare = backend_.create_heightfield_spare(hf);
+
+    // Scratch sized once so the tick path does not grow it in the steady
+    // state (a later interest point, added at setup time, may grow the ring
+    // scratch once).
+    slot_ticket_scratch_.reserve(config_.max_resident_tiles);
+    ring_keys_scratch_.reserve(static_cast<std::size_t>(config_.max_resident_tiles) + ticket_count_);
+    lane_jobs_ = &jobs;
+}
+
+std::size_t TileManager::find_live_ticket(TileKey key) const {
+    for (std::size_t i = 0; i < ticket_count_; ++i) {
+        const PrefetchTicket& t = tickets_[i];
+        const std::uint8_t st = t.state.load(std::memory_order_acquire);
+        if ((st == kTicketQueued || st == kTicketRunning || st == kTicketDone) && t.key.packed == key.packed) return i;
+    }
+    return kNoTicket;
+}
+
+bool TileManager::key_in_ring_or_pending(TileKey key) const {
+    for (const TileKey& k : pending_fill_queue_) {
+        if (k.packed == key.packed) return true;
+    }
+    for (const TileKey& k : ring_keys_scratch_) {
+        if (k.packed == key.packed) return true;
+    }
+    return false;
+}
+
+void TileManager::release_ticket(PrefetchTicket& t) {
+    t.inputs.reset();
+    t.holes = nullptr;
+    t.state.store(kTicketFree, std::memory_order_release);
+}
+
+std::size_t TileManager::prefetch_claim_for_install(TileKey key) {
+    const std::size_t ti = find_live_ticket(key);
+    if (ti == kNoTicket) return kNoTicket;
+    PrefetchTicket& t = tickets_[ti];
+    std::uint8_t expected = kTicketQueued;
+    if (t.state.compare_exchange_strong(expected, kTicketCancelled, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        // Too late: the lane never started it. Filled synchronously; the
+        // lane frees the ticket when it pops the job.
+        t.inputs.reset();
+        t.holes = nullptr;
+        ++prefetch_stats_.late_sync;
+        return kNoTicket;
+    }
+    // `expected` now holds Running or Done: either way the ticket is ours to
+    // install from (a Running one is waited for in step 5).
+    return ti;
+}
+
+void TileManager::prefetch_cancel_stale(const std::vector<std::size_t>& claimed) {
+    for (std::size_t i = 0; i < ticket_count_; ++i) {
+        PrefetchTicket& t = tickets_[i];
+        const std::uint8_t st = t.state.load(std::memory_order_acquire);
+        if (st != kTicketQueued && st != kTicketDone) continue; // Running: left alone, re-checked next tick
+        if (std::find(claimed.begin(), claimed.end(), i) != claimed.end()) continue; // installed this tick
+        if (key_in_ring_or_pending(t.key)) continue;
+        if (st == kTicketQueued) {
+            std::uint8_t expected = kTicketQueued;
+            if (!t.state.compare_exchange_strong(expected, kTicketCancelled, std::memory_order_acq_rel, std::memory_order_acquire)) continue;
+            t.inputs.reset();
+            t.holes = nullptr;
+        } else {
+            release_ticket(t);
+        }
+        ++prefetch_stats_.cancelled;
+    }
+}
+
+void TileManager::prefetch_enqueue() {
+    std::size_t free_count = 0;
+    for (std::size_t i = 0; i < ticket_count_; ++i) {
+        if (tickets_[i].state.load(std::memory_order_acquire) == kTicketFree) ++free_count;
+    }
+    if (free_count == 0) return;
+
+    const bool snapshot = source_->prefetch_support() == PrefetchSupportKind::Snapshot;
+    std::size_t next_free = 0;
+    auto try_enqueue = [&](TileKey key) -> bool { // false: stop (no Free ticket left, or the lane queue is full)
+        if (key_to_slot_.count(key.packed)) return true;
+        if (find_live_ticket(key) != kNoTicket) return true;
+
+        const std::vector<std::uint32_t>* holes = nullptr;
+        if (config_.suppress_terrain_under_static_geometry) {
+            if (const auto it = suppression_cache_.find(key.packed); it != suppression_cache_.end()) {
+                holes = &it->second;
+            } else if (!precompute_complete_) {
+                ++prefetch_stats_.skipped_suppression;
+                return true;
+            }
+        }
+
+        while (next_free < ticket_count_ && tickets_[next_free].state.load(std::memory_order_acquire) != kTicketFree) ++next_free;
+        if (next_free >= ticket_count_) return false;
+        PrefetchTicket& t = tickets_[next_free];
+        if (snapshot && !source_->acquire_prefetch_inputs(key, t.inputs)) return true;
+        t.key = key;
+        t.snapshot = snapshot;
+        t.holes = holes;
+        t.state.store(kTicketQueued, std::memory_order_release);
+        TileManager* self = this;
+        const std::size_t ti = next_free;
+        if (!lane_jobs_->submit_background(jobs::JobFn([self, ti] { self->run_prefetch_job(ti); }))) {
+            release_ticket(t); // lane queue full: nothing was queued
+            return false;
+        }
+        ++prefetch_stats_.enqueued;
+        --free_count;
+        return free_count != 0;
+    };
+
+    // Keys already waiting for a pool slot / fill budget first (they are
+    // installed soonest), then the margin-widened ring in step 1's order.
+    for (const TileKey& k : pending_fill_queue_) {
+        if (!try_enqueue(k)) return;
+    }
+    for (const TileKey& k : ring_keys_scratch_) {
+        if (!try_enqueue(k)) return;
+    }
+}
+
+void TileManager::run_prefetch_job(std::size_t ticket_index) {
+    PrefetchTicket& t = tickets_[ticket_index];
+    std::uint8_t expected = kTicketQueued;
+    if (!t.state.compare_exchange_strong(expected, kTicketRunning, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        // Cancelled by the tick before this job started: hand the ticket
+        // back without touching anything else in it.
+        t.state.store(kTicketFree, std::memory_order_release);
+        return;
+    }
+
+    // One builder per lane thread, so a free one always exists.
+    PrefetchBuilder* b = nullptr;
+    while (b == nullptr) {
+        for (std::size_t i = 0; i < builder_count_ && b == nullptr; ++i) {
+            bool idle = false;
+            if (builders_[i].busy.compare_exchange_strong(idle, true, std::memory_order_acquire)) b = &builders_[i];
+        }
+        if (b == nullptr) std::this_thread::yield();
+    }
+
+    // Exactly update()'s synchronous per-tile pipeline (fill -> suppression
+    // holes -> datum); only the upload goes into the ticket's spare.
+    if (t.snapshot) {
+        source_->fill_tile_from(t.key, t.inputs.get(), b->sample);
+    } else {
+        source_->fill_tile(t.key, b->sample);
+    }
+    if (t.holes != nullptr) {
+        for (const std::uint32_t idx : *t.holes) b->sample.heights[idx] = kHeightfieldNoCollision;
+    }
+    std::size_t overflow = 0;
+    const real datum = compute_tile_datum(b->sample, &overflow);
+    backend_.build_heightfield_spare(t.spare, b->sample.heights, b->sample.cell_surface_ids, *b->ctx);
+    t.origin = b->sample.tile_origin_xy;
+    t.datum = datum;
+    t.relief_overflow = overflow != 0;
+    b->busy.store(false, std::memory_order_release);
+    t.state.store(kTicketDone, std::memory_order_release);
+}
+
+void TileManager::prefetch_quiesce() {
+    for (std::size_t i = 0; i < ticket_count_; ++i) {
+        PrefetchTicket& t = tickets_[i];
+        std::uint8_t expected = kTicketQueued;
+        if (t.state.compare_exchange_strong(expected, kTicketCancelled, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            t.inputs.reset();
+            t.holes = nullptr;
+        }
+    }
+    lane_jobs_->drain_background();
+    for (std::size_t i = 0; i < ticket_count_; ++i) {
+        PrefetchTicket& t = tickets_[i];
+        if (t.state.load(std::memory_order_acquire) == kTicketDone) release_ticket(t);
+    }
+}
+
+void TileManager::update_with_prefetch(jobs::JobSystem& jobs) {
+    // Ring keys: step 1's loop, widened by prefetch_margin_tiles (the
+    // needed square is its centre, so every needed key is a ring key).
+    ring_keys_scratch_.clear();
+    const real ts = source_->tile_size_m();
+    for (const auto& [id, ip] : interest_points_) {
+        const TileKey center = source_->key_for_world_xy(ip.world_xy.x, ip.world_xy.y);
+        const auto radius_tiles =
+            static_cast<std::int32_t>(std::ceil(ip.radius_m / ts)) + static_cast<std::int32_t>(config_.prefetch_margin_tiles);
+        for (std::int32_t dy = -radius_tiles; dy <= radius_tiles; ++dy) {
+            for (std::int32_t dx = -radius_tiles; dx <= radius_tiles; ++dx) {
+                ring_keys_scratch_.push_back(source_->key_offset(center, dx, dy));
+            }
+        }
+    }
+
+    // A. Partition this tick's installs. Steps 1-3 above are the unchanged
+    // pre-prefetch path, so which key lands in which slot at which tick does
+    // not depend on the lane: a Done ticket installs by swap, a Running one
+    // is waited for in step 5, anything else is filled synchronously
+    // exactly as with prefetch off.
+    // A slot listed twice this tick (see update()'s step 4) claims a ticket
+    // only at its first entry; a later entry is filled synchronously, like
+    // every entry with prefetch off, so the final content is the same.
+    sync_slots_scratch_.clear();
+    slot_ticket_scratch_.clear();
+    for (std::size_t n = 0; n < this_tick_slots_scratch_.size(); ++n) {
+        const std::size_t idx = this_tick_slots_scratch_[n];
+        const auto first = this_tick_slots_scratch_.begin();
+        const bool repeat = std::find(first, first + static_cast<std::ptrdiff_t>(n), idx) != first + static_cast<std::ptrdiff_t>(n);
+        std::size_t ti = repeat ? kNoTicket : prefetch_claim_for_install(slots_[idx].key);
+        if (ti != kNoTicket && tickets_[ti].snapshot && tickets_[ti].state.load(std::memory_order_acquire) == kTicketDone &&
+            !source_->prefetch_inputs_current(tickets_[ti].key, tickets_[ti].inputs.get())) {
+            release_ticket(tickets_[ti]);
+            ++prefetch_stats_.stale_inputs;
+            ti = kNoTicket;
+        }
+        slot_ticket_scratch_.push_back(ti);
+        if (ti == kNoTicket && std::find(sync_slots_scratch_.begin(), sync_slots_scratch_.end(), idx) == sync_slots_scratch_.end()) {
+            sync_slots_scratch_.push_back(idx);
+        }
+    }
+
+    // B. Tickets for keys that left both the ring and the pending queue.
+    prefetch_cancel_stale(slot_ticket_scratch_);
+
+    // 4. Synchronous fills, as update()'s step 4.
+    if (!sync_slots_scratch_.empty()) {
+        jobs.parallel_batches(sync_slots_scratch_.size(), [this](std::size_t i) {
+            Slot& slot = slots_[sync_slots_scratch_[i]];
+            source_->fill_tile(slot.key, slot.sample);
+        });
+    }
+
+    // 5. Ordered hand-off in this_tick_slots_scratch_ order, as update()'s
+    // step 5; a ticket slot swaps its prebuilt shape in instead.
+    for (std::size_t n = 0; n < this_tick_slots_scratch_.size(); ++n) {
+        Slot& slot = slots_[this_tick_slots_scratch_[n]];
+        const std::size_t ti = slot_ticket_scratch_[n];
+        if (ti == kNoTicket) {
+            install_sync_slot(slot);
+            continue;
+        }
+        PrefetchTicket& t = tickets_[ti];
+        if (t.state.load(std::memory_order_acquire) != kTicketDone) {
+            const auto t0 = std::chrono::steady_clock::now();
+            while (t.state.load(std::memory_order_acquire) != kTicketDone) std::this_thread::yield();
+            const auto ns =
+                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+            ++prefetch_stats_.late_wait;
+            prefetch_stats_.late_wait_ns_total += ns;
+            prefetch_stats_.late_wait_ns_max = std::max(prefetch_stats_.late_wait_ns_max, ns);
+            if (t.snapshot && !source_->prefetch_inputs_current(t.key, t.inputs.get())) {
+                // Stale after all: fill this one synchronously here (still
+                // in order, still the same content as with prefetch off).
+                release_ticket(t);
+                ++prefetch_stats_.stale_inputs;
+                source_->fill_tile(slot.key, slot.sample);
+                install_sync_slot(slot);
+                continue;
+            }
+        }
+        backend_.swap_heightfield_spare(slot.body, t.spare);
+        backend_.set_pose(slot.body, Pose{Vec3{t.origin.x, t.origin.y, t.datum}, Quat::identity()});
+        slot.datum = t.datum;
+        if (t.relief_overflow) ++relief_overflow_count_;
+        slot.ever_assigned = true;
+        release_ticket(t);
+        ++prefetch_stats_.installed;
+    }
+
+    // C. New tickets for the ring (after the installs, so a key installed
+    // this tick is resident and skipped).
+    prefetch_enqueue();
+}
+
+int TileManager::prefetch_ticket_state(TileKey key) const {
+    const std::size_t ti = find_live_ticket(key);
+    return ti == kNoTicket ? -1 : static_cast<int>(tickets_[ti].state.load(std::memory_order_acquire));
+}
+
+std::size_t TileManager::prefetch_free_ticket_count() const {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < ticket_count_; ++i) {
+        if (tickets_[i].state.load(std::memory_order_acquire) == kTicketFree) ++n;
+    }
+    return n;
+}
+
+BodyId TileManager::resident_body(TileKey key) const {
+    const auto it = key_to_slot_.find(key.packed);
+    return it != key_to_slot_.end() ? slots_[it->second].body : BodyId{};
 }
 
 // Terrain-prefetch-ring plan commit C1: pure extraction of update()'s step
@@ -765,11 +1114,18 @@ void TileManager::precompute_suppression(jobs::JobSystem& jobs) {
         suppression_cache_.emplace(todo[i].packed, std::move(results[i]));
         precomputed_keys_.push_back(todo[i]);
     }
+    // Every tile a foreign static triangle can touch is now cached; any
+    // other tile's suppression is empty (see start_prefetch's rule).
+    precompute_complete_ = true;
 }
 
 void TileManager::on_static_geometry_changed() {
+    // Tickets point into suppression_cache_ and were built against the old
+    // geometry: stop and drop them all before the cache goes.
+    if (lane_jobs_ != nullptr) prefetch_quiesce();
     suppression_cache_.clear();
     precomputed_keys_.clear();
+    precompute_complete_ = false;
 }
 
 const std::vector<std::uint32_t>* TileManager::cached_suppression(TileKey key) const {
