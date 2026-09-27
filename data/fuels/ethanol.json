@@ -1,0 +1,10 @@
+{
+  "format": "physics_sim.fuel/1",
+  "name": "ethanol",
+  "phase": "liquid",
+  "ignition": "spark",
+  "lhv_j_kg": 26800000.0,
+  "afr_stoich": 9.0,
+  "density_kg_m3": 794.0,
+  "source": "Heywood, John B., Internal Combustion Engine Fundamentals, McGraw-Hill, 1988, Table 9.7 'Oxygenate properties', pp. 477-478, 'Ethanol' column: lower heating value 26.8 MJ/kg, specific gravity 0.794 (density = 0.794 * 1000 kg/m^3 water-at-15degC reference = 794.0 kg/m^3; water at 15 degC is 999.1 kg/m^3, so the SG-based figure differs from an exact water reference by <= 0.1%, well inside this fuel-property table's own precision). Stoichiometric air/fuel mass ratio 9.0: Heywood Eq. 3.11's tabulated value for ethanol (C2H5OH), also consistent with computing it from the fuel's own formula and standard air composition. This is the anhydrous (water-free) EN 15376 blending-component composition, not hydrous/denatured ethanol as sold at the pump - the value used as the '100%' endpoint (v=100) of the physics_sim.fuel/1 ethanol blend mixing rule (see data/fuels/e5.json/e10.json/e25.json/e85.json and docs/data_formats/fuel.md)."
+}

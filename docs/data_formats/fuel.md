@@ -22,6 +22,7 @@ see each shipped file's own `"source"` field for the exact citation used
 | `format` | string | required | — | must equal `"physics_sim.fuel/1"` | see README |
 | `name` | string | **required** | — | must be non-empty | fuel name, e.g. `"gasoline"`, `"diesel"` |
 | `phase` | string | **required** | — | must equal `"liquid"`, else `"phase \"<value>\" is not yet supported"` | phase of matter the fuel is modelled as — only `"liquid"` is implemented (a future `"gaseous"` phase, e.g. CNG/LPG/hydrogen, needs its own pressure/temperature-dependent density convention and is not modelled yet) |
+| `ignition` | string | **required** | — | must equal `"spark"` or `"compression"`, else `"ignition \"<value>\" is not \"spark\" or \"compression\""` | which combustion process the fuel is meant for (Heywood ch. 1's SI vs. CI engine/fuel classification) — informational only today (no engine model dispatches on it yet), but required on every file (PHYS-033 P4 I7a C5c) |
 | `lhv_j_kg` | real (J/kg) | **required** | — | must be `> 0` and finite | lower heating value |
 | `afr_stoich` | real | **required** | — | must be `> 0` and finite | stoichiometric air/fuel mass ratio |
 | `density_kg_m3` | real (kg/m³) | **required** | — | must be `> 0` and finite | liquid density at the cited reference condition |
@@ -39,6 +40,7 @@ coefficients, so the loader accepts no partial file.
   "format": "physics_sim.fuel/1",
   "name": "gasoline",
   "phase": "liquid",
+  "ignition": "spark",
   "lhv_j_kg": 44000000.0,
   "afr_stoich": 14.5,
   "density_kg_m3": 747.5,
@@ -50,11 +52,84 @@ coefficients, so the loader accepts no partial file.
 text in their own `"source"` fields — see those files directly rather than
 this shortened example.)
 
+## Shipped files
+
+| File | Ignition | LHV (J/kg) | AFR<sub>s</sub> | Density (kg/m³) |
+|---|---|---:|---:|---:|
+| `gasoline.json` (E0) | spark | 44,000,000 | 14.5 | 747.5 |
+| `diesel.json` | compression | 42,000,000 | 14.925373 | 830.0 |
+| `ethanol.json` (E100) | spark | 26,800,000 | 9.0 | 794.0 |
+| `e5.json` | spark | 43,089,334 | 14.208799 | 749.825 |
+| `e10.json` | spark | 42,184,298 | 13.919398 | 752.150 |
+| `e25.json` | spark | 39,502,453 | 13.061831 | 759.125 |
+| `e85.json` | spark | 29,250,430 | 9.783568 | 787.025 |
+
+`gasoline.json` is the pure (E0) base component and is never edited by a
+blend — its values stay exactly Heywood Table 9.7's gasoline column. `ethanol.json`
+is the pure (E100) blending component: LHV 26.8 MJ/kg, stoichiometric A/F 9.0
+(Heywood Table 9.7 / Eq. 3.11), density from specific gravity 0.794 (SG × 1000
+kg/m³ water-at-15°C reference; water at 15°C is 999.1 kg/m³, so this differs
+from an exact reference by ≤ 0.1%) — the **anhydrous** (water-free) EN 15376
+blending-component composition, not hydrous/denatured ethanol as sold at the
+pump.
+
+### Ethanol blend mixing rule (PHYS-033 P4 I7a C5c)
+
+`e5.json`/`e10.json`/`e25.json`/`e85.json` are DERIVED files, not independently
+sourced — each is a stated volume fraction `v` (5%, 10%, 25%, 85%) of
+`ethanol.json` mixed into `gasoline.json`, computed by:
+
+```
+rho   = v*rho_e + (1-v)*rho_g            (ideal volume additivity)
+w_e   = v*rho_e / rho                    (ethanol mass fraction)
+LHV   = w_e*LHV_e + (1-w_e)*LHV_g        (mass-additive, heat of mixing neglected)
+AFR_s = w_e*AFR_e + (1-w_e)*AFR_g        (exact: stoichiometric air per kg of
+                                           fuel is mass-additive regardless of
+                                           mixing)
+```
+
+where `rho_g`/`LHV_g`/`AFR_g` and `rho_e`/`LHV_e`/`AFR_e` are `gasoline.json`'s
+and `ethanol.json`'s own loaded values (never hand-duplicated constants).
+Density and mass-fraction mixing are both exact under the stated assumptions;
+the LHV mixing rule neglects the (small) heat of mixing; the AFR mixing rule
+is exact regardless of mixing physics, because stoichiometric air mass per kg
+of fuel is a linear (mass-weighted) quantity by definition.
+
+**Stated assumptions** (repeated in each blend file's own `"source"` field):
+
+- **Ideal mixing.** The small negative excess volume real ethanol-gasoline
+  blends exhibit is neglected.
+- **Anhydrous ethanol.** The blending component is water-free (EN 15376), not
+  the hydrous ethanol sometimes sold directly at the pump.
+- **Nominal label composition, not a certified value.** EN 228 states 5%/10%
+  v/v as *maximum* ethanol content for E5/E10 (a real pump fuel may contain
+  less); EN 15293:2018 defines E85 as *nominally* 85% v/v, with seasonal
+  grades permitted lower (e.g. a winter grade around 70% v/v). E25 has **no
+  EU standard** of its own — it is a nominal label composition only, included
+  because the owner asked for it, not because it corresponds to a specific
+  regulated blend.
+- **The base gasoline's own spread dominates.** EN 228's density range alone
+  spans ±3.7% around `gasoline.json`'s 747.5 kg/m³ midpoint — larger than any
+  error this mixing rule itself introduces.
+
+**Range cross-checks:** E5/E10's densities (749.825/752.150 kg/m³) fall inside
+EN 228:2012's 720.0-775.0 kg/m³ range; E85's density (787.025 kg/m³) falls
+inside EN 15293:2018's 755-800 kg/m³ range; E25 has no EU range to check
+against (its density, 759.125 kg/m³, sits between the gasoline and E85 ranges,
+consistent with being a genuine intermediate blend).
+
+No engine currently references any blend file (or `ethanol.json`) — wiring one
+up is a later commit (PHYS-033 P4 I7a C5d).
+
 ## Common mistakes
 
 - **Missing or non-`"liquid"` `phase`.** Throws `"fuel '<name>': phase
   \"<value>\" is not yet supported (only \"liquid\" is implemented)"` —
   there is no silent fallback to liquid.
+- **Missing or unrecognized `ignition`.** Throws `"fuel '<name>': ignition
+  \"<value>\" is not \"spark\" or \"compression\""` — there is no default
+  (a gasoline-like fuel defaulting to "compression" or vice versa would be a
+  silent, plausible-looking error).
 - **`lhv_j_kg`/`afr_stoich`/`density_kg_m3` <= 0, non-finite, or omitted.**
   Each is a hard error naming the offending field and the value read; there
   is no compiled-in default for any of them (unlike most of `tyre.md`'s

@@ -2,6 +2,7 @@
   "format": "physics_sim.fuel/1",
   "name": "gasoline",
   "phase": "liquid",
+  "ignition": "spark",
   "lhv_j_kg": 44000000.0,
   "afr_stoich": 14.5,
   "density_kg_m3": 747.5,

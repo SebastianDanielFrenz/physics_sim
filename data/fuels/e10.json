@@ -1,0 +1,10 @@
+{
+  "format": "physics_sim.fuel/1",
+  "name": "e10",
+  "phase": "liquid",
+  "ignition": "spark",
+  "lhv_j_kg": 42184298.0,
+  "afr_stoich": 13.919398,
+  "density_kg_m3": 752.150,
+  "source": "Derived, not independently sourced: a 10% v/v anhydrous-ethanol / 90% v/v gasoline blend (v = 0.10), computed from this project's own data/fuels/gasoline.json (LHV 44.0 MJ/kg, AFR_s 14.5, density 747.5 kg/m^3) and data/fuels/ethanol.json (LHV 26.8 MJ/kg, AFR_s 9.0, density 794.0 kg/m^3; both ultimately Heywood 1988 Table 9.7) via ideal volume-additive mixing: rho = v*rho_e + (1-v)*rho_g = 752.150 kg/m^3; mass fraction w_e = v*rho_e/rho = 0.105564; LHV = w_e*LHV_e + (1-w_e)*LHV_g = 42,184,298 J/kg (mass-additive, heat of mixing neglected); AFR_s = w_e*AFR_e + (1-w_e)*AFR_g = 13.919398 (exact - stoichiometric air per kg of fuel is mass-additive regardless of mixing). Assumptions: ideal mixing (the small negative excess volume real ethanol-gasoline blends show is neglected), anhydrous ethanol (EN 15376 blending-component composition, not hydrous pump ethanol), and a nominal 10% v/v label composition (EN 228 states 5%/10% v/v as MAXIMUM ethanol content, not a guaranteed value, so a real pump E10 may contain somewhat less). Range cross-check: 752.150 kg/m^3 is inside EN 228:2012's 720.0-775.0 kg/m^3 density range for unleaded petrol - the base gasoline's own density spread (+-3.7% around its 747.5 midpoint) dominates any error this mixing rule itself introduces."
+}
