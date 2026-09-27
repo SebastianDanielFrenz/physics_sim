@@ -308,34 +308,43 @@ void TileManager::update(jobs::JobSystem& jobs) {
         // outright also skips the loop's own float compare/branch per
         // sample, and keeps this change bit-for-bit invisible to every
         // existing scenario's state_hash/hash-compare.
-        real min_h = std::numeric_limits<real>::max();
-        real max_h = std::numeric_limits<real>::lowest();
-        bool any_non_hole = false;
-        for (const real h : slot.sample.heights) {
-            if (h == kHeightfieldNoCollision) continue;
-            any_non_hole = true;
-            if (h < min_h) min_h = h;
-            if (h > max_h) max_h = h;
-        }
-        real datum = 0.0;
-        if (any_non_hole) {
-            const real mid = (min_h + max_h) * real(0.5);
-            datum = std::round(mid / kTileDatumStepM) * kTileDatumStepM;
-            const real relief = std::max(max_h - datum, datum - min_h);
-            if (relief > kPlaceholderHeightRangeM - kReliefOverflowMarginM) ++relief_overflow_count_;
-        }
+        const real datum = compute_tile_datum(slot.sample, &relief_overflow_count_);
         slot.datum = datum;
-        if (datum != real(0.0)) {
-            for (real& h : slot.sample.heights) {
-                if (h == kHeightfieldNoCollision) continue;
-                h -= datum;
-            }
-        }
 
         backend_.update_heightfield_body(slot.body, slot.sample.heights, slot.sample.cell_surface_ids);
         backend_.set_pose(slot.body, Pose{Vec3{slot.sample.tile_origin_xy.x, slot.sample.tile_origin_xy.y, datum}, Quat::identity()});
         slot.ever_assigned = true;
     }
+}
+
+// Terrain-prefetch-ring plan commit C1: pure extraction of update()'s step
+// 5 datum/relief computation (see tile_manager.h's own doc comment on this
+// declaration) - byte-for-byte the same arithmetic, in the same order, as
+// before this function existed.
+real TileManager::compute_tile_datum(TileSample& sample, std::size_t* relief_overflow_count) {
+    real min_h = std::numeric_limits<real>::max();
+    real max_h = std::numeric_limits<real>::lowest();
+    bool any_non_hole = false;
+    for (const real h : sample.heights) {
+        if (h == kHeightfieldNoCollision) continue;
+        any_non_hole = true;
+        if (h < min_h) min_h = h;
+        if (h > max_h) max_h = h;
+    }
+    real datum = 0.0;
+    if (any_non_hole) {
+        const real mid = (min_h + max_h) * real(0.5);
+        datum = std::round(mid / kTileDatumStepM) * kTileDatumStepM;
+        const real relief = std::max(max_h - datum, datum - min_h);
+        if (relief > kPlaceholderHeightRangeM - kReliefOverflowMarginM) ++(*relief_overflow_count);
+    }
+    if (datum != real(0.0)) {
+        for (real& h : sample.heights) {
+            if (h == kHeightfieldNoCollision) continue;
+            h -= datum;
+        }
+    }
+    return datum;
 }
 
 real TileManager::resident_tile_datum(TileKey key) const {

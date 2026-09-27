@@ -195,6 +195,21 @@ private:
     void compute_suppression_holes(const TileSample& sample, SuppressionScratch& scratch, std::vector<std::uint32_t>& holes) const;
     // A TileSample sized for this source (heights/cell ids allocated).
     [[nodiscard]] TileSample make_sample_storage() const;
+    // Pure per-tile datum computation (R1, PLAN.md M1 follow-up; extracted
+    // from update()'s step 5 unchanged - terrain-prefetch-ring plan commit
+    // C1, no behaviour change). Scans `sample.heights` (already suppression-
+    // holed), picks the datum (0 for an all-holes tile, else the mid-range
+    // snapped to kTileDatumStepM), subtracts it from every non-hole sample
+    // IN PLACE (skipped entirely when the datum is exactly 0.0 - see
+    // update()'s own comment for why that keeps every pre-existing
+    // scenario's upload bit-for-bit unchanged), and increments
+    // *relief_overflow_count when this tile's own relief alone exceeds the
+    // placeholder's quantisation range. Reads/writes only `sample` and the
+    // counter it is given - no backend/member-state access - so a future
+    // caller (the prefetch ring's background lane) can run this on a
+    // fill_tile'd sample that is not yet attached to any pool slot, exactly
+    // as update() itself now does inline. Returns the computed datum.
+    [[nodiscard]] static real compute_tile_datum(TileSample& sample, std::size_t* relief_overflow_count);
     // True for any BodyId belonging to THIS pool - every slot's body,
     // whether currently assigned to a real tile or still an unused
     // placeholder. Found the hard way (PHYS-021): an unassigned slot's body
