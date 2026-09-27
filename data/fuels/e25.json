@@ -2,7 +2,6 @@
   "format": "physics_sim.fuel/1",
   "name": "e25",
   "phase": "liquid",
-  "ignition": "spark",
   "lhv_j_kg": 39502453.0,
   "afr_stoich": 13.061831,
   "density_kg_m3": 759.125,

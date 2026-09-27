@@ -22,7 +22,6 @@ see each shipped file's own `"source"` field for the exact citation used
 | `format` | string | required | — | must equal `"physics_sim.fuel/1"` | see README |
 | `name` | string | **required** | — | must be non-empty | fuel name, e.g. `"gasoline"`, `"diesel"` |
 | `phase` | string | **required** | — | must equal `"liquid"`, else `"phase \"<value>\" is not yet supported"` | phase of matter the fuel is modelled as — only `"liquid"` is implemented (a future `"gaseous"` phase, e.g. CNG/LPG/hydrogen, needs its own pressure/temperature-dependent density convention and is not modelled yet) |
-| `ignition` | string | **required** | — | must equal `"spark"` or `"compression"`, else `"ignition \"<value>\" is not \"spark\" or \"compression\""` | which combustion process the fuel is meant for (Heywood ch. 1's SI vs. CI engine/fuel classification) — informational only today (no engine model dispatches on it yet), but required on every file (PHYS-033 P4 I7a C5c) |
 | `lhv_j_kg` | real (J/kg) | **required** | — | must be `> 0` and finite | lower heating value |
 | `afr_stoich` | real | **required** | — | must be `> 0` and finite | stoichiometric air/fuel mass ratio |
 | `density_kg_m3` | real (kg/m³) | **required** | — | must be `> 0` and finite | liquid density at the cited reference condition |
@@ -33,6 +32,13 @@ field in `physics_sim.fuel/1` is required — there is no plausible default
 for a fuel's own heating value or density, unlike (say) a tyre's Pacejka
 coefficients, so the loader accepts no partial file.
 
+Whether a fuel is meant for spark or compression ignition is not a field
+here: any fuel autoignites given enough compression, so ignition type is a
+property of the *engine* (declared on the engine descriptor), not the fuel
+— a fuel's own contribution to that pairing is its ignition-quality numbers
+(octane/cetane), which will arrive alongside a future knock/autoignition
+model, not as a field on `FuelDesc`.
+
 ## Minimal complete example
 
 ```json
@@ -40,7 +46,6 @@ coefficients, so the loader accepts no partial file.
   "format": "physics_sim.fuel/1",
   "name": "gasoline",
   "phase": "liquid",
-  "ignition": "spark",
   "lhv_j_kg": 44000000.0,
   "afr_stoich": 14.5,
   "density_kg_m3": 747.5,
@@ -54,15 +59,15 @@ this shortened example.)
 
 ## Shipped files
 
-| File | Ignition | LHV (J/kg) | AFR<sub>s</sub> | Density (kg/m³) |
-|---|---|---:|---:|---:|
-| `gasoline.json` (E0) | spark | 44,000,000 | 14.5 | 747.5 |
-| `diesel.json` | compression | 42,000,000 | 14.925373 | 830.0 |
-| `ethanol.json` (E100) | spark | 26,800,000 | 9.0 | 794.0 |
-| `e5.json` | spark | 43,089,334 | 14.208799 | 749.825 |
-| `e10.json` | spark | 42,184,298 | 13.919398 | 752.150 |
-| `e25.json` | spark | 39,502,453 | 13.061831 | 759.125 |
-| `e85.json` | spark | 29,250,430 | 9.783568 | 787.025 |
+| File | LHV (J/kg) | AFR<sub>s</sub> | Density (kg/m³) |
+|---|---:|---:|---:|
+| `gasoline.json` (E0) | 44,000,000 | 14.5 | 747.5 |
+| `diesel.json` | 42,000,000 | 14.925373 | 830.0 |
+| `ethanol.json` (E100) | 26,800,000 | 9.0 | 794.0 |
+| `e5.json` | 43,089,334 | 14.208799 | 749.825 |
+| `e10.json` | 42,184,298 | 13.919398 | 752.150 |
+| `e25.json` | 39,502,453 | 13.061831 | 759.125 |
+| `e85.json` | 29,250,430 | 9.783568 | 787.025 |
 
 `gasoline.json` is the pure (E0) base component and is never edited by a
 blend — its values stay exactly Heywood Table 9.7's gasoline column. `ethanol.json`
@@ -126,10 +131,6 @@ up is a later commit (PHYS-033 P4 I7a C5d).
 - **Missing or non-`"liquid"` `phase`.** Throws `"fuel '<name>': phase
   \"<value>\" is not yet supported (only \"liquid\" is implemented)"` —
   there is no silent fallback to liquid.
-- **Missing or unrecognized `ignition`.** Throws `"fuel '<name>': ignition
-  \"<value>\" is not \"spark\" or \"compression\""` — there is no default
-  (a gasoline-like fuel defaulting to "compression" or vice versa would be a
-  silent, plausible-looking error).
 - **`lhv_j_kg`/`afr_stoich`/`density_kg_m3` <= 0, non-finite, or omitted.**
   Each is a hard error naming the offending field and the value read; there
   is no compiled-in default for any of them (unlike most of `tyre.md`'s

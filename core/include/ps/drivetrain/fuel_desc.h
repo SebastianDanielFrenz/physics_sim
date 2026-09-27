@@ -29,22 +29,9 @@ enum class FuelPhase {
     Liquid,
 };
 
-// Which combustion process the fuel is meant for (PHYS-033 P4 I7a C5c) -
-// Heywood ch. 1's SI (spark-ignition, premixed charge ignited by a spark)
-// vs. CI (compression-ignition, fuel injected into already-hot compressed
-// air, no spark) engine/fuel classification. Purely informational today (no
-// engine model dispatches on it yet - a later commit may reject a mismatched
-// fuel/engine pairing), but required on every file so that pairing check has
-// something to read once it exists.
-enum class FuelIgnition {
-    Spark,
-    Compression,
-};
-
 struct FuelDesc {
     std::string name;   // e.g. "gasoline", "diesel" - informational only
     FuelPhase phase = FuelPhase::Liquid;
-    FuelIgnition ignition = FuelIgnition::Spark;
 
     real lhv_j_kg = 0.0;       // lower heating value, J/kg (must be > 0, finite)
     real afr_stoich = 0.0;     // stoichiometric air/fuel mass ratio (must be > 0, finite)

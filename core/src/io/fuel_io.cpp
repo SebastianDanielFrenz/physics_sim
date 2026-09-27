@@ -11,7 +11,6 @@ namespace {
 
 using json = nlohmann::json;
 using ps::drivetrain::FuelDesc;
-using ps::drivetrain::FuelIgnition;
 using ps::drivetrain::FuelPhase;
 
 json read_json_file(const std::string& path) {
@@ -54,20 +53,6 @@ FuelDesc read_fuel_object(const json& j) {
                                   "\" is not yet supported (only \"liquid\" is implemented)");
     }
     d.phase = FuelPhase::Liquid;
-
-    // PHYS-033 P4 I7a C5c: required, no silent default (same Q7 "no legacy
-    // support" ruling as "format" above) - a fuel/engine pairing check may
-    // read this later, and a wrong-but-defaulted ignition would be a silent
-    // physics error, not a loud one.
-    const std::string ignition = j.value("ignition", std::string());
-    if (ignition == "spark") {
-        d.ignition = FuelIgnition::Spark;
-    } else if (ignition == "compression") {
-        d.ignition = FuelIgnition::Compression;
-    } else {
-        throw std::runtime_error("fuel '" + d.name + "': ignition \"" + ignition +
-                                  "\" is not \"spark\" or \"compression\"");
-    }
 
     d.lhv_j_kg = j.value("lhv_j_kg", d.lhv_j_kg);
     if (!(d.lhv_j_kg > real(0.0)) || !std::isfinite(d.lhv_j_kg)) {

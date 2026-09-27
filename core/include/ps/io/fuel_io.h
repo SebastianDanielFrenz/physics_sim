@@ -11,7 +11,7 @@ namespace ps::io {
 
 // Loads a fuel JSON file (data/fuels/*.json, "format": "physics_sim.fuel/1").
 // Throws std::runtime_error on a malformed/unreadable file, a missing/wrong
-// "format", or a missing/invalid required field (name/phase/ignition/
+// "format", or a missing/invalid required field (name/phase/
 // lhv_j_kg/afr_stoich/density_kg_m3/source).
 drivetrain::FuelDesc load_fuel_json(const std::string& path);
 

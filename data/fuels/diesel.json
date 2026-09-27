@@ -2,7 +2,6 @@
   "format": "physics_sim.fuel/1",
   "name": "diesel",
   "phase": "liquid",
-  "ignition": "compression",
   "lhv_j_kg": 42000000.0,
   "afr_stoich": 14.925373,
   "density_kg_m3": 830.0,
