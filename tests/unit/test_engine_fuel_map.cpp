@@ -1080,10 +1080,13 @@ TEST_CASE("F5: loader rejects every malformed engine/fuel/fuel_map field with it
         CHECK(found);
     }
 
-    SECTION("kind == simulated is rejected as not yet supported") {
+    SECTION("kind == simulated dispatches to the simulated parser (PHYS-033 P4 I7b C10)") {
+        // A torque_map body relabelled "simulated" now reaches the simulated
+        // parser, which refuses the graph engine's curves by name (its full
+        // rejection set lives in test_simulated_engine_io.cpp).
         nlohmann::json e = base_engine_component();
         e["kind"] = "simulated";
-        expect_rejected(e, "not yet supported (PHYS-033 I7b)");
+        expect_rejected(e, "simulated engines derive those curves");
     }
     SECTION("kind == bogus is rejected") {
         nlohmann::json e = base_engine_component();

@@ -300,6 +300,14 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         if (!component_index_of.emplace(c.id, static_cast<int>(ci)).second) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain component id '" + c.id + "' is not unique");
         }
+        // PHYS-033 P4 I7b C10/C11: a "simulated" engine loads (the desc and
+        // loader exist) and the standalone SimulatedEngine exists, but its
+        // Powertrain wiring is I7b C12 - refuse loudly instead of building a
+        // vehicle without an engine.
+        if (std::holds_alternative<SimulatedEngineDesc>(c.params)) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain component '" + c.id +
+                                      "': simulated engine not yet integrated (I7b C12)");
+        }
         if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) {
             if (engine_component_index >= 0) {
                 throw std::runtime_error("vehicle '" + vehicle_name + "': more than one engine component - I3 supports at most one");
