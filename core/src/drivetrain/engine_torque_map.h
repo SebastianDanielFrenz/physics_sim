@@ -95,6 +95,17 @@ public:
         bool has_fuel_map = false;
         FuelDesc fuel;
         Table2D fuel_map;
+        // PHYS-033 P4 I7a C5d: the crude no-map fuel estimate, active in
+        // pre_solve/post_solve whenever has_fuel_model is true and
+        // has_fuel_map is false (to_engine_desc sets `fuel` to the ACTIVE
+        // fuel for whichever path applies, so this struct never needs to
+        // know about TorqueMapEngineDesc::fuels/ignition itself - eta_i is
+        // already resolved (override or Heywood ignition-type default) by
+        // the time it gets here). has_fuel_model false (default) means
+        // pre_solve/post_solve never touch mdot_kg_s_/fuel fields at all -
+        // byte-identical to before this commit.
+        bool has_fuel_model = false;
+        real eta_i = 0.0; // only meaningful when has_fuel_model && !has_fuel_map
     };
 
     explicit EngineTorqueMap(Desc desc);

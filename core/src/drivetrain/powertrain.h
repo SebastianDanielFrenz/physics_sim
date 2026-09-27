@@ -519,12 +519,14 @@ private:
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached
-    // PHYS-033 P4 I7a C5: true iff this vehicle's engine has a fuel map -
-    // gates ledger_.fuel_mass/fuel_energy_in/engine_heat/
+    // PHYS-033 P4 I7a C5, broadened C5d: true iff this vehicle's engine has
+    // ANY fuel model (a calibrated fuel_map OR the crude no-map estimate,
+    // see ps::drivetrain::has_fuel_model in powertrain_desc.h) - gates
+    // ledger_.fuel_mass/fuel_energy_in/engine_heat/
     // fuel_efficiency_violations booking in post_solve_components (indicated_work
     // itself is booked unconditionally - see that function). false (default)
     // for every engine without one, so those ledger fields never move.
-    bool engine_has_fuel_map_ = false;
+    bool engine_has_fuel_model_ = false;
     // PHYS-033 P4 I7a C3: the throttle-command stage between the pedal and
     // the engine (throttle_stage.h) - built from either an explicit
     // ThrottleControlDesc component or (no such component) the IMPLICIT

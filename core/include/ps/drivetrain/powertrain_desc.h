@@ -100,6 +100,16 @@ struct GovernorDesc {
 // a second identical enum).
 enum class ThrottleInput { Electronic, Mechanical };
 
+// PHYS-033 P4 I7a C5d: spark vs. compression ignition. Owner ruling
+// 2026-09-27 (reversing an earlier C5c attempt to put this on FuelDesc
+// instead): ignition is an ENGINE property, not a fuel one - any fuel
+// autoignites given enough compression, real fuels differ only in ignition
+// QUALITY (octane/cetane rating), not in which cycle they are "for". Used
+// only to pick the crude no-map fuel model's default indicated efficiency
+// (see TorqueMapEngineDesc::indicated_efficiency below) - never dispatches
+// any other physics.
+enum class EngineIgnition { Spark, Compression };
+
 struct TorqueMapEngineDesc {
     vehicle::Curve1D wot_torque_nm_vs_rpm;       // required; x ascending, x[0] >= 0
     vehicle::Curve1D motoring_torque_nm_vs_rpm;  // required (I3); y <= 0; x[0] == 0 (its y[0] is the Coulomb part)
@@ -130,7 +140,46 @@ struct TorqueMapEngineDesc {
     bool has_fuel_map = false;
     FuelDesc fuel;
     Table2D fuel_map; // x = rpm (ascending), y = load in [0, 1] (ascending), values in g/s
+    // PHYS-033 P4 I7a C5d: spark/compression ignition (see EngineIgnition
+    // above) - has_ignition is false only when neither "ignition" nor any
+    // fuel field is present in the source file; the loader REQUIRES
+    // "ignition" whenever a fuel model exists (has_fuel_map or a non-empty
+    // fuels list below) and otherwise leaves it a harmless stored-but-
+    // unread default.
+    bool has_ignition = false;
+    EngineIgnition ignition = EngineIgnition::Spark;
+    // PHYS-033 P4 I7a C5d: fuels this engine can burn, for the crude
+    // no-map estimate below - plain path strings resolved to FuelDesc at
+    // load time (a hypothetical per-entry blend weight, C5e, was cancelled/
+    // dropped per owner ruling 2026-09-27: no blending, just a list).
+    // fuels[0] is the ACTIVE fuel whose lhv_j_kg/afr_stoich feed the crude
+    // model - order matters. Mutually exclusive with "fuel"/"fuel_map": a
+    // calibrated fuel_map is keyed to exactly the one fuel named by the
+    // singular `fuel` field above, while `fuels` is for an engine with NO
+    // map that simply lists what it can run on. Empty (default) means this
+    // engine has no crude fuel model either - has_fuel_map is then the only
+    // source of fuel computation (see TorqueMapEngineDesc's own
+    // has_fuel_model() free function below).
+    std::vector<FuelDesc> fuels;
+    // PHYS-033 P4 I7a C5d: override for the crude no-map model's assumed
+    // indicated thermal efficiency eta_i (mdot = max(0, tau_comb*omega) /
+    // (eta_i * LHV)). 0.0 (default, sentinel - valid values are in (0, 1)
+    // exclusive) means use the Heywood (1988) ignition-type default: 0.325
+    // spark (p.827), 0.48 compression (p.859). Ignored by the fuel_map
+    // path (has_fuel_map uses the map's own measured flow, not an assumed
+    // efficiency) - the loader rejects setting this without a fuel model.
+    real indicated_efficiency = 0.0;
 };
+
+// PHYS-033 P4 I7a C5d: true whenever this engine has ANY fuel source (a
+// calibrated fuel_map or the crude no-map `fuels` list) - distinct from
+// has_fuel_map, which is specifically "a measured map exists" and picks
+// which of the two mutually-exclusive fuel-flow computations runs. Kept as
+// a free function (not a method) to match this file's own "pure data, no
+// algorithm code" convention.
+inline bool has_fuel_model(const TorqueMapEngineDesc& e) {
+    return e.has_fuel_map || !e.fuels.empty();
+}
 
 struct ClutchDesc {
     real capacity_nm = 0.0;               // KINETIC capacity at engagement 1

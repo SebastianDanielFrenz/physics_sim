@@ -101,6 +101,28 @@ EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     d.has_fuel_map = e.has_fuel_map;
     d.fuel = e.fuel;
     d.fuel_map = e.fuel_map;
+    // PHYS-033 P4 I7a C5d: has_fuel_model / the crude no-map path's active
+    // fuel and resolved eta_i. Resolution happens HERE (not in
+    // EngineTorqueMap itself) so the hot path never needs
+    // TorqueMapEngineDesc::ignition/fuels/indicated_efficiency at all - see
+    // EngineTorqueMap::Desc's own comment.
+    d.has_fuel_model = has_fuel_model(e);
+    if (!e.has_fuel_map && !e.fuels.empty()) {
+        d.fuel = e.fuels.front(); // crude path: fuels[0] is the ACTIVE fuel (order matters)
+        // Heywood, John B., Internal Combustion Engine Fundamentals,
+        // McGraw-Hill, 1988: indicated (gross) thermal efficiency is
+        // typically ~0.3-0.35 for SI (p.827, Fig. 15-1's ~30-38% brake
+        // range plus the pumping/friction margin already folded into this
+        // model's own separate motoring curve) and higher for CI (p.859,
+        // ~0.45-0.5) - single-point defaults for a model this crude, not a
+        // load/speed map. indicated_efficiency (loader-validated to (0,1))
+        // overrides either when the file sets it.
+        constexpr real kEtaSparkDefault = real(0.325);
+        constexpr real kEtaCompressionDefault = real(0.48);
+        d.eta_i = e.indicated_efficiency > real(0.0)
+                      ? e.indicated_efficiency
+                      : (e.ignition == EngineIgnition::Compression ? kEtaCompressionDefault : kEtaSparkDefault);
+    }
     return d;
 }
 
@@ -1089,7 +1111,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         const std::string& e_id = pt.components[static_cast<std::size_t>(engine_component_index)].id;
         engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(e));
         engine_friction_row_ = engine_row;
-        engine_has_fuel_map_ = e.has_fuel_map; // PHYS-033 P4 I7a C5: gates fuel/heat booking below
+        engine_has_fuel_model_ = has_fuel_model(e); // PHYS-033 P4 I7a C5, broadened C5d: gates fuel/heat booking below
 
         // Bootstrap fix: EngineTorqueMap::pre_solve's own state machine can
         // only ENTER Running via a bump-start (omega already > 0, see plan
@@ -1787,11 +1809,11 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         // too (it will feed a future cruder no-map fuel estimate, a separate
         // commit once that model is designed). Only the mass/LHV-derived
         // terms below - which need an actual fuel model to convert a mass
-        // into energy - are gated on engine_has_fuel_map_ (post.
+        // into energy - are gated on engine_has_fuel_model_ (post.
         // fuel_mass_delta/fuel_energy_in_delta are exactly 0.0 from any
-        // engine without one).
+        // engine without one - map or crude, PHYS-033 P4 I7a C5d).
         ledger_.indicated_work += post.indicated_work_delta;
-        if (engine_has_fuel_map_) {
+        if (engine_has_fuel_model_) {
             ledger_.fuel_mass += post.fuel_mass_delta;
             ledger_.fuel_energy_in += post.fuel_energy_in_delta;
             const real heat_delta = post.fuel_energy_in_delta - post.indicated_work_delta;

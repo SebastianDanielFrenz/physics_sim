@@ -224,6 +224,21 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
         const real mdot_g_s = desc_.fuel_map.value(rpm, theta_c);
         mdot_kg_s_ = mdot_g_s / real(1000.0);
         r.fuel_flow_g_s = mdot_g_s;
+    } else if (desc_.has_fuel_model) {
+        // PHYS-033 P4 I7a C5d: crude constant-efficiency estimate for an
+        // engine with no measured map - mdot = max(0, tau_comb*omega_old) /
+        // (eta_i * LHV). Uses omega_old (this substep's start speed, the
+        // same substep-start evaluation point the map path above uses) and
+        // tau_comb_ (just computed above) so post_solve's fuel_mass_delta
+        // stays consistent with indicated_work_delta = h*omega_new*tau_comb_
+        // (the omega_old-vs-omega_new asymmetry between the two is the same
+        // one the map path already has between pre_solve's rpm and
+        // post_solve's omega_new). max(0, .) matches the map convention
+        // (fuel_flow_g_s[.][0] == 0 exactly) of booking no fuel on overrun/
+        // DFCO/fuel-cut, where tau_comb_ is <= 0 or exactly 0.
+        const real mech_power = std::max(real(0.0), tau_comb_ * omega_old);
+        mdot_kg_s_ = mech_power / (desc_.eta_i * desc_.fuel.lhv_j_kg);
+        r.fuel_flow_g_s = mdot_kg_s_ * real(1000.0);
     }
     return r;
 }
@@ -264,7 +279,14 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
     // post_solve_components.
     r.indicated_work_delta = h * omega_new * tau_comb_;
 
-    if (desc_.has_fuel_map) {
+    // PHYS-033 P4 I7a C5d: gate broadened from has_fuel_map to
+    // has_fuel_model - mdot_kg_s_ is now populated by EITHER the map
+    // (pre_solve's has_fuel_map branch) or the crude no-map estimate
+    // (pre_solve's has_fuel_model branch above), and both book the same way
+    // here (fuel_mass_delta = h*mdot, fuel_energy_in_delta = mass*LHV;
+    // desc_.fuel is the map's calibrated fuel or the crude path's active
+    // fuel respectively - to_engine_desc resolves which).
+    if (desc_.has_fuel_model) {
         r.fuel_mass_delta = h * mdot_kg_s_;
         r.fuel_energy_in_delta = r.fuel_mass_delta * desc_.fuel.lhv_j_kg;
     }
