@@ -502,6 +502,8 @@ TEST_CASE("Fix 3 F2: fuel flow matches the map at pre-solve rpm/theta_c through 
     bool saw_theta_c_ne_command = false;
     bool saw_omega_change = false;
     real max_rel_err = 0.0;
+    real max_ledger_rel_err = 0.0;
+    real prev_fuel_mass = rig.world->powertrain_energy(rig.vehicle).fuel_mass;
 
     for (int tick = 0; tick < kRevTicks + kSettleTicks; ++tick) {
         rig.world->set_control("throttle", tick < kRevTicks ? 1.0 : 0.0);
@@ -523,9 +525,27 @@ TEST_CASE("Fix 3 F2: fuel flow matches the map at pre-solve rpm/theta_c through 
         INFO("tick " << tick << " rpm_before=" << rpm_before << " theta_c=" << theta_c << " command=" << command
                       << " fuel_flow_g_s=" << fuel_flow_g_s << " expected_g_s=" << expected_g_s << " rel_err=" << rel_err);
         CHECK(rel_err <= 1e-9);
+
+        // Also cross-check what Powertrain::post_solve_components actually BOOKS
+        // into the ledger (h*mdot_kg_s, gated by has_fuel_map) - fuel_flow_g_s
+        // above comes from PreSolveResult alone and would NOT catch a mistake
+        // confined to post_solve's own use of the cached mdot (e.g. recomputing
+        // it at the post-solve rpm instead of using the pre-solve-cached value -
+        // this file's own demo (a)).
+        const real fuel_mass_now = rig.world->powertrain_energy(rig.vehicle).fuel_mass;
+        const real ledger_delta_kg = fuel_mass_now - prev_fuel_mass;
+        prev_fuel_mass = fuel_mass_now;
+        const real expected_delta_kg = kSubstepH * (expected_g_s / real(1000.0));
+        const real ledger_denom = std::max(std::abs(expected_delta_kg), 1e-12);
+        const real ledger_rel_err = std::abs(ledger_delta_kg - expected_delta_kg) / ledger_denom;
+        max_ledger_rel_err = std::max(max_ledger_rel_err, ledger_rel_err);
+        INFO("tick " << tick << " ledger_delta_kg=" << ledger_delta_kg << " expected_delta_kg=" << expected_delta_kg
+                      << " ledger_rel_err=" << ledger_rel_err);
+        CHECK(ledger_rel_err <= 1e-9);
     }
 
     INFO("max_rel_err over the whole run = " << max_rel_err);
+    INFO("max_ledger_rel_err over the whole run = " << max_ledger_rel_err);
     REQUIRE(saw_theta_c_ne_command); // precondition: theta_c really differs from the commanded throttle (idle PI, post-lift)
     REQUIRE(saw_omega_change);       // precondition: omega really varies across the run (free rev + coast-down)
 }
