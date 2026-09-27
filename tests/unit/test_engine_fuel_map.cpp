@@ -49,6 +49,7 @@
 #include "ps/io/scenario.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
+#include "ps/jobs/debug_alloc.h"
 #include "ps/vehicle/vehicle_reset.h"
 #include "ps/world/world.h"
 
@@ -1449,4 +1450,461 @@ TEST_CASE("F9: balance_error stays within bound with a fuel map over a WOT launc
     const drivetrain::PowertrainEnergy& final_ledger = rig.world->powertrain_energy(rig.vehicle);
     CHECK(final_ledger.fuel_mass > 0.0);         // non-vacuous: fuel really flowed
     CHECK(final_ledger.fuel_efficiency_violations == 0);
+}
+
+// ===========================================================================
+// PHYS-033 P4 I7a C5d: the crude no-map fuel model (owner-amended plan,
+// out/c5d_brief.md). TorqueMapEngineDesc::fuels/ignition/indicated_efficiency
+// are resolved into EngineTorqueMap::Desc::has_fuel_model/fuel/eta_i by
+// to_engine_desc_for_test() above (mirrors production to_engine_desc()) -
+// every test below drives that resolved Desc directly, exactly like F2/F3/F4
+// above, or a real World/Powertrain built from a VehicleDesc whose engine
+// carries "fuels" (car_sedan.json's i4_2l_na.json, tractor.json's
+// diesel_i4_4l5_turbo.json). Test 8 (every loader rejection) is F5 above,
+// already covering fuels/fuel_map/ignition/indicated_efficiency mutual-
+// exclusion and format rejections. Numbering matches out/c5d_brief.md's own
+// test list (1-9); each test's header names which brief item it is and, for
+// 1/2/5/6, the discrimination demo performed against production code.
+// ===========================================================================
+
+FuelDesc c5d_test_fuel_desc(real lhv_j_kg = 44.0e6) {
+    FuelDesc f;
+    f.name = "test fuel (I7a C5d)";
+    f.phase = FuelPhase::Liquid;
+    f.lhv_j_kg = lhv_j_kg;
+    f.afr_stoich = 14.5;
+    f.density_kg_m3 = 750.0;
+    f.source = "synthetic (test_engine_fuel_map.cpp, I7a C5d)";
+    return f;
+}
+
+// Brief test 3: mirrors F3's SECTIONs above, but for the crude no-map model
+// (car_sedan's real engine, has_fuel_model true / has_fuel_map false) rather
+// than F3's synthetic fuel-mapped engine - a distinct code path
+// (EngineTorqueMap::pre_solve's `else if (has_fuel_model)` branch, engine_
+// torque_map.cpp) that F3 never exercises.
+TEST_CASE("C5d Test 3: the crude no-map fuel model is exactly zero whenever combustion cannot be firing",
+          "[unit][drivetrain][fuel]") {
+    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    REQUIRE(desc.has_fuel_model);
+    REQUIRE_FALSE(desc.has_fuel_map);
+
+    SECTION("Off (ignition <= 0.5) even if previously Running") {
+        EngineTorqueMap engine(desc);
+        Sensors s = running_sensors(3000.0);
+        s.ignition = 0.0;
+        const PreSolveResult r = engine.pre_solve(s, throttle_of(1.0), no_ignition_cut(), kSubstepH);
+        CHECK(r.state == EngineState::Off);
+        CHECK(r.fuel_flow_g_s == 0.0);
+    }
+    SECTION("Stalled, starter not pressed, at rest") {
+        EngineTorqueMap engine(desc);
+        engine.reset(EngineState::Stalled);
+        Sensors s = running_sensors(0.0);
+        s.starter = 0.0;
+        const PreSolveResult r = engine.pre_solve(s, throttle_of(1.0), no_ignition_cut(), kSubstepH);
+        CHECK(r.state == EngineState::Stalled);
+        CHECK(r.fuel_flow_g_s == 0.0);
+    }
+    SECTION("DFCO: Running, high rpm (2000 > dfco_enable_rpm 1300), throttle 0") {
+        EngineTorqueMap engine(desc);
+        engine.reset(EngineState::Running);
+        const PreSolveResult r = engine.pre_solve(running_sensors(2000.0), throttle_of(0.0), no_ignition_cut(), kSubstepH);
+        CHECK(r.state == EngineState::Running);
+        CHECK(r.dfco_active);
+        CHECK(r.fuel_flow_g_s == 0.0);
+    }
+    SECTION("Fuel-cut limiter: Running, at/above limiter.rpm (6800), full throttle") {
+        EngineTorqueMap engine(desc);
+        engine.reset(EngineState::Running);
+        const PreSolveResult r = engine.pre_solve(running_sensors(7000.0), throttle_of(1.0), no_ignition_cut(), kSubstepH);
+        CHECK(r.state == EngineState::Running);
+        CHECK(r.limiter_active);
+        CHECK(r.fuel_flow_g_s == 0.0);
+    }
+    SECTION("Ignition cut (upshift cut) at a non-idle rpm") {
+        EngineTorqueMap engine(desc);
+        engine.reset(EngineState::Running);
+        const TcuRequest cut{true};
+        const PreSolveResult r = engine.pre_solve(running_sensors(3000.0), throttle_of(1.0), cut, kSubstepH);
+        CHECK(r.state == EngineState::Running);
+        CHECK(r.fuel_flow_g_s == 0.0);
+    }
+}
+
+// Brief test 2: settled idle, mdot within 2% of the idle-balance identity
+// -(m(rpm)+c_k)*omega/(eta*LHV) and > 0. Derived directly from engine_torque_
+// map.cpp's own pre_solve/post_solve code (tau_smooth_ = sign(omega_old)*
+// (m(rpm)+c_k_), c_k_ = -motoring(0); at settled idle the fixed point has
+// tau0_ ~ 0, so tau_comb_ ~ -tau_smooth_ = -(m(rpm)+c_k_)) - matches the
+// brief's own formula exactly, no deviation from the plan needed here.
+TEST_CASE("C5d Test 2: the crude no-map fuel model at settled idle matches the net-torque-zero identity within 2%",
+          "[unit][drivetrain][fuel]") {
+    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    REQUIRE(desc.has_fuel_model);
+    REQUIRE_FALSE(desc.has_fuel_map);
+
+    EngineTorqueMap engine(desc);
+    engine.reset(EngineState::Running);
+    const real J = engine.desc().inertia_kgm2;
+
+    real omega = rpm_to_omega(desc.idle_rpm);
+    constexpr int kSubsteps = 4800; // 5 s at 960 Hz - long enough for the idle PI to settle
+    for (int i = 0; i < kSubsteps; ++i) {
+        const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(0.0), no_ignition_cut(), kSubstepH);
+        const real omega_new = omega + kSubstepH * pre.tau0 / (J + kSubstepH * pre.d);
+        engine.post_solve(omega_new, kSubstepH);
+        omega = omega_new;
+    }
+
+    const real settled_rpm = std::abs(omega) / kRpmToRadPerSec;
+    INFO("settled_rpm=" << settled_rpm << " idle_rpm=" << desc.idle_rpm);
+    CHECK(std::abs(settled_rpm - static_cast<real>(desc.idle_rpm)) < 5.0);
+
+    const PreSolveResult settled_pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(0.0), no_ignition_cut(), kSubstepH);
+    const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(settled_pre.rpm);
+    const real c_k = -desc.motoring_torque_nm_vs_rpm.evaluate(0.0);
+    const real expected_tau_comb = -(m_rpm + c_k);
+    const real expected_mdot_kg_s = std::max(real(0.0), expected_tau_comb * omega) / (desc.eta_i * desc.fuel.lhv_j_kg);
+    const real expected_g_s = expected_mdot_kg_s * real(1000.0);
+
+    INFO("actual fuel_flow_g_s=" << settled_pre.fuel_flow_g_s << " expected=" << expected_g_s << " tau0=" << settled_pre.tau0);
+    REQUIRE(expected_g_s > 0.0);
+    const real rel_err = std::abs(settled_pre.fuel_flow_g_s - expected_g_s) / expected_g_s;
+    CHECK(rel_err <= 0.02);
+}
+
+// Brief test 1: a dyno-held point (omega held EXACTLY constant across every
+// substep), fuel_mass == sum h*max(0,theta_c*(w-m)*omega_old)/(eta*LHV) to
+// 1e-12. Uses car_sedan's real engine at a mid-range rpm/throttle where
+// combustion is firing and neither DFCO nor the limiter can engage.
+TEST_CASE("C5d Test 1: the crude no-map fuel model integral matches an independent recomputation at a dyno-held point",
+          "[unit][drivetrain][fuel]") {
+    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    REQUIRE(desc.has_fuel_model);
+    REQUIRE_FALSE(desc.has_fuel_map);
+
+    EngineTorqueMap engine(desc);
+    engine.reset(EngineState::Running);
+
+    constexpr real kHeldRpm = 3000.0;
+    const real omega = rpm_to_omega(kHeldRpm);
+    constexpr int kSubsteps = 1000;
+
+    real fuel_mass_sum = 0.0;
+    real recomputed_sum = 0.0;
+    for (int i = 0; i < kSubsteps; ++i) {
+        const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(0.6), no_ignition_cut(), kSubstepH);
+        const PostSolveResult post = engine.post_solve(omega, kSubstepH); // dyno holds omega exactly constant: omega_new == omega
+        fuel_mass_sum += post.fuel_mass_delta;
+
+        REQUIRE_FALSE(pre.dfco_active);
+        REQUIRE_FALSE(pre.limiter_active);
+        const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
+        const real mech_power = std::max(real(0.0), tau_comb * omega); // omega_old == omega (dyno-held)
+        const real mdot_kg_s = mech_power / (desc.eta_i * desc.fuel.lhv_j_kg);
+        recomputed_sum += kSubstepH * mdot_kg_s;
+    }
+
+    REQUIRE(recomputed_sum > 0.0);
+    const real rel_err = std::abs(fuel_mass_sum - recomputed_sum) / recomputed_sum;
+    CHECK(rel_err <= 1e-12);
+}
+
+// Brief test 4: engine_heat >= 0 and fuel_efficiency_violations == 0 every
+// substep through crank -> fire -> WOT launch -> overrun (throttle lifted at
+// the end, engine still spinning fast - genuine overrun/DFCO territory), plus
+// max(omega_new/omega_old) < 1/eta_i whenever tau_comb > 0 (a direct algebraic
+// consequence of engine_heat = fuel_energy_in - indicated_work >= 0 at the
+// crude model's fuel_energy_in = mech_power*h/eta_i and indicated_work =
+// h*omega_new*tau_comb: heat >= 0 <=> omega_old*tau_comb/eta_i >=
+// omega_new*tau_comb, i.e. omega_new/omega_old <= 1/eta_i when tau_comb>0 -
+// not a separate plan/code mismatch, just the same inequality restated).
+TEST_CASE("C5d Test 4: the crude no-map fuel model never reports negative heat or >100% efficiency, crank to overrun",
+          "[unit][drivetrain][fuel]") {
+    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
+    REQUIRE(desc.has_fuel_model);
+    REQUIRE_FALSE(desc.has_fuel_map);
+    EngineTorqueMap engine(desc);
+    engine.reset(EngineState::Off);
+    const real J = engine.desc().inertia_kgm2;
+
+    real omega = 0.0;
+    bool saw_running = false;
+    bool saw_wot = false;
+    bool saw_overrun = false;
+    int heat_violations = 0;
+
+    constexpr int kCrankSubsteps = 1000;
+    constexpr int kWotSubsteps = 4000;
+    constexpr int kOverrunSubsteps = 2000;
+    constexpr int kTotal = kCrankSubsteps + kWotSubsteps + kOverrunSubsteps;
+    for (int i = 0; i < kTotal; ++i) {
+        Sensors s = sensors_at_omega(omega);
+        s.ignition = 1.0;
+        s.starter = (i < kCrankSubsteps) ? 1.0 : 0.0;
+        const real throttle_cmd = (i < kCrankSubsteps) ? 0.0 : ((i < kCrankSubsteps + kWotSubsteps) ? 1.0 : 0.0);
+        const real omega_old = omega;
+        const PreSolveResult pre = engine.pre_solve(s, throttle_of(throttle_cmd), no_ignition_cut(), kSubstepH);
+        const real omega_new = omega + kSubstepH * pre.tau0 / (J + kSubstepH * pre.d);
+        const PostSolveResult post = engine.post_solve(omega_new, kSubstepH);
+
+        if (pre.state == EngineState::Running) {
+            saw_running = true;
+            if (throttle_cmd > 0.99) saw_wot = true;
+            if (i >= kCrankSubsteps + kWotSubsteps) saw_overrun = true;
+        }
+
+        const real heat_delta = post.fuel_energy_in_delta - post.indicated_work_delta;
+        if (heat_delta < -1e-9) {
+            ++heat_violations;
+            INFO("substep " << i << " heat_delta=" << heat_delta << " state=" << static_cast<int>(pre.state));
+        }
+
+        const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
+        if (tau_comb > 0.0 && omega_old > 0.0) {
+            CHECK(omega_new / omega_old < real(1.0) / desc.eta_i);
+        }
+
+        omega = omega_new;
+    }
+
+    CHECK(heat_violations == 0);
+    CHECK(saw_running);
+    CHECK(saw_wot);
+    CHECK(saw_overrun);
+}
+
+// Brief test 5: tractor's compression-ignition engine, fuel_energy_in*0.48 ==
+// sum h*tau_comb*omega_old at a WOT dyno-held point (catches an SI/CI default
+// swap or a diesel-LHV bug - if either default were swapped, this identity
+// would be off by 0.48/0.325 ~ 1.48x). No shared test helper loads tractor.json's
+// engine (only car_sedan's has one, load_sedan_desc() in powertrain_multi_diff_
+// desc.h) - loaded directly here instead.
+TEST_CASE("C5d Test 5: tractor's compression-ignition crude fuel model matches fuel_energy_in*eta_i == sum h*tau_comb*omega_old",
+          "[unit][drivetrain][fuel]") {
+    const vehicle::VehicleDesc tractor_desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+    TorqueMapEngineDesc tractor_engine_public;
+    bool found = false;
+    for (const auto& c : tractor_desc.powertrain.components) {
+        if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+            tractor_engine_public = *e;
+            found = true;
+            break;
+        }
+    }
+    REQUIRE(found);
+    REQUIRE(tractor_engine_public.has_ignition);
+    REQUIRE(tractor_engine_public.ignition == EngineIgnition::Compression);
+
+    const EngineTorqueMap::Desc desc = to_engine_desc_for_test(tractor_engine_public);
+    REQUIRE(desc.has_fuel_model);
+    REQUIRE_FALSE(desc.has_fuel_map);
+    CHECK(desc.eta_i == Catch::Approx(0.48));
+
+    EngineTorqueMap engine(desc);
+    engine.reset(EngineState::Running);
+
+    // Full lever, held well below the governor's droop band ([2200,2400] rpm
+    // per diesel_i4_4l5_turbo.json) so theta_gov saturates to 1 (full fuel) -
+    // a genuine WOT dyno point, not a governed/regulated one.
+    constexpr real kHeldRpm = 1800.0;
+    const real omega = rpm_to_omega(kHeldRpm);
+    constexpr int kSubsteps = 1000;
+
+    real fuel_energy_in_sum = 0.0;
+    real work_sum = 0.0;
+    for (int i = 0; i < kSubsteps; ++i) {
+        const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(1.0), no_ignition_cut(), kSubstepH);
+        const PostSolveResult post = engine.post_solve(omega, kSubstepH); // dyno holds omega exactly constant
+        fuel_energy_in_sum += post.fuel_energy_in_delta;
+
+        const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
+        const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
+        REQUIRE(tau_comb > 0.0); // precondition: WOT really produces positive combustion torque here
+        work_sum += kSubstepH * tau_comb * omega; // omega_old == omega (dyno-held)
+    }
+
+    REQUIRE(work_sum > 0.0);
+    const real rel_err = std::abs(fuel_energy_in_sum * desc.eta_i - work_sum) / work_sum;
+    CHECK(rel_err <= 1e-9);
+}
+
+// Brief test 6: an explicit indicated_efficiency (0.40) scales fuel by
+// exactly 0.325/0.40 relative to the spark default - same torque trajectory
+// (eta_i never feeds back into tau0/d), so the ratio is exact.
+TEST_CASE("C5d Test 6: an explicit indicated_efficiency scales fuel by exactly the default/override ratio",
+          "[unit][drivetrain][fuel]") {
+    auto build = [](real eta_i) {
+        EngineTorqueMap::Desc d = to_engine_desc_for_test(car_sedan_engine_public_desc());
+        REQUIRE(d.has_fuel_model);
+        d.eta_i = eta_i;
+        return d;
+    };
+    const EngineTorqueMap::Desc default_desc = build(0.325); // spark default (no override)
+    const EngineTorqueMap::Desc override_desc = build(0.40); // an explicit indicated_efficiency
+
+    auto run_fuel_mass = [](const EngineTorqueMap::Desc& desc) {
+        EngineTorqueMap engine(desc);
+        engine.reset(EngineState::Running);
+        const real J = engine.desc().inertia_kgm2;
+        real omega = rpm_to_omega(3000.0);
+        real fuel_mass_sum = 0.0;
+        constexpr int kSubsteps = 500;
+        for (int i = 0; i < kSubsteps; ++i) {
+            const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(0.6), no_ignition_cut(), kSubstepH);
+            const real omega_new = omega + kSubstepH * pre.tau0 / (J + kSubstepH * pre.d);
+            const PostSolveResult post = engine.post_solve(omega_new, kSubstepH);
+            fuel_mass_sum += post.fuel_mass_delta;
+            omega = omega_new;
+        }
+        return fuel_mass_sum;
+    };
+
+    const real mass_default = run_fuel_mass(default_desc);
+    const real mass_override = run_fuel_mass(override_desc);
+    REQUIRE(mass_default > 0.0);
+    REQUIRE(mass_override > 0.0);
+
+    const real expected_ratio = real(0.325) / real(0.40);
+    const real actual_ratio = mass_override / mass_default;
+    CHECK(actual_ratio == Catch::Approx(expected_ratio).epsilon(1e-9));
+}
+
+// Brief test 7: no feedback from the fuel sub-ledger into dynamics - car_sedan
+// WITH its real "fuels" list vs. the SAME desc with fuels cleared in code
+// give bit-identical state_hash over vehicle_powertrain.json's own control
+// script (replayed by hand, same event list F6 above uses).
+TEST_CASE("C5d Test 7: car_sedan's state_hash is bit-identical whether the engine's fuels list is present or empty",
+          "[unit][drivetrain][fuel][determinism]") {
+    struct Ev {
+        real t;
+        const char* channel;
+        real value;
+    };
+    const std::vector<Ev> events = {{0.2, "shift_up_count", 1.0}, {0.3, "throttle", 0.8}, {3.0, "shift_up_count", 2.0},
+                                     {6.0, "brake", 0.5},         {7.0, "shift_down_count", 1.0},
+                                     {8.0, "starter", 1.0},       {8.2, "starter", 0.0}};
+
+    const vehicle::VehicleDesc with_fuels = ps_test::load_sedan_desc();
+    vehicle::VehicleDesc without_fuels = ps_test::load_sedan_desc();
+    bool mutated = false;
+    for (auto& c : without_fuels.powertrain.components) {
+        if (auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+            REQUIRE_FALSE(e->fuels.empty()); // precondition: car_sedan really ships with a fuels list to strip
+            e->fuels.clear();
+            mutated = true;
+        }
+    }
+    REQUIRE(mutated);
+
+    WorldRig ra = make_world_rig(with_fuels);
+    WorldRig rb = make_world_rig(without_fuels);
+
+    constexpr real kTickHz = 240.0;
+    constexpr int kTicks = 2400; // 10 s, matching vehicle_powertrain.json's duration_s
+    std::size_t next_event = 0;
+    int mismatches = 0;
+    int first_mismatch = -1;
+    for (int tick = 0; tick < kTicks; ++tick) {
+        const real sim_time = tick / kTickHz;
+        while (next_event < events.size() && sim_time >= events[next_event].t) {
+            ra.world->set_control(events[next_event].channel, events[next_event].value);
+            rb.world->set_control(events[next_event].channel, events[next_event].value);
+            ++next_event;
+        }
+        ra.world->step();
+        rb.world->step();
+        if (ra.world->state_hash() != rb.world->state_hash() && mismatches++ == 0) first_mismatch = tick;
+    }
+    INFO("first differing tick " << first_mismatch << " (" << mismatches << " of " << kTicks << ")");
+    CHECK(mismatches == 0);
+    CHECK(next_event == events.size());
+}
+
+// Mirrors make_world_rig() above but with a caller-chosen worker count, for
+// Test 9's 1-vs-10-worker state_hash check.
+WorldRig make_world_rig_workers(const vehicle::VehicleDesc& desc, int workers) {
+    WorldRig rig;
+    WorldConfig cfg;
+    cfg.job_workers = workers;
+    cfg.tick_rate_hz = 240.0;
+    cfg.substep_rate_hz = 960.0;
+    rig.world = std::make_unique<World>(cfg);
+
+    BodyDesc ground;
+    ground.shape = BoxShape{Vec3{1000.0, 1000.0, 0.5}};
+    ground.motion = BodyMotionType::Static;
+    ground.friction = 1.0;
+    ground.pose.position = Vec3{0.0, 0.0, -0.5};
+    rig.world->create_body(ground);
+
+    BodyDesc chassis;
+    chassis.shape = BoxShape{Vec3{2.0, 0.4, 0.15}};
+    chassis.motion = BodyMotionType::Dynamic;
+    chassis.mass = 1500.0;
+    chassis.friction = 0.5;
+    chassis.allow_sleep = false;
+    chassis.pose.position = Vec3{0.0, 0.0, 0.6};
+    const BodyId chassis_id = rig.world->create_body(chassis);
+
+    rig.world->set_surface_table(std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json"));
+    rig.vehicle = rig.world->create_vehicle(desc, chassis_id);
+
+    rig.world->set_control("assist.auto_clutch", 0.0);
+    rig.world->set_control("assist.auto_blip", 0.0);
+    rig.world->set_control("assist.auto_shift", 0.0);
+    rig.world->set_control("clutch", 0.0);
+    vehicle::VehicleResetOptions o;
+    o.gear = 1;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = true;
+    rig.world->reset_vehicle(rig.vehicle, o);
+    return rig;
+}
+
+// Brief test 9: debug_alloc zero-alloc while the crude model is active, plus
+// worker-count invariance. C5's own existing map-based tests (F2/F3/F4/F6/F9
+// etc. above) already run unmodified through this same shorthand-loader path
+// every build, so their continued pass is this file's own regression net for
+// that half of the requirement.
+TEST_CASE("C5d Test 9: the crude no-map fuel model allocates nothing while stepping, and is worker-count invariant",
+          "[unit][drivetrain][fuel][jobs][determinism]") {
+    if (!ps::jobs::debug_alloc::hook_available()) {
+        WARN("debug_alloc's operator new/delete overrides are compiled out under ASan/TSan - nothing to check on this build.");
+    } else {
+        WorldRig rig = make_world_rig(ps_test::load_sedan_desc());
+        rig.world->set_control("shift_up_count", 1.0);
+        rig.world->set_control("throttle", 0.6);
+        for (int i = 0; i < 300; ++i) rig.world->step(); // warm-up
+
+        ps::jobs::debug_alloc::reset();
+        ps::jobs::debug_alloc::set_armed(true);
+        for (int i = 0; i < 240; ++i) rig.world->step();
+        ps::jobs::debug_alloc::set_armed(false);
+
+        const std::uint64_t own = ps::jobs::debug_alloc::own_violation_count();
+        const std::uint64_t external = ps::jobs::debug_alloc::external_violation_count();
+        ps::jobs::debug_alloc::reset();
+
+        WARN("external (Jolt-internal, pre-existing broadphase-rebuild gap) violation count=" << external);
+        CHECK(own == 0);
+        CHECK(rig.world->powertrain_energy(rig.vehicle).fuel_mass > 0.0); // non-vacuous: the crude model really ran
+    }
+
+    auto run = [](int workers) {
+        WorldRig rig = make_world_rig_workers(ps_test::load_sedan_desc(), workers);
+        rig.world->set_control("shift_up_count", 1.0);
+        rig.world->set_control("throttle", 0.7);
+        for (int i = 0; i < 480; ++i) rig.world->step(); // 2 s at 240 Hz
+        return rig.world->state_hash();
+    };
+    const std::uint64_t h1 = run(1);
+    const std::uint64_t h10 = run(10);
+    CHECK(h1 == h10);
 }
