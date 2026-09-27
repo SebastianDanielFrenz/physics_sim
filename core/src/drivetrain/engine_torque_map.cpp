@@ -166,7 +166,10 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
 
     // --- 6.1.6: combustion -------------------------------------------------------
     const bool comb = (state_ == EngineState::Running || state_ == EngineState::Cranking) && rpm >= desc_.fire_rpm && omega_old > real(0.0);
-    const real theta_c = comb ? theta_eff * f_lim : real(0.0);
+    // PHYS-033 P4 I7a C6: the ECU's commanded combustion fraction (the pre-C6
+    // theta_c); the fired one, theta_c below, is this times the starvation
+    // factor s_starve decided further down.
+    const real theta_c_demand = comb ? theta_eff * f_lim : real(0.0);
 
     // PHYS-033 P4 I4 C12: is the governor the ACTIVE argument all the way
     // through to theta_c this substep? theta_gov must flow through UNCHANGED
@@ -188,7 +191,60 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     const real m_rpm = desc_.motoring_torque_nm_vs_rpm.evaluate(rpm);
     const real w_rpm = desc_.wot_torque_nm_vs_rpm.evaluate(rpm);
     tau_smooth_ = s * (m_rpm + c_k_);
-    tau_comb_ = theta_c * (w_rpm - m_rpm);
+    const real tau_comb_demand = theta_c_demand * (w_rpm - m_rpm);
+
+    // PHYS-033 P4 I7a C5/C5d: fuel DEMAND at this substep-start rpm and the
+    // commanded theta_c (the map's own "load" axis - see
+    // docs/data_formats/engine.md). Table2D clamps at its own domain edges,
+    // same as Curve1D above; theta_c_demand is already in [0, 1] by
+    // construction (theta_eff clamped, f_lim clamped). mdot_kg_s_ is never
+    // touched when there is no fuel model at all.
+    real fuel_flow_g_s = real(0.0);
+    if (desc_.has_fuel_map) {
+        const real mdot_g_s = desc_.fuel_map.value(rpm, theta_c_demand);
+        mdot_kg_s_ = mdot_g_s / real(1000.0);
+        fuel_flow_g_s = mdot_g_s;
+    } else if (desc_.has_fuel_model) {
+        // PHYS-033 P4 I7a C5d: crude constant-efficiency estimate for an
+        // engine with no measured map - mdot = max(0, tau_comb*omega_old) /
+        // (eta_i * LHV). Uses omega_old (this substep's start speed, the
+        // same substep-start evaluation point the map path above uses) and
+        // the commanded tau_comb so post_solve's fuel_mass_delta stays
+        // consistent with indicated_work_delta = h*omega_new*tau_comb_
+        // (the omega_old-vs-omega_new asymmetry between the two is the same
+        // one the map path already has between pre_solve's rpm and
+        // post_solve's omega_new). max(0, .) matches the map convention
+        // (fuel_flow_g_s[.][0] == 0 exactly) of booking no fuel on overrun/
+        // DFCO/fuel-cut, where tau_comb is <= 0 or exactly 0.
+        const real mech_power = std::max(real(0.0), tau_comb_demand * omega_old);
+        mdot_kg_s_ = mech_power / (desc_.eta_i * desc_.fuel.lhv_j_kg);
+        fuel_flow_g_s = mdot_kg_s_ * real(1000.0);
+    }
+
+    // PHYS-033 P4 I7a C6: fuel starvation. The feeding tank can deliver at
+    // most sensors.fuel_available_kg this substep. When the demand
+    // h*mdot exceeds it, combustion is scaled by s_starve = available /
+    // (h*mdot) in [0, 1) - tau_comb, its share of d and the burnt fuel all
+    // scale by the same factor, held constant within the substep - and the
+    // booked mass is EXACTLY the available mass, so the tank's own
+    // `mass - booked` lands on exactly 0.0 on the emptying substep. The map
+    // and crude demands use the same rule. Otherwise s_starve == 1 and every
+    // product below is x*1.0 == x (the build has FP contraction off), so an
+    // engine with no tank, or a tank that covers the demand, is bit-identical
+    // to pre-C6.
+    real s_starve = real(1.0);
+    if (desc_.has_fuel_model) {
+        booked_fuel_mass_kg_ = h * mdot_kg_s_;
+        if (booked_fuel_mass_kg_ > sensors.fuel_available_kg) {
+            const real available = std::max(real(0.0), sensors.fuel_available_kg);
+            s_starve = available / booked_fuel_mass_kg_;
+            booked_fuel_mass_kg_ = available;
+            mdot_kg_s_ = available / h;
+            fuel_flow_g_s = mdot_kg_s_ * real(1000.0);
+        }
+    }
+    const real theta_c = theta_c_demand * s_starve;
+    tau_comb_ = tau_comb_demand * s_starve;
     const real omega_s0 = desc_.starter.free_speed_rpm / kRadPerSecToRpm;
     const bool starter_in_speed_range = starter_active && omega_old >= real(0.0) && omega_old < omega_s0;
     tau_start_ = starter_active ? desc_.starter.stall_torque_nm * std::max(real(0.0), real(1.0) - std::max(omega_old, real(0.0)) / omega_s0)
@@ -197,11 +253,13 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
 
     const real m_slope = curve_slope_at(desc_.motoring_torque_nm_vs_rpm, rpm);
     const real w_slope = curve_slope_at(desc_.wot_torque_nm_vs_rpm, rpm);
-    real dtau_domega = kRadPerSecToRpm * m_slope + theta_c * kRadPerSecToRpm * (w_slope - m_slope);
+    // PHYS-033 P4 I7a C6: each combustion term times s_starve (x*1.0 == x
+    // when not starving - same operands, same order as pre-C6).
+    real dtau_domega = kRadPerSecToRpm * m_slope + theta_c_demand * kRadPerSecToRpm * (w_slope - m_slope) * s_starve;
     if (desc_.limiter.type == LimiterType::SoftCut) {
         const bool in_band = rpm < desc_.limiter.rpm && rpm > desc_.limiter.rpm - desc_.limiter.band_rpm;
         const real dflim_domega = in_band ? -kRadPerSecToRpm / desc_.limiter.band_rpm : real(0.0);
-        dtau_domega += theta_eff * (w_rpm - m_rpm) * dflim_domega;
+        dtau_domega += theta_eff * (w_rpm - m_rpm) * dflim_domega * s_starve;
     }
     // PHYS-033 P4 I4 C12: tau_comb = theta_eff*f_lim*(w-m); when the governor
     // is the active argument (governor_engaged), theta_eff == theta_gov and
@@ -212,7 +270,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     // exactly the spec's own formula.
     if (governor_engaged) {
         const real dgov_domega = -kRadPerSecToRpm / governor_band;
-        dtau_domega += f_lim * (w_rpm - m_rpm) * dgov_domega;
+        dtau_domega += f_lim * (w_rpm - m_rpm) * dgov_domega * s_starve;
     }
     if (starter_in_speed_range) dtau_domega -= desc_.starter.stall_torque_nm / omega_s0;
     const real d = std::max(-dtau_domega, real(0.0));
@@ -234,33 +292,13 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.torque_estimate = tau_smooth_ + tau_comb_;
     r.governor_setpoint_rpm = governor_setpoint_rpm;
     r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
+    // PHYS-033 P4 I7a C6: the FIRED fraction (theta_c_demand*s_starve) -
+    // torque_demand above stays the ECU's unscaled request (a dry tank does
+    // not change what the ECU asks for), torque_estimate follows the fired
+    // tau_comb_.
     r.theta_c = theta_c;
-
-    // PHYS-033 P4 I7a C5: fuel flow at this substep-start rpm/theta_c (the
-    // map's own "load" axis - see docs/data_formats/engine.md). Table2D
-    // clamps at its own domain edges, same as Curve1D above; theta_c is
-    // already in [0, 1] by construction (theta_eff clamped, f_lim clamped).
-    // Exactly 0.0 (mdot_kg_s_ never touched otherwise) when there is no map.
-    if (desc_.has_fuel_map) {
-        const real mdot_g_s = desc_.fuel_map.value(rpm, theta_c);
-        mdot_kg_s_ = mdot_g_s / real(1000.0);
-        r.fuel_flow_g_s = mdot_g_s;
-    } else if (desc_.has_fuel_model) {
-        // PHYS-033 P4 I7a C5d: crude constant-efficiency estimate for an
-        // engine with no measured map - mdot = max(0, tau_comb*omega_old) /
-        // (eta_i * LHV). Uses omega_old (this substep's start speed, the
-        // same substep-start evaluation point the map path above uses) and
-        // tau_comb_ (just computed above) so post_solve's fuel_mass_delta
-        // stays consistent with indicated_work_delta = h*omega_new*tau_comb_
-        // (the omega_old-vs-omega_new asymmetry between the two is the same
-        // one the map path already has between pre_solve's rpm and
-        // post_solve's omega_new). max(0, .) matches the map convention
-        // (fuel_flow_g_s[.][0] == 0 exactly) of booking no fuel on overrun/
-        // DFCO/fuel-cut, where tau_comb_ is <= 0 or exactly 0.
-        const real mech_power = std::max(real(0.0), tau_comb_ * omega_old);
-        mdot_kg_s_ = mech_power / (desc_.eta_i * desc_.fuel.lhv_j_kg);
-        r.fuel_flow_g_s = mdot_kg_s_ * real(1000.0);
-    }
+    r.fuel_flow_g_s = fuel_flow_g_s; // delivered flow (== demand unless starving)
+    r.fuel_supply_fraction = s_starve;
     return r;
 }
 
@@ -310,7 +348,10 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
     // desc_.fuel is the map's calibrated fuel or the crude path's active
     // fuel respectively - to_engine_desc resolves which).
     if (desc_.has_fuel_model) {
-        r.fuel_mass_delta = h * mdot_kg_s_;
+        // PHYS-033 P4 I7a C6: decided in pre_solve - h*mdot_kg_s_ (same h,
+        // same operands as the pre-C6 expression here) or, when starving,
+        // exactly the available tank mass.
+        r.fuel_mass_delta = booked_fuel_mass_kg_;
         r.fuel_energy_in_delta = r.fuel_mass_delta * desc_.fuel.lhv_j_kg;
     }
 

@@ -165,7 +165,14 @@ private:
     // true and has_fuel_map is false (mech_power/(eta_i*LHV), see pre_solve).
     // It stays exactly 0.0 only when neither has_fuel_map nor has_fuel_model
     // is set. NOT hashed (fold_state_hash is unchanged by either commit).
+    // PHYS-033 P4 I7a C6: under fuel starvation this is the DELIVERED flow
+    // (fuel_available_kg/h), not the demand.
     real mdot_kg_s_ = 0.0;
+    // PHYS-033 P4 I7a C6: the fuel mass pre_solve decided to burn this
+    // substep - h*mdot_kg_s_ (the pre-C6 post_solve expression, same
+    // operands) or, when starving, exactly Sensors::fuel_available_kg.
+    // post_solve books it as fuel_mass_delta. NOT hashed.
+    real booked_fuel_mass_kg_ = 0.0;
 };
 
 } // namespace ps::drivetrain

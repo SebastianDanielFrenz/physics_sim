@@ -403,10 +403,29 @@ struct ThrottleControlDesc {
     std::string hand_lever_channel; // optional; empty = no hand lever for this stage
 };
 
+// PHYS-033 P4 I7a C6 (plan section 2.4): a fuel tank - the first lumped
+// ENERGY STORE component (PHYS-033 owner ruling "Tanks and stores": a fill
+// state only, no sloshing/temperature; a pressure is not needed for a liquid
+// fuel feeding a pumped injection system and is not modelled). No shaft
+// port, no node, no rows: it feeds an engine's fuel input through a
+// PowertrainDesc::fluid link ("<tank>.out" -> "<engine>.fuel"). `fuel` is
+// the tank's content (loaded from a physics_sim.fuel/1 file resolved
+// relative to the VEHICLE file's directory); it must be one of the fed
+// engine's `fuels` (the loader compares file paths with
+// std::filesystem::equivalent) and becomes the fuel that engine burns (see
+// docs/data_formats/vehicle.md). initial_kg in [0, capacity_kg],
+// capacity_kg > 0, both finite. The fuel's mass never feeds back into the
+// chassis mass (constant chassis mass by design, C6 brief).
+struct FuelTankDesc {
+    FuelDesc fuel;
+    real capacity_kg = 0.0;
+    real initial_kg = 0.0;
+};
+
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
 // type is a compile-checked change plus a data-format minor bump.
 using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc,
-                                      ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc>;
+                                      ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc, FuelTankDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty
@@ -424,9 +443,18 @@ enum class Compliance { Rigid, Compliant };
 // -1..6, tractor: -4..12).
 inline constexpr real kGearRequestNone = real(-100.0);
 
+// PHYS-033 P4 I7a C6: one fluid (fuel) connection, "<tank>.out" ->
+// "<engine>.fuel" - a supply path, not a shaft: it carries mass, never
+// torque. A separate namespace from ShaftDesc's ports.
+struct FluidLinkDesc {
+    PortRef from; // a fuel_tank component's "out"
+    PortRef to;   // an engine component's "fuel"
+};
+
 struct PowertrainDesc {
     std::vector<ComponentDesc> components; // ARRAY order == evaluation order (PLAN.md D7)
     std::vector<ShaftDesc> shafts;
+    std::vector<FluidLinkDesc> fluid; // PHYS-033 P4 I7a C6: optional, empty for every vehicle without a tank
     Compliance compliance = Compliance::Rigid;
     bool rotor_reaction = true; // plan section 6.7 (Q11); false only for a temporary data migration step
 };

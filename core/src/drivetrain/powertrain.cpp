@@ -150,7 +150,26 @@ EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     return d;
 }
 
+EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e, const FuelTankDesc* tank) {
+    EngineTorqueMap::Desc d = to_engine_desc(e);
+    // PHYS-033 P4 I7a C6: with a tank the engine burns the TANK's fuel -
+    // for the crude path this replaces fuels[0]; for a map engine it is the
+    // map's own one fuel (fuels == {fuel}, enforced by the loader's path
+    // check and the Powertrain constructor's value check).
+    if (tank != nullptr && has_fuel_model(e)) d.fuel = tank->fuel;
+    return d;
+}
+
 namespace {
+
+// PHYS-033 P4 I7a C6: value identity of two loaded fuel files (FuelDesc has
+// no path; the loader already compared the files themselves with
+// std::filesystem::equivalent - this is the Powertrain constructor's
+// backstop for a code-built VehicleDesc).
+bool same_fuel(const FuelDesc& a, const FuelDesc& b) {
+    return a.name == b.name && a.phase == b.phase && a.lhv_j_kg == b.lhv_j_kg && a.afr_stoich == b.afr_stoich &&
+           a.density_kg_m3 == b.density_kg_m3;
+}
 
 Clutch::Desc to_clutch_desc(const ClutchDesc& c) {
     Clutch::Desc d;
@@ -367,10 +386,43 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 throw std::runtime_error("vehicle '" + vehicle_name + "': more than one throttle_control component - I7a C3 supports at most one");
             }
             throttle_control_component_index = static_cast<int>(ci);
+        } else if (std::get_if<FuelTankDesc>(&c.params)) {
+            // PHYS-033 P4 I7a C6: an energy store, no shaft port/node/row -
+            // wired to the engine through PowertrainDesc::fluid below.
         }
     }
     if (throttle_control_component_index >= 0 && engine_component_index < 0) {
         throw std::runtime_error("vehicle '" + vehicle_name + "': throttle_control component requires an engine component");
+    }
+
+    // PHYS-033 P4 I7a C6: fluid links. The loader rejects every malformed
+    // link with its own pinned message; this is the backstop for a
+    // code-built VehicleDesc. At most one tank feeds the (single) engine, and
+    // every tank must feed it.
+    int fuel_tank_component_index = -1;
+    for (const FluidLinkDesc& link : pt.fluid) {
+        const auto from_it = component_index_of.find(link.from.component);
+        if (link.from.is_wheel || from_it == component_index_of.end() || link.from.port != "out" ||
+            !std::holds_alternative<FuelTankDesc>(pt.components[static_cast<std::size_t>(from_it->second)].params)) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': fluid link source '" + link.from.component + "." + link.from.port +
+                                      "' is not a fuel_tank's \"out\" port");
+        }
+        const auto to_it = component_index_of.find(link.to.component);
+        if (link.to.is_wheel || to_it == component_index_of.end() || link.to.port != "fuel" ||
+            !std::holds_alternative<TorqueMapEngineDesc>(pt.components[static_cast<std::size_t>(to_it->second)].params)) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': fluid link target '" + link.to.component + "." + link.to.port +
+                                      "' is not an engine's \"fuel\" port");
+        }
+        if (fuel_tank_component_index >= 0) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': engine '" + link.to.component +
+                                      "' fuel port is fed by more than one fluid link");
+        }
+        fuel_tank_component_index = from_it->second;
+    }
+    for (std::size_t ci = 0; ci < pt.components.size(); ++ci) {
+        if (std::holds_alternative<FuelTankDesc>(pt.components[ci].params) && static_cast<int>(ci) != fuel_tank_component_index) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': fuel_tank '" + pt.components[ci].id + "' has no consumer");
+        }
     }
 
     std::vector<int> wheel_port_index(wheels.size(), -1);
@@ -1135,7 +1187,28 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     if (engine_component_index >= 0) {
         const auto& e = std::get<TorqueMapEngineDesc>(pt.components[static_cast<std::size_t>(engine_component_index)].params);
         const std::string& e_id = pt.components[static_cast<std::size_t>(engine_component_index)].id;
-        engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(e));
+        // PHYS-033 P4 I7a C6: the tank feeding this engine, if any.
+        const FuelTankDesc* tank_desc = nullptr;
+        if (fuel_tank_component_index >= 0) {
+            const ComponentDesc& tc = pt.components[static_cast<std::size_t>(fuel_tank_component_index)];
+            tank_desc = &std::get<FuelTankDesc>(tc.params);
+            if (!has_fuel_model(e)) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': engine '" + e_id + "' has no fuel model - fuel_tank '" + tc.id +
+                                          "' cannot feed it");
+            }
+            if (std::none_of(e.fuels.begin(), e.fuels.end(), [&](const FuelDesc& f) { return same_fuel(f, tank_desc->fuel); })) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': tank fuel '" + tank_desc->fuel.name + "' is not in engine '" +
+                                          e_id + "''s fuels list");
+            }
+            if (!(std::isfinite(tank_desc->capacity_kg) && tank_desc->capacity_kg > real(0.0)) ||
+                !(std::isfinite(tank_desc->initial_kg) && tank_desc->initial_kg >= real(0.0)) ||
+                tank_desc->initial_kg > tank_desc->capacity_kg) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': fuel_tank '" + tc.id +
+                                          "' needs finite capacity_kg > 0 and 0 <= initial_kg <= capacity_kg");
+            }
+            fuel_tank_ = std::make_unique<FuelTank>(tank_desc->fuel, tank_desc->capacity_kg, tank_desc->initial_kg);
+        }
+        engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(e, tank_desc));
         engine_friction_row_ = engine_row;
         engine_has_fuel_model_ = has_fuel_model(e); // PHYS-033 P4 I7a C5, broadened C5d: gates fuel/heat booking below
 
@@ -1649,6 +1722,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         s.starter = ctx.starter;
         s.clutch_engaged_fraction = ctx.clutch_engaged_fraction;
         s.gearbox_in_neutral = ctx.gearbox_in_neutral;
+        if (fuel_tank_) s.fuel_available_kg = fuel_tank_->content(); // PHYS-033 P4 I7a C6: else +infinity (never starves)
         const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut};
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
         const auto& pre = last_engine_result_;
@@ -1847,6 +1921,9 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
             const real heat_delta = post.fuel_energy_in_delta - post.indicated_work_delta;
             ledger_.engine_heat += heat_delta;
             if (heat_delta < real(0.0)) ++ledger_.fuel_efficiency_violations;
+            // PHYS-033 P4 I7a C6: the tank loses exactly the booked mass
+            // (the engine never books more than the tank held at pre_solve).
+            if (fuel_tank_) fuel_tank_->withdraw(post.fuel_mass_delta);
         }
         const real v = network_.row_velocity(engine_friction_row_);
         const real lambda = network_.row_lambda(engine_friction_row_);
@@ -2087,7 +2164,18 @@ std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
         h ^= static_cast<unsigned char>(be_next_ ? 1 : 0);
         h *= 1099511628211ULL;
     }
+    // PHYS-033 P4 I7a C6: the tank's fuel mass - only for a vehicle that has
+    // a tank (every pre-C6 vehicle hashes exactly as before). The cumulative
+    // fuel ledger counters stay unhashed.
+    if (fuel_tank_) h = fuel_tank_->fold_state_hash(h);
     return h;
+}
+
+void Powertrain::request_fuel_tank_mass(real kg) {
+    if (!fuel_tank_) throw std::runtime_error("set_fuel_tank_mass: this vehicle has no fuel_tank");
+    if (std::isnan(kg)) throw std::runtime_error("set_fuel_tank_mass: the requested mass is NaN");
+    fuel_tank_set_value_ = kg;
+    fuel_tank_set_pending_ = true;
 }
 
 } // namespace ps::drivetrain

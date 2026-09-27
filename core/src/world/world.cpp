@@ -318,7 +318,9 @@ void World::step() {
     std::size_t diff_channel_count = 0; // PHYS-033 P4 I4 C8: bias + locked per registered (non-plain-open) diff
     for (const auto& channels : diff_telemetry_channels_) diff_channel_count += channels.size() * 2;
     std::size_t fuel_channel_count = 0; // PHYS-033 P4 I7a C5: flow_g_s + energy_in + heat, only for a fuel-mapped engine
-    for (const auto& channels : fuel_telemetry_channels_) fuel_channel_count += channels.size() * 3;
+    for (const auto& channels : fuel_telemetry_channels_) {
+        for (const FuelTelemetryChannels& fc : channels) fuel_channel_count += fc.has_tank ? 4 : 3; // + tank_kg (PHYS-033 P4 I7a C6)
+    }
 
     std::vector<real> row;
     row.reserve(stage_timing_channels_.size() + worker_utilization_channels_.size() + 1 + wheel_channel_count +
@@ -400,6 +402,7 @@ void World::step() {
             row.push_back(ps_snap.fuel_flow_g_s);
             row.push_back(e.fuel_energy_in);
             row.push_back(e.engine_heat);
+            if (fuel_telemetry_channels_[vi].front().has_tank) row.push_back(ps_snap.fuel_mass_kg); // PHYS-033 P4 I7a C6
         }
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
@@ -625,7 +628,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     // telemetry channels. A vehicle with neither registers nothing here, so
     // its CSV header stays byte-identical (true of every vehicle shipped
     // before C5; car_sedan/tractor/etc. gain this block once their engine
-    // JSON files gain a "fuels" list in C5d). tank_kg telemetry comes with C6.
+    // JSON files gain a "fuels" list in C5d). C6 adds tank_kg for a tank.
     if (fuel_telemetry_channels_.size() <= id.index) fuel_telemetry_channels_.resize(id.index + 1);
     std::vector<FuelTelemetryChannels>& fuel_channels = fuel_telemetry_channels_[id.index];
     fuel_channels.clear();
@@ -637,6 +640,13 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
             fc.flow_g_s = telemetry_->register_channel(fuel_prefix + "flow_g_s");
             fc.energy_in = telemetry_->register_channel(fuel_prefix + "energy_in");
             fc.heat = telemetry_->register_channel(fuel_prefix + "heat");
+            // PHYS-033 P4 I7a C6: vehicle<i>.fuel.tank_kg, only with a tank
+            // (a tank implies a fuel model - the loader and Powertrain both
+            // reject a tank feeding an engine without one).
+            if (vehicle_system_->at(id).has_fuel_tank()) {
+                fc.has_tank = true;
+                fc.tank_kg = telemetry_->register_channel(fuel_prefix + "tank_kg");
+            }
             fuel_channels.push_back(fc);
             break; // at most one engine per vehicle
         }
@@ -671,6 +681,14 @@ real World::wheel_omega(VehicleId id, std::size_t wheel_index) const {
 
 const drivetrain::PowertrainEnergy& World::powertrain_energy(VehicleId id) const {
     return vehicle_system_->at(id).powertrain_energy();
+}
+
+real World::fuel_tank_mass(VehicleId id) const {
+    return vehicle_system_->at(id).fuel_tank_mass();
+}
+
+void World::set_fuel_tank_mass(VehicleId id, real kg) {
+    vehicle_system_->at(id).request_fuel_tank_mass(kg);
 }
 
 const std::vector<real>& World::vehicle_component_channel_values(VehicleId id) const {

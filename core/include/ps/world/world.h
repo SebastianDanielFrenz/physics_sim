@@ -221,6 +221,17 @@ public:
     // accessors, same contract as wheel_telemetry above.
     [[nodiscard]] real wheel_omega(VehicleId id, std::size_t wheel_index) const;
     [[nodiscard]] const drivetrain::PowertrainEnergy& powertrain_energy(VehicleId id) const;
+    // PHYS-033 P4 I7a C6: the vehicle's fuel tank content in kg (live,
+    // sim-thread-only; 0 for a vehicle without a fuel_tank).
+    [[nodiscard]] real fuel_tank_mass(VehicleId id) const;
+    // PHYS-033 P4 I7a C6: sets the tank content - applied at the NEXT tick
+    // boundary (start of the next step()), clamped to [0, capacity], and
+    // booked signed (new - old) into PowertrainEnergy::fuel_external_added.
+    // A later call before that step replaces an earlier one. Throws
+    // std::runtime_error for a vehicle without a fuel_tank or a NaN mass.
+    // Call between steps only (never from a job). The chassis mass never
+    // changes with the fuel mass.
+    void set_fuel_tank_mass(VehicleId id, real kg);
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value for this vehicle
     // (VehicleInstance::component_channel_values(), Powertrain::declare_
@@ -422,6 +433,8 @@ private:
     // vector-of-0-or-more-entries pattern rather than adding <optional>.
     struct FuelTelemetryChannels {
         std::size_t flow_g_s, energy_in, heat;
+        bool has_tank = false; // PHYS-033 P4 I7a C6: tank_kg registered only for a vehicle with a fuel_tank
+        std::size_t tank_kg = 0;
     };
     std::vector<std::vector<FuelTelemetryChannels>> fuel_telemetry_channels_; // outer index == VehicleId.index; inner has 0 or 1 entries
 

@@ -2,6 +2,7 @@
 
 ## Done
 - Read brief, plan backups, C5d code (engine_torque_map, powertrain, vehicle_io, world, vehicle_instance).
+- Steps 1-6 coded (not yet built): desc, loader, energy_store.h, starvation, Powertrain wiring, World API + tank_kg telemetry + snapshot.
 
 ## Next
 1. Public: FuelTankDesc (powertrain_desc.h, in ComponentParams), FluidLinkDesc + PowertrainDesc::fluid.

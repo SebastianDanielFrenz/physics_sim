@@ -23,6 +23,7 @@
 
 #include "clutch.h"
 #include "components.h"
+#include "energy_store.h"
 #include "engine_torque_map.h"
 #include "gearbox.h"
 #include "manual_tcu.h"
@@ -80,6 +81,12 @@ struct TcuThrottleLimits {
 // resolver instead of maintaining their own hand-duplicated copy - a duplicate
 // cannot catch a bug introduced in this function itself.
 EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e);
+// PHYS-033 P4 I7a C6: the same, with the fuel a feeding tank selects - the
+// engine burns the TANK's fuel (its LHV; for a map engine the tank's fuel is
+// the map's one fuel, which the loader/Powertrain already enforce). `tank`
+// nullptr == the one-argument overload exactly (fuels[0] for the crude
+// path). Fixed at construction, never changed at runtime.
+EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e, const FuelTankDesc* tank);
 
 class Powertrain {
 public:
@@ -149,8 +156,29 @@ public:
     // substeps; end_tick() computes balance_error from the deltas since
     // then. Both plain struct copies (PowertrainEnergy is all `real`
     // fields) - no allocation.
-    void begin_tick() { ledger_tick_start_ = ledger_; }
+    // PHYS-033 P4 I7a C6: a pending set_fuel_tank_mass request is applied
+    // here, at the tick boundary, before the snapshot - clamped to [0,
+    // capacity] and booked signed (new - old) into fuel_external_added.
+    void begin_tick() {
+        if (fuel_tank_set_pending_) {
+            ledger_.fuel_external_added += fuel_tank_->set_content(fuel_tank_set_value_);
+            fuel_tank_set_pending_ = false;
+        }
+        ledger_tick_start_ = ledger_;
+    }
     void end_tick();
+
+    // PHYS-033 P4 I7a C6: the fuel tank feeding this vehicle's engine, if any
+    // (energy_store.h). fuel_tank_mass() is 0 without one.
+    [[nodiscard]] bool has_fuel_tank() const { return fuel_tank_ != nullptr; }
+    [[nodiscard]] real fuel_tank_mass() const { return fuel_tank_ ? fuel_tank_->content() : real(0.0); }
+    [[nodiscard]] real fuel_tank_capacity() const { return fuel_tank_ ? fuel_tank_->capacity() : real(0.0); }
+    [[nodiscard]] const FuelTank* fuel_tank() const { return fuel_tank_.get(); }
+    // Queues a new tank content for the NEXT begin_tick() (a later call
+    // before then replaces an earlier one). Throws std::runtime_error when
+    // this vehicle has no tank or `kg` is NaN; any other value (negative,
+    // above capacity, infinite) is clamped when applied.
+    void request_fuel_tank_mass(real kg);
 
     // World::reset_vehicle (plan section 4.5). Call only between ticks,
     // never from a job. `hub_speeds` is this substep's target omega for
@@ -537,6 +565,13 @@ private:
     // itself is booked unconditionally - see that function). false (default)
     // for every engine without one, so those ledger fields never move.
     bool engine_has_fuel_model_ = false;
+    // PHYS-033 P4 I7a C6: the tank feeding the engine's fuel port (nullptr
+    // without one), and a set_fuel_tank_mass request waiting for the next
+    // begin_tick(). Only fuel_tank_'s content is simulation state (hashed
+    // when present); the pending request is an input, like a control value.
+    std::unique_ptr<FuelTank> fuel_tank_;
+    bool fuel_tank_set_pending_ = false;
+    real fuel_tank_set_value_ = 0.0;
     // PHYS-033 P4 I7a C3: the throttle-command stage between the pedal and
     // the engine (throttle_stage.h) - built from either an explicit
     // ThrottleControlDesc component or (no such component) the IMPLICIT

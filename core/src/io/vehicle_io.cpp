@@ -368,7 +368,13 @@ void require_zero_or_unit(const Vec3& v, const std::string& what) {
 // engine kind) - read_engine_fields below is now a thin dispatcher on
 // "kind" so a second engine kind ("simulated", I7b) can sit next to this
 // one. Every torque_map-specific field/check is unchanged.
-ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const std::string& ctx, const std::string& engine_dir) {
+// PHYS-033 P4 I7a C6: `resolved_fuel_paths_out` (optional) receives every
+// fuel file path this engine lists ("fuels" entries, or the one "fuel"
+// shorthand), resolved exactly as they were loaded - load_vehicle_json's
+// fluid-link check compares a tank's own fuel file against these with
+// std::filesystem::equivalent (FuelDesc itself carries no path).
+ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
+                                                           std::vector<std::string>* resolved_fuel_paths_out = nullptr) {
     ps::drivetrain::TorqueMapEngineDesc e;
     if (!j.contains("wot_torque_nm_vs_rpm")) throw std::runtime_error(ctx + ": 'wot_torque_nm_vs_rpm' is required");
     e.wot_torque_nm_vs_rpm = read_curve(j.at("wot_torque_nm_vs_rpm"));
@@ -570,6 +576,7 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
             resolved_paths.push_back(fuel_path);
             e.fuels.push_back(ps::io::load_fuel_json(fuel_path));
         }
+        if (resolved_fuel_paths_out != nullptr) *resolved_fuel_paths_out = resolved_paths;
     }
 
     // PHYS-033 P4 I7a C5 (plan section 2.3): optional fuel map. "fuel" is a
@@ -601,6 +608,7 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
         // level (checked above, before this block runs), so e.fuels is
         // still empty here - safe to desugar unconditionally.
         e.fuels = {e.fuel};
+        if (resolved_fuel_paths_out != nullptr) *resolved_fuel_paths_out = {fuel_path};
     }
     if (j.contains("fuel_map")) {
         const auto& fmj = j.at("fuel_map");
@@ -780,7 +788,8 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
 // the only kind before this commit) is the shipped implementation above;
 // "simulated" (a full MVEM engine, I7b) is parsed nowhere yet and is
 // rejected by name rather than silently falling through to torque_map.
-ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir) {
+ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
+                                                       std::vector<std::string>* resolved_fuel_paths_out = nullptr) {
     // Default "torque_map" (rather than requiring the field) is deliberate,
     // not an oversight: every shipped data/engines/*.json file happens to
     // set "kind" explicitly today, but nothing REQUIRES a hand-authored or
@@ -790,7 +799,7 @@ ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std:
     // absent defaults to torque_map" pin test (the only place this default
     // path is actually exercised, since no shipped file omits it).
     const std::string kind = j.value("kind", std::string("torque_map"));
-    if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir);
+    if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
     if (kind == "simulated") {
         throw std::runtime_error(ctx + ": engine kind \"simulated\" is not yet supported (PHYS-033 I7b)");
     }
@@ -985,6 +994,11 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
     // --- powertrain (plan section 9.1) --------------------------------------
     PowertrainDesc p;
     std::vector<std::string> component_ids;
+    // PHYS-033 P4 I7a C6: engine id -> its resolved fuel file paths, and
+    // tank id -> {fuel path as written, resolved fuel path}, for the fluid
+    // link's "tank fuel is in the engine's fuels list" check.
+    std::vector<std::pair<std::string, std::vector<std::string>>> engine_fuel_paths;
+    std::vector<std::pair<std::string, std::pair<std::string, std::string>>> tank_fuel_paths;
     if (j.contains("powertrain")) {
         const auto& pj = j.at("powertrain");
         if (pj.contains("components")) {
@@ -1006,7 +1020,40 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 if (type == "engine") {
                     const json ej = resolve_component_ref(cj, "engine", base_dir, ctx);
                     const std::string engine_dir = component_ref_dir(cj, base_dir);
-                    p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir)});
+                    std::vector<std::string> fuel_paths;
+                    p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir, &fuel_paths)});
+                    engine_fuel_paths.emplace_back(id, std::move(fuel_paths)); // PHYS-033 P4 I7a C6: for the fluid-link check below
+                } else if (type == "fuel_tank") {
+                    // PHYS-033 P4 I7a C6: always inline (no 'ref' - a tank is
+                    // a per-vehicle fill state, not a reusable part file).
+                    // "fuel" resolves relative to the VEHICLE file's own
+                    // directory (base_dir), like every inline component's
+                    // relative path.
+                    if (cj.contains("ref")) throw std::runtime_error(ctx + ": 'fuel_tank' components are always inline (no 'ref')");
+                    if (!cj.contains("fuel") || !cj.at("fuel").is_string() || cj.at("fuel").get<std::string>().empty()) {
+                        throw std::runtime_error(ctx + ": fuel_tank 'fuel' is required and must be a non-empty path string");
+                    }
+                    ps::drivetrain::FuelTankDesc t;
+                    auto read_mass = [&](const char* key) -> real {
+                        if (!cj.contains(key) || !cj.at(key).is_number()) {
+                            throw std::runtime_error(ctx + ": fuel_tank '" + key + "' is required and must be a number");
+                        }
+                        const real v = cj.at(key).get<real>();
+                        if (!std::isfinite(v)) throw std::runtime_error(ctx + ": fuel_tank '" + key + "' must be finite");
+                        if (v < real(0.0)) throw std::runtime_error(ctx + ": fuel_tank '" + key + "' must not be negative, got " + std::to_string(v));
+                        return v;
+                    };
+                    t.capacity_kg = read_mass("capacity_kg");
+                    t.initial_kg = read_mass("initial_kg");
+                    if (!(t.capacity_kg > real(0.0))) throw std::runtime_error(ctx + ": fuel_tank 'capacity_kg' must be > 0");
+                    if (t.initial_kg > t.capacity_kg) {
+                        throw std::runtime_error(ctx + ": fuel_tank 'initial_kg' (" + std::to_string(t.initial_kg) +
+                                                  ") must not exceed 'capacity_kg' (" + std::to_string(t.capacity_kg) + ")");
+                    }
+                    const std::string tank_fuel_path = resolve_path(base_dir, cj.at("fuel").get<std::string>());
+                    t.fuel = ps::io::load_fuel_json(tank_fuel_path);
+                    tank_fuel_paths.push_back({id, {cj.at("fuel").get<std::string>(), tank_fuel_path}});
+                    p.components.push_back({id, t});
                 } else if (type == "clutch") {
                     if (cj.contains("ref")) throw std::runtime_error(ctx + ": 'clutch' components are always inline in I3 (no 'ref')");
                     p.components.push_back({id, read_clutch_fields(cj, ctx)});
@@ -1515,6 +1562,111 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
             }
         }
         p.rotor_reaction = pj.value("rotor_reaction", true);
+
+        // PHYS-033 P4 I7a C6: optional "fluid" - [["<tank>.out", "<engine>.fuel"], ...].
+        // Each link feeds one engine's fuel input from one fuel_tank; the tank's
+        // fuel file must be one of that engine's own fuel files (compared with
+        // std::filesystem::equivalent, like the engine's own duplicate check).
+        if (pj.contains("fluid")) {
+            const auto& fj = pj.at("fluid");
+            const std::string malformed = "must be a [\"<tank>.out\", \"<engine>.fuel\"] pair of port strings";
+            if (!fj.is_array()) {
+                throw std::runtime_error("vehicle '" + v.name + "': powertrain.fluid must be an array of [\"<tank>.out\", \"<engine>.fuel\"] pairs");
+            }
+            auto find_component = [&p](const std::string& cid) -> const ps::drivetrain::ComponentDesc* {
+                for (const auto& c : p.components) {
+                    if (c.id == cid) return &c;
+                }
+                return nullptr;
+            };
+            std::size_t link_index = 0;
+            for (const auto& lj : fj) {
+                const std::string lctx = "vehicle '" + v.name + "': powertrain.fluid[" + std::to_string(link_index++) + "]";
+                if (!lj.is_array() || lj.size() != 2 || !lj[0].is_string() || !lj[1].is_string()) {
+                    throw std::runtime_error(lctx + ": " + malformed);
+                }
+                auto parse_ref = [&](const std::string& ref) {
+                    const auto dot = ref.find('.');
+                    if (dot == std::string::npos || dot == 0 || dot + 1 == ref.size()) {
+                        throw std::runtime_error(lctx + ": bad port ref \"" + ref + "\" - " + malformed);
+                    }
+                    ps::drivetrain::PortRef pr;
+                    pr.component = ref.substr(0, dot);
+                    pr.port = ref.substr(dot + 1);
+                    return pr;
+                };
+                const std::string from_str = lj[0].get<std::string>();
+                const std::string to_str = lj[1].get<std::string>();
+                const ps::drivetrain::PortRef from = parse_ref(from_str);
+                const ps::drivetrain::PortRef to = parse_ref(to_str);
+
+                const ps::drivetrain::ComponentDesc* from_c = find_component(from.component);
+                if (from_c == nullptr) throw std::runtime_error(lctx + ": unknown component '" + from.component + "'");
+                if (std::get_if<ps::drivetrain::FuelTankDesc>(&from_c->params) == nullptr) {
+                    throw std::runtime_error(lctx + ": '" + from.component + "' is not a fuel_tank (a fluid link must start at \"<tank>.out\")");
+                }
+                if (from.port != "out") {
+                    throw std::runtime_error(lctx + ": unknown port \"" + from_str + "\" (a fuel_tank's only fluid port is \"out\")");
+                }
+                const ps::drivetrain::ComponentDesc* to_c = find_component(to.component);
+                if (to_c == nullptr) throw std::runtime_error(lctx + ": unknown component '" + to.component + "'");
+                const auto* engine = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&to_c->params);
+                if (engine == nullptr) {
+                    throw std::runtime_error(lctx + ": '" + to.component + "' is not an engine (a fluid link must end at \"<engine>.fuel\")");
+                }
+                if (to.port != "fuel") {
+                    throw std::runtime_error(lctx + ": unknown port \"" + to_str + "\" (an engine's only fluid port is \"fuel\")");
+                }
+                if (!ps::drivetrain::has_fuel_model(*engine)) {
+                    throw std::runtime_error(lctx + ": engine '" + to.component +
+                                              "' has no fuel model (no 'fuels', 'fuel' or 'fuel_map') - a fluid link cannot feed it");
+                }
+                for (const auto& existing : p.fluid) {
+                    if (existing.to.component != to.component) continue;
+                    if (existing.from.component == from.component) {
+                        throw std::runtime_error(lctx + ": duplicate fluid link \"" + from_str + "\" -> \"" + to_str + "\"");
+                    }
+                    throw std::runtime_error(lctx + ": engine '" + to.component + "' fuel port is fed by two tanks ('" +
+                                              existing.from.component + "' and '" + from.component + "')");
+                }
+                const std::pair<std::string, std::string>* tank_path = nullptr;
+                for (const auto& tp : tank_fuel_paths) {
+                    if (tp.first == from.component) tank_path = &tp.second;
+                }
+                const std::vector<std::string>* engine_paths = nullptr;
+                for (const auto& ep : engine_fuel_paths) {
+                    if (ep.first == to.component) engine_paths = &ep.second;
+                }
+                bool listed = false;
+                if (tank_path != nullptr && engine_paths != nullptr) {
+                    for (const std::string& ep : *engine_paths) {
+                        bool same = false;
+                        try {
+                            same = std::filesystem::equivalent(tank_path->second, ep);
+                        } catch (const std::filesystem::filesystem_error&) {
+                            same = (tank_path->second == ep);
+                        }
+                        if (same) listed = true;
+                    }
+                }
+                if (!listed) {
+                    throw std::runtime_error(lctx + ": tank fuel \"" + (tank_path != nullptr ? tank_path->first : std::string("?")) +
+                                              "\" is not in engine \"" + to.component + "\"'s fuels list");
+                }
+                p.fluid.push_back({from, to});
+            }
+        }
+    }
+    // PHYS-033 P4 I7a C6: every tank must feed something (whether or not a
+    // "fluid" array exists at all).
+    for (const auto& c : p.components) {
+        if (std::get_if<ps::drivetrain::FuelTankDesc>(&c.params) == nullptr) continue;
+        bool consumed = false;
+        for (const auto& link : p.fluid) consumed = consumed || link.from.component == c.id;
+        if (!consumed) {
+            throw std::runtime_error("vehicle '" + v.name + "': powertrain.components['" + c.id +
+                                      "']: fuel_tank has no consumer (no powertrain.fluid link from \"" + c.id + ".out\")");
+        }
     }
     v.powertrain = p;
 
