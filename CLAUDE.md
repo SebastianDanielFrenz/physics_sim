@@ -30,7 +30,7 @@ physics_sim/
       types.h                         ps::real = double; id_index_t/id_generation_t; SurfaceId (uint16_t) + kInvalidSurfaceId
       math/                           vec3.h, quat.h, mat3.h, pose.h (Pose/Motion/Wrench incl. Wrench::operator*(real)), simd.h (f64x4 skeleton)
       jobs/                           job_fn.h (JobFn), job_system.h (JobSystem, WaitGroup, parallel_for/parallel_batches), task_graph.h, debug_alloc.h
-      world/                          ids.h (BodyId/JointId/ForceElementId/ArticulationId), frame.h (Frame, ILinkStateSource, ArticulationLinkRef), force_element.h (IForceElement), snapshot.h (WorldSnapshot incl. ArticulationSnapshot/contacts, SnapshotTripleBuffer), world.h (World, WorldConfig)
+      world/                          ids.h (BodyId/JointId/ForceElementId/ArticulationId), frame.h (Frame, ILinkStateSource, ArticulationLinkRef), force_element.h (IForceElement), snapshot.h (WorldSnapshot incl. ArticulationSnapshot/contacts, SnapshotTripleBuffer), world.h (World, WorldConfig), ambient.h (AmbientSample{pressure_pa, temperature_k}, ISA sea-level default - PHYS-033 P4 I7b C9)
       backend/                        i_rigid_backend.h (IRigidBackend, BodyDesc/JointDesc, ShapeContactHit, ContactEvent, BodyIntegrationParams (PHYS-033 I1), create_jolt_backend()); shape_desc.h (ShapeDesc/BoxShape/SphereShape/CapsuleShape/MeshShape/HeightfieldShape - split out of i_rigid_backend.h so articulation_desc.h can use ShapeDesc without pulling in the backend's JointType)
       articulation/                   articulation_desc.h (ArticulationDesc incl. contact_strategy, RootDesc, LinkDesc incl. contact, JointType, JointLimits, VelocityActuator, LoopClosureDesc/LoopClosureType, ContactStrategy, ContactMaterial, LinkContactDesc) - descriptors only, no algorithm code
       terrain/                        terrain_source.h (ITerrainSource, TileKey, TileSample), terrain_config.h (TerrainConfig - pool sizing only, NOT grid resolution, see "Terrain tile system" below), procedural_terrain.h (load_procedural_terrain_source() factory)
@@ -1306,6 +1306,12 @@ see "World tick pipeline" above for exactly when these are registered/
 recorded.
 
 ## Adapter seams (`ps/world/snapshot.h`, `World::set_control`/`get_control`, PLAN.md P2)
+
+`World::set_ambient(AmbientSample)`/`ambient()` (PHYS-033 P4 I7b C9): sim thread between steps,
+applied at the next tick; plumbed via `VehicleTickEnv::ambient` -> `ComponentSubstepCtx::ambient` ->
+engine `Sensors::ambient` (`Powertrain::last_engine_sensors_ambient()` is the white-box hook). The graph
+engine ignores it (owner ruling Q10), `WorldConfig::air_density` (aero) is NOT derived from it, and it is
+never hashed; `tests/unit/test_ambient.cpp` guards both.
 
 `World::set_control(name, value)`/`get_control(name)`: a `std::string`-keyed
 `real` map (`control_channels_`) - global, not per-vehicle (PLAN.md P3/M1's
