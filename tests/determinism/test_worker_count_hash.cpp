@@ -777,6 +777,87 @@ TEST_CASE("Tractor I4 scenario's control events produce the expected live powert
     }
 }
 
+// data/scenarios/vehicle_fuel_tank.json (PHYS-033 P4 I7a C7): a car in
+// Neutral at WOT with tests/support/fixtures/vehicle_fuel_tank_car.json's
+// deliberately tiny 0.005 kg initial tank - the tank runs dry and the engine
+// stalls well within the scenario's 10 s duration. Pins the literal hash
+// recorded when the scenario/fixture were authored (ps_run at 1/2/4/10
+// workers all agreed before this test existed).
+TEST_CASE("State hash for the fuel tank starvation scenario is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][vehicle][drivetrain][fuel][heavy][world]") {
+    constexpr std::uint64_t kRecorded = 0xd2d102b2a18005efULL;
+    const std::uint64_t reference = run_scenario_file("vehicle_fuel_tank.json", 1);
+    INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
+    REQUIRE(reference == kRecorded);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("vehicle_fuel_tank.json", workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+// F12 companion (mirrors the tractor I4 "live effect" companion above): the
+// hash-equality case above proves reproducibility, not that the tank
+// actually emptied and the engine actually stalled - a scenario that
+// silently ignored the fuel model would hash just as reproducibly. This
+// runs vehicle_fuel_tank.json once (1 worker) and reads World's live
+// fuel/engine state directly.
+TEST_CASE("Fuel tank starvation scenario's tank empties and the engine stalls as expected",
+          "[determinism][vehicle][drivetrain][fuel][world]") {
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_fuel_tank.json");
+    sc.world_config.job_workers = 1;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    const ps::VehicleId vehicle = built.vehicles_by_name.at("car");
+
+    const ps::real initial_tank_kg = world.fuel_tank_mass(vehicle);
+    REQUIRE(initial_tank_kg > 0.0);
+    REQUIRE(initial_tank_kg < 0.01); // the fixture's deliberately tiny 0.005 kg start
+
+    std::size_t next_control_event = 0;
+    int empty_tick = -1;
+    int stall_tick = -1;
+    ps::real prev_tank_kg = initial_tank_kg;
+    bool tank_ever_decreased = false;
+    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    for (int i = 0; i < ticks; ++i) {
+        while (next_control_event < sc.control_events.size() && sc.control_events[next_control_event].time_s <= world.sim_time()) {
+            const auto& ev = sc.control_events[next_control_event];
+            world.set_control(ev.channel, ev.value);
+            ++next_control_event;
+        }
+        world.step();
+
+        const ps::real tank_kg = world.fuel_tank_mass(vehicle);
+        if (tank_kg < prev_tank_kg) tank_ever_decreased = true;
+        prev_tank_kg = tank_kg;
+        if (empty_tick < 0 && tank_kg == 0.0) empty_tick = i;
+        if (stall_tick < 0 && world.powertrain_state(vehicle).engine_state == drivetrain::EngineState::Stalled) {
+            stall_tick = i;
+        }
+    }
+
+    CHECK(tank_ever_decreased);
+    REQUIRE(empty_tick >= 0);
+    REQUIRE(stall_tick >= 0);
+    CHECK(empty_tick < stall_tick); // the tank must run dry before the engine stalls, not the other way round
+    const ps::real empty_time_s = static_cast<ps::real>(empty_tick) / sc.world_config.tick_rate_hz;
+    const ps::real stall_time_s = static_cast<ps::real>(stall_tick) / sc.world_config.tick_rate_hz;
+    INFO("empty_tick=" << empty_tick << " (" << empty_time_s << " s) stall_tick=" << stall_tick << " (" << stall_time_s
+                        << " s)");
+    // Measured (2026-09-27): tank empties ~2.04 s in, engine stalls ~5.84 s
+    // in - both comfortably inside the scenario's 10 s duration. Bounds set
+    // with margin around the measured values, not tight-fitted.
+    CHECK(empty_time_s < 4.0);
+    CHECK(stall_time_s < 8.0);
+    CHECK(world.fuel_tank_mass(vehicle) == 0.0); // stays empty (no refuel event in this scenario)
+
+    const drivetrain::PowertrainEnergy& e = world.powertrain_energy(vehicle);
+    // Closed-form mass balance: everything the tank lost was booked as burnt
+    // fuel (no external refuel in this scenario, so fuel_external_added == 0).
+    CHECK(std::abs((initial_tank_kg - world.fuel_tank_mass(vehicle)) - e.fuel_mass) <= 1e-9);
+}
+
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {
     constexpr std::size_t kBodies = 8;
     constexpr int kTicks = 10;

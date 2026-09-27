@@ -1,0 +1,42 @@
+{
+  "format": "physics_sim.engine/1",
+  "name": "toyota_a25a_fks",
+  "kind": "torque_map",
+  "source": "PHYS-033 P4 I7a C7. 2018 Toyota 2.5L A25A-FKS 'Dynamic Force' Atkinson-cycle I4 (2018 Toyota Camry LE), EPA NVFEL Fuel Analysis Report 26781 / Test Data Package (Ann Arbor, MI: US EPA, National Center for Advanced Technology, Version 2020-07, 2020), xlsx '4- 2018 Toyota 2.5L A25A-FKS Engine Tier 3 Fuel - Test Data.xlsx'. Cross-referenced against SAE 2019-01-0249 (Kargul et al., 'Benchmarking a 2018 Toyota Camry 2.5-Liter Atkinson Cycle Engine with Cooled-EGR', Table 1: rated power 151 kW @ 6600 rpm, rated torque 249 N*m @ 4800 rpm, geometric CR 13:1). MEASURED wot_torque_nm_vs_rpm: 13 literal points from the 'High Load Final' sheet's Accelerator Pedal == 100.00 rows (chosen over 'High Load Initial' because Initial's Fuel Meter Flow is blank for pedal>50%); (rpm,Nm) rounded to (1dp,2dp) with the xlsx Excel row cited: (1003.1,158.80)[row7] (1153.2,176.65)[row11] (1326.2,172.94)[row13] (1498.7,174.55)[row16] (1728.6,196.62)[row20] (2017.1,216.32)[row23] (2534.9,225.13)[row26] (2995.6,217.81)[row29] (3571.2,228.40)[row32] (4032.2,228.35)[row34] (4493.1,232.04)[row37] (5414.5,229.40)[row42] (5761.0,226.24)[row44]. KNOWN DATA ANOMALY (not corrected, not used): at rpm~1326/1498 the same sheet's pedal==70 rows record HIGHER torque than the pedal==80/100 rows at essentially the same rpm (e.g. 1498 rpm: pedal70=189.62 vs pedal100=174.55 N*m); verified not a column-mapping error; root cause not determined (plausibly a drive-by-wire torque-request non-monotonicity at that speed/mode-transition window); the WOT curve above uses ONLY the literal pedal==100.00 rows, so this anomaly does not enter it. The curve is NOT extended with any published (non-test-cell) point above the highest measured 5761 rpm - Curve1D's own clamped-edge extrapolation covers 5761-6600 rpm (limiter.rpm, see below), holding the last measured value. MEASURED motoring_torque_nm_vs_rpm: 10 literal points from the 'Steady State' sheet's Accelerator Pedal == 0 AND Torque < 0 rows (closed-throttle, confirmed zero-fuel via Injector Fuel Flow == 0 at every one of these rows; Fuel Meter Flow shows only sensor noise, -0.002..-0.005 g/s, disregarded): (1326.0,-22.90)[row42] (1498.0,-23.60)[row56] (1728.0,-23.30)[row70] (2017.0,-24.30)[row83] (2535.0,-25.90)[row96] (2996.0,-28.40)[row111] (3571.0,-30.60)[row124] (4032.0,-33.90)[row137] (4493.0,-37.40)[row145] (4954.0,-42.30)[row153]. DERIVED x[0]=0: format requires the curve's first knot at rpm 0; linear extrapolation of the two lowest measured points (1326,-22.90) and (1498,-23.60): slope = (-23.60 - -22.90)/(1498-1326) = -0.0040697674418604815 N*m/rpm; y(0) = -22.90 - slope*1326 = -17.5 N*m (rounded to 2dp). limiter.rpm = 6600, CITED directly from SAE 2019-01-0249 Table 1's rated-power engine speed (151 kW @ 6600 rpm) - a measured/published engine-speed fact, not an extrapolated torque value; the engine's own torque clamp (components.cpp) zeroes output above this speed regardless of curve extent, so citing the real rated-power rpm here is honest even though the WOT curve itself stops at the last measured knot (5761 rpm). ASSUMED (no citable value found in the reviewed report/paper/xlsx 'Test Parameter List' sheet; copied from data/engines/i4_2l_na.json, a plausible-class placeholder, and labeled here as an assumption per PHYS-033 P4 I7a C7 rules): inertia_kgm2, breakaway_torque_nm, idle_rpm, stall_rpm, fire_rpm, start_complete_rpm, dfco_enable_rpm, dfco_reenable_rpm, idle_control, starter, crank_axis_local, initial_state.",
+  "wot_torque_nm_vs_rpm": {
+    "x": [1003.1, 1153.2, 1326.2, 1498.7, 1728.6, 2017.1, 2534.9, 2995.6, 3571.2, 4032.2, 4493.1, 5414.5, 5761.0],
+    "y": [158.80, 176.65, 172.94, 174.55, 196.62, 216.32, 225.13, 217.81, 228.40, 228.35, 232.04, 229.40, 226.24]
+  },
+  "motoring_torque_nm_vs_rpm": {
+    "x": [0, 1326.0, 1498.0, 1728.0, 2017.0, 2535.0, 2996.0, 3571.0, 4032.0, 4493.0, 4954.0],
+    "y": [-17.5, -22.90, -23.60, -23.30, -24.30, -25.90, -28.40, -30.60, -33.90, -37.40, -42.30]
+  },
+  "inertia_kgm2": 0.16,
+  "breakaway_torque_nm": 45.0,
+  "idle_rpm": 800, "stall_rpm": 400, "fire_rpm": 250, "start_complete_rpm": 550,
+  "dfco_enable_rpm": 1300, "dfco_reenable_rpm": 1000,
+  "idle_control": { "kp_per_rpm": 0.0018, "ki_per_rpm_s": 0.009, "max_throttle": 0.3 },
+  "limiter": { "type": "fuel_cut", "rpm": 6600, "hysteresis_rpm": 150 },
+  "starter": { "stall_torque_nm": 140.0, "free_speed_rpm": 400.0, "interlock": "clutch_or_neutral" },
+  "crank_axis_local": [0, 1, 0],
+  "initial_state": "running",
+  "fuel": "../fuels/tier3_e10_cert.json",
+  "ignition": "spark",
+  "fuel_map": {
+    "rpm": [1326.0, 1498.0, 1728.0, 2017.0, 2535.0, 2996.0, 3571.0, 4032.0, 4493.0, 4954.0],
+    "load": [0.0, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "fuel_flow_g_s": [
+      [0.0, 0.0727, 0.114,  0.1829, 0.3205, 0.4469, 0.59,   0.7263, 0.8501, 1.0029, 1.1558, 1.4596, 2.4644],
+      [0.0, 0.0995, 0.143,  0.2154, 0.3603, 0.511,  0.6622, 0.8124, 0.9748, 1.1383, 1.3365, 1.6162, 3.2878],
+      [0.0, 0.0775, 0.1415, 0.2482, 0.4592, 0.6493, 0.8444, 1.0415, 1.2447, 1.4536, 1.737,  2.248,  3.7983],
+      [0.0, 0.1159, 0.1903, 0.3143, 0.5626, 0.8135, 1.0702, 1.3292, 1.5815, 1.862,  2.3529, 2.8546, 3.812],
+      [0.0, 0.0732, 0.1851, 0.3715, 0.7405, 1.0722, 1.4324, 1.7634, 2.0958, 2.4398, 2.9537, 3.6383, 4.466],
+      [0.0, 0.1081, 0.2303, 0.4338, 0.8408, 1.2434, 1.6343, 2.018,  2.4143, 2.8096, 3.2919, 3.966,  4.8313],
+      [0.0, 0.2256, 0.3709, 0.6131, 1.0974, 1.592,  2.0825, 2.5768, 3.0572, 3.5588, 4.1587, 4.8987, 6.0946],
+      [0.0, 0.3167, 0.476,  0.7415, 1.2724, 1.8161, 2.4293, 3.0027, 3.5636, 4.2243, 4.9149, 5.8239, 7.2859],
+      [0.0, 0.0976, 0.3092, 0.6619, 1.3673, 2.0698, 2.7602, 3.4411, 4.1266, 4.8684, 5.6907, 6.7814, 8.1561],
+      [0.0, 0.2139, 0.4324, 0.7964, 1.5244, 2.2519, 3.0323, 3.8086, 4.6043, 5.4899, 6.557,  7.8323, 9.1035]
+    ],
+    "source": "PHYS-033 P4 I7a C7, out/c7/build_map2.py in the physics_sim worktree (reproducible, not committed - stdlib xlsx parse of the same xlsx as wot_torque_nm_vs_rpm/motoring_torque_nm_vs_rpm above). rpm axis = exactly the 10 measured motoring-curve rpm values above (zero interpolation error for m(rpm) at every row). load axis = theta_c, dense near 0 per PHYS-033 P4 I7a C7's instruction. DERIVED for every (rpm,load) node with load>0: target torque T = m(rpm) + load*(w(rpm)-m(rpm)) using this file's own motoring/WOT Curve1D knots (w(4954) has no pedal=100 anchor at that speed line - obtained via Curve1D interpolation of this file's own wot_torque_nm_vs_rpm knots at 4493/5414 rpm, i.e. no data outside this file); fuel flow at that T is then read off a piecewise-linear fit through EVERY measured fired point (Accelerator Pedal > 0, Fuel Meter Flow present) from the Steady State and High Load Final sheets within +-20 rpm of the node's own rpm, sorted by torque; below the lowest such fired point (which occurs for several nodes' load in {0.02,0.05,0.1}, since idle/near-idle theta_c targets a T below any pedal>0 point on record), the flow is a LINEAR (Willans-line) EXTRAPOLATION of the two lowest fired points down to the target T (never clamped to zero for load>0, per PHYS-033 P4 I7a C7's instruction); likewise linear extrapolation of the two highest fired points above the highest recorded T. load==0 column forced to exactly 0.0 (format requirement, docs/data_formats/engine.md). The load-time >100% thermal-efficiency check (docs/data_formats/engine.md's sampled rule: every map node, every cell midpoint/row-mid/col-mid, and every WOT/motoring curve breakpoint crossed with every load node) was run by build_map2.py against this exact table and this file's LHV (41954062 J/kg, data/fuels/tier3_e10_cert.json) and PASSED with margin - maximum observed indicated efficiency 61.92% at rpm=4493, load=0.02, well under 100%; no node required adjustment."
+  }
+}
