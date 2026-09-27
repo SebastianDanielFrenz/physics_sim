@@ -135,6 +135,21 @@ RawInput PsInputMap::gather_raw_input() const {
     raw.auto_blip_toggle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_DPAD_RIGHT)
         || input->is_action_pressed("ps_toggle_auto_blip");
 
+    // Tractor demo (2026-09-28): keyboard-only (demo/project.godot's
+    // ps_toggle_awd/ps_toggle_diff_lock/ps_toggle_pto/ps_toggle_pto_speed/
+    // ps_toggle_park_lock/ps_hand_throttle_up/ps_hand_throttle_down
+    // actions, physical keys T/L/P/O/N/]/[) - every gamepad button already
+    // has a job (see the remap comment above); JOY_BUTTON_RIGHT_SHOULDER
+    // is the only one still free and is left for a future assignment
+    // rather than overloading it here.
+    raw.toggle_awd_held = input->is_action_pressed("ps_toggle_awd");
+    raw.toggle_diff_lock_held = input->is_action_pressed("ps_toggle_diff_lock");
+    raw.toggle_pto_held = input->is_action_pressed("ps_toggle_pto");
+    raw.toggle_pto_speed_held = input->is_action_pressed("ps_toggle_pto_speed");
+    raw.toggle_park_lock_held = input->is_action_pressed("ps_toggle_park_lock");
+    raw.hand_throttle_up_held = input->is_action_pressed("ps_hand_throttle_up");
+    raw.hand_throttle_down_held = input->is_action_pressed("ps_hand_throttle_down");
+
     return raw;
 }
 
@@ -384,6 +399,12 @@ void PsInputMap::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_toggle_auto_shift"), &PsInputMap::get_toggle_auto_shift);
     ClassDB::bind_method(D_METHOD("get_toggle_auto_clutch"), &PsInputMap::get_toggle_auto_clutch);
     ClassDB::bind_method(D_METHOD("get_toggle_auto_blip"), &PsInputMap::get_toggle_auto_blip);
+    ClassDB::bind_method(D_METHOD("get_toggle_awd"), &PsInputMap::get_toggle_awd);
+    ClassDB::bind_method(D_METHOD("get_toggle_diff_lock"), &PsInputMap::get_toggle_diff_lock);
+    ClassDB::bind_method(D_METHOD("get_toggle_pto"), &PsInputMap::get_toggle_pto);
+    ClassDB::bind_method(D_METHOD("get_toggle_pto_speed"), &PsInputMap::get_toggle_pto_speed);
+    ClassDB::bind_method(D_METHOD("get_toggle_park_lock"), &PsInputMap::get_toggle_park_lock);
+    ClassDB::bind_method(D_METHOD("get_hand_throttle"), &PsInputMap::get_hand_throttle);
 
     ClassDB::bind_method(D_METHOD("set_steer_deadzone", "value"), &PsInputMap::set_steer_deadzone);
     ClassDB::bind_method(D_METHOD("get_steer_deadzone"), &PsInputMap::get_steer_deadzone);

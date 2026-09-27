@@ -41,14 +41,55 @@ extends Node3D
 
 const VEHICLE_NAME := "car"
 const CHASSIS_BODY_NAME := "car_chassis"
-# Mirrors data/scenarios/vehicle_step_steer.json's own "chassis" body specs
-# (already validated by every P3 vehicle acceptance test, out/
-# handover_p3.md) rather than inventing new numbers - sized for
-# car_sedan.json's own wheel geometry (wheelbase 2.70 m, track 1.56 m,
-# wheel attachment z = -0.343 relative to chassis origin).
-const CHASSIS_MASS := 1500.0
-const CHASSIS_HALF_EXTENTS := Vector3(2.0, 0.4, 0.15)
-const CHASSIS_Z_OFFSET := 0.6
+# Generic internal handles (above) - not vehicle-specific, left as-is
+# whichever vehicle is spawned.
+
+# Per-vehicle chassis body + art + spawn table (tractor demo, 2026-09-28):
+# keyed by the vehicle json's own basename (vehicle_relative_path.get_file().
+# get_basename()), resolved once in _ready() into the _chassis_*/model_
+# relative_path/spawn_id instance state below - NO physics logic here, just
+# plain data the adapter needs to build the chassis rigid body and load the
+# right art, exactly mirroring what World::create_vehicle/spawn_vehicle
+# already read from data/vehicles/<name>.json for the rest of the vehicle.
+# car_sedan's entry mirrors the pre-existing hardcoded consts exactly (byte
+# for byte) so the sedan's own behaviour is unchanged. tractor's chassis
+# mirrors data/scenarios/vehicle_tractor_i4.json's own "chassis" body
+# (mass 6000, half_extents [1.2, 0.35, 0.9], z 1.28) the same way car_sedan's
+# entry mirrors vehicle_step_steer.json's.
+const VEHICLE_TABLE := {
+	"car_sedan": {
+		"chassis_mass": 1500.0,
+		"chassis_half_extents": Vector3(2.0, 0.4, 0.15),
+		"chassis_z_offset": 0.6,
+		"model_relative_path": "data/models/car_sedan/car_sedan.glb",
+		"spawn_id": "spawn_straight_car",
+	},
+	"tractor": {
+		"chassis_mass": 6000.0,
+		"chassis_half_extents": Vector3(1.2, 0.35, 0.9),
+		"chassis_z_offset": 1.28,
+		"model_relative_path": "data/models/tractor/tractor.glb",
+		"spawn_id": "spawn_straight_tractor",
+	},
+}
+
+# Resolved once in _ready() from VEHICLE_TABLE (defaults below match
+# car_sedan so nothing looks uninitialized before _ready() runs); read by
+# both _ready() (chassis spawn) and _reset_vehicle() (R key / zone teleport)
+# since CHASSIS_Z_OFFSET used to be a plain const read from two places.
+var _chassis_mass: float = 1500.0
+var _chassis_half_extents: Vector3 = Vector3(2.0, 0.4, 0.15)
+var _chassis_z_offset: float = 0.6
+# Tractor demo (2026-09-28): only tractor.json's engine declares a governor
+# (core's CLAUDE.md "Drivetrain": TorqueMapEngineDesc::has_governor), so only
+# it declares the "hand_throttle" control channel (Powertrain::declare_
+# control_channels). set_control() on any other vehicle logs a per-call
+# "unknown channel, not pre-seeded" warning (core's adapter-seams contract) -
+# harmless once, but hand_throttle is sent EVERY frame (a continuous ramp,
+# not an edge-triggered toggle like the other tractor-only channels below),
+# so gate it on the resolved vehicle key or car_sedan would spam this warning
+# at up to 240 Hz. Resolved once in _ready() alongside the chassis fields.
+var _vehicle_has_hand_throttle: bool = false
 
 @export var vehicle_relative_path: String = "data/vehicles/car_sedan.json"
 @export var track_relative_dir: String = "data/tracks/test_ground"
@@ -90,6 +131,11 @@ var free_camera: Camera3D
 var chase_camera: Camera3D
 var using_chase_camera: bool = true
 var ground_grid: MeshInstance3D
+
+# Tractor demo (2026-09-28): true once --m1-spawn= is seen on the cmdline, so
+# the VEHICLE_TABLE resolution in _ready() does not clobber an explicit
+# owner-chosen spawn with the selected vehicle's own table default.
+var _spawn_id_explicit: bool = false
 
 # M1 visual pass bug fix: ground_grid used to be a fire-and-forget child with
 # an identity transform, fixed forever at Godot (0,0,0) - the speed_grid
@@ -306,11 +352,33 @@ func _ready() -> void:
 			# default - added for the M1 visual-pass bug report's "screenshot
 			# at the skidpad" requirement.
 			spawn_id = a.substr(len("--m1-spawn="))
+			_spawn_id_explicit = true
 		elif a.begins_with("--m1-vehicle="):
 			# Picks data/vehicles/<name>.json instead of the exported default -
-			# e.g. car_sedan (FWD reference), car_sedan_rwd (RWD reference).
+			# e.g. car_sedan (FWD reference), car_sedan_rwd (RWD reference),
+			# tractor (MFWD - see VEHICLE_TABLE above for its chassis/model/
+			# spawn resolution just below).
 			vehicle_relative_path = "data/vehicles/%s.json" % a.substr(len("--m1-vehicle="))
-	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path, " screenshot_view=", _screenshot_view, " spawn_id=", spawn_id, " vehicle=", vehicle_relative_path)
+
+	# Tractor demo (2026-09-28): resolve the chassis mass/half-extents/
+	# z-offset, art model and default spawn for whichever vehicle
+	# vehicle_relative_path now names, keyed by its own basename - e.g.
+	# "data/vehicles/tractor.json" -> "tractor". An unknown key (a
+	# --m1-vehicle= typo, or a vehicle with no VEHICLE_TABLE entry yet)
+	# falls back to car_sedan's entry rather than failing outright, so a
+	# typo produces a sedan-shaped chassis around whatever vehicle json
+	# was actually requested instead of a crash - spawn_vehicle's own
+	# error (checked below) is still what reports the real problem.
+	var vehicle_key := vehicle_relative_path.get_file().get_basename()
+	var vt: Dictionary = VEHICLE_TABLE.get(vehicle_key, VEHICLE_TABLE["car_sedan"])
+	_chassis_mass = vt["chassis_mass"]
+	_chassis_half_extents = vt["chassis_half_extents"]
+	_chassis_z_offset = vt["chassis_z_offset"]
+	model_relative_path = vt["model_relative_path"]
+	if not _spawn_id_explicit:
+		spawn_id = vt["spawn_id"]
+	_vehicle_has_hand_throttle = (vehicle_key == "tractor")
+	print("ps_godot main.gd: _ready start, autopilot=", _autopilot, " screenshot_path=", _screenshot_path, " screenshot_view=", _screenshot_view, " spawn_id=", spawn_id, " vehicle=", vehicle_relative_path, " vehicle_key=", vehicle_key)
 	_setup_lighting()
 
 	simulation = ClassDB.instantiate("PsSimulation")
@@ -333,8 +401,8 @@ func _ready() -> void:
 	var spawn_yaw_rad: float = spawn["yaw_rad"]
 	print("ps_godot main.gd: spawn '", spawn_id, "' at ", spawn_pos, " yaw_rad=", spawn_yaw_rad)
 
-	var chassis_pos := spawn_pos + Vector3(0, 0, CHASSIS_Z_OFFSET)
-	var chassis_ok: bool = simulation.create_body_dynamic(CHASSIS_BODY_NAME, chassis_pos, spawn_yaw_rad, CHASSIS_MASS, CHASSIS_HALF_EXTENTS)
+	var chassis_pos := spawn_pos + Vector3(0, 0, _chassis_z_offset)
+	var chassis_ok: bool = simulation.create_body_dynamic(CHASSIS_BODY_NAME, chassis_pos, spawn_yaw_rad, _chassis_mass, _chassis_half_extents)
 	print("ps_godot main.gd: create_body_dynamic returned: ", chassis_ok, " err=", simulation.get_last_error())
 
 	var vehicle_path := repo_root.path_join(vehicle_relative_path)
@@ -673,6 +741,32 @@ func _process(delta: float) -> void:
 				simulation.set_control("assist.auto_clutch", 1.0 - simulation.get_control("assist.auto_clutch"))
 			if input_map.get_toggle_auto_blip():
 				simulation.set_control("assist.auto_blip", 1.0 - simulation.get_control("assist.auto_blip"))
+			# Tractor demo (2026-09-28): drivetrain component-channel toggles
+			# (PHYS-033 P4 I4 C4/C9/C10/C11 - see core's CLAUDE.md
+			# "Drivetrain" section) plus the hand-throttle ramp (C12's
+			# governor). Harmless on car_sedan (a vehicle that never
+			# declared these channels never reads them back - "Adapter
+			# seams" in core's CLAUDE.md).
+			if input_map.get_toggle_awd():
+				simulation.set_control("awd", 1.0 - simulation.get_control("awd"))
+			if input_map.get_toggle_diff_lock():
+				simulation.set_control("diff_lock", 1.0 - simulation.get_control("diff_lock"))
+			if input_map.get_toggle_pto():
+				simulation.set_control("pto", 1.0 - simulation.get_control("pto"))
+			if input_map.get_toggle_pto_speed():
+				# pto_speed semantics (tractor.json/Pto component): >= 770
+				# selects 1000 rpm mode, else 540 - flip between the two
+				# literal mode values, not a plain 0/1 toggle.
+				simulation.set_control("pto_speed", 540.0 if simulation.get_control("pto_speed") >= 770.0 else 1000.0)
+			if input_map.get_toggle_park_lock():
+				simulation.set_control("park_lock", 1.0 - simulation.get_control("park_lock"))
+			# hand_throttle is a continuous per-frame ramp (unlike the
+			# edge-triggered toggles above), so unconditionally sending it
+			# to a vehicle that never declared the channel (car_sedan) would
+			# spam the "unknown channel" warning every single frame instead
+			# of just once - see _vehicle_has_hand_throttle's own comment.
+			if _vehicle_has_hand_throttle:
+				simulation.set_control("hand_throttle", input_map.get_hand_throttle())
 
 	if _autopilot:
 		_run_autopilot(delta)
@@ -700,7 +794,7 @@ func _process(delta: float) -> void:
 
 func _reset_vehicle(target_spawn_id: String = spawn_id) -> void:
 	var spawn := _read_spawn(_repo_root().path_join(track_relative_dir), target_spawn_id)
-	var pos: Vector3 = spawn["position"] + Vector3(0, 0, CHASSIS_Z_OFFSET)
+	var pos: Vector3 = spawn["position"] + Vector3(0, 0, _chassis_z_offset)
 	simulation.reset_vehicle(VEHICLE_NAME, pos, spawn["yaw_rad"])
 
 # M1 visual pass: 1/2/3 teleport straight to the straight/skidpad/ramps

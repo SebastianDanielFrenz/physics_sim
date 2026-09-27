@@ -137,6 +137,30 @@ func _process(_delta: float) -> void:
 				lines.append("haptics  strong %.2f %s  weak %.2f %s" % [
 					hd.get("strong_out", 0.0), _bar(hd.get("strong_out", 0.0)),
 					hd.get("weak_out", 0.0), _bar(hd.get("weak_out", 0.0))])
+
+		# Tractor demo (2026-09-28): governor/awd/diff-lock/park-lock/pto
+		# readouts - gated on presence (a component-less vehicle like
+		# car_sedan reads every one of these as exactly 0/false, so this
+		# whole block is skipped for it rather than printing a row of
+		# meaningless zeros).
+		var pt: Dictionary = _simulation.get_vehicle_powertrain(vehicle_name)
+		# governor_setpoint_rpm is only ever nonzero for a vehicle whose
+		# engine has a governor (currently tractor.json only) - gate the
+		# whole tractor-specific block on it so car_sedan's HUD is
+		# unaffected rather than showing a row of meaningless zeros.
+		if pt.get("governor_setpoint_rpm", 0.0) > 0.0:
+			lines.append("")
+			lines.append("governor setpoint %.0f rpm   hand throttle %.2f %s" % [
+				pt.get("governor_setpoint_rpm", 0.0), pt.get("hand_throttle", 0.0), _bar(pt.get("hand_throttle", 0.0))])
+			var diff_locked := false
+			var diffs: Array = pt.get("diffs", [])
+			for dd in diffs:
+				if dd.get("locked", false):
+					diff_locked = true
+			lines.append("awd %.2f   diff_lock %s   park_lock %s   pto %.2f mode %d rpm %.0f" % [
+				pt.get("awd_engagement", 0.0), "on" if diff_locked else "off",
+				"on" if pt.get("park_lock_engaged", false) else "off",
+				pt.get("pto_engagement", 0.0), int(pt.get("pto_mode", 0.0)), pt.get("pto_rpm", 0.0)])
 	else:
 		lines.append("(no vehicle spawned)")
 
@@ -147,4 +171,5 @@ func _process(_delta: float) -> void:
 	lines.append("F5/D-pad Left auto-shift   F6/D-pad Down auto-clutch   F7/D-pad Right auto-blip")
 	lines.append("V or Y(joy) camera(free/chase)  G or R3(joy) debug draw  R or Back(joy) reset  H rumble on/off")
 	lines.append("1 straight  2 skidpad  3 ramps (teleport)")
+	lines.append("tractor: T awd  L diff_lock  P pto  O pto_speed  N park_lock  ]/[ hand_throttle up/down (keyboard only, no gamepad free)")
 	_label.text = "\n".join(lines)

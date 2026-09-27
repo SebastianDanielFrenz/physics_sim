@@ -98,6 +98,28 @@ struct RawInput {
     bool auto_shift_toggle_held = false;  // tri-state toggle request, see ControlChannels::toggle_auto_shift
     bool auto_clutch_toggle_held = false; // ditto, assist.auto_clutch
     bool auto_blip_toggle_held = false;   // ditto, assist.auto_blip
+
+    // Tractor demo (2026-09-28, PHYS-033 P4 I4 C4/C9/C10/C11): tri-state
+    // toggle requests for the tractor's drivetrain component channels
+    // ("awd", "diff_lock", "pto", "park_lock" - see core's CLAUDE.md
+    // "Drivetrain" section), same rising-edge convention as the assist
+    // toggles above. Harmless on a vehicle with no such channel (main.gd's
+    // World::set_control("awd", ...) etc. on a vehicle that never declared
+    // that channel is simply never read back by anything, PLAN.md's control
+    // channel map is global/string-keyed - see "Adapter seams").
+    bool toggle_awd_held = false;
+    bool toggle_diff_lock_held = false;
+    bool toggle_pto_held = false;
+    bool toggle_pto_speed_held = false; // flips the pto_speed channel between 540/1000 (main.gd owns the actual values, same pattern as the other tri-state toggles)
+    bool toggle_park_lock_held = false;
+
+    // Tractor demo: hand_throttle is a STATEFUL RAMP (0..1), not a tri-state
+    // toggle - mirrors clutch_button_level_'s ramp below. Held up/down keys
+    // increase/decrease it at kHandThrottleRampPerSecond; releasing both
+    // holds the last value (no auto-return-to-zero, matching a real hand
+    // throttle lever).
+    bool hand_throttle_up_held = false;
+    bool hand_throttle_down_held = false;
 };
 
 // Shaped output: exactly the named control channels PLAN.md P2/P4 I3 list
@@ -136,6 +158,22 @@ struct ControlChannels {
     bool toggle_auto_shift = false;
     bool toggle_auto_clutch = false;
     bool toggle_auto_blip = false;
+
+    // Tractor demo (2026-09-28): same tri-state "no change / toggle"
+    // contract as the assist toggles above - main.gd reads the current
+    // World::get_control(name) value and flips it (toggle_pto_speed_held's
+    // 540/1000 flip logic also lives in main.gd, since InputMapper below
+    // never sees the sim's own channel values).
+    bool toggle_awd = false;
+    bool toggle_diff_lock = false;
+    bool toggle_pto = false;
+    bool toggle_pto_speed = false;
+    bool toggle_park_lock = false;
+
+    // Tractor demo: stateful ramp, 0..1 - forwarded straight to
+    // World::set_control("hand_throttle", ...) every frame (not edge-
+    // triggered, unlike the toggles above).
+    float hand_throttle = 0.0f;
 };
 
 // Speed-sensitive steering assist for sticks/keyboards (owner test drive,
@@ -209,6 +247,14 @@ private:
     bool prev_auto_clutch_toggle_ = false;
     bool prev_auto_blip_toggle_ = false;
 
+    // Tractor demo (2026-09-28) tri-state toggle edge-detection state -
+    // same pattern as the assist toggles above.
+    bool prev_toggle_awd_ = false;
+    bool prev_toggle_diff_lock_ = false;
+    bool prev_toggle_pto_ = false;
+    bool prev_toggle_pto_speed_ = false;
+    bool prev_toggle_park_lock_ = false;
+
     std::uint32_t shift_up_count_ = 0;
     std::uint32_t shift_down_count_ = 0;
     float ignition_ = 1.0f;
@@ -216,6 +262,11 @@ private:
     // Digital clutch-button smoothing state (PLAN.md 12.2), independent of
     // the analog clutch_trigger path - see RawInput::clutch_button_held.
     float clutch_button_level_ = 0.0f;
+
+    // Tractor demo: hand-throttle ramp state (0..1), see
+    // RawInput::hand_throttle_up_held/down_held and
+    // ControlChannels::hand_throttle.
+    float hand_throttle_ = 0.0f;
 };
 
 } // namespace ps_godot

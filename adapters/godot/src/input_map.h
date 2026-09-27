@@ -81,6 +81,16 @@ public:
     [[nodiscard]] bool get_toggle_auto_clutch() const { return channels_.toggle_auto_clutch; }
     [[nodiscard]] bool get_toggle_auto_blip() const { return channels_.toggle_auto_blip; }
 
+    // Tractor demo (2026-09-28): tri-state toggle requests for the
+    // tractor's drivetrain channels (see input_map_core.h's RawInput/
+    // ControlChannels comments) and the hand-throttle ramp value.
+    [[nodiscard]] bool get_toggle_awd() const { return channels_.toggle_awd; }
+    [[nodiscard]] bool get_toggle_diff_lock() const { return channels_.toggle_diff_lock; }
+    [[nodiscard]] bool get_toggle_pto() const { return channels_.toggle_pto; }
+    [[nodiscard]] bool get_toggle_pto_speed() const { return channels_.toggle_pto_speed; }
+    [[nodiscard]] bool get_toggle_park_lock() const { return channels_.toggle_park_lock; }
+    [[nodiscard]] float get_hand_throttle() const { return channels_.hand_throttle; }
+
     // Remap config (deadzone/curve/invert), PLAN.md P2 "configurable".
     void set_steer_deadzone(float v);
     [[nodiscard]] float get_steer_deadzone() const { return mapper_.config().steer.deadzone; }
