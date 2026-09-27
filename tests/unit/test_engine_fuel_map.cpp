@@ -1267,6 +1267,37 @@ TEST_CASE("F5: loader rejects every malformed engine/fuel/fuel_map field with it
         }
         CHECK(found);
     }
+    // B1 review fix: "fuel" (singular) must be TRUE SHORTHAND for a
+    // one-entry "fuels" list, not merely a value fuel_map's LHV happens to
+    // read and otherwise a no-op. An engine with "fuel" and NO "fuel_map"
+    // must resolve TorqueMapEngineDesc::fuels to exactly {the loaded
+    // "fuel"}, giving it the crude no-map fuel model exactly as if it had
+    // been written with "fuels": ["<same path>"] instead (core/src/io/
+    // vehicle_io.cpp: `e.fuels = {e.fuel};` runs unconditionally whenever
+    // "fuel" is present).
+    SECTION("fuel singular with no fuel_map resolves to a one-entry fuels list (B1)") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel_map");
+        // "fuel" stays fuel_json_path() (gasoline.json) from base_engine_component().
+        const f5::TempJsonFile f(f5::vehicle_with_engine(e));
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        bool found = false;
+        for (const auto& c : d.powertrain.components) {
+            if (const auto* eng = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+                found = true;
+                CHECK_FALSE(eng->has_fuel_map);
+                REQUIRE(eng->fuels.size() == 1);
+                CHECK(has_fuel_model(*eng));
+                // The shorthand's one entry must be the SAME fuel "fuel"
+                // itself names (gasoline.json), not a default-constructed
+                // FuelDesc.
+                CHECK(eng->fuels[0].name == eng->fuel.name);
+                CHECK(eng->fuels[0].lhv_j_kg == eng->fuel.lhv_j_kg);
+                CHECK(eng->fuels[0].lhv_j_kg > 0.0);
+            }
+        }
+        CHECK(found);
+    }
     SECTION("ignition required whenever a fuel model exists (fuel_map present, ignition absent)") {
         nlohmann::json e = base_engine_component();
         e.erase("ignition");
