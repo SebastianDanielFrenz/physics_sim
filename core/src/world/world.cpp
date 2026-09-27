@@ -392,10 +392,10 @@ void World::step() {
             }
         }
 
-        // PHYS-033 P4 I7a C5 (plan section 5): fuel flow/energy_in/heat,
-        // right after this vehicle's diff values, matching create_vehicle's
-        // registration order. Empty for every vehicle with no fuel map
-        // (every vehicle shipped before this commit) - reuses ps_snap/e above.
+        // PHYS-033 P4 I7a C5, broadened C5d: fuel flow/energy_in/heat, right
+        // after this vehicle's diff values, matching create_vehicle's
+        // registration order. Empty for a vehicle with no fuel model at all
+        // (map or crude) - reuses ps_snap/e above.
         if (vi < fuel_telemetry_channels_.size() && !fuel_telemetry_channels_[vi].empty()) {
             row.push_back(ps_snap.fuel_flow_g_s);
             row.push_back(e.fuel_energy_in);

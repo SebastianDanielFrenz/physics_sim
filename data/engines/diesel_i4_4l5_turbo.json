@@ -15,5 +15,7 @@
   "governor": { "type": "all_speed", "high_idle_rpm": 2400, "rated_rpm": 2200, "droop": 0.0909, "channel": "hand_throttle" },
   "starter": { "stall_torque_nm": 450.0, "free_speed_rpm": 350.0, "interlock": "clutch_or_neutral" },
   "crank_axis_local": [-1, 0, 0],
-  "initial_state": "running"
+  "initial_state": "running",
+  "fuels": ["../fuels/diesel.json"],
+  "ignition": "compression"
 }

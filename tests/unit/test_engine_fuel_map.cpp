@@ -200,6 +200,20 @@ EngineTorqueMap::Desc to_engine_desc_for_test(const TorqueMapEngineDesc& e) {
     d.has_fuel_map = e.has_fuel_map;
     d.fuel = e.fuel;
     d.fuel_map = e.fuel_map;
+    // PHYS-033 P4 I7a C5d: mirrors to_engine_desc()'s own has_fuel_model/eta_i
+    // resolution - a fuel map wins outright (d.fuel/d.fuel_map above already
+    // cover it); otherwise the first entry of a nonempty "fuels" list is the
+    // crude estimate's fuel, with eta_i defaulting by ignition kind (Heywood
+    // 1988: SI ~0.325, CI ~0.48) unless indicated_efficiency overrides it.
+    d.has_fuel_model = has_fuel_model(e);
+    if (!e.has_fuel_map && !e.fuels.empty()) {
+        d.fuel = e.fuels.front();
+        constexpr real kEtaSparkDefault = real(0.325);
+        constexpr real kEtaCompressionDefault = real(0.48);
+        d.eta_i = e.indicated_efficiency > real(0.0)
+                      ? e.indicated_efficiency
+                      : (e.ignition == EngineIgnition::Compression ? kEtaCompressionDefault : kEtaSparkDefault);
+    }
     return d;
 }
 
@@ -774,68 +788,94 @@ TEST_CASE("Fix 1: engine_heat never goes negative through a DFCO cut and recover
 }
 
 // ---------------------------------------------------------------------------
-// New (owner ruling replacing fix 2): car_sedan's own engine, loaded WITHOUT
-// adding a fuel map (car_sedan_engine_public_desc() alone, via
-// to_engine_desc_for_test() - car_sedan.json ships with no fuel_map field at
-// all). indicated_work must still be computed and booked (owner ruling: an
-// engine without a map still models combustion mechanically), while the
-// fuel_mass/fuel_energy_in/engine_heat fields - which need an actual mass/
-// LHV to convert against - stay exactly 0 until a future no-map fuel model
-// lands. indicated_work is cross-checked against an INDEPENDENT
-// recomputation from PUBLIC data alone (pre.theta_c/pre.rpm plus the
-// public Desc's own wot/motoring Curve1D's), never engine-internal state.
+// New (I7a C5d supersedes the owner ruling this test originally covered):
+// car_sedan's own engine, loaded via car_sedan_engine_public_desc() alone
+// (via to_engine_desc_for_test()) - car_sedan.json/i4_2l_na.json still ship
+// with no "fuel_map" field, but i4_2l_na.json now carries a "fuels" list
+// (I7a C5d), so has_fuel_model is true even though has_fuel_map stays false:
+// the crude constant-efficiency estimate is active. indicated_work is booked
+// unconditionally as before (owner ruling: an engine without a MAP still
+// models combustion mechanically); fuel_mass/fuel_energy_in/engine_heat are
+// now gated on has_fuel_model (broadened from has_fuel_map) and are
+// genuinely nonzero here. Every booked quantity is cross-checked against an
+// INDEPENDENT recomputation from PUBLIC data alone (pre.theta_c/pre.rpm,
+// omega_old/omega_new, plus the public Desc's own wot/motoring Curve1D's and
+// fuel/eta_i fields), never engine-internal state (tau_comb_/mdot_kg_s_).
 // ---------------------------------------------------------------------------
-TEST_CASE("New: car_sedan without a fuel map still books indicated_work, fuel fields stay 0", "[unit][drivetrain][fuel]") {
+TEST_CASE("New: car_sedan's crude no-map fuel model (I7a C5d) books fuel_mass/fuel_energy_in/engine_heat via has_fuel_model",
+          "[unit][drivetrain][fuel]") {
     const EngineTorqueMap::Desc desc = to_engine_desc_for_test(car_sedan_engine_public_desc());
-    REQUIRE_FALSE(desc.has_fuel_map); // precondition: car_sedan really ships with no fuel map
+    REQUIRE_FALSE(desc.has_fuel_map); // precondition: car_sedan/i4_2l_na.json still ship with no fuel_map
+    REQUIRE(desc.has_fuel_model);     // precondition: i4_2l_na.json's "fuels" list (I7a C5d) makes the crude estimate active
     EngineTorqueMap engine(desc);
     engine.reset(EngineState::Running);
     const real J = engine.desc().inertia_kgm2;
 
     real omega = rpm_to_omega(900.0);
     PowertrainEnergy ledger;
-    real recomputed_sum = 0.0;
+    real recomputed_indicated_work = 0.0;
+    real recomputed_fuel_mass = 0.0;
+    real recomputed_fuel_energy_in = 0.0;
     constexpr int kSubsteps = 2000; // ~2.08 s at 960 Hz: WOT launch then lift
     for (int i = 0; i < kSubsteps; ++i) {
         const real throttle_cmd = (i < kSubsteps / 2) ? 1.0 : 0.0;
+        const real omega_old = omega;
         const PreSolveResult pre = engine.pre_solve(sensors_at_omega(omega), throttle_of(throttle_cmd), no_ignition_cut(), kSubstepH);
         const real omega_new = omega + kSubstepH * pre.tau0 / (J + kSubstepH * pre.d);
         const PostSolveResult post = engine.post_solve(omega_new, kSubstepH);
 
-        // Powertrain::post_solve_components' exact booking rule:
+        // Powertrain::post_solve_components' exact booking rule (I7a C5d):
         // indicated_work is unconditional (fix 1/owner ruling); fuel_mass/
-        // fuel_energy_in/engine_heat/fuel_efficiency_violations stay gated
-        // on has_fuel_map (always false here) - engine_heat must NOT be
-        // booked from indicated_work_delta alone or it would wrongly go
-        // negative every substep (caught by this test itself before this
-        // gate was added: engine_heat read -72354.67 instead of 0).
+        // fuel_energy_in/engine_heat/fuel_efficiency_violations are gated on
+        // has_fuel_model (broadened from has_fuel_map) - true here via
+        // car_sedan's real "fuels" list.
         ledger.indicated_work += post.indicated_work_delta;
-        if (desc.has_fuel_map) {
+        if (desc.has_fuel_model) {
             ledger.fuel_mass += post.fuel_mass_delta;
             ledger.fuel_energy_in += post.fuel_energy_in_delta;
-            ledger.engine_heat += post.fuel_energy_in_delta - post.indicated_work_delta;
+            const real heat_delta = post.fuel_energy_in_delta - post.indicated_work_delta;
+            ledger.engine_heat += heat_delta;
+            if (heat_delta < 0.0) ++ledger.fuel_efficiency_violations;
         }
 
         // Public-data-only re-derivation: tau_comb = theta_c*(wot(rpm) -
-        // motoring(rpm)), and indicated_work_delta = h*omega_new*tau_comb -
-        // fix 1's own formula, recomputed here from PreSolveResult::theta_c/
-        // rpm plus the public Desc's curves alone (no access to the
-        // engine's private tau_comb_ member).
+        // motoring(rpm)), indicated_work_delta = h*omega_new*tau_comb (fix
+        // 1's own formula) - recomputed from PreSolveResult::theta_c/rpm plus
+        // the public Desc's curves alone (no access to the engine's private
+        // tau_comb_ member). The crude fuel estimate (docs/data_formats/
+        // engine.md's "fuels"/"ignition"/"indicated_efficiency" section):
+        // mdot = max(0, tau_comb*omega_old) / (eta_i*LHV), using omega_old
+        // (this substep's pre_solve speed, matching engine_torque_map.cpp's
+        // own pre_solve evaluation point) - recomputed from the public
+        // Desc's fuel/eta_i fields alone (no access to mdot_kg_s_).
         const real w_rpm = desc.wot_torque_nm_vs_rpm.evaluate(pre.rpm);
         const real m_rpm = desc.motoring_torque_nm_vs_rpm.evaluate(pre.rpm);
         const real tau_comb = pre.theta_c * (w_rpm - m_rpm);
-        recomputed_sum += kSubstepH * omega_new * tau_comb;
+        recomputed_indicated_work += kSubstepH * omega_new * tau_comb;
+
+        const real mech_power = std::max(real(0.0), tau_comb * omega_old);
+        const real mdot_kg_s = mech_power / (desc.eta_i * desc.fuel.lhv_j_kg);
+        const real fuel_mass_delta = kSubstepH * mdot_kg_s;
+        recomputed_fuel_mass += fuel_mass_delta;
+        recomputed_fuel_energy_in += fuel_mass_delta * desc.fuel.lhv_j_kg;
 
         omega = omega_new;
     }
 
     CHECK(ledger.indicated_work > 0.0); // non-vacuous: real combustion work really accumulated
-    const real rel_err = std::abs(ledger.indicated_work - recomputed_sum) / std::max(std::abs(recomputed_sum), 1e-12);
-    CHECK(rel_err <= 1e-9);
+    const real rel_err_work =
+        std::abs(ledger.indicated_work - recomputed_indicated_work) / std::max(std::abs(recomputed_indicated_work), 1e-12);
+    CHECK(rel_err_work <= 1e-9);
 
-    CHECK(ledger.fuel_mass == 0.0);
-    CHECK(ledger.fuel_energy_in == 0.0);
-    CHECK(ledger.engine_heat == 0.0);
+    CHECK(ledger.fuel_mass > 0.0); // non-vacuous: the crude model really burned fuel during the WOT half
+    CHECK(ledger.fuel_efficiency_violations == 0); // I7a C5d: always 0 for the crude no-map estimate (constant eta_i by construction)
+    const real rel_err_mass = std::abs(ledger.fuel_mass - recomputed_fuel_mass) / std::max(std::abs(recomputed_fuel_mass), 1e-12);
+    CHECK(rel_err_mass <= 1e-9);
+    const real rel_err_energy =
+        std::abs(ledger.fuel_energy_in - recomputed_fuel_energy_in) / std::max(std::abs(recomputed_fuel_energy_in), 1e-12);
+    CHECK(rel_err_energy <= 1e-9);
+    const real expected_heat = ledger.fuel_energy_in - ledger.indicated_work;
+    CHECK(std::abs(ledger.engine_heat - expected_heat) <= 1e-6 * std::max(std::abs(expected_heat), real(1.0)));
 }
 
 // ---------------------------------------------------------------------------
@@ -985,6 +1025,11 @@ nlohmann::json base_engine_component() {
     j["motoring_torque_nm_vs_rpm"] = {{"x", {0.0, 7000.0}}, {"y", {-20.0, -20.0}}};
     j["inertia_kgm2"] = 0.15;
     j["breakaway_torque_nm"] = 20.0;
+    // PHYS-033 P4 I7a C5d: "ignition" is now required whenever an engine has
+    // any fuel model (has_fuel_map here, via "fuel"+"fuel_map" below) - see
+    // the "fuels"/"ignition" SECTIONs further down for the rejection paths
+    // this fixture itself does not exercise.
+    j["ignition"] = "spark";
     j["fuel"] = fuel_json_path();
     j["fuel_map"] = {{"rpm", {500.0, 7000.0}},
                       {"load", {0.0, 1.0}},
@@ -1147,6 +1192,132 @@ TEST_CASE("F5: loader rejects every malformed engine/fuel/fuel_map field with it
         e["fuel_map"]["fuel_flow_g_s"] = {{0.0, "not_a_number"}, {0.0, 12.0}};
         expect_rejected(e, "fuel_flow_g_s[0][1] must be a number");
     }
+
+    // -----------------------------------------------------------------------
+    // PHYS-033 P4 I7a C5d: "fuels" (a plain list of fuel path strings for an
+    // engine with no calibrated map), "ignition" (spark/compression, required
+    // whenever ANY fuel model - has_fuel_map or a non-empty "fuels" - is
+    // present) and "indicated_efficiency" (an override for the crude no-map
+    // estimate's eta_i, valid only alongside a fuel model). Exact rejection
+    // substrings pulled from core/src/io/vehicle_io.cpp's own throw sites.
+    // -----------------------------------------------------------------------
+    SECTION("fuels present together with fuel is rejected") {
+        nlohmann::json e = base_engine_component();
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
+        expect_rejected(e, "'fuels' and 'fuel' are mutually exclusive");
+    }
+    SECTION("fuels present together with fuel_map is rejected") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
+        expect_rejected(e, "'fuels' and 'fuel_map' are mutually exclusive");
+    }
+    SECTION("fuels must be a non-empty array") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array();
+        expect_rejected(e, "'fuels' must be a non-empty array of path strings");
+    }
+    SECTION("fuels rejects an empty-string entry") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({""});
+        expect_rejected(e, "'fuels' entries must be non-empty path strings");
+    }
+    SECTION("fuels rejects a non-string entry") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({123});
+        expect_rejected(e, "'fuels' entries must be non-empty path strings");
+    }
+    SECTION("fuels rejects a duplicate fuel reference") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path(), f5::fuel_json_path()});
+        expect_rejected(e, "'fuels' contains a duplicate fuel reference");
+    }
+    SECTION("fuels loads successfully and resolves has_fuel_model without has_fuel_map") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
+        e["indicated_efficiency"] = 0.35;
+        const f5::TempJsonFile f(f5::vehicle_with_engine(e));
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        bool found = false;
+        for (const auto& c : d.powertrain.components) {
+            if (const auto* eng = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+                found = true;
+                CHECK_FALSE(eng->has_fuel_map);
+                REQUIRE(eng->fuels.size() == 1);
+                CHECK(has_fuel_model(*eng));
+                CHECK(eng->indicated_efficiency == 0.35);
+            }
+        }
+        CHECK(found);
+    }
+    SECTION("ignition required whenever a fuel model exists (fuel_map present, ignition absent)") {
+        nlohmann::json e = base_engine_component();
+        e.erase("ignition");
+        expect_rejected(e, "requires 'ignition'");
+    }
+    SECTION("ignition required whenever a fuel model exists (fuels present, ignition absent)") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e.erase("ignition");
+        e["fuels"] = nlohmann::json::array({f5::fuel_json_path()});
+        expect_rejected(e, "requires 'ignition'");
+    }
+    SECTION("ignition must be spark or compression") {
+        nlohmann::json e = base_engine_component();
+        e["ignition"] = "bogus";
+        expect_rejected(e, "ignition must be \"spark\" or \"compression\"");
+    }
+    SECTION("ignition without any fuel model is accepted (not validated in that direction)") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        // "ignition" stays "spark" from base_engine_component() - an engine
+        // with no fuel model at all may still declare its ignition kind.
+        const f5::TempJsonFile f(f5::vehicle_with_engine(e));
+        const vehicle::VehicleDesc d = io::load_vehicle_json(f.path.string());
+        bool found = false;
+        for (const auto& c : d.powertrain.components) {
+            if (const auto* eng = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+                found = true;
+                CHECK_FALSE(has_fuel_model(*eng));
+            }
+        }
+        CHECK(found);
+    }
+    SECTION("indicated_efficiency requires a fuel model") {
+        nlohmann::json e = base_engine_component();
+        e.erase("fuel");
+        e.erase("fuel_map");
+        e.erase("ignition");
+        e["indicated_efficiency"] = 0.35;
+        expect_rejected(e, "indicated_efficiency requires a fuel model");
+    }
+    SECTION("indicated_efficiency must be a number") {
+        nlohmann::json e = base_engine_component();
+        e["indicated_efficiency"] = "0.35";
+        expect_rejected(e, "indicated_efficiency must be a number");
+    }
+    SECTION("indicated_efficiency must be in (0, 1) - rejects 0") {
+        nlohmann::json e = base_engine_component();
+        e["indicated_efficiency"] = 0.0;
+        expect_rejected(e, "indicated_efficiency must be in (0, 1)");
+    }
+    SECTION("indicated_efficiency must be in (0, 1) - rejects 1") {
+        nlohmann::json e = base_engine_component();
+        e["indicated_efficiency"] = 1.0;
+        expect_rejected(e, "indicated_efficiency must be in (0, 1)");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,7 +1335,16 @@ bool any_channel_contains(const std::vector<std::string>& names, const std::stri
 
 } // namespace
 
-TEST_CASE("F6: a fuel map with no tank is bit-identical to no fuel map at all (state_hash + CSV header)", "[unit][drivetrain][fuel][determinism]") {
+// I7a C5d note: "plain" below (ps_test::load_sedan_desc(), i.e. car_sedan.json)
+// is no longer an engine with NO fuel model at all - i4_2l_na.json's "fuels"
+// list makes the crude no-map estimate active there too (has_fuel_model true,
+// has_fuel_map false). The state_hash comparison is unaffected (the fuel
+// sub-ledger, crude or mapped, is never hashed either way); the CSV-header
+// check below is updated accordingly: BOTH worlds now register `.fuel.`
+// channels (has_fuel_model, broadened from has_fuel_map, gates that
+// registration - see World::create_vehicle/FuelTelemetryChannels).
+TEST_CASE("F6: a fuel map with no tank is bit-identical to the crude no-map estimate (state_hash + CSV header)",
+          "[unit][drivetrain][fuel][determinism]") {
     struct Ev {
         real t;
         const char* channel;
@@ -1206,7 +1386,11 @@ TEST_CASE("F6: a fuel map with no tank is bit-identical to no fuel map at all (s
 
     const auto& plain_names = ra.world->telemetry().channel_names();
     const auto& fueled_names = rb.world->telemetry().channel_names();
-    CHECK_FALSE(any_channel_contains(plain_names, ".fuel."));
+    // I7a C5d: both worlds now have SOME fuel model (plain = car_sedan's real
+    // crude-estimate engine, fueled = the fixture's calibrated map), so both
+    // register `.fuel.` telemetry channels - has_fuel_model, not has_fuel_map,
+    // gates the registration.
+    CHECK(any_channel_contains(plain_names, ".fuel."));
     CHECK(any_channel_contains(fueled_names, ".fuel."));
 }
 

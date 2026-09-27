@@ -413,11 +413,12 @@ private:
     };
     std::vector<std::vector<DiffTelemetryChannels>> diff_telemetry_channels_; // outer index == VehicleId.index
 
-    // PHYS-033 P4 I7a C5 (plan section 5): one entry per vehicle whose engine
-    // has a fuel map, registered right after that vehicle's diff-telemetry
-    // channels in create_vehicle - a vehicle with no fuel map (every vehicle
-    // shipped before this commit) gets an empty inner vector, so its CSV
-    // header stays byte-identical. Mirrors diff_telemetry_channels_'s own
+    // PHYS-033 P4 I7a C5 (plan section 5), broadened C5d: one entry per
+    // vehicle whose engine has ANY fuel model (a calibrated fuel_map or the
+    // crude no-map estimate, ps::drivetrain::has_fuel_model), registered
+    // right after that vehicle's diff-telemetry channels in create_vehicle -
+    // a vehicle with no fuel model at all gets an empty inner vector, so its
+    // CSV header stays byte-identical. Mirrors diff_telemetry_channels_'s own
     // vector-of-0-or-more-entries pattern rather than adding <optional>.
     struct FuelTelemetryChannels {
         std::size_t flow_g_s, energy_in, heat;

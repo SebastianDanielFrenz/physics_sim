@@ -283,8 +283,9 @@ public:
     // default to 0 when desc_.has_governor is false - see EngineTorqueMap::
     // pre_solve). PowertrainSnapshot::governor_setpoint_rpm/hand_throttle.
     [[nodiscard]] real governor_setpoint_rpm() const { return last_engine_result_.governor_setpoint_rpm; }
-    // PHYS-033 P4 I7a C5: 0 for an engine with no fuel map (pre_solve never
-    // touches PreSolveResult::fuel_flow_g_s in that case).
+    // PHYS-033 P4 I7a C5, broadened C5d: nonzero for a fuel map OR the crude
+    // no-map estimate; 0 only for an engine with no fuel model at all
+    // (pre_solve never touches PreSolveResult::fuel_flow_g_s otherwise).
     // PowertrainSnapshot::fuel_flow_g_s/EngineSoundState::fuel_flow_g_s.
     [[nodiscard]] real fuel_flow_g_s() const { return last_engine_result_.fuel_flow_g_s; }
     // PHYS-033 P4 I7a C3: the hand-lever value itself moved into the
