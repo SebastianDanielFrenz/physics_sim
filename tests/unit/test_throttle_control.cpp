@@ -59,6 +59,7 @@
 #include "drivetrain/throttle_stage.h"
 
 #include "powertrain_multi_diff_desc.h"
+#include "vehicle_test_helpers.h"
 
 #include "ps/io/scenario.h"
 #include "ps/io/surface_table.h"
@@ -732,6 +733,22 @@ void reset_running_in_gear(Powertrain& pt, int gear, real hub_omega) {
     pt.reset(o, std::vector<real>(4, hub_omega));
 }
 
+// Same as reset_running_in_gear, but clutch_locked=false: the dog is already
+// in `gear` (not Neutral) while ManualTcu's auto-clutch mode is Launch, e_auto
+// starting at 0 - i.e. "the driver just selected 1st and is now easing the
+// clutch out", the exact state PHYS-033 P4 I7a C5b's launch law (manual_tcu.cpp's
+// "full = full_rpm_min + throttle_request * (full_rpm_max - full_rpm_min)")
+// acts in. Used instead of a real Neutral->1st shift (which needs a whole
+// Selecting/Synchronising gearbox dynamic to reach gearbox_current != 0) to
+// isolate the launch law itself.
+void reset_launch_in_gear(Powertrain& pt, int gear, real hub_omega) {
+    vehicle::VehicleResetOptions o;
+    o.gear = gear;
+    o.engine_state = EngineState::Running;
+    o.clutch_locked = false;
+    pt.reset(o, std::vector<real>(4, hub_omega));
+}
+
 // Drives a Powertrain one 960 Hz substep at a time with every hub held at
 // hub_target by a stiff implicit "dyno" (Assembly::torque semantics
 // tau(w') = tau0 - d*(w' - w_old): tau0 = -K*(w_old - target), d = K), so
@@ -1151,4 +1168,151 @@ TEST_CASE("car_sedan: a \"hand_throttle\" control channel has no effect (its imp
         CHECK(tr.integrator == base.integrator);
         CHECK(tr.snapshot_hand_nonzero == 0);
     }
+}
+
+// ===========================================================================
+// PHYS-033 P4 I7a C5b (owner ruling 2026-09-26): auto-shift/auto-clutch/
+// auto-blip must read the throttle-command stage's REQUEST (ThrottleStage::
+// evaluate's ThrottleCommand::command - pedal_map/hand-lever already
+// applied), not the raw pedal. The two cases below are the task's required
+// discrimination tests: each is set up so the OLD (raw-pedal) and NEW
+// (command) values feed a materially different number into the exact same
+// TCU formula at an otherwise-identical, steady operating point - so a
+// revert of the C5b reorder (Sensors::throttle_request fed ctx.throttle
+// again instead of the throttle stage's command) makes the assertions below
+// FAIL, not just report a different number. See this commit's handback
+// report for the actual sabotage run and its numbers.
+// ===========================================================================
+
+TEST_CASE("C5b: a pedal_map changes the auto-shift upshift threshold (assist reads the command, not the raw pedal)",
+          "[unit][drivetrain][throttle][tcu]") {
+    // An aggressive early-ramp pedal_map: a pedal of 0.2 (raw) reshapes to a
+    // command of ~0.667 - the two are far enough apart that
+    // lerp(up_zero, up_full, ·) gives two thresholds with a wide gap.
+    const vehicle::VehicleDesc d = sedan_with_pedal_map({0.0, 0.3, 1.0}, {0.0, 1.0, 1.0});
+    const ThrottleControlDesc* stage = stage_desc_of(d);
+    REQUIRE(stage != nullptr);
+    const auto& tcu_desc = std::get<ManualTcuDesc>(d.controllers.at(0).params);
+    const AutoShiftDesc& as = tcu_desc.auto_shift;
+
+    constexpr real kPedal = 0.2;
+    const real command = stage->curve.evaluate(kPedal);
+    REQUIRE(command > kPedal + 0.3); // the map genuinely reshapes: a raw-pedal leak would show as command==pedal
+
+    const real up_th_pedal = as.up_rpm_at_zero_throttle + kPedal * (as.up_rpm_at_full_throttle - as.up_rpm_at_zero_throttle);
+    const real up_th_command = as.up_rpm_at_zero_throttle + command * (as.up_rpm_at_full_throttle - as.up_rpm_at_zero_throttle);
+    REQUIRE(up_th_command > up_th_pedal + 1000.0); // the two thresholds are well separated
+
+    // kHub tuned (gear 1: rpm ~= kHub * 137.27, see reset_running_in_gear's
+    // own "kHub=18.0 -> ~2470 rpm" comment/P3's test) so the held engine rpm
+    // sits strictly between up_th_pedal and up_th_command - the discriminating
+    // operating point: correct (command-based) code must NOT shift here,
+    // sabotaged (raw-pedal) code WOULD.
+    constexpr real kHub = 29.15;
+    Powertrain pt = build_pt(d);
+    reset_running_in_gear(pt, 1, kHub);
+    DynoDriver drv(pt, kHub);
+    drv.ctx.throttle = kPedal;
+    drv.ctx.assist_auto_shift = true;
+
+    // Run well past auto_shift.min_time_in_gear_s (1.0 s for car_sedan) so the
+    // dwell-time gate cannot be the reason no shift happens.
+    REQUIRE(as.min_time_in_gear_s < 2.0);
+    for (int s = 0; s < 3 * 960; ++s) drv.step(); // 3 s
+
+    const real rpm = pt.last_engine_result().rpm;
+    INFO("engine rpm=" << rpm << " up_th(raw pedal)=" << up_th_pedal << " up_th(command)=" << up_th_command
+                        << " gearbox target=" << pt.gearbox().target());
+    REQUIRE(rpm > up_th_pedal);   // held ABOVE the (wrong) raw-pedal threshold ...
+    REQUIRE(rpm < up_th_command); // ... but BELOW the (correct) command threshold - a genuine discriminator
+    CHECK(pt.gearbox().current_position() == 1);
+    CHECK(pt.gearbox().target() == 1); // correct code: no upshift requested at this rpm
+}
+
+TEST_CASE("C5b: the tractor's hand_throttle reaches the auto-clutch launch law (not the raw pedal)",
+          "[unit][drivetrain][throttle][tcu]") {
+    const vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+    REQUIRE(engine_desc_of(d).has_governor);
+    REQUIRE(stage_desc_of(d) == nullptr); // no explicit throttle_control component - the implicit stage's hand
+                                           // lever is the governor's own "hand_throttle" channel (throttle_stage.h)
+    const auto& tcu_desc = std::get<ManualTcuDesc>(d.controllers.at(0).params);
+    const AutoClutchDesc& ac = tcu_desc.auto_clutch;
+    REQUIRE(ac.enabled);
+
+    // hand_throttle = 0.2: the diesel governor's no-load setpoint is
+    // idle_rpm + hand*(high_idle_rpm - idle_rpm) = 850 + 0.2*(2400-850) = 1160
+    // rpm (data/engines/diesel_i4_4l5_turbo.json), which sits strictly BELOW
+    // BOTH auto_clutch full-engagement thresholds:
+    //   full(raw pedal=0)          = full_rpm_min                = 1200
+    //   full(command=hand_throttle)= full_rpm_min + 0.2*(1700-1200) = 1300
+    // so e_tgt = clamp((rpm-bite_rpm)/(full-bite_rpm), 0, 1) is in the
+    // strictly-linear (non-clamped) region for BOTH, giving two cleanly
+    // different fractional-engagement targets - not merely two different
+    // sides of a clamp.
+    constexpr real kHand = 0.2;
+    const real full_old = ac.full_rpm_min;                                      // raw pedal (0) - the bug
+    const real full_new = ac.full_rpm_min + kHand * (ac.full_rpm_max - ac.full_rpm_min); // stage command - the fix
+
+    Powertrain pt = build_pt(d);
+    const auto decls = Powertrain::declare_control_channels(d.powertrain);
+    std::vector<real> channels(decls.size(), real(0.0));
+    int hand_slot = -1;
+    for (std::size_t i = 0; i < decls.size(); ++i) {
+        channels[i] = decls[i].default_value;
+        if (decls[i].name == "hand_throttle") hand_slot = static_cast<int>(i);
+    }
+    REQUIRE(hand_slot >= 0);
+    channels[static_cast<std::size_t>(hand_slot)] = kHand;
+
+    reset_launch_in_gear(pt, 1, /*hub_omega=*/0.0); // dog already in 1st, clutch open (Launch, e_auto=0), wheel held at rest
+    DynoDriver drv(pt, /*target=*/0.0);
+    drv.ctx.assist_auto_clutch = true; // DynoDriver defaults this off (see its own comment); the Launch law under
+                                        // test lives entirely behind this flag - ManualTcu::step's out.e_auto is
+                                        // hard-forced to 1.0 whenever it is false, which would trivially "pass" by
+                                        // locking the clutch on substep 1 whatever the rpm/full-rpm math says.
+    // DynoDriver's default k=5000 is a stiffness applied AT THE HUB NODE; the
+    // rigid gear-1 x rear-diff reduction between gearbox.in and the rear hub
+    // is large (>>1:1), and a node-local damping/stiffness term reflects into
+    // the gearbox.in-referred reduced coordinate scaled by the SQUARE of the
+    // (small) hub/gearbox.in speed ratio - k=5000 turned out to be utterly
+    // negligible there once reflected: even a tiny (< 0.2) clutch engagement
+    // spun gearbox_in up to within lock_slip_rpm of the engine in well under
+    // 0.15 s (measured), tripping Launch -> Locked long before the rpm-gated
+    // law could be observed settled. A much stiffer dyno is needed so the
+    // held hub - and, through the rigid mesh, gearbox_in - actually stays
+    // near 0 while the clutch is only partially engaged.
+    drv.k = 1.0e9;
+    drv.ctx.throttle = 0.0; // pedal fully released - only the hand lever drives this
+    drv.ctx.channels = channels.data();
+    drv.ctx.channel_count = static_cast<int>(channels.size());
+
+    // Let the governor settle the engine onto its no-load setpoint and let
+    // e_auto (rate-limited at engage_rate_per_s) converge onto e_tgt.
+    for (int s = 0; s < 4 * 960; ++s) {
+        drv.step();
+    }
+
+    REQUIRE(pt.tcu_clutch_mode() == ManualTcu::ClutchMode::Launch); // still slipping in, not locked/aborted
+    const real rpm = pt.last_engine_result().rpm;
+    // Honest PRECONDITIONS only - these establish the strictly-linear region
+    // for both candidate "full" values (see comment above) and do not
+    // themselves examine ManualTcu's output. The rpm > bite_rpm + 30 margin
+    // keeps us safely clear of the bite-point clamp corner, where a small
+    // rpm difference between the correct and sabotaged runs (the auto-clutch
+    // engagement feeds back into engine load under the governor's droop -
+    // see the sabotage-demo numbers in this test's own history) could
+    // otherwise push one run's e_tgt to 0 and mask the discriminating gap.
+    REQUIRE(rpm > ac.bite_rpm + 30);
+    REQUIRE(rpm < full_old);
+
+    const real e_tgt_old = std::clamp((rpm - ac.bite_rpm) / (full_old - ac.bite_rpm), real(0.0), real(1.0));
+    const real e_tgt_new = std::clamp((rpm - ac.bite_rpm) / (full_new - ac.bite_rpm), real(0.0), real(1.0));
+    INFO("engine rpm=" << rpm << " e_auto=" << pt.clutch_engagement() << " e_tgt(raw pedal)=" << e_tgt_old
+                        << " e_tgt(command)=" << e_tgt_new);
+    // The actual discriminators: ManualTcu's own output, not an arithmetic
+    // stand-in for it. Both are REQUIREs (not CHECKs) so a sabotaged build
+    // (TCU fed ctx.throttle instead of the throttle-command stage's request)
+    // fails HERE, not on an unrelated precondition above.
+    REQUIRE(pt.clutch_engagement() == Catch::Approx(e_tgt_new).margin(0.05));
+    REQUIRE(pt.clutch_engagement() < e_tgt_old - 0.05); // would fail if ManualTcu had instead used the raw pedal (0)
 }

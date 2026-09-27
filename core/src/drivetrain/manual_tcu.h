@@ -44,7 +44,17 @@ public:
     struct Sensors {
         real engine_omega = 0.0, gearbox_in_omega = 0.0, gearbox_out_omega = 0.0;
         real approx_speed_mps = 0.0; // vehicle road speed proxy (gearbox_out_omega/|r_fd|*R_mean) - launch-vs-shift detection
-        real throttle_pedal = 0.0;
+        // PHYS-033 P4 I7a C5b (owner ruling 2026-09-26): the throttle-command
+        // stage's TORQUE REQUEST (throttle_stage.h's ThrottleCommand::command
+        // - pedal_map/hand-lever already applied), NOT the raw pedal - so a
+        // vehicle with an electronic pedal_map or a hand throttle (the
+        // tractor's governor) has its launch law / auto-shift thresholds /
+        // auto-blip act on the same signal the engine itself sees. Was
+        // `throttle_pedal` (raw ctx.throttle) before this commit; for a
+        // vehicle with no pedal_map and no hand lever the stage's command
+        // equals the raw pedal exactly, so this is a no-op for those (every
+        // shipped sedan).
+        real throttle_request = 0.0;
         real gear_request = real(-100.0); // compare against ps::drivetrain::kGearRequestNone
         real shift_up_count = 0.0, shift_down_count = 0.0;
         bool assist_auto_clutch = true, assist_auto_blip = true, assist_auto_shift = false;
