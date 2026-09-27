@@ -70,13 +70,15 @@ this shortened example.)
 | `e85.json` | 29,250,430 | 9.783568 | 787.025 |
 
 `gasoline.json` is the pure (E0) base component and is never edited by a
-blend — its values stay exactly Heywood Table 9.7's gasoline column. `ethanol.json`
+blend — its LHV and AFR_s stay exactly Heywood Table 9.7's gasoline column, and
+its density stays the EN 228:2012 range midpoint. `ethanol.json`
 is the pure (E100) blending component: LHV 26.8 MJ/kg, stoichiometric A/F 9.0
-(Heywood Table 9.7 / Eq. 3.11), density from specific gravity 0.794 (SG × 1000
-kg/m³ water-at-15°C reference; water at 15°C is 999.1 kg/m³, so this differs
-from an exact reference by ≤ 0.1%) — the **anhydrous** (water-free) EN 15376
-blending-component composition, not hydrous/denatured ethanol as sold at the
-pump.
+(Heywood Table 9.7; also stated after Eq. 3.11, p. 72), density taken as
+specific gravity 0.794 × 1000 kg/m³ = 794.0 kg/m³ (derived; Table 9.7 states no
+reference temperature). Against water at 15°C (999.1 kg/m³) it would be
+793.3 kg/m³, −0.1%, below the table's own 3-digit precision. This is
+**anhydrous fuel-grade ethanol** (EN 15376 blending component), not hydrous
+ethanol.
 
 ### Ethanol blend mixing rule (PHYS-033 P4 I7a C5c)
 
@@ -88,40 +90,40 @@ sourced — each is a stated volume fraction `v` (5%, 10%, 25%, 85%) of
 rho   = v*rho_e + (1-v)*rho_g            (ideal volume additivity)
 w_e   = v*rho_e / rho                    (ethanol mass fraction)
 LHV   = w_e*LHV_e + (1-w_e)*LHV_g        (mass-additive, heat of mixing neglected)
-AFR_s = w_e*AFR_e + (1-w_e)*AFR_g        (exact: stoichiometric air per kg of
-                                           fuel is mass-additive regardless of
-                                           mixing)
+AFR_s = w_e*AFR_e + (1-w_e)*AFR_g        (exact in w_e: elemental composition
+                                           is mass-additive; w_e inherits the
+                                           ideal-mixing assumption)
 ```
 
 where `rho_g`/`LHV_g`/`AFR_g` and `rho_e`/`LHV_e`/`AFR_e` are `gasoline.json`'s
 and `ethanol.json`'s own loaded values (never hand-duplicated constants).
 Density and mass-fraction mixing are both exact under the stated assumptions;
-the LHV mixing rule neglects the (small) heat of mixing; the AFR mixing rule
-is exact regardless of mixing physics, because stoichiometric air mass per kg
-of fuel is a linear (mass-weighted) quantity by definition.
+the LHV mixing rule neglects the (small) heat of mixing; the AFR rule is exact
+in w_e (elemental composition is mass-additive); w_e inherits the
+ideal-volume-mixing assumption.
 
 **Stated assumptions** (repeated in each blend file's own `"source"` field):
 
-- **Ideal mixing.** The small negative excess volume real ethanol-gasoline
-  blends exhibit is neglected.
-- **Anhydrous ethanol.** The blending component is water-free (EN 15376), not
-  the hydrous ethanol sometimes sold directly at the pump.
+- **Ideal mixing.** Any excess volume of mixing is neglected; not quantified
+  here.
+- **Anhydrous fuel-grade ethanol.** The blending component is EN 15376
+  blending-grade ethanol, not hydrous ethanol.
 - **Nominal label composition, not a certified value.** EN 228 states 5%/10%
   v/v as *maximum* ethanol content for E5/E10 (a real pump fuel may contain
-  less); EN 15293:2018 defines E85 as *nominally* 85% v/v, with seasonal
-  grades permitted lower (e.g. a winter grade around 70% v/v). E25 has **no
-  EU standard** of its own — it is a nominal label composition only, included
-  because the owner asked for it, not because it corresponds to a specific
-  regulated blend.
-- **The base gasoline's own spread dominates.** EN 228's density range alone
-  spans ±3.7% around `gasoline.json`'s 747.5 kg/m³ midpoint — larger than any
-  error this mixing rule itself introduces.
+  less); EN 15293:2018's scope defines E85 as nominally 85 % (V/V) ethanol,
+  also allowing seasonal grades containing more than 50 % (V/V) ethanol, so a
+  real pump E85 may contain considerably less than this file's 85 %. E25 has
+  **no EU standard** of its own — it is a nominal label composition only,
+  included because the owner asked for it, not because it corresponds to a
+  specific regulated blend.
+- **For scale.** EN 228:2012's density range spans ±3.7% around the
+  747.5 kg/m³ midpoint; the error of the ideal-mixing assumption is not
+  quantified here.
 
 **Range cross-checks:** E5/E10's densities (749.825/752.150 kg/m³) fall inside
 EN 228:2012's 720.0-775.0 kg/m³ range; E85's density (787.025 kg/m³) falls
-inside EN 15293:2018's 755-800 kg/m³ range; E25 has no EU range to check
-against (its density, 759.125 kg/m³, sits between the gasoline and E85 ranges,
-consistent with being a genuine intermediate blend).
+inside EN 15293:2018's 755-800 kg/m³ range; E25: none - no standard gives an
+E25 density range.
 
 No engine currently references any blend file (or `ethanol.json`) — wiring one
 up is a later commit (PHYS-033 P4 I7a C5d).

@@ -152,6 +152,10 @@ TEST_CASE("ethanol blend files match this test's own mixing-rule recomputation",
 }
 
 TEST_CASE("ethanol blend densities fall inside their cited EN density ranges", "[unit][io][fuel]") {
+    // These are sanity cross-checks, not validations: E5/E10 stay inside
+    // 720-775 for any v <= 0.59, and E85 is >= 755 for any v >= 0.16. The
+    // discriminating test is the recompute (above).
+    //
     // EN 228:2012 unleaded petrol density range at 15 degC (also gasoline.json's
     // own cited range) - E5/E10 are still primarily gasoline.
     SECTION("e5, e10 inside EN 228:2012 720.0-775.0 kg/m^3") {
@@ -168,13 +172,10 @@ TEST_CASE("ethanol blend densities fall inside their cited EN density ranges", "
         CHECK(e85.density_kg_m3 >= real(755.0));
         CHECK(e85.density_kg_m3 <= real(800.0));
     }
-    // E25 has no EU standard of its own; only check it sits between the
-    // gasoline and E85 ranges, consistent with being a genuine intermediate.
-    SECTION("e25 sits between the gasoline and E85 ranges (no EU standard of its own)") {
-        const drivetrain::FuelDesc e25 = io::load_fuel_json(std::string(PS_SOURCE_DIR) + "/data/fuels/e25.json");
-        CHECK(e25.density_kg_m3 >= real(720.0));
-        CHECK(e25.density_kg_m3 <= real(800.0));
-    }
+    // No e25 SECTION here: E25 has no EU density standard to check against,
+    // and a [720, 800] bound (the gasoline-to-E85 span) is a tautology -
+    // it passes for every v in [0, 1], so it discriminates nothing. See
+    // data/fuels/e25.json's own "Range cross-check: none" note.
 }
 
 TEST_CASE("load_fuel_json rejects a missing, outdated or unknown 'format'", "[unit][io][fuel][format]") {
