@@ -19,7 +19,10 @@ state machine (off → firing → idle → running). PHYS-033 P4 I7a C5 turned
 (`"simulated"`, a full MVEM engine) can sit next to `torque_map` once it
 exists (I7b) — see the [`kind`](#kind) section below. `torque_map` also
 gained an optional fuel model in C5: [`fuel`](#fuel) and
-[`fuel_map`](#fuel_map) below.
+[`fuel_map`](#fuel_map) below; C5d added a no-map alternative,
+[`fuels`](#fuels-ignition-indicated_efficiency)/[`ignition`](#fuels-ignition-indicated_efficiency)/
+[`indicated_efficiency`](#fuels-ignition-indicated_efficiency), for an
+engine that burns fuel but has no calibrated map.
 
 ### `kind`
 
@@ -63,8 +66,11 @@ every shipped engine file sets it).
 | `crank_axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length (±1e-6), else `"<ctx>.crank_axis_local must be zero or a unit vector, got length <len>"` | chassis-local direction of positive crank ω, for the optional rotor-reaction torque on the chassis; zero = no rotor reaction |
 | `initial_state` | string | optional | `"running"` | must be `"running"` or `"off"`, else `"<ctx>: initial_state must be \"running\" or \"off\", got \"<value>\""` | engine state at scenario start |
 | `throttle_input` | string | optional (PHYS-033 P4 I7a C3; a simulated MVEM engine, out of this commit's scope, will require it explicitly) | `"electronic"` | must be `"electronic"` or `"mechanical"`, else `"<ctx>: throttle_input must be \"electronic\" or \"mechanical\", got \"<value>\""` | which throttle-command stage kind this engine expects when no explicit `throttle_control` powertrain component names it (see `vehicle.md`'s ["`throttle_control` component fields (I7a C3)"](vehicle.md#throttle_control-component-fields-i7a-c3) section) — an explicit `throttle_control` component naming this engine must declare the SAME `kind` as this field, both directions checked at load time; a mismatch is rejected (`"<ctx>: throttle_control 'kind' ... does not match engine '<id>'s throttle_input ..."`), it is never silently overridden |
-| `fuel` | string (path) | optional; **required if `fuel_map` present** | absent (no fuel model) | non-empty string, else `"<ctx>: 'fuel' must be a non-empty path string"`; must resolve and load via `ps::io::load_fuel_json` | path to a `physics_sim.fuel/1` file (see `fuel.md`), resolved relative to THIS engine JSON's own directory — the referenced engine file's own directory when the engine itself was reached via a vehicle's `{"ref": ...}`, else the vehicle file's directory for an inline engine block |
+| `fuel` | string (path) | optional; **required if `fuel_map` present** | absent (no fuel model) | non-empty string, else `"<ctx>: 'fuel' must be a non-empty path string"`; must resolve and load via `ps::io::load_fuel_json` | path to a `physics_sim.fuel/1` file (see `fuel.md`), resolved relative to THIS engine JSON's own directory — the referenced engine file's own directory when the engine itself was reached via a vehicle's `{"ref": ...}`, else the vehicle file's directory for an inline engine block. **Review fix B1:** `fuel` is TRUE SHORTHAND for a one-entry `fuels` list — the loader always sets `fuels = [fuel]` internally when `fuel` is present, whether or not `fuel_map` is ALSO present. So `fuel` with no `fuel_map` is NOT a no-op: it activates the crude no-map estimate below on that one fuel, exactly like writing `"fuels": ["<same path>"]`; `ignition` is then required (see the `fuels`/`ignition` row below) |
 | `fuel_map` | object, see [below](#fuel_map) | optional | absent (`has_fuel_map = false`, no fuel computation anywhere) | see below | fuel flow (g/s) vs. (rpm, load) — `load` is `theta_c`, the post-limiter combustion fraction |
+| `fuels` | array of string (paths) | optional; mutually exclusive with `fuel`/`fuel_map` at the JSON-key level | absent | non-empty array of non-empty path strings, no duplicates (`std::filesystem::equivalent` comparison — review fix N12, was a `weakly_canonical` string compare), each entry must be a string (else `"<ctx>: 'fuels' entries must be non-empty path strings"`) and load via `ps::io::load_fuel_json`; rejected alongside `fuel` or `fuel_map` | PHYS-033 P4 I7a C5d: a plain list of fuels this engine can run on, for the crude no-map estimate (see [below](#fuels-ignition-indicated_efficiency)) — `fuels[0]` is the ACTIVE fuel, no blending; a hypothetical per-entry weighted blend (C5e) was cancelled. Internally this vector is also populated (as a one-entry list) whenever singular `fuel` is present — see that row above |
+| `ignition` | string | **required whenever a fuel model exists** (`fuel_map` present, or `fuels` non-empty); optional otherwise | none (rejected if required and absent) | must be `"spark"` or `"compression"`, else `"<ctx>: ignition must be \"spark\" or \"compression\", got \"<value>\""`; required-but-absent: `"<ctx>: an engine with a fuel ('fuel'+'fuel_map' or 'fuels') requires 'ignition' (\"spark\" or \"compression\")"` | an ENGINE property, not a fuel one (2026-09-27 owner ruling — see [below](#fuels-ignition-indicated_efficiency)); picks the crude no-map estimate's default indicated efficiency |
+| `indicated_efficiency` | real (fraction) | optional; requires the crude no-map path | ignition-based Heywood default (see below) | must be in `(0, 1)` exclusive and finite; rejected without a fuel model: `"<ctx>: indicated_efficiency requires a fuel model ('fuel_map' or 'fuels')"`; rejected alongside a `fuel_map` (review fix N9): `"<ctx>: indicated_efficiency is meaningless with a 'fuel_map' present (the map is never gated by eta_i) - remove one or the other"` | override for the crude no-map estimate's `eta_i`; never consulted by the `fuel_map` path, so setting it there is now a load error rather than a silent no-op |
 
 **rpm ordering rule** (checked as one combined condition): `stall_rpm <
 start_complete_rpm <= idle_rpm < limiter.rpm`, else `"<ctx>: engine rpm
@@ -272,6 +278,92 @@ efficiency at rpm=<r>, load=<l> (mechanical <p1> W > fuel <p2> W)"`. `rpm <=
 0` is skipped (zero mechanical power at any load, never a violation —
 avoids a spurious check at the table's own `x.front()` clamp when
 `rpm[0] == 0`).
+
+### `fuels`, `ignition`, `indicated_efficiency`
+
+PHYS-033 P4 I7a C5d (plan sections 2.1/4/4.1/4.2). For an engine that burns
+fuel but has no calibrated `fuel_map` — every shipped engine as of this
+commit — a crude constant-efficiency estimate replaces the map lookup:
+
+```
+mdot = max(0, tau_comb * omega_old) / (eta_i * LHV)
+```
+
+where `tau_comb` is the same post-limiter combustion torque the map path
+would otherwise convert into `indicated_work` (`PostSolveResult::
+indicated_work_delta`, booked for every `torque_map` engine regardless of
+fuel model), `omega_old` is the crank's pre-solve angular velocity, `LHV` is
+`fuels[0].lhv_j_kg`, and `eta_i` is `indicated_efficiency` if set, else an
+ignition-based default (Heywood, John B., *Internal Combustion Engine
+Fundamentals*, McGraw-Hill, 1988). **Review fix N5:** the two defaults come
+from two DIFFERENT kinds of operating point — an acknowledged
+inconsistency, not hidden:
+
+- **spark, 0.325** — Sec. 15.2, p.827, full load: *"indicated fuel
+  conversion efficiency increases by about 10 percent from 0.31 to 0.34
+  over the speed range 1000 to 4000 rev/min."* 0.325 is the DERIVED midpoint
+  of `[0.31, 0.34]`, not a direct quote from the text.
+- **compression, 0.48** — Sec. 15.5.1 "Load and Speed", p.859, at the
+  minimum-bsfc operating point (220 g/kWh, 1600 rev/min, 580 kPa bmep,
+  medium-swirl NA DI diesel): *"The gross indicated fuel conversion
+  efficiency would be about 48 percent."*
+
+This is deliberately crude — a single constant `eta_i` per engine, no load
+or rpm dependence, no pumping-loss/friction split beyond what the motoring
+curve already folds in — so it is biased in both directions, for DIFFERENT
+reasons (review fix B4, correcting a prior version of this section that
+described both biases backwards):
+
+- **Near WOT, `w - m` OVERSTATES gross indicated torque.** The motoring
+  curve `m` is measured/estimated at CLOSED throttle, so it already
+  includes closed-throttle pumping losses; at WOT those pumping losses are
+  much smaller (or reversed — supercharged/turbocharged engines can pump
+  positive), so `w - m` (which subtracts the closed-throttle pumping loss
+  from the WOT curve) overstates how much *gross* indicated torque a WOT
+  cycle is actually producing. This makes the crude model's WOT `mdot`
+  estimate for a given `tau_comb` too CONSERVATIVE at a fixed `eta_i` (the
+  model attributes more of the delivered torque to combustion than pumping
+  losses actually allow) — no numeric magnitude is given here because none
+  in this file has been DERIVED from a specific engine data file's own
+  `"source"` field; a magnitude would need to be computed from that engine's
+  own curves and labelled "derived" if added.
+- **At idle, real gross indicated efficiency is BELOW the full-load
+  `eta_i` default.** Both Heywood defaults above are full-load/minimum-bsfc
+  operating points, not idle ones — a real engine's indicated efficiency at
+  idle is lower (poor combustion phasing, high relative friction/pumping
+  share of a small net output). Critically, this shortfall belongs to the
+  ENGINE'S OWN pumping losses, which already live in the motoring curve `m`
+  (folded into `tau_comb = theta_c*(w-m)` before this formula ever sees
+  it) — `eta_i` itself is a single indicated-efficiency constant and does
+  NOT separately account for pumping loss; a prior version of this
+  paragraph incorrectly implied `eta_i` absorbs the idle pumping-loss gap.
+
+A calibrated `fuel_map` is the accurate alternative once one exists for a
+given engine.
+
+`has_fuel_model(TorqueMapEngineDesc)` (`ps/drivetrain/powertrain_desc.h`) is
+`has_fuel_map || !fuels.empty()` — distinct from `has_fuel_map` (a
+calibrated map specifically): it gates whether fuel/heat booking
+(`fuel_mass`/`fuel_energy_in`/`engine_heat`/`fuel_efficiency_violations` in
+`PowertrainEnergy`) and the `vehicle<i>.fuel.*` telemetry channels are
+active at all, while `has_fuel_map` alone still picks map-vs-crude *within*
+that. **Review fix N6:** `fuel_efficiency_violations` is NOT always 0 for
+the crude path despite its constant `eta_i` — a prior version of this
+paragraph claimed it was. With `tau_comb > 0`, `engine_heat`'s substep delta
+is `h*tau_comb*(omega_old/eta_i - omega_new)`, which is negative (a
+violation) exactly when `omega_new/omega_old > 1/eta_i` — a large enough
+one-substep speed-up (e.g. a stiff/lightly-loaded crank accelerating fast
+relative to `h`) can still trip it even at a constant assumed efficiency.
+
+**Why `ignition` is an engine field, not a fuel field.** C5c briefly added
+an ignition/combustion-cycle field to `FuelDesc` itself, then reversed it
+(2026-09-27 owner ruling, commit reachable via this branch's own history):
+*any* fuel autoignites given enough compression — fuels differ only in
+ignition QUALITY (octane/cetane rating), not in which cycle they are "for".
+`ignition` therefore lives on the engine (this file), never on `fuel.md`'s
+`FuelDesc`, and its only effect is choosing the crude estimate's default
+`eta_i` above — it never dispatches any other physics (combustion timing,
+knock, etc. are all out of scope for the `torque_map` engine kind).
 
 ## Minimal complete example
 

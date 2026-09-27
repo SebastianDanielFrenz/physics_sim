@@ -95,6 +95,17 @@ public:
         bool has_fuel_map = false;
         FuelDesc fuel;
         Table2D fuel_map;
+        // PHYS-033 P4 I7a C5d: the crude no-map fuel estimate, active in
+        // pre_solve/post_solve whenever has_fuel_model is true and
+        // has_fuel_map is false (to_engine_desc sets `fuel` to the ACTIVE
+        // fuel for whichever path applies, so this struct never needs to
+        // know about TorqueMapEngineDesc::fuels/ignition itself - eta_i is
+        // already resolved (override or Heywood ignition-type default) by
+        // the time it gets here). has_fuel_model false (default) means
+        // pre_solve/post_solve never touch mdot_kg_s_/fuel fields at all -
+        // byte-identical to before this commit.
+        bool has_fuel_model = false;
+        real eta_i = 0.0; // only meaningful when has_fuel_model && !has_fuel_map
     };
 
     explicit EngineTorqueMap(Desc desc);
@@ -147,8 +158,13 @@ private:
     real tau_smooth_ = 0.0, tau_comb_ = 0.0, tau_start_ = 0.0;
     // PHYS-033 P4 I7a C5: this substep's fuel flow, evaluated in pre_solve at
     // the substep-start rpm/theta_c against desc_.fuel_map, consumed by
-    // post_solve. Stays exactly 0.0 forever when !desc_.has_fuel_map. NOT
-    // hashed (fold_state_hash is unchanged by this commit).
+    // post_solve. PHYS-033 P4 I7a C5d review fix (N10): a prior version of
+    // this comment claimed it "stays exactly 0.0 forever when
+    // !desc_.has_fuel_map" - false as of C5d, which ALSO computes a nonzero
+    // mdot_kg_s_ via the crude no-map estimate whenever has_fuel_model is
+    // true and has_fuel_map is false (mech_power/(eta_i*LHV), see pre_solve).
+    // It stays exactly 0.0 only when neither has_fuel_map nor has_fuel_model
+    // is set. NOT hashed (fold_state_hash is unchanged by either commit).
     real mdot_kg_s_ = 0.0;
 };
 

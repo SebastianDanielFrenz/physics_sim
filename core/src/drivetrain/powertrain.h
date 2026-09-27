@@ -72,6 +72,15 @@ struct TcuThrottleLimits {
     real throttle_ceiling = 1.0;
 };
 
+// PHYS-033 P4 I7a C5d review fix (B2): the field-for-field TorqueMapEngineDesc
+// -> EngineTorqueMap::Desc resolver, including the crude no-map fuel model's
+// active-fuel/eta_i resolution (fuels[0] wins, ignition-based default unless
+// indicated_efficiency overrides it). Declared here (defined in powertrain.cpp,
+// no longer in an anonymous namespace) so tests can call the REAL production
+// resolver instead of maintaining their own hand-duplicated copy - a duplicate
+// cannot catch a bug introduced in this function itself.
+EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e);
+
 class Powertrain {
 public:
     // Throws std::runtime_error (naming vehicle_name) on any graph/topology
@@ -283,8 +292,9 @@ public:
     // default to 0 when desc_.has_governor is false - see EngineTorqueMap::
     // pre_solve). PowertrainSnapshot::governor_setpoint_rpm/hand_throttle.
     [[nodiscard]] real governor_setpoint_rpm() const { return last_engine_result_.governor_setpoint_rpm; }
-    // PHYS-033 P4 I7a C5: 0 for an engine with no fuel map (pre_solve never
-    // touches PreSolveResult::fuel_flow_g_s in that case).
+    // PHYS-033 P4 I7a C5, broadened C5d: nonzero for a fuel map OR the crude
+    // no-map estimate; 0 only for an engine with no fuel model at all
+    // (pre_solve never touches PreSolveResult::fuel_flow_g_s otherwise).
     // PowertrainSnapshot::fuel_flow_g_s/EngineSoundState::fuel_flow_g_s.
     [[nodiscard]] real fuel_flow_g_s() const { return last_engine_result_.fuel_flow_g_s; }
     // PHYS-033 P4 I7a C3: the hand-lever value itself moved into the
@@ -519,12 +529,14 @@ private:
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached
-    // PHYS-033 P4 I7a C5: true iff this vehicle's engine has a fuel map -
-    // gates ledger_.fuel_mass/fuel_energy_in/engine_heat/
+    // PHYS-033 P4 I7a C5, broadened C5d: true iff this vehicle's engine has
+    // ANY fuel model (a calibrated fuel_map OR the crude no-map estimate,
+    // see ps::drivetrain::has_fuel_model in powertrain_desc.h) - gates
+    // ledger_.fuel_mass/fuel_energy_in/engine_heat/
     // fuel_efficiency_violations booking in post_solve_components (indicated_work
     // itself is booked unconditionally - see that function). false (default)
     // for every engine without one, so those ledger fields never move.
-    bool engine_has_fuel_map_ = false;
+    bool engine_has_fuel_model_ = false;
     // PHYS-033 P4 I7a C3: the throttle-command stage between the pedal and
     // the engine (throttle_stage.h) - built from either an explicit
     // ThrottleControlDesc component or (no such component) the IMPLICIT

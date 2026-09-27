@@ -517,6 +517,61 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
         }
     }
 
+    // PHYS-033 P4 I7a C5d: "fuels" - a plain list of fuel path strings for
+    // the crude no-map estimate (no per-entry blend weight; a hypothetical
+    // C5e was cancelled/dropped per owner ruling 2026-09-27). Mutually
+    // exclusive with "fuel"/"fuel_map": a calibrated map is keyed to exactly
+    // the one fuel named by "fuel" above, while "fuels" is for an engine
+    // with no map that simply lists what it can run on. fuels[0] is the
+    // ACTIVE fuel (order matters, no blending) - resolved the same way as
+    // "fuel" above (relative to engine_dir). Checked and loaded BEFORE the
+    // "fuel"/"fuel_map" block below so its own mutual-exclusion messages
+    // fire instead of "fuel_map" block's generic "'fuel_map' requires a
+    // 'fuel'" rejection when both "fuels" and "fuel_map" are present with
+    // no "fuel" shorthand.
+    if (j.contains("fuels")) {
+        if (j.contains("fuel")) {
+            throw std::runtime_error(ctx + ": 'fuels' and 'fuel' are mutually exclusive (a calibrated fuel_map is "
+                                      "keyed to one fuel via 'fuel'; 'fuels' is for an engine with no map)");
+        }
+        if (j.contains("fuel_map")) {
+            throw std::runtime_error(ctx + ": 'fuels' and 'fuel_map' are mutually exclusive (a fuel map needs a "
+                                      "single calibrated 'fuel', not a list)");
+        }
+        if (!j.at("fuels").is_array() || j.at("fuels").empty()) {
+            throw std::runtime_error(ctx + ": 'fuels' must be a non-empty array of path strings");
+        }
+        // N12 review fix: duplicate detection now uses
+        // std::filesystem::equivalent instead of a weakly_canonical-then-
+        // string-compare pass - equivalent() resolves the filesystem's own
+        // notion of "same file" (symlinks, "./"/"x/../"-style relative
+        // detours that weakly_canonical's plain string form could miss if
+        // two different textual forms normalise to strings that still
+        // differ, e.g. across a mount point) rather than trusting a second
+        // string comparison of an already-normalised path.
+        std::vector<std::string> resolved_paths;
+        for (const auto& v : j.at("fuels")) {
+            if (!v.is_string() || v.get<std::string>().empty()) {
+                throw std::runtime_error(ctx + ": 'fuels' entries must be non-empty path strings");
+            }
+            const std::string fuel_path = resolve_path(engine_dir, v.get<std::string>());
+            for (const std::string& seen : resolved_paths) {
+                bool same = false;
+                try {
+                    same = std::filesystem::equivalent(fuel_path, seen);
+                } catch (const std::filesystem::filesystem_error&) {
+                    same = (fuel_path == seen); // one or both don't exist yet; fall back to exact string match
+                }
+                if (same) {
+                    throw std::runtime_error(ctx + ": 'fuels' contains a duplicate fuel reference (" +
+                                              v.get<std::string>() + ")");
+                }
+            }
+            resolved_paths.push_back(fuel_path);
+            e.fuels.push_back(ps::io::load_fuel_json(fuel_path));
+        }
+    }
+
     // PHYS-033 P4 I7a C5 (plan section 2.3): optional fuel map. "fuel" is a
     // path (relative to this engine JSON's own directory - engine_dir,
     // component_ref_dir's result above - the referenced engine file's own
@@ -524,10 +579,14 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
     // vehicle file's own directory) to a fuel JSON, loaded via
     // ps::io::load_fuel_json. "fuel_map" is {rpm, load, fuel_flow_g_s
     // (rows=rpm, columns=load), source}. Neither is required; has_fuel_map
-    // stays false (default) unless a full, valid fuel_map is present - a
-    // 'fuel' reference with no map is accepted as a no-op (may matter once
-    // C6's tank exists) but 'fuel_map' with no 'fuel' is rejected outright
-    // (a fuel map with no LHV cannot be turned into energy).
+    // stays false (default) unless a full, valid fuel_map is present.
+    // PHYS-033 P4 I7a C5d review fix (B1): "fuel" is TRUE SHORTHAND for a
+    // one-entry "fuels" list, not a no-op without a map - e.fuels = {e.fuel}
+    // below runs unconditionally whenever "fuel" is present (map or not), so
+    // an engine with "fuel" and no "fuel_map" gets the crude no-map estimate
+    // exactly like one written with "fuels": ["<same path>"]. "fuel_map"
+    // with no "fuel" is still rejected outright (a fuel map with no LHV
+    // cannot be turned into energy).
     if (j.contains("fuel_map") && !j.contains("fuel")) {
         throw std::runtime_error(ctx + ": 'fuel_map' requires a 'fuel' reference (a fuel map with no LHV cannot be "
                                   "turned into energy)");
@@ -538,6 +597,10 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
         }
         const std::string fuel_path = resolve_path(engine_dir, j.at("fuel").get<std::string>());
         e.fuel = ps::io::load_fuel_json(fuel_path);
+        // B1: "fuels" and "fuel" are mutually exclusive at the JSON-key
+        // level (checked above, before this block runs), so e.fuels is
+        // still empty here - safe to desugar unconditionally.
+        e.fuels = {e.fuel};
     }
     if (j.contains("fuel_map")) {
         const auto& fmj = j.at("fuel_map");
@@ -648,6 +711,66 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
 
         e.fuel_map = std::move(t);
         e.has_fuel_map = true;
+    }
+
+    // PHYS-033 P4 I7a C5d: "ignition" - spark vs. compression (an ENGINE
+    // property, see ps::drivetrain::EngineIgnition's own comment). Required
+    // whenever this engine has any fuel model (a map or a "fuels" list) -
+    // the crude no-map estimate's default indicated efficiency depends on
+    // it and a silent default would be a silent physics choice, not a loud
+    // one (same "no silent default" convention as the fuel-file "ignition"
+    // field C5c briefly added and then reversed onto this file's own
+    // "ignition" instead). Stored (never required, never rejected) even
+    // with no fuel model at all - harmlessly unused.
+    if (j.contains("ignition")) {
+        // N12 review fix: check the JSON value's own type before .get<string>()
+        // - nlohmann::json::type_error would otherwise propagate uncaught,
+        // unlike every other rejection in this loader which throws a clean
+        // std::runtime_error with context (same pattern as the fuel_map
+        // fuel_flow_g_s cell check above).
+        if (!j.at("ignition").is_string()) {
+            throw std::runtime_error(ctx + ": ignition must be a string (\"spark\" or \"compression\")");
+        }
+        const std::string ign = j.at("ignition").get<std::string>();
+        if (ign == "spark") {
+            e.ignition = ps::drivetrain::EngineIgnition::Spark;
+        } else if (ign == "compression") {
+            e.ignition = ps::drivetrain::EngineIgnition::Compression;
+        } else {
+            throw std::runtime_error(ctx + ": ignition must be \"spark\" or \"compression\", got \"" + ign + "\"");
+        }
+        e.has_ignition = true;
+    }
+    const bool engine_has_fuel_model = e.has_fuel_map || !e.fuels.empty();
+    if (engine_has_fuel_model && !e.has_ignition) {
+        throw std::runtime_error(ctx + ": an engine with a fuel ('fuel'+'fuel_map' or 'fuels') requires 'ignition' "
+                                  "(\"spark\" or \"compression\")");
+    }
+
+    // PHYS-033 P4 I7a C5d: "indicated_efficiency" - override for the crude
+    // no-map model's eta_i (see TorqueMapEngineDesc's own comment).
+    // Meaningless without the crude no-map path (nothing reads it there), so
+    // rejected rather than silently ignored: both when there is no fuel
+    // model at all, AND (N9 review fix) when a "fuel_map" is present - a
+    // calibrated map is never gated by eta_i, so setting this alongside one
+    // would silently do nothing.
+    if (j.contains("indicated_efficiency")) {
+        if (!engine_has_fuel_model) {
+            throw std::runtime_error(ctx + ": indicated_efficiency requires a fuel model ('fuel_map' or 'fuels')");
+        }
+        if (e.has_fuel_map) {
+            throw std::runtime_error(ctx + ": indicated_efficiency is meaningless with a 'fuel_map' present (the "
+                                      "map is never gated by eta_i) - remove one or the other");
+        }
+        if (!j.at("indicated_efficiency").is_number()) {
+            throw std::runtime_error(ctx + ": indicated_efficiency must be a number");
+        }
+        e.indicated_efficiency = j.at("indicated_efficiency").get<real>();
+        if (!std::isfinite(e.indicated_efficiency) || !(e.indicated_efficiency > real(0.0)) ||
+            !(e.indicated_efficiency < real(1.0))) {
+            throw std::runtime_error(ctx + ": indicated_efficiency must be in (0, 1), got " +
+                                      std::to_string(e.indicated_efficiency));
+        }
     }
 
     return e;

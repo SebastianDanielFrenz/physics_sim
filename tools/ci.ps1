@@ -637,6 +637,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
     @{ Re = '^core/(include/ps|src)/io/'; Kind = 'topics'; Topics = @('io'); AllScenarios = $true },
     @{ Re = '^data/(vehicles|tyres|engines|gearboxes)/'; Kind = 'topics'; Topics = @('vehicle') },
+    @{ Re = '^data/fuels/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },
     @{ Re = '^data/surfaces/'; Kind = 'topics'; Topics = @('vehicle', 'terrain', 'io') },
     @{ Re = '^data/tracks/'; Kind = 'topics'; Topics = @('terrain', 'io') },
     @{ Re = '^data/scenarios/'; Kind = 'scenario' },

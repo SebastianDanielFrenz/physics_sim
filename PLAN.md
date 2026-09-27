@@ -745,6 +745,12 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
     (knock margin) and belongs to the simulated engine only.
   - Exception to "no existing data file edited in I7": the shipped engine
     files gain their fuels list. CSV headers may grow by the fuel channels.
+  - Spark vs compression ignition is an ENGINE property (2026-09-27): any
+    fuel autoignites if compressed enough; fuels differ only in ignition
+    quality (octane/cetane). Fuel files carry no ignition field. An engine
+    with a fuel model declares `ignition: "spark" | "compression"`, which
+    picks the crude efficiency default. Octane/cetane numbers are added with
+    the knock/autoignition model (I7c+), their first consumer.
   - Order: C5 fuel map, C5b assists on the torque request, C5c blend data,
     C5d fuels list plus crude model, then C6 tank, C7 cited data, C8 docs.
 

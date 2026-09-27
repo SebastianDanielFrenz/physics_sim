@@ -72,27 +72,36 @@ struct PowertrainEnergy {
     real shaft_pe = 0.0;
     real shaft_damping_loss = 0.0;
 
-    // PHYS-033 P4 I7a C5: the fuel energy sub-ledger, entirely separate from
-    // balance_error above (a fuel map's own energy split, not a mechanical
-    // term any node-balance/momentum identity constrains) and NEVER folded
-    // into fold_state_hash - a vehicle whose engine has a fuel map but no
-    // tank (this commit; the tank is C6) hashes bit-identically to the same
-    // vehicle with no fuel map at all. Owner ruling (post-review):
-    // `indicated_work` is booked for EVERY torque_map engine, fuel map or
+    // PHYS-033 P4 I7a C5/C5d: the fuel energy sub-ledger, entirely separate
+    // from balance_error above (a fuel model's own energy split, not a
+    // mechanical term any node-balance/momentum identity constrains) and
+    // NEVER folded into fold_state_hash - a vehicle whose engine has a fuel
+    // model but no tank (the tank is C6) hashes bit-identically to the same
+    // vehicle with no fuel model at all. Owner ruling (post-review):
+    // `indicated_work` is booked for EVERY torque_map engine, fuel model or
     // not - a firing engine's own combustion mechanics (tau_comb_) do not
-    // depend on whether a fuel map exists, and this quantity will feed a
-    // future CRUDER no-map fuel estimate (a separate commit once that model
-    // is designed - not implemented here). `fuel_mass`/`fuel_energy_in`/
+    // depend on whether a fuel model exists. `fuel_mass`/`fuel_energy_in`/
     // `engine_heat`/`fuel_efficiency_violations` DO need an actual mass/LHV
-    // model to mean anything, so they stay gated on `has_fuel_map` and are
-    // exactly 0 for every engine with no fuel map (every engine shipped
-    // through this commit) - hash- and value-neutral for those.
-    real fuel_mass = 0.0;             // kg, cumulative (h*mdot per substep, mdot from the fuel map); 0 without a map
-    real fuel_energy_in = 0.0;        // J, cumulative (fuel_mass_delta*LHV per substep); 0 without a map
-    real indicated_work = 0.0;        // J, cumulative - combustion's own share of engine_out above (see PostSolveResult); booked for every torque_map engine, fuel map or not
-    real engine_heat = 0.0;           // J, cumulative = fuel_energy_in - indicated_work (rejected/unconverted heat); 0 without a map
+    // model to mean anything, so they stay gated on `has_fuel_model` (C5d:
+    // a calibrated `fuel_map`, OR - no map - the crude constant-efficiency
+    // estimate `mdot = max(0, tau_comb*omega_old) / (eta_i*LHV)` from the
+    // engine's own `fuels[0]`/`ignition`-derived `eta_i`; see
+    // ps::drivetrain::has_fuel_model/TorqueMapEngineDesc) and are exactly 0
+    // for an engine with no fuel model at all - hash- and value-neutral for
+    // those.
+    real fuel_mass = 0.0;             // kg, cumulative (h*mdot per substep, mdot from the fuel map or the crude estimate); 0 without a fuel model
+    real fuel_energy_in = 0.0;        // J, cumulative (fuel_mass_delta*LHV per substep); 0 without a fuel model
+    real indicated_work = 0.0;        // J, cumulative - combustion's own share of engine_out above (see PostSolveResult); booked for every torque_map engine, fuel model or not
+    real engine_heat = 0.0;           // J, cumulative = fuel_energy_in - indicated_work (rejected/unconverted heat); 0 without a fuel model
     real fuel_external_added = 0.0;   // kg, cumulative fuel MASS added externally (e.g. a refuel); stays 0 until C6's tank hook books into it - not energy, despite living next to the energy fields above
-    std::uint64_t fuel_efficiency_violations = 0; // count of substeps where engine_heat's own delta was < 0 (map claims >100% efficiency); 0 without a map
+    // Count of substeps where engine_heat's own delta was < 0 (the fuel
+    // model claims >100% efficiency). Not always 0 for the crude no-map
+    // estimate despite its constant eta_i: with tau_comb > 0, the delta is
+    // h*tau_comb*(omega_old/eta_i - omega_new), negative exactly when
+    // omega_new/omega_old > 1/eta_i (N6 review fix - a prior version of this
+    // comment incorrectly claimed the crude model can never violate). 0
+    // without a fuel model.
+    std::uint64_t fuel_efficiency_violations = 0;
 };
 
 } // namespace ps::drivetrain

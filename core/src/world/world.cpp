@@ -392,10 +392,10 @@ void World::step() {
             }
         }
 
-        // PHYS-033 P4 I7a C5 (plan section 5): fuel flow/energy_in/heat,
-        // right after this vehicle's diff values, matching create_vehicle's
-        // registration order. Empty for every vehicle with no fuel map
-        // (every vehicle shipped before this commit) - reuses ps_snap/e above.
+        // PHYS-033 P4 I7a C5, broadened C5d: fuel flow/energy_in/heat, right
+        // after this vehicle's diff values, matching create_vehicle's
+        // registration order. Empty for a vehicle with no fuel model at all
+        // (map or crude) - reuses ps_snap/e above.
         if (vi < fuel_telemetry_channels_.size() && !fuel_telemetry_channels_[vi].empty()) {
             row.push_back(ps_snap.fuel_flow_g_s);
             row.push_back(e.fuel_energy_in);
@@ -618,18 +618,20 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         }
     }
 
-    // PHYS-033 P4 I7a C5 (plan section 5): vehicle<i>.fuel.{flow_g_s,
-    // energy_in, heat}, registered ONLY for a vehicle whose engine has a
-    // fuel map, right after this vehicle's diff-telemetry channels - a
-    // vehicle with no fuel map (every vehicle shipped before this commit)
-    // registers nothing here, so its CSV header stays byte-identical.
-    // tank_kg telemetry comes with C6.
+    // PHYS-033 P4 I7a C5 (plan section 5), broadened C5d: vehicle<i>.fuel.
+    // {flow_g_s, energy_in, heat}, registered for a vehicle whose engine has
+    // ANY fuel model - a calibrated fuel_map OR the crude no-map estimate
+    // (drivetrain::has_fuel_model) - right after this vehicle's diff-
+    // telemetry channels. A vehicle with neither registers nothing here, so
+    // its CSV header stays byte-identical (true of every vehicle shipped
+    // before C5; car_sedan/tractor/etc. gain this block once their engine
+    // JSON files gain a "fuels" list in C5d). tank_kg telemetry comes with C6.
     if (fuel_telemetry_channels_.size() <= id.index) fuel_telemetry_channels_.resize(id.index + 1);
     std::vector<FuelTelemetryChannels>& fuel_channels = fuel_telemetry_channels_[id.index];
     fuel_channels.clear();
     for (const drivetrain::ComponentDesc& component : desc.powertrain.components) {
         const auto* engine_desc = std::get_if<drivetrain::TorqueMapEngineDesc>(&component.params);
-        if (engine_desc != nullptr && engine_desc->has_fuel_map) {
+        if (engine_desc != nullptr && drivetrain::has_fuel_model(*engine_desc)) {
             const std::string fuel_prefix = "vehicle" + std::to_string(id.index) + ".fuel.";
             FuelTelemetryChannels fc;
             fc.flow_g_s = telemetry_->register_channel(fuel_prefix + "flow_g_s");

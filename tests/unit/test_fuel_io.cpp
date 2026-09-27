@@ -62,6 +62,22 @@ std::string minimal_fuel_json(const std::string& format_field = R"("physics_sim.
 })";
 }
 
+// Ethanol blend volume fractions (v/v ethanol.json in gasoline.json), for
+// the mixing-rule recomputation cross-check below - PHYS-033 P4 I7a C5c's
+// own mixing rule: rho = v*rho_e + (1-v)*rho_g; w_e = v*rho_e/rho;
+// LHV = w_e*LHV_e + (1-w_e)*LHV_g; AFR_s = w_e*AFR_e + (1-w_e)*AFR_g.
+struct BlendFile {
+    const char* file;
+    const char* name;
+    real volume_fraction;
+};
+constexpr BlendFile kBlendFiles[] = {
+    {"/data/fuels/e5.json", "e5", real(0.05)},
+    {"/data/fuels/e10.json", "e10", real(0.10)},
+    {"/data/fuels/e25.json", "e25", real(0.25)},
+    {"/data/fuels/e85.json", "e85", real(0.85)},
+};
+
 } // namespace
 
 TEST_CASE("load_fuel_json loads the shipped gasoline.json with expected values", "[unit][io][fuel]") {
@@ -82,6 +98,84 @@ TEST_CASE("load_fuel_json loads the shipped diesel.json with expected values", "
     CHECK(d.afr_stoich == Catch::Approx(14.925373).margin(1e-6));
     CHECK(d.density_kg_m3 == Catch::Approx(830.0));
     CHECK_FALSE(d.source.empty());
+}
+
+TEST_CASE("load_fuel_json loads the shipped ethanol.json (E100 blending component) with expected values",
+          "[unit][io][fuel]") {
+    const drivetrain::FuelDesc d = io::load_fuel_json(std::string(PS_SOURCE_DIR) + "/data/fuels/ethanol.json");
+    CHECK(d.name == "ethanol");
+    CHECK(d.phase == drivetrain::FuelPhase::Liquid);
+    CHECK(d.lhv_j_kg == Catch::Approx(26800000.0));
+    CHECK(d.afr_stoich == Catch::Approx(9.0));
+    CHECK(d.density_kg_m3 == Catch::Approx(794.0));
+    CHECK_FALSE(d.source.empty());
+}
+
+TEST_CASE("load_fuel_json loads every shipped ethanol blend file (E5/E10/E25/E85)", "[unit][io][fuel]") {
+    for (const BlendFile& blend : kBlendFiles) {
+        SECTION(blend.name) {
+            const drivetrain::FuelDesc d = io::load_fuel_json(std::string(PS_SOURCE_DIR) + blend.file);
+            CHECK(d.name == blend.name);
+            CHECK(d.phase == drivetrain::FuelPhase::Liquid);
+            CHECK(d.lhv_j_kg > real(0.0));
+            CHECK(d.afr_stoich > real(0.0));
+            CHECK(d.density_kg_m3 > real(0.0));
+            CHECK_FALSE(d.source.empty());
+        }
+    }
+}
+
+// PHYS-033 P4 I7a C5c: each blend file's shipped values must equal THIS
+// test's own recomputation of the mixing rule (rho = v*rho_e + (1-v)*rho_g;
+// w_e = v*rho_e/rho; LHV = w_e*LHV_e + (1-w_e)*LHV_g; AFR_s = w_e*AFR_e +
+// (1-w_e)*AFR_g) from the loaded gasoline.json/ethanol.json values - never a
+// hand-copied constant, so a corrupted blend file or a wrong mixing formula
+// both get caught here.
+TEST_CASE("ethanol blend files match this test's own mixing-rule recomputation", "[unit][io][fuel]") {
+    const drivetrain::FuelDesc gasoline = io::load_fuel_json(std::string(PS_SOURCE_DIR) + "/data/fuels/gasoline.json");
+    const drivetrain::FuelDesc ethanol = io::load_fuel_json(std::string(PS_SOURCE_DIR) + "/data/fuels/ethanol.json");
+
+    for (const BlendFile& blend : kBlendFiles) {
+        SECTION(blend.name) {
+            const drivetrain::FuelDesc d = io::load_fuel_json(std::string(PS_SOURCE_DIR) + blend.file);
+            const real v = blend.volume_fraction;
+            const real rho = v * ethanol.density_kg_m3 + (real(1.0) - v) * gasoline.density_kg_m3;
+            const real w_e = v * ethanol.density_kg_m3 / rho;
+            const real lhv = w_e * ethanol.lhv_j_kg + (real(1.0) - w_e) * gasoline.lhv_j_kg;
+            const real afr = w_e * ethanol.afr_stoich + (real(1.0) - w_e) * gasoline.afr_stoich;
+
+            CHECK(d.density_kg_m3 == Catch::Approx(rho).epsilon(1e-6));
+            CHECK(d.lhv_j_kg == Catch::Approx(lhv).epsilon(1e-6));
+            CHECK(d.afr_stoich == Catch::Approx(afr).epsilon(1e-6));
+        }
+    }
+}
+
+TEST_CASE("ethanol blend densities fall inside their cited EN density ranges", "[unit][io][fuel]") {
+    // These are sanity cross-checks, not validations: E5/E10 stay inside
+    // 720-775 for any v <= 0.59, and E85 is >= 755 for any v >= 0.16. The
+    // discriminating test is the recompute (above).
+    //
+    // EN 228:2012 unleaded petrol density range at 15 degC (also gasoline.json's
+    // own cited range) - E5/E10 are still primarily gasoline.
+    SECTION("e5, e10 inside EN 228:2012 720.0-775.0 kg/m^3") {
+        const drivetrain::FuelDesc e5 = io::load_fuel_json(std::string(PS_SOURCE_DIR) + "/data/fuels/e5.json");
+        const drivetrain::FuelDesc e10 = io::load_fuel_json(std::string(PS_SOURCE_DIR) + "/data/fuels/e10.json");
+        CHECK(e5.density_kg_m3 >= real(720.0));
+        CHECK(e5.density_kg_m3 <= real(775.0));
+        CHECK(e10.density_kg_m3 >= real(720.0));
+        CHECK(e10.density_kg_m3 <= real(775.0));
+    }
+    // EN 15293:2018 E85 density range at 15 degC.
+    SECTION("e85 inside EN 15293:2018 755-800 kg/m^3") {
+        const drivetrain::FuelDesc e85 = io::load_fuel_json(std::string(PS_SOURCE_DIR) + "/data/fuels/e85.json");
+        CHECK(e85.density_kg_m3 >= real(755.0));
+        CHECK(e85.density_kg_m3 <= real(800.0));
+    }
+    // No e25 SECTION here: E25 has no EU density standard to check against,
+    // and a [720, 800] bound (the gasoline-to-E85 span) is a tautology -
+    // it passes for every v in [0, 1], so it discriminates nothing. See
+    // data/fuels/e25.json's own "Range cross-check: none" note.
 }
 
 TEST_CASE("load_fuel_json rejects a missing, outdated or unknown 'format'", "[unit][io][fuel][format]") {

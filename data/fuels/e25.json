@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.fuel/1",
+  "name": "e25",
+  "phase": "liquid",
+  "lhv_j_kg": 39502453.0,
+  "afr_stoich": 13.061831,
+  "density_kg_m3": 759.125,
+  "source": "Derived, not independently sourced: a 25% v/v anhydrous-ethanol / 75% v/v gasoline blend (v = 0.25), computed from this project's own data/fuels/gasoline.json (LHV 44.0 MJ/kg, AFR_s 14.5, density 747.5 kg/m^3) and data/fuels/ethanol.json (LHV 26.8 MJ/kg, AFR_s 9.0, density 794.0 kg/m^3; LHV and AFR_s of both from Heywood 1988 Table 9.7; gasoline density = EN 228:2012 range midpoint, ethanol density from Table 9.7's specific gravity - two different sources and reference bases) via ideal volume-additive mixing: rho = v*rho_e + (1-v)*rho_g = 759.125 kg/m^3; mass fraction w_e = v*rho_e/rho = 0.261485; LHV = w_e*LHV_e + (1-w_e)*LHV_g = 39,502,453 J/kg (mass-additive, heat of mixing neglected); AFR_s = w_e*AFR_e + (1-w_e)*AFR_g = 13.061831 (exact in w_e: stoichiometric air per kg of fuel is mass-additive because elemental composition is; w_e itself inherits the ideal-mixing assumption). Assumptions: ideal mixing (any excess volume of mixing is neglected; not quantified here), anhydrous fuel-grade ethanol (EN 15376 blending component), not hydrous ethanol, and a nominal 25% v/v label composition (E25 is covered by no European fuel specification: EN 228 stops at 10 % V/V and CEN/TS 18227:2025 (E20 petrol) at 20 % V/V; the 25 % figure is a nominal composition only). Range cross-check: none - no standard gives an E25 density range."
+}

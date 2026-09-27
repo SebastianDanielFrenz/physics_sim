@@ -40,6 +40,7 @@
         "starter": { "stall_torque_nm": 140.0, "free_speed_rpm": 400.0, "interlock": "clutch_or_neutral" },
         "crank_axis_local": [0, 1, 0],
         "initial_state": "running",
+        "ignition": "spark",
         "fuel": "../../../data/fuels/gasoline.json",
         "fuel_map": {
           "rpm":  [500, 1000, 2000, 3000, 4000, 5000, 6000, 7000],

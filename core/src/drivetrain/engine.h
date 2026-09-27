@@ -127,16 +127,20 @@ struct PostSolveResult {
     // singular when tau0_ -> 0 with tau_comb_ and d(omega)/dt still nonzero -
     // see EngineTorqueMap::post_solve's own comment). Computed for EVERY
     // torque_map engine, fuel map or not (owner ruling: an engine without a
-    // map still models combustion mechanically, and this quantity will feed
-    // a future cruder no-map fuel estimate). ledger.indicated_work += this,
-    // UNCONDITIONALLY, in Powertrain::post_solve_components - only the
-    // mass/LHV-derived fuel_mass/fuel_energy_in/engine_heat/
-    // fuel_efficiency_violations fields stay gated on has_fuel_map.
+    // map still models combustion mechanically, and this quantity feeds the
+    // crude no-map fuel estimate - PHYS-033 P4 I7a C5d). ledger.indicated_work
+    // += this, UNCONDITIONALLY, in Powertrain::post_solve_components - only
+    // the mass/LHV-derived fuel_mass/fuel_energy_in/engine_heat/
+    // fuel_efficiency_violations fields stay gated on has_fuel_model (C5:
+    // has_fuel_map alone; C5d broadens this to has_fuel_map || !fuels.empty(),
+    // see ps::drivetrain::has_fuel_model).
     real indicated_work_delta = 0.0;
-    // PHYS-033 P4 I7a C5: fuel burned this substep, evaluated at pre_solve's
-    // substep-start rpm/load against an optional fuel map - both exactly
-    // 0.0 for an engine/vehicle with no map (default, every engine shipped
-    // before this commit). ledger.fuel_mass/fuel_energy_in += these.
+    // PHYS-033 P4 I7a C5/C5d: fuel burned this substep, evaluated at
+    // pre_solve's substep-start rpm/load against either a calibrated fuel map
+    // or (C5d, no map) the crude constant-efficiency estimate
+    // mdot = max(0, tau_comb*omega_old) / (eta_i * LHV) - both exactly 0.0
+    // only for an engine with no fuel model at all (no "fuel_map" and no
+    // "fuels" list). ledger.fuel_mass/fuel_energy_in += these.
     real fuel_mass_delta = 0.0;      // kg this substep (h * mdot)
     real fuel_energy_in_delta = 0.0; // J this substep (fuel_mass_delta * LHV)
 };

@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.fuel/1",
+  "name": "e5",
+  "phase": "liquid",
+  "lhv_j_kg": 43089334.0,
+  "afr_stoich": 14.208799,
+  "density_kg_m3": 749.825,
+  "source": "Derived, not independently sourced: a 5% v/v anhydrous-ethanol / 95% v/v gasoline blend (v = 0.05), computed from this project's own data/fuels/gasoline.json (LHV 44.0 MJ/kg, AFR_s 14.5, density 747.5 kg/m^3) and data/fuels/ethanol.json (LHV 26.8 MJ/kg, AFR_s 9.0, density 794.0 kg/m^3; LHV and AFR_s of both from Heywood 1988 Table 9.7; gasoline density = EN 228:2012 range midpoint, ethanol density from Table 9.7's specific gravity - two different sources and reference bases) via ideal volume-additive mixing: rho = v*rho_e + (1-v)*rho_g = 749.825 kg/m^3; mass fraction w_e = v*rho_e/rho = 0.052946; LHV = w_e*LHV_e + (1-w_e)*LHV_g = 43,089,334 J/kg (mass-additive, heat of mixing neglected); AFR_s = w_e*AFR_e + (1-w_e)*AFR_g = 14.208799 (exact in w_e: stoichiometric air per kg of fuel is mass-additive because elemental composition is; w_e itself inherits the ideal-mixing assumption). Assumptions: ideal mixing (any excess volume of mixing is neglected; not quantified here), anhydrous fuel-grade ethanol (EN 15376 blending component), not hydrous ethanol, and a nominal 5% v/v label composition (EN 228 states 5%/10% v/v as MAXIMUM ethanol content, not a guaranteed value, so a real pump E5 may contain somewhat less). Range cross-check: 749.825 kg/m^3 is inside EN 228:2012's 720.0-775.0 kg/m^3 density range for unleaded petrol. For scale: EN 228:2012's density range spans +-3.7 % around the 747.5 kg/m^3 midpoint; the error of the ideal-mixing assumption is not quantified here."
+}

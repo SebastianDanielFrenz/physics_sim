@@ -425,8 +425,9 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             // PHYS-033 P4 I7a C3: the throttle-command stage's combined
             // command this tick - sound only, never hashed.
             ess.throttle_command = powertrain_.throttle_command();
-            // PHYS-033 P4 I7a C5: 0 for an engine with no fuel map (pre's
-            // own default, pre_solve never touches it in that case).
+            // PHYS-033 P4 I7a C5, broadened C5d: nonzero for a fuel map or
+            // the crude no-map estimate, 0 for an engine with no fuel model
+            // at all (pre's own default, pre_solve never touches it then).
             ess.fuel_flow_g_s = pre.fuel_flow_g_s;
             snap.engines.push_back(ess);
         }
@@ -453,8 +454,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         // both 0.0 for every vehicle with no governor.
         snap.governor_setpoint_rpm = powertrain_.governor_setpoint_rpm();
         snap.hand_throttle = powertrain_.governor_hand_throttle();
-        // PHYS-033 P4 I7a C5: mirrors EngineSoundState::fuel_flow_g_s above -
-        // 0.0 for every vehicle with no fuel map.
+        // PHYS-033 P4 I7a C5, broadened C5d: mirrors EngineSoundState::
+        // fuel_flow_g_s above - 0.0 only for a vehicle with no fuel model.
         snap.fuel_flow_g_s = powertrain_.fuel_flow_g_s();
     }
 
