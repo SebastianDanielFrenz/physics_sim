@@ -165,6 +165,7 @@ TEST_CASE("C16b H5: a hot-swapped engine map is bit-identical through the reques
         b.world->step();
     }
     REQUIRE(a.world->state_hash() == b.world->state_hash());
+    REQUIRE(a.world->powertrain_energy(a.vehicle).engine_out == b.world->powertrain_energy(b.vehicle).engine_out);
 
     const EngineMapsPtr swapped = make_scaled_maps(desc, 0.5);
     b.world->replace_engine_maps(b.vehicle, "engine", swapped);
@@ -178,6 +179,18 @@ TEST_CASE("C16b H5: a hot-swapped engine map is bit-identical through the reques
     a.world->step();
     b.world->step();
     CHECK(a.world->state_hash() != b.world->state_hash());
+    // The hash alone cannot show WHEN the swap took effect: it folds the
+    // current maps' content hash, so a swap applied after tick k+1's
+    // pipeline (a tick late) still changes it at k+1 (C16b review: that
+    // sabotage passed every C16b case). The engine's own work over tick k+1
+    // must already come from the new maps. At throttle 0.5 the electronic
+    // throttle's torque-based ECU (its steady tables follow the new maps)
+    // opens up to compensate, so the work moves only slightly (measured
+    // 34.59658 -> 34.59642 J) - but it moves at k+1, and a late swap leaves
+    // it bit-identical.
+    const real work_a = a.world->powertrain_energy(a.vehicle).engine_out;
+    const real work_b = b.world->powertrain_energy(b.vehicle).engine_out;
+    CHECK(work_b != work_a);
 
     // Divergence persists (not a one-tick fluke of float rounding).
     for (int i = 0; i < 20; ++i) {

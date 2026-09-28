@@ -423,6 +423,40 @@ TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, ne
     CHECK(same_engine_maps(*regenerated, *healed));
 }
 
+// C16b review R5 (H2, "the file is rewritten"): the H2 case above heals by
+// calling generate + store itself; this one goes through the production
+// loader, so dropping the store-on-miss in vehicle_io.cpp fails it.
+TEST_CASE("C16b review R5: load_vehicle_json regenerates a corrupt cache entry and rewrites it", "[drivetrain][cycle][io]") {
+    TempCacheDir cache;
+    std::size_t n1 = 0, n2 = 0, n3 = 0;
+    const vehicle::VehicleDesc v1 = load_with_cache(cache.path(), &n1);
+    REQUIRE(n1 == 1);
+
+    std::filesystem::path file;
+    int entries = 0;
+    for (const auto& de : std::filesystem::directory_iterator(cache.dir)) {
+        if (de.path().extension() == ".psmaps") {
+            file = de.path();
+            ++entries;
+        }
+    }
+    REQUIRE(entries == 1);
+    auto bytes = read_all(file);
+    REQUIRE(bytes.size() > 60);
+    bytes[55] = static_cast<char>(bytes[55] ^ 0xFF); // payload byte: content-hash mismatch
+    write_all(file, bytes);
+
+    vehicle::VehicleDesc v2;
+    CHECK_NOTHROW(v2 = load_with_cache(cache.path(), &n2));
+    CHECK(n2 == 1); // the corrupt entry is a miss: regenerated
+    CHECK(read_all(file) != bytes); // and rewritten
+
+    const vehicle::VehicleDesc v3 = load_with_cache(cache.path(), &n3);
+    CHECK(n3 == 0); // the rewritten entry is a hit
+    CHECK(same_bits(only_sim_maps(v1).ve, only_sim_maps(v3).ve));
+    CHECK(same_bits(only_sim_maps(v1).eta_i, only_sim_maps(v3).eta_i));
+}
+
 TEST_CASE("C16b H3: the cache key changes with every field, the generator version and quality - never with JSON formatting",
           "[drivetrain][cycle][io]") {
     const CycleModelDesc ref_desc = fixture_desc();
