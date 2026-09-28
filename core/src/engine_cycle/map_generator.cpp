@@ -17,10 +17,10 @@
 
 #include "ps/drivetrain/engine_maps.h"
 
-#include "../drivetrain/engine_simulated.h"
-#include "cycle_point.h"
-#include "cycle_stepper.h"
-#include "wiebe.h"
+#include "ps/drivetrain/isa_air.h"
+#include "ps/engine_cycle/cycle_point.h"
+#include "ps/engine_cycle/cycle_stepper.h"
+#include "ps/engine_cycle/wiebe.h"
 #include "ps/jobs/job_system.h"
 
 #include <algorithm>
@@ -37,9 +37,17 @@ namespace {
 
 constexpr real kPi = 3.14159265358979323846; // the same literal SimulatedEngine uses
 constexpr real kCCycle = 0.5;
-constexpr real kTref = SimulatedEngine::kIsaTemperatureK;
-constexpr real kPamb = SimulatedEngine::kIsaPressurePa;
-constexpr real kRGas = SimulatedEngine::kGasConstant;
+// ps_audio A1 (out/audio_plan.md D-11): these used to read
+// SimulatedEngine::kIsaTemperatureK/kIsaPressurePa/kGasConstant directly
+// from core/src/drivetrain/engine_simulated.h - a ps_core-INTERNAL header
+// this file (now part of the ps_engine_cycle target, which ps_core links,
+// not the reverse) may no longer include. ps/drivetrain/isa_air.h is the
+// shared header-only source of truth both sides alias (see that header's
+// own comment); SimulatedEngine's own 3 members now alias it too, so this
+// is still exactly the runtime's own value, not a duplicated literal.
+constexpr real kTref = kIsaAirTemperatureK;
+constexpr real kPamb = kIsaAirPressurePa;
+constexpr real kRGas = kIsaAirGasConstantJKgK;
 
 constexpr int kPreviewRpm = 10;
 constexpr int kPreviewPim = 6;

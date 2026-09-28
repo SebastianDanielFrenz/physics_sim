@@ -593,6 +593,10 @@ cycle model is I7e).
 | `combustion_eff_lean` | number | no (0.98) | (0, 1] | combustion efficiency at lambda >= 1 (times lambda below 1) |
 | `exhaust_backflow_temperature_k` | number | no (800) | > 0 | temperature of exhaust gas flowing back into the cylinder |
 | `friction` | object | unless `maps.friction_torque_nm` is given | see below | FMEP correlation |
+| `firing_order` | array of integers | no (`[1, 3, 4, 2]` only for `cylinders` == 4; required otherwise) | a permutation of `1..cylinders` | 1-based cylinder numbers, in FIRING order (first entry fires first) |
+| `firing_angles_deg` | array of numbers | no (derived) | one value per cylinder, in CYLINDER-NUMBER order (index 0 = cylinder 1), each in `[0, 720)`, pairwise distinct | explicit per-cylinder firing angle, crank degrees, 0 = cylinder 1's firing TDC; omit to derive even `720/cylinders` spacing in `firing_order`'s order - REQUIRED for an odd-fire engine (a V-twin, some V6) |
+| `banks` | array of arrays of integers | no (one bank, every cylinder) | every `1..cylinders` covered exactly once | groups cylinder numbers into exhaust banks (source positions, A8+) - does not affect firing timing |
+| `bank_angle_deg` | number | no (0) | | the V angle between banks, geometry only |
 | `grid_rpm` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality rpm grid of the generated tables |
 | `grid_p_im_kpa` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality manifold-pressure grid |
 
@@ -604,6 +608,24 @@ engine's runtime has no exhaust back pressure until I7d.
 A lift curve's x is crank degrees relative to `phase_ref_deg`; the span
 (last x - first x) must be < 720 deg, the first and last lift exactly 0 and
 every lift >= 0.
+
+**Firing order and banks (ps_audio A1, out/audio_plan.md section 1/3).**
+Descriptor only for now: NEITHER the map generator nor the single-cylinder
+0D cycle model this section otherwise describes reads `firing_order`,
+`firing_angles_deg`, `banks` or `bank_angle_deg` yet, so today's generated
+maps and an engine's `state_hash` are unaffected by them (a later
+increment, PLAN.md's ps_audio A5, wires a multi-cylinder cycle model to
+them). `firing_order` lists cylinders in the order they fire (1-based,
+e.g. `[1, 3, 4, 2]` for the common inline-4 order); `firing_angles_deg`,
+when given, is the explicit per-cylinder crank angle (cylinder-number
+order, not firing-order position) at which that cylinder reaches its own
+firing TDC, needed for an odd-fire engine where no even-spacing rule
+applies. `banks`/`bank_angle_deg` are exhaust-bank geometry only (source
+positions once ps_audio lands) and never affect firing timing.
+`ps::engine_cycle::resolve_firing_angles_deg`/`validate_firing_order`/
+`validate_firing_angles` (`ps/engine_cycle/firing_order.h`) implement the
+derivation and validation; the loader (`read_cycle_block`) calls them and
+wraps any rejection into its own `"<ctx>: ..."` message.
 
 **Friction.** `{"model": ..., "a_kpa", "b_kpa", "c_kpa"}`, FMEP = a + b*s +
 c*s^2 [kPa] with s = rpm/1000 (`"polynomial_rpm"`) or the mean piston speed
@@ -669,9 +691,14 @@ two engines on different maps never hash alike.
 Rejections specific to the cycle block: a rotary engine; `bore_mm` /
 `stroke_mm` / `cylinders` inside `cycle`; `back_pressure_kpa_vs_exh_kg_s`;
 an unknown key; a missing `friction` without `maps.friction_torque_nm`;
-every range rule in the table above. Generator errors (e.g. an operating
-point whose cycle does not converge) propagate with their own
-`"engine map generator: ..."` / `"CycleModelDesc: ..."` messages.
+`firing_order` not a permutation of `1..cylinders` (wrong length, a value
+out of range, or a repeat), missing with no default (`cylinders` != 4);
+`firing_angles_deg` not exactly one value per cylinder, a value outside
+`[0, 720)`, or two cylinders sharing an angle; `banks` not covering every
+cylinder exactly once, or an empty bank list; every range rule in the
+table above. Generator errors (e.g. an operating point whose cycle does
+not converge) propagate with their own `"engine map generator: ..."` /
+`"CycleModelDesc: ..."` messages.
 
 ### Shipped simulated engine: `toyota_a25a_fks_sim.json` (measured maps)
 

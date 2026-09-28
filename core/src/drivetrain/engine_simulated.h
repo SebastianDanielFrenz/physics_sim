@@ -54,6 +54,7 @@
 #pragma once
 
 #include "engine.h"
+#include "ps/drivetrain/isa_air.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/types.h"
@@ -117,10 +118,16 @@ struct SimulatedSteadyTables {
 
 class SimulatedEngine final : public IEngine {
 public:
-    static constexpr real kGasConstant = 287.05;       // J/(kg*K), dry air
+    // ps_audio A1 (out/audio_plan.md D-11): these 3 alias the shared
+    // header-only constants in ps/drivetrain/isa_air.h (single source of
+    // truth with core/src/engine_cycle/map_generator.cpp, which needs the
+    // same 3 values and cannot include this ps_core-internal header - see
+    // isa_air.h's own header comment). kGamma has no shared consumer yet
+    // and stays a plain literal.
+    static constexpr real kGasConstant = kIsaAirGasConstantJKgK; // J/(kg*K), dry air
     static constexpr real kGamma = 1.4;
-    static constexpr real kIsaPressurePa = 101325.0;
-    static constexpr real kIsaTemperatureK = 288.15;
+    static constexpr real kIsaPressurePa = kIsaAirPressurePa;
+    static constexpr real kIsaTemperatureK = kIsaAirTemperatureK;
     static constexpr int kPsiIntervals = 1000;
     static constexpr real kPsiRegularisationStart = 0.99;
 

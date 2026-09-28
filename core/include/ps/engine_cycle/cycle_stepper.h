@@ -22,10 +22,10 @@
 
 #pragma once
 
-#include "gas.h"
-#include "geometry.h"
-#include "valve_flow.h"
-#include "wiebe.h"
+#include "ps/engine_cycle/gas.h"
+#include "ps/engine_cycle/geometry.h"
+#include "ps/engine_cycle/valve_flow.h"
+#include "ps/engine_cycle/wiebe.h"
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/types.h"
 

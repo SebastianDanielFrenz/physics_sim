@@ -1,6 +1,6 @@
 // engine_cycle/cycle_point.cpp - see cycle_point.h.
 
-#include "cycle_point.h"
+#include "ps/engine_cycle/cycle_point.h"
 
 #include <cmath>
 
