@@ -706,6 +706,8 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
     @{ Re = '^core/(include/ps|src)/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain', 'cycle') },  # cycle model + pipes; [cycle] also selects the [audio][cycle] voice tests (EngineCore is shared)
     @{ Re = '^audio/'; Kind = 'topics'; Topics = @('audio', 'cycle') },  # ps_audio A7
+    @{ Re = '^tools/ps_engine_audio/|^data/scripts/engine_audio/'; Kind = 'topics'; Topics = @('audio', 'drivetrain') },  # ps_audio A10 listening tool + its scripts
+    @{ Re = '^data/installations/'; Kind = 'topics'; Topics = @('io', 'cycle', 'audio') },  # ps_audio A4/A10 installation files
     @{ Re = '^core/(include/ps|src)/io/'; Kind = 'topics'; Topics = @('io'); AllScenarios = $true },
     @{ Re = '^data/(vehicles|tyres|engines|gearboxes)/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^data/fuels/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },
