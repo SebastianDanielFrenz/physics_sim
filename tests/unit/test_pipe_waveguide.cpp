@@ -13,6 +13,7 @@
 #include "ps/jobs/job_system.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -612,34 +613,39 @@ TEST_CASE("I5 pipe/waveguide build-time rejections and hash neutrality", "[drive
     // Catches: a waveguide end on a non-junction node, two pipe ends on one
     // node, an end correction on the FV side (it belongs to the WG segment),
     // and a network without a waveguide whose hash changed (P8 stays put).
-    auto message = [](const PipeNetworkDesc& d) {
-        std::string msg;
-        try {
-            PipeNetwork net(d, kHFull);
-        } catch (const std::invalid_argument& e) {
-            msg = e.what();
+    // expect_message(d, "") means "must not throw"; a non-empty expected
+    // string means "must throw std::invalid_argument with exactly this
+    // message". CHECK_NOTHROW/CHECK_THROWS_WITH, not try/catch + e.what():
+    // catching an exception by reference and then reading it is the
+    // clang-cl 19.1.5 Windows ASan crash pattern (vault TOOL-019, CLAUDE.md
+    // "Windows ASan caveat") - Catch2's own catch is safe (built with
+    // -asan-stack=0).
+    auto expect_message = [](const PipeNetworkDesc& d, const std::string& expected) {
+        if (expected.empty()) {
+            CHECK_NOTHROW(PipeNetwork(d, kHFull));
+        } else {
+            CHECK_THROWS_WITH(PipeNetwork(d, kHFull), Catch::Matchers::Equals(expected));
         }
-        return msg;
     };
     PipeNetworkDesc d;
     d.pipes.push_back(make_pipe("fv", 0.3, 0.04, 0.04, 0.017, closed_end(), wg_end(0)));
     d.waveguide.nodes.push_back(wg_node(WgNodeDesc::Kind::Junction, "face"));
     d.waveguide.nodes.push_back(wg_node(WgNodeDesc::Kind::Open, "tail"));
     d.waveguide.segments.push_back(wg_seg("wg", 0.3, 0.04, 0, 1, EndCorrection::Unflanged, WgLoss::None));
-    CHECK(message(d).empty());
+    expect_message(d, "");
     PipeNetworkDesc e = d;
     e.pipes[0].end.index = 1;
-    CHECK(message(e) == "PipeNetwork: pipe 'fv': a waveguide end must attach to a Junction node");
+    expect_message(e, "PipeNetwork: pipe 'fv': a waveguide end must attach to a Junction node");
     e = d;
     e.pipes[0].end.index = 2;
-    CHECK(message(e) == "PipeNetwork: pipe 'fv': waveguide node index out of range");
+    expect_message(e, "PipeNetwork: pipe 'fv': waveguide node index out of range");
     e = d;
     e.pipes[0].end.end_correction = EndCorrection::Unflanged;
-    CHECK(message(e) ==
-          "PipeNetwork: pipe 'fv': a waveguide end cannot carry an end correction (the waveguide segment does)");
+    expect_message(e,
+                    "PipeNetwork: pipe 'fv': a waveguide end cannot carry an end correction (the waveguide segment does)");
     e = d;
     e.pipes[0].start = wg_end(0);
-    CHECK(message(e) == "PipeNetwork: waveguide node 'face' is attached to more than one pipe end");
+    expect_message(e, "PipeNetwork: waveguide node 'face' is attached to more than one pipe end");
 
     // Without a waveguide the state hash covers exactly the A2 state.
     PipeNetworkDesc plain;

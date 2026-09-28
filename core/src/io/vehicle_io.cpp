@@ -1581,10 +1581,12 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
                                   " cylinders (no default exists - a cross-plane and a flat-plane V8 differ, for "
                                   "example)");
     }
-    try {
-        ps::engine_cycle::validate_firing_order(d.firing_order, d.cylinders);
-    } catch (const std::invalid_argument& e) {
-        throw std::runtime_error(cctx + ": " + e.what());
+    // Non-throwing form (firing_order_error), not try/catch + e.what():
+    // catching an exception by reference and then reading it is the
+    // clang-cl 19.1.5 Windows ASan crash pattern (vault TOOL-019, CLAUDE.md
+    // "Windows ASan caveat") - core/ must never do that.
+    if (const std::string err = ps::engine_cycle::firing_order_error(d.firing_order, d.cylinders); !err.empty()) {
+        throw std::runtime_error(cctx + ": " + err);
     }
 
     if (cj.contains("firing_angles_deg")) {
@@ -1596,10 +1598,9 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
             d.firing_angles_deg.push_back(v.get<real>());
         }
     }
-    try {
-        ps::engine_cycle::validate_firing_angles(d.firing_angles_deg, d.cylinders);
-    } catch (const std::invalid_argument& e) {
-        throw std::runtime_error(cctx + ": " + e.what());
+    // Non-throwing form - see the firing_order_error comment just above.
+    if (const std::string err = ps::engine_cycle::firing_angles_error(d.firing_angles_deg, d.cylinders); !err.empty()) {
+        throw std::runtime_error(cctx + ": " + err);
     }
 
     if (cj.contains("banks")) {
@@ -2329,6 +2330,20 @@ vehicle::TyreDesc load_tyre_json(const std::string& path) {
 drivetrain::InstallationDesc load_installation_json(const std::string& path) {
     const json j = read_json_file(path);
     return read_installation_object(j, path);
+}
+
+// ps_audio A10: a standalone engine file, no vehicle wrapping it. Same
+// dispatcher (read_engine_fields, in the anonymous namespace above) a
+// vehicle's "ref"'d engine component reaches, given the engine file's own
+// directory as the base for its further relative paths (fuel/installation),
+// exactly component_ref_dir's rule for a "ref"'d (non-inline) component.
+drivetrain::ComponentParams load_engine_json(const std::string& path, const EngineMapOptions& options,
+                                              const std::string* installation_override_path) {
+    const json j = read_json_file(path);
+    require_format(j, "engine", 1, path);
+    const std::string ctx = "engine '" + path + "'";
+    const std::string engine_dir = std::filesystem::path(path).parent_path().string();
+    return read_engine_fields(j, ctx, engine_dir, /*resolved_fuel_paths_out=*/nullptr, &options, installation_override_path);
 }
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path) { return load_vehicle_json(path, EngineMapOptions{}); }
