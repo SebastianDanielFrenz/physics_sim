@@ -103,11 +103,57 @@ bool pipe_run_ok() {
     return ok;
 }
 
+// ps_audio A3: one small FV + waveguide network (the waveguide is part of
+// ps_engine_cycle too). A pressurised FV pipe discharges through a waveguide
+// face into a Kirchhoff-loss segment with a radiating open end.
+bool fv_waveguide_run_ok() {
+    PipeNetworkDesc d;
+    PipeDesc p;
+    p.name = "header";
+    p.length_m = 0.4;
+    p.d_start_m = 0.04;
+    p.d_end_m = 0.04;
+    p.dx_target_m = 0.025;
+    p.start = PipeEndDesc{};
+    p.end = PipeEndDesc{PipeEndDesc::Kind::Waveguide, 0, EndCorrection::None};
+    p.initial = GasStateDesc{102.0e3, 293.15, 0.0};
+    d.pipes.push_back(p);
+    WgNodeDesc j;
+    j.kind = WgNodeDesc::Kind::Junction;
+    j.name = "flange";
+    WgNodeDesc e;
+    e.kind = WgNodeDesc::Kind::Open;
+    e.name = "tail";
+    d.waveguide.nodes = {j, e};
+    WgSegmentDesc s;
+    s.name = "tailpipe";
+    s.length_m = 0.6;
+    s.diameter_m = 0.04;
+    s.node_a = 0;
+    s.node_b = 1;
+    s.end_b = EndCorrection::Unflanged;
+    d.waveguide.segments.push_back(s);
+    PipeNetwork net(d, 1.0 / 46080.0);
+    const real m0 = net.total_mass();
+    for (int k = 0; k < 2000; ++k) net.step();
+    const real closure = std::fabs(net.total_mass() - m0 - net.exchange().waveguide_mass_kg) / m0;
+    const real work = net.waveguide_face(0).acoustic_work_j;
+    const bool ok = std::isfinite(net.total_energy()) && std::isfinite(net.waveguide().wave_energy()) &&
+                    closure < 1e-12 && net.exchange().waveguide_mass_kg < 0.0 && work > 0.0;
+    std::printf("engine_cycle_standalone: FV+waveguide run, mass out %.4g kg, closure %.3g, acoustic work %.4g J\n",
+                -net.exchange().waveguide_mass_kg, closure, work);
+    return ok;
+}
+
 } // namespace
 
 int main() {
     if (!pipe_run_ok()) {
         std::fprintf(stderr, "engine_cycle_standalone: FAIL - pipe network run\n");
+        return 1;
+    }
+    if (!fv_waveguide_run_ok()) {
+        std::fprintf(stderr, "engine_cycle_standalone: FAIL - FV + waveguide run\n");
         return 1;
     }
     const drivetrain::CycleModelDesc d = test::make_generic_i4_cycle_desc();

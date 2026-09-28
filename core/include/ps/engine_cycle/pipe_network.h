@@ -63,6 +63,37 @@
 // - orifice: h * CdA * S * sqrt(1.4) * max_wave_speed * (1/V_a + 1/V_b) <=
 //   cfl_limit, S the regularised Psi slope at pressure equality.
 //
+// Waveguide ends (ps_audio A3): a pipe end of Kind::Waveguide attaches to a
+// Junction node of the network's linear waveguide (PipeNetworkDesc::waveguide,
+// waveguide_network.h) - the FV pipes carry the nonlinear upstream part (ports,
+// runners, collector, the first catalyst; the throttle and plenum on the
+// intake), the waveguide the linear downstream part (exhaust from the flange,
+// intake upstream of the throttle). The face is a linear characteristic
+// junction: the FV side is one more junction port of admittance Y_F = A/(rho_L
+// a_L) (its own half-step interior state), its outgoing wave is
+//   w = ((p_L - p_ref) + rho_L a_L u_L) / 2,
+// the junction pressure p_J = (s + 2 Y_F w)/(y_sum + Y_F) (WgNorton), the face
+// state p_f = p_ref + p_J, u_f = Q_F/A with Q_F = Y_F (2w - p_J), rho_f = rho_L +
+// (p_f - p_L)/a_L^2, x_f = x_L, and the face flux is the physical flux of that
+// state (booked to exchange().waveguide_*). Q_F - the WHOLE face volume flow,
+// mean included - is the waveguide junction's external inflow, so the power
+// p_J Q_F leaving the FV is exactly the power entering the waveguide and the
+// face is transparent at every frequency down to DC. The waveguide's
+// Resistance elements are linearised about the running-mean mass flow (one-pole,
+// waveguide_mean_time_s, summed over all faces): acoustic r = (r_lin + K rho
+// |u|)/A, the incremental resistance. A DC flow through that r drops (r_lin +
+// K rho |u|) u instead of the true r_lin u + K rho u|u|/2, so p_ref = ambient +
+// mean_pressure_drop() - linearised_mean_drop() (= ambient - K rho u|u|/2 per
+// element) corrects the mean face pressure to ambient + the true drop. A
+// one-pole mean that fed only the fluctuation to the waveguide was rejected:
+// it bypasses part of the low-frequency flow around the waveguide and leaves a
+// slow tail (V4 hybrid decay 26 vs 30 1/s, band error up to 14 dB).
+// Linear only: at large amplitude the face stays well posed (instantaneous
+// rho_L a_L) but the waveguide's fixed mean state and linear propagation no
+// longer represent the gas beyond it (no steepening, no temperature/composition
+// transport, backflow re-enters with the interior's composition and entropy) -
+// hence the split downstream of the strongly nonlinear part.
+//
 // Allocation-free after construction; no unordered containers; no mutable
 // statics; plain double, scalar code over structure-of-arrays cell storage
 // (SIMD is A9).
@@ -73,6 +104,7 @@
 #include "ps/engine_cycle/gas.h"
 #include "ps/engine_cycle/pipe_network_types.h"
 #include "ps/engine_cycle/valve_flow.h"
+#include "ps/engine_cycle/waveguide_network.h"
 #include "ps/types.h"
 
 #include <cstdint>
@@ -86,9 +118,11 @@ namespace ps::engine_cycle {
 // waveguide_network.h since ps_audio A3).
 
 struct PipeEndDesc {
-    enum class Kind : std::uint8_t { Closed, Open, Volume, Port };
+    enum class Kind : std::uint8_t { Closed, Open, Volume, Port, Waveguide };
     Kind kind = Kind::Closed;
-    int index = -1;  // volume index (Volume) or port index (Port); unused otherwise
+    // volume index (Volume), port index (Port) or waveguide Junction node index
+    // (Waveguide, ps_audio A3); unused otherwise
+    int index = -1;
     EndCorrection end_correction = EndCorrection::None;  // rejected on a Closed end
 };
 
@@ -142,6 +176,11 @@ struct PipeNetworkDesc {
     std::vector<PortDesc> ports;
     std::vector<OrificeDesc> orifices;
     real cfl_limit = kDefaultPipeCflLimit;
+    // ps_audio A3: the linear waveguide downstream of the FV pipes (no nodes =
+    // none). Its gas is replaced by `gas` above; Waveguide pipe ends attach to
+    // its Junction nodes, at most one pipe end per node.
+    WaveguideNetworkDesc waveguide;
+    real waveguide_mean_time_s = 0.05;  // one-pole time constant of the mean flow that linearises Resistance elements [A]
 };
 
 // State of an externally owned port volume at the start of a step (stagnant).
@@ -176,6 +215,24 @@ struct PipeNetworkExchange {
     real ambient_mass_kg = 0.0, ambient_energy_j = 0.0, ambient_burned_kg = 0.0;
     real source_mass_kg = 0.0, source_energy_j = 0.0, source_burned_kg = 0.0;
     real port_mass_kg = 0.0, port_energy_j = 0.0, port_burned_kg = 0.0;
+    real waveguide_mass_kg = 0.0, waveguide_energy_j = 0.0, waveguide_burned_kg = 0.0;  // A3
+};
+
+// One FV<->waveguide face after the last step (outward = from the pipe into
+// the waveguide).
+struct WaveguideFaceView {
+    int pipe = -1;
+    bool at_start = false;
+    int node = -1;               // waveguide Junction node
+    real area_m2 = 0.0;
+    real p_pa = 0.0;             // face pressure p_ref + p_J
+    real u_m_s = 0.0;            // face velocity, outward
+    real rho = 0.0;              // face density
+    real q_m3_s = 0.0;           // volume flow into the waveguide (whole face flow)
+    real u_mean_m_s = 0.0;       // running-mean face velocity, outward (diagnostic)
+    real mdot_mean_kg_s = 0.0;   // running-mean mass flow, outward
+    real p_ref_pa = 0.0;         // ambient + mean_pressure_drop - linearised_mean_drop used this step
+    real acoustic_work_j = 0.0;  // cumulative sum h p_J Q_F (into the waveguide)
 };
 
 class PipeNetwork {
@@ -228,8 +285,20 @@ public:
     [[nodiscard]] const PipeNetworkExchange& exchange() const { return exch_; }
     // Cells that fell back to first order in the last step (diagnostic).
     [[nodiscard]] int last_step_fallback_count() const { return fallback_count_; }
-    // FNV-1a fold of every cell's and volume's conserved state bytes, in order.
+    // FNV-1a fold of every cell's and volume's conserved state bytes, in order;
+    // then, only when a waveguide exists, its state and every face's running means.
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t h) const;
+
+    // --- Waveguide (ps_audio A3) ---------------------------------------------
+    // The downstream waveguide (empty without one). Stepped inside step(); its
+    // Anechoic sources and extra inflows may be set between steps.
+    [[nodiscard]] const WaveguideNetwork& waveguide() const { return wg_; }
+    [[nodiscard]] WaveguideNetwork& waveguide() { return wg_; }
+    [[nodiscard]] int waveguide_face_count() const { return static_cast<int>(wg_faces_.size()); }
+    [[nodiscard]] const WaveguideFaceView& waveguide_face(int k) const { return wg_faces_[k]; }
+    // Face evaluations whose linear face state went non-physical (p_f or rho_f
+    // <= 0) and fell back to the interior state (large-amplitude misuse).
+    [[nodiscard]] std::uint64_t waveguide_face_fallbacks() const { return wg_face_fallbacks_; }
 
 private:
     struct PipeRt {
@@ -244,6 +313,7 @@ private:
         PipeEndDesc start;
         PipeEndDesc end;
         PipeWallDesc wall;
+        int wg_face[2] = {-1, -1};  // index into wg_faces_ per end (start, end)
     };
     struct VolumeRt {
         real v = 0.0;
@@ -269,6 +339,11 @@ private:
         real p, t, x, r, gamma, a, h_static;
     };
 
+    struct FaceFlux {
+        real m, mom, e, x;  // outward flux per unit area
+    };
+    FaceFlux waveguide_face(real rho, real un, real p, real x, real gamma, WaveguideFaceView& f);
+
     void refresh_reservoir(VolumeRt& v) const;
     void refresh_port(PortRt& p) const;
     [[nodiscard]] Reservoir ambient_reservoir() const;
@@ -284,6 +359,11 @@ private:
     std::vector<OrificeRt> orifices_;
     PipeNetworkExchange exch_;
     int fallback_count_ = 0;
+    WaveguideNetwork wg_;
+    std::vector<WaveguideFaceView> wg_faces_;
+    real wg_mean_alpha_ = 0.0;  // h / waveguide_mean_time_s
+    real wg_p_ref_ = 0.0;
+    std::uint64_t wg_face_fallbacks_ = 0;
 
     // Cells (structure of arrays): conserved densities per unit volume.
     std::vector<real> r_, ru_, e_, rx_;

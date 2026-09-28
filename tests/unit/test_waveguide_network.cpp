@@ -392,6 +392,15 @@ TEST_CASE("W5 waveguide build-time rejections", "[drivetrain][cycle][pipe]") {
     u = d;
     u.segments.push_back(seg("extra", 0.3, 0.03, 0, 1, EndCorrection::None, EndCorrection::None));
     CHECK(message(u) == "WaveguideNetwork: node 'a': an end node needs exactly one segment");
+    u = d;
+    u.nodes[0].kind = WgNodeDesc::Kind::Open;
+    u.nodes[0].radiation = false;
+    u.nodes[1].kind = WgNodeDesc::Kind::Anechoic;
+    u.segments[0].loss = WgLoss::LaminarFriction;
+    CHECK(message(u) ==
+          "WaveguideNetwork: segment 'stub': laminar friction needs a Junction or Closed node at one end at least");
+    u.nodes[1].kind = WgNodeDesc::Kind::Closed;
+    CHECK(message(u).empty());
 }
 
 TEST_CASE("W6 waveguide stepping allocates nothing inside a job", "[drivetrain][cycle][pipe]") {

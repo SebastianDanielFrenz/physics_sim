@@ -309,12 +309,35 @@ WaveguideNetwork::WaveguideNetwork(const WaveguideNetworkDesc& desc, real h) : h
             ports_[static_cast<std::size_t>(nb.p0 + nb.np++)] = Port{2 * s, 2 * s + 1, s};
         }
     }
+    // LaminarFriction: the segment's series resistance R' L = 2 Z alpha L,
+    // lumped in series with its ports at Junction/Closed ends (header).
+    for (Port& pt : ports_) pt.y = segs_[static_cast<std::size_t>(pt.seg)].y;
+    for (int s = 0; s < ns; ++s) {
+        const Seg& g = segs_[static_cast<std::size_t>(s)];
+        if (g.loss != WgLoss::LaminarFriction) continue;
+        const WgSegmentDesc& sd = desc.segments[static_cast<std::size_t>(s)];
+        const auto norton = [&desc](int n) {
+            const WgNodeDesc::Kind k = desc.nodes[static_cast<std::size_t>(n)].kind;
+            return k == WgNodeDesc::Kind::Junction || k == WgNodeDesc::Kind::Closed;
+        };
+        const int ends = (norton(sd.node_a) ? 1 : 0) + (norton(sd.node_b) ? 1 : 0);
+        if (ends == 0)
+            fail("segment '" + sd.name + "': laminar friction needs a Junction or Closed node at one end at least");
+        const real r = 2.0 * g.z * g.alpha_lam * g.length / static_cast<real>(ends);
+        for (Port& pt : ports_) {
+            if (pt.seg != s) continue;
+            const int node = (pt.arrive == 2 * s) ? sd.node_b : sd.node_a;
+            if (!norton(node)) continue;
+            pt.r = r;
+            pt.y = 1.0 / (g.z + r);
+        }
+    }
     for (int n = 0; n < nn; ++n) {
         const WgNodeDesc& nd = desc.nodes[static_cast<std::size_t>(n)];
         Node& nr = nodes_[static_cast<std::size_t>(n)];
         nr.kind = nd.kind;
         real ys = 0.0;
-        for (int k = 0; k < nr.np; ++k) ys += segs_[static_cast<std::size_t>(ports_[static_cast<std::size_t>(nr.p0 + k)].seg)].y;
+        for (int k = 0; k < nr.np; ++k) ys += ports_[static_cast<std::size_t>(nr.p0 + k)].y;
         if (nd.kind == WgNodeDesc::Kind::Junction && nd.volume_m3 > 0.0) {
             const GasPoint vp = gas_point(gas_, nd.volume_gas);
             nr.g_c = 2.0 * nd.volume_m3 / (h * vp.rho * vp.c * vp.c);
@@ -374,9 +397,6 @@ WaveguideNetwork::WaveguideNetwork(const WaveguideNetworkDesc& desc, real h) : h
                     const real gg = (1.0 - fit.p[k]) / (1.0 - fit.q[k]);
                     shelves_.push_back(Shelf{gg, -gg * fit.q[k], -fit.p[k]});
                 }
-            } else if (g.loss == WgLoss::LaminarFriction) {
-                d.nsh = 1;
-                shelves_.push_back(Shelf{ps::math::exp(-g.alpha_lam * g.length), 0.0, 0.0});
             }
             shelf_total += d.nsh;
         }
@@ -411,7 +431,7 @@ WgNorton WaveguideNetwork::junction_norton(int node) const {
     real s = 0.0;
     for (int k = 0; k < nr.np; ++k) {
         const Port& pt = ports_[static_cast<std::size_t>(nr.p0 + k)];
-        s += segs_[static_cast<std::size_t>(pt.seg)].y * dirs_[static_cast<std::size_t>(pt.arrive)].arriving;
+        s += pt.y * dirs_[static_cast<std::size_t>(pt.arrive)].arriving;
     }
     nt.s = 2.0 * s + 2.0 * nr.g_c * nr.s_c;
     nt.y_sum = nr.y_sum;
@@ -425,11 +445,14 @@ void WaveguideNetwork::finish_step() {
             case WgNodeDesc::Kind::Junction:
             case WgNodeDesc::Kind::Closed: {
                 real s = 0.0;
-                for (int k = 0; k < nr.np; ++k)
-                    s += segs_[static_cast<std::size_t>(pt[k].seg)].y * dirs_[static_cast<std::size_t>(pt[k].arrive)].arriving;
+                for (int k = 0; k < nr.np; ++k) s += pt[k].y * dirs_[static_cast<std::size_t>(pt[k].arrive)].arriving;
                 const real pj = (2.0 * s + 2.0 * nr.g_c * nr.s_c + nr.inflow) / nr.y_sum;
-                for (int k = 0; k < nr.np; ++k)
-                    dirs_[static_cast<std::size_t>(pt[k].depart)].departing = pj - dirs_[static_cast<std::size_t>(pt[k].arrive)].arriving;
+                for (int k = 0; k < nr.np; ++k) {
+                    const real a = dirs_[static_cast<std::size_t>(pt[k].arrive)].arriving;
+                    // Line-side pressure pj + r q with q = y (2a - pj) the flow into the node.
+                    const real pl = (pt[k].r > 0.0) ? pj + pt[k].r * pt[k].y * (2.0 * a - pj) : pj;
+                    dirs_[static_cast<std::size_t>(pt[k].depart)].departing = pl - a;
+                }
                 if (nr.g_c > 0.0) nr.s_c = pj - nr.s_c;
                 nr.p = pj;
                 if (nr.np == 1) nr.arriving = dirs_[static_cast<std::size_t>(pt[0].arrive)].arriving;
@@ -491,6 +514,16 @@ real WaveguideNetwork::mean_pressure_drop() const {
         if (nr.kind != WgNodeDesc::Kind::Resistance) continue;
         const real u = nr.frac * mdot_mean_ / (nr.rho * nr.area);
         dp += nr.r_lin * u + 0.5 * nr.k_loss * nr.rho * u * std::fabs(u);
+    }
+    return dp;
+}
+
+real WaveguideNetwork::linearised_mean_drop() const {
+    real dp = 0.0;
+    for (const Node& nr : nodes_) {
+        if (nr.kind != WgNodeDesc::Kind::Resistance) continue;
+        const real u = nr.frac * mdot_mean_ / (nr.rho * nr.area);
+        dp += (nr.r_lin + nr.k_loss * nr.rho * std::fabs(u)) * u;
     }
     return dp;
 }

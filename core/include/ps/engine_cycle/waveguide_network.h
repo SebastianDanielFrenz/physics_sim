@@ -42,9 +42,18 @@
 //   corners, relative error weighting over [kWgLossFitLowHz, min(kWgLossFitHighHz,
 //   0.4 fs)] (loss_fit_max_rel_error() reports the achieved fit).
 // - LaminarFriction: the small-amplitude limit of pipe_network's wall friction
-//   (Poiseuille, tau_w = 8 mu u / D): alpha = 16 mu / (rho c D^2), frequency
-//   independent - a plain gain exp(-alpha L). Exists so the waveguide is the
-//   exact linear limit of the finite-volume equations (V4).
+//   (Poiseuille, tau_w = 8 mu u / D), a SERIES resistance per unit length
+//   R' = 32 mu / (D^2 A) [Pa s/m^4] (travelling-wave attenuation
+//   alpha = R' / (2 Z) = 16 mu / (rho c D^2) Np/m). The segment's R' L is
+//   lumped in series with its ports at its Junction/Closed ends (half each, or
+//   all of it at the one such end; a segment with neither is rejected), so the
+//   loss acts on the volume flow only, like the FV's momentum source. A plain
+//   wave gain exp(-alpha L) would be a distortionless line (half series, half
+//   shunt): same attenuation at high frequency, but half the damping of a
+//   Helmholtz neck's mass flow (measured: 21 vs 30 1/s on the V4 tube). Exists
+//   so the waveguide is the linear limit of the finite-volume equations (V4).
+//   Not part of mean_pressure_drop() (linear: a DC flow through the
+//   waveguide already drops R' L Q).
 // - None.
 //
 // Nodes:
@@ -201,6 +210,11 @@ public:
     // Sum of the mean pressure drops of all Resistance elements [Pa] (series
     // assumption, PROVISIONAL out/audio_a3_progress.md).
     [[nodiscard]] real mean_pressure_drop() const;
+    // What the linearised elements drop for the same mean flow carried as a DC
+    // volume flow through the waveguide: sum (r_lin + K rho |u|) u [Pa].
+    // mean_pressure_drop() - linearised_mean_drop() = -sum K rho u|u|/2 is the
+    // correction a caller feeding the whole flow adds to its reference pressure.
+    [[nodiscard]] real linearised_mean_drop() const;
 
     // Wave energy in flight [J]: h * sum over directions Y (delay-line samples^2
     // + allpass state^2/(1 - a^2)) + h * sum G_C s_C^2. Exactly conserved by a
@@ -256,6 +270,8 @@ private:
         int arrive = -1;  // direction arriving at the node through this port
         int depart = -1;  // direction departing from the node through this port
         int seg = -1;
+        real y = 0.0;  // port admittance 1/(Z + r) seen by the junction
+        real r = 0.0;  // lumped series resistance (LaminarFriction) [Pa s/m^3]
     };
     struct Node {
         WgNodeDesc::Kind kind = WgNodeDesc::Kind::Junction;
