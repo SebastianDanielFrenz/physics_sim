@@ -33,6 +33,7 @@
     }
   ],
   "control_events": [
+    { "t": 0.0, "channel": "gear_request", "value": 1.0 },
     { "t": 0.2, "channel": "throttle", "value": 1.0 }
   ],
   "telemetry_csv": "vehicle_fuel_tank.csv"
