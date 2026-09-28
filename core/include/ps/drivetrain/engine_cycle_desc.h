@@ -126,6 +126,14 @@ struct CycleModelDesc {
     // ---- Generator grid (C16a; PHYS-033 section 5.2 defaults) ----
     std::vector<real> grid_rpm;
     std::vector<real> grid_p_im;
+
+    // The cycle block's own citation (PLAN.md section 8; required by the
+    // loader, ps/io/vehicle_io.cpp's read_cycle_block). Carried through into
+    // the generated maps' SimulatedEngineMapsDesc::source note (I7c C16b
+    // review fix N4) so a generated engine's provenance survives; empty when
+    // a CycleModelDesc is built directly in C++ (tests/fixtures), not
+    // through the loader.
+    std::string source;
 };
 
 } // namespace ps::drivetrain

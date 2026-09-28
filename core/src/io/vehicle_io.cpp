@@ -995,6 +995,7 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
     CycleModelDesc d;
     const std::string source = cj.value("source", std::string());
     if (source.empty()) throw std::runtime_error(cctx + ": 'source' is required (PLAN.md section 8)");
+    d.source = source;
 
     d.bore_m = piston.bore_m;
     d.stroke_m = piston.stroke_m;
@@ -1332,7 +1333,15 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         if (mj.contains("pmep_excess_kpa")) {
             e.maps.pmep_excess_pa = read_engine_table(mj.at("pmep_excess_kpa"), mctx + ".pmep_excess_kpa", "p_im_kpa", kKpa, kKpa);
             require_positive_y_axis(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", "p_im_kpa");
-            require_table_values(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", real(0.0), true, real(1e6), true);
+            // N1: the runtime (engine_simulated.cpp's tau_pump term) uses
+            // pmep_excess_pa as a plain SIGNED additive term with no sign
+            // special-casing, and the C16a generator already produces a
+            // signed value (provisional decision P-E) - a file value must
+            // follow the same rule. The bound is a sane-magnitude sanity
+            // check, not a physical constraint (real excess values are a
+            // few kPa); it also rejects non-finite values (a NaN/Inf fails
+            // both comparisons in require_table_values).
+            require_table_values(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", real(-1e6), true, real(1e6), true);
             e.maps.has_pmep_excess = true;
         }
         if (mj.contains("theta_kl_deg")) {

@@ -258,7 +258,10 @@ struct SimulatedEngineMapsDesc {
     // Reserved (I7c planner request): optional extra pumping loss over the
     // ideal (p_em - p_im) term, e.g. valve-flow losses. Absent = 0.
     bool has_pmep_excess = false;
-    Table2D pmep_excess_pa;                // y = p_im [Pa]; values >= 0 [Pa]
+    Table2D pmep_excess_pa;                 // y = p_im [Pa]; signed, finite, |value| <= 1e6 [Pa] (I7c C16b review N1:
+                                            // the runtime uses this as a plain signed additive term - see
+                                            // engine_simulated.cpp's tau_pump - so a file value follows the same
+                                            // signed rule the generator already produces)
     // Reserved (I7c planner request): knock-limited spark advance. Absent =
     // no knock limit; present = spark used = min(ecu spark target, theta_kl).
     bool has_theta_kl = false;
