@@ -904,3 +904,184 @@ TEST_CASE("C16a M1 diag: trapped air vs rpm, step and cycle count", "[.][diag][d
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// C16a review diagnostics (2026-09-28): one discriminating measurement for
+// each of the C16a report's two surprising numbers. Print-only, [.][diag].
+namespace {
+
+// F4's Ecotec cycle desc (the same edits as the F4 case).
+CycleModelDesc review_ecotec_desc() {
+    CycleModelDesc d = ps::test::make_generic_i4_cycle_desc();
+    const real b0 = d.bore_m;
+    d.bore_m = 0.088;
+    d.stroke_m = 0.101;
+    d.rod_m = d.rod_m * 0.101 / 0.086;
+    d.intake_valve_d_m = d.intake_valve_d_m * 0.088 / b0;
+    d.exhaust_valve_d_m = d.exhaust_valve_d_m * 0.088 / b0;
+    d.compression_ratio = 11.3;
+    return d;
+}
+
+struct ReviewPumpSplit {
+    real w_pump_acc = 0.0;                // the stepper's own W_total - W_gross [J]
+    real w_pump_trap = 0.0;               // trapezoid of p dV over the same window [J]
+    real in_valve = 0.0, in_runner = 0.0; // intake stroke: (p_cyl - p_ip) dV, (p_ip - p_im) dV
+    real ex_valve = 0.0, ex_port = 0.0;   // exhaust stroke: (p_cyl - p_ep) dV, (p_ep - p_amb) dV
+    real ref = 0.0;                       // p_im dV + p_amb dV (0 for a closed stroke pair)
+    real qs_in = 0.0, qs_ex = 0.0;        // quasi-steady orifice estimate [J]
+};
+
+// One motored point (valves on, combustion off, wall heat on), last cycle
+// split into gas-exchange terms, plus an independent quasi-steady estimate:
+// incompressible orifice flow of the piston's volume rate through the desc's
+// own curtain area n*pi*D*L(theta)*Cd(L/D), upstream density (intake port on
+// the intake stroke, cylinder on the exhaust stroke), Delta p capped at
+// 0.47 of the upstream pressure (choking). The QS estimate ignores wave
+// dynamics and the runner/port volumes entirely.
+ReviewPumpSplit review_motored_pump_split(const CycleModelDesc& d, real rpm, real p_amb, real t_im) {
+    ec::CycleStepper s(d, ps::test::kCycleFixtureLhv, ps::test::kCycleFixtureAfr);
+    s.set_switches(ec::CycleSwitches{true, false, true});
+    ec::OperatingPoint op;
+    op.rpm = rpm;
+    op.p_im_pa = p_amb;
+    op.p_amb_pa = p_amb;
+    op.t_im_k = t_im;
+    op.lambda = 1.0;
+    s.reset(op);
+    const std::uint64_t n = ec::steps_per_cycle(rpm, ec::kStepFull);
+    const std::uint64_t total = n * static_cast<std::uint64_t>(ec::kCyclesFull);
+    const std::uint64_t last = total - n;
+    const real bdc = s.model().geom.theta_bdc_deg;
+    auto qs_dp = [&](real vdot, real lift, real dval, int nv, real rho, real p_up) {
+        if (lift <= 0.0) return 0.47 * p_up;
+        const real cd = d.cd_vs_l_over_d.evaluate(lift / dval);
+        const real a = static_cast<real>(nv) * kPi * dval * lift * cd;
+        const real u = vdot / a;
+        return std::min(0.5 * rho * u * u, 0.47 * p_up);
+    };
+    ReviewPumpSplit r;
+    for (std::uint64_t k = 0; k < total; ++k) {
+        if (k == last) s.reset_accumulators();
+        const ec::CycleInputs a = s.evaluate(s.crank_deg(), s.state());
+        s.step_aligned(k, n);
+        if (k < last) continue;
+        const ec::CycleInputs b = s.evaluate(s.crank_deg(), s.state());
+        const real th = ec::wrap720(a.theta_deg + 0.5 * 720.0 / static_cast<real>(n));
+        if (ec::wrap720(th - bdc) < 360.0) continue; // gross window
+        const real dv = b.v_cyl - a.v_cyl;
+        const real pc = 0.5 * (a.cyl.p + b.cyl.p);
+        r.w_pump_trap += pc * dv;
+        const real vdot = std::abs(0.5 * (a.dv_dt + b.dv_dt));
+        r.ref += p_amb * dv;
+        if (th < 360.0) { // intake stroke, TDC -> BDC
+            const real pip = 0.5 * (a.ip.p + b.ip.p);
+            r.in_valve += (pc - pip) * dv;
+            r.in_runner += (pip - p_amb) * dv;
+            const real rho = a.ip.p / (a.ip.r * a.ip.t);
+            const real lift = 0.5 * (a.lift_in_m + b.lift_in_m);
+            r.qs_in -= qs_dp(vdot, lift, d.intake_valve_d_m, d.intake_valves, rho, a.ip.p) * std::abs(dv);
+        } else { // exhaust stroke, BDC -> TDC
+            const real pep = 0.5 * (a.ep.p + b.ep.p);
+            r.ex_valve += (pc - pep) * dv;
+            r.ex_port += (pep - p_amb) * dv;
+            const real rho = a.cyl.p / (a.cyl.r * a.cyl.t);
+            const real lift = 0.5 * (a.lift_ex_m + b.lift_ex_m);
+            r.qs_ex -= qs_dp(vdot, lift, d.exhaust_valve_d_m, d.exhaust_valves, rho, a.cyl.p) * std::abs(dv);
+        }
+    }
+    r.w_pump_acc = s.state().y[ec::kAccWork] - s.state().y[ec::kAccWorkGross];
+    return r;
+}
+
+} // namespace
+
+TEST_CASE("C16a review diag (b): Ecotec motored pumping split vs a quasi-steady estimate", "[.][diag][drivetrain][cycle]") {
+    struct Row { real rpm, bmep_bar, p_amb_bar; };
+    const Row rows[] = {{999.70, -0.88419, 0.9705}, {1991.42, -1.08094, 0.9710}, {3000.06, -1.43171, 0.9731},
+                        {3986.00, -1.94473, 0.972}, {4997.85, -2.49549, 0.9690}};
+    for (real lscale : {1.0, 1e-3}) {
+        CycleModelDesc d = review_ecotec_desc();
+        d.runner_length_m *= lscale;
+        const real v_c = kPi / 4.0 * d.bore_m * d.bore_m * d.stroke_m; // one cylinder
+        real sp[5], fmep_f4[5], fmep_qs[5];
+        std::printf("RB runner L %.4f m\n", d.runner_length_m);
+        for (int i = 0; i < 5; ++i) {
+            const ReviewPumpSplit r = review_motored_pump_split(d, rows[i].rpm, rows[i].p_amb_bar * 1e5, 298.15);
+            auto kpa = [&](real w) { return w / v_c / 1e3; };
+            sp[i] = 2.0 * d.stroke_m * rows[i].rpm / 60.0;
+            std::printf("RB rpm %7.1f Sp %5.2f pmep acc %7.2f trap %7.2f kPa | in valve %6.2f runner %6.2f | ex valve %6.2f "
+                        "port %6.2f | ref %6.3f | QS in %6.2f ex %6.2f sum %6.2f kPa\n",
+                        rows[i].rpm, sp[i], kpa(r.w_pump_acc), kpa(r.w_pump_trap), kpa(r.in_valve), kpa(r.in_runner),
+                        kpa(r.ex_valve), kpa(r.ex_port), kpa(r.ref), kpa(r.qs_in), kpa(r.qs_ex), kpa(r.qs_in + r.qs_ex));
+            // F4: FMEP = IMEP_net(model) - BMEP. Swapping the model's pumping
+            // for the QS pumping shifts FMEP by (W_qs - W_model)/V_c.
+            fmep_f4[i] = kF4A + kF4B * sp[i] + kF4C * sp[i] * sp[i];
+            fmep_qs[i] = fmep_f4[i] + (r.qs_in + r.qs_ex - r.w_pump_acc) / v_c;
+        }
+        if (lscale != 1.0) continue;
+        real m[3][4] = {};
+        for (int i = 0; i < 5; ++i) {
+            const real phi[3] = {1.0, sp[i], sp[i] * sp[i]};
+            for (int rr = 0; rr < 3; ++rr) {
+                for (int c = 0; c < 3; ++c) m[rr][c] += phi[rr] * phi[c];
+                m[rr][3] += phi[rr] * fmep_qs[i];
+            }
+        }
+        for (int k = 0; k < 3; ++k)
+            for (int rr = k + 1; rr < 3; ++rr) {
+                const real f = m[rr][k] / m[k][k];
+                for (int c = k; c < 4; ++c) m[rr][c] -= f * m[k][c];
+            }
+        real coef[3];
+        for (int k = 2; k >= 0; --k) {
+            real s = m[k][3];
+            for (int c = k + 1; c < 3; ++c) s -= m[k][c] * coef[c];
+            coef[k] = s / m[k][k];
+        }
+        for (int i = 0; i < 5; ++i)
+            std::printf("RB fmep rpm %7.1f  F4 %7.2f kPa  with QS pumping %7.2f kPa  diff %+6.2f kPa (%+.1f %%)\n", rows[i].rpm,
+                        fmep_f4[i] / 1e3, fmep_qs[i] / 1e3, (fmep_qs[i] - fmep_f4[i]) / 1e3,
+                        100.0 * (fmep_qs[i] / fmep_f4[i] - 1.0));
+        std::printf("RB QS refit a %.1f b %.3f c %.3f  (F4 a %.1f b %.3f c %.3f)\n", coef[0], coef[1], coef[2], kF4A, kF4B, kF4C);
+    }
+}
+
+TEST_CASE("C16a review diag (a): air ripple at 22.5 kPa vs runner length", "[.][diag][drivetrain][cycle]") {
+    const CycleModelDesc base = fixture_desc();
+    for (real lscale : {1.0, 2.0, 1e-3}) {
+        CycleModelDesc d = base;
+        d.runner_length_m *= lscale;
+        const ec::CycleStepper proto(d, fx::gasoline().lhv_j_kg, fx::gasoline().afr_stoich);
+        std::vector<real> rpm, air;
+        for (real r = 1450.0; r <= 2000.0 + 1e-9; r += 5.0) {
+            rpm.push_back(r);
+            air.push_back(reference_point(proto, d, r, 22500.0).m_air_j_cyc);
+        }
+        const real a_r = kPi / 4.0 * d.runner_diameter_m * d.runner_diameter_m;
+        const real c = std::sqrt(1.4 * 287.05 * SimulatedEngine::kIsaTemperatureK);
+        const real f_h = c / (2.0 * kPi) * std::sqrt(a_r / (d.runner_length_m * d.intake_port_m3));
+        std::vector<real> peaks;
+        real amin = 1e300, amax = -1e300;
+        for (std::size_t i = 0; i < air.size(); ++i) {
+            amin = std::min(amin, air[i]);
+            amax = std::max(amax, air[i]);
+            if (i == 0 || i + 1 == air.size()) continue;
+            if (air[i] > air[i - 1] && air[i] >= air[i + 1]) {
+                const real y0 = air[i - 1], y1 = air[i], y2 = air[i + 1];
+                const real den = y0 - 2.0 * y1 + y2;
+                const real off = den != 0.0 ? 0.5 * (y0 - y2) / den : 0.0;
+                peaks.push_back(rpm[i] + 5.0 * off);
+            }
+        }
+        std::printf("RA L %.5f m: Helmholtz (runner into port volume, valve shut) %.1f Hz; air [%.5e, %.5e] +-%.3f %%; %zu peaks:",
+                    d.runner_length_m, f_h, amin, amax, 100.0 * (amax - amin) / (amax + amin), peaks.size());
+        for (real p : peaks) std::printf(" %.1f", p);
+        std::printf("\n");
+        for (std::size_t i = 1; i < peaks.size(); ++i) {
+            const real f = 1.0 / (120.0 * (1.0 / peaks[i - 1] - 1.0 / peaks[i]));
+            std::printf("RA   peaks %.1f/%.1f rpm -> f = %.1f Hz (order k = 120 f/rpm = %.2f at %.1f rpm)\n", peaks[i - 1], peaks[i], f,
+                        120.0 * f / peaks[i], peaks[i]);
+        }
+    }
+}
