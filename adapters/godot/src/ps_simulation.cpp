@@ -821,6 +821,9 @@ Dictionary PsSimulation::get_vehicle_gauge_info(const String& vehicle_name) cons
         if (const auto* engine = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params)) {
             idle_rpm = engine->idle_rpm;
             limiter_rpm = engine->limiter.rpm;
+        } else if (const auto* sim = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&c.params)) {
+            idle_rpm = sim->idle_rpm;
+            limiter_rpm = sim->limiter.rpm;
         } else if (const auto* gearbox = std::get_if<ps::drivetrain::GearboxDesc>(&c.params)) {
             gear_count = static_cast<std::int64_t>(gearbox->forward_ratios.size());
         }
