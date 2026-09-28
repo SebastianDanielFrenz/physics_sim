@@ -65,6 +65,7 @@
 #include "cycle_fixtures.h"
 #include "ps/engine_cycle/cycle_point.h"
 #include "ps/engine_cycle/cycle_stepper.h"
+#include "ps/engine_cycle/pipe_network.h"
 
 #include <cmath>
 #include <cstdint>
@@ -73,7 +74,42 @@
 using namespace ps;
 using namespace ps::engine_cycle;
 
+namespace {
+
+// ps_audio A2: a short pipe-network run, so the guard also exercises (and
+// links) pipe_network.cpp without ps_core. A closed tube with a pressure step
+// into a junction volume: finite, moving, and mass closure to rounding.
+bool pipe_run_ok() {
+    PipeNetworkDesc d;
+    d.volumes.push_back(VolumeDesc{"junction", 5.0e-4, GasStateDesc{101325.0, 293.15, 0.0}});
+    PipeDesc p;
+    p.name = "tube";
+    p.length_m = 0.5;
+    p.d_start_m = 0.04;
+    p.d_end_m = 0.04;
+    p.dx_target_m = 0.025;
+    p.start = PipeEndDesc{};
+    p.end = PipeEndDesc{PipeEndDesc::Kind::Volume, 0, EndCorrection::None};
+    p.initial = GasStateDesc{200.0e3, 600.0, 1.0};
+    d.pipes.push_back(p);
+    PipeNetwork net(d, 1.0 / 46080.0);
+    const real m0 = net.total_mass();
+    for (int k = 0; k < 2000; ++k) net.step();
+    const real dm = std::fabs(net.total_mass() - m0) / m0;
+    const real pv = net.volume_state(0).p;
+    const bool ok = std::isfinite(net.total_energy()) && dm < 1e-12 && pv > 110.0e3;
+    std::printf("engine_cycle_standalone: pipe run %d cells, rel mass drift %.3g, junction p %.6g Pa\n",
+                net.total_cell_count(), dm, pv);
+    return ok;
+}
+
+} // namespace
+
 int main() {
+    if (!pipe_run_ok()) {
+        std::fprintf(stderr, "engine_cycle_standalone: FAIL - pipe network run\n");
+        return 1;
+    }
     const drivetrain::CycleModelDesc d = test::make_generic_i4_cycle_desc();
     const CycleStepper proto(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr);
 
