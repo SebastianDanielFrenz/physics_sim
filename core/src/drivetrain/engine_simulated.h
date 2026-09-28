@@ -163,6 +163,34 @@ public:
     [[nodiscard]] const SimulatedEngineMaps& maps() const { return *maps_; }
     [[nodiscard]] const std::shared_ptr<const SimulatedEngineMaps>& maps_ptr() const { return maps_; }
 
+    // PHYS-033 P4 I7c C16b: queue an already-built SimulatedEngineMaps
+    // (Powertrain::request_replace_engine_maps calls build_maps itself) for a
+    // swap at the next apply_pending_maps_swap() call. Caller thread, between
+    // World::step() calls only (never a job): besides storing the pointer it
+    // PREFILLS pending_steady_ - the per-engine ambient-dependent derived
+    // tables - from the NEW maps at the engine's CURRENT ambient, exactly the
+    // way a fresh engine built on those maps would hold them after
+    // set_ambient(current) (copy of the maps' own ISA tables, then a
+    // fill_steady_tables refill iff the ambient differs). That refill is the
+    // ~68 ms O(10^6)-evaluation cost; doing it here keeps it off the tick
+    // (review of C16b: it used to run inside the vehicle_islands_substep job
+    // on the swap tick). A later call before the swap applies replaces an
+    // earlier one (last request wins).
+    void request_replace_maps(std::shared_ptr<const SimulatedEngineMaps> new_maps);
+    [[nodiscard]] bool has_pending_maps_swap() const { return pending_maps_ != nullptr; }
+    // Applies a queued swap (no-op, returns nullptr, if none pending): swaps
+    // the maps pointer and std::swap's steady_ with the prefilled
+    // pending_steady_ (buffer exchange only - no allocation, no free, no
+    // refill). MUST be called outside any job (World::step calls it, via
+    // vehicle::System::apply_pending_engine_maps_swaps, before running the
+    // tick pipeline). Returns the OLD maps: the caller's shared_ptr drop is
+    // where a possible deallocation happens, so it must be outside any job
+    // too (D9: "the old maps are released on the sim thread outside jobs").
+    // If the ambient changes between request and apply, the next pre_solve's
+    // set_ambient refills as for any ambient change (pre-existing C12
+    // behaviour - callers quantise ambient).
+    std::shared_ptr<const SimulatedEngineMaps> apply_pending_maps_swap();
+
     // Torque at an arbitrary (omega, p_im) with the given combustion gate
     // (true = fired, the soft-cut taper still applies), starvation factor
     // and starter flag - the same function pre_solve uses, const, for the
@@ -206,6 +234,13 @@ private:
     void init_state_for(EngineState state);
 
     std::shared_ptr<const SimulatedEngineMaps> maps_;
+    // PHYS-033 P4 I7c C16b: queued by request_replace_maps, consumed by
+    // apply_pending_maps_swap - see both methods' own comments above.
+    std::shared_ptr<const SimulatedEngineMaps> pending_maps_;
+    // C16b review: steady tables for pending_maps_ at the ambient current at
+    // request time, filled by request_replace_maps on the caller thread and
+    // exchanged with steady_ by apply_pending_maps_swap.
+    SimulatedSteadyTables pending_steady_;
     // desc fields read per substep (engine management)
     real desc_idle_rpm_ = 0.0, stall_rpm_ = 0.0, fire_rpm_ = 0.0, start_complete_rpm_ = 0.0;
     real dfco_enable_rpm_ = 0.0, dfco_reenable_rpm_ = 0.0;

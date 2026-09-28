@@ -27,6 +27,10 @@ void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const
     });
 }
 
+void System::apply_pending_engine_maps_swaps() {
+    for (const auto& inst : instances_) inst->apply_pending_engine_maps_swap();
+}
+
 void System::note_body_wrench(BodyId body, const Wrench& w) {
     if (body.index >= vehicle_for_body_index_.size()) return;
     const std::int32_t vi = vehicle_for_body_index_[body.index];

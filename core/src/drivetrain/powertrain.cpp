@@ -1248,8 +1248,12 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             SimulatedEngineDesc burnt = *sim;
             burnt.fuels.assign(1, tank_desc ? tank_desc->fuel : sim->fuels.front());
-            engine_ = std::make_unique<SimulatedEngine>(burnt);
+            auto sim_engine = std::make_unique<SimulatedEngine>(burnt);
+            sim_engine_ptr_ = sim_engine.get(); // PHYS-033 P4 I7c C16b
+            simulated_engine_desc_ = std::move(burnt);
+            engine_ = std::move(sim_engine);
         }
+        engine_component_id_ = e_id; // PHYS-033 P4 I7c C16b
         engine_friction_row_ = engine_row;
         engine_has_fuel_model_ = e_has_fuel_model; // PHYS-033 P4 I7a C5, broadened C5d: gates fuel/heat booking below
 
@@ -2264,6 +2268,38 @@ void Powertrain::request_fuel_tank_mass(real kg) {
     if (std::isnan(kg)) throw std::runtime_error("set_fuel_tank_mass: the requested mass is NaN");
     fuel_tank_set_value_ = kg;
     fuel_tank_set_pending_ = true;
+}
+
+// PHYS-033 P4 I7c C16b -----------------------------------------------------
+
+void Powertrain::request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps) {
+    if (!engine_ || component_id != engine_component_id_) {
+        throw std::runtime_error("replace_engine_maps: unknown component id '" + std::string(component_id) + "'");
+    }
+    if (sim_engine_ptr_ == nullptr || !simulated_engine_desc_.has_value()) {
+        throw std::runtime_error("replace_engine_maps: component '" + std::string(component_id) + "' is not a simulated engine");
+    }
+    if (!new_engine_maps) throw std::runtime_error("replace_engine_maps: null maps");
+    // Only .maps ever differs from the desc this engine was originally built
+    // from (architecture/geometry/ECU/limiter/idle/starter/etc. are fixed
+    // for this engine's lifetime - a hot swap replaces MAPS, not the
+    // engine); SimulatedEngine::build_maps needs the full desc regardless
+    // (it reads geometry/ECU/limiter fields too, not just the map curves).
+    SimulatedEngineDesc updated = *simulated_engine_desc_;
+    updated.maps = new_engine_maps->maps;
+    // ALLOCATES (build_maps constructs a fresh SimulatedEngineMaps with its
+    // own derived tables) - safe here: this runs on the caller's thread,
+    // between World::step() calls, never inside a job (see this method's
+    // header-comment contract).
+    sim_engine_ptr_->request_replace_maps(SimulatedEngine::build_maps(updated));
+}
+
+void Powertrain::apply_pending_engine_maps_swap() {
+    if (sim_engine_ptr_ != nullptr) sim_engine_ptr_->apply_pending_maps_swap(); // returned old maps drop here
+}
+
+std::uint64_t Powertrain::simulated_engine_maps_content_hash() const {
+    return sim_engine_ptr_ != nullptr ? sim_engine_ptr_->maps().content_hash : 0;
 }
 
 } // namespace ps::drivetrain

@@ -16,6 +16,7 @@
 #include "ps/world/ids.h"
 
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 namespace ps::vehicle {
@@ -123,6 +124,17 @@ public:
     [[nodiscard]] bool has_fuel_tank() const { return powertrain_.has_fuel_tank(); }
     [[nodiscard]] real fuel_tank_mass() const { return powertrain_.fuel_tank_mass(); }
     void request_fuel_tank_mass(real kg) { powertrain_.request_fuel_tank_mass(kg); }
+    // PHYS-033 P4 I7c C16b: backs World::replace_engine_maps (queues) and
+    // vehicle::System::apply_pending_engine_maps_swaps (applies, from
+    // World::step before the tick pipeline, outside any job - see
+    // Powertrain::apply_pending_engine_maps_swap's own comment).
+    void request_replace_engine_maps(std::string_view component_id, drivetrain::EngineMapsPtr new_maps) {
+        powertrain_.request_replace_engine_maps(component_id, std::move(new_maps));
+    }
+    void apply_pending_engine_maps_swap() { powertrain_.apply_pending_engine_maps_swap(); }
+    [[nodiscard]] std::uint64_t simulated_engine_maps_content_hash() const {
+        return powertrain_.simulated_engine_maps_content_hash();
+    }
     [[nodiscard]] int powertrain_friction_cap_hits() const { return powertrain_.friction_cap_hits(); }
     // PHYS-033 P4 I4 C13: whether telemetry "stored" adds shaft_pe (only then).
     [[nodiscard]] bool powertrain_has_compliant_shafts() const { return powertrain_.has_compliant_shafts(); }

@@ -1,5 +1,6 @@
 #include "ps/io/vehicle_io.h"
 
+#include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/io/fuel_io.h"
@@ -995,6 +996,7 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
     CycleModelDesc d;
     const std::string source = cj.value("source", std::string());
     if (source.empty()) throw std::runtime_error(cctx + ": 'source' is required (PLAN.md section 8)");
+    d.source = source;
 
     d.bore_m = piston.bore_m;
     d.stroke_m = piston.stroke_m;
@@ -1332,7 +1334,15 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         if (mj.contains("pmep_excess_kpa")) {
             e.maps.pmep_excess_pa = read_engine_table(mj.at("pmep_excess_kpa"), mctx + ".pmep_excess_kpa", "p_im_kpa", kKpa, kKpa);
             require_positive_y_axis(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", "p_im_kpa");
-            require_table_values(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", real(0.0), true, real(1e6), true);
+            // N1: the runtime (engine_simulated.cpp's tau_pump term) uses
+            // pmep_excess_pa as a plain SIGNED additive term with no sign
+            // special-casing, and the C16a generator already produces a
+            // signed value (provisional decision P-E) - a file value must
+            // follow the same rule. The bound is a sane-magnitude sanity
+            // check, not a physical constraint (real excess values are a
+            // few kPa); it also rejects non-finite values (a NaN/Inf fails
+            // both comparisons in require_table_values).
+            require_table_values(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", real(-1e6), true, real(1e6), true);
             e.maps.has_pmep_excess = true;
         }
         if (mj.contains("theta_kl_deg")) {
@@ -1491,8 +1501,19 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             // by reference here (vault TOOL-019, the Windows ASan leg).
             const EngineMapOptions defaults{};
             const EngineMapOptions& opt = map_options != nullptr ? *map_options : defaults;
-            if (opt.generation_count_out != nullptr) ++*opt.generation_count_out;
-            const EngineMapsPtr gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool);
+            // PHYS-033 P4 I7c C16b (D8): an opt-in on-disk cache in front of
+            // the generator call below. cache_dir empty (the default) means
+            // load_cached_engine_maps/store_cached_engine_maps touch the
+            // filesystem not at all (see map_cache.h's own contract) - this
+            // whole block is then just the one key computation plus an
+            // always-null load, bit-identical to pre-C16b behaviour.
+            const std::uint64_t cache_key = drivetrain::engine_map_cache_key(*e.cycle, e.fuels.front(), opt.quality);
+            EngineMapsPtr gen = drivetrain::load_cached_engine_maps(opt.cache_dir, cache_key);
+            if (!gen) {
+                if (opt.generation_count_out != nullptr) ++*opt.generation_count_out;
+                gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool);
+                drivetrain::store_cached_engine_maps(opt.cache_dir, cache_key, *gen);
+            }
             const SimulatedEngineMapsDesc& g = gen->maps;
             std::string generated_keys;
             auto note = [&](const char* k) { generated_keys += generated_keys.empty() ? k : std::string(", ") + k; };

@@ -41,7 +41,17 @@ public:
                   const VehicleTickEnv& env, real tick_dt, real substep_rate_hz);
 
     [[nodiscard]] bool empty() const { return instances_.empty(); }
+    // PHYS-033 P4 I7c C16b (D9): applies every vehicle's queued engine-maps
+    // hot swap and drops the old maps. Called by World::step BEFORE the tick
+    // pipeline runs - TaskGraph::run submits every stage, the sequential
+    // ones included, as a job (task_graph.cpp), so nothing inside step_all is
+    // "outside a job". C16b review fix: this used to run at the top of
+    // step_all, i.e. inside the vehicle_islands_substep job.
+    void apply_pending_engine_maps_swaps();
     [[nodiscard]] std::size_t count() const { return instances_.size(); }
+    // True iff id names a vehicle this System created. Vehicles are never
+    // destroyed, so every issued id has generation 1 (create()).
+    [[nodiscard]] bool contains(VehicleId id) const { return id.generation == 1 && id.index < instances_.size(); }
     [[nodiscard]] VehicleInstance& at(VehicleId id) { return *instances_[id.index]; }
     [[nodiscard]] const VehicleInstance& at(VehicleId id) const { return *instances_[id.index]; }
 

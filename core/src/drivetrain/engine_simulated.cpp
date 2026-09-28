@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 namespace ps::drivetrain {
 namespace {
@@ -506,6 +507,40 @@ void SimulatedEngine::set_ambient(real p_pa, real t_k) {
         steady_.t_k = t_k;
         ++steady_rebuilds_;
     }
+}
+
+void SimulatedEngine::request_replace_maps(std::shared_ptr<const SimulatedEngineMaps> new_maps) {
+    if (!new_maps) throw std::runtime_error("SimulatedEngine::request_replace_maps: null maps");
+    // Mirror a fresh engine on new_maps (constructor + set_ambient): start
+    // from the maps' own ISA tables, refill iff the current ambient differs.
+    // Caller thread, between steps (allocates: copy-assignment may grow the
+    // vectors the first time) - see the header comment.
+    SimulatedSteadyTables& t = pending_steady_;
+    t.p_pa = new_maps->ref_p_pa;
+    t.t_k = new_maps->ref_t_k;
+    t.steady_wot_nm = new_maps->steady_wot_nm;
+    t.steady_motoring_nm = new_maps->steady_motoring_nm;
+    t.steady_torque_nm = new_maps->steady_torque_nm;
+    t.inverse_plate = new_maps->inverse_plate;
+    t.idle_ff = new_maps->idle_ff;
+    t.idle_p_im = new_maps->idle_p_im;
+    if (p_amb_ != t.p_pa || t_amb_ != t.t_k) {
+        fill_steady_tables(*new_maps, make_ambient(p_amb_, t_amb_), desc_idle_rpm_, idle_.max_throttle, t, false);
+        t.t_k = t_amb_;
+    }
+    pending_maps_ = std::move(new_maps);
+}
+
+std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::apply_pending_maps_swap() {
+    if (!pending_maps_) return nullptr;
+    std::shared_ptr<const SimulatedEngineMaps> old = std::move(maps_);
+    maps_ = std::move(pending_maps_);
+    pending_maps_.reset();
+    // Buffer exchange only: steady_ takes the tables prefilled from the new
+    // maps by request_replace_maps; pending_steady_ keeps the old buffers
+    // (same sizes) for the next request to overwrite. No refill here.
+    std::swap(steady_, pending_steady_);
+    return old;
 }
 
 void SimulatedEngine::init_state_for(EngineState state) {

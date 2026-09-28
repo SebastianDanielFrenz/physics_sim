@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -305,6 +306,11 @@ void World::step() {
     job_system_->reset_worker_stats();
     const auto tick_t0 = std::chrono::steady_clock::now();
 
+    // PHYS-033 P4 I7c C16b (D9): queued engine-maps hot swaps are applied,
+    // and the old maps released, here - on the calling (sim) thread, before
+    // the pipeline, outside any job (every pipeline stage runs as a job).
+    vehicle_system_->apply_pending_engine_maps_swaps();
+
     pipeline_->run(*job_system_);
 
     const auto tick_t1 = std::chrono::steady_clock::now();
@@ -403,6 +409,14 @@ void World::step() {
             row.push_back(e.fuel_energy_in);
             row.push_back(e.engine_heat);
             if (fuel_telemetry_channels_[vi].front().has_tank) row.push_back(ps_snap.fuel_mass_kg); // PHYS-033 P4 I7a C6
+        }
+
+        // PHYS-033 P4 I7c C16b: the current engine maps' content_hash, low
+        // 32 bits, right after this vehicle's fuel values, matching
+        // create_vehicle's registration order. Empty for a vehicle without a
+        // simulated engine.
+        if (vi < engine_maps_hash_channels_.size() && !engine_maps_hash_channels_[vi].empty()) {
+            row.push_back(real(static_cast<std::uint32_t>(vehicle_instance.simulated_engine_maps_content_hash())));
         }
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
@@ -654,6 +668,25 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         }
     }
 
+    // PHYS-033 P4 I7c C16b: vehicle<i>.engine.maps_hash_lo32, right after
+    // this vehicle's fuel-telemetry channels - registered only for a
+    // simulated engine (sim_engine_desc above, re-scanned here since it was
+    // local to the fuel loop above), never a TorqueMapEngine. A vehicle
+    // without a simulated engine gets an empty inner vector, so its CSV
+    // header stays byte-identical to before this existed.
+    if (engine_maps_hash_channels_.size() <= id.index) engine_maps_hash_channels_.resize(id.index + 1);
+    std::vector<EngineMapsTelemetryChannels>& engine_maps_channels = engine_maps_hash_channels_[id.index];
+    engine_maps_channels.clear();
+    for (const drivetrain::ComponentDesc& component : desc.powertrain.components) {
+        if (std::get_if<drivetrain::SimulatedEngineDesc>(&component.params) != nullptr) {
+            const std::string engine_prefix = "vehicle" + std::to_string(id.index) + ".engine.";
+            EngineMapsTelemetryChannels mc;
+            mc.maps_hash_lo32 = telemetry_->register_channel(engine_prefix + "maps_hash_lo32");
+            engine_maps_channels.push_back(mc);
+            break; // at most one engine per vehicle
+        }
+    }
+
     return id;
 }
 
@@ -691,6 +724,13 @@ real World::fuel_tank_mass(VehicleId id) const {
 
 void World::set_fuel_tank_mass(VehicleId id, real kg) {
     vehicle_system_->at(id).request_fuel_tank_mass(kg);
+}
+
+void World::replace_engine_maps(VehicleId id, std::string_view component_id, drivetrain::EngineMapsPtr new_maps) {
+    // Documented (world.h) to throw for an unknown vehicle id; System::at is a
+    // plain operator[], so check here rather than index out of bounds.
+    if (!vehicle_system_->contains(id)) throw std::runtime_error("replace_engine_maps: unknown vehicle id");
+    vehicle_system_->at(id).request_replace_engine_maps(component_id, std::move(new_maps));
 }
 
 const std::vector<real>& World::vehicle_component_channel_values(VehicleId id) const {
