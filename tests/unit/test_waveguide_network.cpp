@@ -13,6 +13,7 @@
 #include "ps/math/transcendental.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -359,49 +360,53 @@ TEST_CASE("W4 waveguide lossless network is passive: wave energy never grows", "
 TEST_CASE("W5 waveguide build-time rejections", "[drivetrain][cycle][pipe]") {
     // Catches: a segment too short for the minimum delay being accepted (the
     // delay line would need N < 1 or an unstable allpass), bad topology.
-    auto message = [](const WaveguideNetworkDesc& d) {
-        std::string msg;
-        try {
-            WaveguideNetwork net(d, kHFull);
-        } catch (const std::invalid_argument& e) {
-            msg = e.what();
+    // expect_message(d, "") means "must not throw"; a non-empty expected
+    // string means "must throw std::invalid_argument with exactly this
+    // message". CHECK_NOTHROW/CHECK_THROWS_WITH, not try/catch + e.what():
+    // catching an exception by reference and then reading it is the
+    // clang-cl 19.1.5 Windows ASan crash pattern (vault TOOL-019, CLAUDE.md
+    // "Windows ASan caveat") - Catch2's own catch is safe (built with
+    // -asan-stack=0).
+    auto expect_message = [](const WaveguideNetworkDesc& d, const std::string& expected) {
+        if (expected.empty()) {
+            CHECK_NOTHROW(WaveguideNetwork(d, kHFull));
+        } else {
+            CHECK_THROWS_WITH(WaveguideNetwork(d, kHFull), Catch::Matchers::Equals(expected));
         }
-        return msg;
     };
     WaveguideNetworkDesc d;
     d.nodes.push_back(node(WgNodeDesc::Kind::Closed, "a"));
     d.nodes.push_back(node(WgNodeDesc::Kind::Closed, "b"));
     d.segments.push_back(seg("stub", 0.005, 0.03, 0, 1, EndCorrection::None, EndCorrection::None));
-    const std::string m = message(d);
-    std::printf("W5: %s\n", m.c_str());
-    CHECK(m.rfind("WaveguideNetwork: segment 'stub' delay 0.6", 0) == 0);
-    CHECK(m.find("below the minimum 1.5") != std::string::npos);
+    CHECK_THROWS_WITH(WaveguideNetwork(d, kHFull),
+                       Catch::Matchers::StartsWith("WaveguideNetwork: segment 'stub' delay 0.6") &&
+                           Catch::Matchers::ContainsSubstring("below the minimum 1.5"));
     d.segments[0].length_m = 0.012;  // 1.61 samples
-    CHECK(message(d).empty());
+    expect_message(d, "");
 
     WaveguideNetworkDesc t = d;
     t.nodes[0].kind = WgNodeDesc::Kind::Open;
     t.nodes[0].radiation = true;
-    CHECK(message(t) ==
-          "WaveguideNetwork: segment 'stub': a radiating open end needs an unflanged or flanged end correction");
+    expect_message(t, "WaveguideNetwork: segment 'stub': a radiating open end needs an unflanged or flanged end "
+                       "correction");
     t.segments[0].end_a = EndCorrection::Unflanged;
     t.segments[0].end_b = EndCorrection::Flanged;
-    CHECK(message(t) == "WaveguideNetwork: segment 'stub': a closed end cannot carry an end correction");
+    expect_message(t, "WaveguideNetwork: segment 'stub': a closed end cannot carry an end correction");
     WaveguideNetworkDesc u = d;
     u.nodes.push_back(node(WgNodeDesc::Kind::Junction, "dangling"));
-    CHECK(message(u) == "WaveguideNetwork: node 'dangling': a junction needs at least one segment");
+    expect_message(u, "WaveguideNetwork: node 'dangling': a junction needs at least one segment");
     u = d;
     u.segments.push_back(seg("extra", 0.3, 0.03, 0, 1, EndCorrection::None, EndCorrection::None));
-    CHECK(message(u) == "WaveguideNetwork: node 'a': an end node needs exactly one segment");
+    expect_message(u, "WaveguideNetwork: node 'a': an end node needs exactly one segment");
     u = d;
     u.nodes[0].kind = WgNodeDesc::Kind::Open;
     u.nodes[0].radiation = false;
     u.nodes[1].kind = WgNodeDesc::Kind::Anechoic;
     u.segments[0].loss = WgLoss::LaminarFriction;
-    CHECK(message(u) ==
-          "WaveguideNetwork: segment 'stub': laminar friction needs a Junction or Closed node at one end at least");
+    expect_message(u, "WaveguideNetwork: segment 'stub': laminar friction needs a Junction or Closed node at one end "
+                       "at least");
     u.nodes[1].kind = WgNodeDesc::Kind::Closed;
-    CHECK(message(u).empty());
+    expect_message(u, "");
 }
 
 TEST_CASE("W6 waveguide stepping allocates nothing inside a job", "[drivetrain][cycle][pipe]") {

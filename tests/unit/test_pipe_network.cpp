@@ -11,6 +11,7 @@
 #include "ps/jobs/job_system.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -739,41 +740,34 @@ TEST_CASE("P6 pipe CFL rejection at build time (dx 6.25 mm, h 21.7 us)", "[drive
     // Catches: a missing CFL check (this case went NaN in audio_plan.md M1).
     PipeNetworkDesc d;
     d.pipes.push_back(make_pipe("primary", 0.5, 0.036, 0.036, 0.00625, closed_end(), closed_end(), 900.0));
-    std::string msg;
-    try {
-        PipeNetwork net(d, kHFull);
-    } catch (const std::invalid_argument& e) {
-        msg = e.what();
-    }
-    CHECK(msg ==
-          "PipeNetwork: pipe 'primary' cell size 0.00625 m is below the CFL minimum 0.02441 m (max |u|+a 900 m/s, "
-          "h 2.17e-05 s, CFL limit 0.8)");
+    // REQUIRE_THROWS_WITH + a string matcher, not try/catch + e.what():
+    // catching an exception by reference and then reading it is the
+    // clang-cl 19.1.5 Windows ASan crash pattern (vault TOOL-019, CLAUDE.md
+    // "Windows ASan caveat") - Catch2's own catch is safe (built with
+    // -asan-stack=0).
+    REQUIRE_THROWS_WITH(PipeNetwork(d, kHFull),
+                         Catch::Matchers::Equals("PipeNetwork: pipe 'primary' cell size 0.00625 m is below the CFL "
+                                                  "minimum 0.02441 m (max |u|+a 900 m/s, h 2.17e-05 s, CFL limit 0.8)"));
     // Just above the minimum is accepted.
     d.pipes[0].dx_target_m = 0.0245;
     CHECK_NOTHROW(PipeNetwork(d, kHFull));
 
     SECTION("volume and orifice coupling checks") {
+        // CHECK_THROWS_WITH + a StartsWith matcher, not try/catch + e.what()
+        // (the same ASan catch-parameter hazard as P6 above - Catch2's own
+        // exception translation is safe, built with -asan-stack=0).
         PipeNetworkDesc v;
         v.volumes.push_back(VolumeDesc{"tiny_junction", 1.0e-5, GasStateDesc{}});
         v.pipes.push_back(make_pipe("a", 0.3, 0.04, 0.04, 0.032, closed_end(), volume_end(0)));
-        std::string m2;
-        try {
-            PipeNetwork net(v, kHFull);
-        } catch (const std::invalid_argument& e) {
-            m2 = e.what();
-        }
-        CHECK(m2.rfind("PipeNetwork: volume 'tiny_junction' 1e-05 m^3 is below the coupling minimum", 0) == 0);
+        CHECK_THROWS_WITH(PipeNetwork(v, kHFull),
+                           Catch::Matchers::StartsWith("PipeNetwork: volume 'tiny_junction' 1e-05 m^3 is below the "
+                                                        "coupling minimum"));
 
         PipeNetworkDesc o;
         o.volumes.push_back(VolumeDesc{"small", 1.0e-4, GasStateDesc{}});
         o.orifices.push_back(OrificeDesc{"throttle", 0, -1, 5.0e-3, 500.0});
-        std::string m3;
-        try {
-            PipeNetwork net(o, kHFull);
-        } catch (const std::invalid_argument& e) {
-            m3 = e.what();
-        }
-        CHECK(m3.rfind("PipeNetwork: orifice 'throttle' is too stiff for h", 0) == 0);
+        CHECK_THROWS_WITH(PipeNetwork(o, kHFull),
+                           Catch::Matchers::StartsWith("PipeNetwork: orifice 'throttle' is too stiff for h"));
     }
 }
 
@@ -856,8 +850,13 @@ TEST_CASE("pipe diag: what the CFL check prevents (dx 6.25 mm at h_full)", "[.][
         }
         std::printf("CFL diag: constructed (check disabled?) - first bad step %d, total energy %.6g\n", bad_step,
                     net.total_energy());
-    } catch (const std::invalid_argument& e) {
-        std::printf("CFL diag: rejected at build time: %s\n", e.what());
+    } catch (const std::invalid_argument&) {
+        // Catch by type only, message not read (the ASan catch-parameter
+        // hazard, CLAUDE.md's "Windows ASan caveat" - "catching only by
+        // type... is fine", only reading the caught object crashes) - this
+        // is the expected/normal outcome (the CFL check firing), so no
+        // message is needed to know what happened.
+        std::printf("CFL diag: rejected at build time (expected - the CFL check fired)\n");
     }
 }
 

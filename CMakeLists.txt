@@ -374,6 +374,7 @@ add_subdirectory(core)
 add_subdirectory(audio)
 add_subdirectory(tools/ps_run)
 add_subdirectory(tools/sweep)
+add_subdirectory(tools/ps_engine_audio)
 
 if(PS_BUILD_TESTS)
   include(CTest)

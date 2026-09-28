@@ -26,14 +26,32 @@
 
 #include "ps/types.h"
 
+#include <string>
 #include <vector>
 
 namespace ps::engine_cycle {
 
+// Non-throwing form: returns an empty string when firing_order is a valid
+// permutation of 1..cylinders, else the exact message validate_firing_order
+// below would throw. core/src/io/vehicle_io.cpp's loader uses this form (not
+// try/catch + e.what()) because catching an exception by reference and then
+// reading it is the clang-cl 19.1.5 Windows ASan crash pattern (vault
+// TOOL-019, CLAUDE.md's "Windows ASan caveat") - core/ must never do that.
+// validate_firing_order is implemented in terms of this, so the two can
+// never disagree on message text.
+[[nodiscard]] std::string firing_order_error(const std::vector<int>& firing_order, int cylinders);
+
 // Throws std::invalid_argument if firing_order is not a permutation of
 // 1..cylinders (wrong length, a value outside [1, cylinders], or a repeated
-// value). Pure - never touches CycleModelDesc or anything else.
+// value). Pure - never touches CycleModelDesc or anything else. For a
+// direct C++ caller (tests, a future A5 CycleEngine) that wants the
+// exception-throwing form; core/'s own loader uses firing_order_error
+// instead (see above).
 void validate_firing_order(const std::vector<int>& firing_order, int cylinders);
+
+// Non-throwing form of validate_firing_angles below - same rationale/rule
+// as firing_order_error above.
+[[nodiscard]] std::string firing_angles_error(const std::vector<real>& firing_angles_deg, int cylinders);
 
 // Throws std::invalid_argument if firing_angles_deg (when non-empty) is not
 // exactly one value per cylinder, every value finite and in [0, 720), no

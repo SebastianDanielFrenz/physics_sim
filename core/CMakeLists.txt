@@ -153,6 +153,8 @@ add_library(ps_core STATIC
   src/drivetrain/engine_simulated.cpp
   src/drivetrain/gearbox.cpp
   src/drivetrain/manual_tcu.cpp
+  src/drivetrain/engine_sound_state.cpp
+  src/drivetrain/engine_rig.cpp
 
   # Engine-map generator/disk-cache infrastructure (I7c C16a/C16b) - NOT
   # part of ps_engine_cycle above: both need ps::jobs::JobSystem (ps_core-

@@ -578,8 +578,16 @@ void PipeNetwork::set_volume_source(int v, real mdot_kg_s, real h_total_j_kg, re
 
 void PipeNetwork::set_orifice_cd_area(int k, real cd_area_m2) {
     OrificeRt& o = orifices_[static_cast<std::size_t>(k)];
-    if (!(cd_area_m2 > 0.0 && cd_area_m2 <= o.max_cd_area))
-        throw std::invalid_argument("PipeNetwork: orifice Cd*A must be > 0 and <= its stability bound");
+    if (!(cd_area_m2 > 0.0 && cd_area_m2 <= o.max_cd_area)) {
+        // A10: name the offending values - a NaN/Inf caller (e.g. an upstream
+        // control-loop division) previously produced a bare "stability bound"
+        // message with no way to tell a genuine over-bound value from a
+        // propagated non-finite one; see live_engine.cpp's plenum-loop guard.
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "orifice %d Cd*A must be > 0 and <= its stability bound (got %.6g, bound %.6g)",
+                      k, static_cast<double>(cd_area_m2), static_cast<double>(o.max_cd_area));
+        throw std::invalid_argument(std::string("PipeNetwork: ") + buf);
+    }
     o.cd_area = cd_area_m2;
 }
 

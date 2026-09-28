@@ -1,0 +1,10 @@
+{
+  "format": "physics_sim.engine_audio_script/1",
+  "source": "ps_audio A10 shipped demo script for tools/ps_engine_audio: start, settle at a light throttle, then cut ignition and let the engine stall (EngineRig::set_ignition < 0.5 forces EngineState::Off immediately, from any state - engine_simulated.cpp's state machine checks this before its per-state transitions, so this never passes through Stalled; see engine_rig.h's own field comment and tests/unit/test_engine_rig_audio.cpp's R3 case). Every timing value [AS].",
+  "duration_s": 5.0,
+  "events": [
+    { "t": 0.0, "starter": 1.0 },
+    { "t": 0.8, "starter": 0.0, "throttle": 0.15 },
+    { "t": 2.0, "ignition": 0.0 }
+  ]
+}

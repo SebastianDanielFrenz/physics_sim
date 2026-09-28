@@ -71,6 +71,7 @@ add_executable(ps_unit_tests
   test_firing_order.cpp
   test_audio_time_map.cpp
   test_audio_voice.cpp
+  test_engine_rig_audio.cpp
 )
 
 target_link_libraries(ps_unit_tests
