@@ -222,6 +222,16 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     f.pod(desc.exhaust_backflow_temperature_k);
     f.vec(desc.grid_rpm);
     f.vec(desc.grid_p_im);
+    // C17a follow-up: the Tier 1b spark schedule and the Tier 2 ignition
+    // delay, folded (behind a tag) only when present / non-zero so every
+    // pre-existing engine's key - and its .psmaps file name - is unchanged.
+    // The generator's output for such an engine is bit-identical as well.
+    if (!desc.spark_advance_deg.x.empty() || !desc.spark_advance_deg.y.empty() ||
+        !desc.spark_advance_deg.values.empty() || desc.ignition_delay_deg != real(0.0)) {
+        f.str("c17a2.spark_schedule");
+        f.table(desc.spark_advance_deg);
+        f.pod(desc.ignition_delay_deg);
+    }
     // FuelDesc (source excluded - the generator never reads it)
     f.str(fuel.name);
     f.pod(static_cast<int>(fuel.phase));

@@ -16,7 +16,7 @@
     "discharge_coefficient": 0.8,
     "area_fraction_vs_position": {
       "x": [0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0],
-      "y": [0.0027459713, 0.012, 0.03, 0.12, 0.4, 0.75, 1.0]
+      "y": [0.0026313886, 0.012, 0.03, 0.12, 0.4, 0.75, 1.0]
     }
   },
   "throttle_body_source": "[AS] Tier 3: bore sized for a 60 m/s mean air velocity at 6600 rpm (Toyota's rated-power SPEED [C]) with VE 1 at ISA [rule of thumb, recalled]. DISCLOSURE: the M-B file's air-flow-sized 53.6171 mm bore had been seen before this rule was applied. Cd 0.8 [AS] and the area-fraction shape above position 0 [AS] are the M-B file's. y(0) [D] = 0.5 x the plate-0 leak area fraction giving zero net torque at idle_rpm 800 (ISA) on this engine's OWN generated maps (model-consistency rule, as M-B; measured by the [.][diag] case 'C17a-MA diag: idle leak bisection'), so the idle PI keeps authority.",
@@ -50,17 +50,9 @@
         [1.0, 1.0, 1.01, 1.0, 0.98, 0.98, 0.93, 0.93, 0.846526, 0.846526, 0.829695, 0.829695],
         [1.0, 1.0, 1.01, 1.0, 0.98, 0.98, 0.93, 0.93, 0.846526, 0.846526, 0.829062, 0.829695]
       ]
-    },
-    "spark_advance_deg": {
-      "source": "[D] plan D11 mbt_tracking realised as a table: the constant MBT spark the C16a generator uses, -(ca50 - burn*(ln2/a)^(1/(m+1))) = 23.053 deg BTDC (rounded to 1e-4 deg); the measured spark is NOT used",
-      "rpm": [600.0, 6900.0],
-      "p_im_kpa": [20.0, 105.0],
-      "values": [
-        [23.053, 23.053],
-        [23.053, 23.053]
-      ]
     }
   },
+  "ecu_source": "ecu.spark_advance_deg is not given here: the loader takes it from cycle.spark_advance_deg (the measured schedule the generator ran its nodes at; C17a follow-up).",
   "cycle": {
     "source": "I7c C17a M-A: C15a 0D cycle-model description of the Toyota A25A-FKS; the loader generates every runtime map from it (C16a). Tiers per i7c plan D1: Tier 1 = measured/cited engine description, Tier 1b = measured ECU schedules (inputs only), Tier 2 = literature constants frozen before any comparison, Tier 3 = [AS] geometry set by a stated sizing rule. Nothing here was chosen from the A25A's measured torque, fuel flow, BSFC, air flow, WOT envelope or motoring curve. Gas properties: the descriptor's defaults (NIST-JANAF linear cv fits [Tier 2, DERIVED], ps/drivetrain/engine_cycle_desc.h). Not modelled: intake manifold temperature (charge at ambient), exhaust back pressure (I7d), EGR (plan D3; the EPA data show the EGR valve closed along WOT above ~2000 rpm).",
     "rod_mm": 155.1,
@@ -159,6 +151,36 @@
       }
     },
     "cam_source": "[D] Tier 1b: the EPA-measured cam phase schedules, inputs only (never fitted). DERIVED smoothing: the raw IDW grid made the cycle model's trapped air fall with rising MAP at 600/800/1000 rpm (by up to 6.4 %; nearest-neighbour cam steps of up to 24 deg exhaust retard between adjacent MAP cells), which the generator rejects (eta_i is resampled over air mass). Chosen from that model-side criterion only, before any dyno comparison: 47/240 intake and 55/240 exhaust cells change; smallest air step after it +7.6 %.",
+    "spark_advance_deg": {
+      "source": "[D] Tier 1b: measured 'Spark Timing, CAD BTDC' per fired point (EPA NVFEL A25A Tier 3 xlsx), gridded (IDW k6, nearest outside the measured hull) by a25a_author.py's build_schedule_grid, then the cam tables' median-3 root along MAP (DERIVED; see spark_advance_deg_source)",
+      "rpm": [600.0, 800.0, 1000.0, 1200.0, 1500.0, 1800.0, 2100.0, 2400.0, 2700.0, 3000.0, 3300.0, 3700.0, 4100.0, 4500.0, 4900.0, 5300.0, 5700.0, 6100.0, 6500.0, 6900.0],
+      "p_im_kpa": [20.0, 27.727, 35.455, 43.182, 50.909, 58.636, 66.364, 74.091, 81.818, 89.545, 97.273, 105.0],
+      "values": [
+        [9.986, 9.986, 12.511, 12.511, 12.511, 11.764, 7.189, 6.875, 6.875, 6.875, -1.35273, -1.77381],
+        [9.986, 10.8473, 20.5233, 20.5233, 20.5233, 20.5233, 17.5171, 12.625, 8.46214, 6.875, -1.35273, -1.77381],
+        [7.731, 32.0104, 32.0104, 31.2898, 25.3487, 25.3487, 21.6092, 20.3857, 20.3857, 16.7844, -1.35273, -1.77381],
+        [22.866, 28.965, 30.3872, 30.3872, 26.6881, 26.6881, 26.6881, 26.8384, 26.8384, 21.7198, -2.943, -2.943],
+        [22.866, 29.4637, 29.4808, 29.4808, 29.0478, 29.0478, 30.1246, 30.1246, 27.7975, 19.8258, -5.20733, -6.32381],
+        [23.563, 27.9094, 27.9094, 27.9094, 28.6401, 28.6401, 28.6401, 28.5771, 27.6882, 17.7097, -2.48776, -3.41852],
+        [23.563, 25.3891, 25.7481, 26.1124, 27.5488, 27.9953, 27.9953, 27.3619, 26.1277, 21.9075, -0.994664, -3.41852],
+        [30.156, 24.9939, 24.9939, 25.5275, 26.8941, 27.9666, 27.9666, 27.9329, 24.5389, 18.6566, 0.181967, 0.181967],
+        [30.156, 25.2842, 24.4226, 24.4226, 26.6091, 27.7832, 27.7832, 27.1088, 24.5425, 18.2297, 0.181967, 0.181967],
+        [24.28, 24.28, 23.1102, 23.1102, 25.9499, 27.38, 27.38, 26.6004, 25.5792, 15.1501, 4.45921, 4.45921],
+        [30.313, 24.2614, 22.4033, 22.4033, 24.6737, 26.5155, 26.5155, 25.0369, 23.4869, 15.2979, 4.45921, 4.45921],
+        [30.313, 22.1611, 21.5975, 21.5975, 23.5306, 24.1964, 24.1964, 22.3298, 19.932, 13.8428, 4.28329, 4.08639],
+        [30.445, 20.7677, 20.647, 20.647, 20.647, 20.089, 18.1549, 17.3401, 13.6121, 6.8415, 3.26892, 3.26892],
+        [30.469, 21.7688, 20.7263, 20.079, 19.6924, 15.4209, 13.5226, 11.5411, 8.35434, 4.6973, 4.25122, 4.25122],
+        [30.625, 23.0096, 21.6887, 19.9922, 17.8371, 13.077, 11.7439, 9.08859, 8.28475, 4.41866, 3.06876, 3.06876],
+        [30.625, 23.28, 22.5533, 20.255, 16.8564, 13.3785, 11.0605, 9.71214, 7.24489, 4.65284, 3.28813, 3.28813],
+        [30.625, 23.28, 22.972, 20.258, 13.505, 13.505, 9.884, 9.884, 9.048, 5.76215, 5.04469, 5.04469],
+        [23.28, 23.28, 22.972, 20.258, 13.505, 13.505, 9.884, 9.884, 9.884, 5.2879, 5.04469, 5.04469],
+        [23.28, 23.28, 22.972, 20.258, 13.505, 13.505, 9.884, 9.884, 5.2879, 5.2879, 5.04469, 5.04469],
+        [23.28, 23.28, 22.972, 20.258, 13.505, 13.505, 9.884, 9.884, 5.2879, 5.2879, 5.2879, 5.04469]
+      ]
+    },
+    "spark_advance_deg_source": "[D] Tier 1b (C17a follow-up, owner ruling 1): the EPA-measured ECU spark schedule, an input only (never fitted); 240 measured points, 98/240 cells outside their hull (nearest value). The 30 protection-enrichment rows are kept (real ECU behaviour, as in lambda_target); 28/240 cells have one as their nearest sample (schedules.protection_enrichment_flag_grid). The generator runs every grid node at this spark; it is also the ECU's runtime schedule (the loader copies it into ecu.spark_advance_deg). DERIVED smoothing, chosen before any dyno comparison: with the raw grid the runtime rejects the engine (steady torque falls with plate by 0.49 N*m at 2750 rpm, p 96-97 kPa, where the raw grid retards 18.2 -> -0.8 deg BTDC between the 89.5 and 97.3 kPa cells at 2700 rpm); the cam tables' parameter-free median-3 root along MAP keeps the WOT column and monotone runs and changes 49/240 cells by up to 20.07 deg (isolated nearest-neighbour excursions at 600-1000 rpm; 97.3 kPa by <= 1.35 deg at 1200-3300 rpm).",
+    "ignition_delay_deg": 0.0,
+    "ignition_delay_deg_source": "Tier 2 [D] PROVISIONAL: Wiebe start = spark + delay. Literature: MIT 2.61 (Heywood's course) lecture 9 'SI engine combustion I', slide 'Burn duration': modern fast-burn engines, medium speed part load, spark to 10 % burned ~15 crank deg. The frozen Wiebe (a 5, m 2, 60 deg) already spans 16.57 deg from its start to 10 % burned, so delay = max(0, 15 - that) = 0: the Wiebe's own development phase already covers the cited flame development (a literal 15 deg would double-count it).",
     "wiebe_a": 5.0,
     "wiebe_m": 2.0,
     "burn_duration_deg": 60.0,

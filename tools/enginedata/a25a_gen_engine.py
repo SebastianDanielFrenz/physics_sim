@@ -12,7 +12,8 @@ Frozen-literature rule (i7c plan D1). The cycle block holds ONLY
   - Tier 1  engine description, measured or cited: bore/stroke [A], CR and crank offset [C SAE 2019-01-0249
             Table 1], valve lift profiles [D digitised SAE 2019-01-0249 Fig. 11], valve counts [C];
   - Tier 1b measured ECU schedules, gridded [D] by tools/enginedata/a25a_author.py (out/a25a/a25a_tables.json):
-            intake/exhaust cam phase and lambda target over (rpm, MAP) - inputs, never fitting targets;
+            intake/exhaust cam phase, lambda target and (C17a follow-up) spark advance over (rpm, MAP) - inputs,
+            never fitting targets; plus the Tier 2 ignition delay (Wiebe start = spark + delay);
   - Tier 2  model constants frozen from literature (Wiebe, Woschni, Cd(L/D), combustion efficiency, gas
             properties = the descriptor's NIST-JANAF defaults, friction = D13 F4, the Ecotec fit);
   - Tier 3  [AS] geometry set by a stated sizing rule (rod, valve heads, runner, ports, plenum, throttle).
@@ -27,7 +28,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from a25a_author import build_schedule_grid  # noqa: E402  (the SAME IDW gridding as the cam/lambda schedules)
 
 WT = Path(__file__).resolve().parents[2]
 ENGINE_JSON = WT / "data" / "engines" / "toyota_a25a_fks_gen.json"
@@ -62,7 +67,8 @@ AREA_SHAPE_X = [0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0]
 AREA_SHAPE_Y_ABOVE0 = [0.012, 0.03, 0.12, 0.4, 0.75, 1.0]  # [AS] the M-B file's shape above position 0
 # y(0): 0.5 x the plate-0 leak area fraction giving zero net torque at idle_rpm 800 (ISA) on THIS file's own
 # generated maps, measured by the [.][diag] case named in the module docstring. None = not yet measured.
-THROTTLE_LEAK_Y0: float | None = 0.0027459713  # 0.5 x y0* 0.00549194252 (diag, 2026-09-28)
+THROTTLE_LEAK_Y0: float | None = 0.0026313886  # 0.5 x y0* 0.00526277725 (diag, 2026-09-28, re-measured on the maps
+# generated at the measured spark schedule, C17a follow-up; was 0.0027459713 = 0.5 x 0.00549194252 at constant MBT spark)
 THROTTLE_LEAK_PLACEHOLDER = 0.0022046  # the M-B value, used ONLY until the diag measures this engine's own
 
 # ---------------------------------------------------------------- Tier 2 ---
@@ -75,6 +81,20 @@ COMB_EFF_LEAN = 0.98
 BACKFLOW_T_K = 800.0
 # D13 F4: Chevrolet 2.5 L Ecotec LCV motored-friction fit (a third engine), pinned by
 # tests/unit/test_engine_map_generator.cpp ("F4 Ecotec motored-friction fit pinned").
+# C17a follow-up, flame-development (ignition) delay: Wiebe start = spark + delay (PROVISIONAL P1). Literature: MIT
+# 2.61 (Heywood's course) lecture 9 "SI engine combustion I", slide "Burn duration": "For modern fast-burn engines
+# under medium speed, part load condition: 0-10% ~ 15o, 0-50% ~ 25o, 0-90% ~ 35o" (crank deg from the spark).
+# The frozen Wiebe already takes BURN*(ln(1/0.9)/a)^(1/(m+1)) = 16.57 deg from its start to 10 % burned, so the
+# delay that makes the model's spark->10 % equal the cited 15 deg is max(0, 15 - 16.57) = 0 (DERIVED).
+FLAME_DEV_0_10_DEG = 15.0
+# C17a follow-up, spark schedule smoothing (DERIVED, PROVISIONAL): the same parameter-free median-3 root along MAP
+# as the cam schedules. Chosen from a model-consistency rejection, BEFORE any S1/S2 run: with the raw IDW spark
+# grid the runtime SimulatedEngine refuses the engine (steady torque falls with plate by 0.49 + 0.11 N*m at
+# 2750 rpm, p 96.2-97.4 kPa, where the raw grid retards 18.2 -> -0.8 deg BTDC between the 89.5 and 97.3 kPa
+# cells at 2700 rpm). The root keeps the WOT (105 kPa) column and monotone runs unchanged; it changes 49/240
+# cells: 97.3 kPa by <= 1.35 deg (1200-3300 rpm) and isolated nearest-neighbour excursions at 600-1000 rpm by up
+# to 20.1 deg (e.g. 32.6 deg BTDC between 12.5 and 11.8 at 600 rpm).
+SPARK_SMOOTH = True
 F4 = {"model": "polynomial_piston_speed",
       "a_kpa": 66.619521802247167, "b_kpa": 0.091085076199249656, "c_kpa": 0.34680954153442133}
 
@@ -95,7 +115,9 @@ def derived() -> dict:
     a_in_mm2 = INTAKE_VALVES * math.pi / 4.0 * d_in ** 2
     a_ex_mm2 = EXHAUST_VALVES * math.pi / 4.0 * d_ex ** 2
     a_sound = math.sqrt(GAMMA * R_AIR * ISA_T)
-    return {"rod_mm": r4(ROD_OVER_CRANK * r_mm), "vd_m3": vd_m3, "d_in": r4(d_in), "d_ex": r4(d_ex),
+    wiebe_0_10 = BURN_DEG * (math.log(1.0 / 0.9) / WIEBE_A) ** (1.0 / (WIEBE_M + 1.0))
+    return {"wiebe_0_10_deg": wiebe_0_10, "ignition_delay_deg": r4(max(0.0, FLAME_DEV_0_10_DEG - wiebe_0_10)),
+            "rod_mm": r4(ROD_OVER_CRANK * r_mm), "vd_m3": vd_m3, "d_in": r4(d_in), "d_ex": r4(d_ex),
             "a_in_mm2": a_in_mm2, "a_ex_mm2": a_ex_mm2, "a_sound": a_sound,
             "runner_d_mm": r4(math.sqrt(4.0 * a_in_mm2 / math.pi)),
             "intake_port_cc": r4(INTAKE_PORT_LEN_MM * a_in_mm2 * 1e-3),
@@ -155,6 +177,22 @@ def engine_json(tables: dict, mb: dict, y0: float, y0_note: str) -> tuple[dict, 
     for k in ("cam_intake_advance_deg", "cam_exhaust_retard_deg"):
         if s[k]["grid_rpm"] != s["lambda_target"]["grid_rpm"] or s[k]["grid_p_im_kpa"] != s["lambda_target"]["grid_p_im_kpa"]:
             raise RuntimeError("schedule grids differ")
+    # C17a follow-up: the measured spark schedule, gridded by a25a_author.py's own build_schedule_grid (IDW k6,
+    # nearest outside the measured hull) from the SAME measured points. Self-check first: that call reproduces the
+    # shipped lambda grid exactly, so the method and the point set are the ones the cam/lambda tables used.
+    points = tables["measured_points"]
+    lam = build_schedule_grid(points, "lambda")
+    if lam["values"] != s["lambda_target"]["values"] or lam["grid_rpm"] != s["lambda_target"]["grid_rpm"] or \
+            lam["grid_p_im_kpa"] != s["lambda_target"]["grid_p_im_kpa"]:
+        raise RuntimeError("build_schedule_grid does not reproduce the shipped lambda grid")
+    spark = build_schedule_grid(points, "spark_btdc")
+    n_extrap = sum(c == "extrapolated_nearest" for row in spark["coverage"] for c in row)
+    n_enr = sum(bool(v) for row in s["protection_enrichment_flag_grid"] for v in row)
+    n_enr_pts = sum(1 for q in points if q["protection_enrichment_flag"] and q.get("spark_btdc") is not None)
+    sm_rows = [median3_root(r) for r in spark["values"]] if SPARK_SMOOTH else spark["values"]
+    sm_diff = [abs(float(a) - b) for ra, rb in zip(spark["values"], sm_rows) for a, b in zip(ra, rb)]
+    n_sm = sum(1 for v in sm_diff if v > 0.0)
+    max_sm = max(sm_diff)
     tier_rows = []
 
     def tier(field, value, t, src):
@@ -242,6 +280,37 @@ def engine_json(tables: dict, mb: dict, y0: float, y0_note: str) -> tuple[dict, 
                            "over air mass). Chosen from that model-side criterion only, before any dyno "
                            "comparison: 47/240 intake and 55/240 exhaust cells change; smallest air step after "
                            "it +7.6 %."),
+        "spark_advance_deg": table(spark,
+                                   "[D] Tier 1b: measured 'Spark Timing, CAD BTDC' per fired point (EPA NVFEL A25A "
+                                   "Tier 3 xlsx), gridded (IDW k6, nearest outside the measured hull) by "
+                                   "a25a_author.py's build_schedule_grid, then the cam tables' median-3 root along MAP "
+                                   "(DERIVED; see spark_advance_deg_source)", smooth=SPARK_SMOOTH),
+        "spark_advance_deg_source": tier("spark_advance_deg", f"20x12 table, {spark['n_samples']} points", "1b [D]",
+                                         f"[D] Tier 1b (C17a follow-up, owner ruling 1): the EPA-measured ECU spark "
+                                         f"schedule, an input only (never fitted); {spark['n_samples']} measured "
+                                         f"points, {n_extrap}/240 cells outside their hull (nearest value). The "
+                                         f"{n_enr_pts} protection-enrichment rows are kept (real ECU behaviour, as in "
+                                         f"lambda_target); {n_enr}/240 cells have one as their nearest sample "
+                                         "(schedules.protection_enrichment_flag_grid). The generator runs every grid "
+                                         "node at this spark; it is also the ECU's runtime schedule (the loader copies "
+                                         "it into ecu.spark_advance_deg). DERIVED smoothing, chosen before any dyno "
+                                         "comparison: with the raw grid the runtime rejects the engine (steady torque "
+                                         "falls with plate by 0.49 N*m at 2750 rpm, p 96-97 kPa, where the raw grid "
+                                         "retards 18.2 -> -0.8 deg BTDC between the 89.5 and 97.3 kPa cells at 2700 "
+                                         "rpm); the cam tables' parameter-free median-3 root along MAP keeps the WOT "
+                                         f"column and monotone runs and changes {n_sm}/240 cells by up to "
+                                         f"{max_sm:.2f} deg (isolated nearest-neighbour excursions at 600-1000 rpm; "
+                                         "97.3 kPa by <= 1.35 deg at 1200-3300 rpm)."),
+        "ignition_delay_deg": d["ignition_delay_deg"],
+        "ignition_delay_deg_source": tier("ignition_delay_deg", d["ignition_delay_deg"], "2 [D] PROVISIONAL",
+                                          "Tier 2 [D] PROVISIONAL: Wiebe start = spark + delay. Literature: MIT 2.61 "
+                                          "(Heywood's course) lecture 9 'SI engine combustion I', slide 'Burn "
+                                          "duration': modern fast-burn engines, medium speed part load, spark to "
+                                          f"10 % burned ~{FLAME_DEV_0_10_DEG:g} crank deg. The frozen Wiebe (a 5, m 2, "
+                                          f"60 deg) already spans {d['wiebe_0_10_deg']:.2f} deg from its start to 10 % "
+                                          "burned, so delay = max(0, 15 - that) = 0: the Wiebe's own development "
+                                          "phase already covers the cited flame development (a literal 15 deg would "
+                                          "double-count it)."),
         "wiebe_a": WIEBE_A, "wiebe_m": WIEBE_M, "burn_duration_deg": BURN_DEG, "ca50_mbt_deg_atdc": CA50_DEG,
         "wiebe_source": tier("wiebe_a/m, burn_duration, ca50", f"{WIEBE_A}/{WIEBE_M}/{BURN_DEG}/{CA50_DEG}", "2",
                              "Tier 2: Wiebe a 5, m 2 (Heywood 1988 sec. 9.2.1); 0-100 % burn 60 deg [AS-literature "
@@ -300,19 +369,15 @@ def engine_json(tables: dict, mb: dict, y0: float, y0_note: str) -> tuple[dict, 
     eng["throttle_input"] = "electronic"
     eng["throttle_actuator_tau_s"] = mb["throttle_actuator_tau_s"]
     eng["throttle_actuator_source"] = mb["throttle_actuator_source"]
-    theta = d["theta_mbt_btdc"]
     eng["ecu"] = {
         "lambda_target": table(s["lambda_target"],
                                "[D] Tier 1b: measured exhaust lambda per fired point, gridded (IDW k6, nearest outside "
                                "the measured hull) by a25a_author.py; raw, protective-enrichment WOT points kept"),
-        "spark_advance_deg": {"source": (f"[D] plan D11 mbt_tracking realised as a table: the constant MBT spark the "
-                                         f"C16a generator uses, -(ca50 - burn*(ln2/a)^(1/(m+1))) = {theta} deg BTDC "
-                                         "(rounded to 1e-4 deg); the measured spark is NOT used"),
-                              "rpm": [grid_rpm[0], grid_rpm[-1]], "p_im_kpa": [grid_p[0], grid_p[-1]],
-                              "values": [[theta, theta], [theta, theta]]},
     }
+    eng["ecu_source"] = ("ecu.spark_advance_deg is not given here: the loader takes it from cycle.spark_advance_deg "
+                         "(the measured schedule the generator ran its nodes at; C17a follow-up).")
     tier("ecu.lambda_target", "20x12 table", "1b [D]", "measured lambda schedule, raw")
-    tier("ecu.spark_advance_deg", theta, "D11 [D]", "constant = generated theta_mbt")
+    tier("ecu.spark_advance_deg", "= cycle.spark_advance_deg", "1b [D]", "measured spark schedule (loader copy)")
     eng["cycle"] = cyc
     for k in ("inertia_kgm2", "breakaway_torque_nm", "idle_rpm", "stall_rpm", "fire_rpm", "start_complete_rpm",
               "dfco_enable_rpm", "dfco_reenable_rpm", "idle_control", "limiter", "starter", "crank_axis_local",

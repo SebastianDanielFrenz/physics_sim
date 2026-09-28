@@ -534,6 +534,13 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         edits.emplace_back("cam.exhaust_retard_deg values", [&](CycleModelDesc& d) { d.cam.exhaust_retard_deg.values.push_back(1.0); });
         edits.emplace_back("back_pressure x", [&](CycleModelDesc& d) { d.back_pressure_pa_vs_exh_kg_s.x.push_back(1e6); });
         edits.emplace_back("back_pressure y", [&](CycleModelDesc& d) { d.back_pressure_pa_vs_exh_kg_s.y.push_back(1e6); });
+        // C17a follow-up: the Tier 1b spark schedule and the Tier 2 ignition
+        // delay (folded only when present/non-zero, so an engine without them
+        // keeps its pre-follow-up key).
+        edits.emplace_back("spark_advance_deg x", [&](CycleModelDesc& d) { d.spark_advance_deg.x.push_back(1e6); });
+        edits.emplace_back("spark_advance_deg y", [&](CycleModelDesc& d) { d.spark_advance_deg.y.push_back(1e6); });
+        edits.emplace_back("spark_advance_deg values", [&](CycleModelDesc& d) { d.spark_advance_deg.values.push_back(1.0); });
+        edits.emplace_back("ignition_delay_deg", [&](CycleModelDesc& d) { d.ignition_delay_deg = bump(d.ignition_delay_deg); });
         edits.emplace_back("gas.fresh.cv_b_j_kgk2", [&](CycleModelDesc& d) { d.gas.fresh.cv_b_j_kgk2 = bump(d.gas.fresh.cv_b_j_kgk2); });
         edits.emplace_back("gas.fresh.r_j_kgk", [&](CycleModelDesc& d) { d.gas.fresh.r_j_kgk = bump(d.gas.fresh.r_j_kgk); });
         edits.emplace_back("gas.fresh.gamma_flow", [&](CycleModelDesc& d) { d.gas.fresh.gamma_flow = bump(d.gas.fresh.gamma_flow); });
@@ -547,6 +554,30 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
             edit(d);
             INFO("field: " << name);
             CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) != ref_key);
+        }
+    }
+
+    SECTION("with a spark schedule present, every schedule value and the delay still bump the key (C17a follow-up)") {
+        // The fields above start from an engine WITHOUT a schedule, where the
+        // presence condition alone would change the key; this base has one.
+        const auto bump = [](real v) { return std::nextafter(v, real(1e300)); };
+        CycleModelDesc base = ref_desc;
+        base.spark_advance_deg.x = {1000.0, 5500.0};
+        base.spark_advance_deg.y = {30000.0, 95000.0};
+        base.spark_advance_deg.values = {20.0, 10.0, 25.0, 15.0};
+        base.ignition_delay_deg = 3.0;
+        const std::uint64_t base_key = engine_map_cache_key(base, ref_fuel, MapQuality::Preview);
+        CHECK(base_key != ref_key);
+        std::vector<std::pair<const char*, std::function<void(CycleModelDesc&)>>> edits;
+        edits.emplace_back("spark x", [&](CycleModelDesc& d) { d.spark_advance_deg.x.back() = bump(d.spark_advance_deg.x.back()); });
+        edits.emplace_back("spark y", [&](CycleModelDesc& d) { d.spark_advance_deg.y.back() = bump(d.spark_advance_deg.y.back()); });
+        edits.emplace_back("spark values", [&](CycleModelDesc& d) { d.spark_advance_deg.values[2] = bump(d.spark_advance_deg.values[2]); });
+        edits.emplace_back("ignition_delay_deg", [&](CycleModelDesc& d) { d.ignition_delay_deg = bump(d.ignition_delay_deg); });
+        for (const auto& [name, edit] : edits) {
+            CycleModelDesc d = base;
+            edit(d);
+            INFO(name);
+            CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) != base_key);
         }
     }
 

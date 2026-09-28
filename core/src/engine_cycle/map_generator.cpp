@@ -1,6 +1,9 @@
 // PHYS-033 P4 I7c C16a: cycle model -> runtime maps (ps/drivetrain/engine_maps.h).
 //
-// Extraction (every grid node, ISA intake state, lambda 1, MBT spark), with
+// Extraction (every grid node, ISA intake state, lambda 1, MBT spark - or,
+// with a cycle spark_advance_deg schedule, the scheduled spark plus the
+// ignition delay, eta_i then divided by eta_spark(scheduled - theta_mbt) to
+// the MBT-equivalent value the runtime multiplies back; C17a follow-up), with
 // V_disp = cylinders*pi/4*bore^2*stroke and c_cycle = 1/2 computed exactly as
 // SimulatedEngine::build_maps does, so the runtime reproduces the node:
 //   VE        = m_air_rev / (p_im/(R*T_ref) * V_disp * c_cycle),  m_air_rev = cylinders * m_air * c_cycle
@@ -195,6 +198,17 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
     s.rpm_axis = quality == MapQuality::Full ? desc.grid_rpm : subsample(desc.grid_rpm, kPreviewRpm);
     s.p_axis = quality == MapQuality::Full ? desc.grid_p_im : subsample(desc.grid_p_im, kPreviewPim);
     s.mbt_atdc = mbt_spark_atdc(desc);
+    // C17a follow-up: Tier 1b spark schedule (empty = mbt_tracking) and Tier 2
+    // ignition delay (Wiebe start = spark + delay).
+    if (!(desc.ignition_delay_deg >= real(0.0)) || !(desc.ignition_delay_deg <= real(60.0))) {
+        throw std::runtime_error("engine map generator: ignition_delay_deg must be in [0, 60]");
+    }
+    const bool scheduled = !desc.spark_advance_deg.x.empty() || !desc.spark_advance_deg.y.empty() ||
+                           !desc.spark_advance_deg.values.empty();
+    if (scheduled) {
+        const std::string err = desc.spark_advance_deg.validate();
+        if (!err.empty()) throw std::runtime_error("engine map generator: spark_advance_deg: " + err);
+    }
 
     auto make_op = [&](real rpm, real p, real lambda, real spark_atdc) {
         engine_cycle::OperatingPoint op;
@@ -209,7 +223,12 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         return op;
     };
     for (real rpm : s.rpm_axis) {
-        for (real p : s.p_axis) s.ops.push_back(make_op(rpm, p, real(1.0), s.mbt_atdc));
+        for (real p : s.p_axis) {
+            // Scheduled: the node runs at the ECU's spark (deg BTDC -> ATDC)
+            // plus the flame-development delay; mbt_tracking: the MBT Wiebe start.
+            const real start = scheduled ? -desc.spark_advance_deg.value(rpm, p) + desc.ignition_delay_deg : s.mbt_atdc;
+            s.ops.push_back(make_op(rpm, p, real(1.0), start));
+        }
     }
     s.grid_n = s.ops.size();
     for (int k = 0; k < kSparkSites_n; ++k) {
@@ -306,6 +325,71 @@ EngineMapsPtr EngineMapGenTask::finish() {
     }
     m.has_pmep_excess = true;
 
+    // f_lambda
+    {
+        const std::size_t base = s.grid_n + static_cast<std::size_t>(kSparkSites_n * kSparkN);
+        auto g = [&](int j) {
+            const engine_cycle::PointResult& r = s.results[base + static_cast<std::size_t>(j)];
+            return r.w_gross_j / r.m_air_j_cyc * kLambda[j];
+        };
+        const real g_ref = g(kLambdaRefIndex);
+        for (int j = 0; j < kLambdaN; ++j) {
+            m.f_lambda.x.push_back(kLambda[j]);
+            m.f_lambda.y.push_back(j == kLambdaRefIndex ? real(1.0) : g(j) / g_ref);
+        }
+    }
+    // eta_spark: x = spark - MBT = -retard (ascending), mean of the three normalised curves
+    {
+        real norm[kSparkSites_n][kSparkN];
+        for (int k = 0; k < kSparkSites_n; ++k) {
+            auto g = [&](int j) {
+                const engine_cycle::PointResult& r =
+                    s.results[s.grid_n + static_cast<std::size_t>(k * kSparkN + j)];
+                return r.w_gross_j / r.m_air_j_cyc;
+            };
+            const real g0 = g(kSparkRefIndex);
+            for (int j = 0; j < kSparkN; ++j) norm[k][j] = j == kSparkRefIndex ? real(1.0) : g(j) / g0;
+        }
+        real spread = real(0.0);
+        for (int j = kSparkN - 1; j >= 0; --j) {
+            const real mean = (norm[0][j] + norm[1][j] + norm[2][j]) / real(3.0);
+            for (int k = 0; k < kSparkSites_n; ++k) spread = std::max(spread, std::abs(norm[k][j] - mean));
+            m.eta_spark.x.push_back(-kSparkRetard[j]);
+            m.eta_spark.y.push_back(mean);
+        }
+        em.eta_spark_spread = spread;
+    }
+    m.theta_mbt_deg.x = {s.rpm_axis.front(), s.rpm_axis.back()};
+    m.theta_mbt_deg.y = {s.p_axis.front(), s.p_axis.back()};
+    // theta_MBT (spark, deg BTDC): the MBT Wiebe start minus the ignition
+    // delay; constant (fixed Wiebe), kept as a map. delay 0 -> exactly -mbt_atdc.
+    m.theta_mbt_deg.values.assign(4, d.ignition_delay_deg == real(0.0) ? -s.mbt_atdc
+                                                                        : -(s.mbt_atdc - d.ignition_delay_deg));
+    // C17a follow-up: with a spark schedule every grid node ran at the
+    // scheduled spark; store the MBT-equivalent eta_i = eta_gross(scheduled)
+    // / eta_spark(scheduled - theta_mbt), evaluated with exactly the calls the
+    // runtime makes, so its eta_i * eta_spark reproduces the node.
+    if (!d.spark_advance_deg.x.empty()) {
+        for (std::size_t ir = 0; ir < nr; ++ir) {
+            for (std::size_t ip = 0; ip < np; ++ip) {
+                const std::size_t k = ir * np + ip;
+                const real rpm = s.rpm_axis[ir], p = s.p_axis[ip];
+                const real x = d.spark_advance_deg.value(rpm, p) - m.theta_mbt_deg.value(rpm, p);
+                const real es = m.eta_spark.evaluate(x);
+                if (!(es > real(0.0))) {
+                    throw std::runtime_error("engine map generator: eta_spark <= 0 at the scheduled spark at " +
+                                             std::to_string(rpm) + " rpm / " + std::to_string(p) + " Pa");
+                }
+                node_eta[k] = node_eta[k] / es;
+                if (!(node_eta[k] > real(0.0) && node_eta[k] < real(1.0))) {
+                    throw std::runtime_error("engine map generator: MBT-equivalent eta_i out of range at " +
+                                             std::to_string(rpm) + " rpm / " + std::to_string(p) + " Pa (" +
+                                             std::to_string(node_eta[k]) + ")");
+                }
+            }
+        }
+    }
+
     // eta_i over rpm x m_air_rev: union axis, per-line piecewise-linear resampling.
     for (std::size_t ir = 0; ir < nr; ++ir) {
         for (std::size_t ip = 1; ip < np; ++ip) {
@@ -345,44 +429,6 @@ EngineMapsPtr EngineMapGenTask::finish() {
         }
     }
 
-    // f_lambda
-    {
-        const std::size_t base = s.grid_n + static_cast<std::size_t>(kSparkSites_n * kSparkN);
-        auto g = [&](int j) {
-            const engine_cycle::PointResult& r = s.results[base + static_cast<std::size_t>(j)];
-            return r.w_gross_j / r.m_air_j_cyc * kLambda[j];
-        };
-        const real g_ref = g(kLambdaRefIndex);
-        for (int j = 0; j < kLambdaN; ++j) {
-            m.f_lambda.x.push_back(kLambda[j]);
-            m.f_lambda.y.push_back(j == kLambdaRefIndex ? real(1.0) : g(j) / g_ref);
-        }
-    }
-    // eta_spark: x = spark - MBT = -retard (ascending), mean of the three normalised curves
-    {
-        real norm[kSparkSites_n][kSparkN];
-        for (int k = 0; k < kSparkSites_n; ++k) {
-            auto g = [&](int j) {
-                const engine_cycle::PointResult& r =
-                    s.results[s.grid_n + static_cast<std::size_t>(k * kSparkN + j)];
-                return r.w_gross_j / r.m_air_j_cyc;
-            };
-            const real g0 = g(kSparkRefIndex);
-            for (int j = 0; j < kSparkN; ++j) norm[k][j] = j == kSparkRefIndex ? real(1.0) : g(j) / g0;
-        }
-        real spread = real(0.0);
-        for (int j = kSparkN - 1; j >= 0; --j) {
-            const real mean = (norm[0][j] + norm[1][j] + norm[2][j]) / real(3.0);
-            for (int k = 0; k < kSparkSites_n; ++k) spread = std::max(spread, std::abs(norm[k][j] - mean));
-            m.eta_spark.x.push_back(-kSparkRetard[j]);
-            m.eta_spark.y.push_back(mean);
-        }
-        em.eta_spark_spread = spread;
-    }
-    // theta_MBT: constant (fixed Wiebe), kept as a map
-    m.theta_mbt_deg.x = {s.rpm_axis.front(), s.rpm_axis.back()};
-    m.theta_mbt_deg.y = {s.p_axis.front(), s.p_axis.back()};
-    m.theta_mbt_deg.values.assign(4, -s.mbt_atdc);
     // friction: rpm 0, every desc grid rpm and the midpoints between them
     if (d.friction.model != FrictionModelDesc::Model::None) {
         std::vector<real> xs{real(0.0)};

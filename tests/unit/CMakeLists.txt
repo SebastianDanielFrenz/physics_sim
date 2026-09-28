@@ -58,6 +58,7 @@ add_executable(ps_unit_tests
   test_engine_cycle.cpp
   test_engine_map_generator.cpp
   test_engine_map_cache.cpp
+  test_spark_schedule.cpp
   test_engine_hot_swap.cpp
   test_firing_order.cpp
 )
