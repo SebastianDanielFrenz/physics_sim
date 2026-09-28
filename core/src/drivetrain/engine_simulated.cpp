@@ -508,6 +508,25 @@ void SimulatedEngine::set_ambient(real p_pa, real t_k) {
     }
 }
 
+std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::apply_pending_maps_swap() {
+    if (!pending_maps_) return nullptr;
+    std::shared_ptr<const SimulatedEngineMaps> old = std::move(maps_);
+    maps_ = std::move(pending_maps_);
+    pending_maps_.reset();
+    // Force exactly one refill of steady_ from the NEW maps_ at the current
+    // ambient (I7c C16b): set_ambient's own guard compares the requested
+    // p/t against steady_.p_pa/.t_k, which still hold the OLD maps' values
+    // even when the ambient SAMPLE itself hasn't changed - invalidating
+    // them first (not p_amb_/t_amb_, which the guard never reads) is what
+    // makes the very next set_ambient call refill unconditionally, reusing
+    // its existing tested fill_steady_tables call rather than duplicating
+    // it here.
+    steady_.p_pa = real(-1.0);
+    steady_.t_k = real(-1.0);
+    set_ambient(p_amb_, t_amb_);
+    return old;
+}
+
 void SimulatedEngine::init_state_for(EngineState state) {
     const SimulatedEngineMaps& m = *maps_;
     if (state == EngineState::Running) {

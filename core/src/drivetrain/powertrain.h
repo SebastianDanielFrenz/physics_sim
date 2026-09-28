@@ -33,6 +33,7 @@
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/energy_ledger.h"
+#include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/math/vec3.h"
@@ -44,11 +45,18 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace ps::drivetrain {
+
+// PHYS-033 P4 I7c C16b: defined in engine_simulated.h (not included here -
+// only a handful of Powertrain methods need the concrete type, all
+// implemented out-of-line in powertrain.cpp, which already includes it).
+class SimulatedEngine;
 
 // PHYS-033 P4 I4 C3 (plan section 2.4): one control channel a powertrain
 // component wants World::create_vehicle to resolve for it, through the same
@@ -224,6 +232,29 @@ public:
     // does not build one itself yet in commit 6, only exposes the pieces).
     [[nodiscard]] bool has_engine() const { return engine_ != nullptr; }
     [[nodiscard]] const IEngine& engine() const { return *engine_; }
+    // PHYS-033 P4 I7c C16b: World::replace_engine_maps's backing. Validates
+    // component_id against the engine's own ComponentDesc::id and that the
+    // engine is a SimulatedEngine (a TorqueMapEngine has no maps to swap),
+    // then rebuilds a full SimulatedEngineMaps (ALLOCATES - fine here, this
+    // runs on the caller's thread between steps, never inside a job) from
+    // the engine's original SimulatedEngineDesc with only the maps portion
+    // replaced from new_engine_maps->maps, and queues just the resulting
+    // pointer on the engine for apply_pending_engine_maps_swap to pick up at
+    // the next tick boundary. Throws std::runtime_error for an unknown/
+    // mismatched component_id, a non-simulated engine, or null maps.
+    void request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps);
+    // Applies any queued engine-maps swap (no-op if none pending or no
+    // simulated engine). MUST be called sequentially, outside any job,
+    // before this tick's per-vehicle jobs are dispatched (D9) - see
+    // vehicle::System::step_all's own call site comment. The OLD maps'
+    // shared_ptr is destroyed synchronously inside this call (also outside
+    // any job by the same contract), not deferred further.
+    void apply_pending_engine_maps_swap();
+    // The CURRENT engine maps' content_hash (0 without a simulated engine) -
+    // CSV-only telemetry (vehicle<i>.engine.maps_hash_lo32), never hashed
+    // itself (the maps' content_hash is already folded into
+    // Powertrain::fold_state_hash every tick via IEngine::fold_state_hash).
+    [[nodiscard]] std::uint64_t simulated_engine_maps_content_hash() const;
     // This substep's engine pre_solve() result, cached (mirrors
     // last_clutch_result_/last_gearbox_result_) - PowertrainSnapshot's
     // EngineSoundState fill (commit 6: load/limiter/dfco/starter flags,
@@ -559,6 +590,24 @@ private:
 
     // --- engine (nullptr if this vehicle's powertrain has none) -----------
     std::unique_ptr<IEngine> engine_;
+    // PHYS-033 P4 I7c C16b: engine_'s own ComponentDesc::id (empty without
+    // an engine) - request_replace_engine_maps's component_id check.
+    std::string engine_component_id_;
+    // Non-owning alias into engine_ (mirrors diffs_'s/transfer_case_'s own
+    // alias-into-components_ pattern elsewhere in this class), set at
+    // construction iff the engine is a SimulatedEngine (nullptr for a
+    // TorqueMapEngine or no engine at all) - avoids a dynamic_cast on
+    // apply_pending_engine_maps_swap's per-tick-per-vehicle call.
+    SimulatedEngine* sim_engine_ptr_ = nullptr;
+    // The full desc a SimulatedEngine was built from (unset for a
+    // TorqueMapEngine or no engine) - SimulatedEngine itself does not keep
+    // its constructing desc around (engine_simulated.h's own comment: only
+    // scalar management fields survive past construction), but
+    // request_replace_engine_maps's SimulatedEngine::build_maps call needs
+    // the full desc (geometry/ECU/limiter/etc, not just the map curves) to
+    // rebuild a new SimulatedEngineMaps - only .maps ever changes across a
+    // hot swap, so this copy is retained unmodified past construction.
+    std::optional<SimulatedEngineDesc> simulated_engine_desc_;
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached

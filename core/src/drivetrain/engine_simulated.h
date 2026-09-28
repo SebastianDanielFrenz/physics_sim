@@ -163,6 +163,27 @@ public:
     [[nodiscard]] const SimulatedEngineMaps& maps() const { return *maps_; }
     [[nodiscard]] const std::shared_ptr<const SimulatedEngineMaps>& maps_ptr() const { return maps_; }
 
+    // PHYS-033 P4 I7c C16b: queue an already-built (Powertrain::
+    // request_replace_engine_maps calls build_maps itself, off the sim
+    // thread's job-parallel region) SimulatedEngineMaps for a swap at the
+    // next apply_pending_maps_swap() call - a pointer store only, no
+    // allocation (D9). A later call before the swap applies replaces an
+    // earlier one (last request wins).
+    void request_replace_maps(std::shared_ptr<const SimulatedEngineMaps> new_maps) { pending_maps_ = std::move(new_maps); }
+    [[nodiscard]] bool has_pending_maps_swap() const { return pending_maps_ != nullptr; }
+    // Applies a queued swap (no-op, returns nullptr, if none pending). MUST
+    // be called sequentially, outside any job (Powertrain::
+    // apply_pending_engine_maps_swap's own contract) - a pointer move plus a
+    // forced refill of the per-engine ambient-dependent derived tables
+    // (steady_) from the NEW maps at the CURRENT ambient (same sizes as
+    // before: only .maps differs across a hot swap, never limiter.rpm/the
+    // fixed plate grid that size steady_'s tables, so this refill stays
+    // allocation-free like every other set_ambient-triggered one). Returns
+    // the OLD maps (still alive - the caller decides when/where its
+    // shared_ptr, and thus a possible deallocation, actually drops; also
+    // outside any job by the same contract).
+    std::shared_ptr<const SimulatedEngineMaps> apply_pending_maps_swap();
+
     // Torque at an arbitrary (omega, p_im) with the given combustion gate
     // (true = fired, the soft-cut taper still applies), starvation factor
     // and starter flag - the same function pre_solve uses, const, for the
@@ -206,6 +227,9 @@ private:
     void init_state_for(EngineState state);
 
     std::shared_ptr<const SimulatedEngineMaps> maps_;
+    // PHYS-033 P4 I7c C16b: queued by request_replace_maps, consumed by
+    // apply_pending_maps_swap - see both methods' own comments above.
+    std::shared_ptr<const SimulatedEngineMaps> pending_maps_;
     // desc fields read per substep (engine management)
     real desc_idle_rpm_ = 0.0, stall_rpm_ = 0.0, fire_rpm_ = 0.0, start_complete_rpm_ = 0.0;
     real dfco_enable_rpm_ = 0.0, dfco_reenable_rpm_ = 0.0;

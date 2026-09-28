@@ -1,5 +1,6 @@
 #include "ps/io/vehicle_io.h"
 
+#include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/io/fuel_io.h"
@@ -1500,8 +1501,19 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             // by reference here (vault TOOL-019, the Windows ASan leg).
             const EngineMapOptions defaults{};
             const EngineMapOptions& opt = map_options != nullptr ? *map_options : defaults;
-            if (opt.generation_count_out != nullptr) ++*opt.generation_count_out;
-            const EngineMapsPtr gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool);
+            // PHYS-033 P4 I7c C16b (D8): an opt-in on-disk cache in front of
+            // the generator call below. cache_dir empty (the default) means
+            // load_cached_engine_maps/store_cached_engine_maps touch the
+            // filesystem not at all (see map_cache.h's own contract) - this
+            // whole block is then just the one key computation plus an
+            // always-null load, bit-identical to pre-C16b behaviour.
+            const std::uint64_t cache_key = drivetrain::engine_map_cache_key(*e.cycle, e.fuels.front(), opt.quality);
+            EngineMapsPtr gen = drivetrain::load_cached_engine_maps(opt.cache_dir, cache_key);
+            if (!gen) {
+                if (opt.generation_count_out != nullptr) ++*opt.generation_count_out;
+                gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool);
+                drivetrain::store_cached_engine_maps(opt.cache_dir, cache_key, *gen);
+            }
             const SimulatedEngineMapsDesc& g = gen->maps;
             std::string generated_keys;
             auto note = [&](const char* k) { generated_keys += generated_keys.empty() ? k : std::string(", ") + k; };

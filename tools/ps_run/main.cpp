@@ -30,7 +30,10 @@ int main(int argc, char** argv) {
     ps_tools::install_headless_crt_handlers();
 
     if (argc < 2) {
-        std::fprintf(stderr, "ps_run %s\nusage: ps_run <scenario.json> [output.csv] [--workers N]\n", ps::version_string());
+        std::fprintf(stderr,
+                     "ps_run %s\nusage: ps_run <scenario.json> [output.csv] [--workers N] [--map-workers N] "
+                     "[--engine-cache DIR]\n",
+                     ps::version_string());
         return 2;
     }
 
@@ -38,12 +41,15 @@ int main(int argc, char** argv) {
     std::string csv_override;
     int worker_override = -1;
     int map_workers = 0; // I7c C16a: > 0 = generate engine maps on a JobSystem with that many workers at load
+    std::string engine_cache_dir; // I7c C16b: empty (default) = no .psmaps disk cache at all
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--workers" && i + 1 < argc) {
             worker_override = std::atoi(argv[++i]);
         } else if (arg == "--map-workers" && i + 1 < argc) {
             map_workers = std::atoi(argv[++i]);
+        } else if (arg == "--engine-cache" && i + 1 < argc) {
+            engine_cache_dir = argv[++i];
         } else if (csv_override.empty()) {
             csv_override = arg;
         }
@@ -56,6 +62,7 @@ int main(int argc, char** argv) {
         if (map_workers > 0) map_pool = std::make_unique<ps::jobs::JobSystem>(map_workers);
         ps::io::EngineMapOptions map_options;
         map_options.pool = map_pool.get();
+        map_options.cache_dir = engine_cache_dir;
         ps::io::Scenario scenario = ps::io::load_scenario(scenario_path, map_options);
         map_pool.reset();
         if (worker_override >= 0) scenario.world_config.job_workers = worker_override;

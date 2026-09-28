@@ -9,6 +9,7 @@
 #include "ps/articulation/articulation_desc.h"
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/drivetrain/energy_ledger.h"
+#include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/telemetry.h"
 #include "ps/jobs/job_system.h"
@@ -29,6 +30,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -243,6 +245,29 @@ public:
     // not change the chassis mass; a later increment adds it as a point mass
     // at the tank position (PLAN.md "Fuel mass moves the chassis").
     void set_fuel_tank_mass(VehicleId id, real kg);
+    // PHYS-033 P4 I7c C16b: replaces a vehicle's simulated engine's runtime
+    // maps (e.g. a background Full-quality regeneration replacing a Preview
+    // one, or a tuned/edited map file/cache hit) - EngineMapsPtr is the C16a
+    // generator's own public output type (ps/drivetrain/engine_maps.h);
+    // internally this rebuilds the engine's richer runtime
+    // SimulatedEngineMaps (derived tables included) from the vehicle's
+    // original SimulatedEngineDesc with only the maps portion replaced, off
+    // the sim thread's job-parallel region (this call itself), then queues
+    // just a pointer for the actual swap. Applied at the NEXT tick boundary,
+    // mirroring set_fuel_tank_mass's contract exactly: vehicle::System::
+    // step_all applies every pending swap sequentially, BEFORE dispatching
+    // that tick's per-vehicle jobs, so it takes effect before any substep
+    // and the OLD maps are destroyed outside any job (D9's "no allocation
+    // /release inside a job" requirement - this call may allocate, the
+    // eventual swap and release never do). A later call before that step
+    // replaces an earlier one (last request wins). The maps' content_hash is
+    // already folded into World::state_hash() every tick via
+    // SimulatedEngine::fold_state_hash (D9's "fold every tick" requirement
+    // was already satisfied by existing code - nothing new needed there).
+    // Call between steps only (never from a job). Throws std::runtime_error
+    // for an unknown vehicle id, an unknown/mismatched component id, a
+    // component that is not a simulated engine, or null maps.
+    void replace_engine_maps(VehicleId id, std::string_view component_id, drivetrain::EngineMapsPtr new_maps);
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value for this vehicle
     // (VehicleInstance::component_channel_values(), Powertrain::declare_
@@ -449,6 +474,20 @@ private:
         std::size_t tank_kg = 0;
     };
     std::vector<std::vector<FuelTelemetryChannels>> fuel_telemetry_channels_; // outer index == VehicleId.index; inner has 0 or 1 entries
+
+    // PHYS-033 P4 I7c C16b: one entry per vehicle with a simulated engine
+    // (a ps::drivetrain::SimulatedEngineDesc component, never a
+    // TorqueMapEngine), registered right after that vehicle's fuel-telemetry
+    // channels in create_vehicle - a vehicle without one gets an empty inner
+    // vector, so its CSV header stays byte-identical to before this existed.
+    // Mirrors fuel_telemetry_channels_'s own vector-of-0-or-1-entries
+    // pattern. CSV-only (plain read, never hashed - the maps' content_hash
+    // is already folded into state_hash every tick via SimulatedEngine::
+    // fold_state_hash, D9).
+    struct EngineMapsTelemetryChannels {
+        std::size_t maps_hash_lo32;
+    };
+    std::vector<std::vector<EngineMapsTelemetryChannels>> engine_maps_hash_channels_; // outer index == VehicleId.index; inner has 0 or 1 entries
 
     std::vector<double> last_stage_ms_;
     std::vector<ContactEvent> last_contact_events_;
