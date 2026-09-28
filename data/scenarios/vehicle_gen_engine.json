@@ -1,0 +1,104 @@
+{
+  "format": "physics_sim.scenario/1",
+  "name": "vehicle_gen_engine",
+  "duration_s": 10.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [
+    0,
+    0,
+    -9.81
+  ],
+  "job_workers": 0,
+  "surface_table_path": "../surfaces/surfaces.json",
+  "bodies": [
+    {
+      "name": "ground",
+      "motion": "static",
+      "shape": {
+        "type": "box",
+        "half_extents": [
+          1000.0,
+          1000.0,
+          0.5
+        ]
+      },
+      "position": [
+        0,
+        0,
+        -0.5
+      ],
+      "friction": 1.0
+    },
+    {
+      "name": "chassis",
+      "motion": "dynamic",
+      "mass": 1500.0,
+      "shape": {
+        "type": "box",
+        "half_extents": [
+          2.0,
+          0.4,
+          0.15
+        ]
+      },
+      "position": [
+        0,
+        0,
+        0.6
+      ],
+      "friction": 0.5,
+      "allow_sleep": false
+    }
+  ],
+  "vehicles": [
+    {
+      "name": "car",
+      "chassis_body": "chassis",
+      "vehicle_json_path": "../vehicles/car_sedan_gen.json"
+    }
+  ],
+  "control_events": [
+    {
+      "t": 0.2,
+      "channel": "shift_up_count",
+      "value": 1.0
+    },
+    {
+      "t": 0.3,
+      "channel": "throttle",
+      "value": 0.8
+    },
+    {
+      "t": 3.0,
+      "channel": "shift_up_count",
+      "value": 2.0
+    },
+    {
+      "t": 5.5,
+      "channel": "throttle",
+      "value": 0.0
+    },
+    {
+      "t": 6.0,
+      "channel": "brake",
+      "value": 0.5
+    },
+    {
+      "t": 7.0,
+      "channel": "shift_down_count",
+      "value": 1.0
+    },
+    {
+      "t": 8.0,
+      "channel": "starter",
+      "value": 1.0
+    },
+    {
+      "t": 8.2,
+      "channel": "starter",
+      "value": 0.0
+    }
+  ],
+  "telemetry_csv": "vehicle_gen_engine.csv"
+}
