@@ -575,3 +575,83 @@ TEST_CASE("C17a-MA diag: air vs p_im on the grid", "[.][diag][drivetrain][cycle]
         std::printf("\n");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Review diagnostic (C17a M-A review, 2026-09-28) for the S1 per-term
+// attribution. DIAGNOSIS ONLY - measured data here never feeds a model
+// parameter (D1).
+//  (a) Spark: the model fires at its constant MBT spark (23.053 deg BTDC);
+//      the A25A's measured WOT spark (xlsx "High Load Final", column spark
+//      advance, literal) is knock-retarded to -0.9..+5.3 deg BTDC. The cycle
+//      point is run at the anchor MAP and measured lambda twice - MBT, and
+//      Wiebe theta_0 moved later by (23.053 - measured) deg - and the gross
+//      work ratio printed. The model has no ignition delay and one Wiebe
+//      shape, so this is a bound on the spark term, not the engine's truth.
+//  (b) Motoring: the A25A's measured motoring rows (xlsx "Steady State",
+//      fuel 0, closed throttle, literal rpm/MAP/torque) against the model at
+//      the SAME MAP: the cycle with combustion off (gross + pumping work)
+//      minus the generated F4 friction, and the runtime formula
+//      -(p_amb - p_im + pmep_excess)*V_d/(4 pi) - friction for gen and M-B.
+TEST_CASE("C17a-MA review diag: spark retard and motoring vs A25A", "[.][diag][drivetrain][cycle]") {
+    const auto gen_car = load_gen_car();
+    const auto mb_car = ps::io::load_vehicle_json(mb_car_path());
+    const SimulatedEngineDesc* g = sim_engine_of(gen_car);
+    const SimulatedEngineDesc* b = sim_engine_of(mb_car);
+    REQUIRE(g != nullptr);
+    REQUIRE(b != nullptr);
+    REQUIRE(g->cycle.has_value());
+    const CycleModelDesc& c = *g->cycle;
+    const FuelDesc& f = g->fuels[0];
+    const ps::engine_cycle::CycleStepper proto(c, f.lhv_j_kg, f.afr_stoich);
+    const ps::engine_cycle::StepperSettings st{ps::engine_cycle::kStepFull, ps::engine_cycle::kCyclesFull};
+    const real theta0_mbt =
+        ps::engine_cycle::Wiebe::theta0_for_ca50(c.wiebe_a, c.wiebe_m, c.burn_duration_deg, c.ca50_mbt_deg_atdc);
+    const real cyl = real(c.cylinders);
+    const real four_pi = real(4.0) * kPi;
+    std::printf("mbt theta0 %.4f deg ATDC (= %.4f BTDC)\n", theta0_mbt, -theta0_mbt);
+
+    struct SparkRow { real rpm, map_kpa, lambda, spark_btdc; };
+    constexpr SparkRow kSpark[] = {
+        {2017.13, 97.2897, 0.79747, -0.8834489}, {2534.94, 97.3509, 0.867008, -0.1004669},
+        {2995.63, 97.2884, 0.896868, 3.6484548}, {3571.24, 97.0007, 0.879773, 5.2851633},
+        {4032.22, 96.8321, 0.859654, 3.4596332}, {4493.11, 96.6618, 0.87221, 3.3724168},
+        {4954.03, 96.4381, 0.870633, 4.3984367},
+    };
+    std::printf("SPK   rpm  spark_meas retard | Wg_mbt [J]  Wg_meas/Wg_mbt | dT_gross [N*m]\n");
+    for (const SparkRow& r : kSpark) {
+        auto op = cycle_op(c, r.rpm, r.map_kpa);
+        op.lambda = r.lambda;
+        const auto mbt = ps::engine_cycle::run_operating_point(proto, op, st);
+        const real retard = -theta0_mbt - r.spark_btdc;
+        op.spark_deg_atdc = theta0_mbt + retard;
+        const auto ret = ps::engine_cycle::run_operating_point(proto, op, st);
+        std::printf("SPK %6.0f %8.2f %7.2f | %9.3f  %.4f         | %+8.2f\n", r.rpm, r.spark_btdc, retard, mbt.w_gross_j,
+                    ret.w_gross_j / mbt.w_gross_j, cyl * (ret.w_gross_j - mbt.w_gross_j) / four_pi);
+    }
+
+    struct MotRow { real rpm, map_kpa, torque_nm; };
+    constexpr MotRow kMot[] = {
+        {1326, 24.86, -22.90}, {1498, 23.96, -23.60}, {1728, 23.37, -23.30}, {2017, 22.80, -24.30},
+        {2535, 23.01, -25.90}, {2996, 24.81, -28.40}, {3571, 23.80, -30.60}, {4032, 22.29, -33.90},
+        {4493, 22.69, -37.40}, {4954, 23.91, -42.30},
+    };
+    ps::engine_cycle::CycleStepper motored(c, f.lhv_j_kg, f.afr_stoich);
+    ps::engine_cycle::CycleSwitches sw;
+    sw.combustion = false;
+    motored.set_switches(sw);
+    SimulatedEngine eg(*g), eb(*b);
+    const real vd = eg.maps().v_disp_m3;
+    const real p_amb = SimulatedEngine::kIsaPressurePa;
+    std::printf("MOT   rpm   MAP  meas  | cycle_gas fric_gen cyc_tot | rt_pump_gen rt_gen | rt_pump_mb fric_mb rt_mb\n");
+    for (const MotRow& r : kMot) {
+        const real p = r.map_kpa * real(1e3);
+        const auto res = ps::engine_cycle::run_operating_point(motored, cycle_op(c, r.rpm, r.map_kpa), st);
+        const real gas = cyl * (res.w_gross_j + res.w_pump_j) / four_pi;
+        const real fr_g = g->maps.friction_torque_nm.evaluate(r.rpm), fr_b = b->maps.friction_torque_nm.evaluate(r.rpm);
+        const real px_g = g->maps.has_pmep_excess ? g->maps.pmep_excess_pa.value(r.rpm, p) : 0.0;
+        const real px_b = b->maps.has_pmep_excess ? b->maps.pmep_excess_pa.value(r.rpm, p) : 0.0;
+        const real pump_g = -(p_amb - p + px_g) * vd / four_pi, pump_b = -(p_amb - p + px_b) * vd / four_pi;
+        std::printf("MOT %6.0f %5.2f %6.2f | %8.2f %8.2f %8.2f | %8.2f %8.2f | %8.2f %8.2f %8.2f\n", r.rpm, r.map_kpa,
+                    r.torque_nm, gas, fr_g, gas - fr_g, pump_g, pump_g - fr_g, pump_b, fr_b, pump_b - fr_b);
+    }
+}
