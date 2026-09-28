@@ -193,6 +193,123 @@ inline bool has_fuel_model(const TorqueMapEngineDesc& e) {
     return e.has_fuel_map || !e.fuels.empty();
 }
 
+// --- PHYS-033 P4 I7b C10: the simulated (mean-value, MVEM) engine ----------
+//
+// "kind": "simulated" in an engine file (docs/data_formats/engine.md,
+// "simulated" section). Pure data in SI units - the loader converts the
+// file's mm / kPa / g / L into m / Pa / kg / m^3. The runtime model
+// (core/src/drivetrain/engine_simulated.h, PHYS-033 P4 I7b C11) derives the
+// WOT and motoring curves itself, so this desc carries none. Every map is
+// an INLINE table - first-class schema, not a test-only shortcut (I7c adds
+// generated maps behind this same desc; the first shipped simulated car may
+// use literature/EPA-derived tables written straight into the file).
+
+enum class EngineArchitecture { Piston4Stroke, Rotary };
+
+// Piston 4-stroke: displacement = cylinders * pi/4 * bore^2 * stroke; one
+// intake stroke per cylinder every 2 crank revolutions (c_cycle 1/2).
+struct PistonGeometryDesc {
+    real bore_m = 0.0;   // > 0
+    real stroke_m = 0.0; // > 0
+    int cylinders = 0;   // >= 1
+};
+
+// Wankel rotary (PHYS-033 section 5 / I7 plan section 3.1): displaced volume
+// per face 3*sqrt(3)*R*e*b; per e-shaft revolution every rotor inducts one
+// face (c_cycle 1). The rotary runtime is I7e C13 - C11 accepts the desc and
+// computes the geometry but refuses to run it.
+struct RotaryGeometryDesc {
+    real rotor_radius_m = 0.0; // R (generating radius), > 0
+    real eccentricity_m = 0.0; // e, in (0, R)
+    real rotor_width_m = 0.0;  // b, > 0
+    int rotors = 0;            // >= 1
+};
+
+// Throttle plate(s). Flow area at plate position x in [0, 1] is
+// count * pi/4 * diameter^2 * area_fraction_vs_position(x); the effective
+// area is discharge_coefficient times that.
+struct ThrottleBodyDesc {
+    real diameter_m = 0.0;              // > 0
+    int count = 1;                      // >= 1 (individual throttle bodies share one position)
+    real discharge_coefficient = 0.0;   // in (0, 1]
+    vehicle::Curve1D area_fraction_vs_position; // x exactly 0..1 ascending, y in [0, 1] non-decreasing, y(0) > 0 (a
+                                                // closed plate still leaks - the fixed point needs a nonzero area)
+};
+
+// The runtime maps (I7 plan section 3.1). Every Table2D here is x = rpm,
+// y = its own load axis, as noted; every Curve1D its own x.
+//
+// eta_i is the GROSS indicated efficiency at MBT spark and lambda = 1
+// (I7c planner request, adopted in C10): the indicated work per cycle is
+//     W_ind = eta_i(rpm, m_air_rev) * f_lambda(lambda) * eta_spark(theta - theta_MBT) * LHV * m_fuel
+// so f_lambda and eta_spark are applied ON TOP and must equal 1 at their
+// reference points (the loader enforces f_lambda(1) == 1 and
+// eta_spark(0) == 1). Pumping and friction are separate torque terms, never
+// folded into eta_i.
+struct SimulatedEngineMapsDesc {
+    Table2D ve;                            // y = p_im [Pa]; volumetric efficiency, values in (0, 2)
+    Table2D eta_i;                         // y = air mass per crank revolution [kg]; gross indicated efficiency in (0, 1)
+    vehicle::Curve1D f_lambda;             // x = lambda (ascending, > 0); y >= 0; f_lambda(1) == 1
+    vehicle::Curve1D eta_spark;            // x = theta - theta_MBT [deg]; y in [0, 1]; eta_spark(0) == 1
+    Table2D theta_mbt_deg;                 // y = p_im [Pa]; MBT spark advance [deg BTDC]
+    vehicle::Curve1D friction_torque_nm;   // x = rpm (x[0] == 0); y >= 0 (FMEP-equivalent torque; y(0) is the Coulomb part)
+    // Reserved (I7c planner request): optional extra pumping loss over the
+    // ideal (p_em - p_im) term, e.g. valve-flow losses. Absent = 0.
+    bool has_pmep_excess = false;
+    Table2D pmep_excess_pa;                // y = p_im [Pa]; values >= 0 [Pa]
+    // Reserved (I7c planner request): knock-limited spark advance. Absent =
+    // no knock limit; present = spark used = min(ecu spark target, theta_kl).
+    bool has_theta_kl = false;
+    Table2D theta_kl_deg;                  // y = p_im [Pa]; [deg BTDC]
+    std::string source;                    // required (PLAN.md section 8)
+};
+
+// Open-loop engine-management targets.
+struct SimulatedEcuDesc {
+    Table2D lambda_target;     // y = p_im [Pa]; values in [0.5, 2]
+    Table2D spark_advance_deg; // y = p_im [Pa]; [deg BTDC], values in [-30, 70]
+};
+
+struct SimulatedEngineDesc {
+    EngineArchitecture architecture = EngineArchitecture::Piston4Stroke;
+    PistonGeometryDesc piston; // meaningful iff architecture == Piston4Stroke
+    RotaryGeometryDesc rotary; // meaningful iff architecture == Rotary
+    real intake_manifold_volume_m3 = 0.0; // > 0 (plenum + runners)
+    ThrottleBodyDesc throttle_body;
+    // Required for a simulated engine (plan section 3.4.3). Electronic: the
+    // command is a TORQUE request, turned into a plate target through a
+    // load-time inverse table; the plate follows through a first-order
+    // actuator (throttle_actuator_tau_s >= 0; 0 = no lag). Mechanical: the
+    // command IS the plate position; idle air comes from a bypass valve of
+    // idle_bypass_area_m2 (> 0) driven by the idle PI.
+    ThrottleInput throttle_input = ThrottleInput::Electronic;
+    real throttle_actuator_tau_s = 0.0;   // electronic only (the loader rejects it on a mechanical engine)
+    real idle_bypass_area_m2 = 0.0;       // mechanical only (idle_control.bypass_area_mm2 in the file)
+    SimulatedEcuDesc ecu;
+    SimulatedEngineMapsDesc maps;
+
+    // Shared with the graph engine, same meaning and validation.
+    real inertia_kgm2 = 0.0;          // > 0
+    real breakaway_torque_nm = 0.0;   // static Coulomb capacity; >= maps.friction_torque_nm(0)
+    real idle_rpm = 800.0, stall_rpm = 400.0, fire_rpm = 250.0, start_complete_rpm = 550.0;
+    real dfco_enable_rpm = 1300.0, dfco_reenable_rpm = 1000.0;
+    IdleControlDesc idle;             // electronic: PI on the plate target; mechanical: PI on the bypass valve (max_throttle = max valve opening)
+    EngineLimiterDesc limiter;
+    StarterDesc starter;
+    Vec3 crank_axis_local = Vec3::zero();
+    EngineInitialState initial_state = EngineInitialState::Running;
+
+    // Required and non-empty; fuels[0] is burnt unless a fuel tank selects
+    // another entry (same rule as TorqueMapEngineDesc::fuels).
+    std::vector<FuelDesc> fuels;
+    EngineIgnition ignition = EngineIgnition::Spark; // required; only "spark" in I7b (a CI combustion model is later)
+};
+
+// A simulated engine always has a fuel model (the loader requires fuels).
+inline bool has_fuel_model(const SimulatedEngineDesc& e) {
+    return !e.fuels.empty();
+}
+
 struct ClutchDesc {
     real capacity_nm = 0.0;               // KINETIC capacity at engagement 1
     real static_factor = 1.15;            // static = static_factor * kinetic (>= 1)
@@ -425,8 +542,11 @@ struct FuelTankDesc {
 
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
 // type is a compile-checked change plus a data-format minor bump.
+// SimulatedEngineDesc (PHYS-033 P4 I7b C10) is appended LAST so no existing
+// alternative's index moves.
 using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc,
-                                      ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc, FuelTankDesc>;
+                                      ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc, FuelTankDesc,
+                                      SimulatedEngineDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty
