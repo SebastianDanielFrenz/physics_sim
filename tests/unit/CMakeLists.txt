@@ -62,6 +62,7 @@ add_executable(ps_unit_tests
   test_pipe_waveguide.cpp
   test_engine_map_generator.cpp
   test_engine_map_cache.cpp
+  test_engine_map_gen_v2.cpp
   test_spark_schedule.cpp
   test_engine_installation_io.cpp
   test_engine_hot_swap.cpp

@@ -83,6 +83,11 @@ struct CycleEngineResult {
     real h_s = 0.0;
     int cylinders = 0;
     std::array<real, kCycleEngineMaxCylinders> air_kg{};  // per cylinder, measured cycle
+    // Trim trace (diagnostic): per cycle, the mean plenum pressure and the
+    // throttle Cd*A that cycle ran with (first kTraceCycles cycles).
+    static constexpr int kTraceCycles = 16;
+    std::array<real, kTraceCycles> trace_plenum_mean_pa{};
+    std::array<real, kTraceCycles> trace_cd_area_m2{};
 };
 
 // Index layout of the network make_engine_pipe_network_desc builds.

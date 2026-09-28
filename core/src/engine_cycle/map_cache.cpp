@@ -142,6 +142,13 @@ void fold_pipe_pair(KeyFnv& f, const CycleModelDesc& desc) {
         f.str("audio_a4.installation");
         fold_installation(f, *desc.installation);
     }
+
+    // ps_audio A5: the generator v2 (CycleEngine) phases the cylinders by the
+    // firing order/angles, so they are generator inputs for a pipe engine.
+    // banks/bank_angle_deg are not read by the generator and not folded.
+    f.str("audio_a5.firing");
+    f.ints(desc.firing_order);
+    f.vec(desc.firing_angles_deg);
 }
 
 // --- Plain little-endian byte-buffer (de)serialisation for the PAYLOAD. ---
@@ -257,6 +264,11 @@ constexpr char kMagic[8] = {'P', 'S', 'M', 'A', 'P', 'S', '0', '1'};
 } // namespace
 
 std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {
+    return engine_map_cache_key(desc, fuel, quality, engine_map_generator_version(desc));
+}
+
+std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
+                                   std::uint32_t generator_version) {
     KeyFnv f{14695981039346656037ULL};
     // CycleModelDesc, every field incl. source (the generated maps carry it
     // as EngineMaps::source - see map_cache.h's PROVISIONAL DECISION).
@@ -332,15 +344,17 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     f.pod(fuel.lhv_j_kg);
     f.pod(fuel.afr_stoich);
     f.pod(fuel.density_kg_m3);
-    // generator + quality
-    f.pod(kGeneratorVersion);
+    // generator + quality. ps_audio A5: the version of the path this desc
+    // generates through (1 lumped - every pre-A5 key unchanged, 2 pipe), so
+    // v1 and v2 maps can never share a file.
+    f.pod(generator_version);
     f.pod(static_cast<int>(quality));
     return f.h;
 }
 
 namespace {
 
-EngineMapsPtr load_cached_engine_maps_impl(const std::string& cache_dir, std::uint64_t key) {
+EngineMapsPtr load_cached_engine_maps_impl(const std::string& cache_dir, std::uint64_t key, std::uint32_t generator_version) {
     std::error_code ec;
     const std::string path = cache_file_path(cache_dir, key);
     if (!std::filesystem::is_regular_file(path, ec) || ec) return nullptr;
@@ -372,7 +386,7 @@ EngineMapsPtr load_cached_engine_maps_impl(const std::string& cache_dir, std::ui
     Reader payload(bytes.data() + kHeaderSize, static_cast<std::size_t>(payload_size));
     if (!read_maps_payload(payload, *out) || !payload.at_end()) return nullptr; // truncated/malformed payload (H2)
 
-    out->generator_version = kGeneratorVersion; // a stale generator version could never share this KEY (see map_cache.h)
+    out->generator_version = generator_version; // the key folds the version, so a stale file can never share it (map_cache.h)
     out->quality = static_cast<MapQuality>(quality_raw);
     out->content_hash = engine_maps_content_hash(*out);
     if (out->content_hash != content_hash) return nullptr; // a flipped payload byte changes this (H2)
@@ -445,9 +459,13 @@ void store_cached_engine_maps_impl(const std::string& cache_dir, std::uint64_t k
 // still throw (bad_alloc, a path conversion error); any such exception is a
 // cache miss / a skipped write. Caught by type only (vault TOOL-019).
 EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key) {
+    return load_cached_engine_maps(cache_dir, key, kLumpedGeneratorVersion);
+}
+
+EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key, std::uint32_t generator_version) {
     if (cache_dir.empty()) return nullptr;
     try {
-        return load_cached_engine_maps_impl(cache_dir, key);
+        return load_cached_engine_maps_impl(cache_dir, key, generator_version);
     } catch (...) {
         return nullptr;
     }

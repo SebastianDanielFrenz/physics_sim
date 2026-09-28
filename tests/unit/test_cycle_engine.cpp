@@ -297,3 +297,23 @@ TEST_CASE("A5 E5 reservoir reference mode closes mass", "[drivetrain][cycle][pip
     CHECK(r.mean.m_air_j_cyc > 0.0);
     CHECK(r.p_plenum_mean_pa == r.p_target_pa);
 }
+
+TEST_CASE("A5 diag: throttle trim trace per cycle", "[.][diag][cycle][pipe]") {
+    const drivetrain::CycleModelDesc d = test::make_pipe_i4_cycle_desc();
+    const real pts[][2] = {{1500.0, 30000.0}, {6000.0, 30000.0}, {6000.0, 60000.0}, {3000.0, 90000.0}, {6000.0, 90000.0}};
+    for (int q = 0; q < 2; ++q) {
+        for (const auto& pt : pts) {
+            CycleEngineSettings s = q == 0 ? preview_settings() : CycleEngineSettings{};
+            s.settling_cycles = 12;
+            CycleEngine eng(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr, make_op(d, pt[0], pt[1]), s);
+            const CycleEngineResult r = eng.run();
+            std::printf("%s %5.0f rpm %3.0f kPa: err %+.4f cda_max %.3e\n", q == 0 ? "Preview" : "Full   ", pt[0],
+                        pt[1] / 1000.0, r.plenum_error_rel, r.throttle_cd_area_max_m2);
+            for (int c = 0; c < 13; ++c) {
+                std::printf("   cyc %2d  p %8.1f  (%+.4f)  cda %.4e\n", c, r.trace_plenum_mean_pa[static_cast<std::size_t>(c)],
+                            r.trace_plenum_mean_pa[static_cast<std::size_t>(c)] / pt[1] - 1.0,
+                            r.trace_cd_area_m2[static_cast<std::size_t>(c)]);
+            }
+        }
+    }
+}

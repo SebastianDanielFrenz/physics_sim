@@ -405,6 +405,7 @@ CycleEngineResult CycleEngine::run() {
     real air_prev = 0.0, air_last = 0.0;
     real m0 = 0.0, x0 = 0.0, pl_mean = p_t;
     std::uint64_t k = 0;
+    std::array<real, CycleEngineResult::kTraceCycles> trace_p{}, trace_c{};
     for (int cyc = 0; cyc < cycles; ++cyc) {
         const bool last = cyc == cycles - 1;
         for (CycleStepper& s : steppers_) {
@@ -439,6 +440,10 @@ CycleEngineResult CycleEngine::run() {
         real air = 0.0;
         for (const CycleStepper& s : steppers_) air += s.state().y[kAccIvFresh];
         air_prev = air_last;
+        if (cyc < CycleEngineResult::kTraceCycles) {
+            trace_p[static_cast<std::size_t>(cyc)] = net_ ? sum_pl / static_cast<real>(n_) : p_t;
+            trace_c[static_cast<std::size_t>(cyc)] = cda_;
+        }
         air_last = air;
         if (net_) {
             const real rn = static_cast<real>(n_);
@@ -448,15 +453,17 @@ CycleEngineResult CycleEngine::run() {
                 // Throttle trim (PROVISIONAL P11): the flow the engine will draw
                 // at the target (measured valve flow scaled by p_t / p_mean,
                 // speed-density) plus half the mass that refills the intake
-                // volume from its end-of-cycle pressure to the target within
+                // volume from its cycle-mean pressure to the target within
                 // one cycle, over the measured mean unit-Cd*A orifice flow
-                // moved to the target by the steady Psi ratio.
+                // moved to the target by the steady Psi ratio. Both terms
+                // vanish only at p_mean == p_t (an end-of-cycle sample in the
+                // refill term left a +2.5..3 % fixed-point bias at 6000 rpm,
+                // where the sample sits in a pulsation trough).
                 const real t_cycle = 120.0 / op_.rpm;
                 real m_eng = 0.0;
                 for (const CycleStepper& s : steppers_) m_eng += s.state().y[kAccIvMass];
-                const real p_end = net_->volume_state(layout_.plenum_volume).p;
                 const real flow_req = m_eng / t_cycle * (p_t / pl_mean) +
-                                      0.5 * (p_t - p_end) * v_intake_ / (r_amb * op_.t_im_k) / t_cycle;  // gain 0.5 [A]
+                                      0.5 * (p_t - pl_mean) * v_intake_ / (r_amb * op_.t_im_k) / t_cycle;  // gain 0.5 [A]
                 const real psi_bar = psi.eval(std::clamp(pl_mean / p_up, 0.0, 0.999), 0.0);
                 const real psi_t = psi.eval(std::clamp(p_t / p_up, 0.0, 0.999), 0.0);
                 const real g_t = sum_g / rn * (psi_t / psi_bar);
@@ -475,6 +482,8 @@ CycleEngineResult CycleEngine::run() {
     r.p_target_pa = p_t;
     r.p_plenum_mean_pa = pl_mean;
     r.plenum_error_rel = (pl_mean - p_t) / p_t;
+    r.trace_plenum_mean_pa = trace_p;
+    r.trace_cd_area_m2 = trace_c;
     r.throttle_cd_area_m2 = cda_;
     r.throttle_cd_area_max_m2 = cda_max_;
     r.throttle_saturated = net_ && cda_ >= cda_max_ && r.plenum_error_rel < -settings_.trim_tolerance;

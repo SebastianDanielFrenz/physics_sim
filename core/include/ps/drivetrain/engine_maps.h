@@ -38,8 +38,19 @@ class JobSystem;
 namespace ps::drivetrain {
 
 // Bumped whenever the generator's output for the same inputs changes
-// (C16b keys its cache on it).
-inline constexpr std::uint32_t kGeneratorVersion = 1;
+// (C16b keys its cache on it). ps_audio A5: the version is PER PATH -
+// a lumped engine (no intake/exhaust pipe blocks) still generates through
+// the unchanged single-cylinder path and is stamped (and keyed) 1, so its
+// maps, content hash and state hash stay bit-identical to v1; a pipe-bearing
+// engine generates through CycleEngine and is stamped 2.
+// engine_map_generator_version() picks the one a desc uses.
+inline constexpr std::uint32_t kLumpedGeneratorVersion = 1;
+inline constexpr std::uint32_t kPipeGeneratorVersion = 2;
+inline constexpr std::uint32_t kGeneratorVersion = kPipeGeneratorVersion; // the newest path
+
+[[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {
+    return desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion;
+}
 
 enum class MapQuality { Preview, Full };
 
@@ -56,7 +67,7 @@ struct EngineMaps {
     // Spark sweep: largest |normalised curve - mean| over the three sweep
     // points (the eta_spark map is their mean).
     real eta_spark_spread = 0.0;
-    std::uint32_t generator_version = kGeneratorVersion;
+    std::uint32_t generator_version = kLumpedGeneratorVersion; // set by finish() / the cache loader
     MapQuality quality = MapQuality::Full;
     std::uint64_t content_hash = 0; // engine_maps_content_hash(*this), filled by finish()
 };
@@ -69,6 +80,13 @@ class EngineMapGenTask {
 public:
     // Throws std::runtime_error on an unusable desc (grid missing or not
     // strictly ascending, geometry <= 0, a non-4-stroke cycle).
+    // ps_audio A5: a desc with intake/exhaust pipe blocks generates every
+    // point through ps::engine_cycle::CycleEngine (all cylinders, the pipe
+    // network and the resolved installation, throttle trimmed to the point's
+    // p_im); a grid node whose p_im the fully open throttle cannot reach (or
+    // the trim does not settle to within its tolerance) fails the task with
+    // "engine map generator: plenum target ..." (PROVISIONAL P6). Sweep
+    // points only feed normalised ratios and are not held to the target.
     EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
     ~EngineMapGenTask();
     EngineMapGenTask(const EngineMapGenTask&) = delete;

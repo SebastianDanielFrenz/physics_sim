@@ -1688,7 +1688,8 @@ void require_maps_efficiency_below_one(const ps::drivetrain::SimulatedEngineMaps
 
 ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
                                                           std::vector<std::string>* resolved_fuel_paths_out = nullptr,
-                                                          const EngineMapOptions* map_options = nullptr) {
+                                                          const EngineMapOptions* map_options = nullptr,
+                                                          const std::string* installation_override_path = nullptr) {
     using namespace ps::drivetrain;
     constexpr real kMm = real(1e-3);
     constexpr real kKpa = real(1000.0);
@@ -2084,6 +2085,18 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         // block's own table was rejected above) - the runtime then evaluates
         // exactly the table the generator ran its grid nodes at.
         if (!e.cycle->spark_advance_deg.x.empty()) e.ecu.spark_advance_deg = e.cycle->spark_advance_deg;
+        // ps_audio A5 (PROVISIONAL P12): resolve the installation BEFORE the
+        // generator runs - it is a generator input (the exhaust waveguide) and
+        // part of the cache key. The vehicle component's override (already
+        // resolved to a path by the caller) wins over the engine file's own
+        // default_installation. A4 resolved it only after this function
+        // returned, so a pipe engine would have generated without it.
+        if (e.cycle->intake.has_value() && e.cycle->exhaust.has_value()) {
+            const std::string& ip =
+                installation_override_path != nullptr ? *installation_override_path : e.cycle->default_installation_path;
+            e.cycle->installation = load_installation_json(ip);
+            e.cycle->installation_path = ip;
+        }
         const bool complete = have_ve && have_eta_i && have_f_lambda && have_eta_spark && have_theta_mbt && have_friction &&
                               e.maps.has_pmep_excess;
         if (!complete) {
@@ -2099,7 +2112,8 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             // whole block is then just the one key computation plus an
             // always-null load, bit-identical to pre-C16b behaviour.
             const std::uint64_t cache_key = drivetrain::engine_map_cache_key(*e.cycle, e.fuels.front(), opt.quality);
-            EngineMapsPtr gen = drivetrain::load_cached_engine_maps(opt.cache_dir, cache_key);
+            EngineMapsPtr gen = drivetrain::load_cached_engine_maps(opt.cache_dir, cache_key,
+                                                                    drivetrain::engine_map_generator_version(*e.cycle));
             if (!gen) {
                 if (opt.generation_count_out != nullptr) ++*opt.generation_count_out;
                 gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool);
@@ -2145,7 +2159,8 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
 // (the MVEM engine, read_simulated_fields above).
 ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
                                                    std::vector<std::string>* resolved_fuel_paths_out = nullptr,
-                                                   const EngineMapOptions* map_options = nullptr) {
+                                                   const EngineMapOptions* map_options = nullptr,
+                                                   const std::string* installation_override_path = nullptr) {
     // Default "torque_map" (rather than requiring the field) is deliberate,
     // not an oversight: every shipped data/engines/*.json file happens to
     // set "kind" explicitly today, but nothing REQUIRES a hand-authored or
@@ -2156,7 +2171,9 @@ ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::str
     // path is actually exercised, since no shipped file omits it).
     const std::string kind = j.value("kind", std::string("torque_map"));
     if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
-    if (kind == "simulated") return read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options);
+    if (kind == "simulated") {
+        return read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options, installation_override_path);
+    }
     throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" or \"simulated\", got \"" + kind + "\"");
 }
 
@@ -2382,7 +2399,16 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                     const json ej = resolve_component_ref(cj, "engine", base_dir, ctx);
                     const std::string engine_dir = component_ref_dir(cj, base_dir);
                     std::vector<std::string> fuel_paths;
-                    p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir, &fuel_paths, &options)});
+                    // ps_audio A5 (P12): a well-formed installation override
+                    // reaches the engine reader, which resolves it before any
+                    // map generation; a malformed one is rejected below with
+                    // A4's messages, exactly as before.
+                    std::string inst_override;
+                    const bool override_ok = cj.contains("installation") && cj.at("installation").is_string() &&
+                                             !cj.at("installation").get<std::string>().empty();
+                    if (override_ok) inst_override = resolve_path(base_dir, cj.at("installation").get<std::string>());
+                    p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir, &fuel_paths, &options,
+                                                                   override_ok ? &inst_override : nullptr)});
                     engine_fuel_paths.emplace_back(id, std::move(fuel_paths)); // PHYS-033 P4 I7a C6: for the fluid-link check below
 
                     // ps_audio A4 (out/audio_plan.md section 3.2/3.3): resolve
@@ -2406,16 +2432,12 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                                 throw std::runtime_error(ctx + ": 'installation' is only allowed for an engine whose cycle "
                                                           "block has 'intake'/'exhaust' pipe blocks");
                             }
-                            const std::string inst_path = resolve_path(base_dir, cj.at("installation").get<std::string>());
-                            sim->cycle->installation = load_installation_json(inst_path);
-                            sim->cycle->installation_path = inst_path;
-                        } else if (has_pipes) {
-                            // cycle->default_installation_path was already
-                            // resolved (engine-file-relative) and required
-                            // non-empty by read_cycle_block.
-                            sim->cycle->installation = load_installation_json(sim->cycle->default_installation_path);
-                            sim->cycle->installation_path = sim->cycle->default_installation_path;
+                            // ps_audio A5 (P12): already loaded by
+                            // read_simulated_fields (installation_path ==
+                            // inst_override), before map generation.
                         }
+                        // else: the engine file's default_installation, also
+                        // resolved by read_simulated_fields when pipes exist.
                     } else if (cj.contains("installation")) {
                         throw std::runtime_error(ctx + ": 'installation' is only allowed on a simulated engine with "
                                                   "'intake'/'exhaust' pipe blocks");

@@ -21,7 +21,9 @@
 // test_simulated_engine_io.cpp).
 
 #include "ps/drivetrain/engine_cycle_desc.h"
+#include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/installation_desc.h"
+#include "ps/jobs/job_system.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/vehicle/vehicle_desc.h"
@@ -327,6 +329,47 @@ TEST_CASE("A4: a vehicle-level 'installation' override on the engine component w
     // relative), but installation_path (what actually got LOADED) differs.
     CHECK(c.installation_path != c.default_installation_path);
     CHECK(c.installation->source == "alternate installation fixture");
+}
+
+// ps_audio A5 (PROVISIONAL P12): the installation is a generator input, so it
+// must be resolved before the loader generates the maps. A4 resolved it after
+// read_engine_fields returned - a pipe engine generated without it and the
+// vehicle-level override never reached the maps.
+TEST_CASE("A5: the resolved installation (vehicle override) reaches the generated maps",
+          "[unit][io][cycle][drivetrain][pipe]") {
+    TempDir d;
+    d.write("installation.json", base_installation_json());
+    json alt = base_installation_json();
+    alt["source"] = "alternate installation fixture";
+    alt["intake"]["airbox_m3"] = 0.020;
+    alt["exhaust"]["elements"][1]["length_m"] = 0.9;
+    d.write("alt_installation.json", alt);
+
+    json e = base_engine_json(/*with_installation_pipes=*/true);
+    e.erase("maps"); // no override: the generator runs at load
+    e["cycle"]["grid_rpm"] = {2000.0, 4000.0};
+    e["cycle"]["grid_p_im_kpa"] = {50.0, 80.0};
+    e["installation"] = "alt_installation.json";
+    const auto p = d.write("vehicle.json", vehicle_with_components(json::array({e})));
+
+    jobs::JobSystem pool(10);
+    io::EngineMapOptions opt;
+    opt.quality = MapQuality::Preview;
+    opt.pool = &pool;
+    const vehicle::VehicleDesc v = io::load_vehicle_json(p.string(), opt);
+    const SimulatedEngineDesc& s = only_sim_engine(v);
+    REQUIRE(s.cycle->installation.has_value());
+    REQUIRE(s.cycle->installation->intake.airbox_m3 == real(0.020));
+    const EngineMapsPtr direct = generate_engine_maps(*s.cycle, s.fuels.front(), MapQuality::Preview, &pool);
+    CHECK(direct->generator_version == 2u);
+    CHECK(s.maps.ve.values == direct->maps.ve.values);
+    CHECK(s.maps.eta_i.values == direct->maps.eta_i.values);
+
+    // ... and the override matters (else the check above would be vacuous).
+    CycleModelDesc dflt = *s.cycle;
+    dflt.installation = io::load_installation_json((d.dir / "installation.json").string());
+    const EngineMapsPtr with_default = generate_engine_maps(dflt, s.fuels.front(), MapQuality::Preview, &pool);
+    CHECK(with_default->maps.ve.values != direct->maps.ve.values);
 }
 
 TEST_CASE("A4: an engine WITHOUT pipe blocks has an identical cycle key formula to before A4 "

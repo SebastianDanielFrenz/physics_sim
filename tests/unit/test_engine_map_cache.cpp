@@ -700,6 +700,9 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
             branch.branches = {{leaf_outlet}, {leaf_outlet}};
             d.installation->exhaust.elements.back() = branch; // replace the outlet with a branch
         });
+        // ps_audio A5: the generator v2 phases the cylinders by these.
+        edits.emplace_back("firing_order", [&](CycleModelDesc& d) { d.firing_order = {1, 2, 4, 3}; });
+        edits.emplace_back("firing_angles_deg", [&](CycleModelDesc& d) { d.firing_angles_deg = {0.0, 180.0, 360.0, 540.0}; });
 
         for (const auto& [name, edit] : edits) {
             CycleModelDesc d = base;
@@ -720,6 +723,9 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
             excluded.emplace_back("installation exhaust outlet position_m", [](CycleModelDesc& d) {
                 d.installation->exhaust.elements.back().position_m.z += real(1.0);
             });
+            // ps_audio A5: bank geometry is not a generator input.
+            excluded.emplace_back("banks", [](CycleModelDesc& d) { d.banks = {{1, 2, 3, 4}}; });
+            excluded.emplace_back("bank_angle_deg", [](CycleModelDesc& d) { d.bank_angle_deg += real(60.0); });
             for (const auto& [name, edit] : excluded) {
                 CycleModelDesc d = base;
                 edit(d);
