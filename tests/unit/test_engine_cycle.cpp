@@ -338,9 +338,17 @@ TEST_CASE("G7 cycle step convergence: h_full and h_preview vs h_full/4", "[drive
     // PHYS-038: crank-angle stepping (1 deg at 1000 rpm, h = 166.7 us). The
     // plan expected it outside 10 % (PHYS-038 measured +51 % IMEP in its own
     // study model). THIS model does not reproduce that: measured +0.61 %
-    // gross IMEP / +0.49 % air at 100 kPa, +2.6 % / +1.7 % at 30 kPa (the Psi
-    // regularisation and the port volumes bound the stiffness). What holds,
-    // and is asserted, is that 1 deg stepping is far worse than h_full.
+    // gross IMEP / +0.49 % air at 100 kPa, +2.6 % / +1.7 % at 30 kPa. C15a
+    // review: the 1 deg error is set by the open-valve flow stiffness (CdA
+    // times the regularised Psi slope), not by crank-angle stepping as such
+    // nor by the port/runner volumes. PHYS-038's quoted +51 % is its V12
+    // (I4 +30.8 %); halving its valve area alone drops the I4 to -0.39 %
+    // (threshold near 0.65x, non-monotonic above), while runner volume x4 or
+    // orifice area /4 leave it unchanged (+31.2 % / +30.8 %). This fixture's
+    // CdA*Psi' is ~0.52x PHYS-038's, below that threshold; with 4 valves the
+    // 100 kPa error here grows to +2.2 % (review diag case at the end of this
+    // file). What holds, and is asserted, is that 1 deg stepping is far worse
+    // than h_full.
     const OperatingPoint op = make_op(d, 1000.0, 100.0e3);
     const PointResult ref = run_operating_point(proto, op, StepperSettings{kStepFull / 4.0, kCyclesFull});
     const PointResult full = run_operating_point(proto, op, StepperSettings{kStepFull, kCyclesFull});
@@ -564,6 +572,48 @@ TEST_CASE("cycle diag: cost per RHS evaluation and per point", "[.][diag][drivet
             std::printf("cost: %5.0f rpm h=%.3e N=%d: %.2f ms per point (%llu steps)\n", rpm, hs.first, hs.second,
                         std::chrono::duration<double, std::milli>(b - a).count() / reps,
                         static_cast<unsigned long long>(r.steps));
+        }
+    }
+}
+
+// C15a review (Opus): P8 stability-edge check and the PHYS-038 bridge.
+// Part A sweeps h at the G7 points; below RK4's real-axis edge the error
+// scales ~h^4, at the edge it jumps. Part B repeats 1 deg stepping at
+// 1000 rpm with more valves per cylinder (curtain area x1.5 / x2): PHYS-038's
+// +31..51 % came from its larger valve CdA x Psi slope (its own bench:
+// halving the valve areas drops the 1 deg IMEP error from +30.8 % to -0.39 %).
+TEST_CASE("cycle diag: review h sweep and 1 deg valve-area probe", "[.][diag][drivetrain][cycle]") {
+    const drivetrain::CycleModelDesc d = test::make_generic_i4_cycle_desc();
+    const CycleStepper proto(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr);
+    const real h_us[] = {21.70, 30.0, 36.0, 39.06, 43.40, 47.74, 52.0, 60.0, 70.0, 86.8, 120.0, 166.7};
+    std::printf("REV-A: rpm p_im_kPa h_us(req) h_us(used) | dg dn dm (rel. to h_full/4)\n");
+    for (const G7Point& pt : kG7Points) {
+        const OperatingPoint op = make_op(d, pt.rpm, pt.p_im);
+        const PointResult ref = run_operating_point(proto, op, StepperSettings{kStepFull / 4.0, kCyclesFull});
+        const real g = imep(ref.w_gross_j, proto), n = imep(ref.w_gross_j + ref.w_pump_j, proto);
+        for (const real hu : h_us) {
+            const real h = hu * 1.0e-6;
+            const PointResult r = run_operating_point(proto, op, StepperSettings{h, kCyclesFull});
+            const real h_used = 120.0 / (pt.rpm * static_cast<real>(steps_per_cycle(pt.rpm, h)));
+            std::printf("REV-A: %5.0f %5.0f %7.2f %7.2f | %+.3e %+.3e %+.3e\n", pt.rpm, pt.p_im / 1000.0, hu, h_used * 1e6,
+                        imep(r.w_gross_j, proto) / g - 1.0, (imep(r.w_gross_j + r.w_pump_j, proto) - n) / g,
+                        r.m_air_j_cyc / ref.m_air_j_cyc - 1.0);
+        }
+    }
+    std::printf("REV-B: p_im_kPa valves | IMEPg_ref | dg_1deg dm_1deg | dg_hfull dm_hfull\n");
+    for (const real p_im : {100.0e3, 30.0e3}) {
+        for (const int nv : {2, 3, 4}) {
+            drivetrain::CycleModelDesc dv = d;
+            dv.intake_valves = nv;
+            dv.exhaust_valves = nv;
+            const CycleStepper pv(dv, test::kCycleFixtureLhv, test::kCycleFixtureAfr);
+            const OperatingPoint op = make_op(dv, 1000.0, p_im);
+            const PointResult ref = run_operating_point(pv, op, StepperSettings{kStepFull / 4.0, kCyclesFull});
+            const PointResult c = run_operating_point(pv, op, StepperSettings{1.0 / 6000.0, kCyclesFull});
+            const PointResult f = run_operating_point(pv, op, StepperSettings{kStepFull, kCyclesFull});
+            std::printf("REV-B: %5.0f %d | %.5e | %+.3e %+.3e | %+.3e %+.3e\n", p_im / 1000.0, nv, imep(ref.w_gross_j, pv),
+                        c.w_gross_j / ref.w_gross_j - 1.0, c.m_air_j_cyc / ref.m_air_j_cyc - 1.0, f.w_gross_j / ref.w_gross_j - 1.0,
+                        f.m_air_j_cyc / ref.m_air_j_cyc - 1.0);
         }
     }
 }

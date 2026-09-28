@@ -35,6 +35,11 @@ struct StepperSettings {
 // (PROVISIONAL P8, out/c15a_progress.md): with realistic port volumes the
 // plan's values miss G7 at part load (1000 rpm / 30 kPa: trapped air -0.23 %
 // at 43.4 us, -1.3 % at 86.8 us vs h/4). The plan's own G7 fallback.
+// C15a review (REV-A diag case): the air error at 1000 rpm / 30 kPa is
+// +5.9e-7 at 21.7 us and +5.8e-7 at 30 us, then -7.0e-4 at 36 us and -2.3e-3
+// at 43.4 us - an explicit-RK4 stability edge between 30 and 36 us (open-valve
+// CdA * Psi slope), so kStepFull has only ~1.4x margin; larger valves move
+// the edge down (4 valves at 30 kPa: -1.5e-3 air already at kStepFull).
 inline constexpr real kStepFull = 1.0 / (960.0 * 48.0);
 inline constexpr real kStepPreview = 1.0 / (960.0 * 24.0);
 
