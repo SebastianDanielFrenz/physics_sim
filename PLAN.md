@@ -760,6 +760,16 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
 - Compressor surge (Sebastian, 2026-09-26): I7d only flags surge and counts
   events for the sound system. A real surge model stays an optional later
   item, taken up only if the results turn out unsatisfactory.
+- Engine design GUI (Sebastian, 2026-09-28): once the "specs -> engine"
+  workflow works (I7c C16a map generation plus C17a), build a GUI to
+  specify and design an engine. A website is acceptable for now if that is
+  much faster. Constraints already in force: the GUI edits the engine data
+  file only (no GUI dependency in core, engine-neutral logic, D1 frozen
+  literature for anything shipped). Proposed shape, to confirm when it
+  starts: a local web page that writes the engine JSON and asks a small
+  local tool (a command-line front end to generate_engine_maps at Preview
+  quality) for the resulting torque, power and fuel curves; compiling core
+  to WebAssembly is the alternative if a hosted page is wanted.
 - Fun engine (Sebastian, 2026-09-28): once development is far enough, a
   simulated Dodge Challenger SRT Demon 170 engine (6.2 L supercharged V8,
   E85) in a car of its own. Not before these exist: the I7c generator
