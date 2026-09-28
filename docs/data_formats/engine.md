@@ -480,7 +480,7 @@ clamped at every edge. A 1D curve is the usual `{"x": [...], "y": [...]}`.
 | `maps.eta_spark` | curve, x = spark - MBT [deg] | yes | >= 2 points, y in [0, 1], **eta_spark(0) == 1** | spark-timing correction on eta_i |
 | `maps.theta_mbt_deg` | table, load `p_im_kpa` | yes | values in [-30, 70] | MBT spark advance [deg BTDC] |
 | `maps.friction_torque_nm` | curve, x = rpm | yes | x[0] == 0; y >= 0 | friction torque magnitude; y(0) is the Coulomb part |
-| `maps.pmep_excess_kpa` | table, load `p_im_kpa` | no (absent = 0) | values >= 0 | reserved: pumping loss beyond the ideal (p_em - p_im) term |
+| `maps.pmep_excess_kpa` | table, load `p_im_kpa` | no (absent = 0) | signed, finite, \|value\| <= 1e6 | reserved: pumping loss beyond the ideal (p_em - p_im) term |
 | `maps.theta_kl_deg` | table, load `p_im_kpa` | no (absent = no limit) | values in [-30, 70] | reserved: knock-limited spark advance; spark used = min(ECU target, theta_kl) |
 | `inertia_kgm2` | number | yes | > 0 | as `torque_map` |
 | `breakaway_torque_nm` | number | no (0) | >= `maps.friction_torque_nm(0)` | static Coulomb capacity |
@@ -625,8 +625,14 @@ the cycle block is only parsed and validated. With a cycle block every
 (knock is C17b). The efficiency sanity bound and the breakaway rule
 (`breakaway_torque_nm >= maps.friction_torque_nm(0)`) are checked on the
 MERGED maps; the value range checks above apply to file values only.
-Generated `pmep_excess_kpa` values are signed (the runtime takes them
-signed; a file value must be >= 0).
+`pmep_excess_kpa` values are signed, both generated and file-provided (I7c
+C16b review N1: the runtime - `engine_simulated.cpp`'s `tau_pump` term -
+takes them as a plain signed additive term with no sign special-casing, so
+a file value follows the same rule as a generated one; the loader bounds
+the magnitude to <= 1e6 Pa as a sanity check, not a physical constraint).
+When the generator runs from a cycle block, its `source` note also carries
+the cycle block's own `source` citation (I7c C16b review N4) so a
+generated engine's data provenance survives past load time.
 
 What the generator computes (full detail in `engine_maps.h`): every grid
 node at lambda 1, MBT spark and ISA intake state gives `ve` (net fresh air

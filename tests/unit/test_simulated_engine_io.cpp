@@ -451,10 +451,46 @@ TEST_CASE("C10: the simulated-engine loader rejects every malformed field with i
         j["maps"]["friction_torque_nm"]["y"][1] = -1.0;
         expect_rejected(j, "friction_torque_nm: every y must be >= 0");
     }
-    SECTION("negative pmep_excess") {
+    // I7c C16b review N1: pmep_excess_pa is a SIGNED additive term at
+    // runtime (engine_simulated.cpp's tau_pump term has no sign special-
+    // casing), and the C16a generator already produces a signed value
+    // (provisional decision P-E) - a file value follows the same rule, so a
+    // negative value now LOADS instead of being rejected (was "negative
+    // pmep_excess" -> expect_rejected before this fix).
+    SECTION("negative pmep_excess loads (signed, per I7c C16b review N1)") {
         json j = base_simulated_engine();
         j["maps"]["pmep_excess_kpa"] = {{"rpm", {0.0, 7000.0}}, {"p_im_kpa", {20.0, 100.0}}, {"values", {{-1.0, 1.0}, {8.0, 4.0}}}};
-        expect_rejected(j, "maps.pmep_excess_kpa: every value must be in [0");
+        const ps::vehicle::VehicleDesc d = load_with_engine(j);
+        const SimulatedEngineDesc& e = only_sim_engine(d);
+        REQUIRE(e.maps.has_pmep_excess);
+        CHECK(e.maps.pmep_excess_pa.values == std::vector<real>{-1000.0, 1000.0, 8000.0, 4000.0});
+    }
+    SECTION("pmep_excess magnitude out of bounds") {
+        json j = base_simulated_engine();
+        j["maps"]["pmep_excess_kpa"] = {{"rpm", {0.0, 7000.0}}, {"p_im_kpa", {20.0, 100.0}}, {"values", {{2000.0, 1.0}, {8.0, 4.0}}}};
+        expect_rejected(j, "maps.pmep_excess_kpa: every value must be in [-1000000");
+    }
+    SECTION("pmep_excess non-finite (nlohmann rejects the literal before the loader sees it)") {
+        // Same pattern as test_engine_fuel_map.cpp's "indicated_efficiency"
+        // 1e400 SECTION and test_fuel_tank.cpp's "capacity_kg" one: nlohmann
+        // v3.12 refuses an overflowing-but-syntactically-valid numeral
+        // (out_of_range.406, "number overflow parsing '1e400'") during its
+        // own parse, before core/src/io/vehicle_io.cpp's require_table_values
+        // ever sees the value - so this pins nlohmann's own rejection, not a
+        // loader message, matching the established precedent for this class
+        // of test in this codebase.
+        json j = base_simulated_engine();
+        j["maps"]["pmep_excess_kpa"] = {{"rpm", {0.0, 7000.0}}, {"p_im_kpa", {20.0, 100.0}}, {"values", {{9999.0, 1.0}, {8.0, 4.0}}}};
+        std::string text = j.dump(2);
+        const std::string needle = "9999.0";
+        const auto pos = text.find(needle);
+        REQUIRE(pos != std::string::npos);
+        text.replace(pos, needle.size(), "1e400");
+        const std::filesystem::path raw = std::filesystem::temp_directory_path() / "ps_test_simulated_engine_pmep_excess_1e400.json";
+        { std::ofstream out(raw); out << text; }
+        REQUIRE_THROWS_WITH(ps::io::load_vehicle_json(raw.string()), ContainsSubstring("number overflow parsing '1e400'"));
+        std::error_code ec;
+        std::filesystem::remove(raw, ec);
     }
     SECTION("an efficiency combination reaching 100 %") {
         json j = base_simulated_engine();
