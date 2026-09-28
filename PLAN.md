@@ -635,6 +635,24 @@ pressure). One intake/exhaust description in the engine data file and one 1D
 pipe model serve both the map generator (a kGeneratorVersion bump) and
 `ps_audio`; today's maps lack these effects, one reason the I7c validation
 excludes >= 5500 rpm.
+Design: out/audio_plan.md (2026-09-28, increments A1-A12; vault PHYS-054).
+Owner rulings on its open questions (Sebastian, 2026-09-28):
+- Q1 split: the engine file owns throttle-body inlet through the first flange
+  after the last engine-mounted part; an installation file referenced by the
+  vehicle owns airbox/snorkel, catalyst and everything downstream, and the
+  outlet positions; each engine names a `default_installation` (A25A: the
+  EPA test-cell exhaust). Maps keyed by engine + installation acoustic
+  content, never positions.
+- Q2: one live voice (the player car), other audible cars on the crank-angle
+  table fallback - unless the SIMD increment (A9) makes room for more live
+  voices, then use it. A9 is a prerequisite for a V8/V12 player car.
+- Q3: pipes first, but the owner's first listening test may come before the
+  silencer (and catalyst) elements exist - only those may be missing, the
+  rest of the pipe model (primaries, collector, tailpipe) must be there.
+- Q4: engines with a torque map (tractor diesel) get an audio-only cycle
+  block ([AS], no turbo until I7d).
+- Q5: miniaudio (public domain / MIT-0), for `tools/ps_engine_audio --live`
+  only.
 
 Engine mounts, interior sound and propagation (Sebastian, 2026-09-24):
 - Engine mounts: the engine block sits on mounts with stiffness and damping,
