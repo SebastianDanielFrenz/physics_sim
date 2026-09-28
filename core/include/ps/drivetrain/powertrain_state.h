@@ -37,6 +37,14 @@ struct EngineSoundState {
     // crude no-map estimate, 0 only for an engine with no fuel model at all.
     // NOT hashed.
     real fuel_flow_g_s = 0.0;
+    // PHYS-033 P4 I7b C12: mean-value engine state for sound (from
+    // PreSolveResult; 0 for the graph engine). NOT hashed. Exhaust
+    // temperature is not modelled (I7b), so there is no field for it.
+    real throttle_position = 0.0;      // plate position in [0, 1]
+    real p_intake_pa = 0.0;            // intake manifold pressure
+    real lambda = 0.0;                 // commanded lambda
+    real spark_advance_deg = 0.0;      // applied spark advance
+    real exhaust_mass_flow_kg_s = 0.0; // air + fuel mass flow out of the cylinders
 };
 
 struct DrivelineSoundState {

@@ -1,5 +1,7 @@
 #include "powertrain.h"
 
+#include "engine_simulated.h"
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -306,6 +308,14 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             engine_component_index = static_cast<int>(ci);
             add_port(component_port_key(c.id, "crank"), e->inertia_kgm2, e->crank_axis_local);
+        } else if (const auto* se = std::get_if<SimulatedEngineDesc>(&c.params)) {
+            // PHYS-033 P4 I7b C12: the mean-value engine takes the same single
+            // engine slot and the same "crank" port as the graph engine.
+            if (engine_component_index >= 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': more than one engine component - I3 supports at most one");
+            }
+            engine_component_index = static_cast<int>(ci);
+            add_port(component_port_key(c.id, "crank"), se->inertia_kgm2, se->crank_axis_local);
         } else if (const auto* cl = std::get_if<ClutchDesc>(&c.params)) {
             if (clutch_component_index >= 0) {
                 throw std::runtime_error("vehicle '" + vehicle_name + "': more than one clutch component - I3 supports at most one");
@@ -409,7 +419,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         }
         const auto to_it = component_index_of.find(link.to.component);
         if (link.to.is_wheel || to_it == component_index_of.end() || link.to.port != "fuel" ||
-            !std::holds_alternative<TorqueMapEngineDesc>(pt.components[static_cast<std::size_t>(to_it->second)].params)) {
+            !(std::holds_alternative<TorqueMapEngineDesc>(pt.components[static_cast<std::size_t>(to_it->second)].params) ||
+              std::holds_alternative<SimulatedEngineDesc>(pt.components[static_cast<std::size_t>(to_it->second)].params))) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': fluid link target '" + link.to.component + "." + link.to.port +
                                       "' is not an engine's \"fuel\" port");
         }
@@ -1185,18 +1196,26 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
 
     // --- Phase K: engine/clutch/gearbox typed members -----------------------
     if (engine_component_index >= 0) {
-        const auto& e = std::get<TorqueMapEngineDesc>(pt.components[static_cast<std::size_t>(engine_component_index)].params);
+        // PHYS-033 P4 I7b C12: exactly one of tm/sim is set - the graph
+        // engine (EngineTorqueMap) or the mean-value engine (SimulatedEngine).
+        const ComponentParams& e_params = pt.components[static_cast<std::size_t>(engine_component_index)].params;
+        const auto* tm = std::get_if<TorqueMapEngineDesc>(&e_params);
+        const auto* sim = std::get_if<SimulatedEngineDesc>(&e_params);
+        const std::vector<FuelDesc>& e_fuels = tm ? tm->fuels : sim->fuels;
+        const bool e_has_fuel_model = tm ? has_fuel_model(*tm) : has_fuel_model(*sim);
+        const ThrottleInput e_throttle_input = tm ? tm->throttle_input : sim->throttle_input;
+        const bool e_has_governor = tm && tm->has_governor; // the mean-value engine has no governor (I7b)
         const std::string& e_id = pt.components[static_cast<std::size_t>(engine_component_index)].id;
         // PHYS-033 P4 I7a C6: the tank feeding this engine, if any.
         const FuelTankDesc* tank_desc = nullptr;
         if (fuel_tank_component_index >= 0) {
             const ComponentDesc& tc = pt.components[static_cast<std::size_t>(fuel_tank_component_index)];
             tank_desc = &std::get<FuelTankDesc>(tc.params);
-            if (!has_fuel_model(e)) {
+            if (!e_has_fuel_model) {
                 throw std::runtime_error("vehicle '" + vehicle_name + "': engine '" + e_id + "' has no fuel model - fuel_tank '" + tc.id +
                                           "' cannot feed it");
             }
-            if (std::none_of(e.fuels.begin(), e.fuels.end(), [&](const FuelDesc& f) { return same_fuel(f, tank_desc->fuel); })) {
+            if (std::none_of(e_fuels.begin(), e_fuels.end(), [&](const FuelDesc& f) { return same_fuel(f, tank_desc->fuel); })) {
                 throw std::runtime_error("vehicle '" + vehicle_name + "': tank fuel '" + tank_desc->fuel.name + "' is not in engine '" +
                                           e_id + "''s fuels list");
             }
@@ -1208,9 +1227,20 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             fuel_tank_ = std::make_unique<FuelTank>(tank_desc->fuel, tank_desc->capacity_kg, tank_desc->initial_kg);
         }
-        engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(e, tank_desc));
+        if (tm) {
+            engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(*tm, tank_desc));
+        } else {
+            // PHYS-033 P4 I7b C12: SimulatedEngine::build_maps takes LHV/AFR
+            // from fuels[0], so the engine is built from a copy whose fuels
+            // list holds ONLY the fuel actually burnt - the tank's (already
+            // checked to be in the list) or, without a tank, fuels[0] (the
+            // same rule as the graph engine's to_engine_desc). Review R7.
+            SimulatedEngineDesc burnt = *sim;
+            burnt.fuels.assign(1, tank_desc ? tank_desc->fuel : sim->fuels.front());
+            engine_ = std::make_unique<SimulatedEngine>(burnt);
+        }
         engine_friction_row_ = engine_row;
-        engine_has_fuel_model_ = has_fuel_model(e); // PHYS-033 P4 I7a C5, broadened C5d: gates fuel/heat booking below
+        engine_has_fuel_model_ = e_has_fuel_model; // PHYS-033 P4 I7a C5, broadened C5d: gates fuel/heat booking below
 
         // Bootstrap fix: EngineTorqueMap::pre_solve's own state machine can
         // only ENTER Running via a bump-start (omega already > 0, see plan
@@ -1222,8 +1252,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         // engine already idling" - so the crank's network state must be
         // seeded to idle speed directly here, once, at construction, not left
         // for the physics to bootstrap from omega=0.
-        if (e.initial_state == EngineInitialState::Running) {
-            network_.set_omega(engine_crank_, rpm_to_rad_per_s(e.idle_rpm));
+        if ((tm ? tm->initial_state : sim->initial_state) == EngineInitialState::Running) {
+            network_.set_omega(engine_crank_, rpm_to_rad_per_s(tm ? tm->idle_rpm : sim->idle_rpm));
         }
         // --- PHYS-033 P4 I7a C3: the throttle-command stage --------------
         // An explicit throttle_control component (validated above: at most
@@ -1233,7 +1263,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         // exactly when the engine has a governor (its own channel) - the
         // same hand-lever channel the pre-C3 code resolved directly below
         // (engine_governor_channel_slot_, now folded into throttle_stage_).
-        ThrottleInput throttle_kind = e.throttle_input;
+        ThrottleInput throttle_kind = e_throttle_input;
         bool throttle_has_curve = false;
         vehicle::Curve1D throttle_curve;
         std::string hand_lever_channel;
@@ -1243,6 +1273,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 throw std::runtime_error("vehicle '" + vehicle_name + "': throttle_control component '" +
                                           pt.components[static_cast<std::size_t>(throttle_control_component_index)].id +
                                           "' names engine '" + tcd.engine + "', which is not this vehicle's engine ('" + e_id + "')");
+            }
+            // PHYS-033 P4 I7b C12 pairing backstop (the loader already
+            // rejects a mismatch; this catches a code-built desc): the
+            // mean-value engine reads the command as a plate position
+            // (mechanical) or a torque request (electronic) by its OWN
+            // throttle_input, so a stage of the other kind would silently
+            // reinterpret the pedal. The graph engine keeps its pre-C12
+            // behaviour (no backstop) so no existing code-built desc changes.
+            if (sim && tcd.kind != e_throttle_input) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': throttle_control component '" +
+                                          pt.components[static_cast<std::size_t>(throttle_control_component_index)].id +
+                                          "' kind does not match simulated engine '" + e_id + "''s throttle_input");
             }
             throttle_kind = tcd.kind;
             throttle_has_curve = tcd.has_curve;
@@ -1255,11 +1297,11 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             // this, naming an explicit electronic/mechanical stage on the
             // tractor's governed diesel would silently drop its hand lever.
             hand_lever_channel = tcd.hand_lever_channel;
-            if (hand_lever_channel.empty() && e.has_governor) {
-                hand_lever_channel = e.governor.channel;
+            if (hand_lever_channel.empty() && e_has_governor) {
+                hand_lever_channel = tm->governor.channel;
             }
-        } else if (e.has_governor) {
-            hand_lever_channel = e.governor.channel;
+        } else if (e_has_governor) {
+            hand_lever_channel = tm->governor.channel;
         }
         int hand_lever_channel_slot = -1;
         if (!hand_lever_channel.empty()) {
@@ -1432,7 +1474,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                                           "' is not a " + expect_type);
             }
         };
-        check_ref(tcu_desc->engine, "engine", [](const ComponentParams& p) { return std::holds_alternative<TorqueMapEngineDesc>(p); });
+        check_ref(tcu_desc->engine, "engine", [](const ComponentParams& p) {
+            return std::holds_alternative<TorqueMapEngineDesc>(p) || std::holds_alternative<SimulatedEngineDesc>(p);
+        });
         check_ref(tcu_desc->clutch, "clutch", [](const ComponentParams& p) { return std::holds_alternative<ClutchDesc>(p); });
         check_ref(tcu_desc->gearbox, "gearbox", [](const ComponentParams& p) { return std::holds_alternative<GearboxDesc>(p); });
 
@@ -1917,6 +1961,11 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         // fuel_mass_delta/fuel_energy_in_delta are exactly 0.0 from any
         // engine without one - map or crude, PHYS-033 P4 I7a C5d).
         ledger_.indicated_work += post.indicated_work_delta;
+        // PHYS-033 P4 I7b C12: the mean-value engine's pumping/friction split
+        // of engine_out (0 from the graph engine) - diagnostic, outside
+        // balance_error.
+        ledger_.pumping_work += post.pumping_work_delta;
+        ledger_.friction_work += post.friction_work_delta;
         if (engine_has_fuel_model_) {
             ledger_.fuel_mass += post.fuel_mass_delta;
             ledger_.fuel_energy_in += post.fuel_energy_in_delta;

@@ -102,6 +102,13 @@ struct PowertrainEnergy {
     // comment incorrectly claimed the crude model can never violate). 0
     // without a fuel model.
     std::uint64_t fuel_efficiency_violations = 0;
+    // PHYS-033 P4 I7b C12: the simulated (mean-value) engine's own split of
+    // engine_out, cumulative J: pumping work (-(p_amb - p_im + pmep)*V/(2pi)
+    // times omega) and friction work (FMEP times omega), both normally <= 0.
+    // 0 for the graph engine. Diagnostic only - OUTSIDE balance_error (they
+    // are already inside engine_out) and never hashed.
+    real pumping_work = 0.0;
+    real friction_work = 0.0;
 };
 
 } // namespace ps::drivetrain

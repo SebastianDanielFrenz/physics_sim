@@ -634,7 +634,9 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     fuel_channels.clear();
     for (const drivetrain::ComponentDesc& component : desc.powertrain.components) {
         const auto* engine_desc = std::get_if<drivetrain::TorqueMapEngineDesc>(&component.params);
-        if (engine_desc != nullptr && drivetrain::has_fuel_model(*engine_desc)) {
+        const auto* sim_engine_desc = std::get_if<drivetrain::SimulatedEngineDesc>(&component.params); // I7b C12: always fuelled
+        if ((engine_desc != nullptr && drivetrain::has_fuel_model(*engine_desc)) ||
+            (sim_engine_desc != nullptr && drivetrain::has_fuel_model(*sim_engine_desc))) {
             const std::string fuel_prefix = "vehicle" + std::to_string(id.index) + ".fuel.";
             FuelTelemetryChannels fc;
             fc.flow_g_s = telemetry_->register_channel(fuel_prefix + "flow_g_s");
