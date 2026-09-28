@@ -36,9 +36,10 @@
 //   each, eta_spark_spread as one double. generator_version/quality/
 //   content_hash themselves are NOT repeated in the payload (quality and
 //   content_hash already live in the header above; generator_version is set
-//   to the CURRENT ps::drivetrain::kGeneratorVersion on every load, since a
-//   cache built by a different generator version would have a different KEY
-//   and thus a different filename - it could never reach here as a "hit").
+//   to the caller's engine_map_generator_version(desc) on every load (ps_audio
+//   A5: per path, 1 lumped / 2 pipe), since a cache built by a different
+//   generator version would have a different KEY and thus a different
+//   filename - it could never reach here as a "hit").
 //
 // Any mismatch (missing file, short read, wrong magic, wrong format
 // version, wrong key, a payload whose re-computed content_hash disagrees
@@ -90,11 +91,22 @@ inline constexpr std::uint32_t kPsMapsFormatVersion = 1;
 // depends on it. Neither affects engine_maps_content_hash (and so neither
 // affects state_hash).
 [[nodiscard]] std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
+// ps_audio A5: the same key for an explicit generator version (the form
+// above passes engine_map_generator_version(desc)); tests use it to show v1
+// and v2 keys of one desc differ.
+[[nodiscard]] std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
+                                                 std::uint32_t generator_version);
 
 // Attempts a cache load. Returns nullptr on ANY problem - see this file's
 // header comment for the exact list, all silently treated as a miss (H2).
 // cache_dir empty -> nullptr immediately, no filesystem access at all (the
 // opt-in default - see ps::io::EngineMapOptions::cache_dir).
+// ps_audio A5: generator_version = engine_map_generator_version(desc) of the
+// desc the key was computed for (the file stores no version; the content
+// hash, re-checked on load, folds it, so a wrong value is a silent miss).
+// The two-argument form is the lumped (v1) engines' load.
+[[nodiscard]] EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key,
+                                                    std::uint32_t generator_version);
 [[nodiscard]] EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key);
 
 // Writes maps to the cache via a temp-file-then-rename (H4). Never throws:

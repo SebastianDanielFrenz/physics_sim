@@ -435,7 +435,7 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
         const real rate = o.cd_area_m2 * slope * std::sqrt(1.4) * o.max_wave_speed_m_s * inv_v;
         if (h * rate > desc.cfl_limit)
             fail(orifice_message(o.name, h * rate, desc.cfl_limit, o.cd_area_m2));
-        orifices_.push_back(OrificeRt{o.volume_a, o.volume_b, o.cd_area_m2});
+        orifices_.push_back(OrificeRt{o.volume_a, o.volume_b, o.cd_area_m2, desc.cfl_limit / (h * rate) * o.cd_area_m2});
     }
 
     // Ambient reservoir view.
@@ -548,6 +548,13 @@ void PipeNetwork::set_volume_source(int v, real mdot_kg_s, real h_total_j_kg, re
     vr.src_mdot = mdot_kg_s;
     vr.src_h = h_total_j_kg;
     vr.src_x = clamp01(x_b);
+}
+
+void PipeNetwork::set_orifice_cd_area(int k, real cd_area_m2) {
+    OrificeRt& o = orifices_[static_cast<std::size_t>(k)];
+    if (!(cd_area_m2 > 0.0 && cd_area_m2 <= o.max_cd_area))
+        throw std::invalid_argument("PipeNetwork: orifice Cd*A must be > 0 and <= its stability bound");
+    o.cd_area = cd_area_m2;
 }
 
 void PipeNetwork::set_port_state(int port, const PortState& s) {

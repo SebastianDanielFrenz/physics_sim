@@ -63,6 +63,8 @@
 // runs a real cycle point rather than just linking.
 
 #include "cycle_fixtures.h"
+#include "cycle_pipe_fixtures.h"
+#include "ps/engine_cycle/cycle_engine.h"
 #include "ps/engine_cycle/cycle_point.h"
 #include "ps/engine_cycle/cycle_stepper.h"
 #include "ps/engine_cycle/pipe_network.h"
@@ -145,9 +147,37 @@ bool fv_waveguide_run_ok() {
     return ok;
 }
 
+// ps_audio A5: a small multi-cylinder pipe engine (the [AS] pipe I4 fixture:
+// runners, a 4-2-1 exhaust, an installation waveguide) runs without ps_core.
+bool pipe_engine_run_ok() {
+    const drivetrain::CycleModelDesc d = test::make_pipe_i4_cycle_desc();
+    OperatingPoint op;
+    op.rpm = 3000.0;
+    op.p_im_pa = 60.0e3;
+    op.t_im_k = 288.15;
+    op.p_amb_pa = 101325.0;
+    op.lambda = 1.0;
+    op.spark_deg_atdc = test::mbt_spark_deg_atdc(d);
+    CycleEngineSettings st;
+    st.h_s = kStepPreview;
+    st.settling_cycles = 2;
+    CycleEngine eng(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr, op, st);
+    const CycleEngineResult r = eng.run();
+    const bool ok = std::isfinite(r.mean.w_gross_j) && r.mean.m_air_j_cyc > 0.0 && r.mean.p_max_pa > op.p_amb_pa &&
+                    std::fabs(r.mass_closure_kg) <= 1e-9 * r.mass_scale_kg && eng.network() != nullptr &&
+                    eng.network()->waveguide_face_count() == 1;
+    std::printf("engine_cycle_standalone: pipe I4 %d cylinders, air %.4g kg/cyl, p_plenum %.6g Pa, closure %.3g kg\n",
+                r.cylinders, r.mean.m_air_j_cyc, r.p_plenum_mean_pa, r.mass_closure_kg);
+    return ok;
+}
+
 } // namespace
 
 int main() {
+    if (!pipe_engine_run_ok()) {
+        std::fprintf(stderr, "engine_cycle_standalone: FAIL - pipe engine run\n");
+        return 1;
+    }
     if (!pipe_run_ok()) {
         std::fprintf(stderr, "engine_cycle_standalone: FAIL - pipe network run\n");
         return 1;

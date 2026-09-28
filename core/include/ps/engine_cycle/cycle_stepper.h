@@ -7,7 +7,12 @@
 // (PROVISIONAL P1: U instead of T, see gas.h); the intake runner is an
 // incompressible inertial slug (state: its mass flow); the intake plenum (p_im,
 // T_im) and the exhaust reservoir (p_amb - PROVISIONAL P6) are boundary
-// conditions. Crank angle theta [deg] is not a state: 0 = gas-exchange TDC,
+// conditions. ps_audio A5 PIPE MODE (a desc with intake/exhaust pipe blocks):
+// no runner slug and no reservoir orifice - both ports exchange gas only with
+// the externally set PortSource rates (set_port_sources: the PipeNetwork port
+// fluxes of the same step divided by h, held constant over the RK4 step, so
+// the port gains exactly what the pipe lost - the A5 CycleEngine). The lumped path
+// is untouched (bit-identical). Crank angle theta [deg] is not a state: 0 = gas-exchange TDC,
 // 360 = firing TDC, period 720.
 //
 // The state vector also carries the per-cycle accumulators (work, valve mass
@@ -75,6 +80,14 @@ struct CycleState {
     real y[kStateCount] = {};
 };
 
+// ps_audio A5 pipe mode: external source rates INTO a port volume, constant
+// over one step (mass [kg/s], total enthalpy [W], burned mass [kg/s]).
+struct PortSource {
+    real mdot = 0.0;
+    real edot = 0.0;
+    real mbdot = 0.0;
+};
+
 // Test switches (PROVISIONAL P7): physics subsets for G2/G3/G5/G11.
 struct CycleSwitches {
     bool valves = true;
@@ -117,6 +130,9 @@ struct CycleModel {
     real combustion_eff_lean = 0.98;
     real t_backflow = 800.0;
     real lhv = 0.0, afr_st = 0.0;
+    // ps_audio A5: the desc carries intake/exhaust pipe blocks - ports couple
+    // to a PipeNetwork through PortSource rates (no runner, no reservoir).
+    bool pipe_ports = false;
 };
 
 class CycleStepper {
@@ -134,6 +150,31 @@ public:
     // One RK4 step aligned to a cycle of n steps (PROVISIONAL P4): theta runs
     // from 720*k/n to 720*(k+1)/n exactly (k taken mod n); h = cycle time / n.
     void step_aligned(std::uint64_t k, std::uint64_t n);
+
+    // ps_audio A5 (multi-cylinder CycleEngine): the same aligned step for a
+    // cylinder firing phase_deg after cylinder 1 - its own crank angle is the
+    // global one minus phase_deg, wrapped to [0, 720) at the step start (the
+    // step end may exceed 720; every angle-dependent term is 720-periodic or
+    // exhausted there). phase_deg == 0 reproduces step_aligned exactly.
+    void step_phased(std::uint64_t k, std::uint64_t n, real phase_deg);
+    // reset(op), then the crank angle at global angle 0 (= wrap720(-phase_deg))
+    // and the cylinder's burned-gas mass for the volume at that angle.
+    void reset_phased(const OperatingPoint& op, real phase_deg);
+    // Pipe mode only (ignored otherwise): the port source rates used by the
+    // following steps, until changed.
+    void set_port_sources(const PortSource& intake, const PortSource& exhaust) {
+        ip_src_ = intake;
+        ep_src_ = exhaust;
+    }
+    // Pipe mode only: ALSO tie the ports to fixed reservoirs through orifices
+    // of the given Cd*A (0 = off) - intake from (op.p_im, op.t_im, fresh),
+    // exhaust to (op.p_amb, T_backflow, burned) - evaluated inside the RHS
+    // like the lumped exhaust reservoir. The CycleEngine's reservoir_ports
+    // reference (no pipe waves; the V8 sabotage).
+    void set_port_reservoirs(real intake_cd_area, real exhaust_cd_area) {
+        res_ip_cda_ = intake_cd_area;
+        res_ep_cda_ = exhaust_cd_area;
+    }
 
     [[nodiscard]] const CycleState& state() const { return state_; }
     [[nodiscard]] real crank_deg() const { return theta_; }
@@ -166,6 +207,7 @@ public:
 private:
     void rk4(real theta0, real theta_mid, real theta1, real h);
     void after_step(real theta_before, real dtheta);
+    void add_port_reservoir_rates(const CycleInputs& in, PortSource& ip, PortSource& ep) const;
 
     std::shared_ptr<const CycleModel> model_;
     OperatingPoint op_{};
@@ -180,6 +222,8 @@ private:
     real m_air_conv_ = 0.0, m_fuel_ = 0.0, x_b_ivc_ = 0.0;
     real p_ref_ = 0.0, v_ref_ = 0.0, t_ref_ = 0.0;
     real p_max_ = 0.0;
+    PortSource ip_src_{}, ep_src_{};
+    real res_ip_cda_ = 0.0, res_ep_cda_ = 0.0;
 };
 
 [[nodiscard]] real wrap720(real deg);

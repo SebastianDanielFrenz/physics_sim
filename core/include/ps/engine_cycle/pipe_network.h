@@ -278,6 +278,15 @@ public:
     void set_port_state(int port, const PortState& s);
     [[nodiscard]] const PortFlux& port_flux(int port) const { return ports_[port].flux; }
 
+    // --- Orifices (ps_audio A5: the CycleEngine's throttle trim) --------------
+    [[nodiscard]] int orifice_count() const { return static_cast<int>(orifices_.size()); }
+    [[nodiscard]] real orifice_cd_area(int k) const { return orifices_[k].cd_area; }
+    // The largest Cd*A the build-time stability check accepts at this h.
+    [[nodiscard]] real orifice_max_cd_area(int k) const { return orifices_[k].max_cd_area; }
+    // Change an orifice's Cd*A between steps. Throws std::invalid_argument
+    // ("PipeNetwork: ...") unless 0 < cd_area_m2 <= orifice_max_cd_area(k).
+    void set_orifice_cd_area(int k, real cd_area_m2);
+
     // --- Totals, determinism -------------------------------------------------
     [[nodiscard]] real total_mass() const;         // pipes + network volumes (not ports)
     [[nodiscard]] real total_energy() const;       // sum E*V + volume U (gas.h reference)
@@ -332,6 +341,7 @@ private:
     struct OrificeRt {
         int a = -1, b = -1;
         real cd_area = 0.0;
+        real max_cd_area = 0.0;  // stability bound at h (build-time check)
     };
 
     // Reservoir view used by the boundary-face solver.
