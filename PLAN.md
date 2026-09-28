@@ -769,6 +769,9 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
 - Compressor surge (Sebastian, 2026-09-26): I7d only flags surge and counts
   events for the sound system. A real surge model stays an optional later
   item, taken up only if the results turn out unsatisfactory.
+- Order (Sebastian, 2026-09-28): `ps_audio` (engine sound from the live cycle
+  model, after its design pass closes the acoustic gap noted under "Audio
+  library") is implemented BEFORE the engine design GUI below.
 - Engine design GUI (Sebastian, 2026-09-28): once the "specs -> engine"
   workflow works (I7c C16a map generation plus C17a), build a GUI to
   specify and design an engine. A website is acceptable for now if that is
