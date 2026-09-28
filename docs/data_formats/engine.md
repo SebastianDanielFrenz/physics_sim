@@ -702,6 +702,86 @@ table above. Generator errors (e.g. an operating point whose cycle does
 not converge) propagate with their own `"engine map generator: ..."` /
 `"CycleModelDesc: ..."` messages.
 
+### `intake`/`exhaust`: the finite-volume pipe pair (ps_audio A4)
+
+A4 (out/audio_plan.md sections 3.1/3.2) is **data only**: the loader
+validates and round-trips these fields, nothing consumes them yet (the map
+generator still uses `runner_length_mm`/`runner_diameter_mm`; a future
+ps_audio A5 wires the pipe pair into the generator, and the runtime engine
+sound/audio path into the pipe network). `intake` and `exhaust` must be
+given **together** (a manifold with no exhaust plumbing modeled, or vice
+versa, is not a supported configuration) or **not at all**; when given, the
+pre-A4 lumped `runner_length_mm`/`runner_diameter_mm` pair is rejected
+instead (the pipe blocks replace it) - a cycle block without either pair is
+also rejected, exactly as before A4. `default_installation` (below) and
+`resolution` are only allowed together with the pipe pair.
+
+`intake` fields:
+
+| Key | Type | Required | Rule | Meaning |
+|---|---|---|---|---|
+| `source` | string | yes | non-empty | provenance (PLAN.md section 8) |
+| `throttle_bore_m` | number | yes | > 0 | throttle body bore, metres |
+| `plenum_m3` | number | yes | > 0 | plenum/manifold volume |
+| `runners` | array of objects | yes | non-empty | one entry per runner or runner group |
+| `runners[].cylinders` | `"all"` or array of integers | yes | `"all"` only as the sole entry, else every `1..cylinders` covered exactly once | which cylinders this runner feeds |
+| `runners[].length_m`, `d_in_m`, `d_out_m` | number | yes | > 0 | runner length and inlet/outlet diameter (may taper) |
+| `interface` | string | yes | non-empty | the pipe network node name where this intake meets the installation file's own network (A5) |
+
+`exhaust` fields:
+
+| Key | Type | Required | Rule | Meaning |
+|---|---|---|---|---|
+| `source` | string | yes | non-empty | provenance |
+| `primaries` | array of objects | yes | non-empty, `cylinders` covers every `1..cylinders` exactly once (same `"all"` convention as `intake.runners`) | one primary pipe per cylinder or cylinder group |
+| `primaries[].length_m`, `d_m` | number | yes | > 0 | |
+| `merges` | array of objects | yes | non-empty | the collector tree, one entry per junction, in the order pipes reach the flange |
+| `merges[].from` | array, >= 2 entries | yes | each entry a 1-based cylinder number (must be unique across every merge's `from`, and together with every other merge cover every cylinder exactly once) or a string naming an EARLIER merge's `into` (forward references rejected; each name consumed by at most one later merge) | what feeds this junction |
+| `merges[].into` | string | yes | non-empty, no duplicate `into` name | this junction's own name, referenceable by a later merge's `from` |
+| `merges[].length_m`, `d_m` | number | yes | > 0 | the merged pipe leaving this junction |
+| `interface` | string | yes | non-empty, must equal the LAST merge's `into` | the flange - every non-last merge's `into` must be consumed by exactly one later merge (no dangling branch) |
+
+`default_installation` (string, path relative to the ENGINE file's own
+directory, required with the pipe pair, rejected without it): the
+`physics_sim.installation/1` file (below) this engine plugs into unless a
+vehicle overrides it (`docs/data_formats/vehicle.md`'s per-engine
+`"installation"` component field - the vehicle-component JSON's own
+directory-relative override, resolved and loaded once both the vehicle
+component JSON and this engine's parsed cycle block are in hand; only
+allowed for a simulated engine whose cycle block has pipe blocks).
+
+`resolution` (object, optional, only allowed with the pipe pair): the
+finite-volume cell size used by the pipe network (A5/A7), CFL-checked at
+load time against the worst-case wave speed/step-rate combination the plan
+lists (exhaust 900 m/s, intake 500 m/s; `power_dx_m` against the map
+generator's Preview step 1/(960*24) s, `audio_dx_exhaust_m`/
+`audio_dx_intake_m` against the live 44.1 kHz audio rate) - a value below
+the CFL minimum is rejected with that minimum in the message.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `power_dx_m` | number | 0.05 | cell size for load-time map generation (coarse, cheap) |
+| `audio_dx_exhaust_m` | number | 0.032 | live exhaust-pipe cell size |
+| `audio_dx_intake_m` | number | 0.017 | live intake-pipe cell size |
+
+An engine WITHOUT `intake`/`exhaust` carries `resolution` at these defaults
+but never writes `default_installation`/`installation`/`installation_path`
+- bit-identical to a pre-A4 `CycleModelDesc` (`tests/unit/
+test_engine_installation_io.cpp`'s own regression TEST_CASE checks this
+directly; `test_engine_map_cache.cpp`'s H3 section checks the cache key is
+unaffected). See `ps/drivetrain/engine_cycle_desc.h`'s own field comments
+for the exact struct shapes (`IntakeCycleDesc`, `ExhaustCycleDesc`,
+`MergeSourceRef`, `ResolutionCycleDesc`) and `docs/data_formats/
+installation.md` for the installation file format.
+
+Rejections specific to these blocks: every rule in the two tables above;
+`intake`/`exhaust` given one without the other; `runner_length_mm`/
+`runner_diameter_mm` given together with them; `default_installation`
+missing with them present or given without them; `resolution` given
+without them; an unknown key at any level; the vehicle-component
+`"installation"` override on an engine without pipe blocks, on a
+non-simulated engine, or as an empty string.
+
 ### Shipped simulated engine: `toyota_a25a_fks_sim.json` (measured maps)
 
 PHYS-033 P4 I7c C17a (fallback M-B). `data/engines/toyota_a25a_fks_sim.json`

@@ -55,7 +55,94 @@ struct KeyFnv {
         pod(static_cast<std::uint64_t>(s.size()));
         for (char c : s) pod(c);
     }
+    void ints(const std::vector<int>& v) {
+        pod(static_cast<std::uint64_t>(v.size()));
+        for (int x : v) pod(x);
+    }
 };
+
+// ---- ps_audio A4: acoustic-field folding for CycleModelDesc's optional
+// intake/exhaust pipe pair and the resolved InstallationDesc. Positions
+// (RunnerPipeDesc has none; ExhaustElementDesc::position_m,
+// InstallationIntakeDesc::inlet_position_m) and every path/source string
+// (default_installation_path, installation_path, and the *.source citation
+// fields on IntakeCycleDesc/ExhaustCycleDesc/InstallationDesc - mirrors
+// FuelDesc::source's own exclusion above: provenance, never read by the
+// generator) are deliberately NOT folded - out/audio_plan.md section 3.3
+// "positions are excluded from the key" plus the same reasoning extended to
+// every other purely-descriptive string. Everything that could change the
+// finite-volume geometry A5 will build from these structs IS folded.
+void fold_exhaust_elements(KeyFnv& f, const std::vector<ExhaustElementDesc>& elems) {
+    f.pod(static_cast<std::uint64_t>(elems.size()));
+    for (const auto& e : elems) {
+        f.pod(static_cast<int>(e.type));
+        f.pod(e.length_m);
+        f.pod(e.d_m);
+        f.pod(e.k_loss);
+        // position_m intentionally excluded (audio-only, see comment above).
+        f.pod(static_cast<std::uint64_t>(e.branches.size()));
+        for (const auto& chain : e.branches) fold_exhaust_elements(f, chain);
+    }
+}
+
+void fold_installation(KeyFnv& f, const InstallationDesc& inst) {
+    f.pod(inst.intake.airbox_m3);
+    f.pod(static_cast<std::uint8_t>(inst.intake.has_snorkel ? 1 : 0));
+    f.pod(inst.intake.snorkel.length_m);
+    f.pod(inst.intake.snorkel.d_m);
+    // inlet_position_m intentionally excluded (audio-only).
+    fold_exhaust_elements(f, inst.exhaust.elements);
+    // source intentionally excluded (provenance-only).
+}
+
+void fold_pipe_pair(KeyFnv& f, const CycleModelDesc& desc) {
+    // Presence itself must move the key so a pipe-bearing engine can never
+    // collide with a lumped one that happens to share every other field
+    // (in practice impossible since runner_length_m/runner_diameter_m are
+    // forced to 0 for a pipe-bearing engine - kept anyway for clarity/safety).
+    f.str("audio_a4.pipes");
+    const auto& intake = *desc.intake;
+    f.pod(intake.throttle_bore_m);
+    f.pod(intake.plenum_m3);
+    f.pod(static_cast<std::uint64_t>(intake.runners.size()));
+    for (const auto& r : intake.runners) {
+        f.ints(r.cylinders);
+        f.pod(r.length_m);
+        f.pod(r.d_in_m);
+        f.pod(r.d_out_m);
+    }
+    f.str(intake.interface); // a topology tag, not a citation - folded
+
+    const auto& exhaust = *desc.exhaust;
+    f.pod(static_cast<std::uint64_t>(exhaust.primaries.size()));
+    for (const auto& p : exhaust.primaries) {
+        f.ints(p.cylinders);
+        f.pod(p.length_m);
+        f.pod(p.d_m);
+    }
+    f.pod(static_cast<std::uint64_t>(exhaust.merges.size()));
+    for (const auto& m : exhaust.merges) {
+        f.pod(static_cast<std::uint64_t>(m.from.size()));
+        for (const auto& src : m.from) {
+            f.pod(static_cast<std::uint8_t>(src.is_cylinder ? 1 : 0));
+            f.pod(src.cylinder);
+            f.str(src.name);
+        }
+        f.str(m.into); // a topology tag (referenced by a later merge/interface), not a citation - folded
+        f.pod(m.length_m);
+        f.pod(m.d_m);
+    }
+    f.str(exhaust.interface);
+
+    f.pod(desc.resolution.power_dx_m);
+    f.pod(desc.resolution.audio_dx_exhaust_m);
+    f.pod(desc.resolution.audio_dx_intake_m);
+
+    if (desc.installation.has_value()) {
+        f.str("audio_a4.installation");
+        fold_installation(f, *desc.installation);
+    }
+}
 
 // --- Plain little-endian byte-buffer (de)serialisation for the PAYLOAD. ---
 // A payload mismatch (wrong size, truncated) is always caught by the
@@ -231,6 +318,13 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
         f.str("c17a2.spark_schedule");
         f.table(desc.spark_advance_deg);
         f.pod(desc.ignition_delay_deg);
+    }
+    // ps_audio A4: the intake/exhaust pipe pair + resolved installation,
+    // folded only when present (both absent - the pre-A4 default for every
+    // shipped engine - leaves the key bit-identical to before this field
+    // existed; see fold_pipe_pair's own comment for what is/isn't folded).
+    if (desc.intake.has_value()) {
+        fold_pipe_pair(f, desc);
     }
     // FuelDesc (source excluded - the generator never reads it)
     f.str(fuel.name);
