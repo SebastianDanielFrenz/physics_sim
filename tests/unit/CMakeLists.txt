@@ -51,6 +51,7 @@ add_executable(ps_unit_tests
   test_fuel_tank.cpp
   test_ambient.cpp
   test_cited_engine_data.cpp
+  test_engine_cycle.cpp
 )
 
 target_link_libraries(ps_unit_tests
