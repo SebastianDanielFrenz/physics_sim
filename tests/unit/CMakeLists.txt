@@ -55,6 +55,7 @@ add_executable(ps_unit_tests
   test_simulated_engine.cpp
   test_simulated_engine_powertrain.cpp
   test_a25a_sim_engine_data.cpp
+  test_engine_cycle.cpp
 )
 
 target_link_libraries(ps_unit_tests

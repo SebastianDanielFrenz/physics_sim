@@ -56,6 +56,9 @@ add_library(ps_core STATIC
   src/drivetrain/engine_simulated.cpp
   src/drivetrain/gearbox.cpp
   src/drivetrain/manual_tcu.cpp
+  src/engine_cycle/geometry.cpp
+  src/engine_cycle/cycle_stepper.cpp
+  src/engine_cycle/cycle_point.cpp
 
   src/terrain/procedural_terrain_source.cpp
   src/terrain/procedural_terrain.cpp
