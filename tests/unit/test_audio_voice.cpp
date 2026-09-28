@@ -79,6 +79,7 @@ struct Driver {
     real t_sim = 0.0;
     real next_arrival = 0.0;  // audio sample index (fractional)
     std::uint64_t n = 0;      // samples rendered
+    std::uint64_t max_frames = 0;  // > 0: cap every render() call at this many frames
     std::vector<float> chunk;
 
     explicit Driver(Voice& voice, real ratio = 1.0) : v(voice), clock_ratio(ratio) {}
@@ -98,6 +99,7 @@ struct Driver {
                 stop = std::min<std::uint64_t>(end, static_cast<std::uint64_t>(std::ceil(next_arrival)));
                 if (stop <= n) stop = n + 1;
             }
+            if (max_frames > 0 && stop - n > max_frames) stop = n + max_frames;
             const std::size_t frames = static_cast<std::size_t>(stop - n);
             chunk.resize(frames * ns);
             v.render(chunk.data(), static_cast<int>(frames));
@@ -307,6 +309,7 @@ V11Out v11_run(std::uint64_t seed, int split) {
     if (split == 0) {
         drv.run(0.4, in, &rec);
     } else {
+        drv.max_frames = 37;  // render() calls of <= 37 frames, never aligned to the 32-sample control grid
         drv.run(0.1, in, &rec);
         drv.run(0.1003, in, &rec);
         drv.run(0.1997, in, &rec);
