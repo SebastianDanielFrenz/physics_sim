@@ -60,12 +60,15 @@
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace ps::terrain {
@@ -192,6 +195,47 @@ private:
     struct InterestPoint {
         Vec3 world_xy;
         real radius_m = 0.0;
+    };
+
+    // TileKey::packed -> slots_ index, as a vector kept sorted by key.
+    // Holds at most one entry per ASSIGNED slot, so reserve(pool size) at
+    // construction makes every insert/erase allocation-free for the
+    // manager's whole life - the unordered_map it replaced allocated a node
+    // on every slot (re)assignment, i.e. on every tile-boundary crossing.
+    // O(log n) lookup, O(n) insert/erase (a memmove over at most the pool
+    // size, a few hundred 16-byte entries). Never iterated to decide
+    // anything, although iteration would be in key order anyway.
+    class KeySlotIndex {
+    public:
+        void reserve(std::size_t n) { entries_.reserve(n); }
+        [[nodiscard]] std::size_t size() const { return entries_.size(); }
+        // slots_ index for `packed`, or kAbsent.
+        [[nodiscard]] std::size_t find(std::int64_t packed) const {
+            const auto it = lower(packed);
+            return (it != entries_.end() && it->first == packed) ? it->second : kAbsent;
+        }
+        [[nodiscard]] bool contains(std::int64_t packed) const { return find(packed) != kAbsent; }
+        void insert_or_assign(std::int64_t packed, std::size_t slot) {
+            const auto it = lower(packed);
+            if (it != entries_.end() && it->first == packed) {
+                entries_[static_cast<std::size_t>(it - entries_.begin())].second = slot;
+            } else {
+                entries_.insert(it, {packed, slot});
+            }
+        }
+        void erase(std::int64_t packed) {
+            const auto it = lower(packed);
+            if (it != entries_.end() && it->first == packed) entries_.erase(it);
+        }
+        static constexpr std::size_t kAbsent = static_cast<std::size_t>(-1);
+
+    private:
+        using Entry = std::pair<std::int64_t, std::size_t>;
+        [[nodiscard]] std::vector<Entry>::const_iterator lower(std::int64_t packed) const {
+            return std::lower_bound(entries_.begin(), entries_.end(), packed,
+                                    [](const Entry& e, std::int64_t k) { return e.first < k; });
+        }
+        std::vector<Entry> entries_;
     };
 
     struct Slot {
@@ -339,9 +383,11 @@ private:
     // orders differ, so Windows and Linux would diverge. The unordered
     // containers below are lookup-only (find/count/insert/erase/size) and
     // must stay that way; anything iterated is a vector, a std::map, or is
-    // sorted first.
+    // sorted first. key_to_slot_ is a sorted vector (KeySlotIndex), not an
+    // unordered_map, for allocation-freedom rather than ordering; it is
+    // lookup-only all the same.
     std::vector<Slot> slots_;
-    std::unordered_map<std::int64_t, std::size_t> key_to_slot_; // TileKey::packed -> slots_ index (lookup only)
+    KeySlotIndex key_to_slot_; // TileKey::packed -> slots_ index (lookup only), reserved to the pool size
     std::vector<std::size_t> free_slots_;                       // never-yet-assigned slot indices
     // Every slot's BodyId (index, generation), packed - fixed for this
     // TileManager's whole lifetime (see is_own_pool_body's doc comment).

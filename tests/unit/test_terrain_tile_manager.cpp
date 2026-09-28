@@ -156,17 +156,14 @@ TEST_CASE("World::set_terrain_source wires into the terrain_tiles pipeline stage
     REQUIRE(z1 > -20.0);
 }
 
-// Zero-allocation scope (see tile_manager.h's header comment): TileManager
-// deliberately does NOT claim allocation-free behaviour for the (bounded,
-// infrequent) bookkeeping that runs exactly when a tile crosses into or out
-// of the needed set - std::unordered_map's own per-insertion node
-// allocation for key_to_slot_ is the known cost there, accepted because it
-// only ever happens up to max_tile_fills_per_tick times per tick, not once
-// per substep. What DOES need to be allocation-free, because it is the
-// overwhelmingly common case during a steady drive (nothing crosses a tile
-// boundary on most ticks), is calling update() when the needed set has not
-// changed at all - this test checks exactly that steady state, not tile
-// reassignment.
+// Zero-allocation scope (see tile_manager.h's header comment): this case
+// checks the steady state - update() when the needed set has not changed at
+// all, the overwhelmingly common tick during a drive. Tile reassignment (a
+// boundary crossing) has been allocation-free in our own code too since the
+// terrain prefetch ring's C7 (key_to_slot_ became a sorted vector reserved
+// to the pool size; the std::unordered_map before it allocated a node per
+// assignment) - test_terrain_prefetch.cpp's "tile-row crossings allocate
+// nothing" case checks that, with prefetch on.
 TEST_CASE("TileManager::update allocates nothing when the needed tile set is unchanged", "[terrain][tiles][alloc]") {
     if (!ps::jobs::debug_alloc::hook_available()) {
         WARN("debug_alloc hook unavailable under this build (ASan/TSan) - skipping");
@@ -184,8 +181,8 @@ TEST_CASE("TileManager::update allocates nothing when the needed tile set is unc
     TileManager mgr(source, tc, world.backend());
 
     // Warm-up: stream the tile set in fully (allocation expected here -
-    // Jolt's own body/shape bookkeeping, TileManager's own scratch growth,
-    // and the key_to_slot_ insertions this comment describes as accepted).
+    // Jolt's own body/shape bookkeeping and TileManager's own scratch
+    // growth).
     mgr.set_interest_point(1, Vec3{0, 0, 0}, 32.0); // 3x3 = 9 tiles, fills the whole pool
     for (int i = 0; i < 4; ++i) mgr.update(jobs);
     REQUIRE(mgr.resident_tile_count() == 9);

@@ -124,6 +124,7 @@ TileManager::TileManager(std::shared_ptr<const ITerrainSource> source, const Ter
     slots_.resize(config_.max_resident_tiles);
     free_slots_.reserve(config_.max_resident_tiles);
     sync_slots_scratch_.reserve(config_.max_resident_tiles);
+    key_to_slot_.reserve(config_.max_resident_tiles); // at most one entry per slot: never grows past this
 
     const HeightfieldShape hf = make_placeholder_shape();
     for (std::size_t i = 0; i < slots_.size(); ++i) {
@@ -242,7 +243,7 @@ void TileManager::update(jobs::JobSystem& jobs) {
     // 2. Queue newly-needed keys that are not yet resident and not already
     // queued from an earlier tick.
     for (const TileKey& k : needed_keys_scratch_) {
-        if (key_to_slot_.count(k.packed)) continue;
+        if (key_to_slot_.contains(k.packed)) continue;
         bool already_queued = false;
         for (const TileKey& q : pending_fill_queue_) {
             if (q.packed == k.packed) {
@@ -276,7 +277,7 @@ void TileManager::update(jobs::JobSystem& jobs) {
         Slot& slot = slots_[slot_idx];
         slot.key = key;
         slot.assigned = true;
-        key_to_slot_[key.packed] = slot_idx;
+        key_to_slot_.insert_or_assign(key.packed, slot_idx);
         this_tick_slots_scratch_.push_back(slot_idx);
         ++processed;
     }
@@ -454,7 +455,7 @@ void TileManager::prefetch_enqueue() {
     const bool snapshot = source_->prefetch_support() == PrefetchSupportKind::Snapshot;
     std::size_t next_free = 0;
     auto try_enqueue = [&](TileKey key) -> bool { // false: stop (no Free ticket left, or the lane queue is full)
-        if (key_to_slot_.count(key.packed)) return true;
+        if (key_to_slot_.contains(key.packed)) return true;
         if (find_live_ticket(key) != kNoTicket) return true;
 
         const std::vector<std::uint32_t>* holes = nullptr;
@@ -662,8 +663,8 @@ std::size_t TileManager::prefetch_free_ticket_count() const {
 }
 
 BodyId TileManager::resident_body(TileKey key) const {
-    const auto it = key_to_slot_.find(key.packed);
-    return it != key_to_slot_.end() ? slots_[it->second].body : BodyId{};
+    const std::size_t idx = key_to_slot_.find(key.packed);
+    return idx != KeySlotIndex::kAbsent ? slots_[idx].body : BodyId{};
 }
 
 // Terrain-prefetch-ring plan commit C1: pure extraction of update()'s step
@@ -697,8 +698,8 @@ real TileManager::compute_tile_datum(TileSample& sample, std::size_t* relief_ove
 }
 
 real TileManager::resident_tile_datum(TileKey key) const {
-    const auto it = key_to_slot_.find(key.packed);
-    return (it != key_to_slot_.end()) ? slots_[it->second].datum : real(0.0);
+    const std::size_t idx = key_to_slot_.find(key.packed);
+    return (idx != KeySlotIndex::kAbsent) ? slots_[idx].datum : real(0.0);
 }
 
 // PLAN.md M1 / PHYS-021 - see terrain_config.h's

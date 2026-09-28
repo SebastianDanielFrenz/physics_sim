@@ -18,6 +18,9 @@
 //   - a Snapshot source whose data changed after capture: stale_inputs;
 //   - no precompute: skipped_suppression, nothing enqueued;
 //   - a TickOnly source: prefetch never starts.
+// A zero-allocation case (C7) drives tile-row crossings with prefetch on,
+// update() inside a job and debug_alloc armed, and requires no allocation of
+// our own on the tick side or in the lane builder.
 // A last case uses the real test_ground static collision: a prefetched tile
 // with suppression holes is bit-identical to the synchronous path, and the
 // enqueue rule's premise holds (every tile the precompute did NOT cover has
@@ -31,6 +34,7 @@
 
 #include "ps/io/surface_table.h"
 #include "ps/io/test_ground_loader.h"
+#include "ps/jobs/debug_alloc.h"
 #include "ps/jobs/job_system.h"
 #include "ps/terrain/procedural_terrain.h"
 #include "ps/world/world.h"
@@ -619,4 +623,103 @@ TEST_CASE("test_ground: a prefetched tile with suppression holes matches the syn
         }
     }
     REQUIRE(compared == off_records.size());
+}
+
+// C7: a tile-row crossing with prefetch on is allocation-free in our own
+// code - on the tick side (update() runs inside a job, as World's
+// terrain_tiles stage calls it, so debug_alloc::in_job() holds) and in the
+// lane builder (lane jobs run through the same job accounting). A crossing
+// reassigns pool slots (key_to_slot_ insert/erase - a sorted vector reserved
+// to the pool size since C7; the unordered_map before it allocated a node
+// per assignment), claims and releases tickets, enqueues lane jobs and swaps
+// spares. Jolt's own allocations (external_violation_count) are reported,
+// not gated, like every other zero-alloc test here.
+//
+// Suppression is switched off: an install that falls back to the
+// synchronous path on a tile no precompute covered still runs the lazy
+// suppression computation and inserts its result into suppression_cache_
+// (an allocation, pre-existing and independent of the ring - see
+// suppress_covered_samples), which would hide what this case measures.
+TEST_CASE("Prefetch on: tile-row crossings allocate nothing in update() or the lane builder", "[terrain][tiles][prefetch][alloc]") {
+    if (!jobs::debug_alloc::hook_available()) {
+        WARN("debug_alloc hook unavailable under this build (ASan/TSan) - skipping");
+        return;
+    }
+    auto source = std::make_shared<ProceduralTerrainSource>(make_test_spec(), 8);
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+    jobs::JobSystem js(2);
+
+    TerrainConfig tc = small_config(); // 64-slot pool, 4 fills/tick, margin 1
+    tc.prefetch_max_tiles = 40;        // the 24 margin keys of a 5x5 square hold a ticket each, plus the leading edge
+    tc.suppress_terrain_under_static_geometry = false;
+    TileManager mgr(source, tc, world.backend());
+    mgr.start_prefetch(js);
+    REQUIRE(mgr.prefetch_enabled());
+
+    // Tile centre (x, y) of the 32 m tile column/row (cx, cy).
+    const auto centre = [](int cx, int cy) { return Vec3{32.0 * cx + 16.0, 32.0 * cy + 16.0, 0.0}; };
+    // Moves to `p`, lets the lane finish last tick's tickets (outside any
+    // job), then runs update() inside a job, `ticks` times.
+    const auto drive_to = [&](const Vec3& p, int ticks) {
+        mgr.set_interest_point(1, p, kRadius);
+        for (int i = 0; i < ticks; ++i) {
+            js.drain_background();
+            jobs::JobSystem::WaitGroup group;
+            js.submit([&] { mgr.update(js); }, &group);
+            js.wait(group);
+        }
+    };
+
+    // Every tile of the 5x5 needed square around `p` is resident
+    // (resident_tile_count() also counts stale slots still holding a key).
+    const auto needed_resident = [&](const Vec3& p) {
+        const TileKey c = source->key_for_world_xy(p.x, p.y);
+        int n = 0;
+        for (std::int32_t dy = -2; dy <= 2; ++dy) {
+            for (std::int32_t dx = -2; dx <= 2; ++dx) n += mgr.resident_body(source->key_offset(c, dx, dy)).valid() ? 1 : 0;
+        }
+        return n;
+    };
+
+    // Warm-up (allocation expected: first use of each pool slot and spare
+    // in Jolt, scratch vectors growing to their high-water mark): stream in,
+    // then the same pattern of crossings the measurement repeats, so every
+    // pool slot has been assigned at least once.
+    drive_to(centre(0, 0), 12);
+    for (int step = 1; step <= 8; ++step) drive_to(centre(step, step / 2), 8);
+    for (int step = 7; step >= 0; --step) drive_to(centre(step, 4 + step / 2), 8);
+    REQUIRE(mgr.resident_tile_count() == 64); // every pool slot used at least once
+    REQUIRE(needed_resident(centre(0, 4)) == 25);
+
+    const PrefetchStats before = mgr.prefetch_stats();
+    jobs::debug_alloc::reset();
+    jobs::debug_alloc::set_armed(true);
+    // Measured: east across 8 columns (every second step also a row), then
+    // back west one row further north - every step a crossing that
+    // reassigns 5-9 slots, installed from tickets.
+    for (int step = 1; step <= 8; ++step) drive_to(centre(step, 8 + step / 2), 8);
+    for (int step = 7; step >= 0; --step) drive_to(centre(step, 13 + step / 2), 8);
+    // And without draining the lane: some installs find their ticket still
+    // Queued or Running (late_sync / late_wait paths).
+    mgr.set_interest_point(1, centre(20, 20), kRadius);
+    for (int i = 0; i < 12; ++i) {
+        jobs::JobSystem::WaitGroup group;
+        js.submit([&] { mgr.update(js); }, &group);
+        js.wait(group);
+    }
+    js.drain_background();
+    jobs::debug_alloc::set_armed(false);
+    const std::uint64_t own = jobs::debug_alloc::own_violation_count();
+    const std::uint64_t external = jobs::debug_alloc::external_violation_count();
+    jobs::debug_alloc::reset();
+
+    const PrefetchStats& after = mgr.prefetch_stats();
+    INFO("own " << own << " external (Jolt, not gated) " << external << " installed " << (after.installed - before.installed)
+                << " late_sync " << (after.late_sync - before.late_sync) << " late_wait " << (after.late_wait - before.late_wait)
+                << " cancelled " << (after.cancelled - before.cancelled));
+    CHECK(after.installed - before.installed >= 50); // the crossings really went through the lane
+    CHECK(needed_resident(centre(20, 20)) == 25);
+    REQUIRE(own == 0);
 }
