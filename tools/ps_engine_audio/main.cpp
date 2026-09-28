@@ -11,12 +11,13 @@
 //   ps_engine_audio <engine.json> --wav out.wav --script events.json
 //                    [--installation file.json] [--seconds S] [--seed N]
 //                    [--map-workers N] [--engine-cache DIR]
-//                    [--dyno-brake-nm X] [--live]
+//                    [--dyno-brake-nm X] [--full-scale-pa P] [--live]
 #include "ps/drivetrain/engine_rig.h"
 #include "ps/engine_cycle/cycle_engine.h" // RadiatingEnd, for the printed source list
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
 #include "ps_audio/engine_input.h"
+#include "ps_audio/source.h"
 #include "ps_audio/voice.h"
 
 #include "headless_env.h"
@@ -50,6 +51,7 @@ struct Args {
     std::string engine_cache_dir;
     double dyno_brake_nm = -1.0; // < 0: no dyno (free rev)
     bool live = false;
+    double full_scale_pa = ps_audio::Calibration{}.pa_full_scale; // Pa at 1 m mapped to digital full scale
 };
 
 [[noreturn]] void usage_error(const std::string& msg) {
@@ -58,7 +60,7 @@ struct Args {
                   "usage: ps_engine_audio <engine.json> --wav out.wav --script events.json\n"
                   "                       [--installation file.json] [--seconds S] [--seed N]\n"
                   "                       [--map-workers N] [--engine-cache DIR]\n"
-                  "                       [--dyno-brake-nm X] [--live]\n",
+                  "                       [--dyno-brake-nm X] [--full-scale-pa P] [--live]\n",
                   msg.c_str());
     std::exit(1);
 }
@@ -88,6 +90,9 @@ Args parse_args(int argc, char** argv) {
             a.engine_cache_dir = next("--engine-cache");
         } else if (arg == "--dyno-brake-nm") {
             a.dyno_brake_nm = std::stod(next("--dyno-brake-nm"));
+        } else if (arg == "--full-scale-pa") {
+            a.full_scale_pa = std::stod(next("--full-scale-pa"));
+            if (!(a.full_scale_pa > 0.0)) usage_error("--full-scale-pa must be > 0");
         } else if (arg == "--live") {
             a.live = true;
         } else if (!arg.empty() && arg[0] == '-') {
@@ -300,7 +305,10 @@ int main(int argc, char** argv) {
         std::vector<float> per_source_block(static_cast<std::size_t>(frames_per_tick) * static_cast<std::size_t>(sources),
                                              0.0f);
         std::vector<float> mixed_block(static_cast<std::size_t>(frames_per_tick), 0.0f);
-        const float mix_gain = sources > 0 ? 1.0f / static_cast<float>(sources) : 1.0f;
+        // Voice output is Pa at 1 m; ps_audio::Calibration maps pa_full_scale to digital
+        // full scale (no AGC). Without it 1 Pa was full scale and every engine clipped.
+        const float mix_gain = static_cast<float>(1.0 / args.full_scale_pa) /
+                               (sources > 0 ? static_cast<float>(sources) : 1.0f);
 
         const auto wall_start = std::chrono::steady_clock::now();
 
