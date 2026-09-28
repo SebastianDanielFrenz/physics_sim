@@ -68,6 +68,20 @@ this shortened example.)
 | `e10.json` | 42,184,298 | 13.919398 | 752.150 |
 | `e25.json` | 39,502,453 | 13.061831 | 759.125 |
 | `e85.json` | 29,250,430 | 9.783568 | 787.025 |
+| `tier3_e10_cert.json` | 41,954,062 | 14.002173341183884 | 743.26 |
+
+`tier3_e10_cert.json` (PHYS-033 P4 I7a C7) is not a blend — it is the actual
+EPA Tier 3 Bin 30 certification fuel (10 vol% ethanol) `data/engines/
+toyota_a25a_fks.json`'s fuel map was measured on, from EPA NVFEL Fuel
+Analysis Report 26781 ("2018 Toyota 2.5L A25A-FKS Engine Tier 3 Fuel - Test
+Data Package", public domain, data.gov ScienceHub), cross-checked against
+SAE 2019-01-0249 Table 4. `lhv_j_kg`/`density_kg_m3` are unit conversions of
+the report's own measured ASTM D240/D4052 values; `afr_stoich` is derived
+from the report's measured elemental mass fractions (ASTM D5291/D5599, C/H/O
+wt%) via Heywood 1988 section 3.2's stoichiometry — see the file's own
+`"source"` field for the full derivation, independently re-derived (and
+cross-checked against a corrupted-literal negative control) by
+`tests/unit/test_cited_engine_data.cpp`.
 
 `gasoline.json` is the pure (E0) base component and is never edited by a
 blend — its LHV and AFR_s stay exactly Heywood Table 9.7's gasoline column, and

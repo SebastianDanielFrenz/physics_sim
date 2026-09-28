@@ -1,0 +1,40 @@
+{
+  "format": "physics_sim.scenario/1",
+  "name": "vehicle_fuel_tank",
+  "duration_s": 10.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "surface_table_path": "../surfaces/surfaces.json",
+  "bodies": [
+    {
+      "name": "ground",
+      "motion": "static",
+      "shape": {"type": "box", "half_extents": [1000.0, 1000.0, 0.5]},
+      "position": [0, 0, -0.5],
+      "friction": 1.0
+    },
+    {
+      "name": "chassis",
+      "motion": "dynamic",
+      "mass": 1500.0,
+      "shape": {"type": "box", "half_extents": [2.0, 0.4, 0.15]},
+      "position": [0, 0, 0.6],
+      "friction": 0.5,
+      "allow_sleep": false
+    }
+  ],
+  "vehicles": [
+    {
+      "name": "car",
+      "chassis_body": "chassis",
+      "vehicle_json_path": "../../tests/support/fixtures/vehicle_fuel_tank_car.json"
+    }
+  ],
+  "control_events": [
+    { "t": 0.0, "channel": "gear_request", "value": 1.0 },
+    { "t": 0.2, "channel": "throttle", "value": 1.0 }
+  ],
+  "telemetry_csv": "vehicle_fuel_tank.csv"
+}

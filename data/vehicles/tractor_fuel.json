@@ -1,0 +1,73 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "tractor_fuel",
+  "source": "PHYS-033 P4 I7a C7. Identical to data/vehicles/tractor.json (chassis geometry, suspension, tyres, steering, brake_system, aero, gearbox, transfer case, both differentials, park lock, PTO, controllers all UNCHANGED - see that file's own 'source' field for their derivation) plus a fuel_tank component + fluid link. NO fuel map: PHYS-033 P4 I7a C7's owner ruling (2026-09-27) deferred a diesel fuel MAP for this engine because no source found meets the project's 'a map's fuel must be the fuel it was measured on' rule for data/engines/diesel_i4_4l5_turbo.json (itself an admitted plausible-class placeholder, not a specific measured engine - see that file's own source field: 'NOT a specific engine ... verify before citing'). The engine therefore keeps its existing crude no-map fuel model (indicated_efficiency defaults to the ignition='compression' value 0.48, Heywood 1988 section 15.5.1) unchanged; this file adds only a tank so the engine can starve/stall when it runs the tank dry, exactly like the map-less crude-model tests in tests/unit/test_engine_fuel_map.cpp's tractor cases. FUEL: fuel = ../fuels/diesel.json - already the sole entry in diesel_i4_4l5_turbo.json's 'fuels' list, so no engine-file edit was needed. TANK CAPACITY: CITED for a comparable mid-size 4.5 L 4-cylinder turbo-diesel tractor (the same engine displacement/class diesel_i4_4l5_turbo.json's own source field names, 'John Deere PowerTech 4045 / Deutz TCD 4.1 class') - tractordata.com, 'John Deere 6105M tractor information' (https://www.tractordata.com/farm-tractors/007/5/3/7530-john-deere-6105m.html): engine 'PowerTech PVX, 4.5L 4-cyl diesel', gross power '105 hp / 78.3 kW' (this project's engine file's own ~100 kW/2200 rpm rating is in the same class, not identical - the 6105M is cited as a comparable real machine's fuel tank, not as the source of the engine curve itself, which remains its own file's plausible-class placeholder), fuel tank capacity 'Fuel tank: 58 gal / 219.5 L'. DERIVED capacity_kg: 219.5 L * 830.0 kg/m^3 (data/fuels/diesel.json's own density_kg_m3) / 1000 = 182.185 kg, rounded to 182.19 kg. initial_kg = capacity_kg (a full tank) = 182.19. fluid link tank.out -> engine.fuel per docs/data_formats/vehicle.md / tests/support/fixtures/vehicle_tank_sedan.json's established syntax; the only engine/fuel_tank pairing in the vehicle, no fluid ambiguity.",
+  "wheels": [
+    { "name": "FL", "attachment_local": [1.82, 0.95, -0.5], "wheel_radius": 0.8, "wheel_width": 0.48, "wheel_mass": 80.0, "wheel_inertia": 25.6,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 515025.0, "damper_bump_rate": 18600.0, "damper_rebound_rate": 24000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../tyres/tractor_front.json", "steered": true, "is_front": true },
+    { "name": "FR", "attachment_local": [1.82, -0.95, -0.5], "wheel_radius": 0.8, "wheel_width": 0.48, "wheel_mass": 80.0, "wheel_inertia": 25.6,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 515025.0, "damper_bump_rate": 18600.0, "damper_rebound_rate": 24000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../tyres/tractor_front.json", "steered": true, "is_front": true },
+    { "name": "RL", "attachment_local": [-0.98, 0.95, -0.275], "wheel_radius": 1.025, "wheel_width": 0.62, "wheel_mass": 150.0, "wheel_inertia": 78.8,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 956475.0, "damper_bump_rate": 34500.0, "damper_rebound_rate": 45000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../tyres/tractor_rear.json", "steered": false, "is_front": false },
+    { "name": "RR", "attachment_local": [-0.98, -0.95, -0.275], "wheel_radius": 1.025, "wheel_width": 0.62, "wheel_mass": 150.0, "wheel_inertia": 78.8,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 956475.0, "damper_bump_rate": 34500.0, "damper_rebound_rate": 45000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
+      "arb_partner": -1, "tyre": "../tyres/tractor_rear.json", "steered": false, "is_front": false }
+  ],
+  "steering": { "max_wheel_angle": 0.6, "ackermann_fraction": 1.0, "rear_steer_fraction": 0.0, "steer_rate_limit": 0.0 },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [ { "wheel": "FL", "max_torque_nm": 3000.0 }, { "wheel": "FR", "max_torque_nm": 3000.0 },
+                 { "wheel": "RL", "max_torque_nm": 8000.0 }, { "wheel": "RR", "max_torque_nm": 8000.0 } ],
+    "handbrake": { "wheels": ["RL", "RR"], "max_torque_nm": 8000.0 }
+  },
+  "aero": { "drag_area_m2": 4.0 },
+  "powertrain": {
+    "components": [
+      { "id": "engine",  "type": "engine",  "ref": "../engines/diesel_i4_4l5_turbo.json" },
+      { "id": "clutch",  "type": "clutch",  "capacity_nm": 900.0, "static_factor": 1.2,
+        "engagement_vs_pedal": { "x": [0.0, 0.35, 0.55, 0.70, 1.0], "y": [1.0, 1.0, 0.4, 0.0, 0.0] },
+        "out_inertia_kgm2": 0.03, "axis_local": [-1, 0, 0] },
+      { "id": "gearbox", "type": "gearbox", "ref": "../gearboxes/tractor_12f4r.json" },
+      { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
+        "clutch": { "capacity_nm": 2500.0, "static_factor": 1.2, "engage_time_s": 0.3 },
+        "channel": "awd", "in_inertia_kgm2": 0.02, "front_inertia_kgm2": 0.05, "axis_local": [-1, 0, 0] },
+      { "id": "diff",    "type": "differential", "kind": "open", "ratio": 20.0, "efficiency": 0.94,
+        "carrier_inertia_kgm2": 0.5, "carrier_axis_local": [0, 1, 0],
+        "lockable": true, "lock": { "max_engage_mismatch_rad_s": 2.0, "channel": "diff_lock" } },
+      { "id": "front_diff", "type": "differential", "kind": "open", "ratio": 15.30, "efficiency": 0.94,
+        "carrier_inertia_kgm2": 0.2, "carrier_axis_local": [0, 1, 0] },
+      { "id": "park", "type": "park_lock", "capacity_nm": 30000.0, "static_factor": 1.0,
+        "max_engage_speed_rad_s": 5.0, "channel": "park_lock" },
+      { "id": "pto", "type": "pto", "ratios": { "540": 3.61, "1000": 1.95 },
+        "capacity_nm": 700.0, "static_factor": 1.2, "engage_time_s": 1.5, "efficiency": 0.96,
+        "out_inertia_kgm2": 0.05, "disengaged_brake_time_s": 1.0, "channel": "pto", "speed_channel": "pto_speed" },
+      { "id": "tank", "type": "fuel_tank", "fuel": "../fuels/diesel.json", "capacity_kg": 182.19, "initial_kg": 182.19 }
+    ],
+    "shafts": [
+      { "ports": ["engine.crank", "clutch.in", "pto.in"] },
+      { "ports": ["clutch.out", "gearbox.in"] },
+      { "ports": ["gearbox.out", "transfer.in", "park.shaft"] },
+      { "ports": ["transfer.rear", "diff.carrier"] },
+      { "ports": ["diff.left", "wheel:RL"] },
+      { "ports": ["diff.right", "wheel:RR"] },
+      { "ports": ["transfer.front", "front_diff.carrier"] },
+      { "ports": ["front_diff.left", "wheel:FL"] },
+      { "ports": ["front_diff.right", "wheel:FR"] }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true,
+    "fluid": [ ["tank.out", "engine.fuel"] ]
+  },
+  "controllers": [
+    { "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",
+      "auto_clutch": { "enabled": true, "bite_rpm": 1000, "full_rpm_min": 1200, "full_rpm_max": 1700, "lock_slip_rpm": 60,
+                       "anti_stall_rpm": 800, "engage_rate_per_s": 2.0, "release_rate_per_s": 8.0, "open_time_s": 0.15, "close_time_s": 0.40 },
+      "auto_blip":   { "enabled": false, "kp_per_rpm": 0.001, "max_throttle": 0.6, "upshift_cut": false },
+      "auto_shift":  { "enabled": false, "up_rpm_at_zero_throttle": 1600, "up_rpm_at_full_throttle": 2150,
+                       "down_rpm_at_zero_throttle": 1000, "down_rpm_at_full_throttle": 1400, "min_time_in_gear_s": 2.0 },
+      "max_pending_steps": 2 }
+  ]
+}

@@ -1247,3 +1247,69 @@ TEST_CASE("C6 T10: starvation scales tau_comb and every combustion d term by s (
         run_t10(c);
     }
 }
+
+// ---------------------------------------------------------------------------
+// C7 review F5: data/vehicles/tractor_fuel.json (the tractor + a full 182.19 kg
+// diesel tank, see that file's own "source" field) is currently loaded by no
+// test/script/adapter - a smoke test only, not a physics acceptance test:
+// the file loads via the production path, the crude no-map diesel engine
+// (indicated_efficiency defaults to the ignition="compression" value 0.48)
+// idles in neutral for a few seconds without stalling, the tank measurably
+// decreases, balance_error stays within the project-wide 5e-8 relative bound
+// every tick, and the fuel actually burnt is confirmed to be diesel by
+// cross-checking fuel_energy_in/fuel_mass against data/fuels/diesel.json's
+// own literal lhv_j_kg (42,000,000 J/kg) to a tight relative tolerance - the
+// crude model books fuel_energy_in = fuel_mass_delta*LHV every substep, so a
+// wrong fuel (e.g. gasoline's ~44e6 J/kg) would fail this ratio check
+// immediately.
+// ---------------------------------------------------------------------------
+TEST_CASE("C7 F5: tractor_fuel.json loads, idles without stalling and burns down its diesel tank", "[unit][drivetrain][fuel][vehicle]") {
+    vehicle::VehicleDesc desc = io::load_vehicle_json(data_path("vehicles/tractor_fuel.json"));
+    const real capacity_kg = tank_of(desc).capacity_kg;
+    REQUIRE(capacity_kg == Catch::Approx(182.19).margin(1e-9));
+
+    Rig rig = make_rig(desc, 240.0, 960.0, /*gear=*/0, /*workers=*/1, /*auto_clutch_launch=*/false);
+    World& w = *rig.world;
+    const VehicleId v = rig.vehicle;
+
+    // Settle 1 s first (the same pattern run_balance_starvation() above uses):
+    // right after reset_vehicle the idle PI/energy terms are momentarily near
+    // zero, which would otherwise make the balance-error/denom RATIO checked
+    // below spuriously huge for a tick or two even though the absolute
+    // residual is tiny - not checked here, exactly like every other
+    // balance_error-ratio test in this file.
+    for (int t = 0; t < 240; ++t) {
+        w.step();
+        REQUIRE(w.powertrain_state(v).engine_state == EngineState::Running);
+    }
+    const real initial_tank_kg = w.fuel_tank_mass(v);
+    REQUIRE(initial_tank_kg < 182.19); // already idled for 1 s, so a hair below the full 182.19 kg fixture literal
+    REQUIRE(initial_tank_kg == Catch::Approx(182.19).margin(1e-3));
+
+    real worst_balance_ratio = 0.0;
+    for (int t = 0; t < 5 * 240; ++t) { // 5 more seconds idling in neutral
+        w.step();
+        REQUIRE(w.powertrain_state(v).engine_state == EngineState::Running);
+        const PowertrainEnergy& e = w.powertrain_energy(v);
+        const real denom = sum_abs_terms(e);
+        if (denom > 1e-9) {
+            const real ratio = std::abs(e.balance_error) / denom;
+            worst_balance_ratio = std::max(worst_balance_ratio, ratio);
+            CHECK(ratio <= 5e-8);
+        }
+    }
+
+    const real final_tank_kg = w.fuel_tank_mass(v);
+    const PowertrainEnergy& e = w.powertrain_energy(v);
+    WARN("F5: tank " << initial_tank_kg << " -> " << final_tank_kg << " kg over 5 s idle, fuel_mass=" << e.fuel_mass
+                      << " kg, fuel_energy_in=" << e.fuel_energy_in << " J, worst |balance_error|/denom " << worst_balance_ratio);
+
+    CHECK(final_tank_kg < initial_tank_kg); // measurably decreased
+    CHECK(e.fuel_mass > 0.0);
+    REQUIRE(e.fuel_mass > 1e-12); // non-vacuous denominator for the LHV ratio check below
+
+    // Diesel's own literal LHV (data/fuels/diesel.json), not some other fuel's.
+    constexpr real kDieselLhvJKg = 42000000.0;
+    const real measured_lhv = e.fuel_energy_in / e.fuel_mass;
+    CHECK(measured_lhv == Catch::Approx(kDieselLhvJKg).epsilon(1e-6));
+}

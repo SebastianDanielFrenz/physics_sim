@@ -1,0 +1,60 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "car_sedan_fuel",
+  "source": "PHYS-033 P4 I7a C7. Identical to data/vehicles/car_sedan.json (chassis geometry, suspension, tyres, steering, brake_system, aero, gearbox, differential, controllers all UNCHANGED - see that file's own 'source' field for their derivation) except: (1) the engine component's ref is data/engines/toyota_a25a_fks.json (2018 Toyota 2.5L A25A-FKS, EPA NVFEL Report 26781 - see that file's own 'source' field) in place of the generic i4_2l_na.json placeholder; (2) a fuel_tank component + fluid link were added; (3) the clutch capacity_nm was raised, IN THIS FILE ONLY (car_sedan.json itself is never edited). The real 2018 Camry's own 8-speed automatic transmission (U880E) is NOT modeled - this file keeps car_sedan.json's sedan_6mt 6-speed manual gearbox and manual_tcu controller unchanged, so gearing/shift behaviour here is a stand-in, not a Camry replica; only the engine and fuel system are the cited Camry unit. CLUTCH CAPACITY: car_sedan.json's own source field states its 300.0 N*m capacity was sized as '1.5 x engine peak torque' for the OLD i4_2l_na.json engine (peak WOT torque 200 N*m there). The new toyota_a25a_fks.json engine's MEASURED peak WOT torque is 232.04 N*m (at 4493.1 rpm, EPA NVFEL Report 26781 High Load Final sheet, pedal=100 row - see that engine file's own citation). Carrying the old 300.0 N*m forward would give only 300/232.04 = 1.293x, below car_sedan.json's own documented 'typical passenger-car reserve 1.3-1.8' range. Raised, using the SAME 1.5x convention car_sedan.json itself used: 232.04 * 1.5 = 348.06 N*m, rounded to the same round-number style as the original (300.0) -> 350.0 N*m (350.0/232.04 = 1.508x, inside the 1.3-1.8 range). static_factor (1.15) and the engagement_vs_pedal curve are unchanged from car_sedan.json - only capacity_nm differs. FUEL TANK: fuel = ../fuels/tier3_e10_cert.json (the EPA Tier 3 certification fuel toyota_a25a_fks.json's own fuel_map was measured on - required by PHYS-033 P4 I7a C7's 'a map's fuel must be the fuel it was measured on' rule; also present in that engine's fuels list). Capacity CITED: fueleconomy.gov (US DOE/EPA joint fuel-economy site, https://www.fueleconomy.gov/feg/Find.do?action=sbs&id=38883), '2018 Toyota Camry LE/SE' (4-cylinder, the trim this engine actually ships in): 'Tank Size: 16.0 gallons' (US gallons). DERIVED capacity_kg: 16.0 US gal * 3.785411784 L/gal (exact US-gallon-to-litre conversion) = 60.566588544 L; 60.566588544 L * 0.74326 kg/L (tier3_e10_cert.json's own density_kg_m3=743.26, i.e. 0.74326 kg/L) = 45.016722541... kg, rounded to 45.02 kg. initial_kg = capacity_kg (a full tank) = 45.02. fluid link tank.out -> engine.fuel per docs/data_formats/vehicle.md / tests/support/fixtures/vehicle_tank_sedan.json's established syntax; this is the only engine/fuel_tank pairing in the vehicle (no fluid ambiguity).",
+  "wheels": [
+    { "name": "FL", "attachment_local": [1.08, 0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 73575.0, "damper_bump_rate": 4000.0, "damper_rebound_rate": 5900.0, "bump_stop_rate": 400000.0, "arb_rate": 15000.0 },
+      "arb_partner": 1, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": true, "is_front": true },
+    { "name": "FR", "attachment_local": [1.08, -0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 73575.0, "damper_bump_rate": 4000.0, "damper_rebound_rate": 5900.0, "bump_stop_rate": 400000.0, "arb_rate": 15000.0 },
+      "arb_partner": 0, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": true, "is_front": true },
+    { "name": "RL", "attachment_local": [-1.62, 0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 49050.0, "damper_bump_rate": 2700.0, "damper_rebound_rate": 4000.0, "bump_stop_rate": 400000.0, "arb_rate": 10000.0 },
+      "arb_partner": 3, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": false, "is_front": false },
+    { "name": "RR", "attachment_local": [-1.62, -0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
+      "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 49050.0, "damper_bump_rate": 2700.0, "damper_rebound_rate": 4000.0, "bump_stop_rate": 400000.0, "arb_rate": 10000.0 },
+      "arb_partner": 2, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": false, "is_front": false }
+  ],
+  "steering": { "max_wheel_angle": 0.5236, "ackermann_fraction": 1.0, "rear_steer_fraction": 0.0, "steer_rate_limit": 0.0 },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [ { "wheel": "FL", "max_torque_nm": 2800.0 }, { "wheel": "FR", "max_torque_nm": 2800.0 },
+                 { "wheel": "RL", "max_torque_nm": 1600.0 }, { "wheel": "RR", "max_torque_nm": 1600.0 } ],
+    "handbrake": { "wheels": ["RL", "RR"], "max_torque_nm": 1600.0 }
+  },
+  "aero": { "drag_area_m2": 0.68 },
+  "powertrain": {
+    "components": [
+      { "id": "engine",  "type": "engine",  "ref": "../engines/toyota_a25a_fks.json" },
+      { "id": "clutch",  "type": "clutch",  "capacity_nm": 350.0, "static_factor": 1.15,
+        "engagement_vs_pedal": { "x": [0.0, 0.30, 0.45, 0.60, 0.75, 1.0], "y": [1.0, 1.0, 0.55, 0.15, 0.0, 0.0] },
+        "out_inertia_kgm2": 0.004, "axis_local": [0, 1, 0] },
+      { "id": "gearbox", "type": "gearbox", "ref": "../gearboxes/sedan_6mt.json" },
+      { "id": "diff",    "type": "differential", "kind": "open", "ratio": 4.06, "efficiency": 0.97,
+        "carrier_inertia_kgm2": 0.02, "carrier_axis_local": [0, 1, 0] },
+      { "id": "tank", "type": "fuel_tank", "fuel": "../fuels/tier3_e10_cert.json", "capacity_kg": 45.02, "initial_kg": 45.02 }
+    ],
+    "shafts": [
+      { "ports": ["engine.crank", "clutch.in"] },
+      { "ports": ["clutch.out", "gearbox.in"] },
+      { "ports": ["gearbox.out", "diff.carrier"] },
+      { "ports": ["diff.left", "wheel:FL"] },
+      { "ports": ["diff.right", "wheel:FR"] }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true,
+    "fluid": [ ["tank.out", "engine.fuel"] ]
+  },
+  "controllers": [
+    { "id": "tcu", "type": "manual_tcu", "gearbox": "gearbox", "clutch": "clutch", "engine": "engine",
+      "auto_clutch": { "enabled": true, "bite_rpm": 1100, "full_rpm_min": 1600, "full_rpm_max": 3000, "lock_slip_rpm": 80,
+                       "anti_stall_rpm": 750, "engage_rate_per_s": 4.0, "release_rate_per_s": 12.0, "open_time_s": 0.08, "close_time_s": 0.10,
+                       "sync_time_s": 0.30, "max_sync_torque_nm": 50.0 },
+      "auto_blip":   { "enabled": true, "kp_per_rpm": 0.002, "max_throttle": 1.0, "upshift_cut": true,
+                       "upshift_cut_release_slip_rpm": 300, "upshift_cut_max_hold_s": 0.6, "upshift_torque_ramp_s": 0.10 },
+      "auto_shift":  { "enabled": false, "up_rpm_at_zero_throttle": 2500, "up_rpm_at_full_throttle": 6300,
+                       "down_rpm_at_zero_throttle": 1300, "down_rpm_at_full_throttle": 2800, "min_time_in_gear_s": 1.0 },
+      "max_pending_steps": 2 }
+  ]
+}
