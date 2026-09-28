@@ -29,11 +29,11 @@ add_executable(ps_engine_audio
 target_include_directories(ps_engine_audio PRIVATE ${miniaudio_SOURCE_DIR})
 
 # miniaudio_impl.cpp's generated implementation code is third-party and not
-# held to ps_warnings' warnings-as-errors bar. "/w" (MSVC-style, understood
-# by both clang-cl and cl - this project's Windows compilers) is used since
-# this target is only built/exercised on Windows presets in practice; a
-# Linux build would need "-w" instead if that ever changes.
-set_source_files_properties(miniaudio_impl.cpp PROPERTIES COMPILE_OPTIONS "/w")
+# held to ps_warnings' warnings-as-errors bar: warnings off for that one file
+# ("/w" for the MSVC-style front ends clang-cl and cl, "-w" for clang/gcc on
+# Linux - the Linux presets build every target, this one included).
+set_source_files_properties(miniaudio_impl.cpp PROPERTIES COMPILE_OPTIONS
+  "$<IF:$<STREQUAL:${CMAKE_CXX_COMPILER_FRONTEND_VARIANT},MSVC>,/w,-w>")
 
 target_link_libraries(ps_engine_audio
   PRIVATE
@@ -49,4 +49,8 @@ if(WIN32)
   # miniaudio's WASAPI/DirectSound/WinMM backends need these; Jolt/ps_core
   # never pull them in, so they are not already on the link line.
   target_link_libraries(ps_engine_audio PRIVATE ole32 winmm)
+else()
+  # miniaudio on Linux loads its backends with dlopen and runs a device thread.
+  find_package(Threads REQUIRED)
+  target_link_libraries(ps_engine_audio PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
