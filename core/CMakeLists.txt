@@ -1,44 +1,25 @@
-# ps_engine_cycle — the 0D cycle model (map generator + the not-yet-public
-# "stepper" that a future ps_audio, out/audio_plan.md D-11, will also link
-# for live engine sound) split out of ps_core into its own STATIC target
-# (ps_audio A1). ps_core links it PRIVATE (below); ps_audio will link it
-# too, without ever linking ps_core. Its public headers live under
-# include/ps/engine_cycle/ - the SAME include/ tree ps_core's own
-# target_include_directories(PUBLIC) already exposes, so nothing extra is
-# needed for a ps_core consumer (ps_unit_tests, ps_run, ...) to see them.
-# It links no third-party library (no Jolt, no nlohmann_json - JSON parsing
-# stays in ps_core's io/) and must never #include a ps_core-INTERNAL header
-# (core/src/<anything but engine_cycle>/*.h) - see ps/drivetrain/isa_air.h
-# for the one dependency that had to be untangled to keep this true.
-add_library(ps_engine_cycle STATIC
-  src/engine_cycle/geometry.cpp
-  src/engine_cycle/cycle_stepper.cpp
-  src/engine_cycle/cycle_point.cpp
-  src/engine_cycle/firing_order.cpp
-  src/engine_cycle/map_generator.cpp
-  src/engine_cycle/map_cache.cpp
-)
-
-target_include_directories(ps_engine_cycle PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-)
-
-target_link_libraries(ps_engine_cycle
-  PRIVATE
-    ps_warnings
-    ps_options
-)
-
-# ps_core — public API in include/ps, implementation in src/. Phase 0 only
-# has the version placeholder and the Jolt link proof; math/, jobs/, world/,
-# backend/, force/, vehicle/, drivetrain/, aero/, machine/, terrain/, io/
-# are empty (.gitkeep) until P1+.
-
-add_library(ps_core STATIC
-  src/version.cpp
-  src/jolt_proof.cpp
-
-  src/math/math_check.cpp
+# ps_detmath — the deterministic double-precision transcendental math port
+# (ps/math/transcendental.h + its internal detmath/ implementation, PLAN.md
+# D7, vault PHYS-009), split out of ps_core into its own leaf STATIC target
+# for the SAME reason ps_engine_cycle is its own target below: found while
+# verifying ps_engine_cycle_standalone (the coordinator review's link-time
+# guard) - ps_engine_cycle's own "live" files (geometry.cpp/cycle_stepper.cpp/
+# cycle_point.cpp) call ps::math::sincos/asin/exp/log/pow/cos (required by
+# PLAN.md D7 - core/ code must never call the platform libm transcendentals
+# directly), but that public API's IMPLEMENTATION used to be compiled only
+# into ps_core (src/math/transcendental.cpp + detmath/*.cpp) - so even with
+# map_generator.cpp/map_cache.cpp correctly moved out (below),
+# ps_engine_cycle_standalone still failed to LINK, with unresolved
+# ps::math::* symbols, whenever it actually ran a cycle point. Has zero
+# dependencies of its own beyond <bit>/<cfloat>/<cstdint>/<cmath> (std::sqrt
+# only, PLAN.md D7's own carve-out) - confirmed by reading every detmath/*.cpp
+# #include line - so splitting it out risks nothing further. Both ps_core and
+# ps_engine_cycle link it PRIVATE (single compiled copy, no duplicated
+# symbols); math_check.cpp (a "compile every math/ header once" static_assert
+# smoke file, not part of the deterministic-transcendental implementation
+# itself) stays in ps_core, where it already exercises this header tree via
+# ps_core's own public include path.
+add_library(ps_detmath STATIC
   src/math/transcendental.cpp
   src/math/detmath/common.h
   src/math/detmath/rem_pio2.cpp
@@ -51,6 +32,88 @@ add_library(ps_core STATIC
   src/math/detmath/log.cpp
   src/math/detmath/pow_data.cpp
   src/math/detmath/pow.cpp
+)
+
+target_include_directories(ps_detmath PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(ps_detmath
+  PRIVATE
+    ps_warnings
+    ps_options
+)
+
+# ps_engine_cycle — the 0D cycle model's "live" pieces only (the not-yet-
+# public "stepper" a future ps_audio, out/audio_plan.md D-11, will also link
+# for live engine sound) split out of ps_core into its own STATIC target
+# (ps_audio A1). MUST NOT link ps_core and must never pull in anything that
+# needs ps_core's own implementation (e.g. ps::jobs::JobSystem, whose .cpp
+# lives only in ps_core) - a coordinator review of the first cut of this
+# split found exactly that cycle (map_generator.cpp needs JobSystem, so
+# ps_core -> ps_engine_cycle -> ps_core, which only "worked" because MSVC
+# link/lld resolve archives in any order; GNU ld would not). The generator/
+# disk-cache infrastructure (map_generator.cpp, map_cache.cpp - both need
+# JobSystem and/or file IO) therefore stay OUT of this target and live in
+# ps_core's own source list below instead; this target keeps only the
+# geometry/cycle-stepper/cycle-point/firing-order files the live model
+# itself needs. ps_core links this target PRIVATE (below); ps_audio will
+# link it too, without ever linking ps_core - see
+# tests/unit/engine_cycle_standalone_main.cpp (target
+# ps_engine_cycle_standalone, just below ps_core's own target block) for the
+# link-time guard proving this. Its public headers live under
+# include/ps/engine_cycle/ - the SAME include/ tree ps_core's own
+# target_include_directories(PUBLIC) already exposes, so nothing extra is
+# needed for a ps_core consumer (ps_unit_tests, ps_run, ...) to see them.
+# It links no third-party library (no Jolt, no nlohmann_json - JSON parsing
+# stays in ps_core's io/) and must never #include a ps_core-INTERNAL header
+# (core/src/<anything but engine_cycle>/*.h) - see ps/drivetrain/isa_air.h
+# for the one dependency that had to be untangled to keep this true. It DOES
+# link ps_detmath (above) - a leaf target with no dependencies of its own,
+# not "ps_core's own implementation" in the sense this file's dependency
+# rule is about.
+add_library(ps_engine_cycle STATIC
+  src/engine_cycle/geometry.cpp
+  src/engine_cycle/cycle_stepper.cpp
+  src/engine_cycle/cycle_point.cpp
+  src/engine_cycle/firing_order.cpp
+)
+
+target_include_directories(ps_engine_cycle PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(ps_engine_cycle
+  PRIVATE
+    ps_detmath
+    ps_warnings
+    ps_options
+)
+
+# ps_engine_cycle_standalone (ps_audio A1 coordinator review's link-time
+# guard: proves ps_engine_cycle links and runs WITHOUT ps_core) is defined
+# in tests/unit/CMakeLists.txt, not here, even though it links only
+# ps_engine_cycle from this file - core/ is add_subdirectory'd BEFORE the
+# top-level CMakeLists.txt calls enable_testing()/include(CTest) (those run
+# right before tests/* are added), so an add_test() call made from this
+# file would register before CTest testing is enabled for this directory
+# and be silently dropped. tests/unit/CMakeLists.txt is processed after
+# enable_testing(), the same place every other CTest-registered
+# executable in this project (bench_force_elements etc., in
+# tests/bench/CMakeLists.txt) is defined despite also linking a target from
+# core/. See tests/unit/engine_cycle_standalone_main.cpp for the guard's
+# own implementation and header comment.
+
+# ps_core — public API in include/ps, implementation in src/. Phase 0 only
+# has the version placeholder and the Jolt link proof; math/, jobs/, world/,
+# backend/, force/, vehicle/, drivetrain/, aero/, machine/, terrain/, io/
+# are empty (.gitkeep) until P1+.
+
+add_library(ps_core STATIC
+  src/version.cpp
+  src/jolt_proof.cpp
+
+  src/math/math_check.cpp
 
   src/jobs/job_system.cpp
   src/jobs/task_graph.cpp
@@ -88,6 +151,14 @@ add_library(ps_core STATIC
   src/drivetrain/gearbox.cpp
   src/drivetrain/manual_tcu.cpp
 
+  # Engine-map generator/disk-cache infrastructure (I7c C16a/C16b) - NOT
+  # part of ps_engine_cycle above: both need ps::jobs::JobSystem (ps_core-
+  # only implementation) and/or file IO, so they live here even though the
+  # cycle-model math they drive (ps::engine_cycle::CycleStepper etc.) is in
+  # ps_engine_cycle. See ps_engine_cycle's own header comment above.
+  src/engine_cycle/map_generator.cpp
+  src/engine_cycle/map_cache.cpp
+
   src/terrain/procedural_terrain_source.cpp
   src/terrain/procedural_terrain.cpp
   src/terrain/tile_manager.cpp
@@ -104,11 +175,15 @@ target_include_directories(ps_core PUBLIC
 
 # Jolt is linked PRIVATELY: no Jolt type may leak through ps_core's public
 # headers (PLAN.md D2). Consumers of ps_core never see Jolt. ps_engine_cycle
-# is PRIVATE too, ps_audio A1 (out/audio_plan.md D-11) - vehicle_io.cpp's
-# load-time map generation/caching is ps_core's own concern, not something a
-# ps_core consumer links against directly; CMake still forwards the actual
-# archive onto the final link line of anything that links ps_core (same
-# mechanism Jolt already relies on for a PRIVATE static-lib dependency).
+# is PRIVATE too, ps_audio A1 (out/audio_plan.md D-11) - vehicle_io.cpp uses
+# ps_engine_cycle's public stepper API (via the map_generator.cpp/
+# map_cache.cpp sources above, which live in THIS target, not
+# ps_engine_cycle - see that target's own header comment for why); a
+# ps_core consumer never links ps_engine_cycle directly for this. CMake
+# still forwards ps_engine_cycle's own archive onto the final link line of
+# anything that links ps_core (same mechanism Jolt already relies on for a
+# PRIVATE static-lib dependency) since ps_core's own object files call into
+# it (CycleStepper etc.).
 target_link_libraries(ps_core
   PRIVATE
     Jolt
@@ -116,4 +191,5 @@ target_link_libraries(ps_core
     ps_warnings
     ps_options
     ps_engine_cycle
+    ps_detmath
 )
