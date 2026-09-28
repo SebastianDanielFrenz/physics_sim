@@ -620,6 +620,15 @@ engine cycle model instance for audio, tyre synthesis, the interior/exterior
 paths and propagation. Adapters (Godot now, possibly Unreal later) only pump
 buffers to the audio device and forward poses and geometry. Unit-tested
 headlessly like the core.
+Not yet specified (gap noted 2026-09-28, to be designed before `ps_audio`
+starts): how the live cycle model's gas flows become sound. The C15a model is
+one cylinder between fixed reservoirs with a lumped runner, which cannot carry
+pressure waves. Missing: all cylinders phased by firing order (and bank
+angle); a 1D acoustic model of the intake and exhaust pipe networks (headers,
+collector, silencers, tailpipe; e.g. waveguides) excited by the port mass
+flows and radiating at the openings; the exhaust/intake geometry in the engine
+data file; cycle-to-cycle combustion variation; mechanical noise; the audio
+sample rate vs the cycle model's step (1/(960*48) s is ~46 kHz).
 
 Engine mounts, interior sound and propagation (Sebastian, 2026-09-24):
 - Engine mounts: the engine block sits on mounts with stiffness and damping,
@@ -777,11 +786,11 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   interactive; each change regenerates the maps, not only the chart.
   Sound preview (Sebastian, 2026-09-28): the page also lets the designer
   hear the engine free-revving without a car - a throttle control drives an
-  engine-only simulation (no vehicle, no clutch load) in real time, and its
-  per-substep state (crank angle, rpm, load, firing events) feeds a sound
-  synthesiser. This needs the audio slice (the synthesiser, adapter-side,
-  engine-neutral data in, audio out) and a real-time engine-only run mode;
-  tools/plots/rpm_to_wav.py is only an offline placeholder.
+  engine-only simulation (no vehicle, no clutch load) in real time, and
+  `ps_audio`'s live cycle model (below: no samples, the sound comes from the
+  engine's own geometry and combustion) renders it. This needs `ps_audio` and
+  a real-time engine-only run mode; tools/plots/rpm_to_wav.py is only an
+  offline placeholder with an artistic pulse shape, not this model.
 - Fun engine (Sebastian, 2026-09-28): once development is far enough, a
   simulated Dodge Challenger SRT Demon 170 engine (6.2 L supercharged V8,
   E85) in a car of its own. Not before these exist: the I7c generator
