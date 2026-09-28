@@ -430,6 +430,13 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             // the crude no-map estimate, 0 for an engine with no fuel model
             // at all (pre's own default, pre_solve never touches it then).
             ess.fuel_flow_g_s = pre.fuel_flow_g_s;
+            // PHYS-033 P4 I7b C12: mean-value engine sound state (0 from the
+            // graph engine, whose PreSolveResult leaves these at default).
+            ess.throttle_position = pre.throttle_position;
+            ess.p_intake_pa = pre.p_intake_pa;
+            ess.lambda = pre.lambda;
+            ess.spark_advance_deg = pre.spark_advance_deg;
+            ess.exhaust_mass_flow_kg_s = pre.exhaust_mass_flow_kg_s;
             snap.engines.push_back(ess);
         }
 

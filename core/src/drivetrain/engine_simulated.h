@@ -47,9 +47,9 @@
 // SimulatedEngineMaps behind a shared_ptr<const> (I7c interface request 1),
 // with a content hash that fold_state_hash folds on EVERY call (request 2).
 //
-// C11 scope: standalone only - Powertrain does not construct this yet
-// (Powertrain::Powertrain throws "not yet integrated (I7b C12)" for a
-// simulated engine). Rotary geometry is refused here (C13).
+// C12: Powertrain constructs this for a SimulatedEngineDesc component,
+// from a desc copy whose fuels list holds only the fuel actually burnt (the
+// tank's, else fuels[0]). Rotary geometry is refused here (C13).
 
 #pragma once
 
@@ -98,6 +98,23 @@ struct SimulatedEngineMaps {
     std::uint64_t content_hash = 0;
 };
 
+// PHYS-033 P4 I7b C12: the ambient-dependent derived tables (the ECU's
+// steady demand model, the electronic inverse, idle feed-forward). Built at
+// ISA into SimulatedEngineMaps (shared, immutable); every SimulatedEngine
+// holds its OWN copy, refilled IN PLACE (same axes, indexed writes, no
+// allocation) by set_ambient when the ambient changes. Same algorithm as
+// build_maps, so a refill at the maps' own ambient reproduces them bit for
+// bit.
+struct SimulatedSteadyTables {
+    real p_pa = 0.0, t_k = 0.0; // ambient the tables below were filled at
+    vehicle::Curve1D steady_wot_nm;
+    vehicle::Curve1D steady_motoring_nm;
+    Table2D steady_torque_nm;
+    Table2D inverse_plate; // electronic only (empty for mechanical)
+    real idle_ff = 0.0;
+    real idle_p_im = 0.0;
+};
+
 class SimulatedEngine final : public IEngine {
 public:
     static constexpr real kGasConstant = 287.05;       // J/(kg*K), dry air
@@ -124,9 +141,15 @@ public:
     void reset(EngineState state) override;
 
     // Ambient (intake upstream = exhaust back pressure = p; T_im = T).
-    // ISA until called. PHYS-033 P4 I7b C12 feeds C9's Sensors-side
-    // ambient in; the steady tables stay at the ISA they were built at.
+    // ISA until called. PHYS-033 P4 I7b C12: pre_solve calls this whenever
+    // Sensors::ambient differs from the current ambient; a change refills
+    // the per-engine derived tables (steady_tables()) in place - no
+    // allocation, but O(10^6) manifold evaluations (measured cost in the
+    // C12 progress notes). A non-finite or non-positive p or T is ignored
+    // (the previous ambient stays).
     void set_ambient(real p_pa, real t_k);
+    [[nodiscard]] const SimulatedSteadyTables& steady_tables() const { return steady_; }
+    [[nodiscard]] std::uint64_t steady_rebuild_count() const { return steady_rebuilds_; }
 
     // --- white-box accessors ------------------------------------------------
     [[nodiscard]] EngineState state() const { return state_; }
@@ -192,6 +215,8 @@ private:
     real actuator_tau_s_ = 0.0;
 
     // ambient
+    SimulatedSteadyTables steady_; // per-engine, ambient-dependent (not hashed: a pure function of maps + ambient)
+    std::uint64_t steady_rebuilds_ = 0;
     real p_amb_ = kIsaPressurePa, t_amb_ = kIsaTemperatureK;
     real r_t_ = 0.0;         // R*T_amb
     real inv_sqrt_rt_ = 0.0; // 1/sqrt(R*T_amb)

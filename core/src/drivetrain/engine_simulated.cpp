@@ -140,7 +140,8 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
 }
 
 SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& starter,
-                                                 real omega, real p, bool fired, real s_starve, bool starter_active) {
+                                                 real omega, real p, bool fired, real s_starve, bool starter_active,
+                                                 bool ignore_limiter = false) {
     SimulatedEngine::TorqueEval e;
     const real rpm = std::abs(omega) * kRadPerSecToRpm;
     const real s_w = sign(omega);
@@ -156,7 +157,7 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     // combustion
     real fire = real(0.0), dfire_drpm = real(0.0);
     if (fired) {
-        if (m.limiter.type == LimiterType::SoftCut) {
+        if (m.limiter.type == LimiterType::SoftCut && !ignore_limiter) {
             fire = std::clamp((m.limiter.rpm - rpm) / m.limiter.band_rpm, real(0.0), real(1.0));
             const bool in_band = rpm < m.limiter.rpm && rpm > m.limiter.rpm - m.limiter.band_rpm;
             dfire_drpm = in_band ? real(-1.0) / m.limiter.band_rpm : real(0.0);
@@ -242,20 +243,101 @@ real steady_p(const SimulatedEngineMaps& m, const Ambient& amb, real omega, real
     return real(0.5) * (lo + hi);
 }
 
-// Net steady crank torque (Coulomb row included, omega > 0).
+// Net steady crank torque (Coulomb row included, omega > 0), fired torque
+// ignoring every limiter (the steady tables are the ECU's demand model - see
+// header). C12: the limiter is bypassed by evaluate_torque_impl's
+// ignore_limiter flag (fire = 1 when fired, exactly what C11's limiter-free
+// maps copy gave) instead of copying the whole maps struct, which allocated.
 real steady_net_torque(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& st, real rpm, real x_thr, real x_iac,
                        bool fired) {
     const real omega = rpm / kRadPerSecToRpm;
     const real p = steady_p(m, amb, omega, x_thr, x_iac);
-    return evaluate_torque_impl(m, amb, st, omega, p, fired, real(1.0), false).tau - m.c_k;
+    return evaluate_torque_impl(m, amb, st, omega, p, fired, real(1.0), false, true).tau - m.c_k;
 }
 
-// Fired steady torque ignoring every limiter (the steady tables are the
-// ECU's demand model - see header).
-SimulatedEngineMaps limiter_free(const SimulatedEngineMaps& m) {
-    SimulatedEngineMaps c = m;
-    c.limiter.type = LimiterType::FuelCut; // FuelCut = fire 1 inside evaluate_torque_impl
-    return c;
+// Fill the ambient-dependent derived tables IN PLACE. t's axes and value
+// arrays must already be sized (build_maps presets them; a SimulatedEngine's
+// own copy keeps them) - only indexed writes below, no allocation, so a
+// runtime refill (set_ambient) is allocation-free. check_monotone throws on
+// a steady torque that decreases with plate position (build time only; a
+// runtime refill never throws).
+void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real idle_rpm, real idle_max_x, SimulatedSteadyTables& t,
+                        bool check_monotone) {
+    const StarterDesc no_starter{};
+    const std::vector<real>& rpm_axis = t.steady_torque_nm.x;
+    const std::vector<real>& plate_axis = t.steady_torque_nm.y;
+    for (std::size_t ir = 0; ir < rpm_axis.size(); ++ir) {
+        const real rpm = rpm_axis[ir];
+        for (std::size_t ix = 0; ix < plate_axis.size(); ++ix) {
+            const real v = steady_net_torque(m, amb, no_starter, rpm, plate_axis[ix], real(0.0), true);
+            if (check_monotone && ix > 0 && v < t.steady_torque_nm.values[ir * plate_axis.size() + ix - 1] - real(1e-9)) {
+                throw std::runtime_error("SimulatedEngine: steady torque is not non-decreasing in plate position");
+            }
+            t.steady_torque_nm.values[ir * plate_axis.size() + ix] = v;
+        }
+        t.steady_wot_nm.y[ir] = t.steady_torque_nm.values[ir * plate_axis.size() + plate_axis.size() - 1];
+        t.steady_motoring_nm.y[ir] = steady_net_torque(m, amb, no_starter, rpm, real(0.0), real(0.0), false);
+    }
+
+    // Electronic inverse: request r -> plate x with T(x) = mot + r*(wot - mot).
+    if (!t.inverse_plate.values.empty()) {
+        const std::size_t nq = t.inverse_plate.y.size();
+        for (std::size_t ir = 0; ir < rpm_axis.size(); ++ir) {
+            const real rpm = rpm_axis[ir];
+            const real wot = t.steady_wot_nm.y[ir];
+            const real mot = t.steady_motoring_nm.y[ir];
+            const real t0 = t.steady_torque_nm.values[ir * plate_axis.size()];
+            for (std::size_t iq = 0; iq < nq; ++iq) {
+                const real r = t.inverse_plate.y[iq];
+                real x = real(0.0);
+                if (iq + 1 == nq) {
+                    x = real(1.0);
+                } else {
+                    const real target = mot + r * (wot - mot);
+                    if (t0 >= target) {
+                        x = real(0.0);
+                    } else {
+                        real lo = real(0.0), hi = real(1.0);
+                        for (int it = 0; it < 60; ++it) {
+                            const real mid = real(0.5) * (lo + hi);
+                            if (steady_net_torque(m, amb, no_starter, rpm, mid, real(0.0), true) < target) lo = mid;
+                            else hi = mid;
+                        }
+                        x = real(0.5) * (lo + hi);
+                    }
+                }
+                t.inverse_plate.values[ir * nq + iq] = x;
+            }
+        }
+    }
+
+    // Idle feed-forward: the plate (electronic) / bypass valve (mechanical,
+    // plate at 0) position whose steady net torque at idle_rpm is zero.
+    {
+        const bool mech = m.throttle_input == ThrottleInput::Mechanical;
+        auto net = [&](real x) {
+            return mech ? steady_net_torque(m, amb, no_starter, idle_rpm, real(0.0), x, true)
+                        : steady_net_torque(m, amb, no_starter, idle_rpm, x, real(0.0), true);
+        };
+        real ff = real(0.0);
+        if (net(real(0.0)) >= real(0.0)) {
+            ff = real(0.0);
+        } else if (net(idle_max_x) <= real(0.0)) {
+            ff = idle_max_x;
+        } else {
+            real lo = real(0.0), hi = idle_max_x;
+            for (int it = 0; it < 60; ++it) {
+                const real mid = real(0.5) * (lo + hi);
+                if (net(mid) < real(0.0)) lo = mid;
+                else hi = mid;
+            }
+            ff = real(0.5) * (lo + hi);
+        }
+        t.idle_ff = ff;
+        const real omega_idle = idle_rpm / kRadPerSecToRpm;
+        t.idle_p_im = mech ? steady_p(m, amb, omega_idle, real(0.0), ff) : steady_p(m, amb, omega_idle, ff, real(0.0));
+    }
+    t.p_pa = amb.p_amb;
 }
 
 } // namespace
@@ -304,97 +386,37 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps(const Sim
             i < i_reg ? psi_true(real(i) / real(n)) : psi_reg * real(n - i) / real(n - i_reg);
     }
 
-    // Steady tables at ISA.
+    // Steady tables at ISA (C12: the shared fill_steady_tables, the same
+    // routine a SimulatedEngine's runtime refill uses).
     m->ref_p_pa = kIsaPressurePa;
     m->ref_t_k = kIsaTemperatureK;
-    const Ambient amb = make_ambient(kIsaPressurePa, kIsaTemperatureK);
-    const SimulatedEngineMaps nolim = limiter_free(*m);
-    const StarterDesc no_starter{};
-
-    std::vector<real> rpm_axis;
-    for (real r = real(500.0); r <= desc.limiter.rpm + real(250.0) + real(1e-9); r += real(250.0)) rpm_axis.push_back(r);
-    std::vector<real> plate_axis;
-    for (int i = 0; i <= 40; ++i) plate_axis.push_back(real(i) / real(40.0));
-
-    m->steady_wot_nm.x = rpm_axis;
-    m->steady_motoring_nm.x = rpm_axis;
-    m->steady_torque_nm.x = rpm_axis;
-    m->steady_torque_nm.y = plate_axis;
-    m->steady_torque_nm.values.resize(rpm_axis.size() * plate_axis.size());
-    for (std::size_t ir = 0; ir < rpm_axis.size(); ++ir) {
-        const real rpm = rpm_axis[ir];
-        for (std::size_t ix = 0; ix < plate_axis.size(); ++ix) {
-            const real t = steady_net_torque(nolim, amb, no_starter, rpm, plate_axis[ix], real(0.0), true);
-            if (ix > 0 && t < m->steady_torque_nm.values[ir * plate_axis.size() + ix - 1] - real(1e-9)) {
-                throw std::runtime_error("SimulatedEngine: steady torque is not non-decreasing in plate position");
-            }
-            m->steady_torque_nm.values[ir * plate_axis.size() + ix] = t;
-        }
-        m->steady_wot_nm.y.push_back(m->steady_torque_nm.values[ir * plate_axis.size() + plate_axis.size() - 1]);
-        m->steady_motoring_nm.y.push_back(steady_net_torque(nolim, amb, no_starter, rpm, real(0.0), real(0.0), false));
-    }
-
-    // Electronic inverse: request r -> plate x with T(x) = mot + r*(wot - mot).
-    if (desc.throttle_input == ThrottleInput::Electronic) {
-        constexpr int kReq = 20;
-        m->inverse_plate.x = rpm_axis;
-        for (int i = 0; i <= kReq; ++i) m->inverse_plate.y.push_back(real(i) / real(kReq));
-        m->inverse_plate.values.resize(rpm_axis.size() * m->inverse_plate.y.size());
-        for (std::size_t ir = 0; ir < rpm_axis.size(); ++ir) {
-            const real rpm = rpm_axis[ir];
-            const real wot = m->steady_wot_nm.y[ir];
-            const real mot = m->steady_motoring_nm.y[ir];
-            const real t0 = m->steady_torque_nm.values[ir * plate_axis.size()];
-            for (std::size_t iq = 0; iq < m->inverse_plate.y.size(); ++iq) {
-                const real r = m->inverse_plate.y[iq];
-                real x = real(0.0);
-                if (iq + 1 == m->inverse_plate.y.size()) {
-                    x = real(1.0);
-                } else {
-                    const real target = mot + r * (wot - mot);
-                    if (t0 >= target) {
-                        x = real(0.0);
-                    } else {
-                        real lo = real(0.0), hi = real(1.0);
-                        for (int it = 0; it < 60; ++it) {
-                            const real mid = real(0.5) * (lo + hi);
-                            if (steady_net_torque(nolim, amb, no_starter, rpm, mid, real(0.0), true) < target) lo = mid;
-                            else hi = mid;
-                        }
-                        x = real(0.5) * (lo + hi);
-                    }
-                }
-                m->inverse_plate.values[ir * m->inverse_plate.y.size() + iq] = x;
-            }
-        }
-    }
-
-    // Idle feed-forward: the plate (electronic) / bypass valve (mechanical,
-    // plate at 0) position whose steady net torque at idle_rpm is zero.
     {
-        const bool mech = desc.throttle_input == ThrottleInput::Mechanical;
-        const real max_x = desc.idle.max_throttle;
-        auto net = [&](real x) {
-            return mech ? steady_net_torque(nolim, amb, no_starter, desc.idle_rpm, real(0.0), x, true)
-                        : steady_net_torque(nolim, amb, no_starter, desc.idle_rpm, x, real(0.0), true);
-        };
-        real ff = real(0.0);
-        if (net(real(0.0)) >= real(0.0)) {
-            ff = real(0.0);
-        } else if (net(max_x) <= real(0.0)) {
-            ff = max_x;
-        } else {
-            real lo = real(0.0), hi = max_x;
-            for (int it = 0; it < 60; ++it) {
-                const real mid = real(0.5) * (lo + hi);
-                if (net(mid) < real(0.0)) lo = mid;
-                else hi = mid;
-            }
-            ff = real(0.5) * (lo + hi);
+        const Ambient amb = make_ambient(kIsaPressurePa, kIsaTemperatureK);
+        std::vector<real> rpm_axis;
+        for (real r = real(500.0); r <= desc.limiter.rpm + real(250.0) + real(1e-9); r += real(250.0)) rpm_axis.push_back(r);
+        std::vector<real> plate_axis;
+        for (int i = 0; i <= 40; ++i) plate_axis.push_back(real(i) / real(40.0));
+        SimulatedSteadyTables t;
+        t.steady_wot_nm.x = rpm_axis;
+        t.steady_wot_nm.y.assign(rpm_axis.size(), real(0.0));
+        t.steady_motoring_nm.x = rpm_axis;
+        t.steady_motoring_nm.y.assign(rpm_axis.size(), real(0.0));
+        t.steady_torque_nm.x = rpm_axis;
+        t.steady_torque_nm.y = plate_axis;
+        t.steady_torque_nm.values.assign(rpm_axis.size() * plate_axis.size(), real(0.0));
+        if (desc.throttle_input == ThrottleInput::Electronic) {
+            constexpr int kReq = 20;
+            t.inverse_plate.x = rpm_axis;
+            for (int i = 0; i <= kReq; ++i) t.inverse_plate.y.push_back(real(i) / real(kReq));
+            t.inverse_plate.values.assign(rpm_axis.size() * t.inverse_plate.y.size(), real(0.0));
         }
-        m->idle_ff = ff;
-        const real omega_idle = desc.idle_rpm / kRadPerSecToRpm;
-        m->idle_p_im = mech ? steady_p(nolim, amb, omega_idle, real(0.0), ff) : steady_p(nolim, amb, omega_idle, ff, real(0.0));
+        fill_steady_tables(*m, amb, desc.idle_rpm, desc.idle.max_throttle, t, true);
+        m->steady_wot_nm = std::move(t.steady_wot_nm);
+        m->steady_motoring_nm = std::move(t.steady_motoring_nm);
+        m->steady_torque_nm = std::move(t.steady_torque_nm);
+        m->inverse_plate = std::move(t.inverse_plate);
+        m->idle_ff = t.idle_ff;
+        m->idle_p_im = t.idle_p_im;
     }
 
     // Content hash over every number the model reads (I7c interface request 2).
@@ -457,27 +479,44 @@ SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_pt
     starter_ = desc.starter;
     breakaway_torque_nm_ = desc.breakaway_torque_nm;
     actuator_tau_s_ = desc.throttle_input == ThrottleInput::Electronic ? desc.throttle_actuator_tau_s : real(0.0);
+    // C12: the per-engine derived tables start as a copy of the shared
+    // maps' own (built at ref_p_pa/ref_t_k = ISA), so set_ambient(ISA)
+    // below refills nothing.
+    steady_.p_pa = maps_->ref_p_pa;
+    steady_.t_k = maps_->ref_t_k;
+    steady_.steady_wot_nm = maps_->steady_wot_nm;
+    steady_.steady_motoring_nm = maps_->steady_motoring_nm;
+    steady_.steady_torque_nm = maps_->steady_torque_nm;
+    steady_.inverse_plate = maps_->inverse_plate;
+    steady_.idle_ff = maps_->idle_ff;
+    steady_.idle_p_im = maps_->idle_p_im;
     set_ambient(kIsaPressurePa, kIsaTemperatureK);
     state_ = desc.initial_state == EngineInitialState::Running ? EngineState::Running : EngineState::Off;
     init_state_for(state_);
 }
 
 void SimulatedEngine::set_ambient(real p_pa, real t_k) {
+    if (!(std::isfinite(p_pa) && p_pa > real(0.0) && std::isfinite(t_k) && t_k > real(0.0))) return;
     p_amb_ = p_pa;
     t_amb_ = t_k;
     r_t_ = kGasConstant * t_k;
     inv_sqrt_rt_ = real(1.0) / std::sqrt(r_t_);
+    if (p_pa != steady_.p_pa || t_k != steady_.t_k) {
+        fill_steady_tables(*maps_, make_ambient(p_pa, t_k), desc_idle_rpm_, idle_.max_throttle, steady_, false);
+        steady_.t_k = t_k;
+        ++steady_rebuilds_;
+    }
 }
 
 void SimulatedEngine::init_state_for(EngineState state) {
     const SimulatedEngineMaps& m = *maps_;
     if (state == EngineState::Running) {
-        p_im_ = m.idle_p_im;
+        p_im_ = steady_.idle_p_im;
         if (m.throttle_input == ThrottleInput::Mechanical) {
             x_thr_ = real(0.0);
-            x_iac_ = m.idle_ff;
+            x_iac_ = steady_.idle_ff;
         } else {
-            x_thr_ = m.idle_ff;
+            x_thr_ = steady_.idle_ff;
             x_iac_ = real(0.0);
         }
     } else {
@@ -508,6 +547,12 @@ SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_
 PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) {
     const SimulatedEngineMaps& m = *maps_;
     const bool mech = m.throttle_input == ThrottleInput::Mechanical;
+    // C12: the ambient sample (Sensors::ambient, from World::set_ambient)
+    // drives the manifold boundary and the derived steady tables. Exact
+    // comparison: a constant ambient (the ISA default) never refills.
+    if (sensors.ambient.pressure_pa != p_amb_ || sensors.ambient.temperature_k != t_amb_) {
+        set_ambient(sensors.ambient.pressure_pa, sensors.ambient.temperature_k);
+    }
     const real omega_old = sensors.omega;
     omega_old_ = omega_old;
     const real rpm = std::abs(omega_old) * kRadPerSecToRpm;
@@ -561,7 +606,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
 
     // Idle PI in ACTUATOR units: plate position (electronic) or bypass
     // valve opening (mechanical); feed-forward = maps.idle_ff.
-    const real ff = m.idle_ff;
+    const real ff = steady_.idle_ff;
     real theta_idle = real(0.0);
     if ((state_ == EngineState::Running || state_ == EngineState::Cranking) && !dfco_active_) {
         const real e = desc_idle_rpm_ - rpm;
@@ -586,7 +631,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         x_thr_ = theta_cmd;
         x_iac_ = theta_idle;
     } else {
-        const real x_target = std::max(m.inverse_plate.value(rpm, theta_req), theta_idle);
+        const real x_target = std::max(steady_.inverse_plate.value(rpm, theta_req), theta_idle);
         if (!(actuator_tau_s_ > real(0.0))) {
             x_thr_ = x_target;
         } else {
@@ -655,19 +700,24 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.governor_setpoint_rpm = real(0.0);
     {
         const real s = sign(omega_old);
-        const real mot = m.steady_motoring_nm.evaluate(rpm);
+        const real mot = steady_.steady_motoring_nm.evaluate(rpm);
         if (mech) {
-            r.torque_demand = comb ? m.steady_torque_nm.value(rpm, x_thr_) : s * mot;
+            r.torque_demand = comb ? steady_.steady_torque_nm.value(rpm, x_thr_) : s * mot;
         } else {
-            const real wot = m.steady_wot_nm.evaluate(rpm);
+            const real wot = steady_.steady_wot_nm.evaluate(rpm);
             real demand = s * mot + (comb ? theta_req : real(0.0)) * (wot - mot);
-            if (comb && theta_idle > real(0.0)) demand = std::max(demand, m.steady_torque_nm.value(rpm, theta_idle));
+            if (comb && theta_idle > real(0.0)) demand = std::max(demand, steady_.steady_torque_nm.value(rpm, theta_idle));
             r.torque_demand = demand;
         }
     }
     r.theta_c = std::clamp(ev.fire * s_starve * p_im_ / p_amb_, real(0.0), real(1.0));
     r.fuel_flow_g_s = booked_fuel_mass_kg_ / h * real(1000.0);
     r.fuel_supply_fraction = s_starve;
+    r.throttle_position = x_thr_;
+    r.p_intake_pa = p_im_;
+    r.lambda = ev.lambda;
+    r.spark_advance_deg = ev.spark_deg;
+    r.exhaust_mass_flow_kg_s = ev.m_air_rev * std::abs(omega_old) / kTwoPi + booked_fuel_mass_kg_ / h;
     return r;
 }
 
@@ -688,6 +738,8 @@ PostSolveResult SimulatedEngine::post_solve(real omega_new, real h) {
     work_split_.indicated = r.indicated_work_delta;
     work_split_.pumping = h * omega_old_ * tau_pump_;
     work_split_.friction = h * omega_old_ * tau_fric_;
+    r.pumping_work_delta = work_split_.pumping;
+    r.friction_work_delta = work_split_.friction;
 
     // std::fmod is exact (IEEE), like EngineTorqueMap's; folded into
     // [0, 4*pi). A subtraction loop here hung on a non-finite omega (found
