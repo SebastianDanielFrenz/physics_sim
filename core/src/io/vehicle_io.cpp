@@ -933,6 +933,10 @@ constexpr const char* kCycleKeys[] = {
     // geometry. Descriptor-only for now - see CycleModelDesc's own field
     // comments (ps/drivetrain/engine_cycle_desc.h).
     "firing_order", "firing_angles_deg", "banks", "bank_angle_deg",
+    // I7c C17a follow-up: Tier 1b ECU spark schedule (then the ecu block's
+    // own spark_advance_deg must be absent - it is filled from this one) and
+    // Tier 2 flame-development delay.
+    "spark_advance_deg", "ignition_delay_deg",
 };
 
 std::vector<real> read_cycle_grid(const json& cj, const char* key, real scale, const std::string& cctx) {
@@ -1054,6 +1058,22 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
             d.cam.exhaust_retard_deg = read_engine_table(camj.at("exhaust_retard_deg"), kctx + ".exhaust_retard_deg", "p_im_kpa",
                                                          real(1000.0), real(1.0));
             require_positive_y_axis(d.cam.exhaust_retard_deg, kctx + ".exhaust_retard_deg", "p_im_kpa");
+        }
+    }
+
+    // C17a follow-up: Tier 1b spark schedule (same axes, units and value
+    // range as ecu.spark_advance_deg) and Tier 2 ignition delay.
+    if (cj.contains("spark_advance_deg")) {
+        const std::string sctx = cctx + ".spark_advance_deg";
+        d.spark_advance_deg = read_engine_table(cj.at("spark_advance_deg"), sctx, "p_im_kpa", real(1000.0), real(1.0));
+        require_positive_y_axis(d.spark_advance_deg, sctx, "p_im_kpa");
+        require_table_values(d.spark_advance_deg, sctx, real(-30.0), true, real(70.0), true);
+    }
+    if (cj.contains("ignition_delay_deg")) {
+        d.ignition_delay_deg = require_number(cj, "ignition_delay_deg", cctx);
+        if (!(d.ignition_delay_deg >= real(0.0) && d.ignition_delay_deg <= real(60.0))) {
+            throw std::runtime_error(cctx + ": 'ignition_delay_deg' must be in [0, 60], got " +
+                                     std::to_string(d.ignition_delay_deg));
         }
     }
 
@@ -1324,10 +1344,23 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         e.ecu.lambda_target = read_engine_table(ej.at("lambda_target"), ectx + ".lambda_target", "p_im_kpa", kKpa, real(1.0));
         require_positive_y_axis(e.ecu.lambda_target, ectx + ".lambda_target", "p_im_kpa");
         require_table_values(e.ecu.lambda_target, ectx + ".lambda_target", real(0.5), true, real(2.0), true);
-        if (!ej.contains("spark_advance_deg")) throw std::runtime_error(ectx + ": 'spark_advance_deg' is required");
-        e.ecu.spark_advance_deg = read_engine_table(ej.at("spark_advance_deg"), ectx + ".spark_advance_deg", "p_im_kpa", kKpa, real(1.0));
-        require_positive_y_axis(e.ecu.spark_advance_deg, ectx + ".spark_advance_deg", "p_im_kpa");
-        require_table_values(e.ecu.spark_advance_deg, ectx + ".spark_advance_deg", real(-30.0), true, real(70.0), true);
+        // C17a follow-up: a cycle block's spark_advance_deg is the one spark
+        // schedule (the generator runs its nodes at it); the ecu table is then
+        // filled from it after read_cycle_block below and must not be given.
+        const bool cycle_spark = j.contains("cycle") && j.at("cycle").is_object() &&
+                                 j.at("cycle").contains("spark_advance_deg");
+        if (cycle_spark) {
+            if (ej.contains("spark_advance_deg")) {
+                throw std::runtime_error(ectx + ": 'spark_advance_deg' must be absent when cycle.spark_advance_deg is "
+                                                "given (the ecu schedule is taken from the cycle block)");
+            }
+        } else {
+            if (!ej.contains("spark_advance_deg")) throw std::runtime_error(ectx + ": 'spark_advance_deg' is required");
+            e.ecu.spark_advance_deg =
+                read_engine_table(ej.at("spark_advance_deg"), ectx + ".spark_advance_deg", "p_im_kpa", kKpa, real(1.0));
+            require_positive_y_axis(e.ecu.spark_advance_deg, ectx + ".spark_advance_deg", "p_im_kpa");
+            require_table_values(e.ecu.spark_advance_deg, ectx + ".spark_advance_deg", real(-30.0), true, real(70.0), true);
+        }
     }
 
     // --- runtime maps ------------------------------------------------------------
@@ -1578,6 +1611,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                                       "I7e)");
         }
         e.cycle = read_cycle_block(j.at("cycle"), cctx, e.piston, have_friction);
+        // C17a follow-up: the cycle's spark schedule IS the ECU's (the ecu
+        // block's own table was rejected above) - the runtime then evaluates
+        // exactly the table the generator ran its grid nodes at.
+        if (!e.cycle->spark_advance_deg.x.empty()) e.ecu.spark_advance_deg = e.cycle->spark_advance_deg;
         const bool complete = have_ve && have_eta_i && have_f_lambda && have_eta_spark && have_theta_mbt && have_friction &&
                               e.maps.has_pmep_excess;
         if (!complete) {

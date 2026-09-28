@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ps::drivetrain {
@@ -272,7 +273,11 @@ void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real i
         for (std::size_t ix = 0; ix < plate_axis.size(); ++ix) {
             const real v = steady_net_torque(m, amb, no_starter, rpm, plate_axis[ix], real(0.0), true);
             if (check_monotone && ix > 0 && v < t.steady_torque_nm.values[ir * plate_axis.size() + ix - 1] - real(1e-9)) {
-                throw std::runtime_error("SimulatedEngine: steady torque is not non-decreasing in plate position");
+                throw std::runtime_error("SimulatedEngine: steady torque is not non-decreasing in plate position (rpm " +
+                                         std::to_string(rpm) + ", plate " + std::to_string(plate_axis[ix - 1]) + " -> " +
+                                         std::to_string(plate_axis[ix]) + ": " +
+                                         std::to_string(t.steady_torque_nm.values[ir * plate_axis.size() + ix - 1]) +
+                                         " -> " + std::to_string(v) + " N*m)");
             }
             t.steady_torque_nm.values[ir * plate_axis.size() + ix] = v;
         }

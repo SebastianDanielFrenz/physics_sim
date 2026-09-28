@@ -104,6 +104,22 @@ struct CycleModelDesc {
     CamSchedule cam;                               // Tier 1b (generator input)
     vehicle::Curve1D back_pressure_pa_vs_exh_kg_s; // Tier 1b; empty = p_amb. Engine exhaust mass flow.
 
+    // Tier 1b (I7c C17a follow-up): the ECU's spark schedule, deg BTDC over
+    // x = rpm, y = intake manifold pressure (Pa) - the same axes and units as
+    // SimulatedEngineDesc::ecu.spark_advance_deg, which the loader fills from
+    // this table (one source of truth). Empty = mbt_tracking: every grid
+    // node runs at the MBT Wiebe start and the generated maps are
+    // bit-identical to an engine without this field. Non-empty: every grid
+    // node's cycle runs with its Wiebe start at -(schedule) + ignition delay
+    // (deg ATDC), and eta_i is stored as the MBT-equivalent value
+    // eta_gross(scheduled) / eta_spark(scheduled - theta_mbt), so the
+    // runtime's eta_i * eta_spark reproduces the cycle at every node.
+    Table2D spark_advance_deg;
+    // Tier 2: flame-development (ignition) delay, deg crank: the Wiebe
+    // combustion start lies this many degrees AFTER the spark. >= 0; 0 =
+    // spark and Wiebe start coincide (the pre-follow-up behaviour).
+    real ignition_delay_deg = 0.0;
+
     // ---- Tier 2 (frozen literature; every value carries its citation in the JSON source) ----
     real wiebe_a = 5.0;           // Heywood 1988 section 9.2 [A: page]
     real wiebe_m = 2.0;

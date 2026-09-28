@@ -472,7 +472,7 @@ clamped at every edge. A 1D curve is the usual `{"x": [...], "y": [...]}`.
 | `throttle_actuator_tau_s` | number | electronic only | >= 0 (0 = no lag) | first-order plate actuator time constant |
 | `idle_control.bypass_area_mm2` | number | mechanical only | > 0 | idle bypass valve area at full opening |
 | `ecu.lambda_target` | table, load `p_im_kpa` | yes | values in [0.5, 2] | open-loop air/fuel ratio target |
-| `ecu.spark_advance_deg` | table, load `p_im_kpa` | yes | values in [-30, 70] | spark advance target [deg BTDC] |
+| `ecu.spark_advance_deg` | table, load `p_im_kpa` | yes, unless `cycle.spark_advance_deg` is given (then it must be absent and is filled from the cycle table) | values in [-30, 70] | spark advance target [deg BTDC] |
 | `maps.source` | string | yes | non-empty | provenance (PLAN.md section 8) |
 | `maps.ve` | table, load `p_im_kpa` | yes | values in (0, 2) | volumetric efficiency |
 | `maps.eta_i` | table, load `air_mass_per_rev_g` | yes | load axis >= 0; values in (0, 1) | **gross** indicated efficiency at MBT spark and lambda = 1 (see below) |
@@ -588,6 +588,8 @@ cycle model is I7e).
 | `intake_port_cc`, `exhaust_port_cc` | number | yes | > 0 | port volumes |
 | `cd_vs_l_over_d` | curve | yes | >= 2 points, x (L/D) >= 0 ascending, Cd in (0, 1] | valve discharge coefficient over lift/diameter |
 | `cam` | object | no (fixed cams) | keys `intake_advance_deg`, `exhaust_retard_deg`: tables over `rpm` x `p_im_kpa` | cam-phaser schedule, sampled at each operating point |
+| `spark_advance_deg` | table over `rpm` x `p_im_kpa` | no (empty = MBT tracking) | values in [-30, 70] | Tier 1b ECU spark schedule [deg BTDC]. Every grid node's cycle then runs with its Wiebe start at -(schedule) + `ignition_delay_deg` (deg ATDC); the stored `eta_i` is the MBT-equivalent value eta_gross(scheduled)/eta_spark(scheduled - theta_mbt), so the runtime's eta_i x eta_spark reproduces the cycle at every node. The same table becomes `ecu.spark_advance_deg` (which must then be absent). Without it every node runs at MBT and the maps are bit-identical to before the key existed |
+| `ignition_delay_deg` | number | no (0) | [0, 60] | Tier 2 flame-development delay, crank deg: Wiebe start = spark + delay; generated `theta_mbt_deg` = -(MBT Wiebe start - delay) |
 | `wiebe_a`, `wiebe_m`, `burn_duration_deg`, `ca50_mbt_deg_atdc` | number | no (5, 2, 60, 8) | a > 0, m >= 0, duration > 0 | Wiebe burn; MBT = the spark that puts CA50 at `ca50_mbt_deg_atdc` |
 | `woschni_c1_gx`, `woschni_c1_cc`, `woschni_c2`, `wall_temperature_k`, `head_area_factor` | number | no (6.18, 2.28, 3.24e-3, 450, 1.1) | > 0 | Woschni heat transfer |
 | `combustion_eff_lean` | number | no (0.98) | (0, 1] | combustion efficiency at lambda >= 1 (times lambda below 1) |
