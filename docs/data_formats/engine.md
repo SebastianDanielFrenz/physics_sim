@@ -429,7 +429,9 @@ ECU adds to it and the maps below. It therefore has **no** WOT or motoring
 curve. The runtime model is `core/src/drivetrain/engine_simulated.h`
 (I7b C11); the Powertrain accepts it from I7b C12 on.
 
-Every table is **inline** in the engine object. Inline tables are
+Every table is **inline** in the engine object, or (I7c C16a) generated at
+load time from a [`cycle`](#cycle-maps-generated-from-the-0d-cycle-model-i7c-c16a)
+block. Inline tables are
 first-class schema, not a test shortcut: I7c adds generated maps behind the
 same descriptor, and a hand-authored or literature-derived engine may keep
 its tables inline for good.
@@ -555,6 +557,115 @@ carrying one almost certainly meant `"kind": "simulated"`.
   "fuel": "../fuels/gasoline.json", "ignition": "spark"
 }
 ```
+
+### `cycle`: maps generated from the 0D cycle model (I7c C16a)
+
+A piston simulated engine may carry a `"cycle"` block instead of (or in
+addition to) the `maps` block. The loader then runs the map generator
+(`ps::drivetrain::generate_engine_maps`, `ps/drivetrain/engine_maps.h`,
+algorithm in `core/src/engine_cycle/map_generator.cpp`) on the 0D
+single-cylinder cycle model (`ps::engine_cycle`, descriptor
+`ps/drivetrain/engine_cycle_desc.h`) at **load time** and fills every
+runtime map the file does not give. Nothing is generated at runtime and
+nothing is cached on disk yet (C16b adds the `.psmaps` cache).
+
+**Geometry is the engine's own.** `bore_mm`, `stroke_mm` and `cylinders`
+come from the engine object; repeating them inside `cycle` is rejected.
+Only `"architecture": "piston_4stroke"` may carry a cycle block (the rotary
+cycle model is I7e).
+
+| Key | Type | Required | Rule | Meaning |
+|---|---|---|---|---|
+| `source` | string | yes | non-empty | provenance of the cycle inputs (PLAN.md section 8) |
+| `*_source` | string | no | any key ending in `_source` | per-value citation notes; ignored by the loader |
+| `rod_mm` | number | yes | > stroke/2 + \|pin offset\| | connecting-rod length |
+| `pin_offset_mm` | number | no (0) | | piston-pin offset |
+| `compression_ratio` | number | yes | > 1 | |
+| `intake_valves`, `exhaust_valves` | integer | yes | > 0 | valves per cylinder |
+| `intake_valve_d_mm`, `exhaust_valve_d_mm` | number | yes | > 0 | valve head diameter |
+| `intake_lift`, `exhaust_lift` | object | yes | see below | `{"lift_mm_vs_deg": curve, "phase_ref_deg": number}` |
+| `runner_length_mm`, `runner_diameter_mm` | number | yes | > 0 | intake runner (a lumped A/L inertia) |
+| `intake_port_cc`, `exhaust_port_cc` | number | yes | > 0 | port volumes |
+| `cd_vs_l_over_d` | curve | yes | >= 2 points, x (L/D) >= 0 ascending, Cd in (0, 1] | valve discharge coefficient over lift/diameter |
+| `cam` | object | no (fixed cams) | keys `intake_advance_deg`, `exhaust_retard_deg`: tables over `rpm` x `p_im_kpa` | cam-phaser schedule, sampled at each operating point |
+| `wiebe_a`, `wiebe_m`, `burn_duration_deg`, `ca50_mbt_deg_atdc` | number | no (5, 2, 60, 8) | a > 0, m >= 0, duration > 0 | Wiebe burn; MBT = the spark that puts CA50 at `ca50_mbt_deg_atdc` |
+| `woschni_c1_gx`, `woschni_c1_cc`, `woschni_c2`, `wall_temperature_k`, `head_area_factor` | number | no (6.18, 2.28, 3.24e-3, 450, 1.1) | > 0 | Woschni heat transfer |
+| `combustion_eff_lean` | number | no (0.98) | (0, 1] | combustion efficiency at lambda >= 1 (times lambda below 1) |
+| `exhaust_backflow_temperature_k` | number | no (800) | > 0 | temperature of exhaust gas flowing back into the cylinder |
+| `friction` | object | unless `maps.friction_torque_nm` is given | see below | FMEP correlation |
+| `grid_rpm` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality rpm grid of the generated tables |
+| `grid_p_im_kpa` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality manifold-pressure grid |
+
+Defaults in parentheses are the descriptor's literature values
+(`engine_cycle_desc.h`, each with its citation there). Unknown keys are
+rejected. `back_pressure_kpa_vs_exh_kg_s` is rejected: the simulated
+engine's runtime has no exhaust back pressure until I7d.
+
+A lift curve's x is crank degrees relative to `phase_ref_deg`; the span
+(last x - first x) must be < 720 deg, the first and last lift exactly 0 and
+every lift >= 0.
+
+**Friction.** `{"model": ..., "a_kpa", "b_kpa", "c_kpa"}`, FMEP = a + b*s +
+c*s^2 [kPa] with s = rpm/1000 (`"polynomial_rpm"`) or the mean piston speed
+in m/s (`"polynomial_piston_speed"`); `a_kpa` >= 0 is the Coulomb part.
+The generated `friction_torque_nm` is FMEP * V_d / (4 pi) sampled at rpm 0,
+every grid rpm and every midpoint between two grid rpms. The cycle model
+itself has no friction: the correlation is the only friction source.
+
+**Which maps are generated (override precedence).** A key in `maps` always
+wins; the generator fills the rest. The generator runs only if at least one
+of the seven keys `ve`, `eta_i`, `f_lambda`, `eta_spark`, `theta_mbt_deg`,
+`friction_torque_nm`, `pmep_excess_kpa` is missing. A file that gives all
+seven carries a complete override: the generator is not called at all, and
+the cycle block is only parsed and validated. With a cycle block every
+`maps.*` key is optional and the `maps` block itself may be absent. If
+`maps` is present, its `source` stays required and the loader appends
+`" | generated from the cycle block (<keys>): <generator source>"`; without
+`maps`, `source` is the generator's own. `theta_kl_deg` is never generated
+(knock is C17b). The efficiency sanity bound and the breakaway rule
+(`breakaway_torque_nm >= maps.friction_torque_nm(0)`) are checked on the
+MERGED maps; the value range checks above apply to file values only.
+Generated `pmep_excess_kpa` values are signed (the runtime takes them
+signed; a file value must be >= 0).
+
+What the generator computes (full detail in `engine_maps.h`): every grid
+node at lambda 1, MBT spark and ISA intake state gives `ve` (net fresh air
+through the intake valve over the swept volume at manifold density
+p_im/(287.05*288.15 K)), `theta_mbt_deg`, `pmep_excess_kpa`
+(the cycle's pumping work beyond the ideal `p_amb - p_im` term) and the
+gross indicated efficiency at that node; `eta_i` is resampled onto a union
+air-mass-per-revolution axis per rpm line. `eta_spark` is the mean of a
+spark sweep at three sites, `f_lambda` a lambda sweep at 3000 rpm / 80 kPa.
+The fuel is the engine's first `fuels` entry. At every grid node the
+runtime reproduces the cycle model's net torque exactly (1e-9).
+
+**Quality.** `ps::io::EngineMapOptions` (`ps/io/vehicle_io.h`, the
+`load_vehicle_json(path, options)` / `load_scenario(path, options)`
+overloads): `quality` `Full` (default; the whole grid, 5 cycles per point,
+step 1/(960*48) s) or `Preview` (at most 10 x 6 of the grid nodes, 4 cycles,
+step 1/(960*24) s), `pool` (a `JobSystem` to run the operating points on;
+`nullptr` = the calling thread). The result is bit-identical for any worker
+count. `ps_run --map-workers N` generates on an N-worker pool that lives
+only for the load. Measured on the ASSUMED 2 L I4 test fixture with a
+12 x 20 grid (release build): Preview 0.33 s on one thread / 0.034 s on
+10 workers, Full 2.24 s / 0.23 s.
+
+**Off-node accuracy caveat.** The runtime interpolates the generated tables
+bilinearly. eta_i, pumping and friction stay within 1 % between nodes on a
+500 rpm x 5 kPa grid, but the trapped air mass does not: the intake runner
+(a lumped Helmholtz resonator) produces a real, step- and cycle-converged
+ripple of about 100 rpm period and up to +-2.5 % at light load (measured
++-2.5 % near 1700 rpm / 22.5 kPa on the fixture, worst cell-centre error
+7.7 %, mean 1.6 %). No practical rpm grid resolves it; treat it as sub-grid
+detail. A generated engine's `state_hash` folds the maps' content hash, so
+two engines on different maps never hash alike.
+
+Rejections specific to the cycle block: a rotary engine; `bore_mm` /
+`stroke_mm` / `cylinders` inside `cycle`; `back_pressure_kpa_vs_exh_kg_s`;
+an unknown key; a missing `friction` without `maps.friction_torque_nm`;
+every range rule in the table above. Generator errors (e.g. an operating
+point whose cycle does not converge) propagate with their own
+`"engine map generator: ..."` / `"CycleModelDesc: ..."` messages.
 
 ### Shipped simulated engine: `toyota_a25a_fks_sim.json` (measured maps)
 

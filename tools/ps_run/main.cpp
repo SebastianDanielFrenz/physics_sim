@@ -5,12 +5,15 @@
 
 #include "headless_env.h"
 #include "ps/io/scenario.h"
+#include "ps/io/vehicle_io.h"
+#include "ps/jobs/job_system.h"
 #include "ps/version.h"
 #include "ps/world/world.h"
 
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <string>
 
 namespace {
@@ -34,17 +37,27 @@ int main(int argc, char** argv) {
     const std::string scenario_path = argv[1];
     std::string csv_override;
     int worker_override = -1;
+    int map_workers = 0; // I7c C16a: > 0 = generate engine maps on a JobSystem with that many workers at load
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--workers" && i + 1 < argc) {
             worker_override = std::atoi(argv[++i]);
+        } else if (arg == "--map-workers" && i + 1 < argc) {
+            map_workers = std::atoi(argv[++i]);
         } else if (csv_override.empty()) {
             csv_override = arg;
         }
     }
 
     try {
-        ps::io::Scenario scenario = ps::io::load_scenario(scenario_path);
+        // The map pool lives only for the load; generated maps are
+        // bit-identical for any worker count (I7c C16a test M3).
+        std::unique_ptr<ps::jobs::JobSystem> map_pool;
+        if (map_workers > 0) map_pool = std::make_unique<ps::jobs::JobSystem>(map_workers);
+        ps::io::EngineMapOptions map_options;
+        map_options.pool = map_pool.get();
+        ps::io::Scenario scenario = ps::io::load_scenario(scenario_path, map_options);
+        map_pool.reset();
         if (worker_override >= 0) scenario.world_config.job_workers = worker_override;
 
         ps::io::BuiltScenario built = ps::io::build_scenario(scenario);

@@ -233,7 +233,7 @@ ScenarioTerrain read_terrain(const json& j, const std::filesystem::path& scenari
 
 // PLAN.md 5.1/P3: vehicle_json_path resolved relative to the scenario
 // file's own directory, same convention as ScenarioTerrain::spec_path.
-ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenario_dir) {
+ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenario_dir, const EngineMapOptions& map_options) {
     ScenarioVehicle sv;
     sv.name = j.at("name").get<std::string>();
     sv.chassis_body_name = j.at("chassis_body").get<std::string>();
@@ -241,13 +241,15 @@ ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenari
     std::filesystem::path p = sv.vehicle_json_path;
     if (p.is_relative()) p = scenario_dir / p;
     sv.vehicle_json_path = p.lexically_normal().string();
-    sv.desc = load_vehicle_json(sv.vehicle_json_path);
+    sv.desc = load_vehicle_json(sv.vehicle_json_path, map_options);
     return sv;
 }
 
 } // namespace
 
-Scenario load_scenario(const std::string& json_path) {
+Scenario load_scenario(const std::string& json_path) { return load_scenario(json_path, EngineMapOptions{}); }
+
+Scenario load_scenario(const std::string& json_path, const EngineMapOptions& map_options) {
     std::ifstream in(json_path);
     if (!in) throw std::runtime_error("cannot open scenario file: " + json_path);
 
@@ -301,7 +303,7 @@ Scenario load_scenario(const std::string& json_path) {
         }
         if (j.contains("vehicles")) {
             const std::filesystem::path scenario_dir = std::filesystem::path(json_path).parent_path();
-            for (const auto& vj : j.at("vehicles")) s.vehicles.push_back(read_vehicle(vj, scenario_dir));
+            for (const auto& vj : j.at("vehicles")) s.vehicles.push_back(read_vehicle(vj, scenario_dir, map_options));
         }
         if (j.contains("control_events")) {
             for (const auto& cj : j.at("control_events")) {
