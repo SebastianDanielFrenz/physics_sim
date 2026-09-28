@@ -91,7 +91,7 @@
 .PARAMETER Topic
     Per-change run with hand-picked topics, e.g. -Topic terrain,vehicle.
     Known topics: math jobs world backend articulation contact terrain
-    vehicle drivetrain io determinism bench.
+    vehicle drivetrain io cycle audio determinism bench.
 
 .PARAMETER Linux
     With -Affected/-Topic: also run the linux-release leg (topic tests).
@@ -329,14 +329,16 @@ function Invoke-WslLeg {
 }
 
 # ---------------------------------------------------------------------------
-# Godot-include grep: core/ must have zero Godot/GDExtension includes (D1).
+# Godot-include grep: core/ must have zero Godot/GDExtension includes (D1),
+# and (ps_audio A7, D-11) zero ps_audio includes - ps_audio depends on
+# ps_engine_cycle, never the other way round.
 # ---------------------------------------------------------------------------
 function Invoke-GodotIncludeGrep {
     Write-Host ""
     Write-Host "=== Godot-include grep (core/ must stay Godot-free) ===" -ForegroundColor Cyan
 
     $coreDir = Join-Path $repoRoot 'core'
-    $pattern = '#include\s*[<"](godot|gdextension)'
+    $pattern = '#include\s*[<"](godot|gdextension|ps_audio/)'
     $hits = Get-ChildItem -Path $coreDir -Recurse -File -Include *.h,*.hpp,*.hh,*.hxx,*.cpp,*.cc,*.cxx,*.inl |
         Select-String -Pattern $pattern
 
@@ -344,7 +346,7 @@ function Invoke-GodotIncludeGrep {
         Add-Result -Leg 'godot-grep' -Stage 'grep' -Pass $false -Detail "$($hits.Count) match(es)"
         $hits | ForEach-Object { Write-Host "  $($_.Path):$($_.LineNumber): $($_.Line.Trim())" -ForegroundColor Red }
     } else {
-        Add-Result -Leg 'godot-grep' -Stage 'grep' -Pass $true -Detail 'no Godot/GDExtension includes under core/'
+        Add-Result -Leg 'godot-grep' -Stage 'grep' -Pass $true -Detail 'no Godot/GDExtension/ps_audio includes under core/'
     }
 }
 
@@ -400,7 +402,8 @@ function Invoke-TranscendentalGrep {
     )
     $pattern = Get-TranscendentalGrepPattern
 
-    $files = Get-ChildItem -Path $coreDir -Recurse -File -Include *.h,*.hpp,*.hh,*.hxx,*.cpp,*.cc,*.cxx,*.inl |
+    # ps_audio A7: audio/ follows the same rule (its seeded variation and pinned PCM hashes must be cross-platform).
+    $files = Get-ChildItem -Path @($coreDir, (Join-Path $repoRoot 'audio')) -Recurse -File -Include *.h,*.hpp,*.hh,*.hxx,*.cpp,*.cc,*.cxx,*.inl |
         Where-Object {
             $full = $_.FullName
             -not ($exemptPrefixes | Where-Object { $full.StartsWith($_) })
@@ -420,7 +423,7 @@ function Invoke-TranscendentalGrep {
         Add-Result -Leg 'detmath-grep' -Stage 'grep' -Pass $false -Detail "$($hits.Count) match(es)"
         $hits | ForEach-Object { Write-Host "  $($_.Path):$($_.Line): $($_.Text)" -ForegroundColor Red }
     } else {
-        Add-Result -Leg 'detmath-grep' -Stage 'grep' -Pass $true -Detail 'no platform-libm transcendental calls under core/ (excluding core/src/math/detmath)'
+        Add-Result -Leg 'detmath-grep' -Stage 'grep' -Pass $true -Detail 'no platform-libm transcendental calls under core/ and audio/ (excluding core/src/math/detmath)'
     }
 }
 
@@ -673,7 +676,7 @@ function Invoke-WslLane {
 # ===========================================================================
 # -Affected / -Topic: per-change runs
 # ===========================================================================
-$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'determinism', 'bench')
+$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'cycle', 'audio', 'determinism', 'bench')
 
 # Path -> topics. First matching rule wins; paths are repo-relative with '/'.
 # Kind: 'topics' (run Topics), 'everything' (foundational: default fast run),
@@ -701,7 +704,8 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/terrain/'; Kind = 'topics'; Topics = @('terrain') },
     @{ Re = '^core/(include/ps|src)/vehicle/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
-    @{ Re = '^core/src/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain') },  # I7c cycle model; its tests are [drivetrain][cycle]
+    @{ Re = '^core/(include/ps|src)/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain', 'cycle') },  # cycle model + pipes; [cycle] also selects the [audio][cycle] voice tests (EngineCore is shared)
+    @{ Re = '^audio/'; Kind = 'topics'; Topics = @('audio', 'cycle') },  # ps_audio A7
     @{ Re = '^core/(include/ps|src)/io/'; Kind = 'topics'; Topics = @('io'); AllScenarios = $true },
     @{ Re = '^data/(vehicles|tyres|engines|gearboxes)/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^data/fuels/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },
@@ -713,7 +717,7 @@ $script:PathRules = @(
     @{ Re = '^tests/bench/bench_contact_coupling\.cpp$'; Kind = 'topics'; Topics = @('contact') },
     @{ Re = '^tests/bench/bench_terrain_tiles\.cpp$'; Kind = 'topics'; Topics = @('terrain') },
     @{ Re = '^tests/(unit|validation|determinism)/[^/]+\.(cpp|h)$'; Kind = 'testfile' },
-    @{ Re = '^(tools/sweep/|tests/bench/energy_study\.cpp$)'; Kind = 'none'; Note = 'no ctest coverage; the release build still compiles it' },
+    @{ Re = '^(tools/sweep/|tests/bench/energy_study\.cpp$|tests/bench/bench_audio_voice\.cpp$)'; Kind = 'none'; Note = 'no ctest coverage; the release build still compiles it' },
     @{ Re = '^adapters/'; Kind = 'none'; Note = 'Godot adapter: not built by ci.ps1 - run adapters\godot\smoke_test.ps1' },
     @{ Re = '^(data/models/|tools/(assetgen|trackgen|plots)/|tools/setup_dev_env\.ps1$)'; Kind = 'none'; Note = 'not used by core builds or tests' }
 )
