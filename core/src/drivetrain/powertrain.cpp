@@ -1266,6 +1266,32 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         if ((tm ? tm->initial_state : sim->initial_state) == EngineInitialState::Running) {
             network_.set_omega(engine_crank_, rpm_to_rad_per_s(tm ? tm->idle_rpm : sim->idle_rpm));
         }
+        // F-T0 (vault PHYS-049/050 follow-ups): the seed above teleports the
+        // crank (and, through any rigid row already wired to it, other nodes)
+        // straight to idle speed with no substep and no tracked energy flow.
+        // ledger_.rotor_ke defaults to 0 (PowertrainEnergy's all-zero default
+        // member init) until pre_solve_components' own per-substep loop
+        // OVERWRITES it (an assignment, not an accumulation) on tick 0's
+        // first substep - so begin_tick()'s tick-0 snapshot
+        // (ledger_tick_start_ = ledger_) captures the phantom zero, and
+        // end_tick()'s balance_error sees the full seeded KE appear with no
+        // matching engine_out/starter_in to explain it (measured ~561 J
+        // car_sedan.json / ~526 J car_sedan_sim.json). Seeding rotor_ke here
+        // too, from the SAME all-nodes formula pre_solve_components uses,
+        // makes the seed part of construction's initial condition instead of
+        // an unbooked flow on the first tick. Every node is summed (not just
+        // engine_crank_) so this stays correct if a future seed ever touches
+        // more than the crank; every other node's omega is still 0 here, so
+        // this is a no-op for them today.
+        {
+            real seeded_rotor_ke = real(0.0);
+            for (int i = 0; i < network_.node_count(); ++i) {
+                const NodeId nid{static_cast<std::uint16_t>(i)};
+                const real w = network_.omega(nid);
+                seeded_rotor_ke += real(0.5) * network_.node_inertia(nid) * w * w;
+            }
+            ledger_.rotor_ke = seeded_rotor_ke;
+        }
         // --- PHYS-033 P4 I7a C3: the throttle-command stage --------------
         // An explicit throttle_control component (validated above: at most
         // one, and only when there is an engine) configures the stage;

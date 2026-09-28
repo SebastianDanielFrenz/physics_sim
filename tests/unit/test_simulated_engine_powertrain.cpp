@@ -274,12 +274,13 @@ TEST_CASE("C12 T8/F9: a simulated-engine car launches, lifts and closes every le
     auto check_tick = [&]() {
         const PowertrainEnergy& e = w.powertrain_energy(rig.vehicle);
         const real denom = sum_abs_terms(e);
-        // Tick 0 is skipped: the Powertrain constructor seeds a Running
-        // engine's crank at idle without booking it, so the very first
-        // tick's rotor_ke delta carries 0.5*J*w_idle^2 (526.4 J here) -
-        // pre-existing and shared with the graph engine (same Phase K seed),
-        // not a C12 effect; see out/i7b_c12_progress.md.
-        if (tick > 0 && denom > 1e-9) worst_balance = std::max(worst_balance, std::abs(e.balance_error) / denom);
+        // F-T0 (vault PHYS-049/050 follow-ups): tick 0 used to be skipped
+        // here because the Powertrain constructor seeded a Running engine's
+        // crank at idle without booking it into the ledger (the very first
+        // tick's rotor_ke delta carried the full 0.5*J*w_idle^2, ~526 J
+        // here). The constructor now seeds ledger_.rotor_ke itself from the
+        // same seeded state, so tick 0 closes like every other tick.
+        if (denom > 1e-9) worst_balance = std::max(worst_balance, std::abs(e.balance_error) / denom);
         ++tick;
         const real m = w.fuel_tank_mass(rig.vehicle);
         worst_tank = std::max(worst_tank, std::abs((initial - m) - (e.fuel_mass - e.fuel_external_added)));
@@ -316,17 +317,34 @@ TEST_CASE("C12 T8/F9: a simulated-engine car launches, lifts and closes every le
     CHECK(e.indicated_work + e.pumping_work + e.friction_work > 0.0);
 }
 
-// Diagnostic for the tick-0 skip above: the plain graph-engine car_sedan
-// shows the same unbooked first-tick rotor_ke jump (pre-existing).
-TEST_CASE("C12 diag: tick-0 balance_error of the graph-engine car_sedan (pre-existing seed)", "[.][diag][drivetrain]") {
-    Rig rig = make_rig(ps_test::load_sedan_desc(), 1, 1, /*auto_clutch_launch=*/true);
+// F-T0 (vault PHYS-049/050 follow-ups): the Powertrain constructor seeds a
+// Running engine's crank at idle (network_.set_omega) without booking the
+// resulting rotor KE into the ledger, so begin_tick()'s tick-0 snapshot used
+// to capture ledger_.rotor_ke's default-constructed 0 and end_tick() saw the
+// full seeded KE (~561 J car_sedan.json, ~526 J car_sedan_sim.json - same
+// Phase K seed, shared by both engine kinds) appear from nowhere on tick 0's
+// balance_error. The constructor now seeds ledger_.rotor_ke itself from the
+// same all-nodes KE formula right after the omega seed, so tick 0 closes
+// like every other tick. Was tagged [.][diag] (print-only); now a real gate
+// on the graph engine (car_sedan.json) and the simulated engine
+// (car_sedan_sim.json).
+TEST_CASE("C12/F-T0: tick-0 balance_error is bounded like any other tick, both engine kinds", "[unit][drivetrain][engine]") {
+    const bool sim_engine = GENERATE(false, true);
+    vehicle::VehicleDesc desc;
+    if (sim_engine) {
+        const std::string path = std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_sim.json";
+        desc = io::load_vehicle_json(path);
+    } else {
+        desc = ps_test::load_sedan_desc();
+    }
+    Rig rig = make_rig(desc, 1, 1, /*auto_clutch_launch=*/true);
     rig.world->step();
     const PowertrainEnergy& e = rig.world->powertrain_energy(rig.vehicle);
-    std::printf("[C12 diag] graph car_sedan tick 0: balance_error %.6e J, rotor_ke %.6e J, sum_abs_terms %.6e\n", e.balance_error, e.rotor_ke,
-                sum_abs_terms(e));
-    rig.world->step();
-    const PowertrainEnergy& e1 = rig.world->powertrain_energy(rig.vehicle);
-    std::printf("[C12 diag] graph car_sedan tick 1: balance_error %.6e J\n", e1.balance_error);
+    const real denom = sum_abs_terms(e);
+    const real rel = denom > 1e-9 ? std::abs(e.balance_error) / denom : std::abs(e.balance_error);
+    std::printf("[C12/F-T0] %s tick 0: balance_error %.6e J, rotor_ke %.6e J, sum_abs_terms %.6e, rel %.6e\n",
+                sim_engine ? "car_sedan_sim" : "car_sedan", e.balance_error, e.rotor_ke, denom, rel);
+    CHECK(rel <= 5e-8);
 }
 
 // Review R7: the Powertrain passes the burnt fuel to the engine. A tank
@@ -589,8 +607,10 @@ TEST_CASE("C12 determinism: 1 vs 10 workers with a mid-run ambient change hash i
 // the file's idle_rpm, never leaves Running, reaches 2nd, a speed bound
 // measured with margin (see the printf; the graph-engine car_sedan.json
 // reaches less - the bound discriminates the two engines), and the per-tick
-// balance_error <= 5e-8 relative from tick 1 (tick 0 carries the pre-existing
-// unbooked Running-engine seed, F-T0 in out/i7b_c12_progress.md).
+// balance_error <= 5e-8 relative from tick 0 (F-T0, vault PHYS-049/050: the
+// Powertrain constructor now seeds ledger_.rotor_ke from the same
+// Running-engine idle seed it applies to the network, so tick 0 no longer
+// carries an unbooked jump).
 // Sabotages (review run): loading car_sedan.json instead fails the p_im
 // check (0 Pa) and the speed bound (17.802 m/s); booking the engine's work
 // at omega_old in SimulatedEngine::post_solve fails the balance check
@@ -615,7 +635,7 @@ TEST_CASE("C12/C17a integration: car_sedan_sim.json idles, launches WOT in 1st a
     auto check_tick = [&]() {
         const PowertrainEnergy& e = w.powertrain_energy(rig.vehicle);
         const real denom = sum_abs_terms(e);
-        if (tick > 0 && denom > 1e-9) worst_balance = std::max(worst_balance, std::abs(e.balance_error) / denom);
+        if (denom > 1e-9) worst_balance = std::max(worst_balance, std::abs(e.balance_error) / denom);
         ++tick;
         const PowertrainSnapshot& s = w.powertrain_state(rig.vehicle);
         if (s.engine_state != EngineState::Running) stalled = true;
