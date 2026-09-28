@@ -71,6 +71,7 @@
 
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/engine_cycle/gas.h"
+#include "ps/engine_cycle/pipe_network_types.h"
 #include "ps/engine_cycle/valve_flow.h"
 #include "ps/types.h"
 
@@ -80,12 +81,9 @@
 
 namespace ps::engine_cycle {
 
-// End corrections as a multiple of the end's radius.
-inline constexpr real kUnflangedEndCorrection = 0.6133;  // Levine & Schwinger 1948, low ka
-inline constexpr real kFlangedEndCorrection = 0.8216;    // Rayleigh; Norris & Sheng 1989
-inline constexpr real kDefaultPipeCflLimit = 0.8;        // out/audio_plan.md section 4
-
-enum class EndCorrection : std::uint8_t { None, Unflanged, Flanged };
+// kUnflangedEndCorrection, kFlangedEndCorrection, kDefaultPipeCflLimit,
+// EndCorrection and GasStateDesc live in pipe_network_types.h (shared with
+// waveguide_network.h since ps_audio A3).
 
 struct PipeEndDesc {
     enum class Kind : std::uint8_t { Closed, Open, Volume, Port };
@@ -100,12 +98,6 @@ struct PipeWallDesc {
     WallFriction friction = WallFriction::LaminarBlasius;
     bool heat_transfer = false;      // Reynolds analogy to wall_temperature_k
     real wall_temperature_k = 300.0;
-};
-
-struct GasStateDesc {
-    real p_pa = 101325.0;
-    real t_k = 293.15;
-    real x_b = 0.0;  // burned mass fraction
 };
 
 struct PipeDesc {

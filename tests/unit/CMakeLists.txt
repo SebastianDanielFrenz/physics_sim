@@ -57,6 +57,7 @@ add_executable(ps_unit_tests
   test_a25a_sim_engine_data.cpp
   test_engine_cycle.cpp
   test_pipe_network.cpp
+  test_waveguide_network.cpp
   test_engine_map_generator.cpp
   test_engine_map_cache.cpp
   test_engine_hot_swap.cpp
