@@ -211,60 +211,69 @@ TEST_CASE("G4 cycle Wiebe: fraction positions and integral", "[drivetrain][cycle
 // ---------------------------------------------------------------------------
 TEST_CASE("G5 cycle two-volume blowdown: mass, energy, composition conserved", "[drivetrain][cycle]") {
     // Catches: orifice direction or sign, enthalpy not transported, composition leak.
-    // Production gas/valve helpers, RK4 in the test.
+    // Production gas/valve helpers, RK4 in the test. Run twice with the
+    // high-pressure volume on either side, so both orifice branches are used.
     const GasModel g = GasModel::from_desc(drivetrain::GasPropertiesDesc{});
     PsiPair psi;
     psi.fresh = PsiClass::make(1.40);
     psi.burned = PsiClass::make(1.30);
-    const real v1 = 1.0e-3, v2 = 2.0e-3, cda = 1.0e-5;
-    struct Y { real m1, u1, mb1, m2, u2, mb2; };
-    auto f = [&](const Y& y) {
+    const real cda = 1.0e-5;
+    for (const bool hi_on_1 : {true, false}) {
+        CAPTURE(hi_on_1);
+        const real v1 = hi_on_1 ? 1.0e-3 : 2.0e-3;
+        const real v2 = hi_on_1 ? 2.0e-3 : 1.0e-3;
+        struct Y { real m1, u1, mb1, m2, u2, mb2; };
+        auto f = [&](const Y& y) {
+            const CvState a = cv_state(g, y.m1, y.u1, y.mb1, v1);
+            const CvState b = cv_state(g, y.m2, y.u2, y.mb2, v2);
+            const OrificeFlow of = orifice_flow(psi, cda, a.p, a.r, a.t, a.x, b.p, b.r, b.t, b.x);
+            const real x_up = of.from_1 ? a.x : b.x;
+            const real h_up = of.from_1 ? g.h_mix(a.t, a.x) : g.h_mix(b.t, b.x);
+            return Y{-of.mdot, -of.mdot * h_up, -of.mdot * x_up, of.mdot, of.mdot * h_up, of.mdot * x_up};
+        };
+        auto axpy = [](const Y& y, real h, const Y& k) {
+            return Y{y.m1 + h * k.m1, y.u1 + h * k.u1, y.mb1 + h * k.mb1,
+                     y.m2 + h * k.m2, y.u2 + h * k.u2, y.mb2 + h * k.mb2};
+        };
+        // High side: burned at 5 bar / 1000 K, 1 l. Low side: fresh at 1 bar / 300 K, 2 l.
+        const real m_hi = 5.0e5 * 1.0e-3 / (g.burned.r * 1000.0);
+        const real u_hi = energy_from_temperature(g, m_hi, m_hi, 1000.0);
+        const real m_lo = 1.0e5 * 2.0e-3 / (g.fresh.r * 300.0);
+        const real u_lo = energy_from_temperature(g, m_lo, 0.0, 300.0);
+        Y y = hi_on_1 ? Y{m_hi, u_hi, m_hi, m_lo, u_lo, 0.0} : Y{m_lo, u_lo, 0.0, m_hi, u_hi, m_hi};
+        const real m0 = y.m1 + y.m2, u0 = y.u1 + y.u2, mb0 = y.mb1 + y.mb2;
+        const real h = 2.0e-5;
+        // Direction: the first step moves mass from the high side to the low side.
+        const Y k0 = f(y);
+        CHECK((hi_on_1 ? k0.m1 : k0.m2) < 0.0);
+        for (int i = 0; i < 50000; ++i) {
+            const Y k1 = f(y);
+            const Y k2 = f(axpy(y, 0.5 * h, k1));
+            const Y k3 = f(axpy(y, 0.5 * h, k2));
+            const Y k4 = f(axpy(y, h, k3));
+            const real h6 = h / 6.0;
+            y.m1 += h6 * (k1.m1 + 2.0 * k2.m1 + 2.0 * k3.m1 + k4.m1);
+            y.u1 += h6 * (k1.u1 + 2.0 * k2.u1 + 2.0 * k3.u1 + k4.u1);
+            y.mb1 += h6 * (k1.mb1 + 2.0 * k2.mb1 + 2.0 * k3.mb1 + k4.mb1);
+            y.m2 += h6 * (k1.m2 + 2.0 * k2.m2 + 2.0 * k3.m2 + k4.m2);
+            y.u2 += h6 * (k1.u2 + 2.0 * k2.u2 + 2.0 * k3.u2 + k4.u2);
+            y.mb2 += h6 * (k1.mb2 + 2.0 * k2.mb2 + 2.0 * k3.mb2 + k4.mb2);
+        }
         const CvState a = cv_state(g, y.m1, y.u1, y.mb1, v1);
         const CvState b = cv_state(g, y.m2, y.u2, y.mb2, v2);
-        const OrificeFlow of = orifice_flow(psi, cda, a.p, a.r, a.t, a.x, b.p, b.r, b.t, b.x);
-        const real x_up = of.from_1 ? a.x : b.x;
-        const real h_up = of.from_1 ? g.h_mix(a.t, a.x) : g.h_mix(b.t, b.x);
-        return Y{-of.mdot, -of.mdot * h_up, -of.mdot * x_up, of.mdot, of.mdot * h_up, of.mdot * x_up};
-    };
-    auto axpy = [](const Y& y, real h, const Y& k) {
-        return Y{y.m1 + h * k.m1, y.u1 + h * k.u1, y.mb1 + h * k.mb1, y.m2 + h * k.m2, y.u2 + h * k.u2, y.mb2 + h * k.mb2};
-    };
-    // Side 1 burned at 5 bar / 1000 K, side 2 fresh at 1 bar / 300 K.
-    Y y{};
-    y.m1 = 5.0e5 * v1 / (g.burned.r * 1000.0);
-    y.mb1 = y.m1;
-    y.u1 = energy_from_temperature(g, y.m1, y.mb1, 1000.0);
-    y.m2 = 1.0e5 * v2 / (g.fresh.r * 300.0);
-    y.mb2 = 0.0;
-    y.u2 = energy_from_temperature(g, y.m2, 0.0, 300.0);
-    const real m0 = y.m1 + y.m2, u0 = y.u1 + y.u2, mb0 = y.mb1 + y.mb2;
-    const real h = 2.0e-5;
-    for (int i = 0; i < 50000; ++i) {
-        const Y k1 = f(y);
-        const Y k2 = f(axpy(y, 0.5 * h, k1));
-        const Y k3 = f(axpy(y, 0.5 * h, k2));
-        const Y k4 = f(axpy(y, h, k3));
-        const real h6 = h / 6.0;
-        y.m1 += h6 * (k1.m1 + 2.0 * k2.m1 + 2.0 * k3.m1 + k4.m1);
-        y.u1 += h6 * (k1.u1 + 2.0 * k2.u1 + 2.0 * k3.u1 + k4.u1);
-        y.mb1 += h6 * (k1.mb1 + 2.0 * k2.mb1 + 2.0 * k3.mb1 + k4.mb1);
-        y.m2 += h6 * (k1.m2 + 2.0 * k2.m2 + 2.0 * k3.m2 + k4.m2);
-        y.u2 += h6 * (k1.u2 + 2.0 * k2.u2 + 2.0 * k3.u2 + k4.u2);
-        y.mb2 += h6 * (k1.mb2 + 2.0 * k2.mb2 + 2.0 * k3.mb2 + k4.mb2);
+        const CvState& hi = hi_on_1 ? a : b;
+        const CvState& lo = hi_on_1 ? b : a;
+        INFO("p_hi " << hi.p << " p_lo " << lo.p << " T_hi " << hi.t << " T_lo " << lo.t);
+        CHECK(rel(y.m1 + y.m2, m0) < 1e-13);
+        CHECK(rel(y.u1 + y.u2, u0) < 1e-12);
+        CHECK(rel(y.mb1 + y.mb2, mb0) < 1e-13);
+        CHECK(rel(a.p, b.p) < 1e-6);
+        // Burned gas has moved into the low side; the high side kept x_b = 1.
+        CHECK(lo.mb > 0.1 * mb0);
+        CHECK(rel(hi.x, 1.0) < 1e-12);
+        CHECK(hi.p < 5.0e5);
+        CHECK(lo.p > 1.0e5);
     }
-    const CvState a = cv_state(g, y.m1, y.u1, y.mb1, v1);
-    const CvState b = cv_state(g, y.m2, y.u2, y.mb2, v2);
-    INFO("p1 " << a.p << " p2 " << b.p << " T1 " << a.t << " T2 " << b.t);
-    CHECK(rel(y.m1 + y.m2, m0) < 1e-13);
-    CHECK(rel(y.u1 + y.u2, u0) < 1e-12);
-    CHECK(rel(y.mb1 + y.mb2, mb0) < 1e-13);
-    CHECK(rel(a.p, b.p) < 1e-6);
-    // Burned gas has moved into side 2, and side 1 kept its burned fraction.
-    CHECK(y.mb2 > 0.1 * mb0);
-    CHECK(rel(a.x, 1.0) < 1e-12);
-    // Direction: the flow always ran from high to low pressure.
-    CHECK(a.p < 5.0e5);
-    CHECK(b.p > 1.0e5);
 }
 
 // ---------------------------------------------------------------------------
