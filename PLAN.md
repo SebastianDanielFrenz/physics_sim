@@ -825,6 +825,14 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   30 kPa (+0.42 / -0.45 % at 3000/60 and 6000/90; 25 vs 12.5 mm -0.37 %),
   against the plan's 0.5 % [A] target. The C2 test stays [!mayfail] as an
   accepted, measured miss; revisit once A9 SIMD makes finer cells affordable.
+- Sound before hook-up (Sebastian, 2026-09-29, after the first listening test
+  of the A10 demo I4: "someone imitating engine sounds using a Red Bull can",
+  about the same as engine-sim): refine the sound before any wider hook-up.
+  A9 (SIMD) and A11 (Godot) wait behind a sound-realism pass that adds the
+  missing sources and environment one at a time with an A/B render per step
+  (measured on the first render: almost no energy above 2 kHz; a few pipe
+  resonances at 125-500 Hz dominate). The A8b blow-up fix comes first (fine
+  audio cells are unusable until then).
 - Order (Sebastian, 2026-09-28): `ps_audio` (engine sound from the live cycle
   model, after its design pass closes the acoustic gap noted under "Audio
   library") is implemented BEFORE the engine design GUI below.
