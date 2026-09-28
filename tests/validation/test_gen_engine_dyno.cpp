@@ -244,47 +244,71 @@ ps::engine_cycle::OperatingPoint cycle_op(const CycleModelDesc& c, real rpm, rea
 } // namespace
 
 // [!mayfail] (D2, frozen-literature rule D1 - no model parameter chosen from
-// S1/S2). C17a follow-up (owner ruling 1, re-measured 2026-09-28 after the
-// data commit 6f10fde): the generated engine now fires at the EPA-measured
-// ECU spark schedule (cycle.spark_advance_deg, ignition delay 0). 1 of 7
-// asserted points exceeds +-10 %: 2996 rpm +11.2 %. dT% before -> after:
-//     2017 +10.7 -> -4.9    2535 +10.1 -> -4.5    2996 +23.2 -> +11.2
-//     3571 +21.6 -> +8.8    4032 +23.4 -> +8.5    4493 +17.0 -> +2.8
-//     4954  +7.3 -> -7.8    (unasserted 5414 +1.3 -> -13.1, 5761 -9.9 -> -22.2)
+// S1/S2). C17a second follow-up (owner ruling, PLAN.md "Second follow-up
+// rulings" commit 69a3856, vault PHYS-055; re-measured 2026-09-28): the
+// generic [AS] 60 deg 0-100 % Wiebe burn_duration_deg is replaced by a CITED
+// 10-90 % mass-fraction-burned duration for a modern fast-burn/high-tumble SI
+// engine at WOT/medium speed - [C] MIT 2.61 (Heywood's course) Lecture 9 "SI
+// engine combustion I", slide "Burn duration": "For modern fast-burn engines
+// under medium speed, part load condition: 0-10% ~15 deg, 0-50% ~25 deg,
+// 0-90% ~35 deg" (the SAME slide ignition_delay_deg_source already cited for
+// its spark-to-10% figure; no A25A-specific or WOT-specific burn-duration
+// citation exists in the cited SAE 2019-01-0249/2017-01-5020 papers or the
+// EPA NVFEL Tier 3 report/data, full-text searched). [D] 10-90 % = 0-90 % -
+// 0-10 % = 35 - 15 = 20 deg CA; converted through the frozen Wiebe (a 5, m 2)
+// via x = 1 - exp(-a*y^(m+1)) (10-90 % span = 0.496026 x duration) gives
+// burn_duration_deg = 20 / 0.496026 = 40.3205 deg (was 60). ignition_delay_deg
+// is then re-derived by the file's existing rule (delay = max(0, cited
+// spark-to-10% angle - the Wiebe's own 0-10% span at the new duration)): at
+// 40.3205 deg the Wiebe's own 0-10 % span is 0.276208 x 40.3205 = 11.14 deg,
+// LESS than the cited 15 deg spark-to-10% figure (it was 16.57 deg,
+// already exceeding 15 deg, at the old 60 deg duration - why delay was 0
+// before), so ignition_delay_deg = max(0, 15 - 11.14) = 3.8632 deg (was 0).
+// 4 of 7 asserted points now exceed +-10 %: 2996/3571/4032/4493 (was 1:
+// 2996 only). dT% before (measured-spark follow-up) -> after (this
+// follow-up):
+//     2017  -4.9 -> +2.41   2535  -4.5 -> +2.89   2996 +11.2 -> +18.88
+//     3571  +8.8 -> +16.90  4032  +8.5 -> +17.00   4493  +2.8 -> +11.06
+//     4954  -7.8 -> +0.30   (unasserted 5414 -13.1 -> -5.14, 5761 -22.2 -> -14.85)
 //
 // Per-term budget of T_sim - T_meas [N*m] ("diag: per-term breakdown vs
 // M-B", table D2B): against the measured-derived M-B file's gross torque
 // G_b; air = VE ratio, eta = eta_i*eta_spark(spark - theta_mbt) ratio,
-// friction, pumping excess; rest = lambda/ambient/cross terms (<= 2.0):
-//     rpm   obs    air    eta   fric   pump   rest   (pre-follow-up eta)
-//    2017 -10.6   +5.3  -10.7   -7.3   +0.2   +2.0   (+22.9)
-//    2535 -10.1   +9.9  -12.9   -7.8   -0.5   +1.2   (+20.6)
-//    2996 +24.3  +43.5   -9.2   -8.1   -2.7   +0.8   (+17.0)
-//    3571 +20.1  +48.8  -14.5   -8.1   -6.7   +0.6   (+13.8)
-//    4032 +19.5  +47.9  -12.4   -8.0   -8.6   +0.6   (+21.2)
-//    4493  +6.4  +40.5  -14.7   -7.7  -11.9   +0.2   (+17.9)
-//    4954 -18.0  +20.5  -18.6   -7.1  -13.2   +0.5   (+15.6)
-// - eta flipped from +14..+23 to -9..-19 N*m. The measured WOT spark
-//   (-1.4..+4.7 deg BTDC at the anchor MAPs) lies 18-24 deg after the model's
-//   MBT spark (23.05 deg BTDC from the frozen Wiebe: 60 deg, a 5, m 2, CA50
-//   8 deg ATDC); eta_spark there is 0.857-0.916 while the MBT-equivalent eta_i
-//   is 3-11 % above M-B's. The model loses more to that retard than the A25A
-//   does, i.e. the real MBT is later than the model's - consistent with a
-//   faster real burn (MIT 2.61 lec. 9: 10-90 % ~20 deg vs the model's 29.7).
-//   The Wiebe is Tier 2 frozen; reshaping it is an owner decision (vault
-//   PHYS-055), not done here.
-// - 3000-4500: trapped AIR still dominates (+40..+49 N*m, VE gen/M-B
-//   1.16-1.20): the Tier 3 [AS] 708.9 mm quarter-wave runner (tuned to 4800
-//   rpm) gives a +17..+20 % ram gain; the 0.25x runner that lands on M-B is a
-//   fit and forbidden (ruling 2); no cited A25A runner length was found
-//   (follow-up search log, vault PHYS-055), so the rule stays and S1 stays
-//   [!mayfail] at 3000-4500. With eta now negative, the air excess is what
-//   leaves 2996 at +11.2 %.
-// - Friction and pumping LOWER the torque everywhere (unchanged): the F4
-//   Ecotec friction plus the model's pumping over-predict the A25A's measured
-//   motoring rows by 6.8-9.9 N*m (e.g. 2017 rpm / 22.8 kPa: -32.3 vs -24.3).
-// Not a code defect; the owner decides the burn/MBT rule and the friction
-// source (vault ticket).
+// friction, pumping excess; rest = lambda/ambient/cross terms (<= 2.2):
+//     rpm   obs    air    eta   fric   pump   rest   (prior follow-up eta)
+//    2017  +5.2   +5.2   +5.0   -7.3   +0.2   +2.2   (-10.7)
+//    2535  +6.5   +9.6   +3.9   -7.8   -0.5   +1.3   (-12.9)
+//    2996 +41.1  +43.4   +7.6   -8.1   -2.6   +0.9    (-9.2)
+//    3571 +38.6  +48.7   +3.7   -8.1   -6.5   +0.8   (-14.5)
+//    4032 +38.8  +47.8   +6.7   -8.0   -8.3   +0.6   (-12.4)
+//    4493 +25.7  +40.4   +4.3   -7.7  -11.6   +0.2   (-14.7)
+//    4954  +0.7  +20.4   -0.2   -7.1  -12.8   +0.5   (-18.6)
+// - eta flipped again, from -9..-19 to roughly 0..+8 N*m (mostly positive):
+//   the shorter, cited burn moves the model's own MBT spark closer to the
+//   measured ECU spark, so eta_spark at the ECU schedule rises from
+//   0.857-0.916 to 0.904-0.954 - the faster-burn citation used to derive
+//   burn_duration_deg is now the SAME citation that removes most of the
+//   spark-retard penalty this table used to show (the "(MIT 2.61 lec. 9:
+//   10-90 % ~20 deg vs the model's 29.7)" gap the prior follow-up's comment
+//   flagged is now closed by construction: the model's own 10-90 % is 20 deg
+//   too). This is a frozen-literature-driven change, not a fit - S1/S2 were
+//   not looked at before burn_duration_deg/ignition_delay_deg were chosen
+//   (D1).
+// - 3000-4500: trapped AIR is essentially unchanged (+40..+49 N*m, VE
+//   gen/M-B ~1.15-1.20, same as before the burn-duration change) - the Tier 3
+//   [AS] 708.9 mm quarter-wave runner is untouched by this follow-up; still
+//   no cited A25A runner length exists (ruling 2 still forbids fitting it),
+//   so S1 stays [!mayfail] at 3000-4500. With eta no longer cancelling it,
+//   the air excess now shows through directly (2996 obs +41.1, was +24.3) -
+//   the SAME root cause as before, more visible now that the compensating
+//   defect (the too-slow Wiebe) is fixed.
+// - Friction and pumping LOWER the torque everywhere (essentially unchanged
+//   by the burn-duration change): the F4 Ecotec friction plus the model's
+//   pumping over-predict the A25A's measured motoring rows by 6.8-9.9 N*m
+//   (e.g. 2017 rpm / 22.8 kPa: -32.3 vs -24.3), same figure as before.
+// Not a code defect; the runner-length and friction-source gaps are the
+// owner's to close (vault ticket); the burn-duration/MBT gap that used to
+// mask the runner-length one is now closed per this follow-up's citation.
 TEST_CASE("C17a-MA S1: generated A25A WOT brake torque vs EPA NVFEL", "[drivetrain][validation][!mayfail]") {
     const auto car = load_gen_car();
     const SimulatedEngineDesc* d = sim_engine_of(car);
@@ -304,18 +328,33 @@ TEST_CASE("C17a-MA S1: generated A25A WOT brake torque vs EPA NVFEL", "[drivetra
     }
 }
 
-// [!mayfail] since the C17a follow-up (measured 2026-09-28 after the data
-// commit 6f10fde; PROVISIONAL, coordinator/owner to confirm): dBSFC% before
-// -> after at the asserted rows: 2017 -7.0 -> +8.4, 2535 -6.7 -> +7.9,
-// 2996 -3.7 -> +6.9, 3571 -3.0 -> +8.4, 4032 -5.6 -> +7.4, 4493 -1.8 -> +12.0,
-// 4954 +0.3 -> +16.8 (two points over 10 %). Discriminating measurement: the
-// simulated FUEL moved by <= 0.4 % at every row (it follows air through the
-// prescribed lambda; fuel_sim/fuel_meas 1.03/1.03/1.19/1.18/1.17/1.15/1.08 =
-// the S1 budget's air term), so the whole BSFC change is brake torque: before,
-// the +14..+23 N*m eta excess (constant MBT spark) cancelled the air excess
-// in the ratio; with the measured spark the eta term is -9..-19 N*m and
-// BSFC ~ (1 + air/G)/(1 + obs/T) exposes both (4954: 1.078/0.922 = 1.169).
-// Same two causes as S1 (runner air, burn/MBT rule); no parameter changed.
+// [!mayfail] KEPT by explicit owner instruction (C17a second follow-up,
+// PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055) even
+// though every asserted row now passes - see below. Re-measured 2026-09-28
+// after the burn_duration_deg/ignition_delay_deg data change (see S1's
+// comment above for the citation and derivation). dBSFC% before (measured-
+// spark follow-up) -> after (this follow-up) at the asserted rows:
+//     2017  +8.4 -> +0.66   2535  +7.9 -> +0.05   2996  +6.9 -> -0.12
+//     3571  +8.4 -> +0.87   4032  +7.4 -> -0.38    4493 +12.0 -> +3.57
+//     4954 +16.8 -> +7.40
+// All 7 asserted points are now within +-10 % (was 2 over: 4493, 4954).
+// Discriminating measurement: the simulated FUEL is essentially unchanged
+// from the prior follow-up at every row (fuel_sim/fuel_meas 1.031/1.029/
+// 1.187/1.179/1.166/1.150/1.077 - matches the prior follow-up's 1.03/1.03/
+// 1.19/1.18/1.17/1.15/1.08 to within rounding: burn duration does not move
+// the prescribed-lambda fuel path), so the WHOLE BSFC improvement is brake
+// torque: with the measured spark alone the eta term was -9..-19 N*m and
+// BSFC ~ (1 + air/G)/(1 + obs/T) exposed both terms separately; with the
+// cited burn duration eta flips back to roughly 0..+8 N*m, so obs (the S1
+// torque error) now tracks the air excess directly and the ratio's
+// denominator absorbs most of what its numerator (fuel, i.e. air) adds -
+// the same air/runner-length root cause as S1, now largely self-cancelling
+// in BSFC's ratio rather than exposed. This is an emergent consequence of
+// the frozen-literature burn-duration citation, not a parameter chosen to
+// pass S2 (D1: S1/S2 were not looked at first). Kept [!mayfail] because the
+// underlying runner-length/friction-source gaps S1 documents are unresolved
+// and the two terms' cancellation here is coincidental, not a modelling
+// guarantee.
 TEST_CASE("C17a-MA S2: generated A25A WOT BSFC vs EPA NVFEL", "[drivetrain][validation][!mayfail]") {
     // Asserted: a25a_tables.json egr_finding_task6 - EGR is not open along
     // WOT above ~2000 rpm, so the measured fuel at these rows is not
