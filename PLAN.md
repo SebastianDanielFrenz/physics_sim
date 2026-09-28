@@ -708,6 +708,36 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
 - Overnight working mode (Sebastian, 2026-09-27): decisions that would need
   an owner ruling take the recommended option and are recorded here as
   PROVISIONAL for confirmation; reviewed, CI-green commits are merged.
+  PROVISIONAL decisions taken overnight 2026-09-27/28, for owner review
+  (details and alternatives: vault PHYS-033 and PHYS-048, out/i7c_plan.md
+  section 2, out/handover_overnight.md):
+  - I7a C7 (merged): the A25A fuel map is fitted on Pareto-non-dominated rows
+    per speed line. This drops the lambda 0.63-0.73 ECU protection-enrichment
+    rows, so the model does not reproduce the real car's low-speed WOT
+    torque limitation. WOT = the per-speed-line measured torque envelope.
+    Fuel is interpolated linearly down to the motoring point. The axis is
+    extended to 6600 rpm, where the limiter is ASSUMED.
+  - I7c D1: the frozen-literature bright line - the measured description
+    and ECU schedules are inputs; measured torque, fuel, air and BSFC are
+    never inputs; no calibration.
+  - I7c D2: +-10 % is asserted only in the WOT window, 2000-5000 rpm (A25A)
+    and 1500-4500 rpm (Mazda).
+  - I7c D3: EGR is not modelled.
+  - I7c D5: fixed-step RK4 at h = 1/(960*24) s (Preview 1/(960*12) s) with a
+    fixed cycle count.
+  - I7c D6: ps::math first, fast math later with a version bump.
+  - I7c D7-D9: maps are generated at load, with an opt-in cache; a hot swap
+    is a pointer exchange at begin_tick.
+  - I7c D10: a single-cylinder generator between fixed reservoirs.
+  - I7c D11: MBT-tracking spark; the knock limit comes in C17b.
+  - I7c D12: the morning car uses measured-derived maps (M-B), labelled as
+    not validating the generator.
+  - I7c D13: friction is the measured motoring FMEP of a third engine (the
+    2013 GM 2.5 L Ecotec EPA package) if usable, else Barnes-Moss.
+  - I7c D14: Wiebe a = 5, m = 2.
+  - C17-pre: bore/stroke are labelled [A] on four agreeing open-web sources,
+    with no primary Toyota document read. Valve lift is a shape-fit, not a
+    pixel trace.
 - Throttle path: the engine never reads the pedal directly. A separate
   system passes the driver's input on to it - a mechanical linkage (pedal
   cable to the throttle bodies) or an ECU (drive-by-wire). The engine data
