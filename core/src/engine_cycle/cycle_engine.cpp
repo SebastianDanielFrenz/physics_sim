@@ -119,6 +119,26 @@ struct WgBuilder {
     }
 };
 
+// ps_audio A8: outlet positions in the SAME depth-first, branches-in-order
+// traversal WgBuilder::add_chain uses. add_chain never allocates a new node
+// for an Outlet element itself - it converts the node already current at
+// that point (created by the preceding Pipe/ExpansionChamber/Catalyst) to
+// Kind::Open in place - and each Branch's sub-chains run to completion one
+// at a time (no interleaving), so this traversal's Outlet-encounter order is
+// exactly the ascending-node-index order the Open nodes end up in inside
+// nd.waveguide.nodes. That lets EngineCore's constructor zip this vector
+// with its own ascending-index walk of nd.waveguide.nodes without needing a
+// name-based lookup.
+void collect_outlet_positions(const std::vector<ExhaustElementDesc>& chain, std::vector<Vec3>& out) {
+    for (const ExhaustElementDesc& e : chain) {
+        if (e.type == ExhaustElementType::Outlet) {
+            out.push_back(e.position_m);
+        } else if (e.type == ExhaustElementType::Branch) {
+            for (const auto& b : e.branches) collect_outlet_positions(b, out);
+        }
+    }
+}
+
 } // namespace
 
 std::vector<real> engine_firing_phases_deg(const CycleModelDesc& desc) {
@@ -136,13 +156,14 @@ std::vector<real> engine_firing_phases_deg(const CycleModelDesc& desc) {
 }
 
 PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const GasStateDesc& ambient,
-                                              real p_plenum_init_pa, real dx_m, EngineNetworkLayout* layout) {
-    return make_engine_pipe_network_desc(desc, ambient, p_plenum_init_pa, dx_m, dx_m, layout);
+                                              real p_plenum_init_pa, real dx_m, EngineNetworkLayout* layout,
+                                              bool radiation) {
+    return make_engine_pipe_network_desc(desc, ambient, p_plenum_init_pa, dx_m, dx_m, layout, radiation);
 }
 
 PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const GasStateDesc& ambient,
                                               real p_plenum_init_pa, real dx_intake_m, real dx_exhaust_m,
-                                              EngineNetworkLayout* layout) {
+                                              EngineNetworkLayout* layout, bool radiation) {
     if (!desc.intake.has_value() || !desc.exhaust.has_value()) fail("the desc has no intake/exhaust pipe blocks");
     const drivetrain::IntakeCycleDesc& in = *desc.intake;
     const drivetrain::ExhaustCycleDesc& ex = *desc.exhaust;
@@ -172,7 +193,7 @@ PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const 
         sn.d_start_m = sn.d_end_m = desc.installation->intake.snorkel.d_m;
         sn.dx_target_m = dx_intake_m;
         sn.max_wave_speed_m_s = kIntakeMaxWaveSpeed;
-        sn.start = PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged};
+        sn.start = PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged, radiation};
         sn.end = PipeEndDesc{PipeEndDesc::Kind::Volume, lay.airbox_volume, EndCorrection::Unflanged};
         sn.initial = ambient;
         nd.pipes.push_back(sn);
@@ -255,7 +276,7 @@ PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const 
     WgBuilder wg;
     wg.wd = &nd.waveguide;
     wg.gas = exhaust_gas;
-    PipeEndDesc flange_end{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged};
+    PipeEndDesc flange_end{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged, radiation};
     if (inst) {
         const int j = wg.add_node(WgNodeDesc::Kind::Junction, "flange");
         if (wg.add_chain(desc.installation->exhaust.elements, j, 1.0, "exhaust ")) {
@@ -367,7 +388,7 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
 
     const GasStateDesc ambient{op.p_amb_pa, op.t_im_k, 0.0};
     const PipeNetworkDesc nd = make_engine_pipe_network_desc(desc, ambient, op.p_im_pa, settings.dx_intake_m,
-                                                             settings.dx_exhaust_m, &layout_);
+                                                             settings.dx_exhaust_m, &layout_, settings.radiation);
     net_ = std::make_unique<PipeNetwork>(nd, h_);
     cda_max_ = std::min(layout_.throttle_cd_area_geom_m2, net_->orifice_max_cd_area(layout_.throttle_orifice));
     // Feed-forward start: VE 0.9 [A] at the target pressure through a steady orifice.
@@ -386,10 +407,13 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
     }
     net_->set_orifice_cd_area(layout_.throttle_orifice, cda_);
 
-    // A7: radiating ends (FV ends open to ambient, then waveguide Open nodes).
+    // A7/A8: radiating ends (FV ends open to ambient, then waveguide Open
+    // nodes) plus (A8) each one's vehicle-frame position from the
+    // installation, where one exists.
     const auto is_intake_volume = [&](const PipeEndDesc& e) {
         return e.kind == PipeEndDesc::Kind::Volume && (e.index == layout_.airbox_volume || e.index == layout_.plenum_volume);
     };
+    const bool inst = desc.installation.has_value();
     for (std::size_t p = 0; p < nd.pipes.size(); ++p) {
         const PipeDesc& pd = nd.pipes[p];
         for (int side = 0; side < 2; ++side) {
@@ -402,9 +426,21 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
             r.at_start = side == 0;
             r.area_m2 = area_of(side == 0 ? pd.d_start_m : pd.d_end_m);
             r.intake = is_intake_volume(side == 0 ? pd.end : pd.start);
+            if (r.intake) {
+                if (inst) r.position_m = desc.installation->intake.inlet_position_m;
+            } else if (inst && !desc.installation->exhaust.elements.empty() &&
+                       desc.installation->exhaust.elements.front().type == ExhaustElementType::Outlet) {
+                // The degenerate "just an outlet at the flange" installation
+                // (WgBuilder::add_chain returned false: an Outlet with
+                // nothing - no pipe/chamber/catalyst - ahead of it).
+                r.position_m = desc.installation->exhaust.elements.front().position_m;
+            }
             rad_.push_back(r);
         }
     }
+    std::vector<Vec3> outlet_positions;
+    if (inst) collect_outlet_positions(desc.installation->exhaust.elements, outlet_positions);
+    std::size_t next_outlet = 0;
     for (std::size_t n = 0; n < nd.waveguide.nodes.size(); ++n) {
         const WgNodeDesc& wn = nd.waveguide.nodes[n];
         if (wn.kind != WgNodeDesc::Kind::Open) continue;
@@ -412,6 +448,18 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
         r.kind = RadiatingEnd::Kind::WaveguideOpen;
         r.name = wn.name;
         r.index = static_cast<int>(n);
+        // ps_audio A8: the outlet's physical area, for the flow-noise
+        // layer's velocity estimate (Voice::flow_noise_control_point) -
+        // WgBuilder::add_chain never allocates a new node for an Outlet
+        // element, it converts the node its LAST segment already ends at
+        // (node_b) in place, so that segment's diameter is this outlet's own.
+        for (const WgSegmentDesc& seg : nd.waveguide.segments) {
+            if (seg.node_b == static_cast<int>(n)) {
+                r.area_m2 = area_of(seg.diameter_m);
+                break;
+            }
+        }
+        if (next_outlet < outlet_positions.size()) r.position_m = outlet_positions[next_outlet++];
         rad_.push_back(r);
     }
 }

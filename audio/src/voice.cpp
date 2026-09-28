@@ -1,6 +1,10 @@
 // ps_audio/voice.cpp - see voice.h.
 #include "ps_audio/voice.h"
 
+#include "ps/engine_cycle/combustion_variation.h"
+#include "ps/math/transcendental.h"
+
+#include <cmath>
 #include <stdexcept>
 
 namespace ps_audio {
@@ -12,6 +16,7 @@ namespace {
 constexpr real kPi = 3.14159265358979323846264338327950288;
 constexpr real kRadToDeg = 180.0 / kPi;
 constexpr real kDegToRad = kPi / 180.0;
+constexpr real kTwoPi = 2.0 * kPi;
 
 StabilityProbeResult resolve_substeps(const CycleModelDesc& desc, real lhv, real afr, const VoiceSettings& s) {
     if (s.substeps == 1 || s.substeps == 2) {
@@ -52,6 +57,69 @@ Voice::Voice(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, const Voice
         throw std::invalid_argument("Voice: pause_fade_s and crank_tau_s must be > 0, crank_max_rel >= 0");
     ctl_.p_intake_pa = s_.engine.initial_p_intake_pa;
     ctl_.start_of_burn_deg_atdc = engine_.mbt_start_of_burn_deg();
+    // ps_audio A8: one independent white-noise stream per source, seeded
+    // from the same LiveEngineSettings::seed combustion_variation.h uses -
+    // deterministic, and a different seed (or source index) gives an
+    // independent stream (SplitMix64's own avalanche, no shared state).
+    for (int s = 0; s < engine_.source_count(); ++s) {
+        flow_noise_[static_cast<std::size_t>(s)].rng =
+            s_.engine.seed ^ (0xa24baed4963ee407ull * (static_cast<std::uint64_t>(s) + 1u));
+    }
+}
+
+void Voice::flow_noise_control_point() {
+    const FlowNoiseSettings& fs = s_.flow_noise;
+    const int ns = engine_.source_count();
+    for (int s = 0; s < ns; ++s) {
+        FlowNoiseState& fn = flow_noise_[static_cast<std::size_t>(s)];
+        const real area = engine_.source(s).area_m2;
+        if (!(area > 0.0)) {
+            fn.gain_pa = 0.0;
+            continue;
+        }
+        const real q = engine_.core().radiating_outflow(s);
+        const real u = std::fabs(q) / area;
+        fn.gain_pa = fs.level_coeff_pa * ps::math::pow(u, fs.level_exponent);
+        if (!(fn.gain_pa > 0.0)) {
+            fn.gain_pa = 0.0;
+            continue;
+        }
+        const real d = std::sqrt(4.0 * area / kPi);  // hydraulic diameter of a circular outlet
+        real f_centre = d > 0.0 ? fs.strouhal * u / d : fs.min_hz;
+        if (f_centre < fs.min_hz) f_centre = fs.min_hz;
+        if (f_centre > fs.max_hz) f_centre = fs.max_hz;
+        const real nyq_guard = 0.45 / h_;  // stay well clear of Nyquist
+        real f_lo = 0.5 * f_centre;
+        real f_hi = 2.0 * f_centre;
+        if (f_lo < fs.min_hz) f_lo = fs.min_hz;
+        if (f_hi > fs.max_hz) f_hi = fs.max_hz;
+        if (f_hi > nyq_guard) f_hi = nyq_guard;
+        if (f_hi <= f_lo) f_hi = f_lo * 1.5;
+        fn.a_hp = ps::math::exp(-kTwoPi * f_lo * h_);
+        fn.a_lp = ps::math::exp(-kTwoPi * f_hi * h_);
+    }
+}
+
+real Voice::flow_noise_sample(int s) {
+    FlowNoiseState& fn = flow_noise_[static_cast<std::size_t>(s)];
+    if (!(fn.gain_pa > 0.0)) return 0.0;
+    const std::uint64_t bits = ps::engine_cycle::splitmix64_next(fn.rng);
+    const real x = 2.0 * ps::engine_cycle::unit_uniform(bits) - 1.0;
+    // One-pole highpass (leaky differentiator) then one-pole lowpass: a
+    // bandpass whose pole magnitudes are always in (0, 1) by construction
+    // (a plain exponential of a non-negative rate), so it stays stable
+    // across a control point's abrupt coefficient update - unlike a
+    // resonant (high-Q) biquad, which a fast Strouhal-frequency swing could
+    // ring or overshoot.
+    const real hp = fn.a_hp * (fn.hp_y1 + x - fn.hp_x1);
+    fn.hp_x1 = x;
+    fn.hp_y1 = hp;
+    const real lp = fn.a_lp * fn.lp_y1 + (1.0 - fn.a_lp) * hp;
+    fn.lp_y1 = lp;
+    real pmod = 1.0 + s_.flow_noise.pressure_mod * (frame_[static_cast<std::size_t>(s)] / s_.flow_noise.pressure_ref_pa);
+    if (pmod < 0.0) pmod = 0.0;
+    if (pmod > 2.0) pmod = 2.0;
+    return fn.gain_pa * pmod * lp;
 }
 
 void Voice::control_point() {
@@ -117,8 +185,10 @@ void Voice::render(float* out, int frames) {
     const int ns = engine_.source_count();
     const std::uint64_t ci = static_cast<std::uint64_t>(s_.control_interval);
     const real fade_step = h_ / s_.pause_fade_s;
+    const bool flow_noise_on = s_.flow_noise.enabled && s_.flow_noise.level_coeff_pa > 0.0;
     for (int f = 0; f < frames; ++f) {
-        if (n_ % ci == 0) control_point();
+        const bool cp = n_ % ci == 0;
+        if (cp) control_point();
         float* o = out + static_cast<std::size_t>(f) * static_cast<std::size_t>(ns);
         if (frozen_) {
             for (int s = 0; s < ns; ++s) o[s] = 0.0f;
@@ -145,6 +215,7 @@ void Voice::render(float* out, int frames) {
         c.omega_rad_s = omega;
         c.omega_input_rad_s = ctl_.omega_rad_s > 0.0 ? ctl_.omega_rad_s : 0.0;
         engine_.step_sample(c, frame_.data());
+        if (flow_noise_on && cp) flow_noise_control_point();
 
         if (pausing_) {
             gain_ -= fade_step;
@@ -156,7 +227,11 @@ void Voice::render(float* out, int frames) {
             gain_ += fade_step;
             if (gain_ > 1.0) gain_ = 1.0;
         }
-        for (int s = 0; s < ns; ++s) o[s] = static_cast<float>(gain_ * frame_[static_cast<std::size_t>(s)]);
+        for (int s = 0; s < ns; ++s) {
+            real v = frame_[static_cast<std::size_t>(s)];
+            if (flow_noise_on) v += flow_noise_sample(s);
+            o[s] = static_cast<float>(gain_ * v);
+        }
         ++n_;
     }
 }

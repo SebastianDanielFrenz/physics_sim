@@ -124,6 +124,19 @@ struct PipeEndDesc {
     // (Waveguide, ps_audio A3); unused otherwise
     int index = -1;
     EndCorrection end_correction = EndCorrection::None;  // rejected on a Closed end
+    // ps_audio A8: an Open end's radiation loss (false = current behaviour,
+    // an ideal pressure-release boundary with no resistive loss - F3). When
+    // true, reuses WaveguideNetwork's Open-node formulation (waveguide_network.h,
+    // H. Levine, J. Schwinger, Phys. Rev. 73, 383 (1948)): a build-time one-pole
+    // lowpass on the boundary cell's own outgoing small-signal wave p+ = (p' +
+    // rho_amb*a_amb*u_out)/2 models the |R| ~ 1 - K(ka)^2 reflection magnitude;
+    // the mismatch (p+ - filtered p+) shifts the reservoir pressure the
+    // nonlinear characteristic solve targets - a linearised correction on top
+    // of the exact mean-flow solve (out/audio_a8_progress.md). Rejected on a
+    // non-Open end. Never set by the generator path (CycleEngine): the maps
+    // and their content hash are unaffected (fold_state_hash below only folds
+    // the radiation filter state when at least one end uses it).
+    bool radiation = false;
 };
 
 enum class WallFriction : std::uint8_t { None, LaminarBlasius };
@@ -263,6 +276,16 @@ public:
     [[nodiscard]] PipeCellState cell(int pipe, int i) const;
     // Overwrite one cell (initial conditions, tests). rho from p/(R T).
     void set_cell(int pipe, int i, real p_pa, real t_k, real u_m_s, real x_b);
+    // ps_audio A8: the one-pole radiation filter's pole for one end (end = 0
+    // start, 1 = end), built once at construction from PipeEndDesc::radiation
+    // - 0 when that end has radiation disabled. Mirrors
+    // WaveguideNetwork::radiation_pole(node); a white-box test hook (the
+    // fitted pole itself, not a simulation result), used to cross-check the
+    // construction-time formula directly against the SAME closed form W2
+    // (test_waveguide_network.cpp) checks for the waveguide's own Open node.
+    [[nodiscard]] real radiation_pole(int pipe, int end) const {
+        return end == 0 ? pipes_[pipe].rad_p_start : pipes_[pipe].rad_p_end;
+    }
 
     // --- Volumes and ports -------------------------------------------------
     [[nodiscard]] int volume_count() const { return static_cast<int>(vols_.size()); }
@@ -319,6 +342,8 @@ private:
         real l_eff = 0.0;
         real ext_start = 0.0;
         real ext_end = 0.0;
+        real rad_p_start = 0.0;  // radiation one-pole pole (0 = no radiation), ps_audio A8
+        real rad_p_end = 0.0;
         PipeEndDesc start;
         PipeEndDesc end;
         PipeWallDesc wall;
@@ -374,6 +399,13 @@ private:
     real wg_mean_alpha_ = 0.0;  // h / waveguide_mean_time_s
     real wg_p_ref_ = 0.0;
     std::uint64_t wg_face_fallbacks_ = 0;
+    // ps_audio A8: Open-end radiation filter state (one entry per pipe,
+    // start/end; 0 and unused unless that end's PipeEndDesc::radiation is
+    // true). has_radiation_ gates fold_state_hash so a network with no
+    // radiating end hashes exactly as before this feature existed.
+    std::vector<real> rad_s_start_;
+    std::vector<real> rad_s_end_;
+    bool has_radiation_ = false;
 
     // Cells (structure of arrays): conserved densities per unit volume.
     std::vector<real> r_, ru_, e_, rx_;

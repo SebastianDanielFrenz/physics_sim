@@ -17,8 +17,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace ps;
@@ -79,6 +81,17 @@ double sound_speed(const PipeNetwork& net, double t, double x_b) {
     const double cv = net.gas().fresh.cv(t) * (1.0 - x_b) + net.gas().burned.cv(t) * x_b;
     const double r = net.gas().r_mix(x_b);
     return std::sqrt((cv + r) / cv * r * t);
+}
+
+// Hann window applied in place (ps_audio A8 V-radiation, mirrors
+// test_waveguide_network.cpp's own hann()/mode-decay-rate technique).
+std::vector<double> hann(std::vector<double> s) {
+    const std::size_t n = s.size();
+    for (std::size_t k = 0; k < n; ++k) {
+        const double w = 0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(k) / static_cast<double>(n - 1));
+        s[k] *= w;
+    }
+    return s;
 }
 
 // Hann-windowed DFT magnitude of s (sample period dt) at frequency f.
@@ -472,6 +485,190 @@ TEST_CASE("P4 pipe resonances vs analytic quarter-wave, half-wave and Helmholtz 
         CHECK(rel(f, f_ex) < 0.02);
         CHECK(rel(f, f_lumped) < 0.02);
     }
+}
+
+TEST_CASE("V-radiation W1: the FV one-pole radiation filter's pole matches the Levine-Schwinger closed form",
+          "[drivetrain][cycle][pipe][audio]") {
+    // White-box: pipe_network.cpp builds each radiating end's pole (at
+    // construction, `rad_p_start`/`rad_p_end`) from
+    //   beta = (1/h) * 0.5*d / a_amb, b = 2*K*beta^2,
+    //   pole = ((2b+1) - sqrt(4b+1)) / (2b),
+    // K = 1 flanged, 0.5 unflanged - the SAME formula
+    // test_waveguide_network.cpp's W2 validates end to end (a simulated
+    // pulse-echo measurement matching |R| = 1 - K(ka)^2, H. Levine, J.
+    // Schwinger, Phys. Rev. 73, 383 (1948)) for WaveguideNetwork's own Open
+    // node. This test re-derives the SAME closed form independently here and
+    // cross-checks PipeNetwork::radiation_pole() against it directly, for
+    // several diameter/end-correction/timestep combinations - catching a
+    // wrong end used (d_start vs d_end), a flanged/unflanged K mixup, the
+    // wrong ambient sound speed, an h/fs inversion, or the flag not gating
+    // construction at all (pole 0 when radiation is requested). A full
+    // simulated pulse-echo re-derivation of |R| itself (W2's own approach)
+    // is not attempted on the FV network: V-radiation W2 below measures the
+    // qualitative simulated EFFECT instead, because the explicit
+    // conservative FV scheme has real, non-negligible truncation-driven
+    // numerical dissipation at audio-grade dx (test_pipe_waveguide.cpp's own
+    // "[.][diag] FV numerical dissipation" case: a comparable pulse loses
+    // 8-21 % to pure scheme dissipation over 1-3 ms) that swamps the tiny
+    // (order 1 %, since |R| = 1 - K(ka)^2 with ka << 1) per-bounce physical
+    // loss this fix models - a tight quantitative match is not achievable
+    // from FV simulation alone at these resolutions.
+    struct Case {
+        double h, d, a, length;
+        EndCorrection ec;
+    };
+    const std::vector<Case> cases = {
+        {kHFull, 0.05, 343.0, 0.40, EndCorrection::Unflanged},
+        {kHFull, 0.05, 343.0, 0.40, EndCorrection::Flanged},
+        {kHFull, 0.08, 343.0, 0.60, EndCorrection::Unflanged},
+        {kHFull / 2.0, 0.036, 400.0, 0.60, EndCorrection::Flanged},
+    };
+    for (const Case& c : cases) {
+        PipeDesc p = make_pipe("rad", c.length, c.d, c.d, c.d < 0.06 ? 0.017 : 0.032,
+                                closed_end(), PipeEndDesc{PipeEndDesc::Kind::Open, -1, c.ec, true}, 500.0);
+        p.wall.friction = WallFriction::None;
+        PipeNetworkDesc d;
+        d.ambient = GasStateDesc{101325.0, 293.15, 0.0};
+        d.pipes.push_back(p);
+        PipeNetwork net(d, c.h);
+        const double a = sound_speed(net, 293.15, 0.0);  // the network's OWN ambient sound speed
+        const double fs = 1.0 / c.h;
+        const double kk = (c.ec == EndCorrection::Flanged) ? 1.0 : 0.5;
+        const double beta = fs * 0.5 * c.d / a;
+        const double b = 2.0 * kk * beta * beta;
+        const double pole_ref = ((2.0 * b + 1.0) - std::sqrt(4.0 * b + 1.0)) / (2.0 * b);
+        const double pole = net.radiation_pole(0, 1);
+        std::printf("V-radiation W1: d %.3f %s h %.3e: pole %.9f vs ref %.9f (rel %.2e)\n", c.d,
+                    c.ec == EndCorrection::Flanged ? "flanged" : "unflanged", c.h, pole, pole_ref,
+                    rel(pole, pole_ref));
+        CHECK(rel(pole, pole_ref) < 1e-9);
+        CHECK(pole > 0.0);
+        CHECK(pole < 1.0);  // a stable one-pole lowpass
+    }
+    // A non-radiating end's pole stays exactly 0 (gating check).
+    {
+        PipeDesc p = make_pipe("norad", 0.40, 0.05, 0.05, 0.017, closed_end(), open_end(EndCorrection::Unflanged), 500.0);
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        PipeNetwork net(d, kHFull);
+        CHECK(net.radiation_pole(0, 1) == 0.0);
+    }
+}
+
+TEST_CASE("V-radiation W1 sabotage diag: flanged/unflanged K swapped moves the pole off the reference",
+          "[.][diag][audio]") {
+    // Sabotage (by hand, matching pipe_network.cpp's own K selection): if
+    // `kk = (e.end_correction == EndCorrection::Flanged) ? 1.0 : 0.5` were
+    // swapped (0.5 flanged / 1.0 unflanged), the two cases below would each
+    // compare against the OTHER's reference and fail W1's 1e-9 bound.
+    const double h = kHFull, d = 0.05, a = 343.0;
+    const double fs = 1.0 / h;
+    for (int fl = 0; fl < 2; ++fl) {
+        const double kk_correct = fl ? 1.0 : 0.5;
+        const double kk_swapped = fl ? 0.5 : 1.0;  // sabotage
+        const double beta = fs * 0.5 * d / a;
+        const double b_correct = 2.0 * kk_correct * beta * beta;
+        const double b_swapped = 2.0 * kk_swapped * beta * beta;
+        const double pole_correct = ((2.0 * b_correct + 1.0) - std::sqrt(4.0 * b_correct + 1.0)) / (2.0 * b_correct);
+        const double pole_swapped = ((2.0 * b_swapped + 1.0) - std::sqrt(4.0 * b_swapped + 1.0)) / (2.0 * b_swapped);
+        std::printf("V-radiation W1 sabotage (%s): pole %.9f vs correct-K reference %.9f (rel %.4f, want > 1e-9)\n",
+                    fl ? "flanged" : "unflanged", pole_swapped, pole_correct, rel(pole_swapped, pole_correct));
+    }
+}
+
+TEST_CASE("V-radiation W2: turning radiation on measurably increases a closed-open resonator's simulated decay",
+          "[drivetrain][cycle][pipe][audio][long]") {
+    // Black-box, simulated: a closed-open quarter-wave resonator (P4's own
+    // "closed-open quarter wave" geometry) with wall friction and heat
+    // transfer both disabled (the ONLY remaining loss mechanisms are FV
+    // numerical dissipation, present in BOTH cases below, and - only with
+    // radiation on - the F3 fix's physical open-end loss), excited once with
+    // a small Gaussian pulse and left to ring down. Decay rate measured the
+    // way test_waveguide_network.cpp's W3 measures Kirchhoff wall-loss mode
+    // decay: two Hann-windowed DFT magnitudes at the resonance frequency,
+    // 1.5 s apart, decay_rate = -ln(ratio)/gap_time.
+    //
+    // This does NOT attempt a tight quantitative match to the analytic
+    // Levine-Schwinger decay rate alpha = -c*ln|R| / (2*L_eff) (see W1's own
+    // comment on why the FV scheme's numerical dissipation, accumulated over
+    // the ~300 round trips a 1.5 s gap spans at this resonator's ~200 Hz,
+    // confounds an absolute match - measured here: numerical-only decay
+    // ~2.7 x the tiny physical rate alpha itself already predicts). Instead:
+    // radiation must strictly increase the decay rate (catches a missing or
+    // wrong-sign wiring bug at the reservoir_face() call site - the ONE
+    // thing W1's formula-level check above cannot see, since that pole could
+    // be computed correctly and simply never applied), and the EXCESS decay
+    // it adds must be within an order of magnitude of the analytic
+    // radiation-only rate (catches a wiring bug of the wrong SCALE, e.g. a
+    // missing 0.5 factor or a units mixup) while allowing generously for the
+    // numerical-dissipation confound W1 documents.
+    auto make_net = [](bool radiation) {
+        const double length = 0.40, dia = 0.05;
+        PipeDesc p = make_pipe(
+            "qw", length, dia, dia, 0.017, closed_end(),
+            radiation ? PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged, true} : open_end(EndCorrection::Unflanged),
+            500.0);
+        p.wall.friction = WallFriction::None;
+        p.wall.heat_transfer = false;
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        auto net = std::make_unique<PipeNetwork>(d, kHFull);
+        gaussian_pulse(*net, 0, 101325.0, 293.15, 0.0, 0.01, 0.05, 0.04);
+        return net;
+    };
+    auto measure = [](PipeNetwork& net, double f_lo, double f_hi) {
+        const int stride = 4;
+        const double dt = stride * net.h();
+        const int n_win = 2304;  // 0.2 s
+        const int gap = 17280;   // 1.5 s
+        std::vector<double> s;
+        s.reserve(static_cast<std::size_t>(gap + n_win));
+        const int steps = (gap + n_win) * stride;
+        for (int k = 0; k < steps; ++k) {
+            net.step();
+            if (k % stride == 0) s.push_back(net.cell(0, 0).p);
+        }
+        const double f = peak_frequency(std::vector<double>(s.begin(), s.begin() + n_win), dt, f_lo, f_hi);
+        double mean0 = 0.0;
+        for (int i = 0; i < n_win; ++i) mean0 += s[static_cast<std::size_t>(i)];
+        mean0 /= n_win;
+        std::vector<double> w0(s.begin(), s.begin() + n_win), w1(s.begin() + gap, s.begin() + gap + n_win);
+        for (double& v : w0) v -= mean0;
+        for (double& v : w1) v -= mean0;
+        w0 = hann(w0);
+        w1 = hann(w1);
+        const double ratio = dft_mag(w1, dt, f) / dft_mag(w0, dt, f);
+        return std::pair<double, double>{f, -std::log(ratio) / (gap * dt)};
+    };
+
+    const double length = 0.40, dia = 0.05, radius = 0.5 * dia;
+    const double c = 343.2;  // 293.15 K air, matches sound_speed(net, 293.15, 0.0) to fp noise
+    const double l_eff_est = length + kUnflangedEndCorrection * radius;
+    const double f_est = c / (4.0 * l_eff_est);
+
+    auto net_off = make_net(false);
+    const auto [f_off, rate_off] = measure(*net_off, 0.8 * f_est, 1.2 * f_est);
+    auto net_on = make_net(true);
+    const auto [f_on, rate_on] = measure(*net_on, 0.8 * f_est, 1.2 * f_est);
+
+    // Analytic radiation-only decay rate at the ON case's own measured
+    // frequency/ka (the fix's radiation reactance shifts the resonance a
+    // little beyond the plain end-correction estimate - using the MEASURED
+    // f, not f_est, keeps ka and l_eff self-consistent).
+    const double l_eff_on = c / (4.0 * f_on);
+    const double ka_on = 2.0 * kPi * f_on * radius / c;
+    const double r_ref = 1.0 - 0.5 * ka_on * ka_on;
+    const double rate_ex = -c * std::log(r_ref) / (2.0 * l_eff_on);
+    const double excess = rate_on - rate_off;
+    std::printf(
+        "V-radiation W2: off f %.3f Hz decay %.4f 1/s; on f %.3f Hz decay %.4f 1/s; excess %.4f 1/s vs analytic "
+        "%.4f 1/s (ratio %.2fx)\n",
+        f_off, rate_off, f_on, rate_on, excess, rate_ex, excess / rate_ex);
+    CHECK(rate_on > rate_off);            // radiation strictly increases dissipation (sign)
+    CHECK(excess > 0.1 * rate_ex);        // not negligible relative to the analytic loss (missing/too-weak wiring)
+    CHECK(excess < 10.0 * rate_ex);       // not wildly too strong either (wrong-scale wiring)
+    CHECK(std::isfinite(rate_on));
+    CHECK(std::isfinite(rate_off));
 }
 
 TEST_CASE("P5 pipe port hand-off with a prescribed mass-flow/enthalpy source", "[drivetrain][cycle][pipe]") {

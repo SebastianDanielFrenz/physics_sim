@@ -107,9 +107,19 @@ struct EngineNetworkLayout {
 // exhaust_backflow_temperature_k and x_b = 1. The throttle orifice is built
 // with a tiny Cd*A (the caller sets its own). Throws std::invalid_argument
 // on a desc without pipe blocks or a topology it cannot map.
+// ps_audio A8: `radiation` (default false, byte-identical to before this
+// parameter existed) opts every FV Open end this builder creates (the
+// snorkel mouth; the no-installation flange fallback) into pipe_network.h's
+// PipeEndDesc::radiation loss (F3 fix, see that field's own comment). Only
+// LiveEngine's audio-path settings ever pass true; CycleEngine (the map
+// generator) always leaves it at the default, so the generator's maps and
+// content hash are byte-for-byte unaffected. A waveguide Open outlet
+// (WgBuilder::add_chain's Outlet case) already carries its own radiation
+// unconditionally since A5 - this flag only covers the two FV Open ends.
 [[nodiscard]] PipeNetworkDesc make_engine_pipe_network_desc(const drivetrain::CycleModelDesc& desc,
                                                             const GasStateDesc& ambient, real p_plenum_init_pa,
-                                                            real dx_m, EngineNetworkLayout* layout);
+                                                            real dx_m, EngineNetworkLayout* layout,
+                                                            bool radiation = false);
 
 // Firing phase of each cylinder after cylinder 1, in [0, 720) (validates the
 // order/angles; an empty order on a 4-cylinder engine means 1-3-4-2).
@@ -121,7 +131,7 @@ struct EngineNetworkLayout {
 [[nodiscard]] PipeNetworkDesc make_engine_pipe_network_desc(const drivetrain::CycleModelDesc& desc,
                                                             const GasStateDesc& ambient, real p_plenum_init_pa,
                                                             real dx_intake_m, real dx_exhaust_m,
-                                                            EngineNetworkLayout* layout);
+                                                            EngineNetworkLayout* layout, bool radiation = false);
 
 // ps_audio A7: an end of an engine's network that radiates to the outside -
 // an FV pipe end open to ambient (the snorkel mouth; the flange pipe without
@@ -134,12 +144,22 @@ struct RadiatingEnd {
     bool at_start = false;  // PipeEnd: the pipe's start end
     real area_m2 = 0.0;     // PipeEnd: geometric end area
     bool intake = false;    // on the intake side (upstream of the ports)
+    // ps_audio A8: vehicle-frame position (the installation's Outlet
+    // position_m for a WaveguideOpen end, its intake.inlet_position_m for
+    // the intake-side PipeEnd; Vec3::zero() with no installation, or for the
+    // no-installation flange-fallback PipeEnd). Audio-only, never hashed.
+    Vec3 position_m = Vec3::zero();
 };
 
 struct EngineCoreSettings {
     real dx_intake_m = 0.05;
     real dx_exhaust_m = 0.05;
     bool reservoir_ports = false;  // CycleEngineSettings::reservoir_ports
+    // ps_audio A8: see make_engine_pipe_network_desc's own `radiation`
+    // comment. Default false = CycleEngine's (the generator's) behaviour,
+    // byte-identical to before this field existed; only LiveEngine's
+    // audio-path settings builder sets it true.
+    bool radiation = false;
 };
 
 // The part of a multi-cylinder pipe engine shared by CycleEngine (the map
