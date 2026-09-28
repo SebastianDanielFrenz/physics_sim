@@ -1,0 +1,59 @@
+{
+  "format": "physics_sim.scenario/1",
+  "name": "terrain_prefetch_multi_interest",
+  "note": "terrain_multi_interest.json with the terrain prefetch ring on: the same two interest points, static pad (suppression) and dynamic balls, but max_tile_fills_per_tick 4 so the initial load drains over ~13 ticks and most tiles install from prefetched tickets - including the pad's tiles, whose precomputed suppression holes the background builder applies (the suppression cache-hit path). Prefetch on and off must give the same state_hash (tests/determinism/test_worker_count_hash.cpp); the hash differs from terrain_multi_interest.json's because fewer fills per tick change install timing.",
+  "duration_s": 3.0,
+  "tick_rate_hz": 240.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "bodies": [
+    {
+      "name": "pad",
+      "motion": "static",
+      "shape": {"type": "box", "half_extents": [3.0, 3.0, 0.1]},
+      "position": [0, 0, 0],
+      "friction": 0.8
+    },
+    {
+      "name": "ball_across_pad",
+      "motion": "dynamic",
+      "mass": 5.0,
+      "shape": {"type": "sphere", "radius": 0.3},
+      "position": [-6.5, 0.5, 0.6],
+      "linear_velocity": [3.0, 0.0, 0.0],
+      "allow_sleep": false
+    },
+    {
+      "name": "ball_near_origin",
+      "motion": "dynamic",
+      "mass": 2.0,
+      "shape": {"type": "sphere", "radius": 0.3},
+      "position": [7.0, -7.0, 3.0],
+      "linear_velocity": [0.0, 1.5, 0.0],
+      "allow_sleep": false
+    },
+    {
+      "name": "ball_second_area",
+      "motion": "dynamic",
+      "mass": 2.0,
+      "shape": {"type": "sphere", "radius": 0.3},
+      "position": [80.0, 40.0, 12.0],
+      "linear_velocity": [-1.0, 0.5, 0.0],
+      "allow_sleep": false
+    }
+  ],
+  "joints": [],
+  "terrain": {
+    "spec_path": "terrain_spec_small.json",
+    "samples_per_tile": 8,
+    "max_resident_tiles": 64,
+    "max_tile_fills_per_tick": 4,
+    "prefetch_margin_tiles": 1,
+    "prefetch_max_tiles": 16,
+    "interest_points": [
+      { "id": 1, "world_xy": [0.0, 0.0], "radius_m": 24.0 },
+      { "id": 2, "world_xy": [80.0, 40.0], "radius_m": 24.0 }
+    ]
+  },
+  "telemetry_csv": "terrain_prefetch_multi_interest.csv"
+}

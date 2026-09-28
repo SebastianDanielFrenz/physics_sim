@@ -627,6 +627,92 @@ TEST_CASE("State hash with two terrain interest points and suppression is identi
     }
 }
 
+// Terrain prefetch ring (data/scenarios/terrain_prefetch_*.json): the ring
+// only moves WHERE a tile's content is built (a background lane, swapped in
+// at install) - never which key lands in which pool slot at which tick - so
+// prefetch on must hash exactly like prefetch off. The off reference is the
+// same scenario with both prefetch fields zeroed (TileManager's plain path),
+// at 1 worker; on runs at 1, 4 and 24 workers. The static case is what
+// ps_run (and tools/ci.ps1's Windows-vs-Linux hash compare) runs; the driven
+// case moves terrain_prefetch_drive.json's interest point 2 across tile rows
+// in C++ (a scenario's interest points are static) and compares every 60
+// ticks as well as at the end. Each on-run must actually install tiles from
+// the lane, or the comparison proves nothing.
+namespace {
+struct PrefetchRun {
+    std::vector<std::uint64_t> hashes; // every 60 ticks, then the final one
+    ps::terrain::PrefetchStats stats;
+};
+
+PrefetchRun run_prefetch_scenario(const char* file, int workers, bool prefetch, bool drive) {
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/" + file);
+    sc.world_config.job_workers = workers;
+    REQUIRE(sc.terrain.has_value());
+    REQUIRE(sc.terrain->config.prefetch_margin_tiles > 0);
+    REQUIRE(sc.terrain->config.prefetch_max_tiles > 0);
+    if (!prefetch) {
+        sc.terrain->config.prefetch_margin_tiles = 0;
+        sc.terrain->config.prefetch_max_tiles = 0;
+    }
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    Vec3 start;
+    real radius = 0;
+    for (const auto& ip : sc.terrain->interest_points) {
+        if (ip.id == 2) {
+            start = ip.world_xy;
+            radius = ip.radius_m;
+        }
+    }
+    REQUIRE(radius > 0);
+    PrefetchRun run;
+    for (int i = 0; i < ticks; ++i) {
+        if (drive) {
+            // 0.35 m/tick east and 0.12 m/tick north (84 m/s): a tile row or
+            // column (16 m) every ~46 / ~133 ticks, the prefetch margin
+            // ahead of it.
+            const real t = static_cast<real>(i);
+            world.set_terrain_interest_point(2, Vec3{start.x + 0.35 * t, start.y + 0.12 * t, 0.0}, radius);
+        }
+        world.step();
+        if ((i + 1) % 60 == 0) run.hashes.push_back(world.state_hash());
+    }
+    run.hashes.push_back(world.state_hash());
+    run.stats = world.terrain_prefetch_stats();
+    return run;
+}
+
+void require_prefetch_matches_off(const char* file, bool drive) {
+    const PrefetchRun reference = run_prefetch_scenario(file, 1, false, drive);
+    CHECK(reference.stats.installed == 0);
+    CHECK(reference.stats.enqueued == 0);
+    for (int workers : {1, 4, 24}) {
+        const PrefetchRun on = run_prefetch_scenario(file, workers, true, drive);
+        INFO(file << " drive=" << drive << " workers=" << workers << " installed=" << on.stats.installed
+                  << " late_sync=" << on.stats.late_sync << " late_wait=" << on.stats.late_wait
+                  << " cancelled=" << on.stats.cancelled << " skipped_suppression=" << on.stats.skipped_suppression);
+        REQUIRE(on.stats.installed > 0);
+        REQUIRE(on.hashes.size() == reference.hashes.size());
+        for (std::size_t k = 0; k < on.hashes.size(); ++k) {
+            INFO("checkpoint " << k << " hash=0x" << std::hex << on.hashes[k] << " reference=0x" << reference.hashes[k]);
+            REQUIRE(on.hashes[k] == reference.hashes[k]);
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("Terrain prefetch on hashes like prefetch off at 1, 4 and 24 workers (static scenarios)",
+          "[determinism][terrain][prefetch][heavy][world][io]") {
+    require_prefetch_matches_off("terrain_prefetch_drive.json", false);
+    require_prefetch_matches_off("terrain_prefetch_multi_interest.json", false);
+}
+
+TEST_CASE("Terrain prefetch on hashes like prefetch off at 1, 4 and 24 workers (interest point driven across tile rows)",
+          "[determinism][terrain][prefetch][heavy][world][io]") {
+    require_prefetch_matches_off("terrain_prefetch_drive.json", true);
+}
+
 // data/scenarios/vehicle_tractor_i4.json (PHYS-033 P4 I4 C15): a single
 // tractor exercising every tractor-only control channel in one 10 s run -
 // hand_throttle, pto, three incremental shift_up_count steps (N->1->2->3),
