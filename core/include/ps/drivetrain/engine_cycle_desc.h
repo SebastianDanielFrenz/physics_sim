@@ -16,10 +16,13 @@
 
 #pragma once
 
+#include "ps/drivetrain/installation_desc.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h"
 
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace ps::drivetrain {
@@ -77,6 +80,85 @@ struct FrictionModelDesc {
     real a_pa = 0.0;  // constant term
     real b_pa = 0.0;  // per krpm (PolynomialRpm) or per m/s (PolynomialPistonSpeed)
     real c_pa = 0.0;  // per krpm^2 or per (m/s)^2
+};
+
+// ---- ps_audio A4 (out/audio_plan.md section 3.1): the cycle block's
+// optional `intake`/`exhaust` pipe description, engine-owned per Q1's split
+// (the throttle-body inlet through the first flange after the last
+// engine-mounted part). Pure data - the mapping to a real PipeNetworkDesc
+// (ps/engine_cycle/pipe_network.h) is A5's job; nothing reads these structs
+// yet. See ps/io/vehicle_io.cpp's read_intake_block/read_exhaust_block for
+// the loader's rules (both optional as a PAIR, cylinder-coverage checks,
+// runner_*/back_pressure_pa_vs_exh_kg_s rejected together with these).
+
+// One intake runner (or a tapered set shared by several cylinders).
+// `cylinders` is empty for the JSON shorthand "cylinders": "all" (every
+// engine cylinder shares this one runner description); otherwise it lists
+// the 1-based cylinder numbers this runner serves, and every runner
+// together must cover each cylinder exactly once (mirrors CycleModelDesc's
+// own `banks` rule).
+struct RunnerPipeDesc {
+    std::vector<int> cylinders; // empty = "all"
+    real length_m = 0.0;
+    real d_in_m = 0.0;
+    real d_out_m = 0.0;
+};
+
+struct IntakeCycleDesc {
+    real throttle_bore_m = 0.0;
+    real plenum_m3 = 0.0;
+    std::vector<RunnerPipeDesc> runners;
+    // Descriptive tag for the split interface point (plan section 3.3);
+    // "throttle_inlet" in every example so far. Free text, not an enum -
+    // only required non-empty.
+    std::string interface;
+    std::string source; // PLAN.md section 8: citation tier for every length/diameter above
+};
+
+// One exhaust primary (straight, untapered - unlike an intake runner).
+// `cylinders` follows RunnerPipeDesc's own "all"/coverage convention.
+struct PrimaryPipeDesc {
+    std::vector<int> cylinders; // empty = "all"
+    real length_m = 0.0;
+    real d_m = 0.0;
+};
+
+// One entry of a merge's "from" list: either a cylinder's own primary
+// (is_cylinder true, `cylinder` the 1-based number) or a NAMED reference to
+// an earlier merge's `into` (is_cylinder false, `name`).
+struct MergeSourceRef {
+    bool is_cylinder = false;
+    int cylinder = 0;
+    std::string name;
+};
+
+// One junction where two or more primaries/earlier merges join into one
+// pipe named `into`, which a LATER merge (or the exhaust `interface`, for
+// the last merge in the list) refers back to.
+struct MergeCycleDesc {
+    std::vector<MergeSourceRef> from;
+    std::string into;
+    real length_m = 0.0;
+    real d_m = 0.0;
+};
+
+struct ExhaustCycleDesc {
+    std::vector<PrimaryPipeDesc> primaries;
+    std::vector<MergeCycleDesc> merges;
+    // Descriptive tag for the split interface point; must equal the LAST
+    // merge's `into` (the loader checks this) - "flange" in every example
+    // so far, or the engine's own manifold-catalyst outlet name if it
+    // carries one (plan section 3.3).
+    std::string interface;
+    std::string source; // PLAN.md section 8: citation tier for every length/diameter above
+};
+
+// ps_audio A4: the "resolution" sub-block's cell-size knobs (plan section
+// 3.1's defaults). Meaningful only together with intake/exhaust.
+struct ResolutionCycleDesc {
+    real power_dx_m = 0.05;
+    real audio_dx_exhaust_m = 0.032;
+    real audio_dx_intake_m = 0.017;
 };
 
 struct CycleModelDesc {
@@ -189,6 +271,43 @@ struct CycleModelDesc {
     // Bank geometry (the V angle between banks), degrees. Does not affect
     // firing timing. 0 for an inline/single-bank engine (the default).
     real bank_angle_deg = 0.0;
+
+    // ---- ps_audio A4 (out/audio_plan.md section 3.1/3.2/3.3): optional as
+    // a PAIR (both present or both absent) - see the structs above and
+    // ps/io/vehicle_io.cpp's read_cycle_block. Absent: today's lumped path
+    // runs unchanged, bit-identical maps/cache key (D5). Present:
+    // runner_length_m/runner_diameter_m are unused (the loader rejects the
+    // corresponding JSON keys), and default_installation_path/installation
+    // below become meaningful.
+    std::optional<IntakeCycleDesc> intake;
+    std::optional<ExhaustCycleDesc> exhaust;
+
+    // Absolute path to the engine file's OWN `default_installation` (given
+    // relative to the engine file's own directory), empty when not given.
+    // Provenance only - excluded from engine_map_cache_key, like every
+    // other path/position (map_cache.cpp; plan section 3.3 "positions are
+    // excluded from the key").
+    std::string default_installation_path;
+
+    // The RESOLVED installation this particular vehicle-engine pairing
+    // uses: the vehicle powertrain component's own "installation" override
+    // if given, else default_installation_path - loaded and validated by
+    // ps::io::load_vehicle_json once both the engine file and (if given)
+    // the override are visible (read_cycle_block itself only resolves
+    // default_installation_path; it cannot see the vehicle's override).
+    // nullopt iff intake/exhaust are both absent. installation_path is its
+    // resolved absolute path (provenance only, excluded from the key like
+    // default_installation_path above); `installation`'s ACOUSTIC content
+    // (element types/lengths/diameters/volumes/loss coefficients, never
+    // positions) is what the key hashes (map_cache.cpp).
+    std::optional<InstallationDesc> installation;
+    std::string installation_path;
+
+    // Cell-size knobs; only meaningful (and only read by the loader's CFL
+    // check) together with intake/exhaust. Defaults apply even when the
+    // JSON "resolution" key is absent, exactly as if it had been given with
+    // every field at its default.
+    ResolutionCycleDesc resolution;
 };
 
 } // namespace ps::drivetrain

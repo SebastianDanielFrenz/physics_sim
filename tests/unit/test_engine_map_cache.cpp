@@ -581,6 +581,154 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         }
     }
 
+    // ps_audio A4 (out/audio_plan.md section 3.1/3.2/3.3): the intake/exhaust
+    // pipe pair, the "resolution" cell-size block and a resolved
+    // InstallationDesc. Every ACOUSTIC field must bump the key; positions
+    // (inlet_position_m, an exhaust element's position_m) and every
+    // provenance-only string (intake/exhaust/installation `source`,
+    // default_installation_path, installation_path) must NOT.
+    SECTION("with intake/exhaust pipe blocks and a resolved installation present, every acoustic field bumps the key; "
+            "positions and source/path strings do not") {
+        const auto bump = [](real v) { return std::nextafter(v, real(1e300)); };
+
+        CycleModelDesc base = ref_desc;
+        IntakeCycleDesc intake;
+        intake.throttle_bore_m = 0.060;
+        intake.plenum_m3 = 0.0025;
+        RunnerPipeDesc runner;
+        runner.length_m = 0.35;
+        runner.d_in_m = 0.045;
+        runner.d_out_m = 0.040;
+        intake.runners = {runner}; // empty cylinders = "all"
+        intake.interface = "throttle_inlet";
+        intake.source = "test fixture, not physical data";
+        base.intake = intake;
+
+        ExhaustCycleDesc exhaust;
+        PrimaryPipeDesc primary;
+        primary.length_m = 0.40;
+        primary.d_m = 0.036;
+        exhaust.primaries = {primary};
+        MergeCycleDesc merge;
+        MergeSourceRef c1;
+        c1.is_cylinder = true;
+        c1.cylinder = 1;
+        MergeSourceRef c2;
+        c2.is_cylinder = true;
+        c2.cylinder = 2;
+        merge.from = {c1, c2};
+        merge.into = "flange";
+        merge.length_m = 0.10;
+        merge.d_m = 0.050;
+        exhaust.merges = {merge};
+        exhaust.interface = "flange";
+        exhaust.source = "test fixture, not physical data";
+        base.exhaust = exhaust;
+
+        base.resolution = ResolutionCycleDesc{};
+        base.default_installation_path = "/fixture/default_installation.json";
+
+        InstallationDesc inst;
+        inst.intake.airbox_m3 = 0.010;
+        inst.intake.has_snorkel = true;
+        inst.intake.snorkel.length_m = 0.4;
+        inst.intake.snorkel.d_m = 0.07;
+        inst.intake.inlet_position_m = Vec3{0.9, 0.3, 0.5};
+        ExhaustElementDesc cat;
+        cat.type = ExhaustElementType::Catalyst;
+        cat.length_m = 0.12;
+        cat.d_m = 0.11;
+        cat.k_loss = 4.0;
+        ExhaustElementDesc pipe1;
+        pipe1.type = ExhaustElementType::Pipe;
+        pipe1.length_m = 1.6;
+        pipe1.d_m = 0.05;
+        ExhaustElementDesc outlet;
+        outlet.type = ExhaustElementType::Outlet;
+        outlet.position_m = Vec3{-2.2, -0.45, 0.25};
+        inst.exhaust.elements = {cat, pipe1, outlet};
+        inst.source = "test fixture, not physical data";
+        base.installation = inst;
+        base.installation_path = "/fixture/resolved_installation.json";
+
+        const std::uint64_t base_key = engine_map_cache_key(base, ref_fuel, MapQuality::Preview);
+        CHECK(base_key != ref_key); // presence alone (vs. ref_desc's no pipes) must bump the key
+
+        std::vector<std::pair<const char*, std::function<void(CycleModelDesc&)>>> edits;
+        edits.emplace_back("intake.throttle_bore_m", [&](CycleModelDesc& d) { d.intake->throttle_bore_m = bump(d.intake->throttle_bore_m); });
+        edits.emplace_back("intake.plenum_m3", [&](CycleModelDesc& d) { d.intake->plenum_m3 = bump(d.intake->plenum_m3); });
+        edits.emplace_back("intake.runners[0].cylinders", [&](CycleModelDesc& d) { d.intake->runners[0].cylinders = {1}; });
+        edits.emplace_back("intake.runners[0].length_m", [&](CycleModelDesc& d) { d.intake->runners[0].length_m = bump(d.intake->runners[0].length_m); });
+        edits.emplace_back("intake.runners[0].d_in_m", [&](CycleModelDesc& d) { d.intake->runners[0].d_in_m = bump(d.intake->runners[0].d_in_m); });
+        edits.emplace_back("intake.runners[0].d_out_m", [&](CycleModelDesc& d) { d.intake->runners[0].d_out_m = bump(d.intake->runners[0].d_out_m); });
+        edits.emplace_back("intake.runners count", [&](CycleModelDesc& d) { d.intake->runners.push_back(d.intake->runners[0]); });
+        edits.emplace_back("intake.interface", [&](CycleModelDesc& d) { d.intake->interface += "x"; });
+        edits.emplace_back("exhaust.primaries[0].cylinders", [&](CycleModelDesc& d) { d.exhaust->primaries[0].cylinders = {1}; });
+        edits.emplace_back("exhaust.primaries[0].length_m", [&](CycleModelDesc& d) { d.exhaust->primaries[0].length_m = bump(d.exhaust->primaries[0].length_m); });
+        edits.emplace_back("exhaust.primaries[0].d_m", [&](CycleModelDesc& d) { d.exhaust->primaries[0].d_m = bump(d.exhaust->primaries[0].d_m); });
+        edits.emplace_back("exhaust.merges[0].from[0].cylinder", [&](CycleModelDesc& d) { d.exhaust->merges[0].from[0].cylinder = 3; });
+        edits.emplace_back("exhaust.merges[0].from[0].is_cylinder", [&](CycleModelDesc& d) {
+            d.exhaust->merges[0].from[0].is_cylinder = false;
+            d.exhaust->merges[0].from[0].name = "sec_a";
+        });
+        edits.emplace_back("exhaust.merges[0].into", [&](CycleModelDesc& d) {
+            d.exhaust->merges[0].into += "x";
+            d.exhaust->interface += "x"; // keep interface == last merge's into, not that the key cares
+        });
+        edits.emplace_back("exhaust.merges[0].length_m", [&](CycleModelDesc& d) { d.exhaust->merges[0].length_m = bump(d.exhaust->merges[0].length_m); });
+        edits.emplace_back("exhaust.merges[0].d_m", [&](CycleModelDesc& d) { d.exhaust->merges[0].d_m = bump(d.exhaust->merges[0].d_m); });
+        edits.emplace_back("exhaust.merges count", [&](CycleModelDesc& d) { d.exhaust->merges.push_back(d.exhaust->merges[0]); });
+        edits.emplace_back("exhaust.interface", [&](CycleModelDesc& d) { d.exhaust->interface += "x"; });
+        edits.emplace_back("resolution.power_dx_m", [&](CycleModelDesc& d) { d.resolution.power_dx_m = bump(d.resolution.power_dx_m); });
+        edits.emplace_back("resolution.audio_dx_exhaust_m", [&](CycleModelDesc& d) { d.resolution.audio_dx_exhaust_m = bump(d.resolution.audio_dx_exhaust_m); });
+        edits.emplace_back("resolution.audio_dx_intake_m", [&](CycleModelDesc& d) { d.resolution.audio_dx_intake_m = bump(d.resolution.audio_dx_intake_m); });
+        edits.emplace_back("installation presence", [&](CycleModelDesc& d) { d.installation.reset(); });
+        edits.emplace_back("installation.intake.airbox_m3", [&](CycleModelDesc& d) { d.installation->intake.airbox_m3 = bump(d.installation->intake.airbox_m3); });
+        edits.emplace_back("installation.intake.has_snorkel", [&](CycleModelDesc& d) { d.installation->intake.has_snorkel = false; });
+        edits.emplace_back("installation.intake.snorkel.length_m", [&](CycleModelDesc& d) { d.installation->intake.snorkel.length_m = bump(d.installation->intake.snorkel.length_m); });
+        edits.emplace_back("installation.intake.snorkel.d_m", [&](CycleModelDesc& d) { d.installation->intake.snorkel.d_m = bump(d.installation->intake.snorkel.d_m); });
+        edits.emplace_back("installation.exhaust.elements[0].type", [&](CycleModelDesc& d) { d.installation->exhaust.elements[0].type = ExhaustElementType::Pipe; });
+        edits.emplace_back("installation.exhaust.elements[0].length_m", [&](CycleModelDesc& d) { d.installation->exhaust.elements[0].length_m = bump(d.installation->exhaust.elements[0].length_m); });
+        edits.emplace_back("installation.exhaust.elements[0].d_m", [&](CycleModelDesc& d) { d.installation->exhaust.elements[0].d_m = bump(d.installation->exhaust.elements[0].d_m); });
+        edits.emplace_back("installation.exhaust.elements[0].k_loss", [&](CycleModelDesc& d) { d.installation->exhaust.elements[0].k_loss = bump(d.installation->exhaust.elements[0].k_loss); });
+        edits.emplace_back("installation.exhaust.elements count", [&](CycleModelDesc& d) { d.installation->exhaust.elements.push_back(d.installation->exhaust.elements[0]); });
+        edits.emplace_back("installation.exhaust branch element (structure)", [&](CycleModelDesc& d) {
+            ExhaustElementDesc branch;
+            branch.type = ExhaustElementType::Branch;
+            ExhaustElementDesc leaf_outlet;
+            leaf_outlet.type = ExhaustElementType::Outlet;
+            branch.branches = {{leaf_outlet}, {leaf_outlet}};
+            d.installation->exhaust.elements.back() = branch; // replace the outlet with a branch
+        });
+
+        for (const auto& [name, edit] : edits) {
+            CycleModelDesc d = base;
+            edit(d);
+            INFO("field: " << name);
+            CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) != base_key);
+        }
+
+        SECTION("positions and source/path strings do NOT change the key") {
+            std::vector<std::pair<const char*, std::function<void(CycleModelDesc&)>>> excluded;
+            excluded.emplace_back("intake.source", [](CycleModelDesc& d) { d.intake->source += "x"; });
+            excluded.emplace_back("exhaust.source", [](CycleModelDesc& d) { d.exhaust->source += "x"; });
+            excluded.emplace_back("installation.source", [](CycleModelDesc& d) { d.installation->source += "x"; });
+            excluded.emplace_back("default_installation_path", [](CycleModelDesc& d) { d.default_installation_path += "x"; });
+            excluded.emplace_back("installation_path", [](CycleModelDesc& d) { d.installation_path += "x"; });
+            excluded.emplace_back("installation.intake.inlet_position_m",
+                                   [](CycleModelDesc& d) { d.installation->intake.inlet_position_m.x += real(1.0); });
+            excluded.emplace_back("installation exhaust outlet position_m", [](CycleModelDesc& d) {
+                d.installation->exhaust.elements.back().position_m.z += real(1.0);
+            });
+            for (const auto& [name, edit] : excluded) {
+                CycleModelDesc d = base;
+                edit(d);
+                INFO("excluded field: " << name);
+                CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) == base_key);
+            }
+        }
+    }
+
     SECTION("every FuelDesc physics field bumps the key (name/phase/lhv/afr/density)") {
         const auto bump = [](real v) { return std::nextafter(v, real(1e300)); };
         {

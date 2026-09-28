@@ -193,6 +193,18 @@ in [`engine.md`](engine.md) and [`gearbox.md`](gearbox.md) — the same
 fields, same validation, whether the JSON lives in a standalone file or
 directly inside `powertrain.components[]`.
 
+An `engine` component (inline or `ref`'d) may additionally carry a
+vehicle-level `"installation"` field (ps_audio A4, a string path resolved
+relative to the VEHICLE file's own directory, **not** the engine file's) —
+overrides the engine's own `cycle.default_installation` for this vehicle
+only. Only legal when the engine is a simulated engine whose cycle block
+has `intake`/`exhaust` pipe blocks (`"'installation' is only allowed for
+an engine whose cycle block has 'intake'/'exhaust' pipe blocks"` /
+`"'installation' is only allowed on a simulated engine with
+'intake'/'exhaust' pipe blocks"`); must be non-empty when given. See
+[`engine.md`](engine.md)'s `default_installation` field and
+[`installation.md`](installation.md) for the referenced file's own format.
+
 #### `clutch` component fields
 
 `ClutchDesc`. Always inline.

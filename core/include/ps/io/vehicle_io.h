@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ps/drivetrain/engine_maps.h"
+#include "ps/drivetrain/installation_desc.h"
 #include "ps/vehicle/tyre_desc.h"
 #include "ps/vehicle/vehicle_desc.h"
 
@@ -17,6 +18,16 @@ namespace ps::io {
 // a malformed/unreadable file or a missing required field (name/source -
 // PLAN.md section 8).
 vehicle::TyreDesc load_tyre_json(const std::string& path);
+
+// ps_audio A4 (out/audio_plan.md section 3.2): loads an installation JSON
+// file (data/installations/*.json, format "physics_sim.installation/1").
+// Throws std::runtime_error on a malformed/unreadable file, a missing
+// required field, or an inconsistent exhaust chain (see
+// core/src/io/vehicle_io.cpp's read_installation_object for the exact
+// rules). Called by load_vehicle_json to resolve an engine's
+// default_installation / a vehicle component's "installation" override -
+// not normally called directly outside tests.
+drivetrain::InstallationDesc load_installation_json(const std::string& path);
 
 // Loads a vehicle JSON file (data/vehicles/*.json). Each wheel's "tyre"
 // field is either an inline object (same schema load_tyre_json reads) or a

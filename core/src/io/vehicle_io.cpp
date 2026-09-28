@@ -937,6 +937,11 @@ constexpr const char* kCycleKeys[] = {
     // own spark_advance_deg must be absent - it is filled from this one) and
     // Tier 2 flame-development delay.
     "spark_advance_deg", "ignition_delay_deg",
+    // ps_audio A4 (out/audio_plan.md section 3.1): the optional intake/
+    // exhaust pipe pair, the engine's own default_installation and the
+    // pipe cell-size "resolution" block. See read_intake_block/
+    // read_exhaust_block/read_resolution_block below.
+    "intake", "exhaust", "default_installation", "resolution",
 };
 
 std::vector<real> read_cycle_grid(const json& cj, const char* key, real scale, const std::string& cctx) {
@@ -979,7 +984,425 @@ ps::drivetrain::ValveLiftProfile read_cycle_lift(const json& cj, const char* key
     return p;
 }
 
-ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::string& cctx, const ps::drivetrain::PistonGeometryDesc& piston,
+// ---- ps_audio A4 (out/audio_plan.md section 3.1/3.2): the cycle block's
+// optional intake/exhaust pipe pair and the installation file format. ----
+
+// Reads a "cylinders" field that is either the string "all" (returned as an
+// empty vector - CycleModelDesc's own convention, see RunnerPipeDesc's field
+// comment) or a non-empty array of 1-based cylinder numbers in [1, cylinders].
+std::vector<int> read_cylinder_group(const json& gj, const char* key, int cylinders, const std::string& ctx) {
+    if (!gj.contains(key)) throw std::runtime_error(ctx + ": '" + std::string(key) + "' is required");
+    const auto& v = gj.at(key);
+    std::vector<int> out;
+    if (v.is_string()) {
+        if (v.get<std::string>() != "all") {
+            throw std::runtime_error(ctx + ": '" + std::string(key) + "' string value must be \"all\"");
+        }
+        return out; // empty = all
+    }
+    if (!v.is_array() || v.empty()) {
+        throw std::runtime_error(ctx + ": '" + std::string(key) + "' must be \"all\" or a non-empty array of cylinder numbers");
+    }
+    for (const auto& cv : v) {
+        if (!cv.is_number_integer()) throw std::runtime_error(ctx + ": '" + std::string(key) + "' entries must be integers");
+        const int c = cv.get<int>();
+        if (c < 1 || c > cylinders) {
+            throw std::runtime_error(ctx + ": '" + std::string(key) + "' cylinder " + std::to_string(c) + " is out of range [1, " +
+                                      std::to_string(cylinders) + "]");
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
+// Checks that a list of runner/primary-like elements (each with a
+// `.cylinders` member following read_cylinder_group's "all"/list convention)
+// together covers every cylinder in [1, cylinders] EXACTLY once - mirrors
+// CycleModelDesc's own `banks` coverage rule (read_cycle_block below).
+template <typename Elem>
+void require_cylinder_coverage(const std::vector<Elem>& elems, int cylinders, const std::string& ctx) {
+    bool any_all = false;
+    for (const auto& e : elems) any_all = any_all || e.cylinders.empty();
+    if (any_all) {
+        if (elems.size() != 1) throw std::runtime_error(ctx + ": \"all\" must be the only entry");
+        return;
+    }
+    std::vector<bool> seen(static_cast<std::size_t>(cylinders) + 1, false);
+    int covered = 0;
+    for (const auto& e : elems) {
+        for (int c : e.cylinders) {
+            if (seen[static_cast<std::size_t>(c)]) {
+                throw std::runtime_error(ctx + ": cylinder " + std::to_string(c) + " is assigned to more than one entry");
+            }
+            seen[static_cast<std::size_t>(c)] = true;
+            ++covered;
+        }
+    }
+    if (covered != cylinders) {
+        throw std::runtime_error(ctx + ": must cover every cylinder exactly once (covered " + std::to_string(covered) + " of " +
+                                  std::to_string(cylinders) + ")");
+    }
+}
+
+ps::drivetrain::IntakeCycleDesc read_intake_block(const json& ij, const std::string& ictx, int cylinders) {
+    using namespace ps::drivetrain;
+    if (!ij.is_object()) throw std::runtime_error(ictx + " must be an object");
+    constexpr const char* kKeys[] = {"throttle_bore_m", "plenum_m3", "runners", "interface", "source"};
+    for (auto it = ij.begin(); it != ij.end(); ++it) {
+        bool known = false;
+        for (const char* k : kKeys) known = known || it.key() == k;
+        if (!known) throw std::runtime_error(ictx + ": unknown key '" + it.key() + "'");
+    }
+    IntakeCycleDesc d;
+    d.source = ij.value("source", std::string());
+    if (d.source.empty()) throw std::runtime_error(ictx + ": 'source' is required (PLAN.md section 8)");
+    d.throttle_bore_m = require_positive(ij, "throttle_bore_m", ictx);
+    d.plenum_m3 = require_positive(ij, "plenum_m3", ictx);
+    if (!ij.contains("runners") || !ij.at("runners").is_array() || ij.at("runners").empty()) {
+        throw std::runtime_error(ictx + ": 'runners' must be a non-empty array");
+    }
+    const std::string rctx = ictx + ".runners";
+    for (const auto& rj : ij.at("runners")) {
+        if (!rj.is_object()) throw std::runtime_error(rctx + ": each entry must be an object");
+        constexpr const char* kRunnerKeys[] = {"cylinders", "length_m", "d_in_m", "d_out_m"};
+        for (auto it = rj.begin(); it != rj.end(); ++it) {
+            bool known = false;
+            for (const char* k : kRunnerKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(rctx + ": unknown key '" + it.key() + "'");
+        }
+        RunnerPipeDesc r;
+        r.cylinders = read_cylinder_group(rj, "cylinders", cylinders, rctx);
+        r.length_m = require_positive(rj, "length_m", rctx);
+        r.d_in_m = require_positive(rj, "d_in_m", rctx);
+        r.d_out_m = require_positive(rj, "d_out_m", rctx);
+        d.runners.push_back(r);
+    }
+    require_cylinder_coverage(d.runners, cylinders, rctx);
+    if (!ij.contains("interface") || !ij.at("interface").is_string() || ij.at("interface").get<std::string>().empty()) {
+        throw std::runtime_error(ictx + ": 'interface' is required (a non-empty string)");
+    }
+    d.interface = ij.at("interface").get<std::string>();
+    return d;
+}
+
+ps::drivetrain::ExhaustCycleDesc read_exhaust_block(const json& ej, const std::string& ectx, int cylinders) {
+    using namespace ps::drivetrain;
+    if (!ej.is_object()) throw std::runtime_error(ectx + " must be an object");
+    constexpr const char* kKeys[] = {"primaries", "merges", "interface", "source"};
+    for (auto it = ej.begin(); it != ej.end(); ++it) {
+        bool known = false;
+        for (const char* k : kKeys) known = known || it.key() == k;
+        if (!known) throw std::runtime_error(ectx + ": unknown key '" + it.key() + "'");
+    }
+    ExhaustCycleDesc d;
+    d.source = ej.value("source", std::string());
+    if (d.source.empty()) throw std::runtime_error(ectx + ": 'source' is required (PLAN.md section 8)");
+
+    if (!ej.contains("primaries") || !ej.at("primaries").is_array() || ej.at("primaries").empty()) {
+        throw std::runtime_error(ectx + ": 'primaries' must be a non-empty array");
+    }
+    const std::string pctx = ectx + ".primaries";
+    for (const auto& pj : ej.at("primaries")) {
+        if (!pj.is_object()) throw std::runtime_error(pctx + ": each entry must be an object");
+        constexpr const char* kPrimaryKeys[] = {"cylinders", "length_m", "d_m"};
+        for (auto it = pj.begin(); it != pj.end(); ++it) {
+            bool known = false;
+            for (const char* k : kPrimaryKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(pctx + ": unknown key '" + it.key() + "'");
+        }
+        PrimaryPipeDesc pr;
+        pr.cylinders = read_cylinder_group(pj, "cylinders", cylinders, pctx);
+        pr.length_m = require_positive(pj, "length_m", pctx);
+        pr.d_m = require_positive(pj, "d_m", pctx);
+        d.primaries.push_back(pr);
+    }
+    require_cylinder_coverage(d.primaries, cylinders, pctx);
+
+    if (!ej.contains("merges") || !ej.at("merges").is_array() || ej.at("merges").empty()) {
+        throw std::runtime_error(ectx + ": 'merges' must be a non-empty array (a pipe-bearing exhaust needs at least one "
+                                  "junction reaching the flange)");
+    }
+    const std::string mctx = ectx + ".merges";
+    std::vector<std::string> defined_names;   // 'into' names defined so far, in file order
+    std::vector<int> consumed_count;          // parallel to defined_names: times referenced by a LATER merge
+    std::vector<bool> cyl_used(static_cast<std::size_t>(cylinders) + 1, false);
+    int cyl_used_count = 0;
+    for (const auto& mj : ej.at("merges")) {
+        if (!mj.is_object()) throw std::runtime_error(mctx + ": each entry must be an object");
+        constexpr const char* kMergeKeys[] = {"from", "into", "length_m", "d_m"};
+        for (auto it = mj.begin(); it != mj.end(); ++it) {
+            bool known = false;
+            for (const char* k : kMergeKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(mctx + ": unknown key '" + it.key() + "'");
+        }
+        MergeCycleDesc m;
+        if (!mj.contains("from") || !mj.at("from").is_array() || mj.at("from").size() < 2) {
+            throw std::runtime_error(mctx + ": 'from' must be an array of at least 2 sources");
+        }
+        for (const auto& fv : mj.at("from")) {
+            MergeSourceRef ref;
+            if (fv.is_number_integer()) {
+                ref.is_cylinder = true;
+                ref.cylinder = fv.get<int>();
+                if (ref.cylinder < 1 || ref.cylinder > cylinders) {
+                    throw std::runtime_error(mctx + ": 'from' cylinder " + std::to_string(ref.cylinder) + " is out of range [1, " +
+                                              std::to_string(cylinders) + "]");
+                }
+                if (cyl_used[static_cast<std::size_t>(ref.cylinder)]) {
+                    throw std::runtime_error(mctx + ": cylinder " + std::to_string(ref.cylinder) +
+                                              " is referenced by more than one merge");
+                }
+                cyl_used[static_cast<std::size_t>(ref.cylinder)] = true;
+                ++cyl_used_count;
+            } else if (fv.is_string()) {
+                ref.is_cylinder = false;
+                ref.name = fv.get<std::string>();
+                const auto it = std::find(defined_names.begin(), defined_names.end(), ref.name);
+                if (it == defined_names.end()) {
+                    throw std::runtime_error(mctx + ": 'from' name \"" + ref.name + "\" is not an earlier merge's 'into' "
+                                              "(forward/unknown references are rejected)");
+                }
+                const std::size_t idx = static_cast<std::size_t>(it - defined_names.begin());
+                if (consumed_count[idx] > 0) {
+                    throw std::runtime_error(mctx + ": \"" + ref.name + "\" is referenced by more than one merge");
+                }
+                consumed_count[idx] += 1;
+            } else {
+                throw std::runtime_error(mctx + ": 'from' entries must be a cylinder number or a string naming an earlier merge");
+            }
+            m.from.push_back(ref);
+        }
+        if (!mj.contains("into") || !mj.at("into").is_string() || mj.at("into").get<std::string>().empty()) {
+            throw std::runtime_error(mctx + ": 'into' is required (a non-empty string)");
+        }
+        m.into = mj.at("into").get<std::string>();
+        if (std::find(defined_names.begin(), defined_names.end(), m.into) != defined_names.end()) {
+            throw std::runtime_error(mctx + ": duplicate 'into' name \"" + m.into + "\"");
+        }
+        m.length_m = require_positive(mj, "length_m", mctx);
+        m.d_m = require_positive(mj, "d_m", mctx);
+        d.merges.push_back(m);
+        defined_names.push_back(m.into);
+        consumed_count.push_back(0);
+    }
+    if (cyl_used_count != cylinders) {
+        throw std::runtime_error(mctx + ": must cover every cylinder exactly once across every merge's 'from' (covered " +
+                                  std::to_string(cyl_used_count) + " of " + std::to_string(cylinders) + ")");
+    }
+    // Every 'into' except the LAST must be consumed by exactly one later
+    // merge; the last is the terminal flange (consumed zero times).
+    for (std::size_t i = 0; i + 1 < defined_names.size(); ++i) {
+        if (consumed_count[i] != 1) {
+            throw std::runtime_error(mctx + ": \"" + defined_names[i] + "\" must be consumed by exactly one later merge (a "
+                                      "dangling branch never reaches the flange)");
+        }
+    }
+    if (!defined_names.empty() && consumed_count.back() != 0) {
+        throw std::runtime_error(mctx + ": the last merge's 'into' (\"" + defined_names.back() +
+                                  "\") is the terminal flange and must not be consumed by another merge");
+    }
+
+    if (!ej.contains("interface") || !ej.at("interface").is_string() || ej.at("interface").get<std::string>().empty()) {
+        throw std::runtime_error(ectx + ": 'interface' is required (a non-empty string)");
+    }
+    d.interface = ej.at("interface").get<std::string>();
+    if (!defined_names.empty() && d.interface != defined_names.back()) {
+        throw std::runtime_error(ectx + ": 'interface' (\"" + d.interface + "\") must equal the last merge's 'into' (\"" +
+                                  defined_names.back() + "\")");
+    }
+    return d;
+}
+
+// CFL floor for the "resolution" cell-size block (out/audio_plan.md section
+// 3.1's own rule: "the loader checks the CFL ... If dx is too small it
+// rejects with the minimum dx"). Worst-case wave speeds are the plan's own
+// [A] figures (exhaust |u|+a <= 900 m/s, intake <= 500 m/s). The step h used
+// for the check is the LARGEST (worst-case, most restrictive on dx) h this
+// resolution could ever be stepped at, so a resolution that passes here is
+// CFL-safe at every quality/sample-rate the plan lists:
+//  - power_dx_m: checked against h_preview = 1/(960*24) s (CLAUDE.md's
+//    "Engine cycle" section) - the generator's coarser MapQuality::Preview
+//    step, larger than h_full = 1/(960*48) s.
+//  - audio_dx_exhaust_m/audio_dx_intake_m: checked against 1/44100 s (D-7's
+//    44.1 kHz live rate), larger than 1/48000 s.
+// Both constants are duplicated here rather than including
+// core/src/engine_cycle's internal cycle_point.h from this public IO loader
+// (A2/A3 are actively extending that internal directory; this loader must
+// not create a build-order dependency on it).
+ps::drivetrain::ResolutionCycleDesc read_resolution_block(const json& cj, const std::string& cctx) {
+    using namespace ps::drivetrain;
+    ResolutionCycleDesc r; // defaults: 0.05 / 0.032 / 0.017 m
+    const std::string kctx = cctx + ".resolution";
+    if (cj.contains("resolution")) {
+        const auto& rj = cj.at("resolution");
+        if (!rj.is_object()) throw std::runtime_error(kctx + " must be an object");
+        constexpr const char* kKeys[] = {"power_dx_m", "audio_dx_exhaust_m", "audio_dx_intake_m"};
+        for (auto it = rj.begin(); it != rj.end(); ++it) {
+            bool known = false;
+            for (const char* k : kKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(kctx + ": unknown key '" + it.key() + "'");
+        }
+        if (rj.contains("power_dx_m")) r.power_dx_m = require_positive(rj, "power_dx_m", kctx);
+        if (rj.contains("audio_dx_exhaust_m")) r.audio_dx_exhaust_m = require_positive(rj, "audio_dx_exhaust_m", kctx);
+        if (rj.contains("audio_dx_intake_m")) r.audio_dx_intake_m = require_positive(rj, "audio_dx_intake_m", kctx);
+    }
+    constexpr real kHPreview = real(1.0) / (real(960.0) * real(24.0));
+    constexpr real kHAudioWorst = real(1.0) / real(44100.0);
+    constexpr real kExhaustWaveSpeed = real(900.0);
+    constexpr real kIntakeWaveSpeed = real(500.0);
+    const real min_power_dx = kExhaustWaveSpeed * kHPreview;
+    const real min_audio_dx_exhaust = kExhaustWaveSpeed * kHAudioWorst;
+    const real min_audio_dx_intake = kIntakeWaveSpeed * kHAudioWorst;
+    if (!(r.power_dx_m >= min_power_dx)) {
+        throw std::runtime_error(kctx + ": 'power_dx_m' " + std::to_string(r.power_dx_m) + " is below the CFL minimum " +
+                                  std::to_string(min_power_dx) + " m (900 m/s worst-case wave speed at h=1/(960*24) s)");
+    }
+    if (!(r.audio_dx_exhaust_m >= min_audio_dx_exhaust)) {
+        throw std::runtime_error(kctx + ": 'audio_dx_exhaust_m' " + std::to_string(r.audio_dx_exhaust_m) +
+                                  " is below the CFL minimum " + std::to_string(min_audio_dx_exhaust) +
+                                  " m (900 m/s worst-case wave speed at h=1/44100 s)");
+    }
+    if (!(r.audio_dx_intake_m >= min_audio_dx_intake)) {
+        throw std::runtime_error(kctx + ": 'audio_dx_intake_m' " + std::to_string(r.audio_dx_intake_m) +
+                                  " is below the CFL minimum " + std::to_string(min_audio_dx_intake) +
+                                  " m (500 m/s worst-case wave speed at h=1/44100 s)");
+    }
+    return r;
+}
+
+ps::drivetrain::ExhaustElementDesc read_exhaust_element(const json& ej, const std::string& ctx);
+
+std::vector<ps::drivetrain::ExhaustElementDesc> read_exhaust_elements(const json& arr, const std::string& ctx) {
+    if (!arr.is_array() || arr.empty()) throw std::runtime_error(ctx + " must be a non-empty array of elements");
+    std::vector<ps::drivetrain::ExhaustElementDesc> out;
+    for (const auto& ej : arr) out.push_back(read_exhaust_element(ej, ctx));
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const bool terminal = out[i].type == ps::drivetrain::ExhaustElementType::Outlet ||
+                               out[i].type == ps::drivetrain::ExhaustElementType::Branch;
+        const bool last = (i + 1 == out.size());
+        if (terminal && !last) throw std::runtime_error(ctx + ": an 'outlet'/'branch' element must be the last element of its chain");
+        if (!terminal && last) throw std::runtime_error(ctx + ": an exhaust chain must end in an 'outlet' or 'branch' element");
+    }
+    return out;
+}
+
+ps::drivetrain::ExhaustElementDesc read_exhaust_element(const json& ej, const std::string& ctx) {
+    using namespace ps::drivetrain;
+    if (!ej.is_object()) throw std::runtime_error(ctx + ": each exhaust element must be an object");
+    if (!ej.contains("type") || !ej.at("type").is_string()) throw std::runtime_error(ctx + ": exhaust element 'type' is required");
+    const std::string type = ej.at("type").get<std::string>();
+    ExhaustElementDesc d;
+    if (type == "catalyst") {
+        d.type = ExhaustElementType::Catalyst;
+        constexpr const char* kKeys[] = {"type", "length_m", "d_m", "k_loss"};
+        for (auto it = ej.begin(); it != ej.end(); ++it) {
+            bool known = false;
+            for (const char* k : kKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(ctx + ": catalyst element: unknown key '" + it.key() + "'");
+        }
+        d.length_m = require_positive(ej, "length_m", ctx + ".catalyst");
+        d.d_m = require_positive(ej, "d_m", ctx + ".catalyst");
+        d.k_loss = require_positive(ej, "k_loss", ctx + ".catalyst");
+    } else if (type == "pipe" || type == "expansion_chamber") {
+        d.type = type == "pipe" ? ExhaustElementType::Pipe : ExhaustElementType::ExpansionChamber;
+        constexpr const char* kKeys[] = {"type", "length_m", "d_m"};
+        for (auto it = ej.begin(); it != ej.end(); ++it) {
+            bool known = false;
+            for (const char* k : kKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(ctx + ": " + type + " element: unknown key '" + it.key() + "'");
+        }
+        d.length_m = require_positive(ej, "length_m", ctx + "." + type);
+        d.d_m = require_positive(ej, "d_m", ctx + "." + type);
+    } else if (type == "outlet") {
+        d.type = ExhaustElementType::Outlet;
+        constexpr const char* kKeys[] = {"type", "position_m"};
+        for (auto it = ej.begin(); it != ej.end(); ++it) {
+            bool known = false;
+            for (const char* k : kKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(ctx + ": outlet element: unknown key '" + it.key() + "'");
+        }
+        if (!ej.contains("position_m")) throw std::runtime_error(ctx + ": outlet element: 'position_m' is required");
+        d.position_m = read_vec3(ej.at("position_m"), Vec3::zero());
+    } else if (type == "branch") {
+        d.type = ExhaustElementType::Branch;
+        constexpr const char* kKeys[] = {"type", "branches"};
+        for (auto it = ej.begin(); it != ej.end(); ++it) {
+            bool known = false;
+            for (const char* k : kKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(ctx + ": branch element: unknown key '" + it.key() + "'");
+        }
+        if (!ej.contains("branches") || !ej.at("branches").is_array() || ej.at("branches").size() < 2) {
+            throw std::runtime_error(ctx + ": branch element: 'branches' must be an array of at least 2 element chains");
+        }
+        for (const auto& bj : ej.at("branches")) d.branches.push_back(read_exhaust_elements(bj, ctx + ".branch"));
+    } else {
+        throw std::runtime_error(ctx + ": exhaust element 'type' must be \"catalyst\", \"pipe\", \"expansion_chamber\", "
+                                  "\"outlet\" or \"branch\", got \"" + type + "\"");
+    }
+    return d;
+}
+
+ps::drivetrain::InstallationDesc read_installation_object(const json& j, const std::string& path) {
+    using namespace ps::drivetrain;
+    require_format(j, "installation", 1, path);
+    const std::string ctx = path;
+    constexpr const char* kKeys[] = {"format", "intake", "exhaust", "source"};
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        bool known = false;
+        for (const char* k : kKeys) known = known || it.key() == k;
+        if (!known) throw std::runtime_error(ctx + ": unknown key '" + it.key() + "'");
+    }
+    InstallationDesc d;
+    d.source = j.value("source", std::string());
+    if (d.source.empty()) throw std::runtime_error(ctx + ": 'source' is required (PLAN.md section 8)");
+
+    if (!j.contains("intake") || !j.at("intake").is_object()) throw std::runtime_error(ctx + ": 'intake' object is required");
+    {
+        const auto& ij = j.at("intake");
+        const std::string ictx = ctx + ".intake";
+        constexpr const char* kIntakeKeys[] = {"airbox_m3", "snorkel", "inlet_position_m"};
+        for (auto it = ij.begin(); it != ij.end(); ++it) {
+            bool known = false;
+            for (const char* k : kIntakeKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(ictx + ": unknown key '" + it.key() + "'");
+        }
+        d.intake.airbox_m3 = require_positive(ij, "airbox_m3", ictx);
+        if (ij.contains("snorkel")) {
+            const auto& sj = ij.at("snorkel");
+            const std::string sctx = ictx + ".snorkel";
+            if (!sj.is_object()) throw std::runtime_error(sctx + " must be an object");
+            constexpr const char* kSnorkelKeys[] = {"length_m", "d_m"};
+            for (auto it = sj.begin(); it != sj.end(); ++it) {
+                bool known = false;
+                for (const char* k : kSnorkelKeys) known = known || it.key() == k;
+                if (!known) throw std::runtime_error(sctx + ": unknown key '" + it.key() + "'");
+            }
+            d.intake.has_snorkel = true;
+            d.intake.snorkel.length_m = require_positive(sj, "length_m", sctx);
+            d.intake.snorkel.d_m = require_positive(sj, "d_m", sctx);
+        }
+        if (!ij.contains("inlet_position_m")) throw std::runtime_error(ictx + ": 'inlet_position_m' is required");
+        d.intake.inlet_position_m = read_vec3(ij.at("inlet_position_m"), Vec3::zero());
+    }
+
+    if (!j.contains("exhaust") || !j.at("exhaust").is_object()) throw std::runtime_error(ctx + ": 'exhaust' object is required");
+    {
+        const auto& ej = j.at("exhaust");
+        const std::string ectx = ctx + ".exhaust";
+        constexpr const char* kExhaustKeys[] = {"elements"};
+        for (auto it = ej.begin(); it != ej.end(); ++it) {
+            bool known = false;
+            for (const char* k : kExhaustKeys) known = known || it.key() == k;
+            if (!known) throw std::runtime_error(ectx + ": unknown key '" + it.key() + "'");
+        }
+        if (!ej.contains("elements")) throw std::runtime_error(ectx + ": 'elements' is required");
+        d.exhaust.elements = read_exhaust_elements(ej.at("elements"), ectx + ".elements");
+    }
+    return d;
+}
+
+ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::string& cctx, const std::string& engine_dir,
+                                                const ps::drivetrain::PistonGeometryDesc& piston,
                                                 bool friction_map_given) {
     using namespace ps::drivetrain;
     constexpr real kMm = real(1e-3);
@@ -1026,8 +1449,31 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
     d.exhaust_valve_d_m = require_positive(cj, "exhaust_valve_d_mm", cctx) * kMm;
     d.intake_lift = read_cycle_lift(cj, "intake_lift", cctx);
     d.exhaust_lift = read_cycle_lift(cj, "exhaust_lift", cctx);
-    d.runner_length_m = require_positive(cj, "runner_length_mm", cctx) * kMm;
-    d.runner_diameter_m = require_positive(cj, "runner_diameter_mm", cctx) * kMm;
+    // ps_audio A4: 'intake'/'exhaust' (the finite-volume pipe pair) must be
+    // given together (a manifold with no exhaust plumbing modeled, or vice
+    // versa, is not a supported configuration) or not at all. When absent,
+    // the pre-A4 lumped runner_length_mm/runner_diameter_mm pair is
+    // required as before (bit-identical to every pre-A4 engine file); when
+    // present, that lumped pair is redundant with intake.runners and is
+    // rejected instead.
+    const bool has_intake_block = cj.contains("intake");
+    const bool has_exhaust_block = cj.contains("exhaust");
+    if (has_intake_block != has_exhaust_block) {
+        throw std::runtime_error(cctx + ": 'intake' and 'exhaust' must be given together (a pipe-modeled engine needs "
+                                  "both, a lumped one needs neither)");
+    }
+    const bool has_pipes = has_intake_block && has_exhaust_block;
+    if (has_pipes) {
+        if (cj.contains("runner_length_mm") || cj.contains("runner_diameter_mm")) {
+            throw std::runtime_error(cctx + ": 'runner_length_mm'/'runner_diameter_mm' are not allowed together with "
+                                      "'intake'/'exhaust' (the pipe blocks replace the lumped runner)");
+        }
+        d.runner_length_m = real(0.0);
+        d.runner_diameter_m = real(0.0);
+    } else {
+        d.runner_length_m = require_positive(cj, "runner_length_mm", cctx) * kMm;
+        d.runner_diameter_m = require_positive(cj, "runner_diameter_mm", cctx) * kMm;
+    }
     d.intake_port_m3 = require_positive(cj, "intake_port_cc", cctx) * real(1e-6);
     d.exhaust_port_m3 = require_positive(cj, "exhaust_port_cc", cctx) * real(1e-6);
 
@@ -1198,6 +1644,29 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
     }
 
     d.bank_angle_deg = cj.contains("bank_angle_deg") ? require_number(cj, "bank_angle_deg", cctx) : real(0.0);
+
+    // ps_audio A4: the pipe pair, the engine's own default installation and
+    // the pipe cell-size resolution block. All three are only meaningful
+    // (and only allowed) when has_pipes - see the pair-check above.
+    if (has_pipes) {
+        d.intake = read_intake_block(cj.at("intake"), cctx + ".intake", d.cylinders);
+        d.exhaust = read_exhaust_block(cj.at("exhaust"), cctx + ".exhaust", d.cylinders);
+        if (!cj.contains("default_installation") || !cj.at("default_installation").is_string() ||
+            cj.at("default_installation").get<std::string>().empty()) {
+            throw std::runtime_error(cctx + ": 'default_installation' is required (a non-empty path string) when "
+                                      "'intake'/'exhaust' pipe blocks are present");
+        }
+        d.default_installation_path = resolve_path(engine_dir, cj.at("default_installation").get<std::string>());
+        d.resolution = read_resolution_block(cj, cctx);
+    } else {
+        if (cj.contains("default_installation")) {
+            throw std::runtime_error(cctx + ": 'default_installation' is only allowed together with 'intake'/'exhaust' "
+                                      "pipe blocks");
+        }
+        if (cj.contains("resolution")) {
+            throw std::runtime_error(cctx + ": 'resolution' is only allowed together with 'intake'/'exhaust' pipe blocks");
+        }
+    }
 
     d.grid_rpm = read_cycle_grid(cj, "grid_rpm", real(1.0), cctx);
     d.grid_p_im = read_cycle_grid(cj, "grid_p_im_kpa", real(1000.0), cctx);
@@ -1610,7 +2079,7 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             throw std::runtime_error(cctx + ": a cycle block needs architecture \"piston_4stroke\" (the rotary cycle model is "
                                       "I7e)");
         }
-        e.cycle = read_cycle_block(j.at("cycle"), cctx, e.piston, have_friction);
+        e.cycle = read_cycle_block(j.at("cycle"), cctx, engine_dir, e.piston, have_friction);
         // C17a follow-up: the cycle's spark schedule IS the ECU's (the ecu
         // block's own table was rejected above) - the runtime then evaluates
         // exactly the table the generator ran its grid nodes at.
@@ -1840,6 +2309,11 @@ vehicle::TyreDesc load_tyre_json(const std::string& path) {
     return read_tyre_object(j);
 }
 
+drivetrain::InstallationDesc load_installation_json(const std::string& path) {
+    const json j = read_json_file(path);
+    return read_installation_object(j, path);
+}
+
 vehicle::VehicleDesc load_vehicle_json(const std::string& path) { return load_vehicle_json(path, EngineMapOptions{}); }
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapOptions& options) {
@@ -1910,6 +2384,42 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                     std::vector<std::string> fuel_paths;
                     p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir, &fuel_paths, &options)});
                     engine_fuel_paths.emplace_back(id, std::move(fuel_paths)); // PHYS-033 P4 I7a C6: for the fluid-link check below
+
+                    // ps_audio A4 (out/audio_plan.md section 3.2/3.3): resolve
+                    // this engine's installation - the vehicle component's own
+                    // "installation" override if given, else the engine file's
+                    // own "default_installation" (already validated/resolved
+                    // into cycle->default_installation_path by read_cycle_block,
+                    // required-with/rejected-without pipes there). Only visible
+                    // here, once both the vehicle-component JSON (cj, which may
+                    // carry the override) and the just-loaded SimulatedEngineDesc
+                    // (whose cycle->intake/exhaust say whether pipes exist) are
+                    // both in hand.
+                    if (auto* sim = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&p.components.back().params)) {
+                        const bool has_pipes = sim->cycle.has_value() && sim->cycle->intake.has_value() && sim->cycle->exhaust.has_value();
+                        const bool has_override = cj.contains("installation");
+                        if (has_override) {
+                            if (!cj.at("installation").is_string() || cj.at("installation").get<std::string>().empty()) {
+                                throw std::runtime_error(ctx + ": 'installation' must be a non-empty path string");
+                            }
+                            if (!has_pipes) {
+                                throw std::runtime_error(ctx + ": 'installation' is only allowed for an engine whose cycle "
+                                                          "block has 'intake'/'exhaust' pipe blocks");
+                            }
+                            const std::string inst_path = resolve_path(base_dir, cj.at("installation").get<std::string>());
+                            sim->cycle->installation = load_installation_json(inst_path);
+                            sim->cycle->installation_path = inst_path;
+                        } else if (has_pipes) {
+                            // cycle->default_installation_path was already
+                            // resolved (engine-file-relative) and required
+                            // non-empty by read_cycle_block.
+                            sim->cycle->installation = load_installation_json(sim->cycle->default_installation_path);
+                            sim->cycle->installation_path = sim->cycle->default_installation_path;
+                        }
+                    } else if (cj.contains("installation")) {
+                        throw std::runtime_error(ctx + ": 'installation' is only allowed on a simulated engine with "
+                                                  "'intake'/'exhaust' pipe blocks");
+                    }
                 } else if (type == "fuel_tank") {
                     // PHYS-033 P4 I7a C6: always inline (no 'ref' - a tank is
                     // a per-vehicle fill state, not a reusable part file).
