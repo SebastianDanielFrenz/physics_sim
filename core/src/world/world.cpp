@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -726,6 +727,9 @@ void World::set_fuel_tank_mass(VehicleId id, real kg) {
 }
 
 void World::replace_engine_maps(VehicleId id, std::string_view component_id, drivetrain::EngineMapsPtr new_maps) {
+    // Documented (world.h) to throw for an unknown vehicle id; System::at is a
+    // plain operator[], so check here rather than index out of bounds.
+    if (!vehicle_system_->contains(id)) throw std::runtime_error("replace_engine_maps: unknown vehicle id");
     vehicle_system_->at(id).request_replace_engine_maps(component_id, std::move(new_maps));
 }
 

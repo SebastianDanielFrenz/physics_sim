@@ -49,6 +49,9 @@ public:
     // step_all, i.e. inside the vehicle_islands_substep job.
     void apply_pending_engine_maps_swaps();
     [[nodiscard]] std::size_t count() const { return instances_.size(); }
+    // True iff id names a vehicle this System created. Vehicles are never
+    // destroyed, so every issued id has generation 1 (create()).
+    [[nodiscard]] bool contains(VehicleId id) const { return id.generation == 1 && id.index < instances_.size(); }
     [[nodiscard]] VehicleInstance& at(VehicleId id) { return *instances_[id.index]; }
     [[nodiscard]] const VehicleInstance& at(VehicleId id) const { return *instances_[id.index]; }
 

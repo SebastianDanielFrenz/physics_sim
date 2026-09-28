@@ -20,13 +20,10 @@
 //     tables from the new maps; apply_pending_maps_swap is a pointer and
 //     buffer exchange (no allocation, no free, no refill), and the old maps
 //     drop right there, outside any job.
-//   - An unknown component id, or a known component that is not a
-//     simulated engine, or null maps, throws std::runtime_error with a
-//     pinned message. H7 (PROVISIONAL, see this file's own H7 case
-//     comment) deliberately does not cover an unknown VehicleId:
-//     ps::vehicle::System::at(VehicleId) is a plain operator[] with no
-//     bounds check, so that path is undefined behaviour, not a pinned
-//     error - out of scope for a regression test.
+//   - An unknown vehicle id (World::replace_engine_maps checks it before
+//     System::at, C16b review), an unknown component id, a known component
+//     that is not a simulated engine, or null maps, throws
+//     std::runtime_error with a pinned message (H7).
 
 #include "drivetrain/engine_simulated.h"
 #include "ps/drivetrain/engine_maps.h"
@@ -232,19 +229,26 @@ TEST_CASE("C16b H6: hot swap is worker-count invariant and its consuming tick al
     CHECK(hash_1w == hash_10w);
 }
 
-// H7 (PROVISIONAL, scoped): every rejection path reachable on a KNOWN
-// vehicle. "Unknown VehicleId" is intentionally NOT covered here -
-// ps::vehicle::System::at(VehicleId) (core/src/vehicle/system.h) is a bare
-// operator[] with no bounds/generation check, so calling replace_engine_maps
-// on a bogus/stale VehicleId is undefined behaviour at the System::at()
-// call inside Powertrain::request_replace_engine_maps's caller, not a
-// pinned, testable error - the same class of precondition every other
-// VehicleId-taking World method (wheel_telemetry, powertrain_energy, ...)
-// already leaves to the caller.
-TEST_CASE("C16b H7: replace_engine_maps rejects a bad request on a known vehicle without applying it", "[drivetrain][cycle][io]") {
+// H7: every rejection path - an unknown vehicle id (C16b review: the
+// header promised a throw, the code indexed System's vector out of bounds),
+// an unknown component id, null maps, a non-simulated engine.
+TEST_CASE("C16b H7: replace_engine_maps rejects a bad request without applying it", "[drivetrain][cycle][io]") {
     const vehicle::VehicleDesc desc = load_sim_vehicle();
     Rig rig = make_rig(desc, 2);
     const EngineMapsPtr maps = make_scaled_maps(desc, 1.0);
+
+    // Unknown vehicle ids: one past the only vehicle, a far index, a wrong
+    // generation on the real index, and the default (invalid) id.
+    VehicleId past = rig.vehicle;
+    past.index += 1;
+    VehicleId far = rig.vehicle;
+    far.index = 1000000;
+    VehicleId stale = rig.vehicle;
+    stale.generation += 1;
+    for (const VehicleId bad : {past, far, stale, VehicleId{}}) {
+        CHECK_THROWS_WITH(rig.world->replace_engine_maps(bad, "engine", maps),
+                          ContainsSubstring("replace_engine_maps: unknown vehicle id"));
+    }
 
     CHECK_THROWS_WITH(rig.world->replace_engine_maps(rig.vehicle, "not_a_real_component", maps),
                        ContainsSubstring("unknown component id"));
