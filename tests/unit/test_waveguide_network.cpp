@@ -469,3 +469,111 @@ TEST_CASE("waveguide diag: micro-benchmark ns per WG sample per segment", "[.][d
         CHECK(std::isfinite(net.wave_energy()));
     }
 }
+
+TEST_CASE("V6 expansion-chamber transmission loss vs the plane-wave formula below the first cross-mode",
+          "[drivetrain][cycle][pipe]") {
+    // Catches: a junction that does not weight the arriving waves by segment
+    // admittance (the area ratio disappears), a wrong chamber delay (plan V6).
+    // Anechoic inlet -> 50 mm pipe -> 150 mm x 0.3 m chamber -> 50 mm pipe ->
+    // anechoic outlet, lossless, no mean flow. A 1 Pa incident impulse; with
+    // equal inlet/outlet pipes TL = -20 log10 |T(f)|, T the DFT of the
+    // transmitted wave (the allpass delays are unit-magnitude). Reference
+    // (Davis et al., NACA Report 1192, 1954; Munjal, Acoustics of Ducts and
+    // Mufflers, 1987, simple expansion chamber):
+    //   TL = 10 log10(1 + (m - 1/m)^2 sin^2(kL) / 4),  m = S_ch/S_p,
+    // valid below the first cross-mode f_c = 1.841 c/(pi D_ch).
+    const double d_p = 0.05, d_ch = 0.15, l_ch = 0.3;
+    WaveguideNetworkDesc d;
+    d.nodes = {node(WgNodeDesc::Kind::Anechoic, "in"), node(WgNodeDesc::Kind::Junction, "j1"),
+               node(WgNodeDesc::Kind::Junction, "j2"), node(WgNodeDesc::Kind::Anechoic, "out")};
+    d.segments.push_back(seg("inlet", 0.5, d_p, 0, 1, EndCorrection::None, EndCorrection::None));
+    d.segments.push_back(seg("chamber", l_ch, d_ch, 1, 2, EndCorrection::None, EndCorrection::None));
+    d.segments.push_back(seg("outlet", 0.5, d_p, 2, 3, EndCorrection::None, EndCorrection::None));
+    WaveguideNetwork net(d, kHFull);
+    std::vector<double> out;
+    const int steps = static_cast<int>(0.25 / kHFull);
+    for (int k = 0; k < steps; ++k) {
+        if (k == 0) net.set_node_wave(0, 1.0);
+        net.step();
+        out.push_back(net.node_arriving_wave(3));
+    }
+    const double c = net.segment_sound_speed(1);
+    const double l = net.segment_effective_length(1);
+    const double m = (d_ch * d_ch) / (d_p * d_p);
+    const double f_c = 1.841 * c / (kPi * d_ch);
+    double worst = 0.0, worst_f = 0.0, tl_max = 0.0;
+    for (double f = 20.0; f < f_c; f += 10.0) {
+        const double s = std::sin(2.0 * kPi * f * l / c);
+        const double tl_ref = 10.0 * std::log10(1.0 + 0.25 * (m - 1.0 / m) * (m - 1.0 / m) * s * s);
+        const double tl = -20.0 * std::log10(dft_mag(out, kHFull, f));
+        tl_max = std::fmax(tl_max, tl);
+        if (std::fabs(tl - tl_ref) > worst) {
+            worst = std::fabs(tl - tl_ref);
+            worst_f = f;
+        }
+    }
+    std::printf("V6: m %.1f, f_c %.1f Hz, max TL %.3f dB, worst |TL - formula| %.3e dB at %.0f Hz\n", m, f_c, tl_max,
+                worst, worst_f);
+    CHECK(worst < 1.0);
+    CHECK(tl_max > 12.0);
+}
+
+TEST_CASE("W8 quasi-steady resistance element: mean pressure drop, linearised transmission, dissipation",
+          "[drivetrain][cycle][pipe]") {
+    // Catches: a wrong mean-drop law (u from the wrong area or without the
+    // flow fraction), a linearised resistance that is not d(dp)/dQ, a 2-port
+    // that creates energy. Two anechoic lines through one Resistance node; a
+    // 1 Pa impulse from the left. Series resistance R between equal
+    // impedances Z: transmitted 2Z/(R + 2Z), reflected R/(R + 2Z) (DC sums of
+    // the unit-DC-gain allpass responses).
+    for (int variant = 0; variant < 2; ++variant) {
+        WaveguideNetworkDesc d;
+        const double dia = 0.05, area = 0.25 * kPi * dia * dia;
+        const double mdot = 0.05;
+        d.nodes = {node(WgNodeDesc::Kind::Anechoic, "in"), node(WgNodeDesc::Kind::Resistance, "cat"),
+                   node(WgNodeDesc::Kind::Anechoic, "out")};
+        d.segments.push_back(seg("a", 0.3, dia, 0, 1, EndCorrection::None, EndCorrection::None));
+        d.segments.push_back(seg("b", 0.3, dia, 1, 2, EndCorrection::None, EndCorrection::None));
+        const WaveguideNetwork probe(d, kHFull);
+        const double rho = probe.segment_density(0);
+        const double z = 1.0 / probe.segment_admittance(0);
+        double r_ac = 0.0, dp_ref = 0.0;
+        if (variant == 0) {
+            d.nodes[1].r_linear_pa_s_m = rho * probe.segment_sound_speed(0);  // R = Z
+            r_ac = d.nodes[1].r_linear_pa_s_m / area;
+            dp_ref = d.nodes[1].r_linear_pa_s_m * mdot / (rho * area);
+        } else {
+            d.nodes[1].k_loss = 4.0;
+            d.nodes[1].flow_fraction = 0.5;
+            const double u = 0.5 * mdot / (rho * area);
+            dp_ref = 4.0 * rho * u * u / 2.0;
+            r_ac = 4.0 * rho * u / area;
+        }
+        WaveguideNetwork net(d, kHFull);
+        net.set_mean_mass_flow(mdot);
+        double t_sum = 0.0, r_sum = 0.0, t_sq = 0.0, r_sq = 0.0;
+        for (int k = 0; k < 4000; ++k) {
+            if (k == 0) net.set_node_wave(0, 1.0);
+            net.step();
+            const double t = net.node_arriving_wave(2), r = net.node_arriving_wave(0);
+            t_sum += t;
+            r_sum += r;
+            t_sq += t * t;
+            r_sq += r * r;
+        }
+        const double t_ref = 2.0 * z / (r_ac + 2.0 * z), rr_ref = r_ac / (r_ac + 2.0 * z);
+        const double dissipated = 1.0 - t_sq - r_sq;
+        const double diss_ref = 1.0 - t_ref * t_ref - rr_ref * rr_ref;
+        std::printf("W8 %s: T %.12f vs %.12f, R %.12f vs %.12f, dissipated %.9f vs %.9f, dp %.6f vs %.6f Pa\n",
+                    variant == 0 ? "linear R = Z" : "k_loss 4, flow fraction 0.5", t_sum, t_ref, r_sum, rr_ref,
+                    dissipated, diss_ref, net.mean_pressure_drop(), dp_ref);
+        CHECK(std::fabs(t_sum - t_ref) < 1e-9);
+        CHECK(std::fabs(r_sum - rr_ref) < 1e-9);
+        CHECK(std::fabs(dissipated - diss_ref) < 1e-9);
+        CHECK(dissipated > 0.0);
+        CHECK(rel(net.mean_pressure_drop(), dp_ref) < 1e-12);
+        // The linearised element drops (r_lin + K rho |u|) u for the same DC
+        // flow: dp for a linear element, twice dp for a pure K element.
+        CHECK(rel(net.linearised_mean_drop(), variant == 0 ? dp_ref : 2.0 * dp_ref) < 1e-12);
+    }
+}
