@@ -777,6 +777,129 @@ TEST_CASE("Tractor I4 scenario's control events produce the expected live powert
     }
 }
 
+// data/scenarios/vehicle_fuel_tank.json (PHYS-033 P4 I7a C7; switched from
+// Neutral to the in-gear variant by C7 review round 1's F4 fix - see
+// tests/support/fixtures/vehicle_fuel_tank_car.json's own "source" field for
+// the full measurement history of both variants): a car launched in 1st gear
+// at WOT with the fixture's deliberately tiny 0.005 kg initial tank - the
+// tank runs dry, the engine can no longer hold the driveline's speed, and the
+// auto-clutch's anti-stall panic release dumps the clutch open before the
+// wheels can drag the dead engine below stall_rpm; the engine stalls (with
+// the clutch open) well within the scenario's 10 s duration. Pins the literal
+// hash recorded when the in-gear scenario/fixture were authored (ps_run at
+// 1/2/4/10 workers all agreed before this test existed).
+TEST_CASE("State hash for the fuel tank starvation scenario is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][vehicle][drivetrain][fuel][heavy][world]") {
+    constexpr std::uint64_t kRecorded = 0xe545d5f57136415fULL; // recorded 2026-09-28 (in-gear F4 fix, fixed B1/B2/B3/F1 engine+fuel data)
+    const std::uint64_t reference = run_scenario_file("vehicle_fuel_tank.json", 1);
+    INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
+    REQUIRE(reference == kRecorded);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("vehicle_fuel_tank.json", workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+// F12 companion (mirrors the tractor I4 "live effect" companion above): the
+// hash-equality case above proves reproducibility, not that the tank
+// actually emptied and the engine actually stalled through the intended
+// mechanism - a scenario that silently ignored the fuel model, or stalled
+// for some unrelated reason, would hash just as reproducibly. This runs
+// vehicle_fuel_tank.json once (1 worker) and reads World's live fuel/engine/
+// clutch state directly.
+//
+// C7 review round 1 (F4): the pre-review version of this test ran the
+// scenario in Neutral, where the auto-clutch's Launch law fully closes the
+// clutch regardless of engine rpm (manual_tcu.cpp's own comment: "Neutral
+// (current == 0) is unaffected - the Launch law closes fully in N anyway"),
+// so that stall was pure fuel exhaustion, never anti-stall-mediated. Now
+// that the scenario launches in 1st gear (gear_request 1), the stall is
+// expected to happen via the auto-clutch's anti-stall panic release
+// (AutoClutchDesc::anti_stall_release_rate_per_s) opening the clutch as
+// engine rpm falls through anti_stall_rpm - asserted below via the engine
+// stalling AND the effective clutch engagement being low (open) at the tick
+// it does, not merely that the two events occur in some order.
+//
+// For context, a pure-Neutral WOT rev of the same 0.005 kg tank (not what
+// this scenario runs any more) has a closed-form empty-to-stall gap:
+// integral of J/|m(omega)| from 400 to ~6450-6600 rpm, J = 0.16+0.004+0.010 =
+// 0.174 kg*m^2 (engine+clutch+gearbox-input inertia, clutch locked, no
+// driveline load), gives 3.73-3.80 s - matching the pre-review Neutral
+// scenario's own measured 3.80 s gap (2.04 s empty, 5.84 s stall) almost
+// exactly. That is a useful independent physics cross-check of the
+// idle-integrator/fuel-starvation coupling, but it no longer describes what
+// THIS scenario measures now that it launches in gear (the in-gear stall is
+// mediated by the auto-clutch/driveline, not a closed-form coast-down), so
+// it is not re-asserted here - see the fixture's own "source" field for the
+// full numbers of every variant considered.
+TEST_CASE("Fuel tank starvation scenario's tank empties and the engine stalls via the anti-stall path",
+          "[determinism][vehicle][drivetrain][fuel][world]") {
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_fuel_tank.json");
+    sc.world_config.job_workers = 1;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    const ps::VehicleId vehicle = built.vehicles_by_name.at("car");
+
+    const ps::real initial_tank_kg = world.fuel_tank_mass(vehicle);
+    REQUIRE(initial_tank_kg > 0.0);
+    REQUIRE(initial_tank_kg < 0.01); // the fixture's deliberately tiny 0.005 kg start
+
+    std::size_t next_control_event = 0;
+    int empty_tick = -1;
+    int stall_tick = -1;
+    ps::real clutch_engagement_at_stall = -1.0;
+    ps::real prev_tank_kg = initial_tank_kg;
+    bool tank_ever_decreased = false;
+    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    for (int i = 0; i < ticks; ++i) {
+        while (next_control_event < sc.control_events.size() && sc.control_events[next_control_event].time_s <= world.sim_time()) {
+            const auto& ev = sc.control_events[next_control_event];
+            world.set_control(ev.channel, ev.value);
+            ++next_control_event;
+        }
+        world.step();
+
+        const ps::real tank_kg = world.fuel_tank_mass(vehicle);
+        if (tank_kg < prev_tank_kg) tank_ever_decreased = true;
+        prev_tank_kg = tank_kg;
+        if (empty_tick < 0 && tank_kg == 0.0) empty_tick = i;
+        if (stall_tick < 0 && world.powertrain_state(vehicle).engine_state == drivetrain::EngineState::Stalled) {
+            stall_tick = i;
+            clutch_engagement_at_stall = world.powertrain_state(vehicle).clutch_engagement;
+        }
+    }
+
+    CHECK(tank_ever_decreased);
+    REQUIRE(empty_tick >= 0);
+    REQUIRE(stall_tick >= 0);
+    CHECK(empty_tick < stall_tick); // the tank must run dry before the engine stalls, not the other way round
+    const ps::real empty_time_s = static_cast<ps::real>(empty_tick) / sc.world_config.tick_rate_hz;
+    const ps::real stall_time_s = static_cast<ps::real>(stall_tick) / sc.world_config.tick_rate_hz;
+    INFO("empty_tick=" << empty_tick << " (" << empty_time_s << " s) stall_tick=" << stall_tick << " (" << stall_time_s
+                        << " s) clutch_engagement_at_stall=" << clutch_engagement_at_stall);
+    // Measured 2026-09-28 (in-gear variant, current fixed B1/B2/B3/F1
+    // engine+fuel data): empty_tick=283 (1.17917 s), stall_tick=1569
+    // (6.5375 s), clutch_engagement_at_stall=0.0 (fully open - the
+    // anti-stall panic release, not a wheel-dragged stall with the clutch
+    // still closed). Bounds below carry margin around these measured
+    // values, not tight-fitted to them.
+    CHECK(empty_time_s < real(2.0));
+    CHECK(stall_time_s < real(8.0));
+    // The anti-stall path specifically: the clutch must be substantially open
+    // (not locked/closed) at the exact tick the engine is recorded Stalled -
+    // a stall that happened with the clutch still closed would mean the
+    // wheels dragged the engine down directly, not the anti-stall release
+    // this scenario is meant to exercise.
+    CHECK(clutch_engagement_at_stall < real(0.2));
+    CHECK(world.fuel_tank_mass(vehicle) == 0.0); // stays empty (no refuel event in this scenario)
+
+    const drivetrain::PowertrainEnergy& e = world.powertrain_energy(vehicle);
+    // Closed-form mass balance: everything the tank lost was booked as burnt
+    // fuel (no external refuel in this scenario, so fuel_external_added == 0).
+    CHECK(std::abs((initial_tank_kg - world.fuel_tank_mass(vehicle)) - e.fuel_mass) <= 1e-12);
+}
+
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {
     constexpr std::size_t kBodies = 8;
     constexpr int kTicks = 10;
