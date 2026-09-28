@@ -760,6 +760,21 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
 - Compressor surge (Sebastian, 2026-09-26): I7d only flags surge and counts
   events for the sound system. A real surge model stays an optional later
   item, taken up only if the results turn out unsatisfactory.
+- Fun engine (Sebastian, 2026-09-28): once development is far enough, a
+  simulated Dodge Challenger SRT Demon 170 engine (6.2 L supercharged V8,
+  E85) in a car of its own. Not before these exist: the I7c generator
+  producing a multi-cylinder V8 from its description; a crank-driven
+  positive-displacement supercharger (pulley ratio, bypass valve, drive
+  power taken from the crank) - I7d as scoped covers turbochargers only,
+  so this is an addition to I7d or right after it; knock-limited spark
+  (I7c C17b) so the pump-fuel and E85 figures differ for a physical
+  reason. Data rule unchanged: cited manufacturer figures (peak power and
+  torque on E85 and on pump fuel, bore/stroke) are the only validation
+  targets, never inputs; everything else labelled assumed. Open for then:
+  the real car has an 8-speed torque-converter automatic, which the
+  project does not have yet (stand-in: sedan-style manual with the
+  auto-shift assist, labelled), and drag radials, for which no citable
+  tyre data is known yet.
 - Shift logic and the pedal (Sebastian, 2026-09-26): on a manual gearbox the
   auto-shift, auto-clutch and auto-blip are game driver assists for players
   who do not want to shift, not a gear controller; auto-shift is not a
