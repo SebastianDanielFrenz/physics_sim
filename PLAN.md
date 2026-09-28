@@ -793,6 +793,20 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
 - Compressor surge (Sebastian, 2026-09-26): I7d only flags surge and counts
   events for the sound system. A real surge model stays an optional later
   item, taken up only if the results turn out unsatisfactory.
+- Generated A25A follow-up rulings (Sebastian, 2026-09-28; C17a M-A missed
+  the WOT torque window, vault PHYS-055), each fixed BEFORE any re-run:
+  - Runner: use a CITED A25A intake runner length if one can be found (Tier 1);
+    otherwise keep the quarter-wave rule and S1's [!mayfail] at 3000-4500 rpm.
+    The ps_audio 1D pipe model (A5/A6) replaces the lumped runner later. The
+    0.25L runner that happens to match is rejected as a fit.
+  - Spark: the measured EPA WOT/part-load spark schedule becomes a Tier 1b ECU
+    input (like cam phase and lambda), plus a Tier 2 frozen literature
+    flame-development (ignition) delay, since the model has none. This
+    supersedes D11's "measured spark schedules are NOT used by the shipped
+    runtime" for engines that have a measured schedule; engines without one
+    keep mbt_tracking.
+  - Friction: keep the F4 Ecotec correlation. A25A motoring data stays
+    forbidden as an input (D1).
 - Order (Sebastian, 2026-09-28): `ps_audio` (engine sound from the live cycle
   model, after its design pass closes the acoustic gap noted under "Audio
   library") is implemented BEFORE the engine design GUI below.
