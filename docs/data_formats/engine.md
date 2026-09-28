@@ -16,8 +16,8 @@ motoring (closed-throttle/engine-braking) torque curve, plus idle control,
 a rev limiter, a starter model and rpm thresholds for the engine's own
 state machine (off → firing → idle → running). PHYS-033 P4 I7a C5 turned
 `read_engine_fields` into a thin dispatcher on `kind` so a second kind
-(`"simulated"`, a full MVEM engine) can sit next to `torque_map` once it
-exists (I7b) — see the [`kind`](#kind) section below. `torque_map` also
+(`"simulated"`, a full MVEM engine) can sit next to `torque_map`; its
+schema landed in I7b C10 — see the [`kind`](#kind) section below. `torque_map` also
 gained an optional fuel model in C5: [`fuel`](#fuel) and
 [`fuel_map`](#fuel_map) below; C5d added a no-map alternative,
 [`fuels`](#fuels-ignition-indicated_efficiency)/[`ignition`](#fuels-ignition-indicated_efficiency)/
@@ -29,7 +29,7 @@ engine that burns fuel but has no calibrated map.
 | Value | Status | Meaning |
 |---|---|---|
 | absent, or `"torque_map"` | shipped | the `torque_map` engine documented in this file |
-| `"simulated"` | rejected — `"<ctx>: engine kind \"simulated\" is not yet supported (PHYS-033 I7b)"` | reserved for a future full MVEM engine |
+| `"simulated"` | loads (PHYS-033 P4 I7b C10); the runtime engine is I7b C11 and its Powertrain integration I7b C12 - until C12 a vehicle with one is rejected by the Powertrain constructor ("simulated engine not yet integrated (I7b C12)") | the mean-value (MVEM) engine, see [`kind: "simulated"`](#kind-simulated-the-mvem-engine) below |
 | anything else | rejected — `"<ctx>: engine 'kind' must be \"torque_map\" or \"simulated\", got \"<value>\""` | — |
 
 Before C5, `kind` was required and had to equal `"torque_map"` literally
@@ -65,7 +65,7 @@ every shipped engine file sets it).
 | `governor` | object, see [below](#governor) | optional | absent (no governor) | — | all-speed diesel governor with droop (PHYS-033 P4 I4 C12) |
 | `crank_axis_local` | Vec3 | optional | `[0,0,0]` | zero or unit length (±1e-6), else `"<ctx>.crank_axis_local must be zero or a unit vector, got length <len>"` | chassis-local direction of positive crank ω, for the optional rotor-reaction torque on the chassis; zero = no rotor reaction |
 | `initial_state` | string | optional | `"running"` | must be `"running"` or `"off"`, else `"<ctx>: initial_state must be \"running\" or \"off\", got \"<value>\""` | engine state at scenario start |
-| `throttle_input` | string | optional (PHYS-033 P4 I7a C3; a simulated MVEM engine, out of this commit's scope, will require it explicitly) | `"electronic"` | must be `"electronic"` or `"mechanical"`, else `"<ctx>: throttle_input must be \"electronic\" or \"mechanical\", got \"<value>\""` | which throttle-command stage kind this engine expects when no explicit `throttle_control` powertrain component names it (see `vehicle.md`'s ["`throttle_control` component fields (I7a C3)"](vehicle.md#throttle_control-component-fields-i7a-c3) section) — an explicit `throttle_control` component naming this engine must declare the SAME `kind` as this field, both directions checked at load time; a mismatch is rejected (`"<ctx>: throttle_control 'kind' ... does not match engine '<id>'s throttle_input ..."`), it is never silently overridden |
+| `throttle_input` | string | optional (PHYS-033 P4 I7a C3; a `"simulated"` engine requires it explicitly, see below) | `"electronic"` | must be `"electronic"` or `"mechanical"`, else `"<ctx>: throttle_input must be \"electronic\" or \"mechanical\", got \"<value>\""` | which throttle-command stage kind this engine expects when no explicit `throttle_control` powertrain component names it (see `vehicle.md`'s ["`throttle_control` component fields (I7a C3)"](vehicle.md#throttle_control-component-fields-i7a-c3) section) — an explicit `throttle_control` component naming this engine must declare the SAME `kind` as this field, both directions checked at load time; a mismatch is rejected (`"<ctx>: throttle_control 'kind' ... does not match engine '<id>'s throttle_input ..."`), it is never silently overridden |
 | `fuel` | string (path) | optional; **required if `fuel_map` present** | absent (no fuel model) | non-empty string, else `"<ctx>: 'fuel' must be a non-empty path string"`; must resolve and load via `ps::io::load_fuel_json` | path to a `physics_sim.fuel/1` file (see `fuel.md`), resolved relative to THIS engine JSON's own directory — the referenced engine file's own directory when the engine itself was reached via a vehicle's `{"ref": ...}`, else the vehicle file's directory for an inline engine block. **Review fix B1:** `fuel` is TRUE SHORTHAND for a one-entry `fuels` list — the loader always sets `fuels = [fuel]` internally when `fuel` is present, whether or not `fuel_map` is ALSO present. So `fuel` with no `fuel_map` is NOT a no-op: it activates the crude no-map estimate below on that one fuel, exactly like writing `"fuels": ["<same path>"]`; `ignition` is then required (see the `fuels`/`ignition` row below) |
 | `fuel_map` | object, see [below](#fuel_map) | optional | absent (`has_fuel_map = false`, no fuel computation anywhere) | see below | fuel flow (g/s) vs. (rpm, load) — `load` is `theta_c`, the post-limiter combustion fraction |
 | `fuels` | array of string (paths) | optional; mutually exclusive with `fuel`/`fuel_map` at the JSON-key level | absent | non-empty array of non-empty path strings, no duplicates (`std::filesystem::equivalent` comparison — review fix N12, was a `weakly_canonical` string compare), each entry must be a string (else `"<ctx>: 'fuels' entries must be non-empty path strings"`) and load via `ps::io::load_fuel_json`; rejected alongside `fuel` or `fuel_map` | PHYS-033 P4 I7a C5d: a plain list of fuels this engine can run on, for the crude no-map estimate (see [below](#fuels-ignition-indicated_efficiency)) — `fuels[0]` is the ACTIVE fuel, no blending; a hypothetical per-entry weighted blend (C5e) was cancelled. Internally this vector is also populated (as a one-entry list) whenever singular `fuel` is present — see that row above |
@@ -417,3 +417,141 @@ anyway).
   message pointing at `fuel_cut`; see [`governor`](#governor)'s own note
   and the `limiter` section's note above. A governed engine normally wants
   `fuel_cut` for overspeed protection, not `soft_cut`.
+
+## Kind "simulated": the MVEM engine
+
+PHYS-033 P4 I7b C10. Public descriptor: `ps::drivetrain::SimulatedEngineDesc`
+(`core/include/ps/drivetrain/powertrain_desc.h`), a `ComponentParams`
+alternative next to `TorqueMapEngineDesc`. Loader: `read_simulated_fields`
+(`core/src/io/vehicle_io.cpp`). A mean-value engine: manifold pressure is a
+state, torque follows from the air mass the cylinders take in, the fuel the
+ECU adds to it and the maps below. It therefore has **no** WOT or motoring
+curve. The runtime model is `core/src/drivetrain/engine_simulated.h`
+(I7b C11); the Powertrain accepts it from I7b C12 on.
+
+Every table is **inline** in the engine object. Inline tables are
+first-class schema, not a test shortcut: I7c adds generated maps behind the
+same descriptor, and a hand-authored or literature-derived engine may keep
+its tables inline for good.
+
+### Unit conventions (file to descriptor)
+
+| File unit | Descriptor unit | Where |
+|---|---|---|
+| mm | m | `bore_mm`, `stroke_mm`, rotary dimensions, `throttle_body.diameter_mm` |
+| L | m^3 | `intake_manifold_volume_l` |
+| mm^2 | m^2 | `idle_control.bypass_area_mm2` |
+| kPa | Pa | every `p_im_kpa` axis, `pmep_excess_kpa` values |
+| g per crank revolution | kg | `maps.eta_i`'s `air_mass_per_rev_g` axis |
+
+### Table format
+
+A 2D map is `{"rpm": [...], "<load key>": [...], "values": [[...], ...]}`
+with one `values` row per `rpm` point and one entry per load point
+(row-major, same as `Table2D`: `values[i_rpm][i_load]`). Both axes need at
+least 2 points, strictly ascending; `rpm >= 0`. Lookup is bilinear and
+clamped at every edge. A 1D curve is the usual `{"x": [...], "y": [...]}`.
+
+### Fields
+
+| Field | Type | Required | Rule | Meaning |
+|---|---|---|---|---|
+| `architecture` | string | yes | `"piston_4stroke"` or `"rotary"` | selects the geometry block and the cycle factor (1/2 per crank revolution for a 4-stroke, 1 per e-shaft revolution for a rotary) |
+| `bore_mm`, `stroke_mm` | number | piston | > 0 | displacement = cylinders * pi/4 * bore^2 * stroke |
+| `cylinders` | integer | piston | [1, 64] | |
+| `rotor_radius_mm`, `eccentricity_mm`, `rotor_width_mm` | number | rotary | > 0, eccentricity < rotor radius | displaced volume per face 3*sqrt(3)*R*e*b |
+| `rotors` | integer | rotary | [1, 64] | |
+| `intake_manifold_volume_l` | number | yes | > 0 | plenum plus runners |
+| `throttle_body.diameter_mm` | number | yes | > 0 | per throttle body |
+| `throttle_body.count` | integer | no (1) | [1, 64] | individual throttle bodies sharing one position |
+| `throttle_body.discharge_coefficient` | number | yes | (0, 1] | |
+| `throttle_body.area_fraction_vs_position` | curve | yes | x exactly 0..1 ascending; y in [0, 1], non-decreasing; y(0) > 0 | open-area fraction over plate position; a closed plate still leaks |
+| `throttle_input` | string | **yes** | `"electronic"` or `"mechanical"` | see "Input types" below |
+| `throttle_actuator_tau_s` | number | electronic only | >= 0 (0 = no lag) | first-order plate actuator time constant |
+| `idle_control.bypass_area_mm2` | number | mechanical only | > 0 | idle bypass valve area at full opening |
+| `ecu.lambda_target` | table, load `p_im_kpa` | yes | values in [0.5, 2] | open-loop air/fuel ratio target |
+| `ecu.spark_advance_deg` | table, load `p_im_kpa` | yes | values in [-30, 70] | spark advance target [deg BTDC] |
+| `maps.source` | string | yes | non-empty | provenance (PLAN.md section 8) |
+| `maps.ve` | table, load `p_im_kpa` | yes | values in (0, 2) | volumetric efficiency |
+| `maps.eta_i` | table, load `air_mass_per_rev_g` | yes | load axis >= 0; values in (0, 1) | **gross** indicated efficiency at MBT spark and lambda = 1 (see below) |
+| `maps.f_lambda` | curve, x = lambda | yes | >= 2 points, x > 0, y >= 0, **f_lambda(1) == 1** | mixture correction on eta_i |
+| `maps.eta_spark` | curve, x = spark - MBT [deg] | yes | >= 2 points, y in [0, 1], **eta_spark(0) == 1** | spark-timing correction on eta_i |
+| `maps.theta_mbt_deg` | table, load `p_im_kpa` | yes | values in [-30, 70] | MBT spark advance [deg BTDC] |
+| `maps.friction_torque_nm` | curve, x = rpm | yes | x[0] == 0; y >= 0 | friction torque magnitude; y(0) is the Coulomb part |
+| `maps.pmep_excess_kpa` | table, load `p_im_kpa` | no (absent = 0) | values >= 0 | reserved: pumping loss beyond the ideal (p_em - p_im) term |
+| `maps.theta_kl_deg` | table, load `p_im_kpa` | no (absent = no limit) | values in [-30, 70] | reserved: knock-limited spark advance; spark used = min(ECU target, theta_kl) |
+| `inertia_kgm2` | number | yes | > 0 | as `torque_map` |
+| `breakaway_torque_nm` | number | no (0) | >= `maps.friction_torque_nm(0)` | static Coulomb capacity |
+| `idle_rpm`, `stall_rpm`, `fire_rpm`, `start_complete_rpm`, `dfco_enable_rpm`, `dfco_reenable_rpm` | number | no | same ordering rules as `torque_map` | |
+| `idle_control.kp_per_rpm`, `ki_per_rpm_s`, `max_throttle` | number | no | max_throttle in (0, 1] | electronic: PI on the plate; mechanical: PI on the bypass valve (max_throttle = largest valve opening) |
+| `limiter`, `starter`, `crank_axis_local`, `initial_state` | | no | as `torque_map` | |
+| `fuels` / `fuel` | array / string | **yes** | as `torque_map`'s [`fuels`](#fuels-ignition-indicated_efficiency) | the engine's torque comes from burnt fuel, so a fuel is mandatory |
+| `ignition` | string | **yes** | `"spark"` only | `"compression"` is rejected until a CI combustion model exists |
+
+**eta_i is GROSS indicated efficiency at MBT spark and lambda = 1.** The
+indicated work is `W_ind = eta_i(rpm, m_air_per_rev) * f_lambda(lambda) *
+eta_spark(spark - MBT) * LHV * m_fuel`. `f_lambda` and `eta_spark` are
+applied on top of it, so the loader requires them to be exactly 1 at their
+reference points. Pumping (`(p_em - p_im + pmep_excess)` times the
+displaced volume) and friction are separate torque terms and are never
+folded into eta_i. The loader also rejects a map set whose
+`max(eta_i) * max(f_lambda) * max(eta_spark)` reaches 1.
+
+### Input types (I7 plan section 3.4.5)
+
+- **Electronic** (drive-by-wire): the throttle command is a torque request.
+  The ECU turns it into a plate target through an inverse table built at
+  load time; the plate follows through a first-order actuator
+  (`throttle_actuator_tau_s`). The idle PI raises the plate. A
+  `bypass_area_mm2` is rejected (idle air comes from the plate).
+- **Mechanical** (cable): the command IS the plate position. Idle air comes
+  from the bypass valve (`bypass_area_mm2`, required), driven by the idle
+  PI. `throttle_actuator_tau_s` is rejected (a cable has no actuator). As
+  for a mechanical `torque_map` engine, a `manual_tcu` with nonzero
+  `auto_blip` blip/ramp values (after defaults) is rejected.
+
+An explicit `throttle_control` component must agree with `throttle_input`
+in both directions, exactly as for `torque_map`.
+
+### Rejected on a simulated engine
+
+`wot_torque_nm_vs_rpm`, `motoring_torque_nm_vs_rpm` (derived, not given),
+`governor` (torque_map-only in I7), `fuel_map` (fuel follows from the air
+path and the lambda target), `indicated_efficiency` (use `maps.eta_i`).
+A piston key on a rotary engine and a rotary key on a piston engine are
+rejected by name.
+
+### Rejected on a torque_map engine
+
+Every simulated-only key (`architecture`, the geometry keys,
+`intake_manifold_volume_l`, `throttle_body`, `throttle_actuator_tau_s`,
+`ecu`, `maps`) and `idle_control.bypass_area_mm2`. A torque_map file
+carrying one almost certainly meant `"kind": "simulated"`.
+
+### Example (fragment)
+
+```json
+{
+  "id": "engine", "type": "engine", "kind": "simulated",
+  "architecture": "piston_4stroke", "bore_mm": 86.0, "stroke_mm": 86.0, "cylinders": 4,
+  "intake_manifold_volume_l": 3.0,
+  "throttle_body": { "diameter_mm": 60.0, "discharge_coefficient": 0.8,
+                     "area_fraction_vs_position": { "x": [0, 0.5, 1], "y": [0.01, 0.4, 1.0] } },
+  "throttle_input": "electronic", "throttle_actuator_tau_s": 0.04,
+  "ecu": {
+    "lambda_target":     { "rpm": [0, 7000], "p_im_kpa": [20, 100], "values": [[1.0, 1.0], [1.0, 0.9]] },
+    "spark_advance_deg": { "rpm": [0, 7000], "p_im_kpa": [20, 100], "values": [[30, 20], [40, 30]] }
+  },
+  "maps": {
+    "source": "documentation example, not physical data",
+    "ve":            { "rpm": [0, 3000, 7000], "p_im_kpa": [20, 100], "values": [[0.80, 0.85], [0.88, 0.95], [0.85, 0.90]] },
+    "eta_i":         { "rpm": [0, 7000], "air_mass_per_rev_g": [0, 1.5], "values": [[0.34, 0.37], [0.36, 0.38]] },
+    "f_lambda":      { "x": [0.7, 1.0, 1.5], "y": [0.85, 1.0, 0.9] },
+    "eta_spark":     { "x": [-40, 0, 10], "y": [0.5, 1.0, 0.95] },
+    "theta_mbt_deg": { "rpm": [0, 7000], "p_im_kpa": [20, 100], "values": [[30, 20], [40, 30]] },
+    "friction_torque_nm": { "x": [0, 1000, 7000], "y": [15, 18, 40] }
+  },
+  "inertia_kgm2": 0.15, "breakaway_torque_nm": 20.0,
+  "fuel": "../fuels/gasoline.json", "ignition": "spark"
+}
+```

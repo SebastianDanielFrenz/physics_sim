@@ -10,6 +10,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 
 namespace ps::io {
@@ -350,6 +351,7 @@ ps::drivetrain::ThrottleInput effective_throttle_kind(const PowertrainDesc& p, c
     for (const auto& c : p.components) {
         if (c.id == engine_id) {
             if (const auto* e = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params)) return e->throttle_input;
+            if (const auto* e = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&c.params)) return e->throttle_input;
         }
     }
     return ps::drivetrain::ThrottleInput::Electronic; // unreachable for a validated engine reference
@@ -373,8 +375,29 @@ void require_zero_or_unit(const Vec3& v, const std::string& what) {
 // shorthand), resolved exactly as they were loaded - load_vehicle_json's
 // fluid-link check compares a tank's own fuel file against these with
 // std::filesystem::equivalent (FuelDesc itself carries no path).
+// PHYS-033 P4 I7b C10 (I7 plan section 2.1): keys that exist only on a
+// "simulated" engine. A torque_map file carrying any of them is rejected -
+// it almost certainly meant "kind": "simulated" and would otherwise load as
+// a plain torque map with those fields silently ignored.
+constexpr const char* kSimulatedOnlyEngineKeys[] = {
+    "architecture",  "bore_mm",           "stroke_mm",         "cylinders",
+    "rotor_radius_mm", "eccentricity_mm", "rotor_width_mm",    "rotors",
+    "intake_manifold_volume_l", "throttle_body", "throttle_actuator_tau_s", "ecu", "maps",
+};
+
 ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
                                                            std::vector<std::string>* resolved_fuel_paths_out = nullptr) {
+    for (const char* key : kSimulatedOnlyEngineKeys) {
+        if (j.contains(key)) {
+            throw std::runtime_error(ctx + ": '" + std::string(key) +
+                                      "' is a \"simulated\" engine field and is not allowed on a \"torque_map\" engine "
+                                      "(set \"kind\": \"simulated\" or remove it)");
+        }
+    }
+    if (j.contains("idle_control") && j.at("idle_control").is_object() && j.at("idle_control").contains("bypass_area_mm2")) {
+        throw std::runtime_error(ctx + ": idle_control.bypass_area_mm2 is a \"simulated\" engine field (a torque_map "
+                                  "engine has no throttle plate or bypass valve)");
+    }
     ps::drivetrain::TorqueMapEngineDesc e;
     if (!j.contains("wot_torque_nm_vs_rpm")) throw std::runtime_error(ctx + ": 'wot_torque_nm_vs_rpm' is required");
     e.wot_torque_nm_vs_rpm = read_curve(j.at("wot_torque_nm_vs_rpm"));
@@ -784,12 +807,430 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
     return e;
 }
 
+// --- PHYS-033 P4 I7b C10: "kind": "simulated" -------------------------------
+
+// A finite JSON number at `key` (required), with a clean message otherwise.
+real require_number(const json& j, const char* key, const std::string& ctx) {
+    if (!j.contains(key)) throw std::runtime_error(ctx + ": '" + std::string(key) + "' is required");
+    if (!j.at(key).is_number()) throw std::runtime_error(ctx + ": '" + std::string(key) + "' must be a number");
+    const real v = j.at(key).get<real>();
+    if (!std::isfinite(v)) throw std::runtime_error(ctx + ": '" + std::string(key) + "' must be finite");
+    return v;
+}
+
+real require_positive(const json& j, const char* key, const std::string& ctx) {
+    const real v = require_number(j, key, ctx);
+    if (!(v > real(0.0))) throw std::runtime_error(ctx + ": '" + std::string(key) + "' must be > 0, got " + std::to_string(v));
+    return v;
+}
+
+int require_positive_int(const json& j, const char* key, const std::string& ctx) {
+    if (!j.contains(key)) throw std::runtime_error(ctx + ": '" + std::string(key) + "' is required");
+    if (!j.at(key).is_number_integer()) throw std::runtime_error(ctx + ": '" + std::string(key) + "' must be an integer");
+    const long long v = j.at(key).get<long long>();
+    if (v < 1 || v > 64) throw std::runtime_error(ctx + ": '" + std::string(key) + "' must be in [1, 64], got " + std::to_string(v));
+    return static_cast<int>(v);
+}
+
+// An engine-map table: {"rpm": [...], "<y_key>": [...], "values": [[...] per rpm]}.
+// y and values are multiplied by y_scale / value_scale (unit conversion to
+// SI). rpm >= 0, strictly ascending; every entry a finite number; at least
+// 2 points per axis (Table2D::validate()).
+ps::drivetrain::Table2D read_engine_table(const json& j, const std::string& what, const char* y_key, real y_scale,
+                                          real value_scale) {
+    if (!j.is_object()) throw std::runtime_error(what + " must be an object {rpm, " + std::string(y_key) + ", values}");
+    if (!j.contains("rpm") || !j.at("rpm").is_array()) throw std::runtime_error(what + ": 'rpm' array is required");
+    if (!j.contains(y_key) || !j.at(y_key).is_array()) {
+        throw std::runtime_error(what + ": '" + std::string(y_key) + "' array is required");
+    }
+    if (!j.contains("values") || !j.at("values").is_array()) throw std::runtime_error(what + ": 'values' array is required");
+    ps::drivetrain::Table2D t;
+    for (const auto& v : j.at("rpm")) {
+        if (!v.is_number()) throw std::runtime_error(what + ": 'rpm' entries must be numbers");
+        t.x.push_back(v.get<real>());
+    }
+    for (const auto& v : j.at(y_key)) {
+        if (!v.is_number()) throw std::runtime_error(what + ": '" + std::string(y_key) + "' entries must be numbers");
+        t.y.push_back(v.get<real>() * y_scale);
+    }
+    const auto& rows = j.at("values");
+    if (rows.size() != t.x.size()) {
+        throw std::runtime_error(what + ": 'values' must have one row per 'rpm' point (" + std::to_string(t.x.size()) +
+                                  "), got " + std::to_string(rows.size()));
+    }
+    for (std::size_t ix = 0; ix < rows.size(); ++ix) {
+        const auto& row = rows[ix];
+        if (!row.is_array() || row.size() != t.y.size()) {
+            throw std::runtime_error(what + ": 'values' row " + std::to_string(ix) + " must have one value per '" +
+                                      std::string(y_key) + "' point (" + std::to_string(t.y.size()) + ")");
+        }
+        for (std::size_t iy = 0; iy < row.size(); ++iy) {
+            if (!row[iy].is_number()) {
+                throw std::runtime_error(what + ": values[" + std::to_string(ix) + "][" + std::to_string(iy) + "] must be a number");
+            }
+            t.values.push_back(row[iy].get<real>() * value_scale);
+        }
+    }
+    const std::string err = t.validate();
+    if (!err.empty()) throw std::runtime_error(what + ": " + err);
+    if (t.x.front() < real(0.0)) throw std::runtime_error(what + ": 'rpm' must be >= 0");
+    return t;
+}
+
+void require_table_values(const ps::drivetrain::Table2D& t, const std::string& what, real lo, bool lo_inclusive, real hi,
+                          bool hi_inclusive) {
+    for (std::size_t i = 0; i < t.values.size(); ++i) {
+        const real v = t.values[i];
+        const bool lo_ok = lo_inclusive ? (v >= lo) : (v > lo);
+        const bool hi_ok = hi_inclusive ? (v <= hi) : (v < hi);
+        if (!lo_ok || !hi_ok) {
+            throw std::runtime_error(what + ": every value must be in " + std::string(lo_inclusive ? "[" : "(") +
+                                      std::to_string(lo) + ", " + std::to_string(hi) + std::string(hi_inclusive ? "]" : ")") +
+                                      ", got " + std::to_string(v) + " at index " + std::to_string(i));
+        }
+    }
+}
+
+void require_positive_y_axis(const ps::drivetrain::Table2D& t, const std::string& what, const char* y_key) {
+    if (!(t.y.front() > real(0.0))) throw std::runtime_error(what + ": '" + std::string(y_key) + "' must be > 0");
+}
+
+ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
+                                                          std::vector<std::string>* resolved_fuel_paths_out = nullptr) {
+    using namespace ps::drivetrain;
+    constexpr real kMm = real(1e-3);
+    constexpr real kKpa = real(1000.0);
+    constexpr real kGram = real(1e-3);
+
+    // Graph-engine-only keys (I7 plan section 2.1).
+    if (j.contains("wot_torque_nm_vs_rpm") || j.contains("motoring_torque_nm_vs_rpm")) {
+        throw std::runtime_error(ctx + ": wot_torque_nm_vs_rpm/motoring_torque_nm_vs_rpm are not allowed on a "
+                                  "\"simulated\" engine - simulated engines derive those curves from their air path and maps");
+    }
+    if (j.contains("governor")) {
+        throw std::runtime_error(ctx + ": 'governor' is \"torque_map\"-only in I7 (a governed simulated engine is a later "
+                                  "increment)");
+    }
+    if (j.contains("fuel_map")) {
+        throw std::runtime_error(ctx + ": 'fuel_map' is not allowed on a \"simulated\" engine - its fuel flow follows from "
+                                  "the air path and the lambda target");
+    }
+    if (j.contains("indicated_efficiency")) {
+        throw std::runtime_error(ctx + ": 'indicated_efficiency' is not allowed on a \"simulated\" engine - use maps.eta_i");
+    }
+
+    SimulatedEngineDesc e;
+
+    // --- architecture + geometry -------------------------------------------
+    if (!j.contains("architecture") || !j.at("architecture").is_string()) {
+        throw std::runtime_error(ctx + ": 'architecture' is required (\"piston_4stroke\" or \"rotary\")");
+    }
+    const std::string arch = j.at("architecture").get<std::string>();
+    constexpr const char* kPistonKeys[] = {"bore_mm", "stroke_mm", "cylinders"};
+    constexpr const char* kRotaryKeys[] = {"rotor_radius_mm", "eccentricity_mm", "rotor_width_mm", "rotors"};
+    if (arch == "piston_4stroke") {
+        e.architecture = EngineArchitecture::Piston4Stroke;
+        for (const char* k : kRotaryKeys) {
+            if (j.contains(k)) throw std::runtime_error(ctx + ": '" + std::string(k) + "' is a rotary field, not allowed on a piston_4stroke engine");
+        }
+        e.piston.bore_m = require_positive(j, "bore_mm", ctx) * kMm;
+        e.piston.stroke_m = require_positive(j, "stroke_mm", ctx) * kMm;
+        e.piston.cylinders = require_positive_int(j, "cylinders", ctx);
+    } else if (arch == "rotary") {
+        e.architecture = EngineArchitecture::Rotary;
+        for (const char* k : kPistonKeys) {
+            if (j.contains(k)) throw std::runtime_error(ctx + ": '" + std::string(k) + "' is a piston field, not allowed on a rotary engine");
+        }
+        e.rotary.rotor_radius_m = require_positive(j, "rotor_radius_mm", ctx) * kMm;
+        e.rotary.eccentricity_m = require_positive(j, "eccentricity_mm", ctx) * kMm;
+        e.rotary.rotor_width_m = require_positive(j, "rotor_width_mm", ctx) * kMm;
+        e.rotary.rotors = require_positive_int(j, "rotors", ctx);
+        if (!(e.rotary.eccentricity_m < e.rotary.rotor_radius_m)) {
+            throw std::runtime_error(ctx + ": eccentricity_mm must be < rotor_radius_mm");
+        }
+    } else {
+        throw std::runtime_error(ctx + ": 'architecture' must be \"piston_4stroke\" or \"rotary\", got \"" + arch + "\"");
+    }
+
+    e.intake_manifold_volume_m3 = require_positive(j, "intake_manifold_volume_l", ctx) * real(1e-3);
+
+    // --- throttle body -------------------------------------------------------
+    if (!j.contains("throttle_body") || !j.at("throttle_body").is_object()) {
+        throw std::runtime_error(ctx + ": 'throttle_body' object is required");
+    }
+    {
+        const auto& tb = j.at("throttle_body");
+        const std::string tctx = ctx + ".throttle_body";
+        e.throttle_body.diameter_m = require_positive(tb, "diameter_mm", tctx) * kMm;
+        e.throttle_body.count = tb.contains("count") ? require_positive_int(tb, "count", tctx) : 1;
+        e.throttle_body.discharge_coefficient = require_positive(tb, "discharge_coefficient", tctx);
+        if (e.throttle_body.discharge_coefficient > real(1.0)) {
+            throw std::runtime_error(tctx + ": 'discharge_coefficient' must be in (0, 1], got " +
+                                      std::to_string(e.throttle_body.discharge_coefficient));
+        }
+        if (!tb.contains("area_fraction_vs_position")) throw std::runtime_error(tctx + ": 'area_fraction_vs_position' is required");
+        e.throttle_body.area_fraction_vs_position = read_curve(tb.at("area_fraction_vs_position"));
+        const std::string cctx = tctx + ".area_fraction_vs_position";
+        require_ascending(e.throttle_body.area_fraction_vs_position, cctx);
+        require_unit_domain_covered_nondecreasing(e.throttle_body.area_fraction_vs_position, cctx);
+        if (!(e.throttle_body.area_fraction_vs_position.y.front() > real(0.0))) {
+            throw std::runtime_error(cctx + ": y at position 0 must be > 0 (a closed plate still leaks; the manifold fixed "
+                                      "point needs a nonzero area)");
+        }
+    }
+
+    // --- throttle input (required, plan section 3.4.3) and its input-type-
+    // specific fields (plan section 3.4.5) -----------------------------------
+    if (!j.contains("throttle_input") || !j.at("throttle_input").is_string()) {
+        throw std::runtime_error(ctx + ": 'throttle_input' is required for a simulated engine (\"electronic\" or \"mechanical\")");
+    }
+    const std::string throttle_input = j.at("throttle_input").get<std::string>();
+    if (throttle_input == "electronic") e.throttle_input = ThrottleInput::Electronic;
+    else if (throttle_input == "mechanical") e.throttle_input = ThrottleInput::Mechanical;
+    else throw std::runtime_error(ctx + ": throttle_input must be \"electronic\" or \"mechanical\", got \"" + throttle_input + "\"");
+
+    const bool has_bypass = j.contains("idle_control") && j.at("idle_control").is_object() &&
+                            j.at("idle_control").contains("bypass_area_mm2");
+    if (e.throttle_input == ThrottleInput::Mechanical) {
+        if (j.contains("throttle_actuator_tau_s")) {
+            throw std::runtime_error(ctx + ": 'throttle_actuator_tau_s' is not allowed on a mechanical throttle (a cable has "
+                                      "no actuator)");
+        }
+        if (!has_bypass) {
+            throw std::runtime_error(ctx + ": a mechanical throttle requires idle_control.bypass_area_mm2 (idle air comes "
+                                      "from the idle bypass valve)");
+        }
+        e.idle_bypass_area_m2 = require_positive(j.at("idle_control"), "bypass_area_mm2", ctx + ".idle_control") * real(1e-6);
+    } else {
+        if (has_bypass) {
+            throw std::runtime_error(ctx + ": idle_control.bypass_area_mm2 is not allowed on an electronic throttle (idle "
+                                      "air comes from the plate)");
+        }
+        e.throttle_actuator_tau_s = require_number(j, "throttle_actuator_tau_s", ctx);
+        if (e.throttle_actuator_tau_s < real(0.0)) {
+            throw std::runtime_error(ctx + ": 'throttle_actuator_tau_s' must be >= 0, got " + std::to_string(e.throttle_actuator_tau_s));
+        }
+    }
+
+    // --- ECU targets -------------------------------------------------------------
+    if (!j.contains("ecu") || !j.at("ecu").is_object()) throw std::runtime_error(ctx + ": 'ecu' object is required");
+    {
+        const auto& ej = j.at("ecu");
+        const std::string ectx = ctx + ".ecu";
+        if (!ej.contains("lambda_target")) throw std::runtime_error(ectx + ": 'lambda_target' is required");
+        e.ecu.lambda_target = read_engine_table(ej.at("lambda_target"), ectx + ".lambda_target", "p_im_kpa", kKpa, real(1.0));
+        require_positive_y_axis(e.ecu.lambda_target, ectx + ".lambda_target", "p_im_kpa");
+        require_table_values(e.ecu.lambda_target, ectx + ".lambda_target", real(0.5), true, real(2.0), true);
+        if (!ej.contains("spark_advance_deg")) throw std::runtime_error(ectx + ": 'spark_advance_deg' is required");
+        e.ecu.spark_advance_deg = read_engine_table(ej.at("spark_advance_deg"), ectx + ".spark_advance_deg", "p_im_kpa", kKpa, real(1.0));
+        require_positive_y_axis(e.ecu.spark_advance_deg, ectx + ".spark_advance_deg", "p_im_kpa");
+        require_table_values(e.ecu.spark_advance_deg, ectx + ".spark_advance_deg", real(-30.0), true, real(70.0), true);
+    }
+
+    // --- runtime maps ------------------------------------------------------------
+    if (!j.contains("maps") || !j.at("maps").is_object()) throw std::runtime_error(ctx + ": 'maps' object is required");
+    {
+        const auto& mj = j.at("maps");
+        const std::string mctx = ctx + ".maps";
+        e.maps.source = mj.value("source", std::string());
+        if (e.maps.source.empty()) throw std::runtime_error(mctx + ": 'source' is required (PLAN.md section 8)");
+
+        if (!mj.contains("ve")) throw std::runtime_error(mctx + ": 've' is required");
+        e.maps.ve = read_engine_table(mj.at("ve"), mctx + ".ve", "p_im_kpa", kKpa, real(1.0));
+        require_positive_y_axis(e.maps.ve, mctx + ".ve", "p_im_kpa");
+        require_table_values(e.maps.ve, mctx + ".ve", real(0.0), false, real(2.0), false);
+
+        if (!mj.contains("eta_i")) throw std::runtime_error(mctx + ": 'eta_i' is required");
+        e.maps.eta_i = read_engine_table(mj.at("eta_i"), mctx + ".eta_i", "air_mass_per_rev_g", kGram, real(1.0));
+        if (e.maps.eta_i.y.front() < real(0.0)) throw std::runtime_error(mctx + ".eta_i: 'air_mass_per_rev_g' must be >= 0");
+        require_table_values(e.maps.eta_i, mctx + ".eta_i", real(0.0), false, real(1.0), false);
+
+        if (!mj.contains("f_lambda")) throw std::runtime_error(mctx + ": 'f_lambda' is required");
+        e.maps.f_lambda = read_curve(mj.at("f_lambda"));
+        require_ascending(e.maps.f_lambda, mctx + ".f_lambda");
+        if (e.maps.f_lambda.x.size() < 2) throw std::runtime_error(mctx + ".f_lambda: needs at least 2 points");
+        if (!(e.maps.f_lambda.x.front() > real(0.0))) throw std::runtime_error(mctx + ".f_lambda: x (lambda) must be > 0");
+        for (real y : e.maps.f_lambda.y) {
+            if (!(y >= real(0.0)) || !std::isfinite(y)) throw std::runtime_error(mctx + ".f_lambda: every y must be >= 0 and finite");
+        }
+        if (e.maps.f_lambda.evaluate(real(1.0)) != real(1.0)) {
+            throw std::runtime_error(mctx + ".f_lambda: f_lambda(1) must be exactly 1 (eta_i is defined at lambda = 1), got " +
+                                      std::to_string(e.maps.f_lambda.evaluate(real(1.0))));
+        }
+
+        if (!mj.contains("eta_spark")) throw std::runtime_error(mctx + ": 'eta_spark' is required");
+        e.maps.eta_spark = read_curve(mj.at("eta_spark"));
+        require_ascending(e.maps.eta_spark, mctx + ".eta_spark");
+        if (e.maps.eta_spark.x.size() < 2) throw std::runtime_error(mctx + ".eta_spark: needs at least 2 points");
+        for (real y : e.maps.eta_spark.y) {
+            if (!(y >= real(0.0) && y <= real(1.0))) throw std::runtime_error(mctx + ".eta_spark: every y must be in [0, 1]");
+        }
+        if (e.maps.eta_spark.evaluate(real(0.0)) != real(1.0)) {
+            throw std::runtime_error(mctx + ".eta_spark: eta_spark(0) must be exactly 1 (eta_i is defined at MBT spark), got " +
+                                      std::to_string(e.maps.eta_spark.evaluate(real(0.0))));
+        }
+
+        if (!mj.contains("theta_mbt_deg")) throw std::runtime_error(mctx + ": 'theta_mbt_deg' is required");
+        e.maps.theta_mbt_deg = read_engine_table(mj.at("theta_mbt_deg"), mctx + ".theta_mbt_deg", "p_im_kpa", kKpa, real(1.0));
+        require_positive_y_axis(e.maps.theta_mbt_deg, mctx + ".theta_mbt_deg", "p_im_kpa");
+        require_table_values(e.maps.theta_mbt_deg, mctx + ".theta_mbt_deg", real(-30.0), true, real(70.0), true);
+
+        if (!mj.contains("friction_torque_nm")) throw std::runtime_error(mctx + ": 'friction_torque_nm' is required");
+        e.maps.friction_torque_nm = read_curve(mj.at("friction_torque_nm"));
+        require_ascending(e.maps.friction_torque_nm, mctx + ".friction_torque_nm");
+        if (e.maps.friction_torque_nm.x.front() != real(0.0)) {
+            throw std::runtime_error(mctx + ".friction_torque_nm: x[0] must be exactly 0 (its y[0] is the Coulomb part)");
+        }
+        for (real y : e.maps.friction_torque_nm.y) {
+            if (!(y >= real(0.0)) || !std::isfinite(y)) {
+                throw std::runtime_error(mctx + ".friction_torque_nm: every y must be >= 0 and finite (a friction torque magnitude)");
+            }
+        }
+
+        if (mj.contains("pmep_excess_kpa")) {
+            e.maps.pmep_excess_pa = read_engine_table(mj.at("pmep_excess_kpa"), mctx + ".pmep_excess_kpa", "p_im_kpa", kKpa, kKpa);
+            require_positive_y_axis(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", "p_im_kpa");
+            require_table_values(e.maps.pmep_excess_pa, mctx + ".pmep_excess_kpa", real(0.0), true, real(1e6), true);
+            e.maps.has_pmep_excess = true;
+        }
+        if (mj.contains("theta_kl_deg")) {
+            e.maps.theta_kl_deg = read_engine_table(mj.at("theta_kl_deg"), mctx + ".theta_kl_deg", "p_im_kpa", kKpa, real(1.0));
+            require_positive_y_axis(e.maps.theta_kl_deg, mctx + ".theta_kl_deg", "p_im_kpa");
+            require_table_values(e.maps.theta_kl_deg, mctx + ".theta_kl_deg", real(-30.0), true, real(70.0), true);
+            e.maps.has_theta_kl = true;
+        }
+
+        // Efficiency sanity bound: the largest indicated fuel-conversion
+        // efficiency any combination can reach must stay below 1.
+        real eta_max = real(0.0), fl_max = real(0.0), es_max = real(0.0);
+        for (real v : e.maps.eta_i.values) eta_max = std::max(eta_max, v);
+        for (real v : e.maps.f_lambda.y) fl_max = std::max(fl_max, v);
+        for (real v : e.maps.eta_spark.y) es_max = std::max(es_max, v);
+        if (!(eta_max * fl_max * es_max < real(1.0))) {
+            throw std::runtime_error(mctx + ": max(eta_i)*max(f_lambda)*max(eta_spark) = " +
+                                      std::to_string(eta_max * fl_max * es_max) + " implies >= 100% indicated efficiency");
+        }
+    }
+
+    // --- shared engine fields (same meaning/validation as torque_map) ------------
+    e.inertia_kgm2 = require_positive(j, "inertia_kgm2", ctx);
+    e.breakaway_torque_nm = j.value("breakaway_torque_nm", real(0.0));
+    if (e.breakaway_torque_nm < e.maps.friction_torque_nm.evaluate(real(0.0))) {
+        throw std::runtime_error(ctx + ": breakaway_torque_nm must be >= maps.friction_torque_nm(0)");
+    }
+    e.idle_rpm = j.value("idle_rpm", e.idle_rpm);
+    e.stall_rpm = j.value("stall_rpm", e.stall_rpm);
+    e.fire_rpm = j.value("fire_rpm", e.fire_rpm);
+    e.start_complete_rpm = j.value("start_complete_rpm", e.start_complete_rpm);
+    e.dfco_enable_rpm = j.value("dfco_enable_rpm", e.dfco_enable_rpm);
+    e.dfco_reenable_rpm = j.value("dfco_reenable_rpm", e.dfco_reenable_rpm);
+    if (j.contains("idle_control")) {
+        const auto& ij = j.at("idle_control");
+        e.idle.kp_per_rpm = ij.value("kp_per_rpm", e.idle.kp_per_rpm);
+        e.idle.ki_per_rpm_s = ij.value("ki_per_rpm_s", e.idle.ki_per_rpm_s);
+        e.idle.max_throttle = ij.value("max_throttle", e.idle.max_throttle);
+        if (!(e.idle.max_throttle > real(0.0) && e.idle.max_throttle <= real(1.0))) {
+            throw std::runtime_error(ctx + ": idle_control.max_throttle must be in (0, 1], got " + std::to_string(e.idle.max_throttle));
+        }
+    }
+    if (j.contains("limiter")) {
+        const auto& lj = j.at("limiter");
+        const std::string type = lj.value("type", std::string("fuel_cut"));
+        if (type == "fuel_cut") e.limiter.type = LimiterType::FuelCut;
+        else if (type == "soft_cut") e.limiter.type = LimiterType::SoftCut;
+        else throw std::runtime_error(ctx + ": limiter.type must be \"fuel_cut\" or \"soft_cut\", got \"" + type + "\"");
+        e.limiter.rpm = lj.value("rpm", e.limiter.rpm);
+        e.limiter.hysteresis_rpm = lj.value("hysteresis_rpm", e.limiter.hysteresis_rpm);
+        e.limiter.band_rpm = lj.value("band_rpm", e.limiter.band_rpm);
+        if (e.limiter.type == LimiterType::SoftCut && !(e.limiter.band_rpm > real(0.0))) {
+            throw std::runtime_error(ctx + ": limiter.band_rpm must be > 0 for a soft_cut limiter");
+        }
+    }
+    if (j.contains("starter")) {
+        const auto& sj = j.at("starter");
+        e.starter.stall_torque_nm = sj.value("stall_torque_nm", e.starter.stall_torque_nm);
+        e.starter.free_speed_rpm = sj.value("free_speed_rpm", e.starter.free_speed_rpm);
+        const std::string interlock = sj.value("interlock", std::string("clutch_or_neutral"));
+        if (interlock == "clutch_or_neutral") e.starter.interlock = StarterDesc::Interlock::ClutchOrNeutral;
+        else if (interlock == "none") e.starter.interlock = StarterDesc::Interlock::None;
+        else throw std::runtime_error(ctx + ": starter.interlock must be \"clutch_or_neutral\" or \"none\", got \"" + interlock + "\"");
+    }
+    e.crank_axis_local = read_vec3(j.value("crank_axis_local", json()), Vec3::zero());
+    require_zero_or_unit(e.crank_axis_local, ctx + ".crank_axis_local");
+    const std::string initial_state = j.value("initial_state", std::string("running"));
+    if (initial_state == "running") e.initial_state = EngineInitialState::Running;
+    else if (initial_state == "off") e.initial_state = EngineInitialState::Off;
+    else throw std::runtime_error(ctx + ": initial_state must be \"running\" or \"off\", got \"" + initial_state + "\"");
+    if (!(e.stall_rpm < e.start_complete_rpm && e.start_complete_rpm <= e.idle_rpm && e.idle_rpm < e.limiter.rpm)) {
+        throw std::runtime_error(ctx + ": engine rpm thresholds must satisfy stall_rpm < start_complete_rpm <= "
+                                  "idle_rpm < limiter.rpm");
+    }
+    if (!(e.dfco_reenable_rpm < e.dfco_enable_rpm)) {
+        throw std::runtime_error(ctx + ": dfco_reenable_rpm must be < dfco_enable_rpm");
+    }
+
+    // --- fuel (required) + ignition (required, spark only in I7b) -----------------
+    if (j.contains("fuels") && j.contains("fuel")) {
+        throw std::runtime_error(ctx + ": 'fuels' and 'fuel' are mutually exclusive ('fuel' is shorthand for a one-entry 'fuels')");
+    }
+    std::vector<std::string> fuel_refs;
+    if (j.contains("fuels")) {
+        if (!j.at("fuels").is_array() || j.at("fuels").empty()) {
+            throw std::runtime_error(ctx + ": 'fuels' must be a non-empty array of path strings");
+        }
+        for (const auto& v : j.at("fuels")) {
+            if (!v.is_string() || v.get<std::string>().empty()) {
+                throw std::runtime_error(ctx + ": 'fuels' entries must be non-empty path strings");
+            }
+            fuel_refs.push_back(v.get<std::string>());
+        }
+    } else if (j.contains("fuel")) {
+        if (!j.at("fuel").is_string() || j.at("fuel").get<std::string>().empty()) {
+            throw std::runtime_error(ctx + ": 'fuel' must be a non-empty path string");
+        }
+        fuel_refs.push_back(j.at("fuel").get<std::string>());
+    } else {
+        throw std::runtime_error(ctx + ": a simulated engine requires 'fuels' (or the one-entry shorthand 'fuel') - its "
+                                  "torque comes from burnt fuel");
+    }
+    std::vector<std::string> resolved_paths;
+    for (const std::string& ref : fuel_refs) {
+        const std::string fuel_path = resolve_path(engine_dir, ref);
+        for (const std::string& seen : resolved_paths) {
+            bool same = false;
+            try {
+                same = std::filesystem::equivalent(fuel_path, seen);
+            } catch (const std::filesystem::filesystem_error&) {
+                same = (fuel_path == seen);
+            }
+            if (same) throw std::runtime_error(ctx + ": 'fuels' contains a duplicate fuel reference (" + ref + ")");
+        }
+        resolved_paths.push_back(fuel_path);
+        e.fuels.push_back(ps::io::load_fuel_json(fuel_path));
+    }
+    if (resolved_fuel_paths_out != nullptr) *resolved_fuel_paths_out = resolved_paths;
+
+    if (!j.contains("ignition") || !j.at("ignition").is_string()) {
+        throw std::runtime_error(ctx + ": 'ignition' is required for a simulated engine (\"spark\")");
+    }
+    const std::string ign = j.at("ignition").get<std::string>();
+    if (ign == "spark") {
+        e.ignition = EngineIgnition::Spark;
+    } else if (ign == "compression") {
+        throw std::runtime_error(ctx + ": ignition \"compression\" is not supported by the simulated engine yet (the I7 "
+                                  "MVEM is a spark-ignition model; a CI combustion model is later)");
+    } else {
+        throw std::runtime_error(ctx + ": ignition must be \"spark\" or \"compression\", got \"" + ign + "\"");
+    }
+
+    return e;
+}
+
 // PHYS-033 P4 I7a C5: thin dispatcher on "kind" - "torque_map" (or absent,
-// the only kind before this commit) is the shipped implementation above;
-// "simulated" (a full MVEM engine, I7b) is parsed nowhere yet and is
-// rejected by name rather than silently falling through to torque_map.
-ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
-                                                       std::vector<std::string>* resolved_fuel_paths_out = nullptr) {
+// the only kind before C5) and, since PHYS-033 P4 I7b C10, "simulated"
+// (the MVEM engine, read_simulated_fields above).
+ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
+                                                   std::vector<std::string>* resolved_fuel_paths_out = nullptr) {
     // Default "torque_map" (rather than requiring the field) is deliberate,
     // not an oversight: every shipped data/engines/*.json file happens to
     // set "kind" explicitly today, but nothing REQUIRES a hand-authored or
@@ -800,9 +1241,7 @@ ps::drivetrain::TorqueMapEngineDesc read_engine_fields(const json& j, const std:
     // path is actually exercised, since no shipped file omits it).
     const std::string kind = j.value("kind", std::string("torque_map"));
     if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
-    if (kind == "simulated") {
-        throw std::runtime_error(ctx + ": engine kind \"simulated\" is not yet supported (PHYS-033 I7b)");
-    }
+    if (kind == "simulated") return read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
     throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" or \"simulated\", got \"" + kind + "\"");
 }
 
@@ -1444,17 +1883,34 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
             }
             if (tcd_ptr != nullptr) {
                 const std::string tctx = "vehicle '" + v.name + "': powertrain.components['" + tcd_id + "']";
-                const ps::drivetrain::TorqueMapEngineDesc* engine_ptr = nullptr;
+                // PHYS-033 P4 I7b C10: either engine kind. A simulated engine
+                // has no governor, so the hand-lever check below never fires
+                // for it.
+                struct EngineView {
+                    ps::drivetrain::ThrottleInput throttle_input;
+                    bool has_governor;
+                    std::string governor_channel;
+                };
+                auto engine_view = [](const ps::drivetrain::ComponentDesc& c) -> std::optional<EngineView> {
+                    if (const auto* e = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params)) {
+                        return EngineView{e->throttle_input, e->has_governor, e->governor.channel};
+                    }
+                    if (const auto* e = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&c.params)) {
+                        return EngineView{e->throttle_input, false, std::string()};
+                    }
+                    return std::nullopt;
+                };
+                std::optional<EngineView> engine_opt;
                 bool vehicle_has_engine = false;
                 for (const auto& c : p.components) {
-                    if (std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params) != nullptr) vehicle_has_engine = true;
+                    if (engine_view(c).has_value()) vehicle_has_engine = true;
                 }
                 if (!vehicle_has_engine) {
                     throw std::runtime_error(tctx + ": a throttle_control component in a vehicle with no engine component");
                 }
                 for (const auto& c : p.components) {
                     if (c.id == tcd_ptr->engine) {
-                        engine_ptr = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params);
+                        engine_opt = engine_view(c);
                         break;
                     }
                 }
@@ -1462,10 +1918,11 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 // component - covers "unknown id" and "id exists but is some
                 // other type" (a vehicle with no engine at all is rejected
                 // just above with its own message).
-                if (engine_ptr == nullptr) {
+                if (!engine_opt.has_value()) {
                     throw std::runtime_error(tctx + ": 'engine' (\"" + tcd_ptr->engine +
-                                              "\") must name a \"torque_map\" engine component in this vehicle's powertrain");
+                                              "\") must name a \"torque_map\" engine component or a \"simulated\" engine component in this vehicle's powertrain");
                 }
+                const EngineView* engine_ptr = &*engine_opt;
                 // Item 2: the stage's own 'kind' must agree with the engine's
                 // 'throttle_input' - both directions (an implicit stage
                 // always agrees by construction, since it just copies
@@ -1488,10 +1945,10 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 // always allowed (a hand lever on the same linkage/ECU is
                 // physical) and combines by max() as usual.
                 if (!tcd_ptr->hand_lever_channel.empty() && engine_ptr->has_governor &&
-                    tcd_ptr->hand_lever_channel != engine_ptr->governor.channel) {
+                    tcd_ptr->hand_lever_channel != engine_ptr->governor_channel) {
                     throw std::runtime_error(tctx + ": 'hand_lever_channel' (\"" + tcd_ptr->hand_lever_channel +
                                               "\") differs from engine '" + tcd_ptr->engine + "'.governor.channel (\"" +
-                                              engine_ptr->governor.channel +
+                                              engine_ptr->governor_channel +
                                               "\") - a governed engine has one hand lever; leave hand_lever_channel "
                                               "unset to use the governor's own channel, or set it to that same channel");
                 }
@@ -1611,13 +2068,14 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path) {
                 const ps::drivetrain::ComponentDesc* to_c = find_component(to.component);
                 if (to_c == nullptr) throw std::runtime_error(lctx + ": unknown component '" + to.component + "'");
                 const auto* engine = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&to_c->params);
-                if (engine == nullptr) {
+                const auto* sim_engine = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&to_c->params);
+                if (engine == nullptr && sim_engine == nullptr) {
                     throw std::runtime_error(lctx + ": '" + to.component + "' is not an engine (a fluid link must end at \"<engine>.fuel\")");
                 }
                 if (to.port != "fuel") {
                     throw std::runtime_error(lctx + ": unknown port \"" + to_str + "\" (an engine's only fluid port is \"fuel\")");
                 }
-                if (!ps::drivetrain::has_fuel_model(*engine)) {
+                if (!(engine != nullptr ? ps::drivetrain::has_fuel_model(*engine) : ps::drivetrain::has_fuel_model(*sim_engine))) {
                     throw std::runtime_error(lctx + ": engine '" + to.component +
                                               "' has no fuel model (no 'fuels', 'fuel' or 'fuel_map') - a fluid link cannot feed it");
                 }
