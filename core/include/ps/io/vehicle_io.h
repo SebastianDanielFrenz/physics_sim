@@ -6,6 +6,7 @@
 
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/installation_desc.h"
+#include "ps/drivetrain/powertrain_desc.h"
 #include "ps/vehicle/tyre_desc.h"
 #include "ps/vehicle/vehicle_desc.h"
 
@@ -49,5 +50,27 @@ struct EngineMapOptions {
 };
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapOptions& options);
+
+// ps_audio A10 (out/audio_plan.md section 6, EngineRig): loads a standalone
+// engine JSON file (format "physics_sim.engine/1", the same schema as a
+// vehicle's powertrain.components[] "ref"'d engine file) with no vehicle
+// wrapping it. Reuses the exact "kind" dispatch (torque_map/simulated),
+// fuel resolution, and (for a simulated engine with pipe blocks) map
+// generation and installation resolution that load_vehicle_json's engine
+// component reader uses - a standalone engine loads identically to the same
+// file referenced from a vehicle.
+//
+// `installation_override_path`: nullptr means "use the engine file's own
+// default_installation" (required whenever the engine's cycle block has
+// pipe blocks, rejected otherwise) - the same rule load_vehicle_json applies
+// when a vehicle component gives no "installation" override. A non-null
+// pointer is only accepted for a pipe-bearing simulated engine (same
+// rejection as the vehicle loader's per-component override).
+//
+// Throws std::runtime_error on a malformed/unreadable file, exactly the
+// messages read_engine_fields (vehicle_io.cpp) already gives for the same
+// content reached through a vehicle file.
+drivetrain::ComponentParams load_engine_json(const std::string& path, const EngineMapOptions& options = EngineMapOptions{},
+                                              const std::string* installation_override_path = nullptr);
 
 } // namespace ps::io

@@ -1,0 +1,14 @@
+{
+  "format": "physics_sim.engine_audio_script/1",
+  "source": "ps_audio A10 shipped demo script for tools/ps_engine_audio: start on the starter, idle, two throttle blips up toward the limiter and back, then off. Every timing value [AS] (a plausible hand-authored listening-test sequence, not derived from any real drive log).",
+  "duration_s": 8.0,
+  "events": [
+    { "t": 0.0, "starter": 1.0 },
+    { "t": 0.8, "starter": 0.0 },
+    { "t": 1.2, "throttle": 0.05 },
+    { "t": 3.0, "throttle": 0.9 },
+    { "t": 3.8, "throttle": 0.05 },
+    { "t": 5.5, "throttle": 1.0 },
+    { "t": 6.6, "throttle": 0.05 }
+  ]
+}

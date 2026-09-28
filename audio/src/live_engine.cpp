@@ -95,13 +95,25 @@ void LiveEngine::physics_step(const LiveControl& c, real* p_out) {
     // Plenum loop (throttle Cd*A), then the D-3 port <-> pipe exchange.
     if (c.p_intake_pa > 0.0) {
         if (settings_.plenum_loop) {
-            p_f_ += h_ / settings_.plenum_filter_tau_s * (plenum_pressure_pa() - p_f_);
+            // A10 fix: a large/fast throttle step (e.g. a WOT blip) can excite
+            // a transient in the network's own plenum pressure sharp enough
+            // that plenum_pressure_pa() (or the PI term derived from it) is
+            // momentarily non-finite; net_->set_orifice_cd_area's own
+            // hard invariant check has no idea a NaN came from upstream and
+            // throws a generic "stability bound" error with no context. Holding
+            // the filter/command at their last finite value for that one
+            // sample is a defensive floor, not a fix for whatever transient
+            // produced the non-finite reading - see out/audio_a10_progress.md.
+            const real p_net = plenum_pressure_pa();
+            if (std::isfinite(p_net)) p_f_ += h_ / settings_.plenum_filter_tau_s * (p_net - p_f_);
+            if (!std::isfinite(p_f_)) p_f_ = settings_.initial_p_intake_pa;
             // The integral runs only while the crank turns: a stopped engine
             // pumps nothing, and winding the plate shut against the slow refill
             // of the plenum left a self-sustained intake tone (V13 diag).
             if (omega > 0.0) {
                 const real e = (c.p_intake_pa - p_f_) / c.p_intake_pa;
                 real cda = core_.throttle_cd_area() * (1.0 + h_ / settings_.plenum_pi_tau_s * e);
+                if (!std::isfinite(cda)) cda = core_.throttle_cd_area();
                 if (cda < settings_.min_throttle_cd_area_m2) cda = settings_.min_throttle_cd_area_m2;
                 if (cda > core_.throttle_cd_area_max()) cda = core_.throttle_cd_area_max();
                 core_.set_throttle_cd_area(cda);

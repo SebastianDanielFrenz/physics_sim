@@ -1,5 +1,6 @@
 #include "vehicle_instance.h"
 
+#include "../drivetrain/engine_sound_state.h"
 #include "ps/math/transcendental.h"
 
 #include <algorithm>
@@ -406,39 +407,17 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.clutch_engagement = powertrain_.has_clutch() ? powertrain_.clutch_engagement() : real(1.0);
         snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u);
 
+        // ps_audio A10 (vault PHYS-054): the fill itself now lives in
+        // drivetrain::fill_engine_sound_state, shared with EngineRig, so a
+        // car and a wheel-less rig publish byte-identical sound state from
+        // the same code. fill_engine_sound_state's ess.engine_state comes
+        // from last_engine_result().state directly, which is already
+        // ps::drivetrain::EngineState (the switch above computing
+        // snap.engine_state is an identity map on the same value - see that
+        // file's own comment) - so this is bit-identical to the old inline
+        // fill.
         snap.engines.clear();
-        if (powertrain_.has_engine()) {
-            const auto& eng = powertrain_.engine();
-            const auto& pre = powertrain_.last_engine_result();
-            drivetrain::EngineSoundState ess;
-            ess.crank_angle = eng.crank_angle();
-            ess.omega = powertrain_.engine_omega();
-            // PHYS-033 P4 I7a C2: theta_c (the post-limiter combustion
-            // fraction, engine_torque_map.cpp's own `theta_c = comb ?
-            // theta_eff*f_lim : 0`) is now published directly on
-            // PreSolveResult - no more DFCO-gated throttle_eff proxy.
-            ess.load = pre.theta_c;
-            ess.cut_mask = pre.limiter_active || pre.dfco_active ? ~std::uint64_t(0) : std::uint64_t(0);
-            ess.engine_state = snap.engine_state;
-            ess.starter_active = pre.starter_active;
-            ess.limiter_active = pre.limiter_active;
-            ess.dfco_active = pre.dfco_active;
-            // PHYS-033 P4 I7a C3: the throttle-command stage's combined
-            // command this tick - sound only, never hashed.
-            ess.throttle_command = powertrain_.throttle_command();
-            // PHYS-033 P4 I7a C5, broadened C5d: nonzero for a fuel map or
-            // the crude no-map estimate, 0 for an engine with no fuel model
-            // at all (pre's own default, pre_solve never touches it then).
-            ess.fuel_flow_g_s = pre.fuel_flow_g_s;
-            // PHYS-033 P4 I7b C12: mean-value engine sound state (0 from the
-            // graph engine, whose PreSolveResult leaves these at default).
-            ess.throttle_position = pre.throttle_position;
-            ess.p_intake_pa = pre.p_intake_pa;
-            ess.lambda = pre.lambda;
-            ess.spark_advance_deg = pre.spark_advance_deg;
-            ess.exhaust_mass_flow_kg_s = pre.exhaust_mass_flow_kg_s;
-            snap.engines.push_back(ess);
-        }
+        if (powertrain_.has_engine()) snap.engines.push_back(drivetrain::fill_engine_sound_state(powertrain_));
 
         drivetrain::DrivelineSoundState& dl = snap.driveline;
         dl.gearbox_in_omega = powertrain_.gearbox_in_omega();

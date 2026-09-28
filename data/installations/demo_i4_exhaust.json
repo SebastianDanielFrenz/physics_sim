@@ -1,0 +1,19 @@
+{
+  "format": "physics_sim.installation/1",
+  "source": "[AS] assumed generic exhaust/intake plumbing for the ps_engine_audio demo engine (data/engines/demo_i4_pipes.json). Not a real vehicle's installation - every value is a plausible, unmeasured guess, mirroring the geometry of tests/support/cycle_pipe_fixtures.h::make_generic_installation() (pipe 0.4 m -> catalyst 0.16 m x 100 mm k=1.5 -> pipe 1.2 m -> expansion chamber 0.35 m x 120 mm -> tailpipe 0.5 m -> outlet).",
+  "intake": {
+    "airbox_m3": 0.010,
+    "snorkel": { "length_m": 0.4, "d_m": 0.07 },
+    "inlet_position_m": [0.9, 0.3, 0.5]
+  },
+  "exhaust": {
+    "elements": [
+      { "type": "pipe", "length_m": 0.4, "d_m": 0.05 },
+      { "type": "catalyst", "length_m": 0.16, "d_m": 0.10, "k_loss": 1.5 },
+      { "type": "pipe", "length_m": 1.2, "d_m": 0.05 },
+      { "type": "expansion_chamber", "length_m": 0.35, "d_m": 0.12 },
+      { "type": "pipe", "length_m": 0.5, "d_m": 0.05 },
+      { "type": "outlet", "position_m": [-2.0, 0.0, 0.3] }
+    ]
+  }
+}

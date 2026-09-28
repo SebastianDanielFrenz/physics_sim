@@ -412,6 +412,18 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
         r.kind = RadiatingEnd::Kind::WaveguideOpen;
         r.name = wn.name;
         r.index = static_cast<int>(n);
+        // A10: an Open node's own desc carries no diameter (it is the far end
+        // of the segment that terminates there, e.g. WgBuilder::add_chain's
+        // Outlet case just relabels the last Junction node) - find that
+        // segment for display purposes only; radiating_outflow() itself reads
+        // the network's live state, not area_m2, so this never affected the
+        // physics, only the printed source list.
+        for (const WgSegmentDesc& seg : nd.waveguide.segments) {
+            if (seg.node_a == static_cast<int>(n) || seg.node_b == static_cast<int>(n)) {
+                r.area_m2 = area_of(seg.diameter_m);
+                break;
+            }
+        }
         rad_.push_back(r);
     }
 }
