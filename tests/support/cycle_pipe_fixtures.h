@@ -118,4 +118,47 @@ inline drivetrain::CycleModelDesc make_pipe_i4_cycle_desc(real runner_len_m = 0.
     return d;
 }
 
+// ps_audio A8 V2: one BANK of a V8, as its own complete 4-cylinder "half
+// engine" reusing make_pipe_i4_cycle_desc()'s exact merge-tree topology -
+// see out/audio_a8_progress.md for why: CycleModelDesc has exactly one
+// ExhaustCycleDesc/flange (ExhaustCycleDesc::interface "must equal the LAST
+// merge's into", cycle_engine.cpp), so a literal single-engine two-bank
+// V8 with two never-merging tailpipes cannot be built as one
+// CycleModelDesc. Two independent bank fixtures, each its own engine/voice,
+// give exactly what V2 needs (each bank's own outlet order content, and -
+// run together with the crank pre-roll below - the combined 8-cylinder
+// order content) without inventing a second topology.
+//
+// firing_angles_deg is indexed by CYLINDER NUMBER (firing_order.h's own
+// design note), so it is given directly here rather than through
+// firing_order (which stays the inherited {1,3,4,2} permutation - only used
+// to derive angles when firing_angles_deg is empty, ignored otherwise).
+//
+// Cross-plane bank: cyl1@0, cyl2@90, cyl3@360, cyl4@450 - sorted firing
+// order is 1,2,3,4 with alternating 90/270 deg gaps (90, 270, 90, 270), the
+// real cross-plane V8's per-bank pattern (a "180 deg + 90 deg crank"
+// bank). Both banks use the SAME shape; bank B's crank_angle_deg is preset
+// 180 deg from bank A's (the test's job, not this fixture's) so the two
+// banks' events interleave into the full V8's even 90-deg-apart firing
+// (bank A at {0,90,360,450}, bank B at {0,90,360,450}+180 =
+// {180,270,540,630} - together every 90 deg, 0..630).
+inline drivetrain::CycleModelDesc make_v8_bank_cross_plane_cycle_desc(real runner_len_m = 0.35,
+                                                                      real primary_len_m = 0.60) {
+    drivetrain::CycleModelDesc d = make_pipe_i4_cycle_desc(runner_len_m, primary_len_m);
+    d.firing_angles_deg = {0.0, 90.0, 360.0, 450.0};
+    return d;
+}
+
+// Flat-plane bank: fires evenly (180 deg apart, cyl1@0/cyl3@180/cyl4@360/
+// cyl2@540 via the default firing_order {1,3,4,2} with no explicit
+// firing_angles_deg) - identical to the plain I4 fixture, an explicit
+// wrapper only for naming symmetry with the cross-plane bank above. The
+// full V8's two flat-plane banks interleave 90 deg apart (bank B pre-rolled
+// 90 deg from bank A: {0,180,360,540}+90 = {90,270,450,630}, together every
+// 90 deg with bank A's {0,180,360,540}).
+inline drivetrain::CycleModelDesc make_v8_bank_flat_plane_cycle_desc(real runner_len_m = 0.35,
+                                                                     real primary_len_m = 0.60) {
+    return make_pipe_i4_cycle_desc(runner_len_m, primary_len_m);
+}
+
 } // namespace ps::test

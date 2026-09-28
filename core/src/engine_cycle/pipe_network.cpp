@@ -299,6 +299,8 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
         if (!(p.max_wave_speed_m_s > 0.0)) fail("pipe '" + p.name + "': max_wave_speed_m_s must be > 0");
         if (!gas_state_ok(p.initial)) fail("pipe '" + p.name + "': initial state invalid");
         for (const PipeEndDesc* e : {&p.start, &p.end}) {
+            if (e->radiation && e->kind != PipeEndDesc::Kind::Open)
+                fail("pipe '" + p.name + "': radiation is only valid on an Open end");
             switch (e->kind) {
                 case PipeEndDesc::Kind::Closed:
                     if (e->end_correction != EndCorrection::None)
@@ -446,6 +448,30 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
         const real cv = mix_cv(gas_, t, x);
         ambient_ = Reservoir{desc.ambient.p_pa, t, x, r, (cv + r) / cv, std::sqrt((cv + r) / cv * r * t),
                              mix_e(gas_, t, x) + r * t};
+    }
+
+    // ps_audio A8: Open-end radiation filter poles (WaveguideNetwork's own
+    // build-time formula, waveguide_network.cpp - |R| ~ 1 - K(ka)^2 fitted as
+    // a one-pole lowpass at fs = 1/h; K = 1 flanged, 0.5 unflanged). Only for
+    // ends with PipeEndDesc::radiation true (audio path only - see
+    // pipe_network.h's PipeEndDesc::radiation comment).
+    rad_s_start_.assign(pipes_.size(), 0.0);
+    rad_s_end_.assign(pipes_.size(), 0.0);
+    for (std::size_t k = 0; k < pipes_.size(); ++k) {
+        PipeRt& rt = pipes_[k];
+        const PipeDesc& p = desc.pipes[k];
+        const real fs = 1.0 / h;
+        for (int s = 0; s < 2; ++s) {
+            const PipeEndDesc& e = (s == 0) ? p.start : p.end;
+            if (e.kind != PipeEndDesc::Kind::Open || !e.radiation) continue;
+            has_radiation_ = true;
+            const real d = (s == 0) ? p.d_start_m : p.d_end_m;
+            const real kk = (e.end_correction == EndCorrection::Flanged) ? 1.0 : 0.5;
+            const real beta = fs * 0.5 * d / ambient_.a;
+            const real b = 2.0 * kk * beta * beta;
+            const real pole = ((2.0 * b + 1.0) - std::sqrt(4.0 * b + 1.0)) / (2.0 * b);
+            if (s == 0) rt.rad_p_start = pole; else rt.rad_p_end = pole;
+        }
     }
 
     // Initial pipe states (uniform, at rest).
@@ -605,6 +631,10 @@ std::uint64_t PipeNetwork::fold_state_hash(std::uint64_t h) const {
             fnv_fold(h, f.mdot_mean_kg_s);
         }
     }
+    if (has_radiation_) {
+        for (real v : rad_s_start_) fnv_fold(h, v);
+        for (real v : rad_s_end_) fnv_fold(h, v);
+    }
     return h;
 }
 
@@ -658,7 +688,8 @@ void PipeNetwork::step() {
     }
 
     int fallbacks = 0;
-    for (const PipeRt& pr : pipes_) {
+    for (std::size_t pidx = 0; pidx < pipes_.size(); ++pidx) {
+        const PipeRt& pr = pipes_[pidx];
         const int n = pr.n;
         const std::size_t c0 = static_cast<std::size_t>(pr.c0);
 
@@ -753,7 +784,28 @@ void PipeNetwork::step() {
                 const real un = (s == 0) ? -u : u;
                 Flux fn;
                 if (end.kind == PipeEndDesc::Kind::Open) {
-                    fn = reservoir_face(gas_, rho, un, p, x, ambient_);
+                    if (end.radiation) {
+                        // ps_audio A8 (F3): the boundary cell's own outgoing
+                        // small-signal wave (standard plane-wave decomposition,
+                        // the same one the FV<->WG interface uses,
+                        // pipe_network.h's own header comment / audio_plan.md
+                        // section 2.2), one-pole filtered (built above) exactly
+                        // as WaveguideNetwork's Open-node radiation. The
+                        // mismatch between the raw and filtered wave is the
+                        // radiation loss, applied as a small shift of the
+                        // reservoir pressure the exact nonlinear characteristic
+                        // solve targets.
+                        const real rho_amb = ambient_.p / (ambient_.r * ambient_.t);
+                        const real p_plus = 0.5 * ((p - ambient_.p) + rho_amb * ambient_.a * un);
+                        real& rs = (s == 0) ? rad_s_start_[pidx] : rad_s_end_[pidx];
+                        const real pole = (s == 0) ? pr.rad_p_start : pr.rad_p_end;
+                        rs = (1.0 - pole) * p_plus + pole * rs;
+                        Reservoir res = ambient_;
+                        res.p = ambient_.p + (p_plus - rs);
+                        fn = reservoir_face(gas_, rho, un, p, x, res);
+                    } else {
+                        fn = reservoir_face(gas_, rho, un, p, x, ambient_);
+                    }
                 } else if (end.kind == PipeEndDesc::Kind::Volume) {
                     fn = reservoir_face(gas_, rho, un, p, x, vols_[static_cast<std::size_t>(end.index)]);
                 } else if (end.kind == PipeEndDesc::Kind::Waveguide) {

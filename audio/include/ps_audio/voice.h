@@ -40,6 +40,48 @@ namespace ps_audio {
 
 using ps::real;
 
+// ps_audio A8: a broadband turbulence-noise floor added at each radiating
+// end, above and outside the pipe models' own resolved acoustics (out/
+// audio_plan.md section 2.2: "High-frequency content above the resolved
+// band... a flow-noise layer adds seeded noise"). Deterministic: seeded from
+// the voice's LiveEngineSettings::seed (the same seed combustion_variation.h
+// already uses), never from wall-clock/thread state.
+//
+// Model (every numeric default [A], PROVISIONAL - see out/audio_a8_progress.md
+// for the calibration status): white noise (SplitMix64,
+// ps::engine_cycle::splitmix64_next/unit_uniform - the same generator
+// combustion_variation.h uses) is bandpassed by a cascade of one-pole
+// filters (a stable, always-well-behaved shape for coefficients that move
+// every control point, unlike a resonant biquad at a fast-changing centre
+// frequency) whose centre tracks a Strouhal-scaled frequency f = St*u/D
+// (u = the outlet's instantaneous volume flow / its physical area, D =
+// its hydraulic diameter; St ~ 0.2 is a generic order-of-magnitude
+// shear-layer/orifice-tone value - see textbook aeroacoustics, e.g. Blake,
+// "Mechanics of Flow-Induced Sound and Vibration", 1986 - not fitted to
+// this engine). Level scales as level_coeff_pa * u^level_exponent
+// (Lighthill, "On sound generated aerodynamically", Proc. Roy. Soc. A 211,
+// 1952, gives u^8 for the ACOUSTIC POWER of a free subsonic jet;
+// level_exponent defaults to a much-reduced 3 - deliberately NOT a literal
+// implementation of Lighthill's free-jet analogy, just borrowing its
+// qualitative "noise grows steeply with flow speed" shape for a practical,
+// audibly-modest broadband floor), then modulated by the instantaneous
+// resolved outlet pressure (a bounded fraction of frame/pressure_ref_pa) so
+// the floor breathes with the exhaust pulse instead of sitting flat.
+// level_coeff_pa defaults to 0 (no contribution at all - byte-identical to
+// A7 aside from the F3 radiation fix) since audio_plan.md gives no target
+// level to calibrate a nonzero default against; V9/V10's tests set a
+// nonzero value explicitly.
+struct FlowNoiseSettings {
+    bool enabled = true;
+    real strouhal = 0.2;            // [A] Strouhal number, f = strouhal * u / D
+    real level_exponent = 3.0;      // [A] reduced from Lighthill's u^8 (see above)
+    real level_coeff_pa = 0.0;      // [A] Pa per (m/s)^level_exponent at 1 m; 0 = disabled
+    real pressure_mod = 0.3;        // [A] weight of the resolved-pressure envelope term
+    real pressure_ref_pa = 2000.0;  // [A] resolved-pressure scale for that term
+    real min_hz = 20.0;             // filter passband clamp (avoids a near-DC or near-Nyquist pole)
+    real max_hz = 8000.0;
+};
+
 struct VoiceSettings {
     LiveEngineSettings engine{};   // engine.substeps is overridden by `substeps`
     TimeMapSettings time_map{};
@@ -50,6 +92,7 @@ struct VoiceSettings {
     real pause_fade_s = 0.05;
     real crank_tau_s = 0.1;        // phase-correction time constant [A]
     real crank_max_rel = 0.01;     // correction cap, fraction of omega (brief A7)
+    FlowNoiseSettings flow_noise{};  // ps_audio A8
 };
 
 class Voice {
@@ -89,6 +132,20 @@ public:
 private:
     void control_point();
     void interpolate();
+    void flow_noise_control_point();  // ps_audio A8: recompute per-source filter poles
+    real flow_noise_sample(int s);    // ps_audio A8: one filtered+shaped noise sample, source s
+
+    // ps_audio A8: per-source flow-noise state (white-noise RNG, one-pole
+    // highpass then lowpass cascade state and current pole coefficients -
+    // recomputed only at control points, see flow_noise_control_point()).
+    struct FlowNoiseState {
+        std::uint64_t rng = 0;
+        real hp_x1 = 0.0, hp_y1 = 0.0;
+        real lp_y1 = 0.0;
+        real a_hp = 0.0, a_lp = 0.0;
+        real gain_pa = 0.0;  // level_coeff_pa * u^level_exponent, held between control points
+    };
+    std::array<FlowNoiseState, kLiveMaxSources> flow_noise_{};
 
     VoiceSettings s_;
     StabilityProbeResult probe_;

@@ -51,6 +51,10 @@ EngineCoreSettings core_settings(const CycleModelDesc& d, const LiveEngineSettin
     EngineCoreSettings c;
     c.dx_intake_m = s.dx_intake_m > 0.0 ? s.dx_intake_m : d.resolution.audio_dx_intake_m;
     c.dx_exhaust_m = s.dx_exhaust_m > 0.0 ? s.dx_exhaust_m : d.resolution.audio_dx_exhaust_m;
+    // ps_audio A8 (F3): only the audio-path live engine's FV Open ends get
+    // the radiation loss - the map generator (CycleEngine) never sets this,
+    // so map content/hashes are unaffected.
+    c.radiation = true;
     return c;
 }
 

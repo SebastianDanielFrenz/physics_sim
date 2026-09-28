@@ -11,6 +11,7 @@ add_library(ps_audio STATIC
   src/halfband.cpp
   src/live_engine.cpp
   src/runner.cpp
+  src/source.cpp
   src/time_map.cpp
   src/voice.cpp
 )
