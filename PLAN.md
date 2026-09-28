@@ -629,6 +629,12 @@ collector, silencers, tailpipe; e.g. waveguides) excited by the port mass
 flows and radiating at the openings; the exhaust/intake geometry in the engine
 data file; cycle-to-cycle combustion variation; mechanical noise; the audio
 sample rate vs the cycle model's step (1/(960*48) s is ~46 kHz).
+The pipe geometry is part of the ENGINE, not of audio (Sebastian,
+2026-09-28): it shapes power too (wave tuning, scavenging, ram effect, back
+pressure). One intake/exhaust description in the engine data file and one 1D
+pipe model serve both the map generator (a kGeneratorVersion bump) and
+`ps_audio`; today's maps lack these effects, one reason the I7c validation
+excludes >= 5500 rpm.
 
 Engine mounts, interior sound and propagation (Sebastian, 2026-09-24):
 - Engine mounts: the engine block sits on mounts with stiffness and damping,
