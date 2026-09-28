@@ -43,6 +43,7 @@ add_executable(ps_validation_tests
   test_powertrain_pto_governor.cpp
   test_reference_cars.cpp
   test_terrain_seam_crossing.cpp
+  test_gen_engine_dyno.cpp
 )
 
 target_link_libraries(ps_validation_tests
