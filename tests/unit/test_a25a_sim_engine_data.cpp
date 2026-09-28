@@ -129,6 +129,17 @@ TEST_CASE("C17a: car_sedan_sim.json and toyota_a25a_fks_sim.json load as labelle
     CHECK(j.at("source").get<std::string>().find(
               "measured-map engine (I7c D12 M-B): its dyno comparison is tautological and is not a generator "
               "validation") == 0);
+
+    // N6 (vault PHYS-049/050 follow-ups): pin the literals
+    // tools/enginedata/a25a_mb_engine.py's IDLE_RPM/LIMITER constants write
+    // into the shipped file, so a future regen that silently drifts these
+    // (e.g. copy-pasting another engine's limiter block) is caught here
+    // rather than only by whatever vehicle behaviour happens to depend on
+    // them.
+    CHECK(e->idle_rpm == 800.0);
+    CHECK(e->limiter.type == LimiterType::FuelCut);
+    CHECK(e->limiter.rpm == 6500.0);
+    CHECK(e->limiter.hysteresis_rpm == 150.0);
 }
 
 TEST_CASE("C17a: SimulatedEngine reproduces every measured WOT brake torque at measured MAP and cell ambient",
@@ -180,4 +191,80 @@ TEST_CASE("C17a: the sim engine's WOT anchors equal C7's torque-map WOT knots", 
         std::printf("C17a vs C7 %8.2f rpm: sim %9.4f  C7 %9.4f  diff %+.4f N*m\n", a.rpm, t, c7_t, t - c7_t);
         CHECK(std::fabs(t - c7_t) <= 0.012);
     }
+}
+
+// ---------------------------------------------------------------------------
+// N6 (vault PHYS-049/050 follow-ups): the WOT/motoring-vs-C7 checks above
+// pin the fired-torque path but never touch friction_torque_nm at all - a
+// motoring-side regeneration bug (wrong pumping term, a unit error on the
+// exhaust/cell pressure axis, a transposed fit) could ship silently. This
+// independently re-derives the friction curve's own defining quantity, F =
+// -T_motoring - (max(p_exhaust, p_cell) - MAP) * V_d/(4*pi), at 3 of the 10
+// literal motoring points tools/enginedata/a25a_mb_engine.py's friction_f5()
+// fits (EPA NVFEL A25A xlsx, "Steady State" sheet, unfired points, fuel 0 -
+// rows 42/96/153 of the 10 rows spanning 1326-4954 rpm, low/mid/high of that
+// span), and checks it against the SHIPPED (already-fit-and-tabulated)
+// friction_torque_nm curve loaded from toyota_a25a_fks_sim.json.
+//
+// Tolerance: the shipped curve is a least-squares QUADRATIC fit through all
+// 10 points, so any single point's own F disagrees with the fit by that
+// point's fit residual, not by a formula error - measured (this test's own
+// numbers, printed below) -2.6%/-0.6%/+1.9% at the three rows kept here (max
+// over all 10 rows: +6.7% at row 111/2996 rpm, not used, to keep the bound
+// itself well clear of ordinary fit scatter). 10% relative comfortably
+// covers that scatter while staying far below what a genuine regeneration
+// defect produces (the header comment above cites a kPa/Pa axis mixup at
+// ~100%, a reversed row order at tens of percent); verified discriminating
+// by temporarily perturbing one shipped friction_torque_nm.y value by 20%
+// (see out/c12_followups_progress.md's N6 section) and confirming this case
+// then fails.
+// ---------------------------------------------------------------------------
+namespace {
+// bore/stroke/cylinder count (a25a_author.py's BORE_M/STROKE_M/CYLINDERS,
+// EPA NVFEL Report 26781's own A25A-FKS specification) - re-derived here via
+// the formula, not copied as a lump displacement constant.
+constexpr real kBoreM = 0.0875, kStrokeM = 0.1034, kCylinders = 4.0;
+constexpr real kPi = 3.14159265358979323846;
+real displacement_m3() { return (kPi / 4.0) * kBoreM * kBoreM * kStrokeM * kCylinders; }
+// N*m per Pa of mean effective pressure, 4-stroke (one pumping stroke per 2
+// crank revolutions): V_d / (4*pi).
+real k_pump() { return displacement_m3() * 0.5 / (2.0 * kPi); }
+
+struct MotoringAnchor {
+    int row;
+    real rpm, torque_nm, map_kpa, p_exhaust_kpa, p_cell_kpa;
+};
+// Literal xlsx cells (Steady State sheet, unfired, fuel 0) for 3 of the 10
+// rows friction_f5() fits - rpm, motoring torque [N*m, negative], intake
+// MAP [kPa], EGR-inlet/exhaust-side pressure [kPa], test-cell pressure
+// [kPa]. Spanning low/mid/high of the fitted 1326-4954 rpm range.
+constexpr MotoringAnchor kMotoringAnchors[] = {
+    {42, 1326.0, -22.9, 24.86, 99.16, 98.26},
+    {96, 2535.0, -25.9, 23.01, 99.81, 98.41},
+    {153, 4954.0, -42.3, 23.91, 101.91, 98.31},
+};
+constexpr real kFrictionRelTol = 0.10;
+} // namespace
+
+TEST_CASE("N6: shipped friction_torque_nm matches an independent re-derivation at 3 motoring anchors",
+          "[drivetrain][io]") {
+    const auto car = ps::io::load_vehicle_json(sim_car_path());
+    const SimulatedEngineDesc* e = sim_engine_of(car);
+    REQUIRE(e != nullptr);
+    SimulatedEngine eng(*e);
+
+    const real kp = k_pump();
+    real worst = 0.0;
+    for (const auto& a : kMotoringAnchors) {
+        const real p_ex = std::fmax(a.p_exhaust_kpa, a.p_cell_kpa);
+        const real f_expected = -a.torque_nm - (p_ex - a.map_kpa) * 1000.0 * kp;
+        const real f_loaded = eng.maps().maps.friction_torque_nm.evaluate(a.rpm);
+        const real rel = (f_loaded - f_expected) / f_expected;
+        std::printf("N6 motoring row %3d: %7.1f rpm  T_mot %+7.2f  MAP %6.2f  p_ex %6.2f  p_cell %6.2f  "
+                    "F_expected %8.4f  F_loaded %8.4f  rel %+.2e\n",
+                    a.row, a.rpm, a.torque_nm, a.map_kpa, a.p_exhaust_kpa, a.p_cell_kpa, f_expected, f_loaded, rel);
+        worst = std::fmax(worst, std::fabs(rel));
+        CHECK(std::fabs(rel) <= kFrictionRelTol);
+    }
+    std::printf("N6 friction worst |rel| %.2e (tolerance %.0e), K_PUMP %.10e N*m/Pa\n", worst, kFrictionRelTol, kp);
 }

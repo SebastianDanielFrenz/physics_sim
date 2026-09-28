@@ -1243,6 +1243,71 @@ TEST_CASE("load_vehicle_json rejects a malformed governor block", "[unit][vehicl
     }
 }
 
+// R6 (vault PHYS-049/050 follow-ups): a torque_map engine's starter/idle_control/
+// limiter blocks previously accepted a non-positive free_speed_rpm (divide by
+// zero at runtime in EngineTorqueMap/SimulatedEngine's starter torque line), a
+// negative idle PI gain (flips the loop's sign instead of merely weakening it),
+// or a negative limiter hysteresis (reverses the FuelCut latch's restore
+// direction) without complaint.
+TEST_CASE("load_vehicle_json rejects a torque_map engine's starter/idle/limiter sign errors",
+          "[unit][vehicle][io][drivetrain]") {
+    SECTION("starter.free_speed_rpm == 0") {
+        const std::string engine = R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+          "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+          "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+          "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0,
+          "starter": { "stall_torque_nm": 150.0, "free_speed_rpm": 0.0 } })";
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_starter_free_speed_zero");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("starter.free_speed_rpm must be > 0"));
+    }
+    SECTION("starter.free_speed_rpm < 0") {
+        const std::string engine = R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+          "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+          "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+          "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0,
+          "starter": { "stall_torque_nm": 150.0, "free_speed_rpm": -400.0 } })";
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_starter_free_speed_negative");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("starter.free_speed_rpm must be > 0"));
+    }
+    SECTION("negative idle_control.kp_per_rpm") {
+        const std::string engine = R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+          "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+          "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+          "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0,
+          "idle_control": { "kp_per_rpm": -0.001 } })";
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_idle_kp_negative");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("idle_control.kp_per_rpm must be >= 0"));
+    }
+    SECTION("negative idle_control.ki_per_rpm_s") {
+        const std::string engine = R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+          "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+          "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+          "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0,
+          "idle_control": { "ki_per_rpm_s": -0.004 } })";
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_idle_ki_negative");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("idle_control.ki_per_rpm_s must be >= 0"));
+    }
+    SECTION("negative limiter.hysteresis_rpm") {
+        const std::string engine = R"({ "id": "engine", "type": "engine", "kind": "torque_map",
+          "wot_torque_nm_vs_rpm": { "x": [900, 6500], "y": [150, 150] },
+          "motoring_torque_nm_vs_rpm": { "x": [0, 6500], "y": [-20, -60] },
+          "inertia_kgm2": 0.16, "breakaway_torque_nm": 25.0,
+          "limiter": { "type": "fuel_cut", "rpm": 6800, "hysteresis_rpm": -150.0 } })";
+        const std::string json = minimal_i3_vehicle_json(engine, minimal_i3_gearbox_json());
+        TempJsonFile f(json, "vehicle_limiter_hysteresis_negative");
+        REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()),
+                             Catch::Matchers::ContainsSubstring("limiter.hysteresis_rpm must be >= 0"));
+    }
+}
+
 TEST_CASE("load_vehicle_json accepts a well-formed governor block and round-trips its fields", "[unit][vehicle][io][drivetrain][governor]") {
     // NOTE: an INLINE gearbox component (minimal_i3_gearbox_json()) cannot be
     // used for a case that must actually SUCCEED all the way through - its

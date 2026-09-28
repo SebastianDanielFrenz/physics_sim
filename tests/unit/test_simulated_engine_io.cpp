@@ -509,6 +509,37 @@ TEST_CASE("C10: the simulated-engine loader rejects every malformed field with i
         j["idle_control"]["max_throttle"] = 0.0;
         expect_rejected(j, "idle_control.max_throttle must be in (0, 1]");
     }
+    // R6 (vault PHYS-049/050 follow-ups): a negative PI gain flips the idle
+    // loop's sign instead of merely weakening it.
+    SECTION("negative idle kp_per_rpm") {
+        json j = base_simulated_engine();
+        j["idle_control"]["kp_per_rpm"] = -0.001;
+        expect_rejected(j, "idle_control.kp_per_rpm must be >= 0");
+    }
+    SECTION("negative idle ki_per_rpm_s") {
+        json j = base_simulated_engine();
+        j["idle_control"]["ki_per_rpm_s"] = -0.004;
+        expect_rejected(j, "idle_control.ki_per_rpm_s must be >= 0");
+    }
+    // R6: starter.free_speed_rpm <= 0 divides by zero (or flips the starter
+    // torque-speed line's sign) at runtime in both engine kinds.
+    SECTION("starter.free_speed_rpm == 0") {
+        json j = base_simulated_engine();
+        j["starter"] = {{"stall_torque_nm", 150.0}, {"free_speed_rpm", 0.0}};
+        expect_rejected(j, "starter.free_speed_rpm must be > 0");
+    }
+    SECTION("starter.free_speed_rpm < 0") {
+        json j = base_simulated_engine();
+        j["starter"] = {{"stall_torque_nm", 150.0}, {"free_speed_rpm", -400.0}};
+        expect_rejected(j, "starter.free_speed_rpm must be > 0");
+    }
+    // R6: a negative hysteresis reverses the FuelCut latch's restore
+    // direction (restores above the cut point instead of below it).
+    SECTION("negative limiter.hysteresis_rpm") {
+        json j = base_simulated_engine();
+        j["limiter"] = {{"type", "fuel_cut"}, {"rpm", 6800.0}, {"hysteresis_rpm", -150.0}};
+        expect_rejected(j, "limiter.hysteresis_rpm must be >= 0");
+    }
     // --- fuel + ignition ---
     SECTION("no fuel") {
         json j = base_simulated_engine();
