@@ -52,6 +52,7 @@ add_executable(ps_unit_tests
   test_ambient.cpp
   test_simulated_engine_io.cpp
   test_simulated_engine.cpp
+  test_simulated_engine_powertrain.cpp
 )
 
 target_link_libraries(ps_unit_tests

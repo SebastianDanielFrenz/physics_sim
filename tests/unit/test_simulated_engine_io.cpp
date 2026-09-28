@@ -10,7 +10,8 @@
 // exactly one rule of a copy of the valid electronic engine and pins the
 // loader's message.
 
-#include "drivetrain/powertrain.h" // white-box: the C12 "not yet integrated" guard
+#include "drivetrain/engine_simulated.h" // white-box: C12 builds a SimulatedEngine
+#include "drivetrain/powertrain.h"       // white-box
 
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/io/vehicle_io.h"
@@ -24,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <string>
 #include <variant>
 
@@ -211,10 +213,43 @@ TEST_CASE("C10: a rotary simulated engine loads (runtime is I7e)", "[unit][vehic
     CHECK(e.rotary.rotors == 2);
 }
 
-TEST_CASE("C10: Powertrain refuses a simulated engine until I7b C12 integrates it", "[unit][vehicle][drivetrain][engine]") {
-    const ps::vehicle::VehicleDesc d = load_with_engine(base_simulated_engine());
+// PHYS-033 P4 I7b C12 replaces C10's "not yet integrated" refusal: the loaded
+// simulated engine is built behind IEngine. The fixture vehicle has only the
+// engine and one wheel, so a viscous load_dyno is shafted to the crank (an
+// unconnected crank port is rejected by the graph build, not by C12).
+ps::vehicle::VehicleDesc with_crank_dyno(ps::vehicle::VehicleDesc d) {
+    LoadDynoDesc dyno;
+    dyno.mode = LoadDynoMode::Viscous;
+    dyno.viscous_nm_s_rad = 1.0;
+    d.powertrain.components.push_back(ComponentDesc{"dyno", dyno});
+    ShaftDesc s;
+    s.ports = {PortRef{"engine", "crank", false}, PortRef{"dyno", "shaft", false}};
+    d.powertrain.shafts.push_back(s);
+    return d;
+}
+
+TEST_CASE("C12: Powertrain builds a loaded simulated engine behind IEngine", "[unit][vehicle][drivetrain][engine]") {
+    const ps::vehicle::VehicleDesc d = with_crank_dyno(load_with_engine(base_simulated_engine()));
+    std::unique_ptr<Powertrain> pt;
+    REQUIRE_NOTHROW(pt = std::make_unique<Powertrain>(d.powertrain, d.brake_system, d.wheels, d.controllers, d.name));
+    REQUIRE(pt->has_engine());
+    CHECK(dynamic_cast<const SimulatedEngine*>(&pt->engine()) != nullptr);
+}
+
+TEST_CASE("C12: a rotary simulated engine is still refused at build (runtime is I7e C13)",
+          "[unit][vehicle][drivetrain][engine]") {
+    json j = base_simulated_engine();
+    j["architecture"] = "rotary";
+    j.erase("bore_mm");
+    j.erase("stroke_mm");
+    j.erase("cylinders");
+    j["rotor_radius_mm"] = 105.0;
+    j["eccentricity_mm"] = 15.0;
+    j["rotor_width_mm"] = 80.0;
+    j["rotors"] = 2;
+    const ps::vehicle::VehicleDesc d = with_crank_dyno(load_with_engine(j));
     REQUIRE_THROWS_WITH(Powertrain(d.powertrain, d.brake_system, d.wheels, d.controllers, d.name),
-                        ContainsSubstring("simulated engine not yet integrated (I7b C12)"));
+                        ContainsSubstring("rotary architecture is not implemented yet (I7e C13)"));
 }
 
 TEST_CASE("C10: the simulated-engine loader rejects every malformed field with its message",
