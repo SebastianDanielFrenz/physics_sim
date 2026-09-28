@@ -512,6 +512,22 @@ TEST_CASE("C12 pairing: a throttle_control stage of the other kind is refused fo
 }
 
 // ---------------------------------------------------------------------------
+// N1 (vault PHYS-049/050 follow-ups): the production loader
+// (core/src/io/vehicle_io.cpp) already rejects an empty "fuels" list for a
+// simulated engine, so this guard is only reachable via a CODE-BUILT
+// SimulatedEngineDesc that skips that check (as this test does directly,
+// never going through the loader) - previously sim->fuels.front() on an
+// empty vector was UB instead of a clear throw.
+// ---------------------------------------------------------------------------
+TEST_CASE("C12 N1: a code-built simulated engine with no fuels and no tank throws instead of UB",
+          "[unit][drivetrain][engine][fuel]") {
+    SimulatedEngineDesc eng = fx::electronic_engine();
+    eng.fuels.clear();
+    const vehicle::VehicleDesc d = sim_sedan(eng); // tank_fuel = -1: no tank
+    CHECK_THROWS_WITH(build_pt(d), ContainsSubstring("empty fuels list and no fuel_tank"));
+}
+
+// ---------------------------------------------------------------------------
 // Determinism and allocation: 1 vs 10 workers, auto-clutch WOT launch with an
 // ambient change to 2000 m in the middle (the refill runs inside the vehicle
 // job) - identical state_hash, identical rpm, zero own allocations while

@@ -1235,6 +1235,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             // list holds ONLY the fuel actually burnt - the tank's (already
             // checked to be in the list) or, without a tank, fuels[0] (the
             // same rule as the graph engine's to_engine_desc). Review R7.
+            //
+            // N1 (vault PHYS-049/050 follow-ups): the production loader
+            // (core/src/io/vehicle_io.cpp) already rejects an empty "fuels"
+            // list for a simulated engine, so this can only be reached by a
+            // CODE-BUILT SimulatedEngineDesc (tests, or a future non-JSON
+            // caller) that skips that check. Without a tank, sim->fuels
+            // must be non-empty or sim->fuels.front() below is UB.
+            if (!tank_desc && sim->fuels.empty()) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': simulated engine '" + e_id +
+                                          "' has an empty fuels list and no fuel_tank - nothing to burn");
+            }
             SimulatedEngineDesc burnt = *sim;
             burnt.fuels.assign(1, tank_desc ? tank_desc->fuel : sim->fuels.front());
             engine_ = std::make_unique<SimulatedEngine>(burnt);
