@@ -385,9 +385,46 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
         v_intake_ += kPi * rp.length_m / 12.0 * (rp.d_in_m * rp.d_in_m + rp.d_in_m * rp.d_out_m + rp.d_out_m * rp.d_out_m);
     }
     net_->set_orifice_cd_area(layout_.throttle_orifice, cda_);
+
+    // A7: radiating ends (FV ends open to ambient, then waveguide Open nodes).
+    const auto is_intake_volume = [&](const PipeEndDesc& e) {
+        return e.kind == PipeEndDesc::Kind::Volume && (e.index == layout_.airbox_volume || e.index == layout_.plenum_volume);
+    };
+    for (std::size_t p = 0; p < nd.pipes.size(); ++p) {
+        const PipeDesc& pd = nd.pipes[p];
+        for (int side = 0; side < 2; ++side) {
+            const PipeEndDesc& e = side == 0 ? pd.start : pd.end;
+            if (e.kind != PipeEndDesc::Kind::Open) continue;
+            RadiatingEnd r;
+            r.kind = RadiatingEnd::Kind::PipeEnd;
+            r.name = pd.name + (side == 0 ? " (start)" : " (end)");
+            r.index = static_cast<int>(p);
+            r.at_start = side == 0;
+            r.area_m2 = area_of(side == 0 ? pd.d_start_m : pd.d_end_m);
+            r.intake = is_intake_volume(side == 0 ? pd.end : pd.start);
+            rad_.push_back(r);
+        }
+    }
+    for (std::size_t n = 0; n < nd.waveguide.nodes.size(); ++n) {
+        const WgNodeDesc& wn = nd.waveguide.nodes[n];
+        if (wn.kind != WgNodeDesc::Kind::Open) continue;
+        RadiatingEnd r;
+        r.kind = RadiatingEnd::Kind::WaveguideOpen;
+        r.name = wn.name;
+        r.index = static_cast<int>(n);
+        rad_.push_back(r);
+    }
 }
 
 EngineCore::~EngineCore() = default;
+
+real EngineCore::radiating_outflow(int k) const {
+    const RadiatingEnd& r = rad_[static_cast<std::size_t>(k)];
+    if (r.kind == RadiatingEnd::Kind::WaveguideOpen) return net_->waveguide().node_outflow(r.index);
+    const int i = r.at_start ? 0 : net_->cell_count(r.index) - 1;
+    const real u = net_->cell(r.index, i).u;
+    return (r.at_start ? -u : u) * r.area_m2;
+}
 
 void EngineCore::set_throttle_cd_area(real cd_area_m2) {
     cda_ = std::clamp(cd_area_m2, 1e-9, cda_max_);

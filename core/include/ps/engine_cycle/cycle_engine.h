@@ -123,6 +123,19 @@ struct EngineNetworkLayout {
                                                             real dx_intake_m, real dx_exhaust_m,
                                                             EngineNetworkLayout* layout);
 
+// ps_audio A7: an end of an engine's network that radiates to the outside -
+// an FV pipe end open to ambient (the snorkel mouth; the flange pipe without
+// an installation) or a waveguide Open node (each tailpipe outlet).
+struct RadiatingEnd {
+    enum class Kind : std::uint8_t { PipeEnd, WaveguideOpen };
+    Kind kind = Kind::PipeEnd;
+    std::string name;
+    int index = -1;         // pipe (PipeEnd) or waveguide node (WaveguideOpen)
+    bool at_start = false;  // PipeEnd: the pipe's start end
+    real area_m2 = 0.0;     // PipeEnd: geometric end area
+    bool intake = false;    // on the intake side (upstream of the ports)
+};
+
 struct EngineCoreSettings {
     real dx_intake_m = 0.05;
     real dx_exhaust_m = 0.05;
@@ -163,6 +176,13 @@ public:
     // Clamped to [1e-9, max]; pushed to the network's throttle orifice.
     void set_throttle_cd_area(real cd_area_m2);
     [[nodiscard]] real intake_volume_m3() const { return v_intake_; }  // plenum + runners
+    // Radiating ends in network order: FV pipe ends first (pipe order, start
+    // before end), then waveguide Open nodes (node order). Empty in reservoir mode.
+    [[nodiscard]] const std::vector<RadiatingEnd>& radiating_ends() const { return rad_; }
+    // Volume flow [m^3/s] leaving through radiating end k in the last step:
+    // the end cell's u*A (outward) for a pipe end, the waveguide node's
+    // outflow for an Open node.
+    [[nodiscard]] real radiating_outflow(int k) const;
     [[nodiscard]] real total_mass() const;  // network + every cylinder and port
     // FNV-1a fold: the network (if any), every cylinder's state vector and
     // crank angle, the throttle Cd*A.
@@ -177,6 +197,7 @@ private:
     EngineNetworkLayout layout_{};
     real cda_ = 0.0, cda_max_ = 0.0;
     real v_intake_ = 0.0;
+    std::vector<RadiatingEnd> rad_;
 };
 
 class CycleEngine {
