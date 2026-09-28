@@ -770,6 +770,11 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   local tool (a command-line front end to generate_engine_maps at Preview
   quality) for the resulting torque, power and fuel curves; compiling core
   to WebAssembly is the alternative if a hosted page is wanted.
+  Required view (Sebastian, 2026-09-28): while designing, the page shows an
+  rpm vs torque / power chart (full-throttle curves over the engine's rpm
+  range), refreshed as parameters change. Preview-quality generation
+  (0.03-0.3 s on 10 workers) plus the C16b .psmaps cache should keep it
+  interactive; each change regenerates the maps, not only the chart.
 - Fun engine (Sebastian, 2026-09-28): once development is far enough, a
   simulated Dodge Challenger SRT Demon 170 engine (6.2 L supercharged V8,
   E85) in a car of its own. Not before these exist: the I7c generator
