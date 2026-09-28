@@ -137,11 +137,17 @@ std::vector<real> engine_firing_phases_deg(const CycleModelDesc& desc) {
 
 PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const GasStateDesc& ambient,
                                               real p_plenum_init_pa, real dx_m, EngineNetworkLayout* layout) {
+    return make_engine_pipe_network_desc(desc, ambient, p_plenum_init_pa, dx_m, dx_m, layout);
+}
+
+PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const GasStateDesc& ambient,
+                                              real p_plenum_init_pa, real dx_intake_m, real dx_exhaust_m,
+                                              EngineNetworkLayout* layout) {
     if (!desc.intake.has_value() || !desc.exhaust.has_value()) fail("the desc has no intake/exhaust pipe blocks");
     const drivetrain::IntakeCycleDesc& in = *desc.intake;
     const drivetrain::ExhaustCycleDesc& ex = *desc.exhaust;
     const int ncyl = desc.cylinders;
-    if (!(dx_m > 0.0)) fail("dx must be > 0");
+    if (!(dx_intake_m > 0.0) || !(dx_exhaust_m > 0.0)) fail("dx must be > 0");
     EngineNetworkLayout lay;
 
     PipeNetworkDesc nd;
@@ -164,7 +170,7 @@ PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const 
         sn.name = "snorkel";
         sn.length_m = desc.installation->intake.snorkel.length_m;
         sn.d_start_m = sn.d_end_m = desc.installation->intake.snorkel.d_m;
-        sn.dx_target_m = dx_m;
+        sn.dx_target_m = dx_intake_m;
         sn.max_wave_speed_m_s = kIntakeMaxWaveSpeed;
         sn.start = PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged};
         sn.end = PipeEndDesc{PipeEndDesc::Kind::Volume, lay.airbox_volume, EndCorrection::Unflanged};
@@ -211,7 +217,7 @@ PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const 
         p.length_m = r.length_m;
         p.d_start_m = r.d_in_m;
         p.d_end_m = r.d_out_m;
-        p.dx_target_m = dx_m;
+        p.dx_target_m = dx_intake_m;
         p.max_wave_speed_m_s = kIntakeMaxWaveSpeed;
         p.start = PipeEndDesc{PipeEndDesc::Kind::Volume, lay.plenum_volume, EndCorrection::Unflanged};  // [AS]
         p.end = PipeEndDesc{PipeEndDesc::Kind::Port, lay.intake_port0 + c - 1, EndCorrection::None};
@@ -269,7 +275,7 @@ PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const 
         p.name = "primary " + std::to_string(c);
         p.length_m = pr.length_m;
         p.d_start_m = p.d_end_m = pr.d_m;
-        p.dx_target_m = dx_m;
+        p.dx_target_m = dx_exhaust_m;
         p.max_wave_speed_m_s = kExhaustMaxWaveSpeed;
         p.start = PipeEndDesc{PipeEndDesc::Kind::Port, lay.exhaust_port0 + c - 1, EndCorrection::None};
         if (nm == 0) {
@@ -288,7 +294,7 @@ PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const 
         p.name = "merge " + md.into;
         p.length_m = md.length_m;
         p.d_start_m = p.d_end_m = md.d_m;
-        p.dx_target_m = dx_m;
+        p.dx_target_m = dx_exhaust_m;
         p.max_wave_speed_m_s = kExhaustMaxWaveSpeed;
         junction_area[static_cast<std::size_t>(m)] += area_of(md.d_m);
         p.start = PipeEndDesc{PipeEndDesc::Kind::Volume, j0 + m, EndCorrection::None};
@@ -311,18 +317,39 @@ PipeNetworkDesc make_engine_pipe_network_desc(const CycleModelDesc& desc, const 
     return nd;
 }
 
-CycleEngine::CycleEngine(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, const OperatingPoint& op,
-                         const CycleEngineSettings& settings)
-    : op_(op), settings_(settings), cylinders_(desc.cylinders) {
+namespace {
+
+std::uint64_t validated_step_count(const CycleModelDesc& desc, const OperatingPoint& op,
+                                   const CycleEngineSettings& settings) {
     if (!desc.intake.has_value() || !desc.exhaust.has_value()) fail("the desc has no intake/exhaust pipe blocks");
-    if (cylinders_ < 1 || cylinders_ > kCycleEngineMaxCylinders)
+    if (desc.cylinders < 1 || desc.cylinders > kCycleEngineMaxCylinders)
         fail("cylinders must be 1.." + std::to_string(kCycleEngineMaxCylinders));
     if (!(op.rpm > 0.0 && op.p_im_pa > 0.0 && op.t_im_k > 0.0 && op.p_amb_pa > 0.0))
         fail("operating point rpm, p_im, t_im and p_amb must be > 0");
     if (!(settings.h_s > 0.0) || settings.settling_cycles < 0) fail("h_s must be > 0 and settling_cycles >= 0");
     const real nn = std::ceil(120.0 / (op.rpm * settings.h_s));
-    n_ = nn < 1.0 ? 1u : static_cast<std::uint64_t>(nn);
-    h_ = 120.0 / (op.rpm * static_cast<real>(n_));
+    return nn < 1.0 ? 1u : static_cast<std::uint64_t>(nn);
+}
+
+EngineCoreSettings core_settings(const CycleModelDesc& desc, const CycleEngineSettings& settings) {
+    const real dx = settings.dx_m > 0.0 ? settings.dx_m : desc.resolution.power_dx_m;
+    EngineCoreSettings c;
+    c.dx_intake_m = dx;
+    c.dx_exhaust_m = dx;
+    c.reservoir_ports = settings.reservoir_ports;
+    return c;
+}
+
+} // namespace
+
+EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, const OperatingPoint& op, real h,
+                       const EngineCoreSettings& settings)
+    : cylinders_(desc.cylinders), h_(h) {
+    if (!desc.intake.has_value() || !desc.exhaust.has_value()) fail("the desc has no intake/exhaust pipe blocks");
+    if (cylinders_ < 1 || cylinders_ > kCycleEngineMaxCylinders)
+        fail("cylinders must be 1.." + std::to_string(kCycleEngineMaxCylinders));
+    if (!(op.p_im_pa > 0.0 && op.t_im_k > 0.0 && op.p_amb_pa > 0.0 && h > 0.0))
+        fail("operating point p_im, t_im, p_amb and the step h must be > 0");
     phase_ = engine_firing_phases_deg(desc);
 
     const CycleStepper proto(desc, lhv_j_kg, afr_st);
@@ -338,16 +365,17 @@ CycleEngine::CycleEngine(const CycleModelDesc& desc, real lhv_j_kg, real afr_st,
         return;
     }
 
-    const real dx = settings.dx_m > 0.0 ? settings.dx_m : desc.resolution.power_dx_m;
     const GasStateDesc ambient{op.p_amb_pa, op.t_im_k, 0.0};
-    const PipeNetworkDesc nd = make_engine_pipe_network_desc(desc, ambient, op.p_im_pa, dx, &layout_);
+    const PipeNetworkDesc nd = make_engine_pipe_network_desc(desc, ambient, op.p_im_pa, settings.dx_intake_m,
+                                                             settings.dx_exhaust_m, &layout_);
     net_ = std::make_unique<PipeNetwork>(nd, h_);
     cda_max_ = std::min(layout_.throttle_cd_area_geom_m2, net_->orifice_max_cd_area(layout_.throttle_orifice));
     // Feed-forward start: VE 0.9 [A] at the target pressure through a steady orifice.
     const GasModel& g = net_->gas();
     const real v_d = area_of(desc.bore_m) * desc.stroke_m;
     const real m_cyc = 0.9 * op.p_im_pa / (g.fresh.r * op.t_im_k) * v_d * static_cast<real>(cylinders_);
-    const real t_cycle = 120.0 / op.rpm;
+    const real rpm_ff = op.rpm > 0.0 ? op.rpm : 1.0;  // A7: a live engine may start at rest
+    const real t_cycle = 120.0 / rpm_ff;
     const real pr = std::min(op.p_im_pa / op.p_amb_pa, 0.999);
     const real g_unit = op.p_amb_pa / std::sqrt(g.fresh.r * op.t_im_k) * proto.model().psi.eval(pr, 0.0);
     cda_ = std::clamp(m_cyc / t_cycle / g_unit, 1e-9, cda_max_);
@@ -359,33 +387,36 @@ CycleEngine::CycleEngine(const CycleModelDesc& desc, real lhv_j_kg, real afr_st,
     net_->set_orifice_cd_area(layout_.throttle_orifice, cda_);
 }
 
-CycleEngine::~CycleEngine() = default;
+EngineCore::~EngineCore() = default;
 
-void CycleEngine::step_all(std::uint64_t k) {
-    const std::size_t nc = static_cast<std::size_t>(cylinders_);
-    if (net_) {
-        const GasModel& g = steppers_[0].model().gas;
-        const real vip = steppers_[0].model().v_ip, vep = steppers_[0].model().v_ep;
-        for (std::size_t c = 0; c < nc; ++c) {
-            const real* y = steppers_[c].state().y;
-            const CvState ip = cv_state(g, y[kIpM], y[kIpU], y[kIpMb], vip);
-            const CvState ep = cv_state(g, y[kEpM], y[kEpU], y[kEpMb], vep);
-            net_->set_port_state(layout_.intake_port0 + static_cast<int>(c), PortState{ip.p, ip.t, ip.x});
-            net_->set_port_state(layout_.exhaust_port0 + static_cast<int>(c), PortState{ep.p, ep.t, ep.x});
-        }
-        net_->step();
-        const real inv_h = 1.0 / h_;
-        for (std::size_t c = 0; c < nc; ++c) {
-            const PortFlux& fi = net_->port_flux(layout_.intake_port0 + static_cast<int>(c));
-            const PortFlux& fe = net_->port_flux(layout_.exhaust_port0 + static_cast<int>(c));
-            steppers_[c].set_port_sources(PortSource{-fi.mass_kg * inv_h, -fi.energy_j * inv_h, -fi.burned_kg * inv_h},
-                                          PortSource{-fe.mass_kg * inv_h, -fe.energy_j * inv_h, -fe.burned_kg * inv_h});
-        }
-    }
-    for (std::size_t c = 0; c < nc; ++c) steppers_[c].step_phased(k, n_, phase_[c]);
+void EngineCore::set_throttle_cd_area(real cd_area_m2) {
+    cda_ = std::clamp(cd_area_m2, 1e-9, cda_max_);
+    if (net_) net_->set_orifice_cd_area(layout_.throttle_orifice, cda_);
 }
 
-real CycleEngine::total_mass() const {
+void EngineCore::exchange() {
+    if (!net_) return;
+    const std::size_t nc = static_cast<std::size_t>(cylinders_);
+    const GasModel& g = steppers_[0].model().gas;
+    const real vip = steppers_[0].model().v_ip, vep = steppers_[0].model().v_ep;
+    for (std::size_t c = 0; c < nc; ++c) {
+        const real* y = steppers_[c].state().y;
+        const CvState ip = cv_state(g, y[kIpM], y[kIpU], y[kIpMb], vip);
+        const CvState ep = cv_state(g, y[kEpM], y[kEpU], y[kEpMb], vep);
+        net_->set_port_state(layout_.intake_port0 + static_cast<int>(c), PortState{ip.p, ip.t, ip.x});
+        net_->set_port_state(layout_.exhaust_port0 + static_cast<int>(c), PortState{ep.p, ep.t, ep.x});
+    }
+    net_->step();
+    const real inv_h = 1.0 / h_;
+    for (std::size_t c = 0; c < nc; ++c) {
+        const PortFlux& fi = net_->port_flux(layout_.intake_port0 + static_cast<int>(c));
+        const PortFlux& fe = net_->port_flux(layout_.exhaust_port0 + static_cast<int>(c));
+        steppers_[c].set_port_sources(PortSource{-fi.mass_kg * inv_h, -fi.energy_j * inv_h, -fi.burned_kg * inv_h},
+                                      PortSource{-fe.mass_kg * inv_h, -fe.energy_j * inv_h, -fe.burned_kg * inv_h});
+    }
+}
+
+real EngineCore::total_mass() const {
     real m = net_ ? net_->total_mass() : 0.0;
     for (const CycleStepper& s : steppers_) {
         const real* y = s.state().y;
@@ -394,58 +425,86 @@ real CycleEngine::total_mass() const {
     return m;
 }
 
+std::uint64_t EngineCore::fold_state_hash(std::uint64_t h) const {
+    if (net_) h = net_->fold_state_hash(h);
+    for (const CycleStepper& s : steppers_) {
+        for (real v : s.state().y) fnv_fold(h, v);
+        fnv_fold(h, s.crank_deg());
+    }
+    fnv_fold(h, cda_);
+    return h;
+}
+
+CycleEngine::CycleEngine(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, const OperatingPoint& op,
+                         const CycleEngineSettings& settings)
+    : op_(op),
+      settings_(settings),
+      n_(validated_step_count(desc, op, settings)),
+      core_(desc, lhv_j_kg, afr_st, op, 120.0 / (op.rpm * static_cast<real>(n_)), core_settings(desc, settings)) {}
+
+CycleEngine::~CycleEngine() = default;
+
+void CycleEngine::step_all(std::uint64_t k) {
+    core_.exchange();
+    const int nc = core_.cylinders();
+    for (int c = 0; c < nc; ++c) core_.cylinder(c).step_phased(k, n_, core_.phase_deg(c));
+}
+
 CycleEngineResult CycleEngine::run() {
     if (used_) throw std::logic_error("CycleEngine: run() is single use");
     used_ = true;
-    const std::size_t nc = static_cast<std::size_t>(cylinders_);
+    const std::size_t nc = static_cast<std::size_t>(core_.cylinders());
+    PipeNetwork* const net = core_.network();
+    const EngineNetworkLayout& layout = core_.layout();
     const int cycles = settings_.settling_cycles + 1;
     const real p_t = op_.p_im_pa;
-    const PsiPair psi = steppers_[0].model().psi;
-    const real r_amb = steppers_[0].model().gas.fresh.r;
+    const PsiPair psi = core_.cylinder(0).model().psi;
+    const real r_amb = core_.cylinder(0).model().gas.fresh.r;
     real air_prev = 0.0, air_last = 0.0;
     real m0 = 0.0, x0 = 0.0, pl_mean = p_t;
     std::uint64_t k = 0;
     std::array<real, CycleEngineResult::kTraceCycles> trace_p{}, trace_c{};
     for (int cyc = 0; cyc < cycles; ++cyc) {
         const bool last = cyc == cycles - 1;
-        for (CycleStepper& s : steppers_) {
+        for (std::size_t c = 0; c < nc; ++c) {
+            CycleStepper& s = core_.cylinder(static_cast<int>(c));
             s.reset_accumulators();
             if (last) s.reset_peak_pressure();
         }
         if (last) {
-            m0 = total_mass();
-            x0 = net_ ? (net_->exchange().ambient_mass_kg + net_->exchange().waveguide_mass_kg +
-                         net_->exchange().source_mass_kg)
+            m0 = core_.total_mass();
+            x0 = net ? (net->exchange().ambient_mass_kg + net->exchange().waveguide_mass_kg +
+                         net->exchange().source_mass_kg)
                       : 0.0;
         }
         real sum_pl = 0.0, sum_up = 0.0, sum_g = 0.0;
         for (std::uint64_t i = 0; i < n_; ++i, ++k) {
-            if (net_) {
+            if (net) {
                 // Unit-Cd*A throttle flow at this step's start states (what the
                 // network's explicit orifice update sees).
-                const CvState pl = net_->volume_state(layout_.plenum_volume);
-                if (layout_.airbox_volume >= 0) {
-                    const CvState ab = net_->volume_state(layout_.airbox_volume);
+                const CvState pl = net->volume_state(layout.plenum_volume);
+                if (layout.airbox_volume >= 0) {
+                    const CvState ab = net->volume_state(layout.airbox_volume);
                     sum_g += orifice_flow(psi, 1.0, ab.p, ab.r, ab.t, ab.x, pl.p, pl.r, pl.t, pl.x).mdot;
                 } else {
                     sum_g += orifice_flow(psi, 1.0, op_.p_amb_pa, r_amb, op_.t_im_k, 0.0, pl.p, pl.r, pl.t, pl.x).mdot;
                 }
             }
             step_all(k);
-            if (net_) {
-                sum_pl += net_->volume_state(layout_.plenum_volume).p;
-                sum_up += layout_.airbox_volume >= 0 ? net_->volume_state(layout_.airbox_volume).p : op_.p_amb_pa;
+            if (net) {
+                sum_pl += net->volume_state(layout.plenum_volume).p;
+                sum_up += layout.airbox_volume >= 0 ? net->volume_state(layout.airbox_volume).p : op_.p_amb_pa;
             }
         }
         real air = 0.0;
-        for (const CycleStepper& s : steppers_) air += s.state().y[kAccIvFresh];
+        for (std::size_t c = 0; c < nc; ++c) air += core_.cylinder(static_cast<int>(c)).state().y[kAccIvFresh];
         air_prev = air_last;
         if (cyc < CycleEngineResult::kTraceCycles) {
-            trace_p[static_cast<std::size_t>(cyc)] = net_ ? sum_pl / static_cast<real>(n_) : p_t;
-            trace_c[static_cast<std::size_t>(cyc)] = cda_;
+            trace_p[static_cast<std::size_t>(cyc)] = net ? sum_pl / static_cast<real>(n_) : p_t;
+            trace_c[static_cast<std::size_t>(cyc)] = core_.throttle_cd_area();
         }
         air_last = air;
-        if (net_) {
+        if (net) {
             const real rn = static_cast<real>(n_);
             pl_mean = sum_pl / rn;
             const real p_up = sum_up / rn;
@@ -461,38 +520,37 @@ CycleEngineResult CycleEngine::run() {
                 // where the sample sits in a pulsation trough).
                 const real t_cycle = 120.0 / op_.rpm;
                 real m_eng = 0.0;
-                for (const CycleStepper& s : steppers_) m_eng += s.state().y[kAccIvMass];
+                for (std::size_t c = 0; c < nc; ++c) m_eng += core_.cylinder(static_cast<int>(c)).state().y[kAccIvMass];
                 const real flow_req = m_eng / t_cycle * (p_t / pl_mean) +
-                                      0.5 * (p_t - pl_mean) * v_intake_ / (r_amb * op_.t_im_k) / t_cycle;  // gain 0.5 [A]
+                                      0.5 * (p_t - pl_mean) * core_.intake_volume_m3() / (r_amb * op_.t_im_k) / t_cycle;  // gain 0.5 [A]
                 const real psi_bar = psi.eval(std::clamp(pl_mean / p_up, 0.0, 0.999), 0.0);
                 const real psi_t = psi.eval(std::clamp(p_t / p_up, 0.0, 0.999), 0.0);
                 const real g_t = sum_g / rn * (psi_t / psi_bar);
-                real cda = g_t > 0.0 ? flow_req / g_t : cda_max_;
-                cda = std::clamp(cda, 0.5 * cda_, 2.0 * cda_);
-                cda_ = std::clamp(cda, 1e-9, cda_max_);
-                net_->set_orifice_cd_area(layout_.throttle_orifice, cda_);
+                real cda = g_t > 0.0 ? flow_req / g_t : core_.throttle_cd_area_max();
+                cda = std::clamp(cda, 0.5 * core_.throttle_cd_area(), 2.0 * core_.throttle_cd_area());
+                core_.set_throttle_cd_area(cda);  // clamp(cda, 1e-9, max), pushed to the orifice
             }
         }
     }
 
     CycleEngineResult r;
-    r.cylinders = cylinders_;
+    r.cylinders = core_.cylinders();
     r.steps_per_cycle = n_;
-    r.h_s = h_;
+    r.h_s = core_.h();
     r.p_target_pa = p_t;
     r.p_plenum_mean_pa = pl_mean;
     r.plenum_error_rel = (pl_mean - p_t) / p_t;
     r.trace_plenum_mean_pa = trace_p;
     r.trace_cd_area_m2 = trace_c;
-    r.throttle_cd_area_m2 = cda_;
-    r.throttle_cd_area_max_m2 = cda_max_;
-    r.throttle_saturated = net_ && cda_ >= cda_max_ && r.plenum_error_rel < -settings_.trim_tolerance;
+    r.throttle_cd_area_m2 = core_.throttle_cd_area();
+    r.throttle_cd_area_max_m2 = core_.throttle_cd_area_max();
+    r.throttle_saturated = net && core_.throttle_cd_area() >= core_.throttle_cd_area_max() && r.plenum_error_rel < -settings_.trim_tolerance;
     r.air_change_rel = air_last > 0.0 ? std::fabs(air_last - air_prev) / air_last : 0.0;
 
     real fuel = 0.0, res_in = 0.0, ev_m = 0.0, ev_mt = 0.0;
     PointResult& mr = r.mean;
     for (std::size_t c = 0; c < nc; ++c) {
-        const CycleStepper& s = steppers_[c];
+        const CycleStepper& s = core_.cylinder(static_cast<int>(c));
         const real* y = s.state().y;
         fuel += y[kAccFuel];
         res_in += y[kAccRunnerMass] - y[kAccResMass];
@@ -515,26 +573,16 @@ CycleEngineResult CycleEngine::run() {
     mr.residual_frac *= inv;
     mr.h_exh_j *= inv;
     mr.t_exh_k = ev_m > 0.0 ? ev_mt / ev_m : 0.0;
-    mr.ca50_deg = steppers_[0].wiebe().angle_at_fraction(0.5) - 360.0;
+    mr.ca50_deg = core_.cylinder(0).wiebe().angle_at_fraction(0.5) - 360.0;
     mr.steps = k;
 
-    const real x1 = net_ ? (net_->exchange().ambient_mass_kg + net_->exchange().waveguide_mass_kg +
-                            net_->exchange().source_mass_kg)
+    const real x1 = net ? (net->exchange().ambient_mass_kg + net->exchange().waveguide_mass_kg +
+                            net->exchange().source_mass_kg)
                          : 0.0;
-    const real exch = net_ ? (x1 - x0) : res_in;
-    r.mass_closure_kg = (total_mass() - m0) - exch - fuel;
+    const real exch = net ? (x1 - x0) : res_in;
+    r.mass_closure_kg = (core_.total_mass() - m0) - exch - fuel;
     r.mass_scale_kg = mr.m_air_j_cyc * static_cast<real>(nc);
     return r;
-}
-
-std::uint64_t CycleEngine::fold_state_hash(std::uint64_t h) const {
-    if (net_) h = net_->fold_state_hash(h);
-    for (const CycleStepper& s : steppers_) {
-        for (real v : s.state().y) fnv_fold(h, v);
-        fnv_fold(h, s.crank_deg());
-    }
-    fnv_fold(h, cda_);
-    return h;
 }
 
 } // namespace ps::engine_cycle
