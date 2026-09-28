@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include "ps/drivetrain/engine_cycle_desc.h" // CycleModelDesc (PHYS-033 P4 I7c C16a, SimulatedEngineDesc::cycle)
 #include "ps/drivetrain/fuel_desc.h" // FuelDesc (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel)
 #include "ps/drivetrain/table2d.h"   // Table2D (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel_map)
 #include "ps/math/vec3.h"
@@ -19,6 +20,7 @@
 #include "ps/vehicle/curve1d.h" // Curve1D (NOT vehicle_desc.h: VehicleDesc::powertrain
                                  // is a PowertrainDesc, so that include would be circular)
 
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -287,6 +289,11 @@ struct SimulatedEngineDesc {
     real idle_bypass_area_m2 = 0.0;       // mechanical only (idle_control.bypass_area_mm2 in the file)
     SimulatedEcuDesc ecu;
     SimulatedEngineMapsDesc maps;
+    // PHYS-033 P4 I7c C16a: the engine file's "cycle" block, if any. The loader
+    // runs the map generator (ps/drivetrain/engine_maps.h) on it and fills
+    // `maps` with the result; keys given in the file's own "maps" block
+    // override generated ones. The runtime never reads this field.
+    std::optional<CycleModelDesc> cycle;
 
     // Shared with the graph engine, same meaning and validation.
     real inertia_kgm2 = 0.0;          // > 0

@@ -117,6 +117,11 @@ struct Scenario {
 // Throws std::runtime_error with a descriptive message on a malformed or
 // unreadable scenario file.
 Scenario load_scenario(const std::string& json_path);
+// PHYS-033 P4 I7c C16a: the same, with every vehicle loaded through
+// load_vehicle_json(path, map_options) (engine-map generation quality/pool,
+// ps/io/vehicle_io.h). The overload above uses the defaults.
+struct EngineMapOptions;
+Scenario load_scenario(const std::string& json_path, const EngineMapOptions& map_options);
 
 struct BuiltScenario {
     std::unique_ptr<World> world;

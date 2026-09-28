@@ -59,6 +59,7 @@ add_library(ps_core STATIC
   src/engine_cycle/geometry.cpp
   src/engine_cycle/cycle_stepper.cpp
   src/engine_cycle/cycle_point.cpp
+  src/engine_cycle/map_generator.cpp
 
   src/terrain/procedural_terrain_source.cpp
   src/terrain/procedural_terrain.cpp
