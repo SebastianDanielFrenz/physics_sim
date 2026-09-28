@@ -29,9 +29,9 @@
 
 #include "drivetrain/engine.h"
 #include "drivetrain/engine_simulated.h"
-#include "engine_cycle/cycle_point.h"
-#include "engine_cycle/cycle_stepper.h"
-#include "engine_cycle/wiebe.h"
+#include "ps/engine_cycle/cycle_point.h"
+#include "ps/engine_cycle/cycle_stepper.h"
+#include "ps/engine_cycle/wiebe.h"
 
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
