@@ -34,7 +34,9 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -677,5 +679,81 @@ TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files
         const auto entries = cache.entries();
         CHECK(entries.size() == 1);
         for (const auto& name : entries) CHECK_THAT(name, !ContainsSubstring(".tmp"));
+    }
+}
+
+// C16b review task 4 (report only): a cache hit vs a fresh generation,
+// single thread (no pool), release, the cycle_fixtures engine - both the
+// 4x3 unit-test grid and the 12x20 grid of test_engine_map_generator.cpp's
+// M8 report - Full and Preview, median of 5 each.
+// Review item 2g (report only): the runtime's total pumping mean pressure
+// (p_amb - p + pmep_excess, engine_simulated.cpp) at every node equals the
+// cycle's own -cyl*W_pump/V_disp; printed with its sign, plus the clamped
+// value above the grid's highest p_im.
+TEST_CASE("C16b review: cache hit vs fresh generation timing, pumping sign", "[.][diag][drivetrain][cycle]") {
+    CycleModelDesc big = fixture_desc();
+    big.grid_rpm.clear();
+    big.grid_p_im.clear();
+    for (int i = 0; i < 12; ++i) big.grid_rpm.push_back(1000.0 + 500.0 * i);
+    for (int i = 0; i < 20; ++i) big.grid_p_im.push_back(20000.0 + 5000.0 * i);
+    const FuelDesc fuel = fx::gasoline();
+    constexpr real kPamb = 101325.0; // SimulatedEngine::kIsaPressurePa, the generator's p_amb
+    const auto median5 = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        return v[2];
+    };
+    struct Grid {
+        const char* name;
+        CycleModelDesc desc;
+    };
+    for (const Grid& g : {Grid{"4x3  ", fixture_desc()}, Grid{"12x20", big}}) {
+        for (MapQuality q : {MapQuality::Preview, MapQuality::Full}) {
+            TempCacheDir cache;
+            const std::uint64_t key = engine_map_cache_key(g.desc, fuel, q);
+            std::vector<double> gen, hit;
+            EngineMapsPtr fresh;
+            for (int r = 0; r < 5; ++r) {
+                const auto t0 = std::chrono::steady_clock::now();
+                fresh = generate_engine_maps(g.desc, fuel, q, nullptr);
+                gen.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+            }
+            store_cached_engine_maps(cache.path(), key, *fresh);
+            EngineMapsPtr loaded;
+            for (int r = 0; r < 5; ++r) {
+                const auto t0 = std::chrono::steady_clock::now();
+                loaded = load_cached_engine_maps(cache.path(), key);
+                hit.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+            }
+            REQUIRE(loaded);
+            CHECK(loaded->content_hash == fresh->content_hash);
+            const double mg = median5(gen), mh = median5(hit);
+            std::printf("TIMING %s %s: generate %.4f s, cache hit %.6f s, ratio %.0fx, file %llu bytes\n", g.name,
+                        q == MapQuality::Full ? "Full   " : "Preview", mg, mh, mg / mh,
+                        static_cast<unsigned long long>(std::filesystem::file_size(cache.dir / cache.entries().front())));
+
+            const Table2D& t = fresh->maps.pmep_excess_pa;
+            real tmin = 1e300, tmax = -1e300;
+            int negative = 0;
+            real neg_p_min = 1e300;
+            for (std::size_t ix = 0; ix < t.x.size(); ++ix) {
+                for (std::size_t iy = 0; iy < t.y.size(); ++iy) {
+                    const real total = kPamb - t.y[iy] + t.at(ix, iy);
+                    tmin = std::min(tmin, total);
+                    tmax = std::max(tmax, total);
+                    if (total < 0) {
+                        ++negative;
+                        neg_p_min = std::min(neg_p_min, t.y[iy]);
+                    }
+                }
+            }
+            const real p_top = t.y.back();
+            real above_min = 1e300;
+            for (real rpm : t.x) {
+                above_min = std::min(above_min, kPamb - 101325.0 + t.value(rpm, 101325.0));
+            }
+            std::printf("    PUMP total pmep at nodes [%.1f, %.1f] Pa, %d of %zu negative (lowest such p_im %.0f Pa); top p_im %.0f Pa; min total at p 101325 "
+                        "(clamped excess) %.1f Pa\n",
+                        tmin, tmax, negative, t.values.size(), negative ? neg_p_min : 0.0, p_top, above_min);
+        }
     }
 }
