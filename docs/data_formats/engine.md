@@ -555,3 +555,28 @@ carrying one almost certainly meant `"kind": "simulated"`.
   "fuel": "../fuels/gasoline.json", "ignition": "spark"
 }
 ```
+
+### Shipped simulated engine: `toyota_a25a_fks_sim.json` (measured maps)
+
+PHYS-033 P4 I7c C17a (fallback M-B). `data/engines/toyota_a25a_fks_sim.json`
+is the Toyota A25A-FKS on maps back-solved from the US EPA NVFEL Tier 3
+test-data xlsx (the same package as the torque-map
+`toyota_a25a_fks.json`), written by `tools/enginedata/a25a_mb_engine.py`
+(rerun it to regenerate; it also writes `out/a25a_mb_report.txt`).
+`data/vehicles/car_sedan_sim.json` is `car_sedan.json` with this engine and a
+350 N·m clutch. The `ve`, `lambda_target`, `spark_advance_deg` and
+`pmep_excess_kpa` tables are gridded from measured points over (rpm, MAP).
+`eta_i` is an *effective* indicated efficiency: it is back-solved per point
+through the runtime's own torque equation, with the file's own
+`friction_torque_nm`, the file's own pumping term and the first `fuels`
+entry. It therefore absorbs any friction or pumping model error.
+`friction_torque_nm` is fitted to the engine's own measured motoring rows.
+`theta_mbt_deg` equals the spark table, so `eta_spark` is 1 throughout.
+
+Because the maps were solved from the WOT points, reproducing those points is
+tautological. It proves the file round-trips through the loader and runtime,
+not that a cycle generator predicts anything
+(`tests/unit/test_a25a_sim_engine_data.cpp`). The (rpm, MAP) tables have no
+cam-phase input. Steady-state points just below WOT MAP, measured at a
+different cam phasing, sit 30–60 N·m under the model. The per-point
+residuals are in the report.
