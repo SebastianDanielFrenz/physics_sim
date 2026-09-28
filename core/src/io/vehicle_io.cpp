@@ -3,6 +3,7 @@
 #include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
 #include "ps/drivetrain/table2d.h"
+#include "ps/engine_cycle/firing_order.h"
 #include "ps/io/fuel_io.h"
 
 #include <nlohmann/json.hpp>
@@ -928,6 +929,10 @@ constexpr const char* kCycleKeys[] = {
     "cam",             "wiebe_a",          "wiebe_m",             "burn_duration_deg",  "ca50_mbt_deg_atdc",
     "woschni_c1_gx",   "woschni_c1_cc",    "woschni_c2",          "wall_temperature_k", "head_area_factor",
     "combustion_eff_lean", "exhaust_backflow_temperature_k", "friction", "grid_rpm", "grid_p_im_kpa",
+    // ps_audio A1 (out/audio_plan.md section 1/3): firing phasing + bank
+    // geometry. Descriptor-only for now - see CycleModelDesc's own field
+    // comments (ps/drivetrain/engine_cycle_desc.h).
+    "firing_order", "firing_angles_deg", "banks", "bank_angle_deg",
 };
 
 std::vector<real> read_cycle_grid(const json& cj, const char* key, real scale, const std::string& cctx) {
@@ -1093,6 +1098,86 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
     } else if (!friction_map_given) {
         throw std::runtime_error(cctx + ": 'friction' is required unless maps.friction_torque_nm is given");
     }
+
+    // ---- ps_audio A1 (out/audio_plan.md section 1/3): firing phasing +
+    // bank geometry. Descriptor only - see CycleModelDesc's own field
+    // comments for why nothing downstream reads these yet.
+    if (cj.contains("firing_order")) {
+        if (!cj.at("firing_order").is_array()) throw std::runtime_error(cctx + ": 'firing_order' must be an array of integers");
+        for (const auto& v : cj.at("firing_order")) {
+            if (!v.is_number_integer()) throw std::runtime_error(cctx + ": 'firing_order' entries must be integers");
+            d.firing_order.push_back(v.get<int>());
+        }
+    } else if (d.cylinders == 4) {
+        d.firing_order = {1, 3, 4, 2}; // the common inline-4 order (literature, plan section 3)
+    } else {
+        throw std::runtime_error(cctx + ": 'firing_order' is required for " + std::to_string(d.cylinders) +
+                                  " cylinders (no default exists - a cross-plane and a flat-plane V8 differ, for "
+                                  "example)");
+    }
+    try {
+        ps::engine_cycle::validate_firing_order(d.firing_order, d.cylinders);
+    } catch (const std::invalid_argument& e) {
+        throw std::runtime_error(cctx + ": " + e.what());
+    }
+
+    if (cj.contains("firing_angles_deg")) {
+        if (!cj.at("firing_angles_deg").is_array()) {
+            throw std::runtime_error(cctx + ": 'firing_angles_deg' must be an array of numbers");
+        }
+        for (const auto& v : cj.at("firing_angles_deg")) {
+            if (!v.is_number()) throw std::runtime_error(cctx + ": 'firing_angles_deg' entries must be numbers");
+            d.firing_angles_deg.push_back(v.get<real>());
+        }
+    }
+    try {
+        ps::engine_cycle::validate_firing_angles(d.firing_angles_deg, d.cylinders);
+    } catch (const std::invalid_argument& e) {
+        throw std::runtime_error(cctx + ": " + e.what());
+    }
+
+    if (cj.contains("banks")) {
+        if (!cj.at("banks").is_array() || cj.at("banks").empty()) {
+            throw std::runtime_error(cctx + ": 'banks' must be a non-empty array of cylinder-number arrays");
+        }
+        for (const auto& bj : cj.at("banks")) {
+            if (!bj.is_array() || bj.empty()) {
+                throw std::runtime_error(cctx + ": each 'banks' entry must be a non-empty array of cylinder numbers");
+            }
+            std::vector<int> bank;
+            for (const auto& v : bj) {
+                if (!v.is_number_integer()) throw std::runtime_error(cctx + ": 'banks' entries must be integers");
+                bank.push_back(v.get<int>());
+            }
+            d.banks.push_back(std::move(bank));
+        }
+    } else {
+        d.banks.push_back({}); // default: one bank, every cylinder (plan D5)
+        for (int c = 1; c <= d.cylinders; ++c) d.banks.back().push_back(c);
+    }
+    {
+        std::vector<bool> seen(static_cast<std::size_t>(d.cylinders) + 1, false);
+        int covered = 0;
+        for (const auto& bank : d.banks) {
+            for (int c : bank) {
+                if (c < 1 || c > d.cylinders) {
+                    throw std::runtime_error(cctx + ": 'banks' cylinder number " + std::to_string(c) + " is out of range [1, " +
+                                              std::to_string(d.cylinders) + "]");
+                }
+                if (seen[static_cast<std::size_t>(c)]) {
+                    throw std::runtime_error(cctx + ": 'banks' cylinder " + std::to_string(c) + " is assigned to more than one bank");
+                }
+                seen[static_cast<std::size_t>(c)] = true;
+                ++covered;
+            }
+        }
+        if (covered != d.cylinders) {
+            throw std::runtime_error(cctx + ": 'banks' must cover every cylinder exactly once (covered " + std::to_string(covered) +
+                                      " of " + std::to_string(d.cylinders) + ")");
+        }
+    }
+
+    d.bank_angle_deg = cj.contains("bank_angle_deg") ? require_number(cj, "bank_angle_deg", cctx) : real(0.0);
 
     d.grid_rpm = read_cycle_grid(cj, "grid_rpm", real(1.0), cctx);
     d.grid_p_im = read_cycle_grid(cj, "grid_p_im_kpa", real(1000.0), cctx);

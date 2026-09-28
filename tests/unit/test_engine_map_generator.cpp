@@ -19,9 +19,9 @@
 #include "drivetrain/engine.h"
 #include "drivetrain/engine_simulated.h"
 #include "drivetrain/powertrain.h"
-#include "engine_cycle/cycle_point.h"
-#include "engine_cycle/cycle_stepper.h"
-#include "engine_cycle/wiebe.h"
+#include "ps/engine_cycle/cycle_point.h"
+#include "ps/engine_cycle/cycle_stepper.h"
+#include "ps/engine_cycle/wiebe.h"
 
 #include "cycle_fixtures.h"
 #include "mvem_fixtures.h"
@@ -740,6 +740,26 @@ TEST_CASE("C16a M5: loader-time generation, override precedence and cycle-block 
              "the span (last x - first x) must be < 720 deg"},
             {[](json& c) { c["intake_lift"]["lift_mm_vs_deg"]["y"][0] = 0.5; }, "the first and last lift must be exactly 0"},
             {[](json& c) { c["intake_lift"]["lift_mm_vs_deg"]["y"][3] = -0.5; }, "every lift must be >= 0 and finite"},
+            // ps_audio A1 (out/audio_plan.md section 1/3): firing_order/
+            // firing_angles_deg/banks/bank_angle_deg. cycle_only_engine()'s
+            // engine is 4-cylinder, so firing_order defaults to 1-3-4-2 and
+            // is not itself under test here - see test_firing_order.cpp for
+            // the pure-function coverage (including the non-4-cylinder "no
+            // default" case, exercised below outside this table since it
+            // needs a different cylinder count, not just a cycle-block key).
+            {[](json& c) { c["firing_order"] = {1, 3, 4}; }, "firing_order: expected 4 entries, got 3"},
+            {[](json& c) { c["firing_order"] = {1, 3, 4, 5}; }, "cylinder number 5 is out of range [1, 4]"},
+            {[](json& c) { c["firing_order"] = {1, 3, 4, 3}; }, "cylinder 3 appears more than once"},
+            {[](json& c) { c["firing_order"] = {1, "x", 4, 2}; }, "'firing_order' entries must be integers"},
+            {[](json& c) { c["firing_angles_deg"] = {0.0, 180.0}; },
+             "firing_angles_deg: expected 4 entries (one per cylinder) or none, got 2"},
+            {[](json& c) { c["firing_angles_deg"] = {0.0, 180.0, 360.0, 720.0}; }, "must be finite and in [0, 720)"},
+            {[](json& c) { c["firing_angles_deg"] = {0.0, 180.0, 180.0, 540.0}; }, "share the same firing angle"},
+            {[](json& c) { c["banks"] = json::array(); }, "'banks' must be a non-empty array of cylinder-number arrays"},
+            {[](json& c) { c["banks"] = {{1, 2, 3, 5}}; }, "'banks' cylinder number 5 is out of range [1, 4]"},
+            {[](json& c) { c["banks"] = {{1, 2}, {2, 3, 4}}; }, "'banks' cylinder 2 is assigned to more than one bank"},
+            {[](json& c) { c["banks"] = {{1, 2, 3}}; }, "'banks' must cover every cylinder exactly once (covered 3 of 4)"},
+            {[](json& c) { c["bank_angle_deg"] = "x"; }, "'bank_angle_deg' must be a number"},
         };
         for (const auto& [mutate, msg] : cases) {
             json j = cycle_only_engine();
@@ -773,6 +793,47 @@ TEST_CASE("C16a M5: loader-time generation, override precedence and cycle-block 
             const auto p = td.write("vehicle.json", vehicle_with_engine(b));
             CHECK_THROWS_WITH(io::load_vehicle_json(p.string(), preview_options(nullptr)),
                               ContainsSubstring("breakaway_torque_nm must be >= maps.friction_torque_nm(0)"));
+        }
+        // firing_order has no default for any cylinder count other than 4
+        // (ps_audio A1, out/audio_plan.md section 3) - a cross-plane and a
+        // flat-plane V8 differ, so a 6-cylinder engine must say explicitly.
+        json v6 = cycle_only_engine();
+        v6["cylinders"] = 6;
+        {
+            TempDir td;
+            const auto p = td.write("vehicle.json", vehicle_with_engine(v6));
+            CHECK_THROWS_WITH(io::load_vehicle_json(p.string(), preview_options(nullptr)),
+                              ContainsSubstring("'firing_order' is required for 6 cylinders"));
+        }
+    }
+    SECTION("firing_order/firing_angles_deg/banks/bank_angle_deg load and default correctly") {
+        // Defaults for the 4-cylinder fixture: firing_order {1,3,4,2}, empty
+        // firing_angles_deg (derive), one bank with every cylinder, and
+        // bank_angle_deg 0.
+        {
+            const vehicle::VehicleDesc v = load_engine(cycle_only_engine(), nullptr);
+            const auto& cyc = *only_sim_engine(v).cycle;
+            CHECK(cyc.firing_order == std::vector<int>{1, 3, 4, 2});
+            CHECK(cyc.firing_angles_deg.empty());
+            REQUIRE(cyc.banks.size() == 1);
+            CHECK(cyc.banks[0] == std::vector<int>{1, 2, 3, 4});
+            CHECK(cyc.bank_angle_deg == 0.0);
+        }
+        // Explicit values round-trip through the loader unchanged.
+        {
+            json j = cycle_only_engine();
+            j["cycle"]["firing_order"] = {1, 3, 4, 2};
+            j["cycle"]["firing_angles_deg"] = {0.0, 540.0, 180.0, 360.0};
+            j["cycle"]["banks"] = {{1, 3}, {2, 4}};
+            j["cycle"]["bank_angle_deg"] = 90.0;
+            const vehicle::VehicleDesc v = load_engine(j, nullptr);
+            const auto& cyc = *only_sim_engine(v).cycle;
+            CHECK(cyc.firing_order == std::vector<int>{1, 3, 4, 2});
+            CHECK(cyc.firing_angles_deg == std::vector<real>{0.0, 540.0, 180.0, 360.0});
+            REQUIRE(cyc.banks.size() == 2);
+            CHECK(cyc.banks[0] == std::vector<int>{1, 3});
+            CHECK(cyc.banks[1] == std::vector<int>{2, 4});
+            CHECK(cyc.bank_angle_deg == 90.0);
         }
     }
 }

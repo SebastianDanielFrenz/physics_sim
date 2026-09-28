@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cycle_stepper.h"
+#include "ps/engine_cycle/cycle_stepper.h"
 #include "ps/types.h"
 
 #include <cstdint>

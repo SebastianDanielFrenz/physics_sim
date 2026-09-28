@@ -134,6 +134,45 @@ struct CycleModelDesc {
     // a CycleModelDesc is built directly in C++ (tests/fixtures), not
     // through the loader.
     std::string source;
+
+    // ---- ps_audio A1 (out/audio_plan.md section 1/3, D-1/D-5): firing
+    // phasing + exhaust-bank geometry. Descriptor only - NEITHER the map
+    // generator (map_generator.cpp) NOR the single-cylinder cycle stepper
+    // (cycle_stepper.h) read these yet (A5 wires a real multi-cylinder
+    // CycleEngine to them); an engine's generated maps and state_hash are
+    // therefore unaffected by these fields today, and they are deliberately
+    // OUTSIDE engine_map_cache_key (map_cache.cpp) - H3's own rule ("every
+    // field the generator will read must be in the key") does not yet apply
+    // to them. See ps::engine_cycle::resolve_firing_angles_deg
+    // (ps/engine_cycle/firing_order.h) for the derivation these feed, and
+    // ps/io/vehicle_io.cpp's read_cycle_block for the loader/defaults/
+    // rejections.
+    //
+    // 1-based cylinder numbers, a permutation of 1..cylinders, in FIRING
+    // ORDER (cylinder firing_order[0] fires first). Default [1, 3, 4, 2]
+    // only when cylinders == 4 (the common inline-4 order); the loader
+    // requires it explicitly for any other cylinder count (a cross-plane
+    // and a flat-plane V8 differ, and there is no single "common" order).
+    std::vector<int> firing_order;
+
+    // Optional. Empty = derive even 720/cylinders spacing in firing_order's
+    // order (cylinder firing_order[i] gets angle i * 720/cylinders).
+    // Non-empty = one EXPLICIT angle per cylinder, in CYLINDER-NUMBER order
+    // (index 0 = cylinder 1's angle, ..., index cylinders-1 = the last
+    // cylinder's), crank degrees, 0 = cylinder 1's firing TDC - required
+    // for odd-fire engines (a V-twin, some V6), where no even-spacing rule
+    // applies.
+    std::vector<real> firing_angles_deg;
+
+    // Groups of 1-based cylinder numbers assigning each cylinder to an
+    // exhaust bank (audio source positions + bank topology, A8+; NOT used
+    // for firing timing, which the two fields above already fully carry).
+    // Empty = one bank containing every cylinder (the loader's default).
+    std::vector<std::vector<int>> banks;
+
+    // Bank geometry (the V angle between banks), degrees. Does not affect
+    // firing timing. 0 for an inline/single-bank engine (the default).
+    real bank_angle_deg = 0.0;
 };
 
 } // namespace ps::drivetrain

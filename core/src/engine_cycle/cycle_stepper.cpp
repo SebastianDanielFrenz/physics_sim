@@ -1,8 +1,8 @@
 // engine_cycle/cycle_stepper.cpp - see cycle_stepper.h.
 
-#include "cycle_stepper.h"
+#include "ps/engine_cycle/cycle_stepper.h"
 
-#include "heat_transfer.h"
+#include "ps/engine_cycle/heat_transfer.h"
 
 #include <cmath>
 #include <stdexcept>
