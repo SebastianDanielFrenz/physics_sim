@@ -1,0 +1,216 @@
+{
+  "format": "physics_sim.engine/1",
+  "name": "toyota_a25a_fks_gen",
+  "kind": "simulated",
+  "source": "I7c C17a M-A generated-map engine: Toyota A25A-FKS 2.5 L I4 (2018 Camry) as a C15a cycle-model description; the runtime maps are GENERATED at load time by the C16a map generator (no 'maps' block). Validated against the US EPA NVFEL A25A Tier 3 dyno data it was never fitted to (tests/validation/test_gen_engine_dyno.cpp). Written by tools/enginedata/a25a_gen_engine.py. Idle/limiter/starter/DFCO/idle-PI facts are the same engine facts as data/engines/toyota_a25a_fks_sim.json (M-B) and copied from it.",
+  "architecture": "piston_4stroke",
+  "bore_mm": 87.5,
+  "stroke_mm": 103.4,
+  "cylinders": 4,
+  "geometry_source": "bore 87.5 mm, stroke 103.4 mm, compression ratio 13.0 ([C] SAE 2019-01-0249 Table 1, used by the cycle block): secondary web sources (Toyota press material as quoted by third-party sites; see out/a25a/a25a_tables.json bore_stroke_note), not a primary citation",
+  "intake_manifold_volume_l": 2.9845,
+  "intake_manifold_volume_source": "[AS] Tier 3: plenum = 1.2 x V_d (2.48706 L) (i7c plan rule; runners not added).",
+  "throttle_body": {
+    "diameter_mm": 53.8771,
+    "count": 1,
+    "discharge_coefficient": 0.8,
+    "area_fraction_vs_position": {
+      "x": [0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0],
+      "y": [0.0027459713, 0.012, 0.03, 0.12, 0.4, 0.75, 1.0]
+    }
+  },
+  "throttle_body_source": "[AS] Tier 3: bore sized for a 60 m/s mean air velocity at 6600 rpm (Toyota's rated-power SPEED [C]) with VE 1 at ISA [rule of thumb, recalled]. DISCLOSURE: the M-B file's air-flow-sized 53.6171 mm bore had been seen before this rule was applied. Cd 0.8 [AS] and the area-fraction shape above position 0 [AS] are the M-B file's. y(0) [D] = 0.5 x the plate-0 leak area fraction giving zero net torque at idle_rpm 800 (ISA) on this engine's OWN generated maps (model-consistency rule, as M-B; measured by the [.][diag] case 'C17a-MA diag: idle leak bisection'), so the idle PI keeps authority.",
+  "throttle_input": "electronic",
+  "throttle_actuator_tau_s": 0.05,
+  "throttle_actuator_source": "[AS] assumed 50 ms first-order electronic throttle actuator (as the C11 test fixture)",
+  "ecu": {
+    "lambda_target": {
+      "source": "[D] Tier 1b: measured exhaust lambda per fired point, gridded (IDW k6, nearest outside the measured hull) by a25a_author.py; raw, protective-enrichment WOT points kept",
+      "rpm": [600.0, 800.0, 1000.0, 1200.0, 1500.0, 1800.0, 2100.0, 2400.0, 2700.0, 3000.0, 3300.0, 3700.0, 4100.0, 4500.0, 4900.0, 5300.0, 5700.0, 6100.0, 6500.0, 6900.0],
+      "p_im_kpa": [20.0, 27.727, 35.455, 43.182, 50.909, 58.636, 66.364, 74.091, 81.818, 89.545, 97.273, 105.0],
+      "values": [
+        [1.02, 1.02, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.833361, 0.835608],
+        [1.02, 1.01458, 1.00752, 1.0009, 0.999144, 0.997675, 1.00007, 1.00135, 1.0, 1.0, 0.833361, 0.835608],
+        [1.02, 1.0176, 1.018, 0.999539, 0.998314, 0.996983, 1.00033, 1.00169, 0.999155, 0.996165, 0.833361, 0.835608],
+        [1.0, 1.00822, 1.00945, 0.998914, 0.997393, 0.996512, 1.0, 1.00186, 0.999944, 0.996093, 0.785661, 0.793667],
+        [1.0, 1.00055, 1.00435, 0.995913, 0.997471, 0.998645, 1.0, 1.00776, 1.00344, 0.998759, 0.634574, 0.630472],
+        [1.0, 1.00161, 0.998609, 0.992131, 0.998394, 0.999599, 1.0, 0.998421, 1.00716, 0.992025, 0.722389, 0.813061],
+        [1.0, 1.00915, 0.998438, 0.992317, 0.999227, 0.998731, 0.999362, 0.991336, 1.0035, 0.993256, 0.821807, 0.813061],
+        [1.0, 1.0075, 1.00099, 0.994484, 0.99952, 0.993069, 0.999052, 0.997183, 1.00077, 1.0, 0.878307, 0.867921],
+        [1.0, 1.00753, 1.0032, 0.998434, 0.999134, 0.99149, 0.998736, 0.998093, 0.999999, 1.0, 0.880468, 0.867921],
+        [1.01, 1.00557, 1.00972, 0.996308, 0.999297, 0.990334, 0.997396, 0.998427, 1.0, 0.987152, 0.896857, 0.893387],
+        [1.01, 1.00247, 0.99781, 0.992401, 0.994056, 0.99084, 0.995978, 0.998874, 0.999476, 1.0, 0.88414, 0.893387],
+        [1.01, 0.997816, 0.992289, 0.991167, 0.990597, 0.990708, 0.994547, 0.99737, 0.995273, 0.988109, 0.895708, 0.878424],
+        [1.0, 0.991511, 0.998926, 0.996, 0.990131, 0.994392, 0.993671, 0.990558, 0.985716, 0.977227, 0.86381, 0.86381],
+        [1.0, 0.999777, 1.0, 0.999999, 0.994609, 0.997364, 0.988317, 0.983873, 0.973119, 0.909686, 0.870412, 0.870412],
+        [1.0, 1.0, 1.00082, 0.999977, 0.994388, 0.998902, 0.97829, 0.970047, 0.97217, 0.876544, 0.870619, 0.870619],
+        [1.0, 1.0, 1.00195, 1.00013, 0.992237, 0.984755, 0.962934, 0.955298, 0.945024, 0.859461, 0.858261, 0.858261],
+        [1.0, 1.0, 1.01, 1.0, 0.98, 0.98, 0.93, 0.93, 0.97, 0.846011, 0.829695, 0.829695],
+        [1.0, 1.0, 1.01, 1.0, 0.98, 0.98, 0.93, 0.93, 0.93, 0.846526, 0.829695, 0.829695],
+        [1.0, 1.0, 1.01, 1.0, 0.98, 0.98, 0.93, 0.93, 0.846526, 0.846526, 0.829695, 0.829695],
+        [1.0, 1.0, 1.01, 1.0, 0.98, 0.98, 0.93, 0.93, 0.846526, 0.846526, 0.829062, 0.829695]
+      ]
+    },
+    "spark_advance_deg": {
+      "source": "[D] plan D11 mbt_tracking realised as a table: the constant MBT spark the C16a generator uses, -(ca50 - burn*(ln2/a)^(1/(m+1))) = 23.053 deg BTDC (rounded to 1e-4 deg); the measured spark is NOT used",
+      "rpm": [600.0, 6900.0],
+      "p_im_kpa": [20.0, 105.0],
+      "values": [
+        [23.053, 23.053],
+        [23.053, 23.053]
+      ]
+    }
+  },
+  "cycle": {
+    "source": "I7c C17a M-A: C15a 0D cycle-model description of the Toyota A25A-FKS; the loader generates every runtime map from it (C16a). Tiers per i7c plan D1: Tier 1 = measured/cited engine description, Tier 1b = measured ECU schedules (inputs only), Tier 2 = literature constants frozen before any comparison, Tier 3 = [AS] geometry set by a stated sizing rule. Nothing here was chosen from the A25A's measured torque, fuel flow, BSFC, air flow, WOT envelope or motoring curve. Gas properties: the descriptor's defaults (NIST-JANAF linear cv fits [Tier 2, DERIVED], ps/drivetrain/engine_cycle_desc.h). Not modelled: intake manifold temperature (charge at ambient), exhaust back pressure (I7d), EGR (plan D3; the EPA data show the EGR valve closed along WOT above ~2000 rpm).",
+    "rod_mm": 155.1,
+    "rod_mm_source": "[AS] Tier 3: l/r = 3.0 (low end of the 3-4 range for small SI engines, Heywood 1988 sec. 2.2 [recalled, page to verify]; low end because of the long stroke) x crank radius 51.7 mm. No A25A rod length found.",
+    "pin_offset_mm": 10.1,
+    "pin_offset_mm_source": "[C] Tier 1: crankshaft offset 10.1 mm, SAE 2019-01-0249 Table 1. Sign [AS]: positive = the rod stands closer to the cylinder axis during the expansion stroke (the purpose of a desaxe crank), geometry.h's convention.",
+    "compression_ratio": 13.0,
+    "compression_ratio_source": "[C] Tier 1: geometric CR 13:1, SAE 2019-01-0249 Table 1.",
+    "intake_valves": 2,
+    "exhaust_valves": 2,
+    "intake_valves_source": "[C] Tier 1: DOHC, 4 valves per cylinder.",
+    "intake_valve_d_mm": 31.5,
+    "exhaust_valve_d_mm": 26.25,
+    "intake_valve_d_mm_source": "[AS] Tier 3: head diameters 0.36 x bore (intake) and 0.3 x bore (exhaust), the midpoints of the 4-valve pent-roof ranges 0.35-0.37 / 0.28-0.32 of Heywood 1988 Table 6.2 [recalled, page to verify].",
+    "intake_lift": {
+      "phase_ref_deg": 44.0,
+      "lift_mm_vs_deg": {
+        "x": [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, 38.0, 40.0, 42.0, 44.0, 46.0, 48.0, 50.0, 52.0, 54.0, 56.0, 58.0, 60.0, 62.0, 64.0, 66.0, 68.0, 70.0, 72.0, 74.0, 76.0, 78.0, 80.0, 82.0, 84.0, 86.0, 88.0, 90.0, 92.0, 94.0, 96.0, 98.0, 100.0, 102.0, 104.0, 106.0, 108.0, 110.0, 112.0, 114.0, 116.0, 118.0, 120.0, 122.0, 124.0, 126.0, 128.0, 130.0, 132.0, 134.0, 136.0, 138.0, 140.0, 142.0, 144.0, 146.0, 148.0, 150.0, 152.0, 154.0, 156.0, 158.0, 160.0, 162.0, 164.0, 166.0, 168.0, 170.0, 172.0, 174.0, 176.0, 178.0, 180.0, 182.0, 184.0, 186.0, 188.0, 190.0, 192.0, 194.0, 196.0, 198.0, 200.0, 202.0, 204.0, 206.0, 208.0, 210.0, 212.0, 214.0, 216.0, 218.0, 220.0, 222.0, 224.0, 226.0, 228.0, 230.0, 232.0, 234.0, 236.0, 238.0, 240.0, 242.0],
+        "y": [0.0, 0.00195325, 0.0175712, 0.0487643, 0.095447, 0.157491, 0.234728, 0.326944, 0.433887, 0.555264, 0.690742, 0.839951, 1.00248, 1.17789, 1.36569, 1.56537, 1.77638, 1.99815, 2.23006, 2.47148, 2.72176, 2.9802, 3.24609, 3.5187, 3.7973, 4.08111, 4.36936, 4.66126, 4.956, 5.25278, 5.55079, 5.84921, 6.14722, 6.444, 6.73874, 7.03064, 7.31889, 7.6027, 7.8813, 8.15391, 8.4198, 8.67824, 8.92852, 9.16994, 9.40185, 9.62362, 9.83463, 10.0343, 10.2221, 10.3975, 10.56, 10.7093, 10.8447, 10.9661, 11.0731, 11.1653, 11.2425, 11.3046, 11.3512, 11.3824, 11.398, 11.398, 11.3824, 11.3512, 11.3046, 11.2425, 11.1653, 11.0731, 10.9661, 10.8447, 10.7093, 10.56, 10.3975, 10.2221, 10.0343, 9.83463, 9.62362, 9.40185, 9.16994, 8.92852, 8.67824, 8.4198, 8.15391, 7.8813, 7.6027, 7.31889, 7.03064, 6.73874, 6.444, 6.14722, 5.84921, 5.55079, 5.25278, 4.956, 4.66126, 4.36936, 4.08111, 3.7973, 3.5187, 3.24609, 2.9802, 2.72176, 2.47148, 2.23006, 1.99815, 1.77638, 1.56537, 1.36569, 1.17789, 1.00248, 0.839951, 0.690742, 0.555264, 0.433887, 0.326944, 0.234728, 0.157491, 0.095447, 0.0487643, 0.0175712, 0.00195325, 0.0]
+      }
+    },
+    "exhaust_lift": {
+      "phase_ref_deg": 484.0,
+      "lift_mm_vs_deg": {
+        "x": [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, 38.0, 40.0, 42.0, 44.0, 46.0, 48.0, 50.0, 52.0, 54.0, 56.0, 58.0, 60.0, 62.0, 64.0, 66.0, 68.0, 70.0, 72.0, 74.0, 76.0, 78.0, 80.0, 82.0, 84.0, 86.0, 88.0, 90.0, 92.0, 94.0, 96.0, 98.0, 100.0, 102.0, 104.0, 106.0, 108.0, 110.0, 112.0, 114.0, 116.0, 118.0, 120.0, 122.0, 124.0, 126.0, 128.0, 130.0, 132.0, 134.0, 136.0, 138.0, 140.0, 142.0, 144.0, 146.0, 148.0, 150.0, 152.0, 154.0, 156.0, 158.0, 160.0, 162.0, 164.0, 166.0, 168.0, 170.0, 172.0, 174.0, 176.0, 178.0, 180.0, 182.0, 184.0, 186.0, 188.0, 190.0, 192.0, 194.0, 196.0, 198.0, 200.0, 202.0, 204.0, 206.0, 208.0, 210.0, 212.0, 214.0, 216.0, 218.0, 220.0, 222.0, 224.0, 226.0, 228.0, 230.0, 232.0, 234.0, 236.0, 238.0, 240.0, 242.0],
+        "y": [0.0, 0.00191898, 0.0172629, 0.0479088, 0.0937725, 0.154728, 0.230609, 0.321208, 0.426275, 0.545522, 0.678624, 0.825215, 0.984893, 1.15722, 1.34173, 1.5379, 1.74521, 1.96309, 2.19094, 2.42813, 2.67401, 2.92791, 3.18914, 3.45697, 3.73068, 4.00951, 4.29271, 4.57948, 4.86905, 5.16063, 5.45341, 5.74659, 6.03937, 6.33095, 6.62052, 6.90729, 7.19049, 7.46932, 7.74303, 8.01086, 8.27209, 8.52599, 8.77187, 9.00906, 9.23691, 9.45479, 9.6621, 9.85827, 10.0428, 10.2151, 10.3748, 10.5214, 10.6545, 10.7737, 10.8788, 10.9694, 11.0453, 11.1062, 11.1521, 11.1827, 11.1981, 11.1981, 11.1827, 11.1521, 11.1062, 11.0453, 10.9694, 10.8788, 10.7737, 10.6545, 10.5214, 10.3748, 10.2151, 10.0428, 9.85827, 9.6621, 9.45479, 9.23691, 9.00906, 8.77187, 8.52599, 8.27209, 8.01086, 7.74303, 7.46932, 7.19049, 6.90729, 6.62052, 6.33095, 6.03937, 5.74659, 5.45341, 5.16063, 4.86905, 4.57948, 4.29271, 4.00951, 3.73068, 3.45697, 3.18914, 2.92791, 2.67401, 2.42813, 2.19094, 1.96309, 1.74521, 1.5379, 1.34173, 1.15722, 0.984893, 0.825215, 0.678624, 0.545522, 0.426275, 0.321208, 0.230609, 0.154728, 0.0937725, 0.0479088, 0.0172629, 0.00191898, 0.0]
+      }
+    },
+    "intake_lift_source": "[D] Tier 1: SAE 2019-01-0249 Fig. 11 (reproduced in the EPA NVFEL A25A test report) digitised by hand at phase 0 on a 2 deg grid (out/a25a/a25a_tables.json valve_lift_fig11, read uncertainty 0.3 mm / 5 deg); each curve is taken between its bounding 0 mm samples, x relative to the first; phase_ref = that first sample in the 0..720 frame. The SAE text's theta_VO(1 mm) = 138.6 deg disagrees with the figure's 1 mm opening crossing (~68 deg); the figure is used.",
+    "runner_length_mm": 708.9423,
+    "runner_length_mm_source": "[AS] Tier 3, quarter-wave ram rule: the runner's quarter-wave period 4L/a equals the intake-open time (240 deg, the digitised lift start/end read points) at 4800 rpm (Toyota's rated peak-torque speed [C], the speed only), a = sqrt(1.4*287.05*288.15) = 340.29 m/s.",
+    "runner_diameter_mm": 44.5477,
+    "runner_diameter_mm_source": "[AS] Tier 3: runner flow area = the total intake valve head area.",
+    "intake_port_cc": 124.6898,
+    "exhaust_port_cc": 270.5942,
+    "intake_port_cc_source": "[AS] Tier 3: 80 mm port length x the total intake valve head area; 250 mm (port plus the short 4-into-1 primary [C: integrated exhaust manifold]) x the total exhaust valve head area.",
+    "cd_vs_l_over_d": {
+      "x": [0.0, 0.1, 0.2, 0.3],
+      "y": [0.65, 0.62, 0.55, 0.45]
+    },
+    "cd_vs_l_over_d_source": "[AS] Tier 2: discharge coefficient on the curtain area falling with L/D as in Heywood 1988 Fig. 6-19 [recalled, page to verify]; the C15a test fixture's curve, frozen before any comparison; clamped beyond L/D 0.3.",
+    "cam": {
+      "intake_advance_deg": {
+        "source": "[D] Tier 1b: measured icam_adv_deg per fired point, gridded (IDW k6, nearest outside the measured hull) by a25a_author.py, then a running median of 3 along MAP per rpm row repeated to its root signal (DERIVED, see cam_source); reaches 55 deg (above the cited 0-50 deg spec, kept as measured)",
+        "rpm": [600.0, 800.0, 1000.0, 1200.0, 1500.0, 1800.0, 2100.0, 2400.0, 2700.0, 3000.0, 3300.0, 3700.0, 4100.0, 4500.0, 4900.0, 5300.0, 5700.0, 6100.0, 6500.0, 6900.0],
+        "p_im_kpa": [20.0, 27.727, 35.455, 43.182, 50.909, 58.636, 66.364, 74.091, 81.818, 89.545, 97.273, 105.0],
+        "values": [
+          [24.105, 24.105, 19.311, 14.328, 14.328, 14.328, 19.12, 20.106, 20.106, 20.106, 25.0, 25.0],
+          [24.105, 23.2987, 16.0236, 11.2717, 11.2717, 11.2717, 11.2717, 12.111, 18.3526, 20.106, 25.0, 25.0],
+          [22.998, 14.4115, 10.3052, 9.08527, 9.08527, 8.38274, 8.38274, 8.38274, 8.38274, 13.1596, 25.0, 25.0],
+          [11.045, 11.045, 7.29498, 7.04274, 7.04274, 6.72221, 6.72221, 4.47576, 4.47576, 12.398, 43.614, 46.0311],
+          [11.045, 10.0521, 6.57005, 6.3056, 6.3056, 6.3056, 6.57169, 6.57169, 7.33119, 19.2117, 54.9651, 55.0],
+          [15.172, 11.3368, 6.36078, 6.36078, 6.83385, 8.23524, 9.28376, 11.0054, 11.3908, 27.889, 53.8736, 54.893],
+          [15.172, 10.7477, 8.15666, 8.15666, 8.81491, 9.45279, 11.0135, 14.5315, 15.4817, 24.9679, 53.7038, 54.893],
+          [15.0, 14.358, 11.6729, 10.546, 10.546, 10.5955, 12.9482, 13.317, 19.5404, 30.8346, 54.6264, 55.0],
+          [15.0, 15.0, 13.5125, 11.9785, 11.2535, 11.2535, 12.6692, 15.0559, 20.5362, 32.4499, 54.5409, 55.0],
+          [22.425, 17.1354, 16.1998, 15.0152, 12.6776, 11.7646, 11.7646, 15.4991, 20.2356, 37.9768, 54.9308, 54.9308],
+          [15.0, 18.0195, 18.0195, 18.0195, 16.4198, 14.6999, 14.6999, 18.8701, 23.8793, 37.2618, 54.9308, 54.9308],
+          [15.0, 19.9321, 20.3043, 20.3043, 20.191, 19.1121, 19.1121, 22.2411, 28.7272, 38.9522, 54.2688, 54.9247],
+          [15.0, 24.4232, 24.4232, 24.4232, 23.3519, 22.8368, 22.8368, 26.8522, 33.646, 42.6379, 54.6899, 54.6899],
+          [15.0, 24.8043, 25.0, 25.0, 24.4692, 24.4692, 26.0843, 29.6513, 39.7637, 50.7389, 54.7594, 54.7594],
+          [15.0, 23.7796, 25.0, 25.0, 25.0, 25.0, 27.2505, 30.0208, 37.4304, 52.658, 52.9995, 52.9995],
+          [15.0, 25.0, 25.0, 25.0, 25.0, 25.1642, 28.1087, 30.2796, 37.8391, 47.2045, 47.2045, 47.2045],
+          [15.0, 25.0, 25.0, 25.0, 25.0, 25.0, 29.924, 29.924, 30.0, 42.6999, 42.6999, 42.6999],
+          [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 29.924, 29.924, 29.924, 42.6999, 42.6999, 42.6999],
+          [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 29.924, 29.924, 42.7743, 42.7743, 42.6999, 42.6999],
+          [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 29.924, 29.924, 42.7743, 42.7743, 42.7113, 42.6999]
+        ]
+      },
+      "exhaust_retard_deg": {
+        "source": "[D] Tier 1b: measured ecam_ret_deg per fired point, gridded as above, same median-of-3 root smoothing along MAP",
+        "rpm": [600.0, 800.0, 1000.0, 1200.0, 1500.0, 1800.0, 2100.0, 2400.0, 2700.0, 3000.0, 3300.0, 3700.0, 4100.0, 4500.0, 4900.0, 5300.0, 5700.0, 6100.0, 6500.0, 6900.0],
+        "p_im_kpa": [20.0, 27.727, 35.455, 43.182, 50.909, 58.636, 66.364, 74.091, 81.818, 89.545, 97.273, 105.0],
+        "values": [
+          [0.0, 0.0, 5.979, 11.149, 11.149, 11.149, 6.094, 5.238, 5.238, 5.238, 0.0, 0.0],
+          [0.0, 1.04265, 9.25467, 19.0028, 19.0028, 19.0028, 19.0028, 19.0028, 7.79577, 5.238, 0.0, 0.0],
+          [0.0, 6.1096, 17.1384, 24.743, 24.743, 29.4654, 30.1191, 30.1191, 30.1191, 28.6902, 0.0, 0.0],
+          [0.0, 8.04782, 20.8716, 30.1008, 30.1008, 33.0008, 33.0008, 38.6362, 38.6362, 34.2004, 0.0, 0.0],
+          [0.0, 11.3586, 20.1898, 32.2778, 34.5776, 34.5776, 35.9441, 37.7257, 37.7257, 29.7922, 0.00388855, 0.0],
+          [5.306, 13.2079, 24.1002, 33.7532, 33.7532, 33.5382, 33.5382, 33.5857, 33.5857, 21.0019, 0.407828, 0.0],
+          [5.306, 18.397, 28.2261, 28.7969, 30.1867, 30.1867, 30.1867, 30.1867, 30.0103, 21.4612, 0.444426, 0.0],
+          [0.0, 18.2468, 30.826, 30.826, 26.4686, 26.3987, 26.3987, 25.9764, 25.9764, 14.4412, 0.0, 0.0],
+          [0.0, 17.5948, 27.87, 27.87, 25.2338, 24.7496, 24.7496, 24.7496, 24.5223, 12.5625, 0.0, 0.0],
+          [17.654, 17.654, 18.8845, 20.8162, 22.6135, 22.6135, 23.105, 23.5185, 23.5185, 10.128, 5.04397, 5.04397],
+          [0.0, 8.23884, 13.9244, 15.6171, 19.9423, 21.2243, 22.8036, 23.388, 23.388, 11.5365, 8.56372, 5.04397],
+          [0.0, 4.58466, 7.29026, 12.7324, 18.4199, 21.2952, 23.2905, 23.2905, 20.8292, 11.3356, 9.99546, 9.99546],
+          [0.0, 4.95049, 9.29266, 14.5039, 21.7217, 22.7593, 22.7593, 21.6418, 15.1476, 9.986, 9.986, 9.986],
+          [0.0, 4.92421, 7.4847, 16.8579, 20.0293, 21.0614, 21.0614, 14.1853, 9.98198, 9.98198, 9.99173, 9.99173],
+          [0.0, 4.4109, 5.59437, 11.3284, 17.3133, 19.2063, 19.2063, 12.8103, 10.9327, 10.9327, 11.9354, 11.9354],
+          [0.0, 5.0, 5.0, 9.04909, 16.8064, 17.2961, 17.2961, 13.7646, 13.7646, 14.0652, 15.0, 15.0],
+          [0.0, 5.0, 5.0, 8.381, 18.595, 18.595, 14.424, 14.424, 14.424, 14.9889, 14.9889, 14.9889],
+          [5.0, 5.0, 5.0, 8.381, 18.595, 18.595, 14.424, 14.424, 14.424, 14.9889, 14.9889, 14.9889],
+          [5.0, 5.0, 5.0, 8.381, 18.595, 18.595, 14.424, 14.424, 14.9984, 14.9984, 14.9889, 14.9889],
+          [5.0, 5.0, 5.0, 8.381, 18.595, 18.595, 14.424, 14.424, 14.9984, 14.9984, 14.9969, 14.9889]
+        ]
+      }
+    },
+    "cam_source": "[D] Tier 1b: the EPA-measured cam phase schedules, inputs only (never fitted). DERIVED smoothing: the raw IDW grid made the cycle model's trapped air fall with rising MAP at 600/800/1000 rpm (by up to 6.4 %; nearest-neighbour cam steps of up to 24 deg exhaust retard between adjacent MAP cells), which the generator rejects (eta_i is resampled over air mass). Chosen from that model-side criterion only, before any dyno comparison: 47/240 intake and 55/240 exhaust cells change; smallest air step after it +7.6 %.",
+    "wiebe_a": 5.0,
+    "wiebe_m": 2.0,
+    "burn_duration_deg": 60.0,
+    "ca50_mbt_deg_atdc": 8.0,
+    "wiebe_source": "Tier 2: Wiebe a 5, m 2 (Heywood 1988 sec. 9.2.1); 0-100 % burn 60 deg [AS-literature range]; CA50 at MBT 8 deg ATDC (plan D11 MBT rule) - the descriptor defaults, frozen.",
+    "woschni_c1_gx": 6.18,
+    "woschni_c1_cc": 2.28,
+    "woschni_c2": 0.00324,
+    "woschni_source": "Tier 2: Woschni 1967 as given by Heywood 1988 sec. 12.4.3.",
+    "wall_temperature_k": 450.0,
+    "head_area_factor": 1.1,
+    "exhaust_backflow_temperature_k": 800.0,
+    "wall_temperature_k_source": "[AS] Tier 2: descriptor defaults (wall 450 K, pent-roof head area 1.1 x bore area, backflow gas 800 K), frozen.",
+    "combustion_eff_lean": 0.98,
+    "combustion_eff_lean_source": "Tier 2: plan D14 (eta_c 0.98 at lambda >= 1, x lambda below).",
+    "friction": {
+      "model": "polynomial_piston_speed",
+      "a_kpa": 66.61952180224716,
+      "b_kpa": 0.09108507619924966,
+      "c_kpa": 0.34680954153442134
+    },
+    "friction_source": "Tier 2, plan D13 option F4: FMEP = a + b*s + c*s^2 kPa over mean piston speed s, FITTED ON A THIRD ENGINE (the EPA NVFEL 2013 Chevrolet 2.5 L Ecotec LCV motored rows, pumping subtracted with the C15a fixture's ASSUMED valvetrain), not on the A25A. Known bias: low at high speed (tests/unit/test_engine_map_generator.cpp).",
+    "grid_rpm": [600.0, 800.0, 1000.0, 1200.0, 1500.0, 1800.0, 2100.0, 2400.0, 2700.0, 3000.0, 3300.0, 3700.0, 4100.0, 4500.0, 4900.0, 5300.0, 5700.0, 6100.0, 6500.0, 6900.0],
+    "grid_p_im_kpa": [20.0, 27.727, 35.455, 43.182, 50.909, 58.636, 66.364, 74.091, 81.818, 89.545, 97.273, 105.0],
+    "grid_source": "plan default: the Tier 1b schedule grid (600-6900 rpm x 20-105 kPa)."
+  },
+  "inertia_kgm2": 0.16,
+  "breakaway_torque_nm": 45.0,
+  "idle_rpm": 800.0,
+  "stall_rpm": 400,
+  "fire_rpm": 250,
+  "start_complete_rpm": 550,
+  "dfco_enable_rpm": 1300,
+  "dfco_reenable_rpm": 1000,
+  "idle_control": {
+    "kp_per_rpm": 3e-05,
+    "ki_per_rpm_s": 6e-05,
+    "max_throttle": 0.1
+  },
+  "limiter": {
+    "type": "fuel_cut",
+    "rpm": 6500,
+    "hysteresis_rpm": 150
+  },
+  "starter": {
+    "stall_torque_nm": 140.0,
+    "free_speed_rpm": 400.0,
+    "interlock": "clutch_or_neutral"
+  },
+  "crank_axis_local": [0, 1, 0],
+  "initial_state": "running",
+  "fuels": ["../fuels/tier3_e10_cert.json", "../fuels/e10.json"],
+  "ignition": "spark",
+  "fields_source": "Copied from data/engines/toyota_a25a_fks_sim.json (the same engine facts): [AS] inertia 0.16 kg*m^2, breakaway 45 N*m (>= the F4 friction at 0 rpm, ~13.2 N*m), stall/fire/start_complete 400/250/550 rpm, DFCO 1300/1000 rpm, starter 140 N*m/400 rpm (as data/engines/i4_2l_na.json, no A25A measurement); idle_rpm 800 [AS] (the measured cell idle rows sit at 590-663 rpm under dyno load); idle PI kp 3e-5 /rpm, ki 6e-5 /(rpm*s), max plate 0.1 [AS] (the C11 fixture's); limiter fuel_cut 6500 rpm / 150 rpm [AS] = the cited EPA test-cell limit [C] (Report 26781 Table 5) - PROVISIONAL, 6600 rpm is Toyota's rated-power speed, not a cut. Fuels: tier3_e10_cert burnt (the fuel the EPA data were measured on), e10 selectable."
+}

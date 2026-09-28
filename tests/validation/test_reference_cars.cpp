@@ -56,6 +56,9 @@
 
 #include "vehicle_test_helpers.h"
 
+#include "ps/io/vehicle_io.h"
+#include "ps/jobs/job_system.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -197,6 +200,100 @@ TEST_CASE("Reference sedan variants (FWD/RWD/AWD): driven wheels, static loads, 
         CHECK(max_driven_kappa < car.max_driven_kappa_bound);
         if (any_undriven) CHECK(max_undriven_kappa < car.max_undriven_kappa_bound);
     }
+}
+
+// PHYS-033 P4 I7c C17a M-A S3: car_sedan_gen.json - car_sedan_sim.json with
+// the GENERATED-map A25A (data/engines/toyota_a25a_fks_gen.json, maps built
+// at load time from its cycle block by the C16a generator on a 10-worker
+// pool). Settles and idles at the engine's idle_rpm 800 +- 50, launches at
+// WOT in 1st for 3 s without stalling (> 7 m/s, per-tick balance <= 5e-8,
+// fuel booked), then lifts to throttle 0 in gear: while the engine is above
+// dfco_enable_rpm (1300) the booked fuel must be EXACTLY 0.
+TEST_CASE("Reference sedan car_sedan_gen (generated-map engine): idle, WOT launch, energy balance, DFCO fuel",
+          "[validation][vehicle][drivetrain]") {
+    vehicle::VehicleDesc desc;
+    {
+        jobs::JobSystem pool(10);
+        io::EngineMapOptions opt;
+        opt.pool = &pool;
+        desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_gen.json", opt);
+    }
+    auto rig = ps_test::build_vehicle_rig_from_desc(desc, kMass, kHalfExtents, kOriginHeight, /*slope_grade=*/0.0,
+                                                    /*job_workers=*/4);
+    World& w = *rig.world;
+    const real dt = w.dt();
+
+    // 1. Settle 2 s, then the mean engine rpm over a further 0.5 s.
+    ps_test::settle(w, 2.0);
+    real fz_sum = 0.0;
+    for (std::size_t i = 0; i < 4; ++i) fz_sum += w.wheel_telemetry(rig.vehicle, i).fz;
+    real idle_sum = 0.0;
+    const std::uint64_t idle_ticks = ticks_for(0.5, dt);
+    for (std::uint64_t i = 0; i < idle_ticks; ++i) {
+        w.step();
+        idle_sum += w.powertrain_state(rig.vehicle).engine_rpm;
+    }
+    const real idle_rpm = idle_sum / static_cast<real>(idle_ticks);
+
+    // 2. WOT in 1st from settled rest, 3 s.
+    bool ever_stalled = false;
+    real max_balance_ratio = 0.0;
+    auto balance_tick = [&]() {
+        const drivetrain::PowertrainEnergy& e = w.powertrain_energy(rig.vehicle);
+        const real denom = sum_abs_terms(e);
+        if (denom > 1e-9) {
+            const real ratio = std::abs(e.balance_error) / denom;
+            max_balance_ratio = std::max(max_balance_ratio, ratio);
+            CHECK(ratio <= 5e-8);
+        }
+        if (w.powertrain_state(rig.vehicle).engine_state != drivetrain::EngineState::Running) ever_stalled = true;
+    };
+    const real fuel_before_launch = w.powertrain_energy(rig.vehicle).fuel_mass;
+    w.set_control("gear_request", 1.0);
+    w.set_control("throttle", 1.0);
+    for (std::uint64_t i = 0; i < ticks_for(3.0, dt); ++i) {
+        w.step();
+        balance_tick();
+    }
+    const real speed_3s = w.get_motion(rig.chassis).linear.length();
+    const real fuel_launch = w.powertrain_energy(rig.vehicle).fuel_mass - fuel_before_launch;
+    const real rpm_at_lift = w.powertrain_state(rig.vehicle).engine_rpm;
+
+    // 3. Lift to throttle 0 in gear. Every tick that starts and ends above
+    // 1300 rpm lies wholly inside DFCO (enabled above 1300, re-enabled only
+    // below 1000): its booked fuel must be exactly 0.
+    w.set_control("throttle", 0.0);
+    int dfco_ticks = 0;
+    real max_dfco_fuel = 0.0;
+    real prev_rpm = rpm_at_lift;
+    for (std::uint64_t i = 0; i < ticks_for(1.0, dt); ++i) {
+        const real f0 = w.powertrain_energy(rig.vehicle).fuel_mass;
+        w.step();
+        balance_tick();
+        const drivetrain::PowertrainSnapshot& s = w.powertrain_state(rig.vehicle);
+        if (prev_rpm > 1300.0 && s.engine_rpm > 1300.0) {
+            ++dfco_ticks;
+            REQUIRE(s.engines.size() == 1);
+            CHECK(s.engines[0].dfco_active);
+            const real df = w.powertrain_energy(rig.vehicle).fuel_mass - f0;
+            max_dfco_fuel = std::max(max_dfco_fuel, std::abs(df));
+            CHECK(df == 0.0);
+            CHECK(s.engines[0].fuel_flow_g_s == 0.0);
+        }
+        prev_rpm = s.engine_rpm;
+    }
+
+    std::printf("[reference cars] car_sedan_gen: fz_sum %.1f N, idle %.2f rpm, speed@3s %.4f m/s, launch fuel %.6f kg, "
+                "rpm at lift %.1f, DFCO ticks %d (max |fuel| %.3e kg), max_balance_ratio %.3e, ever_stalled %d\n",
+                fz_sum, idle_rpm, speed_3s, fuel_launch, rpm_at_lift, dfco_ticks, max_dfco_fuel, max_balance_ratio,
+                ever_stalled ? 1 : 0);
+    CHECK(std::abs(fz_sum - kMass * kG) <= 0.02 * kMass * kG);
+    CHECK(std::abs(idle_rpm - 800.0) <= 50.0);
+    CHECK_FALSE(ever_stalled);
+    CHECK(speed_3s > 7.0);
+    CHECK(fuel_launch > 0.0);
+    CHECK(rpm_at_lift > 1300.0);
+    CHECK(dfco_ticks > 0);
 }
 
 TEST_CASE("Reference sedan variants (FWD/RWD/AWD): state hash is worker-count invariant (1 vs 10 workers)",

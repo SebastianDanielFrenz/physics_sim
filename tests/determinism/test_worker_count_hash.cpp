@@ -12,13 +12,17 @@
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/io/scenario.h"
+#include "ps/io/vehicle_io.h"
+#include "ps/jobs/job_system.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/world.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <random>
 #include <string>
 #include <vector>
@@ -898,6 +902,86 @@ TEST_CASE("Fuel tank starvation scenario's tank empties and the engine stalls vi
     // Closed-form mass balance: everything the tank lost was booked as burnt
     // fuel (no external refuel in this scenario, so fuel_external_added == 0).
     CHECK(std::abs((initial_tank_kg - world.fuel_tank_mass(vehicle)) - e.fuel_mass) <= 1e-12);
+}
+
+// PHYS-033 P4 I7c C17a M-A S5: data/scenarios/vehicle_gen_engine.json -
+// vehicle_sim_engine.json's control events plus a lift to throttle 0 at
+// t = 5.5 s, on car_sedan_gen.json, whose engine maps are GENERATED at load
+// time from the engine file's cycle block (C16a). The scenario is loaded ONCE
+// (maps generated on a 10-worker pool - the maps are pool-size invariant,
+// test_engine_map_generator M3) and then built and run per worker count.
+namespace {
+struct GenScenarioRun {
+    std::uint64_t hash = 0;
+    real rpm_at_throttle = 0.0, max_rpm_under_throttle = 0.0;
+    int max_gear = 0;
+    real first_low_p_im_after_lift_s = -1.0; // p_im < 40 kPa
+    real fuel_mass_kg = 0.0;
+};
+
+ps::io::Scenario load_gen_engine_scenario() {
+    jobs::JobSystem pool(10);
+    ps::io::EngineMapOptions opt;
+    opt.pool = &pool;
+    return ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_gen_engine.json", opt);
+}
+
+GenScenarioRun run_gen_engine_scenario(ps::io::Scenario sc, int workers) {
+    sc.world_config.job_workers = workers;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    const ps::VehicleId vehicle = built.vehicles_by_name.at("car");
+    GenScenarioRun r;
+    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    std::size_t next_control_event = 0;
+    for (int i = 0; i < ticks; ++i) {
+        while (next_control_event < sc.control_events.size() && sc.control_events[next_control_event].time_s <= world.sim_time()) {
+            const auto& ev = sc.control_events[next_control_event];
+            world.set_control(ev.channel, ev.value);
+            ++next_control_event;
+        }
+        const real t0 = world.sim_time();
+        world.step();
+        const drivetrain::PowertrainSnapshot& s = world.powertrain_state(vehicle);
+        if (t0 < 0.3) r.rpm_at_throttle = s.engine_rpm;
+        if (t0 >= 0.3 && t0 < 5.5) r.max_rpm_under_throttle = std::max(r.max_rpm_under_throttle, s.engine_rpm);
+        r.max_gear = std::max(r.max_gear, static_cast<int>(s.gear));
+        if (t0 >= 5.5 && r.first_low_p_im_after_lift_s < 0.0 && !s.engines.empty() && s.engines[0].p_intake_pa < 40e3)
+            r.first_low_p_im_after_lift_s = world.sim_time() - 5.5;
+    }
+    r.fuel_mass_kg = world.powertrain_energy(vehicle).fuel_mass;
+    r.hash = world.state_hash();
+    return r;
+}
+} // namespace
+
+TEST_CASE("State hash for the generated-map engine scenario is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][vehicle][drivetrain][heavy][world]") {
+    constexpr std::uint64_t kRecorded = 0xe2a2ebb8616b9f2fULL; // recorded 2026-09-28 (C17a M-A, ps_run 10 workers)
+    const ps::io::Scenario sc = load_gen_engine_scenario();
+    const std::uint64_t reference = run_gen_engine_scenario(sc, 1).hash;
+    INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
+    REQUIRE(reference == kRecorded);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_gen_engine_scenario(sc, workers).hash;
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+// S5 effect companion: the hash case proves reproducibility, not that the
+// scenario drives the generated engine the intended way.
+TEST_CASE("Generated-map engine scenario: rpm rises under throttle, upshifts, p_im falls after lift, fuel is booked",
+          "[determinism][vehicle][drivetrain][world]") {
+    const GenScenarioRun r = run_gen_engine_scenario(load_gen_engine_scenario(), 1);
+    std::printf("[S5 gen engine] rpm at throttle %.1f, max under throttle %.1f, max gear %d, p_im < 40 kPa %.4f s "
+                "after lift, fuel %.6f kg\n",
+                r.rpm_at_throttle, r.max_rpm_under_throttle, r.max_gear, r.first_low_p_im_after_lift_s, r.fuel_mass_kg);
+    CHECK(r.max_rpm_under_throttle > r.rpm_at_throttle + 1500.0);
+    CHECK(r.max_gear >= 2);
+    CHECK(r.first_low_p_im_after_lift_s >= 0.0);
+    CHECK(r.first_low_p_im_after_lift_s <= 0.5);
+    CHECK(r.fuel_mass_kg > 0.0);
 }
 
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {
