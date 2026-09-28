@@ -683,7 +683,8 @@ def engine_json(tb: dict, fric_tab: dict, throttle: dict, idle_note: str, fuels:
             "starter 140 N*m/400 rpm: as data/engines/i4_2l_na.json (no A25A measurement). "
             + idle_note +
             " Idle PI kp 3e-5 /rpm, ki 6e-5 /(rpm*s), max plate 0.1: [AS] as the C11 test fixture. "
-            "Limiter fuel_cut 6500 rpm / 150 rpm hysteresis: the EPA test-cell speed limit [C] (the highest measured point "
+            "Limiter fuel_cut 6500 rpm / 150 rpm hysteresis: [AS] fuel-cut speed = the cited EPA test-cell limit [C] "
+            "(Report 26781 Table 5) (the highest measured point "
             "is 5761 rpm); 6600 rpm is Toyota's rated-power speed, not a cut - PROVISIONAL, owner may prefer 6600. "
             "Rated 151 kW @ 6600 rpm / 249 N*m @ 4800 rpm are Toyota ratings, not used. Fuels: tier3_e10_cert burnt "
             f"(LHV {fuels['burnt']['lhv_j_kg']:.0f} J/kg, AFR {fuels['burnt']['afr_stoich']}), e10 selectable."),
