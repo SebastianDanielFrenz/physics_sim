@@ -16,15 +16,6 @@ VehicleId System::create(const VehicleDesc& desc, BodyId chassis, const io::Surf
 void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const std::vector<real>& channel_values,
                        const VehicleTickEnv& env, real tick_dt, real substep_rate_hz) {
     if (instances_.empty()) return;
-    // PHYS-033 P4 I7c C16b (D9): apply any queued engine-maps hot swap
-    // BEFORE this tick's per-vehicle jobs are dispatched below -
-    // VehicleInstance::step_tick (the job body) is where Powertrain::
-    // begin_tick's OWN pending-apply pattern (e.g. the fuel-tank precedent)
-    // runs, but a maps swap additionally destroys the OLD maps object, and
-    // debug_alloc's zero-alloc guarantee (tested by H6) only holds outside a
-    // job - so this one queue-drain runs sequentially, here, on the thread
-    // that calls step_all itself (never a job).
-    for (const auto& inst : instances_) inst->apply_pending_engine_maps_swap();
     const std::size_t n = instances_.size();
     const int workers = std::max(1, job_system.worker_count());
     const std::size_t grain = std::max<std::size_t>(1, (n + static_cast<std::size_t>(workers) * 4 - 1) / (static_cast<std::size_t>(workers) * 4));
@@ -34,6 +25,10 @@ void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const
             instances_[i]->step_tick(backend, channel_values, env, tick_dt, substep_rate_hz);
         }
     });
+}
+
+void System::apply_pending_engine_maps_swaps() {
+    for (const auto& inst : instances_) inst->apply_pending_engine_maps_swap();
 }
 
 void System::note_body_wrench(BodyId body, const Wrench& w) {

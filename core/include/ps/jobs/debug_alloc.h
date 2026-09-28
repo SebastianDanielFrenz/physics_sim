@@ -52,6 +52,15 @@ std::uint64_t external_violation_count();
 // reset independently.
 std::uint64_t own_violation_count();
 
+// PHYS-033 P4 I7c C16b review: frees (non-null) through this file's own
+// operator delete overrides while armed AND inside a job - the counterpart
+// the allocation counters above cannot see (a job that drops the last
+// shared_ptr to a big object, e.g. an engine-maps hot swap's old maps,
+// deallocates without allocating). A separate tally, NOT folded into
+// violation_count()/own_violation_count(); reset() zeroes it too. Jolt's own
+// JPH::Free is not routed here (only its allocations are, see above).
+std::uint64_t own_free_in_job_count();
+
 // False under an ASan/TSan build: those sanitizers install their own global
 // operator new/delete, so this hook's own overrides (debug_alloc.cpp) are
 // compiled out there to avoid a duplicate-symbol link error, and armed()

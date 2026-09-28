@@ -60,6 +60,7 @@ std::atomic<bool> g_armed{false};
 std::atomic<std::uint64_t> g_violations{0};
 std::atomic<std::uint64_t> g_external_violations{0};
 std::atomic<std::uint64_t> g_own_violations{0}; // P4 I2 pre-step P1: violations NOT tagged external
+std::atomic<std::uint64_t> g_frees_in_job{0}; // C16b review: own operator delete while armed + in a job
 thread_local int g_job_depth = 0;
 
 // Re-entrancy guard: the violation bookkeeping below (atomics only) does
@@ -176,6 +177,16 @@ void note_violation(bool external) {
 }
 
 [[maybe_unused]] void note_allocation() { note_violation(/*external=*/false); }
+
+// PHYS-033 P4 I7c C16b review: a free through our own operator delete while
+// armed inside a job. Counted separately from every allocation counter (so
+// no existing zero-alloc assertion changes meaning); a null delete is not a
+// free.
+[[maybe_unused]] void note_free(const void* p) {
+    if (p != nullptr && g_job_depth > 0 && g_armed.load(std::memory_order_relaxed) && !g_in_hook) {
+        g_frees_in_job.fetch_add(1, std::memory_order_relaxed);
+    }
+}
 } // namespace
 
 void set_armed(bool armed) { g_armed.store(armed, std::memory_order_relaxed); }
@@ -187,7 +198,9 @@ void reset() {
     g_violations.store(0, std::memory_order_relaxed);
     g_external_violations.store(0, std::memory_order_relaxed);
     g_own_violations.store(0, std::memory_order_relaxed);
+    g_frees_in_job.store(0, std::memory_order_relaxed);
 }
+std::uint64_t own_free_in_job_count() { return g_frees_in_job.load(std::memory_order_relaxed); }
 void note_external_allocation() { note_violation(/*external=*/true); }
 
 void enter_job() { ++g_job_depth; }
@@ -226,8 +239,12 @@ void* alloc_aligned_impl(std::size_t size, std::align_val_t align) {
     return p;
 }
 
-void free_impl(void* p) { std::free(p); }
+void free_impl(void* p) {
+    ps::jobs::debug_alloc::note_free(p);
+    std::free(p);
+}
 void free_aligned_impl(void* p) {
+    ps::jobs::debug_alloc::note_free(p);
 #if defined(_MSC_VER)
     _aligned_free(p);
 #else

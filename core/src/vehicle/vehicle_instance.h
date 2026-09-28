@@ -125,8 +125,9 @@ public:
     [[nodiscard]] real fuel_tank_mass() const { return powertrain_.fuel_tank_mass(); }
     void request_fuel_tank_mass(real kg) { powertrain_.request_fuel_tank_mass(kg); }
     // PHYS-033 P4 I7c C16b: backs World::replace_engine_maps (queues) and
-    // vehicle::System::step_all's sequential pre-pass (applies, outside any
-    // job - see Powertrain::apply_pending_engine_maps_swap's own comment).
+    // vehicle::System::apply_pending_engine_maps_swaps (applies, from
+    // World::step before the tick pipeline, outside any job - see
+    // Powertrain::apply_pending_engine_maps_swap's own comment).
     void request_replace_engine_maps(std::string_view component_id, drivetrain::EngineMapsPtr new_maps) {
         powertrain_.request_replace_engine_maps(component_id, std::move(new_maps));
     }

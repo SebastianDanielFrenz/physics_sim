@@ -245,8 +245,8 @@ public:
     void request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps);
     // Applies any queued engine-maps swap (no-op if none pending or no
     // simulated engine). MUST be called sequentially, outside any job,
-    // before this tick's per-vehicle jobs are dispatched (D9) - see
-    // vehicle::System::step_all's own call site comment. The OLD maps'
+    // before this tick's pipeline runs (D9) - see vehicle::System::
+    // apply_pending_engine_maps_swaps / World::step. The OLD maps'
     // shared_ptr is destroyed synchronously inside this call (also outside
     // any job by the same contract), not deferred further.
     void apply_pending_engine_maps_swap();

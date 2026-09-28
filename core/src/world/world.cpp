@@ -305,6 +305,11 @@ void World::step() {
     job_system_->reset_worker_stats();
     const auto tick_t0 = std::chrono::steady_clock::now();
 
+    // PHYS-033 P4 I7c C16b (D9): queued engine-maps hot swaps are applied,
+    // and the old maps released, here - on the calling (sim) thread, before
+    // the pipeline, outside any job (every pipeline stage runs as a job).
+    vehicle_system_->apply_pending_engine_maps_swaps();
+
     pipeline_->run(*job_system_);
 
     const auto tick_t1 = std::chrono::steady_clock::now();
