@@ -443,6 +443,14 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
         e.idle.kp_per_rpm = ij.value("kp_per_rpm", e.idle.kp_per_rpm);
         e.idle.ki_per_rpm_s = ij.value("ki_per_rpm_s", e.idle.ki_per_rpm_s);
         e.idle.max_throttle = ij.value("max_throttle", e.idle.max_throttle);
+        // R6: a negative gain flips the PI loop's sign (destabilising, not
+        // merely a weaker response) - reject rather than silently misbehave.
+        if (e.idle.kp_per_rpm < real(0.0)) {
+            throw std::runtime_error(ctx + ": idle_control.kp_per_rpm must be >= 0, got " + std::to_string(e.idle.kp_per_rpm));
+        }
+        if (e.idle.ki_per_rpm_s < real(0.0)) {
+            throw std::runtime_error(ctx + ": idle_control.ki_per_rpm_s must be >= 0, got " + std::to_string(e.idle.ki_per_rpm_s));
+        }
     }
 
     if (j.contains("limiter")) {
@@ -459,6 +467,11 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
         e.limiter.rpm = lj.value("rpm", e.limiter.rpm);
         e.limiter.hysteresis_rpm = lj.value("hysteresis_rpm", e.limiter.hysteresis_rpm);
         e.limiter.band_rpm = lj.value("band_rpm", e.limiter.band_rpm);
+        // R6: a negative hysteresis reverses the FuelCut latch's restore
+        // direction (restores ABOVE the cut point instead of below it).
+        if (e.limiter.hysteresis_rpm < real(0.0)) {
+            throw std::runtime_error(ctx + ": limiter.hysteresis_rpm must be >= 0, got " + std::to_string(e.limiter.hysteresis_rpm));
+        }
     }
 
     // PHYS-033 P4 I4 C12 (plan section 3.6): the optional all-speed diesel
@@ -499,6 +512,12 @@ ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const 
         const auto& sj = j.at("starter");
         e.starter.stall_torque_nm = sj.value("stall_torque_nm", e.starter.stall_torque_nm);
         e.starter.free_speed_rpm = sj.value("free_speed_rpm", e.starter.free_speed_rpm);
+        // R6: EngineTorqueMap/SimulatedEngine both divide by free_speed_rpm
+        // (converted to rad/s) to build the starter's speed-torque line -
+        // zero or negative divides by zero/flips its sign at runtime.
+        if (!(e.starter.free_speed_rpm > real(0.0))) {
+            throw std::runtime_error(ctx + ": starter.free_speed_rpm must be > 0, got " + std::to_string(e.starter.free_speed_rpm));
+        }
         const std::string interlock = sj.value("interlock", std::string("clutch_or_neutral"));
         if (interlock == "clutch_or_neutral") e.starter.interlock = ps::drivetrain::StarterDesc::Interlock::ClutchOrNeutral;
         else if (interlock == "none") e.starter.interlock = ps::drivetrain::StarterDesc::Interlock::None;
@@ -1132,6 +1151,14 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         if (!(e.idle.max_throttle > real(0.0) && e.idle.max_throttle <= real(1.0))) {
             throw std::runtime_error(ctx + ": idle_control.max_throttle must be in (0, 1], got " + std::to_string(e.idle.max_throttle));
         }
+        // R6: a negative gain flips the PI loop's sign (destabilising, not
+        // merely a weaker response) - reject rather than silently misbehave.
+        if (e.idle.kp_per_rpm < real(0.0)) {
+            throw std::runtime_error(ctx + ": idle_control.kp_per_rpm must be >= 0, got " + std::to_string(e.idle.kp_per_rpm));
+        }
+        if (e.idle.ki_per_rpm_s < real(0.0)) {
+            throw std::runtime_error(ctx + ": idle_control.ki_per_rpm_s must be >= 0, got " + std::to_string(e.idle.ki_per_rpm_s));
+        }
     }
     if (j.contains("limiter")) {
         const auto& lj = j.at("limiter");
@@ -1145,11 +1172,22 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         if (e.limiter.type == LimiterType::SoftCut && !(e.limiter.band_rpm > real(0.0))) {
             throw std::runtime_error(ctx + ": limiter.band_rpm must be > 0 for a soft_cut limiter");
         }
+        // R6: a negative hysteresis reverses the FuelCut latch's restore
+        // direction (restores ABOVE the cut point instead of below it).
+        if (e.limiter.hysteresis_rpm < real(0.0)) {
+            throw std::runtime_error(ctx + ": limiter.hysteresis_rpm must be >= 0, got " + std::to_string(e.limiter.hysteresis_rpm));
+        }
     }
     if (j.contains("starter")) {
         const auto& sj = j.at("starter");
         e.starter.stall_torque_nm = sj.value("stall_torque_nm", e.starter.stall_torque_nm);
         e.starter.free_speed_rpm = sj.value("free_speed_rpm", e.starter.free_speed_rpm);
+        // R6: EngineTorqueMap/SimulatedEngine both divide by free_speed_rpm
+        // (converted to rad/s) to build the starter's speed-torque line -
+        // zero or negative divides by zero/flips its sign at runtime.
+        if (!(e.starter.free_speed_rpm > real(0.0))) {
+            throw std::runtime_error(ctx + ": starter.free_speed_rpm must be > 0, got " + std::to_string(e.starter.free_speed_rpm));
+        }
         const std::string interlock = sj.value("interlock", std::string("clutch_or_neutral"));
         if (interlock == "clutch_or_neutral") e.starter.interlock = StarterDesc::Interlock::ClutchOrNeutral;
         else if (interlock == "none") e.starter.interlock = StarterDesc::Interlock::None;
