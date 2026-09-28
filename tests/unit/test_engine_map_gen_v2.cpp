@@ -204,3 +204,33 @@ TEST_CASE("A5 G4: the v2 key and cache stamp are separate from v1", "[drivetrain
     CHECK(hit->content_hash == m->content_hash);
     CHECK(load_cached_engine_maps(cache.path.generic_string(), key) == nullptr);
 }
+
+TEST_CASE("A5 study diag: generator grid cost on 1 and 10 workers", "[.][diag][cycle][pipe]") {
+    // The plan's section 5 estimate for an I4 at power grade: 12x20 about 24 s
+    // single-thread / 2.6 s on 10 workers, 24x20 about 5 s on 10 workers.
+    auto grid = [](int nr, int np) {
+        CycleModelDesc d = ps::test::make_pipe_i4_cycle_desc();
+        d.grid_rpm.clear();
+        d.grid_p_im.clear();
+        for (int i = 0; i < nr; ++i) d.grid_rpm.push_back(1000.0 + 6000.0 * i / (nr - 1));
+        for (int j = 0; j < np; ++j) d.grid_p_im.push_back(20000.0 + 70000.0 * j / (np - 1));
+        return d;
+    };
+    jobs::JobSystem one(1), ten(10);
+    struct Run {
+        int nr, np;
+        MapQuality q;
+        jobs::JobSystem* pool;
+        int workers;
+    };
+    for (const Run& r : {Run{12, 20, MapQuality::Full, &ten, 10}, Run{12, 20, MapQuality::Full, &one, 1},
+                         Run{24, 20, MapQuality::Full, &ten, 10}, Run{12, 20, MapQuality::Preview, &ten, 10},
+                         Run{12, 20, MapQuality::Preview, &one, 1}}) {
+        const CycleModelDesc d = grid(r.nr, r.np);
+        const auto t0 = std::chrono::steady_clock::now();
+        const EngineMapsPtr m = generate_engine_maps(d, fx::gasoline(), r.q, r.pool);
+        std::printf("A5 grid cost %2dx%2d %s on %2d worker(s): %.2f s (content_hash 0x%016llx)\n", r.nr, r.np,
+                    r.q == MapQuality::Full ? "Full   " : "Preview", r.workers, seconds_since(t0),
+                    static_cast<unsigned long long>(m->content_hash));
+    }
+}
