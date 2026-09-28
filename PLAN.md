@@ -807,6 +807,19 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
     keep mbt_tracking.
   - Friction: keep the F4 Ecotec correlation. A25A motoring data stays
     forbidden as an input (D1).
+- Second follow-up rulings (Sebastian, 2026-09-28, after the measured spark
+  schedule: the eta term turned -9..-19 N*m, vault PHYS-055), fixed BEFORE any
+  re-run:
+  - Burn duration: replace the generic 60 deg 0-100 % Wiebe with a CITED 10-90 %
+    burn angle for modern fast-burn (high-tumble) SI engines at WOT / medium
+    speed, converted through the frozen Wiebe shape (a 5, m 2: 10-90 % = 0.4959
+    of the 0-100 % duration). Chosen from the literature before the model is
+    run; one constant, no speed dependence unless the descriptor already has
+    one. The ignition delay is re-derived by its existing rule (max(0, cited
+    spark-to-10 % - the Wiebe's own 0-10 % angle)). No value is picked because
+    it makes S1 pass.
+  - S2 WOT BSFC stays [!mayfail] (confirmed): fuel follows air through the
+    prescribed lambda, so it fails on the known runner air excess.
 - Order (Sebastian, 2026-09-28): `ps_audio` (engine sound from the live cycle
   model, after its design pass closes the acoustic gap noted under "Audio
   library") is implemented BEFORE the engine design GUI below.
