@@ -820,6 +820,11 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
     it makes S1 pass.
   - S2 WOT BSFC stays [!mayfail] (confirmed): fuel follows air through the
     prescribed lambda, so it fails on the known runner air excess.
+- Pipe cell size for maps (Sebastian, 2026-09-28, ps_audio A5 P17): keep
+  power_dx 50 mm. Measured: VE at 50 vs 25 mm differs -0.72 % at 1500 rpm /
+  30 kPa (+0.42 / -0.45 % at 3000/60 and 6000/90; 25 vs 12.5 mm -0.37 %),
+  against the plan's 0.5 % [A] target. The C2 test stays [!mayfail] as an
+  accepted, measured miss; revisit once A9 SIMD makes finer cells affordable.
 - Order (Sebastian, 2026-09-28): `ps_audio` (engine sound from the live cycle
   model, after its design pass closes the acoustic gap noted under "Audio
   library") is implemented BEFORE the engine design GUI below.
