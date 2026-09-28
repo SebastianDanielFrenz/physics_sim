@@ -69,11 +69,14 @@ add_executable(ps_unit_tests
   test_engine_installation_io.cpp
   test_engine_hot_swap.cpp
   test_firing_order.cpp
+  test_audio_time_map.cpp
+  test_audio_voice.cpp
 )
 
 target_link_libraries(ps_unit_tests
   PRIVATE
     ps_core
+    ps_audio
     ps_test_catch_main
     ps_warnings
     ps_options
@@ -151,3 +154,25 @@ target_include_directories(ps_engine_cycle_standalone PRIVATE ${CMAKE_SOURCE_DIR
 
 add_test(NAME ps_engine_cycle_standalone COMMAND ps_engine_cycle_standalone)
 set_tests_properties(ps_engine_cycle_standalone PROPERTIES LABELS "cycle")
+
+# ps_audio_standalone - ps_audio A7's link-time guard, the same pattern as
+# ps_engine_cycle_standalone above: a plain main() linking ps_audio
+# WHOLE-ARCHIVE (every object pulled in, referenced or not) plus
+# ps_engine_cycle, never ps_core. It renders a short Runner block on the pipe
+# I4 fixture (tests/unit/audio_standalone_main.cpp).
+add_executable(ps_audio_standalone
+  audio_standalone_main.cpp
+)
+
+target_link_libraries(ps_audio_standalone
+  PRIVATE
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,ps_audio>
+    ps_engine_cycle
+    ps_warnings
+    ps_options
+)
+
+target_include_directories(ps_audio_standalone PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+
+add_test(NAME ps_audio_standalone COMMAND ps_audio_standalone)
+set_tests_properties(ps_audio_standalone PROPERTIES LABELS "audio;cycle")

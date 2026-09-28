@@ -115,6 +115,91 @@ struct EngineNetworkLayout {
 // order/angles; an empty order on a 4-cylinder engine means 1-3-4-2).
 [[nodiscard]] std::vector<real> engine_firing_phases_deg(const drivetrain::CycleModelDesc& desc);
 
+// ps_audio A7: pipe-network builder with separate intake / exhaust cell
+// targets (audio grade: resolution.audio_dx_intake_m / audio_dx_exhaust_m).
+// The single-dx overload above is this one with dx_intake == dx_exhaust.
+[[nodiscard]] PipeNetworkDesc make_engine_pipe_network_desc(const drivetrain::CycleModelDesc& desc,
+                                                            const GasStateDesc& ambient, real p_plenum_init_pa,
+                                                            real dx_intake_m, real dx_exhaust_m,
+                                                            EngineNetworkLayout* layout);
+
+// ps_audio A7: an end of an engine's network that radiates to the outside -
+// an FV pipe end open to ambient (the snorkel mouth; the flange pipe without
+// an installation) or a waveguide Open node (each tailpipe outlet).
+struct RadiatingEnd {
+    enum class Kind : std::uint8_t { PipeEnd, WaveguideOpen };
+    Kind kind = Kind::PipeEnd;
+    std::string name;
+    int index = -1;         // pipe (PipeEnd) or waveguide node (WaveguideOpen)
+    bool at_start = false;  // PipeEnd: the pipe's start end
+    real area_m2 = 0.0;     // PipeEnd: geometric end area
+    bool intake = false;    // on the intake side (upstream of the ports)
+};
+
+struct EngineCoreSettings {
+    real dx_intake_m = 0.05;
+    real dx_exhaust_m = 0.05;
+    bool reservoir_ports = false;  // CycleEngineSettings::reservoir_ports
+};
+
+// The part of a multi-cylinder pipe engine shared by CycleEngine (the map
+// generator: prescribed rpm, whole cycles of aligned steps) and ps_audio's
+// live engine (A7: time-varying omega, one step per output sample): the n
+// phased CycleSteppers, the PipeNetwork with its layout, the throttle Cd*A
+// and the port <-> pipe hand-off of one step. It owns no stepping policy.
+class EngineCore {
+public:
+    // Steppers reset_phased(op, phase); the network built with step h and
+    // started at op.p_im_pa (plenum, runners) / op.p_amb_pa; the throttle at
+    // the feed-forward Cd*A for op (VE 0.9 [A] through a steady orifice).
+    EngineCore(const drivetrain::CycleModelDesc& desc, real lhv_j_kg, real afr_st, const OperatingPoint& op, real h,
+               const EngineCoreSettings& settings);
+    ~EngineCore();
+    EngineCore(const EngineCore&) = delete;
+    EngineCore& operator=(const EngineCore&) = delete;
+
+    // D-3 hand-off of one step: every port state to the network, one network
+    // step, each port face's flux / h to its stepper as a constant PortSource.
+    // A no-op in reservoir mode. The caller then steps the cylinders.
+    void exchange();
+
+    [[nodiscard]] int cylinders() const { return cylinders_; }
+    [[nodiscard]] real h() const { return h_; }
+    [[nodiscard]] real phase_deg(int c) const { return phase_[static_cast<std::size_t>(c)]; }
+    [[nodiscard]] const CycleStepper& cylinder(int c) const { return steppers_[static_cast<std::size_t>(c)]; }
+    [[nodiscard]] CycleStepper& cylinder(int c) { return steppers_[static_cast<std::size_t>(c)]; }
+    [[nodiscard]] const PipeNetwork* network() const { return net_.get(); }
+    [[nodiscard]] PipeNetwork* network() { return net_.get(); }
+    [[nodiscard]] const EngineNetworkLayout& layout() const { return layout_; }
+    [[nodiscard]] real throttle_cd_area() const { return cda_; }
+    [[nodiscard]] real throttle_cd_area_max() const { return cda_max_; }
+    // Clamped to [1e-9, max]; pushed to the network's throttle orifice.
+    void set_throttle_cd_area(real cd_area_m2);
+    [[nodiscard]] real intake_volume_m3() const { return v_intake_; }  // plenum + runners
+    // Radiating ends in network order: FV pipe ends first (pipe order, start
+    // before end), then waveguide Open nodes (node order). Empty in reservoir mode.
+    [[nodiscard]] const std::vector<RadiatingEnd>& radiating_ends() const { return rad_; }
+    // Volume flow [m^3/s] leaving through radiating end k in the last step:
+    // the end cell's u*A (outward) for a pipe end, the waveguide node's
+    // outflow for an Open node.
+    [[nodiscard]] real radiating_outflow(int k) const;
+    [[nodiscard]] real total_mass() const;  // network + every cylinder and port
+    // FNV-1a fold: the network (if any), every cylinder's state vector and
+    // crank angle, the throttle Cd*A.
+    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t h) const;
+
+private:
+    int cylinders_ = 0;
+    real h_ = 0.0;
+    std::vector<real> phase_;
+    std::vector<CycleStepper> steppers_;
+    std::unique_ptr<PipeNetwork> net_;
+    EngineNetworkLayout layout_{};
+    real cda_ = 0.0, cda_max_ = 0.0;
+    real v_intake_ = 0.0;
+    std::vector<RadiatingEnd> rad_;
+};
+
 class CycleEngine {
 public:
     // op: rpm, target p_im (plenum), t_im (= ambient temperature), p_amb,
@@ -131,33 +216,25 @@ public:
     // (std::logic_error on a second call). Allocation-free.
     CycleEngineResult run();
 
-    [[nodiscard]] int cylinders() const { return cylinders_; }
-    [[nodiscard]] real h() const { return h_; }
+    [[nodiscard]] int cylinders() const { return core_.cylinders(); }
+    [[nodiscard]] real h() const { return core_.h(); }
     [[nodiscard]] std::uint64_t steps_per_cycle() const { return n_; }
-    [[nodiscard]] real phase_deg(int c) const { return phase_[static_cast<std::size_t>(c)]; }
-    [[nodiscard]] const CycleStepper& cylinder(int c) const { return steppers_[static_cast<std::size_t>(c)]; }
+    [[nodiscard]] real phase_deg(int c) const { return core_.phase_deg(c); }
+    [[nodiscard]] const CycleStepper& cylinder(int c) const { return core_.cylinder(c); }
     // nullptr in reservoir mode.
-    [[nodiscard]] const PipeNetwork* network() const { return net_.get(); }
-    [[nodiscard]] const EngineNetworkLayout& layout() const { return layout_; }
+    [[nodiscard]] const PipeNetwork* network() const { return core_.network(); }
+    [[nodiscard]] const EngineNetworkLayout& layout() const { return core_.layout(); }
     // FNV-1a fold: the network (if any), every cylinder's state vector and
     // crank angle, the throttle Cd*A.
-    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t h) const;
+    [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t h) const { return core_.fold_state_hash(h); }
 
 private:
     void step_all(std::uint64_t k);
-    [[nodiscard]] real total_mass() const;
 
     OperatingPoint op_{};
     CycleEngineSettings settings_{};
-    int cylinders_ = 0;
     std::uint64_t n_ = 0;
-    real h_ = 0.0;
-    std::vector<real> phase_;
-    std::vector<CycleStepper> steppers_;
-    std::unique_ptr<PipeNetwork> net_;
-    EngineNetworkLayout layout_{};
-    real cda_ = 0.0, cda_max_ = 0.0;
-    real v_intake_ = 0.0;  // plenum + runner volume [m^3], the trim's fill term
+    EngineCore core_;
     bool used_ = false;
 };
 

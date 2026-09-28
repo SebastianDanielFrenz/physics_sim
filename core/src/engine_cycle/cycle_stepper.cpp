@@ -388,6 +388,21 @@ void CycleStepper::step_phased(std::uint64_t k, std::uint64_t n, real phase_deg)
     after_step(theta0, theta1 - theta0);
 }
 
+void CycleStepper::step_live(real theta0_deg, real dtheta_deg, real h) {
+    rk4(theta0_deg, theta0_deg + 0.5 * dtheta_deg, theta0_deg + dtheta_deg, h);
+    after_step(theta0_deg, dtheta_deg);
+}
+
+void CycleStepper::set_combustion_event(real lambda, real start_deg_atdc, real burn_duration_deg, bool fire) {
+    const CycleModel& m = *model_;
+    op_.lambda = lambda;
+    op_.spark_deg_atdc = start_deg_atdc;
+    theta_spark_ = wrap720(360.0 + start_deg_atdc);
+    eta_c_ = lambda >= 1.0 ? m.combustion_eff_lean : m.combustion_eff_lean * lambda;
+    wiebe_ = Wiebe{m.wiebe_a, m.wiebe_m, burn_duration_deg, 360.0 + start_deg_atdc};
+    m_fuel_ = fire ? m_air_conv_ / (lambda * m.afr_st) : 0.0;
+}
+
 void CycleStepper::step_aligned(std::uint64_t k, std::uint64_t n) {
     const std::uint64_t km = k % n;
     const real rn = static_cast<real>(n);

@@ -176,6 +176,25 @@ public:
         res_ep_cda_ = exhaust_cd_area;
     }
 
+    // ---- ps_audio A7 live stepping (never called by CycleEngine or the map
+    // generator; the generator path above is untouched) ------------------
+    // Crank speed [rpm, >= 0] the RHS uses from now on (dV/dt, the Wiebe rate,
+    // Woschni's mean piston speed). 0 freezes the crank: valves stay where
+    // they are, gas still flows through an open valve, nothing divides by it.
+    void set_speed(real rpm) {
+        op_.rpm = rpm;
+        deg_per_s_ = 6.0 * rpm;
+    }
+    // One RK4 step of h [s] from this cylinder's own angle theta0_deg (in
+    // [0, 720)) by dtheta_deg >= 0 (the caller integrates the crank from its
+    // own omega; dtheta = 6*rpm*h for a constant speed).
+    void step_live(real theta0_deg, real dtheta_deg, real h);
+    // The next combustion event (call between IVC and the burn start): the
+    // fuel is re-derived from the trapped air at IVC for `lambda`; the Wiebe
+    // starts at 360 + start_deg_atdc and lasts burn_duration_deg. fire = false
+    // is a cut (no fuel, the cylinder only pumps).
+    void set_combustion_event(real lambda, real start_deg_atdc, real burn_duration_deg, bool fire);
+
     [[nodiscard]] const CycleState& state() const { return state_; }
     [[nodiscard]] real crank_deg() const { return theta_; }
     [[nodiscard]] const CycleModel& model() const { return *model_; }

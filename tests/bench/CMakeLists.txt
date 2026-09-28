@@ -145,3 +145,18 @@ target_link_libraries(ps_energy_study
     ps_warnings
     ps_options
 )
+
+# bench_audio_voice - ps_audio A7 budget measurement (see
+# tests/bench/bench_audio_voice.cpp). Like ps_energy_study, NOT registered
+# with CTest (a measurement tool; V14's walltime gate is A9's). Links
+# ps_engine_cycle only - no ps_core.
+add_executable(bench_audio_voice bench_audio_voice.cpp)
+
+target_include_directories(bench_audio_voice PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+
+target_link_libraries(bench_audio_voice
+  PRIVATE
+    ps_engine_cycle
+    ps_warnings
+    ps_options
+)
