@@ -245,18 +245,36 @@ ps::engine_cycle::OperatingPoint cycle_op(const CycleModelDesc& c, real rpm, rea
 
 // [!mayfail] (D2, measured 2026-09-28, frozen-literature rule D1 - no model
 // parameter changed): 6 of 7 asserted points exceed +-10 % (+10.1..+23.4 %,
-// 2017-4493 rpm; 4954 rpm +7.3 % passes). Per-term breakdown vs the
-// measured-derived M-B file ("diag: per-term breakdown vs M-B"): VE gen/M-B
-// 1.02/1.04/1.18/1.20/1.19/1.15/1.08, eta_i +6..+10 %, friction +7..+8 N*m,
-// pumping excess larger. Discriminating measurements: (1) S2's simulated
-// fuel flow over measured (lambda follows the measured schedule, so fuel
-// ratio = air ratio) is 1.03/1.03/1.19/1.18/1.17/1.15/1.08 - the torque
-// excess is mostly trapped AIR, S2's BSFC holds (-7.0..+0.3 %); (2) "diag:
-// WOT air vs runner length": shortening the Tier 3 [AS] quarter-wave runner
-// (708.9 mm, tuned to 4800 rpm) to 0.25x drops WOT air by 0.887/0.844/0.830/
-// 0.852 at 3000/3571/4032/4493 rpm vs the 0.844/0.836/0.841/0.866 the M-B VE
-// asks for - the excess is the [AS] ram-runner sizing rule's resonance, not a
-// code defect. See out/c17a_ma_progress.md.
+// 2017-4493 rpm; 4954 rpm +7.3 % passes).
+//
+// Per-term budget of T_sim - T_meas [N*m], against the measured-derived M-B
+// file ("diag: per-term breakdown vs M-B"; indicated work split into air =
+// VE ratio, eta = eta_i ratio, friction, pumping excess; closes to <= 2.6):
+//     rpm   obs    air    eta   fric   pump
+//    2017 +23.1   +4.9  +22.9   -7.3   +0.2
+//    2535 +22.7   +9.0  +20.6   -7.8   -0.5
+//    2996 +50.5  +43.2  +17.0   -8.1   -2.5
+//    3571 +49.2  +48.7  +13.8   -8.1   -6.3
+//    4032 +53.4  +47.7  +21.2   -8.0   -8.0
+//    4493 +39.5  +40.3  +17.9   -7.7  -11.2
+//    4954 +16.9  +20.2  +15.6   -7.2  -12.2
+// - 2017/2535: NOT air. The excess is eta_i: the model fires at its constant
+//   MBT spark (23.05 deg BTDC) while the A25A's measured WOT spark is
+//   knock-retarded to -0.9..+5.3 deg BTDC at every anchor (no knock limit
+//   until C17b). Moving the model's Wiebe start to the measured spark cuts
+//   gross work 9-12 % (-29..-37 N*m, "review diag: spark retard and
+//   motoring") - it covers the eta term everywhere.
+// - 3000-4500: trapped AIR dominates (VE gen/M-B 1.18-1.20; S2's fuel ratio
+//   1.19/1.18/1.17/1.15 agrees). The Tier 3 [AS] 708.9 mm quarter-wave runner
+//   (tuned to 4800 rpm) gives a +17..+20 % ram gain over a 0.25x runner; the
+//   0.25x runner lands on the M-B VE within 1-2 % ("diag: WOT air vs runner
+//   length"). A runner wall-loss term (temporary review patch, not shipped)
+//   barely moves it: K = 0.3 (Blasius) 18.5 -> 17.4 % at 3571, K = 2 still 13 %.
+// - Friction and pumping LOWER the torque everywhere: the F4 Ecotec friction
+//   plus the model's pumping over-predict the A25A's measured motoring rows by
+//   6.8-9.9 N*m (e.g. 2017 rpm / 22.8 kPa: -32.3 vs measured -24.3).
+// S2's BSFC holds (-7.0..+0.3 %). Not a code defect; the owner decides the
+// runner rule, the spark rule and the friction source (vault ticket).
 TEST_CASE("C17a-MA S1: generated A25A WOT brake torque vs EPA NVFEL", "[drivetrain][validation][!mayfail]") {
     const auto car = load_gen_car();
     const SimulatedEngineDesc* d = sim_engine_of(car);
