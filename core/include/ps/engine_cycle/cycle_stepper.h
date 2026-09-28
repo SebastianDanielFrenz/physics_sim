@@ -166,6 +166,15 @@ public:
         ip_src_ = intake;
         ep_src_ = exhaust;
     }
+    // Pipe mode only: ALSO tie the ports to fixed reservoirs through orifices
+    // of the given Cd*A (0 = off) - intake from (op.p_im, op.t_im, fresh),
+    // exhaust to (op.p_amb, T_backflow, burned) - evaluated inside the RHS
+    // like the lumped exhaust reservoir. The CycleEngine's reservoir_ports
+    // reference (no pipe waves; the V8 sabotage).
+    void set_port_reservoirs(real intake_cd_area, real exhaust_cd_area) {
+        res_ip_cda_ = intake_cd_area;
+        res_ep_cda_ = exhaust_cd_area;
+    }
 
     [[nodiscard]] const CycleState& state() const { return state_; }
     [[nodiscard]] real crank_deg() const { return theta_; }
@@ -198,6 +207,7 @@ public:
 private:
     void rk4(real theta0, real theta_mid, real theta1, real h);
     void after_step(real theta_before, real dtheta);
+    void add_port_reservoir_rates(const CycleInputs& in, PortSource& ip, PortSource& ep) const;
 
     std::shared_ptr<const CycleModel> model_;
     OperatingPoint op_{};
@@ -213,6 +223,7 @@ private:
     real p_ref_ = 0.0, v_ref_ = 0.0, t_ref_ = 0.0;
     real p_max_ = 0.0;
     PortSource ip_src_{}, ep_src_{};
+    real res_ip_cda_ = 0.0, res_ep_cda_ = 0.0;
 };
 
 [[nodiscard]] real wrap720(real deg);

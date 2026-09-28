@@ -5,9 +5,13 @@
 // each was shown to fail on is recorded in out/audio_a5_progress.md.
 
 #include "cycle_pipe_fixtures.h"
+#include "ps/engine_cycle/cycle_engine.h"
 #include "ps/engine_cycle/cycle_point.h"
 #include "ps/engine_cycle/cycle_stepper.h"
 #include "ps/engine_cycle/gas.h"
+#include "ps/engine_cycle/geometry.h"
+#include "ps/jobs/debug_alloc.h"
+#include "ps/jobs/job_system.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -16,6 +20,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
+#include <vector>
 
 using namespace ps;
 using namespace ps::engine_cycle;
@@ -120,4 +126,174 @@ TEST_CASE("A5 S3 pipe-mode ports: source rates conserve mass and energy", "[driv
     CHECK(y[kAccIvFresh] > 0.0);
     CHECK(y[kIpM] > 0.0);
     CHECK(y[kEpM] > 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// CycleEngine
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::uint64_t result_hash(const CycleEngineResult& r) {
+    std::uint64_t h = 1469598103934665603ull;
+    auto fold = [&](real v) {
+        std::uint64_t b = 0;
+        std::memcpy(&b, &v, sizeof(b));
+        for (int k = 0; k < 8; ++k) {
+            h ^= (b >> (8 * k)) & 0xffu;
+            h *= 1099511628211ull;
+        }
+    };
+    const PointResult& m = r.mean;
+    for (real v : {m.w_gross_j, m.w_pump_j, m.m_air_j_cyc, m.m_fuel_kg, m.residual_frac, m.t_exh_k, m.h_exh_j,
+                   m.p_max_pa, r.p_plenum_mean_pa, r.throttle_cd_area_m2, r.mass_closure_kg})
+        fold(v);
+    return h;
+}
+
+CycleEngineSettings preview_settings() {
+    CycleEngineSettings s;
+    s.h_s = kStepPreview;
+    s.settling_cycles = kEngineSettlingCyclesPreview;
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("A5 E1 engine network layout from the pipe blocks and installation", "[drivetrain][cycle][pipe]") {
+    // Catches: a mapping that drops or duplicates a pipe, wires a primary to
+    // the wrong junction, or builds the installation chain wrongly.
+    const drivetrain::CycleModelDesc d = test::make_pipe_i4_cycle_desc();
+    const GasStateDesc amb{101325.0, 288.15, 0.0};
+    EngineNetworkLayout lay;
+    const PipeNetworkDesc nd = make_engine_pipe_network_desc(d, amb, 60.0e3, 0.05, &lay);
+    CHECK(nd.pipes.size() == 12u);   // snorkel + 4 runners + 4 primaries + 3 merge pipes
+    CHECK(nd.volumes.size() == 5u);  // airbox, plenum, 3 junctions
+    CHECK(nd.ports.size() == 8u);
+    CHECK(nd.orifices.size() == 1u);
+    CHECK(lay.airbox_volume == 0);
+    CHECK(lay.plenum_volume == 1);
+    CHECK(nd.orifices[0].volume_a == 1);
+    CHECK(nd.orifices[0].volume_b == 0);
+    // Primaries 1 and 4 end in junction y14 (volume 2), 2 and 3 in y23 (volume 3).
+    for (int c = 1; c <= 4; ++c) {
+        const PipeDesc& p = nd.pipes[static_cast<std::size_t>(4 + c)];
+        CHECK(p.start.kind == PipeEndDesc::Kind::Port);
+        CHECK(p.start.index == 4 + c - 1);
+        CHECK(p.end.kind == PipeEndDesc::Kind::Volume);
+        CHECK(p.end.index == ((c == 1 || c == 4) ? 2 : 3));
+    }
+    // y14/y23 merge pipes feed the flange junction (volume 4); the last ends at the waveguide.
+    CHECK(nd.pipes[9].end.index == 4);
+    CHECK(nd.pipes[10].end.index == 4);
+    CHECK(nd.pipes[11].end.kind == PipeEndDesc::Kind::Waveguide);
+    const real a38 = 0.25 * kPi * 0.038 * 0.038, a45 = 0.25 * kPi * 0.045 * 0.045, a50 = 0.25 * kPi * 0.05 * 0.05;
+    CHECK(nd.volumes[2].volume_m3 == kJunctionLengthM * ((a38 + a38) + a45));
+    CHECK(nd.volumes[4].volume_m3 == kJunctionLengthM * ((a45 + a45) + a50));
+    // pipe, catalyst (2 halves around a Resistance), pipe, chamber, tailpipe -> Open.
+    CHECK(nd.waveguide.nodes.size() == 7u);
+    CHECK(nd.waveguide.segments.size() == 6u);
+    CHECK(nd.waveguide.nodes[2].kind == WgNodeDesc::Kind::Resistance);
+    CHECK(nd.waveguide.nodes[2].k_loss == 1.5);
+    CHECK(nd.waveguide.nodes.back().kind == WgNodeDesc::Kind::Open);
+    CHECK(nd.waveguide.segments.back().end_b == EndCorrection::Unflanged);
+
+    // No installation: throttle to ambient, flange pipe open, no waveguide.
+    drivetrain::CycleModelDesc bare = d;
+    bare.installation.reset();
+    const PipeNetworkDesc nb = make_engine_pipe_network_desc(bare, amb, 60.0e3, 0.05, &lay);
+    CHECK(lay.airbox_volume == -1);
+    CHECK(nb.orifices[0].volume_b == -1);
+    CHECK(nb.pipes.size() == 11u);
+    CHECK(nb.waveguide.nodes.empty());
+    CHECK(nb.pipes.back().end.kind == PipeEndDesc::Kind::Open);
+
+    // Firing phases of 1-3-4-2: cylinder 1 at 0, 3 at 180, 4 at 360, 2 at 540.
+    const std::vector<real> ph = engine_firing_phases_deg(d);
+    CHECK(ph == std::vector<real>{0.0, 540.0, 180.0, 360.0});
+}
+
+TEST_CASE("A5 E2 CycleEngine closes mass per cycle and holds the plenum", "[drivetrain][cycle][pipe]") {
+    // Catches: a hand-off that creates or destroys gas between the pipes and
+    // the ports (e.g. sources scaled with a different h than the flux), and a
+    // throttle trim that does not converge.
+    const drivetrain::CycleModelDesc d = test::make_pipe_i4_cycle_desc();
+    struct Pt {
+        real rpm, p;
+    };
+    for (const Pt pt : {Pt{1500.0, 30.0e3}, Pt{3000.0, 60.0e3}, Pt{6000.0, 90.0e3}}) {
+        CAPTURE(pt.rpm, pt.p);
+        CycleEngine eng(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr, make_op(d, pt.rpm, pt.p));
+        const CycleEngineResult r = eng.run();
+        const real ve =
+            r.mean.m_air_j_cyc / (pt.p / (287.05 * 288.15) * 0.25 * kPi * d.bore_m * d.bore_m * d.stroke_m);
+        std::printf("A5 E2 %5.0f rpm %3.0f kPa: n %llu h %.4g us, air %.5e kg (VE~%.4f), plenum %.2f kPa "
+                    "(err %+.3e), cda %.4e/%.4e, closure %.3e kg of %.3e (rel %.2e), air change %.2e\n",
+                    pt.rpm, pt.p / 1000.0, static_cast<unsigned long long>(r.steps_per_cycle), r.h_s * 1e6,
+                    r.mean.m_air_j_cyc, ve, r.p_plenum_mean_pa / 1000.0, r.plenum_error_rel, r.throttle_cd_area_m2,
+                    r.throttle_cd_area_max_m2, r.mass_closure_kg, r.mass_scale_kg,
+                    r.mass_closure_kg / r.mass_scale_kg, r.air_change_rel);
+        CHECK(r.h_s <= kStepFull);
+        CHECK(std::fabs(r.mass_closure_kg) <= 1e-12 * r.mass_scale_kg);
+        CHECK_FALSE(r.throttle_saturated);
+        CHECK(std::fabs(r.plenum_error_rel) < 0.02);
+        CHECK(r.mean.m_air_j_cyc > 0.0);
+        CHECK(r.mean.w_gross_j > 0.0);
+    }
+}
+
+TEST_CASE("A5 E3 CycleEngine is run-to-run identical", "[drivetrain][cycle][pipe]") {
+    // Catches: hidden state (a mutable static, an uninitialised read).
+    const drivetrain::CycleModelDesc d = test::make_pipe_i4_cycle_desc();
+    const OperatingPoint op = make_op(d, 4500.0, 60.0e3);
+    CycleEngine a(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr, op, preview_settings());
+    CycleEngine b(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr, op, preview_settings());
+    const std::uint64_t h0 = a.fold_state_hash(1469598103934665603ull);
+    CHECK(h0 == b.fold_state_hash(1469598103934665603ull));
+    const CycleEngineResult ra = a.run();
+    const CycleEngineResult rb = b.run();
+    CHECK(result_hash(ra) == result_hash(rb));
+    CHECK(a.fold_state_hash(1469598103934665603ull) == b.fold_state_hash(1469598103934665603ull));
+    CHECK(a.fold_state_hash(1469598103934665603ull) != h0);
+    CHECK_THROWS_AS(a.run(), std::logic_error);
+}
+
+TEST_CASE("A5 E4 CycleEngine::run allocates nothing inside a job", "[drivetrain][cycle][pipe]") {
+    // Catches: a heap allocation in the per-step loop or the result assembly.
+    if (!ps::jobs::debug_alloc::hook_available()) {
+        SUCCEED("debug_alloc hook unavailable (sanitizer build)");
+        return;
+    }
+    const drivetrain::CycleModelDesc d = test::make_pipe_i4_cycle_desc();
+    CycleEngineSettings st = preview_settings();
+    st.settling_cycles = 1;
+    CycleEngine eng(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr, make_op(d, 3000.0, 60.0e3), st);
+    ps::jobs::JobSystem js(2);
+    CycleEngineResult r;
+    ps::jobs::debug_alloc::reset();
+    ps::jobs::debug_alloc::set_armed(true);
+    {
+        ps::jobs::JobSystem::WaitGroup wg;
+        js.submit([&] { r = eng.run(); }, &wg);
+        js.wait(wg);
+    }
+    ps::jobs::debug_alloc::set_armed(false);
+    const std::uint64_t v = ps::jobs::debug_alloc::violation_count();
+    ps::jobs::debug_alloc::reset();
+    CHECK(v == 0);
+    CHECK(r.mean.m_air_j_cyc > 0.0);
+}
+
+TEST_CASE("A5 E5 reservoir reference mode closes mass", "[drivetrain][cycle][pipe]") {
+    // Catches: reservoir rates booked differently from what the ports gain.
+    const drivetrain::CycleModelDesc d = test::make_pipe_i4_cycle_desc();
+    CycleEngineSettings st = preview_settings();
+    st.reservoir_ports = true;
+    CycleEngine eng(d, test::kCycleFixtureLhv, test::kCycleFixtureAfr, make_op(d, 3000.0, 60.0e3), st);
+    CHECK(eng.network() == nullptr);
+    const CycleEngineResult r = eng.run();
+    std::printf("A5 E5 reservoir: air %.5e kg, closure %.3e kg\n", r.mean.m_air_j_cyc, r.mass_closure_kg);
+    CHECK(std::fabs(r.mass_closure_kg) <= 1e-12 * r.mass_scale_kg);
+    CHECK(r.mean.m_air_j_cyc > 0.0);
+    CHECK(r.p_plenum_mean_pa == r.p_target_pa);
 }

@@ -253,13 +253,22 @@ void CycleStepper::rhs(real theta_deg, const CycleState& s, CycleState& dydt) co
         d[kEpMb] = in.mdot_ev * x_ev - mdot_res * x_res;
         d[kEpU] = in.mdot_ev * h_ev - mdot_res * h_res;
     } else {
-        d[kIpM] = ip_src_.mdot - in.mdot_iv;
-        d[kIpMb] = ip_src_.mbdot - in.mdot_iv * x_iv;
-        d[kIpU] = ip_src_.edot - in.mdot_iv * h_iv;
+        // External rates, plus (reference mode only) the fixed port reservoirs.
+        PortSource ip = ip_src_, ep = ep_src_;
+        add_port_reservoir_rates(in, ip, ep);
+        d[kIpM] = ip.mdot - in.mdot_iv;
+        d[kIpMb] = ip.mbdot - in.mdot_iv * x_iv;
+        d[kIpU] = ip.edot - in.mdot_iv * h_iv;
         d[kRunnerMdot] = 0.0;
-        d[kEpM] = in.mdot_ev + ep_src_.mdot;
-        d[kEpMb] = in.mdot_ev * x_ev + ep_src_.mbdot;
-        d[kEpU] = in.mdot_ev * h_ev + ep_src_.edot;
+        d[kEpM] = in.mdot_ev + ep.mdot;
+        d[kEpMb] = in.mdot_ev * x_ev + ep.mbdot;
+        d[kEpU] = in.mdot_ev * h_ev + ep.edot;
+        // The same two accumulators book the pipe exchange (intake: into the
+        // port; exhaust: out of the port into the pipe).
+        d[kAccRunnerMass] = ip.mdot;
+        d[kAccRunnerEnthalpy] = ip.edot;
+        d[kAccResMass] = -ep.mdot;
+        d[kAccResEnthalpy] = -ep.edot;
     }
 
     const bool gross = wrap720(theta_deg - m.geom.theta_bdc_deg) < 360.0;
@@ -280,13 +289,6 @@ void CycleStepper::rhs(real theta_deg, const CycleState& s, CycleState& dydt) co
         d[kAccRunnerEnthalpy] = mdot_r * h_r;
         d[kAccResMass] = mdot_res;
         d[kAccResEnthalpy] = mdot_res * h_res;
-    } else {
-        // Pipe mode: the same two accumulators book the pipe exchange
-        // (intake: into the port; exhaust: out of the port into the pipe).
-        d[kAccRunnerMass] = ip_src_.mdot;
-        d[kAccRunnerEnthalpy] = ip_src_.edot;
-        d[kAccResMass] = -ep_src_.mdot;
-        d[kAccResEnthalpy] = -ep_src_.edot;
     }
 }
 
@@ -343,6 +345,31 @@ void CycleStepper::reset_phased(const OperatingPoint& op, real phase_deg) {
     state_.y[kCylM] = m_cyl;
     state_.y[kCylMb] = m_cyl;
     state_.y[kCylU] = energy_from_temperature(g, m_cyl, m_cyl, t_b);
+}
+
+void CycleStepper::add_port_reservoir_rates(const CycleInputs& in, PortSource& ip, PortSource& ep) const {
+    const CycleModel& m = *model_;
+    const GasModel& g = m.gas;
+    if (res_ip_cda_ > 0.0) {
+        // + reservoir -> intake port; inflow is fresh at T_im.
+        const OrificeFlow f = orifice_flow(m.psi, res_ip_cda_, op_.p_im_pa, g.fresh.r, op_.t_im_k, 0.0, in.ip.p,
+                                           in.ip.r, in.ip.t, in.ip.x);
+        const real x = f.from_1 ? 0.0 : in.ip.x;
+        const real hh = f.from_1 ? g.fresh.h(op_.t_im_k) : g.h_mix(in.ip.t, in.ip.x);
+        ip.mdot += f.mdot;
+        ip.mbdot += f.mdot * x;
+        ip.edot += f.mdot * hh;
+    }
+    if (res_ep_cda_ > 0.0) {
+        // + exhaust port -> reservoir; backflow is burned gas at T_backflow.
+        const OrificeFlow f = orifice_flow(m.psi, res_ep_cda_, in.ep.p, in.ep.r, in.ep.t, in.ep.x, op_.p_amb_pa,
+                                           g.burned.r, m.t_backflow, 1.0);
+        const real x = f.from_1 ? in.ep.x : 1.0;
+        const real hh = f.from_1 ? g.h_mix(in.ep.t, in.ep.x) : g.burned.h(m.t_backflow);
+        ep.mdot -= f.mdot;
+        ep.mbdot -= f.mdot * x;
+        ep.edot -= f.mdot * hh;
+    }
 }
 
 void CycleStepper::step_phased(std::uint64_t k, std::uint64_t n, real phase_deg) {
