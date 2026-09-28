@@ -775,6 +775,13 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   range), refreshed as parameters change. Preview-quality generation
   (0.03-0.3 s on 10 workers) plus the C16b .psmaps cache should keep it
   interactive; each change regenerates the maps, not only the chart.
+  Sound preview (Sebastian, 2026-09-28): the page also lets the designer
+  hear the engine free-revving without a car - a throttle control drives an
+  engine-only simulation (no vehicle, no clutch load) in real time, and its
+  per-substep state (crank angle, rpm, load, firing events) feeds a sound
+  synthesiser. This needs the audio slice (the synthesiser, adapter-side,
+  engine-neutral data in, audio out) and a real-time engine-only run mode;
+  tools/plots/rpm_to_wav.py is only an offline placeholder.
 - Fun engine (Sebastian, 2026-09-28): once development is far enough, a
   simulated Dodge Challenger SRT Demon 170 engine (6.2 L supercharged V8,
   E85) in a car of its own. Not before these exist: the I7c generator
