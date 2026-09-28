@@ -12,8 +12,10 @@
 // axis order, fuel). It is not evidence the cycle model predicts anything.
 //
 // White-box: SimulatedEngine (core/src/drivetrain/engine_simulated.h) is
-// built directly from the loaded desc, because Powertrain still throws
-// "simulated engine not yet integrated (I7b C12)" for a simulated engine.
+// built directly from the loaded desc (written before I7b C12 wired the
+// simulated engine into the Powertrain; the whole-vehicle run of
+// car_sedan_sim.json is test_simulated_engine_powertrain.cpp's
+// "C12/C17a integration" case).
 //
 // Tolerance for the WOT check: 2e-5 relative. The literals below are the
 // script's r6() (6 significant digits) roundings of the xlsx cells, and the

@@ -19,7 +19,10 @@
 //     raw pedal (a flat pedal_map / linkage_curve plateau);
 //   - pairing: a throttle_control stage of the other kind is refused;
 //   - determinism: 1 vs 10 workers with a mid-run ambient change hash
-//     identically, zero own allocations.
+//     identically, zero own allocations;
+//   - C12/C17a integration: the shipped data/vehicles/car_sedan_sim.json
+//     through the production loader - idle, WOT in 1st and 2nd, no stall,
+//     per-tick balance (review of C12 + C17a).
 
 #include "drivetrain/engine_simulated.h"
 #include "drivetrain/powertrain.h"
@@ -30,6 +33,7 @@
 #include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/io/surface_table.h"
+#include "ps/io/vehicle_io.h"
 #include "ps/jobs/debug_alloc.h"
 #include "ps/vehicle/vehicle_reset.h"
 #include "ps/world/ambient.h"
@@ -557,4 +561,76 @@ TEST_CASE("C12 determinism: 1 vs 10 workers with a mid-run ambient change hash i
     CHECK(a1.hash == a10.hash);
     CHECK(a1.rpm == a10.rpm);
     CHECK(a1.rpm != isa.rpm); // the ambient change really reached the dynamics
+}
+
+// ---------------------------------------------------------------------------
+// Integration (C12 + C17a review): the SHIPPED data/vehicles/car_sedan_sim.json
+// (A25A-FKS mean-value engine, tools/enginedata/a25a_mb_engine.py) loaded
+// through the production loader - not a code-built fixture. Auto-clutch rig in
+// neutral, 2 s idle settle, then 5 s WOT: gear_request 1 at t = 0, gear_request
+// 2 at t = 2.5 s. Asserts: the loaded engine IS the simulated one (manifold
+// pressure published - the graph engine publishes 0), idle within 50 rpm of
+// the file's idle_rpm, never leaves Running, reaches 2nd, a speed bound
+// measured with margin (see the printf; the graph-engine car_sedan.json
+// reaches less - the bound discriminates the two engines), and the per-tick
+// balance_error <= 5e-8 relative from tick 1 (tick 0 carries the pre-existing
+// unbooked Running-engine seed, F-T0 in out/i7b_c12_progress.md).
+// Sabotages (review run): loading car_sedan.json instead fails the p_im
+// check (0 Pa) and the speed bound (17.802 m/s); booking the engine's work
+// at omega_old in SimulatedEngine::post_solve fails the balance check
+// (2.566e-4 relative vs. 2.123e-14 clean).
+// ---------------------------------------------------------------------------
+TEST_CASE("C12/C17a integration: car_sedan_sim.json idles, launches WOT in 1st and 2nd without stalling, ledger closed per tick",
+          "[unit][drivetrain][vehicle][engine]") {
+    const std::string path = std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_sim.json";
+    const vehicle::VehicleDesc desc = io::load_vehicle_json(path);
+    real idle_rpm_desc = -1.0;
+    for (const auto& c : desc.powertrain.components)
+        if (const auto* s = std::get_if<SimulatedEngineDesc>(&c.params)) idle_rpm_desc = s->idle_rpm;
+    REQUIRE(idle_rpm_desc > 0.0); // the file's engine is a simulated one
+
+    Rig rig = make_rig(desc, 0, 1, /*auto_clutch_launch=*/true);
+    World& w = *rig.world;
+    real worst_balance = 0.0;
+    int tick = 0;
+    bool stalled = false;
+    int max_gear = 0;
+    real max_rpm = 0.0;
+    auto check_tick = [&]() {
+        const PowertrainEnergy& e = w.powertrain_energy(rig.vehicle);
+        const real denom = sum_abs_terms(e);
+        if (tick > 0 && denom > 1e-9) worst_balance = std::max(worst_balance, std::abs(e.balance_error) / denom);
+        ++tick;
+        const PowertrainSnapshot& s = w.powertrain_state(rig.vehicle);
+        if (s.engine_state != EngineState::Running) stalled = true;
+        max_gear = std::max(max_gear, static_cast<int>(s.gear));
+        max_rpm = std::max(max_rpm, s.engine_rpm);
+    };
+    for (int t = 0; t < 480; ++t) { w.step(); check_tick(); }
+    const PowertrainSnapshot idle = w.powertrain_state(rig.vehicle);
+    REQUIRE(idle.engines.size() == 1);
+    const real idle_rpm = idle.engine_rpm;
+    const real idle_p_im = idle.engines[0].p_intake_pa;
+
+    w.set_control("throttle", 1.0);
+    w.set_control("gear_request", 1.0);
+    for (int t = 0; t < 600; ++t) { w.step(); check_tick(); }
+    const real v_1st = speed(rig);
+    const real rpm_1st = w.powertrain_state(rig.vehicle).engine_rpm;
+    w.set_control("gear_request", 2.0);
+    for (int t = 0; t < 600; ++t) { w.step(); check_tick(); }
+    const PowertrainSnapshot end = w.powertrain_state(rig.vehicle);
+    const real v_end = speed(rig);
+
+    std::printf("[C12/C17a car_sedan_sim] idle %.2f rpm (desc %.0f), p_im %.0f Pa; WOT 1st 2.5 s: %.3f m/s at %.0f rpm; "
+                "5 s: %.3f m/s at %.0f rpm, gear %d, max rpm %.0f; worst balance %.3e rel\n",
+                idle_rpm, idle_rpm_desc, idle_p_im, v_1st, rpm_1st, v_end, end.engine_rpm, static_cast<int>(end.gear), max_rpm, worst_balance);
+    CHECK(idle_p_im > 0.0);
+    CHECK(std::abs(idle_rpm - idle_rpm_desc) < 50.0);
+    CHECK_FALSE(stalled);
+    CHECK(max_gear == 2);
+    CHECK(static_cast<int>(end.gear) == 2);
+    // Measured 19.370 m/s (graph-engine car_sedan.json, same protocol: 17.802).
+    CHECK(v_end > 18.5);
+    CHECK(worst_balance <= 5e-8);
 }
