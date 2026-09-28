@@ -80,10 +80,13 @@ inline constexpr std::uint32_t kPsMapsFormatVersion = 1;
 // cleaner seam here: H3's "does not change with JSON key order or
 // whitespace" requirement is satisfied automatically (there is no text left
 // to vary), and it also sidesteps any floating-point round-trip risk a
-// re-serialise-then-hash-text approach would carry. source strings on both
-// structs are citations, not physics values, and are excluded - mirrors
-// engine_maps_content_hash's own "source string excluded - not model data"
-// convention exactly.
+// re-serialise-then-hash-text approach would carry. CycleModelDesc::source
+// IS keyed (C16b review): the generator copies it into EngineMaps::source
+// (map_generator.cpp) and the payload stores that string, so a key without
+// it served a stale provenance string on a hit. FuelDesc::source is not
+// keyed - the generator never reads it, so nothing in the cached payload
+// depends on it. Neither affects engine_maps_content_hash (and so neither
+// affects state_hash).
 [[nodiscard]] std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
 
 // Attempts a cache load. Returns nullptr on ANY problem - see this file's

@@ -161,8 +161,9 @@ constexpr char kMagic[8] = {'P', 'S', 'M', 'A', 'P', 'S', '0', '1'};
 
 std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {
     KeyFnv f{14695981039346656037ULL};
-    // CycleModelDesc (source excluded - a citation, not a physics value;
-    // see this file's/map_cache.h's own PROVISIONAL DECISION comment).
+    // CycleModelDesc, every field incl. source (the generated maps carry it
+    // as EngineMaps::source - see map_cache.h's PROVISIONAL DECISION).
+    f.str(desc.source);
     f.pod(desc.bore_m);
     f.pod(desc.stroke_m);
     f.pod(desc.rod_m);
@@ -211,7 +212,7 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     f.pod(desc.exhaust_backflow_temperature_k);
     f.vec(desc.grid_rpm);
     f.vec(desc.grid_p_im);
-    // FuelDesc (source excluded, same reasoning)
+    // FuelDesc (source excluded - the generator never reads it)
     f.str(fuel.name);
     f.pod(static_cast<int>(fuel.phase));
     f.pod(fuel.lhv_j_kg);

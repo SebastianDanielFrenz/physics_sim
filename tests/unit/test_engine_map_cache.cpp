@@ -314,6 +314,35 @@ TEST_CASE("C16b H1: a cache hit is bit-for-bit identical to a fresh generation",
     }
 }
 
+// C16b review R4 (item 2a): the generated maps' provenance string embeds the
+// cycle block's source (map_generator.cpp), so editing only that citation
+// must not be served the old string from the cache.
+TEST_CASE("C16b review R4: a cycle-source edit misses the cache and the loaded maps carry the new source", "[drivetrain][cycle][io]") {
+    TempCacheDir cache;
+    const auto load = [&](const std::string& cycle_source, std::size_t* count) {
+        TempJsonDir d;
+        nlohmann::json engine = cycle_only_engine_json();
+        engine["cycle"]["source"] = cycle_source;
+        const auto path = d.write_vehicle(vehicle_with_engine_json(engine));
+        io::EngineMapOptions opt;
+        opt.quality = MapQuality::Preview;
+        opt.generation_count_out = count;
+        opt.cache_dir = cache.path();
+        return io::load_vehicle_json(path.string(), opt);
+    };
+    std::size_t n1 = 0, n2 = 0, n3 = 0;
+    const vehicle::VehicleDesc v1 = load("citation A", &n1);
+    const vehicle::VehicleDesc v2 = load("citation B", &n2);
+    const vehicle::VehicleDesc v3 = load("citation B", &n3);
+    CHECK(n1 == 1);
+    CHECK(n2 == 1); // a different citation is a different key: generated, not served A's maps
+    CHECK(n3 == 0); // and B's own entry is then a hit
+    CHECK(only_sim_maps(v1).source.find("(cycle source: citation A)") != std::string::npos);
+    CHECK(only_sim_maps(v2).source.find("(cycle source: citation B)") != std::string::npos);
+    CHECK(only_sim_maps(v3).source == only_sim_maps(v2).source);
+    CHECK(same_bits(only_sim_maps(v1).ve, only_sim_maps(v2).ve)); // physics unchanged
+}
+
 TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, never thrown, and self-heals",
           "[drivetrain][cycle][io]") {
     TempCacheDir cache;
@@ -400,10 +429,16 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
 
     SECTION("quality changes the key") { CHECK(engine_map_cache_key(ref_desc, ref_fuel, MapQuality::Full) != ref_key); }
 
-    SECTION("source citation strings do NOT change the key (excluded by design)") {
+    SECTION("the fuel's source citation does NOT change the key (the generator never reads it)") {
         FuelDesc fuel2 = ref_fuel;
         fuel2.source = fuel2.source + " (mutated citation only)";
         CHECK(engine_map_cache_key(ref_desc, fuel2, MapQuality::Preview) == ref_key);
+    }
+
+    SECTION("the cycle block's source DOES change the key (C16b review: it ends up in EngineMaps::source)") {
+        CycleModelDesc d = ref_desc;
+        d.source += " (mutated citation only)";
+        CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) != ref_key);
     }
 
     SECTION("every CycleModelDesc field bumps the key") {
@@ -447,6 +482,27 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         edits.emplace_back("exhaust_backflow_temperature_k", [&](CycleModelDesc& d) { d.exhaust_backflow_temperature_k = bump(d.exhaust_backflow_temperature_k + 1.0); });
         edits.emplace_back("grid_rpm", [&](CycleModelDesc& d) { d.grid_rpm.back() = bump(d.grid_rpm.back()); });
         edits.emplace_back("grid_p_im", [&](CycleModelDesc& d) { d.grid_p_im.back() = bump(d.grid_p_im.back()); });
+        // C16b review: the fields the original table left out. A pushed
+        // element works whether the fixture's table/curve is empty or not.
+        edits.emplace_back("intake_lift curve x", [&](CycleModelDesc& d) { d.intake_lift.lift_m_vs_deg.x.front() = bump(d.intake_lift.lift_m_vs_deg.x.front()); });
+        edits.emplace_back("exhaust_lift curve x", [&](CycleModelDesc& d) { d.exhaust_lift.lift_m_vs_deg.x.front() = bump(d.exhaust_lift.lift_m_vs_deg.x.front()); });
+        edits.emplace_back("exhaust_lift curve y", [&](CycleModelDesc& d) { d.exhaust_lift.lift_m_vs_deg.y.front() = bump(d.exhaust_lift.lift_m_vs_deg.y.front()); });
+        edits.emplace_back("cd_vs_l_over_d x", [&](CycleModelDesc& d) { d.cd_vs_l_over_d.x.back() = bump(d.cd_vs_l_over_d.x.back()); });
+        edits.emplace_back("cam.intake_advance_deg x", [&](CycleModelDesc& d) { d.cam.intake_advance_deg.x.push_back(1e6); });
+        edits.emplace_back("cam.intake_advance_deg y", [&](CycleModelDesc& d) { d.cam.intake_advance_deg.y.push_back(1e6); });
+        edits.emplace_back("cam.intake_advance_deg values", [&](CycleModelDesc& d) { d.cam.intake_advance_deg.values.push_back(1.0); });
+        edits.emplace_back("cam.exhaust_retard_deg x", [&](CycleModelDesc& d) { d.cam.exhaust_retard_deg.x.push_back(1e6); });
+        edits.emplace_back("cam.exhaust_retard_deg y", [&](CycleModelDesc& d) { d.cam.exhaust_retard_deg.y.push_back(1e6); });
+        edits.emplace_back("cam.exhaust_retard_deg values", [&](CycleModelDesc& d) { d.cam.exhaust_retard_deg.values.push_back(1.0); });
+        edits.emplace_back("back_pressure x", [&](CycleModelDesc& d) { d.back_pressure_pa_vs_exh_kg_s.x.push_back(1e6); });
+        edits.emplace_back("back_pressure y", [&](CycleModelDesc& d) { d.back_pressure_pa_vs_exh_kg_s.y.push_back(1e6); });
+        edits.emplace_back("gas.fresh.cv_b_j_kgk2", [&](CycleModelDesc& d) { d.gas.fresh.cv_b_j_kgk2 = bump(d.gas.fresh.cv_b_j_kgk2); });
+        edits.emplace_back("gas.fresh.r_j_kgk", [&](CycleModelDesc& d) { d.gas.fresh.r_j_kgk = bump(d.gas.fresh.r_j_kgk); });
+        edits.emplace_back("gas.fresh.gamma_flow", [&](CycleModelDesc& d) { d.gas.fresh.gamma_flow = bump(d.gas.fresh.gamma_flow); });
+        edits.emplace_back("gas.burned.cv_a_j_kgk", [&](CycleModelDesc& d) { d.gas.burned.cv_a_j_kgk = bump(d.gas.burned.cv_a_j_kgk); });
+        edits.emplace_back("gas.burned.cv_b_j_kgk2", [&](CycleModelDesc& d) { d.gas.burned.cv_b_j_kgk2 = bump(d.gas.burned.cv_b_j_kgk2); });
+        edits.emplace_back("gas.burned.gamma_flow", [&](CycleModelDesc& d) { d.gas.burned.gamma_flow = bump(d.gas.burned.gamma_flow); });
+        edits.emplace_back("source", [&](CycleModelDesc& d) { d.source += "x"; });
 
         for (const auto& [name, edit] : edits) {
             CycleModelDesc d = ref_desc;
