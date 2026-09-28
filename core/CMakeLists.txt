@@ -78,6 +78,7 @@ add_library(ps_engine_cycle STATIC
   src/engine_cycle/cycle_point.cpp
   src/engine_cycle/firing_order.cpp
   src/engine_cycle/pipe_network.cpp
+  src/engine_cycle/waveguide_network.cpp
 )
 
 target_include_directories(ps_engine_cycle PUBLIC

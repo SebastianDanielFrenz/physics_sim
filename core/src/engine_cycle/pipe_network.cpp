@@ -285,6 +285,8 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
         if (!(p.volume_m3 > 0.0)) fail("port '" + p.name + "': volume_m3 must be > 0");
     }
     std::vector<int> port_uses(static_cast<std::size_t>(np), 0);
+    const int nwg = static_cast<int>(desc.waveguide.nodes.size());
+    std::vector<int> wg_uses(static_cast<std::size_t>(nwg), 0);
 
     // --- Pipes: geometry and cells ----------------------------------------
     int cells = 0;
@@ -309,6 +311,15 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
                 case PipeEndDesc::Kind::Port:
                     if (e->index < 0 || e->index >= np) fail("pipe '" + p.name + "': port index out of range");
                     ++port_uses[static_cast<std::size_t>(e->index)];
+                    break;
+                case PipeEndDesc::Kind::Waveguide:
+                    if (e->index < 0 || e->index >= nwg)
+                        fail("pipe '" + p.name + "': waveguide node index out of range");
+                    if (desc.waveguide.nodes[static_cast<std::size_t>(e->index)].kind != WgNodeDesc::Kind::Junction)
+                        fail("pipe '" + p.name + "': a waveguide end must attach to a Junction node");
+                    if (e->end_correction != EndCorrection::None)
+                        fail("pipe '" + p.name + "': a waveguide end cannot carry an end correction (the waveguide segment does)");
+                    ++wg_uses[static_cast<std::size_t>(e->index)];
                     break;
             }
         }
@@ -336,6 +347,11 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
     for (int k = 0; k < np; ++k) {
         if (port_uses[static_cast<std::size_t>(k)] != 1)
             fail("port '" + desc.ports[static_cast<std::size_t>(k)].name + "' must be connected to exactly one pipe end");
+    }
+    for (int k = 0; k < nwg; ++k) {
+        if (wg_uses[static_cast<std::size_t>(k)] > 1)
+            fail("waveguide node '" + desc.waveguide.nodes[static_cast<std::size_t>(k)].name +
+                 "' is attached to more than one pipe end");
     }
 
     const auto nc = static_cast<std::size_t>(cells);
@@ -436,6 +452,33 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
     for (std::size_t k = 0; k < pipes_.size(); ++k) {
         const GasStateDesc& s = desc.pipes[k].initial;
         for (int i = 0; i < pipes_[k].n; ++i) set_cell(static_cast<int>(k), i, s.p_pa, s.t_k, 0.0, s.x_b);
+    }
+
+    // Waveguide (ps_audio A3) and its FV faces, in pipe order, start end first.
+    if (nwg > 0) {
+        if (!(std::isfinite(desc.waveguide_mean_time_s) && desc.waveguide_mean_time_s > h))
+            fail("waveguide_mean_time_s must be finite and > h");
+        WaveguideNetworkDesc wd = desc.waveguide;
+        wd.gas = desc.gas;
+        wg_ = WaveguideNetwork(wd, h);
+        wg_mean_alpha_ = h / desc.waveguide_mean_time_s;
+        wg_p_ref_ = desc.ambient.p_pa;
+        for (std::size_t k = 0; k < pipes_.size(); ++k) {
+            PipeRt& rt = pipes_[k];
+            for (int s = 0; s < 2; ++s) {
+                const PipeEndDesc& e = (s == 0) ? rt.start : rt.end;
+                if (e.kind != PipeEndDesc::Kind::Waveguide) continue;
+                WaveguideFaceView f;
+                f.pipe = static_cast<int>(k);
+                f.at_start = (s == 0);
+                f.node = e.index;
+                f.area_m2 = af_[static_cast<std::size_t>(s == 0 ? rt.f0 : rt.f0 + rt.n)];
+                f.p_pa = desc.ambient.p_pa;
+                f.p_ref_pa = desc.ambient.p_pa;
+                rt.wg_face[s] = static_cast<int>(wg_faces_.size());
+                wg_faces_.push_back(f);
+            }
+        }
     }
 }
 
@@ -548,7 +591,47 @@ std::uint64_t PipeNetwork::fold_state_hash(std::uint64_t h) const {
         fnv_fold(h, v.u);
         fnv_fold(h, v.mb);
     }
+    if (!wg_.empty()) {
+        h = wg_.fold_state_hash(h);
+        for (const WaveguideFaceView& f : wg_faces_) {
+            fnv_fold(h, f.u_mean_m_s);
+            fnv_fold(h, f.mdot_mean_kg_s);
+        }
+    }
     return h;
+}
+
+// FV<->waveguide face (ps_audio A3, pipe_network.h "Waveguide ends"). Interior
+// state in the face's outward-normal frame; returns the outward flux per unit
+// area and sets the junction's inflow for this step.
+PipeNetwork::FaceFlux PipeNetwork::waveguide_face(real rho, real un, real p, real x, real gamma, WaveguideFaceView& f) {
+    const real a_l = std::sqrt(gamma * p / rho);
+    const real z = rho * a_l;
+    const real y_f = f.area_m2 / z;
+    const WgNorton nt = wg_.junction_norton(f.node);
+    const real w = 0.5 * ((p - wg_p_ref_) + z * un);
+    const real pj = (nt.s + 2.0 * y_f * w) / (nt.y_sum + y_f);
+    const real q = y_f * (2.0 * w - pj);
+    real pf = wg_p_ref_ + pj;
+    real uf = q / f.area_m2;
+    real rhof = rho + (pf - p) / (a_l * a_l);
+    if (!(pf > 0.0 && rhof > 0.0)) {
+        ++wg_face_fallbacks_;
+        pf = p;
+        uf = un;
+        rhof = rho;
+    }
+    wg_.set_node_inflow(f.node, q);
+    const Flux fl = physical_flux(gas_, rhof, uf, pf, x);
+    f.p_pa = pf;
+    f.u_m_s = uf;
+    f.rho = rhof;
+    f.q_m3_s = q;
+    f.p_ref_pa = wg_p_ref_;
+    f.acoustic_work_j += h_ * pj * q;
+    f.u_mean_m_s += wg_mean_alpha_ * (uf - f.u_mean_m_s);
+    f.mdot_mean_kg_s += wg_mean_alpha_ * (fl.m * f.area_m2 - f.mdot_mean_kg_s);
+    return FaceFlux{fl.m, fl.mom, fl.e, fl.x};
 }
 
 void PipeNetwork::step() {
@@ -557,6 +640,15 @@ void PipeNetwork::step() {
 
     // 0. Start-of-step reservoir views of every volume.
     for (VolumeRt& v : vols_) refresh_reservoir(v);
+    // 0b. Waveguide (A3): mean element pressure drop at the running-mean mass
+    // flow, then this step's arriving waves (the faces below read its Norton view).
+    if (!wg_.empty()) {
+        real mdot = 0.0;
+        for (const WaveguideFaceView& f : wg_faces_) mdot += f.mdot_mean_kg_s;
+        wg_.set_mean_mass_flow(mdot);
+        wg_p_ref_ = ambient_.p + (wg_.mean_pressure_drop() - wg_.linearised_mean_drop());
+        wg_.begin_step();
+    }
 
     int fallbacks = 0;
     for (const PipeRt& pr : pipes_) {
@@ -657,6 +749,13 @@ void PipeNetwork::step() {
                     fn = reservoir_face(gas_, rho, un, p, x, ambient_);
                 } else if (end.kind == PipeEndDesc::Kind::Volume) {
                     fn = reservoir_face(gas_, rho, un, p, x, vols_[static_cast<std::size_t>(end.index)]);
+                } else if (end.kind == PipeEndDesc::Kind::Waveguide) {
+                    const FaceFlux ff =
+                        waveguide_face(rho, un, p, x, w_g_[c], wg_faces_[static_cast<std::size_t>(pr.wg_face[s])]);
+                    fn.m = ff.m;
+                    fn.mom = ff.mom;
+                    fn.e = ff.e;
+                    fn.x = ff.x;
                 } else {
                     fn = reservoir_face(gas_, rho, un, p, x, ports_[static_cast<std::size_t>(end.index)]);
                 }
@@ -685,6 +784,10 @@ void PipeNetwork::step() {
                 exch_.ambient_mass_kg += dm;
                 exch_.ambient_energy_j += de;
                 exch_.ambient_burned_kg += dxb;
+            } else if (end.kind == PipeEndDesc::Kind::Waveguide) {
+                exch_.waveguide_mass_kg += dm;
+                exch_.waveguide_energy_j += de;
+                exch_.waveguide_burned_kg += dxb;
             } else if (end.kind == PipeEndDesc::Kind::Port) {
                 PortRt& port = ports_[static_cast<std::size_t>(end.index)];
                 port.flux = PortFlux{dm, de, dxb};
@@ -736,6 +839,8 @@ void PipeNetwork::step() {
             }
         }
     }
+
+    if (!wg_.empty()) wg_.finish_step();
 
     // 7. Volumes: pipe-end fluxes (with the same face numbers), orifices,
     // sources. Orifices and sources use the start-of-step reservoir views.
