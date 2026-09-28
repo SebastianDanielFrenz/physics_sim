@@ -10,6 +10,7 @@
 #include "ps/engine_cycle/waveguide_network.h"
 #include "ps/jobs/debug_alloc.h"
 #include "ps/jobs/job_system.h"
+#include "ps/math/transcendental.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -440,7 +441,8 @@ TEST_CASE("W7 waveguide run is bit-identical run to run", "[drivetrain][cycle][p
     auto run = [] {
         WaveguideNetwork net(lossy_network(), kHFull);
         for (int k = 0; k < 20000; ++k) {
-            net.set_node_inflow(1, 1.0e-4 * std::sin(0.013 * k));
+            // ps::math::sin, not std::sin: the pinned hash below needs bit-identical input on every platform.
+            net.set_node_inflow(1, 1.0e-4 * ps::math::sin(0.013 * k));
             net.step();
         }
         return net.fold_state_hash(1469598103934665603ull);
@@ -449,7 +451,7 @@ TEST_CASE("W7 waveguide run is bit-identical run to run", "[drivetrain][cycle][p
     const std::uint64_t b = run();
     std::printf("W7 hash %016llx\n", static_cast<unsigned long long>(a));
     CHECK(a == b);
-    CHECK(a == 0xf1e4a5a9cf5aa148ull);  // recorded 2026-09-28, clang-cl release
+    CHECK(a == 0xab154e22348af820ull);  // recorded 2026-09-28, clang-cl release and linux-release (ps::math::sin input)
 }
 
 TEST_CASE("waveguide diag: micro-benchmark ns per WG sample per segment", "[.][diag][drivetrain][cycle][pipe]") {
