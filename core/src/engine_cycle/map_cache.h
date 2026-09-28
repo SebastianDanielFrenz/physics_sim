@@ -44,13 +44,15 @@
 // version, wrong key, a payload whose re-computed content_hash disagrees
 // with the header's) is ALWAYS treated as a plain cache miss - never an
 // exception, the file is simply left alone and the caller regenerates (H2).
-// A write goes to a fresh, process+thread-unique temp file in the same
-// directory, then std::filesystem::rename (atomic on both this project's
-// target platforms' filesystems for a same-directory rename) - a
-// pre-existing temp file from an earlier crashed/killed run is never read
-// by load_cached_engine_maps (it doesn't match "<key:016x>.psmaps") and is
-// simply overwritten the next time THIS process picks the same temp name,
-// or left as harmless debris otherwise (H4).
+// A write goes to a fresh temp file named
+// "<key:016x>.psmaps.<pid>.<thread hash>.<per-process counter>.tmp" in the
+// same directory, then std::filesystem::rename (atomic on both this
+// project's target platforms' filesystems for a same-directory rename; a
+// failed rename, e.g. the target held open by a reader on Windows, removes
+// the temp and leaves the existing file whole) - a pre-existing temp file
+// from an earlier crashed/killed run is never read by
+// load_cached_engine_maps (it doesn't match "<key:016x>.psmaps") and is left
+// as harmless debris (H4).
 
 #pragma once
 

@@ -34,6 +34,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -41,6 +42,7 @@
 #include <fstream>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ps;
@@ -597,5 +599,49 @@ TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files
         const auto entries = cache.entries();
         REQUIRE(entries.size() == 1); // no leftover temp from either store
         CHECK(entries.front() == cache_file_name(key));
+    }
+
+    // C16b review (item 2d): concurrent writers of one key and a concurrent
+    // reader. Every successful load is the whole file (never a torn one),
+    // every writer's temp file is gone afterwards, and the final file loads.
+    // A characterisation of the reader-side safety (rename + content-hash
+    // recheck), not a guard for the temp NAME: on Windows it also passes
+    // with one shared temp name (measured, 5 runs) - the per-process part
+    // of the name (the pid) matters across processes, which an in-process
+    // test cannot exercise.
+    SECTION("concurrent writers of one key never expose a partial file and leave no temp behind") {
+        constexpr int kWriters = 6;
+        constexpr int kStoresEach = 8;
+        std::atomic<int> writers_done{0};
+        std::atomic<int> loads_ok{0};
+        std::atomic<int> loads_bad{0}; // a non-null load whose maps differ
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kWriters; ++t) {
+            threads.emplace_back([&] {
+                for (int i = 0; i < kStoresEach; ++i) store_cached_engine_maps(cache.path(), key, *maps);
+                writers_done.fetch_add(1);
+            });
+        }
+        threads.emplace_back([&] {
+            while (writers_done.load() < kWriters) {
+                const EngineMapsPtr l = load_cached_engine_maps(cache.path(), key);
+                if (!l) continue;
+                if (same_engine_maps(*maps, *l) && l->content_hash == maps->content_hash) {
+                    loads_ok.fetch_add(1);
+                } else {
+                    loads_bad.fetch_add(1);
+                }
+            }
+        });
+        for (auto& th : threads) th.join();
+        std::printf("2d concurrent: %d writers x %d stores, reader saw %d whole loads, %d bad\n", kWriters, kStoresEach,
+                    loads_ok.load(), loads_bad.load());
+        CHECK(loads_bad.load() == 0);
+        const EngineMapsPtr final_load = load_cached_engine_maps(cache.path(), key);
+        REQUIRE(final_load != nullptr);
+        CHECK(same_engine_maps(*maps, *final_load));
+        const auto entries = cache.entries();
+        CHECK(entries.size() == 1);
+        for (const auto& name : entries) CHECK_THAT(name, !ContainsSubstring(".tmp"));
     }
 }

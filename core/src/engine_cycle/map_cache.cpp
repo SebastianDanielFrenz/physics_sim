@@ -1,16 +1,28 @@
 #include "map_cache.h"
 
+#include <atomic>
+#include <bit>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#include <process.h> // _getpid
+#else
+#include <unistd.h> // getpid
+#endif
 
 namespace ps::drivetrain {
 
 namespace {
+
+// The payload and header are raw host-order bytes (memcpy of doubles and
+// fixed-width integers) and documented as little-endian (map_cache.h). Every
+// build target is x86_64; a big-endian port must add byte swapping here.
+static_assert(std::endian::native == std::endian::little, "the .psmaps format is little-endian; add byte swapping for this host");
 
 // --- FNV-1a folding for the cache KEY (mirrors engine_simulated.cpp's and
 // map_generator.cpp's own file-local Fnv helper - no shared header for it
@@ -91,7 +103,7 @@ public:
     }
     [[nodiscard]] bool vec(std::vector<real>& v) {
         std::uint64_t n = 0;
-        if (!pod(n) || n > size_) return false; // n > size_: a corrupt/huge count can never fit this buffer
+        if (!pod(n) || n > (size_ - pos_) / sizeof(real)) return false; // a corrupt/huge count can never fit the rest of this buffer
         v.resize(static_cast<std::size_t>(n));
         for (auto& x : v) {
             if (!pod(x)) return false;
@@ -150,8 +162,6 @@ void write_maps_payload(Writer& w, const EngineMaps& m) {
 constexpr char kMagic[8] = {'P', 'S', 'M', 'A', 'P', 'S', '0', '1'};
 
 [[nodiscard]] std::string cache_file_path(const std::string& cache_dir, std::uint64_t key) {
-    std::ostringstream oss;
-    oss << std::hex << std::uppercase; // placeholder, overwritten below - kept for clang-tidy hygiene only
     char hex[17];
     std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(key));
     return (std::filesystem::path(cache_dir) / (std::string(hex) + ".psmaps")).string();
@@ -224,8 +234,9 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     return f.h;
 }
 
-EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key) {
-    if (cache_dir.empty()) return nullptr;
+namespace {
+
+EngineMapsPtr load_cached_engine_maps_impl(const std::string& cache_dir, std::uint64_t key) {
     std::error_code ec;
     const std::string path = cache_file_path(cache_dir, key);
     if (!std::filesystem::is_regular_file(path, ec) || ec) return nullptr;
@@ -264,8 +275,21 @@ EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_
     return out;
 }
 
-void store_cached_engine_maps(const std::string& cache_dir, std::uint64_t key, const EngineMaps& maps) {
-    if (cache_dir.empty()) return;
+// Process id plus a process-wide counter make every temp name unique across
+// concurrent writers: the thread id alone is not (on Linux std::thread::id
+// is a pthread_t, an address two processes can share), and neither is the
+// maps object's address.
+[[nodiscard]] unsigned long long process_id() {
+#if defined(_WIN32)
+    return static_cast<unsigned long long>(_getpid());
+#else
+    return static_cast<unsigned long long>(getpid());
+#endif
+}
+
+std::atomic<std::uint64_t> g_temp_counter{0};
+
+void store_cached_engine_maps_impl(const std::string& cache_dir, std::uint64_t key, const EngineMaps& maps) {
     std::error_code ec;
     std::filesystem::create_directories(cache_dir, ec); // best-effort; a failure here just falls through to the write failing below
     (void)ec;
@@ -287,12 +311,16 @@ void store_cached_engine_maps(const std::string& cache_dir, std::uint64_t key, c
     append_pod(static_cast<std::uint64_t>(w.buf.size()));
     file_bytes.insert(file_bytes.end(), w.buf.begin(), w.buf.end());
 
-    // Atomic write (H4): a process+thread-unique temp name in the same
-    // directory, then std::filesystem::rename.
-    std::ostringstream tmp_name;
-    tmp_name << cache_file_path(cache_dir, key) << "."
-             << std::hash<std::thread::id>{}(std::this_thread::get_id()) << "." << static_cast<const void*>(&maps) << ".tmp";
-    const std::string tmp_path = tmp_name.str();
+    // Atomic write (H4): a temp name unique per process, thread and call in
+    // the same directory, then std::filesystem::rename (MoveFileExW with
+    // MOVEFILE_REPLACE_EXISTING on Windows; if a reader holds the target open
+    // the rename fails, ec is set and the temp is removed - the existing file
+    // stays whole).
+    char suffix[96];
+    std::snprintf(suffix, sizeof(suffix), ".%llu.%llu.%llu.tmp", process_id(),
+                  static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id())),
+                  static_cast<unsigned long long>(g_temp_counter.fetch_add(1, std::memory_order_relaxed)));
+    const std::string tmp_path = cache_file_path(cache_dir, key) + suffix;
     {
         std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
         if (!out) return; // caching is a pure optimisation - never throw
@@ -304,6 +332,29 @@ void store_cached_engine_maps(const std::string& cache_dir, std::uint64_t key, c
     }
     std::filesystem::rename(tmp_path, cache_file_path(cache_dir, key), ec);
     if (ec) std::filesystem::remove(tmp_path, ec); // best-effort cleanup on a failed rename
+}
+
+} // namespace
+
+// Both public entry points are documented as never throwing. The filesystem
+// calls use error_code overloads, but path/string/vector construction can
+// still throw (bad_alloc, a path conversion error); any such exception is a
+// cache miss / a skipped write. Caught by type only (vault TOOL-019).
+EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key) {
+    if (cache_dir.empty()) return nullptr;
+    try {
+        return load_cached_engine_maps_impl(cache_dir, key);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void store_cached_engine_maps(const std::string& cache_dir, std::uint64_t key, const EngineMaps& maps) {
+    if (cache_dir.empty()) return;
+    try {
+        store_cached_engine_maps_impl(cache_dir, key, maps);
+    } catch (...) {
+    }
 }
 
 } // namespace ps::drivetrain
