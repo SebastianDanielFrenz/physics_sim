@@ -317,6 +317,10 @@ public:
     [[nodiscard]] const PipeNetworkExchange& exchange() const { return exch_; }
     // Cells that fell back to first order in the last step (diagnostic).
     [[nodiscard]] int last_step_fallback_count() const { return fallback_count_; }
+    // ps_audio A8b: pipe-steps run sub-cycled because the ACTUAL max(|u| + a)
+    // exceeded cfl_limit * dx / h (the build-time check only bounds the
+    // assumed max_wave_speed_m_s). Diagnostic, not state (not hashed).
+    [[nodiscard]] std::uint64_t subcycled_pipe_steps() const { return subcycled_pipe_steps_; }
     // FNV-1a fold of every cell's and volume's conserved state bytes, in order;
     // then, only when a waveguide exists, its state and every face's running means.
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t h) const;
@@ -378,6 +382,7 @@ private:
         real m, mom, e, x;  // outward flux per unit area
     };
     FaceFlux waveguide_face(real rho, real un, real p, real x, real gamma, WaveguideFaceView& f);
+    int step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, int& fallbacks);
 
     void refresh_reservoir(VolumeRt& v) const;
     void refresh_port(PortRt& p) const;
@@ -399,6 +404,11 @@ private:
     real wg_mean_alpha_ = 0.0;  // h / waveguide_mean_time_s
     real wg_p_ref_ = 0.0;
     std::uint64_t wg_face_fallbacks_ = 0;
+    // ps_audio A8b: runtime CFL sub-cycling (step_pipe). The waveguide face
+    // flux of the outer step's first sub-cycle, held for the later ones.
+    real cfl_limit_ = kDefaultPipeCflLimit;
+    std::uint64_t subcycled_pipe_steps_ = 0;
+    std::vector<FaceFlux> wg_face_hold_;
     // ps_audio A8: Open-end radiation filter state (one entry per pipe,
     // start/end; 0 and unused unless that end's PipeEndDesc::radiation is
     // true). has_radiation_ gates fold_state_hash so a network with no

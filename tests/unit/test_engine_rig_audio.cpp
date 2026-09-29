@@ -11,6 +11,7 @@
 #include "ps/drivetrain/engine_rig.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/debug_alloc.h"
+#include "ps/jobs/job_system.h"
 #include "ps_audio/engine_input.h"
 #include "ps_audio/voice.h"
 
@@ -58,6 +59,9 @@ EngineInput make_engine_input(const EngineRig& rig) {
 const drivetrain::CycleModelDesc& demo_cycle_desc() {
     static const drivetrain::CycleModelDesc d = [] {
         io::EngineMapOptions opts;
+        opts.quality = drivetrain::MapQuality::Preview;  // A8b: only the desc is read; Preview maps are cheaper to generate
+        jobs::JobSystem pool(10);
+        opts.pool = &pool;
         const drivetrain::ComponentParams params = io::load_engine_json(demo_engine_path(), opts, nullptr);
         const auto* sim = std::get_if<drivetrain::SimulatedEngineDesc>(&params);
         REQUIRE(sim != nullptr);
@@ -70,6 +74,9 @@ const drivetrain::CycleModelDesc& demo_cycle_desc() {
 const drivetrain::FuelDesc& demo_fuel_desc() {
     static const drivetrain::FuelDesc f = [] {
         io::EngineMapOptions opts;
+        opts.quality = drivetrain::MapQuality::Preview;  // A8b: only the desc is read; Preview maps are cheaper to generate
+        jobs::JobSystem pool(10);
+        opts.pool = &pool;
         const drivetrain::ComponentParams params = io::load_engine_json(demo_engine_path(), opts, nullptr);
         const auto* sim = std::get_if<drivetrain::SimulatedEngineDesc>(&params);
         REQUIRE(sim != nullptr);
@@ -266,4 +273,218 @@ TEST_CASE("A10 R6: EngineRig::step is allocation-free once built", "[audio][driv
     std::printf("A10 R6: debug_alloc violation_count = %llu over 120 steps\n",
                 static_cast<unsigned long long>(violations));
     CHECK(violations == 0);
+}
+
+namespace {
+// free_rev.json's event list (data/scripts/engine_audio/free_rev.json),
+// driven through an EngineRig exactly as tools/ps_engine_audio does (no
+// explicit ignition call), recorded once as the Voice's per-tick inputs.
+std::vector<EngineInput> record_free_rev_inputs(real seconds) {
+    struct Ev {
+        real t;
+        int kind;  // 0 starter, 1 throttle
+        real v;
+    };
+    const Ev evs[] = {{0.0, 0, 1.0}, {0.8, 0, 0.0}, {1.2, 1, 0.05}, {3.0, 1, 0.9},
+                      {3.8, 1, 0.05}, {5.5, 1, 1.0}, {6.6, 1, 0.05}};
+    jobs::JobSystem pool(10);  // Full maps as the tool uses them, generated on 10 workers (A8b: cost)
+    io::EngineMapOptions opts;
+    opts.pool = &pool;
+    EngineRig rig(demo_engine_path(), opts);
+    std::vector<EngineInput> in;
+    std::size_t next = 0;
+    const int ticks = static_cast<int>(seconds * 240.0);
+    for (int tick = 0; tick < ticks; ++tick) {
+        const real t = tick / 240.0;
+        while (next < sizeof(evs) / sizeof(evs[0]) && evs[next].t <= t) {
+            if (evs[next].kind == 0) rig.set_starter(evs[next].v);
+            else rig.set_throttle(evs[next].v);
+            ++next;
+        }
+        rig.step();
+        in.push_back(make_engine_input(rig));
+    }
+    return in;
+}
+
+struct BlowupStats {
+    real first_bad_t = -1.0;  // first 0.1 s block with a non-finite or > 1 kPa sample (-1: none)
+    real max_abs_pa = 0.0;
+    std::uint64_t subcycled = 0;
+};
+
+// Renders the recorded inputs through a Voice (default audio dx unless the
+// settings override it) and prints per-0.1 s the peak output, plenum
+// pressure, filtered plenum target, throttle Cd*A and the network's extreme
+// cell state.
+BlowupStats render_free_rev(const std::vector<EngineInput>& in, const VoiceSettings& vs, const char* label,
+                            bool print, std::size_t first_tick = 0) {
+    Voice voice(demo_cycle_desc(), demo_fuel_desc().lhv_j_kg, demo_fuel_desc().afr_stoich, vs);
+    const int fpt = static_cast<int>(voice.sample_rate_hz() / 240.0);
+    const int ns = voice.source_count();
+    std::vector<float> blk(static_cast<std::size_t>(fpt) * static_cast<std::size_t>(ns));
+    BlowupStats st;
+    real peak = 0.0;
+    for (std::size_t tick = first_tick; tick < in.size(); ++tick) {
+        voice.push_input(in[tick]);
+        voice.render(blk.data(), fpt);
+        for (float v : blk) {
+            const real a = std::isfinite(v) ? std::fabs(static_cast<real>(v)) : 1e30;
+            peak = std::fmax(peak, a);
+        }
+        if ((tick + 1) % 24 == 0) {
+            const real t = (tick + 1) / 240.0;
+            const engine_cycle::PipeNetwork* net = voice.engine().core().network();
+            real mach = 0.0, pmin = 1e30, pmax = 0.0;
+            int wp = -1;
+            for (int p = 0; p < net->pipe_count(); ++p)
+                for (int i = 0; i < net->cell_count(p); ++i) {
+                    const engine_cycle::PipeCellState c = net->cell(p, i);
+                    const real m = std::fabs(c.u) / c.a;
+                    if (!(m <= mach)) {
+                        mach = m;
+                        wp = p;
+                    }
+                    pmin = std::fmin(pmin, c.p);
+                    pmax = std::fmax(pmax, c.p);
+                }
+            if (print)
+                std::printf("%s t %.1f: peak %.3e Pa, rpm %.0f p_tgt %.0f plenum %.0f p_f %.0f cda %.3e, max Mach %.3f (pipe %d), "
+                            "cell p %.0f..%.0f\n",
+                            label, t, peak, in[tick].omega_rad_s * 60.0 / 6.283185307179586, in[tick].p_intake_pa,
+                            voice.engine().plenum_pressure_pa(), voice.engine().plenum_filtered_pa(),
+                            voice.engine().throttle_cd_area(), mach, wp, pmin, pmax);
+            st.max_abs_pa = std::fmax(st.max_abs_pa, peak);
+            if (st.first_bad_t < 0.0 && !(peak < 1000.0)) st.first_bad_t = t;
+            if (!(peak < 1e20)) break;
+            peak = 0.0;
+        }
+    }
+    st.subcycled = voice.engine().core().network()->subcycled_pipe_steps();
+    return st;
+}
+}  // namespace
+
+TEST_CASE("A8b B diag: free_rev at the default audio dx - where the blow-up grows", "[.][diag][audio]") {
+    const std::vector<EngineInput> in = record_free_rev_inputs(8.0);
+    for (int variant = 0; variant < 3; ++variant) {
+        VoiceSettings vs;
+        const char* label = "default dx";
+        if (variant == 0) {
+            vs.engine.dx_exhaust_m = 0.032;
+            vs.engine.dx_intake_m = 0.017;
+        } else if (variant == 1) {
+            vs.engine.dx_exhaust_m = 0.032;
+            vs.engine.dx_intake_m = 0.017;
+            vs.engine.plenum_loop = false;
+            label = "plenum loop off";
+        } else {
+            vs.engine.dx_exhaust_m = 0.064;  // A10's former workaround (doubled audio dx)
+            vs.engine.dx_intake_m = 0.034;
+            label = "doubled dx (0.064/0.034)";
+        }
+        const BlowupStats st = render_free_rev(in, vs, label, true);
+        std::printf("%s: first block with |p| >= 1 kPa or non-finite at t %.1f s, max %.3e Pa, subcycled pipe-steps %llu\n", label,
+                    st.first_bad_t, st.max_abs_pa, static_cast<unsigned long long>(st.subcycled));
+    }
+}
+
+TEST_CASE("A8b B diag: sample-level trace into the default-dx blow-up", "[.][diag][audio]") {
+    const std::vector<EngineInput> in = record_free_rev_inputs(5.0);
+    VoiceSettings vs;
+    vs.engine.dx_exhaust_m = 0.032;
+    vs.engine.dx_intake_m = 0.017;
+    Voice voice(demo_cycle_desc(), demo_fuel_desc().lhv_j_kg, demo_fuel_desc().afr_stoich, vs);
+    const int fpt = static_cast<int>(voice.sample_rate_hz() / 240.0);
+    const int ns = voice.source_count();
+    std::vector<float> blk(static_cast<std::size_t>(fpt) * static_cast<std::size_t>(ns));
+    const engine_cycle::PipeNetwork* net = voice.engine().core().network();
+    std::printf("pipes:");
+    for (int p = 0; p < net->pipe_count(); ++p) std::printf(" %d:%d cells dx %.4f", p, net->cell_count(p), net->cell_dx(p));
+    std::printf("\nvolumes %d, ports %d\n", net->volume_count(), net->port_count());
+    long long sample = 0;
+    real pmin_run = 1e30;
+    bool done = false;
+    for (std::size_t tick = 0; tick < in.size() && !done; ++tick) {
+        voice.push_input(in[tick]);
+        const bool fine = tick >= static_cast<std::size_t>(4.3 * 240.0);
+        if (!fine) {
+            voice.render(blk.data(), fpt);
+            sample += fpt;
+            continue;
+        }
+        for (int f = 0; f < fpt && !done; ++f) {
+            voice.render(blk.data(), 1);
+            ++sample;
+            real pmin = 1e30, rmin = 1e30, tmin = 1e30, tmax = 0.0, mmax = 0.0;
+            int wp = -1, wi = -1, wm = -1;
+            bool bad = false;
+            for (int p = 0; p < net->pipe_count(); ++p)
+                for (int i = 0; i < net->cell_count(p); ++i) {
+                    const engine_cycle::PipeCellState c = net->cell(p, i);
+                    if (!std::isfinite(c.p) || !std::isfinite(c.rho) || !std::isfinite(c.u)) bad = true;
+                    if (c.p < pmin) {
+                        pmin = c.p;
+                        wp = p;
+                        wi = i;
+                    }
+                    rmin = std::fmin(rmin, c.rho);
+                    tmin = std::fmin(tmin, c.t);
+                    tmax = std::fmax(tmax, c.t);
+                    if (std::fabs(c.u) / c.a > mmax) {
+                        mmax = std::fabs(c.u) / c.a;
+                        wm = p;
+                    }
+                }
+            real vmin = 1e30;
+            int wv = -1;
+            for (int v = 0; v < net->volume_count(); ++v) {
+                const real pv = net->volume_state(v).p;
+                if (!std::isfinite(pv)) bad = true;
+                if (pv < vmin) {
+                    vmin = pv;
+                    wv = v;
+                }
+            }
+            pmin_run = std::fmin(pmin_run, pmin);
+            const bool report = bad || (sample % 480 == 0) || pmin < 2000.0;
+            if (report) {
+                const engine_cycle::PipeCellState c = (wp >= 0) ? net->cell(wp, wi) : engine_cycle::PipeCellState{};
+                std::printf("s %lld t %.5f: pmin %.1f at pipe %d cell %d/%d (rho %.4e u %.1f T %.1f a %.1f) rho_min %.3e "
+                            "T %.1f..%.1f Mach max %.3f (pipe %d) vol pmin %.1f (vol %d) fallbacks %d crank %.1f%s\n",
+                            sample, sample / 48000.0, pmin, wp, wi, wp >= 0 ? net->cell_count(wp) : 0, c.rho, c.u, c.t,
+                            c.a, rmin, tmin, tmax, mmax, wm, vmin, wv, net->last_step_fallback_count(),
+                            voice.engine().crank_deg(), bad ? "  NON-FINITE" : "");
+            }
+            if (bad) done = true;
+        }
+    }
+    std::printf("run min cell pressure %.1f Pa\n", pmin_run);
+}
+
+TEST_CASE("A8b B1: WOT hold then close at the default audio dx stays bounded", "[audio][cycle][pipe][long]") {
+    // ps_audio A8b point 4: free_rev.json's throttle 0.9 hold (t 3.0-3.8 s)
+    // used to grow to NaN / railed output by t ~4.7 s at the default audio
+    // dx (0.032/0.017 m). Cause: after the close, under the near-vacuum
+    // overrun manifold, valve overlap blows a supersonic backflow jet
+    // (Mach ~2, |u| + a ~1260 m/s) into an intake runner - CFL ~1.5 at dx
+    // 0.017 m and h 1/48000 s, beyond the build-time check's assumed 500 m/s
+    // - and the explicit FV update diverged. Fixed by the runtime CFL
+    // sub-cycling in PipeNetwork::step (P9 is the standalone guard). This is
+    // the whole-engine guard: the Voice starts at t 2.8 s from the rig's
+    // state (saves ~3 s of idle render) and runs past the old blow-up time.
+    // Sabotage (step_pipe never sub-cycles): non-finite / > 1 kPa by t ~4.x s.
+    const std::vector<EngineInput> in = record_free_rev_inputs(5.0);
+    const std::size_t t0 = static_cast<std::size_t>(2.8 * 240.0);
+    VoiceSettings vs;
+    vs.engine.dx_exhaust_m = 0.032;  // the ResolutionCycleDesc defaults, explicit so the test does not
+    vs.engine.dx_intake_m = 0.017;   // follow a later change of the demo file
+    vs.engine.initial_rpm = in[t0].omega_rad_s * 60.0 / 6.283185307179586;
+    vs.engine.initial_p_intake_pa = in[t0].p_intake_pa;
+    const BlowupStats st = render_free_rev(in, vs, "B1", false, t0);
+    std::printf("A8b B1: first bad block t %.1f s (-1 none), max |p| %.3e Pa at 1 m, sub-cycled pipe-steps %llu\n",
+                st.first_bad_t, st.max_abs_pa, static_cast<unsigned long long>(st.subcycled));
+    CHECK(st.first_bad_t < 0.0);
+    CHECK(st.max_abs_pa < 1000.0);
+    CHECK(st.subcycled > 0);  // scenario sanity: the supersonic backflow does occur
 }

@@ -99,15 +99,14 @@ void LiveEngine::physics_step(const LiveControl& c, real* p_out) {
     // Plenum loop (throttle Cd*A), then the D-3 port <-> pipe exchange.
     if (c.p_intake_pa > 0.0) {
         if (settings_.plenum_loop) {
-            // A10 fix: a large/fast throttle step (e.g. a WOT blip) can excite
-            // a transient in the network's own plenum pressure sharp enough
-            // that plenum_pressure_pa() (or the PI term derived from it) is
-            // momentarily non-finite; net_->set_orifice_cd_area's own
-            // hard invariant check has no idea a NaN came from upstream and
-            // throws a generic "stability bound" error with no context. Holding
-            // the filter/command at their last finite value for that one
-            // sample is a defensive floor, not a fix for whatever transient
-            // produced the non-finite reading - see out/audio_a10_progress.md.
+            // Pure backstop (ps_audio A8b): these isfinite holds keep a
+            // non-finite network reading from reaching set_orifice_cd_area's
+            // invariant check. A10 added them for a NaN that A8b traced to a
+            // runtime CFL violation in an intake runner (a supersonic backflow
+            // jet at overlap under the overrun vacuum), fixed at the source by
+            // PipeNetwork's CFL sub-cycling - with it the network stays finite
+            // (test_engine_rig_audio.cpp "A8b B1", test_pipe_network.cpp P9),
+            // so they did not engage in those runs; they are not part of the model.
             const real p_net = plenum_pressure_pa();
             if (std::isfinite(p_net)) p_f_ += h_ / settings_.plenum_filter_tau_s * (p_net - p_f_);
             if (!std::isfinite(p_f_)) p_f_ = settings_.initial_p_intake_pa;

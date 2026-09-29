@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -670,6 +671,107 @@ TEST_CASE("V-radiation W2: turning radiation on measurably increases a closed-op
     CHECK(excess < 10.0 * rate_ex);       // not wildly too strong either (wrong-scale wiring)
     CHECK(std::isfinite(rate_on));
     CHECK(std::isfinite(rate_off));
+}
+
+TEST_CASE("A8b W2 diag: FV open-end reflection by pulse echo, radiation on/off, two dx", "[.][diag][drivetrain][cycle][pipe]") {
+    // ps_audio A8b W2 discriminator: the FV open end's own reflection
+    // coefficient R(f), isolated from the interior's numerical dissipation.
+    // A 3 m closed-start pipe, a pressure pulse at 1 m; at a probe cell at
+    // 1.5 m the right-going wave p+ = (p' + rho a u)/2 carries the direct
+    // half (window 0..4 ms), the left-going p- its echo from the end (window
+    // 8..13 ms). R(f) = P-(f)/P+(f) for the open end is divided by the same
+    // ratio for a closed end (R = +1 exactly, same interior path), so the
+    // interior loss cancels. The phase of R_open/R_closed * (-1) gives the
+    // end's effective extra length dL = -arg / (2k).
+    struct Out {
+        double mag = 0.0, dl = 0.0;
+    };
+    auto run = [](int kind, double dx, double f) {
+        const double length = 3.0, dia = 0.05;
+        PipeEndDesc end = kind == 0 ? closed_end()
+                                    : (kind == 1 ? open_end(EndCorrection::Unflanged)
+                                                 : PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged, true});
+        PipeDesc p = make_pipe("echo", length, dia, dia, dx, closed_end(), end, 500.0);
+        p.wall.friction = WallFriction::None;
+        p.wall.heat_transfer = false;
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        PipeNetwork net(d, kHFull);
+        gaussian_pulse(net, 0, 101325.0, 293.15, 0.0, 1e-4, 1.0, 0.03);
+        int probe = 0;
+        while (net.cell_center_m(0, probe) < 1.5) ++probe;
+        const int steps = static_cast<int>(0.013 / kHFull);
+        std::vector<std::complex<double>> acc(2);
+        const double rho = 101325.0 / (287.0 * 293.15);
+        const double a = sound_speed(net, 293.15, 0.0);
+        for (int k = 0; k < steps; ++k) {
+            net.step();
+            const double t = (k + 1) * kHFull;
+            const PipeCellState c = net.cell(0, probe);
+            const double pp = 0.5 * ((c.p - 101325.0) + rho * a * c.u);
+            const double pm = 0.5 * ((c.p - 101325.0) - rho * a * c.u);
+            const std::complex<double> e = std::polar(1.0, -2.0 * kPi * f * t);
+            if (t < 0.004) acc[0] += pp * e;
+            if (t > 0.008) acc[1] += pm * e;
+        }
+        return acc[1] / acc[0];
+    };
+    const double c = 343.2, radius = 0.025;
+    for (double dx : {0.017, 0.0085}) {
+        for (double f : {100.0, 200.0, 400.0, 800.0}) {
+            const std::complex<double> rc = run(0, dx, f);
+            const std::complex<double> ro = run(1, dx, f) / rc;
+            const std::complex<double> rr = run(2, dx, f) / rc;
+            const double k = 2.0 * kPi * f / c, ka = k * radius;
+            // Open end: R = -exp(-2jk dL) for an extra length dL beyond the
+            // pipe; the FV places the end correction inside the pipe
+            // (extension), so the plain end's dL ~ 0.6133 a is expected.
+            const double dl_o = -std::arg(-ro) / (2.0 * k), dl_r = -std::arg(-rr) / (2.0 * k);
+            std::printf(
+                "A8b W2 echo dx %.4f f %5.0f: plain |R| %.5f dL %.5f m; radiating |R| %.5f (1-|R| %.5f vs K(ka)^2 "
+                "%.5f) dL %.5f m (extra %.5f m)\n",
+                dx, f, std::abs(ro), dl_o, std::abs(rr), 1.0 - std::abs(rr), 0.5 * ka * ka, dl_r, dl_r - dl_o);
+        }
+    }
+}
+
+TEST_CASE("P9 runtime CFL: a hot supersonic backflow jet into a near-vacuum runner stays bounded",
+          "[drivetrain][cycle][pipe]") {
+    // ps_audio A8b (the free_rev blow-up, out/audio_a8b_progress.md): the
+    // build-time CFL check bounds h * max_wave_speed_m_s / dx with an ASSUMED
+    // wave speed (intake 500 m/s). At valve overlap under a near-vacuum
+    // manifold (DFCO, ~6 kPa) the cylinder blows hot gas back into the runner
+    // as a supersonic jet (measured in the demo engine: u -857 m/s, Mach 2.1,
+    // |u| + a ~ 1260 m/s = CFL 1.5 at the default audio dx 0.017 m) and the
+    // explicit update diverged to NaN. This rig reproduces it standalone: an
+    // audio-grade intake runner (dx 0.017 m, assumed 500 m/s, passes the
+    // build check at CFL 0.61) at 6 kPa / 300 K, its port held at 100 kPa /
+    // 1000 K burned. Catches a missing runtime CFL guard (sabotage: step_pipe
+    // never sub-cycles -> non-finite state within the run).
+    PipeDesc p = make_pipe("runner", 0.35, 0.040, 0.040, 0.017, closed_end(), port_end(0), 500.0);
+    p.initial = GasStateDesc{6000.0, 300.0, 0.0};
+    PipeNetworkDesc d;
+    d.pipes.push_back(p);
+    d.ports.push_back(PortDesc{"port", 150e-6});
+    PipeNetwork net(d, 1.0 / 48000.0);
+    bool finite = true;
+    double p_min = 1e30, p_max = 0.0, mach_max = 0.0;
+    for (int k = 0; k < 2400 && finite; ++k) {  // 50 ms
+        net.set_port_state(0, PortState{100000.0, 1000.0, 1.0});
+        net.step();
+        for (int i = 0; i < net.cell_count(0); ++i) {
+            const PipeCellState c = net.cell(0, i);
+            if (!(std::isfinite(c.p) && std::isfinite(c.u) && c.p > 0.0 && c.rho > 0.0)) finite = false;
+            p_min = std::fmin(p_min, c.p);
+            p_max = std::fmax(p_max, c.p);
+            mach_max = std::fmax(mach_max, std::fabs(c.u) / c.a);
+        }
+    }
+    std::printf("P9: finite %d, cell p %.0f..%.0f Pa, max Mach %.2f, sub-cycled pipe-steps %llu of 2400\n",
+                finite ? 1 : 0, p_min, p_max, mach_max, static_cast<unsigned long long>(net.subcycled_pipe_steps()));
+    CHECK(finite);
+    CHECK(net.subcycled_pipe_steps() > 0);  // the jet does exceed the assumed wave speed (scenario sanity)
+    CHECK(p_min > 0.0);  // (p_max may exceed the port: the jet's shock reflects off the closed end)
 }
 
 TEST_CASE("P5 pipe port hand-off with a prescribed mass-flow/enthalpy source", "[drivetrain][cycle][pipe]") {

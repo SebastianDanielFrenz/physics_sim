@@ -2,7 +2,7 @@
   "format": "physics_sim.engine/1",
   "name": "demo_i4_pipes",
   "kind": "simulated",
-  "source": "[AS] assumed generic 2.0 L naturally-aspirated I4 for tools/ps_engine_audio's demo/listening test (ps_audio A10). NOT a real engine - every geometry/table value is a plausible, unmeasured [AS] guess, deliberately mirroring tests/support/cycle_fixtures.h's generic fixture geometry (bore/stroke/valves/lift) and tests/support/cycle_pipe_fixtures.h's generic pipe geometry (intake runners/plenum, exhaust primaries/merge tree), so this file's own map-generation cost/behaviour matches what those tests already exercise. cycle.resolution is set explicitly (audio dx doubled from the ResolutionCycleDesc defaults 0.032/0.017 m to 0.064/0.034 m): at the defaults, a sustained throttle=0.9 hold (data/scripts/engine_audio/free_rev.json, t=3.0-3.8s) seeds a resonant mode with negative numerical damping in the live PipeNetwork that blows up (NaN/railed audio output) by t~4.7s, well after the throttle has already closed again - the coarser dx's extra MUSCL-Hancock/HLLC numerical dissipation removes the blow-up through the whole 8s script including the t=5.5s WOT event. Empirically found by bisection (out/audio_a10_progress.md), not derived from a CFL/damping analysis - a real PipeNetwork numerical-stability edge case at sustained near-WOT load, not specific to this data file's guessed values, flagged for a future ps_audio increment rather than fixed at the solver level here.",
+  "source": "[AS] assumed generic 2.0 L naturally-aspirated I4 for tools/ps_engine_audio's demo/listening test (ps_audio A10). NOT a real engine - every geometry/table value is a plausible, unmeasured [AS] guess, deliberately mirroring tests/support/cycle_fixtures.h's generic fixture geometry (bore/stroke/valves/lift) and tests/support/cycle_pipe_fixtures.h's generic pipe geometry (intake runners/plenum, exhaust primaries/merge tree), so this file's own map-generation cost/behaviour matches what those tests already exercise. cycle.resolution is not set: the live audio path uses the ResolutionCycleDesc default audio dx (0.032 m exhaust / 0.017 m intake). ps_audio A10 had doubled it to 0.064/0.034 m to avoid a NaN blow-up about 0.9 s after a WOT hold closed; ps_audio A8b traced that to a CFL violation, not to this file: at valve overlap under the near-vacuum overrun manifold the cylinder blows a supersonic (Mach ~2, |u|+a ~1260 m/s) backflow jet into the intake runner, beyond the build-time CFL check's assumed intake wave speed (500 m/s), and the explicit update diverged. PipeNetwork now sub-cycles a pipe whose runtime CFL exceeds the limit (tests/unit/test_pipe_network.cpp P9, tests/unit/test_engine_rig_audio.cpp A8b B1), so the default dx is stable.",
   "architecture": "piston_4stroke",
   "bore_mm": 86.0,
   "stroke_mm": 86.0,
@@ -54,8 +54,7 @@
       ],
       "interface": "flange"
     },
-    "default_installation": "../installations/demo_i4_exhaust.json",
-    "resolution": { "audio_dx_exhaust_m": 0.064, "audio_dx_intake_m": 0.034 }
+    "default_installation": "../installations/demo_i4_exhaust.json"
   },
   "inertia_kgm2": 0.15,
   "breakaway_torque_nm": 20.0,

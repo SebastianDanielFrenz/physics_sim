@@ -16,6 +16,7 @@ namespace ps::engine_cycle {
 inline constexpr real kUnflangedEndCorrection = 0.6133;  // Levine & Schwinger 1948, low ka
 inline constexpr real kFlangedEndCorrection = 0.8216;    // Rayleigh; Norris & Sheng 1989
 inline constexpr real kDefaultPipeCflLimit = 0.8;        // out/audio_plan.md section 4
+inline constexpr int kMaxPipeSubcycles = 8;  // ps_audio A8b: runtime CFL sub-cycle cap per pipe-step [A]
 
 enum class EndCorrection : std::uint8_t { None, Unflanged, Flanged };
 
