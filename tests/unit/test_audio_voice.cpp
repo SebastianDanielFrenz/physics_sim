@@ -584,9 +584,12 @@ TEST_CASE("A7 V11: same seed and script give identical PCM, another seed differs
     // CycleEngine map-generator hash `mh` below is untouched by that fix and
     // stays pinned to its pre-A8 value, confirming the generator's engine
     // never runs through the audio radiation code path). Was
-    // 0x4d31ad68a2491739 / 0x5fc7ec81b3fa76e3 before A8.
-    CHECK(a.pcm == 0xf6127b2e2ec390f8ull);
-    CHECK(a.state == 0xf42b26f64d538437ull);
+    // 0x4d31ad68a2491739 / 0x5fc7ec81b3fa76e3 before A8. Re-pinned by
+    // ps_audio A8b (was 0xf6127b2e2ec390f8 / 0xf42b26f64d538437): the
+    // catalyst monolith resistance (F1) and the reservoir face's inflow
+    // branch (W2) change the fixture's exhaust and every port/volume face.
+    CHECK(a.pcm == 0xe4e8cf0d04b01008ull);
+    CHECK(a.state == 0xa798da1cb19bfb03ull);
     // The map generator's engine never sees a seed: a Preview CycleEngine
     // point's state hash is pinned (a generator call of the variation moves it).
     const drivetrain::CycleModelDesc& d = fixture();
@@ -603,7 +606,9 @@ TEST_CASE("A7 V11: same seed and script give identical PCM, another seed differs
     (void)ce.run();
     const std::uint64_t mh = ce.fold_state_hash(1469598103934665603ull);
     std::printf("A7 V11: CycleEngine Preview 3000 rpm / 60 kPa state 0x%016llx\n", static_cast<unsigned long long>(mh));
-    CHECK(mh == 0x3d50ccb4707a1c36ull);
+    // Re-pinned by ps_audio A8b (was 0x3d50ccb4707a1c36): the generator's
+    // CycleEngine runs the same catalyst (F1) and reservoir faces (W2).
+    CHECK(mh == 0xaa9bc382a11e1dbeull);
 }
 
 TEST_CASE("A7 V12a: an rpm ramp under a 1.5 % clock mismatch - firing frequency follows omega to 0.5 %",
@@ -754,11 +759,17 @@ TEST_CASE("A7 V13: omega -> 0 leaves a decaying tail, no NaN", "[audio][cycle][p
                 finite ? 1 : 0, run_rms, tail_rms, db(tail_rms / run_rms), crank_a, crank_b);
     CHECK(finite);
     CHECK(crank_a == crank_b);
-    // At least 12 dB down 0.7 s after the stop (measured -19.4 dB). It does not
-    // ring out to silence: a residual exhaust floor (~0.06 Pa at 5 s, tau ~18 s)
-    // is an open finding - see out/audio_a7_progress.md "Findings" and the
-    // "A7 V13 diag" case.
-    CHECK(tail_rms < 0.25 * run_rms);
+    // At least 36 dB down 0.7 s after the stop (measured -42.0 dB; the
+    // planned A7 bound was 26 dB). ps_audio A8b (F1): the -19.4 dB before
+    // had two causes, each now fixed and each failing this bound alone:
+    // the catalyst's resistance was purely flow-dependent (K rho |u_mean| / A,
+    // 0 at rest), so a 25 Hz exhaust mode rang on (without its laminar
+    // substrate resistance, cycle_engine.cpp: -25.4 dB); and the reservoir
+    // faces' inflow branch had a velocity deadband/jump wherever the pipe and
+    // reservoir temperatures differed, which kept a slowly decaying source
+    // under that mode (tau ~22 s; with the old face: -27.0 dB). The exhaust
+    // tail now decays with tau 0.6 s to 5e-14 Pa at 5 s.
+    CHECK(tail_rms < 0.01585 * run_rms);  // 10^(-36/20)
 }
 
 TEST_CASE("A7 V13 diag: the stop tail per second in variants", "[.][diag][audio]") {
@@ -856,31 +867,151 @@ TEST_CASE("F1 diag: spectral character of the post-stop exhaust floor", "[.][dia
     }
 }
 
+// ps_audio A8b F1: the lowest exhaust mode's Q per loss element. The
+// fixture's own engine network (make_engine_pipe_network_desc, audio-path
+// radiation on) with every cylinder port closed (valves shut, engine
+// stopped), rung by a +200 Pa pressure step in the collector and read at the
+// collector's last FV cell. Frequency: the Goertzel peak over 10..60 Hz of a
+// 0.8 s window; decay: the log-amplitude regression over 0.4 s Hann windows.
+namespace {
+struct ModeFit {
+    real f_hz = 0.0;
+    real sigma = 0.0;  // amplitude decay rate [1/s]
+};
+
+ModeFit ring_down(engine_cycle::PipeNetworkDesc nd, real t_end_s, bool print) {
+    using engine_cycle::PipeEndDesc;
+    for (engine_cycle::PipeDesc& p : nd.pipes) {
+        if (p.start.kind == PipeEndDesc::Kind::Port) p.start = PipeEndDesc{};
+        if (p.end.kind == PipeEndDesc::Kind::Port) p.end = PipeEndDesc{};
+    }
+    nd.ports.clear();
+    engine_cycle::PipeNetwork net(nd, 1.0 / kFs);
+    int coll = -1;
+    for (int k = 0; k < static_cast<int>(nd.pipes.size()); ++k) {
+        const engine_cycle::PipeDesc& p = nd.pipes[static_cast<std::size_t>(k)];
+        if (p.end.kind == PipeEndDesc::Kind::Waveguide) coll = k;
+    }
+    REQUIRE(coll >= 0);
+    const int nc = net.cell_count(coll);
+    for (int i = 0; i < nc; ++i) {
+        const engine_cycle::PipeCellState c = net.cell(coll, i);
+        net.set_cell(coll, i, c.p + 200.0, c.t, 0.0, c.x_b);
+    }
+    const std::size_t n = static_cast<std::size_t>(t_end_s * kFs);
+    std::vector<real> x(n);
+    for (std::size_t s = 0; s < n; ++s) {
+        net.step();
+        x[s] = net.cell(coll, nc - 1).p;
+    }
+    real mean = 0.0;
+    for (real v : x) mean += v;
+    mean /= static_cast<real>(n);
+    for (real& v : x) v -= mean;
+    ModeFit fit;
+    {
+        const std::size_t i0 = static_cast<std::size_t>(0.1 * kFs);
+        const std::size_t w = static_cast<std::size_t>(0.8 * kFs);
+        std::vector<real> seg(x.begin() + static_cast<std::ptrdiff_t>(i0),
+                              x.begin() + static_cast<std::ptrdiff_t>(i0 + w));
+        real best = 0.0;
+        for (real f = 10.0; f <= 60.0; f += 0.05) {
+            const real a = goertzel_amp(seg, f * 0.8);
+            if (a > best) {
+                best = a;
+                fit.f_hz = f;
+            }
+        }
+    }
+    const std::size_t w = static_cast<std::size_t>(0.4 * kFs);
+    real st = 0.0, sy = 0.0, stt = 0.0, sty = 0.0;
+    int m = 0;
+    for (real t0 = 0.1; t0 + 0.4 <= t_end_s + 1e-9; t0 += 0.2) {
+        const std::size_t i0 = static_cast<std::size_t>(t0 * kFs);
+        if (i0 + w > n) break;
+        std::vector<real> seg(w);
+        for (std::size_t k = 0; k < w; ++k)
+            seg[k] = x[i0 + k] * 0.5 * (1.0 - ps::math::cos(kTwoPi * static_cast<real>(k) / static_cast<real>(w)));
+        // Peak over f0 +- 4 Hz per window: the mean state relaxes after the
+        // step, so the mode frequency drifts by ~1 Hz and a fixed-frequency
+        // Goertzel read a drift as decay (lossless variant sigma 5.8 1/s).
+        real a = 0.0, fw = fit.f_hz;
+        for (real ff = fit.f_hz - 4.0; ff <= fit.f_hz + 4.0; ff += 0.05) {
+            const real aa = goertzel_amp(seg, ff * 0.4);
+            if (aa > a) {
+                a = aa;
+                fw = ff;
+            }
+        }
+        if (!(a > 1e-7)) break;
+        const real t = t0 + 0.2, y = std::log(a);
+        if (print) std::printf(" [%.1f s %.2f Hz %.3e]", t, fw, a);
+        st += t;
+        sy += y;
+        stt += t * t;
+        sty += t * y;
+        ++m;
+    }
+    if (m >= 2) fit.sigma = -(m * sty - st * sy) / (m * stt - st * st);
+    return fit;
+}
+}  // namespace
+
+TEST_CASE("A8b F1 diag: lowest exhaust mode Q per loss element", "[.][diag][audio]") {
+    using engine_cycle::EngineNetworkLayout;
+    using engine_cycle::GasStateDesc;
+    using engine_cycle::PipeDesc;
+    using engine_cycle::PipeNetworkDesc;
+    using engine_cycle::WallFriction;
+    using engine_cycle::WgLoss;
+    using engine_cycle::WgNodeDesc;
+    using engine_cycle::WgSegmentDesc;
+    const GasStateDesc amb{101325.0, 293.15, 0.0};
+    // Every variant but the first sets the catalyst's k_loss to 0: the
+    // quadratic term's R = K rho |u_mean| / A follows the mean flow the step
+    // excitation drains through the tailpipe and would confound the linear
+    // losses (the pre-A8b version of this diag read sigma 5.8 1/s with every
+    // loss off for exactly that reason).
+    const char* names[] = {"k_loss 1.5, all losses",   "all linear losses",        "monolith off (pre-A8b)",
+                           "monolith off, rad off",    "monolith off, Kirchhoff off", "monolith off, FV friction off",
+                           "monolith only",            "all losses off"};
+    for (int variant = 0; variant < 8; ++variant) {
+        EngineNetworkLayout lay;
+        drivetrain::CycleModelDesc d = fixture();
+        if (variant > 0)
+            for (auto& el : d.installation->exhaust.elements) el.k_loss = 0.0;
+        const bool rad = !(variant == 3 || variant >= 6);
+        PipeNetworkDesc nd = make_engine_pipe_network_desc(d, amb, 40000.0, 0.05, 0.05, &lay, rad);
+        if (!rad)
+            for (WgNodeDesc& nn : nd.waveguide.nodes) nn.radiation = false;
+        if ((variant >= 2 && variant <= 5) || variant == 7)
+            for (WgNodeDesc& nn : nd.waveguide.nodes) nn.monolith_length_m = 0.0;
+        if (variant == 4 || variant >= 6)
+            for (WgSegmentDesc& sg : nd.waveguide.segments) sg.loss = WgLoss::None;
+        if (variant == 5 || variant >= 6)
+            for (PipeDesc& p : nd.pipes) p.wall.friction = WallFriction::None;
+        std::printf("A8b F1 windows %s:", names[variant]);
+        const ModeFit f = ring_down(nd, 3.0, true);
+        std::printf("\n");
+        std::printf("A8b F1 Q: %-32s f %.2f Hz sigma %.4f 1/s Q %.1f\n", names[variant], f.f_hz, f.sigma,
+                    f.sigma > 0.0 ? kPi * f.f_hz / f.sigma : -1.0);
+    }
+}
+
 // ps_audio A8 V9/V10: flow-noise level (spec section on turbulence noise,
 // voice.h's own FlowNoiseSettings) and a coarse radiated-power/full-scale
 // sanity bound (spec section 8's Calibration). `level_coeff_pa` defaults to
-// 0.0 (inert - see progress file item 5, keeps every A7 test byte-identical)
-// so both tests set a PROVISIONAL, NOT-SHIPPED nonzero calibration [A]
-// directly on the VoiceSettings they build, chosen only so the resulting
-// levels sit in a physically plausible range - not fitted to any real
-// engine's measured exhaust noise.
+// 0.0 (off). ps_audio A8b: no test sets a level-bearing flow-noise
+// coefficient any more - the A8 pass-by constant (1.3e-6 Pa per (m/s)^3,
+// chosen so a WOT pass-by landed near 75-80 dB) was a fit, not a physics
+// check. The absolute radiated level is now checked physics-only by
+// "A8b V9" (the monopole identity at the outlet), and V10 runs with flow
+// noise off. The only remaining coefficient, kV9FlowNoiseCoeffPa, is an
+// exaggerated [A] value used by the shape-only monotonicity check below
+// (and its sabotage diag); it makes no level claim and is not shipped.
 namespace {
-// [A] PROVISIONAL, Pa per (m/s)^3 at 1 m - see the header comment above.
-// Two DIFFERENT calibration constants for two different purposes: the
-// flow-velocity dependence is level ~ level_coeff_pa * u^3 (voice.h's own
-// FlowNoiseSettings), and u itself grows very steeply with rpm/load in this
-// fixture (measured ~740x from 1200 to 6000 rpm at a fixed coefficient) -
-// there is no single coefficient that is both (a) large enough to be
-// cleanly measurable above the periodic exhaust note at IDLE and (b) small
-// enough that the flow-noise term does not swamp a physically-plausible
-// pass-by SPL at WOT. kV9FlowNoiseCoeffPa (exaggerated) isolates the SHAPE
-// of the response (monotone growth) with good SNR; kV9PassByCoeffPa
-// (much smaller, calibrated so WOT pass-by lands near a real car's
-// ~75-80 dB unweighted figure) is used wherever this test cares about a
-// physically-plausible absolute level (the WOT pass-by estimate itself,
-// and V10's peak/radiated-power sanity bounds).
+// [A] exaggerated, Pa per (m/s)^3 at 1 m, shape-only - see above.
 constexpr real kV9FlowNoiseCoeffPa = 0.02;
-constexpr real kV9PassByCoeffPa = 1.3e-6;
 
 // Runs one settle + 1 s measurement window at (rpm, p_im) with
 // `level_coeff_pa` and returns the exhaust channel's RMS over the last 0.8 s
@@ -904,7 +1035,7 @@ real v9_exhaust_rms(real rpm, real p_im, real level_coeff_pa) {
 }
 }  // namespace
 
-TEST_CASE("A8 V9: flow-noise level increases monotonically with load and rpm; WOT pass-by estimate",
+TEST_CASE("A8 V9: flow-noise level increases monotonically with load and rpm (shape only)",
           "[audio][cycle][pipe][long]") {
     // Isolated flow-noise contribution at each point: RMS with the layer on
     // minus RMS with it off, combined in QUADRATURE (the noise is an
@@ -929,21 +1060,119 @@ TEST_CASE("A8 V9: flow-noise level increases monotonically with load and rpm; WO
     for (std::size_t i = 1; i < noise_rms.size(); ++i) {
         CHECK(noise_rms[i] > noise_rms[i - 1]);
     }
-    // WOT pass-by estimate (spec: 60-90 dB(A) at some representative WOT
-    // point) [A]: 1/r spherical falloff from the "Pa at 1 m" reference
-    // convention (source.h's Calibration/SourceInfo) to a nominal 7.5 m
-    // pass-by distance, on the FULL exhaust signal (periodic note + flow
-    // noise), not just the isolated noise term - a pass-by measurement
-    // hears the whole exhaust, not only its broadband floor.
-    // NOT A-weighted: this codebase has no A-weighting filter, so this is
-    // a broadband/unweighted SPL proxy for the brief's dB(A) band, not a
-    // true dB(A) figure - disclosed here and in the final report.
-    const real wot_full = v9_exhaust_rms(6000.0, 95000.0, kV9PassByCoeffPa);
-    const real pass_by_pa = wot_full / 7.5;
-    const real spl_db = db(pass_by_pa / 20e-6);
-    std::printf("A8 V9 WOT pass-by estimate at 7.5 m (unweighted): %.4e Pa, %.1f dB SPL\n", pass_by_pa, spl_db);
-    CHECK(spl_db > 60.0);
-    CHECK(spl_db < 90.0);
+    // ps_audio A8b: the A8 WOT pass-by estimate that followed here (a
+    // 60-90 dB band reached through the fitted 1.3e-6 coefficient) is gone;
+    // "A8b V9" checks the level physics-only.
+}
+
+TEST_CASE("A8b V9: WOT order-2 outlet pressure equals the monopole estimate from the outlet volume velocity",
+          "[audio][cycle][pipe]") {
+    // ps_audio A8b point 3: the radiated level validated from physics only,
+    // flow noise OFF (FlowNoiseSettings::level_coeff_pa default 0 - no
+    // chosen coefficient anywhere in this check). At a steady WOT point the
+    // exhaust source's order-2 pressure at 1 m must equal an INDEPENDENT
+    // simple-source estimate |p| = rho_amb * omega * |Q| / (4 pi r) (Kinsler
+    // et al., Fundamentals of Acoustics, 4th ed. 2000 [A: simple source],
+    // r = 1 m, rho_amb = p_amb / (R_air T_amb) with R_air = 287.05 J/(kg K)
+    // computed here, not read from the engine) from the outlet's own volume
+    // velocity Q (EngineCore::radiating_outflow, the FV/WG pipe physics'
+    // output). Catches a calibration that drops rho or 4 pi (sabotage table:
+    // measured: 4 pi dropped reads 12.52x, rho dropped 0.816x), a wrong reference
+    // distance or a mis-scaled derivative. The absolute WOT level itself is
+    // printed (unweighted, 1 m and a 7.5 m 1/r pass-by proxy) - no cited
+    // measured tailpipe level for a comparable I4 was found open access, see
+    // out/audio_a8b_progress.md.
+    const real rpm = 6000.0, p_im = 95000.0;
+    VoiceSettings vs = coarse_settings(rpm, p_im);
+    vs.engine.variation_scale = 0.0;
+    REQUIRE(vs.flow_noise.level_coeff_pa == 0.0);
+    Voice v(fixture(), test::kCycleFixtureLhv, test::kCycleFixtureAfr, vs);
+    const int ex = exhaust_source_index(v);
+    REQUIRE(ex >= 0);
+    Driver drv(v);
+    auto in = [&](real t) { return steady_input(t, rpm, p_im); };
+    drv.run(0.5, in, nullptr);
+    const int n_cycles = 25;  // 0.5 s at 6000 rpm
+    const std::size_t n = static_cast<std::size_t>(n_cycles * 2 * 60.0 / rpm * kFs + 0.5);
+    const int ns = v.source_count();
+    std::vector<real> p(n), q(n);
+    std::vector<float> rec;
+    for (std::size_t k = 0; k < n; ++k) {
+        rec.clear();
+        drv.run(1.0 / kFs, in, &rec);
+        REQUIRE(rec.size() == static_cast<std::size_t>(ns));
+        p[k] = rec[static_cast<std::size_t>(ex)];
+        q[k] = v.engine().core().radiating_outflow(ex);
+    }
+    const real omega2 = 2.0 * omega_of(rpm);
+    const real rho_amb = vs.engine.p_amb_pa / (287.05 * vs.engine.t_amb_k);
+    const real q2 = goertzel_amp(q, 4.0 * n_cycles);
+    const real p2 = goertzel_amp(p, 4.0 * n_cycles);
+    const real p2_est = rho_amb * omega2 * q2 / (4.0 * kPi * 1.0);
+    const real p_rms = rms(p, 0, n);
+    std::printf("A8b V9: order-2 |Q| %.4e m^3/s, |p| %.4e Pa vs monopole %.4e Pa (ratio %.5f); rms %.4e Pa = %.1f dB "
+                "at 1 m, %.1f dB at 7.5 m (unweighted, 1/r)\n",
+                q2, p2, p2_est, p2 / p2_est, p_rms, db(p_rms / 20e-6), db(p_rms / 7.5 / 20e-6));
+    CHECK(std::fabs(p2 / p2_est - 1.0) < 0.01);
+    CHECK(p2 > 0.0);
+}
+
+TEST_CASE("A8b HF diag: WOT octave-band levels at the default audio grid vs a halved grid and step",
+          "[.][diag][audio]") {
+    // Coordinator question (listening test): almost no energy above 2 kHz.
+    // Discriminator: the same steady WOT point rendered at the default audio
+    // grid (dx 0.032 / 0.017 m, h = 1/48000) and at half the grid AND half
+    // the step (dx 0.016 / 0.0085 m, substeps 2, same CFL). A band that gains
+    // many dB on the finer grid is being removed by the FV scheme's numerical
+    // dissipation, not by the modelled physics. Engine-cycle harmonics
+    // (variation off: an exactly periodic steady state) summed per octave.
+    const real rpm = 6000.0, p_im = 95000.0;
+    const int n_cycles = 50;  // 1 s
+    const real bands[] = {125, 250, 500, 1000, 2000, 4000, 8000};
+    for (int grid = 0; grid < 3; ++grid) {
+        VoiceSettings vs = coarse_settings(rpm, p_im);
+        vs.engine.variation_scale = 0.0;
+        vs.engine.plenum_loop = false;
+        if (grid == 0) {
+            vs.engine.dx_exhaust_m = 0.032;
+            vs.engine.dx_intake_m = 0.017;
+        } else if (grid == 1) {
+            vs.substeps = 2;
+            vs.engine.dx_exhaust_m = 0.016;
+            vs.engine.dx_intake_m = 0.0085;
+        } else {
+            vs.substeps = 2;
+            vs.engine.dx_exhaust_m = 0.032;
+            vs.engine.dx_intake_m = 0.017;
+        }
+        Voice v(fixture(), test::kCycleFixtureLhv, test::kCycleFixtureAfr, vs);
+        Driver drv(v);
+        auto in = [&](real t) { return steady_input(t, rpm, p_im); };
+        drv.run(0.5, in, nullptr);
+        std::vector<float> rec;
+        const std::size_t n = static_cast<std::size_t>(n_cycles * 120.0 / rpm * kFs + 0.5);
+        drv.run(static_cast<real>(n) / kFs, in, &rec);
+        const int ns = v.source_count();
+        for (int s = 0; s < ns; ++s) {
+            const std::vector<real> x = channel(rec, ns, s, 0, n);
+            std::printf("A8b HF grid %d (%s) source %d (%s):", grid,
+                        grid == 0 ? "dx 0.032/0.017, h 1/48k" : (grid == 1 ? "dx 0.016/0.0085, h 1/96k" : "dx 0.032/0.017, h 1/96k"),
+                        s, v.source(s).intake ? "intake" : "exhaust");
+            for (int b = 0; b < 7; ++b) {
+                const real lo = bands[b] / std::sqrt(2.0), hi = bands[b] * std::sqrt(2.0);
+                real e = 0.0;
+                for (int k = 1;; ++k) {
+                    const real f = k * rpm / 120.0;
+                    if (f >= hi) break;
+                    if (f < lo) continue;
+                    const real a = goertzel_amp(x, static_cast<real>(k * n_cycles));
+                    e += 0.5 * a * a;
+                }
+                std::printf(" %gHz %.1fdB", bands[b], 10.0 * std::log10(e / (20e-6 * 20e-6) + 1e-30));
+            }
+            std::printf("\n");
+        }
+    }
 }
 
 TEST_CASE("A8 V9 sabotage diag: calibration off by rho or 4pi", "[.][diag][audio]") {
@@ -967,7 +1196,10 @@ TEST_CASE("A8 V10: radiated power bound, no NaN/Inf, peak below full scale at WO
     const real rpm = 6500.0, p_im = 98000.0;  // near-redline WOT for this [AS] fixture
     VoiceSettings vs = coarse_settings(rpm, p_im);
     vs.engine.variation_scale = 0.0;
-    vs.flow_noise.level_coeff_pa = kV9PassByCoeffPa;
+    // ps_audio A8b: flow noise off (the default) - the A8 version set the
+    // fitted pass-by coefficient here; the bounds below now see the modelled
+    // pipe physics only.
+    REQUIRE(vs.flow_noise.level_coeff_pa == 0.0);
     Voice v(fixture(), test::kCycleFixtureLhv, test::kCycleFixtureAfr, vs);
     Driver drv(v);
     auto in = [&](real t) { return steady_input(t, rpm, p_im); };
@@ -1012,13 +1244,13 @@ TEST_CASE("A8 V10: radiated power bound, no NaN/Inf, peak below full scale at WO
 }
 
 TEST_CASE("A8 V10 sabotage diag: missing loss term (cranked flow-noise coefficient)", "[.][diag][audio]") {
-    // Simulates "a missing loss/clamp term" by cranking level_coeff_pa far
-    // above the calibrated value - demonstrates the peak-below-full-scale
-    // and radiated-power checks both catch it.
+    // Simulates "a missing loss/clamp term" by switching on a large
+    // flow-noise term (V10 itself runs with it off) - demonstrates the
+    // peak-below-full-scale and radiated-power checks both catch it.
     const real rpm = 6500.0, p_im = 98000.0;
     VoiceSettings vs = coarse_settings(rpm, p_im);
     vs.engine.variation_scale = 0.0;
-    vs.flow_noise.level_coeff_pa = kV9PassByCoeffPa * 3000.0;  // sabotage: 3000x too large
+    vs.flow_noise.level_coeff_pa = kV9FlowNoiseCoeffPa;  // sabotage: the exaggerated shape-test coefficient
     Voice v(fixture(), test::kCycleFixtureLhv, test::kCycleFixtureAfr, vs);
     Driver drv(v);
     auto in = [&](real t) { return steady_input(t, rpm, p_im); };

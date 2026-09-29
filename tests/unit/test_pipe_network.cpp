@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -578,7 +579,7 @@ TEST_CASE("V-radiation W1 sabotage diag: flanged/unflanged K swapped moves the p
 }
 
 TEST_CASE("V-radiation W2: turning radiation on measurably increases a closed-open resonator's simulated decay",
-          "[drivetrain][cycle][pipe][audio][long]") {
+          "[drivetrain][cycle][pipe][audio]") {
     // Black-box, simulated: a closed-open quarter-wave resonator (P4's own
     // "closed-open quarter wave" geometry) with wall friction and heat
     // transfer both disabled (the ONLY remaining loss mechanisms are FV
@@ -599,10 +600,11 @@ TEST_CASE("V-radiation W2: turning radiation on measurably increases a closed-op
     // wrong-sign wiring bug at the reservoir_face() call site - the ONE
     // thing W1's formula-level check above cannot see, since that pole could
     // be computed correctly and simply never applied), and the EXCESS decay
-    // it adds must be within an order of magnitude of the analytic
-    // radiation-only rate (catches a wiring bug of the wrong SCALE, e.g. a
-    // missing 0.5 factor or a units mixup) while allowing generously for the
-    // numerical-dissipation confound W1 documents.
+    // it adds must match the analytic radiation-only rate within the bound
+    // below (catches a wiring bug of the wrong SCALE, e.g. a missing 0.5
+    // factor or a units mixup, and any extra boundary loss). ps_audio A8b:
+    // the order-of-magnitude bound this test first had covered a 5.3x
+    // excess that was a reservoir-face deadband, not the radiation.
     auto make_net = [](bool radiation) {
         const double length = 0.40, dia = 0.05;
         PipeDesc p = make_pipe(
@@ -666,10 +668,336 @@ TEST_CASE("V-radiation W2: turning radiation on measurably increases a closed-op
         "%.4f 1/s (ratio %.2fx)\n",
         f_off, rate_off, f_on, rate_on, excess, rate_ex, excess / rate_ex);
     CHECK(rate_on > rate_off);            // radiation strictly increases dissipation (sign)
-    CHECK(excess > 0.1 * rate_ex);        // not negligible relative to the analytic loss (missing/too-weak wiring)
-    CHECK(excess < 10.0 * rate_ex);       // not wildly too strong either (wrong-scale wiring)
+    // ps_audio A8b: measured 0.861x (was 5.26x before the reservoir face's
+    // inflow branch matched pressure and velocity across the contact - the
+    // old deadband stopped the "on" ring at ~0.03 Pa, so the 1.5 s DFT
+    // window read a collapse, not a decay; P10 and the "A8b W2 diag"
+    // cases). The pulse echo gives 1 - |R| = 0.00383 vs K (ka)^2 = 0.00419
+    // at 200 Hz (0.914x, the one-pole's own low-frequency shortfall), so the
+    // resonator's 0.86x is the filter, not the scheme. Bound [0.75, 1.0].
+    CHECK(excess > 0.75 * rate_ex);
+    CHECK(excess < 1.0 * rate_ex);
     CHECK(std::isfinite(rate_on));
     CHECK(std::isfinite(rate_off));
+}
+
+TEST_CASE("A8b W2 diag: closed-open resonator decay by excitation, amplitude and grid", "[.][diag][drivetrain][cycle][pipe]") {
+    // ps_audio A8b W2 discriminator for V-radiation W2's 5.3x excess: the
+    // same resonator, radiation off/on, excited by (a) W2's own pulse at
+    // 1e-2, (b) the same pulse at 1e-4 (nonlinearity), (c) the fundamental's
+    // own mode shape cos(pi x / 2 L) at 1e-4 (harmonic content: a TVD
+    // limiter clips smooth extrema, so the interior's numerical decay of the
+    // fundamental depends on what else is ringing), each at dx 0.017 / h and
+    // dx 0.0085 / h/2.
+    const double length = 0.40, dia = 0.05, c = 343.2, radius = 0.025;
+    auto run = [&](bool radiation, int ic, double amp, double dx) {
+        const double hh = kHFull * dx / 0.017;
+        PipeDesc p = make_pipe(
+            "qw", length, dia, dia, dx, closed_end(),
+            radiation ? PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged, true} : open_end(EndCorrection::Unflanged),
+            500.0);
+        p.wall.friction = WallFriction::None;
+        p.wall.heat_transfer = false;
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        PipeNetwork net(d, hh);
+        if (ic == 0) {
+            gaussian_pulse(net, 0, 101325.0, 293.15, 0.0, amp, 0.05, 0.04);
+        } else {
+            const int n = net.cell_count(0);
+            const double lc = n * dx;
+            for (int i = 0; i < n; ++i) {
+                const double pp = 101325.0 * (1.0 + amp * std::cos(0.5 * kPi * net.cell_center_m(0, i) / lc));
+                const double t = 293.15 * std::pow(pp / 101325.0, 0.4 / 1.4);
+                net.set_cell(0, i, pp, t, 0.0, 0.0);
+            }
+        }
+        const int stride = static_cast<int>(4.0 * kHFull / hh + 0.5);
+        const double dt = stride * hh;
+        const int n_win = 2304, gap = 17280;
+        std::vector<double> s;
+        s.reserve(static_cast<std::size_t>(gap + n_win));
+        for (int k = 0; k < (gap + n_win) * stride; ++k) {
+            net.step();
+            if (k % stride == 0) s.push_back(net.cell(0, 0).p);
+        }
+        const double f_est = c / (4.0 * (length + kUnflangedEndCorrection * radius));
+        const double f = peak_frequency(std::vector<double>(s.begin(), s.begin() + n_win), dt, 0.8 * f_est, 1.2 * f_est);
+        double mean0 = 0.0;
+        for (int i = 0; i < n_win; ++i) mean0 += s[static_cast<std::size_t>(i)];
+        mean0 /= n_win;
+        std::vector<double> w0(s.begin(), s.begin() + n_win), w1(s.begin() + gap, s.begin() + gap + n_win);
+        for (double& v : w0) v -= mean0;
+        for (double& v : w1) v -= mean0;
+        w0 = hann(w0);
+        w1 = hann(w1);
+        return std::pair<double, double>{f, -std::log(dft_mag(w1, dt, f) / dft_mag(w0, dt, f)) / (gap * dt)};
+    };
+    struct V {
+        int ic;
+        double amp, dx;
+        const char* name;
+    };
+    const V vs[] = {{0, 1e-2, 0.017, "pulse 1e-2 dx 0.017"},  {0, 1e-4, 0.017, "pulse 1e-4 dx 0.017"},
+                    {1, 1e-4, 0.017, "mode 1e-4 dx 0.017"},   {0, 1e-2, 0.0085, "pulse 1e-2 dx 0.0085"},
+                    {0, 1e-4, 0.0085, "pulse 1e-4 dx 0.0085"}, {1, 1e-4, 0.0085, "mode 1e-4 dx 0.0085"}};
+    for (const V& v : vs) {
+        const auto [f_off, r_off] = run(false, v.ic, v.amp, v.dx);
+        const auto [f_on, r_on] = run(true, v.ic, v.amp, v.dx);
+        const double ka = 2.0 * kPi * f_on * radius / c;
+        const double rate_ex = -c * std::log(1.0 - 0.5 * ka * ka) / (2.0 * (c / (4.0 * f_on)));
+        std::printf("A8b W2 res %-22s: off f %.3f decay %.4f; on f %.3f decay %.4f; excess %.4f vs analytic %.4f (%.2fx)\n",
+                    v.name, f_off, r_off, f_on, r_on, r_on - r_off, rate_ex, (r_on - r_off) / rate_ex);
+    }
+}
+
+TEST_CASE("A8b W2 diag: resonator mode amplitude vs time", "[.][diag][drivetrain][cycle][pipe]") {
+    // Closed-end amplitude per 0.05 s window of the mode-shape IC, printed
+    // with the log-rate since the previous window. Variants: radiation
+    // off/on, dx 0.017 / 0.0085 (h scaled), and the ambient temperature
+    // offset from the pipe gas (dT < 0: the pipe gas is hotter than the
+    // ambient, dT > 0: colder) - the discriminator for the open-end
+    // inflow/outflow branch mismatch.
+    const double length = 0.40, dia = 0.05;
+    struct V {
+        int rad;
+        double dx, dt;
+    };
+    const V vs[] = {{0, 0.017, 0.0},  {0, 0.0085, 0.0}, {1, 0.017, 0.0},   {1, 0.0085, 0.0},
+                    {0, 0.017, -1e-4}, {0, 0.017, 1e-4}, {0, 0.017, -1e-2}, {1, 0.017, 1e-4}};
+    for (const V& v : vs) {
+        const double dx = v.dx;
+        const double hh = kHFull * dx / 0.017;
+        PipeDesc p = make_pipe(
+            "qw", length, dia, dia, dx, closed_end(),
+            v.rad ? PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged, true} : open_end(EndCorrection::Unflanged),
+            500.0);
+        p.wall.friction = WallFriction::None;
+        p.wall.heat_transfer = false;
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        d.ambient.t_k = 293.15 + v.dt;
+        PipeNetwork net(d, hh);
+        const double gamma = (net.gas().fresh.cv(293.15) + net.gas().r_mix(0.0)) / net.gas().fresh.cv(293.15);
+        const int n = net.cell_count(0);
+        const double lc = n * dx;
+        for (int i = 0; i < n; ++i) {
+            const double pp = 101325.0 * (1.0 + 1e-4 * std::cos(0.5 * kPi * net.cell_center_m(0, i) / lc));
+            net.set_cell(0, i, pp, 293.15 * std::pow(pp / 101325.0, (gamma - 1.0) / gamma), 0.0, 0.0);
+        }
+        const int per = static_cast<int>(0.05 / hh + 0.5);
+        std::printf("A8b W2 amp rad %d dx %.4f dT %+.0e:", v.rad, dx, v.dt);
+        double prev = 0.0;
+        for (int w = 0; w < 60; ++w) {
+            double mx = 0.0;
+            for (int k = 0; k < per; ++k) {
+                net.step();
+                mx = std::max(mx, std::fabs(net.cell(0, 0).p - 101325.0));
+            }
+            if (w % 4 == 0) std::printf(" t%.2f %.3g(%.2f)", (w + 1) * 0.05, mx, w ? -std::log(mx / prev) / 0.05 : 0.0);
+            prev = mx;
+        }
+        std::printf("\n");
+    }
+}
+
+TEST_CASE("A8b HF diag: FV numerical propagation loss per metre vs frequency at the audio dx", "[.][diag][drivetrain][cycle][pipe]") {
+    // ps_audio A8b, coordinator's HF question. Exhaust-like gas (800 K,
+    // burned), no wall terms, so every loss is the scheme's own. A narrow
+    // pulse at 0.5 m in a 4 m closed-closed pipe; the right-going wave
+    // p+ = (p' + rho a u)/2 is recorded at 1.0 m and 2.0 m (windows before
+    // the wall reflection arrives), and |P+(2 m)/P+(1 m)| is the loss over
+    // 1 m. dx 0.032 m is the live exhaust default; 0.016 m and 0.0085 m at
+    // the same CFL (h scaled).
+    for (double dx : {0.032, 0.016, 0.0085}) {
+        const double hh = (1.0 / 48000.0) * dx / 0.032;
+        PipeDesc p = make_pipe("hf", 4.0, 0.05, 0.05, dx, closed_end(), closed_end(), 900.0);
+        p.wall.friction = WallFriction::None;
+        p.wall.heat_transfer = false;
+        p.initial = GasStateDesc{101325.0, 800.0, 1.0};
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        PipeNetwork net(d, hh);
+        gaussian_pulse(net, 0, 101325.0, 800.0, 1.0, 1e-4, 0.5, 0.008);
+        const double a = sound_speed(net, 800.0, 1.0);
+        const double rho = 101325.0 / (net.gas().r_mix(1.0) * 800.0);
+        int i1 = 0, i2 = 0;
+        while (net.cell_center_m(0, i1) < 1.0) ++i1;
+        while (net.cell_center_m(0, i2) < 2.0) ++i2;
+        const double freqs[] = {500.0, 1000.0, 2000.0, 4000.0, 8000.0};
+        std::complex<double> s1[5], s2[5];
+        const int steps = static_cast<int>(0.0036 / hh);
+        for (int k = 0; k < steps; ++k) {
+            net.step();
+            const double t = (k + 1) * hh;
+            const PipeCellState c1 = net.cell(0, i1), c2 = net.cell(0, i2);
+            const double p1 = 0.5 * ((c1.p - 101325.0) + rho * a * c1.u);
+            const double p2 = 0.5 * ((c2.p - 101325.0) + rho * a * c2.u);
+            for (int j = 0; j < 5; ++j) {
+                const std::complex<double> e = std::polar(1.0, -2.0 * kPi * freqs[j] * t);
+                if (t < 0.0018) s1[j] += p1 * e;
+                if (t >= 0.0018) s2[j] += p2 * e;
+            }
+        }
+        std::printf("A8b HF prop dx %.4f (%.1f cells per 2 kHz wavelength):", dx, a / 2000.0 / dx);
+        for (int j = 0; j < 5; ++j)
+            std::printf(" %gHz %.2fdB/m", freqs[j], 20.0 * std::log10(std::abs(s2[j]) / std::abs(s1[j])));
+        std::printf("\n");
+    }
+}
+
+TEST_CASE("A8b W2 diag: FV open-end reflection by pulse echo, radiation on/off, two dx", "[.][diag][drivetrain][cycle][pipe]") {
+    // ps_audio A8b W2 discriminator: the FV open end's own reflection
+    // coefficient R(f), isolated from the interior's numerical dissipation.
+    // A 3 m closed-start pipe, a pressure pulse at 1 m; at a probe cell at
+    // 1.5 m the right-going wave p+ = (p' + rho a u)/2 carries the direct
+    // half (window 0..4 ms), the left-going p- its echo from the end (window
+    // 8..13 ms). R(f) = P-(f)/P+(f) for the open end is divided by the same
+    // ratio for a closed end (R = +1 exactly, same interior path), so the
+    // interior loss cancels. The phase of R_open/R_closed * (-1) gives the
+    // end's effective extra length dL = -arg / (2k).
+    struct Out {
+        double mag = 0.0, dl = 0.0;
+    };
+    auto run = [](int kind, double dx, double f) {
+        const double length = 3.0, dia = 0.05;
+        PipeEndDesc end = kind == 0 ? closed_end()
+                                    : (kind == 1 ? open_end(EndCorrection::Unflanged)
+                                                 : PipeEndDesc{PipeEndDesc::Kind::Open, -1, EndCorrection::Unflanged, true});
+        PipeDesc p = make_pipe("echo", length, dia, dia, dx, closed_end(), end, 500.0);
+        p.wall.friction = WallFriction::None;
+        p.wall.heat_transfer = false;
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        const double hh = kHFull * dx / 0.017;  // same CFL at both dx
+        PipeNetwork net(d, hh);
+        gaussian_pulse(net, 0, 101325.0, 293.15, 0.0, 1e-4, 1.0, 0.03);
+        int probe = 0;
+        while (net.cell_center_m(0, probe) < 1.5) ++probe;
+        const int steps = static_cast<int>(0.013 / hh);
+        std::vector<std::complex<double>> acc(2);
+        const double rho = 101325.0 / (287.0 * 293.15);
+        const double a = sound_speed(net, 293.15, 0.0);
+        for (int k = 0; k < steps; ++k) {
+            net.step();
+            const double t = (k + 1) * hh;
+            const PipeCellState c = net.cell(0, probe);
+            const double pp = 0.5 * ((c.p - 101325.0) + rho * a * c.u);
+            const double pm = 0.5 * ((c.p - 101325.0) - rho * a * c.u);
+            const std::complex<double> e = std::polar(1.0, -2.0 * kPi * f * t);
+            if (t < 0.004) acc[0] += pp * e;
+            if (t > 0.008) acc[1] += pm * e;
+        }
+        return acc[1] / acc[0];
+    };
+    const double c = 343.2, radius = 0.025;
+    for (double dx : {0.017, 0.0085}) {
+        for (double f : {100.0, 200.0, 400.0, 800.0}) {
+            const std::complex<double> rc = run(0, dx, f);
+            const std::complex<double> ro = run(1, dx, f) / rc;
+            const std::complex<double> rr = run(2, dx, f) / rc;
+            const double k = 2.0 * kPi * f / c, ka = k * radius;
+            // Open end: R = -exp(-2jk dL) for an extra length dL beyond the
+            // pipe; the FV places the end correction inside the pipe
+            // (extension), so the plain end's dL ~ 0.6133 a is expected.
+            const double dl_o = -std::arg(-ro) / (2.0 * k), dl_r = -std::arg(-rr) / (2.0 * k);
+            std::printf(
+                "A8b W2 echo dx %.4f f %5.0f: plain |R| %.5f dL %.5f m; radiating |R| %.5f (1-|R| %.5f vs K(ka)^2 "
+                "%.5f) dL %.5f m (extra %.5f m)\n",
+                dx, f, std::abs(ro), dl_o, std::abs(rr), 1.0 - std::abs(rr), 0.5 * ka * ka, dl_r, dl_r - dl_o);
+        }
+    }
+}
+
+TEST_CASE("P9 runtime CFL: a hot supersonic backflow jet into a near-vacuum runner stays bounded",
+          "[drivetrain][cycle][pipe]") {
+    // ps_audio A8b (the free_rev blow-up, out/audio_a8b_progress.md): the
+    // build-time CFL check bounds h * max_wave_speed_m_s / dx with an ASSUMED
+    // wave speed (intake 500 m/s). At valve overlap under a near-vacuum
+    // manifold (DFCO, ~6 kPa) the cylinder blows hot gas back into the runner
+    // as a supersonic jet (measured in the demo engine: u -857 m/s, Mach 2.1,
+    // |u| + a ~ 1260 m/s = CFL 1.5 at the default audio dx 0.017 m) and the
+    // explicit update diverged to NaN. This rig reproduces it standalone: an
+    // audio-grade intake runner (dx 0.017 m, assumed 500 m/s, passes the
+    // build check at CFL 0.61) at 6 kPa / 300 K, its port held at 100 kPa /
+    // 1000 K burned. Catches a missing runtime CFL guard (sabotage: step_pipe
+    // never sub-cycles -> non-finite state within the run).
+    PipeDesc p = make_pipe("runner", 0.35, 0.040, 0.040, 0.017, closed_end(), port_end(0), 500.0);
+    p.initial = GasStateDesc{6000.0, 300.0, 0.0};
+    PipeNetworkDesc d;
+    d.pipes.push_back(p);
+    d.ports.push_back(PortDesc{"port", 150e-6});
+    PipeNetwork net(d, 1.0 / 48000.0);
+    bool finite = true;
+    double p_min = 1e30, p_max = 0.0, mach_max = 0.0;
+    for (int k = 0; k < 2400 && finite; ++k) {  // 50 ms
+        net.set_port_state(0, PortState{100000.0, 1000.0, 1.0});
+        net.step();
+        for (int i = 0; i < net.cell_count(0); ++i) {
+            const PipeCellState c = net.cell(0, i);
+            if (!(std::isfinite(c.p) && std::isfinite(c.u) && c.p > 0.0 && c.rho > 0.0)) finite = false;
+            p_min = std::fmin(p_min, c.p);
+            p_max = std::fmax(p_max, c.p);
+            mach_max = std::fmax(mach_max, std::fabs(c.u) / c.a);
+        }
+    }
+    std::printf("P9: finite %d, cell p %.0f..%.0f Pa, max Mach %.2f, sub-cycled pipe-steps %llu of 2400\n",
+                finite ? 1 : 0, p_min, p_max, mach_max, static_cast<unsigned long long>(net.subcycled_pipe_steps()));
+    CHECK(finite);
+    CHECK(net.subcycled_pipe_steps() > 0);  // the jet does exceed the assumed wave speed (scenario sanity)
+    CHECK(p_min > 0.0);  // (p_max may exceed the port: the jet's shock reflects off the closed end)
+}
+
+TEST_CASE("P10 open-end inflow: a small ring decays the same whatever the ambient-vs-pipe temperature",
+          "[drivetrain][cycle][pipe]") {
+    // ps_audio A8b. A reservoir face's inflow branch used to match the
+    // interior's Riemann invariant with the RESERVOIR's sound speed, so at
+    // u = 0 it disagreed with the outflow branch by 2 (a_pipe - a_res)/gm1
+    // whenever the two temperatures differed: a velocity deadband for a
+    // hotter pipe (a Coulomb-like loss that stopped a resonator's ring
+    // exactly - 10 Pa in 0.2 s at 0.01 K) and a jump for a colder one (a
+    // stuck residual). Now the face matches pressure and velocity across the
+    // contact. W2's closed-open resonator (no wall terms), its fundamental
+    // excited at 1e-4 through its own mode shape, ambient 0.01 K below / at /
+    // above the pipe gas: the closed-end amplitude at 0.25 s and 1.0 s and
+    // the log-decay between them must match the equal-temperature run.
+    auto run = [](double dt_amb) {
+        PipeDesc p = make_pipe("qw", 0.40, 0.05, 0.05, 0.017, closed_end(), open_end(EndCorrection::Unflanged), 500.0);
+        p.wall.friction = WallFriction::None;
+        p.wall.heat_transfer = false;
+        PipeNetworkDesc d;
+        d.pipes.push_back(p);
+        d.ambient.t_k = 293.15 + dt_amb;
+        PipeNetwork net(d, kHFull);
+        const double cv = net.gas().fresh.cv(293.15), gamma = (cv + net.gas().r_mix(0.0)) / cv;
+        const int n = net.cell_count(0);
+        const double lc = n * 0.017;
+        for (int i = 0; i < n; ++i) {
+            const double pp = 101325.0 * (1.0 + 1e-4 * std::cos(0.5 * kPi * net.cell_center_m(0, i) / lc));
+            net.set_cell(0, i, pp, 293.15 * std::pow(pp / 101325.0, (gamma - 1.0) / gamma), 0.0, 0.0);
+        }
+        // Max |p'| at the closed end over [0.20, 0.25] s and [0.95, 1.0] s.
+        double a1 = 0.0, a2 = 0.0;
+        const int steps = static_cast<int>(1.0 / kHFull + 0.5);
+        for (int k = 1; k <= steps; ++k) {
+            net.step();
+            const double t = k * kHFull, v = std::fabs(net.cell(0, 0).p - 101325.0);
+            if (t > 0.20 && t <= 0.25) a1 = std::max(a1, v);
+            if (t > 0.95) a2 = std::max(a2, v);
+        }
+        return std::pair<double, double>{a1, a2};
+    };
+    const auto [e1, e2] = run(0.0);
+    const double rate_e = std::log(e1 / e2) / 0.75;
+    for (double dt : {-0.01, 0.01}) {
+        const auto [a1, a2] = run(dt);
+        const double rate = std::log(a1 / a2) / 0.75;
+        std::printf("P10 ambient %+.2f K: |p'| %.5f / %.5f Pa (equal T %.5f / %.5f), rate %.4f vs %.4f 1/s\n", dt, a1,
+                    a2, e1, e2, rate, rate_e);
+        CHECK(rel(a1, e1) < 1e-3);
+        CHECK(rel(a2, e2) < 1e-3);
+        CHECK(std::fabs(rate - rate_e) < 0.01 * rate_e);
+    }
 }
 
 TEST_CASE("P5 pipe port hand-off with a prescribed mass-flow/enthalpy source", "[drivetrain][cycle][pipe]") {
@@ -697,6 +1025,8 @@ TEST_CASE("P5 pipe port hand-off with a prescribed mass-flow/enthalpy source", "
     double src_m = 0.0, src_e = 0.0;
     double port_m_sum = 0.0;
     double p_port_max = 0.0, p_port_end = 0.0, amb_out_window = 0.0;
+    double tail_sum = 0.0, tail_min = 1e30, tail_max = -1e30;
+    int tail_n = 0;
     const int steps = static_cast<int>(0.3 / net.h());
     const int s_on_end = static_cast<int>(0.2 / net.h());
     const int s_win0 = static_cast<int>(0.15 / net.h());
@@ -705,6 +1035,12 @@ TEST_CASE("P5 pipe port hand-off with a prescribed mass-flow/enthalpy source", "
         net.set_port_state(0, PortState{cs.p, cs.t, cs.x});
         p_port_max = std::max(p_port_max, cs.p);
         p_port_end = cs.p;
+        if (s >= steps - static_cast<int>(0.05 / net.h())) {
+            tail_sum += cs.p;
+            tail_min = std::min(tail_min, cs.p);
+            tail_max = std::max(tail_max, cs.p);
+            ++tail_n;
+        }
         const double amb_before = net.exchange().ambient_mass_kg;
         net.step();
         const PortFlux& f = net.port_flux(0);
@@ -726,6 +1062,9 @@ TEST_CASE("P5 pipe port hand-off with a prescribed mass-flow/enthalpy source", "
                 "open-end outflow %.5f kg/s vs source %.5f (%+.3f %%); port p max %.0f Pa, end %.0f Pa\n",
                 m_close, e_close, b_close, src_m, src_e, mdot_out, mdot_src, 100.0 * (mdot_out / mdot_src - 1.0),
                 p_port_max, p_port_end);
+    const double tail_mean = tail_sum / tail_n;
+    std::printf("P5 port tail (last 50 ms): mean %.1f Pa above ambient, peak-to-peak %.1f Pa\n", tail_mean - 101325.0,
+                tail_max - tail_min);
     CHECK(std::fabs(m_close) < 1e-12 * src_m);
     CHECK(std::fabs(e_close) < 1e-12 * src_e);
     CHECK(std::fabs(b_close) < 1e-12 * src_m);
@@ -733,7 +1072,14 @@ TEST_CASE("P5 pipe port hand-off with a prescribed mass-flow/enthalpy source", "
     // Quasi-steady over the last 50 ms of injection: the open end carries the source.
     CHECK(rel(mdot_out, mdot_src) < 0.03);
     CHECK(p_port_max > 101325.0 + 1000.0);
-    CHECK(std::fabs(p_port_end - 101325.0) < 2000.0);
+    // Drained: the port's mean pressure over the last 50 ms is back at the
+    // ambient. ps_audio A8b: this was a single end sample within 2000 Pa,
+    // which read the phase of the pipe's quarter-wave ring (peak-to-peak
+    // 7.7 kPa) rather than the drain. The mean is -18.1 Pa; before the
+    // reservoir face's inflow branch matched p and u across the contact the
+    // hot pipe's open end was a check valve for small inflow and held
+    // +335.5 Pa (ring 13.5 kPa peak-to-peak).
+    CHECK(std::fabs(tail_mean - 101325.0) < 150.0);
 }
 
 TEST_CASE("P6 pipe CFL rejection at build time (dx 6.25 mm, h 21.7 us)", "[drivetrain][cycle][pipe]") {

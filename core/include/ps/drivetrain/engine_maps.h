@@ -42,10 +42,12 @@ namespace ps::drivetrain {
 // a lumped engine (no intake/exhaust pipe blocks) still generates through
 // the unchanged single-cylinder path and is stamped (and keyed) 1, so its
 // maps, content hash and state hash stay bit-identical to v1; a pipe-bearing
-// engine generates through CycleEngine and is stamped 2.
+// engine generates through CycleEngine and is stamped 2; ps_audio A8b: 3,
+// the catalyst gained its laminar substrate resistance (cycle_engine.cpp), so
+// every pipe engine's maps moved and its v2 cache files must not be reused.
 // engine_map_generator_version() picks the one a desc uses.
 inline constexpr std::uint32_t kLumpedGeneratorVersion = 1;
-inline constexpr std::uint32_t kPipeGeneratorVersion = 2;
+inline constexpr std::uint32_t kPipeGeneratorVersion = 3;
 inline constexpr std::uint32_t kGeneratorVersion = kPipeGeneratorVersion; // the newest path
 
 [[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {

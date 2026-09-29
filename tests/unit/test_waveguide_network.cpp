@@ -584,3 +584,53 @@ TEST_CASE("W8 quasi-steady resistance element: mean pressure drop, linearised tr
         CHECK(rel(net.linearised_mean_drop(), variant == 0 ? dp_ref : 2.0 * dp_ref) < 1e-12);
     }
 }
+
+TEST_CASE("W9 monolith resistance: laminar channel r_lin from the inlet segment's viscosity (ps_audio A8b)",
+          "[drivetrain][cycle][pipe]") {
+    // Catches: a monolith term that is missing, uses the wrong viscosity, the
+    // frontal instead of the channel velocity (missing 1/OFA) or d_h instead
+    // of d_h^2. A catalyst-like node (100 mm, 800 K burned gas, k_loss 0) with
+    // the generic substrate: dp = 2 fRe mu L u / (d_h^2 OFA) at the frontal
+    // velocity u; mu from Sutherland (1.716e-5 Pa s, 273 K, S 111 K - F. M.
+    // White, Viscous Fluid Flow) at 800 K, recomputed here. The same drop acts
+    // at zero mean flow as the acoustic R = r_lin / A (W8's transmission law).
+    WaveguideNetworkDesc d;
+    const double dia = 0.10, area = 0.25 * kPi * dia * dia, len = 0.16;
+    const GasStateDesc hot{101325.0, 800.0, 1.0};
+    d.nodes = {node(WgNodeDesc::Kind::Anechoic, "in"), node(WgNodeDesc::Kind::Resistance, "cat"),
+               node(WgNodeDesc::Kind::Anechoic, "out")};
+    d.segments.push_back(seg("a", 0.3, dia, 0, 1, EndCorrection::None, EndCorrection::None, WgLoss::None, hot));
+    d.segments.push_back(seg("b", 0.3, dia, 1, 2, EndCorrection::None, EndCorrection::None, WgLoss::None, hot));
+    const double d_h = 1.1049e-3, ofa = 0.7569, f_re = 14.227;
+    d.nodes[1].monolith_length_m = len;
+    d.nodes[1].monolith_d_h_m = d_h;
+    d.nodes[1].monolith_open_frontal_area = ofa;
+    d.nodes[1].monolith_f_re = f_re;
+    const double mu = 1.716e-5 * std::pow(800.0 / 273.0, 1.5) * (273.0 + 111.0) / (800.0 + 111.0);
+    const double r_lin = 2.0 * f_re * mu * len / (d_h * d_h * ofa);
+    const double mdot = 0.05;
+    WaveguideNetwork net(d, kHFull);
+    net.set_mean_mass_flow(mdot);
+    const double rho = net.segment_density(0);
+    const double dp_ref = r_lin * mdot / (rho * area);
+    const double z = 1.0 / net.segment_admittance(0), r_ac = r_lin / area;
+    WaveguideNetwork quiet(d, kHFull);  // zero mean flow: the laminar R stays
+    double t_sum = 0.0;
+    for (int k = 0; k < 4000; ++k) {
+        if (k == 0) quiet.set_node_wave(0, 1.0);
+        quiet.step();
+        t_sum += quiet.node_arriving_wave(2);
+    }
+    const double t_ref = 2.0 * z / (r_ac + 2.0 * z);
+    std::printf("W9 monolith: mu %.6e Pa s, r_lin %.4f Pa/(m/s), R/Z %.4f, dp %.6f vs %.6f Pa, T at rest %.9f vs %.9f\n",
+                mu, r_lin, r_ac / z, net.mean_pressure_drop(), dp_ref, t_sum, t_ref);
+    CHECK(rel(net.mean_pressure_drop(), dp_ref) < 1e-12);
+    CHECK(std::fabs(t_sum - t_ref) < 1e-9);
+    CHECK(t_ref < 0.8);  // scenario sanity: the substrate is a real loss at rest (R/Z ~0.7 here)
+    WaveguideNetworkDesc bad = d;
+    bad.nodes[1].monolith_open_frontal_area = 0.0;
+    CHECK_THROWS_AS(WaveguideNetwork(bad, kHFull), std::invalid_argument);
+    bad = d;
+    bad.nodes[1].monolith_d_h_m = 0.0;
+    CHECK_THROWS_AS(WaveguideNetwork(bad, kHFull), std::invalid_argument);
+}
