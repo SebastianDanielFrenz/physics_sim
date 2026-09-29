@@ -317,6 +317,9 @@ public:
     // Runner thread underran Godot's own draw rate. 0 for a healthy run;
     // -1 for an unknown vehicle or one with no voice.
     std::int64_t get_vehicle_voice_underrun_count(const godot::String& vehicle_name) const;
+    // Listener gain (Pa at 1 m mapped to full scale); > 0, default 15.
+    void set_voice_full_scale_pa(double pa);
+    double get_voice_full_scale_pa() const;
     // Teleports the vehicle's chassis body back to sim_position/yaw_rad
     // with zero velocity (IRigidBackend::set_pose/set_motion - PLAN.md M1
     // "reset vehicle" control), THEN calls ps::World::reset_vehicle (plan
@@ -513,6 +516,11 @@ private:
     // Main-thread only (read_vehicle_voice_audio is called from Godot's
     // _process, never the sim thread) - a plain map is fine, no atomics.
     std::unordered_map<std::string, std::int64_t> vehicle_voice_underrun_count_;
+    // Listener gain: read_vehicle_voice_audio divides the voice's Pa at 1 m
+    // by this, like tools/ps_engine_audio's --full-scale-pa. 15 Pa is the
+    // level of the owner's 'loud' listening renders (the calibrated 200 Pa
+    // default of ps_audio::Calibration sits near -40 dBFS - too quiet in-game).
+    double voice_full_scale_pa_ = 15.0;
 
     // Gamepad rumble (haptics_core.h): one previous world-frame chassis
     // linear-velocity sample per vehicle, for the finite-difference

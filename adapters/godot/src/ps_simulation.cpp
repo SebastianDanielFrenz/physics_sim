@@ -1024,16 +1024,27 @@ godot::PackedFloat32Array PsSimulation::read_vehicle_voice_audio(const String& v
     // threads, not this adapter-side readback call).
     std::vector<float> scratch(static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels));
     const std::size_t got = it->second->runner().read(scratch.data(), static_cast<std::size_t>(frames));
-    if (got < static_cast<std::size_t>(frames)) {
+    // Only an EMPTY ring counts: Godot asks for its whole free buffer
+    // (up to 0.2 s), which the ring normally only partly holds - a partial
+    // read is not a dropout. Godot-side dropouts are
+    // AudioStreamGeneratorPlayback.get_skips() (main.gd prints both).
+    if (got == 0) {
         vehicle_voice_underrun_count_[name] += 1;
     }
+    const float gain = static_cast<float>(1.0 / voice_full_scale_pa_);
     const int got_samples = static_cast<int>(got) * channels;
     out.resize(got_samples);
     for (int i = 0; i < got_samples; ++i) {
-        out[i] = scratch[static_cast<std::size_t>(i)];
+        out[i] = scratch[static_cast<std::size_t>(i)] * gain;
     }
     return out;
 }
+
+void PsSimulation::set_voice_full_scale_pa(double pa) {
+    if (pa > 0.0) voice_full_scale_pa_ = pa;
+}
+
+double PsSimulation::get_voice_full_scale_pa() const { return voice_full_scale_pa_; }
 
 std::int64_t PsSimulation::get_vehicle_voice_underrun_count(const String& vehicle_name) const {
     const auto it = vehicle_voice_underrun_count_.find(to_std_string(vehicle_name));
@@ -1109,6 +1120,8 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_channel_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_channel_count);
     ClassDB::bind_method(D_METHOD("read_vehicle_voice_audio", "vehicle_name", "frames"), &PsSimulation::read_vehicle_voice_audio);
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_underrun_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_underrun_count);
+    ClassDB::bind_method(D_METHOD("set_voice_full_scale_pa", "pa"), &PsSimulation::set_voice_full_scale_pa);
+    ClassDB::bind_method(D_METHOD("get_voice_full_scale_pa"), &PsSimulation::get_voice_full_scale_pa);
 }
 
 } // namespace ps_godot

@@ -870,9 +870,14 @@ func _process_engine_audio() -> void:
 		mono /= float(channels)
 		playback.push_frame(Vector2(mono, mono))
 
-	var underruns: int = simulation.get_vehicle_voice_underrun_count(VEHICLE_NAME)
+	# Two counters: ring empty when Godot asked (the voice fell behind) and
+	# Godot's own playback skips (its buffer ran dry - an audible dropout).
+	# Print only on a Godot-side skip (an audible dropout). ring_empty alone
+	# also counts frames that simply came faster than one 256-frame block
+	# (5.3 ms) - measured 451 in a headless smoke run with 0 skips.
+	var underruns: int = playback.get_skips()
 	if underruns != _engine_audio_underrun_last:
-		print("ps_godot main.gd: engine audio underrun count = ", underruns)
+		print("ps_godot main.gd: engine audio ring_empty = ", simulation.get_vehicle_voice_underrun_count(VEHICLE_NAME), ", godot_skips = ", playback.get_skips())
 		_engine_audio_underrun_last = underruns
 
 func _reset_vehicle(target_spawn_id: String = spawn_id) -> void:
