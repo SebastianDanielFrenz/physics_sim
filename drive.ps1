@@ -88,6 +88,7 @@ $SkipBuild = $false
 $NoConsole = $false
 $Editor    = $false
 $DryRun    = $false
+$ShowHelp  = $false
 $GodotArgs = New-Object System.Collections.Generic.List[string]
 $sawSeparator = $false
 
@@ -98,9 +99,80 @@ foreach ($a in $args) {
         '^--?NoConsole$' { $NoConsole = $true; continue }
         '^--?Editor$'    { $Editor    = $true; continue }
         '^--?DryRun$'    { $DryRun    = $true; continue }
+        '^(--?help|-h|/\?)$' { $ShowHelp = $true; continue }
         '^--$'           { $sawSeparator = $true; continue }
         default          { $GodotArgs.Add($a) }
     }
+}
+
+# ---------------------------------------------------------------------------
+# -help / --help / -h: usage, this script's switches and the demo's own
+# --m1-* flags (main.gd's _ready). Vehicles and spawn points are listed
+# from the data files so the text cannot go stale.
+# ---------------------------------------------------------------------------
+if ($ShowHelp) {
+    $vehicles = (Get-ChildItem (Join-Path $repoRoot 'data\vehicles') -Filter '*.json' |
+        ForEach-Object { $_.BaseName }) -join ', '
+    $groundJson = Join-Path $repoRoot 'data\tracks\test_ground\test_ground.json'
+    $spawns = if (Test-Path $groundJson) {
+        ([regex]::Matches((Get-Content $groundJson -Raw), '"(spawn_[a-z0-9_]+)"') |
+            ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ', '
+    } else { '(test_ground.json not found)' }
+    # Wrap a comma list to ~70 columns under the help text's value column.
+    $wrap = {
+        param([string]$list)
+        $lines = @(); $line = ''
+        foreach ($item in ($list -split ', ')) {
+            if ($line.Length -gt 0 -and ($line.Length + $item.Length + 2) -gt 70) { $lines += $line + ','; $line = $item }
+            elseif ($line.Length -gt 0) { $line += ', ' + $item }
+            else { $line = $item }
+        }
+        $lines += $line
+        $lines -join ("`n" + (' ' * 29))
+    }
+    $vehicles = & $wrap $vehicles
+    $spawns = & $wrap $spawns
+    @"
+drive - build the Godot adapter (incrementally) and launch the demo
+
+USAGE
+  drive [switches] [--] [demo/Godot args...]      (cmd.exe: drive.cmd, PowerShell: .\drive.ps1)
+
+SWITCHES (one or two leading dashes)
+  -help, -h        show this text and exit
+  -SkipBuild       launch the existing DLL without building
+  -NoConsole       use the non-console Godot executable (no log window)
+  -Editor          open the Godot editor on the demo instead of running it
+  -DryRun          print what would be built/launched, do nothing
+
+Anything else is forwarded to the demo (placed after Godot's own "--").
+A literal "--" is optional; everything after it is forwarded unchanged.
+
+DEMO FLAGS (main.gd)
+  --m1-vehicle=NAME          vehicle file data/vehicles/NAME.json (default car_sedan)
+                             $vehicles
+                             chassis and art come from main.gd's VEHICLE_TABLE: only
+                             car_sedan and tractor have entries, every other file uses
+                             the sedan's (right for car_sedan_*, not for tractor_fuel)
+  --m1-spawn=ID              spawn point (default spawn_straight_car / _tractor)
+                             $spawns
+  --m1-autopilot             scripted drive, prints a smoke summary and quits
+  --m1-force-rebase-test     with --m1-autopilot: force an origin rebase and check the camera
+  --m1-haptics-cruise        scripted cruise for the rumble check, then quits
+  --m1-screenshot=PATH.png   save one screenshot and quit (needs a window, not --headless)
+  --m1-screenshot-view=V     drive (default) | cockpit | side | three_quarter | wheels
+  --m1-screenshot-delay=S    simulated seconds before the screenshot (default 3)
+
+IN GAME
+  V / Y(joy) cycles chase -> cockpit -> free camera; the HUD lists the other keys.
+
+EXAMPLES
+  drive
+  drive --m1-vehicle=car_sedan_pipes
+  drive -SkipBuild --m1-vehicle=tractor --m1-spawn=spawn_skidpad_tractor
+  drive -DryRun -- --headless --quit-after 300
+"@ | Write-Host
+    exit 0
 }
 
 Write-Host "=== drive: build + launch the ps_godot demo ===" -ForegroundColor Cyan
