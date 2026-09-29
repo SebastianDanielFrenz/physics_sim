@@ -833,6 +833,12 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   (measured on the first render: almost no energy above 2 kHz; a few pipe
   resonances at 125-500 Hz dominate). The A8b blow-up fix comes first (fine
   audio cells are unusable until then).
+- A11 now (Sebastian, 2026-09-29, after the A8b renders): "Integrate the
+  sound into godot" - supersedes the sound-first ordering for A11 only; the
+  sound-realism pass follows in-game. Minimal scope under the weekly budget
+  cap: the player car (car_sedan_sim) with an audio engine that has pipes, one
+  voice; the tractor's diesel audio block is deferred. A9 still waits; live
+  play uses a coarser audio dx if the scalar voice cannot keep up.
 - Order (Sebastian, 2026-09-28): `ps_audio` (engine sound from the live cycle
   model, after its design pass closes the acoustic gap noted under "Audio
   library") is implemented BEFORE the engine design GUI below.
