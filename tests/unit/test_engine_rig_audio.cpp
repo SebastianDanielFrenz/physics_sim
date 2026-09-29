@@ -88,7 +88,7 @@ const drivetrain::FuelDesc& demo_fuel_desc() {
 
 } // namespace
 
-TEST_CASE("A10 R1: demo engine free revs from idle toward the limiter and back", "[audio][drivetrain]") {
+TEST_CASE("A10 R1: demo engine free revs from idle toward the limiter and back", "[audio][drivetrain][long]") {
     EngineRig rig(demo_engine_path());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
@@ -130,7 +130,7 @@ TEST_CASE("A10 R1: demo engine free revs from idle toward the limiter and back",
     CHECK(settle_rpm < peak_rpm * 0.6);
 }
 
-TEST_CASE("A10 R2: the starter takes the demo engine Off -> Cranking -> Running", "[audio][drivetrain]") {
+TEST_CASE("A10 R2: the starter takes the demo engine Off -> Cranking -> Running", "[audio][drivetrain][long]") {
     EngineRig rig(demo_engine_path());
     REQUIRE(rig.engine_state() == drivetrain::EngineState::Off);
     rig.set_ignition(1.0);
@@ -153,7 +153,7 @@ TEST_CASE("A10 R2: the starter takes the demo engine Off -> Cranking -> Running"
     CHECK(rig.engine_state() == drivetrain::EngineState::Running);
 }
 
-TEST_CASE("A10 R3: cutting ignition stalls a running demo engine", "[audio][drivetrain]") {
+TEST_CASE("A10 R3: cutting ignition stalls a running demo engine", "[audio][drivetrain][long]") {
     EngineRig rig(demo_engine_path());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
@@ -195,7 +195,7 @@ TEST_CASE("A10 R3: cutting ignition stalls a running demo engine", "[audio][driv
     CHECK(all_finite);
 }
 
-TEST_CASE("A10 R4: EngineRig -> Voice render is deterministic and seed-sensitive", "[audio][drivetrain]") {
+TEST_CASE("A10 R4: EngineRig -> Voice render is deterministic and seed-sensitive", "[audio][drivetrain][long]") {
     auto render = [](std::uint64_t seed, int seconds) {
         EngineRig rig(demo_engine_path());
         rig.set_ignition(1.0);
@@ -233,7 +233,7 @@ TEST_CASE("A10 R4: EngineRig -> Voice render is deterministic and seed-sensitive
     CHECK(a1 != b);
 }
 
-TEST_CASE("A10 R5: the demo engine's ledger closes from tick 1 (F-T0)", "[audio][drivetrain]") {
+TEST_CASE("A10 R5: the demo engine's ledger closes from tick 1 (F-T0)", "[audio][drivetrain][long]") {
     EngineRig rig(demo_engine_path());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
@@ -255,7 +255,7 @@ TEST_CASE("A10 R5: the demo engine's ledger closes from tick 1 (F-T0)", "[audio]
     CHECK(worst_balance <= 1e-8 * scale);
 }
 
-TEST_CASE("A10 R6: EngineRig::step is allocation-free once built", "[audio][drivetrain]") {
+TEST_CASE("A10 R6: EngineRig::step is allocation-free once built", "[audio][drivetrain][long]") {
     EngineRig rig(demo_engine_path());
     rig.set_ignition(1.0);
     rig.set_starter(1.0);
