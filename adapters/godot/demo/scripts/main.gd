@@ -139,6 +139,11 @@ var ground_grid: MeshInstance3D
 # default car_sedan.json) - _process below no-ops in that case.
 var _engine_audio_player: AudioStreamPlayer = null
 var _engine_audio_underrun_last: int = 0
+var _engine_audio_capacity: int = 0
+# Audio queued in the AudioStreamGenerator ahead of the speaker (see
+# _process_engine_audio): must exceed one _process frame (~17 ms at 60 fps)
+# with margin; the Runner's own ring (vehicle_voice.cpp) adds ~21 ms.
+const ENGINE_AUDIO_TARGET_S: float = 0.05
 
 # Tractor demo (2026-09-28): true once --m1-spawn= is seen on the cmdline, so
 # the VEHICLE_TABLE resolution in _ready() does not clobber an explicit
@@ -852,7 +857,17 @@ func _process_engine_audio() -> void:
 	if playback == null:
 		return
 
-	var to_fill: int = playback.get_frames_available()
+	# Latency (owner 2026-09-29, "a substantial delay between the engine rpm
+	# changing and the pitch change"): filling this buffer to the brim every
+	# frame kept ~buffer_length (200 ms) of already-rendered audio queued in
+	# front of every rpm change. Keep only ENGINE_AUDIO_TARGET_S queued; the
+	# 200 ms capacity stays as headroom. The largest frames_available ever
+	# seen is the (empty) buffer's capacity - Godot rounds it up internally.
+	var available: int = playback.get_frames_available()
+	_engine_audio_capacity = maxi(_engine_audio_capacity, available)
+	var queued: int = _engine_audio_capacity - available
+	var target: int = int(ENGINE_AUDIO_TARGET_S * _engine_audio_player.stream.mix_rate)
+	var to_fill: int = mini(available, target - queued)
 	if to_fill <= 0:
 		return
 	var channels: int = simulation.get_vehicle_voice_channel_count(VEHICLE_NAME)

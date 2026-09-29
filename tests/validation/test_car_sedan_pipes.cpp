@@ -40,6 +40,9 @@
 //     World path with wheels, gearbox, clutch);
 //   - a full-throttle 1st-gear launch from settled rest makes real forward
 //     progress without stalling.
+// Run for car_sedan_pipes.json (FWD 60/40) and car_sedan_pipes_rwd.json
+// (owner 2026-09-29, "give me RWD": car_sedan_rwd.json, same engine) - idle
+// and free rev are identical (neutral), launch speed@3s 12.21 / 13.28 m/s.
 #include "vehicle_test_helpers.h"
 
 #include "ps/drivetrain/powertrain_desc.h"
@@ -47,6 +50,7 @@
 #include "ps/io/vehicle_io.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -62,8 +66,8 @@ constexpr real kMass = 1500.0;
 const Vec3 kHalfExtents{2.0, 0.4, 0.15};
 constexpr real kOriginHeight = 0.6;
 
-ps_test::VehicleTestRig build_rig() {
-    return ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_pipes.json", kMass,
+ps_test::VehicleTestRig build_rig(const std::string& path) {
+    return ps_test::build_vehicle_rig(path, kMass,
                                        kHalfExtents, kOriginHeight, /*slope_grade=*/0.0, /*job_workers=*/4);
 }
 
@@ -71,7 +75,10 @@ ps_test::VehicleTestRig build_rig() {
 
 TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launches without stalling",
           "[vehicle][drivetrain][engine][cycle]") {
-    const std::string path = std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_pipes.json";
+    // car_sedan_pipes_rwd.json (owner 2026-09-29, "give me RWD"): car_sedan_rwd.json with the same engine.
+    const std::string name = GENERATE(std::string("car_sedan_pipes"), std::string("car_sedan_pipes_rwd"));
+    CAPTURE(name);
+    const std::string path = std::string(PS_SOURCE_DIR) + "/data/vehicles/" + name + ".json";
     const vehicle::VehicleDesc desc = io::load_vehicle_json(path);
     real idle_rpm_desc = -1.0, limiter_rpm_desc = -1.0, hysteresis_rpm_desc = -1.0;
     for (const auto& c : desc.powertrain.components) {
@@ -84,7 +91,7 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     REQUIRE(idle_rpm_desc > 0.0);   // confirms the engine component IS a simulated (pipe) one
     REQUIRE(limiter_rpm_desc > 0.0);
 
-    ps_test::VehicleTestRig rig = build_rig();
+    ps_test::VehicleTestRig rig = build_rig(path);
     World& w = *rig.world;
     bool stalled = false;
     auto check = [&]() {
@@ -125,12 +132,12 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     for (int t = 0; t < 240; ++t) { w.step(); check(); } // 1 s
     const real rpm_after_lift = w.powertrain_state(rig.vehicle).engine_rpm;
 
-    std::printf("[car_sedan_pipes idle] last 2 s of 10 s: rpm [%.3f, %.3f] mean %.3f (desc idle_rpm %.0f), "
+    std::printf("[%s idle] last 2 s of 10 s: rpm [%.3f, %.3f] mean %.3f (desc idle_rpm %.0f), "
                 "within +-10 rpm from t = %.3f s, final %.3f\n",
-                idle_rpm_min, idle_rpm_max, idle_rpm_mean, idle_rpm_desc, last_off_band_t, idle_rpm);
-    std::printf("[car_sedan_pipes free rev] free-rev max %.1f rpm (limiter %.0f + hysteresis), 1 s after lift %.1f "
+                name.c_str(), idle_rpm_min, idle_rpm_max, idle_rpm_mean, idle_rpm_desc, last_off_band_t, idle_rpm);
+    std::printf("[%s free rev] free-rev max %.1f rpm (limiter %.0f + hysteresis), 1 s after lift %.1f "
                 "rpm\n",
-                max_rpm, limiter_rpm_desc, rpm_after_lift);
+                name.c_str(), max_rpm, limiter_rpm_desc, rpm_after_lift);
     CHECK_FALSE(stalled);
     // Settled idle (see the header comment). Measured: last 2 s range
     // 0.653 rpm, mean 800.054, inside +-10 rpm from 3.054 s. Sabotages (the
@@ -153,8 +160,8 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     const real speed_3s = w.get_motion(rig.chassis).linear.length();
     const auto launch = w.powertrain_state(rig.vehicle);
 
-    std::printf("[car_sedan_pipes launch] gear %d, engine %.0f rpm, speed@3s %.4f m/s\n",
-                static_cast<int>(launch.gear), launch.engine_rpm, speed_3s);
+    std::printf("[%s launch] gear %d, engine %.0f rpm, speed@3s %.4f m/s\n",
+                name.c_str(), static_cast<int>(launch.gear), launch.engine_rpm, speed_3s);
     CHECK_FALSE(stalled);
     CHECK(static_cast<int>(launch.gear) == 1);
     CHECK(speed_3s > 2.0); // real forward progress; see the printed measured value for margin

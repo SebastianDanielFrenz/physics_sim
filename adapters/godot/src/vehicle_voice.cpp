@@ -46,7 +46,12 @@ std::unique_ptr<VehicleVoice> VehicleVoice::try_create(const ps::vehicle::Vehicl
 
 VehicleVoice::VehicleVoice(const ps::drivetrain::CycleModelDesc& cycle, ps::real lhv_j_kg, ps::real afr_stoich,
                             const ps_audio::VoiceSettings& settings)
-    : voice_(cycle, lhv_j_kg, afr_stoich, settings), runner_(std::vector<ps_audio::Voice*>{&voice_}) {}
+    : voice_(cycle, lhv_j_kg, afr_stoich, settings),
+      // 4 x 256 frames = 21 ms of ring (default 8 = 43 ms): the ring stays
+      // full, so its whole length is latency between an rpm change and the
+      // speaker (owner 2026-09-29). The render thread refills a 256-frame
+      // block in ~3.5 ms (0.66 core), far inside the ring.
+      runner_(std::vector<ps_audio::Voice*>{&voice_}, ps_audio::RunnerSettings{256, 4, 500}) {}
 
 VehicleVoice::~VehicleVoice() { runner_.stop(); }
 
