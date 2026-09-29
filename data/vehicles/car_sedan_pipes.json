@@ -1,0 +1,220 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "car_sedan_pipes",
+  "source": "ps_audio A11 (out/audio_plan.md section 9 row A11, owner ruling 2026-09-29 'can I drive the same engine that drives the audio?'): data/vehicles/car_sedan_sim.json with its engine swapped for engines/demo_i4_pipes.json - the SAME [AS] generic 2.0 L naturally-aspirated I4 with intake/exhaust pipe blocks that ps_audio's tools/ps_engine_audio demo (A10) and adapters/godot's live voice (A11) render. NOT a real engine, and NOT the Toyota A25A car_sedan_sim.json drives - every geometry/table value in demo_i4_pipes.json is a plausible, unmeasured [AS] guess (see that file's own 'source'). The point of this file is that physics (the mean-value VE/eta_i/friction maps, generated at vehicle-load time from demo_i4_pipes.json's 'cycle' block through the existing I7c C16a loader path, cached to a .psmaps directory by the caller's EngineMapOptions so a repeat launch does not pay the generation cost again) and sound (the SAME 'cycle' block's live pipe-network model, ps_audio A11) come from ONE engine description - no separate 'sound engine' override. Chassis/gearbox/final-drive/tyres/brakes/aero/steering/tcu blocks are car_sedan_sim.json's, unchanged (same 60/40 static split, same sedan_6mt gearbox, same auto-clutch/auto-blip tuning). Clutch: capacity kept at car_sedan.json's original 300 N*m / static_factor 1.15 (NOT car_sedan_sim.json's 350 N*m) - demo_i4_pipes.json is a generic 2.0 L NA four in the same class as car_sedan.json's own engines/i4_2l_na.json (bore/stroke 86/86 mm ~= 2.0 L, CR 10.5, vs. i4_2l_na.json's own torque curve), not the larger, higher-torque 2.5 L A25A car_sedan_sim.json was tuned for, so car_sedan.json's original clutch margin (1.5x its engine's peak torque, from that file's own 'source' field) is the better-fitting reuse. Checked (tests/validation/test_car_sedan_pipes.cpp): idles without stalling, a full-throttle 1st-gear launch from rest does not stall and reaches forward speed (measured 12.08 m/s at 3 s, comparable to car_sedan.json's own reference launch), and a neutral free rev reaches the demo engine's fuel-cut limiter band (6800 rpm, hysteresis 150, measured peak 6809.7) and falls back below it (measured 4170.7 rpm one second after lift) - the same three checks test_reference_cars.cpp/test_powertrain_engine.cpp use elsewhere, run once here because this is the first vehicle to drive a pipe-network simulated engine instead of a torque-map or measured-map one. KNOWN LIMITATION, measured not chased further (out of A11's scope): the idle PI does not converge to idle_rpm (800) the way car_sedan_sim.json's MVEM engine does - it hunts in a bounded ~3 s limit cycle, measured roughly 1040-1300 rpm, confirmed not a slow transient (unchanged out to 10 s of settle time). Likely the idle PI gains, tuned against the smooth MVEM torque tables, are too aggressive for the C16a-generated pipe-engine maps' coarser grid near idle - a generator/PI-tuning mismatch, not an instability that grows or a stall; the car is still fully drivable (see the launch/free-rev numbers above). The test bounds idle rpm to a plausible band (500-2000) instead of asserting convergence to idle_rpm and documents the measured range.",
+  "wheels": [
+    {
+      "name": "FL",
+      "attachment_local": [1.08, 0.78, -0.343],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 1,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "FR",
+      "attachment_local": [1.08, -0.78, -0.343],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 0,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "RL",
+      "attachment_local": [-1.62, 0.78, -0.343],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 3,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    },
+    {
+      "name": "RR",
+      "attachment_local": [-1.62, -0.78, -0.343],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [0, 0, 1],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 2,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    }
+  ],
+  "steering": {
+    "max_wheel_angle": 0.5236,
+    "ackermann_fraction": 1.0,
+    "rear_steer_fraction": 0.0,
+    "steer_rate_limit": 0.0
+  },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      {
+        "wheel": "FL",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "FR",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "RL",
+        "max_torque_nm": 1600.0
+      },
+      {
+        "wheel": "RR",
+        "max_torque_nm": 1600.0
+      }
+    ],
+    "handbrake": {
+      "wheels": ["RL", "RR"],
+      "max_torque_nm": 1600.0
+    }
+  },
+  "aero": {
+    "drag_area_m2": 0.68
+  },
+  "powertrain": {
+    "components": [
+      {
+        "id": "engine",
+        "type": "engine",
+        "ref": "../engines/demo_i4_pipes.json"
+      },
+      {
+        "id": "clutch",
+        "type": "clutch",
+        "capacity_nm": 300.0,
+        "static_factor": 1.15,
+        "engagement_vs_pedal": {
+          "x": [0.0, 0.3, 0.45, 0.6, 0.75, 1.0],
+          "y": [1.0, 1.0, 0.55, 0.15, 0.0, 0.0]
+        },
+        "out_inertia_kgm2": 0.004,
+        "axis_local": [0, 1, 0]
+      },
+      {
+        "id": "gearbox",
+        "type": "gearbox",
+        "ref": "../gearboxes/sedan_6mt.json"
+      },
+      {
+        "id": "diff",
+        "type": "differential",
+        "kind": "open",
+        "ratio": 4.06,
+        "efficiency": 0.97,
+        "carrier_inertia_kgm2": 0.02,
+        "carrier_axis_local": [0, 1, 0]
+      }
+    ],
+    "shafts": [
+      {
+        "ports": ["engine.crank", "clutch.in"]
+      },
+      {
+        "ports": ["clutch.out", "gearbox.in"]
+      },
+      {
+        "ports": ["gearbox.out", "diff.carrier"]
+      },
+      {
+        "ports": ["diff.left", "wheel:FL"]
+      },
+      {
+        "ports": ["diff.right", "wheel:FR"]
+      }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true
+  },
+  "controllers": [
+    {
+      "id": "tcu",
+      "type": "manual_tcu",
+      "gearbox": "gearbox",
+      "clutch": "clutch",
+      "engine": "engine",
+      "auto_clutch": {
+        "enabled": true,
+        "bite_rpm": 1100,
+        "full_rpm_min": 1600,
+        "full_rpm_max": 3000,
+        "lock_slip_rpm": 80,
+        "anti_stall_rpm": 750,
+        "engage_rate_per_s": 4.0,
+        "release_rate_per_s": 12.0,
+        "open_time_s": 0.08,
+        "close_time_s": 0.1,
+        "sync_time_s": 0.3,
+        "max_sync_torque_nm": 50.0
+      },
+      "auto_blip": {
+        "enabled": true,
+        "kp_per_rpm": 0.002,
+        "max_throttle": 1.0,
+        "upshift_cut": true,
+        "upshift_cut_release_slip_rpm": 300,
+        "upshift_cut_max_hold_s": 0.6,
+        "upshift_torque_ramp_s": 0.1
+      },
+      "auto_shift": {
+        "enabled": false,
+        "up_rpm_at_zero_throttle": 2500,
+        "up_rpm_at_full_throttle": 6300,
+        "down_rpm_at_zero_throttle": 1300,
+        "down_rpm_at_full_throttle": 2800,
+        "min_time_in_gear_s": 1.0
+      },
+      "max_pending_steps": 2
+    }
+  ]
+}
