@@ -251,6 +251,12 @@ WaveguideNetwork::WaveguideNetwork(const WaveguideNetworkDesc& desc, real h) : h
                       std::isfinite(nd.r_linear_pa_s_m) && nd.area_m2 >= 0.0 && std::isfinite(nd.area_m2) &&
                       std::isfinite(nd.flow_fraction)))
                     fail("node '" + nd.name + "': k_loss, r_linear_pa_s_m, area_m2 must be finite and >= 0");
+                if (!(nd.monolith_length_m >= 0.0 && std::isfinite(nd.monolith_length_m)))
+                    fail("node '" + nd.name + "': monolith_length_m must be finite and >= 0");
+                if (nd.monolith_length_m > 0.0 &&
+                    !(nd.monolith_d_h_m > 0.0 && std::isfinite(nd.monolith_d_h_m) && nd.monolith_open_frontal_area > 0.0 &&
+                      nd.monolith_open_frontal_area <= 1.0 && nd.monolith_f_re > 0.0 && std::isfinite(nd.monolith_f_re)))
+                    fail("node '" + nd.name + "': a monolith needs d_h > 0, 0 < open_frontal_area <= 1 and f_re > 0");
                 break;
         }
     }
@@ -360,6 +366,9 @@ WaveguideNetwork::WaveguideNetwork(const WaveguideNetworkDesc& desc, real h) : h
             const Seg& s1 = segs_[static_cast<std::size_t>(ports_[static_cast<std::size_t>(nr.p0 + 1)].seg)];
             nr.area = nd.area_m2 > 0.0 ? nd.area_m2 : (s0.area < s1.area ? s0.area : s1.area);
             nr.rho = s0.rho;
+            if (nd.monolith_length_m > 0.0)
+                nr.r_lin += 2.0 * nd.monolith_f_re * s0.mu * nd.monolith_length_m /
+                            (nd.monolith_d_h_m * nd.monolith_d_h_m * nd.monolith_open_frontal_area);
         }
     }
 

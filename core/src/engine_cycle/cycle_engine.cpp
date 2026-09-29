@@ -32,6 +32,23 @@ inline void fnv_fold(std::uint64_t& h, real v) {
 
 real area_of(real d) { return 0.25 * kPi * d * d; }
 
+// ps_audio A8b: the catalyst's substrate as a laminar channel resistance (the
+// installation format carries no substrate data; one generic substrate for
+// every catalyst element). Channel friction: fully developed laminar flow in
+// a square channel, Fanning f*Re = 14.227 [C] (Shah & London 1978, "Laminar
+// Flow Forced Convection in Ducts", square duct; 2 f Re = 28.45 is the A =
+// 28.4 of Ekstrom & Andersson, SAE 2002-01-1010, for monolith channels).
+// Substrate 400 cpsi / 6.5 mil walls [A] (a common ceramic substrate, not a
+// measured part): pitch 25.4 mm / sqrt(400) = 1.27 mm, wall 0.1651 mm, square
+// channel d_h = 1.1049 mm, open frontal area (d_h / pitch)^2 = 0.7569
+// [DERIVED]. Entrance / exit and developing-flow losses stay in k_loss.
+constexpr real kCatalystChannelFRe = 14.227;
+constexpr real kCatalystCellPitchM = 0.0254 / 20.0;  // 400 cells per square inch
+constexpr real kCatalystWallM = 6.5 * 0.0254e-3;     // 6.5 mil
+constexpr real kCatalystChannelDhM = kCatalystCellPitchM - kCatalystWallM;
+constexpr real kCatalystOpenFrontalArea =
+    (kCatalystChannelDhM / kCatalystCellPitchM) * (kCatalystChannelDhM / kCatalystCellPitchM);
+
 // The template entry (runner / primary) that covers 1-based cylinder c.
 template <class T>
 const T& entry_for_cylinder(const std::vector<T>& entries, int c, const char* what) {
@@ -87,8 +104,13 @@ struct WgBuilder {
                 }
                 case ExhaustElementType::Catalyst: {
                     const int r = add_node(WgNodeDesc::Kind::Resistance, nm + " substrate");
-                    wd->nodes[static_cast<std::size_t>(r)].k_loss = e.k_loss;
-                    wd->nodes[static_cast<std::size_t>(r)].flow_fraction = flow_fraction;
+                    WgNodeDesc& rn = wd->nodes[static_cast<std::size_t>(r)];
+                    rn.k_loss = e.k_loss;
+                    rn.flow_fraction = flow_fraction;
+                    rn.monolith_length_m = e.length_m;
+                    rn.monolith_d_h_m = kCatalystChannelDhM;
+                    rn.monolith_open_frontal_area = kCatalystOpenFrontalArea;
+                    rn.monolith_f_re = kCatalystChannelFRe;
                     add_segment(cur, r, 0.5 * e.length_m, e.d_m, nm + " inlet half");
                     const int j = add_node(WgNodeDesc::Kind::Junction, nm + " end");
                     last_seg = add_segment(r, j, 0.5 * e.length_m, e.d_m, nm + " outlet half");

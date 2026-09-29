@@ -81,6 +81,9 @@
 //   from the mean mass flow (set_mean_mass_flow, times flow_fraction); the
 //   fluctuation sees the linearised resistance R = (r_lin + K rho |u|) / A
 //   (acoustic, Pa s/m^3): Q = 2 (p1+ - p2+) / (R + Z1 + Z2), Z = 1/Y.
+//   r_lin includes a monolith's laminar channel friction when the node
+//   carries one (WgNodeDesc::monolith_*, ps_audio A8b) - the part of a
+//   catalyst's resistance that does not vanish at zero mean flow.
 //
 // Timing: per step every direction first produces its arriving wave from the
 // delay line written in earlier steps (begin_step), then every node scatters
@@ -138,6 +141,15 @@ struct WgNodeDesc {
     real r_linear_pa_s_m = 0.0;
     real area_m2 = 0.0;
     real flow_fraction = 1.0;
+    // ps_audio A8b: a monolith substrate's laminar channel friction, added to
+    // r_linear at build time from the attached (inlet-side) segment's
+    // viscosity mu: r += 2 fRe mu L / (d_h^2 OFA) [Pa per m/s at area_m2] -
+    // fully developed laminar flow in each channel at u_ch = u / OFA,
+    // dp/L = 2 fRe mu u_ch / d_h^2 (fRe = Fanning f * Re). 0 length = none.
+    real monolith_length_m = 0.0;
+    real monolith_d_h_m = 0.0;         // channel hydraulic diameter
+    real monolith_open_frontal_area = 0.0;  // open / frontal area, (0, 1]
+    real monolith_f_re = 0.0;          // Fanning f * Re of the channel shape
 };
 
 struct WgSegmentDesc {

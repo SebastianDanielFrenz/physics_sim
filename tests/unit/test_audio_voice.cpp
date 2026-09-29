@@ -754,11 +754,13 @@ TEST_CASE("A7 V13: omega -> 0 leaves a decaying tail, no NaN", "[audio][cycle][p
                 finite ? 1 : 0, run_rms, tail_rms, db(tail_rms / run_rms), crank_a, crank_b);
     CHECK(finite);
     CHECK(crank_a == crank_b);
-    // At least 12 dB down 0.7 s after the stop (measured -19.4 dB). It does not
-    // ring out to silence: a residual exhaust floor (~0.06 Pa at 5 s, tau ~18 s)
-    // is an open finding - see out/audio_a7_progress.md "Findings" and the
-    // "A7 V13 diag" case.
-    CHECK(tail_rms < 0.25 * run_rms);
+    // At least 26 dB down 0.7 s after the stop (the planned A7 bound; measured
+    // -27.0 dB). ps_audio A8b: the -19.4 dB before came from a 25 Hz exhaust
+    // mode ringing on with Q ~1900 (F1) because the catalyst's resistance was
+    // purely flow-dependent (K rho |u_mean| / A, 0 at rest); its laminar
+    // substrate resistance (cycle_engine.cpp) now damps it. A broadband floor
+    // of ~0.02 Pa at 5 s remains (F1 diag, "A8b F1 diag" cases).
+    CHECK(tail_rms < 0.0501 * run_rms);  // 10^(-26/20)
 }
 
 TEST_CASE("A7 V13 diag: the stop tail per second in variants", "[.][diag][audio]") {
@@ -868,7 +870,7 @@ struct ModeFit {
     real sigma = 0.0;  // amplitude decay rate [1/s]
 };
 
-ModeFit ring_down(engine_cycle::PipeNetworkDesc nd, real t_end_s) {
+ModeFit ring_down(engine_cycle::PipeNetworkDesc nd, real t_end_s, bool print) {
     using engine_cycle::PipeEndDesc;
     for (engine_cycle::PipeDesc& p : nd.pipes) {
         if (p.start.kind == PipeEndDesc::Kind::Port) p.start = PipeEndDesc{};
@@ -921,9 +923,20 @@ ModeFit ring_down(engine_cycle::PipeNetworkDesc nd, real t_end_s) {
         std::vector<real> seg(w);
         for (std::size_t k = 0; k < w; ++k)
             seg[k] = x[i0 + k] * 0.5 * (1.0 - ps::math::cos(kTwoPi * static_cast<real>(k) / static_cast<real>(w)));
-        const real a = goertzel_amp(seg, fit.f_hz * 0.4);
+        // Peak over f0 +- 4 Hz per window: the mean state relaxes after the
+        // step, so the mode frequency drifts by ~1 Hz and a fixed-frequency
+        // Goertzel read a drift as decay (lossless variant sigma 5.8 1/s).
+        real a = 0.0, fw = fit.f_hz;
+        for (real ff = fit.f_hz - 4.0; ff <= fit.f_hz + 4.0; ff += 0.05) {
+            const real aa = goertzel_amp(seg, ff * 0.4);
+            if (aa > a) {
+                a = aa;
+                fw = ff;
+            }
+        }
         if (!(a > 1e-7)) break;
         const real t = t0 + 0.2, y = std::log(a);
+        if (print) std::printf(" [%.1f s %.2f Hz %.3e]", t, fw, a);
         st += t;
         sy += y;
         stt += t * t;
@@ -945,24 +958,32 @@ TEST_CASE("A8b F1 diag: lowest exhaust mode Q per loss element", "[.][diag][audi
     using engine_cycle::WgNodeDesc;
     using engine_cycle::WgSegmentDesc;
     const GasStateDesc amb{101325.0, 293.15, 0.0};
-    const char* names[] = {"baseline",        "radiation off",  "WG Kirchhoff -> None",
-                           "FV friction off", "FV heat on",     "all losses off",
-                           "WG Kirchhoff -> LaminarFriction"};
-    for (int variant = 0; variant < 7; ++variant) {
+    // Every variant but the first sets the catalyst's k_loss to 0: the
+    // quadratic term's R = K rho |u_mean| / A follows the mean flow the step
+    // excitation drains through the tailpipe and would confound the linear
+    // losses (the pre-A8b version of this diag read sigma 5.8 1/s with every
+    // loss off for exactly that reason).
+    const char* names[] = {"k_loss 1.5, all losses",   "all linear losses",        "monolith off (pre-A8b)",
+                           "monolith off, rad off",    "monolith off, Kirchhoff off", "monolith off, FV friction off",
+                           "monolith only",            "all losses off"};
+    for (int variant = 0; variant < 8; ++variant) {
         EngineNetworkLayout lay;
-        const bool rad = variant != 1 && variant != 5;
-        PipeNetworkDesc nd = make_engine_pipe_network_desc(fixture(), amb, 40000.0, 0.05, 0.05, &lay, rad);
+        drivetrain::CycleModelDesc d = fixture();
+        if (variant > 0)
+            for (auto& el : d.installation->exhaust.elements) el.k_loss = 0.0;
+        const bool rad = !(variant == 3 || variant >= 6);
+        PipeNetworkDesc nd = make_engine_pipe_network_desc(d, amb, 40000.0, 0.05, 0.05, &lay, rad);
         if (!rad)
             for (WgNodeDesc& nn : nd.waveguide.nodes) nn.radiation = false;
-        if (variant == 2 || variant == 5)
+        if ((variant >= 2 && variant <= 5) || variant == 7)
+            for (WgNodeDesc& nn : nd.waveguide.nodes) nn.monolith_length_m = 0.0;
+        if (variant == 4 || variant >= 6)
             for (WgSegmentDesc& sg : nd.waveguide.segments) sg.loss = WgLoss::None;
-        if (variant == 6)
-            for (WgSegmentDesc& sg : nd.waveguide.segments) sg.loss = WgLoss::LaminarFriction;
-        if (variant == 3 || variant == 5)
+        if (variant == 5 || variant >= 6)
             for (PipeDesc& p : nd.pipes) p.wall.friction = WallFriction::None;
-        if (variant == 4)
-            for (PipeDesc& p : nd.pipes) p.wall.heat_transfer = true;
-        const ModeFit f = ring_down(nd, 3.0);
+        std::printf("A8b F1 windows %s:", names[variant]);
+        const ModeFit f = ring_down(nd, 3.0, true);
+        std::printf("\n");
         std::printf("A8b F1 Q: %-32s f %.2f Hz sigma %.4f 1/s Q %.1f\n", names[variant], f.f_hz, f.sigma,
                     f.sigma > 0.0 ? kPi * f.f_hz / f.sigma : -1.0);
     }

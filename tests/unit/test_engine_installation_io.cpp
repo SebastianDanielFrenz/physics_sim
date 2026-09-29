@@ -361,7 +361,7 @@ TEST_CASE("A5: the resolved installation (vehicle override) reaches the generate
     REQUIRE(s.cycle->installation.has_value());
     REQUIRE(s.cycle->installation->intake.airbox_m3 == real(0.020));
     const EngineMapsPtr direct = generate_engine_maps(*s.cycle, s.fuels.front(), MapQuality::Preview, &pool);
-    CHECK(direct->generator_version == 2u);
+    CHECK(direct->generator_version == 3u);
     CHECK(s.maps.ve.values == direct->maps.ve.values);
     CHECK(s.maps.eta_i.values == direct->maps.eta_i.values);
 
