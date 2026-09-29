@@ -2,7 +2,7 @@
   "format": "physics_sim.engine/1",
   "name": "demo_i4_pipes",
   "kind": "simulated",
-  "source": "[AS] assumed generic 2.0 L naturally-aspirated I4 for tools/ps_engine_audio's demo/listening test (ps_audio A10). NOT a real engine - every geometry/table value is a plausible, unmeasured [AS] guess, deliberately mirroring tests/support/cycle_fixtures.h's generic fixture geometry (bore/stroke/valves/lift) and tests/support/cycle_pipe_fixtures.h's generic pipe geometry (intake runners/plenum, exhaust primaries/merge tree), so this file's own map-generation cost/behaviour matches what those tests already exercise. cycle.resolution is not set: the live audio path uses the ResolutionCycleDesc default audio dx (0.032 m exhaust / 0.017 m intake). ps_audio A10 had doubled it to 0.064/0.034 m to avoid a NaN blow-up about 0.9 s after a WOT hold closed; ps_audio A8b traced that to a CFL violation, not to this file: at valve overlap under the near-vacuum overrun manifold the cylinder blows a supersonic (Mach ~2, |u|+a ~1260 m/s) backflow jet into the intake runner, beyond the build-time CFL check's assumed intake wave speed (500 m/s), and the explicit update diverged. PipeNetwork now sub-cycles a pipe whose runtime CFL exceeds the limit (tests/unit/test_pipe_network.cpp P9, tests/unit/test_engine_rig_audio.cpp A8b B1), so the default dx is stable.",
+  "source": "[AS] assumed generic 2.0 L naturally-aspirated I4 for tools/ps_engine_audio's demo/listening test (ps_audio A10). NOT a real engine - every geometry/table value is a plausible, unmeasured [AS] guess, deliberately mirroring tests/support/cycle_fixtures.h's generic fixture geometry (bore/stroke/valves/lift) and tests/support/cycle_pipe_fixtures.h's generic pipe geometry (intake runners/plenum, exhaust primaries/merge tree), so this file's own map-generation cost/behaviour matches what those tests already exercise. cycle.resolution is not set: the live audio path uses the ResolutionCycleDesc default audio dx (0.032 m exhaust / 0.017 m intake). ps_audio A10 had doubled it to 0.064/0.034 m to avoid a NaN blow-up about 0.9 s after a WOT hold closed; ps_audio A8b traced that to a CFL violation, not to this file: at valve overlap under the near-vacuum overrun manifold the cylinder blows a supersonic (Mach ~2, |u|+a ~1260 m/s) backflow jet into the intake runner, beyond the build-time CFL check's assumed intake wave speed (500 m/s), and the explicit update diverged. PipeNetwork now sub-cycles a pipe whose runtime CFL exceeds the limit (tests/unit/test_pipe_network.cpp P9, tests/unit/test_engine_rig_audio.cpp A8b B1), so the default dx is stable. idle_pipes task (2026-09-29, car_sedan_pipes.json's idle hunt, root-caused via a per-tick trace of PowertrainDebug/EngineSoundState - see test_car_sedan_pipes.cpp's header comment for the measured before/after bands): two combined causes, both fixed - (1) grid_rpm did not cover idle_rpm (800; started at 1000), so every low-rpm lookup including the idle feed-forward bisection used Table2D's edge-clamped 1000 rpm row; grid_rpm now starts at 800.0, the lowest node the offline generator could actually converge at (trim_tolerance 0.02) - 250 rpm/30 kPa failed 'not settled, mean plenum 41255.9 Pa' (37.5% over target), 500 rpm/30 kPa failed 'not settled, mean plenum 30796.1 Pa' (2.65% over, just outside tolerance) even after fix (2) below, confirming this floor is a structural settling-time limitation of the offline generator at low rpm, not a throttle-leak artifact; both dropped, no owner-requested lower node (~200 rpm, ~500 rpm) is reachable for this cycle geometry. (2) even with 800 rpm covered, throttle_body.area_fraction_vs_position's closed-throttle (x=0) leak fraction (was 0.01, 1% of bore area) was too large: at 800 rpm even a fully closed throttle produced positive net torque (measured net(0) = +46.99 Nm via engine_simulated.cpp's idle_ff bisection), so no idle equilibrium existed at all and the bisection degenerated to ff=0. Reduced to 0.002 (0.2% of bore area), which gives net(0) = -11.93 Nm and a valid idle_ff solution (idle_p_im ~= 29.5 kPa, close to the 30 kPa grid node). Residual: the idle PI still hunts in a bounded, non-growing limit cycle (was ~1040-1280 rpm, now ~759-1301 rpm sustained - much closer to true idle) - confirmed independent of DFCO (disabling it widened the oscillation) and of simple PI gain scaling (a 10x gain cut left a similar-magnitude oscillation), so this is a structural idle-loop issue (the idle PI's own d(theta_idle)/d(omega) is not in the implicit solve's d, a documented CLAUDE.md backlog item), not force-tuned here.",
   "architecture": "piston_4stroke",
   "bore_mm": 86.0,
   "stroke_mm": 86.0,
@@ -12,7 +12,7 @@
     "diameter_mm": 60.0,
     "count": 1,
     "discharge_coefficient": 0.8,
-    "area_fraction_vs_position": { "x": [0.0, 0.5, 1.0], "y": [0.01, 0.4, 1.0] }
+    "area_fraction_vs_position": { "x": [0.0, 0.5, 1.0], "y": [0.002, 0.4, 1.0] }
   },
   "throttle_input": "electronic",
   "throttle_actuator_tau_s": 0.04,
@@ -22,7 +22,7 @@
     "spark_advance_deg": { "rpm": [0.0, 7000.0], "p_im_kpa": [20.0, 100.0], "values": [[30.0, 20.0], [40.0, 30.0]] }
   },
   "cycle": {
-    "source": "[AS] assumed generic cycle-model inputs, not measured - mirrors tests/support/cycle_fixtures.h::make_generic_i4_cycle_desc() (geometry/valves/lift/friction) and tests/support/cycle_pipe_fixtures.h::make_pipe_i4_cycle_desc() (pipe geometry). No real engine's cited data was used.",
+    "source": "[AS] assumed generic cycle-model inputs, not measured - mirrors tests/support/cycle_fixtures.h::make_generic_i4_cycle_desc() (geometry/valves/lift/friction) and tests/support/cycle_pipe_fixtures.h::make_pipe_i4_cycle_desc() (pipe geometry). No real engine's cited data was used. grid_rpm extended to start at 800 (was 1000) by the idle_pipes task (2026-09-29) so the generated maps cover idle_rpm - see this file's top-level 'source' field for the full writeup (why 250/500 rpm nodes are unreachable, and the paired throttle_body leak-area fix).",
     "rod_mm": 145.0,
     "compression_ratio": 10.5,
     "intake_valves": 2,
@@ -35,7 +35,7 @@
     "exhaust_port_cc": 250.0,
     "cd_vs_l_over_d": { "x": [0.0, 0.1, 0.2, 0.3], "y": [0.65, 0.62, 0.55, 0.45] },
     "friction": { "model": "polynomial_piston_speed", "a_kpa": 66.62, "b_kpa": 0.091, "c_kpa": 0.347 },
-    "grid_rpm": [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 6500.0],
+    "grid_rpm": [800.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 6500.0],
     "grid_p_im_kpa": [30.0, 50.0, 70.0, 90.0, 100.0],
     "intake": {
       "source": "[AS] assumed, mirrors cycle_pipe_fixtures.h",
