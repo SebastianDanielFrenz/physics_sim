@@ -18,6 +18,21 @@
 //
 // Godot-free (only ps:: and ps_audio:: types) so it could in principle be
 // reused by a non-Godot frontend, mirroring fall_detector.h's own seam.
+//
+// Live dx (2026-09-29 measurement, tests/bench/bench_audio_voice's audio-
+// grade I4 fixture, RelWithDebInfo release build, this machine, 3000 rpm):
+// at the engine file's OWN default dx (intake 17 mm / exhaust 32 mm,
+// ps/drivetrain/engine_cycle_desc.h's ResolutionCycleDesc defaults) one
+// voice costs ~20.9 us/sample against the 48 kHz budget of 20.83 us -
+// 1.00 of one core, i.e. NO margin at all (any scheduling jitter on that
+// thread underruns). Doubling dx (34/64 mm) costs ~13.8 us/sample = 0.66
+// of one core (34% margin); 1.5x (25.5/48 mm) costs ~16.3 us = 0.78 core
+// (22% margin). kLiveDxScale below picks the doubled (2x) grid as the
+// live default for comfortable real-time margin pre-A9 (SIMD) - see
+// CLAUDE.md's ps_audio A7/A8b section ("live play needs A9"). This is a
+// one-line multiplier, not a data-file edit (car_sedan_pipes.json/
+// demo_i4_pipes.json keep their own dx for the OFFLINE map generator and
+// tools/ps_engine_audio's WAV renders, which have no real-time budget).
 #pragma once
 
 #include "ps/drivetrain/powertrain_desc.h"
@@ -32,13 +47,23 @@ namespace ps_godot {
 
 class VehicleVoice {
 public:
+    // Live-dx scale factor applied to the engine's own audio_dx_intake_m/
+    // audio_dx_exhaust_m before building the Voice - see the header
+    // comment above for the measurement behind this default.
+    static constexpr ps::real kLiveDxScale = 2.0;
+
     // Returns nullptr (no throw) if `desc`'s powertrain has no "kind":
     // "simulated" engine component with a "cycle" block, or that engine has
     // no fuel - both are ordinary, expected cases (most vehicles), not
     // errors. `out_reason` is set to a short one-line explanation either
-    // way (useful for the caller's one-time log line).
+    // way (useful for the caller's one-time log line). `dx_scale` (default
+    // kLiveDxScale) multiplies the engine file's own audio_dx_intake_m/
+    // audio_dx_exhaust_m for this live Voice only - the loaded desc (and
+    // the offline map generator / ps_engine_audio's own renders) are
+    // untouched.
     static std::unique_ptr<VehicleVoice> try_create(const ps::vehicle::VehicleDesc& desc, std::string& out_reason,
-                                                      const ps_audio::VoiceSettings& settings = {});
+                                                      const ps_audio::VoiceSettings& settings = {},
+                                                      ps::real dx_scale = kLiveDxScale);
 
     ~VehicleVoice();
     VehicleVoice(const VehicleVoice&) = delete;
