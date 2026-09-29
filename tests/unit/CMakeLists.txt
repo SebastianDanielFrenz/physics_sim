@@ -71,6 +71,7 @@ add_executable(ps_unit_tests
   test_firing_order.cpp
   test_audio_time_map.cpp
   test_audio_voice.cpp
+  test_engine_sound_glue.cpp
   test_engine_rig_audio.cpp
 )
 
@@ -85,6 +86,11 @@ target_link_libraries(ps_unit_tests
     # directly (nlohmann/json is linked PRIVATE into ps_core, so a test that
     # needs it too must link it itself rather than get it transitively).
     nlohmann_json::nlohmann_json
+    # test_engine_sound_glue.cpp (ps_audio A11) includes tools/common/
+    # engine_sound_glue.h; ps_headless_env PUBLICly exposes tools/common as
+    # an include dir (see tools/common/CMakeLists.txt) - linked only for
+    # that include path, its own CRT-handler code is unused here.
+    ps_headless_env
 )
 
 # test_articulation_core.cpp white-box tests core/src/articulation directly

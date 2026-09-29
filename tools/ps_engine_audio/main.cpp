@@ -4,8 +4,10 @@
 // no vehicle), steps it at 240 Hz alongside a ps_audio::Voice fed from its
 // EngineSoundState every tick, and renders a deterministic WAV file. This
 // file is the ONE place in the project that links both ps_core and ps_audio
-// (see CMakeLists.txt) - the EngineRig -> Voice glue lives here, in the
-// tool, not in either library.
+// (see CMakeLists.txt) - the EngineSoundState -> EngineInput glue itself
+// (ps_audio A11) moved out to tools/common/engine_sound_glue.h so
+// adapters/godot's ps_godot_adapter (a second binary linking both ps_core
+// and ps_audio) can share it instead of duplicating the mapping.
 //
 // Usage:
 //   ps_engine_audio <engine.json> --wav out.wav --script events.json
@@ -16,6 +18,7 @@
 #include "ps/engine_cycle/cycle_engine.h" // RadiatingEnd, for the printed source list
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
+#include "engine_sound_glue.h"
 #include "ps_audio/engine_input.h"
 #include "ps_audio/source.h"
 #include "ps_audio/voice.h"
@@ -106,41 +109,6 @@ Args parse_args(int argc, char** argv) {
     if (a.wav_path.empty()) usage_error("--wav is required");
     if (a.script_path.empty()) usage_error("--script is required");
     return a;
-}
-
-// Fills a ps_audio::EngineInput from an EngineRig's this-tick state. Sign
-// conventions cross-checked against docs/data_formats/engine.md: a spark
-// schedule's `spark_advance_deg` is documented "[deg BTDC]"
-// (deg_atdc.md line ~591: "Wiebe start at -(schedule) + ignition_delay_deg
-// (deg ATDC)"), matching ps_audio::EngineInput::spark_deg_atdc's own
-// "negative=before TDC" convention exactly - so spark_deg_atdc =
-// -spark_advance_deg, no further adjustment needed here (the cycle model
-// itself applies ignition_delay_deg).
-ps_audio::EngineInput make_engine_input(const ps::EngineRig& rig) {
-    const auto& ess = rig.engine_sound_state();
-    ps_audio::EngineInput in;
-    in.t_sim_s = rig.sim_time_s();
-    in.omega_rad_s = rig.engine_omega_rad_s();
-    // EngineSoundState::crank_angle is in radians, period 4*pi (two
-    // crank revolutions); EngineInput::crank_angle_deg wants degrees,
-    // period 720, same phase origin (both come from the same underlying
-    // ps::engine_cycle crank-angle convention, 0 = cylinder 1 gas-exchange
-    // TDC - drivetrain::fill_engine_sound_state does not re-zero it).
-    constexpr ps::real kRadToDeg = 180.0 / 3.14159265358979323846;
-    ps::real deg = ess.crank_angle * kRadToDeg;
-    deg = std::fmod(deg, 720.0);
-    if (deg < 0.0) deg += 720.0;
-    in.crank_angle_deg = deg;
-    in.p_intake_pa = ess.p_intake_pa;
-    in.throttle = ess.throttle_position;
-    in.lambda = ess.lambda;
-    in.spark_deg_atdc = -ess.spark_advance_deg;
-    in.spark_given = true;
-    std::uint32_t flags = 0;
-    if (ess.dfco_active) flags |= ps_audio::kInputDfco;
-    if (ess.limiter_active) flags |= ps_audio::kInputFuelCut;
-    in.flags = flags;
-    return in;
 }
 
 // Prints the Voice's own resolved radiating-end list (the authoritative
@@ -325,7 +293,7 @@ int main(int argc, char** argv) {
             }
 
             rig.step();
-            voice.push_input(make_engine_input(rig));
+            voice.push_input(ps_tools::make_engine_input(rig.engine_sound_state(), rig.sim_time_s()));
             voice.render(per_source_block.data(), frames_per_tick);
             for (int f = 0; f < frames_per_tick; ++f) {
                 float sum = 0.0f;
