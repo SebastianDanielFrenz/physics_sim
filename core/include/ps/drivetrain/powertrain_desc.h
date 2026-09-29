@@ -62,6 +62,11 @@ struct IdleControlDesc { // PI on throttle (idle air bypass), plan section 6.1.4
     real kp_per_rpm = 0.0018;    // throttle fraction per rpm of error
     real ki_per_rpm_s = 0.009;   // throttle fraction per (rpm*s)
     real max_throttle = 0.3;
+    // SimulatedEngine only (owner 2026-09-29): > 0 caps the idle controller's
+    // authority at the plate/valve whose steady net torque at idle_rpm is
+    // this much above zero (the no-load feed-forward) - enough to creep in
+    // gear, not a hidden launch aid. 0 = max_throttle alone.
+    real max_torque_nm = 0.0;
 };
 
 struct StarterDesc { // ideal DC starter referred to the crank (I9 puts it on the LV bus)

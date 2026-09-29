@@ -957,7 +957,7 @@ GenScenarioRun run_gen_engine_scenario(ps::io::Scenario sc, int workers) {
 
 TEST_CASE("State hash for the generated-map engine scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
-    constexpr std::uint64_t kRecorded = 0x5e88a765a7e748e4ULL; // recorded 2026-09-28 (C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
+    constexpr std::uint64_t kRecorded = 0x4030651924c4dbd2ULL; // recorded 2026-09-29 (owner-requested SimulatedEngine idle rework: pedal-released one-sided PI, DFCO dashpot, manifold-fill term; was 0x5e88a765a7e748e4, recorded 2026-09-28 at the C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
     const ps::io::Scenario sc = load_gen_engine_scenario();
     const std::uint64_t reference = run_gen_engine_scenario(sc, 1).hash;
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);

@@ -129,7 +129,12 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
         max_rpm = std::max(max_rpm, w.powertrain_state(rig.vehicle).engine_rpm);
     }
     w.set_control("throttle", 0.0);
-    for (int t = 0; t < 240; ++t) { w.step(); check(); } // 1 s
+    real lift_min_rpm = 1e9; // lift-off to idle, neutral: must not dip below idle (owner 2026-09-29)
+    for (int t = 0; t < 240; ++t) {
+        w.step();
+        check();
+        lift_min_rpm = std::min(lift_min_rpm, w.powertrain_state(rig.vehicle).engine_rpm);
+    } // 1 s
     const real rpm_after_lift = w.powertrain_state(rig.vehicle).engine_rpm;
 
     std::printf("[%s idle] last 2 s of 10 s: rpm [%.3f, %.3f] mean %.3f (desc idle_rpm %.0f), "
@@ -150,8 +155,20 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     CHECK(rpm_after_lift < limiter_rpm_desc - hysteresis_rpm_desc); // fell back below the restore point
 
     // Settle back to idle in neutral before the launch (the free rev above
-    // left the crank spinning down).
-    for (int t = 0; t < 480; ++t) { w.step(); check(); } // 2 s
+    // left the crank spinning down); the lift-off minimum spans all of it.
+    for (int t = 0; t < 1440; ++t) { // 6 s
+        w.step();
+        check();
+        lift_min_rpm = std::min(lift_min_rpm, w.powertrain_state(rig.vehicle).engine_rpm);
+    }
+    const real rpm_settled = w.powertrain_state(rig.vehicle).engine_rpm;
+    std::printf("[%s lift] min rpm over 7 s after the lift %.3f, final %.3f\n", name.c_str(), lift_min_rpm, rpm_settled);
+    // SimulatedEngine idle rework (owner 2026-09-29: "dips below 800 rpms
+    // multiple times ... That should not happen"): the DFCO dashpot, the
+    // manifold-fill term and the one-sided pedal-released PI. Before it the
+    // car_sedan_pipes lift from WOT (in a World scenario) dipped to 539 rpm.
+    CHECK(lift_min_rpm > idle_rpm_desc - 2.0);
+    CHECK(std::abs(rpm_settled - idle_rpm_desc) < 2.0);
 
     // WOT launch in 1st from settled rest.
     w.set_control("throttle", 1.0);

@@ -96,6 +96,7 @@ struct SimulatedEngineMaps {
     Table2D inverse_plate;                // electronic only: x = rpm, y = request in [0,1] -> plate target
     real idle_ff = 0.0;                   // idle feed-forward: plate (electronic) / bypass (mechanical)
     real idle_p_im = 0.0;                 // steady manifold pressure at idle_rpm with idle_ff
+    real idle_cap_x = 0.0;                // idle authority cap (IdleControlDesc::max_torque_nm), 0 = none
     std::uint64_t content_hash = 0;
 };
 
@@ -114,6 +115,7 @@ struct SimulatedSteadyTables {
     Table2D inverse_plate; // electronic only (empty for mechanical)
     real idle_ff = 0.0;
     real idle_p_im = 0.0;
+    real idle_cap_x = 0.0;
 };
 
 class SimulatedEngine final : public IEngine {
@@ -130,6 +132,11 @@ public:
     static constexpr real kIsaTemperatureK = kIsaAirTemperatureK;
     static constexpr int kPsiIntervals = 1000;
     static constexpr real kPsiRegularisationStart = 0.99;
+    // Idle manifold-fill compensation (owner 2026-09-29): the idle air path
+    // fills the plenum this many times faster than the idle plate alone [A],
+    // bringing the ~0.3 s idle manifold lag near the 0.04 s actuator lag.
+    static constexpr real kIdleFillGain = 4.0;
+    static constexpr real kIdleFillDx = 1e-4; // forward-difference step for df/dx
 
     explicit SimulatedEngine(const SimulatedEngineDesc& desc);
     // Reuse an already-built maps object (must come from build_maps(desc)

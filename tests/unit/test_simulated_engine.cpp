@@ -746,8 +746,20 @@ TEST_CASE("C11 T7 state machine, DFCO, limiter, idle PI, ignition cut", "[drivet
         const real ff_e = el.maps().idle_ff;
         const real x0 = el.x_thr();
         REQUIRE(x0 == ff_e);
+        // Pedal released: the PI position plus the manifold-fill term, x with
+        // f(p, x) = 4*f(p, theta_idle) linearised by a 1e-4 forward difference
+        // (owner 2026-09-29 idle rework), evaluated at the pre-step p_im.
+        auto fill = [&](const SimulatedEngine& eng, real theta, bool mech) {
+            auto f_at = [&](real xi) { return mech ? eng.manifold_rhs(eng.p_im(), w, 0.0, xi).f : eng.manifold_rhs(eng.p_im(), w, xi, 0.0).f; };
+            const real f0 = f_at(theta);
+            const real dfdx = (f_at(theta + 1e-4) - f0) / 1e-4;
+            REQUIRE(f0 > 0.0); // below idle the manifold is under its target: the fill term adds air
+            return std::clamp(theta + 3.0 * f0 / dfdx, 0.0, mech ? 0.5 : 0.1);
+        };
+        const real x_idle_e = fill(el, ff_e + 3e-5 * 100.0, false);
+        CHECK(x_idle_e > ff_e + 3e-5 * 100.0);
         (void)el.pre_solve(running(w), cmd(0.0), TcuRequest{}, kH);
-        const real tgt = std::max(el.maps().inverse_plate.value(700.0, 0.0), ff_e + 3e-5 * 100.0);
+        const real tgt = std::max(el.maps().inverse_plate.value(700.0, 0.0), x_idle_e);
         CHECK(std::abs(el.x_thr() - (x0 + kH / (0.05 + kH) * (tgt - x0))) < 1e-16);
         CHECK(el.x_iac() == 0.0);
         CHECK(std::abs(el.idle_integrator() - 6e-5 * 100.0 * kH) < 1e-18);
@@ -756,8 +768,9 @@ TEST_CASE("C11 T7 state machine, DFCO, limiter, idle PI, ignition cut", "[drivet
         const real ff_m = me.maps().idle_ff;
         REQUIRE(me.x_iac() == ff_m);
         REQUIRE(me.x_thr() == 0.0);
+        const real x_idle_m = fill(me, std::clamp(ff_m + 1.5e-4 * 100.0, 0.0, 0.5), true);
         (void)me.pre_solve(running(w), cmd(0.0), TcuRequest{}, kH);
-        CHECK(std::abs(me.x_iac() - std::clamp(ff_m + 1.5e-4 * 100.0, 0.0, 0.5)) < 1e-15);
+        CHECK(std::abs(me.x_iac() - x_idle_m) < 1e-12); // the forward difference amplifies last-bit differences (1.7e-14 measured)
         CHECK(me.x_thr() == 0.0);
     }
     SECTION("ignition cut: no combustion; the electronic plate closes, the mechanical plate stays at the command") {

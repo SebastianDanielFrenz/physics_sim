@@ -263,7 +263,8 @@ real steady_net_torque(const SimulatedEngineMaps& m, const Ambient& amb, const S
 // runtime refill (set_ambient) is allocation-free. check_monotone throws on
 // a steady torque that decreases with plate position (build time only; a
 // runtime refill never throws).
-void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real idle_rpm, real idle_max_x, SimulatedSteadyTables& t,
+void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real idle_rpm, real idle_max_x, real idle_max_torque_nm,
+                        SimulatedSteadyTables& t,
                         bool check_monotone) {
     const StarterDesc no_starter{};
     const std::vector<real>& rpm_axis = t.steady_torque_nm.x;
@@ -342,6 +343,24 @@ void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real i
         t.idle_ff = ff;
         const real omega_idle = idle_rpm / kRadPerSecToRpm;
         t.idle_p_im = mech ? steady_p(m, amb, omega_idle, real(0.0), ff) : steady_p(m, amb, omega_idle, ff, real(0.0));
+
+        // Idle authority cap (owner 2026-09-29: "not orders of magnitude
+        // more" than creeping in gear needs): the position whose steady net
+        // torque at idle_rpm is max_torque_nm, bounded by idle_max_x.
+        t.idle_cap_x = real(0.0);
+        if (idle_max_torque_nm > real(0.0)) {
+            real x_cap = idle_max_x;
+            if (net(idle_max_x) > idle_max_torque_nm) {
+                real lo = ff, hi = idle_max_x;
+                for (int it = 0; it < 60; ++it) {
+                    const real mid = real(0.5) * (lo + hi);
+                    if (net(mid) < idle_max_torque_nm) lo = mid;
+                    else hi = mid;
+                }
+                x_cap = real(0.5) * (lo + hi);
+            }
+            t.idle_cap_x = x_cap;
+        }
     }
     t.p_pa = amb.p_amb;
 }
@@ -416,13 +435,14 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps(const Sim
             for (int i = 0; i <= kReq; ++i) t.inverse_plate.y.push_back(real(i) / real(kReq));
             t.inverse_plate.values.assign(rpm_axis.size() * t.inverse_plate.y.size(), real(0.0));
         }
-        fill_steady_tables(*m, amb, desc.idle_rpm, desc.idle.max_throttle, t, true);
+        fill_steady_tables(*m, amb, desc.idle_rpm, desc.idle.max_throttle, desc.idle.max_torque_nm, t, true);
         m->steady_wot_nm = std::move(t.steady_wot_nm);
         m->steady_motoring_nm = std::move(t.steady_motoring_nm);
         m->steady_torque_nm = std::move(t.steady_torque_nm);
         m->inverse_plate = std::move(t.inverse_plate);
         m->idle_ff = t.idle_ff;
         m->idle_p_im = t.idle_p_im;
+        m->idle_cap_x = t.idle_cap_x;
     }
 
     // Content hash over every number the model reads (I7c interface request 2).
@@ -463,6 +483,8 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps(const Sim
     f.table(m->inverse_plate);
     f.pod(m->idle_ff);
     f.pod(m->idle_p_im);
+    // Owner 2026-09-29: folded only when set, so engines without it hash as before.
+    if (desc.idle.max_torque_nm > real(0.0)) f.pod(desc.idle.max_torque_nm);
     m->content_hash = f.h;
     return m;
 }
@@ -496,6 +518,7 @@ SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_pt
     steady_.inverse_plate = maps_->inverse_plate;
     steady_.idle_ff = maps_->idle_ff;
     steady_.idle_p_im = maps_->idle_p_im;
+    steady_.idle_cap_x = maps_->idle_cap_x;
     set_ambient(kIsaPressurePa, kIsaTemperatureK);
     state_ = desc.initial_state == EngineInitialState::Running ? EngineState::Running : EngineState::Off;
     init_state_for(state_);
@@ -508,7 +531,7 @@ void SimulatedEngine::set_ambient(real p_pa, real t_k) {
     r_t_ = kGasConstant * t_k;
     inv_sqrt_rt_ = real(1.0) / std::sqrt(r_t_);
     if (p_pa != steady_.p_pa || t_k != steady_.t_k) {
-        fill_steady_tables(*maps_, make_ambient(p_pa, t_k), desc_idle_rpm_, idle_.max_throttle, steady_, false);
+        fill_steady_tables(*maps_, make_ambient(p_pa, t_k), desc_idle_rpm_, idle_.max_throttle, idle_.max_torque_nm, steady_, false);
         steady_.t_k = t_k;
         ++steady_rebuilds_;
     }
@@ -529,8 +552,9 @@ void SimulatedEngine::request_replace_maps(std::shared_ptr<const SimulatedEngine
     t.inverse_plate = new_maps->inverse_plate;
     t.idle_ff = new_maps->idle_ff;
     t.idle_p_im = new_maps->idle_p_im;
+    t.idle_cap_x = new_maps->idle_cap_x;
     if (p_amb_ != t.p_pa || t_amb_ != t.t_k) {
-        fill_steady_tables(*new_maps, make_ambient(p_amb_, t_amb_), desc_idle_rpm_, idle_.max_throttle, t, false);
+        fill_steady_tables(*new_maps, make_ambient(p_amb_, t_amb_), desc_idle_rpm_, idle_.max_throttle, idle_.max_torque_nm, t, false);
         t.t_k = t_amb_;
     }
     pending_maps_ = std::move(new_maps);
@@ -647,14 +671,56 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // Idle PI in ACTUATOR units: plate position (electronic) or bypass
     // valve opening (mechanical); feed-forward = maps.idle_ff.
     const real ff = steady_.idle_ff;
+    // Authority cap (IdleControlDesc::max_torque_nm, owner 2026-09-29): enough
+    // to creep in gear, not a hidden launch aid.
+    const real cap = steady_.idle_cap_x > real(0.0) ? std::min(steady_.idle_cap_x, idle_.max_throttle) : idle_.max_throttle;
     real theta_idle = real(0.0);
     if ((state_ == EngineState::Running || state_ == EngineState::Cranking) && !dfco_active_) {
+        // One-sided around the model's own no-load feed-forward (owner
+        // 2026-09-29: never less air than idle needs): P and I only ADD air
+        // for a load; above idle the feed-forward alone brings the engine
+        // down (its net torque falls with rpm at a fixed position). A
+        // two-sided P closed the plate on the way down and dipped below idle.
+        // With the pedal pressed the pre-2026-09-29 two-sided law stays: the
+        // idle air backs off above idle so part-throttle torque is the pedal's.
         const real e = desc_idle_rpm_ - rpm;
-        theta_idle = std::clamp(ff + idle_.kp_per_rpm * e + idle_integrator_, real(0.0), idle_.max_throttle);
-        idle_integrator_ = std::clamp(idle_integrator_ + idle_.ki_per_rpm_s * e * h, -ff, idle_.max_throttle - ff);
+        if (theta_req < real(0.01)) {
+            theta_idle = std::clamp(ff + idle_.kp_per_rpm * std::max(e, real(0.0)) + idle_integrator_, real(0.0), std::max(cap, ff));
+            idle_integrator_ = std::clamp(idle_integrator_ + idle_.ki_per_rpm_s * e * h, real(0.0), std::max(cap - ff, real(0.0)));
+        } else {
+            theta_idle = std::clamp(ff + idle_.kp_per_rpm * e + idle_integrator_, real(0.0), std::max(cap, ff));
+            idle_integrator_ = std::clamp(idle_integrator_ + idle_.ki_per_rpm_s * e * h, -ff, std::max(cap - ff, real(0.0)));
+        }
+    } else if (state_ == EngineState::Running && dfco_active_) {
+        // Dashpot (owner 2026-09-29, "as soon as the engine reaches idle, the
+        // ECU should inject just enough fuel and air to keep the idle rpm"):
+        // fuel cut, idle air kept, so the manifold is at its idle-plate
+        // pressure when fuelling resumes. A closed plate here emptied the
+        // plenum and the engine fell ~260 rpm below idle after every lift.
+        idle_integrator_ = real(0.0);
+        theta_idle = std::min(ff, idle_.max_throttle);
     } else {
         idle_integrator_ = real(0.0);
         theta_idle = real(0.0);
+    }
+    // Manifold-fill compensation (the ECU's air-charge dynamics): with the
+    // pedal released the idle position theta_idle sets the manifold's
+    // TARGET; the actuator is driven to x with f(p, x) = G*f(p, theta_idle),
+    // so the plenum reaches theta_idle's steady pressure G times faster and x
+    // returns to theta_idle there (f = 0 <=> f = 0). Without it the 3 L
+    // plenum (~0.3 s at idle) lagged the falling rpm and the engine dipped
+    // below idle after fuelling resumed.
+    real x_idle = theta_idle;
+    if (theta_idle > real(0.0) && theta_req < real(0.01)) {
+        const real xp = mech ? theta_cmd : real(0.0);
+        auto f_at = [&](real xi) {
+            return mech ? manifold_rhs(p_im_, omega_old, xp, xi).f : manifold_rhs(p_im_, omega_old, xi, real(0.0)).f;
+        };
+        const real f0 = f_at(theta_idle);
+        const real dfdx = (f_at(theta_idle + kIdleFillDx) - f0) / kIdleFillDx;
+        if (dfdx > real(0.0)) {
+            x_idle = std::clamp(theta_idle + (kIdleFillGain - real(1.0)) * f0 / dfdx, real(0.0), idle_.max_throttle);
+        }
     }
 
     bool limiter_active = false;
@@ -669,9 +735,9 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // (3) actuator
     if (mech) {
         x_thr_ = theta_cmd;
-        x_iac_ = theta_idle;
+        x_iac_ = x_idle;
     } else {
-        const real x_target = std::max(steady_.inverse_plate.value(rpm, theta_req), theta_idle);
+        const real x_target = std::max(steady_.inverse_plate.value(rpm, theta_req), x_idle);
         if (!(actuator_tau_s_ > real(0.0))) {
             x_thr_ = x_target;
         } else {
@@ -746,7 +812,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         } else {
             const real wot = steady_.steady_wot_nm.evaluate(rpm);
             real demand = s * mot + (comb ? theta_req : real(0.0)) * (wot - mot);
-            if (comb && theta_idle > real(0.0)) demand = std::max(demand, steady_.steady_torque_nm.value(rpm, theta_idle));
+            if (comb && !dfco_active_ && theta_idle > real(0.0)) demand = std::max(demand, steady_.steady_torque_nm.value(rpm, theta_idle));
             r.torque_demand = demand;
         }
     }

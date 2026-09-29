@@ -1964,6 +1964,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         if (!(e.idle.max_throttle > real(0.0) && e.idle.max_throttle <= real(1.0))) {
             throw std::runtime_error(ctx + ": idle_control.max_throttle must be in (0, 1], got " + std::to_string(e.idle.max_throttle));
         }
+        e.idle.max_torque_nm = ij.value("max_torque_nm", e.idle.max_torque_nm);
+        if (!(std::isfinite(e.idle.max_torque_nm) && e.idle.max_torque_nm >= real(0.0))) {
+            throw std::runtime_error(ctx + ": idle_control.max_torque_nm must be >= 0, got " + std::to_string(e.idle.max_torque_nm));
+        }
         // R6: a negative gain flips the PI loop's sign (destabilising, not
         // merely a weaker response) - reject rather than silently misbehave.
         if (e.idle.kp_per_rpm < real(0.0)) {

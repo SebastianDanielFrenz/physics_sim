@@ -485,7 +485,8 @@ clamped at every edge. A 1D curve is the usual `{"x": [...], "y": [...]}`.
 | `inertia_kgm2` | number | yes | > 0 | as `torque_map` |
 | `breakaway_torque_nm` | number | no (0) | >= `maps.friction_torque_nm(0)` | static Coulomb capacity |
 | `idle_rpm`, `stall_rpm`, `fire_rpm`, `start_complete_rpm`, `dfco_enable_rpm`, `dfco_reenable_rpm` | number | no | same ordering rules as `torque_map` | |
-| `idle_control.kp_per_rpm`, `ki_per_rpm_s`, `max_throttle` | number | no | max_throttle in (0, 1] | electronic: PI on the plate; mechanical: PI on the bypass valve (max_throttle = largest valve opening) |
+| `idle_control.kp_per_rpm`, `ki_per_rpm_s`, `max_throttle` | number | no | max_throttle in (0, 1] | electronic: PI on the plate; mechanical: PI on the bypass valve (max_throttle = largest valve opening). Pedal released (request < 0.01): the P term only adds air below idle_rpm and the integrator stays in [0, cap - ff] (ff = the no-load idle position), during the overrun fuel cut the position is held at ff (dashpot), and a manifold-fill term opens further while the manifold is below its target (x with f(p, x) = 4 f(p, theta_idle)), so a lift-off settles onto idle from above. Pedal pressed: the two-sided PI. |
+| `idle_control.max_torque_nm` | number | no | >= 0, default 0 | caps the idle controller at the position whose steady net torque at idle_rpm is this much above zero - enough to creep in gear, not a launch aid; 0 = max_throttle alone. Per engine file (a truck engine sets its own). Folded into the maps content hash only when > 0 |
 | `limiter`, `starter`, `crank_axis_local`, `initial_state` | | no | as `torque_map` | |
 | `fuels` / `fuel` | array / string | **yes** | as `torque_map`'s [`fuels`](#fuels-ignition-indicated_efficiency) | the engine's torque comes from burnt fuel, so a fuel is mandatory |
 | `ignition` | string | **yes** | `"spark"` only | `"compression"` is rejected until a CI combustion model exists |
