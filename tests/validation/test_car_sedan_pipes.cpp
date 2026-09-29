@@ -8,36 +8,31 @@
 // from a cycle block that was fitted/cited against real dyno data.
 // demo_i4_pipes.json is [AS] (assumed, unmeasured) throughout - this test
 // only checks the car DRIVES, not that it drives like any real car:
-//   - idles without stalling (engine stays Running, within a measured,
-//     tightened band around idle_rpm). idle_pipes task (2026-09-29,
-//     root-caused via a per-tick trace, see data/engines/demo_i4_pipes.json's
-//     own "source"/"cycle.source" fields for the full writeup): the ORIGINAL
-//     hunt (~1040-1280 rpm, anchored on dfco_reenable_rpm/dfco_enable_rpm)
-//     had two combined causes, both fixed here - (1) the generated map grid
-//     did not cover idle_rpm (800, grid_rpm started at 1000), so the idle
-//     feed-forward bisection and every low-rpm lookup used Table2D's
-//     edge-clamped 1000 rpm row, physically wrong for 800 rpm; grid_rpm now
-//     includes 800 (the lowest node the offline generator could actually
-//     converge at - 250/500 rpm were tried and are structurally unreachable/
-//     not-settled at this engine's low-rpm plenum targets, independent of
-//     cause (2)); (2) even with 800 rpm covered, the closed-throttle minimum
-//     leak area (throttle_body.area_fraction_vs_position at x=0) was too
-//     large - even fully closed throttle produced positive net torque at
-//     800 rpm (measured net(0) = +46.99 Nm), so no idle equilibrium existed
-//     at all; reduced 0.01 -> 0.002, which gives net(0) = -11.93 Nm and a
-//     valid idle_ff solution (idle_p_im ~= 29.5 kPa, close to the 30 kPa
-//     grid node). KNOWN LIMITATION, still present and NOT chased further
-//     (confirmed independent of DFCO - disabling it made the residual
-//     oscillation worse - and independent of simple PI gain scaling - a 10x
-//     gain cut left a similar-magnitude oscillation - so this is a
-//     structural idle-loop issue, consistent with CLAUDE.md's documented
-//     "idle PI's own d(theta_idle)/d(omega) is not in the implicit solve's
-//     d" gap, not something to force-tune here): the idle PI still hunts in
-//     a bounded, non-growing limit cycle, now roughly 730-1300 rpm over a
-//     2 s settle window (steady-state, confirmed sustained not decaying out
-//     to 20 s: ~759-1301 rpm). The low end now sits much closer to the true
-//     800 rpm target than before. The car is still fully drivable (see the
-//     launch case below);
+//   - idles without stalling and SETTLES at idle_rpm. idle_pipes task
+//     (2026-09-29, root-caused with a per-tick rpm/p_im/throttle_eff/
+//     idle-integrator trace; see data/engines/demo_i4_pipes.json's "source"
+//     for the writeup). The original hunt (~1040-1300 rpm, ~3 s period) had
+//     four causes, all in the [AS] data file, none in code:
+//     (1) grid_rpm started at 1000, above idle_rpm 800 - every idle lookup
+//         used Table2D's edge-clamped 1000 rpm row; grid_rpm now starts at
+//         800 (250/500 rpm nodes do not settle in the generator);
+//     (2) the closed-throttle leak (area fraction at x=0) was 0.01: even a
+//         closed throttle gave +46.99 N*m net at 800 rpm, no idle
+//         equilibrium; now 0.002 (net(0) = -11.93 N*m);
+//     (3) the idle point (~29.5 kPa) sat on the 30 kPa lower edge of
+//         grid_p_im_kpa, where Table2D's slopes drop to 0 - a 25 kPa node
+//         was added (20 kPa does not settle at 800 rpm in the generator);
+//     (4) the throttle area curve rose in one 0 -> 0.5 segment (plant gain
+//         ~4x a real body near closed) and the idle PI gains were
+//         kp 1e-3 / ki 4e-3, ~33x/67x the A25A sim engine's (3e-5 / 6e-5)
+//         on the same 3.0 L manifold and similar crank inertia; both now
+//         follow toyota_a25a_fks_sim.json (its curve shape with this file's
+//         own 0.002 leak, and its idle_control) - taken as a working
+//         precedent, not tuned to this test.
+//     Discriminating runs (20 s idle, rpm range over the last 2 s): (1)+(2)
+//     only 759-1301; +(3) only 749-1299; +(4) only 772-827 (+-30, a slow
+//     ~2.5 s swing still decaying at 20 s); all four 800.0-800.0.
+//     car_sedan_sim.json in the same harness settles to 800.0 in ~4 s.
 //   - a neutral (no gear engaged) full-throttle free rev reaches the
 //     engine's own fuel-cut limiter band and falls back below it on
 //     throttle lift, mirroring tests/unit/test_engine_rig_audio.cpp's R1
@@ -96,18 +91,24 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
         if (w.powertrain_state(rig.vehicle).engine_state != EngineState::Running) stalled = true;
     };
 
-    // Settle at idle (default initial_state = Running, no starter needed).
-    // See this file's header comment: the pipe/cycle engine's idle PI does
-    // not converge to idle_rpm here, it hunts in a bounded limit cycle -
-    // track the min/max seen instead of asserting convergence.
-    real idle_rpm_min = 1e9, idle_rpm_max = -1e9;
-    for (int t = 0; t < 480; ++t) {
+    // Settle at idle (default initial_state = Running, no starter needed):
+    // 10 s, then the rpm range and mean over the last 2 s.
+    constexpr int kIdleTicks = 2400, kWindowStart = 1920; // 10 s / last 2 s @ 240 Hz
+    real idle_rpm_min = 1e9, idle_rpm_max = -1e9, idle_rpm_sum = 0.0;
+    int n_window = 0;
+    real last_off_band_t = 0.0; // last time |rpm - idle_rpm| > 10 rpm
+    for (int t = 0; t < kIdleTicks; ++t) {
         w.step();
         check();
         const real r = w.powertrain_state(rig.vehicle).engine_rpm;
+        if (std::abs(r - idle_rpm_desc) > 10.0) last_off_band_t = (t + 1) / 240.0;
+        if (t < kWindowStart) continue;
         idle_rpm_min = std::min(idle_rpm_min, r);
         idle_rpm_max = std::max(idle_rpm_max, r);
-    } // 2 s @ 240 Hz
+        idle_rpm_sum += r;
+        ++n_window;
+    }
+    const real idle_rpm_mean = idle_rpm_sum / n_window;
     const auto idle = w.powertrain_state(rig.vehicle);
     const real idle_rpm = idle.engine_rpm;
 
@@ -124,27 +125,20 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     for (int t = 0; t < 240; ++t) { w.step(); check(); } // 1 s
     const real rpm_after_lift = w.powertrain_state(rig.vehicle).engine_rpm;
 
-    std::printf("[car_sedan_pipes idle] rpm range over 2 s settle: [%.1f, %.1f] (desc idle_rpm %.0f - see header "
-                "comment on the idle hunt), final %.1f\n",
-                idle_rpm_min, idle_rpm_max, idle_rpm_desc, idle_rpm);
+    std::printf("[car_sedan_pipes idle] last 2 s of 10 s: rpm [%.3f, %.3f] mean %.3f (desc idle_rpm %.0f), "
+                "within +-10 rpm from t = %.3f s, final %.3f\n",
+                idle_rpm_min, idle_rpm_max, idle_rpm_mean, idle_rpm_desc, last_off_band_t, idle_rpm);
     std::printf("[car_sedan_pipes free rev] free-rev max %.1f rpm (limiter %.0f + hysteresis), 1 s after lift %.1f "
                 "rpm\n",
                 max_rpm, limiter_rpm_desc, rpm_after_lift);
     CHECK_FALSE(stalled);
-    // The idle PI still hunts (see header comment) rather than converging to
-    // idle_rpm, but the idle_pipes fix (grid_rpm now covers 800, the
-    // closed-throttle leak area no longer forces positive torque at idle)
-    // moved the band much closer to idle_rpm (800) than the pre-fix
-    // ~1040-1280 rpm. Measured over this 2 s settle window: min ~731.7 rpm,
-    // max ~1300.2 rpm; sustained steady-state (20 s trace) ~759-1301 rpm.
-    // Margin: min must clear stall_rpm (400) by a wide margin and land
-    // clearly below the old floor (1000); max must stay clear of the
-    // dfco_enable_rpm/limiter and land clearly below the old loose 2000
-    // bound. Sabotage (pre-fix grid_rpm/leak area): idle_rpm_min measured
-    // ~1003-1040, which fails idle_rpm_min < 900.0 below.
-    CHECK(idle_rpm_min > 600.0);
-    CHECK(idle_rpm_min < 900.0);
-    CHECK(idle_rpm_max < 1450.0);
+    // Settled idle (see the header comment). Measured: last 2 s range
+    // 0.653 rpm, mean 800.054, inside +-10 rpm from 3.054 s. Sabotages (the
+    // header's discriminating runs): without the 25 kPa node the range is
+    // ~550 rpm, without the A25A throttle curve/idle gains ~55 rpm.
+    CHECK(idle_rpm_max - idle_rpm_min < 2.0);
+    CHECK(std::abs(idle_rpm_mean - idle_rpm_desc) < 2.0);
+    CHECK(last_off_band_t < 5.0);
     CHECK(max_rpm >= limiter_rpm_desc); // reached the fuel-cut band
     CHECK(rpm_after_lift < limiter_rpm_desc - hysteresis_rpm_desc); // fell back below the restore point
 
