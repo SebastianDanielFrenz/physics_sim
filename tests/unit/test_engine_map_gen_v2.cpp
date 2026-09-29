@@ -135,8 +135,12 @@ TEST_CASE("A5 G1: a pipe engine generates through CycleEngine as v2, run-to-run 
     CHECK(a->maps.ve.values == b->maps.ve.values);
     // Pinned (clang-cl release, re-checked on msvc-release): the pipe path
     // runs on ps::math only, so any change of numerics - or a platform libm
-    // call slipping in - moves this value.
-    CHECK(a->content_hash == 0xeced05eb5892fd4aull);
+    // call slipping in - moves this value. Re-pinned by ps_audio A8b (was
+    // 0xeced05eb5892fd4a): the catalyst's laminar monolith resistance (F1,
+    // WgNodeDesc::monolith_*) and the reservoir face's inflow branch (W2,
+    // pressure and velocity matched across the contact) both change a pipe
+    // engine's cycle; lumped engines are untouched (V7).
+    CHECK(a->content_hash == 0x171173a11cd5cd05ull);
     for (std::size_t ir = 0; ir < a->maps.ve.x.size(); ++ir) {
         for (std::size_t ip = 0; ip < a->maps.ve.y.size(); ++ip) {
             const real ve = a->maps.ve.values[ir * a->maps.ve.y.size() + ip];

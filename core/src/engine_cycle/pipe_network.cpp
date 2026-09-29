@@ -131,7 +131,9 @@ inline real minmod(real a, real b) {
 // reservoir pressure, reached along the outgoing isentropic characteristic
 // (u + 2a/(gamma-1) = const, interior gamma frozen); sonic cap. Inflow: isentropic
 // from the reservoir's stagnation state (h0 = the reservoir's static enthalpy,
-// a stagnant reservoir), matched to the same outgoing characteristic; sonic cap.
+// a stagnant reservoir), matched in pressure and velocity (not in the Riemann
+// invariant - the two gases' entropies differ) to the interior gas's outgoing
+// characteristic; sonic cap.
 // The inflow energy flux is mdot * h0 exactly, so reservoir and pipe book the
 // same energy.
 template <class Res>
@@ -163,21 +165,53 @@ inline Flux reservoir_face(const GasModel& g, real rho, real un, real p, real x,
         return physical_flux(g, rho_s, un_s, p_s, x);
     }
 
-    // Inflow from the stagnant reservoir.
-    const real gc = 0.5 * gm1;
+    // Inflow from the stagnant reservoir (ps_audio A8b). The face (u, p*)
+    // lies on the interior's outgoing characteristic WITH THE INTERIOR'S OWN
+    // ENTROPY, u = un + 2a/gm1 (1 - (p*/p)^k), k = gm1/(2 gamma), and on the
+    // reservoir gas's isentropic expansion from stagnation, p* = p_res q^(g_r/(g_r-1)),
+    // q = 1 - gr u^2 / a_res^2: the exact Riemann problem's contact between
+    // the pipe gas and the reservoir gas carries p and u across, not the
+    // Riemann invariant. Eliminating p*: F(u) = un + 2a/gm1 (1 - A q^m) - u = 0,
+    // A = (p_res/p)^k (a_ratio above), m = k g_r/(g_r - 1). At u = 0 this is
+    // the outflow branch's own face state, so the two branches meet.
+    // F is decreasing (F' <= -1 for u <= 0) and convex, F(un_s) >= 0 > F(0),
+    // so Newton from un_s (or from the sonic bound) climbs monotonically to
+    // the root. The pre-A8b form matched the interior invariant
+    // un + 2a/gm1 with the RESERVOIR's sound speed; whenever the two gases'
+    // entropies differed (any temperature difference at equal pressure)
+    // the branches disagreed at u = 0 by 2 (a_int - a_res)/gm1: a hotter
+    // pipe got a velocity deadband (the face returned u = 0 - a Coulomb-like
+    // loss that stopped a resonator's ring exactly, 10 Pa in 0.2 s at
+    // 0.01 K), a colder pipe a jump (a stuck residual) - test_pipe_network.cpp
+    // "A8b W2 diag: resonator mode amplitude vs time" and P10.
     const real gr = 0.5 * (res.gamma - 1.0);
-    const real j = un + a / gc;
-    const real a2 = gc * gc + gr;
-    const real b = gc * gc * j;
-    const real c = gc * gc * j * j - res.a * res.a;
-    real disc = b * b - a2 * c;
-    if (disc < 0.0) disc = 0.0;
-    un_s = (b - std::sqrt(disc)) / a2;
-    if (un_s > 0.0) un_s = 0.0;
-    real as2 = res.a * res.a - gr * un_s * un_s;
-    if (un_s * un_s > as2) {  // choked inflow
+    const real m_exp = (gm1 / (2.0 * gamma)) * res.gamma / (res.gamma - 1.0);
+    const real two_a = 2.0 * a / gm1;
+    const real inv_ar2 = 1.0 / (res.a * res.a);
+    const real u_sonic = -res.a / std::sqrt(1.0 + gr);  // |u| = a* here: choked
+    real u = un_s > u_sonic ? un_s : u_sonic;
+    real as2 = 0.0;
+    bool choked = false;
+    for (int it = 0; it < 8; ++it) {
+        const real q = 1.0 - gr * u * u * inv_ar2;
+        const real qm = ps::math::pow(q, m_exp);
+        const real f = un + two_a * (1.0 - a_ratio * qm) - u;
+        if (it == 0 && u == u_sonic && f <= 0.0) {
+            choked = true;
+            break;
+        }
+        const real df = two_a * a_ratio * m_exp * (qm / q) * 2.0 * gr * u * inv_ar2 - 1.0;
+        const real du = -f / df;
+        u += du;
+        if (u > 0.0) u = 0.0;
+        if (std::fabs(du) <= 1e-13 * a) break;
+    }
+    if (choked) {
         as2 = res.a * res.a / (1.0 + gr);
         un_s = -std::sqrt(as2);
+    } else {
+        un_s = u;
+        as2 = res.a * res.a - gr * un_s * un_s;
     }
     const real as = std::sqrt(as2);
     const real p_s = res.p * ps::math::pow(as / res.a, 2.0 * res.gamma / (res.gamma - 1.0));
