@@ -132,6 +132,14 @@ var chase_camera: Camera3D
 var using_chase_camera: bool = true
 var ground_grid: MeshInstance3D
 
+# ps_audio A11: engine sound, only when the spawned vehicle's own engine has
+# a live cycle model (VEHICLE_NAME's simulated engine with pipe blocks -
+# see ps_simulation.h's has_vehicle_voice/adapters/godot/src/vehicle_voice.h
+# for what qualifies). null on any vehicle without one (most, including the
+# default car_sedan.json) - _process below no-ops in that case.
+var _engine_audio_player: AudioStreamPlayer = null
+var _engine_audio_underrun_last: int = 0
+
 # Tractor demo (2026-09-28): true once --m1-spawn= is seen on the cmdline, so
 # the VEHICLE_TABLE resolution in _ready() does not clobber an explicit
 # owner-chosen spawn with the selected vehicle's own table default.
@@ -420,6 +428,7 @@ func _ready() -> void:
 	_setup_input_map()
 	_setup_hud()
 	_setup_tach_gauge()
+	_setup_engine_audio()
 
 func _setup_lighting() -> void:
 	# M1 visual pass fix: the demo previously had a DirectionalLight3D but
@@ -706,6 +715,43 @@ func _setup_tach_gauge() -> void:
 	gauge.set("vehicle_name", VEHICLE_NAME)
 	hud.add_child(gauge)
 
+func _setup_engine_audio() -> void:
+	# ps_audio A11 ("engine sound in Godot, minimal"): only when the spawned
+	# vehicle's own physics engine has a live cycle model does it have a
+	# voice at all (has_vehicle_voice - see vehicle_voice.h's try_create for
+	# exactly what qualifies: a "kind": "simulated" engine with a "cycle"
+	# block and a fuel, e.g. car_sedan_pipes.json; car_sedan.json's
+	# torque-map engine and car_sedan_sim.json's maps-only engine do not).
+	# No voice -> this function is a no-op, not an error.
+	if simulation == null or not simulation.has_vehicle_voice(VEHICLE_NAME):
+		print("ps_godot main.gd: no engine voice for vehicle '", VEHICLE_NAME, "' (see PsSimulation's own log line above for why)")
+		return
+
+	var sample_rate: float = simulation.get_vehicle_voice_sample_rate_hz(VEHICLE_NAME)
+	var channels: int = simulation.get_vehicle_voice_channel_count(VEHICLE_NAME)
+	if sample_rate <= 0.0 or channels <= 0:
+		return
+
+	var stream := AudioStreamGenerator.new()
+	stream.mix_rate = sample_rate
+	# Buffer length: comfortably longer than one _process tick at a low
+	# frame rate (say 20 fps = 50 ms) so a slow frame does not itself cause
+	# an audible gap - the Runner thread keeps rendering independently of
+	# Godot's frame rate (audio/include/ps_audio/runner.h), this buffer is
+	# only the hand-off cushion between it and AudioStreamGenerator.
+	stream.buffer_length = 0.2
+
+	_engine_audio_player = AudioStreamPlayer.new()
+	_engine_audio_player.name = "EngineAudio"
+	_engine_audio_player.stream = stream
+	_engine_audio_player.autoplay = true
+	# channels > 1 (multiple radiating sources, ps_audio A8) is mixed down
+	# to mono here for this minimal pass - AudioStreamGenerator's playback
+	# is itself mono/stereo only, and the brief scope is "minimal", not a
+	# full per-source spatial mix.
+	add_child(_engine_audio_player)
+	_engine_audio_player.play()
+
 func _process(delta: float) -> void:
 	if simulation != null and ground_grid != null:
 		ground_grid.position = simulation.get_world_origin_godot_position() + Vector3(0, GRID_Y_OFFSET_M, 0)
@@ -791,6 +837,43 @@ func _process(delta: float) -> void:
 			print("ps_godot main.gd: screenshot saved to ", _screenshot_path, " err=", err)
 			await get_tree().create_timer(0.2).timeout
 			get_tree().quit()
+
+	_process_engine_audio()
+
+func _process_engine_audio() -> void:
+	# ps_audio A11: drain read_vehicle_voice_audio() into the
+	# AudioStreamGenerator's own ring, once per Godot frame - the Voice's
+	# Runner thread renders independently (audio/include/ps_audio/
+	# runner.h), this only moves already-rendered frames across. No-op
+	# when _setup_engine_audio found no voice.
+	if _engine_audio_player == null:
+		return
+	var playback: AudioStreamGeneratorPlayback = _engine_audio_player.get_stream_playback()
+	if playback == null:
+		return
+
+	var to_fill: int = playback.get_frames_available()
+	if to_fill <= 0:
+		return
+	var channels: int = simulation.get_vehicle_voice_channel_count(VEHICLE_NAME)
+	var samples: PackedFloat32Array = simulation.read_vehicle_voice_audio(VEHICLE_NAME, to_fill)
+	var frames_got: int = (samples.size() / channels) if channels > 0 else 0
+	for i in frames_got:
+		# Minimal pass (brief scope): mix every source/channel down to one
+		# mono value, duplicated to both AudioStreamGeneratorPlayback
+		# output channels (push_frame always takes a stereo Vector2) - a
+		# real spatial mix of ps_audio A8's per-source channels is future
+		# work, not part of A11.
+		var mono: float = 0.0
+		for c in channels:
+			mono += samples[i * channels + c]
+		mono /= float(channels)
+		playback.push_frame(Vector2(mono, mono))
+
+	var underruns: int = simulation.get_vehicle_voice_underrun_count(VEHICLE_NAME)
+	if underruns != _engine_audio_underrun_last:
+		print("ps_godot main.gd: engine audio underrun count = ", underruns)
+		_engine_audio_underrun_last = underruns
 
 func _reset_vehicle(target_spawn_id: String = spawn_id) -> void:
 	var spawn := _read_spawn(_repo_root().path_join(track_relative_dir), target_spawn_id)
