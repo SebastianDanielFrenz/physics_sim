@@ -65,6 +65,7 @@ var _simulation: Node
 var _wheel_nodes: Array = []
 var _model_root: Node3D
 var _load_ok: bool = false
+var _eye_node: Node3D # socket_driver_eye, null if the model has none
 
 func _ready() -> void:
 	if simulation_path != NodePath():
@@ -75,6 +76,25 @@ func _ready() -> void:
 
 func model_loaded() -> bool:
 	return _load_ok
+
+# Driver eye point for cockpit_cam.gd: the art's own "socket_driver_eye"
+# node (every data/models rig has one), expressed in THIS node's frame -
+# the chassis body's ISO-local frame, _model_root's gltf->ISO permutation
+# and the physics-wheel alignment offset included. Walks the local
+# transforms up to this node rather than using global_position, so the
+# result does not depend on whether the chassis node has been placed yet
+# this frame.
+func has_driver_eye() -> bool:
+	return _eye_node != null
+
+func driver_eye_local() -> Vector3:
+	var xf := Transform3D.IDENTITY
+	var n: Node = _eye_node
+	while n != null and n != self:
+		if n is Node3D:
+			xf = (n as Node3D).transform * xf
+		n = n.get_parent()
+	return xf.origin
 
 func _load_model() -> void:
 	if model_absolute_path == "" or not FileAccess.file_exists(model_absolute_path):
@@ -99,6 +119,47 @@ func _load_model() -> void:
 	# three axes), so this never mirrors the mesh.
 	_model_root.transform.basis = Basis(Vector3(0, 1, 0), Vector3(0, 0, 1), Vector3(1, 0, 0))
 	_load_ok = true
+	_eye_node = _model_root.find_child("socket_driver_eye", true, false) as Node3D
+	_matte_inside_of_body_shell(_model_root)
+
+# Cockpit view fix (owner 2026-09-29, "the windows are floating"): the art
+# is built to be seen from outside. From the driver's eye (a) single-sided
+# exterior parts - the black trim framing the glass, door frames - are
+# back-face culled, so there is open sky where they should be, and (b) the
+# double-sided METALLIC paint shell (no headliner) mirrors the sky from
+# inside. Both made the glass look like panes floating in the air. So every
+# opaque surface gets a next_pass that draws only its back faces (cull
+# front) as matte dark trim; a double-sided metallic surface is first made
+# single-sided so its outside keeps the art's material. Double-sided
+# non-metallic surfaces (interior trim, rims) already look right from
+# behind and are left alone, as is the glass. From outside only what is
+# seen through the windows changes. The art files stay untouched
+# (data/models is read-only here).
+func _matte_inside_of_body_shell(root: Node) -> void:
+	var inner := StandardMaterial3D.new()
+	inner.cull_mode = BaseMaterial3D.CULL_FRONT
+	inner.albedo_color = Color(0.05, 0.05, 0.055)
+	inner.metallic = 0.0
+	inner.roughness = 0.9
+	var patched := {} # original material -> its patched copy, shared across meshes
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh: Mesh = (mi as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		for s in range(mesh.get_surface_count()):
+			var m := mesh.surface_get_material(s) as BaseMaterial3D
+			if m == null or m.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+				continue
+			var single_sided := m.cull_mode == BaseMaterial3D.CULL_BACK
+			var mirror_inside := m.cull_mode == BaseMaterial3D.CULL_DISABLED and m.metallic >= 0.5
+			if not (single_sided or mirror_inside):
+				continue
+			if not patched.has(m):
+				var outer := m.duplicate() as BaseMaterial3D
+				outer.cull_mode = BaseMaterial3D.CULL_BACK
+				outer.next_pass = inner
+				patched[m] = outer
+			(mi as MeshInstance3D).set_surface_override_material(s, patched[m])
 	print("ps_godot vehicle_visual.gd: loaded model ", model_absolute_path)
 
 func _bind_wheel_nodes() -> void:

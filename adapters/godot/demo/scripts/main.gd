@@ -13,8 +13,9 @@ extends Node3D
 # spawning on dirt made the first drive feel sluggish) - the vehicle is
 # also the terrain's streaming interest point, PLAN.md M1, updated
 # automatically every tick inside PsSimulation's post_step), shown with the
-# existing car_sedan.glb art (vehicle_visual.gd), a free-look camera and a
-# chase camera (toggled with the "camera" control action), a debug-draw
+# existing car_sedan.glb art (vehicle_visual.gd), a chase, a driver's-eye
+# (cockpit_cam.gd) and a free-look camera (cycled with the "camera" control
+# action), a debug-draw
 # toggle, and the HUD (hud.gd). Xbox/keyboard input (PsInputMap) feeds the
 # vehicle only through named control channels (PsSimulation.set_control) -
 # PLAN.md P2/M1's own rule. Keys 1/2/3 teleport the vehicle to the straight/
@@ -129,7 +130,10 @@ var debug_draw: Node
 var input_map: Node
 var free_camera: Camera3D
 var chase_camera: Camera3D
-var using_chase_camera: bool = true
+var cockpit_camera: Camera3D
+# The "camera" action cycles chase -> cockpit -> free -> chase.
+enum CameraMode { CHASE, COCKPIT, FREE }
+var camera_mode: int = CameraMode.CHASE
 var ground_grid: MeshInstance3D
 
 # ps_audio A11: engine sound, only when the spawned vehicle's own engine has
@@ -351,7 +355,8 @@ func _ready() -> void:
 			# Framing for the screenshot above: "drive" (default) leaves the
 			# normal chase camera running; "side"/"three_quarter"/"wheels"
 			# snap the free camera to a canned shot of the parked vehicle,
-			# for the M1 visual-pass report's reference screenshots.
+			# for the M1 visual-pass report's reference screenshots;
+			# "cockpit" drives like "drive" but from the driver's eye.
 			_screenshot_view = a.substr(len("--m1-screenshot-view="))
 		elif a.begins_with("--m1-screenshot-delay="):
 			# How many simulated seconds to wait before capturing (default
@@ -630,13 +635,26 @@ func _setup_cameras() -> void:
 	chase_camera.set("chassis_body_name", CHASSIS_BODY_NAME)
 	add_child(chase_camera)
 
-	using_chase_camera = true
-	chase_camera.current = true
-	free_camera.current = false
+	# Driver's-eye camera at the model's socket_driver_eye (cockpit_cam.gd).
+	cockpit_camera = Camera3D.new()
+	cockpit_camera.name = "CockpitCamera"
+	cockpit_camera.set_script(load("res://scripts/cockpit_cam.gd"))
+	cockpit_camera.set("simulation_path", simulation.get_path())
+	cockpit_camera.set("chassis_body_name", CHASSIS_BODY_NAME)
+	# Absolute path: a NodePath export resolves relative to the camera, not main.
+	var visual_node := get_node_or_null("Body_%s/VehicleVisual" % CHASSIS_BODY_NAME)
+	if visual_node != null:
+		cockpit_camera.set("vehicle_visual_path", visual_node.get_path())
+	add_child(cockpit_camera)
+
+	_set_camera_mode(CameraMode.CHASE)
 
 func _apply_screenshot_view(view: String) -> void:
 	if view == "" or view == "drive":
 		return # default chase-camera framing, already set up by _setup_cameras
+	if view == "cockpit":
+		_set_camera_mode(CameraMode.COCKPIT)
+		return
 	var chassis_xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
 	var pos := chassis_xform.origin
 	# basis.x/y/z = the chassis's own forward/left/up, expressed in Godot
@@ -663,14 +681,16 @@ func _apply_screenshot_view(view: String) -> void:
 			return
 	free_camera.transform.origin = cam_pos
 	free_camera.look_at(look_at_pos, up)
-	free_camera.current = true
-	chase_camera.current = false
-	using_chase_camera = false
+	_set_camera_mode(CameraMode.FREE)
+
+func _set_camera_mode(mode: int) -> void:
+	camera_mode = mode
+	chase_camera.current = (mode == CameraMode.CHASE)
+	cockpit_camera.current = (mode == CameraMode.COCKPIT)
+	free_camera.current = (mode == CameraMode.FREE)
 
 func _toggle_camera() -> void:
-	using_chase_camera = not using_chase_camera
-	chase_camera.current = using_chase_camera
-	free_camera.current = not using_chase_camera
+	_set_camera_mode((camera_mode + 1) % 3)
 
 func _setup_debug_draw() -> void:
 	debug_draw = ClassDB.instantiate("PsDebugDraw")
@@ -828,7 +848,7 @@ func _process(delta: float) -> void:
 
 	if _screenshot_path != "" and not _screenshot_taken:
 		_screenshot_t += delta
-		if not _autopilot and _screenshot_view == "drive":
+		if not _autopilot and (_screenshot_view == "drive" or _screenshot_view == "cockpit"):
 			# PHYS-033 P4 I3 (C8) section 12.4: the drivetrain sits in
 			# Neutral until a gear is requested - a single shift_up_count=1
 			# (edge-triggered, so setting it repeatedly every frame is
