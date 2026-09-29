@@ -1,5 +1,7 @@
 #include "ps_simulation.h"
 
+#include <filesystem>
+
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -331,6 +333,19 @@ void PsSimulation::rebuild_post_step_and_start() {
                 vs.wheels.push_back(ws);
             }
             vs.powertrain = world_->powertrain_state(vid); // plan section 12.1, same race-free path as the wheels above
+
+            // ps_audio A11: feed this tick's engine sound state into the
+            // vehicle's own voice (if it has one - most don't, see
+            // spawn_vehicle's VehicleVoice::try_create call). Sim-thread
+            // only, same as everything else in this post_step callback;
+            // push_tick itself just writes into the voice's lock-free SPSC
+            // queue, so this never blocks on the Runner's render thread.
+            if (!vs.powertrain.engines.empty()) {
+                const auto voice_it = vehicle_voice_by_name_.find(name);
+                if (voice_it != vehicle_voice_by_name_.end()) {
+                    voice_it->second->push_tick(vs.powertrain.engines[0], world_->sim_time());
+                }
+            }
             snap.vehicles.push_back(std::move(vs));
 
             const auto chassis_name_it = vehicle_chassis_body_name_.find(name);
@@ -394,11 +409,24 @@ void PsSimulation::rebuild_post_step_and_start() {
         adapter_snapshots_.publish();
     });
 
+    // ps_audio A11: start every vehicle's voice Runner thread alongside the
+    // sim thread (start() is idempotent, see VehicleVoice::start's own
+    // comment - rebuild_post_step_and_start can run more than once across
+    // a scenario reload without double-starting anything).
+    for (auto& [name, voice] : vehicle_voice_by_name_) {
+        voice->start();
+    }
+
     sim_thread_->start();
 }
 
 void PsSimulation::stop() {
     if (sim_thread_) sim_thread_->stop();
+    // ps_audio A11: stop every voice's Runner thread too, so nothing keeps
+    // rendering (or holding its thread) once the sim itself is stopped.
+    for (auto& [name, voice] : vehicle_voice_by_name_) {
+        voice->stop();
+    }
 }
 
 godot::Vector3 PsSimulation::rebase_focus(const godot::Vector3& focus_godot_position) {
@@ -624,7 +652,25 @@ bool PsSimulation::spawn_vehicle(const String& vehicle_name, const String& vehic
     }
 
     try {
-        ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(to_std_string(vehicle_json_absolute_path));
+        // ps_audio A11: a .psmaps disk cache (I7c C16b) for a simulated
+        // engine's load-time-generated maps (e.g. demo_i4_pipes.json's
+        // cycle block, car_sedan_pipes.json) - without it every launch
+        // regenerates them (0.17-2.2 s per engine, see core's CLAUDE.md),
+        // which is fine once but a needless wait on every "drive.ps1" run.
+        // Derived from the vehicle file's own path rather than a new
+        // GDExtension parameter: <repo_root>/out/godot_engine_cache, where
+        // repo_root is two directories up from data/vehicles/<file>.json.
+        // A vehicle with no simulated/cycle engine ignores cache_dir
+        // entirely (EngineMapOptions' own contract), so this is a no-op
+        // for every non-pipe-engine vehicle.
+        ps::io::EngineMapOptions map_options;
+        {
+            const std::string vpath = to_std_string(vehicle_json_absolute_path);
+            const std::filesystem::path vehicle_dir = std::filesystem::path(vpath).parent_path();
+            const std::filesystem::path repo_root = vehicle_dir.parent_path().parent_path();
+            map_options.cache_dir = (repo_root / "out" / "godot_engine_cache").string();
+        }
+        ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(to_std_string(vehicle_json_absolute_path), map_options);
         const ps::VehicleId vid = world_->create_vehicle(desc, body_it->second);
         vehicles_by_name_[name] = vid;
         vehicle_chassis_body_name_[name] = chassis_name;
@@ -632,6 +678,22 @@ bool PsSimulation::spawn_vehicle(const String& vehicle_name, const String& vehic
         vehicle_terrain_interest_id_[name] = next_terrain_interest_id_++;
         vehicle_stream_radius_m_[name] = stream_radius_m;
         vehicle_desc_by_name_[name] = std::move(desc);
+
+        // ps_audio A11: build this vehicle's voice from its OWN already-
+        // loaded engine desc (vehicle_desc_by_name_[name], just stored
+        // above) - no second file load, no separate "sound engine". A
+        // vehicle whose engine has no "cycle" block (most of them) simply
+        // gets no voice; logged once, not an error (see vehicle_voice.h).
+        {
+            std::string reason;
+            std::unique_ptr<VehicleVoice> voice = VehicleVoice::try_create(vehicle_desc_by_name_.at(name), reason);
+            godot::UtilityFunctions::print(String("ps_godot: vehicle \"") + vehicle_name + "\" engine voice: " +
+                                            String(reason.c_str()));
+            if (voice) {
+                vehicle_voice_underrun_count_[name] = 0;
+                vehicle_voice_by_name_[name] = std::move(voice);
+            }
+        }
         return true;
     } catch (const std::exception& e) {
         last_error_ = String("spawn_vehicle failed: ") + String(e.what());
@@ -925,6 +987,59 @@ String PsSimulation::get_wheel_surface_name(const String& vehicle_name, int whee
     return String(surface_table_->name_for(w->surface).c_str());
 }
 
+// ps_audio A11: the Godot-facing voice-readback API. VehicleVoice/its
+// Runner thread are built and started in spawn_vehicle/rebuild_post_step_
+// and_start above; these just expose read-only status plus the one
+// side-effecting call (read_vehicle_voice_audio, which drains the
+// Runner's ring and counts underruns) to GDScript.
+bool PsSimulation::has_vehicle_voice(const String& vehicle_name) const {
+    return vehicle_voice_by_name_.find(to_std_string(vehicle_name)) != vehicle_voice_by_name_.end();
+}
+
+double PsSimulation::get_vehicle_voice_sample_rate_hz(const String& vehicle_name) const {
+    const auto it = vehicle_voice_by_name_.find(to_std_string(vehicle_name));
+    return it == vehicle_voice_by_name_.end() ? 0.0 : it->second->sample_rate_hz();
+}
+
+int PsSimulation::get_vehicle_voice_channel_count(const String& vehicle_name) const {
+    const auto it = vehicle_voice_by_name_.find(to_std_string(vehicle_name));
+    return it == vehicle_voice_by_name_.end() ? 0 : it->second->channel_count();
+}
+
+godot::PackedFloat32Array PsSimulation::read_vehicle_voice_audio(const String& vehicle_name, int frames) {
+    godot::PackedFloat32Array out;
+    if (frames <= 0) return out;
+    const std::string name = to_std_string(vehicle_name);
+    const auto it = vehicle_voice_by_name_.find(name);
+    if (it == vehicle_voice_by_name_.end()) return out;
+
+    const int channels = it->second->channel_count();
+    if (channels <= 0) return out;
+
+    // Local scratch, not a persistent member: this runs on Godot's main
+    // thread from _process, at most a few hundred frames at a time (one
+    // AudioStreamGenerator fill per frame) - not the sim's own hot path,
+    // so an ordinary per-call allocation is fine here (unlike core/audio's
+    // own zero-alloc-after-warmup rules, which apply to the sim/render
+    // threads, not this adapter-side readback call).
+    std::vector<float> scratch(static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels));
+    const std::size_t got = it->second->runner().read(scratch.data(), static_cast<std::size_t>(frames));
+    if (got < static_cast<std::size_t>(frames)) {
+        vehicle_voice_underrun_count_[name] += 1;
+    }
+    const int got_samples = static_cast<int>(got) * channels;
+    out.resize(got_samples);
+    for (int i = 0; i < got_samples; ++i) {
+        out[i] = scratch[static_cast<std::size_t>(i)];
+    }
+    return out;
+}
+
+std::int64_t PsSimulation::get_vehicle_voice_underrun_count(const String& vehicle_name) const {
+    const auto it = vehicle_voice_underrun_count_.find(to_std_string(vehicle_name));
+    return it == vehicle_voice_underrun_count_.end() ? 0 : it->second;
+}
+
 void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_scenario", "absolute_json_path"), &PsSimulation::load_scenario);
     ClassDB::bind_method(D_METHOD("start"), &PsSimulation::start);
@@ -987,6 +1102,13 @@ void PsSimulation::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("add_adapter_time_us", "us"), &PsSimulation::add_adapter_time_us);
     ClassDB::bind_method(D_METHOD("consume_adapter_frame_time_us"), &PsSimulation::consume_adapter_frame_time_us);
+
+    // ps_audio A11
+    ClassDB::bind_method(D_METHOD("has_vehicle_voice", "vehicle_name"), &PsSimulation::has_vehicle_voice);
+    ClassDB::bind_method(D_METHOD("get_vehicle_voice_sample_rate_hz", "vehicle_name"), &PsSimulation::get_vehicle_voice_sample_rate_hz);
+    ClassDB::bind_method(D_METHOD("get_vehicle_voice_channel_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_channel_count);
+    ClassDB::bind_method(D_METHOD("read_vehicle_voice_audio", "vehicle_name", "frames"), &PsSimulation::read_vehicle_voice_audio);
+    ClassDB::bind_method(D_METHOD("get_vehicle_voice_underrun_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_underrun_count);
 }
 
 } // namespace ps_godot

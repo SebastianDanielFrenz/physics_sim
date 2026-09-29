@@ -35,6 +35,7 @@
 #include "render_interp.h"
 #include "sim_thread.h"
 #include "triple_buffer.h"
+#include "vehicle_voice.h"
 
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/scenario.h"
@@ -45,6 +46,7 @@
 #include "ps/world/world.h"
 
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2.hpp>
@@ -290,6 +292,31 @@ public:
     // see ps_simulation.cpp's post_step lambda) with `stream_radius_m`.
     // Must be called before start().
     bool spawn_vehicle(const godot::String& vehicle_name, const godot::String& vehicle_json_absolute_path, const godot::String& chassis_body_name, float stream_radius_m);
+
+    // ps_audio A11: whether spawn_vehicle built a VehicleVoice for this
+    // vehicle (its engine has a "cycle" block - see vehicle_voice.h). false
+    // for an unknown vehicle name too, not an error.
+    bool has_vehicle_voice(const godot::String& vehicle_name) const;
+    // Sample rate / interleaved channel count of the vehicle's voice (0 if
+    // has_vehicle_voice() is false) - a GDScript AudioStreamGenerator must
+    // be configured to match sample_rate before this is read from.
+    double get_vehicle_voice_sample_rate_hz(const godot::String& vehicle_name) const;
+    int get_vehicle_voice_channel_count(const godot::String& vehicle_name) const;
+    // Reads up to `frames` interleaved frames (channel_count() floats each)
+    // already rendered by this vehicle's Runner thread into its ring
+    // buffer - call every Godot _process() frame, mix channel_count() down
+    // to however many an AudioStreamGenerator needs (typically 1: mono
+    // sum), and push_buffer() the result. Returns fewer than `frames` (down
+    // to 0) whenever the Runner has not rendered enough yet - each such
+    // call also increments this vehicle's own underrun counter, read via
+    // get_vehicle_voice_underrun_count(). Empty array for an unknown
+    // vehicle or one with no voice (not an error - see has_vehicle_voice).
+    godot::PackedFloat32Array read_vehicle_voice_audio(const godot::String& vehicle_name, int frames);
+    // Total number of read_vehicle_voice_audio() calls, over this voice's
+    // whole life, that returned fewer frames than requested - i.e. the
+    // Runner thread underran Godot's own draw rate. 0 for a healthy run;
+    // -1 for an unknown vehicle or one with no voice.
+    std::int64_t get_vehicle_voice_underrun_count(const godot::String& vehicle_name) const;
     // Teleports the vehicle's chassis body back to sim_position/yaw_rad
     // with zero velocity (IRigidBackend::set_pose/set_motion - PLAN.md M1
     // "reset vehicle" control), THEN calls ps::World::reset_vehicle (plan
@@ -473,6 +500,19 @@ private:
     std::unordered_map<std::string, std::uint64_t> vehicle_terrain_interest_id_;
     std::unordered_map<std::string, float> vehicle_stream_radius_m_;
     std::uint64_t next_terrain_interest_id_ = 1;
+
+    // ps_audio A11: one VehicleVoice per vehicle whose engine has a "cycle"
+    // block (see vehicle_voice.h) - built once in spawn_vehicle from that
+    // vehicle's OWN already-loaded VehicleDesc, started/stopped alongside
+    // the sim thread (start()/stop()), fed every tick from post_step (sim
+    // thread only, same race-free point PowertrainSnapshot itself is read
+    // at - see rebuild_post_step_and_start()). A vehicle with no cycle
+    // block simply has no entry here (get_vehicle_voice_underrun_count
+    // below returns -1 for it) - never a placeholder silent voice.
+    std::unordered_map<std::string, std::unique_ptr<VehicleVoice>> vehicle_voice_by_name_;
+    // Main-thread only (read_vehicle_voice_audio is called from Godot's
+    // _process, never the sim thread) - a plain map is fine, no atomics.
+    std::unordered_map<std::string, std::int64_t> vehicle_voice_underrun_count_;
 
     // Gamepad rumble (haptics_core.h): one previous world-frame chassis
     // linear-velocity sample per vehicle, for the finite-difference

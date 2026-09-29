@@ -8,7 +8,12 @@
 // steppers), the PipeNetwork step (FV + waveguide) and - separately - a
 // stand-alone copy of the same waveguide, so FV = network - waveguide.
 //
-// Usage: bench_audio_voice [rpm] [seconds]
+// Usage: bench_audio_voice [rpm] [seconds] [dx_intake_mm] [dx_exhaust_mm]
+// ps_audio A11: the two trailing optional args override the fixture's own
+// audio_dx_intake_m/audio_dx_exhaust_m (default 17/32 mm, see
+// cycle_pipe_fixtures.h) for one-off "how much does a coarser live dx cost"
+// measurements - the A11 brief's own request, e.g.
+// `bench_audio_voice 3000 1 34 64` for a 2x-coarser grid.
 #include "cycle_pipe_fixtures.h"
 #include "ps/engine_cycle/cycle_engine.h"
 #include "ps/engine_cycle/cycle_stepper.h"
@@ -29,7 +34,9 @@ int main(int argc, char** argv) {
     const real rpm = argc > 1 ? std::atof(argv[1]) : 3000.0;
     const real seconds = argc > 2 ? std::atof(argv[2]) : 1.0;
     const real fs = 48000.0;
-    const drivetrain::CycleModelDesc desc = test::make_pipe_i4_cycle_desc();
+    drivetrain::CycleModelDesc desc = test::make_pipe_i4_cycle_desc();
+    if (argc > 3) desc.resolution.audio_dx_intake_m = std::atof(argv[3]) * 1e-3;
+    if (argc > 4) desc.resolution.audio_dx_exhaust_m = std::atof(argv[4]) * 1e-3;
     OperatingPoint op;
     op.rpm = rpm;
     op.p_im_pa = 60000.0;

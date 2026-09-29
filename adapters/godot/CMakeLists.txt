@@ -23,9 +23,18 @@ add_library(ps_godot_adapter SHARED
   src/ps_body_node.cpp
   src/debug_draw.cpp
   src/collision_import.cpp
+  src/vehicle_voice.cpp
 )
 
 target_include_directories(ps_godot_adapter PRIVATE src)
+# ps_audio A11: tools/common/engine_sound_glue.h (ps_tools::make_engine_input)
+# is the one shared EngineSoundState->EngineInput mapping between
+# tools/ps_engine_audio and this adapter (core's CLAUDE.md: neither ps_core
+# nor ps_audio may include the other, so the glue lives outside both). Only
+# the include path is needed here, not the ps_headless_env TARGET - that
+# target's own .cpp installs Windows headless-CRT/abort handlers, meant for
+# standalone tool/test executables, not a Godot-hosted GDExtension DLL.
+target_include_directories(ps_godot_adapter PRIVATE ${CMAKE_SOURCE_DIR}/tools/common)
 
 # godot-cpp's own CMakeLists.txt (branch 4.5) defines the target as
 # "godot-cpp"; newer godot-cpp versions also alias it to "godot::cpp", but
@@ -50,6 +59,7 @@ target_include_directories(ps_godot_adapter PRIVATE src)
 target_link_libraries(ps_godot_adapter
   PRIVATE
     ps_core
+    ps_audio
     godot-cpp
     nlohmann_json::nlohmann_json
     ps_options
