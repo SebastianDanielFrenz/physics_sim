@@ -141,3 +141,9 @@ ps_hand_throttle_down={
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+
+[xr]
+
+openxr/enabled=false
+openxr/startup_alert=false
+shaders/enabled=true

@@ -61,6 +61,12 @@
     Forwarded Godot args are ignored in this mode (a warning is printed
     if any were given).
 
+.PARAMETER -VR
+    SteamVR/OpenXR driver's-eye view: starts Godot with --xr-mode on and
+    the Vulkan (Mobile) renderer. Start SteamVR streaming and wear the
+    headset first; keyboard input needs the Godot desktop window focused.
+    F9 recenters. Without a runtime/headset the demo stays on the flat screen.
+
 .PARAMETER -DryRun
     Print exactly what would happen (whether a configure/build would
     run, and the resolved Godot command line) and do nothing - no
@@ -89,6 +95,7 @@ $NoConsole = $false
 $Editor    = $false
 $DryRun    = $false
 $ShowHelp  = $false
+$VR        = $false
 $GodotArgs = New-Object System.Collections.Generic.List[string]
 $sawSeparator = $false
 
@@ -99,6 +106,7 @@ foreach ($a in $args) {
         '^--?NoConsole$' { $NoConsole = $true; continue }
         '^--?Editor$'    { $Editor    = $true; continue }
         '^--?DryRun$'    { $DryRun    = $true; continue }
+        '^--?VR$'        { $VR        = $true; continue }
         '^(--?help|-h|/\?)$' { $ShowHelp = $true; continue }
         '^--$'           { $sawSeparator = $true; continue }
         default          { $GodotArgs.Add($a) }
@@ -144,6 +152,9 @@ SWITCHES (one or two leading dashes)
   -NoConsole       use the non-console Godot executable (no log window)
   -Editor          open the Godot editor on the demo instead of running it
   -DryRun          print what would be built/launched, do nothing
+  -VR              SteamVR/OpenXR driver's-eye view (Godot --xr-mode on); start
+                   SteamVR with the headset first. Falls back to the flat screen
+                   if OpenXR does not start. F9 recenters the seat.
 
 Anything else is forwarded to the demo (placed after Godot's own "--").
 A literal "--" is optional; everything after it is forwarded unchanged.
@@ -170,6 +181,7 @@ EXAMPLES
   drive
   drive --m1-vehicle=car_sedan_pipes
   drive -SkipBuild --m1-vehicle=tractor --m1-spawn=spawn_skidpad_tractor
+  drive -VR --m1-vehicle=car_sedan_pipes
   drive -DryRun -- --headless --quit-after 300
 "@ | Write-Host
     exit 0
@@ -250,6 +262,16 @@ $godotExe = if ($NoConsole) { Find-GodotExe } else { Find-GodotConsoleExe }
 $launchArgs = New-Object System.Collections.Generic.List[string]
 $launchArgs.Add('--path')
 $launchArgs.Add($demoDir)
+if ($VR) {
+    # The project keeps xr/openxr/enabled=false; this turns OpenXR on for this run only.
+    $launchArgs.Add('--xr-mode')
+    $launchArgs.Add('on')
+    # Vulkan for VR: SteamVR's OpenXR wants OpenGL >= 4.3, Godot's GL
+    # Compatibility renderer makes a 3.3 context ("trying anyway") - head
+    # tracking worked but no picture reached the headset (AMD, 2026-09-30).
+    $launchArgs.Add('--rendering-method')
+    $launchArgs.Add('mobile')
+}
 
 if ($Editor) {
     $launchArgs.Add('--editor')

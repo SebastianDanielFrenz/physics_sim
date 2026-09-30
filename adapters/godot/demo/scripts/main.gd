@@ -134,6 +134,10 @@ var cockpit_camera: Camera3D
 # The "camera" action cycles chase -> cockpit -> free -> chase.
 enum CameraMode { CHASE, COCKPIT, FREE }
 var camera_mode: int = CameraMode.CHASE
+# SteamVR/OpenXR (vr_rig.gd): only when Godot runs with --xr-mode on (drive -VR)
+# and OpenXR initialised; then no flat camera is ever current.
+var vr_rig: Node3D
+var vr_active: bool = false
 var ground_grid: MeshInstance3D
 
 # ps_audio A11: engine sound, only when the spawned vehicle's own engine has
@@ -648,8 +652,35 @@ func _setup_cameras() -> void:
 	add_child(cockpit_camera)
 
 	_set_camera_mode(CameraMode.CHASE)
+	_try_start_vr()
+
+# The OpenXR interface is initialised at startup by Godot itself when it was
+# started with --xr-mode on (the project keeps xr/openxr/enabled=false). Not
+# initialised (flag absent, no runtime, no headset) -> stay on the flat
+# cameras.
+func _try_start_vr() -> void:
+	var xr := XRServer.find_interface("OpenXR")
+	if xr == null or not xr.is_initialized():
+		return
+	# Godot's OpenXR guidance: the headset paces frames, window vsync must not.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	get_viewport().use_xr = true
+	chase_camera.current = false
+	cockpit_camera.current = false
+	free_camera.current = false
+	vr_rig = XROrigin3D.new()
+	vr_rig.name = "VrRig"
+	vr_rig.set_script(load("res://scripts/vr_rig.gd"))
+	vr_rig.set("simulation_path", simulation.get_path())
+	vr_rig.set("chassis_body_name", CHASSIS_BODY_NAME)
+	vr_rig.set("vehicle_visual_path", cockpit_camera.get("vehicle_visual_path"))
+	add_child(vr_rig)
+	vr_active = true
+	print("ps_godot main.gd: VR on (", xr.get_name(), "), driver's-eye view; F9 recenters")
 
 func _apply_screenshot_view(view: String) -> void:
+	if vr_active:
+		return # the headset is the view
 	if view == "" or view == "drive":
 		return # default chase-camera framing, already set up by _setup_cameras
 	if view == "cockpit":
@@ -684,6 +715,8 @@ func _apply_screenshot_view(view: String) -> void:
 	_set_camera_mode(CameraMode.FREE)
 
 func _set_camera_mode(mode: int) -> void:
+	if vr_active:
+		return # the headset is the view; flat cameras stay off
 	camera_mode = mode
 	chase_camera.current = (mode == CameraMode.CHASE)
 	cockpit_camera.current = (mode == CameraMode.COCKPIT)
