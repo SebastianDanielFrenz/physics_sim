@@ -545,10 +545,37 @@ each newly-assigned slot's `TileSample` (allocation-free,
 buffers) -> sequential `IRigidBackend::update_heightfield_body` +
 `set_pose` per changed slot. `starved_tile_count()` reports (never
 silently drops) tiles needed but with no free/reusable slot. Slot
-(re)assignment bookkeeping (`unordered_map` insert/erase) is the one
-explicitly-accepted exception to strict zero-alloc, bounded by
-`max_tile_fills_per_tick`/tick; the STEADY STATE (needed-tile-set
-unchanged, the common case while driving) is checked allocation-free.
+(re)assignment uses a sorted vector reserved to the pool size; row
+crossings with prefetch enabled are checked allocation-free. The lazy
+suppression-cache insertion remains an exception for a synchronous fill
+outside the complete load-time precompute.
+
+Terrain prefetch is opt-in: both `TerrainConfig::prefetch_margin_tiles`
+and `prefetch_max_tiles` must be nonzero. `ITerrainSource` defaults to
+`PrefetchSupportKind::TickOnly`; procedural sources declare `Immutable`.
+A `Snapshot` source captures immutable inputs on the tick thread via
+`acquire_prefetch_inputs`, fills from those inputs on the background
+lane via `fill_tile_from`, and validates them at install with
+`prefetch_inputs_current`. Releasing inputs in a tick must not free
+snapshot storage; the source retains it for an owner-thread purge.
+
+The JobSystem owns a separate background lane. Fixed tickets and
+detached heightfield spares move generation and upload off the tick.
+Installation keeps the existing tick, pool slot and BodyId: a ready
+tile swaps its spare into the body; a queued build is cancelled and
+filled synchronously; a running build is waited for. Stale snapshots
+also fall back to synchronous filling. Suppression inputs must be
+cached or provably empty before enqueue. `World::terrain_prefetch_stats()`
+exposes lifetime install, cancellation, stale-input and late counters,
+including wait duration. These counters do not affect state hashes.
+
+`bench_terrain_tiles --crossings-only` measures six row crossings at
+256×256 samples, one fill/tick and 900 km/h; the enabled run is paced
+to 240 Hz. On Windows release (2026-10-01), terrain-stage p99/max was
+8.094 ms off and 0.031 ms on across 72 crossing-window ticks, with
+42 background installs, no driven late builds and no starvation.
+This is a procedural-source benchmark, not a geo2map integration result;
+startup and slower background scheduling can still cause late waits.
 
 Tile seams: adjacent tiles are separate Jolt bodies whose border edges Jolt always treats as active; `jolt_backend.cpp`'s cross-tile edge weld (see "Jolt backend") removes the resulting ghost-edge contact spike (`tests/validation/test_terrain_seam_crossing.cpp`).
 
@@ -559,8 +586,9 @@ MSVC's and libstdc++'s iteration orders differ, and a different fill order
 hands the same tile to a different pool `BodyId` (moves `state_hash` and
 Jolt's contact-solve order). `interest_points_` is therefore a `std::map`
 keyed by interest-point id (updating an existing id does not allocate);
-`key_to_slot_`/`own_pool_body_ids_`/`suppression_cache_` stay
-`unordered_*` because they are lookup-only; the precompute's tile-key set
+`key_to_slot_` is a sorted vector; `own_pool_body_ids_` and
+`suppression_cache_` stay `unordered_*`
+because they are lookup-only; the precompute's tile-key set
 is sorted by `TileKey::packed` before use.
 
 Per-tile vertical datum (R1, real-world terrain 90-880 m ASL fed through

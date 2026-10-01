@@ -51,7 +51,34 @@
 // (Jolt's own SetShape/body bookkeeping may still touch the heap the very
 // first time), which is why this pool is created once, up front, at
 // World::set_terrain_source time (setup, not a job) - see TileManager's
-// constructor.
+// constructor. Slot (re)assignment bookkeeping is allocation-free too:
+// key_to_slot_ is a KeySlotIndex (a sorted vector reserved to the pool size
+// at construction), so a tile-row crossing allocates nothing
+// (tests/unit/test_terrain_prefetch.cpp, "Prefetch on: tile-row crossings
+// allocate nothing"). The one remaining exception is the lazy suppression
+// cache insert (suppression_cache_) the first time a tile NOT covered by the
+// load-time precompute is filled synchronously - bounded by
+// max_tile_fills_per_tick, and never hit while the precompute is complete.
+//
+// Prefetch ring (TerrainConfig::prefetch_margin_tiles/prefetch_max_tiles,
+// start_prefetch below): a background lane (JobSystem::submit_background)
+// fills tiles in a ring prefetch_margin_tiles wider than every interest
+// point's needed square and builds each into a heightfield SPARE shape
+// (IRigidBackend::build_heightfield_spare) ahead of time; installing such a
+// tile is then a pointer swap (swap_heightfield_spare) plus set_pose.
+// The 256^2 crossing benchmark measures the complete terrain stage. Steps 1-3 of
+// update() are unchanged, so every key is installed on the same tick into
+// the same slot/BodyId as with prefetch off - a still-Queued ticket falls
+// back to a synchronous fill (late_sync), a Running one is waited for
+// (late_wait) - and state_hash is identical either way. Sizing rule:
+// prefetch_max_tiles >= (ring - needed square) per interest point plus one
+// leading row, else the ring starves itself (tickets stay Done for margin
+// keys; there is no direction-aware priority, so keys left behind are
+// re-enqueued and later cancelled - wasted lane work, counted in
+// PrefetchStats::cancelled). The lane builds in wall-clock time: a caller
+// stepping much faster than real time (an unpaced bench or test) sees
+// late_sync/late_wait more often than a paced 240 Hz caller. A paced
+// caller can still be late under contention; inspect PrefetchStats.
 
 #pragma once
 

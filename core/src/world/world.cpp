@@ -805,4 +805,12 @@ terrain::PrefetchStats World::terrain_prefetch_stats() const {
     return terrain_manager_ ? terrain_manager_->prefetch_stats() : terrain::PrefetchStats{};
 }
 
+double World::last_stage_ms(const std::string& stage) const {
+    const std::vector<std::string>& names = pipeline_->stage_names();
+    for (std::size_t i = 0; i < names.size() && i < last_stage_ms_.size(); ++i) {
+        if (names[i] == stage) return last_stage_ms_[i];
+    }
+    return -1.0;
+}
+
 } // namespace ps

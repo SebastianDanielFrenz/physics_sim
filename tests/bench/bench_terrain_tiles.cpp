@@ -80,6 +80,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ps;
@@ -102,6 +103,166 @@ void print_stats(const char* label, const TickStats& s) {
                 s.total_ms / static_cast<double>(s.tick_ms.size()), median_ms, p99_ms, s.worst_ms, s.worst_tick);
 }
 
+// Phase 3 (terrain prefetch ring, TerrainConfig::prefetch_margin_tiles/
+// prefetch_max_tiles): tile-row crossings at 256^2 samples per tile and ONE
+// fill per tick, prefetch off vs on. With prefetch off every tile of a newly
+// needed row is filled and uploaded synchronously inside the terrain_tiles
+// stage, one per tick; with prefetch on the background lane has built it into
+// a spare shape well before the row is needed and the stage only swaps it in.
+// A world of its own per mode with NO static collision (the route runs
+// through open terrain at kFarAway, where test_ground has no features), so
+// the numbers are fill + upload cost only, not suppression.
+//
+// The prefetch-on run is PACED to real time (each tick starts 1/240 s after
+// the previous one, spin-waiting): the lane builds in wall-clock time, and
+// an unpaced loop here steps ~0.05 ms per quiet tick, so the ticks between
+// two crossings would give the lane a few ms instead of ~1 s and every
+// crossing would read as late (measured unpaced at 300 km/h: late_sync 9 +
+// late_wait 21 of 56 row tiles). The off run is not paced: its whole cost is
+// synchronous inside the stage and does not depend on wall-clock gaps.
+// 900 km/h (a crossing every ~1.0 s) is deliberately harsher than any car:
+// if the lane keeps ahead here it keeps ahead at road speed.
+struct CrossingRun {
+    std::vector<double> window_ms; // terrain_tiles stage ms, every tick of every crossing window
+    double max_outside_ms = 0.0;   // terrain_tiles stage ms, worst tick outside the windows
+    double max_step_ms = 0.0;      // whole World::step, worst driven tick
+    int crossings = 0;
+    int window_over_budget = 0;    // window ticks whose terrain_tiles stage alone exceeds 4.17 ms
+    std::size_t starved = 0;       // worst starved count over the driven ticks
+    ps::terrain::PrefetchStats stats;
+};
+
+constexpr std::uint32_t kCrossingSamplesPerTile = 256;
+constexpr int kCrossingRows = 6;
+constexpr int kCrossingWindowTicks = 12; // a new row is 7 tiles; at 1 fill/tick the off path needs 7 ticks
+constexpr real kCrossingRadiusM = 600.0;
+constexpr real kCrossingStepM = 900.0 / 3.6 / 240.0; // 900 km/h at 240 Hz
+
+CrossingRun run_row_crossings(const std::string& terrain_json, bool prefetch, int workers, bool paced) {
+    using clock = std::chrono::steady_clock;
+    const auto tick_period = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(1.0 / 240.0));
+    auto next_tick = clock::now();
+    auto pace = [&] {
+        if (!paced) return;
+        while (clock::now() < next_tick) std::this_thread::yield();
+        next_tick += tick_period;
+    };
+    WorldConfig cfg;
+    cfg.job_workers = workers;
+    World world(cfg);
+    auto source = ps::terrain::load_procedural_terrain_source(terrain_json, kCrossingSamplesPerTile);
+    ps::terrain::TerrainConfig tc;
+    // The needed set is the (2*ceil(r/tile)+1)^2 square around the centre's
+    // tile (TileManager::update), 7x7 here; a row crossing of the CENTRE adds
+    // a row of 7.
+    tc.max_resident_tiles = 64; // 49 needed plus release churn
+    tc.max_tile_fills_per_tick = 1;
+    if (prefetch) {
+        tc.prefetch_margin_tiles = 1;
+        tc.prefetch_max_tiles = 48; // 9x9 ring - 7x7 needed = 32 margin keys, plus the next leading edge (9)
+    }
+    world.set_terrain_source(source, tc);
+
+    const real tile = source->tile_size_m();
+    const real x = 20000.0 + 0.5 * tile;
+    const real y0 = 20000.0 + 0.5 * tile;
+    constexpr std::uint64_t kId = 1;
+    world.set_terrain_interest_point(kId, Vec3{x, y0, 0.0}, kCrossingRadiusM);
+    next_tick = clock::now();
+    for (int i = 0; i < 240; ++i) { // initial load (and, with prefetch on, the ring) settles
+        pace();
+        world.step();
+    }
+
+    const ps::terrain::PrefetchStats warm = world.terrain_prefetch_stats();
+    CrossingRun run;
+    run.window_ms.reserve(static_cast<std::size_t>(kCrossingRows * kCrossingWindowTicks));
+    const auto driven_ticks = static_cast<int>(kCrossingRows * tile / kCrossingStepM) + kCrossingWindowTicks;
+    std::int64_t centre_key = source->key_for_world_xy(x, y0).packed;
+    int window_left = 0;
+    for (int t = 1; t <= driven_ticks; ++t) {
+        const real y = y0 + static_cast<real>(t) * kCrossingStepM;
+        world.set_terrain_interest_point(kId, Vec3{x, y, 0.0}, kCrossingRadiusM);
+        // The centre enters a new tile row: the leading row of the needed
+        // square becomes needed this tick.
+        const std::int64_t k = source->key_for_world_xy(x, y).packed;
+        if (k != centre_key) {
+            centre_key = k;
+            window_left = kCrossingWindowTicks;
+            ++run.crossings;
+        }
+        pace();
+        const auto t0 = clock::now();
+        world.step();
+        const double step_ms = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
+        const double tiles_ms = world.last_stage_ms("terrain_tiles");
+        run.max_step_ms = std::max(run.max_step_ms, step_ms);
+        run.starved = std::max(run.starved, world.terrain_starved_tile_count());
+        if (window_left > 0) {
+            --window_left;
+            run.window_ms.push_back(tiles_ms);
+            if (tiles_ms > 1000.0 / 240.0) ++run.window_over_budget;
+        } else {
+            run.max_outside_ms = std::max(run.max_outside_ms, tiles_ms);
+        }
+    }
+    // Driven ticks only: the warm-up's initial load (every needed tile at
+    // once, the lane still building them) is not a crossing.
+    const ps::terrain::PrefetchStats end = world.terrain_prefetch_stats();
+    run.stats.enqueued = end.enqueued - warm.enqueued;
+    run.stats.installed = end.installed - warm.installed;
+    run.stats.late_sync = end.late_sync - warm.late_sync;
+    run.stats.late_wait = end.late_wait - warm.late_wait;
+    run.stats.late_wait_ns_total = end.late_wait_ns_total - warm.late_wait_ns_total;
+    run.stats.late_wait_ns_max = end.late_wait_ns_max; // lifetime max (not differentiable)
+    run.stats.stale_inputs = end.stale_inputs - warm.stale_inputs;
+    run.stats.cancelled = end.cancelled - warm.cancelled;
+    run.stats.skipped_suppression = end.skipped_suppression - warm.skipped_suppression;
+    return run;
+}
+
+void print_crossing_run(const char* label, const CrossingRun& r) {
+    std::vector<double> s = r.window_ms;
+    std::sort(s.begin(), s.end());
+    const double p99 = s.empty() ? 0.0 : s[std::min(s.size() - 1, static_cast<std::size_t>(static_cast<double>(s.size()) * 0.99))];
+    const double worst = s.empty() ? 0.0 : s.back();
+    const double median = s.empty() ? 0.0 : s[s.size() / 2];
+    std::printf("  [%s] %d row crossings, %zu window ticks: terrain_tiles median=%.4f p99=%.4f max=%.4f ms, over 4.17 ms=%d; "
+                "outside windows max=%.4f ms; whole step max=%.4f ms; starved max=%zu\n",
+                label, r.crossings, s.size(), median, p99, worst, r.window_over_budget, r.max_outside_ms, r.max_step_ms, r.starved);
+    std::printf("  [%s] prefetch (driven ticks; late_wait max is lifetime): enqueued=%llu installed=%llu late_sync=%llu late_wait=%llu (total %.3f ms, max %.3f ms) "
+                "cancelled=%llu stale_inputs=%llu skipped_suppression=%llu\n",
+                label, static_cast<unsigned long long>(r.stats.enqueued), static_cast<unsigned long long>(r.stats.installed),
+                static_cast<unsigned long long>(r.stats.late_sync), static_cast<unsigned long long>(r.stats.late_wait),
+                static_cast<double>(r.stats.late_wait_ns_total) * 1e-6, static_cast<double>(r.stats.late_wait_ns_max) * 1e-6,
+                static_cast<unsigned long long>(r.stats.cancelled), static_cast<unsigned long long>(r.stats.stale_inputs),
+                static_cast<unsigned long long>(r.stats.skipped_suppression));
+}
+
+// Runs phase 3 in both modes and prints it. Returns false on a failed smoke
+// check (starved tiles, a missed crossing, or prefetch on installing nothing).
+bool run_phase3(const std::string& terrain_json, int workers) {
+    const CrossingRun off = run_row_crossings(terrain_json, false, workers, /*paced=*/false);
+    const CrossingRun on = run_row_crossings(terrain_json, true, workers, /*paced=*/true);
+    std::printf("bench_terrain_tiles: phase 3 - tile-row crossings, %u x %u samples/tile, 1 fill/tick, radius %.0f m, %.1f km/h (prefetch on paced to 240 Hz real time)\n",
+                kCrossingSamplesPerTile, kCrossingSamplesPerTile, kCrossingRadiusM, kCrossingStepM * 240.0 * 3.6);
+    print_crossing_run("prefetch off", off);
+    print_crossing_run("prefetch on ", on);
+    bool ok = true;
+    for (const CrossingRun* r : {&off, &on}) {
+        if (r->starved != 0 || r->crossings < kCrossingRows) {
+            std::fprintf(stderr, "bench_terrain_tiles: phase 3 %s: starved=%zu crossings=%d (expected 0 and >= %d)\n",
+                         r == &off ? "prefetch off" : "prefetch on", r->starved, r->crossings, kCrossingRows);
+            ok = false;
+        }
+    }
+    if (on.stats.installed == 0) {
+        std::fprintf(stderr, "bench_terrain_tiles: phase 3 prefetch on installed no tile from the lane\n");
+        ok = false;
+    }
+    return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -116,10 +277,13 @@ int main(int argc, char** argv) {
     WorldConfig cfg;
     cfg.job_workers = 0; // auto (PLAN.md D8 default); `--workers N` overrides (measurement only, e.g. precompute scaling)
     bool precompute = true; // `--no-precompute`: measurement-only A/B of TerrainConfig::precompute_suppression_at_load
+    bool crossings_only = false; // `--crossings-only`: phase 3 alone (measurement only)
     for (int a = 1; a < argc; ++a) {
         if (std::string(argv[a]) == "--workers" && a + 1 < argc) cfg.job_workers = std::atoi(argv[a + 1]);
         if (std::string(argv[a]) == "--no-precompute") precompute = false;
+        if (std::string(argv[a]) == "--crossings-only") crossings_only = true;
     }
+    if (crossings_only) return run_phase3(track_dir + "/terrain.json", cfg.job_workers) ? 0 : 1;
     World world(cfg);
 
     // Setup (excluded from every per-tick statistic below - see header
@@ -240,6 +404,12 @@ int main(int argc, char** argv) {
     std::printf("  tile sample pool: %u x %u samples/tile, %zu tiles resident capacity, ~%.2f MB\n", kSamplesPerTile, kSamplesPerTile,
                 tc.max_resident_tiles, pool_mb);
 
+    // Phase 3 (see run_row_crossings): no timing bound - its worlds are
+    // separate from phases 1-2 and its numbers are a measurement, reported
+    // only. Its smoke checks (no starved tile, every crossing seen, prefetch
+    // on actually installing from the lane) are asserted everywhere.
+    const bool phase3_ok = run_phase3(track_dir + "/terrain.json", cfg.job_workers);
+
     // Smoke bounds, not a PLAN.md-mandated number (see header comment) -
     // generous rather than tuned to the 240 Hz/4.17 ms tick budget: this
     // bench runs under every CI leg, including unoptimized debug and ASan
@@ -317,7 +487,7 @@ int main(int argc, char** argv) {
     constexpr bool kAssertTiming = (PS_SANITIZER_BUILD == 0);
     constexpr double kDriveBoundMs = 250.0;
     constexpr double kTeleportBoundMs = 12000.0;
-    bool ok = true;
+    bool ok = phase3_ok;
     if (drive.worst_ms > kDriveBoundMs) {
         std::fprintf(stderr, "bench_terrain_tiles: phase 2 (drive) worst tick %.4f ms exceeds the %.0f ms smoke bound%s\n", drive.worst_ms,
                      kDriveBoundMs, kAssertTiming ? "" : " (sanitizer build: reported, not enforced)");

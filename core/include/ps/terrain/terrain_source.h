@@ -142,7 +142,10 @@ public:
     // TileManager then falls back to the synchronous per-tick path for it,
     // exactly as if this source were TickOnly. Default: declines (correct
     // for TickOnly and unnecessary for Immutable, which fill_tile alone
-    // already satisfies).
+    // already satisfies). The ticket releases this handle inside the tick;
+    // releasing it must not deallocate snapshot storage. Snapshot sources
+    // must retain ownership and reclaim retired snapshots on their owner
+    // thread outside World::step (for example, an owner-thread purge).
     virtual bool acquire_prefetch_inputs(TileKey /*key*/, std::shared_ptr<const void>& /*out*/) const { return false; }
 
     // Fills `out` for `key` using ONLY `inputs` (the pointer previously

@@ -77,8 +77,8 @@ struct TerrainConfig {
     // Terrain prefetch ring (owner-approved 2026-09-27): how many tiles
     // beyond the needed square TileManager builds ahead of time on a
     // background lane, so the tile a moving interest point is about to need
-    // is already built (fill_tile + datum, and - gated on the C0 gate's
-    // Option A/B outcome - the Jolt-side shape upload too) by the
+    // is already built (fill_tile + suppression + datum + detached
+    // heightfield upload) by the
     // DETERMINISTIC tick it actually enters the needed set, instead of
     // being built synchronously in that tick (today's only path, and the
     // one that costs several 240 Hz ticks at a 256^2-sample row crossing -

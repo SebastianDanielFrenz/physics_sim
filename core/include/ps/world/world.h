@@ -320,6 +320,11 @@ public:
     // scheduling.
     [[nodiscard]] std::uint64_t state_hash() const;
 
+    // Wall-clock ms the named pipeline stage (e.g. "terrain_tiles") took in
+    // the last step() - the value its "stage.<name>.ms" telemetry channel
+    // records. Profiling only (bench_terrain_tiles); -1 for an unknown name.
+    [[nodiscard]] double last_stage_ms(const std::string& stage) const;
+
     [[nodiscard]] jobs::JobSystem& job_system() { return *job_system_; }
     [[nodiscard]] IRigidBackend& backend() { return *backend_; }
     [[nodiscard]] const IRigidBackend& backend() const { return *backend_; }
