@@ -48,6 +48,11 @@
 .PARAMETER SkipWsl
     Skip the three WSL/Linux legs (linux-release, linux-asan-ubsan, linux-tsan).
 
+.PARAMETER WslBuildRoot
+    Optional absolute Linux build root. Worktrees default to a private
+    ~/build/physics_sim_worktrees/<worktree-name> directory; the main checkout
+    keeps ~/build/physics_sim. Every leg appends its preset name.
+
 .PARAMETER SkipWindows
     Skip all Windows legs (clang-cl debug/release/asan, cl msvc-release).
 
@@ -132,12 +137,37 @@ param(
     [switch]$Linux,
     [switch]$PlanOnly,
     [switch]$Sanitizers,
-    [switch]$WithValidation
+    [switch]$WithValidation,
+    [string]$WslBuildRoot
 )
 
 $ErrorActionPreference = 'Continue'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
+
+# Every Linux leg must use the calling checkout and its own build directory.
+# A worktree never shares a CMake cache with the main checkout.
+$script:WslRepoRoot = ''
+$script:WslBuildRoot = $WslBuildRoot
+if (-not $SkipWsl) {
+    $script:WslRepoRoot = ((wsl -- wslpath -a ($repoRoot.Replace('\', '/'))) -join '').Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $script:WslRepoRoot) { throw 'Cannot resolve this checkout in WSL' }
+    $wslHome = ((wsl -- printenv HOME) -join '').Trim()
+    if (-not $script:WslBuildRoot) {
+        if (Test-Path -LiteralPath (Join-Path $repoRoot '.git') -PathType Leaf) {
+            $script:WslBuildRoot = $wslHome + '/build/physics_sim_worktrees/' + (Split-Path -Leaf $repoRoot)
+        } else {
+            $script:WslBuildRoot = $wslHome + '/build/physics_sim'
+        }
+    }
+    if ($script:WslBuildRoot.StartsWith('~/')) {
+        $script:WslBuildRoot = $wslHome + $script:WslBuildRoot.Substring(1)
+    }
+    if (-not $script:WslBuildRoot.StartsWith('/') -or
+        $script:WslBuildRoot.Contains("'") -or $script:WslRepoRoot.Contains("'")) {
+        throw 'WSL source/build roots must be absolute paths without single quotes'
+    }
+}
 
 $script:Results = New-Object System.Collections.Generic.List[object]
 $script:LegTimings = New-Object System.Collections.Generic.List[object]
@@ -285,7 +315,7 @@ function Invoke-WindowsLeg {
 
 # ---------------------------------------------------------------------------
 # One WSL/Linux leg: same three steps, run inside WSL, building under the
-# Linux filesystem (~/build/physics_sim/<preset>, set via CMakePresets.json),
+# Linux filesystem ($script:WslBuildRoot/<preset>, overriding the preset),
 # never under /mnt/s.
 # ---------------------------------------------------------------------------
 function Invoke-WslLeg {
@@ -295,13 +325,13 @@ function Invoke-WslLeg {
     Write-Host "=== WSL leg: $Preset ===" -ForegroundColor Cyan
     $legStart = Get-Date
 
-    $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --preset $Preset"
+    $cmd = "cd '$script:WslRepoRoot' && cmake --preset $Preset -B '$script:WslBuildRoot/$Preset'"
     $t = Measure-Command { wsl --cd ~ -- bash -lc $cmd }
     $configOk = ($LASTEXITCODE -eq 0)
     Add-Result -Leg $Preset -Stage 'configure' -Pass $configOk -Seconds $t.TotalSeconds
     if (-not $configOk) { return }
 
-    $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --build --preset $Preset 2>&1"
+    $cmd = "cd '$script:WslRepoRoot' && cmake --build '$script:WslBuildRoot/$Preset' 2>&1"
     $t = Measure-Command { $script:buildOut = wsl --cd ~ -- bash -lc $cmd }
     $buildOk = ($LASTEXITCODE -eq 0)
     Add-Result -Leg $Preset -Stage 'build' -Pass $buildOk -Seconds $t.TotalSeconds
@@ -317,7 +347,7 @@ function Invoke-WslLeg {
     # a pipe.
     $labelArgsRaw = Get-CtestLabelArgs -LegKind $LegKind
     $labelArgs = ($labelArgsRaw | ForEach-Object { "'$_'" }) -join ' '
-    $cmd = "cd /mnt/s/claude_code/physics_sim && ctest --preset $Preset --output-on-failure --parallel $script:WslParallel $labelArgs"
+    $cmd = "cd '$script:WslRepoRoot' && ctest --preset $Preset --test-dir '$script:WslBuildRoot/$Preset' --output-on-failure --parallel $script:WslParallel $labelArgs"
     $ctestOut = $null
     $t = Measure-Command { $script:ctestOut = wsl --cd ~ -- bash -lc $cmd }
     $ctestOk = ($LASTEXITCODE -eq 0)
@@ -482,7 +512,7 @@ function Invoke-WalltimePhase {
             $t = Measure-Command { $script:wtOut = & ctest --preset $preset --output-on-failure -L walltime @topicArgs 2>&1 }
         } else {
             $topicStr = ($topicArgs | ForEach-Object { "'$_'" }) -join ' '
-            $cmd = "cd /mnt/s/claude_code/physics_sim && ctest --preset $preset --output-on-failure -L walltime $topicStr 2>&1"
+            $cmd = "cd '$script:WslRepoRoot' && ctest --preset $preset --test-dir '$script:WslBuildRoot/$preset' --output-on-failure -L walltime $topicStr 2>&1"
             $t = Measure-Command { $script:wtOut = wsl --cd ~ -- bash -lc $cmd }
         }
         $ok = ($LASTEXITCODE -eq 0)
@@ -527,6 +557,11 @@ function Invoke-CrossPlatformHashCheck {
     Write-Host ""
     Write-Host "=== Cross-platform state-hash comparison (Windows vs Linux, PLAN.md D7) ===" -ForegroundColor Cyan
 
+    if ($SkipWsl -or $SkipWindows) {
+        Add-Result -Leg 'hash-compare' -Stage 'compare' -Pass $true -Detail 'skipped: one platform explicitly disabled'
+        return
+    }
+
     # A failed release/linux-release build (or ps_run-only build) this run
     # leaves an OLD ps_run on disk: comparing it would "pass" on stale code.
     $staleSide = $script:Results | Where-Object { $_.Leg -in @('release', 'linux-release') -and $_.Stage -in @('configure', 'build', 'ps_run') -and -not $_.Pass } | Select-Object -First 1
@@ -539,7 +574,7 @@ function Invoke-CrossPlatformHashCheck {
         Add-Result -Leg 'hash-compare' -Stage 'compare' -Pass $true -Detail 'skipped: no Windows release ps_run.exe (leg not built this run)'
         return
     }
-    $linuxProbe = wsl --cd ~ -- bash -lc "test -x ~/build/physics_sim/linux-release/tools/ps_run/ps_run && echo OK"
+    $linuxProbe = wsl --cd ~ -- bash -lc "test -x '$script:WslBuildRoot/linux-release/tools/ps_run/ps_run' && echo OK"
     if (($linuxProbe -join '') -notmatch 'OK') {
         Add-Result -Leg 'hash-compare' -Stage 'compare' -Pass $true -Detail 'skipped: no Linux linux-release ps_run (leg not built this run)'
         return
@@ -559,8 +594,8 @@ function Invoke-CrossPlatformHashCheck {
         $winCsv = Join-Path $tmpWin "$scenario.win.csv"
         $winHash = Get-PsRunStateHash -PsRunPath $winPsRun -ScenarioPath $scenarioPath -CsvOutPath $winCsv
 
-        $linuxHash = Get-PsRunStateHash -PsRunPath '~/build/physics_sim/linux-release/tools/ps_run/ps_run' `
-            -ScenarioPath "/mnt/s/claude_code/physics_sim/data/scenarios/$scenario" `
+        $linuxHash = Get-PsRunStateHash -PsRunPath "$script:WslBuildRoot/linux-release/tools/ps_run/ps_run" `
+            -ScenarioPath "$script:WslRepoRoot/data/scenarios/$scenario" `
             -CsvOutPath "/home/sebas/ps_hashcheck_$scenario.csv" -Wsl
 
         if (-not $winHash -or -not $linuxHash) {
@@ -599,7 +634,7 @@ function Invoke-WslScript {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $path = Join-Path $dir $Name
     [System.IO.File]::WriteAllText($path, (($Lines -join "`n") + "`n"))
-    return (wsl --cd ~ -- bash "/mnt/s/claude_code/physics_sim/out/ci_tmp/$Name")
+    return (wsl --cd ~ -- bash "$script:WslRepoRoot/out/ci_tmp/$Name")
 }
 
 # The two WSL sanitizer legs: configure + build one after the other, then
@@ -614,12 +649,12 @@ function Invoke-WslSanitizerPair {
         Write-Host ""
         Write-Host "=== WSL leg: $preset (ctest runs side by side with the other sanitizer leg) ===" -ForegroundColor Cyan
         $legStart = Get-Date
-        $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --preset $preset"
+        $cmd = "cd '$script:WslRepoRoot' && cmake --preset $preset -B '$script:WslBuildRoot/$preset'"
         $t = Measure-Command { wsl --cd ~ -- bash -lc $cmd }
         $ok = ($LASTEXITCODE -eq 0)
         Add-Result -Leg $preset -Stage 'configure' -Pass $ok -Seconds $t.TotalSeconds
         if (-not $ok) { continue }
-        $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --build --preset $preset 2>&1"
+        $cmd = "cd '$script:WslRepoRoot' && cmake --build '$script:WslBuildRoot/$preset' 2>&1"
         $t = Measure-Command { $script:buildOut = wsl --cd ~ -- bash -lc $cmd }
         $ok = ($LASTEXITCODE -eq 0)
         Add-Result -Leg $preset -Stage 'build' -Pass $ok -Seconds $t.TotalSeconds
@@ -636,9 +671,9 @@ function Invoke-WslSanitizerPair {
 
     $labelArgs = ((Get-CtestLabelArgs -LegKind 'sanitizer') | ForEach-Object { "'$_'" }) -join ' '
     $par = [math]::Max(1, [int][math]::Floor($script:WslParallel / $ready.Count))
-    $lines = @('cd /mnt/s/claude_code/physics_sim')
+    $lines = @("cd '$script:WslRepoRoot'")
     foreach ($preset in $ready) {
-        $lines += "( s=`$(date +%s.%N); ctest --preset $preset --output-on-failure --parallel $par $labelArgs > `$HOME/ps_ci_$preset.log 2>&1; echo `$? > `$HOME/ps_ci_$preset.exit; echo `"`$s `$(date +%s.%N)`" > `$HOME/ps_ci_$preset.time ) &"
+        $lines += "( s=`$(date +%s.%N); ctest --preset $preset --test-dir '$script:WslBuildRoot/$preset' --output-on-failure --parallel $par $labelArgs > `$HOME/ps_ci_$preset.log 2>&1; echo `$? > `$HOME/ps_ci_$preset.exit; echo `"`$s `$(date +%s.%N)`" > `$HOME/ps_ci_$preset.time ) &"
     }
     $lines += 'wait'
     Write-Host ("  running ctest for {0} side by side (--parallel {1} each)" -f ($ready -join ' + '), $par)
@@ -730,6 +765,7 @@ $script:ScenarioTopics = @{
     'articulation_chain.json' = @('articulation'); 'multi_articulation.json' = @('articulation')
     'contact_articulation.json' = @('articulation', 'contact')
     'terrain_tiles.json' = @('terrain'); 'terrain_multi_interest.json' = @('terrain')
+    'terrain_prefetch_drive.json' = @('terrain'); 'terrain_prefetch_multi_interest.json' = @('terrain')
     'vehicle_step_steer.json' = @('vehicle'); 'vehicle_powertrain.json' = @('vehicle')
     'vehicle_tractor_i4.json' = @('vehicle', 'drivetrain')
     'vehicle_fuel_tank.json' = @('vehicle', 'drivetrain')
@@ -923,14 +959,14 @@ function Invoke-AffectedRun {
             $t = Measure-Command { & cmake --preset release; if ($LASTEXITCODE -eq 0) { & cmake --build --preset release } }
             Add-Result -Leg 'release' -Stage 'build' -Pass ($LASTEXITCODE -eq 0) -Seconds $t.TotalSeconds
         }
-        if ($Plan.Linux -and $Plan.Topics.Count -gt 0) {
+        if (-not $SkipWsl -and $Plan.Linux -and $Plan.Topics.Count -gt 0) {
             Invoke-WslLeg -Preset 'linux-release' -LegKind 'unit'
             if ($Plan.Tsan) { Invoke-WslLeg -Preset 'linux-tsan' -LegKind 'sanitizer' }
-        } elseif ($Plan.Scenarios.Count -gt 0) {
+        } elseif (-not $SkipWsl -and $Plan.Scenarios.Count -gt 0) {
             # The hash compare needs a CURRENT Linux ps_run; build just that target.
             Write-Host ""
             Write-Host "=== WSL: building linux-release ps_run only (for the hash compare) ===" -ForegroundColor Cyan
-            $cmd = "cd /mnt/s/claude_code/physics_sim && cmake --preset linux-release > /dev/null && cmake --build --preset linux-release --target ps_run"
+            $cmd = "cd '$script:WslRepoRoot' && cmake --preset linux-release -B '$script:WslBuildRoot/linux-release' > /dev/null && cmake --build '$script:WslBuildRoot/linux-release' --target ps_run"
             $t = Measure-Command { wsl --cd ~ -- bash -lc $cmd }
             Add-Result -Leg 'linux-release' -Stage 'ps_run' -Pass ($LASTEXITCODE -eq 0) -Seconds $t.TotalSeconds
         }
@@ -980,6 +1016,7 @@ if ($overlap) {
     $laneErrPath = Join-Path $env:TEMP "$laneTag.err.log"
     Remove-Item -LiteralPath $laneResultPath, $laneLogPath, $laneErrPath -ErrorAction SilentlyContinue
     $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-WslLaneOnly', '-LaneResultFile', "`"$laneResultPath`"")
+    if ($WslBuildRoot) { $childArgs += @('-WslBuildRoot', $WslBuildRoot) }
     if ($Full) { $childArgs += '-Full' }
     if ($Sanitizers) { $childArgs += '-Sanitizers' }
     if ($Only) { $childArgs += @('-Only', ($Only -join ',')) }
