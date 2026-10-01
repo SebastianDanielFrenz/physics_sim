@@ -116,14 +116,14 @@ public:
     //             comment above) - e.g. ProceduralTerrainSource, a pure
     //             function of its own fixed spec. acquire_prefetch_inputs
     //             below need not be overridden.
-    //   Snapshot: fill_tile itself is NOT safe to call off the owning
-    //             thread (e.g. it reads a mutable resident-height set the
-    //             owner only ever touches between World::step calls - see
-    //             the racing_game/geo2map_engine bridge). Such a source
+    //   Snapshot: fill_tile reads live state and is safe only during the
+    //             tick, while owner mutation is excluded (e.g. a mutable
+    //             resident-height set changed between World::step calls -
+    //             see the racing_game/geo2map_engine bridge). Such a source
     //             instead overrides acquire_prefetch_inputs to hand back an
     //             immutable, independently-owned snapshot of whatever
     //             fill_tile would have read for that key (captured
-    //             synchronously, on the owning thread), and fill_tile_from
+    //             synchronously, on the tick side), and fill_tile_from
     //             to fill a tile from that snapshot alone, with no access
     //             to the source's own live state - safe to run on the
     //             background lane. prefetch_inputs_current lets the
@@ -135,14 +135,17 @@ public:
     [[nodiscard]] virtual PrefetchSupportKind prefetch_support() const { return PrefetchSupportKind::TickOnly; }
 
     // Captures whatever fill_tile_from(key, ...) below will need for
-    // `key`, called on the OWNING thread (never the background lane) at
+    // `key`, called inside World::step (never the background lane) at
     // the moment TileManager decides to enqueue a background build for
     // this key. Returns false (out left untouched) to decline prefetching
     // this particular key right now (e.g. its inputs are not ready yet) -
     // TileManager then falls back to the synchronous per-tick path for it,
     // exactly as if this source were TickOnly. Default: declines (correct
     // for TickOnly and unnecessary for Immutable, which fill_tile alone
-    // already satisfies). The ticket releases this handle inside the tick;
+    // already satisfies). Tick-side callbacks may run on a JobSystem
+    // worker, not necessarily the OS thread that called World::step. Live
+    // source mutation must be excluded until World::step returns.
+    // The ticket releases this handle inside the tick;
     // releasing it must not deallocate snapshot storage. Snapshot sources
     // must retain ownership and reclaim retired snapshots on their owner
     // thread outside World::step (for example, an owner-thread purge).
@@ -157,7 +160,7 @@ public:
     // since acquire_prefetch_inputs's default declines).
     virtual void fill_tile_from(TileKey key, const void* /*inputs*/, TileSample& out) const { fill_tile(key, out); }
 
-    // Called on the owning thread at the pinned install tick, right before
+    // Called on the tick side at the pinned install tick, right before
     // installing a background-built tile: true if `inputs` (still exactly
     // what acquire_prefetch_inputs returned for `key`) is still an
     // accurate snapshot of what fill_tile would produce for `key` right
