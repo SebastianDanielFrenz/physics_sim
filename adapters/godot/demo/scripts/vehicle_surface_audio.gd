@@ -21,6 +21,8 @@ func set_surface_wetness(surface: String, amount: float) -> void:
     surface_wetness[surface] = clampf(amount, 0.0, 1.0)
 
 func _ready() -> void:
+    # Synthetic turbo cues rejected in audition; keep muted until a usable sample exists.
+    enable_turbos = false
     tyre_count = simulation.get_vehicle_wheel_count(vehicle_name) if enable_tyres else 0
     for wheel in range(tyre_count):
         var attachment: Vector3 = simulation.get_wheel_attachment_local(vehicle_name, wheel)

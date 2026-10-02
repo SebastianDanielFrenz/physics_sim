@@ -1,57 +1,30 @@
-# Telemetry-driven tyre and turbo audio
+# Telemetry-driven tyre audio
 
-The demo now creates positional AudioStreamPlayer3D feeds at each wheel and,
-for car_hyper, a separate engine-bay turbo sound feed. These are procedural
-presentation sounds; they add no force, tyre, weather or turbo physics.
-They currently use Godot positional mixing, not the engine's separate native
-Windows spatial-object stream. Cabin occlusion/filtering is not yet modeled.
+The demo uses per-wheel positional Godot streams driven by existing speed,
+wheel load, tread speed, slip and forces. No additional physics simulation.
+Rolling retains the accepted asphalt synthesis from audition sections 1 and 2.
+Sliding and stationary burnout use the licensed three-second asphalt squeal
+sample in demo/audio/tyres, with a 50 ms overlapping loop crossfade and a 40 ms
+level envelope. Independent wheel playback offsets reduce coherent repetition.
+See audio/tyres/LICENSE.md for attribution, source and conversion details.
 
-Tyres consume the existing wheel load, omega/radius, slip ratio/angle, fx/fy,
-vehicle speed and physical surface name. Load gates contact sounds. Rolling
-level and spectral cutoff rise with speed. Slip/force work proxies drive scrub,
-slide/squeal and burnout noise, including rear-wheel spin at zero road speed.
-Authored profiles distinguish asphalt, kerb, dirt, grass, field and low_mu ice.
-Loose surfaces have rougher broadband textures and less tonal rubber squeal.
-Seeds differ per wheel, so identical conditions do not create coherent noise.
-Unknown surface names use the generic asphalt profile. Numeric gains and
-filters are sound-design assumptions, not measured tyre spectra.
+Dirt, grass and other surfaces currently share this generic asphalt fallback.
+There are no distinct loose-surface recordings. Rejected synthetic spray is
+muted; wetness reduces squeal gain but does not change rolling sound or friction.
+The rejected synthetic turbo layer is muted even when requested by main.gd.
+The underlying turbo prototype remains available for development checks only.
 
-Wetness is explicit audio input in [0,1]. The simulator has no weather/water
-state, so no weather is inferred and friction is unchanged. Wetness adds
-high-frequency spray and reduces tonal dry-rubber squeal. Set individual
-surfaces with SurfaceAudio.set_surface_wetness(name, amount), or audition a
-uniform condition with `drive --m1-vehicle=car_hyper --m1-road-wetness=0.7`.
+Controls: --m1-no-tyre-audio disables tyre sound. These streams use Godot
+positional mixing, not the native Windows spatial-object engine stream.
+Cabin occlusion/filtering is not modeled. Queues target 50 ms at 24 kHz;
+graceful shutdown drains audio commands before exit.
 
-The current powertrain exposes no turbo shaft RPM or boost pressure. The turbo
-layer therefore uses engine RPM, throttle, fuel flow and running state only:
-smooth spool/whine and flow-noise envelopes plus a lift-off pressure-release
-cue. These proxies are NOT physics telemetry and are never shown as measured
-boost/RPM in the dashboard. If actual `turbo_rpm` and `boost_bar` fields become
-available, the layer uses them automatically, including measured coast-down.
-The twin-tone frequencies, envelope times and noise gains are authored
-approximations. No turbo compressor/turbine simulation or exhaust-pulse
-attenuation was added; the full offline V8 acoustic reference remains separate.
+Verification: focused model checks cover stationary/unloaded silence, speed
+and slip response, generic/wet fallback, burnout and seeded reproducibility.
+The tests also cover the dormant turbo prototype; passing them does not mean
+its subjective sound is approved. No DLL rebuild is required.
 
-Controls: `--m1-no-tyre-audio` and `--m1-no-turbo-audio` independently mute layers.
-Runtime queues target 50 ms at 24 kHz. Graceful shutdown drains audio commands
-before SceneTree exits, avoiding leaked generator playback objects.
-
-Verification (2026-10-02):
-- Headless model checks pass: stationary/unloaded silence; speed and slip energy
-  response; surface/wetness changes; stationary burnout; seeded reproducibility;
-  spool/lift-off/shutdown envelopes; supplied turbo telemetry overrides estimates.
-- Ten-second real hypercar autopilot, wetness 0.7, asphalt/dirt transitions:
-  distance 75.14 m, max speed 65.69 km/h, upright, no NaN, max gear 2, engine
-  running. Final verbose run has no script errors or leaked audio resources.
-- Headless checks do not establish subjective speaker/headset mix quality.
-- No DLL rebuild or extra physics simulation was performed.
-
-Run checks: Godot --headless --path adapters/godot/demo --xr-mode off
---script res://scripts/test_surface_audio.gd
-
-Audition files (export gain +12 dB for listening, not the runtime gain):
-`out/one1_reference/tyres_comparison.wav`: 2 seconds each, dry asphalt 15 m/s,
-dry asphalt 40 m/s, asphalt drift 30 m/s, wet asphalt 30 m/s, dirt slide,
-grass slide, stationary burnout. `turbo_cues.wav`: six seconds of authored
-spool/lift-off cues. Re-export with scripts/export_surface_audio.gd.
-Logs: out/one1_reference/surface_audio_tests.log and surface_audio_verified.log.
+Audition: out/one1_reference/tyres_sample_comparison.wav, two seconds each:
+asphalt rolling 15 m/s, rolling 40 m/s, drift, wet rolling, dirt fallback,
+grass fallback, stationary burnout. Export gain +12 dB, not runtime gain.
+Re-export with scripts/export_surface_audio.gd. Original comparison is retained.
