@@ -443,6 +443,7 @@ func _ready() -> void:
 	_setup_hud()
 	_setup_tach_gauge()
 	_setup_engine_audio()
+	_setup_surface_audio()
 
 func _setup_lighting() -> void:
 	# M1 visual pass fix: the demo previously had a DirectionalLight3D but
@@ -773,6 +774,26 @@ func _setup_tach_gauge() -> void:
 	gauge.set("vehicle_name", VEHICLE_NAME)
 	hud.add_child(gauge)
 
+func _shutdown_surface_audio() -> void:
+	var audio := get_node_or_null("SurfaceAudio")
+	if audio != null:
+		audio.shutdown()
+		await get_tree().create_timer(0.1).timeout
+
+func _setup_surface_audio() -> void:
+	var audio := Node3D.new()
+	audio.set_script(load("res://scripts/vehicle_surface_audio.gd"))
+	audio.set("simulation", simulation)
+	audio.set("vehicle_name", VEHICLE_NAME)
+	audio.set("chassis_name", CHASSIS_BODY_NAME)
+	audio.set("enable_tyres", not "--m1-no-tyre-audio" in OS.get_cmdline_user_args())
+	audio.set("enable_turbos", vehicle_relative_path.get_file().get_basename() == "car_hyper" and not "--m1-no-turbo-audio" in OS.get_cmdline_user_args())
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--m1-road-wetness="):
+			audio.set("wetness", clampf(argument.trim_prefix("--m1-road-wetness=").to_float(), 0.0, 1.0))
+	audio.name = "SurfaceAudio"
+	add_child(audio)
+
 func _setup_engine_audio() -> void:
 	# ps_audio A11 ("engine sound in Godot, minimal"): only when the spawned
 	# vehicle's own physics engine has a live cycle model does it have a
@@ -894,6 +915,7 @@ func _process(delta: float) -> void:
 			var err := img.save_png(_screenshot_path)
 			print("ps_godot main.gd: screenshot saved to ", _screenshot_path, " err=", err)
 			await get_tree().create_timer(0.2).timeout
+			await _shutdown_surface_audio()
 			get_tree().quit()
 
 	_process_engine_audio()
@@ -1142,6 +1164,7 @@ func _finish_haptics_cruise() -> void:
 	_haptics_cruise_done = true
 	print("ps_godot M1 haptics cruise: done")
 	await get_tree().create_timer(0.2).timeout
+	await _shutdown_surface_audio()
 	get_tree().quit()
 
 func _run_camera_rebase_check(_delta: float) -> void:
@@ -1261,4 +1284,5 @@ func _finish_autopilot() -> void:
 			_rebase_test_triggered, _camera_check_max_frame_jump_m, jump_bound_m, _camera_check_max_dist_m, _camera_check_max_dist_after_settle_m, camera_ok, _camera_check_max_render_desync_m, desync_bound_m])
 
 	await get_tree().create_timer(0.2).timeout
+	await _shutdown_surface_audio()
 	get_tree().quit()
