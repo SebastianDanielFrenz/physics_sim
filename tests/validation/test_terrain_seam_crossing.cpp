@@ -55,7 +55,7 @@ using namespace ps;
 namespace {
 
 enum class TerrainShape { Flat, Slope, Wavy };
-enum class Ground { Tiles, Seamless, Box };
+enum class Ground { Tiles, Seamless, Box, Mixed, MixedHole, MeshOnly };
 enum class BodyKind { SlidingSphere, RollingSphere, SlidingBox, RollingCapsule };
 
 const char* name_of(TerrainShape s) { return s == TerrainShape::Flat ? "flat" : s == TerrainShape::Slope ? "slope" : "wavy"; }
@@ -153,7 +153,43 @@ constexpr std::uint64_t kInterestId = 1;
 constexpr real kStreamRadius = 48.0;
 
 void install_ground(World& world, Ground g, TerrainShape shape, const GroundParams& gp, const Vec3& start) {
-    if (g == Ground::Tiles) {
+    if (g == Ground::Mixed || g == Ground::MixedHole || g == Ground::MeshOnly) {
+        REQUIRE(shape == TerrainShape::Flat);
+        HeightfieldShape hf;
+        hf.sample_count = 16;
+        hf.sample_spacing = 16.0 / 15.0;
+        if (g == Ground::MixedHole) hf.sample_count = 32;
+        hf.heights.assign(hf.sample_count * hf.sample_count, 0.0);
+        hf.cell_surface_ids.assign((hf.sample_count-1) * (hf.sample_count-1), SurfaceId{0});
+        if (g == Ground::MixedHole) {
+            for (unsigned y = 0; y < hf.sample_count; ++y)
+                for (unsigned x = 16; x < hf.sample_count; ++x)
+                    hf.heights[y * hf.sample_count + x] = kHeightfieldNoCollision;
+        }
+        BodyDesc left;
+        left.shape = hf;
+        left.motion = BodyMotionType::Static;
+        left.friction = 0.8;
+        left.pose.position = Vec3{-16.0, 0.0, 0.0};
+        if (g != Ground::MeshOnly) world.create_body(left);
+        MeshShape mesh;
+        const unsigned nx = g == Ground::MeshOnly ? 31u : 16u;
+        const real origin_x = g == Ground::MeshOnly ? -16.0 : 0.0;
+        for (int y = 0; y < 16; ++y)
+            for (unsigned x = 0; x < nx; ++x)
+                mesh.vertices.push_back(Vec3{origin_x + x * hf.sample_spacing, y * hf.sample_spacing, 0.0});
+        for (std::uint32_t y = 0; y < 15; ++y)
+            for (std::uint32_t x = 0; x + 1 < nx; ++x) {
+                const auto a = y * nx + x;
+                mesh.indices.insert(mesh.indices.end(), {a, a+1, a+nx+1, a, a+nx+1, a+nx});
+                mesh.triangle_surface_ids.insert(mesh.triangle_surface_ids.end(), 2, SurfaceId{0});
+            }
+        BodyDesc right;
+        right.shape = mesh;
+        right.motion = BodyMotionType::Static;
+        right.friction = 0.8;
+        world.create_body(right);
+    } else if (g == Ground::Tiles) {
         terrain::TerrainConfig tc;
         tc.max_resident_tiles = 512;
         tc.max_tile_fills_per_tick = 128;
@@ -207,13 +243,15 @@ struct BodyRun {
     real peak_az_x = 0.0;
     real peak_ax = 0.0;
     real min_clear = 1e9;
+    real peak_contact_fz = 0.0; // net normal support from m*(az+g), NOT per-manifold solver impulse
+    std::uint64_t hash = 1469598103934665603ull;
 };
 
 BodyRun run_body(Ground g, TerrainShape shape, BodyKind kind, real speed, const GroundParams& gp, real start_x,
-                 real y, real distance, bool verbose) {
+                 real y, real distance, bool verbose, unsigned workers = 4) {
     WorldConfig cfg;
     cfg.tick_rate_hz = 240.0;
-    cfg.job_workers = 4;
+    cfg.job_workers = workers;
     World world(cfg);
     install_ground(world, g, shape, gp, Vec3{start_x, y, 0.0});
 
@@ -264,12 +302,13 @@ BodyRun run_body(Ground g, TerrainShape shape, BodyKind kind, real speed, const 
     }
     BodyRun r;
     Motion prev = world.get_motion(id);
-    const std::uint64_t n = static_cast<std::uint64_t>(distance / speed * cfg.tick_rate_hz);
+    const std::uint64_t n = static_cast<std::uint64_t>(distance / std::abs(speed) * cfg.tick_rate_hz);
     for (std::uint64_t t = 0; t < n; ++t) {
         world.set_terrain_interest_point(kInterestId, world.get_pose(id).position, kStreamRadius);
         world.step();
         const Pose p = world.get_pose(id);
         const Motion m = world.get_motion(id);
+        r.hash = (r.hash ^ world.state_hash()) * 1099511628211ull;
         const real az = (m.linear.z - prev.linear.z) * cfg.tick_rate_hz;
         const real ax = (m.linear.x - prev.linear.x) * cfg.tick_rate_hz;
         prev = m;
@@ -278,6 +317,7 @@ BodyRun run_body(Ground g, TerrainShape shape, BodyKind kind, real speed, const 
             r.peak_az = az;
             r.peak_az_x = p.position.x;
         }
+        r.peak_contact_fz = std::max(r.peak_contact_fz, b.mass * (az + cfg.gravity.z * -1));
         r.peak_ax = std::max(r.peak_ax, std::abs(ax));
         r.min_clear = std::min(r.min_clear, p.position.z - terrain_height(shape, p.position.x, p.position.y));
         if (verbose && std::abs(az) > 5.0) {
@@ -299,6 +339,8 @@ struct CarRun {
     real peak_az = 0.0, peak_az_x = 0.0;
     real peak_pitch_acc = 0.0;
     real peak_fz = 0.0, peak_fz_x = 0.0;
+    std::uint64_t hash = 1469598103934665603ull;
+    real wheel_peak_fz[4]{};
     real peak_dfz = 0.0; // largest tick-to-tick |dFz| on any wheel
 };
 
@@ -320,11 +362,11 @@ private:
 };
 
 CarRun run_car(Ground g, TerrainShape shape, real speed, const GroundParams& gp, real start_x, real y, real lead_s,
-               real distance, bool verbose) {
+               real distance, bool verbose, unsigned workers = 4) {
     WorldConfig cfg;
     cfg.tick_rate_hz = 240.0;
     cfg.substep_rate_hz = 960.0;
-    cfg.job_workers = 4;
+    cfg.job_workers = workers;
     auto world = std::make_unique<World>(cfg);
     install_ground(*world, g, shape, gp, Vec3{start_x, y, 0.0});
 
@@ -356,11 +398,12 @@ CarRun run_car(Ground g, TerrainShape shape, real speed, const GroundParams& gp,
     for (std::size_t w = 0; w < 4; ++w) prev_fz[w] = world->wheel_telemetry(veh, w).fz;
     const real x0 = world->get_pose(ch).position.x;
     std::uint64_t t = 0;
-    while (world->get_pose(ch).position.x < x0 + distance && t < 100000) {
+    while ((world->get_pose(ch).position.x - x0) * (speed > 0 ? 1 : -1) < distance && t < 100000) {
         step();
         ++t;
         const Pose p = world->get_pose(ch);
         const Motion m = world->get_motion(ch);
+        r.hash = (r.hash ^ world->state_hash()) * 1099511628211ull;
         const real az = (m.linear.z - prev.linear.z) * 240.0;
         const real pitch_acc = (m.angular.y - prev.angular.y) * 240.0;
         prev = m;
@@ -372,6 +415,7 @@ CarRun run_car(Ground g, TerrainShape shape, real speed, const GroundParams& gp,
         real tick_max_dfz = 0.0;
         for (std::size_t w = 0; w < 4; ++w) {
             const real fz = world->wheel_telemetry(veh, w).fz;
+            r.wheel_peak_fz[w] = std::max(r.wheel_peak_fz[w], fz);
             if (fz > r.peak_fz) {
                 r.peak_fz = fz;
                 r.peak_fz_x = p.position.x;
@@ -493,6 +537,57 @@ TEST_CASE("seam crossing diagnostics: car", "[.][diag][terrain][vehicle]") {
                 std::printf("car %-6s v=%4.0f %-8s peak|az|=%7.3f at x=%8.3f (seam_d=%.3f) pitch_acc=%7.3f peak_fz=%8.1f at x=%8.3f max|dFz|/tick=%7.1f\n",
                             name_of(shape), v, name_of(g), r.peak_az, r.peak_az_x, nearest_seam_distance(r.peak_az_x, gp.tile),
                             r.peak_pitch_acc, r.peak_fz, r.peak_fz_x, r.peak_dfz);
+            }
+        }
+    }
+}
+
+// Equivalent to the test_ground boundary at x=-500: a flush grid edge
+// shared by different static shape types. MixedHole also pins the case
+// where the edge lies inside the heightfield AABB after sample suppression.
+// The baseline includes BOTH continuous shape types: Jolt's stock standalone
+// mesh/sphere path has tick-scale support oscillations (~g), unrelated to the
+// boundary kick. Preserve that path; reject the extra O(100) m/s^2 edge kick.
+// Rigid-body support force is inferred from vertical momentum plus gravity;
+// ContactEvent::normal_impulse is currently unpopulated and must not be used.
+TEST_CASE("Flush heightfield mesh boundary crosses without a contact kick", "[terrain][validation][mesh_boundary]") {
+    GroundParams gp;
+    gp.tx0 = -1; gp.ty0 = 0; gp.m = 3;
+    for (const real speed : {10.0, -10.0, 20.0, -20.0, 40.0, -40.0}) {
+        const real start = speed > 0 ? -8.0 : 8.0;
+        for (const auto kind : {BodyKind::SlidingSphere, BodyKind::SlidingBox}) {
+            const auto baseline = run_body(Ground::Seamless, TerrainShape::Flat, kind, speed, gp, start, 8.0, 16.0, false);
+            const auto mesh_baseline = run_body(Ground::MeshOnly, TerrainShape::Flat, kind, speed, gp, start, 8.0, 16.0, false);
+            for (auto ground : {Ground::Mixed, Ground::MixedHole}) {
+                const auto mixed = run_body(ground, TerrainShape::Flat, kind, speed, gp, start, 8.0, 16.0, false);
+                std::printf("MESH_BOUNDARY body=%s speed=%.0f baseline_az=%.6f mixed_az=%.6f peak_x=%.6f\n", name_of(kind), speed, baseline.peak_az, mixed.peak_az, mixed.peak_az_x);
+                std::printf("  support_N baseline=%.6f mixed=%.6f hash=%llu\n", baseline.peak_contact_fz, mixed.peak_contact_fz, static_cast<unsigned long long>(mixed.hash));
+                std::printf("  hole=%d mesh_baseline_az=%.6f mesh_support_N=%.6f\n", ground == Ground::MixedHole, mesh_baseline.peak_az, mesh_baseline.peak_contact_fz);
+                CHECK(std::abs(mixed.peak_az) <= 2 * std::max(std::abs(baseline.peak_az), std::abs(mesh_baseline.peak_az)) + 5.0);
+                for (unsigned workers : {1u, 24u}) {
+                    const auto parallel = run_body(ground, TerrainShape::Flat, kind, speed, gp, start, 8.0, 16.0, false, workers);
+                    CHECK(parallel.hash == mixed.hash);
+                }
+            }
+        }
+    }
+}
+TEST_CASE("Flush heightfield mesh wheel crossings and worker determinism", "[terrain][validation][mesh_boundary]") {
+    GroundParams gp;
+    gp.tx0 = -1; gp.ty0 = 0; gp.m = 3;
+    for (const real speed : {10.0, -10.0, 20.0, -20.0}) {
+        const real start = speed > 0 ? -10.0 : 10.0;
+        const auto baseline = run_car(Ground::Seamless, TerrainShape::Flat, speed, gp, start, 8.0, 0.05, 16.0, false, 1);
+        const auto reference = run_car(Ground::Mixed, TerrainShape::Flat, speed, gp, start, 8.0, 0.05, 16.0, false, 1);
+        for (unsigned workers : {1u, 4u, 24u}) {
+            const auto mixed = run_car(Ground::Mixed, TerrainShape::Flat, speed, gp, start, 8.0, 0.05, 16.0, false, workers);
+            std::printf("MESH_BOUNDARY car speed=%.0f workers=%u baseline_az=%.6f mixed_az=%.6f baseline_fz=%.6f mixed_fz=%.6f delta_fz=%.6f\n", speed, workers, baseline.peak_az, mixed.peak_az, baseline.peak_fz, mixed.peak_fz, mixed.peak_dfz);
+            CHECK(std::abs(mixed.peak_az) <= 2 * std::abs(baseline.peak_az) + 0.5);
+            CHECK(mixed.peak_fz <= baseline.peak_fz * 1.05);
+            CHECK(mixed.hash == reference.hash);
+            for (unsigned wheel = 0; wheel < 4; ++wheel) {
+                std::printf("  wheel=%u baseline_fz=%.6f mixed_fz=%.6f hash=%llu\n", wheel, baseline.wheel_peak_fz[wheel], mixed.wheel_peak_fz[wheel], static_cast<unsigned long long>(mixed.hash));
+                CHECK(mixed.wheel_peak_fz[wheel] <= baseline.wheel_peak_fz[wheel] * 1.05);
             }
         }
     }
