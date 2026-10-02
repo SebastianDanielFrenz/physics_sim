@@ -669,14 +669,14 @@ private:
 
 // Terrain tile seams (PLAN.md P8, vault PHYS-021): Jolt's HeightFieldShape
 // marks every edge on its own outer border ACTIVE (it cannot see the
-// neighbouring tile), so a body sliding from tile A onto tile B picks up a
+// neighbouring tile or static mesh), so a body sliding from tile A onto tile B picks up a
 // speculative contact against B's first border edge whose normal tilts back
 // against the motion - a one-tick vertical kick of O(100-1000) m/s^2 that a
-// single seamless heightfield never shows. Fix: every body-vs-heightfield
+// single seamless heightfield never shows. Fix: every body-vs-static-surface
 // pair runs Jolt's own enhanced internal-edge removal (Terdiman's algorithm,
 // JPH::InternalEdgeRemovingCollector - CollideWithAll + void every vertex of
 // a face contact, drop edge/vertex contacts whose feature is fully voided),
-// but with the dynamic body collided against EVERY heightfield body its
+// but with the dynamic body collided against EVERY heightfield/mesh body its
 // bounds overlap, in ascending BodyID order, so a face contact on A voids
 // the shared seam vertices of B's border edge. Only hits on the pair's own
 // body2 are forwarded; the neighbours' hits only void features. This is a
@@ -699,8 +699,8 @@ public:
         delayed_.reserve(kMaxLocalDelayed);
     }
 
-    // true while the hits being added belong to the pair's own body2 (the
-    // only ones ever passed on); false while colliding a neighbour tile.
+    // true for the pair's own body2 (the only hits passed on); false
+    // while colliding neighbouring static surface geometry.
     void set_forward(bool forward) { forward_ = forward; }
 
     void AddHit(const JPH::CollideShapeResult& r) override {
@@ -917,18 +917,21 @@ public:
         const JPH::BodyID jph_id = body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
         const BodyId id = alloc_slot(jph_id, raw_heightfield);
         body_interface().SetUserData(jph_id, pack_body_id(id));
-        if (raw_heightfield != nullptr) {
-            heightfield_body_ids_.insert(std::lower_bound(heightfield_body_ids_.begin(), heightfield_body_ids_.end(), jph_id), jph_id);
+        if (raw_heightfield != nullptr || std::holds_alternative<MeshShape>(desc.shape)) {
+            terrain_surface_body_ids_.insert(std::lower_bound(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), jph_id), jph_id);
+        }
+        if (std::holds_alternative<MeshShape>(desc.shape)) {
+            mesh_body_ids_.insert(std::lower_bound(mesh_body_ids_.begin(), mesh_body_ids_.end(), jph_id), jph_id);
         }
         return id;
     }
 
     void destroy_body(BodyId id) override {
         const JPH::BodyID jid = lookup(id);
-        if (slots_[id.index].heightfield != nullptr) {
-            const auto it = std::lower_bound(heightfield_body_ids_.begin(), heightfield_body_ids_.end(), jid);
-            if (it != heightfield_body_ids_.end() && *it == jid) heightfield_body_ids_.erase(it);
-        }
+        const auto it = std::lower_bound(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), jid);
+        if (it != terrain_surface_body_ids_.end() && *it == jid) terrain_surface_body_ids_.erase(it);
+        const auto mesh_it = std::lower_bound(mesh_body_ids_.begin(), mesh_body_ids_.end(), jid);
+        if (mesh_it != mesh_body_ids_.end() && *mesh_it == jid) mesh_body_ids_.erase(mesh_it);
         body_interface().RemoveBody(jid);
         body_interface().DestroyBody(jid);
         free_slot(id);
@@ -1399,29 +1402,55 @@ private:
 
     // PhysicsSystem's SimCollideBodyVsBody hook (installed in the
     // constructor), called from Jolt's narrow-phase jobs during Update.
-    // heightfield_body_ids_ and every static body's pose/bounds are only
+    // terrain_surface_body_ids_ and every static body's pose/bounds are only
     // mutated outside Update (create/destroy/set_pose/update_heightfield_body
     // run in World stages other than backend_step), so reading them here
     // unlocked is race-free. t1/t2 are relative to body1's COM
     // (PhysicsSystem::ProcessBodyPair); neighbours use the same convention.
     void collide_body_vs_body(const JPH::Body& b1, const JPH::Body& b2, JPH::Mat44Arg t1, JPH::Mat44Arg t2, JPH::CollideShapeSettings& settings,
                               JPH::CollideShapeCollector& collector, const JPH::ShapeFilter& filter) const {
-        if (!std::binary_search(heightfield_body_ids_.begin(), heightfield_body_ids_.end(), b2.GetID())) {
+        if (!std::binary_search(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), b2.GetID())) {
             JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody(b1, b2, t1, t2, settings, collector, filter);
             return;
         }
-        settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideWithAll; // required by the internal-edge algorithm
-        TerrainSeamWeldingCollector weld(collector, kTerrainSeamVertexToleranceSq);
-        const JPH::Vec3 one = JPH::Vec3::sOne();
-
         JPH::AABox query = b1.GetWorldSpaceBounds();
         query.ExpandBy(JPH::Vec3::sReplicate(settings.mMaxSeparationDistance));
+        const auto& bodies = physics_system_.GetBodyLockInterfaceNoLock();
+        const bool mesh_pair = std::binary_search(mesh_body_ids_.begin(), mesh_body_ids_.end(), b2.GetID());
+        if (mesh_pair) {
+            bool touches_heightfield = false;
+            for (const JPH::BodyID id : terrain_surface_body_ids_) {
+                if (std::binary_search(mesh_body_ids_.begin(), mesh_body_ids_.end(), id)) continue;
+                const auto* other = bodies.TryGetBody(id);
+                if (other && other->IsInBroadPhase() && other->GetWorldSpaceBounds().Overlaps(query)) {
+                    touches_heightfield = true;
+                    break;
+                }
+            }
+            if (!touches_heightfield) {
+                JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody(b1, b2, t1, t2, settings, collector, filter);
+                return;
+            }
+        }
+        settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideWithAll;
+        TerrainSeamWeldingCollector weld(collector, kTerrainSeamVertexToleranceSq);
+        const JPH::Vec3 one = JPH::Vec3::sOne();
         const JPH::AABox own = b2.GetWorldSpaceBounds();
-        // Fast path: query footprint strictly inside body2's XY footprint -
-        // no other (non-overlapping) tile can touch it.
         const bool inside_xy = query.mMin.GetX() > own.mMin.GetX() && query.mMax.GetX() < own.mMax.GetX() &&
                                query.mMin.GetY() > own.mMin.GetY() && query.mMax.GetY() < own.mMax.GetY();
-        if (inside_xy) {
+        bool touches_mesh = mesh_pair;
+        if (inside_xy && !mesh_pair) {
+            // A mesh may border a suppressed hole INSIDE a heightfield AABB.
+            // Only use the old interior fast path if no mesh overlaps the query.
+            for (const JPH::BodyID id : mesh_body_ids_) {
+                const auto* other = bodies.TryGetBody(id);
+                if (other && other->IsInBroadPhase() && other->GetWorldSpaceBounds().Overlaps(query)) {
+                    touches_mesh = true;
+                    break;
+                }
+            }
+        }
+        if (inside_xy && !touches_mesh) {
             JPH::SubShapeIDCreator p1, p2;
             weld.set_forward(true);
             JPH::CollisionDispatch::sCollideShapeVsShape(b1.GetShape(), b2.GetShape(), one, one, t1, t2, p1, p2, settings, weld, filter);
@@ -1432,9 +1461,8 @@ private:
         // Ascending BodyID order, so the pairs (b1, A) and (b1, B) both see
         // the identical hit sequence and make identical voiding decisions.
         const JPH::RVec3 offset = b1.GetCenterOfMassPosition();
-        const JPH::BodyLockInterfaceNoLock& bodies = physics_system_.GetBodyLockInterfaceNoLock();
         const JPH::ShapeFilter accept_all;
-        for (const JPH::BodyID id : heightfield_body_ids_) {
+        for (const JPH::BodyID id : terrain_surface_body_ids_) {
             const bool self = (id == b2.GetID());
             const JPH::Body* other = self ? &b2 : bodies.TryGetBody(id);
             if (!self && (other == nullptr || !other->IsInBroadPhase() || !other->GetWorldSpaceBounds().Overlaps(query))) continue;
@@ -1529,9 +1557,10 @@ private:
     std::vector<id_index_t> free_list_;
     std::vector<JointSlot> joint_slots_;
     std::vector<id_index_t> joint_free_list_;
-    // Every live HeightfieldShape body, ascending - collide_body_vs_body's
+    // Every live heightfield or static mesh body, ascending - collide_body_vs_body's
     // seam-welding candidate set and its canonical collide order.
-    std::vector<JPH::BodyID> heightfield_body_ids_;
+    std::vector<JPH::BodyID> terrain_surface_body_ids_;
+    std::vector<JPH::BodyID> mesh_body_ids_;
 
     // update_heightfield_body's scratch conversion buffers - see that
     // method's comment.
