@@ -85,6 +85,9 @@ public:
 
     [[nodiscard]] ps_audio::Runner& runner() { return runner_; }
     [[nodiscard]] const ps_audio::Runner& runner() const { return runner_; }
+    // Immutable source metadata; channel must be in [0, channel_count()).
+    // The returned reference remains valid for this VehicleVoice's lifetime.
+    [[nodiscard]] const ps::engine_cycle::RadiatingEnd& source(int channel) const { return voice_.source(channel); }
     [[nodiscard]] int channel_count() const { return runner_.channel_count(); }
     [[nodiscard]] double sample_rate_hz() const { return static_cast<double>(voice_.sample_rate_hz()); }
 
