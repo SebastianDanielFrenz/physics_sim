@@ -1,0 +1,508 @@
+{
+  "format": "physics_sim.engine/1",
+  "name": "hyper_v8_one1_audio",
+  "kind": "simulated",
+  "source": "Offline acoustic reference approximating the One:1 V8. Published geometry: 8 cylinders, 92 mm bore, 95.25 mm stroke, 9:1 compression, 4 valves/cylinder, https://www.koenigsegg.com/technical-specifications-one1 . Firing order, banks, ports, cams, pipe dimensions and efficiency maps are assumed. Unboosted acoustic surrogate: no compressor/turbine rotor, turbo spool, blow-off or boost-pressure acoustics. Do not use its generated torque as the One:1 driving power curve; car_hyper uses hyper_v8_torque.json.",
+  "architecture": "piston_4stroke",
+  "bore_mm": 92.0,
+  "stroke_mm": 95.25,
+  "cylinders": 8,
+  "intake_manifold_volume_l": 6.0,
+  "throttle_body": {
+    "diameter_mm": 80.0,
+    "count": 1,
+    "discharge_coefficient": 0.8,
+    "area_fraction_vs_position": {
+      "x": [
+        0.0,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        0.75,
+        1.0
+      ],
+      "y": [
+        0.002,
+        0.012,
+        0.03,
+        0.12,
+        0.4,
+        0.75,
+        1.0
+      ]
+    }
+  },
+  "throttle_input": "electronic",
+  "throttle_actuator_tau_s": 0.04,
+  "idle_control": {
+    "kp_per_rpm": 3e-05,
+    "ki_per_rpm_s": 6e-05,
+    "max_throttle": 0.1,
+    "max_torque_nm": 25
+  },
+  "ecu": {
+    "lambda_target": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "p_im_kpa": [
+        20,
+        100
+      ],
+      "values": [
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    "spark_advance_deg": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "p_im_kpa": [
+        20,
+        100
+      ],
+      "values": [
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ]
+      ]
+    }
+  },
+  "cycle": {
+    "source": "Published bore/stroke and 9:1 compression; remaining geometry and cross-plane-style firing topology are explicitly assumed for offline sound development, not measured One:1 internals.",
+    "rod_mm": 155,
+    "compression_ratio": 9,
+    "intake_valves": 2,
+    "exhaust_valves": 2,
+    "intake_valve_d_mm": 36,
+    "exhaust_valve_d_mm": 32,
+    "intake_lift": {
+      "lift_mm_vs_deg": {
+        "x": [
+          0.0,
+          120.0,
+          240.0
+        ],
+        "y": [
+          0.0,
+          9.0,
+          0.0
+        ]
+      },
+      "phase_ref_deg": -10.0
+    },
+    "exhaust_lift": {
+      "lift_mm_vs_deg": {
+        "x": [
+          0.0,
+          120.0,
+          240.0
+        ],
+        "y": [
+          0.0,
+          9.0,
+          0.0
+        ]
+      },
+      "phase_ref_deg": 490.0
+    },
+    "intake_port_cc": 150.0,
+    "exhaust_port_cc": 250.0,
+    "cd_vs_l_over_d": {
+      "x": [
+        0.0,
+        0.1,
+        0.2,
+        0.3
+      ],
+      "y": [
+        0.65,
+        0.62,
+        0.55,
+        0.45
+      ]
+    },
+    "friction": {
+      "model": "polynomial_piston_speed",
+      "a_kpa": 66.62,
+      "b_kpa": 0.091,
+      "c_kpa": 0.347
+    },
+    "grid_rpm": [
+      950,
+      3000,
+      6000,
+      8250
+    ],
+    "grid_p_im_kpa": [
+      25,
+      50,
+      100
+    ],
+    "intake": {
+      "source": "[AS] assumed, mirrors cycle_pipe_fixtures.h",
+      "throttle_bore_m": 0.06,
+      "plenum_m3": 0.006,
+      "runners": [
+        {
+          "cylinders": "all",
+          "length_m": 0.3,
+          "d_in_m": 0.047,
+          "d_out_m": 0.043
+        }
+      ],
+      "interface": "throttle_inlet"
+    },
+    "exhaust": {
+      "source": "[AS] assumed, mirrors cycle_pipe_fixtures.h",
+      "primaries": [
+        {
+          "cylinders": "all",
+          "length_m": 0.42,
+          "d_m": 0.042
+        }
+      ],
+      "merges": [
+        {
+          "from": [
+            1,
+            2
+          ],
+          "into": "l12",
+          "length_m": 0.18,
+          "d_m": 0.052
+        },
+        {
+          "from": [
+            3,
+            4
+          ],
+          "into": "l34",
+          "length_m": 0.18,
+          "d_m": 0.052
+        },
+        {
+          "from": [
+            5,
+            6
+          ],
+          "into": "r56",
+          "length_m": 0.18,
+          "d_m": 0.052
+        },
+        {
+          "from": [
+            7,
+            8
+          ],
+          "into": "r78",
+          "length_m": 0.18,
+          "d_m": 0.052
+        },
+        {
+          "from": [
+            "l12",
+            "l34"
+          ],
+          "into": "left",
+          "length_m": 0.2,
+          "d_m": 0.065
+        },
+        {
+          "from": [
+            "r56",
+            "r78"
+          ],
+          "into": "right",
+          "length_m": 0.2,
+          "d_m": 0.065
+        },
+        {
+          "from": [
+            "left",
+            "right"
+          ],
+          "into": "flange",
+          "length_m": 0.25,
+          "d_m": 0.085
+        }
+      ],
+      "interface": "flange"
+    },
+    "default_installation": "../installations/hyper_v8_one1_reference.json",
+    "firing_order": [
+      1,
+      5,
+      4,
+      8,
+      6,
+      3,
+      7,
+      2
+    ],
+    "banks": [
+      [
+        1,
+        2,
+        3,
+        4
+      ],
+      [
+        5,
+        6,
+        7,
+        8
+      ]
+    ],
+    "bank_angle_deg": 90
+  },
+  "inertia_kgm2": 0.3,
+  "breakaway_torque_nm": 75.0,
+  "fuel": "../fuels/gasoline.json",
+  "ignition": "spark",
+  "idle_rpm": 950.0,
+  "initial_state": "running",
+  "limiter": {
+    "type": "fuel_cut",
+    "rpm": 8250,
+    "hysteresis_rpm": 150
+  },
+  "maps": {
+    "source": "[AS] complete unboosted acoustic-reference maps; coarse plausible coefficients, not a dyno fit; full override avoids unnecessary load-time map generation.",
+    "ve": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "p_im_kpa": [
+        20,
+        100
+      ],
+      "values": [
+        [
+          0.95,
+          0.95
+        ],
+        [
+          0.95,
+          0.95
+        ],
+        [
+          0.95,
+          0.95
+        ],
+        [
+          0.95,
+          0.95
+        ],
+        [
+          0.95,
+          0.95
+        ]
+      ]
+    },
+    "eta_i": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "air_mass_per_rev_g": [
+        0,
+        3,
+        10
+      ],
+      "values": [
+        [
+          0.34,
+          0.34,
+          0.34
+        ],
+        [
+          0.34,
+          0.34,
+          0.34
+        ],
+        [
+          0.34,
+          0.34,
+          0.34
+        ],
+        [
+          0.34,
+          0.34,
+          0.34
+        ],
+        [
+          0.34,
+          0.34,
+          0.34
+        ]
+      ]
+    },
+    "theta_mbt_deg": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "p_im_kpa": [
+        20,
+        100
+      ],
+      "values": [
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ],
+        [
+          28,
+          28
+        ]
+      ]
+    },
+    "pmep_excess_kpa": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "p_im_kpa": [
+        20,
+        100
+      ],
+      "values": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    "friction_torque_nm": {
+      "x": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "y": [
+        25,
+        50,
+        90,
+        140,
+        180
+      ]
+    },
+    "f_lambda": {
+      "x": [
+        0.5,
+        0.85,
+        1,
+        1.5,
+        2
+      ],
+      "y": [
+        0.5,
+        1.04,
+        1,
+        0.7,
+        0.2
+      ]
+    },
+    "eta_spark": {
+      "x": [
+        -40,
+        0,
+        10
+      ],
+      "y": [
+        0.6,
+        1,
+        0.8
+      ]
+    }
+  }
+}

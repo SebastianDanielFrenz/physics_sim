@@ -1,0 +1,108 @@
+{
+  "format": "physics_sim.engine/1",
+  "name": "hyper_v8_torque",
+  "kind": "torque_map",
+  "source": "One:1-inspired steady full-load approximation. Published Koenigsegg anchors: 1371 Nm at 6000 rpm, 1 MW at 7500 rpm, >1000 Nm from 3000 to 8000 rpm, limiter 8250 rpm. Source https://www.koenigsegg.com/technical-specifications-one1 . All other torque points, motoring losses, inertia, idle and controls are authored assumptions, not a measured dyno trace. Twin-turbo steady boost is implicit in this torque curve; no turbo lag, boost state, octane correction or live pipe voice is simulated.",
+  "wot_torque_nm_vs_rpm": {
+    "x": [
+      500,
+      950,
+      1500,
+      2000,
+      2500,
+      3000,
+      4000,
+      5000,
+      6000,
+      6500,
+      7000,
+      7500,
+      7800,
+      8000,
+      8250,
+      8500,
+      9000
+    ],
+    "y": [
+      170,
+      290,
+      410,
+      560,
+      790,
+      1050,
+      1180,
+      1300,
+      1371,
+      1350,
+      1320,
+      1273.2395447351626,
+      1220,
+      1170,
+      1100,
+      1050,
+      850
+    ]
+  },
+  "motoring_torque_nm_vs_rpm": {
+    "x": [
+      0,
+      500,
+      1000,
+      2000,
+      3000,
+      4000,
+      5000,
+      6000,
+      7000,
+      8000,
+      9000
+    ],
+    "y": [
+      -25,
+      -42,
+      -48,
+      -60,
+      -74,
+      -90,
+      -108,
+      -129,
+      -153,
+      -180,
+      -210
+    ]
+  },
+  "inertia_kgm2": 0.3,
+  "breakaway_torque_nm": 75.0,
+  "idle_rpm": 950,
+  "stall_rpm": 450,
+  "fire_rpm": 300,
+  "start_complete_rpm": 650,
+  "dfco_enable_rpm": 1300,
+  "dfco_reenable_rpm": 1000,
+  "idle_control": {
+    "kp_per_rpm": 0.0018,
+    "ki_per_rpm_s": 0.009,
+    "max_throttle": 0.3
+  },
+  "limiter": {
+    "type": "fuel_cut",
+    "rpm": 8250,
+    "hysteresis_rpm": 150
+  },
+  "starter": {
+    "stall_torque_nm": 230.0,
+    "free_speed_rpm": 500.0,
+    "interlock": "clutch_or_neutral"
+  },
+  "crank_axis_local": [
+    0,
+    1,
+    0
+  ],
+  "initial_state": "running",
+  "fuels": [
+    "../fuels/e5.json",
+    "../fuels/e10.json"
+  ],
+  "ignition": "spark"
+}
