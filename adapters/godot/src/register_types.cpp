@@ -8,6 +8,7 @@
 #include "input_map.h"
 #include "ps_body_node.h"
 #include "ps_simulation.h"
+#include "spatial_audio.h"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/defs.hpp>
@@ -18,6 +19,7 @@ using namespace godot;
 void initialize_ps_godot_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
     ClassDB::register_class<ps_godot::PsSimulation>();
+    ClassDB::register_class<ps_godot::PsSpatialAudio>();
     ClassDB::register_class<ps_godot::PsBodyNode3D>();
     ClassDB::register_class<ps_godot::PsDebugDraw>();
     ClassDB::register_class<ps_godot::PsInputMap>();

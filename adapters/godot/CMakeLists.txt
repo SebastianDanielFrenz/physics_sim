@@ -23,6 +23,7 @@ add_library(ps_godot_adapter SHARED
   src/ps_body_node.cpp
   src/debug_draw.cpp
   src/collision_import.cpp
+  src/spatial_audio.cpp
   src/vehicle_voice.cpp
 )
 
@@ -64,6 +65,10 @@ target_link_libraries(ps_godot_adapter
     nlohmann_json::nlohmann_json
     ps_options
 )
+
+if(WIN32)
+  target_link_libraries(ps_godot_adapter PRIVATE ole32)
+endif()
 
 set_target_properties(ps_godot_adapter PROPERTIES
   OUTPUT_NAME "libps_godot"
