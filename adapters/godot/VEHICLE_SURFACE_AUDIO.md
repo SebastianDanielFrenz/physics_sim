@@ -5,7 +5,10 @@ wheel load, tread speed, slip and forces. No additional physics simulation.
 Rolling retains the accepted asphalt synthesis from audition sections 1 and 2.
 Sliding and stationary burnout use the licensed three-second asphalt squeal
 sample in demo/audio/tyres, with a 50 ms overlapping loop crossfade and a 40 ms
-level envelope. Independent wheel playback offsets reduce coherent repetition.
+level envelope. Small braking slip stays silent: squeal starts gradually above
+an authored combined slip threshold (0.10 longitudinal ratio / 0.08 rad lateral),
+with a sliding-speed gate to reject creeping slip-ratio spikes. This is audio
+calibration, not telemetry for the exact tyre force limit. Independent wheel playback offsets reduce coherent repetition.
 See audio/tyres/LICENSE.md for attribution, source and conversion details.
 
 Dirt, grass and other surfaces currently share this generic asphalt fallback.

@@ -41,7 +41,12 @@ func update(speed: float, tread_speed: float, slip_ratio: float, slip_angle: flo
     if longitudinal + lateral < 0.05:
         scrub = 0.0
     roll = 0.014 * float(profile[0]) * pow(minf(v / 30.0, 3.0), 0.7) * load_scale
-    slide = 0.035 * scrub * load_scale
+    # Small elastic/contact-patch slip during ordinary braking is not a skid.
+    # Audio thresholds, not a claim to measure the tyre's exact force limit.
+    var slip_demand := sqrt(pow(absf(slip_ratio) / 0.10, 2.0) + pow(absf(slip_angle) / 0.08, 2.0))
+    var skid_gate := smoothstep(1.0, 2.0, slip_demand)
+    skid_gate *= smoothstep(0.5, 2.0, longitudinal + lateral)
+    slide = 0.035 * scrub * load_scale * skid_gate
     water = 0.0 # Rejected synthetic spray is muted; wetness has no distinct sample yet.
     tone_gain = float(profile[1]) * (1.0 - wet * 0.7)
     frequency = clampf(float(profile[2]) + 10.0 * v + 35.0 * sqrt(longitudinal + lateral), 200.0, 5000.0)
