@@ -8,6 +8,7 @@
 #include "../../jobs/jolt_job_system.h"
 
 #include <Jolt/Jolt.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/Memory.h>
@@ -1263,6 +1264,22 @@ public:
             out.point = from_rvec3(ray.GetPointOnRay(result.mFraction));
             const JPH::Body* hit_body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(result.mBodyID);
             out.body = hit_body ? unpack_body_id(hit_body->GetUserData()) : BodyId{};
+        }
+        return out;
+    }
+
+    RayCastHit ray_cast_excluding(const Vec3& origin,const Vec3& direction,real max_distance,BodyId excluded) const override {
+        JPH::RRayCast ray(to_rvec3(origin),to_vec3f(direction.normalized()*max_distance));
+        JPH::RayCastResult result;
+        const JPH::IgnoreSingleBodyFilter filter(lookup(excluded));
+        RayCastHit out;
+        if(physics_system_.GetNarrowPhaseQuery().CastRay(ray,result,{}, {},filter)) {
+            const auto* body=physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(result.mBodyID);
+            if(body) {
+                out.hit=true; out.body=unpack_body_id(body->GetUserData()); out.fraction=real(result.mFraction);
+                out.point=from_rvec3(ray.GetPointOnRay(result.mFraction));
+                out.normal=from_vec3f(body->GetWorldSpaceSurfaceNormal(result.mSubShapeID2,ray.GetPointOnRay(result.mFraction)));
+            }
         }
         return out;
     }

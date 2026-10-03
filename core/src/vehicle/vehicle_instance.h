@@ -71,6 +71,8 @@ struct VehicleTickEnv {
     // to drivetrain::ComponentSubstepCtx::ambient (below) for a future
     // simulated engine; the graph engine ignores it.
     AmbientSample ambient{};
+    Vec3 wind_world{};
+    std::span<const aero::WakeSource> wakes{}, extra_wakes{};
 };
 
 class VehicleInstance {
@@ -182,6 +184,12 @@ public:
     }
 
     [[nodiscard]] BodyId chassis() const { return chassis_; }
+    [[nodiscard]] const aero::WakeDesc& aero_wake() const { return desc_.aero.wake; }
+    [[nodiscard]] const aero::Telemetry& aero_telemetry() const { return aero_telemetry_; }
+    void set_aero_surface_command(std::size_t surface, real command);
+    void set_aero_fan_command(std::size_t fan, real command);
+    void credit_aero_fan_energy(real joules);
+
     // PHYS-033 I1 W1: called ONLY from vehicle::System::note_body_wrench,
     // itself called only from World::stage_gather (sequential, fixed
     // element order - PLAN.md D8) - never concurrently for the same
@@ -250,9 +258,12 @@ private:
 
     // Ackermann geometry, cached at construction from wheel attachment
     // points (vehicle_desc.h's SteeringDesc comment).
+    bool has_axle_balance_=false;
     real wheelbase_ = 2.5;
     real rear_axle_x_ = 0.0;
 
+    aero::State aero_state_{};
+    aero::Telemetry aero_telemetry_{};
     real prev_steer_avg_ = 0.0; // for SteeringDesc::steer_rate_limit
 
     // PHYS-033 I1 W1 (section 3.2/3.3). ext_wrench_accum_ is written ONLY by

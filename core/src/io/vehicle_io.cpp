@@ -3,6 +3,7 @@
 #include <cstring>
 #include <sstream>
 #include "ps/io/vehicle_io.h"
+#include "aero_io.h"
 
 #include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
@@ -2479,9 +2480,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
 
     // --- aero (plan section 4.4/9.1) ---------------------------------------
     if (j.contains("aero")) {
-        const auto& aj = j.at("aero");
-        v.aero.drag_area_m2 = aj.value("drag_area_m2", real(0.0));
-        if (v.aero.drag_area_m2 < real(0.0)) throw std::runtime_error("vehicle '" + v.name + "': aero.drag_area_m2 must be >= 0");
+        v.aero=read_aero(j.at("aero"));
     }
 
     // --- powertrain (plan section 9.1) --------------------------------------

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <variant>
+#include <stdexcept>
 
 namespace ps::vehicle {
 namespace {
@@ -29,6 +30,7 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
                                    const ControlChannelIndices& control_indices)
     : chassis_(chassis), surfaces_(surfaces), control_indices_(control_indices), desc_(desc),
       powertrain_(desc_.powertrain, desc_.brake_system, desc_.wheels, desc_.controllers, desc_.name) {
+    aero::validate(desc_.aero);
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
         wheels_.push_back(std::make_unique<WheelInstance>(w, create_pacejka_tyre_model(w.tyre)));
@@ -50,6 +52,7 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
         if (w.is_front) { front_sum += w.attachment_local.x; ++front_n; }
         else { rear_sum += w.attachment_local.x; ++rear_n; }
     }
+    has_axle_balance_=front_n>0&&rear_n>0;
     rear_axle_x_ = rear_n > 0 ? rear_sum / rear_n : 0.0;
     const real front_x = front_n > 0 ? front_sum / front_n : rear_axle_x_ + 2.5;
     wheelbase_ = std::max(real(0.5), front_x - rear_axle_x_);
@@ -190,6 +193,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     Vec3 force_sum = Vec3::zero();
     Vec3 torque_sum = Vec3::zero();
+    Vec3 aero_force_sum{}, aero_torque_sum{};
+    real fan_energy_used=0, front_downforce_sum=0, rear_downforce_sum=0;
 
     // PHYS-033 P4 I2 commit 5b (plan section 8): snapshot the ledger's
     // cumulative fields before this tick's substeps, so end_tick() below can
@@ -299,15 +304,43 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             }
         }
 
-        // PHYS-033 P4 I3 plan section 6.6: aero drag, a single bluff element
-        // at the chassis CoM (F_drag = -0.5*rho*CdA*|v|*v) - added directly
-        // here (not an IForceElement, this file's own top area / plan
-        // section 6.6's "why" note) so it is exact within the W1 shadow.
-        if (desc_.aero.drag_area_m2 > real(0.0)) {
-            const Vec3 v = twist_s.linear;
-            const real speed = v.length();
-            force_s += v * (-real(0.5) * env.air_density * desc_.aero.drag_area_m2 * speed);
+        // Aero sees the SAME shadow pose/twist as the tyres, not a stale backend state.
+        // Local probes also work against overhead roads when the chassis is inverted.
+        std::array<aero::GroundSample,aero::max_surfaces+aero::max_fans> aero_ground{};
+        auto probe=[&](Vec3 point,Vec3 direction,real range) {
+            aero::GroundSample result;
+            if(range<=0) return result;
+            const Vec3 origin=pose_s.transform_point(point), dir=pose_s.transform_direction(direction);
+            const auto hit=backend.ray_cast_excluding(origin,dir,range,chassis_);
+            // Only a surface facing this probe may form a road/seal. A miss is never ground.
+            if(hit.hit&&dot(hit.normal,-dir)>.5) result={true,range*hit.fraction};
+            return result;
+        };
+        for(std::size_t i=0;i<desc_.aero.surfaces.size();++i) {
+            const auto& surface=desc_.aero.surfaces[i];
+            const real command=aero_state_.surface_command[i];
+            const real target=command>=0?command*surface.max_offset_rad:-command*surface.min_offset_rad;
+            const real offset=aero_state_.offset_rad[i]+std::clamp(target-aero_state_.offset_rad[i],-surface.rate_rad_s*substep_dt,surface.rate_rad_s*substep_dt);
+            const real lift=surface.max_offset_rad>0 ? surface.max_lift_m*std::clamp(offset/surface.max_offset_rad,real(0),real(1)) : real(0);
+            aero_ground[i]=probe(surface.position_local+surface.normal_local*lift,surface.ground.probe_local,surface.ground.range_m);
         }
+        for(std::size_t i=0;i<desc_.aero.fans.size();++i) {
+            const auto& fan=desc_.aero.fans[i];
+            aero_ground[desc_.aero.surfaces.size()+i]=probe(fan.position_local,fan.direction_local,fan.probe_range_m);
+        }
+        auto aero_sample=aero::step(desc_.aero,aero_state_,pose_s,twist_s,
+            aero::Environment{env.air_density,env.wind_world},substep_dt,aero_ground,env.wakes,chassis_,env.extra_wakes);
+        force_s+=aero_sample.wrench_world.force; torque_s+=aero_sample.wrench_world.torque;
+        aero_force_sum+=aero_sample.wrench_world.force; aero_torque_sum+=aero_sample.wrench_world.torque;
+        fan_energy_used+=aero_sample.fan_energy_used_j;
+        if(has_axle_balance_) {
+            const real pitch=pose_s.orientation.inverse().rotate(aero_sample.wrench_world.torque).y;
+            const real front=(pitch-rear_axle_x_*aero_sample.downforce_n)/wheelbase_;
+            front_downforce_sum+=front; rear_downforce_sum+=aero_sample.downforce_n-front;
+        } else {
+            front_downforce_sum+=aero_sample.front_downforce_n; rear_downforce_sum+=aero_sample.rear_downforce_n;
+        }
+        aero_telemetry_=aero_sample; // surface/actuator values describe the last substep
 
         // PHYS-033 P4 I3 plan section 6.7: rotor reaction from every non-hub
         // rotating port (engine crank, clutch in/out, gearbox in/out, diff
@@ -458,6 +491,13 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     shadow_valid_ = true;
 
     const real n = static_cast<real>(num_substeps);
+    aero_telemetry_.wrench_world={aero_force_sum/n,aero_torque_sum/n};
+    aero_telemetry_.fan_energy_used_j=fan_energy_used;
+    aero_telemetry_.fan_power_w=fan_energy_used/tick_dt;
+    aero_telemetry_.axle_balance_valid=has_axle_balance_;
+    aero_telemetry_.front_downforce_n=front_downforce_sum/n; aero_telemetry_.rear_downforce_n=rear_downforce_sum/n;
+    aero_telemetry_.downforce_n=aero_telemetry_.front_downforce_n+aero_telemetry_.rear_downforce_n;
+    aero_telemetry_.front_balance=std::abs(aero_telemetry_.downforce_n)>1e-9 ? aero_telemetry_.front_downforce_n/aero_telemetry_.downforce_n : real(0);
     backend.apply_wrench(chassis_, Wrench{force_sum / n, torque_sum / n});
 }
 
@@ -480,6 +520,9 @@ void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRig
         wheels_[i]->reset_relaxation();
     }
     powertrain_.reset(opts, hub_speeds);
+    // Teleport resets actuator dynamics/commands, but does not create or discard prepaid energy.
+    const real energy=aero_state_.fan_energy_j; aero_state_={}; aero_state_.fan_energy_j=energy;
+    aero_telemetry_={};
 }
 
 std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
@@ -490,7 +533,23 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
     // topology state, each lossy gear's lambda_mesh_prev) - see
     // powertrain.h's fold_state_hash.
     h = powertrain_.fold_state_hash(h);
-    return h;
+    return aero::fold_state_hash(desc_.aero,aero_state_,h);
+}
+
+void VehicleInstance::set_aero_surface_command(std::size_t i,real command) {
+    if(i>=desc_.aero.surfaces.size()||!std::isfinite(command)||command < -1||command > 1)
+        throw std::invalid_argument("invalid aero surface index/command [-1,1]");
+    aero_state_.surface_command[i]=command;
+}
+void VehicleInstance::set_aero_fan_command(std::size_t i,real command) {
+    if(i>=desc_.aero.fans.size()||!std::isfinite(command)||command < 0||command > 1)
+        throw std::invalid_argument("invalid aero fan index/command [0,1]");
+    aero_state_.fan_command[i]=command;
+}
+void VehicleInstance::credit_aero_fan_energy(real joules) {
+    if(desc_.aero.fans.empty()||!std::isfinite(joules)||joules<0||!std::isfinite(aero_state_.fan_energy_j+joules))
+        throw std::invalid_argument("invalid aero fan energy credit");
+    aero_state_.fan_energy_j+=joules;
 }
 
 } // namespace ps::vehicle

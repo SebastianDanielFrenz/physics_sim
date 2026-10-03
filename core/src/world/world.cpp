@@ -8,13 +8,43 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <variant>
 
 namespace ps {
+void World::set_aero_environment(const aero::Environment& e) {
+    aero::validate(e); config_.air_density=e.air_density; config_.wind_world=e.wind_world;
+}
+void World::set_aero_wakes(std::vector<aero::WakeSource> wakes) {
+    for(const auto& w:wakes) {
+        aero::validate(w.desc);
+        auto finite=[](Vec3 v) { return std::isfinite(v.x)&&std::isfinite(v.y)&&std::isfinite(v.z); };
+        if(!finite(w.position_world)||!finite(w.velocity_world)) throw std::invalid_argument("nonfinite aero wake source");
+    }
+    aero_wakes_=std::move(wakes);
+}
+void World::set_aero_surface_command(VehicleId id,std::size_t i,real cmd) {
+    if(!vehicle_system_->contains(id)) throw std::invalid_argument("invalid vehicle for aero command");
+    vehicle_system_->at(id).set_aero_surface_command(i,cmd);
+}
+void World::set_aero_fan_command(VehicleId id,std::size_t i,real cmd) {
+    if(!vehicle_system_->contains(id)) throw std::invalid_argument("invalid vehicle for aero command");
+    vehicle_system_->at(id).set_aero_fan_command(i,cmd);
+}
+void World::credit_aero_fan_energy(VehicleId id,real joules) {
+    if(!vehicle_system_->contains(id)) throw std::invalid_argument("invalid vehicle for aero energy credit");
+    vehicle_system_->at(id).credit_aero_fan_energy(joules);
+}
+const aero::Telemetry& World::vehicle_aero_telemetry(VehicleId id) const {
+    if(!vehicle_system_->contains(id)) throw std::invalid_argument("invalid vehicle for aero telemetry");
+    return vehicle_system_->at(id).aero_telemetry();
+}
+
 
 World::World(const WorldConfig& config) : config_(config), dt_(real(1.0) / config.tick_rate_hz) {
+    aero::validate(aero::Environment{config.air_density,config.wind_world});
     job_system_ = std::make_unique<jobs::JobSystem>(config.job_workers, config.job_queue_capacity);
     articulation_system_ = std::make_unique<articulation::System>();
     vehicle_system_ = std::make_unique<vehicle::System>();
@@ -175,7 +205,7 @@ void World::stage_vehicle_islands() {
         // PHYS-033 I1 W1: the shadow chassis needs gravity to build its own
         // per-substep acceleration estimate (it never talks to World
         // otherwise) - see vehicle::VehicleTickEnv.
-        const vehicle::VehicleTickEnv env{config_.gravity, config_.air_density, ambient_};
+        const vehicle::VehicleTickEnv env{config_.gravity, config_.air_density, ambient_,config_.wind_world,{},aero_wakes_};
         vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz);
     }
 }
@@ -290,6 +320,7 @@ void World::stage_snapshot() {
         // until commit 6 wires real engine/clutch/gearbox/TCU state into
         // VehicleInstance::powertrain_state_.
         vsnap.powertrain = vinst.powertrain_state();
+        vsnap.aero=vinst.aero_telemetry();
     }
 
     // PLAN.md P2 adapter seam (this task's step 3): a race-free copy of this
@@ -477,6 +508,7 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
 
 VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
                                  const std::vector<std::pair<std::string, real>>& test_only_extra_channels) {
+    aero::validate(desc.aero);
     // PLAN.md P4 I0 (PHYS-033 section 8, Q4): resolve this vehicle's four
     // control channels to indices ONCE, here (setup time, off the tick
     // path - never called from inside a job). Vehicle index 0 (the next

@@ -60,6 +60,7 @@ struct WorldConfig {
     // Scenario JSON reads it as an optional "air_density" key
     // (ps::io::load_scenario, scenario.cpp).
     real air_density = 1.225;
+    Vec3 wind_world{};
     int job_workers = 0;            // 0 = auto (physical cores - 2, PLAN.md D8)
     // 0 = auto (ps::jobs::JobSystem::kDefaultQueueCapacity, 4096 - every real
     // workload in this codebase). A test may set a small explicit value to
@@ -187,6 +188,17 @@ public:
     // effect at the next tick's vehicle::VehicleTickEnv (World::step reads
     // ambient_ once per tick, not mid-step). Never hashed (an ECU/
     // environment input, like a control channel, not simulation state).
+    // Aero setters and live telemetry are stepping-thread-only, called BETWEEN ticks.
+    // Renderers should read VehicleSnapshot::aero instead of the live accessor.
+    void set_aero_environment(const aero::Environment& environment);
+    [[nodiscard]] aero::Environment aero_environment() const { return {config_.air_density,config_.wind_world}; }
+    void set_aero_wakes(std::vector<aero::WakeSource> wakes); // optional non-vehicle sources (e.g. trucks)
+    void set_aero_surface_command(VehicleId, std::size_t surface, real command);
+    void set_aero_fan_command(VehicleId, std::size_t fan, real command);
+    // Caller MUST debit this credit from its electrical/engine energy store. No automatic coupling.
+    // Reservoir starts empty; motors never generate unpaid suction. Tick telemetry reports consumption.
+    void credit_aero_fan_energy(VehicleId, real joules);
+    [[nodiscard]] const aero::Telemetry& vehicle_aero_telemetry(VehicleId) const;
     void set_ambient(const AmbientSample& a) { ambient_ = a; }
     [[nodiscard]] const AmbientSample& ambient() const { return ambient_; }
 
@@ -365,6 +377,7 @@ private:
     real dt_;
     std::uint64_t tick_ = 0;
     real sim_time_ = 0.0;
+    std::vector<aero::WakeSource> aero_wakes_;
     AmbientSample ambient_; // PHYS-033 P4 I7b C9; never hashed, see set_ambient/ambient() above
 
     std::unique_ptr<jobs::JobSystem> job_system_;

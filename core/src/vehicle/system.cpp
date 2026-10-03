@@ -7,6 +7,7 @@ namespace ps::vehicle {
 VehicleId System::create(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces,
                           const ControlChannelIndices& control_indices) {
     instances_.push_back(std::make_unique<VehicleInstance>(desc, chassis, surfaces, control_indices));
+    aero_wakes_.resize(instances_.size());
     const auto vehicle_index = static_cast<std::int32_t>(instances_.size() - 1);
     if (vehicle_for_body_index_.size() <= chassis.index) vehicle_for_body_index_.resize(chassis.index + 1, -1);
     vehicle_for_body_index_[chassis.index] = vehicle_index;
@@ -17,12 +18,18 @@ void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const
                        const VehicleTickEnv& env, real tick_dt, real substep_rate_hz) {
     if (instances_.empty()) return;
     const std::size_t n = instances_.size();
+    for(std::size_t i=0;i<n;++i) {
+        const auto body=instances_[i]->chassis();
+        aero_wakes_[i]={body,backend.get_pose(body).position,backend.get_motion(body).linear,instances_[i]->aero_wake()};
+    }
+    VehicleTickEnv tick_env=env; tick_env.wakes=aero_wakes_;
+
     const int workers = std::max(1, job_system.worker_count());
     const std::size_t grain = std::max<std::size_t>(1, (n + static_cast<std::size_t>(workers) * 4 - 1) / (static_cast<std::size_t>(workers) * 4));
 
-    job_system.parallel_for(n, grain, [this, &backend, &channel_values, &env, tick_dt, substep_rate_hz](std::size_t begin, std::size_t end) {
+    job_system.parallel_for(n, grain, [this, &backend, &channel_values, &tick_env, tick_dt, substep_rate_hz](std::size_t begin, std::size_t end) {
         for (std::size_t i = begin; i < end; ++i) {
-            instances_[i]->step_tick(backend, channel_values, env, tick_dt, substep_rate_hz);
+            instances_[i]->step_tick(backend, channel_values, tick_env, tick_dt, substep_rate_hz);
         }
     });
 }

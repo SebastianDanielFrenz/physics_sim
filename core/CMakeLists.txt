@@ -117,6 +117,8 @@ target_link_libraries(ps_engine_cycle
 # are empty (.gitkeep) until P1+.
 
 add_library(ps_core STATIC
+  src/io/aero_io.cpp
+  src/aero/aerodynamics.cpp
   src/version.cpp
   src/jolt_proof.cpp
 

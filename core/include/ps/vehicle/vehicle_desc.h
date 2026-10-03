@@ -15,6 +15,7 @@
 #include "ps/math/pose.h"
 #include "ps/math/vec3.h"
 #include "ps/types.h"
+#include "ps/aero/aerodynamics.h"
 #include "ps/vehicle/curve1d.h" // Curve1D (moved to its own header, PHYS-033 I2 commit 5a, to
                                  // break the vehicle_desc.h <-> powertrain_desc.h cycle below)
 #include "ps/vehicle/tyre_desc.h"
@@ -131,13 +132,12 @@ struct SteeringDesc {
 // (core/include/ps/drivetrain/powertrain_desc.h's EngineLimiterDesc
 // comment: "I2 semantics == the P3 placeholder") - I3's real drivetrain is
 // where it is finally addressed.
+// Legacy drag plus reusable coefficient surfaces/wakes/fans (ps/aero/aerodynamics.h).
 // PHYS-033 P4 I3 plan section 4.4/6.6: a single bluff-body drag element at
 // the chassis CoM, F_drag = -0.5*rho*CdA*|v|*v (VehicleInstance::step_tick,
 // plan section 6.6) - drag_area_m2 IS CdA (Cd already folded in), not a
 // separate Cd/frontal-area pair. 0 == no aero drag (I2/P3 behaviour).
-struct AeroDesc {
-    real drag_area_m2 = 0.0;
-};
+using AeroDesc = aero::Desc;
 
 struct VehicleDesc {
     std::string name;

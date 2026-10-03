@@ -358,6 +358,10 @@ public:
     // point (d) - but the safety guarantee itself held and may still be
     // useful elsewhere.)
     [[nodiscard]] virtual RayCastHit ray_cast(const Vec3& origin, const Vec3& direction, real max_distance) const = 0;
+    [[nodiscard]] virtual RayCastHit ray_cast_excluding(const Vec3& origin,const Vec3& direction,real distance,BodyId excluded) const {
+        auto hit=ray_cast(origin,direction,distance);
+        return hit.hit&&hit.body==excluded ? RayCastHit{} : hit;
+    }
     [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
 
     // Pure narrowphase overlap query (no sweep, no side effects on the

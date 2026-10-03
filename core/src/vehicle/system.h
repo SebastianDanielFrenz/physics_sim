@@ -77,6 +77,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<VehicleInstance>> instances_;
+    std::vector<aero::WakeSource> aero_wakes_; // sized at create; immutable during vehicle jobs
     // PHYS-033 I1 W1: index == BodyId::index -> that vehicle's index into
     // instances_, or -1 if that body is not a vehicle chassis. Built/grown
     // only in create() (sim thread, setup time); note_body_wrench's lookup

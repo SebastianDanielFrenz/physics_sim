@@ -3,6 +3,7 @@
 # world stepping, jobs etc. arrive in P1.
 
 add_executable(ps_unit_tests
+  test_aerodynamics.cpp
   test_hello.cpp
   test_math.cpp
   test_jobs.cpp
