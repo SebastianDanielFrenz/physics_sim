@@ -952,6 +952,20 @@ TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy
     CHECK(high.fuel_flow_g_s>70);
     CHECK(high.fuel_flow_g_s<100);
     CHECK_FALSE(boosted.maps().maps.has_theta_kl);
+    // A boosted engine's clutch feed-forward must carry current charge,
+    // and fuel-cut limiter pulses must not command the clutch to reopen.
+    CHECK(high.torque_demand>=high.tau0-boosted.maps().c_k-1e-6);
+    SimulatedEngine limited(desc);
+    (void)hold(limited,w_of(7500),1.0,14400);
+    const auto cut=hold(limited,w_of(8300),1.0,1);
+    CHECK(cut.limiter_active);
+    CHECK(cut.tau0<0);
+    CHECK(cut.torque_demand>1000);
+    TcuRequest shift_cut; shift_cut.ignition_cut=true;
+    const auto shifting=limited.pre_solve(running(w_of(8300)),cmd(1),shift_cut,kH);
+    CHECK(shifting.torque_demand<0); // deliberate shift cut still bounds flywheel-energy transfer
+
+
     // Spool: part throttle at 4500 rpm, then WOT; time to 90 % of the boost target.
     {
         SimulatedEngine sp(desc);

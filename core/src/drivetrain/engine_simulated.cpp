@@ -886,6 +886,18 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
             r.torque_demand = demand;
         }
     }
+    // The ambient steady tables do not include a spinning turbo's charge.
+    // Carry present boosted torque without feeding rev-limiter pulses back
+    // into clutch capacity (that would trap a flare on the limiter). Explicit
+    // shift cuts and DFCO still reduce torque for the bounded rolling close.
+    // Retain the steady request during spool-up.
+    if (turbo_ && comb && !dfco_active_ && !tcu.ignition_cut) {
+        const real rt = kGasConstant * turbo_->charge_k;
+        const auto uncut = evaluate_torque_impl(m,
+            Ambient{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)},
+            starter_, omega_old, p_im_, true, real(1.0), false, true);
+        r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
+    }
     r.theta_c = std::clamp(ev.fire * s_starve * p_im_ / p_amb_, real(0.0), real(1.0));
     r.fuel_flow_g_s = booked_fuel_mass_kg_ / h * real(1000.0);
     r.fuel_supply_fraction = s_starve;

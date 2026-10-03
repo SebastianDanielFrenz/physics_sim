@@ -113,6 +113,8 @@ struct PreSolveResult {
     // limiter is a speed governor that answers the clutch's own load,
     // so feeding its (clutch-dependent) output back into the clutch
     // target held a flared engine on the limiter indefinitely.
+    // Turbo MVEM also includes current-charge uncut net torque when larger
+    // than the ambient steady request, so clutch capacity carries boost.
     real torque_demand = 0.0;
     // PHYS-033 P4 I7a C2: the post-limiter combustion fraction theta_c
     // (engine_torque_map.cpp's own `theta_c = comb ? theta_eff*f_lim : 0`,

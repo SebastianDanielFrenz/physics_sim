@@ -9,6 +9,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include "vehicle_test_helpers.h"
+#include "ps/jobs/job_system.h"
+#include <cstdio>
 #include <cmath>
 
 using namespace ps;
@@ -583,4 +586,42 @@ TEST_CASE("ManualTcu: auto-shift thresholds and hysteresis", "[unit][drivetrain]
     for (int i = 0; i < 1000; ++i) (void)tcu.step(s, h, false);
     out = tcu.step(s, h, true);
     CHECK(out.gearbox_target == 1);
+}
+
+TEST_CASE("Hyper auto-clutch re-locks rolling seventh-gear WOT without tyre spin", "[hyper_clutch][tcu]") {
+    ps::jobs::JobSystem pool(10); ps::io::EngineMapOptions opt; opt.pool=&pool;
+    auto desc=ps::io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
+    for(real kmh : {70.,80.,100.}) {
+        auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.5);
+        ps_test::settle(*rig.world,.5);
+        auto motion=rig.world->get_motion(rig.chassis); motion.linear={kmh/3.6,0,0};
+        rig.world->backend().set_motion(rig.chassis,motion);
+        ps::vehicle::VehicleResetOptions reset; reset.gear=7; reset.clutch_locked=false;
+        rig.world->reset_vehicle(rig.vehicle,reset);
+        rig.world->set_control("gear_request",7); rig.world->set_control("throttle",1);
+        real max_late_slip=0, max_late_rpm=0, max_kappa=0; int first_lock=-1;
+        for(int tick=0;tick<2400;++tick) {
+            rig.world->step();
+            const auto state=rig.world->powertrain_state(rig.vehicle);
+            const auto debug=rig.world->powertrain_debug(rig.vehicle);
+            if(debug.clutch_stuck && first_lock<0) first_lock=tick;
+            if(tick>=480) {
+                max_late_slip=std::max(max_late_slip,std::abs(debug.clutch_slip*60/6.283185307179586));
+                max_late_rpm=std::max(max_late_rpm,state.engine_rpm);
+            }
+            for(std::size_t wheel : {std::size_t(2),std::size_t(3)})
+                max_kappa=std::max(max_kappa,std::abs(rig.world->wheel_telemetry(rig.vehicle,wheel).slip_ratio));
+            CHECK(state.gear==7);
+            CHECK(state.engine_state!=ps::drivetrain::EngineState::Stalled);
+            if(tick%120==0) {
+                const auto pt=rig.world->powertrain_state(rig.vehicle); const auto dbg=rig.world->powertrain_debug(rig.vehicle);
+                std::printf("clutch_probe start=%.0f t=%.1f v=%.1f rpm=%.1f slip=%.1f e=%.3f cap=%.1f clutchT=%.1f stuck=%d kappa=%.3f/%.3f\n",kmh,tick/240.,rig.world->get_motion(rig.chassis).linear.x*3.6,pt.engine_rpm,dbg.clutch_slip*60/6.283185307179586,pt.clutch_engagement,dbg.clutch_cap_kinetic,dbg.clutch_torque,dbg.clutch_stuck,rig.world->wheel_telemetry(rig.vehicle,2).slip_ratio,rig.world->wheel_telemetry(rig.vehicle,3).slip_ratio);
+            }
+        }
+        INFO("start km/h=" << kmh << " first_lock_s=" << first_lock/240. << " max_late_slip=" << max_late_slip << " rpm=" << max_late_rpm);
+        CHECK(first_lock>=0); CHECK(first_lock<480);
+        CHECK(max_late_slip<80); CHECK(max_late_rpm<4000);
+        CHECK(max_kappa<.15);
+        CHECK(rig.world->get_motion(rig.chassis).linear.x*3.6>kmh+20);
+    }
 }
