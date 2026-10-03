@@ -382,10 +382,10 @@ TEST_CASE("C12 F9: a tank holding the engine's second fuel burns that fuel, not 
 //       rises with p_im and eta_i with the air charge, both lower at
 //       altitude);
 //   (c) the electronic pedal law (C11 T4a) still holds at altitude - the
-//       derived steady tables are refilled for the new ambient;
-//   (d) white-box Powertrain: the refill happens on an ambient CHANGE only.
+//       bounded operating-point inversion uses the current atmosphere;
+//   (d) white-box Powertrain: live changes never rebuild the complete control grid.
 // ---------------------------------------------------------------------------
-TEST_CASE("C12 T3: the ambient sample drives the manifold, the pedal law and the steady-table refill", "[unit][drivetrain][engine]") {
+TEST_CASE("C12 T3: the ambient sample drives the manifold and bounded live pedal control", "[unit][drivetrain][engine]") {
     const SimulatedEngineDesc desc = fx::electronic_engine();
     const auto maps = SimulatedEngine::build_maps(desc);
     const real rpm = 3000.0, w = w_of(rpm);
@@ -432,7 +432,7 @@ TEST_CASE("C12 T3: the ambient sample drives the manifold, the pedal law and the
         CHECK(worst < 0.01);
     }
 
-    SECTION("(d) the Powertrain's engine refills its tables on a change only, and the refill is cheap") {
+    SECTION("(d) the Powertrain's engine updates live atmosphere without rebuilding whole tables") {
         Powertrain pt = build_pt(sim_sedan(desc));
         vehicle::VehicleResetOptions o;
         o.gear = 0;
@@ -458,14 +458,14 @@ TEST_CASE("C12 T3: the ambient sample drives the manifold, the pedal law and the
         run(kIsa, 96);
         CHECK(e.steady_rebuild_count() == 0);
         run(kAlt, 96);
-        CHECK(e.steady_rebuild_count() == 1);
-        CHECK(e.steady_tables().p_pa == kAlt.pressure_pa);
-        CHECK(e.steady_tables().t_k == kAlt.temperature_k);
+        CHECK(e.steady_rebuild_count() == 0);
+        CHECK(e.ambient_pressure() == kAlt.pressure_pa);
+        CHECK(e.ambient_temperature() == kAlt.temperature_k);
         run(kAlt, 96);
-        CHECK(e.steady_rebuild_count() == 1);
+        CHECK(e.steady_rebuild_count() == 0);
         run(kIsa, 1);
-        CHECK(e.steady_rebuild_count() == 2);
-        // The ISA refill reproduces the build-time (ISA) tables bit for bit.
+        CHECK(e.steady_rebuild_count() == 0);
+        // Returning to ISA reuses the unchanged setup tables bit for bit.
         CHECK(e.steady_tables().inverse_plate.values == e.maps().inverse_plate.values);
         CHECK(e.steady_tables().steady_wot_nm.y == e.maps().steady_wot_nm.y);
         CHECK(e.steady_tables().idle_ff == e.maps().idle_ff);

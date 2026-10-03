@@ -176,3 +176,7 @@ target_link_libraries(diag_terrain_build_split
     ps_warnings
     ps_options
 )
+
+# Aero ground-query timing tool (not registered with CTest).
+add_executable(bench_aero_ground bench_aero_ground.cpp)
+target_link_libraries(bench_aero_ground PRIVATE ps_core ps_warnings ps_options)

@@ -156,12 +156,13 @@ public:
     void reset(EngineState state) override;
 
     // Ambient (intake upstream = exhaust back pressure = p; T_im = T).
-    // ISA until called. PHYS-033 P4 I7b C12: pre_solve calls this whenever
-    // Sensors::ambient differs from the current ambient; a change refills
-    // the per-engine derived tables (steady_tables()) in place - no
-    // allocation, but O(10^6) manifold evaluations (measured cost in the
-    // C12 progress notes). A non-finite or non-positive p or T is ignored
-    // (the previous ambient stays).
+    // Explicit SETUP/OFFLINE setter: materializes complete steady_tables(), which is expensive.
+    // Runtime Sensors::ambient instead updates exact physical boundaries immediately and
+    // solves only needed idle/pedal/demand operating points, with bounded 24-iteration
+    // control bisections. It never builds a full grid, allocates, or quantizes atmosphere.
+    // steady_tables() describes the last fully materialized setup/maps-swap cache;
+    // ambient_pressure()/temperature() report the CURRENT live physical boundary.
+    // Nonfinite/nonpositive ambient is ignored. steady_rebuild_count counts full grids.
     void set_ambient(real p_pa, real t_k);
     [[nodiscard]] const SimulatedSteadyTables& steady_tables() const { return steady_; }
     [[nodiscard]] std::uint64_t steady_rebuild_count() const { return steady_rebuilds_; }
@@ -249,6 +250,11 @@ public:
 
 private:
     void init_state_for(EngineState state);
+    void set_live_ambient(real p_pa,real t_k);
+    [[nodiscard]] bool live_steady() const { return p_amb_!=steady_.p_pa || t_amb_!=steady_.t_k; }
+    [[nodiscard]] real live_steady_torque(real rpm,real plate,bool fired) const;
+    [[nodiscard]] real live_inverse_plate(real rpm,real request) const;
+
     std::optional<TurboPair> turbo_;
     real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_fuel_w_ = 0.0;
 
@@ -270,8 +276,9 @@ private:
     real actuator_tau_s_ = 0.0;
 
     // ambient
-    SimulatedSteadyTables steady_; // per-engine, ambient-dependent (not hashed: a pure function of maps + ambient)
+    SimulatedSteadyTables steady_; // full setup cache; non-reference anchor is hashed, values derive from maps/anchor
     std::uint64_t steady_rebuilds_ = 0;
+    real live_idle_ff_=0, live_idle_p_im_=0, live_idle_cap_x_=0;
     real p_amb_ = kIsaPressurePa, t_amb_ = kIsaTemperatureK;
     real r_t_ = 0.0;         // R*T_amb
     real inv_sqrt_rt_ = 0.0; // 1/sqrt(R*T_amb)

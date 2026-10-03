@@ -257,6 +257,56 @@ real steady_net_torque(const SimulatedEngineMaps& m, const Ambient& amb, const S
     return evaluate_torque_impl(m, amb, st, omega, p, fired, real(1.0), false, true).tau - m.c_k;
 }
 
+// Setup builds use 60 iterations; live control solves only the current idle operating point.
+void fill_idle_control(const SimulatedEngineMaps& m,const Ambient& amb,real idle_rpm,real idle_max_x,
+                       real idle_max_torque_nm,SimulatedSteadyTables& t,int iterations) {
+    const StarterDesc no_starter{};
+    // Idle feed-forward: the plate (electronic) / bypass valve (mechanical,
+    // plate at 0) position whose steady net torque at idle_rpm is zero.
+    {
+        const bool mech = m.throttle_input == ThrottleInput::Mechanical;
+        auto net = [&](real x) {
+            return mech ? steady_net_torque(m, amb, no_starter, idle_rpm, real(0.0), x, true)
+                        : steady_net_torque(m, amb, no_starter, idle_rpm, x, real(0.0), true);
+        };
+        real ff = real(0.0);
+        if (net(real(0.0)) >= real(0.0)) {
+            ff = real(0.0);
+        } else if (net(idle_max_x) <= real(0.0)) {
+            ff = idle_max_x;
+        } else {
+            real lo = real(0.0), hi = idle_max_x;
+            for (int it = 0; it < iterations; ++it) {
+                const real mid = real(0.5) * (lo + hi);
+                if (net(mid) < real(0.0)) lo = mid;
+                else hi = mid;
+            }
+            ff = real(0.5) * (lo + hi);
+        }
+        t.idle_ff = ff;
+        const real omega_idle = idle_rpm / kRadPerSecToRpm;
+        t.idle_p_im = mech ? steady_p(m, amb, omega_idle, real(0.0), ff) : steady_p(m, amb, omega_idle, ff, real(0.0));
+
+        // Idle authority cap (owner 2026-09-29: "not orders of magnitude
+        // more" than creeping in gear needs): the position whose steady net
+        // torque at idle_rpm is max_torque_nm, bounded by idle_max_x.
+        t.idle_cap_x = real(0.0);
+        if (idle_max_torque_nm > real(0.0)) {
+            real x_cap = idle_max_x;
+            if (net(idle_max_x) > idle_max_torque_nm) {
+                real lo = ff, hi = idle_max_x;
+                for (int it = 0; it < iterations; ++it) {
+                    const real mid = real(0.5) * (lo + hi);
+                    if (net(mid) < idle_max_torque_nm) lo = mid;
+                    else hi = mid;
+                }
+                x_cap = real(0.5) * (lo + hi);
+            }
+            t.idle_cap_x = x_cap;
+        }
+    }
+}
+
 // Fill the ambient-dependent derived tables IN PLACE. t's axes and value
 // arrays must already be sized (build_maps presets them; a SimulatedEngine's
 // own copy keeps them) - only indexed writes below, no allocation, so a
@@ -318,50 +368,7 @@ void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real i
         }
     }
 
-    // Idle feed-forward: the plate (electronic) / bypass valve (mechanical,
-    // plate at 0) position whose steady net torque at idle_rpm is zero.
-    {
-        const bool mech = m.throttle_input == ThrottleInput::Mechanical;
-        auto net = [&](real x) {
-            return mech ? steady_net_torque(m, amb, no_starter, idle_rpm, real(0.0), x, true)
-                        : steady_net_torque(m, amb, no_starter, idle_rpm, x, real(0.0), true);
-        };
-        real ff = real(0.0);
-        if (net(real(0.0)) >= real(0.0)) {
-            ff = real(0.0);
-        } else if (net(idle_max_x) <= real(0.0)) {
-            ff = idle_max_x;
-        } else {
-            real lo = real(0.0), hi = idle_max_x;
-            for (int it = 0; it < 60; ++it) {
-                const real mid = real(0.5) * (lo + hi);
-                if (net(mid) < real(0.0)) lo = mid;
-                else hi = mid;
-            }
-            ff = real(0.5) * (lo + hi);
-        }
-        t.idle_ff = ff;
-        const real omega_idle = idle_rpm / kRadPerSecToRpm;
-        t.idle_p_im = mech ? steady_p(m, amb, omega_idle, real(0.0), ff) : steady_p(m, amb, omega_idle, ff, real(0.0));
-
-        // Idle authority cap (owner 2026-09-29: "not orders of magnitude
-        // more" than creeping in gear needs): the position whose steady net
-        // torque at idle_rpm is max_torque_nm, bounded by idle_max_x.
-        t.idle_cap_x = real(0.0);
-        if (idle_max_torque_nm > real(0.0)) {
-            real x_cap = idle_max_x;
-            if (net(idle_max_x) > idle_max_torque_nm) {
-                real lo = ff, hi = idle_max_x;
-                for (int it = 0; it < 60; ++it) {
-                    const real mid = real(0.5) * (lo + hi);
-                    if (net(mid) < idle_max_torque_nm) lo = mid;
-                    else hi = mid;
-                }
-                x_cap = real(0.5) * (lo + hi);
-            }
-            t.idle_cap_x = x_cap;
-        }
-    }
+    fill_idle_control(m,amb,idle_rpm,idle_max_x,idle_max_torque_nm,t,60);
     t.p_pa = amb.p_amb;
 }
 
@@ -538,6 +545,37 @@ void SimulatedEngine::set_ambient(real p_pa, real t_k) {
     }
 }
 
+void SimulatedEngine::set_live_ambient(real p_pa,real t_k) {
+    if(!(std::isfinite(p_pa)&&p_pa>0&&std::isfinite(t_k)&&t_k>0)) return;
+    p_amb_=p_pa; t_amb_=t_k; r_t_=kGasConstant*t_k; inv_sqrt_rt_=real(1)/std::sqrt(r_t_);
+    if(live_steady()) {
+        // Stack-only scalar output; no table vectors are populated or allocated.
+        SimulatedSteadyTables idle;
+        fill_idle_control(*maps_,make_ambient(p_pa,t_k),desc_idle_rpm_,idle_.max_throttle,idle_.max_torque_nm,idle,24);
+        live_idle_ff_=idle.idle_ff; live_idle_p_im_=idle.idle_p_im; live_idle_cap_x_=idle.idle_cap_x;
+    }
+}
+
+real SimulatedEngine::live_steady_torque(real rpm,real plate,bool fired) const {
+    const real clamped_rpm=std::clamp(rpm,steady_.steady_torque_nm.x.front(),steady_.steady_torque_nm.x.back());
+    return steady_net_torque(*maps_,make_ambient(p_amb_,t_amb_),StarterDesc{},clamped_rpm,plate,real(0),fired);
+}
+
+real SimulatedEngine::live_inverse_plate(real rpm,real request) const {
+    if(request<=0) return 0;
+    if(request>=1) return 1;
+    const real mot=live_steady_torque(rpm,0,false), wot=live_steady_torque(rpm,1,true);
+    const real target=mot+request*(wot-mot);
+    if(live_steady_torque(rpm,0,true)>=target) return 0;
+    real lo=0, hi=1;
+    // Plate uncertainty <= 2^-24: no whole RPM/request grid and no altitude hysteresis.
+    for(int i=0;i<24;++i) {
+        const real mid=(lo+hi)*real(.5);
+        if(live_steady_torque(rpm,mid,true)<target) lo=mid; else hi=mid;
+    }
+    return (lo+hi)*real(.5);
+}
+
 void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
     if(!desc.maps) throw std::runtime_error("replace_turbo_configuration: missing prepared maps");
     if(turbo_) {
@@ -577,25 +615,29 @@ void SimulatedEngine::request_replace_maps(std::shared_ptr<const SimulatedEngine
 
 std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::apply_pending_maps_swap() {
     if (!pending_maps_) return nullptr;
+    const bool identical=maps_->content_hash==pending_maps_->content_hash;
     std::shared_ptr<const SimulatedEngineMaps> old = std::move(maps_);
     maps_ = std::move(pending_maps_);
     pending_maps_.reset();
     // Buffer exchange only: steady_ takes the tables prefilled from the new
     // maps by request_replace_maps; pending_steady_ keeps the old buffers
     // (same sizes) for the next request to overwrite. No refill here.
-    std::swap(steady_, pending_steady_);
+    if(!identical) {
+        std::swap(steady_, pending_steady_);
+        if(live_steady()) set_live_ambient(p_amb_,t_amb_); // request may have preceded a newer atmospheric sample
+    } // Identical maps must preserve the control cache/algorithm and remain invisible at any altitude.
     return old;
 }
 
 void SimulatedEngine::init_state_for(EngineState state) {
     const SimulatedEngineMaps& m = *maps_;
     if (state == EngineState::Running) {
-        p_im_ = steady_.idle_p_im;
+        p_im_ = live_steady()?live_idle_p_im_:steady_.idle_p_im;
         if (m.throttle_input == ThrottleInput::Mechanical) {
             x_thr_ = real(0.0);
-            x_iac_ = steady_.idle_ff;
+            x_iac_ = live_steady()?live_idle_ff_:steady_.idle_ff;
         } else {
-            x_thr_ = steady_.idle_ff;
+            x_thr_ = live_steady()?live_idle_ff_:steady_.idle_ff;
             x_iac_ = real(0.0);
         }
     } else {
@@ -637,11 +679,10 @@ SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_
 PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) {
     const SimulatedEngineMaps& m = *maps_;
     const bool mech = m.throttle_input == ThrottleInput::Mechanical;
-    // C12: the ambient sample (Sensors::ambient, from World::set_ambient)
-    // drives the manifold boundary and the derived steady tables. Exact
-    // comparison: a constant ambient (the ISA default) never refills.
+    // Physical atmosphere follows every finite change, including microscopic altitude motion.
+    // Control uses the current operating point; never refill the whole steady grid in a job.
     if (sensors.ambient.pressure_pa != p_amb_ || sensors.ambient.temperature_k != t_amb_) {
-        set_ambient(sensors.ambient.pressure_pa, sensors.ambient.temperature_k);
+        set_live_ambient(sensors.ambient.pressure_pa, sensors.ambient.temperature_k);
     }
     const real omega_old = sensors.omega;
     omega_old_ = omega_old;
@@ -696,10 +737,11 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
 
     // Idle PI in ACTUATOR units: plate position (electronic) or bypass
     // valve opening (mechanical); feed-forward = maps.idle_ff.
-    const real ff = steady_.idle_ff;
+    const real ff = live_steady()?live_idle_ff_:steady_.idle_ff;
     // Authority cap (IdleControlDesc::max_torque_nm, owner 2026-09-29): enough
     // to creep in gear, not a hidden launch aid.
-    const real cap = steady_.idle_cap_x > real(0.0) ? std::min(steady_.idle_cap_x, idle_.max_throttle) : idle_.max_throttle;
+    const real idle_cap=live_steady()?live_idle_cap_x_:steady_.idle_cap_x;
+    const real cap = idle_cap > real(0.0) ? std::min(idle_cap, idle_.max_throttle) : idle_.max_throttle;
     real theta_idle = real(0.0);
     if ((state_ == EngineState::Running || state_ == EngineState::Cranking) && !dfco_active_) {
         // One-sided around the model's own no-load feed-forward (owner
@@ -763,7 +805,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         x_thr_ = theta_cmd;
         x_iac_ = x_idle;
     } else {
-        const real x_target = std::max(steady_.inverse_plate.value(rpm, theta_req), x_idle);
+        const real x_target = std::max(live_steady()?live_inverse_plate(rpm,theta_req):steady_.inverse_plate.value(rpm, theta_req), x_idle);
         if (!(actuator_tau_s_ > real(0.0))) {
             x_thr_ = x_target;
         } else {
@@ -834,13 +876,13 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.governor_setpoint_rpm = real(0.0);
     {
         const real s = sign(omega_old);
-        const real mot = steady_.steady_motoring_nm.evaluate(rpm);
+        const real mot = live_steady()?live_steady_torque(rpm,0,false):steady_.steady_motoring_nm.evaluate(rpm);
         if (mech) {
-            r.torque_demand = comb ? steady_.steady_torque_nm.value(rpm, x_thr_) : s * mot;
+            r.torque_demand = comb ? (live_steady()?live_steady_torque(rpm,x_thr_,true):steady_.steady_torque_nm.value(rpm, x_thr_)) : s * mot;
         } else {
-            const real wot = steady_.steady_wot_nm.evaluate(rpm);
+            const real wot = live_steady()?live_steady_torque(rpm,1,true):steady_.steady_wot_nm.evaluate(rpm);
             real demand = s * mot + (comb ? theta_req : real(0.0)) * (wot - mot);
-            if (comb && !dfco_active_ && theta_idle > real(0.0)) demand = std::max(demand, steady_.steady_torque_nm.value(rpm, theta_idle));
+            if (comb && !dfco_active_ && theta_idle > real(0.0)) demand = std::max(demand, live_steady()?live_steady_torque(rpm,theta_idle,true):steady_.steady_torque_nm.value(rpm, theta_idle));
             r.torque_demand = demand;
         }
     }
@@ -895,6 +937,12 @@ PostSolveResult SimulatedEngine::post_solve(real omega_new, real h) {
 std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
     Fnv f{seed};
     f.pod(maps_->content_hash);
+    // Non-reference setup/swap caches select tabulated control when their ambient matches.
+    // This anchor is now persistent control state; include it so future divergence is visible.
+    // Reference-ambient engines retain their existing hash byte layout.
+    if(steady_.p_pa!=maps_->ref_p_pa || steady_.t_k!=maps_->ref_t_k) {
+        f.pod(steady_.p_pa); f.pod(steady_.t_k);
+    }
     f.pod(state_);
     f.pod(idle_integrator_);
     f.pod(limiter_cut_);
