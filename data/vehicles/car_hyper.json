@@ -214,6 +214,14 @@
         "torque_bias_ratio": 2.5
       },
       {
+        "id": "park",
+        "type": "park_lock",
+        "capacity_nm": 1500.0,
+        "static_factor": 1.0,
+        "max_engage_speed_rad_s": 1.0,
+        "channel": "park_lock"
+      },
+      {
         "id": "tank",
         "type": "fuel_tank",
         "fuel": "../fuels/e5.json",
@@ -237,7 +245,8 @@
       {
         "ports": [
           "gearbox.out",
-          "diff.carrier"
+          "diff.carrier",
+          "park.shaft"
         ]
       },
       {

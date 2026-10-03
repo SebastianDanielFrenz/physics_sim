@@ -2,7 +2,7 @@
   "format": "physics_sim.gearbox/1",
   "name": "hyper_7mt",
   "type": "manual",
-  "source": "Fictional seven-speed assisted manual transaxle for Sculpted A; ratios and synchro capacities are authored, not measured.",
+  "source": "Fictional seven-speed assisted manual transaxle for Sculpted A; ratios and synchro capacities are authored, not measured. Reverse is synchronized to allow assisted selection from idle Neutral.",
   "forward_ratios": [
     3.1,
     2.2,
@@ -50,7 +50,7 @@
       80
     ],
     "reverse_capacity_nm": [
-      0
+      140
     ],
     "static_factor": 1.0,
     "max_dog_mismatch_rad_s": 5.0

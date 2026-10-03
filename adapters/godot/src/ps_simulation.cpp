@@ -161,7 +161,7 @@ void PsSimulation::rebuild_post_step_and_start() {
     if (world_) {
         for (const char* name :
              {"shift_up_count", "shift_down_count", "gear_request", "ignition", "starter", "assist.auto_clutch",
-              "assist.auto_blip", "assist.auto_shift"}) {
+              "assist.auto_blip", "assist.auto_shift", "park_lock"}) {
             if (control_channels_.find(name) == control_channels_.end()) {
                 control_channels_.emplace(name, static_cast<float>(world_->get_control(name)));
             }

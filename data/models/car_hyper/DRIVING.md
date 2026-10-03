@@ -30,3 +30,5 @@ Earlier Godot verification with the original 600 kW setup:
 Previous main.gd preserved under `out/asset_backups/hyper_physics_*`.
 
 The current engine and live turbo/audio-bank configuration are documented in ../../engines/HYPER_ONE1.md. Published power figures are targets; see that document for measured approximation results.
+
+Reverse and Park (2026-10-03): from stationary Neutral, press shift-down once for R. Reverse now has an authored 140 Nm synchronizer, matching the first forward gear, so the assisted clutch can stop the spinning input shaft before dog engagement. The hypercar now has a 1500 Nm output-shaft parking lock, accepting engagement below 1 rad/s. In the physics_sim demo, N toggles park_lock; use Neutral before engaging it, and the digital cluster displays P when the pawl is engaged. Park is a separate lock rather than another manual transmission ratio. Other frontends must forward the park_lock control (0 release / 1 request) and expose an input; racing_game currently does not forward that channel. The Godot regression test test_hyper_gears.gd verifies N-to-R selection and park engagement/release through the shipped vehicle and adapter.

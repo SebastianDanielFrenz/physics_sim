@@ -6,6 +6,7 @@ var rpm := 0.0
 var drive_kw := 0.0
 var boost_bar := -1.0
 var gear := 0
+var park_engaged := false
 var capacity := 0.0
 var density := 0.0
 var fuel := 0.0
@@ -34,6 +35,7 @@ func _process(delta: float) -> void:
 	drive_kw = pt.get("drive_power_kw",0.0)
 	boost_bar = pt.get("boost_bar",-1.0)
 	gear = int(pt.get("gear",0))
+	park_engaged = bool(pt.get("park_lock_engaged",false))
 	fuel = pt.get("fuel_mass_kg",0.0)
 	if capacity>0.0 and (initial_fuel<0.0 or fuel>initial_fuel+0.01):
 		initial_fuel = fuel
@@ -86,7 +88,7 @@ func _draw() -> void:
 	text("km/h",Vector2(245,214),22,blue)
 	text("%.0f" % rpm,Vector2(735,180),58)
 	text("RPM",Vector2(735,214),22,blue)
-	text("R" if gear<0 else ("N" if gear==0 else str(gear)),Vector2(490,174),90)
+	text("P" if park_engaged else ("R" if gear<0 else ("N" if gear==0 else str(gear))),Vector2(490,174),90)
 	text("GEAR",Vector2(490,207),18,blue)
 	small_dial(Vector2(935,109),"%.0f" % drive_kw,"DRIVE kW",maxf(drive_kw,0)/650.0)
 	small_dial(Vector2(935,241),"%.1f" % boost_bar if boost_bar>=0 else "--","BOOST bar",boost_bar/3.0 if boost_bar>=0 else -1)
