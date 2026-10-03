@@ -162,7 +162,7 @@ TEST_CASE("ManualTcu: auto-clutch launch law gives e(rpm), then Launch -> Locked
 // full mechanism) is a faster floor applied ONLY while releasing below
 // anti_stall_rpm - this pins that it actually takes effect and opens the
 // clutch materially faster than release_rate_per_s alone would.
-TEST_CASE("ManualTcu: anti-stall release uses the faster panic rate, not the ordinary release_rate_per_s",
+TEST_CASE("ManualTcu: slipping-launch anti-stall release uses the faster panic rate, not the ordinary release_rate_per_s",
           "[unit][drivetrain][tcu]") {
     auto build = [](real anti_stall_release_rate_per_s) {
         ManualTcu::Desc d;
@@ -178,42 +178,42 @@ TEST_CASE("ManualTcu: anti-stall release uses the faster panic rate, not the ord
     };
     const real h = 1.0 / 960.0;
 
-    // Drive both variants to Locked at full engagement first (same setup as
-    // the launch-law test above), then trigger anti-stall the same way.
-    auto lock_up = [&](ManualTcu& tcu) {
+    // Start both variants in a half-engaged launch, then drop below anti-stall.
+    // Locked emergency release is immediate and is covered separately.
+    auto half_launch = [&](ManualTcu& tcu) {
         ManualTcu::Sensors s = base_sensors();
         s.gearbox_current = 1;
         s.gearbox_target = 1;
         s.throttle_request = 0.0;
-        s.engine_omega = rpm_to_omega(1200.0);
-        s.gearbox_in_omega = rpm_to_omega(1200.0 - 30.0); // small slip -> locks quickly
+        s.engine_omega = rpm_to_omega(1350.0);
+        s.gearbox_in_omega = 0; // launch is still slipping
         for (int i = 0; i < 400; ++i) (void)tcu.step(s, h, false);
-        REQUIRE(tcu.clutch_mode() == ManualTcu::ClutchMode::Locked);
-        REQUIRE(tcu.e_auto() == Catch::Approx(1.0).margin(1e-6));
+        REQUIRE(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
+        REQUIRE(tcu.e_auto() == Catch::Approx(0.5).margin(1e-6));
         return s;
     };
 
     // Variant A: anti_stall_release_rate_per_s == release_rate_per_s (no
     // panic boost - isolates the ordinary rate's own behaviour).
     ManualTcu tcu_ordinary(build(/*anti_stall_release_rate_per_s=*/12.0));
-    ManualTcu::Sensors sa = lock_up(tcu_ordinary);
+    ManualTcu::Sensors sa = half_launch(tcu_ordinary);
     sa.engine_omega = rpm_to_omega(700.0); // below anti_stall_rpm(950): triggers the transition
     sa.gearbox_in_omega = rpm_to_omega(700.0);
     (void)tcu_ordinary.step(sa, h, false);
     CHECK(tcu_ordinary.clutch_mode() == ManualTcu::ClutchMode::Launch);
     // One substep at release_rate_per_s(12/s): e_auto drops by 12*h.
-    CHECK(tcu_ordinary.e_auto() == Catch::Approx(1.0 - 12.0 * h).margin(1e-6));
+    CHECK(tcu_ordinary.e_auto() == Catch::Approx(0.5 - 12.0 * h).margin(1e-6));
 
     // Variant B: this file's shipped-style panic rate (40/s), well above
     // release_rate_per_s - must open FASTER than variant A on the very same
     // first substep after the anti-stall trigger.
     ManualTcu tcu_panic(build(/*anti_stall_release_rate_per_s=*/40.0));
-    ManualTcu::Sensors sb = lock_up(tcu_panic);
+    ManualTcu::Sensors sb = half_launch(tcu_panic);
     sb.engine_omega = rpm_to_omega(700.0);
     sb.gearbox_in_omega = rpm_to_omega(700.0);
     (void)tcu_panic.step(sb, h, false);
     CHECK(tcu_panic.clutch_mode() == ManualTcu::ClutchMode::Launch);
-    CHECK(tcu_panic.e_auto() == Catch::Approx(1.0 - 40.0 * h).margin(1e-6));
+    CHECK(tcu_panic.e_auto() == Catch::Approx(0.5 - 40.0 * h).margin(1e-6));
     CHECK(tcu_panic.e_auto() < tcu_ordinary.e_auto()); // strictly faster than the ordinary rate
 
     // Fully open well within the panic rate's own ~0.025s budget (24
@@ -255,14 +255,14 @@ TEST_CASE("ManualTcu: after an anti-stall release the clutch re-closes while sti
     REQUIRE(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
     REQUIRE(tcu.e_auto() == Catch::Approx(0.0).margin(1e-6));
 
-    // Engine back at idle, input shaft below rolling_reengage_rpm: stays open
+    // Engine back at idle, input shaft below anti_stall_rpm: stays open
     // (closing now could stall the engine).
     s.engine_omega = rpm_to_omega(800.0);
-    s.gearbox_in_omega = rpm_to_omega(1200.0);
+    s.gearbox_in_omega = rpm_to_omega(900.0);
     for (int i = 0; i < 200; ++i) (void)tcu.step(s, h, false);
     CHECK(tcu.e_auto() == Catch::Approx(0.0).margin(1e-6));
 
-    // Still rolling with the input shaft above rolling_reengage_rpm, driver
+    // Still rolling with the input shaft above anti_stall_rpm, driver
     // off the throttle: the clutch closes (engage_rate 4/s -> 0.25 s).
     s.gearbox_in_omega = rpm_to_omega(1800.0);
     for (int i = 0; i < 300; ++i) (void)tcu.step(s, h, false);
@@ -623,5 +623,57 @@ TEST_CASE("Hyper auto-clutch re-locks rolling seventh-gear WOT without tyre spin
         CHECK(max_late_slip<80); CHECK(max_late_rpm<4000);
         CHECK(max_kappa<.15);
         CHECK(rig.world->get_motion(rig.chassis).linear.x*3.6>kmh+20);
+    }
+}
+
+TEST_CASE("Auto clutch uses signed anti-stall RPM rather than launch bite RPM while rolling", "[tcu][hyper_clutch]") {
+    ManualTcu::Desc d; d.auto_clutch.anti_stall_rpm=850; d.auto_clutch.bite_rpm=1400;
+    ManualTcu tcu(d); auto s=base_sensors(); s.gearbox_current=7; s.gearbox_target=7;
+    s.engine_omega=rpm_to_omega(1250); s.gearbox_in_omega=rpm_to_omega(1230);
+    tcu.reset(true);
+    for(real throttle : {0.,.5,1.}) {
+        s.throttle_request=throttle;
+        for(int i=0;i<240;++i) CHECK(tcu.step(s,1./960,false).e_auto==real(1));
+    }
+    s.engine_omega=rpm_to_omega(1500); s.gearbox_in_omega=rpm_to_omega(800);
+    CHECK(tcu.step(s,1./960,false).e_auto==real(0)); // coupled RPM would fall below threshold
+    tcu.reset(true); s.engine_omega=rpm_to_omega(800); s.gearbox_in_omega=rpm_to_omega(1230);
+    CHECK(tcu.step(s,1./960,false).e_auto==real(0)); // actual RPM below threshold
+    tcu.reset(true); s.engine_omega=rpm_to_omega(1250);
+    s.gearbox_in_omega=rpm_to_omega(-1230); // would reverse the crank
+    CHECK(tcu.step(s,1./960,false).e_auto==real(0));
+    s.assist_auto_clutch=false;
+    CHECK(tcu.step(s,1./960,false).e_auto==real(1)); // manual pedal remains authoritative
+}
+
+TEST_CASE("Hyper auto clutch protects a running crank while sliding backwards in a forward gear", "[tcu][hyper_clutch]") {
+    ps::jobs::JobSystem pool(10); ps::io::EngineMapOptions opt; opt.pool=&pool;
+    const auto desc=ps::io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
+    for(real kmh : {60.,120.,200.}) {
+        auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.5);
+        ps_test::settle(*rig.world,.5);
+        auto motion=rig.world->get_motion(rig.chassis); motion.linear={70./3.6,0,0};
+        rig.world->backend().set_motion(rig.chassis,motion);
+        ps::vehicle::VehicleResetOptions reset; reset.gear=7; reset.clutch_locked=true;
+        rig.world->reset_vehicle(rig.vehicle,reset);
+        // Reverse road travel while preserving the previously running crank and hubs.
+        motion.linear={-kmh/3.6,0,0}; rig.world->backend().set_motion(rig.chassis,motion);
+        rig.world->set_control("gear_request",7); rig.world->set_control("throttle",1);
+        int protected_ticks=0;
+        for(int tick=0;tick<720;++tick) {
+            rig.world->step();
+            const auto state=rig.world->powertrain_state(rig.vehicle);
+            const auto debug=rig.world->powertrain_debug(rig.vehicle);
+            const real input_rpm=state.engine_rpm-debug.clutch_slip*kRadPerSecToRpm;
+            CHECK(state.engine_state!=ps::drivetrain::EngineState::Stalled);
+            CHECK(state.engine_rpm>400);
+            if(input_rpm < -80) {
+                ++protected_ticks;
+                CHECK(state.clutch_engagement==real(0));
+                CHECK(std::abs(debug.clutch_torque)<1e-6);
+            }
+        }
+        INFO("backward speed km/h=" << kmh);
+        CHECK(protected_ticks>600);
     }
 }

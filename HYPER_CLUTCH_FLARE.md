@@ -60,3 +60,34 @@ owner road/throttle trace. Integration still needs the racing-game chat's
 DLL build and a road retest. No game source, Godot process or DLL was modified.
 Long Linux sanitizer verification is queued for the overnight owner, with
 existing queues preserved; full CI is not claimed green.
+
+## Signed anti-stall threshold follow-up, 2026-10-04
+
+The owner's follow-up requires an engaged rolling clutch to stay closed when
+both actual crank RPM and the RPM imposed by the driveline are safe. At
+70 km/h in seventh the input is about +1230 rpm, above the shipped 850 rpm
+anti-stall threshold but below the old 1300 rpm rolling threshold and 1400 rpm
+launch bite. Rolling/post-shift safety now uses the signed anti-stall threshold;
+the legacy rolling_reengage_rpm field remains accepted for compatibility.
+
+Locked auto-clutch release is immediate if actual signed crank RPM or signed
+coupled RPM falls below that threshold. Backward shaft rotation is unsafe,
+not a high positive RPM: sustained negative input holds the clutch open, with
+a lock-slip-speed deadband for near-rest jitter. The auto-clutch output remains
+gated by the assist channel; with it disabled the manual clutch stays authoritative.
+Normal gearbox shifts and standstill launch modulation remain separate behaviors.
+
+The full-vehicle backward test starts with a running, forward-coupled drivetrain,
+then reverses chassis travel to -60/-120/-200 km/h without resetting or
+pre-reversing the crank. The old controller fails this reproduction, including
+actual engine stalls. The corrected controller protects the running crank,
+leaves the clutch open against reverse input, and never stalls in these cases.
+Additional unit checks hold full engagement at +1230 input RPM across zero,
+half and full throttle, release for actual/coupled RPM below 850, and check
+manual-assist gating. Evidence: out/hyper_clutch_flare/backward_before.log and
+signed_tests.log. This is a focused velocity-reversal proxy, not a full road
+replay of the owner's 180-degree spin.
+
+Final staged-source focused verification: **23,811 assertions in 17 cases passed**.
+The old controller failed the backward proxy with 3,513 failed assertions,
+including 1,200 sampled stalled-engine failures. No game/Godot DLL was rebuilt.

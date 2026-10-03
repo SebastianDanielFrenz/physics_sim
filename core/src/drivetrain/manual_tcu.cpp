@@ -122,15 +122,15 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // forced reclose dragged the engine down to the input shaft's speed and
     // stalled it; the Launch law then held the clutch open (rpm 0 < bite)
     // and the car coasted with a dead engine whatever the throttle said.
-    // The same threshold the Launch law already uses to decide the
-    // driveline CAN carry the engine (rolling_reengage_rpm) now also
+    // The same anti-stall threshold the Launch law uses to decide the
+    // driveline CAN carry the engine (signed input RPM) now also
     // decides the opposite: below it, the post-shift engagement is a
     // launch (rpm-gated slip law, anti-stall), not a shift. Also a direct
     // anti-stall net for the closing phase itself. Neutral (current == 0)
     // is unaffected (the Launch law closes fully in N anyway).
     if (mode_ == ClutchMode::Shift && !gearbox_shifting_now && s.gearbox_current != 0) {
-        const real in_rpm = std::abs(s.gearbox_in_omega) * kRadPerSecToRpm;
-        if (in_rpm < desc_.auto_clutch.rolling_reengage_rpm || rpm < desc_.auto_clutch.anti_stall_rpm) mode_ = ClutchMode::Launch;
+        const real in_rpm = s.gearbox_in_omega * kRadPerSecToRpm;
+        if (in_rpm < desc_.auto_clutch.anti_stall_rpm || rpm < desc_.auto_clutch.anti_stall_rpm) mode_ = ClutchMode::Launch;
     }
 
     // Torque-following close (AutoClutchDesc::sync_time_s, owner test drive
@@ -167,6 +167,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // e = k*slip law (no notion of engine torque: under-carries at WOT, so
     // the engine flares to the limiter, and over-carries off-throttle).
     // Launch from rest (the rpm-gated Launch law) is unchanged.
+    bool emergency_release = false;
     real e_tgt = e_auto_;
     real rate = desc_.auto_clutch.release_rate_per_s;
     if (mode_ == ClutchMode::Shift) {
@@ -178,7 +179,11 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             rate = real(1.0) / desc_.auto_clutch.close_time_s;
         }
     } else if (mode_ == ClutchMode::Locked) {
-        if (rpm < desc_.auto_clutch.anti_stall_rpm) mode_ = ClutchMode::Launch;
+        if (s.engine_omega * kRadPerSecToRpm < desc_.auto_clutch.anti_stall_rpm ||
+            s.gearbox_in_omega * kRadPerSecToRpm < desc_.auto_clutch.anti_stall_rpm) {
+            mode_ = ClutchMode::Launch;
+            emergency_release = true;
+        }
         else {
             e_tgt = real(1.0);
             rate = desc_.auto_clutch.engage_rate_per_s;
@@ -210,13 +215,13 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                                s.throttle_request * (desc_.auto_clutch.full_rpm_max - desc_.auto_clutch.full_rpm_min);
             const real denom = full - desc_.auto_clutch.bite_rpm;
             e_tgt = denom > real(0.0) ? std::clamp((rpm - desc_.auto_clutch.bite_rpm) / denom, real(0.0), real(1.0)) : real(1.0);
-            // Rolling re-engagement (AutoClutchDesc::rolling_reengage_rpm):
+            // Rolling re-engagement uses the signed anti-stall threshold:
             // in gear, not shifting, and the input shaft fast enough to
             // carry the engine - close, like after any shift.
             // Torque-following (see the Shift-mode close above) when the
             // network data is available, else the legacy ramp to 1.
-            const real in_rpm = std::abs(s.gearbox_in_omega) * kRadPerSecToRpm;
-            if (s.gearbox_current != 0 && s.gearbox_phase == Gearbox::Phase::Idle && in_rpm > desc_.auto_clutch.rolling_reengage_rpm) {
+            const real in_rpm = s.gearbox_in_omega * kRadPerSecToRpm;
+            if (s.gearbox_current != 0 && s.gearbox_phase == Gearbox::Phase::Idle && in_rpm >= desc_.auto_clutch.anti_stall_rpm) {
                 e_tgt = torque_following_close() ? sync_close_target(s) : real(1.0);
                 sync_closing = torque_following_close();
             }
@@ -229,7 +234,8 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
         // releasing below anti_stall_rpm specifically opens at LEAST this
         // fast, on top of whatever release_rate_per_s already gives - never
         // slower than the ordinary rate.
-        if (e_tgt < e_auto_ && rpm < desc_.auto_clutch.anti_stall_rpm) {
+        if (e_tgt < e_auto_ && (s.engine_omega * kRadPerSecToRpm < desc_.auto_clutch.anti_stall_rpm ||
+                                 s.gearbox_in_omega * kRadPerSecToRpm < desc_.auto_clutch.anti_stall_rpm)) {
             rate = std::max(rate, desc_.auto_clutch.anti_stall_release_rate_per_s);
         }
         const real slip_rpm = std::abs(s.engine_omega - s.gearbox_in_omega) * kRadPerSecToRpm;
@@ -238,6 +244,15 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             e_tgt = real(1.0);
             rate = desc_.auto_clutch.engage_rate_per_s;
         }
+    }
+    // A locked clutch below the actual/coupled anti-stall threshold must
+    // release this substep: a 25 ms ramp can already stall a light flywheel.
+    // Opposite shaft rotation also stays disconnected. The small signed
+    // speed deadband avoids treating near-rest numerical jitter as a spin.
+    if (s.gearbox_current != 0 && s.gearbox_phase == Gearbox::Phase::Idle && (emergency_release || s.gearbox_in_omega * kRadPerSecToRpm < -desc_.auto_clutch.lock_slip_rpm)) {
+        mode_ = ClutchMode::Launch;
+        e_tgt = real(0.0);
+        rate = std::max(rate, e_auto_ / h);
     }
     e_auto_ = move_toward(e_auto_, e_tgt, rate * h);
     if (mode_ == ClutchMode::Shift && !gearbox_shifting_now) {

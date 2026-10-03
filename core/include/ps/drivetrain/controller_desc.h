@@ -20,7 +20,7 @@ struct AutoClutchDesc {
     real full_rpm_min = 1600.0;  // engagement 1 at this rpm with throttle 0 ...
     real full_rpm_max = 3000.0;  // ... and at this rpm with throttle 1
     real lock_slip_rpm = 80.0;   // |engine - input| below this (and rpm > bite) -> Locked
-    real anti_stall_rpm = 950.0; // Locked and rpm below this -> back to the launch law
+    real anti_stall_rpm = 950.0; // signed crank/coupled RPM below this: release a locked clutch
     real engage_rate_per_s = 4.0, release_rate_per_s = 12.0;
     // PHYS-033 P4 I3 (C8 smoke-test finding): while releasing BELOW
     // anti_stall_rpm specifically, the clutch opens at at least this rate
@@ -43,20 +43,9 @@ struct AutoClutchDesc {
     // unaffected. Default is intentionally aggressive (~0.025 s to fully
     // open) relative to release_rate_per_s's ~0.083 s.
     real anti_stall_release_rate_per_s = 40.0;
-    // Rolling re-engagement (owner test drive, 2026-09-24: "after braking
-    // hard, rpm is stuck at idle"). After an anti-stall release the Launch
-    // law only closes on ENGINE rpm (bite_rpm), so a car still rolling in
-    // gear with the driver off the throttle coasted with the clutch open
-    // forever: no engine braking, rpm at idle. Like a real automated
-    // clutch, Launch mode now also closes whenever the gearbox input shaft
-    // turns faster than this (rpm) with the gearbox idle in a gear: the
-    // driveline is then fast enough to carry the engine above anti_stall_rpm
-    // without stalling it. Must be > anti_stall_rpm (hysteresis).
-    // Also the post-shift launch-vs-shift decision (owner test drive
-    // 2026-09-25): once a shift's dog is in, an input shaft BELOW this rpm
-    // cannot carry the engine, so the TCU hands the engagement to the Launch
-    // law instead of the Shift-mode reclose (which stalled the engine when
-    // 2nd was selected at walking pace - manual_tcu.cpp's own comment).
+    // Legacy configuration field retained for source/JSON compatibility.
+    // Since 2026-10-04 the controller uses signed gearbox-input RPM and
+    // anti_stall_rpm for rolling safety, rather than this separate threshold.
     real rolling_reengage_rpm = 1300.0;
     real open_time_s = 0.08, close_time_s = 0.20; // shift ramps
     // Torque-following close onto a MOVING driveline (owner test drive
