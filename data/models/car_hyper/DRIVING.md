@@ -8,13 +8,10 @@ drive -VR --m1-vehicle=car_hyper
 
 `data/vehicles/car_hyper.json` now supplies the physical wheels, suspension,
 brakes, steering and rear-drive powertrain. Its dependencies are
-`hyper_v8_torque.json`, `hyper_7mt.json` and separate front/rear tyre files.
+`hyper_v8_one1_audio.json`, `hyper_7mt.json` and separate front/rear tyre files.
 The demo's `VEHICLE_TABLE` selects the hypercar art, chassis and spawn.
 
-This is authored tuning with a One:1-inspired 1 MW torque-map engine,
-seven-speed assisted manual, 1500 kg chassis, 42/58 static load split and
-2.5 torque-biasing differential. It has no simulated cylinder/pipe block,
-so the existing live engine audio system does not produce an engine voice.
+This is authored tuning with a One:1-inspired simulated twin-turbo V8, seven-speed assisted manual, 1500 kg chassis, 42/58 static load split and 2.5 torque-biasing differential. Live combustion/pipe audio and asynchronously generated audio banks follow the engine and turbo configuration.
 
 The collision proxy is deliberately narrow (half extents 2.0, 0.4, 0.12 m).
 The initial 0.72 m half-width caused full-compression wheel contacts and
@@ -32,4 +29,4 @@ Earlier Godot verification with the original 600 kW setup:
 
 Previous main.gd preserved under `out/asset_backups/hyper_physics_*`.
 
-The current engine approximation and separate offline V8 reference are documented in ../../engines/HYPER_ONE1.md. The driving engine now has 1371 Nm at 6000 rpm, 1 MW at 7500 rpm and an 8250 rpm limiter. New native validation is recorded there; the offline reference is not yet connected to baked playback in Godot.
+The current engine and live turbo/audio-bank configuration are documented in ../../engines/HYPER_ONE1.md. Published power figures are targets; see that document for measured approximation results.

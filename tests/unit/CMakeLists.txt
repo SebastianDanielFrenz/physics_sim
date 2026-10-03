@@ -63,6 +63,7 @@ add_executable(ps_unit_tests
   test_cycle_engine_studies.cpp
   test_engine_rig_wheelless.cpp
   test_pipe_network.cpp
+  test_pipe_network_simd.cpp
   test_waveguide_network.cpp
   test_pipe_waveguide.cpp
   test_engine_map_generator.cpp
@@ -74,6 +75,7 @@ add_executable(ps_unit_tests
   test_firing_order.cpp
   test_audio_time_map.cpp
   test_audio_voice.cpp
+  test_voice_threads.cpp
   test_engine_sound_glue.cpp
   test_engine_rig_audio.cpp
 )

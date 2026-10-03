@@ -69,6 +69,9 @@ struct EngineMaps {
     // Spark sweep: largest |normalised curve - mean| over the three sweep
     // points (the eta_spark map is their mean).
     real eta_spark_spread = 0.0;
+    // Grid nodes below the engine's closed-throttle manifold floor, generated
+    // with the plenum held at the node pressure (diagnostic, not hashed).
+    int held_plenum_points = 0;
     std::uint32_t generator_version = kLumpedGeneratorVersion; // set by finish() / the cache loader
     MapQuality quality = MapQuality::Full;
     std::uint64_t content_hash = 0; // engine_maps_content_hash(*this), filled by finish()
@@ -87,7 +90,9 @@ public:
     // network and the resolved installation, throttle trimmed to the point's
     // p_im); a grid node whose p_im the fully open throttle cannot reach (or
     // the trim does not settle to within its tolerance) fails the task with
-    // "engine map generator: plenum target ..." (PROVISIONAL P6). Sweep
+    // "engine map generator: plenum target ..." (PROVISIONAL P6). A node
+    // BELOW the closed-throttle floor (overlap backflow) is generated with
+    // the plenum held at the node pressure instead (held_plenum_points). Sweep
     // points only feed normalised ratios and are not held to the target.
     EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
     ~EngineMapGenTask();

@@ -24,11 +24,26 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 using namespace ps;
 using namespace ps::engine_cycle;
 using Clock = std::chrono::steady_clock;
+
+std::string env_value(const char* name) {
+#ifdef _WIN32
+    char* v = nullptr;
+    std::size_t n = 0;
+    const bool ok = _dupenv_s(&v, &n, name) == 0 && v != nullptr;
+    const std::string s = ok ? std::string(v) : std::string();
+    std::free(v);
+    return s;
+#else
+    const char* v = std::getenv(name);
+    return v != nullptr ? std::string(v) : std::string();
+#endif
+}
 
 int main(int argc, char** argv) {
     const real rpm = argc > 1 ? std::atof(argv[1]) : 3000.0;
@@ -59,6 +74,15 @@ int main(int argc, char** argv) {
         if (p.max_wave_speed_m_s > kIntakeMaxWaveSpeed) p.dx_target_m = desc.resolution.audio_dx_exhaust_m;
     PipeNetwork net(nd, h);
     net.set_orifice_cd_area(lay.throttle_orifice, 4e-4);
+    // ps_audio A9: PS_PIPE_KERNEL=reference|simd forces the FV kernel so the
+    // same binary can A/B the scalar reference against the AVX2 kernel.
+    const std::string kenv = env_value("PS_PIPE_KERNEL");
+    if (kenv == "reference") net.set_kernel(PipeKernel::Reference);
+    if (kenv == "simd") net.set_kernel(PipeKernel::Simd);
+    // ps_audio A9b: PS_VOICE_THREADS=N runs the pipe loop on N workers (the
+    // bare PipeNetwork here owns its own team). 1/unset = the serial path.
+    const std::string tenv = env_value("PS_VOICE_THREADS");
+    if (!tenv.empty()) net.set_step_threads(std::atoi(tenv.c_str()));
     WaveguideNetworkDesc wd = nd.waveguide;
     wd.gas = nd.gas;
     WaveguideNetwork wg(wd, h);
@@ -98,8 +122,9 @@ int main(int argc, char** argv) {
     }
     const double us = 1e6 / static_cast<double>(steps);
     const double budget = 1e6 / fs;
-    std::printf("audio-grade fixture I4 at %.0f rpm, h = %.3f us (%llu steps/cycle), %llu steps\n", rpm, h * 1e6,
-                static_cast<unsigned long long>(n), static_cast<unsigned long long>(steps));
+    std::printf("audio-grade fixture I4 at %.0f rpm, h = %.3f us (%llu steps/cycle), %llu steps [kernel %s, threads %d]\n", rpm,
+                h * 1e6, static_cast<unsigned long long>(n), static_cast<unsigned long long>(steps),
+                net.kernel() == PipeKernel::Simd ? "simd" : "reference", net.step_threads());
     std::printf("cells: intake %d, exhaust %d, total %d; waveguide segments %d\n", cells_in, cells_ex,
                 net.total_cell_count(), wg.segment_count());
     std::printf("per sample: cylinders %.3f us, network %.3f us (FV %.3f + WG %.3f), total %.3f us; "

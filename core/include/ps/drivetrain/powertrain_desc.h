@@ -1,3 +1,4 @@
+#include <memory>
 // ps/drivetrain/powertrain_desc.h — public, additive descriptors for the
 // P4 shaft-network powertrain (PHYS-033 P4 I3 plan section 4.1). Pure
 // data; no algorithm code, no Jolt/Godot type (same D2/D10 pattern as
@@ -280,12 +281,40 @@ struct SimulatedEcuDesc {
     Table2D spark_advance_deg; // y = p_im [Pa]; [deg BTDC], values in [-30, 70]
 };
 
+// Reduced symmetric parallel turbo pair. Each turbo sees half the flow;
+// inertia/flow capacity below are totals for the pair. No measured OEM maps.
+struct TurboPerformanceMaps;
+struct TurboPairDesc {
+    std::shared_ptr<const TurboPerformanceMaps> maps;
+    real reference_head_pa = 324000.0;
+    real target_boost_pa = 180000.0;
+    real rotor_inertia_kgm2 = 0.00004;
+    real reference_rpm = 120000.0;
+    real max_mass_flow_kg_s = 0.75;
+    real compressor_efficiency = 0.72;
+    real turbine_efficiency = 0.70;
+    real turbine_area_m2 = 0.0015;
+    real intercooler_effectiveness = 0.85;
+    real shaft_loss_w_at_reference = 1200.0;
+    // Boost controller (PID on charge pressure, error per unit of
+    // target_boost_pa; derivative on the measurement) and the wastegate
+    // actuator's first-order lag. [A] Defaults from a gain sweep on
+    // hyper_v8_one1_audio.json (2026-10-02, vault PHYS-058): every speed
+    // settles on target with < 20 Pa ripple, 4500 rpm part throttle -> WOT
+    // reaches 90 % boost in 0.27 s without overshoot. kd = 0 limit-cycles.
+    real wastegate_kp = 1.0;
+    real wastegate_ki_per_s = 1.0;
+    real wastegate_kd_s = 0.05;
+    real wastegate_actuator_tau_s = 0.10;
+};
+
 struct SimulatedEngineDesc {
     EngineArchitecture architecture = EngineArchitecture::Piston4Stroke;
     PistonGeometryDesc piston; // meaningful iff architecture == Piston4Stroke
     RotaryGeometryDesc rotary; // meaningful iff architecture == Rotary
     real intake_manifold_volume_m3 = 0.0; // > 0 (plenum + runners)
     ThrottleBodyDesc throttle_body;
+    std::optional<TurboPairDesc> turbo_pair;
     // Required for a simulated engine (plan section 3.4.3). Electronic: the
     // command is a TORQUE request, turned into a plate target through a
     // load-time inverse table; the plate follows through a first-order

@@ -72,6 +72,8 @@ target_link_libraries(ps_detmath
 # link ps_detmath (above) - a leaf target with no dependencies of its own,
 # not "ps_core's own implementation" in the sense this file's dependency
 # rule is about.
+find_package(Threads REQUIRED)
+
 add_library(ps_engine_cycle STATIC
   src/engine_cycle/geometry.cpp
   src/engine_cycle/cycle_stepper.cpp
@@ -80,6 +82,7 @@ add_library(ps_engine_cycle STATIC
   src/engine_cycle/pipe_network.cpp
   src/engine_cycle/waveguide_network.cpp
   src/engine_cycle/cycle_engine.cpp
+  src/engine_cycle/step_team.cpp
 )
 
 target_include_directories(ps_engine_cycle PUBLIC
@@ -89,6 +92,7 @@ target_include_directories(ps_engine_cycle PUBLIC
 target_link_libraries(ps_engine_cycle
   PRIVATE
     ps_detmath
+    Threads::Threads
     ps_warnings
     ps_options
 )

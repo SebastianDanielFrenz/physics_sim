@@ -58,6 +58,13 @@ const CHASSIS_BODY_NAME := "car_chassis"
 # (mass 6000, half_extents [1.2, 0.35, 0.9], z 1.28) the same way car_sedan's
 # entry mirrors vehicle_step_steer.json's.
 const VEHICLE_TABLE := {
+	"car_hyper": {
+		"chassis_mass": 1500.0,
+		"chassis_half_extents": Vector3(2.0, 0.4, 0.12),
+		"chassis_z_offset": 0.50,
+		"model_relative_path": "data/models/car_hyper/car_hyper.glb",
+		"spawn_id": "spawn_straight_car",
+	},
 	"car_sedan": {
 		"chassis_mass": 1500.0,
 		"chassis_half_extents": Vector3(2.0, 0.4, 0.15),
@@ -145,6 +152,9 @@ var ground_grid: MeshInstance3D
 # see ps_simulation.h's has_vehicle_voice/adapters/godot/src/vehicle_voice.h
 # for what qualifies). null on any vehicle without one (most, including the
 # default car_sedan.json) - _process below no-ops in that case.
+var _spatial_audio: PsSpatialAudio
+var _audio_debug_second: int = -1
+var _voice_source_positions := PackedVector3Array()
 var _engine_audio_player: AudioStreamPlayer = null
 var _engine_audio_underrun_last: int = 0
 var _engine_audio_capacity: int = 0
@@ -329,6 +339,16 @@ func _repo_root() -> String:
 	return ProjectSettings.globalize_path("res://").path_join("../../..")
 
 func _ready() -> void:
+	var lock_record := Node.new()
+	lock_record.set_script(load("res://scripts/runtime_lock_record.gd"))
+	add_child(lock_record)
+	lock_record.begin("physics_sim demo")
+	if "--m1-speaker-test" in OS.get_cmdline_user_args():
+		set_process(false)
+		var speaker_test := Node.new()
+		speaker_test.set_script(load("res://scripts/spatial_speaker_test.gd"))
+		add_child(speaker_test)
+		return
 	# Godot processes a parent's _process before its children's (pre-order
 	# tree traversal) unless process_priority says otherwise. This node's
 	# own _process reads PsInputMap's channels (a child, added below) and
@@ -391,6 +411,13 @@ func _ready() -> void:
 	# typo produces a sedan-shaped chassis around whatever vehicle json
 	# was actually requested instead of a crash - spawn_vehicle's own
 	# error (checked below) is still what reports the real problem.
+	var requested_vehicle_path := _repo_root().path_join(vehicle_relative_path)
+	if not FileAccess.file_exists(requested_vehicle_path):
+		push_error("Missing vehicle definition: %s" % requested_vehicle_path)
+		set_process(false)
+		set_physics_process(false)
+		get_tree().quit(1)
+		return
 	var vehicle_key := vehicle_relative_path.get_file().get_basename()
 	var vt: Dictionary = VEHICLE_TABLE.get(vehicle_key, VEHICLE_TABLE["car_sedan"])
 	_chassis_mass = vt["chassis_mass"]
@@ -444,6 +471,41 @@ func _ready() -> void:
 	_setup_tach_gauge()
 	_setup_engine_audio()
 	_setup_surface_audio()
+	_setup_tyre_recorder()
+
+func _shutdown_surface_audio() -> void:
+	var audio := get_node_or_null("SurfaceAudio")
+	if audio != null:
+		audio.shutdown()
+		await get_tree().create_timer(0.1).timeout
+
+func _setup_surface_audio() -> void:
+	var audio := Node3D.new()
+	audio.set_script(load("res://scripts/vehicle_surface_audio.gd"))
+	audio.set("simulation", simulation)
+	audio.set("vehicle_name", VEHICLE_NAME)
+	audio.set("chassis_name", CHASSIS_BODY_NAME)
+	audio.set("enable_tyres", not "--m1-no-tyre-audio" in OS.get_cmdline_user_args())
+	audio.set("enable_turbos", vehicle_relative_path.get_file().get_basename() == "car_hyper" and not "--m1-no-turbo-audio" in OS.get_cmdline_user_args())
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--m1-road-wetness="):
+			audio.set("wetness", clampf(argument.trim_prefix("--m1-road-wetness=").to_float(), 0.0, 1.0))
+	audio.name = "SurfaceAudio"
+	add_child(audio)
+
+func _setup_tyre_recorder() -> void:
+	for argument in OS.get_cmdline_user_args():
+		if argument == "--m1-tyre-log" or argument.begins_with("--m1-tyre-log="):
+			var path: String = argument.trim_prefix("--m1-tyre-log=") if argument.begins_with("--m1-tyre-log=") else _repo_root().path_join("out/telemetry/hyper_" + str(Time.get_unix_time_from_system()).replace(".","_") + ".csv")
+			var recorder := Node.new()
+			recorder.set_script(load("res://scripts/vehicle_telemetry_recorder.gd"))
+			recorder.name = "VehicleTelemetryRecorder"
+			recorder.simulation = simulation
+			recorder.vehicle_name = VEHICLE_NAME
+			recorder.chassis_name = CHASSIS_BODY_NAME
+			add_child(recorder)
+			recorder.begin(path)
+			return
 
 func _setup_lighting() -> void:
 	# M1 visual pass fix: the demo previously had a DirectionalLight3D but
@@ -774,26 +836,6 @@ func _setup_tach_gauge() -> void:
 	gauge.set("vehicle_name", VEHICLE_NAME)
 	hud.add_child(gauge)
 
-func _shutdown_surface_audio() -> void:
-	var audio := get_node_or_null("SurfaceAudio")
-	if audio != null:
-		audio.shutdown()
-		await get_tree().create_timer(0.1).timeout
-
-func _setup_surface_audio() -> void:
-	var audio := Node3D.new()
-	audio.set_script(load("res://scripts/vehicle_surface_audio.gd"))
-	audio.set("simulation", simulation)
-	audio.set("vehicle_name", VEHICLE_NAME)
-	audio.set("chassis_name", CHASSIS_BODY_NAME)
-	audio.set("enable_tyres", not "--m1-no-tyre-audio" in OS.get_cmdline_user_args())
-	audio.set("enable_turbos", vehicle_relative_path.get_file().get_basename() == "car_hyper" and not "--m1-no-turbo-audio" in OS.get_cmdline_user_args())
-	for argument in OS.get_cmdline_user_args():
-		if argument.begins_with("--m1-road-wetness="):
-			audio.set("wetness", clampf(argument.trim_prefix("--m1-road-wetness=").to_float(), 0.0, 1.0))
-	audio.name = "SurfaceAudio"
-	add_child(audio)
-
 func _setup_engine_audio() -> void:
 	# ps_audio A11 ("engine sound in Godot, minimal"): only when the spawned
 	# vehicle's own physics engine has a live cycle model does it have a
@@ -811,6 +853,23 @@ func _setup_engine_audio() -> void:
 	if sample_rate <= 0.0 or channels <= 0:
 		return
 
+	_voice_source_positions = simulation.get_vehicle_voice_source_positions(VEHICLE_NAME)
+	if not "--m1-audio=godot" in OS.get_cmdline_user_args():
+		_spatial_audio = PsSpatialAudio.new()
+		# Full nearby engine volume for the 7 m follow camera;
+		# free-camera falloff starts beyond 8 m. Cockpit stays at unity.
+		_spatial_audio.set_reference_distance_m(8.0)
+		# A modest decorrelated reflection bed gives rear/height speakers
+		# a diffuse tail, while direct sources retain real direction.
+		_spatial_audio.set_reflections_gain(0.15)
+		var opened: bool = _spatial_audio.open(int(sample_rate), channels)
+		print("ps_godot spatial audio: ", _spatial_audio.get_status())
+		if opened:
+			return
+		_spatial_audio = null
+	_setup_engine_audio_fallback(sample_rate)
+
+func _setup_engine_audio_fallback(sample_rate: float) -> void:
 	var stream := AudioStreamGenerator.new()
 	stream.mix_rate = sample_rate
 	# Buffer length: comfortably longer than one _process tick at a low
@@ -921,6 +980,30 @@ func _process(delta: float) -> void:
 	_process_engine_audio()
 
 func _process_engine_audio() -> void:
+	if _spatial_audio != null:
+		if _spatial_audio.is_active():
+			var listener: Camera3D = get_viewport().get_camera_3d()
+			if vr_active and vr_rig != null:
+				listener = vr_rig.camera
+			if listener != null:
+				var chassis: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
+				var inverse_listener: Transform3D = listener.global_transform.affine_inverse()
+				var positions := PackedVector3Array()
+				for source in _voice_source_positions:
+					positions.append(inverse_listener * (chassis * source))
+				_spatial_audio.set_positions(positions)
+				if "--m1-audio-debug" in OS.get_cmdline_user_args():
+					if Time.get_ticks_msec() / 1000 != _audio_debug_second:
+						_audio_debug_second = Time.get_ticks_msec() / 1000
+						print("ps_godot audio listener=",listener.name," sources listener-relative(+z rear,+y above)=",positions)
+			var needed: int = _spatial_audio.get_frames_needed()
+			if needed > 0:
+				_spatial_audio.push_audio(simulation.read_vehicle_voice_audio(VEHICLE_NAME, needed))
+			return
+		print("ps_godot spatial audio: ", _spatial_audio.get_status())
+		_spatial_audio.close()
+		_spatial_audio = null
+		_setup_engine_audio_fallback(simulation.get_vehicle_voice_sample_rate_hz(VEHICLE_NAME))
 	# ps_audio A11: drain read_vehicle_voice_audio() into the
 	# AudioStreamGenerator's own ring, once per Godot frame - the Voice's
 	# Runner thread renders independently (audio/include/ps_audio/

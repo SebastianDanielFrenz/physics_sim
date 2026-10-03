@@ -8,6 +8,7 @@
 find_package(Threads REQUIRED)
 
 add_library(ps_audio STATIC
+  src/audio_bank.cpp
   src/halfband.cpp
   src/live_engine.cpp
   src/runner.cpp

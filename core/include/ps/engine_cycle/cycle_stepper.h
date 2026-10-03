@@ -44,6 +44,11 @@ struct OperatingPoint {
     real p_im_pa = 0.0;
     real t_im_k = 0.0;
     real p_amb_pa = 101325.0;
+    // Pipe engines only (EngineCore/CycleEngine): the throttle's upstream
+    // supply pressure at t_im_k, i.e. a compressor outlet after the
+    // intercooler. 0 = the ambient path through snorkel/airbox. Needed for a
+    // plenum target above ambient, which the ambient path cannot reach.
+    real p_supply_pa = 0.0;
     real lambda = 1.0;
     real spark_deg_atdc = 0.0;       // start of combustion (Wiebe theta_0) relative to firing TDC
     real intake_advance_deg = 0.0;

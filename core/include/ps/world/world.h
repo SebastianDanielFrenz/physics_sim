@@ -270,6 +270,7 @@ public:
     // Call between steps only (never from a job). Throws std::runtime_error
     // for an unknown vehicle id, an unknown/mismatched component id, a
     // component that is not a simulated engine, or null maps.
+    void replace_turbo_configuration(VehicleId id, std::string_view component_id, const drivetrain::TurboPairDesc& desc);
     void replace_engine_maps(VehicleId id, std::string_view component_id, drivetrain::EngineMapsPtr new_maps);
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value for this vehicle

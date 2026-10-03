@@ -14,6 +14,7 @@
 set(PS_GODOT_ADAPTER_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/demo/bin")
 
 add_library(ps_godot_adapter SHARED
+  ${CMAKE_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
   src/register_types.cpp
   src/frame_convert_core.cpp
   src/input_map_core.cpp
@@ -121,3 +122,7 @@ add_test(NAME ps_godot_test_input_map COMMAND ps_godot_test_input_map)
 add_test(NAME ps_godot_test_origin_rebase COMMAND ps_godot_test_origin_rebase)
 add_test(NAME ps_godot_test_haptics COMMAND ps_godot_test_haptics)
 add_test(NAME ps_godot_test_render_interp COMMAND ps_godot_test_render_interp)
+
+target_include_directories(ps_godot_adapter PRIVATE ${CMAKE_SOURCE_DIR}/core/src ${CMAKE_SOURCE_DIR}/tools/common)
+
+target_link_libraries(ps_godot_adapter PRIVATE nlohmann_json::nlohmann_json)

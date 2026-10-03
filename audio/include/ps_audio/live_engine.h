@@ -6,6 +6,7 @@
 //
 // - one physics step per output sample (h = 1/fs), or two with a half-band
 //   decimator when the load-time stability probe asks for it (substeps 2);
+//   4/8/16 (a half-band cascade) only when a caller forces them;
 // - time-varying speed: every step advances the crank by omega*h (degrees),
 //   omega given per sample by the caller (the voice interpolates it from the
 //   snapshots and applies the capped crank-phase correction);
@@ -45,10 +46,16 @@ namespace ps_audio {
 using ps::real;
 
 inline constexpr int kLiveMaxSources = 8;
+// Physics steps per output sample: 1, or a power of two up to 16 decimated by a
+// cascade of half-band stages (2 = one stage, the probe's choice; 4-16 are for
+// offline listening tests at finer pipe cells - a cost of that many times the
+// per-step work).
+inline constexpr int kLiveMaxSubsteps = 16;
+inline constexpr int kLiveMaxDecimStages = 4;
 
 struct LiveEngineSettings {
     real sample_rate_hz = 48000.0;
-    int substeps = 1;             // physics steps per output sample: 1 or 2
+    int substeps = 1;             // physics steps per output sample: 1, 2, 4, 8 or 16
     real dx_intake_m = 0.0;       // 0 = desc.resolution.audio_dx_intake_m
     real dx_exhaust_m = 0.0;      // 0 = desc.resolution.audio_dx_exhaust_m
     real p_amb_pa = 101325.0;
@@ -59,6 +66,10 @@ struct LiveEngineSettings {
     real plenum_pi_tau_s = 0.05;       // [A] brief A7
     real min_throttle_cd_area_m2 = 1e-6;  // [A] closed-plate leakage floor
     bool plenum_loop = true;           // false: the throttle Cd*A stays at the feed-forward start
+    // ps_audio A9b: physics-step worker count (>= 1; 1 = serial, the default
+    // and bit-identical to before A9b). The pipes and the cylinders both run on
+    // this one team; the result is bit-identical for every count.
+    int threads = 1;
     std::uint64_t seed = 0;
     real variation_scale = 1.0;        // 0 = no cycle-to-cycle variation
     ps::engine_cycle::CombustionVariationDesc variation{};
@@ -69,6 +80,7 @@ struct LiveControl {
     real omega_rad_s = 0.0;        // crank speed used for the crank advance (>= 0)
     real omega_input_rad_s = -1.0; // diagnostic only: the interpolated snapshot omega before the
                                    // phase correction (< 0: same as omega_rad_s); logged per firing
+    real p_charge_pa = 0.0, t_charge_k = 0.0; // compressor supply, 0 = atmospheric path
     real p_intake_pa = 0.0;        // plenum pressure target (<= 0: use throttle)
     real throttle = 0.0;
     real lambda = 1.0;
@@ -103,6 +115,7 @@ public:
     [[nodiscard]] int substeps() const { return settings_.substeps; }
     [[nodiscard]] real h() const { return h_; }
     [[nodiscard]] real time_s() const { return t_; }
+    [[nodiscard]] int step_threads() const { return core_.step_team() ? core_.step_team()->size() : 1; }
     [[nodiscard]] real crank_deg() const { return theta_; }  // cylinder 1, [0, 720)
     [[nodiscard]] real plenum_pressure_pa() const;
     [[nodiscard]] real plenum_filtered_pa() const { return p_f_; }
@@ -139,8 +152,11 @@ private:
     real rho_amb_ = 0.0;
     real sob_mbt_ = 0.0, ign_delay_ = 0.0, burn_deg_ = 0.0;
     std::array<real, kLiveMaxSources> q_prev_{};
-    std::array<real, kLiveMaxSources> p_sub_{};
-    std::array<HalfbandDecimator, kLiveMaxSources> dec_{};
+    // Substep outputs of one sample, and one half-band cascade per source
+    // (stage 0 at the physics rate).
+    std::array<std::array<real, kLiveMaxSources>, kLiveMaxSubsteps> sub_{};
+    std::array<std::array<HalfbandDecimator, kLiveMaxDecimStages>, kLiveMaxSources> dec_{};
+    int stages_ = 0;
     std::vector<real> fresh_acc_prev_, fresh_last_;
     std::vector<std::uint64_t> events_;
     std::uint64_t cuts_ = 0;

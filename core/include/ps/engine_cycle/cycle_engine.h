@@ -60,6 +60,9 @@ struct CycleEngineSettings {
     // area (CycleStepper::set_port_reservoirs). No pipe waves.
     bool reservoir_ports = false;
     real trim_tolerance = 0.02;  // relative plenum-pressure shortfall that counts as unreachable [A]
+    // Extra trim cycles allowed when the measured cycle misses trim_tolerance
+    // (see CycleEngine::run). 0 = the plain settling schedule only.
+    int max_extra_trim_cycles = 12;  // [A]
 };
 
 struct CycleEngineResult {
@@ -79,6 +82,7 @@ struct CycleEngineResult {
     real mass_closure_kg = 0.0;
     real mass_scale_kg = 0.0;
     real air_change_rel = 0.0;  // |air(last) - air(previous cycle)| / air(last), all cylinders
+    int extra_trim_cycles = 0;  // cycles added because the measured cycle missed the trim tolerance
     std::uint64_t steps_per_cycle = 0;
     real h_s = 0.0;
     int cylinders = 0;
@@ -160,6 +164,12 @@ struct EngineCoreSettings {
     // byte-identical to before this field existed; only LiveEngine's
     // audio-path settings builder sets it true.
     bool radiation = false;
+    // ps_audio A9b: physics-step worker count (>= 1; 1 = the serial path,
+    // bit-identical to before A9b). The map generator (CycleEngine) keeps 1:
+    // it runs inside ps::jobs and must not spawn threads. LiveEngine sets it
+    // from LiveEngineSettings::threads. The team is shared with the caller so
+    // the cylinder loop can use the same workers.
+    int threads = 1;
 };
 
 // The part of a multi-cylinder pipe engine shared by CycleEngine (the map
@@ -190,12 +200,23 @@ public:
     [[nodiscard]] CycleStepper& cylinder(int c) { return steppers_[static_cast<std::size_t>(c)]; }
     [[nodiscard]] const PipeNetwork* network() const { return net_.get(); }
     [[nodiscard]] PipeNetwork* network() { return net_.get(); }
+    // ps_audio A9b: the step worker team (nullptr = serial). The live engine
+    // uses it to run its cylinder loop on the same workers. nullptr before
+    // A9b wiring or when threads <= 1.
+    [[nodiscard]] StepTeam* step_team() const { return step_team_.get(); }
+    // A9: select the pipe step kernel (Reference vs AVX2 Simd; bit-identical).
+    // A no-op in reservoir mode.
+    void set_pipe_kernel(PipeKernel k) {
+        if (net_) net_->set_kernel(k);
+    }
     [[nodiscard]] const EngineNetworkLayout& layout() const { return layout_; }
     [[nodiscard]] real throttle_cd_area() const { return cda_; }
     [[nodiscard]] real throttle_cd_area_max() const { return cda_max_; }
     // Clamped to [1e-9, max]; pushed to the network's throttle orifice.
     void set_throttle_cd_area(real cd_area_m2);
     [[nodiscard]] real intake_volume_m3() const { return v_intake_; }  // plenum + runners
+    // The op's p_supply_pa when it set a throttle supply (pipe mode), else 0.
+    [[nodiscard]] real throttle_supply_pa() const { return p_supply_; }
     // Radiating ends in network order: FV pipe ends first (pipe order, start
     // before end), then waveguide Open nodes (node order). Empty in reservoir mode.
     [[nodiscard]] const std::vector<RadiatingEnd>& radiating_ends() const { return rad_; }
@@ -214,9 +235,12 @@ private:
     std::vector<real> phase_;
     std::vector<CycleStepper> steppers_;
     std::unique_ptr<PipeNetwork> net_;
+    // A9b: declared after net_ so it is destroyed first; net_ only borrows it.
+    std::unique_ptr<StepTeam> step_team_;
     EngineNetworkLayout layout_{};
     real cda_ = 0.0, cda_max_ = 0.0;
     real v_intake_ = 0.0;
+    real p_supply_ = 0.0;
     std::vector<RadiatingEnd> rad_;
 };
 
@@ -243,6 +267,9 @@ public:
     [[nodiscard]] const CycleStepper& cylinder(int c) const { return core_.cylinder(c); }
     // nullptr in reservoir mode.
     [[nodiscard]] const PipeNetwork* network() const { return core_.network(); }
+    // A9: select the pipe step kernel (Reference vs AVX2 Simd; bit-identical).
+    // A no-op in reservoir mode.
+    void set_pipe_kernel(PipeKernel k) { core_.set_pipe_kernel(k); }
     [[nodiscard]] const EngineNetworkLayout& layout() const { return core_.layout(); }
     // FNV-1a fold: the network (if any), every cylinder's state vector and
     // crank angle, the throttle Cd*A.

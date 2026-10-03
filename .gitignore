@@ -27,3 +27,8 @@ Thumbs.db
 
 # Telemetry / scenario run output
 *.csv.tmp
+
+# Local archived checkout and generated diagnostic outputs
+/backup_2026-09-25/
+/adapters/godot/demo_diag/bin/
+/vehicle_step_steer.csv

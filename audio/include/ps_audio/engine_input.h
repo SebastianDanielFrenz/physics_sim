@@ -24,6 +24,7 @@ struct EngineInput {
     // Crank angle [deg] in the cycle model's convention (0 = cylinder 1
     // gas-exchange TDC, 360 = its firing TDC, period 720); < 0 = not supplied.
     real crank_angle_deg = -1.0;
+    real p_charge_pa = 0.0, t_charge_k = 0.0; // compressor supply, 0 = atmospheric path
     real p_intake_pa = 0.0;        // manifold (plenum) pressure target [Pa]; <= 0 = use `throttle`
     real throttle = 0.0;           // throttle plate fraction [0, 1] (only when p_intake_pa <= 0)
     real lambda = 1.0;             // air-fuel equivalence ratio of the next charges

@@ -52,6 +52,7 @@
 // tank's, else fuels[0]). Rotary geometry is refused here (C13).
 
 #pragma once
+#include "turbo_pair.h"
 
 #include "engine.h"
 #include "ps/drivetrain/isa_air.h"
@@ -205,6 +206,8 @@ public:
     // behaviour - callers quantise ambient).
     std::shared_ptr<const SimulatedEngineMaps> apply_pending_maps_swap();
 
+    void replace_turbo_configuration(const TurboPairDesc& desc);
+
     // Torque at an arbitrary (omega, p_im) with the given combustion gate
     // (true = fired, the soft-cut taper still applies), starvation factor
     // and starter flag - the same function pre_solve uses, const, for the
@@ -246,6 +249,9 @@ public:
 
 private:
     void init_state_for(EngineState state);
+    std::optional<TurboPair> turbo_;
+    real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_fuel_w_ = 0.0;
+
 
     std::shared_ptr<const SimulatedEngineMaps> maps_;
     // PHYS-033 P4 I7c C16b: queued by request_replace_maps, consumed by

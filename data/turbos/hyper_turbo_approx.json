@@ -1,0 +1,13 @@
+{
+  "format": "physics_sim.turbo/1",
+  "name": "hyper_turbo_approx",
+  "source": "Authored approximation, not a measured Koenigsegg turbo map. Values are per turbo.",
+  "rotor_inertia_kgm2": 2e-05,
+  "reference_rpm": 120000,
+  "max_mass_flow_kg_s": 0.6,
+  "compressor_efficiency": 0.72,
+  "turbine_efficiency": 0.7,
+  "turbine_area_m2": 0.00075,
+  "shaft_loss_w_at_reference": 600,
+  "reference_head_bar": 3.24
+}

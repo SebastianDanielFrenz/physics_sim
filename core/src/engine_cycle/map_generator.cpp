@@ -53,6 +53,18 @@ constexpr real kTref = kIsaAirTemperatureK;
 constexpr real kPamb = kIsaAirPressurePa;
 constexpr real kRGas = kIsaAirGasConstantJKgK;
 
+// Forced induction (IntakeCycleDesc::compressor_supply, pipe engines only):
+// every grid node's throttle draws from a fixed supply of max(ambient,
+// kBoostSupplyRatio x the node pressure) at T_ref - a compressor outlet after
+// an ideal intercooler, the plate trimming the rest [A]. The airbox path is
+// bypassed: it cannot reach a node above ambient, and on a real turbo engine
+// it is not what feeds the throttle. The maps stay independent of the turbo
+// hardware (swappable at runtime): VE is normalised by the density at T_ref
+// and the runtime applies its own charge temperature through air_per_ve. The
+// exhaust still ends at ambient here; the runtime adds the turbine back
+// pressure through the pumping term (pmep_excess). Engines without the flag
+// are unchanged, keys included (map_cache folds the flag only when set).
+constexpr real kBoostSupplyRatio = 1.05;
 constexpr int kPreviewRpm = 10;
 constexpr int kPreviewPim = 6;
 
@@ -160,6 +172,7 @@ struct EngineMapGenTask::Impl {
     std::vector<real> rpm_axis, p_axis;
     std::vector<engine_cycle::OperatingPoint> ops;
     std::vector<engine_cycle::PointResult> results;
+    std::vector<unsigned char> held;  // 1 = grid node generated with the plenum held (diagnostic)
     std::vector<unsigned char> done;
     // I7c C16b review fix N5: a caught-by-reference std::exception& that is
     // then touched (e.what()) is the TOOL-019 ASan-crash pattern (vault
@@ -229,6 +242,7 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         op.p_im_pa = p;
         op.t_im_k = kTref;
         op.p_amb_pa = kPamb;
+        if (s.pipe && desc.intake->compressor_supply) op.p_supply_pa = std::max(kPamb, p * kBoostSupplyRatio);
         op.lambda = lambda;
         op.spark_deg_atdc = spark_atdc;
         op.intake_advance_deg = cam_value(desc.cam.intake_advance_deg, rpm, p);
@@ -252,6 +266,7 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
     for (int j = 0; j < kLambdaN; ++j) s.ops.push_back(make_op(kLambdaSite.rpm, kLambdaSite.p_pa, kLambda[j], s.mbt_atdc));
     s.results.resize(s.ops.size());
     s.done.assign(s.ops.size(), 0);
+    s.held.assign(s.ops.size(), 0);
     s.exceptions.resize(s.ops.size());
 }
 
@@ -268,8 +283,22 @@ void EngineMapGenTask::run_point(std::size_t i) {
             // One engine per point (PROVISIONAL P7): built here, then run()
             // allocates nothing. The result is the per-cylinder mean, the
             // same per-cylinder quantities the v1 path extracts.
-            engine_cycle::CycleEngine eng(s.desc, s.lhv, s.afr, s.ops[i], s.engine_settings);
-            const engine_cycle::CycleEngineResult r = eng.run();
+            engine_cycle::CycleEngineResult r = engine_cycle::CycleEngine(s.desc, s.lhv, s.afr, s.ops[i], s.engine_settings).run();
+            if (i < s.grid_n && !r.throttle_saturated && r.plenum_error_rel > s.engine_settings.trim_tolerance) {
+                // The plenum stays above the node with the throttle closed:
+                // the node is below the lowest manifold pressure this engine
+                // reaches at this speed (valve overlap pushes exhaust back into
+                // the intake - long cams idle at a higher MAP). Hold the plenum
+                // instead: feed the throttle from a reservoir at the node
+                // pressure itself, so backflow can leave through it. The cycle
+                // then reports how the engine breathes at that pressure (little
+                // or no net induction), which keeps the runtime above the floor.
+                // Only such nodes take this path; every other point is unchanged.
+                engine_cycle::OperatingPoint held = s.ops[i];
+                held.p_supply_pa = held.p_im_pa;
+                r = engine_cycle::CycleEngine(s.desc, s.lhv, s.afr, held, s.engine_settings).run();
+                s.held[i] = 1;
+            }
             if (i < s.grid_n) {
                 if (r.throttle_saturated) {
                     throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[i].p_im_pa) +
@@ -393,6 +422,7 @@ EngineMapsPtr EngineMapGenTask::finish() {
             m.eta_spark.y.push_back(mean);
         }
         em.eta_spark_spread = spread;
+        for (unsigned char h : s.held) em.held_plenum_points += h;
     }
     m.theta_mbt_deg.x = {s.rpm_axis.front(), s.rpm_axis.back()};
     m.theta_mbt_deg.y = {s.p_axis.front(), s.p_axis.back()};

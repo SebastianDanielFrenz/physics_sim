@@ -57,12 +57,15 @@ inline ps_audio::EngineInput make_engine_input(const ps::drivetrain::EngineSound
     ps::real deg = std::fmod(ess.crank_angle * kRadToDeg, 720.0);
     if (deg < 0.0) deg += 720.0;
     in.crank_angle_deg = deg;
+    in.p_charge_pa=ess.p_charge_pa; in.t_charge_k=ess.t_charge_k;
     in.p_intake_pa = ess.p_intake_pa;
     in.throttle = ess.throttle_position;
     in.lambda = ess.lambda;
     in.spark_deg_atdc = -ess.spark_advance_deg;
     in.spark_given = true;
     std::uint32_t flags = 0;
+    if(ess.engine_state!=ps::drivetrain::EngineState::Running && ess.engine_state!=ps::drivetrain::EngineState::Cranking)
+        flags|=ps_audio::kInputIgnitionCut;
     if (ess.dfco_active) flags |= ps_audio::kInputDfco;
     if (ess.limiter_active) flags |= ps_audio::kInputFuelCut;
     in.flags = flags;

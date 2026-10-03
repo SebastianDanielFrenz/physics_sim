@@ -41,6 +41,8 @@ struct EngineSoundState {
     // PreSolveResult; 0 for the graph engine). NOT hashed. Exhaust
     // temperature is not modelled (I7b), so there is no field for it.
     real throttle_position = 0.0;      // plate position in [0, 1]
+    real turbo_rpm = 0.0, boost_bar = 0.0, p_exhaust_pa = 0.0;
+    real p_charge_pa = 0.0, t_charge_k = 0.0; // compressor supply, 0 = atmospheric path
     real p_intake_pa = 0.0;            // intake manifold pressure
     real lambda = 0.0;                 // commanded lambda
     real spark_advance_deg = 0.0;      // applied spark advance

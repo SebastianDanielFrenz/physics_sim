@@ -16,6 +16,26 @@ var capacity: Array[int] = []
 var gains: Array[float] = []
 var tyre_count := 0
 var skipped := 0
+var cabin_mix := 0.0
+var cabin_low: Array[float] = []
+const CABIN_TYRE_GAIN := 0.12589254 # -18 dB before low-pass filtering.
+const CABIN_CUTOFF_HZ := 900.0
+
+func _listener_in_cabin() -> bool:
+    var main := get_parent()
+    if main == null:
+        return false
+    if main.get("vr_active") == true:
+        return true
+    var cockpit := main.get("cockpit_camera") as Camera3D
+    return cockpit != null and cockpit.current
+
+func set_cabin_listener(inside: bool, delta: float) -> void:
+    cabin_mix = lerpf(cabin_mix, 1.0 if inside else 0.0, 1.0 - exp(-delta / 0.12))
+
+func _filter_tyre(raw: float, wheel: int, dt: float) -> float:
+    cabin_low[wheel] += (raw - cabin_low[wheel]) * (1.0 - exp(-TAU * CABIN_CUTOFF_HZ * dt))
+    return lerpf(raw, cabin_low[wheel] * CABIN_TYRE_GAIN, cabin_mix)
 
 func set_surface_wetness(surface: String, amount: float) -> void:
     surface_wetness[surface] = clampf(amount, 0.0, 1.0)
@@ -47,10 +67,12 @@ func _add_voice(model: RefCounted, point: Vector3) -> void:
     players.append(player)
     capacity.append(0)
     gains.append(0.0)
+    cabin_low.append(0.0)
 
 func _process(delta: float) -> void:
     if simulation == null:
         return
+    set_cabin_listener(_listener_in_cabin(), delta)
     global_transform = simulation.get_body_transform(chassis_name)
     var speed: float = simulation.get_vehicle_ground_speed_mps(vehicle_name)
     for wheel in range(tyre_count):
@@ -77,6 +99,8 @@ func _process(delta: float) -> void:
         buffer.resize(frames)
         for frame in range(frames):
             var raw: float = voices[i].sample(1.0 / RATE)
+            if i < tyre_count:
+                raw = _filter_tyre(raw, i, 1.0 / RATE)
             # Short output slew suppresses contact/surface update discontinuities.
             gains[i] += (raw - gains[i]) * 0.65
             buffer[frame] = Vector2(gains[i], gains[i])

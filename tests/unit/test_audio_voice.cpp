@@ -12,6 +12,9 @@
 #include "ps/math/transcendental.h"
 #include "ps_audio/runner.h"
 #include "ps_audio/voice.h"
+#include "ps_audio/audio_bank.h"
+#include <filesystem>
+#include <fstream>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1432,4 +1435,24 @@ TEST_CASE("A7 R1: the threaded Runner renders while a producer thread pushes sna
     CHECK(frames >= target_frames);
     CHECK(finite);
     CHECK(runner.blocks_rendered() * static_cast<std::uint64_t>(runner.block_frames()) >= frames);
+}
+
+TEST_CASE("Audio banks reject damaged caches and interpolate RPM/load continuously", "[audio_bank]") {
+    ps_audio::AudioBank b; b.key=1234; b.channels=1; b.frames=4800;
+    b.rpms={1000,2000}; b.pressures={20000,100000,20000,100000};
+    b.samples.resize(4*4800);
+    for(int p=0;p<4;++p) std::fill(b.samples.begin()+p*4800,b.samples.begin()+(p+1)*4800,static_cast<float>(p));
+    const auto file=std::filesystem::temp_directory_path()/"ps_audio_bank_unit.psab";
+    ps_audio::write_audio_bank(b,file.string());
+    auto read=ps_audio::read_audio_bank(file.string(),1234);
+    REQUIRE(read->samples==b.samples);
+    CHECK_THROWS(ps_audio::read_audio_bank(file.string(),4321));
+    ps_audio::BankPlayback playback; float out=0;
+    playback.frame(*read,1500,60000,&out); CHECK(std::abs(out-1.5f)<0.00001f);
+    for(int i=0;i<12000;++i) playback.frame(*read,1500,60000,&out);
+    CHECK(std::abs(out-1.5f)<0.00001f);
+    playback.frame(*read,0,60000,&out); CHECK(out==0);
+    { std::fstream f(file,std::ios::binary|std::ios::in|std::ios::out); f.seekp(-1,std::ios::end); f.put('x'); }
+    CHECK_THROWS(ps_audio::read_audio_bank(file.string(),1234));
+    std::filesystem::remove(file);
 }

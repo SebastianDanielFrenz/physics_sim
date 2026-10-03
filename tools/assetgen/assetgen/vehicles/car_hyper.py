@@ -23,14 +23,14 @@ from ..vec import Curve, norm, smoothstep, compose, translate, rot_axis
 WB = 2.70
 TRACK_F, TRACK_R = 1.70, 1.65
 XF, XR = WB / 2, -WB / 2
-TYRE_F = WheelSpec(radius=0.347, width=0.265, rim_radius=0.254, tyre="road", rim="centerlock", spokes=7,
+TYRE_F = WheelSpec(radius=0.347, width=0.265, rim_radius=0.254, tyre="road", rim="centerlock", spokes=10,
                    rim_color=(0.16, 0.16, 0.17), rim_metallic=0.8, caliper_color=(0.95, 0.72, 0.05))
-TYRE_R = WheelSpec(radius=0.364, width=0.325, rim_radius=0.267, tyre="road", rim="centerlock", spokes=7,
+TYRE_R = WheelSpec(radius=0.364, width=0.325, rim_radius=0.267, tyre="road", rim="centerlock", spokes=10,
                    rim_color=(0.16, 0.16, 0.17), rim_metallic=0.8, caliper_color=(0.95, 0.72, 0.05))
 
 # Rear wing (main plane on wing_flap), rest pose. Pitch = chord angle, trailing edge up.
-WING_LE = (-1.93, 0.0, 1.005)
-WING_CHORD, WING_SPAN, WING_PITCH = 0.30, 1.62, math.radians(8.0)
+WING_LE = (-1.93, 0.0, 0.975)
+WING_CHORD, WING_SPAN, WING_PITCH = 0.30, 1.72, math.radians(8.0)
 WING_LIFT_MAX = 0.28
 WING_FLAP_RANGE = (-8.0, 55.0)   # deg about the rest pitch: -8 = flat (low drag), +55 = airbrake
 
@@ -150,6 +150,11 @@ class HyperBody(CarBody):
                 f = self.intake_w(x, min(k, n_low - k) / (n_low / 2))
                 if f > 0:
                     y = math.copysign(abs(y) - d * f, y)
+            # Sculpted door cove: a continuous concavity sweeping upward into the intake.
+            waist = math.exp(-((x + 0.02) / 0.78) ** 4)
+            waist_z = 0.36 + 0.13 * smoothstep(0.85, -0.65, x)
+            cove = 0.09 * waist * math.exp(-((z - waist_z) / 0.105) ** 2)
+            y = math.copysign(max(0.0, abs(y) - cove), y)
             px, pz = x, z
             for w in self.wheels:  # arch carving, as CarBody._lower_section
                 y_in = w["y_in"] - self.arch_depth_in
@@ -208,19 +213,24 @@ def surface_z(body, x, y):
 
 
 def build():
-    m = Model("car_hyper", "Hyper car (mid-engine)",
-              "Generic mid-engine two-seat hypercar, 4.65 m, 265/35 R20 front, 325/30 R21 rear, "
+    m = Model("car_hyper", "Sculpted A — silver mid-engine hypercar",
+              "Sculpted A: silver organic body, dark teardrop canopy, carbon aero, 4.65 m, 265/35 R20 front, 325/30 R21 rear, "
               "butterfly doors, active rear wing.",
               "Ground plane below the wheel centres, x = 0 midway between the axles, y = 0 on the centreline.")
     standard_materials(m)
-    m.mat("paint", color=(1, 1, 1), tex=("paint", {"color": (0.86, 0.2, 0.03), "metallic": 0.85, "rough": 0.16,
-                                                    "seed": 7}),
-          tile=0.8, double=True, role="paint")
+    m.mat("centerlock_nut", color=(0.64, 0.52, 0.25), metallic=0.85, roughness=0.25)
+    # Clean metallic silver: fine paint grain is deliberately below the mesh's texel scale.
+    m.mat("paint", color=(0.78, 0.80, 0.84), metallic=0.92, roughness=0.22,
+          double=True, role="paint")
+    m.materials["glass"].alpha = 0.18
+    m.materials["glass"].color = (0.60, 0.70, 0.76)
+    m.materials["glass"].roughness = 0.10
+    m.materials["glass"].metallic = 0.0
     m.mat("carbon", color=(1, 1, 1), tex=("carbon", {}), tile=0.12, roughness=0.2, double=True)
     m.mat("intake", color=(1, 1, 1), tex=("honeycomb", {"cells": 6, "color": (0.03, 0.03, 0.035)}), tile=0.1,
           roughness=0.7)
     m.mat("seat", color=(1, 1, 1), tex=("fabric", {"color": (0.1, 0.1, 0.11)}), tile=0.2)
-    m.mat("seat_accent", color=(0.86, 0.2, 0.03), roughness=0.6)
+    m.mat("seat_accent", color=(0.36, 0.39, 0.44), roughness=0.6)
     m.mat("exhaust_tip", color=(0.35, 0.3, 0.28), metallic=1.0, roughness=0.35)
     m.mat("exhaust_soot", color=(0.02, 0.02, 0.02), roughness=1.0)
     m.mat("engine_red", color=(0.55, 0.05, 0.03), metallic=0.3, roughness=0.35)
@@ -230,25 +240,28 @@ def build():
               dict(x=XR, z=RR, r=RR, y_out=TRACK_R / 2 + TYRE_R.width / 2, y_in=TRACK_R / 2 - TYRE_R.width / 2)]
 
     X_REAR, X_FRONT = -2.35, 2.30
-    intake = dict(x0=-0.92, x1=-0.62, ls0=0.445, ls1=0.585, depth=0.10)
+    intake = dict(x0=-0.97, x1=-0.59, ls0=0.445, ls1=0.605, depth=0.14)
     body = HyperBody(
         m, x_rear=X_REAR, x_front=X_FRONT,
-        W=[(-2.35, 0.93), (-2.15, 1.0), (-1.7, 1.025), (-1.0, 1.02), (-0.4, 0.99), (0.6, 0.985), (1.35, 1.0),
-           (1.9, 0.96), (2.30, 0.84)],
+        W=[(-2.35, 0.92), (-2.13, 1.00), (-1.55, 1.025), (-1.0, 1.01),
+           (-0.40, 0.915), (0.25, 0.92), (0.80, 0.965), (1.35, 1.00),
+           (1.80, 0.97), (2.15, 0.91), (2.30, 0.85)],
         zb=[(-2.35, 0.33), (-2.1, 0.24), (-1.75, 0.105), (1.7, 0.10), (2.1, 0.12), (2.30, 0.17)],
         zt=[(-2.35, 0.83), (-2.15, 0.9), (-1.8, 0.92), (-1.2, 0.905), (-0.6, 0.83), (0.5, 0.80), (0.95, 0.78),
             (1.35, 0.63), (1.9, 0.50), (2.30, 0.40)],
-        exp=[(-2.35, 3.5), (-2.0, 4.5), (1.8, 4.5), (2.30, 3.2)],
-        bulge=[(-2.35, 0.0), (-2.1, 0.05), (-1.5, 0.08), (-1.1, 0.06), (-0.75, 0.0), (0.75, 0.0), (1.0, 0.09),
-               (1.35, 0.19), (1.75, 0.14), (2.1, 0.06), (2.30, 0.0)],
-        fender=(0.45, 0.70), intakes=[intake],
-        end_r=(0.16, 0.2), wheels=wheels, around=120, step=0.024, arch_clear=0.05,
+        exp=[(-2.35, 3.5), (-1.8, 4.0), (-0.5, 3.6), (0.7, 3.8), (1.8, 4.0), (2.30, 3.2)],
+        bulge=[(-2.35, 0.0), (-2.1, 0.05), (-1.50, 0.11), (-1.10, 0.07),
+               (-0.65, 0.0), (0.20, 0.0), (0.75, 0.02), (1.0, 0.14),
+               (1.35, 0.28), (1.75, 0.24), (2.1, 0.13), (2.30, 0.04)],
+        fender=(0.30, 0.74), intakes=[intake],
+        end_r=(0.16, 0.2), wheels=wheels, around=136, step=0.022, arch_clear=0.05,
         green=dict(x0=-1.22, x1=0.97,
                    zroof=[(-1.22, 0.905), (-0.9, 0.99), (-0.55, 1.07), (-0.15, 1.105), (0.2, 1.095), (0.55, 1.0),
                           (0.97, 0.765)],
-                   wb=[(-1.22, 0.42), (-0.9, 0.62), (-0.4, 0.73), (0.5, 0.73), (0.97, 0.66)],
+                   wb=[(-1.22, 0.42), (-0.9, 0.62), (-0.4, 0.70), (0.5, 0.70), (0.97, 0.63)],
                    wr=[(-1.22, 0.3), (-0.9, 0.45), (-0.3, 0.52), (0.4, 0.5), (0.97, 0.46)],
                    r=0.16, crown=0.05))
+
 
     W = body.W
 
@@ -272,11 +285,11 @@ def build():
     FR_X0, FR_X1 = 1.00, 2.12
     body.panels.append(Panel(
         "frunk", lambda c, n: FR_X0 < c[0] < FR_X1 and body.ls > LS_FRUNK and n[2] > 0.3,
-        lambda c, n: c[0] < FR_X0 + 0.02 or c[0] > FR_X1 - 0.02 or body.ls < LS_FRUNK + 0.02))
+        lambda c, n: c[0] < FR_X0 + 0.01 or c[0] > FR_X1 - 0.01 or body.ls < LS_FRUNK + 0.007))
     EC_X0, EC_X1 = -2.22, -1.24
     body.panels.append(Panel(
         "engine_cover", lambda c, n: EC_X0 < c[0] < EC_X1 and body.ls > LS_COVER and n[2] > 0.3,
-        lambda c, n: c[0] > EC_X1 - 0.02 or c[0] < EC_X0 + 0.02 or body.ls < LS_COVER + 0.02))
+        lambda c, n: c[0] > EC_X1 - 0.01 or c[0] < EC_X0 + 0.01 or body.ls < LS_COVER + 0.007))
 
     def in_arch(c):
         """Arch liner = inside the arch circle AND out at the wheel well (the frunk and engine
@@ -325,13 +338,17 @@ def build():
                 return "trim_black" if pos < 0.1 or x < 0.37 or x > 0.90 else "glass"
             if x < -0.62:
                 return "trim_black" if pos < 0.1 or x > -0.68 or x < -1.12 else "glass"
-            return "carbon" if abs(y) < 0.3 else "paint"
+            return "carbon"
         side = 1 if y > 0 else -1
         name = "door_L" if side > 0 else "door_R"
         if seg == "corner":
             if x > 0.30:
-                return "paint"  # A-pillar (fixed)
-            return (name, "paint") if DX0 < x < DX1 else "paint"
+                # This curved band belongs to the wraparound windscreen.
+                # Painting the entire band made giant opaque wedges at eye level.
+                return "glass" if 0.37 < x < 0.90 else "trim_black"
+            if DX0 + 0.05 < x < 0.30:
+                return (name, "glass")
+            return (name, "trim_black") if DX0 < x < DX1 else "trim_black"
         if DX0 < x < DX1:  # side window in the door, framed
             if 0.15 < pos < 0.9 and DX0 + 0.05 < x < DX1 - 0.04:
                 return (name, "glass")
@@ -344,17 +361,22 @@ def build():
     rr = M.rrect
     for s in (1, -1):
         ind = "light_indicator_left" if s > 0 else "light_indicator_right"
-        # headlamp: slim lens across the fender front, LED daytime strip under it, indicator outboard
-        body.patch(rr(0.34, 0.085, 0.03, 3, s * 0.655, 0.422), "trim_black", "front", skirt_mat="trim_black",
-                   offset=0.002)
-        body.patch(rr(0.27, 0.026, 0.012, 3, s * 0.665, 0.435), "light_head", "front", offset=0.006, skirt=0)
-        for k in range(3):  # projector dots
-            body.patch(M.circle(0.011, 12, s * (0.58 + 0.055 * k), 0.402), "light_head", "front", offset=0.006,
-                       skirt=0, rings=2)
-        body.patch(rr(0.36, 0.011, 0.005, 2, s * 0.64, 0.372), "light_head", "front", offset=0.004, skirt=0)
-        body.patch(rr(0.08, 0.022, 0.009, 2, s * 0.855, 0.415), ind, "front", offset=0.004, skirt=0)
-        # front intakes either side of the nose
-        body.patch(rr(0.42, 0.13, 0.045, 4, s * 0.60, 0.245), "intake", "front", skirt_mat="carbon", offset=0.002)
+        body.patch(rr(0.42, 0.115, 0.035, 4, s * 0.60, 0.245), "intake", "front",
+                   skirt_mat="carbon", offset=0.003)
+        def top_lens(outline, mat, off):
+            rows = []
+            cx = sum(v[0] for v in outline) / len(outline)
+            cy = sum(v[1] for v in outline) / len(outline)
+            for k in range(6):
+                t = k / 5
+                rows.append([(cx+(x-cx)*t, s*(cy+(y-cy)*t),
+                              surface_z(body,cx+(x-cx)*t,cy+(y-cy)*t)+off)
+                             for x,y in outline])
+            m.mb.grid(rows,mat,closed_v=True,flip=s<0)
+        top_lens([(1.72,0.82),(2.16,0.46),(2.19,0.55),(1.80,0.86)],"trim_black",0.006)
+        top_lens([(1.76,0.82),(2.14,0.51),(2.145,0.527),(1.78,0.834)],"light_head",0.010)
+        top_lens([(1.81,0.825),(2.12,0.555),(2.12,0.567),(1.83,0.838)],"light_head",0.010)
+        body.patch(rr(0.07,0.018,0.006,2,s*0.85,0.415),ind,"front",offset=0.005,skirt=0)
         # rear: indicator and brake segments on the full-width LED strip, reverse lamps
         body.patch(rr(0.12, 0.024, 0.01, 2, s * 0.80, 0.765), ind, "rear", offset=0.006, skirt=0)
         body.patch(rr(0.26, 0.018, 0.008, 2, s * 0.55, 0.765), "light_brake", "rear", offset=0.006, skirt=0)
@@ -436,9 +458,9 @@ def build():
     for s in (1, -1):
         y = s * (WING_SPAN / 2 + 0.006)
         x0, z0 = le[0] + 0.05, le[2]
-        plate = [(x0, z0 - 0.07), (x0 - 0.36, z0 - 0.07 + 0.0), (x0 - 0.38, z0 + 0.10), (x0 - 0.10, z0 + 0.06),
+        plate = [(x0, z0 - 0.035), (x0 - 0.36, z0 - 0.035 + 0.0), (x0 - 0.38, z0 + 0.045), (x0 - 0.10, z0 + 0.035),
                  (x0, z0 + 0.02)]
-        slab_xz(mb, plate, y, 0.012, "carbon", "wing_flap")
+        slab_xz(mb, plate, y, 0.012, "paint", "wing_flap")
         # strut: plate from inside the deck up to the wing's leading edge, where the pivot is,
         # so the pitching main plane stays attached to it
         sy = s * 0.36
@@ -452,17 +474,9 @@ def build():
         mx = le[0] - 0.035
         M.box(mb, (mx, s * 0.36, surface_z(body, mx, 0.36) + 0.002), (0.16, 0.04, 0.006), "gap")
 
-    # ---- interior (static, on the body): carbon tub, seats, dash
-    M.box(mb, (-0.15, 0, 0.16), (2.0, 1.4, 0.03), "carbon")                        # floor
-    M.box(mb, (-0.98, 0, 0.55), (0.04, 1.3, 0.8), "carbon")                        # rear bulkhead
-    M.rounded_box(mb, (0.62, 0, 0.60), (0.45, 1.35, 0.18), 0.05, "carbon")         # dashboard
-    M.box(mb, (0.90, 0, 0.45), (0.08, 1.3, 0.55), "interior")                      # front bulkhead
-    M.rounded_box(mb, (0.05, 0, 0.30), (1.3, 0.24, 0.26), 0.05, "carbon")          # centre tunnel
-    for yy in (0.33, -0.33):
-        M.box(mb, (-0.02, math.copysign(0.70, yy), 0.35), (1.6, 0.04, 0.35), "interior")  # sill inner wall
-        seat(m, "", (-0.28, yy, 0.27), width=0.48, recline=0.55, height=0.10)
-        M.box(mb, (-0.28, yy, 0.278), (0.40, 0.08, 0.004), "seat_accent")
-    steering_wheel(m, "steering_wheel", None, (0.30, 0.33, 0.62), (0.95, 0.0, -0.3), radius=0.17, lock_deg=360)
+    # Fitted enclosed cockpit; its door cards move with the butterfly doors.
+    from .hyper_interior import build_cabin
+    build_cabin(m, body)
 
     # ---- frunk tub (luggage well between the front wheel wells), walls kept under the lid
     TX0, TX1, TY, TZ = 1.08, 1.98, 0.48, 0.24
@@ -517,4 +531,5 @@ def build():
         "Flat underbody at z=0.10 between them. Frontal area approx. 2.0 m^2.",
         "Butterfly doors: tilted hinge axis at the A-pillar base; door + mirror open together.",
     ]
+    m.notes.append("Design A: sculpted silver body, concave door coves, enlarged side scoops, swept LED blades, dark canopy.")
     return m

@@ -23,15 +23,18 @@
 // which is itself checked against std::pow separately.
 
 #include "drivetrain/engine_simulated.h"
+#include "ps/io/vehicle_io.h"
 
 #include "mvem_fixtures.h"
 
 #include "ps/jobs/debug_alloc.h"
+#include "ps/jobs/job_system.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -884,4 +887,87 @@ TEST_CASE("C11 hashed state layout, content hash, reset, zero allocation", "[dri
         da::set_armed(false);
         CHECK(da::own_violation_count() == 0);
     }
+}
+
+TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy", "[turbo][sim_engine]") {
+    // The shipped engine has no maps block: loading generates them from its
+    // cycle block (8 x 6 grid, boosted nodes), on a pool to keep this test short.
+    ps::jobs::JobSystem pool(10);
+    ps::io::EngineMapOptions map_options;
+    map_options.pool=&pool;
+    const auto t_load=std::chrono::steady_clock::now();
+    const auto loaded=ps::io::load_engine_json(std::string(PS_SOURCE_DIR)+"/data/engines/hyper_v8_one1_audio.json",map_options);
+    std::printf("[turbo dyno] load incl. map generation: %.2f s\n",std::chrono::duration<double>(std::chrono::steady_clock::now()-t_load).count());
+    auto desc=std::get<SimulatedEngineDesc>(loaded);
+    REQUIRE(desc.turbo_pair.has_value());
+    SimulatedEngine boosted(desc);
+    auto na_desc=desc; na_desc.turbo_pair.reset();
+    SimulatedEngine na(na_desc);
+    const auto nr=hold(na,w_of(6000),1.0,9600);
+    // WOT hold on the dyno; the last second is the steady window. The boost
+    // controller (PI on charge pressure) must settle: the earlier narrow-band
+    // proportional wastegate limit-cycled at 7-10 Hz (rotor 59k-137k rpm,
+    // torque 780-1500 Nm at 6000 rpm), so a single sample was a random phase.
+    struct Window { PreSolveResult last; real charge_min=1e9, charge_max=-1e9, tau_mean=0; };
+    const auto settle=[&](SimulatedEngine& e, real rpm) {
+        Window wdw;
+        for(int i=0;i<9600;++i) {
+            wdw.last=e.pre_solve(running(w_of(rpm)),cmd(1),TcuRequest{},kH);
+            (void)e.post_solve(w_of(rpm),kH);
+            if(i>=8640) {
+                wdw.charge_min=std::min(wdw.charge_min,wdw.last.p_charge_pa); wdw.charge_max=std::max(wdw.charge_max,wdw.last.p_charge_pa);
+                wdw.tau_mean+=wdw.last.tau0/960;
+            }
+        }
+        std::printf("[turbo dyno] %4.0f rpm: boost %.3f bar, charge %.0f Pa (ripple %.0f), rotor %.0f rpm, exhaust %.0f Pa, torque %.1f Nm, power %.1f kW\n",
+            rpm,wdw.last.boost_bar,wdw.last.p_charge_pa,wdw.charge_max-wdw.charge_min,wdw.last.turbo_rpm,wdw.last.p_exhaust_pa,wdw.tau_mean,wdw.tau_mean*w_of(rpm)/1000);
+        return wdw;
+    };
+    const real target_charge=kPamb+desc.turbo_pair->target_boost_pa;
+    for(real rpm : {3000.0, 4500.0}) {
+        const auto wdw=settle(boosted,rpm);
+        CHECK(wdw.charge_max-wdw.charge_min<1000);
+    }
+    const auto br_w=settle(boosted,6000);
+    const auto& br=br_w.last;
+    std::printf("[turbo dyno] NA at 6000 rpm: %.1f Nm\n",nr.tau0);
+    const auto high_w=settle(boosted,7500);
+    const auto& high=high_w.last;
+    for(const Window* wdw : {&br_w,&high_w}) {
+        CHECK(wdw->charge_max-wdw->charge_min<1000);   // settled, no limit cycle
+        CHECK(std::abs(wdw->last.p_charge_pa-target_charge)<0.02*desc.turbo_pair->target_boost_pa); // on target
+    }
+    CHECK(std::isfinite(br.tau0)); CHECK(br.boost_bar>0.2); CHECK(br.boost_bar<2.3);
+    CHECK(br.turbo_rpm>10000); CHECK(br_w.tau_mean>nr.tau0);
+    // Spool: part throttle at 4500 rpm, then WOT; time to 90 % of the boost target.
+    {
+        SimulatedEngine sp(desc);
+        (void)hold(sp,w_of(4500),0.2,4800);
+        int i90=-1;
+        for(int i=0;i<4800 && i90<0;++i) {
+            const auto r=sp.pre_solve(running(w_of(4500)),cmd(1),TcuRequest{},kH);
+            (void)sp.post_solve(w_of(4500),kH);
+            if(r.p_charge_pa-kPamb>0.9*desc.turbo_pair->target_boost_pa) i90=i;
+        }
+        std::printf("[turbo dyno] spool 4500 rpm, 0.2 -> WOT: 90 %% of target boost after %.3f s\n",i90*kH);
+        CHECK(i90>0);
+    }
+    const auto hash_before=boosted.fold_state_hash(1);
+    auto replacement=*desc.turbo_pair;
+    replacement.rotor_inertia_kgm2*=2;
+    boosted.replace_turbo_configuration(replacement);
+    CHECK(boosted.fold_state_hash(1)!=hash_before);
+    const auto after_swap=boosted.pre_solve(running(w_of(7500)),cmd(1),TcuRequest{},kH);
+    CHECK(std::abs(after_swap.turbo_rpm-high.turbo_rpm)<1000);
+    CHECK(std::abs(after_swap.p_intake_pa-high.p_intake_pa)<2000);
+    (void)boosted.post_solve(w_of(7500),kH);
+    const auto lifted=hold(boosted,w_of(6000),0.0,960);
+    CHECK(lifted.turbo_rpm<high.turbo_rpm); CHECK(lifted.boost_bar<br.boost_bar);
+    auto s=running(0); s.ignition=0;
+    for(int i=0;i<19200;++i) { (void)boosted.pre_solve(s,cmd(0),TcuRequest{},kH); (void)boosted.post_solve(0,kH); }
+    auto stopped=boosted.pre_solve(s,cmd(0),TcuRequest{},kH);
+    CHECK(stopped.turbo_rpm<10000);
+    TurboPair pair(*desc.turbo_pair); pair.reset(101325,288.15);
+    for(int i=0;i<9600;++i) pair.step(kH,101325,288.15,0,0,0,1);
+    CHECK(pair.energy_j==0); CHECK(pair.charge_pa==101325);
 }

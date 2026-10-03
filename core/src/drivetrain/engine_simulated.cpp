@@ -497,6 +497,7 @@ SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_pt
     if (desc.architecture != EngineArchitecture::Piston4Stroke) {
         throw std::runtime_error("SimulatedEngine: rotary architecture is not implemented yet (I7e C13)");
     }
+    if (desc.turbo_pair) turbo_.emplace(*desc.turbo_pair);
     desc_idle_rpm_ = desc.idle_rpm;
     stall_rpm_ = desc.stall_rpm;
     fire_rpm_ = desc.fire_rpm;
@@ -534,6 +535,20 @@ void SimulatedEngine::set_ambient(real p_pa, real t_k) {
         fill_steady_tables(*maps_, make_ambient(p_pa, t_k), desc_idle_rpm_, idle_.max_throttle, idle_.max_torque_nm, steady_, false);
         steady_.t_k = t_k;
         ++steady_rebuilds_;
+    }
+}
+
+void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
+    if(!desc.maps) throw std::runtime_error("replace_turbo_configuration: missing prepared maps");
+    if(turbo_) {
+        // Preserve shaft angular speed, manifold and charge states; replacing
+        // hardware does not reset the crank or teleport the car.
+        const real omega=turbo_->omega();
+        turbo_->desc=desc;
+        turbo_->energy_j=real(0.5)*desc.rotor_inertia_kgm2*omega*omega;
+    } else {
+        turbo_.emplace(desc);
+        turbo_->reset(p_amb_,t_amb_);
     }
 }
 
@@ -592,6 +607,8 @@ void SimulatedEngine::init_state_for(EngineState state) {
 
 void SimulatedEngine::reset(EngineState state) {
     state_ = state;
+    if (turbo_) turbo_->reset(p_amb_,t_amb_);
+    turbo_air_kg_s_=turbo_exhaust_kg_s_=turbo_fuel_w_=real(0.0);
     idle_integrator_ = real(0.0);
     limiter_cut_ = false;
     dfco_active_ = false;
@@ -601,10 +618,19 @@ void SimulatedEngine::reset(EngineState state) {
 real SimulatedEngine::psi(real pr, real* dpsi_dpr) const { return psi_lookup(maps_->psi, pr, dpsi_dpr); }
 
 SimulatedEngine::ManifoldRhs SimulatedEngine::manifold_rhs(real p_im, real omega, real x_thr, real x_iac) const {
+    if (turbo_) {
+        const real rt = kGasConstant*turbo_->charge_k;
+        return manifold_rhs_impl(*maps_, Ambient{turbo_->charge_pa,rt,real(1.0)/std::sqrt(rt)},p_im,omega,x_thr,x_iac);
+    }
     return manifold_rhs_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, p_im, omega, x_thr, x_iac);
 }
 
 SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active) const {
+    if (turbo_) {
+        const real rt = kGasConstant*turbo_->charge_k;
+        auto result = evaluate_torque_impl(*maps_,Ambient{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)},starter_,omega,p_im,fired,s_starve,starter_active);
+        return result;
+    }
     return evaluate_torque_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega, p_im, fired, s_starve, starter_active);
 }
 
@@ -750,6 +776,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         x_iac_ = real(0.0);
     }
 
+    if (turbo_) turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_fuel_w_,x_thr_);
+
     // (4) air step, omega frozen at omega_old
     {
         const real p0 = p_im_;
@@ -824,6 +852,14 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.lambda = ev.lambda;
     r.spark_advance_deg = ev.spark_deg;
     r.exhaust_mass_flow_kg_s = ev.m_air_rev * std::abs(omega_old) / kTwoPi + booked_fuel_mass_kg_ / h;
+    if (turbo_) {
+        turbo_air_kg_s_ = ev.m_air_rev*std::abs(omega_old)/kTwoPi;
+        turbo_exhaust_kg_s_ = r.exhaust_mass_flow_kg_s;
+        turbo_fuel_w_ = booked_fuel_mass_kg_/h*maps_->lhv_j_kg;
+        r.turbo_rpm=turbo_->rpm(); r.boost_bar=(p_im_-p_amb_)/real(100000.0);
+        r.p_exhaust_pa=turbo_->exhaust_pa;
+        r.p_charge_pa=turbo_->charge_pa; r.t_charge_k=turbo_->charge_k;
+    }
     return r;
 }
 
@@ -866,6 +902,18 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
     f.pod(p_im_);
     f.pod(x_thr_);
     if (maps_->throttle_input == ThrottleInput::Mechanical) f.pod(x_iac_);
+    if (turbo_) {
+        f.pod(turbo_->energy_j); f.pod(turbo_->charge_pa); f.pod(turbo_->charge_k);
+        f.pod(turbo_->exhaust_pa); f.pod(turbo_->wastegate); f.pod(turbo_->boost_integral);
+        f.pod(turbo_air_kg_s_); f.pod(turbo_exhaust_kg_s_); f.pod(turbo_fuel_w_);
+        const auto& t=turbo_->desc;
+        f.pod(t.reference_head_pa);
+        if(t.maps) f.pod(t.maps->content_hash);
+        f.pod(t.target_boost_pa); f.pod(t.rotor_inertia_kgm2); f.pod(t.reference_rpm);
+        f.pod(t.max_mass_flow_kg_s); f.pod(t.compressor_efficiency); f.pod(t.turbine_efficiency);
+        f.pod(t.turbine_area_m2); f.pod(t.intercooler_effectiveness); f.pod(t.shaft_loss_w_at_reference);
+        f.pod(t.wastegate_kp); f.pod(t.wastegate_ki_per_s); f.pod(t.wastegate_kd_s); f.pod(t.wastegate_actuator_tau_s);
+    }
     return f.h;
 }
 

@@ -14,6 +14,8 @@
 //                    [--installation file.json] [--seconds S] [--seed N]
 //                    [--map-workers N] [--engine-cache DIR]
 //                    [--dyno-brake-nm X] [--full-scale-pa P] [--live]
+//                    [--dx-intake-mm D] [--dx-exhaust-mm D] [--substeps 1|2|4|8|16]
+//                    [--voice-threads N]
 #include "ps/drivetrain/engine_rig.h"
 #include "ps/engine_cycle/cycle_engine.h" // RadiatingEnd, for the printed source list
 #include "ps/io/vehicle_io.h"
@@ -55,6 +57,14 @@ struct Args {
     double dyno_brake_nm = -1.0; // < 0: no dyno (free rev)
     bool live = false;
     double full_scale_pa = ps_audio::Calibration{}.pa_full_scale; // Pa at 1 m mapped to digital full scale
+    // Listening-test overrides of the voice's pipe cell sizes (0 = the engine's
+    // resolution.audio_dx_*) and physics steps per output sample (0 = the
+    // stability probe). Bypass the loader's 1-substep CFL floor on purpose; the
+    // PipeNetwork's own build-time CFL check still rejects an unsteppable size.
+    double dx_intake_mm = 0.0;
+    double dx_exhaust_mm = 0.0;
+    int substeps = 0;
+    int voice_threads = 1;  // ps_audio A9b: physics-step worker count (1 = serial)
 };
 
 [[noreturn]] void usage_error(const std::string& msg) {
@@ -63,7 +73,9 @@ struct Args {
                   "usage: ps_engine_audio <engine.json> --wav out.wav --script events.json\n"
                   "                       [--installation file.json] [--seconds S] [--seed N]\n"
                   "                       [--map-workers N] [--engine-cache DIR]\n"
-                  "                       [--dyno-brake-nm X] [--full-scale-pa P] [--live]\n",
+                  "                       [--dyno-brake-nm X] [--full-scale-pa P] [--live]\n"
+                  "                       [--dx-intake-mm D] [--dx-exhaust-mm D] [--substeps 1|2|4|8|16]\n"
+                  "                       [--voice-threads N]\n",
                   msg.c_str());
     std::exit(1);
 }
@@ -96,6 +108,19 @@ Args parse_args(int argc, char** argv) {
         } else if (arg == "--full-scale-pa") {
             a.full_scale_pa = std::stod(next("--full-scale-pa"));
             if (!(a.full_scale_pa > 0.0)) usage_error("--full-scale-pa must be > 0");
+        } else if (arg == "--dx-intake-mm") {
+            a.dx_intake_mm = std::stod(next("--dx-intake-mm"));
+            if (!(a.dx_intake_mm > 0.0)) usage_error("--dx-intake-mm must be > 0");
+        } else if (arg == "--dx-exhaust-mm") {
+            a.dx_exhaust_mm = std::stod(next("--dx-exhaust-mm"));
+            if (!(a.dx_exhaust_mm > 0.0)) usage_error("--dx-exhaust-mm must be > 0");
+        } else if (arg == "--substeps") {
+            a.substeps = std::stoi(next("--substeps"));
+            if (a.substeps != 1 && a.substeps != 2 && a.substeps != 4 && a.substeps != 8 && a.substeps != 16)
+                usage_error("--substeps must be 1, 2, 4, 8 or 16");
+        } else if (arg == "--voice-threads") {
+            a.voice_threads = std::stoi(next("--voice-threads"));
+            if (a.voice_threads < 1) usage_error("--voice-threads must be >= 1");
         } else if (arg == "--live") {
             a.live = true;
         } else if (!arg.empty() && arg[0] == '-') {
@@ -240,6 +265,10 @@ int main(int argc, char** argv) {
 
         ps_audio::VoiceSettings voice_settings;
         voice_settings.engine.seed = args.seed;
+        voice_settings.engine.dx_intake_m = args.dx_intake_mm * 1e-3;
+        voice_settings.engine.dx_exhaust_m = args.dx_exhaust_mm * 1e-3;
+        voice_settings.substeps = args.substeps;
+        voice_settings.engine.threads = args.voice_threads;
         ps_audio::Voice voice(*sim->cycle, sim->fuels[0].lhv_j_kg, sim->fuels[0].afr_stoich, voice_settings);
         print_source_list(voice);
 

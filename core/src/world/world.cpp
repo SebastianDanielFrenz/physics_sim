@@ -726,6 +726,11 @@ void World::set_fuel_tank_mass(VehicleId id, real kg) {
     vehicle_system_->at(id).request_fuel_tank_mass(kg);
 }
 
+void World::replace_turbo_configuration(VehicleId id,std::string_view component_id,const drivetrain::TurboPairDesc& desc) {
+    if(!vehicle_system_->contains(id)) throw std::runtime_error("replace_turbo_configuration: unknown vehicle");
+    vehicle_system_->at(id).replace_turbo_configuration(component_id,desc);
+}
+
 void World::replace_engine_maps(VehicleId id, std::string_view component_id, drivetrain::EngineMapsPtr new_maps) {
     // Documented (world.h) to throw for an unknown vehicle id; System::at is a
     // plain operator[], so check here rather than index out of bounds.

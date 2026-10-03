@@ -128,6 +128,9 @@ public:
     // vehicle::System::apply_pending_engine_maps_swaps (applies, from
     // World::step before the tick pipeline, outside any job - see
     // Powertrain::apply_pending_engine_maps_swap's own comment).
+    void replace_turbo_configuration(std::string_view component_id,const drivetrain::TurboPairDesc& desc) {
+        powertrain_.replace_turbo_configuration(component_id,desc);
+    }
     void request_replace_engine_maps(std::string_view component_id, drivetrain::EngineMapsPtr new_maps) {
         powertrain_.request_replace_engine_maps(component_id, std::move(new_maps));
     }

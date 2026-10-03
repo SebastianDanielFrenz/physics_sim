@@ -113,6 +113,14 @@ struct IntakeCycleDesc {
     // only required non-empty.
     std::string interface;
     std::string source; // PLAN.md section 8: citation tier for every length/diameter above
+    // Forced induction: the throttle is fed by a compressor (after its
+    // intercooler), not by the snorkel/airbox. Set by the engine loader from
+    // the engine's default_turbo_configuration, never read from the cycle
+    // block itself. The map generator then supplies the throttle at every
+    // grid node (max(ambient, 1.05 x node pressure) at ISA temperature)
+    // instead of failing on a node the ambient path cannot reach. A
+    // generator input: folded into the C16b cache key when true.
+    bool compressor_supply = false;
 };
 
 // One exhaust primary (straight, untapered - unlike an intake runner).

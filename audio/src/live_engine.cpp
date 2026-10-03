@@ -28,12 +28,14 @@ real wrap720(real deg) {
 }
 
 const LiveEngineSettings& checked(const LiveEngineSettings& s) {
-    if (s.substeps != 1 && s.substeps != 2) fail("substeps must be 1 or 2");
+    if (s.substeps != 1 && s.substeps != 2 && s.substeps != 4 && s.substeps != 8 && s.substeps != 16)
+        fail("substeps must be 1, 2, 4, 8 or 16");
     if (!(s.sample_rate_hz > 0.0)) fail("sample_rate_hz must be > 0");
     if (!(s.p_amb_pa > 0.0 && s.t_amb_k > 0.0)) fail("ambient pressure and temperature must be > 0");
     if (!(s.initial_p_intake_pa > 0.0)) fail("initial_p_intake_pa must be > 0");
     if (!(s.plenum_filter_tau_s > 0.0 && s.plenum_pi_tau_s > 0.0)) fail("plenum loop time constants must be > 0");
     if (!(s.min_throttle_cd_area_m2 > 0.0)) fail("min_throttle_cd_area_m2 must be > 0");
+    if (s.threads < 1) fail("threads must be >= 1");
     return s;
 }
 
@@ -55,6 +57,7 @@ EngineCoreSettings core_settings(const CycleModelDesc& d, const LiveEngineSettin
     // the radiation loss - the map generator (CycleEngine) never sets this,
     // so map content/hashes are unaffected.
     c.radiation = true;
+    c.threads = s.threads;
     return c;
 }
 
@@ -65,6 +68,7 @@ LiveEngine::LiveEngine(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
       core_(desc, lhv_j_kg, afr_st, start_op(settings), 1.0 / (settings.sample_rate_hz * settings.substeps),
             core_settings(desc, settings)),
       h_(1.0 / (settings.sample_rate_hz * settings.substeps)) {
+    for (int n = settings_.substeps; n > 1; n /= 2) ++stages_;
     sources_ = static_cast<int>(core_.radiating_ends().size());
     if (sources_ < 1) fail("the engine network has no radiating end");
     if (sources_ > kLiveMaxSources) fail("more than " + std::to_string(kLiveMaxSources) + " radiating ends");
@@ -96,6 +100,11 @@ void LiveEngine::physics_step(const LiveControl& c, real* p_out) {
     const real dtheta = 6.0 * rpm * h_;
     const int nc = core_.cylinders();
 
+    if(auto* net=core_.network()) {
+        const auto& layout=core_.layout();
+        net->set_orifice_supply(layout.throttle_orifice,
+            ps::engine_cycle::GasStateDesc{c.p_charge_pa,c.t_charge_k,real(0.0)});
+    }
     // Plenum loop (throttle Cd*A), then the D-3 port <-> pipe exchange.
     if (c.p_intake_pa > 0.0) {
         if (settings_.plenum_loop) {
@@ -132,21 +141,53 @@ void LiveEngine::physics_step(const LiveControl& c, real* p_out) {
     const bool fuel_off = (c.flags & (kInputFuelCut | kInputDfco)) != 0u;
     const bool spark_off = (c.flags & kInputIgnitionCut) != 0u;
     const real load = p_f_ / settings_.p_amb_pa;
+    // A9b: three passes. Pass 1 (serial, engine-wide): speed and the ignition-cut
+    // charge reset. Pass 2: the live step, one cylinder per worker - cylinders
+    // are independent within a step and step_live keeps all state per cylinder,
+    // so any thread count is bit-identical. Pass 3 (serial, in cylinder order):
+    // IVC and firing-TDC bookkeeping into shared per-engine state.
     for (int k = 0; k < nc; ++k) {
         CycleStepper& cyl = core_.cylinder(k);
-        const std::size_t kk = static_cast<std::size_t>(k);
         cyl.set_speed(rpm);
-        const real th0 = wrap720(theta_ - core_.phase_deg(k));
         if (dtheta > 0.0) {
             // Ignition cut: a charge whose start of burn falls in this step does not burn.
+            const real th0 = wrap720(theta_ - core_.phase_deg(k));
             const real d_sob = wrap720(cyl.wiebe().theta0_deg - th0);
             if (spark_off && d_sob > 0.0 && d_sob <= dtheta && cyl.m_fuel() > 0.0) {
                 cyl.set_charge(cyl.m_air_trapped(), 0.0);
                 ++cuts_;
             }
         }
-        cyl.step_live(th0, dtheta, h_);
-        if (dtheta > 0.0) {
+    }
+    {
+        struct CylinderJob final : StepJob {
+            LiveEngine& eng;
+            int nc;
+            real dtheta;
+            CylinderJob(LiveEngine& e, int n, real d) : eng(e), nc(n), dtheta(d) {}
+            void run(int worker, int workers) override {
+                for (int k = worker; k < nc; k += workers) {
+                    const real th0 = wrap720(eng.theta_ - eng.core_.phase_deg(k));
+                    eng.core_.cylinder(k).step_live(th0, dtheta, eng.h_);
+                }
+            }
+        };
+        StepTeam* team = core_.step_team();
+        if (team != nullptr && team->size() > 1) {
+            CylinderJob job(*this, nc, dtheta);
+            team->run(job);
+        } else {
+            for (int k = 0; k < nc; ++k) {
+                const real th0 = wrap720(theta_ - core_.phase_deg(k));
+                core_.cylinder(k).step_live(th0, dtheta, h_);
+            }
+        }
+    }
+    if (dtheta > 0.0) {
+        for (int k = 0; k < nc; ++k) {
+            CycleStepper& cyl = core_.cylinder(k);
+            const std::size_t kk = static_cast<std::size_t>(k);
+            const real th0 = wrap720(theta_ - core_.phase_deg(k));
             const real d_ivc = wrap720(cyl.theta_ivc() - th0);
             if (d_ivc > 0.0 && d_ivc <= dtheta) {
                 // IVC: close the cycle's fresh-air account and set the next combustion event.
@@ -189,13 +230,22 @@ void LiveEngine::step_sample(const LiveControl& c, real* out) {
         physics_step(c, out);
         return;
     }
-    std::array<real, kLiveMaxSources> a{};
-    physics_step(c, a.data());
-    physics_step(c, p_sub_.data());
-    for (int s = 0; s < sources_; ++s) {
-        const std::size_t ss = static_cast<std::size_t>(s);
-        out[s] = dec_[ss].push2(a[ss], p_sub_[ss]);
+    // Substeps in time order, then each half-band stage halves the count in
+    // place (substeps 2 = the single-stage push2 of the A7 design, unchanged).
+    int n = settings_.substeps;
+    for (int k = 0; k < n; ++k) physics_step(c, sub_[static_cast<std::size_t>(k)].data());
+    for (int st = 0; st < stages_; ++st) {
+        n /= 2;
+        for (int j = 0; j < n; ++j) {
+            const std::size_t j0 = static_cast<std::size_t>(2 * j);
+            for (int s = 0; s < sources_; ++s) {
+                const std::size_t ss = static_cast<std::size_t>(s);
+                sub_[static_cast<std::size_t>(j)][ss] =
+                    dec_[ss][static_cast<std::size_t>(st)].push2(sub_[j0][ss], sub_[j0 + 1][ss]);
+            }
+        }
     }
+    for (int s = 0; s < sources_; ++s) out[s] = sub_[0][static_cast<std::size_t>(s)];
 }
 
 std::uint64_t LiveEngine::fold_state_hash(std::uint64_t h) const {

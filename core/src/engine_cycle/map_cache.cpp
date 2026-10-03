@@ -337,6 +337,8 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     // existed; see fold_pipe_pair's own comment for what is/isn't folded).
     if (desc.intake.has_value()) {
         fold_pipe_pair(f, desc);
+        // Folded only when set, so every engine without a turbo keeps its key.
+        if (desc.intake->compressor_supply) f.str("boost.compressor_supply");
     }
     // FuelDesc (source excluded - the generator never reads it)
     f.str(fuel.name);

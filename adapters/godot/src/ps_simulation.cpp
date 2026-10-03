@@ -1,6 +1,12 @@
+#include "engine_bank_generator.h"
+#include <nlohmann/json.hpp>
+#include <fstream>
 #include "ps_simulation.h"
 
 #include <filesystem>
+#include <algorithm>
+#include <memory>
+#include "ps/jobs/job_system.h"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -93,6 +99,7 @@ bool PsSimulation::load_scenario(const String& absolute_json_path) {
         vehicles_by_name_.clear();
         vehicle_chassis_body_name_.clear();
         vehicle_desc_by_name_.clear();
+        engine_definition_paths_.clear(); requested_turbo_paths_.clear();
         vehicle_order_.clear();
         vehicle_terrain_interest_id_.clear();
         vehicle_stream_radius_m_.clear();
@@ -211,6 +218,18 @@ void PsSimulation::rebuild_post_step_and_start() {
         // before World::step()) so a live reset never races
         // IRigidBackend::step() running concurrently with a main-thread
         // backend write.
+        std::vector<PendingTurboUpdate> turbo_updates;
+        { std::lock_guard<std::mutex> lock(turbo_update_mutex_); turbo_updates.swap(pending_turbo_updates_); }
+        for(const auto& update:turbo_updates) {
+            const auto vehicle=vehicles_by_name_.find(update.vehicle_name);
+            if(vehicle==vehicles_by_name_.end()) continue;
+            std::string component;
+            for(const auto& c:vehicle_desc_by_name_.at(update.vehicle_name).powertrain.components)
+                if(std::holds_alternative<ps::drivetrain::SimulatedEngineDesc>(c.params)) { component=c.id; break; }
+            if(!component.empty()) world_->replace_turbo_configuration(vehicle->second,component,update.desc);
+            std::lock_guard<std::mutex> lock(turbo_update_mutex_);
+            turbo_configuration_status_="Active";
+        }
         std::vector<PendingVehicleReset> resets;
         {
             std::lock_guard<std::mutex> lock(pending_reset_mutex_);
@@ -418,9 +437,21 @@ void PsSimulation::rebuild_post_step_and_start() {
     }
 
     sim_thread_->start();
+    for(const auto& entry:vehicle_voice_by_name_) {
+        const auto def=engine_definition_paths_.find(entry.first);
+        if(def!=engine_definition_paths_.end()) {
+            const auto cache=(std::filesystem::path(def->second).parent_path().parent_path().parent_path()/"out"/"godot_engine_cache").string();
+            const auto override_path=requested_turbo_paths_.find(entry.first);
+            enqueue_bank_request(BankRequest{entry.first,def->second,override_path==requested_turbo_paths_.end()?"":override_path->second,cache,override_path!=requested_turbo_paths_.end()});
+        }
+    }
 }
 
 void PsSimulation::stop() {
+    { std::lock_guard<std::mutex> lock(turbo_update_mutex_); bank_worker_stop_=true; }
+    bank_request_cv_.notify_all();
+    if(turbo_generation_thread_.joinable()) turbo_generation_thread_.join();
+    { std::lock_guard<std::mutex> lock(turbo_update_mutex_); bank_requests_.clear(); pending_turbo_updates_.clear(); }
     if (sim_thread_) sim_thread_->stop();
     // ps_audio A11: stop every voice's Runner thread too, so nothing keeps
     // rendering (or holding its thread) once the sim itself is stopped.
@@ -670,7 +701,19 @@ bool PsSimulation::spawn_vehicle(const String& vehicle_name, const String& vehic
             const std::filesystem::path repo_root = vehicle_dir.parent_path().parent_path();
             map_options.cache_dir = (repo_root / "out" / "godot_engine_cache").string();
         }
+        // A cache miss generates the maps here (car_hyper's 8 x 6 grid is
+        // ~30 s on one thread); a pool that lives only for the load, as in
+        // ps_run --map-workers, cuts that to a few seconds.
+        auto map_pool = std::make_unique<ps::jobs::JobSystem>(std::max(1, ps::jobs::physical_core_count()));
+        map_options.pool = map_pool.get();
         ps::vehicle::VehicleDesc desc = ps::io::load_vehicle_json(to_std_string(vehicle_json_absolute_path), map_options);
+        map_pool.reset();
+        {
+            const auto vpath=to_std_string(vehicle_json_absolute_path);
+            std::ifstream file(vpath);const auto json=nlohmann::json::parse(file);
+            for(const auto& c:json.at("powertrain").at("components")) if(c.at("type")=="engine" && c.contains("ref"))
+                engine_definition_paths_[name]=(std::filesystem::path(vpath).parent_path()/c.at("ref").get<std::string>()).lexically_normal().string();
+        }
         const ps::VehicleId vid = world_->create_vehicle(desc, body_it->second);
         vehicles_by_name_[name] = vid;
         vehicle_chassis_body_name_[name] = chassis_name;
@@ -700,6 +743,73 @@ bool PsSimulation::spawn_vehicle(const String& vehicle_name, const String& vehic
         godot::UtilityFunctions::print("ps_godot: ", last_error_);
         return false;
     }
+}
+
+void PsSimulation::enqueue_bank_request(BankRequest request) {
+    {
+        std::lock_guard<std::mutex> lock(turbo_update_mutex_);
+        bank_worker_stop_=false;
+        // Latest request for this vehicle wins without disturbing its current audio.
+        bank_requests_.erase(std::remove_if(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){ return r.vehicle_name==request.vehicle_name; }),bank_requests_.end());
+        bank_requests_.push_back(std::move(request));engine_audio_bank_status_="Queued";
+    }
+    if(!turbo_generation_thread_.joinable()) turbo_generation_thread_=std::thread([this] {
+        for(;;) {
+            BankRequest task;
+            { std::unique_lock<std::mutex> lock(turbo_update_mutex_);
+                bank_request_cv_.wait(lock,[this]{return bank_worker_stop_ || !bank_requests_.empty();});
+                if(bank_worker_stop_) break;
+                task=std::move(bank_requests_.front());bank_requests_.erase(bank_requests_.begin());
+                engine_audio_bank_status_="Generating or loading cache";
+            }
+            try {
+                if(task.apply_physics) {
+                    ps::io::EngineMapOptions options;options.cache_dir=task.cache_dir;
+                    auto loaded=ps::io::load_engine_json(task.engine_path,options);
+                    auto desc=std::get<ps::drivetrain::SimulatedEngineDesc>(loaded);
+                    if(!task.turbo_path.empty()) desc.turbo_pair=ps::io::load_turbo_configuration_json(task.turbo_path,task.cache_dir);
+                    if(!desc.turbo_pair) throw std::runtime_error("Engine has no default turbo configuration");
+                    std::lock_guard<std::mutex> lock(turbo_update_mutex_);
+                    if(bank_worker_stop_ || std::any_of(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){return r.vehicle_name==task.vehicle_name;})) continue;
+                    pending_turbo_updates_.push_back(PendingTurboUpdate{task.vehicle_name,*desc.turbo_pair});
+                    turbo_configuration_status_="Ready; waiting for tick boundary";
+                }
+                auto bank=ps_tools::prepare_engine_audio_bank(task.engine_path,task.turbo_path,task.cache_dir,[this,&task] {
+                    std::lock_guard<std::mutex> lock(turbo_update_mutex_);
+                    return bank_worker_stop_ || std::any_of(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){return r.vehicle_name==task.vehicle_name;});
+                });
+                std::lock_guard<std::mutex> lock(turbo_update_mutex_);
+                const bool superseded=std::any_of(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){ return r.vehicle_name==task.vehicle_name; });
+                if(!bank_worker_stop_ && !superseded) {
+                    const auto voice=vehicle_voice_by_name_.find(task.vehicle_name);
+                    if(voice!=vehicle_voice_by_name_.end()) voice->second->set_audio_bank(std::move(bank));
+                    engine_audio_bank_status_="Ready";
+                }
+            } catch(const std::exception& e) {
+                std::lock_guard<std::mutex> lock(turbo_update_mutex_);
+                if(!bank_worker_stop_ && !std::any_of(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){return r.vehicle_name==task.vehicle_name;}))
+                    engine_audio_bank_status_=std::string("Failed; keeping previous audio: ")+e.what();
+            }
+        }
+    });
+    bank_request_cv_.notify_one();
+}
+
+bool PsSimulation::request_vehicle_turbo_configuration(const String& vehicle_name,const String& path) {
+    const auto name=to_std_string(vehicle_name);const auto engine=engine_definition_paths_.find(name);
+    if(engine==engine_definition_paths_.end() || vehicle_voice_by_name_.find(name)==vehicle_voice_by_name_.end()) {
+        last_error_="Vehicle has no referenced simulated cycle engine";return false;
+    }
+    const auto cache=(std::filesystem::path(engine->second).parent_path().parent_path().parent_path()/"out"/"godot_engine_cache").string();
+    requested_turbo_paths_[name]=to_std_string(path);
+    enqueue_bank_request(BankRequest{name,engine->second,to_std_string(path),cache,true});
+    return true;
+}
+String PsSimulation::get_turbo_configuration_status() const {
+    std::lock_guard<std::mutex> lock(turbo_update_mutex_);return String(turbo_configuration_status_.c_str());
+}
+String PsSimulation::get_engine_audio_bank_status() const {
+    std::lock_guard<std::mutex> lock(turbo_update_mutex_);return String(engine_audio_bank_status_.c_str());
 }
 
 bool PsSimulation::reset_vehicle(const String& vehicle_name, const Vector3& sim_position, float yaw_rad) {
@@ -831,6 +941,12 @@ Dictionary PsSimulation::get_vehicle_powertrain(const String& vehicle_name) cons
     d["engine_state"] = String(engine_state_name(p.engine_state));
     d["speedo_kmh"] = static_cast<float>(p.speedo_mps * 3.6);
     d["clutch_engagement"] = static_cast<float>(p.clutch_engagement);
+    d["fuel_flow_g_s"] = static_cast<double>(p.fuel_flow_g_s);
+    d["fuel_mass_kg"] = static_cast<double>(p.fuel_mass_kg);
+    d["turbo_rpm"] = p.engines.empty() ? 0.0 : static_cast<double>(p.engines[0].turbo_rpm);
+    d["boost_bar"] = p.engines.empty() ? 0.0 : static_cast<double>(p.engines[0].boost_bar);
+    d["p_exhaust_bar"] = p.engines.empty() ? 0.0 : static_cast<double>(p.engines[0].p_exhaust_pa) / 1e5; // absolute
+    d["drive_power_kw"] = p.engines.empty() ? 0.0 : static_cast<double>(-p.driveline.clutch_torque * p.engines[0].omega / 1000.0);
     // 0 or 1 engine in I3 (powertrain_state.h's own comment on
     // PowertrainSnapshot::engines) - the limiter/starter/dfco flags live on
     // the engine sound-state entry, not on PowertrainSnapshot itself.
@@ -878,6 +994,7 @@ Dictionary PsSimulation::get_vehicle_gauge_info(const String& vehicle_name) cons
     // carry exactly one of each (see data/vehicles/*.json's own
     // "powertrain.components").
     ps::real idle_rpm = 0.0, limiter_rpm = 0.0;
+    ps::real fuel_capacity_kg = 0.0, fuel_density_kg_m3 = 0.0;
     std::int64_t gear_count = 0;
     for (const ps::drivetrain::ComponentDesc& c : it->second.powertrain.components) {
         if (const auto* engine = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&c.params)) {
@@ -886,6 +1003,9 @@ Dictionary PsSimulation::get_vehicle_gauge_info(const String& vehicle_name) cons
         } else if (const auto* sim = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&c.params)) {
             idle_rpm = sim->idle_rpm;
             limiter_rpm = sim->limiter.rpm;
+        } else if (const auto* tank = std::get_if<ps::drivetrain::FuelTankDesc>(&c.params)) {
+            fuel_capacity_kg += tank->capacity_kg;
+            fuel_density_kg_m3 = tank->fuel.density_kg_m3;
         } else if (const auto* gearbox = std::get_if<ps::drivetrain::GearboxDesc>(&c.params)) {
             gear_count = static_cast<std::int64_t>(gearbox->forward_ratios.size());
         }
@@ -894,6 +1014,8 @@ Dictionary PsSimulation::get_vehicle_gauge_info(const String& vehicle_name) cons
     d["idle_rpm"] = static_cast<float>(idle_rpm);
     d["limiter_rpm"] = static_cast<float>(limiter_rpm);
     d["gear_count"] = gear_count;
+    d["fuel_capacity_kg"] = static_cast<double>(fuel_capacity_kg);
+    d["fuel_density_kg_m3"] = static_cast<double>(fuel_density_kg_m3);
     // Data-driven and empty today on purpose - see this method's header
     // comment (ps_simulation.h) for why.
     d["fitted_assists"] = godot::PackedStringArray();
@@ -1006,6 +1128,17 @@ int PsSimulation::get_vehicle_voice_channel_count(const String& vehicle_name) co
     return it == vehicle_voice_by_name_.end() ? 0 : it->second->channel_count();
 }
 
+godot::PackedVector3Array PsSimulation::get_vehicle_voice_source_positions(const String& vehicle_name) const {
+    godot::PackedVector3Array out;
+    const auto it = vehicle_voice_by_name_.find(to_std_string(vehicle_name));
+    if (it == vehicle_voice_by_name_.end()) return out;
+    for (int c = 0; c < it->second->channel_count(); ++c) {
+        const auto p = it->second->source(c).position_m;
+        out.push_back(godot::Vector3(p.x, p.y, p.z));
+    }
+    return out;
+}
+
 godot::PackedFloat32Array PsSimulation::read_vehicle_voice_audio(const String& vehicle_name, int frames) {
     godot::PackedFloat32Array out;
     if (frames <= 0) return out;
@@ -1081,6 +1214,9 @@ void PsSimulation::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("create_body_dynamic", "name", "sim_position", "yaw_rad", "mass", "half_extents"), &PsSimulation::create_body_dynamic);
     ClassDB::bind_method(D_METHOD("spawn_vehicle", "vehicle_name", "vehicle_json_absolute_path", "chassis_body_name", "stream_radius_m"), &PsSimulation::spawn_vehicle);
+    ClassDB::bind_method(D_METHOD("request_vehicle_turbo_configuration","vehicle_name","path"),&PsSimulation::request_vehicle_turbo_configuration);
+    ClassDB::bind_method(D_METHOD("get_engine_audio_bank_status"),&PsSimulation::get_engine_audio_bank_status);
+    ClassDB::bind_method(D_METHOD("get_turbo_configuration_status"),&PsSimulation::get_turbo_configuration_status);
     ClassDB::bind_method(D_METHOD("reset_vehicle", "vehicle_name", "sim_position", "yaw_rad"), &PsSimulation::reset_vehicle);
     ClassDB::bind_method(D_METHOD("get_vehicle_names"), &PsSimulation::get_vehicle_names);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_body_name", "vehicle_name"), &PsSimulation::get_vehicle_chassis_body_name);
@@ -1115,6 +1251,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("consume_adapter_frame_time_us"), &PsSimulation::consume_adapter_frame_time_us);
 
     // ps_audio A11
+    ClassDB::bind_method(D_METHOD("get_vehicle_voice_source_positions", "vehicle_name"), &PsSimulation::get_vehicle_voice_source_positions);
     ClassDB::bind_method(D_METHOD("has_vehicle_voice", "vehicle_name"), &PsSimulation::has_vehicle_voice);
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_sample_rate_hz", "vehicle_name"), &PsSimulation::get_vehicle_voice_sample_rate_hz);
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_channel_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_channel_count);

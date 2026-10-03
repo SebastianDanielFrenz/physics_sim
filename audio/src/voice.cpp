@@ -19,12 +19,12 @@ constexpr real kDegToRad = kPi / 180.0;
 constexpr real kTwoPi = 2.0 * kPi;
 
 StabilityProbeResult resolve_substeps(const CycleModelDesc& desc, real lhv, real afr, const VoiceSettings& s) {
-    if (s.substeps == 1 || s.substeps == 2) {
+    if (s.substeps == 1 || s.substeps == 2 || s.substeps == 4 || s.substeps == 8 || s.substeps == 16) {
         StabilityProbeResult r;
         r.substeps = s.substeps;
         return r;
     }
-    if (s.substeps != 0) throw std::invalid_argument("Voice: substeps must be 0 (probe), 1 or 2");
+    if (s.substeps != 0) throw std::invalid_argument("Voice: substeps must be 0 (probe), 1, 2, 4, 8 or 16");
     return probe_stability(desc, lhv, afr, s.engine, s.stability_bound);
 }
 
@@ -159,6 +159,8 @@ void Voice::interpolate() {
     const real f = has_b ? (t - a.t_sim_s) / (b.t_sim_s - a.t_sim_s) : 0.0;
     ctl_.omega_rad_s = lerp(a.omega_rad_s, b.omega_rad_s, f);
     ctl_.p_intake_pa = (a.p_intake_pa > 0.0 && b.p_intake_pa > 0.0) ? lerp(a.p_intake_pa, b.p_intake_pa, f) : a.p_intake_pa;
+    ctl_.p_charge_pa=lerp(a.p_charge_pa,b.p_charge_pa,f);
+    ctl_.t_charge_k=lerp(a.t_charge_k,b.t_charge_k,f);
     ctl_.throttle = lerp(a.throttle, b.throttle, f);
     ctl_.lambda = lerp(a.lambda, b.lambda, f);
     if (a.spark_given) {
@@ -181,11 +183,22 @@ void Voice::interpolate() {
     }
 }
 
+void Voice::set_audio_bank(AudioBankPtr bank) {
+    if(!bank || bank->channels!=source_count()) throw std::invalid_argument("Audio bank topology mismatch");
+    retained_banks_.push_back(bank);
+    requested_bank_.store(std::move(bank),std::memory_order_release);
+}
+
 void Voice::render(float* out, int frames) {
     const int ns = engine_.source_count();
     const std::uint64_t ci = static_cast<std::uint64_t>(s_.control_interval);
     const real fade_step = h_ / s_.pause_fade_s;
     const bool flow_noise_on = s_.flow_noise.enabled && s_.flow_noise.level_coeff_pa > 0.0;
+    const auto requested=requested_bank_.load(std::memory_order_acquire);
+    if(requested && requested!=active_bank_) {
+        previous_bank_=active_bank_;previous_playback_=bank_playback_;
+        active_bank_=requested;bank_playback_=BankPlayback{};bank_fade_=real(0.0);
+    }
     for (int f = 0; f < frames; ++f) {
         const bool cp = n_ % ci == 0;
         if (cp) control_point();
@@ -215,6 +228,20 @@ void Voice::render(float* out, int frames) {
         c.omega_rad_s = omega;
         c.omega_input_rad_s = ctl_.omega_rad_s > 0.0 ? ctl_.omega_rad_s : 0.0;
         engine_.step_sample(c, frame_.data());
+        if(active_bank_) {
+            std::array<float,kLiveMaxSources> current{},previous{};
+            const real rpm=omega*real(60.0/6.2831853071795864769);
+            bank_playback_.frame(*active_bank_,rpm,c.p_intake_pa,current.data());
+            if(previous_bank_) previous_playback_.frame(*previous_bank_,rpm,c.p_intake_pa,previous.data());
+            bank_fade_=std::min(real(1.0),bank_fade_+real(1.0)/(fs_*real(0.12)));
+            const real wanted=c.flags==0?real(1.0):real(0.0);
+            bank_weight_+=(wanted-bank_weight_)/(fs_*real(0.01));
+            for(int source=0;source<ns;++source) {
+                const real before=previous_bank_?previous[static_cast<std::size_t>(source)]:frame_[static_cast<std::size_t>(source)];
+                const real baked=before*(real(1.0)-bank_fade_)+current[static_cast<std::size_t>(source)]*bank_fade_;
+                frame_[static_cast<std::size_t>(source)]=static_cast<float>(frame_[static_cast<std::size_t>(source)]*(real(1.0)-bank_weight_)+baked*bank_weight_);
+            }
+        }
         if (flow_noise_on && cp) flow_noise_control_point();
 
         if (pausing_) {

@@ -40,8 +40,18 @@ std::unique_ptr<VehicleVoice> VehicleVoice::try_create(const ps::vehicle::Vehicl
     // VehicleVoice's private ctor is only reachable through this factory,
     // so std::make_unique cannot be used (it needs a public ctor) -
     // new+unique_ptr is the ordinary workaround.
+    ps_audio::VoiceSettings live_settings = settings;
+    // The sound network follows the already-integrated MVEM manifold.
+    // Avoid adding a second slow throttle response solely in the renderer.
+    live_settings.engine.plenum_pi_tau_s = 0.015;
+    live_settings.engine.plenum_filter_tau_s = 0.003;
+
+    // The V8 exceeds a single audio worker's budget; reuse the existing
+    // deterministic step team rather than altering the engine physics.
+    if (live_cycle.cylinders >= 8 && live_settings.engine.threads == 1)
+        live_settings.engine.threads = 4;
     return std::unique_ptr<VehicleVoice>(
-        new VehicleVoice(live_cycle, sim->fuels[0].lhv_j_kg, sim->fuels[0].afr_stoich, settings));
+        new VehicleVoice(live_cycle, sim->fuels[0].lhv_j_kg, sim->fuels[0].afr_stoich, live_settings));
 }
 
 VehicleVoice::VehicleVoice(const ps::drivetrain::CycleModelDesc& cycle, ps::real lhv_j_kg, ps::real afr_stoich,

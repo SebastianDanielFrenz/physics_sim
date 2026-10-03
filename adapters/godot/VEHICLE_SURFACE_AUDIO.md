@@ -19,7 +19,9 @@ The underlying turbo prototype remains available for development checks only.
 
 Controls: --m1-no-tyre-audio disables tyre sound. These streams use Godot
 positional mixing, not the native Windows spatial-object engine stream.
-Cabin occlusion/filtering is not modeled. Queues target 50 ms at 24 kHz;
+Cockpit and VR views attenuate tyres by 18 dB and low-pass them at 900 Hz.
+Camera changes crossfade over 120 ms. Exterior gain and engine audio stay
+unchanged. These are authored cabin-mix settings, not a material acoustics model. Queues target 50 ms at 24 kHz;
 graceful shutdown drains audio commands before exit.
 
 Verification: focused model checks cover stationary/unloaded silence, speed

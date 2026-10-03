@@ -1,8 +1,8 @@
 {
   "format": "physics_sim.rig/1",
   "model": "car_hyper.glb",
-  "title": "Hyper car (mid-engine)",
-  "description": "Generic mid-engine two-seat hypercar, 4.65 m, 265/35 R20 front, 325/30 R21 rear, butterfly doors, active rear wing.",
+  "title": "Sculpted A \u2014 silver mid-engine hypercar",
+  "description": "Sculpted A: silver organic body, dark teardrop canopy, carbon aero, 4.65 m, 265/35 R20 front, 325/30 R21 rear, butterfly doors, active rear wing.",
   "frame": "ISO 8855: x forward, y left, z up; metres; radians. The .glb itself uses glTF axes (+Y up, +Z forward, +X left): gltf(x,y,z) = iso(y,z,x).",
   "origin": "Ground plane below the wheel centres, x = 0 midway between the axles, y = 0 on the centreline.",
   "rest_pose": "All node rotations are identity at rest; a node's origin is its joint pivot. Joint values are offsets from the rest pose (0 = as modelled).",
@@ -30,12 +30,12 @@
       "bounds_local": {
         "min": [
           -2.362,
-          -1.025,
-          0.0554
+          -1.0247,
+          0.0687
         ],
         "max": [
-          2.3004,
-          1.025,
+          2.3,
+          1.0247,
           1.155
         ]
       }
@@ -369,12 +369,12 @@
       },
       "bounds_local": {
         "min": [
-          -1.4586,
-          -0.4536,
-          -0.5523
+          -1.4649,
+          -0.4397,
+          -0.56
         ],
         "max": [
-          0.0178,
+          0.0243,
           0.27,
           0.3299
         ]
@@ -401,13 +401,13 @@
       },
       "bounds_local": {
         "min": [
-          -1.4586,
+          -1.4649,
           -0.27,
-          -0.5523
+          -0.56
         ],
         "max": [
-          0.0178,
-          0.4536,
+          0.0243,
+          0.4397,
           0.3299
         ]
       }
@@ -433,14 +433,14 @@
       },
       "bounds_local": {
         "min": [
-          0.0201,
-          -0.4767,
-          -0.3525
+          -0.0083,
+          -0.4993,
+          -0.3498
         ],
         "max": [
-          1.1082,
-          0.4767,
-          -0.0085
+          1.1017,
+          0.4993,
+          0.0473
         ]
       }
     },
@@ -465,14 +465,14 @@
       },
       "bounds_local": {
         "min": [
-          -0.9662,
-          -0.5426,
-          -0.0641
+          -0.9778,
+          -0.5539,
+          -0.0667
         ],
         "max": [
-          -0.0314,
-          0.5426,
-          0.0128
+          -0.0081,
+          0.5539,
+          0.0515
         ]
       }
     },
@@ -576,13 +576,13 @@
       "bounds_local": {
         "min": [
           -0.296,
-          -0.9905,
-          0.0049
+          -0.9827,
+          0.0048
         ],
         "max": [
-          0.3387,
-          0.9905,
-          0.3357
+          0.3391,
+          0.9827,
+          0.3356
         ]
       },
       "aero": {
@@ -596,7 +596,7 @@
       "pivot": [
         -1.93,
         0.0,
-        1.005
+        0.975
       ],
       "joint": {
         "type": "prismatic",
@@ -613,7 +613,7 @@
         "min": [
           -0.1,
           -0.38,
-          -0.385
+          -0.355
         ],
         "max": [
           0.03,
@@ -628,7 +628,7 @@
       "pivot": [
         -1.93,
         0.0,
-        1.005
+        0.975
       ],
       "joint": {
         "type": "revolute",
@@ -644,23 +644,23 @@
       "bounds_local": {
         "min": [
           -0.33,
-          -0.822,
-          -0.07
+          -0.872,
+          -0.035
         ],
         "max": [
           0.05,
-          0.822,
-          0.1
+          0.872,
+          0.045
         ]
       },
       "aero": {
         "kind": "wing",
         "chord": 0.3,
-        "span": 1.62,
+        "span": 1.72,
         "pivot": [
           -1.93,
           0.0,
-          1.005
+          0.975
         ],
         "rest_pitch_deg": 8.0,
         "pitch_range_deg": [
@@ -682,7 +682,7 @@
         "type": "revolute",
         "axis": [
           -0.9535826651341417,
-          -0.0,
+          0.0,
           0.3011313679370974
         ],
         "min": -6.283185307179586,
@@ -826,9 +826,10 @@
   "notes": [
     "Generic mid-engine hypercar; dimensions are class-typical, not a specific production car.",
     "Different wheel radii: front 0.347 m, rear 0.364 m; at rest the wheel centres are at z = r per axle.",
-    "Rear wing: node wing_flap = main plane, chord 0.3 m, span 1.62 m, inverted NACA 4-digit (12 % thick, 6 % camber). Pivot = leading edge [-1.93, 0.0, 1.005] at rest (moves with wing_lift). Rest chord angle 8 deg trailing edge up (downforce). wing_flap range -8..+55 deg about the rest angle (-8 = flat/low drag, +55 = airbrake). wing_lift raises the whole wing 0..0.28 m along +z.",
+    "Rear wing: node wing_flap = main plane, chord 0.3 m, span 1.72 m, inverted NACA 4-digit (12 % thick, 6 % camber). Pivot = leading edge [-1.93, 0.0, 0.975] at rest (moves with wing_lift). Rest chord angle 8 deg trailing edge up (downforce). wing_flap range -8..+55 deg about the rest angle (-8 = flat/low drag, +55 = airbrake). wing_lift raises the whole wing 0..0.28 m along +z.",
     "Front flaps flap_front_L/R: chord 0.13 m, span 0.34 m each, leading edge x=2.31, |y|=0.6, z=0.128; rest chord angle 10 deg trailing edge up; range -10..+20 deg.",
     "Aero regions: node 'splitter' = front splitter plate (x 1.70..2.38, |y|<0.85, z=0.09); node 'diffuser' = rear diffuser ramp + 6 fins (underbody from x=-1.75, z=0.105 rising to z=0.33 at x=-2.35). Flat underbody at z=0.10 between them. Frontal area approx. 2.0 m^2.",
-    "Butterfly doors: tilted hinge axis at the A-pillar base; door + mirror open together."
+    "Butterfly doors: tilted hinge axis at the A-pillar base; door + mirror open together.",
+    "Design A: sculpted silver body, concave door coves, enlarged side scoops, swept LED blades, dark canopy."
   ]
 }

@@ -393,6 +393,7 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
         fail("cylinders must be 1.." + std::to_string(kCycleEngineMaxCylinders));
     if (!(op.p_im_pa > 0.0 && op.t_im_k > 0.0 && op.p_amb_pa > 0.0 && h > 0.0))
         fail("operating point p_im, t_im, p_amb and the step h must be > 0");
+    if (!(op.p_supply_pa >= 0.0 && op.p_supply_pa < 1e8)) fail("operating point p_supply must be >= 0 and finite");
     phase_ = engine_firing_phases_deg(desc);
 
     const CycleStepper proto(desc, lhv_j_kg, afr_st);
@@ -412,15 +413,29 @@ EngineCore::EngineCore(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
     const PipeNetworkDesc nd = make_engine_pipe_network_desc(desc, ambient, op.p_im_pa, settings.dx_intake_m,
                                                              settings.dx_exhaust_m, &layout_, settings.radiation);
     net_ = std::make_unique<PipeNetwork>(nd, h_);
+    // A9b: own the step worker team and lend it to the network; the cylinders
+    // of the live engine share the same workers.
+    if (settings.threads > 1) {
+        step_team_ = std::make_unique<StepTeam>(settings.threads);
+        net_->set_step_team(step_team_.get());
+    }
     cda_max_ = std::min(layout_.throttle_cd_area_geom_m2, net_->orifice_max_cd_area(layout_.throttle_orifice));
+    // Boosted operating point: the throttle draws from a fixed supply (the
+    // compressor outlet after the intercooler) at t_im_k instead of the
+    // snorkel/airbox, which stay connected but carry no throttle flow.
+    if (op.p_supply_pa > 0.0) {
+        p_supply_ = op.p_supply_pa;
+        net_->set_orifice_supply(layout_.throttle_orifice, GasStateDesc{op.p_supply_pa, op.t_im_k, 0.0});
+    }
+    const real p_up = p_supply_ > 0.0 ? p_supply_ : op.p_amb_pa;
     // Feed-forward start: VE 0.9 [A] at the target pressure through a steady orifice.
     const GasModel& g = net_->gas();
     const real v_d = area_of(desc.bore_m) * desc.stroke_m;
     const real m_cyc = 0.9 * op.p_im_pa / (g.fresh.r * op.t_im_k) * v_d * static_cast<real>(cylinders_);
     const real rpm_ff = op.rpm > 0.0 ? op.rpm : 1.0;  // A7: a live engine may start at rest
     const real t_cycle = 120.0 / rpm_ff;
-    const real pr = std::min(op.p_im_pa / op.p_amb_pa, 0.999);
-    const real g_unit = op.p_amb_pa / std::sqrt(g.fresh.r * op.t_im_k) * proto.model().psi.eval(pr, 0.0);
+    const real pr = std::min(op.p_im_pa / p_up, 0.999);
+    const real g_unit = p_up / std::sqrt(g.fresh.r * op.t_im_k) * proto.model().psi.eval(pr, 0.0);
     cda_ = std::clamp(m_cyc / t_cycle / g_unit, 1e-9, cda_max_);
     v_intake_ = desc.intake->plenum_m3;
     for (int c = 1; c <= cylinders_; ++c) {
@@ -563,10 +578,19 @@ CycleEngineResult CycleEngine::run() {
     const std::size_t nc = static_cast<std::size_t>(core_.cylinders());
     PipeNetwork* const net = core_.network();
     const EngineNetworkLayout& layout = core_.layout();
-    const int cycles = settings_.settling_cycles + 1;
+    int cycles = settings_.settling_cycles + 1;
+    int extra = 0;
+    // Integral correction on the feed-forward throttle Cd*A. The feed-forward
+    // has a fixed-point bias wherever the valve flow it scales is not the
+    // flow the throttle must supply (e.g. valve overlap pushing exhaust back
+    // into the intake at low speed: the plenum then settles ~5 % high). It
+    // stays exactly 1 unless the measured cycle misses trim_tolerance, so
+    // every point that settles on the plain schedule is bit-identical.
+    real corr = 1.0;
     const real p_t = op_.p_im_pa;
     const PsiPair psi = core_.cylinder(0).model().psi;
     const real r_amb = core_.cylinder(0).model().gas.fresh.r;
+    const real p_sup = core_.throttle_supply_pa();  // 0 = the ambient path
     real air_prev = 0.0, air_last = 0.0;
     real m0 = 0.0, x0 = 0.0, pl_mean = p_t;
     std::uint64_t k = 0;
@@ -590,7 +614,9 @@ CycleEngineResult CycleEngine::run() {
                 // Unit-Cd*A throttle flow at this step's start states (what the
                 // network's explicit orifice update sees).
                 const CvState pl = net->volume_state(layout.plenum_volume);
-                if (layout.airbox_volume >= 0) {
+                if (p_sup > 0.0) {
+                    sum_g += orifice_flow(psi, 1.0, p_sup, r_amb, op_.t_im_k, 0.0, pl.p, pl.r, pl.t, pl.x).mdot;
+                } else if (layout.airbox_volume >= 0) {
                     const CvState ab = net->volume_state(layout.airbox_volume);
                     sum_g += orifice_flow(psi, 1.0, ab.p, ab.r, ab.t, ab.x, pl.p, pl.r, pl.t, pl.x).mdot;
                 } else {
@@ -600,7 +626,7 @@ CycleEngineResult CycleEngine::run() {
             step_all(k);
             if (net) {
                 sum_pl += net->volume_state(layout.plenum_volume).p;
-                sum_up += layout.airbox_volume >= 0 ? net->volume_state(layout.airbox_volume).p : op_.p_amb_pa;
+                sum_up += p_sup > 0.0 ? p_sup : layout.airbox_volume >= 0 ? net->volume_state(layout.airbox_volume).p : op_.p_amb_pa;
             }
         }
         real air = 0.0;
@@ -615,7 +641,17 @@ CycleEngineResult CycleEngine::run() {
             const real rn = static_cast<real>(n_);
             pl_mean = sum_pl / rn;
             const real p_up = sum_up / rn;
-            if (!last) {
+            bool trim = !last;
+            if (last && extra < settings_.max_extra_trim_cycles && std::abs(pl_mean - p_t) > settings_.trim_tolerance * p_t &&
+                !(core_.throttle_cd_area() >= core_.throttle_cd_area_max() && pl_mean < p_t)) {
+                // Missed: keep trimming with the integral correction and
+                // measure again on the next cycle.
+                ++extra;
+                ++cycles;
+                corr *= std::clamp(p_t / pl_mean, 0.5, 2.0);
+                trim = true;
+            }
+            if (trim) {
                 // Throttle trim (PROVISIONAL P11): the flow the engine will draw
                 // at the target (measured valve flow scaled by p_t / p_mean,
                 // speed-density) plus half the mass that refills the intake
@@ -633,7 +669,7 @@ CycleEngineResult CycleEngine::run() {
                 const real psi_bar = psi.eval(std::clamp(pl_mean / p_up, 0.0, 0.999), 0.0);
                 const real psi_t = psi.eval(std::clamp(p_t / p_up, 0.0, 0.999), 0.0);
                 const real g_t = sum_g / rn * (psi_t / psi_bar);
-                real cda = g_t > 0.0 ? flow_req / g_t : core_.throttle_cd_area_max();
+                real cda = (g_t > 0.0 ? flow_req / g_t : core_.throttle_cd_area_max()) * corr;
                 cda = std::clamp(cda, 0.5 * core_.throttle_cd_area(), 2.0 * core_.throttle_cd_area());
                 core_.set_throttle_cd_area(cda);  // clamp(cda, 1e-9, max), pushed to the orifice
             }
@@ -653,6 +689,7 @@ CycleEngineResult CycleEngine::run() {
     r.throttle_cd_area_max_m2 = core_.throttle_cd_area_max();
     r.throttle_saturated = net && core_.throttle_cd_area() >= core_.throttle_cd_area_max() && r.plenum_error_rel < -settings_.trim_tolerance;
     r.air_change_rel = air_last > 0.0 ? std::fabs(air_last - air_prev) / air_last : 0.0;
+    r.extra_trim_cycles = extra;
 
     real fuel = 0.0, res_in = 0.0, ev_m = 0.0, ev_mt = 0.0;
     PointResult& mr = r.mean;

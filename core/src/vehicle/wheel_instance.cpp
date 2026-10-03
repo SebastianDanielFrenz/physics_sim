@@ -276,7 +276,21 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
         const TyreForcesWithSlope tw = tyre_->evaluate_with_slope(slip_in);
         pre_fx_pred_ = tw.forces.fx;
         pre_C_ = clamped ? real(0.0) : std::max(tw.dfx_dkappa, real(0.0));
-        pre_fy_ = tw.forces.fy + low_speed_lateral_damping_force(tyre_->desc(), vx_contact, vy_contact);
+        // Carcass damping is a tyre contact force, not an unlimited drag.
+        // Its coefficient still uses the fixed nominal load for stability,
+        // but its force budget must shrink with the actual supported load.
+        // Otherwise an unloaded front tyre can produce several times mu*Fz
+        // during a spinning stop and kick/pin the chassis. Preserve the
+        // existing MF force (including its offsets); bound only the addition.
+        const TyreDesc& td = tyre_->desc();
+        const real dfz_lat = (fz - td.fz0) / td.fz0;
+        const real dy = fz * (td.pdy1 + td.pdy2 * dfz_lat) *
+                        (real(1.0) - td.pdy3 * gamma * gamma) * td.lambda_muy * lambda_mu;
+        const real svy = fz * (td.pvy1 + td.pvy2 * dfz_lat) * td.lambda_muy * lambda_mu +
+                         fz * (td.pvy3 + td.pvy4 * dfz_lat) * gamma;
+        const real lateral_limit = std::max(std::abs(tw.forces.fy), std::abs(dy) + std::abs(svy));
+        pre_fy_ = std::clamp(tw.forces.fy + low_speed_lateral_damping_force(td, vx_contact, vy_contact),
+                             -lateral_limit, lateral_limit);
         pre_mz_ = tw.forces.mz;
         pre_mx_ = tw.forces.mx;
 

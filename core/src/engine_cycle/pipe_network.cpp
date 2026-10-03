@@ -4,6 +4,7 @@
 
 #include "ps/engine_cycle/pipe_network.h"
 
+#include "ps/math/simd.h"
 #include "ps/math/transcendental.h"
 
 #include <algorithm>
@@ -123,6 +124,120 @@ inline real minmod(real a, real b) {
     if (a > 0.0 && b > 0.0) return a < b ? a : b;
     if (a < 0.0 && b < 0.0) return a > b ? a : b;
     return 0.0;
+}
+
+// --- A9 vector helpers ------------------------------------------------------
+// Every helper mirrors its scalar counterpart name for name and in the same
+// operation order, so an AVX2 lane produces the same bits as the scalar code
+// (ps/math/simd.h; no FMA is ever used here). minmod_vec mirrors minmod()
+// above; the gas helpers mirror mix_r/mix_cv/mix_e and gas.h's
+// temperature_from_energy with m = 1, m_b = x (temp_from_e). Branches are
+// compute-both-then-select, exactly the scalar definition (min/max/abs are NOT
+// _mm256_min_pd/_mm256_max_pd, which differ on +0/-0 and NaN).
+using ps::simd::f64x4;
+using ps::simd::Mask;
+
+inline f64x4 minmod_vec(const f64x4& a, const f64x4& b) {
+    const f64x4 zero(0.0);
+    const f64x4 pos = f64x4::select(a.gt(zero) & b.gt(zero), f64x4::select(a.lt(b), a, b), zero);
+    return f64x4::select(a.lt(zero) & b.lt(zero), f64x4::select(a.gt(b), a, b), pos);
+}
+
+inline f64x4 clamp01_vec(const f64x4& x) {
+    return f64x4::select(x.lt(f64x4(0.0)), f64x4(0.0), f64x4::select(x.gt(f64x4(1.0)), f64x4(1.0), x));
+}
+
+inline f64x4 mix_r_vec(const GasModel& g, const f64x4& x) {
+    const f64x4 one(1.0);
+    return (one - x) * f64x4(g.fresh.r) + x * f64x4(g.burned.r);
+}
+
+inline f64x4 mix_cv_vec(const GasModel& g, const f64x4& t, const f64x4& x) {
+    const f64x4 one(1.0);
+    const f64x4 cvf = f64x4(g.fresh.a) + f64x4(g.fresh.b) * t;    // gas.h cv(t)
+    const f64x4 cvb = f64x4(g.burned.a) + f64x4(g.burned.b) * t;
+    return (one - x) * cvf + x * cvb;
+}
+
+inline f64x4 mix_e_vec(const GasModel& g, const f64x4& t, const f64x4& x) {
+    const f64x4 one(1.0);
+    const f64x4 tref(kTRef);
+    const f64x4 t2 = t * t - f64x4(kTRef * kTRef);
+    const f64x4 uf = f64x4(g.fresh.a) * (t - tref) + f64x4(0.5) * f64x4(g.fresh.b) * t2;  // gas.h u(t)
+    const f64x4 ub = f64x4(g.burned.a) * (t - tref) + f64x4(0.5) * f64x4(g.burned.b) * t2;
+    return (one - x) * uf + x * ub;
+}
+
+inline f64x4 temp_from_e_vec(const GasModel& g, const f64x4& e, const f64x4& x) {
+    const f64x4 one(1.0);
+    const f64x4 mu = one - x;
+    const f64x4 a = mu * f64x4(g.fresh.a) + x * f64x4(g.burned.a);
+    const f64x4 b = mu * f64x4(g.fresh.b) + x * f64x4(g.burned.b);
+    const f64x4 ap = a + b * f64x4(kTRef);
+    f64x4 disc = ap * ap + f64x4(2.0) * b * e;
+    disc = f64x4::select(disc.lt(f64x4(0.0)), f64x4(0.0), disc);
+    return f64x4(kTRef) + f64x4(2.0) * e / (ap + disc.sqrt());
+}
+
+struct Flux4 {
+    f64x4 m, mom, e, x;
+};
+
+// Vector form of hllc() above: all four candidate fluxes per lane, selected
+// with the same priority as the scalar early returns (F_L if sl >= 0, else
+// F_R if sr <= 0, else the star flux of the side ss falls on). Unselected
+// lanes may hold inf/NaN and are discarded.
+inline Flux4 hllc_vec(const GasModel& g, const f64x4& rl, const f64x4& ul, const f64x4& pl, const f64x4& xl,
+                      const f64x4& rr, const f64x4& ur, const f64x4& pr, const f64x4& xr) {
+    const f64x4 rml = mix_r_vec(g, xl);
+    const f64x4 rmr = mix_r_vec(g, xr);
+    const f64x4 tl = pl / (rl * rml);
+    const f64x4 tr = pr / (rr * rmr);
+    const f64x4 cvl = mix_cv_vec(g, tl, xl);
+    const f64x4 cvr = mix_cv_vec(g, tr, xr);
+    const f64x4 al = ((cvl + rml) / cvl * pl / rl).sqrt();
+    const f64x4 ar = ((cvr + rmr) / cvr * pr / rr).sqrt();
+    const f64x4 el = rl * (mix_e_vec(g, tl, xl) + f64x4(0.5) * ul * ul);
+    const f64x4 er = rr * (mix_e_vec(g, tr, xr) + f64x4(0.5) * ur * ur);
+
+    const f64x4 sl = f64x4::select((ur - ar).lt(ul - al), ur - ar, ul - al);
+    const f64x4 sr = f64x4::select((ul + al).lt(ur + ar), ur + ar, ul + al);
+
+    const f64x4 mdl = rl * ul;  // F_L
+    const f64x4 fa_m = mdl;
+    const f64x4 fa_mom = mdl * ul + pl;
+    const f64x4 fa_e = ul * (el + pl);
+    const f64x4 fa_x = mdl * xl;
+    const f64x4 mdr = rr * ur;  // F_R
+    const f64x4 fb_m = mdr;
+    const f64x4 fb_mom = mdr * ur + pr;
+    const f64x4 fb_e = ur * (er + pr);
+    const f64x4 fb_x = mdr * xr;
+    const f64x4 dl = rl * (sl - ul);  // star region
+    const f64x4 dr = rr * (sr - ur);
+    const f64x4 ss = (pr - pl + ul * dl - ur * dr) / (dl - dr);
+    const f64x4 cl = dl / (sl - ss);
+    const f64x4 estl = cl * (el / rl + (ss - ul) * (ss + pl / dl));
+    const f64x4 fc_m = mdl + sl * (cl - rl);
+    const f64x4 fc_mom = mdl * ul + pl + sl * (cl * ss - mdl);
+    const f64x4 fc_e = ul * (el + pl) + sl * (estl - el);
+    const f64x4 fc_x = mdl * xl + sl * (cl * xl - rl * xl);
+    const f64x4 cr = dr / (sr - ss);
+    const f64x4 estr = cr * (er / rr + (ss - ur) * (ss + pr / dr));
+    const f64x4 fd_m = mdr + sr * (cr - rr);
+    const f64x4 fd_mom = mdr * ur + pr + sr * (cr * ss - mdr);
+    const f64x4 fd_e = ur * (er + pr) + sr * (estr - er);
+    const f64x4 fd_x = mdr * xr + sr * (cr * xr - rr * xr);
+
+    const Mask ma = sl.ge(f64x4(0.0));
+    const Mask mb = sr.le(f64x4(0.0));
+    const Mask mc = ss.ge(f64x4(0.0));
+    Flux4 f;
+    f.m = f64x4::select(ma, fa_m, f64x4::select(mb, fb_m, f64x4::select(mc, fc_m, fd_m)));
+    f.mom = f64x4::select(ma, fa_mom, f64x4::select(mb, fb_mom, f64x4::select(mc, fc_mom, fd_mom)));
+    f.e = f64x4::select(ma, fa_e, f64x4::select(mb, fb_e, f64x4::select(mc, fc_e, fd_e)));
+    f.x = f64x4::select(ma, fa_x, f64x4::select(mb, fb_x, f64x4::select(mc, fc_x, fd_x)));
+    return f;
 }
 
 // Characteristic pressure-reservoir face (Open, Volume, Port). Interior face
@@ -542,6 +657,12 @@ PipeNetwork::PipeNetwork(const PipeNetworkDesc& desc, real h) : h_(h) {
         }
     }
     wg_face_hold_.assign(wg_faces_.size(), FaceFlux{0.0, 0.0, 0.0, 0.0});
+
+    // A9b: a default single serial group, so the serial step() path (no team
+    // set) has its pipe_groups_ / deferred_subs_ sized. The other parallel
+    // scratch is sized when a team is attached (set_step_team).
+    compute_pipe_groups(1);
+    deferred_subs_.assign(pipes_.size(), 1);
 }
 
 PipeNetwork::Reservoir PipeNetwork::ambient_reservoir() const { return ambient_; }
@@ -656,6 +777,15 @@ real PipeNetwork::total_burned_mass() const {
     return m;
 }
 
+void PipeNetwork::set_orifice_supply(int k,const GasStateDesc& supply) {
+    if(k<0 || k>=static_cast<int>(orifices_.size())) throw std::invalid_argument("orifice supply index");
+    auto& o=orifices_[static_cast<std::size_t>(k)];
+    if(supply.p_pa<=0) { o.supplied=false; return; }
+    if(!std::isfinite(supply.p_pa) || !std::isfinite(supply.t_k) || supply.t_k<=0 || supply.x_b!=0)
+        throw std::invalid_argument("orifice supply must be finite fresh gas");
+    o.supplied=true; o.supply=supply;
+}
+
 std::uint64_t PipeNetwork::fold_state_hash(std::uint64_t h) const {
     for (std::size_t c = 0; c < r_.size(); ++c) {
         fnv_fold(h, r_[c]);
@@ -667,6 +797,9 @@ std::uint64_t PipeNetwork::fold_state_hash(std::uint64_t h) const {
         fnv_fold(h, v.m);
         fnv_fold(h, v.u);
         fnv_fold(h, v.mb);
+    }
+    for(const auto& o:orifices_) if(o.supplied) {
+        fnv_fold(h,o.supply.p_pa); fnv_fold(h,o.supply.t_k);
     }
     if (!wg_.empty()) {
         h = wg_.fold_state_hash(h);
@@ -685,7 +818,8 @@ std::uint64_t PipeNetwork::fold_state_hash(std::uint64_t h) const {
 // FV<->waveguide face (ps_audio A3, pipe_network.h "Waveguide ends"). Interior
 // state in the face's outward-normal frame; returns the outward flux per unit
 // area and sets the junction's inflow for this step.
-PipeNetwork::FaceFlux PipeNetwork::waveguide_face(real rho, real un, real p, real x, real gamma, WaveguideFaceView& f) {
+PipeNetwork::FaceFlux PipeNetwork::waveguide_face(real rho, real un, real p, real x, real gamma, WaveguideFaceView& f,
+                                                   StepCounters& counters) {
     const real a_l = std::sqrt(gamma * p / rho);
     const real z = rho * a_l;
     const real y_f = f.area_m2 / z;
@@ -697,7 +831,7 @@ PipeNetwork::FaceFlux PipeNetwork::waveguide_face(real rho, real un, real p, rea
     real uf = q / f.area_m2;
     real rhof = rho + (pf - p) / (a_l * a_l);
     if (!(pf > 0.0 && rhof > 0.0)) {
-        ++wg_face_fallbacks_;
+        ++counters.wg_fallbacks;
         pf = p;
         uf = un;
         rhof = rho;
@@ -720,7 +854,14 @@ PipeNetwork::FaceFlux PipeNetwork::waveguide_face(real rho, real un, real p, rea
 // the waveguide face advance once per outer step (sub 0) and are held, the
 // port flux accumulates. Returns 1, or (check_cfl, sub 0 only) the sub-cycle
 // count needed before anything but scratch was written.
-int PipeNetwork::step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, int& fallbacks) {
+// A9: dispatch between the scalar reference and the AVX2 vectorised kernel.
+// Both are bit-identical; the kernel choice never affects state.
+int PipeNetwork::step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, StepCounters& counters) {
+    if (kernel_ == PipeKernel::Simd) return step_pipe_simd(pidx, h, sub, check_cfl, counters);
+    return step_pipe_reference(pidx, h, sub, check_cfl, counters);
+}
+
+int PipeNetwork::step_pipe_reference(std::size_t pidx, real h, int sub, bool check_cfl, StepCounters& counters) {
     const real half_h = 0.5 * h;
     const PipeRt& pr = pipes_[pidx];
     const int n = pr.n;
@@ -806,7 +947,7 @@ int PipeNetwork::step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, in
             rx2_[c] = clamp01(w_x_[c] + 0.5 * dxs + d_x);
             ps_[c] = p + d_p;
         } else {
-            ++fallbacks;
+            ++counters.fallbacks;
             l_r_[c] = rr_[c] = rho;
             l_u_[c] = ru2_[c] = u;
             l_p_[c] = rp_[c] = p;
@@ -873,7 +1014,7 @@ int PipeNetwork::step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, in
                 fn = reservoir_face(gas_, rho, un, p, x, vols_[static_cast<std::size_t>(end.index)]);
             } else if (end.kind == PipeEndDesc::Kind::Waveguide) {
                 const std::size_t wfi = static_cast<std::size_t>(pr.wg_face[s]);
-                if (sub == 0) wg_face_hold_[wfi] = waveguide_face(rho, un, p, x, w_g_[c], wg_faces_[wfi]);
+                if (sub == 0) wg_face_hold_[wfi] = waveguide_face(rho, un, p, x, w_g_[c], wg_faces_[wfi], counters);
                 const FaceFlux ff = wg_face_hold_[wfi];
                 fn.m = ff.m;
                 fn.mom = ff.mom;
@@ -903,27 +1044,7 @@ int PipeNetwork::step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, in
         const real dm = sign * h * a * f.m;   // into the pipe across this face
         const real de = sign * h * a * f.e;
         const real dxb = sign * h * a * f.x;
-        if (end.kind == PipeEndDesc::Kind::Open) {
-            exch_.ambient_mass_kg += dm;
-            exch_.ambient_energy_j += de;
-            exch_.ambient_burned_kg += dxb;
-        } else if (end.kind == PipeEndDesc::Kind::Waveguide) {
-            exch_.waveguide_mass_kg += dm;
-            exch_.waveguide_energy_j += de;
-            exch_.waveguide_burned_kg += dxb;
-        } else if (end.kind == PipeEndDesc::Kind::Port) {
-            PortRt& port = ports_[static_cast<std::size_t>(end.index)];
-            if (sub == 0) {
-                port.flux = PortFlux{dm, de, dxb};
-            } else {
-                port.flux.mass_kg += dm;
-                port.flux.energy_j += de;
-                port.flux.burned_kg += dxb;
-            }
-            exch_.port_mass_kg += dm;
-            exch_.port_energy_j += de;
-            exch_.port_burned_kg += dxb;
-        }
+        book_end_exchange(pidx, end, sub, s, dm, de, dxb);
     }
 
     // 6. Conservative update with the well-balanced area source, then wall
@@ -970,36 +1091,558 @@ int PipeNetwork::step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, in
     return 1;
 }
 
-void PipeNetwork::step() {
-    const real h = h_;
+// A9: AVX2 vectorised step_pipe. Bit-identical to step_pipe_reference: every
+// helper mirrors its scalar counterpart in the same operation order, and the
+// scalar bodies below are the reference's unchanged, for every cell or face a
+// vector group cannot cover (the two end cells and the tail). Only whole
+// 4-cell / 4-face groups are vectorised.
+int PipeNetwork::step_pipe_simd(std::size_t pidx, real h, int sub, bool check_cfl, StepCounters& counters) {
+    const real half_h = 0.5 * h;
+    const PipeRt& pr = pipes_[pidx];
+    const int n = pr.n;
+    const std::size_t c0 = static_cast<std::size_t>(pr.c0);
+    const std::size_t f0 = static_cast<std::size_t>(pr.f0);
 
-    // 0. Start-of-step reservoir views of every volume.
-    for (VolumeRt& v : vols_) refresh_reservoir(v);
-    // 0b. Waveguide (A3): mean element pressure drop at the running-mean mass
-    // flow, then this step's arriving waves (the faces below read its Norton view).
-    if (!wg_.empty()) {
-        real mdot = 0.0;
-        for (const WaveguideFaceView& f : wg_faces_) mdot += f.mdot_mean_kg_s;
-        wg_.set_mean_mass_flow(mdot);
-        wg_p_ref_ = ambient_.p + (wg_.mean_pressure_drop() - wg_.linearised_mean_drop());
-        wg_.begin_step();
+    // Scalar bodies, identical to step_pipe_reference.
+    auto prim_cell = [&](int i) {
+        const std::size_t c = c0 + static_cast<std::size_t>(i);
+        const real rho = r_[c];
+        const real u = ru_[c] / rho;
+        const real x = clamp01(rx_[c] / rho);
+        const real e = e_[c] / rho - 0.5 * u * u;
+        const real t = temp_from_e(gas_, e, x);
+        const real rm = mix_r(gas_, x);
+        const real cv = mix_cv(gas_, t, x);
+        w_r_[c] = rho;
+        w_u_[c] = u;
+        w_p_[c] = rho * rm * t;
+        w_x_[c] = x;
+        w_g_[c] = (cv + rm) / cv;
+    };
+    auto hancock_cell = [&](int i) {
+        const std::size_t c = c0 + static_cast<std::size_t>(i);
+        real dr = 0.0, du = 0.0, dp = 0.0, dxs = 0.0;
+        if (i > 0 && i < n - 1) {
+            dr = minmod(w_r_[c] - w_r_[c - 1], w_r_[c + 1] - w_r_[c]);
+            du = minmod(w_u_[c] - w_u_[c - 1], w_u_[c + 1] - w_u_[c]);
+            dp = minmod(w_p_[c] - w_p_[c - 1], w_p_[c + 1] - w_p_[c]);
+            dxs = minmod(w_x_[c] - w_x_[c - 1], w_x_[c + 1] - w_x_[c]);
+        }
+        const real rho = w_r_[c];
+        const real u = w_u_[c];
+        const real p = w_p_[c];
+        const real gp = w_g_[c] * p;
+        const real k = half_h * pr.inv_dx;
+        const real sa = half_h * u * area_src_[c];
+        const real d_r = -k * (u * dr + rho * du) - sa * rho;
+        const real d_u = -k * (u * du + dp / rho);
+        const real d_p = -k * (u * dp + gp * du) - sa * gp;
+        const real d_x = -k * (u * dxs);
+        const real lr = rho - 0.5 * dr + d_r, rrv = rho + 0.5 * dr + d_r;
+        const real lp = p - 0.5 * dp + d_p, rpv = p + 0.5 * dp + d_p;
+        if (lr > 0.0 && rrv > 0.0 && lp > 0.0 && rpv > 0.0) {
+            l_r_[c] = lr;
+            rr_[c] = rrv;
+            l_p_[c] = lp;
+            rp_[c] = rpv;
+            l_u_[c] = u - 0.5 * du + d_u;
+            ru2_[c] = u + 0.5 * du + d_u;
+            l_x_[c] = clamp01(w_x_[c] - 0.5 * dxs + d_x);
+            rx2_[c] = clamp01(w_x_[c] + 0.5 * dxs + d_x);
+            ps_[c] = p + d_p;
+        } else {
+            ++counters.fallbacks;
+            l_r_[c] = rr_[c] = rho;
+            l_u_[c] = ru2_[c] = u;
+            l_p_[c] = rp_[c] = p;
+            l_x_[c] = rx2_[c] = w_x_[c];
+            ps_[c] = p;
+        }
+    };
+    auto face_cell = [&](int i) {
+        const std::size_t cl = c0 + static_cast<std::size_t>(i - 1);
+        const std::size_t cr = cl + 1;
+        const Flux f = hllc(gas_, rr_[cl], ru2_[cl], rp_[cl], rx2_[cl], l_r_[cr], l_u_[cr], l_p_[cr], l_x_[cr]);
+        const std::size_t fi = f0 + static_cast<std::size_t>(i);
+        fm_[fi] = f.m;
+        fmom_[fi] = f.mom;
+        fe_[fi] = f.e;
+        fx_[fi] = f.x;
+    };
+    auto cons_cell = [&](int i) {
+        const std::size_t c = c0 + static_cast<std::size_t>(i);
+        const std::size_t fl = f0 + static_cast<std::size_t>(i);
+        const std::size_t fr = fl + 1;
+        const real am = af_[fl];
+        const real ap = af_[fr];
+        const real k = h * inv_vol_[c];
+        const real psrc = ps_[c];
+        r_[c] -= k * (ap * fm_[fr] - am * fm_[fl]);
+        ru_[c] -= k * (ap * (fmom_[fr] - psrc) - am * (fmom_[fl] - psrc));
+        e_[c] -= k * (ap * fe_[fr] - am * fe_[fl]);
+        rx_[c] -= k * (ap * fx_[fr] - am * fx_[fl]);
+    };
+    auto wall_cell = [&](int i) {
+        const std::size_t c = c0 + static_cast<std::size_t>(i);
+        const real rho = w_r_[c];
+        const real u = w_u_[c];
+        const real x = w_x_[c];
+        const real rm = mix_r(gas_, x);
+        const real t = w_p_[c] / (rho * rm);
+        const real d = diam_[c];
+        const real tt = t / kSutherlandT0;
+        const real mu = kSutherlandMu0 * tt * std::sqrt(tt) * (kSutherlandT0 + kSutherlandS) / (t + kSutherlandS);
+        real coef = 8.0 * mu / d;
+        const real au = std::fabs(u);
+        if (au > 0.0) {
+            const real re = rho * au * d / mu;
+            const real ct = kBlasiusHalf * rho * au / std::sqrt(std::sqrt(re));
+            if (ct > coef) coef = ct;
+        }
+        const real per_vol = 4.0 / d;
+        if (pr.wall.friction == WallFriction::LaminarBlasius) ru_[c] -= h * per_vol * coef * u;
+        if (pr.wall.heat_transfer) {
+            const real cp = mix_cv(gas_, t, x) + rm;
+            e_[c] += h * per_vol * coef * cp * (pr.wall.wall_temperature_k - t);
+        }
+    };
+
+    // 1. Primitives and gamma of every cell.
+    {
+        int i = 0;
+        for (; i + 4 <= n; i += 4) {
+            const std::size_t c = c0 + static_cast<std::size_t>(i);
+            const f64x4 rho = f64x4::loadu(r_.data() + c);
+            const f64x4 u = f64x4::loadu(ru_.data() + c) / rho;
+            const f64x4 x = clamp01_vec(f64x4::loadu(rx_.data() + c) / rho);
+            const f64x4 e = f64x4::loadu(e_.data() + c) / rho - f64x4(0.5) * u * u;
+            const f64x4 t = temp_from_e_vec(gas_, e, x);
+            const f64x4 rm = mix_r_vec(gas_, x);
+            const f64x4 cv = mix_cv_vec(gas_, t, x);
+            rho.storeu(w_r_.data() + c);
+            u.storeu(w_u_.data() + c);
+            (rho * rm * t).storeu(w_p_.data() + c);
+            x.storeu(w_x_.data() + c);
+            ((cv + rm) / cv).storeu(w_g_.data() + c);
+        }
+        for (; i < n; ++i) prim_cell(i);
     }
 
-    int fallbacks = 0;
+    // ps_audio A8b: runtime CFL guard, as in the reference. The vector scan
+    // reproduces the scalar "over" decision exactly; the (rare) over branch
+    // recomputes s_max with the reference's own scalar loop.
+    if (check_cfl) {
+        const real lim = cfl_limit_ * pr.dx / h;
+        bool over = false;
+        int j = 0;
+        for (; j + 4 <= n; j += 4) {
+            const std::size_t c = c0 + static_cast<std::size_t>(j);
+            const f64x4 room = f64x4(lim) - f64x4::loadu(w_u_.data() + c).abs();
+            const f64x4 term = f64x4::loadu(w_g_.data() + c) * f64x4::loadu(w_p_.data() + c) / f64x4::loadu(w_r_.data() + c);
+            if ((room.le(f64x4(0.0)) | term.gt(room * room)).any()) {
+                over = true;
+                break;
+            }
+        }
+        if (!over) {
+            for (; j < n; ++j) {
+                const std::size_t c = c0 + static_cast<std::size_t>(j);
+                const real au = std::fabs(w_u_[c]);
+                const real room = lim - au;
+                over = room <= 0.0 || w_g_[c] * w_p_[c] / w_r_[c] > room * room;
+                if (over) break;
+            }
+        }
+        if (over) {
+            real s_max = 0.0;
+            for (int k = 0; k < n; ++k) {
+                const std::size_t c = c0 + static_cast<std::size_t>(k);
+                const real s = std::fabs(w_u_[c]) + std::sqrt(w_g_[c] * w_p_[c] / w_r_[c]);
+                s_max = s > s_max ? s : s_max;
+            }
+            int ns = static_cast<int>(std::ceil(h * s_max / (cfl_limit_ * pr.dx)));
+            if (!(ns >= 2)) ns = 2;
+            if (ns > kMaxPipeSubcycles) ns = kMaxPipeSubcycles;
+            return ns;
+        }
+    }
+
+    // 2-3. Limited slopes (zero in the end cells) and the Hancock half step.
+    hancock_cell(0);
+    {
+        int i = 1;
+        for (; i + 4 <= n - 1; i += 4) {
+            const std::size_t c = c0 + static_cast<std::size_t>(i);
+            const f64x4 wr = f64x4::loadu(w_r_.data() + c);
+            const f64x4 wu = f64x4::loadu(w_u_.data() + c);
+            const f64x4 wp = f64x4::loadu(w_p_.data() + c);
+            const f64x4 wx = f64x4::loadu(w_x_.data() + c);
+            const f64x4 dr = minmod_vec(wr - f64x4::loadu(w_r_.data() + (c - 1)), f64x4::loadu(w_r_.data() + (c + 1)) - wr);
+            const f64x4 du = minmod_vec(wu - f64x4::loadu(w_u_.data() + (c - 1)), f64x4::loadu(w_u_.data() + (c + 1)) - wu);
+            const f64x4 dp = minmod_vec(wp - f64x4::loadu(w_p_.data() + (c - 1)), f64x4::loadu(w_p_.data() + (c + 1)) - wp);
+            const f64x4 dxs = minmod_vec(wx - f64x4::loadu(w_x_.data() + (c - 1)), f64x4::loadu(w_x_.data() + (c + 1)) - wx);
+            const f64x4 gp = f64x4::loadu(w_g_.data() + c) * wp;
+            const real k = half_h * pr.inv_dx;
+            const f64x4 sa = f64x4(half_h) * wu * f64x4::loadu(area_src_.data() + c);
+            const f64x4 d_r = f64x4(-k) * (wu * dr + wr * du) - sa * wr;
+            const f64x4 d_u = f64x4(-k) * (wu * du + dp / wr);
+            const f64x4 d_p = f64x4(-k) * (wu * dp + gp * du) - sa * gp;
+            const f64x4 d_x = f64x4(-k) * (wu * dxs);
+            const f64x4 lr = wr - f64x4(0.5) * dr + d_r;
+            const f64x4 rrv = wr + f64x4(0.5) * dr + d_r;
+            const f64x4 lp = wp - f64x4(0.5) * dp + d_p;
+            const f64x4 rpv = wp + f64x4(0.5) * dp + d_p;
+            const Mask ok = lr.gt(f64x4(0.0)) & rrv.gt(f64x4(0.0)) & lp.gt(f64x4(0.0)) & rpv.gt(f64x4(0.0));
+            const f64x4 lu = wu - f64x4(0.5) * du + d_u;
+            const f64x4 ru2v = wu + f64x4(0.5) * du + d_u;
+            const f64x4 lx = clamp01_vec(wx - f64x4(0.5) * dxs + d_x);
+            const f64x4 rx2v = clamp01_vec(wx + f64x4(0.5) * dxs + d_x);
+            const f64x4 psc = wp + d_p;
+            f64x4::select(ok, lr, wr).storeu(l_r_.data() + c);
+            f64x4::select(ok, rrv, wr).storeu(rr_.data() + c);
+            f64x4::select(ok, lu, wu).storeu(l_u_.data() + c);
+            f64x4::select(ok, ru2v, wu).storeu(ru2_.data() + c);
+            f64x4::select(ok, lp, wp).storeu(l_p_.data() + c);
+            f64x4::select(ok, rpv, wp).storeu(rp_.data() + c);
+            f64x4::select(ok, lx, wx).storeu(l_x_.data() + c);
+            f64x4::select(ok, rx2v, wx).storeu(rx2_.data() + c);
+            f64x4::select(ok, psc, wp).storeu(ps_.data() + c);
+            counters.fallbacks += 4 - ok.count();
+        }
+        for (; i < n; ++i) hancock_cell(i);
+    }
+
+    // 4. Interior faces.
+    {
+        int i = 1;
+        for (; i + 4 <= n; i += 4) {
+            const std::size_t cl = c0 + static_cast<std::size_t>(i - 1);
+            const std::size_t cr = cl + 1;
+            const Flux4 f = hllc_vec(gas_, f64x4::loadu(rr_.data() + cl), f64x4::loadu(ru2_.data() + cl),
+                                     f64x4::loadu(rp_.data() + cl), f64x4::loadu(rx2_.data() + cl),
+                                     f64x4::loadu(l_r_.data() + cr), f64x4::loadu(l_u_.data() + cr),
+                                     f64x4::loadu(l_p_.data() + cr), f64x4::loadu(l_x_.data() + cr));
+            const std::size_t fi = f0 + static_cast<std::size_t>(i);
+            f.m.storeu(fm_.data() + fi);
+            f.mom.storeu(fmom_.data() + fi);
+            f.e.storeu(fe_.data() + fi);
+            f.x.storeu(fx_.data() + fi);
+        }
+        for (; i < n; ++i) face_cell(i);
+    }
+
+    // 5. Boundary faces. Start face: interior state = left face of cell 0,
+    // outward normal -x. End face: right face of cell n-1, outward +x.
+    for (int s = 0; s < 2; ++s) {
+        const PipeEndDesc& end = (s == 0) ? pr.start : pr.end;
+        const std::size_t c = (s == 0) ? c0 : c0 + static_cast<std::size_t>(n - 1);
+        const std::size_t fi = (s == 0) ? f0 : f0 + static_cast<std::size_t>(n);
+        const real rho = (s == 0) ? l_r_[c] : rr_[c];
+        const real u = (s == 0) ? l_u_[c] : ru2_[c];
+        const real p = (s == 0) ? l_p_[c] : rp_[c];
+        const real x = (s == 0) ? l_x_[c] : rx2_[c];
+        Flux f;
+        if (end.kind == PipeEndDesc::Kind::Closed) {
+            // Reflecting wall: mirror state, keep only the pressure (momentum) flux.
+            const Flux m = (s == 0) ? hllc(gas_, rho, -u, p, x, rho, u, p, x) : hllc(gas_, rho, u, p, x, rho, -u, p, x);
+            f.mom = m.mom;
+        } else {
+            const real un = (s == 0) ? -u : u;
+            Flux fn;
+            if (end.kind == PipeEndDesc::Kind::Open) {
+                if (end.radiation) {
+                    // ps_audio A8 (F3): the boundary cell's own outgoing
+                    // small-signal wave (standard plane-wave decomposition,
+                    // the same one the FV<->WG interface uses,
+                    // pipe_network.h's own header comment / audio_plan.md
+                    // section 2.2), one-pole filtered (built above) exactly
+                    // as WaveguideNetwork's Open-node radiation. The
+                    // mismatch between the raw and filtered wave is the
+                    // radiation loss, applied as a small shift of the
+                    // reservoir pressure the exact nonlinear characteristic
+                    // solve targets.
+                    const real rho_amb = ambient_.p / (ambient_.r * ambient_.t);
+                    const real p_plus = 0.5 * ((p - ambient_.p) + rho_amb * ambient_.a * un);
+                    real& rs = (s == 0) ? rad_s_start_[pidx] : rad_s_end_[pidx];
+                    const real pole = (s == 0) ? pr.rad_p_start : pr.rad_p_end;
+                    if (sub == 0) rs = (1.0 - pole) * p_plus + pole * rs;
+                    Reservoir res = ambient_;
+                    res.p = ambient_.p + (p_plus - rs);
+                    fn = reservoir_face(gas_, rho, un, p, x, res);
+                } else {
+                    fn = reservoir_face(gas_, rho, un, p, x, ambient_);
+                }
+            } else if (end.kind == PipeEndDesc::Kind::Volume) {
+                fn = reservoir_face(gas_, rho, un, p, x, vols_[static_cast<std::size_t>(end.index)]);
+            } else if (end.kind == PipeEndDesc::Kind::Waveguide) {
+                const std::size_t wfi = static_cast<std::size_t>(pr.wg_face[s]);
+                if (sub == 0) wg_face_hold_[wfi] = waveguide_face(rho, un, p, x, w_g_[c], wg_faces_[wfi], counters);
+                const FaceFlux ff = wg_face_hold_[wfi];
+                fn.m = ff.m;
+                fn.mom = ff.mom;
+                fn.e = ff.e;
+                fn.x = ff.x;
+            } else {
+                fn = reservoir_face(gas_, rho, un, p, x, ports_[static_cast<std::size_t>(end.index)]);
+            }
+            if (s == 0) {
+                f.m = -fn.m;
+                f.mom = fn.mom;
+                f.e = -fn.e;
+                f.x = -fn.x;
+            } else {
+                f = fn;
+            }
+        }
+        fm_[fi] = f.m;
+        fmom_[fi] = f.mom;
+        fe_[fi] = f.e;
+        fx_[fi] = f.x;
+
+        // Hand the face flux to whatever sits beyond it (into the pipe = +
+        // at the start face, - at the end face).
+        const real a = af_[fi];
+        const real sign = (s == 0) ? 1.0 : -1.0;
+        const real dm = sign * h * a * f.m;   // into the pipe across this face
+        const real de = sign * h * a * f.e;
+        const real dxb = sign * h * a * f.x;
+        book_end_exchange(pidx, end, sub, s, dm, de, dxb);
+    }
+
+    // 6. Conservative update with the well-balanced area source, then wall
+    // friction and heat from the start-of-step state.
+    {
+        int i = 0;
+        for (; i + 4 <= n; i += 4) {
+            const std::size_t c = c0 + static_cast<std::size_t>(i);
+            const std::size_t fl = f0 + static_cast<std::size_t>(i);
+            const std::size_t fr = fl + 1;
+            const f64x4 am = f64x4::loadu(af_.data() + fl);
+            const f64x4 ap = f64x4::loadu(af_.data() + fr);
+            const f64x4 k = f64x4(h) * f64x4::loadu(inv_vol_.data() + c);
+            const f64x4 psrc = f64x4::loadu(ps_.data() + c);
+            (f64x4::loadu(r_.data() + c) -
+             k * (ap * f64x4::loadu(fm_.data() + fr) - am * f64x4::loadu(fm_.data() + fl)))
+                .storeu(r_.data() + c);
+            (f64x4::loadu(ru_.data() + c) -
+             k * (ap * (f64x4::loadu(fmom_.data() + fr) - psrc) - am * (f64x4::loadu(fmom_.data() + fl) - psrc)))
+                .storeu(ru_.data() + c);
+            (f64x4::loadu(e_.data() + c) -
+             k * (ap * f64x4::loadu(fe_.data() + fr) - am * f64x4::loadu(fe_.data() + fl)))
+                .storeu(e_.data() + c);
+            (f64x4::loadu(rx_.data() + c) -
+             k * (ap * f64x4::loadu(fx_.data() + fr) - am * f64x4::loadu(fx_.data() + fl)))
+                .storeu(rx_.data() + c);
+        }
+        for (; i < n; ++i) cons_cell(i);
+    }
+    if (pr.wall.friction == WallFriction::LaminarBlasius || pr.wall.heat_transfer) {
+        const f64x4 h4v(h);
+        const f64x4 tref(kSutherlandT0);
+        const f64x4 t0s(kSutherlandT0 + kSutherlandS);
+        const f64x4 s5(kSutherlandS);
+        int i = 0;
+        for (; i + 4 <= n; i += 4) {
+            const std::size_t c = c0 + static_cast<std::size_t>(i);
+            const f64x4 rho = f64x4::loadu(w_r_.data() + c);
+            const f64x4 u = f64x4::loadu(w_u_.data() + c);
+            const f64x4 x = f64x4::loadu(w_x_.data() + c);
+            const f64x4 rm = mix_r_vec(gas_, x);
+            const f64x4 t = f64x4::loadu(w_p_.data() + c) / (rho * rm);
+            const f64x4 d = f64x4::loadu(diam_.data() + c);
+            const f64x4 tt = t / tref;
+            const f64x4 mu = f64x4(kSutherlandMu0) * tt * tt.sqrt() * t0s / (t + s5);
+            f64x4 coef = f64x4(8.0) * mu / d;
+            const f64x4 au = u.abs();
+            const f64x4 re = rho * au * d / mu;
+            const f64x4 ct = f64x4(kBlasiusHalf) * rho * au / re.sqrt().sqrt();
+            coef = f64x4::select(coef.lt(ct), ct, coef);
+            const f64x4 per_vol = f64x4(4.0) / d;
+            if (pr.wall.friction == WallFriction::LaminarBlasius) {
+                (f64x4::loadu(ru_.data() + c) - h4v * per_vol * coef * u).storeu(ru_.data() + c);
+            }
+            if (pr.wall.heat_transfer) {
+                const f64x4 cp = mix_cv_vec(gas_, t, x) + rm;
+                (f64x4::loadu(e_.data() + c) + h4v * per_vol * coef * cp * (f64x4(pr.wall.wall_temperature_k) - t))
+                    .storeu(e_.data() + c);
+            }
+        }
+        for (; i < n; ++i) wall_cell(i);
+    }
+    return 1;
+}
+
+// A9b: the StepJob that runs step_pipe_group for the worker's own pipe range.
+// A nested class so it may reach PipeNetwork's private state.
+struct PipeNetwork::PipeJob final : StepJob {
+    explicit PipeJob(PipeNetwork* n) : net(n) {}
+    void run(int worker, int workers) override {
+        (void)workers;
+        const std::size_t w = static_cast<std::size_t>(worker);
+        net->step_pipe_group(worker, net->worker_counters_[w], net->worker_subcycled_[w]);
+    }
+    PipeNetwork* net;
+};
+
+// A9b: pipe `worker`'s slice of the static, cell-balanced partition. Contiguous
+// and ascending, so folding the deferred exchange in pipe order is the serial
+// order.
+void PipeNetwork::compute_pipe_groups(int nthreads) {
+    const int np = static_cast<int>(pipes_.size());
+    long total = 0;
+    for (const PipeRt& p : pipes_) total += p.n;
+    pipe_groups_.assign(static_cast<std::size_t>(nthreads), {np, np});
+    if (np == 0 || total == 0) return;
+    int begin = 0;
+    long acc = 0;
+    for (int t = 0; t < nthreads; ++t) {
+        const long target = total * static_cast<long>(t + 1) / nthreads;
+        int end = begin;
+        while (end < np && acc < target) {
+            acc += pipes_[static_cast<std::size_t>(end)].n;
+            ++end;
+        }
+        if (t == nthreads - 1) end = np;  // the last worker takes the remainder
+        pipe_groups_[static_cast<std::size_t>(t)] = {begin, end};
+        begin = end;
+    }
+}
+
+void PipeNetwork::set_step_team(StepTeam* team) {
+    team_ = team;
+    const int nthreads = team != nullptr ? team->size() : 1;
+    compute_pipe_groups(nthreads);
+    worker_counters_.assign(static_cast<std::size_t>(nthreads), StepCounters{});
+    worker_subcycled_.assign(static_cast<std::size_t>(nthreads), 0);
+    exch_slots_.assign(pipes_.size() * 2 * static_cast<std::size_t>(kMaxPipeSubcycles), EndExchange{});
+    deferred_subs_.assign(pipes_.size(), 1);
+}
+
+void PipeNetwork::set_step_threads(int threads) {
+    if (threads <= 1) {
+        owned_team_.reset();
+        set_step_team(nullptr);
+        return;
+    }
+    owned_team_ = std::make_unique<StepTeam>(threads);
+    set_step_team(owned_team_.get());
+}
+
+// A9b: one end face's flux beyond the pipe. Serial mode accumulates on exch_
+// exactly as before; parallel mode records the delta in the end's slot, to be
+// folded in serial order (pipe, sub-cycle, end) by fold_deferred_exchange().
+// The port flux is per-port (one pipe end per port), so it is written directly
+// either way; only the shared exch_ accumulators are deferred.
+void PipeNetwork::book_end_exchange(std::size_t pidx, const PipeEndDesc& end, int sub, int s, real dm, real de,
+                                    real dxb) {
+    const auto store = [&](std::uint8_t kind) {
+        EndExchange& e = exch_slots_[(pidx * 2 + static_cast<std::size_t>(s)) *
+                                         static_cast<std::size_t>(kMaxPipeSubcycles) +
+                                     static_cast<std::size_t>(sub)];
+        e.kind = kind;
+        e.m = dm;
+        e.e = de;
+        e.x = dxb;
+    };
+    switch (end.kind) {
+        case PipeEndDesc::Kind::Open:
+            if (parallel_step_) {
+                store(1);
+                return;
+            }
+            exch_.ambient_mass_kg += dm;
+            exch_.ambient_energy_j += de;
+            exch_.ambient_burned_kg += dxb;
+            return;
+        case PipeEndDesc::Kind::Waveguide:
+            if (parallel_step_) {
+                store(2);
+                return;
+            }
+            exch_.waveguide_mass_kg += dm;
+            exch_.waveguide_energy_j += de;
+            exch_.waveguide_burned_kg += dxb;
+            return;
+        case PipeEndDesc::Kind::Port: {
+            PortRt& port = ports_[static_cast<std::size_t>(end.index)];
+            if (sub == 0) {
+                port.flux = PortFlux{dm, de, dxb};
+            } else {
+                port.flux.mass_kg += dm;
+                port.flux.energy_j += de;
+                port.flux.burned_kg += dxb;
+            }
+            if (parallel_step_) {
+                store(3);
+                return;
+            }
+            exch_.port_mass_kg += dm;
+            exch_.port_energy_j += de;
+            exch_.port_burned_kg += dxb;
+            return;
+        }
+        default:
+            return;  // Closed / Volume exchange nothing here
+    }
+}
+
+void PipeNetwork::fold_deferred_exchange() {
     for (std::size_t pidx = 0; pidx < pipes_.size(); ++pidx) {
-        const int n_sub = step_pipe(pidx, h, 0, true, fallbacks);
-        if (n_sub == 1) continue;
+        const int ns = deferred_subs_[pidx];
+        for (int sub = 0; sub < ns; ++sub) {
+            for (int s = 0; s < 2; ++s) {
+                const EndExchange& e = exch_slots_[(pidx * 2 + static_cast<std::size_t>(s)) *
+                                                       static_cast<std::size_t>(kMaxPipeSubcycles) +
+                                                   static_cast<std::size_t>(sub)];
+                switch (e.kind) {
+                    case 1:
+                        exch_.ambient_mass_kg += e.m;
+                        exch_.ambient_energy_j += e.e;
+                        exch_.ambient_burned_kg += e.x;
+                        break;
+                    case 2:
+                        exch_.waveguide_mass_kg += e.m;
+                        exch_.waveguide_energy_j += e.e;
+                        exch_.waveguide_burned_kg += e.x;
+                        break;
+                    case 3:
+                        exch_.port_mass_kg += e.m;
+                        exch_.port_energy_j += e.e;
+                        exch_.port_burned_kg += e.x;
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+}
+
+// A9b: the CFL check and A8b sub-cycle loop for every pipe in worker `worker`'s
+// group. Byte-for-byte the body of the original serial step() loop, so the
+// serial path (one group, one worker) is unchanged.
+void PipeNetwork::step_pipe_group(int worker, StepCounters& counters, std::uint64_t& subcycled) {
+    const real h = h_;
+    const auto [p0, p1] = pipe_groups_[static_cast<std::size_t>(worker)];
+    for (int pi = p0; pi < p1; ++pi) {
+        const std::size_t pidx = static_cast<std::size_t>(pi);
+        const int n_sub = step_pipe(pidx, h, 0, true, counters);
+        if (n_sub == 1) {
+            deferred_subs_[pidx] = 1;
+            continue;
+        }
         // ps_audio A8b: sub-cycle this pipe n_sub times at h / n_sub (volumes,
         // ports and the waveguide stay at their start-of-step views); the end
         // faces carry the time-averaged flux into stage 7.
-        ++subcycled_pipe_steps_;
+        ++subcycled;
+        deferred_subs_[pidx] = n_sub;
         const PipeRt& pr = pipes_[pidx];
         const std::size_t fe0 = static_cast<std::size_t>(pr.f0);
         const std::size_t fe1 = fe0 + static_cast<std::size_t>(pr.n);
         const real hs = h / n_sub;
         real acc[2][4] = {};
         for (int sub = 0; sub < n_sub; ++sub) {
-            step_pipe(pidx, hs, sub, false, fallbacks);
+            step_pipe(pidx, hs, sub, false, counters);
             const std::size_t fis[2] = {fe0, fe1};
             for (int s = 0; s < 2; ++s) {
                 acc[s][0] += fm_[fis[s]];
@@ -1015,6 +1658,46 @@ void PipeNetwork::step() {
             fe_[fis[s]] = acc[s][2] / n_sub;
             fx_[fis[s]] = acc[s][3] / n_sub;
         }
+    }
+}
+
+void PipeNetwork::step() {
+    const real h = h_;
+
+    // 0. Start-of-step reservoir views of every volume.
+    for (VolumeRt& v : vols_) refresh_reservoir(v);
+    // 0b. Waveguide (A3): mean element pressure drop at the running-mean mass
+    // flow, then this step's arriving waves (the faces below read its Norton view).
+    if (!wg_.empty()) {
+        real mdot = 0.0;
+        for (const WaveguideFaceView& f : wg_faces_) mdot += f.mdot_mean_kg_s;
+        wg_.set_mean_mass_flow(mdot);
+        wg_p_ref_ = ambient_.p + (wg_.mean_pressure_drop() - wg_.linearised_mean_drop());
+        wg_.begin_step();
+    }
+
+    StepCounters counters;
+    std::uint64_t subcycled = 0;
+    if (team_ == nullptr || team_->size() <= 1) {
+        // A9b: the original serial path, byte for byte.
+        parallel_step_ = false;
+        step_pipe_group(0, counters, subcycled);
+    } else {
+        parallel_step_ = true;
+        const int nt = team_->size();
+        for (int t = 0; t < nt; ++t) {
+            worker_counters_[static_cast<std::size_t>(t)] = StepCounters{};
+            worker_subcycled_[static_cast<std::size_t>(t)] = 0;
+        }
+        PipeJob job(this);
+        team_->run(job);
+        for (int t = 0; t < nt; ++t) {
+            counters.fallbacks += worker_counters_[static_cast<std::size_t>(t)].fallbacks;
+            counters.wg_fallbacks += worker_counters_[static_cast<std::size_t>(t)].wg_fallbacks;
+            subcycled += worker_subcycled_[static_cast<std::size_t>(t)];
+        }
+        fold_deferred_exchange();
+        parallel_step_ = false;
     }
 
     if (!wg_.empty()) wg_.finish_step();
@@ -1036,12 +1719,12 @@ void PipeNetwork::step() {
     }
     for (const OrificeRt& o : orifices_) {
         VolumeRt& va = vols_[static_cast<std::size_t>(o.a)];
-        const bool amb = o.b < 0;
-        const real pb = amb ? ambient_.p : vols_[static_cast<std::size_t>(o.b)].p;
-        const real rb = amb ? ambient_.r : vols_[static_cast<std::size_t>(o.b)].r;
-        const real tb = amb ? ambient_.t : vols_[static_cast<std::size_t>(o.b)].t;
-        const real xb = amb ? ambient_.x : vols_[static_cast<std::size_t>(o.b)].x;
-        const real hb = amb ? ambient_.h_static : vols_[static_cast<std::size_t>(o.b)].h_static;
+        const bool amb = o.b < 0 || o.supplied;
+        const real pb = o.supplied ? o.supply.p_pa : amb ? ambient_.p : vols_[static_cast<std::size_t>(o.b)].p;
+        const real rb = o.supplied ? gas_.fresh.r : amb ? ambient_.r : vols_[static_cast<std::size_t>(o.b)].r;
+        const real tb = o.supplied ? o.supply.t_k : amb ? ambient_.t : vols_[static_cast<std::size_t>(o.b)].t;
+        const real xb = o.supplied ? real(0.0) : amb ? ambient_.x : vols_[static_cast<std::size_t>(o.b)].x;
+        const real hb = o.supplied ? mix_e(gas_,o.supply.t_k,real(0.0))+gas_.fresh.r*o.supply.t_k : amb ? ambient_.h_static : vols_[static_cast<std::size_t>(o.b)].h_static;
         const OrificeFlow of = orifice_flow(psi_, o.cd_area, va.p, va.r, va.t, va.x, pb, rb, tb, xb);
         const real dm = h * of.mdot;  // a -> b
         const real de = dm * (of.from_1 ? va.h_static : hb);
@@ -1073,7 +1756,9 @@ void PipeNetwork::step() {
         exch_.source_burned_kg += dxb;
     }
 
-    fallback_count_ = fallbacks;
+    fallback_count_ = counters.fallbacks;
+    wg_face_fallbacks_ += counters.wg_fallbacks;
+    subcycled_pipe_steps_ += subcycled;
     ++steps_;
 }
 

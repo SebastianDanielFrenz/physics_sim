@@ -33,7 +33,9 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
     // PHYS-033 P4 I7b C12: mean-value engine sound state (0 from the graph
     // engine, whose PreSolveResult leaves these at default).
     ess.throttle_position = pre.throttle_position;
+    ess.p_charge_pa=pre.p_charge_pa; ess.t_charge_k=pre.t_charge_k;
     ess.p_intake_pa = pre.p_intake_pa;
+    ess.turbo_rpm=pre.turbo_rpm; ess.boost_bar=pre.boost_bar; ess.p_exhaust_pa=pre.p_exhaust_pa;
     ess.lambda = pre.lambda;
     ess.spark_advance_deg = pre.spark_advance_deg;
     ess.exhaust_mass_flow_kg_s = pre.exhaust_mass_flow_kg_s;

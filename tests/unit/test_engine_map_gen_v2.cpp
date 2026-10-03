@@ -119,6 +119,57 @@ TEST_CASE("A5 V7: lumped engines keep generator v1 bit-identical", "[drivetrain]
     }
 }
 
+// The generator must work for any piston engine, not just the cams it was
+// tuned on. Long, high-overlap cams on the hyper V8 (32 deg overlap) used to
+// fail the 950 rpm / 25 kPa idle node: exhaust pushed back into the intake
+// biased the throttle feed-forward, the plenum settled ~5 % high ("not
+// settled"): with the throttle fully closed the plenum still sat at ~28 kPa.
+// Such a node is generated with the plenum held at the node pressure; points
+// that settle normally stay bit-identical (G1's pin).
+TEST_CASE("A5 G6: long high-overlap cams on a twin-turbo V8 generate the whole grid", "[drivetrain][cycle][pipe]") {
+    jobs::JobSystem pool(10);
+    io::EngineMapOptions opt;
+    opt.quality = MapQuality::Preview;
+    opt.pool = &pool;
+    // The shipped file has no maps block, so loading it generates them (Preview,
+    // on the pool) with the shipped low-overlap cams.
+    const auto loaded = io::load_engine_json(src("data/engines/hyper_v8_one1_audio.json"), opt);
+    const auto& e = std::get<SimulatedEngineDesc>(loaded);
+    REQUIRE(e.cycle.has_value());
+    CycleModelDesc d = *e.cycle;
+    d.grid_rpm = {950.0, 3000.0, 6000.0, 8250.0};  // the coarse grid this case was measured on
+    REQUIRE(d.intake.has_value());
+    REQUIRE(d.intake->compressor_supply);  // the engine has a turbo
+    // Smooth lobes: intake 270 deg / 11.5 mm opening 20 deg BTDC, exhaust
+    // 274 deg / 11 mm opening 78 deg BBDC -> 32 deg overlap.
+    const real xs[] = {0, 0.08, 0.17, 0.25, 0.33, 0.42, 0.5, 0.58, 0.67, 0.75, 0.83, 0.92, 1.0};
+    const real ys[] = {0, 0.10, 0.40, 0.72, 0.92, 0.99, 1.0, 0.99, 0.92, 0.72, 0.40, 0.10, 0};
+    const auto lobe = [&](real dur, real lift_m, real phase) {
+        ValveLiftProfile v;
+        for (std::size_t i = 0; i < std::size(xs); ++i) {
+            v.lift_m_vs_deg.x.push_back(xs[i] * dur);
+            v.lift_m_vs_deg.y.push_back(ys[i] * lift_m);
+        }
+        v.phase_ref_deg = phase;
+        return v;
+    };
+    d.intake_lift = lobe(270.0, 0.0115, -20.0);
+    d.exhaust_lift = lobe(274.0, 0.011, 462.0);
+    const auto t0 = std::chrono::steady_clock::now();
+    EngineMapsPtr m;
+    REQUIRE_NOTHROW(m = generate_engine_maps(d, e.fuels.front(), MapQuality::Preview, &pool));
+    const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const std::size_t np = m->maps.ve.y.size();
+    std::printf("G6 hyper V8, 32 deg overlap: %zu x %zu grid generated in %.2f s (Preview, 10 workers); VE at 950 rpm / %.0f kPa %.3f\n",
+                m->maps.ve.x.size(), np, sec, m->maps.ve.y[0] / 1000.0, m->maps.ve.values[0]);
+    std::printf("G6 held-plenum nodes (below the closed-throttle floor): %d\n", m->held_plenum_points);
+    CHECK(m->held_plenum_points > 0);  // the 950 rpm / 25 kPa node is below the floor
+    for (real v : m->maps.ve.values) {
+        CHECK(v > 0.0);
+        CHECK(v < 1.3);
+    }
+}
+
 TEST_CASE("A5 G1: a pipe engine generates through CycleEngine as v2, run-to-run identical", "[drivetrain][cycle][pipe]") {
     jobs::JobSystem pool(10);
     const CycleModelDesc d = ps::test::make_pipe_i4_cycle_desc();
@@ -174,6 +225,36 @@ TEST_CASE("A5 G3: a grid node the fully open throttle cannot reach fails the gen
     task.run_point(0); // the lowest failing index is what finish() reports
     REQUIRE_THROWS_WITH(task.finish(), ContainsSubstring("engine map generator: plenum target 106000") &&
                                            ContainsSubstring("unreachable at 6000"));
+}
+
+TEST_CASE("G5: a compressor-supplied engine generates boosted grid nodes; the flag moves the key",
+          "[drivetrain][cycle][pipe]") {
+    jobs::JobSystem pool(10);
+    CycleModelDesc boosted = ps::test::make_pipe_i4_cycle_desc();
+    boosted.grid_p_im = {30000.0, 60000.0, 90000.0, 150000.0, 200000.0};
+    boosted.intake->compressor_supply = true;
+    CycleModelDesc na = boosted;
+    na.intake->compressor_supply = false;
+    // Without the flag the same grid is unreachable (G3); with it, it generates.
+    CHECK(engine_map_cache_key(boosted, fx::gasoline(), MapQuality::Preview) !=
+          engine_map_cache_key(na, fx::gasoline(), MapQuality::Preview));
+    const EngineMapsPtr b = generate_engine_maps(boosted, fx::gasoline(), MapQuality::Preview, &pool);
+    const std::size_t np = b->maps.ve.y.size();
+    REQUIRE(np == 5);
+    for (std::size_t ir = 0; ir < b->maps.ve.x.size(); ++ir) {
+        const real* ve = &b->maps.ve.values[ir * np];
+        std::printf("G5 VE(%6.0f rpm): 30 %.4f 60 %.4f 90 %.4f 150 %.4f 200 %.4f kPa; pmep_excess 90 %.0f 200 %.0f Pa\n",
+                    b->maps.ve.x[ir], ve[0], ve[1], ve[2], ve[3], ve[4], b->maps.pmep_excess_pa.values[ir * np + 2],
+                    b->maps.pmep_excess_pa.values[ir * np + 4]);
+        // Boost keeps VE in the naturally aspirated range (a denser charge,
+        // not better breathing) and the trapped air rises with the pressure.
+        for (std::size_t ip = 0; ip < np; ++ip) {
+            CHECK(ve[ip] > 0.5);
+            CHECK(ve[ip] < 1.3);
+        }
+        CHECK(ve[3] * 150000.0 > ve[2] * 90000.0 * 1.4);
+        CHECK(ve[4] * 200000.0 > ve[3] * 150000.0 * 1.2);
+    }
 }
 
 TEST_CASE("A5 G4: the v2 key and cache stamp are separate from v1", "[drivetrain][cycle][pipe][io]") {

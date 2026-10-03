@@ -70,6 +70,8 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
 // Throws std::runtime_error on a malformed/unreadable file, exactly the
 // messages read_engine_fields (vehicle_io.cpp) already gives for the same
 // content reached through a vehicle file.
+drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path, const std::string& cache_dir = {});
+
 drivetrain::ComponentParams load_engine_json(const std::string& path, const EngineMapOptions& options = EngineMapOptions{},
                                               const std::string* installation_override_path = nullptr);
 

@@ -71,6 +71,7 @@ public:
 
     // Starts/stops the Runner's own render thread. Safe to call start()
     // more than once (Runner::start() is a no-op if already running).
+    void set_audio_bank(ps_audio::AudioBankPtr bank) { voice_.set_audio_bank(std::move(bank)); }
     void start() { runner_.start(); }
     void stop() { runner_.stop(); }
 

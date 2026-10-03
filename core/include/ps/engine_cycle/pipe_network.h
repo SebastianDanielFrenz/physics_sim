@@ -103,12 +103,16 @@
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/engine_cycle/gas.h"
 #include "ps/engine_cycle/pipe_network_types.h"
+#include "ps/engine_cycle/step_team.h"
 #include "ps/engine_cycle/valve_flow.h"
 #include "ps/engine_cycle/waveguide_network.h"
+#include "ps/math/simd.h"
 #include "ps/types.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ps::engine_cycle {
@@ -140,6 +144,11 @@ struct PipeEndDesc {
 };
 
 enum class WallFriction : std::uint8_t { None, LaminarBlasius };
+
+// A9: which step_pipe implementation runs. Reference is the original scalar
+// code (kept byte for byte as the bit-identical reference), Simd the AVX2
+// vectorised path. The two must agree bit for bit; the choice is not hashed.
+enum class PipeKernel : std::uint8_t { Reference, Simd };
 
 struct PipeWallDesc {
     WallFriction friction = WallFriction::LaminarBlasius;
@@ -257,6 +266,24 @@ public:
     // One explicit step of h. Allocation-free.
     void step();
 
+    // A9b: run the pipe loop on a shared worker team (non-owning; nullptr =
+    // the serial path, which is exactly the code before A9b existed). The team
+    // must outlive the network. Never affects the state: for every thread count
+    // the per-pipe arithmetic is unchanged and the few shared accumulators are
+    // folded in serial order after the barrier.
+    void set_step_team(StepTeam* team);
+    // Own a team of `threads` (>= 1; <= 1 selects the serial path). For a
+    // standalone PipeNetwork (tests, bench); EngineCore instead owns one team
+    // shared with its cylinders (set_step_team).
+    void set_step_threads(int threads);
+    [[nodiscard]] int step_threads() const { return team_ ? team_->size() : 1; }
+
+    // A9: select the step_pipe implementation. Default Simd on an AVX2 build
+    // (PS_SIMD_AVX2, ps/math/simd.h), Reference otherwise; both are
+    // bit-identical. Never part of fold_state_hash.
+    void set_kernel(PipeKernel k) { kernel_ = k; }
+    [[nodiscard]] PipeKernel kernel() const { return kernel_; }
+
     [[nodiscard]] real h() const { return h_; }
     [[nodiscard]] std::uint64_t steps() const { return steps_; }
     [[nodiscard]] const GasModel& gas() const { return gas_; }
@@ -309,6 +336,9 @@ public:
     // Change an orifice's Cd*A between steps. Throws std::invalid_argument
     // ("PipeNetwork: ...") unless 0 < cd_area_m2 <= orifice_max_cd_area(k).
     void set_orifice_cd_area(int k, real cd_area_m2);
+    // External compressor supply at the upstream side; 0 pressure clears it.
+    // Its exchange is booked as an external reservoir, not a network volume.
+    void set_orifice_supply(int k,const GasStateDesc& supply);
 
     // --- Totals, determinism -------------------------------------------------
     [[nodiscard]] real total_mass() const;         // pipes + network volumes (not ports)
@@ -371,6 +401,8 @@ private:
         int a = -1, b = -1;
         real cd_area = 0.0;
         real max_cd_area = 0.0;  // stability bound at h (build-time check)
+        bool supplied = false;
+        GasStateDesc supply{};
     };
 
     // Reservoir view used by the boundary-face solver.
@@ -381,8 +413,40 @@ private:
     struct FaceFlux {
         real m, mom, e, x;  // outward flux per unit area
     };
-    FaceFlux waveguide_face(real rho, real un, real p, real x, real gamma, WaveguideFaceView& f);
-    int step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, int& fallbacks);
+    // A9b: per-worker diagnostics, summed after the barrier. Fallbacks and
+    // waveguide-face fallbacks are both plain counts, so the (integer) sum
+    // order cannot change the result.
+    struct StepCounters {
+        int fallbacks = 0;
+        std::uint64_t wg_fallbacks = 0;
+    };
+    // A9b: one end face's exchange delta recorded by the owning worker in a
+    // parallel step, folded into exch_ in serial pipe/sub-cycle/end order after
+    // the barrier (reproducing the serial floating-point sum order bit for
+    // bit). kMaxPipeSubcycles sub-cycles per end, written once each.
+    struct EndExchange {
+        real m = 0.0, e = 0.0, x = 0.0;
+        std::uint8_t kind = 0;  // 0 none, 1 ambient, 2 waveguide, 3 port
+    };
+    struct PipeJob;  // A9b: StepJob over pipe_groups_ (pipe_network.cpp)
+
+    FaceFlux waveguide_face(real rho, real un, real p, real x, real gamma, WaveguideFaceView& f,
+                            StepCounters& counters);
+    int step_pipe(std::size_t pidx, real h, int sub, bool check_cfl, StepCounters& counters);
+    // A9: the scalar reference (the original step_pipe body) and the vectorised
+    // implementation step_pipe() dispatches between.
+    int step_pipe_reference(std::size_t pidx, real h, int sub, bool check_cfl, StepCounters& counters);
+    int step_pipe_simd(std::size_t pidx, real h, int sub, bool check_cfl, StepCounters& counters);
+
+    // A9b: step every pipe in worker `worker`'s group of pipe_groups_ (the CFL
+    // check and the A8b sub-cycle loop of the original step() loop). Runs
+    // identically for 1 or N workers.
+    void step_pipe_group(int worker, StepCounters& counters, std::uint64_t& subcycled);
+    // A9b: hand one end face's flux to whatever sits beyond it. Serial mode
+    // adds to exch_ directly; parallel mode stores the delta in the end's slot.
+    void book_end_exchange(std::size_t pidx, const PipeEndDesc& end, int sub, int s, real dm, real de, real dxb);
+    void fold_deferred_exchange();
+    void compute_pipe_groups(int nthreads);
 
     void refresh_reservoir(VolumeRt& v) const;
     void refresh_port(PortRt& p) const;
@@ -409,6 +473,8 @@ private:
     real cfl_limit_ = kDefaultPipeCflLimit;
     std::uint64_t subcycled_pipe_steps_ = 0;
     std::vector<FaceFlux> wg_face_hold_;
+    // A9: the step_pipe implementation this network runs (set_kernel above).
+    PipeKernel kernel_ = simd::has_avx2_backend() ? PipeKernel::Simd : PipeKernel::Reference;
     // ps_audio A8: Open-end radiation filter state (one entry per pipe,
     // start/end; 0 and unused unless that end's PipeEndDesc::radiation is
     // true). has_radiation_ gates fold_state_hash so a network with no
@@ -416,6 +482,19 @@ private:
     std::vector<real> rad_s_start_;
     std::vector<real> rad_s_end_;
     bool has_radiation_ = false;
+
+    // A9b: the worker team (borrowed via set_step_team, or owned by
+    // set_step_threads), the static pipe partition, and the per-worker
+    // diagnostics / deferred exchange slots of a parallel step. All empty /
+    // inert until a team is set, so the default path is the original serial one.
+    StepTeam* team_ = nullptr;
+    std::unique_ptr<StepTeam> owned_team_;
+    bool parallel_step_ = false;
+    std::vector<std::pair<int, int>> pipe_groups_;
+    std::vector<StepCounters> worker_counters_;
+    std::vector<std::uint64_t> worker_subcycled_;
+    std::vector<EndExchange> exch_slots_;
+    std::vector<int> deferred_subs_;
 
     // Cells (structure of arrays): conserved densities per unit volume.
     std::vector<real> r_, ru_, e_, rx_;

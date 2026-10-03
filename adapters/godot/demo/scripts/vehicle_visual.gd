@@ -121,6 +121,13 @@ func _load_model() -> void:
 	_load_ok = true
 	_eye_node = _model_root.find_child("socket_driver_eye", true, false) as Node3D
 	_matte_inside_of_body_shell(_model_root)
+	if model_absolute_path.get_file() == "car_hyper.glb":
+		var cluster := Node3D.new()
+		cluster.name = "LiveInstruments"
+		cluster.set_script(load("res://scripts/hyper_live_cluster.gd"))
+		cluster.set("simulation", _simulation)
+		cluster.set("vehicle_name", vehicle_name)
+		_model_root.add_child(cluster)
 
 # Cockpit view fix (owner 2026-09-29, "the windows are floating"): the art
 # is built to be seen from outside. From the driver's eye (a) single-sided

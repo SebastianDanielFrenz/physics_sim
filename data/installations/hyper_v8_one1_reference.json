@@ -1,6 +1,6 @@
 {
   "format": "physics_sim.installation/1",
-  "source": "[AS] assumed compact mid-engine exhaust for offline One:1-inspired listening. Shared merge and loss/catalyst elements are surrogates, not a measured twin-turbo installation or a turbine model. Two outlets are authored hypercar geometry.",
+  "source": "[AS] assumed compact mid-engine exhaust for offline One:1-inspired listening. Shared merge and loss/catalyst elements are surrogates, not a measured twin-turbo installation or a turbine model. Two outlets are authored hypercar geometry. 2026-10-02: diameters enlarged for ~1 kg/s at boost: pipe 115 mm (was 85), catalyst 160 (120), expansion chamber 200 (150), tailpipes 2x80 (2x60).",
   "intake": {
     "airbox_m3": 0.012,
     "snorkel": {
@@ -18,18 +18,18 @@
       {
         "type": "pipe",
         "length_m": 0.25,
-        "d_m": 0.085
+        "d_m": 0.115
       },
       {
         "type": "catalyst",
         "length_m": 0.18,
-        "d_m": 0.12,
+        "d_m": 0.16,
         "k_loss": 2.0
       },
       {
         "type": "expansion_chamber",
         "length_m": 0.3,
-        "d_m": 0.15
+        "d_m": 0.2
       },
       {
         "type": "branch",
@@ -38,7 +38,7 @@
             {
               "type": "pipe",
               "length_m": 0.4,
-              "d_m": 0.06
+              "d_m": 0.08
             },
             {
               "type": "outlet",
@@ -53,7 +53,7 @@
             {
               "type": "pipe",
               "length_m": 0.4,
-              "d_m": 0.06
+              "d_m": 0.08
             },
             {
               "type": "outlet",

@@ -23,6 +23,7 @@
 // the output depends only on the input script and the seed, not on how the
 // caller splits render() calls. Allocation-free after construction.
 #pragma once
+#include "ps_audio/audio_bank.h"
 
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/types.h"
@@ -118,6 +119,10 @@ public:
     [[nodiscard]] real sample_rate_hz() const { return fs_; }
     [[nodiscard]] const StabilityProbeResult& stability() const { return probe_; }
 
+    // Called on a preparation/control thread; retains old banks until teardown
+    // so a crossfade cannot free a large sample array on the audio thread.
+    void set_audio_bank(AudioBankPtr bank);
+
     // Diagnostics (consumer thread).
     [[nodiscard]] const LiveEngine& engine() const { return engine_; }
     [[nodiscard]] const TimeMap& time_map() const { return tm_; }
@@ -147,6 +152,11 @@ private:
     };
     std::array<FlowNoiseState, kLiveMaxSources> flow_noise_{};
 
+    std::atomic<AudioBankPtr> requested_bank_;
+    AudioBankPtr active_bank_, previous_bank_;
+    std::vector<AudioBankPtr> retained_banks_;
+    BankPlayback bank_playback_, previous_playback_;
+    real bank_fade_ = 1.0, bank_weight_ = 0.0;
     VoiceSettings s_;
     StabilityProbeResult probe_;
     LiveEngine engine_;

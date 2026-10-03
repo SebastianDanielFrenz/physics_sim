@@ -1,3 +1,7 @@
+#include "ps/drivetrain/turbo_maps.h"
+#include "ps/math/transcendental.h"
+#include <cstring>
+#include <sstream>
 #include "ps/io/vehicle_io.h"
 
 #include "../engine_cycle/map_cache.h"
@@ -1714,6 +1718,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
     }
 
     SimulatedEngineDesc e;
+    if (j.contains("default_turbo_configuration")) {
+        const auto cfg_path=resolve_path(engine_dir,j.at("default_turbo_configuration").get<std::string>());
+        e.turbo_pair=load_turbo_configuration_json(cfg_path,map_options ? map_options->cache_dir : std::string{});
+    }
 
     // --- architecture + geometry -------------------------------------------
     if (!j.contains("architecture") || !j.at("architecture").is_string()) {
@@ -2101,6 +2109,9 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                 installation_override_path != nullptr ? *installation_override_path : e.cycle->default_installation_path;
             e.cycle->installation = load_installation_json(ip);
             e.cycle->installation_path = ip;
+            // A turbo feeds the throttle from its compressor; the generator's
+            // grid nodes are then supplied, not drawn through the airbox.
+            e.cycle->intake->compressor_supply = e.turbo_pair.has_value();
         }
         const bool complete = have_ve && have_eta_i && have_f_lambda && have_eta_spark && have_theta_mbt && have_friction &&
                               e.maps.has_pmep_excess;
@@ -2324,6 +2335,91 @@ std::string component_ref_dir(const json& cj, const std::string& base_dir) {
 }
 
 } // namespace
+
+drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path, const std::string& cache_dir) {
+    const json cfg=read_json_file(path);
+    require_format(cfg,"turbo_configuration",1,path);
+    const int count=require_positive_int(cfg,"count",path);
+    if (count>8) throw std::runtime_error(path+": turbo count must be <= 8");
+    const auto hw_path=resolve_path(std::filesystem::path(path).parent_path().string(),cfg.at("turbo").get<std::string>());
+    const auto hw=read_json_file(hw_path);
+    require_format(hw,"turbo",1,hw_path);
+    drivetrain::TurboPairDesc t;
+    t.rotor_inertia_kgm2=require_positive(hw,"rotor_inertia_kgm2",hw_path)*count;
+    t.reference_rpm=require_positive(hw,"reference_rpm",hw_path);
+    // Pressures in turbo files are bar (owner rule 2026-10-02: files and
+    // readouts in bar); the desc stays SI. The old Pa keys are rejected by name.
+    if(hw.contains("reference_head_pa")) throw std::runtime_error(hw_path+": 'reference_head_pa' was replaced by 'reference_head_bar' (bar)");
+    t.reference_head_pa=require_positive(hw,"reference_head_bar",hw_path)*real(1e5);
+    t.max_mass_flow_kg_s=require_positive(hw,"max_mass_flow_kg_s",hw_path)*count;
+    t.compressor_efficiency=require_positive(hw,"compressor_efficiency",hw_path);
+    t.turbine_efficiency=require_positive(hw,"turbine_efficiency",hw_path);
+    t.turbine_area_m2=require_positive(hw,"turbine_area_m2",hw_path)*count;
+    t.shaft_loss_w_at_reference=require_positive(hw,"shaft_loss_w_at_reference",hw_path)*count;
+    if(cfg.contains("target_boost_pa")) throw std::runtime_error(path+": 'target_boost_pa' was replaced by 'target_boost_bar' (gauge, bar)");
+    t.target_boost_pa=require_positive(cfg,"target_boost_bar",path)*real(1e5);
+    t.intercooler_effectiveness=require_positive(cfg,"intercooler_effectiveness",path);
+    if(t.compressor_efficiency>1 || t.turbine_efficiency>1 || t.intercooler_effectiveness>1)
+        throw std::runtime_error(path+": turbo efficiencies must be <= 1");
+    if(cfg.contains("boost_control")) {
+        const json& bc=cfg.at("boost_control");
+        if(!bc.is_object()) throw std::runtime_error(path+": 'boost_control' must be an object");
+        const std::string bctx=path+": boost_control";
+        if(bc.contains("kp")) t.wastegate_kp=require_positive(bc,"kp",bctx);
+        if(bc.contains("ki_per_s")) t.wastegate_ki_per_s=require_positive(bc,"ki_per_s",bctx);
+        if(bc.contains("kd_s")) { t.wastegate_kd_s=require_number(bc,"kd_s",bctx); if(t.wastegate_kd_s<0) throw std::runtime_error(bctx+": 'kd_s' must be >= 0"); }
+        if(bc.contains("actuator_tau_s")) t.wastegate_actuator_tau_s=require_positive(bc,"actuator_tau_s",bctx);
+    }
+    // Versioned parameter key; cache is derived data, never an engine input.
+    std::uint64_t key=14695981039346656037ULL;
+    const real parameters[]={real(1.0),t.reference_head_pa,t.rotor_inertia_kgm2,t.reference_rpm,t.max_mass_flow_kg_s,
+        t.compressor_efficiency,t.turbine_efficiency,t.turbine_area_m2,t.target_boost_pa,t.intercooler_effectiveness,t.shaft_loss_w_at_reference,
+        t.wastegate_kp,t.wastegate_ki_per_s,t.wastegate_kd_s,t.wastegate_actuator_tau_s};
+    for(real v:parameters) { unsigned char bytes[sizeof(v)]; std::memcpy(bytes,&v,sizeof(v));
+        for(auto b:bytes) { key^=b; key*=1099511628211ULL; } }
+    auto maps=std::make_shared<drivetrain::TurboPerformanceMaps>();
+    std::filesystem::path cached;
+    if(!cache_dir.empty()) { std::ostringstream hex; hex<<std::hex<<key;
+        cached=std::filesystem::path(cache_dir)/"turbo"/(hex.str()+".json"); }
+    bool hit=false;
+    if(!cached.empty()) {
+        try {
+            const auto cj=read_json_file(cached.string());
+            if(cj.at("key").get<std::uint64_t>()==key && cj.at("version").get<int>()==1) {
+                maps->head_pa.x=cj.at("speed").get<std::vector<real>>();
+                maps->head_pa.y=cj.at("flow").get<std::vector<real>>();
+                maps->head_pa.values=cj.at("head").get<std::vector<real>>();
+                maps->compressor_temperature_ratio.x=cj.at("pr").get<std::vector<real>>();
+                maps->compressor_temperature_ratio.y=cj.at("temperature_ratio").get<std::vector<real>>();
+                // Compare to the authored generator below before accepting.
+                hit=maps->head_pa.x.size()==61 && maps->head_pa.y.size()==49 && maps->head_pa.values.size()==61*49 &&
+                    maps->compressor_temperature_ratio.x.size()==91 && maps->compressor_temperature_ratio.y.size()==91;
+            }
+        } catch(...) { hit=false; }
+    }
+    drivetrain::TurboPerformanceMaps generated;
+    for(int i=0;i<=60;++i) generated.head_pa.x.push_back(real(i)/real(40.0));
+    for(int i=0;i<=48;++i) generated.head_pa.y.push_back(real(i)/real(40.0));
+    for(real speed:generated.head_pa.x) for(real flow:generated.head_pa.y)
+        generated.head_pa.values.push_back(t.reference_head_pa*speed*speed*std::max(real(0.0),real(1.0)-flow*flow));
+    for(int i=0;i<=90;++i) { const real pr=real(1.0)+real(i)/real(10.0);
+        generated.compressor_temperature_ratio.x.push_back(pr);
+        generated.compressor_temperature_ratio.y.push_back(real(1.0)+(ps::math::pow(pr,real(2.0/7.0))-real(1.0))/t.compressor_efficiency); }
+    hit=hit && maps->head_pa.x==generated.head_pa.x && maps->head_pa.y==generated.head_pa.y && maps->head_pa.values==generated.head_pa.values &&
+        maps->compressor_temperature_ratio.x==generated.compressor_temperature_ratio.x && maps->compressor_temperature_ratio.y==generated.compressor_temperature_ratio.y;
+    if(!hit) {
+        *maps=std::move(generated);
+        if(!cached.empty()) { try {
+            std::filesystem::create_directories(cached.parent_path());
+            json cj={{"version",1},{"key",key},{"speed",maps->head_pa.x},{"flow",maps->head_pa.y},{"head",maps->head_pa.values},
+                {"pr",maps->compressor_temperature_ratio.x},{"temperature_ratio",maps->compressor_temperature_ratio.y}};
+            std::ofstream out(cached); out<<cj.dump();
+        } catch(...) { /* An unwritable cache does not prevent driving. */ } }
+    }
+    maps->content_hash=key;
+    t.maps=std::move(maps);
+    return t;
+}
 
 vehicle::TyreDesc load_tyre_json(const std::string& path) {
     const json j = read_json_file(path);

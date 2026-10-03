@@ -1,0 +1,155 @@
+extends Camera3D
+# adapters/godot/demo/scripts/chase_cam.gd — PLAN.md M1 step 7: "a chase
+# camera that works at 50 km from the origin (origin rebasing already
+# exists) and does not jitter".
+#
+# Follows the vehicle chassis's OWN Transform3D (already race-free/origin-
+# relative via PsSimulation.get_body_transform - ps_simulation.h's file
+# comment), smoothed with an exponential lag so small physics-tick jitter
+# doesn't show, then rebases itself through PsSimulation.rebase_focus every
+# frame exactly like free_cam.gd - this IS the origin-rebasing loop PLAN.md
+# P2 asks for: once this camera (not the chassis - the camera's own Godot
+# position) drifts past OriginRebase's threshold, the origin snaps to it and
+# rebase_focus's return value is `position` re-expressed in the new frame.
+# Because the camera always stays within follow_distance_m of the chassis,
+# and that is far under the 500 m rebase threshold, the origin effectively
+# follows the car around the whole 100x100 km world with no jitter at any
+# distance from the world's own (0,0,0) - PROVIDED every piece of this
+# script's own persistent Godot-space state is shifted by the same delta
+# rebase_focus applied to `position`, not just `position` itself. Below,
+# `_smoothed_pos` gets that same shift right after the rebase_focus call.
+# It didn't always: an earlier version left `_smoothed_pos` in the OLD
+# frame, so the very next frame's lerp target (`desired_pos`, freshly
+# re-derived from the chassis's own transform and therefore already correct
+# in the NEW frame) was up to ~threshold metres away from where
+# `_smoothed_pos` still thought the camera was - visibly "the camera swings
+# around as if the car had teleported", then drags back over about a second
+# as the lerp catches up. Owner-reported live-demo bug, happening every
+# ~500 m of driving; see this fix's commit for the smoke-test check that
+# catches a regression of it.
+
+@export var simulation_path: NodePath
+@export var chassis_body_name: String = ""
+@export var follow_distance_m: float = 7.0
+@export var follow_height_m: float = 2.5
+@export var look_height_m: float = 1.0
+@export var position_lag: float = 6.0 # higher = snappier
+@export var rotation_lag: float = 4.0
+# Right-stick look-around: the stick's POSITION sets the orbit angle (not a
+# rate). The camera looks the way the stick points - up = normal chase view,
+# right = look right, down = look back - scaled by deflection past the
+# deadzone, so releasing the stick returns to the chase view. Pure camera
+# presentation, deliberately not a PsInputMap channel (nothing in the sim
+# reads it).
+@export var orbit_deadzone: float = 0.2
+@export var orbit_lag: float = 14.0 # higher = snappier; <= 0 = no smoothing
+
+var _simulation: Node
+var _smoothed_pos: Vector3 = Vector3.ZERO
+var _smoothed_basis: Basis = Basis.IDENTITY
+var _initialized: bool = false
+var _orbit_yaw: float = 0.0 # radians, + = looking right of the car's heading
+# Godot-space position of the sim's absolute origin as of this camera's
+# previous frame - see free_cam.gd's _follow_origin_shift.
+var _last_origin_godot: Vector3 = Vector3.ZERO
+
+func _target_orbit_yaw() -> float:
+	var pads := Input.get_connected_joypads()
+	if pads.is_empty():
+		return 0.0
+	# Godot's stick Y is +down, so "up" is -Y.
+	var stick := Vector2(Input.get_joy_axis(pads[0], JOY_AXIS_RIGHT_X),
+			-Input.get_joy_axis(pads[0], JOY_AXIS_RIGHT_Y))
+	var mag: float = min(stick.length(), 1.0)
+	if mag <= orbit_deadzone:
+		return 0.0
+	# Continuous everywhere: weight grows from 0 at the deadzone to 1 at full
+	# deflection, and +-PI (straight down) is the same view either way.
+	var weight: float = smoothstep(orbit_deadzone, 1.0, mag)
+	return atan2(stick.x, stick.y) * weight
+
+func _ready() -> void:
+	# Run BEFORE every other node that reads a pose this frame (PsBodyNode3D,
+	# terrain_visual.gd, vehicle_visual.gd, main.gd's grid - all default or
+	# higher priority): rebase_focus below may move the shared floating
+	# origin, and anything that already placed itself this frame with the
+	# OLD origin is then drawn up to the rebase threshold (500 m) away from
+	# this camera for exactly one frame - the owner-reported "car bugs back
+	# and bounces back" glitch, measured as a 500 m chassis/camera desync on
+	# every rebase frame (once per ~500 m driven). Camera-first means every
+	# later reader in the frame sees the post-rebase origin.
+	set_process_priority(-1000)
+	if simulation_path != NodePath():
+		_simulation = get_node_or_null(simulation_path)
+
+func _process(delta: float) -> void:
+	var t0 := Time.get_ticks_usec()
+	if _simulation == null or chassis_body_name == "":
+		return
+
+	# Follow an origin shift made by someone else (the free camera, while
+	# it is the current one) so _smoothed_pos stays in the current frame.
+	var origin_now: Vector3 = _simulation.get_world_origin_godot_position()
+	if _initialized:
+		_smoothed_pos += origin_now - _last_origin_godot
+
+	var chassis_xform: Transform3D = _simulation.get_body_transform(chassis_body_name)
+	var chassis_pos: Vector3 = chassis_xform.origin
+	var chassis_basis: Basis = chassis_xform.basis
+
+	# Desired camera position: behind and above the chassis. NOTE:
+	# chassis_basis's columns are NOT Godot's usual node-local convention
+	# (where .z is "backward") - PsSimulation's chassis transform comes
+	# through frame_convert.h's iso_to_godot_basis, whose column i is
+	# "the sim's own local axis i (ISO 8855: x forward, y left, z up),
+	# expressed in Godot world space" (see that file's header comment).
+	# So chassis_basis.x is the car's FORWARD direction in Godot space,
+	# and "behind" is its negation - NOT chassis_basis.z (that is the
+	# car's UP direction, which is why using it here made the look_at
+	# target/eye nearly colinear with world UP whenever the car was
+	# level - a bug found by actually running this and seeing Godot's own
+	# "Target and up vectors are colinear" warning fire every frame).
+	var behind := -chassis_basis.x.normalized() * follow_distance_m
+	var desired_pos := chassis_pos + behind + Vector3.UP * follow_height_m
+	var desired_look_at := chassis_pos + Vector3.UP * look_height_m
+
+	if not _initialized:
+		_smoothed_pos = desired_pos
+		_initialized = true
+
+	var pos_alpha: float = 1.0 - exp(-position_lag * delta)
+	_smoothed_pos = _smoothed_pos.lerp(desired_pos, pos_alpha)
+
+	# Orbit AFTER the chase smoothing, about the chassis's vertical axis:
+	# swinging the smoothed offset keeps the camera on a circle around the
+	# car instead of lerping straight through it on a 180 deg look-back.
+	# _smoothed_pos itself stays the plain chase position (the rebase shift
+	# below applies to it unchanged).
+	var target_yaw := _target_orbit_yaw()
+	if orbit_lag <= 0.0:
+		_orbit_yaw = target_yaw
+	else:
+		_orbit_yaw = lerp_angle(_orbit_yaw, target_yaw, 1.0 - exp(-orbit_lag * delta))
+	var offset := _smoothed_pos - chassis_pos
+	# Rotating about +UP by a positive angle turns toward the car's left, so
+	# looking right (+yaw) means rotating the camera's offset by -yaw.
+	position = chassis_pos + offset.rotated(Vector3.UP, -_orbit_yaw)
+	look_at(desired_look_at, Vector3.UP)
+
+	# Origin rebasing (see file comment) - keeps this camera's own position
+	# always well under float32's precision problems, at any distance from
+	# the sim's own absolute origin. _smoothed_pos is OUR OWN persistent
+	# state, not re-derived from the sim each frame the way chassis_pos/
+	# desired_pos are - it must be carried across the same delta the origin
+	# snap applies to `position`, or it silently keeps living in the old
+	# frame (see file comment for the resulting bug).
+	# Only the CURRENT camera drives the floating origin (see free_cam.gd).
+	if current:
+		var rebased_pos: Vector3 = _simulation.rebase_focus(position)
+		var rebase_delta: Vector3 = rebased_pos - position
+		position = rebased_pos
+		_smoothed_pos += rebase_delta
+	_last_origin_godot = _simulation.get_world_origin_godot_position()
+
+	var elapsed_us := Time.get_ticks_usec() - t0
+	_simulation.add_adapter_time_us(elapsed_us)

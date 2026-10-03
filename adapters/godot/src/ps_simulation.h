@@ -1,3 +1,5 @@
+#include <condition_variable>
+#include <thread>
 // adapters/godot/src/ps_simulation.h — PsSimulation: the adapter's main
 // Godot node (PLAN.md P2). Owns a ps::World, loads a JSON scenario into it,
 // runs it on its own fixed-240 Hz thread (SimThread, decoupled from
@@ -36,6 +38,7 @@
 #include "sim_thread.h"
 #include "triple_buffer.h"
 #include "vehicle_voice.h"
+#include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/scenario.h"
@@ -302,6 +305,7 @@ public:
     // be configured to match sample_rate before this is read from.
     double get_vehicle_voice_sample_rate_hz(const godot::String& vehicle_name) const;
     int get_vehicle_voice_channel_count(const godot::String& vehicle_name) const;
+    godot::PackedVector3Array get_vehicle_voice_source_positions(const godot::String& vehicle_name) const;
     // Reads up to `frames` interleaved frames (channel_count() floats each)
     // already rendered by this vehicle's Runner thread into its ring
     // buffer - call every Godot _process() frame, mix channel_count() down
@@ -328,6 +332,9 @@ public:
     // closes the KNOWN LIMITATION this comment used to carry: per-wheel
     // tyre relaxation state and the drivetrain network's own omega are now
     // reset too, not left to relax toward zero over the following second.
+    bool request_vehicle_turbo_configuration(const godot::String& vehicle_name,const godot::String& path);
+    godot::String get_turbo_configuration_status() const;
+    godot::String get_engine_audio_bank_status() const;
     bool reset_vehicle(const godot::String& vehicle_name, const godot::Vector3& sim_position, float yaw_rad);
     // PHYS-033 P4 I3 plan section 12.1: gear/gear_target/shift_phase(str)/
     // rpm/engine_state(str)/speedo_kmh/clutch_engagement/limiter/
@@ -452,6 +459,20 @@ private:
         std::string vehicle_name;
         ps::Pose pose;
     };
+    struct PendingTurboUpdate { std::string vehicle_name; ps::drivetrain::TurboPairDesc desc; };
+    std::thread turbo_generation_thread_;
+    struct BankRequest { std::string vehicle_name, engine_path, turbo_path, cache_dir; bool apply_physics=false; };
+    std::unordered_map<std::string,std::string> engine_definition_paths_;
+    std::unordered_map<std::string,std::string> requested_turbo_paths_;
+    std::vector<BankRequest> bank_requests_;
+    std::condition_variable bank_request_cv_;
+    bool bank_worker_stop_=false;
+    std::string engine_audio_bank_status_="Live acoustic model";
+    void enqueue_bank_request(BankRequest request);
+
+    mutable std::mutex turbo_update_mutex_;
+    std::vector<PendingTurboUpdate> pending_turbo_updates_;
+    std::string turbo_configuration_status_="Default configuration";
     std::mutex pending_reset_mutex_;
     std::vector<PendingVehicleReset> pending_vehicle_resets_;
 

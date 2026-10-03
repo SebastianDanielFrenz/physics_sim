@@ -281,3 +281,33 @@ TEST_CASE("Wheel contact frame: the contact point is the ground patch, not the w
         CHECK(std::abs(dot(cf.point - pose.position, spin)) < 1e-3);
     }
 }
+
+TEST_CASE("Low-speed carcass damping stays within loaded tyre lateral grip", "[vehicle][contact][low_speed_grip]") {
+    WorldConfig cfg;
+    cfg.job_workers = 1;
+    World world(cfg);
+    make_tilted_ground(world, 0.0);
+    for (real load_scale : {real(1.0), real(0.1), real(0.01)}) {
+        WheelDesc wd = fl_wheel_desc_at_origin();
+        wd.suspension.spring_rate *= load_scale;
+        wd.suspension.damper_bump_rate = 0.0;
+        wd.suspension.damper_rebound_rate = 0.0;
+        wd.suspension.arb_rate = 0.0;
+        wd.static_camber = 0.0;
+        wd.suspension.camber_vs_travel = Curve1D{};
+        auto wheel = make_wheel(wd);
+        Pose pose;
+        pose.position = Vec3{0.0, 0.0, 0.257};
+        wheel->measure_contact(pose, 0.0, world.backend());
+        auto in = zero_motion_input(pose);
+        in.chassis_motion.linear = Vec3{0.0, 1.0, 0.0};
+        const auto output = pre_and_post_solve_at_rest(*wheel, in);
+        const real fz = dot(output.contact_force_world, Vec3::unit_z());
+        const real fy = dot(output.contact_force_world, Vec3::unit_y());
+        REQUIRE(fz > 0.0);
+        const real dfz = (fz-wd.tyre.fz0)/wd.tyre.fz0;
+        const real limit = fz*(wd.tyre.pdy1+wd.tyre.pdy2*dfz)*wd.tyre.lambda_muy;
+        CHECK(fy < 0.0);
+        CHECK(std::abs(fy) <= limit + real(1e-6));
+    }
+}

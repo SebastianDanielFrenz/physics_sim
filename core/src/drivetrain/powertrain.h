@@ -242,6 +242,7 @@ public:
     // pointer on the engine for apply_pending_engine_maps_swap to pick up at
     // the next tick boundary. Throws std::runtime_error for an unknown/
     // mismatched component_id, a non-simulated engine, or null maps.
+    void replace_turbo_configuration(std::string_view component_id, const TurboPairDesc& desc);
     void request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps);
     // Applies any queued engine-maps swap (no-op if none pending or no
     // simulated engine). MUST be called sequentially, outside any job,

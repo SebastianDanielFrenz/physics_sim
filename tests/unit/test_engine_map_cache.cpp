@@ -657,6 +657,7 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         std::vector<std::pair<const char*, std::function<void(CycleModelDesc&)>>> edits;
         edits.emplace_back("intake.throttle_bore_m", [&](CycleModelDesc& d) { d.intake->throttle_bore_m = bump(d.intake->throttle_bore_m); });
         edits.emplace_back("intake.plenum_m3", [&](CycleModelDesc& d) { d.intake->plenum_m3 = bump(d.intake->plenum_m3); });
+        edits.emplace_back("intake.compressor_supply", [&](CycleModelDesc& d) { d.intake->compressor_supply = true; });
         edits.emplace_back("intake.runners[0].cylinders", [&](CycleModelDesc& d) { d.intake->runners[0].cylinders = {1}; });
         edits.emplace_back("intake.runners[0].length_m", [&](CycleModelDesc& d) { d.intake->runners[0].length_m = bump(d.intake->runners[0].length_m); });
         edits.emplace_back("intake.runners[0].d_in_m", [&](CycleModelDesc& d) { d.intake->runners[0].d_in_m = bump(d.intake->runners[0].d_in_m); });

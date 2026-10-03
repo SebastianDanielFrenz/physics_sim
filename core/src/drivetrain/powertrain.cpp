@@ -2272,6 +2272,13 @@ void Powertrain::request_fuel_tank_mass(real kg) {
 
 // PHYS-033 P4 I7c C16b -----------------------------------------------------
 
+void Powertrain::replace_turbo_configuration(std::string_view component_id,const TurboPairDesc& desc) {
+    if(!sim_engine_ptr_ || component_id!=engine_component_id_)
+        throw std::runtime_error("replace_turbo_configuration: unknown simulated engine");
+    sim_engine_ptr_->replace_turbo_configuration(desc);
+    simulated_engine_desc_->turbo_pair=desc;
+}
+
 void Powertrain::request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps) {
     if (!engine_ || component_id != engine_component_id_) {
         throw std::runtime_error("replace_engine_maps: unknown component id '" + std::string(component_id) + "'");

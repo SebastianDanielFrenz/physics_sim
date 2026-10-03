@@ -48,6 +48,20 @@ func _initialize() -> void:
     var b := tyre(20,0.5,"grass",0.5)
     for i in range(1000):
         require(a.sample(1.0/24000) == b.sample(1.0/24000), "seed reproducibility")
+    var cabin := Player.new()
+    cabin.cabin_low.append(0.0)
+    require(cabin._filter_tyre(0.25,0,1.0/24000) == 0.25, "exterior tyre signal unchanged")
+    cabin.set_cabin_listener(true,0.01)
+    require(cabin.cabin_mix > 0.0 and cabin.cabin_mix < 0.1, "camera transition fades")
+    cabin.set_cabin_listener(true,2.0)
+    var cabin_energy := 0.0
+    for i in range(24000):
+        var filtered: float = cabin._filter_tyre(sin(TAU*4000*i/24000.0),0,1.0/24000)
+        cabin_energy += filtered * filtered / 24000.0
+    require(cabin_energy < 0.002, "cabin attenuates high-frequency tyre sound")
+    cabin.set_cabin_listener(false,2.0)
+    require(cabin.cabin_mix < 0.0001, "exterior mix restored")
+    cabin.free()
     var turbo := Turbo.new(7)
     for i in range(120):
         turbo.update(1.0/60,6500,1,70,true)

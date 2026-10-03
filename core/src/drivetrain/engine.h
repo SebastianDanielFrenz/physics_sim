@@ -139,6 +139,8 @@ struct PreSolveResult {
     // (EngineTorqueMap), which has no manifold. Never hashed, never read back
     // for physics.
     real throttle_position = 0.0;      // plate position x_thr in [0, 1] after the actuator lag
+    real turbo_rpm = 0.0, boost_bar = 0.0, p_exhaust_pa = 0.0;
+    real p_charge_pa = 0.0, t_charge_k = 0.0; // compressor supply, 0 = atmospheric path
     real p_intake_pa = 0.0;            // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)
