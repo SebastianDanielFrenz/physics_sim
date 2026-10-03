@@ -14,7 +14,7 @@
 set(PS_GODOT_ADAPTER_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/demo/bin")
 
 add_library(ps_godot_adapter SHARED
-  ${CMAKE_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
+  ${PROJECT_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
   src/register_types.cpp
   src/frame_convert_core.cpp
   src/input_map_core.cpp
@@ -36,7 +36,7 @@ target_include_directories(ps_godot_adapter PRIVATE src)
 # the include path is needed here, not the ps_headless_env TARGET - that
 # target's own .cpp installs Windows headless-CRT/abort handlers, meant for
 # standalone tool/test executables, not a Godot-hosted GDExtension DLL.
-target_include_directories(ps_godot_adapter PRIVATE ${CMAKE_SOURCE_DIR}/tools/common)
+target_include_directories(ps_godot_adapter PRIVATE ${PROJECT_SOURCE_DIR}/tools/common)
 
 # godot-cpp's own CMakeLists.txt (branch 4.5) defines the target as
 # "godot-cpp"; newer godot-cpp versions also alias it to "godot::cpp", but
@@ -123,6 +123,6 @@ add_test(NAME ps_godot_test_origin_rebase COMMAND ps_godot_test_origin_rebase)
 add_test(NAME ps_godot_test_haptics COMMAND ps_godot_test_haptics)
 add_test(NAME ps_godot_test_render_interp COMMAND ps_godot_test_render_interp)
 
-target_include_directories(ps_godot_adapter PRIVATE ${CMAKE_SOURCE_DIR}/core/src ${CMAKE_SOURCE_DIR}/tools/common)
+target_include_directories(ps_godot_adapter PRIVATE ${PROJECT_SOURCE_DIR}/core/src ${PROJECT_SOURCE_DIR}/tools/common)
 
 target_link_libraries(ps_godot_adapter PRIVATE nlohmann_json::nlohmann_json)

@@ -20,7 +20,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(miniaudio)
 
 add_executable(ps_engine_audio
-  ${CMAKE_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
+  ${PROJECT_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
   main.cpp
   wav_writer.cpp
   script.cpp
@@ -56,4 +56,4 @@ else()
   target_link_libraries(ps_engine_audio PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
-target_include_directories(ps_engine_audio PRIVATE ${CMAKE_SOURCE_DIR}/core/src ${CMAKE_SOURCE_DIR}/tools/common)
+target_include_directories(ps_engine_audio PRIVATE ${PROJECT_SOURCE_DIR}/core/src ${PROJECT_SOURCE_DIR}/tools/common)
