@@ -1,13 +1,13 @@
 {
   "format": "physics_sim.turbo/1",
   "name": "hyper_turbo_approx",
-  "source": "Authored approximation, not a measured Koenigsegg turbo map. Values are per turbo.",
+  "source": "[AS] Per-turbo approximation, not a measured Koenigsegg map. 2026-10-03: effective turbine throat 500 mm2 enables steady 3000 rpm boost; reference head 4.5 bar, compressor/turbine efficiency 0.80. Smaller throat trades low-speed boost for higher high-speed exhaust pressure. Inertia, flow limit, reference speed and loss unchanged.",
   "rotor_inertia_kgm2": 2e-05,
   "reference_rpm": 120000,
   "max_mass_flow_kg_s": 0.6,
-  "compressor_efficiency": 0.72,
-  "turbine_efficiency": 0.7,
-  "turbine_area_m2": 0.00075,
+  "compressor_efficiency": 0.8,
+  "turbine_efficiency": 0.8,
+  "turbine_area_m2": 0.0005,
   "shaft_loss_w_at_reference": 600,
-  "reference_head_bar": 3.24
+  "reference_head_bar": 4.5
 }

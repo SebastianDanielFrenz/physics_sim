@@ -891,7 +891,7 @@ TEST_CASE("C11 hashed state layout, content hash, reset, zero allocation", "[dri
 
 TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy", "[turbo][sim_engine]") {
     // The shipped engine has no maps block: loading generates them from its
-    // cycle block (8 x 6 grid, boosted nodes), on a pool to keep this test short.
+    // cycle block (10 x 6 grid, boosted nodes), on a pool to keep this test short.
     ps::jobs::JobSystem pool(10);
     ps::io::EngineMapOptions map_options;
     map_options.pool=&pool;
@@ -911,15 +911,15 @@ TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy
     struct Window { PreSolveResult last; real charge_min=1e9, charge_max=-1e9, tau_mean=0; };
     const auto settle=[&](SimulatedEngine& e, real rpm) {
         Window wdw;
-        for(int i=0;i<9600;++i) {
+        for(int i=0;i<14400;++i) {
             wdw.last=e.pre_solve(running(w_of(rpm)),cmd(1),TcuRequest{},kH);
             (void)e.post_solve(w_of(rpm),kH);
-            if(i>=8640) {
+            if(i>=13440) {
                 wdw.charge_min=std::min(wdw.charge_min,wdw.last.p_charge_pa); wdw.charge_max=std::max(wdw.charge_max,wdw.last.p_charge_pa);
-                wdw.tau_mean+=wdw.last.tau0/960;
+                wdw.tau_mean+=(wdw.last.tau0-e.maps().c_k)/960;
             }
         }
-        std::printf("[turbo dyno] %4.0f rpm: boost %.3f bar, charge %.0f Pa (ripple %.0f), rotor %.0f rpm, exhaust %.0f Pa, torque %.1f Nm, power %.1f kW\n",
+        std::printf("[turbo dyno] %4.0f rpm: boost %.3f bar, charge %.0f Pa (ripple %.0f), rotor %.0f rpm, exhaust %.0f Pa, net torque %.1f Nm, power %.1f kW\n",
             rpm,wdw.last.boost_bar,wdw.last.p_charge_pa,wdw.charge_max-wdw.charge_min,wdw.last.turbo_rpm,wdw.last.p_exhaust_pa,wdw.tau_mean,wdw.tau_mean*w_of(rpm)/1000);
         return wdw;
     };
@@ -927,6 +927,8 @@ TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy
     for(real rpm : {3000.0, 4500.0}) {
         const auto wdw=settle(boosted,rpm);
         CHECK(wdw.charge_max-wdw.charge_min<1000);
+        CHECK(wdw.tau_mean>1000);
+        CHECK(std::abs(wdw.last.p_charge_pa-target_charge)<0.02*desc.turbo_pair->target_boost_pa);
     }
     const auto br_w=settle(boosted,6000);
     const auto& br=br_w.last;
@@ -938,7 +940,18 @@ TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy
         CHECK(std::abs(wdw->last.p_charge_pa-target_charge)<0.02*desc.turbo_pair->target_boost_pa); // on target
     }
     CHECK(std::isfinite(br.tau0)); CHECK(br.boost_bar>0.2); CHECK(br.boost_bar<2.3);
-    CHECK(br.turbo_rpm>10000); CHECK(br_w.tau_mean>nr.tau0);
+    CHECK(br.turbo_rpm>10000); CHECK(br_w.tau_mean>nr.tau0-na.maps().c_k);
+    // Net shaft targets, including Coulomb friction; protect the physical fit.
+    CHECK(std::abs(br_w.tau_mean-1371)<20);
+    CHECK(std::abs(high_w.tau_mean*w_of(7500)/1000-1000)<15);
+    SimulatedEngine top(desc);
+    const auto top_w=settle(top,8000);
+    CHECK(top_w.tau_mean>1000);
+    CHECK(top_w.charge_max-top_w.charge_min<1000);
+    CHECK(high.p_exhaust_pa>high.p_intake_pa);
+    CHECK(high.fuel_flow_g_s>70);
+    CHECK(high.fuel_flow_g_s<100);
+    CHECK_FALSE(boosted.maps().maps.has_theta_kl);
     // Spool: part throttle at 4500 rpm, then WOT; time to 90 % of the boost target.
     {
         SimulatedEngine sp(desc);

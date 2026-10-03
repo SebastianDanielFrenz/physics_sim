@@ -11,11 +11,80 @@ geometry integrates to approximately 5.066 L. The published One:1 targets are
 1371 Nm at 6000 rpm and 1 MW at 7500 rpm:
 https://www.koenigsegg.com/technical-specifications-one1
 
-Firing order [1,5,4,8,6,3,7,2], bank layout, cams, pipe lengths, VE,
-efficiency, lambda, ignition, turbo inertia and performance curves are authored
-assumptions. They are not measured manufacturer data. The present held-speed
-regression produces approximately 1363 Nm / 856 kW at 6000 rpm and 1049 Nm /
-824 kW at 7500 rpm. This is an approximation, not the published rated curve.
+Firing order [1,5,4,8,6,3,7,2], bank layout, cams, ports, pipe lengths,
+ECU settings and turbo hardware are authored assumptions, not measured
+manufacturer internals. VE, indicated efficiency, spark response, pumping and
+friction remain generated from the physical cycle; no torque multiplier or
+hand-authored engine-performance map was added.
+
+## Physical calibration, 2026-10-03
+
+The fixed bore, stroke, compression, 8250 rpm limiter and 1.8 bar charge boost
+target are unchanged. E5 and the vehicle's 1500 kg chassis are unchanged.
+The fresh baseline below subtracts both smooth and Coulomb friction; previous
+824 kW / 1363 Nm statements included the 26.854 Nm Coulomb loss and are not net
+shaft results. At 7500 rpm the old VE was 0.850, charge temperature 308.49 K,
+and exhaust pressure 318.3 kPa; spark efficiency was already 0.993. At 3000 rpm
+boost settled at 0.386 bar after 15 seconds: a low-speed turbo equilibrium,
+not merely spool lag.
+
+Assumed intake valves grow 36â†’38 mm, exhaust 32â†’34 mm, with 12 mm lift.
+Intake duration 250â†’270 degrees delays closing to 86 ABDC, retaining IVO
+4 BTDC. Exhaust duration 254â†’264 opens at 80 BBDC and closes at 4 ATDC;
+overlap stays eight degrees. High-lift discharge coefficient becomes 0.50
+(previously 0.45); runner diameters become 50/46 mm and primaries 46 mm.
+The cycle throttle becomes 80 mm to match the runtime throttle. Explicit
+7500 and 8000 rpm generation nodes capture the top-end curve.
+
+Per-turbo effective turbine throat 750â†’500 mmÂ² sustains low-rpm boost.
+Reference compressor head 3.24â†’4.5 bar and assumed compressor/turbine
+efficiencies 0.80 support the delivery; rotor inertia and flow capacity are
+unchanged. Intercooler effectiveness 0.85â†’0.95 gives 294.25 K charge air at
+ISA. This is optimistic steady cooling: heat soak and cooler pressure loss
+are not resolved. The smaller throat raises exhaust pressure at 7500 rpm
+to 412.9 kPa; it trades back-pressure for low-speed boost. Pumping remains
+about âˆ’180 Nm there. Improved filling (VE 0.986) and cooler charge supply
+the power gain. RPM-dependent high-load ignition retard trims the resulting
+midrange; it is an explicit ECU calibration, not a global torque scale.
+
+Held-crank dyno: 960 Hz, fresh engine at each point, 15 seconds WOT,
+final one-second average. ISA ambient 101325 Pa / 288.15 K. Boost below is
+manifold gauge pressure; charge pressure is 281325 Pa (1.8 bar gauge) at all
+listed calibrated points. Fuel is actual model E5 mass flow. Power and torque
+are **net crank output**, including 26.854 Nm Coulomb friction.
+
+| RPM | Before Nm | Before kW | After Nm | After kW | Boost bar | Fuel g/s |
+|---:|---:|---:|---:|---:|---:|---:|
+| 3000 | 654.5 | 205.6 | 1230.3 | 386.5 | 1.783 | 28.94 |
+| 4000 | 1420.2 | 594.9 | 1273.8 | 533.6 | 1.776 | 40.45 |
+| 4500 | 1431.7 | 674.7 | 1338.6 | 630.8 | 1.770 | 48.42 |
+| 5000 | 1440.9 | 754.5 | 1376.1 | 720.5 | 1.758 | 56.85 |
+| 6000 | 1336.3 | 839.6 | 1371.0 | 861.4 | 1.732 | 72.02 |
+| 7000 | 1140.0 | 835.7 | 1323.4 | 970.1 | 1.712 | 81.30 |
+| 7500 | 1021.9 | 802.6 | 1273.5 | 1000.2 | 1.703 | 85.31 |
+| 8000 | 904.1 | 757.4 | 1184.3 | 992.1 | 1.699 | 86.91 |
+
+Charge ripple in the final window is below 0.02 Pa. This verifies sampled
+steady points, not every continuous RPM or transient road condition. The
+published anchors are from [Koenigsegg's One:1 specifications](https://www.koenigsegg.com/technical-specifications-one1).
+The generator explicitly sets `has_theta_kl=false`: there is no validated
+knock constraint. Keeping E5 does **not** establish that a real E5 engine could
+safely make this power. Actual cam/port/turbo measurements and combustion/knock
+validation are needed before claiming manufacturer fidelity.
+
+Reproduce with the `bench_hyper_calibration` native target and the shipped
+engine JSON. The tool prints VE, manifold/charge/exhaust pressures, temperatures,
+rotor speed, lambda, spark/MBT, combustion/pumping/friction and fuel diagnostics.
+Cycle geometry changes also feed the existing live simulated audio renderer;
+content-keyed cached engine/audio maps regenerate through the existing path.
+No recorded engine audio replaces it.
+
+Focused staged-source verification: native build passed; `[turbo]` passed
+33 assertions, including net power/torque anchors, 3000/8000 rpm delivery,
+boost settling, spool (0.140 s to 90% target at 4500 rpm), coast, stopped rotor
+energy, and live hardware replacement continuity. The shipped-file dyno
+reproduced the table above. No Godot adapter or racing-game DLL was rebuilt
+for this data calibration; integration build ownership stays with that chat.
 
 ## Configuration and live replacement
 
@@ -81,7 +150,7 @@ reintroduced by this configuration work.
   the reported 200 ms gap has not been independently timed.
 ## Commit verification, 2026-10-03
 
-The staged source built independently under out/hyper_commit_verify. Focused engine, turbo, audio-bank, SIMD and thread checks passed: 76,367 assertions in 22 cases. Physics maps are now generated from the engine cycle (the hand-authored maps were removed). Current WOT held-speed results are 1363 Nm at 6000 rpm and 824 kW at 7500 rpm; these are model results rather than a fitted manufacturer curve. Long sanitizer checks remain queued for overnight verification.
+The staged source built independently under out/hyper_commit_verify. Focused engine, turbo, audio-bank, SIMD and thread checks passed: 76,367 assertions in 22 cases. Physics maps are now generated from the engine cycle (the hand-authored maps were removed). The earlier WOT values here included Coulomb friction; the consistent net before/after calibration is reported above. Long sanitizer checks remain queued for overnight verification.
 
 Final complete staged-source native checks: 76,616 assertions in 27 cases passed, including boosted map generation, cache-key coverage, low-speed tyre grip, and serial/threaded/SIMD equality. Godot adapter rebuilt; editor import passed. Full sanitizer suites are pending overnight, not declared passed.
 

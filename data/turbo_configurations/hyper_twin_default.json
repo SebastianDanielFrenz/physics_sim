@@ -4,12 +4,13 @@
   "turbo": "../turbos/hyper_turbo_approx.json",
   "count": 2,
   "target_boost_bar": 1.8,
-  "intercooler_effectiveness": 0.85,
+  "intercooler_effectiveness": 0.95,
   "boost_control": {
     "source": "[A] PID on charge pressure (per unit of target_boost_bar, derivative on the measurement) and wastegate actuator lag; gains from a sweep on hyper_v8_one1_audio.json, 2026-10-02",
     "kp": 1.0,
     "ki_per_s": 1.0,
     "kd_s": 0.05,
     "actuator_tau_s": 0.1
-  }
+  },
+  "source": "[AS] Authored twin configuration; 1.8 bar charge target unchanged. Intercooler effectiveness 0.95 is an optimistic steady-ISA assumption, not a measured cooler; no heat-soak or cooler pressure-loss model."
 }
