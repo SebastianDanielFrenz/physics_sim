@@ -15,6 +15,7 @@
 
 #include "ps/drivetrain/engine_cycle_desc.h" // CycleModelDesc (PHYS-033 P4 I7c C16a, SimulatedEngineDesc::cycle)
 #include "ps/drivetrain/fuel_desc.h" // FuelDesc (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel)
+#include "ps/drivetrain/nitrous_desc.h" // N2oBottleDesc/NitrousKitDesc (N2O plan N1, ComponentParams alternatives)
 #include "ps/drivetrain/table2d.h"   // Table2D (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel_map)
 #include "ps/math/vec3.h"
 #include "ps/types.h"
@@ -652,10 +653,11 @@ struct FuelTankDesc {
 // Closed, visited exhaustively (like ps::ShapeDesc) - adding a component
 // type is a compile-checked change plus a data-format minor bump.
 // SimulatedEngineDesc (PHYS-033 P4 I7b C10) is appended LAST so no existing
-// alternative's index moves.
+// alternative's index moves; N2oBottleDesc/NitrousKitDesc (N2O plan N1) follow
+// it (no port, node or row - like FuelTankDesc they are wired by fluid links).
 using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc,
                                       ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc, FuelTankDesc,
-                                      SimulatedEngineDesc>;
+                                      SimulatedEngineDesc, N2oBottleDesc, NitrousKitDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty
@@ -676,9 +678,12 @@ inline constexpr real kGearRequestNone = real(-100.0);
 // PHYS-033 P4 I7a C6: one fluid (fuel) connection, "<tank>.out" ->
 // "<engine>.fuel" - a supply path, not a shaft: it carries mass, never
 // torque. A separate namespace from ShaftDesc's ports.
+// N2O plan N1: two more link kinds share this struct - "<bottle>.out" ->
+// "<kit>.n2o" (n2o_bottle to nitrous_kit) and "<kit>.out" -> "<engine>.nitrous"
+// (nitrous_kit to an engine); the source component's type tells them apart.
 struct FluidLinkDesc {
-    PortRef from; // a fuel_tank component's "out"
-    PortRef to;   // an engine component's "fuel"
+    PortRef from; // a fuel_tank/n2o_bottle/nitrous_kit component's "out"
+    PortRef to;   // an engine's "fuel"/"nitrous" or a nitrous_kit's "n2o"
 };
 
 struct PowertrainDesc {

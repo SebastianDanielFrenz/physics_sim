@@ -134,7 +134,7 @@ from).
 significant for scenario determinism. Each entry:
 
 ```json
-{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case" | "park_lock" | "pto" | "load_dyno" | "throttle_control" | "fuel_tank", ... }
+{ "id": "<unique id>", "type": "engine" | "clutch" | "gearbox" | "gear_pair" | "differential" | "transfer_case" | "park_lock" | "pto" | "load_dyno" | "throttle_control" | "fuel_tank" | "n2o_bottle" | "nitrous_kit", ... }
 ```
 
 - `id`: required, non-empty, unique across `components[]`
@@ -632,6 +632,41 @@ Loader rejections (`<lctx>` = `vehicle '<v>': powertrain.fluid[<n>]`):
 
 A tank on a map-less engine (the [crude fuel model](engine.md)) is allowed.
 
+#### Nitrous links (N2O N1)
+
+The same `fluid` array also carries the nitrous wiring (N2O plan N1, the three part files are in
+[nitrous.md](nitrous.md); a `n2o_bottle`/`nitrous_kit` component is always a `"ref"` to a part
+file plus the documented overrides):
+
+```json
+"fluid": [["tank.out", "engine.fuel"], ["n2o_bottle.out", "n2o_kit.n2o"], ["n2o_kit.out", "engine.nitrous"]]
+```
+
+A link whose source is an `n2o_bottle` must be `"<bottle>.out" -> "<kit>.n2o"`; one whose source
+is a `nitrous_kit` must be `"<kit>.out" -> "<engine>.nitrous"`. The fuel-link rejections above
+are unchanged (and the "two tanks feed one engine" check only looks at links into the `fuel` port).
+Additional rejections (`<lctx>` as above):
+
+| Case | Message |
+|---|---|
+| bottle source port is not `out` | `"<lctx>: unknown port \"<ref>\" (an n2o_bottle's only fluid port is \"out\")"` |
+| bottle target is not a `nitrous_kit` | `"<lctx>: '<id>' is not a nitrous_kit (an n2o_bottle's link must end at \"<kit>.n2o\")"` |
+| bottle target port is not `n2o` | `"<lctx>: unknown port \"<ref>\" (a nitrous_kit's bottle input is \"n2o\")"` |
+| two bottles into one kit | `"<lctx>: nitrous_kit '<k>' n2o port is fed by two bottles ('<a>' and '<b>')"` |
+| a bottle feeding a second kit | `"<lctx>: n2o_bottle '<b>' already feeds a kit"` |
+| kit source port is not `out` | `"<lctx>: unknown port \"<ref>\" (a nitrous_kit's only output port is \"out\")"` |
+| kit target is not an engine | `"<lctx>: '<id>' is not an engine (a kit's link must end at \"<engine>.nitrous\")"` |
+| kit target port is not `nitrous` | `"<lctx>: unknown port \"<ref>\" (an engine's nitrous input is \"nitrous\")"` |
+| target engine has no fuel model | `"<lctx>: engine '<e>' has no fuel model (...) - a nitrous_kit's fuel jet needs its fuel"` |
+| two kits into one engine | `"<lctx>: engine '<e>' nitrous port is fed by two kits ('<a>' and '<b>')"` |
+| a bottle without a kit link / a kit without a bottle or engine link | `"vehicle '<v>': powertrain.components['<id>']: n2o_bottle has no consumer (no powertrain.fluid link from \"<id>.out\")"`, `"... nitrous_kit has no bottle (no powertrain.fluid link to \"<id>.n2o\")"`, `"... nitrous_kit has no consumer ..."` |
+
+`Powertrain::Powertrain` repeats the wiring checks for a code-built `VehicleDesc`
+(`"vehicle '<v>': n2o_bottle '<id>' is not linked to a nitrous_kit"`, `"... nitrous_kit '<id>' has no n2o_bottle"`,
+`"... nitrous_kit '<id>' has no consumer"`, `"... a nitrous_kit's \"out\" port feeds an engine's \"nitrous\" port"`,
+`"... an n2o_bottle's \"out\" port feeds a nitrous_kit's \"n2o\" port"`). The nitrous system is a
+Powertrain-owned typed member (no shaft port, node or row); a vehicle without a kit is bit-identical to before.
+
 The loader's same-fuel check compares **file paths**
 (`std::filesystem::equivalent`), not contents: a byte-identical copy of
 `e5.json` under another name is rejected. The `Powertrain` constructor's
@@ -687,6 +722,7 @@ when the vehicle has a tank, so every tank-less vehicle hashes as before.
 | `pto` | `in`, `out` (`out` exempt from the "must be connected" rule, see above) |
 | `load_dyno` | `shaft` |
 | `fuel_tank` | none (fluid port `out`, used only in [`fluid`](#fluid-links-i7a-c6)); an engine's fluid port is `fuel` |
+| `n2o_bottle` | none (fluid port `out`); `nitrous_kit`: fluid ports `n2o` (in) and `out`; an engine's second fluid port is `nitrous` - see [nitrous.md](nitrous.md) and [Nitrous links](#nitrous-links-n2o-n1) |
 | a wheel (implicit, one per entry in the top-level `wheels[]`) | `wheel:<wheel name>` |
 
 A port reference string is written `"<component id>.<port>"` (e.g.

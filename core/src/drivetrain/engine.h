@@ -39,6 +39,20 @@
 
 namespace ps::drivetrain {
 
+// N2O plan N1: what the Powertrain-owned NitrousSystem (nitrous_system.h) hands
+// the engine each substep. All zero = no nitrous (every vehicle without a kit,
+// and every substep the solenoid is closed). N1 engines IGNORE it; N2 wires the
+// simulated engine's charge model to it.
+struct NitrousInput {
+    real mdot_n_kg_s = 0.0;  // N2O mass flow delivered to the intake
+    real mdot_kf_kg_s = 0.0; // kit fuel mass flow (the engine's own fuel, wet kit)
+    real h_in_j_kg = 0.0;    // liquid enthalpy at the jet (the cooling balance's inlet state)
+    real retard_deg = 0.0;   // kit/controller spark retard
+    std::uint8_t injection = 0;   // 0 plenum, 1 direct port
+    std::uint8_t enrichment = 0;  // 0 kit fuel, 1 ECU (dry kit, later)
+    bool active = false;     // solenoid open and N2O flowing
+};
+
 // ECU inputs, by value (spec's "controllers get sensors only"). omega is
 // the crank node's omega_old (network state at THIS substep's start).
 // Hoisted, unchanged except pedal_throttle/hand_throttle's removal, from
@@ -72,6 +86,8 @@ struct Sensors {
     // declare at build time): the engine then uses the block's
     // default_enabled. Ignored by every engine without an anti_lag block.
     real anti_lag_channel = std::numeric_limits<real>::quiet_NaN();
+    // N2O plan N1: the nitrous system's flows this substep (default = none).
+    NitrousInput nitrous{};
 };
 // PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
 // combined command plus the TCU-forwarded (electronic) or fixed (mechanical)
@@ -248,6 +264,11 @@ public:
     // from yet (plan section 4.5's bootstrap). See the class comment above
     // for why this is a narrow virtual rather than exposing the whole Desc.
     [[nodiscard]] virtual real idle_rpm() const = 0;
+    // N2O plan N1: the pressure the intake sees right now (Pa abs) - the
+    // downstream pressure of the nitrous and kit-fuel jets. A mean-value engine
+    // returns its manifold pressure; the graph engine has no manifold and
+    // returns the ambient pressure of its last Sensors. Never hashed.
+    [[nodiscard]] virtual real intake_pressure_pa() const = 0;
 
     [[nodiscard]] virtual std::uint64_t fold_state_hash(std::uint64_t seed) const = 0;
 

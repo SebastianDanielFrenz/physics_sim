@@ -124,6 +124,8 @@ public:
     [[nodiscard]] real crank_angle() const override { return crank_angle_; } // NOT hashed (sound only, plan section 6.1.9)
     [[nodiscard]] const Desc& desc() const { return desc_; }
     [[nodiscard]] real idle_rpm() const override { return desc_.idle_rpm; }
+    // No manifold: the ambient pressure of the last Sensors (N2O plan N1; never hashed).
+    [[nodiscard]] real intake_pressure_pa() const override { return p_ambient_last_; }
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
 
@@ -152,6 +154,7 @@ private:
     bool dfco_active_ = false;
 
     real crank_angle_ = 0.0; // NOT hashed
+    real p_ambient_last_ = 101325.0; // NOT hashed (intake_pressure_pa)
 
     // Stashed by pre_solve, read back by post_solve.
     real tau0_ = 0.0, d_ = 0.0, omega_old_ = 0.0;

@@ -260,6 +260,11 @@ public:
     // not change the chassis mass; a later increment adds it as a point mass
     // at the tank position (PLAN.md "Fuel mass moves the chassis").
     void set_fuel_tank_mass(VehicleId id, real kg);
+    // N2O plan N1: the vehicle's N2O bottle content in kg (live, sim-thread-only; 0 without a nitrous kit) and
+    // the same tick-boundary set as set_fuel_tank_mass (clamped to [0, capacity], booked signed into
+    // PowertrainEnergy::n2o_external_added; throws for a vehicle without a bottle or a NaN mass).
+    [[nodiscard]] real n2o_bottle_mass(VehicleId id) const;
+    void set_n2o_bottle_mass(VehicleId id, real kg);
     // PHYS-033 P4 I7c C16b: replaces a vehicle's simulated engine's runtime
     // maps (e.g. a background Full-quality regeneration replacing a Preview
     // one, or a tuned/edited map file/cache hit) - EngineMapsPtr is the C16a
@@ -496,6 +501,13 @@ private:
         std::size_t tank_kg = 0;
     };
     std::vector<std::vector<FuelTelemetryChannels>> fuel_telemetry_channels_; // outer index == VehicleId.index; inner has 0 or 1 entries
+
+    // N2O plan N1: vehicle<i>.n2o.{flow_g_s,bottle_kg,bottle_bar,active}, registered (and recorded) only for a
+    // vehicle with a nitrous kit, right after its engine-maps channel. Outer index == VehicleId.index; inner 0 or 1.
+    struct N2oTelemetryChannels {
+        std::size_t flow_g_s, bottle_kg, bottle_bar, active;
+    };
+    std::vector<std::vector<N2oTelemetryChannels>> n2o_telemetry_channels_;
 
     // PHYS-033 P4 I7c C16b: one entry per vehicle with a simulated engine
     // (a ps::drivetrain::SimulatedEngineDesc component, never a

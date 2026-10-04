@@ -449,6 +449,15 @@ void World::step() {
         if (vi < engine_maps_hash_channels_.size() && !engine_maps_hash_channels_[vi].empty()) {
             row.push_back(real(static_cast<std::uint32_t>(vehicle_instance.simulated_engine_maps_content_hash())));
         }
+
+        // N2O plan N1: the kit-only channels, right after the engine-maps value, matching create_vehicle's order.
+        if (vi < n2o_telemetry_channels_.size() && !n2o_telemetry_channels_[vi].empty()) {
+            const drivetrain::NitrousSystem* n2o = vehicle_instance.nitrous_system();
+            row.push_back(n2o->status().mdot_n_kg_s * real(1000.0));
+            row.push_back(n2o->bottle_kg());
+            row.push_back(n2o->bottle_gauge_bar());
+            row.push_back(n2o->status().flowing ? real(1.0) : real(0.0));
+        }
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
@@ -719,6 +728,21 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         }
     }
 
+    // N2O plan N1: vehicle<i>.n2o.{flow_g_s,bottle_kg,bottle_bar,active}, only for a vehicle with a nitrous kit
+    // (an empty inner vector keeps every kit-less CSV header byte-identical).
+    if (n2o_telemetry_channels_.size() <= id.index) n2o_telemetry_channels_.resize(id.index + 1);
+    std::vector<N2oTelemetryChannels>& n2o_channels = n2o_telemetry_channels_[id.index];
+    n2o_channels.clear();
+    if (vehicle_system_->at(id).has_nitrous()) {
+        const std::string n2o_prefix = "vehicle" + std::to_string(id.index) + ".n2o.";
+        N2oTelemetryChannels nc;
+        nc.flow_g_s = telemetry_->register_channel(n2o_prefix + "flow_g_s");
+        nc.bottle_kg = telemetry_->register_channel(n2o_prefix + "bottle_kg");
+        nc.bottle_bar = telemetry_->register_channel(n2o_prefix + "bottle_bar");
+        nc.active = telemetry_->register_channel(n2o_prefix + "active");
+        n2o_channels.push_back(nc);
+    }
+
     return id;
 }
 
@@ -756,6 +780,14 @@ real World::fuel_tank_mass(VehicleId id) const {
 
 void World::set_fuel_tank_mass(VehicleId id, real kg) {
     vehicle_system_->at(id).request_fuel_tank_mass(kg);
+}
+
+real World::n2o_bottle_mass(VehicleId id) const {
+    return vehicle_system_->at(id).n2o_bottle_mass();
+}
+
+void World::set_n2o_bottle_mass(VehicleId id, real kg) {
+    vehicle_system_->at(id).request_n2o_bottle_mass(kg);
 }
 
 void World::replace_turbo_configuration(VehicleId id,std::string_view component_id,const drivetrain::TurboPairDesc& desc) {

@@ -4,6 +4,7 @@
 #include <sstream>
 #include "ps/io/vehicle_io.h"
 #include "aero_io.h"
+#include "nitrous_components.h"
 
 #include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
@@ -2693,6 +2694,11 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                     t.fuel = ps::io::load_fuel_json(tank_fuel_path);
                     tank_fuel_paths.push_back({id, {cj.at("fuel").get<std::string>(), tank_fuel_path}});
                     p.components.push_back({id, t});
+                } else if (type == "n2o_bottle") {
+                    // N2O plan N1: a part file ("ref") plus the component's own bottom-up overrides.
+                    p.components.push_back({id, ps::io::detail::build_n2o_bottle_component(cj, base_dir, ctx)});
+                } else if (type == "nitrous_kit") {
+                    p.components.push_back({id, ps::io::detail::build_nitrous_kit_component(cj, base_dir, ctx)});
                 } else if (type == "clutch") {
                     if (cj.contains("ref")) throw std::runtime_error(ctx + ": 'clutch' components are always inline in I3 (no 'ref')");
                     p.components.push_back({id, read_clutch_fields(cj, ctx)});
@@ -3259,6 +3265,61 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
 
                 const ps::drivetrain::ComponentDesc* from_c = find_component(from.component);
                 if (from_c == nullptr) throw std::runtime_error(lctx + ": unknown component '" + from.component + "'");
+                // N2O plan N1: "<bottle>.out" -> "<kit>.n2o" and "<kit>.out" -> "<engine>.nitrous".
+                if (std::get_if<ps::drivetrain::N2oBottleDesc>(&from_c->params) != nullptr) {
+                    if (from.port != "out") {
+                        throw std::runtime_error(lctx + ": unknown port \"" + from_str + "\" (an n2o_bottle's only fluid port is \"out\")");
+                    }
+                    const ps::drivetrain::ComponentDesc* kit_c = find_component(to.component);
+                    if (kit_c == nullptr) throw std::runtime_error(lctx + ": unknown component '" + to.component + "'");
+                    if (std::get_if<ps::drivetrain::NitrousKitDesc>(&kit_c->params) == nullptr) {
+                        throw std::runtime_error(lctx + ": '" + to.component + "' is not a nitrous_kit (an n2o_bottle's link must end at \"<kit>.n2o\")");
+                    }
+                    if (to.port != "n2o") {
+                        throw std::runtime_error(lctx + ": unknown port \"" + to_str + "\" (a nitrous_kit's bottle input is \"n2o\")");
+                    }
+                    for (const auto& existing : p.fluid) {
+                        if (existing.to.component == to.component && existing.to.port == "n2o") {
+                            throw std::runtime_error(lctx + ": nitrous_kit '" + to.component + "' n2o port is fed by two bottles ('" +
+                                                      existing.from.component + "' and '" + from.component + "')");
+                        }
+                        if (existing.from.component == from.component && existing.from.port == "out" && existing.to.port == "n2o") {
+                            throw std::runtime_error(lctx + ": n2o_bottle '" + from.component + "' already feeds a kit");
+                        }
+                    }
+                    p.fluid.push_back({from, to});
+                    continue;
+                }
+                if (std::get_if<ps::drivetrain::NitrousKitDesc>(&from_c->params) != nullptr) {
+                    if (from.port != "out") {
+                        throw std::runtime_error(lctx + ": unknown port \"" + from_str + "\" (a nitrous_kit's only output port is \"out\")");
+                    }
+                    const ps::drivetrain::ComponentDesc* eng_c = find_component(to.component);
+                    if (eng_c == nullptr) throw std::runtime_error(lctx + ": unknown component '" + to.component + "'");
+                    const auto* eng = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&eng_c->params);
+                    const auto* sim_eng = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&eng_c->params);
+                    if (eng == nullptr && sim_eng == nullptr) {
+                        throw std::runtime_error(lctx + ": '" + to.component + "' is not an engine (a kit's link must end at \"<engine>.nitrous\")");
+                    }
+                    if (to.port != "nitrous") {
+                        throw std::runtime_error(lctx + ": unknown port \"" + to_str + "\" (an engine's nitrous input is \"nitrous\")");
+                    }
+                    if (!(eng != nullptr ? ps::drivetrain::has_fuel_model(*eng) : ps::drivetrain::has_fuel_model(*sim_eng))) {
+                        throw std::runtime_error(lctx + ": engine '" + to.component +
+                                                  "' has no fuel model (no 'fuels', 'fuel' or 'fuel_map') - a nitrous_kit's fuel jet needs its fuel");
+                    }
+                    for (const auto& existing : p.fluid) {
+                        if (existing.to.component == to.component && existing.to.port == "nitrous") {
+                            throw std::runtime_error(lctx + ": engine '" + to.component + "' nitrous port is fed by two kits ('" +
+                                                      existing.from.component + "' and '" + from.component + "')");
+                        }
+                        if (existing.from.component == from.component && existing.from.port == "out" && existing.to.port == "nitrous") {
+                            throw std::runtime_error(lctx + ": nitrous_kit '" + from.component + "' already feeds an engine");
+                        }
+                    }
+                    p.fluid.push_back({from, to});
+                    continue;
+                }
                 if (std::get_if<ps::drivetrain::FuelTankDesc>(&from_c->params) == nullptr) {
                     throw std::runtime_error(lctx + ": '" + from.component + "' is not a fuel_tank (a fluid link must start at \"<tank>.out\")");
                 }
@@ -3280,7 +3341,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                                               "' has no fuel model (no 'fuels', 'fuel' or 'fuel_map') - a fluid link cannot feed it");
                 }
                 for (const auto& existing : p.fluid) {
-                    if (existing.to.component != to.component) continue;
+                    if (existing.to.component != to.component || existing.to.port != "fuel") continue;
                     if (existing.from.component == from.component) {
                         throw std::runtime_error(lctx + ": duplicate fluid link \"" + from_str + "\" -> \"" + to_str + "\"");
                     }
@@ -3324,6 +3385,28 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
         if (!consumed) {
             throw std::runtime_error("vehicle '" + v.name + "': powertrain.components['" + c.id +
                                       "']: fuel_tank has no consumer (no powertrain.fluid link from \"" + c.id + ".out\")");
+        }
+    }
+    // N2O plan N1: every bottle needs a kit and every kit a bottle and an engine, so a half-wired nitrous
+    // system is rejected at load (Powertrain repeats the check for a code-built desc).
+    for (const auto& c : p.components) {
+        const bool is_bottle = std::get_if<ps::drivetrain::N2oBottleDesc>(&c.params) != nullptr;
+        const bool is_kit = std::get_if<ps::drivetrain::NitrousKitDesc>(&c.params) != nullptr;
+        if (!is_bottle && !is_kit) continue;
+        bool as_source = false, as_target = false;
+        for (const auto& link : p.fluid) {
+            as_source = as_source || (link.from.component == c.id && link.from.port == "out");
+            as_target = as_target || (link.to.component == c.id && link.to.port == "n2o");
+        }
+        const std::string cctx = "vehicle '" + v.name + "': powertrain.components['" + c.id + "']";
+        if (is_bottle && !as_source) {
+            throw std::runtime_error(cctx + ": n2o_bottle has no consumer (no powertrain.fluid link from \"" + c.id + ".out\")");
+        }
+        if (is_kit && !as_target) {
+            throw std::runtime_error(cctx + ": nitrous_kit has no bottle (no powertrain.fluid link to \"" + c.id + ".n2o\")");
+        }
+        if (is_kit && !as_source) {
+            throw std::runtime_error(cctx + ": nitrous_kit has no consumer (no powertrain.fluid link from \"" + c.id + ".out\")");
         }
     }
     v.powertrain = p;

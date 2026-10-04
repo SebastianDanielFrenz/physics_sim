@@ -1,0 +1,17 @@
+{
+  "format": "physics_sim.nitrous_kit/1",
+  "type": "wet",
+  "injection": "plenum",
+  "nozzle_count": 1,
+  "nitrous_jet_diameter_mm": 1.4478,
+  "nitrous_jet_cd": 0.66,
+  "flow_model": "hem",
+  "fuel_jet_diameter_mm": 1.4478,
+  "fuel_jet_cd": 0.7,
+  "fuel_pressure": {
+    "gauge_bar": 0.448,
+    "reference": "atmosphere"
+  },
+  "default_controller": "controller_basic.json",
+  "source": "N2O plan N1 TEST FIXTURE (tests/unit/test_n2o_system.cpp), not shipped data: jets 0.057 in = 1.4478 mm [D, industry numbering convention, AS], Cd 0.66 [C: Dyer et al. 2007 as reported by Waxman et al.], fuel Cd 0.70 [AS], fuel pressure 6.5 psi = 0.448 bar [D]."
+}

@@ -152,6 +152,7 @@ public:
     [[nodiscard]] real idle_integrator() const override { return idle_integrator_; }
     [[nodiscard]] real crank_angle() const override { return crank_angle_; }
     [[nodiscard]] real idle_rpm() const override { return desc_idle_rpm_; }
+    [[nodiscard]] real intake_pressure_pa() const override { return p_im_; }
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
     void reset(EngineState state) override;
 

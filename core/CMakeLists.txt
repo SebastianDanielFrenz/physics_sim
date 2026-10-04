@@ -150,6 +150,7 @@ add_library(ps_core STATIC
   src/vehicle/system.cpp
   src/io/vehicle_io.cpp
   src/io/fuel_io.cpp
+  src/io/nitrous_io.cpp
 
   src/drivetrain/box_lcp.cpp
   src/drivetrain/network.cpp
@@ -161,6 +162,8 @@ add_library(ps_core STATIC
   src/drivetrain/manual_tcu.cpp
   src/drivetrain/engine_sound_state.cpp
   src/drivetrain/engine_rig.cpp
+  src/drivetrain/nitrous_flow.cpp
+  src/drivetrain/nitrous_system.cpp
 
   # Engine-map generator/disk-cache infrastructure (I7c C16a/C16b) - NOT
   # part of ps_engine_cycle above: both need ps::jobs::JobSystem (ps_core-
