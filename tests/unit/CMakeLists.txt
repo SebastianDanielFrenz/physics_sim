@@ -202,3 +202,52 @@ target_include_directories(ps_audio_standalone PRIVATE ${CMAKE_SOURCE_DIR}/tests
 
 add_test(NAME ps_audio_standalone COMMAND ps_audio_standalone)
 set_tests_properties(ps_audio_standalone PROPERTIES LABELS "audio;cycle")
+
+# ps_environment_tests (weather plan W1): the Catch2 tests of ps_environment /
+# ps_environment_io. A separate executable that does NOT link ps_core (it links
+# only ps_test_catch_main's own dependencies, which are core-free apart from
+# the CRT handlers) so the environment library's independence stays visible in
+# the link line; the standalone guard below checks it for the libraries
+# themselves. Tests carry the [environment] tag, so CTest labels select them.
+add_executable(ps_environment_tests
+  test_environment_calendar.cpp
+  test_environment_sun.cpp
+  test_environment_io.cpp
+)
+
+target_link_libraries(ps_environment_tests
+  PRIVATE
+    ps_environment
+    ps_environment_io
+    ps_test_catch_main
+    ps_warnings
+    ps_options
+    nlohmann_json::nlohmann_json
+)
+
+target_include_directories(ps_environment_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+target_compile_definitions(ps_environment_tests PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+catch_discover_tests(ps_environment_tests ADD_TAGS_AS_LABELS)
+
+# ps_environment_standalone - link-time guard like ps_engine_cycle_standalone:
+# a plain main() linking ps_environment and ps_environment_io WHOLE-ARCHIVE
+# without ps_core (tests/unit/environment_standalone_main.cpp).
+add_executable(ps_environment_standalone
+  environment_standalone_main.cpp
+)
+
+target_link_libraries(ps_environment_standalone
+  PRIVATE
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,ps_environment>
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,ps_environment_io>
+    nlohmann_json::nlohmann_json
+    ps_warnings
+    ps_options
+)
+
+target_include_directories(ps_environment_standalone PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+target_compile_definitions(ps_environment_standalone PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+add_test(NAME ps_environment_standalone COMMAND ps_environment_standalone)
+set_tests_properties(ps_environment_standalone PROPERTIES LABELS "environment")
