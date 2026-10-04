@@ -110,6 +110,7 @@ add_library(ps_environment STATIC
   src/environment/solar_geometry.cpp
   src/environment/calendar.cpp
   src/environment/sun.cpp
+  src/environment/environment.cpp
 )
 
 target_include_directories(ps_environment PUBLIC

@@ -9,6 +9,8 @@
 
 #include "ps/articulation/articulation_desc.h"
 #include "ps/backend/i_rigid_backend.h"
+#include "ps/environment/climate_desc.h"
+#include "ps/environment/environment.h"
 #include "ps/terrain/terrain_config.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/world.h"
@@ -95,6 +97,29 @@ struct ScenarioControlEvent {
     real value = 0.0;
 };
 
+// Weather plan W2 (docs/data_formats/scenario.md "environment" block): an
+// environment (clock + calendar + sun for now) installed into the World by
+// build_scenario. The climate file is loaded - and any error surfaced - by
+// load_scenario. A scenario without the block installs none and behaves
+// exactly as before this field existed.
+struct ScenarioEnvironmentEvent {
+    enum class Kind : std::uint8_t {
+        JumpTime,      // advance environment time by `value` env seconds (negative = back) at the event time
+        SetTimeScale   // set the time scale to `value` (>= 0) without a time jump
+    };
+    real time_s = 0.0;  // SIM time at which the event applies
+    Kind kind = Kind::JumpTime;
+    real value = 0.0;
+};
+
+struct ScenarioEnvironment {
+    std::string climate_path;                    // resolved, informational
+    environment::ClimateDesc climate;
+    environment::EnvironmentConfig config;
+    std::uint64_t seed = 0;                      // accepted now, used by the weather timeline (W3)
+    std::vector<ScenarioEnvironmentEvent> events; // kept sorted by time_s (stable) by load_scenario
+};
+
 struct Scenario {
     std::string name;
     real duration_s = 1.0;
@@ -111,6 +136,7 @@ struct Scenario {
     // convention as ScenarioTerrain::spec_path. Empty == no SurfaceTable
     // installed (every surface reads as lambda_mu=1, crr=0).
     std::string surface_table_path;
+    std::optional<ScenarioEnvironment> environment; // weather plan W2
     std::string telemetry_csv; // empty == "<name>.csv" next to the scenario file's caller (ps_run decides)
 };
 
@@ -132,5 +158,12 @@ struct BuiltScenario {
 
 // Builds bodies/joints from a Scenario into a fresh World.
 BuiltScenario build_scenario(const Scenario& scenario);
+
+// Applies every scenario environment event whose time_s <= world.sim_time(), in
+// order, starting at `next_event` (advanced past the applied ones); returns how
+// many were applied. The scenario-driving tools (ps_run, the determinism
+// tests) call this each tick right before World::step(), next to their
+// control_events loop. A scenario without an environment applies nothing.
+std::size_t apply_environment_events(World& world, const Scenario& scenario, std::size_t& next_event);
 
 } // namespace ps::io

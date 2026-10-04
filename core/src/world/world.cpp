@@ -1,5 +1,7 @@
 #include "ps/world/world.h"
 
+#include "ps/environment/environment.h" // weather plan W2
+
 #include "../articulation/contact.h" // internal; PLAN.md P1.5b
 #include "../articulation/system.h" // internal; World owns it via the forward-declared pointer (world.h)
 #include "../drivetrain/powertrain.h" // internal; PHYS-033 P4 I4 C3's declare_control_channels (create_vehicle)
@@ -95,7 +97,7 @@ void World::build_pipeline() {
     };
 
     std::size_t slot = 0;
-    const auto freeze = pipeline_->add_stage("freeze_tick_start_state", timed(slot++, [] {}));
+    const auto freeze = pipeline_->add_stage("freeze_tick_start_state", timed(slot++, [this] { stage_freeze_tick_start_state(); }));
     const auto queries = pipeline_->add_stage("scene_queries", timed(slot++, [] {}), {freeze});
     const auto islands = pipeline_->add_stage("vehicle_islands_substep", timed(slot++, [this] { stage_vehicle_islands(); }), {queries});
     const auto force_el = pipeline_->add_stage("force_elements", timed(slot++, [this] { stage_force_elements(); }), {islands});
@@ -261,6 +263,37 @@ void World::stage_backend_step() {
     backend_->drain_contact_events_into(last_contact_events_);
 }
 
+// Weather plan W2: the one place environment work runs (a new stage would add
+// a stage.<name>.ms channel and change every scenario's CSV header). The
+// environment evaluates this tick's snapshot - a closed-form function of the
+// tick, allocation-free. No environment: nothing.
+void World::stage_freeze_tick_start_state() {
+    if (!environment_) return;
+    environment_->begin_tick(static_cast<std::int64_t>(tick_));
+}
+
+void World::install_environment(std::shared_ptr<environment::Environment> env) {
+    if (!env) throw std::invalid_argument("World::install_environment: null environment");
+    env->attach(static_cast<std::int64_t>(tick_), config_.tick_rate_hz);
+    environment_ = std::move(env);
+}
+
+void World::remove_environment() { environment_.reset(); }
+
+const environment::EnvironmentSnapshot* World::environment_snapshot() const {
+    return environment_ ? &environment_->current() : nullptr;
+}
+
+void World::set_environment_time(real env_s) {
+    if (!environment_) throw std::logic_error("World::set_environment_time: no environment installed");
+    environment_->set_time(env_s, static_cast<std::int64_t>(tick_));
+}
+
+void World::set_environment_time_scale(real scale) {
+    if (!environment_) throw std::logic_error("World::set_environment_time_scale: no environment installed");
+    environment_->set_time_scale(scale, static_cast<std::int64_t>(tick_));
+}
+
 void World::stage_terrain_tiles() {
     if (!terrain_manager_) return; // PLAN.md M1: no-op until set_terrain_source is called
     terrain_manager_->update(*job_system_);
@@ -322,6 +355,11 @@ void World::stage_snapshot() {
         vsnap.powertrain = vinst.powertrain_state();
         vsnap.aero=vinst.aero_telemetry();
     }
+
+    // Weather plan W2: this tick's environment record (a POD copy, no
+    // allocation); left default and flagged absent without an environment.
+    snap.has_environment = static_cast<bool>(environment_);
+    if (environment_) snap.environment = environment_->current();
 
     // PLAN.md P2 adapter seam (this task's step 3): a race-free copy of this
     // tick's contact events - see snapshot.h's own comment on why this must
@@ -476,7 +514,11 @@ std::uint64_t World::state_hash() const {
     h = articulation_system_->fold_state_hash(h);
     // PLAN.md 5.1/P3: every wheel's internal (not otherwise observable)
     // state folds in too - see vehicle::System::fold_state_hash's comment.
-    return vehicle_system_->fold_state_hash(h);
+    h = vehicle_system_->fold_state_hash(h);
+    // Weather plan W2: the environment's clock anchor folds in only while one
+    // is installed, so a World without one hashes exactly as before.
+    if (environment_) h = environment_->fold_state_hash(h);
+    return h;
 }
 
 ArticulationId World::create_articulation(const articulation::ArticulationDesc& desc) {

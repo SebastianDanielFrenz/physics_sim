@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <memory>
 #include "ps/jobs/job_system.h"
+#include "ps/environment/calendar.h"
+#include "ps/environment/climate_io.h"
+#include "ps/environment/environment.h"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -299,6 +302,10 @@ void PsSimulation::rebuild_post_step_and_start() {
     sim_thread_->set_post_step([this]() {
         AdapterSnapshot snap;
         snap.tick = world_->tick();
+        if (const ps::environment::EnvironmentSnapshot* env = world_->environment_snapshot()) {
+            snap.has_environment = true;
+            snap.environment = *env;
+        }
         // Render-time interpolation (render_interp.h): stamp the moment
         // THIS tick's pose data becomes the new "latest" - ensure_render_
         // frame_cached() measures a render frame's alpha against this.
@@ -1022,6 +1029,75 @@ float PsSimulation::get_vehicle_rear_steer_fraction(const String& vehicle_name) 
     return it == vehicle_desc_by_name_.end() ? 0.0f : static_cast<float>(it->second.steering.rear_steer_fraction);
 }
 
+bool PsSimulation::install_environment(const String& climate_absolute_path, double time_scale, const String& start_season,
+                                       std::int64_t start_day, double start_clock_hours) {
+    if (!world_) {
+        last_error_ = "install_environment: no world (call load_scenario first)";
+        return false;
+    }
+    if (is_running()) {
+        last_error_ = "install_environment: setup only, call it before start()";
+        return false;
+    }
+    try {
+        const ps::environment::ClimateDesc climate = ps::io::load_climate_json(to_std_string(climate_absolute_path));
+        ps::environment::EnvironmentConfig cfg;
+        cfg.time_scale = time_scale;
+        if (start_day >= 0) {
+            ps::environment::EnvironmentStart start;
+            start.season = to_std_string(start_season);
+            start.day = static_cast<int>(start_day);
+            // The start is given as a 24-hour clock reading: a game day of any length maps
+            // onto 24 h (EnvironmentSnapshot::clock_hours), so resolve it against that
+            // day's own length.
+            const ps::environment::Calendar calendar(climate);
+            const int season = start.season.empty() ? 0 : calendar.season_index(start.season);
+            if (season < 0) throw std::invalid_argument("unknown start season '" + start.season + "'");
+            if (start.day < 0 || start.day >= calendar.season_days(season)) throw std::invalid_argument("start day out of range for its season");
+            const ps::real day_length_s = calendar.day(calendar.season_start_day(season) + start.day).length_s();
+            start.time_of_day_s = ps::real(start_clock_hours) / 24.0 * day_length_s;
+            cfg.start = start;
+        }
+        world_->install_environment(std::make_shared<ps::environment::Environment>(climate, cfg));
+        last_error_ = String();
+        return true;
+    } catch (const std::exception& e) {
+        godot::UtilityFunctions::print("ps_godot: install_environment failed: ", e.what());
+        last_error_ = String("install_environment failed: ") + String(e.what());
+        return false;
+    }
+}
+
+bool PsSimulation::has_environment() const { return render_snapshot().has_environment; }
+
+Dictionary PsSimulation::get_environment() const {
+    Dictionary d;
+    const AdapterSnapshot& snap = render_snapshot();
+    if (!snap.has_environment) return d;
+    const ps::environment::EnvironmentSnapshot& e = snap.environment;
+    d["t_env_s"] = static_cast<double>(e.t_env_s);
+    d["time_scale"] = static_cast<double>(e.time_scale);
+    d["year"] = static_cast<std::int64_t>(e.year);
+    d["season"] = static_cast<int>(e.season);
+    d["season_name"] = String(e.season_name);
+    d["day_in_season"] = static_cast<int>(e.day_in_season);
+    d["day_of_year"] = static_cast<int>(e.day_of_year);
+    d["time_of_day_s"] = static_cast<double>(e.time_of_day_s);
+    d["day_s"] = static_cast<double>(e.day_s);
+    d["night_s"] = static_cast<double>(e.night_s);
+    d["day_fraction"] = static_cast<double>(e.day_fraction);
+    d["clock_hours"] = static_cast<double>(e.clock_hours);
+    d["is_day"] = e.is_day;
+    d["sun_elevation_deg"] = static_cast<double>(e.sun_elevation_rad * 180.0 / 3.14159265358979323846);
+    d["sun_azimuth_deg"] = static_cast<double>(e.sun_azimuth_rad * 180.0 / 3.14159265358979323846);
+    // A direction: the same sim -> Godot axis fix-up as every other direction
+    // (frame_convert_core.h), no origin shift.
+    d["sun_direction"] = to_godot(iso_to_godot_dir(e.sun_dir_world));
+    d["ghi_w_m2"] = static_cast<double>(e.ghi_w_m2);
+    d["cloud_cover"] = static_cast<double>(e.cloud_cover);
+    return d;
+}
+
 Dictionary PsSimulation::get_vehicle_powertrain(const String& vehicle_name) const {
     Dictionary d;
     const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
@@ -1359,6 +1435,11 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_rear_steer_fraction", "vehicle_name"), &PsSimulation::get_vehicle_rear_steer_fraction);
     ClassDB::bind_method(D_METHOD("get_vehicle_powertrain", "vehicle_name"), &PsSimulation::get_vehicle_powertrain);
     ClassDB::bind_method(D_METHOD("get_vehicle_gauge_info", "vehicle_name"), &PsSimulation::get_vehicle_gauge_info);
+    // Weather plan W2
+    ClassDB::bind_method(D_METHOD("install_environment", "climate_absolute_path", "time_scale", "start_season", "start_day", "start_clock_hours"),
+                         &PsSimulation::install_environment, DEFVAL(1.0), DEFVAL(String()), DEFVAL(-1), DEFVAL(12.0));
+    ClassDB::bind_method(D_METHOD("has_environment"), &PsSimulation::has_environment);
+    ClassDB::bind_method(D_METHOD("get_environment"), &PsSimulation::get_environment);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_vehicle_steer_geometry", "vehicle_name"), &PsSimulation::get_vehicle_steer_geometry);

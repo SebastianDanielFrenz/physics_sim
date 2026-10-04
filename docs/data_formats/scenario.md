@@ -31,6 +31,7 @@ bodies, a shared surface table, and a timeline of control events.
 | `terrain` | [terrain object](#terrain) | optional | none | see below | a procedural terrain source + streaming interest points |
 | `vehicles` | array of [vehicle objects](#vehicles) | optional | empty | see below | vehicles built on an already-described chassis body |
 | `control_events` | array of `{t, channel, value}` | optional | empty | see below | scripted `World::set_control` calls over time |
+| `environment` | [environment object](#environment-weather-plan-w2) | optional | none | see below | clock + calendar + sun installed into the `World` (weather plan W2) |
 | `surface_table_path` | string | optional | `""` | resolved relative to the scenario file's own directory if relative | shared surface-parameter table (see `surfaces.md`); empty = every surface reads `lambda_mu=1, crr=0` |
 
 ## Bodies
@@ -153,6 +154,69 @@ required to be stable; ties break in an unspecified order). `ps_run`
 applies them in that time order as it steps. A scenario with no
 `control_events` behaves exactly as if every channel reads its `World`
 default (usually `0`).
+
+## Environment (weather plan W2)
+
+`"environment"` installs a `ps::environment::Environment` (clock, calendar,
+sun - the weather, surface condition and tyre-profile parts arrive with W3+)
+into the `World` at build time (`World::install_environment`). The climate
+file is `physics_sim.climate/1` (see [`climate.md`](climate.md)) and is loaded,
+so any error in it surfaces, by `load_scenario`. A scenario without the block
+installs nothing and behaves exactly as before: same state hash, same CSV
+header, same allocation behaviour. With one installed, the environment's clock
+anchor is folded into `World::state_hash()`, `WorldSnapshot::environment` is
+filled every tick, and no telemetry channel is added.
+
+```json
+"environment": {
+  "climate": "../climates/test_fixed_summer.json",
+  "seed": 1,
+  "time": { "start": { "season": "autumn", "day": 29, "time_of_day_s": 60000 }, "scale": 20000 },
+  "season": "dynamic",
+  "north_yaw_deg": 15,
+  "events": [ { "t": 3.0, "jump_time_s": 40000 }, { "t": 5.0, "set_time_scale": 5000 } ]
+}
+```
+
+| Field | Type | Req./opt. | Default | Meaning |
+|---|---|---|---|---|
+| `climate` | string | required | - | climate file, relative to the scenario file's directory if relative |
+| `seed` | uint64 | optional | `0` | stored; used by the weather timeline from W3 on |
+| `time.start` | `{year, season, day, time_of_day_s}` | optional | the climate's epoch (`t_env = 0`) | the calendar position the clock starts at: `season` empty = the first season, `day` within that season, `time_of_day_s` since that day's start (midnight) in environment seconds; out-of-range values are load errors |
+| `time.scale` | real >= 0 | optional | `1.0` | environment seconds per simulation second; `0` freezes weather/sun/surface time |
+| `season` | string | optional | `"dynamic"` | `"dynamic"` advances through the seasons; a season name pins every day to that season's mid-season values |
+| `fixed_day_of_year` | int >= 0 | optional | off | pins every day to one game day's values; mutually exclusive with a fixed `season` |
+| `north_yaw_deg` | real | optional | `0` | rotation of north about the World's Z axis, counter-clockwise from +Y (0 = north is +Y, east is +X); used for `sun_dir_world` |
+| `events` | array | optional | empty | timed environment changes, see below |
+
+Environment time is `t_env = anchor_env + scale * (tick - anchor_tick) / tick_hz`,
+a closed-form function of the tick (nothing accumulates). Installing at tick 0
+anchors `t_env = start` there; a mid-run `World::install_environment` anchors it
+at the current tick.
+
+`events` (sorted by `t`, simulation time, applied by
+`ps::io::apply_environment_events` - `ps_run` and the determinism tests call it
+each tick right before `World::step()`): each has `t` and exactly one of
+
+- `jump_time_s` (real): advance environment time by that many environment
+  seconds (negative goes back; the weather and sun are pure functions of time,
+  so this is always valid in W2);
+- `set_time_scale` (real >= 0): change the scale without a time jump.
+
+Rejected (load errors, never silently dropped): unknown keys, a missing
+`climate`, a climate file error, an unknown `season`/`time.start.season`, a bad
+scale, both fixed modes, an event with zero or two actions, and the keys of later
+increments (`weather`, `surface_conditions`, `default_tyre_profile`,
+`set_weather`).
+
+The published record (`ps/environment/environment_snapshot.h`, in
+`WorldSnapshot::environment` when `has_environment`): `t_env_s`, `time_scale`,
+`year`, `season` + `season_name`, `day_in_season`, `day_of_year`,
+`time_of_day_s`, `day_s`/`night_s`, `day_fraction`, `clock_hours`
+(`day_fraction * 24`: a game day of any length maps onto a 24-hour clock),
+`is_day`, `sun_elevation_rad`, `sun_azimuth_rad` (from north, clockwise),
+`sun_dir_world` (unit vector towards the sun, World frame Z up), `ghi_w_m2`
+(clear-sky Haurwitz irradiance; `cloud_cover` is 0 until W3).
 
 ## Minimal complete example
 

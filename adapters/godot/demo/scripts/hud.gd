@@ -96,6 +96,16 @@ func _process(_delta: float) -> void:
 		Engine.get_frames_per_second(), _last_avg_frame_time_us / 1000.0, _last_max_frame_time_us / 1000.0])
 	lines.append("sim time: %.2f s   ticks: %d   bodies: %d" % [_simulation.get_sim_time(), ticks, _simulation.get_body_count()])
 	lines.append("terrain tiles: resident %d  starved %d" % [_simulation.terrain_resident_tile_count(), _simulation.terrain_starved_tile_count()])
+	if _simulation.has_environment():
+		# W2: the clock and calendar come from the sim's environment snapshot (a game day of
+		# any length shows as 24 h); nothing is computed here.
+		var env: Dictionary = _simulation.get_environment()
+		var hours: float = env["clock_hours"]
+		var hh: int = int(floor(hours)) % 24
+		var mm: int = int(floor((hours - floor(hours)) * 60.0)) % 60
+		lines.append("time %02d:%02d  %s day %d  sun %.1f deg  %s  scale x%.1f" % [
+			hh, mm, String(env["season_name"]), int(env["day_in_season"]) + 1,
+			float(env["sun_elevation_deg"]), "day" if env["is_day"] else "night", float(env["time_scale"])])
 	lines.append("")
 
 	if vehicle_name != "" and _simulation.get_vehicle_names().has(vehicle_name):

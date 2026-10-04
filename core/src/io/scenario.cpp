@@ -1,5 +1,6 @@
 #include "ps/io/scenario.h"
 
+#include "ps/environment/climate_io.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/terrain/procedural_terrain.h"
@@ -250,6 +251,93 @@ ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenari
     return sv;
 }
 
+// Weather plan W2: the scenario "environment" block (docs/data_formats/
+// scenario.md). Rejects unknown keys and the keys of later increments (weather,
+// surface_conditions, default_tyre_profile) so a scenario written for them
+// never silently loads with half its meaning dropped.
+ScenarioEnvironment read_environment(const json& j, const std::filesystem::path& scenario_dir) {
+    const auto fail = [](const std::string& msg) { throw std::runtime_error("environment: " + msg); };
+    if (!j.is_object()) fail("expected an object");
+    for (const auto& [key, v] : j.items()) {
+        (void)v;
+        if (key == "weather" || key == "surface_conditions" || key == "default_tyre_profile")
+            fail("key \"" + key + "\" is not supported yet (weather plan W3+)");
+        if (key != "climate" && key != "seed" && key != "time" && key != "season" && key != "fixed_day_of_year" &&
+            key != "north_yaw_deg" && key != "events")
+            fail("unknown key \"" + key + "\"");
+    }
+    ScenarioEnvironment e;
+    if (!j.contains("climate") || !j.at("climate").is_string()) fail("missing required string \"climate\"");
+    std::filesystem::path cp = j.at("climate").get<std::string>();
+    if (cp.is_relative()) cp = scenario_dir / cp;
+    e.climate_path = cp.lexically_normal().string();
+    e.climate = load_climate_json(e.climate_path);
+    if (j.contains("seed")) e.seed = j.at("seed").get<std::uint64_t>();
+
+    if (j.contains("time")) {
+        const json& t = j.at("time");
+        if (!t.is_object()) fail("\"time\" must be an object");
+        for (const auto& [key, v] : t.items()) {
+            (void)v;
+            if (key != "start" && key != "scale") fail("unknown key \"time." + key + "\"");
+        }
+        if (t.contains("scale")) e.config.time_scale = t.at("scale").get<real>();
+        if (t.contains("start")) {
+            const json& st = t.at("start");
+            if (!st.is_object()) fail("\"time.start\" must be an object");
+            for (const auto& [key, v] : st.items()) {
+                (void)v;
+                if (key != "year" && key != "season" && key != "day" && key != "time_of_day_s")
+                    fail("unknown key \"time.start." + key + "\"");
+            }
+            environment::EnvironmentStart start;
+            start.year = st.value("year", std::int64_t(0));
+            start.season = st.value("season", std::string());
+            start.day = st.value("day", 0);
+            start.time_of_day_s = st.value("time_of_day_s", real(0.0));
+            e.config.start = start;
+        }
+    }
+    if (j.contains("season")) {
+        const std::string s = j.at("season").get<std::string>();
+        if (s != "dynamic") e.config.fixed_season = s;
+    }
+    if (j.contains("fixed_day_of_year")) e.config.fixed_day_of_year = j.at("fixed_day_of_year").get<int>();
+    if (j.contains("north_yaw_deg")) e.config.north_yaw_deg = j.at("north_yaw_deg").get<real>();
+
+    if (j.contains("events")) {
+        for (const auto& ej : j.at("events")) {
+            if (!ej.is_object() || !ej.contains("t")) fail("each event needs an object with a \"t\"");
+            ScenarioEnvironmentEvent ev;
+            ev.time_s = ej.at("t").get<real>();
+            int kinds = 0;
+            for (const auto& [key, v] : ej.items()) {
+                if (key == "t") continue;
+                if (key == "jump_time_s") { ev.kind = ScenarioEnvironmentEvent::Kind::JumpTime; ev.value = v.get<real>(); ++kinds; }
+                else if (key == "set_time_scale") { ev.kind = ScenarioEnvironmentEvent::Kind::SetTimeScale; ev.value = v.get<real>(); ++kinds; }
+                else if (key == "set_weather") fail("event key \"set_weather\" is not supported yet (weather plan W3+)");
+                else fail("unknown event key \"" + key + "\"");
+            }
+            if (kinds != 1) fail("each event needs exactly one of jump_time_s, set_time_scale");
+            if (ev.kind == ScenarioEnvironmentEvent::Kind::SetTimeScale && !(ev.value >= 0.0 && std::isfinite(ev.value)))
+                fail("set_time_scale must be >= 0 and finite");
+            e.events.push_back(ev);
+        }
+        std::stable_sort(e.events.begin(), e.events.end(),
+                         [](const ScenarioEnvironmentEvent& a, const ScenarioEnvironmentEvent& b) { return a.time_s < b.time_s; });
+    }
+    // Build the Environment once here so a bad config (unknown season, bad
+    // scale, a start outside its day, ...) is a load-time error naming the
+    // scenario, not a failure in build_scenario.
+    try {
+        environment::Environment probe(e.climate, e.config);
+        (void)probe;
+    } catch (const std::invalid_argument& ex) {
+        fail(ex.what());
+    }
+    return e;
+}
+
 } // namespace
 
 Scenario load_scenario(const std::string& json_path) { return load_scenario(json_path, EngineMapOptions{}); }
@@ -321,6 +409,9 @@ Scenario load_scenario(const std::string& json_path, const EngineMapOptions& map
             std::sort(s.control_events.begin(), s.control_events.end(),
                       [](const ScenarioControlEvent& a, const ScenarioControlEvent& b) { return a.time_s < b.time_s; });
         }
+        if (j.contains("environment")) {
+            s.environment = read_environment(j.at("environment"), std::filesystem::path(json_path).parent_path());
+        }
         if (j.contains("surface_table_path")) {
             std::filesystem::path p = j.at("surface_table_path").get<std::string>();
             if (p.is_relative()) p = std::filesystem::path(json_path).parent_path() / p;
@@ -366,6 +457,10 @@ BuiltScenario build_scenario(const Scenario& scenario) {
     if (!scenario.surface_table_path.empty()) {
         built.world->set_surface_table(std::make_shared<SurfaceTable>(scenario.surface_table_path));
     }
+    if (scenario.environment) {
+        built.world->install_environment(
+            std::make_shared<environment::Environment>(scenario.environment->climate, scenario.environment->config));
+    }
     for (const auto& sv : scenario.vehicles) {
         auto it = built.bodies_by_name.find(sv.chassis_body_name);
         if (it == built.bodies_by_name.end()) throw std::runtime_error("vehicle '" + sv.name + "' references unknown chassis_body '" + sv.chassis_body_name + "'");
@@ -373,6 +468,29 @@ BuiltScenario build_scenario(const Scenario& scenario) {
         built.vehicles_by_name[sv.name] = id;
     }
     return built;
+}
+
+std::size_t apply_environment_events(World& world, const Scenario& scenario, std::size_t& next_event) {
+    if (!scenario.environment) return 0;
+    const auto& events = scenario.environment->events;
+    std::size_t applied = 0;
+    while (next_event < events.size() && events[next_event].time_s <= world.sim_time()) {
+        const ScenarioEnvironmentEvent& ev = events[next_event];
+        switch (ev.kind) {
+            case ScenarioEnvironmentEvent::Kind::JumpTime: {
+                // The env time the NEXT step() will run at, plus the jump.
+                const real now = world.environment()->clock().env_time(static_cast<std::int64_t>(world.tick()));
+                world.set_environment_time(now + ev.value);
+                break;
+            }
+            case ScenarioEnvironmentEvent::Kind::SetTimeScale:
+                world.set_environment_time_scale(ev.value);
+                break;
+        }
+        ++next_event;
+        ++applied;
+    }
+    return applied;
 }
 
 } // namespace ps::io

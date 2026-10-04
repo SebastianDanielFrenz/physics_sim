@@ -1,0 +1,55 @@
+{
+  "format": "physics_sim.scenario/1",
+  "name": "environment_day",
+  "duration_s": 8.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "surface_table_path": "../surfaces/surfaces.json",
+  "bodies": [
+    {
+      "name": "ground",
+      "motion": "static",
+      "shape": {"type": "box", "half_extents": [1000.0, 1000.0, 0.5]},
+      "position": [0, 0, -0.5],
+      "friction": 1.0
+    },
+    {
+      "name": "chassis",
+      "motion": "dynamic",
+      "mass": 1500.0,
+      "shape": {"type": "box", "half_extents": [2.0, 0.4, 0.15]},
+      "position": [0, 0, 0.6],
+      "linear_velocity": [20.0, 0, 0],
+      "friction": 0.5,
+      "allow_sleep": false
+    }
+  ],
+  "vehicles": [
+    {
+      "name": "car",
+      "chassis_body": "chassis",
+      "vehicle_json_path": "../vehicles/car_sedan.json"
+    }
+  ],
+  "control_events": [
+    { "t": 0.0, "channel": "steer", "value": 0.0 },
+    { "t": 1.0, "channel": "steer", "value": 0.25 }
+  ],
+  "environment": {
+    "climate": "../climates/test_fixed_summer.json",
+    "seed": 1,
+    "time": {
+      "start": { "season": "autumn", "day": 29, "time_of_day_s": 60000 },
+      "scale": 20000
+    },
+    "season": "dynamic",
+    "north_yaw_deg": 15,
+    "events": [
+      { "t": 3.0, "jump_time_s": 40000 },
+      { "t": 5.0, "set_time_scale": 5000 }
+    ]
+  },
+  "telemetry_csv": "environment_day.csv"
+}

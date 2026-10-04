@@ -605,7 +605,9 @@ std::uint64_t run_scenario_file(const char* file, int workers) {
     ps::World& world = *built.world;
     const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
     std::size_t next_control_event = 0;
+    std::size_t next_environment_event = 0; // weather plan W2: same helper ps_run calls
     for (int i = 0; i < ticks; ++i) {
+        ps::io::apply_environment_events(world, sc, next_environment_event);
         while (next_control_event < sc.control_events.size() && sc.control_events[next_control_event].time_s <= world.sim_time()) {
             const auto& ev = sc.control_events[next_control_event];
             world.set_control(ev.channel, ev.value);
@@ -616,6 +618,66 @@ std::uint64_t run_scenario_file(const char* file, int workers) {
     return world.state_hash();
 }
 } // namespace
+
+// Weather plan W2: data/scenarios/environment_day.json - car_sedan driving under an
+// installed environment (clock + calendar + sun, scale 20000 across an autumn -> winter
+// boundary, a time jump at t=3 s and a scale change at t=5 s). The same file is in
+// tools/ci.ps1's Windows-vs-Linux hash compare once the coordinator registers it; this
+// covers worker count. The environment folds its clock anchor into the hash, so the
+// events must have run (asserted below) for the equality to mean anything.
+TEST_CASE("State hash with an installed environment is identical across 1, 2, 4, 10 and 24 workers",
+          "[determinism][environment][heavy][world][io]") {
+    const std::uint64_t reference = run_scenario_file("environment_day.json", 1);
+    for (int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("environment_day.json", workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h << " reference=0x" << reference);
+        REQUIRE(h == reference);
+    }
+}
+
+TEST_CASE("environment_day.json: the environment events really run and move the hash",
+          "[determinism][environment][world][io]") {
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/environment_day.json");
+    sc.world_config.job_workers = 1;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    const auto ticks = static_cast<int>(sc.duration_s * sc.world_config.tick_rate_hz + 0.5);
+    std::size_t next_control_event = 0, next_environment_event = 0;
+    std::string first_season, last_season;
+    double first_elev = 0.0, last_elev = 0.0;
+    for (int i = 0; i < ticks; ++i) {
+        ps::io::apply_environment_events(world, sc, next_environment_event);
+        while (next_control_event < sc.control_events.size() && sc.control_events[next_control_event].time_s <= world.sim_time()) {
+            world.set_control(sc.control_events[next_control_event].channel, sc.control_events[next_control_event].value);
+            ++next_control_event;
+        }
+        world.step();
+        const auto& env = world.snapshots().read().environment;
+        if (i == 0) { first_season = env.season_name; first_elev = env.sun_elevation_rad; }
+        last_season = env.season_name;
+        last_elev = env.sun_elevation_rad;
+    }
+    CHECK(next_environment_event == 2);
+    CHECK(first_season == "autumn");
+    CHECK(last_season == "winter");          // 8 s of 20000x plus a 40000 s jump crossed the season boundary
+    CHECK(first_elev != last_elev);          // the sun moved
+    CHECK(world.environment_snapshot()->time_scale == 5000.0);
+
+    // Without the environment events the same run hashes differently (the clock anchor is folded in).
+    ps::io::Scenario sc2 = sc;
+    sc2.environment->events.clear();
+    ps::io::BuiltScenario built2 = ps::io::build_scenario(sc2);
+    next_control_event = 0;
+    next_environment_event = 0;
+    for (int i = 0; i < ticks; ++i) {
+        while (next_control_event < sc2.control_events.size() && sc2.control_events[next_control_event].time_s <= built2.world->sim_time()) {
+            built2.world->set_control(sc2.control_events[next_control_event].channel, sc2.control_events[next_control_event].value);
+            ++next_control_event;
+        }
+        built2.world->step();
+    }
+    CHECK(built2.world->state_hash() != world.state_hash());
+}
 
 TEST_CASE("State hash with two terrain interest points and suppression is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][terrain][heavy][world][io]") {

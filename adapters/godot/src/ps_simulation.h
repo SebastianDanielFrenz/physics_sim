@@ -42,6 +42,7 @@
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include "ps/drivetrain/powertrain_state.h"
+#include "ps/environment/environment_snapshot.h"
 #include "ps/io/scenario.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
@@ -134,6 +135,12 @@ struct AdapterSnapshot {
     // Indexed the same way as vehicle_order_ (registration order at
     // spawn_vehicle time, finalised when start() is called).
     std::vector<VehicleDynamicSnapshot> vehicles;
+    // Weather plan W2: this tick's environment record (time + sun), copied
+    // from World::environment_snapshot() in post_step; has_environment is
+    // false while none is installed. A plain POD, so the per-tick copy never
+    // allocates.
+    bool has_environment = false;
+    ps::environment::EnvironmentSnapshot environment;
     // Render-time interpolation (render_interp.h, PLAN.md D3 judder fix):
     // every body PsSimulation exposes by name (bodies_by_name_), indexed
     // the same way as PsSimulation::body_order_ (registration order,
@@ -389,6 +396,27 @@ public:
     // get_vehicle_max_wheel_angle et al. above) - no core change. Empty
     // Dictionary for an unknown vehicle.
     [[nodiscard]] godot::Dictionary get_vehicle_gauge_info(const godot::String& vehicle_name) const;
+
+    // Weather plan W2 (out/weather_plan.md 1.3): clock + calendar + sun. The
+    // logic lives in core (ps::environment); this adapter only installs it
+    // and exposes the per-tick record. install_environment loads the climate
+    // file (absolute path), anchors time at `start_clock_hours` (0-24; a game
+    // day of any length maps onto 24 h) of day `start_day` of `start_season`
+    // (start_day < 0: the climate's own epoch; empty season: the first one) at
+    // `time_scale` environment seconds per sim second, and installs it into the
+    // World. Setup only: after load_scenario() and BEFORE start() (returns
+    // false with last_error set while the sim thread runs, or on any load
+    // error). Without it the demo has no environment and every other adapter
+    // behaviour is unchanged.
+    bool install_environment(const godot::String& climate_absolute_path, double time_scale, const godot::String& start_season,
+                             std::int64_t start_day, double start_clock_hours);
+    [[nodiscard]] bool has_environment() const;
+    // Race-free (render snapshot). Empty Dictionary without an environment.
+    // Keys: t_env_s, time_scale, year, season (index), season_name, day_in_season,
+    // day_of_year, time_of_day_s, day_s, night_s, day_fraction, clock_hours,
+    // is_day, sun_elevation_deg, sun_azimuth_deg, sun_direction (Godot-frame
+    // unit Vector3 TOWARDS the sun), ghi_w_m2, cloud_cover.
+    [[nodiscard]] godot::Dictionary get_environment() const;
 
     [[nodiscard]] godot::PackedStringArray get_vehicle_names() const;
     [[nodiscard]] godot::String get_vehicle_chassis_body_name(const godot::String& vehicle_name) const;
