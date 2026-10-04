@@ -16,6 +16,14 @@
 namespace ps {
 
 bool jolt_backend_self_check() {
+    // Jolt is already set up process-wide (a World's backend ran
+    // ensure_jolt_registered): touching the globals again would reinstall the
+    // default allocator over debug_alloc's counting hook and UnregisterTypes()
+    // would null PhysicsMaterial::sDefault under the live backend - the
+    // test-order-dependent "debug_alloc sees allocations made through Jolt's
+    // allocator" failure (2026-10-05).
+    if (JPH::Factory::sInstance != nullptr) return true;
+
     JPH::RegisterDefaultAllocator();
 
     JPH::Factory* factory = new JPH::Factory();
