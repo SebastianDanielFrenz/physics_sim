@@ -118,6 +118,7 @@ Calendar::Calendar(const ClimateDesc& desc, CalendarOptions options) {
         for (int k = 0; k < season_days_[static_cast<std::size_t>(s)]; ++k, ++day_index) {
             DayValues& dv = days_[static_cast<std::size_t>(day_index)];
             dv.season = s;
+            dv.weather_season = s;
             dv.day_in_season = k;
 
             const real x = static_cast<real>(day_index);
@@ -190,6 +191,7 @@ Calendar::Calendar(const ClimateDesc& desc, CalendarOptions options) {
             dv.night_s = dn.second;
             dv.y_start = y_mid;
             dv.y_end = y_mid;
+            dv.weather_season = s;
             dv.has_climate = sd.climate.has_value();
             if (sd.climate) dv.climate = *sd.climate;
             dv.has_authored = authored[static_cast<std::size_t>(s)].valid;

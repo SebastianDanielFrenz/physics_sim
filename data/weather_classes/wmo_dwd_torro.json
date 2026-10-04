@@ -1,0 +1,28 @@
+{
+  "format": "physics_sim.weather_classes/1",
+  "drizzle_mm_h": { "thresholds": [0.1, 0.5], "rule": "ge" },
+  "rain_mm_h": { "thresholds": [2.5, 10.0, 50.0], "rule": ["ge", "ge", "gt"] },
+  "snow_mm_h": { "thresholds": [1.0, 5.0], "rule": ["ge", "gt"] },
+  "cloudburst_mm_h": 100.0,
+  "dwd_rain_1h_mm": { "thresholds": [15.0, 25.0, 40.0], "rule": ["ge", "ge", "gt"] },
+  "dwd_rain_6h_mm": { "thresholds": [20.0, 35.0, 60.0], "rule": ["ge", "ge", "gt"] },
+  "dwd_rain_unwetter_level": 2,
+  "beaufort_m_s": {
+    "thresholds": [0.2, 1.5, 3.3, 5.4, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6],
+    "rule": "gt"
+  },
+  "dwd_gust_km_h": { "thresholds": [50.0, 65.0, 90.0, 105.0, 120.0, 140.0], "rule": ["gt", "ge", "ge", "ge", "ge", "gt"] },
+  "dwd_gust_unwetter_level": 4,
+  "torro_hail_mm": {
+    "thresholds": [5.0, 10.0, 16.0, 21.0, 31.0, 41.0, 51.0, 61.0, 76.0, 91.0, 100.0],
+    "rule": ["ge", "ge", "ge", "ge", "ge", "ge", "ge", "ge", "ge", "ge", "gt"]
+  },
+  "source": {
+    "drizzle_rain_snow": "CITED: WMO-No. 8 (2018 ed.) Vol. I ch. 14 annex, precipitation intensity classes (defined over 3-min periods): drizzle light < 0.1, moderate 0.1-0.5, heavy >= 0.5 mm/h; rain light < 2.5, moderate 2.5-10, heavy 10-50, violent > 50 mm/h; snow light < 1.0, moderate 1.0-5.0, heavy > 5.0 mm/h water equivalent (as transcribed in out/weather_plan.md section 3.3, source marked [V] there). The 'ge'/'gt' choice at each shared boundary is ASSUMED where the table text gives both neighbours the boundary value; the published value is a continuous rate, not the 3-min reporting resolution. Sleet, freezing rain and hail use the rain scale [ASSUMED].",
+    "cloudburst": "ASSUMED: no official DWD numeric definition of 'Wolkenbruch' exists; >= 100 mm/h as an instantaneous (short cell peak) rate is the AMS Glossary 'cloudburst' figure as quoted by out/weather_plan.md (marked [M], not re-checked). Owner question Q17: changing this number is a data change.",
+    "dwd_rain": "CITED: DWD Warnkriterien (https://www.dwd.de/DE/wetter/warnungen_aktuell/kriterien/warnkriterien.html, read 2026-10-05): Starkregen '15 bis 25 l/m2 in 1 Stunde' / '20 bis 35 l/m2 in 6 Stunden' (Stufe 2), heftiger Starkregen '25-40' / '35-60' (Stufe 3, Unwetter), extrem heftiger Starkregen '> 40' / '> 60' (Stufe 4). A value exactly on 25 (35) is in both quoted ranges; the higher level is taken [ASSUMED]. Applied to the trailing 1 h / 6 h accumulation of the published (liquid-equivalent) rate. dwd_rain_unwetter_level 2 = heftiger Starkregen = the first Stufe 3 level.",
+    "beaufort": "CITED: WMO-No. 8 (2018 ed.) Vol. I ch. 5 Table 5.1, Beaufort upper boundaries 0.2/1.5/3.3/5.4/7.9/10.7/13.8/17.1/20.7/24.4/28.4/32.6 m/s for force 0-11 (10-min mean at 10 m), as transcribed in out/weather_plan.md section 3.3. The table is in 0.1 m/s steps; a continuous speed above an upper boundary enters the next force ('gt') [ASSUMED convention].",
+    "dwd_gust": "CITED: DWD Warnkriterien (read 2026-10-05): Windboeen '> 50 km/h' (Stufe 1), Sturmboeen '65 bis 89' (Stufe 2), schwere Sturmboeen '90 bis 104' (Stufe 2), orkanartige Boeen '105 bis 119' (Stufe 3), Orkanboeen 'ab 120' (Stufe 3), extreme Orkanboeen 'mehr als 140' (Stufe 4). The integer km/h ranges leave gaps (64-65 ...); the next level starts at its quoted lower bound ('ge') [ASSUMED]. dwd_gust_unwetter_level 4 = orkanartige Boeen = the first Stufe 3 level. Applied to the nominal gust (10-min mean x gust factor) until W4 synthesises the 3-s gust.",
+    "torro": "CITED: TORRO hailstone size codes (https://www.torro.org.uk/research/hail/hscale, read 2026-10-05): code 0 5-9 mm, 1 10-15, 2 16-20, 3 21-30, 4 31-40, 5 41-50, 6 51-60, 7 61-75, 8 76-90, 9 91-100, 10 > 100 mm maximum diameter. A continuous diameter between two integer ranges (e.g. 9.5 mm) stays in the lower code [ASSUMED convention]; below 5 mm is no TORRO code (-1). TORRO notes vehicle bodywork damage from intensity H4 (no damage model here)."
+  }
+}

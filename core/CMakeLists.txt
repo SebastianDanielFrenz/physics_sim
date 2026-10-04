@@ -111,6 +111,10 @@ add_library(ps_environment STATIC
   src/environment/calendar.cpp
   src/environment/sun.cpp
   src/environment/environment.cpp
+  src/environment/weather_desc.cpp
+  src/environment/air_temperature.cpp
+  src/environment/weather.cpp
+  src/environment/weather_classes.cpp
 )
 
 target_include_directories(ps_environment PUBLIC
@@ -133,6 +137,7 @@ target_link_libraries(ps_environment
 add_library(ps_environment_io STATIC
   src/environment/io/json_extends.cpp
   src/environment/io/climate_io.cpp
+  src/environment/io/weather_io.cpp
 )
 
 target_include_directories(ps_environment_io PUBLIC

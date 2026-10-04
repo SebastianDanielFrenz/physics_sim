@@ -1,0 +1,13 @@
+{
+  "format": "physics_sim.weather_preset/1",
+  "regime": "fog",
+  "cloud_cover": 1.0,
+  "precip_mm_h": 0.0,
+  "precip_type": "auto",
+  "wind_mean_m_s": 0.5,
+  "wind_dir_deg": 0.0,
+  "gust_factor": 1.2,
+  "rh": 1.0,
+  "temp_offset_k": -1.0,
+  "source": "ASSUMED: authored game preset (weather plan 7.3), not a measurement. The intensity is chosen inside the class it represents (data/weather_classes/wmo_dwd_torro.json: WMO-No. 8 intensity classes, DWD Warnkriterien, TORRO); every other number (cloud cover, wind, RH, offsets) is ASSUMED plausible for the phenomenon. calm (Beaufort 1), saturated, no precipitation; visibility is not modelled in W3."
+}
