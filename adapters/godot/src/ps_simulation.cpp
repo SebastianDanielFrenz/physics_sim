@@ -206,6 +206,22 @@ void PsSimulation::rebuild_post_step_and_start() {
         }
     }
 
+    // Nominal-clock pose history (render_interp.h): flat layout = every
+    // body, then per articulation its root followed by its links. Allocated
+    // here, before the sim thread starts.
+    articulation_pose_offset_.assign(articulation_order_.size(), 0);
+    std::size_t flat_pose_count = body_order_.size();
+    for (std::size_t i = 0; i < articulation_order_.size(); ++i) {
+        articulation_pose_offset_[i] = flat_pose_count;
+        flat_pose_count += 1 + prev_articulation_poses_[i].links.size();
+    }
+    pose_history_.reset(flat_pose_count);
+    history_pose_scratch_.assign(flat_pose_count, ps::Pose{});
+    history_teleport_scratch_.assign(flat_pose_count, 0);
+    last_publish_wall_ns_ = 0;
+    render_sample_.valid = false;
+    cached_render_snapshot_ = nullptr; // force a fresh sample on the first frame after a (re)start
+
     sim_thread_->set_pre_step([this]() {
         // Control channels: the only writer of VALUES from here on is the
         // Godot main thread (set_control), the only writer of KEYS was
@@ -322,8 +338,28 @@ void PsSimulation::rebuild_post_step_and_start() {
             const ps::Pose latest = world_->get_pose(bodies_by_name_.at(body_order_[i])); // safe: sim thread, right after step()
             const ps::Pose prev = body_teleported_this_tick_[i] ? latest : prev_body_pose_[i];
             snap.bodies.push_back(InterpolatedPose{prev, latest});
+            history_pose_scratch_[i] = latest;
+            history_teleport_scratch_[i] = body_teleported_this_tick_[i] ? 1 : 0;
             prev_body_pose_[i] = latest;
             body_teleported_this_tick_[i] = false; // consumed for this tick
+        }
+        for (std::size_t i = 0; i < snap.articulations.size(); ++i) {
+            const ArticulationLinkPoseSet& set = snap.articulations[i];
+            const std::size_t base = articulation_pose_offset_[i];
+            history_pose_scratch_[base] = set.root.latest;
+            for (std::size_t l = 0; l < set.links.size(); ++l) history_pose_scratch_[base + 1 + l] = set.links[l].latest;
+        }
+        // Nominal-clock history (render_interp.h): stamp with the tick's
+        // scheduled time, not the wall time this callback happens to run at.
+        // Publish lateness/gap histograms are the measured jitter the old
+        // publish-time alpha suffered from.
+        pose_history_.push(sim_thread_->tick_nominal_time(), snap.tick, sim_thread_->tick_clock_break(), history_pose_scratch_, history_teleport_scratch_);
+        {
+            const auto wall = std::chrono::steady_clock::now();
+            const std::int64_t wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(wall.time_since_epoch()).count();
+            publish_lateness_hist_.add(std::chrono::duration_cast<std::chrono::nanoseconds>(wall - sim_thread_->tick_nominal_time()).count());
+            if (last_publish_wall_ns_ != 0) publish_gap_hist_.add(wall_ns - last_publish_wall_ns_);
+            last_publish_wall_ns_ = wall_ns;
         }
 
         // PLAN.md M1 steps 1/5: per-vehicle wheel telemetry (race-free
@@ -501,9 +537,8 @@ godot::Transform3D PsSimulation::get_body_transform(const String& body_name) con
     // snapshot triple buffer - the core one only ever carries the latest
     // tick's pose, not the (prev, latest, publish_time) this needs to blend.
     ensure_render_frame_cached();
-    if (cached_render_snapshot_ == nullptr || it->second >= cached_render_snapshot_->bodies.size()) return godot::Transform3D();
-    const ps::Pose pose = interpolate_pose(cached_render_snapshot_->bodies[it->second], cached_render_alpha_);
-    return iso_to_godot_transform(pose, origin_rebase_.origin());
+    if (!render_sample_.valid || it->second >= render_sample_.poses.size()) return godot::Transform3D();
+    return iso_to_godot_transform(render_sample_.poses[it->second], origin_rebase_.origin());
 }
 
 float PsSimulation::get_body_speed_mps(const String& body_name) const {
@@ -528,11 +563,13 @@ godot::Transform3D PsSimulation::get_articulation_link_transform(const String& a
     // comment; same frame-cached (snapshot, alpha) pair as every other pose
     // read this frame.
     ensure_render_frame_cached();
-    if (cached_render_snapshot_ == nullptr || order_index >= cached_render_snapshot_->articulations.size()) return godot::Transform3D();
-    const ArticulationLinkPoseSet& set = cached_render_snapshot_->articulations[order_index];
-    const InterpolatedPose& ip = (link_index < 0) ? set.root : (static_cast<std::size_t>(link_index) < set.links.size() ? set.links[static_cast<std::size_t>(link_index)] : set.root);
-    const ps::Pose pose = interpolate_pose(ip, cached_render_alpha_);
-    return iso_to_godot_transform(pose, origin_rebase_.origin());
+    if (!render_sample_.valid || order_index >= articulation_pose_offset_.size()) return godot::Transform3D();
+    const std::size_t base = articulation_pose_offset_[order_index];
+    const auto links_it = articulation_link_counts_.find(articulation_order_[order_index]);
+    const std::size_t link_count = links_it == articulation_link_counts_.end() ? 0 : links_it->second;
+    const std::size_t flat = (link_index >= 0 && static_cast<std::size_t>(link_index) < link_count) ? base + 1 + static_cast<std::size_t>(link_index) : base;
+    if (flat >= render_sample_.poses.size()) return godot::Transform3D();
+    return iso_to_godot_transform(render_sample_.poses[flat], origin_rebase_.origin());
 }
 
 void PsSimulation::ensure_render_frame_cached() const {
@@ -548,7 +585,59 @@ void PsSimulation::ensure_render_frame_cached() const {
     cached_render_frame_ = frame;
     cached_render_snapshot_ = &const_cast<TripleBuffer<AdapterSnapshot>&>(adapter_snapshots_).read();
     const double tick_dt_s = world_ ? world_->dt() : 0.0;
-    cached_render_alpha_ = render_interp_alpha(cached_render_snapshot_->publish_time, std::chrono::steady_clock::now(), tick_dt_s);
+    const auto now = std::chrono::steady_clock::now();
+    last_sample_time_us_ = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    if (render_legacy_alpha_) {
+        // A/B diagnostic: the old publish-time alpha on the snapshot's
+        // (prev, latest) pairs, written into the same flat sample layout.
+        cached_render_alpha_ = render_interp_alpha(cached_render_snapshot_->publish_time, now, tick_dt_s);
+        const AdapterSnapshot& snap = *cached_render_snapshot_;
+        render_sample_.poses.resize(history_pose_scratch_.size());
+        for (std::size_t i = 0; i < snap.bodies.size() && i < render_sample_.poses.size(); ++i) {
+            render_sample_.poses[i] = interpolate_pose(snap.bodies[i], cached_render_alpha_);
+        }
+        for (std::size_t a = 0; a < snap.articulations.size() && a < articulation_pose_offset_.size(); ++a) {
+            const std::size_t base = articulation_pose_offset_[a];
+            render_sample_.poses[base] = interpolate_pose(snap.articulations[a].root, cached_render_alpha_);
+            for (std::size_t l = 0; l < snap.articulations[a].links.size(); ++l) {
+                render_sample_.poses[base + 1 + l] = interpolate_pose(snap.articulations[a].links[l], cached_render_alpha_);
+            }
+        }
+        render_sample_.valid = !snap.bodies.empty() || !snap.articulations.empty();
+        render_sample_.alpha = cached_render_alpha_;
+        render_sample_.tick_a = snap.tick > 0 ? snap.tick - 1 : 0;
+        render_sample_.tick_b = snap.tick;
+        render_sample_.late = render_sample_.early = render_sample_.stepped = false;
+    } else {
+        pose_history_.sample(render_time_for(now, tick_dt_s, render_delay_ticks_), render_sample_);
+        cached_render_alpha_ = render_sample_.alpha;
+    }
+}
+
+godot::Dictionary PsSimulation::get_render_diagnostics() const {
+    godot::Dictionary d;
+    d["legacy_alpha"] = render_legacy_alpha_;
+    d["delay_ticks"] = render_delay_ticks_;
+    d["frames_sampled"] = static_cast<std::int64_t>(pose_history_.frames_sampled());
+    d["frames_late"] = static_cast<std::int64_t>(pose_history_.frames_late());
+    d["frames_early"] = static_cast<std::int64_t>(pose_history_.frames_early());
+    d["frames_stepped"] = static_cast<std::int64_t>(pose_history_.frames_stepped());
+    d["alpha"] = render_sample_.alpha;
+    d["tick_a"] = static_cast<std::int64_t>(render_sample_.tick_a);
+    d["tick_b"] = static_cast<std::int64_t>(render_sample_.tick_b);
+    d["late"] = render_sample_.late;
+    d["sample_time_us"] = last_sample_time_us_;
+    d["resyncs"] = sim_thread_ ? static_cast<std::int64_t>(sim_thread_->resync_count()) : 0;
+    godot::PackedInt64Array lateness;
+    godot::PackedInt64Array gap;
+    for (std::size_t i = 0; i < publish_lateness_hist_.size(); ++i) {
+        lateness.push_back(static_cast<std::int64_t>(publish_lateness_hist_.count(i)));
+        gap.push_back(static_cast<std::int64_t>(publish_gap_hist_.count(i)));
+    }
+    d["publish_lateness_hist"] = lateness;
+    d["publish_gap_hist"] = gap;
+    d["hist_bin_ms"] = static_cast<double>(publish_lateness_hist_.bin_ns()) / 1.0e6;
+    return d;
 }
 
 godot::PackedStringArray PsSimulation::get_body_names() const {
@@ -1295,6 +1384,11 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("read_vehicle_voice_audio", "vehicle_name", "frames"), &PsSimulation::read_vehicle_voice_audio);
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_underrun_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_underrun_count);
     ClassDB::bind_method(D_METHOD("take_vehicle_voice_timing", "vehicle_name"), &PsSimulation::take_vehicle_voice_timing);
+    ClassDB::bind_method(D_METHOD("get_render_diagnostics"), &PsSimulation::get_render_diagnostics);
+    ClassDB::bind_method(D_METHOD("set_render_delay_ticks", "ticks"), &PsSimulation::set_render_delay_ticks);
+    ClassDB::bind_method(D_METHOD("get_render_delay_ticks"), &PsSimulation::get_render_delay_ticks);
+    ClassDB::bind_method(D_METHOD("set_render_legacy_alpha", "legacy"), &PsSimulation::set_render_legacy_alpha);
+    ClassDB::bind_method(D_METHOD("get_render_legacy_alpha"), &PsSimulation::get_render_legacy_alpha);
     ClassDB::bind_method(D_METHOD("set_voice_full_scale_pa", "pa"), &PsSimulation::set_voice_full_scale_pa);
     ClassDB::bind_method(D_METHOD("get_voice_full_scale_pa"), &PsSimulation::get_voice_full_scale_pa);
 }

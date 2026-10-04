@@ -330,6 +330,19 @@ public:
     // wake-ups (cumulative) and the Runner's worst block. Empty for an
     // unknown vehicle or one without a voice.
     godot::Dictionary take_vehicle_voice_timing(const godot::String& vehicle_name);
+    // Render-interpolation diagnostics (render_interp.h PoseHistory): frames
+    // sampled/late/early/stepped (cumulative), the last sample's blend, the
+    // delay in use, SimThread resyncs and histograms of the sim's publish
+    // lateness (wall publish time minus nominal tick time) and of the wall
+    // gap between consecutive publishes (0.5 ms bins, last bin = overflow).
+    godot::Dictionary get_render_diagnostics() const;
+    // Render delay D in ticks (default 2.0, see render_interp.h). Main thread.
+    void set_render_delay_ticks(double ticks) { render_delay_ticks_ = ticks; }
+    double get_render_delay_ticks() const { return render_delay_ticks_; }
+    // A/B diagnostic: true renders with the OLD publish-time alpha
+    // (render_interp_alpha) instead of the nominal-clock history.
+    void set_render_legacy_alpha(bool legacy) { render_legacy_alpha_ = legacy; }
+    bool get_render_legacy_alpha() const { return render_legacy_alpha_; }
     // Listener gain (Pa at 1 m mapped to full scale); > 0, default 15.
     void set_voice_full_scale_pa(double pa);
     double get_voice_full_scale_pa() const;
@@ -455,6 +468,22 @@ private:
     mutable std::uint64_t cached_render_frame_ = ~static_cast<std::uint64_t>(0); // sentinel: no frame cached yet
     mutable const AdapterSnapshot* cached_render_snapshot_ = nullptr;
     mutable double cached_render_alpha_ = 1.0;
+    // Nominal-clock path (render_interp.h PoseHistory): every body, then per
+    // articulation its root and links, flattened in this order into one pose
+    // vector per published tick. render_sample_ is the frame's interpolated
+    // result (getters read it); the legacy A/B path fills it from the
+    // snapshot's (prev, latest) pairs and publish_time alpha instead.
+    PoseHistory pose_history_;
+    mutable RenderSample render_sample_;
+    mutable std::int64_t last_sample_time_us_ = 0; // steady_clock time of the frame's sample (diagnostics)
+    std::vector<std::size_t> articulation_pose_offset_; // per articulation_order_ index: index of its root in the flat layout
+    std::vector<ps::Pose> history_pose_scratch_;        // sim thread only
+    std::vector<std::uint8_t> history_teleport_scratch_; // sim thread only
+    double render_delay_ticks_ = 2.0;
+    bool render_legacy_alpha_ = false;
+    TimingHistogram<32> publish_lateness_hist_{500000};
+    TimingHistogram<32> publish_gap_hist_{500000};
+    std::int64_t last_publish_wall_ns_ = 0; // sim thread only
     // The ONLY way main-thread code reads adapter_snapshots_: every getter
     // must go through the same once-per-frame sample. A second read() in
     // the same frame could swap the triple buffer's read slot and hand the

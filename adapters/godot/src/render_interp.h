@@ -41,7 +41,13 @@
 #include "ps/math/pose.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
+#include <vector>
 
 namespace ps_godot {
 
@@ -56,6 +62,13 @@ struct InterpolatedPose {
     ps::Pose latest;
 };
 
+// LEGACY (kept for the A/B diagnostic switch and as the sabotage reference
+// of tests/test_render_interp.cpp - production rendering uses PoseHistory
+// below). Alpha measured from the WALL time a tick happened to publish: a
+// publish that jitters by up to ~80 % of a tick (step cost 0.6-3.4 ms against
+// a 4.17 ms period) makes the rendered pose stall (alpha clamped at 1 while a
+// tick is late) and then jump - see the PoseHistory comment.
+//
 // Blend factor in [0, 1] for "how far the render clock (`now`) has moved
 // past the moment the LATEST tick was published (`publish_time`), as a
 // fraction of one sim tick period (`tick_dt_s`)". 0 renders exactly the
@@ -99,5 +112,206 @@ inline ps::Pose interpolate_pose(const InterpolatedPose& p, double alpha) {
         ps::slerp(p.prev.orientation, p.latest.orientation, static_cast<ps::real>(alpha)),
     };
 }
+
+// ---------------------------------------------------------------------------
+// Nominal-clock pose history (2026-10-04, owner report "the follow camera
+// bugs back and forth", car_hyper > 300 km/h).
+//
+// What was wrong with render_interp_alpha(): alpha was measured from the
+// WALL time the sim thread happened to publish tick k. A tick is DUE at a
+// fixed schedule (SimThread's `next`) but publishes when its step ends, and
+// a step costs 0.6-3.4 ms (turbo, aero, generated maps, voice threads
+// competing for cores) against a 4.17 ms period, so publish times jitter by
+// most of a tick. The rendered pose then stalls (alpha pinned at 1 while a
+// tick is late), jumps when the late tick lands, and the rendered chassis
+// speed is irregular frame to frame - at 83 m/s one tick is 0.35 m, which
+// the exponentially lagged chase camera shows as the car moving back and
+// forth in view.
+//
+// Fix: every published frame is stamped with the tick's NOMINAL time (its
+// scheduled due time, SimThread::tick_nominal_time()), not the wall time it
+// finished. Nominal times are exactly one period apart however the step
+// durations jitter. Poses of the last kCapacity ticks are kept, and a render
+// frame samples the history at `now - D` on the same steady clock, blending
+// the two frames that bracket that time. The rendered motion is then a
+// piecewise-linear function of the SCHEDULE, independent of publish jitter.
+//
+// D (the render delay) must cover the publish lateness: the newest published
+// frame is at least (period + lateness) old in nominal time, so
+// D >= period + lateness keeps render time inside the history. When data is
+// late anyway (render time ran past the newest frame) the sample clamps to
+// the newest frame - never extrapolates - and the frame is counted.
+//
+// Discontinuities are marked per frame, not smeared:
+//   * clock_break: SimThread re-anchored its schedule after a stall (or this
+//     is the first tick), so the nominal gap to the previous frame does not
+//     describe elapsed motion. The pair is rendered as a step (previous pose
+//     until the new frame's time) instead of a slow crawl over the gap.
+//   * teleported[i]: pose i was reset this tick (reset_vehicle); that pose is
+//     stepped, the other poses still blend.
+//
+// Concurrency: single writer (sim thread, push), single reader (render
+// thread, sample). One std::mutex guards the ring; the critical sections
+// copy/blend a few hundred bytes (microseconds), so the sim thread is never
+// blocked for a meaningful time. Chosen over a seqlock (a torn read of a
+// vector<Pose> payload is formally a data race) and over per-frame
+// triple-buffer reads (a 60 Hz reader sees only every ~4th tick, so the
+// brackets it needs are gone). All storage is allocated by reset() (before
+// the sim thread starts); push and sample allocate nothing afterwards
+// (RenderSample's vector is sized on first use and reused).
+using SimClock = std::chrono::steady_clock;
+
+struct RenderSample {
+    std::vector<ps::Pose> poses; // interpolated, same layout as PoseHistory::push's input
+    double alpha = 1.0;          // blend factor used (0 for a stepped/early sample)
+    std::uint64_t tick_a = 0;    // older bracketing frame's tick
+    std::uint64_t tick_b = 0;    // newer bracketing frame's tick
+    bool valid = false;          // false: history empty (no tick published yet)
+    bool late = false;           // render time ran past the newest frame: clamped, not extrapolated
+    bool early = false;          // render time before the oldest frame: clamped to it
+    bool stepped = false;        // the bracket crossed a clock break
+};
+
+class PoseHistory {
+public:
+    static constexpr std::size_t kCapacity = 8;
+
+    // Allocates every slot. Call before the sim thread starts (also resets).
+    void reset(std::size_t pose_count) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pose_count_ = pose_count;
+        for (Slot& s : slots_) {
+            s.poses.assign(pose_count, ps::Pose{});
+            s.teleported.assign(pose_count, 0);
+            s.time = SimClock::time_point{};
+            s.tick = 0;
+            s.clock_break = false;
+        }
+        next_ = 0;
+        count_ = 0;
+        frames_sampled_.store(0, std::memory_order_relaxed);
+        frames_late_.store(0, std::memory_order_relaxed);
+        frames_early_.store(0, std::memory_order_relaxed);
+        frames_stepped_.store(0, std::memory_order_relaxed);
+    }
+
+    // Sim thread. `poses`/`teleported` must have reset()'s pose_count entries.
+    // `nominal` must be strictly increasing across calls.
+    void push(SimClock::time_point nominal, std::uint64_t tick, bool clock_break, const std::vector<ps::Pose>& poses, const std::vector<std::uint8_t>& teleported) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (poses.size() != pose_count_ || teleported.size() != pose_count_) return;
+        Slot& s = slots_[next_];
+        std::copy(poses.begin(), poses.end(), s.poses.begin());
+        std::copy(teleported.begin(), teleported.end(), s.teleported.begin());
+        s.time = nominal;
+        s.tick = tick;
+        s.clock_break = clock_break;
+        next_ = (next_ + 1) % kCapacity;
+        if (count_ < kCapacity) ++count_;
+    }
+
+    // Render thread: blends the two frames bracketing `render_time` into out.
+    // Returns out.valid.
+    bool sample(SimClock::time_point render_time, RenderSample& out) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        out.valid = false;
+        out.late = out.early = out.stepped = false;
+        if (count_ == 0) return false;
+        out.poses.resize(pose_count_); // no-op after the first call
+        const Slot& oldest = frame(0);
+        const Slot& newest = frame(count_ - 1);
+        const Slot* a = &newest;
+        const Slot* b = &newest;
+        double alpha = 1.0;
+        if (render_time >= newest.time) {
+            out.late = render_time > newest.time;
+        } else if (render_time < oldest.time) {
+            a = b = &oldest;
+            alpha = 0.0;
+            out.early = true;
+        } else {
+            // oldest.time <= render_time < newest.time: first frame after render_time.
+            std::size_t i = 1;
+            while (i < count_ && frame(i).time <= render_time) ++i;
+            a = &frame(i - 1);
+            b = &frame(i);
+            const double span = std::chrono::duration<double>(b->time - a->time).count();
+            alpha = span > 0.0 ? std::clamp(std::chrono::duration<double>(render_time - a->time).count() / span, 0.0, 1.0) : 1.0;
+            if (b->clock_break) {
+                out.stepped = true;
+                alpha = 0.0;
+            }
+        }
+        for (std::size_t k = 0; k < pose_count_; ++k) {
+            if (a == b) {
+                out.poses[k] = b->poses[k];
+            } else if (b->teleported[k] != 0 || alpha <= 0.0) {
+                out.poses[k] = a->poses[k]; // stepped: hold the old pose until the new frame's time
+            } else {
+                out.poses[k] = interpolate_pose(InterpolatedPose{a->poses[k], b->poses[k]}, alpha);
+            }
+        }
+        out.alpha = alpha;
+        out.tick_a = a->tick;
+        out.tick_b = b->tick;
+        out.valid = true;
+        frames_sampled_.fetch_add(1, std::memory_order_relaxed);
+        if (out.late) frames_late_.fetch_add(1, std::memory_order_relaxed);
+        if (out.early) frames_early_.fetch_add(1, std::memory_order_relaxed);
+        if (out.stepped) frames_stepped_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
+    [[nodiscard]] std::uint64_t frames_sampled() const { return frames_sampled_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t frames_late() const { return frames_late_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t frames_early() const { return frames_early_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t frames_stepped() const { return frames_stepped_.load(std::memory_order_relaxed); }
+
+private:
+    struct Slot {
+        SimClock::time_point time{};
+        std::uint64_t tick = 0;
+        bool clock_break = false;
+        std::vector<ps::Pose> poses;
+        std::vector<std::uint8_t> teleported;
+    };
+    // i-th oldest stored frame (0 = oldest). Caller holds mutex_.
+    const Slot& frame(std::size_t i) const { return slots_[(next_ + kCapacity - count_ + i) % kCapacity]; }
+
+    mutable std::mutex mutex_;
+    std::array<Slot, kCapacity> slots_{};
+    std::size_t pose_count_ = 0;
+    std::size_t next_ = 0;  // slot the next push writes
+    std::size_t count_ = 0; // valid frames, <= kCapacity
+    mutable std::atomic<std::uint64_t> frames_sampled_{0};
+    mutable std::atomic<std::uint64_t> frames_late_{0};
+    mutable std::atomic<std::uint64_t> frames_early_{0};
+    mutable std::atomic<std::uint64_t> frames_stepped_{0};
+};
+
+// Render time on the nominal clock: `now - delay_ticks * tick_dt_s`.
+inline SimClock::time_point render_time_for(SimClock::time_point now, double tick_dt_s, double delay_ticks) {
+    return now - std::chrono::duration_cast<SimClock::duration>(std::chrono::duration<double>(tick_dt_s * delay_ticks));
+}
+
+// Fixed-bin histogram written from one thread, read from another (diagnostic
+// only): counts per bin of `bin_ns`, the last bin collects the overflow.
+template <std::size_t N>
+class TimingHistogram {
+public:
+    explicit TimingHistogram(std::uint64_t bin_ns = 500000) : bin_ns_(bin_ns) {}
+    void add(std::int64_t ns) {
+        const std::uint64_t v = ns < 0 ? 0 : static_cast<std::uint64_t>(ns);
+        const std::size_t bin = std::min<std::size_t>(static_cast<std::size_t>(v / bin_ns_), N - 1);
+        bins_[bin].fetch_add(1, std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t count(std::size_t bin) const { return bins_[bin].load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t bin_ns() const { return bin_ns_; }
+    static constexpr std::size_t size() { return N; }
+
+private:
+    std::uint64_t bin_ns_;
+    std::array<std::atomic<std::uint64_t>, N> bins_{};
+};
 
 } // namespace ps_godot
