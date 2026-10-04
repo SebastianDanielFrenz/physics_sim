@@ -32,6 +32,22 @@ struct PsSpatialAudio::Impl {
     float reflections_gain = 0.0f;
     int static_type = 0;
     int pcm_channel = -1;
+    std::shared_ptr<ps_audio::OutputPump> native_pump;
+    ps_audio::OutputPumpStats last_native_stats{};
+    ps_audio::SynthesisStats last_synthesis_stats{};
+    std::uint64_t endpoint_short_reads=0,endpoint_missing_frames=0,rejected_pushes=0;
+    void release_native_locked() {
+        if(native_pump) { native_pump->stop(); last_native_stats=native_pump->stats(); last_synthesis_stats=native_pump->synthesis_stats(); }
+        native_pump.reset(); // joins native producer and releases the Runner lease
+    }
+    void pull_native_locked(int frames) {
+        if(native_pump && !native_pump->source_connected()) { release_native_locked(); read=count=0; }
+        if(native_pump) {
+            read=0;
+            count=static_cast<int>(native_pump->read(ring.data(),static_cast<std::size_t>(std::min(frames,capacity))));
+        }
+        if(count<frames) { ++endpoint_short_reads; endpoint_missing_frames+=static_cast<std::uint64_t>(frames-count); }
+    }
     std::vector<float> ring;
     std::vector<godot::Vector3> positions;
     std::string status = "Closed";
@@ -93,6 +109,7 @@ struct PsSpatialAudio::Impl {
                     std::fill(out,out+frames*8,0);
                     {
                         std::lock_guard<std::mutex> lock(mutex);
+                        pull_native_locked(static_cast<int>(frames));
                         const int got=std::min(count,static_cast<int>(frames));
                         for (int f=0;f<got;++f) out[f*8+pcm_channel]=static_cast<short>(std::clamp(ring[(read+f)%capacity],-1.0f,1.0f)*32767.0f);
                         read=(read+got)%capacity; count-=got;
@@ -110,6 +127,7 @@ struct PsSpatialAudio::Impl {
 #else
         message("Windows PCM diagnostic unavailable on this platform"); ready.set_value(false);
 #endif
+        { std::lock_guard<std::mutex> lock(mutex); release_native_locked(); }
     }
     void run(std::promise<bool> ready) {
         if (pcm_channel >= 0) { run_pcm(std::move(ready)); return; }
@@ -192,6 +210,7 @@ struct PsSpatialAudio::Impl {
                     if (FAILED(hr)) break;
                     {
                         std::lock_guard<std::mutex> lock(mutex);
+                        pull_native_locked(static_cast<int>(frames));
                         const int got = std::min(count, static_cast<int>(frames));
                         for (int c = 0; c < 6; ++c) {
                             if (static_type) break;
@@ -247,6 +266,7 @@ struct PsSpatialAudio::Impl {
 #else
         message("Windows spatial audio is unavailable on this platform"); ready.set_value(false);
 #endif
+        { std::lock_guard<std::mutex> lock(mutex); release_native_locked(); }
     }
 };
 PsSpatialAudio::PsSpatialAudio() : impl_(std::make_unique<Impl>()) {}
@@ -278,12 +298,13 @@ bool PsSpatialAudio::open_internal(int rate, int channels, int static_type, int 
     impl_->worker = std::thread(&Impl::run, impl_.get(), std::move(ready));
     return result.get();
 }
-void PsSpatialAudio::close() { impl_->stop = true; if (impl_->worker.joinable()) impl_->worker.join(); impl_->active = false; }
+void PsSpatialAudio::close() { impl_->stop = true; if (impl_->worker.joinable()) impl_->worker.join(); impl_->active = false; std::lock_guard<std::mutex> lock(impl_->mutex); impl_->release_native_locked(); impl_->count=0; }
 bool PsSpatialAudio::is_active() const { return impl_->active; }
 godot::String PsSpatialAudio::get_status() const { std::lock_guard<std::mutex> lock(impl_->mutex); return godot::String(impl_->status.c_str()); }
-int PsSpatialAudio::get_frames_needed() const { std::lock_guard<std::mutex> lock(impl_->mutex); return is_active() ? std::max(0, impl_->rate / (impl_->pcm_channel >= 0 ? 5 : 50) - impl_->count) : 0; }
+int PsSpatialAudio::get_frames_needed() const { std::lock_guard<std::mutex> lock(impl_->mutex); return is_active() && !impl_->native_pump ? std::max(0, impl_->rate / (impl_->pcm_channel >= 0 ? 5 : 50) - impl_->count) : 0; }
 void PsSpatialAudio::push_audio(const godot::PackedFloat32Array &samples) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
+    if(impl_->native_pump) { ++impl_->rejected_pushes; return; }
     if (!is_active() || impl_->channels < 1) return;
     const int frames = std::min(static_cast<int>(samples.size() / impl_->channels), Impl::capacity - impl_->count);
     for (int f = 0; f < frames; ++f) for (int c = 0; c < impl_->channels; ++c) {
@@ -291,6 +312,46 @@ void PsSpatialAudio::push_audio(const godot::PackedFloat32Array &samples) {
         impl_->ring[((impl_->read + impl_->count + f) % Impl::capacity) * impl_->channels + c] = std::isfinite(s) ? s : 0;
     }
     impl_->count += frames;
+}
+bool PsSpatialAudio::attach_native_source(std::shared_ptr<ps_audio::OutputSource> source,int latency_ms,float gain) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if(!source || !is_active() || impl_->pcm_channel>=0 || impl_->native_pump || source->channels()!=impl_->channels || source->sample_rate()!=impl_->rate) return false;
+    try {
+        auto pump=std::make_shared<ps_audio::OutputPump>(std::move(source),latency_ms,gain);
+        pump->start();
+        impl_->read=impl_->count=0; impl_->native_pump=std::move(pump);
+        return true;
+    } catch(const std::exception&) { return false; }
+}
+void PsSpatialAudio::detach_native_source() {
+    std::lock_guard<std::mutex> lock(impl_->mutex); impl_->release_native_locked(); impl_->read=impl_->count=0;
+}
+void PsSpatialAudio::set_native_gain(double gain) {
+    if(!std::isfinite(gain) || gain<0 || gain>64) return;
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if(impl_->native_pump) impl_->native_pump->set_gain(static_cast<float>(gain));
+}
+godot::Dictionary PsSpatialAudio::get_output_diagnostics() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    const auto p=impl_->native_pump ? impl_->native_pump->stats() : impl_->last_native_stats;
+    const auto r=impl_->native_pump ? impl_->native_pump->synthesis_stats() : impl_->last_synthesis_stats;
+    godot::Dictionary out;
+    out["native_pump_active"]=bool(impl_->native_pump);
+    out["source_connected"]=impl_->native_pump && impl_->native_pump->source_connected();
+    out["queued_frames"]=static_cast<int64_t>(p.queued_frames);
+    out["source_short_reads"]=static_cast<int64_t>(p.source_short_reads);
+    out["source_missing_frames"]=static_cast<int64_t>(p.source_missing_frames);
+    out["output_short_reads"]=static_cast<int64_t>(p.output_short_reads);
+    out["output_missing_frames"]=static_cast<int64_t>(p.output_missing_frames);
+    out["endpoint_short_reads"]=static_cast<int64_t>(impl_->endpoint_short_reads);
+    out["endpoint_missing_frames"]=static_cast<int64_t>(impl_->endpoint_missing_frames);
+    out["rejected_manual_pushes"]=static_cast<int64_t>(impl_->rejected_pushes);
+    out["runner_rejected_reads"]=static_cast<int64_t>(r.rejected_reads);
+    out["runner_blocks_rendered"]=static_cast<int64_t>(r.blocks);
+    out["runner_max_block_ms"]=r.max_block_ns/1.e6;
+    out["runner_mean_us_per_frame"]=r.blocks && r.block_frames ? r.render_ns/(1000.*r.blocks*r.block_frames) : 0.;
+    out["runner_block_budget_ms"]=r.block_frames*1000./std::max(1,impl_->rate);
+    return out;
 }
 void PsSpatialAudio::set_positions(const godot::PackedVector3Array &positions) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -304,6 +365,9 @@ void PsSpatialAudio::_bind_methods() {
     ClassDB::bind_method(D_METHOD("open_static_channel", "channel_name"), &PsSpatialAudio::open_static_channel);
     ClassDB::bind_method(D_METHOD("open_pcm_channel", "channel_name"), &PsSpatialAudio::open_pcm_channel);
     ClassDB::bind_method(D_METHOD("close"), &PsSpatialAudio::close);
+    ClassDB::bind_method(D_METHOD("detach_native_source"), &PsSpatialAudio::detach_native_source);
+    ClassDB::bind_method(D_METHOD("set_native_gain", "gain"), &PsSpatialAudio::set_native_gain);
+    ClassDB::bind_method(D_METHOD("get_output_diagnostics"), &PsSpatialAudio::get_output_diagnostics);
     ClassDB::bind_method(D_METHOD("is_active"), &PsSpatialAudio::is_active);
     ClassDB::bind_method(D_METHOD("get_status"), &PsSpatialAudio::get_status);
     ClassDB::bind_method(D_METHOD("get_frames_needed"), &PsSpatialAudio::get_frames_needed);

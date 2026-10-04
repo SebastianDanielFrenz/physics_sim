@@ -184,3 +184,7 @@ target_link_libraries(bench_aero_ground PRIVATE ps_core ps_warnings ps_options)
 add_executable(bench_hyper_calibration bench_hyper_calibration.cpp)
 target_include_directories(bench_hyper_calibration PRIVATE ${PROJECT_SOURCE_DIR}/core/src)
 target_link_libraries(bench_hyper_calibration PRIVATE ps_core ps_warnings ps_options)
+
+add_executable(bench_engine_output bench_engine_output.cpp ${PROJECT_SOURCE_DIR}/adapters/godot/src/vehicle_voice.cpp)
+target_include_directories(bench_engine_output PRIVATE ${PROJECT_SOURCE_DIR}/adapters/godot/src ${PROJECT_SOURCE_DIR}/tools/common)
+target_link_libraries(bench_engine_output PRIVATE ps_core ps_audio ps_warnings ps_options)

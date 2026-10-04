@@ -61,9 +61,9 @@ VehicleVoice::VehicleVoice(const ps::drivetrain::CycleModelDesc& cycle, ps::real
       // full, so its whole length is latency between an rpm change and the
       // speaker (owner 2026-09-29). The render thread refills a 256-frame
       // block in ~3.5 ms (0.66 core), far inside the ring.
-      runner_(std::vector<ps_audio::Voice*>{&voice_}, ps_audio::RunnerSettings{256, 4, 500}) {}
+      runner_(std::vector<ps_audio::Voice*>{&voice_}, ps_audio::RunnerSettings{256, 4, 500}) { output_=std::make_shared<ps_audio::RunnerOutput>(runner_,static_cast<int>(sample_rate_hz())); }
 
-VehicleVoice::~VehicleVoice() { runner_.stop(); }
+VehicleVoice::~VehicleVoice() { output_->invalidate(); runner_.stop(); }
 
 void VehicleVoice::push_tick(const ps::drivetrain::EngineSoundState& ess, ps::real t_sim_s) {
     voice_.push_input(ps_tools::make_engine_input(ess, t_sim_s));

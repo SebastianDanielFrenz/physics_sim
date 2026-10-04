@@ -1139,6 +1139,12 @@ godot::PackedVector3Array PsSimulation::get_vehicle_voice_source_positions(const
     return out;
 }
 
+bool PsSimulation::connect_vehicle_voice_spatial(const String& name,const godot::Ref<PsSpatialAudio>& spatial,int latency_ms) {
+    const auto it=vehicle_voice_by_name_.find(to_std_string(name));
+    if(it==vehicle_voice_by_name_.end() || spatial.is_null()) return false;
+    return spatial->attach_native_source(it->second->native_output()->acquire(),latency_ms,static_cast<float>(1./voice_full_scale_pa_));
+}
+
 godot::PackedFloat32Array PsSimulation::read_vehicle_voice_audio(const String& vehicle_name, int frames) {
     godot::PackedFloat32Array out;
     if (frames <= 0) return out;
@@ -1253,6 +1259,7 @@ void PsSimulation::_bind_methods() {
     // ps_audio A11
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_source_positions", "vehicle_name"), &PsSimulation::get_vehicle_voice_source_positions);
     ClassDB::bind_method(D_METHOD("has_vehicle_voice", "vehicle_name"), &PsSimulation::has_vehicle_voice);
+    ClassDB::bind_method(D_METHOD("connect_vehicle_voice_spatial", "vehicle_name", "spatial", "latency_ms"), &PsSimulation::connect_vehicle_voice_spatial,DEFVAL(12));
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_sample_rate_hz", "vehicle_name"), &PsSimulation::get_vehicle_voice_sample_rate_hz);
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_channel_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_channel_count);
     ClassDB::bind_method(D_METHOD("read_vehicle_voice_audio", "vehicle_name", "frames"), &PsSimulation::read_vehicle_voice_audio);

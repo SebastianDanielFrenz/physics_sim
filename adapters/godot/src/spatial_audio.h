@@ -3,6 +3,8 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <memory>
+#include "ps_audio/native_output.h"
+#include <godot_cpp/variant/dictionary.hpp>
 namespace ps_godot {
 // Main-thread Godot interface; Windows COM and rendering live on a private thread.
 class PsSpatialAudio : public godot::RefCounted {
@@ -19,6 +21,12 @@ public:
     bool open_static_channel(const godot::String &channel_name);
     bool open_pcm_channel(const godot::String &channel_name);
     void close();
+    // Native adapter seam: consumes an exclusive RunnerOutput::acquire lease.
+    bool attach_native_source(std::shared_ptr<ps_audio::OutputSource>,int latency_ms=12,float gain=1);
+    void detach_native_source();
+    void set_native_gain(double gain);
+    godot::Dictionary get_output_diagnostics() const;
+
     bool is_active() const;
     godot::String get_status() const;
     int get_frames_needed() const;

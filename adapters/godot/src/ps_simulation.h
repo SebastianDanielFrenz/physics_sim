@@ -38,6 +38,7 @@
 #include "sim_thread.h"
 #include "triple_buffer.h"
 #include "vehicle_voice.h"
+#include "spatial_audio.h"
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include "ps/drivetrain/powertrain_state.h"
@@ -300,6 +301,7 @@ public:
     // vehicle (its engine has a "cycle" block - see vehicle_voice.h). false
     // for an unknown vehicle name too, not an error.
     bool has_vehicle_voice(const godot::String& vehicle_name) const;
+    bool connect_vehicle_voice_spatial(const godot::String&,const godot::Ref<PsSpatialAudio>&,int latency_ms=12);
     // Sample rate / interleaved channel count of the vehicle's voice (0 if
     // has_vehicle_voice() is false) - a GDScript AudioStreamGenerator must
     // be configured to match sample_rate before this is read from.

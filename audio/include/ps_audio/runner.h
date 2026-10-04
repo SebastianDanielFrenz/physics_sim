@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <thread>
+#include <mutex>
 #include <vector>
 
 namespace ps_audio {
@@ -42,6 +43,14 @@ public:
     // Consumer (device) side: up to `frames` frames into out (frames *
     // channel_count() floats); returns the frames read.
     std::size_t read(float* out, std::size_t frames);
+    // Exclusive native-reader lease; legacy read() is rejected until released.
+    std::uint64_t claim_consumer();
+    void release_consumer(std::uint64_t owner);
+    std::size_t read_owned(float*,std::size_t,std::uint64_t owner);
+    std::uint64_t rejected_reads() const { return rejected_reads_.load(); }
+    std::uint64_t render_ns() const { return render_ns_.load(); }
+    std::uint64_t max_block_render_ns() const { return max_block_ns_.load(); }
+
     [[nodiscard]] std::size_t frames_available() const { return ring_.readable() / channels_u(); }
 
     // Synchronous: render one block of every voice into the ring (false when
@@ -57,6 +66,9 @@ private:
     [[nodiscard]] std::size_t channels_u() const { return static_cast<std::size_t>(channels_); }
     void thread_main();
 
+    mutable std::mutex consumer_mutex_;
+    std::uint64_t consumer_owner_=0,next_owner_=1;
+    std::atomic<std::uint64_t> rejected_reads_{0},render_ns_{0},max_block_ns_{0};
     RunnerSettings s_;
     std::vector<Voice*> voices_;
     int channels_ = 0;

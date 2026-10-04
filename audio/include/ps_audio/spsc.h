@@ -82,6 +82,13 @@ public:
     [[nodiscard]] std::size_t readable() const {
         return tail_.load(std::memory_order_acquire) - head_.load(std::memory_order_acquire);
     }
+    // Bounded diagnostic snapshot for a third observer. Reading head first
+    // avoids unsigned underflow if both producer and consumer advance.
+    [[nodiscard]] std::size_t readable_snapshot() const {
+        const auto head=head_.load(std::memory_order_acquire);
+        const auto count=tail_.load(std::memory_order_acquire)-head;
+        return count<capacity() ? count : capacity();
+    }
     [[nodiscard]] std::size_t writable() const { return capacity() - readable(); }
 
 private:

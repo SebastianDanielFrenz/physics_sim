@@ -39,6 +39,7 @@
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps_audio/runner.h"
+#include "ps_audio/native_output.h"
 #include "ps_audio/voice.h"
 
 #include <memory>
@@ -72,8 +73,11 @@ public:
     // Starts/stops the Runner's own render thread. Safe to call start()
     // more than once (Runner::start() is a no-op if already running).
     void set_audio_bank(ps_audio::AudioBankPtr bank) { voice_.set_audio_bank(std::move(bank)); }
-    void start() { runner_.start(); }
-    void stop() { runner_.stop(); }
+    void start() {
+        if(!output_->connected()) output_=std::make_shared<ps_audio::RunnerOutput>(runner_,static_cast<int>(sample_rate_hz()));
+        runner_.start();
+    }
+    void stop() { output_->invalidate(); runner_.stop(); }
 
     // Sim-thread call, once per tick, per vehicle: pushes this tick's sound
     // state into the voice's lock-free input queue (SPSC: this is the ONE
@@ -84,6 +88,7 @@ public:
 
     void set_paused(bool paused) { voice_.set_paused(paused); }
 
+    std::shared_ptr<ps_audio::RunnerOutput> native_output() const { return output_; }
     [[nodiscard]] ps_audio::Runner& runner() { return runner_; }
     [[nodiscard]] const ps_audio::Runner& runner() const { return runner_; }
     // Immutable source metadata; channel must be in [0, channel_count()).
@@ -97,6 +102,7 @@ private:
                  const ps_audio::VoiceSettings& settings);
 
     ps_audio::Voice voice_;
+    std::shared_ptr<ps_audio::RunnerOutput> output_;
     ps_audio::Runner runner_; // holds a non-owning Voice* into voice_ above - member order matters (Voice first)
 };
 

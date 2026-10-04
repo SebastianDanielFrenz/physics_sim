@@ -55,6 +55,20 @@ void Runner::stop() {
 }
 
 std::size_t Runner::read(float* out, std::size_t frames) {
+    return read_owned(out,frames,0);
+}
+std::uint64_t Runner::claim_consumer() {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    if(consumer_owner_) return 0;
+    consumer_owner_=next_owner_++; return consumer_owner_;
+}
+void Runner::release_consumer(std::uint64_t owner) {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    if(consumer_owner_==owner) consumer_owner_=0;
+}
+std::size_t Runner::read_owned(float* out,std::size_t frames,std::uint64_t owner) {
+    std::lock_guard<std::mutex> lock(consumer_mutex_);
+    if(owner!=consumer_owner_) { ++rejected_reads_; return 0; }
     const std::size_t n = ring_.read(out, frames * channels_u());
     return n / channels_u();
 }
@@ -62,6 +76,7 @@ std::size_t Runner::read(float* out, std::size_t frames) {
 bool Runner::render_block() {
     const std::size_t bf = static_cast<std::size_t>(s_.block_frames);
     if (ring_.writable() < bf * channels_u()) return false;
+    const auto render_begin=std::chrono::steady_clock::now();
     std::size_t ch0 = 0;
     for (Voice* v : voices_) {
         const std::size_t ns = static_cast<std::size_t>(v->source_count());
@@ -71,6 +86,10 @@ bool Runner::render_block() {
         ch0 += ns;
     }
     ring_.write(block_.data(), bf * channels_u());
+    const auto elapsed=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_begin).count());
+    render_ns_.fetch_add(elapsed);
+    auto maximum=max_block_ns_.load();
+    while(elapsed>maximum && !max_block_ns_.compare_exchange_weak(maximum,elapsed)) {}
     blocks_.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }

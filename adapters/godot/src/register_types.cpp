@@ -18,8 +18,8 @@ using namespace godot;
 
 void initialize_ps_godot_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
-    ClassDB::register_class<ps_godot::PsSimulation>();
     ClassDB::register_class<ps_godot::PsSpatialAudio>();
+    ClassDB::register_class<ps_godot::PsSimulation>();
     ClassDB::register_class<ps_godot::PsBodyNode3D>();
     ClassDB::register_class<ps_godot::PsDebugDraw>();
     ClassDB::register_class<ps_godot::PsInputMap>();
