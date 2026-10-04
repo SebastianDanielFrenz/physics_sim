@@ -19,6 +19,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -123,4 +124,91 @@ TEST_CASE("Guard scripts exercise the turbo: spool, lift-off, re-apply", "[turbo
     CHECK(charge_spooled > kPamb + 0.8e5);
     CHECK(rpm_lift < rpm_spooled);
     CHECK(rpm_reapplied > rpm_lift);
+}
+
+// ---------------------------------------------------------------------------
+// D1: sound-state plumbing (wastegate_opening, compressor_flow_kg_s,
+// compressor_pressure_ratio). Literal values derived by hand from the desc's
+// own head formula, not from the code under test.
+// ---------------------------------------------------------------------------
+TEST_CASE("D1: TurboPair publishes compressor flow, pressure ratio and wastegate position", "[turbo][drivetrain]") {
+    const TurboPairDesc d = tb::hyper_like_pair();
+    // (a) zero rotor speed: no head, charge stays at ambient, pr == 1 exactly;
+    //     plate 0 commands the wastegate open, the actuator moves h/(tau+h) =
+    //     1/(0.1*960 + 1) = 1/97 of the way in one 960 Hz step.
+    {
+        TurboPair p(d);
+        p.reset(kPamb, kTamb);
+        p.step(kH, kPamb, kTamb, 0.3, 0.3, 0.0, 0.0);
+        CHECK(p.compressor_flow_kg_s == 0.3);
+        CHECK(p.compressor_pr == 1.0);
+        CHECK(p.wastegate == Catch::Approx(1.0 / 97.0).epsilon(1e-14));
+    }
+    // (b) negative air flow is no flow
+    {
+        TurboPair p(d);
+        p.reset(kPamb, kTamb);
+        p.step(kH, kPamb, kTamb, -0.2, 0.0, 0.0, 0.0);
+        CHECK(p.compressor_flow_kg_s == 0.0);
+    }
+    // (c) rotor at s = 0.5 (nodes of the head table: s 20/40, f = 0.25 = 10/40):
+    //     head = 4.5e5 * 0.25 * (1 - 0.0625) = 105468.75 Pa; charge moves
+    //     h/(0.025+h) = 1/25 of the way from ambient toward ambient + head.
+    {
+        TurboPair p(d);
+        p.reset(kPamb, kTamb);
+        const real wr = d.reference_rpm * 2.0 * kPi / 60.0;
+        p.energy_j = 0.5 * d.rotor_inertia_kgm2 * wr * wr * 0.25;
+        p.step(kH, kPamb, kTamb, 0.3, 0.3, 0.0, 1.0);
+        const real charge = kPamb + 105468.75 / 25.0;
+        CHECK(p.charge_pa == Catch::Approx(charge).epsilon(1e-12));
+        CHECK(p.compressor_pr == Catch::Approx(charge / kPamb).epsilon(1e-12));
+        CHECK(p.compressor_flow_kg_s == 0.3);
+    }
+}
+
+TEST_CASE("D1: the engine publishes the turbo sound state, 0 without a turbo", "[turbo][drivetrain][sim_engine]") {
+    auto d = fx::electronic_engine();
+    SimulatedEngine na(d);
+    d.turbo_pair = tb::hyper_like_pair();
+    SimulatedEngine boosted(d);
+    const real omega = 5000.0 * 2.0 * kPi / 60.0;
+    Sensors s;
+    s.omega = omega;
+    s.ignition = 1.0;
+    PreSolveResult prev, r;
+    real wg_wot = -1.0, wg_lift = -1.0;
+    for (int i = 0; i < 3 * 960; ++i) {
+        const real t = i * kH;
+        const real c = t < 1.5 ? 1.0 : 0.0;
+        prev = r;
+        r = boosted.pre_solve(s, ThrottleCommand{c, 0.0, 1.0}, TcuRequest{}, kH);
+        (void)boosted.post_solve(omega, kH);
+        // Total compressor flow = the engine's air of the previous substep
+        // (the pair is stepped with last substep's flow): exhaust mass flow
+        // is air + booked fuel.
+        if (i > 0 && prev.p_charge_pa > 0.0) {
+            const real air_prev = prev.exhaust_mass_flow_kg_s - prev.fuel_flow_g_s * 1e-3;
+            CHECK(r.compressor_flow_kg_s == Catch::Approx(air_prev).epsilon(1e-9).margin(1e-12));
+        }
+        // No baseline cooler drop, no valve: outlet pressure ratio = charge / ambient (>= 1).
+        CHECK(r.compressor_pressure_ratio == std::max(1.0, r.p_charge_pa / kPamb));
+        CHECK(r.wastegate_opening >= 0.0);
+        CHECK(r.wastegate_opening <= 1.0);
+        if (i == 1439) wg_wot = r.wastegate_opening;
+        if (i == 2879) wg_lift = r.wastegate_opening;
+    }
+    std::printf("[D1] wastegate opening: WOT hold %.4f, 1.5 s after lift-off %.6f; compressor flow at end %.4f kg/s, pr %.4f\n",
+                wg_wot, wg_lift, r.compressor_flow_kg_s, r.compressor_pressure_ratio);
+    CHECK(wg_wot < 0.9);     // holding boost: partly closed
+    CHECK(wg_lift > 0.999);  // plate < 10 %: commanded open, actuator tau 0.1 s -> 1 - exp(-15)
+    // The same engine without a turbo reports 0 everywhere.
+    PreSolveResult n;
+    for (int i = 0; i < 960; ++i) {
+        n = na.pre_solve(s, ThrottleCommand{1.0, 0.0, 1.0}, TcuRequest{}, kH);
+        (void)na.post_solve(omega, kH);
+    }
+    CHECK(n.wastegate_opening == 0.0);
+    CHECK(n.compressor_flow_kg_s == 0.0);
+    CHECK(n.compressor_pressure_ratio == 0.0);
 }

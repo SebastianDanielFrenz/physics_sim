@@ -15,16 +15,22 @@ public:
     real exhaust_pa = 101325.0, wastegate = 0.0;
     real boost_integral = 0.0; // PI controller's integral (closing) term, [0, 1]
     real compressor_w = 0.0, turbine_w = 0.0;
+    // Sound/HUD outputs of the latest step (I7d D1), derived from the state
+    // above and the step's inputs: never hashed, never read back by the model.
+    real compressor_flow_kg_s = 0.0;  // total compressor mass flow (the pair)
+    real compressor_pr = 1.0;         // compressor outlet pressure over ambient, >= 1
     explicit TurboPair(const TurboPairDesc& d) : desc(d) {}
     real omega() const { return std::sqrt(real(2.0)*energy_j/desc.rotor_inertia_kgm2); }
     real rpm() const { return omega()*real(60.0/6.2831853071795864769); }
-    void reset(real p, real t) { energy_j=0; charge_pa=p; charge_k=t; exhaust_pa=p; wastegate=0; boost_integral=0; }
+    void reset(real p, real t) { energy_j=0; charge_pa=p; charge_k=t; exhaust_pa=p; wastegate=0; boost_integral=0;
+                                 compressor_flow_kg_s=0; compressor_pr=1; }
     // plate: the throttle plate position in [0, 1]; it scales the boost target.
     void step(real h, real ambient_pa, real ambient_k, real air_kg_s, real exhaust_kg_s,
               real fuel_w, real plate) {
         const real wr = desc.reference_rpm*real(6.2831853071795864769/60.0);
         const real speed2 = real(2.0)*energy_j/(desc.rotor_inertia_kgm2*wr*wr);
-        const real flow = std::max(real(0.0),air_kg_s)/desc.max_mass_flow_kg_s;
+        const real comp_flow = std::max(real(0.0),air_kg_s);
+        const real flow = comp_flow/desc.max_mass_flow_kg_s;
         const real head = desc.maps ? desc.maps->head_pa.value(std::sqrt(speed2),flow) :
             desc.reference_head_pa*speed2*std::max(real(0.0),real(1.0)-flow*flow);
         // Pressure equilibrium includes compressor capacity; actual manifold
@@ -36,7 +42,8 @@ public:
         const real rise = ps::math::pow(pr,real(2.0/7.0))-real(1.0);
         const real outlet_k = ambient_k*(desc.maps ? desc.maps->compressor_temperature_ratio.evaluate(pr) : real(1.0)+rise/desc.compressor_efficiency);
         charge_k = ambient_k + (outlet_k-ambient_k)*(real(1.0)-desc.intercooler_effectiveness);
-        compressor_w = std::max(real(0.0),air_kg_s)*real(1005.0)*ambient_k*rise/desc.compressor_efficiency;
+        compressor_w = comp_flow*real(1005.0)*ambient_k*rise/desc.compressor_efficiency;
+        compressor_flow_kg_s = comp_flow; compressor_pr = pr;
         // Boost control, the usual ECU arrangement: a PID controller on the
         // charge pressure after the intercooler (the throttle's upstream
         // pressure), toward ambient + target_boost_pa * plate. Its output is

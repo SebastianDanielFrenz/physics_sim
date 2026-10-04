@@ -29,7 +29,7 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `wheels` | array of [wheel objects](#wheel) | **required** | — | must exist, be an array, and be non-empty, else `"vehicle <path> has no 'wheels' array"` | one entry per wheel |
 | `steering` | [steering object](#steering) | optional | all fields at their own defaults | see below | Ackermann steering geometry |
 | `brake_system` | [brake_system object](#brake_system) | optional | no corners, no handbrake | see below | direct-torque friction brakes |
-| `aero` | object `{drag_area_m2}` | optional | `drag_area_m2 = 0` | `drag_area_m2 >= 0`, else `"vehicle '<name>': aero.drag_area_m2 must be >= 0"` | bluff-body drag: `F_drag = -0.5*rho*CdA*|v|*v` at the chassis CoM; `drag_area_m2` **is** `Cd*A` already combined, not a separate `Cd`/frontal-area pair |
+| `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
 | `controllers` | array of [controller objects](#controllers) | optional | empty | at most 1 entry, else `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"` | driver-assist logic (auto-clutch, auto-blip, auto-shift) |
 
@@ -963,6 +963,57 @@ PHYS-033 P4 I7a C6: a vehicle with a `fuel_tank` adds
 `vehicle<i>.fuel.{flow_g_s,energy_in,heat}` channels. A vehicle without a
 tank registers no such channel, so every shipped vehicle's CSV header is
 unchanged.
+
+## Aero
+
+`aero` is read by `core/src/io/aero_io.cpp` (`read_aero`) and validated by
+`ps::aero::validate` (`core/src/aero/aerodynamics.cpp`, shared with
+`World::create_vehicle`). SI throughout; all `*_local` points are relative to the
+chassis centre of mass in the vehicle's local axes (+x forward, +y left, +z up);
+[`AERODYNAMICS.md`](../../AERODYNAMICS.md) describes the model (quasi-steady
+coefficients, authored stall blend, finite drafting wakes - no measured data).
+An unknown key at ANY level throws `std::invalid_argument("unknown aero key: <key>")`;
+entries that are not objects throw `"aero entries must be objects"`; a vector that is not
+three numbers `"aero <key> must be a 3-vector"`; a wrong JSON type
+(`"surfaces"` not an array: `"aero surfaces must be an array"`) likewise. Validation
+failures throw `std::invalid_argument` with the messages quoted below.
+
+| Field | Type | Default | Rule | Meaning |
+|---|---|---|---|---|
+| `drag_area_m2` | number | 0 | finite, >= 0 (`"aero drag_area_m2 must be finite and nonnegative"`) | LEGACY isotropic `Cd*A` already combined: `F = -0.5*rho*CdA*|v|*v` at the CoM. Positive together with `body` (non-default position, moments, side force, reference area or drag_area_xyz_m2) or any `surfaces` throws `"aero legacy drag_area_m2 cannot coexist with explicit body/surfaces"` |
+| `body` | object | none | below | explicit body drag, side force and intrinsic moments |
+| `surfaces` | array | none | at most 32 | lifting surfaces (wings, splitters, flaps) |
+| `fans` | array | none | at most 8 | suction fans (`"aero surface/fan count exceeds limits"`) |
+| `wake` | object | `length_m` 0 (no wake) | below | the drafting wake this vehicle leaves |
+
+**`body`**: `position_local` [x,y,z] (0), `drag_area_xyz_m2` [x,y,z] CdA per axis (0; >= 0),
+`moment_coeff` [roll,pitch,yaw] (0), `angular_damping` [x,y,z] (0.1; >= 0),
+`reference_area_m2` (0; >= 0), `reference_length_m` (1; > 0), `side_force_slope` (0; >= 0).
+Violations: `"aero body vectors must be finite"`, `"aero drag and damping must be nonnegative"`,
+`"invalid aero body dimensions"`.
+
+**`surfaces[]`**: `name` (required, non-empty, unique: `"duplicate aero surface name"`),
+`position_local`, `chord_local` ([1,0,0]) and `normal_local` ([0,0,1]) (orthonormal unit vectors, else
+`"aero chord/normal must be orthonormal unit vectors"`), `area_m2` (1; > 0), `cl0` (0), `lift_slope_per_rad` (4.5; >= 0),
+`stall_angle_rad` (0.3; in (0, 1.5)), `cd0` (0.02), `induced_drag` (0.08), `stalled_drag` (1.2) (all >= 0),
+`rest_angle_rad` (0), `min_offset_rad` (0; <= 0), `max_offset_rad` (0; >= 0), `rate_rad_s` (1; > 0) (actuator travel:
+command -1..1 goes toward min/max offset), `max_lift_m` (0; >= 0), optional `ground`: `{probe_local` [0,0,-1] unit,
+`range_m` 0 (>= 0), `gain` 0 (in [0, 3])`}` (multiplier `1 + gain*(1-clearance/range)^2`).
+Messages: `"invalid aero surface name/vectors"`, `"invalid aero lift parameters"`, `"invalid aero drag coefficients"`,
+`"aero max_lift_m must be nonnegative"`, `"invalid aero actuator angles/rate"`, `"invalid aero ground effect"`.
+
+**`fans[]`**: `name` (required, unique), `position_local`, `direction_local` ([0,0,-1], unit), `area_m2` (1; > 0),
+`pressure_pa` (1000; >= 0), `seal_height_m` (0.1; > 0), `probe_range_m` (1; > 0, >= seal height),
+`max_power_w` (10000; > 0), `rate_per_s` (1; > 0). Message `"invalid aero fan pressure/geometry/power/rate"`.
+Fan energy is prepaid: the reservoir starts EMPTY and is credited by the caller
+(`World::credit_aero_fan_energy`).
+
+**`wake`**: `length_m` (0; >= 0), `radius_m` (1; > 0), `expansion` (0.12; >= 0), `deficit` (0.25; in [0, 0.75]),
+`turbulence` (0.1; in [0, 1]); messages `"invalid aero wake geometry"`, `"invalid aero wake deficit/turbulence"`.
+
+Runtime control (not in the file): `World::set_aero_surface_command` (-1..1),
+`World::set_aero_fan_command` (0..1), `World::set_aero_environment` (air density, wind),
+`WorldConfig::wind_world`. Example: `data/vehicles/car_hyper.json`.
 
 ## Minimal complete example
 

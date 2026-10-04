@@ -913,6 +913,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         r.turbo_rpm=turbo_->rpm(); r.boost_bar=(p_im_-p_amb_)/real(100000.0);
         r.p_exhaust_pa=turbo_->exhaust_pa;
         r.p_charge_pa=turbo_->charge_pa; r.t_charge_k=turbo_->charge_k;
+        r.wastegate_opening=turbo_->wastegate; r.compressor_flow_kg_s=turbo_->compressor_flow_kg_s;
+        r.compressor_pressure_ratio=turbo_->compressor_pr;
     }
     return r;
 }
