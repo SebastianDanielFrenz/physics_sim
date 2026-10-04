@@ -97,7 +97,10 @@ TEST_CASE("Guard: a pair without I7d blocks is bit-identical to master 976e8d7",
     std::printf("[turbo guard] pair script hash 0x%016llx, engine script hash 0x%016llx\n",
                 static_cast<unsigned long long>(ph), static_cast<unsigned long long>(eh));
     CHECK(ph == 0x42be4848b80f27d5ULL);
-    CHECK(eh == 0xc5a3c62d9ce14ffaULL);
+    // Engine-level hash re-recorded for the I7d compressor-flow fix (the compressor is fed the relaxed throttle
+    // flow, the turbine heat is peak-held: engine behaviour with a turbo moved on purpose). Was 0xc5a3c62d9ce14ffa
+    // on b486223. The pair-level hash above is UNCHANGED (TurboPair::step is untouched).
+    CHECK(eh == 0x90b9167102a14c12ULL);
 }
 
 TEST_CASE("Guard scripts exercise the turbo: spool, lift-off, re-apply", "[turbo][drivetrain][guard]") {
@@ -170,21 +173,17 @@ TEST_CASE("D1: the engine publishes the turbo sound state, 0 without a turbo", "
     Sensors s;
     s.omega = omega;
     s.ignition = 1.0;
-    PreSolveResult prev, r;
+    PreSolveResult r;
     real wg_wot = -1.0, wg_lift = -1.0;
     for (int i = 0; i < 3 * 960; ++i) {
         const real t = i * kH;
         const real c = t < 1.5 ? 1.0 : 0.0;
-        prev = r;
         r = boosted.pre_solve(s, ThrottleCommand{c, 0.0, 1.0}, TcuRequest{}, kH);
         (void)boosted.post_solve(omega, kH);
-        // Total compressor flow = the engine's air of the previous substep
-        // (the pair is stepped with last substep's flow): exhaust mass flow
-        // is air + booked fuel.
-        if (i > 0 && prev.p_charge_pa > 0.0) {
-            const real air_prev = prev.exhaust_mass_flow_kg_s - prev.fuel_flow_g_s * 1e-3;
-            CHECK(r.compressor_flow_kg_s == Catch::Approx(air_prev).epsilon(1e-9).margin(1e-12));
-        }
+        // The compressor flow is the relaxed throttle-path flow of the previous substep (I7d compressor-flow
+        // fix; before it, the cylinder air of the previous substep). Its identity is checked substep by
+        // substep in test_turbo_compressor_flow.cpp CF1; here only that it is a flow.
+        CHECK(r.compressor_flow_kg_s >= 0.0);
         // No baseline cooler drop, no valve: outlet pressure ratio = charge / ambient (>= 1).
         CHECK(r.compressor_pressure_ratio == std::max(1.0, r.p_charge_pa / kPamb));
         CHECK(r.wastegate_opening >= 0.0);

@@ -64,6 +64,7 @@ add_executable(ps_unit_tests
   test_turbo_intercooler.cpp
   test_turbo_io.cpp
   test_turbo_vehicle.cpp
+  test_turbo_compressor_flow.cpp
   test_simulated_engine_powertrain.cpp
   test_a25a_sim_engine_data.cpp
   test_engine_cycle.cpp

@@ -16,12 +16,15 @@
 //     0.801 s with no valve, 0.046 s with the 0.9 bar valve, 0.011 s with the 0.2 bar
 //     valve (flag edges at steps 74/96 = a spool-up blip, then 1440 = the lift, off at
 //     2209 / 1484 / 1451); 2 entries each.
-//   shipped hyper V8 (held 6000 rpm, WOT 2 s then lift), fixture line: no surge at all
-//     (the rotor is at 0 rpm 50 ms after the lift, pr -> 1 before the flow falls under
-//     the line); line x1.5: 0.007 s (1 entry) with no valve and with the 0.9 bar valve,
-//     0 s with the 0.2 bar valve.
-//   vehicle (sedan chassis + hyper-like pair, no valve): 3 entries, state hash identical
-//     with and without the line (0x5078ce266ce00488) at 1 and 10 workers.
+//   shipped hyper V8 (held 6000 rpm, WOT 2 s then lift), fixture line, AFTER the I7d
+//     compressor-flow fix (compressor fed the throttle flow, the rotor coasts): surge time
+//     in the 1 s after the lift 0.946 s (1 entry) with no valve, 0.150 s (1) with the 0.9 bar
+//     valve, 0 s with the 0.2 bar valve; line x1.5 0.966 / 0.170 / 0. Before the fix: no surge
+//     at all with the fixture line (the rotor was at 0 rpm 50 ms after the lift), line x1.5
+//     0.007 / 0.007 / 0 s.
+//   vehicle (sedan chassis + hyper-like pair, no valve): 2 entries (3 before the fix), state
+//     hash identical with and without the line (0x77ed68600cda4d85; was 0x0f8fb8cfb73d2ebe)
+//     at 1 and 10 workers.
 // Sabotages (each makes the named check fail, then reverted): see
 //   out/i7d_d1_d4_progress.md "Sabotage results".
 
@@ -300,18 +303,20 @@ TEST_CASE("D3: hyper V8 lift-off surge with and without the valve (measured)", "
         const HyperSurge sens = hyper_lift(base, tb::sensitive_bov(), scale);
         std::printf("[D3 hyper lift] line x%.1f, surge time in the 1 s after the lift: no valve %.3f s (%u entries), 0.9 bar valve %.3f s (%u), 0.2 bar valve %.3f s (%u)\n",
                     scale, none.surge_s, none.events, fixture.surge_s, fixture.events, sens.surge_s, sens.events);
-        if (scale == 1.0) {
-            CHECK(none.events == 0);
-            CHECK(sens.events == 0);
-        } else {
-            CHECK(none.events == 1);
-            CHECK(none.surge_s > 0.0);
-            CHECK(sens.events == 0);
-            CHECK(sens.surge_s == 0.0);
-        }
+        // With the compressor fed the throttle flow (I7d compressor-flow fix) the rotor coasts after the lift
+        // and the pressure ratio stays above 1.05 for ~1 s while the throttle flow is ~0.006 kg/s: without a
+        // valve the flag is raised for almost the whole second; the 0.9 bar valve (opens to ~0.3) shortens it
+        // to ~0.15 s; the 0.2 bar valve (fully open at once) keeps the compressor out of surge altogether.
+        CHECK(none.events == 1);
+        CHECK(none.surge_s > 0.5);
+        CHECK(fixture.events == 1);
+        CHECK(fixture.surge_s > 0.0);
+        CHECK(fixture.surge_s < 0.5 * none.surge_s);
+        CHECK(sens.events == 0);
+        CHECK(sens.surge_s == 0.0);
     }
-    // measured: line x1 never surges (the shipped rotor is at 0 rpm 50 ms after the lift, so pr -> 1
-    // before the flow falls under the line); line x1.5: 0.007 s (1 entry) with no valve and with the
-    // 0.9 bar valve (it opens only to 13 %), 0 s with the 0.2 bar valve. (A line x2 puts steady WOT on
-    // the line itself, 0.8 vs a flow fraction of ~0.75, and was dropped.)
+    // measured: line x1.0 no valve 0.946 s (1 entry), 0.9 bar valve 0.150 s (1), 0.2 bar valve 0 s; line x1.5:
+    // 0.966 / 0.170 / 0. (Before the fix: x1.0 never surged - the rotor was at 0 rpm 50 ms after the lift;
+    // x1.5 0.007 / 0.007 / 0.) A line x2 puts steady WOT on the line itself (0.8 vs a flow fraction of
+    // ~0.75) and was dropped.
 }

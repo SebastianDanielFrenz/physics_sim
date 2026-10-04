@@ -256,6 +256,10 @@ private:
     [[nodiscard]] real live_inverse_plate(real rpm,real request) const;
 
     std::optional<TurboPair> turbo_;
+    // Turbo feeds (hashed), all written by the previous substep: turbo_air_kg_s_ = the THROTTLE-path mass
+    // flow (ManifoldRhs::m_thr, positive part, relaxed by kTurboFlowLagS) - the flow the compressor delivers;
+    // turbo_exhaust_kg_s_ = the cylinder exhaust flow; turbo_fuel_w_ = the exhaust heat (burnt fuel power,
+    // peak-held with kExhaustHeatHoldS). See engine_simulated.cpp.
     real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_fuel_w_ = 0.0;
 
 
