@@ -42,6 +42,8 @@
 #include "ps_audio/native_output.h"
 #include "ps_audio/voice.h"
 
+#include <cstdint>
+#include <cstdio>
 #include <memory>
 
 namespace ps_godot {
@@ -85,12 +87,17 @@ public:
     // drops the sample - Voice::push_input's own contract, not handled
     // specially here.
     void push_tick(const ps::drivetrain::EngineSoundState& ess, ps::real t_sim_s);
+    // Diagnostic (env PS_VOICE_OUTPUT_RAW): appends the frames a consumer read
+    // from the Runner as raw interleaved float32, and one line per read
+    // (steady-clock us, frames) to <path>.reads.csv. No-op when unset.
+    void record_output(const float* samples, std::size_t frames);
 
     void set_paused(bool paused) { voice_.set_paused(paused); }
 
     std::shared_ptr<ps_audio::RunnerOutput> native_output() const { return output_; }
     [[nodiscard]] ps_audio::Runner& runner() { return runner_; }
     [[nodiscard]] const ps_audio::Runner& runner() const { return runner_; }
+    [[nodiscard]] ps_audio::Voice& voice() { return voice_; }
     // Immutable source metadata; channel must be in [0, channel_count()).
     // The returned reference remains valid for this VehicleVoice's lifetime.
     [[nodiscard]] const ps::engine_cycle::RadiatingEnd& source(int channel) const { return voice_.source(channel); }
@@ -104,6 +111,14 @@ private:
     ps_audio::Voice voice_;
     std::shared_ptr<ps_audio::RunnerOutput> output_;
     ps_audio::Runner runner_; // holds a non-owning Voice* into voice_ above - member order matters (Voice first)
+    // Diagnostic input recording (audio-steps investigation, 2026-10-04): when the
+    // environment variable PS_VOICE_INPUT_CSV names a file, every pushed
+    // EngineInput is appended to it as CSV (flushed every 240 ticks) -
+    // replayable by ps_engine_audio --input-csv.
+    std::FILE* record_file_ = nullptr;
+    std::uint64_t recorded_rows_ = 0;
+    std::FILE* output_file_ = nullptr;
+    std::FILE* output_reads_file_ = nullptr;
 };
 
 } // namespace ps_godot

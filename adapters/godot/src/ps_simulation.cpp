@@ -437,7 +437,7 @@ void PsSimulation::rebuild_post_step_and_start() {
     }
 
     sim_thread_->start();
-    for(const auto& entry:vehicle_voice_by_name_) {
+    if(engine_audio_bank_enabled_.load()) for(const auto& entry:vehicle_voice_by_name_) {
         const auto def=engine_definition_paths_.find(entry.first);
         if(def!=engine_definition_paths_.end()) {
             const auto cache=(std::filesystem::path(def->second).parent_path().parent_path().parent_path()/"out"/"godot_engine_cache").string();
@@ -774,6 +774,11 @@ void PsSimulation::enqueue_bank_request(BankRequest request) {
                     pending_turbo_updates_.push_back(PendingTurboUpdate{task.vehicle_name,*desc.turbo_pair});
                     turbo_configuration_status_="Ready; waiting for tick boundary";
                 }
+                if(!engine_audio_bank_enabled_.load()) {
+                    std::lock_guard<std::mutex> lock(turbo_update_mutex_);
+                    engine_audio_bank_status_="Disabled";
+                    continue;
+                }
                 auto bank=ps_tools::prepare_engine_audio_bank(task.engine_path,task.turbo_path,task.cache_dir,[this,&task] {
                     std::lock_guard<std::mutex> lock(turbo_update_mutex_);
                     return bank_worker_stop_ || std::any_of(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){return r.vehicle_name==task.vehicle_name;});
@@ -805,6 +810,8 @@ bool PsSimulation::request_vehicle_turbo_configuration(const String& vehicle_nam
     enqueue_bank_request(BankRequest{name,engine->second,to_std_string(path),cache,true});
     return true;
 }
+void PsSimulation::set_engine_audio_bank_enabled(bool enabled) { engine_audio_bank_enabled_.store(enabled); }
+bool PsSimulation::get_engine_audio_bank_enabled() const { return engine_audio_bank_enabled_.load(); }
 String PsSimulation::get_turbo_configuration_status() const {
     std::lock_guard<std::mutex> lock(turbo_update_mutex_);return String(turbo_configuration_status_.c_str());
 }
@@ -1163,6 +1170,7 @@ godot::PackedFloat32Array PsSimulation::read_vehicle_voice_audio(const String& v
     // threads, not this adapter-side readback call).
     std::vector<float> scratch(static_cast<std::size_t>(frames) * static_cast<std::size_t>(channels));
     const std::size_t got = it->second->runner().read(scratch.data(), static_cast<std::size_t>(frames));
+    it->second->record_output(scratch.data(), got);
     // Only an EMPTY ring counts: Godot asks for its whole free buffer
     // (up to 0.2 s), which the ring normally only partly holds - a partial
     // read is not a dropout. Godot-side dropouts are
@@ -1188,6 +1196,26 @@ double PsSimulation::get_voice_full_scale_pa() const { return voice_full_scale_p
 std::int64_t PsSimulation::get_vehicle_voice_underrun_count(const String& vehicle_name) const {
     const auto it = vehicle_voice_underrun_count_.find(to_std_string(vehicle_name));
     return it == vehicle_voice_underrun_count_.end() ? 0 : it->second;
+}
+
+godot::Dictionary PsSimulation::take_vehicle_voice_timing(const String& vehicle_name) {
+    godot::Dictionary d;
+    const auto it = vehicle_voice_by_name_.find(to_std_string(vehicle_name));
+    if (it == vehicle_voice_by_name_.end() || !it->second) return d;
+    ps_audio::Voice& v = it->second->voice();
+    d["hitches"] = static_cast<std::int64_t>(v.published_hitch_count());
+    d["arrivals"] = static_cast<std::int64_t>(v.published_arrivals());
+    d["max_arrival_gap_ms"] = static_cast<double>(v.take_max_arrival_gap_s()) * 1000.0;
+    d["max_crank_error_deg"] = static_cast<double>(v.take_max_crank_error_deg());
+    d["crank_saturated_samples"] = static_cast<std::int64_t>(v.take_crank_saturated_samples());
+    d["crank_saturation_flips"] = static_cast<std::int64_t>(v.take_crank_saturation_flips());
+    d["rate_min"] = static_cast<double>(v.take_min_rate());
+    d["rate_max"] = static_cast<double>(v.take_max_rate());
+    d["max_step_ms"] = sim_thread_ ? static_cast<double>(sim_thread_->take_max_step_ns()) / 1.0e6 : -1.0;
+    d["catch_up_wakeups"] = sim_thread_ ? static_cast<std::int64_t>(sim_thread_->catch_up_wakeups()) : -1;
+    d["runner_max_block_ms"] = static_cast<double>(it->second->runner().max_block_render_ns()) / 1.0e6;
+    d["runner_blocks"] = static_cast<std::int64_t>(it->second->runner().blocks_rendered());
+    return d;
 }
 
 void PsSimulation::_bind_methods() {
@@ -1222,6 +1250,8 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("spawn_vehicle", "vehicle_name", "vehicle_json_absolute_path", "chassis_body_name", "stream_radius_m"), &PsSimulation::spawn_vehicle);
     ClassDB::bind_method(D_METHOD("request_vehicle_turbo_configuration","vehicle_name","path"),&PsSimulation::request_vehicle_turbo_configuration);
     ClassDB::bind_method(D_METHOD("get_engine_audio_bank_status"),&PsSimulation::get_engine_audio_bank_status);
+    ClassDB::bind_method(D_METHOD("set_engine_audio_bank_enabled","enabled"),&PsSimulation::set_engine_audio_bank_enabled);
+    ClassDB::bind_method(D_METHOD("get_engine_audio_bank_enabled"),&PsSimulation::get_engine_audio_bank_enabled);
     ClassDB::bind_method(D_METHOD("get_turbo_configuration_status"),&PsSimulation::get_turbo_configuration_status);
     ClassDB::bind_method(D_METHOD("reset_vehicle", "vehicle_name", "sim_position", "yaw_rad"), &PsSimulation::reset_vehicle);
     ClassDB::bind_method(D_METHOD("get_vehicle_names"), &PsSimulation::get_vehicle_names);
@@ -1264,6 +1294,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_channel_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_channel_count);
     ClassDB::bind_method(D_METHOD("read_vehicle_voice_audio", "vehicle_name", "frames"), &PsSimulation::read_vehicle_voice_audio);
     ClassDB::bind_method(D_METHOD("get_vehicle_voice_underrun_count", "vehicle_name"), &PsSimulation::get_vehicle_voice_underrun_count);
+    ClassDB::bind_method(D_METHOD("take_vehicle_voice_timing", "vehicle_name"), &PsSimulation::take_vehicle_voice_timing);
     ClassDB::bind_method(D_METHOD("set_voice_full_scale_pa", "pa"), &PsSimulation::set_voice_full_scale_pa);
     ClassDB::bind_method(D_METHOD("get_voice_full_scale_pa"), &PsSimulation::get_voice_full_scale_pa);
 }

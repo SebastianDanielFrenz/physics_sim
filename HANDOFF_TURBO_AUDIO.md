@@ -24,12 +24,13 @@ An empty path restores the default.
 
 Engine banks are generated from the simulated combustion/pipe renderer. They are keyed by the engine definition, referenced turbo/configuration dependencies, and generator settings. Missing or corrupt banks generate on a background worker while the current renderer continues playing; the completed bank crossfades in over 120 ms.
 
-Banks contain five RPM points and two manifold-load planes with all source channels. New requests supersede queued requests. Obsolete generation is cancelled. Failed requests keep the previous audio and simulation running.
+Banks contain five RPM points and two manifold-load planes with all source channels. Since PSAB0002 each plane is a loop of whole engine cycles with a known crank angle at frame 0, played back at the live voice's crank angle (crank-synchronous; see `audio_bank.h`); old PSAB0001 cache files are a silent miss and regenerate. New requests supersede queued requests. Obsolete generation is cancelled. Failed requests keep the previous audio and simulation running.
 
 Relevant files:
 
 - `audio/include/ps_audio/audio_bank.h`
 - `audio/src/audio_bank.cpp`
+- `audio/include/ps_audio/audio_bank_reference.h` (old sample-time playback, measurement/test reference only)
 - `tools/common/engine_bank_generator.cpp`
 - `adapters/godot/src/ps_simulation.cpp`
 - `audio/src/voice.cpp`

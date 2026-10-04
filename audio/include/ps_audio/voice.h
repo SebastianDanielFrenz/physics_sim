@@ -24,6 +24,7 @@
 // caller splits render() calls. Allocation-free after construction.
 #pragma once
 #include "ps_audio/audio_bank.h"
+#include "ps_audio/audio_bank_reference.h"
 
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/types.h"
@@ -94,6 +95,10 @@ struct VoiceSettings {
     real crank_tau_s = 0.1;        // phase-correction time constant [A]
     real crank_max_rel = 0.01;     // correction cap, fraction of omega (brief A7)
     FlowNoiseSettings flow_noise{};  // ps_audio A8
+    // MEASUREMENT / TEST REFERENCE ONLY: play an audio bank with the old
+    // sample-time algorithm (audio_bank_reference.h) instead of the
+    // crank-synchronous BankPlayback. Required for a PSAB0001 bank.
+    bool bank_sample_time_reference = false;
 };
 
 class Voice {
@@ -121,6 +126,10 @@ public:
 
     // Called on a preparation/control thread; retains old banks until teardown
     // so a crossfade cannot free a large sample array on the audio thread.
+    // Under fuel on (flags == 0) the bank replaces the live synthesis (10 ms
+    // weight ramp), read at the live engine's crank angle (audio_bank.h).
+    // Throws on a channel/rate mismatch, or a sample-time-only (PSAB0001)
+    // bank without bank_sample_time_reference.
     void set_audio_bank(AudioBankPtr bank);
 
     // Diagnostics (consumer thread).
@@ -133,6 +142,21 @@ public:
     [[nodiscard]] real last_omega_applied() const { return omega_applied_; }
     [[nodiscard]] real crank_target_deg() const { return target_theta_; }
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t h) const { return engine_.fold_state_hash(h); }
+    // Diagnostics (any thread): the time map's counters as of the end of the
+    // last render() call, and the largest audio-time gap between two snapshot
+    // arrivals since the previous take_max_arrival_gap_s() (exchange-reset).
+    // Read-only mirrors - nothing in rendering reads them.
+    [[nodiscard]] std::uint64_t published_hitch_count() const { return pub_hitches_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t published_arrivals() const { return pub_arrivals_.load(std::memory_order_relaxed); }
+    [[nodiscard]] real take_max_arrival_gap_s() { return pub_max_gap_s_.exchange(0.0, std::memory_order_relaxed); }
+    // Crank-phase correction diagnostics since the previous take (exchange-reset):
+    // largest |target - engine| crank error [deg], samples whose correction hit
+    // the crank_max_rel cap, saturated-sign reversals, and the time map's rate range.
+    [[nodiscard]] real take_max_crank_error_deg() { return pub_max_err_deg_.exchange(0.0, std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t take_crank_saturated_samples() { return pub_sat_samples_.exchange(0, std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t take_crank_saturation_flips() { return pub_sat_flips_.exchange(0, std::memory_order_relaxed); }
+    [[nodiscard]] real take_min_rate() { return pub_rate_min_.exchange(1.0e9, std::memory_order_relaxed); }
+    [[nodiscard]] real take_max_rate() { return pub_rate_max_.exchange(0.0, std::memory_order_relaxed); }
 
 private:
     void control_point();
@@ -156,6 +180,7 @@ private:
     AudioBankPtr active_bank_, previous_bank_;
     std::vector<AudioBankPtr> retained_banks_;
     BankPlayback bank_playback_, previous_playback_;
+    SampleTimeBankPlayback ref_playback_, previous_ref_playback_;  // bank_sample_time_reference only
     real bank_fade_ = 1.0, bank_weight_ = 0.0;
     VoiceSettings s_;
     StabilityProbeResult probe_;
@@ -179,6 +204,15 @@ private:
     bool frozen_ = false;
     std::uint64_t n_ = 0;
     std::array<real, kLiveMaxSources> frame_{};
+    std::atomic<std::uint64_t> pub_hitches_{0};
+    std::atomic<std::uint64_t> pub_arrivals_{0};
+    std::atomic<real> pub_max_gap_s_{0.0};
+    std::atomic<real> pub_max_err_deg_{0.0};
+    std::atomic<std::uint64_t> pub_sat_samples_{0};
+    std::atomic<std::uint64_t> pub_sat_flips_{0};
+    std::atomic<real> pub_rate_min_{1.0e9};
+    std::atomic<real> pub_rate_max_{0.0};
+    int last_sat_sign_ = 0;  // diagnostics only, never read by the synthesis
 };
 
 // Offline render (allocates the buffer; not for the real-time path): `frames`

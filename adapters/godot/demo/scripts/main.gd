@@ -153,6 +153,13 @@ var ground_grid: MeshInstance3D
 # for what qualifies). null on any vehicle without one (most, including the
 # default car_sedan.json) - _process below no-ops in that case.
 var _spatial_audio: PsSpatialAudio
+# True once the voice's native output pump (NATIVE_ENGINE_OUTPUT.md) feeds
+# _spatial_audio directly: delivery no longer depends on render frames, so a
+# long frame cannot starve the endpoint. --m1-audio=render keeps the old
+# render-fed push_audio path for A/B comparison.
+var _spatial_native: bool = false
+var _audio_diag_second: int = -1
+var _audio_diag_last := {}
 var _audio_debug_second: int = -1
 var _voice_source_positions := PackedVector3Array()
 var _engine_audio_player: AudioStreamPlayer = null
@@ -162,6 +169,9 @@ var _engine_audio_capacity: int = 0
 # _process_engine_audio): must exceed one _process frame (~17 ms at 60 fps)
 # with margin; the Runner's own ring (vehicle_voice.cpp) adds ~21 ms.
 const ENGINE_AUDIO_TARGET_S: float = 0.05
+# --m1-audio-queue-ms=N overrides the target (20..200 ms) for A/B listening;
+# racing_game's fallback keeps 100 ms. Resolved on first use, -1 = not yet.
+var _engine_audio_target_s: float = -1.0
 
 # Tractor demo (2026-09-28): true once --m1-spawn= is seen on the cmdline, so
 # the VEHICLE_TABLE resolution in _ready() does not clobber an explicit
@@ -458,6 +468,9 @@ func _ready() -> void:
 	var vehicle_ok: bool = simulation.spawn_vehicle(VEHICLE_NAME, vehicle_path, CHASSIS_BODY_NAME, terrain_stream_radius_m)
 	print("ps_godot main.gd: spawn_vehicle returned: ", vehicle_ok, " err=", simulation.get_last_error())
 
+	# Baked engine audio bank: off unless --m1-audio-bank (its loops are not
+	# crank-synchronous yet and step every ~0.5 s under throttle, 2026-10-04).
+	simulation.set_engine_audio_bank_enabled("--m1-audio-bank" in OS.get_cmdline_user_args())
 	simulation.start()
 	print("ps_godot main.gd: sim started, is_running=", simulation.is_running())
 
@@ -865,9 +878,76 @@ func _setup_engine_audio() -> void:
 		var opened: bool = _spatial_audio.open(int(sample_rate), channels)
 		print("ps_godot spatial audio: ", _spatial_audio.get_status())
 		if opened:
+			if not "--m1-audio=render" in OS.get_cmdline_user_args():
+				_spatial_native = simulation.connect_vehicle_voice_spatial(VEHICLE_NAME, _spatial_audio)
+			print("ps_godot spatial audio feed: ", "native pump" if _spatial_native else "render-fed push_audio")
 			return
 		_spatial_audio = null
 	_setup_engine_audio_fallback(sample_rate)
+
+# Once per second, only when something went wrong in that second: a device
+# shortage (output_missing_frames), a synthesis block over its 5.33 ms budget,
+# or a stalled sim tick feed show up here, so an audible step can be matched
+# to its cause. Counters are cumulative; deltas are printed.
+func _print_audio_output_diagnostics() -> void:
+	var second: int = Time.get_ticks_msec() / 1000
+	if second == _audio_diag_second:
+		return
+	_audio_diag_second = second
+	var d: Dictionary = _spatial_audio.get_output_diagnostics()
+	var missing: int = int(d.get("output_missing_frames", 0)) - int(_audio_diag_last.get("output_missing_frames", 0))
+	var endpoint_missing: int = int(d.get("endpoint_missing_frames", 0)) - int(_audio_diag_last.get("endpoint_missing_frames", 0))
+	var max_block: float = float(d.get("runner_max_block_ms", 0.0))
+	var budget: float = float(d.get("runner_block_budget_ms", 5.333))
+	var over_budget: bool = max_block > budget and max_block > float(_audio_diag_last.get("runner_max_block_ms", 0.0))
+	if not _audio_diag_last.is_empty() and (missing > 0 or endpoint_missing > 0 or over_budget):
+		var kmh: float = simulation.get_vehicle_ground_speed_mps(VEHICLE_NAME) * 3.6
+		print("ps_godot audio output: missing_frames=%d endpoint_missing=%d runner_mean_us=%.2f runner_max_block_ms=%.3f (budget %.3f) queued=%d speed_kmh=%.0f" % [
+			missing, endpoint_missing, float(d.get("runner_mean_us_per_frame", 0.0)), max_block, budget,
+			int(d.get("queued_frames", 0)), kmh])
+	_audio_diag_last = d
+
+# Once per second: the engine voice's time-map hitches (no physics snapshot
+# for more than two tick intervals of audio time - the voice holds its last
+# input, then jumps), the largest audio-time gap between snapshot arrivals,
+# the longest sim step, sim catch-up wake-ups and the worst audio render
+# block, with speed and resident terrain tiles. Printed every second while
+# moving so steps can be matched against regular events (tile crossings).
+var _voice_timing_second: int = -1
+var _voice_timing_last := {}
+var _voice_timing_file: FileAccess = null
+# Godot's own log file only reaches disk on a clean exit; with PS_VOICE_INPUT_CSV
+# set (the voice input recording) the lines also go to "<that path>.timing.txt",
+# flushed every line.
+func _voice_timing_line(line: String) -> void:
+	print(line)
+	var base := OS.get_environment("PS_VOICE_INPUT_CSV")
+	if base.is_empty():
+		return
+	if _voice_timing_file == null:
+		_voice_timing_file = FileAccess.open(base + ".timing.txt", FileAccess.WRITE)
+	if _voice_timing_file != null:
+		_voice_timing_file.store_line(line)
+		_voice_timing_file.flush()
+func _print_voice_timing() -> void:
+	var second: int = Time.get_ticks_msec() / 1000
+	if second == _voice_timing_second or not simulation.has_method("take_vehicle_voice_timing"):
+		return
+	_voice_timing_second = second
+	var d: Dictionary = simulation.take_vehicle_voice_timing(VEHICLE_NAME)
+	if d.is_empty():
+		return
+	if not _voice_timing_last.is_empty():
+		_voice_timing_line("ps_godot voice timing:t=%d speed_kmh=%.0f hitches=+%d arrivals=+%d max_arrival_gap_ms=%.2f max_step_ms=%.2f catch_up=+%d runner_max_block_ms=%.2f tiles=%d crank_err_max_deg=%.1f crank_sat=%d crank_flips=%d rate=[%.4f, %.4f] rpm=%.0f" % [
+			second, simulation.get_vehicle_ground_speed_mps(VEHICLE_NAME) * 3.6,
+			int(d["hitches"]) - int(_voice_timing_last["hitches"]),
+			int(d["arrivals"]) - int(_voice_timing_last["arrivals"]),
+			float(d["max_arrival_gap_ms"]), float(d["max_step_ms"]),
+			int(d["catch_up_wakeups"]) - int(_voice_timing_last["catch_up_wakeups"]),
+			float(d["runner_max_block_ms"]), simulation.terrain_resident_tile_count(),
+			float(d["max_crank_error_deg"]), int(d["crank_saturated_samples"]), int(d["crank_saturation_flips"]),
+			float(d["rate_min"]), float(d["rate_max"]), float(simulation.get_vehicle_powertrain(VEHICLE_NAME).get("rpm", 0.0))])
+	_voice_timing_last = d
 
 func _setup_engine_audio_fallback(sample_rate: float) -> void:
 	var stream := AudioStreamGenerator.new()
@@ -877,7 +957,7 @@ func _setup_engine_audio_fallback(sample_rate: float) -> void:
 	# an audible gap - the Runner thread keeps rendering independently of
 	# Godot's frame rate (audio/include/ps_audio/runner.h), this buffer is
 	# only the hand-off cushion between it and AudioStreamGenerator.
-	stream.buffer_length = 0.2
+	stream.buffer_length = 0.25
 
 	_engine_audio_player = AudioStreamPlayer.new()
 	_engine_audio_player.name = "EngineAudio"
@@ -996,6 +1076,9 @@ func _process_engine_audio() -> void:
 					if Time.get_ticks_msec() / 1000 != _audio_debug_second:
 						_audio_debug_second = Time.get_ticks_msec() / 1000
 						print("ps_godot audio listener=",listener.name," sources listener-relative(+z rear,+y above)=",positions)
+			if _spatial_native:
+				_print_audio_output_diagnostics()
+				return
 			var needed: int = _spatial_audio.get_frames_needed()
 			if needed > 0:
 				_spatial_audio.push_audio(simulation.read_vehicle_voice_audio(VEHICLE_NAME, needed))
@@ -1011,6 +1094,7 @@ func _process_engine_audio() -> void:
 	# when _setup_engine_audio found no voice.
 	if _engine_audio_player == null:
 		return
+	_print_voice_timing()
 	var playback: AudioStreamGeneratorPlayback = _engine_audio_player.get_stream_playback()
 	if playback == null:
 		return
@@ -1024,7 +1108,13 @@ func _process_engine_audio() -> void:
 	var available: int = playback.get_frames_available()
 	_engine_audio_capacity = maxi(_engine_audio_capacity, available)
 	var queued: int = _engine_audio_capacity - available
-	var target: int = int(ENGINE_AUDIO_TARGET_S * _engine_audio_player.stream.mix_rate)
+	if _engine_audio_target_s < 0.0:
+		_engine_audio_target_s = ENGINE_AUDIO_TARGET_S
+		for argument in OS.get_cmdline_user_args():
+			if argument.begins_with("--m1-audio-queue-ms="):
+				_engine_audio_target_s = clampf(argument.trim_prefix("--m1-audio-queue-ms=").to_float(), 20.0, 200.0) / 1000.0
+		print("ps_godot engine audio fallback queue: %.0f ms" % (_engine_audio_target_s * 1000.0))
+	var target: int = int(_engine_audio_target_s * _engine_audio_player.stream.mix_rate)
 	var to_fill: int = mini(available, target - queued)
 	if to_fill <= 0:
 		return
