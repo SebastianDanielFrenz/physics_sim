@@ -121,6 +121,29 @@ inline ps::drivetrain::AntiLagDesc hyper_like_anti_lag() {
     return a;
 }
 
+// A rally-style ALS (cylinder cut + deep retard + enrichment + held boost target).
+// Cited: Wikipedia "Antilag system" (CC BY-SA, read 2026-10-05, citing Markus,
+// MotorTrend 2024-09-09): ignition typically 35-45 deg ATDC -> spark -40 (the
+// midpoint); throttle bypass/kick ~12-20 deg of plate angle -> plate_floor 0.17
+// (DERIVED: 15.3 deg of a 90 deg plate, assuming plate position linear in angle);
+// "slight enrichment, mainly for cooling" -> lambda 0.85 [AS value]. Cut fraction
+// 0.4, manifold burn 1.0 and boost target 1.0 [AS]. Chosen with
+// test_turbo_als_cut.cpp's [.][diag] sweep on the hyper V8 at 6000 rpm so that
+// ALS air is 10-20 % of WOT air (measured 18.4 %) and the crank torque slightly
+// negative (-54 N*m); AC6 pins it.
+inline ps::drivetrain::AntiLagDesc hyper_like_als_cut() {
+    ps::drivetrain::AntiLagDesc a = hyper_like_anti_lag();
+    a.retard_deg = 0.0;
+    a.spark_advance_deg = -40.0;
+    a.plate_floor = 0.17;
+    a.cylinder_cut_fraction = 0.4;
+    a.manifold_burn_fraction = 1.0;
+    a.lambda = 0.85;
+    a.boost_target_fraction = 1.0;
+    a.source = "[AS] test fixture; spark and throttle kick per Wikipedia 'Antilag system'";
+    return a;
+}
+
 inline ps::drivetrain::TurboPairDesc hyper_like_pair_with_anti_lag() {
     ps::drivetrain::TurboPairDesc t = hyper_like_pair();
     t.anti_lag = hyper_like_anti_lag();

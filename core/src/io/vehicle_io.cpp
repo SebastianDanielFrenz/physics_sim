@@ -2447,7 +2447,8 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         if(!al.is_object()) throw std::runtime_error(path+": 'anti_lag' must be an object");
         const std::string actx=path+": anti_lag";
         static const char* const kKeys[]={"channel","default_enabled","arm_below_command","min_rpm","max_rpm",
-                                          "retard_deg","plate_floor","max_active_s","source"};
+                                          "retard_deg","plate_floor","max_active_s","source","spark_advance_deg",
+                                          "cylinder_cut_fraction","manifold_burn_fraction","lambda","boost_target_fraction"};
         for(auto it=al.begin();it!=al.end();++it)
             if(std::none_of(std::begin(kKeys),std::end(kKeys),[&](const char* k){ return it.key()==k; }))
                 throw std::runtime_error(actx+": unknown key '"+it.key()+"'");
@@ -2467,11 +2468,36 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         if(!(a.min_rpm>=0)) throw std::runtime_error(actx+": 'min_rpm' must be >= 0");
         a.max_rpm=require_number(al,"max_rpm",actx);
         if(!(a.max_rpm>a.min_rpm)) throw std::runtime_error(actx+": 'max_rpm' must be > 'min_rpm'");
-        a.retard_deg=require_number(al,"retard_deg",actx);
-        if(!(a.retard_deg>=0)) throw std::runtime_error(actx+": 'retard_deg' must be >= 0");
+        // Exactly one of retard_deg (from the scheduled advance) and spark_advance_deg (absolute).
+        if(al.contains("retard_deg") && al.contains("spark_advance_deg"))
+            throw std::runtime_error(actx+": give either 'retard_deg' or 'spark_advance_deg', not both");
+        if(al.contains("spark_advance_deg")) {
+            const real sa=require_number(al,"spark_advance_deg",actx);
+            if(!(sa>=-90 && sa<=60)) throw std::runtime_error(actx+": 'spark_advance_deg' must be in [-90, 60]");
+            a.spark_advance_deg=sa;
+        } else {
+            a.retard_deg=require_number(al,"retard_deg",actx);
+            if(!(a.retard_deg>=0)) throw std::runtime_error(actx+": 'retard_deg' must be >= 0");
+        }
         a.plate_floor=require_number(al,"plate_floor",actx);
         if(!(a.plate_floor>=0 && a.plate_floor<=1)) throw std::runtime_error(actx+": 'plate_floor' must be in [0, 1]");
         a.max_active_s=require_positive(al,"max_active_s",actx);
+        if(al.contains("cylinder_cut_fraction")) {
+            a.cylinder_cut_fraction=require_number(al,"cylinder_cut_fraction",actx);
+            if(!(a.cylinder_cut_fraction>=0 && a.cylinder_cut_fraction<1)) throw std::runtime_error(actx+": 'cylinder_cut_fraction' must be in [0, 1)");
+        }
+        if(al.contains("manifold_burn_fraction")) {
+            a.manifold_burn_fraction=require_number(al,"manifold_burn_fraction",actx);
+            if(!(a.manifold_burn_fraction>=0 && a.manifold_burn_fraction<=1)) throw std::runtime_error(actx+": 'manifold_burn_fraction' must be in [0, 1]");
+        }
+        if(al.contains("lambda")) {
+            a.lambda=require_number(al,"lambda",actx);
+            if(!(a.lambda>=0.5 && a.lambda<=1.5)) throw std::runtime_error(actx+": 'lambda' must be in [0.5, 1.5]");
+        }
+        if(al.contains("boost_target_fraction")) {
+            a.boost_target_fraction=require_number(al,"boost_target_fraction",actx);
+            if(!(a.boost_target_fraction>=0 && a.boost_target_fraction<=1)) throw std::runtime_error(actx+": 'boost_target_fraction' must be in [0, 1]");
+        }
         if(!al.contains("source") || !al.at("source").is_string() || al.at("source").get<std::string>().empty())
             throw std::runtime_error(actx+": 'source' is required (PLAN.md section 8)");
         a.source=al.at("source").get<std::string>();

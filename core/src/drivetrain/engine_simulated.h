@@ -225,14 +225,19 @@ public:
         real fire = 0.0;         // gate * soft-cut taper, before s_starve
         real lambda = 0.0, spark_deg = 0.0, theta_mbt_deg = 0.0;
         real eta_i = 0.0, f_lambda = 0.0, eta_spark = 0.0;
-        // I7d D5: tau_comb at the SCHEDULED spark (no anti-lag retard); equal to
-        // tau_comb when spark_retard_deg is 0.
+        // I7d D5: tau_comb at the SCHEDULED spark with every injected charge fired (no anti-lag retard,
+        // spark setting or cylinder cut; the anti-lag lambda applies); equal to tau_comb without anti-lag.
         real tau_comb_unretarded = 0.0;
+        // anti-lag cylinder cut: share of the injected fuel (m_fuel_rev) whose spark is cut; tau_comb covers
+        // the fired share (1 - cut_fraction) only. 0 without anti-lag.
+        real cut_fraction = 0.0;
     };
-    // spark_retard_deg (I7d D5, >= 0): subtracted from the scheduled (knock-
-    // limited) advance before eta_spark is looked up - the anti-lag retard.
+    // als (I7d D5, nullptr = none): the active anti-lag block - the spark is retarded by retard_deg from
+    // the scheduled (knock-limited) advance or set to spark_advance_deg before eta_spark is looked up
+    // (below the table's most retarded node eta_spark is extrapolated linearly, floored at 0), lambda is
+    // overridden when the block sets one, and cylinder_cut_fraction of the charges are not fired.
     [[nodiscard]] TorqueEval evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active,
-                                             real spark_retard_deg = 0.0) const;
+                                             const AntiLagDesc* als = nullptr) const;
 
     // I7d D5 anti-lag white-box accessors (all 0/false/true defaults without an anti_lag block).
     [[nodiscard]] bool anti_lag_active() const { return als_active_; }
@@ -242,7 +247,8 @@ public:
     [[nodiscard]] const TurboPair* turbo() const { return turbo_ ? &*turbo_ : nullptr; }
 
     // Exhaust energy balance of the latest pre_solve (turbo engines only; zeros otherwise), all W:
-    // fuel_w = indicated_w + wall_w + sensible_w + chemical_w - clamp_w. port_k is the gas temperature
+    // fuel_w = indicated_w + wall_w + sensible_w + chemical_w - clamp_w (manifold_w, the cut charge burnt
+    // in the exhaust manifold under anti-lag, is part of sensible_w). port_k is the gas temperature
     // at the exhaust ports handed to the next substep's turbo step. Never hashed (port_k is, as
     // turbo_port_k_).
     struct ExhaustSplit {
@@ -252,6 +258,7 @@ public:
         real sensible_w = 0.0;  // exhaust sensible enthalpy above the intake temperature
         real chemical_w = 0.0;  // unreleased fuel energy (lambda < 1)
         real clamp_w = 0.0;     // sensible enthalpy added by the >= 0 guard (0 in every shipped regime)
+        real manifold_w = 0.0;  // anti-lag: cut-cylinder fuel energy released in the exhaust manifold
         real port_k = 0.0;
     };
     [[nodiscard]] const ExhaustSplit& exhaust_split() const { return exhaust_split_; }

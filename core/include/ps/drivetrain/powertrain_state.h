@@ -64,6 +64,7 @@ struct EngineSoundState {
     real exhaust_port_k = 0.0;             // gas temperature at the exhaust ports
     real turbine_inlet_k = 0.0;            // gas temperature at the turbine inlet (after the exhaust wall)
     real exhaust_wall_k = 0.0;             // lumped exhaust manifold / turbine housing wall temperature
+    real anti_lag_manifold_burn_w = 0.0;   // anti-lag cylinder cut: fuel energy released in the exhaust manifold (W)
     real p_intake_pa = 0.0;           // intake manifold pressure
     real lambda = 0.0;                 // commanded lambda
     real spark_advance_deg = 0.0;      // applied spark advance

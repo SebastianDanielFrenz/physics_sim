@@ -324,9 +324,12 @@ struct SurgeLineDesc {
 // did not starve last substep, for at most max_active_s per lift (re-armed
 // when the command rises to arm_below_command again). While active: DFCO is
 // inhibited, the plate target is at least plate_floor (bypass air), the spark
-// is retarded by retard_deg from the scheduled advance; the indicated work the
-// retard removes stays in the gas (the engine's exhaust energy balance), so it
-// reaches the turbine as exhaust enthalpy.
+// is retarded by retard_deg from the scheduled advance (or set to
+// spark_advance_deg); the indicated work the retard removes stays in the gas
+// (the engine's exhaust energy balance), so it reaches the turbine as exhaust
+// enthalpy. Optionally a share of the firing events is spark-cut with the fuel
+// still injected (the charge burns in the manifold), the mixture enriched and
+// the wastegate held toward a boost target.
 struct AntiLagDesc {
     std::string channel = "anti_lag"; // control channel; declared with default default_enabled
     real default_enabled = 0.0;       // 0 or 1: the channel's declared default
@@ -337,6 +340,19 @@ struct AntiLagDesc {
     real plate_floor = 0.0;           // in [0, 1], bypass-air throttle plate floor
     real max_active_s = 0.0;          // > 0, longest activity per lift
     std::string source;               // required (PLAN.md section 8)
+    // Optional (absent = the D5 behaviour, bit-identical):
+    std::optional<real> spark_advance_deg; // absolute spark while active (deg BTDC, negative = ATDC), instead of retard_deg
+    real cylinder_cut_fraction = 0.0;  // [0, 1): share of firing events whose spark is cut (fuel still injected; the
+                                       // unburnt charge reaches the exhaust manifold)
+    real manifold_burn_fraction = 1.0; // [0, 1]: share of the cut charge's oxygen-limited fuel energy released in the
+                                       // hot exhaust manifold (the rest leaves as chemical enthalpy)
+    real lambda = 0.0;                 // 0 = the ECU lambda target; > 0 = lambda while active (enrichment)
+    real boost_target_fraction = 0.0;  // [0, 1]: wastegate PID target while active, as a fraction of target boost
+                                       // (0 = follows the plate as without anti-lag)
+    [[nodiscard]] bool has_extension() const {
+        return spark_advance_deg.has_value() || cylinder_cut_fraction != 0.0 || manifold_burn_fraction != 1.0 ||
+               lambda != 0.0 || boost_target_fraction != 0.0;
+    }
 };
 
 struct TurboPairDesc {

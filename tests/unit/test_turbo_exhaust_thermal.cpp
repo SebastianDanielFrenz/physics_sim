@@ -241,7 +241,7 @@ TEST_CASE("ET5: engine exhaust split closes to round-off and matches literal ter
             ++als;
             // the work the retard removes stays in the gas: sensible + indicated equals what the unretarded
             // spark would leave, evaluated independently at the same state
-            const auto ev0 = e.evaluate_torque(omega, e.p_im(), true, 1.0, false, 0.0);
+            const auto ev0 = e.evaluate_torque(omega, e.p_im(), true, 1.0, false, nullptr);
             const real expect_sensible = (1.0 - kFwall) * eta_c * x.fuel_w - omega * ev0.tau_comb + r.anti_lag_extra_exhaust_w;
             worst_als = std::max(worst_als, std::abs(x.sensible_w - expect_sensible) / std::max(1.0, x.sensible_w));
             CHECK(r.anti_lag_extra_exhaust_w == Catch::Approx(omega * (ev0.tau_comb - x.indicated_w / omega)).epsilon(1e-9));

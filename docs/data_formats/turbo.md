@@ -239,7 +239,14 @@ protection (enrichment, boost cut) is modelled - a follow-up.
 A rally-style anti-lag system (ALS): while the driver is off the throttle the
 engine keeps the throttle partly open, keeps fuelling (no DFCO) and retards the
 spark; the work the retard takes from the crank stays in the exhaust gas (the
-energy balance above) and keeps the turbine spinning. Absent = no anti-lag and every number is bit-identical to a
+energy balance above) and keeps the turbine spinning. Optionally (the "extension"
+fields) the spark is set to an absolute late angle, a share of the firing events
+is spark-cut with the fuel still injected (that charge burns in the exhaust
+manifold), the mixture is enriched and the wastegate is held toward a boost
+target. Published ALS practice (Wikipedia "Antilag system", CC BY-SA, citing
+Markus, MotorTrend 2024-09-09): ignition typically 35-45 deg ATDC, a throttle
+bypass/kick of about 12-20 deg of plate angle, slight enrichment, mainly for
+cooling. Absent = no anti-lag and every number is bit-identical to a
 configuration without the block.
 
 | Field | Type | Rule | Meaning |
@@ -249,7 +256,12 @@ configuration without the block.
 | `arm_below_command` | number | required, in (0, 1] | throttle command below which anti-lag acts; the command reaching it again re-arms it |
 | `min_rpm` | number | required, >= 0 | engine speed range in which it acts |
 | `max_rpm` | number | required, > `min_rpm` | |
-| `retard_deg` | number | required, >= 0 | spark retard from the scheduled advance while active |
+| `retard_deg` | number | required unless `spark_advance_deg` is given, >= 0 | spark retard from the scheduled advance while active |
+| `spark_advance_deg` | number | optional, in [-90, 60], excludes `retard_deg` | absolute spark advance while active, deg BTDC (negative = ATDC; ALS practice -35..-45) |
+| `cylinder_cut_fraction` | number | optional, in [0, 1), default 0 | share of the firing events whose spark is cut; the fuel is still injected and booked |
+| `manifold_burn_fraction` | number | optional, in [0, 1], default 1 | share of the cut charge's (oxygen-limited) fuel energy released in the exhaust manifold; the rest leaves as chemical enthalpy |
+| `lambda` | number | optional, in [0.5, 1.5], default = the ECU target | lambda while active (enrichment) |
+| `boost_target_fraction` | number | optional, in [0, 1], default 0 | while active the wastegate PID sees `max(plate, boost_target_fraction)` instead of the plate |
 | `plate_floor` | number | required, in [0, 1] | minimum throttle plate while active |
 | `max_active_s` | number | required, > 0 | longest active time per lift (a thermal limit) |
 | `source` | string | required, non-empty | provenance (PLAN.md section 8) |
@@ -260,7 +272,10 @@ vanish silently), `'channel' must be a non-empty string`, `'default_enabled' mus
 be 0 or 1`, `'<key>' is required`, `'arm_below_command' must be in (0, 1]`,
 `'min_rpm' must be >= 0`, `'max_rpm' must be > 'min_rpm'`, `'retard_deg' must be
 >= 0`, `'plate_floor' must be in [0, 1]`, `'max_active_s' must be > 0`, `'source'
-is required (PLAN.md section 8)`.
+is required (PLAN.md section 8)`, `give either 'retard_deg' or 'spark_advance_deg',
+not both`, `'spark_advance_deg' must be in [-90, 60]`, `'cylinder_cut_fraction' must
+be in [0, 1)`, `'manifold_burn_fraction' must be in [0, 1]`, `'lambda' must be in
+[0.5, 1.5]`, `'boost_target_fraction' must be in [0, 1]`.
 
 Model (`core/src/drivetrain/engine_simulated.cpp`, once per substep, decided right
 after the throttle request and before DFCO):
@@ -273,9 +288,27 @@ after the throttle request and before DFCO):
   substeps). A substep that starves the engine of fuel (empty tank) while active
   also disarms it for the rest of the lift.
 - While active: DFCO is held off; the plate target (electronic) or the plate itself
-  (mechanical, a throttle kicker) is at least `plate_floor`; the spark is the
-  scheduled advance minus `retard_deg`, through the same `eta_spark` curve as any
-  spark offset (torque falls by the curve, fuel does not).
+  (mechanical, a throttle kicker) is at least `plate_floor`; the spark is
+  `spark_advance_deg` if given, else the scheduled advance minus `retard_deg`,
+  through the same `eta_spark` curve as any spark offset (torque falls by the
+  curve, fuel does not). Below the curve's most retarded node (the generator's
+  cycle points end 40 deg after MBT) `eta_spark` is extrapolated along the first
+  segment's slope, floored at 0 - under anti-lag only; elsewhere the curve still
+  clamps (PROVISIONAL: a real ALS fires past the table; a linear extrapolation is
+  the simplest continuation, the cycle model at those angles is the alternative).
+- `lambda` > 0 replaces the ECU lambda target: fuel per charge `m_air / (lambda *
+  AFR)` and `f_lambda` follow it.
+- Cylinder cut `c`: `tau_comb = (1 - c) * eta_i f_lambda eta_spark LHV/2pi *
+  m_fuel_rev`; the whole injected `m_fuel_rev` is booked (ledger, tank). In the
+  exhaust balance the released energy `R = min(1, lambda) Q_f` splits into the
+  fired share `(1 - c) R` (indicated work, in-cylinder wall heat
+  `in_cylinder_wall_heat_fraction * (1 - c) R`, sensible rest) and the cut share
+  `c R`, of which `manifold_burn_fraction * c R` is released in the manifold
+  (added to the sensible enthalpy) and the rest stays chemical. `Q_f = W_i +
+  Q_wall + H + chemical` still holds to round-off. Not modelled: a manifold
+  ignition threshold (the cut charge burns whatever the wall temperature), misfire
+  or knock limits, a lambda- or temperature-dependent burn fraction, ECU material
+  protection.
 - The retard needs no exhaust term of its own: it lowers the indicated work, and
   the exhaust energy balance above puts the difference into the gas. The sound
   field `anti_lag_extra_exhaust_w` reports `omega * (tau_comb(scheduled spark) -
@@ -283,12 +316,16 @@ after the throttle request and before DFCO):
   read by nothing).
 - Energy: the exhaust heat is part of `engine_heat` (fuel energy minus indicated
   work) - the ledger books nothing new and `balance_error` is unchanged.
-- No wastegate override: the boost PID's target is still `target_boost * plate`, so
-  `plate_floor` doubles as the anti-lag boost target.
+- Wastegate: the boost PID's target is `target_boost * plate`; with
+  `boost_target_fraction` > 0 it is `target_boost * max(plate,
+  boost_target_fraction)` while active. Without it `plate_floor` doubles as the
+  anti-lag boost target, and a floor below 0.10 commands the wastegate open.
 
 Hashing: the activity flag, armed flag, timer and every block
 parameter except `channel`/`default_enabled`/`source` are folded into the state
-hash, appended after the other turbo state and only when the block exists. The
+hash, appended after the other turbo state and only when the block exists; the
+extension fields only when one of them differs from its default, so a block
+without them hashes as before. The
 block is NOT part of the derived-map cache key. A hot swap
 (`World::replace_turbo_configuration`) to a configuration without `anti_lag`
 clears the anti-lag state; channels are declared when the vehicle is built, so a
@@ -300,10 +337,23 @@ Known limits (measured, I7d D5, `tests/unit/test_turbo_anti_lag.cpp`):
   nearly balance at every flow, so a low `plate_floor` leaves the rotor SLOWER than
   a DFCO coast (fixture engine, 5000 rpm, rotor 1 s after the lift: floor 0.2 ->
   15.5-18.6k rpm vs 39.8k with anti-lag off; 0.35 -> ~40k; 0.5 -> ~53k).
-- Torque is cut only by `eta_spark`: on the hyper V8 at 6000 rpm, floor 0.5 and
-  30 deg retard the crank still sees +630..640 N*m while anti-lag acts (a car keeps
-  pulling). A cylinder cut or deeper retard tables would be needed to hold the
-  crank torque near zero.
+- Retard alone (`retard_deg`) cuts torque only through `eta_spark`: on the hyper V8
+  at 6000 rpm, floor 0.5 and 30 deg retard the crank still sees +605 N*m while
+  anti-lag acts (a car keeps pulling), at 59.6 % of WOT air and 36.3 g/s of fuel.
+- Rally ALS with the extension (`tests/unit/test_turbo_als_cut.cpp` AC6, hyper V8,
+  6000 rpm, test fixture: spark -40, floor 0.17, cut 0.4, lambda 0.85, burn 1.0,
+  boost target 1.0; mean over +0.25..+1 s after the lift): air 18.4 % of WOT
+  (0.150 vs 0.814 kg/s), fuel 12.39 g/s = 18.1 % of WOT (68.53 g/s), crank torque
+  -54 N*m, boost -0.46 bar, manifold burn 182 kW, port 2280 K, turbine inlet
+  1489 K, rotor 51.7k / 59.8k / 70.0k rpm at +0.25 / +0.5 / +1 s (D5 fixture
+  54.7k / 55.6k / 57.2k; no anti-lag 0 - the fuel-cut coast stops the [AS] rotor,
+  see `exhaust_thermal`). Without a boost target the wastegate PID follows the
+  plate: floors 0.12-0.15 give 5-7 % of WOT air and 3.6-8.6k rpm at +1 s, floor
+  0.20 11-12 % and 15-19k (spark -35..-45, cut 0-0.5); a plate below 0.10 commands
+  the wastegate open. The boost target (wastegate held shut) is what keeps the
+  rotor up at realistic airflow. The air
+  share is steep in the floor near 0.16-0.18 (12-21 %) because the held boost
+  raises the manifold pressure.
 
 ## Derived-map cache
 
@@ -347,6 +397,7 @@ for physics:
 | `anti_lag_active` | 0/1 | 1 while anti-lag acts (0 without an `anti_lag` block) |
 | `anti_lag_activations` | count | rising edges of `anti_lag_active`, cumulative since the engine was built |
 | `anti_lag_extra_exhaust_w` | W | indicated work rate the retard removes this substep (it stays in the exhaust gas through the energy balance; a diagnostic) |
+| `anti_lag_manifold_burn_w` | W | fuel energy rate of the cut charge released in the exhaust manifold (0 without a cut) |
 | `exhaust_port_k` | K | exhaust gas temperature at the ports (the energy balance) |
 | `turbine_inlet_k` | K | gas temperature at the turbine inlet, after the exhaust wall |
 | `exhaust_wall_k` | K | lumped manifold/turbine-housing wall temperature |
