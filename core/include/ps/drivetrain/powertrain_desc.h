@@ -324,8 +324,9 @@ struct SurgeLineDesc {
 // did not starve last substep, for at most max_active_s per lift (re-armed
 // when the command rises to arm_below_command again). While active: DFCO is
 // inhibited, the plate target is at least plate_floor (bypass air), the spark
-// is retarded by retard_deg from the scheduled advance, and the indicated work
-// the retard removes goes to the turbine as extra exhaust enthalpy.
+// is retarded by retard_deg from the scheduled advance; the indicated work the
+// retard removes stays in the gas (the engine's exhaust energy balance), so it
+// reaches the turbine as exhaust enthalpy.
 struct AntiLagDesc {
     std::string channel = "anti_lag"; // control channel; declared with default default_enabled
     real default_enabled = 0.0;       // 0 or 1: the channel's declared default
@@ -371,6 +372,17 @@ struct TurboPairDesc {
     real intercooler_dp_pa_at_max_flow = 0.0;
     // I7d D5: absent = no anti-lag; the engine is then bit-identical to before.
     std::optional<AntiLagDesc> anti_lag;
+    // Exhaust energy balance and thermal mass (turbo configuration block "exhaust_thermal",
+    // docs/data_formats/turbo.md). Installation totals, NOT scaled by the turbo count.
+    // The engine splits the fuel energy it releases into indicated work, in-cylinder wall heat
+    // (this fraction of the released energy) and exhaust sensible enthalpy; the gas then passes a
+    // lumped wall (exhaust manifolds + turbine housings) before the turbine. [AS] defaults - the
+    // sizing rules are in turbo.md; no cited manifold/housing data exists for these turbos.
+    real in_cylinder_wall_heat_fraction = 0.20;      // [0, 1), of the released fuel energy
+    real exhaust_wall_heat_capacity_j_k = 9200.0;    // > 0: mass x specific heat of the lumped wall
+    real exhaust_wall_gas_conductance_w_k = 120.0;   // >= 0: gas-side h*A
+    real exhaust_wall_ambient_conductance_w_k = 30.0; // >= 0: outer convection + radiation, linearised
+    real exhaust_wall_initial_k = 0.0;               // wall temperature at reset; 0 = ambient (cold start)
 };
 
 struct SimulatedEngineDesc {

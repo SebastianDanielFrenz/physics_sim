@@ -28,6 +28,17 @@
 // 23 ms of WOT compressor power, was at 0 rpm 75 ms after the lift. Only with
 // the exhaust heat held does the rotor coast (see CF2).
 //
+// SUPERSEDED (exhaust energy balance + wall thermal mass): the hold is gone. The
+// port gas temperature now comes from the engine's energy balance and passes a
+// lumped exhaust wall; after a fuel-cut lift the air gets only the wall's heat
+// (turbine 10.7 kW at +10 ms against 90.7 kW compressor from a 1000 K wall), so
+// the shipped [AS] rotor (2e-5 kg*m^2, ~2.4 kJ at the lift) is at 0 rpm ~0.1 s
+// after the lift again - the plate (tau 40 ms) needs ~50 ms to cut the
+// compressor flow, and that drain alone exceeds the rotor's energy. A 5x rotor
+// inertia coasts (76k rpm at +0.25 s, 72.6k at +0.5 s; x10: 90k / 88k).
+// CF2 therefore runs on a TEST RIG: the shipped hyper with the rotor inertia x5
+// (kRigInertiaScale), not data; the shipped inertia is for D6 to revisit.
+//
 // Tests
 //   CF1  White-box, every substep of WOT -> lift -> WOT on the fixture engine:
 //        the published compressor flow equals a reference relaxation (re-
@@ -36,20 +47,23 @@
 //        manifold_rhs, to 1e-9 relative, while the cylinder flow differs from
 //        the compressor flow by more than 0.04 kg/s during the lift. Feeding the
 //        cylinder flow back fails it (sabotage in the commit message).
-//   CF2  Lift-off spin-down on the shipped hyper V8 (held 6000 rpm, WOT 2 s,
-//        then throttle 0). Energy estimate: E0 = J*w0^2/2 = 2.2 kJ at the lift.
+//   CF2  Lift-off spin-down on the shipped hyper V8 with the rotor inertia x5
+//        (test rig, see above; held 6000 rpm, WOT 2 s, then throttle 0).
+//        Energy estimate (shipped rotor): E0 = J*w0^2/2 = 2.2 kJ at the lift.
 //        The plate (actuator tau 40 ms, area fraction convex in lift) closes in
 //        ~100 ms; until then the compressor delivers the throttle flow and draws
-//        up to 96 kW, the turbine (held exhaust heat) returns part of it. After
+//        up to 96 kW, the turbine (wall-heated air) returns a little of it. After
 //        0.15 s the throttle flow is < 0.03 kg/s: the rotor can then lose energy
 //        only through the shaft loss (loss_ref*s^2, falling with speed) and the
 //        compressor power at that small flow, and the turbine only adds. The
 //        test integrates both from the published flow/pressure ratio and asserts
 //        E(0.5 s) >= E(0.15 s) - int(P_comp + P_loss) (a coast must not be
 //        drained by anything else), plus the absolute floors rotor(0.15 s) >=
-//        25000 rpm and rotor(0.5 s) >= 20000 rpm (measured-with-margin pins:
-//        measured 38.5k / 29.6k; compressor fix alone, no heat hold: 0 / 0;
-//        heat hold alone, cylinder flow to the compressor: 0 / 0).
+//        65000 rpm and rotor(0.5 s) >= 60000 rpm (measured-with-margin pins on
+//        the x5 rig: measured 73.3k / 69.1k; cylinder flow fed to the
+//        compressor instead: 63.8k / 59.6k, fails both). With the shipped
+//        rotor and the former heat
+//        hold the floors were 25k / 20k (measured 38.5k / 29.6k).
 //   CF3  Steady WOT hold at 3000..8200 rpm: steady-state m_thr == m_cyl, so the
 //        pre-fix values hold (literal pre-fix numbers below, recorded on
 //        b486223); plus the stability check the raw feed failed.
@@ -93,6 +107,7 @@ namespace {
 constexpr real kH = 1.0 / 960.0;
 constexpr real kPi = 3.14159265358979323846;
 constexpr real kFlowLagS = 0.005; // literal copy of engine_simulated.cpp's kTurboFlowLagS
+constexpr real kRigInertiaScale = 5.0; // CF2 test rig: rotor inertia x5 (not data)
 
 SimulatedEngineDesc load_hyper() {
     ps::jobs::JobSystem pool(10);
@@ -178,8 +193,12 @@ TEST_CASE("CF1: the compressor flow is the throttle flow of the previous substep
 }
 
 TEST_CASE("CF2: hyper V8 lift-off spin-down (measured, energy bound)", "[turbo][sim_engine][hyper][compressor_flow]") {
-    const SimulatedEngineDesc base = load_hyper();
+    SimulatedEngineDesc base = load_hyper();
     REQUIRE(base.turbo_pair.has_value());
+    // Test rig, not data: the shipped [AS] rotor inertia x kRigInertiaScale (see the header: with the exhaust
+    // energy balance the shipped 2e-5 kg*m^2 rotor stores ~23 ms of WOT compressor power and is at 0 rpm
+    // ~0.1 s after any lift; the coast this test guards needs a rotor that outlives the plate's closing).
+    base.turbo_pair->rotor_inertia_kgm2 *= kRigInertiaScale;
     const TurboPairDesc& t = *base.turbo_pair;
     SimulatedEngine e(base);
     const int n_wot = 2 * 960, n_total = n_wot + 2 * 960 + 1;
@@ -213,18 +232,23 @@ TEST_CASE("CF2: hyper V8 lift-off spin-down (measured, energy bound)", "[turbo][
                 "(E(0.15) - drain = %.1f J); rotor 0.15 s %.0f rpm, 0.5 s %.0f rpm\n",
                 e1, e2, drain, e1 - drain, rec[k1].rpm, rec[k2].rpm);
     CHECK(e2 >= e1 - drain - 2.0); // 2 J: the turbine adds ~0 here; slack for the independent re-derivation of the compressor power
-    CHECK(rec[k1].rpm >= 25000.0);
-    CHECK(rec[k2].rpm >= 20000.0);
+    CHECK(rec[k1].rpm >= 65000.0);
+    CHECK(rec[k2].rpm >= 60000.0);
 }
 
 TEST_CASE("CF3: steady WOT boost and torque by speed", "[turbo][sim_engine][hyper][compressor_flow]") {
     const SimulatedEngineDesc base = load_hyper();
     REQUIRE(base.turbo_pair.has_value());
     struct Pre { real rpm, tau0, boost, rotor; };
-    // Recorded on b486223 (cylinder flow fed to the compressor), 6 s held WOT, last 1 s mean for tau0/boost.
-    const Pre pre[] = {{3000.0, 1256.2183, 1.7807, 79052.6}, {4500.0, 1364.4133, 1.7677, 85994.5},
-                       {6000.0, 1396.9949, 1.7298, 106769.1}, {7500.0, 1299.3794, 1.7007, 138456.6},
-                       {8000.0, 1210.2170, 1.6968, 145154.3}};
+    // 6 s held WOT from a cold exhaust wall, last 1 s mean for tau0/boost. Re-recorded for the exhaust energy
+    // balance (turbine inlet 1250-1310 K from the engine's own energy balance instead of the 1200 K cap):
+    // tau0 +0.2..+0.8 %, boost +0.0..+0.3 %, rotor +0.0..+0.07 %. Recorded on b486223 (cylinder flow fed to the
+    // compressor, 25 % fuel heat capped at 1200 K): 1256.2183/1.7807/79052.6, 1364.4133/1.7677/85994.5,
+    // 1396.9949/1.7298/106769.1, 1299.3794/1.7007/138456.6, 1210.2170/1.6968/145154.3 - the compressor-flow fix
+    // itself moved none of them beyond these tolerances.
+    const Pre pre[] = {{3000.0, 1258.2169, 1.7832, 79106.9}, {4500.0, 1368.1835, 1.7687, 86025.6},
+                       {6000.0, 1405.4251, 1.7306, 106815.2}, {7500.0, 1308.6220, 1.7011, 138521.5},
+                       {8000.0, 1219.7386, 1.6972, 145229.3}};
     for (real rpm : {3000.0, 4500.0, 6000.0, 7000.0, 7500.0, 7750.0, 8000.0, 8200.0}) {
         SimulatedEngine e(base);
         const real omega = rpm * 2.0 * kPi / 60.0;

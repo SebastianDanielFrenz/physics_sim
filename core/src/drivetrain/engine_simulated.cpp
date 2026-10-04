@@ -34,10 +34,9 @@ constexpr real kFourPi = real(4.0) * kPi;
 //   7500-8200 rpm WOT ran away; 0.5 ms and up are stable over 7000-8200 rpm (steady values equal to 1e-4 bar).
 //   25 ms (the charge-pressure lag) is stable too but keeps the compressor loaded so long after a lift that
 //   the rotor stops again within 100 ms.
-// - kExhaustHeatHoldS [AS]: decay time constant of the exhaust heat the turbine sees after the fuel flow
-//   falls (peak-hold, instant rise). 0.5 s and 1.0 s give the same rotor at +0.5 s (29.6k vs 29.7k rpm).
+// (The former kExhaustHeatHoldS peak-hold of the fuel watts, 0.5 s [AS], is replaced by the exhaust energy
+// balance below and the lumped exhaust wall in turbo_pair.h - exhaust_thermal in turbo.md.)
 constexpr real kTurboFlowLagS = real(0.005);
-constexpr real kExhaustHeatHoldS = real(0.5);
 constexpr real kRadPerSecToRpm = real(60.0) / (real(2.0) * kPi);
 
 real sign(real x) { return x > real(0.0) ? real(1.0) : (x < real(0.0) ? real(-1.0) : real(0.0)); }
@@ -663,7 +662,8 @@ void SimulatedEngine::init_state_for(EngineState state) {
 void SimulatedEngine::reset(EngineState state) {
     state_ = state;
     if (turbo_) turbo_->reset(p_amb_,t_amb_);
-    turbo_air_kg_s_=turbo_exhaust_kg_s_=turbo_fuel_w_=real(0.0);
+    turbo_air_kg_s_=turbo_exhaust_kg_s_=turbo_port_k_=real(0.0);
+    exhaust_split_ = ExhaustSplit{};
     clear_anti_lag_state();
     idle_integrator_ = real(0.0);
     limiter_cut_ = false;
@@ -697,7 +697,6 @@ void SimulatedEngine::clear_anti_lag_state() {
     als_active_ = false;
     als_armed_ = true;
     als_timer_s_ = real(0.0);
-    turbo_als_w_ = real(0.0);
     als_extra_w_ = real(0.0);
 }
 
@@ -874,7 +873,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         x_iac_ = real(0.0);
     }
 
-    if (turbo_) turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_fuel_w_,x_thr_,p_im_,&maps_->psi,turbo_als_w_);
+    if (turbo_) turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_port_k_,x_thr_,p_im_,&maps_->psi);
 
     // (4) air step, omega frozen at omega_old
     {
@@ -929,7 +928,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     if (als) {
         // I7d D5 energy routing: the indicated work the retard removes this substep, as a rate at the speed
         // the fuel is metered and the indicated work is booked at (post_solve books h*omega_old*tau_comb).
-        // It stays inside fuel_energy_in - indicated_work (engine_heat) and goes to the turbine in full.
+        // It stays inside fuel_energy_in - indicated_work (engine_heat); the exhaust energy balance below
+        // puts it into the exhaust sensible enthalpy (a diagnostic here, not an extra term).
         als_extra_w_ = std::max(omega_old, real(0.0)) * (ev.tau_comb_unretarded - ev.tau_comb);
         if (als_active_ && s_starve < real(1.0)) als_armed_ = false; // starving: no more anti-lag this lift
     }
@@ -987,17 +987,39 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.exhaust_mass_flow_kg_s = ev.m_air_rev * std::abs(omega_old) / kTwoPi + booked_fuel_mass_kg_ / h;
     if (turbo_) {
         turbo_exhaust_kg_s_ = r.exhaust_mass_flow_kg_s;
-        // Turbine-side heat: rises with the burnt fuel at once, falls with the exhaust's thermal inertia
-        // (kExhaustHeatHoldS, PROVISIONAL). The exhaust manifold and turbine housing keep the gas hot for
-        // ~a second after a fuel cut; fed instantaneously the turbine power fell 10x within 10 ms of a lift
-        // (97 -> 9.6 kW) and the rotor stopped in ~50 ms whatever the compressor flow. Steady state is
-        // unchanged (the hold equals the instantaneous value while the fuel flow is constant or rising).
-        turbo_fuel_w_ = std::max(booked_fuel_mass_kg_/h*maps_->lhv_j_kg, turbo_fuel_w_*std::max(real(0.0), real(1.0)-h/kExhaustHeatHoldS));
+        // Exhaust energy balance (exhaust_thermal, turbo.md): of the fuel energy that entered the cylinders
+        // this substep, the share oxygen allows to burn (eta_c = min(1, lambda), [AS] ideal oxygen-limited
+        // combustion) is released; it leaves as indicated work (omega_old*tau_comb, exactly the rate post_solve
+        // books), in-cylinder wall heat (in_cylinder_wall_heat_fraction of the released energy) and exhaust
+        // sensible enthalpy (the rest); the unreleased share leaves as chemical enthalpy (CO/H2, not heat).
+        // A spark retard (anti-lag) lowers tau_comb and so raises the sensible part by exactly the work it
+        // removes. The port gas temperature is that enthalpy over the actual exhaust flow (air + fuel):
+        // bounded by construction - a kg of gas carries at most its own fuel's energy - so no cap is needed.
+        // Pumping work done on the gas is not included (PROVISIONAL). Handed to the NEXT substep's turbo step
+        // (the same one-substep hand-off the flows have), which passes it through the exhaust wall.
+        {
+            const TurboPairDesc& td = turbo_->desc;
+            ExhaustSplit x;
+            x.fuel_w = booked_fuel_mass_kg_ / h * maps_->lhv_j_kg;
+            const real eta_c = ev.lambda > real(0.0) ? std::min(real(1.0), ev.lambda) : real(0.0);
+            x.chemical_w = (real(1.0) - eta_c) * x.fuel_w;
+            const real released = x.fuel_w - x.chemical_w;
+            x.indicated_w = std::max(omega_old, real(0.0)) * ev.tau_comb;
+            x.wall_w = td.in_cylinder_wall_heat_fraction * released;
+            const real sensible = released - x.indicated_w - x.wall_w;
+            x.sensible_w = std::max(sensible, real(0.0));
+            x.clamp_w = x.sensible_w - sensible; // > 0 only if the maps claim more work than the released energy allows
+            const real t_in = turbo_->charge_k;
+            x.port_k = t_in;
+            if (r.exhaust_mass_flow_kg_s > real(0.0))
+                x.port_k = t_in + x.sensible_w / (TurboPair::kExhaustCp * r.exhaust_mass_flow_kg_s);
+            exhaust_split_ = x;
+            turbo_port_k_ = x.port_k;
+        }
+        r.exhaust_port_k = turbo_port_k_;
+        r.turbine_inlet_k = turbo_->exhaust_k;
+        r.exhaust_wall_k = turbo_->wall_k;
         if (als) {
-            // I7d D5 (PROVISIONAL): the anti-lag heat is peak-held like the fuel heat, with the same
-            // kExhaustHeatHoldS, but on its OWN state - held separately and summed at the turbine inlet
-            // (turbo_pair.h), so an engine without anti-lag keeps the exact fuel-heat arithmetic.
-            turbo_als_w_ = std::max(als_extra_w_, turbo_als_w_*std::max(real(0.0), real(1.0)-h/kExhaustHeatHoldS));
             r.anti_lag_active = als_active_ ? std::uint8_t(1) : std::uint8_t(0);
             r.anti_lag_activations = als_activations_;
             r.anti_lag_extra_exhaust_w = als_extra_w_;
@@ -1063,7 +1085,8 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
     if (turbo_) {
         f.pod(turbo_->energy_j); f.pod(turbo_->charge_pa); f.pod(turbo_->charge_k);
         f.pod(turbo_->exhaust_pa); f.pod(turbo_->wastegate); f.pod(turbo_->boost_integral);
-        f.pod(turbo_air_kg_s_); f.pod(turbo_exhaust_kg_s_); f.pod(turbo_fuel_w_);
+        f.pod(turbo_air_kg_s_); f.pod(turbo_exhaust_kg_s_); f.pod(turbo_port_k_);
+        f.pod(turbo_->wall_k); // exhaust thermal mass state
         const auto& t=turbo_->desc;
         f.pod(t.reference_head_pa);
         if(t.maps) f.pod(t.maps->content_hash);
@@ -1071,6 +1094,8 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
         f.pod(t.max_mass_flow_kg_s); f.pod(t.compressor_efficiency); f.pod(t.turbine_efficiency);
         f.pod(t.turbine_area_m2); f.pod(t.intercooler_effectiveness); f.pod(t.shaft_loss_w_at_reference);
         f.pod(t.wastegate_kp); f.pod(t.wastegate_ki_per_s); f.pod(t.wastegate_kd_s); f.pod(t.wastegate_actuator_tau_s);
+        f.pod(t.in_cylinder_wall_heat_fraction); f.pod(t.exhaust_wall_heat_capacity_j_k);
+        f.pod(t.exhaust_wall_gas_conductance_w_k); f.pod(t.exhaust_wall_ambient_conductance_w_k);
         // I7d D4: appended and only when nonzero, so an engine without a cooler drop keeps its byte layout.
         if (t.intercooler_dp_pa_at_max_flow != real(0.0)) f.pod(t.intercooler_dp_pa_at_max_flow);
         // I7d D2: appended, so an engine without a valve keeps its byte layout.
@@ -1080,7 +1105,7 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
         }
         // I7d D5: appended, so an engine without anti-lag keeps its byte layout.
         if (t.anti_lag) {
-            f.pod(als_active_); f.pod(als_armed_); f.pod(als_timer_s_); f.pod(turbo_als_w_);
+            f.pod(als_active_); f.pod(als_armed_); f.pod(als_timer_s_);
             const auto& a = *t.anti_lag;
             f.pod(a.arm_below_command); f.pod(a.min_rpm); f.pod(a.max_rpm); f.pod(a.retard_deg);
             f.pod(a.plate_floor); f.pod(a.max_active_s);

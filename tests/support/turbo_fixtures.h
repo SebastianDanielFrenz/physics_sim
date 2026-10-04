@@ -127,16 +127,19 @@ inline ps::drivetrain::TurboPairDesc hyper_like_pair_with_anti_lag() {
     return t;
 }
 
-// The air/exhaust/fuel the engine would hand the pair at a given phase of the
-// guard script (960 Hz steps): spool at WOT (0-1.5 s), lift-off (1.5-2.5 s),
-// re-apply (2.5-4 s).
-struct Phase { ps::real plate, air, exhaust, fuel_w; };
+// The air/exhaust flows and exhaust port gas temperature the engine would hand
+// the pair at a given phase of the guard script (960 Hz steps): spool at WOT
+// (0-1.5 s), lift-off (1.5-2.5 s, fuel cut: the ports pass air at about the
+// charge temperature), re-apply (2.5-4 s). Port temperatures [AS] (exhaust
+// thermal re-record): 1200 K at WOT, 300 K in the fuel cut. Until the exhaust
+// energy balance this field was the fuel power (the pair took 25 % of it).
+struct Phase { ps::real plate, air, exhaust, port_k; };
 inline Phase script_phase(int step) {
     using ps::real;
     const real t = step * (1.0 / 960.0);
-    if (t < 1.5) return {1.0, 0.2 + 0.7 * t / 1.5, (0.2 + 0.7 * t / 1.5) * 1.07, (0.2 + 0.7 * t / 1.5) / 12.5 * 43e6};
-    if (t < 2.5) return {0.0, 0.04, 0.045, 0.0};
-    return {1.0, 0.9, 0.96, 0.9 / 12.5 * 43e6};
+    if (t < 1.5) return {1.0, 0.2 + 0.7 * t / 1.5, (0.2 + 0.7 * t / 1.5) * 1.07, 1200.0};
+    if (t < 2.5) return {0.0, 0.04, 0.045, 300.0};
+    return {1.0, 0.9, 0.96, 1200.0};
 }
 constexpr int kScriptSteps = 4 * 960;
 

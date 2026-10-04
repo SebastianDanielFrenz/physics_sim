@@ -117,7 +117,7 @@ std::vector<Rec> run_lift_script(const TurboPairDesc& d, real lift_s, real reapp
             p = {1.0, 0.9, 0.96, 0.9 / 12.5 * 43e6};
             p_im = pair.charge_pa - 1.5e4;
         }
-        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.fuel_w, p.plate, p_im, &psi_table());
+        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.port_k, p.plate, p_im, &psi_table());
         out.push_back({pair.compressor_flow_kg_s, pair.bov_flow_kg_s, pair.rpm(), pair.charge_pa, pair.bov_opening,
                        pair.compressor_pr, pair.bov_events});
     }
@@ -217,8 +217,8 @@ TEST_CASE("D2: a closed valve is invisible", "[turbo][drivetrain][bov]") {
     for (int i = 0; i < kScriptSteps; ++i) {
         const Phase ph = script_phase(i);
         const real p_im = with.charge_pa - 1.5e4;
-        with.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.fuel_w, ph.plate, p_im, &psi_table());
-        without.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.fuel_w, ph.plate, p_im, &psi_table());
+        with.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.port_k, ph.plate, p_im, &psi_table());
+        without.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.port_k, ph.plate, p_im, &psi_table());
         if (with.energy_j != without.energy_j || with.charge_pa != without.charge_pa || with.wastegate != without.wastegate ||
             with.exhaust_pa != without.exhaust_pa || with.boost_integral != without.boost_integral)
             ++mismatches;

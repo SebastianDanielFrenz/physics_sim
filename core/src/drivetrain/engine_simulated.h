@@ -239,8 +239,22 @@ public:
     [[nodiscard]] bool anti_lag_armed() const { return als_armed_; }
     [[nodiscard]] real anti_lag_timer_s() const { return als_timer_s_; }
     [[nodiscard]] real anti_lag_extra_exhaust_w() const { return als_extra_w_; }
-    [[nodiscard]] real anti_lag_held_exhaust_w() const { return turbo_als_w_; }
     [[nodiscard]] const TurboPair* turbo() const { return turbo_ ? &*turbo_ : nullptr; }
+
+    // Exhaust energy balance of the latest pre_solve (turbo engines only; zeros otherwise), all W:
+    // fuel_w = indicated_w + wall_w + sensible_w + chemical_w - clamp_w. port_k is the gas temperature
+    // at the exhaust ports handed to the next substep's turbo step. Never hashed (port_k is, as
+    // turbo_port_k_).
+    struct ExhaustSplit {
+        real fuel_w = 0.0;      // booked fuel mass flow x LHV
+        real indicated_w = 0.0; // omega_old * tau_comb
+        real wall_w = 0.0;      // in-cylinder wall heat
+        real sensible_w = 0.0;  // exhaust sensible enthalpy above the intake temperature
+        real chemical_w = 0.0;  // unreleased fuel energy (lambda < 1)
+        real clamp_w = 0.0;     // sensible enthalpy added by the >= 0 guard (0 in every shipped regime)
+        real port_k = 0.0;
+    };
+    [[nodiscard]] const ExhaustSplit& exhaust_split() const { return exhaust_split_; }
 
     // Manifold right-hand side f(p) = dp_im/dt and df/dp at (p_im, omega,
     // plate, bypass) - the function the air step integrates.
@@ -272,17 +286,18 @@ private:
     std::optional<TurboPair> turbo_;
     // Turbo feeds (hashed), all written by the previous substep: turbo_air_kg_s_ = the THROTTLE-path mass
     // flow (ManifoldRhs::m_thr, positive part, relaxed by kTurboFlowLagS) - the flow the compressor delivers;
-    // turbo_exhaust_kg_s_ = the cylinder exhaust flow; turbo_fuel_w_ = the exhaust heat (burnt fuel power,
-    // peak-held with kExhaustHeatHoldS). See engine_simulated.cpp.
-    real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_fuel_w_ = 0.0;
+    // turbo_exhaust_kg_s_ = the cylinder exhaust flow; turbo_port_k_ = the exhaust port gas temperature from
+    // the exhaust energy balance (0 = no gas yet: the pair treats it as ambient). See engine_simulated.cpp.
+    real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_port_k_ = 0.0;
+    ExhaustSplit exhaust_split_;
     // I7d D5 anti-lag (hashed only when the turbo configuration has an anti_lag block):
     // als_active_ this substep's activity, als_armed_ false once max_active_s is used up in
     // this lift or after a starving substep (re-armed when the command rises to
-    // arm_below_command), als_timer_s_ the activity accumulated in this lift, turbo_als_w_ the anti-lag exhaust heat handed to the turbine (peak-held like
-    // turbo_fuel_w_, written by the previous substep). Not hashed: als_extra_w_ (this
-    // substep's removed indicated work rate) and the activation counter (sound only).
+    // arm_below_command), als_timer_s_ the activity accumulated in this lift. Not hashed:
+    // als_extra_w_ (this substep's removed indicated work rate - by the exhaust energy balance
+    // the sensible exhaust enthalpy it adds) and the activation counter (sound only).
     bool als_active_ = false, als_armed_ = true;
-    real als_timer_s_ = 0.0, turbo_als_w_ = 0.0, als_extra_w_ = 0.0;
+    real als_timer_s_ = 0.0, als_extra_w_ = 0.0;
     std::uint32_t als_activations_ = 0;
     void clear_anti_lag_state();
 

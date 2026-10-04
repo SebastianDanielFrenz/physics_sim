@@ -43,6 +43,8 @@ from the exhaust flow through the open fraction of the wastegate, and a rotor
 energy balance (turbine power - compressor power - shaft loss) clamped at 2.25 x
 the energy at `reference_rpm`. The engine's throttle is fed from the charge
 pressure/temperature and its exhaust back-pressure is the turbine inlet pressure.
+The exhaust gas temperature comes from the engine's own energy balance (see
+`exhaust_thermal` below): no temperature cap anywhere, only numerical guards.
 `engine.md`'s `cycle` section describes how boosted map nodes are generated.
 
 ## Hardware file — `physics_sim.turbo/1`
@@ -103,6 +105,7 @@ The shipped hardware file has no line yet (no cited map exists).
 | `boost_control` | object | no | see below | PID on the post-cooler charge pressure driving the wastegate |
 | `blow_off_valve` | object | no | see below | I7d D2 |
 | `anti_lag` | object | no | see below | I7d D5 |
+| `exhaust_thermal` | object | no | see below | exhaust energy balance and wall thermal mass parameters; absent = the [AS] defaults |
 
 ### Intercooler pressure drop (I7d D4)
 
@@ -185,12 +188,58 @@ a valve, and the charge pressure goes with it, so a valve with a crack pressure 
 0.9 bar opens only to ~13 % at a lift-off. A valve that opens in time needs a low
 crack pressure and a short lag.
 
+### `exhaust_thermal` (optional)
+
+Turbo engines only. The exhaust gas temperature is the engine's own energy balance
+per substep (`engine_simulated.cpp`, one-substep hand-off to the turbo step like the
+flows), and the turbine sees it after a lumped thermal mass (two manifolds + two
+turbine housings as ONE wall). There is no temperature cap; the temperature is
+bounded by construction (sensible heat over the actual gas flow, a well-stirred
+wall exchange).
+
+Energy balance (W, per substep): `Q_f = booked fuel mass * LHV / h`; combustion
+efficiency `eta_c = min(1, lambda)` ([AS] oxygen-limited ideal - rich mixture
+leaves its unburnt share as chemical enthalpy, not heat); released `eta_c * Q_f`;
+indicated work `W_i = omega * tau_comb` (the ledger's `indicated_work` rate);
+in-cylinder wall heat `Q_wall = in_cylinder_wall_heat_fraction * released`;
+sensible exhaust enthalpy `H = released - W_i - Q_wall` (clamped at >= 0, a
+numerical guard); `Q_f = W_i + Q_wall + H + (1 - eta_c) Q_f` to round-off. Port
+gas temperature `T_port = T_charge + H / (1100 * m_exh)`, `m_exh` = the actual
+cylinder exhaust flow (air + fuel); no flow -> `T_port = T_charge`. A spark retard
+(anti-lag) lowers `W_i` and therefore heats the exhaust with no separate term.
+
+Wall (C heat capacity, K gas-side, Ka outer conductance): `G = 1100 * m_exh`,
+`Keff = K G / (K + G)`; backward Euler `T_w' = (C T_w + h (Keff T_port + Ka
+T_amb)) / (C + h (Keff + Ka))`; turbine inlet `T_t = (G T_port + K T_w') / (G +
+K)` (gas side well stirred). At vanishing flow the gas leaves at the wall
+temperature, so a hot wall gives heat back to the small flow after a lift-off.
+`C (T_w' - T_w) = h (Keff (T_port - T_w') - Ka (T_w' - T_amb))` holds to
+round-off. The wall starts at ambient (a cold start) unless
+`initial_wall_temperature_k` is given.
+
+| Field | Type | Rule | Default | Meaning |
+|---|---|---|---|---|
+| `in_cylinder_wall_heat_fraction` | number | [0, 1) | 0.20 [AS] | share of the released fuel energy lost to the cylinder walls/coolant (Heywood 1988 Table 12.1: coolant 17-26 % of the fuel energy at max power, SI) |
+| `wall_heat_capacity_j_k` | number | > 0 | 9200 [AS] | ~20 kg of cast iron/steel x 460 J/(kg K) |
+| `wall_gas_conductance_w_k` | number | >= 0 | 120 [AS] | gas-side h*A (~0.4 m^2 x ~300 W/(m^2 K)), constant (no flow dependence) |
+| `wall_ambient_conductance_w_k` | number | >= 0 | 30 [AS] | outer convection + linearised radiation (~0.5 m^2 x ~60 W/(m^2 K)) |
+| `initial_wall_temperature_k` | number | > 0 | ambient | wall temperature after a reset |
+| `source` | string | required, non-empty | | provenance (PLAN.md section 8) |
+
+Installation totals: NOT scaled by `count`. Unknown keys are rejected
+(`"<path>: exhaust_thermal: unknown key '<key>'"`), as is every rule above
+(`"... must be in [0, 1)"`, `"... must be >= 0"`, `"'source' is required (PLAN.md
+section 8)"`). Hashing: the wall temperature, the port temperature handed to the
+next substep and the four parameters are folded into the state hash of turbo
+engines only; not part of the derived-map cache key. No ECU material-temperature
+protection (enrichment, boost cut) is modelled - a follow-up.
+
 ### `anti_lag` (optional, I7d D5)
 
 A rally-style anti-lag system (ALS): while the driver is off the throttle the
 engine keeps the throttle partly open, keeps fuelling (no DFCO) and retards the
-spark; the work the retard takes from the crank leaves as exhaust heat and keeps
-the turbine spinning. Absent = no anti-lag and every number is bit-identical to a
+spark; the work the retard takes from the crank stays in the exhaust gas (the
+energy balance above) and keeps the turbine spinning. Absent = no anti-lag and every number is bit-identical to a
 configuration without the block.
 
 | Field | Type | Rule | Meaning |
@@ -227,20 +276,17 @@ after the throttle request and before DFCO):
   (mechanical, a throttle kicker) is at least `plate_floor`; the spark is the
   scheduled advance minus `retard_deg`, through the same `eta_spark` curve as any
   spark offset (torque falls by the curve, fuel does not).
-- The extra exhaust enthalpy is `omega * (tau_comb(scheduled spark) -
-  tau_comb(retarded spark))` - the indicated work the retard removes, measured from
-  the scheduled spark, not MBT (the schedule's own MBT shortfall is already part of
-  the normal exhaust heat). It is peak-held with the exhaust-heat hold's own 0.5 s
-  decay on a separate state and ADDED at the turbine inlet to the 25 % fuel heat:
-  `T_exh = T_amb + (0.25 * fuel_w_held + extra_held) / (1100 * m_exh)`. The 1200 K
-  turbine-inlet cap applies to the sum.
-- Energy: the extra heat is part of `engine_heat` (fuel energy minus indicated
-  work) - the ledger books nothing new and `balance_error` is unchanged; the heat
-  the turbine receives never exceeds the heat the substep rejects.
+- The retard needs no exhaust term of its own: it lowers the indicated work, and
+  the exhaust energy balance above puts the difference into the gas. The sound
+  field `anti_lag_extra_exhaust_w` reports `omega * (tau_comb(scheduled spark) -
+  tau_comb(retarded spark))`, the indicated work the retard removes (a diagnostic,
+  read by nothing).
+- Energy: the exhaust heat is part of `engine_heat` (fuel energy minus indicated
+  work) - the ledger books nothing new and `balance_error` is unchanged.
 - No wastegate override: the boost PID's target is still `target_boost * plate`, so
   `plate_floor` doubles as the anti-lag boost target.
 
-Hashing: the activity flag, armed flag, timer, held extra heat and every block
+Hashing: the activity flag, armed flag, timer and every block
 parameter except `channel`/`default_enabled`/`source` are folded into the state
 hash, appended after the other turbo state and only when the block exists. The
 block is NOT part of the derived-map cache key. A hot swap
@@ -254,7 +300,6 @@ Known limits (measured, I7d D5, `tests/unit/test_turbo_anti_lag.cpp`):
   nearly balance at every flow, so a low `plate_floor` leaves the rotor SLOWER than
   a DFCO coast (fixture engine, 5000 rpm, rotor 1 s after the lift: floor 0.2 ->
   15.5-18.6k rpm vs 39.8k with anti-lag off; 0.35 -> ~40k; 0.5 -> ~53k).
-- The 1200 K cap is reached at moderate retard: 30 and 45 deg give the same rotor.
 - Torque is cut only by `eta_spark`: on the hyper V8 at 6000 rpm, floor 0.5 and
   30 deg retard the crank still sees +630..640 N*m while anti-lag acts (a car keeps
   pulling). A cylinder cut or deeper retard tables would be needed to hold the
@@ -301,7 +346,10 @@ for physics:
 | `bov_events` | count | rising edges of the opening (> 0.1, re-armed below 0.05), cumulative since the engine was built (a counter for sound, never hashed) |
 | `anti_lag_active` | 0/1 | 1 while anti-lag acts (0 without an `anti_lag` block) |
 | `anti_lag_activations` | count | rising edges of `anti_lag_active`, cumulative since the engine was built |
-| `anti_lag_extra_exhaust_w` | W | indicated work rate the retard removes this substep, handed to the turbine (before the hold) |
+| `anti_lag_extra_exhaust_w` | W | indicated work rate the retard removes this substep (it stays in the exhaust gas through the energy balance; a diagnostic) |
+| `exhaust_port_k` | K | exhaust gas temperature at the ports (the energy balance) |
+| `turbine_inlet_k` | K | gas temperature at the turbine inlet, after the exhaust wall |
+| `exhaust_wall_k` | K | lumped manifold/turbine-housing wall temperature |
 
 ## Shipped files
 

@@ -166,7 +166,11 @@ struct PreSolveResult {
     // state), 0 without an anti_lag block.
     std::uint8_t anti_lag_active = 0;
     std::uint32_t anti_lag_activations = 0;  // rising edges of anti_lag_active since the engine was built
-    real anti_lag_extra_exhaust_w = 0.0;     // indicated work rate the retard removes this substep (W), sent to the turbine
+    real anti_lag_extra_exhaust_w = 0.0;     // indicated work rate the retard removes this substep (W); by the exhaust energy balance it stays in the exhaust gas
+    // Exhaust temperatures (exhaust_thermal, turbo.md), 0 without a turbo. Never hashed here.
+    real exhaust_port_k = 0.0;               // gas temperature at the exhaust ports (this substep's energy balance)
+    real turbine_inlet_k = 0.0;              // gas temperature at the turbine inlet, after the exhaust wall
+    real exhaust_wall_k = 0.0;               // lumped exhaust manifold / turbine housing wall temperature
     real p_intake_pa = 0.0;           // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)

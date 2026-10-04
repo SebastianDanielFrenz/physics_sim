@@ -39,7 +39,7 @@ struct EngineSoundState {
     real fuel_flow_g_s = 0.0;
     // PHYS-033 P4 I7b C12: mean-value engine state for sound (from
     // PreSolveResult; 0 for the graph engine). NOT hashed. Exhaust
-    // temperature is not modelled (I7b), so there is no field for it.
+    // temperatures exist for turbo engines only (fields below).
     real throttle_position = 0.0;      // plate position in [0, 1]
     real turbo_rpm = 0.0, boost_bar = 0.0, p_exhaust_pa = 0.0;
     real p_charge_pa = 0.0, t_charge_k = 0.0; // compressor supply, 0 = atmospheric path
@@ -59,7 +59,11 @@ struct EngineSoundState {
     // PHYS-033 P4 I7d D5: anti-lag, 0 without an anti_lag block in the turbo configuration. NOT hashed.
     std::uint8_t anti_lag_active = 0;      // 1 while anti-lag acts (DFCO inhibited, plate floor, spark retard)
     std::uint32_t anti_lag_activations = 0; // activations (rising edges of anti_lag_active)
-    real anti_lag_extra_exhaust_w = 0.0;   // indicated work rate the retard removes, sent to the turbine (W)
+    real anti_lag_extra_exhaust_w = 0.0;   // indicated work rate the retard removes (W); it stays in the exhaust gas
+    // Exhaust temperatures (exhaust_thermal, docs/data_formats/turbo.md), 0 without a turbo. NOT hashed.
+    real exhaust_port_k = 0.0;             // gas temperature at the exhaust ports
+    real turbine_inlet_k = 0.0;            // gas temperature at the turbine inlet (after the exhaust wall)
+    real exhaust_wall_k = 0.0;             // lumped exhaust manifold / turbine housing wall temperature
     real p_intake_pa = 0.0;           // intake manifold pressure
     real lambda = 0.0;                 // commanded lambda
     real spark_advance_deg = 0.0;      // applied spark advance

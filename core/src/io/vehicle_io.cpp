@@ -2477,6 +2477,35 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         a.source=al.at("source").get<std::string>();
         t.anti_lag=std::move(a);
     }
+    // Exhaust energy balance and thermal mass (installation totals, not scaled by count). Optional:
+    // absent keeps TurboPairDesc's [AS] defaults. Not part of the map cache key (it feeds no map).
+    if(cfg.contains("exhaust_thermal")) {
+        const json& et=cfg.at("exhaust_thermal");
+        if(!et.is_object()) throw std::runtime_error(path+": 'exhaust_thermal' must be an object");
+        const std::string ectx=path+": exhaust_thermal";
+        static const char* const kKeys[]={"in_cylinder_wall_heat_fraction","wall_heat_capacity_j_k","wall_gas_conductance_w_k",
+                                          "wall_ambient_conductance_w_k","initial_wall_temperature_k","source"};
+        for(auto it=et.begin();it!=et.end();++it)
+            if(std::none_of(std::begin(kKeys),std::end(kKeys),[&](const char* k){ return it.key()==k; }))
+                throw std::runtime_error(ectx+": unknown key '"+it.key()+"'");
+        if(et.contains("in_cylinder_wall_heat_fraction")) {
+            t.in_cylinder_wall_heat_fraction=require_number(et,"in_cylinder_wall_heat_fraction",ectx);
+            if(!(t.in_cylinder_wall_heat_fraction>=0 && t.in_cylinder_wall_heat_fraction<1))
+                throw std::runtime_error(ectx+": 'in_cylinder_wall_heat_fraction' must be in [0, 1)");
+        }
+        if(et.contains("wall_heat_capacity_j_k")) t.exhaust_wall_heat_capacity_j_k=require_positive(et,"wall_heat_capacity_j_k",ectx);
+        if(et.contains("wall_gas_conductance_w_k")) {
+            t.exhaust_wall_gas_conductance_w_k=require_number(et,"wall_gas_conductance_w_k",ectx);
+            if(!(t.exhaust_wall_gas_conductance_w_k>=0)) throw std::runtime_error(ectx+": 'wall_gas_conductance_w_k' must be >= 0");
+        }
+        if(et.contains("wall_ambient_conductance_w_k")) {
+            t.exhaust_wall_ambient_conductance_w_k=require_number(et,"wall_ambient_conductance_w_k",ectx);
+            if(!(t.exhaust_wall_ambient_conductance_w_k>=0)) throw std::runtime_error(ectx+": 'wall_ambient_conductance_w_k' must be >= 0");
+        }
+        if(et.contains("initial_wall_temperature_k")) t.exhaust_wall_initial_k=require_positive(et,"initial_wall_temperature_k",ectx);
+        if(!et.contains("source") || !et.at("source").is_string() || et.at("source").get<std::string>().empty())
+            throw std::runtime_error(ectx+": 'source' is required (PLAN.md section 8)");
+    }
     // Versioned parameter key; cache is derived data, never an engine input.
     std::uint64_t key=14695981039346656037ULL;
     const real parameters[]={real(1.0),t.reference_head_pa,t.rotor_inertia_kgm2,t.reference_rpm,t.max_mass_flow_kg_s,
