@@ -133,6 +133,21 @@ public:
     [[nodiscard]] real last_omega_applied() const { return omega_applied_; }
     [[nodiscard]] real crank_target_deg() const { return target_theta_; }
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t h) const { return engine_.fold_state_hash(h); }
+    // Diagnostics (any thread): the time map's counters as of the end of the
+    // last render() call, and the largest audio-time gap between two snapshot
+    // arrivals since the previous take_max_arrival_gap_s() (exchange-reset).
+    // Read-only mirrors - nothing in rendering reads them.
+    [[nodiscard]] std::uint64_t published_hitch_count() const { return pub_hitches_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t published_arrivals() const { return pub_arrivals_.load(std::memory_order_relaxed); }
+    [[nodiscard]] real take_max_arrival_gap_s() { return pub_max_gap_s_.exchange(0.0, std::memory_order_relaxed); }
+    // Crank-phase correction diagnostics since the previous take (exchange-reset):
+    // largest |target - engine| crank error [deg], samples whose correction hit
+    // the crank_max_rel cap, saturated-sign reversals, and the time map's rate range.
+    [[nodiscard]] real take_max_crank_error_deg() { return pub_max_err_deg_.exchange(0.0, std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t take_crank_saturated_samples() { return pub_sat_samples_.exchange(0, std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t take_crank_saturation_flips() { return pub_sat_flips_.exchange(0, std::memory_order_relaxed); }
+    [[nodiscard]] real take_min_rate() { return pub_rate_min_.exchange(1.0e9, std::memory_order_relaxed); }
+    [[nodiscard]] real take_max_rate() { return pub_rate_max_.exchange(0.0, std::memory_order_relaxed); }
 
 private:
     void control_point();
@@ -179,6 +194,15 @@ private:
     bool frozen_ = false;
     std::uint64_t n_ = 0;
     std::array<real, kLiveMaxSources> frame_{};
+    std::atomic<std::uint64_t> pub_hitches_{0};
+    std::atomic<std::uint64_t> pub_arrivals_{0};
+    std::atomic<real> pub_max_gap_s_{0.0};
+    std::atomic<real> pub_max_err_deg_{0.0};
+    std::atomic<std::uint64_t> pub_sat_samples_{0};
+    std::atomic<std::uint64_t> pub_sat_flips_{0};
+    std::atomic<real> pub_rate_min_{1.0e9};
+    std::atomic<real> pub_rate_max_{0.0};
+    int last_sat_sign_ = 0;  // diagnostics only, never read by the synthesis
 };
 
 // Offline render (allocates the buffer; not for the real-time path): `frames`

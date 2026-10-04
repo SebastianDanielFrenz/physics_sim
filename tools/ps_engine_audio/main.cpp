@@ -35,6 +35,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <sstream>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -55,6 +57,13 @@ struct Args {
     int map_workers = 0;
     std::string engine_cache_dir;
     double dyno_brake_nm = -1.0; // < 0: no dyno (free rev)
+    double dyno_viscous_nms = -1.0; // > 0: a viscous dyno (N*m*s/rad) instead
+    double hitch_every_s = -1.0;   // > 0: diag - withhold the voice input for hitch_ticks ticks this often
+    int hitch_ticks = 3;
+    std::string input_csv_path;    // diag: replay recorded EngineInputs (one row per 240 Hz tick) instead of the rig
+    double plenum_pi_tau_s = -1.0;     // < 0: LiveEngineSettings default
+    double plenum_filter_tau_s = -1.0; // < 0: LiveEngineSettings default
+    std::string diag_csv_path;         // empty: none; else one row per tick (voice plenum loop)
     bool live = false;
     double full_scale_pa = ps_audio::Calibration{}.pa_full_scale; // Pa at 1 m mapped to digital full scale
     // Listening-test overrides of the voice's pipe cell sizes (0 = the engine's
@@ -105,6 +114,14 @@ Args parse_args(int argc, char** argv) {
             a.engine_cache_dir = next("--engine-cache");
         } else if (arg == "--dyno-brake-nm") {
             a.dyno_brake_nm = std::stod(next("--dyno-brake-nm"));
+        } else if (arg == "--dyno-viscous-nms") {
+            a.dyno_viscous_nms = std::stod(next("--dyno-viscous-nms"));
+        } else if (arg == "--hitch-every-s") {
+            a.hitch_every_s = std::stod(next("--hitch-every-s"));
+        } else if (arg == "--input-csv") {
+            a.input_csv_path = next("--input-csv");
+        } else if (arg == "--hitch-ticks") {
+            a.hitch_ticks = std::stoi(next("--hitch-ticks"));
         } else if (arg == "--full-scale-pa") {
             a.full_scale_pa = std::stod(next("--full-scale-pa"));
             if (!(a.full_scale_pa > 0.0)) usage_error("--full-scale-pa must be > 0");
@@ -121,6 +138,12 @@ Args parse_args(int argc, char** argv) {
         } else if (arg == "--voice-threads") {
             a.voice_threads = std::stoi(next("--voice-threads"));
             if (a.voice_threads < 1) usage_error("--voice-threads must be >= 1");
+        } else if (arg == "--plenum-pi-tau-s") {
+            a.plenum_pi_tau_s = std::stod(next("--plenum-pi-tau-s"));
+        } else if (arg == "--plenum-filter-tau-s") {
+            a.plenum_filter_tau_s = std::stod(next("--plenum-filter-tau-s"));
+        } else if (arg == "--diag-csv") {
+            a.diag_csv_path = next("--diag-csv");
         } else if (arg == "--live") {
             a.live = true;
         } else if (!arg.empty() && arg[0] == '-') {
@@ -260,6 +283,11 @@ int main(int argc, char** argv) {
             rig_config.dyno.desc.mode = ps::drivetrain::LoadDynoMode::Brake;
             rig_config.dyno.desc.inertia_kgm2 = 0.02; // [AS] small test-dyno rotor
             rig_config.dyno.desc.torque_nm = args.dyno_brake_nm;
+        } else if (args.dyno_viscous_nms > 0.0) {
+            rig_config.dyno.enabled = true;
+            rig_config.dyno.desc.mode = ps::drivetrain::LoadDynoMode::Viscous;
+            rig_config.dyno.desc.inertia_kgm2 = 0.02; // [AS] small test-dyno rotor
+            rig_config.dyno.desc.viscous_nm_s_rad = args.dyno_viscous_nms;
         }
         ps::EngineRig rig(args.engine_path, map_options, installation_override, rig_config);
 
@@ -269,6 +297,8 @@ int main(int argc, char** argv) {
         voice_settings.engine.dx_exhaust_m = args.dx_exhaust_mm * 1e-3;
         voice_settings.substeps = args.substeps;
         voice_settings.engine.threads = args.voice_threads;
+        if (args.plenum_pi_tau_s > 0.0) voice_settings.engine.plenum_pi_tau_s = args.plenum_pi_tau_s;
+        if (args.plenum_filter_tau_s > 0.0) voice_settings.engine.plenum_filter_tau_s = args.plenum_filter_tau_s;
         ps_audio::Voice voice(*sim->cycle, sim->fuels[0].lhv_j_kg, sim->fuels[0].afr_stoich, voice_settings);
         print_source_list(voice);
 
@@ -292,7 +322,29 @@ int main(int argc, char** argv) {
             const double last_t = script.events.empty() ? 0.0 : script.events.back().t;
             duration_s = last_t + 3.0; // fixed tail so the engine's final state is actually heard
         }
-        const long long total_ticks = static_cast<long long>(std::ceil(duration_s * tick_hz));
+        std::vector<ps_audio::EngineInput> replay;
+        if (!args.input_csv_path.empty()) {
+            std::ifstream in_csv(args.input_csv_path);
+            if (!in_csv) throw std::runtime_error("cannot open --input-csv " + args.input_csv_path);
+            std::string line;
+            std::getline(in_csv, line);  // header
+            while (std::getline(in_csv, line)) {
+                ps_audio::EngineInput e;
+                int spark_given = 0;
+                unsigned flags = 0;
+                std::istringstream ls(line);
+                char c = 0;
+                ls >> e.t_sim_s >> c >> e.omega_rad_s >> c >> e.crank_angle_deg >> c >> e.p_charge_pa >> c >> e.t_charge_k >> c >>
+                    e.p_intake_pa >> c >> e.throttle >> c >> e.lambda >> c >> e.spark_deg_atdc >> c >> spark_given >> c >> flags;
+                if (!ls) continue;
+                e.spark_given = spark_given != 0;
+                e.flags = flags;
+                replay.push_back(e);
+            }
+            std::fprintf(stderr, "ps_engine_audio: replaying %zu recorded inputs\n", replay.size());
+        }
+        const long long total_ticks = replay.empty() ? static_cast<long long>(std::ceil(duration_s * tick_hz))
+                                                     : static_cast<long long>(replay.size());
 
         std::vector<float> rendered;
         rendered.reserve(static_cast<std::size_t>(total_ticks) * static_cast<std::size_t>(frames_per_tick));
@@ -309,6 +361,17 @@ int main(int argc, char** argv) {
 
         const auto wall_start = std::chrono::steady_clock::now();
 
+        std::FILE* diag = nullptr;
+#if defined(_MSC_VER)
+        if (!args.diag_csv_path.empty() && fopen_s(&diag, args.diag_csv_path.c_str(), "w") != 0) diag = nullptr;
+#else
+        if (!args.diag_csv_path.empty()) diag = std::fopen(args.diag_csv_path.c_str(), "w");
+#endif
+        if (diag != nullptr)
+            std::fprintf(diag, "t,rpm,throttle,p_intake_in_pa,p_charge_in_pa,voice_plenum_pa,voice_plenum_filtered_pa,"
+                               "voice_throttle_cd_area_m2,block_rms_pa,hitches,crank_err_max_deg,crank_sat_samples\n");
+        std::vector<ps_audio::EngineInput> withheld;
+        withheld.reserve(64);
         std::size_t next_event = 0;
         for (long long tick = 0; tick < total_ticks; ++tick) {
             const double t = static_cast<double>(tick) / tick_hz;
@@ -321,8 +384,21 @@ int main(int argc, char** argv) {
                 ++next_event;
             }
 
-            rig.step();
-            voice.push_input(ps_tools::make_engine_input(rig.engine_sound_state(), rig.sim_time_s()));
+            if (replay.empty()) rig.step();
+            const ps_audio::EngineInput cur = replay.empty()
+                                                  ? ps_tools::make_engine_input(rig.engine_sound_state(), rig.sim_time_s())
+                                                  : replay[static_cast<std::size_t>(tick)];
+            {
+                const ps_audio::EngineInput& in = cur;
+                const long long period = args.hitch_every_s > 0.0 ? std::llround(args.hitch_every_s * tick_hz) : 0;
+                if (period > 0 && tick > 0 && tick % period < args.hitch_ticks) {
+                    withheld.push_back(in);  // diag: the input arrives late, all at once
+                } else {
+                    for (const auto& w : withheld) voice.push_input(w);
+                    withheld.clear();
+                    voice.push_input(in);
+                }
+            }
             voice.render(per_source_block.data(), frames_per_tick);
             for (int f = 0; f < frames_per_tick; ++f) {
                 float sum = 0.0f;
@@ -333,7 +409,18 @@ int main(int argc, char** argv) {
                 mixed_block[static_cast<std::size_t>(f)] = sum * mix_gain;
             }
             rendered.insert(rendered.end(), mixed_block.begin(), mixed_block.end());
+            if (diag != nullptr) {
+                double ss = 0.0;
+                for (float v : per_source_block) ss += static_cast<double>(v) * v;
+                std::fprintf(diag, "%.6f,%.3f,%.5f,%.2f,%.2f,%.2f,%.2f,%.6e,%.5f,%llu,%.2f,%llu\n", cur.t_sim_s,
+                             cur.omega_rad_s * 60.0 / 6.283185307179586, cur.throttle, cur.p_intake_pa,
+                             cur.p_charge_pa, voice.engine().plenum_pressure_pa(), voice.engine().plenum_filtered_pa(),
+                             voice.engine().throttle_cd_area(), std::sqrt(ss / per_source_block.size()),
+                             static_cast<unsigned long long>(voice.published_hitch_count()), voice.take_max_crank_error_deg(),
+                             static_cast<unsigned long long>(voice.take_crank_saturated_samples()));
+            }
         }
+        if (diag != nullptr) std::fclose(diag);
 
         const auto wall_end = std::chrono::steady_clock::now();
         const double wall_s = std::chrono::duration<double>(wall_end - wall_start).count();

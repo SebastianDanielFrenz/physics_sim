@@ -323,6 +323,13 @@ public:
     // Runner thread underran Godot's own draw rate. 0 for a healthy run;
     // -1 for an unknown vehicle or one with no voice.
     std::int64_t get_vehicle_voice_underrun_count(const godot::String& vehicle_name) const;
+    // Engine-audio timing diagnostics (main thread): the voice's time-map
+    // hitch/arrival counters (cumulative), the largest audio-time gap between
+    // two snapshot arrivals and the longest sim step (world step + post_step)
+    // since the previous call (both reset by this call), sim catch-up
+    // wake-ups (cumulative) and the Runner's worst block. Empty for an
+    // unknown vehicle or one without a voice.
+    godot::Dictionary take_vehicle_voice_timing(const godot::String& vehicle_name);
     // Listener gain (Pa at 1 m mapped to full scale); > 0, default 15.
     void set_voice_full_scale_pa(double pa);
     double get_voice_full_scale_pa() const;
@@ -336,6 +343,14 @@ public:
     // reset too, not left to relax toward zero over the following second.
     bool request_vehicle_turbo_configuration(const godot::String& vehicle_name,const godot::String& path);
     godot::String get_turbo_configuration_status() const;
+    // Baked engine audio bank (40923cf). Off by default since 2026-10-04: its
+    // 0.5 s sample-time loops are not crank-synchronous, so loop joins and
+    // plane blends produce audible steps every ~0.5 s under throttle. While
+    // off, vehicles play the live voice only; turbo configuration swaps still
+    // apply their physics. Set before start(); the demo's --m1-audio-bank
+    // turns it on.
+    void set_engine_audio_bank_enabled(bool enabled);
+    bool get_engine_audio_bank_enabled() const;
     godot::String get_engine_audio_bank_status() const;
     bool reset_vehicle(const godot::String& vehicle_name, const godot::Vector3& sim_position, float yaw_rad);
     // PHYS-033 P4 I3 plan section 12.1: gear/gear_target/shift_phase(str)/
@@ -467,6 +482,7 @@ private:
     std::unordered_map<std::string,std::string> engine_definition_paths_;
     std::unordered_map<std::string,std::string> requested_turbo_paths_;
     std::vector<BankRequest> bank_requests_;
+    std::atomic<bool> engine_audio_bank_enabled_{false};
     std::condition_variable bank_request_cv_;
     bool bank_worker_stop_=false;
     std::string engine_audio_bank_status_="Live acoustic model";

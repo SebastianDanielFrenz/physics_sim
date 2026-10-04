@@ -199,6 +199,9 @@ void Voice::render(float* out, int frames) {
         previous_bank_=active_bank_;previous_playback_=bank_playback_;
         active_bank_=requested;bank_playback_=BankPlayback{};bank_fade_=real(0.0);
     }
+    real max_gap_s = 0.0;  // diagnostics only (pub_max_gap_s_ and the crank/rate ones below)
+    real max_err = 0.0, rate_lo = 1.0e9, rate_hi = 0.0;
+    std::uint64_t sat = 0, flips = 0;
     for (int f = 0; f < frames; ++f) {
         const bool cp = n_ % ci == 0;
         if (cp) control_point();
@@ -209,7 +212,10 @@ void Voice::render(float* out, int frames) {
             continue;
         }
         const real rate = tm_.rate();
+        if (rate < rate_lo) rate_lo = rate;
+        if (rate > rate_hi) rate_hi = rate;
         tm_.advance(h_);
+        if (tm_.since_arrival() > max_gap_s) max_gap_s = tm_.since_arrival();
         interpolate();
 
         // Crank advance: omega (pitch), plus the capped phase correction while locked.
@@ -219,6 +225,13 @@ void Voice::render(float* out, int frames) {
             const real err = wrap_pm360(target_theta_ - engine_.crank_deg());
             real corr = err / s_.crank_tau_s;               // deg/s
             const real cap = s_.crank_max_rel * omega * kRadToDeg;
+            if (std::abs(err) > max_err) max_err = std::abs(err);
+            if (corr > cap || corr < -cap) {
+                const int sign = corr > 0.0 ? 1 : -1;
+                ++sat;
+                if (last_sat_sign_ != 0 && sign != last_sat_sign_) ++flips;
+                last_sat_sign_ = sign;
+            }
             if (corr > cap) corr = cap;
             if (corr < -cap) corr = -cap;
             omega += corr * kDegToRad;
@@ -261,6 +274,18 @@ void Voice::render(float* out, int frames) {
         }
         ++n_;
     }
+    pub_hitches_.store(tm_.hitch_count(), std::memory_order_relaxed);
+    pub_arrivals_.store(tm_.arrivals(), std::memory_order_relaxed);
+    real prev = pub_max_gap_s_.load(std::memory_order_relaxed);
+    while (max_gap_s > prev && !pub_max_gap_s_.compare_exchange_weak(prev, max_gap_s, std::memory_order_relaxed)) {}
+    prev = pub_max_err_deg_.load(std::memory_order_relaxed);
+    while (max_err > prev && !pub_max_err_deg_.compare_exchange_weak(prev, max_err, std::memory_order_relaxed)) {}
+    prev = pub_rate_min_.load(std::memory_order_relaxed);
+    while (rate_lo < prev && !pub_rate_min_.compare_exchange_weak(prev, rate_lo, std::memory_order_relaxed)) {}
+    prev = pub_rate_max_.load(std::memory_order_relaxed);
+    while (rate_hi > prev && !pub_rate_max_.compare_exchange_weak(prev, rate_hi, std::memory_order_relaxed)) {}
+    pub_sat_samples_.fetch_add(sat, std::memory_order_relaxed);
+    pub_sat_flips_.fetch_add(flips, std::memory_order_relaxed);
 }
 
 std::vector<float> render_to_buffer(Voice& voice, std::size_t frames) {

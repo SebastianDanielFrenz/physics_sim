@@ -106,6 +106,11 @@ public:
     // "measure and report" tick-rate-stability check (PLAN.md P2
     // acceptance).
     [[nodiscard]] std::uint64_t ticks_run() const { return ticks_run_.load(std::memory_order_relaxed); }
+    // Diagnostics (any thread): longest world step + post_step wall time since
+    // the previous call (exchange-reset), and wake-ups that had to run more
+    // than one tick back-to-back (cumulative).
+    [[nodiscard]] std::uint64_t take_max_step_ns() { return max_step_ns_.exchange(0, std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t catch_up_wakeups() const { return catch_up_wakeups_.load(std::memory_order_relaxed); }
 
 private:
     void loop() {
@@ -126,13 +131,19 @@ private:
 
             int ran = 0;
             while (running_.load(std::memory_order_relaxed) && clock::now() >= next && ran < kMaxCatchUpTicksPerWakeup) {
+                const auto step_start = clock::now();
                 if (pre_step_) pre_step_();
                 world_.step();
                 ticks_run_.fetch_add(1, std::memory_order_relaxed);
                 if (post_step_) post_step_();
+                const auto step_ns = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - step_start).count());
+                std::uint64_t prev_max = max_step_ns_.load(std::memory_order_relaxed);
+                while (step_ns > prev_max && !max_step_ns_.compare_exchange_weak(prev_max, step_ns, std::memory_order_relaxed)) {}
                 next += period;
                 ++ran;
             }
+            if (ran > 1) catch_up_wakeups_.fetch_add(1, std::memory_order_relaxed);
             if (clock::now() >= next) {
                 // Still behind after the bounded catch-up - a genuine stall
                 // (e.g. the process was paused). Resync to "now" instead of
@@ -147,6 +158,8 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> ticks_run_{0};
+    std::atomic<std::uint64_t> max_step_ns_{0};
+    std::atomic<std::uint64_t> catch_up_wakeups_{0};
     std::function<void()> post_step_;
     std::function<void()> pre_step_;
 };
