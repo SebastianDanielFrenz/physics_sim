@@ -88,6 +88,7 @@ public:
         // above for why the hybrid spin-wait is still needed).
         timeBeginPeriod(1);
 #endif
+        pending_clock_break_ = true; // a (re)start is a fresh schedule
         thread_ = std::thread([this] { loop(); });
     }
 
@@ -112,6 +113,18 @@ public:
     [[nodiscard]] std::uint64_t take_max_step_ns() { return max_step_ns_.exchange(0, std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t catch_up_wakeups() const { return catch_up_wakeups_.load(std::memory_order_relaxed); }
 
+    // SIM THREAD ONLY (valid inside pre_step/post_step): the NOMINAL time of
+    // the tick being run - the scheduled due time `next`, one period apart
+    // from the previous tick whatever the step durations were - and whether
+    // the schedule was re-anchored since the previous tick (first tick, or a
+    // stall resync below), in which case the gap to the previous nominal
+    // time does not describe elapsed motion. render_interp.h's PoseHistory
+    // stamps frames with these instead of the wall time a step finished.
+    [[nodiscard]] std::chrono::steady_clock::time_point tick_nominal_time() const { return tick_nominal_; }
+    [[nodiscard]] bool tick_clock_break() const { return tick_clock_break_; }
+    // Stall resyncs since start() (cumulative, any thread).
+    [[nodiscard]] std::uint64_t resync_count() const { return resync_count_.load(std::memory_order_relaxed); }
+
 private:
     void loop() {
         using clock = std::chrono::steady_clock;
@@ -132,6 +145,9 @@ private:
             int ran = 0;
             while (running_.load(std::memory_order_relaxed) && clock::now() >= next && ran < kMaxCatchUpTicksPerWakeup) {
                 const auto step_start = clock::now();
+                tick_nominal_ = next;
+                tick_clock_break_ = pending_clock_break_;
+                pending_clock_break_ = false;
                 if (pre_step_) pre_step_();
                 world_.step();
                 ticks_run_.fetch_add(1, std::memory_order_relaxed);
@@ -150,6 +166,8 @@ private:
                 // an ever-growing backlog; a fixed 240 Hz cadence resuming
                 // late is the intended behaviour, not a catch-up spiral.
                 next = clock::now() + period;
+                pending_clock_break_ = true; // next tick's nominal time is re-anchored
+                resync_count_.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
@@ -160,6 +178,11 @@ private:
     std::atomic<std::uint64_t> ticks_run_{0};
     std::atomic<std::uint64_t> max_step_ns_{0};
     std::atomic<std::uint64_t> catch_up_wakeups_{0};
+    std::atomic<std::uint64_t> resync_count_{0};
+    // Sim-thread-only (see tick_nominal_time()).
+    std::chrono::steady_clock::time_point tick_nominal_{};
+    bool tick_clock_break_ = true;
+    bool pending_clock_break_ = true;
     std::function<void()> post_step_;
     std::function<void()> pre_step_;
 };

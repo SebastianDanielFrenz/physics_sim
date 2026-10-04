@@ -378,6 +378,22 @@ func _ready() -> void:
 	# _process below only checks _autopilot first, so pass one or the
 	# other, not both, on the command line).
 	_haptics_cruise = "--m1-haptics-cruise" in user_args
+	# Render-interpolation measurement (2026-10-04, see render_interp.h):
+	# --m1-wot-drive = full throttle on the 10 km straight with scripted
+	# upshifts; --m1-render-log=<csv> = one line per rendered frame;
+	# --m1-render-legacy = the OLD publish-time alpha (A/B);
+	# --m1-render-delay=<ticks> overrides the render delay D.
+	_wot_drive = "--m1-wot-drive" in user_args
+	for a in user_args:
+		if a.begins_with("--m1-render-log="):
+			_render_log = FileAccess.open(a.substr(len("--m1-render-log=")), FileAccess.WRITE)
+			if _render_log != null:
+				_render_log.store_line("frame,wall_us,x,y,z,sim_speed_mps,alpha,tick_a,tick_b,late,step_count")
+		elif a.begins_with("--m1-render-seconds="):
+			_render_seconds_arg = a.substr(len("--m1-render-seconds=")).to_float()
+		elif a.begins_with("--m1-render-delay="):
+			_render_delay_arg = a.substr(len("--m1-render-delay=")).to_float()
+	_render_legacy_arg = "--m1-render-legacy" in user_args
 	# --m1-screenshot=<absolute_path.png>: saves one PNG of the running
 	# demo a few seconds in (viewport texture -> Image, no user interaction
 	# needed - only works when Godot actually has a rendering context, not
@@ -471,6 +487,9 @@ func _ready() -> void:
 	# Baked engine audio bank: off unless --m1-audio-bank (its loops are not
 	# crank-synchronous yet and step every ~0.5 s under throttle, 2026-10-04).
 	simulation.set_engine_audio_bank_enabled("--m1-audio-bank" in OS.get_cmdline_user_args())
+	if _render_delay_arg > 0.0:
+		simulation.set_render_delay_ticks(_render_delay_arg)
+	simulation.set_render_legacy_alpha(_render_legacy_arg)
 	simulation.start()
 	print("ps_godot main.gd: sim started, is_running=", simulation.is_running())
 
@@ -1038,6 +1057,7 @@ func _process(delta: float) -> void:
 			_run_camera_rebase_check(delta)
 	elif _haptics_cruise:
 		_run_haptics_cruise(delta)
+	_render_measure_tick(delta)
 
 	if _screenshot_path != "" and not _screenshot_taken:
 		_screenshot_t += delta
@@ -1157,6 +1177,69 @@ func _handle_zone_keys() -> void:
 		if pressed and not _zone_keys_prev.get(key, false):
 			_reset_vehicle(ZONE_SPAWNS[key])
 		_zone_keys_prev[key] = pressed
+
+# Render-interpolation measurement (see _ready's --m1-render-log comment).
+var _wot_drive: bool = false
+var _wot_launched: bool = false
+var _wot_t: float = 0.0
+var _wot_shift_up_count: float = 1.0
+var _wot_shift_cooldown_t: float = 0.0
+var _render_log: FileAccess = null
+var _render_delay_arg: float = 0.0
+var _render_legacy_arg: bool = false
+var _render_log_frames: int = 0
+var _render_measure_t: float = 0.0
+var _render_seconds_arg: float = 0.0
+
+func _run_wot_drive(delta: float) -> void:
+	_wot_t += delta
+	if not _wot_launched:
+		_wot_launched = true
+		simulation.set_control("assist.auto_shift", 1.0)
+		simulation.set_control("shift_up_count", 1.0)
+	var pt: Dictionary = simulation.get_vehicle_powertrain(VEHICLE_NAME)
+	var gear: int = int(pt.get("gear", 0))
+	var rpm: float = pt.get("rpm", 0.0)
+	_wot_shift_cooldown_t = max(0.0, _wot_shift_cooldown_t - delta)
+	if gear >= 1 and rpm > 7000.0 and _wot_shift_cooldown_t <= 0.0:
+		_wot_shift_up_count += 1.0
+		simulation.set_control("shift_up_count", _wot_shift_up_count)
+		_wot_shift_cooldown_t = 1.0
+	simulation.set_control("throttle", 0.0 if (gear == 0 and _wot_t < 1.5) else 1.0)
+	simulation.set_control("brake", 0.0)
+	simulation.set_control("steer", 0.0)
+
+func _log_render_frame() -> void:
+	# One CSV line per rendered frame: the chassis pose exactly as the render
+	# path hands it to Godot (absolute sim position = godot position - origin),
+	# the sim's own speed and the sample's bracket/alpha/late state.
+	var xform: Transform3D = simulation.get_body_transform(CHASSIS_BODY_NAME)
+	var p: Vector3 = xform.origin - simulation.get_world_origin_godot_position()
+	var d: Dictionary = simulation.get_render_diagnostics()
+	_render_log.store_line("%d,%d,%.5f,%.5f,%.5f,%.3f,%.4f,%d,%d,%d,%d" % [
+		Engine.get_process_frames(), d["sample_time_us"], p.x, p.y, p.z,
+		simulation.get_body_speed_mps(CHASSIS_BODY_NAME), d["alpha"], d["tick_a"], d["tick_b"],
+		1 if d["late"] else 0, simulation.get_step_count()])
+	_render_log_frames += 1
+	if _render_log_frames % 600 == 0:
+		_render_log.flush()
+
+func _write_render_summary() -> void:
+	var d: Dictionary = simulation.get_render_diagnostics()
+	print("ps_godot render diag: legacy=", d["legacy_alpha"], " delay_ticks=", d["delay_ticks"], " frames=", d["frames_sampled"], " late=", d["frames_late"], " early=", d["frames_early"], " stepped=", d["frames_stepped"], " resyncs=", d["resyncs"])
+	print("ps_godot render diag: publish_lateness_hist(", d["hist_bin_ms"], "ms bins)=", d["publish_lateness_hist"])
+	print("ps_godot render diag: publish_gap_hist(", d["hist_bin_ms"], "ms bins)=", d["publish_gap_hist"])
+
+func _render_measure_tick(delta: float) -> void:
+	if _wot_drive:
+		_run_wot_drive(delta)
+	if _render_log != null:
+		_log_render_frame()
+		_render_measure_t += delta
+		if _render_seconds_arg > 0.0 and _render_measure_t >= _render_seconds_arg:
+			_render_log.flush()
+			_write_render_summary()
+			get_tree().quit()
 
 func _run_autopilot(delta: float) -> void:
 	if _autopilot_done:
