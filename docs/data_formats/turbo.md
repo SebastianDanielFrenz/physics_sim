@@ -98,8 +98,26 @@ The shipped hardware file has no line yet (no cited map exists).
 | `turbo` | string | yes | path relative to THIS file; must name a `physics_sim.turbo/1` file | the hardware |
 | `count` | integer | yes | [1, 8] | number of identical turbos in the pair, see "Pair scaling" (a count over 8 throws `"<path>: turbo count must be <= 8"`) |
 | `target_boost_bar` | number (bar) | yes | > 0 | GAUGE boost the wastegate controller holds at full plate. `target_boost_pa` is rejected: `"<path>: 'target_boost_pa' was replaced by 'target_boost_bar' (gauge, bar)"` |
-| `intercooler_effectiveness` | number | yes | > 0, <= 1 | fraction of the compressor outlet temperature rise removed; there is no pressure drop in the baseline model |
+| `intercooler_effectiveness` | number | yes | > 0, <= 1 | fraction of the compressor outlet temperature rise removed; the pressure drop is the optional key below (absent = none) |
+| `intercooler_pressure_drop_bar_at_max_flow` | number (bar) | no | >= 0 (`"<path>: 'intercooler_pressure_drop_bar_at_max_flow' must be >= 0"`), < the hardware `reference_head_bar`, a non-number `"... must be a number"`; NOT scaled by `count` | I7d D4: pressure drop of the cooler at the pair's max flow; absent or 0 = no drop, bit-identical to a file without the key |
 | `boost_control` | object | no | see below | PID on the post-cooler charge pressure driving the wastegate |
+| `blow_off_valve` | object | no | see below | I7d D2 |
+
+### Intercooler pressure drop (I7d D4)
+
+`dp = k * (compressor flow / max flow)^2` with `k = intercooler_pressure_drop_bar_at_max_flow`
+(in Pa inside the desc, `TurboPairDesc::intercooler_dp_pa_at_max_flow`). The compressor
+makes head above ambient; the charge pressure the throttle sees is that minus `dp`, i.e.
+`charge = ambient + head - dp` (the lag state), and the compressor outlet pressure is
+`charge + dp`. The compressor pressure ratio used for the outlet temperature, the
+compressor power and the published `compressor_pressure_ratio` is the OUTLET's. The boost
+controller keeps controlling the post-cooler pressure (the usual sensor position), so the
+steady boost stays on target and the rotor runs faster by the amount that supplies the
+drop: at steady WOT `s = sqrt((boost + dp) / (reference_head * (1 - f^2)))` for the
+hyper-like fixture (measured: 114734 rpm without, 121693 rpm with 0.4 bar at max flow and
+f = 0.75, vs the head-curve inversion 114742 / 121702). The key is not in the derived-map
+cache key (it feeds no map); a nonzero value is folded into the engine state hash through
+the desc, zero is not, so a file without the key keeps its hash.
 
 Any of the three efficiencies (compressor, turbine, intercooler) above 1 throws
 `"<path>: turbo efficiencies must be <= 1"` (path = the configuration file).

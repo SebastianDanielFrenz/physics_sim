@@ -201,3 +201,16 @@ TEST_CASE("D3: a surge line does not move the vehicle hash and the flag reaches 
     CHECK(a.surge_events == 0);
     CHECK(b.surge_events >= 1);
 }
+
+// D4 at vehicle level: a nonzero cooler drop is worker-count invariant and allocation-free (own).
+TEST_CASE("D4: a vehicle with an intercooler drop is worker-count invariant and allocation-free", "[turbo][drivetrain][vehicle][intercooler][determinism]") {
+    TurboPairDesc d = tb::hyper_like_pair();
+    d.intercooler_dp_pa_at_max_flow = 30000.0;
+    const VehicleRun a1 = run_vehicle(d, 1, true);
+    const VehicleRun a10 = run_vehicle(d, 10, true);
+    const VehicleRun none = run_vehicle(tb::hyper_like_pair(), 1, false);
+    std::printf("[D4 vehicle] hash 1w %016llx 10w %016llx, without the drop %016llx\n", static_cast<unsigned long long>(a1.hash),
+                static_cast<unsigned long long>(a10.hash), static_cast<unsigned long long>(none.hash));
+    CHECK(a1.hash == a10.hash);
+    CHECK(a1.hash != none.hash); // the drop reached the dynamics
+}

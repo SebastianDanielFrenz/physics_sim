@@ -31,13 +31,16 @@ public:
     // Surge flag (I7d D3): pure bookkeeping, never hashed, never read back by the model.
     bool surge_active = false;
     std::uint32_t surge_events = 0;   // entries into surge; hysteresis 1.05 x the line
+    // Intercooler drop (I7d D4), derived from the state and the step's flow: never hashed.
+    real intercooler_dp_pa = 0.0;     // k * (flow/max)^2 of the latest step
+    real compressor_outlet_pa = 101325.0; // charge_pa + intercooler_dp_pa (the pressure the compressor makes)
     // Gas constant of the vent orifice, the same value as SimulatedEngine::kGasConstant.
     static constexpr real kGasConstant = 287.05;
     explicit TurboPair(const TurboPairDesc& d) : desc(d) {}
     real omega() const { return std::sqrt(real(2.0)*energy_j/desc.rotor_inertia_kgm2); }
     real rpm() const { return omega()*real(60.0/6.2831853071795864769); }
     void reset(real p, real t) { energy_j=0; charge_pa=p; charge_k=t; exhaust_pa=p; wastegate=0; boost_integral=0;
-                                 compressor_flow_kg_s=0; compressor_pr=1;
+                                 compressor_flow_kg_s=0; compressor_pr=1; intercooler_dp_pa=0; compressor_outlet_pa=p;
                                  bov_opening=0; bov_flow_kg_s=0; bov_latched=false; surge_active=false; }
     // plate: the throttle plate position in [0, 1]; it scales the boost target.
     // p_im / psi (I7d D2): the manifold pressure the valve diaphragm senses and the
@@ -65,10 +68,15 @@ public:
             desc.reference_head_pa*speed2*std::max(real(0.0),real(1.0)-flow*flow);
         // Pressure equilibrium includes compressor capacity; actual manifold
         // filling remains the engine's existing mass balance through its throttle.
-        const real desired = ambient_pa + head;
+        // I7d D4: the compressor makes head above ambient, the cooler drops dp of it; charge_pa is
+        // the pressure AFTER the cooler (what the throttle and the boost controller see). With
+        // dp == 0 both lines are the same arithmetic as before.
+        const real dp = desc.intercooler_dp_pa_at_max_flow*flow*flow;
+        const real desired = ambient_pa + head - dp;
         const real charge_old = charge_pa;
         charge_pa += h/(real(0.025)+h)*(desired-charge_pa);
-        const real pr = std::max(real(1.0),charge_pa/ambient_pa);
+        const real pr = std::max(real(1.0),(charge_pa+dp)/ambient_pa);
+        intercooler_dp_pa = dp; compressor_outlet_pa = charge_pa + dp;
         const real rise = ps::math::pow(pr,real(2.0/7.0))-real(1.0);
         const real outlet_k = ambient_k*(desc.maps ? desc.maps->compressor_temperature_ratio.evaluate(pr) : real(1.0)+rise/desc.compressor_efficiency);
         charge_k = ambient_k + (outlet_k-ambient_k)*(real(1.0)-desc.intercooler_effectiveness);

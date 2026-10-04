@@ -342,6 +342,11 @@ struct TurboPairDesc {
     std::optional<BlowOffValveDesc> blow_off_valve;
     // I7d D3: absent = the surge flag is never raised. Not hashed.
     std::optional<SurgeLineDesc> surge_line;
+    // I7d D4: pressure drop of the intercooler at the pair's max flow; at flow f (a fraction of
+    // max_mass_flow_kg_s) the drop is k * f^2, and the throttle sees the compressor outlet pressure
+    // minus it. 0 = no drop (bit-identical to before); hashed only when nonzero. Intensive: not
+    // scaled by the turbo count.
+    real intercooler_dp_pa_at_max_flow = 0.0;
 };
 
 struct SimulatedEngineDesc {

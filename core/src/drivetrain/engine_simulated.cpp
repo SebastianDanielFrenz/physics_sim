@@ -972,6 +972,8 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
         f.pod(t.max_mass_flow_kg_s); f.pod(t.compressor_efficiency); f.pod(t.turbine_efficiency);
         f.pod(t.turbine_area_m2); f.pod(t.intercooler_effectiveness); f.pod(t.shaft_loss_w_at_reference);
         f.pod(t.wastegate_kp); f.pod(t.wastegate_ki_per_s); f.pod(t.wastegate_kd_s); f.pod(t.wastegate_actuator_tau_s);
+        // I7d D4: appended and only when nonzero, so an engine without a cooler drop keeps its byte layout.
+        if (t.intercooler_dp_pa_at_max_flow != real(0.0)) f.pod(t.intercooler_dp_pa_at_max_flow);
         // I7d D2: appended, so an engine without a valve keeps its byte layout.
         if (t.blow_off_valve) {
             f.pod(turbo_->bov_opening); f.pod(t.blow_off_valve->crack_dp_pa); f.pod(t.blow_off_valve->full_open_dp_pa);

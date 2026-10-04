@@ -254,3 +254,34 @@ TEST_CASE("D3 loader: surge_line block", "[turbo][io][surge]") {
         CHECK_THROWS_WITH(load_surge(json(7), "surge_obj"), ContainsSubstring("'surge_line' must be an object"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// D4 loader: the optional "intercooler_pressure_drop_bar_at_max_flow" key.
+// ---------------------------------------------------------------------------
+TEST_CASE("D4 loader: intercooler pressure drop", "[turbo][io][intercooler]") {
+    SECTION("loads in bar, intensive (not scaled by count), absent = 0") {
+        json c = base_config();
+        CHECK(load(c, "dp_absent").intercooler_dp_pa_at_max_flow == 0.0);
+        c["intercooler_pressure_drop_bar_at_max_flow"] = 0.25;
+        CHECK(load(c, "dp_2").intercooler_dp_pa_at_max_flow == Catch::Approx(25000.0).epsilon(1e-12));
+        c["count"] = 1;
+        CHECK(load(c, "dp_1").intercooler_dp_pa_at_max_flow == Catch::Approx(25000.0).epsilon(1e-12));
+        c["intercooler_pressure_drop_bar_at_max_flow"] = 0;
+        CHECK(load(c, "dp_zero").intercooler_dp_pa_at_max_flow == 0.0);
+    }
+    SECTION("the key does not touch the derived-map cache key") {
+        json c = base_config();
+        const auto without = load(c, "dpkey0");
+        c["intercooler_pressure_drop_bar_at_max_flow"] = 0.25;
+        CHECK(load(c, "dpkey1").maps->content_hash == without.maps->content_hash);
+    }
+    SECTION("rejections") {
+        json c = base_config();
+        c["intercooler_pressure_drop_bar_at_max_flow"] = -0.1;
+        CHECK_THROWS_WITH(load(c, "dp_neg"), ContainsSubstring("'intercooler_pressure_drop_bar_at_max_flow' must be >= 0"));
+        c["intercooler_pressure_drop_bar_at_max_flow"] = "high";
+        CHECK_THROWS_WITH(load(c, "dp_str"), ContainsSubstring("'intercooler_pressure_drop_bar_at_max_flow' must be a number"));
+        c["intercooler_pressure_drop_bar_at_max_flow"] = 4.5; // = the hardware's reference_head_bar
+        CHECK_THROWS_WITH(load(c, "dp_big"), ContainsSubstring("must be < the hardware 'reference_head_bar'"));
+    }
+}

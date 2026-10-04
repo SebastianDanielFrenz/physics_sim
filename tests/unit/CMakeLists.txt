@@ -61,6 +61,7 @@ add_executable(ps_unit_tests
   test_turbo_pair.cpp
   test_turbo_bov.cpp
   test_turbo_surge.cpp
+  test_turbo_intercooler.cpp
   test_turbo_io.cpp
   test_turbo_vehicle.cpp
   test_simulated_engine_powertrain.cpp

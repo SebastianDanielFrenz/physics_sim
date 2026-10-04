@@ -2393,6 +2393,14 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
     t.intercooler_effectiveness=require_positive(cfg,"intercooler_effectiveness",path);
     if(t.compressor_efficiency>1 || t.turbine_efficiency>1 || t.intercooler_effectiveness>1)
         throw std::runtime_error(path+": turbo efficiencies must be <= 1");
+    // I7d D4: optional intercooler pressure drop at the pair's max flow (bar in the file; intensive,
+    // not scaled by count). Not part of the map cache key (it feeds no map).
+    if(cfg.contains("intercooler_pressure_drop_bar_at_max_flow")) {
+        const real dp_bar=require_number(cfg,"intercooler_pressure_drop_bar_at_max_flow",path);
+        if(dp_bar<0) throw std::runtime_error(path+": 'intercooler_pressure_drop_bar_at_max_flow' must be >= 0");
+        if(!(dp_bar*real(1e5)<t.reference_head_pa)) throw std::runtime_error(path+": 'intercooler_pressure_drop_bar_at_max_flow' must be < the hardware 'reference_head_bar'");
+        t.intercooler_dp_pa_at_max_flow=dp_bar*real(1e5);
+    }
     if(cfg.contains("boost_control")) {
         const json& bc=cfg.at("boost_control");
         if(!bc.is_object()) throw std::runtime_error(path+": 'boost_control' must be an object");
