@@ -124,9 +124,16 @@ data resides in `out/godot_engine_cache/turbo` and `audio`. Missing or corrupt
 banks are regenerated while driving; generation does not run on the physics or
 audio thread. Existing audio remains active until a complete bank is ready.
 
-Each bank contains five RPM knots and two manifold-load planes, all radiating
-source channels, with overlapping loop boundaries. Playback interpolates load
-and RPM, with pitch following current engine speed. A 120 ms crossfade replaces
+Each bank (PSAB0002) contains five RPM knots and two manifold-load planes, all
+radiating source channels. Each plane is a loop of whole engine cycles (about
+1 s, at least 12 cycles; knots moved to rpm = 48000*120/n so a cycle is n whole
+frames) with the crank angle of its first frame stored and a cycle-aligned seam
+crossfade. Playback reads every plane at the live voice's own crank angle, so
+blended planes stay phase-aligned with each other and the engine; it
+interpolates load and RPM at that crank angle. (The PSAB0001 sample-time
+playback made level steps every ~0.5 s under throttle; it survives only as a
+reference in `audio_bank_reference.h`.) The demo keeps the bank off by default
+(`--m1-audio-bank` turns it on). A 120 ms crossfade replaces
 the old bank. Ignition/limiter/DFCO cuts blend back to the continuously running
 acoustic renderer. On first launch that live renderer supplies the fallback.
 Failed generation keeps the previous audio; closing the demo cancels generation.

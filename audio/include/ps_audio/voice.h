@@ -24,6 +24,7 @@
 // caller splits render() calls. Allocation-free after construction.
 #pragma once
 #include "ps_audio/audio_bank.h"
+#include "ps_audio/audio_bank_reference.h"
 
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/types.h"
@@ -94,6 +95,10 @@ struct VoiceSettings {
     real crank_tau_s = 0.1;        // phase-correction time constant [A]
     real crank_max_rel = 0.01;     // correction cap, fraction of omega (brief A7)
     FlowNoiseSettings flow_noise{};  // ps_audio A8
+    // MEASUREMENT / TEST REFERENCE ONLY: play an audio bank with the old
+    // sample-time algorithm (audio_bank_reference.h) instead of the
+    // crank-synchronous BankPlayback. Required for a PSAB0001 bank.
+    bool bank_sample_time_reference = false;
 };
 
 class Voice {
@@ -121,6 +126,10 @@ public:
 
     // Called on a preparation/control thread; retains old banks until teardown
     // so a crossfade cannot free a large sample array on the audio thread.
+    // Under fuel on (flags == 0) the bank replaces the live synthesis (10 ms
+    // weight ramp), read at the live engine's crank angle (audio_bank.h).
+    // Throws on a channel/rate mismatch, or a sample-time-only (PSAB0001)
+    // bank without bank_sample_time_reference.
     void set_audio_bank(AudioBankPtr bank);
 
     // Diagnostics (consumer thread).
@@ -171,6 +180,7 @@ private:
     AudioBankPtr active_bank_, previous_bank_;
     std::vector<AudioBankPtr> retained_banks_;
     BankPlayback bank_playback_, previous_playback_;
+    SampleTimeBankPlayback ref_playback_, previous_ref_playback_;  // bank_sample_time_reference only
     real bank_fade_ = 1.0, bank_weight_ = 0.0;
     VoiceSettings s_;
     StabilityProbeResult probe_;

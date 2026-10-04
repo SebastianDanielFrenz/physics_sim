@@ -16,11 +16,15 @@
 //                    [--dyno-brake-nm X] [--full-scale-pa P] [--live]
 //                    [--dx-intake-mm D] [--dx-exhaust-mm D] [--substeps 1|2|4|8|16]
 //                    [--voice-threads N]
+//                    [--audio-bank | --audio-bank-v1 file.psab] [--bank-reference-playback]
+//                    [--dx-scale S] [--input-csv rec.csv]
 #include "ps/drivetrain/engine_rig.h"
 #include "ps/engine_cycle/cycle_engine.h" // RadiatingEnd, for the printed source list
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
+#include "engine_bank_generator.h"
 #include "engine_sound_glue.h"
+#include "ps_audio/audio_bank_reference.h"
 #include "ps_audio/engine_input.h"
 #include "ps_audio/source.h"
 #include "ps_audio/voice.h"
@@ -74,6 +78,17 @@ struct Args {
     double dx_exhaust_mm = 0.0;
     int substeps = 0;
     int voice_threads = 1;  // ps_audio A9b: physics-step worker count (1 = serial)
+    // Engine audio bank (blended by the Voice exactly as the demo does):
+    // --audio-bank loads/generates the crank-synchronous PSAB0002 bank via
+    // tools/common/engine_bank_generator (cache under --engine-cache);
+    // --audio-bank-v1 FILE plays an old PSAB0001 file with the old
+    // sample-time playback (reference, reproduces the 40923cf level steps);
+    // --bank-reference-playback plays the new bank with that old algorithm.
+    bool audio_bank = false;
+    std::string audio_bank_v1_path;
+    bool bank_reference_playback = false;
+    // Voice cell-size scale on a desc copy (the demo's VehicleVoice uses 2).
+    double dx_scale = 1.0;
 };
 
 [[noreturn]] void usage_error(const std::string& msg) {
@@ -146,6 +161,15 @@ Args parse_args(int argc, char** argv) {
             a.diag_csv_path = next("--diag-csv");
         } else if (arg == "--live") {
             a.live = true;
+        } else if (arg == "--audio-bank") {
+            a.audio_bank = true;
+        } else if (arg == "--audio-bank-v1") {
+            a.audio_bank_v1_path = next("--audio-bank-v1");
+        } else if (arg == "--bank-reference-playback") {
+            a.bank_reference_playback = true;
+        } else if (arg == "--dx-scale") {
+            a.dx_scale = std::stod(next("--dx-scale"));
+            if (!(a.dx_scale > 0.0)) usage_error("--dx-scale must be > 0");
         } else if (!arg.empty() && arg[0] == '-') {
             usage_error("unknown option '" + arg + "'");
         } else {
@@ -156,6 +180,8 @@ Args parse_args(int argc, char** argv) {
     a.engine_path = positional[0];
     if (a.wav_path.empty()) usage_error("--wav is required");
     if (a.script_path.empty()) usage_error("--script is required");
+    if (a.audio_bank && a.engine_cache_dir.empty()) usage_error("--audio-bank needs --engine-cache DIR (the bank cache)");
+    if (a.audio_bank && !a.audio_bank_v1_path.empty()) usage_error("--audio-bank and --audio-bank-v1 are exclusive");
     return a;
 }
 
@@ -299,8 +325,38 @@ int main(int argc, char** argv) {
         voice_settings.engine.threads = args.voice_threads;
         if (args.plenum_pi_tau_s > 0.0) voice_settings.engine.plenum_pi_tau_s = args.plenum_pi_tau_s;
         if (args.plenum_filter_tau_s > 0.0) voice_settings.engine.plenum_filter_tau_s = args.plenum_filter_tau_s;
-        ps_audio::Voice voice(*sim->cycle, sim->fuels[0].lhv_j_kg, sim->fuels[0].afr_stoich, voice_settings);
+        voice_settings.bank_sample_time_reference = args.bank_reference_playback || !args.audio_bank_v1_path.empty();
+        ps::drivetrain::CycleModelDesc voice_cycle = *sim->cycle;
+        voice_cycle.resolution.audio_dx_intake_m *= args.dx_scale;
+        voice_cycle.resolution.audio_dx_exhaust_m *= args.dx_scale;
+        ps_audio::Voice voice(voice_cycle, sim->fuels[0].lhv_j_kg, sim->fuels[0].afr_stoich, voice_settings);
         print_source_list(voice);
+        if (args.audio_bank) {
+            ps_tools::EngineAudioBankStats bank_stats;
+            auto bank = ps_tools::prepare_engine_audio_bank(args.engine_path, "", args.engine_cache_dir, {}, &bank_stats);
+            std::fprintf(stderr,
+                         "ps_engine_audio: audio bank %s in %.2f s: %d rows x 2 loads x %d channels, %.2f MB\n",
+                         bank_stats.cache_hit ? "loaded from cache" : "generated", bank_stats.seconds, bank->rows(),
+                         bank->channels, static_cast<double>(bank_stats.bytes) / 1.0e6);
+            for (int r = 0; r < bank->rows(); ++r) {
+                std::fprintf(stderr, "  row %d: %.3f rpm, %d frames/cycle x %d cycles (%.3f s), p %.0f / %.0f Pa, crank0 %.3f / %.3f deg",
+                             r, bank->rpms[static_cast<std::size_t>(r)], bank->frames_per_cycle[static_cast<std::size_t>(r)],
+                             bank->cycles[static_cast<std::size_t>(r)],
+                             bank->plane_frames(r * 2) / voice.sample_rate_hz(), bank->pressures[static_cast<std::size_t>(r * 2)],
+                             bank->pressures[static_cast<std::size_t>(r * 2 + 1)], bank->crank0_deg[static_cast<std::size_t>(r * 2)],
+                             bank->crank0_deg[static_cast<std::size_t>(r * 2 + 1)]);
+                if (!bank_stats.removed_energy_fraction.empty())
+                    std::fprintf(stderr, ", band-limit removed %.3g / %.3g of the energy",
+                                 bank_stats.removed_energy_fraction[static_cast<std::size_t>(r * 2)],
+                                 bank_stats.removed_energy_fraction[static_cast<std::size_t>(r * 2 + 1)]);
+                std::fprintf(stderr, "\n");
+            }
+            voice.set_audio_bank(bank);
+        } else if (!args.audio_bank_v1_path.empty()) {
+            voice.set_audio_bank(ps_audio::read_audio_bank_v1_reference(args.audio_bank_v1_path));
+            std::fprintf(stderr, "ps_engine_audio: PSAB0001 bank %s, old sample-time playback (reference)\n",
+                         args.audio_bank_v1_path.c_str());
+        }
 
         const int sample_rate_hz = static_cast<int>(voice.sample_rate_hz());
         const int sources = voice.source_count();
