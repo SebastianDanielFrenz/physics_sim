@@ -1,0 +1,24 @@
+{
+  "format": "physics_sim.climate/1",
+  "location": {
+    "latitude_deg": 50.14988,
+    "longitude_deg": 8.45474,
+    "elevation_m": 150
+  },
+  "sun": { "mode": "astronomical" },
+  "calendar": {
+    "epoch": { "year": 0, "season": "summer", "day": 14, "time_of_day_s": 28800 },
+    "cycle_s": 86400
+  },
+  "seasons": [
+    { "name": "spring", "days": 31, "doy_span": [60, 151], "day_night": { "astronomical": true } },
+    { "name": "summer", "days": 31, "doy_span": [152, 243], "day_night": { "astronomical": true } },
+    { "name": "autumn", "days": 31, "doy_span": [244, 334], "day_night": { "astronomical": true } },
+    { "name": "winter", "days": 31, "doy_span": [335, 59], "day_night": { "astronomical": true } }
+  ],
+  "source": {
+    "location": "latitude/longitude: the home-region spawn point, racing_game data/world/world_config.json lines 18-22 (50.14988 N, 8.45474 E) as cited by out/weather_plan.md section 2.3; elevation 150 m is ASSUMED (informational in W1, not used).",
+    "seasons": "doy_span: the meteorological seasons of the northern hemisphere (spring 1 March - 31 May = day of year 60-151, summer 1 June - 31 August = 152-243, autumn 1 September - 30 November = 244-334, winter 1 December - 28 February = 335-59, non-leap year) - a DEFINITION, not a measurement. days: 31 per season is ASSUMED (an odd count puts the season midpoint on a day centre; the game year is 124 days). No temperature/humidity/pressure scalars are given: none is invented here, the statistics for temperate_de_home.json come from DWD climate normals in a later increment.",
+    "purpose": "test fixture: with the calendar fixed to season \"summer\" every day carries the summer mid-season values (tests/unit/test_environment_calendar.cpp, E2)."
+  }
+}

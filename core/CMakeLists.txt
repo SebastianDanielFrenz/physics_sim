@@ -97,6 +97,56 @@ target_link_libraries(ps_engine_cycle
     ps_options
 )
 
+# ps_environment (weather plan W1, out/weather_plan.md K1): the engine-neutral
+# environment library - clock, calendar, sun (later weather, surface
+# condition, tyre-profile response). Like ps_engine_cycle it MUST NOT link
+# ps_core (a game server links it without Jolt or the vehicle code); it links
+# only ps_detmath (deterministic ps::math, PLAN.md D7), ps_warnings and
+# ps_options. Public headers under include/ps/environment/ (the same include/
+# tree ps_core exposes). Guard: ps_environment_standalone
+# (tests/unit/CMakeLists.txt, plain main, linked WHOLE_ARCHIVE without ps_core).
+add_library(ps_environment STATIC
+  src/environment/climate_desc.cpp
+  src/environment/solar_geometry.cpp
+  src/environment/calendar.cpp
+  src/environment/sun.cpp
+)
+
+target_include_directories(ps_environment PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(ps_environment
+  PRIVATE
+    ps_detmath
+    ps_warnings
+    ps_options
+)
+
+# ps_environment_io (W1): the JSON loaders (climate now; weather presets,
+# surface conditions and tyre profiles in later increments) and the shared
+# `extends` merge-patch helper. A sibling of ps_environment, NOT part of
+# ps_core's io/, so a server needs neither Jolt nor the vehicle code.
+# nlohmann_json PRIVATE like ps_core: a consumer calling the json-typed
+# helpers links nlohmann_json itself.
+add_library(ps_environment_io STATIC
+  src/environment/io/json_extends.cpp
+  src/environment/io/climate_io.cpp
+)
+
+target_include_directories(ps_environment_io PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(ps_environment_io
+  PUBLIC
+    ps_environment
+  PRIVATE
+    nlohmann_json::nlohmann_json
+    ps_warnings
+    ps_options
+)
+
 # ps_engine_cycle_standalone (ps_audio A1 coordinator review's link-time
 # guard: proves ps_engine_cycle links and runs WITHOUT ps_core) is defined
 # in tests/unit/CMakeLists.txt, not here, even though it links only
@@ -206,4 +256,8 @@ target_link_libraries(ps_core
     ps_options
     ps_engine_cycle
     ps_detmath
+    # W1: nothing in ps_core calls these yet (W2 wires World in); linked now so
+    # the dependency direction ps_core -> ps_environment is fixed from the start.
+    ps_environment
+    ps_environment_io
 )
