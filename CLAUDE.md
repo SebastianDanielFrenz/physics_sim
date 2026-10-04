@@ -140,7 +140,19 @@ physics_sim/
   test_environment_object.cpp (ps_environment_tests), test_environment_world.cpp ([environment], zero alloc
   armed). Godot: PsSimulation::install_environment/has_environment/get_environment; demo flags --m1-climate,
   --m1-time-scale, --m1-time-of-day (24 h clock), --m1-season, --m1-day; the DirectionalLight/sky follow the
-  snapshot sun, the HUD shows clock/season.
+  snapshot sun, the HUD shows clock/season. W3 (2b90f35): weather as a pure function of (climate, seed,
+  overrides, env time) - weather_desc.h/.cpp + weather.h/.cpp (per-season regimes, semi-Markov chain with
+  log-normal durations from an Irwin-Hall n=4 normal, WeatherCursor 64-segment ring - a query before the ring
+  restarts at segment 0, convective triangle cells inside a segment, first-order lags, smoothstep override
+  windows chained in t_start order with exact restore, closed-form trailing accumulations, thinned-Poisson
+  lightning, fold_hash; SplitMix64 counter-hash RNG weather_rng.h), air_temperature.h/.cpp (Parton-Logan on the
+  game's day/night lengths, Magnus dew point/RH), weather_classes.h/.cpp (WMO/DWD/Beaufort/TORRO scales,
+  classify()), weather_io.h/.cpp (physics_sim.weather_preset/1, physics_sim.weather_classes/1). Climate blocks
+  weather, lags_s, precip_phase, humidity, diurnal_temperature, lightning (docs/data_formats/climate.md,
+  weather_preset.md, weather_classes.md). Data: data/weather_presets/*.json (12 presets, [AS]),
+  data/weather_classes/wmo_dwd_torro.json, data/climates/test_weather.json ([AS] fixture). Tests
+  test_environment_weather*.cpp ([environment][weather], ps_environment_tests). Not yet consumed by World (W4+);
+  evaluate() 0.28 us sequential, 5.5 us random access at 30 days.
 - `ps_audio` (STATIC, `audio/`, ps_audio A7): the live engine voice; links
   `ps_engine_cycle` only, never `ps_core`. Guard `ps_audio_standalone`
   (`tests/unit/audio_standalone_main.cpp`, plain `main`, WHOLE_ARCHIVE
