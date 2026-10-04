@@ -600,6 +600,14 @@ private:
     // TorqueMapEngine or no engine at all) - avoids a dynamic_cast on
     // apply_pending_engine_maps_swap's per-tick-per-vehicle call.
     SimulatedEngine* sim_engine_ptr_ = nullptr;
+    // PHYS-033 P4 I7d D5: the anti-lag channel declared at build time (from the
+    // simulated engine's turbo configuration; empty without one) and its slot in
+    // declare_control_channels' list. anti_lag_channel_live_ is false while the
+    // CURRENT configuration (after a hot swap) has no anti_lag block or names
+    // another channel: the engine then sees NaN and uses default_enabled.
+    std::string anti_lag_channel_name_;
+    int anti_lag_channel_slot_ = -1;
+    bool anti_lag_channel_live_ = false;
     // The full desc a SimulatedEngine was built from (unset for a
     // TorqueMapEngine or no engine) - SimulatedEngine itself does not keep
     // its constructing desc around (engine_simulated.h's own comment: only

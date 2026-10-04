@@ -145,7 +145,7 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
 
 SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& starter,
                                                  real omega, real p, bool fired, real s_starve, bool starter_active,
-                                                 bool ignore_limiter = false) {
+                                                 bool ignore_limiter = false, real spark_retard_deg = real(0.0)) {
     SimulatedEngine::TorqueEval e;
     const real rpm = std::abs(omega) * kRadPerSecToRpm;
     const real s_w = sign(omega);
@@ -182,14 +182,18 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
             dspark_drpm = m.maps.theta_kl_deg.dvalue_dx(rpm, p);
         }
     }
-    e.spark_deg = spark;
+    // I7d D5: the anti-lag retard moves the applied spark from the scheduled
+    // (knock-limited) advance; a constant offset, so dspark_drpm is unchanged.
+    real spark_applied = spark;
+    if (spark_retard_deg > real(0.0)) spark_applied = spark - spark_retard_deg;
+    e.spark_deg = spark_applied;
     e.theta_mbt_deg = m.maps.theta_mbt_deg.value(rpm, p);
     const real dmbt_drpm = m.maps.theta_mbt_deg.dvalue_dx(rpm, p);
     e.eta_i = m.maps.eta_i.value(rpm, e.m_air_rev);
     const real deta_drpm = m.maps.eta_i.dvalue_dx(rpm, e.m_air_rev) + m.maps.eta_i.dvalue_dy(rpm, e.m_air_rev) * dma_drpm;
     e.f_lambda = m.maps.f_lambda.evaluate(e.lambda);
     const real dfl_dlambda = curve_slope_at(m.maps.f_lambda, e.lambda);
-    const real dspark_rel = spark - e.theta_mbt_deg;
+    const real dspark_rel = spark_applied - e.theta_mbt_deg;
     e.eta_spark = m.maps.eta_spark.evaluate(dspark_rel);
     const real des_d = curve_slope_at(m.maps.eta_spark, dspark_rel);
 
@@ -203,6 +207,11 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     const real dmfuel_drpm = s_starve * (fire * dfuel_per_fire_drpm + fuel_per_fire * dfire_drpm);
     const real lhv_2pi = m.lhv_j_kg / kTwoPi;
     e.tau_comb = g * lhv_2pi * e.m_fuel_rev;
+    e.tau_comb_unretarded = e.tau_comb;
+    if (spark_retard_deg > real(0.0)) {
+        const real g0 = e.eta_i * e.f_lambda * m.maps.eta_spark.evaluate(spark - e.theta_mbt_deg);
+        e.tau_comb_unretarded = g0 * lhv_2pi * e.m_fuel_rev;
+    }
     const real dcomb_drpm = lhv_2pi * (dg_drpm * e.m_fuel_rev + g * dmfuel_drpm);
 
     // pumping (ideal gas exchange + optional excess), friction (Coulomb part excluded)
@@ -586,6 +595,7 @@ void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
         const real omega=turbo_->omega();
         turbo_->desc=desc;
         if(!desc.blow_off_valve) { turbo_->bov_opening=real(0.0); turbo_->bov_flow_kg_s=real(0.0); turbo_->bov_latched=false; }
+        if(!desc.anti_lag) clear_anti_lag_state(); // I7d D5: a configuration without anti-lag starts from rest
         turbo_->energy_j=real(0.5)*desc.rotor_inertia_kgm2*omega*omega;
     } else {
         turbo_.emplace(desc);
@@ -654,6 +664,7 @@ void SimulatedEngine::reset(EngineState state) {
     state_ = state;
     if (turbo_) turbo_->reset(p_amb_,t_amb_);
     turbo_air_kg_s_=turbo_exhaust_kg_s_=turbo_fuel_w_=real(0.0);
+    clear_anti_lag_state();
     idle_integrator_ = real(0.0);
     limiter_cut_ = false;
     dfco_active_ = false;
@@ -670,13 +681,24 @@ SimulatedEngine::ManifoldRhs SimulatedEngine::manifold_rhs(real p_im, real omega
     return manifold_rhs_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, p_im, omega, x_thr, x_iac);
 }
 
-SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active) const {
+SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active,
+                                                             real spark_retard_deg) const {
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
-        auto result = evaluate_torque_impl(*maps_,Ambient{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)},starter_,omega,p_im,fired,s_starve,starter_active);
+        auto result = evaluate_torque_impl(*maps_,Ambient{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)},starter_,omega,p_im,fired,s_starve,starter_active,
+                                           false,spark_retard_deg);
         return result;
     }
-    return evaluate_torque_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega, p_im, fired, s_starve, starter_active);
+    return evaluate_torque_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega, p_im, fired, s_starve, starter_active,
+                                false, spark_retard_deg);
+}
+
+void SimulatedEngine::clear_anti_lag_state() {
+    als_active_ = false;
+    als_armed_ = true;
+    als_timer_s_ = real(0.0);
+    turbo_als_w_ = real(0.0);
+    als_extra_w_ = real(0.0);
 }
 
 PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) {
@@ -732,9 +754,38 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     const real theta_cmd = std::max(std::min(throttle.command, throttle.ceiling), throttle.floor);
     const real theta_req = tcu.ignition_cut ? real(0.0) : theta_cmd;
 
-    if (state_ == EngineState::Running && theta_req < real(0.01) && rpm > dfco_enable_rpm_) {
+    // I7d D5 anti-lag: decided on the ECU's command theta_cmd (an upshift ignition cut does not disarm it -
+    // the cut itself still suppresses combustion below). Arms while the command is at or above
+    // arm_below_command; below it, acts while every condition holds, for at most max_active_s per lift
+    // (round(max_active_s/h) substeps: the half-step margin absorbs the rounding of the summed timer).
+    // Starvation disarms it for the rest of the lift (below), so a dry tank cannot toggle it every substep.
+    const AntiLagDesc* als = (turbo_ && turbo_->desc.anti_lag) ? &*turbo_->desc.anti_lag : nullptr;
+    if (als) {
+        if (theta_cmd >= als->arm_below_command) {
+            als_armed_ = true;
+            als_timer_s_ = real(0.0);
+            als_active_ = false;
+        } else {
+            const real ch = sensors.anti_lag_channel;
+            const bool requested = std::isnan(ch) ? als->default_enabled >= real(0.5) : ch >= real(0.5);
+            const bool ok = requested && state_ == EngineState::Running && rpm >= als->min_rpm && rpm <= als->max_rpm;
+            bool active = false;
+            if (ok && als_armed_) {
+                if (als_timer_s_ + real(0.5) * h <= als->max_active_s) {
+                    active = true;
+                    als_timer_s_ += h;
+                } else {
+                    als_armed_ = false;
+                }
+            }
+            if (active && !als_active_) ++als_activations_;
+            als_active_ = active;
+        }
+    }
+
+    if (state_ == EngineState::Running && theta_req < real(0.01) && rpm > dfco_enable_rpm_ && !als_active_) {
         dfco_active_ = true;
-    } else if (theta_req >= real(0.01) || rpm < dfco_reenable_rpm_) {
+    } else if (theta_req >= real(0.01) || rpm < dfco_reenable_rpm_ || als_active_) {
         dfco_active_ = false;
     }
 
@@ -806,9 +857,11 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // (3) actuator
     if (mech) {
         x_thr_ = theta_cmd;
+        if (als_active_) x_thr_ = std::max(x_thr_, als->plate_floor); // I7d D5: anti-lag throttle kicker
         x_iac_ = x_idle;
     } else {
-        const real x_target = std::max(live_steady()?live_inverse_plate(rpm,theta_req):steady_.inverse_plate.value(rpm, theta_req), x_idle);
+        real x_target = std::max(live_steady()?live_inverse_plate(rpm,theta_req):steady_.inverse_plate.value(rpm, theta_req), x_idle);
+        if (als_active_) x_target = std::max(x_target, als->plate_floor); // I7d D5: anti-lag bypass air
         if (!(actuator_tau_s_ > real(0.0))) {
             x_thr_ = x_target;
         } else {
@@ -821,7 +874,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         x_iac_ = real(0.0);
     }
 
-    if (turbo_) turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_fuel_w_,x_thr_,p_im_,&maps_->psi);
+    if (turbo_) turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_fuel_w_,x_thr_,p_im_,&maps_->psi,turbo_als_w_);
 
     // (4) air step, omega frozen at omega_old
     {
@@ -862,7 +915,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // (5) torque at (omega_old, p_im_new), then starvation
     const bool comb = (state_ == EngineState::Running || state_ == EngineState::Cranking) && rpm >= fire_rpm_ && omega_old > real(0.0);
     const bool fired = comb && !dfco_active_ && !tcu.ignition_cut && !(m.limiter.type == LimiterType::FuelCut && limiter_cut_);
-    TorqueEval ev = evaluate_torque(omega_old, p_im_, fired, real(1.0), starter_active);
+    const real retard = als_active_ ? als->retard_deg : real(0.0); // I7d D5
+    TorqueEval ev = evaluate_torque(omega_old, p_im_, fired, real(1.0), starter_active, retard);
     const real rev_rate = std::max(omega_old, real(0.0)) / kTwoPi;
     real s_starve = real(1.0);
     booked_fuel_mass_kg_ = h * ev.m_fuel_rev * rev_rate;
@@ -870,7 +924,14 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         const real available = std::max(real(0.0), sensors.fuel_available_kg);
         s_starve = available / booked_fuel_mass_kg_;
         booked_fuel_mass_kg_ = available;
-        ev = evaluate_torque(omega_old, p_im_, fired, s_starve, starter_active);
+        ev = evaluate_torque(omega_old, p_im_, fired, s_starve, starter_active, retard);
+    }
+    if (als) {
+        // I7d D5 energy routing: the indicated work the retard removes this substep, as a rate at the speed
+        // the fuel is metered and the indicated work is booked at (post_solve books h*omega_old*tau_comb).
+        // It stays inside fuel_energy_in - indicated_work (engine_heat) and goes to the turbine in full.
+        als_extra_w_ = std::max(omega_old, real(0.0)) * (ev.tau_comb_unretarded - ev.tau_comb);
+        if (als_active_ && s_starve < real(1.0)) als_armed_ = false; // starving: no more anti-lag this lift
     }
     tau_comb_ = ev.tau_comb;
     tau_pump_ = ev.tau_pump;
@@ -913,7 +974,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         const real rt = kGasConstant * turbo_->charge_k;
         const auto uncut = evaluate_torque_impl(m,
             Ambient{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)},
-            starter_, omega_old, p_im_, true, real(1.0), false, true);
+            starter_, omega_old, p_im_, true, real(1.0), false, true, retard);
         r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
     }
     r.theta_c = std::clamp(ev.fire * s_starve * p_im_ / p_amb_, real(0.0), real(1.0));
@@ -932,6 +993,15 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         // (97 -> 9.6 kW) and the rotor stopped in ~50 ms whatever the compressor flow. Steady state is
         // unchanged (the hold equals the instantaneous value while the fuel flow is constant or rising).
         turbo_fuel_w_ = std::max(booked_fuel_mass_kg_/h*maps_->lhv_j_kg, turbo_fuel_w_*std::max(real(0.0), real(1.0)-h/kExhaustHeatHoldS));
+        if (als) {
+            // I7d D5 (PROVISIONAL): the anti-lag heat is peak-held like the fuel heat, with the same
+            // kExhaustHeatHoldS, but on its OWN state - held separately and summed at the turbine inlet
+            // (turbo_pair.h), so an engine without anti-lag keeps the exact fuel-heat arithmetic.
+            turbo_als_w_ = std::max(als_extra_w_, turbo_als_w_*std::max(real(0.0), real(1.0)-h/kExhaustHeatHoldS));
+            r.anti_lag_active = als_active_ ? std::uint8_t(1) : std::uint8_t(0);
+            r.anti_lag_activations = als_activations_;
+            r.anti_lag_extra_exhaust_w = als_extra_w_;
+        }
         r.turbo_rpm=turbo_->rpm(); r.boost_bar=(p_im_-p_amb_)/real(100000.0);
         r.p_exhaust_pa=turbo_->exhaust_pa;
         r.p_charge_pa=turbo_->charge_pa; r.t_charge_k=turbo_->charge_k;
@@ -1007,6 +1077,13 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
         if (t.blow_off_valve) {
             f.pod(turbo_->bov_opening); f.pod(t.blow_off_valve->crack_dp_pa); f.pod(t.blow_off_valve->full_open_dp_pa);
             f.pod(t.blow_off_valve->effective_area_m2); f.pod(t.blow_off_valve->tau_s);
+        }
+        // I7d D5: appended, so an engine without anti-lag keeps its byte layout.
+        if (t.anti_lag) {
+            f.pod(als_active_); f.pod(als_armed_); f.pod(als_timer_s_); f.pod(turbo_als_w_);
+            const auto& a = *t.anti_lag;
+            f.pod(a.arm_below_command); f.pod(a.min_rpm); f.pod(a.max_rpm); f.pod(a.retard_deg);
+            f.pod(a.plate_floor); f.pod(a.max_active_s);
         }
     }
     return f.h;

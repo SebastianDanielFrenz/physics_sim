@@ -2440,6 +2440,43 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         v.source=bv.at("source").get<std::string>();
         t.blow_off_valve=std::move(v);
     }
+    // I7d D5: optional anti-lag (the ECU strategy serving the turbo). Not part of the map cache key (it feeds
+    // no map). Unknown keys inside the block are rejected (a misspelt key would silently disable a limit).
+    if(cfg.contains("anti_lag")) {
+        const json& al=cfg.at("anti_lag");
+        if(!al.is_object()) throw std::runtime_error(path+": 'anti_lag' must be an object");
+        const std::string actx=path+": anti_lag";
+        static const char* const kKeys[]={"channel","default_enabled","arm_below_command","min_rpm","max_rpm",
+                                          "retard_deg","plate_floor","max_active_s","source"};
+        for(auto it=al.begin();it!=al.end();++it)
+            if(std::none_of(std::begin(kKeys),std::end(kKeys),[&](const char* k){ return it.key()==k; }))
+                throw std::runtime_error(actx+": unknown key '"+it.key()+"'");
+        drivetrain::AntiLagDesc a;
+        if(al.contains("channel")) {
+            if(!al.at("channel").is_string() || al.at("channel").get<std::string>().empty())
+                throw std::runtime_error(actx+": 'channel' must be a non-empty string");
+            a.channel=al.at("channel").get<std::string>();
+        }
+        if(al.contains("default_enabled")) {
+            a.default_enabled=require_number(al,"default_enabled",actx);
+            if(a.default_enabled!=real(0.0) && a.default_enabled!=real(1.0)) throw std::runtime_error(actx+": 'default_enabled' must be 0 or 1");
+        }
+        a.arm_below_command=require_number(al,"arm_below_command",actx);
+        if(!(a.arm_below_command>0 && a.arm_below_command<=1)) throw std::runtime_error(actx+": 'arm_below_command' must be in (0, 1]");
+        a.min_rpm=require_number(al,"min_rpm",actx);
+        if(!(a.min_rpm>=0)) throw std::runtime_error(actx+": 'min_rpm' must be >= 0");
+        a.max_rpm=require_number(al,"max_rpm",actx);
+        if(!(a.max_rpm>a.min_rpm)) throw std::runtime_error(actx+": 'max_rpm' must be > 'min_rpm'");
+        a.retard_deg=require_number(al,"retard_deg",actx);
+        if(!(a.retard_deg>=0)) throw std::runtime_error(actx+": 'retard_deg' must be >= 0");
+        a.plate_floor=require_number(al,"plate_floor",actx);
+        if(!(a.plate_floor>=0 && a.plate_floor<=1)) throw std::runtime_error(actx+": 'plate_floor' must be in [0, 1]");
+        a.max_active_s=require_positive(al,"max_active_s",actx);
+        if(!al.contains("source") || !al.at("source").is_string() || al.at("source").get<std::string>().empty())
+            throw std::runtime_error(actx+": 'source' is required (PLAN.md section 8)");
+        a.source=al.at("source").get<std::string>();
+        t.anti_lag=std::move(a);
+    }
     // Versioned parameter key; cache is derived data, never an engine input.
     std::uint64_t key=14695981039346656037ULL;
     const real parameters[]={real(1.0),t.reference_head_pa,t.rotor_inertia_kgm2,t.reference_rpm,t.max_mass_flow_kg_s,

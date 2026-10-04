@@ -99,6 +99,34 @@ inline ps::drivetrain::SurgeLineDesc hyper_like_surge_line() {
     return s;
 }
 
+// I7d D5: an anti-lag block for the pair above, code-built. Every value [AS]
+// (no cited ALS calibration exists for this fictional turbo): arm below 10 %
+// command, 3000-7500 rpm, 30 deg retard, 50 % plate floor, 1.5 s per lift.
+// default_enabled 0, so the channel decides. The floor is high on purpose: in
+// the lumped pair the rotor's equilibrium is set by the airflow (turbine and
+// compressor power nearly balance at every flow), so a floor below ~0.3 on the
+// mvem fixture engine leaves the rotor SLOWER than a DFCO coast (measured in
+// test_turbo_anti_lag.cpp's [.][diag] sweep).
+inline ps::drivetrain::AntiLagDesc hyper_like_anti_lag() {
+    ps::drivetrain::AntiLagDesc a;
+    a.channel = "anti_lag";
+    a.default_enabled = 0.0;
+    a.arm_below_command = 0.1;
+    a.min_rpm = 3000.0;
+    a.max_rpm = 7500.0;
+    a.retard_deg = 30.0;
+    a.plate_floor = 0.5;
+    a.max_active_s = 1.5;
+    a.source = "[AS] test fixture";
+    return a;
+}
+
+inline ps::drivetrain::TurboPairDesc hyper_like_pair_with_anti_lag() {
+    ps::drivetrain::TurboPairDesc t = hyper_like_pair();
+    t.anti_lag = hyper_like_anti_lag();
+    return t;
+}
+
 // The air/exhaust/fuel the engine would hand the pair at a given phase of the
 // guard script (960 Hz steps): spool at WOT (0-1.5 s), lift-off (1.5-2.5 s),
 // re-apply (2.5-4 s).

@@ -34,6 +34,10 @@ public:
     // Intercooler drop (I7d D4), derived from the state and the step's flow: never hashed.
     real intercooler_dp_pa = 0.0;     // k * (flow/max)^2 of the latest step
     real compressor_outlet_pa = 101325.0; // charge_pa + intercooler_dp_pa (the pressure the compressor makes)
+    // Diagnostics of the latest step (I7d D5 tests): turbine-inlet sensible heat and
+    // temperature (after the 1200 K cap). Never hashed, never read back.
+    real exhaust_heat_w = 0.0;
+    real exhaust_k = 288.15;
     // Gas constant of the vent orifice, the same value as SimulatedEngine::kGasConstant.
     static constexpr real kGasConstant = 287.05;
     explicit TurboPair(const TurboPairDesc& d) : desc(d) {}
@@ -46,8 +50,13 @@ public:
     // p_im / psi (I7d D2): the manifold pressure the valve diaphragm senses and the
     // engine's tabulated Psi(pr) (SimulatedEngineMaps::psi), used by the vent
     // orifice only; both are ignored without a blow-off valve.
+    // extra_exhaust_w (I7d D5): exhaust enthalpy on top of the authored 25 %
+    // fuel-energy fraction (anti-lag: the indicated work a spark retard
+    // removes), added in full to the turbine inlet's sensible heat. 0 without
+    // anti-lag, and the arithmetic is then the same as before.
     void step(real h, real ambient_pa, real ambient_k, real air_kg_s, real exhaust_kg_s,
-              real fuel_w, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr) {
+              real fuel_w, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr,
+              real extra_exhaust_w = real(0.0)) {
         const real wr = desc.reference_rpm*real(6.2831853071795864769/60.0);
         const real speed2 = real(2.0)*energy_j/(desc.rotor_inertia_kgm2*wr*wr);
         // Vent flow at the START of the step state (valve opening, charge state
@@ -118,7 +127,10 @@ public:
         const real turbine_flow = std::max(real(0.0),exhaust_kg_s)*(real(1.0)-wastegate);
         // Exhaust sensible heat from an authored 25% fuel-energy fraction,
         // capped to avoid using an unbounded temperature at near-zero flow.
-        const real exhaust_k = std::clamp(ambient_k + real(0.25)*std::max(real(0.0),fuel_w)/
+        real heat_w = real(0.25)*std::max(real(0.0),fuel_w);
+        if (extra_exhaust_w > real(0.0)) heat_w += extra_exhaust_w;
+        exhaust_heat_w = heat_w;
+        exhaust_k = std::clamp(ambient_k + heat_w/
             (real(1100.0)*std::max(real(0.001),exhaust_kg_s)),ambient_k,real(1200.0));
         const real rho = ambient_pa/(real(287.05)*exhaust_k);
         exhaust_pa = ambient_pa + turbine_flow*turbine_flow/(real(2.0)*rho*desc.turbine_area_m2*desc.turbine_area_m2);
