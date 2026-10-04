@@ -1,0 +1,13 @@
+{
+  "format": "physics_sim.weather_preset/1",
+  "regime": "windstorm",
+  "cloud_cover": 0.9,
+  "precip_mm_h": 3.0,
+  "precip_type": "auto",
+  "wind_mean_m_s": 22.0,
+  "wind_dir_deg": 250.0,
+  "gust_factor": 1.6,
+  "rh": 0.85,
+  "pressure_offset_hpa": -25.0,
+  "source": "ASSUMED: authored game preset (weather plan 7.3), not a measurement. The intensity is chosen inside the class it represents (data/weather_classes/wmo_dwd_torro.json: WMO-No. 8 intensity classes, DWD Warnkriterien, TORRO); every other number (cloud cover, wind, RH, offsets) is ASSUMED plausible for the phenomenon. 22 m/s mean = Beaufort 9 (20.8-24.4); nominal gust 22 x 1.6 = 35.2 m/s = 126.7 km/h = DWD Orkanboeen (>= 120)."
+}

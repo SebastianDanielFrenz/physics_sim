@@ -4,6 +4,7 @@
 #include "ps/environment/climate_io.h"
 
 #include "ps/environment/json_extends.h"
+#include "object_reader.h"
 
 #include <nlohmann/json.hpp>
 
@@ -19,91 +20,8 @@ using nlohmann::json;
 using namespace ps::environment;
 
 namespace {
+using ps::io::detail::ObjectReader;
 
-// Typed access to one JSON object with unknown-key rejection. Never uses
-// json::get<T>() on an unchecked value (no exception is caught anywhere in
-// this file - clang-cl ASan catch caveat).
-class ObjectReader {
-public:
-    ObjectReader(const json& obj, std::string context, const std::string& origin)
-        : obj_(obj), ctx_(std::move(context)), origin_(origin) {
-        if (!obj.is_object()) fail("must be an object");
-    }
-
-    [[noreturn]] void fail(const std::string& msg) const {
-        throw std::runtime_error(origin_ + ": " + (ctx_.empty() ? "" : ctx_ + ": ") + msg);
-    }
-
-    bool has(const char* key) const { return obj_.contains(key); }
-
-    real number(const char* key, bool required, real fallback) {
-        used_.insert(key);
-        auto it = obj_.find(key);
-        if (it == obj_.end()) {
-            if (required) fail(std::string("missing required field \"") + key + "\"");
-            return fallback;
-        }
-        if (!it->is_number()) fail(std::string("\"") + key + "\" must be a number");
-        const real v = it->get<real>();
-        if (!std::isfinite(v)) fail(std::string("\"") + key + "\" must be finite");
-        return v;
-    }
-
-    int integer(const char* key, bool required, int fallback) {
-        used_.insert(key);
-        auto it = obj_.find(key);
-        if (it == obj_.end()) {
-            if (required) fail(std::string("missing required field \"") + key + "\"");
-            return fallback;
-        }
-        if (!it->is_number()) fail(std::string("\"") + key + "\" must be an integer");
-        const real v = it->get<real>();
-        if (!std::isfinite(v) || v != std::floor(v) || std::fabs(v) > 1e9)
-            fail(std::string("\"") + key + "\" must be an integer");
-        return static_cast<int>(v);
-    }
-
-    std::string string(const char* key, bool required, const std::string& fallback) {
-        used_.insert(key);
-        auto it = obj_.find(key);
-        if (it == obj_.end()) {
-            if (required) fail(std::string("missing required field \"") + key + "\"");
-            return fallback;
-        }
-        if (!it->is_string()) fail(std::string("\"") + key + "\" must be a string");
-        return it->get<std::string>();
-    }
-
-    const json* child(const char* key) {
-        used_.insert(key);
-        auto it = obj_.find(key);
-        return it == obj_.end() ? nullptr : &*it;
-    }
-
-    void skip(const char* key) { used_.insert(key); }
-
-    // Keys named by the format but not implemented yet: a clear error rather
-    // than a silent drop.
-    void reserve_for_later(const char* key, const char* increment) {
-        used_.insert(key);
-        if (obj_.contains(key))
-            fail(std::string("\"") + key + "\" is part of physics_sim.climate/1 but is not implemented before " +
-                 increment + "; remove it");
-    }
-
-    void finish() const {
-        for (auto it = obj_.begin(); it != obj_.end(); ++it)
-            if (!used_.count(it.key())) fail("unknown key \"" + it.key() + "\"");
-    }
-
-    const std::string& context() const { return ctx_; }
-
-private:
-    const json& obj_;
-    std::string ctx_;
-    const std::string& origin_;
-    std::set<std::string> used_;
-};
 
 SunAuthoredPartial read_authored_partial(const json& j, const std::string& ctx, const std::string& origin) {
     ObjectReader r(j, ctx, origin);
@@ -148,6 +66,99 @@ DayNightDesc read_day_night(const json& j, const std::string& ctx, const std::st
     return d;
 }
 
+LogNormalDesc read_lognormal(const json& j, const std::string& ctx, const std::string& origin) {
+    ObjectReader r(j, ctx, origin);
+    LogNormalDesc l;
+    l.median = r.number("median", true, 0.0);
+    l.sigma_log = r.number("sigma_log", true, 0.0);
+    r.finish();
+    return l;
+}
+
+ConvectiveDesc read_convective(const json& j, const std::string& ctx, const std::string& origin) {
+    ObjectReader r(j, ctx, origin);
+    ConvectiveDesc c;
+    c.cell_duration_min = read_lognormal(r.object("cell_duration_min"), ctx + ".cell_duration_min", origin);
+    c.gap_min = read_lognormal(r.object("gap_min"), ctx + ".gap_min", origin);
+    c.peak_mm_h = read_lognormal(r.object("peak_mm_h"), ctx + ".peak_mm_h", origin);
+    c.rise_fraction = r.number("rise_fraction", true, 0.0);
+    c.gust_factor = r.number("gust_factor", true, 0.0);
+    if (const json* h = r.child("hail"); h && !h->is_null()) {
+        ObjectReader hr(*h, ctx + ".hail", origin);
+        HailDesc hd;
+        hd.probability = hr.number("probability", true, 0.0);
+        hd.diameter_mm = read_lognormal(hr.object("diameter_mm"), ctx + ".hail.diameter_mm", origin);
+        hd.min_shape = hr.number("min_shape", true, 0.0);
+        hr.finish();
+        c.hail = hd;
+    }
+    r.finish();
+    return c;
+}
+
+RegimeDesc read_regime(const json& j, const std::string& ctx, const std::string& origin) {
+    ObjectReader r(j, ctx, origin);
+    RegimeDesc g;
+    {
+        ObjectReader d(r.object("duration_h"), ctx + ".duration_h", origin);
+        g.duration.min_h = d.number("min", true, 0.0);
+        g.duration.median_h = d.number("median", true, 0.0);
+        g.duration.sigma_log = d.number("sigma_log", true, 0.0);
+        d.finish();
+    }
+    g.cloud_cover = r.range("cloud_cover");
+    {
+        const json* p = r.child("precip_mm_h");
+        if (!p) r.fail("missing required field \"precip_mm_h\" (an object, or null for no stratiform precipitation)");
+        if (!p->is_null()) g.precip_mm_h = read_lognormal(*p, ctx + ".precip_mm_h", origin);
+    }
+    const std::string form = r.string("precip_form", false, "auto");
+    if (form == "auto") g.precip_form = PrecipForm::Auto;
+    else if (form == "drizzle") g.precip_form = PrecipForm::Drizzle;
+    else if (form == "freezing_rain") g.precip_form = PrecipForm::FreezingRain;
+    else r.fail("\"precip_form\" must be \"auto\", \"drizzle\" or \"freezing_rain\" (got \"" + form + "\")");
+    if (const json* c = r.child("convective"); c && !c->is_null()) g.convective = read_convective(*c, ctx + ".convective", origin);
+    {
+        ObjectReader w(r.object("wind_mean_m_s"), ctx + ".wind_mean_m_s", origin);
+        g.wind_mean_m_s.k = w.number("weibull_k", true, 0.0);
+        g.wind_mean_m_s.c = w.number("weibull_c", true, 0.0);
+        w.finish();
+    }
+    {
+        ObjectReader w(r.object("wind_dir_deg"), ctx + ".wind_dir_deg", origin);
+        g.wind_dir_deg.mean_deg = w.number("mean", true, 0.0);
+        g.wind_dir_deg.spread_deg = w.number("spread", true, 0.0);
+        w.finish();
+    }
+    g.gust_factor = r.number("gust_factor", true, 0.0);
+    g.temp_offset_k = r.range("temp_offset_k");
+    g.rh = r.range("rh");
+    g.pressure_offset_hpa = r.range("pressure_offset_hpa");
+    g.lightning_per_min = r.number("lightning_per_min", false, 0.0);
+    r.finish();
+    return g;
+}
+
+SeasonWeatherDesc read_season_weather(ObjectReader& r, const std::string& ctx, const std::string& origin) {
+    SeasonWeatherDesc w;
+    const json& regs = r.object("regimes");
+    for (auto it = regs.begin(); it != regs.end(); ++it)   // nlohmann object: keys in alphabetical order
+        w.regimes.push_back({it.key(), read_regime(it.value(), ctx + ".regimes." + it.key(), origin)});
+    const json& tr = r.object("transitions");
+    for (auto it = tr.begin(); it != tr.end(); ++it) {
+        if (!it.value().is_object()) r.fail("\"transitions." + it.key() + "\" must be an object {regime: probability}");
+        TransitionRowDesc row;
+        row.from = it.key();
+        for (auto jt = it.value().begin(); jt != it.value().end(); ++jt) {
+            if (!jt.value().is_number()) r.fail("\"transitions." + it.key() + "." + jt.key() + "\" must be a number");
+            row.to.push_back({jt.key(), jt.value().get<real>()});
+        }
+        w.transitions.push_back(row);
+    }
+    w.initial_regime = r.string("initial_regime", true, "");
+    return w;
+}
+
 SeasonDesc read_season(const json& j, const std::string& ctx, const std::string& origin) {
     ObjectReader r(j, ctx, origin);
     SeasonDesc s;
@@ -189,9 +200,11 @@ SeasonDesc read_season(const json& j, const std::string& ctx, const std::string&
 
     if (const json* sa = r.child("sun_authored")) s.sun_authored = read_authored_partial(*sa, ctx + ".sun_authored", origin);
 
-    r.reserve_for_later("regimes", "W3 (weather timeline)");
-    r.reserve_for_later("transitions", "W3 (weather timeline)");
-    r.reserve_for_later("initial_regime", "W3 (weather timeline)");
+    if (r.has("regimes") || r.has("transitions") || r.has("initial_regime")) {
+        s.weather = read_season_weather(r, ctx, origin);
+    } else {
+        r.skip("regimes"); r.skip("transitions"); r.skip("initial_regime");
+    }
     r.finish();
     return s;
 }
@@ -261,7 +274,53 @@ ClimateDesc parse_climate_json(const json& root, const std::string& origin) {
         else d.source = src->dump();
     }
 
-    r.reserve_for_later("lags_s", "W3 (weather timeline)");
+    if (const json* l = r.child("lags_s")) {
+        ObjectReader lr(*l, "lags_s", origin);
+        WeatherLagsDesc g;
+        g.cloud_s = lr.number("cloud", true, 0.0);
+        g.precip_on_s = lr.number("precip_on", true, 0.0);
+        g.precip_off_s = lr.number("precip_off", true, 0.0);
+        g.wind_s = lr.number("wind", true, 0.0);
+        g.temp_offset_s = lr.number("temp_offset", true, 0.0);
+        g.rh_s = lr.number("rh", true, 0.0);
+        g.pressure_s = lr.number("pressure", true, 0.0);
+        lr.finish();
+        d.lags = g;
+    }
+    if (const json* ph = r.child("precip_phase")) {
+        ObjectReader pr(*ph, "precip_phase", origin);
+        PrecipPhaseDesc g;
+        g.snow_below_c = pr.number("snow_below_c", true, 0.0);
+        g.rain_above_c = pr.number("rain_above_c", true, 0.0);
+        g.min_rate_mm_h = pr.number("min_rate_mm_h", true, 0.0);
+        pr.finish();
+        d.precip_phase = g;
+    }
+    if (const json* hu = r.child("humidity")) {
+        ObjectReader hr(*hu, "humidity", origin);
+        HumidityDesc g;
+        g.precip_rh_floor = hr.number("precip_rh_floor", true, 0.0);
+        g.precip_full_mm_h = hr.number("precip_full_mm_h", true, 0.0);
+        hr.finish();
+        d.humidity = g;
+    }
+    if (const json* dt = r.child("diurnal_temperature")) {
+        ObjectReader tr(*dt, "diurnal_temperature", origin);
+        DiurnalTempDesc g;
+        g.a_h = tr.number("a_h", true, 0.0);
+        g.b = tr.number("b", true, 0.0);
+        g.c_h = tr.number("c_h", true, 0.0);
+        g.reference_cycle_s = tr.number("reference_cycle_s", true, 0.0);
+        g.cloud_range_reduction = tr.number("cloud_range_reduction", true, 0.0);
+        tr.finish();
+        d.diurnal_temperature = g;
+    }
+    if (const json* li = r.child("lightning")) {
+        ObjectReader lr(*li, "lightning", origin);
+        const RangeDesc dist = lr.range("distance_km");
+        lr.finish();
+        d.lightning = LightningDesc{dist.lo, dist.hi};
+    }
     r.reserve_for_later("gusts", "W4 (wind)");
     r.reserve_for_later("condition", "W5 (surface condition)");
     r.finish();

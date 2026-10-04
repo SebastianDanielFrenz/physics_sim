@@ -1,0 +1,12 @@
+{
+  "format": "physics_sim.weather_preset/1",
+  "regime": "overcast",
+  "cloud_cover": 1.0,
+  "precip_mm_h": 0.0,
+  "precip_type": "auto",
+  "wind_mean_m_s": 4.0,
+  "wind_dir_deg": 240.0,
+  "gust_factor": 1.4,
+  "rh": 0.8,
+  "source": "ASSUMED: authored game preset (weather plan 7.3), not a measurement. The intensity is chosen inside the class it represents (data/weather_classes/wmo_dwd_torro.json: WMO-No. 8 intensity classes, DWD Warnkriterien, TORRO); every other number (cloud cover, wind, RH, offsets) is ASSUMED plausible for the phenomenon. full cloud, dry."
+}

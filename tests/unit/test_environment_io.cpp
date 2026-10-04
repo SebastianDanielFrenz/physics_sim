@@ -267,8 +267,9 @@ TEST_CASE("Climate loader rejections", "[environment][io]") {
              j["sun"]["mode"] = "authored";
              j["sun"]["authored"] = json::parse(R"({"e_max_deg": 100, "e_night_deg": 20, "az_rise_deg": 90, "az_set_deg": 270})"); },
          "e_max_deg must be in [-90, 90]"},
-        {"regimes reserved for W3", [](json& j) { j["seasons"][0]["regimes"] = json::object(); }, "not implemented before W3"},
-        {"lags_s reserved for W3", [](json& j) { j["lags_s"] = json::object(); }, "not implemented before W3"},
+        // W3 lifted the regimes / lags_s reservation (weather rejections: test_environment_weather_io.cpp).
+        {"regimes without transitions", [](json& j) { j["seasons"][0]["regimes"] = json::object(); }, "missing required field \"transitions\""},
+        {"lags_s incomplete", [](json& j) { j["lags_s"] = json::object(); }, "missing required field \"cloud\""},
         {"gusts reserved for W4", [](json& j) { j["gusts"] = json::object(); }, "not implemented before W4"},
         {"condition reserved for W5", [](json& j) { j["condition"] = json::object(); }, "not implemented before W5"},
     };

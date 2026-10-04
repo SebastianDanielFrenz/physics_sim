@@ -8,6 +8,8 @@
 
 #include "ps/environment/climate_desc.h"
 
+#include "weather_validation.h"
+
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -154,7 +156,7 @@ std::string climate_validation_error(const ClimateDesc& d) {
     const int epoch_days = d.seasons[static_cast<std::size_t>(epoch_season)].days;
     if (d.calendar.epoch.day < 0 || d.calendar.epoch.day >= epoch_days)
         return err("calendar.epoch.day must be in [0, days of the epoch season)");
-    return {};
+    return detail::climate_weather_validation_error(d);
 }
 
 void validate_climate(const ClimateDesc& desc) {

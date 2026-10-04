@@ -215,6 +215,9 @@ add_executable(ps_environment_tests
   test_environment_calendar.cpp
   test_environment_sun.cpp
   test_environment_io.cpp
+  test_environment_weather.cpp
+  test_environment_weather_classes.cpp
+  test_environment_weather_io.cpp
 )
 
 target_link_libraries(ps_environment_tests

@@ -1,6 +1,6 @@
 // ps/environment/climate_io.h - loader for physics_sim.climate/1
-// (docs/data_formats/climate.md; weather plan 7.1), W1 subset: location, sun,
-// calendar and seasons. Like every ps loader it rejects unknown keys.
+// (docs/data_formats/climate.md; weather plan 7.1): location, sun, calendar,
+// seasons and the W3 weather statistics. Like every ps loader it rejects unknown keys.
 //
 // Lives in ps_environment_io (nlohmann PRIVATE), not in ps_core's io/, so a
 // game server needs neither Jolt nor the vehicle code.

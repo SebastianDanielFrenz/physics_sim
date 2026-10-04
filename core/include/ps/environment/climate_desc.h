@@ -1,16 +1,19 @@
-// ps/environment/climate_desc.h - climate descriptor (weather plan 7.1), W1 subset.
+// ps/environment/climate_desc.h - climate descriptor (weather plan 7.1).
 //
 // Descriptors only (PLAN.md D2 seam style): the time / sun / season parts of
-// physics_sim.climate/1. The weather regimes, transition matrices, lags,
-// gusts and condition-grid settings arrive with W3+ and are REJECTED by the
-// loader until then (see docs/data_formats/climate.md), so a file written for
-// a later increment never silently loads with half its meaning dropped.
+// physics_sim.climate/1 (W1) and the weather statistics (W3: regimes,
+// transition matrices, lags, precipitation phase, humidity, diurnal
+// temperature, lightning geometry - types in weather_desc.h). Gusts and
+// condition-grid settings arrive with W4/W5 and are REJECTED by the loader
+// until then (see docs/data_formats/climate.md), so a file written for a later
+// increment never silently loads with half its meaning dropped.
 //
 // Every numeric field is plain data. Nothing here is a physical constant of
 // code: values come from a data file with its own source note.
 
 #pragma once
 
+#include "ps/environment/weather_desc.h"
 #include "ps/types.h"
 
 #include <optional>
@@ -67,8 +70,10 @@ struct DayNightDesc {
     real day_fraction = 0.0;   // CycleFraction, in (0, 1)
 };
 
-// Mid-season climate scalars (used from W3; W1 only carries and interpolates
-// them per day). Present on every season or on none.
+// Mid-season climate scalars (interpolated per day by the calendar; the W3
+// weather timeline reads them: diurnal temperature from temp_mean_c /
+// temp_range_k, sea-level pressure from pressure_msl_hpa). Present on every
+// season or on none; required when the climate has weather statistics.
 struct SeasonClimateDesc {
     real temp_mean_c = 0.0;
     real temp_range_k = 0.0;      // >= 0
@@ -89,6 +94,8 @@ struct SeasonDesc {
     DayNightDesc day_night;
     std::optional<SeasonClimateDesc> climate;
     SunAuthoredPartial sun_authored;
+    // W3: regimes / transitions / initial_regime. On every season or on none.
+    std::optional<SeasonWeatherDesc> weather;
 };
 
 struct CalendarEpochDesc {
@@ -109,7 +116,18 @@ struct ClimateDesc {
     std::optional<SunAuthoredDesc> sun_authored;  // global authored block (required for SunMode::Authored unless every season completes it)
     CalendarDesc calendar;
     std::vector<SeasonDesc> seasons;
+    // W3 weather model blocks. lags_s is required when the seasons carry
+    // regimes; precip_phase, humidity and diurnal_temperature are required by
+    // any WeatherTimeline (dynamic or preset mode); lightning when a regime or
+    // preset has lightning_per_min > 0.
+    std::optional<WeatherLagsDesc> lags;
+    std::optional<PrecipPhaseDesc> precip_phase;
+    std::optional<HumidityDesc> humidity;
+    std::optional<DiurnalTempDesc> diurnal_temperature;
+    std::optional<LightningDesc> lightning;
     std::string source;
+
+    bool has_weather_statistics() const { return !seasons.empty() && seasons.front().weather.has_value(); }
 };
 
 // Structural validation (the loader checks JSON types, this checks meaning).

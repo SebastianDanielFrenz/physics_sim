@@ -48,6 +48,10 @@ struct DayValues {
     real y_start = 0.0;   // continuous day of year (days since 1 Jan 00:00) at this game day's start
     real y_end = 0.0;     // ... at its end
     int season = 0;       // natural season of this game day
+    // Season whose statistics apply on this day (W3 weather): the natural one
+    // in Dynamic mode, the fixed season in FixedSeason mode, the fixed day's
+    // natural season in FixedDay mode.
+    int weather_season = 0;
     int day_in_season = 0;
     bool has_climate = false;
     SeasonClimateDesc climate;   // valid iff has_climate
