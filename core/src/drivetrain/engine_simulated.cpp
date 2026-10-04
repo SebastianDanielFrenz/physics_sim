@@ -911,6 +911,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         r.bov_opening=turbo_->bov_opening; r.bov_flow_kg_s=turbo_->bov_flow_kg_s;
         r.bov_vent=turbo_->desc.blow_off_valve ? static_cast<std::uint8_t>(turbo_->desc.blow_off_valve->vent) : std::uint8_t(0);
         r.bov_events=turbo_->bov_events;
+        r.surge_active=turbo_->surge_active ? std::uint8_t(1) : std::uint8_t(0); r.surge_events=turbo_->surge_events;
     }
     return r;
 }

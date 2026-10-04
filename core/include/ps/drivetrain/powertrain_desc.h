@@ -306,6 +306,16 @@ struct BlowOffValveDesc {
     std::string source;           // required (PLAN.md section 8)
 };
 
+// PHYS-033 P4 I7d D3: compressor surge line of a turbo HARDWARE file
+// (physics_sim.turbo/1 "surge_line", docs/data_formats/turbo.md): the surge
+// flow as a fraction of max_mass_flow_kg_s over the compressor pressure ratio.
+// It drives only a flag (TurboPair::surge_active); nothing dynamic reads it,
+// so it is in neither the state hash nor the derived-map cache key.
+struct SurgeLineDesc {
+    ps::vehicle::Curve1D flow_fraction_vs_pr; // x strictly increasing pressure ratio (>= 1), y in [0, 1)
+    std::string source;          // required (PLAN.md section 8)
+};
+
 struct TurboPairDesc {
     std::shared_ptr<const TurboPerformanceMaps> maps;
     real reference_head_pa = 324000.0;
@@ -330,6 +340,8 @@ struct TurboPairDesc {
     real wastegate_actuator_tau_s = 0.10;
     // I7d D2: absent = no valve; the pair is then bit-identical to before.
     std::optional<BlowOffValveDesc> blow_off_valve;
+    // I7d D3: absent = the surge flag is never raised. Not hashed.
+    std::optional<SurgeLineDesc> surge_line;
 };
 
 struct SimulatedEngineDesc {

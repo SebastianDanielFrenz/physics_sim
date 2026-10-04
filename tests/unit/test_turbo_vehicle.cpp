@@ -130,6 +130,7 @@ namespace {
 struct VehicleRun {
     std::uint64_t hash = 0;
     std::uint32_t events = 0;
+    std::uint32_t surge_events = 0;
     real max_open = 0.0, max_vent = 0.0;
 };
 VehicleRun run_vehicle(const TurboPairDesc& pair, int workers, bool arm_alloc) {
@@ -159,6 +160,7 @@ VehicleRun run_vehicle(const TurboPairDesc& pair, int workers, bool arm_alloc) {
         CHECK(da::own_violation_count() == 0);
     }
     out.events = w.powertrain_state(rig.vehicle).engines.at(0).bov_events;
+    out.surge_events = w.powertrain_state(rig.vehicle).engines.at(0).surge_events;
     out.hash = w.state_hash();
     return out;
 }
@@ -180,4 +182,22 @@ TEST_CASE("D2: a vehicle with a blow-off valve is worker-count invariant and all
     CHECK(a1.max_vent > 0.0);
     CHECK(a1.hash != none.hash);    // the valve reached the dynamics
     CHECK(none.events == 0);
+}
+
+// D3 at vehicle level: a surge line only adds the flag - the vehicle's state hash is identical
+// with and without it, the lift (no valve) raises the flag, and the snapshot carries the counter.
+TEST_CASE("D3: a surge line does not move the vehicle hash and the flag reaches the snapshot", "[turbo][drivetrain][vehicle][surge][determinism]") {
+    TurboPairDesc plain = tb::hyper_like_pair();
+    TurboPairDesc lined = plain;
+    lined.surge_line = tb::hyper_like_surge_line();
+    const VehicleRun a = run_vehicle(plain, 1, false);
+    const VehicleRun b = run_vehicle(lined, 1, false);
+    const VehicleRun b10 = run_vehicle(lined, 10, false);
+    std::printf("[D3 vehicle] hash without line %016llx, with line %016llx (10 workers %016llx); surge events %u (without %u)\n",
+                static_cast<unsigned long long>(a.hash), static_cast<unsigned long long>(b.hash),
+                static_cast<unsigned long long>(b10.hash), b.surge_events, a.surge_events);
+    CHECK(a.hash == b.hash);
+    CHECK(b.hash == b10.hash);
+    CHECK(a.surge_events == 0);
+    CHECK(b.surge_events >= 1);
 }

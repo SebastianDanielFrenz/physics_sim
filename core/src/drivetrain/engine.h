@@ -152,6 +152,9 @@ struct PreSolveResult {
     real bov_flow_kg_s = 0.0;              // vent flow (part of compressor_flow_kg_s)
     std::uint8_t bov_vent = 0;             // 0 atmosphere, 1 recirculate (sound only)
     std::uint32_t bov_events = 0;          // opening events since the engine was built (rising edge > 0.1, re-armed below 0.05)
+    // PHYS-033 P4 I7d D3: surge flag (no dynamics, unhashed), 0 without a surge line.
+    std::uint8_t surge_active = 0;
+    std::uint32_t surge_events = 0;        // entries into surge since the engine was built
     real p_intake_pa = 0.0;            // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)

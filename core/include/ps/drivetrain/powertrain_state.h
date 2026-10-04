@@ -53,6 +53,9 @@ struct EngineSoundState {
     real bov_flow_kg_s = 0.0;              // vent flow (part of compressor_flow_kg_s)
     std::uint8_t bov_vent = 0;             // 0 atmosphere, 1 recirculate
     std::uint32_t bov_events = 0;          // opening events (rising edge > 0.1, re-armed below 0.05)
+    // PHYS-033 P4 I7d D3: compressor surge flag, 0 without a surge line on the turbo hardware file. NOT hashed.
+    std::uint8_t surge_active = 0;         // 1 while the operating point is left of the surge line
+    std::uint32_t surge_events = 0;        // entries into surge (hysteresis: leave above 1.05 x the line)
     real p_intake_pa = 0.0;            // intake manifold pressure
     real lambda = 0.0;                 // commanded lambda
     real spark_advance_deg = 0.0;      // applied spark advance

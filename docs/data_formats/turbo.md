@@ -66,6 +66,29 @@ A missing key throws `"<path>: '<key>' is required"`, a non-number
 `"<path>: '<key>' must be > 0, got <value>"` (path = the hardware file).
 Unknown keys are ignored.
 
+### `surge_line` (optional, I7d D3)
+
+| Field | Type | Rule | Meaning |
+|---|---|---|---|
+| `pressure_ratio` | array of numbers | required, >= 2 points, first >= 1, strictly increasing | compressor outlet pressure over ambient |
+| `flow_fraction` | array of numbers | required, same length, each in [0, 1) | surge flow as a fraction of `max_mass_flow_kg_s` (per turbo; the pair is symmetric, so the same fraction of the pair's flow) |
+| `source` | string | required, non-empty | provenance (PLAN.md section 8): cite a measured map or label `[AS]` |
+
+Linear interpolation, clamped at both ends (the line is flat beyond its last point).
+Rejections (context `"<hardware path>: surge_line"`): `'surge_line' must be an object`,
+`'pressure_ratio' must be an array of numbers` (also `'flow_fraction'`), `needs at
+least 2 points`, `'pressure_ratio' and 'flow_fraction' must have the same length`,
+`'pressure_ratio' must start at >= 1`, `'pressure_ratio' must be strictly increasing`,
+`'flow_fraction' must be in [0, 1)`, `'source' is required (PLAN.md section 8)`.
+
+The line drives a FLAG only (ruling N2: no surge dynamics, no pressure collapse, no
+flow reversal): `surge_active` is raised when `pr > 1.05` and `flow_fraction < line(pr)`
+and cleared when `flow_fraction > 1.05 * line(pr)` or `pr <= 1.05` (hysteresis);
+`surge_events` counts entries. Absent = the flag is never raised (no invented line).
+Nothing in the model reads the flag, so it is in neither the state hash nor the
+derived-map cache key, and an engine with a line is bit-identical to one without.
+The shipped hardware file has no line yet (no cited map exists).
+
 ## Configuration file — `physics_sim.turbo_configuration/1`
 
 | Field | Type | Required | Rule | Meaning |
@@ -179,6 +202,8 @@ for physics:
 | `bov_opening` | 0..1 | blow-off valve opening (0 without a valve) |
 | `bov_flow_kg_s` | kg/s | vent flow of the latest substep (included in `compressor_flow_kg_s`) |
 | `bov_vent` | 0/1 | 1 = the valve recirculates, 0 = atmosphere or no valve |
+| `surge_active` | 0/1 | 1 while the operating point is left of the hardware file's `surge_line` (0 without a line) |
+| `surge_events` | count | entries into surge, cumulative since the engine was built |
 | `bov_events` | count | rising edges of the opening (> 0.1, re-armed below 0.05), cumulative since the engine was built (a counter for sound, never hashed) |
 
 ## Shipped files

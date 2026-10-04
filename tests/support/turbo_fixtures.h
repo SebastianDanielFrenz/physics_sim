@@ -88,6 +88,17 @@ inline ps::drivetrain::BlowOffValveDesc sensitive_bov() {
     return v;
 }
 
+// A surge line for the pair above, code-built: surge flow as a fraction of the
+// pair's max flow over compressor pressure ratio. [AS] a plausible rising line
+// (surge flow grows with pressure ratio), not a measured map.
+inline ps::drivetrain::SurgeLineDesc hyper_like_surge_line() {
+    ps::drivetrain::SurgeLineDesc s;
+    s.flow_fraction_vs_pr.x = {1.0, 1.5, 2.0, 3.0};
+    s.flow_fraction_vs_pr.y = {0.04, 0.12, 0.22, 0.40};
+    s.source = "[AS] test fixture";
+    return s;
+}
+
 // The air/exhaust/fuel the engine would hand the pair at a given phase of the
 // guard script (960 Hz steps): spool at WOT (0-1.5 s), lift-off (1.5-2.5 s),
 // re-apply (2.5-4 s).

@@ -2357,6 +2357,37 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
     t.turbine_efficiency=require_positive(hw,"turbine_efficiency",hw_path);
     t.turbine_area_m2=require_positive(hw,"turbine_area_m2",hw_path)*count;
     t.shaft_loss_w_at_reference=require_positive(hw,"shaft_loss_w_at_reference",hw_path)*count;
+    // I7d D3: optional surge line of the hardware file (flag only; feeds no map and
+    // no dynamics, so it is outside the cache key and the state hash).
+    if(hw.contains("surge_line")) {
+        const json& sl=hw.at("surge_line");
+        if(!sl.is_object()) throw std::runtime_error(hw_path+": 'surge_line' must be an object");
+        const std::string sctx=hw_path+": surge_line";
+        const auto number_array=[&](const char* key) {
+            if(!sl.contains(key) || !sl.at(key).is_array()) throw std::runtime_error(sctx+": '"+std::string(key)+"' must be an array of numbers");
+            std::vector<real> v;
+            for(const auto& e:sl.at(key)) {
+                if(!e.is_number()) throw std::runtime_error(sctx+": '"+std::string(key)+"' must be an array of numbers");
+                v.push_back(e.get<real>());
+            }
+            return v;
+        };
+        drivetrain::SurgeLineDesc d;
+        d.flow_fraction_vs_pr.x=number_array("pressure_ratio");
+        d.flow_fraction_vs_pr.y=number_array("flow_fraction");
+        if(d.flow_fraction_vs_pr.x.size()<2) throw std::runtime_error(sctx+": needs at least 2 points");
+        if(d.flow_fraction_vs_pr.x.size()!=d.flow_fraction_vs_pr.y.size())
+            throw std::runtime_error(sctx+": 'pressure_ratio' and 'flow_fraction' must have the same length");
+        if(!(d.flow_fraction_vs_pr.x.front()>=1.0)) throw std::runtime_error(sctx+": 'pressure_ratio' must start at >= 1");
+        for(std::size_t i=1;i<d.flow_fraction_vs_pr.x.size();++i)
+            if(!(d.flow_fraction_vs_pr.x[i]>d.flow_fraction_vs_pr.x[i-1])) throw std::runtime_error(sctx+": 'pressure_ratio' must be strictly increasing");
+        for(real f:d.flow_fraction_vs_pr.y)
+            if(!(f>=0.0 && f<1.0)) throw std::runtime_error(sctx+": 'flow_fraction' must be in [0, 1)");
+        if(!sl.contains("source") || !sl.at("source").is_string() || sl.at("source").get<std::string>().empty())
+            throw std::runtime_error(sctx+": 'source' is required (PLAN.md section 8)");
+        d.source=sl.at("source").get<std::string>();
+        t.surge_line=std::move(d);
+    }
     if(cfg.contains("target_boost_pa")) throw std::runtime_error(path+": 'target_boost_pa' was replaced by 'target_boost_bar' (gauge, bar)");
     t.target_boost_pa=require_positive(cfg,"target_boost_bar",path)*real(1e5);
     t.intercooler_effectiveness=require_positive(cfg,"intercooler_effectiveness",path);

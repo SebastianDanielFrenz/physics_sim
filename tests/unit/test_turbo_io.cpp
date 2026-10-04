@@ -189,3 +189,68 @@ TEST_CASE("D2 loader: blow_off_valve block", "[turbo][io][bov]") {
         CHECK_THROWS_WITH(load(c, "bov_obj"), ContainsSubstring("'blow_off_valve' must be an object"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// D3 loader: the optional "surge_line" block of the hardware file.
+// ---------------------------------------------------------------------------
+namespace {
+json valid_surge() {
+    return json::parse(R"({
+      "pressure_ratio": [1.0, 1.5, 2.0, 3.0], "flow_fraction": [0.04, 0.12, 0.22, 0.40], "source": "[AS] io test"
+    })");
+}
+ps::drivetrain::TurboPairDesc load_surge(const json& surge, const std::string& tag) {
+    std::ifstream in(hardware_path());
+    json hw = json::parse(in);
+    hw["surge_line"] = surge;
+    const auto dir = std::filesystem::temp_directory_path() / "ps_turbo_io_test";
+    std::filesystem::create_directories(dir);
+    const auto hw_file = dir / ("hw_" + tag + ".json");
+    std::ofstream(hw_file) << hw.dump(2);
+    json cfg = base_config();
+    cfg["turbo"] = hw_file.string();
+    const auto cfg_file = dir / ("cfg_" + tag + ".json");
+    std::ofstream(cfg_file) << cfg.dump(2);
+    return ps::io::load_turbo_configuration_json(cfg_file.string());
+}
+} // namespace
+
+TEST_CASE("D3 loader: surge_line block", "[turbo][io][surge]") {
+    SECTION("loads; absent leaves the desc without a line") {
+        const auto d = load_surge(valid_surge(), "surge_ok");
+        REQUIRE(d.surge_line.has_value());
+        const auto& c = d.surge_line->flow_fraction_vs_pr;
+        REQUIRE(c.x.size() == 4);
+        CHECK(c.x[3] == 3.0);
+        CHECK(c.y[1] == 0.12);
+        CHECK(c.evaluate(1.75) == Catch::Approx(0.17).epsilon(1e-12)); // linear between 1.5 and 2.0
+        CHECK(d.surge_line->source == "[AS] io test");
+        CHECK_FALSE(load(base_config(), "surge_absent").surge_line.has_value());
+    }
+    SECTION("the block does not touch the derived-map cache key") {
+        const auto with = load_surge(valid_surge(), "surge_key");
+        const auto without = load(base_config(), "surge_nokey");
+        CHECK(with.maps->content_hash == without.maps->content_hash);
+    }
+    SECTION("rejections") {
+        const auto bad = [&](const std::string& key, const json& value, const std::string& message) {
+            json s = valid_surge();
+            if (value.is_null()) s.erase(key);
+            else s[key] = value;
+            CHECK_THROWS_WITH(load_surge(s, "surge_bad"), ContainsSubstring(message));
+        };
+        bad("pressure_ratio", nullptr, "'pressure_ratio' must be an array of numbers");
+        bad("flow_fraction", nullptr, "'flow_fraction' must be an array of numbers");
+        bad("pressure_ratio", json::array({1.0, "x", 2.0, 3.0}), "'pressure_ratio' must be an array of numbers");
+        bad("pressure_ratio", json::array({1.0}), "needs at least 2 points");
+        bad("flow_fraction", json::array({0.04, 0.12, 0.22}), "'pressure_ratio' and 'flow_fraction' must have the same length");
+        bad("pressure_ratio", json::array({0.9, 1.5, 2.0, 3.0}), "'pressure_ratio' must start at >= 1");
+        bad("pressure_ratio", json::array({1.0, 1.5, 1.5, 3.0}), "'pressure_ratio' must be strictly increasing");
+        bad("pressure_ratio", json::array({1.0, 2.0, 1.5, 3.0}), "'pressure_ratio' must be strictly increasing");
+        bad("flow_fraction", json::array({0.04, 0.12, 1.0, 0.40}), "'flow_fraction' must be in [0, 1)");
+        bad("flow_fraction", json::array({0.04, -0.1, 0.22, 0.40}), "'flow_fraction' must be in [0, 1)");
+        bad("source", nullptr, "'source' is required (PLAN.md section 8)");
+        bad("source", "", "'source' is required (PLAN.md section 8)");
+        CHECK_THROWS_WITH(load_surge(json(7), "surge_obj"), ContainsSubstring("'surge_line' must be an object"));
+    }
+}

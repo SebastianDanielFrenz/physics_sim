@@ -28,6 +28,9 @@ public:
     real bov_flow_kg_s = 0.0;         // vent flow of the latest step (inside compressor_flow_kg_s)
     std::uint32_t bov_events = 0;     // rising edges: opening > 0.1, re-armed below 0.05
     bool bov_latched = false;
+    // Surge flag (I7d D3): pure bookkeeping, never hashed, never read back by the model.
+    bool surge_active = false;
+    std::uint32_t surge_events = 0;   // entries into surge; hysteresis 1.05 x the line
     // Gas constant of the vent orifice, the same value as SimulatedEngine::kGasConstant.
     static constexpr real kGasConstant = 287.05;
     explicit TurboPair(const TurboPairDesc& d) : desc(d) {}
@@ -35,7 +38,7 @@ public:
     real rpm() const { return omega()*real(60.0/6.2831853071795864769); }
     void reset(real p, real t) { energy_j=0; charge_pa=p; charge_k=t; exhaust_pa=p; wastegate=0; boost_integral=0;
                                  compressor_flow_kg_s=0; compressor_pr=1;
-                                 bov_opening=0; bov_flow_kg_s=0; bov_latched=false; }
+                                 bov_opening=0; bov_flow_kg_s=0; bov_latched=false; surge_active=false; }
     // plate: the throttle plate position in [0, 1]; it scales the boost target.
     // p_im / psi (I7d D2): the manifold pressure the valve diaphragm senses and the
     // engine's tabulated Psi(pr) (SimulatedEngineMaps::psi), used by the vent
@@ -71,6 +74,13 @@ public:
         charge_k = ambient_k + (outlet_k-ambient_k)*(real(1.0)-desc.intercooler_effectiveness);
         compressor_w = comp_flow*real(1005.0)*ambient_k*rise/desc.compressor_efficiency;
         compressor_flow_kg_s = comp_flow; compressor_pr = pr;
+        if (desc.surge_line) {
+            // pr is the compressor outlet over ambient, flow the pair's fraction of its max
+            // flow (= each turbo's fraction, the pair being symmetric).
+            const real line = desc.surge_line->flow_fraction_vs_pr.evaluate(pr);
+            if (!surge_active) { if (pr > real(1.05) && flow < line) { surge_active = true; ++surge_events; } }
+            else if (pr <= real(1.05) || flow > real(1.05)*line) surge_active = false;
+        }
         // Boost control, the usual ECU arrangement: a PID controller on the
         // charge pressure after the intercooler (the throttle's upstream
         // pressure), toward ambient + target_boost_pa * plate. Its output is
