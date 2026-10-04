@@ -11,6 +11,7 @@
 // std::sqrt only in set_ambient/construction.
 
 #include "engine_simulated.h"
+#include "psi_table.h"
 
 #include "ps/math/transcendental.h"
 
@@ -86,16 +87,7 @@ Ambient make_ambient(real p_pa, real t_k) {
 
 // Tabulated Psi(pr) on a uniform grid of kPsiIntervals intervals.
 real psi_lookup(const std::vector<real>& table, real pr, real* dpsi_dpr) {
-    constexpr int n = SimulatedEngine::kPsiIntervals;
-    const real prc = std::clamp(pr, real(0.0), real(1.0));
-    const real u = prc * real(n);
-    int i = static_cast<int>(u);
-    if (i >= n) i = n - 1;
-    const real t = u - real(i);
-    const real a = table[static_cast<std::size_t>(i)];
-    const real b = table[static_cast<std::size_t>(i) + 1];
-    if (dpsi_dpr) *dpsi_dpr = (b - a) * real(n);
-    return a + t * (b - a);
+    return psi_table_lookup(table, pr, dpsi_dpr);
 }
 
 // True isentropic flow function (build time only, ps::math::pow).
@@ -583,6 +575,7 @@ void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
         // hardware does not reset the crank or teleport the car.
         const real omega=turbo_->omega();
         turbo_->desc=desc;
+        if(!desc.blow_off_valve) { turbo_->bov_opening=real(0.0); turbo_->bov_flow_kg_s=real(0.0); turbo_->bov_latched=false; }
         turbo_->energy_j=real(0.5)*desc.rotor_inertia_kgm2*omega*omega;
     } else {
         turbo_.emplace(desc);
@@ -818,7 +811,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         x_iac_ = real(0.0);
     }
 
-    if (turbo_) turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_fuel_w_,x_thr_);
+    if (turbo_) turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_fuel_w_,x_thr_,p_im_,&maps_->psi);
 
     // (4) air step, omega frozen at omega_old
     {
@@ -915,6 +908,9 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         r.p_charge_pa=turbo_->charge_pa; r.t_charge_k=turbo_->charge_k;
         r.wastegate_opening=turbo_->wastegate; r.compressor_flow_kg_s=turbo_->compressor_flow_kg_s;
         r.compressor_pressure_ratio=turbo_->compressor_pr;
+        r.bov_opening=turbo_->bov_opening; r.bov_flow_kg_s=turbo_->bov_flow_kg_s;
+        r.bov_vent=turbo_->desc.blow_off_valve ? static_cast<std::uint8_t>(turbo_->desc.blow_off_valve->vent) : std::uint8_t(0);
+        r.bov_events=turbo_->bov_events;
     }
     return r;
 }
@@ -975,6 +971,11 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
         f.pod(t.max_mass_flow_kg_s); f.pod(t.compressor_efficiency); f.pod(t.turbine_efficiency);
         f.pod(t.turbine_area_m2); f.pod(t.intercooler_effectiveness); f.pod(t.shaft_loss_w_at_reference);
         f.pod(t.wastegate_kp); f.pod(t.wastegate_ki_per_s); f.pod(t.wastegate_kd_s); f.pod(t.wastegate_actuator_tau_s);
+        // I7d D2: appended, so an engine without a valve keeps its byte layout.
+        if (t.blow_off_valve) {
+            f.pod(turbo_->bov_opening); f.pod(t.blow_off_valve->crack_dp_pa); f.pod(t.blow_off_valve->full_open_dp_pa);
+            f.pod(t.blow_off_valve->effective_area_m2); f.pod(t.blow_off_valve->tau_s);
+        }
     }
     return f.h;
 }

@@ -147,6 +147,11 @@ struct PreSolveResult {
     real wastegate_opening = 0.0;          // wastegate actuator position, 1 = fully open
     real compressor_flow_kg_s = 0.0;       // total compressor mass flow (the pair)
     real compressor_pressure_ratio = 0.0;  // compressor outlet over ambient, >= 1 with a turbo
+    // PHYS-033 P4 I7d D2: blow-off valve, 0 without a valve.
+    real bov_opening = 0.0;                // valve position in [0, 1]
+    real bov_flow_kg_s = 0.0;              // vent flow (part of compressor_flow_kg_s)
+    std::uint8_t bov_vent = 0;             // 0 atmosphere, 1 recirculate (sound only)
+    std::uint32_t bov_events = 0;          // opening events since the engine was built (rising edge > 0.1, re-armed below 0.05)
     real p_intake_pa = 0.0;            // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)

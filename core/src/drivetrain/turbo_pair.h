@@ -2,8 +2,11 @@
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/math/transcendental.h"
 #include "ps/drivetrain/turbo_maps.h"
+#include "psi_table.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace ps::drivetrain {
 // Lumped mean-value model with a quasi-steady authored compressor head curve,
@@ -19,17 +22,41 @@ public:
     // above and the step's inputs: never hashed, never read back by the model.
     real compressor_flow_kg_s = 0.0;  // total compressor mass flow (the pair)
     real compressor_pr = 1.0;         // compressor outlet pressure over ambient, >= 1
+    // Blow-off valve (I7d D2). bov_opening is dynamic state, hashed only when
+    // desc.blow_off_valve exists; the rest is sound/HUD only and never hashed.
+    real bov_opening = 0.0;           // valve position in [0, 1]
+    real bov_flow_kg_s = 0.0;         // vent flow of the latest step (inside compressor_flow_kg_s)
+    std::uint32_t bov_events = 0;     // rising edges: opening > 0.1, re-armed below 0.05
+    bool bov_latched = false;
+    // Gas constant of the vent orifice, the same value as SimulatedEngine::kGasConstant.
+    static constexpr real kGasConstant = 287.05;
     explicit TurboPair(const TurboPairDesc& d) : desc(d) {}
     real omega() const { return std::sqrt(real(2.0)*energy_j/desc.rotor_inertia_kgm2); }
     real rpm() const { return omega()*real(60.0/6.2831853071795864769); }
     void reset(real p, real t) { energy_j=0; charge_pa=p; charge_k=t; exhaust_pa=p; wastegate=0; boost_integral=0;
-                                 compressor_flow_kg_s=0; compressor_pr=1; }
+                                 compressor_flow_kg_s=0; compressor_pr=1;
+                                 bov_opening=0; bov_flow_kg_s=0; bov_latched=false; }
     // plate: the throttle plate position in [0, 1]; it scales the boost target.
+    // p_im / psi (I7d D2): the manifold pressure the valve diaphragm senses and the
+    // engine's tabulated Psi(pr) (SimulatedEngineMaps::psi), used by the vent
+    // orifice only; both are ignored without a blow-off valve.
     void step(real h, real ambient_pa, real ambient_k, real air_kg_s, real exhaust_kg_s,
-              real fuel_w, real plate) {
+              real fuel_w, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr) {
         const real wr = desc.reference_rpm*real(6.2831853071795864769/60.0);
         const real speed2 = real(2.0)*energy_j/(desc.rotor_inertia_kgm2*wr*wr);
-        const real comp_flow = std::max(real(0.0),air_kg_s);
+        // Vent flow at the START of the step state (valve opening, charge state
+        // of the previous substep): a one-substep explicit hand-off, no algebraic
+        // loop. It adds to the compressor flow (head curve and compressor power)
+        // and is not air the engine sees.
+        real vent = real(0.0);
+        if (desc.blow_off_valve && psi && bov_opening > real(0.0)) {
+            const real q = ambient_pa/charge_pa; // Psi is 0 at q >= 1: no reverse flow through the valve
+            if (q < real(1.0))
+                vent = bov_opening*desc.blow_off_valve->effective_area_m2*charge_pa/
+                       std::sqrt(kGasConstant*charge_k)*psi_table_lookup(*psi,q);
+        }
+        bov_flow_kg_s = vent;
+        const real comp_flow = std::max(real(0.0),air_kg_s) + vent;
         const real flow = comp_flow/desc.max_mass_flow_kg_s;
         const real head = desc.maps ? desc.maps->head_pa.value(std::sqrt(speed2),flow) :
             desc.reference_head_pa*speed2*std::max(real(0.0),real(1.0)-flow*flow);
@@ -82,6 +109,13 @@ public:
         const real loss = desc.shaft_loss_w_at_reference*speed2;
         energy_j = std::clamp(energy_j+h*(turbine_w-compressor_w-loss),real(0.0),
             real(0.5)*desc.rotor_inertia_kgm2*wr*wr*real(2.25));
+        if (desc.blow_off_valve) {
+            const auto& v = *desc.blow_off_valve;
+            const real command = std::clamp((charge_pa-p_im-v.crack_dp_pa)/(v.full_open_dp_pa-v.crack_dp_pa),real(0.0),real(1.0));
+            bov_opening += h/(v.tau_s+h)*(command-bov_opening);
+            if (!bov_latched) { if (bov_opening > real(0.1)) { ++bov_events; bov_latched = true; } }
+            else if (bov_opening < real(0.05)) bov_latched = false;
+        }
     }
 };
 }

@@ -119,3 +119,65 @@ TEST_CASE("D1: the turbo sound state reaches the vehicle snapshot", "[turbo][dri
     CHECK(max_pr > 1.0);
     CHECK(min_wg < 1.0);
 }
+
+// ---------------------------------------------------------------------------
+// D2 at vehicle level: WOT launch then a lift with the valve present - the
+// valve opens (events >= 1), the state hash is identical at 1 and 10 workers,
+// and the whole run (turbo step included, inside the vehicle job) allocates
+// nothing of its own while armed.
+// ---------------------------------------------------------------------------
+namespace {
+struct VehicleRun {
+    std::uint64_t hash = 0;
+    std::uint32_t events = 0;
+    real max_open = 0.0, max_vent = 0.0;
+};
+VehicleRun run_vehicle(const TurboPairDesc& pair, int workers, bool arm_alloc) {
+    Rig rig = make_rig(turbo_sedan(pair), workers);
+    World& w = *rig.world;
+    for (int t = 0; t < 120; ++t) w.step();
+    namespace da = ps::jobs::debug_alloc;
+    const bool arm = arm_alloc && da::hook_available();
+    if (arm) {
+        da::reset();
+        da::set_armed(true);
+    }
+    VehicleRun out;
+    w.set_control("throttle", 1.0);
+    for (int t = 0; t < 480; ++t) w.step();
+    w.set_control("throttle", 0.0);
+    for (int t = 0; t < 240; ++t) {
+        w.step();
+        const auto& es = w.powertrain_state(rig.vehicle).engines.at(0);
+        out.max_open = std::max(out.max_open, es.bov_opening);
+        out.max_vent = std::max(out.max_vent, es.bov_flow_kg_s);
+    }
+    if (arm) {
+        da::set_armed(false);
+        WARN("D2 vehicle debug_alloc (" << workers << " workers): own " << da::own_violation_count() << ", external (Jolt) "
+                                        << da::external_violation_count());
+        CHECK(da::own_violation_count() == 0);
+    }
+    out.events = w.powertrain_state(rig.vehicle).engines.at(0).bov_events;
+    out.hash = w.state_hash();
+    return out;
+}
+} // namespace
+
+TEST_CASE("D2: a vehicle with a blow-off valve is worker-count invariant and allocation-free", "[turbo][drivetrain][vehicle][bov][determinism]") {
+    if (!ps::jobs::debug_alloc::hook_available()) WARN("debug_alloc hook unavailable in this build - allocation check skipped");
+    TurboPairDesc with = tb::hyper_like_pair();
+    with.blow_off_valve = tb::sensitive_bov();
+    const VehicleRun a1 = run_vehicle(with, 1, true);
+    const VehicleRun a10 = run_vehicle(with, 10, true);
+    const VehicleRun none = run_vehicle(tb::hyper_like_pair(), 1, false);
+    std::printf("[D2 vehicle] hash 1w %016llx 10w %016llx, no valve %016llx; events %u, max opening %.3f, max vent %.4f kg/s\n",
+                static_cast<unsigned long long>(a1.hash), static_cast<unsigned long long>(a10.hash),
+                static_cast<unsigned long long>(none.hash), a1.events, a1.max_open, a1.max_vent);
+    CHECK(a1.hash == a10.hash);
+    CHECK(a1.events >= 1);          // the lift opened the valve
+    CHECK(a1.max_open > 0.5);
+    CHECK(a1.max_vent > 0.0);
+    CHECK(a1.hash != none.hash);    // the valve reached the dynamics
+    CHECK(none.events == 0);
+}

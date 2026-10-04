@@ -97,6 +97,52 @@ PHYS-058): every speed settles on target with < 20 Pa ripple. The controller
 requests no boost below 10 % plate (wastegate commanded open, integral reset); the
 boost target is `ambient + target_boost * plate`.
 
+### `blow_off_valve` (optional, I7d D2)
+
+A pressure-actuated valve on the charge pipe that vents compressor air when the
+throttle shuts under boost, so the compressor keeps a flow path instead of
+choking against a closed plate. Absent = no valve and
+every number is bit-identical to a configuration without the block.
+
+| Field | Type | Rule | Meaning |
+|---|---|---|---|
+| `vent` | string | required, `"atmosphere"` or `"recirculate"` | atmosphere: the vented air is lost; recirculate: it returns to the compressor inlet (a pure sound label, the lumped model treats both alike - the vent flow is compressor flow either way, no extra mass is booked) |
+| `crack_dp_bar` | number | required, >= 0 | charge pressure minus manifold pressure at which the valve starts to open |
+| `full_open_dp_bar` | number | required, > `crack_dp_bar` | the difference at which it is fully open |
+| `effective_area_mm2` | number | required, > 0 | effective flow area (Cd included) PER TURBO; scaled by `count` |
+| `tau_s` | number | required, >= 0 | first-order lag of the valve opening (0 = follows the command at once) |
+| `source` | string | required, non-empty | provenance (PLAN.md section 8) |
+
+Rejections (each prefixed `"<path>: blow_off_valve: "` style context):
+`'blow_off_valve' must be an object`, `'vent' must be "atmosphere" or "recirculate"`,
+`'<key>' is required`, `'crack_dp_bar' must be >= 0`, `'full_open_dp_bar' must be >
+'crack_dp_bar'`, `'effective_area_mm2' must be > 0`, `'tau_s' must be >= 0`,
+`'source' is required (PLAN.md section 8)`, and the Pa spellings `crack_dp_pa` /
+`full_open_dp_pa` ("was replaced by ... (bar)").
+
+Model: per substep the valve command is `clamp((p_charge - p_im - crack)/(full -
+crack), 0, 1)`, evaluated at the END of the turbo step; the opening follows it
+with a first-order lag `h/(tau + h)`. The vent flow of the NEXT step is the
+isentropic orifice flow `opening * A * p_charge / sqrt(R * T_charge) * Psi(p_amb/p_charge)`
+(the engine's shared tabulated Psi, so choked above the critical ratio) and is ADDED
+to the compressor flow: the compressor moves more air at a lower head (the head
+map falls with flow) and its power draw rises, so in this model the rotor of a
+lifted engine decelerates FASTER with the valve than without it (pair-level lift
+test: 0 rpm vs 33152 rpm after 500 ms). What the valve buys is a compressor that
+stays off its surge line (D3's flag), not a spinning rotor. The vent adds no mass
+to the intake - it leaves the system. The crack pressure must exceed the idle vacuum
+(ambient - idle manifold, ~0.7 bar) or the valve opens at every closed-throttle
+point. The valve opening is dynamic state: it is hashed (together with the valve
+parameters) only when a valve exists. The block is NOT part of the derived-map
+cache key (it changes nothing the maps contain).
+
+Known limit (measured, I7d D2): the lumped model has no plenum between the
+compressor and the throttle, and its quasi-steady charge pressure follows the rotor.
+When the throttle closes the rotor of the hyper V8 collapses within ~50 ms even without
+a valve, and the charge pressure goes with it, so a valve with a crack pressure of
+0.9 bar opens only to ~13 % at a lift-off. A valve that opens in time needs a low
+crack pressure and a short lag.
+
 ## Derived-map cache
 
 The head table (61 x 49 nodes over normalised speed 0..1.5 and flow 0..1.2) and
@@ -130,6 +176,10 @@ for physics:
 | `wastegate_opening` | 0..1 | wastegate actuator position (1 = fully open) |
 | `compressor_flow_kg_s` | kg/s | total compressor mass flow (the pair) |
 | `compressor_pressure_ratio` | - | compressor outlet pressure over ambient, >= 1 |
+| `bov_opening` | 0..1 | blow-off valve opening (0 without a valve) |
+| `bov_flow_kg_s` | kg/s | vent flow of the latest substep (included in `compressor_flow_kg_s`) |
+| `bov_vent` | 0/1 | 1 = the valve recirculates, 0 = atmosphere or no valve |
+| `bov_events` | count | rising edges of the opening (> 0.1, re-armed below 0.05), cumulative since the engine was built (a counter for sound, never hashed) |
 
 ## Shipped files
 

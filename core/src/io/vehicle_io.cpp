@@ -2371,6 +2371,36 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         if(bc.contains("kd_s")) { t.wastegate_kd_s=require_number(bc,"kd_s",bctx); if(t.wastegate_kd_s<0) throw std::runtime_error(bctx+": 'kd_s' must be >= 0"); }
         if(bc.contains("actuator_tau_s")) t.wastegate_actuator_tau_s=require_positive(bc,"actuator_tau_s",bctx);
     }
+    // I7d D2: optional compressor bypass (blow-off) valve. Pressures in bar,
+    // the per-turbo area is multiplied by the turbo count like the hardware's
+    // extensive keys. Not part of the map cache key (it feeds no map).
+    if(cfg.contains("blow_off_valve")) {
+        const json& bv=cfg.at("blow_off_valve");
+        if(!bv.is_object()) throw std::runtime_error(path+": 'blow_off_valve' must be an object");
+        const std::string vctx=path+": blow_off_valve";
+        if(bv.contains("crack_dp_pa")) throw std::runtime_error(vctx+": 'crack_dp_pa' was replaced by 'crack_dp_bar' (bar)");
+        if(bv.contains("full_open_dp_pa")) throw std::runtime_error(vctx+": 'full_open_dp_pa' was replaced by 'full_open_dp_bar' (bar)");
+        drivetrain::BlowOffValveDesc v;
+        if(!bv.contains("vent") || !bv.at("vent").is_string()) throw std::runtime_error(vctx+": 'vent' must be \"atmosphere\" or \"recirculate\"");
+        const std::string vent=bv.at("vent").get<std::string>();
+        if(vent=="atmosphere") v.vent=drivetrain::BlowOffValveDesc::Vent::Atmosphere;
+        else if(vent=="recirculate") v.vent=drivetrain::BlowOffValveDesc::Vent::Recirculate;
+        else throw std::runtime_error(vctx+": 'vent' must be \"atmosphere\" or \"recirculate\", got \""+vent+"\"");
+        const real crack_bar=require_number(bv,"crack_dp_bar",vctx);
+        if(crack_bar<0) throw std::runtime_error(vctx+": 'crack_dp_bar' must be >= 0");
+        const real full_bar=require_positive(bv,"full_open_dp_bar",vctx);
+        if(!(full_bar>crack_bar)) throw std::runtime_error(vctx+": 'full_open_dp_bar' must be > 'crack_dp_bar'");
+        v.crack_dp_pa=crack_bar*real(1e5);
+        v.full_open_dp_pa=full_bar*real(1e5);
+        // effective_area_mm2 is PER TURBO (Cd included); the pair is `count` valves.
+        v.effective_area_m2=require_positive(bv,"effective_area_mm2",vctx)*real(1e-6)*count;
+        v.tau_s=require_number(bv,"tau_s",vctx);
+        if(v.tau_s<0) throw std::runtime_error(vctx+": 'tau_s' must be >= 0");
+        if(!bv.contains("source") || !bv.at("source").is_string() || bv.at("source").get<std::string>().empty())
+            throw std::runtime_error(vctx+": 'source' is required (PLAN.md section 8)");
+        v.source=bv.at("source").get<std::string>();
+        t.blow_off_valve=std::move(v);
+    }
     // Versioned parameter key; cache is derived data, never an engine input.
     std::uint64_t key=14695981039346656037ULL;
     const real parameters[]={real(1.0),t.reference_head_pa,t.rotor_inertia_kgm2,t.reference_rpm,t.max_mass_flow_kg_s,

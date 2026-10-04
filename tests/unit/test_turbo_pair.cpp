@@ -46,15 +46,9 @@ struct Fnv {
     }
 };
 
-// The air/exhaust/fuel the engine would hand the pair at a given phase.
-struct Phase { real plate, air, exhaust, fuel_w; };
-Phase script_phase(int step) {
-    const real t = step * kH;
-    if (t < 1.5) return {1.0, 0.2 + 0.7 * t / 1.5, (0.2 + 0.7 * t / 1.5) * 1.07, (0.2 + 0.7 * t / 1.5) / 12.5 * 43e6};
-    if (t < 2.5) return {0.0, 0.04, 0.045, 0.0};
-    return {1.0, 0.9, 0.96, 0.9 / 12.5 * 43e6};
-}
-constexpr int kScriptSteps = 4 * 960;
+using tb::Phase;
+using tb::script_phase;
+using tb::kScriptSteps;
 
 // Legacy-field hash of the pair script (turbo_pair.h as of master 976e8d7).
 std::uint64_t pair_script_hash() {
