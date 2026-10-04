@@ -34,6 +34,11 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
     // engine, whose PreSolveResult leaves these at default).
     ess.throttle_position = pre.throttle_position;
     ess.p_charge_pa=pre.p_charge_pa; ess.t_charge_k=pre.t_charge_k;
+    ess.wastegate_opening=pre.wastegate_opening; ess.compressor_flow_kg_s=pre.compressor_flow_kg_s;
+    ess.compressor_pressure_ratio=pre.compressor_pressure_ratio;
+    ess.bov_opening=pre.bov_opening; ess.bov_flow_kg_s=pre.bov_flow_kg_s;
+    ess.bov_vent=pre.bov_vent; ess.bov_events=pre.bov_events;
+    ess.surge_active=pre.surge_active; ess.surge_events=pre.surge_events;
     ess.p_intake_pa = pre.p_intake_pa;
     ess.turbo_rpm=pre.turbo_rpm; ess.boost_bar=pre.boost_bar; ess.p_exhaust_pa=pre.p_exhaust_pa;
     ess.lambda = pre.lambda;

@@ -1,0 +1,24 @@
+{
+  "format": "physics_sim.turbo_configuration/1",
+  "name": "test_hyper_twin_bov",
+  "turbo": "../../../data/turbos/hyper_turbo_approx.json",
+  "count": 2,
+  "target_boost_bar": 1.8,
+  "intercooler_effectiveness": 0.95,
+  "boost_control": {
+    "source": "[A] same PID and actuator lag as data/turbo_configurations/hyper_twin_default.json",
+    "kp": 1.0,
+    "ki_per_s": 1.0,
+    "kd_s": 0.05,
+    "actuator_tau_s": 0.1
+  },
+  "blow_off_valve": {
+    "vent": "recirculate",
+    "crack_dp_bar": 0.9,
+    "full_open_dp_bar": 1.6,
+    "effective_area_mm2": 460,
+    "tau_s": 0.04,
+    "source": "[AS] TEST FIXTURE, not shipped data. Area ASSUMED, sized by a rule: the pair (2 x 460 mm2, Cd included) vents about half of the pair's max_mass_flow_kg_s 1.2 at 1.8 bar gauge: choked orifice m = A*p/sqrt(R*T)*0.685 with p 2.8 bar abs and T 294 K gives 0.6 kg/s. Crack 0.9 bar and full-open 1.6 bar (charge minus manifold pressure) ASSUMED by a rule: crack above the idle vacuum (ambient minus an idle manifold of ~0.3 bar = 0.7 bar) so the valve stays shut at idle and light load, full open when the throttle closes at 2+ bar charge (2.5 bar difference). Tau 40 ms ASSUMED."
+  },
+  "source": "[AS] Test fixture: the hyper twin configuration plus a blow-off valve; hardware data/turbos/hyper_turbo_approx.json."
+}

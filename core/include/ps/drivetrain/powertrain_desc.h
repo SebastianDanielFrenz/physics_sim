@@ -21,6 +21,7 @@
 #include "ps/vehicle/curve1d.h" // Curve1D (NOT vehicle_desc.h: VehicleDesc::powertrain
                                  // is a PowertrainDesc, so that include would be circular)
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
@@ -284,6 +285,37 @@ struct SimulatedEcuDesc {
 // Reduced symmetric parallel turbo pair. Each turbo sees half the flow;
 // inertia/flow capacity below are totals for the pair. No measured OEM maps.
 struct TurboPerformanceMaps;
+
+// PHYS-033 P4 I7d D2: compressor bypass (blow-off / diverter) valve, an
+// optional part of a turbo configuration (docs/data_formats/turbo.md). Its
+// diaphragm sees charge pressure below and manifold pressure above: the
+// command is clamp((p_charge - p_im - crack_dp)/(full_open_dp - crack_dp), 0, 1)
+// and the opening follows with a first-order lag tau_s. Vent flow is an
+// isentropic orifice of effective_area_m2 (Cd included) from the charge state
+// to ambient; it adds to the COMPRESSOR flow, not to the engine's air.
+// Extensive: the loader multiplies the per-turbo area by the turbo count.
+struct BlowOffValveDesc {
+    // Sound only (the physics is identical): the vented air leaves to the
+    // atmosphere or is recirculated to the compressor inlet.
+    enum class Vent : std::uint8_t { Atmosphere = 0, Recirculate = 1 };
+    Vent vent = Vent::Atmosphere;
+    real crack_dp_pa = 0.0;       // >= 0
+    real full_open_dp_pa = 0.0;   // > crack_dp_pa
+    real effective_area_m2 = 0.0; // > 0, pair total
+    real tau_s = 0.0;             // >= 0 (0 = the opening follows the command at once)
+    std::string source;           // required (PLAN.md section 8)
+};
+
+// PHYS-033 P4 I7d D3: compressor surge line of a turbo HARDWARE file
+// (physics_sim.turbo/1 "surge_line", docs/data_formats/turbo.md): the surge
+// flow as a fraction of max_mass_flow_kg_s over the compressor pressure ratio.
+// It drives only a flag (TurboPair::surge_active); nothing dynamic reads it,
+// so it is in neither the state hash nor the derived-map cache key.
+struct SurgeLineDesc {
+    ps::vehicle::Curve1D flow_fraction_vs_pr; // x strictly increasing pressure ratio (>= 1), y in [0, 1)
+    std::string source;          // required (PLAN.md section 8)
+};
+
 struct TurboPairDesc {
     std::shared_ptr<const TurboPerformanceMaps> maps;
     real reference_head_pa = 324000.0;
@@ -306,6 +338,15 @@ struct TurboPairDesc {
     real wastegate_ki_per_s = 1.0;
     real wastegate_kd_s = 0.05;
     real wastegate_actuator_tau_s = 0.10;
+    // I7d D2: absent = no valve; the pair is then bit-identical to before.
+    std::optional<BlowOffValveDesc> blow_off_valve;
+    // I7d D3: absent = the surge flag is never raised. Not hashed.
+    std::optional<SurgeLineDesc> surge_line;
+    // I7d D4: pressure drop of the intercooler at the pair's max flow; at flow f (a fraction of
+    // max_mass_flow_kg_s) the drop is k * f^2, and the throttle sees the compressor outlet pressure
+    // minus it. 0 = no drop (bit-identical to before); hashed only when nonzero. Intensive: not
+    // scaled by the turbo count.
+    real intercooler_dp_pa_at_max_flow = 0.0;
 };
 
 struct SimulatedEngineDesc {

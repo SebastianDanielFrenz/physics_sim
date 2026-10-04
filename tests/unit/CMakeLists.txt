@@ -58,6 +58,12 @@ add_executable(ps_unit_tests
   test_cited_engine_data.cpp
   test_simulated_engine_io.cpp
   test_simulated_engine.cpp
+  test_turbo_pair.cpp
+  test_turbo_bov.cpp
+  test_turbo_surge.cpp
+  test_turbo_intercooler.cpp
+  test_turbo_io.cpp
+  test_turbo_vehicle.cpp
   test_simulated_engine_powertrain.cpp
   test_a25a_sim_engine_data.cpp
   test_engine_cycle.cpp

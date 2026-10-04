@@ -2357,11 +2357,50 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
     t.turbine_efficiency=require_positive(hw,"turbine_efficiency",hw_path);
     t.turbine_area_m2=require_positive(hw,"turbine_area_m2",hw_path)*count;
     t.shaft_loss_w_at_reference=require_positive(hw,"shaft_loss_w_at_reference",hw_path)*count;
+    // I7d D3: optional surge line of the hardware file (flag only; feeds no map and
+    // no dynamics, so it is outside the cache key and the state hash).
+    if(hw.contains("surge_line")) {
+        const json& sl=hw.at("surge_line");
+        if(!sl.is_object()) throw std::runtime_error(hw_path+": 'surge_line' must be an object");
+        const std::string sctx=hw_path+": surge_line";
+        const auto number_array=[&](const char* key) {
+            if(!sl.contains(key) || !sl.at(key).is_array()) throw std::runtime_error(sctx+": '"+std::string(key)+"' must be an array of numbers");
+            std::vector<real> v;
+            for(const auto& e:sl.at(key)) {
+                if(!e.is_number()) throw std::runtime_error(sctx+": '"+std::string(key)+"' must be an array of numbers");
+                v.push_back(e.get<real>());
+            }
+            return v;
+        };
+        drivetrain::SurgeLineDesc d;
+        d.flow_fraction_vs_pr.x=number_array("pressure_ratio");
+        d.flow_fraction_vs_pr.y=number_array("flow_fraction");
+        if(d.flow_fraction_vs_pr.x.size()<2) throw std::runtime_error(sctx+": needs at least 2 points");
+        if(d.flow_fraction_vs_pr.x.size()!=d.flow_fraction_vs_pr.y.size())
+            throw std::runtime_error(sctx+": 'pressure_ratio' and 'flow_fraction' must have the same length");
+        if(!(d.flow_fraction_vs_pr.x.front()>=1.0)) throw std::runtime_error(sctx+": 'pressure_ratio' must start at >= 1");
+        for(std::size_t i=1;i<d.flow_fraction_vs_pr.x.size();++i)
+            if(!(d.flow_fraction_vs_pr.x[i]>d.flow_fraction_vs_pr.x[i-1])) throw std::runtime_error(sctx+": 'pressure_ratio' must be strictly increasing");
+        for(real f:d.flow_fraction_vs_pr.y)
+            if(!(f>=0.0 && f<1.0)) throw std::runtime_error(sctx+": 'flow_fraction' must be in [0, 1)");
+        if(!sl.contains("source") || !sl.at("source").is_string() || sl.at("source").get<std::string>().empty())
+            throw std::runtime_error(sctx+": 'source' is required (PLAN.md section 8)");
+        d.source=sl.at("source").get<std::string>();
+        t.surge_line=std::move(d);
+    }
     if(cfg.contains("target_boost_pa")) throw std::runtime_error(path+": 'target_boost_pa' was replaced by 'target_boost_bar' (gauge, bar)");
     t.target_boost_pa=require_positive(cfg,"target_boost_bar",path)*real(1e5);
     t.intercooler_effectiveness=require_positive(cfg,"intercooler_effectiveness",path);
     if(t.compressor_efficiency>1 || t.turbine_efficiency>1 || t.intercooler_effectiveness>1)
         throw std::runtime_error(path+": turbo efficiencies must be <= 1");
+    // I7d D4: optional intercooler pressure drop at the pair's max flow (bar in the file; intensive,
+    // not scaled by count). Not part of the map cache key (it feeds no map).
+    if(cfg.contains("intercooler_pressure_drop_bar_at_max_flow")) {
+        const real dp_bar=require_number(cfg,"intercooler_pressure_drop_bar_at_max_flow",path);
+        if(dp_bar<0) throw std::runtime_error(path+": 'intercooler_pressure_drop_bar_at_max_flow' must be >= 0");
+        if(!(dp_bar*real(1e5)<t.reference_head_pa)) throw std::runtime_error(path+": 'intercooler_pressure_drop_bar_at_max_flow' must be < the hardware 'reference_head_bar'");
+        t.intercooler_dp_pa_at_max_flow=dp_bar*real(1e5);
+    }
     if(cfg.contains("boost_control")) {
         const json& bc=cfg.at("boost_control");
         if(!bc.is_object()) throw std::runtime_error(path+": 'boost_control' must be an object");
@@ -2370,6 +2409,36 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         if(bc.contains("ki_per_s")) t.wastegate_ki_per_s=require_positive(bc,"ki_per_s",bctx);
         if(bc.contains("kd_s")) { t.wastegate_kd_s=require_number(bc,"kd_s",bctx); if(t.wastegate_kd_s<0) throw std::runtime_error(bctx+": 'kd_s' must be >= 0"); }
         if(bc.contains("actuator_tau_s")) t.wastegate_actuator_tau_s=require_positive(bc,"actuator_tau_s",bctx);
+    }
+    // I7d D2: optional compressor bypass (blow-off) valve. Pressures in bar,
+    // the per-turbo area is multiplied by the turbo count like the hardware's
+    // extensive keys. Not part of the map cache key (it feeds no map).
+    if(cfg.contains("blow_off_valve")) {
+        const json& bv=cfg.at("blow_off_valve");
+        if(!bv.is_object()) throw std::runtime_error(path+": 'blow_off_valve' must be an object");
+        const std::string vctx=path+": blow_off_valve";
+        if(bv.contains("crack_dp_pa")) throw std::runtime_error(vctx+": 'crack_dp_pa' was replaced by 'crack_dp_bar' (bar)");
+        if(bv.contains("full_open_dp_pa")) throw std::runtime_error(vctx+": 'full_open_dp_pa' was replaced by 'full_open_dp_bar' (bar)");
+        drivetrain::BlowOffValveDesc v;
+        if(!bv.contains("vent") || !bv.at("vent").is_string()) throw std::runtime_error(vctx+": 'vent' must be \"atmosphere\" or \"recirculate\"");
+        const std::string vent=bv.at("vent").get<std::string>();
+        if(vent=="atmosphere") v.vent=drivetrain::BlowOffValveDesc::Vent::Atmosphere;
+        else if(vent=="recirculate") v.vent=drivetrain::BlowOffValveDesc::Vent::Recirculate;
+        else throw std::runtime_error(vctx+": 'vent' must be \"atmosphere\" or \"recirculate\", got \""+vent+"\"");
+        const real crack_bar=require_number(bv,"crack_dp_bar",vctx);
+        if(crack_bar<0) throw std::runtime_error(vctx+": 'crack_dp_bar' must be >= 0");
+        const real full_bar=require_positive(bv,"full_open_dp_bar",vctx);
+        if(!(full_bar>crack_bar)) throw std::runtime_error(vctx+": 'full_open_dp_bar' must be > 'crack_dp_bar'");
+        v.crack_dp_pa=crack_bar*real(1e5);
+        v.full_open_dp_pa=full_bar*real(1e5);
+        // effective_area_mm2 is PER TURBO (Cd included); the pair is `count` valves.
+        v.effective_area_m2=require_positive(bv,"effective_area_mm2",vctx)*real(1e-6)*count;
+        v.tau_s=require_number(bv,"tau_s",vctx);
+        if(v.tau_s<0) throw std::runtime_error(vctx+": 'tau_s' must be >= 0");
+        if(!bv.contains("source") || !bv.at("source").is_string() || bv.at("source").get<std::string>().empty())
+            throw std::runtime_error(vctx+": 'source' is required (PLAN.md section 8)");
+        v.source=bv.at("source").get<std::string>();
+        t.blow_off_valve=std::move(v);
     }
     // Versioned parameter key; cache is derived data, never an engine input.
     std::uint64_t key=14695981039346656037ULL;

@@ -143,6 +143,18 @@ struct PreSolveResult {
     real throttle_position = 0.0;      // plate position x_thr in [0, 1] after the actuator lag
     real turbo_rpm = 0.0, boost_bar = 0.0, p_exhaust_pa = 0.0;
     real p_charge_pa = 0.0, t_charge_k = 0.0; // compressor supply, 0 = atmospheric path
+    // PHYS-033 P4 I7d D1: further turbo sound/HUD state, 0 without a turbo.
+    real wastegate_opening = 0.0;          // wastegate actuator position, 1 = fully open
+    real compressor_flow_kg_s = 0.0;       // total compressor mass flow (the pair)
+    real compressor_pressure_ratio = 0.0;  // compressor outlet over ambient, >= 1 with a turbo
+    // PHYS-033 P4 I7d D2: blow-off valve, 0 without a valve.
+    real bov_opening = 0.0;                // valve position in [0, 1]
+    real bov_flow_kg_s = 0.0;              // vent flow (part of compressor_flow_kg_s)
+    std::uint8_t bov_vent = 0;             // 0 atmosphere, 1 recirculate (sound only)
+    std::uint32_t bov_events = 0;          // opening events since the engine was built (rising edge > 0.1, re-armed below 0.05)
+    // PHYS-033 P4 I7d D3: surge flag (no dynamics, unhashed), 0 without a surge line.
+    std::uint8_t surge_active = 0;
+    std::uint32_t surge_events = 0;        // entries into surge since the engine was built
     real p_intake_pa = 0.0;            // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)
