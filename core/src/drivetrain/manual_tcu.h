@@ -144,7 +144,11 @@ private:
     // emergency release with the input already below -lock_slip_rpm) and
     // released once the input is above -lock_slip_rpm again, so short
     // negative transients (suspension settling, locked-diff wind-up) do not
-    // dump the clutch.
+    // dump the clutch. Applies only without driver throttle at hill-start pace
+    // (throttle_request above kDriverThrottleThreshold and road speed below
+    // kReverseLaunchMaxSpeedMps, manual_tcu.cpp, clear it): with the throttle
+    // pressed - a hill start rolling backwards in a forward gear - the
+    // ordinary Launch law engages the clutch gradually instead.
     bool reverse_hold_ = false;
     // The anti-stall last released a locked clutch and it has not locked
     // again since: from this state the clutch may not start closing onto a
