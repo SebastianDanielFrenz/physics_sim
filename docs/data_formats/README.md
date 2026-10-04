@@ -15,6 +15,8 @@ not what the example files under `data/` happen to contain. The loaders are:
 | surfaces | `core/src/io/surface_table.cpp` (`SurfaceTable::SurfaceTable`) | `ps/io/surface_table.h` |
 | scenario | `core/src/io/scenario.cpp` (`load_scenario`, `build_scenario`) | `ps/io/scenario.h` |
 | fuel | `core/src/io/fuel_io.cpp` (`load_fuel_json`) | `ps/drivetrain/fuel_desc.h` (`FuelDesc`) |
+| oxidizer | `core/src/io/nitrous_io.cpp` (`load_oxidizer_json`) | `ps/drivetrain/oxidizer_desc.h` (`OxidizerDesc`) |
+| n2o_bottle / nitrous_kit / nitrous_controller | `core/src/io/nitrous_io.cpp` (`load_n2o_bottle_json`, `load_nitrous_kit_json`, `load_nitrous_controller_json`; vehicle components via `load_vehicle_json`) | `ps/drivetrain/nitrous_desc.h` (`N2oBottleDesc`, `NitrousKitDesc`, `NitrousControllerDesc`) |
 
 The powertrain **graph itself** (which ports may connect, what gets
 rejected) is additionally validated by `core/src/drivetrain/powertrain.cpp`
@@ -37,6 +39,8 @@ the end of this file under "Discrepancies found".
 - [`surfaces.md`](surfaces.md) — `physics_sim.surfaces/1`, `data/surfaces/surfaces.json`.
 - [`scenario.md`](scenario.md) — `physics_sim.scenario/1`, `data/scenarios/*.json`.
 - [`fuel.md`](fuel.md) — `physics_sim.fuel/1`, `data/fuels/*.json`. Lower heating value, stoichiometric AFR, density — cited fuel properties, no combustion model.
+- [`oxidizer.md`](oxidizer.md) — `physics_sim.oxidizer/1`, `data/oxidizers/*.json`. NIST nitrous-oxide saturation and gas properties, the HEM/Dyer jet-flow tables built from them.
+- [`nitrous.md`](nitrous.md) � `physics_sim.n2o_bottle/1`, `physics_sim.nitrous_kit/1`, `physics_sim.nitrous_controller/1` (`data/n2o_bottles/`, `data/nitrous_kits/`, `data/nitrous_controllers/`): the slot-in nitrous hardware parts, their overrides, control channels and the vehicle wiring.
 
 ## Format versioning
 

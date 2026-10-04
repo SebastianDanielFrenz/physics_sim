@@ -64,6 +64,17 @@ struct EngineSoundState {
     real lambda = 0.0;                 // commanded lambda
     real spark_advance_deg = 0.0;      // applied spark advance
     real exhaust_mass_flow_kg_s = 0.0; // air + fuel mass flow out of the cylinders
+    // N2O plan N1 (section 6): the nitrous system's state, all 0 without a kit. NOT hashed, never read back
+    // for physics (the engine ignores the N2O in N1).
+    std::uint8_t n2o_active = 0;           // 1 while the solenoid is open and N2O flows
+    std::uint8_t n2o_safety_cut = 0;       // NitrousSafetyCut: 0 none, 1 bottle pressure, 2 fuel starve, 3 duty time
+    real n2o_flow_g_s = 0.0;               // delivered N2O flow
+    real n2o_purge_flow_g_s = 0.0;         // purge vent flow
+    real n2o_bottle_kg = 0.0;              // bottle content
+    real n2o_bottle_bar = 0.0;             // bottle gauge pressure (bar)
+    real n2o_retard_deg = 0.0;             // spark retard the kit asks for
+    std::uint32_t n2o_activations = 0;     // solenoid openings since the vehicle was built
+    std::uint32_t n2o_purge_events = 0;    // purge starts since the vehicle was built
 };
 
 struct DrivelineSoundState {
@@ -154,6 +165,8 @@ struct PowertrainSnapshot {
     // tick - 0 for a vehicle without a fuel_tank. A read-only copy (the
     // hashed state lives in the Powertrain's tank).
     real fuel_mass_kg = 0.0;
+    // N2O plan N1: the bottle content (kg) at the end of this tick - 0 without a kit.
+    real n2o_bottle_kg = 0.0;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled

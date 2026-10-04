@@ -126,6 +126,11 @@ public:
     [[nodiscard]] bool has_fuel_tank() const { return powertrain_.has_fuel_tank(); }
     [[nodiscard]] real fuel_tank_mass() const { return powertrain_.fuel_tank_mass(); }
     void request_fuel_tank_mass(real kg) { powertrain_.request_fuel_tank_mass(kg); }
+    // N2O plan N1: backs World::n2o_bottle_mass/set_n2o_bottle_mass and the kit-only telemetry channels.
+    [[nodiscard]] bool has_nitrous() const { return powertrain_.has_nitrous(); }
+    [[nodiscard]] real n2o_bottle_mass() const { return powertrain_.n2o_bottle_mass(); }
+    void request_n2o_bottle_mass(real kg) { powertrain_.request_n2o_bottle_mass(kg); }
+    [[nodiscard]] const drivetrain::NitrousSystem* nitrous_system() const { return powertrain_.nitrous(); }
     // PHYS-033 P4 I7c C16b: backs World::replace_engine_maps (queues) and
     // vehicle::System::apply_pending_engine_maps_swaps (applies, from
     // World::step before the tick pipeline, outside any job - see

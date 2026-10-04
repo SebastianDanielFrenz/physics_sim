@@ -1,0 +1,16 @@
+{
+  "format": "physics_sim.n2o_bottle/1",
+  "oxidizer": "../../../../data/oxidizers/nitrous_oxide.json",
+  "capacity_kg": 4.536,
+  "pressure": {
+    "mode": "constant",
+    "gauge_bar": 65.5
+  },
+  "heater": {
+    "channel": "nitrous_heater",
+    "default_on": 0,
+    "set_point_gauge_bar": 68.0
+  },
+  "outlet": "siphon",
+  "source": "N2O plan N1 TEST FIXTURE (tests/unit/test_n2o_system.cpp), not shipped data: a generic 10 lb bottle, capacity 10 lb x 0.45359237 kg/lb [D], 65.5 bar gauge constant [AS: the plan's own example, 950 psig]; heater set point 68 bar gauge [AS]."
+}

@@ -1,0 +1,28 @@
+{
+  "format": "physics_sim.nitrous_controller/1",
+  "arm_channel": "nitrous_arm",
+  "arm_default": 0,
+  "min_throttle_command": 0.95,
+  "min_rpm": 1500,
+  "max_rpm": 6000,
+  "min_gear": 1,
+  "max_gear": 99,
+  "min_speed_mps": 0,
+  "progressive": {
+    "start_fraction": 1.0,
+    "delay_s": 0.0,
+    "ramp_s": 0.0
+  },
+  "spark_retard_deg": 4.0,
+  "safety": {
+    "min_bottle_gauge_bar": 55.0,
+    "cut_on_fuel_starve": 1,
+    "max_active_s": 15.0
+  },
+  "purge": {
+    "channel": "nitrous_purge",
+    "jet_diameter_mm": 1.0,
+    "cd": 0.66
+  },
+  "source": "N2O plan N1 TEST FIXTURE (tests/unit/test_n2o_system.cpp), not shipped data: thresholds chosen for the test rig [AS]."
+}

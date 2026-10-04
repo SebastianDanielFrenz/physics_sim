@@ -478,6 +478,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         // fuel_flow_g_s above - 0.0 only for a vehicle with no fuel model.
         snap.fuel_flow_g_s = powertrain_.fuel_flow_g_s();
         snap.fuel_mass_kg = powertrain_.fuel_tank_mass(); // PHYS-033 P4 I7a C6: 0.0 without a tank
+        snap.n2o_bottle_kg = powertrain_.n2o_bottle_mass(); // N2O plan N1: 0.0 without a kit
     }
 
     // Predict what Jolt will report as this chassis's velocity next tick

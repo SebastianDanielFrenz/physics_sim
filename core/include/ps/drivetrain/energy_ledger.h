@@ -109,6 +109,16 @@ struct PowertrainEnergy {
     // are already inside engine_out) and never hashed.
     real pumping_work = 0.0;
     real friction_work = 0.0;
+    // N2O plan N1 (section 4): the nitrous sub-ledger, cumulative kg, unhashed, OUTSIDE balance_error,
+    // exactly 0 for a vehicle without a kit. Bottle closure: initial - m_bottle = n2o_mass + n2o_purged
+    // - n2o_external_added. In N1 the engine ignores the N2O, so every delivered kg is unburnt pass-through
+    // (n2o_unburnt == n2o_mass, n2o_energy_in == 0, kit_fuel_mass == 0); N2 books the real split.
+    real n2o_mass = 0.0;           // delivered to the engine
+    real n2o_energy_in = 0.0;      // J, burnt N2O * decomposition heat
+    real n2o_unburnt = 0.0;        // the pass-through part of n2o_mass
+    real n2o_purged = 0.0;         // vented by the purge
+    real n2o_external_added = 0.0; // refill/drain hook (World::set_n2o_bottle_mass), signed
+    real kit_fuel_mass = 0.0;      // kit fuel, a diagnostic subset of fuel_mass (booked from N2)
 };
 
 } // namespace ps::drivetrain

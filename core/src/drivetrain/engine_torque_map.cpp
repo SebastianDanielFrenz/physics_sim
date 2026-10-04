@@ -67,6 +67,7 @@ EngineTorqueMap::EngineTorqueMap(Desc desc) : desc_(std::move(desc)) {
 EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) {
     const real omega_old = sensors.omega;
     omega_old_ = omega_old;
+    p_ambient_last_ = sensors.ambient.pressure_pa;
     const real rpm = std::abs(omega_old) * kRadPerSecToRpm;
 
     // --- 6.1.3: state machine (evaluated first) -----------------------------

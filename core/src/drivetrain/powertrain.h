@@ -28,6 +28,7 @@
 #include "gearbox.h"
 #include "manual_tcu.h"
 #include "network.h"
+#include "nitrous_system.h"
 #include "throttle_stage.h"
 
 #include "ps/drivetrain/brake_system_desc.h"
@@ -172,9 +173,23 @@ public:
             ledger_.fuel_external_added += fuel_tank_->set_content(fuel_tank_set_value_);
             fuel_tank_set_pending_ = false;
         }
+        // N2O plan N1: same tick-boundary rule for the bottle; booked signed into n2o_external_added.
+        if (n2o_bottle_set_pending_) {
+            ledger_.n2o_external_added += nitrous_->set_bottle_kg(n2o_bottle_set_value_);
+            n2o_bottle_set_pending_ = false;
+        }
         ledger_tick_start_ = ledger_;
     }
     void end_tick();
+
+    // N2O plan N1: the nitrous system (nitrous_system.h), nullptr without a bottle + kit.
+    [[nodiscard]] bool has_nitrous() const { return nitrous_ != nullptr; }
+    [[nodiscard]] const NitrousSystem* nitrous() const { return nitrous_.get(); }
+    [[nodiscard]] real n2o_bottle_mass() const { return nitrous_ ? nitrous_->bottle_kg() : real(0.0); }
+    [[nodiscard]] real n2o_bottle_capacity() const { return nitrous_ ? nitrous_->bottle_capacity_kg() : real(0.0); }
+    // Queues a new bottle content for the NEXT begin_tick() (clamped to [0, capacity] when applied). Throws
+    // std::runtime_error without a bottle or for NaN.
+    void request_n2o_bottle_mass(real kg);
 
     // PHYS-033 P4 I7a C6: the fuel tank feeding this vehicle's engine, if any
     // (energy_store.h). fuel_tank_mass() is 0 without one.
@@ -636,6 +651,11 @@ private:
     std::unique_ptr<FuelTank> fuel_tank_;
     bool fuel_tank_set_pending_ = false;
     real fuel_tank_set_value_ = 0.0;
+    // N2O plan N1: the nitrous hardware + controller (nullptr without a kit; hashed only when present) and a
+    // set_n2o_bottle_mass request waiting for the next begin_tick().
+    std::unique_ptr<NitrousSystem> nitrous_;
+    bool n2o_bottle_set_pending_ = false;
+    real n2o_bottle_set_value_ = 0.0;
     // PHYS-033 P4 I7a C3: the throttle-command stage between the pedal and
     // the engine (throttle_stage.h) - built from either an explicit
     // ThrottleControlDesc component or (no such component) the IMPLICIT

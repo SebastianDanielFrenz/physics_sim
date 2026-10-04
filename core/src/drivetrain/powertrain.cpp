@@ -227,6 +227,14 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             // default_enabled); nothing without an anti_lag block.
             if (se->turbo_pair && se->turbo_pair->anti_lag)
                 add(ChannelDecl{se->turbo_pair->anti_lag->channel, se->turbo_pair->anti_lag->default_enabled});
+        } else if (const auto* bo = std::get_if<N2oBottleDesc>(&c.params)) {
+            // N2O plan N1: the bottle heater's switch (default = its default_on); nothing without a heater.
+            if (bo->has_heater) add(ChannelDecl{bo->heater.channel, bo->heater.default_on});
+        } else if (const auto* kit = std::get_if<NitrousKitDesc>(&c.params)) {
+            // N2O plan N1: the controller's arm switch (a plain 0/1 level, default = arm_default, 0 = disarmed)
+            // and, with a purge, the purge switch (default 0). Declared ONLY for a vehicle with a kit.
+            add(ChannelDecl{kit->controller.arm_channel, kit->controller.arm_default});
+            if (kit->controller.has_purge) add(ChannelDecl{kit->controller.purge.channel, real(0.0)});
         } else if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
             if (d->lockable) add(ChannelDecl{d->lock.channel, real(0.0)});
         } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
@@ -404,6 +412,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         } else if (std::get_if<FuelTankDesc>(&c.params)) {
             // PHYS-033 P4 I7a C6: an energy store, no shaft port/node/row -
             // wired to the engine through PowertrainDesc::fluid below.
+        } else if (std::get_if<N2oBottleDesc>(&c.params) || std::get_if<NitrousKitDesc>(&c.params)) {
+            // N2O plan N1: no shaft port/node/row; the NitrousSystem is a typed member
+            // built below from the fluid-linked bottle + kit.
         }
     }
     if (throttle_control_component_index >= 0 && engine_component_index < 0) {
@@ -415,14 +426,48 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     // code-built VehicleDesc. At most one tank feeds the (single) engine, and
     // every tank must feed it.
     int fuel_tank_component_index = -1;
+    int n2o_bottle_component_index = -1, nitrous_kit_component_index = -1; // N2O plan N1
+    bool kit_feeds_engine = false;
     for (const FluidLinkDesc& link : pt.fluid) {
-        const auto from_it = component_index_of.find(link.from.component);
+        const auto from_it = link.from.is_wheel ? component_index_of.end() : component_index_of.find(link.from.component);
+        const auto to_it = link.to.is_wheel ? component_index_of.end() : component_index_of.find(link.to.component);
+        const ComponentParams* from_params =
+            from_it == component_index_of.end() ? nullptr : &pt.components[static_cast<std::size_t>(from_it->second)].params;
+        const ComponentParams* to_params = to_it == component_index_of.end() ? nullptr : &pt.components[static_cast<std::size_t>(to_it->second)].params;
+        const bool from_bottle = from_params && std::holds_alternative<N2oBottleDesc>(*from_params);
+        const bool from_kit = from_params && std::holds_alternative<NitrousKitDesc>(*from_params);
+        if (from_bottle) {
+            // N2O plan N1: "<bottle>.out" -> "<kit>.n2o"
+            if (link.from.port != "out" || !to_params || !std::holds_alternative<NitrousKitDesc>(*to_params) || link.to.port != "n2o") {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': fluid link '" + link.from.component + "." + link.from.port + "' -> '" +
+                                          link.to.component + "." + link.to.port + "': an n2o_bottle's \"out\" port feeds a nitrous_kit's \"n2o\" port");
+            }
+            if (nitrous_kit_component_index >= 0 || n2o_bottle_component_index >= 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': nitrous_kit '" + link.to.component + "' n2o port is fed by more than one fluid link");
+            }
+            n2o_bottle_component_index = from_it->second;
+            nitrous_kit_component_index = to_it->second;
+            continue;
+        }
+        if (from_kit) {
+            // N2O plan N1: "<kit>.out" -> "<engine>.nitrous"
+            if (link.from.port != "out" || !to_params || link.to.port != "nitrous" ||
+                !(std::holds_alternative<TorqueMapEngineDesc>(*to_params) || std::holds_alternative<SimulatedEngineDesc>(*to_params))) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': fluid link '" + link.from.component + "." + link.from.port + "' -> '" +
+                                          link.to.component + "." + link.to.port + "': a nitrous_kit's \"out\" port feeds an engine's \"nitrous\" port");
+            }
+            if (kit_feeds_engine) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': engine '" + link.to.component +
+                                          "' nitrous port is fed by more than one fluid link");
+            }
+            kit_feeds_engine = true;
+            continue;
+        }
         if (link.from.is_wheel || from_it == component_index_of.end() || link.from.port != "out" ||
             !std::holds_alternative<FuelTankDesc>(pt.components[static_cast<std::size_t>(from_it->second)].params)) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': fluid link source '" + link.from.component + "." + link.from.port +
                                       "' is not a fuel_tank's \"out\" port");
         }
-        const auto to_it = component_index_of.find(link.to.component);
         if (link.to.is_wheel || to_it == component_index_of.end() || link.to.port != "fuel" ||
             !(std::holds_alternative<TorqueMapEngineDesc>(pt.components[static_cast<std::size_t>(to_it->second)].params) ||
               std::holds_alternative<SimulatedEngineDesc>(pt.components[static_cast<std::size_t>(to_it->second)].params))) {
@@ -438,6 +483,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     for (std::size_t ci = 0; ci < pt.components.size(); ++ci) {
         if (std::holds_alternative<FuelTankDesc>(pt.components[ci].params) && static_cast<int>(ci) != fuel_tank_component_index) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': fuel_tank '" + pt.components[ci].id + "' has no consumer");
+        }
+        if (std::holds_alternative<N2oBottleDesc>(pt.components[ci].params) && static_cast<int>(ci) != n2o_bottle_component_index) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': n2o_bottle '" + pt.components[ci].id + "' is not linked to a nitrous_kit");
+        }
+        if (std::holds_alternative<NitrousKitDesc>(pt.components[ci].params)) {
+            if (static_cast<int>(ci) != nitrous_kit_component_index) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': nitrous_kit '" + pt.components[ci].id + "' has no n2o_bottle");
+            }
+            if (!kit_feeds_engine) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': nitrous_kit '" + pt.components[ci].id + "' has no consumer");
+            }
         }
     }
 
@@ -1274,6 +1330,27 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         engine_friction_row_ = engine_row;
         engine_has_fuel_model_ = e_has_fuel_model; // PHYS-033 P4 I7a C5, broadened C5d: gates fuel/heat booking below
 
+        // N2O plan N1: the Powertrain-owned nitrous system from the fluid-linked bottle + kit. The kit's fuel jet
+        // is sized with the density of the fuel the engine burns (the tank's, else fuels[0]).
+        if (nitrous_kit_component_index >= 0) {
+            if (!tank_desc && e_fuels.empty()) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': nitrous_kit needs an engine with a fuel (its jet density)");
+            }
+            const FuelDesc& burnt_fuel = tank_desc ? tank_desc->fuel : e_fuels.front();
+            const N2oBottleDesc& bottle_desc = std::get<N2oBottleDesc>(pt.components[static_cast<std::size_t>(n2o_bottle_component_index)].params);
+            const NitrousKitDesc& kit_desc = std::get<NitrousKitDesc>(pt.components[static_cast<std::size_t>(nitrous_kit_component_index)].params);
+            const std::vector<ChannelDecl> n2o_decls = declare_control_channels(pt);
+            auto slot_of = [&](const std::string& name) {
+                for (std::size_t i = 0; i < n2o_decls.size(); ++i) {
+                    if (n2o_decls[i].name == name) return static_cast<int>(i);
+                }
+                return -1;
+            };
+            nitrous_ = std::make_unique<NitrousSystem>(bottle_desc, kit_desc, burnt_fuel.density_kg_m3, slot_of(kit_desc.controller.arm_channel),
+                                                       bottle_desc.has_heater ? slot_of(bottle_desc.heater.channel) : -1,
+                                                       kit_desc.controller.has_purge ? slot_of(kit_desc.controller.purge.channel) : -1);
+        }
+
         // Bootstrap fix: EngineTorqueMap::pre_solve's own state machine can
         // only ENTER Running via a bump-start (omega already > 0, see plan
         // section 6.1.3) or a completed crank - it never spins the crank up
@@ -1829,9 +1906,33 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         if (anti_lag_channel_live_ && ctx.channels != nullptr && anti_lag_channel_slot_ < ctx.channel_count)
             s.anti_lag_channel = ctx.channels[anti_lag_channel_slot_]; // I7d D5; else NaN = default_enabled
         last_engine_sensors_ambient_ = ctx.ambient; // test-only white-box hook
+        if (nitrous_) {
+            // N2O plan N1: the nitrous system decides this substep's flows BEFORE the engine's pre_solve
+            // (previous substep's engine flags, the throttle stage's command). The engine ignores the block in N1.
+            NitrousInputs ni;
+            ni.h = ctx.h;
+            auto channel = [&](int slot, real fallback) {
+                return (ctx.channels != nullptr && slot >= 0 && slot < ctx.channel_count) ? ctx.channels[slot] : fallback;
+            };
+            ni.arm = channel(nitrous_->arm_slot(), nitrous_->kit().controller.arm_default);
+            ni.heater = channel(nitrous_->heater_slot(), nitrous_->bottle().has_heater ? nitrous_->bottle().heater.default_on : real(0.0));
+            ni.purge = channel(nitrous_->purge_slot(), real(0.0));
+            ni.throttle_command = throttle_cmd.command;
+            ni.omega = s.omega;
+            ni.has_gearbox = gearbox_ != nullptr;
+            ni.gear = gearbox_ ? gearbox_->current_position() : 0;
+            ni.speed_mps = approx_speed_mps();
+            ni.engine_running = last_engine_result_.state == EngineState::Running;
+            ni.ignition_cut = ctx.tcu_ignition_cut;
+            ni.p_intake_pa = engine_->intake_pressure_pa();
+            ni.p_ambient_pa = ctx.ambient.pressure_pa;
+            nitrous_->step(ni);
+            s.nitrous = nitrous_->engine_input();
+        }
         const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut};
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
         const auto& pre = last_engine_result_;
+        if (nitrous_) nitrous_->observe(pre.limiter_active || pre.dfco_active, pre.fuel_supply_fraction < real(1.0));
         assembly_.torque(engine_crank_, pre.tau0, pre.d);
         assembly_.set_friction_capacity(engine_friction_row_, pre.friction_cap_static, pre.friction_cap_kinetic);
     }
@@ -2039,6 +2140,14 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         const real v = network_.row_velocity(engine_friction_row_);
         const real lambda = network_.row_lambda(engine_friction_row_);
         ledger_.engine_friction_loss += -ctx.h * v * lambda;
+        if (nitrous_) {
+            // N2O plan N1: the bottle loses what was delivered/vented; the engine ignores the N2O, so every
+            // delivered kg is booked as unburnt pass-through (N2 books the real split).
+            const NitrousBooking nb = nitrous_->commit();
+            ledger_.n2o_mass += nb.n2o_kg;
+            ledger_.n2o_unburnt += nb.n2o_kg;
+            ledger_.n2o_purged += nb.purge_kg;
+        }
     }
     if (clutch_) {
         const real v = network_.row_velocity(clutch_row_);
@@ -2279,7 +2388,15 @@ std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     // a tank (every pre-C6 vehicle hashes exactly as before). The cumulative
     // fuel ledger counters stay unhashed.
     if (fuel_tank_) h = fuel_tank_->fold_state_hash(h);
+    if (nitrous_) h = nitrous_->fold_state_hash(h); // N2O plan N1: appended after every existing fold, only with a kit
     return h;
+}
+
+void Powertrain::request_n2o_bottle_mass(real kg) {
+    if (!nitrous_) throw std::runtime_error("set_n2o_bottle_mass: this vehicle has no n2o_bottle");
+    if (std::isnan(kg)) throw std::runtime_error("set_n2o_bottle_mass: the requested mass is NaN");
+    n2o_bottle_set_value_ = kg;
+    n2o_bottle_set_pending_ = true;
 }
 
 void Powertrain::request_fuel_tank_mass(real kg) {

@@ -46,6 +46,18 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
     ess.lambda = pre.lambda;
     ess.spark_advance_deg = pre.spark_advance_deg;
     ess.exhaust_mass_flow_kg_s = pre.exhaust_mass_flow_kg_s;
+    if (const NitrousSystem* n2o = pt.nitrous()) {
+        const NitrousStatus& ns = n2o->status();
+        ess.n2o_active = ns.flowing ? std::uint8_t(1) : std::uint8_t(0);
+        ess.n2o_safety_cut = static_cast<std::uint8_t>(ns.safety_cut);
+        ess.n2o_flow_g_s = ns.mdot_n_kg_s * real(1000.0);
+        ess.n2o_purge_flow_g_s = ns.mdot_purge_kg_s * real(1000.0);
+        ess.n2o_bottle_kg = n2o->bottle_kg();
+        ess.n2o_bottle_bar = n2o->bottle_gauge_bar();
+        ess.n2o_retard_deg = ns.retard_deg;
+        ess.n2o_activations = n2o->activations();
+        ess.n2o_purge_events = n2o->purge_events();
+    }
     return ess;
 }
 
