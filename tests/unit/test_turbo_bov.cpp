@@ -16,17 +16,22 @@
 //     0.716, vent 0.4152); rotor after 500 ms 33152 rpm vs 0 rpm (the valve makes
 //     the rotor decelerate FASTER: more flow at lower head, more compressor power).
 //   shipped hyper V8 (held 6000 rpm, WOT 2 s then a lift), rotor at the lift
-//     100406 rpm, 0 rpm already 50 ms later with or without a valve; compressor
-//     flow +50 ms 0.4027 kg/s in every variant, +100 ms 0.0966 (none, 0.9 bar
-//     valve, whose opening peaks at 0.128 with a vent peak of 0.0004 kg/s) vs
-//     0.2153 kg/s (0.2 bar / 10 ms valve: opening 1.000, vent peak 0.1362 kg/s).
-//   The charge pressure collapses together with the rotor, so the fixture valve
-//   (crack 0.9 bar) opens late; a 0.2 bar valve opens in time but also cracks once
-//   at the t=0 spool-up (charge 101 kPa over a 30 kPa manifold) - hence a real
-//   crack pressure must exceed the idle vacuum.
+//     100663 rpm. AFTER the I7d compressor-flow fix (compressor fed the throttle flow,
+//     exhaust heat held): no valve: rotor +50 ms 69674, +100 ms 41615, +250 ms 34989,
+//     +500 ms 29602 rpm, compressor flow +50 ms 0.4463, +100 ms 0.0580 kg/s; 0.9 bar valve
+//     (opening peaks at 0.315, vent peak 0.0943 kg/s): rotor +100 ms 36058, +250 ms 6144,
+//     +500 ms 4527 rpm; 0.2 bar / 10 ms valve (opening 1.000, vent peak 0.4050 kg/s): the
+//     rotor is at 0 rpm by +100 ms (the vent keeps 0.28 kg/s on the compressor, more
+//     load than the rotor's energy). BEFORE the fix: 0 rpm already 50 ms after the lift
+//     with or without a valve, compressor flow +50 ms 0.4027 kg/s in every variant,
+//     +100 ms 0.0966 (none, 0.9 bar valve, opening peak 0.128, vent peak 0.0004 kg/s)
+//     vs 0.2153 kg/s (0.2 bar valve, vent peak 0.1362 kg/s).
+//   A real crack pressure must exceed the idle vacuum: a 0.2 bar valve also cracks once
+//   at the t=0 spool-up (charge 101 kPa over a 30 kPa manifold).
 //   vehicle, sedan chassis + hyper-like pair + 0.2 bar valve: events 2 (launch
-//     spool-up, lift), max opening 1.000, max vent 0.1006 kg/s, hash identical
-//     at 1 and 10 workers, own allocations 0.
+//     spool-up, lift), max opening 1.000, max vent 0.3381 kg/s (0.1006 before the
+//     fix), hash identical at 1 and 10 workers, own allocations 0.
+//   engine fixture (held 5000 rpm, 0.2 bar valve): max vent 0.3170 kg/s (0.0972 before).
 // Sabotages (each makes the named check fail, then reverted): see
 //   out/i7d_d1_d4_progress.md "Sabotage results".
 // The printf lines "[D2 ...]" print the numbers above.
@@ -260,7 +265,7 @@ TEST_CASE("D2: the engine publishes the valve and counts one event per lift", "[
     s.omega = omega;
     s.ignition = 1.0;
     PreSolveResult r, rn, prev;
-    real max_open_wot = 0.0, max_open_lift = 0.0, max_vent = 0.0;
+    real flow_ref = 0.0, max_open_wot = 0.0, max_open_lift = 0.0, max_vent = 0.0;
     std::uint32_t ev_before = 0, ev_after = 0;
     for (int i = 0; i < 3 * 960; ++i) {
         const real t = i * kH;
@@ -275,10 +280,15 @@ TEST_CASE("D2: the engine publishes the valve and counts one event per lift", "[
         if (i == 959) ev_before = r.bov_events;
         if (i == 1919) ev_after = r.bov_events;
         if (t >= 1.0 && t < 2.0) { max_open_lift = std::max(max_open_lift, r.bov_opening); max_vent = std::max(max_vent, r.bov_flow_kg_s); }
-        // compressor flow = the engine's air of the previous substep + the vent flow of this one
-        if (i > 0 && prev.p_charge_pa > 0.0) {
-            const real air_prev = prev.exhaust_mass_flow_kg_s - prev.fuel_flow_g_s * 1e-3;
-            CHECK(r.compressor_flow_kg_s == Catch::Approx(air_prev + r.bov_flow_kg_s).epsilon(1e-9).margin(1e-12));
+        // compressor flow = the relaxed throttle-path flow of the previous substep (I7d compressor-flow fix, see
+        // test_turbo_compressor_flow.cpp CF1; was the cylinder air before it) + the vent flow of this one.
+        // The vent is NOT subtracted from the engine's air, so m_thr is the same with or without the valve.
+        if (i >= 2) {
+            const real published = r.compressor_flow_kg_s - r.bov_flow_kg_s;
+            if (i == 2) flow_ref = published; // seed: f_1
+            else CHECK(published == Catch::Approx(flow_ref).epsilon(1e-9).margin(1e-12));
+            const real m_thr = e.manifold_rhs(prev.p_intake_pa, omega, r.throttle_position, 0.0).m_thr;
+            flow_ref += (kH / (0.005 + kH)) * (std::max(real(0.0), m_thr) - flow_ref); // literal 5 ms = kTurboFlowLagS
         }
         CHECK(rn.bov_opening == 0.0);
         CHECK(rn.bov_events == 0);

@@ -28,6 +28,16 @@ namespace {
 constexpr real kPi = 3.14159265358979323846;
 constexpr real kTwoPi = real(2.0) * kPi;
 constexpr real kFourPi = real(4.0) * kPi;
+// I7d compressor-flow fix, both PROVISIONAL (owner/coordinator to confirm; no cited value exists):
+// - kTurboFlowLagS [AS]: first-order relaxation of the throttle-path flow handed to the compressor. 5 ms is
+//   the charge-pipe/compressor flow inertia and, empirically, the loop-stability margin: unrelaxed (0) a held
+//   7500-8200 rpm WOT ran away; 0.5 ms and up are stable over 7000-8200 rpm (steady values equal to 1e-4 bar).
+//   25 ms (the charge-pressure lag) is stable too but keeps the compressor loaded so long after a lift that
+//   the rotor stops again within 100 ms.
+// - kExhaustHeatHoldS [AS]: decay time constant of the exhaust heat the turbine sees after the fuel flow
+//   falls (peak-hold, instant rise). 0.5 s and 1.0 s give the same rotor at +0.5 s (29.6k vs 29.7k rpm).
+constexpr real kTurboFlowLagS = real(0.005);
+constexpr real kExhaustHeatHoldS = real(0.5);
 constexpr real kRadPerSecToRpm = real(60.0) / (real(2.0) * kPi);
 
 real sign(real x) { return x > real(0.0) ? real(1.0) : (x < real(0.0) ? real(-1.0) : real(0.0)); }
@@ -832,6 +842,21 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
             p1 = p0 + (p1 - p0) * (rhs.f / (rhs.f - f1));
         }
         p_im_ = p1;
+        // I7d compressor-flow fix: the compressor delivers into the charge pipe, which feeds the THROTTLE; the
+        // cylinders draw from the manifold behind it. The turbo therefore sees the throttle-path flow of this
+        // air step (m_thr = throttle plate + idle-air bypass, the whole path from the charge pipe into the
+        // manifold), not the cylinder flow: on a lift-off the throttle flow collapses at once while the
+        // cylinders keep pumping the manifold down for ~100 ms. Positive part only: reverse flow out of the
+        // manifold does not pass the compressor forward. Read by the NEXT substep's turbo step (the same
+        // one-substep hand-off the cylinder flow had; the turbo step above runs before this air step).
+        // Relaxed with kTurboFlowLagS before it is handed over (PROVISIONAL, see the constant): fed raw, the
+        // loop charge pressure -> throttle flow -> compressor flow -> head curve -> charge pressure has a
+        // one-substep delay and a gain above 1 near the end of the compressor map, and a held 7500 rpm WOT
+        // ran away through a period-2 oscillation (rotor to its 1.5x cap, 3.2 bar).
+        if (turbo_) {
+            const real a = h / (kTurboFlowLagS + h);
+            turbo_air_kg_s_ += a * (std::max(real(0.0), rhs.m_thr) - turbo_air_kg_s_);
+        }
     }
 
     // (5) torque at (omega_old, p_im_new), then starvation
@@ -900,9 +925,13 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.spark_advance_deg = ev.spark_deg;
     r.exhaust_mass_flow_kg_s = ev.m_air_rev * std::abs(omega_old) / kTwoPi + booked_fuel_mass_kg_ / h;
     if (turbo_) {
-        turbo_air_kg_s_ = ev.m_air_rev*std::abs(omega_old)/kTwoPi;
         turbo_exhaust_kg_s_ = r.exhaust_mass_flow_kg_s;
-        turbo_fuel_w_ = booked_fuel_mass_kg_/h*maps_->lhv_j_kg;
+        // Turbine-side heat: rises with the burnt fuel at once, falls with the exhaust's thermal inertia
+        // (kExhaustHeatHoldS, PROVISIONAL). The exhaust manifold and turbine housing keep the gas hot for
+        // ~a second after a fuel cut; fed instantaneously the turbine power fell 10x within 10 ms of a lift
+        // (97 -> 9.6 kW) and the rotor stopped in ~50 ms whatever the compressor flow. Steady state is
+        // unchanged (the hold equals the instantaneous value while the fuel flow is constant or rising).
+        turbo_fuel_w_ = std::max(booked_fuel_mass_kg_/h*maps_->lhv_j_kg, turbo_fuel_w_*std::max(real(0.0), real(1.0)-h/kExhaustHeatHoldS));
         r.turbo_rpm=turbo_->rpm(); r.boost_bar=(p_im_-p_amb_)/real(100000.0);
         r.p_exhaust_pa=turbo_->exhaust_pa;
         r.p_charge_pa=turbo_->charge_pa; r.t_charge_k=turbo_->charge_k;
