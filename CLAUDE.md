@@ -126,7 +126,21 @@ physics_sim/
   ("extends" chains bottom-up, user file last, cycle detection, depth 8), load_climate_json
   (physics_sim.climate/1, docs/data_formats/climate.md; keys of later increments rejected as reserved). Tests in
   the separate exe `ps_environment_tests` (no ps_core on its link line), tag [environment]: E1-E5, RFC 7396
-  appendix, loader rejections. data/climates/test_fixed_summer.json. Not yet used by World (W2).
+  appendix, loader rejections. data/climates/test_fixed_summer.json. W2 (118f93c): `Environment`
+  (environment.h/.cpp: attach/set_time/set_time_scale/begin_tick/current/fold_state_hash - the clock anchor
+  t = anchor + scale*(tick - anchor_tick)/tick_hz, never accumulated) and the POD `EnvironmentSnapshot`
+  (environment_snapshot.h: time, season/day, day/night lengths, clock_hours, sun elevation/azimuth/direction
+  in the World frame, GHI, cloud cover). World: install_environment (anchors at the current tick)/
+  remove_environment/environment()/environment_snapshot()/set_environment_time/set_environment_time_scale;
+  runs in the existing freeze_tick_start_state stage (no new stage or telemetry channel), anchor/scale/mode
+  hashed only while installed, WorldSnapshot::has_environment/environment. Scenario "environment" block
+  (climate, seed, time.start/scale, season, north_yaw_deg, explicit events jump_time_s/set_time_scale;
+  io::apply_environment_events, called by ps_run and the determinism harness; docs/data_formats/scenario.md);
+  data/scenarios/environment_day.json (hash-compared, 0x2af395ee8a54f0b5 at 1/2/4/10/24 workers). Tests
+  test_environment_object.cpp (ps_environment_tests), test_environment_world.cpp ([environment], zero alloc
+  armed). Godot: PsSimulation::install_environment/has_environment/get_environment; demo flags --m1-climate,
+  --m1-time-scale, --m1-time-of-day (24 h clock), --m1-season, --m1-day; the DirectionalLight/sky follow the
+  snapshot sun, the HUD shows clock/season.
 - `ps_audio` (STATIC, `audio/`, ps_audio A7): the live engine voice; links
   `ps_engine_cycle` only, never `ps_core`. Guard `ps_audio_standalone`
   (`tests/unit/audio_standalone_main.cpp`, plain `main`, WHOLE_ARCHIVE
