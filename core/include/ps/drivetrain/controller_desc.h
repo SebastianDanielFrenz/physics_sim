@@ -43,9 +43,18 @@ struct AutoClutchDesc {
     // unaffected. Default is intentionally aggressive (~0.025 s to fully
     // open) relative to release_rate_per_s's ~0.083 s.
     real anti_stall_release_rate_per_s = 40.0;
-    // Legacy configuration field retained for source/JSON compatibility.
-    // Since 2026-10-04 the controller uses signed gearbox-input RPM and
-    // anti_stall_rpm for rolling safety, rather than this separate threshold.
+    // Rolling re-engagement (owner test drive 2026-09-24: "after braking
+    // hard, rpm is stuck at idle"): in Launch mode, in gear with the gearbox
+    // idle, the clutch closes once the gearbox INPUT shaft turns faster than
+    // this (rpm, SIGNED - a backwards-turning input never qualifies). Also
+    // the post-shift launch-vs-shift decision (owner test drive 2026-09-25):
+    // below it the post-shift engagement is a launch, not a shift reclose.
+    // Must be > anti_stall_rpm. ca118ec (2026-10-04) briefly replaced it with
+    // anti_stall_rpm; that closed every launch from rest at ~6 km/h onto an
+    // engine near idle (failing the unsettled-start, compliant-launch and
+    // split-mu validation tests), so it governs again. The release side
+    // (Locked below anti_stall_rpm on engine OR signed input rpm, instant
+    // release, reverse-rotation hold) stays as ca118ec made it.
     real rolling_reengage_rpm = 1300.0;
     real open_time_s = 0.08, close_time_s = 0.20; // shift ramps
     // Torque-following close onto a MOVING driveline (owner test drive

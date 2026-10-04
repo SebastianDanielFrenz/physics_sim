@@ -1067,6 +1067,14 @@ TEST_CASE("P6: tractor governor path over vehicle_tractor_i4.json's control even
     // FNV-1a hash over all fields and one per field, and print ticks
     // 300/1200/2000 as hex floats. Compared with == (hash equality is bit
     // equality of every value on every one of the 2400 ticks).
+    // Re-recorded 2026-10-04 (vault PHYS-040): ca118ec made the auto-clutch
+    // anti-stall release a locked clutch at once (engine OR signed input rpm
+    // below anti_stall_rpm) instead of ramping it at 40/s, which changes the
+    // braking-to-a-stop phase only: hand_throttle and governor_setpoint_rpm
+    // and the tick 300/1200 spot values are still the ba0f486 recording;
+    // throttle_eff/engine_torque_demand/idle_integrator and tick 2000 moved
+    // (were 0x6443ff93d68468d5 / 0xd6ab85ab58668bde / 0x3d3d46be580ce397,
+    // all 0x5342f8c7ba48dfe9).
     auto fnv = [](std::uint64_t h, double v) {
         unsigned char b[8];
         std::memcpy(b, &v, 8);
@@ -1105,14 +1113,14 @@ TEST_CASE("P6: tractor governor path over vehicle_tractor_i4.json's control even
     REQUIRE(ticks == 2400);
     CHECK(h_field[0] == 0x09c190b1bd78f7f9ULL); // hand_throttle
     CHECK(h_field[1] == 0x1ece9dfdcfa3ddecULL); // governor_setpoint_rpm
-    CHECK(h_field[2] == 0x6443ff93d68468d5ULL); // throttle_eff
-    CHECK(h_field[3] == 0xd6ab85ab58668bdeULL); // engine_torque_demand
-    CHECK(h_field[4] == 0x3d3d46be580ce397ULL); // idle_integrator
-    CHECK(h_all == 0x5342f8c7ba48dfe9ULL);
+    CHECK(h_field[2] == 0x4a4dec2dbe22c70dULL); // throttle_eff
+    CHECK(h_field[3] == 0xc00e022ed2f37e06ULL); // engine_torque_demand
+    CHECK(h_field[4] == 0xcf9faa9e08c73845ULL); // idle_integrator
+    CHECK(h_all == 0x5fd1a1eb03f6e1abULL);
     const double expected[3][5] = {
         {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.ff2169a8cdd91p-3, 0x1.6c6bc04ec3802p+6, -0x1.b5de0d29ea85bp-4},
         {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.e344502230825p-4, 0x1.f57fc23bceb90p+2, -0x1.b5de0d29ea85bp-4},
-        {0x0.0000000000000p+0, 0x1.a900000000000p+9, 0x1.a60fe0719d98ap-4, -0x1.cf94c04e5b960p+0, 0x1.5f2e95bc232ccp-8},
+        {0x0.0000000000000p+0, 0x1.a900000000000p+9, 0x1.abb920a044aedp-4, -0x1.2901827fcb9e0p+0, 0x1.cf2be9edd195bp-9},
     };
     for (int t = 0; t < 3; ++t) {
         for (int k = 0; k < 5; ++k) {

@@ -753,7 +753,7 @@ TEST_CASE("Terrain prefetch on hashes like prefetch off at 1, 4 and 24 workers (
 // re-deriving this saturation argument for the new build.
 TEST_CASE("State hash for the tractor I4 control-channel exercise scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
-    constexpr std::uint64_t kRecorded = 0xac386af7129b9ffeULL;
+    constexpr std::uint64_t kRecorded = 0xe471f1f3e5ad4328ULL; // re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0xac386af7129b9ffe
     const std::uint64_t reference = run_scenario_file("vehicle_tractor_i4.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     REQUIRE(reference == kRecorded);
@@ -880,7 +880,7 @@ TEST_CASE("Tractor I4 scenario's control events produce the expected live powert
 // 1/2/4/10 workers all agreed before this test existed).
 TEST_CASE("State hash for the fuel tank starvation scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][fuel][heavy][world]") {
-    constexpr std::uint64_t kRecorded = 0xe545d5f57136415fULL; // recorded 2026-09-28 (in-gear F4 fix, fixed B1/B2/B3/F1 engine+fuel data)
+    constexpr std::uint64_t kRecorded = 0xc89f5ed4df82b2dcULL; // re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0xe545d5f57136415f, recorded 2026-09-28 (in-gear F4 fix, fixed B1/B2/B3/F1 engine+fuel data)
     const std::uint64_t reference = run_scenario_file("vehicle_fuel_tank.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     REQUIRE(reference == kRecorded);
@@ -1043,7 +1043,7 @@ GenScenarioRun run_gen_engine_scenario(ps::io::Scenario sc, int workers) {
 
 TEST_CASE("State hash for the generated-map engine scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
-    constexpr std::uint64_t kRecorded = 0x4030651924c4dbd2ULL; // recorded 2026-09-29 (owner-requested SimulatedEngine idle rework: pedal-released one-sided PI, DFCO dashpot, manifold-fill term; was 0x5e88a765a7e748e4, recorded 2026-09-28 at the C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
+    constexpr std::uint64_t kRecorded = 0x84518e7edcdc3b6aULL; // re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0x4030651924c4dbd2, recorded 2026-09-29 (owner-requested SimulatedEngine idle rework: pedal-released one-sided PI, DFCO dashpot, manifold-fill term; was 0x5e88a765a7e748e4, recorded 2026-09-28 at the C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
     const ps::io::Scenario sc = load_gen_engine_scenario();
     const std::uint64_t reference = run_gen_engine_scenario(sc, 1).hash;
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);

@@ -115,6 +115,8 @@ public:
         throttle_ceiling_ = real(1.0);
         mode_ = clutch_locked ? ClutchMode::Locked : ClutchMode::Launch;
         e_auto_ = clutch_locked ? real(1.0) : real(0.0);
+        reverse_hold_ = false;
+        anti_stall_released_ = false;
     }
 
 private:
@@ -137,6 +139,19 @@ private:
     // Auto-clutch state (plan section 6.5.2).
     ClutchMode mode_ = ClutchMode::Launch;
     real e_auto_ = 1.0;
+    // The gearbox input turns backwards in a forward gear: the clutch is held
+    // open. Latched on a clear reversal (below -anti_stall_rpm, or an
+    // emergency release with the input already below -lock_slip_rpm) and
+    // released once the input is above -lock_slip_rpm again, so short
+    // negative transients (suspension settling, locked-diff wind-up) do not
+    // dump the clutch.
+    bool reverse_hold_ = false;
+    // The anti-stall last released a locked clutch and it has not locked
+    // again since: from this state the clutch may not start closing onto a
+    // backwards-turning input at all (latches reverse_hold_ at any input
+    // below -lock_slip_rpm), unlike a launch from rest, whose input can dip
+    // backwards briefly while 1st goes in.
+    bool anti_stall_released_ = false;
 
     // Auto-shift state (plan section 6.5.4).
     real time_in_gear_ = 0.0;
