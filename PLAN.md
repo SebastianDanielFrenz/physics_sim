@@ -711,6 +711,16 @@ Status 2026-09-26: I0-I4 done. I4 (C1-C16) closed by `tools\ci.ps1 -Full`
 on every leg is the pre-existing Spec test 10.1 (vault PHYS-037, fails
 identically at be36545, root cause not diagnosed). Next: I7 (below).
 
+Status 2026-10-04: I7a-I7c done (graph-engine fuel map, fuel files and tank;
+mean-value runtime; cycle-model map generator with pipes, the generated A25A
+and the ps_audio live voice in Godot). I7d is partial: a lumped twin-turbo
+pair (quasi-steady compressor head, PID wastegate, intercooler effectiveness,
+live ambient) ships on car_hyper from the racing_game session. Missing for
+I7d: blow-off valve, surge flag and counters, intercooler pressure drop,
+anti-lag, the wastegate/BOV/anti-lag/surge sound-state fields and the turbo
+format docs - plan out/i7d_completion_plan.md (D1-D6). Then I7e (rotary
+R26B), N2O, and fuel mass feeding back into the chassis.
+
 Engine options and order (Sebastian, 2026-09-26): I7 moves up to come right
 after I4 closes, before the tractor demo. Two generic engine types must exist
 side by side, selected per engine data file:
