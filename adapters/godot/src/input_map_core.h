@@ -112,6 +112,7 @@ struct RawInput {
     bool toggle_pto_held = false;
     bool toggle_pto_speed_held = false; // flips the pto_speed channel between 540/1000 (main.gd owns the actual values, same pattern as the other tri-state toggles)
     bool toggle_park_lock_held = false;
+    bool toggle_n2o_held = false; // owner 2026-10-05: gamepad Y / key B, the nitrous kit's arm switch
 
     // Tractor demo: hand_throttle is a STATEFUL RAMP (0..1), not a tri-state
     // toggle - mirrors clutch_button_level_'s ramp below. Held up/down keys
@@ -169,6 +170,7 @@ struct ControlChannels {
     bool toggle_pto = false;
     bool toggle_pto_speed = false;
     bool toggle_park_lock = false;
+    bool toggle_n2o = false;
 
     // Tractor demo: stateful ramp, 0..1 - forwarded straight to
     // World::set_control("hand_throttle", ...) every frame (not edge-
@@ -254,6 +256,7 @@ private:
     bool prev_toggle_pto_ = false;
     bool prev_toggle_pto_speed_ = false;
     bool prev_toggle_park_lock_ = false;
+    bool prev_toggle_n2o_ = false;
 
     std::uint32_t shift_up_count_ = 0;
     std::uint32_t shift_down_count_ = 0;

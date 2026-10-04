@@ -348,7 +348,16 @@ func _repo_root() -> String:
 	# demo/ is adapters/godot/demo; the repo root is three levels up.
 	return ProjectSettings.globalize_path("res://").path_join("../../..")
 
+# Window close: stop the tyre-audio players and let the audio thread release
+# their AudioStreamGeneratorPlayback before quitting - quitting straight away
+# leaks 4 of them ("ObjectDB instances were leaked at exit", 2026-10-05).
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		await _shutdown_surface_audio()
+		get_tree().quit()
+
 func _ready() -> void:
+	get_tree().set_auto_accept_quit(false)
 	var lock_record := Node.new()
 	lock_record.set_script(load("res://scripts/runtime_lock_record.gd"))
 	add_child(lock_record)
@@ -1024,6 +1033,11 @@ func _process(delta: float) -> void:
 				simulation.set_control("pto_speed", 540.0 if simulation.get_control("pto_speed") >= 770.0 else 1000.0)
 			if input_map.get_toggle_park_lock():
 				simulation.set_control("park_lock", 1.0 - simulation.get_control("park_lock"))
+			# N2O arm switch (owner 2026-10-05: gamepad Y, key B). The channel name is the
+			# nitrous controller's arm_channel; shipped kits use "nitrous_arm". A vehicle
+			# without a kit never declared it (logged once per press, nothing reads it).
+			if input_map.get_toggle_n2o():
+				simulation.set_control("nitrous_arm", 1.0 - simulation.get_control("nitrous_arm"))
 			# hand_throttle is a continuous per-frame ramp (unlike the
 			# edge-triggered toggles above), so unconditionally sending it
 			# to a vehicle that never declared the channel (car_sedan) would

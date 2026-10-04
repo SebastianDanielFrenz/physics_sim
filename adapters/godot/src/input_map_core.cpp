@@ -117,6 +117,7 @@ ControlChannels InputMapper::process(const RawInput& raw, float dt) {
     out.toggle_pto = raw.toggle_pto_held && !prev_toggle_pto_;
     out.toggle_pto_speed = raw.toggle_pto_speed_held && !prev_toggle_pto_speed_;
     out.toggle_park_lock = raw.toggle_park_lock_held && !prev_toggle_park_lock_;
+    out.toggle_n2o = raw.toggle_n2o_held && !prev_toggle_n2o_;
 
     // Tractor demo: hand-throttle ramp - up/down held keys move it at
     // kHandThrottleRampPerSecond/s, clamped to [0, 1]; holding neither (or
@@ -143,6 +144,7 @@ ControlChannels InputMapper::process(const RawInput& raw, float dt) {
     prev_toggle_pto_ = raw.toggle_pto_held;
     prev_toggle_pto_speed_ = raw.toggle_pto_speed_held;
     prev_toggle_park_lock_ = raw.toggle_park_lock_held;
+    prev_toggle_n2o_ = raw.toggle_n2o_held;
 
     return out;
 }

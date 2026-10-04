@@ -89,6 +89,7 @@ public:
     [[nodiscard]] bool get_toggle_pto() const { return channels_.toggle_pto; }
     [[nodiscard]] bool get_toggle_pto_speed() const { return channels_.toggle_pto_speed; }
     [[nodiscard]] bool get_toggle_park_lock() const { return channels_.toggle_park_lock; }
+    [[nodiscard]] bool get_toggle_n2o() const { return channels_.toggle_n2o; }
     [[nodiscard]] float get_hand_throttle() const { return channels_.hand_throttle; }
 
     // Remap config (deadzone/curve/invert), PLAN.md P2 "configurable".

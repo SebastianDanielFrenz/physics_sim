@@ -344,6 +344,19 @@ int main() {
               "tractor toggles: no new edge while released");
     }
 
+    // --- N2O arm toggle (owner 2026-10-05: gamepad Y / key B) ---------------
+    {
+        InputMapper mapper;
+        RawInput raw;
+        raw.toggle_n2o_held = true;
+        check(mapper.process(raw, kDt60).toggle_n2o, "n2o toggle: rising edge requests a toggle");
+        check(!mapper.process(raw, kDt60).toggle_n2o, "n2o toggle: holding does not repeat the request");
+        raw.toggle_n2o_held = false;
+        check(!mapper.process(raw, kDt60).toggle_n2o, "n2o toggle: release is not a request");
+        raw.toggle_n2o_held = true;
+        check(mapper.process(raw, kDt60).toggle_n2o, "n2o toggle: a second press requests again");
+    }
+
     // --- Tractor demo: hand-throttle ramp (1.0 s to full at dt = 1/60) ------
     {
         InputMapper mapper;

@@ -169,7 +169,7 @@ func _process(_delta: float) -> void:
 	lines.append("E/Q or B/X(joy) shift up/down   C or LB(joy) clutch (hold)")
 	lines.append("I or D-pad Up ignition   K or Start(joy) starter (hold)")
 	lines.append("F5/D-pad Left auto-shift   F6/D-pad Down auto-clutch   F7/D-pad Right auto-blip")
-	lines.append("V or Y(joy) camera(chase/cockpit/free)  G or R3(joy) debug draw  R or Back(joy) reset  H rumble on/off")
+	lines.append("V or RB(joy) camera(chase/cockpit/free)  B or Y(joy) N2O arm  G or R3(joy) debug draw  R or Back(joy) reset  H rumble on/off")
 	lines.append("1 straight  2 skidpad  3 ramps (teleport)")
 	lines.append("tractor: T awd  L diff_lock  P pto  O pto_speed  N park_lock  ]/[ hand_throttle up/down (keyboard only, no gamepad free)")
 	_label.text = "\n".join(lines)

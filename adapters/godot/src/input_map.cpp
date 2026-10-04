@@ -104,7 +104,8 @@ RawInput PsInputMap::gather_raw_input() const {
     // digital clutch button is a level too (clutch_button_held), smoothed on
     // release inside InputMapper rather than snapped to 0/1 here.
     // Owner remap (2026-09-24): B = upshift, X = downshift, LB = clutch
-    // (hold), right stick click = debug draw (below). RB is unbound.
+    // (hold), right stick click = debug draw (below). Owner remap
+    // (2026-10-05): Y = N2O arm toggle, RB = camera (was Y).
     const bool joy_clutch = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_LEFT_SHOULDER);
     raw.clutch_button_held = joy_clutch || input->is_action_pressed("ps_clutch_button");
 
@@ -112,7 +113,7 @@ RawInput PsInputMap::gather_raw_input() const {
         || input->is_action_pressed("ps_shift_up");
     raw.shift_down_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_X)
         || input->is_action_pressed("ps_shift_down");
-    raw.camera_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_Y)
+    raw.camera_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_RIGHT_SHOULDER)
         || input->is_action_pressed("ps_camera");
     raw.reset_vehicle_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_BACK)
         || input->is_action_pressed("ps_reset_vehicle");
@@ -139,14 +140,14 @@ RawInput PsInputMap::gather_raw_input() const {
     // ps_toggle_awd/ps_toggle_diff_lock/ps_toggle_pto/ps_toggle_pto_speed/
     // ps_toggle_park_lock/ps_hand_throttle_up/ps_hand_throttle_down
     // actions, physical keys T/L/P/O/N/]/[) - every gamepad button already
-    // has a job (see the remap comment above); JOY_BUTTON_RIGHT_SHOULDER
-    // is the only one still free and is left for a future assignment
-    // rather than overloading it here.
+    // has a job (see the remap comment above).
     raw.toggle_awd_held = input->is_action_pressed("ps_toggle_awd");
     raw.toggle_diff_lock_held = input->is_action_pressed("ps_toggle_diff_lock");
     raw.toggle_pto_held = input->is_action_pressed("ps_toggle_pto");
     raw.toggle_pto_speed_held = input->is_action_pressed("ps_toggle_pto_speed");
     raw.toggle_park_lock_held = input->is_action_pressed("ps_toggle_park_lock");
+    raw.toggle_n2o_held = input->is_joy_button_pressed(joy_device_, godot::JOY_BUTTON_Y)
+        || input->is_action_pressed("ps_toggle_n2o");
     raw.hand_throttle_up_held = input->is_action_pressed("ps_hand_throttle_up");
     raw.hand_throttle_down_held = input->is_action_pressed("ps_hand_throttle_down");
 
@@ -404,6 +405,7 @@ void PsInputMap::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_toggle_pto"), &PsInputMap::get_toggle_pto);
     ClassDB::bind_method(D_METHOD("get_toggle_pto_speed"), &PsInputMap::get_toggle_pto_speed);
     ClassDB::bind_method(D_METHOD("get_toggle_park_lock"), &PsInputMap::get_toggle_park_lock);
+    ClassDB::bind_method(D_METHOD("get_toggle_n2o"), &PsInputMap::get_toggle_n2o);
     ClassDB::bind_method(D_METHOD("get_hand_throttle"), &PsInputMap::get_hand_throttle);
 
     ClassDB::bind_method(D_METHOD("set_steer_deadzone", "value"), &PsInputMap::set_steer_deadzone);
