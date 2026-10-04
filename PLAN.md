@@ -721,6 +721,21 @@ anti-lag, the wastegate/BOV/anti-lag/surge sound-state fields and the turbo
 format docs - plan out/i7d_completion_plan.md (D1-D6). Then I7e (rotary
 R26B), N2O, and fuel mass feeding back into the chassis.
 
+Order change (Sebastian, 2026-10-04): N2O comes right after I7d, wet system
+first (the kit's own fuel jet keeps the mixture; dry later). A knock limit
+(C17b, knock-limited spark) must exist at some point anyway. I7e (rotary
+R26B) moves back far, behind N2O and fuel mass coupling. The I7 order
+paragraph below is superseded on these points.
+N2O gains are validated against sources the coordinator picks (kit jet
+charts, published dyno pulls). Diesel simulated engines become possible once
+the autoignition model behind the knock limit exists (Sebastian, 2026-10-04);
+they additionally need direct injection (injection timing and rate, ignition
+delay, premixed plus diffusion burn) and quantity (unthrottled) load control.
+
+Controls (Sebastian, 2026-10-04): gamepad Y toggles the N2O arming switch in
+the Godot demo and in racing_game (bound once N1's arming channel exists);
+the camera switch moves from Y to RB.
+
 Engine options and order (Sebastian, 2026-09-26): I7 moves up to come right
 after I4 closes, before the tractor demo. Two generic engine types must exist
 side by side, selected per engine data file:

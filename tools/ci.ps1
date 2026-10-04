@@ -711,7 +711,7 @@ function Invoke-WslLane {
 # ===========================================================================
 # -Affected / -Topic: per-change runs
 # ===========================================================================
-$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'cycle', 'audio', 'determinism', 'bench')
+$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'cycle', 'audio', 'environment', 'determinism', 'bench')
 
 # Path -> topics. First matching rule wins; paths are repo-relative with '/'.
 # Kind: 'topics' (run Topics), 'everything' (foundational: default fast run),
@@ -738,6 +738,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/articulation/'; Kind = 'topics'; Topics = @('articulation', 'contact') },
     @{ Re = '^core/(include/ps|src)/terrain/'; Kind = 'topics'; Topics = @('terrain') },
     @{ Re = '^core/(include/ps|src)/vehicle/'; Kind = 'topics'; Topics = @('vehicle') },
+    @{ Re = '^core/(include/ps|src)/environment/'; Kind = 'topics'; Topics = @('environment', 'vehicle') },  # weather plan W1+: ps_environment (+ _io); the wheel reads its surface condition
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
     @{ Re = '^core/(include/ps|src)/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain', 'cycle') },  # cycle model + pipes; [cycle] also selects the [audio][cycle] voice tests (EngineCore is shared)
     @{ Re = '^audio/'; Kind = 'topics'; Topics = @('audio', 'cycle') },  # ps_audio A7
@@ -746,6 +747,8 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/io/'; Kind = 'topics'; Topics = @('io'); AllScenarios = $true },
     @{ Re = '^data/(vehicles|tyres|engines|gearboxes)/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^data/fuels/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },
+    @{ Re = '^data/oxidizers/|^tools/oxidizerdata/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },  # N2O N0 property data + its generator
+    @{ Re = '^data/(climates|weather_presets|surface_conditions|tyre_profiles)/'; Kind = 'topics'; Topics = @('environment', 'io', 'vehicle') },  # weather plan data files
     @{ Re = '^data/surfaces/'; Kind = 'topics'; Topics = @('vehicle', 'terrain', 'io') },
     @{ Re = '^data/tracks/'; Kind = 'topics'; Topics = @('terrain', 'io') },
     @{ Re = '^data/scenarios/'; Kind = 'scenario' },
