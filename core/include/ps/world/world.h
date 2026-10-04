@@ -48,6 +48,9 @@ namespace ps::terrain { class TileManager; }
 // core/src/vehicle/system.h) is internal for the same reason - World owns
 // it via this incomplete-type pointer, same pattern as articulation::System.
 namespace ps::vehicle { class System; }
+// Forward-declared only (weather plan W2): the environment library
+// (core/include/ps/environment, target ps_environment) is held by shared_ptr.
+namespace ps::environment { class Environment; struct EnvironmentSnapshot; }
 
 namespace ps {
 
@@ -201,6 +204,32 @@ public:
     [[nodiscard]] const aero::Telemetry& vehicle_aero_telemetry(VehicleId) const;
     void set_ambient(const AmbientSample& a) { ambient_ = a; }
     [[nodiscard]] const AmbientSample& ambient() const { return ambient_; }
+
+    // Weather plan W2 (out/weather_plan.md 1.3): the environment (clock,
+    // calendar, sun; later weather and surface condition). Sim thread, between
+    // steps. install_environment anchors the environment's clock at the
+    // CURRENT tick (a mid-run install is a "weather starts now" event) and
+    // evaluates its snapshot for that tick; from then on the work runs inside
+    // the existing freeze_tick_start_state stage (no new stage, no new
+    // telemetry channel), the environment's clock anchor is folded into
+    // state_hash() and WorldSnapshot::environment is filled. With no
+    // environment installed nothing here runs and every hash, CSV header and
+    // allocation count is exactly as before. Throws std::invalid_argument for
+    // a null pointer; replaces a previously installed environment.
+    void install_environment(std::shared_ptr<environment::Environment> env);
+    void remove_environment();
+    // Null when none is installed. The pointee is shared with the caller: only
+    // call mutating methods on it from the sim thread between steps (prefer
+    // set_environment_time/_scale below, which pass the right tick).
+    [[nodiscard]] environment::Environment* environment() const { return environment_.get(); }
+    // This tick's evaluated snapshot (the one stage_snapshot publishes); null
+    // when none is installed. Sim thread only (live state).
+    [[nodiscard]] const environment::EnvironmentSnapshot* environment_snapshot() const;
+    // Jump env time to `env_s` at the next step / change the scale without a
+    // jump (re-anchored at the current tick). Throw std::logic_error when no
+    // environment is installed, std::invalid_argument for a bad value.
+    void set_environment_time(real env_s);
+    void set_environment_time_scale(real scale);
 
     // PLAN.md section 6 / P3: shared surface-parameter lookup (lambda_mu,
     // crr) for every vehicle's tyre model. Setup-time only (like
@@ -377,12 +406,14 @@ private:
     void stage_contact_coupling_post(); // PLAN.md P1.5b; between backend_step and terrain_tiles
     void stage_terrain_tiles();         // PLAN.md M1; no-op until set_terrain_source is called
     void stage_snapshot();
+    void stage_freeze_tick_start_state(); // weather plan W2: environment clock/sun, no-op without one
 
     WorldConfig config_;
     real dt_;
     std::uint64_t tick_ = 0;
     real sim_time_ = 0.0;
     std::vector<aero::WakeSource> aero_wakes_;
+    std::shared_ptr<environment::Environment> environment_; // weather plan W2; null == none installed
     AmbientSample ambient_; // PHYS-033 P4 I7b C9; never hashed, see set_ambient/ambient() above
 
     std::unique_ptr<jobs::JobSystem> job_system_;

@@ -147,6 +147,28 @@ var vr_rig: Node3D
 var vr_active: bool = false
 var ground_grid: MeshInstance3D
 
+# Weather plan W2 (out/weather_plan.md): the environment (clock + calendar + sun)
+# lives in core (ps::environment); this demo only installs it and shows it.
+# Off unless --m1-climate=<name or path> is given (a bare name resolves to
+# data/climates/<name>.json), so every other demo run is unchanged. Optional:
+#   --m1-time-scale=<x>     environment seconds per sim second (default 60; 0 freezes time)
+#   --m1-time-of-day=<h>    start at <h> o'clock (0-24, of the day's own cycle) of the start day
+#   --m1-season=<name>      start season (default: the climate's epoch season)
+#   --m1-day=<n>            start day within that season (default 0 when a start flag is used)
+# With an environment, the sun DirectionalLight follows the snapshot's sun
+# direction and irradiance, and the HUD shows the clock, day and season.
+var _env_climate_arg: String = ""
+var _env_time_scale: float = 60.0
+var _env_time_of_day_h: float = -1.0
+var _env_season: String = ""
+var _env_day: int = -1
+var sun_light: DirectionalLight3D
+var sky_material: ProceduralSkyMaterial
+var sky_environment: Environment
+const SUN_FULL_ENERGY: float = 1.3     # the demo's former fixed light energy, reached at ~900 W/m2 irradiance
+const SUN_FULL_IRRADIANCE_W_M2: float = 900.0
+const AMBIENT_NIGHT_FRACTION: float = 0.06
+
 # ps_audio A11: engine sound, only when the spawned vehicle's own engine has
 # a live cycle model (VEHICLE_NAME's simulated engine with pipe blocks -
 # see ps_simulation.h's has_vehicle_voice/adapters/godot/src/vehicle_voice.h
@@ -430,6 +452,16 @@ func _ready() -> void:
 			# at the skidpad" requirement.
 			spawn_id = a.substr(len("--m1-spawn="))
 			_spawn_id_explicit = true
+		elif a.begins_with("--m1-climate="):
+			_env_climate_arg = a.substr(len("--m1-climate="))
+		elif a.begins_with("--m1-time-scale="):
+			_env_time_scale = a.substr(len("--m1-time-scale=")).to_float()
+		elif a.begins_with("--m1-time-of-day="):
+			_env_time_of_day_h = a.substr(len("--m1-time-of-day=")).to_float()
+		elif a.begins_with("--m1-season="):
+			_env_season = a.substr(len("--m1-season="))
+		elif a.begins_with("--m1-day="):
+			_env_day = a.substr(len("--m1-day=")).to_int()
 		elif a.begins_with("--m1-vehicle="):
 			# Picks data/vehicles/<name>.json instead of the exported default -
 			# e.g. car_sedan (FWD reference), car_sedan_rwd (RWD reference),
@@ -499,6 +531,7 @@ func _ready() -> void:
 	if _render_delay_arg > 0.0:
 		simulation.set_render_delay_ticks(_render_delay_arg)
 	simulation.set_render_legacy_alpha(_render_legacy_arg)
+	_setup_environment(repo_root)
 	simulation.start()
 	print("ps_godot main.gd: sim started, is_running=", simulation.is_running())
 
@@ -566,8 +599,9 @@ func _setup_lighting() -> void:
 	light.light_color = Color(1.0, 0.98, 0.92)
 	light.shadow_enabled = false
 	add_child(light)
+	sun_light = light # _update_sun() drives it when an environment is installed (W2)
 
-	var sky_material := ProceduralSkyMaterial.new()
+	sky_material = ProceduralSkyMaterial.new()
 	sky_material.sky_top_color = Color(0.35, 0.55, 0.85)
 	sky_material.sky_horizon_color = Color(0.75, 0.82, 0.9)
 	sky_material.ground_bottom_color = Color(0.3, 0.3, 0.3)
@@ -577,6 +611,7 @@ func _setup_lighting() -> void:
 
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
+	sky_environment = e # _update_sun() dims its ambient light with the sun (W2)
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
@@ -998,7 +1033,49 @@ func _setup_engine_audio_fallback(sample_rate: float) -> void:
 	add_child(_engine_audio_player)
 	_engine_audio_player.play()
 
+func _setup_environment(repo_root: String) -> void:
+	# Weather plan W2: install the core environment (setup only - before
+	# simulation.start()). No flag, no environment: nothing else changes.
+	if _env_climate_arg == "":
+		return
+	var path := _env_climate_arg
+	if not (path.contains("/") or path.contains("\\") or path.ends_with(".json")):
+		path = repo_root.path_join("data/climates/%s.json" % path)
+	elif not path.is_absolute_path():
+		path = repo_root.path_join(path)
+	# Any start flag selects an explicit start (day 0 of the season unless --m1-day, noon
+	# unless --m1-time-of-day); no start flag keeps the climate's own epoch.
+	var start_day: int = _env_day
+	var start_hours: float = _env_time_of_day_h if _env_time_of_day_h >= 0.0 else 12.0
+	if start_day < 0 and (_env_time_of_day_h >= 0.0 or _env_season != ""):
+		start_day = 0
+	var ok: bool = simulation.install_environment(path.simplify_path(), _env_time_scale, _env_season, start_day, start_hours)
+	print("ps_godot main.gd: install_environment ", path.simplify_path(), " scale=", _env_time_scale, " returned: ", ok, " err=", simulation.get_last_error())
+
+func _update_sun() -> void:
+	# Weather plan W2: the DirectionalLight follows the snapshot's sun (a
+	# Godot-frame unit vector TOWARDS the sun) and irradiance; ambient/sky
+	# dim with the sun below the horizon. Does nothing without an environment.
+	if sun_light == null or simulation == null or not simulation.has_environment():
+		return
+	var env: Dictionary = simulation.get_environment()
+	var to_sun: Vector3 = env["sun_direction"]
+	var up_hint := Vector3.UP if absf(to_sun.y) < 0.999 else Vector3.RIGHT
+	sun_light.global_transform = Transform3D(Basis.looking_at(-to_sun, up_hint), sun_light.global_transform.origin)
+	var ghi: float = env["ghi_w_m2"]
+	sun_light.light_energy = SUN_FULL_ENERGY * clampf(ghi / SUN_FULL_IRRADIANCE_W_M2, 0.0, 1.0)
+	sun_light.visible = ghi > 1.0
+	# Sky/ambient follow the sun elevation (smooth through twilight): full above +10 deg, a dim floor at night.
+	var elev_deg: float = env["sun_elevation_deg"]
+	var day_factor: float = smoothstep(-6.0, 10.0, elev_deg)
+	var ambient: float = lerpf(AMBIENT_NIGHT_FRACTION, 1.0, day_factor)
+	if sky_environment != null:
+		sky_environment.ambient_light_energy = ambient
+	if sky_material != null:
+		sky_material.sky_energy_multiplier = ambient
+
 func _process(delta: float) -> void:
+	_update_sun()
 	if simulation != null and ground_grid != null:
 		ground_grid.position = simulation.get_world_origin_godot_position() + Vector3(0, GRID_Y_OFFSET_M, 0)
 

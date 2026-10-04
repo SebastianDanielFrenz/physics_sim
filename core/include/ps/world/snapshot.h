@@ -13,6 +13,7 @@
 
 #include "ps/backend/i_rigid_backend.h" // ContactEvent - plain struct, no Jolt/Godot type (PLAN.md D2)
 #include "ps/drivetrain/powertrain_state.h" // PHYS-033 P4 I3 plan section 4.3 - see VehicleSnapshot below
+#include "ps/environment/environment_snapshot.h" // weather plan W2 - see WorldSnapshot::environment
 #include "ps/math/pose.h"
 #include "ps/aero/aerodynamics.h"
 #include "ps/vehicle/wheel_state.h" // PLAN.md M1, task 2 of the P3 fix-up phase - see VehicleSnapshot below
@@ -107,6 +108,14 @@ struct WorldSnapshot {
     // hand-off every other field here does, so a reader only ever sees a
     // complete, stable, already-published tick's contacts.
     std::vector<ContactEvent> contacts;
+
+    // Weather plan W2 (out/weather_plan.md 8.1): this tick's evaluated
+    // environment record (time + sun), filled by World::stage_snapshot() only
+    // while an environment is installed (`has_environment`; otherwise the
+    // value is left default and has_environment is false). A fixed-size POD,
+    // so filling it never allocates; never hashed.
+    bool has_environment = false;
+    environment::EnvironmentSnapshot environment;
 
     // Deformation payload seam (PLAN.md section 6): empty in P1. A future
     // deformable body type can populate this per-body blob without changing

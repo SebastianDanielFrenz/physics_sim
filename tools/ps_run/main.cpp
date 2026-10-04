@@ -76,7 +76,9 @@ int main(int argc, char** argv) {
 
         const std::uint64_t num_ticks = static_cast<std::uint64_t>(scenario.duration_s * scenario.world_config.tick_rate_hz + 0.5);
         std::size_t next_control_event = 0;
+        std::size_t next_environment_event = 0;
         for (std::uint64_t i = 0; i < num_ticks; ++i) {
+            ps::io::apply_environment_events(world, scenario, next_environment_event); // weather plan W2
             // PLAN.md P3 scope item 7: apply any due control_events before
             // stepping, in time order (scenario.control_events is sorted by
             // load_scenario).

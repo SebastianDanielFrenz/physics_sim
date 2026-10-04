@@ -10,6 +10,7 @@ add_executable(ps_unit_tests
   test_jobs.cpp
   test_job_background_lane.cpp
   test_world_basic.cpp
+  test_environment_world.cpp
   test_body_integration_params.cpp
   test_world_snapshot.cpp
   test_test_ground_loader.cpp
@@ -215,6 +216,7 @@ add_executable(ps_environment_tests
   test_environment_calendar.cpp
   test_environment_sun.cpp
   test_environment_io.cpp
+  test_environment_object.cpp
 )
 
 target_link_libraries(ps_environment_tests
