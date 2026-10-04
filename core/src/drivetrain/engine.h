@@ -65,6 +65,13 @@ struct Sensors {
     // ignores it entirely (owner ruling Q10); a future simulated engine
     // (I7b C11+) reads it to model altitude effects on power. Never hashed.
     AmbientSample ambient{};
+    // PHYS-033 P4 I7d D5: the anti-lag control channel's value this tick
+    // (Powertrain copies it from the channel the turbo configuration's
+    // anti_lag block names). NaN = no channel wired (a direct pre_solve call,
+    // or a hot-swapped configuration naming a channel the vehicle did not
+    // declare at build time): the engine then uses the block's
+    // default_enabled. Ignored by every engine without an anti_lag block.
+    real anti_lag_channel = std::numeric_limits<real>::quiet_NaN();
 };
 // PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
 // combined command plus the TCU-forwarded (electronic) or fixed (mechanical)
@@ -155,7 +162,12 @@ struct PreSolveResult {
     // PHYS-033 P4 I7d D3: surge flag (no dynamics, unhashed), 0 without a surge line.
     std::uint8_t surge_active = 0;
     std::uint32_t surge_events = 0;        // entries into surge since the engine was built
-    real p_intake_pa = 0.0;            // intake manifold pressure p_im
+    // PHYS-033 P4 I7d D5: anti-lag (unhashed here; the engine hashes its own
+    // state), 0 without an anti_lag block.
+    std::uint8_t anti_lag_active = 0;
+    std::uint32_t anti_lag_activations = 0;  // rising edges of anti_lag_active since the engine was built
+    real anti_lag_extra_exhaust_w = 0.0;     // indicated work rate the retard removes this substep (W), sent to the turbine
+    real p_intake_pa = 0.0;           // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)
     real exhaust_mass_flow_kg_s = 0.0; // (air + booked fuel) per revolution * rev/s

@@ -316,6 +316,28 @@ struct SurgeLineDesc {
     std::string source;          // required (PLAN.md section 8)
 };
 
+// PHYS-033 P4 I7d D5: anti-lag (ALS), an optional part of a turbo
+// configuration (docs/data_formats/turbo.md) - the ECU strategy that keeps the
+// rotor spinning while the driver is off the throttle. Active while the
+// channel reads >= 0.5, the engine's throttle command is below
+// arm_below_command, rpm is in [min_rpm, max_rpm], the engine is Running and
+// did not starve last substep, for at most max_active_s per lift (re-armed
+// when the command rises to arm_below_command again). While active: DFCO is
+// inhibited, the plate target is at least plate_floor (bypass air), the spark
+// is retarded by retard_deg from the scheduled advance, and the indicated work
+// the retard removes goes to the turbine as extra exhaust enthalpy.
+struct AntiLagDesc {
+    std::string channel = "anti_lag"; // control channel; declared with default default_enabled
+    real default_enabled = 0.0;       // 0 or 1: the channel's declared default
+    real arm_below_command = 0.0;     // in (0, 1]: throttle command below which it acts
+    real min_rpm = 0.0;               // >= 0
+    real max_rpm = 0.0;               // > min_rpm
+    real retard_deg = 0.0;            // >= 0, spark retard from the scheduled advance
+    real plate_floor = 0.0;           // in [0, 1], bypass-air throttle plate floor
+    real max_active_s = 0.0;          // > 0, longest activity per lift
+    std::string source;               // required (PLAN.md section 8)
+};
+
 struct TurboPairDesc {
     std::shared_ptr<const TurboPerformanceMaps> maps;
     real reference_head_pa = 324000.0;
@@ -347,6 +369,8 @@ struct TurboPairDesc {
     // minus it. 0 = no drop (bit-identical to before); hashed only when nonzero. Intensive: not
     // scaled by the turbo count.
     real intercooler_dp_pa_at_max_flow = 0.0;
+    // I7d D5: absent = no anti-lag; the engine is then bit-identical to before.
+    std::optional<AntiLagDesc> anti_lag;
 };
 
 struct SimulatedEngineDesc {

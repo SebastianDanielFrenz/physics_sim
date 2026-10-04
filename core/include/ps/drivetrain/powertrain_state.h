@@ -56,7 +56,11 @@ struct EngineSoundState {
     // PHYS-033 P4 I7d D3: compressor surge flag, 0 without a surge line on the turbo hardware file. NOT hashed.
     std::uint8_t surge_active = 0;         // 1 while the operating point is left of the surge line
     std::uint32_t surge_events = 0;        // entries into surge (hysteresis: leave above 1.05 x the line)
-    real p_intake_pa = 0.0;            // intake manifold pressure
+    // PHYS-033 P4 I7d D5: anti-lag, 0 without an anti_lag block in the turbo configuration. NOT hashed.
+    std::uint8_t anti_lag_active = 0;      // 1 while anti-lag acts (DFCO inhibited, plate floor, spark retard)
+    std::uint32_t anti_lag_activations = 0; // activations (rising edges of anti_lag_active)
+    real anti_lag_extra_exhaust_w = 0.0;   // indicated work rate the retard removes, sent to the turbine (W)
+    real p_intake_pa = 0.0;           // intake manifold pressure
     real lambda = 0.0;                 // commanded lambda
     real spark_advance_deg = 0.0;      // applied spark advance
     real exhaust_mass_flow_kg_s = 0.0; // air + fuel mass flow out of the cylinders

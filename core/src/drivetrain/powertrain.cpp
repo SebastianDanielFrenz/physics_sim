@@ -222,6 +222,11 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             // car_sedan/no-governor vehicles declare nothing extra here;
             // tractor.json's channel list gains "hand_throttle".
             if (e->has_governor) add(ChannelDecl{e->governor.channel, real(0.0)});
+        } else if (const auto* se = std::get_if<SimulatedEngineDesc>(&c.params)) {
+            // I7d D5: the turbo configuration's anti-lag switch (default = its
+            // default_enabled); nothing without an anti_lag block.
+            if (se->turbo_pair && se->turbo_pair->anti_lag)
+                add(ChannelDecl{se->turbo_pair->anti_lag->channel, se->turbo_pair->anti_lag->default_enabled});
         } else if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
             if (d->lockable) add(ChannelDecl{d->lock.channel, real(0.0)});
         } else if (const auto* tc = std::get_if<TransferCaseDesc>(&c.params)) {
@@ -1250,6 +1255,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             burnt.fuels.assign(1, tank_desc ? tank_desc->fuel : sim->fuels.front());
             auto sim_engine = std::make_unique<SimulatedEngine>(burnt);
             sim_engine_ptr_ = sim_engine.get(); // PHYS-033 P4 I7c C16b
+            // I7d D5: resolve the anti-lag channel's slot like the other declared channels.
+            if (burnt.turbo_pair && burnt.turbo_pair->anti_lag) {
+                anti_lag_channel_name_ = burnt.turbo_pair->anti_lag->channel;
+                const std::vector<ChannelDecl> al_decls = declare_control_channels(pt);
+                for (std::size_t i = 0; i < al_decls.size(); ++i) {
+                    if (al_decls[i].name == anti_lag_channel_name_) {
+                        anti_lag_channel_slot_ = static_cast<int>(i);
+                        break;
+                    }
+                }
+                anti_lag_channel_live_ = anti_lag_channel_slot_ >= 0;
+            }
             simulated_engine_desc_ = std::move(burnt);
             engine_ = std::move(sim_engine);
         }
@@ -1809,6 +1826,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         s.gearbox_in_neutral = ctx.gearbox_in_neutral;
         if (fuel_tank_) s.fuel_available_kg = fuel_tank_->content(); // PHYS-033 P4 I7a C6: else +infinity (never starves)
         s.ambient = ctx.ambient; // PHYS-033 P4 I7b C9; EngineTorqueMap ignores it
+        if (anti_lag_channel_live_ && ctx.channels != nullptr && anti_lag_channel_slot_ < ctx.channel_count)
+            s.anti_lag_channel = ctx.channels[anti_lag_channel_slot_]; // I7d D5; else NaN = default_enabled
         last_engine_sensors_ambient_ = ctx.ambient; // test-only white-box hook
         const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut};
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
@@ -2277,6 +2296,9 @@ void Powertrain::replace_turbo_configuration(std::string_view component_id,const
         throw std::runtime_error("replace_turbo_configuration: unknown simulated engine");
     sim_engine_ptr_->replace_turbo_configuration(desc);
     simulated_engine_desc_->turbo_pair=desc;
+    // I7d D5: channels are declared at build time only; a swapped-in anti_lag block naming that channel
+    // keeps reading it, any other falls back to its default_enabled (Sensors::anti_lag_channel NaN).
+    anti_lag_channel_live_ = anti_lag_channel_slot_ >= 0 && desc.anti_lag && desc.anti_lag->channel == anti_lag_channel_name_;
 }
 
 void Powertrain::request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps) {

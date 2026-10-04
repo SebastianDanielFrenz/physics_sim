@@ -102,6 +102,7 @@ The shipped hardware file has no line yet (no cited map exists).
 | `intercooler_pressure_drop_bar_at_max_flow` | number (bar) | no | >= 0 (`"<path>: 'intercooler_pressure_drop_bar_at_max_flow' must be >= 0"`), < the hardware `reference_head_bar`, a non-number `"... must be a number"`; NOT scaled by `count` | I7d D4: pressure drop of the cooler at the pair's max flow; absent or 0 = no drop, bit-identical to a file without the key |
 | `boost_control` | object | no | see below | PID on the post-cooler charge pressure driving the wastegate |
 | `blow_off_valve` | object | no | see below | I7d D2 |
+| `anti_lag` | object | no | see below | I7d D5 |
 
 ### Intercooler pressure drop (I7d D4)
 
@@ -184,6 +185,81 @@ a valve, and the charge pressure goes with it, so a valve with a crack pressure 
 0.9 bar opens only to ~13 % at a lift-off. A valve that opens in time needs a low
 crack pressure and a short lag.
 
+### `anti_lag` (optional, I7d D5)
+
+A rally-style anti-lag system (ALS): while the driver is off the throttle the
+engine keeps the throttle partly open, keeps fuelling (no DFCO) and retards the
+spark; the work the retard takes from the crank leaves as exhaust heat and keeps
+the turbine spinning. Absent = no anti-lag and every number is bit-identical to a
+configuration without the block.
+
+| Field | Type | Rule | Meaning |
+|---|---|---|---|
+| `channel` | string | optional, non-empty, default `"anti_lag"` | control channel that switches it (>= 0.5 = on); declared by the vehicle like every component channel |
+| `default_enabled` | number | optional, 0 or 1, default 0 | the channel's default value, also used when no channel is wired (a direct engine call, `ps::EngineRig`) |
+| `arm_below_command` | number | required, in (0, 1] | throttle command below which anti-lag acts; the command reaching it again re-arms it |
+| `min_rpm` | number | required, >= 0 | engine speed range in which it acts |
+| `max_rpm` | number | required, > `min_rpm` | |
+| `retard_deg` | number | required, >= 0 | spark retard from the scheduled advance while active |
+| `plate_floor` | number | required, in [0, 1] | minimum throttle plate while active |
+| `max_active_s` | number | required, > 0 | longest active time per lift (a thermal limit) |
+| `source` | string | required, non-empty | provenance (PLAN.md section 8) |
+
+Rejections (each prefixed `"<path>: anti_lag: "`): `'anti_lag' must be an object`,
+`unknown key '<key>'` (unlike the other blocks: a misspelt limit would otherwise
+vanish silently), `'channel' must be a non-empty string`, `'default_enabled' must
+be 0 or 1`, `'<key>' is required`, `'arm_below_command' must be in (0, 1]`,
+`'min_rpm' must be >= 0`, `'max_rpm' must be > 'min_rpm'`, `'retard_deg' must be
+>= 0`, `'plate_floor' must be in [0, 1]`, `'max_active_s' must be > 0`, `'source'
+is required (PLAN.md section 8)`.
+
+Model (`core/src/drivetrain/engine_simulated.cpp`, once per substep, decided right
+after the throttle request and before DFCO):
+- A throttle command (after the TCU floor/ceiling, before an ignition cut) at or
+  above `arm_below_command` re-arms anti-lag, zeroes its timer and switches it off.
+- Below it, anti-lag is active while the channel reads >= 0.5, the engine is
+  Running, rpm is in `[min_rpm, max_rpm]`, it is armed and the timer has room for
+  this substep. The timer counts active substeps only; once `max_active_s` is used
+  up, anti-lag disarms until the next re-arm (at 960 Hz, 1.5 s = exactly 1440
+  substeps). A substep that starves the engine of fuel (empty tank) while active
+  also disarms it for the rest of the lift.
+- While active: DFCO is held off; the plate target (electronic) or the plate itself
+  (mechanical, a throttle kicker) is at least `plate_floor`; the spark is the
+  scheduled advance minus `retard_deg`, through the same `eta_spark` curve as any
+  spark offset (torque falls by the curve, fuel does not).
+- The extra exhaust enthalpy is `omega * (tau_comb(scheduled spark) -
+  tau_comb(retarded spark))` - the indicated work the retard removes, measured from
+  the scheduled spark, not MBT (the schedule's own MBT shortfall is already part of
+  the normal exhaust heat). It is peak-held with the exhaust-heat hold's own 0.5 s
+  decay on a separate state and ADDED at the turbine inlet to the 25 % fuel heat:
+  `T_exh = T_amb + (0.25 * fuel_w_held + extra_held) / (1100 * m_exh)`. The 1200 K
+  turbine-inlet cap applies to the sum.
+- Energy: the extra heat is part of `engine_heat` (fuel energy minus indicated
+  work) - the ledger books nothing new and `balance_error` is unchanged; the heat
+  the turbine receives never exceeds the heat the substep rejects.
+- No wastegate override: the boost PID's target is still `target_boost * plate`, so
+  `plate_floor` doubles as the anti-lag boost target.
+
+Hashing: the activity flag, armed flag, timer, held extra heat and every block
+parameter except `channel`/`default_enabled`/`source` are folded into the state
+hash, appended after the other turbo state and only when the block exists. The
+block is NOT part of the derived-map cache key. A hot swap
+(`World::replace_turbo_configuration`) to a configuration without `anti_lag`
+clears the anti-lag state; channels are declared when the vehicle is built, so a
+swapped-in block naming a channel the vehicle did not declare runs on its
+`default_enabled`.
+
+Known limits (measured, I7d D5, `tests/unit/test_turbo_anti_lag.cpp`):
+- The lumped pair's rotor speed follows airflow: turbine and compressor power
+  nearly balance at every flow, so a low `plate_floor` leaves the rotor SLOWER than
+  a DFCO coast (fixture engine, 5000 rpm, rotor 1 s after the lift: floor 0.2 ->
+  15.5-18.6k rpm vs 39.8k with anti-lag off; 0.35 -> ~40k; 0.5 -> ~53k).
+- The 1200 K cap is reached at moderate retard: 30 and 45 deg give the same rotor.
+- Torque is cut only by `eta_spark`: on the hyper V8 at 6000 rpm, floor 0.5 and
+  30 deg retard the crank still sees +630..640 N*m while anti-lag acts (a car keeps
+  pulling). A cylinder cut or deeper retard tables would be needed to hold the
+  crank torque near zero.
+
 ## Derived-map cache
 
 The head table (61 x 49 nodes over normalised speed 0..1.5 and flow 0..1.2) and
@@ -223,6 +299,9 @@ for physics:
 | `surge_active` | 0/1 | 1 while the operating point is left of the hardware file's `surge_line` (0 without a line) |
 | `surge_events` | count | entries into surge, cumulative since the engine was built |
 | `bov_events` | count | rising edges of the opening (> 0.1, re-armed below 0.05), cumulative since the engine was built (a counter for sound, never hashed) |
+| `anti_lag_active` | 0/1 | 1 while anti-lag acts (0 without an `anti_lag` block) |
+| `anti_lag_activations` | count | rising edges of `anti_lag_active`, cumulative since the engine was built |
+| `anti_lag_extra_exhaust_w` | W | indicated work rate the retard removes this substep, handed to the turbine (before the hold) |
 
 ## Shipped files
 

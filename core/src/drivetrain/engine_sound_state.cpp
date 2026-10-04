@@ -39,6 +39,8 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
     ess.bov_opening=pre.bov_opening; ess.bov_flow_kg_s=pre.bov_flow_kg_s;
     ess.bov_vent=pre.bov_vent; ess.bov_events=pre.bov_events;
     ess.surge_active=pre.surge_active; ess.surge_events=pre.surge_events;
+    ess.anti_lag_active=pre.anti_lag_active; ess.anti_lag_activations=pre.anti_lag_activations;
+    ess.anti_lag_extra_exhaust_w=pre.anti_lag_extra_exhaust_w;
     ess.p_intake_pa = pre.p_intake_pa;
     ess.turbo_rpm=pre.turbo_rpm; ess.boost_bar=pre.boost_bar; ess.p_exhaust_pa=pre.p_exhaust_pa;
     ess.lambda = pre.lambda;

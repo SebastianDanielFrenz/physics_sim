@@ -225,8 +225,22 @@ public:
         real fire = 0.0;         // gate * soft-cut taper, before s_starve
         real lambda = 0.0, spark_deg = 0.0, theta_mbt_deg = 0.0;
         real eta_i = 0.0, f_lambda = 0.0, eta_spark = 0.0;
+        // I7d D5: tau_comb at the SCHEDULED spark (no anti-lag retard); equal to
+        // tau_comb when spark_retard_deg is 0.
+        real tau_comb_unretarded = 0.0;
     };
-    [[nodiscard]] TorqueEval evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active) const;
+    // spark_retard_deg (I7d D5, >= 0): subtracted from the scheduled (knock-
+    // limited) advance before eta_spark is looked up - the anti-lag retard.
+    [[nodiscard]] TorqueEval evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active,
+                                             real spark_retard_deg = 0.0) const;
+
+    // I7d D5 anti-lag white-box accessors (all 0/false/true defaults without an anti_lag block).
+    [[nodiscard]] bool anti_lag_active() const { return als_active_; }
+    [[nodiscard]] bool anti_lag_armed() const { return als_armed_; }
+    [[nodiscard]] real anti_lag_timer_s() const { return als_timer_s_; }
+    [[nodiscard]] real anti_lag_extra_exhaust_w() const { return als_extra_w_; }
+    [[nodiscard]] real anti_lag_held_exhaust_w() const { return turbo_als_w_; }
+    [[nodiscard]] const TurboPair* turbo() const { return turbo_ ? &*turbo_ : nullptr; }
 
     // Manifold right-hand side f(p) = dp_im/dt and df/dp at (p_im, omega,
     // plate, bypass) - the function the air step integrates.
@@ -261,6 +275,16 @@ private:
     // turbo_exhaust_kg_s_ = the cylinder exhaust flow; turbo_fuel_w_ = the exhaust heat (burnt fuel power,
     // peak-held with kExhaustHeatHoldS). See engine_simulated.cpp.
     real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_fuel_w_ = 0.0;
+    // I7d D5 anti-lag (hashed only when the turbo configuration has an anti_lag block):
+    // als_active_ this substep's activity, als_armed_ false once max_active_s is used up in
+    // this lift or after a starving substep (re-armed when the command rises to
+    // arm_below_command), als_timer_s_ the activity accumulated in this lift, turbo_als_w_ the anti-lag exhaust heat handed to the turbine (peak-held like
+    // turbo_fuel_w_, written by the previous substep). Not hashed: als_extra_w_ (this
+    // substep's removed indicated work rate) and the activation counter (sound only).
+    bool als_active_ = false, als_armed_ = true;
+    real als_timer_s_ = 0.0, turbo_als_w_ = 0.0, als_extra_w_ = 0.0;
+    std::uint32_t als_activations_ = 0;
+    void clear_anti_lag_state();
 
 
     std::shared_ptr<const SimulatedEngineMaps> maps_;
