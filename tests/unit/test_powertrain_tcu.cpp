@@ -677,3 +677,70 @@ TEST_CASE("Hyper auto clutch protects a running crank while sliding backwards in
         CHECK(protected_ticks>600);
     }
 }
+
+// Owner ruling 2026-10-04: rolling backwards without throttle -> clutch open;
+// rolling backwards WITH throttle -> the clutch engages gradually (the Launch
+// law) while the engine stays above stall. The reverse-rotation hold is gated
+// on Sensors::throttle_request (kDriverThrottleThreshold 0.05).
+TEST_CASE("Reverse-rotation hold applies only without driver throttle", "[tcu][hyper_clutch]") {
+    ManualTcu::Desc d; d.auto_clutch.anti_stall_rpm=850; d.auto_clutch.bite_rpm=1400;
+    d.auto_clutch.full_rpm_min=2000; d.auto_clutch.full_rpm_max=3500;
+    const real h=1./960;
+    auto make=[&](real throttle, real engine_rpm, real in_rpm) {
+        auto s=base_sensors(); s.gearbox_current=1; s.gearbox_target=1; s.throttle_request=throttle;
+        s.engine_omega=rpm_to_omega(engine_rpm); s.gearbox_in_omega=rpm_to_omega(in_rpm); return s;
+    };
+    SECTION("no throttle: the clutch stays open however fast the engine turns") {
+        ManualTcu tcu(d); tcu.reset(false);
+        const auto s=make(0.0,3000,-1200);
+        for(int i=0;i<480;++i) CHECK(tcu.step(s,h,false).e_auto==real(0));
+    }
+    SECTION("throttle pinned while sliding backwards fast (above hill-start pace) keeps the hold") {
+        ManualTcu tcu(d); tcu.reset(false);
+        auto s=make(1.0,3000,-1200); s.approx_speed_mps=16.7; // ~60 km/h
+        for(int i=0;i<480;++i) CHECK(tcu.step(s,h,false).e_auto==real(0));
+        s.approx_speed_mps=4.9; // slowed below the hill-start pace: the Launch law takes over
+        real e=0; for(int i=0;i<60;++i) e=tcu.step(s,h,false).e_auto;
+        CHECK(e>real(0.1));
+    }
+    SECTION("throttle just below the threshold still holds it open") {
+        ManualTcu tcu(d); tcu.reset(false);
+        const auto s=make(0.049,3000,-1200);
+        for(int i=0;i<480;++i) CHECK(tcu.step(s,h,false).e_auto==real(0));
+    }
+    SECTION("throttle: engagement rises gradually at engage_rate_per_s, never in one step") {
+        ManualTcu tcu(d); tcu.reset(false);
+        const auto s=make(0.3,3000,-1200);
+        real prev=0; int first_full=-1;
+        for(int i=0;i<480;++i) {
+            const real e=tcu.step(s,h,false).e_auto;
+            CHECK(e>=prev); CHECK(e-prev<=d.auto_clutch.engage_rate_per_s*h+real(1e-12));
+            if(i==0) CHECK(e>real(0));
+            if(first_full<0 && e>=real(1)) first_full=i;
+            prev=e;
+        }
+        CHECK(first_full>=int(0.9/(d.auto_clutch.engage_rate_per_s*h))); // ~0.25 s at 4 per s, not instant
+    }
+    SECTION("throttle but engine below bite: the Launch law keeps it open") {
+        ManualTcu tcu(d); tcu.reset(false);
+        const auto s=make(0.3,1300,-1200);
+        for(int i=0;i<240;++i) CHECK(tcu.step(s,h,false).e_auto==real(0));
+    }
+    SECTION("lifting the throttle while still reversing opens it again at once") {
+        ManualTcu tcu(d); tcu.reset(false);
+        auto s=make(0.3,3000,-1200);
+        for(int i=0;i<120;++i) (void)tcu.step(s,h,false);
+        CHECK(tcu.e_auto()>real(0.1));
+        s.throttle_request=0.0;
+        CHECK(tcu.step(s,h,false).e_auto==real(0));
+        for(int i=0;i<240;++i) CHECK(tcu.step(s,h,false).e_auto==real(0));
+        s.throttle_request=0.3; // pressing again re-engages
+        real e=0; for(int i=0;i<60;++i) e=tcu.step(s,h,false).e_auto;
+        CHECK(e>real(0.1));
+    }
+    SECTION("a locked clutch still dumps instantly on the emergency release whatever the throttle") {
+        ManualTcu tcu(d); tcu.reset(true);
+        const auto s=make(1.0,3000,-1200);
+        CHECK(tcu.step(s,h,false).e_auto==real(0));
+    }
+}

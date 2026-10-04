@@ -9,6 +9,21 @@ namespace ps::drivetrain {
 namespace {
 constexpr real kPi = 3.14159265358979323846;
 constexpr real kRadPerSecToRpm = real(60.0) / (real(2.0) * kPi);
+// "The driver has the throttle pressed" for the TCU's own decisions (the
+// auto-shift's N->1 select and the reverse-rotation hold below). PROVISIONAL:
+// no AutoClutchDesc field carries such a threshold, and the value is the one
+// the N->1 auto-select already used as a literal; 5 % of the throttle request
+// is above pedal noise yet below any deliberate hill-start input.
+constexpr real kDriverThrottleThreshold = real(0.05);
+// Road speed (m/s, magnitude, gearbox-output derived) up to which a throttle
+// press launches the clutch while the car rolls backwards in a forward gear (a
+// hill start). PROVISIONAL, no data field: ~18 km/h of roll-back is more than
+// a driver lets a car roll before moving off, and far below the "sliding
+// backwards at 60-200 km/h in 7th with the throttle pinned" case that
+// test_powertrain_tcu.cpp's "Hyper auto clutch protects a running crank..."
+// keeps open - engaging onto a driveline reversing that fast would drag the
+// crank backwards through zero, which no launch law can arrest.
+constexpr real kReverseLaunchMaxSpeedMps = real(5.0);
 real lerp(real a, real b, real t) { return a + (b - a) * t; }
 real move_toward(real x, real target, real max_delta) {
     if (target > x) return std::min(x + max_delta, target);
@@ -66,7 +81,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                 const real engine_rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
                 const real out_rpm = std::abs(s.gearbox_out_omega) * kRadPerSecToRpm;
                 if (s.gearbox_current == 0) {
-                    if (s.throttle_request > real(0.05) && out_rpm < real(100.0)) desired_target = 1;
+                    if (s.throttle_request > kDriverThrottleThreshold && out_rpm < real(100.0)) desired_target = 1;
                 } else if (s.gearbox_current >= 1 && time_in_gear_ >= desc_.auto_shift.min_time_in_gear_s) {
                     const real up_th = lerp(desc_.auto_shift.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_full_throttle, s.throttle_request);
                     const real down_th =
@@ -254,9 +269,26 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // -lock_slip_rpm. Entering at -lock_slip_rpm alone dumped the clutch on
     // brief negative input transients of ordinary cars (an unsettled WOT
     // start, locked-diff split-mu launch and braking - 2026-10-04).
+    // The hold applies only WITHOUT driver throttle at hill-start pace (owner ruling 2026-10-04:
+    // rolling backwards without throttle the clutch disengages; rolling
+    // backwards WITH throttle - a hill start in a forward gear - it engages
+    // gradually while the rpm stays above stall). With the throttle pressed
+    // (road speed below kReverseLaunchMaxSpeedMps; faster, the hold stays on
+    // whatever the throttle) the ordinary rpm-gated Launch law above decides: e rises with engine
+    // rpm at engage_rate_per_s and falls to 0 at bite_rpm (> anti_stall_rpm),
+    // the rolling re-engagement stays signed so it never fires on a reversing
+    // input, and the anti-stall panic release still applies. While the
+    // throttle is pressed reverse_hold_ is cleared (not latched, so it cannot
+    // re-open the clutch mid-hill-start) and anti_stall_released_ is left
+    // alone: it only feeds the latch below, and keeps its meaning if the
+    // driver lifts while the car is still rolling back with the clutch fully
+    // open (e_auto 0 - the hold then re-latches). A Locked clutch still
+    // dumps instantly on emergency_release whatever the throttle.
     const real in_rpm_signed = s.gearbox_in_omega * kRadPerSecToRpm;
     const bool in_gear_idle = s.gearbox_current != 0 && s.gearbox_phase == Gearbox::Phase::Idle;
-    if (!in_gear_idle || in_rpm_signed >= -desc_.auto_clutch.lock_slip_rpm) {
+    const bool driver_throttle =
+        s.throttle_request > kDriverThrottleThreshold && std::abs(s.approx_speed_mps) < kReverseLaunchMaxSpeedMps;
+    if (!in_gear_idle || in_rpm_signed >= -desc_.auto_clutch.lock_slip_rpm || driver_throttle) {
         reverse_hold_ = false;
     } else if (in_rpm_signed < -desc_.auto_clutch.anti_stall_rpm || emergency_release ||
                (anti_stall_released_ && e_auto_ <= real(0.0))) {
