@@ -308,6 +308,17 @@ void World::stage_freeze_tick_start_state() {
 
 void World::install_environment(std::shared_ptr<environment::Environment> env) {
     if (!env) throw std::invalid_argument("World::install_environment: null environment");
+    // W5: the condition classes are indexed by SurfaceId, so they must be this
+    // world's surface table, in id order (checked before anything changes).
+    if (const environment::ConditionGrid* g = env->surface_conditions(); g && surface_table_) {
+        bool same = static_cast<std::size_t>(g->class_count()) == surface_table_->size();
+        for (int i = 0; same && i < g->class_count(); ++i)
+            same = g->class_name(i) == surface_table_->name_for(static_cast<SurfaceId>(i));
+        if (!same)
+            throw std::invalid_argument("World::install_environment: the environment's surface classes do not match "
+                                        "the world's surface table (pass its names in id order as "
+                                        "EnvironmentConfig::surface_names)");
+    }
     env->attach(static_cast<std::int64_t>(tick_), config_.tick_rate_hz);
     environment_ = std::move(env);
     // The air of an environment that does not provide one (or of the previous

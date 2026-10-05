@@ -163,6 +163,10 @@ std::string climate_validation_error(const ClimateDesc& d) {
     const int epoch_days = d.seasons[static_cast<std::size_t>(epoch_season)].days;
     if (d.calendar.epoch.day < 0 || d.calendar.epoch.day >= epoch_days)
         return err("calendar.epoch.day must be in [0, days of the epoch season)");
+    if (d.condition) {
+        const std::string ce = condition_grid_validation_error(*d.condition);
+        if (!ce.empty()) return err(ce);
+    }
     return detail::climate_weather_validation_error(d);
 }
 

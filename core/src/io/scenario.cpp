@@ -1,6 +1,7 @@
 #include "ps/io/scenario.h"
 
 #include "ps/environment/climate_io.h"
+#include "ps/environment/surface_conditions_io.h"
 #include "ps/environment/weather_io.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
@@ -253,18 +254,22 @@ ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenari
 }
 
 // Weather plan W2: the scenario "environment" block (docs/data_formats/
-// scenario.md). Rejects unknown keys and the keys of later increments (weather,
-// surface_conditions, default_tyre_profile) so a scenario written for them
-// never silently loads with half its meaning dropped.
-ScenarioEnvironment read_environment(const json& j, const std::filesystem::path& scenario_dir) {
+// scenario.md). Rejects unknown keys and the keys of later increments
+// (default_tyre_profile) so a scenario written for them never silently loads
+// with half its meaning dropped. `surface_table_path` is the scenario's
+// resolved surface table (empty = none): W5's "surface_conditions" needs it,
+// the condition classes are indexed by its SurfaceIds.
+ScenarioEnvironment read_environment(const json& j, const std::filesystem::path& scenario_dir,
+                                     const std::string& surface_table_path) {
     const auto fail = [](const std::string& msg) { throw std::runtime_error("environment: " + msg); };
     if (!j.is_object()) fail("expected an object");
     for (const auto& [key, v] : j.items()) {
         (void)v;
-        if (key == "surface_conditions" || key == "default_tyre_profile")
-            fail("key \"" + key + "\" is not supported yet (weather plan W5+)");
+        if (key == "default_tyre_profile")
+            fail("key \"" + key + "\" is not supported yet (weather plan W6+)");
         if (key != "climate" && key != "seed" && key != "time" && key != "season" && key != "fixed_day_of_year" &&
-            key != "north_yaw_deg" && key != "events" && key != "weather" && key != "altitude_offset_m")
+            key != "north_yaw_deg" && key != "events" && key != "weather" && key != "altitude_offset_m" &&
+            key != "surface_conditions")
             fail("unknown key \"" + key + "\"");
     }
     ScenarioEnvironment e;
@@ -329,6 +334,24 @@ ScenarioEnvironment read_environment(const json& j, const std::filesystem::path&
     }
     if (j.contains("fixed_day_of_year")) e.config.fixed_day_of_year = j.at("fixed_day_of_year").get<int>();
     if (j.contains("north_yaw_deg")) e.config.north_yaw_deg = j.at("north_yaw_deg").get<real>();
+
+    // Weather plan W5: "surface_conditions": "<file>" (physics_sim.surface_conditions/1).
+    // The classes are the scenario's surface table, in SurfaceId order.
+    if (j.contains("surface_conditions")) {
+        if (!j.at("surface_conditions").is_string()) fail("\"surface_conditions\" must be a file path string");
+        if (surface_table_path.empty())
+            fail("\"surface_conditions\" needs the scenario's \"surface_table_path\" (the classes are its SurfaceIds)");
+        if (e.config.weather == environment::EnvironmentWeather::Off)
+            fail("\"surface_conditions\" needs the environment's \"weather\" key");
+        std::filesystem::path sp = j.at("surface_conditions").get<std::string>();
+        if (sp.is_relative()) sp = scenario_dir / sp;
+        e.surface_conditions_path = sp.lexically_normal().string();
+        e.config.surface_conditions = load_surface_conditions_json(e.surface_conditions_path);
+        const SurfaceTable table(surface_table_path);
+        e.config.surface_names.clear();
+        for (std::size_t i = 0; i < table.size(); ++i)
+            e.config.surface_names.push_back(table.name_for(static_cast<SurfaceId>(i)));
+    }
 
     if (j.contains("events")) {
         for (const auto& ej : j.at("events")) {
@@ -475,13 +498,15 @@ Scenario load_scenario(const std::string& json_path, const EngineMapOptions& map
             std::sort(s.control_events.begin(), s.control_events.end(),
                       [](const ScenarioControlEvent& a, const ScenarioControlEvent& b) { return a.time_s < b.time_s; });
         }
-        if (j.contains("environment")) {
-            s.environment = read_environment(j.at("environment"), std::filesystem::path(json_path).parent_path());
-        }
         if (j.contains("surface_table_path")) {
             std::filesystem::path p = j.at("surface_table_path").get<std::string>();
             if (p.is_relative()) p = std::filesystem::path(json_path).parent_path() / p;
             s.surface_table_path = p.lexically_normal().string();
+        }
+        // After surface_table_path: the W5 surface conditions take its names.
+        if (j.contains("environment")) {
+            s.environment = read_environment(j.at("environment"), std::filesystem::path(json_path).parent_path(),
+                                             s.surface_table_path);
         }
     } catch (const json::exception& e) {
         throw std::runtime_error("invalid scenario " + json_path + ": " + e.what());

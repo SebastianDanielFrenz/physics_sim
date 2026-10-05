@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include "ps/environment/surface_condition_desc.h"
 #include "ps/environment/weather_desc.h"
 #include "ps/types.h"
 
@@ -142,6 +143,9 @@ struct ClimateDesc {
     std::optional<LightningDesc> lightning;
     // W4: gust synthesis (wind.h); absent = steady mean wind.
     std::optional<GustDesc> gusts;
+    // W5: the surface-condition grid settings ("condition" block); absent =
+    // the ConditionGridDesc defaults when surface conditions are installed.
+    std::optional<ConditionGridDesc> condition;
     std::string source;
 
     bool has_weather_statistics() const { return !seasons.empty() && seasons.front().weather.has_value(); }

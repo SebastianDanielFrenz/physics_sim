@@ -11,6 +11,7 @@
 #include "counter_force_element.h"
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/environment/environment.h"
 #include "ps/environment/vehicle_air.h"
 #include "ps/io/scenario.h"
 #include "ps/io/vehicle_io.h"
@@ -1186,6 +1187,40 @@ TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24
     CHECK(air.altitude_m > 900.0);
     CHECK(air.pressure_pa < 95000.0);
     CHECK(world.snapshots().read().environment.has_weather);
+}
+
+// Weather plan W5: data/scenarios/environment_surface.json - car_sedan under dynamic weather with the
+// surface condition grid (data/surface_conditions/default.json on surfaces.json's classes), x36000 clock
+// (two or three 60 s grid steps per tick) and a one-day backward jump at t = 5 s (a spin-up inside a tick).
+// The grid is folded into the hash (installed with surfaces only). Belongs in tools/ci.ps1's
+// Windows-vs-Linux hash compare (coordinator).
+TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4, 10 and 24 workers and really steps the grid",
+          "[determinism][environment][vehicle][heavy][world][io]") {
+    constexpr std::uint64_t kRecorded = 0x030df2de793ce721ULL; // recorded 2026-10-05 (W5), ps_run at 1 and 10 workers
+    const std::uint64_t reference = run_scenario_file("environment_surface.json", 1);
+    INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
+    CHECK(reference == kRecorded);
+    for (const int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("environment_surface.json", workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h);
+        REQUIRE(h == reference);
+    }
+
+    // The grid ran: surfaces published, the grid holds the interval of the published env time.
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/environment_surface.json");
+    sc.world_config.job_workers = 1;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    for (int i = 0; i < 480; ++i) world.step();
+    const ps::environment::EnvironmentSnapshot* s = world.environment_snapshot();
+    REQUIRE(s != nullptr);
+    CHECK(s->has_surfaces);
+    CHECK(s->surface_count == 6);
+    CHECK(s->surfaces[0].has_state);
+    // The grid index matches the published env time (it may be negative: the climate epoch sets t = 0).
+    const ps::environment::ConditionGrid* g = world.environment()->surface_conditions();
+    REQUIRE(g != nullptr);
+    CHECK(g->grid_index() == g->grid_index_at(s->t_env_s));
 }
 
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {

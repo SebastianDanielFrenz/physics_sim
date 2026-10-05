@@ -268,6 +268,8 @@ public:
     // set_terrain_source); must be called before the first step() if any
     // vehicle should see non-default (1.0/0.0) surface values.
     void set_surface_table(std::shared_ptr<const io::SurfaceTable> table) { surface_table_ = std::move(table); }
+    // The installed table (null = none); weather plan W5 maps surface condition classes onto it.
+    [[nodiscard]] const io::SurfaceTable* surface_table() const { return surface_table_.get(); }
 
     // PLAN.md 5.1/P3: per-corner suspension + tyre + steering + brakes + a
     // placeholder drive, on an existing chassis body (created separately,

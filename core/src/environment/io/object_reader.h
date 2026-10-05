@@ -108,10 +108,10 @@ public:
 
     // Keys named by the format but not implemented yet: a clear error rather
     // than a silent drop.
-    void reserve_for_later(const char* key, const char* increment) {
+    void reserve_for_later(const char* key, const char* increment, const char* format = "physics_sim.climate/1") {
         used_.insert(key);
         if (obj_.contains(key))
-            fail(std::string("\"") + key + "\" is part of physics_sim.climate/1 but is not implemented before " +
+            fail(std::string("\"") + key + "\" is part of " + format + " but is not implemented before " +
                  increment + "; remove it");
     }
 

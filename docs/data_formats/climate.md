@@ -1,4 +1,4 @@
-# `physics_sim.climate/1` - climate files (weather plan W1 + W3 + W4)
+# `physics_sim.climate/1` - climate files (weather plan W1 + W3 + W4 + W5)
 
 Loader: `ps::io::load_climate_json(path)` (`core/include/ps/environment/climate_io.h`,
 library `ps_environment_io`, which does not link `ps_core`). Descriptor:
@@ -11,8 +11,8 @@ weather statistics: per-season `regimes`, `transitions`, `initial_regime` and
 the top-level `lags_s`, `precip_phase`, `humidity`, `diurnal_temperature`,
 `lightning` blocks (section "Weather (W3)" below; model:
 `ps/environment/weather.h`, example `data/climates/test_weather.json`).
-`gusts` (W4, section "Gusts (W4)") configures the turbulence synthesis; `condition` stays
-RESERVED: a file that contains it is rejected with "... is not implemented before W5".
+`gusts` (W4, section "Gusts (W4)") configures the turbulence synthesis; `condition` (W5,
+section "Surface condition grid (W5)") the surface condition grid.
 Like every ps loader, any other unknown key is rejected.
 
 ## Top level
@@ -255,6 +255,25 @@ honoured by scaling the intensity (measured 1.652, sd 0.077, 200 records).
 PROVISIONAL: the calibration holds for U about 10 m/s only (the 3-s averaging
 path grows with U).
 
+## Surface condition grid (W5)
+
+`"condition"` (optional object, every member optional) sets the grid the surface
+condition state ([`surface_conditions.md`](surface_conditions.md)) is stepped on.
+All values are ENVIRONMENT seconds (not game days: the relaxation is physical, and
+game day lengths are configurable).
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `dt_env_s` | 60 | (0, 3600] | grid step; state is held at `k * dt_env_s` |
+| `spinup_s` | 604800 (7 d) | [`dt_env_s`, 366 d] | history stepped from a linear initial profile when the grid starts or after a jump that cannot be stepped |
+| `max_fast_forward_s` | 2592000 (30 d) | [`dt_env_s`, 366 d] | a forward jump up to this is stepped through (bit-identical to having run); a longer forward jump and every backward jump spins up |
+
+Rejections: an unknown key ("climate: condition.<key>"), a value outside its range
+("climate: condition: dt_env_s must be in (0, 3600]" and the like), a non-object.
+A climate used with surface conditions also needs the seasons' climate scalars
+(`temp_mean_c`, `ground_temp_c`: the initial profile and the column's bottom
+temperature).
+
 ## `extends`
 
 `"extends": "<relative path>"` (path relative to the file naming it): the
@@ -266,7 +285,7 @@ a chain deeper than 8 parents is an error naming the file.
 
 ## Rejections (all are `std::runtime_error`, message prefixed with the file)
 
-Wrong or missing `format`; unknown key anywhere; the reserved W5 key `condition`; latitude
+Wrong or missing `format`; unknown key anywhere; latitude
 or longitude out of range; empty `seasons`; `days` < 1 or non-integer;
 duplicate or empty season name; `doy_span` not two integers in [1, 366];
 astronomical sun or day length without a `doy_span`; `day_s`/`night_s` <= 0;

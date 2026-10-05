@@ -121,6 +121,7 @@ struct ScenarioEnvironmentEvent {
 
 struct ScenarioEnvironment {
     std::string climate_path;                    // resolved, informational
+    std::string surface_conditions_path;         // W5: resolved, informational (empty = none)
     environment::ClimateDesc climate;
     environment::EnvironmentConfig config;
     std::uint64_t seed = 0;                      // accepted now, used by the weather timeline (W3)
