@@ -5,19 +5,23 @@
 // (add_season_weather_override / set_calendar_lock). The World/vehicle level is in
 // test_world_weather_override.cpp. Tags [environment][weather]; links ps_environment only.
 //
-// RECORDED SABOTAGES (performed by hand, reverted; symptoms in out/weather_w3b_progress.md):
-//  - S1 t_end = season end (the ramp-out AFTER the boundary instead of finishing at it): "the next
-//    season is the timeline's bit-exactly" failed at t = end (the override still weighs ~1) and "the ramp
-//    finishes exactly at the season end" failed.
-//  - S2 the season end taken from the START of the current season (+ its length of the FIRST season):
-//    the end moved by a whole season in b-season cases ("ends with the season" failed).
-//  - S3 season_locked() ignored (a locked season still gets a finite end): "a locked season keeps the
-//    override" failed.
-//  - S4 set_calendar without bumping the cursor generation: "the chain re-derived under the new calendar"
-//    failed (stale ring: the old season's draws).
-//  - S5 set_calendar_lock keeping t_env (no re-anchor): "game day and fraction of the day preserved" failed.
-//  - S6 ramp_weight without the exact-zero early exit and t_end rounded up: "bit-exact from the boundary"
-//    failed on the precipitation (an ulp-sized weight left 3e-32 mm/h at a zero base).
+// RECORDED SABOTAGES (performed by hand through the scratch driver, reverted; measured 2026-10-05):
+//  - S1 t_end = season end (the ramp-out AFTER the boundary instead of finishing at it): 3 cases failed
+//    (67 assertions): t_end + ramp 2678900 > the boundary 2678400, the override still weighed 12 mm/h of
+//    precipitation 10 s after the boundary, "bit-exact from the boundary" failed.
+//  - S2 the season end shifted by one season (+ 31 days): 3 cases failed (14 assertions), the ramp-out
+//    ended 5356800 instead of 2678400, the shortened ramp stayed 1300 instead of 500.
+//  - S3 season_locked() ignored (a locked season still gets a finite end): 2 cases failed (15 assertions):
+//    t_end 2677800 instead of +inf, and a locked override gone after 300 days.
+//  - S4 set_calendar without bumping the cursor generation: "the chain is re-derived under the new
+//    calendar" failed (wind 0.667 m/s from the stale Dynamic ring instead of 4.455 m/s) - only once the lock
+//    lands INSIDE the cached ring (a lock at tick 0 restarts the cursor anyway, which hid it first).
+//  - S5 set_calendar_lock keeping t_env (no re-anchor): "season lock re-anchors" failed (day 38 instead
+//    of 41, day fraction off by 0.176).
+//  - S6 ramp_weight without the exact-zero early exit: "non-round ramps leave exactly zero weight" failed
+//    (302 assertions: an ulp-sized positive weight, ~1e-37, at the boundary leaves a field that is 0 in the
+//    timeline non-zero). With the round ramps of the other cases the formula happens to give exactly 0, so
+//    only the non-round ramps discriminate.
 
 #include "environment_fixtures.h"
 
@@ -326,6 +330,39 @@ TEST_CASE("W3b Environment: season lock re-anchors keeping the game day and the 
     CHECK(env.config().fixed_day_of_year == 40);
 }
 
+TEST_CASE("W3b season-end override: non-round ramps leave exactly zero weight at the boundary", "[environment][weather]") {
+    // (end - t_end) / ramp is not exactly 1 in floating point for most ramps (t_end = end - ramp is rounded): without the
+    // exact-zero exit in ramp_weight the override keeps a positive weight of ~1e-37 AT the boundary - invisible in
+    // value, but not bit-exact against the timeline (measured: ramp 333.3 -> 5.6e-13 left of the ramp-out).
+    // The weight is only visible where the timeline's own value of some field is exactly 0 (1e-37 vanishes against anything
+    // else), so the check runs over many seeds and compares every field (diff_field); measured: without the exit 303 of the
+    // 960 boundary samples differ.
+    const ClimateDesc wc = test_env::weather_two_season();
+    int dry = 0, checked = 0;
+    for (std::uint64_t seed = 1; seed <= 80; ++seed) {
+        const WeatherTimeline base(wc, seed, WeatherOptions{});
+        for (const real ramp : {333.3, 45.55, 1234.5678, 1000.1}) {
+            WeatherTimeline ov(wc, seed, WeatherOptions{});
+            const int id = ov.add_season_override(storm_preset(), ramp, 10.0 * kDay + 3601.37);
+            const WeatherOverride* w = ov.find_override(id);
+            REQUIRE(w != nullptr);
+            WeatherCursor cb, co;
+            for (const real t : {kSeasonAEnd, kSeasonAEnd + 1.0, kSeasonAEnd + 500.0}) {
+                const WeatherSample b = base.evaluate(t, cb);
+                const WeatherSample s = ov.evaluate(t, co);
+                INFO("seed " << seed << " ramp " << ramp << " t " << t << " end of ramp-out " << (w->t_end + w->ramp_s));
+                CHECK(s.base_weight == 1.0);
+                CHECK(diff_field(s, b, false).empty());
+                CHECK(s.precip_mm_h == b.precip_mm_h);
+                ++checked;
+                if (b.precip_mm_h == 0.0) ++dry;
+            }
+        }
+    }
+    CHECK(checked == 80 * 4 * 3);
+    (void)dry;
+}
+
 TEST_CASE("W3b Environment: the chain is re-derived under the new calendar (cursor invalidated)", "[environment][weather]") {
     const ClimateDesc wc = test_env::weather_two_season();
     EnvironmentConfig cfg;
@@ -335,7 +372,9 @@ TEST_CASE("W3b Environment: the chain is re-derived under the new calendar (curs
     Environment a(wc, cfg);
     // Walk the cursor far along the Dynamic chain first (so a stale ring would be wrong later).
     for (real t = 0.0; t < 50.0 * kDay; t += 4000.0) (void)a.evaluate(t);
-    a.set_calendar_lock("b", -1, 0);
+    // Lock at the tick whose env time is where the walk stopped (scale 30 at 240 Hz: env s = tick / 8): the lock's own
+    // re-evaluation then lands inside the cached ring instead of restarting it.
+    a.set_calendar_lock("b", -1, static_cast<std::int64_t>(49.99 * kDay * 8.0));
     EnvironmentConfig locked_cfg = cfg;
     locked_cfg.fixed_season = "b";
     const Environment fresh(wc, locked_cfg);
@@ -347,6 +386,16 @@ TEST_CASE("W3b Environment: the chain is re-derived under the new calendar (curs
         const WeatherSample sf = fresh.weather()->evaluate(t, cf);
         INFO("t = " << t);
         REQUIRE(diff_field(sa, sf).empty());
+    }
+    // The Environment's own (stale-able) cursor: continue right where the Dynamic walk stopped, inside the ring it cached.
+    for (real t = 49.9 * kDay; t < 60.0 * kDay; t += 5003.0) {
+        const EnvironmentSnapshot ea = a.evaluate(t), ef = fresh.evaluate(t);
+        INFO("t = " << t);
+        REQUIRE(ea.wind_mean_m_s == ef.wind_mean_m_s);
+        REQUIRE(ea.precip_mm_h == ef.precip_mm_h);
+        REQUIRE(ea.cloud_cover == ef.cloud_cover);
+        REQUIRE(ea.air_temp_c == ef.air_temp_c);
+        REQUIRE(ea.pressure_msl_hpa == ef.pressure_msl_hpa);
     }
     // Season b's draws differ from the Dynamic walk's (season a first): the guard is not vacuous.
     const Environment dyn(wc, cfg);

@@ -3,13 +3,18 @@
 // [kDayShareMin, kDayShareMax] (DayNightKind::AstronomicalScaled). Tags [environment][calendar]
 // (+ [sun], [io]); links only ps_environment / ps_environment_io, never ps_core.
 //
-// RECORDED SABOTAGES (performed by hand, reverted; symptoms in out/weather_w3b_progress.md):
-//  - S1 multiplier ignored (share = h0/pi): "midpoint days equal share x multiplier" failed on the
-//    summer, autumn and winter midpoint days and on the interpolated days.
-//  - S2 clamp removed: the winter (3 x ~0.34 = 1.02) and the 0.01 cases failed.
-//  - S3 the plain Astronomical kind clamped as well: "bit-identical" failed at 70 N (night 0 -> 1728 s).
-//  - S4 sunrise/sunset not following the scaled day_s (a fixed 0.5 share): the bisection checks failed.
-//  - S5 loader: the multiplier read but the kind left Astronomical: the loader round trip failed.
+// RECORDED SABOTAGES (performed by hand through the scratch driver, reverted; measured 2026-10-05):
+//  - S1 multiplier ignored (calendar.cpp: share = h0/pi): "midpoint days equal share x multiplier" and
+//    "the low clamp ..." failed (2 cases, 504 assertions, e.g. day_s off by 17228 s on a midpoint day).
+//  - S2 clamp removed: 3 cases failed (393 assertions): the polar scaled day became 86400 s instead of
+//    kDayShareMax x 86400 = 84672 s with night 0, and the low-multiplier days were 1333 s off.
+//  - S3 the plain Astronomical kind clamped as well: "Explicit and Astronomical stay bit-identical" failed
+//    at the polar latitude (day 84672 s instead of 86400 s, night 1728 s instead of 0).
+//  - S4 a fixed 0.5 share instead of share (day length independent of H0 and m): 3 cases failed (505
+//    assertions). Sunrise/sunset consistency itself is by construction (the warp reads the calendar's
+//    day_s/night_s), so no separate sabotage exists for it; the bisection checks guard the transitions.
+//  - S5 loader: the multiplier read but the kind left Astronomical: "loader round trip" failed
+//    (kind 2 instead of 3).
 
 #include "environment_fixtures.h"
 

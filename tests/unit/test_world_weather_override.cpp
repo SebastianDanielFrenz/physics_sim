@@ -6,16 +6,21 @@
 // calendar switch, hash, random access == sequential) is tested without ps_core in
 // test_environment_season_override.cpp. Tags [environment][world][vehicle].
 //
-// RECORDED SABOTAGES (performed by hand, reverted; numbers in out/weather_w3b_progress.md):
-//  - W3b-W1 (override never ends: WeatherTimeline::resolve_season_bound returning t_end = +inf for
-//    an unlocked calendar): "the override ends with the season" failed - the vehicle still felt the
-//    22 m/s storm after the boundary.
-//  - W3b-W2 (the override ignored by the world: World::add_weather_override_to_season_end a no-op):
-//    "the override reaches the vehicle's air" failed (mean wind stayed at the natural value).
-//  - W3b-W3 (lock without re-anchoring the override: Environment::set_calendar_lock leaving the
-//    override's t_end alone): "a locked season keeps the override" failed after the old boundary.
-//  - W3b-W4 (allocation: a std::vector<int>(64) in WeatherCursor::ensure's re-init path): the
-//    allocation case failed.
+// RECORDED SABOTAGES (performed by hand through the scratch driver, reverted; measured 2026-10-05):
+//  - W1 (override never ends: WeatherTimeline::resolve_season_bound returning t_end = +inf for an
+//    unlocked calendar): 2 cases failed (7 assertions): the vehicle (and the snapshot) still had the 22 m/s
+//    storm 1.1 sim s after the boundary (wind 22 vs the natural 1.92 m/s), and unlocking left t_end = inf.
+//  - W2 (World::add_weather_override_to_season_end a no-op): 5 cases failed (13 assertions): the vehicle
+//    felt 2.08 m/s instead of 22 m/s, the override was missing, the hash with and without override was equal.
+//  - W3 (unlock without re-resolving the season-bound override's end: set_calendar skipping
+//    resolve_season_bound): "unlocking restores the season end" failed (t_end stayed +inf).
+//  - SE1 (scenario loader without the "weather events need the weather key" check): the two w3nw
+//    rejection checks in test_environment_world.cpp failed (empty message).
+//  - SE2 (apply_environment_events ignoring set_season): "scenario events apply at their sim time" failed
+//    (the day length stayed at 49266 s instead of growing by > 300 s at the lock).
+//  - SE3 (unknown set_season name accepted): the "unknown season monsoon" rejection check failed.
+//  - W4 (a std::vector<int>(64) in Environment::begin_tick): the allocation case failed with 240 own
+//    violations (1 per step) at the first worker count.
 
 #include "ps/environment/climate_io.h"
 #include "ps/environment/environment.h"
@@ -275,14 +280,19 @@ TEST_CASE("World weather override: scenario events apply at their sim time", "[e
 
     std::size_t next = 0;
     std::size_t count_at[5] = {};
-    real wind_at_2s = 0.0;
+    real wind_at_2s = 0.0, day_s_before_lock = 0.0, day_s_after_lock = 0.0;
     std::string season_at_3_5;
     for (int tick = 0; tick < 240 * 5; ++tick) {
         io::apply_environment_events(world, sc, next);
         world.step();
         if (tick == 0) count_at[0] = tl->override_count();
         if (tick == 240 * 2) { count_at[1] = tl->override_count(); wind_at_2s = world.snapshots().read().environment.wind_mean_m_s; }
-        if (tick == 240 * 3 + 120) { count_at[2] = tl->override_count(); season_at_3_5 = world.snapshots().read().environment.season_name; }
+        if (tick == 240 * 2 + 120) day_s_before_lock = world.snapshots().read().environment.day_s;
+        if (tick == 240 * 3 + 120) {
+            count_at[2] = tl->override_count();
+            season_at_3_5 = world.snapshots().read().environment.season_name;
+            day_s_after_lock = world.snapshots().read().environment.day_s;
+        }
         if (tick == 240 * 4 + 60) count_at[3] = tl->override_count();   // soft end at 4.0 s: still listed
         if (tick == 240 * 5 - 1) count_at[4] = tl->override_count();    // cleared at 4.5 s
     }
@@ -294,4 +304,7 @@ TEST_CASE("World weather override: scenario events apply at their sim time", "[e
     CHECK(count_at[4] == 0);
     CHECK(wind_at_2s == 22.0);   // ramp-in (500 env s = 0.5 sim s) done long before
     CHECK(season_at_3_5 == "summer");
+    // The lock at 3.0 s: from then on every day carries summer's mid-season values (day 30 of summer was already
+    // interpolating towards autumn's shorter day), so the day gets longer by minutes at once.
+    CHECK(day_s_after_lock > day_s_before_lock + 300.0);
 }
