@@ -333,11 +333,12 @@ private:
     std::uint64_t steady_rebuilds_ = 0;
     real live_idle_ff_=0, live_idle_p_im_=0, live_idle_cap_x_=0;
     // Engine thermal plan T1 (vault PHYS-063): the oil-viscosity friction scale. plant_k_ = the PLANT's k (the
-    // physical friction: tau_fric, the Coulomb caps, the friction slope in d); ecu_k_ = the ECU's quantised estimate
+    // physical friction: tau_fric and its slope in d; T1b: never the Coulomb caps); ecu_k_ = the ECU's quantised estimate
     // (steady torque tables, idle feed-forward/cap, torque demand). Both come from Sensors, one tick old, both 1.0
     // without thermal. Not hashed (derived from the hashed thermal state). eta_c_ = this substep's combustion
     // efficiency min(1, lambda) x (1 - anti-lag cut share), read by post_solve for the released heat.
     real plant_k_ = 1.0, ecu_k_ = 1.0, eta_c_ = 0.0;
+    real hyd_ref_rpm_ = 2000.0; // T1b: Sensors::friction_reference_rpm (unused while both k are 1)
     real p_amb_ = kIsaPressurePa, t_amb_ = kIsaTemperatureK;
     real r_t_ = 0.0;         // R*T_amb
     real inv_sqrt_rt_ = 0.0; // 1/sqrt(R*T_amb)

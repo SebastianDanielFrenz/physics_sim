@@ -1918,6 +1918,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         if (thermal_) { // engine thermal plan T1: last tick's scales; defaults 1.0 without thermal
             s.friction_scale = thermal_->plant_friction_scale();
             s.ecu_friction_scale = thermal_->ecu_friction_scale();
+            s.friction_reference_rpm = thermal_->hydrodynamic_reference_rpm();
         }
         if (anti_lag_channel_live_ && ctx.channels != nullptr && anti_lag_channel_slot_ < ctx.channel_count)
             s.anti_lag_channel = ctx.channels[anti_lag_channel_slot_]; // I7d D5; else NaN = default_enabled

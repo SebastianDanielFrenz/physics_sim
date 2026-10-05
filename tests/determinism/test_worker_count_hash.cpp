@@ -1196,7 +1196,7 @@ TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24
 // 0xba94bad06472d25c, a.hash == b.hash).
 TEST_CASE("Engine thermal: vehicle_thermal.json hashes identically across 1, 2, 4, 10 and 24 workers; T_o is hashed",
           "[determinism][thermal][vehicle][drivetrain][heavy][world][io]") {
-    constexpr std::uint64_t kRecorded = 0x74d75aa6d229faa0ULL; // recorded 2026-10-05 (T1 C6), ps_run at 1/2/4/10/24 workers
+    constexpr std::uint64_t kRecorded = 0xd7205b0b06295bd8ULL; // re-recorded 2026-10-05 (T1b friction split, fire_rpm 100; T1 C6 was 0x74d75aa6d229faa0), ps_run at 1/2/4/10/24 workers
     const std::uint64_t reference = run_scenario_file("vehicle_thermal.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     CHECK(reference == kRecorded);

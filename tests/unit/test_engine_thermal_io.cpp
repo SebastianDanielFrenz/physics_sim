@@ -87,7 +87,8 @@ json valid_engine_thermal() {
   "friction_to_oil_fraction": 0.30,
   "motoring_friction_fraction": 0.6,
   "oil": { "kv40_mm2_s": 69.1, "kv100_mm2_s": 12.0, "density_15c_kg_m3": 851.0,
-           "reference_temperature_c": 95.0, "hydrodynamic_fraction": 0.5, "friction_scale_min": 1.0 },
+           "reference_temperature_c": 95.0, "hydrodynamic_fraction": 0.5, "hydrodynamic_reference_rpm": 2000.0,
+           "friction_scale_min": 1.0 },
   "conductance_per_l": { "oil_coolant_time_constant_s": 300.0, "block_air_w_k": 7.5, "block_air_w_k_per_m_s": 0.75,
                          "oil_air_w_k": 2.5, "oil_air_w_k_per_m_s": 0.25 },
   "coolant": { "cp_j_kg_k": 3400.0, "density_kg_m3": 1065.0 },
@@ -165,6 +166,12 @@ TEST_CASE("I8 shipped engine thermal and cooling files load with expanded values
     CHECK(i4.displacement_l == 2.0);
     CHECK(i4.engine_capacity_j_k == Approx(53200.0).epsilon(1e-12));
     CHECK(i4.motoring_friction_fraction == 0.6);
+    // T1b: the class reference speed, and this engine's own hydrodynamic share (its Heywood correlation's
+    // speed-linear term, 0.30 of 1.47 bar at 2000 rpm) overriding the class 0.5.
+    CHECK(i4.oil.hydrodynamic_reference_rpm == 2000.0);
+    CHECK(i4.oil.hydrodynamic_fraction == 0.2);
+    CHECK(a25a.oil.hydrodynamic_reference_rpm == 2000.0);
+    CHECK(a25a.oil.hydrodynamic_fraction == 0.5);
 
     const CoolingSystemDesc cs = io::load_cooling_system_json(kRoot + "/data/cooling_systems/sedan.json");
     CHECK(cs.radiator.ua_ref_w_k == 1500.0);
@@ -198,6 +205,8 @@ TEST_CASE("I8 engine thermal rejections", "[thermal][drivetrain][io]") {
     check_engine_bad("beta > 1", [](json& j) { j["friction_to_oil_fraction"] = 1.1; }, "\"friction_to_oil_fraction\" must be in [0, 1]");
     check_engine_bad("phi_f zero", [](json& j) { j["motoring_friction_fraction"] = 0.0; }, "\"motoring_friction_fraction\" must be in (0, 1]");
     check_engine_bad("phi_h zero", [](json& j) { j["oil"]["hydrodynamic_fraction"] = 0.0; }, "\"hydrodynamic_fraction\" must be in (0, 1]");
+    check_engine_bad("n_ref low", [](json& j) { j["oil"]["hydrodynamic_reference_rpm"] = 400.0; }, "\"hydrodynamic_reference_rpm\" must be in [500, 10000]");
+    check_engine_bad("n_ref missing", [](json& j) { j["oil"].erase("hydrodynamic_reference_rpm"); }, "missing required field \"hydrodynamic_reference_rpm\"");
     check_engine_bad("k_min < 1", [](json& j) { j["oil"]["friction_scale_min"] = 0.9; }, "\"friction_scale_min\" must be >= 1");
     check_engine_bad("T_ref low", [](json& j) { j["oil"]["reference_temperature_c"] = 50.0; }, "\"reference_temperature_c\" must be in [60, 140]");
     check_engine_bad("T_ref high", [](json& j) { j["oil"]["reference_temperature_c"] = 150.0; }, "\"reference_temperature_c\" must be in [60, 140]");

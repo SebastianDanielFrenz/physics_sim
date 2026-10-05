@@ -24,19 +24,21 @@
 //       does not occur: the idle heat is small, see the deviations below; 97.78 C at 1200 s either way.)
 //   I6a oil hydrodynamic_fraction 0.5 -> 1e-9 (k = 1 + 1.5e-10) -> fuel ratio 1.00000000015: "ratio >= 1.03" fails.
 //       Unsabotaged: 1.0557 (cold 0.5885 kg, warm 0.5574 kg over 1200 s).
-//   I9  the in-test negative control (starter at 0.8 k*breakaway never turns the crank: 1.9e-10 rpm; at 2 k*breakaway
-//       the simulated engine starts in 0.21 s and idles 771-831 rpm at k = 12.7) is the discriminating measurement;
-//       the plan's "starter torque halved" sabotage is vacuous because the shipped starter already fails (below).
+//   I9  (T1b) B1: the Coulomb caps scaled by k again (EngineTorqueMap and SimulatedEngine friction_cap_* x k) ->
+//       TBD
+//   I9v (T1b) the viscosity exponent 1 instead of 0.5 (EngineThermal::friction_scale_exact without the sqrt) ->
+//       TBD
 //
 // Deviations from the plan (all measured, none tuned):
 //   * Dyno: Viscous-mode LoadDyno with a feed-forward scale and a test-side throttle PI holding the speed (a Brake
 //     dyno cannot hold a speed). The load ramps in over 20 s (a cold engine stalls on a load step).
-//   * I2 at -10 C and I9 at -30 C: the shipped starter (140 N*m stall [AS]) cannot break away k * 45 N*m once
-//     k > 3.11 (oil below about 7 C), so the engine never turns: I9's plan bound fails with the shipped starter for the
-//     simulated AND the graph engine ([!mayfail], measurement above, no cap added). The torque-balance A/B uses a bench
-//     starter (2 x k x breakaway) to answer the actual question: the simulated engine then starts and idles at -30 C.
-//     The graph engine cranks (326 rpm) but never reaches start_complete (550); its cranking margin is razor-thin even
-//     at k = 1 (552 rpm), so it does not start below about 50 C ([!mayfail] case "I2 graph ... 20 C").
+//   * T1b (2026-10-05): T1 scaled the Coulomb/breakaway caps by k, so the shipped starter (140 N*m) could not turn
+//     either engine below about 7 C oil, and the graph engine never reached start_complete below about 50 C. T1b keeps
+//     the boundary friction unscaled, adds k only as a hydrodynamic increment (k - 1) F(2000) sqrt(n / 2000), fires
+//     from the cited SI minimum starting speed (fire_rpm 100) and lets the graph engine's idle law know the cold
+//     friction. I2 (20 C and -10 C) and I9 (-30 C) now pass with the SHIPPED starter for both engines; the [!mayfail]
+//     tags and the bench starters are gone. The graph engine's k(20 C) is 1.535 (its own hydrodynamic_fraction 0.2,
+//     data/engine_thermal/i4_2l_na.json), not > 2.
 //   * I3: the hold uses the settled window [60 s, end] for the rpm check. Measured: coolant 80 C at 869 s [bound 400,
 //     1100], oil 80 C at 1181 s, oil 79.99 C at 1180 s, k at 1200 s 1.098.
 //   * I4: lower coolant bound 83 C instead of 88 C and opening in (0.02, 0.5) instead of (0, 1): the 20 s wax lag with
@@ -46,6 +48,7 @@
 //     0.0034 K/s at 97 C, the plan's [D] 0.023 K/s at 91 C did not include the block-air loss.)
 //   * I6: ratio 1.0557 (plan estimate 1.11, bound [1.03, 1.20]).
 
+#include "drivetrain/engine_simulated.h"
 #include "drivetrain/engine_thermal.h"
 
 #include "ps/drivetrain/engine_rig.h"
@@ -65,6 +68,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace ps;
@@ -323,16 +327,15 @@ TEST_CASE("I2 cold idle holds: car_sedan_sim_thermal from an ambient start at 20
     CHECK(r.max_rpm <= 875.0);
 }
 
-// The shipped starter (140 N*m stall, [AS]) cannot break the engine away below about 7 C (k*45 N*m > 140 N*m, see I9),
-// so the -10 C idle case uses a bench starter sized for the torque balance (2 x k * breakaway, deviation from the plan).
-TEST_CASE("I2 cold idle holds (long): 120 s at 20 C and 60 s at -10 C (bench starter)", "[thermal][drivetrain][long]") {
+// T1b: the -10 C case uses the shipped starter (T1 needed a bench starter of 2 x k x breakaway while the caps scaled).
+TEST_CASE("I2 cold idle holds (long): 120 s at 20 C and 60 s at -10 C", "[thermal][drivetrain][long]") {
     const ColdStart a = run_cold_start("vehicles/car_sedan_sim_thermal.json", 20.0, 125.0, 3.0);
     report("I2 long 20 C", a);
     CHECK(a.t_running > 0.0);
     CHECK_FALSE(a.stalled_after);
     CHECK(a.min_rpm >= 725.0);
     CHECK(a.max_rpm <= 875.0);
-    const ColdStart b = run_cold_start("vehicles/car_sedan_sim_thermal.json", -10.0, 65.0, 5.0, 2.0 * 5.34 * 45.0);
+    const ColdStart b = run_cold_start("vehicles/car_sedan_sim_thermal.json", -10.0, 65.0, 5.0);
     report("I2 long -10 C", b);
     CHECK(b.k_start > 5.0);
     REQUIRE(b.t_running > 0.0);
@@ -341,11 +344,11 @@ TEST_CASE("I2 cold idle holds (long): 120 s at 20 C and 60 s at -10 C (bench sta
     CHECK(b.max_rpm <= 875.0);
 }
 
-// FINDING (reported): the graph (torque-map) engine's cranking is razor-thin by construction - the starter (140 N*m
-// stall, 400 rpm free speed) against the motoring curve reaches 552 rpm at k = 1 and start_complete_rpm is 550, so
-// every bit of added cold friction (k_g = 1 + 0.6 (k - 1) on the smooth part) leaves the crank at its cranking
-// equilibrium below 550 rpm: 60 C starts (550.6 rpm, 1.19 s), 40 C and colder do not (391 rpm at 40 C, 355 at 20 C).
-// The simulated engine, whose combustion torque during cranking is modelled, starts and idles down to -30 C (below).
+// T1 FINDING, resolved by T1b: the graph engine did not start below about 50 C oil. Cause: (1) the T1 law scaled the
+// whole smooth motoring part (pumping included) by k_g and the Coulomb caps by k, (2) the idle authority (max_throttle
+// 0.3) did not know the extra friction, so combustion during cranking could not lift the crank to start_complete
+// (550 rpm). The "552 rpm at k = 1" margin was a measuring artefact: max_crank_rpm is the last cranking sample, taken
+// just before the switch to Running at 550 rpm; at k = 1 combustion during cranking has about +10 N*m of margin there.
 TEST_CASE("I2 graph engine (car_sedan_thermal): the baseline at k = 1 starts", "[thermal][drivetrain]") {
     const ColdStart r = run_cold_start("vehicles/car_sedan_thermal.json", 95.0, 12.0, 3.0); // ambient start at 95 C: k = 1
     report("I2 graph baseline", r);
@@ -355,72 +358,91 @@ TEST_CASE("I2 graph engine (car_sedan_thermal): the baseline at k = 1 starts", "
     CHECK_FALSE(r.stalled_after);
 }
 
-TEST_CASE("I2 graph engine (car_sedan_thermal) from an ambient start at 20 C starts (known to fail)", "[thermal][drivetrain][!mayfail]") {
+TEST_CASE("I2 graph engine (car_sedan_thermal) from an ambient start at 20 C starts and idles", "[thermal][drivetrain]") {
     const ColdStart r = run_cold_start("vehicles/car_sedan_thermal.json", 20.0, 36.0, 3.0);
     report("I2 graph 20 C", r);
-    CHECK(r.k_start > 2.0);
+    CHECK(r.k_start == Approx(1.535).margin(0.01)); // the graph engine's own hydrodynamic_fraction 0.2
     REQUIRE(r.t_running > 0.0);
     CHECK(r.t_running <= 3.0);
     CHECK_FALSE(r.stalled_after);
+    CHECK(r.final_state == static_cast<int>(EngineState::Running));
+    CHECK(r.min_rpm >= 725.0);
+    CHECK(r.max_rpm <= 875.0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // I9 - cold crank and start at -30 C, no friction cap
 // ---------------------------------------------------------------------------------------------------------------
-// FINDING (reported, no cap added per the plan): with the shipped starter (stall torque 140 N*m [AS], data/engines/
-// toyota_a25a_fks_sim.json and i4_2l_na.json) and breakaway torque 45 N*m [AS] times k, the engine never turns once
-// k * 45 > 140, i.e. below about 7 C oil (k = 3.11; k(0 C) = 3.85, k(-30 C) = 12.72 -> 572 N*m). The plan's bound
-// ("Running within 10 s") therefore fails for BOTH engine kinds; the case below keeps that bound as a [!mayfail] check.
-// The explanation is the torque balance, pinned by the discriminating A/B in the next case.
-TEST_CASE("I9 cold crank and start at -30 C with the shipped starter (plan bound, known to fail)", "[thermal][drivetrain][long][!mayfail]") {
-    for (const char* file : {"vehicles/car_sedan_sim_thermal.json", "vehicles/car_sedan_thermal.json"}) {
-        INFO(file);
-        const ColdStart r = run_cold_start(file, -30.0, 45.0, 10.0);
-        report(file, r);
+// T1b: the boundary friction (Coulomb row, breakaway) is not viscosity-scaled, so the shipped starter (140 N*m stall,
+// 1.47 kW, data/engines/*.json) breaks a -30 C engine away; the hydrodynamic increment sets the cranking speed and the
+// engines fire from fire_rpm 100 (cited SI minimum starting speed 40..100 rpm). No friction cap (owner 2026-10-05).
+TEST_CASE("I9 cold crank and start at -30 C with the shipped starter", "[thermal][drivetrain][long]") {
+    struct Case {
+        const char* file;
+        real k30;
+    };
+    for (const Case c : {Case{"vehicles/car_sedan_sim_thermal.json", 12.72}, Case{"vehicles/car_sedan_thermal.json", 5.69}}) {
+        INFO(c.file);
+        const ColdStart r = run_cold_start(c.file, -30.0, 40.0, 10.0);
+        report(c.file, r);
+        CHECK(r.k_start == Approx(c.k30).margin(0.01));
         REQUIRE(r.t_running > 0.0);
         CHECK(r.t_running <= 10.0);
-        CHECK_FALSE(r.stalled_after);
+        CHECK_FALSE(r.stalled_after); // over the 30 s after the start
+        CHECK(r.final_state == static_cast<int>(EngineState::Running));
+        CHECK(r.min_rpm >= 725.0);
+        CHECK(r.max_rpm <= 875.0);
     }
 }
 
-TEST_CASE("I9 torque balance: the -30 C start fails exactly when the starter stall torque is below k * breakaway", "[thermal][drivetrain][long]") {
-    constexpr real k30 = 12.72; // U2: k(-30 C)
-    constexpr real breakaway = 45.0;
-    for (const char* file : {"vehicles/car_sedan_sim_thermal.json", "vehicles/car_sedan_thermal.json"}) {
-        INFO(file);
-        // Shipped starter, and a starter at 80 % of the breakaway torque: the crank never moves.
-        const ColdStart shipped = run_cold_start(file, -30.0, 12.0, 10.0);
-        report("shipped starter", shipped);
-        CHECK(shipped.k_start == Approx(k30).margin(0.05));
-        CHECK(shipped.max_crank_rpm < 1.0);
-        CHECK(shipped.t_running < 0.0);
-        const ColdStart weak = run_cold_start(file, -30.0, 12.0, 10.0, 0.8 * k30 * breakaway);
-        report("starter at 0.8 k*breakaway", weak);
-        CHECK(weak.max_crank_rpm < 1.0);
-        CHECK(weak.t_running < 0.0);
-        // A starter at 2 x k * breakaway cranks the crank.
-        const ColdStart bench = run_cold_start(file, -30.0, 45.0, 10.0, 2.0 * k30 * breakaway);
-        report("starter at 2 k*breakaway", bench);
-        CHECK(bench.max_crank_rpm > 100.0);
-        if (std::string(file).find("sim_thermal") != std::string::npos) {
-            // Simulated engine: it fires, runs, and holds an idle at k = 12.7 (ECU idle feed-forward knows k) - the
-            // actual I9 question, answered: the start fails only for want of starter torque.
-            REQUIRE(bench.t_running > 0.0);
-            CHECK(bench.t_running <= 10.0);
-            CHECK_FALSE(bench.stalled_after);
-            CHECK(bench.final_state == static_cast<int>(EngineState::Running));
-            CHECK(bench.min_rpm >= 725.0);
-            CHECK(bench.max_rpm <= 875.0);
-        } else {
-            // FINDING: the graph (torque-map) engine cranks at the torque-balance speed (about 326 rpm: starter free
-            // speed 400 rpm, friction 1 + 0.6 (k - 1) = 8 on the smooth part) but its idle-limited combustion torque
-            // cannot carry it to start_complete_rpm (550); it never reaches Running.
-            CHECK(bench.t_running < 0.0);
-            CHECK(bench.max_crank_rpm < 550.0);
+// Validation of the friction split against the cited cranking resistance of a 2 L SI engine vs oil viscosity
+// (Europa Tabellenbuch Kfz, starter sizing, via fahrzeug-elektrik.de/Eebd.htm, read 2026-10-05): 85 N*m at
+// 2000 mm2/s, x1.45 at 5500 mm2/s (the -20 C design case), "about 33 %" at 100 mm2/s. The cited values include the
+// gas-exchange share; the ratios are compared. The simulated A25A (class law, phi_h 0.5) friction torque at 120 rpm
+// cranking: Coulomb row + smooth map + increment, at the oil temperature where the Walther fit gives each viscosity.
+TEST_CASE("I9 cranking friction vs oil viscosity: the cited x1.45 from 2000 to 5500 mm2/s", "[thermal][drivetrain]") {
+    EngineThermalConfig cfg;
+    cfg.engine = io::load_engine_thermal_json(data_path("engine_thermal/toyota_a25a_fks.json"));
+    cfg.cooling = io::load_cooling_system_json(data_path("cooling_systems/sedan.json"));
+    const EngineThermal th(cfg);
+    auto t_at_nu = [&](real nu) {
+        real lo = 200.0, hi = 400.0; // K; viscosity falls with temperature
+        for (int i = 0; i < 200; ++i) {
+            const real mid = 0.5 * (lo + hi);
+            if (th.kinematic_viscosity_mm2_s(mid) > nu) lo = mid;
+            else hi = mid;
         }
-    }
+        return 0.5 * (lo + hi);
+    };
+    ComponentParams cp = io::load_engine_json(data_path("engines/toyota_a25a_fks_sim.json"));
+    REQUIRE(std::holds_alternative<SimulatedEngineDesc>(cp));
+    SimulatedEngineDesc desc = std::get<SimulatedEngineDesc>(cp);
+    desc.fuels.resize(1);
+    const auto maps = SimulatedEngine::build_maps(desc);
+    constexpr real rpm = 120.0;
+    auto resistance = [&](real nu) {
+        const real k = th.friction_scale_exact(t_at_nu(nu));
+        SimulatedEngine e(desc, maps);
+        Sensors s;
+        s.omega = rpm * 2.0 * 3.14159265358979323846 / 60.0;
+        s.ignition = 0.0; // Off: no combustion, only friction and pumping
+        s.friction_scale = k;
+        s.ecu_friction_scale = k;
+        s.friction_reference_rpm = th.hydrodynamic_reference_rpm();
+        const PreSolveResult r = e.pre_solve(s, ThrottleCommand{0.0, 0.0, 1.0}, TcuRequest{}, 1.0 / 960.0);
+        const auto ev = e.evaluate_torque(s.omega, r.p_intake_pa, false, 1.0, false);
+        return r.friction_cap_kinetic - ev.tau_fric; // both Coulomb and smooth friction oppose motion
+    };
+    const real r100 = resistance(100.0), r2000 = resistance(2000.0), r5500 = resistance(5500.0);
+    WARN("A25A friction at 120 rpm: " << r100 << " / " << r2000 << " / " << r5500 << " N*m at 100 / 2000 / 5500 mm2/s (oil "
+                                      << t_at_nu(100.0) - kKelvin << " / " << t_at_nu(2000.0) - kKelvin << " / "
+                                      << t_at_nu(5500.0) - kKelvin << " C); ratios " << r5500 / r2000 << " (cited 1.45), "
+                                      << r100 / r2000 << " (cited about 0.33)");
+    CHECK(r5500 / r2000 == Approx(1.45).epsilon(0.05));
+    // Report-only: the warm residual is higher than cited (the A25A map's boundary share at 120 rpm is larger than the
+    // cited engine's); the bound only guards the direction.
+    CHECK(r100 / r2000 < 0.6);
 }
-
 
 // ---------------------------------------------------------------------------------------------------------------
 // I3 - warm-up time

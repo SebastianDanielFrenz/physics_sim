@@ -53,7 +53,10 @@ engine file changes neither its map content hash nor its cache key.
 `oil`: `kv40_mm2_s`, `kv100_mm2_s` (`kv40 > kv100 > 0`), `density_15c_kg_m3`
 (`> 0`, density at 15.6 C), `reference_temperature_c` (in `[60, 140]`; the
 friction maps apply unchanged at and above it), `hydrodynamic_fraction` (phi_h,
-in `(0, 1]`), `friction_scale_min` (optional, default 1, must be `>= 1`).
+in `(0, 1]`: the hydrodynamic share of the friction map at the reference speed),
+`hydrodynamic_reference_rpm` (required, in `[500, 10000]`: the speed at which
+the whole friction map is scaled by exactly `k`), `friction_scale_min`
+(optional, default 1, must be `>= 1`).
 **`friction_scale_max` is rejected** with a message naming the owner ruling of
 2026-10-05: there is no friction cap.
 
@@ -73,6 +76,21 @@ with the Walther (ASTM D341) viscosity through KV40 and KV100 and the density
 `rho15 * (1 - 6.5e-4 * (T - 15.6 C))`. `k` is exactly 1.0 at and above
 `reference_temperature_c`. The plant engine uses `k(T_oil)`; the engine's ECU
 model uses `k` of the oil temperature rounded to 1 K.
+
+`k` does not multiply the friction map (engine thermal T1b). The engine adds a
+hydrodynamic increment to the map's speed-dependent part:
+
+`dF(n) = (k - 1) * F(n_ref) * sqrt(n / n_ref)`, `n_ref = hydrodynamic_reference_rpm`
+
+(linear through zero below 50 rpm). Hydrodynamic friction under a fixed load
+goes as `sqrt(mu * speed)`, so the same square root that gives the viscosity
+exponent gives the speed exponent. `F` is the simulated engine's
+`friction_torque_nm`, or `motoring_friction_fraction * |motoring(n)|` for a
+graph engine (pumping is never scaled). The Coulomb part (`F(0)`) and the
+breakaway torque are boundary friction and are never scaled, so a cold engine
+breaks away with the warm starter torque. A graph engine's idle feed-forward and
+idle authority rise by `dF(idle) / (wot(idle) - motoring(idle))` with the ECU
+`k` (cold fast idle).
 
 ## Minimal example
 

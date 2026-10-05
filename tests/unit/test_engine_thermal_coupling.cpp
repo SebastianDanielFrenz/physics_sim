@@ -4,18 +4,25 @@
 //
 // C4 content: I1-graph (EngineTorqueMap, white-box pre_solve/post_solve). C5 adds I1-sim (SimulatedEngine) and I2.
 //
-// Sabotage record (each applied once, the named check then fails):
-//   C4a I1-graph: the friction slope in d not scaled by k_g -> the finite-difference CHECK fails (d 0.0344 vs FD 0.0393,
-//       and d(k) == d(1) at theta 0.2).
-//   C4b I1-graph: the kinetic Coulomb cap left at c_k -> cap 15.0 vs 35.07 and the net-torque CHECK off by 20.07 N*m.
-//   C4c I1-graph: friction heat without the phi_f share -> 20.29 vs the expected -(h*omega*tau_smooth*phi_f).
+//
+// Engine thermal T1b replaced the T1 law (k multiplied the whole smooth friction, k_g = 1 + phi_f (k - 1) for the graph
+// engine, and the Coulomb caps): k now sets only the hydrodynamic increment dF(n) = (k - 1) F(n_ref) sqrt(n / n_ref)
+// (core/src/drivetrain/hydrodynamic_friction.h), the Coulomb/breakaway caps are never scaled, and the graph engine's
+// idle feed-forward/authority rise by dF_ecu(idle) / (w - m)(idle). The T1 sabotages C4a-c and C5a, C5b, C5f were
+// rewritten against the new law; C4d, C5c-e, C5h are unchanged in substance.
+//
+// Sabotage record (each applied once to core/src, measured 2026-10-05, the named check then fails):
+//   B1 caps scaled by k again (graph and sim) -> TBD
+//   B2 speed shape linear (sqrt(n/n_ref) -> n/n_ref) -> TBD
+//   B3 graph increment on the whole motoring curve (phi_f dropped from f_hyd_ref) -> TBD
+//   B4 graph idle feed-forward/authority shift removed -> TBD
+//   B5 graph friction-heat increment dropped -> TBD
+//   B6 d without the increment's slope (graph and sim) -> TBD
 //   C4d I1-graph: released_heat_delta = 0 -> 0 vs 257.7 J (fuel energy of the substep).
-//   C5a I1-sim: friction slope in d not scaled by k -> d vs finite difference off by 0.0345 (tolerance 4e-8).
-//   C5b I1-sim: static Coulomb cap unscaled -> 12.0 vs 28.056.
-//   C5c I1-sim: the ECU's live steady torque built with k = 1 -> demand error 19.65 N*m, the k_ecu ordering check fails.
-//   C5d I1-sim: live idle control ignoring k_ecu -> idle plate 0.02111 instead of 0.03451 (the CHECK needs > 0.02154).
+//   C5c I1-sim: the ECU's live steady torque built with k = 1 -> the k_ecu demand CHECK fails.
+//   C5d I1-sim: live idle control ignoring k_ecu -> idle plate 0.02111, the CHECK needs > 1.02 x.
 //   C5e I1-sim: released heat = the whole fuel energy (no eta_c) -> 24.818 J vs lambda * fuel energy.
-//   C5f I1-sim: the PLANT evaluating with the ECU's k -> tau0 does not fall by (k-1)(F - c_k) (3.39 N*m off).
+//   C5f I1-sim: the PLANT evaluating with the ECU's k -> tau0 does not fall by dF.
 //   C5h I1-sim: no live idle recompute when only k_ecu changes -> idle plate 0.00015 (uninitialised live feed-forward).
 // U9a graph (test_engine_thermal_powertrain.cpp): the plant scale handed to the engine perturbed by +1e-14 -> the
 //   rig trajectory differs from the no-thermal one at tick 0 (a perturbation inside the engine alone would hit both
@@ -87,50 +94,67 @@ constexpr real kK = 2.338; // k at 20 C for the A25A oil class (plan section 6.1
 
 } // namespace
 
-TEST_CASE("I1-graph: friction scale k in EngineTorqueMap (smooth part by k_g, caps by k, slope, heat)", "[thermal][drivetrain]") {
+// The T1b hydrodynamic increment, closed form (n_ref = Sensors' default 2000 rpm, linear below 50 rpm).
+static real hyd_shape(real rpm) { return rpm >= 50.0 ? std::sqrt(rpm / 2000.0) : rpm / 50.0 * std::sqrt(50.0 / 2000.0); }
+
+TEST_CASE("I1-graph: friction scale k in EngineTorqueMap (hydrodynamic increment, unscaled caps, slope, idle, heat)",
+          "[thermal][drivetrain]") {
     const TorqueMapEngineDesc tm = graph_params();
     const real phi = 0.6;
     EngineTorqueMap::Desc d = to_engine_desc(tm);
     d.thermal_friction_fraction = phi;
     const real c_k = -d.motoring_torque_nm_vs_rpm.evaluate(0.0);
     REQUIRE(c_k > 0.0);
-    const real k_g = 1.0 + phi * (kK - 1.0);
+    const real f_ref = -d.motoring_torque_nm_vs_rpm.evaluate(2000.0) * phi; // friction share of the curve at n_ref
+    auto dF = [&](real k, real rpm) { return (k - 1.0) * f_ref * hyd_shape(rpm); };
 
     const real rpm = 3250.0; // mid-segment of both curves (knots every 500 rpm): finite differences stay on one segment
     const real m = d.motoring_torque_nm_vs_rpm.evaluate(rpm);
-    const real m_smooth = m + c_k; // the friction part of the motoring curve (<= 0)
+    const real m_smooth = m + c_k;
     REQUIRE(m_smooth < 0.0);
 
-    SECTION("net torque: only the smooth friction and the Coulomb caps change, the indicated torque w - m does not") {
+    SECTION("net torque: only the hydrodynamic increment changes; pumping, w - m and the boundary caps do not") {
         for (const real theta : {1.0, 0.5}) {
             INFO("theta " << theta);
             const Eval a = eval_graph(d, rpm, theta, 1.0);
             const Eval b = eval_graph(d, rpm, theta, kK);
-            // Smooth friction acts on the node torque: tau0 differs by exactly (k_g - 1)*m_smooth.
-            const real expected_dtau0 = (k_g - 1.0) * m_smooth;
-            CHECK(std::abs((b.pre.tau0 - a.pre.tau0) - expected_dtau0) <= 1e-12 * std::abs(expected_dtau0));
-            // Coulomb caps scale with k (the full friction at rest is pure Coulomb).
-            CHECK(a.pre.friction_cap_kinetic == c_k);
-            CHECK(a.pre.friction_cap_static == d.breakaway_torque_nm);
-            CHECK(b.pre.friction_cap_kinetic == Approx(c_k * kK).epsilon(1e-14));
-            CHECK(b.pre.friction_cap_static == Approx(d.breakaway_torque_nm * kK).epsilon(1e-14));
-            // Net engine torque including the Coulomb row's kinetic value: falls by (k_g-1)*m_smooth - (k-1)*c_k.
-            const real net_a = a.pre.tau0 - a.pre.friction_cap_kinetic;
-            const real net_b = b.pre.tau0 - b.pre.friction_cap_kinetic;
-            const real expected_dnet = (k_g - 1.0) * m_smooth - (kK - 1.0) * c_k;
-            CHECK(std::abs((net_b - net_a) - expected_dnet) <= 1e-12 * std::abs(expected_dnet));
-            // The ECU-visible torque demand of the graph engine uses the plant k (it has no separate ECU model).
-            const real expected_dtd = (k_g - 1.0) * m_smooth - (kK - 1.0) * c_k;
-            CHECK(std::abs((b.pre.torque_demand - a.pre.torque_demand) - expected_dtd) <= 1e-12 * std::abs(expected_dtd));
+            const real expected = -dF(kK, rpm);
+            REQUIRE(expected < -1.0);
+            CHECK(std::abs((b.pre.tau0 - a.pre.tau0) - expected) <= 1e-12 * std::abs(expected));
+            // The ECU-visible torque demand carries the ECU's estimate of the same increment.
+            CHECK(std::abs((b.pre.torque_demand - a.pre.torque_demand) - expected) <= 1e-12 * std::abs(expected));
         }
-        // WOT in particular: the indicated torque w - m is untouched (compare against the curves directly).
         const Eval w = eval_graph(d, rpm, 1.0, kK);
         const real w_rpm = d.wot_torque_nm_vs_rpm.evaluate(rpm);
-        CHECK(std::abs(w.pre.tau0 - (k_g * m_smooth + (w_rpm - m))) <= 1e-12 * std::abs(w_rpm));
+        CHECK(std::abs(w.pre.tau0 - (m_smooth - dF(kK, rpm) + (w_rpm - m))) <= 1e-12 * std::abs(w_rpm));
+        // Plant and ECU split: the plant k moves tau0 only, the ECU k the demand only.
+        EngineTorqueMap ep(d), ee(d);
+        Sensors sp = sensors_at(rpm, kK);
+        sp.ecu_friction_scale = 1.0;
+        Sensors se = sensors_at(rpm, 1.0);
+        se.ecu_friction_scale = kK;
+        ThrottleCommand tc;
+        tc.command = 0.5;
+        const PreSolveResult rp = ep.pre_solve(sp, tc, TcuRequest{}, kH);
+        const PreSolveResult re = ee.pre_solve(se, tc, TcuRequest{}, kH);
+        const Eval a = eval_graph(d, rpm, 0.5, 1.0);
+        CHECK(rp.torque_demand == a.pre.torque_demand);
+        CHECK(re.tau0 == a.pre.tau0);
     }
 
-    SECTION("d matches a central finite difference of tau0 (the friction slope carries k_g, the combustion slope does not)") {
-        for (const real k : {1.0, kK}) {
+    SECTION("boundary caps: breakaway and Coulomb are never viscosity-scaled, whatever k") {
+        for (const real k : {1.0, kK, 12.72}) {
+            INFO("k " << k);
+            for (const real r : {0.0, 120.0, rpm}) {
+                const Eval e = eval_graph(d, r, 0.0, k);
+                CHECK(e.pre.friction_cap_kinetic == c_k);
+                CHECK(e.pre.friction_cap_static == d.breakaway_torque_nm);
+            }
+        }
+    }
+
+    SECTION("d matches a central finite difference of tau0 (the increment's sqrt slope included)") {
+        for (const real k : {1.0, kK, 12.72}) {
             for (const real theta : {0.2, 0.5}) {
                 INFO("k " << k << " theta " << theta);
                 const real dr = 5.0; // rpm; the 500 rpm segments keep both points on one linear piece
@@ -141,23 +165,38 @@ TEST_CASE("I1-graph: friction scale k in EngineTorqueMap (smooth part by k_g, ca
                 CHECK(mid.pre.d == Approx(std::max(fd, 0.0)).epsilon(1e-6));
             }
         }
-        // The scale is not a no-op for d: the friction slope of this motoring curve is nonzero here.
         const Eval a = eval_graph(d, rpm, 0.2, 1.0);
         const Eval b = eval_graph(d, rpm, 0.2, kK);
-        CHECK(a.pre.d > 0.0);
-        CHECK(std::abs(b.pre.d - a.pre.d) > 1e-6);
+        const real expected_dd = (kK - 1.0) * f_ref * 0.5 * hyd_shape(rpm) / rpm * (60.0 / (2.0 * kPi));
+        CHECK(std::abs((b.pre.d - a.pre.d) - expected_dd) <= 1e-12 * expected_dd);
     }
 
-    SECTION("heat: released = fuel energy (eta_c = 1), friction heat = -h*omega*tau_smooth*phi_f with tau_smooth carrying k_g") {
+    SECTION("idle: the feed-forward and the authority rise by dF_ecu(idle) / (w - m)(idle)") {
+        const real span = d.wot_torque_nm_vs_rpm.evaluate(d.idle_rpm) - d.motoring_torque_nm_vs_rpm.evaluate(d.idle_rpm);
+        const real shift = dF(kK, d.idle_rpm) / span;
+        REQUIRE(shift > 0.03);
+        // At idle speed (e = 0, fresh integrator) theta_eff = the feed-forward.
+        const Eval a = eval_graph(d, d.idle_rpm, 0.0, 1.0);
+        const Eval b = eval_graph(d, d.idle_rpm, 0.0, kK);
+        CHECK(b.pre.throttle_eff - a.pre.throttle_eff == Approx(shift).epsilon(1e-12));
+        // Far below idle the PI saturates at the authority cap: max_throttle at k = 1, max_throttle + shift cold.
+        const Eval ca = eval_graph(d, 400.0, 0.0, 1.0);
+        const Eval cb = eval_graph(d, 400.0, 0.0, kK);
+        CHECK(ca.pre.throttle_eff == d.idle.max_throttle);
+        CHECK(cb.pre.throttle_eff == Approx(d.idle.max_throttle + shift).epsilon(1e-12));
+        WARN("I1-graph idle: theta_ff " << a.pre.throttle_eff << " -> " << b.pre.throttle_eff << ", cap " << ca.pre.throttle_eff
+                                        << " -> " << cb.pre.throttle_eff);
+    }
+
+    SECTION("heat: released = fuel energy (eta_c = 1), friction heat = phi_f share of the warm curve + the whole increment") {
         REQUIRE(d.has_fuel_model);
         const Eval e = eval_graph(d, rpm, 1.0, kK);
         const real omega = rpm * kRpmToRad;
-        const real tau_smooth = (m_smooth)*k_g; // s = +1
-        CHECK(e.post.friction_heat_delta == Approx(-(kH * omega * tau_smooth * phi)).epsilon(1e-12));
+        const real expected = -(kH * omega * m_smooth * phi) + kH * omega * dF(kK, rpm);
+        CHECK(e.post.friction_heat_delta == Approx(expected).epsilon(1e-12));
         CHECK(e.post.friction_heat_delta > 0.0);
         CHECK(e.post.released_heat_delta == e.post.fuel_energy_in_delta);
         CHECK(e.post.released_heat_delta > 0.0);
-        // Coasting (no fuel): friction heat still flows, nothing is released.
         const Eval c = eval_graph(d, rpm, 0.0, kK);
         CHECK(c.post.released_heat_delta == 0.0);
         CHECK(c.post.friction_heat_delta > 0.0);
@@ -166,12 +205,11 @@ TEST_CASE("I1-graph: friction scale k in EngineTorqueMap (smooth part by k_g, ca
     SECTION("k = 1.0 leaves every output bit-identical to the unscaled expressions") {
         const Eval a = eval_graph(d, rpm, 0.7, 1.0);
         EngineTorqueMap::Desc d1 = d;
-        d1.thermal_friction_fraction = 1.0; // k_g = 1 whatever phi_f is
+        d1.thermal_friction_fraction = 1.0;
         const Eval b = eval_graph(d1, rpm, 0.7, 1.0);
         CHECK(a.pre.tau0 == b.pre.tau0);
         CHECK(a.pre.d == b.pre.d);
         CHECK(a.pre.torque_demand == b.pre.torque_demand);
-        // and against the closed forms of the pre-thermal code
         const real w_rpm = d.wot_torque_nm_vs_rpm.evaluate(rpm);
         CHECK(a.pre.tau0 == (m + c_k) + 0.7 * (w_rpm - m));
     }
@@ -203,39 +241,43 @@ TEST_CASE("I1-sim: friction scale k in SimulatedEngine (plant scales the physics
     const real c_k = desc.maps.friction_torque_nm.evaluate(0.0);
     REQUIRE(c_k == 6.0);
     auto friction = [&](real rpm) { return desc.maps.friction_torque_nm.evaluate(rpm); };
+    const real f_ref = friction(2000.0);
+    auto dF = [&](real k, real rpm) { return (k - 1.0) * f_ref * hyd_shape(rpm); };
 
-    SECTION("plant: tau0 falls by (k-1)(F - c_k), caps = k*c_k and k*breakaway, d vs central finite difference") {
+    SECTION("plant: tau0 falls by dF, caps stay c_k and breakaway, d vs central finite difference") {
         for (const real rpm : {1234.0, 3137.0, 6021.0}) {
             INFO("rpm " << rpm);
             const real w = rpm * kRpmToRad;
             SimulatedEngine a(desc, maps), b(desc, maps);
             const PreSolveResult ra = a.pre_solve(sim_sensors(rpm, 1.0, 1.0), cmd(1.0), TcuRequest{}, kH);
             const PreSolveResult rb = b.pre_solve(sim_sensors(rpm, kK, 1.0), cmd(1.0), TcuRequest{}, kH); // ECU view unchanged
-            const real expected = -(kK - 1.0) * (friction(rpm) - c_k);
+            const real expected = -dF(kK, rpm);
             REQUIRE(std::abs(expected) > 1.0);
             CHECK(std::abs((rb.tau0 - ra.tau0) - expected) <= 1e-12 * std::abs(expected) + 1e-13);
-            CHECK(ra.friction_cap_kinetic == c_k);
-            CHECK(ra.friction_cap_static == desc.breakaway_torque_nm);
-            CHECK(rb.friction_cap_kinetic == Approx(c_k * kK).epsilon(1e-14));
-            CHECK(rb.friction_cap_static == Approx(desc.breakaway_torque_nm * kK).epsilon(1e-14));
-            // The ECU's demand does not see the plant's extra friction.
-            CHECK(rb.torque_demand == ra.torque_demand);
+            for (const PreSolveResult* r : {&ra, &rb}) {
+                CHECK(r->friction_cap_kinetic == c_k);
+                CHECK(r->friction_cap_static == desc.breakaway_torque_nm);
+            }
+            CHECK(rb.torque_demand == ra.torque_demand); // the ECU's demand does not see the plant's extra friction
 
-            // d: analytic dtau/domega at frozen p_im against a central difference, k = kK; and its k-increment.
             const real p = rb.p_intake_pa;
             const real dw = 1e-3;
             const auto ev = b.evaluate_torque(w, p, true, 1.0, false);
             const real fd = (b.evaluate_torque(w + dw, p, true, 1.0, false).tau - b.evaluate_torque(w - dw, p, true, 1.0, false).tau) / (2.0 * dw);
             CHECK(std::abs(ev.dtau_domega - fd) <= 1e-6 * std::abs(fd));
             const auto eva = a.evaluate_torque(w, p, true, 1.0, false);
-            const real slope_f = (friction(rpm + 0.5) - friction(rpm - 0.5)); // per rpm, same segment
-            const real expected_dd = -(kK - 1.0) * (60.0 / (2.0 * kPi)) * slope_f;
+            const real expected_dd = -(kK - 1.0) * f_ref * 0.5 * hyd_shape(rpm) / rpm * (60.0 / (2.0 * kPi));
             REQUIRE(std::abs(expected_dd) > 1e-3);
             CHECK(std::abs((ev.dtau_domega - eva.dtau_domega) - expected_dd) <= 1e-9 * std::abs(expected_dd));
         }
+        // The caps stay unscaled at the extreme -30 C scale too.
+        SimulatedEngine x(desc, maps);
+        const PreSolveResult rx = x.pre_solve(sim_sensors(120.0, 12.72, 12.72), cmd(0.0), TcuRequest{}, kH);
+        CHECK(rx.friction_cap_kinetic == c_k);
+        CHECK(rx.friction_cap_static == desc.breakaway_torque_nm);
     }
 
-    SECTION("heat: released = min(1, lambda) x fuel energy; friction heat = h omega k (F - c_k)") {
+    SECTION("heat: released = min(1, lambda) x fuel energy; friction heat = h omega (F - c_k + dF)") {
         const real rpm = 3137.0;
         const real w = rpm * kRpmToRad;
         SimulatedEngine b(desc, maps);
@@ -246,9 +288,8 @@ TEST_CASE("I1-sim: friction scale k in SimulatedEngine (plant scales the physics
         REQUIRE(pb.fuel_energy_in_delta > 0.0);
         CHECK(pb.released_heat_delta == Approx(rb.lambda * pb.fuel_energy_in_delta).epsilon(1e-14));
         CHECK(pb.released_heat_delta < pb.fuel_energy_in_delta);
-        CHECK(pb.friction_heat_delta == Approx(kH * w * kK * (friction(rpm) - c_k)).epsilon(1e-12));
+        CHECK(pb.friction_heat_delta == Approx(kH * w * (friction(rpm) - c_k + dF(kK, rpm))).epsilon(1e-12));
         CHECK(pb.friction_heat_delta == -pb.friction_work_delta);
-        // A rich point (lambda > 1 would be capped): eta_c = 1 is the cap. Coasting releases nothing.
         SimulatedEngine c(desc, maps);
         const PreSolveResult rc = c.pre_solve(sim_sensors(rpm, kK, kK), cmd(0.0), TcuRequest{}, kH); // DFCO
         const PostSolveResult pc = c.post_solve(w, kH);
@@ -263,14 +304,13 @@ TEST_CASE("I1-sim: friction scale k in SimulatedEngine (plant scales the physics
         SimulatedEngine a(desc, maps), c(desc, maps);
         const PreSolveResult ra = a.pre_solve(sim_sensors(rpm, 1.0, 1.0, 100000.0), cmd(0.0), TcuRequest{}, kH);
         const PreSolveResult rc = c.pre_solve(sim_sensors(rpm, kK, kK, 100000.0), cmd(0.0), TcuRequest{}, kH);
-        // Motoring demand: pumping at the steady manifold pressure minus k*F (the Coulomb row included).
-        const real expected = -(kK - 1.0) * friction(rpm);
+        // Motoring demand: pumping at the steady manifold pressure minus the increment (Coulomb row unscaled).
+        const real expected = -dF(kK, rpm);
         CHECK(std::abs((rc.torque_demand - ra.torque_demand) - expected) <= 1e-9 * std::abs(expected));
         CHECK(a.steady_rebuild_count() == c.steady_rebuild_count());
 
         // Idle feed-forward grows with k_ecu: the engine held at idle speed for 0.25 s, the actuator settles at the
-        // ECU's target (feed-forward plus the manifold-fill compensation). A k_ecu-blind idle control would sit at
-        // the k = 1 position (the old live/table difference is ~1e-7, far below this margin).
+        // ECU's target (feed-forward plus the manifold-fill compensation).
         SimulatedEngine i1(desc, maps), i2(desc, maps);
         PreSolveResult ri1, ri2;
         for (int n = 0; n < 240; ++n) {
@@ -282,7 +322,6 @@ TEST_CASE("I1-sim: friction scale k in SimulatedEngine (plant scales the physics
         WARN("I1-sim idle plate position: k_ecu 1 -> " << ri1.throttle_eff << ", k_ecu " << kK << " -> " << ri2.throttle_eff);
         CHECK(ri2.throttle_eff > ri1.throttle_eff * 1.02);
 
-        // Changing k_ecu back and forth never rebuilds the grid, and returning to exactly 1.0 returns to the tables.
         SimulatedEngine g(desc, maps);
         const std::uint64_t rebuilds0 = g.steady_rebuild_count();
         const PreSolveResult g1 = g.pre_solve(sim_sensors(rpm, 1.0, 1.0), cmd(0.0), TcuRequest{}, kH);

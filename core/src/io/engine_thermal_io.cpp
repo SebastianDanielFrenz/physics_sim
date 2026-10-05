@@ -182,6 +182,7 @@ EngineThermalDesc load_engine_thermal_json(const std::string& path) {
         d.oil.density_15c_kg_m3 = o.number("density_15c_kg_m3", true, 0.0);
         const real t_ref_c = o.number("reference_temperature_c", true, 0.0);
         d.oil.hydrodynamic_fraction = o.number("hydrodynamic_fraction", true, 0.0);
+        d.oil.hydrodynamic_reference_rpm = o.number("hydrodynamic_reference_rpm", true, 0.0);
         o.mark("friction_scale_max");
         if (o.has("friction_scale_max")) {
             o.fail("\"friction_scale_max\" is rejected: the owner ruled on 2026-10-05 that there is NO friction cap (the "
@@ -197,6 +198,9 @@ EngineThermalDesc load_engine_thermal_json(const std::string& path) {
         d.oil.reference_temperature_k = t_ref_c + kCelsiusToKelvin;
         if (!(d.oil.hydrodynamic_fraction > 0.0 && d.oil.hydrodynamic_fraction <= 1.0)) {
             o.fail("\"hydrodynamic_fraction\" must be in (0, 1]");
+        }
+        if (!(d.oil.hydrodynamic_reference_rpm >= 500.0 && d.oil.hydrodynamic_reference_rpm <= 10000.0)) {
+            o.fail("\"hydrodynamic_reference_rpm\" must be in [500, 10000]");
         }
         if (!(d.oil.friction_scale_min >= 1.0)) o.fail("\"friction_scale_min\" must be >= 1");
     }

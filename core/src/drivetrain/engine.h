@@ -91,10 +91,14 @@ struct Sensors {
     // Engine thermal plan T1 (vault PHYS-063): oil-viscosity friction factors from the Powertrain's EngineThermal
     // (both exactly 1.0 without one - and x*1.0 == x bit-exactly, so an engine without thermal is unchanged).
     // friction_scale = the PLANT's k(T_oil); ecu_friction_scale = the ECU's quantised estimate of it (T1: the ECU
-    // knows the cold-friction scale, plan D7). One tick old by construction. The graph engine reads only
-    // friction_scale; the simulated engine splits plant and ECU use.
+    // knows the cold-friction scale, plan D7). One tick old by construction. Both engines use the plant k for the
+    // physics and the ECU k for their ECU models (T1b: the graph engine's idle feed-forward and torque demand).
+    // T1b: k no longer multiplies the friction map; it sets the hydrodynamic increment
+    // (k - 1) * F(friction_reference_rpm) * sqrt(rpm / friction_reference_rpm) (hydrodynamic_friction.h), and the
+    // Coulomb/breakaway part is never scaled. friction_reference_rpm is unused while k == 1.
     real friction_scale = 1.0;
     real ecu_friction_scale = 1.0;
+    real friction_reference_rpm = 2000.0;
 };
 // PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
 // combined command plus the TCU-forwarded (electronic) or fixed (mechanical)

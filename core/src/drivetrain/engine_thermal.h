@@ -79,6 +79,8 @@ public:
     [[nodiscard]] real plant_friction_scale() const { return plant_k_; }
     [[nodiscard]] real ecu_friction_scale() const { return ecu_k_; }
     [[nodiscard]] real motoring_friction_fraction() const { return cfg_.engine.motoring_friction_fraction; }
+    // T1b: the speed at which the engine's friction map is scaled by exactly k (see hydrodynamic_friction.h).
+    [[nodiscard]] real hydrodynamic_reference_rpm() const { return cfg_.engine.oil.hydrodynamic_reference_rpm; }
     [[nodiscard]] const EngineThermalSnapshot& snapshot() const { return snapshot_; }
     [[nodiscard]] const EngineThermalLedger& ledger() const { return ledger_; }
     [[nodiscard]] const EngineThermalConfig& config() const { return cfg_; }

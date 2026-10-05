@@ -52,7 +52,11 @@ struct EngineThermalDesc {
         real kv40_mm2_s = 0.0, kv100_mm2_s = 0.0;
         real density_15c_kg_m3 = 0.0; // density at 15.6 C (the data sheet's reference temperature)
         real reference_temperature_k = 0.0; // T_ref: friction maps apply unchanged here
-        real hydrodynamic_fraction = 0.0;   // phi_h
+        real hydrodynamic_fraction = 0.0;   // phi_h: hydrodynamic share of the friction map at hydrodynamic_reference_rpm
+        // T1b: the viscosity increment (k - 1) * F(n_ref) * sqrt(n / n_ref) (hydrodynamic friction ~ sqrt(mu * speed) at
+        // fixed load) is added to the map's speed-dependent part only; the Coulomb/breakaway (boundary) part is never
+        // scaled. n_ref is where the whole map is scaled by exactly k.
+        real hydrodynamic_reference_rpm = 0.0;
         real friction_scale_min = 1.0;      // k_min; there is NO upper cap (owner 2026-10-05)
     } oil;
 

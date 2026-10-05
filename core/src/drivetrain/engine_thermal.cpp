@@ -33,6 +33,9 @@ EngineThermal::EngineThermal(const EngineThermalConfig& cfg) : cfg_(cfg) {
     if (!(e.oil.kv100_mm2_s > 0.0 && e.oil.kv40_mm2_s > e.oil.kv100_mm2_s)) {
         throw std::runtime_error("EngineThermal: oil requires kv40 > kv100 > 0");
     }
+    if (!(e.oil.hydrodynamic_reference_rpm > 0.0)) {
+        throw std::runtime_error("EngineThermal: oil hydrodynamic_reference_rpm must be > 0");
+    }
     if (!(e.oil_coolant_time_constant_s > 0.0) || !(e.thermostat.time_constant_s > 0.0)) {
         throw std::runtime_error("EngineThermal: time constants must be > 0");
     }
