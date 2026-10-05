@@ -334,6 +334,31 @@ void World::set_environment_time_scale(real scale) {
     environment_->set_time_scale(scale, static_cast<std::int64_t>(tick_));
 }
 
+int World::add_weather_override_to_season_end(const environment::WeatherPresetDesc& preset, real ramp_s) {
+    if (!environment_) throw std::logic_error("World::add_weather_override_to_season_end: no environment installed");
+    return environment_->add_season_weather_override(preset, ramp_s, static_cast<std::int64_t>(tick_));
+}
+
+void World::end_weather_overrides() {
+    if (!environment_) throw std::logic_error("World::end_weather_overrides: no environment installed");
+    environment_->end_weather_overrides(static_cast<std::int64_t>(tick_));
+}
+
+bool World::remove_weather_override(int id) {
+    if (!environment_) throw std::logic_error("World::remove_weather_override: no environment installed");
+    return environment_->remove_weather_override(id, static_cast<std::int64_t>(tick_));
+}
+
+void World::clear_weather_overrides() {
+    if (!environment_) throw std::logic_error("World::clear_weather_overrides: no environment installed");
+    environment_->clear_weather_overrides(static_cast<std::int64_t>(tick_));
+}
+
+void World::set_environment_calendar_lock(const std::string& fixed_season, int fixed_day_of_year) {
+    if (!environment_) throw std::logic_error("World::set_environment_calendar_lock: no environment installed");
+    environment_->set_calendar_lock(fixed_season, fixed_day_of_year, static_cast<std::int64_t>(tick_));
+}
+
 void World::stage_terrain_tiles() {
     if (!terrain_manager_) return; // PLAN.md M1: no-op until set_terrain_source is called
     terrain_manager_->update(*job_system_);

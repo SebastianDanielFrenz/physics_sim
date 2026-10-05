@@ -12,6 +12,7 @@ add_executable(ps_unit_tests
   test_world_basic.cpp
   test_environment_world.cpp
   test_world_atmosphere.cpp
+  test_world_weather_override.cpp
   test_body_integration_params.cpp
   test_world_snapshot.cpp
   test_test_ground_loader.cpp
@@ -226,6 +227,8 @@ add_executable(ps_environment_tests
   test_environment_weather_io.cpp
   test_environment_atmosphere.cpp
   test_environment_wind.cpp
+  test_environment_day_share.cpp
+  test_environment_season_override.cpp
 )
 
 target_link_libraries(ps_environment_tests

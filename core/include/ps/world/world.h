@@ -50,7 +50,7 @@ namespace ps::terrain { class TileManager; }
 namespace ps::vehicle { class System; }
 // Forward-declared only (weather plan W2): the environment library
 // (core/include/ps/environment, target ps_environment) is held by shared_ptr.
-namespace ps::environment { class Environment; struct EnvironmentSnapshot; }
+namespace ps::environment { class Environment; struct EnvironmentSnapshot; struct WeatherPresetDesc; }
 
 namespace ps {
 
@@ -245,6 +245,23 @@ public:
     // environment is installed, std::invalid_argument for a bad value.
     void set_environment_time(real env_s);
     void set_environment_time_scale(real scale);
+
+    // Weather plan W3b (owner answer Q12), sim thread between steps, each effective at the next
+    // step; all throw std::logic_error without an environment (and, for the weather ones, without a
+    // weather timeline). The owner's "manual weather": the preset replaces the weather from now to the
+    // END OF THE CURRENT SEASON (ramp-in/-out over ramp_s, the ramp-out finishing at the boundary) and
+    // the next season starts on the natural weather; with the season locked it lasts until ended or
+    // removed. Returns the override id. Reaches the vehicles through the ordinary per-vehicle air path.
+    int add_weather_override_to_season_end(const environment::WeatherPresetDesc& preset, real ramp_s);
+    // Soft end: every override ramps out from now over its own ramp_s.
+    void end_weather_overrides();
+    // Immediate end (an exact reset to the natural weather).
+    bool remove_weather_override(int id);
+    void clear_weather_overrides();
+    // Season lock: fixed_season = a season name locks it, fixed_day_of_year >= 0 pins one game day,
+    // empty / -1 = Dynamic. Re-anchors the clock keeping the game day and the fraction of the day
+    // (Environment::set_calendar_lock). std::invalid_argument for an unknown season.
+    void set_environment_calendar_lock(const std::string& fixed_season, int fixed_day_of_year = -1);
 
     // PLAN.md section 6 / P3: shared surface-parameter lookup (lambda_mu,
     // crr) for every vehicle's tyre model. Setup-time only (like

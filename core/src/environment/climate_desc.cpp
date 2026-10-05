@@ -101,6 +101,13 @@ std::string climate_validation_error(const ClimateDesc& d) {
         case DayNightKind::Astronomical:
             any_astronomical_day = true;
             break;
+        case DayNightKind::AstronomicalScaled:
+            any_astronomical_day = true;
+            if (!(e = finite_error(dn.day_share_multiplier, where + ".day_night.day_share_multiplier")).empty()) return e;
+            if (!(dn.day_share_multiplier > 0.0) || dn.day_share_multiplier > kDayShareMultiplierMax)
+                return err(where + ".day_night.day_share_multiplier must be in (0, " +
+                           std::to_string(static_cast<int>(kDayShareMultiplierMax)) + "]");
+            break;
         }
 
         if (s.climate) {

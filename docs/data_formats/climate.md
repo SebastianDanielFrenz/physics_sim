@@ -42,7 +42,7 @@ A year is the concatenation of its seasons; each has `days` game days (integer
 |---|---|
 | `name`, `days` | required |
 | `doy_span` | `[first, last]` real day of year, 1-based inclusive, each in [1, 366]; `first > last` wraps over the new year (northern winter `[335, 59]`). The real year is 365 days. **Required for every season** when the sun is astronomical or any season uses the astronomical day/night form |
-| `day_night` | required, exactly ONE of: `{day_s, night_s}` (both > 0), `{cycle_s, day_fraction}` (cycle_s > 0, fraction in (0,1)), `{astronomical: true}` (day length from latitude and the real day of year, total = calendar `cycle_s`) |
+| `day_night` | required, exactly ONE of: `{day_s, night_s}` (both > 0), `{cycle_s, day_fraction}` (cycle_s > 0, fraction in (0,1)), `{astronomical: true}` (day length from latitude and the real day of year, total = calendar `cycle_s`), or `{astronomical: true, day_share_multiplier: m}` (W3b, owner answer Q2: the astronomical day SHARE times a per-season factor, see "Scaled astronomical day share" below). `day_share_multiplier` without `astronomical: true` is rejected; `m` must be in (0, 10] |
 | `temp_mean_c`, `temp_range_k` (>= 0), `rh_mean` [0,1], `pressure_msl_hpa` (> 0), `ground_temp_c` | mid-season climate scalars, carried and interpolated per day (used from W3). All five on EVERY season or on none |
 | `sun_authored` | per-season override of the authored block; each member optional, unset members inherit the global block |
 | `regimes`, `transitions`, `initial_regime` | W3 weather statistics, all three together, on EVERY season or on none - see "Weather (W3)" |
@@ -60,6 +60,24 @@ A year is the concatenation of its seasons; each has `days` game days (integer
 * The real day of year used by the sun and the astronomical day length is the
   continuous `y` (days since 1 Jan 00:00; noon of 1 Jan = 0.5), piecewise
   linear per season over its `doy_span`.
+* **Scaled astronomical day share (W3b, the third day/night form of owner
+  question Q2).** `{astronomical: true, day_share_multiplier: m}`: the day's
+  share of the game day is `clamp((H0/pi) * m, 0.02, 0.98) [AS]`, where
+  `H0/pi` is the real astronomical day share of that day of year (sunrise hour
+  angle `H0`; 0.5 at the equinox for `m = 1`) and the total length is the calendar
+  `cycle_s`. So a season can lengthen or shorten the daylight part of the
+  game day relative to the real sky (`m = 1.2`: a long-day winter; `m = 0.7`: a
+  short-day summer) while following the real annual course day by day. The
+  clamp keeps at least 2 % day and 2 % night (`kDayShareMin/Max` in
+  `climate_desc.h`), so sunrise and sunset stay distinct and the astronomical
+  warp (`H = -H0 + 2 H0 u`) never degenerates. `m` is a property of the season
+  (like `temp_mean_c`): per-day values still interpolate between season
+  midpoints, each season evaluating ITS form (and its `m`) at the day's real
+  day of year. The sun's sunrise/sunset follow the scaled lengths because the
+  warp uses the calendar's day and night lengths. `m = 1` is bit-identical to the
+  plain `{astronomical: true}` form, and the `{day_s, night_s}` and
+  `{cycle_s, day_fraction}` forms are unchanged. Mixing forms across seasons is
+  allowed; `doy_span` is required for a season using this form.
 * Modes (`CalendarOptions`): `Dynamic` (default), `FixedSeason` (every day
   carries that season's mid values and a constant `y`), `FixedDay`.
 * `sample(t_env)` is O(log years-length) (prefix sums + binary search), no

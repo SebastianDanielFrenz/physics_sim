@@ -48,7 +48,7 @@ real lerp(real a, real b, real w) { return a + (b - a) * w; }
 
 } // namespace
 
-Calendar::Calendar(const ClimateDesc& desc, CalendarOptions options) {
+Calendar::Calendar(const ClimateDesc& desc, CalendarOptions options) : options_(options) {
     validate_climate(desc);
 
     const int n = static_cast<int>(desc.seasons.size());
@@ -103,9 +103,17 @@ Calendar::Calendar(const ClimateDesc& desc, CalendarOptions options) {
         case DayNightKind::CycleFraction:
             return {dn.cycle_s * dn.day_fraction, dn.cycle_s * (1.0 - dn.day_fraction)};
         case DayNightKind::Astronomical:
+        case DayNightKind::AstronomicalScaled:
             break;
         }
         const real h0 = sunrise_hour_angle_rad(lat_rad, declination_spencer_rad(y_noon));
+        if (dn.kind == DayNightKind::AstronomicalScaled) {
+            real share = (h0 / kPi) * dn.day_share_multiplier;
+            if (share < kDayShareMin) share = kDayShareMin;
+            if (share > kDayShareMax) share = kDayShareMax;
+            const real day = cycle_s * share;
+            return {day, cycle_s - day};
+        }
         const real day = cycle_s * (h0 / kPi);
         return {day, cycle_s - day};
     };
@@ -275,6 +283,15 @@ CalendarSample Calendar::sample(real t_env) const {
         s.phase_u = 1.0;
     }
     return s;
+}
+
+real Calendar::season_end_env_time(real t_env) const {
+    const CalendarSample cs = sample(t_env);
+    const int last_day = season_days_[static_cast<std::size_t>(cs.season)] - 1;
+    const int idx = season_start_[static_cast<std::size_t>(cs.season)] + last_day;
+    // End of the season's last day = start of the next day (the next season's first day, or the next
+    // year's first day after the last season): the prefix-sum entry idx + 1.
+    return static_cast<real>(cs.year - epoch_year_) * year_length_s_ + day_start_[static_cast<std::size_t>(idx) + 1] - epoch_offset_s_;
 }
 
 real Calendar::env_time(std::int64_t year, int season, int day_in_season, real time_of_day_s) const {

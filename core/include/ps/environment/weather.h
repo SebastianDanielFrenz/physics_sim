@@ -163,7 +163,7 @@ class WeatherTimeline;
 class WeatherCursor {
 public:
     WeatherCursor();
-    void reset() { newest_ = -1; owner_ = nullptr; }
+    void reset() { newest_ = -1; owner_ = nullptr; generation_ = 0; }
     std::int64_t newest_segment() const { return newest_; }
     std::uint64_t restarts() const { return restarts_; }   // diagnostics: walks restarted at segment 0
 
@@ -174,6 +174,7 @@ private:
     std::vector<std::uint64_t> scratch_bin_;
     std::int64_t newest_ = -1;
     const WeatherTimeline* owner_ = nullptr;
+    std::uint64_t generation_ = 0;   // the timeline's calendar generation the ring was walked under
     std::uint64_t restarts_ = 0;
 };
 
@@ -216,6 +217,30 @@ public:
     void clear_overrides();
     int override_count() const { return static_cast<int>(overrides_.size()); }
 
+    // W3b (owner answer Q12): a SEASON-BOUND override. Starts at t_now (env time) with a smoothstep
+    // ramp-in of ramp_s and ends with the weather season: in a Dynamic calendar the ramp-OUT finishes
+    // exactly at the end of the current natural season (t_end = season end - ramp, so the next season's
+    // weather is the timeline's bit-exactly from its first instant), shortened to half the remaining
+    // time when less than 2 ramps remain; with a locked season (FixedSeason / FixedDay) there is no
+    // season end and the override is open (t_end = +inf) until removed. Returns the override id; throws
+    // like add_override. The calendar in effect is the timeline's own (set_calendar).
+    int add_season_override(const WeatherPresetDesc& target, real ramp_s, real t_now);
+    // Switches the calendar mode (lock / unlock the season). The chain is re-derived under the new
+    // calendar (a pure function of the new options, like constructing the timeline with them); season-
+    // bound overrides keep their ELAPSED time (t_start' = t_now_new - (t_now_old - t_start)) and get their
+    // end re-resolved under the new calendar; plain overrides keep their env times. Invalidates every
+    // WeatherCursor (calendar_generation). Throws std::invalid_argument for a bad option index and leaves
+    // the timeline untouched.
+    void set_calendar(const CalendarOptions& options, real t_now_old, real t_now_new);
+    std::uint64_t calendar_generation() const { return calendar_generation_; }
+    // Soft end: every override stops at t_now and ramps out over its own ramp_s (it becomes a plain
+    // window, no longer season-bound); one whose t_start is not before t_now is removed instead.
+    void end_all_overrides(real t_now);
+    // True iff the override with this id is season-bound; false for an unknown id.
+    bool override_is_season_bound(int id) const;
+    // The installed override with this id (nullptr when unknown): its effective window.
+    const WeatherOverride* find_override(int id) const;
+
     // Regime-name table (alphabetical over every season's regimes).
     int regime_count() const { return static_cast<int>(regime_names_.size()); }
     const std::string& regime_name(int i) const { return regime_names_[static_cast<std::size_t>(i)]; }
@@ -237,6 +262,8 @@ private:
         std::uint64_t key = 0;
         int regime = -1;
         WeatherOverride o;
+        bool season_bound = false;   // W3b: t_end follows the season (re-resolved by set_calendar)
+        real ramp_requested = 0.0;   // season-bound: the caller's ramp (o.ramp_s may be shortened)
     };
     struct Base;
     struct Blend;
@@ -247,6 +274,8 @@ private:
         return i < 0 ? nullptr : &regimes_flat_[static_cast<std::size_t>(i)];
     }
     int weather_season_at(real t) const;
+    int insert_override(Override ov);
+    void resolve_season_bound(Override& ov, real t_start, real t_now) const;
     WeatherSegment first_segment() const;
     WeatherSegment next_segment(const WeatherSegment& s) const;
     void draw_segment(WeatherSegment& s) const;
@@ -271,6 +300,7 @@ private:
     std::vector<int> regime_table_;                 // [season][regime] -> regimes_flat_ index, -1 undefined
     std::vector<real> cum_;                         // [season][from][to] cumulative probabilities
     std::vector<int> initial_;                      // per season
+    std::uint64_t calendar_generation_ = 0;         // bumped by set_calendar; WeatherCursor caches are per generation
     std::vector<Override> overrides_;               // sorted by (t_start, seq)
     int next_override_id_ = 0;
     std::uint64_t next_seq_ = 0;

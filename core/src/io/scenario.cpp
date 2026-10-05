@@ -340,10 +340,51 @@ ScenarioEnvironment read_environment(const json& j, const std::filesystem::path&
                 if (key == "t") continue;
                 if (key == "jump_time_s") { ev.kind = ScenarioEnvironmentEvent::Kind::JumpTime; ev.value = v.get<real>(); ++kinds; }
                 else if (key == "set_time_scale") { ev.kind = ScenarioEnvironmentEvent::Kind::SetTimeScale; ev.value = v.get<real>(); ++kinds; }
-                else if (key == "set_weather") fail("event key \"set_weather\" is not supported yet (weather plan W3+)");
+                else if (key == "set_weather") {
+                    // {"preset": "<file>", "ramp_s": 60}: the owner's manual weather - the preset replaces the
+                    // weather from the event to the end of the current season (until removed when the season
+                    // is locked). Needs the "weather" key above.
+                    ev.kind = ScenarioEnvironmentEvent::Kind::SetWeather;
+                    if (!v.is_object()) fail("event key \"set_weather\" must be an object {preset, ramp_s}");
+                    for (const auto& [wk, wv] : v.items()) {
+                        (void)wv;
+                        if (wk != "preset" && wk != "ramp_s") fail("unknown key \"set_weather." + wk + "\"");
+                    }
+                    if (!v.contains("preset") || !v.at("preset").is_string()) fail("\"set_weather\" needs a string \"preset\"");
+                    std::filesystem::path pp = v.at("preset").get<std::string>();
+                    if (pp.is_relative()) pp = scenario_dir / pp;
+                    ev.preset = load_weather_preset_json(pp.lexically_normal());
+                    ev.value = v.contains("ramp_s") ? v.at("ramp_s").get<real>() : real(0.0);
+                    if (!(ev.value >= 0.0 && std::isfinite(ev.value))) fail("set_weather.ramp_s must be >= 0 and finite");
+                    ++kinds;
+                }
+                else if (key == "end_weather") {
+                    if (!v.is_boolean() || !v.get<bool>()) fail("\"end_weather\" must be true");
+                    ev.kind = ScenarioEnvironmentEvent::Kind::EndWeather; ++kinds;
+                }
+                else if (key == "clear_weather") {
+                    if (!v.is_boolean() || !v.get<bool>()) fail("\"clear_weather\" must be true");
+                    ev.kind = ScenarioEnvironmentEvent::Kind::ClearWeather; ++kinds;
+                }
+                else if (key == "set_season") {
+                    if (!v.is_string()) fail("\"set_season\" must be a season name or \"dynamic\"");
+                    ev.kind = ScenarioEnvironmentEvent::Kind::SetSeason;
+                    ev.text = v.get<std::string>();
+                    ++kinds;
+                }
                 else fail("unknown event key \"" + key + "\"");
             }
-            if (kinds != 1) fail("each event needs exactly one of jump_time_s, set_time_scale");
+            if (kinds != 1) fail("each event needs exactly one of jump_time_s, set_time_scale, set_weather, end_weather, clear_weather, set_season");
+            if (ev.kind == ScenarioEnvironmentEvent::Kind::SetSeason && ev.text != "dynamic") {
+                bool known = false;
+                for (const auto& sd : e.climate.seasons) known = known || sd.name == ev.text;
+                if (!known) fail("set_season: unknown season \"" + ev.text + "\"");
+            }
+            const bool weather_event = ev.kind == ScenarioEnvironmentEvent::Kind::SetWeather ||
+                                       ev.kind == ScenarioEnvironmentEvent::Kind::EndWeather ||
+                                       ev.kind == ScenarioEnvironmentEvent::Kind::ClearWeather;
+            if (weather_event && e.config.weather == environment::EnvironmentWeather::Off)
+                fail("weather events need the environment's \"weather\" key");
             if (ev.kind == ScenarioEnvironmentEvent::Kind::SetTimeScale && !(ev.value >= 0.0 && std::isfinite(ev.value)))
                 fail("set_time_scale must be >= 0 and finite");
             e.events.push_back(ev);
@@ -510,6 +551,18 @@ std::size_t apply_environment_events(World& world, const Scenario& scenario, std
             }
             case ScenarioEnvironmentEvent::Kind::SetTimeScale:
                 world.set_environment_time_scale(ev.value);
+                break;
+            case ScenarioEnvironmentEvent::Kind::SetWeather:
+                world.add_weather_override_to_season_end(ev.preset, ev.value);
+                break;
+            case ScenarioEnvironmentEvent::Kind::EndWeather:
+                world.end_weather_overrides();
+                break;
+            case ScenarioEnvironmentEvent::Kind::ClearWeather:
+                world.clear_weather_overrides();
+                break;
+            case ScenarioEnvironmentEvent::Kind::SetSeason:
+                world.set_environment_calendar_lock(ev.text == "dynamic" ? std::string() : ev.text);
                 break;
         }
         ++next_event;

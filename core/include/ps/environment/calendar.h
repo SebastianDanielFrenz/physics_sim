@@ -95,6 +95,15 @@ public:
     // on a bad option index, or on an epoch time of day beyond its day.
     explicit Calendar(const ClimateDesc& desc, CalendarOptions options = {});
 
+    const CalendarOptions& options() const { return options_; }
+    // True iff the weather season never changes (FixedSeason / FixedDay): there is no "next season".
+    bool season_locked() const { return options_.mode != CalendarMode::Dynamic; }
+
+    // t_env at which the NATURAL season of the day containing t_env ends (the start of the next season's
+    // first day, in the following year after the last season). Meaningful in every mode (the calendar
+    // keeps counting days when the season is locked); callers check season_locked().
+    real season_end_env_time(real t_env) const;
+
     int days_per_year() const { return static_cast<int>(days_.size()); }
     real year_length_s() const { return year_length_s_; }
     int season_count() const { return static_cast<int>(season_names_.size()); }
@@ -127,6 +136,7 @@ public:
     int season_index(const std::string& name) const;  // -1 when unknown
 
 private:
+    CalendarOptions options_;
     std::vector<DayValues> days_;
     std::vector<real> day_start_;       // N_y + 1 entries, last = year length
     std::vector<std::string> season_names_;

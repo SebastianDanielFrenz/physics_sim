@@ -122,6 +122,66 @@ void Environment::set_time_scale(real scale, std::int64_t tick) {
     begin_tick(tick);
 }
 
+namespace {
+void require_weather(bool has, const char* what) {
+    if (!has) throw std::logic_error(std::string("Environment::") + what + ": the environment has no weather timeline");
+}
+} // namespace
+
+int Environment::add_season_weather_override(const WeatherPresetDesc& target, real ramp_s, std::int64_t tick) {
+    require_weather(weather_.has_value(), "add_season_weather_override");
+    const int id = weather_->add_season_override(target, ramp_s, clock_.env_time(tick));
+    invalidate_gust_cache();
+    begin_tick(tick);
+    return id;
+}
+
+bool Environment::remove_weather_override(int id, std::int64_t tick) {
+    require_weather(weather_.has_value(), "remove_weather_override");
+    const bool removed = weather_->remove_override(id);
+    invalidate_gust_cache();
+    begin_tick(tick);
+    return removed;
+}
+
+void Environment::clear_weather_overrides(std::int64_t tick) {
+    require_weather(weather_.has_value(), "clear_weather_overrides");
+    weather_->clear_overrides();
+    invalidate_gust_cache();
+    begin_tick(tick);
+}
+
+void Environment::end_weather_overrides(std::int64_t tick) {
+    require_weather(weather_.has_value(), "end_weather_overrides");
+    weather_->end_all_overrides(clock_.env_time(tick));
+    invalidate_gust_cache();
+    begin_tick(tick);
+}
+
+void Environment::set_calendar_lock(const std::string& fixed_season, int fixed_day_of_year, std::int64_t tick) {
+    EnvironmentConfig cfg = config_;
+    cfg.fixed_season = fixed_season;
+    cfg.fixed_day_of_year = fixed_day_of_year;
+    const CalendarOptions opts = make_calendar_options(climate_, cfg);   // throws before any change
+    const CalendarOptions& cur = calendar_.options();
+    if (opts.mode == cur.mode && opts.fixed_season == cur.fixed_season && opts.fixed_day == cur.fixed_day) return;
+    Calendar next(climate_, opts);
+    // Keep the game day and the fraction of the day across the switch.
+    const real t_old = clock_.env_time(tick);
+    const CalendarSample cs = calendar_.sample(t_old);
+    const int idx = next.season_start_day(cs.season) + cs.day_in_season;
+    const real t_new = next.env_time(cs.year, cs.season, cs.day_in_season, cs.day_fraction * next.day(idx).length_s());
+    EnvClock c = clock_;
+    c.set_time(t_new, tick);
+    c.validate();
+    if (weather_) weather_->set_calendar(opts, t_old, t_new);   // strong guarantee; same validity as `next`
+    calendar_ = std::move(next);
+    config_ = cfg;
+    clock_ = c;
+    invalidate_gust_cache();
+    begin_tick(tick);
+}
+
 void Environment::begin_tick(std::int64_t tick) {
     const real t_env = clock_.env_time(tick);
     WeatherSample w;

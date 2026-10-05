@@ -57,6 +57,9 @@ real blend_angle(real v, real target, real w) {
 real ramp_weight(const WeatherOverride& o, real t) {
     if (t < o.t_start) return 0.0;
     if (!(o.ramp_s > 0.0)) return t < o.t_end ? 1.0 : 0.0;
+    // Exactly 0 once the ramp-out is over (W3b): the formula below can leave an ulp-sized positive
+    // weight there, which is not bit-exact against the timeline when the base value is 0.
+    if (t >= o.t_end && t >= o.t_end + o.ramp_s) return 0.0;
     real up = (t - o.t_start) / o.ramp_s;
     if (up > 1.0) up = 1.0;
     real down = 1.0;
@@ -276,8 +279,9 @@ void WeatherTimeline::ensure(WeatherCursor& c, real t_lo, real t_hi) const {
         at(0) = first_segment();
         c.newest_ = 0;
         c.owner_ = this;
+        c.generation_ = calendar_generation_;
     };
-    if (c.owner_ != this || c.newest_ < 0) init();
+    if (c.owner_ != this || c.generation_ != calendar_generation_ || c.newest_ < 0) init();
     if (oldest() > 0 && t_lo < at(oldest()).t0) {
         init();
         ++c.restarts_;
@@ -724,6 +728,24 @@ int WeatherTimeline::lightning_events(real t, real max_age_s, WeatherCursor& c, 
     return count;
 }
 
+int WeatherTimeline::insert_override(Override ov) {
+    if (static_cast<int>(overrides_.size()) >= kMaxOverrides)
+        throw std::length_error("WeatherTimeline: at most 16 overrides");
+    ov.id = next_override_id_++;
+    ov.seq = next_seq_++;
+    ov.regime = regime_index(ov.o.target.regime);
+    std::uint64_t h = 0xcbf29ce484222325ull;
+    fnv_real(h, ov.o.t_start);
+    fnv_real(h, ov.o.t_end);
+    fnv_real(h, ov.o.ramp_s);
+    ov.key = h;
+    auto it = overrides_.begin();
+    while (it != overrides_.end() && (it->o.t_start < ov.o.t_start || (it->o.t_start == ov.o.t_start && it->seq < ov.seq))) ++it;
+    const int id = ov.id;
+    overrides_.insert(it, std::move(ov));
+    return id;
+}
+
 int WeatherTimeline::add_override(const WeatherOverride& o) {
     if (!std::isfinite(o.t_start)) throw std::invalid_argument("WeatherOverride: t_start must be finite");
     if (std::isnan(o.t_end) || !(o.t_end > o.t_start)) throw std::invalid_argument("WeatherOverride: t_end must be > t_start");
@@ -731,22 +753,86 @@ int WeatherTimeline::add_override(const WeatherOverride& o) {
     validate_weather_preset(o.target);
     if (o.target.lightning_per_min > 0.0 && !climate_.lightning)
         throw std::invalid_argument("WeatherOverride: lightning needs the climate's lightning block");
-    if (static_cast<int>(overrides_.size()) >= kMaxOverrides)
-        throw std::length_error("WeatherTimeline: at most 16 overrides");
     Override ov;
-    ov.id = next_override_id_++;
-    ov.seq = next_seq_++;
     ov.o = o;
-    ov.regime = regime_index(o.target.regime);
-    std::uint64_t h = 0xcbf29ce484222325ull;
-    fnv_real(h, o.t_start);
-    fnv_real(h, o.t_end);
-    fnv_real(h, o.ramp_s);
-    ov.key = h;
-    auto it = overrides_.begin();
-    while (it != overrides_.end() && (it->o.t_start < o.t_start || (it->o.t_start == o.t_start && it->seq < ov.seq))) ++it;
-    overrides_.insert(it, ov);
-    return ov.id;
+    return insert_override(std::move(ov));
+}
+
+void WeatherTimeline::resolve_season_bound(Override& ov, real t_start, real t_now) const {
+    ov.o.t_start = t_start;
+    ov.o.ramp_s = ov.ramp_requested;
+    if (calendar_.season_locked()) {
+        ov.o.t_end = std::numeric_limits<real>::infinity();
+        return;
+    }
+    const real end = calendar_.season_end_env_time(t_now);
+    real ramp = ov.ramp_requested;
+    const real half = 0.5 * (end - t_start);
+    if (ramp > half) ramp = half;
+    real t_end = end - ramp;
+    // The ramp-out must be complete at `end` exactly: rounding of (end - ramp) + ramp must not exceed it.
+    while (t_end + ramp > end) t_end = std::nextafter(t_end, -std::numeric_limits<real>::infinity());
+    ov.o.ramp_s = ramp;
+    ov.o.t_end = t_end;
+}
+
+int WeatherTimeline::add_season_override(const WeatherPresetDesc& target, real ramp_s, real t_now) {
+    if (!std::isfinite(t_now)) throw std::invalid_argument("WeatherOverride: t_now must be finite");
+    if (!std::isfinite(ramp_s) || ramp_s < 0.0) throw std::invalid_argument("WeatherOverride: ramp_s must be >= 0");
+    validate_weather_preset(target);
+    if (target.lightning_per_min > 0.0 && !climate_.lightning)
+        throw std::invalid_argument("WeatherOverride: lightning needs the climate's lightning block");
+    Override ov;
+    ov.o.target = target;
+    ov.season_bound = true;
+    ov.ramp_requested = ramp_s;
+    resolve_season_bound(ov, t_now, t_now);
+    return insert_override(std::move(ov));
+}
+
+void WeatherTimeline::set_calendar(const CalendarOptions& options, real t_now_old, real t_now_new) {
+    if (!std::isfinite(t_now_old) || !std::isfinite(t_now_new))
+        throw std::invalid_argument("WeatherTimeline::set_calendar: times must be finite");
+    Calendar next(climate_, options);   // throws before anything changes
+    calendar_ = std::move(next);
+    ++calendar_generation_;
+    bool moved = false;
+    for (Override& ov : overrides_) {
+        if (!ov.season_bound) continue;
+        real elapsed = t_now_old - ov.o.t_start;
+        if (elapsed < 0.0) elapsed = 0.0;
+        resolve_season_bound(ov, t_now_new - elapsed, t_now_new);
+        moved = true;
+    }
+    if (moved)
+        std::stable_sort(overrides_.begin(), overrides_.end(), [](const Override& a, const Override& b) {
+            return a.o.t_start < b.o.t_start || (a.o.t_start == b.o.t_start && a.seq < b.seq);
+        });
+}
+
+bool WeatherTimeline::override_is_season_bound(int id) const {
+    for (const Override& ov : overrides_)
+        if (ov.id == id) return ov.season_bound;
+    return false;
+}
+
+void WeatherTimeline::end_all_overrides(real t_now) {
+    for (std::size_t i = 0; i < overrides_.size();) {
+        Override& ov = overrides_[i];
+        if (!(t_now > ov.o.t_start)) {
+            overrides_.erase(overrides_.begin() + static_cast<std::ptrdiff_t>(i));
+            continue;
+        }
+        if (t_now < ov.o.t_end) ov.o.t_end = t_now;   // an earlier scheduled end stays
+        ov.season_bound = false;
+        ++i;
+    }
+}
+
+const WeatherOverride* WeatherTimeline::find_override(int id) const {
+    for (const Override& ov : overrides_)
+        if (ov.id == id) return &ov.o;
+    return nullptr;
 }
 
 bool WeatherTimeline::remove_override(int id) {
@@ -772,6 +858,11 @@ std::uint64_t WeatherTimeline::fold_hash(std::uint64_t h) const {
         fnv_real(h, ov.o.t_end);
         fnv_real(h, ov.o.ramp_s);
         fnv_preset(h, ov.o.target);
+        if (ov.season_bound) {   // W3b: only season-bound overrides add bytes, so older hashes are unchanged
+            const std::uint8_t sb = 1;
+            fnv(h, &sb, 1);
+            fnv_real(h, ov.ramp_requested);
+        }
     }
     return h;
 }
