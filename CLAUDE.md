@@ -189,6 +189,18 @@ physics_sim/
   env time scale defaults to 24 (24 h game = 1 h real; World default stays 1.0). Trailing 1 h/6 h precipitation sums
   keep override rain for up to 6 h after it ends (physical accumulation). Tests test_environment_day_share/
   test_environment_season_override (ps_environment_tests), test_world_weather_override (ps_unit_tests).
+  W5 (4a43f37, 5d0466c): surface condition core - surface_condition_desc.h (physics_sim.surface_conditions/1 desc, climate optional
+  "condition" block dt_env_s 60 / spinup_s 7 d / max_fast_forward_s 30 d), surface_condition.h/.cpp (1D vertex-centred FV
+  conduction column per class, 5 mm top cell x1.3, <= 32 nodes, <= 10 m, backward Euler + Thomas, dense reference in the test;
+  surface balance (1-albedo)GHI + Geiger/cloud sky longwave + linearised emission + Vehrencamp h_c; Dirichlet bottom at the
+  day's ground_temp_c; ConditionGrid S[k]/S[k+1] on floor(t/dt), forward <= max_ff stepped, else spin-up; checkpoint/restore
+  bit-exact; W6-W8 zero placeholders), surface_conditions_io (ps_environment_io). Environment steps it in begin_tick,
+  EnvironmentSnapshot::surfaces (unhashed), fold only with surfaces; World::install_environment checks names vs the surface
+  table; scenario key "surface_conditions" (needs surface_table_path + weather). data/surface_conditions/default.json,
+  docs/data_formats/surface_conditions.md. Tests test_environment_surface.cpp ([environment][surface], ps_environment_tests:
+  S1 SHRP +1.03 K, S2 Kallas range +1.6 % / t_max +0.26 h / 12 in rms 1.11 K, S2b night min -4.5 K [!mayfail], S3 0.033 K,
+  S4), test_environment_surface_world.cpp ([environment][vehicle][world]). data/scenarios/environment_surface.json
+  0x030df2de793ce721 at 1/2/4/10/24 workers. Adapter: get_surface_temperature_c, demo --m1-surfaces, HUD road line. Decisions vault PHYS-061, notes out/weather_w5_progress.md. Not read by tyres yet (W6+).
 - `ps_audio` (STATIC, `audio/`, ps_audio A7): the live engine voice; links
   `ps_engine_cycle` only, never `ps_core`. Guard `ps_audio_standalone`
   (`tests/unit/audio_standalone_main.cpp`, plain `main`, WHOLE_ARCHIVE
