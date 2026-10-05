@@ -36,8 +36,9 @@
 // after the lift again - the plate (tau 40 ms) needs ~50 ms to cut the
 // compressor flow, and that drain alone exceeds the rotor's energy. A 5x rotor
 // inertia coasts (76k rpm at +0.25 s, 72.6k at +0.5 s; x10: 90k / 88k).
-// CF2 therefore runs on a TEST RIG: the shipped hyper with the rotor inertia x5
-// (kRigInertiaScale), not data; the shipped inertia is for D6 to revisit.
+// CF2 therefore ran on a TEST RIG (rotor inertia x5). Review fix 2026-10-05: the
+// shipped rotor is now 2.3e-4 kg*m^2 per turbo (derived for a ~500 kW unit, see
+// data/turbos/hyper_turbo_approx.json) and CF2 runs on shipped data again.
 //
 // Tests
 //   CF1  White-box, every substep of WOT -> lift -> WOT on the fixture engine:
@@ -47,9 +48,9 @@
 //        manifold_rhs, to 1e-9 relative, while the cylinder flow differs from
 //        the compressor flow by more than 0.04 kg/s during the lift. Feeding the
 //        cylinder flow back fails it (sabotage in the commit message).
-//   CF2  Lift-off spin-down on the shipped hyper V8 with the rotor inertia x5
-//        (test rig, see above; held 6000 rpm, WOT 2 s, then throttle 0).
-//        Energy estimate (shipped rotor): E0 = J*w0^2/2 = 2.2 kJ at the lift.
+//   CF2  Lift-off spin-down on the shipped hyper V8 (held 6000 rpm, WOT 2 s, then
+//        throttle 0). Energy estimate (old 2e-5 rotor): E0 = J*w0^2/2 = 2.2 kJ at
+//        the lift; 2.3e-4 rotor: 28 kJ.
 //        The plate (actuator tau 40 ms, area fraction convex in lift) closes in
 //        ~100 ms; until then the compressor delivers the throttle flow and draws
 //        up to 96 kW, the turbine (wall-heated air) returns a little of it. After
@@ -61,7 +62,8 @@
 //        drained by anything else), plus the absolute floors rotor(0.15 s) >=
 //        65000 rpm and rotor(0.5 s) >= 60000 rpm (measured-with-margin pins on
 //        the x5 rig: measured 73.3k / 69.1k; 75.0k / 70.7k after the review fix
-//        (parallel wastegate, compressor bound); cylinder flow fed to the
+//        (parallel wastegate, compressor bound); shipped 2.3e-4 rotor 92.9k /
+//        90.1k (floors kept); cylinder flow fed to the
 //        compressor instead: 63.8k / 59.6k, fails both). With the shipped
 //        rotor and the former heat
 //        hold the floors were 25k / 20k (measured 38.5k / 29.6k).
@@ -108,7 +110,6 @@ namespace {
 constexpr real kH = 1.0 / 960.0;
 constexpr real kPi = 3.14159265358979323846;
 constexpr real kFlowLagS = 0.005; // literal copy of engine_simulated.cpp's kTurboFlowLagS
-constexpr real kRigInertiaScale = 5.0; // CF2 test rig: rotor inertia x5 (not data)
 
 SimulatedEngineDesc load_hyper() {
     ps::jobs::JobSystem pool(10);
@@ -196,10 +197,8 @@ TEST_CASE("CF1: the compressor flow is the throttle flow of the previous substep
 TEST_CASE("CF2: hyper V8 lift-off spin-down (measured, energy bound)", "[turbo][sim_engine][hyper][compressor_flow]") {
     SimulatedEngineDesc base = load_hyper();
     REQUIRE(base.turbo_pair.has_value());
-    // Test rig, not data: the shipped [AS] rotor inertia x kRigInertiaScale (see the header: with the exhaust
-    // energy balance the shipped 2e-5 kg*m^2 rotor stores ~23 ms of WOT compressor power and is at 0 rpm
-    // ~0.1 s after any lift; the coast this test guards needs a rotor that outlives the plate's closing).
-    base.turbo_pair->rotor_inertia_kgm2 *= kRigInertiaScale;
+    // Shipped data (rotor 2.3e-4 kg*m^2 per turbo since the review fix; the x5 test rig on the old 2e-5 [AS]
+    // rotor is gone, see the header).
     const TurboPairDesc& t = *base.turbo_pair;
     SimulatedEngine e(base);
     const int n_wot = 2 * 960, n_total = n_wot + 2 * 960 + 1;
@@ -252,9 +251,14 @@ TEST_CASE("CF3: steady WOT boost and torque by speed", "[turbo][sim_engine][hype
     // 0.17 / 0.40 / 0.63 / 0.70 / 0.71; tau0 -0.04..+0.06 %, boost -0.07..+0.09 %, rotor -0.02..+0.17 %. Was
     // 1258.2169/1.7832/79106.9, 1368.1835/1.7687/86025.6, 1405.4251/1.7306/106815.2, 1308.6220/1.7011/138521.5,
     // 1219.7386/1.6972/145229.3 (9fd087c).
-    const Pre pre[] = {{3000.0, 1257.6810, 1.7820, 79088.8}, {4500.0, 1368.4982, 1.7693, 86046.5},
-                       {6000.0, 1406.0689, 1.7321, 106902.6}, {7500.0, 1309.3552, 1.7027, 138720.8},
-                       {8000.0, 1220.4495, 1.6988, 145471.0}};
+    // Re-recorded for the derived 2.3e-4 rotor (was 2e-5 [AS]): a steady equilibrium does not depend on the
+    // inertia, but the 6 s hold from a cold wall with the boost PID is not fully settled and the larger rotor
+    // answers the gate more slowly; the last-second means moved tau0 -0.01..+0.26 %, boost -0.11..+0.10 %,
+    // rotor -0.87..+0.04 % (the largest at 7500/8000 rpm). Was 1257.6810/1.7820/79088.8, 1368.4982/1.7693/86046.5,
+    // 1406.0689/1.7321/106902.6, 1309.3552/1.7027/138720.8, 1220.4495/1.6988/145471.0 (258f5c2).
+    const Pre pre[] = {{3000.0, 1257.5909, 1.7819, 79091.6}, {4500.0, 1369.2901, 1.7710, 86075.2},
+                       {6000.0, 1406.5556, 1.7333, 106941.9}, {7500.0, 1309.6103, 1.7009, 137741.7},
+                       {8000.0, 1223.6028, 1.7006, 144205.3}};
     for (real rpm : {3000.0, 4500.0, 6000.0, 7000.0, 7500.0, 7750.0, 8000.0, 8200.0}) {
         SimulatedEngine e(base);
         const real omega = rpm * 2.0 * kPi / 60.0;

@@ -825,7 +825,12 @@ TEST_CASE("D5: hyper V8 lift-off with and without anti-lag (measured)", "[turbo]
         std::printf(" | activations %u, heat margin min %.3e J, ledger violation max %.3e J\n", r.activations, r.min_heat_margin,
                     r.max_ledger_violation);
     }
-    CHECK(on.s[std::size_t(k0 + 960)].turbo_rpm > off.s[std::size_t(k0 + 960)].turbo_rpm);
+    // Review fix 2026-10-05 (derived 2.3e-4 kg*m^2 rotor): the rotor check became a boost check. The no-ALS
+    // rotor now coasts (86.4k rpm at +1 s, the plate closed so the compressor barely draws), while the D5
+    // fixture's 50 % plate floor keeps the compressor loaded and the boost PID opens the gate (charge above
+    // target), so its rotor is LOWER at +1 s (59.0k). What the anti-lag holds is the manifold pressure
+    // (+0.66 bar vs -0.93 bar at +1 s). With the old 2e-5 [AS] rotor the no-ALS rotor was near 0 (14.6k).
+    CHECK(on.s[std::size_t(k0 + 960)].boost_bar > off.s[std::size_t(k0 + 960)].boost_bar + 1.0);
     CHECK(on.als_and_dfco == 0);
     CHECK(on.max_ledger_violation <= 1e-9);
 }

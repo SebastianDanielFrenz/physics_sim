@@ -31,10 +31,16 @@
 //        removed.
 //   WG3  Shipped hyper V8, held 6000 rpm, WOT 2 s, then throttle 0 (DFCO, no ALS) for 2 s, then a
 //        held idle (950 rpm) for 8 s: the rotor never reaches 0 rpm and keeps measured-with-margin
-//        floors. Sabotage: the old 100 % bypass.
-//        Measured (shipped 2e-5 rotor, 2026-10-05): rotor 102248 at the lift, 23102 / 19809 / 14646 /
-//        8084 rpm at +0.25 / +0.5 / +1 / +2 s; min 4 rpm; idle mean 4 rpm. Without the compressor
-//        bound: 0 rpm at +0.25 s. KNOWN LIMIT: the steady idle rotor speed is only ~10 rpm for any
+//        floors. Sabotage: the old 100 % bypass fails it on the 2e-5 rotor (min 0 rpm); on the derived
+//        2.3e-4 rotor it does NOT (90.1k / 84.5k / 77.9k at +0.25 / +1 / +2 s, idle 45.9k - the rotor
+//        coasts through the window), so WG1 is the discriminating guard for the split. The data
+//        sabotage (2e-5 restored) fails every floor.
+//        Measured (shipped derived 2.3e-4 rotor, 2026-10-05): rotor 106137 at the lift, 92158 / 90148 /
+//        86357 / 79500 rpm at +0.25 / +0.5 / +1 / +2 s; min 45177; idle (last 1 s of 8 s) 46616 rpm,
+//        still coasting (60 s idle: 3.1k rpm). Floors 80k / 75k / 65k / idle 30k. The old 2e-5 [AS] rotor
+//        restored in the data file fails every floor. With the 2e-5 rotor (commit 258f5c2, floors then
+//        18k / 11k / 6k / 1): 102248 at the lift, 23102 / 19809 / 14646 / 8084 rpm; min 4 rpm; idle mean
+//        4 rpm. Without the compressor bound (2e-5): 0 rpm at +0.25 s. KNOWN LIMIT: the steady idle rotor speed is only ~10 rpm for any
 //        inertia (WG diag, 60 s idle). At idle exhaust flow (~0.01 kg/s through the open gate) the
 //        mean-value orifice turbine sees a few Pa of pressure drop, i.e. mW of power; the equilibrium
 //        is set against the compressor's power at the bilinear head table's lowest speed cell (head
@@ -86,7 +92,7 @@ constexpr real kH = 1.0 / 960.0;
 constexpr real kPi = 3.14159265358979323846;
 constexpr real kAmbPa = 101325.0, kAmbK = 288.15;
 // WG3 measured-with-margin floors (shipped data; values in the progress file).
-constexpr real WG3_FLOOR_025 = 18000.0, WG3_FLOOR_1 = 11000.0, WG3_FLOOR_2 = 6000.0, WG3_FLOOR_IDLE = 1.0;
+constexpr real WG3_FLOOR_025 = 80000.0, WG3_FLOOR_1 = 75000.0, WG3_FLOOR_2 = 65000.0, WG3_FLOOR_IDLE = 30000.0;
 
 real omega_of(real rpm) { return rpm * 2.0 * kPi / 60.0; }
 

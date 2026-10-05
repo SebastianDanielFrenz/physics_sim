@@ -60,7 +60,7 @@ The exhaust gas temperature comes from the engine's own energy balance (see
 | `format` | string | yes | `"physics_sim.turbo/1"` | format tag |
 | `name` | string | no | ignored by the loader | free text |
 | `source` | string | convention | not enforced by this loader | provenance (README's "source" convention): cite or label `[AS]` |
-| `rotor_inertia_kgm2` | number | yes | > 0; x `count` | shaft + wheels inertia of ONE turbo |
+| `rotor_inertia_kgm2` | number | yes | > 0; x `count` | shaft + wheels inertia of ONE turbo (hyper_turbo_approx: 2.3e-4, derived from Garrett GTX3582R-class wheel sizes, source in the file's `rotor_inertia_source`) |
 | `reference_rpm` | number | yes | > 0 | rotor speed at which `reference_head_bar` is reached at zero flow; also the energy cap reference |
 | `reference_head_bar` | number (bar) | yes | > 0 | compressor head at `reference_rpm` and zero flow. `reference_head_pa` is rejected: `"<path>: 'reference_head_pa' was replaced by 'reference_head_bar' (bar)"` |
 | `max_mass_flow_kg_s` | number | yes | > 0; x `count` | compressor flow that closes the head curve to zero (normalising flow) |
@@ -348,9 +348,18 @@ Known limits (measured, I7d D5, `tests/unit/test_turbo_anti_lag.cpp`):
   at 6000 rpm, floor 0.5 and 30 deg retard the crank still sees +605 N*m while
   anti-lag acts (a car keeps pulling), at 59.6 % of WOT air and 36.3 g/s of fuel.
 - Rally ALS with the extension (`tests/unit/test_turbo_als_cut.cpp` AC6, hyper V8,
-  6000 rpm, test fixture: spark -40, floor 0.17, cut 0.4, lambda 0.85, burn 1.0,
+  6000 rpm, test fixture: spark -40, floor 0.12, cut 0.4, lambda 0.85, burn 1.0,
   boost target 1.0; mean over +0.25..+1 s after the lift; parallel wastegate
-  port, 2e-5 rotor): air 14.8 % of WOT (0.121 vs 0.819 kg/s), fuel 10.03 g/s =
+  port, derived 2.3e-4 rotor): air 16.3 % of WOT (0.136 vs 0.839 kg/s), fuel
+  11.29 g/s = 15.8 % of WOT, crank torque -47 N*m, boost -0.50 bar, wastegate
+  0.89, manifold burn 165 kW, rotor 104.2k / 90.5k / 70.7k rpm at +0.25 / +0.5 /
+  +1 s (D5 fixture 99.6k / 82.2k / 59.0k; no anti-lag 92.2k / 90.1k / 86.4k).
+  With a realistic rotor the plain fuel-cut coast keeps MORE rotor speed over the
+  first second than anti-lag: the plate floor loads the compressor while the boost
+  PID, seeing the charge above target, opens the gate. Anti-lag holds manifold
+  pressure (D5 fixture +0.66 bar vs -0.93 bar at +1 s), not rotor speed, on that
+  time scale. The same fixture at floor 0.17 passed 24.9 % of WOT air.
+  Before (floor 0.17, 2e-5 rotor): air 14.8 % of WOT (0.121 vs 0.819 kg/s), fuel 10.03 g/s =
   14.5 % of WOT (69.10 g/s), crank torque -64 N*m, boost -0.55 bar, manifold burn
   147 kW, port 2279 K, turbine inlet 1383 K, rotor 60.9k / 37.4k / 58.4k rpm at
   +0.25 / +0.5 / +1 s (the boost-target PID overshoots at the lift - rotor 174k at
@@ -371,7 +380,8 @@ Known limits of the wastegate split (review fix, `tests/unit/test_turbo_wastegat
   speed cell (bilinear, so head is linear in speed below 1/40 of `reference_rpm`).
   Real turbos idle much faster on exhaust pulse energy, which a mean-value turbine
   does not carry. A coasting rotor stays far above that until its stored energy is
-  spent (see the rotor inertia in the hardware file).
+  spent: the shipped 2.3e-4 rotor is at 46.6k rpm after 2 s of DFCO and 8 s of
+  idle, 3.1k after 60 s of idle.
 - The compressor-power bound (`pr <= 1 + head(current speed) / p_amb`) decides the
   lift with the 2e-5 rotor: without it the rotor is at 0 rpm 0.25 s after a WOT
   lift at 6000 rpm (with it 23.1k); with a 1e-4 or 2.3e-4 rotor it moves the lift

@@ -69,9 +69,10 @@ TEST_CASE("Turbo loader: a valid configuration scales the extensive hardware key
     json c1 = base_config();
     c1["count"] = 1;
     const auto d1 = load(c1, "base1");
-    // hyper_turbo_approx.json: rotor 2e-5, max flow 0.6, throat 5e-4, shaft loss 600, reference head 4.5 bar
-    CHECK(d1.rotor_inertia_kgm2 == Catch::Approx(2e-5).epsilon(1e-12));
-    CHECK(d2.rotor_inertia_kgm2 == Catch::Approx(4e-5).epsilon(1e-12));
+    // hyper_turbo_approx.json: rotor 2.3e-4 (derived, review fix 2026-10-05; was 2e-5 [AS]), max flow 0.6,
+    // throat 5e-4, shaft loss 600, reference head 4.5 bar
+    CHECK(d1.rotor_inertia_kgm2 == Catch::Approx(2.3e-4).epsilon(1e-12));
+    CHECK(d2.rotor_inertia_kgm2 == Catch::Approx(4.6e-4).epsilon(1e-12));
     CHECK(d2.max_mass_flow_kg_s == Catch::Approx(1.2).epsilon(1e-12));
     CHECK(d2.turbine_area_m2 == Catch::Approx(1e-3).epsilon(1e-12));
     CHECK(d2.shaft_loss_w_at_reference == Catch::Approx(1200.0).epsilon(1e-12));

@@ -135,7 +135,7 @@ inline ps::drivetrain::AntiLagDesc hyper_like_als_cut() {
     ps::drivetrain::AntiLagDesc a = hyper_like_anti_lag();
     a.retard_deg = 0.0;
     a.spark_advance_deg = -40.0;
-    a.plate_floor = 0.17;
+    a.plate_floor = 0.12; // 0.17 until the derived 2.3e-4 rotor (review fix): its held boost passed 24.9 % of WOT air
     a.cylinder_cut_fraction = 0.4;
     a.manifold_burn_fraction = 1.0;
     a.lambda = 0.85;
