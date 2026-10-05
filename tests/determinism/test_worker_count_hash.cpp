@@ -1188,6 +1188,50 @@ TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24
     CHECK(world.snapshots().read().environment.has_weather);
 }
 
+// Engine thermal plan T1 I7 (vault PHYS-063): data/scenarios/vehicle_thermal.json - car_sedan_sim_thermal from an
+// "ambient" cold soak (15 C, k about 2.6), ignition cycle and starter, idle, WOT 1st -> 2nd. The thermal state
+// (T_e, T_o, wax, play, fan) is hashed, so the hash must be worker-count invariant; and a 1e-3 K perturbation of
+// the coolant temperature at the last tick (the mechanics of that tick still use last tick's k) must move it. Sabotage (Powertrain::fold_state_hash
+// without the thermal fold, measured 2026-10-05): the pinned-hash CHECK and the perturbation CHECK both fail (hash
+// 0xba94bad06472d25c, a.hash == b.hash).
+TEST_CASE("Engine thermal: vehicle_thermal.json hashes identically across 1, 2, 4, 10 and 24 workers; T_o is hashed",
+          "[determinism][thermal][vehicle][drivetrain][heavy][world][io]") {
+    constexpr std::uint64_t kRecorded = 0x74d75aa6d229faa0ULL; // recorded 2026-10-05 (T1 C6), ps_run at 1/2/4/10/24 workers
+    const std::uint64_t reference = run_scenario_file("vehicle_thermal.json", 1);
+    INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
+    CHECK(reference == kRecorded);
+    for (const int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("vehicle_thermal.json", workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h);
+        REQUIRE(h == reference);
+    }
+
+    // The same scenario's thermal model really ran, and T_o is part of the hash.
+    auto run_to = [](int ticks, bool perturb) {
+        ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/vehicle_thermal.json");
+        sc.world_config.job_workers = 1;
+        ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+        ps::World& world = *built.world;
+        const ps::VehicleId car = built.vehicles_by_name.at("car");
+        for (int i = 0; i < ticks; ++i) {
+            if (perturb && i == ticks - 1) { // applied at the last tick's begin; the tick's mechanics use the old k, so only the hash fold can show it
+                ps::drivetrain::EngineThermalState s = world.engine_thermal_state(car);
+                s.coolant_c += 1e-3;
+                world.set_engine_thermal_state(car, s);
+            }
+            world.step();
+        }
+        struct Out { std::uint64_t hash; ps::real coolant_c, oil_c, k; };
+        return Out{world.state_hash(), world.engine_thermal_state(car).coolant_c, world.engine_thermal_state(car).oil_c,
+                   world.powertrain_state(car).thermal.friction_scale};
+    };
+    const auto a = run_to(600, false);
+    const auto b = run_to(600, true);
+    CHECK(a.k > 2.0);           // 15 C oil: the cold-friction scale is far above 1
+    CHECK(a.coolant_c > 15.0);  // idle heat warmed the engine
+    CHECK(a.hash != b.hash);    // the thermal state is in the hash
+}
+
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {
     constexpr std::size_t kBodies = 8;
     constexpr int kTicks = 10;

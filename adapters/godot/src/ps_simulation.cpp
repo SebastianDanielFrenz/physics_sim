@@ -1214,6 +1214,28 @@ Dictionary PsSimulation::get_vehicle_air(const String& vehicle_name) const {
     return d;
 }
 
+Dictionary PsSimulation::get_engine_thermal(const String& vehicle_name) const {
+    Dictionary d;
+    const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
+    if (order_index == static_cast<std::size_t>(-1)) return d;
+    const AdapterSnapshot& snap = render_snapshot();
+    if (order_index >= snap.vehicles.size()) return d;
+    const ps::drivetrain::EngineThermalSnapshot& t = snap.vehicles[order_index].powertrain.thermal;
+    d["has_thermal"] = t.has_thermal;
+    if (!t.has_thermal) return d;
+    d["coolant_c"] = static_cast<double>(t.coolant_c);
+    d["oil_c"] = static_cast<double>(t.oil_c);
+    d["thermostat_opening"] = static_cast<double>(t.thermostat_opening);
+    d["fan_on"] = t.fan_on;
+    d["gauge"] = static_cast<double>(t.gauge);
+    d["radiator_heat_w"] = static_cast<double>(t.radiator_heat_w);
+    d["wall_heat_w"] = static_cast<double>(t.wall_heat_w);
+    d["friction_heat_w"] = static_cast<double>(t.friction_heat_w);
+    d["friction_scale"] = static_cast<double>(t.friction_scale);
+    d["warning_bits"] = static_cast<int>(t.warning_bits);
+    return d;
+}
+
 Dictionary PsSimulation::get_vehicle_powertrain(const String& vehicle_name) const {
     Dictionary d;
     const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
@@ -1550,6 +1572,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_max_wheel_angle", "vehicle_name"), &PsSimulation::get_vehicle_max_wheel_angle);
     ClassDB::bind_method(D_METHOD("get_vehicle_rear_steer_fraction", "vehicle_name"), &PsSimulation::get_vehicle_rear_steer_fraction);
     ClassDB::bind_method(D_METHOD("get_vehicle_powertrain", "vehicle_name"), &PsSimulation::get_vehicle_powertrain);
+    ClassDB::bind_method(D_METHOD("get_engine_thermal", "vehicle_name"), &PsSimulation::get_engine_thermal);
     ClassDB::bind_method(D_METHOD("get_vehicle_gauge_info", "vehicle_name"), &PsSimulation::get_vehicle_gauge_info);
     // Weather plan W2
     ClassDB::bind_method(D_METHOD("install_environment", "climate_absolute_path", "time_scale", "start_season", "start_day", "start_clock_hours",
