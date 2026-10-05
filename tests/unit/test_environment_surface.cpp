@@ -901,15 +901,33 @@ TEST_CASE("Surface conditions loader: the shipped file and rejections", "[enviro
 //   identity: the existing determinism pin tests.)
 //
 // RECORDED SABOTAGES (performed by hand, reverted, 2026-10-05):
-//  - W6-G1 : ...
-//  - W6-G1b: ...
-//  - W6-G2 : ...
-//  - W6-G8 : ...
-//  - W6-G9 : ...
-//  - W6-G7 : ...
-//  - W6-G5 : ...
-//  - W6-G3 : ...
-//  - W6-G6 : ...
+//  - W6-G1 : tau = 300 s instead of WFD/R: every rain level failed (50 mm/h: steady film 4.567 mm vs 1.213 mm,
+//            tau 300 vs 58.51 s; 5 mm/h: 0.817 vs 0.400 mm).
+//  - W6-G1b: drainage applied from below the storage too (W = (W + a W_tex)/(1 + a)): the film rose from nothing,
+//            0.400 mm vs 0.1667 mm after the first 1/6 of the storage was supplied, 0.400 vs 0.3333 after the second.
+//  - W6-G2 : (a) availability limit removed from the evaporation: flux 3.114e-4 vs the 1.667e-6 kg/(m2 s) a
+//            1e-4 mm film allows, and a dry surface still evaporated (2.82e-4 vs 0); (b) condensation cap
+//            removed: dew flux -1.722e-4 vs the capped -1.0e-4 kg/(m2 s).
+//  - W6-G8 : latent term dropped from the surface-node balance (0 * q_latent): node 0 312.185 K vs the dense
+//            reference 308.152 K (latent 1010 W/m2, 1.507 mm/h); node 1 311.780 vs 309.843 K.
+//  - W6-G9 : (a) a porosity factor 0.4 on the soil layer: soil moisture 0.25625 vs 0.25250 after the infiltration
+//            step and 0.25625 vs 0.25250 on the drain step, the evaporation closure also failed; (b) dew routed
+//            to the film on turf: canopy 0.0 vs 2.97e-4 mm, film 2.92e-4 vs 0.
+//  - W6-G7 : (a) any film counts as fully wet: half-saturated texture 0.425 vs 0.6625; (b) nearest-sample speed
+//            lookup: 0.6892 vs 0.71 at 60 km/h, 0.4142 vs 0.4062 at 30 m/s; (c) flat sealed speed table: 0.71
+//            vs 0.85 at 0 km/h and 0.71 vs 0.797 at a node speed; (d) the IFI exp on a soil class: dirt 0.90
+//            vs 0.81 at rest and 0.0022 vs 0.81 at 40 m/s.
+//  - W6-G5 : reserve_block_or_null accepting an object: the "thermal object" and "wear object" rows threw nothing.
+//  - W6-G3 : (the world test, test_environment_surface_world.cpp) grip factor forced to 1: distance ratio 1.000 (bound
+//            1.14); the grip evaluated at speed 0 instead of the patch speed: ratio 1.170 vs the PIARC bracket 1.26
+//            and ratio100 1.161 vs ratio60 + 0.2.
+//  - W6-G4b: dry grip level x 0.99: the chassis x after 4 s differed (7.2606 vs 7.3099 m).
+//  - W6-G10: condition label without the damp band: 2 vs 1; water above the texture without the subtraction:
+//            0.2 vs 0.0 and 0.9 vs 0.5 mm.
+//  - W6-G6 : a std::vector with three push_backs in ConditionGrip::update_state: "an installed surface grid allocates
+//            nothing inside the tick" failed with 732 own allocations at 1 worker.
+//  - W6-G6b: each of the four fold_value lines of fold_state (water, canopy, soil moisture, drain tau) dropped
+//            in turn: the matching perturbation left the grid hash unchanged (4 of 4 failed).
 
 namespace {
 
@@ -1483,4 +1501,38 @@ TEST_CASE("W6-G5: the tyre profile loader accepts the shipped profiles and rejec
         CHECK_THROWS_WITH(io::load_tyre_profile_json(path), ContainsSubstring(row.message));
     }
     CHECK_NOTHROW(io::load_tyre_profile_json(dir.write("ok.json", valid())));
+}
+
+TEST_CASE("W6-G6b: every water state value is folded into the grid hash",
+          "[environment][surface][water]") {
+    const SurfaceConditionsDesc d = default_conditions();
+    ConditionGrid grid(d, {}, ConditionGridDesc{60.0, 3600.0, 86400.0});
+    ConstantForcing src;
+    src.p = InitialProfile{300.0, 290.0};
+    src.f.air_temp_k = 300.0;
+    grid.advance_to(3600.0, src);
+    const std::uint64_t base = grid.fold_hash(0xcbf29ce484222325ULL);
+    const ConditionCheckpoint ck0 = grid.checkpoint();
+    const int grass = class_index(grid, "grass");
+    REQUIRE(grass >= 0);
+
+    struct Probe {
+        const char* what;
+        std::function<void(SurfaceClassState&)> edit;
+    };
+    const std::vector<Probe> probes = {
+        {"water_mm", [](SurfaceClassState& s) { s.water_mm += 0.25; }},
+        {"canopy_water_mm", [](SurfaceClassState& s) { s.canopy_water_mm += 0.1; }},
+        {"soil_moisture", [](SurfaceClassState& s) { s.soil_moisture += 0.01; }},
+        {"drain_tau_s", [](SurfaceClassState& s) { s.drain_tau_s += 5.0; }},
+    };
+    for (const Probe& p : probes) {
+        ConditionCheckpoint ck = ck0;
+        p.edit(ck.next[static_cast<std::size_t>(grass)]);
+        grid.restore(ck);
+        INFO("perturbed " << p.what);
+        CHECK(grid.fold_hash(0xcbf29ce484222325ULL) != base);
+        grid.restore(ck0);
+        CHECK(grid.fold_hash(0xcbf29ce484222325ULL) == base);
+    }
 }
