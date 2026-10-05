@@ -145,6 +145,9 @@ public:
     [[nodiscard]] std::uint64_t simulated_engine_maps_content_hash() const {
         return powertrain_.simulated_engine_maps_content_hash();
     }
+    // Weather plan W4: backs World::vehicle_engine_steady_rebuild_count / vehicle_engine_ambient (tests, diagnostics).
+    [[nodiscard]] std::uint64_t engine_steady_rebuild_count() const { return powertrain_.simulated_engine_steady_rebuild_count(); }
+    [[nodiscard]] const AmbientSample& engine_sensors_ambient() const { return powertrain_.last_engine_sensors_ambient(); }
     [[nodiscard]] int powertrain_friction_cap_hits() const { return powertrain_.friction_cap_hits(); }
     // PHYS-033 P4 I4 C13: whether telemetry "stored" adds shaft_pe (only then).
     [[nodiscard]] bool powertrain_has_compliant_shafts() const { return powertrain_.has_compliant_shafts(); }

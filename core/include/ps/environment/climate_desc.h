@@ -3,10 +3,10 @@
 // Descriptors only (PLAN.md D2 seam style): the time / sun / season parts of
 // physics_sim.climate/1 (W1) and the weather statistics (W3: regimes,
 // transition matrices, lags, precipitation phase, humidity, diurnal
-// temperature, lightning geometry - types in weather_desc.h). Gusts and
-// condition-grid settings arrive with W4/W5 and are REJECTED by the loader
-// until then (see docs/data_formats/climate.md), so a file written for a later
-// increment never silently loads with half its meaning dropped.
+// temperature, lightning geometry - types in weather_desc.h) and the W4 gust
+// block. Condition-grid settings arrive with W5 and are REJECTED by the
+// loader until then (see docs/data_formats/climate.md), so a file written for
+// a later increment never silently loads with half its meaning dropped.
 //
 // Every numeric field is plain data. Nothing here is a physical constant of
 // code: values come from a data file with its own source note.
@@ -125,6 +125,8 @@ struct ClimateDesc {
     std::optional<HumidityDesc> humidity;
     std::optional<DiurnalTempDesc> diurnal_temperature;
     std::optional<LightningDesc> lightning;
+    // W4: gust synthesis (wind.h); absent = steady mean wind.
+    std::optional<GustDesc> gusts;
     std::string source;
 
     bool has_weather_statistics() const { return !seasons.empty() && seasons.front().weather.has_value(); }

@@ -321,7 +321,20 @@ ClimateDesc parse_climate_json(const json& root, const std::string& origin) {
         lr.finish();
         d.lightning = LightningDesc{dist.lo, dist.hi};
     }
-    r.reserve_for_later("gusts", "W4 (wind)");
+    if (const json* gu = r.child("gusts")) {
+        ObjectReader gr(*gu, "gusts", origin);
+        GustDesc g;   // every member optional: the defaults are the documented [AS]/[C] values
+        g.roughness_length_m = gr.number("roughness_length_m", false, g.roughness_length_m);
+        g.reference_height_m = gr.number("reference_height_m", false, g.reference_height_m);
+        g.reference_gust_factor = gr.number("reference_gust_factor", false, g.reference_gust_factor);
+        g.f_min_hz = gr.number("f_min_hz", false, g.f_min_hz);
+        g.bands_per_octave = gr.integer("bands_per_octave", false, g.bands_per_octave);
+        g.window_s = gr.number("window_s", false, g.window_s);
+        g.blend_s = gr.number("blend_s", false, g.blend_s);
+        g.min_advection_speed_m_s = gr.number("min_advection_speed_m_s", false, g.min_advection_speed_m_s);
+        gr.finish();
+        d.gusts = g;
+    }
     r.reserve_for_later("condition", "W5 (surface condition)");
     r.finish();
 

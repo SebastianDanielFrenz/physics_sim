@@ -15,7 +15,8 @@ VehicleId System::create(const VehicleDesc& desc, BodyId chassis, const io::Surf
 }
 
 void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const std::vector<real>& channel_values,
-                       const VehicleTickEnv& env, real tick_dt, real substep_rate_hz) {
+                       const VehicleTickEnv& env, real tick_dt, real substep_rate_hz,
+                       std::span<const environment::VehicleAir> air) {
     if (instances_.empty()) return;
     const std::size_t n = instances_.size();
     for(std::size_t i=0;i<n;++i) {
@@ -27,9 +28,19 @@ void System::step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const
     const int workers = std::max(1, job_system.worker_count());
     const std::size_t grain = std::max<std::size_t>(1, (n + static_cast<std::size_t>(workers) * 4 - 1) / (static_cast<std::size_t>(workers) * 4));
 
-    job_system.parallel_for(n, grain, [this, &backend, &channel_values, &tick_env, tick_dt, substep_rate_hz](std::size_t begin, std::size_t end) {
+    job_system.parallel_for(n, grain, [this, &backend, &channel_values, &tick_env, air, tick_dt, substep_rate_hz](std::size_t begin, std::size_t end) {
         for (std::size_t i = begin; i < end; ++i) {
-            instances_[i]->step_tick(backend, channel_values, tick_env, tick_dt, substep_rate_hz);
+            if (i < air.size() && air[i].valid) {
+                // W4: this vehicle's own atmosphere and wind (a stack copy, no allocation).
+                const environment::VehicleAir& a = air[i];
+                VehicleTickEnv e = tick_env;
+                e.ambient = AmbientSample{a.pressure_pa, a.temperature_k, a.vapour_pressure_pa};
+                e.air_density = a.density_kg_m3;
+                e.wind_world = a.wind_world;
+                instances_[i]->step_tick(backend, channel_values, e, tick_dt, substep_rate_hz);
+            } else {
+                instances_[i]->step_tick(backend, channel_values, tick_env, tick_dt, substep_rate_hz);
+            }
         }
     });
 }

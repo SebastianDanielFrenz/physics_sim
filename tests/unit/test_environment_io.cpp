@@ -270,7 +270,9 @@ TEST_CASE("Climate loader rejections", "[environment][io]") {
         // W3 lifted the regimes / lags_s reservation (weather rejections: test_environment_weather_io.cpp).
         {"regimes without transitions", [](json& j) { j["seasons"][0]["regimes"] = json::object(); }, "missing required field \"transitions\""},
         {"lags_s incomplete", [](json& j) { j["lags_s"] = json::object(); }, "missing required field \"cloud\""},
-        {"gusts reserved for W4", [](json& j) { j["gusts"] = json::object(); }, "not implemented before W4"},
+        // W4 lifted the gusts reservation (gust rejections: test_environment_wind.cpp).
+        {"gusts unknown key", [](json& j) { j["gusts"] = json::parse(R"({"turbulence": 1})"); }, "unknown key \"turbulence\""},
+        {"gusts roughness zero", [](json& j) { j["gusts"] = json::parse(R"({"roughness_length_m": 0})"); }, "gusts.roughness_length_m"},
         {"condition reserved for W5", [](json& j) { j["condition"] = json::object(); }, "not implemented before W5"},
     };
     int n = 0;

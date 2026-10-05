@@ -11,13 +11,34 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <variant>
 
 namespace ps {
 void World::set_aero_environment(const aero::Environment& e) {
+    // Weather plan W4 (Q12, PROVISIONAL): an atmosphere-providing environment owns density and wind.
+    if (environment_ && environment_->provides_atmosphere())
+        throw std::logic_error("World::set_aero_environment: the installed environment provides the air density and wind (remove_environment first)");
     aero::validate(e); config_.air_density=e.air_density; config_.wind_world=e.wind_world;
+}
+void World::set_ambient(const AmbientSample& a) {
+    if (environment_ && environment_->provides_atmosphere())
+        throw std::logic_error("World::set_ambient: the installed environment provides the ambient atmosphere (remove_environment first)");
+    ambient_ = a;
+}
+environment::VehicleAir World::vehicle_air(VehicleId id) const {
+    if (!vehicle_system_->contains(id) || id.index >= vehicle_air_.size()) throw std::invalid_argument("invalid vehicle for vehicle_air");
+    return vehicle_air_[id.index];
+}
+std::uint64_t World::vehicle_engine_steady_rebuild_count(VehicleId id) const {
+    if (!vehicle_system_->contains(id)) throw std::invalid_argument("invalid vehicle for vehicle_engine_steady_rebuild_count");
+    return vehicle_system_->at(id).engine_steady_rebuild_count();
+}
+AmbientSample World::vehicle_engine_ambient(VehicleId id) const {
+    if (!vehicle_system_->contains(id)) throw std::invalid_argument("invalid vehicle for vehicle_engine_ambient");
+    return vehicle_system_->at(id).engine_sensors_ambient();
 }
 void World::set_aero_wakes(std::vector<aero::WakeSource> wakes) {
     for(const auto& w:wakes) {
@@ -208,7 +229,9 @@ void World::stage_vehicle_islands() {
         // per-substep acceleration estimate (it never talks to World
         // otherwise) - see vehicle::VehicleTickEnv.
         const vehicle::VehicleTickEnv env{config_.gravity, config_.air_density, ambient_,config_.wind_world,{},aero_wakes_};
-        vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz);
+        // Weather plan W4: per-vehicle air (valid entries only while an atmosphere-providing environment is installed).
+        vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz,
+                                  std::span<const environment::VehicleAir>(vehicle_air_));
     }
 }
 
@@ -267,18 +290,35 @@ void World::stage_backend_step() {
 // a stage.<name>.ms channel and change every scenario's CSV header). The
 // environment evaluates this tick's snapshot - a closed-form function of the
 // tick, allocation-free. No environment: nothing.
+//
+// W4: with an atmosphere-providing environment the same stage also samples the
+// air at every chassis (ISA lift to the chassis altitude, humid density, mean
+// wind + gust at its position) into vehicle_air_, which vehicle_islands_substep
+// hands to each vehicle. Sequential, fixed vehicle order, allocation-free.
 void World::stage_freeze_tick_start_state() {
     if (!environment_) return;
     environment_->begin_tick(static_cast<std::int64_t>(tick_));
+    if (!environment_->provides_atmosphere()) return;
+    const std::size_t n = vehicle_system_->count();
+    for (std::size_t i = 0; i < n; ++i) {
+        const VehicleId id{static_cast<id_index_t>(i), 1};
+        vehicle_air_[i] = environment_->sample_air(backend_->get_pose(vehicle_system_->at(id).chassis()).position);
+    }
 }
 
 void World::install_environment(std::shared_ptr<environment::Environment> env) {
     if (!env) throw std::invalid_argument("World::install_environment: null environment");
     env->attach(static_cast<std::int64_t>(tick_), config_.tick_rate_hz);
     environment_ = std::move(env);
+    // The air of an environment that does not provide one (or of the previous
+    // environment) must not leak into the next step.
+    for (environment::VehicleAir& a : vehicle_air_) a = environment::VehicleAir{};
 }
 
-void World::remove_environment() { environment_.reset(); }
+void World::remove_environment() {
+    environment_.reset();
+    for (environment::VehicleAir& a : vehicle_air_) a = environment::VehicleAir{};
+}
 
 const environment::EnvironmentSnapshot* World::environment_snapshot() const {
     return environment_ ? &environment_->current() : nullptr;
@@ -354,6 +394,7 @@ void World::stage_snapshot() {
         // VehicleInstance::powertrain_state_.
         vsnap.powertrain = vinst.powertrain_state();
         vsnap.aero=vinst.aero_telemetry();
+        vsnap.air = vi < vehicle_air_.size() ? vehicle_air_[vi] : environment::VehicleAir{};
     }
 
     // Weather plan W2: this tick's environment record (a POD copy, no
@@ -632,6 +673,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     backend_->set_integrate_sub_threshold_rotation(chassis, true);
 
     const VehicleId id = vehicle_system_->create(desc, chassis, surface_table_.get(), channel_indices);
+    vehicle_air_.resize(vehicle_system_->count()); // weather plan W4; default (valid == false) until the environment fills it
     // PLAN.md P3 scope item 7: register this vehicle's per-wheel telemetry
     // channels now (setup time, not a hot path) so the CSV header names
     // every wheel by its vehicle index and the wheel's own name (e.g.

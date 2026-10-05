@@ -161,6 +161,28 @@ struct LightningDesc {
     real distance_max_km = 15.0; // >= min
 };
 
+// Gust synthesis parameters (plan 3.8, W4; model: ps/environment/wind.h). A
+// climate WITHOUT this block has steady mean wind (no gusts).
+//   turbulence intensity  I = c_u kappa / ln(z / z0)            [C WMO-No. 8 Vol. I ch. 5, eq. 5.A.1]
+//   per-sample intensity  sigma_u / U = I (G - 1) / (G_ref - 1)  [D: G = the published gust factor of the weather
+//                          at the moment, G_ref = reference_gust_factor, the 3-s/10-min factor the roughness-derived
+//                          intensity stands for; G = G_ref reproduces the WMO value exactly, G = 1 is calm]
+//   spectrum              Kaimal, 32 components, log-spaced bands from f_min_hz with bands_per_octave per octave
+//   phases re-seeded every window_s of SIM time, crossfaded over blend_s (variance preserving)
+struct GustDesc {
+    real roughness_length_m = 0.03;        // z0 > 0 [C Davenport-Wieringa, open grass 0.03 m]
+    real reference_height_m = 10.0;        // z: height of the mean-wind definition and of the Kaimal scales
+    real reference_gust_factor = 1.35;     // G_ref > 1 [M: the 3-s/10-min factor the synthesised Kaimal field MEASURES at I = 0.1515, U = 10 m/s (1.346 over 200 records, test_environment_wind.cpp); the plan cites ~1.66 (Harper et al. 2010, secondary) which a Gaussian field only reaches at I ~ 0.29 - see out/weather_w4_progress.md]
+    real f_min_hz = 1.0 / 600.0;           // lowest component band edge: the 10-min mean wind cutoff [D]
+    int bands_per_octave = 2;              // [2, 8]: 32 bands span 32 / this octaves from f_min_hz [AS]
+    real window_s = 600.0;                 // phase re-seed / advection window, sim seconds [AS, = the 10-min mean]
+    real blend_s = 30.0;                   // crossfade at the start of a window, [0, window_s / 2] [AS]
+    real min_advection_speed_m_s = 0.5;    // floor of the Taylor advection speed (calm wind) [AS]
+};
+
+// First problem as "gusts.<field> ..." or empty.
+std::string gust_desc_validation_error(const GustDesc& g);
+
 // ---- physics_sim.weather_preset/1 (plan 7.3) -------------------------------
 
 enum class PresetPrecipType : std::uint8_t { Auto, Rain, Snow, Sleet, FreezingRain, Drizzle, Hail };

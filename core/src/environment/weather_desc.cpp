@@ -129,6 +129,11 @@ std::string climate_weather_validation_error(const ClimateDesc& d) {
             return err(p, "lightning.distance_km must be [min, max] with max > 0 and max >= min");
     }
 
+    if (d.gusts) {
+        const std::string ge = gust_desc_validation_error(*d.gusts);
+        if (!ge.empty()) return err(p, ge);
+    }
+
     if (!any) return {};
 
     if (!d.lags) return err(p, "lags_s is required when the seasons carry regimes");
@@ -178,6 +183,26 @@ std::string climate_weather_validation_error(const ClimateDesc& d) {
 }
 
 } // namespace detail
+
+std::string gust_desc_validation_error(const GustDesc& g) {
+    if (!finite(g.roughness_length_m) || !(g.roughness_length_m > 0.0) || g.roughness_length_m > 10.0)
+        return "gusts.roughness_length_m must be in (0, 10] m";
+    if (!finite(g.reference_height_m) || !(g.reference_height_m > 2.0 * g.roughness_length_m) || g.reference_height_m > 60.0)
+        return "gusts.reference_height_m must be in (2 z0, 60] m (the Kaimal length scale 0.7 z holds to 60 m)";
+    if (!finite(g.reference_gust_factor) || !(g.reference_gust_factor > 1.0) || g.reference_gust_factor > 4.0)
+        return "gusts.reference_gust_factor must be in (1, 4]";
+    if (!finite(g.f_min_hz) || !(g.f_min_hz >= 1e-5) || g.f_min_hz > 1.0)
+        return "gusts.f_min_hz must be in [1e-5, 1] Hz";
+    if (g.bands_per_octave < 2 || g.bands_per_octave > 8)
+        return "gusts.bands_per_octave must be in [2, 8] (32 components)";
+    if (!finite(g.window_s) || g.window_s < 60.0 || g.window_s > 86400.0)
+        return "gusts.window_s must be in [60, 86400] s";
+    if (!finite(g.blend_s) || g.blend_s < 0.0 || g.blend_s > 0.5 * g.window_s)
+        return "gusts.blend_s must be in [0, window_s / 2]";
+    if (!finite(g.min_advection_speed_m_s) || !(g.min_advection_speed_m_s > 0.0) || g.min_advection_speed_m_s > 10.0)
+        return "gusts.min_advection_speed_m_s must be in (0, 10] m/s";
+    return {};
+}
 
 std::string weather_preset_validation_error(const WeatherPresetDesc& w) {
     const std::string p = "weather_preset";

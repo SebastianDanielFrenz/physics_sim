@@ -2448,4 +2448,8 @@ std::uint64_t Powertrain::simulated_engine_maps_content_hash() const {
     return sim_engine_ptr_ != nullptr ? sim_engine_ptr_->maps().content_hash : 0;
 }
 
+std::uint64_t Powertrain::simulated_engine_steady_rebuild_count() const {
+    return sim_engine_ptr_ != nullptr ? sim_engine_ptr_->steady_rebuild_count() : 0;
+}
+
 } // namespace ps::drivetrain

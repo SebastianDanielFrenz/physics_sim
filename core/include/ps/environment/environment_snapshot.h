@@ -38,7 +38,22 @@ struct EnvironmentSnapshot {
     real sun_azimuth_rad = 0.0;    // from north, clockwise, [0, 2 pi)
     Vec3 sun_dir_world;            // unit vector TOWARDS the sun in the World frame (Z up; north = +Y rotated by the environment's north yaw)
     real ghi_w_m2 = 0.0;           // global horizontal irradiance incl. cloud reduction (cloud_cover is 0 until the weather timeline exists)
-    real cloud_cover = 0.0;        // [0, 1]; 0 in W2
+    real cloud_cover = 0.0;        // [0, 1]; 0 without weather (W2), the weather's cloud cover with it
+
+    // --- Weather (W4: set when the Environment owns a weather timeline; the
+    // station-level values at the climate's reference elevation, before the
+    // per-vehicle altitude lift of VehicleAir) ---
+    bool has_weather = false;
+    std::int32_t precip_type = 0;      // ps::environment::PrecipType as an integer (0 = none)
+    real precip_mm_h = 0.0;
+    real wind_mean_m_s = 0.0;
+    real wind_dir_deg = 0.0;           // direction the wind blows FROM, compass degrees clockwise from north
+    real gust_factor = 1.0;
+    real air_temp_c = 0.0;
+    real rh = 0.0;                     // [0, 1]
+    real dew_point_c = 0.0;
+    real pressure_msl_hpa = 0.0;
+    real lightning_per_min = 0.0;
 };
 
 } // namespace ps::environment

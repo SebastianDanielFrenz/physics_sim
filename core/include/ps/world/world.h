@@ -202,8 +202,23 @@ public:
     // Reservoir starts empty; motors never generate unpaid suction. Tick telemetry reports consumption.
     void credit_aero_fan_energy(VehicleId, real joules);
     [[nodiscard]] const aero::Telemetry& vehicle_aero_telemetry(VehicleId) const;
-    void set_ambient(const AmbientSample& a) { ambient_ = a; }
+    // Weather plan W4 (owner question Q12, PROVISIONAL): while an environment
+    // that provides the atmosphere (EnvironmentConfig::weather != Off) is
+    // installed it owns the ambient sample, the air density and the wind of every
+    // vehicle, so set_ambient and set_aero_environment throw std::logic_error
+    // instead of being silently overwritten next tick; after remove_environment()
+    // (or with an environment that has no weather) they behave as before.
+    void set_ambient(const AmbientSample& a);
     [[nodiscard]] const AmbientSample& ambient() const { return ambient_; }
+    // W4: the air the environment computed for a vehicle this tick (ps/environment/
+    // vehicle_air.h; valid == false without an atmosphere-providing environment).
+    // Sim thread only; renderers read VehicleSnapshot::air.
+    [[nodiscard]] environment::VehicleAir vehicle_air(VehicleId id) const;
+    // W4 diagnostics (tests): the simulated engine's full steady-grid rebuild count
+    // (stays 0 under live ambient changes) and the ambient sample its Sensors saw in
+    // the last substep.
+    [[nodiscard]] std::uint64_t vehicle_engine_steady_rebuild_count(VehicleId id) const;
+    [[nodiscard]] AmbientSample vehicle_engine_ambient(VehicleId id) const;
 
     // Weather plan W2 (out/weather_plan.md 1.3): the environment (clock,
     // calendar, sun; later weather and surface condition). Sim thread, between
@@ -414,6 +429,9 @@ private:
     real sim_time_ = 0.0;
     std::vector<aero::WakeSource> aero_wakes_;
     std::shared_ptr<environment::Environment> environment_; // weather plan W2; null == none installed
+    // W4: one entry per vehicle (grown in create_vehicle, filled by stage_freeze_tick_start_state while an
+    // atmosphere-providing environment is installed). Never hashed.
+    std::vector<environment::VehicleAir> vehicle_air_;
     AmbientSample ambient_; // PHYS-033 P4 I7b C9; never hashed, see set_ambient/ambient() above
 
     std::unique_ptr<jobs::JobSystem> job_system_;

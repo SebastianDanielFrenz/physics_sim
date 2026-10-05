@@ -182,6 +182,8 @@ filled every tick, and no telemetry channel is added.
 |---|---|---|---|---|
 | `climate` | string | required | - | climate file, relative to the scenario file's directory if relative |
 | `seed` | uint64 | optional | `0` | stored; used by the weather timeline from W3 on |
+| `weather` | `"dynamic"` or `{"preset": "<file>"}` | optional | off | W4: switches the weather on - `"dynamic"` follows the climate's regime chain, a preset file (`physics_sim.weather_preset/1`, path relative to the scenario) is held constant. The climate must carry the weather statistics. With weather on, the environment provides every vehicle's ambient air (ISA at its altitude, humid-air density), wind and gusts; `World::set_ambient`/`set_aero_environment` are then rejected. Absent: the World keeps its own values, bit-identical to before |
+| `altitude_offset_m` | real | optional | `0` | added to the climate's `location.elevation_m` as the altitude of the World z = 0 plane above sea level (a track above or below the climate's station) |
 | `time.start` | `{year, season, day, time_of_day_s}` | optional | the climate's epoch (`t_env = 0`) | the calendar position the clock starts at: `season` empty = the first season, `day` within that season, `time_of_day_s` since that day's start (midnight) in environment seconds; out-of-range values are load errors |
 | `time.scale` | real >= 0 | optional | `1.0` | environment seconds per simulation second; `0` freezes weather/sun/surface time |
 | `season` | string | optional | `"dynamic"` | `"dynamic"` advances through the seasons; a season name pins every day to that season's mid-season values |
@@ -205,8 +207,7 @@ each tick right before `World::step()`): each has `t` and exactly one of
 
 Rejected (load errors, never silently dropped): unknown keys, a missing
 `climate`, a climate file error, an unknown `season`/`time.start.season`, a bad
-scale, both fixed modes, an event with zero or two actions, and the keys of later
-increments (`weather`, `surface_conditions`, `default_tyre_profile`,
+increments (`surface_conditions`, `default_tyre_profile`, `set_weather`).
 `set_weather`).
 
 The published record (`ps/environment/environment_snapshot.h`, in

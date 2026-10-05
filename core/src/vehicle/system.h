@@ -9,6 +9,7 @@
 
 #include "vehicle_instance.h"
 
+#include "ps/environment/vehicle_air.h"
 #include "ps/io/surface_table.h"
 #include "ps/jobs/job_system.h"
 #include "ps/vehicle/vehicle_desc.h"
@@ -16,6 +17,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace ps::vehicle {
@@ -37,8 +39,14 @@ public:
     // - no string lookup and no per-vehicle vector to build happens here.
     // PHYS-033 I1 W1: `env` (gravity) is forwarded to every instance's
     // shadow chassis unchanged.
+    //
+    // Weather plan W4: `air` (empty = none) is one environment::VehicleAir per
+    // vehicle, in vehicle order, filled by World::stage_freeze_tick_start_state;
+    // an entry with valid == true replaces that vehicle's ambient sample, air
+    // density and wind in `env` (the others keep the World-wide values).
     void step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const std::vector<real>& channel_values,
-                  const VehicleTickEnv& env, real tick_dt, real substep_rate_hz);
+                  const VehicleTickEnv& env, real tick_dt, real substep_rate_hz,
+                  std::span<const environment::VehicleAir> air = {});
 
     [[nodiscard]] bool empty() const { return instances_.empty(); }
     // PHYS-033 P4 I7c C16b (D9): applies every vehicle's queued engine-maps

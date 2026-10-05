@@ -1,0 +1,54 @@
+{
+  "format": "physics_sim.scenario/1",
+  "name": "environment_weather",
+  "duration_s": 8.0,
+  "tick_rate_hz": 240.0,
+  "substep_rate_hz": 960.0,
+  "gravity": [0, 0, -9.81],
+  "job_workers": 0,
+  "surface_table_path": "../surfaces/surfaces.json",
+  "bodies": [
+    {
+      "name": "ground",
+      "motion": "static",
+      "shape": {"type": "box", "half_extents": [1000.0, 1000.0, 0.5]},
+      "position": [0, 0, -0.5],
+      "friction": 1.0
+    },
+    {
+      "name": "chassis",
+      "motion": "dynamic",
+      "mass": 1500.0,
+      "shape": {"type": "box", "half_extents": [2.0, 0.4, 0.15]},
+      "position": [0, 0, 0.6],
+      "linear_velocity": [15.0, 0, 0],
+      "friction": 0.5,
+      "allow_sleep": false
+    }
+  ],
+  "vehicles": [
+    {
+      "name": "car",
+      "chassis_body": "chassis",
+      "vehicle_json_path": "../vehicles/car_sedan_sim.json"
+    }
+  ],
+  "control_events": [
+    { "t": 0.0, "channel": "steer", "value": 0.0 },
+    { "t": 0.0, "channel": "throttle", "value": 0.4 },
+    { "t": 4.0, "channel": "throttle", "value": 0.1 }
+  ],
+  "environment": {
+    "climate": "../climates/test_weather_gusts.json",
+    "seed": 5,
+    "weather": "dynamic",
+    "altitude_offset_m": 800,
+    "time": {
+      "start": { "season": "summer", "day": 3, "time_of_day_s": 30000 },
+      "scale": 3000
+    },
+    "season": "dynamic",
+    "north_yaw_deg": 15
+  },
+  "telemetry_csv": "environment_weather.csv"
+}

@@ -18,6 +18,8 @@ enum RngDomain : std::uint64_t {
     kDomainSegment = 1,    // a = segment index, slot = quantity
     kDomainCell = 2,       // a = segment index, b = cell index, slot = quantity
     kDomainLightning = 3,  // a = 60 s bin index, b = source key, slot = draw
+    kDomainGustFrequency = 4,  // a = axis, b = component (W4: line position inside its band, seed only)
+    kDomainGustPhase = 5,      // a = gust window index, b = axis, slot = component (W4)
 };
 
 // Slots of kDomainSegment.

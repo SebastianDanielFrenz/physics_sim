@@ -271,6 +271,9 @@ public:
     // itself (the maps' content_hash is already folded into
     // Powertrain::fold_state_hash every tick via IEngine::fold_state_hash).
     [[nodiscard]] std::uint64_t simulated_engine_maps_content_hash() const;
+    // Weather plan W4 (test/diagnostic hook): full steady-grid rebuilds the simulated engine has done
+    // (a live ambient change must leave it at 0 - engine_simulated.h set_live_ambient); 0 without one.
+    [[nodiscard]] std::uint64_t simulated_engine_steady_rebuild_count() const;
     // This substep's engine pre_solve() result, cached (mirrors
     // last_clutch_result_/last_gearbox_result_) - PowertrainSnapshot's
     // EngineSoundState fill (commit 6: load/limiter/dfco/starter flags,

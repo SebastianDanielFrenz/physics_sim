@@ -275,7 +275,10 @@ TEST_CASE("Scenario environment block: rejections", "[environment][io]") {
     CHECK(load_msg("{ " + kClimate + " }", "ok").empty());
 
     CHECK_THAT(load_msg("{ " + kClimate + ", \"bogus\": 1 }", "unk"), ContainsSubstring("unknown key \"bogus\""));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": \"dynamic\" }", "weather"), ContainsSubstring("not supported yet"));
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": \"dynamic\" }", "weather"), ContainsSubstring("the climate needs precip_phase"));
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": \"sunny\" }", "wbad"), ContainsSubstring("\"weather\" must be"));
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": { \"bogus\": 1 } }", "wk"), ContainsSubstring("weather.bogus"));
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": { \"preset\": \"does/not/exist.json\" } }", "wp"), ContainsSubstring("exist.json"));
     CHECK_THAT(load_msg("{ " + kClimate + ", \"surface_conditions\": \"x\" }", "sc"), ContainsSubstring("not supported yet"));
     CHECK_THAT(load_msg("{ \"seed\": 1 }", "noclimate"), ContainsSubstring("missing required string \"climate\""));
     CHECK_THAT(load_msg("{ \"climate\": \"does/not/exist.json\" }", "nofile"), ContainsSubstring("exist.json"));
