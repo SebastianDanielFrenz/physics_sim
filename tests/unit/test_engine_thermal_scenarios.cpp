@@ -25,9 +25,12 @@
 //   I6a oil hydrodynamic_fraction 0.5 -> 1e-9 (k = 1 + 1.5e-10) -> fuel ratio 1.00000000015: "ratio >= 1.03" fails.
 //       Unsabotaged: 1.0557 (cold 0.5885 kg, warm 0.5574 kg over 1200 s).
 //   I9  (T1b) B1: the Coulomb caps scaled by k again (EngineTorqueMap and SimulatedEngine friction_cap_* x k) ->
-//       TBD
+//       car_sedan_sim_thermal never turns at -30 C (max cranking rpm 5.8e-11, t_running -1; the REQUIRE stops the
+//       case), the cranking-resistance ratio reads 1.635 (cited 1.45 +- 5 %). B4 (the graph engine's idle shift
+//       removed): car_sedan_thermal never reaches Running at -30 C. Measured 2026-10-05.
 //   I9v (T1b) the viscosity exponent 1 instead of 0.5 (EngineThermal::friction_scale_exact without the sqrt) ->
-//       TBD
+//       ratio 2.691 (cited 1.45), k(-30 C) 299.2, the -30 C start fails; B2 (speed shape linear instead of sqrt) ->
+//       ratio 1.182 and r100/r2000 0.786 (bound < 0.6). Measured 2026-10-05.
 //
 // Deviations from the plan (all measured, none tuned):
 //   * Dyno: Viscous-mode LoadDyno with a feed-forward scale and a test-side throttle PI holding the speed (a Brake

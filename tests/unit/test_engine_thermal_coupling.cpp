@@ -12,12 +12,19 @@
 // rewritten against the new law; C4d, C5c-e, C5h are unchanged in substance.
 //
 // Sabotage record (each applied once to core/src, measured 2026-10-05, the named check then fails):
-//   B1 caps scaled by k again (graph and sim) -> TBD
-//   B2 speed shape linear (sqrt(n/n_ref) -> n/n_ref) -> TBD
-//   B3 graph increment on the whole motoring curve (phi_f dropped from f_hyd_ref) -> TBD
-//   B4 graph idle feed-forward/authority shift removed -> TBD
-//   B5 graph friction-heat increment dropped -> TBD
-//   B6 d without the increment's slope (graph and sim) -> TBD
+//   B1 caps scaled by k again (graph and sim) -> I1-graph caps 14.028 vs 6.0 / 28.056 vs 12.0 N*m at k 2.338
+//      (152.64 vs 12.0 static at 12.72), I1-sim caps fail likewise; I9 -30 C: the sim car never turns (max cranking
+//      rpm 5.8e-11), I2 long -10 C does not start, the viscosity ratio reads 1.635 (cited 1.45).
+//   B2 speed shape linear (sqrt(n/n_ref) -> n/n_ref) -> I1-graph tau0/torque_demand off by 10.68 N*m, d off by
+//      0.0885, idle shift 0.0770 vs 0.1218; I1-sim tau0 off by 2.39 N*m at 1234 rpm; I9 ratio 1.182 (cited 1.45),
+//      r100/r2000 0.786 (bound < 0.6); I3 fails too.
+//   B3 graph increment on the whole motoring curve (phi_f dropped from f_hyd_ref) -> I1-graph tau0 off by 25.93 N*m,
+//      idle shift 0.2030 vs 0.1218, heat 29.73 vs 20.54 J (the I9 graph start still passes: the idle shift grows with it).
+//   B4 graph idle feed-forward/authority shift removed -> I1-graph throttle shift 0.0 vs 0.1218, cap 0.30 vs 0.4218;
+//      I9 -30 C: car_sedan_thermal never reaches Running (t_running -1).
+//   B5 graph friction-heat increment dropped -> I1-graph friction_heat_delta 6.754 vs 20.540 J.
+//   B6 d without the increment's slope (graph and sim) -> I1-graph d 0.0344 vs finite difference 0.0915 (k 2.338) and
+//      0.0344 vs 0.5348 (k 12.72); I1-sim dtau/domega vs finite difference off by 0.0431 at 1234 rpm.
 //   C4d I1-graph: released_heat_delta = 0 -> 0 vs 257.7 J (fuel energy of the substep).
 //   C5c I1-sim: the ECU's live steady torque built with k = 1 -> the k_ecu demand CHECK fails.
 //   C5d I1-sim: live idle control ignoring k_ecu -> idle plate 0.02111, the CHECK needs > 1.02 x.
