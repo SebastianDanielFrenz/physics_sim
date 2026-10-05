@@ -228,7 +228,10 @@ void World::stage_vehicle_islands() {
         // PHYS-033 I1 W1: the shadow chassis needs gravity to build its own
         // per-substep acceleration estimate (it never talks to World
         // otherwise) - see vehicle::VehicleTickEnv.
-        const vehicle::VehicleTickEnv env{config_.gravity, config_.air_density, ambient_,config_.wind_world,{},aero_wakes_};
+        vehicle::VehicleTickEnv env{config_.gravity, config_.air_density, ambient_, config_.wind_world, {}, aero_wakes_};
+        // Weather plan W6: hand the installed environment's condition grip to
+        // the wheels (nullptr without surface conditions, a no-op then).
+        if (environment_) env.grip = environment_->condition_grip();
         // Weather plan W4: per-vehicle air (valid entries only while an atmosphere-providing environment is installed).
         vehicle_system_->step_all(*backend_, *job_system_, control_channel_values_, env, dt_, config_.substep_rate_hz,
                                   std::span<const environment::VehicleAir>(vehicle_air_));

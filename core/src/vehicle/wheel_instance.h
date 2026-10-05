@@ -8,6 +8,7 @@
 #pragma once
 
 #include "ps/backend/i_rigid_backend.h"
+#include "ps/environment/condition_grip.h"
 #include "ps/io/surface_table.h"
 #include "ps/vehicle/tyre_model.h"
 #include "ps/vehicle/vehicle_desc.h"
@@ -35,6 +36,9 @@ struct WheelPreSolveInput {
     real dt = 0.0;
     real partner_compression = 0.0;
     const io::SurfaceTable* surfaces = nullptr;
+    // W6: the installed environment's condition grip (nullptr = none). The
+    // wheel multiplies the class lambda_mu by its factor at the contact speed.
+    const environment::ConditionGrip* grip = nullptr;
 };
 
 // The hub's implicit torque-law terms this wheel contributes THIS substep

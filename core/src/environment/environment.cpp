@@ -4,6 +4,7 @@
 
 #include "ps/math/transcendental.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -93,6 +94,7 @@ Environment::Environment(const ClimateDesc& climate, const EnvironmentConfig& co
                 "environment: surface conditions need the seasons' climate scalars (ground_temp_c, temp_mean_c)");
         // ConditionGrid validates the desc, the names and the grid settings.
         grid_.emplace(*config_.surface_conditions, config_.surface_names, climate_.condition.value_or(ConditionGridDesc{}));
+        grip_.build_static(*grid_, config_.default_tyre_profile.condition_factors);
         forcing_.env = this;
     }
 
@@ -201,6 +203,7 @@ void Environment::begin_tick(std::int64_t tick) {
     if (weather_) update_air(tick, t_env, w);
     if (grid_) {
         last_condition_steps_ = grid_->advance_to(t_env, forcing_);
+        grip_.update_state(*grid_, t_env);
         fill_surfaces(t_env);
     }
 }
@@ -218,6 +221,9 @@ SurfaceForcing Environment::surface_forcing(real t_env) const {
         f.wind_m_s = w.wind_mean_m_s;
         f.vapour_pressure_hpa = w.vapour_pressure_hpa;
         f.cloud_cover = w.cloud_cover;
+        // W6 models liquid water only: snow precipitation is W8 (its melt and
+        // pack), so it contributes no liquid input yet.
+        if (w.precip_type != PrecipType::Snow) f.precip_mm_h = w.precip_mm_h;
     }
     f.ghi_w_m2 = ghi_w_m2(ss.elevation_rad, f.cloud_cover);
     f.bottom_temp_k = (day.has_climate ? day.climate.ground_temp_c : 10.0) + kCelsiusToKelvin;
@@ -257,6 +263,12 @@ void Environment::fill_surfaces(real t_env) {
         s.snow_density_kg_m3 = lerp(a.snow_density_kg_m3, b.snow_density_kg_m3);
         s.soil_moisture = lerp(a.soil_moisture, b.soil_moisture);
         s.canopy_water_mm = lerp(a.canopy_water_mm, b.canopy_water_mm);
+        const ColumnModel& col = g.column(i);
+        const real above = col.kind == SurfaceKind::Sealed ? std::max(s.water_mm - col.w_tex_mm, 0.0) : s.water_mm;
+        s.water_above_texture_mm = above;
+        const real ww = grip_.water_weight(i);
+        s.condition = ww <= 0.0 ? 0 : (ww < 1.0 ? 1 : 2);
+        s.condition_factor = grip_.factor(i, 0.0);
     }
 }
 

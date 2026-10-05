@@ -118,6 +118,8 @@ add_library(ps_environment STATIC
   src/environment/atmosphere.cpp
   src/environment/wind.cpp
   src/environment/surface_condition.cpp
+  src/environment/condition_grip.cpp
+  src/environment/tyre_profile.cpp
 )
 
 target_include_directories(ps_environment PUBLIC
@@ -142,6 +144,7 @@ add_library(ps_environment_io STATIC
   src/environment/io/climate_io.cpp
   src/environment/io/weather_io.cpp
   src/environment/io/surface_conditions_io.cpp
+  src/environment/io/tyre_profile_io.cpp
 )
 
 target_include_directories(ps_environment_io PUBLIC

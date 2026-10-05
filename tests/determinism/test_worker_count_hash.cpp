@@ -1196,7 +1196,7 @@ TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24
 // Windows-vs-Linux hash compare (coordinator).
 TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4, 10 and 24 workers and really steps the grid",
           "[determinism][environment][vehicle][heavy][world][io]") {
-    constexpr std::uint64_t kRecorded = 0x030df2de793ce721ULL; // recorded 2026-10-05 (W5), ps_run at 1 and 10 workers
+    constexpr std::uint64_t kRecorded = 0x64326439851d8dfcULL; // re-recorded 2026-10-05 (W6: water film/drain/soil state hashed, wet grip active; was 0x030df2de793ce721 at W5)
     const std::uint64_t reference = run_scenario_file("environment_surface.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     CHECK(reference == kRecorded);
@@ -1211,7 +1211,21 @@ TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4,
     sc.world_config.job_workers = 1;
     ps::io::BuiltScenario built = ps::io::build_scenario(sc);
     ps::World& world = *built.world;
-    for (int i = 0; i < 480; ++i) world.step();
+    double max_water_mm = 0.0;
+    double max_soil = 0.0;
+    for (int i = 0; i < 480; ++i) {
+        world.step();
+        const ps::environment::EnvironmentSnapshot* sn = world.environment_snapshot();
+        if (sn != nullptr && sn->has_surfaces)
+            for (int c = 0; c < sn->surface_count; ++c) {
+                max_water_mm = std::max(max_water_mm, static_cast<double>(sn->surfaces[c].water_mm));
+                max_soil = std::max(max_soil, static_cast<double>(sn->surfaces[c].soil_moisture));
+            }
+    }
+    INFO("max surface water " << max_water_mm << " mm, max soil moisture " << max_soil);
+    // W6: the water state that is folded into the hash is live in this scenario (soil moisture starts at field
+    // capacity; film water needs rain, which this seed/season may not produce within 2 s of sim time).
+    CHECK(max_soil > 0.0);
     const ps::environment::EnvironmentSnapshot* s = world.environment_snapshot();
     REQUIRE(s != nullptr);
     CHECK(s->has_surfaces);

@@ -47,6 +47,7 @@
 #include "ps/environment/atmosphere.h"
 #include "ps/environment/calendar.h"
 #include "ps/environment/climate_desc.h"
+#include "ps/environment/condition_grip.h"
 #include "ps/environment/env_time.h"
 #include "ps/environment/environment_snapshot.h"
 #include "ps/environment/sun.h"
@@ -108,6 +109,10 @@ struct EnvironmentConfig {
     // The surface classes, index = SurfaceId (a World passes its SurfaceTable
     // names in id order). Empty = the desc's classes in name order.
     std::vector<std::string> surface_names;
+    // W6: the tyre profile a wheel without its own uses (plan 5.1, owner Q4);
+    // its per-condition factors apply to every wheel in W6. Defaults to the
+    // reference summer values when unset.
+    TyreProfileDesc default_tyre_profile;
 };
 
 class Environment {
@@ -200,6 +205,9 @@ public:
     // max_fast_forward_s stepped, anything else a spin-up (surface_condition.h).
     bool has_surface_conditions() const { return grid_.has_value(); }
     const ConditionGrid* surface_conditions() const { return grid_ ? &*grid_ : nullptr; }
+    // W6: the friction factor lookup built from the grid and the default tyre
+    // profile. Invalid (factor() == 1) without surface conditions.
+    const ConditionGrip* condition_grip() const { return grid_ ? &grip_ : nullptr; }
     // Number of grid steps the last begin_tick took (spin-up included); a
     // diagnostic, not hashed.
     std::int64_t last_condition_steps() const { return last_condition_steps_; }
@@ -271,6 +279,8 @@ private:
 
     // W5
     std::optional<ConditionGrid> grid_;
+    // W6
+    ConditionGrip grip_;
     ForcingSource forcing_;
     mutable WeatherCursor grid_cursor_;   // own cursor: grid midpoints (and spin-ups) run apart from the tick time
     std::int64_t last_condition_steps_ = 0;

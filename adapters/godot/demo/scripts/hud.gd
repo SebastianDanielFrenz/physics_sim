@@ -121,6 +121,13 @@ func _process(_delta: float) -> void:
 			var road_c: float = _simulation.get_surface_temperature_c("asphalt")
 			if not is_nan(road_c):
 				lines.append("road (asphalt) %.1f C" % road_c)
+			# W6: the road water film above the texture and its condition label.
+			var road_w: float = _simulation.get_surface_water_mm("asphalt")
+			if not is_nan(road_w):
+				var cond_names := ["dry", "damp", "wet"]
+				var cond: int = _simulation.get_surface_condition("asphalt")
+				var cond_s: String = cond_names[cond] if cond >= 0 and cond < cond_names.size() else "?"
+				lines.append("road film %.2f mm (%s)" % [road_w, cond_s])
 	lines.append("")
 
 	if vehicle_name != "" and _simulation.get_vehicle_names().has(vehicle_name):

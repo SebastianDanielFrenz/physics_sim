@@ -39,6 +39,33 @@ ThermalLayerDesc read_layer(ObjectReader& parent, const char* key, const std::st
     return l;
 }
 
+SoilDesc read_soil(ObjectReader& parent, const std::string& ctx, const std::string& origin) {
+    const json& j = parent.object("soil");
+    ObjectReader r(j, ctx + ".soil", origin);
+    SoilDesc s;
+    s.ksat_mm_h = r.number("ksat_mm_h", true, 0.0);
+    s.theta_fc = r.number("theta_fc", true, 0.0);
+    s.theta_sat = r.number("theta_sat", true, 0.0);
+    r.skip("source");
+    r.finish();
+    return s;
+}
+
+SurfaceFrictionDesc read_friction(ObjectReader& parent, const std::string& ctx, const std::string& origin) {
+    const json& j = parent.object("friction");
+    ObjectReader r(j, ctx + ".friction", origin);
+    SurfaceFrictionDesc f;
+    f.damp = r.number("damp", false, 0.85);
+    f.wet = r.number("wet", false, 0.71);
+    f.wet_grass = r.number("wet_grass", false, 0.67);
+    // W8/W9 conditions: a clear error, not a silent drop.
+    for (const char* k : {"slush", "snow_loose", "snow_packed", "ice", "wet_ice", "frost", "black_ice", "mud"})
+        r.reserve_for_later(k, "W8/W9 (snow, ice, mud grip)", kFormat);
+    r.skip("source");
+    r.finish();
+    return f;
+}
+
 SurfaceClassDesc read_class(const std::string& name, const json& j, const std::string& origin) {
     const std::string ctx = "surfaces." + name;
     ObjectReader r(j, ctx, origin);
@@ -52,24 +79,39 @@ SurfaceClassDesc read_class(const std::string& name, const json& j, const std::s
     else r.fail("\"kind\" must be \"sealed\", \"soil\", \"vegetated\" or \"static\" (got \"" + kind + "\")");
 
     // Keys of later increments (weather plan 7.4): a clear error, not a silent drop.
-    r.reserve_for_later("mtd_mm", "W6 (water film)", kFormat);
-    r.reserve_for_later("drainage", "W6 (water film)", kFormat);
-    r.reserve_for_later("texture_storage_mm", "W6 (water film)", kFormat);
-    r.reserve_for_later("canopy", "W6 (canopy water)", kFormat);
-    r.reserve_for_later("friction", "W6 (condition grip)", kFormat);
     r.reserve_for_later("crr", "W8 (condition rolling resistance)", kFormat);
-    r.reserve_for_later("soil", "W9 (mud)", kFormat);
     r.reserve_for_later("abrasiveness", "W10 (tyre wear)", kFormat);
     r.reserve_for_later("maintenance", "a later increment (winter maintenance)", kFormat);
 
     if (c.kind == SurfaceKind::Static) {
-        for (const char* k : {"albedo", "emissivity", "layer", "deep"})
-            if (r.has(k)) r.fail(std::string("a static class takes no thermal field (\"") + k + "\")");
+        for (const char* k : {"albedo", "emissivity", "layer", "deep", "mtd_mm", "texture_storage_mm", "drainage",
+                              "soil", "canopy", "friction"})
+            if (r.has(k)) r.fail(std::string("a static class takes no field (\"") + k + "\")");
     } else {
         c.albedo = r.number("albedo", true, 0.0);
         c.emissivity = r.number("emissivity", true, 0.0);
         c.layer = read_layer(r, "layer", ctx, origin);
         c.deep = read_layer(r, "deep", ctx, origin);
+        if (c.kind == SurfaceKind::Sealed) {
+            c.mtd_mm = r.number("mtd_mm", true, 0.0);
+            c.texture_storage_mm = r.number("texture_storage_mm", false, -1.0);
+            const json& dj = r.object("drainage");
+            ObjectReader dr(dj, ctx + ".drainage", origin);
+            c.drainage_path_m = dr.number("path_m", true, 0.0);
+            c.drainage_slope_m_m = dr.number("slope", true, 0.0);
+            dr.skip("source");
+            dr.finish();
+        } else {
+            c.soil = read_soil(r, ctx, origin);
+            if (c.kind == SurfaceKind::Vegetated) {
+                const json& cj = r.object("canopy");
+                ObjectReader cr(cj, ctx + ".canopy", origin);
+                c.canopy_capacity_mm = cr.number("capacity_mm", true, 0.0);
+                cr.skip("source");
+                cr.finish();
+            }
+        }
+        if (r.has("friction")) c.friction = read_friction(r, ctx, origin);
     }
     c.source = source_text(r.child("source"));
     r.finish();

@@ -1216,6 +1216,28 @@ double PsSimulation::get_surface_temperature_c(const String& surface_name) const
     return s.has_state ? static_cast<double>(s.t_surface_c) : std::numeric_limits<double>::quiet_NaN();
 }
 
+double PsSimulation::get_surface_water_mm(const String& surface_name) const {
+    const AdapterSnapshot& snap = render_snapshot();
+    if (!snap.has_environment || !snap.environment.has_surfaces) return std::numeric_limits<double>::quiet_NaN();
+    const std::string name = to_std_string(surface_name);
+    const auto it = std::find(surface_condition_names_.begin(), surface_condition_names_.end(), name);
+    const auto id = static_cast<std::int32_t>(it - surface_condition_names_.begin());
+    if (it == surface_condition_names_.end() || id >= snap.environment.surface_count) return std::numeric_limits<double>::quiet_NaN();
+    const ps::environment::SurfaceConditionSample& s = snap.environment.surfaces[static_cast<std::size_t>(id)];
+    return s.has_state ? static_cast<double>(s.water_above_texture_mm) : std::numeric_limits<double>::quiet_NaN();
+}
+
+int PsSimulation::get_surface_condition(const String& surface_name) const {
+    const AdapterSnapshot& snap = render_snapshot();
+    if (!snap.has_environment || !snap.environment.has_surfaces) return -1;
+    const std::string name = to_std_string(surface_name);
+    const auto it = std::find(surface_condition_names_.begin(), surface_condition_names_.end(), name);
+    const auto id = static_cast<std::int32_t>(it - surface_condition_names_.begin());
+    if (it == surface_condition_names_.end() || id >= snap.environment.surface_count) return -1;
+    const ps::environment::SurfaceConditionSample& s = snap.environment.surfaces[static_cast<std::size_t>(id)];
+    return s.has_state ? s.condition : -1;
+}
+
 Dictionary PsSimulation::get_vehicle_air(const String& vehicle_name) const {
     Dictionary d;
     const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
@@ -1609,6 +1631,8 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_environment"), &PsSimulation::get_environment);
     ClassDB::bind_method(D_METHOD("get_vehicle_air", "vehicle_name"), &PsSimulation::get_vehicle_air);
     ClassDB::bind_method(D_METHOD("get_surface_temperature_c", "surface_name"), &PsSimulation::get_surface_temperature_c);
+    ClassDB::bind_method(D_METHOD("get_surface_water_mm", "surface_name"), &PsSimulation::get_surface_water_mm);
+    ClassDB::bind_method(D_METHOD("get_surface_condition", "surface_name"), &PsSimulation::get_surface_condition);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_vehicle_steer_geometry", "vehicle_name"), &PsSimulation::get_vehicle_steer_geometry);

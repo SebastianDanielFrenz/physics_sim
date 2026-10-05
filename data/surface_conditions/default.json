@@ -7,13 +7,21 @@
       "emissivity": 0.90,
       "layer": { "depth_m": 0.20, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6 },
       "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.8,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
       "source": {
         "albedo": "[C] Solaimanian & Kennedy 1993 (TRR 1417 pp. 1-11): surface absorptivity of asphalt mixtures typically 0.85-0.93, typical value 0.9 used for the SHRP model -> albedo 0.10",
         "emissivity": "[C] Solaimanian & Kennedy 1993: emissivity in the same narrow range, typical 0.9",
         "layer.k_w_mk": "[C] Solaimanian & Kennedy 1993: typical asphalt concrete conductivity 1.38 W/(m K) (range 0.74-2.89, Highter & Wall 1984)",
         "layer.rho_c_j_m3k": "[C] Yavuzturk & Ksaibati 2002 (MPC 02-136) Table 1: volumetric specific heat 2,000 kJ/(m3 K) for typical asphalt; cross-check [D] Kallas 1966 core bulk specific gravity 2.281 x 880 J/(kg K) = 2.0e6",
         "layer.depth_m": "[AS] a 0.20 m bound asphalt layer (Kallas 1966's College Park section was 12 in = 0.305 m full depth)",
-        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c"
+        "deep": "[AS] granular base / subgrade soil within the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M, not re-checked]; column bottom at 2.0 m [AS: > 10 diurnal damping depths of asphalt, sqrt(2 k / (rho_c omega)) = 0.13 m [D]], held at the climate's ground_temp_c",
+        "mtd_mm": "[AS] 0.8 mm mean texture depth, mid of the dense-graded asphalt range (0.5-1.2 mm) the Gallaway/PIARC forms expect",
+        "drainage": "[AS] L = 7.3 m (a 7.3 m half carriageway to the drain) and S = 2.5 % crossfall; Gallaway et al. 1979 [C] take exactly these in their worked example",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.71)",
+        "friction.wet": "[D] Wong, Theory of Ground Vehicles, peak wet asphalt 0.5-0.7 and dry 0.8-0.9: 0.6 / 0.85 = 0.71",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry locked-wheel ratio (vault RACE-002), mean of 0.81/0.58/0.63 = 0.67"
       }
     },
     "kerb": {
@@ -22,11 +30,17 @@
       "emissivity": 0.90,
       "layer": { "depth_m": 0.30, "k_w_mk": 1.51, "rho_c_j_m3k": 2.11e6 },
       "deep": { "depth_m": 1.70, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.6,
+      "drainage": { "path_m": 5.0, "slope": 0.02 },
+      "friction": { "damp": 0.85, "wet": 0.68, "wet_grass": 0.67 },
       "source": {
         "albedo": "[M] Oke 1987 Table 2.1: concrete 0.10-0.35, mid-range value 0.25 [AS] - not re-checked in W5",
         "emissivity": "[M] Oke 1987 Table 2.1: concrete 0.71-0.90; 0.90 [AS] like asphalt",
         "layer": "[M] Oke 1987 Table 2.1 dense concrete: rho 2.40 Mg/m3, c 0.88 kJ/(kg K), C 2.11 MJ/(m3 K), k 1.51 W/(m K) - not re-checked; depth [AS]",
-        "deep": "[AS] as asphalt.deep"
+        "deep": "[AS] as asphalt.deep",
+        "mtd_mm": "[AS] 0.6 mm, a smoother concrete kerb than the carriageway",
+        "drainage": "[AS] kerb to drain: shorter path and flatter fall than the carriageway",
+        "friction": "[AS] as asphalt; wet slightly lower (smoother concrete)"
       }
     },
     "dirt": {
@@ -35,11 +49,16 @@
       "emissivity": 0.93,
       "layer": { "depth_m": 0.20, "k_w_mk": 0.8, "rho_c_j_m3k": 2.0e6 },
       "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "soil": { "ksat_mm_h": 15.0, "theta_fc": 0.25, "theta_sat": 0.45 },
+      "friction": { "damp": 0.90, "wet": 0.81, "wet_grass": 0.67 },
       "source": {
         "albedo": "[M] Oke 1987 Table 2.1: soils dark/wet 0.05 to light/dry 0.40; 0.20 [AS] for a packed dirt track",
         "emissivity": "[M] Oke 1987 Table 2.1: soils 0.90-0.98; 0.93 [AS]",
         "layer": "[AS] moist sandy soil inside Oke 1987 Table 2.1's dry-to-saturated range (k 0.30-2.20 W/(m K), C 1.28-2.96 MJ/(m3 K)) [M]; W5 has no soil moisture, so the values are fixed",
-        "deep": "[AS] as asphalt.deep"
+        "deep": "[AS] as asphalt.deep",
+        "soil": "[M] Rawls et al. 1982 / Clapp & Hornberger 1978 sandy-loam order: K_sat ~ 15 mm/h, field capacity ~ 0.25, saturation ~ 0.45 [C, not re-checked]; W6 fills the top 0.1 m",
+        "friction.wet": "[D] Wong p. 26: wet earth 0.55 / dry earth 0.68 = 0.81, applied to the class dry lambda (dirt 0.6 in surfaces.json)",
+        "friction.damp": "[AS] midpoint of dry and wet"
       }
     },
     "field": {
@@ -48,11 +67,15 @@
       "emissivity": 0.93,
       "layer": { "depth_m": 0.20, "k_w_mk": 0.6, "rho_c_j_m3k": 1.8e6 },
       "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "soil": { "ksat_mm_h": 20.0, "theta_fc": 0.28, "theta_sat": 0.48 },
+      "friction": { "damp": 0.90, "wet": 0.81, "wet_grass": 0.67 },
       "source": {
         "albedo": "[M] Oke 1987 Table 2.1 soils range; 0.18 [AS] for a ploughed field",
         "emissivity": "[M] Oke 1987 Table 2.1: soils 0.90-0.98; 0.93 [AS]",
         "layer": "[AS] loose (ploughed) moist soil: lower k and C than the packed dirt, inside Oke 1987 Table 2.1's ranges [M]",
-        "deep": "[AS] as asphalt.deep"
+        "deep": "[AS] as asphalt.deep",
+        "soil": "[M] Rawls et al. 1982 loam order: K_sat ~ 20 mm/h, field capacity ~ 0.28, saturation ~ 0.48 [C, not re-checked]",
+        "friction": "[AS] as dirt (wet earth); the crop canopy is the grass class"
       }
     },
     "grass": {
@@ -61,11 +84,17 @@
       "emissivity": 0.95,
       "layer": { "depth_m": 0.20, "k_w_mk": 0.8, "rho_c_j_m3k": 2.0e6 },
       "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "soil": { "ksat_mm_h": 15.0, "theta_fc": 0.25, "theta_sat": 0.45 },
+      "canopy": { "capacity_mm": 0.5 },
+      "friction": { "damp": 0.85, "wet": 0.71, "wet_grass": 0.67 },
       "source": {
         "albedo": "[M] Oke 1987 Table 2.1: grass long (1.0 m) 0.16 to short (0.02 m) 0.26; 0.22 [AS]",
         "emissivity": "[M] Oke 1987 Table 2.1: grass 0.90-0.95; 0.95 [AS]",
         "layer": "[AS] the root-zone soil under the turf, as dirt.layer; W5 has no canopy layer and no evapotranspiration, so grass runs warmer than real in sunshine (latent heat arrives with W6)",
-        "deep": "[AS] as asphalt.deep"
+        "deep": "[AS] as asphalt.deep",
+        "soil": "[M] Rawls et al. 1982 sandy loam as dirt [C, not re-checked]",
+        "canopy.capacity_mm": "[AS] 0.5 mm canopy interception storage, inside the grass/crop 0.2-1 mm range (interception literature)",
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry ratio (vault RACE-002), mean 0.67, applied to the class dry lambda (grass 0.42 in surfaces.json)"
       }
     },
     "low_mu": {
@@ -74,7 +103,7 @@
     }
   },
   "source": {
-    "purpose": "Default surface classes for data/surfaces/surfaces.json (weather plan W5, docs/data_formats/surface_conditions.md). Thermal part only; the water/snow/ice/friction fields of later increments are not in the format yet.",
+    "purpose": "Default surface classes for data/surfaces/surfaces.json (weather plan W5/W6, docs/data_formats/surface_conditions.md). W5 thermal + W6 water/friction; the snow/ice/crr fields of W8+ are not in the format yet.",
     "marks": "[C] cited and read, [D] derived, [M] from memory of a named source, not re-checked in this increment, [AS] assumed"
   }
 }

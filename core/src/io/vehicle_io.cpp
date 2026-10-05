@@ -232,6 +232,9 @@ WheelDesc read_wheel(const json& j, const std::string& base_dir) {
     if (j.contains("suspension")) w.suspension = read_suspension(j.at("suspension"));
     w.arb_partner = j.value("arb_partner", w.arb_partner);
     if (j.contains("tyre")) w.tyre = read_tyre_ref(j.at("tyre"), base_dir);
+    // W6 (weather plan 7.5): a physics_sim.tyre_profile/1 path/name. Stored
+    // only; W6 resolves the environment's default_tyre_profile (W7 per-wheel).
+    w.tyre_profile = j.value("tyre_profile", w.tyre_profile);
     w.steered = j.value("steered", w.steered);
     // PHYS-033 I2 (owner ruling Q7, plan section 9.1): "driven" is a /1
     // field. Which wheels are driven is now determined by the vehicle's

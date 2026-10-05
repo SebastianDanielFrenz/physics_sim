@@ -73,6 +73,10 @@ struct VehicleTickEnv {
     AmbientSample ambient{};
     Vec3 wind_world{};
     std::span<const aero::WakeSource> wakes{}, extra_wakes{};
+    // W6: the installed environment's surface-condition grip (nullptr = none);
+    // World fills it per tick from the environment. Without it the wheel's
+    // friction is exactly the class lambda_mu (bit-identical to before W6).
+    const environment::ConditionGrip* grip = nullptr;
 };
 
 class VehicleInstance {

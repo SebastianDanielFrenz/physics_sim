@@ -1,0 +1,14 @@
+{
+  "format": "physics_sim.tyre_profile/1",
+  "class": "slick",
+  "tread_new_mm": 4.0,
+  "tread_min_mm": 1.6,
+  "groove_void_ratio": 0.05,
+  "siping": "none",
+  "inflation_pressure_kpa": 220.0,
+  "condition_factors": { "dry": 1.15, "damp": 0.75, "wet": 0.50, "wet_grass": 0.50 },
+  "tread_exponents": { "wet": 0.5 },
+  "thermal": null,
+  "wear": null,
+  "source": "[AS] A treadless dry racing slick: no grooves, so the highest dry grip but the steepest wet fall-off; condition factors are plausible dry-vs-wet ratios, not a measured tyre."
+}
