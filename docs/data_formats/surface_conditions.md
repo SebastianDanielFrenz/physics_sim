@@ -83,6 +83,18 @@ an entry no table name uses is ignored (`unused_entries()`). At most 32 classes.
 the world's table (order included). Without a table (a code-built Environment)
 the file's classes are used in name order.
 
+`data/surface_conditions/default.json` carries 13 classes: the six of
+`data/surfaces/surfaces.json` (asphalt, dirt, field, grass, kerb, low_mu) and, since
+2026-10-05, seven road and off-road classes a game's own surface table may use:
+`concrete`, `paving_stones`, `sett`, `cobblestone` (sealed) and `gravel`, `compacted`,
+`sand` (soil). Every number of the seven carries a `source` entry tagged [C] cited and read,
+[D] derived, [M] from memory or [AS] assumed (`test_environment_surface_classes.cpp`
+checks the coverage). Their friction values are relative to the class's own dry level
+(the game's surface table holds the dry `lambda_mu`/`crr`); sand's wet factor is above 1
+(damp compacted sand grips better than dry), the sealed classes' below 1. Soil classes
+drain gravity water above field capacity with the fixed 3-day time constant, whatever
+their conductivity, so sand and gravel stay wet for days after rain (known model limit).
+
 ## Model
 
 Per stateful class a one-dimensional vertex-centred finite-volume conduction
