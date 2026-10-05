@@ -14,6 +14,7 @@
 #include "ps/backend/i_rigid_backend.h" // ContactEvent - plain struct, no Jolt/Godot type (PLAN.md D2)
 #include "ps/drivetrain/powertrain_state.h" // PHYS-033 P4 I3 plan section 4.3 - see VehicleSnapshot below
 #include "ps/environment/environment_snapshot.h" // weather plan W2 - see WorldSnapshot::environment
+#include "ps/environment/vehicle_air.h" // weather plan W4 - see VehicleSnapshot::air
 #include "ps/math/pose.h"
 #include "ps/aero/aerodynamics.h"
 #include "ps/vehicle/wheel_state.h" // PLAN.md M1, task 2 of the P3 fix-up phase - see VehicleSnapshot below
@@ -71,6 +72,14 @@ struct VehicleSnapshot {
     // VehicleInstance's real engine/clutch/gearbox/TCU state into it.
     drivetrain::PowertrainSnapshot powertrain;
     aero::Telemetry aero;
+    // Weather plan W4: the air this vehicle sat in this tick (outside
+    // temperature, pressure, humid-air density, mean wind + gust at the chassis
+    // position). Per VEHICLE, not one global record, because altitude (hence
+    // temperature/pressure/density) and the gust phase depend on the chassis
+    // position; the global record (WorldSnapshot::environment) stays the
+    // position-independent sky/time/weather state. valid == false without an
+    // environment that provides an atmosphere. Never hashed.
+    environment::VehicleAir air;
 };
 
 struct WorldSnapshot {

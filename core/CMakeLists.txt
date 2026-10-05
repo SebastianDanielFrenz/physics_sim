@@ -115,6 +115,8 @@ add_library(ps_environment STATIC
   src/environment/air_temperature.cpp
   src/environment/weather.cpp
   src/environment/weather_classes.cpp
+  src/environment/atmosphere.cpp
+  src/environment/wind.cpp
 )
 
 target_include_directories(ps_environment PUBLIC

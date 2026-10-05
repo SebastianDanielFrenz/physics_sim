@@ -106,6 +106,17 @@ func _process(_delta: float) -> void:
 		lines.append("time %02d:%02d  %s day %d  sun %.1f deg  %s  scale x%.1f" % [
 			hh, mm, String(env["season_name"]), int(env["day_in_season"]) + 1,
 			float(env["sun_elevation_deg"]), "day" if env["is_day"] else "night", float(env["time_scale"])])
+		if env.get("has_weather", false):
+			# W4: outside temperature and wind come from the sim (the air at the driven car's
+			# altitude when there is one, else the weather's station values); nothing is computed here.
+			var air: Dictionary = _simulation.get_vehicle_air(vehicle_name) if vehicle_name != "" else {}
+			if not air.is_empty():
+				lines.append("outside %.1f C  %.0f hPa  rho %.3f kg/m3  alt %.0f m   wind %.1f m/s (mean %.1f, from %.0f deg)" % [
+					float(air["temperature_c"]), float(air["pressure_hpa"]), float(air["density_kg_m3"]), float(air["altitude_m"]),
+					float(air["wind_speed_m_s"]), float(air["mean_wind_m_s"]), float(env["wind_dir_deg"])])
+			else:
+				lines.append("outside %.1f C  %.0f hPa  wind %.1f m/s from %.0f deg" % [
+					float(env["air_temp_c"]), float(env["pressure_msl_hpa"]), float(env["wind_mean_m_s"]), float(env["wind_dir_deg"])])
 	lines.append("")
 
 	if vehicle_name != "" and _simulation.get_vehicle_names().has(vehicle_name):

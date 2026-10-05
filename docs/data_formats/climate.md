@@ -1,4 +1,4 @@
-# `physics_sim.climate/1` - climate files (weather plan W1 + W3)
+# `physics_sim.climate/1` - climate files (weather plan W1 + W3 + W4)
 
 Loader: `ps::io::load_climate_json(path)` (`core/include/ps/environment/climate_io.h`,
 library `ps_environment_io`, which does not link `ps_core`). Descriptor:
@@ -11,9 +11,9 @@ weather statistics: per-season `regimes`, `transitions`, `initial_regime` and
 the top-level `lags_s`, `precip_phase`, `humidity`, `diurnal_temperature`,
 `lightning` blocks (section "Weather (W3)" below; model:
 `ps/environment/weather.h`, example `data/climates/test_weather.json`).
-`gusts` and `condition` stay RESERVED: a file that contains them is rejected
-with "... is not implemented before W4/W5". Like every ps loader, any other
-unknown key is rejected.
+`gusts` (W4, section "Gusts (W4)") configures the turbulence synthesis; `condition` stays
+RESERVED: a file that contains it is rejected with "... is not implemented before W5".
+Like every ps loader, any other unknown key is rejected.
 
 ## Top level
 
@@ -21,7 +21,7 @@ unknown key is rejected.
 |---|---|---|
 | `format` | string, required | exactly `"physics_sim.climate/1"` |
 | `extends` | string, optional | relative path of a parent file, see below |
-| `location` | object, required | `latitude_deg` [-90, 90] (required), `longitude_deg` [-180, 180], `elevation_m` (both optional, default 0, informational in W1: the clock is local mean solar time) |
+| `location` | object, required | `latitude_deg` [-90, 90] (required), `longitude_deg` [-180, 180], `elevation_m` (both optional, default 0; the clock is local mean solar time; from W4 `elevation_m` is the altitude of the World z = 0 plane above sea level, which the ISA atmosphere lifts from - see "Atmosphere and wind (W4)") |
 | `sun` | object, optional | `mode`: `"astronomical"` (default) or `"authored"`; `authored`: `{e_max_deg, e_night_deg, az_rise_deg, az_set_deg}` (degrees). Authored mode needs a complete block globally or per season |
 | `calendar` | object, optional | `cycle_s` > 0 (default 86400, the global day+night length used by the astronomical day/night form); `epoch` `{year, season, day, time_of_day_s}` = what `t_env = 0` means (season name, empty/absent = first season; `day` within the season; `time_of_day_s` since that day's midnight, >= 0) |
 | `seasons` | array, required, non-empty | see below |
@@ -31,6 +31,7 @@ unknown key is rejected.
 | `humidity` | object, W3 | `precip_rh_floor` [0,1], `precip_full_mm_h` > 0: during precipitation `rh += (max(rh, floor) - rh) * clamp(P / precip_full_mm_h, 0, 1)` |
 | `diurnal_temperature` | object, W3 | Parton-Logan: `a_h` > 0 (lag of the maximum), `b` > 0 (night decay), `c_h` (lag of the minimum after sunrise), `reference_cycle_s` > 0 (a_h and c_h scale with day+night / this), `cloud_range_reduction` [0,1] (range x (1 - this x N)); `a_h > -c_h/2` |
 | `lightning` | object, W3 | `distance_km: [min, max]`, 0 <= min <= max, max > 0: strike distance from the weather cell centre, area-uniform |
+| `gusts` | object, W4 | turbulence synthesis, see "Gusts (W4)"; every member optional. Needs the weather statistics only for the weather, not for loading |
 
 ## Seasons
 
@@ -153,6 +154,89 @@ is not defined, the next regime is drawn from the row of that season's
 Starting statistics are ASSUMED [AS] until fitted to DWD data (owner question
 Q11); a transition probability or duration is a data change.
 
+## Atmosphere and wind (W4)
+
+An `Environment` created with `weather` on (scenario `"weather": "dynamic"` or
+`{"preset": file}`; `ps::environment::EnvironmentWeather`) provides the
+atmosphere of the World (`ps/environment/atmosphere.h`, `wind.h`,
+`vehicle_air.h`):
+
+* **Sea-level reference.** The weather sample's air temperature and reduced
+  pressure are the STATION values at `location.elevation_m` (+ the scenario's
+  `altitude_offset_m`). They are lifted to sea level on the ISA lapse (6.5 K/km)
+  to give T0, p0 = the published mean-sea-level pressure; the vapour mole
+  fraction (from the relative humidity) is kept and capped at the Magnus
+  saturation pressure.
+* **Per vehicle.** Altitude of a vehicle = `location.elevation_m +
+  altitude_offset_m + chassis z`. `atmosphere_at` gives T (ISA lapse, isothermal
+  above 11 km, altitude clamped to [-5000, 20000] m), p (barometric, [C] ISO
+  2533), vapour pressure (constant mixing ratio) and the humid-air density
+  `(p - e)/(R_d T) + e/(R_v T)` (ideal gas mixture, `R_v = 461.5228`). These
+  replace the World's `AmbientSample`, `air_density` and `wind_world` for that
+  vehicle (engine ambient, aero) once per tick, in the `freeze_tick_start_state`
+  stage. `World::set_ambient` and `World::set_aero_environment` throw
+  `std::logic_error` while an environment WITH weather is installed (the weather
+  is the single source of truth; accepted again after `remove_environment`).
+  An environment without weather leaves both unchanged.
+* **Mean wind.** The weather's 10-min mean wind speed and "from" direction,
+  rotated by `north_yaw_deg`, as a world-frame vector blowing TOWARD
+  `-(sin(from) east + cos(from) north)`. No height profile: the 10 m value is
+  used at any altitude [AS].
+* Vehicles: `VehicleSnapshot::air` (valid flag, altitude, pressure, temperature,
+  vapour pressure, density, mean wind, gust, wind); the weather group of
+  `EnvironmentSnapshot` carries the weather-time outside values for a HUD.
+  None of this is hashed except the weather timeline fold, the altitude offset
+  and the gust flag, and only while an environment with weather is installed.
+
+## Gusts (W4)
+
+```
+"gusts": {
+  "roughness_length_m": 0.03,      // z0 in (0, 10]: open grass [C Davenport-Wieringa]
+  "reference_height_m": 10.0,      // z in (2 z0, 60]: mean-wind height and Kaimal scales
+  "reference_gust_factor": 1.35,   // G_ref in (1, 4], see below
+  "f_min_hz": 0.0016667,           // lowest band edge (the 10-min mean cutoff) [1e-5, 1]
+  "bands_per_octave": 2,           // [2, 8]: 32 bands span 32 / n octaves
+  "window_s": 600.0,               // [60, 86400] sim s: phase re-seed and advection window
+  "blend_s": 30.0,                 // [0, window_s / 2]: crossfade at the start of a window
+  "min_advection_speed_m_s": 0.5   // (0, 10]: floor of the Taylor advection speed
+}
+```
+
+Absent = no gusts (the mean wind only); every member is optional. Unknown keys
+and out-of-range values are load errors naming the key. Model:
+`GustField` (`ps/environment/wind.h`), Shinozuka's spectral representation:
+
+* Three axes (u along the mean wind, v across it, w vertical), 32 sinusoid
+  lines each, one line per frequency band, uniform random frequency inside the
+  band and random phase (SplitMix64 counter hash of the scenario seed, window
+  index, axis, line).
+* Kaimal spectrum, band variance `sigma^2 [C(f_lo) - C(f_hi)]` with
+  `C(f) = (1 + 6 f L / U)^(-2/3)` (closed-form band integral of `S(f) = 4 sigma^2
+  (L/U) / (1 + 6 f L / U)^(5/3)`), `L_u : L_v : L_w = 8.1 : 2.7 : 0.66` times
+  `0.7 z` [C IEC 61400-1 and Kaimal et al. 1972, via a secondary source: the standard text was not re-read]; `sigma_v : sigma_w = 0.8 :
+  0.5` times `sigma_u` [C IEC 61400-1].
+* Intensity: `sigma_u / U = I (G - 1)/(G_ref - 1)` with the WMO-No. 8 intensity
+  `I = 2.2 kappa / ln(z / z0)` [M] (0.1515 at z 10 m, z0 0.03 m) and `G` the
+  gust factor of the current weather regime or preset.
+* Frozen turbulence (Taylor): a point at `x` sees the field at `t - (x . e)/U_adv`
+  (`e` the mean wind direction, `U_adv` the mean speed at the window start,
+  floored at `min_advection_speed_m_s`); two vehicles in one gust field see
+  one coherent field. There is no lateral decorrelation (documented limit).
+* Gust time is simulation time (tick / tick_hz), the weather runs on environment
+  time (weather plan Q6, PROVISIONAL): a scaled clock does not speed the gusts up.
+* Every `window_s` of sim time the phases are re-drawn; across `blend_s` the new
+  and old window are blended with cos/sin weights (variance preserving).
+
+`reference_gust_factor`: the default 1.35 is what the synthesised field
+MEASURES as its 3-s/10-min gust factor at the WMO intensity (1.346, sd 0.041
+over 200 records, U 10 m/s; U 5: 1.358, U 20: 1.324). The plan cites about 1.66
+for open land (Harper et al. 2010, secondary source); a Gaussian field reaches it
+at `sigma_u / U` about 0.29, so a published gust factor of 1.66 here is
+honoured by scaling the intensity (measured 1.652, sd 0.077, 200 records).
+PROVISIONAL: the calibration holds for U about 10 m/s only (the 3-s averaging
+path grows with U).
+
 ## `extends`
 
 `"extends": "<relative path>"` (path relative to the file naming it): the
@@ -164,7 +248,7 @@ a chain deeper than 8 parents is an error naming the file.
 
 ## Rejections (all are `std::runtime_error`, message prefixed with the file)
 
-Wrong or missing `format`; unknown key anywhere; reserved W4/W5 keys; latitude
+Wrong or missing `format`; unknown key anywhere; the reserved W5 key `condition`; latitude
 or longitude out of range; empty `seasons`; `days` < 1 or non-integer;
 duplicate or empty season name; `doy_span` not two integers in [1, 366];
 astronomical sun or day length without a `doy_span`; `day_s`/`night_s` <= 0;
@@ -192,3 +276,9 @@ outside (0,1]; a lag <= 0; `rain_above_c` <= `snow_below_c`; `min_rate_mm_h`
 [0,1]; a bad lightning range; regimes without the climate scalars, `lags_s`,
 `precip_phase`, `humidity`, `diurnal_temperature`, or (with lightning) the
 `lightning` block.
+
+W4 (gusts): `gusts` not an object; unknown `gusts.*` key; `roughness_length_m`
+outside (0, 10]; `reference_height_m` outside (2 z0, 60]; `reference_gust_factor`
+outside (1, 4]; `f_min_hz` outside [1e-5, 1]; `bands_per_octave` outside [2, 8];
+`window_s` outside [60, 86400]; `blend_s` outside [0, window_s/2];
+`min_advection_speed_m_s` outside (0, 10].

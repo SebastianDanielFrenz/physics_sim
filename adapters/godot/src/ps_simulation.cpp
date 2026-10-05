@@ -10,6 +10,7 @@
 #include "ps/environment/calendar.h"
 #include "ps/environment/climate_io.h"
 #include "ps/environment/environment.h"
+#include "ps/environment/weather_io.h"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -395,6 +396,7 @@ void PsSimulation::rebuild_post_step_and_start() {
                 vs.wheels.push_back(ws);
             }
             vs.powertrain = world_->powertrain_state(vid); // plan section 12.1, same race-free path as the wheels above
+            vs.air = world_->vehicle_air(vid);             // weather plan W4: the air at this chassis (valid only with weather)
 
             // ps_audio A11: feed this tick's engine sound state into the
             // vehicle's own voice (if it has one - most don't, see
@@ -1030,7 +1032,8 @@ float PsSimulation::get_vehicle_rear_steer_fraction(const String& vehicle_name) 
 }
 
 bool PsSimulation::install_environment(const String& climate_absolute_path, double time_scale, const String& start_season,
-                                       std::int64_t start_day, double start_clock_hours) {
+                                       std::int64_t start_day, double start_clock_hours, const String& weather,
+                                       double altitude_offset_m) {
     if (!world_) {
         last_error_ = "install_environment: no world (call load_scenario first)";
         return false;
@@ -1043,6 +1046,15 @@ bool PsSimulation::install_environment(const String& climate_absolute_path, doub
         const ps::environment::ClimateDesc climate = ps::io::load_climate_json(to_std_string(climate_absolute_path));
         ps::environment::EnvironmentConfig cfg;
         cfg.time_scale = time_scale;
+        cfg.altitude_offset_m = altitude_offset_m;
+        // Weather plan W4: "" = none, "dynamic" = the climate's chain, else a preset file.
+        const std::string weather_arg = to_std_string(weather);
+        if (weather_arg == "dynamic") {
+            cfg.weather = ps::environment::EnvironmentWeather::Dynamic;
+        } else if (!weather_arg.empty()) {
+            cfg.weather = ps::environment::EnvironmentWeather::Preset;
+            cfg.weather_preset = ps::io::load_weather_preset_json(weather_arg);
+        }
         if (start_day >= 0) {
             ps::environment::EnvironmentStart start;
             start.season = to_std_string(start_season);
@@ -1095,6 +1107,40 @@ Dictionary PsSimulation::get_environment() const {
     d["sun_direction"] = to_godot(iso_to_godot_dir(e.sun_dir_world));
     d["ghi_w_m2"] = static_cast<double>(e.ghi_w_m2);
     d["cloud_cover"] = static_cast<double>(e.cloud_cover);
+    d["has_weather"] = e.has_weather;
+    if (e.has_weather) {
+        // Weather plan W4: the weather-time station values (the per-vehicle altitude lift is
+        // get_vehicle_air); nothing is computed here.
+        d["air_temp_c"] = static_cast<double>(e.air_temp_c);
+        d["rh"] = static_cast<double>(e.rh);
+        d["dew_point_c"] = static_cast<double>(e.dew_point_c);
+        d["pressure_msl_hpa"] = static_cast<double>(e.pressure_msl_hpa);
+        d["wind_mean_m_s"] = static_cast<double>(e.wind_mean_m_s);
+        d["wind_dir_deg"] = static_cast<double>(e.wind_dir_deg);
+        d["gust_factor"] = static_cast<double>(e.gust_factor);
+        d["precip_mm_h"] = static_cast<double>(e.precip_mm_h);
+        d["precip_type"] = static_cast<int>(e.precip_type);
+        d["lightning_per_min"] = static_cast<double>(e.lightning_per_min);
+    }
+    return d;
+}
+
+Dictionary PsSimulation::get_vehicle_air(const String& vehicle_name) const {
+    Dictionary d;
+    const std::size_t order_index = index_in_order(vehicle_order_, to_std_string(vehicle_name));
+    if (order_index == static_cast<std::size_t>(-1)) return d;
+    const AdapterSnapshot& snap = render_snapshot();
+    if (order_index >= snap.vehicles.size()) return d;
+    const ps::environment::VehicleAir& a = snap.vehicles[order_index].air;
+    if (!a.valid) return d;
+    d["altitude_m"] = static_cast<double>(a.altitude_m);
+    d["pressure_hpa"] = static_cast<double>(a.pressure_pa / 100.0);
+    d["temperature_c"] = static_cast<double>(a.temperature_k - 273.15);
+    d["vapour_pressure_pa"] = static_cast<double>(a.vapour_pressure_pa);
+    d["density_kg_m3"] = static_cast<double>(a.density_kg_m3);
+    d["wind_speed_m_s"] = static_cast<double>(std::sqrt(a.wind_world.x * a.wind_world.x + a.wind_world.y * a.wind_world.y));
+    d["mean_wind_m_s"] = static_cast<double>(std::sqrt(a.mean_wind_world.x * a.mean_wind_world.x + a.mean_wind_world.y * a.mean_wind_world.y));
+    d["wind_world"] = to_godot(iso_to_godot_dir(a.wind_world));
     return d;
 }
 
@@ -1436,10 +1482,13 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_powertrain", "vehicle_name"), &PsSimulation::get_vehicle_powertrain);
     ClassDB::bind_method(D_METHOD("get_vehicle_gauge_info", "vehicle_name"), &PsSimulation::get_vehicle_gauge_info);
     // Weather plan W2
-    ClassDB::bind_method(D_METHOD("install_environment", "climate_absolute_path", "time_scale", "start_season", "start_day", "start_clock_hours"),
-                         &PsSimulation::install_environment, DEFVAL(1.0), DEFVAL(String()), DEFVAL(-1), DEFVAL(12.0));
+    ClassDB::bind_method(D_METHOD("install_environment", "climate_absolute_path", "time_scale", "start_season", "start_day", "start_clock_hours",
+                                  "weather", "altitude_offset_m"),
+                         &PsSimulation::install_environment, DEFVAL(1.0), DEFVAL(String()), DEFVAL(-1), DEFVAL(12.0), DEFVAL(String()),
+                         DEFVAL(0.0));
     ClassDB::bind_method(D_METHOD("has_environment"), &PsSimulation::has_environment);
     ClassDB::bind_method(D_METHOD("get_environment"), &PsSimulation::get_environment);
+    ClassDB::bind_method(D_METHOD("get_vehicle_air", "vehicle_name"), &PsSimulation::get_vehicle_air);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_vehicle_steer_geometry", "vehicle_name"), &PsSimulation::get_vehicle_steer_geometry);

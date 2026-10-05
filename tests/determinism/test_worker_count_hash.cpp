@@ -11,6 +11,7 @@
 #include "counter_force_element.h"
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/environment/vehicle_air.h"
 #include "ps/io/scenario.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
@@ -1130,6 +1131,61 @@ TEST_CASE("Generated-map engine scenario: rpm rises under throttle, upshifts, p_
     CHECK(r.first_low_p_im_after_lift_s >= 0.0);
     CHECK(r.first_low_p_im_after_lift_s <= 0.5);
     CHECK(r.fuel_mass_kg > 0.0);
+}
+
+// Weather plan W4: without a weather environment nothing changed. The hashes below are the values
+// recorded on master BEFORE W4 (CLAUDE.md scenario list, 2026-10-04/05); the W4 branch reproduced every
+// one at 1 and 10 workers. vehicle_step_steer 0xbab69b300eba41a3 (2026-09-25 60/40 split),
+// environment_day 0x2af395ee8a54f0b5 (W2: a clock-only environment, no weather). A sabotage that made
+// the vehicle step read the environment air for a weather-less World, or folded the weather into the
+// hash unconditionally, moves these.
+TEST_CASE("W4: scenarios without a weather environment keep their pre-W4 state hash at 1 and 10 workers",
+          "[determinism][environment][vehicle][heavy][world][io]") {
+    struct Pin { const char* file; std::uint64_t hash; };
+    const Pin pins[] = {
+        {"vehicle_step_steer.json", 0xbab69b300eba41a3ULL},
+        {"vehicle_powertrain.json", 0xc72122c8fe8d0228ULL},
+        {"vehicle_tractor_i4.json", 0xe471f1f3e5ad4328ULL},
+        {"vehicle_fuel_tank.json", 0xc89f5ed4df82b2dcULL},
+        {"vehicle_sim_engine.json", 0x5fe7f8d90bbe23e0ULL},
+        {"vehicle_gen_engine.json", 0x84518e7edcdc3b6aULL},
+        {"environment_day.json", 0x2af395ee8a54f0b5ULL},
+    };
+    for (const Pin& p : pins) {
+        for (const int workers : {1, 10}) {
+            const std::uint64_t h = run_scenario_file(p.file, workers);
+            INFO(p.file << " workers=" << workers << " hash=0x" << std::hex << h << " pinned=0x" << p.hash);
+            CHECK(h == p.hash);
+        }
+    }
+}
+
+// Weather plan W4: data/scenarios/environment_weather.json - car_sedan_sim (simulated engine, live ambient)
+// driving under dynamic weather (x3000 clock, 800 m above the station), per-vehicle ISA air, gusts on the
+// sim clock. The same file belongs in tools/ci.ps1's Windows-vs-Linux hash compare (coordinator).
+TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24 workers and really runs the weather",
+          "[determinism][environment][vehicle][heavy][world][io]") {
+    constexpr std::uint64_t kRecorded = 0x2520d724148fa822ULL; // recorded 2026-10-05 (W4), ps_run at 1 and 10 workers
+    const std::uint64_t reference = run_scenario_file("environment_weather.json", 1);
+    INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
+    CHECK(reference == kRecorded);
+    for (const int workers : {2, 4, 10, 24}) {
+        const std::uint64_t h = run_scenario_file("environment_weather.json", workers);
+        INFO("workers=" << workers << " hash=0x" << std::hex << h);
+        REQUIRE(h == reference);
+    }
+
+    // The weather and the gusts really ran: the vehicle's air is valid, 800 m up, and the clock moved.
+    ps::io::Scenario sc = ps::io::load_scenario(std::string(PS_SOURCE_DIR) + "/data/scenarios/environment_weather.json");
+    sc.world_config.job_workers = 1;
+    ps::io::BuiltScenario built = ps::io::build_scenario(sc);
+    ps::World& world = *built.world;
+    for (int i = 0; i < 480; ++i) world.step();
+    const ps::environment::VehicleAir air = world.vehicle_air(built.vehicles_by_name.at("car"));
+    CHECK(air.valid);
+    CHECK(air.altitude_m > 900.0);
+    CHECK(air.pressure_pa < 95000.0);
+    CHECK(world.snapshots().read().environment.has_weather);
 }
 
 TEST_CASE("State hash survives 1000 runs of randomised worker count and scheduling grain", "[determinism][stress][jobs][world][backend]") {

@@ -1,29 +1,51 @@
 // ps/environment/environment.h - the environment object (weather plan K1/K2,
-// 1.3, 11.2), W2 subset: clock + calendar + sun. It will own the weather
-// timeline and the surface-condition grid in later increments; the public
-// surface below is the part a game server and World::install_environment use
-// and does not change shape when those arrive.
+// 1.3, 11.2): clock + calendar + sun (W2), and - when the config asks for it -
+// the weather timeline (W3) plus the atmosphere/wind coupling (W4). It will own
+// the surface-condition grid in later increments; the public surface below is
+// the part a game server and World::install_environment use and does not change
+// shape when those arrive.
 //
 // Time model (plan 2.1): environment time is a pure, non-accumulating function
 // of the sim tick (EnvClock). The Environment keeps NO per-tick history: its
 // only mutable state is the clock anchor (changed by set_time/set_time_scale),
-// the calendar/sun are immutable after construction, and the per-tick
-// EnvironmentSnapshot is a cache of the pure evaluate(t_env).
+// the calendar/sun/weather are immutable after construction, and the per-tick
+// EnvironmentSnapshot / air state are caches of pure functions of
+// (tick, clock anchor, climate, seed, config).
+//
+// Weather and atmosphere (W4). With EnvironmentConfig::weather != Off the
+// Environment owns a WeatherTimeline (seed = EnvironmentConfig::seed). Each tick
+// begin_tick also derives the SEA-LEVEL reference atmosphere from the weather
+// sample (sea-level pressure, the station temperature lifted to sea level on
+// the ISA lapse, the station vapour pressure lifted likewise), the mean wind
+// vector in the World frame and - when the climate has a gusts block - the gust
+// amplitudes. sample_air(position) then yields what one vehicle sits in: the
+// ISA lift to the chassis altitude (location.elevation_m + altitude_offset_m +
+// world z), the humid-air density and wind = mean + gust at that position.
+// Gusts run on the SIM clock (tick / tick_hz), the weather on environment time
+// (owner question Q6, PROVISIONAL, weather plan 3.8).
 //
 // Hashed state (fold_state_hash): the clock anchor {anchor_env_s, anchor_tick,
-// tick_hz, scale} and the calendar mode. Everything else is a closed-form
-// function of those plus the immutable climate.
+// tick_hz, scale} and the calendar mode; ONLY when weather is on, additionally
+// the weather timeline's fold_hash (seed, mode, preset, overrides), the
+// altitude offset and the gusts flag. Everything else is a closed-form
+// function of those plus the immutable climate. An environment without weather
+// hashes exactly as before W4.
 //
 // Not thread safe: World calls begin_tick from the sim thread; a game server
-// uses its own instance.
+// uses its own instance. sample_air/evaluate are const but read/refresh the
+// weather cursor cache (mutable), so they must not be called concurrently.
 
 #pragma once
 
+#include "ps/environment/atmosphere.h"
 #include "ps/environment/calendar.h"
 #include "ps/environment/climate_desc.h"
 #include "ps/environment/env_time.h"
 #include "ps/environment/environment_snapshot.h"
 #include "ps/environment/sun.h"
+#include "ps/environment/vehicle_air.h"
+#include "ps/environment/weather.h"
+#include "ps/environment/wind.h"
 #include "ps/types.h"
 
 #include <cstdint>
@@ -40,6 +62,13 @@ struct EnvironmentStart {
     real time_of_day_s = 0.0;    // since the day's start (midnight), env seconds
 };
 
+// How the environment obtains its weather (W4 owns the plumbing; the model is W3).
+enum class EnvironmentWeather : std::uint8_t {
+    Off,      // no weather timeline: the World's own ambient/density/wind stay in charge
+    Dynamic,  // the climate's regime chain
+    Preset    // EnvironmentConfig::weather_preset held constant
+};
+
 struct EnvironmentConfig {
     // Calendar mode (plan 2.2): both empty/negative = dynamic (the calendar
     // advances through the seasons). A season name pins every day to that
@@ -53,14 +82,26 @@ struct EnvironmentConfig {
     // Rotation of "north" about the World's Z axis, degrees counter-clockwise
     // from +Y (so 0 = north is +Y, east is +X). The World frame is Z up.
     real north_yaw_deg = 0.0;
+
+    // --- W4 ---
+    EnvironmentWeather weather = EnvironmentWeather::Off;
+    WeatherPresetDesc weather_preset;  // the base in Preset mode
+    // Seed of the weather chain and of the gust phases (counter-hash keyed).
+    std::uint64_t seed = 0;
+    // The World's z = 0 sits at location.elevation_m + altitude_offset_m above
+    // sea level; vehicles lift/lower the atmosphere by their chassis z from there.
+    real altitude_offset_m = 0.0;
 };
 
 class Environment {
 public:
     // Throws std::invalid_argument for a bad config (unknown season, both
-    // fixed modes, bad scale, an epoch/start outside its day) or a bad climate
-    // (Calendar's validation).
+    // fixed modes, bad scale, an epoch/start outside its day, weather without
+    // the climate blocks the timeline needs) or a bad climate (Calendar's
+    // validation).
     explicit Environment(const ClimateDesc& climate, const EnvironmentConfig& config = {});
+    Environment(const Environment&) = delete;
+    Environment& operator=(const Environment&) = delete;
 
     const ClimateDesc& climate() const { return climate_; }
     const Calendar& calendar() const { return calendar_; }
@@ -69,6 +110,14 @@ public:
     const EnvClock& clock() const { return clock_; }
     // t_env at which the configured start sits (config.start, else 0).
     real start_env_s() const { return start_env_s_; }
+
+    // W4: true iff the environment owns a weather timeline, i.e. it provides the
+    // atmosphere (ambient pressure/temperature/humidity, density, wind) a World
+    // would otherwise take from set_ambient/set_aero_environment.
+    bool provides_atmosphere() const { return weather_.has_value(); }
+    const WeatherTimeline* weather() const { return weather_ ? &*weather_ : nullptr; }
+    WeatherTimeline* weather() { return weather_ ? &*weather_ : nullptr; }
+    const GustField* gusts() const { return gust_ ? &*gust_ : nullptr; }
 
     // --- Clock ---
     // Anchors the clock so that env time == start_env_s() at `tick` with the
@@ -82,17 +131,47 @@ public:
     void set_time_scale(real scale, std::int64_t tick);
 
     // --- Per-tick evaluation ---
-    // Evaluates this tick's snapshot (cached in current()). Allocation-free.
+    // Evaluates this tick's snapshot (cached in current()) and the air state
+    // sample_air reads. Allocation-free.
     void begin_tick(std::int64_t tick);
     const EnvironmentSnapshot& current() const { return current_; }
     // The pure function begin_tick caches: the snapshot for an arbitrary env
     // time at the CURRENT clock scale. Allocation-free.
     EnvironmentSnapshot evaluate(real t_env) const;
 
+    // W4: the air at a World position for the tick begin_tick last evaluated.
+    // valid == false (all else default) without weather. Allocation-free; two
+    // ps::math::pow/exp (the ISA lift) plus the gust evaluation (96 cos per
+    // axis set, doubled while crossfading a window boundary).
+    VehicleAir sample_air(const Vec3& position_world) const;
+    // The sim time the gusts of the current tick are evaluated at.
+    real gust_time_s() const { return air_.t_gust; }
+    // The mean wind vector (World frame, direction the air moves toward) of this tick.
+    Vec3 mean_wind_world() const { return air_.mean_wind; }
+    // The along-wind standard deviation the gusts of this tick are synthesised with.
+    real gust_sigma_u() const { return air_.sigma_u; }
+
     // FNV-1a fold of the hashed state (see the file header).
     std::uint64_t fold_state_hash(std::uint64_t h) const;
 
 private:
+    struct AirState {
+        bool valid = false;
+        SeaLevelAtmosphere sea;       // reference the ISA lift starts from
+        Vec3 mean_wind;               // World frame, toward
+        real mean_speed = 0.0;
+        real sigma_u = 0.0;
+        real t_gust = 0.0;            // sim seconds
+        GustField::Amplitudes amps;
+        GustField::Blend blend;
+        real dir_x = 1.0, dir_y = 0.0;   // advection direction of the current window
+        real adv_speed = 0.0;
+    };
+
+    EnvironmentSnapshot evaluate_impl(real t_env, WeatherSample* weather_out) const;
+    void update_air(std::int64_t tick, real t_env, const WeatherSample& w);
+    void invalidate_gust_cache() { adv_valid_ = false; }
+
     ClimateDesc climate_;
     EnvironmentConfig config_;
     Calendar calendar_;
@@ -103,6 +182,18 @@ private:
     Vec3 east_world_{1.0, 0.0, 0.0};
     Vec3 north_world_{0.0, 1.0, 0.0};
     EnvironmentSnapshot current_;
+
+    // W4
+    std::optional<WeatherTimeline> weather_;
+    std::optional<GustField> gust_;
+    mutable WeatherCursor cursor_;
+    AirState air_;
+    GustField::Phases phases_cur_, phases_prev_;
+    // Advection velocity of the frozen gust pattern for one window (pure
+    // function of (window, clock anchor); recomputed whenever the clock changes).
+    bool adv_valid_ = false;
+    std::int64_t adv_window_ = 0;
+    real adv_dir_x_ = 1.0, adv_dir_y_ = 0.0, adv_speed_ = 0.0;
 };
 
 } // namespace ps::environment

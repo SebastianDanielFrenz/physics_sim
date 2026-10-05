@@ -1,0 +1,18 @@
+{
+  "format": "physics_sim.climate/1",
+  "extends": "test_weather.json",
+  "gusts": {
+    "roughness_length_m": 0.03,
+    "reference_height_m": 10.0,
+    "reference_gust_factor": 1.35,
+    "f_min_hz": 0.0016666666666666668,
+    "bands_per_octave": 2,
+    "window_s": 600.0,
+    "blend_s": 30.0,
+    "min_advection_speed_m_s": 0.5
+  },
+  "source": {
+    "purpose": "TEST FIXTURE for the W4 gust synthesis and atmosphere coupling (tests/unit/test_environment_wind.cpp, test_environment_world_atmosphere.cpp): test_weather.json (ASSUMED statistics, see there) plus the gusts block. NOT a climatology.",
+    "gusts": "roughness_length_m 0.03 = open flat terrain with low grass, reference_height_m 10 = the standard anemometer height, reference_gust_factor 1.35 = the 3 s gust factor over a 10 min mean that the synthesised field MEASURES at the WMO intensity I = 0.1515 (U 10 m/s; 1.346 over 200 records, tests/unit/test_environment_wind.cpp) [M] - weather plan 3.8 cites ~1.66 for open land (Harper et al. 2010, secondary), which a Gaussian field reaches only at I ~ 0.29, so a published gust factor of 1.66 here yields sigma_u/U 0.29; f_min 1/600 Hz = the 10 min mean cutoff (the weather timeline carries the variation below it), bands_per_octave 2, window 600 s, blend 30 s, min_advection_speed 0.5 m/s: DESIGN values of wind.h, not measurements. The turbulence intensity I = c_u kappa / ln(z / z0) with c_u 2.2 (WMO-No. 8 Vol. I ch. 5 eq. 5.A.1, secondary source, [M]) is fixed in code; the gust factor of each weather regime scales it."
+  }
+}

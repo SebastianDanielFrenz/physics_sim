@@ -26,9 +26,16 @@ namespace ps {
 
 // Pa, K. Default = ISA (International Standard Atmosphere, ISO 2533:1975)
 // sea-level values: 101325 Pa, 288.15 K (15 degC).
+//
+// vapour_pressure_pa (weather plan W4): partial pressure of water vapour in the
+// air, Pa. 0 = dry air = every behaviour before humidity existed. A seam only:
+// nothing reads it yet (the simulated engine may later use the dry-air partial
+// pressure for charge mass, an SAE J1349-style correction); never hashed, like
+// the rest of the sample.
 struct AmbientSample {
     real pressure_pa = 101325.0;
     real temperature_k = 288.15;
+    real vapour_pressure_pa = 0.0;
 };
 
 } // namespace ps

@@ -43,6 +43,7 @@
 
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/environment/environment_snapshot.h"
+#include "ps/environment/vehicle_air.h"
 #include "ps/io/scenario.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
@@ -109,6 +110,10 @@ struct VehicleDynamicSnapshot {
     // as the wheels above (World::powertrain_state is sim-thread-only live
     // state, same contract as wheel_telemetry).
     ps::drivetrain::PowertrainSnapshot powertrain;
+    // Weather plan W4: the air this vehicle sat in (World::vehicle_air, a POD
+    // copied per tick like the fields above). valid is false without a weather
+    // environment.
+    ps::environment::VehicleAir air;
     // Gamepad rumble (haptics_core.h): the chassis's PROPER (gravity-
     // removed) linear acceleration, CHASSIS frame (x fwd, y left, z up),
     // computed once per SIM TICK (240 Hz) in post_step by finite-
@@ -408,15 +413,30 @@ public:
     // false with last_error set while the sim thread runs, or on any load
     // error). Without it the demo has no environment and every other adapter
     // behaviour is unchanged.
+    // Weather plan W4: `weather` empty = no weather (clock + sun only), "dynamic" = the
+    // climate's regime chain, anything else = the absolute path of a
+    // physics_sim.weather_preset/1 file held constant; `altitude_offset_m` is added to
+    // the climate's elevation. With weather the core environment provides every
+    // vehicle's air (ISA at its altitude, humid-air density, wind, gusts).
     bool install_environment(const godot::String& climate_absolute_path, double time_scale, const godot::String& start_season,
-                             std::int64_t start_day, double start_clock_hours);
+                             std::int64_t start_day, double start_clock_hours, const godot::String& weather = godot::String(),
+                             double altitude_offset_m = 0.0);
     [[nodiscard]] bool has_environment() const;
     // Race-free (render snapshot). Empty Dictionary without an environment.
     // Keys: t_env_s, time_scale, year, season (index), season_name, day_in_season,
     // day_of_year, time_of_day_s, day_s, night_s, day_fraction, clock_hours,
     // is_day, sun_elevation_deg, sun_azimuth_deg, sun_direction (Godot-frame
-    // unit Vector3 TOWARDS the sun), ghi_w_m2, cloud_cover.
+    // unit Vector3 TOWARDS the sun), ghi_w_m2, cloud_cover. W4, with weather
+    // (has_weather true): air_temp_c, rh, dew_point_c, pressure_msl_hpa, wind_mean_m_s,
+    // wind_dir_deg (compass, FROM), gust_factor, precip_mm_h, precip_type (int),
+    // lightning_per_min.
     [[nodiscard]] godot::Dictionary get_environment() const;
+    // Weather plan W4 (race-free render snapshot): the air one vehicle sits in. Empty
+    // Dictionary for an unknown vehicle or without weather. Keys: altitude_m,
+    // pressure_hpa, temperature_c (outside), vapour_pressure_pa, density_kg_m3,
+    // wind_speed_m_s (horizontal, mean + gust), mean_wind_m_s, wind_world (Godot-frame
+    // Vector3, the air's velocity incl. gust).
+    [[nodiscard]] godot::Dictionary get_vehicle_air(const godot::String& vehicle_name) const;
 
     [[nodiscard]] godot::PackedStringArray get_vehicle_names() const;
     [[nodiscard]] godot::String get_vehicle_chassis_body_name(const godot::String& vehicle_name) const;

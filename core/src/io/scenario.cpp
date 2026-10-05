@@ -1,6 +1,7 @@
 #include "ps/io/scenario.h"
 
 #include "ps/environment/climate_io.h"
+#include "ps/environment/weather_io.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/terrain/procedural_terrain.h"
@@ -260,10 +261,10 @@ ScenarioEnvironment read_environment(const json& j, const std::filesystem::path&
     if (!j.is_object()) fail("expected an object");
     for (const auto& [key, v] : j.items()) {
         (void)v;
-        if (key == "weather" || key == "surface_conditions" || key == "default_tyre_profile")
-            fail("key \"" + key + "\" is not supported yet (weather plan W3+)");
+        if (key == "surface_conditions" || key == "default_tyre_profile")
+            fail("key \"" + key + "\" is not supported yet (weather plan W5+)");
         if (key != "climate" && key != "seed" && key != "time" && key != "season" && key != "fixed_day_of_year" &&
-            key != "north_yaw_deg" && key != "events")
+            key != "north_yaw_deg" && key != "events" && key != "weather" && key != "altitude_offset_m")
             fail("unknown key \"" + key + "\"");
     }
     ScenarioEnvironment e;
@@ -273,6 +274,30 @@ ScenarioEnvironment read_environment(const json& j, const std::filesystem::path&
     e.climate_path = cp.lexically_normal().string();
     e.climate = load_climate_json(e.climate_path);
     if (j.contains("seed")) e.seed = j.at("seed").get<std::uint64_t>();
+    e.config.seed = e.seed;
+    if (j.contains("altitude_offset_m")) e.config.altitude_offset_m = j.at("altitude_offset_m").get<real>();
+    // Weather plan W4: "weather": "dynamic" (the climate's regime chain) or
+    // {"preset": "<file>"} (a physics_sim.weather_preset/1 file held constant).
+    // Absent = no weather: the World keeps its own ambient/density/wind.
+    if (j.contains("weather")) {
+        const json& w = j.at("weather");
+        if (w.is_string()) {
+            if (w.get<std::string>() != "dynamic") fail("\"weather\" must be \"dynamic\" or {\"preset\": <file>}");
+            e.config.weather = environment::EnvironmentWeather::Dynamic;
+        } else if (w.is_object()) {
+            for (const auto& [key, v] : w.items()) {
+                (void)v;
+                if (key != "preset") fail("unknown key \"weather." + key + "\"");
+            }
+            if (!w.contains("preset") || !w.at("preset").is_string()) fail("\"weather\" needs a string \"preset\"");
+            std::filesystem::path pp = w.at("preset").get<std::string>();
+            if (pp.is_relative()) pp = scenario_dir / pp;
+            e.config.weather = environment::EnvironmentWeather::Preset;
+            e.config.weather_preset = load_weather_preset_json(pp.lexically_normal());
+        } else {
+            fail("\"weather\" must be \"dynamic\" or {\"preset\": <file>}");
+        }
+    }
 
     if (j.contains("time")) {
         const json& t = j.at("time");
