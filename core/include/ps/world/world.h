@@ -328,6 +328,12 @@ public:
     // PowertrainEnergy::n2o_external_added; throws for a vehicle without a bottle or a NaN mass).
     [[nodiscard]] real n2o_bottle_mass(VehicleId id) const;
     void set_n2o_bottle_mass(VehicleId id, real kg);
+    // Engine thermal plan T1 (vault PHYS-063): a vehicle with a cooling_system keeps lumped coolant/oil temperatures.
+    // engine_thermal_state returns the live values in deg C (sim thread only; throws for a vehicle without thermal),
+    // set_engine_thermal_state queues a new state for the next tick boundary (wax/play follow the coolant, fan off;
+    // throws for a vehicle without thermal or a non-finite value). reset_vehicle does not touch thermal state.
+    [[nodiscard]] drivetrain::EngineThermalState engine_thermal_state(VehicleId id) const;
+    void set_engine_thermal_state(VehicleId id, const drivetrain::EngineThermalState& state);
     // PHYS-033 P4 I7c C16b: replaces a vehicle's simulated engine's runtime
     // maps (e.g. a background Full-quality regeneration replacing a Preview
     // one, or a tuned/edited map file/cache hit) - EngineMapsPtr is the C16a
@@ -576,6 +582,14 @@ private:
         std::size_t flow_g_s, bottle_kg, bottle_bar, active;
     };
     std::vector<std::vector<N2oTelemetryChannels>> n2o_telemetry_channels_;
+
+    // Engine thermal plan T1: vehicle<i>.thermal.{coolant_c,oil_c,thermostat,fan,q_wall_w,q_friction_w,q_radiator_w,
+    // friction_scale}, registered (and recorded) only for a vehicle with a cooling_system, right after its n2o
+    // channels. Outer index == VehicleId.index; inner 0 or 1.
+    struct ThermalTelemetryChannels {
+        std::size_t coolant_c, oil_c, thermostat, fan, q_wall_w, q_friction_w, q_radiator_w, friction_scale;
+    };
+    std::vector<std::vector<ThermalTelemetryChannels>> thermal_telemetry_channels_;
 
     // PHYS-033 P4 I7c C16b: one entry per vehicle with a simulated engine
     // (a ps::drivetrain::SimulatedEngineDesc component, never a

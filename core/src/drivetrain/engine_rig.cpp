@@ -2,6 +2,7 @@
 
 #include "engine_sound_state.h"
 #include "powertrain.h"
+#include "ps/io/engine_thermal_io.h"
 #include "ps/vehicle/vehicle_reset.h"
 
 #include <cmath>
@@ -26,6 +27,8 @@ struct EngineRig::Impl {
     std::vector<real> channel_values;
     int dyno_scale_channel_index = -1;
     drivetrain::EngineSoundState sound_state;
+    AmbientSample ambient{};
+    real ram_speed_mps = 0.0;
 
     Impl(drivetrain::PowertrainDesc desc, bool dyno_enabled, real tick_hz, real substep_hz, const std::string& name)
         : pt_desc(std::move(desc)),
@@ -80,6 +83,19 @@ EngineRig::EngineRig(const std::string& engine_path, const io::EngineMapOptions&
         crank_shaft.ports.push_back(drivetrain::PortRef{"dyno", "shaft", false});
     }
     pt.shafts.push_back(crank_shaft);
+    if (!config.cooling_system_path.empty()) {
+        drivetrain::EngineThermalConfig tc;
+        std::string thermal_path = config.engine_thermal_path;
+        if (thermal_path.empty()) thermal_path = io::engine_default_thermal_path(engine_path);
+        if (thermal_path.empty()) {
+            throw std::runtime_error("EngineRig: a cooling_system needs an engine thermal file, but engine file '" + engine_path +
+                                      "' has no 'default_thermal' and Config::engine_thermal_path is empty");
+        }
+        tc.engine = io::load_engine_thermal_json(thermal_path);
+        tc.cooling = io::load_cooling_system_json(config.cooling_system_path);
+        tc.start = config.thermal_start;
+        pt.thermal = std::move(tc);
+    }
 
     impl_ = std::make_unique<Impl>(std::move(pt), config.dyno.enabled, config.tick_hz, config.substep_hz, engine_path);
 
@@ -103,8 +119,28 @@ void EngineRig::set_dyno_torque_scale(real v) {
     }
 }
 
+void EngineRig::set_ambient(const AmbientSample& a) {
+    impl_->ambient = a; // the thermal model's air
+    impl_->ctx.ambient = a; // and the engine's
+}
+void EngineRig::set_thermal_env(real ambient_k, real ram_speed_mps) {
+    impl_->ambient.temperature_k = ambient_k; // the thermal model only; the engine keeps its own ambient (set_ambient)
+    impl_->ram_speed_mps = ram_speed_mps;
+}
+bool EngineRig::has_thermal() const { return impl_->powertrain.has_thermal(); }
+const drivetrain::EngineThermalSnapshot& EngineRig::thermal_snapshot() const { return impl_->powertrain.thermal_snapshot(); }
+drivetrain::EngineThermalState EngineRig::engine_thermal_state() const {
+    const drivetrain::EngineThermal* t = impl_->powertrain.thermal();
+    if (t == nullptr) throw std::runtime_error("EngineRig::engine_thermal_state: no cooling_system configured");
+    return drivetrain::EngineThermalState{t->engine_temperature_k() - drivetrain::kCelsiusToKelvin,
+                                          t->oil_temperature_k() - drivetrain::kCelsiusToKelvin};
+}
+void EngineRig::set_engine_thermal_state(const drivetrain::EngineThermalState& s) { impl_->powertrain.request_thermal_state(s); }
+void EngineRig::set_thermal_friction_scale_override_for_test(real k) { impl_->powertrain.thermal_friction_scale_override_for_test(k); }
+
 void EngineRig::step() {
     drivetrain::Powertrain& pt = impl_->powertrain;
+    pt.set_thermal_env(impl_->ambient.temperature_k, impl_->ambient.pressure_pa, impl_->ram_speed_mps);
     pt.begin_tick();
     for (int k = 0; k < impl_->substeps_per_tick; ++k) {
         impl_->ctx.first_substep_of_tick = (k == 0);

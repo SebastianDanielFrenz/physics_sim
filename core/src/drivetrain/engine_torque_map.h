@@ -106,6 +106,12 @@ public:
         // byte-identical to before this commit.
         bool has_fuel_model = false;
         real eta_i = 0.0; // only meaningful when has_fuel_model && !has_fuel_map
+        // Engine thermal plan T1 (vault PHYS-063): phi_f, the friction share of the motoring curve (the rest is
+        // pumping). T1b: the cold-oil increment is (k - 1) * phi_f * |m(n_ref)| * sqrt(n / n_ref)
+        // (hydrodynamic_friction.h) - pumping and the Coulomb caps are never scaled. Also the friction-heat share
+        // of the warm curve. Set by the Powertrain from the engine thermal file; 1.0 (and unused: k stays 1.0)
+        // without thermal.
+        real thermal_friction_fraction = 1.0;
     };
 
     explicit EngineTorqueMap(Desc desc);
@@ -145,6 +151,7 @@ public:
 private:
     Desc desc_;
     real theta_ff_ = 0.0; // build-time idle feedforward (plan section 6.1.4), computed once in the constructor
+    real idle_span_ = 0.0; // w(idle) - m(idle): T1b shifts the feedforward/authority by dF(idle) / idle_span_
     real c_k_ = 0.0;      // -motoring(0): the Coulomb part of engine friction, computed once in the constructor
 
     // Hashed (plan section 6.1.9): state, idle integrator, limiter cut flag, dfco flag.
@@ -159,6 +166,7 @@ private:
     // Stashed by pre_solve, read back by post_solve.
     real tau0_ = 0.0, d_ = 0.0, omega_old_ = 0.0;
     real tau_smooth_ = 0.0, tau_comb_ = 0.0, tau_start_ = 0.0;
+    real tau_hyd_ = 0.0; // T1b: this substep's cold-oil friction increment (part of tau_smooth_), 0 at k == 1
     // PHYS-033 P4 I7a C5: this substep's fuel flow, evaluated in pre_solve at
     // the substep-start rpm/theta_c against desc_.fuel_map, consumed by
     // post_solve. PHYS-033 P4 I7a C5d review fix (N10): a prior version of

@@ -20,9 +20,11 @@
 #pragma once
 
 #include "ps/drivetrain/energy_ledger.h"
+#include "ps/drivetrain/engine_thermal_desc.h"
 #include "ps/drivetrain/powertrain_desc.h" // LoadDynoDesc
 #include "ps/drivetrain/powertrain_state.h" // EngineSoundState, EngineState
 #include "ps/io/vehicle_io.h"               // EngineMapOptions
+#include "ps/world/ambient.h"
 
 #include <memory>
 #include <string>
@@ -50,6 +52,12 @@ public:
         // idle instead (Powertrain's own bootstrap convention), for a
         // harness that wants to start already spinning.
         drivetrain::EngineState initial_engine_state = drivetrain::EngineState::Off;
+        // Engine thermal plan T1 (vault PHYS-063): a non-empty cooling_system_path attaches the lumped thermal model.
+        // The engine thermal file is engine_thermal_path if given, else the engine file's "default_thermal" (an
+        // error if it has none). thermal_start as in a vehicle's "engine_thermal_start".
+        std::string cooling_system_path;
+        std::string engine_thermal_path;
+        drivetrain::ThermalStartKind thermal_start = drivetrain::ThermalStartKind::Warm;
     };
 
     // Throws std::runtime_error on a malformed engine/fuel/installation file
@@ -105,6 +113,16 @@ public:
     [[nodiscard]] const drivetrain::EngineSoundState& engine_sound_state() const;
     [[nodiscard]] const drivetrain::PowertrainEnergy& ledger() const;
     [[nodiscard]] bool has_dyno() const;
+
+    // Engine thermal plan T1 (tests and tools). The environment is held at its last value across step() calls.
+    void set_ambient(const AmbientSample& a);                   // the engine's AND the thermal model's air (K, Pa)
+    void set_thermal_env(real ambient_k, real ram_speed_mps);   // the thermal model's air temperature and the ram airspeed only
+    [[nodiscard]] bool has_thermal() const;
+    [[nodiscard]] const drivetrain::EngineThermalSnapshot& thermal_snapshot() const; // has_thermal false without thermal
+    [[nodiscard]] drivetrain::EngineThermalState engine_thermal_state() const;       // deg C; throws without thermal
+    void set_engine_thermal_state(const drivetrain::EngineThermalState& s);          // applied at the next step(); throws without thermal
+    // Test hook (plan U9): pins both friction scales to k whatever the oil temperature is. No-op without thermal.
+    void set_thermal_friction_scale_override_for_test(real k);
 
 private:
     struct Impl;

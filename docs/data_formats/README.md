@@ -16,6 +16,7 @@ not what the example files under `data/` happen to contain. The loaders are:
 | scenario | `core/src/io/scenario.cpp` (`load_scenario`, `build_scenario`) | `ps/io/scenario.h` |
 | fuel | `core/src/io/fuel_io.cpp` (`load_fuel_json`) | `ps/drivetrain/fuel_desc.h` (`FuelDesc`) |
 | oxidizer | `core/src/io/nitrous_io.cpp` (`load_oxidizer_json`) | `ps/drivetrain/oxidizer_desc.h` (`OxidizerDesc`) |
+| engine_thermal / cooling_system | `core/src/io/engine_thermal_io.cpp` (`load_engine_thermal_json`, `load_cooling_system_json`; the vehicle keys `cooling_system`/`engine_thermal_start` and the engine key `default_thermal` via `load_vehicle_json`) | `ps/drivetrain/engine_thermal_desc.h` (`EngineThermalDesc`, `CoolingSystemDesc`) |
 | n2o_bottle / nitrous_kit / nitrous_controller | `core/src/io/nitrous_io.cpp` (`load_n2o_bottle_json`, `load_nitrous_kit_json`, `load_nitrous_controller_json`; vehicle components via `load_vehicle_json`) | `ps/drivetrain/nitrous_desc.h` (`N2oBottleDesc`, `NitrousKitDesc`, `NitrousControllerDesc`) |
 
 The powertrain **graph itself** (which ports may connect, what gets
@@ -39,8 +40,10 @@ the end of this file under "Discrepancies found".
 - [`surfaces.md`](surfaces.md) — `physics_sim.surfaces/1`, `data/surfaces/surfaces.json`.
 - [`scenario.md`](scenario.md) — `physics_sim.scenario/1`, `data/scenarios/*.json`.
 - [`fuel.md`](fuel.md) — `physics_sim.fuel/1`, `data/fuels/*.json`. Lower heating value, stoichiometric AFR, density — cited fuel properties, no combustion model.
+- [`engine_thermal.md`](engine_thermal.md) — `physics_sim.engine_thermal/1`, `data/engine_thermal/*.json`. The engine side of the lumped engine thermal model: capacities, heat split, oil viscosity friction, thermostat.
+- [`cooling_system.md`](cooling_system.md) — `physics_sim.cooling_system/1`, `data/cooling_systems/*.json`. The vehicle side: radiator, fan, gauge, warnings; naming one in a vehicle opts it in.
 - [`oxidizer.md`](oxidizer.md) — `physics_sim.oxidizer/1`, `data/oxidizers/*.json`. NIST nitrous-oxide saturation and gas properties, the HEM/Dyer jet-flow tables built from them.
-- [`nitrous.md`](nitrous.md) � `physics_sim.n2o_bottle/1`, `physics_sim.nitrous_kit/1`, `physics_sim.nitrous_controller/1` (`data/n2o_bottles/`, `data/nitrous_kits/`, `data/nitrous_controllers/`): the slot-in nitrous hardware parts, their overrides, control channels and the vehicle wiring.
+- [`nitrous.md`](nitrous.md) � `physics_sim.n2o_bottle/1`, `physics_sim.nitrous_kit/1`, `physics_sim.nitrous_controller/1` (`data/n2o_bottles/`, `data/nitrous_kits/`, `data/nitrous_controllers/`): the slot-in nitrous hardware parts, their overrides, control channels and the vehicle wiring.
 - [`climate.md`](climate.md) — `physics_sim.climate/1`, `data/climates/*.json`. Location, sun, calendar and seasons (W1); per-season weather regimes, transitions, lags, precipitation phase, humidity, diurnal temperature, lightning (W3).
 - [`weather_preset.md`](weather_preset.md) — `physics_sim.weather_preset/1`, `data/weather_presets/*.json`. One fixed-value regime: the base in Preset mode or an override target.
 - [`surface_conditions.md`](surface_conditions.md) — `physics_sim.surface_conditions/1`, `data/surface_conditions/*.json`. Per surface class: kind, albedo, emissivity and a two-layer thermal column (W5); the road surface temperature model.

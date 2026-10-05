@@ -24,6 +24,7 @@
 #include "clutch.h"
 #include "components.h"
 #include "energy_store.h"
+#include "engine_thermal.h"
 #include "engine_torque_map.h"
 #include "gearbox.h"
 #include "manual_tcu.h"
@@ -178,9 +179,35 @@ public:
             ledger_.n2o_external_added += nitrous_->set_bottle_kg(n2o_bottle_set_value_);
             n2o_bottle_set_pending_ = false;
         }
+        // Engine thermal plan T1: a pending set_engine_thermal_state request (and an "ambient" start's cold soak)
+        // is applied here, at the tick boundary, like the fuel tank's.
+        if (thermal_) thermal_->begin_tick();
         ledger_tick_start_ = ledger_;
     }
     void end_tick();
+
+    // Engine thermal plan T1 (engine_thermal.h): the lumped engine/oil temperature model, nullptr unless the
+    // vehicle opted in with a cooling_system. set_thermal_env is called by the owner once per tick BEFORE
+    // begin_tick (ambient, ram airspeed); the pump speed comes from the crank at end_tick.
+    [[nodiscard]] bool has_thermal() const { return thermal_ != nullptr; }
+    [[nodiscard]] const EngineThermal* thermal() const { return thermal_.get(); }
+    void set_thermal_env(real ambient_k, real ambient_pressure_pa, real ram_speed_mps) {
+        if (thermal_) {
+            ThermalEnv e;
+            e.ambient_k = ambient_k;
+            e.ambient_pressure_pa = ambient_pressure_pa;
+            e.ram_speed_mps = ram_speed_mps;
+            thermal_->set_env(e);
+        }
+    }
+    [[nodiscard]] const EngineThermalSnapshot& thermal_snapshot() const { return thermal_snapshot_zero_or_live(); }
+    // Queues a new coolant/oil state for the NEXT begin_tick() (wax/play follow the coolant, fan off). Throws
+    // std::runtime_error for a vehicle without thermal or a non-finite value.
+    void request_thermal_state(const EngineThermalState& s);
+    // Test hook (plan U9): pins both friction scales; see EngineThermal.
+    void thermal_friction_scale_override_for_test(real k) {
+        if (thermal_) thermal_->set_friction_scale_override_for_test(k);
+    }
 
     // N2O plan N1: the nitrous system (nitrous_system.h), nullptr without a bottle + kit.
     [[nodiscard]] bool has_nitrous() const { return nitrous_ != nullptr; }
@@ -659,6 +686,15 @@ private:
     std::unique_ptr<NitrousSystem> nitrous_;
     bool n2o_bottle_set_pending_ = false;
     real n2o_bottle_set_value_ = 0.0;
+    // Engine thermal plan T1: the lumped thermal model (nullptr without a cooling_system; hashed only when present).
+    // thermal_coulomb_share_ = the part of the engine Coulomb row's friction loss that becomes coolant/oil heat:
+    // 1 for a simulated engine, motoring_friction_fraction for the graph engine (its motoring curve lumps pumping).
+    std::unique_ptr<EngineThermal> thermal_;
+    real thermal_coulomb_share_ = 1.0;
+    EngineThermalSnapshot thermal_snapshot_empty_{};
+    [[nodiscard]] const EngineThermalSnapshot& thermal_snapshot_zero_or_live() const {
+        return thermal_ ? thermal_->snapshot() : thermal_snapshot_empty_;
+    }
     // PHYS-033 P4 I7a C3: the throttle-command stage between the pedal and
     // the engine (throttle_stage.h) - built from either an explicit
     // ThrottleControlDesc component or (no such component) the IMPLICIT

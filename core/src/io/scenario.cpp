@@ -3,6 +3,7 @@
 #include "ps/environment/climate_io.h"
 #include "ps/environment/surface_conditions_io.h"
 #include "ps/environment/weather_io.h"
+#include "ps/io/engine_thermal_io.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/terrain/procedural_terrain.h"
@@ -250,6 +251,18 @@ ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenari
     if (p.is_relative()) p = scenario_dir / p;
     sv.vehicle_json_path = p.lexically_normal().string();
     sv.desc = load_vehicle_json(sv.vehicle_json_path, map_options);
+    // Engine thermal plan T1 (section 8.4): the scenario's start state wins over the vehicle file's.
+    if (j.contains("engine_thermal_start")) {
+        if (!j.at("engine_thermal_start").is_string()) {
+            throw std::runtime_error("vehicle '" + sv.name + "': 'engine_thermal_start' must be \"warm\" or \"ambient\"");
+        }
+        sv.engine_thermal_start = j.at("engine_thermal_start").get<std::string>();
+        const auto kind = parse_thermal_start(sv.engine_thermal_start, "vehicle '" + sv.name + "'");
+        if (!sv.desc.powertrain.thermal.has_value()) {
+            throw std::runtime_error("vehicle '" + sv.name + "': 'engine_thermal_start' needs a vehicle file with a 'cooling_system'");
+        }
+        sv.desc.powertrain.thermal->start = kind;
+    }
     return sv;
 }
 

@@ -536,7 +536,7 @@ function Invoke-WalltimePhase {
 # so it runs in fast CI too, whenever both sides were actually built this
 # invocation (skipped with a note otherwise, e.g. -SkipWindows/-SkipWsl).
 # ---------------------------------------------------------------------------
-$script:HashCheckScenarios = @('free_fall.json', 'pendulum.json', 'joint_chain.json', 'articulation_chain.json', 'multi_articulation.json', 'contact_articulation.json', 'terrain_tiles.json', 'terrain_multi_interest.json', 'terrain_prefetch_drive.json', 'terrain_prefetch_multi_interest.json', 'vehicle_step_steer.json', 'vehicle_powertrain.json', 'vehicle_tractor_i4.json', 'vehicle_fuel_tank.json', 'vehicle_sim_engine.json', 'vehicle_gen_engine.json', 'environment_day.json', 'environment_weather.json', 'environment_surface.json')
+$script:HashCheckScenarios = @('free_fall.json', 'pendulum.json', 'joint_chain.json', 'articulation_chain.json', 'multi_articulation.json', 'contact_articulation.json', 'terrain_tiles.json', 'terrain_multi_interest.json', 'terrain_prefetch_drive.json', 'terrain_prefetch_multi_interest.json', 'vehicle_step_steer.json', 'vehicle_powertrain.json', 'vehicle_tractor_i4.json', 'vehicle_fuel_tank.json', 'vehicle_sim_engine.json', 'vehicle_gen_engine.json', 'environment_day.json', 'environment_weather.json', 'environment_surface.json', 'vehicle_thermal.json')
 
 function Get-PsRunStateHash {
     param([string]$PsRunPath, [string]$ScenarioPath, [string]$CsvOutPath, [switch]$Wsl)
@@ -777,6 +777,7 @@ $script:ScenarioTopics = @{
     'environment_day.json' = @('environment', 'vehicle')
     'environment_weather.json' = @('environment', 'vehicle')
     'environment_surface.json' = @('environment', 'vehicle')
+    'vehicle_thermal.json' = @('vehicle', 'drivetrain')
 }
 # Scenario inputs that are not themselves hash-compare scenarios.
 $script:ScenarioInputTopics = @{ 'terrain_spec_small.json' = @('terrain') }

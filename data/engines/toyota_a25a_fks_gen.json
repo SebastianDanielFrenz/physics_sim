@@ -2,6 +2,7 @@
   "format": "physics_sim.engine/1",
   "name": "toyota_a25a_fks_gen",
   "kind": "simulated",
+  "default_thermal": "../engine_thermal/toyota_a25a_fks.json",
   "source": "I7c C17a M-A generated-map engine: Toyota A25A-FKS 2.5 L I4 (2018 Camry) as a C15a cycle-model description; the runtime maps are GENERATED at load time by the C16a map generator (no 'maps' block). Validated against the US EPA NVFEL A25A Tier 3 dyno data it was never fitted to (tests/validation/test_gen_engine_dyno.cpp). Written by tools/enginedata/a25a_gen_engine.py. Idle/limiter/starter/DFCO/idle-PI facts are the same engine facts as data/engines/toyota_a25a_fks_sim.json (M-B) and copied from it.",
   "architecture": "piston_4stroke",
   "bore_mm": 87.5,

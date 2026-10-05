@@ -32,6 +32,13 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
 | `controllers` | array of [controller objects](#controllers) | optional | empty | at most 1 entry, else `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"` | driver-assist logic (auto-clutch, auto-blip, auto-shift) |
+| `cooling_system` | string | optional | path relative to the vehicle file; a `physics_sim.cooling_system/1` file ([cooling_system.md](cooling_system.md)); needs an engine component whose engine file names a `default_thermal` (or whose component carries a `thermal` override), else the load throws | **opts the vehicle in to the lumped engine/oil thermal model** (coolant and oil temperature, thermostat, radiator, fan, oil-viscosity friction, gauge, `vehicle<i>.thermal.*` telemetry). Absent = no thermal state, every hash and CSV header as before |
+| `engine_thermal_start` | string | optional | `"warm"` (default) or `"ambient"`; rejected without a `cooling_system` | `"warm"`: coolant at the thermostat's 25 % opening point (91 C by default), oil at the friction reference temperature (95 C, friction scale exactly 1); `"ambient"`: cold soak at the first tick's ambient temperature. A scenario's vehicle entry may give its own `engine_thermal_start`, which wins |
+
+The engine component of a vehicle with a `cooling_system` may carry a
+`"thermal"` path (relative to the vehicle file; also allowed next to `"ref"`) that
+overrides the engine file's `default_thermal` - see
+[engine_thermal.md](engine_thermal.md).
 
 **Rejected /1 fields.** A `physics_sim.vehicle/2` file must not contain a
 top-level `"drive"` or `"brakes"` block (the `/1` placeholder drive/brake

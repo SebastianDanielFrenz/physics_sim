@@ -88,6 +88,17 @@ struct Sensors {
     real anti_lag_channel = std::numeric_limits<real>::quiet_NaN();
     // N2O plan N1: the nitrous system's flows this substep (default = none).
     NitrousInput nitrous{};
+    // Engine thermal plan T1 (vault PHYS-063): oil-viscosity friction factors from the Powertrain's EngineThermal
+    // (both exactly 1.0 without one - and x*1.0 == x bit-exactly, so an engine without thermal is unchanged).
+    // friction_scale = the PLANT's k(T_oil); ecu_friction_scale = the ECU's quantised estimate of it (T1: the ECU
+    // knows the cold-friction scale, plan D7). One tick old by construction. Both engines use the plant k for the
+    // physics and the ECU k for their ECU models (T1b: the graph engine's idle feed-forward and torque demand).
+    // T1b: k no longer multiplies the friction map; it sets the hydrodynamic increment
+    // (k - 1) * F(friction_reference_rpm) * sqrt(rpm / friction_reference_rpm) (hydrodynamic_friction.h), and the
+    // Coulomb/breakaway part is never scaled. friction_reference_rpm is unused while k == 1.
+    real friction_scale = 1.0;
+    real ecu_friction_scale = 1.0;
+    real friction_reference_rpm = 2000.0;
 };
 // PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
 // combined command plus the TCU-forwarded (electronic) or fixed (mechanical)
@@ -229,6 +240,12 @@ struct PostSolveResult {
     // only, OUTSIDE balance_error (engine_out already carries them).
     real pumping_work_delta = 0.0;
     real friction_work_delta = 0.0;
+    // Engine thermal plan T1: the heat this substep puts into the thermal model. released_heat_delta = the
+    // combustion energy released (J, eta_c * fuel energy; the graph engine uses eta_c = 1); friction_heat_delta =
+    // the engine's own friction work turned into heat (J, >= 0 to rounding; smooth friction only - the Coulomb row's
+    // loss is added by Powertrain). Both 0 until an engine fills them; read only by EngineThermal.
+    real released_heat_delta = 0.0;
+    real friction_heat_delta = 0.0;
 };
 
 // The engine/ECU seam (PHYS-033 P4 I7a plan): exactly the operations

@@ -199,6 +199,13 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     // PHYS-033 P4 I2 commit 5b (plan section 8): snapshot the ledger's
     // cumulative fields before this tick's substeps, so end_tick() below can
     // compute this TICK's own balance_error from the deltas since here.
+    // Engine thermal plan T1 (section 2.2): this tick's environment for the thermal model - the vehicle's own
+    // ambient (per-vehicle air with an environment, else the World's) and the ram airspeed along the chassis
+    // forward axis (chassis-local +x), at the tick-start state. Set BEFORE begin_tick (an "ambient" start reads it).
+    if (powertrain_.has_thermal()) {
+        const real ram = pose0.orientation.inverse().rotate(motion0.linear - env.wind_world).x;
+        powertrain_.set_thermal_env(env.ambient.temperature_k, env.ambient.pressure_pa, ram > real(0.0) ? ram : real(0.0));
+    }
     powertrain_.begin_tick();
 
     // PHYS-033 I1 W1 (section 3.3): the shadow chassis. pose_s/twist_s is
@@ -479,6 +486,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.fuel_flow_g_s = powertrain_.fuel_flow_g_s();
         snap.fuel_mass_kg = powertrain_.fuel_tank_mass(); // PHYS-033 P4 I7a C6: 0.0 without a tank
         snap.n2o_bottle_kg = powertrain_.n2o_bottle_mass(); // N2O plan N1: 0.0 without a kit
+        snap.thermal = powertrain_.thermal_snapshot(); // engine thermal plan T1: has_thermal false without a cooling_system
     }
 
     // Predict what Jolt will report as this chassis's velocity next tick

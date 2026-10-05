@@ -1,0 +1,6 @@
+{
+  "format": "physics_sim.engine_thermal/1",
+  "extends": "class_si_passenger.json",
+  "source": "Toyota A25A-FKS (2.5 L I4): displacement 2.487 L [D: bore 87.5 mm x stroke 103.4 mm x 4 cylinders = pi/4 * 8.75^2 * 10.34 * 4 = 2487 cm3, from data/engines/toyota_a25a_fks_sim.json's own geometry]. Everything else is the class default (class_si_passenger.json, engine thermal plan T1). Used by toyota_a25a_fks_sim.json and toyota_a25a_fks_gen.json (and the torque-map toyota_a25a_fks.json if a vehicle opts in).",
+  "displacement_l": 2.487
+}

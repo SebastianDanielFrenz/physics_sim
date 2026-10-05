@@ -163,6 +163,13 @@ func _process(_delta: float) -> void:
 					hd.get("strong_out", 0.0), _bar(hd.get("strong_out", 0.0)),
 					hd.get("weak_out", 0.0), _bar(hd.get("weak_out", 0.0))])
 
+		# Engine thermal plan T1: coolant/oil temperature line, only for a vehicle with a cooling_system.
+		var th: Dictionary = _simulation.get_engine_thermal(vehicle_name)
+		if th.get("has_thermal", false):
+			lines.append("engine temp  coolant %.1f C  oil %.1f C  thermostat %.2f  fan %s  friction x%.2f" % [
+				th.get("coolant_c", 0.0), th.get("oil_c", 0.0), th.get("thermostat_opening", 0.0),
+				"on" if th.get("fan_on", false) else "off", th.get("friction_scale", 1.0)])
+
 		# Tractor demo (2026-09-28): governor/awd/diff-lock/park-lock/pto
 		# readouts - gated on presence (a component-less vehicle like
 		# car_sedan reads every one of these as exactly 0/false, so this

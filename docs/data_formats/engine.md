@@ -490,6 +490,7 @@ clamped at every edge. A 1D curve is the usual `{"x": [...], "y": [...]}`.
 | `limiter`, `starter`, `crank_axis_local`, `initial_state` | | no | as `torque_map` | |
 | `fuels` / `fuel` | array / string | **yes** | as `torque_map`'s [`fuels`](#fuels-ignition-indicated_efficiency) | the engine's torque comes from burnt fuel, so a fuel is mandatory |
 | `ignition` | string | **yes** | `"spark"` only | `"compression"` is rejected until a CI combustion model exists |
+| `default_thermal` | string | no (both engine kinds) | path relative to the ENGINE file; a `physics_sim.engine_thermal/1` file ([engine_thermal.md](engine_thermal.md)) | the engine's thermal part (heat capacities, heat split, oil, thermostat). Used only by a vehicle that names a `cooling_system`; changes nothing otherwise and is not part of the map content hash or the `.psmaps` cache key. A vehicle's engine component can override it with its own `thermal` path |
 | `default_turbo_configuration` | string | no | path relative to the ENGINE file; a `physics_sim.turbo_configuration/1` file | adds a turbo pair to the engine (charge pressure feeds the throttle, turbine back-pressure loads the exhaust); formats, units, the pair scaling and the sound state in [turbo.md](turbo.md). With a `cycle` block it also switches generated map nodes to a compressor supply (see `grid_p_im_kpa`) |
 
 **eta_i is GROSS indicated efficiency at MBT spark and lambda = 1.** The

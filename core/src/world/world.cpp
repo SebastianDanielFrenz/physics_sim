@@ -573,6 +573,19 @@ void World::step() {
             row.push_back(n2o->bottle_gauge_bar());
             row.push_back(n2o->status().flowing ? real(1.0) : real(0.0));
         }
+
+        // Engine thermal plan T1: the thermal channels, right after the n2o block, matching create_vehicle's order.
+        if (vi < thermal_telemetry_channels_.size() && !thermal_telemetry_channels_[vi].empty()) {
+            const drivetrain::EngineThermalSnapshot& th = vehicle_instance.thermal_snapshot();
+            row.push_back(th.coolant_c);
+            row.push_back(th.oil_c);
+            row.push_back(th.thermostat_opening);
+            row.push_back(th.fan_on ? real(1.0) : real(0.0));
+            row.push_back(th.wall_heat_w);
+            row.push_back(th.friction_heat_w);
+            row.push_back(th.radiator_heat_w);
+            row.push_back(th.friction_scale);
+        }
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
 
@@ -863,6 +876,25 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         n2o_channels.push_back(nc);
     }
 
+    // Engine thermal plan T1: vehicle<i>.thermal.*, only for a vehicle with a cooling_system (an empty inner
+    // vector keeps every other CSV header byte-identical).
+    if (thermal_telemetry_channels_.size() <= id.index) thermal_telemetry_channels_.resize(id.index + 1);
+    std::vector<ThermalTelemetryChannels>& thermal_channels = thermal_telemetry_channels_[id.index];
+    thermal_channels.clear();
+    if (vehicle_system_->at(id).has_thermal()) {
+        const std::string th_prefix = "vehicle" + std::to_string(id.index) + ".thermal.";
+        ThermalTelemetryChannels tc;
+        tc.coolant_c = telemetry_->register_channel(th_prefix + "coolant_c");
+        tc.oil_c = telemetry_->register_channel(th_prefix + "oil_c");
+        tc.thermostat = telemetry_->register_channel(th_prefix + "thermostat");
+        tc.fan = telemetry_->register_channel(th_prefix + "fan");
+        tc.q_wall_w = telemetry_->register_channel(th_prefix + "q_wall_w");
+        tc.q_friction_w = telemetry_->register_channel(th_prefix + "q_friction_w");
+        tc.q_radiator_w = telemetry_->register_channel(th_prefix + "q_radiator_w");
+        tc.friction_scale = telemetry_->register_channel(th_prefix + "friction_scale");
+        thermal_channels.push_back(tc);
+    }
+
     return id;
 }
 
@@ -908,6 +940,19 @@ real World::n2o_bottle_mass(VehicleId id) const {
 
 void World::set_n2o_bottle_mass(VehicleId id, real kg) {
     vehicle_system_->at(id).request_n2o_bottle_mass(kg);
+}
+
+drivetrain::EngineThermalState World::engine_thermal_state(VehicleId id) const {
+    const vehicle::VehicleInstance& v = vehicle_system_->at(id);
+    if (!v.has_thermal()) throw std::runtime_error("engine_thermal_state: this vehicle has no cooling_system");
+    drivetrain::EngineThermalState s;
+    s.coolant_c = v.thermal()->engine_temperature_k() - drivetrain::kCelsiusToKelvin;
+    s.oil_c = v.thermal()->oil_temperature_k() - drivetrain::kCelsiusToKelvin;
+    return s;
+}
+
+void World::set_engine_thermal_state(VehicleId id, const drivetrain::EngineThermalState& state) {
+    vehicle_system_->at(id).request_thermal_state(state);
 }
 
 void World::replace_turbo_configuration(VehicleId id,std::string_view component_id,const drivetrain::TurboPairDesc& desc) {

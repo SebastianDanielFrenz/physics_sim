@@ -1,0 +1,7 @@
+{
+  "format": "physics_sim.engine_thermal/1",
+  "extends": "class_si_passenger.json",
+  "source": "Generic 2.0 L naturally aspirated I4 (data/engines/i4_2l_na.json, a plausible class engine, not a specific one). displacement_l 2.0 [AS: the engine's name; the file carries no geometry]. Everything else is the class default (class_si_passenger.json, engine thermal plan T1); motoring_friction_fraction 0.6 [D] is exactly this engine's case: its motoring curve is Heywood FMEP plus about 0.9 bar pumping. Engine thermal T1b: hydrodynamic_fraction 0.2 [D] overrides the class 0.5 - this engine's own friction correlation fmep = 0.97 + 0.15 N + 0.05 N^2 bar (N in 1000 rpm) has its viscous-shear (speed-linear) term 0.30 bar of 1.47 bar at 2000 rpm = 0.20; the constant 0.97 bar is boundary/mixed friction. With the class 0.5 this older, high-friction correlation (1.47 bar vs the A25A's 0.54 bar) would need 199 N*m at 800 rpm with -30 C oil against 158 N*m available at WOT, i.e. this engine could not run on 5W-30 at the SAE J300 5W cranking temperature, which real engines do [M, out/thermal_t1b_progress.md]. Cranking-resistance viscosity ratio at 120 rpm with 0.2: x1.30 from 2000 to 5500 mm2/s vs the cited x1.45 (Europa Tabellenbuch Kfz via fahrzeug-elektrik.de/Eebd.htm).",
+  "displacement_l": 2.0,
+  "oil": { "hydrodynamic_fraction": 0.2 }
+}

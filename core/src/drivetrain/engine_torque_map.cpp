@@ -1,5 +1,7 @@
 #include "engine_torque_map.h"
 
+#include "hydrodynamic_friction.h"
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -60,6 +62,7 @@ EngineTorqueMap::EngineTorqueMap(Desc desc) : desc_(std::move(desc)) {
     const real w_idle = desc_.wot_torque_nm_vs_rpm.evaluate(desc_.idle_rpm);
     const real m_idle = desc_.motoring_torque_nm_vs_rpm.evaluate(desc_.idle_rpm);
     const real denom = w_idle - m_idle;
+    idle_span_ = denom;
     theta_ff_ = denom > real(0.0) ? std::clamp(-m_idle / denom, real(0.0), desc_.idle.max_throttle) : real(0.0);
     state_ = desc_.initial_state == InitialState::Running ? EngineState::Running : EngineState::Off;
 }
@@ -141,11 +144,32 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
         dfco_active_ = false;
     }
 
+    // Engine thermal T1b: the cold-oil friction increment dF(n) = (k - 1) * phi_f * |m(n_ref)| * sqrt(n / n_ref)
+    // (hydrodynamic_friction.h). The plant uses the plant k, the ECU-side laws (idle feed-forward/authority, torque
+    // demand) the ECU's quantised k. Both increments are exactly 0 (and the branches below are skipped) at k == 1.
+    const real k_plant = sensors.friction_scale;
+    const real k_ecu = sensors.ecu_friction_scale;
+    const real n_ref = sensors.friction_reference_rpm;
+    const real f_hyd_ref = (k_plant != real(1.0) || k_ecu != real(1.0))
+                               ? -desc_.motoring_torque_nm_vs_rpm.evaluate(n_ref) * desc_.thermal_friction_fraction
+                               : real(0.0);
+
+    // Idle feed-forward and authority (plan 6.1.4). T1b: a cold-start ECU opens the idle air path by the throttle
+    // share that carries the extra friction it expects at idle (the cold fast-idle/IAC opening of a real ECU):
+    // theta_ff(k) = (|m(idle)| + dF_ecu(idle)) / (w(idle) - m(idle)), and the authority cap moves up by the same
+    // amount. At k == 1 both are the T1 values exactly.
+    real idle_ff = theta_ff_;
+    real idle_cap = desc_.idle.max_throttle;
+    if (k_ecu != real(1.0) && idle_span_ > real(0.0)) {
+        const real shift = (k_ecu - real(1.0)) * f_hyd_ref * hydrodynamic_speed_shape(desc_.idle_rpm, n_ref).value / idle_span_;
+        idle_ff += shift;
+        idle_cap += shift;
+    }
     real theta_idle = real(0.0);
     if ((state_ == EngineState::Running || state_ == EngineState::Cranking) && !dfco_active_) {
         const real e = desc_.idle_rpm - rpm;
-        theta_idle = std::clamp(theta_ff_ + desc_.idle.kp_per_rpm * e + idle_integrator_, real(0.0), desc_.idle.max_throttle);
-        idle_integrator_ = std::clamp(idle_integrator_ + desc_.idle.ki_per_rpm_s * e * h, -theta_ff_, desc_.idle.max_throttle - theta_ff_);
+        theta_idle = std::clamp(idle_ff + desc_.idle.kp_per_rpm * e + idle_integrator_, real(0.0), idle_cap);
+        idle_integrator_ = std::clamp(idle_integrator_ + desc_.idle.ki_per_rpm_s * e * h, -idle_ff, idle_cap - idle_ff);
     } else {
         idle_integrator_ = real(0.0);
         theta_idle = real(0.0);
@@ -191,7 +215,16 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     const real s = sign(omega_old);
     const real m_rpm = desc_.motoring_torque_nm_vs_rpm.evaluate(rpm);
     const real w_rpm = desc_.wot_torque_nm_vs_rpm.evaluate(rpm);
+    // Engine thermal T1b: the warm smooth part s*(m + c_k) plus the cold-oil increment (opposing motion). The
+    // Coulomb row (c_k, breakaway) is never scaled: boundary friction does not depend on viscosity.
     tau_smooth_ = s * (m_rpm + c_k_);
+    tau_hyd_ = real(0.0);
+    HydrodynamicShape hyd_shape;
+    if (k_plant != real(1.0)) {
+        hyd_shape = hydrodynamic_speed_shape(rpm, n_ref);
+        tau_hyd_ = -(s * ((k_plant - real(1.0)) * f_hyd_ref * hyd_shape.value));
+        tau_smooth_ += tau_hyd_;
+    }
     const real tau_comb_demand = theta_c_demand * (w_rpm - m_rpm);
 
     // PHYS-033 P4 I7a C5/C5d: fuel DEMAND at this substep-start rpm and the
@@ -257,6 +290,10 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     // PHYS-033 P4 I7a C6: each combustion term times s_starve (x*1.0 == x
     // when not starving - same operands, same order as pre-C6).
     real dtau_domega = kRadPerSecToRpm * m_slope + theta_c_demand * kRadPerSecToRpm * (w_slope - m_slope) * s_starve;
+    // Thermal T1b: d(tau_hyd)/domega = -s * dF'(rpm) * K * s = -K * dF'(rpm) (only while turning: s != 0).
+    if (k_plant != real(1.0) && s != real(0.0)) {
+        dtau_domega -= kRadPerSecToRpm * ((k_plant - real(1.0)) * f_hyd_ref * hyd_shape.slope_per_rpm);
+    }
     if (desc_.limiter.type == LimiterType::SoftCut) {
         const bool in_band = rpm < desc_.limiter.rpm && rpm > desc_.limiter.rpm - desc_.limiter.band_rpm;
         const real dflim_domega = in_band ? -kRadPerSecToRpm / desc_.limiter.band_rpm : real(0.0);
@@ -282,7 +319,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     PreSolveResult r;
     r.tau0 = tau0_;
     r.d = d_;
-    r.friction_cap_static = desc_.breakaway_torque_nm;
+    r.friction_cap_static = desc_.breakaway_torque_nm; // thermal T1b: boundary friction, never viscosity-scaled
     r.friction_cap_kinetic = c_k_;
     r.state = state_;
     r.rpm = rpm;
@@ -293,6 +330,10 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.torque_estimate = tau_smooth_ + tau_comb_;
     r.governor_setpoint_rpm = governor_setpoint_rpm;
     r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
+    // Thermal T1b: the ECU's estimate of the cold-oil increment (the ECU k; skipped at k == 1, bit-identical).
+    if (k_ecu != real(1.0)) {
+        r.torque_demand -= s * ((k_ecu - real(1.0)) * f_hyd_ref * hydrodynamic_speed_shape(rpm, n_ref).value);
+    }
     // PHYS-033 P4 I7a C6: the FIRED fraction (theta_c_demand*s_starve) -
     // torque_demand above stays the ECU's unscaled request (a dry tank does
     // not change what the ECU asks for), torque_estimate follows the fired
@@ -354,7 +395,14 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
         // exactly the available tank mass.
         r.fuel_mass_delta = booked_fuel_mass_kg_;
         r.fuel_energy_in_delta = r.fuel_mass_delta * desc_.fuel.lhv_j_kg;
+        // Thermal T1 (plan 4.1): the graph engine has no lambda, eta_c = 1: everything burnt is released.
+        r.released_heat_delta = r.fuel_energy_in_delta;
     }
+    // Thermal T1 (plan 4.4): the warm smooth curve's friction share (phi_f) of its work turns into coolant/oil heat
+    // (the rest is pumping: exhaust, T3); T1b: the cold-oil increment is all friction. Booked even when a tiny
+    // negative so the thermal closure stays exact.
+    r.friction_heat_delta = -(h * omega_old_ * (tau_smooth_ - tau_hyd_) * desc_.thermal_friction_fraction);
+    if (tau_hyd_ != real(0.0)) r.friction_heat_delta -= h * omega_old_ * tau_hyd_;
 
     crank_angle_ = std::fmod(crank_angle_ + omega_new * h, real(4.0) * kPi);
     return r;
