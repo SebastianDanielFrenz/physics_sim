@@ -151,8 +151,27 @@ physics_sim/
   weather, lags_s, precip_phase, humidity, diurnal_temperature, lightning (docs/data_formats/climate.md,
   weather_preset.md, weather_classes.md). Data: data/weather_presets/*.json (12 presets, [AS]),
   data/weather_classes/wmo_dwd_torro.json, data/climates/test_weather.json ([AS] fixture). Tests
-  test_environment_weather*.cpp ([environment][weather], ps_environment_tests). Not yet consumed by World (W4+);
-  evaluate() 0.28 us sequential, 5.5 us random access at 30 days.
+  test_environment_weather*.cpp ([environment][weather], ps_environment_tests); evaluate() 0.28 us sequential, 5.5 us random access at 30 days.
+  W4 (c2aca55): atmosphere.h/.cpp (ISO 2533 ISA lift of the weather sample to an altitude, humid-air density from the
+  vapour pressure), wind.h/.cpp (GustField: Shinozuka sum of 32 Kaimal lines per axis, sigma ratios 1:0.8:0.5, Taylor
+  frozen-turbulence shift so nearby cars see coherent gusts, counter-hash phases, 600 s windows blended over 30 s,
+  stateless - a pure function of seed, window, sim time and position; gusts on SIM time, weather on env time),
+  vehicle_air.h (POD VehicleAir: ambient, density, mean wind + gust). Environment weather source Off/Dynamic/Preset
+  with altitude_offset_m and sample_air (weather folded into the hash only while on). Climate "gusts" block
+  (reference_gust_factor default 1.35 - MEASURED gust factor of the Gaussian field at the WMO open-land intensity
+  0.1515, not the plan's cited 1.66, which a Gaussian field reaches only at I ~0.29); scenario "weather" and
+  "altitude_offset_m". Altitude = location.elevation_m + offset + chassis z (no terrain lookup, no wind height
+  profile). World computes one VehicleAir per vehicle per tick in freeze_tick_start_state and passes it through
+  VehicleTickEnv: the engine's live ambient (SimulatedEngine stays on set_live_ambient, steady_rebuild_count 0), aero
+  density and wind; VehicleSnapshot::air, World::vehicle_air/vehicle_engine_ambient/
+  vehicle_engine_steady_rebuild_count; AmbientSample::vapour_pressure_pa (default 0 = dry, never hashed).
+  World::set_ambient/set_aero_environment throw std::logic_error while an environment WITH weather is installed
+  (a weather-less W2 environment keeps the old behaviour). Without an environment bit-identical to before.
+  Cost: begin_tick 2.29 us/tick, sample_air 1.60 us per vehicle. Data data/climates/test_weather_gusts.json,
+  data/scenarios/environment_weather.json (0x2520d724148fa822 at 1/2/4/10/24 workers, hash-compared). Tests
+  test_environment_atmosphere/test_environment_wind (ps_environment_tests), test_world_atmosphere (ps_unit_tests,
+  [environment][vehicle]). Adapter: PsSimulation::get_vehicle_air, demo flags --m1-weather, --m1-altitude-offset,
+  HUD outside temperature/pressure/density/altitude/wind. Decisions vault PHYS-061, notes out/weather_w4_progress.md.
 - `ps_audio` (STATIC, `audio/`, ps_audio A7): the live engine voice; links
   `ps_engine_cycle` only, never `ps_core`. Guard `ps_audio_standalone`
   (`tests/unit/audio_standalone_main.cpp`, plain `main`, WHOLE_ARCHIVE
@@ -1447,7 +1466,7 @@ recorded.
 applied at the next tick; plumbed via `VehicleTickEnv::ambient` -> `ComponentSubstepCtx::ambient` ->
 engine `Sensors::ambient` (`Powertrain::last_engine_sensors_ambient()` is the white-box hook). The graph
 engine ignores it (owner ruling Q10), `WorldConfig::air_density` (aero) is NOT derived from it, and it is
-never hashed; `tests/unit/test_ambient.cpp` guards both.
+never hashed; `tests/unit/test_ambient.cpp` guards both. Weather W4: while an environment with weather is installed, set_ambient/set_aero_environment throw and each vehicle gets its own ambient/density/wind from the environment (see ps_environment).
 
 `World::set_control(name, value)`/`get_control(name)`: a `std::string`-keyed
 `real` map (`control_channels_`) - global, not per-vehicle (PLAN.md P3/M1's
