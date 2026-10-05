@@ -83,6 +83,18 @@ Environment::Environment(const ClimateDesc& climate, const EnvironmentConfig& co
         weather_.emplace(climate_, config_.seed, wo);  // throws std::invalid_argument naming what is missing
         if (climate_.gusts) gust_.emplace(*climate_.gusts, config_.seed);
     }
+    if (config_.surface_conditions) {
+        if (!weather_)
+            throw std::invalid_argument(
+                "environment: surface conditions need weather (EnvironmentConfig::weather Dynamic or Preset): "
+                "the energy balance reads air temperature, wind, humidity and cloud");
+        if (calendar_.days_per_year() < 1 || !calendar_.day(0).has_climate)
+            throw std::invalid_argument(
+                "environment: surface conditions need the seasons' climate scalars (ground_temp_c, temp_mean_c)");
+        // ConditionGrid validates the desc, the names and the grid settings.
+        grid_.emplace(*config_.surface_conditions, config_.surface_names, climate_.condition.value_or(ConditionGridDesc{}));
+        forcing_.env = this;
+    }
 
     clock_.anchor_env_s = start_env_s_;
     clock_.anchor_tick = 0;
@@ -187,6 +199,84 @@ void Environment::begin_tick(std::int64_t tick) {
     WeatherSample w;
     current_ = evaluate_impl(t_env, weather_ ? &w : nullptr);
     if (weather_) update_air(tick, t_env, w);
+    if (grid_) {
+        last_condition_steps_ = grid_->advance_to(t_env, forcing_);
+        fill_surfaces(t_env);
+    }
+}
+
+// ---- W5: surface conditions
+
+SurfaceForcing Environment::surface_forcing(real t_env) const {
+    SurfaceForcing f;
+    const CalendarSample cs = calendar_.sample(t_env);
+    const SunState ss = sun_.at(calendar_, cs);
+    const DayValues& day = calendar_.day(cs.day_of_year);
+    if (weather_) {
+        const WeatherSample w = weather_->evaluate(t_env, grid_cursor_);
+        f.air_temp_k = w.air_temp_c + kCelsiusToKelvin;
+        f.wind_m_s = w.wind_mean_m_s;
+        f.vapour_pressure_hpa = w.vapour_pressure_hpa;
+        f.cloud_cover = w.cloud_cover;
+    }
+    f.ghi_w_m2 = ghi_w_m2(ss.elevation_rad, f.cloud_cover);
+    f.bottom_temp_k = (day.has_climate ? day.climate.ground_temp_c : 10.0) + kCelsiusToKelvin;
+    return f;
+}
+
+InitialProfile Environment::initial_profile(real t_env) const {
+    // W5 decision D5: linear from the day's mean air temperature at the
+    // surface to its ground temperature at the column bottom.
+    const DayValues& day = calendar_.day(calendar_.sample(t_env).day_of_year);
+    InitialProfile p;
+    p.surface_temp_k = (day.has_climate ? day.climate.temp_mean_c : 10.0) + kCelsiusToKelvin;
+    p.bottom_temp_k = (day.has_climate ? day.climate.ground_temp_c : 10.0) + kCelsiusToKelvin;
+    return p;
+}
+
+void Environment::fill_surfaces(real t_env) {
+    const ConditionGrid& g = *grid_;
+    current_.has_surfaces = true;
+    current_.surface_count = g.class_count();
+    const real w = g.weight_at(t_env);
+    for (int i = 0; i < g.class_count(); ++i) {
+        SurfaceConditionSample& s = current_.surfaces[static_cast<std::size_t>(i)];
+        s = SurfaceConditionSample{};
+        s.surface_id = i;
+        s.kind = static_cast<std::int32_t>(g.kind(i));
+        s.has_state = g.has_state(i);
+        if (!s.has_state) continue;
+        const SurfaceClassState& a = g.prev(i);
+        const SurfaceClassState& b = g.next(i);
+        const auto lerp = [w](real x, real y) { return x + (y - x) * w; };
+        s.t_surface_c = lerp(a.temp_k[0], b.temp_k[0]) - kCelsiusToKelvin;
+        s.water_mm = lerp(a.water_mm, b.water_mm);
+        s.ice_mm = lerp(a.ice_mm, b.ice_mm);
+        s.frost_mm = lerp(a.frost_mm, b.frost_mm);
+        s.snow_mm = lerp(a.snow_mm, b.snow_mm);
+        s.snow_density_kg_m3 = lerp(a.snow_density_kg_m3, b.snow_density_kg_m3);
+        s.soil_moisture = lerp(a.soil_moisture, b.soil_moisture);
+        s.canopy_water_mm = lerp(a.canopy_water_mm, b.canopy_water_mm);
+    }
+}
+
+ConditionCheckpoint Environment::checkpoint_conditions() const {
+    if (!grid_) throw std::logic_error("Environment::checkpoint_conditions: the environment has no surface conditions");
+    return grid_->checkpoint();
+}
+
+void Environment::restore_conditions(const ConditionCheckpoint& c, std::int64_t tick) {
+    if (!grid_) throw std::logic_error("Environment::restore_conditions: the environment has no surface conditions");
+    const std::int64_t kt = grid_->grid_index_at(clock_.env_time(tick));
+    if (c.valid && c.grid_index > kt)
+        throw std::invalid_argument("Environment::restore_conditions: the checkpoint (grid index " +
+                                    std::to_string(c.grid_index) + ") lies ahead of the clock (" +
+                                    std::to_string(kt) + ")");
+    if (c.valid && kt - c.grid_index > grid_->max_fast_forward_steps())
+        throw std::invalid_argument("Environment::restore_conditions: the checkpoint is more than max_fast_forward_s "
+                                    "behind the clock (a spin-up would discard it)");
+    grid_->restore(c);   // validates the rest; throws before any change
+    begin_tick(tick);
 }
 
 EnvironmentSnapshot Environment::evaluate(real t_env) const { return evaluate_impl(t_env, nullptr); }
@@ -352,6 +442,9 @@ std::uint64_t Environment::fold_state_hash(std::uint64_t h) const {
         fold_value(h, config_.altitude_offset_m);
         fold_value(h, static_cast<std::int32_t>(gust_ ? 1 : 0));
     }
+    // W5: only with surface conditions (which imply weather), so every
+    // environment without them hashes exactly as before.
+    if (grid_) h = grid_->fold_hash(h);
     return h;
 }
 

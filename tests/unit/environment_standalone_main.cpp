@@ -7,7 +7,8 @@
 //
 // It builds a calendar and sun from a code-made descriptor, applies a merge
 // patch, loads the shipped climate file and checks a few values, exit code 0 on
-// success.
+// success. W5: the shipped surface conditions load and a grid spins up under a
+// constant forcing to a surface temperature between the air and the ground.
 
 #include "environment_fixtures.h"
 
@@ -16,6 +17,8 @@
 #include "ps/environment/env_time.h"
 #include "ps/environment/json_extends.h"
 #include "ps/environment/sun.h"
+#include "ps/environment/surface_condition.h"
+#include "ps/environment/surface_conditions_io.h"
 
 #include <nlohmann/json.hpp>
 
@@ -26,6 +29,20 @@
 namespace {
 
 int failures = 0;
+
+struct ConstantForcing final : ps::environment::ISurfaceForcingSource {
+    ps::environment::SurfaceForcing forcing_at(double) const override {
+        ps::environment::SurfaceForcing f;
+        f.ghi_w_m2 = 0.0;
+        f.air_temp_k = 283.15;
+        f.wind_m_s = 3.0;
+        f.vapour_pressure_hpa = 10.0;
+        f.cloud_cover = 1.0;
+        f.bottom_temp_k = 288.15;
+        return f;
+    }
+    ps::environment::InitialProfile initial_at(double) const override { return {283.15, 288.15}; }
+};
 
 void check(bool ok, const char* what) {
     if (!ok) {
@@ -64,6 +81,15 @@ int main() {
     check(loaded.seasons.size() == 4, "shipped climate has 4 seasons");
     const Calendar loaded_cal(loaded);
     check(loaded_cal.days_per_year() == 124, "shipped climate: 4 x 31 days");
+
+    const SurfaceConditionsDesc conds = ps::io::load_surface_conditions_json(
+        std::filesystem::path(PS_SOURCE_DIR) / "data" / "surface_conditions" / "default.json");
+    ConditionGrid grid(conds, {}, ConditionGridDesc{});
+    const ConstantForcing forcing;
+    check(grid.advance_to(10.0 * 86400.0, forcing) > 0, "surface grid spins up");
+    const double t_asphalt = grid.surface_temp_k(0, 10.0 * 86400.0);
+    check(grid.class_name(0) == "asphalt" && t_asphalt > 283.15 && t_asphalt < 288.15,
+          "overcast night: asphalt between the air and the ground");
 #endif
 
     if (failures == 0) std::printf("environment_standalone: OK\n");

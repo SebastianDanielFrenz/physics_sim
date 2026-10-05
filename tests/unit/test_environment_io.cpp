@@ -273,7 +273,13 @@ TEST_CASE("Climate loader rejections", "[environment][io]") {
         // W4 lifted the gusts reservation (gust rejections: test_environment_wind.cpp).
         {"gusts unknown key", [](json& j) { j["gusts"] = json::parse(R"({"turbulence": 1})"); }, "unknown key \"turbulence\""},
         {"gusts roughness zero", [](json& j) { j["gusts"] = json::parse(R"({"roughness_length_m": 0})"); }, "gusts.roughness_length_m"},
-        {"condition reserved for W5", [](json& j) { j["condition"] = json::object(); }, "not implemented before W5"},
+        // W5 lifted the condition reservation.
+        {"condition unknown key", [](json& j) { j["condition"] = json::parse(R"({"dt_env_days": 1})"); }, "unknown key \"dt_env_days\""},
+        {"condition dt zero", [](json& j) { j["condition"] = json::parse(R"({"dt_env_s": 0})"); }, "condition: dt_env_s must be in (0, 3600]"},
+        {"condition dt above an hour", [](json& j) { j["condition"] = json::parse(R"({"dt_env_s": 3601})"); }, "condition: dt_env_s must be in (0, 3600]"},
+        {"condition spin-up below dt", [](json& j) { j["condition"] = json::parse(R"({"dt_env_s": 60, "spinup_s": 30})"); }, "condition: spinup_s"},
+        {"condition fast-forward below dt", [](json& j) { j["condition"] = json::parse(R"({"max_fast_forward_s": 10})"); }, "condition: max_fast_forward_s"},
+        {"condition not an object", [](json& j) { j["condition"] = 60; }, "must be an object"},
     };
     int n = 0;
     for (const Row& row : rows) {

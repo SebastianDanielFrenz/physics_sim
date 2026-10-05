@@ -31,6 +31,13 @@
 // function of those plus the immutable climate. An environment without weather
 // hashes exactly as before W4.
 //
+// Surface conditions (W5): with EnvironmentConfig::surface_conditions the
+// Environment owns a ConditionGrid (surface_condition.h) - the one piece of
+// state that is NOT a closed-form function of the clock: per surface class a
+// temperature column stepped on a fixed env-time grid. begin_tick advances it
+// (forward steps or a spin-up after a jump), and fold_state_hash folds it.
+// An environment without surface conditions hashes exactly as before W5.
+//
 // Not thread safe: World calls begin_tick from the sim thread; a game server
 // uses its own instance. sample_air/evaluate are const but read/refresh the
 // weather cursor cache (mutable), so they must not be called concurrently.
@@ -43,6 +50,7 @@
 #include "ps/environment/env_time.h"
 #include "ps/environment/environment_snapshot.h"
 #include "ps/environment/sun.h"
+#include "ps/environment/surface_condition.h"
 #include "ps/environment/vehicle_air.h"
 #include "ps/environment/weather.h"
 #include "ps/environment/wind.h"
@@ -91,6 +99,15 @@ struct EnvironmentConfig {
     // The World's z = 0 sits at location.elevation_m + altitude_offset_m above
     // sea level; vehicles lift/lower the atmosphere by their chassis z from there.
     real altitude_offset_m = 0.0;
+
+    // --- W5: surface conditions ---
+    // Present = the environment owns a ConditionGrid (requires weather != Off
+    // and the seasons' climate scalars). Grid settings: the climate's
+    // "condition" block (defaults when absent).
+    std::optional<SurfaceConditionsDesc> surface_conditions;
+    // The surface classes, index = SurfaceId (a World passes its SurfaceTable
+    // names in id order). Empty = the desc's classes in name order.
+    std::vector<std::string> surface_names;
 };
 
 class Environment {
@@ -177,10 +194,41 @@ public:
     // The along-wind standard deviation the gusts of this tick are synthesised with.
     real gust_sigma_u() const { return air_.sigma_u; }
 
-    // FNV-1a fold of the hashed state (see the file header).
+    // --- W5: surface conditions (weather plan 4, 11.2) ---
+    // The grid advances inside begin_tick (and so inside every clock change
+    // above): 0 or a few steps per tick, a forward jump up to
+    // max_fast_forward_s stepped, anything else a spin-up (surface_condition.h).
+    bool has_surface_conditions() const { return grid_.has_value(); }
+    const ConditionGrid* surface_conditions() const { return grid_ ? &*grid_ : nullptr; }
+    // Number of grid steps the last begin_tick took (spin-up included); a
+    // diagnostic, not hashed.
+    std::int64_t last_condition_steps() const { return last_condition_steps_; }
+    // Throws std::logic_error without surface conditions.
+    ConditionCheckpoint checkpoint_conditions() const;
+    // Restores the grid, then evaluates `tick` (which steps the grid forward
+    // to the clock). Throws std::logic_error without surface conditions,
+    // std::invalid_argument when the checkpoint does not fit, lies ahead of the
+    // clock at `tick`, or more than max_fast_forward_s behind it (the state
+    // would be discarded by a spin-up); nothing changes then.
+    void restore_conditions(const ConditionCheckpoint& checkpoint, std::int64_t tick);
+    // The surface forcing at an env time (what a grid step at that midpoint
+    // uses): the sun, the weather and the day's ground temperature.
+    SurfaceForcing surface_forcing(real t_env) const;
+
+    // FNV-1a fold of the hashed state (see the file header). W5: with surface
+    // conditions additionally the grid's fold_hash.
     std::uint64_t fold_state_hash(std::uint64_t h) const;
 
 private:
+    // The grid's view of this environment (forcing from weather/sun/calendar).
+    struct ForcingSource final : ISurfaceForcingSource {
+        const Environment* env = nullptr;
+        SurfaceForcing forcing_at(real t_env) const override { return env->surface_forcing(t_env); }
+        InitialProfile initial_at(real t_env) const override { return env->initial_profile(t_env); }
+    };
+    InitialProfile initial_profile(real t_env) const;
+    void fill_surfaces(real t_env);
+
     struct AirState {
         bool valid = false;
         SeaLevelAtmosphere sea;       // reference the ISA lift starts from
@@ -220,6 +268,12 @@ private:
     bool adv_valid_ = false;
     std::int64_t adv_window_ = 0;
     real adv_dir_x_ = 1.0, adv_dir_y_ = 0.0, adv_speed_ = 0.0;
+
+    // W5
+    std::optional<ConditionGrid> grid_;
+    ForcingSource forcing_;
+    mutable WeatherCursor grid_cursor_;   // own cursor: grid midpoints (and spin-ups) run apart from the tick time
+    std::int64_t last_condition_steps_ = 0;
 };
 
 } // namespace ps::environment

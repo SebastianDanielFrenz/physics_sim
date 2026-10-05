@@ -343,7 +343,15 @@ ClimateDesc parse_climate_json(const json& root, const std::string& origin) {
         gr.finish();
         d.gusts = g;
     }
-    r.reserve_for_later("condition", "W5 (surface condition)");
+    if (const json* co = r.child("condition")) {
+        ObjectReader cr(*co, "condition", origin);
+        ConditionGridDesc g;   // every member optional: the defaults are the plan's [AS] values
+        g.dt_env_s = cr.number("dt_env_s", false, g.dt_env_s);
+        g.spinup_s = cr.number("spinup_s", false, g.spinup_s);
+        g.max_fast_forward_s = cr.number("max_fast_forward_s", false, g.max_fast_forward_s);
+        cr.finish();
+        d.condition = g;
+    }
     r.finish();
 
     // Meaning checks (ranges, references, the epoch). The string form keeps

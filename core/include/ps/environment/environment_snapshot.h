@@ -10,12 +10,30 @@
 
 #pragma once
 
+#include "ps/environment/surface_condition_desc.h"
 #include "ps/math/vec3.h"
 #include "ps/types.h"
 
+#include <array>
 #include <cstdint>
 
 namespace ps::environment {
+
+// One surface class in the snapshot (weather plan 8.1, W5 subset). The W6-W9
+// fields are published as 0 until their increments exist.
+struct SurfaceConditionSample {
+    std::int32_t surface_id = 0;     // index in the installed surface name list (= SurfaceId)
+    std::int32_t kind = 0;           // ps::environment::SurfaceKind as an integer (0 = static: no state)
+    bool has_state = false;          // false for a static class (every value below 0)
+    real t_surface_c = 0.0;          // surface (node 0) temperature
+    real water_mm = 0.0;
+    real ice_mm = 0.0;
+    real frost_mm = 0.0;
+    real snow_mm = 0.0;
+    real snow_density_kg_m3 = 0.0;
+    real soil_moisture = 0.0;
+    real canopy_water_mm = 0.0;
+};
 
 struct EnvironmentSnapshot {
     // --- Time ---
@@ -54,6 +72,13 @@ struct EnvironmentSnapshot {
     real dew_point_c = 0.0;
     real pressure_msl_hpa = 0.0;
     real lightning_per_min = 0.0;
+
+    // --- Surface (W5: set when the Environment owns a surface-condition grid;
+    // per class in SurfaceId order, values interpolated between the grid
+    // states S[k] and S[k+1] at t_env_s) ---
+    bool has_surfaces = false;
+    std::int32_t surface_count = 0;
+    std::array<SurfaceConditionSample, kMaxSurfaceClasses> surfaces{};
 };
 
 } // namespace ps::environment
