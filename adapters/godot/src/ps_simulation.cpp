@@ -5,11 +5,13 @@
 
 #include <filesystem>
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include "ps/jobs/job_system.h"
 #include "ps/environment/calendar.h"
 #include "ps/environment/climate_io.h"
 #include "ps/environment/environment.h"
+#include "ps/environment/surface_conditions_io.h"
 #include "ps/environment/weather_io.h"
 
 #include <godot_cpp/classes/engine.hpp>
@@ -1054,7 +1056,7 @@ float PsSimulation::get_vehicle_rear_steer_fraction(const String& vehicle_name) 
 
 bool PsSimulation::install_environment(const String& climate_absolute_path, double time_scale, const String& start_season,
                                        std::int64_t start_day, double start_clock_hours, const String& weather,
-                                       double altitude_offset_m) {
+                                       double altitude_offset_m, const String& surface_conditions_absolute_path) {
     if (!world_) {
         last_error_ = "install_environment: no world (call load_scenario first)";
         return false;
@@ -1091,7 +1093,15 @@ bool PsSimulation::install_environment(const String& climate_absolute_path, doub
             start.time_of_day_s = ps::real(start_clock_hours) / 24.0 * day_length_s;
             cfg.start = start;
         }
+        // Weather plan W5: the classes are the scenario's surface table, in SurfaceId order.
+        const std::string surfaces_arg = to_std_string(surface_conditions_absolute_path);
+        if (!surfaces_arg.empty()) {
+            if (world_->surface_table() == nullptr) throw std::invalid_argument("surface conditions need the scenario's surface table");
+            cfg.surface_conditions = ps::io::load_surface_conditions_json(surfaces_arg);
+            cfg.surface_names = world_->surface_table()->names();
+        }
         world_->install_environment(std::make_shared<ps::environment::Environment>(climate, cfg));
+        surface_condition_names_ = cfg.surface_names;
         last_error_ = String();
         return true;
     } catch (const std::exception& e) {
@@ -1193,6 +1203,17 @@ Dictionary PsSimulation::get_environment() const {
         d["lightning_per_min"] = static_cast<double>(e.lightning_per_min);
     }
     return d;
+}
+
+double PsSimulation::get_surface_temperature_c(const String& surface_name) const {
+    const AdapterSnapshot& snap = render_snapshot();
+    if (!snap.has_environment || !snap.environment.has_surfaces) return std::numeric_limits<double>::quiet_NaN();
+    const std::string name = to_std_string(surface_name);
+    const auto it = std::find(surface_condition_names_.begin(), surface_condition_names_.end(), name);
+    const auto id = static_cast<std::int32_t>(it - surface_condition_names_.begin());
+    if (it == surface_condition_names_.end() || id >= snap.environment.surface_count) return std::numeric_limits<double>::quiet_NaN();
+    const ps::environment::SurfaceConditionSample& s = snap.environment.surfaces[static_cast<std::size_t>(id)];
+    return s.has_state ? static_cast<double>(s.t_surface_c) : std::numeric_limits<double>::quiet_NaN();
 }
 
 Dictionary PsSimulation::get_vehicle_air(const String& vehicle_name) const {
@@ -1553,9 +1574,9 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_vehicle_gauge_info", "vehicle_name"), &PsSimulation::get_vehicle_gauge_info);
     // Weather plan W2
     ClassDB::bind_method(D_METHOD("install_environment", "climate_absolute_path", "time_scale", "start_season", "start_day", "start_clock_hours",
-                                  "weather", "altitude_offset_m"),
+                                  "weather", "altitude_offset_m", "surface_conditions_absolute_path"),
                          &PsSimulation::install_environment, DEFVAL(1.0), DEFVAL(String()), DEFVAL(-1), DEFVAL(12.0), DEFVAL(String()),
-                         DEFVAL(0.0));
+                         DEFVAL(0.0), DEFVAL(String()));
     ClassDB::bind_method(D_METHOD("has_environment"), &PsSimulation::has_environment);
     // Weather plan W3b
     ClassDB::bind_method(D_METHOD("set_weather_override", "preset_absolute_path", "ramp_s"), &PsSimulation::set_weather_override, DEFVAL(60.0));
@@ -1564,6 +1585,7 @@ void PsSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_season_lock", "season"), &PsSimulation::set_season_lock);
     ClassDB::bind_method(D_METHOD("get_environment"), &PsSimulation::get_environment);
     ClassDB::bind_method(D_METHOD("get_vehicle_air", "vehicle_name"), &PsSimulation::get_vehicle_air);
+    ClassDB::bind_method(D_METHOD("get_surface_temperature_c", "surface_name"), &PsSimulation::get_surface_temperature_c);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);
     ClassDB::bind_method(D_METHOD("get_wheel_compression", "vehicle_name", "wheel_index"), &PsSimulation::get_wheel_compression);
     ClassDB::bind_method(D_METHOD("get_vehicle_steer_geometry", "vehicle_name"), &PsSimulation::get_vehicle_steer_geometry);

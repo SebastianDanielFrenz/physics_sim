@@ -13,8 +13,22 @@
 //  S3 backward Euler at dt 60 s vs 15 s within 0.2 K.
 //  S4 fast-forward == stepped bit-exact; checkpoint/restore bit-exact.
 //
-// RECORDED SABOTAGES (performed by hand, reverted) - see the end of the file
-// header list filled in after the runs.
+// RECORDED SABOTAGES (performed by hand, reverted, 2026-10-05):
+//  - W5-S0 (the plan's sabotages, run inside the tests as negative controls): albedo 0.5 puts S1 at
+//    30.32 C (-11.05 K vs SHRP); in S2 rho_c x0.25 moves the range +20.3 % and albedo 0.5 -28.8 %.
+//  - W5-S1 (explicit Euler in step_column instead of the implicit Thomas solve): the dense Gaussian
+//    reference failed on every node (node 0 316.34 vs 304.26 K), the energy closure failed (43125 vs
+//    27341 J/m2), S1/S2/S3 failed (the 5 mm top cell is unstable at dt 60 s: NaN), and the snapshot
+//    case read NaN.
+//  - W5-S4 (every forward jump > 1 step spins up instead of stepping, max_fast_forward ignored): S4 B
+//    failed (2881 steps instead of 2160, checkpoints and grid hash differ, surface 34.17 vs 34.90 C).
+//  - W5-S5 (restore copies S[k] into both states): S4 C/E failed (checkpoint, grid hash and the full
+//    Environment hash differ after the restore).
+//  - W5-S2 (an unconditional fold in Environment::fold_state_hash, a zero int64 folded for every
+//    environment): the W4 pin test in ps_determinism_tests failed on environment_day.json
+//    (0x5921cbbefbcaa135 vs 0x2af395ee8a54f0b5 at 1 and 10 workers); this file's cases do not see it.
+//  - W5-S3 (a std::vector allocated in Environment::fill_surfaces): test_environment_surface_world.cpp
+//    "allocates nothing inside the tick" failed at 1 and 4 workers (244 own allocations).
 
 #include "ps/environment/climate_io.h"
 #include "ps/environment/environment.h"

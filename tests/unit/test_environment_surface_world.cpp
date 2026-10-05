@@ -7,8 +7,9 @@
 // Tags [environment][vehicle][world].
 //
 // RECORDED SABOTAGES: see the "RECORDED SABOTAGES" block in test_environment_surface.cpp
-// (W5-S5 allocation in fill_surfaces and W5-S6 the unconditional hash fold were run against
-// this file's cases).
+// (W5-S3, an allocation in Environment::fill_surfaces, failed this file's zero-allocation case
+// with 244 own allocations at 1 and 4 workers; W5-S2, an unconditional hash fold, is caught by
+// the W4 pin test in ps_determinism_tests, not here).
 
 #include "ps/environment/climate_io.h"
 #include "ps/environment/environment.h"

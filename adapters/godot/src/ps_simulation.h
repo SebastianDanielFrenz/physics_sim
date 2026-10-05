@@ -419,9 +419,12 @@ public:
     // physics_sim.weather_preset/1 file held constant; `altitude_offset_m` is added to
     // the climate's elevation. With weather the core environment provides every
     // vehicle's air (ISA at its altitude, humid-air density, wind, gusts).
+    // Weather plan W5: `surface_conditions_absolute_path` non-empty = a
+    // physics_sim.surface_conditions/1 file whose classes are mapped onto the
+    // scenario's surface table (needs weather and a scenario with a surface table).
     bool install_environment(const godot::String& climate_absolute_path, double time_scale, const godot::String& start_season,
                              std::int64_t start_day, double start_clock_hours, const godot::String& weather = godot::String(),
-                             double altitude_offset_m = 0.0);
+                             double altitude_offset_m = 0.0, const godot::String& surface_conditions_absolute_path = godot::String());
     [[nodiscard]] bool has_environment() const;
     // Race-free (render snapshot). Empty Dictionary without an environment.
     // Keys: t_env_s, time_scale, year, season (index), season_name, day_in_season,
@@ -451,6 +454,10 @@ public:
     // wind_speed_m_s (horizontal, mean + gust), mean_wind_m_s, wind_world (Godot-frame
     // Vector3, the air's velocity incl. gust).
     [[nodiscard]] godot::Dictionary get_vehicle_air(const godot::String& vehicle_name) const;
+    // Weather plan W5, race-free (render snapshot): the surface temperature (deg C) of the
+    // named surface class (e.g. "asphalt" for the road), NAN without surface conditions,
+    // for an unknown name or for a static class. Computed in core; read only here.
+    [[nodiscard]] double get_surface_temperature_c(const godot::String& surface_name) const;
 
     [[nodiscard]] godot::PackedStringArray get_vehicle_names() const;
     [[nodiscard]] godot::String get_vehicle_chassis_body_name(const godot::String& vehicle_name) const;
@@ -691,6 +698,9 @@ private:
 
     std::unordered_map<std::string, std::atomic<float>> control_channels_; // see set_control's doc comment above
     godot::String last_error_;
+    // Weather plan W5: the surface table's names in SurfaceId order, cached by
+    // install_environment (setup, main thread) for get_surface_temperature_c.
+    std::vector<std::string> surface_condition_names_;
 };
 
 } // namespace ps_godot

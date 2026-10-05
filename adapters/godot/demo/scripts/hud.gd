@@ -117,6 +117,10 @@ func _process(_delta: float) -> void:
 			else:
 				lines.append("outside %.1f C  %.0f hPa  wind %.1f m/s from %.0f deg" % [
 					float(env["air_temp_c"]), float(env["pressure_msl_hpa"]), float(env["wind_mean_m_s"]), float(env["wind_dir_deg"])])
+			# W5: the road surface temperature from the sim's surface condition grid (NAN without one).
+			var road_c: float = _simulation.get_surface_temperature_c("asphalt")
+			if not is_nan(road_c):
+				lines.append("road (asphalt) %.1f C" % road_c)
 	lines.append("")
 
 	if vehicle_name != "" and _simulation.get_vehicle_names().has(vehicle_name):

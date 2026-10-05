@@ -190,6 +190,7 @@ filled every tick, and no telemetry channel is added.
 | `fixed_day_of_year` | int >= 0 | optional | off | pins every day to one game day's values; mutually exclusive with a fixed `season` |
 | `north_yaw_deg` | real | optional | `0` | rotation of north about the World's Z axis, counter-clockwise from +Y (0 = north is +Y, east is +X); used for `sun_dir_world` |
 | `events` | array | optional | empty | timed environment changes, see below |
+| `surface_conditions` | string | optional | none | W5: a `physics_sim.surface_conditions/1` file ([`surface_conditions.md`](surface_conditions.md)), relative to the scenario file. Needs the scenario's `surface_table_path` (the condition classes are that table's names in `SurfaceId` order; a table name without an entry is a static class) and the `weather` key (the energy balance reads air temperature, wind, humidity and cloud). The grid is stepped on environment time, published per class in `EnvironmentSnapshot::surfaces` and folded into the state hash; nothing in the vehicle physics reads it yet |
 
 Environment time is `t_env = anchor_env + scale * (tick - anchor_tick) / tick_hz`,
 a closed-form function of the tick (nothing accumulates). Installing at tick 0
@@ -230,8 +231,10 @@ Rejected (load errors, never silently dropped): unknown keys, a missing
 `climate`, a climate file error, an unknown `season`/`time.start.season`, a bad
 event (an unknown event key, more or fewer than one action key, a negative
 `ramp_s`, an unknown `set_season` name, a weather event without the
-`weather` key, an unreadable preset file) and keys of later increments
-(`surface_conditions`, `default_tyre_profile`).
+`weather` key, an unreadable preset file), `surface_conditions` that is not a
+string, without `surface_table_path` or without `weather`, an unreadable or
+invalid surface conditions file, and the key of a later increment
+(`default_tyre_profile`: "not supported yet (weather plan W6+)").
 
 The published record (`ps/environment/environment_snapshot.h`, in
 `WorldSnapshot::environment` when `has_environment`): `t_env_s`, `time_scale`,
@@ -240,7 +243,13 @@ The published record (`ps/environment/environment_snapshot.h`, in
 (`day_fraction * 24`: a game day of any length maps onto a 24-hour clock),
 `is_day`, `sun_elevation_rad`, `sun_azimuth_rad` (from north, clockwise),
 `sun_dir_world` (unit vector towards the sun, World frame Z up), `ghi_w_m2`
-(clear-sky Haurwitz irradiance; `cloud_cover` is 0 until W3).
+(clear-sky Haurwitz irradiance; `cloud_cover` is 0 until W3). W5:
+`has_surfaces`, `surface_count` and `surfaces[i]` (`i` = `SurfaceId`):
+`surface_id`, `kind` (0 static, 1 sealed, 2 soil, 3 vegetated), `has_state`,
+`t_surface_c` (interpolated between the two grid states at `t_env_s`) and the
+zero placeholders `water_mm`, `ice_mm`, `frost_mm`, `snow_mm`,
+`snow_density_kg_m3`, `soil_moisture`, `canopy_water_mm` (W6-W8). Not hashed
+(the grid state behind it is).
 
 ## Minimal complete example
 

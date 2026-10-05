@@ -43,6 +43,7 @@ the end of this file under "Discrepancies found".
 - [`nitrous.md`](nitrous.md) � `physics_sim.n2o_bottle/1`, `physics_sim.nitrous_kit/1`, `physics_sim.nitrous_controller/1` (`data/n2o_bottles/`, `data/nitrous_kits/`, `data/nitrous_controllers/`): the slot-in nitrous hardware parts, their overrides, control channels and the vehicle wiring.
 - [`climate.md`](climate.md) — `physics_sim.climate/1`, `data/climates/*.json`. Location, sun, calendar and seasons (W1); per-season weather regimes, transitions, lags, precipitation phase, humidity, diurnal temperature, lightning (W3).
 - [`weather_preset.md`](weather_preset.md) — `physics_sim.weather_preset/1`, `data/weather_presets/*.json`. One fixed-value regime: the base in Preset mode or an override target.
+- [`surface_conditions.md`](surface_conditions.md) — `physics_sim.surface_conditions/1`, `data/surface_conditions/*.json`. Per surface class: kind, albedo, emissivity and a two-layer thermal column (W5); the road surface temperature model.
 - [`weather_classes.md`](weather_classes.md) — `physics_sim.weather_classes/1`, `data/weather_classes/*.json`. WMO intensity, DWD Starkregen/gust warning, Beaufort and TORRO thresholds with ge/gt boundary rules.
 
 ## Format versioning

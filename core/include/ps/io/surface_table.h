@@ -35,6 +35,8 @@ public:
     // this table).
     [[nodiscard]] const std::string& name_for(SurfaceId id) const;
     [[nodiscard]] std::size_t size() const { return names_.size(); }
+    // Every name in SurfaceId order (weather plan W5: the surface condition classes).
+    [[nodiscard]] const std::vector<std::string>& names() const { return names_; }
 
     // PLAN.md section 6 / P3: the tyre model is the first consumer of the
     // actual physical values (lambda_mu, crr) rather than just the

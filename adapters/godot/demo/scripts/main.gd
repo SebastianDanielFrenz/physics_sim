@@ -164,6 +164,11 @@ var ground_grid: MeshInstance3D
 #                           (temperature, pressure, density at the car's altitude) and wind + gusts;
 #                           a bare preset name resolves to data/weather_presets/<name>.json
 #   --m1-altitude-offset=<m>   altitude of the world's z = 0 above the climate's station
+# Weather plan W5 (needs --m1-weather):
+#   --m1-surfaces=<name or path>   surface condition classes (a bare name resolves to
+#                           data/surface_conditions/<name>.json, e.g. "default"); the HUD shows the
+#                           road (asphalt) surface temperature the sim computes
+var _env_surfaces_arg: String = ""
 var _env_weather_arg: String = ""
 var _env_altitude_offset_m: float = 0.0
 var _env_climate_arg: String = ""
@@ -471,6 +476,8 @@ func _ready() -> void:
 			_env_season = a.substr(len("--m1-season="))
 		elif a.begins_with("--m1-weather="):
 			_env_weather_arg = a.substr(len("--m1-weather="))
+		elif a.begins_with("--m1-surfaces="):
+			_env_surfaces_arg = a.substr(len("--m1-surfaces="))
 		elif a.begins_with("--m1-altitude-offset="):
 			_env_altitude_offset_m = a.substr(len("--m1-altitude-offset=")).to_float()
 		elif a.begins_with("--m1-day="):
@@ -1069,7 +1076,14 @@ func _setup_environment(repo_root: String) -> void:
 		elif not weather.is_absolute_path():
 			weather = repo_root.path_join(weather)
 		weather = weather.simplify_path()
-	var ok: bool = simulation.install_environment(path.simplify_path(), _env_time_scale, _env_season, start_day, start_hours, weather, _env_altitude_offset_m)
+	var surfaces: String = _env_surfaces_arg
+	if surfaces != "":
+		if not (surfaces.contains("/") or surfaces.contains("\\") or surfaces.ends_with(".json")):
+			surfaces = repo_root.path_join("data/surface_conditions/%s.json" % surfaces)
+		elif not surfaces.is_absolute_path():
+			surfaces = repo_root.path_join(surfaces)
+		surfaces = surfaces.simplify_path()
+	var ok: bool = simulation.install_environment(path.simplify_path(), _env_time_scale, _env_season, start_day, start_hours, weather, _env_altitude_offset_m, surfaces)
 	print("ps_godot main.gd: install_environment ", path.simplify_path(), " scale=", _env_time_scale, " returned: ", ok, " err=", simulation.get_last_error())
 
 func _update_sun() -> void:

@@ -1,12 +1,13 @@
 // ps/environment/environment_snapshot.h - the published environment record
-// (weather plan 8.1), W2 subset: time and sun. Later increments add the
-// weather, surface and wind groups as further additive fields.
+// (weather plan 8.1): time and sun (W2), weather (W3/W4), surface condition
+// per class (W5). Later increments add further additive fields.
 //
 // A plain, fixed-size, trivially copyable value: filling it never allocates,
 // so World::stage_snapshot can copy it into every WorldSnapshot slot inside a
-// job (PLAN.md D8). It is NEVER hashed - it is a pure function of the clock
-// (Environment::evaluate), and the clock anchor is what World::state_hash
-// folds.
+// job (PLAN.md D8). It is NEVER hashed - time, sun and weather are pure
+// functions of the clock (the clock anchor is what World::state_hash folds);
+// the surface samples are read from the condition grid, whose state the hash
+// folds instead.
 
 #pragma once
 
