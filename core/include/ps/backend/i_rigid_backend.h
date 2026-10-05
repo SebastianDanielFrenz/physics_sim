@@ -1,7 +1,7 @@
 // ps/backend/i_rigid_backend.h — backend seam (PLAN.md D2).
 //
-// create/destroy bodies, shapes (via our own descriptors, never a backend
-// shape handle), joints; apply wrench; step; ray/shape casts; contacts.
+// create/destroy bodies, shapes (via our own descriptors, or an opaque
+// prebuilt ps::ShapeHandle - never a backend shape type), joints; apply wrench; step; ray/shape casts; contacts.
 // No Jolt type appears anywhere in this header - the only implementation in
 // P1 is core/src/backend/jolt/jolt_backend.cpp, reached only through
 // create_jolt_backend() below, which returns the abstract interface.
@@ -9,6 +9,7 @@
 #pragma once
 
 #include "ps/backend/shape_desc.h"
+#include "ps/backend/shape_handle.h"
 #include "ps/jobs/job_system.h"
 #include "ps/math/mat3.h"
 #include "ps/math/pose.h"
@@ -201,6 +202,29 @@ public:
 
     virtual BodyId create_body(const BodyDesc& desc) = 0;
     virtual void destroy_body(BodyId id) = 0;
+
+    // Prebuilt shapes (racing_game R2) - full contract in
+    // ps/backend/shape_handle.h. create_shape is const and touches no
+    // backend instance state: safe on ANY thread, concurrently with step(),
+    // with body creation/destruction and with other create_shape calls.
+    // Throws std::invalid_argument for a HeightfieldShape, std::runtime_error
+    // when the backend rejects the shape. Allocates (never call it from a
+    // ps::jobs job body).
+    [[nodiscard]] virtual ShapeHandle create_shape(const ShapeDesc& desc) const = 0;
+    // Sim thread, between steps (like create_body(desc)). Exactly
+    // create_body(desc) with desc.shape replaced by the shape `shape` was
+    // built from - same BodyId sequence, bit-identical body; desc.shape is
+    // ignored. O(1) in the shape's size. The body keeps the shape alive
+    // until destroy_body. Throws std::invalid_argument for an empty handle,
+    // a handle another backend type built, or a MeshShape handle on a
+    // non-Static body.
+    virtual BodyId create_body(const BodyDesc& desc, const ShapeHandle& shape) = 0;
+
+    // Test-only (allocates): FNV-1a over the backend's own binary
+    // serialisation of the body's collision shape (Jolt SaveWithChildren -
+    // for a mesh its whole BVH/triangle buffer) plus the surface ids of its
+    // materials. Equal digests == byte-identical shapes.
+    [[nodiscard]] virtual std::uint64_t debug_body_shape_digest(BodyId id) const = 0;
 
     virtual JointId create_joint(const JointDesc& desc) = 0;
     virtual void destroy_joint(JointId id) = 0;

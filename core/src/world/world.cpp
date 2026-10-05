@@ -1008,6 +1008,12 @@ BodyId World::create_body(const BodyDesc& desc) {
     return id;
 }
 
+BodyId World::create_body(const BodyDesc& desc, const ShapeHandle& shape) {
+    const BodyId id = backend_->create_body(desc, shape);
+    if (terrain_manager_ && desc.motion == BodyMotionType::Static) terrain_manager_->on_static_geometry_changed();
+    return id;
+}
+
 void World::destroy_body(BodyId id) {
     const bool was_static = terrain_manager_ && backend_->is_static(id);
     backend_->destroy_body(id);
