@@ -144,7 +144,7 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
 
 SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& starter,
                                                  real omega, real p, bool fired, real s_starve, bool starter_active,
-                                                 bool ignore_limiter = false, const AntiLagDesc* als = nullptr) {
+                                                 bool ignore_limiter = false, const AntiLagDesc* als = nullptr, real k_fric = real(1.0)) {
     SimulatedEngine::TorqueEval e;
     const real rpm = std::abs(omega) * kRadPerSecToRpm;
     const real s_w = sign(omega);
@@ -247,7 +247,10 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     }
     e.tau_pump = -s_w * (amb.p_amb - p + pmep) * vc_2pi;
     const real f_rpm = m.maps.friction_torque_nm.evaluate(rpm);
-    e.tau_fric = -s_w * (f_rpm - m.c_k);
+    // Engine thermal plan T1: k_fric = the oil-viscosity friction scale of the CALLER's model (the plant's k for the
+    // physics, the ECU's estimate for the steady tables); the Coulomb part c_k is excluded here and scaled by the
+    // Coulomb row. k_fric = 1.0: x*1.0 == x, bit-identical.
+    e.tau_fric = -s_w * (k_fric * (f_rpm - m.c_k));
 
     // starter (EngineTorqueMap's own law)
     const real omega_s0 = starter.free_speed_rpm / kRadPerSecToRpm;
@@ -260,7 +263,7 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     // ever runs at omega > 0 (sign 1). Pumping/friction: sign(omega)^2 = 1.
     real dtau = kRadPerSecToRpm * s_w * dcomb_drpm;
     dtau += -kRadPerSecToRpm * dpmep_drpm * vc_2pi * (s_w != real(0.0) ? real(1.0) : real(0.0));
-    dtau += -kRadPerSecToRpm * curve_slope_at(m.maps.friction_torque_nm, rpm) * (s_w != real(0.0) ? real(1.0) : real(0.0));
+    dtau += -kRadPerSecToRpm * k_fric * curve_slope_at(m.maps.friction_torque_nm, rpm) * (s_w != real(0.0) ? real(1.0) : real(0.0));
     if (starter_active && omega >= real(0.0) && omega < omega_s0) dtau -= starter.stall_torque_nm / omega_s0;
     e.dtau_domega = dtau;
     return e;
@@ -287,23 +290,24 @@ real steady_p(const SimulatedEngineMaps& m, const Ambient& amb, real omega, real
 // ignore_limiter flag (fire = 1 when fired, exactly what C11's limiter-free
 // maps copy gave) instead of copying the whole maps struct, which allocated.
 real steady_net_torque(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& st, real rpm, real x_thr, real x_iac,
-                       bool fired) {
+                       bool fired, real k_ecu = real(1.0)) {
     const real omega = rpm / kRadPerSecToRpm;
     const real p = steady_p(m, amb, omega, x_thr, x_iac);
-    return evaluate_torque_impl(m, amb, st, omega, p, fired, real(1.0), false, true).tau - m.c_k;
+    // k_ecu: the ECU's friction scale (engine thermal plan T1); the Coulomb row's kinetic value scales with it too.
+    return evaluate_torque_impl(m, amb, st, omega, p, fired, real(1.0), false, true, nullptr, k_ecu).tau - k_ecu * m.c_k;
 }
 
 // Setup builds use 60 iterations; live control solves only the current idle operating point.
 void fill_idle_control(const SimulatedEngineMaps& m,const Ambient& amb,real idle_rpm,real idle_max_x,
-                       real idle_max_torque_nm,SimulatedSteadyTables& t,int iterations) {
+                       real idle_max_torque_nm,SimulatedSteadyTables& t,int iterations,real k_ecu = real(1.0)) {
     const StarterDesc no_starter{};
     // Idle feed-forward: the plate (electronic) / bypass valve (mechanical,
     // plate at 0) position whose steady net torque at idle_rpm is zero.
     {
         const bool mech = m.throttle_input == ThrottleInput::Mechanical;
         auto net = [&](real x) {
-            return mech ? steady_net_torque(m, amb, no_starter, idle_rpm, real(0.0), x, true)
-                        : steady_net_torque(m, amb, no_starter, idle_rpm, x, real(0.0), true);
+            return mech ? steady_net_torque(m, amb, no_starter, idle_rpm, real(0.0), x, true, k_ecu)
+                        : steady_net_torque(m, amb, no_starter, idle_rpm, x, real(0.0), true, k_ecu);
         };
         real ff = real(0.0);
         if (net(real(0.0)) >= real(0.0)) {
@@ -587,14 +591,14 @@ void SimulatedEngine::set_live_ambient(real p_pa,real t_k) {
     if(live_steady()) {
         // Stack-only scalar output; no table vectors are populated or allocated.
         SimulatedSteadyTables idle;
-        fill_idle_control(*maps_,make_ambient(p_pa,t_k),desc_idle_rpm_,idle_.max_throttle,idle_.max_torque_nm,idle,24);
+        fill_idle_control(*maps_,make_ambient(p_pa,t_k),desc_idle_rpm_,idle_.max_throttle,idle_.max_torque_nm,idle,24,ecu_k_);
         live_idle_ff_=idle.idle_ff; live_idle_p_im_=idle.idle_p_im; live_idle_cap_x_=idle.idle_cap_x;
     }
 }
 
 real SimulatedEngine::live_steady_torque(real rpm,real plate,bool fired) const {
     const real clamped_rpm=std::clamp(rpm,steady_.steady_torque_nm.x.front(),steady_.steady_torque_nm.x.back());
-    return steady_net_torque(*maps_,make_ambient(p_amb_,t_amb_),StarterDesc{},clamped_rpm,plate,real(0),fired);
+    return steady_net_torque(*maps_,make_ambient(p_amb_,t_amb_),StarterDesc{},clamped_rpm,plate,real(0),fired,ecu_k_);
 }
 
 real SimulatedEngine::live_inverse_plate(real rpm,real request) const {
@@ -712,11 +716,11 @@ SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
         auto result = evaluate_torque_impl(*maps_,Ambient{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)},starter_,omega,p_im,fired,s_starve,starter_active,
-                                           false,als);
+                                           false,als,plant_k_);
         return result;
     }
     return evaluate_torque_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega, p_im, fired, s_starve, starter_active,
-                                false, als);
+                                false, als, plant_k_);
 }
 
 void SimulatedEngine::clear_anti_lag_state() {
@@ -731,8 +735,15 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     const bool mech = m.throttle_input == ThrottleInput::Mechanical;
     // Physical atmosphere follows every finite change, including microscopic altitude motion.
     // Control uses the current operating point; never refill the whole steady grid in a job.
+    // Engine thermal plan T1: the plant's friction scale acts at once; a changed ECU estimate (once per 1 K of oil
+    // temperature, quantised by EngineThermal) recomputes the live idle control in place - never the steady grid.
+    plant_k_ = sensors.friction_scale;
+    const bool ecu_k_changed = sensors.ecu_friction_scale != ecu_k_;
+    ecu_k_ = sensors.ecu_friction_scale;
     if (sensors.ambient.pressure_pa != p_amb_ || sensors.ambient.temperature_k != t_amb_) {
         set_live_ambient(sensors.ambient.pressure_pa, sensors.ambient.temperature_k);
+    } else if (ecu_k_changed) {
+        set_live_ambient(p_amb_, t_amb_);
     }
     const real omega_old = sensors.omega;
     omega_old_ = omega_old;
@@ -964,6 +975,9 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         als_extra_w_ = std::max(omega_old, real(0.0)) * (ev.tau_comb_unretarded - ev.tau_comb);
         if (als_active_ && s_starve < real(1.0)) als_armed_ = false; // starving: no more anti-lag this lift
     }
+    // Engine thermal plan T1 (4.1): the share of the metered fuel energy released in the cylinder
+    // (oxygen-limited, [AS] as the exhaust balance below), less an anti-lag cut share (burnt in the manifold).
+    eta_c_ = (ev.lambda > real(0.0) ? std::min(real(1.0), ev.lambda) : real(0.0)) * (real(1.0) - ev.cut_fraction);
     tau_comb_ = ev.tau_comb;
     tau_pump_ = ev.tau_pump;
     tau_fric_ = ev.tau_fric;
@@ -974,8 +988,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     PreSolveResult r;
     r.tau0 = tau0_;
     r.d = d_;
-    r.friction_cap_static = breakaway_torque_nm_;
-    r.friction_cap_kinetic = m.c_k;
+    r.friction_cap_static = breakaway_torque_nm_ * plant_k_; // engine thermal plan T1: the Coulomb part scales with k
+    r.friction_cap_kinetic = m.c_k * plant_k_;
     r.state = state_;
     r.rpm = rpm;
     r.throttle_eff = x_thr_;
@@ -1005,8 +1019,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         const real rt = kGasConstant * turbo_->charge_k;
         const auto uncut = evaluate_torque_impl(m,
             Ambient{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)},
-            starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval);
-        r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
+            starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_);
+        r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * (ecu_k_ * m.c_k));
     }
     r.theta_c = std::clamp(ev.fire * s_starve * p_im_ / p_amb_, real(0.0), real(1.0));
     r.fuel_flow_g_s = booked_fuel_mass_kg_ / h * real(1000.0);
@@ -1097,6 +1111,10 @@ PostSolveResult SimulatedEngine::post_solve(real omega_new, real h) {
     work_split_.friction = h * omega_old_ * tau_fric_;
     r.pumping_work_delta = work_split_.pumping;
     r.friction_work_delta = work_split_.friction;
+    // Engine thermal plan T1 (4.1/4.4): released combustion energy and the smooth friction work turned into heat
+    // (tau_fric opposes motion, so -work >= 0 to rounding; booked as is so the thermal closure stays exact).
+    r.released_heat_delta = eta_c_ * r.fuel_energy_in_delta;
+    r.friction_heat_delta = -work_split_.friction;
 
     // std::fmod is exact (IEEE), like EngineTorqueMap's; folded into
     // [0, 4*pi). A subtraction loop here hung on a non-finite omega (found

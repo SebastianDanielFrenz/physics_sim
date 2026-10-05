@@ -287,7 +287,9 @@ public:
 private:
     void init_state_for(EngineState state);
     void set_live_ambient(real p_pa,real t_k);
-    [[nodiscard]] bool live_steady() const { return p_amb_!=steady_.p_pa || t_amb_!=steady_.t_k; }
+    // Live control path: the ambient differs from the setup tables' OR the ECU's friction scale is not exactly 1.0
+    // (engine thermal plan T1: the setup tables assume k = 1; a cold engine's ECU models the extra friction live).
+    [[nodiscard]] bool live_steady() const { return p_amb_!=steady_.p_pa || t_amb_!=steady_.t_k || ecu_k_!=real(1.0); }
     [[nodiscard]] real live_steady_torque(real rpm,real plate,bool fired) const;
     [[nodiscard]] real live_inverse_plate(real rpm,real request) const;
 
@@ -330,6 +332,12 @@ private:
     SimulatedSteadyTables steady_; // full setup cache; non-reference anchor is hashed, values derive from maps/anchor
     std::uint64_t steady_rebuilds_ = 0;
     real live_idle_ff_=0, live_idle_p_im_=0, live_idle_cap_x_=0;
+    // Engine thermal plan T1 (vault PHYS-063): the oil-viscosity friction scale. plant_k_ = the PLANT's k (the
+    // physical friction: tau_fric, the Coulomb caps, the friction slope in d); ecu_k_ = the ECU's quantised estimate
+    // (steady torque tables, idle feed-forward/cap, torque demand). Both come from Sensors, one tick old, both 1.0
+    // without thermal. Not hashed (derived from the hashed thermal state). eta_c_ = this substep's combustion
+    // efficiency min(1, lambda) x (1 - anti-lag cut share), read by post_solve for the released heat.
+    real plant_k_ = 1.0, ecu_k_ = 1.0, eta_c_ = 0.0;
     real p_amb_ = kIsaPressurePa, t_amb_ = kIsaTemperatureK;
     real r_t_ = 0.0;         // R*T_amb
     real inv_sqrt_rt_ = 0.0; // 1/sqrt(R*T_amb)

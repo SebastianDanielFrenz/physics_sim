@@ -11,7 +11,7 @@
 //   C3b a heap allocation in Powertrain::end_tick (after thermal_->step) -> U8 World half: own violations 720.
 //   C3c the Coulomb-row share dropped from accumulate() -> thermal_friction_in == 0 (the "thermal ledger" CHECK).
 //   C3d ambient start disabled -> coolant 91.0 / oil 95.0 instead of -20 C ("ambient start soaks").
-//   U9a graph (C4): Sensors::friction_scale +1e-14 in Powertrain -> first differing tick 0.
+//   U9a graph (C4) and U9a simulated (C5): Sensors::friction_scale +1e-14 in Powertrain -> first differing tick 0.
 //   (the EngineRig setters case shares the ambient-start mechanism of C3d; U9a's sabotage lands with C4/C5.)
 
 #include "drivetrain/engine_thermal.h"
@@ -122,7 +122,7 @@ TEST_CASE("U9a graph engine with a thermal model and k = 1 is bit-identical to t
 }
 
 TEST_CASE("U9a simulated engine with a thermal model and k = 1 is bit-identical to the same engine without", "[thermal][drivetrain]") {
-    u9a("engines/toyota_a25a_fks_sim.json", false); // coupled from C5
+    u9a("engines/toyota_a25a_fks_sim.json", true);
 }
 
 TEST_CASE("EngineRig thermal setters and rejections", "[thermal][drivetrain]") {
