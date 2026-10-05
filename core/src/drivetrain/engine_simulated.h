@@ -226,22 +226,43 @@ public:
         real fire = 0.0;         // gate * soft-cut taper, before s_starve
         real lambda = 0.0, spark_deg = 0.0, theta_mbt_deg = 0.0;
         real eta_i = 0.0, f_lambda = 0.0, eta_spark = 0.0;
-        // I7d D5: tau_comb at the SCHEDULED spark (no anti-lag retard); equal to
-        // tau_comb when spark_retard_deg is 0.
+        // I7d D5: tau_comb at the SCHEDULED spark with every injected charge fired (no anti-lag retard,
+        // spark setting or cylinder cut; the anti-lag lambda applies); equal to tau_comb without anti-lag.
         real tau_comb_unretarded = 0.0;
+        // anti-lag cylinder cut: share of the injected fuel (m_fuel_rev) whose spark is cut; tau_comb covers
+        // the fired share (1 - cut_fraction) only. 0 without anti-lag.
+        real cut_fraction = 0.0;
     };
-    // spark_retard_deg (I7d D5, >= 0): subtracted from the scheduled (knock-
-    // limited) advance before eta_spark is looked up - the anti-lag retard.
+    // als (I7d D5, nullptr = none): the active anti-lag block - the spark is retarded by retard_deg from
+    // the scheduled (knock-limited) advance or set to spark_advance_deg before eta_spark is looked up
+    // (below the table's most retarded node eta_spark is extrapolated linearly, floored at 0), lambda is
+    // overridden when the block sets one, and cylinder_cut_fraction of the charges are not fired.
     [[nodiscard]] TorqueEval evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active,
-                                             real spark_retard_deg = 0.0) const;
+                                             const AntiLagDesc* als = nullptr) const;
 
     // I7d D5 anti-lag white-box accessors (all 0/false/true defaults without an anti_lag block).
     [[nodiscard]] bool anti_lag_active() const { return als_active_; }
     [[nodiscard]] bool anti_lag_armed() const { return als_armed_; }
     [[nodiscard]] real anti_lag_timer_s() const { return als_timer_s_; }
     [[nodiscard]] real anti_lag_extra_exhaust_w() const { return als_extra_w_; }
-    [[nodiscard]] real anti_lag_held_exhaust_w() const { return turbo_als_w_; }
     [[nodiscard]] const TurboPair* turbo() const { return turbo_ ? &*turbo_ : nullptr; }
+
+    // Exhaust energy balance of the latest pre_solve (turbo engines only; zeros otherwise), all W:
+    // fuel_w = indicated_w + wall_w + sensible_w + chemical_w - clamp_w (manifold_w, the cut charge burnt
+    // in the exhaust manifold under anti-lag, is part of sensible_w). port_k is the gas temperature
+    // at the exhaust ports handed to the next substep's turbo step. Never hashed (port_k is, as
+    // turbo_port_k_).
+    struct ExhaustSplit {
+        real fuel_w = 0.0;      // booked fuel mass flow x LHV
+        real indicated_w = 0.0; // omega_old * tau_comb
+        real wall_w = 0.0;      // in-cylinder wall heat
+        real sensible_w = 0.0;  // exhaust sensible enthalpy above the intake temperature
+        real chemical_w = 0.0;  // unreleased fuel energy (lambda < 1)
+        real clamp_w = 0.0;     // sensible enthalpy added by the >= 0 guard (0 in every shipped regime)
+        real manifold_w = 0.0;  // anti-lag: cut-cylinder fuel energy released in the exhaust manifold
+        real port_k = 0.0;
+    };
+    [[nodiscard]] const ExhaustSplit& exhaust_split() const { return exhaust_split_; }
 
     // Manifold right-hand side f(p) = dp_im/dt and df/dp at (p_im, omega,
     // plate, bypass) - the function the air step integrates.
@@ -273,17 +294,18 @@ private:
     std::optional<TurboPair> turbo_;
     // Turbo feeds (hashed), all written by the previous substep: turbo_air_kg_s_ = the THROTTLE-path mass
     // flow (ManifoldRhs::m_thr, positive part, relaxed by kTurboFlowLagS) - the flow the compressor delivers;
-    // turbo_exhaust_kg_s_ = the cylinder exhaust flow; turbo_fuel_w_ = the exhaust heat (burnt fuel power,
-    // peak-held with kExhaustHeatHoldS). See engine_simulated.cpp.
-    real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_fuel_w_ = 0.0;
+    // turbo_exhaust_kg_s_ = the cylinder exhaust flow; turbo_port_k_ = the exhaust port gas temperature from
+    // the exhaust energy balance (0 = no gas yet: the pair treats it as ambient). See engine_simulated.cpp.
+    real turbo_air_kg_s_ = 0.0, turbo_exhaust_kg_s_ = 0.0, turbo_port_k_ = 0.0;
+    ExhaustSplit exhaust_split_;
     // I7d D5 anti-lag (hashed only when the turbo configuration has an anti_lag block):
     // als_active_ this substep's activity, als_armed_ false once max_active_s is used up in
     // this lift or after a starving substep (re-armed when the command rises to
-    // arm_below_command), als_timer_s_ the activity accumulated in this lift, turbo_als_w_ the anti-lag exhaust heat handed to the turbine (peak-held like
-    // turbo_fuel_w_, written by the previous substep). Not hashed: als_extra_w_ (this
-    // substep's removed indicated work rate) and the activation counter (sound only).
+    // arm_below_command), als_timer_s_ the activity accumulated in this lift. Not hashed:
+    // als_extra_w_ (this substep's removed indicated work rate - by the exhaust energy balance
+    // the sensible exhaust enthalpy it adds) and the activation counter (sound only).
     bool als_active_ = false, als_armed_ = true;
-    real als_timer_s_ = 0.0, turbo_als_w_ = 0.0, als_extra_w_ = 0.0;
+    real als_timer_s_ = 0.0, als_extra_w_ = 0.0;
     std::uint32_t als_activations_ = 0;
     void clear_anti_lag_state();
 

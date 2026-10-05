@@ -993,7 +993,21 @@ TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy
     auto s=running(0); s.ignition=0;
     for(int i=0;i<19200;++i) { (void)boosted.pre_solve(s,cmd(0),TcuRequest{},kH); (void)boosted.post_solve(0,kH); }
     auto stopped=boosted.pre_solve(s,cmd(0),TcuRequest{},kH);
-    CHECK(stopped.turbo_rpm<10000);
+    // Engine stopped for 20 s: no exhaust, so nothing adds rotor energy; the shaft loss P_ref*(w/w_ref)^2 alone
+    // decays it exponentially with tau = J*w_ref^2/P_ref (121 s for the doubled shipped 2.3e-4 kg*m^2 rotor) -
+    // an upper bound. The compressor refilling the manifold after the stop takes the rest: measured 100509 rpm
+    // = 0.947 x the shaft-loss-only 106100 (from 125159). Was a fixed "< 10000 rpm", which only the old
+    // 2e-5 [AS] rotor met (tau 10.5 s).
+    {
+        const real wr=replacement.reference_rpm*2*kPi/60;
+        const real tau=replacement.rotor_inertia_kgm2*wr*wr/replacement.shaft_loss_w_at_reference;
+        const real expected=lifted.turbo_rpm*std::exp(-20.0/tau);
+        std::printf("[turbo dyno] stopped 20 s: rotor %.0f -> %.0f rpm, shaft-loss decay alone %.0f rpm (tau %.1f s)\n",
+                    lifted.turbo_rpm,stopped.turbo_rpm,expected,tau);
+        CHECK(stopped.turbo_rpm<lifted.turbo_rpm);
+        CHECK(stopped.turbo_rpm<=expected*1.001);
+        CHECK(stopped.turbo_rpm>=expected*0.90);
+    }
     TurboPair pair(*desc.turbo_pair); pair.reset(101325,288.15);
     for(int i=0;i<9600;++i) pair.step(kH,101325,288.15,0,0,0,1);
     CHECK(pair.energy_j==0); CHECK(pair.charge_pa==101325);

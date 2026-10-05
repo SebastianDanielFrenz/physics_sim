@@ -57,7 +57,7 @@ std::uint64_t pair_script_hash() {
     Fnv f;
     for (int i = 0; i < kScriptSteps; ++i) {
         const Phase p = script_phase(i);
-        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.fuel_w, p.plate);
+        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.port_k, p.plate);
         f.pod(pair.energy_j); f.pod(pair.charge_pa); f.pod(pair.charge_k);
         f.pod(pair.exhaust_pa); f.pod(pair.wastegate); f.pod(pair.boost_integral);
         f.pod(pair.compressor_w); f.pod(pair.turbine_w);
@@ -96,11 +96,18 @@ TEST_CASE("Guard: a pair without I7d blocks is bit-identical to master 976e8d7",
     const std::uint64_t eh = engine_script_hash();
     std::printf("[turbo guard] pair script hash 0x%016llx, engine script hash 0x%016llx\n",
                 static_cast<unsigned long long>(ph), static_cast<unsigned long long>(eh));
-    CHECK(ph == 0x42be4848b80f27d5ULL);
-    // Engine-level hash re-recorded for the I7d compressor-flow fix (the compressor is fed the relaxed throttle
-    // flow, the turbine heat is peak-held: engine behaviour with a turbo moved on purpose). Was 0xc5a3c62d9ce14ffa
-    // on b486223. The pair-level hash above is UNCHANGED (TurboPair::step is untouched).
-    CHECK(eh == 0x90b9167102a14c12ULL);
+    // Both re-recorded for the exhaust energy balance + exhaust wall thermal mass (no 1200 K cap, no 0.5 s
+    // heat hold): TurboPair::step takes the port gas temperature instead of a fuel power, steps a hashed wall
+    // temperature and computes the turbine from the post-wall gas temperature; the engine hands it the port
+    // temperature of its own energy balance. Was pair 0x42be4848b80f27d5 / engine 0x90b9167102a14c12 (e38b56c);
+    // the engine hash before that, on b486223, 0xc5a3c62d9ce14ffa (compressor-flow fix).
+    // Re-recorded again for the review fix (test_turbo_wastegate_split.cpp): the wastegate is a port in
+    // parallel with the turbine (flow split by effective area, default 2.4 x the throat) instead of a
+    // 100 % bypass at full opening, and the compressor power is bounded by the head of the current rotor
+    // speed; the engine hash also folds the wastegate area. Was pair 0xeb6a5f7cc032271f / engine
+    // 0xd8b9c8a08566580c (9fd087c).
+    CHECK(ph == 0xe7d5137fd1bbb44dULL);
+    CHECK(eh == 0x721d080fecaad8b0ULL);
 }
 
 TEST_CASE("Guard scripts exercise the turbo: spool, lift-off, re-apply", "[turbo][drivetrain][guard]") {
@@ -110,7 +117,7 @@ TEST_CASE("Guard scripts exercise the turbo: spool, lift-off, re-apply", "[turbo
     real rpm_spooled = 0.0, charge_spooled = 0.0, rpm_lift = 0.0, rpm_reapplied = 0.0;
     for (int i = 0; i < kScriptSteps; ++i) {
         const Phase p = script_phase(i);
-        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.fuel_w, p.plate);
+        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.port_k, p.plate);
         if (i == 1439) { rpm_spooled = pair.rpm(); charge_spooled = pair.charge_pa; }
         if (i == 2399) rpm_lift = pair.rpm();
         if (i == kScriptSteps - 1) rpm_reapplied = pair.rpm();

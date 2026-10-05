@@ -2357,6 +2357,9 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
     t.compressor_efficiency=require_positive(hw,"compressor_efficiency",hw_path);
     t.turbine_efficiency=require_positive(hw,"turbine_efficiency",hw_path);
     t.turbine_area_m2=require_positive(hw,"turbine_area_m2",hw_path)*count;
+    // Optional effective wastegate port area per turbo (absent = the desc's [AS] ratio to the
+    // turbine area). Feeds no map: outside the cache key.
+    if(hw.contains("wastegate_area_m2")) t.wastegate_area_m2=require_positive(hw,"wastegate_area_m2",hw_path)*count;
     t.shaft_loss_w_at_reference=require_positive(hw,"shaft_loss_w_at_reference",hw_path)*count;
     // I7d D3: optional surge line of the hardware file (flag only; feeds no map and
     // no dynamics, so it is outside the cache key and the state hash).
@@ -2448,7 +2451,8 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         if(!al.is_object()) throw std::runtime_error(path+": 'anti_lag' must be an object");
         const std::string actx=path+": anti_lag";
         static const char* const kKeys[]={"channel","default_enabled","arm_below_command","min_rpm","max_rpm",
-                                          "retard_deg","plate_floor","max_active_s","source"};
+                                          "retard_deg","plate_floor","max_active_s","source","spark_advance_deg",
+                                          "cylinder_cut_fraction","manifold_burn_fraction","lambda","boost_target_fraction"};
         for(auto it=al.begin();it!=al.end();++it)
             if(std::none_of(std::begin(kKeys),std::end(kKeys),[&](const char* k){ return it.key()==k; }))
                 throw std::runtime_error(actx+": unknown key '"+it.key()+"'");
@@ -2468,15 +2472,69 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         if(!(a.min_rpm>=0)) throw std::runtime_error(actx+": 'min_rpm' must be >= 0");
         a.max_rpm=require_number(al,"max_rpm",actx);
         if(!(a.max_rpm>a.min_rpm)) throw std::runtime_error(actx+": 'max_rpm' must be > 'min_rpm'");
-        a.retard_deg=require_number(al,"retard_deg",actx);
-        if(!(a.retard_deg>=0)) throw std::runtime_error(actx+": 'retard_deg' must be >= 0");
+        // Exactly one of retard_deg (from the scheduled advance) and spark_advance_deg (absolute).
+        if(al.contains("retard_deg") && al.contains("spark_advance_deg"))
+            throw std::runtime_error(actx+": give either 'retard_deg' or 'spark_advance_deg', not both");
+        if(al.contains("spark_advance_deg")) {
+            const real sa=require_number(al,"spark_advance_deg",actx);
+            if(!(sa>=-90 && sa<=60)) throw std::runtime_error(actx+": 'spark_advance_deg' must be in [-90, 60]");
+            a.spark_advance_deg=sa;
+        } else {
+            a.retard_deg=require_number(al,"retard_deg",actx);
+            if(!(a.retard_deg>=0)) throw std::runtime_error(actx+": 'retard_deg' must be >= 0");
+        }
         a.plate_floor=require_number(al,"plate_floor",actx);
         if(!(a.plate_floor>=0 && a.plate_floor<=1)) throw std::runtime_error(actx+": 'plate_floor' must be in [0, 1]");
         a.max_active_s=require_positive(al,"max_active_s",actx);
+        if(al.contains("cylinder_cut_fraction")) {
+            a.cylinder_cut_fraction=require_number(al,"cylinder_cut_fraction",actx);
+            if(!(a.cylinder_cut_fraction>=0 && a.cylinder_cut_fraction<1)) throw std::runtime_error(actx+": 'cylinder_cut_fraction' must be in [0, 1)");
+        }
+        if(al.contains("manifold_burn_fraction")) {
+            a.manifold_burn_fraction=require_number(al,"manifold_burn_fraction",actx);
+            if(!(a.manifold_burn_fraction>=0 && a.manifold_burn_fraction<=1)) throw std::runtime_error(actx+": 'manifold_burn_fraction' must be in [0, 1]");
+        }
+        if(al.contains("lambda")) {
+            a.lambda=require_number(al,"lambda",actx);
+            if(!(a.lambda>=0.5 && a.lambda<=1.5)) throw std::runtime_error(actx+": 'lambda' must be in [0.5, 1.5]");
+        }
+        if(al.contains("boost_target_fraction")) {
+            a.boost_target_fraction=require_number(al,"boost_target_fraction",actx);
+            if(!(a.boost_target_fraction>=0 && a.boost_target_fraction<=1)) throw std::runtime_error(actx+": 'boost_target_fraction' must be in [0, 1]");
+        }
         if(!al.contains("source") || !al.at("source").is_string() || al.at("source").get<std::string>().empty())
             throw std::runtime_error(actx+": 'source' is required (PLAN.md section 8)");
         a.source=al.at("source").get<std::string>();
         t.anti_lag=std::move(a);
+    }
+    // Exhaust energy balance and thermal mass (installation totals, not scaled by count). Optional:
+    // absent keeps TurboPairDesc's [AS] defaults. Not part of the map cache key (it feeds no map).
+    if(cfg.contains("exhaust_thermal")) {
+        const json& et=cfg.at("exhaust_thermal");
+        if(!et.is_object()) throw std::runtime_error(path+": 'exhaust_thermal' must be an object");
+        const std::string ectx=path+": exhaust_thermal";
+        static const char* const kKeys[]={"in_cylinder_wall_heat_fraction","wall_heat_capacity_j_k","wall_gas_conductance_w_k",
+                                          "wall_ambient_conductance_w_k","initial_wall_temperature_k","source"};
+        for(auto it=et.begin();it!=et.end();++it)
+            if(std::none_of(std::begin(kKeys),std::end(kKeys),[&](const char* k){ return it.key()==k; }))
+                throw std::runtime_error(ectx+": unknown key '"+it.key()+"'");
+        if(et.contains("in_cylinder_wall_heat_fraction")) {
+            t.in_cylinder_wall_heat_fraction=require_number(et,"in_cylinder_wall_heat_fraction",ectx);
+            if(!(t.in_cylinder_wall_heat_fraction>=0 && t.in_cylinder_wall_heat_fraction<1))
+                throw std::runtime_error(ectx+": 'in_cylinder_wall_heat_fraction' must be in [0, 1)");
+        }
+        if(et.contains("wall_heat_capacity_j_k")) t.exhaust_wall_heat_capacity_j_k=require_positive(et,"wall_heat_capacity_j_k",ectx);
+        if(et.contains("wall_gas_conductance_w_k")) {
+            t.exhaust_wall_gas_conductance_w_k=require_number(et,"wall_gas_conductance_w_k",ectx);
+            if(!(t.exhaust_wall_gas_conductance_w_k>=0)) throw std::runtime_error(ectx+": 'wall_gas_conductance_w_k' must be >= 0");
+        }
+        if(et.contains("wall_ambient_conductance_w_k")) {
+            t.exhaust_wall_ambient_conductance_w_k=require_number(et,"wall_ambient_conductance_w_k",ectx);
+            if(!(t.exhaust_wall_ambient_conductance_w_k>=0)) throw std::runtime_error(ectx+": 'wall_ambient_conductance_w_k' must be >= 0");
+        }
+        if(et.contains("initial_wall_temperature_k")) t.exhaust_wall_initial_k=require_positive(et,"initial_wall_temperature_k",ectx);
+        if(!et.contains("source") || !et.at("source").is_string() || et.at("source").get<std::string>().empty())
+            throw std::runtime_error(ectx+": 'source' is required (PLAN.md section 8)");
     }
     // Versioned parameter key; cache is derived data, never an engine input.
     std::uint64_t key=14695981039346656037ULL;

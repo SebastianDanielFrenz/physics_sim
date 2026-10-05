@@ -10,10 +10,11 @@
 // while active disarms anti-lag for the rest of the lift). While
 // active: DFCO inhibited, plate target >= plate_floor, spark = scheduled -
 // retard_deg through eta_spark; the indicated work the retard removes,
-// omega_old*(tau_comb(scheduled spark) - tau_comb(retarded)), is handed to the
-// turbine as extra exhaust enthalpy (peak-held with the exhaust-heat hold's
-// own 0.5 s, on its own state, summed with the 25 % fuel heat at the turbine
-// inlet).
+// omega_old*(tau_comb(scheduled spark) - tau_comb(retarded)), stays in the
+// exhaust gas through the engine's exhaust energy balance (exhaust_thermal,
+// test_turbo_exhaust_thermal.cpp) - no separate term since that change; before
+// it, this work was peak-held for 0.5 s and added to a 25 % fuel-heat fraction
+// under a 1200 K cap, and the numbers below were measured on that model.
 //
 // Fixtures: tests/support/mvem_fixtures.h electronic engine (2 L I4) +
 // tests/support/turbo_fixtures.h hyper-like pair + hyper_like_anti_lag()
@@ -38,6 +39,16 @@
 // hash 1 == 10 workers, 0 own allocations (Jolt external = the known
 // QuadTree gap), worst balance_error 2.0e-15 relative, fuel identity
 // 1.9e-15, 2 activations with a channel toggle during the lift.
+// Re-measured with the exhaust energy balance + wall (cold wall, 2026-10-05):
+//   fixture 5000 rpm off 73904 / 30851 / 28483 / 24126 / 17412, on 73904 /
+//   50112 / 50891 / 52685 / 26818 (port 1676 K, turbine 1167-1181 K, extra
+//   83-86 kW, tau0 +245..256 N*m), on retard 0 73904 / 43933 / 43728 / 49269 /
+//   26950. Hyper 6000 rpm off 101288 / 0 / 0 / 0 / 0 (the shipped [AS] rotor
+//   is drained within ~0.1 s, see test_turbo_compressor_flow.cpp), on 101288 /
+//   54673 / 55636 / 57161 / 0 (port 1538-1542 K, turbine 1324-1334 K, extra
+//   123-128 kW, tau0 +626..640 N*m), retard 0 52390 / 53833 / 56037 / 3941,
+//   floor 0.2 10904 / 10509 / 13318 / 10115. No cap: a deeper retard heats the
+//   gas further without a ceiling.
 //
 // Sabotages (each made the named check fail, then reverted):
 //   heat not routed to the turbine        -> lift "on > on0 + 1000 rpm"
@@ -101,8 +112,6 @@ namespace fx = ps::test::mvem;
 namespace tb = ps::test::turbo;
 
 constexpr real kH = 1.0 / 960.0;
-constexpr real kPamb = 101325.0;
-constexpr real kTamb = 288.15;
 constexpr real kPi = 3.14159265358979323846;
 
 real omega_of(real rpm) { return rpm * 2.0 * kPi / 60.0; }
@@ -128,7 +137,7 @@ real eta_spark_literal(real dx) {
 
 // One lift-off on a held crank: WOT for wot_s, then command `lift_cmd` for lift_s.
 struct Sample {
-    real turbo_rpm = 0, boost_bar = 0, extra_w = 0, held_w = 0, exhaust_k = 0, wastegate = 0, plate = 0, tau0 = 0;
+    real turbo_rpm = 0, boost_bar = 0, extra_w = 0, port_k = 0, exhaust_k = 0, wastegate = 0, plate = 0, tau0 = 0, fuel_g_s = 0;
     bool dfco = false, als = false;
 };
 struct LiftRun {
@@ -159,7 +168,8 @@ LiftRun run_lift(const SimulatedEngineDesc& d, real channel, real rpm = 5000.0, 
         sm.turbo_rpm = r.turbo_rpm;
         sm.boost_bar = r.boost_bar;
         sm.extra_w = r.anti_lag_extra_exhaust_w;
-        sm.held_w = e.anti_lag_held_exhaust_w();
+        sm.port_k = r.exhaust_port_k;
+        sm.fuel_g_s = r.fuel_flow_g_s;
         sm.exhaust_k = e.turbo()->exhaust_k;
         sm.wastegate = r.wastegate_opening;
         sm.plate = r.throttle_position;
@@ -177,42 +187,6 @@ LiftRun run_lift(const SimulatedEngineDesc& d, real channel, real rpm = 5000.0, 
 }
 
 } // namespace
-
-// ---------------------------------------------------------------------------
-// Pair level: the extra exhaust heat input.
-// ---------------------------------------------------------------------------
-TEST_CASE("D5: TurboPair extra exhaust heat - 0 is the old arithmetic, > 0 adds to the turbine inlet", "[turbo][drivetrain][anti_lag]") {
-    const TurboPairDesc d = tb::hyper_like_pair();
-    // (a) the guard script with an explicit 0 equals the default argument bit for bit
-    TurboPair a(d), b(d);
-    a.reset(kPamb, kTamb);
-    b.reset(kPamb, kTamb);
-    for (int i = 0; i < tb::kScriptSteps; ++i) {
-        const tb::Phase p = tb::script_phase(i);
-        a.step(kH, kPamb, kTamb, p.air, p.exhaust, p.fuel_w, p.plate);
-        b.step(kH, kPamb, kTamb, p.air, p.exhaust, p.fuel_w, p.plate, 0.0, nullptr, 0.0);
-        REQUIRE(a.energy_j == b.energy_j);
-        REQUIRE(a.exhaust_pa == b.exhaust_pa);
-        REQUIRE(a.turbine_w == b.turbine_w);
-    }
-    // (b) literal: no fuel heat, 0.1 kg/s exhaust, 22 kW extra -> T = 288.15 + 22000/(1100*0.1) = 488.15 K
-    TurboPair c(d);
-    c.reset(kPamb, kTamb);
-    c.step(kH, kPamb, kTamb, 0.1, 0.1, 0.0, 1.0, 0.0, nullptr, 22000.0);
-    CHECK(c.exhaust_heat_w == 22000.0);
-    CHECK(c.exhaust_k == Catch::Approx(488.15).epsilon(1e-13));
-    // (c) with fuel heat too: 0.25*40 kW + 22 kW = 32 kW -> 288.15 + 32000/110 = 579.059... K
-    TurboPair e(d);
-    e.reset(kPamb, kTamb);
-    e.step(kH, kPamb, kTamb, 0.1, 0.1, 40000.0, 1.0, 0.0, nullptr, 22000.0);
-    CHECK(e.exhaust_heat_w == 32000.0);
-    CHECK(e.exhaust_k == Catch::Approx(288.15 + 32000.0 / 110.0).epsilon(1e-13));
-    // (d) the 1200 K cap still applies
-    TurboPair f(d);
-    f.reset(kPamb, kTamb);
-    f.step(kH, kPamb, kTamb, 0.1, 0.1, 0.0, 1.0, 0.0, nullptr, 1e6);
-    CHECK(f.exhaust_k == 1200.0);
-}
 
 // ---------------------------------------------------------------------------
 // An anti_lag block with the channel off is invisible to the dynamics (only the
@@ -299,8 +273,8 @@ TEST_CASE("D5: lift-off at 5000 rpm - anti-lag keeps the rotor spinning, DFCO re
         std::printf("[D5 lift 5000] ALS %-3s", name);
         for (int m : marks) {
             const Sample& x = r.s[std::size_t(k0 + m)];
-            std::printf(" | +%.2f s rotor %6.0f rpm boost %+.3f bar dfco %d als %d extra %7.0f W held %7.0f W T_exh %4.0f K wg %.3f plate %.3f tau0 %+6.1f",
-                        m / 960.0, x.turbo_rpm, x.boost_bar, int(x.dfco), int(x.als), x.extra_w, x.held_w, x.exhaust_k, x.wastegate, x.plate, x.tau0);
+            std::printf(" | +%.2f s rotor %6.0f rpm boost %+.3f bar dfco %d als %d extra %7.0f W T_port %4.0f K T_turb %4.0f K wg %.3f plate %.3f tau0 %+6.1f fuel %.2f g/s",
+                        m / 960.0, x.turbo_rpm, x.boost_bar, int(x.dfco), int(x.als), x.extra_w, x.port_k, x.exhaust_k, x.wastegate, x.plate, x.tau0, x.fuel_g_s);
         }
         std::printf(" | activations %u\n", r.activations);
     }
@@ -572,10 +546,10 @@ TEST_CASE("D5: replace_turbo_configuration without anti-lag clears its state", "
         (void)e.post_solve(omega, kH);
     }
     REQUIRE(e.anti_lag_active());
-    REQUIRE(e.anti_lag_held_exhaust_w() > 0.0);
+    REQUIRE(e.anti_lag_extra_exhaust_w() > 0.0);
     e.replace_turbo_configuration(tb::hyper_like_pair());
     CHECK_FALSE(e.anti_lag_active());
-    CHECK(e.anti_lag_held_exhaust_w() == 0.0);
+    CHECK(e.anti_lag_extra_exhaust_w() == 0.0);
     CHECK(e.anti_lag_timer_s() == 0.0);
     const PreSolveResult r = e.pre_solve(s, ThrottleCommand{0.0, 0.0, 1.0}, TcuRequest{}, kH);
     CHECK(r.anti_lag_active == 0);
@@ -845,13 +819,18 @@ TEST_CASE("D5: hyper V8 lift-off with and without anti-lag (measured)", "[turbo]
         std::printf("[D5 hyper lift 6000] ALS %-6s", name);
         for (int m : marks) {
             const Sample& x = r.s[std::size_t(k0 + m)];
-            std::printf(" | +%.2f s rotor %6.0f rpm boost %+.3f bar dfco %d als %d extra %7.0f W held %7.0f W T_exh %4.0f K wg %.3f plate %.3f tau0 %+6.1f",
-                        m / 960.0, x.turbo_rpm, x.boost_bar, int(x.dfco), int(x.als), x.extra_w, x.held_w, x.exhaust_k, x.wastegate, x.plate, x.tau0);
+            std::printf(" | +%.2f s rotor %6.0f rpm boost %+.3f bar dfco %d als %d extra %7.0f W T_port %4.0f K T_turb %4.0f K wg %.3f plate %.3f tau0 %+6.1f fuel %.2f g/s",
+                        m / 960.0, x.turbo_rpm, x.boost_bar, int(x.dfco), int(x.als), x.extra_w, x.port_k, x.exhaust_k, x.wastegate, x.plate, x.tau0, x.fuel_g_s);
         }
         std::printf(" | activations %u, heat margin min %.3e J, ledger violation max %.3e J\n", r.activations, r.min_heat_margin,
                     r.max_ledger_violation);
     }
-    CHECK(on.s[std::size_t(k0 + 960)].turbo_rpm > off.s[std::size_t(k0 + 960)].turbo_rpm);
+    // Review fix 2026-10-05 (derived 2.3e-4 kg*m^2 rotor): the rotor check became a boost check. The no-ALS
+    // rotor now coasts (86.4k rpm at +1 s, the plate closed so the compressor barely draws), while the D5
+    // fixture's 50 % plate floor keeps the compressor loaded and the boost PID opens the gate (charge above
+    // target), so its rotor is LOWER at +1 s (59.0k). What the anti-lag holds is the manifold pressure
+    // (+0.66 bar vs -0.93 bar at +1 s). With the old 2e-5 [AS] rotor the no-ALS rotor was near 0 (14.6k).
+    CHECK(on.s[std::size_t(k0 + 960)].boost_bar > off.s[std::size_t(k0 + 960)].boost_bar + 1.0);
     CHECK(on.als_and_dfco == 0);
     CHECK(on.max_ledger_violation <= 1e-9);
 }

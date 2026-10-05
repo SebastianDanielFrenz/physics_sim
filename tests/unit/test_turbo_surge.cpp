@@ -165,7 +165,7 @@ Lift run_lift(const TurboPairDesc& d) {
     for (int i = 0; i < n_spool + n_lift + n_reapply; ++i) {
         const tb::Phase ph = tb::script_phase(i);
         const real p_im = i < n_spool ? pair.charge_pa - 1.5e4 : (i < n_spool + n_lift ? 3.0e4 : pair.charge_pa - 1.5e4);
-        pair.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.fuel_w, ph.plate, p_im, &psi_table());
+        pair.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.port_k, ph.plate, p_im, &psi_table());
         if (pair.surge_active != was_active) { out.edges.push_back(i); was_active = pair.surge_active; }
         if (i >= n_spool && i < n_spool + n_lift && pair.surge_active) ++out.surge_steps;
         if (i == n_spool + n_lift - 1) out.active_at_lift_end = pair.surge_active;
@@ -203,15 +203,21 @@ TEST_CASE("D3: lift-off surge with and without the blow-off valve (pair level)",
         for (int e : l->edges) std::printf(" %d", e);
         std::printf("\n");
     }
-    // measured: 0.801 / 0.046 / 0.011 s; the 2 entries are a brief spool-up blip (steps 74-96, rotor
-    // still accelerating at 0.2 kg/s, charge pr jumps past the fixture line) and the lift.
+    // measured: 0.806 / 0.046 / 0.011 s, one entry each - the lift. (Before the exhaust energy balance the
+    // script fed exhaust heat in watts and a brief spool-up blip at steps 74-96 was a second entry; with the
+    // port temperature fed at 1200 K from step 0 and a cold exhaust wall the rotor spools differently and the
+    // charge pressure ratio no longer jumps past the fixture line there.)
     CHECK(none.surge_s > 0.6);
     CHECK(fx_valve.surge_s < 0.1);
     CHECK(sens.surge_s < 0.03);
-    CHECK(none.events == 2);
+    CHECK(none.events == 1);
+    // The 0.9 bar valve run re-enters once (edges 1440 1486 1600 1609) since the compressor power is bounded by
+    // the head of the current rotor speed (test_turbo_wastegate_split.cpp): the wheel keeps more speed through the
+    // lift, the vent flow decays while the valve closes and dips under the line for 9 steps. Was 1 entry
+    // (0.046 s) before that fix; now 0.057 s in two entries, still far below the no-valve 0.9 s.
     CHECK(fx_valve.events == 2);
-    CHECK(sens.events == 2);
-    CHECK(none.edges.at(2) == 1440); // the lift entry is immediate: flow drops from 0.75 to 0.033 in one step
+    CHECK(sens.events == 1);
+    CHECK(none.edges.at(0) == 1440); // the lift entry is immediate: flow drops from 0.75 to 0.033 in one step
     CHECK(none.active_at_lift_end == false);
 }
 
@@ -269,6 +275,9 @@ struct HyperSurge {
 };
 HyperSurge hyper_lift(const SimulatedEngineDesc& base, const std::optional<BlowOffValveDesc>& valve, real line_scale) {
     SimulatedEngineDesc d = base;
+    // Shipped data (rotor 2.3e-4 kg*m^2 per turbo, derived in data/turbos/hyper_turbo_approx.json). Until the
+    // review fix this case ran on a test rig with the old 2e-5 [AS] rotor x5: that rotor was at 0 rpm ~0.1 s
+    // after the lift and there was no coast to surge in.
     d.turbo_pair->blow_off_valve = valve;
     d.turbo_pair->surge_line = tb::hyper_like_surge_line();
     for (real& y : d.turbo_pair->surge_line->flow_fraction_vs_pr.y) y = std::min(0.99, y * line_scale);
@@ -304,19 +313,27 @@ TEST_CASE("D3: hyper V8 lift-off surge with and without the valve (measured)", "
         std::printf("[D3 hyper lift] line x%.1f, surge time in the 1 s after the lift: no valve %.3f s (%u entries), 0.9 bar valve %.3f s (%u), 0.2 bar valve %.3f s (%u)\n",
                     scale, none.surge_s, none.events, fixture.surge_s, fixture.events, sens.surge_s, sens.events);
         // With the compressor fed the throttle flow (I7d compressor-flow fix) the rotor coasts after the lift
-        // and the pressure ratio stays above 1.05 for ~1 s while the throttle flow is ~0.006 kg/s: without a
-        // valve the flag is raised for almost the whole second; the 0.9 bar valve (opens to ~0.3) shortens it
-        // to ~0.15 s; the 0.2 bar valve (fully open at once) keeps the compressor out of surge altogether.
+        // and the pressure ratio stays above 1.05 for ~1 s while the throttle flow is ~0.01 kg/s: without a
+        // valve the flag is raised for almost the whole second; the 0.9 bar valve shortens it (it cracks, the
+        // vent flow lifts the operating point over the line, the flag drops and re-enters once); the 0.2 bar
+        // valve (fully open at once) keeps the compressor out of surge altogether.
         CHECK(none.events == 1);
         CHECK(none.surge_s > 0.5);
-        CHECK(fixture.events == 1);
+        // shipped 2.3e-4 rotor: line x1.0 the 0.9 bar valve clears surge after 23 ms and the flag does not
+        // re-enter within the second (1 entry); line x1.5 it re-enters once (2)
+        CHECK(fixture.events == (scale == 1.0 ? 1u : 2u));
         CHECK(fixture.surge_s > 0.0);
-        CHECK(fixture.surge_s < 0.5 * none.surge_s);
+        CHECK(fixture.surge_s < 0.9 * none.surge_s);
         CHECK(sens.events == 0);
         CHECK(sens.surge_s == 0.0);
     }
-    // measured: line x1.0 no valve 0.946 s (1 entry), 0.9 bar valve 0.150 s (1), 0.2 bar valve 0 s; line x1.5:
-    // 0.966 / 0.170 / 0. (Before the fix: x1.0 never surged - the rotor was at 0 rpm 50 ms after the lift;
+    // measured (shipped 2.3e-4 rotor, review fix): line x1.0 no valve 0.947 s (1 entry), 0.9 bar valve 0.023 s
+    // (1), 0.2 bar valve 0 s; line x1.5: 0.966 s (1) / 0.482 s (2) / 0.
+    // measured (rig: old 2e-5 rotor x5, exhaust energy balance): line x1.0 no valve 0.947 s (1 entry), 0.9 bar
+    // valve 0.614 s (2), 0.2 bar valve 0 s; line x1.5: 0.966 / 0.803 (2) / 0. With the shipped rotor and the
+    // former 0.5 s exhaust-heat hold: x1.0 0.946 / 0.150 (1) / 0, x1.5 0.966 / 0.170 / 0 - the x5 rotor keeps
+    // the compressor pressure ratio up longer, so the 0.9 bar valve's vent no longer clears it as quickly.
+    // (Before the compressor-flow fix: x1.0 never surged - the rotor was at 0 rpm 50 ms after the lift;
     // x1.5 0.007 / 0.007 / 0.) A line x2 puts steady WOT on the line itself (0.8 vs a flow fraction of
     // ~0.75) and was dropped.
 }

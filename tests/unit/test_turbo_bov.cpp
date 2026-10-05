@@ -117,7 +117,7 @@ std::vector<Rec> run_lift_script(const TurboPairDesc& d, real lift_s, real reapp
             p = {1.0, 0.9, 0.96, 0.9 / 12.5 * 43e6};
             p_im = pair.charge_pa - 1.5e4;
         }
-        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.fuel_w, p.plate, p_im, &psi_table());
+        pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.port_k, p.plate, p_im, &psi_table());
         out.push_back({pair.compressor_flow_kg_s, pair.bov_flow_kg_s, pair.rpm(), pair.charge_pa, pair.bov_opening,
                        pair.compressor_pr, pair.bov_events});
     }
@@ -199,7 +199,10 @@ TEST_CASE("D2: opening command, lag and events", "[turbo][drivetrain][bov]") {
     for (int k = 0; k < 6; ++k) {
         const real charge_after = p.charge_pa + (kPamb - p.charge_pa) / 25.0;
         const real p_im = charge_after - crack - targets[k] * (full - crack);
-        p.step(kH, kPamb, kTamb, 0.2, 0.2, 0.0, 0.0, p_im, &psi_table());
+        // No exhaust flow: the rotor stays at rest. (With exhaust the turbine spins it up; before the
+        // compressor-power bound the lagged charge pressure drained that energy again at once, which is what
+        // used to keep this "rotor at rest" premise true with 0.2 kg/s of exhaust.)
+        p.step(kH, kPamb, kTamb, 0.2, 0.0, 0.0, 0.0, p_im, &psi_table());
         CHECK(p.bov_opening == Catch::Approx(targets[k]).margin(1e-9));
         CHECK(p.bov_events == events_after[k]);
         p.charge_pa = 2.8e5; // hold the frozen state for the next target
@@ -217,8 +220,8 @@ TEST_CASE("D2: a closed valve is invisible", "[turbo][drivetrain][bov]") {
     for (int i = 0; i < kScriptSteps; ++i) {
         const Phase ph = script_phase(i);
         const real p_im = with.charge_pa - 1.5e4;
-        with.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.fuel_w, ph.plate, p_im, &psi_table());
-        without.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.fuel_w, ph.plate, p_im, &psi_table());
+        with.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.port_k, ph.plate, p_im, &psi_table());
+        without.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.port_k, ph.plate, p_im, &psi_table());
         if (with.energy_j != without.energy_j || with.charge_pa != without.charge_pa || with.wastegate != without.wastegate ||
             with.exhaust_pa != without.exhaust_pa || with.boost_integral != without.boost_integral)
             ++mismatches;

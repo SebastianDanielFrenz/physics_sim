@@ -84,8 +84,8 @@ TEST_CASE("D4: k = 0 is bit-identical to a pair without the key", "[turbo][drive
     int mismatches = 0;
     for (int i = 0; i < tb::kScriptSteps; ++i) {
         const tb::Phase ph = tb::script_phase(i);
-        a.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.fuel_w, ph.plate);
-        b.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.fuel_w, ph.plate);
+        a.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.port_k, ph.plate);
+        b.step(kH, kPamb, kTamb, ph.air, ph.exhaust, ph.port_k, ph.plate);
         if (a.energy_j != b.energy_j || a.charge_pa != b.charge_pa || a.charge_k != b.charge_k || a.wastegate != b.wastegate ||
             a.exhaust_pa != b.exhaust_pa || a.compressor_pr != b.compressor_pr)
             ++mismatches;
@@ -101,7 +101,7 @@ TEST_CASE("D4: steady WOT boost stays on target, the rotor runs faster by the dr
     const auto settle = [](real k) {
         TurboPair p(with_dp(k));
         p.reset(kPamb, kTamb);
-        for (int i = 0; i < 12 * 960; ++i) p.step(kH, kPamb, kTamb, 0.9, 0.96, 0.9 / 12.5 * 43e6, 1.0);
+        for (int i = 0; i < 12 * 960; ++i) p.step(kH, kPamb, kTamb, 0.9, 0.96, 1200.0, 1.0); // port gas 1200 K [AS]
         return Steady{p.charge_pa, p.rpm(), p.compressor_outlet_pa, p.wastegate};
     };
     const real k = 40000.0; // 0.4 bar at max flow -> 22500 Pa at f 0.75

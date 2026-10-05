@@ -1,8 +1,10 @@
 {
   "format": "physics_sim.turbo/1",
   "name": "hyper_turbo_approx",
-  "source": "[AS] Per-turbo approximation, not a measured Koenigsegg map. 2026-10-03: effective turbine throat 500 mm2 enables steady 3000 rpm boost; reference head 4.5 bar, compressor/turbine efficiency 0.80. Smaller throat trades low-speed boost for higher high-speed exhaust pressure. Inertia, flow limit, reference speed and loss unchanged.",
-  "rotor_inertia_kgm2": 2e-05,
+  "source": "[AS] Per-turbo approximation, not a measured Koenigsegg map. 2026-10-03: effective turbine throat 500 mm2 enables steady 3000 rpm boost; reference head 4.5 bar, compressor/turbine efficiency 0.80. Smaller throat trades low-speed boost for higher high-speed exhaust pressure. Inertia, flow limit, reference speed and loss unchanged. 2026-10-05 wastegate_area_m2 (effective, per turbo, in parallel with the turbine): one 50 mm poppet valve per turbo - the size an external-wastegate sizing guide gives for a V8 or a turbine housing small for the engine (nzperformance.co.nz 'External wastegate size guide', read 2026-10-05: 45 mm default for 2-3 L singles, 50-60 mm for V8s/small housings) - geometric 1963 mm2 x Cd 0.6 [AS] = 1178 mm2 (2.36 x the throat). Checked: holds 1.8 bar to 8000 rpm with the steady gate at most 0.71 open; 1.5 x the throat could not (boost creep above ~6500 rpm).",
+  "wastegate_area_m2": 0.00118,
+  "rotor_inertia_source": "2026-10-05 (owner decision 'Turbo: try'): [D] derived for a unit sized for ~500 kW, the Garrett GTX3582R Gen II class (garrettmotion.com, read 2026-10-05: 450-900 hp; compressor wheel 66/82 mm inducer/exducer, turbine wheel 68/62 mm). Each wheel a solid disc at its tip radius, I = m r^2 / 2, mass = density x swept cylinder x metal share. Turbine: Inconel 713C 7910 kg/m3 (alloy 713C datasheets, e.g. American Elements / ASM Alloy Digest Ni-50: 7.91 g/cm3), tip 68 mm, axial length 0.45 D = 30.6 mm [AS], metal share 0.25 [AS] -> 0.220 kg, 1.27e-4 kg m2. Compressor: forged aluminium 2618, 2760 kg/m3, tip 82 mm, length 0.40 D = 32.8 mm [AS], share 0.25 [AS] -> 0.120 kg, 1.00e-4 kg m2. Shaft: steel 7850 kg/m3, 9 x 90 mm [AS] -> 0.045 kg, 4.6e-7 kg m2. Sum 2.28e-4 -> 2.3e-4 per turbo. Was 2e-5 [AS] (a small passenger-car rotor; it stored ~2.4 kJ at the lift and spun down in ~0.1 s).",
+  "rotor_inertia_kgm2": 0.00023,
   "reference_rpm": 120000,
   "max_mass_flow_kg_s": 0.6,
   "compressor_efficiency": 0.8,

@@ -121,22 +121,48 @@ inline ps::drivetrain::AntiLagDesc hyper_like_anti_lag() {
     return a;
 }
 
+// A rally-style ALS (cylinder cut + deep retard + enrichment + held boost target).
+// Cited: Wikipedia "Antilag system" (CC BY-SA, read 2026-10-05, citing Markus,
+// MotorTrend 2024-09-09): ignition typically 35-45 deg ATDC -> spark -40 (the
+// midpoint); throttle bypass/kick ~12-20 deg of plate angle -> plate_floor 0.17
+// (DERIVED: 15.3 deg of a 90 deg plate, assuming plate position linear in angle);
+// "slight enrichment, mainly for cooling" -> lambda 0.85 [AS value]. Cut fraction
+// 0.4, manifold burn 1.0 and boost target 1.0 [AS]. Chosen with
+// test_turbo_als_cut.cpp's [.][diag] sweep on the hyper V8 at 6000 rpm so that
+// ALS air is 10-20 % of WOT air (measured 18.4 %) and the crank torque slightly
+// negative (-54 N*m); AC6 pins it.
+inline ps::drivetrain::AntiLagDesc hyper_like_als_cut() {
+    ps::drivetrain::AntiLagDesc a = hyper_like_anti_lag();
+    a.retard_deg = 0.0;
+    a.spark_advance_deg = -40.0;
+    a.plate_floor = 0.12; // 0.17 until the derived 2.3e-4 rotor (review fix): its held boost passed 24.9 % of WOT air
+    a.cylinder_cut_fraction = 0.4;
+    a.manifold_burn_fraction = 1.0;
+    a.lambda = 0.85;
+    a.boost_target_fraction = 1.0;
+    a.source = "[AS] test fixture; spark and throttle kick per Wikipedia 'Antilag system'";
+    return a;
+}
+
 inline ps::drivetrain::TurboPairDesc hyper_like_pair_with_anti_lag() {
     ps::drivetrain::TurboPairDesc t = hyper_like_pair();
     t.anti_lag = hyper_like_anti_lag();
     return t;
 }
 
-// The air/exhaust/fuel the engine would hand the pair at a given phase of the
-// guard script (960 Hz steps): spool at WOT (0-1.5 s), lift-off (1.5-2.5 s),
-// re-apply (2.5-4 s).
-struct Phase { ps::real plate, air, exhaust, fuel_w; };
+// The air/exhaust flows and exhaust port gas temperature the engine would hand
+// the pair at a given phase of the guard script (960 Hz steps): spool at WOT
+// (0-1.5 s), lift-off (1.5-2.5 s, fuel cut: the ports pass air at about the
+// charge temperature), re-apply (2.5-4 s). Port temperatures [AS] (exhaust
+// thermal re-record): 1200 K at WOT, 300 K in the fuel cut. Until the exhaust
+// energy balance this field was the fuel power (the pair took 25 % of it).
+struct Phase { ps::real plate, air, exhaust, port_k; };
 inline Phase script_phase(int step) {
     using ps::real;
     const real t = step * (1.0 / 960.0);
-    if (t < 1.5) return {1.0, 0.2 + 0.7 * t / 1.5, (0.2 + 0.7 * t / 1.5) * 1.07, (0.2 + 0.7 * t / 1.5) / 12.5 * 43e6};
-    if (t < 2.5) return {0.0, 0.04, 0.045, 0.0};
-    return {1.0, 0.9, 0.96, 0.9 / 12.5 * 43e6};
+    if (t < 1.5) return {1.0, 0.2 + 0.7 * t / 1.5, (0.2 + 0.7 * t / 1.5) * 1.07, 1200.0};
+    if (t < 2.5) return {0.0, 0.04, 0.045, 300.0};
+    return {1.0, 0.9, 0.96, 1200.0};
 }
 constexpr int kScriptSteps = 4 * 960;
 

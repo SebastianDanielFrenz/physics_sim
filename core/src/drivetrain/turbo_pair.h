@@ -34,29 +34,40 @@ public:
     // Intercooler drop (I7d D4), derived from the state and the step's flow: never hashed.
     real intercooler_dp_pa = 0.0;     // k * (flow/max)^2 of the latest step
     real compressor_outlet_pa = 101325.0; // charge_pa + intercooler_dp_pa (the pressure the compressor makes)
-    // Diagnostics of the latest step (I7d D5 tests): turbine-inlet sensible heat and
-    // temperature (after the 1200 K cap). Never hashed, never read back.
-    real exhaust_heat_w = 0.0;
-    real exhaust_k = 288.15;
+    // Exhaust thermal mass (exhaust_thermal): wall_k is the lumped wall temperature of
+    // the exhaust manifolds and turbine housings - dynamic state, hashed by the engine.
+    real wall_k = 288.15;
+    // Diagnostics of the latest step, derived from the state and the step's inputs:
+    // never hashed, never read back. exhaust_k is the turbine-inlet gas temperature
+    // (after the wall); there is no temperature cap (the engine's energy balance
+    // bounds the port temperature, the wall only moves it toward wall_k).
+    real port_k = 288.15;            // gas temperature handed in at the exhaust ports (>= ambient)
+    real exhaust_k = 288.15;         // turbine-inlet gas temperature
+    real gas_to_wall_w = 0.0;        // heat the gas gave the wall this step (W; < 0 = the wall heats the gas)
+    real wall_to_ambient_w = 0.0;    // heat the wall lost to the ambient this step (W)
+    // Specific heat of the exhaust gas used for the turbine and the wall exchange (J/(kg K)).
+    static constexpr real kExhaustCp = 1100.0;
     // Gas constant of the vent orifice, the same value as SimulatedEngine::kGasConstant.
     static constexpr real kGasConstant = 287.05;
-    explicit TurboPair(const TurboPairDesc& d) : desc(d) {}
+    explicit TurboPair(const TurboPairDesc& d) : desc(d) {
+        if (desc.exhaust_wall_initial_k > real(0.0)) wall_k = desc.exhaust_wall_initial_k;
+    }
     real omega() const { return std::sqrt(real(2.0)*energy_j/desc.rotor_inertia_kgm2); }
     real rpm() const { return omega()*real(60.0/6.2831853071795864769); }
     void reset(real p, real t) { energy_j=0; charge_pa=p; charge_k=t; exhaust_pa=p; wastegate=0; boost_integral=0;
                                  compressor_flow_kg_s=0; compressor_pr=1; intercooler_dp_pa=0; compressor_outlet_pa=p;
-                                 bov_opening=0; bov_flow_kg_s=0; bov_latched=false; surge_active=false; }
+                                 bov_opening=0; bov_flow_kg_s=0; bov_latched=false; surge_active=false;
+                                 wall_k = desc.exhaust_wall_initial_k > real(0.0) ? desc.exhaust_wall_initial_k : t;
+                                 port_k=t; exhaust_k=t; gas_to_wall_w=0; wall_to_ambient_w=0; }
     // plate: the throttle plate position in [0, 1]; it scales the boost target.
+    // port_k: the exhaust gas temperature at the cylinder ports (the engine's own energy
+    // balance, engine_simulated.cpp); exhaust_kg_s the exhaust mass flow. Only numerical
+    // guards: port_k below ambient and a negative flow count as ambient / no flow.
     // p_im / psi (I7d D2): the manifold pressure the valve diaphragm senses and the
     // engine's tabulated Psi(pr) (SimulatedEngineMaps::psi), used by the vent
     // orifice only; both are ignored without a blow-off valve.
-    // extra_exhaust_w (I7d D5): exhaust enthalpy on top of the authored 25 %
-    // fuel-energy fraction (anti-lag: the indicated work a spark retard
-    // removes), added in full to the turbine inlet's sensible heat. 0 without
-    // anti-lag, and the arithmetic is then the same as before.
     void step(real h, real ambient_pa, real ambient_k, real air_kg_s, real exhaust_kg_s,
-              real fuel_w, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr,
-              real extra_exhaust_w = real(0.0)) {
+              real port_gas_k, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr) {
         const real wr = desc.reference_rpm*real(6.2831853071795864769/60.0);
         const real speed2 = real(2.0)*energy_j/(desc.rotor_inertia_kgm2*wr*wr);
         // Vent flow at the START of the step state (valve opening, charge state
@@ -89,7 +100,13 @@ public:
         const real rise = ps::math::pow(pr,real(2.0/7.0))-real(1.0);
         const real outlet_k = ambient_k*(desc.maps ? desc.maps->compressor_temperature_ratio.evaluate(pr) : real(1.0)+rise/desc.compressor_efficiency);
         charge_k = ambient_k + (outlet_k-ambient_k)*(real(1.0)-desc.intercooler_effectiveness);
-        compressor_w = comp_flow*real(1005.0)*ambient_k*rise/desc.compressor_efficiency;
+        // The compressor power is bounded by the head the CURRENT rotor speed makes at this flow:
+        // charge_pa lags the head by 25 ms, and after a lift the slowing wheel must not keep paying
+        // for a pressure ratio it no longer produces (the stored charge above that head is not
+        // compressor work). Outlet temperature and the published ratio stay on the charge state.
+        const real pr_wheel = real(1.0) + std::max(real(0.0),head)/ambient_pa;
+        const real rise_w = pr <= pr_wheel ? rise : ps::math::pow(pr_wheel,real(2.0/7.0))-real(1.0);
+        compressor_w = comp_flow*real(1005.0)*ambient_k*rise_w/desc.compressor_efficiency;
         compressor_flow_kg_s = comp_flow; compressor_pr = pr;
         if (desc.surge_line) {
             // pr is the compressor outlet over ambient, flow the pair's fraction of its max
@@ -124,17 +141,36 @@ public:
             opening = std::clamp(real(1.0)-closing,real(0.0),real(1.0));
         }
         wastegate += h/(desc.wastegate_actuator_tau_s+h)*(opening-wastegate);
-        const real turbine_flow = std::max(real(0.0),exhaust_kg_s)*(real(1.0)-wastegate);
-        // Exhaust sensible heat from an authored 25% fuel-energy fraction,
-        // capped to avoid using an unbounded temperature at near-zero flow.
-        real heat_w = real(0.25)*std::max(real(0.0),fuel_w);
-        if (extra_exhaust_w > real(0.0)) heat_w += extra_exhaust_w;
-        exhaust_heat_w = heat_w;
-        exhaust_k = std::clamp(ambient_k + heat_w/
-            (real(1100.0)*std::max(real(0.001),exhaust_kg_s)),ambient_k,real(1200.0));
+        // Wastegate: a bypass orifice in parallel with the turbine. Both see the same manifold
+        // pressure, so the exhaust splits by effective area (the same incompressible orifice
+        // form as exhaust_pa below): turbine share A_t/(A_t + A_wg*opening), and the manifold
+        // pressure follows from the total flow through the combined area. A fully open gate
+        // therefore still drives the turbine (a real turbo idles at tens of thousands of rpm).
+        const real total_flow = std::max(real(0.0),exhaust_kg_s);
+        const real flow_area = desc.turbine_area_m2 + desc.wastegate_area()*wastegate;
+        const real turbine_flow = total_flow*(desc.turbine_area_m2/flow_area);
+        // Exhaust thermal mass: the whole exhaust flow (turbine and wastegate path share the
+        // manifold) passes a lumped wall of heat capacity C, gas-side conductance K and outer
+        // conductance Ka. Well-stirred gas side: the gas leaves at T_out = (G*T_port + K*T_w)/(G + K),
+        // G = cp*mdot, so it gives the wall Keff*(T_port - T_w), Keff = K*G/(K + G) - bounded for
+        // every flow, and at vanishing flow the gas leaves at the wall temperature (after a lift-off
+        // the wall gives heat back to the low flow). The wall step is backward Euler (unconditionally
+        // stable), so C*(T_w' - T_w) = h*(gas_to_wall - wall_to_ambient) holds to round-off.
+        {
+            const real g = kExhaustCp*std::max(real(0.0),exhaust_kg_s);
+            const real tg = std::max(port_gas_k,ambient_k);
+            const real k = desc.exhaust_wall_gas_conductance_w_k, ka = desc.exhaust_wall_ambient_conductance_w_k;
+            const real keff = (g > real(0.0) && k > real(0.0)) ? k*g/(k+g) : real(0.0);
+            const real c = desc.exhaust_wall_heat_capacity_j_k;
+            wall_k = (c*wall_k + h*(keff*tg + ka*ambient_k))/(c + h*(keff + ka));
+            gas_to_wall_w = keff*(tg - wall_k);
+            wall_to_ambient_w = ka*(wall_k - ambient_k);
+            port_k = tg;
+            exhaust_k = (g + k > real(0.0)) ? (g*tg + k*wall_k)/(g + k) : tg;
+        }
         const real rho = ambient_pa/(real(287.05)*exhaust_k);
-        exhaust_pa = ambient_pa + turbine_flow*turbine_flow/(real(2.0)*rho*desc.turbine_area_m2*desc.turbine_area_m2);
-        turbine_w = turbine_flow*real(1100.0)*exhaust_k*desc.turbine_efficiency*
+        exhaust_pa = ambient_pa + total_flow*total_flow/(real(2.0)*rho*flow_area*flow_area);
+        turbine_w = turbine_flow*kExhaustCp*exhaust_k*desc.turbine_efficiency*
             (real(1.0)-ps::math::pow(ambient_pa/exhaust_pa,real(0.24812030075188)));
         const real loss = desc.shaft_loss_w_at_reference*speed2;
         energy_j = std::clamp(energy_j+h*(turbine_w-compressor_w-loss),real(0.0),

@@ -70,6 +70,9 @@ add_executable(ps_unit_tests
   test_turbo_vehicle.cpp
   test_turbo_compressor_flow.cpp
   test_turbo_anti_lag.cpp
+  test_turbo_exhaust_thermal.cpp
+  test_turbo_als_cut.cpp
+  test_turbo_wastegate_split.cpp
   test_simulated_engine_powertrain.cpp
   test_a25a_sim_engine_data.cpp
   test_engine_cycle.cpp

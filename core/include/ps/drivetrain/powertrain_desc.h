@@ -325,8 +325,12 @@ struct SurgeLineDesc {
 // did not starve last substep, for at most max_active_s per lift (re-armed
 // when the command rises to arm_below_command again). While active: DFCO is
 // inhibited, the plate target is at least plate_floor (bypass air), the spark
-// is retarded by retard_deg from the scheduled advance, and the indicated work
-// the retard removes goes to the turbine as extra exhaust enthalpy.
+// is retarded by retard_deg from the scheduled advance (or set to
+// spark_advance_deg); the indicated work the retard removes stays in the gas
+// (the engine's exhaust energy balance), so it reaches the turbine as exhaust
+// enthalpy. Optionally a share of the firing events is spark-cut with the fuel
+// still injected (the charge burns in the manifold), the mixture enriched and
+// the wastegate held toward a boost target.
 struct AntiLagDesc {
     std::string channel = "anti_lag"; // control channel; declared with default default_enabled
     real default_enabled = 0.0;       // 0 or 1: the channel's declared default
@@ -337,6 +341,19 @@ struct AntiLagDesc {
     real plate_floor = 0.0;           // in [0, 1], bypass-air throttle plate floor
     real max_active_s = 0.0;          // > 0, longest activity per lift
     std::string source;               // required (PLAN.md section 8)
+    // Optional (absent = the D5 behaviour, bit-identical):
+    std::optional<real> spark_advance_deg; // absolute spark while active (deg BTDC, negative = ATDC), instead of retard_deg
+    real cylinder_cut_fraction = 0.0;  // [0, 1): share of firing events whose spark is cut (fuel still injected; the
+                                       // unburnt charge reaches the exhaust manifold)
+    real manifold_burn_fraction = 1.0; // [0, 1]: share of the cut charge's oxygen-limited fuel energy released in the
+                                       // hot exhaust manifold (the rest leaves as chemical enthalpy)
+    real lambda = 0.0;                 // 0 = the ECU lambda target; > 0 = lambda while active (enrichment)
+    real boost_target_fraction = 0.0;  // [0, 1]: wastegate PID target while active, as a fraction of target boost
+                                       // (0 = follows the plate as without anti-lag)
+    [[nodiscard]] bool has_extension() const {
+        return spark_advance_deg.has_value() || cylinder_cut_fraction != 0.0 || manifold_burn_fraction != 1.0 ||
+               lambda != 0.0 || boost_target_fraction != 0.0;
+    }
 };
 
 struct TurboPairDesc {
@@ -349,6 +366,14 @@ struct TurboPairDesc {
     real compressor_efficiency = 0.72;
     real turbine_efficiency = 0.70;
     real turbine_area_m2 = 0.0015;
+    // Effective (Cd x geometric) flow area of the wastegate port(s) of the pair, in parallel with
+    // the turbine; absent = kDefaultWastegateAreaRatio x turbine_area_m2 [AS] (docs/data_formats/
+    // turbo.md: a 50 mm poppet valve, Cd 0.6, ~1180 mm2, against the hyper turbo's 500 mm2 throat).
+    std::optional<real> wastegate_area_m2;
+    static constexpr real kDefaultWastegateAreaRatio = 2.4;
+    [[nodiscard]] real wastegate_area() const {
+        return wastegate_area_m2 ? *wastegate_area_m2 : kDefaultWastegateAreaRatio*turbine_area_m2;
+    }
     real intercooler_effectiveness = 0.85;
     real shaft_loss_w_at_reference = 1200.0;
     // Boost controller (PID on charge pressure, error per unit of
@@ -372,6 +397,17 @@ struct TurboPairDesc {
     real intercooler_dp_pa_at_max_flow = 0.0;
     // I7d D5: absent = no anti-lag; the engine is then bit-identical to before.
     std::optional<AntiLagDesc> anti_lag;
+    // Exhaust energy balance and thermal mass (turbo configuration block "exhaust_thermal",
+    // docs/data_formats/turbo.md). Installation totals, NOT scaled by the turbo count.
+    // The engine splits the fuel energy it releases into indicated work, in-cylinder wall heat
+    // (this fraction of the released energy) and exhaust sensible enthalpy; the gas then passes a
+    // lumped wall (exhaust manifolds + turbine housings) before the turbine. [AS] defaults - the
+    // sizing rules are in turbo.md; no cited manifold/housing data exists for these turbos.
+    real in_cylinder_wall_heat_fraction = 0.20;      // [0, 1), of the released fuel energy
+    real exhaust_wall_heat_capacity_j_k = 9200.0;    // > 0: mass x specific heat of the lumped wall
+    real exhaust_wall_gas_conductance_w_k = 120.0;   // >= 0: gas-side h*A
+    real exhaust_wall_ambient_conductance_w_k = 30.0; // >= 0: outer convection + radiation, linearised
+    real exhaust_wall_initial_k = 0.0;               // wall temperature at reset; 0 = ambient (cold start)
 };
 
 struct SimulatedEngineDesc {
