@@ -223,6 +223,7 @@ add_library(ps_core STATIC
   src/drivetrain/engine_rig.cpp
   src/drivetrain/nitrous_flow.cpp
   src/drivetrain/nitrous_system.cpp
+  src/drivetrain/engine_thermal.cpp
 
   # Engine-map generator/disk-cache infrastructure (I7c C16a/C16b) - NOT
   # part of ps_engine_cycle above: both need ps::jobs::JobSystem (ps_core-
