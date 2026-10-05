@@ -172,6 +172,23 @@ physics_sim/
   test_environment_atmosphere/test_environment_wind (ps_environment_tests), test_world_atmosphere (ps_unit_tests,
   [environment][vehicle]). Adapter: PsSimulation::get_vehicle_air, demo flags --m1-weather, --m1-altitude-offset,
   HUD outside temperature/pressure/density/altitude/wind. Decisions vault PHYS-061, notes out/weather_w4_progress.md.
+  W3b (owner answers Q2/Q12/Q5): third day/night form `{"astronomical": true, "day_share_multiplier": m}`
+  (DayNightKind AstronomicalScaled, share = clamp(H0/pi*m, kDayShareMin 0.02, kDayShareMax 0.98) [AS], m in (0, 10],
+  per season, total stays cycle_s; m = 1 bit-identical to Astronomical). Season-bound weather override ("manual
+  weather overrides the season, resets with the next"): WeatherTimeline::add_season_override/set_calendar/
+  end_all_overrides, the ramp-out FINISHES at the season boundary (shortened to half the remaining time if needed) and
+  the weight is exactly 0.0 afterwards, so the base weather is bit-exact from the boundary; under a locked calendar
+  (FixedSeason/FixedDay) it lasts until ended. Environment add_season_weather_override/remove_weather_override/
+  clear_weather_overrides/end_weather_overrides/set_calendar_lock; World add_weather_override_to_season_end/
+  end_weather_overrides/remove_weather_override/clear_weather_overrides/set_environment_calendar_lock (logic_error
+  without an environment / without weather). A runtime lock re-anchors the clock keeping year, game day and fraction
+  of day (env seconds jump when day lengths differ - PROVISIONAL); the weather cursor is invalidated by a calendar
+  generation. Season-bound overrides hash only when present. Scenario environment events set_weather{preset, ramp_s},
+  end_weather, clear_weather, set_season (name or "dynamic"). Adapter PsSimulation set_weather_override/
+  end_weather_overrides/clear_weather_overrides/set_season_lock (pending queue applied in pre_step); the demo's
+  env time scale defaults to 24 (24 h game = 1 h real; World default stays 1.0). Trailing 1 h/6 h precipitation sums
+  keep override rain for up to 6 h after it ends (physical accumulation). Tests test_environment_day_share/
+  test_environment_season_override (ps_environment_tests), test_world_weather_override (ps_unit_tests).
 - `ps_audio` (STATIC, `audio/`, ps_audio A7): the live engine voice; links
   `ps_engine_cycle` only, never `ps_core`. Guard `ps_audio_standalone`
   (`tests/unit/audio_standalone_main.cpp`, plain `main`, WHOLE_ARCHIVE
