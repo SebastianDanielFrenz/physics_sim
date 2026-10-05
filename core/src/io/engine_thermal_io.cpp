@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -331,6 +332,20 @@ CoolingSystemDesc load_cooling_system_json(const std::string& path) {
 
     r.finish();
     return d;
+}
+
+std::string engine_default_thermal_path(const std::string& engine_json_path) {
+    std::ifstream in(engine_json_path);
+    if (!in) throw std::runtime_error(engine_json_path + ": cannot open file");
+    const json j = json::parse(in, nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded() || !j.is_object()) throw std::runtime_error(engine_json_path + ": not a JSON object");
+    if (!j.contains("default_thermal")) return {};
+    if (!j.at("default_thermal").is_string() || j.at("default_thermal").get<std::string>().empty()) {
+        throw std::runtime_error(engine_json_path + ": 'default_thermal' must be a non-empty path string");
+    }
+    const std::filesystem::path rel(j.at("default_thermal").get<std::string>());
+    if (rel.is_absolute()) return rel.string();
+    return (std::filesystem::path(engine_json_path).parent_path() / rel).lexically_normal().string();
 }
 
 } // namespace ps::io

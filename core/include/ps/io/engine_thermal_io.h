@@ -25,4 +25,8 @@ drivetrain::CoolingSystemDesc load_cooling_system_json(const std::string& path);
 // Throws std::runtime_error naming `context` on any other value.
 drivetrain::ThermalStartKind parse_thermal_start(const std::string& value, const std::string& context);
 
+// The engine file's "default_thermal" resolved against the engine file's directory (what the vehicle loader
+// does), or "" when the engine file has none. Throws on an unreadable file or a non-string/empty value.
+std::string engine_default_thermal_path(const std::string& engine_json_path);
+
 } // namespace ps::io

@@ -130,6 +130,11 @@ public:
     [[nodiscard]] bool has_nitrous() const { return powertrain_.has_nitrous(); }
     [[nodiscard]] real n2o_bottle_mass() const { return powertrain_.n2o_bottle_mass(); }
     void request_n2o_bottle_mass(real kg) { powertrain_.request_n2o_bottle_mass(kg); }
+    // Engine thermal plan T1: backs World::engine_thermal_state/set_engine_thermal_state and the thermal telemetry.
+    [[nodiscard]] bool has_thermal() const { return powertrain_.has_thermal(); }
+    [[nodiscard]] const drivetrain::EngineThermalSnapshot& thermal_snapshot() const { return powertrain_.thermal_snapshot(); }
+    [[nodiscard]] const drivetrain::EngineThermal* thermal() const { return powertrain_.thermal(); }
+    void request_thermal_state(const drivetrain::EngineThermalState& s) { powertrain_.request_thermal_state(s); }
     [[nodiscard]] const drivetrain::NitrousSystem* nitrous_system() const { return powertrain_.nitrous(); }
     // PHYS-033 P4 I7c C16b: backs World::replace_engine_maps (queues) and
     // vehicle::System::apply_pending_engine_maps_swaps (applies, from

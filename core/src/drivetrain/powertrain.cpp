@@ -1351,6 +1351,16 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                                                        kit_desc.controller.has_purge ? slot_of(kit_desc.controller.purge.channel) : -1);
         }
 
+        // Engine thermal plan T1: the lumped engine/oil temperature model. Heat comes from the engine's fuel
+        // sub-ledger path, so an engine without a fuel model cannot feed it.
+        if (pt.thermal.has_value()) {
+            if (!e_has_fuel_model) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': a cooling_system needs an engine with a fuel model (a fuel_map or a fuels list)");
+            }
+            thermal_ = std::make_unique<EngineThermal>(*pt.thermal);
+            thermal_coulomb_share_ = tm ? thermal_->motoring_friction_fraction() : real(1.0);
+        }
+
         // Bootstrap fix: EngineTorqueMap::pre_solve's own state machine can
         // only ENTER Running via a bump-start (omega already > 0, see plan
         // section 6.1.3) or a completed crank - it never spins the crank up
@@ -1903,6 +1913,10 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         s.gearbox_in_neutral = ctx.gearbox_in_neutral;
         if (fuel_tank_) s.fuel_available_kg = fuel_tank_->content(); // PHYS-033 P4 I7a C6: else +infinity (never starves)
         s.ambient = ctx.ambient; // PHYS-033 P4 I7b C9; EngineTorqueMap ignores it
+        if (thermal_) { // engine thermal plan T1: last tick's scales; defaults 1.0 without thermal
+            s.friction_scale = thermal_->plant_friction_scale();
+            s.ecu_friction_scale = thermal_->ecu_friction_scale();
+        }
         if (anti_lag_channel_live_ && ctx.channels != nullptr && anti_lag_channel_slot_ < ctx.channel_count)
             s.anti_lag_channel = ctx.channels[anti_lag_channel_slot_]; // I7d D5; else NaN = default_enabled
         last_engine_sensors_ambient_ = ctx.ambient; // test-only white-box hook
@@ -2139,7 +2153,13 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         }
         const real v = network_.row_velocity(engine_friction_row_);
         const real lambda = network_.row_lambda(engine_friction_row_);
-        ledger_.engine_friction_loss += -ctx.h * v * lambda;
+        const real coulomb_delta = -ctx.h * v * lambda;
+        ledger_.engine_friction_loss += coulomb_delta;
+        if (thermal_) {
+            // Engine thermal plan T1 (4.4): released fuel energy and friction heat (engine's smooth friction + the
+            // Coulomb row's loss, the latter times the share that is friction rather than pumping).
+            thermal_->accumulate(post.released_heat_delta, post.friction_heat_delta + thermal_coulomb_share_ * coulomb_delta, ctx.h);
+        }
         if (nitrous_) {
             // N2O plan N1: the bottle loses what was delivered/vented; the engine ignores the N2O, so every
             // delivered kg is booked as unburnt pass-through (N2 books the real split).
@@ -2186,6 +2206,29 @@ void Powertrain::end_tick() {
     if (!compliant_.empty()) {
         ledger_.balance_error += (L.shaft_pe - L0.shaft_pe) + (L.shaft_damping_loss - L0.shaft_damping_loss);
     }
+    if (thermal_) {
+        // Engine thermal plan T1: one BE step over this tick's accumulated heat, then copy the thermal sub-ledger
+        // (cumulative, unhashed, outside balance_error) into PowertrainEnergy.
+        const real rpm = std::abs(network_.omega(engine_crank_)) * (real(60.0) / (real(2.0) * real(3.14159265358979323846)));
+        thermal_->step(rpm);
+        const EngineThermalLedger& tl = thermal_->ledger();
+        ledger_.thermal_wall_in = tl.wall_in;
+        ledger_.thermal_friction_in = tl.friction_in;
+        ledger_.thermal_radiator_out = tl.radiator_out;
+        ledger_.thermal_block_air_out = tl.block_air_out;
+        ledger_.thermal_oil_air_out = tl.oil_air_out;
+        ledger_.thermal_heater_out = tl.heater_out;
+        ledger_.thermal_stored = tl.stored;
+        ledger_.thermal_balance_error = tl.balance_error;
+    }
+}
+
+void Powertrain::request_thermal_state(const EngineThermalState& st) {
+    if (!thermal_) throw std::runtime_error("set_engine_thermal_state: this vehicle has no cooling_system");
+    if (!std::isfinite(st.coolant_c) || !std::isfinite(st.oil_c)) {
+        throw std::runtime_error("set_engine_thermal_state: coolant_c and oil_c must be finite");
+    }
+    thermal_->request_state(st);
 }
 
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
@@ -2389,6 +2432,7 @@ std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     // fuel ledger counters stay unhashed.
     if (fuel_tank_) h = fuel_tank_->fold_state_hash(h);
     if (nitrous_) h = nitrous_->fold_state_hash(h); // N2O plan N1: appended after every existing fold, only with a kit
+    if (thermal_) h = thermal_->fold_state_hash(h); // engine thermal plan T1: T_e, T_o, T_wax, T_play, fan_on; only with a cooling_system
     return h;
 }
 
