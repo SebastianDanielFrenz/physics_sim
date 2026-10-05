@@ -236,6 +236,7 @@ add_executable(ps_environment_tests
   test_environment_day_share.cpp
   test_environment_season_override.cpp
   test_environment_surface.cpp
+  test_environment_surface_classes.cpp
 )
 
 target_link_libraries(ps_environment_tests

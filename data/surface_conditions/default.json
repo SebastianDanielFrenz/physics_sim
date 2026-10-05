@@ -97,13 +97,174 @@
         "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry ratio (vault RACE-002), mean 0.67, applied to the class dry lambda (grass 0.42 in surfaces.json)"
       }
     },
+    "concrete": {
+      "kind": "sealed",
+      "albedo": 0.30,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.25, "k_w_mk": 1.51, "rho_c_j_m3k": 2.11e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.7,
+      "drainage": { "path_m": 7.3, "slope": 0.025 },
+      "friction": { "damp": 0.94, "wet": 0.87, "wet_grass": 0.67 },
+      "source": {
+        "albedo": "[AS] a trafficked grey-cement carriageway. Oke 1987 Table 2.1 concrete 0.10-0.35 [M, not re-checked] bounds it from above. Levinson & Akbari 2001 (LBNL-48334) [C]: 8 smooth fresh lab concretes 0.41-0.77, mean 0.59 (white and grey cements mixed), simulated weathering/soiling/abrasion cut the mean by 0.06/0.05/0.19 - a worn grey road sits well below that mean, so 0.30, the top of Oke's range",
+        "emissivity": "[D] mean of the Engineering ToolBox emissivity table's concrete 0.85 and rough concrete 0.94 [C, read] = 0.895, rounded to 0.90 (the kerb class and Oke 1987 concrete 0.71-0.90 [M] agree)",
+        "layer.k_w_mk": "[M] Oke 1987 Table 2.1 dense concrete k 1.51 W/(m K), not re-checked; same value as the kerb class",
+        "layer.rho_c_j_m3k": "[M] Oke 1987 Table 2.1 dense concrete: rho 2.40 Mg/m3 x c 0.88 kJ/(kg K) = 2.11 MJ/(m3 K) [D], not re-checked",
+        "layer.depth_m": "[AS] a 0.25 m jointed plain concrete slab (European carriageway slabs are about 0.22-0.30 m; the kerb class uses 0.30)",
+        "deep": "[AS] as asphalt.deep (granular base on subgrade)",
+        "mtd_mm": "[D] Gierasimiuk, Wasilewska & Gardziejczyk 2021 (Materials 14, PMC7794823) Table 4 [C, table read through a fetch extraction] MPD of six concrete finishes: mean of the unworn values (0.27+0.75+0.80+0.49+1.15+1.11)/6 = 0.76 mm, mean after the abrasion + polishing phases (0.26+0.25+0.47+0.30+0.81+0.84)/6 = 0.49 mm, midpoint 0.62 mm; ISO 13473-1 ETD = 0.2 + 0.8 MPD [M, not re-checked] gives 0.70 mm, taken as the sand-patch MTD",
+        "drainage": "[AS] as asphalt: 7.3 m half carriageway and 2.5 % crossfall, the Gallaway et al. 1979 [C] worked example; the same crossfall is normal on a concrete carriageway",
+        "friction.wet": "[D] mean of two wet/dry peak ratios for concrete: Wong, Theory of Ground Vehicles, 2nd ed. 1993 p. 26 (table read as reproduced at hpwizard.com/tire-friction-coefficient.html [C]) wet concrete 0.80 / dry asphalt-and-concrete 0.80-0.90 (mid 0.85) = 0.94; TRL PPR073 (Lambourn & Viner 2006) [C, read] concrete taxiway dry peak 0.88, wet peak 0.6-0.8 (mid 0.70) = 0.80; (0.94 + 0.80) / 2 = 0.87. The speed fall-off of wet grip comes from mtd_mm through the PIARC form",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.87) = 0.935, rounded to 0.94 (also the cap the wet speed table is clamped to)",
+        "friction.wet_grass": "[D] as asphalt (Cenek/Jamieson/McLarin mean 0.67, vault RACE-002); unused here: only a vegetated class reads wet_grass"
+      }
+    },
+    "paving_stones": {
+      "kind": "sealed",
+      "albedo": 0.25,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.08, "k_w_mk": 1.4, "rho_c_j_m3k": 2.0e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.6,
+      "drainage": { "path_m": 5.0, "slope": 0.02 },
+      "friction": { "damp": 0.93, "wet": 0.85, "wet_grass": 0.67 },
+      "source": {
+        "albedo": "[AS] mixed grey and coloured concrete block pavers, weathered: inside Oke 1987 Table 2.1 concrete 0.10-0.35 [M, not re-checked], a little below the concrete class (joints and coloured units darken the mean); no paver reflectance measurement was read",
+        "emissivity": "[D] concrete, as the concrete class (Engineering ToolBox concrete 0.85 / rough concrete 0.94 [C, read], mean 0.895)",
+        "layer.depth_m": "[AS] an 80 mm vehicular paver (EN 1338 nominal thickness 60 or 80 mm [M, not re-checked]); the 30 mm sand bedding sits in the deep slab",
+        "layer.k_w_mk": "[AS] Oke 1987 dense concrete 1.51 W/(m K) [M] reduced about 7 % for the sand-filled joints and the bedding contact; no measurement",
+        "layer.rho_c_j_m3k": "[AS] dense concrete 2.11 MJ/(m3 K) [M, Oke 1987] with the same joint allowance, rounded to 2.0e6",
+        "deep": "[AS] as asphalt.deep (sand bedding on compacted aggregate base, inside the moist sandy/clay soil ranges of Oke 1987 Table 2.1 [M])",
+        "mtd_mm": "[D] chamfer and joint geometry (all dimensions [AS]): cell 203 x 103 mm (200 x 100 mm paver, 3 mm joint) = 20909 mm2; joint area 20909 - 20000 = 909 mm2 filled to 3 mm below the arris = 2727 mm3; 3 mm 45-degree chamfers on 600 mm of edge, 0.5 x 3 x 3 = 4.5 mm2 per mm = 2700 mm3; (2727 + 2700) / 20909 = 0.26 mm, plus about 0.3 mm of the unit's own face texture [AS] = 0.56, taken as 0.6 mm",
+        "drainage": "[AS] a 5 m path to the gutter at 2 % fall (a plaza or residential street; the kerb class uses 5.0 m / 2 %)",
+        "friction.wet": "[D] ICPI/CMHA PAV-TEC-013-20 Table 5 [C, read] (Muira et al., Ichihara Japan, light van, same wet street): stopping distance from 60 km/h dry/wet 13.6/21.3 m on pavers and 14.2/26.7 m on asphalt; mu is proportional to 1/distance, so wet/dry = 13.6/21.3 = 0.64 on pavers and 14.2/26.7 = 0.53 on asphalt. This file's asphalt wet level is 0.71 (Wong), so the study's asphalt is wetter than that reference; the pavers are anchored to it: 0.71 x 0.64/0.53 = 0.85 (the study's own 0.64 would put pavers below asphalt in the wet, which its own distances contradict)",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.85) = 0.925, rounded to 0.93",
+        "friction.wet_grass": "[D] as asphalt (vault RACE-002), unused here"
+      }
+    },
+    "sett": {
+      "kind": "sealed",
+      "albedo": 0.22,
+      "emissivity": 0.95,
+      "layer": { "depth_m": 0.12, "k_w_mk": 2.4, "rho_c_j_m3k": 1.94e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 0.9,
+      "drainage": { "path_m": 5.0, "slope": 0.025 },
+      "friction": { "damp": 0.88, "wet": 0.75, "wet_grass": 0.67 },
+      "source": {
+        "albedo": "[AS] grey granite setts, polished dark by traffic and soiled; Wikipedia 'Albedo' sample table [C, read]: bare soil 0.17 (Markvart & Castaner 2003), worn asphalt 0.12; no sett measurement was found",
+        "emissivity": "[D] stone fraction 0.857 x granite natural surface 0.96 (Engineering ToolBox [C, read]) + joint fraction 0.143 x sand 0.90 (same table) = 0.951; joint fraction = 1 - (100/108)^2 = 0.143 for 100 mm setts with 8 mm joints [AS dimensions]",
+        "layer.k_w_mk": "[D] 0.857 x 2.8 + 0.143 x 0.30 = 2.44, taken as 2.4 (vertical conduction, stone and joint in parallel). Granite k 2.8 [AS]: Monteith 1973 via bookdown.org/huckley Table 7.3 [C, read] lists granite 4.61 W/(m K), which is high for rock, and the LBL Modelica Soil package lists 1.9 [read]; a 2.3-3.7 range for 2650 kg/m3 granite was seen in a search result only. Joint sand 0.30 [M, Oke 1987 dry sand]",
+        "layer.rho_c_j_m3k": "[D] 0.857 x 2.08e6 + 0.143 x 1.12e6 = 1.94e6; granite 2.6e3 kg/m3 x 0.8e3 J/(kg K) = 2.08e6 and dry sand 1.4e3 x 0.8e3 = 1.12e6, both Monteith 1973 [C, read]",
+        "layer.depth_m": "[AS] 100-120 mm setts on a bedding course: 0.12 m",
+        "deep": "[AS] as asphalt.deep (bedding sand and aggregate base)",
+        "mtd_mm": "[D] flat-topped dressed setts: joint fraction 0.143 [D above] x joint depth 6 mm (sand/mortar 6 mm below the arris [AS]) = 0.86 mm, taken as 0.9; the texture of a dressed sett face itself is not added (no measurement found)",
+        "drainage": "[AS] a 10 m street cambered to both sides: 5 m path, 2.5 % crossfall",
+        "friction.wet": "[AS] 0.75: granite polishes under traffic (a smooth, low-microtexture stone is the classic wet-slippery case) while the joints give some drainage. Stinson & Roberts 1933 (HRB Proc. 13, [C] read): wet brick-block sliding mu 0.23-0.52 vs wet portland cement concrete 0.41 and bituminous 0.42-0.54 at 30 mph - scatter of the size between asphalt and concrete, no systematic sett value. Placed between the paver class (0.85) and cobbles (0.70)",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.75) = 0.875, rounded to 0.88",
+        "friction.wet_grass": "[D] as asphalt (vault RACE-002), unused here"
+      }
+    },
+    "cobblestone": {
+      "kind": "sealed",
+      "albedo": 0.20,
+      "emissivity": 0.95,
+      "layer": { "depth_m": 0.12, "k_w_mk": 2.2, "rho_c_j_m3k": 1.85e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "mtd_mm": 3.0,
+      "drainage": { "path_m": 4.0, "slope": 0.03 },
+      "friction": { "damp": 0.85, "wet": 0.70, "wet_grass": 0.67 },
+      "source": {
+        "albedo": "[AS] dark weathered natural cobbles, slightly below the sett class (a rough surface traps light in its joints); bounded by Wikipedia 'Albedo' bare soil 0.17 and worn asphalt 0.12 [C, read]",
+        "emissivity": "[D] stone fraction 0.756 x 0.96 + joint fraction 0.244 x 0.90 = 0.945 (granite and sand rows of the Engineering ToolBox table [C, read]); joint fraction = 1 - (100/115)^2 = 0.244 for 100 mm cobbles with 15 mm joints [AS dimensions]; rounded to 0.95",
+        "layer.k_w_mk": "[D] 0.756 x 2.8 + 0.244 x 0.30 = 2.19, taken as 2.2 (stone and joint in parallel; granite 2.8 [AS] and joint sand 0.30 [M], see the sett class)",
+        "layer.rho_c_j_m3k": "[D] 0.756 x 2.08e6 + 0.244 x 1.12e6 = 1.85e6 (Monteith 1973 granite and dry sand [C, read], see the sett class)",
+        "layer.depth_m": "[AS] 100-120 mm cobbles on a bedding course: 0.12 m",
+        "deep": "[AS] as asphalt.deep (bedding sand and aggregate base)",
+        "mtd_mm": "[D] joint fraction 0.244 [D above] x joint depth 12 mm (joints filled to 12 mm below the stone crowns [AS]) = 2.93 mm, taken as 3.0 mm; no cobble sand-patch value was found. 3 mm lies far above the 0.2-1.5 mm range the PIARC speed form (Sp = 14.2 + 89.7 MTD) was calibrated on; there it only says that wet grip is nearly speed-independent (Sp 283 km/h)",
+        "drainage": "[AS] an old-town street cambered to a gutter: 4 m path, 3 % fall. Gallaway's WFD formula minus a 3 mm MTD is <= 0 up to the 150 mm/h cap, so the surface never carries a film above its texture storage",
+        "friction.wet": "[AS] 0.70: rounded stones, joints and polished crowns, below the sett class; the same scatter evidence as the sett class (Stinson & Roberts 1933 [C, read]). A search result quoted dry cobblestone peak mu 0.53-0.85 at about 40 km/h (source not opened, not used)",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.70) = 0.85",
+        "friction.wet_grass": "[D] as asphalt (vault RACE-002), unused here"
+      }
+    },
+    "gravel": {
+      "kind": "soil",
+      "albedo": 0.25,
+      "emissivity": 0.93,
+      "layer": { "depth_m": 0.20, "k_w_mk": 0.6, "rho_c_j_m3k": 1.5e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "soil": { "ksat_mm_h": 21.2, "theta_fc": 0.09, "theta_sat": 0.32 },
+      "friction": { "damp": 0.95, "wet": 0.90, "wet_grass": 0.67 },
+      "source": {
+        "albedo": "[AS] light grey crushed aggregate between Wikipedia 'Albedo' bare soil 0.17 (Markvart & Castaner 2003) and desert sand 0.40 (Tetzlaff 1983) [C, read]",
+        "emissivity": "[AS] Oke 1987 Table 2.1 soils 0.90-0.98 [M, not re-checked]: 0.93 like the dirt class. The Engineering ToolBox table [read] lists 'gravel' at 0.28; rejected, it contradicts every ground-cover value (the row is presumably a metallic or polished sample)",
+        "layer.depth_m": "[AS] a 0.20 m wearing course, like the other soil classes (the infiltration pore space uses it)",
+        "layer.k_w_mk": "[AS] 0.6: dry bulk crushed aggregate (porosity 0.28), above Monteith 1973 dry sand 0.17 [C, read] and Oke 1987 dry sand 0.30 [M] because the grains touch as a rock skeleton, far below solid rock (about 2.8); no measurement",
+        "layer.rho_c_j_m3k": "[D] bulk density 2650 x (1 - 0.28 [AS porosity]) = 1.91e3 kg/m3 x c 0.8e3 J/(kg K) (Monteith 1973 granite, quartz and dry sand c 0.8e3 [C, read]) = 1.53e6, rounded to 1.5e6 (dry; a draining aggregate does not stay wet)",
+        "deep": "[AS] as asphalt.deep (granular base on subgrade)",
+        "soil.ksat_mm_h": "[D] Bouchedid & Humphrey 2005 (Permeability of Base Material for Maine Roads, abstract read at trid.trb.org/View/781064 [C]): MaineDOT dense-graded subbase, average k = 5.9e-4 cm/s x 3600 s/h = 2.12 cm/h = 21.2 mm/h; a road gravel with fines compacts to a similar dense gradation (a clean free-draining base would be 0.35 cm/s, FHWA, about 12600 mm/h - not a wearing course)",
+        "soil.theta_fc": "[AS] Rawls et al. table as reproduced in the SWMM reference (swmm5.org 2015/07/29, Table 9) [C, read]: sand field capacity 0.091 anchors a clean coarse material; fines in a road gravel raise it, large stones lower it: 0.09",
+        "soil.theta_sat": "[AS] porosity of a compacted dense-graded aggregate about 0.25-0.35, below Rawls sand 0.437 [C, read] because of the grading and compaction: 0.32",
+        "friction.wet": "[AS] 0.90: water drains through an open aggregate, there is no film; the fines soften it slightly. Wong p. 26 (via hpwizard.com [C]) gives gravel a single value, peak 0.60 / sliding 0.55, between his dry earth road 0.68 and wet earth road 0.55, so no wet/dry split exists there; a search-result snippet of another friction table put rolled gravel wet at or above dry (not opened, not used)",
+        "friction.damp": "[AS] 0.95, above wet; the soil wet level is flat in speed (a soil class has no MTD)",
+        "friction.wet_grass": "[D] as asphalt (vault RACE-002), unused here"
+      }
+    },
+    "compacted": {
+      "kind": "soil",
+      "albedo": 0.25,
+      "emissivity": 0.93,
+      "layer": { "depth_m": 0.20, "k_w_mk": 0.9, "rho_c_j_m3k": 2.2e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6 },
+      "soil": { "ksat_mm_h": 3.3, "theta_fc": 0.27, "theta_sat": 0.40 },
+      "friction": { "damp": 0.88, "wet": 0.75, "wet_grass": 0.67 },
+      "source": {
+        "albedo": "[AS] light dry packed fine-grained earth, a little above the dirt class (0.20); Oke 1987 soils 0.05-0.40 [M, not re-checked], Wikipedia 'Albedo' bare soil 0.17 [C, read]",
+        "emissivity": "[AS] Oke 1987 Table 2.1 soils 0.90-0.98 [M]; Engineering ToolBox soil 0.90-0.95 [C, read]: 0.93",
+        "layer.depth_m": "[AS] a 0.20 m traffic-compacted surface, like the other soil classes",
+        "layer.k_w_mk": "[D] mid of Oke 1987 Table 2.1 clay soil dry 0.25 and saturated 1.58 W/(m K) = 0.92 [M, not re-checked]; a compacted earth keeps a moisture between the two: 0.9",
+        "layer.rho_c_j_m3k": "[D] mid of Oke 1987 clay soil dry 1.42 and saturated 3.10 MJ/(m3 K) = 2.26e6 [M, not re-checked], rounded to 2.2e6",
+        "deep": "[AS] as asphalt.deep",
+        "soil.ksat_mm_h": "[D] Rawls et al. loam K_s 1.32 cm/h = 13.2 mm/h (SWMM reference Table 9, swmm5.org [C, read]) x 0.25 compaction factor [AS: a traffic-compacted soil keeps a fraction of its loose K_s, an order of magnitude lower for heavy compaction] = 3.3 mm/h",
+        "soil.theta_fc": "[C] Rawls et al. loam field capacity 0.270 (SWMM reference Table 9, swmm5.org, read)",
+        "soil.theta_sat": "[AS] 0.40: compaction cuts the loam's total porosity of 0.463 [C, same table] by the density increase",
+        "friction.wet": "[AS] 0.75: Wong p. 26 (via hpwizard.com [C]) earth road wet 0.55 / dry 0.68 = 0.81 is the dirt class's value; a fine-grained, traffic-polished surface turns slicker than loose dirt: 0.75",
+        "friction.damp": "[AS] midpoint of dry (1.0) and wet (0.75) = 0.875, rounded to 0.88",
+        "friction.wet_grass": "[D] as asphalt (vault RACE-002), unused here"
+      }
+    },
+    "sand": {
+      "kind": "soil",
+      "albedo": 0.35,
+      "emissivity": 0.90,
+      "layer": { "depth_m": 0.20, "k_w_mk": 0.25, "rho_c_j_m3k": 1.12e6 },
+      "deep": { "depth_m": 1.80, "k_w_mk": 1.0, "rho_c_j_m3k": 1.6e6 },
+      "soil": { "ksat_mm_h": 235.6, "theta_fc": 0.091, "theta_sat": 0.437 },
+      "friction": { "damp": 1.10, "wet": 1.10, "wet_grass": 0.67 },
+      "source": {
+        "albedo": "[AS] between Wikipedia 'Albedo' bare soil 0.17 and desert sand 0.40 (Tetzlaff 1983) [C, read]; beach sand a little darker than desert sand: 0.35",
+        "emissivity": "[C] Engineering ToolBox emissivity table, sand 0.9 (read); Oke 1987 soils 0.90-0.98 [M]",
+        "layer.depth_m": "[AS] a 0.20 m loose surface layer, like the other soil classes (the infiltration pore space uses it)",
+        "layer.k_w_mk": "[AS] 0.25: between Monteith 1973 dry sand 0.17 W/(m K) (rho 1.4e3, loose) [C, bookdown.org/huckley Table 7.3, read] and Oke 1987 dry sand 0.30 (porosity 0.35) [M, not re-checked]; W5 has no soil-moisture dependence, so the layer is dry sand",
+        "layer.rho_c_j_m3k": "[C] Monteith 1973 (bookdown.org/huckley Table 7.3, read): dry sand rho 1.4e3 kg/m3 x c 0.8e3 J/(kg K) = 1.12e6 J/(m3 K) [D]; Oke 1987 dry sand 1.28e6 [M] is 14 % higher",
+        "deep": "[D] moist sand under the dry surface: k about the mid of Monteith dry 0.17 and wet 1.68 W/(m K) (0.93, taken as 1.0 [AS]); C = mid of dry 1.12e6 and wet 2.08e6 (1.6e3 x 1.3e3) = 1.60e6 [C, read]",
+        "soil.ksat_mm_h": "[C] Rawls & Brakensiek table as reproduced in the SWMM reference (swmm5.org 2015/07/29, Table 9, read): sand K_s 23.56 cm/h = 235.6 mm/h (the 1982 Rawls, Brakensiek & Saxton paper itself was not opened)",
+        "soil.theta_fc": "[C] same table: sand field capacity 0.091",
+        "soil.theta_sat": "[C] same table: sand total porosity 0.437",
+        "friction.wet": "[AS] 1.10: a ratio above 1 on purpose. Damp and wet sand has capillary cohesion and a higher bearing and shear strength than loose dry sand, which is why beach driving is done on the firm wet sand near the waterline; Wong p. 26 has no sand row. No measured dry/wet table for sand and tyres was found: the 10 % is a judgement. The wet weight needs a soil moisture above the field capacity 0.091, which sand reaches only in rain and drains at 235 mm/h",
+        "friction.damp": "[AS] 1.10: damp is the cap of the flat soil wet level in ConditionGrip (min(wet, damp)), so it must not be below wet for a ratio above 1 to take effect",
+        "friction.wet_grass": "[D] as asphalt (vault RACE-002), unused here"
+      }
+    },
     "low_mu": {
       "kind": "static",
       "source": "the test-ground ice rink (data/surfaces/surfaces.json): no condition state, weather plan 4.1"
     }
   },
   "source": {
-    "purpose": "Default surface classes for data/surfaces/surfaces.json (weather plan W5/W6, docs/data_formats/surface_conditions.md). W5 thermal + W6 water/friction; the snow/ice/crr fields of W8+ are not in the format yet.",
+    "purpose": "Default surface classes: the classes of data/surfaces/surfaces.json plus the road and off-road classes a game's own surface table may use (concrete, paving_stones, sett, cobblestone, gravel, compacted, sand) (weather plan W5/W6, docs/data_formats/surface_conditions.md). W5 thermal + W6 water/friction; the snow/ice/crr fields of W8+ are not in the format yet.",
     "marks": "[C] cited and read, [D] derived, [M] from memory of a named source, not re-checked in this increment, [AS] assumed"
   }
 }
