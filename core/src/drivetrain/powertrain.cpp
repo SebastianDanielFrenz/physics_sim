@@ -1289,7 +1289,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             fuel_tank_ = std::make_unique<FuelTank>(tank_desc->fuel, tank_desc->capacity_kg, tank_desc->initial_kg);
         }
         if (tm) {
-            engine_ = std::make_unique<EngineTorqueMap>(to_engine_desc(*tm, tank_desc));
+            EngineTorqueMap::Desc tm_desc = to_engine_desc(*tm, tank_desc);
+            if (pt.thermal.has_value()) tm_desc.thermal_friction_fraction = pt.thermal->engine.motoring_friction_fraction;
+            engine_ = std::make_unique<EngineTorqueMap>(std::move(tm_desc));
         } else {
             // PHYS-033 P4 I7b C12: SimulatedEngine::build_maps takes LHV/AFR
             // from fuels[0], so the engine is built from a copy whose fuels

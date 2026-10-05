@@ -191,7 +191,11 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     const real s = sign(omega_old);
     const real m_rpm = desc_.motoring_torque_nm_vs_rpm.evaluate(rpm);
     const real w_rpm = desc_.wot_torque_nm_vs_rpm.evaluate(rpm);
-    tau_smooth_ = s * (m_rpm + c_k_);
+    // Engine thermal plan T1: oil-viscosity friction. k_g = 1 + phi_f*(k - 1) scales the smooth friction (the part
+    // of the motoring curve that is friction, not pumping); k = 1.0 gives k_g == 1.0 and x*1.0 == x, bit-identical.
+    const real k_plant = sensors.friction_scale;
+    const real k_g = real(1.0) + desc_.thermal_friction_fraction * (k_plant - real(1.0));
+    tau_smooth_ = (s * (m_rpm + c_k_)) * k_g;
     const real tau_comb_demand = theta_c_demand * (w_rpm - m_rpm);
 
     // PHYS-033 P4 I7a C5/C5d: fuel DEMAND at this substep-start rpm and the
@@ -256,7 +260,8 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     const real w_slope = curve_slope_at(desc_.wot_torque_nm_vs_rpm, rpm);
     // PHYS-033 P4 I7a C6: each combustion term times s_starve (x*1.0 == x
     // when not starving - same operands, same order as pre-C6).
-    real dtau_domega = kRadPerSecToRpm * m_slope + theta_c_demand * kRadPerSecToRpm * (w_slope - m_slope) * s_starve;
+    // Thermal T1: only the friction slope (m_slope) carries k_g; the combustion term theta*(w - m) is untouched.
+    real dtau_domega = kRadPerSecToRpm * m_slope * k_g + theta_c_demand * kRadPerSecToRpm * (w_slope - m_slope) * s_starve;
     if (desc_.limiter.type == LimiterType::SoftCut) {
         const bool in_band = rpm < desc_.limiter.rpm && rpm > desc_.limiter.rpm - desc_.limiter.band_rpm;
         const real dflim_domega = in_band ? -kRadPerSecToRpm / desc_.limiter.band_rpm : real(0.0);
@@ -282,8 +287,8 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     PreSolveResult r;
     r.tau0 = tau0_;
     r.d = d_;
-    r.friction_cap_static = desc_.breakaway_torque_nm;
-    r.friction_cap_kinetic = c_k_;
+    r.friction_cap_static = desc_.breakaway_torque_nm * k_plant; // thermal T1: Coulomb caps scale with k
+    r.friction_cap_kinetic = c_k_ * k_plant;
     r.state = state_;
     r.rpm = rpm;
     r.throttle_eff = theta_eff;
@@ -292,7 +297,10 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.starter_active = starter_active;
     r.torque_estimate = tau_smooth_ + tau_comb_;
     r.governor_setpoint_rpm = governor_setpoint_rpm;
-    r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
+    // Thermal T1: the graph engine has no separate ECU model, so its torque demand uses the plant k. Written as the
+    // unscaled expression plus the friction increments so that k = 1.0 adds exact zeros (bit-identical).
+    r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm) +
+                      (s * (m_rpm + c_k_) * (k_g - real(1.0)) - s * c_k_ * (k_plant - real(1.0)));
     // PHYS-033 P4 I7a C6: the FIRED fraction (theta_c_demand*s_starve) -
     // torque_demand above stays the ECU's unscaled request (a dry tank does
     // not change what the ECU asks for), torque_estimate follows the fired
@@ -354,7 +362,13 @@ EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, rea
         // exactly the available tank mass.
         r.fuel_mass_delta = booked_fuel_mass_kg_;
         r.fuel_energy_in_delta = r.fuel_mass_delta * desc_.fuel.lhv_j_kg;
+        // Thermal T1 (plan 4.1): the graph engine has no lambda, eta_c = 1: everything burnt is released.
+        r.released_heat_delta = r.fuel_energy_in_delta;
     }
+    // Thermal T1 (plan 4.4): the smooth friction's share (phi_f) of the friction work turns into coolant/oil heat;
+    // the rest of the motoring curve is pumping (exhaust, T3). tau_smooth_ already carries k_g. Booked even when a
+    // tiny negative so the thermal closure stays exact.
+    r.friction_heat_delta = -(h * omega_old_ * tau_smooth_ * desc_.thermal_friction_fraction);
 
     crank_angle_ = std::fmod(crank_angle_ + omega_new * h, real(4.0) * kPi);
     return r;

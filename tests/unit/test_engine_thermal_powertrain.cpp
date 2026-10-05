@@ -11,6 +11,7 @@
 //   C3b a heap allocation in Powertrain::end_tick (after thermal_->step) -> U8 World half: own violations 720.
 //   C3c the Coulomb-row share dropped from accumulate() -> thermal_friction_in == 0 (the "thermal ledger" CHECK).
 //   C3d ambient start disabled -> coolant 91.0 / oil 95.0 instead of -20 C ("ambient start soaks").
+//   U9a graph (C4): Sensors::friction_scale +1e-14 in Powertrain -> first differing tick 0.
 //   (the EngineRig setters case shares the ambient-start mechanism of C3d; U9a's sabotage lands with C4/C5.)
 
 #include "drivetrain/engine_thermal.h"
@@ -86,10 +87,15 @@ void expect_identical(const std::vector<Sample>& a, const std::vector<Sample>& b
         }
     }
     INFO("first differing tick: " << first_diff);
+    const Sample& x = a[std::min(first_diff, a.size() - 1)];
+    const Sample& y = b[std::min(first_diff, a.size() - 1)];
+    INFO("omega " << x.omega << " vs " << y.omega << "; fuel_mass " << x.fuel_mass << " vs " << y.fuel_mass << "; engine_out "
+                  << x.engine_out << " vs " << y.engine_out << "; indicated " << x.indicated_work << " vs " << y.indicated_work
+                  << "; flow " << x.fuel_flow << " vs " << y.fuel_flow << "; state " << x.state << " vs " << y.state);
     CHECK(first_diff == a.size());
 }
 
-void u9a(const std::string& engine_rel) {
+void u9a(const std::string& engine_rel, bool coupled) {
     const std::string engine = data_path(engine_rel);
     EngineRig::Config plain;
     EngineRig::Config thermal;
@@ -101,19 +107,22 @@ void u9a(const std::string& engine_rel) {
     CHECK(base.back().fuel_mass > 0.0);
     const auto pinned = run_rig(engine, thermal, 2400, 1.0, &mx_pinned);
     expect_identical(base, pinned);
-    // A warm start (oil exactly at the reference temperature, then warming) never leaves k = 1.0 either.
+    // The coupling is live: with the natural warm start the oil sits a little below T_ref (k slightly above 1), so the
+    // trajectory differs from the pinned one - slightly (the oil never leaves ~94-95 C here).
     const auto natural = run_rig(engine, thermal, 2400, 0.0, &mx_natural);
-    expect_identical(base, natural);
+    if (coupled) CHECK_FALSE(natural.back() == base.back());
+    CHECK(natural.back().fuel_mass >= base.back().fuel_mass * 0.995);
+    CHECK(natural.back().fuel_mass <= base.back().fuel_mass * 1.02);
 }
 
 } // namespace
 
 TEST_CASE("U9a graph engine with a thermal model and k = 1 is bit-identical to the same engine without", "[thermal][drivetrain]") {
-    u9a("engines/i4_2l_na.json");
+    u9a("engines/i4_2l_na.json", true);
 }
 
 TEST_CASE("U9a simulated engine with a thermal model and k = 1 is bit-identical to the same engine without", "[thermal][drivetrain]") {
-    u9a("engines/toyota_a25a_fks_sim.json");
+    u9a("engines/toyota_a25a_fks_sim.json", false); // coupled from C5
 }
 
 TEST_CASE("EngineRig thermal setters and rejections", "[thermal][drivetrain]") {

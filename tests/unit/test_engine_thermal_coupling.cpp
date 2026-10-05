@@ -1,0 +1,168 @@
+// tests/unit/test_engine_thermal_coupling.cpp - engine thermal plan T1: how the oil-viscosity friction scale k and
+// the heat bookkeeping act inside the two engine models (out/engine_thermal_plan.md section 6.1 / 12, vault PHYS-063).
+// Tags [thermal][drivetrain].
+//
+// C4 content: I1-graph (EngineTorqueMap, white-box pre_solve/post_solve). C5 adds I1-sim (SimulatedEngine) and I2.
+//
+// Sabotage record (each applied once, the named check then fails):
+//   C4a I1-graph: the friction slope in d not scaled by k_g -> the finite-difference CHECK fails (d 0.0344 vs FD 0.0393,
+//       and d(k) == d(1) at theta 0.2).
+//   C4b I1-graph: the kinetic Coulomb cap left at c_k -> cap 15.0 vs 35.07 and the net-torque CHECK off by 20.07 N*m.
+//   C4c I1-graph: friction heat without the phi_f share -> 20.29 vs the expected -(h*omega*tau_smooth*phi_f).
+//   C4d I1-graph: released_heat_delta = 0 -> 0 vs 257.7 J (fuel energy of the substep).
+// U9a graph (test_engine_thermal_powertrain.cpp): the plant scale handed to the engine perturbed by +1e-14 -> the
+//   rig trajectory differs from the no-thermal one at tick 0 (a perturbation inside the engine alone would hit both
+//   runs equally and prove nothing).
+
+#include "drivetrain/engine_torque_map.h"
+#include "drivetrain/powertrain.h"
+
+#include "ps/drivetrain/engine_maps.h"
+#include "ps/io/vehicle_io.h"
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <cmath>
+#include <string>
+#include <variant>
+
+using namespace ps;
+using namespace ps::drivetrain;
+using Catch::Approx;
+
+namespace {
+
+constexpr real kPi = 3.14159265358979323846;
+constexpr real kRpmToRad = 2.0 * kPi / 60.0;
+constexpr real kH = 1.0 / 960.0;
+
+std::string data_path(const std::string& rel) { return std::string(PS_SOURCE_DIR) + "/data/" + rel; }
+
+TorqueMapEngineDesc graph_params() {
+    ComponentParams p = io::load_engine_json(data_path("engines/i4_2l_na.json"));
+    REQUIRE(std::holds_alternative<TorqueMapEngineDesc>(p));
+    return std::get<TorqueMapEngineDesc>(p);
+}
+
+Sensors sensors_at(real rpm, real k) {
+    Sensors s;
+    s.omega = rpm * kRpmToRad;
+    s.ignition = 1.0;
+    s.starter = 0.0;
+    s.clutch_engaged_fraction = 1.0;
+    s.gearbox_in_neutral = true;
+    s.friction_scale = k;
+    s.ecu_friction_scale = k;
+    return s;
+}
+
+struct Eval {
+    PreSolveResult pre;
+    PostSolveResult post;
+};
+
+// A fresh Running engine every call (no state carried between evaluations), one pre_solve + post_solve.
+Eval eval_graph(const EngineTorqueMap::Desc& d, real rpm, real theta, real k, real omega_new_rpm = -1.0) {
+    EngineTorqueMap e(d);
+    ThrottleCommand tc;
+    tc.command = theta;
+    Eval r;
+    r.pre = e.pre_solve(sensors_at(rpm, k), tc, TcuRequest{}, kH);
+    r.post = e.post_solve((omega_new_rpm < 0.0 ? rpm : omega_new_rpm) * kRpmToRad, kH);
+    return r;
+}
+
+constexpr real kK = 2.338; // k at 20 C for the A25A oil class (plan section 6.1)
+
+} // namespace
+
+TEST_CASE("I1-graph: friction scale k in EngineTorqueMap (smooth part by k_g, caps by k, slope, heat)", "[thermal][drivetrain]") {
+    const TorqueMapEngineDesc tm = graph_params();
+    const real phi = 0.6;
+    EngineTorqueMap::Desc d = to_engine_desc(tm);
+    d.thermal_friction_fraction = phi;
+    const real c_k = -d.motoring_torque_nm_vs_rpm.evaluate(0.0);
+    REQUIRE(c_k > 0.0);
+    const real k_g = 1.0 + phi * (kK - 1.0);
+
+    const real rpm = 3250.0; // mid-segment of both curves (knots every 500 rpm): finite differences stay on one segment
+    const real m = d.motoring_torque_nm_vs_rpm.evaluate(rpm);
+    const real m_smooth = m + c_k; // the friction part of the motoring curve (<= 0)
+    REQUIRE(m_smooth < 0.0);
+
+    SECTION("net torque: only the smooth friction and the Coulomb caps change, the indicated torque w - m does not") {
+        for (const real theta : {1.0, 0.5}) {
+            INFO("theta " << theta);
+            const Eval a = eval_graph(d, rpm, theta, 1.0);
+            const Eval b = eval_graph(d, rpm, theta, kK);
+            // Smooth friction acts on the node torque: tau0 differs by exactly (k_g - 1)*m_smooth.
+            const real expected_dtau0 = (k_g - 1.0) * m_smooth;
+            CHECK(std::abs((b.pre.tau0 - a.pre.tau0) - expected_dtau0) <= 1e-12 * std::abs(expected_dtau0));
+            // Coulomb caps scale with k (the full friction at rest is pure Coulomb).
+            CHECK(a.pre.friction_cap_kinetic == c_k);
+            CHECK(a.pre.friction_cap_static == d.breakaway_torque_nm);
+            CHECK(b.pre.friction_cap_kinetic == Approx(c_k * kK).epsilon(1e-14));
+            CHECK(b.pre.friction_cap_static == Approx(d.breakaway_torque_nm * kK).epsilon(1e-14));
+            // Net engine torque including the Coulomb row's kinetic value: falls by (k_g-1)*m_smooth - (k-1)*c_k.
+            const real net_a = a.pre.tau0 - a.pre.friction_cap_kinetic;
+            const real net_b = b.pre.tau0 - b.pre.friction_cap_kinetic;
+            const real expected_dnet = (k_g - 1.0) * m_smooth - (kK - 1.0) * c_k;
+            CHECK(std::abs((net_b - net_a) - expected_dnet) <= 1e-12 * std::abs(expected_dnet));
+            // The ECU-visible torque demand of the graph engine uses the plant k (it has no separate ECU model).
+            const real expected_dtd = (k_g - 1.0) * m_smooth - (kK - 1.0) * c_k;
+            CHECK(std::abs((b.pre.torque_demand - a.pre.torque_demand) - expected_dtd) <= 1e-12 * std::abs(expected_dtd));
+        }
+        // WOT in particular: the indicated torque w - m is untouched (compare against the curves directly).
+        const Eval w = eval_graph(d, rpm, 1.0, kK);
+        const real w_rpm = d.wot_torque_nm_vs_rpm.evaluate(rpm);
+        CHECK(std::abs(w.pre.tau0 - (k_g * m_smooth + (w_rpm - m))) <= 1e-12 * std::abs(w_rpm));
+    }
+
+    SECTION("d matches a central finite difference of tau0 (the friction slope carries k_g, the combustion slope does not)") {
+        for (const real k : {1.0, kK}) {
+            for (const real theta : {0.2, 0.5}) {
+                INFO("k " << k << " theta " << theta);
+                const real dr = 5.0; // rpm; the 500 rpm segments keep both points on one linear piece
+                const Eval hi = eval_graph(d, rpm + dr, theta, k);
+                const Eval lo = eval_graph(d, rpm - dr, theta, k);
+                const real fd = -(hi.pre.tau0 - lo.pre.tau0) / (2.0 * dr * kRpmToRad); // d = -dtau/domega
+                const Eval mid = eval_graph(d, rpm, theta, k);
+                CHECK(mid.pre.d == Approx(std::max(fd, 0.0)).epsilon(1e-6));
+            }
+        }
+        // The scale is not a no-op for d: the friction slope of this motoring curve is nonzero here.
+        const Eval a = eval_graph(d, rpm, 0.2, 1.0);
+        const Eval b = eval_graph(d, rpm, 0.2, kK);
+        CHECK(a.pre.d > 0.0);
+        CHECK(std::abs(b.pre.d - a.pre.d) > 1e-6);
+    }
+
+    SECTION("heat: released = fuel energy (eta_c = 1), friction heat = -h*omega*tau_smooth*phi_f with tau_smooth carrying k_g") {
+        REQUIRE(d.has_fuel_model);
+        const Eval e = eval_graph(d, rpm, 1.0, kK);
+        const real omega = rpm * kRpmToRad;
+        const real tau_smooth = (m_smooth)*k_g; // s = +1
+        CHECK(e.post.friction_heat_delta == Approx(-(kH * omega * tau_smooth * phi)).epsilon(1e-12));
+        CHECK(e.post.friction_heat_delta > 0.0);
+        CHECK(e.post.released_heat_delta == e.post.fuel_energy_in_delta);
+        CHECK(e.post.released_heat_delta > 0.0);
+        // Coasting (no fuel): friction heat still flows, nothing is released.
+        const Eval c = eval_graph(d, rpm, 0.0, kK);
+        CHECK(c.post.released_heat_delta == 0.0);
+        CHECK(c.post.friction_heat_delta > 0.0);
+    }
+
+    SECTION("k = 1.0 leaves every output bit-identical to the unscaled expressions") {
+        const Eval a = eval_graph(d, rpm, 0.7, 1.0);
+        EngineTorqueMap::Desc d1 = d;
+        d1.thermal_friction_fraction = 1.0; // k_g = 1 whatever phi_f is
+        const Eval b = eval_graph(d1, rpm, 0.7, 1.0);
+        CHECK(a.pre.tau0 == b.pre.tau0);
+        CHECK(a.pre.d == b.pre.d);
+        CHECK(a.pre.torque_demand == b.pre.torque_demand);
+        // and against the closed forms of the pre-thermal code
+        const real w_rpm = d.wot_torque_nm_vs_rpm.evaluate(rpm);
+        CHECK(a.pre.tau0 == (m + c_k) + 0.7 * (w_rpm - m));
+    }
+}

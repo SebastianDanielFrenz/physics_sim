@@ -106,6 +106,11 @@ public:
         // byte-identical to before this commit.
         bool has_fuel_model = false;
         real eta_i = 0.0; // only meaningful when has_fuel_model && !has_fuel_map
+        // Engine thermal plan T1 (vault PHYS-063): phi_f, the friction share of the motoring curve's smooth part
+        // (the rest is pumping). Sensors::friction_scale k scales that smooth part by k_g = 1 + phi_f*(k - 1) and the
+        // Coulomb caps by k. Set by the Powertrain from the engine thermal file; 1.0 (and unused: k stays 1.0)
+        // without thermal.
+        real thermal_friction_fraction = 1.0;
     };
 
     explicit EngineTorqueMap(Desc desc);
