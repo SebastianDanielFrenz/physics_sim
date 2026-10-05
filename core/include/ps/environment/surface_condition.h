@@ -138,6 +138,7 @@ real surface_vapour_flux_kg_m2_s(const ColumnModel& column, const SurfaceForcing
 inline constexpr real kSoilTopDepthM = 0.1;             // [AS] top-layer depth the infiltration fills
 inline constexpr real kSoilTauFcS = 3.0 * 86400.0;      // [AS] gravity drainage above field capacity
 inline constexpr real kPondTauS = 3600.0;               // [AS] ponded-water drain time constant
+inline constexpr real kGallawayIntensityCapMmH = 150.0; // [AS] owner Q17 (>= 100 mm/h): Gallaway's WFD sees at most this intensity
 inline constexpr real kDrainRainMinMmH = 0.1;           // [AS] below this the drainage tau is frozen
 inline constexpr real kAirDensityKgM3 = 1.2;            // [C] ISA sea level ~1.225
 inline constexpr real kAirCpJkgK = 1005.0;              // [C] dry air

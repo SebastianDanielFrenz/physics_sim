@@ -268,9 +268,8 @@ ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenari
 }
 
 // Weather plan W2: the scenario "environment" block (docs/data_formats/
-// scenario.md). Rejects unknown keys and the keys of later increments
-// (default_tyre_profile) so a scenario written for them never silently loads
-// with half its meaning dropped. `surface_table_path` is the scenario's
+// scenario.md). Rejects unknown keys so a scenario written for a later
+// increment never silently loads with half its meaning dropped. `surface_table_path` is the scenario's
 // resolved surface table (empty = none): W5's "surface_conditions" needs it,
 // the condition classes are indexed by its SurfaceIds.
 ScenarioEnvironment read_environment(const json& j, const std::filesystem::path& scenario_dir,

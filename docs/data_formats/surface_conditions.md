@@ -116,11 +116,13 @@ is added to the film `W` -> evaporation or dew -> drainage.
   environment passes 0 for a snow sample).
 - **Canopy** (vegetated): fills up to `canopy.capacity_mm` first.
 - **Infiltration** (soil/vegetated): at most `ksat_mm_h / 3600 * dt` and at most
-  the pore space `(theta_sat - theta) * 0.1 m * 0.4` [AS porosity]; the rest
-  stays on the surface.
+  the pore space `(theta_sat - theta) * layer.depth_m * 1000` mm (theta is volumetric, so
+  no further porosity factor; the top soil layer is the `layer` slab, 0.1 m in the shipped
+  file [AS]); the rest stays on the surface. A soil class starts at `theta_fc` [AS].
 - **Evaporation/dew**: the Dalton bulk flux `E = h_m (rho_v,sat(T_s) - rho_v,air)`
   with `h_m = h_c / (rho cp)` (Lewis analogy, Le = 1 [AS], `rho cp` = 1.2 * 1005),
-  `e_sat` the Magnus form `6.112 exp(17.67 Tc / (Tc + 243.5))` hPa [C Bolton 1980],
+  `e_sat` the Magnus form `6.1094 exp(17.625 Tc / (Tc + 243.04))` hPa [C Bolton 1980, the
+  same function the weather's dew point uses],
   `rho_v = e_pa * 0.018016 / (8.314462618 T)`. Positive `E` evaporates (drawn from
   `W`, then canopy, then the soil surface scaled by `theta/theta_fc`), limited by
   the available water over one step; negative `E` is dew, capped at 0.36 mm/h and
@@ -130,18 +132,22 @@ is added to the film `W` -> evaporation or dew -> drainage.
 - **Drainage** (`sealed`): the Gallaway et al. 1979 (FHWA-RD-79-31) steady film
   above the texture, metric form
   `WFD = 0.01485 mtd^0.11 path^0.43 I^0.59 / slope^0.42 - mtd` (mm, clamped at 0),
-  with `I` the rain in mm/h. While it rains, `tau = WFD / (I/3600)` and the film
-  relaxes to `W_tex + WFD` by backward Euler (`W <- (W + a W_tex) / (1 + a)`,
-  `a = dt/tau`); the fixed point is exact and a fast-forward is bit-identical to
-  stepping. Once the rain stops (`I < 0.1 mm/h`) `tau` is frozen (the state
-  carries `drain_tau_s`) and free water above `W_tex` drains at that rate.
+  with `I` the rain in mm/h, capped at 150 mm/h [AS, owner Q17: >= 100] inside the
+  formula (the tau below still uses the real rain). While it rains, `tau = WFD / (I/3600)` and the water
+  above the texture storage relaxes to `WFD` by backward Euler
+  (`W <- W_tex + (W - W_tex) / (1 + a)`, `a = dt/tau`, only while `W > W_tex`; water
+  below the storage never drains, it only evaporates); the fixed point under the rain
+  input is `R tau = WFD`, exact. Once the rain stops (`I < 0.1 mm/h`) `tau` is frozen
+  (the state carries `drain_tau_s`) and free water above `W_tex` drains at that rate
+  (`tau = 0`: down to `W_tex` in one step).
 - **Drainage** (soil/vegetated): gravity water above `theta_fc` relaxes with a
   3-day [AS] time constant and any ponded `W` with a 1 h [AS] constant.
 
 The published wet weight of a class (the condition grip and the snapshot's
 `condition`): sealed `W / W_tex`; soil/vegetated
-`(theta - theta_fc) / (theta_sat - theta_fc)`, forced to 1 while ponded; the
-vegetated grass weight is `max(canopy/capacity, wet weight)`.
+`(theta - theta_fc) / (theta_sat - theta_fc)`, at least `min(W / 1 mm, 1)` while
+ponded (a ramp over 1 mm [AS], not a switch); the vegetated grass weight is
+`max(canopy/capacity, wet weight)`. Dew on turf wets the canopy first.
 
 ## Grid (climate `condition` block)
 
@@ -176,7 +182,9 @@ the absolute dry level and the factor is relative to it (plan 5.2). Built once p
 grid (one `ps::math::exp` per class and speed sample), updated per tick, no
 allocation. Per class: a wet speed table
 `table(v) = min(wet * exp((v_ref - v) / Sp), damp)` with `Sp = 14.2 + 89.7 mtd`
-km/h [C PIARC 1995] and `v_ref` = 60 km/h; non-vegetated
+km/h [C PIARC 1995] and `v_ref` = 60 km/h, for sealed classes only (a soil/vegetated
+class has no MTD: its wet level is flat in speed, the mud curve is W9), interpolated
+linearly between the 33 samples and evaluated at the contact-patch speed; non-vegetated
 `f = (1 - w) dry_tyre + w table(v) wet_tyre`, vegetated
 `f = (1 - g) dry_tyre + g wet_grass * wet_grass_tyre`; `w`/`g` are the wet/grass
 weights above and `*_tyre` the tyre profile's per-condition factors
@@ -194,10 +202,15 @@ environment gives exactly 1. W7 adds the tread-depth factor, W8 aquaplaning.
 - dt 60 s vs 15 s: 0.033 K.
 - W6-G1: a sealed steady film equals `W_tex + WFD` to 1e-9 (the Gallaway fixed
   point) and the frozen `drain_tau_s` is `WFD / (I/3600)`.
-- W6-G2: drying removes exactly the integrated evaporation flux to 1e-9 and a
-  0.4 mm film dries in a plausible time (<= 2 h).
-- W6-G4: the grip wet weight, the PIARC speed table and the static/out-of-range
-  fallbacks.
+- W6-G2: the flux equals an independent hand evaluation (h_c 17.17 W/(m2 K): 1.12 mm/h at
+  T_s = T_a = 300 K, 5 m/s, 5 hPa), drying removes exactly the integrated flux to 1e-9 and a
+  0.4 mm film dries in 27 min (600 W/m2 sun, 5 hPa) / 55 min (100 W/m2, 14 hPa).
+- W6-G8: the latent heat enters the surface node (dense reference, 1010 W/m2 at 1.507 mm/h).
+- W6-G9: soil/turf interception, infiltration limit, ponding, drain and the mass closure.
+- W6-G7: the grip wet weight, the PIARC speed table, soil flat in speed and the fallbacks.
+- W6-G3 (World, `test_environment_surface_world.cpp`): wet vs dry threshold braking, car_sedan
+  on a tagged asphalt mesh, no ABS, 0.8 s pedal ramp: distance ratio 1.40 from 20 m/s
+  (Wong 1.14-1.8, PIARC bracket 1.26-1.62) and 1.86 from 30 m/s.
 - W6-G3 (World level, `test_environment_surface_world.cpp`): wet vs dry asphalt
   braking distance ratio inside the Wong band [1.14, 1.8].
 

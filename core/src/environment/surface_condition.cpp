@@ -425,7 +425,10 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     if (col.kind == SurfaceKind::Sealed) {
         const real R = f.precip_mm_h;
         if (R >= kDrainRainMinMmH) {
-            const real wfd = gallaway_wfd_mm(col.mtd_mm, col.drainage_path_m, R, col.drainage_slope_m_m);
+            // The film depth sees at most the intensity cap (above it the formula is an extrapolation, Q17);
+            // tau still uses the real input, so the steady film is WFD(min(R, cap)) exactly.
+            const real wfd = gallaway_wfd_mm(col.mtd_mm, col.drainage_path_m, std::min(R, kGallawayIntensityCapMmH),
+                                             col.drainage_slope_m_m);
             tau = wfd > 0.0 ? wfd / (R / 3600.0) : 0.0;
         }
         if (W > col.w_tex_mm) {

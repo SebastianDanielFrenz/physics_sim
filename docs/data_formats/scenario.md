@@ -191,7 +191,8 @@ filled every tick, and no telemetry channel is added.
 | `fixed_day_of_year` | int >= 0 | optional | off | pins every day to one game day's values; mutually exclusive with a fixed `season` |
 | `north_yaw_deg` | real | optional | `0` | rotation of north about the World's Z axis, counter-clockwise from +Y (0 = north is +Y, east is +X); used for `sun_dir_world` |
 | `events` | array | optional | empty | timed environment changes, see below |
-| `surface_conditions` | string | optional | none | W5: a `physics_sim.surface_conditions/1` file ([`surface_conditions.md`](surface_conditions.md)), relative to the scenario file. Needs the scenario's `surface_table_path` (the condition classes are that table's names in `SurfaceId` order; a table name without an entry is a static class) and the `weather` key (the energy balance reads air temperature, wind, humidity and cloud). The grid is stepped on environment time, published per class in `EnvironmentSnapshot::surfaces` and folded into the state hash; nothing in the vehicle physics reads it yet |
+| `surface_conditions` | string | optional | none | W5: a `physics_sim.surface_conditions/1` file ([`surface_conditions.md`](surface_conditions.md)), relative to the scenario file. Needs the scenario's `surface_table_path` (the condition classes are that table's names in `SurfaceId` order; a table name without an entry is a static class) and the `weather` key (the energy balance reads air temperature, wind, humidity and cloud). The grid is stepped on environment time, published per class in `EnvironmentSnapshot::surfaces` and folded into the state hash; W6: the grid also carries the water film, canopy and soil moisture and the wheels read the resulting condition grip (a vehicle tyre contact on a tagged surface of an installed class) |
+| `default_tyre_profile` | string | optional | the reference profile (all factors 1.0) | W6: a `physics_sim.tyre_profile/1` file ([`tyre_profile.md`](tyre_profile.md)), relative to the scenario file; the tyre profile every wheel uses under this environment (the per-wheel `tyre_profile` is resolved in W7). Needs `surface_conditions` |
 
 Environment time is `t_env = anchor_env + scale * (tick - anchor_tick) / tick_hz`,
 a closed-form function of the tick (nothing accumulates). Installing at tick 0
@@ -234,8 +235,8 @@ event (an unknown event key, more or fewer than one action key, a negative
 `ramp_s`, an unknown `set_season` name, a weather event without the
 `weather` key, an unreadable preset file), `surface_conditions` that is not a
 string, without `surface_table_path` or without `weather`, an unreadable or
-invalid surface conditions file, and the key of a later increment
-(`default_tyre_profile`: "not supported yet (weather plan W6+)").
+invalid surface conditions file, and `default_tyre_profile` that is not a string,
+is given without `surface_conditions` or names an unreadable/invalid profile file.
 
 The published record (`ps/environment/environment_snapshot.h`, in
 `WorldSnapshot::environment` when `has_environment`): `t_env_s`, `time_scale`,
@@ -248,8 +249,9 @@ The published record (`ps/environment/environment_snapshot.h`, in
 `has_surfaces`, `surface_count` and `surfaces[i]` (`i` = `SurfaceId`):
 `surface_id`, `kind` (0 static, 1 sealed, 2 soil, 3 vegetated), `has_state`,
 `t_surface_c` (interpolated between the two grid states at `t_env_s`) and the
-zero placeholders `water_mm`, `ice_mm`, `frost_mm`, `snow_mm`,
-`snow_density_kg_m3`, `soil_moisture`, `canopy_water_mm` (W6-W8). Not hashed
+`water_mm`, `soil_moisture`, `canopy_water_mm` (W6) and the zero placeholders `ice_mm`,
+`frost_mm`, `snow_mm`, `snow_density_kg_m3` (W8), plus W6's `water_above_texture_mm`,
+`condition` (0 dry, 1 damp, 2 wet) and `condition_factor` (the default tyre at rest). Not hashed
 (the grid state behind it is).
 
 ## Minimal complete example

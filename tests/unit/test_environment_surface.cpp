@@ -902,7 +902,8 @@ TEST_CASE("Surface conditions loader: the shipped file and rejections", "[enviro
 //
 // RECORDED SABOTAGES (performed by hand, reverted, 2026-10-05):
 //  - W6-G1 : tau = 300 s instead of WFD/R: every rain level failed (50 mm/h: steady film 4.567 mm vs 1.213 mm,
-//            tau 300 vs 58.51 s; 5 mm/h: 0.817 vs 0.400 mm).
+//            tau 300 vs 58.51 s; 5 mm/h: 0.817 vs 0.400 mm); the Gallaway intensity cap removed (min(R, 150)):
+//            300 mm/h steady film 4.2415 vs 2.6836 mm and tau 46.10 vs 27.40 s.
 //  - W6-G1b: drainage applied from below the storage too (W = (W + a W_tex)/(1 + a)): the film rose from nothing,
 //            0.400 mm vs 0.1667 mm after the first 1/6 of the storage was supplied, 0.400 vs 0.3333 after the second.
 //  - W6-G2 : (a) availability limit removed from the evaporation: flux 3.114e-4 vs the 1.667e-6 kg/(m2 s) a
@@ -1036,15 +1037,15 @@ TEST_CASE("W6-G1: a sealed steady film equals the Gallaway WFD above the texture
     CHECK(gallaway_wfd_mm(0.8, 7.3, 5.0, 0.025) == 0.0);    // the texture absorbs a light rain: clamped at 0
     CHECK(gallaway_wfd_mm(0.8, 7.3, 0.0, 0.025) == 0.0);
 
-    // The steady state of the dynamic model: W - W_tex == WFD, tau frozen at WFD / R. 150 mm/h exceeds the
-    // plan's >= 100 mm/h intensity cap [AS], the film formula holds there too.
-    for (const real rain : {5.0, 20.0, 50.0, 100.0, 150.0}) {
+    // The steady state of the dynamic model: W - W_tex == WFD(min(R, cap)), tau frozen at WFD / R. The intensity
+    // cap is 150 mm/h [AS, owner Q17: >= 100]; 300 mm/h sees the film of 150 mm/h but drains with tau = WFD(150) / 300.
+    for (const real rain : {5.0, 20.0, 50.0, 100.0, 150.0, 300.0}) {
         SurfaceClassState s;
         initial_column_state(col, InitialProfile{300.0, 300.0}, s);
         SurfaceForcing f = quiet(300.0);
         f.precip_mm_h = rain;
         for (int n = 0; n < 300; ++n) step_column(col, f, 60.0, s, s);
-        const real wfd = gallaway_ref(col.mtd_mm, col.drainage_path_m, rain, col.drainage_slope_m_m);
+        const real wfd = gallaway_ref(col.mtd_mm, col.drainage_path_m, std::min(rain, 150.0), col.drainage_slope_m_m);
         INFO("rain " << rain << " mm/h: W " << s.water_mm << " steady " << (col.w_tex_mm + wfd) << " w_tex " << col.w_tex_mm
                      << " wfd " << wfd << " tau " << s.drain_tau_s);
         CHECK_THAT(s.water_mm, WithinAbs(col.w_tex_mm + wfd, 1e-9));
