@@ -1,0 +1,14 @@
+{
+  "format": "physics_sim.tyre_profile/1",
+  "class": "agricultural_lug",
+  "tread_new_mm": 25.0,
+  "tread_min_mm": 5.0,
+  "groove_void_ratio": 0.55,
+  "siping": "none",
+  "inflation_pressure_kpa": 160.0,
+  "condition_factors": { "dry": 0.90, "damp": 1.0, "wet": 1.10, "wet_grass": 1.25 },
+  "tread_exponents": { "wet": 0.5 },
+  "thermal": null,
+  "wear": null,
+  "source": "[AS] An agricultural lug (tractor) tyre: very deep, open lugs for soil/grass traction; lowest dry grip on pavement, best on grass; plausible ratios."
+}

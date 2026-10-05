@@ -34,6 +34,13 @@ struct SurfaceConditionSample {
     real snow_density_kg_m3 = 0.0;
     real soil_moisture = 0.0;
     real canopy_water_mm = 0.0;
+    // W6: water above the texture (sealed) / ponding (soil), the condition
+    // label (0 dry, 1 damp, 2 wet) and the default-tyre friction factor. The
+    // label and factor are diagnostics: they are NOT hashed (the state they
+    // derive from is).
+    real water_above_texture_mm = 0.0;
+    std::int32_t condition = 0;
+    real condition_factor = 1.0;
 };
 
 struct EnvironmentSnapshot {

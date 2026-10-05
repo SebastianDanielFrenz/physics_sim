@@ -63,6 +63,7 @@ One entry of the top-level `wheels` array (`ps::vehicle::WheelDesc`).
 | `suspension` | [suspension object](#suspension) | optional | all fields at their own defaults | see below | per-corner spring/damper/ARB |
 | `arb_partner` | int | optional | `-1` | **not range-checked** by the loader (see README "Discrepancies found") | index into `wheels[]` of this wheel's anti-roll-bar pair; `-1` = none |
 | `tyre` | [tyre reference](tyre.md) | optional | empty `TyreDesc` (all its own defaults) | see `tyre.md` | inline tyre object, a path to a standalone tyre JSON, or a path to a `.tir` file |
+| `tyre_profile` | string | optional | `""` | none (stored as-is; not resolved yet) | path or name of a [`physics_sim.tyre_profile/1`](tyre_profile.md) file for the surface condition grip. W6 stores it but resolves every wheel through the environment's `default_tyre_profile`; the per-wheel lookup is W7 |
 | `steered` | bool | optional | `false` | none | whether this wheel responds to the `"steer"` control channel |
 | `is_front` | bool | optional | `true` | none | selects the Ackermann-axle-averaging group and the rear-steer sign (see below); does **not** by itself pick a `brake_system` corner (that matches by `name`) |
 | `driven` | — | **rejected** | — | presence throws `"wheel '<name>': 'driven' is no longer a wheel field (physics_sim.vehicle/2) - which wheels are driven is now determined by the 'powertrain' graph (PHYS-033 Q7)"` | superseded `/1` field; whether a wheel is driven is now whatever the `powertrain` graph connects to `wheel:<name>` |

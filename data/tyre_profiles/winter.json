@@ -1,0 +1,14 @@
+{
+  "format": "physics_sim.tyre_profile/1",
+  "class": "winter",
+  "tread_new_mm": 9.0,
+  "tread_min_mm": 1.6,
+  "groove_void_ratio": 0.35,
+  "siping": "high",
+  "inflation_pressure_kpa": 230.0,
+  "condition_factors": { "dry": 0.95, "damp": 1.05, "wet": 1.0, "wet_grass": 1.05 },
+  "tread_exponents": { "wet": 0.5 },
+  "thermal": null,
+  "wear": null,
+  "source": "[AS] A winter tyre: denser siping, slightly softer dry response, better on damp/grass; snow/ice factors arrive in W8. Plan 7.5's worked example order of magnitude."
+}

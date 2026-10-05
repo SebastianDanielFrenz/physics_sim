@@ -1,0 +1,14 @@
+{
+  "format": "physics_sim.tyre_profile/1",
+  "class": "summer",
+  "tread_new_mm": 8.0,
+  "tread_min_mm": 1.6,
+  "groove_void_ratio": 0.30,
+  "siping": "low",
+  "inflation_pressure_kpa": 220.0,
+  "condition_factors": { "dry": 1.0, "damp": 1.0, "wet": 1.0, "wet_grass": 1.0 },
+  "tread_exponents": { "wet": 0.5 },
+  "thermal": null,
+  "wear": null,
+  "source": "[AS] The reference summer passenger tyre: this is the profile every other profile's condition_factors are relative to (all 1.0 by definition, plan 5.2)."
+}

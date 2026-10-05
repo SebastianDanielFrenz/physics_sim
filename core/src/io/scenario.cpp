@@ -2,6 +2,7 @@
 
 #include "ps/environment/climate_io.h"
 #include "ps/environment/surface_conditions_io.h"
+#include "ps/environment/tyre_profile_io.h"
 #include "ps/environment/weather_io.h"
 #include "ps/io/engine_thermal_io.h"
 #include "ps/io/surface_table.h"
@@ -278,11 +279,9 @@ ScenarioEnvironment read_environment(const json& j, const std::filesystem::path&
     if (!j.is_object()) fail("expected an object");
     for (const auto& [key, v] : j.items()) {
         (void)v;
-        if (key == "default_tyre_profile")
-            fail("key \"" + key + "\" is not supported yet (weather plan W6+)");
         if (key != "climate" && key != "seed" && key != "time" && key != "season" && key != "fixed_day_of_year" &&
             key != "north_yaw_deg" && key != "events" && key != "weather" && key != "altitude_offset_m" &&
-            key != "surface_conditions")
+            key != "surface_conditions" && key != "default_tyre_profile")
             fail("unknown key \"" + key + "\"");
     }
     ScenarioEnvironment e;
@@ -364,6 +363,18 @@ ScenarioEnvironment read_environment(const json& j, const std::filesystem::path&
         e.config.surface_names.clear();
         for (std::size_t i = 0; i < table.size(); ++i)
             e.config.surface_names.push_back(table.name_for(static_cast<SurfaceId>(i)));
+    }
+
+    // Weather plan W6: "default_tyre_profile": "<file>" (physics_sim.tyre_profile/1).
+    // The tyre profile a wheel without its own uses under this environment.
+    if (j.contains("default_tyre_profile")) {
+        if (!j.at("default_tyre_profile").is_string()) fail("\"default_tyre_profile\" must be a file path string");
+        if (!e.config.surface_conditions)
+            fail("\"default_tyre_profile\" needs the environment's \"surface_conditions\" key");
+        std::filesystem::path tp = j.at("default_tyre_profile").get<std::string>();
+        if (tp.is_relative()) tp = scenario_dir / tp;
+        e.default_tyre_profile_path = tp.lexically_normal().string();
+        e.config.default_tyre_profile = load_tyre_profile_json(e.default_tyre_profile_path);
     }
 
     if (j.contains("events")) {

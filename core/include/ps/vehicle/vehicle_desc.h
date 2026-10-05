@@ -65,6 +65,12 @@ struct WheelDesc {
 
     TyreDesc tyre;
 
+    // W6 (weather plan 7.5): path or name of a physics_sim.tyre_profile/1 file
+    // for the condition grip. Parsed here; W6 resolves every wheel through the
+    // environment's default_tyre_profile (per-wheel lookup is W7). Empty =
+    // the environment default.
+    std::string tyre_profile;
+
     bool steered = false;
     // PHYS-033 I2 (owner ruling Q7): "driven" is gone - which wheels are
     // driven is now determined by VehicleDesc::powertrain's graph (which

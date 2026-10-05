@@ -63,6 +63,42 @@ int split_slab(real L, real first, std::array<real, kMaxColumnNodes>& sp) {
     return m;
 }
 
+// W6: the per-kind hydraulic fields (plan 4.4, 7.4). Returns an error string
+// instead of throwing so the validation path can share it.
+std::string hydraulic_error(const SurfaceClassDesc& d) {
+    if (!(d.friction.damp > 0.0 && d.friction.damp <= 2.0)) return "friction.damp must be in (0, 2]";
+    if (!(d.friction.wet > 0.0 && d.friction.wet <= 2.0)) return "friction.wet must be in (0, 2]";
+    if (!(d.friction.wet_grass > 0.0 && d.friction.wet_grass <= 2.0)) return "friction.wet_grass must be in (0, 2]";
+    switch (d.kind) {
+    case SurfaceKind::Static:
+        break;
+    case SurfaceKind::Sealed:
+        if (!(d.mtd_mm > 0.0)) return "a sealed class needs mtd_mm > 0";
+        if (d.texture_storage_mm == 0.0 || d.texture_storage_mm < -1.0) return "texture_storage_mm must be > 0 or omitted";
+        if (!(d.drainage_path_m > 0.0)) return "a sealed class needs drainage.path_m > 0";
+        if (!(d.drainage_slope_m_m > 0.0)) return "a sealed class needs drainage.slope > 0";
+        if (!(d.soil.ksat_mm_h == 0.0 && d.soil.theta_fc == 0.0 && d.soil.theta_sat == 0.0))
+            return "a sealed class takes no soil fields";
+        if (d.canopy_capacity_mm != 0.0) return "a sealed class takes no canopy field";
+        break;
+    case SurfaceKind::Soil:
+        if (!(d.soil.ksat_mm_h > 0.0)) return "a soil class needs soil.ksat_mm_h > 0";
+        if (!(d.soil.theta_fc > 0.0 && d.soil.theta_sat > d.soil.theta_fc && d.soil.theta_sat <= 1.0))
+            return "a soil class needs 0 < soil.theta_fc < soil.theta_sat <= 1";
+        if (d.canopy_capacity_mm != 0.0) return "a soil class takes no canopy field";
+        if (d.mtd_mm != 0.0 || d.texture_storage_mm >= 0.0) return "a soil class takes no mtd/texture storage";
+        break;
+    case SurfaceKind::Vegetated:
+        if (!(d.soil.ksat_mm_h > 0.0)) return "a vegetated class needs soil.ksat_mm_h > 0";
+        if (!(d.soil.theta_fc > 0.0 && d.soil.theta_sat > d.soil.theta_fc && d.soil.theta_sat <= 1.0))
+            return "a vegetated class needs 0 < soil.theta_fc < soil.theta_sat <= 1";
+        if (!(d.canopy_capacity_mm > 0.0)) return "a vegetated class needs canopy.capacity_mm > 0";
+        if (d.mtd_mm != 0.0 || d.texture_storage_mm >= 0.0) return "a vegetated class takes no mtd/texture storage";
+        break;
+    }
+    return {};
+}
+
 // Builds the column; returns an error string instead of throwing so the
 // validation path can share it.
 std::string build_column_impl(const SurfaceClassDesc& d, ColumnModel& c) {
@@ -75,10 +111,23 @@ std::string build_column_impl(const SurfaceClassDesc& d, ColumnModel& c) {
     if (!e.empty()) return e;
     if (!(d.layer.depth_m + d.deep.depth_m <= kMaxColumnDepthM))
         return "layer.depth_m + deep.depth_m must be <= " + std::to_string(kMaxColumnDepthM) + " m";
+    e = hydraulic_error(d);
+    if (!e.empty()) return e;
 
     c = ColumnModel{};
     c.albedo = d.albedo;
     c.emissivity = d.emissivity;
+    c.kind = d.kind;
+    c.mtd_mm = d.mtd_mm;
+    c.w_tex_mm = d.texture_storage_mm >= 0.0 ? d.texture_storage_mm : d.mtd_mm * kTexturePorosity;
+    c.drainage_path_m = d.drainage_path_m;
+    c.drainage_slope_m_m = d.drainage_slope_m_m;
+    c.canopy_capacity_mm = d.canopy_capacity_mm;
+    c.soil_ksat_mm_h = d.soil.ksat_mm_h;
+    c.soil_theta_fc = d.soil.theta_fc;
+    c.soil_theta_sat = d.soil.theta_sat;
+    c.soil_top_depth_m = kSoilTopDepthM;
+    c.friction = d.friction;
     // Cells: thickness, conductivity, heat capacity.
     std::array<real, kMaxColumnNodes> cell_dz{}, cell_k{}, cell_rc{};
     int cells = 0;
@@ -185,6 +234,56 @@ real convection_coefficient_w_m2k(real surface_temp_k, real air_temp_k, real win
     return 698.24 * (forced + free);
 }
 
+real saturation_vapour_pressure_hpa(real temp_k) {
+    // Magnus/Bolton 1980 over water: e_s = 6.112 exp(17.67 T_c / (T_c + 243.5)).
+    const real tc = temp_k - kCelsiusToKelvin;
+    return 6.112 * math::exp(17.67 * tc / (tc + 243.5));
+}
+
+real vapour_density_kg_m3(real vapour_pressure_hpa, real temp_k) {
+    // Ideal gas: rho_v = e M_w / (R T), M_w/R = 0.0021668 kg K/(J mol? ) - here
+    // e in Pa: rho_v = e_pa * 0.018016 / (8.314462618 * T).
+    const real e_pa = vapour_pressure_hpa * 100.0;
+    if (!(e_pa > 0.0) || !(temp_k > 0.0)) return 0.0;
+    return e_pa * 0.018016 / (8.314462618 * temp_k);
+}
+
+real gallaway_wfd_mm(real mtd_mm, real path_m, real intensity_mm_h, real slope_m_m) {
+    if (!(intensity_mm_h > 0.0) || !(mtd_mm > 0.0) || !(path_m > 0.0) || !(slope_m_m > 0.0)) return 0.0;
+    const real wfd = 0.01485 * math::pow(mtd_mm, 0.11) * math::pow(path_m, 0.43) *
+                         math::pow(intensity_mm_h, 0.59) / math::pow(slope_m_m, 0.42) -
+                     mtd_mm;
+    return wfd > 0.0 ? wfd : 0.0;
+}
+
+real surface_vapour_flux_kg_m2_s(const ColumnModel& col, const SurfaceForcing& f, const SurfaceClassState& in,
+                                 real dt) {
+    if (dt <= 0.0) return 0.0;
+    const real t0 = in.temp_k[0];
+    const real hc = convection_coefficient_w_m2k(t0, f.air_temp_k, f.wind_m_s);
+    // Dalton bulk formula via the Lewis analogy (Le = 1 [AS]): h_m = h_c /
+    // (rho cp); the Vehrencamp h_c supplies the wind function (plan 4.4 [D]).
+    const real h_mass = hc / (kAirDensityKgM3 * kAirCpJkgK);
+    const real rho_v_air = vapour_density_kg_m3(f.vapour_pressure_hpa, f.air_temp_k);
+    const real rho_v_sat = vapour_density_kg_m3(saturation_vapour_pressure_hpa(t0), t0);
+    real flux = h_mass * (rho_v_sat - rho_v_air);   // > 0 evaporates, < 0 condenses
+    if (t0 <= kCelsiusToKelvin) {
+        // W6 models liquid only: below freezing there is no liquid dew (frost is W8).
+        if (flux < 0.0) flux = 0.0;
+    }
+    if (flux > 0.0) {
+        real avail = in.water_mm;
+        if (col.kind == SurfaceKind::Vegetated) avail += in.canopy_water_mm;
+        if (col.kind == SurfaceKind::Soil || col.kind == SurfaceKind::Vegetated)
+            avail += in.soil_moisture * col.soil_top_depth_m * 1000.0 * kSoilPorosity;
+        const real max_evap = avail / dt;
+        if (flux > max_evap) flux = max_evap;
+    } else if (flux < -kMaxCondensationKgM2S) {
+        flux = -kMaxCondensationKgM2S;
+    }
+    return flux;
+}
+
 void initial_column_state(const ColumnModel& column, const InitialProfile& p, SurfaceClassState& out) {
     out = SurfaceClassState{};
     const int n = column.nodes;
@@ -207,8 +306,15 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     const real t02 = t0 * t0;
     const real l_sky = sky_emissivity(f.vapour_pressure_hpa, f.cloud_cover) * kStefanBoltzmann * ta2 * ta2;
     const real hc = convection_coefficient_w_m2k(t0, ta, f.wind_m_s);
+    // W6: the latent flux is evaluated at the OLD state and folded into the
+    // energy balance as a lagged constant (plan 4.4), so the solve stays one
+    // linear system and the energy balance stays closed.
+    const real evap_kg_m2_s = surface_vapour_flux_kg_m2_s(col, f, in, dt);
+    const real L_v = kLatentHeatVaporisation - kLatentHeatSlope * (t0 - kCelsiusToKelvin);
+    const real q_latent = L_v * evap_kg_m2_s;   // W/m2 out of the surface
     // q(T) ~ A - B' T with T^4 linearised about t0.
-    const real a_flux = (1.0 - col.albedo) * f.ghi_w_m2 + eps * l_sky + 3.0 * eps * kStefanBoltzmann * t02 * t02 + hc * ta;
+    const real a_flux =
+        (1.0 - col.albedo) * f.ghi_w_m2 + eps * l_sky + 3.0 * eps * kStefanBoltzmann * t02 * t02 + hc * ta - q_latent;
     const real b_flux = 4.0 * eps * kStefanBoltzmann * t02 * t0 + hc;
 
     // Tridiagonal: lo[i] T[i-1] + di[i] T[i] + up[i] T[i+1] = rhs[i].
@@ -250,14 +356,94 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
         t[u] = dp[u] - cp[u] * t[u + 1];
     }
     t[static_cast<std::size_t>(n - 1)] = f.bottom_temp_k;
-    // Placeholders are carried unchanged (W5: always 0).
-    out.water_mm = in.water_mm;
+
+    // --- W6 mass update (plan 4.4): rain, interception, infiltration, -->
+    // evaporation/dew, drainage. W in mm; 1 kg/m2 == 1 mm.
+    real W = in.water_mm;
+    real C = in.canopy_water_mm;
+    real theta = in.soil_moisture;
+    const bool soil_like = col.kind == SurfaceKind::Soil || col.kind == SurfaceKind::Vegetated;
+    const real pore_cap_mm = soil_like ? col.soil_top_depth_m * 1000.0 * kSoilPorosity : 0.0;
+    real input = f.precip_mm_h / 3600.0 * dt;   // liquid water this step
+
+    if (col.kind == SurfaceKind::Vegetated && input > 0.0) {
+        const real room = col.canopy_capacity_mm - C;
+        if (room > 0.0) {
+            const real take = input < room ? input : room;
+            C += take;
+            input -= take;
+        }
+    }
+    if (soil_like && input > 0.0) {
+        const real infil_cap = col.soil_ksat_mm_h / 3600.0 * dt;
+        real pore = (col.soil_theta_sat - theta) * pore_cap_mm;
+        if (pore < 0.0) pore = 0.0;
+        real take = input < infil_cap ? input : infil_cap;
+        if (take > pore) take = pore;
+        if (take > 0.0) {
+            theta += take / pore_cap_mm;
+            input -= take;
+        }
+    }
+    W += input;
+
+    // Evaporation (draws W first, then canopy, then the soil surface) or dew.
+    const real dW = evap_kg_m2_s * dt;   // mm, > 0 removes water
+    if (dW > 0.0) {
+        real need = dW;
+        real from_w = W < need ? W : need;
+        W -= from_w;
+        need -= from_w;
+        if (need > 0.0 && col.kind == SurfaceKind::Vegetated) {
+            real from_c = C < need ? C : need;
+            C -= from_c;
+            need -= from_c;
+        }
+        if (need > 0.0 && soil_like) {
+            // Soil-surface evaporation scaled by theta / theta_fc (plan 4.4).
+            const real scale = col.soil_theta_fc > 0.0 ? (theta < col.soil_theta_fc ? theta / col.soil_theta_fc : 1.0) : 0.0;
+            const real cap = theta * pore_cap_mm;
+            real from_s = need * scale;
+            if (from_s > cap) from_s = cap;
+            theta -= from_s / pore_cap_mm;
+        }
+    } else {
+        W -= dW;   // dW < 0: condensation adds water (dew)
+    }
+
+    // Drainage (plan 4.4): sealed relaxes toward the Gallaway steady film;
+    // soil/vegetated drain gravity water above field capacity and ponding.
+    real tau = in.drain_tau_s;
+    if (col.kind == SurfaceKind::Sealed) {
+        const real R = f.precip_mm_h;
+        if (R >= kDrainRainMinMmH) {
+            const real wfd = gallaway_wfd_mm(col.mtd_mm, col.drainage_path_m, R, col.drainage_slope_m_m);
+            tau = wfd > 0.0 ? wfd / (R / 3600.0) : 0.0;
+        }
+        if (tau > 0.0) {
+            const real a = dt / tau;   // backward Euler; the fixed point is exactly W_tex + R tau
+            W = (W + a * col.w_tex_mm) / (1.0 + a);
+        } else if (W > col.w_tex_mm) {
+            W = col.w_tex_mm;
+        }
+    } else if (soil_like) {
+        const real excess = theta - col.soil_theta_fc;
+        if (excess > 0.0) theta = col.soil_theta_fc + excess / (1.0 + dt / kSoilTauFcS);
+        if (W > 0.0) W = W / (1.0 + dt / kPondTauS);
+    }
+    if (W < 0.0) W = 0.0;
+    if (C < 0.0) C = 0.0;
+    if (theta < 0.0) theta = 0.0;
+    if (soil_like && theta > col.soil_theta_sat) theta = col.soil_theta_sat;
+
+    out.water_mm = W;
+    out.canopy_water_mm = C;
+    out.soil_moisture = theta;
+    out.drain_tau_s = tau;
     out.ice_mm = in.ice_mm;
     out.frost_mm = in.frost_mm;
     out.snow_mm = in.snow_mm;
     out.snow_density_kg_m3 = in.snow_density_kg_m3;
-    out.soil_moisture = in.soil_moisture;
-    out.canopy_water_mm = in.canopy_water_mm;
     for (int i = 0; i < n; ++i) out.temp_k[static_cast<std::size_t>(i)] = t[static_cast<std::size_t>(i)];
     for (int i = n; i < kMaxColumnNodes; ++i) out.temp_k[static_cast<std::size_t>(i)] = 0.0;
 }
@@ -419,6 +605,7 @@ void fold_state(std::uint64_t& h, const SurfaceClassState& s, int nodes) {
     fold_value(h, s.snow_density_kg_m3);
     fold_value(h, s.soil_moisture);
     fold_value(h, s.canopy_water_mm);
+    fold_value(h, s.drain_tau_s);
 }
 } // namespace
 

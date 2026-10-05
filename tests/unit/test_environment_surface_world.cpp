@@ -1,10 +1,20 @@
-// tests/unit/test_environment_surface_world.cpp - weather plan W5: the surface
-// condition grid inside a World (Environment::begin_tick in the existing
-// freeze_tick_start_state stage, published per class in EnvironmentSnapshot,
-// folded into the hash only while installed, read by nothing in the vehicle
-// physics yet). The library pieces (column, energy balance, S1-S4, loader) are
-// tested without ps_core in test_environment_surface.cpp.
-// Tags [environment][vehicle][world].
+// tests/unit/test_environment_surface_world.cpp - weather plan W5/W6: the
+// surface condition grid inside a World (Environment::begin_tick in the
+// existing freeze_tick_start_state stage, published per class in
+// EnvironmentSnapshot, folded into the hash only while installed). W6 adds the
+// condition grip (ConditionGrip): a wheel contact on a tagged surface now reads
+// the class's friction factor, so the chassis is NO LONGER bit-identical across
+// wet and dry - but the first test's ground is an untagged BoxShape, so its
+// contact_surface is kInvalidSurfaceId and the factor stays 1 (that test's
+// bit-identity is therefore still exact). The library pieces (column, energy
+// balance, S1-S4, loader, G1/G2/G4/G5) are tested without ps_core in
+// test_environment_surface.cpp. Tags [environment][vehicle][world].
+//
+// Validation cases (weather plan 13, W6 row, World level):
+//  G3 wet vs dry braking distance ratio in [1.14, 1.8] (plan 5.2).
+//  G6 the grip update allocates nothing inside the tick (the existing
+//     "allocates nothing inside the tick" case, now also covering
+//     ConditionGrip::update_state).
 //
 // RECORDED SABOTAGES: see the "RECORDED SABOTAGES" block in test_environment_surface.cpp
 // (W5-S3, an allocation in Environment::fill_surfaces, failed this file's zero-allocation case
@@ -24,6 +34,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -133,8 +144,10 @@ TEST_CASE("World surfaces: the snapshot publishes each class's surface temperatu
     const auto low_mu = static_cast<std::size_t>(with.surfaces->id_for("low_mu"));
     CHECK_FALSE(s->surfaces[low_mu].has_state);
 
-    // Nothing in the vehicle physics reads the surfaces yet (W6+): the chassis
-    // moves bit-identically; only the hash differs (the grid is folded in).
+    // W6: the grip reads a wheel's contact SurfaceId, but this rig's ground is
+    // an untagged BoxShape (contact_surface == kInvalidSurfaceId), so factor()
+    // returns 1 and the chassis still moves bit-identically; only the hash
+    // differs (the grid is folded in). G3 below uses a tagged mesh ground.
     const Pose a = with.world->get_pose(with.chassis);
     const Pose b = without.world->get_pose(without.chassis);
     CHECK(a.position.x == b.position.x);
@@ -237,4 +250,83 @@ TEST_CASE("Scenario surface_conditions: parsing and rejections", "[environment][
                ContainsSubstring("exist.json"));
     CHECK_THAT(load_msg(table, "{ " + climate + ", \"weather\": \"dynamic\", \"surface_conditions\": 3 }", "notstr"),
                ContainsSubstring("must be a file path string"));
+}
+
+// ================================================================== W6
+
+namespace {
+
+// Force the asphalt class of an installed environment to a water depth and
+// restore it at the current tick. `water_mm < 0` = the class's texture storage
+// (fully wet). The environment runs at time_scale 0, so the grid never steps
+// afterwards and the forced state is frozen for the whole run.
+void set_asphalt_water(ps::World& w, real water_mm) {
+    environment::Environment* env = w.environment();
+    REQUIRE(env != nullptr);
+    const environment::ConditionGrid* g = env->surface_conditions();
+    REQUIRE(g != nullptr);
+    environment::ConditionCheckpoint ck = env->checkpoint_conditions();
+    for (int i = 0; i < g->class_count(); ++i) {
+        if (g->class_name(i) == "asphalt") {
+            const real mm = water_mm < 0.0 ? g->column(i).w_tex_mm : water_mm;
+            ck.prev[i].water_mm = mm;
+            ck.next[i].water_mm = mm;
+        }
+    }
+    env->restore_conditions(ck, w.tick());
+}
+
+// Accelerates on asphalt to 15 m/s (closed-loop yaw damping), then brakes to a
+// stop; returns the travelled distance in the ground plane.
+real brake_to_stop(ps_test::VehicleTestRig& r) {
+    ps::World& w = *r.world;
+    ps_test::settle(w, 1.0);
+    w.set_control("gear_request", 1.0);
+    w.set_control("throttle", 1.0);
+    const real dt = w.dt();
+    bool reached = false;
+    for (int i = 0; i < static_cast<int>(std::lround(90.0 / dt)); ++i) {
+        const real yaw_rate = w.get_motion(r.chassis).angular.z;
+        w.set_control("steer", std::clamp(real(-4.0) * yaw_rate, real(-1.0), real(1.0)));
+        w.step();
+        if (w.get_motion(r.chassis).linear.length() >= 15.0) {
+            reached = true;
+            break;
+        }
+    }
+    REQUIRE(reached);
+    w.set_control("steer", 0.0);
+    w.set_control("throttle", 0.0);
+    w.set_control("brake", 0.6);
+    w.set_control("clutch", 1.0);
+    const ps::Vec3 start = w.get_pose(r.chassis).position;
+    real dist = 0.0;
+    for (int i = 0; i < static_cast<int>(std::lround(30.0 / dt)); ++i) {
+        w.step();
+        const ps::Vec3 p = w.get_pose(r.chassis).position;
+        dist = std::sqrt((p.x - start.x) * (p.x - start.x) + (p.y - start.y) * (p.y - start.y));
+        if (w.get_motion(r.chassis).linear.length() < 0.5) break;
+    }
+    return dist;
+}
+
+} // namespace
+
+TEST_CASE("W6-G3: wet asphalt brakes longer than dry, in the Wong band [1.14, 1.8]",
+          "[environment][vehicle][world][grip]") {
+    const auto make = [](bool wet) {
+        ps_test::VehicleTestRig r = ps_test::build_vehicle_rig_on_surface(
+            data("vehicles/car_sedan.json"), 1500.0, Vec3{2.0, 0.4, 0.15}, 0.6, "asphalt", 1);
+        r.world->install_environment(make_env(table_names(*r.surfaces), 0.0));
+        set_asphalt_water(*r.world, wet ? -1.0 : 0.0);
+        return r;
+    };
+    ps_test::VehicleTestRig dry = make(false);
+    ps_test::VehicleTestRig wet = make(true);
+    const real d_dry = brake_to_stop(dry);
+    const real d_wet = brake_to_stop(wet);
+    const real ratio = d_wet / d_dry;
+    INFO("dry " << d_dry << " m, wet " << d_wet << " m, ratio " << ratio);
+    CHECK(ratio > 1.14);
+    CHECK(ratio < 1.8);
 }

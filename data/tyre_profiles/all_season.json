@@ -1,0 +1,14 @@
+{
+  "format": "physics_sim.tyre_profile/1",
+  "class": "all_season",
+  "tread_new_mm": 8.5,
+  "tread_min_mm": 1.6,
+  "groove_void_ratio": 0.32,
+  "siping": "low",
+  "inflation_pressure_kpa": 220.0,
+  "condition_factors": { "dry": 0.97, "damp": 1.0, "wet": 1.0, "wet_grass": 1.0 },
+  "tread_exponents": { "wet": 0.5 },
+  "thermal": null,
+  "wear": null,
+  "source": "[AS] An all-season tyre: a little dry grip traded for slightly more groove and siping; plausible ratios, not a measured tyre."
+}

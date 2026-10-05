@@ -463,6 +463,11 @@ public:
     // named surface class (e.g. "asphalt" for the road), NAN without surface conditions,
     // for an unknown name or for a static class. Computed in core; read only here.
     [[nodiscard]] double get_surface_temperature_c(const godot::String& surface_name) const;
+    // Weather plan W6, race-free (render snapshot): the water film above the texture (mm) and
+    // the condition (0 dry, 1 damp, 2 wet) of the named surface class. NAN / -1 without surface
+    // conditions, for an unknown name or for a static class. Computed in core; read only here.
+    [[nodiscard]] double get_surface_water_mm(const godot::String& surface_name) const;
+    [[nodiscard]] int get_surface_condition(const godot::String& surface_name) const;
 
     [[nodiscard]] godot::PackedStringArray get_vehicle_names() const;
     [[nodiscard]] godot::String get_vehicle_chassis_body_name(const godot::String& vehicle_name) const;

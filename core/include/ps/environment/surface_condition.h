@@ -49,6 +49,19 @@ struct ColumnModel {
     std::array<real, kMaxColumnNodes> cond_w_m2k{};  // conductance between node i and i+1 (k / dz)
     real albedo = 0.0;
     real emissivity = 0.0;
+    // W6 hydraulics (plan 4.4): copied from the desc so the mass update needs
+    // no desc lookup. Static classes keep the zero defaults.
+    SurfaceKind kind = SurfaceKind::Static;
+    real mtd_mm = 0.0;
+    real w_tex_mm = 0.0;             // texture storage (already resolved from mtd when needed)
+    real drainage_path_m = 0.0;
+    real drainage_slope_m_m = 0.0;
+    real canopy_capacity_mm = 0.0;
+    real soil_ksat_mm_h = 0.0;
+    real soil_theta_fc = 0.0;
+    real soil_theta_sat = 0.0;
+    real soil_top_depth_m = 0.1;
+    SurfaceFrictionDesc friction;
 };
 
 // Throws std::invalid_argument when the column needs more than kMaxColumnNodes
@@ -64,6 +77,7 @@ struct SurfaceForcing {
     real vapour_pressure_hpa = 10.0;
     real cloud_cover = 0.0;         // [0, 1]
     real bottom_temp_k = 283.15;    // Dirichlet at the column bottom
+    real precip_mm_h = 0.0;         // W6: liquid-equivalent precipitation rate
 };
 
 // Initial profile at the start of a spin-up: linear from surface to bottom.
@@ -84,6 +98,7 @@ struct SurfaceClassState {
     real snow_density_kg_m3 = 0.0;  // rho_s
     real soil_moisture = 0.0;       // theta
     real canopy_water_mm = 0.0;     // C
+    real drain_tau_s = 0.0;         // W6: frozen drainage time constant (plan 4.4)
 };
 
 // Clear-sky emissivity from the vapour pressure (Geiger 1959 via Solaimanian &
@@ -93,6 +108,35 @@ real sky_emissivity(real vapour_pressure_hpa, real cloud_cover);
 // 698.24 [0.00144 T_m^0.3 U^0.7 + 0.00097 (T_s - T_a)^0.3], T_m the mean of
 // surface and air in K; the free-convection term only while T_s > T_a [AS].
 real convection_coefficient_w_m2k(real surface_temp_k, real air_temp_k, real wind_m_s);
+
+// --- W6 water part (plan 4.4) ---
+
+// Saturation vapour pressure (hPa) over water, Magnus form [C Bolton 1980].
+real saturation_vapour_pressure_hpa(real temp_k);
+// Vapour density (kg/m3) from the partial pressure (hPa) and temperature (K).
+real vapour_density_kg_m3(real vapour_pressure_hpa, real temp_k);
+// Gallaway et al. 1979 (FHWA-RD-79-31) steady water-film depth above the
+// texture, metric form (plan 4.4): WFD = 0.01485 MTD^0.11 L^0.43 I^0.59 /
+// S^0.42 - MTD, clamped at 0. WFD/MTD in mm, L in m, I in mm/h, S in m/m.
+real gallaway_wfd_mm(real mtd_mm, real path_m, real intensity_mm_h, real slope_m_m);
+// The signed, availability-limited surface vapour flux of one step (kg/(m2 s),
+// 1 kg/m2 == 1 mm): > 0 evaporates from the surface, < 0 condenses (dew) onto
+// it. `dt` sizes the availability limit. Uses the OLD state's surface
+// temperature (the caller passes the state the step starts from).
+real surface_vapour_flux_kg_m2_s(const ColumnModel& column, const SurfaceForcing& forcing,
+                                 const SurfaceClassState& in, real dt);
+
+// Physical constants of the W6 water part (all [C]/[AS] as marked).
+inline constexpr real kSoilTopDepthM = 0.1;             // [AS] top-layer depth the infiltration fills
+inline constexpr real kSoilPorosity = 0.4;              // [AS] effective porosity of the top layer
+inline constexpr real kSoilTauFcS = 3.0 * 86400.0;      // [AS] gravity drainage above field capacity
+inline constexpr real kPondTauS = 3600.0;               // [AS] ponded-water drain time constant
+inline constexpr real kDrainRainMinMmH = 0.1;           // [AS] below this the drainage tau is frozen
+inline constexpr real kAirDensityKgM3 = 1.2;            // [C] ISA sea level ~1.225
+inline constexpr real kAirCpJkgK = 1005.0;              // [C] dry air
+inline constexpr real kLatentHeatVaporisation = 2.501e6; // [C] at 0 C
+inline constexpr real kLatentHeatSlope = 2370.0;        // [C] L_v(T) = L0 - slope (T - 273.15)
+inline constexpr real kMaxCondensationKgM2S = 1.0e-4;   // [AS] ~0.36 mm/h dew cap
 
 // One backward-Euler step of length dt. `out` may alias `in`. Allocation-free.
 void step_column(const ColumnModel& column, const SurfaceForcing& forcing, real dt, const SurfaceClassState& in,

@@ -31,10 +31,12 @@
 //    "allocates nothing inside the tick" failed at 1 and 4 workers (244 own allocations).
 
 #include "ps/environment/climate_io.h"
+#include "ps/environment/condition_grip.h"
 #include "ps/environment/environment.h"
 #include "ps/environment/solar_geometry.h"
 #include "ps/environment/surface_condition.h"
 #include "ps/environment/surface_conditions_io.h"
+#include "ps/environment/tyre_profile_io.h"
 #include "ps/environment/weather_io.h"
 #include "ps/math/transcendental.h"
 
@@ -796,12 +798,15 @@ struct TempDir {
 };
 
 nlohmann::json valid_conditions_json() {
+    // W6: a sealed class now also needs mtd_mm and drainage (plan 7.4).
     return nlohmann::json::parse(R"({
       "format": "physics_sim.surface_conditions/1",
       "surfaces": {
         "asphalt": { "kind": "sealed", "albedo": 0.1, "emissivity": 0.9,
                      "layer": {"depth_m": 0.2, "k_w_mk": 1.38, "rho_c_j_m3k": 2.0e6},
-                     "deep": {"depth_m": 1.8, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6} },
+                     "deep": {"depth_m": 1.8, "k_w_mk": 1.0, "rho_c_j_m3k": 2.2e6},
+                     "mtd_mm": 0.8, "drainage": {"path_m": 7.3, "slope": 0.025},
+                     "friction": {"damp": 0.85, "wet": 0.71, "wet_grass": 0.67} },
         "low_mu": { "kind": "static" }
       }
     })");
@@ -842,11 +847,15 @@ TEST_CASE("Surface conditions loader: the shipped file and rejections", "[enviro
         {"negative conductivity", [](json& j) { j["surfaces"]["asphalt"]["layer"]["k_w_mk"] = -1.0; }, "layer.k_w_mk must be > 0"},
         {"zero heat capacity", [](json& j) { j["surfaces"]["asphalt"]["deep"]["rho_c_j_m3k"] = 0.0; }, "deep.rho_c_j_m3k must be > 0"},
         {"column too deep", [](json& j) { j["surfaces"]["asphalt"]["deep"]["depth_m"] = 12.0; }, "<= 10"},
-        {"static with a thermal field", [](json& j) { j["surfaces"]["low_mu"]["albedo"] = 0.3; }, "static class takes no thermal field"},
-        {"reserved mtd_mm", [](json& j) { j["surfaces"]["asphalt"]["mtd_mm"] = 0.8; }, "not implemented before W6"},
-        {"reserved drainage", [](json& j) { j["surfaces"]["asphalt"]["drainage"] = json::object(); }, "not implemented before W6"},
-        {"reserved friction", [](json& j) { j["surfaces"]["asphalt"]["friction"] = json::object(); }, "not implemented before W6"},
-        {"reserved soil on a sealed class", [](json& j) { j["surfaces"]["asphalt"]["soil"] = json::object(); }, "not implemented before W9"},
+        {"static with a thermal field", [](json& j) { j["surfaces"]["low_mu"]["albedo"] = 0.3; }, "static class takes no field"},
+        // W6: mtd_mm/drainage/soil/canopy/friction are implemented; their own
+        // rejections replace the W5 "not implemented" rows.
+        {"sealed without mtd_mm", [](json& j) { j["surfaces"]["asphalt"].erase("mtd_mm"); }, "\"mtd_mm\""},
+        {"sealed without drainage", [](json& j) { j["surfaces"]["asphalt"].erase("drainage"); }, "\"drainage\""},
+        {"drainage slope 0", [](json& j) { j["surfaces"]["asphalt"]["drainage"]["slope"] = 0.0; }, "drainage.slope > 0"},
+        {"friction wet 0", [](json& j) { j["surfaces"]["asphalt"]["friction"]["wet"] = 0.0; }, "friction.wet must be in (0, 2]"},
+        {"soil on a sealed class", [](json& j) { j["surfaces"]["asphalt"]["soil"] = json::object(); }, "unknown key \"soil\""},
+        {"canopy on a sealed class", [](json& j) { j["surfaces"]["asphalt"]["canopy"] = json::object(); }, "unknown key \"canopy\""},
         {"reserved crr", [](json& j) { j["surfaces"]["asphalt"]["crr"] = json::object(); }, "not implemented before W8"},
         {"reserved abrasiveness", [](json& j) { j["surfaces"]["asphalt"]["abrasiveness"] = 1.0; }, "not implemented before W10"},
         {"albedo a string", [](json& j) { j["surfaces"]["asphalt"]["albedo"] = "dark"; }, "\"albedo\" must be a number"},
@@ -872,4 +881,226 @@ TEST_CASE("Surface conditions loader: the shipped file and rejections", "[enviro
     // Errors name the file.
     const std::filesystem::path bad = dir.write("named_bad.json", [] { json j = valid_conditions_json(); j["x"] = 1; return j; }());
     CHECK_THROWS_WITH(io::load_surface_conditions_json(bad), ContainsSubstring("named_bad.json"));
+}
+
+// ================================================================== W6
+//
+// Validation cases (weather plan 13, W6 row):
+//  G1 sealed steady water film vs the Gallaway model, 1e-9 (plan 4.4).
+//  G2 drying: the evaporated mass equals the integrated flux, 1e-9, and a
+//     plausible drying time (plan 4.4).
+//  G7 the condition grip layer: wet weight, the PIARC speed table, static and
+//     out-of-range fallbacks (plan 5.2) - an extra case, the brief's G4 is the
+//     no-environment bit identity (the existing determinism pin test).
+//  G5 the tyre profile loader: the shipped profiles and rejections (plan 7.5).
+//  (G3 braking and G6 allocation are in test_environment_surface_world.cpp.)
+//
+// RECORDED SABOTAGES (performed by hand, reverted, 2026-10-05):
+//  - W6-G1 (constant drainage tau instead of the Gallaway tau): G1 failed, ...
+//  - W6-G2 (no availability limit in surface_vapour_flux_kg_m2_s): G2 failed, ...
+//  - W6-G7 (the speed table not built, every table entry = friction.wet): G7 failed, ...
+//  - W6-G5 (reserve_block_or_null accepting an object): G5 failed, ...
+//  - W6-G3 (ConditionGrip::factor ignoring the wet weight, always dry): G3 failed, ...
+//  - W6-G6 (a heap vector inside ConditionGrip::update_state): G6 failed, ...
+
+namespace {
+
+struct ConstantForcing : ISurfaceForcingSource {
+    SurfaceForcing f;
+    InitialProfile p;
+    SurfaceForcing forcing_at(real) const override { return f; }
+    InitialProfile initial_at(real) const override { return p; }
+};
+
+int class_index(const ConditionGrid& g, const char* name) {
+    for (int i = 0; i < g.class_count(); ++i)
+        if (g.class_name(i) == name) return i;
+    return -1;
+}
+
+} // namespace
+
+TEST_CASE("W6-G1: a sealed steady film equals the Gallaway WFD above the texture (1e-9)",
+          "[environment][surface][water]") {
+    const SurfaceClassDesc asphalt = find_class(default_conditions(), "asphalt");
+    const ColumnModel col = build_column(asphalt);
+    REQUIRE(col.kind == SurfaceKind::Sealed);
+    SurfaceClassState s;
+    initial_column_state(col, InitialProfile{300.0, 300.0}, s);
+
+    SurfaceForcing f;
+    f.air_temp_k = 300.0;
+    f.bottom_temp_k = 300.0;
+    f.wind_m_s = 0.0;             // h_c = 0: no evaporation, the water part is isolated
+    f.vapour_pressure_hpa = 0.0;
+    f.cloud_cover = 0.0;
+    f.ghi_w_m2 = 0.0;
+    const real R = 50.0;          // steady rain
+    f.precip_mm_h = R;
+    const real dt = 60.0;
+    for (int n = 0; n < 200; ++n) step_column(col, f, dt, s, s);
+
+    const real wfd = gallaway_wfd_mm(col.mtd_mm, col.drainage_path_m, R, col.drainage_slope_m_m);
+    const real steady = col.w_tex_mm + wfd;
+    INFO("W " << s.water_mm << " steady " << steady << " w_tex " << col.w_tex_mm << " wfd " << wfd);
+    REQUIRE(wfd > 0.0);
+    CHECK_THAT(s.water_mm, WithinAbs(steady, 1e-9));
+    // The drainage time constant is the frozen Gallaway tau = WFD / R.
+    CHECK_THAT(s.drain_tau_s, WithinRel(wfd / (R / 3600.0), 1e-12));
+}
+
+TEST_CASE("W6-G2: drying removes exactly the integrated evaporation flux (1e-9)",
+          "[environment][surface][water]") {
+    const SurfaceClassDesc asphalt = find_class(default_conditions(), "asphalt");
+    const ColumnModel col = build_column(asphalt);
+    SurfaceClassState s;
+    initial_column_state(col, InitialProfile{300.0, 295.0}, s);
+    s.water_mm = col.w_tex_mm;    // a film exactly at the texture storage (no free water to drain)
+
+    SurfaceForcing f;
+    f.air_temp_k = 300.0;
+    f.bottom_temp_k = 295.0;
+    f.wind_m_s = 5.0;
+    f.vapour_pressure_hpa = 5.0;
+    f.cloud_cover = 0.0;
+    f.ghi_w_m2 = 600.0;
+    f.precip_mm_h = 0.0;
+
+    const real dt = 60.0;
+    real removed = 0.0;
+    int steps = 0;
+    while (s.water_mm > 0.0 && steps < 600) {
+        const real flux = surface_vapour_flux_kg_m2_s(col, f, s, dt);
+        REQUIRE(flux > 0.0);
+        removed += flux * dt;
+        step_column(col, f, dt, s, s);
+        ++steps;
+    }
+    INFO("dry after " << steps << " steps (" << steps * dt / 60.0 << " min), removed " << removed << " mm, W "
+                      << s.water_mm);
+    CHECK(s.water_mm < 1e-9);
+    CHECK_THAT(col.w_tex_mm - removed, WithinAbs(0.0, 1e-9));
+    CHECK(steps >= 5);
+    CHECK(steps <= 120);          // <= 2 h for a 0.4 mm film
+}
+
+TEST_CASE("W6-G7: the condition grip wet weight, speed table and fallbacks (plan 5.2)",
+          "[environment][surface][grip]") {
+    const SurfaceConditionsDesc d = default_conditions();
+    ConditionGrid grid(d, {}, ConditionGridDesc{60.0, 3600.0, 86400.0});
+    ConstantForcing src;
+    src.p = InitialProfile{300.0, 290.0};
+    src.f.air_temp_k = 300.0;
+    grid.advance_to(3600.0, src);
+
+    const int asphalt = class_index(grid, "asphalt");
+    const int grass = class_index(grid, "grass");
+    const int low = class_index(grid, "low_mu");
+    REQUIRE(asphalt >= 0);
+    REQUIRE(grass >= 0);
+    REQUIRE(low >= 0);
+
+    // Saturate the sealed asphalt film and the grass soil/canopy.
+    ConditionCheckpoint ck = grid.checkpoint();
+    for (int i = 0; i < grid.class_count(); ++i) {
+        if (grid.class_name(i) == "asphalt") {
+            ck.prev[i].water_mm = grid.column(i).w_tex_mm;
+            ck.next[i].water_mm = grid.column(i).w_tex_mm;
+        } else if (grid.class_name(i) == "grass") {
+            ck.prev[i].soil_moisture = grid.column(i).soil_theta_sat;
+            ck.next[i].soil_moisture = grid.column(i).soil_theta_sat;
+            ck.prev[i].canopy_water_mm = grid.column(i).canopy_capacity_mm;
+            ck.next[i].canopy_water_mm = grid.column(i).canopy_capacity_mm;
+        }
+    }
+    grid.restore(ck);
+
+    ConditionGrip grip;
+    grip.build_static(grid, TyreConditionFactors{});   // the reference summer profile (all 1.0)
+    grip.update_state(grid, 3600.0);
+    REQUIRE(grip.valid());
+
+    CHECK(grip.water_weight(asphalt) == 1.0);
+    CHECK(grip.water_weight(low) == 0.0);
+
+    const real slow = grip.factor(asphalt, 0.0);
+    const real fast = grip.factor(asphalt, 55.6);
+    // Fully wet, low speed: the table is clamped to the class damp level.
+    CHECK_THAT(slow, WithinAbs(0.85, 1e-12));
+    CHECK(fast < slow);           // PIARC: grip falls with speed
+    // Vegetated: the canopy drives the wet_grass level (no speed table).
+    CHECK_THAT(grip.factor(grass, 10.0), WithinAbs(0.67, 1e-12));
+    // Static and out-of-range ids are the identity.
+    CHECK(grip.factor(low, 30.0) == 1.0);
+    CHECK(grip.factor(-1, 30.0) == 1.0);
+    CHECK(grip.factor(99, 30.0) == 1.0);
+    // The profile scales the wet branch (dry branch uses p.dry).
+    TyreConditionFactors p;
+    p.dry = 0.9;
+    p.wet = 0.5;
+    CHECK_THAT(grip.factor(asphalt, p, 0.0), WithinAbs(0.85 * 0.5, 1e-12));
+}
+
+TEST_CASE("W6-G5: the tyre profile loader accepts the shipped profiles and rejects bad ones",
+          "[environment][surface][io]") {
+    struct Expected {
+        const char* file;
+        TyreClass cls;
+        real wet;
+        real wet_grass;
+    };
+    const std::vector<Expected> shipped = {
+        {"slick", TyreClass::Slick, 0.50, 0.50},
+        {"summer_generic", TyreClass::Summer, 1.0, 1.0},
+        {"all_season", TyreClass::AllSeason, 1.0, 1.0},
+        {"winter", TyreClass::Winter, 1.0, 1.05},
+        {"offroad_at", TyreClass::OffroadAT, 1.05, 1.15},
+        {"agricultural_lug", TyreClass::AgriculturalLug, 1.10, 1.25},
+    };
+    for (const Expected& e : shipped) {
+        const TyreProfileDesc p = io::load_tyre_profile_json(data(std::string("tyre_profiles/") + e.file + ".json"));
+        INFO("profile " << e.file);
+        CHECK(p.tyre_class == e.cls);
+        CHECK(p.name == e.file);
+        CHECK_THAT(p.condition_factors.wet, WithinAbs(e.wet, 1e-12));
+        CHECK_THAT(p.condition_factors.wet_grass, WithinAbs(e.wet_grass, 1e-12));
+        CHECK(p.tread_new_mm > p.tread_min_mm);
+    }
+
+    auto valid = [] {
+        return nlohmann::json::parse(R"({
+          "format": "physics_sim.tyre_profile/1", "class": "summer",
+          "tread_new_mm": 8.0, "tread_min_mm": 1.6, "groove_void_ratio": 0.3,
+          "siping": "low", "inflation_pressure_kpa": 220.0,
+          "condition_factors": {"dry": 1.0, "damp": 0.85, "wet": 0.71, "wet_grass": 0.67},
+          "tread_exponents": {"wet": 0.5}, "thermal": null, "wear": null, "source": "test"})");
+    };
+    TempDir dir;
+    struct Row {
+        const char* what;
+        std::function<void(nlohmann::json&)> mutate;
+        const char* message;
+    };
+    using nlohmann::json;
+    const std::vector<Row> rows = {
+        {"wrong format", [](json& j) { j["format"] = "physics_sim.tyre_profile/2"; }, "\"format\" must be"},
+        {"unknown class", [](json& j) { j["class"] = "spiky"; }, "\"class\" must be one of"},
+        {"unknown top-level key", [](json& j) { j["width_mm"] = 205; }, "unknown key \"width_mm\""},
+        {"tread_min above new", [](json& j) { j["tread_min_mm"] = 9.0; }, "tread_min_mm"},
+        {"groove void above 1", [](json& j) { j["groove_void_ratio"] = 1.1; }, "groove_void_ratio must be in [0, 1]"},
+        {"bad siping", [](json& j) { j["siping"] = "medium"; }, "siping must be"},
+        {"zero pressure", [](json& j) { j["inflation_pressure_kpa"] = 0.0; }, "inflation_pressure_kpa must be > 0"},
+        {"reserved snow factor", [](json& j) { j["condition_factors"]["snow_loose"] = 0.7; }, "not implemented before W8/W9"},
+        {"thermal object", [](json& j) { j["thermal"] = json::object(); }, "not implemented before W9"},
+        {"wear object", [](json& j) { j["wear"] = json::object(); }, "not implemented before W10"},
+    };
+    int n = 0;
+    for (const Row& row : rows) {
+        json j = valid();
+        row.mutate(j);
+        const std::filesystem::path path = dir.write("profile" + std::to_string(n++) + ".json", j);
+        INFO("rejection row: " << row.what);
+        CHECK_THROWS_WITH(io::load_tyre_profile_json(path), ContainsSubstring(row.message));
+    }
+    CHECK_NOTHROW(io::load_tyre_profile_json(dir.write("ok.json", valid())));
 }
