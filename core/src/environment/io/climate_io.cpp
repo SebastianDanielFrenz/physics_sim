@@ -40,11 +40,14 @@ DayNightDesc read_day_night(const json& j, const std::string& ctx, const std::st
     const bool has_day = r.has("day_s"), has_night = r.has("night_s");
     const bool has_cycle = r.has("cycle_s"), has_frac = r.has("day_fraction");
     const bool has_astro = r.has("astronomical");
+    const bool has_mult = r.has("day_share_multiplier");
     const bool explicit_form = has_day || has_night;
     const bool fraction_form = has_cycle || has_frac;
+    if (has_mult && !has_astro) r.fail("\"day_share_multiplier\" needs \"astronomical\": true");
     const int forms = int(explicit_form) + int(fraction_form) + int(has_astro);
     if (forms == 0)
-        r.fail("must give one form: {day_s, night_s}, {cycle_s, day_fraction} or {astronomical: true}");
+        r.fail("must give one form: {day_s, night_s}, {cycle_s, day_fraction}, {astronomical: true} or "
+               "{astronomical: true, day_share_multiplier}");
     if (forms > 1) r.fail("gives more than one day/night form (day_s/night_s, cycle_s/day_fraction, astronomical)");
     if (explicit_form) {
         d.kind = DayNightKind::Explicit;
@@ -59,7 +62,12 @@ DayNightDesc read_day_night(const json& j, const std::string& ctx, const std::st
     } else {
         const json* a = r.child("astronomical");
         if (!a->is_boolean() || !a->get<bool>()) r.fail("\"astronomical\" must be true");
-        d.kind = DayNightKind::Astronomical;
+        if (has_mult) {
+            d.kind = DayNightKind::AstronomicalScaled;
+            d.day_share_multiplier = r.number("day_share_multiplier", true, 0.0);
+        } else {
+            d.kind = DayNightKind::Astronomical;
+        }
         r.skip("day_s"); r.skip("night_s"); r.skip("cycle_s"); r.skip("day_fraction");
     }
     r.finish();

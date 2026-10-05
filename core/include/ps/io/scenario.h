@@ -105,11 +105,18 @@ struct ScenarioControlEvent {
 struct ScenarioEnvironmentEvent {
     enum class Kind : std::uint8_t {
         JumpTime,      // advance environment time by `value` env seconds (negative = back) at the event time
-        SetTimeScale   // set the time scale to `value` (>= 0) without a time jump
+        SetTimeScale,  // set the time scale to `value` (>= 0) without a time jump
+        // W3b (owner answer Q12), all need the environment's "weather" key:
+        SetWeather,    // preset override from now to the end of the current season (`preset`, ramp `value` s)
+        EndWeather,    // soft end of every override (each ramps out over its own ramp)
+        ClearWeather,  // immediate removal of every override
+        SetSeason      // season lock: `text` = a season name, or "dynamic" to unlock
     };
     real time_s = 0.0;  // SIM time at which the event applies
     Kind kind = Kind::JumpTime;
     real value = 0.0;
+    environment::WeatherPresetDesc preset;  // SetWeather
+    std::string text;                       // SetSeason
 };
 
 struct ScenarioEnvironment {

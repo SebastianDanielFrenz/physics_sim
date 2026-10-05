@@ -151,7 +151,8 @@ var ground_grid: MeshInstance3D
 # lives in core (ps::environment); this demo only installs it and shows it.
 # Off unless --m1-climate=<name or path> is given (a bare name resolves to
 # data/climates/<name>.json), so every other demo run is unchanged. Optional:
-#   --m1-time-scale=<x>     environment seconds per sim second (default 60; 0 freezes time)
+#   --m1-time-scale=<x>     environment seconds per sim second (default 24 = one 24 h game day per real hour,
+#                           owner answer Q5; the physics World's own default stays 1.0; 0 freezes time)
 #   --m1-time-of-day=<h>    start at <h> o'clock (0-24, of the day's own cycle) of the start day
 #   --m1-season=<name>      start season (default: the climate's epoch season)
 #   --m1-day=<n>            start day within that season (default 0 when a start flag is used)
@@ -166,7 +167,7 @@ var ground_grid: MeshInstance3D
 var _env_weather_arg: String = ""
 var _env_altitude_offset_m: float = 0.0
 var _env_climate_arg: String = ""
-var _env_time_scale: float = 60.0
+var _env_time_scale: float = 24.0
 var _env_time_of_day_h: float = -1.0
 var _env_season: String = ""
 var _env_day: int = -1

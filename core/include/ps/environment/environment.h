@@ -130,6 +130,32 @@ public:
     // Scale change without a time jump (re-anchors, see EnvClock::set_scale).
     void set_time_scale(real scale, std::int64_t tick);
 
+    // --- W3b: manual weather and the season lock (owner answer Q12) ---
+    // The owner's model: a manual weather choice overrides the weather for the REST OF THE CURRENT
+    // SEASON and resets at the next season; seasons can be locked. All of these are "now" events at
+    // `tick` (the tick the next step runs at), re-evaluate the cached tick state and invalidate the
+    // gust advection cache; they throw std::logic_error without a weather timeline.
+    //  - add_season_weather_override: the preset starts now with a smoothstep ramp-in of ramp_s and
+    //    ends with the natural season (ramp-out finishing at the boundary, see
+    //    WeatherTimeline::add_season_override); with a locked season it lasts until removed. Returns
+    //    the override id (std::length_error at 16 overrides, std::invalid_argument for a bad preset).
+    //  - end_weather_overrides: the soft end ("back to the natural weather"): every override stops now
+    //    and ramps out over its own ramp_s (an override added this very tick is removed instead).
+    //    remove_weather_override / clear_weather_overrides: the immediate end - the override leaves the
+    //    list and the published weather is the timeline's from this tick on (an exact reset for tests
+    //    and servers; the weather steps back if the override had moved it).
+    int add_season_weather_override(const WeatherPresetDesc& target, real ramp_s, std::int64_t tick);
+    bool remove_weather_override(int id, std::int64_t tick);
+    void clear_weather_overrides(std::int64_t tick);
+    void end_weather_overrides(std::int64_t tick);
+    //  - set_calendar_lock: lock the season (fixed_season = its name), pin one game day
+    //    (fixed_day_of_year >= 0) or unlock (empty / -1 = Dynamic). Re-anchors the clock so the game day
+    //    index and the fraction of the day are preserved (the clock hours do not jump; env seconds do
+    //    when the day lengths differ between the modes). Season-bound overrides keep their elapsed time
+    //    and have their end re-resolved. Works without weather too (the calendar always exists).
+    //    Throws std::invalid_argument (unknown season, both set) before changing anything.
+    void set_calendar_lock(const std::string& fixed_season, int fixed_day_of_year, std::int64_t tick);
+
     // --- Per-tick evaluation ---
     // Evaluates this tick's snapshot (cached in current()) and the air state
     // sample_air reads. Allocation-free.

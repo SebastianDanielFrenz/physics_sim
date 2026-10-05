@@ -43,6 +43,7 @@
 
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/environment/environment_snapshot.h"
+#include "ps/environment/weather_desc.h"
 #include "ps/environment/vehicle_air.h"
 #include "ps/io/scenario.h"
 #include "ps/io/surface_table.h"
@@ -431,6 +432,19 @@ public:
     // wind_dir_deg (compass, FROM), gust_factor, precip_mm_h, precip_type (int),
     // lightning_per_min.
     [[nodiscard]] godot::Dictionary get_environment() const;
+    // Weather plan W3b (owner answer Q12), thin wrappers over World (all logic in core; applied on the
+    // sim thread right before the next step, so safe to call from the main thread while running).
+    // set_weather_override: `preset_absolute_path` = the absolute path of a physics_sim.weather_preset/1
+    // file (the demo resolves bare names to data/weather_presets/<name>.json); the preset replaces the
+    // weather from now to the END OF THE CURRENT SEASON (ramp over `ramp_s`), until ended when the
+    // season is locked. Returns false (last_error set) when the preset cannot be loaded or no
+    // environment with weather is installed. end_weather_overrides = soft end (ramp out),
+    // clear_weather_overrides = immediate. set_season_lock("summer") locks the season, "" or "dynamic"
+    // unlocks.
+    bool set_weather_override(const godot::String& preset_absolute_path, double ramp_s);
+    void end_weather_overrides();
+    void clear_weather_overrides();
+    bool set_season_lock(const godot::String& season);
     // Weather plan W4 (race-free render snapshot): the air one vehicle sits in. Empty
     // Dictionary for an unknown vehicle or without weather. Keys: altitude_m,
     // pressure_hpa, temperature_c (outside), vapour_pressure_pa, density_kg_m3,
@@ -570,6 +584,15 @@ private:
     std::string turbo_configuration_status_="Default configuration";
     std::mutex pending_reset_mutex_;
     std::vector<PendingVehicleReset> pending_vehicle_resets_;
+    // Weather plan W3b: environment commands from the main thread, applied by the pre_step hook.
+    struct PendingEnvironmentCommand {
+        enum class Kind { SetWeather, EndWeather, ClearWeather, SetSeasonLock } kind = Kind::EndWeather;
+        ps::environment::WeatherPresetDesc preset;
+        ps::real ramp_s = 0.0;
+        std::string season;
+    };
+    std::mutex pending_environment_mutex_;
+    std::vector<PendingEnvironmentCommand> pending_environment_commands_;
 
     std::unique_ptr<ps::World> world_;
     std::unordered_map<std::string, ps::BodyId> bodies_by_name_;

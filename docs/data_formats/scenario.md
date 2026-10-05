@@ -203,12 +203,35 @@ each tick right before `World::step()`): each has `t` and exactly one of
 - `jump_time_s` (real): advance environment time by that many environment
   seconds (negative goes back; the weather and sun are pure functions of time,
   so this is always valid in W2);
-- `set_time_scale` (real >= 0): change the scale without a time jump.
+- `set_time_scale` (real >= 0): change the scale without a time jump;
+- `set_weather` (W3b, owner answer Q12, the manual weather): `{preset, ramp_s}`;
+  `preset` is a `physics_sim.weather_preset/1` file (relative to the scenario
+  file), `ramp_s` >= 0 (environment seconds, default 0). The preset replaces the
+  weather from the event to the END OF THE CURRENT SEASON (smoothstep ramp-in of
+  `ramp_s`; the ramp-out finishes at the season boundary, shortened to at most
+  half the remaining time), and the next season starts on the natural weather.
+  With the season locked (`set_season` or the `season` key) it lasts until
+  `end_weather`/`clear_weather`. Needs the environment's `weather` key;
+- `end_weather` (`true`): soft end - every override stops now and ramps out
+  over its own `ramp_s`; `clear_weather` (`true`): immediate removal of every
+  override (an exact reset to the natural weather; trailing 1 h / 6 h
+  precipitation sums still contain override rain for up to 6 h). Both need the
+  `weather` key;
+- `set_season`: a season name locks the calendar to it (every day carries that
+  season's mid values; the game day index and the fraction of the day are
+  preserved, the env seconds jump when the day lengths differ), `"dynamic"`
+  unlocks (a season-bound override re-resolves its end). Works without the
+  `weather` key.
+
+Weather events live in the environment hash (the override list and the calendar
+mode are description state); a scenario without them hashes exactly as before.
 
 Rejected (load errors, never silently dropped): unknown keys, a missing
 `climate`, a climate file error, an unknown `season`/`time.start.season`, a bad
-increments (`surface_conditions`, `default_tyre_profile`, `set_weather`).
-`set_weather`).
+event (an unknown event key, more or fewer than one action key, a negative
+`ramp_s`, an unknown `set_season` name, a weather event without the
+`weather` key, an unreadable preset file) and keys of later increments
+(`surface_conditions`, `default_tyre_profile`).
 
 The published record (`ps/environment/environment_snapshot.h`, in
 `WorldSnapshot::environment` when `has_environment`): `t_env_s`, `time_scale`,

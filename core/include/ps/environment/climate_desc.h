@@ -59,8 +59,22 @@ struct SunAuthoredPartial {
 enum class DayNightKind : std::uint8_t {
     Explicit,       // day_s + night_s
     CycleFraction,  // cycle_s * day_fraction
-    Astronomical    // day fraction from latitude and the real day of year, with the calendar's global cycle_s
+    Astronomical,   // day fraction from latitude and the real day of year, with the calendar's global cycle_s
+    // W3b (owner question Q2, third form): the astronomical day share times a per-season multiplier,
+    // clamped to [kDayShareMin, kDayShareMax], with the calendar's global cycle_s. A multiplier above 1
+    // lengthens the day of that season, below 1 shortens it; per-day values interpolate between season
+    // midpoints like every other form.
+    AstronomicalScaled
 };
+
+// Clamp range of the day share (day / (day + night)) of DayNightKind::AstronomicalScaled [AS]. A share of
+// 0 or 1 would give a zero-length day or night, which the sun warp and the Parton-Logan temperature
+// (sunrise/sunset anchors) treat as a degenerate polar case; 2 % of a 24 h cycle (~29 min) keeps both
+// phases real. The multiplier itself must lie in (0, kDayShareMultiplierMax] - a typo guard, anything
+// above ~2.3 already saturates the clamp at mid latitudes.
+inline constexpr real kDayShareMin = 0.02;
+inline constexpr real kDayShareMax = 0.98;
+inline constexpr real kDayShareMultiplierMax = 10.0;
 
 struct DayNightDesc {
     DayNightKind kind = DayNightKind::Astronomical;
@@ -68,6 +82,7 @@ struct DayNightDesc {
     real night_s = 0.0;        // Explicit
     real cycle_s = 0.0;        // CycleFraction
     real day_fraction = 0.0;   // CycleFraction, in (0, 1)
+    real day_share_multiplier = 1.0;  // AstronomicalScaled, in (0, kDayShareMultiplierMax]
 };
 
 // Mid-season climate scalars (interpolated per day by the calendar; the W3

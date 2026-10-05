@@ -115,6 +115,10 @@ bool PsSimulation::load_scenario(const String& absolute_json_path) {
             std::lock_guard<std::mutex> lock(pending_reset_mutex_);
             pending_vehicle_resets_.clear();
         }
+        {
+            std::lock_guard<std::mutex> lock(pending_environment_mutex_);
+            pending_environment_commands_.clear();
+        }
 
         // Pre-seed every control channel name this adapter's input map can
         // drive (input_map_core.h's ControlChannels) so later set_control()
@@ -249,6 +253,23 @@ void PsSimulation::rebuild_post_step_and_start() {
             if(!component.empty()) world_->replace_turbo_configuration(vehicle->second,component,update.desc);
             std::lock_guard<std::mutex> lock(turbo_update_mutex_);
             turbo_configuration_status_="Active";
+        }
+        // Weather plan W3b: manual weather / season lock, on the sim thread between steps.
+        {
+            std::vector<PendingEnvironmentCommand> env_commands;
+            { std::lock_guard<std::mutex> lock(pending_environment_mutex_); env_commands.swap(pending_environment_commands_); }
+            for (const PendingEnvironmentCommand& c : env_commands) {
+                try {
+                    switch (c.kind) {
+                        case PendingEnvironmentCommand::Kind::SetWeather: world_->add_weather_override_to_season_end(c.preset, c.ramp_s); break;
+                        case PendingEnvironmentCommand::Kind::EndWeather: world_->end_weather_overrides(); break;
+                        case PendingEnvironmentCommand::Kind::ClearWeather: world_->clear_weather_overrides(); break;
+                        case PendingEnvironmentCommand::Kind::SetSeasonLock: world_->set_environment_calendar_lock(c.season); break;
+                    }
+                } catch (const std::exception& e) {
+                    godot::UtilityFunctions::print("ps_godot: environment command failed: ", e.what());
+                }
+            }
         }
         std::vector<PendingVehicleReset> resets;
         {
@@ -1082,6 +1103,55 @@ bool PsSimulation::install_environment(const String& climate_absolute_path, doub
 
 bool PsSimulation::has_environment() const { return render_snapshot().has_environment; }
 
+bool PsSimulation::set_weather_override(const String& preset_absolute_path, double ramp_s) {
+    if (!world_ || !world_->environment() || !world_->environment()->provides_atmosphere()) {
+        last_error_ = "set_weather_override: no environment with weather is installed";
+        return false;
+    }
+    PendingEnvironmentCommand c;
+    c.kind = PendingEnvironmentCommand::Kind::SetWeather;
+    try {
+        c.preset = ps::io::load_weather_preset_json(to_std_string(preset_absolute_path));
+    } catch (const std::exception& e) {
+        last_error_ = String("set_weather_override failed: ") + String(e.what());
+        return false;
+    }
+    c.ramp_s = static_cast<ps::real>(ramp_s);
+    std::lock_guard<std::mutex> lock(pending_environment_mutex_);
+    pending_environment_commands_.push_back(std::move(c));
+    last_error_ = String();
+    return true;
+}
+
+void PsSimulation::end_weather_overrides() {
+    PendingEnvironmentCommand c;
+    c.kind = PendingEnvironmentCommand::Kind::EndWeather;
+    std::lock_guard<std::mutex> lock(pending_environment_mutex_);
+    pending_environment_commands_.push_back(std::move(c));
+}
+
+void PsSimulation::clear_weather_overrides() {
+    PendingEnvironmentCommand c;
+    c.kind = PendingEnvironmentCommand::Kind::ClearWeather;
+    std::lock_guard<std::mutex> lock(pending_environment_mutex_);
+    pending_environment_commands_.push_back(std::move(c));
+}
+
+bool PsSimulation::set_season_lock(const String& season) {
+    if (!world_ || !world_->environment()) {
+        last_error_ = "set_season_lock: no environment is installed";
+        return false;
+    }
+    PendingEnvironmentCommand c;
+    c.kind = PendingEnvironmentCommand::Kind::SetSeasonLock;
+    c.season = to_std_string(season);
+    if (c.season == "dynamic") c.season.clear();
+    std::lock_guard<std::mutex> lock(pending_environment_mutex_);
+    pending_environment_commands_.push_back(std::move(c));
+    last_error_ = String();
+    return true;
+}
+
 Dictionary PsSimulation::get_environment() const {
     Dictionary d;
     const AdapterSnapshot& snap = render_snapshot();
@@ -1487,6 +1557,11 @@ void PsSimulation::_bind_methods() {
                          &PsSimulation::install_environment, DEFVAL(1.0), DEFVAL(String()), DEFVAL(-1), DEFVAL(12.0), DEFVAL(String()),
                          DEFVAL(0.0));
     ClassDB::bind_method(D_METHOD("has_environment"), &PsSimulation::has_environment);
+    // Weather plan W3b
+    ClassDB::bind_method(D_METHOD("set_weather_override", "preset_absolute_path", "ramp_s"), &PsSimulation::set_weather_override, DEFVAL(60.0));
+    ClassDB::bind_method(D_METHOD("end_weather_overrides"), &PsSimulation::end_weather_overrides);
+    ClassDB::bind_method(D_METHOD("clear_weather_overrides"), &PsSimulation::clear_weather_overrides);
+    ClassDB::bind_method(D_METHOD("set_season_lock", "season"), &PsSimulation::set_season_lock);
     ClassDB::bind_method(D_METHOD("get_environment"), &PsSimulation::get_environment);
     ClassDB::bind_method(D_METHOD("get_vehicle_air", "vehicle_name"), &PsSimulation::get_vehicle_air);
     ClassDB::bind_method(D_METHOD("get_vehicle_chassis_accel_local", "vehicle_name"), &PsSimulation::get_vehicle_chassis_accel_local);

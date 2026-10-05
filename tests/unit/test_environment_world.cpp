@@ -290,7 +290,28 @@ TEST_CASE("Scenario environment block: rejections", "[environment][io]") {
     CHECK_THAT(load_msg("{ " + kClimate + ", \"season\": \"summer\", \"fixed_day_of_year\": 3 }", "both"), ContainsSubstring("mutually exclusive"));
     CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1 } ] }", "e0"), ContainsSubstring("exactly one"));
     CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"jump_time_s\": 5, \"set_time_scale\": 2 } ] }", "e2"), ContainsSubstring("exactly one"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_weather\": {} } ] }", "ew"), ContainsSubstring("not supported yet"));
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_weather\": {} } ] }", "ew"), ContainsSubstring("needs a string \"preset\""));
+    // W3b: the weather/season events.
+    const std::string wclimate = "\"climate\": \"" + source_dir() + "/data/climates/test_weather.json\", \"weather\": \"dynamic\"";
+    const std::string storm_path = source_dir() + "/data/weather_presets/storm.json";
+    const auto ev = [&](const std::string& event) { return "{ " + wclimate + ", \"events\": [ { \"t\": 1, " + event + " } ] }"; };
+    CHECK(load_msg(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"ramp_s\": 30 }"), "w3ok").empty());
+    CHECK(load_msg(ev("\"end_weather\": true"), "w3end").empty());
+    CHECK(load_msg(ev("\"clear_weather\": true"), "w3clr").empty());
+    CHECK(load_msg(ev("\"set_season\": \"winter\""), "w3s").empty());
+    CHECK(load_msg(ev("\"set_season\": \"dynamic\""), "w3sd").empty());
+    CHECK_THAT(load_msg(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"ramp_s\": -1 }"), "w3neg"), ContainsSubstring("ramp_s"));
+    CHECK_THAT(load_msg(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"bogus\": 1 }"), "w3bog"), ContainsSubstring("set_weather.bogus"));
+    CHECK_THAT(load_msg(ev("\"set_weather\": { \"preset\": \"does/not/exist.json\" }"), "w3np"), ContainsSubstring("exist.json"));
+    CHECK_THAT(load_msg(ev("\"set_weather\": 5"), "w3obj"), ContainsSubstring("must be an object"));
+    CHECK_THAT(load_msg(ev("\"end_weather\": false"), "w3f"), ContainsSubstring("must be true"));
+    CHECK_THAT(load_msg(ev("\"set_season\": \"monsoon\""), "w3m"), ContainsSubstring("unknown season \"monsoon\""));
+    CHECK_THAT(load_msg(ev("\"set_season\": 3"), "w3n"), ContainsSubstring("season name"));
+    CHECK_THAT(load_msg(ev("\"end_weather\": true, \"clear_weather\": true"), "w3two"), ContainsSubstring("exactly one"));
+    // The weather events need the weather key; set_season does not.
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"end_weather\": true } ] }", "w3nw"), ContainsSubstring("need the environment's \"weather\" key"));
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_weather\": { \"preset\": \"" + storm_path + "\" } } ] }", "w3nw2"), ContainsSubstring("\"weather\" key"));
+    CHECK(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_season\": \"winter\" } ] }", "w3nws").empty());
     CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"bogus\": 5 } ] }", "eb"), ContainsSubstring("unknown event key"));
     CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_time_scale\": -2 } ] }", "es"), ContainsSubstring("set_time_scale"));
     CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"jump_time_s\": 5 } ] }", "et"), ContainsSubstring("\"t\""));
