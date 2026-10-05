@@ -14,6 +14,7 @@
 #pragma once
 
 #include "ps/drivetrain/engine_cycle_desc.h" // CycleModelDesc (PHYS-033 P4 I7c C16a, SimulatedEngineDesc::cycle)
+#include "ps/drivetrain/engine_thermal_desc.h" // EngineThermalConfig (engine thermal plan T1, PowertrainDesc::thermal)
 #include "ps/drivetrain/fuel_desc.h" // FuelDesc (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel)
 #include "ps/drivetrain/nitrous_desc.h" // N2oBottleDesc/NitrousKitDesc (N2O plan N1, ComponentParams alternatives)
 #include "ps/drivetrain/table2d.h"   // Table2D (PHYS-033 P4 I7a C5, TorqueMapEngineDesc::fuel_map)
@@ -728,6 +729,9 @@ struct PowertrainDesc {
     std::vector<FluidLinkDesc> fluid; // PHYS-033 P4 I7a C6: optional, empty for every vehicle without a tank
     Compliance compliance = Compliance::Rigid;
     bool rotor_reaction = true; // plan section 6.7 (Q11); false only for a temporary data migration step
+    // Engine thermal plan T1: present iff the vehicle opts in (names a cooling system). The Powertrain then
+    // owns an EngineThermal; absent = no thermal state, every hash unchanged.
+    std::optional<EngineThermalConfig> thermal;
 };
 
 } // namespace ps::drivetrain

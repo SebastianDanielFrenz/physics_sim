@@ -1,0 +1,15 @@
+{
+  "format": "physics_sim.cooling_system/1",
+  "source": "Class defaults for a passenger-car cooling system (engine thermal plan T1, out/engine_thermal_plan.md, vault PHYS-063). Radiator [AS]: 0.35 m2 frontal area, ram coefficient 0.35 (face velocity = 0.35 x ram airspeed), UA 1500 W/K at 2.0 kg/s air, exponent 0.6 (the usual Re^0.6 air-side scaling, Incropera & DeWitt ch. 7 correlation form [C S12]); cross-flow both-unmixed eps-NTU (Incropera Table 11.3 [C]). Fan [AS]: 3.5 m/s face velocity, on at 98 C, off at 93 C (a 5 K band, the 81/75 C example of US 5992755 [C S11] shifted), 300 W reported only. Gauge [AS]: buffered like a dashboard needle, 0 at 40 C, 0.5 from 75 to 105 C, 1 at 125 C. Warnings [AS]: overheat 118 C, cold ('blue') below 50 C.",
+  "radiator": {
+    "frontal_area_m2": 0.35,
+    "ram_coefficient": 0.35,
+    "ua_ref_w_k": 1500.0,
+    "air_mass_flow_ref_kg_s": 2.0,
+    "ua_exponent": 0.6
+  },
+  "fan": { "face_velocity_m_s": 3.5, "on_c": 98.0, "off_c": 93.0, "power_w": 300.0 },
+  "oil_cooler": { "air_w_k_per_m_s": 0.0 },
+  "gauge": { "x_c": [40.0, 75.0, 105.0, 125.0], "y": [0.0, 0.5, 0.5, 1.0] },
+  "warnings": { "overheat_c": 118.0, "cold_c": 50.0 }
+}

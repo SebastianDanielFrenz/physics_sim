@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "ps/drivetrain/engine_thermal_desc.h" // EngineThermalSnapshot
 #include "ps/types.h"
 
 #include <array>
@@ -172,6 +173,9 @@ struct PowertrainSnapshot {
     real fuel_mass_kg = 0.0;
     // N2O plan N1: the bottle content (kg) at the end of this tick - 0 without a kit.
     real n2o_bottle_kg = 0.0;
+    // Engine thermal plan T1: coolant/oil temperature, gauge, warnings, fan. has_thermal false (all zeros)
+    // for a vehicle without a cooling system. Never hashed.
+    EngineThermalSnapshot thermal;
 };
 
 // Debug-only accessor payload for tests (World::powertrain_debug). Filled

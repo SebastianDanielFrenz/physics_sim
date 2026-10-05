@@ -2,6 +2,7 @@
   "format": "physics_sim.engine/1",
   "name": "toyota_a25a_fks_sim",
   "kind": "simulated",
+  "default_thermal": "../engine_thermal/toyota_a25a_fks.json",
   "source": "measured-map engine (I7c D12 M-B): its dyno comparison is tautological and is not a generator validation. Toyota A25A-FKS 2.5 L I4 (2018 Camry). Maps back-solved from the US EPA NVFEL benchmark 'Engine Tier 3 Fuel - Test Data' package (sheets Steady State + High Load Final; measured = a literal xlsx reading, [D] derived with the method stated, [AS] assumed, [C] cited) by tools/enginedata/a25a_mb_engine.py (PHYS-033 P4 I7c C17a). Every WOT brake torque is reproduced at its measured MAP and cell ambient (tests/unit/test_a25a_sim_engine_data.cpp). Burns tier3_e10_cert.json (the fuel the data were measured on); e10.json selectable. WOT anchor per speed line = its maximum measured brake torque (C7's envelope, data/engines/toyota_a25a_fks.json), which excludes the measured lambda 0.73 / 0.63 ECU protective-enrichment pedal-80/100 rows at 1326/1498 rpm (7-16 N*m below the lambda 0.88 pedal-70 rows there); the 1003-2535 rpm anchors are themselves enriched (measured lambda 0.67-0.88) and stay in the lambda_target table as measured. Known limitation: the (rpm, MAP) tables cannot carry the measured cam-phase dependence - Steady State points just below WOT MAP (intake cam 25-37 deg adv) make 30-60 N*m less than the model, which follows the High Load Final points (intake cam 55 deg); see out/a25a_mb_report.txt for the per-point residuals.",
   "architecture": "piston_4stroke",
   "bore_mm": 87.5,

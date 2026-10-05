@@ -1,0 +1,26 @@
+{
+  "format": "physics_sim.engine_thermal/1",
+  "source": "Class defaults for a water-cooled spark-ignition passenger-car engine (engine thermal plan T1, out/engine_thermal_plan.md, vault PHYS-063). A part file meant to be extended: it carries no displacement_l, so it is not loadable on its own - an engine-specific file extends it and adds displacement_l. Capacities [D]: engine lump 26600 J/K per litre = 25 kg/L participating metal [AS] x 630 J/(kg K) (0.62 x cast iron 460 + 0.38 x aluminium 900, 62 % cast-iron share [C Haury & Volkering, Chalmers MSc 2011:13, S5]) + 3.0 L/L coolant [AS] x 1065 kg/m3 x 3400 J/(kg K) [AS, 50/50 ethylene glycol]; oil lump 7600 J/K per litre = 2.25 L/L oil [AS] x 851 kg/m3 [C S8] x 2000 J/(kg K) [AS] + 6 kg/L crank and sump metal [AS] x 630. wall_heat_fraction 0.20 [AS], inside Heywood 1988 Table 12.1's 17-26 % coolant share of fuel energy for SI engines [C, secondhand, not re-verified] and equal to the exhaust-thermal branch's in_cylinder_wall_heat_fraction. friction_to_oil_fraction 0.30 [AS, calibration set]. motoring_friction_fraction 0.6 [D]: friction share of a graph engine's motoring curve (Heywood FMEP about 1.3 bar against about 0.9 bar pumping at 2000 rpm: 1.3/2.2 = 0.59); ignored by simulated engines. Oil: Mobil 1 ESP 5W-30 KV40 69.1 / KV100 12.0 mm2/s, density 0.851 g/ml at 15.6 C [C ExxonMobil product data sheet, read 2026-10-05, S8]; reference_temperature_c 95 [C vault PHYS-052: the friction maps come from EPA Ecotec motored friction at oil 92-98 C]; hydrodynamic_fraction 0.5 [D: solves k(20 C) in [2.0, 2.5], the cited 'about 2x to 2.5x' of Sandoval & Heywood SAE 2003-01-0725 / Roberts et al. 2014, with sqrt viscosity ratio 3.676 at 20 C]; friction_scale_min 1 and NO upper cap (owner 2026-10-05). Conductances per litre [AS]: oil-coolant time constant 300 s (G_oc = C_oil/tau_oc = 25.3 W/K per litre), block-air 7.5 W/K + 0.75 W/(K m/s) x ram speed (cool-down check C_e/G0 = 3547 s, about 1 h engine-off time constant), oil-air 2.5 + 0.25 per m/s. Pump 10 L/min per 1000 rpm per litre [AS]. Thermostat 88 -> 100 C opening range, 2 K play hysteresis, 20 s wax time constant [AS] (patent examples such as 88/100 C, attribution not verified).",
+  "capacity_per_l": { "engine_j_k": 26600.0, "oil_j_k": 7600.0 },
+  "wall_heat_fraction": 0.20,
+  "friction_to_oil_fraction": 0.30,
+  "motoring_friction_fraction": 0.6,
+  "oil": {
+    "kv40_mm2_s": 69.1,
+    "kv100_mm2_s": 12.0,
+    "density_15c_kg_m3": 851.0,
+    "reference_temperature_c": 95.0,
+    "hydrodynamic_fraction": 0.5,
+    "friction_scale_min": 1.0
+  },
+  "conductance_per_l": {
+    "oil_coolant_time_constant_s": 300.0,
+    "block_air_w_k": 7.5,
+    "block_air_w_k_per_m_s": 0.75,
+    "oil_air_w_k": 2.5,
+    "oil_air_w_k_per_m_s": 0.25
+  },
+  "coolant": { "cp_j_kg_k": 3400.0, "density_kg_m3": 1065.0 },
+  "pump": { "l_min_per_krpm_per_l": 10.0 },
+  "thermostat": { "open_c": 88.0, "full_open_c": 100.0, "hysteresis_k": 2.0, "time_constant_s": 20.0 }
+}

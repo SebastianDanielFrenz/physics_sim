@@ -119,6 +119,17 @@ struct PowertrainEnergy {
     real n2o_purged = 0.0;         // vented by the purge
     real n2o_external_added = 0.0; // refill/drain hook (World::set_n2o_bottle_mass), signed
     real kit_fuel_mass = 0.0;      // kit fuel, a diagnostic subset of fuel_mass (booked from N2)
+    // Engine thermal plan T1 (section 4.6): the thermal sub-ledger, cumulative J, unhashed, OUTSIDE balance_error,
+    // exactly 0 for a vehicle without thermal. Friction heat is COPIED out of the mechanical ledger (the work is
+    // already booked there as lost); the thermal ledger starts where that work becomes heat.
+    real thermal_wall_in = 0.0;       // f_wall * released fuel energy, into the engine lump
+    real thermal_friction_in = 0.0;   // engine friction heat (smooth + Coulomb row), split engine/oil lump
+    real thermal_radiator_out = 0.0;  // G_rad * (T_engine' - T_ambient) * dt
+    real thermal_block_air_out = 0.0; // block convection
+    real thermal_oil_air_out = 0.0;   // sump / oil cooler convection
+    real thermal_heater_out = 0.0;    // heater core (T7), 0 until then
+    real thermal_stored = 0.0;        // C_e*T_e + C_o*T_o relative to the start value (instantaneous, not cumulative)
+    real thermal_balance_error = 0.0; // cumulative: stored change minus (in - out); ~0 to rounding by the BE closed form
 };
 
 } // namespace ps::drivetrain

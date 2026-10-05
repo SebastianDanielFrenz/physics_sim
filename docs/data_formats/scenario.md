@@ -128,6 +128,7 @@ Each entry of `vehicles[]` (`ScenarioVehicle`):
 | `name` | string | **required** | — | — | vehicle instance name |
 | `chassis_body` | string | **required** | — | must name an existing body from `bodies[]`, else `"vehicle '<name>' references unknown chassis_body '<name>'"` (checked in `build_scenario`, not `load_scenario`) | which body is the chassis |
 | `vehicle_json_path` | string | **required** | — | resolved relative to the scenario file's own directory if relative; loaded immediately via `load_vehicle_json` (any vehicle-file error — see `vehicle.md` — surfaces here) | path to the vehicle's own JSON file |
+| `engine_thermal_start` | string | optional | — | `"warm"` or `"ambient"`; the vehicle file must have a `cooling_system` (else `"vehicle '<name>': 'engine_thermal_start' needs a vehicle file with a 'cooling_system'"`) | overrides the vehicle file's own start state for this scenario (engine thermal plan T1) |
 
 There is no way to inline a vehicle's fields directly in a scenario file —
 `vehicle_json_path` is always a reference to a separate file (`desc` in the

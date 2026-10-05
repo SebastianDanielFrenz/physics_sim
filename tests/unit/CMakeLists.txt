@@ -55,6 +55,7 @@ add_executable(ps_unit_tests
   test_sub_threshold_rotation.cpp
   test_table2d.cpp
   test_fuel_io.cpp
+  test_engine_thermal_io.cpp
   test_n2o_flow.cpp
   test_n2o_system.cpp
   test_throttle_control.cpp

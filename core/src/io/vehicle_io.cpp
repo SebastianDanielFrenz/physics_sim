@@ -10,6 +10,7 @@
 #include "../vehicle/tir_parser.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/engine_cycle/firing_order.h"
+#include "ps/io/engine_thermal_io.h"
 #include "ps/io/fuel_io.h"
 
 #include <nlohmann/json.hpp>
@@ -2314,7 +2315,9 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
 json resolve_component_ref(const json& cj, const std::string& kind, const std::string& base_dir, const std::string& ctx) {
     if (!cj.contains("ref")) return cj;
     for (auto it = cj.begin(); it != cj.end(); ++it) {
-        if (it.key() != "id" && it.key() != "type" && it.key() != "ref") {
+        // Engine thermal plan T1: an engine component may carry its per-vehicle "thermal" override next to "ref".
+        const bool thermal_override = kind == "engine" && it.key() == "thermal";
+        if (it.key() != "id" && it.key() != "type" && it.key() != "ref" && !thermal_override) {
             throw std::runtime_error(ctx + ": a component with 'ref' may only contain 'id', 'type' and 'ref' "
                                       "(found extra field '" + it.key() + "')");
         }
@@ -2656,6 +2659,8 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
     // link's "tank fuel is in the engine's fuels list" check.
     std::vector<std::pair<std::string, std::vector<std::string>>> engine_fuel_paths;
     std::vector<std::pair<std::string, std::pair<std::string, std::string>>> tank_fuel_paths;
+    // Engine thermal plan T1: the first engine component's resolved thermal file ("" = it has none).
+    std::string thermal_engine_id, thermal_engine_path;
     if (j.contains("powertrain")) {
         const auto& pj = j.at("powertrain");
         if (pj.contains("components")) {
@@ -2689,6 +2694,27 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                     p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir, &fuel_paths, &options,
                                                                    override_ok ? &inst_override : nullptr)});
                     engine_fuel_paths.emplace_back(id, std::move(fuel_paths)); // PHYS-033 P4 I7a C6: for the fluid-link check below
+
+                    // Engine thermal plan T1 (section 9.1): the engine file's "default_thermal" (relative to the engine
+                    // file), overridable by this component's own "thermal" (relative to the vehicle file). Only used
+                    // when the vehicle names a cooling_system (opt-in) - resolved after the component loop.
+                    if (cj.contains("thermal")) {
+                        if (!cj.at("thermal").is_string() || cj.at("thermal").get<std::string>().empty()) {
+                            throw std::runtime_error(ctx + ": 'thermal' must be a non-empty path string");
+                        }
+                    }
+                    if (ej.contains("default_thermal") &&
+                        (!ej.at("default_thermal").is_string() || ej.at("default_thermal").get<std::string>().empty())) {
+                        throw std::runtime_error(ctx + ": 'default_thermal' must be a non-empty path string");
+                    }
+                    if (thermal_engine_id.empty()) {
+                        if (cj.contains("thermal")) {
+                            thermal_engine_path = resolve_path(base_dir, cj.at("thermal").get<std::string>());
+                        } else if (ej.contains("default_thermal")) {
+                            thermal_engine_path = resolve_path(engine_dir, ej.at("default_thermal").get<std::string>());
+                        }
+                        thermal_engine_id = id;
+                    }
 
                     // ps_audio A4 (out/audio_plan.md section 3.2/3.3): resolve
                     // this engine's installation - the vehicle component's own
@@ -3466,6 +3492,47 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
         if (is_kit && !as_source) {
             throw std::runtime_error(cctx + ": nitrous_kit has no consumer (no powertrain.fluid link from \"" + c.id + ".out\")");
         }
+    }
+    // --- engine thermal (engine thermal plan T1 section 9.1): opt-in by naming a cooling system -------------
+    if (j.contains("engine_thermal_start") && !j.contains("cooling_system")) {
+        throw std::runtime_error("vehicle '" + v.name + "': 'engine_thermal_start' needs a 'cooling_system' (the vehicle opts in to engine thermal by naming one)");
+    }
+    if (j.contains("cooling_system")) {
+        const std::string vctx = "vehicle '" + v.name + "'";
+        if (!j.at("cooling_system").is_string() || j.at("cooling_system").get<std::string>().empty()) {
+            throw std::runtime_error(vctx + ": 'cooling_system' must be a non-empty path string");
+        }
+        if (thermal_engine_id.empty()) {
+            throw std::runtime_error(vctx + ": 'cooling_system' needs an engine component");
+        }
+        if (thermal_engine_path.empty()) {
+            throw std::runtime_error(vctx + ": 'cooling_system' needs an engine thermal file, but engine '" + thermal_engine_id +
+                                      "' has neither a 'default_thermal' nor a component 'thermal' override");
+        }
+        ps::drivetrain::EngineThermalConfig tc;
+        tc.engine = ps::io::load_engine_thermal_json(thermal_engine_path);
+        tc.cooling = ps::io::load_cooling_system_json(resolve_path(base_dir, j.at("cooling_system").get<std::string>()));
+        if (j.contains("engine_thermal_start")) {
+            if (!j.at("engine_thermal_start").is_string()) {
+                throw std::runtime_error(vctx + ": 'engine_thermal_start' must be \"warm\" or \"ambient\"");
+            }
+            tc.start = ps::io::parse_thermal_start(j.at("engine_thermal_start").get<std::string>(), vctx);
+        }
+        // One energy split must never use two fractions (plan section 4.3): a turbo engine's exhaust_thermal
+        // wall-heat fraction has to equal the thermal file's until T3 moves the owner.
+        for (const auto& c : p.components) {
+            if (c.id != thermal_engine_id) continue;
+            if (const auto* sim = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&c.params)) {
+                if (sim->turbo_pair.has_value() &&
+                    sim->turbo_pair->in_cylinder_wall_heat_fraction != tc.engine.wall_heat_fraction) {
+                    throw std::runtime_error(vctx + ": engine '" + thermal_engine_id + "': the turbo configuration's exhaust_thermal "
+                                              "in_cylinder_wall_heat_fraction (" + std::to_string(sim->turbo_pair->in_cylinder_wall_heat_fraction) +
+                                              ") must equal the engine thermal file's wall_heat_fraction (" +
+                                              std::to_string(tc.engine.wall_heat_fraction) + ") - one energy split, one fraction");
+                }
+            }
+        }
+        p.thermal = std::move(tc);
     }
     v.powertrain = p;
 

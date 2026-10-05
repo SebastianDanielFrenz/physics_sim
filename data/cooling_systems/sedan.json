@@ -1,0 +1,5 @@
+{
+  "format": "physics_sim.cooling_system/1",
+  "extends": "class_passenger_car.json",
+  "source": "Cooling system of the reference sedans (car_sedan_sim_thermal.json, car_sedan_thermal.json): the passenger-car class defaults (class_passenger_car.json) unchanged. A swapped radiator or an oil cooler is a user-level file extending this one."
+}

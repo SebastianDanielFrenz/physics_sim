@@ -209,6 +209,7 @@ add_library(ps_core STATIC
   src/io/vehicle_io.cpp
   src/io/fuel_io.cpp
   src/io/nitrous_io.cpp
+  src/io/engine_thermal_io.cpp
 
   src/drivetrain/box_lcp.cpp
   src/drivetrain/network.cpp

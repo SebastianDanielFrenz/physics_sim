@@ -64,6 +64,9 @@ struct ScenarioVehicle {
     std::string name;
     std::string chassis_body_name;
     std::string vehicle_json_path;
+    // Engine thermal plan T1: optional "engine_thermal_start" ("warm"/"ambient") given in the scenario; "" = the
+    // vehicle file's own value. Already applied to desc.powertrain.thermal->start when set.
+    std::string engine_thermal_start;
     vehicle::VehicleDesc desc;
 };
 

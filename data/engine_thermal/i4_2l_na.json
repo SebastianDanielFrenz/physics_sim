@@ -1,0 +1,6 @@
+{
+  "format": "physics_sim.engine_thermal/1",
+  "extends": "class_si_passenger.json",
+  "source": "Generic 2.0 L naturally aspirated I4 (data/engines/i4_2l_na.json, a plausible class engine, not a specific one). displacement_l 2.0 [AS: the engine's name; the file carries no geometry]. Everything else is the class default (class_si_passenger.json, engine thermal plan T1); motoring_friction_fraction 0.6 [D] is exactly this engine's case: its motoring curve is Heywood FMEP plus about 0.9 bar pumping.",
+  "displacement_l": 2.0
+}
