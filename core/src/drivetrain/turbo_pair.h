@@ -100,7 +100,13 @@ public:
         const real rise = ps::math::pow(pr,real(2.0/7.0))-real(1.0);
         const real outlet_k = ambient_k*(desc.maps ? desc.maps->compressor_temperature_ratio.evaluate(pr) : real(1.0)+rise/desc.compressor_efficiency);
         charge_k = ambient_k + (outlet_k-ambient_k)*(real(1.0)-desc.intercooler_effectiveness);
-        compressor_w = comp_flow*real(1005.0)*ambient_k*rise/desc.compressor_efficiency;
+        // The compressor power is bounded by the head the CURRENT rotor speed makes at this flow:
+        // charge_pa lags the head by 25 ms, and after a lift the slowing wheel must not keep paying
+        // for a pressure ratio it no longer produces (the stored charge above that head is not
+        // compressor work). Outlet temperature and the published ratio stay on the charge state.
+        const real pr_wheel = real(1.0) + std::max(real(0.0),head)/ambient_pa;
+        const real rise_w = pr <= pr_wheel ? rise : ps::math::pow(pr_wheel,real(2.0/7.0))-real(1.0);
+        compressor_w = comp_flow*real(1005.0)*ambient_k*rise_w/desc.compressor_efficiency;
         compressor_flow_kg_s = comp_flow; compressor_pr = pr;
         if (desc.surge_line) {
             // pr is the compressor outlet over ambient, flow the pair's fraction of its max
@@ -135,7 +141,14 @@ public:
             opening = std::clamp(real(1.0)-closing,real(0.0),real(1.0));
         }
         wastegate += h/(desc.wastegate_actuator_tau_s+h)*(opening-wastegate);
-        const real turbine_flow = std::max(real(0.0),exhaust_kg_s)*(real(1.0)-wastegate);
+        // Wastegate: a bypass orifice in parallel with the turbine. Both see the same manifold
+        // pressure, so the exhaust splits by effective area (the same incompressible orifice
+        // form as exhaust_pa below): turbine share A_t/(A_t + A_wg*opening), and the manifold
+        // pressure follows from the total flow through the combined area. A fully open gate
+        // therefore still drives the turbine (a real turbo idles at tens of thousands of rpm).
+        const real total_flow = std::max(real(0.0),exhaust_kg_s);
+        const real flow_area = desc.turbine_area_m2 + desc.wastegate_area()*wastegate;
+        const real turbine_flow = total_flow*(desc.turbine_area_m2/flow_area);
         // Exhaust thermal mass: the whole exhaust flow (turbine and wastegate path share the
         // manifold) passes a lumped wall of heat capacity C, gas-side conductance K and outer
         // conductance Ka. Well-stirred gas side: the gas leaves at T_out = (G*T_port + K*T_w)/(G + K),
@@ -156,7 +169,7 @@ public:
             exhaust_k = (g + k > real(0.0)) ? (g*tg + k*wall_k)/(g + k) : tg;
         }
         const real rho = ambient_pa/(real(287.05)*exhaust_k);
-        exhaust_pa = ambient_pa + turbine_flow*turbine_flow/(real(2.0)*rho*desc.turbine_area_m2*desc.turbine_area_m2);
+        exhaust_pa = ambient_pa + total_flow*total_flow/(real(2.0)*rho*flow_area*flow_area);
         turbine_w = turbine_flow*kExhaustCp*exhaust_k*desc.turbine_efficiency*
             (real(1.0)-ps::math::pow(ambient_pa/exhaust_pa,real(0.24812030075188)));
         const real loss = desc.shaft_loss_w_at_reference*speed2;

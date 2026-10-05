@@ -1137,6 +1137,7 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
         f.pod(t.wastegate_kp); f.pod(t.wastegate_ki_per_s); f.pod(t.wastegate_kd_s); f.pod(t.wastegate_actuator_tau_s);
         f.pod(t.in_cylinder_wall_heat_fraction); f.pod(t.exhaust_wall_heat_capacity_j_k);
         f.pod(t.exhaust_wall_gas_conductance_w_k); f.pod(t.exhaust_wall_ambient_conductance_w_k);
+        f.pod(t.wastegate_area()); // parallel wastegate orifice (effective area, default ratio resolved)
         // I7d D4: appended and only when nonzero, so an engine without a cooler drop keeps its byte layout.
         if (t.intercooler_dp_pa_at_max_flow != real(0.0)) f.pod(t.intercooler_dp_pa_at_max_flow);
         // I7d D2: appended, so an engine without a valve keeps its byte layout.

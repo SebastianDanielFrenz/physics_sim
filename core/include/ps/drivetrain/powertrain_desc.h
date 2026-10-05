@@ -365,6 +365,14 @@ struct TurboPairDesc {
     real compressor_efficiency = 0.72;
     real turbine_efficiency = 0.70;
     real turbine_area_m2 = 0.0015;
+    // Effective (Cd x geometric) flow area of the wastegate port(s) of the pair, in parallel with
+    // the turbine; absent = kDefaultWastegateAreaRatio x turbine_area_m2 [AS] (docs/data_formats/
+    // turbo.md: a 50 mm poppet valve, Cd 0.6, ~1180 mm2, against the hyper turbo's 500 mm2 throat).
+    std::optional<real> wastegate_area_m2;
+    static constexpr real kDefaultWastegateAreaRatio = 2.4;
+    [[nodiscard]] real wastegate_area() const {
+        return wastegate_area_m2 ? *wastegate_area_m2 : kDefaultWastegateAreaRatio*turbine_area_m2;
+    }
     real intercooler_effectiveness = 0.85;
     real shaft_loss_w_at_reference = 1200.0;
     // Boost controller (PID on charge pressure, error per unit of

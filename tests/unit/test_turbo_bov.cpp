@@ -199,7 +199,10 @@ TEST_CASE("D2: opening command, lag and events", "[turbo][drivetrain][bov]") {
     for (int k = 0; k < 6; ++k) {
         const real charge_after = p.charge_pa + (kPamb - p.charge_pa) / 25.0;
         const real p_im = charge_after - crack - targets[k] * (full - crack);
-        p.step(kH, kPamb, kTamb, 0.2, 0.2, 0.0, 0.0, p_im, &psi_table());
+        // No exhaust flow: the rotor stays at rest. (With exhaust the turbine spins it up; before the
+        // compressor-power bound the lagged charge pressure drained that energy again at once, which is what
+        // used to keep this "rotor at rest" premise true with 0.2 kg/s of exhaust.)
+        p.step(kH, kPamb, kTamb, 0.2, 0.0, 0.0, 0.0, p_im, &psi_table());
         CHECK(p.bov_opening == Catch::Approx(targets[k]).margin(1e-9));
         CHECK(p.bov_events == events_after[k]);
         p.charge_pa = 2.8e5; // hold the frozen state for the next target

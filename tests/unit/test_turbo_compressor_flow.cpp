@@ -60,7 +60,8 @@
 //        E(0.5 s) >= E(0.15 s) - int(P_comp + P_loss) (a coast must not be
 //        drained by anything else), plus the absolute floors rotor(0.15 s) >=
 //        65000 rpm and rotor(0.5 s) >= 60000 rpm (measured-with-margin pins on
-//        the x5 rig: measured 73.3k / 69.1k; cylinder flow fed to the
+//        the x5 rig: measured 73.3k / 69.1k; 75.0k / 70.7k after the review fix
+//        (parallel wastegate, compressor bound); cylinder flow fed to the
 //        compressor instead: 63.8k / 59.6k, fails both). With the shipped
 //        rotor and the former heat
 //        hold the floors were 25k / 20k (measured 38.5k / 29.6k).
@@ -246,9 +247,14 @@ TEST_CASE("CF3: steady WOT boost and torque by speed", "[turbo][sim_engine][hype
     // compressor, 25 % fuel heat capped at 1200 K): 1256.2183/1.7807/79052.6, 1364.4133/1.7677/85994.5,
     // 1396.9949/1.7298/106769.1, 1299.3794/1.7007/138456.6, 1210.2170/1.6968/145154.3 - the compressor-flow fix
     // itself moved none of them beyond these tolerances.
-    const Pre pre[] = {{3000.0, 1258.2169, 1.7832, 79106.9}, {4500.0, 1368.1835, 1.7687, 86025.6},
-                       {6000.0, 1405.4251, 1.7306, 106815.2}, {7500.0, 1308.6220, 1.7011, 138521.5},
-                       {8000.0, 1219.7386, 1.6972, 145229.3}};
+    // Re-recorded for the review fix (parallel wastegate port, compressor bound): an unsaturated equilibrium is
+    // the same in both wastegate forms (p_exh - p_amb = m_turbine^2/(2 rho A_t^2)), the gate now sits at
+    // 0.17 / 0.40 / 0.63 / 0.70 / 0.71; tau0 -0.04..+0.06 %, boost -0.07..+0.09 %, rotor -0.02..+0.17 %. Was
+    // 1258.2169/1.7832/79106.9, 1368.1835/1.7687/86025.6, 1405.4251/1.7306/106815.2, 1308.6220/1.7011/138521.5,
+    // 1219.7386/1.6972/145229.3 (9fd087c).
+    const Pre pre[] = {{3000.0, 1257.6810, 1.7820, 79088.8}, {4500.0, 1368.4982, 1.7693, 86046.5},
+                       {6000.0, 1406.0689, 1.7321, 106902.6}, {7500.0, 1309.3552, 1.7027, 138720.8},
+                       {8000.0, 1220.4495, 1.6988, 145471.0}};
     for (real rpm : {3000.0, 4500.0, 6000.0, 7000.0, 7500.0, 7750.0, 8000.0, 8200.0}) {
         SimulatedEngine e(base);
         const real omega = rpm * 2.0 * kPi / 60.0;

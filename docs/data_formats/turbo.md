@@ -24,7 +24,7 @@ rejected by name (below). Mass flow kg/s, inertia kg*m^2, area m^2, power W.
 **Pair scaling.** The simulated engine holds ONE lumped `TurboPair` standing for
 `count` identical turbos sharing the flow symmetrically. The loader multiplies the
 extensive hardware quantities by `count`: `rotor_inertia_kgm2`,
-`max_mass_flow_kg_s`, `turbine_area_m2` and `shaft_loss_w_at_reference` (a pair of
+`max_mass_flow_kg_s`, `turbine_area_m2`, `wastegate_area_m2` and `shaft_loss_w_at_reference` (a pair of
 two turbos has twice the inertia, flow capacity, throat area and bearing loss of
 one). Intensive quantities (`reference_rpm`, `reference_head_bar`, the efficiencies,
 the intercooler effectiveness, the boost target) are not scaled. `count` is an
@@ -38,8 +38,14 @@ compressor head `head(speed, flow)` from an authored table (generated at load as
 `reference_head * s^2 * (1 - f^2)` with `s` = rotor speed over `reference_rpm` and
 `f` = compressor flow over `max_mass_flow_kg_s`), charge pressure = ambient + head
 followed with a 25 ms lag, an isentropic outlet temperature with the intercooler's
-effectiveness, a PID wastegate on the post-cooler charge pressure, turbine power
-from the exhaust flow through the open fraction of the wastegate, and a rotor
+effectiveness, a PID wastegate on the post-cooler charge pressure, a wastegate
+port in parallel with the turbine (both see the same manifold pressure; the
+exhaust splits by effective area, turbine share `A_t / (A_t + A_wg * opening)`,
+manifold pressure `p_amb + m^2 / (2 rho (A_t + A_wg * opening)^2)` from the total
+exhaust flow `m`), turbine power from the turbine's share, compressor power
+bounded by the head the CURRENT rotor speed makes (`pr <= 1 + head(speed, flow) /
+p_amb`; the charge pressure lags the head by 25 ms, and a slowing wheel does not
+pay for stored charge), and a rotor
 energy balance (turbine power - compressor power - shaft loss) clamped at 2.25 x
 the energy at `reference_rpm`. The engine's throttle is fed from the charge
 pressure/temperature and its exhaust back-pressure is the turbine inlet pressure.
@@ -60,7 +66,8 @@ The exhaust gas temperature comes from the engine's own energy balance (see
 | `max_mass_flow_kg_s` | number | yes | > 0; x `count` | compressor flow that closes the head curve to zero (normalising flow) |
 | `compressor_efficiency` | number | yes | > 0, <= 1 | isentropic; sets the outlet temperature table and the compressor power |
 | `turbine_efficiency` | number | yes | > 0, <= 1 | turbine power factor |
-| `turbine_area_m2` | number | yes | > 0; x `count` | effective turbine throat; sets the exhaust back-pressure `dp = m_turbine^2 / (2 rho A^2)` |
+| `turbine_area_m2` | number | yes | > 0; x `count` | effective turbine throat; with the wastegate shut it sets the exhaust back-pressure `dp = m^2 / (2 rho A_t^2)` |
+| `wastegate_area_m2` | number | no | > 0; x `count` | effective (Cd x geometric) wastegate port area of ONE turbo, in parallel with the turbine. Absent = 2.4 x `turbine_area_m2` [AS] (the hyper ratio below). Too small an area cannot hold the boost target at high exhaust flow (boost creep: the gate saturates open and the rotor runs to its cap) |
 | `shaft_loss_w_at_reference` | number | yes | > 0; x `count` | bearing/friction power at `reference_rpm`, scales with speed^2 |
 
 A missing key throws `"<path>: '<key>' is required"`, a non-number
@@ -342,18 +349,33 @@ Known limits (measured, I7d D5, `tests/unit/test_turbo_anti_lag.cpp`):
   anti-lag acts (a car keeps pulling), at 59.6 % of WOT air and 36.3 g/s of fuel.
 - Rally ALS with the extension (`tests/unit/test_turbo_als_cut.cpp` AC6, hyper V8,
   6000 rpm, test fixture: spark -40, floor 0.17, cut 0.4, lambda 0.85, burn 1.0,
-  boost target 1.0; mean over +0.25..+1 s after the lift): air 18.4 % of WOT
-  (0.150 vs 0.814 kg/s), fuel 12.39 g/s = 18.1 % of WOT (68.53 g/s), crank torque
-  -54 N*m, boost -0.46 bar, manifold burn 182 kW, port 2280 K, turbine inlet
-  1489 K, rotor 51.7k / 59.8k / 70.0k rpm at +0.25 / +0.5 / +1 s (D5 fixture
-  54.7k / 55.6k / 57.2k; no anti-lag 0 - the fuel-cut coast stops the [AS] rotor,
-  see `exhaust_thermal`). Without a boost target the wastegate PID follows the
+  boost target 1.0; mean over +0.25..+1 s after the lift; parallel wastegate
+  port, 2e-5 rotor): air 14.8 % of WOT (0.121 vs 0.819 kg/s), fuel 10.03 g/s =
+  14.5 % of WOT (69.10 g/s), crank torque -64 N*m, boost -0.55 bar, manifold burn
+  147 kW, port 2279 K, turbine inlet 1383 K, rotor 60.9k / 37.4k / 58.4k rpm at
+  +0.25 / +0.5 / +1 s (the boost-target PID overshoots at the lift - rotor 174k at
+  +80 ms - and the small rotor dips while the gate reopens; D5 fixture 62.0k /
+  54.9k / 57.5k; no anti-lag 23.1k / 19.8k / 14.6k). Without a boost target the wastegate PID follows the
   plate: floors 0.12-0.15 give 5-7 % of WOT air and 3.6-8.6k rpm at +1 s, floor
   0.20 11-12 % and 15-19k (spark -35..-45, cut 0-0.5); a plate below 0.10 commands
   the wastegate open. The boost target (wastegate held shut) is what keeps the
   rotor up at realistic airflow. The air
   share is steep in the floor near 0.16-0.18 (12-21 %) because the held boost
   raises the manifold pressure.
+
+Known limits of the wastegate split (review fix, `tests/unit/test_turbo_wastegate_split.cpp`):
+- The steady idle rotor speed is only ~10 rpm whatever the inertia (60 s held idle
+  after a lift). At idle flow (~0.01 kg/s, gate commanded open below 10 % plate) the
+  mean-value orifice turbine sees a few Pa of pressure drop, i.e. milliwatts, and
+  the equilibrium sits against the compressor power in the head table's lowest
+  speed cell (bilinear, so head is linear in speed below 1/40 of `reference_rpm`).
+  Real turbos idle much faster on exhaust pulse energy, which a mean-value turbine
+  does not carry. A coasting rotor stays far above that until its stored energy is
+  spent (see the rotor inertia in the hardware file).
+- The compressor-power bound (`pr <= 1 + head(current speed) / p_amb`) decides the
+  lift with the 2e-5 rotor: without it the rotor is at 0 rpm 0.25 s after a WOT
+  lift at 6000 rpm (with it 23.1k); with a 1e-4 or 2.3e-4 rotor it moves the lift
+  by < 0.3 %.
 
 ## Derived-map cache
 

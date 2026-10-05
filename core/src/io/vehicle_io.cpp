@@ -2356,6 +2356,9 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
     t.compressor_efficiency=require_positive(hw,"compressor_efficiency",hw_path);
     t.turbine_efficiency=require_positive(hw,"turbine_efficiency",hw_path);
     t.turbine_area_m2=require_positive(hw,"turbine_area_m2",hw_path)*count;
+    // Optional effective wastegate port area per turbo (absent = the desc's [AS] ratio to the
+    // turbine area). Feeds no map: outside the cache key.
+    if(hw.contains("wastegate_area_m2")) t.wastegate_area_m2=require_positive(hw,"wastegate_area_m2",hw_path)*count;
     t.shaft_loss_w_at_reference=require_positive(hw,"shaft_loss_w_at_reference",hw_path)*count;
     // I7d D3: optional surge line of the hardware file (flag only; feeds no map and
     // no dynamics, so it is outside the cache key and the state hash).

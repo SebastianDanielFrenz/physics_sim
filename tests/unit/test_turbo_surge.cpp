@@ -211,7 +211,11 @@ TEST_CASE("D3: lift-off surge with and without the blow-off valve (pair level)",
     CHECK(fx_valve.surge_s < 0.1);
     CHECK(sens.surge_s < 0.03);
     CHECK(none.events == 1);
-    CHECK(fx_valve.events == 1);
+    // The 0.9 bar valve run re-enters once (edges 1440 1486 1600 1609) since the compressor power is bounded by
+    // the head of the current rotor speed (test_turbo_wastegate_split.cpp): the wheel keeps more speed through the
+    // lift, the vent flow decays while the valve closes and dips under the line for 9 steps. Was 1 entry
+    // (0.046 s) before that fix; now 0.057 s in two entries, still far below the no-valve 0.9 s.
+    CHECK(fx_valve.events == 2);
     CHECK(sens.events == 1);
     CHECK(none.edges.at(0) == 1440); // the lift entry is immediate: flow drops from 0.75 to 0.033 in one step
     CHECK(none.active_at_lift_end == false);

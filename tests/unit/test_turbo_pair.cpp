@@ -101,8 +101,13 @@ TEST_CASE("Guard: a pair without I7d blocks is bit-identical to master 976e8d7",
     // temperature and computes the turbine from the post-wall gas temperature; the engine hands it the port
     // temperature of its own energy balance. Was pair 0x42be4848b80f27d5 / engine 0x90b9167102a14c12 (e38b56c);
     // the engine hash before that, on b486223, 0xc5a3c62d9ce14ffa (compressor-flow fix).
-    CHECK(ph == 0xeb6a5f7cc032271fULL);
-    CHECK(eh == 0xd8b9c8a08566580cULL);
+    // Re-recorded again for the review fix (test_turbo_wastegate_split.cpp): the wastegate is a port in
+    // parallel with the turbine (flow split by effective area, default 2.4 x the throat) instead of a
+    // 100 % bypass at full opening, and the compressor power is bounded by the head of the current rotor
+    // speed; the engine hash also folds the wastegate area. Was pair 0xeb6a5f7cc032271f / engine
+    // 0xd8b9c8a08566580c (9fd087c).
+    CHECK(ph == 0xe7d5137fd1bbb44dULL);
+    CHECK(eh == 0x721d080fecaad8b0ULL);
 }
 
 TEST_CASE("Guard scripts exercise the turbo: spool, lift-off, re-apply", "[turbo][drivetrain][guard]") {

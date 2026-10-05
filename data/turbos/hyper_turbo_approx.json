@@ -1,7 +1,8 @@
 {
   "format": "physics_sim.turbo/1",
   "name": "hyper_turbo_approx",
-  "source": "[AS] Per-turbo approximation, not a measured Koenigsegg map. 2026-10-03: effective turbine throat 500 mm2 enables steady 3000 rpm boost; reference head 4.5 bar, compressor/turbine efficiency 0.80. Smaller throat trades low-speed boost for higher high-speed exhaust pressure. Inertia, flow limit, reference speed and loss unchanged.",
+  "source": "[AS] Per-turbo approximation, not a measured Koenigsegg map. 2026-10-03: effective turbine throat 500 mm2 enables steady 3000 rpm boost; reference head 4.5 bar, compressor/turbine efficiency 0.80. Smaller throat trades low-speed boost for higher high-speed exhaust pressure. Inertia, flow limit, reference speed and loss unchanged. 2026-10-05 wastegate_area_m2 (effective, per turbo, in parallel with the turbine): one 50 mm poppet valve per turbo - the size an external-wastegate sizing guide gives for a V8 or a turbine housing small for the engine (nzperformance.co.nz 'External wastegate size guide', read 2026-10-05: 45 mm default for 2-3 L singles, 50-60 mm for V8s/small housings) - geometric 1963 mm2 x Cd 0.6 [AS] = 1178 mm2 (2.36 x the throat). Checked: holds 1.8 bar to 8000 rpm with the steady gate at most 0.71 open; 1.5 x the throat could not (boost creep above ~6500 rpm).",
+  "wastegate_area_m2": 0.00118,
   "rotor_inertia_kgm2": 2e-05,
   "reference_rpm": 120000,
   "max_mass_flow_kg_s": 0.6,
