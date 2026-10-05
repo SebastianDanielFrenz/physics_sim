@@ -281,7 +281,7 @@ TEST_CASE("Scenario environment block: rejections", "[environment][io]") {
     CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": { \"preset\": \"does/not/exist.json\" } }", "wp"), ContainsSubstring("exist.json"));
     // W5 lifted the surface_conditions reservation (its rejections: test_environment_surface_world.cpp).
     CHECK_THAT(load_msg("{ " + kClimate + ", \"surface_conditions\": \"x\" }", "sc"), ContainsSubstring("surface_table_path"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"default_tyre_profile\": \"x\" }", "tp"), ContainsSubstring("not supported yet"));
+    CHECK_THAT(load_msg("{ " + kClimate + ", \"default_tyre_profile\": \"x\" }", "tp"), ContainsSubstring("needs the environment's \"surface_conditions\" key"));
     CHECK_THAT(load_msg("{ \"seed\": 1 }", "noclimate"), ContainsSubstring("missing required string \"climate\""));
     CHECK_THAT(load_msg("{ \"climate\": \"does/not/exist.json\" }", "nofile"), ContainsSubstring("exist.json"));
     CHECK_THAT(load_msg("{ " + kClimate + ", \"time\": { \"scale\": -1 } }", "neg"), ContainsSubstring("time_scale"));

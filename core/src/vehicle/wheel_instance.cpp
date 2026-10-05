@@ -264,11 +264,12 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
 
         real lambda_mu = in.surfaces ? in.surfaces->lambda_mu_for(contact_surface_) : real(1.0);
         // W6: the surface condition scales the class's dry lambda_mu by the
-        // grip factor at the contact speed (plan 5.2; the factor is relative to
+        // grip factor at the total contact-patch speed (plan 5.2; the factor is relative to
         // the class dry level). Without an environment/grip this is a no-op, so
         // a World without surface conditions stays bit-identical.
         if (in.grip != nullptr && contact_surface_ != kInvalidSurfaceId)
-            lambda_mu *= in.grip->factor(static_cast<int>(contact_surface_), vx_mag);
+            lambda_mu *= in.grip->factor(static_cast<int>(contact_surface_),
+                                       std::sqrt(vx_contact * vx_contact + vy_contact * vy_contact));
         const real crr_surface = in.surfaces ? in.surfaces->crr_for(contact_surface_) : real(0.0);
 
         TyreSlipInput slip_in;

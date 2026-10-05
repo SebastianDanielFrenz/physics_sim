@@ -886,22 +886,30 @@ TEST_CASE("Surface conditions loader: the shipped file and rejections", "[enviro
 // ================================================================== W6
 //
 // Validation cases (weather plan 13, W6 row):
-//  G1 sealed steady water film vs the Gallaway model, 1e-9 (plan 4.4).
-//  G2 drying: the evaporated mass equals the integrated flux, 1e-9, and a
-//     plausible drying time (plan 4.4).
-//  G7 the condition grip layer: wet weight, the PIARC speed table, static and
-//     out-of-range fallbacks (plan 5.2) - an extra case, the brief's G4 is the
-//     no-environment bit identity (the existing determinism pin test).
-//  G5 the tyre profile loader: the shipped profiles and rejections (plan 7.5).
-//  (G3 braking and G6 allocation are in test_environment_surface_world.cpp.)
+//  G1  a sealed steady film equals the Gallaway WFD above the texture to 1e-9 for 5 intensities (an independent
+//      std::pow evaluation of the formula, a literal pin, the clamp at 0), tau = WFD / R is frozen after the rain;
+//      G1b water below the texture storage never drains, the frozen film runs off to the storage and stops there.
+//  G2  drying: the flux equals an independent hand evaluation (1e-12), each step removes exactly flux*dt (1e-9),
+//      the 0.4 mm film dries in a plausible time; dew: sign, cap, freezing.
+//  G8  the latent heat L_v E enters the surface balance: the production step equals a dense reference whose
+//      latent term comes from the independent flux, and the column energy closes with it.
+//  G9  soil/turf: interception, infiltration limit, ponding, gravity drain against a hand step; evaporation order
+//      (film, canopy, soil), dew on the leaves, mass closure.
+//  G7  the condition grip layer: wet weight, PIARC speed table, soil flat in speed, ponded ramp, fallbacks.
+//  G5  the tyre profile loader: the shipped profiles and rejections.
+//  (G3 braking and G6 allocation, 1 vs 10 workers: test_environment_surface_world.cpp; G4 no-environment bit
+//   identity: the existing determinism pin tests.)
 //
 // RECORDED SABOTAGES (performed by hand, reverted, 2026-10-05):
-//  - W6-G1 (constant drainage tau instead of the Gallaway tau): G1 failed, ...
-//  - W6-G2 (no availability limit in surface_vapour_flux_kg_m2_s): G2 failed, ...
-//  - W6-G7 (the speed table not built, every table entry = friction.wet): G7 failed, ...
-//  - W6-G5 (reserve_block_or_null accepting an object): G5 failed, ...
-//  - W6-G3 (ConditionGrip::factor ignoring the wet weight, always dry): G3 failed, ...
-//  - W6-G6 (a heap vector inside ConditionGrip::update_state): G6 failed, ...
+//  - W6-G1 : ...
+//  - W6-G1b: ...
+//  - W6-G2 : ...
+//  - W6-G8 : ...
+//  - W6-G9 : ...
+//  - W6-G7 : ...
+//  - W6-G5 : ...
+//  - W6-G3 : ...
+//  - W6-G6 : ...
 
 namespace {
 
@@ -918,6 +926,79 @@ int class_index(const ConditionGrid& g, const char* name) {
     return -1;
 }
 
+// Independent evaluations (std::pow / std::exp, constants typed again) of the formulas under test.
+real gallaway_ref(real mtd, real path, real rain, real slope) {
+    const real w = 0.01485 * std::pow(mtd, 0.11) * std::pow(path, 0.43) * std::pow(rain, 0.59) / std::pow(slope, 0.42) - mtd;
+    return w > 0.0 ? w : 0.0;
+}
+real esat_ref_hpa(real tc) { return 6.1094 * std::exp(17.625 * tc / (tc + 243.04)); }
+real rho_v_ref(real e_hpa, real t_k) { return e_hpa * 100.0 * 0.018016 / (8.314462618 * t_k); }
+// Dalton bulk flux via the Lewis analogy, kg/(m2 s) (positive evaporates).
+real flux_ref(real hc, real ts_k, real ta_k, real e_air_hpa) {
+    return hc / (1.2 * 1005.0) * (rho_v_ref(esat_ref_hpa(ts_k - 273.15), ts_k) - rho_v_ref(e_air_hpa, ta_k));
+}
+
+// Still air at a uniform temperature, no sun, no rain: no convection (h_c = 0 while T_s <= T_a), so no vapour exchange.
+SurfaceForcing quiet(real t_k) {
+    SurfaceForcing f;
+    f.air_temp_k = t_k;
+    f.bottom_temp_k = t_k;
+    f.wind_m_s = 0.0;
+    f.vapour_pressure_hpa = 0.0;
+    f.cloud_cover = 0.0;
+    f.ghi_w_m2 = 0.0;
+    return f;
+}
+
+// The same discrete equations as step_column, assembled densely (the existing reference case does this inline for
+// the dry step); `q_latent` (W/m2 leaving the surface) is an INPUT here, computed by the caller independently.
+std::vector<real> dense_step(const ColumnModel& col, const SurfaceClassState& s, const SurfaceForcing& f, real dt,
+                             real q_latent) {
+    const int m = col.nodes - 1;
+    std::vector<std::vector<real>> a(static_cast<std::size_t>(m), std::vector<real>(static_cast<std::size_t>(m + 1), 0.0));
+    const real t0 = s.temp_k[0];
+    const real eps = col.emissivity;
+    const real hc = convection_coefficient_w_m2k(t0, f.air_temp_k, f.wind_m_s);
+    const real lsky = sky_emissivity(f.vapour_pressure_hpa, f.cloud_cover) * kStefanBoltzmann * std::pow(f.air_temp_k, 4.0);
+    for (int i = 0; i < m; ++i) {
+        auto& row = a[static_cast<std::size_t>(i)];
+        const real cap = col.cap_j_m2k[static_cast<std::size_t>(i)] / dt;
+        row[static_cast<std::size_t>(i)] = cap;
+        row[static_cast<std::size_t>(m)] = cap * s.temp_k[static_cast<std::size_t>(i)];
+        if (i > 0) {
+            const real k = col.cond_w_m2k[static_cast<std::size_t>(i - 1)];
+            row[static_cast<std::size_t>(i)] += k;
+            row[static_cast<std::size_t>(i - 1)] -= k;
+        }
+        const real k = col.cond_w_m2k[static_cast<std::size_t>(i)];
+        row[static_cast<std::size_t>(i)] += k;
+        if (i + 1 < m) row[static_cast<std::size_t>(i + 1)] -= k;
+        else row[static_cast<std::size_t>(m)] += k * f.bottom_temp_k;
+        if (i == 0) {
+            row[0] += 4.0 * eps * kStefanBoltzmann * t0 * t0 * t0 + hc;
+            row[static_cast<std::size_t>(m)] += (1.0 - col.albedo) * f.ghi_w_m2 + eps * lsky +
+                                                3.0 * eps * kStefanBoltzmann * std::pow(t0, 4.0) + hc * f.air_temp_k - q_latent;
+        }
+    }
+    for (int c = 0; c < m; ++c) {
+        int p = c;
+        for (int r = c + 1; r < m; ++r)
+            if (std::fabs(a[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)]) > std::fabs(a[static_cast<std::size_t>(p)][static_cast<std::size_t>(c)])) p = r;
+        std::swap(a[static_cast<std::size_t>(c)], a[static_cast<std::size_t>(p)]);
+        for (int r = c + 1; r < m; ++r) {
+            const real q = a[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] / a[static_cast<std::size_t>(c)][static_cast<std::size_t>(c)];
+            for (int k = c; k <= m; ++k) a[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)] -= q * a[static_cast<std::size_t>(c)][static_cast<std::size_t>(k)];
+        }
+    }
+    std::vector<real> x(static_cast<std::size_t>(m), 0.0);
+    for (int r = m - 1; r >= 0; --r) {
+        real v = a[static_cast<std::size_t>(r)][static_cast<std::size_t>(m)];
+        for (int k = r + 1; k < m; ++k) v -= a[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)] * x[static_cast<std::size_t>(k)];
+        x[static_cast<std::size_t>(r)] = v / a[static_cast<std::size_t>(r)][static_cast<std::size_t>(r)];
+    }
+    return x;
+}
+
 } // namespace
 
 TEST_CASE("W6-G1: a sealed steady film equals the Gallaway WFD above the texture (1e-9)",
@@ -925,38 +1006,93 @@ TEST_CASE("W6-G1: a sealed steady film equals the Gallaway WFD above the texture
     const SurfaceClassDesc asphalt = find_class(default_conditions(), "asphalt");
     const ColumnModel col = build_column(asphalt);
     REQUIRE(col.kind == SurfaceKind::Sealed);
-    SurfaceClassState s;
-    initial_column_state(col, InitialProfile{300.0, 300.0}, s);
 
-    SurfaceForcing f;
-    f.air_temp_k = 300.0;
-    f.bottom_temp_k = 300.0;
-    f.wind_m_s = 0.0;             // h_c = 0: no evaporation, the water part is isolated
-    f.vapour_pressure_hpa = 0.0;
-    f.cloud_cover = 0.0;
-    f.ghi_w_m2 = 0.0;
-    const real R = 50.0;          // steady rain
-    f.precip_mm_h = R;
-    const real dt = 60.0;
-    for (int n = 0; n < 200; ++n) step_column(col, f, dt, s, s);
+    // The formula itself: an independent std::pow evaluation, and one literal value (asphalt in default.json,
+    // MTD 0.8 mm, L 7.3 m, S 0.025, I 50 mm/h: 0.01485 * 0.976 * 2.351 * 10.05 / 0.2124 - 0.8 = 0.8127 mm [M]).
+    for (const real rain : {0.1, 1.0, 5.0, 20.0, 50.0, 100.0, 150.0}) {
+        const real ref = gallaway_ref(col.mtd_mm, col.drainage_path_m, rain, col.drainage_slope_m_m);
+        INFO("rain " << rain << " mm/h");
+        CHECK_THAT(gallaway_wfd_mm(col.mtd_mm, col.drainage_path_m, rain, col.drainage_slope_m_m), WithinAbs(ref, 1e-12));
+    }
+    CHECK_THAT(gallaway_wfd_mm(0.8, 7.3, 50.0, 0.025), WithinAbs(0.8127, 1e-4));
+    CHECK(gallaway_wfd_mm(0.8, 7.3, 5.0, 0.025) == 0.0);    // the texture absorbs a light rain: clamped at 0
+    CHECK(gallaway_wfd_mm(0.8, 7.3, 0.0, 0.025) == 0.0);
 
-    const real wfd = gallaway_wfd_mm(col.mtd_mm, col.drainage_path_m, R, col.drainage_slope_m_m);
-    const real steady = col.w_tex_mm + wfd;
-    INFO("W " << s.water_mm << " steady " << steady << " w_tex " << col.w_tex_mm << " wfd " << wfd);
-    REQUIRE(wfd > 0.0);
-    CHECK_THAT(s.water_mm, WithinAbs(steady, 1e-9));
-    // The drainage time constant is the frozen Gallaway tau = WFD / R.
-    CHECK_THAT(s.drain_tau_s, WithinRel(wfd / (R / 3600.0), 1e-12));
+    // The steady state of the dynamic model: W - W_tex == WFD, tau frozen at WFD / R. 150 mm/h exceeds the
+    // plan's >= 100 mm/h intensity cap [AS], the film formula holds there too.
+    for (const real rain : {5.0, 20.0, 50.0, 100.0, 150.0}) {
+        SurfaceClassState s;
+        initial_column_state(col, InitialProfile{300.0, 300.0}, s);
+        SurfaceForcing f = quiet(300.0);
+        f.precip_mm_h = rain;
+        for (int n = 0; n < 300; ++n) step_column(col, f, 60.0, s, s);
+        const real wfd = gallaway_ref(col.mtd_mm, col.drainage_path_m, rain, col.drainage_slope_m_m);
+        INFO("rain " << rain << " mm/h: W " << s.water_mm << " steady " << (col.w_tex_mm + wfd) << " w_tex " << col.w_tex_mm
+                     << " wfd " << wfd << " tau " << s.drain_tau_s);
+        CHECK_THAT(s.water_mm, WithinAbs(col.w_tex_mm + wfd, 1e-9));
+        CHECK_THAT(s.drain_tau_s, WithinAbs(wfd > 0.0 ? wfd / (rain / 3600.0) : 0.0, 1e-9));
+    }
 }
 
-TEST_CASE("W6-G2: drying removes exactly the integrated evaporation flux (1e-9)",
+TEST_CASE("W6-G1b: water below the texture storage never drains; the frozen film runs off to the storage",
           "[environment][surface][water]") {
     const SurfaceClassDesc asphalt = find_class(default_conditions(), "asphalt");
     const ColumnModel col = build_column(asphalt);
-    SurfaceClassState s;
-    initial_column_state(col, InitialProfile{300.0, 295.0}, s);
-    s.water_mm = col.w_tex_mm;    // a film exactly at the texture storage (no free water to drain)
+    const real dt = 60.0;
 
+    // (a) a light rain (WFD 0) fills the texture mass-exactly and then holds it: W = min(k * input, W_tex).
+    {
+        SurfaceClassState s;
+        initial_column_state(col, InitialProfile{300.0, 300.0}, s);
+        SurfaceForcing f = quiet(300.0);
+        f.precip_mm_h = 10.0;
+        const real input = 10.0 / 3600.0 * dt;
+        for (int k = 1; k <= 6; ++k) {
+            step_column(col, f, dt, s, s);
+            INFO("step " << k);
+            CHECK_THAT(s.water_mm, WithinAbs(std::min(k * input, col.w_tex_mm), 1e-12));
+        }
+    }
+    // (b) a frozen tau from an earlier heavy rain does NOT pull water up from below the storage (a drainage
+    // term that relaxes toward W_tex from both sides would create water).
+    {
+        SurfaceClassState s;
+        initial_column_state(col, InitialProfile{300.0, 300.0}, s);
+        s.water_mm = 0.1;
+        s.drain_tau_s = 58.5;
+        const SurfaceForcing f = quiet(300.0);
+        for (int k = 0; k < 10; ++k) step_column(col, f, dt, s, s);
+        CHECK(s.water_mm == 0.1);
+    }
+    // (c) after a heavy rain stops, the film runs off monotonically to exactly W_tex and stops; tau stays frozen.
+    {
+        SurfaceClassState s;
+        initial_column_state(col, InitialProfile{300.0, 300.0}, s);
+        SurfaceForcing f = quiet(300.0);
+        f.precip_mm_h = 50.0;
+        for (int n = 0; n < 60; ++n) step_column(col, f, dt, s, s);
+        const real tau = s.drain_tau_s;
+        REQUIRE(tau > 0.0);
+        f.precip_mm_h = 0.0;
+        real prev = s.water_mm;
+        for (int n = 0; n < 60; ++n) {
+            step_column(col, f, dt, s, s);
+            CHECK(s.water_mm <= prev);
+            CHECK(s.water_mm >= col.w_tex_mm);
+            prev = s.water_mm;
+        }
+        CHECK_THAT(s.water_mm, WithinAbs(col.w_tex_mm, 1e-9));
+        CHECK(s.drain_tau_s == tau);
+    }
+}
+
+TEST_CASE("W6-G2: the evaporation flux, drying time and dew (Dalton/Lewis, mass closure 1e-9)",
+          "[environment][surface][water]") {
+    const SurfaceClassDesc asphalt = find_class(default_conditions(), "asphalt");
+    const ColumnModel col = build_column(asphalt);
+    const real dt = 60.0;
+
+    // (a) the flux against an independent hand evaluation: surface 300 K, air 300 K, 5 m/s, 5 hPa.
     SurfaceForcing f;
     f.air_temp_k = 300.0;
     f.bottom_temp_k = 295.0;
@@ -964,27 +1100,230 @@ TEST_CASE("W6-G2: drying removes exactly the integrated evaporation flux (1e-9)"
     f.vapour_pressure_hpa = 5.0;
     f.cloud_cover = 0.0;
     f.ghi_w_m2 = 600.0;
-    f.precip_mm_h = 0.0;
+    SurfaceClassState wet;
+    initial_column_state(col, InitialProfile{300.0, 295.0}, wet);
+    wet.water_mm = col.w_tex_mm;
+    const real hc = convection_coefficient_w_m2k(300.0, 300.0, 5.0);
+    const real expected = flux_ref(hc, 300.0, 300.0, 5.0);
+    INFO("h_c " << hc << " W/m2K, flux " << expected << " kg/(m2 s) = " << expected * 3600.0 << " mm/h");
+    CHECK_THAT(surface_vapour_flux_kg_m2_s(col, f, wet, dt), WithinRel(expected, 1e-12));
 
-    const real dt = 60.0;
-    real removed = 0.0;
-    int steps = 0;
-    while (s.water_mm > 0.0 && steps < 600) {
-        const real flux = surface_vapour_flux_kg_m2_s(col, f, s, dt);
-        REQUIRE(flux > 0.0);
-        removed += flux * dt;
+    // (b) availability: 1e-4 mm of water cannot supply the potential flux; the step takes exactly all of it.
+    {
+        SurfaceClassState s = wet;
+        s.water_mm = 1e-4;
+        CHECK_THAT(surface_vapour_flux_kg_m2_s(col, f, s, dt), WithinRel(1e-4 / dt, 1e-12));
         step_column(col, f, dt, s, s);
-        ++steps;
+        CHECK(s.water_mm == 0.0);
+        // Nothing left: no flux, no latent term (a dry road).
+        CHECK(surface_vapour_flux_kg_m2_s(col, f, s, dt) == 0.0);
     }
-    INFO("dry after " << steps << " steps (" << steps * dt / 60.0 << " min), removed " << removed << " mm, W "
-                      << s.water_mm);
-    CHECK(s.water_mm < 1e-9);
-    CHECK_THAT(col.w_tex_mm - removed, WithinAbs(0.0, 1e-9));
-    CHECK(steps >= 5);
-    CHECK(steps <= 120);          // <= 2 h for a 0.4 mm film
+
+    // (c) drying run: every step removes exactly flux*dt (1e-9), the film is gone in a plausible time.
+    // Plausibility [D]: the energy-limited potential evaporation of a wet surface under 600 W/m2 is
+    // (Rn + h_c (T_a - T_s)) / L_v ~ 0.4-1 mm/h, so a 0.4 mm film dries in about 25-60 min in summer sun; a
+    // humid, overcast hour (100 W/m2, 14 hPa) is several times slower - bounds [10 min, 3 h] / [30 min, 12 h].
+    const auto drying_minutes = [&](real ghi, real vapour_hpa, real* removed_out) {
+        SurfaceForcing g = f;
+        g.ghi_w_m2 = ghi;
+        g.vapour_pressure_hpa = vapour_hpa;
+        SurfaceClassState s = wet;
+        real removed = 0.0;
+        int steps = 0;
+        while (s.water_mm > 0.0 && steps < 1000) {
+            const real flux = surface_vapour_flux_kg_m2_s(col, g, s, dt);
+            const real before = s.water_mm;
+            step_column(col, g, dt, s, s);
+            CHECK_THAT(before - s.water_mm, WithinAbs(flux * dt, 1e-9));
+            removed += flux * dt;
+            ++steps;
+        }
+        *removed_out = removed;
+        return steps * dt / 60.0;
+    };
+    real removed_sun = 0.0, removed_dull = 0.0;
+    const real t_sun = drying_minutes(600.0, 5.0, &removed_sun);
+    const real t_dull = drying_minutes(100.0, 14.0, &removed_dull);
+    INFO("sunny/dry air: " << t_sun << " min, overcast/humid: " << t_dull << " min");
+    CHECK_THAT(removed_sun, WithinAbs(col.w_tex_mm, 1e-9));
+    CHECK_THAT(removed_dull, WithinAbs(col.w_tex_mm, 1e-9));
+    CHECK(t_sun >= 10.0);
+    CHECK(t_sun <= 180.0);
+    CHECK(t_dull >= 30.0);
+    CHECK(t_dull <= 720.0);
+    CHECK(t_dull > 1.5 * t_sun);    // drier air and more sun dry faster
+
+    // (d) dew: a surface colder than the air's dew point gains water at exactly the flux; capped at 1e-4 kg/(m2 s);
+    // none below 0 degC (frost is W8).
+    {
+        SurfaceForcing g = f;
+        g.air_temp_k = 290.0;
+        g.wind_m_s = 2.0;
+        g.vapour_pressure_hpa = 15.0;
+        g.ghi_w_m2 = 0.0;
+        SurfaceClassState s;
+        initial_column_state(col, InitialProfile{285.0, 285.0}, s);   // dew point of 15 hPa is ~13 C = 286 K
+        const real hc_dew = convection_coefficient_w_m2k(285.0, 290.0, 2.0);
+        const real flux = flux_ref(hc_dew, 285.0, 290.0, 15.0);
+        REQUIRE(flux < 0.0);
+        REQUIRE(-flux < 1.0e-4);
+        CHECK_THAT(surface_vapour_flux_kg_m2_s(col, g, s, dt), WithinRel(flux, 1e-12));
+        const real before = s.water_mm;
+        step_column(col, g, dt, s, s);
+        CHECK_THAT(s.water_mm - before, WithinAbs(-flux * dt, 1e-12));
+
+        // The cap: a much colder surface in a strong wind.
+        SurfaceForcing h = g;
+        h.wind_m_s = 15.0;
+        SurfaceClassState c;
+        initial_column_state(col, InitialProfile{275.0, 275.0}, c);
+        const real hc_cap = convection_coefficient_w_m2k(275.0, 290.0, 15.0);
+        REQUIRE(-flux_ref(hc_cap, 275.0, 290.0, 15.0) > 1.0e-4);
+        CHECK_THAT(surface_vapour_flux_kg_m2_s(col, h, c, dt), WithinRel(-1.0e-4, 1e-12));
+
+        // Below freezing: no liquid dew.
+        SurfaceClassState z;
+        initial_column_state(col, InitialProfile{270.0, 270.0}, z);
+        CHECK(surface_vapour_flux_kg_m2_s(col, h, z, dt) == 0.0);
+    }
 }
 
-TEST_CASE("W6-G7: the condition grip wet weight, speed table and fallbacks (plan 5.2)",
+TEST_CASE("W6-G8: the latent heat L_v E leaves the surface node (dense reference and column energy closure)",
+          "[environment][surface][water]") {
+    const SurfaceClassDesc asphalt = find_class(default_conditions(), "asphalt");
+    const ColumnModel col = build_column(asphalt);
+    const real dt = 60.0;
+    SurfaceClassState s;
+    initial_column_state(col, InitialProfile{310.0, 290.0}, s);
+    for (int i = 0; i < col.nodes - 1; ++i) s.temp_k[static_cast<std::size_t>(i)] += 2.0 * std::sin(0.9 * i);
+    s.water_mm = col.w_tex_mm;
+    SurfaceForcing f;
+    f.ghi_w_m2 = 700.0;
+    f.air_temp_k = 301.0;
+    f.wind_m_s = 3.0;
+    f.vapour_pressure_hpa = 8.0;
+    f.cloud_cover = 0.1;
+    f.bottom_temp_k = 291.0;
+
+    const real t0 = s.temp_k[0];
+    const real hc = convection_coefficient_w_m2k(t0, f.air_temp_k, f.wind_m_s);
+    const real flux = flux_ref(hc, t0, f.air_temp_k, f.vapour_pressure_hpa);
+    REQUIRE(flux > 0.0);
+    REQUIRE(flux * dt < s.water_mm);            // not availability-limited: the pure Dalton flux acts
+    const real l_v = 2.501e6 - 2370.0 * (t0 - 273.15);
+    const real q_latent = l_v * flux;
+    INFO("flux " << flux * 3600.0 << " mm/h, latent " << q_latent << " W/m2");
+
+    SurfaceClassState out;
+    step_column(col, f, dt, s, out);
+    const std::vector<real> ref = dense_step(col, s, f, dt, q_latent);
+    for (int i = 0; i < col.nodes - 1; ++i) {
+        INFO("node " << i);
+        CHECK_THAT(out.temp_k[static_cast<std::size_t>(i)], WithinAbs(ref[static_cast<std::size_t>(i)], 1e-9));
+    }
+    // Without the latent term the surface would be warmer by roughly q_latent / (the surface conductance).
+    const std::vector<real> no_latent = dense_step(col, s, f, dt, 0.0);
+    CHECK(no_latent[0] - out.temp_k[0] > 1.0);
+
+    // Energy closure: d(column heat) = dt (q_top - L_v E + q_bottom).
+    const int m = col.nodes - 1;
+    const real eps = col.emissivity;
+    const real lsky = sky_emissivity(f.vapour_pressure_hpa, f.cloud_cover) * kStefanBoltzmann * std::pow(f.air_temp_k, 4.0);
+    real de = 0.0;
+    for (int i = 0; i < m; ++i)
+        de += col.cap_j_m2k[static_cast<std::size_t>(i)] * (out.temp_k[static_cast<std::size_t>(i)] - s.temp_k[static_cast<std::size_t>(i)]);
+    const real tn = out.temp_k[0];
+    const real q_top = (1.0 - col.albedo) * f.ghi_w_m2 + eps * lsky -
+                       eps * kStefanBoltzmann * (4.0 * t0 * t0 * t0 * tn - 3.0 * std::pow(t0, 4.0)) + hc * (f.air_temp_k - tn);
+    const real q_bot = col.cond_w_m2k[static_cast<std::size_t>(m - 1)] * (f.bottom_temp_k - out.temp_k[static_cast<std::size_t>(m - 1)]);
+    CHECK_THAT(de, WithinAbs(dt * (q_top - q_latent + q_bot), 1e-7 * dt * (std::fabs(q_top) + std::fabs(q_latent) + std::fabs(q_bot))));
+    // And the water that carried the latent heat away is exactly the evaporated mass.
+    CHECK_THAT(s.water_mm - out.water_mm, WithinAbs(flux * dt, 1e-12));
+}
+
+TEST_CASE("W6-G9: soil and turf - interception, infiltration limit, ponding, drain; evaporation order and mass closure",
+          "[environment][surface][water]") {
+    const SurfaceConditionsDesc d = default_conditions();
+    const ColumnModel grass = build_column(find_class(d, "grass"));
+    const ColumnModel dirt = build_column(find_class(d, "dirt"));
+    REQUIRE(grass.kind == SurfaceKind::Vegetated);
+    REQUIRE(dirt.kind == SurfaceKind::Soil);
+    const real dt = 60.0;
+    // Layer water per unit theta: 0.1 m = 100 mm [AS].
+    const real layer = grass.soil_top_depth_m * 1000.0;
+
+    // (a) one hand step: 60 mm/h on grass at field capacity (theta_fc 0.25, K_sat 15 mm/h, canopy 0.5 mm):
+    // 1 mm falls; the canopy takes 0.5; infiltration is capped at 15/3600*60 = 0.25 mm; 0.25 mm ponds; then the
+    // gravity drain of the 0.25/100 theta excess (tau 3 d) and the pond drain (tau 1 h) act once.
+    {
+        SurfaceClassState s;
+        initial_column_state(grass, InitialProfile{300.0, 300.0}, s);
+        REQUIRE(s.soil_moisture == grass.soil_theta_fc);
+        SurfaceForcing f = quiet(300.0);
+        f.precip_mm_h = 60.0;
+        step_column(grass, f, dt, s, s);
+        CHECK_THAT(s.canopy_water_mm, WithinAbs(0.5, 1e-12));
+        const real theta_expected = grass.soil_theta_fc + (0.25 / layer) / (1.0 + dt / (3.0 * 86400.0));
+        CHECK_THAT(s.soil_moisture, WithinAbs(theta_expected, 1e-12));
+        CHECK_THAT(s.water_mm, WithinAbs(0.25 / (1.0 + dt / 3600.0), 1e-12));
+    }
+    // (b) bare dirt has no canopy: the same rain infiltrates 0.25 mm and ponds 0.75 mm.
+    {
+        SurfaceClassState s;
+        initial_column_state(dirt, InitialProfile{300.0, 300.0}, s);
+        SurfaceForcing f = quiet(300.0);
+        f.precip_mm_h = 60.0;
+        const real cap = dirt.soil_ksat_mm_h / 3600.0 * dt;
+        step_column(dirt, f, dt, s, s);
+        CHECK(s.canopy_water_mm == 0.0);
+        CHECK_THAT(s.water_mm, WithinAbs((1.0 - cap) / (1.0 + dt / 3600.0), 1e-12));
+        CHECK_THAT(s.soil_moisture, WithinAbs(dirt.soil_theta_fc + (cap / layer) / (1.0 + dt / (3.0 * 86400.0)), 1e-12));
+    }
+    // (c) evaporation draws pond water, then the canopy, then the soil; the soil part is scaled by theta/theta_fc.
+    {
+        SurfaceForcing f;
+        f.air_temp_k = 300.0;
+        f.bottom_temp_k = 300.0;
+        f.wind_m_s = 5.0;
+        f.vapour_pressure_hpa = 5.0;
+        f.ghi_w_m2 = 600.0;
+        SurfaceClassState s;
+        initial_column_state(grass, InitialProfile{300.0, 300.0}, s);
+        s.water_mm = 1e-3;
+        s.canopy_water_mm = 2e-3;
+        s.soil_moisture = 0.20;           // theta/theta_fc = 0.8
+        const real e_pot = flux_ref(convection_coefficient_w_m2k(300.0, 300.0, 5.0), 300.0, 300.0, 5.0);
+        const VapourExchange ex = surface_vapour_exchange(grass, f, s, dt);
+        CHECK_THAT(ex.from_water, WithinAbs(1e-3 / dt, 1e-15));
+        CHECK_THAT(ex.from_canopy, WithinAbs(2e-3 / dt, 1e-15));
+        CHECK_THAT(ex.from_soil, WithinRel((e_pot - 3e-3 / dt) * 0.8, 1e-12));
+        CHECK(ex.dew == 0.0);
+        const real water0 = s.water_mm + s.canopy_water_mm + s.soil_moisture * layer;
+        step_column(grass, f, dt, s, s);
+        CHECK(s.water_mm == 0.0);
+        CHECK(s.canopy_water_mm == 0.0);
+        const real water1 = s.water_mm + s.canopy_water_mm + s.soil_moisture * layer;
+        // gravity drain does not act (theta below theta_fc): the stores lost exactly the net flux.
+        CHECK_THAT(water0 - water1, WithinAbs(ex.net() * dt, 1e-9));
+    }
+    // (d) dew wets the leaves first.
+    {
+        SurfaceForcing f;
+        f.air_temp_k = 290.0;
+        f.bottom_temp_k = 285.0;
+        f.wind_m_s = 2.0;
+        f.vapour_pressure_hpa = 15.0;
+        SurfaceClassState s;
+        initial_column_state(grass, InitialProfile{285.0, 285.0}, s);
+        const VapourExchange ex = surface_vapour_exchange(grass, f, s, dt);
+        REQUIRE(ex.dew > 0.0);
+        step_column(grass, f, dt, s, s);
+        CHECK_THAT(s.canopy_water_mm, WithinAbs(ex.dew * dt, 1e-12));
+        CHECK(s.water_mm == 0.0);
+    }
+}
+
+TEST_CASE("W6-G7: the condition grip wet weight, speed table, soil and fallbacks (plan 5.2)",
           "[environment][surface][grip]") {
     const SurfaceConditionsDesc d = default_conditions();
     ConditionGrid grid(d, {}, ConditionGridDesc{60.0, 3600.0, 86400.0});
@@ -995,50 +1334,91 @@ TEST_CASE("W6-G7: the condition grip wet weight, speed table and fallbacks (plan
 
     const int asphalt = class_index(grid, "asphalt");
     const int grass = class_index(grid, "grass");
+    const int dirt = class_index(grid, "dirt");
     const int low = class_index(grid, "low_mu");
     REQUIRE(asphalt >= 0);
     REQUIRE(grass >= 0);
+    REQUIRE(dirt >= 0);
     REQUIRE(low >= 0);
 
-    // Saturate the sealed asphalt film and the grass soil/canopy.
-    ConditionCheckpoint ck = grid.checkpoint();
-    for (int i = 0; i < grid.class_count(); ++i) {
-        if (grid.class_name(i) == "asphalt") {
-            ck.prev[i].water_mm = grid.column(i).w_tex_mm;
-            ck.next[i].water_mm = grid.column(i).w_tex_mm;
-        } else if (grid.class_name(i) == "grass") {
-            ck.prev[i].soil_moisture = grid.column(i).soil_theta_sat;
-            ck.next[i].soil_moisture = grid.column(i).soil_theta_sat;
-            ck.prev[i].canopy_water_mm = grid.column(i).canopy_capacity_mm;
-            ck.next[i].canopy_water_mm = grid.column(i).canopy_capacity_mm;
+    const auto force = [&](auto&& edit) {
+        ConditionCheckpoint ck = grid.checkpoint();
+        for (int i = 0; i < grid.class_count(); ++i) {
+            edit(ck.prev[static_cast<std::size_t>(i)], i);
+            edit(ck.next[static_cast<std::size_t>(i)], i);
         }
-    }
-    grid.restore(ck);
-
+        grid.restore(ck);
+    };
     ConditionGrip grip;
     grip.build_static(grid, TyreConditionFactors{});   // the reference summer profile (all 1.0)
-    grip.update_state(grid, 3600.0);
-    REQUIRE(grip.valid());
 
+    // Dry (the state after the spin-up on a dry forcing): identity everywhere.
+    grip.update_state(grid, 3600.0);
+    CHECK(grip.water_weight(asphalt) == 0.0);
+    CHECK(grip.factor(asphalt, 20.0) == 1.0);
+    CHECK(grip.factor(grass, 20.0) == 1.0);
+    CHECK(grip.factor(dirt, 20.0) == 1.0);
+
+    // Saturate the sealed film, the grass canopy and the dirt's ponding.
+    force([&](SurfaceClassState& st, int i) {
+        const ColumnModel& c = grid.column(i);
+        if (i == asphalt) st.water_mm = c.w_tex_mm;
+        if (i == grass) st.canopy_water_mm = c.canopy_capacity_mm;
+        if (i == dirt) st.water_mm = 5.0;
+    });
+    grip.update_state(grid, 3600.0);
     CHECK(grip.water_weight(asphalt) == 1.0);
+    CHECK(grip.water_weight(dirt) == 1.0);
     CHECK(grip.water_weight(low) == 0.0);
 
-    const real slow = grip.factor(asphalt, 0.0);
-    const real fast = grip.factor(asphalt, 55.6);
-    // Fully wet, low speed: the table is clamped to the class damp level.
-    CHECK_THAT(slow, WithinAbs(0.85, 1e-12));
-    CHECK(fast < slow);           // PIARC: grip falls with speed
-    // Vegetated: the canopy drives the wet_grass level (no speed table).
+    // Sealed: wet level 0.71 exp((v_ref - v)/Sp) with v_ref 60 km/h, Sp = 14.2 + 89.7 MTD(0.8) km/h [C PIARC 1995],
+    // clamped to the damp level 0.85; linear interpolation between the 33 table nodes.
+    const real sp = (14.2 + 89.7 * 0.8) / 3.6;
+    CHECK_THAT(grip.factor(asphalt, 0.0), WithinAbs(0.85, 1e-12));
+    const real v_node = 8.0 * ConditionGrip::kSpeedMaxMps / (ConditionGrip::kSpeedSamples - 1);
+    CHECK_THAT(grip.factor(asphalt, v_node), WithinRel(0.71 * std::exp((60.0 / 3.6 - v_node) / sp), 1e-12));
+    CHECK_THAT(grip.factor(asphalt, 60.0 / 3.6), WithinRel(0.71, 1e-3));      // between nodes: interpolation error ~7e-4
+    CHECK_THAT(grip.factor(asphalt, 30.0), WithinRel(0.71 * std::exp((60.0 / 3.6 - 30.0) / sp), 2e-3));
+    CHECK(grip.factor(asphalt, 55.6) < grip.factor(asphalt, 30.0));
+    CHECK(grip.factor(asphalt, 30.0) < grip.factor(asphalt, 10.0));
+    CHECK(grip.factor(asphalt, 1e6) == grip.factor(asphalt, ConditionGrip::kSpeedMaxMps));   // clamped to the table
+    // Smooth: no staircase - the factor changes by < 2 % over any 0.3 m/s step.
+    for (real v = 0.0; v < 50.0; v += 0.3)
+        CHECK(std::fabs(grip.factor(asphalt, v + 0.3) - grip.factor(asphalt, v)) < 0.02 * grip.factor(asphalt, v));
+
+    // Vegetated: the canopy drives the wet_grass level (no speed table); the soil class is flat in speed (the IFI
+    // form needs an MTD, an earth surface has none): its wet level is the soil's damp-clamped 0.81.
     CHECK_THAT(grip.factor(grass, 10.0), WithinAbs(0.67, 1e-12));
+    CHECK_THAT(grip.factor(grass, 40.0), WithinAbs(0.67, 1e-12));
+    CHECK_THAT(grip.factor(dirt, 0.0), WithinAbs(0.81, 1e-12));
+    CHECK_THAT(grip.factor(dirt, 40.0), WithinAbs(0.81, 1e-12));
+    // Ponding is a ramp: 0.3 mm of ponded water is weight 0.3 (a trace of dew must not make a track fully wet).
+    force([&](SurfaceClassState& st, int i) { if (i == dirt) st.water_mm = 0.3; });
+    grip.update_state(grid, 3600.0);
+    CHECK_THAT(grip.water_weight(dirt), WithinAbs(0.3, 1e-12));
+    CHECK_THAT(grip.factor(dirt, 5.0), WithinAbs(0.7 * 1.0 + 0.3 * 0.81, 1e-12));
+    // Soil moisture above field capacity wets without ponding: weight (theta - fc)/(sat - fc).
+    force([&](SurfaceClassState& st, int i) {
+        if (i == dirt) { st.water_mm = 0.0; st.soil_moisture = grid.column(i).soil_theta_fc + 0.1; }
+    });
+    grip.update_state(grid, 3600.0);
+    CHECK_THAT(grip.water_weight(dirt), WithinAbs(0.1 / (0.45 - 0.25), 1e-12));
+
     // Static and out-of-range ids are the identity.
     CHECK(grip.factor(low, 30.0) == 1.0);
     CHECK(grip.factor(-1, 30.0) == 1.0);
     CHECK(grip.factor(99, 30.0) == 1.0);
-    // The profile scales the wet branch (dry branch uses p.dry).
+    // The profile scales the wet branch, the dry branch uses p.dry: asphalt at weight 1 is pure wet.
+    force([&](SurfaceClassState& st, int i) { if (i == asphalt) st.water_mm = grid.column(i).w_tex_mm; });
+    grip.update_state(grid, 3600.0);
     TyreConditionFactors p;
     p.dry = 0.9;
     p.wet = 0.5;
     CHECK_THAT(grip.factor(asphalt, p, 0.0), WithinAbs(0.85 * 0.5, 1e-12));
+    // Half the texture filled: weight 0.5 mixes the dry and wet branches.
+    force([&](SurfaceClassState& st, int i) { if (i == asphalt) st.water_mm = 0.5 * grid.column(i).w_tex_mm; });
+    grip.update_state(grid, 3600.0);
+    CHECK_THAT(grip.factor(asphalt, p, 0.0), WithinAbs(0.5 * 0.9 + 0.5 * 0.85 * 0.5, 1e-12));
 }
 
 TEST_CASE("W6-G5: the tyre profile loader accepts the shipped profiles and rejects bad ones",

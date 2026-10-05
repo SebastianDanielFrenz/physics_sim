@@ -12,6 +12,7 @@ namespace {
 constexpr real kDegPerSpeed = 3.6;                 // km/h per m/s
 constexpr real kVRefKmh = 60.0;                    // PIARC IFI reference speed [C]
 constexpr real kVRefMps = kVRefKmh / kDegPerSpeed; // 16.667 m/s
+constexpr real kPondFullMm = 1.0;                  // [AS] ponded water depth at which a soil/turf class counts as fully wet
 } // namespace
 
 void ConditionGrip::reset() {
@@ -32,7 +33,9 @@ void ConditionGrip::build_static(const ConditionGrid& grid, const TyreConditionF
         const real sp_mps = sp_kmh / kDegPerSpeed;
         for (int j = 0; j < kSpeedSamples; ++j) {
             const real v = kSpeedMaxMps * static_cast<real>(j) / static_cast<real>(kSpeedSamples - 1);
-            real mu = friction_[i].wet * math::exp((kVRefMps - v) / sp_mps);
+            // The IFI speed form is a sealed-surface (MPD/MTD) relation; an earth surface has no MTD, so its wet level
+            // is flat in speed (the mud curve is W9).
+            real mu = grid.kind(i) == SurfaceKind::Sealed ? friction_[i].wet * math::exp((kVRefMps - v) / sp_mps) : friction_[i].wet;
             if (mu > friction_[i].damp) mu = friction_[i].damp;   // plan 5.2 step 3 clamp
             table_[i][j] = mu;
         }
@@ -63,7 +66,7 @@ void ConditionGrip::update_state(const ConditionGrid& grid, real t_env) {
             // 4.6; the mud-specific grip curve is W9).
             if (col.soil_theta_sat > col.soil_theta_fc)
                 ww = (theta - col.soil_theta_fc) / (col.soil_theta_sat - col.soil_theta_fc);
-            if (water > 0.0 && ww < 1.0) ww = 1.0;   // ponded
+            ww = std::max(ww, std::min(water / kPondFullMm, real(1.0)));   // ponded water: a ramp to fully wet over kPondFullMm
         }
         w_wet_[i] = std::clamp(ww, real(0.0), real(1.0));
         if (vegetated_[i]) {
@@ -83,8 +86,12 @@ real ConditionGrip::factor(int surface_id, real speed_m_s) const { return factor
 real ConditionGrip::factor(int surface_id, const TyreConditionFactors& p, real speed_m_s) const {
     if (!valid_ || surface_id < 0 || surface_id >= count_ || !stateful_[surface_id]) return 1.0;
     const real v = std::clamp(speed_m_s, real(0.0), kSpeedMaxMps);
-    const int j = std::clamp(static_cast<int>(v / kSpeedMaxMps * (kSpeedSamples - 1) + 0.5), 0, kSpeedSamples - 1);
-    const real mu_wet = table_[surface_id][j];
+    // Linear interpolation of the speed table (a nearest-sample lookup would make the grip a staircase of ~7 % steps
+    // every 1.7 m/s while braking).
+    const real pos = v / kSpeedMaxMps * static_cast<real>(kSpeedSamples - 1);
+    const int j = std::min(static_cast<int>(pos), kSpeedSamples - 2);
+    const real frac = pos - static_cast<real>(j);
+    const real mu_wet = table_[surface_id][j] + (table_[surface_id][j + 1] - table_[surface_id][j]) * frac;
     if (vegetated_[surface_id]) {
         const real g = w_grass_[surface_id];
         return (1.0 - g) * p.dry + g * friction_[surface_id].wet_grass * p.wet_grass;

@@ -3,6 +3,8 @@
 
 #include "ps/environment/surface_condition.h"
 
+#include "ps/environment/air_temperature.h"
+
 #include "ps/math/transcendental.h"
 
 #include <algorithm>
@@ -234,15 +236,9 @@ real convection_coefficient_w_m2k(real surface_temp_k, real air_temp_k, real win
     return 698.24 * (forced + free);
 }
 
-real saturation_vapour_pressure_hpa(real temp_k) {
-    // Magnus/Bolton 1980 over water: e_s = 6.112 exp(17.67 T_c / (T_c + 243.5)).
-    const real tc = temp_k - kCelsiusToKelvin;
-    return 6.112 * math::exp(17.67 * tc / (tc + 243.5));
-}
-
 real vapour_density_kg_m3(real vapour_pressure_hpa, real temp_k) {
-    // Ideal gas: rho_v = e M_w / (R T), M_w/R = 0.0021668 kg K/(J mol? ) - here
-    // e in Pa: rho_v = e_pa * 0.018016 / (8.314462618 * T).
+    // Ideal gas: rho_v = e M_w / (R T) with e in Pa:
+    // rho_v = e_pa * 0.018016 / (8.314462618 * T).
     const real e_pa = vapour_pressure_hpa * 100.0;
     if (!(e_pa > 0.0) || !(temp_k > 0.0)) return 0.0;
     return e_pa * 0.018016 / (8.314462618 * temp_k);
@@ -256,32 +252,44 @@ real gallaway_wfd_mm(real mtd_mm, real path_m, real intensity_mm_h, real slope_m
     return wfd > 0.0 ? wfd : 0.0;
 }
 
-real surface_vapour_flux_kg_m2_s(const ColumnModel& col, const SurfaceForcing& f, const SurfaceClassState& in,
-                                 real dt) {
-    if (dt <= 0.0) return 0.0;
+VapourExchange surface_vapour_exchange(const ColumnModel& col, const SurfaceForcing& f, const SurfaceClassState& in,
+                                       real dt) {
+    VapourExchange x;
+    if (!(dt > 0.0)) return x;
     const real t0 = in.temp_k[0];
     const real hc = convection_coefficient_w_m2k(t0, f.air_temp_k, f.wind_m_s);
-    // Dalton bulk formula via the Lewis analogy (Le = 1 [AS]): h_m = h_c /
-    // (rho cp); the Vehrencamp h_c supplies the wind function (plan 4.4 [D]).
+    // Dalton bulk formula via the Lewis analogy (Le^(2/3) = 1 [AS]): the mass
+    // transfer coefficient h_m = h_c / (rho cp) [m/s]; the Vehrencamp h_c
+    // supplies the wind function (plan 4.4 [D]).
     const real h_mass = hc / (kAirDensityKgM3 * kAirCpJkgK);
     const real rho_v_air = vapour_density_kg_m3(f.vapour_pressure_hpa, f.air_temp_k);
-    const real rho_v_sat = vapour_density_kg_m3(saturation_vapour_pressure_hpa(t0), t0);
-    real flux = h_mass * (rho_v_sat - rho_v_air);   // > 0 evaporates, < 0 condenses
-    if (t0 <= kCelsiusToKelvin) {
+    const real rho_v_sat = vapour_density_kg_m3(saturation_vapour_pressure_hpa(t0 - kCelsiusToKelvin), t0);
+    const real e_pot = h_mass * (rho_v_sat - rho_v_air);   // kg/(m2 s); > 0 evaporates, < 0 condenses
+    if (e_pot < 0.0) {
         // W6 models liquid only: below freezing there is no liquid dew (frost is W8).
-        if (flux < 0.0) flux = 0.0;
+        if (t0 > kCelsiusToKelvin) x.dew = std::min(-e_pot, kMaxCondensationKgM2S);
+        return x;
     }
-    if (flux > 0.0) {
-        real avail = in.water_mm;
-        if (col.kind == SurfaceKind::Vegetated) avail += in.canopy_water_mm;
-        if (col.kind == SurfaceKind::Soil || col.kind == SurfaceKind::Vegetated)
-            avail += in.soil_moisture * col.soil_top_depth_m * 1000.0 * kSoilPorosity;
-        const real max_evap = avail / dt;
-        if (flux > max_evap) flux = max_evap;
-    } else if (flux < -kMaxCondensationKgM2S) {
-        flux = -kMaxCondensationKgM2S;
+    // Evaporation draws the free water first, then the canopy store, then the
+    // soil surface (scaled by theta / theta_fc, plan 4.4); each limited by the
+    // water that is there at the start of the step.
+    real rem = e_pot;
+    x.from_water = std::min(rem, in.water_mm / dt);
+    rem -= x.from_water;
+    if (col.kind == SurfaceKind::Vegetated) {
+        x.from_canopy = std::min(rem, in.canopy_water_mm / dt);
+        rem -= x.from_canopy;
     }
-    return flux;
+    if ((col.kind == SurfaceKind::Soil || col.kind == SurfaceKind::Vegetated) && col.soil_theta_fc > 0.0) {
+        const real scale = std::min(in.soil_moisture / col.soil_theta_fc, 1.0);
+        x.from_soil = std::min(rem * scale, in.soil_moisture * col.soil_top_depth_m * 1000.0 / dt);
+    }
+    return x;
+}
+
+real surface_vapour_flux_kg_m2_s(const ColumnModel& col, const SurfaceForcing& f, const SurfaceClassState& in,
+                                 real dt) {
+    return surface_vapour_exchange(col, f, in, dt).net();
 }
 
 void initial_column_state(const ColumnModel& column, const InitialProfile& p, SurfaceClassState& out) {
@@ -293,6 +301,9 @@ void initial_column_state(const ColumnModel& column, const InitialProfile& p, Su
         out.temp_k[static_cast<std::size_t>(i)] = p.surface_temp_k + (p.bottom_temp_k - p.surface_temp_k) * f;
     }
     out.temp_k[static_cast<std::size_t>(n - 1)] = p.bottom_temp_k;
+    // W6: soil and turf start at field capacity (a state with no gravity water and no
+    // ponding, unscaled evaporation) [AS]; the spin-up's weather moves it from there.
+    if (column.kind == SurfaceKind::Soil || column.kind == SurfaceKind::Vegetated) out.soil_moisture = column.soil_theta_fc;
 }
 
 void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const SurfaceClassState& in,
@@ -309,7 +320,8 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     // W6: the latent flux is evaluated at the OLD state and folded into the
     // energy balance as a lagged constant (plan 4.4), so the solve stays one
     // linear system and the energy balance stays closed.
-    const real evap_kg_m2_s = surface_vapour_flux_kg_m2_s(col, f, in, dt);
+    const VapourExchange ex = surface_vapour_exchange(col, f, in, dt);
+    const real evap_kg_m2_s = ex.net();
     const real L_v = kLatentHeatVaporisation - kLatentHeatSlope * (t0 - kCelsiusToKelvin);
     const real q_latent = L_v * evap_kg_m2_s;   // W/m2 out of the surface
     // q(T) ~ A - B' T with T^4 linearised about t0.
@@ -357,13 +369,15 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     }
     t[static_cast<std::size_t>(n - 1)] = f.bottom_temp_k;
 
-    // --- W6 mass update (plan 4.4): rain, interception, infiltration, -->
-    // evaporation/dew, drainage. W in mm; 1 kg/m2 == 1 mm.
+    // --- W6 mass update (plan 4.4): rain, interception, infiltration,
+    // evaporation/dew, drainage. W in mm; 1 kg/m2 == 1 mm. The evaporation and
+    // dew amounts are exactly the ones whose latent heat the energy balance
+    // above used (ex), so mass and energy stay consistent.
     real W = in.water_mm;
     real C = in.canopy_water_mm;
     real theta = in.soil_moisture;
     const bool soil_like = col.kind == SurfaceKind::Soil || col.kind == SurfaceKind::Vegetated;
-    const real pore_cap_mm = soil_like ? col.soil_top_depth_m * 1000.0 * kSoilPorosity : 0.0;
+    const real layer_mm = soil_like ? col.soil_top_depth_m * 1000.0 : 0.0;   // mm of water per unit volumetric theta
     real input = f.precip_mm_h / 3600.0 * dt;   // liquid water this step
 
     if (col.kind == SurfaceKind::Vegetated && input > 0.0) {
@@ -376,43 +390,37 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
     }
     if (soil_like && input > 0.0) {
         const real infil_cap = col.soil_ksat_mm_h / 3600.0 * dt;
-        real pore = (col.soil_theta_sat - theta) * pore_cap_mm;
+        real pore = (col.soil_theta_sat - theta) * layer_mm;
         if (pore < 0.0) pore = 0.0;
         real take = input < infil_cap ? input : infil_cap;
         if (take > pore) take = pore;
         if (take > 0.0) {
-            theta += take / pore_cap_mm;
+            theta += take / layer_mm;
             input -= take;
         }
     }
     W += input;
 
-    // Evaporation (draws W first, then canopy, then the soil surface) or dew.
-    const real dW = evap_kg_m2_s * dt;   // mm, > 0 removes water
-    if (dW > 0.0) {
-        real need = dW;
-        real from_w = W < need ? W : need;
-        W -= from_w;
-        need -= from_w;
-        if (need > 0.0 && col.kind == SurfaceKind::Vegetated) {
-            real from_c = C < need ? C : need;
-            C -= from_c;
-            need -= from_c;
+    W -= ex.from_water * dt;
+    C -= ex.from_canopy * dt;
+    if (soil_like) theta -= ex.from_soil * dt / layer_mm;
+    if (ex.dew > 0.0) {
+        // Dew wets the leaves first (vegetated), the rest the surface film.
+        real dew = ex.dew * dt;
+        if (col.kind == SurfaceKind::Vegetated) {
+            const real room = col.canopy_capacity_mm - C;
+            const real take = room > 0.0 ? (dew < room ? dew : room) : 0.0;
+            C += take;
+            dew -= take;
         }
-        if (need > 0.0 && soil_like) {
-            // Soil-surface evaporation scaled by theta / theta_fc (plan 4.4).
-            const real scale = col.soil_theta_fc > 0.0 ? (theta < col.soil_theta_fc ? theta / col.soil_theta_fc : 1.0) : 0.0;
-            const real cap = theta * pore_cap_mm;
-            real from_s = need * scale;
-            if (from_s > cap) from_s = cap;
-            theta -= from_s / pore_cap_mm;
-        }
-    } else {
-        W -= dW;   // dW < 0: condensation adds water (dew)
+        W += dew;
     }
 
-    // Drainage (plan 4.4): sealed relaxes toward the Gallaway steady film;
-    // soil/vegetated drain gravity water above field capacity and ponding.
+    // Drainage (plan 4.4): sealed water above the texture storage relaxes
+    // toward the Gallaway steady film with tau = WFD / R (the fixed point of
+    // W - W_tex under the input R is R tau = WFD exactly); water below the
+    // storage does not drain. Soil/vegetated drain gravity water above field
+    // capacity and ponding.
     real tau = in.drain_tau_s;
     if (col.kind == SurfaceKind::Sealed) {
         const real R = f.precip_mm_h;
@@ -420,11 +428,9 @@ void step_column(const ColumnModel& col, const SurfaceForcing& f, real dt, const
             const real wfd = gallaway_wfd_mm(col.mtd_mm, col.drainage_path_m, R, col.drainage_slope_m_m);
             tau = wfd > 0.0 ? wfd / (R / 3600.0) : 0.0;
         }
-        if (tau > 0.0) {
-            const real a = dt / tau;   // backward Euler; the fixed point is exactly W_tex + R tau
-            W = (W + a * col.w_tex_mm) / (1.0 + a);
-        } else if (W > col.w_tex_mm) {
-            W = col.w_tex_mm;
+        if (W > col.w_tex_mm) {
+            if (tau > 0.0) W = col.w_tex_mm + (W - col.w_tex_mm) / (1.0 + dt / tau);   // backward Euler
+            else W = col.w_tex_mm;
         }
     } else if (soil_like) {
         const real excess = theta - col.soil_theta_fc;

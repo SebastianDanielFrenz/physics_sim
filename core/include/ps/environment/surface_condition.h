@@ -111,24 +111,31 @@ real convection_coefficient_w_m2k(real surface_temp_k, real air_temp_k, real win
 
 // --- W6 water part (plan 4.4) ---
 
-// Saturation vapour pressure (hPa) over water, Magnus form [C Bolton 1980].
-real saturation_vapour_pressure_hpa(real temp_k);
 // Vapour density (kg/m3) from the partial pressure (hPa) and temperature (K).
 real vapour_density_kg_m3(real vapour_pressure_hpa, real temp_k);
 // Gallaway et al. 1979 (FHWA-RD-79-31) steady water-film depth above the
 // texture, metric form (plan 4.4): WFD = 0.01485 MTD^0.11 L^0.43 I^0.59 /
 // S^0.42 - MTD, clamped at 0. WFD/MTD in mm, L in m, I in mm/h, S in m/m.
 real gallaway_wfd_mm(real mtd_mm, real path_m, real intensity_mm_h, real slope_m_m);
-// The signed, availability-limited surface vapour flux of one step (kg/(m2 s),
-// 1 kg/m2 == 1 mm): > 0 evaporates from the surface, < 0 condenses (dew) onto
-// it. `dt` sizes the availability limit. Uses the OLD state's surface
-// temperature (the caller passes the state the step starts from).
+// The vapour exchange of one step split by the reservoir it draws from or
+// feeds (kg/(m2 s), 1 kg/m2 == 1 mm). Uses the OLD state (the state the step
+// starts from) for the surface temperature and the availability limits, so the
+// mass update and the latent heat use exactly the same numbers.
+struct VapourExchange {
+    real from_water = 0.0;    // evaporation from the film / ponded water W
+    real from_canopy = 0.0;   // evaporation from the canopy store C (vegetated)
+    real from_soil = 0.0;     // soil-surface evaporation from theta (soil, vegetated), scaled by theta/theta_fc
+    real dew = 0.0;           // condensation onto the surface (>= 0)
+    real net() const { return from_water + from_canopy + from_soil - dew; }
+};
+VapourExchange surface_vapour_exchange(const ColumnModel& column, const SurfaceForcing& forcing,
+                                       const SurfaceClassState& in, real dt);
+// The signed net flux (kg/(m2 s)): > 0 evaporates, < 0 condenses (dew).
 real surface_vapour_flux_kg_m2_s(const ColumnModel& column, const SurfaceForcing& forcing,
                                  const SurfaceClassState& in, real dt);
 
 // Physical constants of the W6 water part (all [C]/[AS] as marked).
 inline constexpr real kSoilTopDepthM = 0.1;             // [AS] top-layer depth the infiltration fills
-inline constexpr real kSoilPorosity = 0.4;              // [AS] effective porosity of the top layer
 inline constexpr real kSoilTauFcS = 3.0 * 86400.0;      // [AS] gravity drainage above field capacity
 inline constexpr real kPondTauS = 3600.0;               // [AS] ponded-water drain time constant
 inline constexpr real kDrainRainMinMmH = 0.1;           // [AS] below this the drainage tau is frozen

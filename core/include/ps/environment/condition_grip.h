@@ -12,8 +12,8 @@
 // aquaplaning (step 5) are W7/W8 and not here.
 //
 // The speed table uses ps::math::exp but is built once per grid (the class
-// MTD and levels are static), never per substep; a lookup takes the nearest
-// sample (round to the nearest of kSpeedSamples). No allocation, not thread
+// MTD and levels are static), never per substep; a lookup interpolates the
+// two nearest samples (linear). No allocation, not thread
 // safe.
 
 #pragma once
