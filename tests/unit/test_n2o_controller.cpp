@@ -614,6 +614,20 @@ TEST_CASE("N4 C5: sound counters and fields", "[unit][n2o][drivetrain]") {
         CHECK(ess(rig).n2o_flow_fraction == 0.0);
         CHECK(ess(rig).n2o_solenoid_open == 0);
     }
+    SECTION("an empty bottle: the solenoid flag stays up, nothing flows") {
+        Rig rig = make_rig(desc);
+        run(rig, 60);
+        rig.world->set_control("throttle", 1.0);
+        rig.world->set_n2o_bottle_mass(rig.vehicle, 0.0);
+        run(rig, 2);
+        rig.world->set_control("nitrous_arm", 1.0);
+        run(rig, 10);
+        CHECK(ess(rig).n2o_solenoid_open == 1);
+        CHECK(ess(rig).n2o_activations == 1);
+        CHECK(ess(rig).n2o_active == 0);
+        CHECK(ess(rig).n2o_flow_fraction == 0.0);
+        CHECK(ess(rig).n2o_flow_g_s == 0.0);
+    }
     SECTION("a plenum kit reports injection 0") {
         mutable_component_of<NitrousKitDesc>(desc).injection = NitrousInjection::Plenum;
         Rig rig = make_rig(desc);
