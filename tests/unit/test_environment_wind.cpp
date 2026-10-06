@@ -339,8 +339,9 @@ TEST_CASE("Gusts: Taylor shift - a point downwind sees the field delayed", "[env
     }
     const auto corr = [&](int lag_samples) {  // x1[i + lag] against x0[i]
         real sxy = 0.0, sxx = 0.0, syy = 0.0;
-        for (int i = 0; i + lag_samples < n; ++i) {
-            if (i + lag_samples < 0) continue;
+        // Both x0[i] and x1[i + lag] must exist: i in [max(0, -lag), min(n, n - lag)). The old bound
+        // (i + lag < n, i >= 0) read x0[i] past its end for every negative lag (ASan/TSan/debug abort).
+        for (int i = std::max(0, -lag_samples); i < std::min(n, n - lag_samples); ++i) {
             const real a0 = x0[i], b0 = x1[i + lag_samples];
             sxy += a0 * b0;
             sxx += a0 * a0;
@@ -355,6 +356,7 @@ TEST_CASE("Gusts: Taylor shift - a point downwind sees the field delayed", "[env
         const real c = corr(lag);
         if (c > best) { best = c; best_lag = lag; }
     }
+    INFO("peak lag " << best_lag << ", coefficient " << best << ", lag-0 coefficient " << corr(0));
     CHECK(best_lag == 160);
     CHECK(best > 0.999);
     CHECK(corr(0) < best - 1e-3);

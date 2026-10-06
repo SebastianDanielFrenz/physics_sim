@@ -262,61 +262,58 @@ TEST_CASE("Scenario environment block: parsing", "[environment][io]") {
 }
 
 TEST_CASE("Scenario environment block: rejections", "[environment][io]") {
-    const auto load_msg = [](const std::string& block, const char* tag) -> std::string {
+    // Windows ASan caveat (CLAUDE.md, vault TOOL-019): no catch-by-reference in test code -
+    // the throwing call is wrapped in Catch2's CHECK_THROWS_WITH / CHECK_NOTHROW instead.
+    const auto load_scen = [](const std::string& block, const char* tag) {
         TempScenario f(scenario_json(block), tag);
-        try {
-            io::load_scenario(f.path.string());
-        } catch (const std::runtime_error& e) {
-            return e.what();
-        }
-        return {};
+        return io::load_scenario(f.path.string());
     };
     // Sanity: the harness accepts a minimal valid block.
-    CHECK(load_msg("{ " + kClimate + " }", "ok").empty());
+    CHECK_NOTHROW(load_scen("{ " + kClimate + " }", "ok"));
 
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"bogus\": 1 }", "unk"), ContainsSubstring("unknown key \"bogus\""));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": \"dynamic\" }", "weather"), ContainsSubstring("the climate needs precip_phase"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": \"sunny\" }", "wbad"), ContainsSubstring("\"weather\" must be"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": { \"bogus\": 1 } }", "wk"), ContainsSubstring("weather.bogus"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"weather\": { \"preset\": \"does/not/exist.json\" } }", "wp"), ContainsSubstring("exist.json"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"bogus\": 1 }", "unk"), ContainsSubstring("unknown key \"bogus\""));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"weather\": \"dynamic\" }", "weather"), ContainsSubstring("the climate needs precip_phase"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"weather\": \"sunny\" }", "wbad"), ContainsSubstring("\"weather\" must be"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"weather\": { \"bogus\": 1 } }", "wk"), ContainsSubstring("weather.bogus"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"weather\": { \"preset\": \"does/not/exist.json\" } }", "wp"), ContainsSubstring("exist.json"));
     // W5 lifted the surface_conditions reservation (its rejections: test_environment_surface_world.cpp).
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"surface_conditions\": \"x\" }", "sc"), ContainsSubstring("surface_table_path"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"default_tyre_profile\": \"x\" }", "tp"), ContainsSubstring("needs the environment's \"surface_conditions\" key"));
-    CHECK_THAT(load_msg("{ \"seed\": 1 }", "noclimate"), ContainsSubstring("missing required string \"climate\""));
-    CHECK_THAT(load_msg("{ \"climate\": \"does/not/exist.json\" }", "nofile"), ContainsSubstring("exist.json"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"time\": { \"scale\": -1 } }", "neg"), ContainsSubstring("time_scale"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"time\": { \"nope\": 1 } }", "tk"), ContainsSubstring("time.nope"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"time\": { \"start\": { \"season\": \"monsoon\" } } }", "ss"), ContainsSubstring("monsoon"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"time\": { \"start\": { \"zzz\": 1 } } }", "sk"), ContainsSubstring("time.start.zzz"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"season\": \"monsoon\" }", "season"), ContainsSubstring("monsoon"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"season\": \"summer\", \"fixed_day_of_year\": 3 }", "both"), ContainsSubstring("mutually exclusive"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1 } ] }", "e0"), ContainsSubstring("exactly one"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"jump_time_s\": 5, \"set_time_scale\": 2 } ] }", "e2"), ContainsSubstring("exactly one"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_weather\": {} } ] }", "ew"), ContainsSubstring("needs a string \"preset\""));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"surface_conditions\": \"x\" }", "sc"), ContainsSubstring("surface_table_path"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"default_tyre_profile\": \"x\" }", "tp"), ContainsSubstring("needs the environment's \"surface_conditions\" key"));
+    CHECK_THROWS_WITH(load_scen("{ \"seed\": 1 }", "noclimate"), ContainsSubstring("missing required string \"climate\""));
+    CHECK_THROWS_WITH(load_scen("{ \"climate\": \"does/not/exist.json\" }", "nofile"), ContainsSubstring("exist.json"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"time\": { \"scale\": -1 } }", "neg"), ContainsSubstring("time_scale"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"time\": { \"nope\": 1 } }", "tk"), ContainsSubstring("time.nope"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"time\": { \"start\": { \"season\": \"monsoon\" } } }", "ss"), ContainsSubstring("monsoon"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"time\": { \"start\": { \"zzz\": 1 } } }", "sk"), ContainsSubstring("time.start.zzz"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"season\": \"monsoon\" }", "season"), ContainsSubstring("monsoon"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"season\": \"summer\", \"fixed_day_of_year\": 3 }", "both"), ContainsSubstring("mutually exclusive"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1 } ] }", "e0"), ContainsSubstring("exactly one"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"jump_time_s\": 5, \"set_time_scale\": 2 } ] }", "e2"), ContainsSubstring("exactly one"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_weather\": {} } ] }", "ew"), ContainsSubstring("needs a string \"preset\""));
     // W3b: the weather/season events.
     const std::string wclimate = "\"climate\": \"" + source_dir() + "/data/climates/test_weather.json\", \"weather\": \"dynamic\"";
     const std::string storm_path = source_dir() + "/data/weather_presets/storm.json";
     const auto ev = [&](const std::string& event) { return "{ " + wclimate + ", \"events\": [ { \"t\": 1, " + event + " } ] }"; };
-    CHECK(load_msg(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"ramp_s\": 30 }"), "w3ok").empty());
-    CHECK(load_msg(ev("\"end_weather\": true"), "w3end").empty());
-    CHECK(load_msg(ev("\"clear_weather\": true"), "w3clr").empty());
-    CHECK(load_msg(ev("\"set_season\": \"winter\""), "w3s").empty());
-    CHECK(load_msg(ev("\"set_season\": \"dynamic\""), "w3sd").empty());
-    CHECK_THAT(load_msg(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"ramp_s\": -1 }"), "w3neg"), ContainsSubstring("ramp_s"));
-    CHECK_THAT(load_msg(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"bogus\": 1 }"), "w3bog"), ContainsSubstring("set_weather.bogus"));
-    CHECK_THAT(load_msg(ev("\"set_weather\": { \"preset\": \"does/not/exist.json\" }"), "w3np"), ContainsSubstring("exist.json"));
-    CHECK_THAT(load_msg(ev("\"set_weather\": 5"), "w3obj"), ContainsSubstring("must be an object"));
-    CHECK_THAT(load_msg(ev("\"end_weather\": false"), "w3f"), ContainsSubstring("must be true"));
-    CHECK_THAT(load_msg(ev("\"set_season\": \"monsoon\""), "w3m"), ContainsSubstring("unknown season \"monsoon\""));
-    CHECK_THAT(load_msg(ev("\"set_season\": 3"), "w3n"), ContainsSubstring("season name"));
-    CHECK_THAT(load_msg(ev("\"end_weather\": true, \"clear_weather\": true"), "w3two"), ContainsSubstring("exactly one"));
+    CHECK_NOTHROW(load_scen(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"ramp_s\": 30 }"), "w3ok"));
+    CHECK_NOTHROW(load_scen(ev("\"end_weather\": true"), "w3end"));
+    CHECK_NOTHROW(load_scen(ev("\"clear_weather\": true"), "w3clr"));
+    CHECK_NOTHROW(load_scen(ev("\"set_season\": \"winter\""), "w3s"));
+    CHECK_NOTHROW(load_scen(ev("\"set_season\": \"dynamic\""), "w3sd"));
+    CHECK_THROWS_WITH(load_scen(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"ramp_s\": -1 }"), "w3neg"), ContainsSubstring("ramp_s"));
+    CHECK_THROWS_WITH(load_scen(ev("\"set_weather\": { \"preset\": \"" + storm_path + "\", \"bogus\": 1 }"), "w3bog"), ContainsSubstring("set_weather.bogus"));
+    CHECK_THROWS_WITH(load_scen(ev("\"set_weather\": { \"preset\": \"does/not/exist.json\" }"), "w3np"), ContainsSubstring("exist.json"));
+    CHECK_THROWS_WITH(load_scen(ev("\"set_weather\": 5"), "w3obj"), ContainsSubstring("must be an object"));
+    CHECK_THROWS_WITH(load_scen(ev("\"end_weather\": false"), "w3f"), ContainsSubstring("must be true"));
+    CHECK_THROWS_WITH(load_scen(ev("\"set_season\": \"monsoon\""), "w3m"), ContainsSubstring("unknown season \"monsoon\""));
+    CHECK_THROWS_WITH(load_scen(ev("\"set_season\": 3"), "w3n"), ContainsSubstring("season name"));
+    CHECK_THROWS_WITH(load_scen(ev("\"end_weather\": true, \"clear_weather\": true"), "w3two"), ContainsSubstring("exactly one"));
     // The weather events need the weather key; set_season does not.
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"end_weather\": true } ] }", "w3nw"), ContainsSubstring("need the environment's \"weather\" key"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_weather\": { \"preset\": \"" + storm_path + "\" } } ] }", "w3nw2"), ContainsSubstring("\"weather\" key"));
-    CHECK(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_season\": \"winter\" } ] }", "w3nws").empty());
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"bogus\": 5 } ] }", "eb"), ContainsSubstring("unknown event key"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_time_scale\": -2 } ] }", "es"), ContainsSubstring("set_time_scale"));
-    CHECK_THAT(load_msg("{ " + kClimate + ", \"events\": [ { \"jump_time_s\": 5 } ] }", "et"), ContainsSubstring("\"t\""));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"end_weather\": true } ] }", "w3nw"), ContainsSubstring("need the environment's \"weather\" key"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_weather\": { \"preset\": \"" + storm_path + "\" } } ] }", "w3nw2"), ContainsSubstring("\"weather\" key"));
+    CHECK_NOTHROW(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_season\": \"winter\" } ] }", "w3nws"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"bogus\": 5 } ] }", "eb"), ContainsSubstring("unknown event key"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"t\": 1, \"set_time_scale\": -2 } ] }", "es"), ContainsSubstring("set_time_scale"));
+    CHECK_THROWS_WITH(load_scen("{ " + kClimate + ", \"events\": [ { \"jump_time_s\": 5 } ] }", "et"), ContainsSubstring("\"t\""));
 }
 
 TEST_CASE("Scenario environment block: events apply at their sim time", "[environment][io][world]") {
