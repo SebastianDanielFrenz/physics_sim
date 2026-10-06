@@ -6,15 +6,44 @@
 #include <cstdio>
 #include <cstdlib>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__linux__)
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
 namespace ps::jobs {
 
 namespace {
 thread_local int t_worker_index = -1; // -1: not a worker thread
 thread_local const JobSystem* t_lane_owner = nullptr; // non-null: a background-lane thread of that pool
+
+// JobSystemOptions::background_priority: lowers the CALLING thread's own priority; a failure is ignored.
+void lower_current_thread_priority() {
+#if defined(_WIN32)
+    (void)SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__linux__)
+    // nice is per thread on Linux: setpriority on the tid touches this thread only.
+    (void)setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 5);
+#endif
 }
+} // namespace
 
 JobSystem::JobSystem(int num_workers, std::size_t queue_capacity)
-    : injector_(queue_capacity != 0 ? queue_capacity : kDefaultQueueCapacity) {
+    : JobSystem(num_workers, JobSystemOptions{queue_capacity, false}) {}
+
+JobSystem::JobSystem(int num_workers, const JobSystemOptions& options)
+    : injector_(options.queue_capacity != 0 ? options.queue_capacity : kDefaultQueueCapacity),
+      background_priority_(options.background_priority) {
+    const std::size_t queue_capacity = options.queue_capacity;
     if (num_workers <= 0) {
         const int physical = physical_core_count();
         num_workers = std::max(1, physical - 2);
@@ -126,6 +155,7 @@ void JobSystem::run_job_counted(JobEntry& job, std::atomic<long>* pending_counte
 
 void JobSystem::worker_loop(int index) {
     t_worker_index = index;
+    if (background_priority_) lower_current_thread_priority();
     JobEntry job;
     while (!shutdown_.load(std::memory_order_acquire)) {
         if (try_pop_own(index, job) || try_steal(index, job) || try_pop_injector(job)) {
@@ -252,6 +282,7 @@ bool JobSystem::submit_background(JobFn fn) {
 
 void JobSystem::background_loop() {
     t_lane_owner = this;
+    if (background_priority_) lower_current_thread_priority();
     JobEntry job;
     for (;;) {
         {

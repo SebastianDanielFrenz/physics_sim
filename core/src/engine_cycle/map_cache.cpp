@@ -383,6 +383,12 @@ EngineMapsPtr load_cached_engine_maps_impl(const std::string& cache_dir, std::ui
     if (format_version != kPsMapsFormatVersion) return nullptr;          // wrong format version (H2)
     if (file_key != key) return nullptr;                                 // wrong key (H2)
     if (bytes.size() - kHeaderSize != payload_size) return nullptr;      // size mismatch (H2, catches a truncated file too)
+    // An unknown quality value (a file from a newer build, or corruption) is a miss, never a cast of
+    // an out-of-range integer into the enum (engine garage P1).
+    if (quality_raw != static_cast<std::uint32_t>(MapQuality::Preview) && quality_raw != static_cast<std::uint32_t>(MapQuality::Full) &&
+        quality_raw != static_cast<std::uint32_t>(MapQuality::Sketch)) {
+        return nullptr;
+    }
 
     auto out = std::make_shared<EngineMaps>();
     Reader payload(bytes.data() + kHeaderSize, static_cast<std::size_t>(payload_size));

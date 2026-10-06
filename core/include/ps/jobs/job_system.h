@@ -35,6 +35,24 @@ namespace ps::jobs {
 // Falls back to hardware_concurrency()/2 (SMT heuristic) or 1.
 int physical_core_count();
 
+// Construction options of a JobSystem (engine garage P1, A3).
+struct JobSystemOptions {
+    // 0 = kDefaultQueueCapacity (see the queue_capacity argument below).
+    std::size_t queue_capacity = 0;
+    // true: every thread this pool creates (workers and, once started, the
+    // background lane) lowers its own OS scheduling priority so the pool yields
+    // to the rest of the machine - for a precompute that must not stutter a
+    // renderer or the sim on the same cores. Windows: THREAD_PRIORITY_BELOW_NORMAL
+    // (SetThreadPriority on the thread itself). Linux: the thread's nice value is
+    // raised by 5 ([AS]) with setpriority(PRIO_PROCESS, <that thread's tid>, ...) -
+    // on Linux nice is per thread, so only the pool's threads are affected, not the
+    // creating thread; lowering it again needs privilege, which a worker never
+    // does. A failing call is ignored (the pool just runs at normal priority).
+    // Other platforms: no effect. Priority never changes a result: jobs run the
+    // same code, only their share of CPU time under contention changes.
+    bool background_priority = false;
+};
+
 class JobSystem {
 public:
     // A WaitGroup ties a batch of submitted jobs to a countdown a caller can
@@ -52,6 +70,7 @@ public:
     // fallback below without waiting for an unrealistic real workload to
     // hit it (P1.5b review item).
     explicit JobSystem(int num_workers = 0, std::size_t queue_capacity = 0);
+    JobSystem(int num_workers, const JobSystemOptions& options);
     ~JobSystem();
     JobSystem(const JobSystem&) = delete;
     JobSystem& operator=(const JobSystem&) = delete;
@@ -295,6 +314,7 @@ private:
     // Background lane (start_background_lane). bg_queue_ is created by
     // start_background_lane and guarded by bg_m_; bg_cv_ wakes lane threads.
     std::size_t queue_capacity_ = kDefaultQueueCapacity;
+    bool background_priority_ = false; // JobSystemOptions::background_priority
     std::vector<std::thread> bg_threads_;
     std::unique_ptr<RingQueue> bg_queue_;
     std::mutex bg_m_;

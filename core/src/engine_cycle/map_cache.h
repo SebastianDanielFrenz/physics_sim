@@ -90,7 +90,8 @@ inline constexpr std::uint32_t kPsMapsFormatVersion = 1;
 // keyed - the generator never reads it, so nothing in the cached payload
 // depends on it. Neither affects engine_maps_content_hash (and so neither
 // affects state_hash).
-[[nodiscard]] std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
+// The 3-argument form is public (ps/drivetrain/engine_maps.h, engine garage P1
+// A2); this header adds the explicit-version form below.
 // ps_audio A5: the same key for an explicit generator version (the form
 // above passes engine_map_generator_version(desc)); tests use it to show v1
 // and v2 keys of one desc differ.

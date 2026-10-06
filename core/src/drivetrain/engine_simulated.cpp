@@ -636,6 +636,10 @@ void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real i
 // ---------------------------------------------------------------------------
 
 std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps(const SimulatedEngineDesc& desc) {
+    if (desc.maps_pending) {
+        throw std::runtime_error("SimulatedEngine: the engine's maps are pending (it was loaded with EngineMapOptions::generate = "
+                                 "false); load it again with generate = true to run it");
+    }
     if (desc.architecture != EngineArchitecture::Piston4Stroke) {
         throw std::runtime_error("SimulatedEngine: rotary architecture is not implemented yet (I7e C13)");
     }
@@ -760,6 +764,10 @@ SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc) : SimulatedEng
 SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_ptr<const SimulatedEngineMaps> maps)
     : maps_(std::move(maps)) {
     if (!maps_) throw std::runtime_error("SimulatedEngine: null maps");
+    if (desc.maps_pending) {
+        throw std::runtime_error("SimulatedEngine: the engine's maps are pending (it was loaded with EngineMapOptions::generate = "
+                                 "false); load it again with generate = true to run it");
+    }
     if (desc.architecture != EngineArchitecture::Piston4Stroke) {
         throw std::runtime_error("SimulatedEngine: rotary architecture is not implemented yet (I7e C13)");
     }

@@ -28,11 +28,13 @@
 #include "ps/jobs/job_system.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ps::drivetrain {
@@ -67,19 +69,31 @@ constexpr real kRGas = kIsaAirGasConstantJKgK;
 constexpr real kBoostSupplyRatio = 1.05;
 constexpr int kPreviewRpm = 10;
 constexpr int kPreviewPim = 6;
+// Engine garage P1: Sketch's reduced grid, at most 8 rpm values x 3 p_im rows.
+constexpr int kSketchRpm = 8;
 
-constexpr real kSparkRetard[] = {-10.0, -5.0, 0.0, 2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0};
-constexpr int kSparkN = 10;
-constexpr int kSparkRefIndex = 2; // retard 0
 struct SweepSite {
     real rpm, p_pa;
 };
-constexpr SweepSite kSparkSites[] = {{2000.0, 50000.0}, {3000.0, 80000.0}, {5000.0, 100000.0}};
-constexpr int kSparkSites_n = 3;
-constexpr real kLambda[] = {0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5};
-constexpr int kLambdaN = 9;
-constexpr int kLambdaRefIndex = 4;
+// The sweeps of Preview and Full (identical, so their results differ only by
+// step and cycle settings and the grid).
+const std::vector<real> kSparkRetard = {-10.0, -5.0, 0.0, 2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0};
+const std::vector<SweepSite> kSparkSites = {{2000.0, 50000.0}, {3000.0, 80000.0}, {5000.0, 100000.0}};
+const std::vector<real> kLambda = {0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5};
 constexpr SweepSite kLambdaSite{3000.0, 80000.0};
+// Sketch: one spark-sweep site (the middle one) with 6 retards, a lambda sweep
+// of 5 values - [AS], chosen to keep the curve shapes the runtime needs (the
+// retard range and the lean/rich ends of Full) with ~1/4 of its sweep points.
+const std::vector<real> kSketchSparkRetard = {-10.0, 0.0, 5.0, 10.0, 20.0, 40.0};
+const std::vector<SweepSite> kSketchSparkSites = {{3000.0, 80000.0}};
+const std::vector<real> kSketchLambda = {0.6, 0.8, 1.0, 1.2, 1.5};
+// Position of the reference entry (retard 0 / lambda 1) in a sweep list.
+int index_of(const std::vector<real>& v, real x) {
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (v[i] == x) return static_cast<int>(i);
+    }
+    throw std::logic_error("engine map generator: sweep list without its reference entry");
+}
 
 struct Fnv {
     std::uint64_t h = 14695981039346656037ULL;
@@ -130,6 +144,21 @@ std::vector<real> subsample(const std::vector<real>& v, int m) {
         out.push_back(v[idx]);
     }
     return out;
+}
+
+// Sketch's p_im rows: the lowest node, the node nearest ambient and the top
+// node; when the node nearest ambient is itself the lowest or the top one, the
+// middle node (by index) stands in so the result keeps 3 rows (a grid of fewer
+// than 3 nodes keeps all of them). Strictly ascending by construction.
+std::vector<real> sketch_p_rows(const std::vector<real>& p) {
+    const std::size_t n = p.size();
+    if (n <= 3) return p;
+    std::size_t nearest = 0;
+    for (std::size_t i = 1; i < n; ++i) {
+        if (std::abs(p[i] - kPamb) < std::abs(p[nearest] - kPamb)) nearest = i;
+    }
+    const std::size_t mid = (nearest == 0 || nearest == n - 1) ? (n - 1) / 2 : nearest;
+    return {p.front(), p[mid], p.back()};
 }
 
 real cam_value(const Table2D& t, real rpm, real p) {
@@ -192,7 +221,23 @@ struct EngineMapGenTask::Impl {
     bool pipe = false;
     std::uint32_t version = kLumpedGeneratorVersion;
     engine_cycle::CycleEngineSettings engine_settings;
+    // The sweep lists of this quality (Sketch: one site, shorter lists).
+    std::vector<real> spark_retard;
+    std::vector<SweepSite> spark_sites;
+    std::vector<real> lambdas;
+    int spark_ref = 0, lambda_ref = 0;
 };
+
+namespace {
+const char* quality_name(MapQuality q) {
+    switch (q) {
+    case MapQuality::Full: return "Full";
+    case MapQuality::Preview: return "Preview";
+    case MapQuality::Sketch: return "Sketch";
+    }
+    throw std::logic_error("engine map generator: unknown MapQuality");
+}
+} // namespace
 
 EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality)
     : impl_(std::make_unique<Impl>()) {
@@ -212,17 +257,47 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
     require_ascending(desc.grid_rpm, "grid_rpm");
     require_ascending(desc.grid_p_im, "grid_p_im");
     s.proto = std::make_unique<engine_cycle::CycleStepper>(desc, s.lhv, s.afr); // validates the model desc
-    s.settings.h_s = quality == MapQuality::Full ? engine_cycle::kStepFull : engine_cycle::kStepPreview;
-    s.settings.cycles = quality == MapQuality::Full ? engine_cycle::kCyclesFull : engine_cycle::kCyclesPreview;
-    s.rpm_axis = quality == MapQuality::Full ? desc.grid_rpm : subsample(desc.grid_rpm, kPreviewRpm);
-    s.p_axis = quality == MapQuality::Full ? desc.grid_p_im : subsample(desc.grid_p_im, kPreviewPim);
+    // Every quality is handled by name: a new MapQuality value must be added
+    // here (the default throws) rather than silently falling into Preview's
+    // settings.
+    const bool full = quality == MapQuality::Full;
+    switch (quality) {
+    case MapQuality::Full:
+        s.rpm_axis = desc.grid_rpm;
+        s.p_axis = desc.grid_p_im;
+        s.spark_retard = kSparkRetard;
+        s.spark_sites = kSparkSites;
+        s.lambdas = kLambda;
+        break;
+    case MapQuality::Preview:
+        s.rpm_axis = subsample(desc.grid_rpm, kPreviewRpm);
+        s.p_axis = subsample(desc.grid_p_im, kPreviewPim);
+        s.spark_retard = kSparkRetard;
+        s.spark_sites = kSparkSites;
+        s.lambdas = kLambda;
+        break;
+    case MapQuality::Sketch:
+        s.rpm_axis = subsample(desc.grid_rpm, kSketchRpm);
+        s.p_axis = sketch_p_rows(desc.grid_p_im);
+        s.spark_retard = kSketchSparkRetard;
+        s.spark_sites = kSketchSparkSites;
+        s.lambdas = kSketchLambda;
+        break;
+    default:
+        throw std::logic_error("engine map generator: unknown MapQuality");
+    }
+    s.spark_ref = index_of(s.spark_retard, real(0.0));
+    s.lambda_ref = index_of(s.lambdas, real(1.0));
+    // Sketch runs Preview's step and cycle settings (engine garage P1: measure
+    // before changing; the dyno preview only needs the shape of the curves).
+    s.settings.h_s = full ? engine_cycle::kStepFull : engine_cycle::kStepPreview;
+    s.settings.cycles = full ? engine_cycle::kCyclesFull : engine_cycle::kCyclesPreview;
     s.mbt_atdc = mbt_spark_atdc(desc);
     s.pipe = desc.intake.has_value();
     s.version = engine_map_generator_version(desc);
     if (s.pipe) {
         s.engine_settings.h_s = s.settings.h_s;
-        s.engine_settings.settling_cycles =
-            quality == MapQuality::Full ? engine_cycle::kEngineSettlingCyclesFull : engine_cycle::kEngineSettlingCyclesPreview;
+        s.engine_settings.settling_cycles = full ? engine_cycle::kEngineSettlingCyclesFull : engine_cycle::kEngineSettlingCyclesPreview;
     }
     // C17a follow-up: Tier 1b spark schedule (empty = mbt_tracking) and Tier 2
     // ignition delay (Wiebe start = spark + delay).
@@ -258,12 +333,12 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         }
     }
     s.grid_n = s.ops.size();
-    for (int k = 0; k < kSparkSites_n; ++k) {
-        for (int j = 0; j < kSparkN; ++j) {
-            s.ops.push_back(make_op(kSparkSites[k].rpm, kSparkSites[k].p_pa, real(1.0), s.mbt_atdc + kSparkRetard[j]));
+    for (const SweepSite& site : s.spark_sites) {
+        for (real retard : s.spark_retard) {
+            s.ops.push_back(make_op(site.rpm, site.p_pa, real(1.0), s.mbt_atdc + retard));
         }
     }
-    for (int j = 0; j < kLambdaN; ++j) s.ops.push_back(make_op(kLambdaSite.rpm, kLambdaSite.p_pa, kLambda[j], s.mbt_atdc));
+    for (real lambda : s.lambdas) s.ops.push_back(make_op(kLambdaSite.rpm, kLambdaSite.p_pa, lambda, s.mbt_atdc));
     s.results.resize(s.ops.size());
     s.done.assign(s.ops.size(), 0);
     s.held.assign(s.ops.size(), 0);
@@ -323,6 +398,14 @@ void EngineMapGenTask::run_point(std::size_t i) {
         // arming) thread that calls finish().
         s.exceptions[i] = std::current_exception();
         s.done[i] = 2;
+    }
+}
+
+void EngineMapGenTask::build_check() const {
+    const Impl& s = *impl_;
+    if (s.pipe && !s.ops.empty()) {
+        // Same construction run_point makes for point 0; nothing is run.
+        engine_cycle::CycleEngine(s.desc, s.lhv, s.afr, s.ops.front(), s.engine_settings);
     }
 }
 
@@ -390,35 +473,44 @@ EngineMapsPtr EngineMapGenTask::finish() {
     m.has_pmep_excess = true;
 
     // f_lambda
+    const int lambda_n = static_cast<int>(s.lambdas.size());
+    const int spark_n = static_cast<int>(s.spark_retard.size());
+    const int sites_n = static_cast<int>(s.spark_sites.size());
     {
-        const std::size_t base = s.grid_n + static_cast<std::size_t>(kSparkSites_n * kSparkN);
+        const std::size_t base = s.grid_n + static_cast<std::size_t>(sites_n * spark_n);
         auto g = [&](int j) {
             const engine_cycle::PointResult& r = s.results[base + static_cast<std::size_t>(j)];
-            return r.w_gross_j / r.m_air_j_cyc * kLambda[j];
+            return r.w_gross_j / r.m_air_j_cyc * s.lambdas[static_cast<std::size_t>(j)];
         };
-        const real g_ref = g(kLambdaRefIndex);
-        for (int j = 0; j < kLambdaN; ++j) {
-            m.f_lambda.x.push_back(kLambda[j]);
-            m.f_lambda.y.push_back(j == kLambdaRefIndex ? real(1.0) : g(j) / g_ref);
+        const real g_ref = g(s.lambda_ref);
+        for (int j = 0; j < lambda_n; ++j) {
+            m.f_lambda.x.push_back(s.lambdas[static_cast<std::size_t>(j)]);
+            m.f_lambda.y.push_back(j == s.lambda_ref ? real(1.0) : g(j) / g_ref);
         }
     }
-    // eta_spark: x = spark - MBT = -retard (ascending), mean of the three normalised curves
+    // eta_spark: x = spark - MBT = -retard (ascending), mean of the normalised
+    // curves of the sweep sites (three for Preview/Full - summed in site order,
+    // so the value is bit-identical to the old (a + b + c) / 3 - one for Sketch)
     {
-        real norm[kSparkSites_n][kSparkN];
-        for (int k = 0; k < kSparkSites_n; ++k) {
+        std::vector<real> norm(static_cast<std::size_t>(sites_n * spark_n));
+        for (int k = 0; k < sites_n; ++k) {
             auto g = [&](int j) {
                 const engine_cycle::PointResult& r =
-                    s.results[s.grid_n + static_cast<std::size_t>(k * kSparkN + j)];
+                    s.results[s.grid_n + static_cast<std::size_t>(k * spark_n + j)];
                 return r.w_gross_j / r.m_air_j_cyc;
             };
-            const real g0 = g(kSparkRefIndex);
-            for (int j = 0; j < kSparkN; ++j) norm[k][j] = j == kSparkRefIndex ? real(1.0) : g(j) / g0;
+            const real g0 = g(s.spark_ref);
+            for (int j = 0; j < spark_n; ++j) {
+                norm[static_cast<std::size_t>(k * spark_n + j)] = j == s.spark_ref ? real(1.0) : g(j) / g0;
+            }
         }
         real spread = real(0.0);
-        for (int j = kSparkN - 1; j >= 0; --j) {
-            const real mean = (norm[0][j] + norm[1][j] + norm[2][j]) / real(3.0);
-            for (int k = 0; k < kSparkSites_n; ++k) spread = std::max(spread, std::abs(norm[k][j] - mean));
-            m.eta_spark.x.push_back(-kSparkRetard[j]);
+        for (int j = spark_n - 1; j >= 0; --j) {
+            real sum = norm[static_cast<std::size_t>(j)];
+            for (int k = 1; k < sites_n; ++k) sum += norm[static_cast<std::size_t>(k * spark_n + j)];
+            const real mean = sum / real(sites_n);
+            for (int k = 0; k < sites_n; ++k) spread = std::max(spread, std::abs(norm[static_cast<std::size_t>(k * spark_n + j)] - mean));
+            m.eta_spark.x.push_back(-s.spark_retard[static_cast<std::size_t>(j)]);
             m.eta_spark.y.push_back(mean);
         }
         em.eta_spark_spread = spread;
@@ -523,25 +615,118 @@ EngineMapsPtr EngineMapGenTask::finish() {
     m.source = std::string("generated by the ps::engine_cycle map generator v") + std::to_string(s.version) +
                (s.pipe ? " (PHYS-033 P4 I7c C16a; ps_audio A5 CycleEngine: every cylinder, pipes and installation)"
                        : " (PHYS-033 P4 I7c C16a)") +
-               ", quality " + (s.quality == MapQuality::Full ? "Full" : "Preview") +
+               ", quality " + quality_name(s.quality) +
                ", from the engine file's cycle block" +
                (s.desc.source.empty() ? std::string() : " (cycle source: " + s.desc.source + ")");
     em.content_hash = engine_maps_content_hash(em);
     return out;
 }
 
+namespace {
+
+// State shared by the points of one generate_engine_maps run. Jobs touch only
+// the two atomics (a relaxed load of the external cancel flag, one fetch_add per
+// finished point): no allocation, no lock inside a job.
+struct RunShared {
+    EngineMapGenTask* task = nullptr;
+    const std::atomic<bool>* cancel = nullptr;
+    std::atomic<std::size_t> finished{0}; // points whose run_point returned
+    std::atomic<bool> skipped{false};     // some point observed the cancel flag and did not run
+    std::atomic<bool> abort{false};       // the progress callback threw: stop starting points
+};
+
+void run_one_point(RunShared* sh, std::size_t i) {
+    if (sh->abort.load(std::memory_order_relaxed)) return;
+    if (sh->cancel != nullptr && sh->cancel->load(std::memory_order_relaxed)) {
+        sh->skipped.store(true, std::memory_order_relaxed);
+        return;
+    }
+    sh->task->run_point(i);
+    sh->finished.fetch_add(1, std::memory_order_release);
+}
+
+} // namespace
+
 EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
-                                   jobs::JobSystem* pool) {
+                                   jobs::JobSystem* pool, const MapGenerationControl* control) {
+    const std::atomic<bool>* cancel = control != nullptr ? control->cancel : nullptr;
+    const std::function<void(std::size_t, std::size_t)>* progress =
+        (control != nullptr && control->on_progress) ? &control->on_progress : nullptr;
+    // Cancelled before it started: no desc validation, no point, nothing built.
+    if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) throw GenerationCancelled();
+
     EngineMapGenTask task(desc, fuel, quality);
     const std::size_t n = task.point_count();
+    RunShared sh;
+    sh.task = &task;
+    sh.cancel = cancel;
+    std::size_t reported = 0;
+    const auto report_up_to = [&](std::size_t done) {
+        // One call per finished point, values 1..total in order (a burst between two polls
+        // arrives as consecutive calls), on this - the calling - thread only.
+        while (reported < done) {
+            ++reported;
+            if (progress != nullptr) (*progress)(reported, n);
+        }
+    };
+
     if (pool == nullptr) {
-        for (std::size_t i = 0; i < n; ++i) task.run_point(i);
+        for (std::size_t i = 0; i < n; ++i) {
+            run_one_point(&sh, i);
+            if (sh.skipped.load(std::memory_order_relaxed)) break;
+            report_up_to(sh.finished.load(std::memory_order_acquire));
+        }
     } else {
-        pool->parallel_for(n, 1, [&task](std::size_t b, std::size_t e) {
-            for (std::size_t i = b; i < e; ++i) task.run_point(i);
-        });
+        jobs::JobSystem::WaitGroup group;
+        for (std::size_t i = 0; i < n; ++i) {
+            RunShared* shp = &sh;
+            pool->submit(jobs::JobFn([shp, i]() { run_one_point(shp, i); }), &group);
+        }
+        std::exception_ptr callback_error;
+        if (progress != nullptr && !pool->on_worker_thread()) {
+            // Poll the counter the workers bump; the pool's own wait() would spin the
+            // same way (a non-worker caller has no queue to help drain).
+            while (group.remaining.load(std::memory_order_acquire) > 0) {
+                if (!callback_error) {
+                    try {
+                        report_up_to(sh.finished.load(std::memory_order_acquire));
+                    } catch (...) {
+                        // The jobs reference this frame: hold the exception until they are done.
+                        callback_error = std::current_exception();
+                        sh.abort.store(true, std::memory_order_relaxed);
+                    }
+                }
+                std::this_thread::yield();
+            }
+        } else {
+            pool->wait(group);
+        }
+        if (callback_error) std::rethrow_exception(callback_error);
+        report_up_to(sh.finished.load(std::memory_order_acquire));
     }
+    if (sh.skipped.load(std::memory_order_relaxed)) throw GenerationCancelled();
     return task.finish();
+}
+
+void validate_engine_map_generation(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {
+    EngineMapGenTask task(desc, fuel, quality); // desc/fuel/grid/spark-schedule validation
+    task.build_check();                          // point 0's build-time checks (pipe engines)
+    // finish()'s friction-axis sign check (the correlation's own values do not depend on any point).
+    if (desc.friction.model != FrictionModelDesc::Model::None) {
+        real prev = real(0.0);
+        const auto check = [&](real x) {
+            if (!(cycle_friction_torque_nm(desc, x) >= real(0.0))) {
+                throw std::runtime_error("engine map generator: the friction correlation is negative at " + std::to_string(x) +
+                                         " rpm");
+            }
+        };
+        check(real(0.0));
+        for (real r : desc.grid_rpm) {
+            check((prev + r) / real(2.0));
+            check(r);
+            prev = r;
+        }
+    }
 }
 
 std::uint64_t engine_maps_content_hash(const EngineMaps& em) {
