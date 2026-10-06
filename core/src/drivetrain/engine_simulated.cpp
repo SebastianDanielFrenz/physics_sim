@@ -492,12 +492,14 @@ real steady_p(const SimulatedEngineMaps& m, const Ambient& amb, real omega, real
 // header). C12: the limiter is bypassed by evaluate_torque_impl's
 // ignore_limiter flag (fire = 1 when fired, exactly what C11's limiter-free
 // maps copy gave) instead of copying the whole maps struct, which allocated.
+// exh: the pressure the exhaust works against when it differs from the supply amb (a turbo
+// engine's turbine inlet, see SimulatedEngine::evaluate_torque); nullptr = amb for both.
 real steady_net_torque(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& st, real rpm, real x_thr, real x_iac,
-                       bool fired, real k_ecu = real(1.0), real hyd_ref_rpm = real(2000.0)) {
+                       bool fired, real k_ecu = real(1.0), real hyd_ref_rpm = real(2000.0), const Ambient* exh = nullptr) {
     const real omega = rpm / kRadPerSecToRpm;
     const real p = steady_p(m, amb, omega, x_thr, x_iac);
     // k_ecu: the ECU's friction scale (engine thermal plan T1); T1b: the Coulomb row's kinetic value is not scaled.
-    return evaluate_torque_impl(m, amb, st, omega, p, fired, real(1.0), false, true, nullptr, k_ecu, hyd_ref_rpm).tau - m.c_k;
+    return evaluate_torque_impl(m, exh ? *exh : amb, st, omega, p, fired, real(1.0), false, true, nullptr, k_ecu, hyd_ref_rpm).tau - m.c_k;
 }
 
 // The three scalars fill_idle_control produces. A plain POD on purpose: the live path
@@ -514,15 +516,15 @@ struct IdleControlOut {
 // Setup builds use 60 iterations; live control solves only the current idle operating point.
 void fill_idle_control(const SimulatedEngineMaps& m,const Ambient& amb,real idle_rpm,real idle_max_x,
                        real idle_max_torque_nm,IdleControlOut& t,int iterations,real k_ecu = real(1.0),
-                       real hyd_ref_rpm = real(2000.0)) {
+                       real hyd_ref_rpm = real(2000.0), const Ambient* exh = nullptr) {
     const StarterDesc no_starter{};
     // Idle feed-forward: the plate (electronic) / bypass valve (mechanical,
     // plate at 0) position whose steady net torque at idle_rpm is zero.
     {
         const bool mech = m.throttle_input == ThrottleInput::Mechanical;
         auto net = [&](real x) {
-            return mech ? steady_net_torque(m, amb, no_starter, idle_rpm, real(0.0), x, true, k_ecu, hyd_ref_rpm)
-                        : steady_net_torque(m, amb, no_starter, idle_rpm, x, real(0.0), true, k_ecu, hyd_ref_rpm);
+            return mech ? steady_net_torque(m, amb, no_starter, idle_rpm, real(0.0), x, true, k_ecu, hyd_ref_rpm, exh)
+                        : steady_net_torque(m, amb, no_starter, idle_rpm, x, real(0.0), true, k_ecu, hyd_ref_rpm, exh);
         };
         real ff = real(0.0);
         if (net(real(0.0)) >= real(0.0)) {
@@ -1065,7 +1067,35 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
 
     // Idle PI in ACTUATOR units: plate position (electronic) or bypass
     // valve opening (mechanical); feed-forward = maps.idle_ff.
-    const real ff = live_steady()?live_idle_ff_:steady_.idle_ff;
+    real ff = live_steady()?live_idle_ff_:steady_.idle_ff;
+    // Boost-aware idle feed-forward (2026-10-06, car_hyper idle hunt after a free rev): after a lift the
+    // turbo rotors spin down over tens of seconds and keep the supply ahead of the plate far above ambient
+    // (3.1 bar abs at the lift, still 1.2 bar 20 s later). The feed-forward above is solved against the
+    // AMBIENT supply, so it admitted too much air and the one-sided idle PI could not take it back - the
+    // engine cycled between the DFCO enable and re-enable rpm. With the pedal released, a turbo engine
+    // whose charge pressure is above ambient solves its feed-forward against the charge pressure and
+    // temperature (supply) and the turbine-inlet pressure (exhaust), exactly as evaluate_torque and
+    // manifold_rhs see them. Quantised (1 kPa, 1 K) and cached: a pure function of the quantised state,
+    // recomputed only when it changes. At or below ambient + 1 kPa the ambient feed-forward stays, so a
+    // turbo engine at rest and every atmospheric engine are unchanged.
+    if (turbo_ && theta_req < real(0.01) && turbo_->charge_pa > p_amb_ + kBoostIdleThresholdPa &&
+        (state_ == EngineState::Running || state_ == EngineState::Cranking)) {
+        const real qp = std::round(turbo_->charge_pa / real(1000.0)) * real(1000.0);
+        const real qt = std::round(turbo_->charge_k);
+        const real qe = std::round(turbo_->exhaust_pa / real(1000.0)) * real(1000.0);
+        if (qp != boost_idle_p_ || qt != boost_idle_t_ || qe != boost_idle_exh_ || ff != boost_idle_base_ff_) {
+            IdleControlOut idle;
+            const Ambient exh = make_ambient(qe, qt);
+            // Feed-forward only (no authority-cap solve): the cap below stays the ambient one, max(cap, ff) as before.
+            fill_idle_control(m, make_ambient(qp, qt), desc_idle_rpm_, idle_.max_throttle, real(0.0), idle, 24, ecu_k_, hyd_ref_rpm_, &exh);
+            boost_idle_p_ = qp;
+            boost_idle_t_ = qt;
+            boost_idle_exh_ = qe;
+            boost_idle_base_ff_ = ff;
+            boost_idle_ff_ = std::min(idle.idle_ff, ff); // boost never asks for MORE idle air than ambient supply
+        }
+        ff = boost_idle_ff_;
+    }
     // Authority cap (IdleControlDesc::max_torque_nm, owner 2026-09-29): enough
     // to creep in gear, not a hidden launch aid.
     const real idle_cap=live_steady()?live_idle_cap_x_:steady_.idle_cap_x;

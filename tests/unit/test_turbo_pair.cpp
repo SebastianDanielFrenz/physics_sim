@@ -107,7 +107,10 @@ TEST_CASE("Guard: a pair without I7d blocks is bit-identical to master 976e8d7",
     // speed; the engine hash also folds the wastegate area. Was pair 0xeb6a5f7cc032271f / engine
     // 0xd8b9c8a08566580c (9fd087c).
     CHECK(ph == 0xe7d5137fd1bbb44dULL);
-    CHECK(eh == 0x721d080fecaad8b0ULL);
+    // Engine hash re-recorded 2026-10-06 for the boost-aware idle feed-forward (test_hyper_idle_recovery.cpp):
+    // the script's 1 s lift at 5000 rpm runs the DFCO dashpot, whose idle plate is now solved against the
+    // charge pressure while it is above ambient; the pair hash is unchanged. Was engine 0x721d080fecaad8b0.
+    CHECK(eh == 0x9187a72a2a306b09ULL);
 }
 
 TEST_CASE("Guard scripts exercise the turbo: spool, lift-off, re-apply", "[turbo][drivetrain][guard]") {

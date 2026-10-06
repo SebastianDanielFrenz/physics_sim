@@ -399,6 +399,10 @@ private:
     SimulatedSteadyTables steady_; // full setup cache; non-reference anchor is hashed, values derive from maps/anchor
     std::uint64_t steady_rebuilds_ = 0;
     real live_idle_ff_=0, live_idle_p_im_=0, live_idle_cap_x_=0;
+    // Boost-aware idle feed-forward cache (pre_solve): the quantised charge pressure/temperature and turbine-inlet
+    // pressure plus the ambient feed-forward it was solved for; boost_idle_ff_ is a pure function of them (not hashed).
+    static constexpr real kBoostIdleThresholdPa = 1000.0;
+    real boost_idle_p_ = -1.0, boost_idle_t_ = -1.0, boost_idle_exh_ = -1.0, boost_idle_base_ff_ = -1.0, boost_idle_ff_ = 0.0;
     // Engine thermal plan T1 (vault PHYS-063): the oil-viscosity friction scale. plant_k_ = the PLANT's k (the
     // physical friction: tau_fric and its slope in d; T1b: never the Coulomb caps); ecu_k_ = the ECU's quantised estimate
     // (steady torque tables, idle feed-forward/cap, torque demand). Both come from Sensors, one tick old, both 1.0
