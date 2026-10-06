@@ -1,0 +1,28 @@
+{
+  "format": "physics_sim.nitrous_controller/1",
+  "arm_channel": "nitrous_arm",
+  "arm_default": 0,
+  "min_throttle_command": 0.95,
+  "min_rpm": 3000,
+  "max_rpm": 6200,
+  "min_gear": 1,
+  "max_gear": 99,
+  "min_speed_mps": 0,
+  "progressive": {
+    "start_fraction": 1.0,
+    "delay_s": 0.0,
+    "ramp_s": 0.0
+  },
+  "spark_retard_deg": 2.0,
+  "safety": {
+    "min_bottle_gauge_bar": 55.0,
+    "cut_on_fuel_starve": 1,
+    "max_active_s": 15.0
+  },
+  "purge": {
+    "channel": "nitrous_purge",
+    "jet_diameter_mm": 1.0,
+    "cd": 0.66
+  },
+  "source": "A basic wet-kit activation strategy: an arm switch (channel nitrous_arm, default off), a wide-open-throttle switch (min_throttle_command 0.95 [AS: a WOT microswitch closes near full travel]) and an rpm window 3000-6200 rpm [AS: activation well above idle, max below the A25A's 6600 rpm limiter - out/n2o_plan.md 2.5's example]; on/off (no progressive controller). spark_retard_deg 2.0 [C: midpoint of the 1-3 deg the Edelbrock 70011 sheet lists for its 50 hp shot - Edelbrock 'Jet Map Information' for Performer nitrous kits #70011/#70012, Brochure 63-70011 Rev. 07/08, https://static.speedwaymotors.com/pdf/32570011.pdf, as transcribed in out/n2o_plan.md section 9.2 (the sheet itself was not re-read in N2: no download permission in that session)]. Safety cuts: bottle below 55 bar gauge (~800 psig) [AS], fuel starvation [AS], 15 s maximum spray [AS]. Purge solenoid jet 1.0 mm, Cd 0.66 [AS: the kit jet's Cd]. UNVALIDATED until N2O plan N5 (out/n2o_plan.md section 9.2: the whole-kit Edelbrock jet-map check has not run yet)."
+}

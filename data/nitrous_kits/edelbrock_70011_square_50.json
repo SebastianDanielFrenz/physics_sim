@@ -1,0 +1,23 @@
+{
+  "format": "physics_sim.nitrous_kit/1",
+  "type": "wet",
+  "injection": "plenum",
+  "nozzle_count": 1,
+  "nitrous_jet_diameter_mm": 0.9652,
+  "nitrous_jet_cd": 0.66,
+  "flow_model": "hem",
+  "fuel_jet_diameter_mm": 0.9652,
+  "fuel_jet_cd": 0.7,
+  "fuel_pressure": {
+    "gauge_bar": 0.448,
+    "reference": "atmosphere"
+  },
+  "rating": {
+    "power_kw": 37.285,
+    "bottle_gauge_bar": 65.5,
+    "basis": "crank",
+    "source": "50 hp [C: Edelbrock 'Jet Map Information' for Performer nitrous kits #70011/#70012, Brochure 63-70011 Rev. 07/08, https://static.speedwaymotors.com/pdf/32570011.pdf, as transcribed in out/n2o_plan.md section 9.2 (the sheet itself was not re-read in N2: no download permission in that session)] x 0.745699872 kW/hp [D]; crank power on Edelbrock's engine dyno at 950 psi bottle pressure."
+  },
+  "default_controller": "../nitrous_controllers/edelbrock_basic.json",
+  "source": "Edelbrock #70011 Performer nitrous kit, square flange, 38/38 jets (nitrous/fuel) -> 50 hp [C: Edelbrock 'Jet Map Information' for Performer nitrous kits #70011/#70012, Brochure 63-70011 Rev. 07/08, https://static.speedwaymotors.com/pdf/32570011.pdf, as transcribed in out/n2o_plan.md section 9.2 (the sheet itself was not re-read in N2: no download permission in that session)]. Jet number 38 = 0.038 in [AS: the industry convention, not stated on the sheet] = 0.9652 mm [D: x 25.4]. nitrous_jet_cd 0.66 [C: Dyer et al. 2007 mean discharge coefficient, as reported by Waxman et al.; measured range 0.6-0.8 by inlet geometry]. flow_model hem [AS: out/n2o_plan.md owner Q1 recommended default - a long feed line flashes before the jet]. fuel_jet_cd 0.70 [AS: a sharp-edged short orifice, inside the Lichtarowicz, Duggins and Markland 1965 range; not re-read in N2]. fuel_pressure 6.5 psi [C: the sheet's fuel pressure] = 0.448 bar gauge [D: x 0.0689476] over the atmosphere [AS: a non-referenced kit fuel regulator]. injection plenum changes nothing physical in N2 (out/n2o_plan.md 2.4). UNVALIDATED until N2O plan N5 (out/n2o_plan.md section 9.2: the whole-kit Edelbrock jet-map check has not run yet). The sheet lists 1-3 deg spark retard for this shot; the default controller (edelbrock_basic.json) retards 2 deg."
+}

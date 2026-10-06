@@ -112,8 +112,80 @@ real psi_true(real pr) {
     return std::sqrt(real(2.0) * g / (g - real(1.0)) * std::max(real(0.0), a - b));
 }
 
+// --- N2O plan N2: the wet charge model (out/n2o_plan.md section 1.2) --------------------------
+// Constants (labels: [C] cited, [D] derived):
+// - kAirMolarMassKgMol 28.96442 g/mol [C: ISO 2533:1975 Table 1, the standard atmosphere's dry air - the
+//   same standard isa_air.h's R = 287.05 J/(kg K) comes from (8314.32/28.96442)].
+// - kAirO2MassFraction 0.2314 [D: ISO 2533:1975 Table 1 dry-air composition, O2 volume fraction 0.20946,
+//   M_O2 31.9988 g/mol: 0.20946 * 31.9988 / 28.96442 = 0.23140].
+// - cp of air = R * gamma / (gamma - 1) = 1004.675 J/(kg K) [D from the engine's own R and gamma 1.4].
+// The N2O side (molar mass, O2 fraction 0.3635, decomposition heat 1.8643 MJ/kg, the 1 bar gas enthalpy)
+// comes from the oxidizer file through OxidizerTables.
+constexpr real kAirMolarMassKgMol = 0.02896442;
+constexpr real kAirO2MassFraction = 0.2314;
+constexpr real kAirCp = SimulatedEngine::kGasConstant * SimulatedEngine::kGamma / (SimulatedEngine::kGamma - real(1.0));
+
+// The air a (kg per crank revolution) the cylinder traps next to n kg of N2O, and the charge temperature.
+// Two balances at the port (section 1.2 steps 1-2):
+//   moles:  a + r*n = X / T_mix                       r = M_air/M_N2O, X = VE*p*V_c/R (kg K)
+//   energy: a*cp_a*(T_in - T_mix) = n*(h_g(T_mix) - h_in)     (adiabatic constant-pressure mixing; the
+//           evaporated N2O as an ideal gas at its low partial pressure [AS], h_g on the 1 bar isobar)
+// With h_g(T) = h0 + cp_n*(T - t0) on one isobar segment, eliminating T_mix gives
+//   A2*a^2 + A1*a + A0 = 0,  A2 = cp_a*T_in,  A1 = r*n*cp_a*T_in - n*B - X*cp_a,  A0 = -n*(r*n*B + X*cp_n),
+//   B = h0 - cp_n*t0 - h_in,
+// whose positive root is taken in closed form (one sqrt). The segment is the one holding T_mix: start at
+// T_in's, move one segment toward the solution while it lies outside, stop on a reversal (h_g is
+// continuous, so the root is unique). A0 >= 0 means the N2O alone fills the cylinder (step 9): a = 0.
+// Derivatives by implicit differentiation of F(a, X, n) = 0 on the final segment.
+struct N2oAir {
+    real a = 0.0, t_mix = 0.0;
+    real da_dx = 0.0, da_dn = 0.0;
+    bool overflow = false;
+};
+
+N2oAir solve_n2o_air(real x, real n, real t_in, real h_in, const OxidizerTables& ox) {
+    const real r = kAirMolarMassKgMol / ox.molar_mass_kg_mol();
+    const std::size_t last = ox.gas_segment_count() - 1;
+    std::size_t k = ox.gas_segment_index(t_in);
+    int dir = 0;
+    N2oAir s;
+    for (std::size_t it = 0; it <= last + 1; ++it) {
+        const OxidizerTables::GasSegment g = ox.gas_segment(k);
+        const real b = g.h0 - g.cp * g.t0 - h_in;
+        const real a2 = kAirCp * t_in;
+        const real a1 = r * n * kAirCp * t_in - n * b - x * kAirCp;
+        const real a0 = -n * (r * n * b + x * g.cp);
+        if (!(a0 < real(0.0))) {
+            s = N2oAir{};
+            s.overflow = true;
+            s.t_mix = g.cp > real(0.0) ? -b / g.cp : t_in;
+            return s;
+        }
+        const real sq = std::sqrt(a1 * a1 - real(4.0) * a2 * a0);
+        s.a = a1 <= real(0.0) ? (sq - a1) / (real(2.0) * a2) : (real(-2.0) * a0) / (a1 + sq);
+        s.t_mix = x / (s.a + r * n);
+        const real fa = real(2.0) * a2 * s.a + a1;
+        const real fx = -kAirCp * s.a - n * g.cp;
+        const real fn = (r * kAirCp * t_in - b) * s.a - (real(2.0) * r * n * b + x * g.cp);
+        s.da_dx = -fx / fa;
+        s.da_dn = -fn / fa;
+        if (s.t_mix < g.t0 && k > 0 && dir <= 0) {
+            --k;
+            dir = -1;
+            continue;
+        }
+        if (s.t_mix > g.t1 && k < last && dir >= 0) {
+            ++k;
+            dir = 1;
+            continue;
+        }
+        break;
+    }
+    return s;
+}
+
 SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, const Ambient& amb, real p, real omega, real x_thr,
-                                               real x_iac) {
+                                               real x_iac, const NitrousCharge* nc = nullptr) {
     SimulatedEngine::ManifoldRhs r;
     const real frac = m.area_fraction.evaluate(x_thr);
     const real a_eff = m.cd * m.a_throttle_full_m2 * frac + x_iac * m.a_bypass_m2;
@@ -135,8 +207,20 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
     const real ve = m.maps.ve.value(rpm, p);
     const real dve_dp = m.maps.ve.dvalue_dy(rpm, p);
     const real vol_rate = m.v_disp_m3 * m.c_cycle * std::max(omega, real(0.0)) / kTwoPi; // m^3/s swept (VE 1)
-    r.m_cyl = ve * p / amb.r_t * vol_rate;
-    const real dm_cyl_dp = (dve_dp * p + ve) / amb.r_t * vol_rate;
+    real dm_cyl_dp = real(0.0);
+    if (nc && omega > real(0.0) && nc->mdot_n_kg_s > real(0.0) && nc->oxidizer) {
+        // N2O plan N2: the cylinders draw the charge model's air a per revolution (section 1.2 step 3), so
+        // the plenum mass balance stays consistent with the torque evaluation; da/dp = da/dX * dX/dp.
+        const real rev_rate = omega / kTwoPi;
+        const real vc_r = m.v_disp_m3 * m.c_cycle / SimulatedEngine::kGasConstant;
+        const N2oAir s = solve_n2o_air(ve * p * vc_r, nc->mdot_n_kg_s / rev_rate, amb.r_t / SimulatedEngine::kGasConstant,
+                                       nc->h_in_j_kg, *nc->oxidizer);
+        r.m_cyl = s.a * rev_rate;
+        dm_cyl_dp = s.da_dx * (dve_dp * p + ve) * vc_r * rev_rate;
+    } else {
+        r.m_cyl = ve * p / amb.r_t * vol_rate;
+        dm_cyl_dp = (dve_dp * p + ve) / amb.r_t * vol_rate;
+    }
     const real c = amb.r_t / m.v_im_m3;
     r.f = c * (r.m_thr - r.m_cyl);
     r.dfdp = c * (dm_thr_dp - dm_cyl_dp);
@@ -146,11 +230,14 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
 SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& starter,
                                                  real omega, real p, bool fired, real s_starve, bool starter_active,
                                                  bool ignore_limiter = false, const AntiLagDesc* als = nullptr, real k_fric = real(1.0),
-                                                 real hyd_ref_rpm = real(2000.0)) {
+                                                 real hyd_ref_rpm = real(2000.0), const NitrousCharge* nc = nullptr) {
     SimulatedEngine::TorqueEval e;
     const real rpm = std::abs(omega) * kRadPerSecToRpm;
     const real s_w = sign(omega);
     const real vc_2pi = m.v_disp_m3 * m.c_cycle / kTwoPi;
+    // N2O plan N2: the wet charge model runs only with a charge input and a turning crank (n = mdot_n*2pi/omega);
+    // otherwise every expression below is the pre-N2 one, bit for bit.
+    const bool n2o = nc != nullptr && omega > real(0.0) && nc->mdot_n_kg_s > real(0.0) && nc->oxidizer != nullptr;
 
     // air per revolution (and its rpm slope at frozen p)
     const real ve = m.maps.ve.value(rpm, p);
@@ -158,6 +245,9 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     const real air_per_ve = p / amb.r_t * m.v_disp_m3 * m.c_cycle;
     e.m_air_rev = ve * air_per_ve;
     const real dma_drpm = dve_drpm * air_per_ve;
+    e.charge.t_in_k = amb.r_t / SimulatedEngine::kGasConstant;
+    e.charge.t_mix_k = e.charge.t_in_k;
+    e.charge.air_kg_rev = e.m_air_rev;
 
     // combustion
     real fire = real(0.0), dfire_drpm = real(0.0);
@@ -175,11 +265,14 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     real dlambda_drpm = m.ecu.lambda_target.dvalue_dx(rpm, p);
     if (als && als->lambda > real(0.0)) { e.lambda = als->lambda; dlambda_drpm = real(0.0); } // anti-lag enrichment
     const real spark_target = m.ecu.spark_advance_deg.value(rpm, p);
-    real spark = spark_target;
+    // N2O plan D7: the kit's retard comes off the schedule BEFORE the knock limit, spark = min(schedule - retard,
+    // theta_kl); a constant offset, so dspark_drpm is unchanged. Without N2O spark_sched IS spark_target.
+    const real spark_sched = (n2o && nc->retard_deg != real(0.0)) ? spark_target - nc->retard_deg : spark_target;
+    real spark = spark_sched;
     real dspark_drpm = m.ecu.spark_advance_deg.dvalue_dx(rpm, p);
     if (m.maps.has_theta_kl) {
         const real kl = m.maps.theta_kl_deg.value(rpm, p);
-        if (kl < spark_target) {
+        if (kl < spark_sched) {
             spark = kl;
             dspark_drpm = m.maps.theta_kl_deg.dvalue_dx(rpm, p);
         }
@@ -197,10 +290,55 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     e.spark_deg = spark_applied;
     e.theta_mbt_deg = m.maps.theta_mbt_deg.value(rpm, p);
     const real dmbt_drpm = m.maps.theta_mbt_deg.dvalue_dx(rpm, p);
-    e.eta_i = m.maps.eta_i.value(rpm, e.m_air_rev);
-    const real deta_drpm = m.maps.eta_i.dvalue_dx(rpm, e.m_air_rev) + m.maps.eta_i.dvalue_dy(rpm, e.m_air_rev) * dma_drpm;
-    e.f_lambda = m.maps.f_lambda.evaluate(e.lambda);
-    const real dfl_dlambda = curve_slope_at(m.maps.f_lambda, e.lambda);
+
+    // N2O plan N2 (section 1.2 steps 1-4): the charge. Per rev n = mdot_n*2pi/omega (dn/drpm = -n/rpm, the
+    // constant-mass-flow source), kit fuel kf likewise; the air a and T_mix from the two port balances
+    // (solve_n2o_air), a_eq = a + k_O2*n the O2-equivalent air, the ECU fuels the trapped air at its lambda
+    // target [AS, owner Q8], lambda_c = a_eq / (AFR_st * (f_ecu + kf)). eta_i is read at a_eq (step 5 [AS]),
+    // f_lambda at lambda_c. Without N2O the reads below use e.m_air_rev/dma_drpm/e.lambda as before.
+    real eta_y = e.m_air_rev, deta_y_drpm = dma_drpm, lambda_fl = e.lambda;
+    real n_rev = real(0.0), dn_drpm = real(0.0), kf_rev = real(0.0), dkf_drpm = real(0.0);
+    real f_ecu = real(0.0), df_ecu_drpm = real(0.0), dlc_drpm = real(0.0);
+    if (n2o) {
+        const OxidizerTables& ox = *nc->oxidizer;
+        n_rev = nc->mdot_n_kg_s * kTwoPi / omega;
+        kf_rev = nc->mdot_kf_kg_s * kTwoPi / omega;
+        dn_drpm = -n_rev / rpm;
+        dkf_drpm = -kf_rev / rpm;
+        const real vc_r = m.v_disp_m3 * m.c_cycle / SimulatedEngine::kGasConstant;
+        const N2oAir s = solve_n2o_air(ve * p * vc_r, n_rev, e.charge.t_in_k, nc->h_in_j_kg, ox);
+        const real da_drpm = s.da_dx * dve_drpm * p * vc_r + s.da_dn * dn_drpm;
+        e.m_air_rev = s.a;
+        const real k_o2 = ox.oxygen_mass_fraction() / kAirO2MassFraction;
+        const real a_eq = s.a + k_o2 * n_rev;
+        const real daeq_drpm = da_drpm + k_o2 * dn_drpm;
+        const real afr_t = e.lambda * m.afr_stoich;
+        f_ecu = s.a / afr_t;
+        df_ecu_drpm = da_drpm / afr_t - s.a * dlambda_drpm / (e.lambda * afr_t);
+        const real f_tot = f_ecu + kf_rev;
+        const real df_tot = df_ecu_drpm + dkf_drpm;
+        real lambda_c = real(0.0);
+        if (f_tot > real(0.0)) {
+            lambda_c = a_eq / (m.afr_stoich * f_tot);
+            dlc_drpm = (daeq_drpm * f_tot - a_eq * df_tot) / (m.afr_stoich * f_tot * f_tot);
+        }
+        eta_y = a_eq;
+        deta_y_drpm = daeq_drpm;
+        lambda_fl = lambda_c;
+        e.charge.t_mix_k = s.t_mix;
+        e.charge.air_kg_rev = s.a;
+        e.charge.n2o_kg_rev = n_rev;
+        e.charge.ecu_fuel_kg_rev = f_ecu;
+        e.charge.kit_fuel_kg_rev = kf_rev;
+        e.charge.o2_equiv_air_kg_rev = a_eq;
+        e.charge.lambda_combined = lambda_c;
+        e.charge.overflow = s.overflow;
+        e.n2o_rev = n_rev;
+    }
+    e.eta_i = m.maps.eta_i.value(rpm, eta_y);
+    const real deta_drpm = m.maps.eta_i.dvalue_dx(rpm, eta_y) + m.maps.eta_i.dvalue_dy(rpm, eta_y) * deta_y_drpm;
+    e.f_lambda = m.maps.f_lambda.evaluate(lambda_fl);
+    const real dfl_dlambda = curve_slope_at(m.maps.f_lambda, lambda_fl);
     const real dspark_rel = spark_applied - e.theta_mbt_deg;
     e.eta_spark = m.maps.eta_spark.evaluate(dspark_rel);
     real des_d = curve_slope_at(m.maps.eta_spark, dspark_rel);
@@ -216,22 +354,55 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
         des_d = v > real(0.0) ? slope : real(0.0);
     }
 
-    const real g = e.eta_i * e.f_lambda * e.eta_spark;
-    const real dg_drpm = deta_drpm * e.f_lambda * e.eta_spark + e.eta_i * dfl_dlambda * dlambda_drpm * e.eta_spark +
-                         e.eta_i * e.f_lambda * des_d * (dspark_drpm - dmbt_drpm);
-    const real afr = e.lambda * m.afr_stoich;
-    const real fuel_per_fire = e.m_air_rev / afr; // kg/rev at fire 1, s 1
-    e.m_fuel_rev = fuel_per_fire * fire * s_starve;
-    const real dfuel_per_fire_drpm = dma_drpm / afr - e.m_air_rev * dlambda_drpm / (e.lambda * afr);
-    const real dmfuel_drpm = s_starve * (fire * dfuel_per_fire_drpm + fuel_per_fire * dfire_drpm);
     const real lhv_2pi = m.lhv_j_kg / kTwoPi;
-    e.tau_comb = g * lhv_2pi * e.m_fuel_rev;
-    e.tau_comb_unretarded = e.tau_comb;
-    if (spark_applied != spark) {
-        const real g0 = e.eta_i * e.f_lambda * m.maps.eta_spark.evaluate(spark - e.theta_mbt_deg);
-        e.tau_comb_unretarded = g0 * lhv_2pi * e.m_fuel_rev;
+    real dcomb_drpm = real(0.0);
+    if (!n2o) {
+        const real g = e.eta_i * e.f_lambda * e.eta_spark;
+        const real dg_drpm = deta_drpm * e.f_lambda * e.eta_spark + e.eta_i * dfl_dlambda * dlambda_drpm * e.eta_spark +
+                             e.eta_i * e.f_lambda * des_d * (dspark_drpm - dmbt_drpm);
+        const real afr = e.lambda * m.afr_stoich;
+        const real fuel_per_fire = e.m_air_rev / afr; // kg/rev at fire 1, s 1
+        e.m_fuel_rev = fuel_per_fire * fire * s_starve;
+        const real dfuel_per_fire_drpm = dma_drpm / afr - e.m_air_rev * dlambda_drpm / (e.lambda * afr);
+        const real dmfuel_drpm = s_starve * (fire * dfuel_per_fire_drpm + fuel_per_fire * dfire_drpm);
+        e.tau_comb = g * lhv_2pi * e.m_fuel_rev;
+        e.tau_comb_unretarded = e.tau_comb;
+        if (spark_applied != spark) {
+            const real g0 = e.eta_i * e.f_lambda * m.maps.eta_spark.evaluate(spark - e.theta_mbt_deg);
+            e.tau_comb_unretarded = g0 * lhv_2pi * e.m_fuel_rev;
+        }
+        dcomb_drpm = lhv_2pi * (dg_drpm * e.m_fuel_rev + g * dmfuel_drpm);
+    } else {
+        // N2O plan N2 (section 1.2 step 6): work per rev = eta_i*eta_spark*(f_lambda(lambda_c)*LHV*f*fire*s +
+        // dH_dec*n*fire*s). The fired charge burns f = f_ecu + kf; the N2O in it decomposes completely [AS].
+        // Booked fuel = (f_ecu*fire + kf)*s: the ECU skips a cut cylinder, the kit jet does not (its fuel passes
+        // unburnt [AS], the same one-substep-late cut as section 1.3). The decomposition share uses fire*s_starve
+        // (PROVISIONAL: the plan writes fire_n = fire; a starving substep burns only the fuelled share, so the
+        // N2O in the unfuelled share passes through as well - identical when not starving).
+        const real dh_dec = nc->oxidizer->decomposition_j_per_kg();
+        const real f_tot = f_ecu + kf_rev;
+        const real df_tot = df_ecu_drpm + dkf_drpm;
+        const real fs = fire * s_starve;
+        const real fb = f_tot * fs;
+        const real dfb = s_starve * (df_tot * fire + f_tot * dfire_drpm);
+        const real nb = n_rev * fs;
+        const real dnb = s_starve * (dn_drpm * fire + n_rev * dfire_drpm);
+        const real heat = e.f_lambda * m.lhv_j_kg * fb + dh_dec * nb; // J per rev released in the fired charges
+        const real dheat = dfl_dlambda * dlc_drpm * m.lhv_j_kg * fb + e.f_lambda * m.lhv_j_kg * dfb + dh_dec * dnb;
+        const real gs = e.eta_i * e.eta_spark;
+        const real dgs = deta_drpm * e.eta_spark + e.eta_i * des_d * (dspark_drpm - dmbt_drpm);
+        e.m_fuel_rev = (f_ecu * fire + kf_rev) * s_starve;
+        e.kit_fuel_rev = kf_rev * s_starve;
+        e.burnt_fuel_rev = fb;
+        e.n2o_burnt_rev = nb;
+        e.tau_comb = gs * heat / kTwoPi;
+        e.tau_comb_unretarded = e.tau_comb;
+        if (spark_applied != spark) {
+            const real g0 = e.eta_i * m.maps.eta_spark.evaluate(spark - e.theta_mbt_deg);
+            e.tau_comb_unretarded = g0 * heat / kTwoPi;
+        }
+        dcomb_drpm = (dgs * heat + gs * dheat) / kTwoPi;
     }
-    real dcomb_drpm = lhv_2pi * (dg_drpm * e.m_fuel_rev + g * dmfuel_drpm);
     // Anti-lag cylinder cut: the fuel is still injected (m_fuel_rev, booked), only the fired share burns in
     // the cylinder; the cut charge reaches the exhaust manifold (the exhaust energy balance).
     if (als && als->cylinder_cut_fraction > real(0.0)) {
@@ -710,29 +881,31 @@ void SimulatedEngine::reset(EngineState state) {
     idle_integrator_ = real(0.0);
     limiter_cut_ = false;
     dfco_active_ = false;
+    n2o_on_ = false; // N2O plan N2: re-derived from the next substep's sensors
+    n2o_in_kg_ = n2o_burnt_kg_ = kit_fuel_kg_ = n2o_dh_j_kg_ = burnt_fuel_kg_ = real(0.0);
     init_state_for(state);
 }
 
 real SimulatedEngine::psi(real pr, real* dpsi_dpr) const { return psi_lookup(maps_->psi, pr, dpsi_dpr); }
 
-SimulatedEngine::ManifoldRhs SimulatedEngine::manifold_rhs(real p_im, real omega, real x_thr, real x_iac) const {
+SimulatedEngine::ManifoldRhs SimulatedEngine::manifold_rhs(real p_im, real omega, real x_thr, real x_iac, const NitrousCharge* nc) const {
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
-        return manifold_rhs_impl(*maps_, Ambient{turbo_->charge_pa,rt,real(1.0)/std::sqrt(rt)},p_im,omega,x_thr,x_iac);
+        return manifold_rhs_impl(*maps_, Ambient{turbo_->charge_pa,rt,real(1.0)/std::sqrt(rt)},p_im,omega,x_thr,x_iac,nc);
     }
-    return manifold_rhs_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, p_im, omega, x_thr, x_iac);
+    return manifold_rhs_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, p_im, omega, x_thr, x_iac, nc);
 }
 
 SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active,
-                                                             const AntiLagDesc* als) const {
+                                                             const AntiLagDesc* als, const NitrousCharge* nc) const {
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
         auto result = evaluate_torque_impl(*maps_,Ambient{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)},starter_,omega,p_im,fired,s_starve,starter_active,
-                                           false,als,plant_k_,hyd_ref_rpm_);
+                                           false,als,plant_k_,hyd_ref_rpm_,nc);
         return result;
     }
     return evaluate_torque_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega, p_im, fired, s_starve, starter_active,
-                                false, als, plant_k_, hyd_ref_rpm_);
+                                false, als, plant_k_, hyd_ref_rpm_, nc);
 }
 
 void SimulatedEngine::clear_anti_lag_state() {
@@ -761,6 +934,14 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     const real omega_old = sensors.omega;
     omega_old_ = omega_old;
     const real rpm = std::abs(omega_old) * kRadPerSecToRpm;
+    // N2O plan N2: this substep's wet charge input (the NitrousSystem decided it before this pre_solve). nc is
+    // nullptr - the pre-N2 code path, bit for bit - unless N2O actually flows with property tables.
+    n2o_on_ = sensors.nitrous.active && sensors.nitrous.mdot_n_kg_s > real(0.0) && sensors.nitrous.oxidizer != nullptr;
+    if (n2o_on_) {
+        n2o_nc_ = NitrousCharge{sensors.nitrous.mdot_n_kg_s, sensors.nitrous.mdot_kf_kg_s, sensors.nitrous.h_in_j_kg,
+                                sensors.nitrous.retard_deg, sensors.nitrous.oxidizer};
+    }
+    const NitrousCharge* nc = n2o_on_ ? &n2o_nc_ : nullptr;
 
     // (1) state machine - EngineTorqueMap's, verbatim in semantics.
     const EngineState prev_state = state_;
@@ -885,7 +1066,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     if (theta_idle > real(0.0) && theta_req < real(0.01)) {
         const real xp = mech ? theta_cmd : real(0.0);
         auto f_at = [&](real xi) {
-            return mech ? manifold_rhs(p_im_, omega_old, xp, xi).f : manifold_rhs(p_im_, omega_old, xi, real(0.0)).f;
+            return mech ? manifold_rhs(p_im_, omega_old, xp, xi, nc).f : manifold_rhs(p_im_, omega_old, xi, real(0.0), nc).f;
         };
         const real f0 = f_at(theta_idle);
         const real dfdx = (f_at(theta_idle + kIdleFillDx) - f0) / kIdleFillDx;
@@ -933,7 +1114,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // (4) air step, omega frozen at omega_old
     {
         const real p0 = p_im_;
-        const ManifoldRhs rhs = manifold_rhs(p0, omega_old, x_thr_, x_iac_);
+        const ManifoldRhs rhs = manifold_rhs(p0, omega_old, x_thr_, x_iac_, nc);
         const real den = std::max(real(1.0), real(1.0) - h * rhs.dfdp);
         real p1 = std::max(p0 + h * rhs.f / den, real(1e-3) * p_amb_);
         // Equilibrium guard (provisional decision P-C11-AIR): with omega
@@ -944,7 +1125,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         // take the chord root of f between p0 and p1 instead (for a concave
         // f it lies on p0's side of the root). One extra rhs evaluation, no
         // iteration; a no-op in the linear regime (den >= 1 never crosses).
-        const real f1 = manifold_rhs(p1, omega_old, x_thr_, x_iac_).f;
+        const real f1 = manifold_rhs(p1, omega_old, x_thr_, x_iac_, nc).f;
         if ((rhs.f > real(0.0) && f1 < real(0.0)) || (rhs.f < real(0.0) && f1 > real(0.0))) {
             p1 = p0 + (p1 - p0) * (rhs.f / (rhs.f - f1));
         }
@@ -970,7 +1151,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     const bool comb = (state_ == EngineState::Running || state_ == EngineState::Cranking) && rpm >= fire_rpm_ && omega_old > real(0.0);
     const bool fired = comb && !dfco_active_ && !tcu.ignition_cut && !(m.limiter.type == LimiterType::FuelCut && limiter_cut_);
     const AntiLagDesc* als_eval = als_active_ ? als : nullptr; // I7d D5
-    TorqueEval ev = evaluate_torque(omega_old, p_im_, fired, real(1.0), starter_active, als_eval);
+    TorqueEval ev = evaluate_torque(omega_old, p_im_, fired, real(1.0), starter_active, als_eval, nc);
     const real rev_rate = std::max(omega_old, real(0.0)) / kTwoPi;
     real s_starve = real(1.0);
     booked_fuel_mass_kg_ = h * ev.m_fuel_rev * rev_rate;
@@ -978,8 +1159,23 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         const real available = std::max(real(0.0), sensors.fuel_available_kg);
         s_starve = available / booked_fuel_mass_kg_;
         booked_fuel_mass_kg_ = available;
-        ev = evaluate_torque(omega_old, p_im_, fired, s_starve, starter_active, als_eval);
+        ev = evaluate_torque(omega_old, p_im_, fired, s_starve, starter_active, als_eval, nc);
     }
+    // N2O plan N2 bookings for post_solve (section 1.3/4): every delivered kg enters the engine; the fired,
+    // fuelled share decomposes (fire * s_starve, the same factor as the charge model's n2o_burnt_rev); the rest
+    // passes through. Without a turning crank there is no charge model: all of it passes through [AS].
+    n2o_in_kg_ = n2o_burnt_kg_ = kit_fuel_kg_ = n2o_dh_j_kg_ = burnt_fuel_kg_ = real(0.0);
+    if (n2o_on_) {
+        n2o_in_kg_ = h * n2o_nc_.mdot_n_kg_s;
+        if (omega_old > real(0.0)) {
+            n2o_burnt_kg_ = n2o_in_kg_ * (ev.fire * s_starve);
+            kit_fuel_kg_ = h * ev.kit_fuel_rev * rev_rate;
+            burnt_fuel_kg_ = h * ev.burnt_fuel_rev * rev_rate;
+            n2o_dh_j_kg_ = n2o_nc_.oxidizer->decomposition_j_per_kg();
+            if (ev.charge.overflow) ++n2o_overflow_substeps_;
+        }
+    }
+    last_charge_ = ev.charge;
     if (als) {
         // I7d D5 energy routing: the indicated work the retard removes this substep, as a rate at the speed
         // the fuel is metered and the indicated work is booked at (post_solve books h*omega_old*tau_comb).
@@ -990,7 +1186,9 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     }
     // Engine thermal plan T1 (4.1): the share of the metered fuel energy released in the cylinder
     // (oxygen-limited, [AS] as the exhaust balance below), less an anti-lag cut share (burnt in the manifold).
-    eta_c_ = (ev.lambda > real(0.0) ? std::min(real(1.0), ev.lambda) : real(0.0)) * (real(1.0) - ev.cut_fraction);
+    // N2O plan N2: with the charge model the fuel burns at the combined lambda (O2 from air and N2O).
+    const real lambda_burn = (n2o_on_ && omega_old > real(0.0)) ? ev.charge.lambda_combined : ev.lambda;
+    eta_c_ = (lambda_burn > real(0.0) ? std::min(real(1.0), lambda_burn) : real(0.0)) * (real(1.0) - ev.cut_fraction);
     tau_comb_ = ev.tau_comb;
     tau_pump_ = ev.tau_pump;
     tau_fric_ = ev.tau_fric;
@@ -1028,11 +1226,16 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // into clutch capacity (that would trap a flare on the limiter). Explicit
     // shift cuts and DFCO still reduce torque for the bounded rolling close.
     // Retain the steady request during spool-up.
+    // N2O plan N2: the same rule carries the torque a nitrous shot adds (the steady tables have no N2O either).
     if (turbo_ && comb && !dfco_active_ && !tcu.ignition_cut) {
         const real rt = kGasConstant * turbo_->charge_k;
         const auto uncut = evaluate_torque_impl(m,
             Ambient{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)},
-            starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_, hyd_ref_rpm_);
+            starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_, hyd_ref_rpm_, nc);
+        r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
+    } else if (n2o_on_ && comb && !dfco_active_ && !tcu.ignition_cut) {
+        const auto uncut = evaluate_torque_impl(m, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega_old, p_im_, true, real(1.0), false,
+                                                true, als_eval, ecu_k_, hyd_ref_rpm_, nc);
         r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
     }
     r.theta_c = std::clamp(ev.fire * s_starve * p_im_ / p_amb_, real(0.0), real(1.0));
@@ -1043,6 +1246,16 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.lambda = ev.lambda;
     r.spark_advance_deg = ev.spark_deg;
     r.exhaust_mass_flow_kg_s = ev.m_air_rev * std::abs(omega_old) / kTwoPi + booked_fuel_mass_kg_ / h;
+    if (n2o_on_) {
+        // N2O plan N2 (section 1.2 step 7): the N2O (decomposed or not) leaves through the exhaust too; the kit
+        // fuel is already in the booked fuel. Sound/HUD fields (section 6).
+        r.exhaust_mass_flow_kg_s += n2o_nc_.mdot_n_kg_s;
+        if (omega_old > real(0.0)) {
+            r.charge_temperature_k = ev.charge.t_mix_k;
+            r.n2o_lambda_combined = ev.charge.lambda_combined;
+            r.n2o_kit_fuel_g_s = kit_fuel_kg_ / h * real(1000.0);
+        }
+    }
     if (turbo_) {
         turbo_exhaust_kg_s_ = r.exhaust_mass_flow_kg_s;
         // Exhaust energy balance (exhaust_thermal, turbo.md): of the fuel energy that entered the cylinders
@@ -1128,6 +1341,17 @@ PostSolveResult SimulatedEngine::post_solve(real omega_new, real h) {
     // (tau_fric opposes motion, so -work >= 0 to rounding; booked as is so the thermal closure stays exact).
     r.released_heat_delta = eta_c_ * r.fuel_energy_in_delta;
     r.friction_heat_delta = -work_split_.friction;
+    if (n2o_on_) {
+        // N2O plan N2 (section 4): the engine's split of this substep's N2O; the decomposition heat joins the
+        // fuel energy (engine_heat = fuel_energy_in + n2o_energy_in - indicated_work, Powertrain).
+        r.n2o_mass_delta = n2o_in_kg_;
+        r.n2o_unburnt_delta = n2o_in_kg_ - n2o_burnt_kg_;
+        r.n2o_energy_in_delta = n2o_burnt_kg_ * n2o_dh_j_kg_;
+        r.kit_fuel_mass_delta = kit_fuel_kg_;
+        // Only the fuel of the fired charges is released: in a cut the kit fuel is booked (drawn from the tank)
+        // but passes the cylinder unburnt, like the anti-lag cut share.
+        r.released_heat_delta = eta_c_ * burnt_fuel_kg_ * maps_->lhv_j_kg + r.n2o_energy_in_delta;
+    }
 
     // std::fmod is exact (IEEE), like EngineTorqueMap's; folded into
     // [0, 4*pi). A subtraction loop here hung on a non-finite omega (found

@@ -132,6 +132,24 @@ real OxidizerTables::saturation_pressure_pa(real t_k) const { return interp(t_k_
 
 real OxidizerTables::gas_enthalpy_j_kg(real t_k) const { return interp(gas_t_k_, gas_h_, t_k); }
 
+OxidizerTables::GasSegment OxidizerTables::gas_segment(std::size_t i) const {
+    GasSegment g;
+    g.t0 = gas_t_k_[i];
+    g.t1 = gas_t_k_[i + 1];
+    g.h0 = gas_h_[i];
+    g.cp = (gas_h_[i + 1] - gas_h_[i]) / (g.t1 - g.t0);
+    return g;
+}
+
+std::size_t OxidizerTables::gas_segment_index(real t_k) const {
+    const std::size_t last = gas_t_k_.size() - 2;
+    if (!(t_k > gas_t_k_.front())) return 0;
+    if (t_k >= gas_t_k_.back()) return last;
+    const auto it = std::upper_bound(gas_t_k_.begin(), gas_t_k_.end(), t_k);
+    const std::size_t hi = static_cast<std::size_t>(it - gas_t_k_.begin());
+    return std::min(hi - 1, last);
+}
+
 real OxidizerTables::g_hem(real p_bottle_pa) const { return interp(p_pa_, g_hem_, p_bottle_pa); }
 
 real OxidizerTables::choke_pressure_pa(real p_bottle_pa) const { return interp(p_pa_, choke_pa_, p_bottle_pa); }

@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.n2o_bottle/1",
+  "oxidizer": "../oxidizers/nitrous_oxide.json",
+  "capacity_kg": 4.536,
+  "pressure": {
+    "mode": "constant",
+    "gauge_bar": 65.5
+  },
+  "outlet": "siphon",
+  "source": "A 10 lb siphon-tube nitrous bottle held at 950 psig. capacity_kg 4.536 [D: 10 lb x 0.45359237 kg/lb = 4.5359]. gauge_bar 65.5 [D: 950 psig x 0.0689476 bar/psi = 65.50 bar gauge] - 950 psi is the bottle pressure both Edelbrock jet maps are rated at [C: Edelbrock 'Jet Map Information' for Performer nitrous kits #70011/#70012, Brochure 63-70011 Rev. 07/08, https://static.speedwaymotors.com/pdf/32570011.pdf, as transcribed in out/n2o_plan.md section 9.2 (the sheet itself was not re-read in N2: no download permission in that session); Edelbrock Performer RPM nitrous plate kits #70060/#70061/#70063, Brochure 63-0003 Rev. 7/08, https://static.speedwaymotors.com/pdf/32570060.pdf, as transcribed in out/n2o_plan.md section 9.2 (the sheet itself was not re-read in N2: no download permission in that session)]. Constant pressure [AS]: a heated, regulated bottle; no vs_fill or temperature data (out/n2o_plan.md owner Q2). No heater block: the constant mode already is the heated state. Siphon outlet (liquid draw) [AS]. UNVALIDATED until N2O plan N5 (out/n2o_plan.md section 9.2: the whole-kit Edelbrock jet-map check has not run yet)."
+}

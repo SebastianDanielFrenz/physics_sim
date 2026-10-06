@@ -59,6 +59,9 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
         ess.n2o_retard_deg = ns.retard_deg;
         ess.n2o_activations = n2o->activations();
         ess.n2o_purge_events = n2o->purge_events();
+        ess.charge_temperature_k = pre.charge_temperature_k; // N2O plan N2 (0 unless the charge model ran)
+        ess.n2o_lambda_combined = pre.n2o_lambda_combined;
+        ess.n2o_kit_fuel_g_s = pre.n2o_kit_fuel_g_s;
     }
     return ess;
 }
