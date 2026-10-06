@@ -268,6 +268,11 @@ public:
         // I7d D5: tau_comb at the SCHEDULED spark with every injected charge fired (no anti-lag retard,
         // spark setting or cylinder cut; the anti-lag lambda applies); equal to tau_comb without anti-lag.
         real tau_comb_unretarded = 0.0;
+        // N2O plan N3: tau_comb with the kit's spark retard removed (the knock-limited schedule; the anti-lag
+        // retard/setting stays), same charge, same cut share. tau_comb_no_n2o_retard - tau_comb is the work the
+        // kit retard costs (0 where the knock limit already holds the spark below schedule - retard). Equal to
+        // tau_comb without N2O. Never read by the dynamics.
+        real tau_comb_no_n2o_retard = 0.0;
         // anti-lag cylinder cut: share of the injected fuel (m_fuel_rev) whose spark is cut; tau_comb covers
         // the fired share (1 - cut_fraction) only. 0 without anti-lag.
         real cut_fraction = 0.0;
@@ -301,6 +306,10 @@ public:
     // in the exhaust manifold under anti-lag, is part of sensible_w). port_k is the gas temperature
     // at the exhaust ports handed to the next substep's turbo step. Never hashed (port_k is, as
     // turbo_port_k_).
+    // N2O plan N3: with the wet charge model the balance reads fuel_w + n2o_w = indicated_w + wall_w + sensible_w +
+    // chemical_w - clamp_w, where fuel_w is still the booked fuel x LHV (== the ledger's fuel_energy_in / h) and n2o_w
+    // the decomposition power of the N2O that burnt (== n2o_energy_in / h); chemical_w then also holds the kit fuel
+    // that passed a cut cylinder unburnt, and the burning fuel releases min(1, lambda_combined) of its energy.
     struct ExhaustSplit {
         real fuel_w = 0.0;      // booked fuel mass flow x LHV
         real indicated_w = 0.0; // omega_old * tau_comb
@@ -309,6 +318,8 @@ public:
         real chemical_w = 0.0;  // unreleased fuel energy (lambda < 1)
         real clamp_w = 0.0;     // sensible enthalpy added by the >= 0 guard (0 in every shipped regime)
         real manifold_w = 0.0;  // anti-lag: cut-cylinder fuel energy released in the exhaust manifold
+        real n2o_w = 0.0;       // N2O: decomposition power of the burnt N2O (released in full; 0 without N2O)
+        real n2o_retard_w = 0.0; // N2O: indicated power the kit's spark retard removes (already inside sensible_w; diagnostic)
         real port_k = 0.0;
     };
     [[nodiscard]] const ExhaustSplit& exhaust_split() const { return exhaust_split_; }
