@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.n2o_bottle/1",
+  "oxidizer": "../oxidizers/nitrous_oxide.json",
+  "capacity_kg": 6.804,
+  "pressure": {
+    "mode": "constant",
+    "gauge_bar": 65.5
+  },
+  "outlet": "siphon",
+  "source": "A 15 lb siphon-tube nitrous bottle held at 950 psig, sized for an ~800 hp shot (N2O plan N7). capacity_kg 6.804 [D: 15 lb x 0.45359237 kg/lb = 6.8039 kg; AS: the owner-requested 800 hp shot of ../nitrous_kits/custom_wet_plate_800.json flows 0.220 kg/s at WOT (3.6 mm jet, Cd 0.66, HEM flux 32782 kg/(m2 s), measured in tests/validation/test_car_hyper_n2o.cpp), so the shipped 10 lb bottle (4.536 kg) would last 20.6 s and 15 lb gives 30.9 s - long enough for a drag-strip or roll-race pass, a common size for large shots]. gauge_bar 65.5 [D: 950 psig x 0.0689476 bar/psi = 65.50 bar gauge; the same fill pressure as data/n2o_bottles/bottle_10lb_950psi.json, the pressure the Edelbrock jet maps are rated at - [C: Edelbrock 'Jet Map Information' for Performer nitrous kits #70011/#70012, Brochure 63-70011 Rev. 07/08, https://static.speedwaymotors.com/pdf/32570011.pdf, as transcribed in out/n2o_plan.md section 9.2 (the sheet itself was not re-read in this increment: no download permission)]]. Constant pressure [AS]: a heated, regulated bottle; no vs_fill or temperature data (out/n2o_plan.md owner Q2). No heater block: the constant mode already is the heated state. Siphon outlet (liquid draw) [AS]. PROVISIONAL: nothing here is a measured part."
+}
