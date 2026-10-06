@@ -47,6 +47,16 @@
 // SimulatedEngineMaps behind a shared_ptr<const> (I7c interface request 1),
 // with a content hash that fold_state_hash folds on EVERY call (request 2).
 //
+// N2O plan N2 (out/n2o_plan.md section 1.2, docs/data_formats/engine.md "nitrous"): while
+// Sensors::nitrous is active with N2O flowing (and property tables), the wet charge model replaces
+// m_air_rev and the combustion line above. n = mdot_n*2pi/omega N2O and kf kit fuel per rev; the
+// air a and the charge temperature T_mix solve the port's mole and adiabatic-mixing energy balances
+// (one quadratic, closed form); a_eq = a + k_O2*n; ECU fuel f_ecu = a/(lambda_t*AFR); lambda_c =
+// a_eq/(AFR*(f_ecu + kf)); W_ind_rev = eta_i(rpm, a_eq)*eta_spark*(f_lambda(lambda_c)*LHV*f*fire*s
+// + dH_dec*n*fire*s); spark = min(schedule - kit retard, theta_kl). m_cyl uses a (plenum mass
+// conserved), d carries dn/domega = -n/omega and the implicit da/domega, dfdp the implicit da/dp.
+// Without N2O every expression is the pre-N2 one (a null NitrousCharge), bit for bit.
+//
 // C12: Powertrain constructs this for a SimulatedEngineDesc component,
 // from a desc copy whose fuels list holds only the fuel actually burnt (the
 // tank's, else fuels[0]). Rotary geometry is refused here (C13).
@@ -55,6 +65,7 @@
 #include "turbo_pair.h"
 
 #include "engine.h"
+#include "nitrous_flow.h"
 #include "ps/drivetrain/isa_air.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/drivetrain/table2d.h"
@@ -117,6 +128,34 @@ struct SimulatedSteadyTables {
     real idle_ff = 0.0;
     real idle_p_im = 0.0;
     real idle_cap_x = 0.0;
+};
+
+// N2O plan N2 (out/n2o_plan.md section 1.2): the wet-kit flows the engine's charge model
+// reads, from Sensors::nitrous. Constant MASS flows: per crank revolution they are
+// n = mdot_n_kg_s * 2*pi/omega and kf = mdot_kf_kg_s * 2*pi/omega, so their share of the
+// charge falls as 1/omega (the constant-power character of nitrous; dn/domega = -n/omega
+// enters d). A null NitrousCharge pointer is the pre-N2 code path, bit for bit.
+struct NitrousCharge {
+    real mdot_n_kg_s = 0.0;  // N2O mass flow into the intake
+    real mdot_kf_kg_s = 0.0; // kit fuel mass flow (the engine's own fuel)
+    real h_in_j_kg = 0.0;    // enthalpy of the N2O at the jet (saturated liquid at bottle pressure)
+    real retard_deg = 0.0;   // kit/controller retard: spark = min(schedule - retard, theta_kl) (plan D7)
+    const OxidizerTables* oxidizer = nullptr; // decomposition heat, O2 fraction, molar mass, gas enthalpy
+};
+
+// N2O plan N2 / D7: the cylinder charge the charge model computed - published for the
+// knock limit (C17b's autoignition integral) and for sound/HUD. Without N2O only t_in_k,
+// t_mix_k (= t_in_k) and air_kg_rev are set. Never hashed.
+struct ChargeState {
+    real t_in_k = 0.0;              // intake temperature (ambient NA, charge-air temperature turbo)
+    real t_mix_k = 0.0;             // charge temperature after the N2O evaporated into the air
+    real air_kg_rev = 0.0;          // air trapped per crank revolution (a)
+    real n2o_kg_rev = 0.0;          // N2O per crank revolution (n)
+    real ecu_fuel_kg_rev = 0.0;     // ECU fuel per rev for the trapped air, a / (lambda_target * AFR_st), before fire/starvation
+    real kit_fuel_kg_rev = 0.0;     // kit fuel per rev, before starvation
+    real o2_equiv_air_kg_rev = 0.0; // a_eq = a + k_O2 * n
+    real lambda_combined = 0.0;     // a_eq / (AFR_st * (ECU + kit fuel)); 0 without N2O (or with no fuel at all)
+    bool overflow = false;          // the N2O alone would fill the cylinder: a clamped to 0 (section 1.2 step 9)
 };
 
 class SimulatedEngine final : public IEngine {
@@ -232,13 +271,23 @@ public:
         // anti-lag cylinder cut: share of the injected fuel (m_fuel_rev) whose spark is cut; tau_comb covers
         // the fired share (1 - cut_fraction) only. 0 without anti-lag.
         real cut_fraction = 0.0;
+        // N2O plan N2: the charge (D7 knock seam) and the N2O per revolution. With the charge model
+        // m_air_rev is the air a the cylinder draws, m_fuel_rev the BOOKED fuel (ECU fuel * fire + kit fuel,
+        // times s_starve - the kit jet flows through a cut cylinder [AS]), f_lambda is f_lambda(lambda_combined)
+        // and n2o_burnt_rev = n * fire * s_starve (decomposition is complete in a fired charge [AS]).
+        ChargeState charge;
+        real n2o_rev = 0.0;
+        real n2o_burnt_rev = 0.0;
+        real kit_fuel_rev = 0.0; // booked kit fuel per rev (kf * s_starve), a subset of m_fuel_rev
+        real burnt_fuel_rev = 0.0; // fuel burnt in the fired charges ((f_ecu + kf) * fire * s_starve); <= m_fuel_rev
     };
     // als (I7d D5, nullptr = none): the active anti-lag block - the spark is retarded by retard_deg from
     // the scheduled (knock-limited) advance or set to spark_advance_deg before eta_spark is looked up
     // (below the table's most retarded node eta_spark is extrapolated linearly, floored at 0), lambda is
     // overridden when the block sets one, and cylinder_cut_fraction of the charges are not fired.
+    // nc (N2O plan N2, nullptr = none): the wet charge model with these flows (see NitrousCharge).
     [[nodiscard]] TorqueEval evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active,
-                                             const AntiLagDesc* als = nullptr) const;
+                                             const AntiLagDesc* als = nullptr, const NitrousCharge* nc = nullptr) const;
 
     // I7d D5 anti-lag white-box accessors (all 0/false/true defaults without an anti_lag block).
     [[nodiscard]] bool anti_lag_active() const { return als_active_; }
@@ -270,7 +319,14 @@ public:
         real f = 0.0, dfdp = 0.0;
         real m_thr = 0.0, m_cyl = 0.0;
     };
-    [[nodiscard]] ManifoldRhs manifold_rhs(real p_im, real omega, real x_thr, real x_iac) const;
+    // nc (N2O plan N2): the cylinders draw the charge model's air a instead of VE*p/(R*T)*V (plenum mass
+    // conserved; dfdp carries da/dp).
+    [[nodiscard]] ManifoldRhs manifold_rhs(real p_im, real omega, real x_thr, real x_iac, const NitrousCharge* nc = nullptr) const;
+
+    // N2O plan N2 white-box: the charge of the latest pre_solve (a default ChargeState before the first),
+    // and the substeps whose N2O alone would have filled the cylinder (overflow guard; unhashed diagnostic).
+    [[nodiscard]] const ChargeState& last_charge() const { return last_charge_; }
+    [[nodiscard]] std::uint64_t n2o_overflow_substeps() const { return n2o_overflow_substeps_; }
 
     // Psi(pr) and dPsi/dpr from the tabulated function (pr in [0, 1]).
     [[nodiscard]] real psi(real pr, real* dpsi_dpr = nullptr) const;
@@ -361,6 +417,14 @@ private:
     real tau_start_ = 0.0, tau_comb_ = 0.0, tau_pump_ = 0.0, tau_fric_ = 0.0;
     real booked_fuel_mass_kg_ = 0.0;
     WorkSplit work_split_;
+    // N2O plan N2 (all unhashed: functions of this substep's Sensors::nitrous and the hashed state).
+    // n2o_nc_ is this substep's charge input, n2o_on_ whether the charge model applies (active block with
+    // flow and tables); the *_kg_ are post_solve's bookings for this substep.
+    NitrousCharge n2o_nc_;
+    bool n2o_on_ = false;
+    real n2o_in_kg_ = 0.0, n2o_burnt_kg_ = 0.0, kit_fuel_kg_ = 0.0, n2o_dh_j_kg_ = 0.0, burnt_fuel_kg_ = 0.0;
+    ChargeState last_charge_;
+    std::uint64_t n2o_overflow_substeps_ = 0;
 };
 
 } // namespace ps::drivetrain

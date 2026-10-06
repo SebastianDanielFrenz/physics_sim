@@ -64,6 +64,7 @@ add_executable(ps_unit_tests
   test_engine_thermal_scenarios.cpp
   test_n2o_flow.cpp
   test_n2o_system.cpp
+  test_n2o_engine.cpp
   test_throttle_control.cpp
   test_engine_fuel_map.cpp
   test_fuel_tank.cpp
@@ -237,6 +238,7 @@ add_executable(ps_environment_tests
   test_environment_day_share.cpp
   test_environment_season_override.cpp
   test_environment_surface.cpp
+  test_environment_surface_classes.cpp
 )
 
 target_link_libraries(ps_environment_tests

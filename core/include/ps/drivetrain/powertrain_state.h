@@ -71,7 +71,7 @@ struct EngineSoundState {
     real spark_advance_deg = 0.0;      // applied spark advance
     real exhaust_mass_flow_kg_s = 0.0; // air + fuel mass flow out of the cylinders
     // N2O plan N1 (section 6): the nitrous system's state, all 0 without a kit. NOT hashed, never read back
-    // for physics (the engine ignores the N2O in N1).
+    // for physics.
     std::uint8_t n2o_active = 0;           // 1 while the solenoid is open and N2O flows
     std::uint8_t n2o_safety_cut = 0;       // NitrousSafetyCut: 0 none, 1 bottle pressure, 2 fuel starve, 3 duty time
     real n2o_flow_g_s = 0.0;               // delivered N2O flow
@@ -81,6 +81,11 @@ struct EngineSoundState {
     real n2o_retard_deg = 0.0;             // spark retard the kit asks for
     std::uint32_t n2o_activations = 0;     // solenoid openings since the vehicle was built
     std::uint32_t n2o_purge_events = 0;    // purge starts since the vehicle was built
+    // N2O plan N2 (section 6): the simulated engine's wet charge model, 0 unless it ran this substep (graph
+    // engine: always 0). NOT hashed.
+    real charge_temperature_k = 0.0;       // T_mix: charge temperature after the N2O evaporated into the air
+    real n2o_lambda_combined = 0.0;        // O2-equivalent air / (AFR_st * (ECU + kit fuel))
+    real n2o_kit_fuel_g_s = 0.0;           // kit fuel flow (part of fuel_flow_g_s)
 };
 
 struct DrivelineSoundState {

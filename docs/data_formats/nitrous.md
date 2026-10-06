@@ -97,9 +97,12 @@ The vehicle component (`"type": "n2o_bottle"`, see below) overrides, bottom-up:
 Flows per substep: `mdot_n = frac * nozzle_count * Cd * A * G(p_bottle, p_intake)`,
 `mdot_kf = frac * nozzle_count * Cd_f * A_f * sqrt(2 * rho_fuel * max(0, p_fuel - p_intake))`
 with `rho_fuel` the density of the fuel the engine burns. `G` is the oxidizer
-table's HEM critical flux (or the Dyer flux). In N1 the engine **ignores** the
-delivered N2O and kit fuel; every delivered kg is booked as unburnt pass-through
-(`PowertrainEnergy::n2o_mass == n2o_unburnt`). N2 wires the charge model in.
+table's HEM critical flux (or the Dyer flux). N2: a simulated engine (`kind`
+`"simulated"`) burns both through its wet charge model (engine.md,
+[nitrous](engine.md#nitrous-the-wet-charge-model-n2o-plan-n2)); the kit fuel is drawn
+from the engine's own fuel feed (the tank, if any). A torque-map engine still
+**ignores** them until N6: every delivered kg is booked as unburnt pass-through
+(`PowertrainEnergy::n2o_mass == n2o_unburnt`) and no kit fuel is booked.
 
 ## Controller — `physics_sim.nitrous_controller/1`
 
@@ -130,7 +133,8 @@ previous substep had neither limiter nor DFCO active.
 * `progressive`: while the solenoid has been open for less than `delay_s` the flow
   fraction is `start_fraction`, then it ramps linearly to 1 over `ramp_s` (0 = jumps to 1).
   The pulse-width solenoid is modelled by its mean flow.
-* `spark_retard_deg`: a constant, or `{"fraction": [...], "deg": [...]}` over the flow fraction (published, unused in N1).
+* `spark_retard_deg`: a constant, or `{"fraction": [...], "deg": [...]}` over the flow fraction. A simulated
+  engine applies it while N2O flows: spark = min(schedule - retard, knock limit).
 * `safety`: each cut **latches** until the command drops below `min_throttle_command`:
   `min_bottle_gauge_bar` (bottle-pressure switch, 0/absent = none), `cut_on_fuel_starve`
   (previous substep's fuel supply fraction < 1), `max_active_s` (solenoid duty time, `> 0`; absent = unlimited).
@@ -176,9 +180,26 @@ the bottle heater's `channel` (default `default_on`).
 to `[0, capacity]`, booked signed into `PowertrainEnergy::n2o_external_added`; throws
 without a bottle or for NaN). `PowertrainEnergy` sub-ledger (cumulative kg, unhashed,
 outside `balance_error`): `n2o_mass`, `n2o_unburnt`, `n2o_purged`, `n2o_external_added`,
-plus `n2o_energy_in`/`kit_fuel_mass` (0 until N2). Bottle closure:
-`initial - bottle = n2o_mass + n2o_purged - n2o_external_added`. `EngineSoundState`:
+plus `n2o_energy_in` (J, decomposition heat of the burnt N2O) and `kit_fuel_mass` (kg, the kit-jet share
+of `fuel_mass`), both 0 from a torque-map engine. `n2o_mass` is the bottle's delivery; `n2o_unburnt` its share
+that passed a cut or starving cylinder. `engine_heat = fuel_energy_in + n2o_energy_in - indicated_work`.
+Bottle closure: `initial - bottle = n2o_mass + n2o_purged - n2o_external_added`. `EngineSoundState`:
 `n2o_active`, `n2o_safety_cut`, `n2o_flow_g_s`, `n2o_purge_flow_g_s`, `n2o_bottle_kg`,
-`n2o_bottle_bar`, `n2o_retard_deg`, `n2o_activations`, `n2o_purge_events`;
+`n2o_bottle_bar`, `n2o_retard_deg`, `n2o_activations`, `n2o_purge_events`, and (N2, simulated engine,
+0 otherwise) `charge_temperature_k`, `n2o_lambda_combined`, `n2o_kit_fuel_g_s`;
 `PowertrainSnapshot::n2o_bottle_kg`. CSV (kit vehicles only):
 `vehicle<i>.n2o.{flow_g_s, bottle_kg, bottle_bar, active}`.
+
+## Shipped parts (N2O plan N2, unvalidated until N5)
+
+| file | what | numbers |
+|---|---|---|
+| `data/n2o_bottles/bottle_10lb_950psi.json` | 10 lb siphon bottle, constant 950 psig | 4.536 kg [D], 65.5 bar gauge [D from the Edelbrock sheets' 950 psi] |
+| `data/nitrous_kits/edelbrock_70011_square_50.json` | Edelbrock #70011 Performer, 38/38 jets, 50 hp | jets 0.9652 mm [AS jet-number convention], Cd 0.66 [C Dyer via Waxman], fuel Cd 0.70 [AS], 6.5 psi fuel [C], HEM |
+| `data/nitrous_kits/edelbrock_70060_square_150.json` | Edelbrock #70060 Performer RPM plate, 68/68 jets, 150 hp | jets 1.7272 mm; the sheet's 5-7 deg retard is NOT in the shared default controller (PROVISIONAL, N5) |
+| `data/nitrous_controllers/edelbrock_basic.json` | arm switch `nitrous_arm`, WOT switch 0.95, 3000-6200 rpm, on/off, 2 deg retard | retard [C 70011 sheet 1-3 deg midpoint], the rest [AS] |
+
+`data/vehicles/car_sedan_gen_n2o.json` is `car_sedan_gen.json` with the bottle and the 50 hp kit (arm channel
+`nitrous_arm`, default off; smoke test `tests/validation/test_car_sedan_gen_n2o.cpp`: a WOT 3rd-gear pull
+gains about +41 kW crank power at 4000-5500 rpm, reported only). Every Edelbrock number is as transcribed in `out/n2o_plan.md` section 9.2; the
+whole-kit check against the ratings (V2) is N5.
