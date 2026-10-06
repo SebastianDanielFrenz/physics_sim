@@ -324,7 +324,7 @@ HubTerms WheelInstance::pre_solve(const WheelPreSolveInput& in, real omega_old) 
         // discontinuously through v=0 - physically, rolling resistance is a
         // hysteresis loss that must fade continuously to zero with speed.
         const real crr_total = tyre_->desc().qsy1 + crr_surface + tyre_->desc().qsy2 * std::abs(tw.forces.fx_pure) / tyre_->desc().fz0 +
-                                tyre_->desc().qsy4 * ps::math::pow(vx_contact / tyre_->desc().v0, real(4.0));
+                                tyre_rolling_speed_term(tyre_->desc(), vx_contact);
         const real froll_ramp = std::clamp(vx_contact / tyre_->desc().rolling_resistance_v_eps, real(-1.0), real(1.0));
         pre_froll_ = -froll_ramp * fz * crr_total;
     }

@@ -780,7 +780,7 @@ real tyre_rolling_resistance(const vehicle::TyreDesc& tyre_desc, real fz, real f
                              real crr_surface) {
     const real ramp = std::clamp(vx / tyre_desc.rolling_resistance_v_eps, real(-1.0), real(1.0));
     const real crr_total = tyre_desc.qsy1 + crr_surface + tyre_desc.qsy2 * std::abs(fx_pure_for_qsy2) / tyre_desc.fz0 +
-                            tyre_desc.qsy4 * std::pow(vx / tyre_desc.v0, real(4.0));
+                            vehicle::tyre_rolling_speed_term(tyre_desc, vx); // the wheel's own speed law (qsy3/qsy4), not a copy
     return ramp * fz * crr_total;
 }
 

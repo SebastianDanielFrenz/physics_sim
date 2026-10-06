@@ -36,6 +36,7 @@ add_executable(ps_unit_tests
   test_terrain_tile_datum.cpp
   test_terrain_prefetch.cpp
   test_pacejka_tyre_model.cpp
+  test_tyre_rolling_resistance.cpp
   test_vehicle_ackermann_symmetry.cpp
   test_vehicle_io_validation.cpp
   test_vehicle_parallel_alloc.cpp

@@ -279,6 +279,7 @@ void run_variant(const Variant& v) {
         w.tyre.relaxation_length_y *= v.sigma_y_scale;
         if (v.front_qsy_override >= 0.0 && w.is_front) {
             w.tyre.qsy1 = v.front_qsy_override;
+            w.tyre.qsy3 = 0.0;
             w.tyre.qsy4 = v.front_qsy_override;
         }
     }

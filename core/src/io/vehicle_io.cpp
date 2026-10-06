@@ -8,6 +8,7 @@
 
 #include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
+#include "ps/vehicle/tyre_model.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/engine_cycle/firing_order.h"
 #include "ps/io/engine_thermal_io.h"
@@ -122,7 +123,56 @@ TyreDesc read_tyre_object(const json& j) {
     d.v0 = j.value("v0", d.v0);
     d.qsy1 = j.value("qsy1", d.qsy1);
     d.qsy2 = j.value("qsy2", d.qsy2);
+    d.qsy3 = j.value("qsy3", d.qsy3);
     d.qsy4 = j.value("qsy4", d.qsy4);
+    if (j.contains("rolling_resistance")) {
+        // Optional anchor block deriving qsy1/qsy3/qsy4 in closed form
+        // (ps::vehicle::derive_rolling_resistance, docs/data_formats/tyre.md).
+        const std::string ctx = "tyre '" + d.name + "': rolling_resistance";
+        for (const char* key : {"qsy1", "qsy3", "qsy4"}) {
+            if (j.contains(key)) {
+                throw std::runtime_error(ctx + ": cannot be combined with an explicit '" + key +
+                                          "' (the block derives qsy1, qsy3 and qsy4)");
+            }
+        }
+        const json& rr = j.at("rolling_resistance");
+        if (!rr.is_object()) throw std::runtime_error(ctx + ": must be an object");
+        for (auto it = rr.begin(); it != rr.end(); ++it) {
+            const std::string& k = it.key();
+            if (k != "rated_speed_kmh" && k != "crr_base" && k != "rise_at_fraction" && k != "factor_at_rated") {
+                throw std::runtime_error(ctx + ": unknown key '" + k + "'");
+            }
+        }
+        const auto need_number = [&](const json& obj, const char* key, const std::string& where) {
+            if (!obj.contains(key) || !obj.at(key).is_number()) {
+                throw std::runtime_error(where + ": missing required number '" + key + "'");
+            }
+            return obj.at(key).get<double>();
+        };
+        ps::vehicle::RollingResistanceAnchors anchors;
+        anchors.rated_speed_kmh = need_number(rr, "rated_speed_kmh", ctx);
+        anchors.crr_base = need_number(rr, "crr_base", ctx);
+        anchors.factor_at_rated = need_number(rr, "factor_at_rated", ctx);
+        if (!rr.contains("rise_at_fraction") || !rr.at("rise_at_fraction").is_object()) {
+            throw std::runtime_error(ctx + ": missing required object 'rise_at_fraction'");
+        }
+        const json& rise = rr.at("rise_at_fraction");
+        for (auto it = rise.begin(); it != rise.end(); ++it) {
+            if (it.key() != "fraction" && it.key() != "factor") {
+                throw std::runtime_error(ctx + ".rise_at_fraction: unknown key '" + it.key() + "'");
+            }
+        }
+        anchors.fraction = need_number(rise, "fraction", ctx + ".rise_at_fraction");
+        anchors.factor = need_number(rise, "factor", ctx + ".rise_at_fraction");
+        try {
+            const auto c = ps::vehicle::derive_rolling_resistance(anchors, d.v0);
+            d.qsy1 = c.qsy1;
+            d.qsy3 = c.qsy3;
+            d.qsy4 = c.qsy4;
+        } catch (const std::invalid_argument& e) {
+            throw std::runtime_error("tyre '" + d.name + "': " + e.what());
+        }
+    }
     d.rolling_resistance_v_eps = j.value("rolling_resistance_v_eps", d.rolling_resistance_v_eps);
     if (d.rolling_resistance_v_eps <= real(0.0)) {
         throw std::runtime_error("tyre '" + d.name + "': rolling_resistance_v_eps must be > 0, got " +

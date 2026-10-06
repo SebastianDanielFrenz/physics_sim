@@ -250,7 +250,7 @@ TEST_CASE("Engine braking in 4th: term breakdown diagnostic", "[.][diag][validat
     const real rpm = s_rpm * inv, v = s_v * inv, fz = s_fz * inv, fx_f = s_fx_f * inv, fx_r = s_fx_r * inv;
     const real tau_m = rc.motoring.evaluate(rpm);
     const real f_aero = 0.5 * 1.225 * rc.drag_area_m2 * v * v;
-    const real crr = rc.tyre_desc.qsy1 + rc.tyre_desc.qsy4 * std::pow(v / rc.tyre_desc.v0, 4.0);
+    const real crr = ps_test::ref_crr(rc.tyre_desc, v);
     const real f_roll = crr * fz;
     const real hub_sum = s_hub * inv;
     std::printf("--- engine braking breakdown, window [2.9,3.1]s ---\n");

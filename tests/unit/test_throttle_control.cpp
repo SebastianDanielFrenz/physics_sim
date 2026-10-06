@@ -1075,6 +1075,15 @@ TEST_CASE("P6: tractor governor path over vehicle_tractor_i4.json's control even
     // throttle_eff/engine_torque_demand/idle_integrator and tick 2000 moved
     // (were 0x6443ff93d68468d5 / 0xd6ab85ab58668bde / 0x3d3d46be580ce397,
     // all 0x5342f8c7ba48dfe9).
+    // Re-recorded 2026-10-06 (tyre rolling-resistance work): the tractor tyres
+    // now derive qsy3/qsy4 from a rolling_resistance block (rated 65 km/h, crr
+    // 1.25x base at 40 km/h, was +5 %), which moves the vehicle dynamics and
+    // therefore throttle_eff/engine_torque_demand/idle_integrator at every
+    // tick (were 0x4a4dec2dbe22c70d / 0xc00e022ed2f37e06 / 0xcf9faa9e08c73845,
+    // all 0x5fd1a1eb03f6e1ab); hand_throttle and governor_setpoint_rpm are
+    // control-event driven and unchanged. The spot values below are the new
+    // recording; this test is now a frozen regression of the governor path,
+    // no longer a comparison against the pre-C3 code.
     auto fnv = [](std::uint64_t h, double v) {
         unsigned char b[8];
         std::memcpy(b, &v, 8);
@@ -1113,14 +1122,14 @@ TEST_CASE("P6: tractor governor path over vehicle_tractor_i4.json's control even
     REQUIRE(ticks == 2400);
     CHECK(h_field[0] == 0x09c190b1bd78f7f9ULL); // hand_throttle
     CHECK(h_field[1] == 0x1ece9dfdcfa3ddecULL); // governor_setpoint_rpm
-    CHECK(h_field[2] == 0x4a4dec2dbe22c70dULL); // throttle_eff
-    CHECK(h_field[3] == 0xc00e022ed2f37e06ULL); // engine_torque_demand
-    CHECK(h_field[4] == 0xcf9faa9e08c73845ULL); // idle_integrator
-    CHECK(h_all == 0x5fd1a1eb03f6e1abULL);
+    CHECK(h_field[2] == 0xe98a0abededffaf0ULL); // throttle_eff
+    CHECK(h_field[3] == 0x0c44a2d22c8a534dULL); // engine_torque_demand
+    CHECK(h_field[4] == 0xb405d2355f44b66cULL); // idle_integrator
+    CHECK(h_all == 0xc0cbc7fdc6150a48ULL);
     const double expected[3][5] = {
-        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.ff2169a8cdd91p-3, 0x1.6c6bc04ec3802p+6, -0x1.b5de0d29ea85bp-4},
-        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.e344502230825p-4, 0x1.f57fc23bceb90p+2, -0x1.b5de0d29ea85bp-4},
-        {0x0.0000000000000p+0, 0x1.a900000000000p+9, 0x1.abb920a044aedp-4, -0x1.2901827fcb9e0p+0, 0x1.cf2be9edd195bp-9},
+        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.ff2a1524a2dddp-3, 0x1.6c7680ec27068p+6, -0x1.b5de0d29ea85bp-4},
+        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.e4d9f9a92e738p-4, 0x1.028e6a8a8b010p+3, -0x1.b5de0d29ea85bp-4},
+        {0x0.0000000000000p+0, 0x1.a900000000000p+9, 0x1.ab9d39d427288p-4, -0x1.2c3be4b3887a0p+0, 0x1.d28ab98965e3cp-9},
     };
     for (int t = 0; t < 3; ++t) {
         for (int k = 0; k < 5; ++k) {
