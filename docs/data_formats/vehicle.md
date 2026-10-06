@@ -213,6 +213,19 @@ an engine whose cycle block has 'intake'/'exhaust' pipe blocks"` /
 [`engine.md`](engine.md)'s `default_installation` field and
 [`installation.md`](installation.md) for the referenced file's own format.
 
+Likewise an `engine` component may carry a vehicle-level `"turbo_configuration"`
+field (a string path resolved relative to the VEHICLE file's own directory) that
+replaces the engine's own `default_turbo_configuration` for this vehicle only
+(the engine garage step P2 will later rename it `"forced_induction"`). The
+replacement happens before the turbo tables and the engine maps are built, so
+the derived turbo cache key and the generated maps follow the file actually
+used; `compressor_supply` and the map keys behave exactly as with the engine's
+default. Only legal on a simulated engine whose file has
+`default_turbo_configuration` (`"'turbo_configuration' is only allowed on a
+simulated engine whose file has 'default_turbo_configuration'"`); must be a
+non-empty string (`"'turbo_configuration' must be a non-empty path string"`).
+Absent = bit-identical to before.
+
 #### `clutch` component fields
 
 `ClutchDesc`. Always inline.

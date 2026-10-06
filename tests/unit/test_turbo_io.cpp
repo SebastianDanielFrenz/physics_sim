@@ -6,9 +6,11 @@
 // hardware file by absolute path.
 
 #include "turbo_fixtures.h"
+#include "vehicle_test_helpers.h"
 
 #include "ps/drivetrain/turbo_maps.h"
 #include "ps/io/vehicle_io.h"
+#include "ps/jobs/job_system.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -17,6 +19,8 @@
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <cstdint>
+#include <stdexcept>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -284,5 +288,178 @@ TEST_CASE("D4 loader: intercooler pressure drop", "[turbo][io][intercooler]") {
         CHECK_THROWS_WITH(load(c, "dp_str"), ContainsSubstring("'intercooler_pressure_drop_bar_at_max_flow' must be a number"));
         c["intercooler_pressure_drop_bar_at_max_flow"] = 4.5; // = the hardware's reference_head_bar
         CHECK_THROWS_WITH(load(c, "dp_big"), ContainsSubstring("must be < the hardware 'reference_head_bar'"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// N7b: a vehicle's engine component may override the engine file's
+// default_turbo_configuration ("turbo_configuration", a path relative to the
+// VEHICLE file; docs/data_formats/vehicle.md), modelled on "installation".
+// The fixtures are the real car_hyper.json / hyper_v8_one1_audio.json with
+// every "../x.json" path made absolute and written to a scratch directory
+// (a copy next to nothing keeps relative paths from resolving), loaded at
+// Preview quality with a disk map cache.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::string data_dir() { return std::string(PS_SOURCE_DIR) + "/data"; }
+
+// "../fuels/e5.json" -> "<abs base>/fuels/e5.json" (collapsed), for every string that starts with "../".
+void absolutize(json& j, const std::filesystem::path& base) {
+    if (j.is_string()) {
+        const std::string v = j.get<std::string>();
+        if (v.rfind("../", 0) == 0) j = std::filesystem::weakly_canonical(base / v).generic_string();
+    } else if (j.is_object() || j.is_array()) {
+        for (auto& e : j) absolutize(e, base);
+    }
+}
+
+json read_json(const std::string& path) {
+    std::ifstream in(path);
+    return json::parse(in);
+}
+
+struct OverrideFixture {
+    std::filesystem::path dir;
+    std::string cfg_path; // an alternate turbo configuration (target 1.6 bar, no boost_control block)
+    json vehicle;         // car_hyper.json, absolutized; the engine component is "ref" -> the stock engine file
+    json engine;          // hyper_v8_one1_audio.json, absolutized
+    OverrideFixture() {
+        dir = std::filesystem::temp_directory_path() /
+              ("ps_turbo_vehicle_override_" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+        std::filesystem::create_directories(dir);
+        json c = base_config();
+        c["target_boost_bar"] = 1.6;
+        cfg_path = write_config(c, "vehicle_override_cfg");
+        vehicle = read_json(data_dir() + "/vehicles/car_hyper.json");
+        absolutize(vehicle, std::filesystem::path(data_dir()) / "vehicles");
+        engine = read_json(data_dir() + "/engines/hyper_v8_one1_audio.json");
+        absolutize(engine, std::filesystem::path(data_dir()) / "engines");
+    }
+    ~OverrideFixture() {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+    static json& engine_component(json& v) {
+        for (auto& c : v["powertrain"]["components"])
+            if (c.value("type", "") == "engine") return c;
+        throw std::runtime_error("no engine component");
+    }
+    std::string write(const std::string& name, const json& j) const {
+        const auto p = dir / name;
+        std::ofstream(p) << j.dump(2);
+        return p.string();
+    }
+    ps::vehicle::VehicleDesc load(const json& v, const std::string& name) const {
+        static ps::jobs::JobSystem pool(4);
+        ps::io::EngineMapOptions opt;
+        opt.quality = ps::drivetrain::MapQuality::Preview;
+        opt.pool = &pool;
+        opt.cache_dir = (std::filesystem::temp_directory_path() / "ps_turbo_vehicle_override_cache").string();
+        return ps::io::load_vehicle_json(write(name, v), opt);
+    }
+};
+
+const ps::drivetrain::SimulatedEngineDesc& sim_engine(const ps::vehicle::VehicleDesc& d) {
+    for (const auto& c : d.powertrain.components)
+        if (const auto* e = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&c.params)) return *e;
+    throw std::runtime_error("no simulated engine");
+}
+
+std::uint64_t hash_after(const ps::vehicle::VehicleDesc& d, int ticks, int workers) {
+    auto rig = ps_test::build_vehicle_rig_from_desc(d, 1500.0, ps::Vec3{2.0, 0.4, 0.15}, 0.5, 0.0, workers);
+    rig.world->set_control("throttle", 0.6);
+    for (int i = 0; i < ticks; ++i) rig.world->step();
+    return rig.world->state_hash();
+}
+
+std::string default_config_path() {
+    return std::filesystem::weakly_canonical(std::filesystem::path(data_dir()) / "turbo_configurations/hyper_twin_default.json").generic_string();
+}
+
+} // namespace
+
+TEST_CASE("N7b: a vehicle-level 'turbo_configuration' equals putting the path into the engine file", "[turbo][io][vehicle]") {
+    OverrideFixture f;
+    // (a) the override on the vehicle's engine component, the stock engine file.
+    json va = f.vehicle;
+    OverrideFixture::engine_component(va)["turbo_configuration"] = f.cfg_path;
+    const auto da = f.load(va, "va.json");
+    // (b) the same path as the engine file's own default_turbo_configuration, no override.
+    json e = f.engine;
+    e["default_turbo_configuration"] = f.cfg_path;
+    json vb = f.vehicle;
+    OverrideFixture::engine_component(vb)["ref"] = f.write("engine_b.json", e);
+    const auto db = f.load(vb, "vb.json");
+    // (c) the stock car (engine default), (d) the stock default named as an explicit override.
+    const auto dc = f.load(f.vehicle, "vc.json");
+    json vd = f.vehicle;
+    OverrideFixture::engine_component(vd)["turbo_configuration"] = default_config_path();
+    const auto dd = f.load(vd, "vd.json");
+    // (e) the repository car loaded directly: a file without the new key loads as before.
+    ps::io::EngineMapOptions opt;
+    opt.quality = ps::drivetrain::MapQuality::Preview;
+    opt.cache_dir = (std::filesystem::temp_directory_path() / "ps_turbo_vehicle_override_cache").string();
+    const auto de = ps::io::load_vehicle_json(data_dir() + "/vehicles/car_hyper.json", opt);
+
+    const auto& ea = sim_engine(da);
+    const auto& eb = sim_engine(db);
+    const auto& ec = sim_engine(dc);
+    REQUIRE(ea.turbo_pair.has_value());
+    REQUIRE(eb.turbo_pair.has_value());
+    REQUIRE(ec.turbo_pair.has_value());
+    // The override really replaced the default (else the equalities below would be vacuous).
+    CHECK(ea.turbo_pair->target_boost_pa == Catch::Approx(1.6e5).epsilon(1e-12));
+    CHECK(ec.turbo_pair->target_boost_pa == Catch::Approx(1.8e5).epsilon(1e-12));
+    // (a) == (b): same turbo desc, same hashed state.
+    CHECK(ea.turbo_pair->target_boost_pa == eb.turbo_pair->target_boost_pa);
+    CHECK(ea.turbo_pair->wastegate_area() == eb.turbo_pair->wastegate_area());
+    CHECK(ea.turbo_pair->rotor_inertia_kgm2 == eb.turbo_pair->rotor_inertia_kgm2);
+    REQUIRE(ea.turbo_pair->maps != nullptr);
+    REQUIRE(eb.turbo_pair->maps != nullptr);
+    CHECK(ea.turbo_pair->maps->content_hash == eb.turbo_pair->maps->content_hash);
+    const std::uint64_t ha1 = hash_after(da, 20, 1);
+    CHECK(ha1 == hash_after(db, 20, 1));
+    CHECK(ha1 != hash_after(dc, 20, 1)); // a different target boost moves the engine state
+    // No override = bit-identical (and naming the default explicitly changes nothing).
+    const std::uint64_t hc1 = hash_after(dc, 20, 1);
+    CHECK(hc1 == hash_after(dd, 20, 1));
+    CHECK(hc1 == hash_after(de, 20, 1));
+    CHECK(hc1 == hash_after(dc, 20, 10)); // worker-count invariant
+}
+
+TEST_CASE("N7b: a vehicle-level 'turbo_configuration' is rejected by message", "[turbo][io][vehicle]") {
+    OverrideFixture f;
+    SECTION("an empty string") {
+        json v = f.vehicle;
+        OverrideFixture::engine_component(v)["turbo_configuration"] = "";
+        CHECK_THROWS_WITH(f.load(v, "r1.json"), ContainsSubstring("'turbo_configuration' must be a non-empty path string"));
+    }
+    SECTION("not a string") {
+        json v = f.vehicle;
+        OverrideFixture::engine_component(v)["turbo_configuration"] = 3;
+        CHECK_THROWS_WITH(f.load(v, "r2.json"), ContainsSubstring("'turbo_configuration' must be a non-empty path string"));
+    }
+    SECTION("a simulated engine without default_turbo_configuration") {
+        json e = f.engine;
+        e.erase("default_turbo_configuration");
+        json v = f.vehicle;
+        OverrideFixture::engine_component(v)["ref"] = f.write("engine_noturbo.json", e);
+        OverrideFixture::engine_component(v)["turbo_configuration"] = f.cfg_path;
+        CHECK_THROWS_WITH(f.load(v, "r3.json"),
+                          ContainsSubstring("'turbo_configuration' is only allowed on a simulated engine whose file has 'default_turbo_configuration'"));
+    }
+    SECTION("a torque_map engine") {
+        json v = f.vehicle;
+        auto& c = OverrideFixture::engine_component(v);
+        c["ref"] = std::filesystem::weakly_canonical(std::filesystem::path(data_dir()) / "engines/i4_2l_na.json").generic_string();
+        c["turbo_configuration"] = f.cfg_path;
+        CHECK_THROWS_WITH(f.load(v, "r4.json"),
+                          ContainsSubstring("'turbo_configuration' is only allowed on a simulated engine whose file has 'default_turbo_configuration'"));
+    }
+    SECTION("a missing configuration file") {
+        json v = f.vehicle;
+        OverrideFixture::engine_component(v)["turbo_configuration"] = (f.dir / "does_not_exist.json").generic_string();
+        CHECK_THROWS(f.load(v, "r5.json"));
     }
 }

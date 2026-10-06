@@ -2,9 +2,9 @@
 // the hypercar (data/vehicles/car_hyper.json, a twin-turbo 5.07 L V8, engines/hyper_v8_one1_audio.json)
 // with an ~800 hp (597 kW) [AS] wet shot, data/vehicles/car_hyper_n2o.json.
 //
-// The numbers below are the POST-N3 ones (turbo exhaust balance with the N2O decomposition heat, merged e4756a8); the pre-N3 table is kept
-// in the comment block above the asserting tests. The diag cases (tag [.][diag][n2o]) print the dyno table, a kit-size exploration and a pull
-// report and are rerunnable (env vars PS_JET, PS_FJET, PS_RPM0/1, PS_DRPM, PS_PULL_GEAR; see the explore case).
+// The numbers below are the N7b ones (car_hyper_n2o with the larger wastegate of data/turbos/hyper_turbo_n2o.json and the re-bisected kit
+// custom_wet_plate_800_bigjet.json; see the comment above the asserting tests). The diag cases (tag [.][diag][n2o]) print the dyno table, a kit-size exploration and a pull
+// report and are rerunnable (env vars PS_CAR=car_hyper_n2o.json, PS_JET, PS_FJET, PS_RPM0/1, PS_DRPM, PS_PULL_GEAR; see the explore case).
 #include "drivetrain/engine_simulated.h"
 #include "drivetrain/nitrous_flow.h"
 #include "vehicle_test_helpers.h"
@@ -78,7 +78,7 @@ struct KitSpec {
 
 struct ShotRes {
     real brake_nm = 0, kw = 0, p_im_kpa = 0, boost_bar = 0, lambda_c = 0, lambda_ecu = 0, t_mix = 0, t_charge = 0, mdot_n = 0, mdot_kf = 0,
-         spark = 0, turbo_rpm = 0, brake_min = 1e300, brake_max = -1e300;
+         spark = 0, turbo_rpm = 0, brake_min = 1e300, brake_max = -1e300, wastegate = 0, wastegate_max = 0, turbo_rpm_max = 0;
     std::uint64_t overflow = 0;
 };
 
@@ -139,11 +139,14 @@ ShotRes dyno_shot(const drivetrain::SimulatedEngineDesc& d, const std::shared_pt
             r.mdot_kf += mdk;
             r.spark += pre.spark_advance_deg;
             r.turbo_rpm += pre.turbo_rpm;
+            r.wastegate += pre.wastegate_opening;
+            r.wastegate_max = std::max(r.wastegate_max, pre.wastegate_opening);
+            r.turbo_rpm_max = std::max(r.turbo_rpm_max, pre.turbo_rpm);
         }
     }
     const real inv = 1.0 / n_avg;
     for (real* x : {&r.brake_nm, &r.p_im_kpa, &r.boost_bar, &r.lambda_c, &r.lambda_ecu, &r.t_mix, &r.t_charge, &r.mdot_n, &r.mdot_kf, &r.spark,
-                    &r.turbo_rpm})
+                    &r.turbo_rpm, &r.wastegate})
         *x *= inv;
     r.kw = r.brake_nm * omega * 1e-3;
     r.overflow = e.n2o_overflow_substeps() - ov0;
@@ -171,9 +174,9 @@ real envd(const char* n, real def) {
 
 void print_row(real rpm, const ShotRes& b, const ShotRes& w) {
     std::printf("[N7 dyno] %5.0f rpm: base %7.1f Nm %6.1f kW (boost %.2f bar, pim %.0f kPa) | shot %7.1f Nm %6.1f kW (boost %.2f, pim %.0f)  gain %+6.1f kW %+6.1f hp"
-                " | lam_c %.3f (ecu %.3f) T_mix %.1f K (T_charge %.1f) N2O %.1f g/s kit fuel %.1f g/s spark %.1f turbo %.0f/%.0f rpm ov %llu spread %.1f Nm\n",
+                " | lam_c %.3f (ecu %.3f) T_mix %.1f K (T_charge %.1f) N2O %.1f g/s kit fuel %.1f g/s spark %.1f turbo %.0f/%.0f rpm gate mean/max %.3f/%.3f ov %llu spread %.1f Nm\n",
                 rpm, b.brake_nm, b.kw, b.boost_bar, b.p_im_kpa, w.brake_nm, w.kw, w.boost_bar, w.p_im_kpa, w.kw - b.kw, (w.kw - b.kw) * 1e3 / kHpW,
-                w.lambda_c, w.lambda_ecu, w.t_mix, w.t_charge, w.mdot_n * 1e3, w.mdot_kf * 1e3, w.spark, b.turbo_rpm, w.turbo_rpm,
+                w.lambda_c, w.lambda_ecu, w.t_mix, w.t_charge, w.mdot_n * 1e3, w.mdot_kf * 1e3, w.spark, b.turbo_rpm, w.turbo_rpm, w.wastegate, w.wastegate_max,
                 static_cast<unsigned long long>(w.overflow), w.brake_max - w.brake_min);
 }
 
@@ -359,23 +362,22 @@ TEST_CASE("N7 whole car: car_hyper_n2o WOT pull report", "[.][diag][n2o]") {
 }
 
 // ===========================================================================
-// Asserting tests. Bounds are the POST-N3 measurement (release, Windows, 2026-10-06) with margin.
+// Asserting tests (release, Windows, 2026-10-06, with margin).
 //
-// Dyno-held shot, data/vehicles/car_hyper_n2o.json (kit 3.6 mm / 1.45 mm, bottle 950 psig, 6 deg retard; settle 10 s, mean of 0.5 s):
-//   rpm   base kW   shot kW   gain kW (hp)   boost base/shot   lambda_c  T_mix K  N2O g/s  kit fuel g/s  spark  turbo rpm shot
-//   3000   387.0     925.8    +538.7 (722)   1.78/1.79         0.839     206.7    220.0    28.3          12.0    79100
-//   4000   534.9    1080.3    +545.4 (731)   1.78/1.78         0.837     225.1    220.0    28.3          12.0    82607
-//   5000   723.5    1343.1    +619.6 (831)   1.76/2.12         0.832     246.6    220.0    28.3           8.5   107081
-//   6000   867.0    1549.8    +682.8 (916)   1.73/2.37         0.829     258.6    220.0    28.3           4.8   180000 (model cap)
-//   7000   977.1    1599.1    +622.0 (834)   1.71/2.02         0.829     258.7    220.0    28.3          10.0   180000 (model cap)
-//   mean gain +601.7 kW = 807 hp (target 800 hp = 596.6 kW). No overflow (N2O alone never fills the cylinder). Bottle 6.804 kg lasts 30.9 s.
-// The shot is limited by the jet/bottle flow, not by the charge model (the overflow guard never fires on this 5.07 L boosted V8); after N3
-// the shot also lifts the charge pressure (2.0-2.4 bar against the 1.8 bar target) until the turbine reaches the model's 180000 rpm cap.
-// PRE-N3 for comparison (3.8/1.5 mm, same files otherwise): +598/+605/+585/+556/+594 kW at 3000..7000 rpm, boost unchanged (1.71-1.78).
+// N7b (owner option b): car_hyper_n2o.json now carries the vehicle-level "turbo_configuration" override
+// (../turbo_configurations/hyper_twin_n2o.json -> ../turbos/hyper_turbo_n2o.json, wastegate 1.4875e-3 m2 per turbo against the stock 1.18e-3)
+// and the kit custom_wet_plate_800_bigjet.json (3.81 mm N2O / 1.535 mm fuel, re-bisected). Dyno-held shot (settle 10 s, mean of 0.5 s):
+// MEAN GAIN OVER 3000-7000 rpm +596.1 kW = 799 hp (target 596.6 kW; jet bisection, same gate: 3.6 mm +530, 3.75 mm +577, 3.81 mm +596); wastegate at most 0.965 open (6000-7000 rpm), turbo at most 126500 rpm
+// (0.70 x the 180000 rpm cap), boost 1.71-1.78 bar gauge at the manifold (the stock engine's own 1.71-1.78 without the shot).
+// Peak shot crank torque 3153 N*m at 3000 rpm (clutch 3650). With the STOCK wastegate the same engine saturates the gate at 5000-7000 rpm,
+// boosts to 2.0-2.4 bar and hits the rotor cap (the previous N7 numbers, 3.6 mm jet: +602 kW mean): the stock configuration fails the
+// gate/cap/boost asserts below. RECORDED SABOTAGE (PS_SABOTAGE_STOCK_TURBO=1 on the dyno test, stock configuration, same 3.81 mm kit):
+// gate 1.000, turbo 180000 rpm, boost above 1.9 bar at 5000-7000 rpm, mean gain +691.5 kW (927 hp) - 12 asserts fail (wastegate_max < 0.98,
+// turbo_rpm_max < 0.95 x cap, boost < 1.9, per-point gain < 700, mean gain < 640); with the shipped configuration all pass.
 //
-// Whole-car pull (3rd gear, armed at the 3rd-gear clutch lock, 3180 rpm, progressive 0.4 -> 1.0 over 1 s): the clutch stays locked
-// (88 of 88 ticks, 0.0 rpm slip), rear wheelspin max kappa 1.30 (baseline 0.80; physics, not fixed), the 7800 rpm mark is reached at t 5.22 s
-// against 6.16 s without spray; balance_error 4.0e-16, bottle closure 8e-16 kg, N2O energy closure 2.2e-15.
+// Whole-car pull (3rd gear, armed at the 3rd-gear clutch lock, 3269 rpm, progressive 0.4 -> 1.0 over 1 s; measured with this kit and gate):
+// the clutch stays locked (83 of 83 ticks, 0.0 rpm slip), rear wheelspin max kappa 1.24 (baseline 0.77; physics, not fixed), the 7800 rpm mark is
+// reached at t 5.29 s against 6.27 s without spray; balance_error 4.8e-16, bottle closure 9.7e-16 kg, N2O energy closure 2.5e-15.
 // ===========================================================================
 namespace {
 
@@ -418,14 +420,22 @@ TEST_CASE("N7 car_hyper_n2o: parts and flow arithmetic and a coarse shot", "[n2o
     CHECK(a.desc.powertrain.components.size() == stock.desc.powertrain.components.size() + 2);
     CHECK(a.desc.powertrain.fluid.size() == stock.desc.powertrain.fluid.size() + 2);
     CHECK(stock.clutch->capacity_nm == 1650.0);
-    CHECK(a.clutch->capacity_nm == 3400.0);
-    // The kit: every number as shipped (data/nitrous_kits/custom_wet_plate_800.json).
+    // N7b: the n2o car's engine component overrides the turbo configuration (the larger wastegate); the stock car keeps the engine default.
+    REQUIRE(a.engine->turbo_pair.has_value());
+    REQUIRE(stock.engine->turbo_pair.has_value());
+    CHECK(stock.engine->turbo_pair->wastegate_area() == Catch::Approx(2.36e-3).epsilon(1e-9));  // 2 x 1.18e-3 m2 (hyper_turbo_approx.json)
+    CHECK(a.engine->turbo_pair->wastegate_area() == Catch::Approx(2.975e-3).epsilon(1e-9));     // 2 x 1.4875e-3 m2 (hyper_turbo_n2o.json)
+    CHECK(a.engine->turbo_pair->target_boost_pa == stock.engine->turbo_pair->target_boost_pa);  // 1.8 bar gauge, unchanged
+    CHECK(a.engine->turbo_pair->turbine_area_m2 == stock.engine->turbo_pair->turbine_area_m2);
+    CHECK(a.engine->turbo_pair->rotor_inertia_kgm2 == stock.engine->turbo_pair->rotor_inertia_kgm2);
+    CHECK(a.clutch->capacity_nm == 3650.0);
+    // The kit: every number as shipped (data/nitrous_kits/custom_wet_plate_800_bigjet.json).
     CHECK(a.kit->type == drivetrain::NitrousKitType::Wet);
     CHECK(a.kit->nozzle_count == 1);
-    CHECK(a.kit->nitrous_jet_diameter_mm == 3.6);
+    CHECK(a.kit->nitrous_jet_diameter_mm == 3.81);
     CHECK(a.kit->nitrous_jet_cd == 0.66);
     CHECK(a.kit->flow_model == drivetrain::NitrousFlowModel::Hem);
-    CHECK(a.kit->fuel_jet_diameter_mm == 1.45);
+    CHECK(a.kit->fuel_jet_diameter_mm == 1.535);
     CHECK(a.kit->fuel_jet_cd == 0.7);
     CHECK(a.kit->fuel_pressure_gauge_bar == 4.0);
     CHECK(a.kit->fuel_reference == drivetrain::NitrousFuelReference::Manifold);
@@ -442,14 +452,14 @@ TEST_CASE("N7 car_hyper_n2o: parts and flow arithmetic and a coarse shot", "[n2o
     CHECK(a.bottle->capacity_kg == Catch::Approx(15.0 * 0.45359237).epsilon(1e-4)); // 15 lb
     CHECK(a.bottle->initial_kg == a.bottle->capacity_kg);
     CHECK(a.bottle->pressure.gauge_bar == Catch::Approx(950.0 * 0.0689476).epsilon(1e-4)); // 950 psig
-    // Flow = Cd * A * G_HEM(p_bottle); the bottle lasts 30.9 s at full flow, less than the controller's own 35 s cut.
+    // Flow = Cd * A * G_HEM(p_bottle); the bottle lasts 27.6 s at full flow, less than the controller's own 35 s cut.
     const drivetrain::OxidizerTables tabs(a.bottle->oxidizer);
     const real p_abs = (a.bottle->pressure.gauge_bar + 1.01325) * 1e5;
     const real mdot = jet_flow(*a.kit, tabs, p_abs);
-    CHECK(mdot * 1e3 == Catch::Approx(220.0).margin(0.5));
+    CHECK(mdot * 1e3 == Catch::Approx(246.4).margin(0.5));
     const real duration = a.bottle->capacity_kg / mdot;
-    CHECK(duration > 30.5);
-    CHECK(duration < 31.3);
+    CHECK(duration > 27.2);
+    CHECK(duration < 28.0);
     CHECK(duration < a.kit->controller.safety.max_active_s);
     // 800 hp sizing: the shot's expected crank work at 2.46 MJ per kg N2O (out/n2o_plan.md section 9) is within -10 %/+15 % of 597 kW.
     CHECK(mdot * 2.46e6 * 1e-3 > 0.9 * a.kit->rating.power_kw);
@@ -478,52 +488,65 @@ TEST_CASE("N7 car_hyper_n2o: dyno-held shot at 3000-7000 rpm", "[n2o][vehicle][d
     REQUIRE(a.kit != nullptr);
     REQUIRE(a.bottle != nullptr);
     REQUIRE(a.clutch != nullptr);
-    const auto maps = drivetrain::SimulatedEngine::build_maps(*a.engine);
+    // Recorded sabotage (N7b): PS_SABOTAGE_STOCK_TURBO=1 swaps the stock turbo configuration (the stock wastegate) back in; the gate, rotor-cap
+    // and boost asserts below then fail at 5000-7000 rpm (see the header comment above: gate 1.0, boost 2.0-2.4 bar, turbo at the 180000 rpm cap).
+    drivetrain::SimulatedEngineDesc engine = *a.engine;
+    if (!envs("PS_SABOTAGE_STOCK_TURBO").empty())
+        engine.turbo_pair = io::load_turbo_configuration_json(data_path("turbo_configurations/hyper_twin_default.json"));
+    REQUIRE(engine.turbo_pair.has_value());
+    const auto maps = drivetrain::SimulatedEngine::build_maps(engine);
     const drivetrain::OxidizerTables tabs(a.bottle->oxidizer);
     const KitSpec spec = spec_from(*a.kit, *a.bottle);
     const real mdot = jet_flow(*a.kit, tabs, spec.bottle_abs_pa);
-    struct Band {
-        real rpm, gain_lo, gain_hi;
-    };
-    const Band bands[] = {{3000, 495, 585}, {4000, 500, 590}, {5000, 570, 670}, {6000, 630, 735}, {7000, 575, 670}};
-    real gain_sum = 0.0, peak_torque = 0.0;
-    for (const Band& bd : bands) {
-        const ShotRes b = dyno_shot(*a.engine, maps, tabs, bd.rpm, nullptr);
-        const ShotRes w = dyno_shot(*a.engine, maps, tabs, bd.rpm, &spec);
-        print_row(bd.rpm, b, w);
+    constexpr real kRotorCapRpm = 1.5 * 120000.0; // the turbo model's rotor speed cap, 1.5 x the hardware reference speed
+    real gain_sum = 0.0, peak_torque = 0.0, worst_gate = 0.0, worst_turbo = 0.0;
+    for (real rpm : {3000.0, 4000.0, 5000.0, 6000.0, 7000.0}) {
+        const ShotRes b = dyno_shot(engine, maps, tabs, rpm, nullptr);
+        const ShotRes w = dyno_shot(engine, maps, tabs, rpm, &spec);
+        print_row(rpm, b, w);
         const real gain = w.kw - b.kw;
         gain_sum += gain;
         peak_torque = std::max(peak_torque, w.brake_nm);
-        INFO("rpm " << bd.rpm);
-        CHECK(gain > bd.gain_lo);
-        CHECK(gain < bd.gain_hi);
+        worst_gate = std::max(worst_gate, w.wastegate_max);
+        worst_turbo = std::max(worst_turbo, w.turbo_rpm_max);
+        INFO("rpm " << rpm);
+        CHECK(gain > 500.0); // per point: loose; the mean below is the sizing check
+        CHECK(gain < 700.0);
+        // N7b: with the shot the wastegate does not saturate, the rotor stays clear of its cap, and the boost stays on the 1.8 bar target
+        // (the engine's own manifold gauge, 1.71-1.78 bar; the stock gate gives 2.0-2.4 bar at 5000-7000 rpm).
+        CHECK(w.wastegate_max < 0.98);
+        CHECK(w.turbo_rpm_max < 0.95 * kRotorCapRpm);
+        CHECK(w.boost_bar > 1.8 - 0.1);
+        CHECK(w.boost_bar < 1.8 + 0.1);
         CHECK(w.overflow == 0); // the charge model does not limit this shot
         CHECK(w.lambda_c > 0.80);
         CHECK(w.lambda_c < 0.87);
         CHECK(w.t_mix > 190.0); // evaporative cooling of the N2O: ~90 K below the 295 K charge
         CHECK(w.t_mix < 275.0);
         CHECK(w.mdot_n == Catch::Approx(mdot).epsilon(1e-12));
-        CHECK(w.mdot_n * 1e3 == Catch::Approx(220.0).margin(0.5));
-        CHECK(w.mdot_kf * 1e3 > 26.5);
-        CHECK(w.mdot_kf * 1e3 < 30.5);
+        CHECK(w.mdot_n * 1e3 == Catch::Approx(246.4).margin(0.5));
+        CHECK(w.mdot_kf * 1e3 > 29.5);
+        CHECK(w.mdot_kf * 1e3 < 34.0);
         CHECK(w.brake_max - w.brake_min < 80.0);  // settled, not hunting
-        CHECK(w.boost_bar >= b.boost_bar - 0.02); // the shot never LOWERS boost after N3
-        CHECK(w.turbo_rpm <= 180000.0 + 1.0);
+        CHECK(w.boost_bar >= b.boost_bar - 0.02); // the shot never LOWERS boost
+        // No-spray reference of the engine (unchanged by the kit; the larger gate does not move it either).
+        if (rpm == 4000.0) {
+            CHECK(b.kw > 510.0);
+            CHECK(b.kw < 560.0);
+        }
+        if (rpm == 6000.0) {
+            CHECK(b.kw > 830.0);
+            CHECK(b.kw < 905.0);
+        }
     }
     const real mean_gain = gain_sum / 5.0;
-    std::printf("[N7 dyno] mean gain %.1f kW = %.0f hp (target 596.6 kW = 800 hp), peak shot crank torque %.0f Nm vs clutch %.0f Nm\n", mean_gain,
-                mean_gain * 1e3 / kHpW, peak_torque, a.clutch->capacity_nm);
+    // The one summary line: mean gain over 3000-7000 rpm, 800 hp = 596.6 kW (measured +596.0 kW = 799 hp).
+    std::printf("[N7 dyno] mean gain %.1f kW = %.0f hp (target 596.6 kW = 800 hp); worst wastegate %.3f, worst turbo %.0f rpm (cap %.0f); peak shot torque %.0f Nm vs clutch %.0f Nm\n",
+                mean_gain, mean_gain * 1e3 / kHpW, worst_gate, worst_turbo, kRotorCapRpm, peak_torque, a.clutch->capacity_nm);
     CHECK(mean_gain > 560.0);
-    CHECK(mean_gain < 650.0);
+    CHECK(mean_gain < 640.0);
     // The clutch carries the shot with a >= 10 % margin on the peak crank torque (3000 rpm, the controller's lowest rpm).
     CHECK(1.1 * peak_torque <= a.clutch->capacity_nm);
-    // No-spray reference of the stock engine (unchanged by the kit).
-    const ShotRes b4 = dyno_shot(*a.engine, maps, tabs, 4000.0, nullptr);
-    const ShotRes b6 = dyno_shot(*a.engine, maps, tabs, 6000.0, nullptr);
-    CHECK(b4.kw > 510.0);
-    CHECK(b4.kw < 560.0);
-    CHECK(b6.kw > 830.0);
-    CHECK(b6.kw < 905.0);
 }
 
 TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull with the shot", "[n2o][vehicle][drivetrain][validation][long]") {
@@ -563,10 +586,10 @@ TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull with the shot", "[n2o][vehicle][
     CHECK(with.max_kappa >= base.max_kappa);
 }
 
-// The 3rd-gear pull above is short (0.36 s, rear wheelspin). In 5th the tyres hold (max kappa 0.24), the progressive flow reaches its full
-// 220 g/s at t = 1 s and the pull lasts 1.2 s with the shot against 4.8 s without (5646 -> 7800 rpm); measured post-N3: clutch locked 296/296,
-// 204 g N2O, crank power gain +366 kW at 6000 rpm and +460 kW at 7000 rpm over the baseline pull, v_end 67.4 m/s (baseline 80.2 m/s, the
-// baseline pull simply lasts 3.6 s longer: not a speed comparison), balance 4.0e-16, bottle 3.2e-14 kg, tank 2.1e-13 kg, closure 5.2e-15.
+// The 3rd-gear pull above is short (0.36 s, rear wheelspin). In 5th the tyres hold (max kappa 0.26), the progressive flow reaches its full
+// 246.4 g/s at t = 1 s and the pull lasts 1.1 s with the shot against 4.9 s without (5646 -> 7800 rpm); measured with the N7b kit and gate: clutch
+// locked 265/265, 197 g N2O, crank power gain +366 kW at 6000 rpm and +480 kW at 7000 rpm over the baseline pull, v_end 66.5 m/s (baseline 80.2 m/s,
+// the baseline pull simply lasts 3.8 s longer: not a speed comparison), balance 4.8e-16, bottle 2.6e-14 kg, tank 4.1e-13 kg, closure 3.7e-15.
 TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull in 5th gear reaches full flow", "[n2o][vehicle][drivetrain][validation][long]") {
     const vehicle::VehicleDesc desc = load_car("car_hyper_n2o.json");
     constexpr int kGear = 5;
@@ -584,9 +607,9 @@ TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull in 5th gear reaches full flow", 
     CHECK(with.max_slip_rpm < 1.0);
     CHECK(with.spray_ticks >= 200);
     CHECK(with.max_kappa < 0.6); // the tyres hold in 5th: no wheelspin runaway
-    // Full flow (Cd*A*G_HEM = 220 g/s) is reached once the 1 s progressive ramp ends, never exceeded.
-    CHECK(max_flow > 215.0);
-    CHECK(max_flow < 225.0);
+    // Full flow (Cd*A*G_HEM = 246.4 g/s) is reached once the 1 s progressive ramp ends, never exceeded.
+    CHECK(max_flow > 241.0);
+    CHECK(max_flow < 251.0);
     CHECK(with.n2o_kg * 1e3 > 170.0);
     CHECK(with.n2o_kg * 1e3 < 240.0);
     CHECK(with.unburnt_kg < 1e-9);

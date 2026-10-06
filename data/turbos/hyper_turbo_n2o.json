@@ -1,0 +1,15 @@
+{
+  "format": "physics_sim.turbo/1",
+  "name": "hyper_turbo_n2o",
+  "source": "[AS] car_hyper_n2o's own wastegate: a copy of hyper_turbo_approx.json with a larger gate, because the ~800 hp wet N2O shot (data/nitrous_kits/custom_wet_plate_800_bigjet.json) drives the exhaust flow high enough that the stock gate (1178 mm2 per turbo) saturates at 5000-7000 rpm and boost overshoots to 2.0-2.4 bar with the rotor at the model's 1.5 x reference-speed cap. Measured on the dyno-held V8 (settle 10 s, mean 0.5 s): a pair gate area of 2.704e-3 m2 just holds 1.8 bar at 7000 rpm with the shot; plus a 10 % margin = 2.975e-3 m2 for the pair = 1.4875e-3 m2 per turbo (1.26 x the stock 1.178e-3; a ~54 mm poppet at Cd 0.6, or one larger valve or two). Everything else is identical to hyper_turbo_approx.json (see its source and rotor_inertia_source). The stock car_hyper keeps hyper_turbo_approx.json.",
+  "wastegate_area_m2": 0.0014875,
+  "rotor_inertia_source": "2026-10-05 (owner decision 'Turbo: try'): [D] derived for a unit sized for ~500 kW, the Garrett GTX3582R Gen II class (garrettmotion.com, read 2026-10-05: 450-900 hp; compressor wheel 66/82 mm inducer/exducer, turbine wheel 68/62 mm). Each wheel a solid disc at its tip radius, I = m r^2 / 2, mass = density x swept cylinder x metal share. Turbine: Inconel 713C 7910 kg/m3 (alloy 713C datasheets, e.g. American Elements / ASM Alloy Digest Ni-50: 7.91 g/cm3), tip 68 mm, axial length 0.45 D = 30.6 mm [AS], metal share 0.25 [AS] -> 0.220 kg, 1.27e-4 kg m2. Compressor: forged aluminium 2618, 2760 kg/m3, tip 82 mm, length 0.40 D = 32.8 mm [AS], share 0.25 [AS] -> 0.120 kg, 1.00e-4 kg m2. Shaft: steel 7850 kg/m3, 9 x 90 mm [AS] -> 0.045 kg, 4.6e-7 kg m2. Sum 2.28e-4 -> 2.3e-4 per turbo. Was 2e-5 [AS] (a small passenger-car rotor; it stored ~2.4 kJ at the lift and spun down in ~0.1 s).",
+  "rotor_inertia_kgm2": 0.00023,
+  "reference_rpm": 120000,
+  "max_mass_flow_kg_s": 0.6,
+  "compressor_efficiency": 0.8,
+  "turbine_efficiency": 0.8,
+  "turbine_area_m2": 0.0005,
+  "shaft_loss_w_at_reference": 600,
+  "reference_head_bar": 4.5
+}

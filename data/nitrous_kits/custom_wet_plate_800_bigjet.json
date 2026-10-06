@@ -1,0 +1,23 @@
+{
+  "format": "physics_sim.nitrous_kit/1",
+  "type": "wet",
+  "injection": "plenum",
+  "nozzle_count": 1,
+  "nitrous_jet_diameter_mm": 3.81,
+  "nitrous_jet_cd": 0.66,
+  "flow_model": "hem",
+  "fuel_jet_diameter_mm": 1.535,
+  "fuel_jet_cd": 0.7,
+  "fuel_pressure": {
+    "gauge_bar": 4.0,
+    "reference": "manifold"
+  },
+  "rating": {
+    "power_kw": 596.56,
+    "bottle_gauge_bar": 65.5,
+    "basis": "crank",
+    "source": "800 hp [AS: the owner's request, 2026-10-06] x 0.745699872 kW/hp [D] = 596.56 kW; the target the jets were sized for, not a cited rating. Measured on the hyper V8 with the larger wastegate of data/turbos/hyper_turbo_n2o.json (dyno-held, settle 10 s, mean 0.5 s): +604/+612/+594/+565/+606 kW at 3000/4000/5000/6000/7000 rpm, mean +596.1 kW = 799 hp (tests/validation/test_car_hyper_n2o.cpp)."
+  },
+  "default_controller": "../nitrous_controllers/custom_wet_800.json",
+  "source": "custom_wet_plate_800.json (the N7 800 hp wet plate: one nitrous jet and one fuel jet on engines/hyper_v8_one1_audio.json, every number [AS] unless stated; see its source for the jet-flow derivation, Cd values, HEM flow model and fuel-supply choice) re-sized for car_hyper_n2o's larger wastegate (data/turbos/hyper_turbo_n2o.json via data/turbo_configurations/hyper_twin_n2o.json). Why a new jet: with the stock wastegate the shot overdrove the turbo (2.0-2.4 bar, rotor at the model's 180000 rpm cap) and that extra boost was part of the +602 kW the 3.6 mm jet made; with the gate that holds 1.8 bar the gain comes from the N2O alone, so the jet is re-bisected for the same ~597 kW (800 hp) mean over 3000-7000 rpm. Dyno-held mean gain: 3.6 mm +530 kW (earlier measurement), 3.75 mm +577 kW, 3.81 mm +596.1 kW (target 596.6). The N2O jet: 3.81 mm at Cd 0.66 and G_HEM(950 psig) = 32782 kg/(m2 s) [D] gives 0.2464 kg/s (the bottle's 6.804 kg lasts 27.6 s, under the controller's 35 s cut). The fuel jet follows the N2O area to keep the combined lambda: 1.45 mm x 3.81/3.6 = 1.535 mm (same Cd 0.70 and 4.0 bar over the manifold [AS] -> 31.7 g/s of E5); measured combined lambda 0.836-0.840 (0.829-0.839 with the 3.6/1.45 mm kit). UNVALIDATED: no cited kit exists at this size; PROVISIONAL."
+}

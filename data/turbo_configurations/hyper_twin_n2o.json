@@ -1,0 +1,16 @@
+{
+  "format": "physics_sim.turbo_configuration/1",
+  "name": "hyper_twin_n2o",
+  "turbo": "../turbos/hyper_turbo_n2o.json",
+  "count": 2,
+  "target_boost_bar": 1.8,
+  "intercooler_effectiveness": 0.95,
+  "boost_control": {
+    "source": "[A] PID on charge pressure (per unit of target_boost_bar, derivative on the measurement) and wastegate actuator lag; gains from a sweep on hyper_v8_one1_audio.json, 2026-10-02",
+    "kp": 1.0,
+    "ki_per_s": 1.0,
+    "kd_s": 0.05,
+    "actuator_tau_s": 0.1
+  },
+  "source": "[AS] Authored twin configuration; 1.8 bar charge target unchanged. Intercooler effectiveness 0.95 is an optimistic steady-ISA assumption, not a measured cooler; no heat-soak or cooler pressure-loss model. hyper_twin_n2o (car_hyper_n2o): identical to hyper_twin_default.json except that it references ../turbos/hyper_turbo_n2o.json (larger wastegate for the N2O shot)."
+}
