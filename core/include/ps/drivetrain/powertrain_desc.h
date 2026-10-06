@@ -434,6 +434,13 @@ struct SimulatedEngineDesc {
     // `maps` with the result; keys given in the file's own "maps" block
     // override generated ones. The runtime never reads this field.
     std::optional<CycleModelDesc> cycle;
+    // Engine garage P1: true when the loader ran with EngineMapOptions::generate = false and
+    // the maps above are NOT the complete set (the "cycle" block's generated keys are still
+    // missing - only keys the engine file's own "maps" block gave are filled). Such a desc is
+    // for inspection (parameters, validation) only: constructing a SimulatedEngine from it -
+    // hence a World vehicle, an EngineRig or a Powertrain - throws. False for every ordinary
+    // load, including a load that generated Sketch maps.
+    bool maps_pending = false;
 
     // Shared with the graph engine, same meaning and validation.
     real inertia_kgm2 = 0.0;          // > 0

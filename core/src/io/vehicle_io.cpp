@@ -1726,7 +1726,8 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
     SimulatedEngineDesc e;
     if (j.contains("default_turbo_configuration")) {
         const auto cfg_path=resolve_path(engine_dir,j.at("default_turbo_configuration").get<std::string>());
-        e.turbo_pair=load_turbo_configuration_json(cfg_path,map_options ? map_options->cache_dir : std::string{});
+        // A validate-only load (generate = false) writes nothing, the derived turbo table cache included.
+        e.turbo_pair=load_turbo_configuration_json(cfg_path,(map_options && map_options->generate) ? map_options->cache_dir : std::string{});
     }
 
     // --- architecture + geometry -------------------------------------------
@@ -2127,6 +2128,15 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             // by reference here (vault TOOL-019, the Windows ASan leg).
             const EngineMapOptions defaults{};
             const EngineMapOptions& opt = map_options != nullptr ? *map_options : defaults;
+            if (!opt.generate) {
+                // Engine garage P1: validate-only. Everything above already ran; add the generator's
+                // own build-time checks, then leave the maps pending (no generator, no cache access).
+                drivetrain::validate_engine_map_generation(*e.cycle, e.fuels.front(), opt.quality);
+                e.maps_pending = true;
+            } else {
+            // Engine garage P1: a request to cancel that is already set stops the load before
+            // any work, even where the cache would have hit.
+            if (opt.cancel != nullptr && opt.cancel->load(std::memory_order_relaxed)) throw drivetrain::GenerationCancelled();
             // PHYS-033 P4 I7c C16b (D8): an opt-in on-disk cache in front of
             // the generator call below. cache_dir empty (the default) means
             // load_cached_engine_maps/store_cached_engine_maps touch the
@@ -2138,7 +2148,11 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                                                                     drivetrain::engine_map_generator_version(*e.cycle));
             if (!gen) {
                 if (opt.generation_count_out != nullptr) ++*opt.generation_count_out;
-                gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool);
+                drivetrain::MapGenerationControl control;
+                control.cancel = opt.cancel;
+                control.on_progress = opt.on_progress;
+                // A cancelled generation throws here, before the cache store: no file is written.
+                gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool, &control);
                 drivetrain::store_cached_engine_maps(opt.cache_dir, cache_key, *gen);
             }
             const SimulatedEngineMapsDesc& g = gen->maps;
@@ -2157,8 +2171,23 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             }
             e.maps.source = j.contains("maps") ? e.maps.source + " | generated from the cycle block (" + generated_keys + "): " + g.source
                                                : g.source;
+            } // generate
         }
         const std::string mctx = ctx + ".maps";
+        if (e.maps_pending) {
+            // Pending (validate-only): the generated keys are missing. What does not depend on them still
+            // runs. The friction curve is given by the file, or - when it is generated - it is exactly
+            // the correlation the generator would tabulate, whose value at rpm 0 is the Coulomb part.
+            real friction0 = real(0.0);
+            if (have_friction) {
+                friction0 = e.maps.friction_torque_nm.evaluate(real(0.0));
+            } else {
+                friction0 = drivetrain::cycle_friction_torque_nm(*e.cycle, real(0.0));
+            }
+            if (e.breakaway_torque_nm < friction0) {
+                throw std::runtime_error(ctx + ": breakaway_torque_nm must be >= maps.friction_torque_nm(0)");
+            }
+        } else {
         if (e.maps.friction_torque_nm.x.empty() || e.maps.friction_torque_nm.x.front() != real(0.0)) {
             throw std::runtime_error(mctx + ".friction_torque_nm: x[0] must be exactly 0 (its y[0] is the Coulomb part)");
         }
@@ -2170,6 +2199,7 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         require_maps_efficiency_below_one(e.maps, mctx);
         if (e.breakaway_torque_nm < e.maps.friction_torque_nm.evaluate(real(0.0))) {
             throw std::runtime_error(ctx + ": breakaway_torque_nm must be >= maps.friction_torque_nm(0)");
+        }
         }
     }
 
