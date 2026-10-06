@@ -211,7 +211,7 @@ vehicle::VehicleDesc car_desc_with_zeta(real zeta, bool zero_rolling_resistance)
     vehicle::VehicleDesc desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
     for (auto& w : desc.wheels) {
         w.tyre.low_speed_damping_ratio = zeta;
-        if (zero_rolling_resistance) { w.tyre.qsy1 = 0.0; w.tyre.qsy2 = 0.0; w.tyre.qsy4 = 0.0; }
+        if (zero_rolling_resistance) { w.tyre.qsy1 = 0.0; w.tyre.qsy2 = 0.0; w.tyre.qsy3 = 0.0; w.tyre.qsy4 = 0.0; }
     }
     return desc;
 }
@@ -451,7 +451,7 @@ TEST_CASE("Spec test 10.3: default-zeta yaw decay rate matches the section 4.2 m
     // (TyreDesc::low_speed_damping_ratio, currently 1.5 - I1 commit E).
     const vehicle::VehicleDesc desc = [] {
         vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json");
-        for (auto& w : d.wheels) { w.tyre.qsy1 = 0.0; w.tyre.qsy2 = 0.0; w.tyre.qsy4 = 0.0; }
+        for (auto& w : d.wheels) { w.tyre.qsy1 = 0.0; w.tyre.qsy2 = 0.0; w.tyre.qsy3 = 0.0; w.tyre.qsy4 = 0.0; }
         return d;
     }();
     auto rig = ps_test::build_vehicle_rig_from_desc(desc, 1500.0, Vec3{2.0, 0.4, 0.15}, 0.6);

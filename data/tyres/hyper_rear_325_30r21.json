@@ -1,16 +1,20 @@
 {
   "format": "physics_sim.tyre/1",
   "name": "hyper_rear",
-  "source": "Fictional performance tyre using existing passenger-car Magic Formula coefficients. Authored dimensions match the art; reference load equals the 1500 kg 42/58 static corner load. Friction scales 1.15, vertical stiffness 260/300 kN/m; not a measured tyre fit.",
+  "source": "Fictional performance tyre using existing passenger-car Magic Formula coefficients. Authored dimensions match the art; reference load equals the 1500 kg 42/58 static corner load. Friction scales 1.15, vertical stiffness 260/300 kN/m; not a measured tyre fit. Rolling resistance (2026-10-06, tyre crr work): qsy1/qsy3/qsy4 are now DERIVED from the rolling_resistance anchor block - crr = crr_base*(1 + A*(v/V_r) + B*(v/V_r)^4) with crr(0.8 V_r) = 1.5 crr_base and crr(V_r) = 2.0 crr_base [AS: the 1.5/2.0 rise anchors sit between the Gillespie and Wong passenger-tyre forms, neither re-checked against a readable source], rated speed V_r [AS] fictional hypercar tyre rated 500 km/h (above the ISO 4000-1 / ETRTO Y = 300 km/h and (Y) > 300 symbols, which stop there); replaces the raw qsy4 0.0002*(v/16.7)^4 (tractor 0.0003*(v/8.3)^4) which cost 30x the base at 370 km/h on the hypercar.",
   "unloaded_radius": 0.364,
   "width": 0.325,
   "rim_radius": 0.267,
   "fz0": 4267.35,
   "vertical_stiffness": 300000.0,
   "v0": 16.7,
-  "qsy1": 0.01,
   "qsy2": 0.0,
-  "qsy4": 0.0002,
+  "rolling_resistance": {
+    "rated_speed_kmh": 500,
+    "crr_base": 0.01,
+    "rise_at_fraction": { "fraction": 0.8, "factor": 1.5 },
+    "factor_at_rated": 2.0
+  },
   "relaxation_length_x": 0.1,
   "relaxation_length_y": 0.15,
   "low_speed_damping_ratio": 1.5,

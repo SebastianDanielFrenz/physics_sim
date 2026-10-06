@@ -21,7 +21,7 @@
 //   - Mx: the book's simplified linear-in-camber-and-lateral-force case
 //     (a reduced form of eq. 4.E69), not the full expression.
 //   - Rolling resistance: eq. 4.E70's shape (qsy1 + qsy2*Fx/Fz0 +
-//     qsy4*(V/V0)^4), returned as out.crr_effective via the surface table
+//     qsy3*|V/V0| + qsy4*(V/V0)^4), returned as out.crr_effective via the surface table
 //     (see step_rolling_resistance below) rather than folded into Fx here -
 //     the caller (core/src/vehicle/wheel_instance.cpp) applies it as an
 //     explicit drag force at the contact patch, matching
@@ -36,6 +36,8 @@
 #include "ps/math/transcendental.h"
 
 #include <algorithm> // std::max, std::clamp
+#include <stdexcept> // derive_rolling_resistance
+#include <string>
 #include <cmath>     // std::abs only (exact, not a rounding-sensitive transcendental)
 #include <utility>   // std::move
 
@@ -223,6 +225,45 @@ RelaxStep relaxation_step_axis(real x, real slip_velocity, real v_mag, real sigm
     if (a < kTiny) return {x + b * dt, dt / sigma};
     const real decay = ps::math::exp(-a * dt);
     return {x * decay + (b / a) * (real(1.0) - decay), (real(1.0) - decay) / v_mag};
+}
+
+real tyre_rolling_speed_term(const TyreDesc& desc, real vx) {
+    // qsy3 == 0 adds an exact +0.0: bit-identical to the old qsy4-only term.
+    return desc.qsy4 * ps::math::pow(vx / desc.v0, real(4.0)) + desc.qsy3 * std::abs(vx / desc.v0);
+}
+
+RollingResistanceCoefficients derive_rolling_resistance(const RollingResistanceAnchors& a, real v0) {
+    const real f = a.fraction;
+    if (!(a.rated_speed_kmh > real(0.0))) throw std::invalid_argument("rolling_resistance: rated_speed_kmh must be > 0");
+    if (!(a.crr_base > real(0.0))) throw std::invalid_argument("rolling_resistance: crr_base must be > 0");
+    if (!(v0 > real(0.0))) throw std::invalid_argument("rolling_resistance: v0 must be > 0");
+    if (!(f > real(0.0) && f < real(1.0))) throw std::invalid_argument("rolling_resistance: rise_at_fraction.fraction must be in (0, 1)");
+    if (!(a.factor >= real(1.0))) throw std::invalid_argument("rolling_resistance: rise_at_fraction.factor must be >= 1");
+    if (!(a.factor_at_rated > a.factor)) throw std::invalid_argument("rolling_resistance: factor_at_rated must be > rise_at_fraction.factor");
+
+    const real f4 = f * f * f * f;
+    const real rise_rated = a.factor_at_rated - real(1.0);
+    const real rise_f = a.factor - real(1.0);
+    real b = (rise_rated * f - rise_f) / (f - f4);
+    real aa = rise_rated - b;
+    // Exact anchors on the edge (A or B == 0) can land a rounding error on
+    // the wrong side of zero; accept that, reject a real violation.
+    const real tol = real(1e-12) * rise_rated;
+    if (b < -tol || aa < -tol) {
+        throw std::invalid_argument("rolling_resistance: the anchors need a negative speed coefficient ((factor-1)/(factor_at_rated-1) = " +
+                                    std::to_string(rise_f / rise_rated) + " must lie in [fraction^4, fraction] = [" + std::to_string(f4) + ", " +
+                                    std::to_string(f) + "])");
+    }
+    b = std::max(b, real(0.0));
+    aa = std::max(aa, real(0.0));
+
+    const real v_rated = a.rated_speed_kmh / real(3.6);
+    const real x_r = v_rated / v0;
+    RollingResistanceCoefficients out;
+    out.qsy1 = a.crr_base;
+    out.qsy3 = aa * a.crr_base / x_r;
+    out.qsy4 = b * a.crr_base / (x_r * x_r * x_r * x_r);
+    return out;
 }
 
 void step_slip_relaxation(SlipRelaxationState& state, real slip_velocity_x, real slip_velocity_y,

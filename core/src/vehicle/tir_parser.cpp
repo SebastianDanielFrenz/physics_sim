@@ -35,6 +35,7 @@ const std::unordered_map<std::string, real TyreDesc::*>& key_table() {
         {"LONGVL", &TyreDesc::v0},
         {"QSY1", &TyreDesc::qsy1},
         {"QSY2", &TyreDesc::qsy2},
+        {"QSY3", &TyreDesc::qsy3},
         {"QSY4", &TyreDesc::qsy4},
         {"LAMBDA_MUX", &TyreDesc::lambda_mux},
         {"LAMBDA_MUY", &TyreDesc::lambda_muy},

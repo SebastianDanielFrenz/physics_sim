@@ -42,6 +42,12 @@ struct TyreDesc {
     real v0 = 16.7;   // reference speed, m/s (~60 km/h), for the QSY4 speed^4 term
     real qsy1 = 0.01; // baseline rolling-resistance coefficient (tyre's own contribution; surface crr multiplies this - see pacejka_tyre_model.cpp)
     real qsy2 = 0.0;  // Fx-dependent rolling resistance term
+    // MF 6.1's linear-speed term: qsy3*|Vx/v0| (tyre-rolling-resistance work,
+    // out/tyre_crr_progress.md). Default 0 = every file that never mentions it
+    // is bit-identical to before. Normally DERIVED from a tyre file's optional
+    // "rolling_resistance" anchor block (ps::vehicle::derive_rolling_resistance,
+    // tyre_model.h), raw values stay legal for measured data.
+    real qsy3 = 0.0;
     real qsy4 = 0.0002; // speed^4 term coefficient
 
     // Parking-slope creep fix (defect D1): wheel_instance.cpp's pre_solve

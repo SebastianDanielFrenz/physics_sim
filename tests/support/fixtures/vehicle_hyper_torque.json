@@ -1,0 +1,303 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "hyper_torque_topspeed_fixture",
+  "source": "Test fixture (tests/validation/test_hyper_top_speed.cpp, tyre rolling-resistance work 2026-10-06). data/vehicles/car_hyper.json with relative paths rebased to ../../../data/, the simulated twin-turbo engine replaced by the torque_map engines/hyper_v8_torque.json (the steady full-load approximation, so an independent per-gear reference exists), the fuel tank and its fluid link removed (that engine file lists fuels but the fixture needs no tank), and the aero block replaced by a constant drag_area_m2 0.58 (the car_hyper body forward CdA, [AS]) with NO downforce so the reference load is exactly m*g.",
+  "wheels": [
+    {
+      "name": "FL",
+      "attachment_local": [
+        1.566,
+        0.85,
+        -0.188
+      ],
+      "wheel_radius": 0.347,
+      "wheel_width": 0.265,
+      "wheel_mass": 20.0,
+      "wheel_inertia": 1.20409,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.105,
+        "spring_rate": 88290.0,
+        "damper_bump_rate": 4746,
+        "damper_rebound_rate": 6328,
+        "bump_stop_rate": 600000.0,
+        "arb_rate": 22000.0
+      },
+      "arb_partner": 1,
+      "tyre": "../../../data/tyres/hyper_front_265_35r20.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "FR",
+      "attachment_local": [
+        1.566,
+        -0.85,
+        -0.188
+      ],
+      "wheel_radius": 0.347,
+      "wheel_width": 0.265,
+      "wheel_mass": 20.0,
+      "wheel_inertia": 1.20409,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.105,
+        "spring_rate": 88290.0,
+        "damper_bump_rate": 4746,
+        "damper_rebound_rate": 6328,
+        "bump_stop_rate": 600000.0,
+        "arb_rate": 22000.0
+      },
+      "arb_partner": 0,
+      "tyre": "../../../data/tyres/hyper_front_265_35r20.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "RL",
+      "attachment_local": [
+        -1.134,
+        0.825,
+        -0.171
+      ],
+      "wheel_radius": 0.364,
+      "wheel_width": 0.325,
+      "wheel_mass": 24.0,
+      "wheel_inertia": 1.589952,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.105,
+        "spring_rate": 121924.28571428568,
+        "damper_bump_rate": 6554,
+        "damper_rebound_rate": 8739,
+        "bump_stop_rate": 600000.0,
+        "arb_rate": 18000.0
+      },
+      "arb_partner": 3,
+      "tyre": "../../../data/tyres/hyper_rear_325_30r21.json",
+      "steered": false,
+      "is_front": false
+    },
+    {
+      "name": "RR",
+      "attachment_local": [
+        -1.134,
+        -0.825,
+        -0.171
+      ],
+      "wheel_radius": 0.364,
+      "wheel_width": 0.325,
+      "wheel_mass": 24.0,
+      "wheel_inertia": 1.589952,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.105,
+        "spring_rate": 121924.28571428568,
+        "damper_bump_rate": 6554,
+        "damper_rebound_rate": 8739,
+        "bump_stop_rate": 600000.0,
+        "arb_rate": 18000.0
+      },
+      "arb_partner": 2,
+      "tyre": "../../../data/tyres/hyper_rear_325_30r21.json",
+      "steered": false,
+      "is_front": false
+    }
+  ],
+  "steering": {
+    "max_wheel_angle": 0.5585053606381855,
+    "ackermann_fraction": 1.0,
+    "rear_steer_fraction": 0.0,
+    "steer_rate_limit": 0.0
+  },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      {
+        "wheel": "FL",
+        "max_torque_nm": 3600.0
+      },
+      {
+        "wheel": "FR",
+        "max_torque_nm": 3600.0
+      },
+      {
+        "wheel": "RL",
+        "max_torque_nm": 2400.0
+      },
+      {
+        "wheel": "RR",
+        "max_torque_nm": 2400.0
+      }
+    ],
+    "handbrake": {
+      "wheels": [
+        "RL",
+        "RR"
+      ],
+      "max_torque_nm": 1600.0
+    }
+  },
+  "aero": {
+    "drag_area_m2": 0.58
+  },
+  "powertrain": {
+    "components": [
+      {
+        "id": "engine",
+        "type": "engine",
+        "ref": "../../../data/engines/hyper_v8_torque.json"
+      },
+      {
+        "id": "clutch",
+        "type": "clutch",
+        "capacity_nm": 1650.0,
+        "static_factor": 1.15,
+        "engagement_vs_pedal": {
+          "x": [
+            0.0,
+            0.3,
+            0.45,
+            0.6,
+            0.75,
+            1.0
+          ],
+          "y": [
+            1.0,
+            1.0,
+            0.55,
+            0.15,
+            0.0,
+            0.0
+          ]
+        },
+        "out_inertia_kgm2": 0.004,
+        "axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "gearbox",
+        "type": "gearbox",
+        "ref": "../../../data/gearboxes/hyper_7mt.json"
+      },
+      {
+        "id": "diff",
+        "type": "differential",
+        "kind": "torsen",
+        "ratio": 3.35,
+        "efficiency": 0.97,
+        "carrier_inertia_kgm2": 0.02,
+        "carrier_axis_local": [
+          0,
+          1,
+          0
+        ],
+        "torque_bias_ratio": 2.5
+      },
+      {
+        "id": "park",
+        "type": "park_lock",
+        "capacity_nm": 1500.0,
+        "static_factor": 1.0,
+        "max_engage_speed_rad_s": 1.0,
+        "channel": "park_lock"
+      }
+    ],
+    "shafts": [
+      {
+        "ports": [
+          "engine.crank",
+          "clutch.in"
+        ]
+      },
+      {
+        "ports": [
+          "clutch.out",
+          "gearbox.in"
+        ]
+      },
+      {
+        "ports": [
+          "gearbox.out",
+          "diff.carrier",
+          "park.shaft"
+        ]
+      },
+      {
+        "ports": [
+          "diff.left",
+          "wheel:RL"
+        ]
+      },
+      {
+        "ports": [
+          "diff.right",
+          "wheel:RR"
+        ]
+      }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true
+  },
+  "controllers": [
+    {
+      "id": "tcu",
+      "type": "manual_tcu",
+      "gearbox": "gearbox",
+      "clutch": "clutch",
+      "engine": "engine",
+      "auto_clutch": {
+        "enabled": true,
+        "bite_rpm": 1400,
+        "full_rpm_min": 2000,
+        "full_rpm_max": 3500,
+        "lock_slip_rpm": 80,
+        "anti_stall_rpm": 850,
+        "rolling_reengage_rpm": 900,
+        "engage_rate_per_s": 4.0,
+        "release_rate_per_s": 12.0,
+        "open_time_s": 0.08,
+        "close_time_s": 0.1,
+        "sync_time_s": 0.3,
+        "max_sync_torque_nm": 100.0
+      },
+      "auto_blip": {
+        "enabled": true,
+        "kp_per_rpm": 0.002,
+        "max_throttle": 1.0,
+        "upshift_cut": true,
+        "upshift_cut_release_slip_rpm": 300,
+        "upshift_cut_max_hold_s": 0.6,
+        "upshift_torque_ramp_s": 0.1
+      },
+      "auto_shift": {
+        "enabled": false,
+        "up_rpm_at_zero_throttle": 2500,
+        "up_rpm_at_full_throttle": 8000,
+        "down_rpm_at_zero_throttle": 1300,
+        "down_rpm_at_full_throttle": 3500,
+        "min_time_in_gear_s": 1.0
+      },
+      "max_pending_steps": 2
+    }
+  ]
+}

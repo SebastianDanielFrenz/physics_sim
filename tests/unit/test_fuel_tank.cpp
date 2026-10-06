@@ -205,7 +205,7 @@ TEST_CASE("C6 T1: a never-empty tank is bit-identical to car_sedan over the vehi
     }
     INFO("first mismatching tick: " << first_mismatch);
     CHECK(first_mismatch == -1);
-    CHECK(wa.state_hash() == 0xc72122c8fe8d0228ULL); // data/scenarios/vehicle_powertrain.json's recorded hash (re-recorded 2026-10-04 for ca118ec's instant anti-stall release, was 0x5380949669212c71)
+    CHECK(wa.state_hash() == 0xaadddd7bcd24ac15ULL); // 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0xc72122c8fe8d0228): data/scenarios/vehicle_powertrain.json's recorded hash (re-recorded 2026-10-04 for ca118ec's instant anti-stall release, was 0x5380949669212c71)
     CHECK(wb.state_hash() != wa.state_hash());       // the tank's content is hashed
     // Non-vacuous: fuel really flowed through the tank.
     const PowertrainEnergy& eb = wb.powertrain_energy(vb);

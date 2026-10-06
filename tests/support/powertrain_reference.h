@@ -73,6 +73,14 @@ constexpr ps::real kRefPi = 3.14159265358979323846;
 inline ps::real ref_rpm_to_rad(ps::real rpm) { return rpm * (kRefPi / ps::real(30.0)); }
 inline ps::real ref_rad_to_rpm(ps::real rad) { return rad * (ps::real(30.0) / kRefPi); }
 
+// The tyre's own rolling-resistance coefficient at ground speed v, built
+// from the SAME speed law the wheel uses (ps::vehicle::tyre_rolling_speed_term,
+// one definition for qsy3/qsy4) so a reference cannot keep a stale copy of it.
+// qsy2 and the surface crr are 0 for every reference vehicle (box ground).
+inline ps::real ref_crr(const ps::vehicle::TyreDesc& tyre, ps::real v) {
+    return tyre.qsy1 + ps::vehicle::tyre_rolling_speed_term(tyre, v);
+}
+
 // See this file's header comment - pulled directly from the public
 // VehicleDesc, field for field, rather than hand-duplicated JSON constants.
 struct RefCar {
@@ -321,7 +329,7 @@ inline void ref_locked_gear_step(RefLockedGearState& s, const RefCar& rc, const 
     const ps::real omega_hub_dot = ref_locked_hub_accel(gp, tau_e, rc.wheel_radius_m * fx, rc.driven_wheel_inertia_kgm2);
 
     // Rolling resistance (plan section 13's own vehicle-level formula: "Sum
-    // Fz_i (qsy1 + qsy4 (v/v0)^4)") is applied here, at the CHASSIS level
+    // Fz_i crr(v)", crr = qsy1 + qsy3|v/v0| + qsy4 (v/v0)^4 via ref_crr) is applied here, at the CHASSIS level
     // only, over all 4 wheels' combined static-weight approximation - the
     // plan's own simplification (its reference vehicle equation has no
     // separate per-wheel rolling-resistance-on-the-hub term), matching the
@@ -333,7 +341,7 @@ inline void ref_locked_gear_step(RefLockedGearState& s, const RefCar& rc, const 
     // sim, 14% vs this version's ~5-6%, so it was reverted; qsy2=0 for
     // every I3 tyre and the box-ground surface's own crr is 0, so this
     // omits both those terms too, matching the plan's own formula exactly.)
-    const ps::real crr_total = rc.tyre_desc.qsy1 + rc.tyre_desc.qsy4 * std::pow(s.v / rc.tyre_desc.v0, ps::real(4.0));
+    const ps::real crr_total = ref_crr(rc.tyre_desc, s.v);
     const ps::real f_roll = crr_total * mass * g_grav;
     const ps::real f_aero = ps::real(0.5) * ps::real(1.225) * rc.drag_area_m2 * s.v * std::abs(s.v);
     const ps::real m_eff = mass + ps::real(2.0) * rc.undriven_wheel_inertia_kgm2 / (rc.wheel_radius_m * rc.wheel_radius_m);
@@ -343,5 +351,102 @@ inline void ref_locked_gear_step(RefLockedGearState& s, const RefCar& rc, const 
     s.v += v_dot * h;
     s.prev_accel = v_dot;
 }
+
+// ---------------------------------------------------------------------
+// Steady-state top-speed reference (plan section 13.2), shared by
+// test_powertrain_accel_topspeed.cpp (sedan) and test_hyper_top_speed.cpp.
+// Moved here unchanged from the sedan test when the hypercar needed it;
+// solve_gear_top_speed now takes the resistance as a callable and the
+// bisection range as parameters (defaults are the plan's [10, 90] m/s).
+// ---------------------------------------------------------------------
+
+
+struct GearDriveForce {
+    ps::real f_drive = 0.0;
+    ps::real kappa = 0.0;
+    ps::real engine_rpm = 0.0;
+};
+
+// Steady-state (WOT, theta=1) drive force at speed v in gear (gp), for a
+// fixed static per-wheel front load fz_f. kappa and F_drive are a genuine
+// fixed point (omega_e = g*(1+kappa)*v/R depends on kappa, and F_drive
+// depends on omega_e via the WOT curve) - plan section 13.2 states the
+// kappa-inversion step alone ("kappa from inverting Fx(kappa, Fz_f,static)
+// = F_drive/2 by bisection on [0, 0.3]"); this iterates that inversion to
+// convergence against the (weakly kappa-dependent) F_drive rather than a
+// single pass, since kappa can reach several percent at a driveline's
+// torque peak.
+inline GearDriveForce ref_gear_drive_force(const RefCar& rc, const GearLossParams& gp, ps::real v, ps::real fz_f) {
+    ps::real kappa = 0.0;
+    ps::real f_drive = 0.0;
+    for (int outer = 0; outer < 30; ++outer) {
+        const ps::real omega_hub = (ps::real(1.0) + kappa) * v / rc.wheel_radius_m;
+        const ps::real omega_e_rad = gp.g * omega_hub;
+        const ps::real rpm = ref_rad_to_rpm(omega_e_rad);
+        const ps::real tau_wot = rc.wot.evaluate(rpm);
+        const ps::real new_f_drive = ps::real(2.0) * gp.hub_torque_gain * tau_wot / rc.wheel_radius_m;
+
+        ps::real lo = ps::real(0.0), hi = ps::real(0.3);
+        for (int b = 0; b < 60; ++b) {
+            const ps::real mid = ps::real(0.5) * (lo + hi);
+            const ps::vehicle::TyreSlipInput in{mid, ps::real(0.0), fz_f, ps::real(0.0), v, ps::real(1.0), ps::real(0.0)};
+            const ps::real fx = rc.tyre->evaluate(in).fx;
+            if (fx < new_f_drive / ps::real(2.0)) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        const ps::real new_kappa = ps::real(0.5) * (lo + hi);
+        f_drive = new_f_drive;
+        if (std::abs(new_kappa - kappa) < ps::real(1e-7)) {
+            kappa = new_kappa;
+            break;
+        }
+        kappa = new_kappa;
+    }
+    GearDriveForce r;
+    r.f_drive = f_drive;
+    r.kappa = kappa;
+    r.engine_rpm = ref_rad_to_rpm(gp.g * (ps::real(1.0) + kappa) * v / rc.wheel_radius_m);
+    return r;
+}
+
+struct GearTopSpeedResult {
+    bool valid = false;
+    ps::real v = 0.0;
+    ps::real engine_rpm = 0.0;
+};
+
+// Bisects F_drive(v) - F_res(v) == 0 on v in [10, 90] (plan section 13.2's
+// own search range) for one gear; rejects the gear if no sign change is
+// found in that range, or if the root's own engine rpm is at/above the
+// limiter (plan: "reject a gear if omega_e >= limiter.rpm" - such a state
+// is not a stable cruise, the limiter would be cutting fuel).
+template <typename ResistanceFn>
+GearTopSpeedResult solve_gear_top_speed(const RefCar& rc, const GearLossParams& gp, ps::real fz_f_static, ResistanceFn resistance_force,
+                                        ps::real v_lo = 10.0, ps::real v_hi = 90.0) {
+    auto net = [&](ps::real v) { return ref_gear_drive_force(rc, gp, v, fz_f_static).f_drive - resistance_force(v); };
+    ps::real lo = v_lo, hi = v_hi;
+    const ps::real f_lo = net(lo), f_hi = net(hi);
+    if (f_lo <= ps::real(0.0) || f_hi > ps::real(0.0)) return {}; // no sign change in range: reject (see this fn's own comment)
+    for (int it = 0; it < 60; ++it) {
+        const ps::real mid = ps::real(0.5) * (lo + hi);
+        if (net(mid) > ps::real(0.0)) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    const ps::real v_root = ps::real(0.5) * (lo + hi);
+    const GearDriveForce gd = ref_gear_drive_force(rc, gp, v_root, fz_f_static);
+    if (gd.engine_rpm >= rc.limiter_rpm) return {};
+    GearTopSpeedResult r;
+    r.valid = true;
+    r.v = v_root;
+    r.engine_rpm = gd.engine_rpm;
+    return r;
+}
+
 
 } // namespace ps_test

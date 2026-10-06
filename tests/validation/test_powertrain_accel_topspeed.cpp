@@ -45,101 +45,15 @@ real front_static_fraction_from_settle(World& world, VehicleId vehicle) {
     return total > real(0.0) ? (fz_fl + fz_fr) / total : real(0.5);
 }
 
-// Plan section 13.2's own resistance formula: Sum_i Fz_i*(qsy1 + qsy4*(v/v0)^4)
+// Plan section 13.2's own resistance formula: Sum_i Fz_i*crr(v) (crr = qsy1 + qsy3|v/v0| + qsy4(v/v0)^4)
 // + 1/2*rho*CdA*v^2, Fz_i summed over all four wheels == mass*g (static, no
 // load transfer - a steady-speed simplification the plan states directly).
 real ref_resistance_force(const ps_test::RefCar& rc, real v, real mass) {
     const real g_grav = real(9.81);
-    const real crr_total = rc.tyre_desc.qsy1 + rc.tyre_desc.qsy4 * std::pow(v / rc.tyre_desc.v0, real(4.0));
+    const real crr_total = ps_test::ref_crr(rc.tyre_desc, v);
     const real f_roll = crr_total * mass * g_grav;
     const real f_aero = real(0.5) * real(1.225) * rc.drag_area_m2 * v * v;
     return f_roll + f_aero;
-}
-
-struct GearDriveForce {
-    real f_drive = 0.0;
-    real kappa = 0.0;
-    real engine_rpm = 0.0;
-};
-
-// Steady-state (WOT, theta=1) drive force at speed v in gear (gp), for a
-// fixed static per-wheel front load fz_f. kappa and F_drive are a genuine
-// fixed point (omega_e = g*(1+kappa)*v/R depends on kappa, and F_drive
-// depends on omega_e via the WOT curve) - plan section 13.2 states the
-// kappa-inversion step alone ("kappa from inverting Fx(kappa, Fz_f,static)
-// = F_drive/2 by bisection on [0, 0.3]"); this iterates that inversion to
-// convergence against the (weakly kappa-dependent) F_drive rather than a
-// single pass, since kappa can reach several percent at a driveline's
-// torque peak.
-GearDriveForce ref_gear_drive_force(const ps_test::RefCar& rc, const ps_test::GearLossParams& gp, real v, real fz_f) {
-    real kappa = 0.0;
-    real f_drive = 0.0;
-    for (int outer = 0; outer < 30; ++outer) {
-        const real omega_hub = (real(1.0) + kappa) * v / rc.wheel_radius_m;
-        const real omega_e_rad = gp.g * omega_hub;
-        const real rpm = ps_test::ref_rad_to_rpm(omega_e_rad);
-        const real tau_wot = rc.wot.evaluate(rpm);
-        const real new_f_drive = real(2.0) * gp.hub_torque_gain * tau_wot / rc.wheel_radius_m;
-
-        real lo = real(0.0), hi = real(0.3);
-        for (int b = 0; b < 60; ++b) {
-            const real mid = real(0.5) * (lo + hi);
-            const ps::vehicle::TyreSlipInput in{mid, real(0.0), fz_f, real(0.0), v, real(1.0), real(0.0)};
-            const real fx = rc.tyre->evaluate(in).fx;
-            if (fx < new_f_drive / real(2.0)) {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        const real new_kappa = real(0.5) * (lo + hi);
-        f_drive = new_f_drive;
-        if (std::abs(new_kappa - kappa) < real(1e-7)) {
-            kappa = new_kappa;
-            break;
-        }
-        kappa = new_kappa;
-    }
-    GearDriveForce r;
-    r.f_drive = f_drive;
-    r.kappa = kappa;
-    r.engine_rpm = ps_test::ref_rad_to_rpm(gp.g * (real(1.0) + kappa) * v / rc.wheel_radius_m);
-    return r;
-}
-
-struct GearTopSpeedResult {
-    bool valid = false;
-    real v = 0.0;
-    real engine_rpm = 0.0;
-};
-
-// Bisects F_drive(v) - F_res(v) == 0 on v in [10, 90] (plan section 13.2's
-// own search range) for one gear; rejects the gear if no sign change is
-// found in that range, or if the root's own engine rpm is at/above the
-// limiter (plan: "reject a gear if omega_e >= limiter.rpm" - such a state
-// is not a stable cruise, the limiter would be cutting fuel).
-GearTopSpeedResult solve_gear_top_speed(const ps_test::RefCar& rc, const ps_test::GearLossParams& gp, real mass,
-                                          real fz_f_static) {
-    auto net = [&](real v) { return ref_gear_drive_force(rc, gp, v, fz_f_static).f_drive - ref_resistance_force(rc, v, mass); };
-    real lo = real(10.0), hi = real(90.0);
-    const real f_lo = net(lo), f_hi = net(hi);
-    if (f_lo <= real(0.0) || f_hi > real(0.0)) return {}; // no sign change in range: reject (see this fn's own comment)
-    for (int it = 0; it < 60; ++it) {
-        const real mid = real(0.5) * (lo + hi);
-        if (net(mid) > real(0.0)) {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    const real v_root = real(0.5) * (lo + hi);
-    const GearDriveForce gd = ref_gear_drive_force(rc, gp, v_root, fz_f_static);
-    if (gd.engine_rpm >= rc.limiter_rpm) return {};
-    GearTopSpeedResult r;
-    r.valid = true;
-    r.v = v_root;
-    r.engine_rpm = gd.engine_rpm;
-    return r;
 }
 
 } // namespace
@@ -166,7 +80,7 @@ TEST_CASE("Top speed is within 3% of the steady-state-per-gear reference", "[val
     real v_ref_rpm = 0.0;
     for (std::size_t k = 0; k < rc.forward_ratios.size(); ++k) {
         const ps_test::GearLossParams gp = ps_test::ref_gear_loss_params(rc, k);
-        const GearTopSpeedResult gr = solve_gear_top_speed(rc, gp, mass, fz_f_static);
+        const ps_test::GearTopSpeedResult gr = ps_test::solve_gear_top_speed(rc, gp, fz_f_static, [&](real v) { return ref_resistance_force(rc, v, mass); });
         INFO("gear " << (k + 1) << ": valid=" << gr.valid << " v=" << gr.v << " rpm=" << gr.engine_rpm);
         if (gr.valid && gr.v > v_ref) {
             v_ref = gr.v;
@@ -178,11 +92,11 @@ TEST_CASE("Top speed is within 3% of the steady-state-per-gear reference", "[val
     INFO("reference: best_gear=" << (best_gear_zero_based + 1) << " v_ref=" << v_ref << " (" << (v_ref * 3.6)
                                   << " km/h) rpm=" << v_ref_rpm);
 
-    // --- Sim: two runs bracketing v_ref, ground half-extent 4000 (plan) -----
+    // --- Sim: two runs bracketing v_ref, ground half-extent 6000 (plan said 4000; the derived speed term raised the top speed to ~60.6 m/s, 70 s of it overran a 4000 m ground) ---
     auto run_sim = [&](real v0) {
         auto rig = ps_test::build_vehicle_rig(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json", mass,
                                                Vec3{2.0, 0.4, 0.15}, chassis_origin_height, 0.0, 4, Vec3::unit_y(), 240.0,
-                                               960.0, /*ground_half_extent=*/4000.0);
+                                               960.0, /*ground_half_extent=*/6000.0);
         ps_test::settle(*rig.world, 1.0);
         rig.world->backend().set_motion(rig.chassis, Motion{Vec3{v0, 0.0, 0.0}, Vec3::zero()});
         vehicle::VehicleResetOptions opts;

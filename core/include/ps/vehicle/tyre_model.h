@@ -74,6 +74,40 @@ public:
 // implemented).
 std::unique_ptr<ITyreModel> create_pacejka_tyre_model(const TyreDesc& desc);
 
+// The tyre's speed-dependent rolling-resistance part, qsy3*|vx/v0| +
+// qsy4*(vx/v0)^4 (MF 6.1 eq. 4.E70's speed terms; vx signed, m/s). The full
+// coefficient the wheel applies is qsy1 + surface crr + qsy2*|Fx|/Fz0 + this
+// (core/src/vehicle/wheel_instance.cpp) - tests build their independent
+// references from this same function so there is exactly one speed law.
+// With qsy3 == 0 the result is bit-identical to the pre-qsy3 qsy4 term.
+[[nodiscard]] real tyre_rolling_speed_term(const TyreDesc& desc, real vx);
+
+// Closed-form derivation of qsy3/qsy4 from two anchors (a tyre file's
+// optional "rolling_resistance" block). With x_r = V_r/v0 the model is
+//   crr(v) = qsy1 * (1 + A*(v/V_r) + B*(v/V_r)^4),  A = qsy3*x_r/qsy1,
+//   B = qsy4*x_r^4/qsy1,
+// and the anchors crr(fraction*V_r) = factor*crr_base, crr(V_r) =
+// factor_at_rated*crr_base give (F = factor_at_rated, f = fraction)
+//   B = ((F-1)*f - (factor-1)) / (f - f^4),  A = (F-1) - B.
+struct RollingResistanceAnchors {
+    real rated_speed_kmh = 0.0;  // V_r, the tyre's speed-symbol rating
+    real crr_base = 0.0;         // becomes qsy1
+    real fraction = 0.0;         // f, in (0,1)
+    real factor = 1.0;           // crr(f*V_r)/crr_base, >= 1
+    real factor_at_rated = 1.0;  // crr(V_r)/crr_base, > factor
+};
+struct RollingResistanceCoefficients {
+    real qsy1 = 0.0;
+    real qsy3 = 0.0;
+    real qsy4 = 0.0;
+};
+// Throws std::invalid_argument (message starts "rolling_resistance: ") on
+// any violated precondition: rated_speed_kmh/crr_base/v0 <= 0, fraction
+// outside (0,1), factor < 1, factor_at_rated <= factor, or an anchor pair
+// whose solution has a negative A or B ((factor-1)/(factor_at_rated-1)
+// outside [f^4, f]).
+[[nodiscard]] RollingResistanceCoefficients derive_rolling_resistance(const RollingResistanceAnchors& anchors, real v0);
+
 // PLAN.md ch.7 transient/relaxation-length model (out/handover_p3.md
 // decision 2): d(kappa_eq)/dt = (slip_velocity_x - Vx*kappa_eq) /
 // relaxation_length_x, integrated EXACTLY over a substep via the scalar

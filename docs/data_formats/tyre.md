@@ -48,10 +48,12 @@ is not rejected, it just produces an unrealistic force curve.
 | `rim_radius` | real (m) | optional | `0.2286` | none | informational only, not modelled |
 | `fz0` | real (N) | optional | `4000` | none | nominal (reference) vertical load |
 | `vertical_stiffness` | real (N/m) | optional | `200000` | none | informational only — `Fz` comes from the suspension model, not tyre carcass deflection, in this phase's simplified contact model |
-| `v0` | real (m/s) | optional | `16.7` (~60 km/h) | none | reference speed for the `qsy4` speed⁴ rolling-resistance term |
+| `v0` | real (m/s) | optional | `16.7` (~60 km/h) | none | reference speed for the `qsy3`/`qsy4` speed rolling-resistance terms |
 | `qsy1` | real | optional | `0.01` | none | baseline rolling-resistance coefficient (multiplied by the surface's own `crr`) |
 | `qsy2` | real | optional | `0` | none | `Fx`-dependent rolling-resistance term |
+| `qsy3` | real | optional | `0` | none | MF 6.1 linear speed term, `qsy3*abs(vx/v0)`; `0` (the default) leaves every file that never names it bit-identical |
 | `qsy4` | real | optional | `0.0002` | none | speed⁴ rolling-resistance term coefficient |
+| `rolling_resistance` | object | optional | — | see "Derived rolling resistance" below | derives `qsy1`, `qsy3` and `qsy4` in closed form from two speed anchors; cannot be combined with an explicit `qsy1`/`qsy3`/`qsy4` |
 | `rolling_resistance_v_eps` | real (m/s) | optional | `0.05` | **must be > 0**, else `"tyre '<name>': rolling_resistance_v_eps must be > 0, got <value>"` | half-width of the linear ramp rolling resistance uses near `vx = 0` (regularised Coulomb drag — see the field's own header comment for why a hard `sign(vx)` caused a parked-car creep bug) |
 | `relaxation_length_x` | real (m) | optional | `0.10` | none | longitudinal slip relaxation length (Pacejka ch. 7 transient model) |
 | `relaxation_length_y` | real (m) | optional | `0.15` | none | lateral slip relaxation length |
@@ -152,3 +154,46 @@ real tyre file should specify all of them explicitly, as the shipped
   enclosing vehicle's.** A wheel's `"tyre": "../tyres/foo.json"` reference
   is independently format-checked (`physics_sim.tyre/1`); an *inline* tyre
   object has no `"format"` key at all and must not have one.
+
+## Derived rolling resistance (`rolling_resistance` block)
+
+The wheel applies a rolling-resistance drag `crr * Fz` at the contact patch with
+
+```
+crr = qsy1 + surface crr + qsy2*|Fx|/fz0 + qsy3*|vx/v0| + qsy4*(vx/v0)^4
+```
+
+(MF 6.1 eq. 4.E70's shape; `vx` is the contact-patch ground speed). Hand-tuning `qsy3`/`qsy4` is not authorable for
+a tyre like "this one is for 600 km/h", so a tyre file may instead give two anchors of the rise relative to the
+base coefficient and let the loader solve for the coefficients:
+
+```json
+"rolling_resistance": {
+  "rated_speed_kmh": 270,
+  "crr_base": 0.010,
+  "rise_at_fraction": { "fraction": 0.8, "factor": 1.5 },
+  "factor_at_rated": 2.0
+}
+```
+
+`crr_base` becomes `qsy1`. The conditions are `crr(fraction*V_r) = factor*crr_base` and `crr(V_r) =
+factor_at_rated*crr_base`, `V_r = rated_speed_kmh/3.6`. With `x_r = V_r/v0`, `A = qsy3*x_r/qsy1`, `B =
+qsy4*x_r^4/qsy1` and `f = fraction`:
+
+```
+(factor - 1)          = A*f + B*f^4
+(factor_at_rated - 1) = A   + B
+B = ((factor_at_rated - 1)*f - (factor - 1)) / (f - f^4),   A = (factor_at_rated - 1) - B
+qsy3 = A*qsy1/x_r,   qsy4 = B*qsy1/x_r^4
+```
+
+Rejected (`std::runtime_error`, message prefixed `tyre '<name>': rolling_resistance: ...`): `A < 0` or `B < 0` (i.e.
+`(factor-1)/(factor_at_rated-1)` outside `[f^4, f]`); an explicit `qsy1`, `qsy3` or `qsy4` next to the block;
+`fraction` outside `(0,1)`; `factor < 1`; `factor_at_rated <= factor`; `crr_base <= 0`; `rated_speed_kmh <= 0`; a
+missing key or an unknown key (in the block or in `rise_at_fraction`). Raw `qsy3`/`qsy4` stay legal for measured data.
+`rolling_resistance_v_eps` (the standstill ramp) is unchanged. The derivation is `ps::vehicle::derive_rolling_resistance`
+(`ps/vehicle/tyre_model.h`); the speed law the wheel and every test reference share is `tyre_rolling_speed_term`.
+
+Shipped anchors (all `fraction` 0.8, `factor` 1.5, `factor_at_rated` 2.0 [AS], giving A 0.2316, B 0.7684): passenger
+225/45R17 `rated_speed_kmh` 270 (ISO 4000-1 / ETRTO speed symbol W), hypercar tyres 500 [AS], tractor tyres 65
+(agricultural symbol D, above the tractor's 47.8 km/h limiter top speed).
