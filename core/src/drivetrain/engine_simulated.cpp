@@ -288,6 +288,18 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
         spark_applied = spark - als->retard_deg;
     }
     e.spark_deg = spark_applied;
+    // N2O plan N3 (retard heat): the applied spark WITHOUT the kit's retard - the knock-limited schedule (and the
+    // anti-lag retard/setting, which the kit does not touch). Where the knock limit already holds the spark below
+    // schedule - retard it equals spark_applied (the retard costs nothing). Used only to report the work the kit
+    // retard removes (tau_comb_no_n2o_retard); the dynamics never read it.
+    real spark_applied_nr = spark_applied;
+    if (n2o && nc->retard_deg != real(0.0)) {
+        real spark_nr = spark_target;
+        if (m.maps.has_theta_kl) spark_nr = std::min(spark_nr, m.maps.theta_kl_deg.value(rpm, p));
+        if (als && als->spark_advance_deg) spark_applied_nr = spark_applied;
+        else if (als && als->retard_deg > real(0.0)) spark_applied_nr = spark_nr - als->retard_deg;
+        else spark_applied_nr = spark_nr;
+    }
     e.theta_mbt_deg = m.maps.theta_mbt_deg.value(rpm, p);
     const real dmbt_drpm = m.maps.theta_mbt_deg.dvalue_dx(rpm, p);
 
@@ -356,6 +368,7 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
 
     const real lhv_2pi = m.lhv_j_kg / kTwoPi;
     real dcomb_drpm = real(0.0);
+    real tau_no_n2o_retard = real(0.0); // N3: tau_comb at the kit-unretarded spark (n2o branch only), before the anti-lag cut
     if (!n2o) {
         const real g = e.eta_i * e.f_lambda * e.eta_spark;
         const real dg_drpm = deta_drpm * e.f_lambda * e.eta_spark + e.eta_i * dfl_dlambda * dlambda_drpm * e.eta_spark +
@@ -401,6 +414,12 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
             const real g0 = e.eta_i * m.maps.eta_spark.evaluate(spark - e.theta_mbt_deg);
             e.tau_comb_unretarded = g0 * heat / kTwoPi;
         }
+        tau_no_n2o_retard = e.tau_comb;
+        if (spark_applied_nr != spark_applied) {
+            // N3 / D5 P2 rule: eta_spark(schedule) against eta_spark(schedule - retard) at the same charge, times the
+            // released energy and eta_i; the plain table read (no anti-lag extrapolation) on the unretarded side.
+            tau_no_n2o_retard = e.eta_i * m.maps.eta_spark.evaluate(spark_applied_nr - e.theta_mbt_deg) * heat / kTwoPi;
+        }
         dcomb_drpm = (dgs * heat + gs * dheat) / kTwoPi;
     }
     // Anti-lag cylinder cut: the fuel is still injected (m_fuel_rev, booked), only the fired share burns in
@@ -410,7 +429,9 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
         const real fired_share = real(1.0) - e.cut_fraction;
         e.tau_comb *= fired_share;
         dcomb_drpm *= fired_share;
+        tau_no_n2o_retard *= fired_share;
     }
+    e.tau_comb_no_n2o_retard = n2o ? tau_no_n2o_retard : e.tau_comb;
 
     // pumping (ideal gas exchange + optional excess), friction (Coulomb part excluded)
     real pmep = real(0.0), dpmep_drpm = real(0.0);
@@ -1272,9 +1293,33 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
             const TurboPairDesc& td = turbo_->desc;
             ExhaustSplit x;
             x.fuel_w = booked_fuel_mass_kg_ / h * maps_->lhv_j_kg;
-            const real eta_c = ev.lambda > real(0.0) ? std::min(real(1.0), ev.lambda) : real(0.0);
-            x.chemical_w = (real(1.0) - eta_c) * x.fuel_w;
-            real released = x.fuel_w - x.chemical_w;
+            real released = real(0.0);
+            if (n2o_on_ && omega_old > real(0.0)) {
+                // N2O plan N3 (turbine heat): with the wet charge model the exhaust balance follows the ENGINE's own
+                // release bookkeeping (D-N2-9), not the ECU lambda over the booked fuel. (1) Only the fuel of the
+                // fired charges burns: the kit jet's fuel through a cut cylinder was booked (drawn from the tank) but
+                // leaves as unburnt chemical enthalpy. (2) It burns at the COMBINED lambda (oxygen from the air and
+                // from the decomposed N2O): eta_c = min(1, lambda_c), the same eta_c_ the thermal model uses.
+                // (3) The decomposition heat of the N2O that burnt (n2o_burnt * dH, the ledger's n2o_energy_in) is
+                // released in full and joins the chemical input the exhaust balance splits:
+                //   fuel_w + n2o_w = indicated + wall + sensible + chemical - clamp.
+                // The liquid-to-gas enthalpy deficit of the evaporating N2O (~4 % of the decomposition heat at a
+                // 100 hp shot) is not subtracted (PROVISIONAL, section 1.2 keeps T_in as the reference).
+                const real lambda_c = ev.charge.lambda_combined;
+                const real eta_c = lambda_c > real(0.0) ? std::min(real(1.0), lambda_c) : real(0.0);
+                const real burnt_fuel_w = burnt_fuel_kg_ / h * maps_->lhv_j_kg;
+                x.n2o_w = n2o_burnt_kg_ * n2o_dh_j_kg_ / h;
+                x.chemical_w = (x.fuel_w - burnt_fuel_w) + (real(1.0) - eta_c) * burnt_fuel_w;
+                released = eta_c * burnt_fuel_w + x.n2o_w;
+                // The work the kit's retard removes (D5 P2 rule) needs no extra term: indicated_w below is the
+                // retarded work, so the lost part stays in the released energy and reaches the exhaust as sensible
+                // enthalpy, and from there the lumped exhaust wall (the held heat). Reported for tests and the HUD.
+                x.n2o_retard_w = omega_old * (ev.tau_comb_no_n2o_retard - ev.tau_comb);
+            } else {
+                const real eta_c = ev.lambda > real(0.0) ? std::min(real(1.0), ev.lambda) : real(0.0);
+                x.chemical_w = (real(1.0) - eta_c) * x.fuel_w;
+                released = x.fuel_w - x.chemical_w;
+            }
             if (ev.cut_fraction > real(0.0)) {
                 // Anti-lag cylinder cut: the cut share of the charge passes the cylinder unburnt; in the hot
                 // manifold manifold_burn_fraction of its oxygen-limited energy is released (the mixture is the
