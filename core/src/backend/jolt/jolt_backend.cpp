@@ -52,6 +52,8 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace ps {
@@ -259,7 +261,17 @@ void reverse_heightfield_material_rows_into(const std::vector<SurfaceId>& src, s
 // keep the HOT tile-update path allocation-free). data/tracks/test_ground's
 // own collision format groups triangles BY surface already (one surface per
 // mesh in practice), so this limit is generous, not a real constraint.
-JPH::RefConst<JPH::Shape> make_mesh_shape(const MeshShape& s) {
+//
+// `error` (create_shape's path, racing_game R2): when non-null, a Jolt
+// rejection is reported through it (the caller throws) instead of being
+// printed; the desc path (error == nullptr) is unchanged. Thread safety
+// (create_shape runs this on any thread): everything here is local - the
+// settings object, its cached result, the local material list - and Jolt's
+// MeshShape construction (Sanitize, sFindActiveEdges, AABBTreeBuilder,
+// AABBTreeToBuffer) touches no mutable global state (Jolt v5.6.0: the only
+// mutable statics in the shape sources are debug-draw flags); materials and
+// shapes are RefTarget-counted with std::atomic.
+JPH::RefConst<JPH::Shape> make_mesh_shape(const MeshShape& s, std::string* error = nullptr) {
     JPH::VertexList verts;
     verts.reserve(s.vertices.size());
     for (const Vec3& v : s.vertices) verts.push_back(JPH::Float3(static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)));
@@ -287,6 +299,10 @@ JPH::RefConst<JPH::Shape> make_mesh_shape(const MeshShape& s) {
     JPH::MeshShapeSettings settings(verts, tris, local_materials);
     JPH::Shape::ShapeResult result = settings.Create();
     if (result.HasError()) {
+        if (error != nullptr) {
+            *error = result.GetError().c_str();
+            return nullptr;
+        }
         std::fprintf(stderr, "[ps] MeshShape creation failed: %s\n", result.GetError().c_str());
         std::fflush(stderr);
         return nullptr;
@@ -617,6 +633,74 @@ void ensure_jolt_registered() {
     (void)registration;
 }
 
+// ---------------------------------------------------------------------
+// Prebuilt shapes (racing_game R2, ps/backend/shape_handle.h). A
+// JoltPreparedShape is the immutable payload behind a ShapeHandle: the
+// fully built top-level Jolt shape (exactly what make_shape returns for the
+// same desc). Every body created from it holds a shared_ptr to it in its
+// Slot (JoltRigidBackend::Slot::prepared), and the Jolt Body itself holds
+// its own RefConst to `shape` - so by the time this object is destroyed no
+// body uses `shape` any more and its reference is the last one (counted in
+// debug_prepared_shape_backend_frees for the lifetime test).
+//
+// Thread safety of create_jolt_shape_handle (any thread, concurrently with
+// PhysicsSystem::Update and other builds), Jolt v5.6.0:
+// - Jolt is registered once (ensure_jolt_registered, a magic static - the
+//   call below makes a first use on a builder thread safe too); allocation
+//   goes through JPH::Allocate, a function pointer written only inside that
+//   registration (and through it debug_alloc's thread_local job check).
+// - Convex shapes: plain constructors over their arguments (material
+//   pointer null, no lookup of PhysicsMaterial::sDefault).
+// - MeshShape: see make_mesh_shape's comment - local settings, local
+//   material list, no mutable global state.
+// - RefTarget reference counts (shapes, materials) are std::atomic, so a
+//   handle released on another thread while PhysicsSystem::Update reads the
+//   same shape through a body is race-free; the shape itself is immutable.
+// - No JoltRigidBackend member is touched (create_shape is const and calls
+//   only this free function), so there is nothing of ours to lock.
+// HeightfieldShape is rejected: heightfield content is mutable
+// (update_heightfield_body / the prefetch ring's spares), which a shared
+// immutable handle cannot honour.
+class JoltPreparedShape final : public PreparedShape {
+public:
+    JoltPreparedShape(ShapeKind kind, JPH::RefConst<JPH::Shape> s) : PreparedShape(kind), shape(std::move(s)) {}
+    ~JoltPreparedShape() override {
+        if (shape != nullptr && shape->GetRefCount() == 1) debug_note_prepared_shape_backend_free();
+    }
+    const JPH::RefConst<JPH::Shape> shape;
+};
+
+ShapeKind shape_kind_of(const ShapeDesc& desc) {
+    return std::visit(
+        [](auto&& s) -> ShapeKind {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, BoxShape>) return ShapeKind::Box;
+            else if constexpr (std::is_same_v<T, SphereShape>) return ShapeKind::Sphere;
+            else if constexpr (std::is_same_v<T, CapsuleShape>) return ShapeKind::Capsule;
+            else if constexpr (std::is_same_v<T, CylinderShape>) return ShapeKind::Cylinder;
+            else if constexpr (std::is_same_v<T, MeshShape>) return ShapeKind::Mesh;
+            else return ShapeKind::Heightfield;
+        },
+        desc);
+}
+
+ShapeHandle create_jolt_shape_handle(const ShapeDesc& desc) {
+    ensure_jolt_registered();
+    if (std::holds_alternative<HeightfieldShape>(desc)) {
+        throw std::invalid_argument("create_shape: HeightfieldShape is not supported (heightfield content is mutable - use the "
+                                    "terrain tile system / heightfield spares)");
+    }
+    JPH::RefConst<JPH::Shape> shape;
+    if (const auto* mesh = std::get_if<MeshShape>(&desc)) {
+        std::string error;
+        shape = make_mesh_shape(*mesh, &error);
+        if (shape == nullptr) throw std::runtime_error("create_shape: MeshShape rejected by Jolt: " + error);
+    } else {
+        shape = make_shape(desc); // the same constructor arguments as create_body(desc)
+    }
+    return ShapeHandle(std::make_shared<const JoltPreparedShape>(shape_kind_of(desc), std::move(shape)));
+}
+
 class BackendContactListener final : public JPH::ContactListener {
 public:
     void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override {
@@ -895,6 +979,56 @@ public:
         } else {
             shape = make_shape(desc.shape);
         }
+        return add_body(desc, shape, raw_heightfield, std::holds_alternative<MeshShape>(desc.shape), nullptr);
+    }
+
+    // racing_game R2 (ps/backend/shape_handle.h): any thread, touches no
+    // member - see create_jolt_shape_handle's comment.
+    ShapeHandle create_shape(const ShapeDesc& desc) const override { return create_jolt_shape_handle(desc); }
+
+    BodyId create_body(const BodyDesc& desc, const ShapeHandle& handle) override {
+        if (!handle.valid()) throw std::invalid_argument("create_body: empty ShapeHandle");
+        const auto* prepared = dynamic_cast<const JoltPreparedShape*>(handle.prepared().get());
+        if (prepared == nullptr) throw std::invalid_argument("create_body: ShapeHandle was not built by the Jolt backend");
+        const bool is_mesh = prepared->kind() == ShapeKind::Mesh;
+        if (is_mesh && desc.motion != BodyMotionType::Static) {
+            throw std::invalid_argument("create_body: a MeshShape handle needs a Static body (JPH::MeshShape::MustBeStatic)");
+        }
+        // O(1) in the shape's size: no shape is built here, the body just
+        // takes a reference (bounds come from the BVH root).
+        return add_body(desc, prepared->shape, nullptr, is_mesh, handle.prepared());
+    }
+
+    std::uint64_t debug_body_shape_digest(BodyId id) const override {
+        const JPH::BodyID jid = lookup(id);
+        const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(jid);
+        assert(body != nullptr);
+        const JPH::Shape* shape = body->GetShape();
+        FnvStreamOut out(1469598103934665603ULL);
+        JPH::Shape::ShapeToIDMap shape_map;
+        JPH::Shape::MaterialToIDMap material_map;
+        shape->SaveWithChildren(out, shape_map, material_map);
+        std::uint64_t h = out.hash();
+        JPH::PhysicsMaterialList mats;
+        shape->SaveMaterialState(mats);
+        h = fnv1a_val(h, static_cast<std::uint64_t>(mats.size()));
+        for (const JPH::PhysicsMaterial* m : mats) h = fnv1a_val(h, surface_id_from_material(m));
+        const JPH::Vec3 com = shape->GetCenterOfMass();
+        const float com_f[3] = {com.GetX(), com.GetY(), com.GetZ()};
+        h = fnv1a(h, com_f, sizeof(com_f));
+        return h;
+    }
+
+private:
+    // The one body-creation sequence shared by both create_body overloads:
+    // identical Jolt calls in identical order whether `shape` was just built
+    // from desc.shape or comes from a prebuilt handle, so a handle body is
+    // bit-identical to the desc body (same BodyCreationSettings, same slot /
+    // BodyId assignment, same seam-welding lists). `prepared` (handle path
+    // only) is kept in the slot so the shape outlives every handle copy
+    // until destroy_body.
+    BodyId add_body(const BodyDesc& desc, const JPH::RefConst<JPH::Shape>& shape, JPH::HeightFieldShape* raw_heightfield, bool is_mesh,
+                    std::shared_ptr<const PreparedShape> prepared) {
         const JPH::EMotionType motion = to_jph_motion(desc.motion);
         const JPH::ObjectLayer layer = (desc.motion == BodyMotionType::Static) ? Layers::NON_MOVING : Layers::MOVING;
 
@@ -917,16 +1051,18 @@ public:
 
         const JPH::BodyID jph_id = body_interface().CreateAndAddBody(settings, JPH::EActivation::Activate);
         const BodyId id = alloc_slot(jph_id, raw_heightfield);
+        slots_[id.index].prepared = std::move(prepared);
         body_interface().SetUserData(jph_id, pack_body_id(id));
-        if (raw_heightfield != nullptr || std::holds_alternative<MeshShape>(desc.shape)) {
+        if (raw_heightfield != nullptr || is_mesh) {
             terrain_surface_body_ids_.insert(std::lower_bound(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), jph_id), jph_id);
         }
-        if (std::holds_alternative<MeshShape>(desc.shape)) {
+        if (is_mesh) {
             mesh_body_ids_.insert(std::lower_bound(mesh_body_ids_.begin(), mesh_body_ids_.end(), jph_id), jph_id);
         }
         return id;
     }
 
+public:
     void destroy_body(BodyId id) override {
         const JPH::BodyID jid = lookup(id);
         const auto it = std::lower_bound(terrain_surface_body_ids_.begin(), terrain_surface_body_ids_.end(), jid);
@@ -1403,6 +1539,11 @@ private:
         // always aggregate-inits a Slot, so a reused index never inherits
         // the previous occupant's opt-in).
         bool integrate_sub_threshold_rotation = false;
+        // Non-null only for a body created from a ShapeHandle (racing_game
+        // R2): keeps the prepared shape alive while the body exists, so
+        // releasing every handle copy never frees a shape in use. Released
+        // in free_slot, AFTER DestroyBody dropped the body's own reference.
+        std::shared_ptr<const PreparedShape> prepared{};
     };
     struct JointSlot {
         JPH::Ref<JPH::Constraint> constraint;
@@ -1514,6 +1655,7 @@ private:
 
     void free_slot(BodyId id) {
         slots_[id.index].alive = false;
+        slots_[id.index].prepared.reset(); // may free the shape: DestroyBody already released the body's reference
         free_list_.push_back(id.index);
     }
 
