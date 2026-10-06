@@ -2147,7 +2147,12 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         if (engine_has_fuel_model_) {
             ledger_.fuel_mass += post.fuel_mass_delta;
             ledger_.fuel_energy_in += post.fuel_energy_in_delta;
-            const real heat_delta = post.fuel_energy_in_delta - post.indicated_work_delta;
+            // N2O plan N2 (section 4): engine_heat = fuel_energy_in + n2o_energy_in - indicated_work; the N2O
+            // term is added only when nonzero so every N2O-free substep keeps the old floating-point order.
+            ledger_.kit_fuel_mass += post.kit_fuel_mass_delta;
+            const real heat_delta = post.n2o_energy_in_delta != real(0.0)
+                                        ? (post.fuel_energy_in_delta + post.n2o_energy_in_delta) - post.indicated_work_delta
+                                        : post.fuel_energy_in_delta - post.indicated_work_delta;
             ledger_.engine_heat += heat_delta;
             if (heat_delta < real(0.0)) ++ledger_.fuel_efficiency_violations;
             // PHYS-033 P4 I7a C6: the tank loses exactly the booked mass
@@ -2164,11 +2169,14 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
             thermal_->accumulate(post.released_heat_delta, post.friction_heat_delta + thermal_coulomb_share_ * coulomb_delta, ctx.h);
         }
         if (nitrous_) {
-            // N2O plan N1: the bottle loses what was delivered/vented; the engine ignores the N2O, so every
-            // delivered kg is booked as unburnt pass-through (N2 books the real split).
+            // N2O plan N1/N2: the bottle loses what was delivered/vented (n2o_mass is the bottle's truth); the
+            // engine reports the burnt share (post.n2o_mass_delta - post.n2o_unburnt_delta, 0 from the graph
+            // engine, so every kg is pass-through there) and the decomposition heat it released.
             const NitrousBooking nb = nitrous_->commit();
+            const real burnt = post.n2o_mass_delta - post.n2o_unburnt_delta;
             ledger_.n2o_mass += nb.n2o_kg;
-            ledger_.n2o_unburnt += nb.n2o_kg;
+            ledger_.n2o_unburnt += std::max(real(0.0), nb.n2o_kg - burnt);
+            ledger_.n2o_energy_in += post.n2o_energy_in_delta;
             ledger_.n2o_purged += nb.purge_kg;
         }
     }

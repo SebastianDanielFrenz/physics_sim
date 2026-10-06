@@ -72,6 +72,20 @@ public:
     // Gas enthalpy on the 1 bar isobar (J/kg), linear in T, clamped.
     [[nodiscard]] real gas_enthalpy_j_kg(real t_k) const;
 
+    // N2O plan N2: the same isobar as straight segments h(T) = h0 + cp*(T - t0) for the
+    // engine's evaporative-cooling balance (engine_simulated.cpp). Segment i spans rows i..i+1
+    // (i < gas_segment_count() = rows - 1); the two end segments are also used beyond the
+    // table (linear extrapolation, unlike gas_enthalpy_j_kg's clamp). gas_segment_index(T) is
+    // the segment containing T (clamped to the end segments).
+    struct GasSegment {
+        real t0 = 0.0, t1 = 0.0; // the segment's own knots (K)
+        real h0 = 0.0;           // h(t0), J/kg
+        real cp = 0.0;           // (h(t1) - h(t0)) / (t1 - t0), J/(kg*K)
+    };
+    [[nodiscard]] std::size_t gas_segment_count() const { return gas_t_k_.size() - 1; }
+    [[nodiscard]] GasSegment gas_segment(std::size_t i) const;
+    [[nodiscard]] std::size_t gas_segment_index(real t_k) const;
+
     // HEM critical mass flux (kg/(m^2*s)) and the choke (throat) pressure
     // (Pa abs) for a saturated-liquid bottle at p_bottle_pa.
     [[nodiscard]] real g_hem(real p_bottle_pa) const;

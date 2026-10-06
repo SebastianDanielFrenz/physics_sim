@@ -178,6 +178,7 @@ NitrousInput NitrousSystem::engine_input() const {
     n.injection = kit_.injection == NitrousInjection::DirectPort ? std::uint8_t(1) : std::uint8_t(0);
     n.enrichment = 0;
     n.active = true;
+    n.oxidizer = tables_.get(); // N2O plan N2: the engine's charge model reads the property tables
     return n;
 }
 

@@ -39,10 +39,13 @@
 
 namespace ps::drivetrain {
 
+class OxidizerTables; // nitrous_flow.h (immutable property tables, owned by the NitrousSystem)
+
 // N2O plan N1: what the Powertrain-owned NitrousSystem (nitrous_system.h) hands
 // the engine each substep. All zero = no nitrous (every vehicle without a kit,
-// and every substep the solenoid is closed). N1 engines IGNORE it; N2 wires the
-// simulated engine's charge model to it.
+// and every substep the solenoid is closed). N2: the simulated engine applies its
+// wet charge model (engine_simulated.h) only while active && mdot_n_kg_s > 0 &&
+// oxidizer != nullptr; the graph engine still ignores the block (N6).
 struct NitrousInput {
     real mdot_n_kg_s = 0.0;  // N2O mass flow delivered to the intake
     real mdot_kf_kg_s = 0.0; // kit fuel mass flow (the engine's own fuel, wet kit)
@@ -51,6 +54,11 @@ struct NitrousInput {
     std::uint8_t injection = 0;   // 0 plenum, 1 direct port
     std::uint8_t enrichment = 0;  // 0 kit fuel, 1 ECU (dry kit, later)
     bool active = false;     // solenoid open and N2O flowing
+    // N2O plan N2: the oxidizer's property tables (decomposition heat, O2 fraction,
+    // molar mass, gas enthalpy for the evaporative-cooling balance). Owned by the
+    // NitrousSystem, immutable; nullptr = no charge model (the engine treats the
+    // block as inactive).
+    const OxidizerTables* oxidizer = nullptr;
 };
 
 // ECU inputs, by value (spec's "controllers get sensors only"). omega is
@@ -202,7 +210,12 @@ struct PreSolveResult {
     real p_intake_pa = 0.0;           // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)
-    real exhaust_mass_flow_kg_s = 0.0; // (air + booked fuel) per revolution * rev/s
+    real exhaust_mass_flow_kg_s = 0.0; // (air + booked fuel) per revolution * rev/s (+ N2O while it flows)
+    // N2O plan N2 (section 6): the wet charge model's state, 0 unless the charge model ran this substep. Never
+    // hashed, never read back for physics.
+    real charge_temperature_k = 0.0;   // T_mix: the cylinder charge after the N2O evaporated into the air
+    real n2o_lambda_combined = 0.0;    // lambda_c = O2-equivalent air / (AFR_st * (ECU + kit fuel))
+    real n2o_kit_fuel_g_s = 0.0;       // kit fuel booked this substep (g/s), part of fuel_flow_g_s
 };
 
 // Hoisted, unchanged except the three PHYS-033 P4 I7a C5 fields below, from
@@ -246,6 +259,15 @@ struct PostSolveResult {
     // loss is added by Powertrain). Both 0 until an engine fills them; read only by EngineThermal.
     real released_heat_delta = 0.0;
     real friction_heat_delta = 0.0;
+    // N2O plan N2 (section 4), all 0 unless the engine received N2O this substep (and always 0 from the graph
+    // engine, which ignores it until N6). n2o_mass_delta = the N2O the engine took in (h * mdot_n);
+    // n2o_unburnt_delta = its pass-through share (a cut or starving substep); the burnt rest released
+    // n2o_energy_in_delta (J, decomposition heat). kit_fuel_mass_delta (kg) is the kit-jet share of
+    // fuel_mass_delta. indicated_work_delta keeps its definition and includes the decomposition share.
+    real n2o_mass_delta = 0.0;
+    real n2o_energy_in_delta = 0.0;
+    real n2o_unburnt_delta = 0.0;
+    real kit_fuel_mass_delta = 0.0;
 };
 
 // The engine/ECU seam (PHYS-033 P4 I7a plan): exactly the operations

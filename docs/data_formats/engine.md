@@ -809,3 +809,40 @@ not that a cycle generator predicts anything
 cam-phase input. Steady-state points just below WOT MAP, measured at a
 different cam phasing, sit 30–60 N·m under the model. The per-point
 residuals are in the report.
+
+## Nitrous: the wet charge model (N2O plan N2)
+
+A simulated engine fed by a nitrous kit (`powertrain.fluid` link `"<kit>.out" -> "<engine>.nitrous"`,
+parts in [nitrous.md](nitrous.md)) burns the N2O and the kit fuel through a charge model; no engine-file key
+is involved. It runs only while the kit sprays (solenoid open, N2O flowing) and the crank turns forward;
+otherwise every expression is the pre-N2 one, bit for bit. Model (`out/n2o_plan.md` section 1.2), per crank
+revolution:
+
+* N2O `n = mdot_n * 2*pi/omega` and kit fuel `kf = mdot_kf * 2*pi/omega` - constant mass flows, so their
+  share falls as 1/omega (the roughly constant added power of nitrous; `dn/domega = -n/omega` is in `d`).
+* Air `a` and charge temperature `T_mix` from the port's mole balance `a + r*n = VE*p_im*V*c/(R*T_mix)`
+  (`r` = M_air/M_N2O, the N2O displaces air) and its adiabatic mixing balance
+  `a*cp_air*(T_in - T_mix) = n*(h_g(T_mix) - h_in)` (the liquid at the jet, `h_in` = saturated liquid at
+  bottle pressure, evaporates and cools the charge; `h_g` from the oxidizer file's 1 bar rows, ideal gas
+  at its low partial pressure [AS]). One quadratic, closed form. `T_in` is the ambient temperature (NA) or
+  the charge-air temperature after the intercooler (turbo). The cylinders draw `a` from the manifold
+  (`manifold_rhs`, plenum mass conserved; `dfdp` carries `da/dp`).
+* O2-equivalent air `a_eq = a + 1.571*n` (0.3635/0.2314); ECU fuel `f_ecu = a/(lambda_target*AFR)`
+  (the ECU meters the trapped air, owner Q8 [AS]); combined lambda `lambda_c = a_eq/(AFR*(f_ecu + kf))`.
+* `W_ind = eta_i(rpm, a_eq) * eta_spark * (f_lambda(lambda_c)*LHV*f*fire*s + dH_dec*n*fire*s)` with
+  `dH_dec` = 1.8643 MJ/kg (decomposition `2 N2O -> 2 N2 + O2`, from the oxidizer file), spark
+  `min(schedule - kit retard, theta_kl)`. A cut or starving cylinder passes its share of the N2O unburnt
+  (PROVISIONAL: the decomposition share uses `fire*s_starve`, the plan wrote `fire`); the kit jet keeps
+  flowing through a cut cylinder, so the booked fuel is `(f_ecu*fire + kf)*s`.
+* Exhaust mass flow adds `mdot_n`; the torque demand the TCU sees is at least the present uncut torque
+  (the turbo rule), since the steady tables hold no N2O.
+* Overflow guard: when the N2O alone would fill the cylinder, `a = 0` (counted, unhashed).
+
+Ledger: `n2o_energy_in += burnt N2O * dH_dec`, `engine_heat = fuel_energy_in + n2o_energy_in -
+indicated_work` (the N2O term is added only when nonzero), `kit_fuel_mass` is the kit share of `fuel_mass`
+(drawn from the tank). The thermal model's released heat counts only the fuel burnt in the fired charges,
+`min(1, lambda_c) * (f_ecu + kf)*fire*s * LHV + burnt N2O * dH_dec`; kit fuel passing a cut cylinder releases
+nothing (the turbo's exhaust energy balance still uses the booked fuel and the ECU lambda - N3). Sound/HUD: `charge_temperature_k`, `n2o_lambda_combined`, `n2o_kit_fuel_g_s`.
+No new hashed state: the charge is a function of the hashed engine state and the NitrousSystem's hashed state.
+Not modelled in N2: the turbo exhaust energy share of the N2O and its pressure effects (N3), an MBT shift with
+N2O (owner Q4), knock. Validation V1 (NACA MR E5F26) runs in `tests/unit/test_n2o_engine.cpp` E7.
