@@ -1700,7 +1700,8 @@ void require_maps_efficiency_below_one(const ps::drivetrain::SimulatedEngineMaps
 ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
                                                           std::vector<std::string>* resolved_fuel_paths_out = nullptr,
                                                           const EngineMapOptions* map_options = nullptr,
-                                                          const std::string* installation_override_path = nullptr) {
+                                                          const std::string* installation_override_path = nullptr,
+                                                          const std::string* turbo_configuration_override_path = nullptr) {
     using namespace ps::drivetrain;
     constexpr real kMm = real(1e-3);
     constexpr real kKpa = real(1000.0);
@@ -1725,9 +1726,16 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
 
     SimulatedEngineDesc e;
     if (j.contains("default_turbo_configuration")) {
-        const auto cfg_path=resolve_path(engine_dir,j.at("default_turbo_configuration").get<std::string>());
+        // A vehicle component's own "turbo_configuration" (resolved relative to the VEHICLE file) replaces the engine's
+        // default here, before the turbo tables are built, so the derived cache key follows the file actually used.
+        const auto cfg_path = turbo_configuration_override_path != nullptr
+                                  ? *turbo_configuration_override_path
+                                  : resolve_path(engine_dir, j.at("default_turbo_configuration").get<std::string>());
         // A validate-only load (generate = false) writes nothing, the derived turbo table cache included.
         e.turbo_pair=load_turbo_configuration_json(cfg_path,(map_options && map_options->generate) ? map_options->cache_dir : std::string{});
+    } else if (turbo_configuration_override_path != nullptr) {
+        throw std::runtime_error(ctx + ": 'turbo_configuration' is only allowed on a simulated engine whose file has "
+                                  "'default_turbo_configuration'");
     }
 
     // --- architecture + geometry -------------------------------------------
@@ -2212,7 +2220,8 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
 ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
                                                    std::vector<std::string>* resolved_fuel_paths_out = nullptr,
                                                    const EngineMapOptions* map_options = nullptr,
-                                                   const std::string* installation_override_path = nullptr) {
+                                                   const std::string* installation_override_path = nullptr,
+                                                   const std::string* turbo_configuration_override_path = nullptr) {
     // Default "torque_map" (rather than requiring the field) is deliberate,
     // not an oversight: every shipped data/engines/*.json file happens to
     // set "kind" explicitly today, but nothing REQUIRES a hand-authored or
@@ -2224,7 +2233,8 @@ ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::str
     const std::string kind = j.value("kind", std::string("torque_map"));
     if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
     if (kind == "simulated") {
-        return read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options, installation_override_path);
+        return read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options, installation_override_path,
+                                     turbo_configuration_override_path);
     }
     throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" or \"simulated\", got \"" + kind + "\"");
 }
@@ -2350,7 +2360,9 @@ json resolve_component_ref(const json& cj, const std::string& kind, const std::s
     for (auto it = cj.begin(); it != cj.end(); ++it) {
         // Engine thermal plan T1: an engine component may carry its per-vehicle "thermal" override next to "ref".
         const bool thermal_override = kind == "engine" && it.key() == "thermal";
-        if (it.key() != "id" && it.key() != "type" && it.key() != "ref" && !thermal_override) {
+        // N7b: likewise the per-vehicle "turbo_configuration" override (replaces the engine file's default_turbo_configuration).
+        const bool turbo_override = kind == "engine" && it.key() == "turbo_configuration";
+        if (it.key() != "id" && it.key() != "type" && it.key() != "ref" && !thermal_override && !turbo_override) {
             throw std::runtime_error(ctx + ": a component with 'ref' may only contain 'id', 'type' and 'ref' "
                                       "(found extra field '" + it.key() + "')");
         }
@@ -2724,8 +2736,23 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                     const bool override_ok = cj.contains("installation") && cj.at("installation").is_string() &&
                                              !cj.at("installation").get<std::string>().empty();
                     if (override_ok) inst_override = resolve_path(base_dir, cj.at("installation").get<std::string>());
+                    // Same for the optional "turbo_configuration" override (a path relative to the vehicle file): a
+                    // malformed one is rejected below; a well-formed one reaches the engine reader, which rejects it on an
+                    // engine without default_turbo_configuration.
+                    std::string turbo_override;
+                    const bool turbo_override_ok = cj.contains("turbo_configuration") && cj.at("turbo_configuration").is_string() &&
+                                                   !cj.at("turbo_configuration").get<std::string>().empty();
+                    if (turbo_override_ok) turbo_override = resolve_path(base_dir, cj.at("turbo_configuration").get<std::string>());
+                    if (cj.contains("turbo_configuration") && !turbo_override_ok) {
+                        throw std::runtime_error(ctx + ": 'turbo_configuration' must be a non-empty path string");
+                    }
+                    if (turbo_override_ok && ej.value("kind", std::string("torque_map")) != "simulated") {
+                        throw std::runtime_error(ctx + ": 'turbo_configuration' is only allowed on a simulated engine whose file has "
+                                                  "'default_turbo_configuration'");
+                    }
                     p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir, &fuel_paths, &options,
-                                                                   override_ok ? &inst_override : nullptr)});
+                                                                   override_ok ? &inst_override : nullptr,
+                                                                   turbo_override_ok ? &turbo_override : nullptr)});
                     engine_fuel_paths.emplace_back(id, std::move(fuel_paths)); // PHYS-033 P4 I7a C6: for the fluid-link check below
 
                     // Engine thermal plan T1 (section 9.1): the engine file's "default_thermal" (relative to the engine
