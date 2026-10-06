@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -267,6 +268,30 @@ ScenarioVehicle read_vehicle(const json& j, const std::filesystem::path& scenari
     return sv;
 }
 
+// Builds the Environment once to validate a climate/config pair; the message of
+// the std::invalid_argument it throws, or nullopt when it constructs. Windows
+// clang-cl ASan caveat (CLAUDE.md, vault TOOL-019): a function that catches by
+// reference and reads the exception reads garbage when ASan instruments its
+// stack, so the error path of the scenario "environment" block would crash the
+// asan leg instead of rejecting. This one catch site is therefore a tiny
+// function of its own with the ASan stack instrumentation switched off (no
+// effect on any other build; MSVC cl has no such attribute and no such bug).
+#if defined(__clang__)
+#define PS_NO_ASAN __attribute__((no_sanitize("address")))
+#else
+#define PS_NO_ASAN
+#endif
+PS_NO_ASAN std::optional<std::string> environment_probe_error(const environment::ClimateDesc& climate,
+                                                              const environment::EnvironmentConfig& config) {
+    try {
+        environment::Environment probe(climate, config);
+        (void)probe;
+    } catch (const std::invalid_argument& ex) {
+        return std::string(ex.what());
+    }
+    return std::nullopt;
+}
+
 // Weather plan W2: the scenario "environment" block (docs/data_formats/
 // scenario.md). Rejects unknown keys so a scenario written for a later
 // increment never silently loads with half its meaning dropped. `surface_table_path` is the scenario's
@@ -441,12 +466,7 @@ ScenarioEnvironment read_environment(const json& j, const std::filesystem::path&
     // Build the Environment once here so a bad config (unknown season, bad
     // scale, a start outside its day, ...) is a load-time error naming the
     // scenario, not a failure in build_scenario.
-    try {
-        environment::Environment probe(e.climate, e.config);
-        (void)probe;
-    } catch (const std::invalid_argument& ex) {
-        fail(ex.what());
-    }
+    if (const std::optional<std::string> probe_error = environment_probe_error(e.climate, e.config)) fail(*probe_error);
     return e;
 }
 

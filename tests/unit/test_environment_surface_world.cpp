@@ -206,7 +206,6 @@ TEST_CASE("World surfaces: 1 and 10 workers give the same state hash", "[environ
         CHECK(g->grid_index() - k0 == 1197);
         CHECK(r.world->wheel_telemetry(r.vehicle, 0).surface == r.surfaces->id_for("asphalt"));   // the grip path ran
         h[k++] = r.world->state_hash();
-        h[k++] = r.world->state_hash();
     }
     INFO("hash 1 worker 0x" << std::hex << h[0] << ", 10 workers 0x" << h[1]);
     CHECK(h[0] == h[1]);
@@ -259,14 +258,11 @@ TEST_CASE("Scenario surface_conditions: parsing and rejections", "[environment][
     const std::string climate = "\"climate\": \"" + data("climates/test_weather.json") + "\"";
     const std::string table = "  \"surface_table_path\": \"" + data("surfaces/surfaces.json") + "\",\n";
     const std::string conds = "\"surface_conditions\": \"" + data("surface_conditions/default.json") + "\"";
-    const auto load_msg = [](const std::string& top, const std::string& block, const char* tag) -> std::string {
+    // Windows ASan caveat (CLAUDE.md, vault TOOL-019): no catch-by-reference in test code -
+    // the throwing call is wrapped in Catch2's CHECK_THROWS_WITH instead.
+    const auto load_scen = [](const std::string& top, const std::string& block, const char* tag) {
         TempScenario f(scenario_json(top, block), tag);
-        try {
-            io::load_scenario(f.path.string());
-        } catch (const std::runtime_error& e) {
-            return e.what();
-        }
-        return {};
+        return io::load_scenario(f.path.string());
     };
 
     // Accepted: the classes are the surface table's names in SurfaceId order.
@@ -278,13 +274,13 @@ TEST_CASE("Scenario surface_conditions: parsing and rejections", "[environment][
         CHECK(sc.environment->config.surface_names == table_names(io::SurfaceTable(data("surfaces/surfaces.json"))));
         CHECK_THAT(sc.environment->surface_conditions_path, ContainsSubstring("default.json"));
     }
-    CHECK_THAT(load_msg("", "{ " + climate + ", \"weather\": \"dynamic\", " + conds + " }", "notable"),
+    CHECK_THROWS_WITH(load_scen("", "{ " + climate + ", \"weather\": \"dynamic\", " + conds + " }", "notable"),
                ContainsSubstring("needs the scenario's \"surface_table_path\""));
-    CHECK_THAT(load_msg(table, "{ " + climate + ", " + conds + " }", "noweather"),
+    CHECK_THROWS_WITH(load_scen(table, "{ " + climate + ", " + conds + " }", "noweather"),
                ContainsSubstring("needs the environment's \"weather\" key"));
-    CHECK_THAT(load_msg(table, "{ " + climate + ", \"weather\": \"dynamic\", \"surface_conditions\": \"does/not/exist.json\" }", "nofile"),
+    CHECK_THROWS_WITH(load_scen(table, "{ " + climate + ", \"weather\": \"dynamic\", \"surface_conditions\": \"does/not/exist.json\" }", "nofile"),
                ContainsSubstring("exist.json"));
-    CHECK_THAT(load_msg(table, "{ " + climate + ", \"weather\": \"dynamic\", \"surface_conditions\": 3 }", "notstr"),
+    CHECK_THROWS_WITH(load_scen(table, "{ " + climate + ", \"weather\": \"dynamic\", \"surface_conditions\": 3 }", "notstr"),
                ContainsSubstring("must be a file path string"));
 }
 

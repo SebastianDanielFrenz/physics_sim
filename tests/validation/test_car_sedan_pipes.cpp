@@ -74,7 +74,7 @@ ps_test::VehicleTestRig build_rig(const std::string& path) {
 } // namespace
 
 TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launches without stalling",
-          "[vehicle][drivetrain][engine][cycle]") {
+          "[vehicle][drivetrain][engine][cycle][long]") {   // 2 x ~45 s in release (map generation + 3 sim phases): [long] per CLAUDE.md
     // car_sedan_pipes_rwd.json (owner 2026-09-29, "give me RWD"): car_sedan_rwd.json with the same engine.
     const std::string name = GENERATE(std::string("car_sedan_pipes"), std::string("car_sedan_pipes_rwd"));
     CAPTURE(name);
