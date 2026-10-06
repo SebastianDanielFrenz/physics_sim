@@ -3365,6 +3365,20 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
                     if (to.port != "n2o") {
                         throw std::runtime_error(lctx + ": unknown port \"" + to_str + "\" (a nitrous_kit's bottle input is \"n2o\")");
                     }
+                    // N2O plan N4: a heater channel shared with the controller's arm or purge channel (a vehicle-level controller
+                    // override can introduce the clash; declared channels merge by name, so the two switches would be one).
+                    if (const auto* bo = std::get_if<ps::drivetrain::N2oBottleDesc>(&from_c->params);
+                        bo != nullptr && bo->has_heater) {
+                        const auto& kc = std::get<ps::drivetrain::NitrousKitDesc>(kit_c->params).controller;
+                        if (bo->heater.channel == kc.arm_channel) {
+                            throw std::runtime_error(lctx + ": the bottle heater channel '" + bo->heater.channel + "' is also the arm channel of nitrous_kit '" +
+                                                      to.component + "' controller");
+                        }
+                        if (kc.has_purge && bo->heater.channel == kc.purge.channel) {
+                            throw std::runtime_error(lctx + ": the bottle heater channel '" + bo->heater.channel + "' is also the purge channel of nitrous_kit '" +
+                                                      to.component + "' controller");
+                        }
+                    }
                     for (const auto& existing : p.fluid) {
                         if (existing.to.component == to.component && existing.to.port == "n2o") {
                             throw std::runtime_error(lctx + ": nitrous_kit '" + to.component + "' n2o port is fed by two bottles ('" +

@@ -98,7 +98,7 @@ struct NitrousControllerDesc {
     real min_throttle_command = 0.95; // on the throttle stage's command
     real min_rpm = 0.0;
     real max_rpm = 1.0e9;
-    int min_gear = 1;                 // neutral (0) and reverse never spray while min_gear >= 1
+    int min_gear = 1;                 // >= 1 (the loader rejects less): neutral (0) and reverse never spray; the system also enforces it
     int max_gear = 99;
     real min_speed_mps = 0.0;
     NitrousProgressiveDesc progressive;

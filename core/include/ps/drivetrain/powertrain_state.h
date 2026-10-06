@@ -81,6 +81,11 @@ struct EngineSoundState {
     real n2o_retard_deg = 0.0;             // spark retard the kit asks for
     std::uint32_t n2o_activations = 0;     // solenoid openings since the vehicle was built
     std::uint32_t n2o_purge_events = 0;    // purge starts since the vehicle was built
+    // N2O plan N4 (section 6): controller state for the sound/HUD layer, 0 without a kit. NOT hashed.
+    std::uint8_t n2o_solenoid_open = 0;    // 1 while the controller requests spraying and no safety cut holds (also with an empty bottle)
+    real n2o_flow_fraction = 0.0;          // progressive duty (0..1), 0 while no N2O flows
+    std::uint8_t n2o_purge_active = 0;     // 1 while the purge vents
+    std::uint8_t n2o_injection = 0;        // 0 plenum / 1 direct_port (a kit property, constant)
     // N2O plan N2 (section 6): the simulated engine's wet charge model, 0 unless it ran this substep (graph
     // engine: always 0). NOT hashed.
     real charge_temperature_k = 0.0;       // T_mix: charge temperature after the N2O evaporated into the air

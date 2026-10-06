@@ -122,19 +122,25 @@ The solenoid opens (the "request") while ALL of these hold, evaluated each
 substep before the engine's pre_solve:
 armed (`arm` channel `>= 0.5`) · the throttle stage's command `>= min_throttle_command`
 (after TCU floor and ceiling) · rpm in `[min_rpm, max_rpm]` · gear in
-`[min_gear, max_gear]` (neutral is 0 and reverse negative, so both are excluded
-whenever `min_gear >= 1`; a wheel-less rig has no gear condition) · road speed
+`[min_gear, max_gear]` (neutral is 0 and reverse negative: they **never spray** - `min_gear`
+below 1 is rejected by the loader, and the runtime enforces `gear >= max(1, min_gear)` for a
+code-built desc too; a wheel-less rig has no gear condition) · road speed
 `>= min_speed_mps` · the engine is Running · no TCU upshift ignition cut · the
 previous substep had neither limiter nor DFCO active.
 
 * `arm_channel` is a **plain 0/1 level** (default `arm_default`, 0 = disarmed), the
   channel an adapter toggle drives. It is declared (`Powertrain::declare_control_channels`)
   only for a vehicle with a kit.
-* `progressive`: while the solenoid has been open for less than `delay_s` the flow
-  fraction is `start_fraction`, then it ramps linearly to 1 over `ramp_s` (0 = jumps to 1).
-  The pulse-width solenoid is modelled by its mean flow.
-* `spark_retard_deg`: a constant, or `{"fraction": [...], "deg": [...]}` over the flow fraction. A simulated
-  engine applies it while N2O flows: spark = min(schedule - retard, knock limit).
+* `progressive`: with `t_active` the time the solenoid has been continuously open (it restarts from 0
+  whenever the solenoid closes, for any reason - disarm, lift, a safety cut), the flow fraction is
+  `start_fraction` while `t_active < delay_s`, then
+  `clamp(start + (1 - start) * (t_active - delay_s) / ramp_s, 0, 1)`; `ramp_s` 0 jumps to 1 after the
+  delay. The nitrous and the kit fuel flow are both multiplied by it (the two solenoids pulse together;
+  the pulse-width solenoid is modelled by its mean flow). Without a `progressive` block the fraction is 1.
+* `spark_retard_deg`: a constant, or `{"fraction": [...], "deg": [...]}` (strictly ascending
+  fractions in `[0, 1]`, `deg >= 0`, piecewise linear, clamped at the ends) evaluated at the
+  progressive flow fraction of the substep. A simulated engine applies it while N2O flows:
+  spark = min(schedule - retard, knock limit). The retard is 0 while nothing flows.
 * `safety`: each cut **latches** until the command drops below `min_throttle_command`:
   `min_bottle_gauge_bar` (bottle-pressure switch, 0/absent = none), `cut_on_fuel_starve`
   (previous substep's fuel supply fraction < 1), `max_active_s` (solenoid duty time, `> 0`; absent = unlimited).
@@ -143,7 +149,8 @@ previous substep had neither limiter nor DFCO active.
   (HEM flux), independent of the request; its mass goes to `n2o_purged`. The purge channel must differ from the arm channel.
 
 Rejections: missing `arm_channel`/`min_rpm`/`max_rpm`/`source`, `min_throttle_command`
-outside `[0, 1]`, `min_rpm < 0`, `max_rpm <= min_rpm`, `max_gear < min_gear`,
+outside `[0, 1]`, `min_rpm < 0`, `max_rpm <= min_rpm`, `min_gear < 1`
+(`"'min_gear' must be >= 1 (neutral and reverse never spray)"`), `max_gear < min_gear`,
 `min_speed_mps < 0`, progressive `start_fraction` outside `(0, 1]` / negative delay or ramp,
 negative or malformed retard (curve length mismatch, `fraction` outside `[0, 1]`),
 `max_active_s <= 0`, negative `min_bottle_gauge_bar`, a malformed `cut_on_fuel_starve`,
@@ -164,7 +171,13 @@ Two `powertrain.components` types (always `"ref"` a part file) and two fluid lin
 Component overrides (bottom-up: part file default, then the vehicle component,
 then the runtime user later): bottle `initial_kg` (`0 <= initial_kg <= capacity_kg`,
 `"<ctx>: 'initial_kg' (<v>) must not exceed the bottle's capacity_kg (<c>)"`) and `pressure`;
-kit `controller` (path). Any other key is rejected. Every bottle needs a kit, every kit a
+kit `controller` (path, relative to the vehicle file; a vehicle-level controller file **wins** over the kit's
+`default_controller`: every controller field, arm channel included, comes from the override and the declared
+channels follow it; the kit's own jets/flow model are untouched; a missing file, a wrong `format` or any
+controller rejection above fails the vehicle load with the file named). The heater channel (bottle), the arm
+channel and the purge channel (controller) must be three different names, since declared channels merge by name:
+`"vehicle '<v>' ...: the bottle heater channel '<c>' is also the arm channel of nitrous_kit '<id>' controller"`
+(same for the purge channel; the Powertrain constructor repeats the check for a code-built desc). Any other key is rejected. Every bottle needs a kit, every kit a
 bottle and an engine with a fuel model (the fuel jet needs the fuel's density):
 `"vehicle '<v>': powertrain.components['<id>']: n2o_bottle has no consumer (no powertrain.fluid link from \"<id>.out\")"`,
 `"... nitrous_kit has no bottle (no powertrain.fluid link to \"<id>.n2o\")"`,
@@ -185,7 +198,11 @@ of `fuel_mass`), both 0 from a torque-map engine. `n2o_mass` is the bottle's del
 that passed a cut or starving cylinder. `engine_heat = fuel_energy_in + n2o_energy_in - indicated_work`.
 Bottle closure: `initial - bottle = n2o_mass + n2o_purged - n2o_external_added`. `EngineSoundState`:
 `n2o_active`, `n2o_safety_cut`, `n2o_flow_g_s`, `n2o_purge_flow_g_s`, `n2o_bottle_kg`,
-`n2o_bottle_bar`, `n2o_retard_deg`, `n2o_activations`, `n2o_purge_events`, and (N2, simulated engine,
+`n2o_bottle_bar`, `n2o_retard_deg`, `n2o_activations` (solenoid rising edges), `n2o_purge_events` (purge
+presses, counted once per press; a press with an empty bottle is not an event), and (N4, the controller's
+state for sound/HUD, never hashed) `n2o_solenoid_open` (the controller wants to spray, also with an empty
+bottle), `n2o_flow_fraction` (the progressive duty of the tick's last substep, 0 while nothing flows),
+`n2o_purge_active`, `n2o_injection` (0 plenum, 1 direct_port); all 0 without a kit. And (N2, simulated engine,
 0 otherwise) `charge_temperature_k`, `n2o_lambda_combined`, `n2o_kit_fuel_g_s`;
 `PowertrainSnapshot::n2o_bottle_kg`. CSV (kit vehicles only):
 `vehicle<i>.n2o.{flow_g_s, bottle_kg, bottle_bar, active}`.

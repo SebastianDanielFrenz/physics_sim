@@ -59,6 +59,10 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
         ess.n2o_retard_deg = ns.retard_deg;
         ess.n2o_activations = n2o->activations();
         ess.n2o_purge_events = n2o->purge_events();
+        ess.n2o_solenoid_open = ns.solenoid_open ? std::uint8_t(1) : std::uint8_t(0); // N2O plan N4
+        ess.n2o_flow_fraction = ns.flow_fraction;
+        ess.n2o_purge_active = ns.purge_active ? std::uint8_t(1) : std::uint8_t(0);
+        ess.n2o_injection = n2o->kit().injection == NitrousInjection::DirectPort ? std::uint8_t(1) : std::uint8_t(0);
         ess.charge_temperature_k = pre.charge_temperature_k; // N2O plan N2 (0 unless the charge model ran)
         ess.n2o_lambda_combined = pre.n2o_lambda_combined;
         ess.n2o_kit_fuel_g_s = pre.n2o_kit_fuel_g_s;
