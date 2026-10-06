@@ -842,7 +842,35 @@ Ledger: `n2o_energy_in += burnt N2O * dH_dec`, `engine_heat = fuel_energy_in + n
 indicated_work` (the N2O term is added only when nonzero), `kit_fuel_mass` is the kit share of `fuel_mass`
 (drawn from the tank). The thermal model's released heat counts only the fuel burnt in the fired charges,
 `min(1, lambda_c) * (f_ecu + kf)*fire*s * LHV + burnt N2O * dH_dec`; kit fuel passing a cut cylinder releases
-nothing (the turbo's exhaust energy balance still uses the booked fuel and the ECU lambda - N3). Sound/HUD: `charge_temperature_k`, `n2o_lambda_combined`, `n2o_kit_fuel_g_s`.
+nothing. Sound/HUD: `charge_temperature_k`, `n2o_lambda_combined`, `n2o_kit_fuel_g_s`.
 No new hashed state: the charge is a function of the hashed engine state and the NitrousSystem's hashed state.
-Not modelled in N2: the turbo exhaust energy share of the N2O and its pressure effects (N3), an MBT shift with
-N2O (owner Q4), knock. Validation V1 (NACA MR E5F26) runs in `tests/unit/test_n2o_engine.cpp` E7.
+Not modelled: an MBT shift with N2O (owner Q4), knock. Validation V1 (NACA MR E5F26) runs in
+`tests/unit/test_n2o_engine.cpp` E7.
+
+### Turbo side (N3)
+
+On a turbo engine the exhaust energy balance (`ExhaustSplit`, turbo.md "exhaust_thermal") follows the same
+release bookkeeping while the kit sprays; without a spray it is the pre-N3 balance, bit for bit:
+
+    fuel_w + n2o_w = indicated_w + wall_w + sensible_w + chemical_w - clamp_w
+
+* `fuel_w` = booked fuel x LHV (== `fuel_energy_in / h`, kit fuel included); `n2o_w` = decomposition power of the
+  N2O that burnt, `n2o_burnt * dH_dec / h` (== `n2o_energy_in / h`), released in full.
+* Only the fuel of the FIRED charges burns, at `eta_c = min(1, lambda_c)` of the COMBINED lambda (not the ECU
+  lambda). The rest - the unburnt rich share and the kit fuel that passed a cut cylinder - leaves as `chemical_w`.
+  An ignition-cut substep therefore releases nothing: `sensible_w = 0`, the port gas stays at the charge
+  temperature, and N2O plus kit fuel still add to the exhaust mass flow.
+* The in-cylinder wall fraction (`in_cylinder_wall_heat_fraction`, 0.20 [AS]) applies to the whole released energy.
+  The exhaust port temperature is `t_charge + sensible_w / (cp_exh * mdot_exh)`, `mdot_exh` = air + ECU fuel + kit
+  fuel + N2O; the turbine inlet follows through the lumped wall as before.
+* The kit retard needs no extra heat term: `indicated_w` is the RETARDED work, so the work the retard removes (D5
+  rule `(eta_spark(schedule) - eta_spark(schedule - retard)) * chemical input * eta_i`, relative to the
+  knock-limited schedule) is already inside `sensible_w` and from there in the held exhaust wall. It is reported by
+  `ExhaustSplit::n2o_retard_w` (0 where the knock limit already holds the spark below `schedule - retard`). It is
+  deliberately not added to the anti-lag sound field `anti_lag_extra_exhaust_w`.
+* The compressor flow stays the throttle-path air (the N2O and the kit fuel enter after the intercooler); the
+  charge temperature `t_charge` (compressor outlet after the intercooler) is the reference of the mixing balance.
+* PROVISIONAL: the N2O liquid-to-gas enthalpy deficit (~4 % of the decomposition heat at a 100 hp shot) is not
+  subtracted from the exhaust balance.
+
+Tests: `tests/unit/test_n2o_turbo.cpp` (T1-T6, `[n2o][turbo]`).

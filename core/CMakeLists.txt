@@ -192,6 +192,7 @@ add_library(ps_core STATIC
   src/jobs/topology.cpp
   src/jobs/debug_alloc.cpp
 
+  src/backend/shape_handle.cpp
   src/backend/jolt/jolt_backend.cpp
 
   src/articulation/model.cpp

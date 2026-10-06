@@ -107,6 +107,20 @@ public:
     // TerrainConfig::precompute_suppression_at_load).
     BodyId create_body(const BodyDesc& desc);
     void destroy_body(BodyId id);
+
+    // Prebuilt shapes (racing_game R2; contract in ps/backend/shape_handle.h).
+    // create_shape: ANY thread, also while step() runs on the sim thread and
+    // concurrently with other create_shape calls (the World must outlive the
+    // call; the handle may outlive the World). Allocates - call it from your
+    // own threads, not from a ps::jobs job body. Throws std::invalid_argument
+    // for a HeightfieldShape, std::runtime_error for a mesh Jolt rejects.
+    [[nodiscard]] ShapeHandle create_shape(const ShapeDesc& desc) const { return backend_->create_shape(desc); }
+    // Sim thread between steps, like create_body(desc): the same body, BodyId
+    // sequence and state_hash as create_body(desc with desc.shape = the
+    // handle's ShapeDesc); desc.shape is ignored. O(1) in the shape's size.
+    // A Static body drops the terrain suppression cache exactly like the
+    // desc path. The body keeps the shape alive until destroy_body.
+    BodyId create_body(const BodyDesc& desc, const ShapeHandle& shape);
     JointId create_joint(const JointDesc& desc) { return backend_->create_joint(desc); }
     void destroy_joint(JointId id) { backend_->destroy_joint(id); }
 
