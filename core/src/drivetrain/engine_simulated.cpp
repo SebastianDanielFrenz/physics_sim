@@ -479,9 +479,20 @@ real steady_net_torque(const SimulatedEngineMaps& m, const Ambient& amb, const S
     return evaluate_torque_impl(m, amb, st, omega, p, fired, real(1.0), false, true, nullptr, k_ecu, hyd_ref_rpm).tau - m.c_k;
 }
 
+// The three scalars fill_idle_control produces. A plain POD on purpose: the live path
+// (set_live_ambient, once per engine pre_solve) used to default-construct a whole
+// SimulatedSteadyTables for them, whose ten empty std::vector members each allocate a
+// _Container_proxy on the MSVC debug STL (_ITERATOR_DEBUG_LEVEL=2) - ten debug_alloc
+// violations per tick, invisible in release.
+struct IdleControlOut {
+    real idle_ff = real(0.0);
+    real idle_p_im = real(0.0);
+    real idle_cap_x = real(0.0);
+};
+
 // Setup builds use 60 iterations; live control solves only the current idle operating point.
 void fill_idle_control(const SimulatedEngineMaps& m,const Ambient& amb,real idle_rpm,real idle_max_x,
-                       real idle_max_torque_nm,SimulatedSteadyTables& t,int iterations,real k_ecu = real(1.0),
+                       real idle_max_torque_nm,IdleControlOut& t,int iterations,real k_ecu = real(1.0),
                        real hyd_ref_rpm = real(2000.0)) {
     const StarterDesc no_starter{};
     // Idle feed-forward: the plate (electronic) / bypass valve (mechanical,
@@ -591,7 +602,11 @@ void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real i
         }
     }
 
-    fill_idle_control(m,amb,idle_rpm,idle_max_x,idle_max_torque_nm,t,60);
+    IdleControlOut idle;
+    fill_idle_control(m,amb,idle_rpm,idle_max_x,idle_max_torque_nm,idle,60);
+    t.idle_ff = idle.idle_ff;
+    t.idle_p_im = idle.idle_p_im;
+    t.idle_cap_x = idle.idle_cap_x;
     t.p_pa = amb.p_amb;
 }
 
@@ -773,7 +788,7 @@ void SimulatedEngine::set_live_ambient(real p_pa,real t_k) {
     p_amb_=p_pa; t_amb_=t_k; r_t_=kGasConstant*t_k; inv_sqrt_rt_=real(1)/std::sqrt(r_t_);
     if(live_steady()) {
         // Stack-only scalar output; no table vectors are populated or allocated.
-        SimulatedSteadyTables idle;
+        IdleControlOut idle;
         fill_idle_control(*maps_,make_ambient(p_pa,t_k),desc_idle_rpm_,idle_.max_throttle,idle_.max_torque_nm,idle,24,ecu_k_,hyd_ref_rpm_);
         live_idle_ff_=idle.idle_ff; live_idle_p_im_=idle.idle_p_im; live_idle_cap_x_=idle.idle_cap_x;
     }
