@@ -31,6 +31,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -806,4 +808,66 @@ TEST_CASE("Garage P1 T7: a background-priority pool lowers its threads and gives
     // the old constructor shape stays source-compatible
     jobs::JobSystem legacy(2, std::size_t{64});
     CHECK(legacy.worker_count() == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Timing table (engine garage P1 measurement): Sketch and Full, cold (no cache), on 1/10/22 workers.
+// Run by hand: ps_unit_tests "Garage P1 timing*" (hidden, [.][diag]).
+// ---------------------------------------------------------------------------
+TEST_CASE("Garage P1 timing: Sketch and Full map generation on 1/10/22 workers", "[.][diag][drivetrain][cycle]") {
+    struct Engine {
+        std::string name;
+        CycleModelDesc desc;
+        FuelDesc fuel;
+    };
+    std::vector<Engine> engines;
+    auto from_vehicle = [&](const char* name, const char* file) {
+        io::EngineMapOptions o;
+        o.generate = false; // validate-only: instant, gives the resolved desc
+        const vehicle::VehicleDesc v = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/" + file, o);
+        for (const auto& c : v.powertrain.components) {
+            if (const auto* e = std::get_if<SimulatedEngineDesc>(&c.params)) {
+                if (e->cycle.has_value()) engines.push_back({name, *e->cycle, e->fuels.front()});
+            }
+        }
+    };
+    from_vehicle("hyper_v8_one1_audio", "car_hyper.json");
+    from_vehicle("demo_i4_pipes", "car_sedan_pipes.json");
+    from_vehicle("toyota_a25a_fks_gen", "car_sedan_gen.json");
+    // boosted demo_i4_pipes: a test-local copy with a compressor and two grid rows above ambient
+    for (const Engine& e : std::vector<Engine>(engines)) {
+        if (e.name != "demo_i4_pipes") continue;
+        Engine b = e;
+        b.name = "demo_i4_pipes boosted (test-local)";
+        b.desc.intake->compressor_supply = true;
+        b.desc.grid_p_im.push_back(130000.0);
+        b.desc.grid_p_im.push_back(160000.0);
+        engines.push_back(b);
+    }
+    REQUIRE(engines.size() == 4);
+    const bool full_one = true;
+    std::printf("TIMING hardware threads %u\n", std::thread::hardware_concurrency());
+    for (const Engine& e : engines) {
+        for (MapQuality q : {MapQuality::Sketch, MapQuality::Full}) {
+            const std::size_t pts = points_of(e.desc, q);
+            for (int workers : {1, 10, 22}) {
+                if (q == MapQuality::Full && workers == 1 && !full_one) continue;
+                jobs::JobSystem pool(workers);
+                const auto t0 = std::chrono::steady_clock::now();
+                std::string status = "ok";
+                std::uint64_t hash = 0;
+                try {
+                    const EngineMapsPtr m = generate_engine_maps(e.desc, e.fuel, q, &pool);
+                    hash = m->content_hash;
+                } catch (...) {
+                    status = Catch::translateActiveException();
+                }
+                const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                std::printf("TIMING %-36s %-6s %3d workers %4zu points %8.3f s  hash %016llx  %s\n", e.name.c_str(),
+                            q == MapQuality::Sketch ? "Sketch" : "Full", workers, pts, s, static_cast<unsigned long long>(hash),
+                            status.c_str());
+                std::fflush(stdout);
+            }
+        }
+    }
 }

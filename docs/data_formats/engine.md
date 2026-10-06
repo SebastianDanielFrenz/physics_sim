@@ -683,6 +683,42 @@ only for the load. Measured on the ASSUMED 2 L I4 test fixture with a
 12 x 20 grid (release build): Preview 0.33 s on one thread / 0.034 s on
 10 workers, Full 2.24 s / 0.23 s.
 
+**Quality `Sketch`, cancel, progress, validate-only** (engine garage P1,
+`EngineMapOptions` additions; every one is optional and changes no result).
+`MapQuality::Sketch` is a COMPLETE map set on a reduced grid for a dyno
+preview while an engine is being edited, never for driving a car: at most 8
+rpm values (the grid subsampled by index rounding, both ends kept) x 3 p_im
+rows (the lowest node, the node nearest ambient, the top node), the spark sweep
+at one site (3000 rpm / 80 kPa, retard {-10, 0, 5, 10, 20, 40} deg) and a lambda
+sweep of 5 ({0.6, 0.8, 1.0, 1.2, 1.5}), about 35 points, with Preview's step
+and cycle settings. It has its own `.psmaps` cache key and its own content;
+`MapQuality` values are `Preview` 0, `Full` 1, `Sketch` 2 (folded into the key,
+never renumber).
+- `cancel` (`const std::atomic<bool>*`): read before each point starts; once set
+  the load throws `ps::io::GenerationCancelled` (a `std::runtime_error`) after
+  the running points finish (at most one point per worker), writes no cache file,
+  and a flag already set when generation would start throws without running a
+  point, even where the cache would hit. If every point had already started the
+  load completes normally. A load that generates nothing never reads it.
+- `on_progress` (`std::function<void(size_t done, size_t total)>`): once per
+  finished point, `done` 1, 2, ..., `total`, always on the thread that called the
+  loader (workers only bump an atomic counter, so the jobs stay allocation-free).
+  Not called for a cache hit; one call sequence per generating engine.
+- `generate = false`: validate-only. Every loader rejection fires with the same
+  message as a full load, plus the generator's build-time checks
+  (`ps::drivetrain::validate_engine_map_generation`); no generator runs, no cache
+  is read or written (the turbo-table cache included), `generation_count_out`
+  stays 0. The returned engine is PENDING: `SimulatedEngineDesc::maps_pending`
+  is true and only the keys of the file's own `maps` block are filled; building
+  a `SimulatedEngine` (World vehicle, EngineRig, Powertrain) from it throws.
+  Rejections that depend on generated numbers (an unreachable plenum node, VE or
+  eta_i out of range) fire only when generating.
+- `ps::drivetrain::engine_map_cache_key(cycle, fuel, quality)` returns the key a
+  load would use; the cache file is `<cache_dir>/<key as 16 hex digits>.psmaps`.
+- `ps::jobs::JobSystemOptions::background_priority` (`JobSystem(workers,
+  options)`) lowers the pool threads' OS priority (Windows BELOW_NORMAL, Linux
+  nice +5 per thread) so a long generation does not stutter a renderer.
+
 **Off-node accuracy caveat.** The runtime interpolates the generated tables
 bilinearly. eta_i, pumping and friction stay within 1 % between nodes on a
 500 rpm x 5 kPa grid, but the trapped air mass does not: the intake runner
