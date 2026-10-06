@@ -44,6 +44,7 @@ add_executable(ps_validation_tests
   test_reference_cars.cpp
   test_car_sedan_pipes.cpp
   test_car_sedan_gen_n2o.cpp
+  test_car_hyper_n2o.cpp
   test_terrain_seam_crossing.cpp
   test_gen_engine_dyno.cpp
 )
