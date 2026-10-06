@@ -290,6 +290,7 @@ NitrousControllerDesc read_controller_object(const json& j, const std::string& p
     if (!(c.max_rpm > c.min_rpm)) throw std::runtime_error(ctx + ": 'max_rpm' must be above 'min_rpm'");
     c.min_gear = optional_int(j, "min_gear", c.min_gear, ctx);
     c.max_gear = optional_int(j, "max_gear", c.max_gear, ctx);
+    if (c.min_gear < 1) throw std::runtime_error(ctx + ": 'min_gear' must be >= 1 (neutral and reverse never spray)");
     if (c.max_gear < c.min_gear) throw std::runtime_error(ctx + ": 'max_gear' must be >= 'min_gear'");
     c.min_speed_mps = optional_number(j, "min_speed_mps", real(0.0), ctx);
     if (!(c.min_speed_mps >= real(0.0))) throw std::runtime_error(ctx + ": 'min_speed_mps' must be >= 0");

@@ -1341,6 +1341,20 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             const FuelDesc& burnt_fuel = tank_desc ? tank_desc->fuel : e_fuels.front();
             const N2oBottleDesc& bottle_desc = std::get<N2oBottleDesc>(pt.components[static_cast<std::size_t>(n2o_bottle_component_index)].params);
             const NitrousKitDesc& kit_desc = std::get<NitrousKitDesc>(pt.components[static_cast<std::size_t>(nitrous_kit_component_index)].params);
+            // N2O plan N4 backstop (the vehicle loader rejects the same): the heater, arm and purge switches are three
+            // different channels; declared channels merge by name, so a clash would silently make two of them one.
+            if (bottle_desc.has_heater && bottle_desc.heater.channel == kit_desc.controller.arm_channel) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': the bottle heater channel '" + bottle_desc.heater.channel +
+                                          "' is also the nitrous controller's arm channel");
+            }
+            if (kit_desc.controller.has_purge && bottle_desc.has_heater && bottle_desc.heater.channel == kit_desc.controller.purge.channel) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': the bottle heater channel '" + bottle_desc.heater.channel +
+                                          "' is also the nitrous controller's purge channel");
+            }
+            if (kit_desc.controller.has_purge && kit_desc.controller.purge.channel == kit_desc.controller.arm_channel) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': the nitrous controller's purge channel '" + kit_desc.controller.purge.channel +
+                                          "' is also its arm channel");
+            }
             const std::vector<ChannelDecl> n2o_decls = declare_control_channels(pt);
             auto slot_of = [&](const std::string& name) {
                 for (std::size_t i = 0; i < n2o_decls.size(); ++i) {

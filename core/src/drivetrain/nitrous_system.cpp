@@ -84,7 +84,9 @@ const NitrousStatus& NitrousSystem::step(const NitrousInputs& in) {
     if (!wot) latch_ = static_cast<std::uint8_t>(NitrousSafetyCut::None); // a cut holds until the command drops below the switch
     const real rpm = std::abs(in.omega) * kRadPerSecToRpm;
     const bool rpm_ok = rpm >= c.min_rpm && rpm <= c.max_rpm;
-    const bool gear_ok = !in.has_gearbox || (in.gear >= c.min_gear && in.gear <= c.max_gear);
+    // Neutral (0) and reverse (< 0) never spray, whatever min_gear says (N2O plan N4: a hard rule, not a data default;
+    // a wheel-less rig has no gear condition).
+    const bool gear_ok = !in.has_gearbox || (in.gear >= std::max(1, c.min_gear) && in.gear <= c.max_gear);
     const bool speed_ok = in.speed_mps >= c.min_speed_mps;
     const bool base_request = armed && wot && rpm_ok && gear_ok && speed_ok && in.engine_running && !in.ignition_cut && !prev_engine_cut_;
 
