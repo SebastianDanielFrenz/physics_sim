@@ -182,6 +182,7 @@ target_link_libraries(ps_environment_io
 add_library(ps_core STATIC
   src/io/aero_io.cpp
   src/aero/aerodynamics.cpp
+  src/aero/coefficient_map.cpp
   src/version.cpp
   src/jolt_proof.cpp
 

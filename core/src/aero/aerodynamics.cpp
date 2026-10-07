@@ -56,6 +56,14 @@ void validate(const Desc& d) {
         for(std::size_t j=0;j<i;++j) check(f.name!=d.fans[j].name,"duplicate aero fan name");
         check(positive(f.area_m2)&&nonnegative(f.pressure_pa)&&positive(f.seal_height_m)&&positive(f.probe_range_m)&&f.probe_range_m>=f.seal_height_m&&positive(f.max_power_w)&&positive(f.rate_per_s),"invalid aero fan pressure/geometry/power/rate");
     }
+    const auto& map=d.coefficient_map;
+    if(map.table) {
+        check(map.scope==MapScope::ReplaceBody||map.scope==MapScope::ReplacePassiveAero,"invalid coefficient scope");
+        check(finite(map.ground_position_local)&&finite(map.ground_probe_local)&&std::abs(map.ground_probe_local.length()-1)<1e-6,"invalid coefficient ground probe");
+        check(nonnegative(map.ground_range_m),"invalid coefficient ground range");
+        check(map.table->data().axes[3].empty()||map.ground_range_m>0,"ride height map requires a ground probe");
+        check(map.table->data().axes[4].empty()||map.wing_surface<d.surfaces.size(),"invalid coefficient wing surface");
+    }
     validate(d.wake);
 }
 AirSample sample_air(const Environment& e,Vec3 p,BodyId exclude,std::span<const WakeSource> wakes,std::span<const WakeSource> extra) {
@@ -91,21 +99,33 @@ Telemetry step(const Desc& d,State& state,const Pose& pose,const Motion& motion,
         const auto air=sample_air(env,pose.position+arm,exclude,wakes,extra);
         return rotation.inverse().rotate(motion.velocity_at(arm)-air.wind_world);
     };
+    for(std::size_t i=0;i<d.surfaces.size();++i) {
+        const auto& s=d.surfaces[i]; const real cmd=std::clamp(state.surface_command[i],real(-1),real(1));
+        const real target=cmd>=0?cmd*s.max_offset_rad:-cmd*s.min_offset_rad;
+        state.offset_rad[i]=slew(state.offset_rad[i],target,s.rate_rad_s,dt);
+    }
+    const auto& map=d.coefficient_map;
+    const auto map_ground=ground_at(ground,d.surfaces.size()+d.fans.size());
+    const bool needs_ground=map.table&&!map.table->data().axes[3].empty();
+    t.coefficient_map_ground_missing=needs_ground&&!map_ground.hit;
+    const bool use_map=map.table&&!t.coefficient_map_ground_missing;
+    t.coefficient_map_active=use_map;
     const auto& b=d.body;
-    const Vec3 bv=relative(b.position_local);
+    const Vec3 point=use_map?map.table->data().reference_point_local:b.position_local;
+    const Vec3 bv=relative(point);
     const real speed=bv.length(), q=.5*env.air_density*speed*speed;
     t.body_relative_airflow_local=bv; t.body_airspeed_m_s=speed; t.body_dynamic_pressure_pa=q;
-    t.body_turbulence=sample_air(env,pose.transform_point(b.position_local),exclude,wakes,extra).turbulence;
+    t.body_turbulence=sample_air(env,pose.transform_point(point),exclude,wakes,extra).turbulence;
     Vec3 body_force{};
     Vec3 legacy_force_world{};
-    if(!explicit_model(d)) {
+    if(!use_map&&!explicit_model(d)) {
         // Preserve the legacy world-space arithmetic exactly when wind/wakes are zero.
         const auto air=sample_air(env,pose.position,exclude,wakes,extra);
         const Vec3 velocity=motion.linear-air.wind_world;
         legacy_force_world=velocity*(-real(.5)*env.air_density*d.drag_area_m2*velocity.length());
         body_force=rotation.inverse().rotate(legacy_force_world);
     }
-    else {
+    else if(!use_map) {
         body_force={-.5*env.air_density*b.drag_area_xyz_m2.x*bv.x*std::abs(bv.x),
                     -.5*env.air_density*b.drag_area_xyz_m2.y*bv.y*std::abs(bv.y),
                     -.5*env.air_density*b.drag_area_xyz_m2.z*bv.z*std::abs(bv.z)};
@@ -117,20 +137,35 @@ Telemetry step(const Desc& d,State& state,const Pose& pose,const Motion& motion,
     }
     const Vec3 omega=rotation.inverse().rotate(motion.angular);
     const real damp_scale=b.reference_length_m/(2*std::max(real(1),speed));
-    const Vec3 body_torque=(b.moment_coeff-Vec3{b.angular_damping.x*omega.x,b.angular_damping.y*omega.y,b.angular_damping.z*omega.z}*damp_scale)*(q*b.reference_area_m2*b.reference_length_m);
+    Vec3 body_torque{};
+    if(!use_map) body_torque=(b.moment_coeff-Vec3{b.angular_damping.x*omega.x,b.angular_damping.y*omega.y,b.angular_damping.z*omega.z}*damp_scale)*(q*b.reference_area_m2*b.reference_length_m);
+    if(use_map) {
+        constexpr real deg=180/3.14159265358979323846;
+        const real horizontal=std::hypot(bv.x,bv.y);
+        t.coefficient_map_inputs={horizontal>1e-12?ps::math::atan2(bv.y,bv.x)*deg:real(0),
+            speed>1e-12?ps::math::atan2(bv.z,horizontal)*deg:real(0),speed,map_ground.clearance_m,
+            map.table->data().axes[4].empty()?real(0):state.offset_rad[map.wing_surface]*deg};
+        const auto sample=map.table->evaluate(t.coefficient_map_inputs);
+        t.coefficient_map_clamped_axes=sample.clamped_axes;t.coefficient_map_coefficients=sample.coefficients;
+        const auto& c=sample.coefficients;const auto& data=map.table->data();const real scale=q*data.area_m2;
+        if(scale==0) { body_force={}; body_torque={}; }
+        else {
+            body_force=Vec3{c[0],c[1],c[2]}*scale;
+            body_torque=Vec3{c[3]*data.lengths_m.x,c[4]*data.lengths_m.y,c[5]*data.lengths_m.z}*scale;
+        }
+    }
     t.body_force_local=body_force; t.body_moment_local=body_torque;
-    if(explicit_model(d)) add(t,rotation.rotate(body_force),rotation.rotate(body_torque),rotation.rotate(b.position_local),rotation);
+    if(use_map||explicit_model(d)) add(t,rotation.rotate(body_force),rotation.rotate(body_torque),rotation.rotate(point),rotation);
     else add(t,legacy_force_world,{}, {},rotation);
     for(std::size_t i=0;i<d.surfaces.size();++i) {
         const auto& s=d.surfaces[i]; auto& st=t.surfaces[i];
-        const real cmd=std::clamp(state.surface_command[i],real(-1),real(1));
-        const real target=cmd>=0 ? cmd*s.max_offset_rad : -cmd*s.min_offset_rad;
-        state.offset_rad[i]=slew(state.offset_rad[i],target,s.rate_rad_s,dt);
+
         st.offset_rad=state.offset_rad[i]; st.angle_rad=s.rest_angle_rad+st.offset_rad;
         const Vec3 span=cross(s.normal_local,s.chord_local);
         const Quat incidence=Quat::from_axis_angle(span,st.angle_rad);
         const Vec3 chord=incidence.rotate(s.chord_local), normal=incidence.rotate(s.normal_local);
         st.lift_m=s.max_offset_rad>0 ? s.max_lift_m*std::clamp(st.offset_rad/s.max_offset_rad,real(0),real(1)) : real(0);
+        if(use_map&&map.scope==MapScope::ReplacePassiveAero) continue;
         const Vec3 arm=rotation.rotate(s.position_local+s.normal_local*st.lift_m);
         const auto air=sample_air(env,pose.position+arm,exclude,wakes,extra);
         const Vec3 v=rotation.inverse().rotate(motion.velocity_at(arm)-air.wind_world);
@@ -179,6 +214,12 @@ Telemetry step(const Desc& d,State& state,const Pose& pose,const Motion& motion,
 }
 std::uint64_t fold_state_hash(const Desc& d,const State& s,std::uint64_t h) {
     auto fold=[&](real v) { const auto* bytes=reinterpret_cast<const unsigned char*>(&v); for(std::size_t i=0;i<sizeof(v);++i) { h^=bytes[i]; h*=1099511628211ULL; } };
+    if(d.coefficient_map.table) {
+        const auto& m=d.coefficient_map;auto hash=m.table->content_hash();
+        for(unsigned i=0;i<8;++i){h^=(hash>>(i*8))&255;h*=1099511628211ULL;}
+        fold(static_cast<real>(m.scope));fold(static_cast<real>(m.wing_surface));
+        fold(m.ground_range_m);for(auto v:{m.ground_position_local,m.ground_probe_local}){fold(v.x);fold(v.y);fold(v.z);}
+    }
     for(std::size_t i=0;i<d.surfaces.size();++i) fold(s.offset_rad[i]);
     for(std::size_t i=0;i<d.fans.size();++i) fold(s.fan_level[i]);
     if(!d.fans.empty()) fold(s.fan_energy_j);

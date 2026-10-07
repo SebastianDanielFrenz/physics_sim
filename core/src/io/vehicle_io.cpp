@@ -2743,7 +2743,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
 
     // --- aero (plan section 4.4/9.1) ---------------------------------------
     if (j.contains("aero")) {
-        v.aero=read_aero(j.at("aero"));
+        v.aero=read_aero(j.at("aero"),base_dir);
     }
 
     // --- powertrain (plan section 9.1) --------------------------------------

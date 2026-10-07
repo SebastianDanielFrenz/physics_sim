@@ -15,6 +15,7 @@ physics_sim/
   CLAUDE.md                           this file
   PLAN.md                             design and phase plan
   AGENTS.md, RUNTIME_LOCKS.md         shared Godot runtime coordination: out/runtime_locks/godot_<PID>.json libps_godot.dll ownership records, overnight sanitizer rule
+  AERO_COEFFICIENT_MAPS.md              optional offline-CFD table schema, public selection loader, native interpolation/ownership and telemetry
   AERODYNAMICS.md, LIVE_ATMOSPHERE_PERFORMANCE.md, HYPER_CLUTCH_FLARE.md, NATIVE_ENGINE_OUTPUT.md, HANDOFF_TURBO_AUDIO.md
                                       subsystem notes from the racing_game integration sessions; every repo .md with a one-line summary: vault PHYS-060
   drive.ps1                           incremental adapter build + launch Godot on the demo ("build and go drive"); dot-sources adapters/godot/godot_common.ps1

@@ -1,6 +1,7 @@
 // Quasi-steady, deterministic coefficient model; SI, ISO +x forward/+y left/+z up.
 #pragma once
 #include "ps/math/pose.h"
+#include "ps/aero/coefficient_map.h"
 #include "ps/world/ids.h"
 #include <array>
 #include <span>
@@ -36,6 +37,14 @@ struct FanDesc {
     real area_m2=1, pressure_pa=1000, seal_height_m=.1, probe_range_m=1;
     real max_power_w=10000, rate_per_s=1;
 };
+enum class MapScope { ReplaceBody, ReplacePassiveAero };
+struct MapDesc {
+    std::shared_ptr<const CoefficientMap> table;
+    MapScope scope=MapScope::ReplaceBody;
+    Vec3 ground_probe_local{0,0,-1}, ground_position_local{};
+    real ground_range_m=0;
+    std::size_t wing_surface=0; // actual actuator offset, never the command
+};
 struct Desc {
     // Legacy isotropic CdA applies ONLY if body/surfaces are absent. Fans are independent.
     real drag_area_m2=0;
@@ -43,6 +52,7 @@ struct Desc {
     std::vector<SurfaceDesc> surfaces;
     std::vector<FanDesc> fans;
     WakeDesc wake;
+    MapDesc coefficient_map;
 };
 struct Environment { real air_density=1.225; Vec3 wind_world{}; };
 struct WakeSource { BodyId owner{}; Vec3 position_world{}, velocity_world{}; WakeDesc desc; };
@@ -63,6 +73,10 @@ struct FanTelemetry {
 };
 struct Telemetry {
     Wrench wrench_world{};
+    bool coefficient_map_active=false, coefficient_map_ground_missing=false;
+    std::uint32_t coefficient_map_clamped_axes=0;
+    std::array<real,5> coefficient_map_inputs{};
+    std::array<real,6> coefficient_map_coefficients{};
     Vec3 body_relative_airflow_local{}, body_force_local{}, body_moment_local{};
     real body_airspeed_m_s=0, body_dynamic_pressure_pa=0, body_turbulence=0;
     std::array<SurfaceTelemetry,max_surfaces> surfaces{};
@@ -80,7 +94,7 @@ void validate(const Environment&);
 void validate(const WakeDesc&);
 AirSample sample_air(const Environment&, Vec3 point_world, BodyId exclude,
                      std::span<const WakeSource> wakes={}, std::span<const WakeSource> extra_wakes={});
-// Ground span order: all surfaces, then fans. Missing/short span means no ground.
+// Ground span order: all surfaces, then fans, then optional map probe. Missing/short span means no ground.
 // No allocation. Independent of wheels/backends: usable directly for an aircraft or any rigid body.
 Telemetry step(const Desc&, State&, const Pose&, const Motion&, const Environment&, real dt,
                std::span<const GroundSample> ground={}, std::span<const WakeSource> wakes={},

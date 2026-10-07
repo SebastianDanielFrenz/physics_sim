@@ -314,7 +314,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
         // Aero sees the SAME shadow pose/twist as the tyres, not a stale backend state.
         // Local probes also work against overhead roads when the chassis is inverted.
-        std::array<aero::GroundSample,aero::max_surfaces+aero::max_fans> aero_ground{};
+        std::array<aero::GroundSample,aero::max_surfaces+aero::max_fans+1> aero_ground{};
         auto probe=[&](Vec3 point,Vec3 direction,real range) {
             aero::GroundSample result;
             if(range<=0) return result;
@@ -335,6 +335,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         for(std::size_t i=0;i<desc_.aero.fans.size();++i) {
             const auto& fan=desc_.aero.fans[i];
             aero_ground[desc_.aero.surfaces.size()+i]=probe(fan.position_local,fan.direction_local,fan.probe_range_m);
+        }
+        if(desc_.aero.coefficient_map.table&&!desc_.aero.coefficient_map.table->data().axes[3].empty()) {
+            const auto& map=desc_.aero.coefficient_map;
+            aero_ground[desc_.aero.surfaces.size()+desc_.aero.fans.size()]=probe(map.ground_position_local,map.ground_probe_local,map.ground_range_m);
         }
         auto aero_sample=aero::step(desc_.aero,aero_state_,pose_s,twist_s,
             aero::Environment{env.air_density,env.wind_world},substep_dt,aero_ground,env.wakes,chassis_,env.extra_wakes);

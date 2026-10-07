@@ -5,6 +5,7 @@
 add_executable(ps_unit_tests
   test_live_engine_ambient.cpp
   test_aerodynamics.cpp
+  test_aero_coefficient_map.cpp
   test_hello.cpp
   test_math.cpp
   test_jobs.cpp
