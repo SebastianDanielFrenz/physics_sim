@@ -35,6 +35,13 @@ def main(argv):
         mod = importlib.import_module(f"assetgen.vehicles.{mid}")
         model = mod.build()
         stats = model.write(os.path.join(OUT, mid))
+        if hasattr(model,"flow_selection"):
+            import hashlib
+            selection=dict(model.flow_selection)
+            with open(os.path.join(OUT,mid,mid+".glb"),"rb") as f:
+                selection["source_glb_sha256"]=hashlib.sha256(f.read()).hexdigest()
+            with open(os.path.join(OUT,mid,mid+".flow.json"),"w",encoding="utf-8") as f:
+                json.dump(selection,f,indent=2);f.write("\n")
         print(f"{mid:16s} {stats['triangles']:7d} tris  {stats['nodes']:3d} nodes  "
               f"{stats['materials']:3d} mats  {stats['images']:3d} imgs  {stats['bytes'] / 1e6:6.2f} MB  "
               f"{time.time() - t0:5.1f} s")

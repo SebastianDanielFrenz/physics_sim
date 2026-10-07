@@ -61,7 +61,8 @@ class WheelSpec:
 
     def __init__(self, radius, width, rim_radius, tyre="road", rim="alloy5", rim_color=(0.75, 0.76, 0.78),
                  rim_metallic=0.9, disc=True, caliper_color=(0.15, 0.15, 0.15), lugs=22, lug_height=0.05,
-                 spokes=5, rim_offset=0.0, hubcap=True, sidewall_text=False):
+                 spokes=5, rim_offset=0.0, hubcap=True, sidewall_text=False, solid_visual=False):
+        self.solid_visual = solid_visual  # opt-in material returns, preserves other model output
         self.radius, self.width, self.rim_radius = radius, width, rim_radius
         self.tyre, self.rim = tyre, rim
         self.rim_color, self.rim_metallic = rim_color, rim_metallic
@@ -134,12 +135,12 @@ def build_wheel(model, part, center, spec, side, tag):
     a0 = arc[crown_i0]
 
     def uv(i, j):
-        return (arc[i] - a0, j / count * circ)
+        return ((arc[i] if i < len(arc) else arc[-1] + math.dist(prof[-1], prof[0])) - a0, j / count * circ)
 
     def cls(i, j, c, n):
         return tread_mat if crown_i0 <= i < crown_i1 else side_mat
 
-    M.lathe(mb, [(r, a) for (r, a) in prof], tread_mat, part, xf, count=count, classify=cls, orient=False, uv=uv)
+    M.lathe(mb, [(r, a) for (r, a) in prof], tread_mat, part, xf, count=count, classify=cls, orient=False, uv=uv, closed_profile=spec.solid_visual)
 
     if spec.tyre == "farm":
         _farm_lugs(model, part, xf, spec, tread_mat)
@@ -166,7 +167,7 @@ def _rim(model, part, xf, spec, rim_mat):
     # barrel: outer lip -> seat -> inner lip (seen from both sides: double-sided material)
     barrel = [(lip, hw), (Rr, hw - 0.01), (Rr * 0.97, hw * 0.6), (Rr * 0.97, -hw * 0.6), (Rr, -hw + 0.01),
               (lip, -hw)]
-    M.lathe(mb, barrel, rim_mat, part, xf, count=48, orient=True)
+    M.lathe(mb, barrel, rim_mat, part, xf, count=48, orient=True, closed_profile=spec.solid_visual)
     hub_r = Rr * 0.22
     if spec.rim == "steel" or spec.rim == "farm":
         # dished disc with ventilation holes, and a centre hub
@@ -192,7 +193,7 @@ def _rim(model, part, xf, spec, rim_mat):
         return
     # alloy / centerlock: centre hub + spokes
     M.lathe(mb, [(hub_r * 1.4, face - 0.01), (hub_r * 1.3, face + 0.02), (hub_r, face + 0.03), (0.001, face + 0.032)],
-            rim_mat, part, xf, count=32, orient=True)
+            rim_mat, part, xf, count=32, orient=True, closed_profile=spec.solid_visual)
     n = spec.spokes
     split = spec.rim in ("alloy_multi", "centerlock")
     for k in range(n):
@@ -204,7 +205,7 @@ def _rim(model, part, xf, spec, rim_mat):
     if spec.rim == "centerlock":
         model.mat("centerlock_nut", color=(0.85, 0.1, 0.1), metallic=0.8, roughness=0.3)
         M.lathe(mb, [(hub_r * 0.75, face + 0.03), (hub_r * 0.75, face + 0.07), (hub_r * 0.5, face + 0.08),
-                     (0.001, face + 0.08)], "centerlock_nut", part, xf, count=12, orient=True)
+                     (0.001, face + 0.08)], "centerlock_nut", part, xf, count=12, orient=True, closed_profile=spec.solid_visual)
     else:
         for k in range(5):  # wheel bolts
             a = 2 * math.pi * k / 5 + 0.3

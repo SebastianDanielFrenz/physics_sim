@@ -23,9 +23,9 @@ from ..vec import Curve, norm, smoothstep, compose, translate, rot_axis
 WB = 2.70
 TRACK_F, TRACK_R = 1.70, 1.65
 XF, XR = WB / 2, -WB / 2
-TYRE_F = WheelSpec(radius=0.347, width=0.265, rim_radius=0.254, tyre="road", rim="centerlock", spokes=10,
+TYRE_F = WheelSpec(radius=0.347, width=0.265, rim_radius=0.254, tyre="road", rim="centerlock", spokes=10, solid_visual=True,
                    rim_color=(0.16, 0.16, 0.17), rim_metallic=0.8, caliper_color=(0.95, 0.72, 0.05))
-TYRE_R = WheelSpec(radius=0.364, width=0.325, rim_radius=0.267, tyre="road", rim="centerlock", spokes=10,
+TYRE_R = WheelSpec(radius=0.364, width=0.325, rim_radius=0.267, tyre="road", rim="centerlock", spokes=10, solid_visual=True,
                    rim_color=(0.16, 0.16, 0.17), rim_metallic=0.8, caliper_color=(0.95, 0.72, 0.05))
 
 # Rear wing (main plane on wing_flap), rest pose. Pitch = chord angle, trailing edge up.
@@ -50,6 +50,39 @@ class HyperBody(CarBody):
         self.bulge = Curve(bulge)
         self.fender = fender
         self.intakes = list(intakes)
+
+    def _inner_skins(self):
+        # The shared CarBody leaves paint-only reverse copies with unstitched edges.
+        # Here all material regions (including glazing) own real perimeter returns.
+        from .hyper_shell import skin_part
+        self.model.flow_outer = {key:len(p.idx) for key,p in self.model.mb.prims.items()}
+        for part in list(self.model.mb.parts()):
+            skin_part(self.model.mb,part,thickness=.018,inset=.001 if part in
+                      ('door_L','door_R','frunk','engine_cover','diffuser') else 0)
+        self.model.flow_after_shell = {key:len(p.idx) for key,p in self.model.mb.prims.items()}
+
+    def patch(self,outline,mat,face,part="",offset=.004,rings=5,skirt_mat=None,skirt=.004):
+        # Same visible drape as CarBody; real backing behind the grille/lens,
+        # not a cap across an intake or exhaust mouth.
+        from .hyper_shell import clean_degenerate
+        mb=self.model.mb
+        def place(a,b,off):
+            if face in ("front","rear"):
+                e=1 if face=="front" else -1
+                return (self.surface_x(a,b,e)+e*off,a,b)
+            side=1 if face=="left" else -1
+            return (a,side*(self.surface_y(a,b)+off),b)
+        want={"front":(1,0,0),"rear":(-1,0,0),"left":(0,1,0),"right":(0,-1,0)}[face]
+        if M.dot(M.newell([place(a,b,0) for a,b in outline]),want)<0: outline=list(reversed(outline))
+        ca=sum(p[0] for p in outline)/len(outline);cb=sum(p[1] for p in outline)/len(outline)
+        def rows(off):
+            return [[place(ca+(a-ca)*k/rings,cb+(b-cb)*k/rings,off) for a,b in outline] for k in range(rings+1)]
+        front=rows(offset);recs=mb.grid(front,mat,part,closed_v=True)
+        back=rows(offset-skirt-.004)
+        mb.grid([back[-1],front[-1]],skirt_mat or mat,part,closed_v=True,flip=True)
+        mb.grid(back,skirt_mat or mat,part,closed_v=True,flip=True)
+        clean_degenerate(mb)
+        return recs
 
     def _g(self, yn):
         return smoothstep(self.fender[0], self.fender[1], yn)
@@ -373,6 +406,9 @@ def build():
                               surface_z(body,cx+(x-cx)*t,cy+(y-cy)*t)+off)
                              for x,y in outline])
             m.mb.grid(rows,mat,closed_v=True,flip=s<0)
+            back=[[(x,y,z-.004) for x,y,z in row] for row in rows]
+            m.mb.grid(back,mat,closed_v=True,flip=s>=0)
+            m.mb.grid([back[-1],rows[-1]],mat,closed_v=True,flip=s>=0)
         top_lens([(1.72,0.82),(2.16,0.46),(2.19,0.55),(1.80,0.86)],"trim_black",0.006)
         top_lens([(1.76,0.82),(2.14,0.51),(2.145,0.527),(1.78,0.834)],"light_head",0.010)
         top_lens([(1.81,0.825),(2.12,0.555),(2.12,0.567),(1.83,0.838)],"light_head",0.010)
@@ -474,6 +510,14 @@ def build():
         mx = le[0] - 0.035
         M.box(mb, (mx, s * 0.36, surface_z(body, mx, 0.36) + 0.002), (0.16, 0.04, 0.006), "gap")
 
+    # Explicit exterior selection before hidden cabin/engine/tub details are emitted.
+    m.flow_ranges=[]
+    for key,p in mb.prims.items():
+        if key in m.flow_outer:
+            m.flow_ranges.append((key,0,m.flow_outer[key]))
+        start=m.flow_after_shell.get(key,0)
+        if len(p.idx)>start: m.flow_ranges.append((key,start,len(p.idx)-start))
+
     # Fitted enclosed cockpit; its door cards move with the butterfly doors.
     from .hyper_interior import build_cabin
     build_cabin(m, body)
@@ -500,13 +544,33 @@ def build():
     M.box(mb, (-1.60, 0, 0.36), (1.2, 1.5, 0.02), "underbody")                   # bay floor
 
     # ---- exhaust: twin centre outlets through the rear mesh
+    flow_before_exhaust={key:len(p.idx) for key,p in mb.prims.items()}
     ex_pts = []
     for s in (1, -1):
         p0, p1 = (-2.05, s * 0.45, 0.555), (X_REAR - 0.012, s * 0.45, 0.555)
-        M.cylinder(mb, p0, p1, 0.052, "exhaust_tip", count=20, caps=False)
+        # Annular tube wall: open bore with inner wall and rolled-end returns.
+        # No flat disk at the outlet. The existing recessed soot back remains.
+        from ..vec import frame_z_to
+        xf=frame_z_to(tuple(p1[i]-p0[i] for i in range(3)),p0)
+        L=math.dist(p0,p1)
+        M.lathe(mb,[(.052,0),(.052,L),(.047,L),(.047,0)],"exhaust_tip",axis_xf=xf,count=20,closed_profile=True)
         M.cylinder(mb, (p1[0] + 0.02, p1[1], p1[2]), (p1[0] + 0.021, p1[1], p1[2]), 0.049, "exhaust_soot",
                    count=20)
         ex_pts.append(p1)
+
+    for key,p in mb.prims.items():
+        start=flow_before_exhaust.get(key,0)
+        if len(p.idx)>start: m.flow_ranges.append((key,start,len(p.idx)-start))
+    m.flow_selection={
+        "format":"physics_sim.visual_flow_selection/1",
+        "frame":"ISO x forward,y left,z up; rig ground origin, not chassis COM",
+        "status":"visual_surface_selection_not_fluid_solid",
+        "cfd_ready":False,
+        "ranges":[{"node":key[0] or m.id,"material":key[1],"first_triangle":start//3,"triangle_count":count//3}
+                  for key,start,count in m.flow_ranges if count],
+        "excluded":"Inner shell returns, headliner, cabin upholstery/dashboard/seats, frunk tub, engine and bay details.",
+        "limitations":"Overlapping visual components and occluded faces remain; not a boolean union. Cooling grilles are backed visual facades; no resolved cooling flow. Exhaust bore has a recessed soot termination. Fluid-solid preparation/pressure-region choices required before CFD."
+    }
 
     # ---- sockets
     m.socket("socket_driver_eye", None, (-0.28, 0.33, 0.93), "driver eye point (camera)")
@@ -531,5 +595,9 @@ def build():
         "Flat underbody at z=0.10 between them. Frontal area approx. 2.0 m^2.",
         "Butterfly doors: tilted hinge axis at the A-pillar base; door + mirror open together.",
     ]
+    from .hyper_shell import clean_degenerate
+    if clean_degenerate(mb):
+        raise ValueError("late triangle cleanup would invalidate exterior selection ranges")
+    m.notes.append("Visual material shells have stitched inner returns; intentional intake/exhaust mouths and wheel arches are retained. Not a boolean-unioned CFD solid.")
     m.notes.append("Design A: sculpted silver body, concave door coves, enlarged side scoops, swept LED blades, dark canopy.")
     return m

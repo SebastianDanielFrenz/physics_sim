@@ -32,7 +32,7 @@ physics_sim/
     sweep/                            fans N scenarios out over local ps_run processes (--jobs N); target sweep
     plots/                            python telemetry tools, dev only: rpm_to_wav.py (stdlib-only crude 4-rotor synth from a t/engine_rpm CSV, firing 4*rpm/60 - the 787B lift-off preview; pulse shape/resonance are artistic, labelled so; optional --fm-reference REF.csv --fm-exaggerate G magnifies the rpm difference to a reference run, labelled EXAGGERATED, a listening aid only - default output unchanged)
     enginedata/                       python engine-data generators, dev only: a25a_mb_engine.py (PHYS-033 P4 I7c C17a fallback M-B: EPA NVFEL A25A xlsx -> data/engines/toyota_a25a_fks_sim.json; --sabotage {transpose_ve,reverse_ve_rows,kpa_as_pa} for the data test's corruption check); a25a_gen_engine.py (I7c C17a M-A: out/a25a/a25a_tables.json -> data/engines/toyota_a25a_fks_gen.json's cycle block, deterministic, same bytes on re-run)
-    assetgen/                         Godot art-asset generator (Python; owned by a separate session, do not touch)
+    assetgen/                         Godot art-asset generator (Python; coordinate source ownership before edits); hyper_topology_check.py verifies final hypercar node topology, flow selection ranges/hash and rig; data/models/car_hyper/GEOMETRY.md describes visual closure and unresolved CFD preparation
   core/
     include/ps/                       public API headers (no Jolt or Godot types); target ps_core (STATIC)
       version.h                       ps::version_string(), ps::jolt_backend_self_check()

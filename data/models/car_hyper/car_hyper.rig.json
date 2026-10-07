@@ -34,7 +34,7 @@
           0.0687
         ],
         "max": [
-          2.3,
+          2.3066,
           1.0247,
           1.155
         ]
@@ -369,14 +369,14 @@
       },
       "bounds_local": {
         "min": [
-          -1.4649,
-          -0.4397,
+          -1.4663,
+          -0.4486,
           -0.56
         ],
         "max": [
-          0.0243,
+          0.0242,
           0.27,
-          0.3299
+          0.329
         ]
       }
     },
@@ -401,14 +401,14 @@
       },
       "bounds_local": {
         "min": [
-          -1.4649,
+          -1.4663,
           -0.27,
           -0.56
         ],
         "max": [
-          0.0243,
-          0.4397,
-          0.3299
+          0.0242,
+          0.4486,
+          0.329
         ]
       }
     },
@@ -433,14 +433,14 @@
       },
       "bounds_local": {
         "min": [
-          -0.0083,
-          -0.4993,
-          -0.3498
+          -0.0053,
+          -0.4924,
+          -0.3392
         ],
         "max": [
-          1.1017,
-          0.4993,
-          0.0473
+          1.1014,
+          0.4924,
+          0.0464
         ]
       }
     },
@@ -465,14 +465,14 @@
       },
       "bounds_local": {
         "min": [
-          -0.9778,
-          -0.5539,
-          -0.0667
+          -0.9774,
+          -0.5507,
+          -0.0565
         ],
         "max": [
-          -0.0081,
-          0.5539,
-          0.0515
+          -0.0082,
+          0.5507,
+          0.0506
         ]
       }
     },
@@ -575,14 +575,14 @@
       ],
       "bounds_local": {
         "min": [
-          -0.296,
-          -0.9827,
-          0.0048
+          -0.2951,
+          -0.982,
+          0.005
         ],
         "max": [
-          0.3391,
-          0.9827,
-          0.3356
+          0.3395,
+          0.982,
+          0.3423
         ]
       },
       "aero": {
@@ -830,6 +830,7 @@
     "Front flaps flap_front_L/R: chord 0.13 m, span 0.34 m each, leading edge x=2.31, |y|=0.6, z=0.128; rest chord angle 10 deg trailing edge up; range -10..+20 deg.",
     "Aero regions: node 'splitter' = front splitter plate (x 1.70..2.38, |y|<0.85, z=0.09); node 'diffuser' = rear diffuser ramp + 6 fins (underbody from x=-1.75, z=0.105 rising to z=0.33 at x=-2.35). Flat underbody at z=0.10 between them. Frontal area approx. 2.0 m^2.",
     "Butterfly doors: tilted hinge axis at the A-pillar base; door + mirror open together.",
+    "Visual material shells have stitched inner returns; intentional intake/exhaust mouths and wheel arches are retained. Not a boolean-unioned CFD solid.",
     "Design A: sculpted silver body, concave door coves, enlarged side scoops, swept LED blades, dark canopy."
   ]
 }

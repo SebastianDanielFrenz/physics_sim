@@ -26,7 +26,8 @@ sys.path.insert(0, HERE)
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(REPO, "data", "models")
 
-BUDGET = {"car": (130_000, 6.5e6), "farm": (220_000, 8.5e6)}
+BUDGET = {"car": (130_000, 6.5e6), "farm": (220_000, 8.5e6),
+          "car_hyper": (185_000, 6.5e6)}  # physical inner skins/returns; other budgets unchanged
 COMP = {5126: ("f", 4), 5125: ("I", 4), 5123: ("H", 2), 5121: ("B", 1)}
 NCOMP = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
 
@@ -187,7 +188,7 @@ def check_model(mid, errors, warns):
         if abs(r_geom - w["radius"]) > 0.03 * w["radius"]:
             err(f"{name}: mesh radius {r_geom:.3f} != rig radius {w['radius']:.3f}")
     kind = "farm" if mid in ("tractor", "trailer_tipper", "combine") else "car"
-    tb, sb = BUDGET[kind]
+    tb, sb = BUDGET.get(mid,BUDGET[kind])
     if tris > tb:
         err(f"{tris} triangles > budget {tb}")
     if size > sb:

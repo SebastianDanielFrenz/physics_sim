@@ -49,7 +49,8 @@ def build_cabin(m, body):
         zr=body.green['zroof'](x)
         rows.append([(x,width*(2*j/16-1),zr+.035*(1-(2*j/16-1)**2)-.028)
                      for j in range(17)])
-    mb.grid(rows,'cabin_suede',flip=True)
+    # Six-millimetre headliner with closed perimeter returns, not a floating sheet.
+    M.loft(mb,[row+[(x,y,z+.006) for x,y,z in reversed(row)] for row in rows],'cabin_suede')
     for side in (1,-1):
         M.tube(mb,[(.91,side*.60,.76),(.68,side*.54,.92),(.36,side*.49,1.075)],
                .019,'cabin_suede',count=10)
