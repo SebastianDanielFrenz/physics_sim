@@ -14,13 +14,13 @@ CoefficientMap::CoefficientMap(CoefficientData d):data_(std::move(d)) {
     require(std::isfinite(data_.area_m2)&&data_.area_m2>0&&finite(data_.lengths_m)&&data_.lengths_m.x>0&&data_.lengths_m.y>0&&data_.lengths_m.z>0&&finite(data_.reference_point_local),"invalid coefficient reference dimensions");
     require(data_.geometry_sha256.size()==64&&std::all_of(data_.geometry_sha256.begin(),data_.geometry_sha256.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');})&&!data_.solver.empty()&&!data_.source.empty(),"coefficient provenance requires lowercase geometry SHA256, solver and source");
     std::size_t rows=1;
-    for(std::size_t a=0;a<5;++a) {
+    for(std::size_t a=0;a<6;++a) {
         const auto& axis=data_.axes[a];
         require(a>=3||!axis.empty(),"missing mandatory coefficient axis");
         require(axis.size()<=4096,"coefficient axis too large");
         for(std::size_t i=0;i<axis.size();++i) {
             require(std::isfinite(axis[i])&&(i==0||axis[i]>axis[i-1]),"coefficient axes must be finite and strictly increasing");
-            require((a!=2&&a!=3)||axis[i]>=0,"negative speed/height axis");
+            require((a!=2&&a!=3&&a!=5)||axis[i]>=0,"negative speed/height/wing lift axis");
         }
         const auto n=std::max(std::size_t(1),axis.size());
         require(rows<=1000000/n,"coefficient table exceeds one million rows"); rows*=n;
@@ -37,18 +37,23 @@ CoefficientMap::CoefficientMap(CoefficientData d):data_(std::move(d)) {
         for(std::size_t i=0;i<pitch_stride;++i) require(data_.rows[p*pitch_stride+i]==data_.rows[y*yaw_stride+p*pitch_stride+i],"pitch pole coefficients must be yaw independent");
     auto bytes=[&](const void* p,std::size_t n) { auto b=static_cast<const unsigned char*>(p);for(std::size_t i=0;i<n;++i){hash_^=b[i];hash_*=1099511628211ULL;} };
     auto number=[&](real v){if(v==0)v=0;bytes(&v,sizeof(v));};
-    for(const auto& axis:data_.axes){auto n=static_cast<std::uint64_t>(axis.size());bytes(&n,sizeof(n));for(real v:axis)number(v);}
+    // Keep all original five-axis content hashes unchanged when lift is absent.
+    for(std::size_t a=0;a<5;++a){const auto& axis=data_.axes[a];auto n=static_cast<std::uint64_t>(axis.size());bytes(&n,sizeof(n));for(real v:axis)number(v);}
+    if(!data_.axes[5].empty()) {
+        const std::uint64_t tag=0x57494e474c494654ULL;bytes(&tag,sizeof(tag));
+        const auto& axis=data_.axes[5];auto n=static_cast<std::uint64_t>(axis.size());bytes(&n,sizeof(n));for(real v:axis)number(v);
+    }
     for(const auto& row:data_.rows)for(real v:row)number(v);
     number(data_.area_m2);for(auto v:{data_.lengths_m,data_.reference_point_local}){number(v.x);number(v.y);number(v.z);}
     for(const auto* s:{&data_.geometry_sha256,&data_.solver,&data_.source}) {auto n=static_cast<std::uint64_t>(s->size());bytes(&n,sizeof(n));bytes(s->data(),s->size());}
 }
-CoefficientSample CoefficientMap::evaluate(const std::array<real,5>& input) const noexcept {
+CoefficientSample CoefficientMap::evaluate(const std::array<real,6>& input) const noexcept {
     CoefficientSample out;
-    std::array<std::size_t,5> low{},high{},stride{};
-    std::array<real,5> f{};
+    std::array<std::size_t,6> low{},high{},stride{};
+    std::array<real,6> f{};
     std::size_t count=1;
-    for(int a=4;a>=0;--a) {stride[a]=count;count*=std::max(std::size_t(1),data_.axes[a].size());}
-    for(std::size_t a=0;a<5;++a) {
+    for(int a=5;a>=0;--a) {stride[a]=count;count*=std::max(std::size_t(1),data_.axes[a].size());}
+    for(std::size_t a=0;a<6;++a) {
         const auto& axis=data_.axes[a];if(axis.empty())continue;
         real v=input[a];if(!std::isfinite(v)){out.clamped_axes|=1u<<a;v=axis.front();}
         if(a==0){v=std::fmod(v+180,real(360));if(v<0)v+=360;v-=180;}
@@ -60,9 +65,9 @@ CoefficientSample CoefficientMap::evaluate(const std::array<real,5>& input) cons
         high[a]=static_cast<std::size_t>(upper-axis.begin());low[a]=high[a]-1;
         f[a]=(v-axis[low[a]])/(axis[high[a]]-axis[low[a]]);
     }
-    for(unsigned corner=0;corner<32;++corner) {
+    for(unsigned corner=0;corner<64;++corner) {
         real weight=1;std::size_t index=0;
-        for(std::size_t a=0;a<5;++a) {bool hi=(corner&(1u<<a))!=0;weight*=hi?f[a]:1-f[a];index+=(hi?high[a]:low[a])*stride[a];}
+        for(std::size_t a=0;a<6;++a) {bool hi=(corner&(1u<<a))!=0;weight*=hi?f[a]:1-f[a];index+=(hi?high[a]:low[a])*stride[a];}
         if(weight==0)continue;
         for(std::size_t c=0;c<6;++c)out.coefficients[c]+=weight*data_.rows[index][c];
     }

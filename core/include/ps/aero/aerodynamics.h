@@ -43,7 +43,7 @@ struct MapDesc {
     MapScope scope=MapScope::ReplaceBody;
     Vec3 ground_probe_local{0,0,-1}, ground_position_local{};
     real ground_range_m=0;
-    std::size_t wing_surface=0; // actual actuator offset, never the command
+    std::size_t wing_surface=0; // actual actuator offset and lift, never the command
 };
 struct Desc {
     // Legacy isotropic CdA applies ONLY if body/surfaces are absent. Fans are independent.
@@ -60,6 +60,7 @@ struct AirSample { Vec3 wind_world{}; real turbulence=0; };
 struct GroundSample { bool hit=false; real clearance_m=0; };
 struct State {
     std::array<real,max_surfaces> offset_rad{}, surface_command{};
+    std::array<real,max_surfaces> lift_m{}; // actual derived height after the rate-limited offset advances
     std::array<real,max_fans> fan_level{}, fan_command{};
     real fan_energy_j=0; // prepaid energy reservoir; starts EMPTY, caller explicitly credits it
 };
@@ -75,7 +76,7 @@ struct Telemetry {
     Wrench wrench_world{};
     bool coefficient_map_active=false, coefficient_map_ground_missing=false;
     std::uint32_t coefficient_map_clamped_axes=0;
-    std::array<real,5> coefficient_map_inputs{};
+    std::array<real,6> coefficient_map_inputs{};
     std::array<real,6> coefficient_map_coefficients{};
     Vec3 body_relative_airflow_local{}, body_force_local{}, body_moment_local{};
     real body_airspeed_m_s=0, body_dynamic_pressure_pa=0, body_turbulence=0;

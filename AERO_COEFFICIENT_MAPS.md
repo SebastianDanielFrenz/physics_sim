@@ -18,7 +18,7 @@ Vehicle aero entry (paths relative to vehicle JSON directory):
 }
 ```
 
-Omit ground_probe unless ride_height_m exists. Omit wing_surface unless wing_offset_deg exists. Table enabled by explicit reference; default vehicles have no reference. The wing name resolves to an existing authored surface used as a rate-limited actuator even when its passive forces are replaced. Offset is actual State.offset_rad in degrees, relative to rest angle; it is not the input command or absolute incidence. A table without a wing axis describes one fixed configuration; callers must not infer CFD support for configuration changes from it.
+Omit ground_probe unless ride_height_m exists. Omit wing_surface unless wing_offset_deg or wing_lift_m exists. Table enabled by explicit reference; default vehicles have no reference. The wing name resolves to an existing authored surface used as a rate-limited actuator even when its passive forces are replaced. Offset is actual State.offset_rad in degrees, relative to rest angle; it is not the input command or absolute incidence. A table without a wing axis describes one fixed configuration; callers must not infer CFD support for configuration changes from it.
 
 Table structure (shown without coefficient rows; not a loadable physical asset):
 
@@ -60,7 +60,7 @@ replace_body suppresses authored body/legacy CdA only, retaining all authored su
 
 For ride-height maps a real body-local road probe is appended after surface/fan ground samples. Misses, invalid clearance, short sample span, or non-facing normals select the complete authored passive fallback for that substep, retaining fan behavior. No artificial clearance or arbitrary free-air slice is used. Probe range is explicit; hits outside the height domain clamp to its endpoints. A free-air map should omit ride_height_m. Its valid installation/configuration is a provenance responsibility.
 
-Yaw must span exact[-180,+180] with at least one interior knot; corresponding seam rows must match exactly. Pitch must span exact[-90,+90], and rows at each pitch pole must be identical across yaw because those angles describe the same direction. Interpolation is multilinear, deterministic and allocation-free: binary search plus at most32 corners. Yaw wraps periodically; other dimensions clamp to endpoints. There is no extrapolation or sparse-cell fill.
+Yaw must span exact[-180,+180] with at least one interior knot; corresponding seam rows must match exactly. Pitch must span exact[-90,+90], and rows at each pitch pole must be identical across yaw because those angles describe the same direction. Interpolation is multilinear, deterministic and allocation-free: binary search plus at most64 corners (32 when wing lift is absent). Yaw wraps periodically; other dimensions clamp to endpoints. There is no extrapolation or sparse-cell fill.
 
 ## Native integration and telemetry
 
@@ -81,3 +81,27 @@ ps::io::load_aero_coefficient_map_reference(selection_json_path, cloned_vehicle.
 Selection root is exactly `{ "enabled": false }` when disabled, or `{ "enabled": true, "coefficient_map": { ...the reference above... } }` when enabled. enabled is required. Selection may include coefficient_map when disabled; it is not loaded. Paths resolve relative to the selection, not the original vehicle file. Disabled selection removes only a previously attached map, preserving authored body/surfaces/fans. Enabled parsing/validation commits atomically to the supplied descriptor; errors leave it untouched. Invoke before create_vehicle and on a retained descriptor clone; no read-only vehicle asset changes required. Provenance/validation sidecars are consumer tooling responsibilities, not additional keys in this strict selection file.
 
 Focused Windows Release verification: [aero] passed 6,492 assertions in23 cases, including existing authored/legacy aero checks, signed map forces/moments, wind/wakes, full-yaw seam, zero speed, strict schema/row/provenance errors, public selection strong exception guarantee, ownership/fan energy, real-ground fallback, actual actuator offset, reset and1-vs-4-worker hash parity with allocation guard. Long Linux sanitizer coverage remains queued; no CFD solver run or real coefficient validation claimed.
+
+
+## Optional wing lift axis
+
+Schema /1 additionally accepts optional `wing_lift_m` as axis index 5, after
+`wing_offset_deg`; rows remain dense and the last present axis varies fastest.
+The public CoefficientData axes and Telemetry coefficient_map_inputs now have
+six slots. Evaluate accepts six inputs; explicitly typed legacy five-input
+arrays remain accepted with lift zero. Lift knots must be finite, nonnegative
+and strictly increasing. Clamp bit5 (32) reports lift outside the map. Pitch
+and lift axes may be present independently or together; either requires the
+same existing wing_surface binding. Missing lift preserves five-axis lookup,
+table hashes and native behavior exactly. Six-axis interpolation uses up to64
+corners, with no allocation.
+
+The map samples actual State.lift_m after actuator advancement, alongside
+actual offset_rad, before passive-force suppression. Current native actuator
+kinematics derive height from its rate-limited offset and max_lift_m, exactly
+as the existing visual/surface telemetry did; this extension adds no independent
+lift controller or extra simulation. The table can represent independent lift
+and pitch configurations without collapsing them onto a single baked axis.
+Snapshots copy all six telemetry inputs; new-map state hashes include actual
+bound lift. Reset clears the lift cache with aero State. Old-map hashes omit
+the new cache because height was already derived from the hashed offset.

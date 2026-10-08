@@ -77,9 +77,9 @@ void bind_coefficient_map(const json& ref,const std::string& base_dir,aero::Desc
         if(!reference.contains("point_local_m")||!reference.contains("lengths_m"))throw std::invalid_argument("missing coefficient reference dimensions");
         const auto& prov=m.at("provenance");keys(prov,{"geometry_sha256","solver","source"});
         data.geometry_sha256=prov.at("geometry_sha256").get<std::string>();data.solver=prov.at("solver").get<std::string>();data.source=prov.at("source").get<std::string>();
-        const auto& axes=m.at("axes");keys(axes,{"yaw_deg","pitch_deg","speed_m_s","ride_height_m","wing_offset_deg"});
-        const char* names[]={"yaw_deg","pitch_deg","speed_m_s","ride_height_m","wing_offset_deg"};
-        for(std::size_t i=0;i<5;++i) {
+        const auto& axes=m.at("axes");keys(axes,{"yaw_deg","pitch_deg","speed_m_s","ride_height_m","wing_offset_deg","wing_lift_m"});
+        const char* names[]={"yaw_deg","pitch_deg","speed_m_s","ride_height_m","wing_offset_deg","wing_lift_m"};
+        for(std::size_t i=0;i<6;++i) {
             if(i<3||axes.contains(names[i])) {data.axes[i]=axes.at(names[i]).get<std::vector<real>>();if(data.axes[i].empty())throw std::invalid_argument("empty coefficient axis");}
         }
         const auto& rows=m.at("coefficients");if(!rows.is_array()||rows.size()>1000000)throw std::invalid_argument("invalid coefficient rows");
@@ -102,9 +102,9 @@ void bind_coefficient_map(const json& ref,const std::string& base_dir,aero::Desc
             auto it=std::find_if(d.surfaces.begin(),d.surfaces.end(),[&](const auto& s){return s.name==name;});
             if(it==d.surfaces.end())throw std::invalid_argument("coefficient wing_surface not found");
             d.coefficient_map.wing_surface=static_cast<std::size_t>(it-d.surfaces.begin());
-        } else if(!d.coefficient_map.table->data().axes[4].empty()) throw std::invalid_argument("wing map requires wing_surface");
+        } else if(!d.coefficient_map.table->data().axes[4].empty()||!d.coefficient_map.table->data().axes[5].empty()) throw std::invalid_argument("wing map requires wing_surface");
         if(d.coefficient_map.table->data().axes[3].empty()==ref.contains("ground_probe"))throw std::invalid_argument("ground_probe must exist exactly for ride-height maps");
-        if(d.coefficient_map.table->data().axes[4].empty()&&ref.contains("wing_surface"))throw std::invalid_argument("wing_surface without wing axis");
+        if(d.coefficient_map.table->data().axes[4].empty()&&d.coefficient_map.table->data().axes[5].empty()&&ref.contains("wing_surface"))throw std::invalid_argument("wing_surface without wing axis");
 }
 }
 aero::Desc read_aero(const json& j,const std::string& base_dir) {

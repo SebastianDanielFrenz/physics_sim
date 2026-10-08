@@ -113,3 +113,88 @@ TEST_CASE("CFD map hash reset and worker determinism allocation free","[aero][ae
         vehicle::VehicleResetOptions opts;world.reset_vehicle(id,opts);world.step();CHECK(world.vehicle_aero_telemetry(id).coefficient_map_active);CHECK(world.vehicle_aero_telemetry(id).surfaces[0].offset_rad==0);return hashes;
     };CHECK(run_world(1)==run_world(4));
 }
+
+namespace {
+aero::CoefficientData lift_fixture(bool pitch_axis=true) {
+    auto d=fixture(pitch_axis);
+    d.axes[5]={0,.28};
+    const auto old=d.rows;d.rows.clear();
+    for(const auto& row:old)for(real lift:d.axes[5]) {
+        auto expanded=row;expanded[2]-=lift*2;d.rows.push_back(expanded);
+    }
+    return d;
+}
+}
+TEST_CASE("CFD wing lift interpolates independently and validates optional sixth axis","[aero][aero_map][wing_lift]") {
+    auto d=lift_fixture();auto map=aero::CoefficientMap::create(d);
+    const auto low=map->evaluate({45,0,20,.3,10,0});
+    const auto middle=map->evaluate({45,0,20,.3,10,.14});
+    CHECK(middle.coefficients[2]==Catch::Approx(low.coefficients[2]-.28));
+    CHECK(middle.clamped_axes==0);
+    const auto pitched=map->evaluate({45,0,20,.3,20,.14});
+    CHECK(pitched.coefficients[2]==Catch::Approx(middle.coefficients[2]-.1));
+    CHECK(map->evaluate({45,0,20,.3,10,.4}).clamped_axes==32);
+    CHECK(map->evaluate({45,0,20,.3,10,-.1}).clamped_axes==32);
+    CHECK(map->evaluate(std::array<real,5>{45,0,20,.3,10}).coefficients==low.coefficients);
+    CHECK(aero::CoefficientMap::create(fixture(false))->content_hash()==0xa2e69c3d4422760cULL); // legacy five-axis byte-layout digest, independently calculated
+    auto absent=fixture(true);CHECK(aero::CoefficientMap::create(absent)->content_hash()!=map->content_hash());
+    auto changed=d;changed.axes[5][1]=.3;CHECK(aero::CoefficientMap::create(changed)->content_hash()!=map->content_hash());
+    changed=d;changed.axes[5][0]=-.1;CHECK_THROWS(aero::CoefficientMap::create(changed));
+    changed=d;changed.axes[5][1]=0;CHECK_THROWS(aero::CoefficientMap::create(changed));
+    changed=d;changed.rows.pop_back();CHECK_THROWS(aero::CoefficientMap::create(changed));
+    CHECK(aero::CoefficientMap::create(lift_fixture(false))->evaluate({0,0,20,0,0,.14}).clamped_axes==0);
+}
+TEST_CASE("CFD wing lift samples actual transient before passive suppression","[aero][aero_map][wing_lift]") {
+    aero::Desc d;d.coefficient_map.table=aero::CoefficientMap::create(lift_fixture(false));
+    d.coefficient_map.scope=aero::MapScope::ReplacePassiveAero;
+    aero::SurfaceDesc wing;wing.name="rear_wing";wing.max_offset_rad=.2;wing.rate_rad_s=.1;wing.max_lift_m=.28;
+    d.surfaces.push_back(wing);aero::validate(d);
+    aero::State state;state.surface_command[0]=1;
+    const auto t=aero::step(d,state,{},Motion{{20,0,0},{}},{},.1);
+    CHECK(state.offset_rad[0]==Catch::Approx(.01));
+    CHECK(state.lift_m[0]==Catch::Approx(.014));
+    CHECK(t.coefficient_map_inputs[5]==state.lift_m[0]);
+    CHECK(t.surfaces[0].lift_m==state.lift_m[0]);
+    CHECK(t.coefficient_map_coefficients[2]==Catch::Approx(-.048));
+    CHECK(t.surfaces[0].wrench_world.force.length()==0);
+    auto altered=state;altered.lift_m[0]+=.001;
+    CHECK(aero::fold_state_hash(d,state,42)!=aero::fold_state_hash(d,altered,42));
+    auto legacy=d;legacy.coefficient_map.table=aero::CoefficientMap::create(fixture(false));
+    CHECK(aero::fold_state_hash(legacy,state,42)==aero::fold_state_hash(legacy,altered,42));
+    d.coefficient_map.wing_surface=1;CHECK_THROWS(aero::validate(d));
+    state={};CHECK(state.lift_m[0]==0);
+}
+TEST_CASE("CFD JSON lift-only axis requires binding and dense rows","[aero][aero_map][wing_lift]") {
+    auto dir=std::filesystem::temp_directory_path()/"ps_lift_map_unit";std::filesystem::create_directories(dir);
+    auto file=dir/"lift.json";auto j=json_fixture();auto data=lift_fixture(false);
+    j["axes"]["wing_lift_m"]=data.axes[5];j["coefficients"]=data.rows;
+    std::ofstream(file)<<j.dump();
+    nlohmann::json ref={{"surfaces",nlohmann::json::array({{{"name","rear_wing"},{"max_offset_rad",.2},{"max_lift_m",.28}}})},
+        {"coefficient_map",{{"file","lift.json"},{"scope","replace_passive_aero"},{"wing_surface","rear_wing"}}}};
+    auto loaded=io::read_aero(ref,dir.string());CHECK(loaded.coefficient_map.table->data().axes[5]==data.axes[5]);
+    ref["coefficient_map"].erase("wing_surface");CHECK_THROWS(io::read_aero(ref,dir.string()));
+    ref["coefficient_map"]["wing_surface"]="rear_wing";
+    j["axes"]["wing_lift_m"]=nlohmann::json::array();std::ofstream(file)<<j.dump();CHECK_THROWS(io::read_aero(ref,dir.string()));
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("CFD lift map world snapshots reset and worker parity","[aero][aero_map][wing_lift][determinism]") {
+    const auto run=[](int workers) {
+        WorldConfig cfg;cfg.job_workers=workers;cfg.gravity={};World world(cfg);
+        vehicle::VehicleDesc car;car.name="lift_map";car.aero.coefficient_map.table=aero::CoefficientMap::create(lift_fixture(false));
+        car.aero.coefficient_map.scope=aero::MapScope::ReplacePassiveAero;
+        aero::SurfaceDesc wing;wing.name="wing";wing.max_offset_rad=.2;wing.rate_rad_s=.1;wing.max_lift_m=.28;
+        car.aero.surfaces.push_back(wing);
+        BodyDesc body;body.mass=1000;body.motion=BodyMotionType::Dynamic;body.shape=BoxShape{{1,.5,.2}};body.allow_sleep=false;
+        const auto b=world.create_body(body);const auto id=world.create_vehicle(car,b);
+        world.backend().set_motion(b,Motion{{20,0,0},{}});world.set_aero_surface_command(id,0,1);
+        for(int i=0;i<10;++i)world.step(); std::array<std::uint64_t,20> hashes{};
+        const bool armed=jobs::debug_alloc::hook_available();jobs::debug_alloc::reset();jobs::debug_alloc::set_armed(armed);
+        for(auto& hash:hashes){world.step();hash=world.state_hash();}
+        jobs::debug_alloc::set_armed(false);if(armed)CHECK(jobs::debug_alloc::own_violation_count()==0);
+        const auto t=world.vehicle_aero_telemetry(id);
+        CHECK(t.coefficient_map_inputs[5]>0);CHECK(t.coefficient_map_inputs[5]==t.surfaces[0].lift_m);
+        world.reset_vehicle(id,{});world.step();CHECK(world.vehicle_aero_telemetry(id).coefficient_map_inputs[5]==0);
+        return hashes;
+    };CHECK(run(1)==run(4));
+}

@@ -62,7 +62,7 @@ void validate(const Desc& d) {
         check(finite(map.ground_position_local)&&finite(map.ground_probe_local)&&std::abs(map.ground_probe_local.length()-1)<1e-6,"invalid coefficient ground probe");
         check(nonnegative(map.ground_range_m),"invalid coefficient ground range");
         check(map.table->data().axes[3].empty()||map.ground_range_m>0,"ride height map requires a ground probe");
-        check(map.table->data().axes[4].empty()||map.wing_surface<d.surfaces.size(),"invalid coefficient wing surface");
+        check((map.table->data().axes[4].empty()&&map.table->data().axes[5].empty())||map.wing_surface<d.surfaces.size(),"invalid coefficient wing surface");
     }
     validate(d.wake);
 }
@@ -103,6 +103,7 @@ Telemetry step(const Desc& d,State& state,const Pose& pose,const Motion& motion,
         const auto& s=d.surfaces[i]; const real cmd=std::clamp(state.surface_command[i],real(-1),real(1));
         const real target=cmd>=0?cmd*s.max_offset_rad:-cmd*s.min_offset_rad;
         state.offset_rad[i]=slew(state.offset_rad[i],target,s.rate_rad_s,dt);
+        state.lift_m[i]=s.max_offset_rad>0 ? s.max_lift_m*std::clamp(state.offset_rad[i]/s.max_offset_rad,real(0),real(1)) : real(0);
     }
     const auto& map=d.coefficient_map;
     const auto map_ground=ground_at(ground,d.surfaces.size()+d.fans.size());
@@ -144,7 +145,8 @@ Telemetry step(const Desc& d,State& state,const Pose& pose,const Motion& motion,
         const real horizontal=std::hypot(bv.x,bv.y);
         t.coefficient_map_inputs={horizontal>1e-12?ps::math::atan2(bv.y,bv.x)*deg:real(0),
             speed>1e-12?ps::math::atan2(bv.z,horizontal)*deg:real(0),speed,map_ground.clearance_m,
-            map.table->data().axes[4].empty()?real(0):state.offset_rad[map.wing_surface]*deg};
+            map.table->data().axes[4].empty()?real(0):state.offset_rad[map.wing_surface]*deg,
+            map.table->data().axes[5].empty()?real(0):state.lift_m[map.wing_surface]};
         const auto sample=map.table->evaluate(t.coefficient_map_inputs);
         t.coefficient_map_clamped_axes=sample.clamped_axes;t.coefficient_map_coefficients=sample.coefficients;
         const auto& c=sample.coefficients;const auto& data=map.table->data();const real scale=q*data.area_m2;
@@ -164,7 +166,7 @@ Telemetry step(const Desc& d,State& state,const Pose& pose,const Motion& motion,
         const Vec3 span=cross(s.normal_local,s.chord_local);
         const Quat incidence=Quat::from_axis_angle(span,st.angle_rad);
         const Vec3 chord=incidence.rotate(s.chord_local), normal=incidence.rotate(s.normal_local);
-        st.lift_m=s.max_offset_rad>0 ? s.max_lift_m*std::clamp(st.offset_rad/s.max_offset_rad,real(0),real(1)) : real(0);
+        st.lift_m=state.lift_m[i];
         if(use_map&&map.scope==MapScope::ReplacePassiveAero) continue;
         const Vec3 arm=rotation.rotate(s.position_local+s.normal_local*st.lift_m);
         const auto air=sample_air(env,pose.position+arm,exclude,wakes,extra);
@@ -218,6 +220,7 @@ std::uint64_t fold_state_hash(const Desc& d,const State& s,std::uint64_t h) {
         const auto& m=d.coefficient_map;auto hash=m.table->content_hash();
         for(unsigned i=0;i<8;++i){h^=(hash>>(i*8))&255;h*=1099511628211ULL;}
         fold(static_cast<real>(m.scope));fold(static_cast<real>(m.wing_surface));
+        if(!m.table->data().axes[5].empty()) fold(s.lift_m[m.wing_surface]);
         fold(m.ground_range_m);for(auto v:{m.ground_position_local,m.ground_probe_local}){fold(v.x);fold(v.y);fold(v.z);}
     }
     for(std::size_t i=0;i<d.surfaces.size();++i) fold(s.offset_rad[i]);
