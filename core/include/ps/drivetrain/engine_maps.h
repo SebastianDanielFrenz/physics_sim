@@ -65,7 +65,7 @@ inline constexpr std::uint32_t kPipeGeneratorVersion = 3;
 inline constexpr std::uint32_t kGeneratorVersion = kPipeGeneratorVersion; // the newest path
 
 [[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {
-    return (desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion) + (desc.pressure_sampling.enabled ? 256 : 0);
+    return (desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion) + (desc.pressure_sampling.enabled ? 257 : 0);
 }
 
 // The numeric values are folded into the .psmaps cache key, the content hash

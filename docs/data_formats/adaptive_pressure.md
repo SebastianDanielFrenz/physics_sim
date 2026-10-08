@@ -25,9 +25,9 @@ fresh-air mass. Intervals exceeding tolerance receive additional nodes.
 Completed operating-point results are retained throughout generation and
 reused on subsequent passes; refinement never repeats their cycle simulation.
 
-VE, pumping, exhaust temperature, exhaust enthalpy and efficiency are reduced
+VE, pumping, exhaust temperature and exhaust enthalpy are reduced
 independently against all computed validation samples. Efficiency retains its
-fresh-air-mass coordinate; it is not converted into a pressure table. For signed
+fresh-air-mass coordinate and all of its computed knots; it is not converted into a pressure table. For signed
 or nearly zero values, the error denominator has a floor of 1% of the table's
 peak absolute magnitude. Half the tolerance is allocated to refinement and half
 to final table reduction. This is sampled interpolation control, not a proof of
