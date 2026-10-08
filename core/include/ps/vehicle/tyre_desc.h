@@ -27,7 +27,22 @@
 
 namespace ps::vehicle {
 
+struct RollingResistanceAnchors {
+    real rated_speed_kmh = 0.0;  // V_r, the tyre's speed-symbol rating
+    real crr_base = 0.0;         // becomes qsy1
+    real fraction = 0.0;         // f, in (0,1)
+    real factor = 1.0;           // crr(f*V_r)/crr_base, >= 1
+    real factor_at_rated = 1.0;  // crr(V_r)/crr_base, > factor
+};
+enum class RollingResistanceSpeedLaw { FourthPower, Quadratic };
+
 struct TyreDesc {
+    // Source coefficients/anchors are retained when selecting a runtime law.
+    RollingResistanceSpeedLaw rolling_resistance_speed_law = RollingResistanceSpeedLaw::FourthPower;
+    RollingResistanceAnchors rolling_resistance_anchors{}; // rated_speed_kmh == 0: explicit QSY/.tir
+    real rolling_resistance_quadratic = 0.0; // coefficient multiplying (v/reference)^2
+    real rolling_resistance_reference_speed_m_s = 0.0;
+
     std::string name;
     std::string source; // required: paper/book/.tir provenance, PLAN.md section 8
 

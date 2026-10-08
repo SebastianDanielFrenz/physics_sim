@@ -17,6 +17,7 @@
 
 #include "ps/types.h"
 #include "ps/vehicle/tyre_desc.h"
+#include <cstdint>
 
 #include <memory>
 
@@ -79,8 +80,19 @@ std::unique_ptr<ITyreModel> create_pacejka_tyre_model(const TyreDesc& desc);
 // coefficient the wheel applies is qsy1 + surface crr + qsy2*|Fx|/Fz0 + this
 // (core/src/vehicle/wheel_instance.cpp) - tests build their independent
 // references from this same function so there is exactly one speed law.
-// With qsy3 == 0 the result is bit-identical to the pre-qsy3 qsy4 term.
+// In FourthPower, qsy3 == 0 is bit-identical to the pre-qsy3 qsy4 term.
+// Quadratic instead uses the selected calibrated nonnegative squared-speed rise.
 [[nodiscard]] real tyre_rolling_speed_term(const TyreDesc& desc, real vx);
+
+// Idempotent and reversible; never changes qsy1/2/3/4 or authored anchors.
+// Quadratic matches the rated-speed rise when anchors exist; otherwise matches
+// the source MF curve at fallback_reference_speed_m_s (0 selects desc.v0).
+// Throws invalid_argument before modifying desc on invalid/nonfinite calibration.
+void select_rolling_resistance_speed_law(TyreDesc& desc, RollingResistanceSpeedLaw law,
+                                       real fallback_reference_speed_m_s = 0.0);
+// Default law leaves seed unchanged, preserving legacy simulation hashes.
+[[nodiscard]] std::uint64_t fold_rolling_resistance_hash(const TyreDesc& desc, std::uint64_t seed);
+
 
 // Closed-form derivation of qsy3/qsy4 from two anchors (a tyre file's
 // optional "rolling_resistance" block). With x_r = V_r/v0 the model is
@@ -89,13 +101,6 @@ std::unique_ptr<ITyreModel> create_pacejka_tyre_model(const TyreDesc& desc);
 // and the anchors crr(fraction*V_r) = factor*crr_base, crr(V_r) =
 // factor_at_rated*crr_base give (F = factor_at_rated, f = fraction)
 //   B = ((F-1)*f - (factor-1)) / (f - f^4),  A = (F-1) - B.
-struct RollingResistanceAnchors {
-    real rated_speed_kmh = 0.0;  // V_r, the tyre's speed-symbol rating
-    real crr_base = 0.0;         // becomes qsy1
-    real fraction = 0.0;         // f, in (0,1)
-    real factor = 1.0;           // crr(f*V_r)/crr_base, >= 1
-    real factor_at_rated = 1.0;  // crr(V_r)/crr_base, > factor
-};
 struct RollingResistanceCoefficients {
     real qsy1 = 0.0;
     real qsy3 = 0.0;

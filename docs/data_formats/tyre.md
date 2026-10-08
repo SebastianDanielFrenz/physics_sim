@@ -197,3 +197,32 @@ missing key or an unknown key (in the block or in `rise_at_fraction`). Raw `qsy3
 Shipped anchors (all `fraction` 0.8, `factor` 1.5, `factor_at_rated` 2.0 [AS], giving A 0.2316, B 0.7684): passenger
 225/45R17 `rated_speed_kmh` 270 (ISO 4000-1 / ETRTO speed symbol W), hypercar tyres 500 [AS], tractor tyres 65
 (agricultural symbol D, above the tractor's 47.8 km/h limiter top speed).
+
+
+## Runtime rolling-resistance speed law
+
+Optional `rolling_resistance_speed_law` is `fourth_power` (native default) or
+`quadratic`. The legacy name retains the exact existing MF expression,
+`qsy4 * pow(v/v0,4) + qsy3 * abs(v/v0)`, including its linear term.
+The game may default to quadratic without changing native defaults or tyre files.
+
+Public `ps::vehicle::select_rolling_resistance_speed_law(TyreDesc&,
+RollingResistanceSpeedLaw, real fallback_reference_speed_m_s = 0)` in
+`ps/vehicle/tyre_model.h` selects `FourthPower` or `Quadratic` before vehicle
+creation. Reapply to cached descriptors safely: source QSY coefficients and the
+full `rolling_resistance_anchors` remain intact, so selection is idempotent and
+reversible. Recreate an existing vehicle to apply its changed descriptor.
+
+Quadratic adds `crr_base * (factor_at_rated - 1) * (v/V_rated)^2` to qsy1;
+it deliberately ignores the intermediate fractional anchor. This guarantees a
+nonnegative speed term and matches the same authored rated-speed resistance.
+For explicit QSY JSON or .tir without rated metadata, it matches the original
+speed contribution at `v0`, the MF reference speed. Native callers may provide
+another positive reference in m/s; this fallback does not override rated metadata.
+The loader uses v0 for this case. Negative/nonfinite coefficients or invalid
+reference speeds are rejected before changing selection. Surface resistance,
+load/Fx terms, contact speed and the existing near-zero sign ramp are unchanged.
+
+Runtime quadratic coefficient/reference, law and retained anchor metadata enter
+the wheel simulation hash. Default FourthPower contributes no new hash bytes,
+preserving legacy scenario hashes. No SAE J2452 measured tyre fit is implied.

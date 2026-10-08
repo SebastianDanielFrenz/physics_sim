@@ -228,11 +228,66 @@ RelaxStep relaxation_step_axis(real x, real slip_velocity, real v_mag, real sigm
 }
 
 real tyre_rolling_speed_term(const TyreDesc& desc, real vx) {
+    if (desc.rolling_resistance_speed_law == RollingResistanceSpeedLaw::Quadratic) {
+        const real x = vx / desc.rolling_resistance_reference_speed_m_s;
+        return desc.rolling_resistance_quadratic * x * x;
+    }
     // qsy3 == 0 adds an exact +0.0: bit-identical to the old qsy4-only term.
     return desc.qsy4 * ps::math::pow(vx / desc.v0, real(4.0)) + desc.qsy3 * std::abs(vx / desc.v0);
 }
 
+void select_rolling_resistance_speed_law(TyreDesc& d, RollingResistanceSpeedLaw law, real fallback) {
+    if (law == RollingResistanceSpeedLaw::FourthPower) {
+        d.rolling_resistance_speed_law = law;
+        d.rolling_resistance_quadratic = 0.0;
+        d.rolling_resistance_reference_speed_m_s = 0.0;
+        return;
+    }
+    if (law != RollingResistanceSpeedLaw::Quadratic || !std::isfinite(fallback) || fallback < 0.0)
+        throw std::invalid_argument("rolling_resistance: invalid law/reference speed");
+    const auto& a = d.rolling_resistance_anchors;
+    const bool authored = a.rated_speed_kmh != 0.0;
+    real ref = authored ? a.rated_speed_kmh / real(3.6) : (fallback > 0.0 ? fallback : d.v0);
+    real rise;
+    if (authored) {
+        if (!std::isfinite(a.crr_base) || a.crr_base <= 0.0 || !std::isfinite(a.factor_at_rated) || a.factor_at_rated < 1.0)
+            throw std::invalid_argument("rolling_resistance: invalid rated anchor");
+        rise = a.crr_base * (a.factor_at_rated - real(1.0));
+    } else {
+        if (!std::isfinite(d.v0) || d.v0 <= 0.0 || !std::isfinite(d.qsy3) || d.qsy3 < 0.0 || !std::isfinite(d.qsy4) || d.qsy4 < 0.0)
+            throw std::invalid_argument("rolling_resistance: invalid QSY calibration");
+        const real x = ref / d.v0;
+        rise = d.qsy4 * ps::math::pow(x, real(4.0)) + d.qsy3 * std::abs(x);
+    }
+    if (!std::isfinite(ref) || ref <= 0.0 || !std::isfinite(rise) || rise < 0.0 || !std::isfinite(d.qsy1) || d.qsy1 < 0.0)
+        throw std::invalid_argument("rolling_resistance: invalid quadratic calibration");
+    d.rolling_resistance_reference_speed_m_s = ref;
+    d.rolling_resistance_quadratic = rise;
+    d.rolling_resistance_speed_law = law;
+}
+
+std::uint64_t fold_rolling_resistance_hash(const TyreDesc& d, std::uint64_t seed) {
+    if (d.rolling_resistance_speed_law == RollingResistanceSpeedLaw::FourthPower) return seed;
+    auto h = seed;
+    const auto fold = [&](const auto& value) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(&value);
+        for (std::size_t i = 0; i < sizeof(value); ++i) { h ^= bytes[i]; h *= 1099511628211ULL; }
+    };
+    const std::uint64_t tag = 0x52524c4157000001ULL;
+    fold(tag);
+    fold(d.rolling_resistance_speed_law);
+    fold(d.rolling_resistance_quadratic);
+    fold(d.rolling_resistance_reference_speed_m_s);
+    fold(d.qsy1); fold(d.qsy2); fold(d.fz0); fold(d.rolling_resistance_v_eps);
+    const auto& a = d.rolling_resistance_anchors;
+    fold(a.rated_speed_kmh); fold(a.crr_base); fold(a.fraction); fold(a.factor); fold(a.factor_at_rated);
+    return h;
+}
+
 RollingResistanceCoefficients derive_rolling_resistance(const RollingResistanceAnchors& a, real v0) {
+    if (!std::isfinite(a.rated_speed_kmh) || !std::isfinite(a.crr_base) || !std::isfinite(a.fraction) ||
+        !std::isfinite(a.factor) || !std::isfinite(a.factor_at_rated) || !std::isfinite(v0))
+        throw std::invalid_argument("rolling_resistance: anchors and v0 must be finite");
     const real f = a.fraction;
     if (!(a.rated_speed_kmh > real(0.0))) throw std::invalid_argument("rolling_resistance: rated_speed_kmh must be > 0");
     if (!(a.crr_base > real(0.0))) throw std::invalid_argument("rolling_resistance: crr_base must be > 0");

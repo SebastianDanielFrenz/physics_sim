@@ -10,6 +10,8 @@
 // qsy4 formula), R4 the shipped tyre files' anchors, R5 raw qsy3 is legal.
 
 #include "ps/io/vehicle_io.h"
+#include "ps/world/world.h"
+#include <array>
 #include "ps/math/transcendental.h"
 #include "ps/vehicle/tyre_model.h"
 
@@ -21,6 +23,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -194,4 +197,86 @@ TEST_CASE("R4 the shipped tyre files carry the documented anchors", "[tyre][vehi
     // The hypercar at 370 km/h: ~1.40 x base (was 30x with the raw qsy4 0.0002).
     const auto h = io::load_tyre_json(std::string(PS_SOURCE_DIR) + "/data/tyres/hyper_rear_325_30r21.json");
     CHECK(crr_of(h, 370.0 / 3.6) / h.qsy1 == Catch::Approx(1.40).margin(0.005));
+}
+
+
+TEST_CASE("Rolling selector matches rating and reversibly preserves MF coefficients", "[tyre][rolling_selector][unit]") {
+    auto d = io::load_tyre_json(std::string(PS_SOURCE_DIR) + "/data/tyres/hyper_rear_325_30r21.json");
+    const auto original = d;
+    const real vr = d.rolling_resistance_anchors.rated_speed_kmh / 3.6;
+    REQUIRE(vr > 0.0);
+    const auto legacy = vehicle::tyre_rolling_speed_term(d, 70.0);
+    const std::uint64_t seed = 14695981039346656037ULL;
+    CHECK(vehicle::fold_rolling_resistance_hash(d, seed) == seed);
+    vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic);
+    CHECK(crr_of(d, vr) == Catch::Approx(original.rolling_resistance_anchors.crr_base * original.rolling_resistance_anchors.factor_at_rated));
+    CHECK(vehicle::tyre_rolling_speed_term(d, 0.0) == 0.0);
+    CHECK(vehicle::tyre_rolling_speed_term(d, vr * 0.5) == Catch::Approx(vehicle::tyre_rolling_speed_term(d, vr) * 0.25));
+    CHECK(vehicle::tyre_rolling_speed_term(d, -vr) == vehicle::tyre_rolling_speed_term(d, vr));
+    CHECK(d.qsy1 == original.qsy1);
+    CHECK(d.qsy3 == original.qsy3);
+    CHECK(d.qsy4 == original.qsy4);
+    const auto hash = vehicle::fold_rolling_resistance_hash(d, seed);
+    CHECK(hash != seed);
+    vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic);
+    CHECK(vehicle::fold_rolling_resistance_hash(d, seed) == hash);
+    auto altered = d; altered.rolling_resistance_quadratic += 0.001;
+    CHECK(vehicle::fold_rolling_resistance_hash(altered, seed) != hash);
+    altered = d; altered.rolling_resistance_reference_speed_m_s += 1.0;
+    CHECK(vehicle::fold_rolling_resistance_hash(altered, seed) != hash);
+    vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::FourthPower);
+    CHECK(vehicle::tyre_rolling_speed_term(d, 70.0) == legacy);
+    CHECK(vehicle::fold_rolling_resistance_hash(d, seed) == seed);
+    vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic);
+    CHECK(vehicle::fold_rolling_resistance_hash(d, seed) == hash);
+}
+
+TEST_CASE("Rolling selector calibrates raw QSY and rejects invalid configuration atomically", "[tyre][rolling_selector][unit]") {
+    vehicle::TyreDesc d;
+    d.qsy3 = 0.001;
+    const auto legacy = vehicle::tyre_rolling_speed_term(d, d.v0);
+    vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic);
+    CHECK(vehicle::tyre_rolling_speed_term(d, d.v0) == legacy);
+    vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::FourthPower);
+    const auto custom = vehicle::tyre_rolling_speed_term(d, 50.0);
+    vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic, 50.0);
+    CHECK(vehicle::tyre_rolling_speed_term(d, 50.0) == custom);
+    const auto hash = vehicle::fold_rolling_resistance_hash(d, 1);
+    CHECK_THROWS_AS(vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic, -1.0), std::invalid_argument);
+    CHECK(vehicle::fold_rolling_resistance_hash(d, 1) == hash);
+    d.qsy4 = -0.1;
+    CHECK_THROWS_AS(vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic), std::invalid_argument);
+    d.qsy4 = 0.0002; d.v0 = std::numeric_limits<real>::infinity();
+    CHECK_THROWS_AS(vehicle::select_rolling_resistance_speed_law(d, vehicle::RollingResistanceSpeedLaw::Quadratic), std::invalid_argument);
+    TempTyre t(R"("qsy3": 0.001, "rolling_resistance_speed_law": "quadratic")");
+    CHECK(t.load().rolling_resistance_speed_law == vehicle::RollingResistanceSpeedLaw::Quadratic);
+    TempTyre bad(R"("rolling_resistance_speed_law": "cubic")");
+    CHECK_THROWS(bad.load());
+    TempTyre wrong(R"("rolling_resistance_speed_law": 3)");
+    CHECK_THROWS(wrong.load());
+}
+
+TEST_CASE("Rolling law enters vehicle hash before contact and remains worker deterministic", "[tyre][rolling_selector][determinism][unit]") {
+    const auto run = [](vehicle::RollingResistanceSpeedLaw law, int workers, bool restore) {
+        WorldConfig cfg; cfg.job_workers = workers; cfg.gravity = {};
+        World world(cfg);
+        vehicle::VehicleDesc car; car.name = "rolling_hash";
+        vehicle::WheelDesc wheel; wheel.name = "test_wheel";
+        if (restore) vehicle::select_rolling_resistance_speed_law(wheel.tyre, vehicle::RollingResistanceSpeedLaw::Quadratic);
+        vehicle::select_rolling_resistance_speed_law(wheel.tyre, law);
+        car.wheels.push_back(wheel);
+        BodyDesc body; body.mass = 1000; body.motion = BodyMotionType::Dynamic;
+        body.shape = BoxShape{{1,.5,.2}}; body.allow_sleep = false;
+        const auto b = world.create_body(body);
+        world.create_vehicle(car, b);
+        std::array<std::uint64_t, 8> hashes{};
+        for (auto& h : hashes) { world.step(); h = world.state_hash(); }
+        return hashes;
+    };
+    using Law = vehicle::RollingResistanceSpeedLaw;
+    const auto legacy = run(Law::FourthPower, 1, false);
+    CHECK(legacy == run(Law::FourthPower, 1, true));
+    const auto quadratic = run(Law::Quadratic, 1, false);
+    CHECK(quadratic != legacy);
+    CHECK(quadratic == run(Law::Quadratic, 4, false));
 }

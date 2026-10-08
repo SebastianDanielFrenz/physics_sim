@@ -169,9 +169,19 @@ TyreDesc read_tyre_object(const json& j) {
             d.qsy1 = c.qsy1;
             d.qsy3 = c.qsy3;
             d.qsy4 = c.qsy4;
+            d.rolling_resistance_anchors = anchors;
         } catch (const std::invalid_argument& e) {
             throw std::runtime_error("tyre '" + d.name + "': " + e.what());
         }
+    }
+    if (j.contains("rolling_resistance_speed_law")) {
+        if (!j.at("rolling_resistance_speed_law").is_string())
+            throw std::runtime_error("rolling_resistance_speed_law must be a string");
+        const auto law = j.at("rolling_resistance_speed_law").get<std::string>();
+        if (law != "quadratic" && law != "fourth_power")
+            throw std::runtime_error("rolling_resistance_speed_law must be quadratic or fourth_power");
+        ps::vehicle::select_rolling_resistance_speed_law(d, law == "quadratic" ?
+            ps::vehicle::RollingResistanceSpeedLaw::Quadratic : ps::vehicle::RollingResistanceSpeedLaw::FourthPower);
     }
     d.rolling_resistance_v_eps = j.value("rolling_resistance_v_eps", d.rolling_resistance_v_eps);
     if (d.rolling_resistance_v_eps <= real(0.0)) {

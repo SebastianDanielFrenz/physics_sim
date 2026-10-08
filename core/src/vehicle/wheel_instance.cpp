@@ -395,7 +395,7 @@ std::uint64_t WheelInstance::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, x_);
     h = fnv1a(h, relax_.kappa_eq);
     h = fnv1a(h, relax_.alpha_eq);
-    return h;
+    return fold_rolling_resistance_hash(tyre_->desc(), h);
 }
 
 } // namespace ps::vehicle
