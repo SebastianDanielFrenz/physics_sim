@@ -799,6 +799,7 @@ EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& f
             // Keep every air-mass knot. Its union axis is much larger than a
             // pressure axis, and reducing it is unnecessary for generation.
             result->generator_version=engine_map_generator_version(desc);
+            result->content_hash=engine_maps_content_hash(*result);
             if(control && control->on_progress)control->on_progress(budget,budget);
             return result;
         }

@@ -1,11 +1,13 @@
 #include "ps/drivetrain/adaptive_pressure.h"
 #include "ps/drivetrain/engine_maps.h"
+#include "engine_cycle/map_cache.h"
 #include "ps/jobs/job_system.h"
 #include "cycle_fixtures.h"
 #include "mvem_fixtures.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include <atomic>
+#include <filesystem>
 using namespace ps::drivetrain;
 using Catch::Approx;
 TEST_CASE("adaptive axes preserve nonlinear and signed maps independently", "[adaptive_pressure]") {
@@ -46,9 +48,23 @@ TEST_CASE("adaptive engine maps converge and retain independent cached axes", "[
     CHECK(result->maps.ve.validate().empty());CHECK(result->maps.eta_i.validate().empty());
     CHECK(engine_map_cache_key(d,fuel,MapQuality::Preview)!=legacy);
     const auto adaptive_key=engine_map_cache_key(d,fuel,MapQuality::Preview);
+    CHECK(result->content_hash==engine_maps_content_hash(*result));
+    const auto cache=(std::filesystem::temp_directory_path()/"ps_adaptive_pressure_cache_tests").generic_string();
+    store_cached_engine_maps(cache,adaptive_key,*result);
+    auto cached=load_cached_engine_maps(cache,adaptive_key,result->generator_version);
+    REQUIRE(cached!=nullptr);
+    CHECK(cached->maps.ve.y==result->maps.ve.y);
+    CHECK(cached->maps.pmep_excess_pa.y==result->maps.pmep_excess_pa.y);
+    CHECK(cached->content_hash==result->content_hash);
     ps::jobs::JobSystem workers(2);
     auto parallel=generate_engine_maps(d,fuel,MapQuality::Preview,&workers);
     CHECK(engine_maps_content_hash(*parallel)==engine_maps_content_hash(*result));
+    auto extended=d;
+    extended.pressure_sampling.max_pa=600000;
+    auto high=generate_engine_maps(extended,fuel,MapQuality::Preview,&workers);
+    CHECK(high->maps.ve.y.back()==Approx(600000));
+    CHECK(high->maps.pmep_excess_pa.y.back()==Approx(600000));
+    CHECK(high->content_hash==engine_maps_content_hash(*high));
     d.pressure_sampling.relative_error=0.04;
     CHECK(engine_map_cache_key(d,fuel,MapQuality::Preview)!=adaptive_key);
     std::atomic<bool> cancel{true};MapGenerationControl control;control.cancel=&cancel;
