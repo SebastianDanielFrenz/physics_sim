@@ -998,7 +998,7 @@ constexpr const char* kCycleKeys[] = {
     "runner_length_mm", "runner_diameter_mm", "intake_port_cc",   "exhaust_port_cc",    "cd_vs_l_over_d",
     "cam",             "wiebe_a",          "wiebe_m",             "burn_duration_deg",  "ca50_mbt_deg_atdc",
     "woschni_c1_gx",   "woschni_c1_cc",    "woschni_c2",          "wall_temperature_k", "head_area_factor",
-    "combustion_eff_lean", "exhaust_backflow_temperature_k", "friction", "grid_rpm", "grid_p_im_kpa",
+    "combustion_eff_lean", "exhaust_backflow_temperature_k", "friction", "grid_rpm", "grid_p_im_kpa", "pressure_sampling",
     // ps_audio A1 (out/audio_plan.md section 1/3): firing phasing + bank
     // geometry. Descriptor-only for now - see CycleModelDesc's own field
     // comments (ps/drivetrain/engine_cycle_desc.h).
@@ -1741,6 +1741,25 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
 
     d.grid_rpm = read_cycle_grid(cj, "grid_rpm", real(1.0), cctx);
     d.grid_p_im = read_cycle_grid(cj, "grid_p_im_kpa", real(1000.0), cctx);
+    if (cj.contains("pressure_sampling")) {
+        const auto& a = cj.at("pressure_sampling");
+        if (!a.is_object()) throw std::runtime_error(cctx + ": pressure_sampling must be an object");
+        for (auto it=a.begin(); it!=a.end(); ++it)
+            if (it.key()!="enabled" && it.key()!="min_kpa" && it.key()!="max_kpa" && it.key()!="relative_error" && it.key()!="max_points" && it.key()!="max_passes")
+                throw std::runtime_error(cctx + ": unknown pressure_sampling field " + it.key());
+        auto& p = d.pressure_sampling;
+        p.enabled = a.value("enabled", true);
+        p.min_pa = a.value("min_kpa", real(0)) * real(1000);
+        p.max_pa = a.value("max_kpa", real(0)) * real(1000);
+        p.relative_error = a.value("relative_error", real(0.01));
+        const int budget = a.value("max_points", 256);
+        p.max_passes = a.value("max_passes", 8);
+        if (budget<5 || budget>1024 || p.max_passes<1 || p.max_passes>12 || !(p.relative_error>0 && p.relative_error<=0.1) ||
+            !std::isfinite(p.min_pa) || !std::isfinite(p.max_pa) || p.min_pa<0 || p.max_pa<0 ||
+            (p.min_pa>0 && p.max_pa>0 && p.min_pa>=p.max_pa))
+            throw std::runtime_error(cctx + ": invalid pressure_sampling bounds/tolerance/budget");
+        p.max_points = static_cast<std::size_t>(budget);
+    }
     return d;
 }
 

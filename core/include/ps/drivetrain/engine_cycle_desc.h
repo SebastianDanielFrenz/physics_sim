@@ -232,6 +232,15 @@ struct CycleModelDesc {
     // ---- Generator grid (C16a; PHYS-033 section 5.2 defaults) ----
     std::vector<real> grid_rpm;
     std::vector<real> grid_p_im;
+    // Opt-in interpolation-driven sampling. Bounds default to the authored grid.
+    // Each generated table gets its own reduced axis (eta_i remains air mass).
+    struct PressureSampling {
+        bool enabled = false;
+        real min_pa = 0, max_pa = 0;
+        real relative_error = 0.01;
+        std::size_t max_points = 256;
+        int max_passes = 8;
+    } pressure_sampling;
 
     // The cycle block's own citation (PLAN.md section 8; required by the
     // loader, ps/io/vehicle_io.cpp's read_cycle_block). Carried through into

@@ -321,6 +321,12 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     f.pod(desc.exhaust_backflow_temperature_k);
     f.vec(desc.grid_rpm);
     f.vec(desc.grid_p_im);
+    // Legacy keys remain identical when adaptive sampling is disabled.
+    if (desc.pressure_sampling.enabled) {
+        f.pod(desc.pressure_sampling.min_pa); f.pod(desc.pressure_sampling.max_pa);
+        f.pod(desc.pressure_sampling.relative_error); f.pod(desc.pressure_sampling.max_points);
+        f.pod(desc.pressure_sampling.max_passes);
+    }
     // C17a follow-up: the Tier 1b spark schedule and the Tier 2 ignition
     // delay, folded (behind a tag) only when present / non-zero so every
     // pre-existing engine's key - and its .psmaps file name - is unchanged.

@@ -19,6 +19,9 @@
 // over the three sweep points of [W_gross/m_air](retard) / [..](0).
 
 #include "ps/drivetrain/engine_maps.h"
+#include "ps/drivetrain/adaptive_pressure.h"
+#include <array>
+#include <map>
 
 #include "ps/drivetrain/isa_air.h"
 #include "ps/engine_cycle/cycle_engine.h"
@@ -194,6 +197,7 @@ real cycle_friction_torque_nm(const CycleModelDesc& d, real rpm) {
 
 struct EngineMapGenTask::Impl {
     CycleModelDesc desc;
+    std::uint64_t reuse_key=0;
     real lhv = 0.0, afr = 0.0;
     MapQuality quality = MapQuality::Full;
     engine_cycle::StepperSettings settings;
@@ -243,6 +247,10 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
     : impl_(std::make_unique<Impl>()) {
     Impl& s = *impl_;
     s.desc = desc;
+    CycleModelDesc invariant=desc;
+    invariant.grid_rpm={real(1000),real(2000)};
+    invariant.grid_p_im={real(50000),real(100000)};
+    s.reuse_key=engine_map_cache_key(invariant,fuel,quality);
     s.lhv = fuel.lhv_j_kg;
     s.afr = fuel.afr_stoich;
     s.quality = quality;
@@ -271,14 +279,14 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         break;
     case MapQuality::Preview:
         s.rpm_axis = subsample(desc.grid_rpm, kPreviewRpm);
-        s.p_axis = subsample(desc.grid_p_im, kPreviewPim);
+        s.p_axis = desc.pressure_sampling.enabled ? desc.grid_p_im : subsample(desc.grid_p_im, kPreviewPim);
         s.spark_retard = kSparkRetard;
         s.spark_sites = kSparkSites;
         s.lambdas = kLambda;
         break;
     case MapQuality::Sketch:
         s.rpm_axis = subsample(desc.grid_rpm, kSketchRpm);
-        s.p_axis = sketch_p_rows(desc.grid_p_im);
+        s.p_axis = desc.pressure_sampling.enabled ? desc.grid_p_im : sketch_p_rows(desc.grid_p_im);
         s.spark_retard = kSketchSparkRetard;
         s.spark_sites = kSketchSparkSites;
         s.lambdas = kSketchLambda;
@@ -350,9 +358,26 @@ EngineMapGenTask::~EngineMapGenTask() = default;
 std::size_t EngineMapGenTask::point_count() const { return impl_->ops.size(); }
 std::size_t EngineMapGenTask::grid_point_count() const { return impl_->grid_n; }
 
+std::size_t EngineMapGenTask::reuse_points_from(const EngineMapGenTask& previous) {
+    Impl& s=*impl_;const Impl& old=*previous.impl_;
+    if(s.reuse_key!=old.reuse_key)throw std::invalid_argument("engine point reuse: engine/fuel/quality mismatch");
+    using Key=std::array<real,10>;
+    auto key=[](const engine_cycle::OperatingPoint& p,bool grid){return Key{p.rpm,p.p_im_pa,p.t_im_k,p.p_amb_pa,p.p_supply_pa,p.lambda,p.spark_deg_atdc,p.intake_advance_deg,p.exhaust_retard_deg,grid ? real(1):real(0)};};
+    std::map<Key,std::size_t> index;
+    for(std::size_t i=0;i<old.ops.size();++i)if(old.done[i] && !old.exceptions[i])index.emplace(key(old.ops[i],i<old.grid_n),i);
+    std::size_t count=0;
+    for(std::size_t i=0;i<s.ops.size();++i) {
+        if(s.done[i])continue;
+        auto found=index.find(key(s.ops[i],i<s.grid_n));if(found==index.end())continue;
+        const auto j=found->second;s.results[i]=old.results[j];s.held[i]=old.held[j];s.done[i]=1;++count;
+    }
+    return count;
+}
+
 void EngineMapGenTask::run_point(std::size_t i) {
     Impl& s = *impl_;
     if (i >= s.ops.size()) throw std::out_of_range("EngineMapGenTask::run_point: index out of range");
+    if (s.done[i]) return;
     try {
         if (s.pipe) {
             // One engine per point (PROVISIONAL P7): built here, then run()
@@ -647,15 +672,18 @@ void run_one_point(RunShared* sh, std::size_t i) {
 
 } // namespace
 
-EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
-                                   jobs::JobSystem* pool, const MapGenerationControl* control) {
+static EngineMapsPtr generate_fixed_engine_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
+                                   jobs::JobSystem* pool, const MapGenerationControl* control,
+                                   std::vector<std::unique_ptr<EngineMapGenTask>>* history=nullptr) {
     const std::atomic<bool>* cancel = control != nullptr ? control->cancel : nullptr;
     const std::function<void(std::size_t, std::size_t)>* progress =
         (control != nullptr && control->on_progress) ? &control->on_progress : nullptr;
     // Cancelled before it started: no desc validation, no point, nothing built.
     if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) throw GenerationCancelled();
 
-    EngineMapGenTask task(desc, fuel, quality);
+    auto owned=std::make_unique<EngineMapGenTask>(desc,fuel,quality);
+    EngineMapGenTask& task=*owned;
+    if(history)for(const auto& previous:*history)task.reuse_points_from(*previous);
     const std::size_t n = task.point_count();
     RunShared sh;
     sh.task = &task;
@@ -705,7 +733,79 @@ EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& f
         report_up_to(sh.finished.load(std::memory_order_acquire));
     }
     if (sh.skipped.load(std::memory_order_relaxed)) throw GenerationCancelled();
-    return task.finish();
+    auto result=task.finish();
+    if(history)history->push_back(std::move(owned));
+    return result;
+}
+
+EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
+                                   jobs::JobSystem* pool, const MapGenerationControl* control) {
+    const auto& settings=desc.pressure_sampling;
+    if(control && control->cancel && control->cancel->load(std::memory_order_relaxed))throw GenerationCancelled();
+    if(!settings.enabled)return generate_fixed_engine_maps(desc,fuel,quality,pool,control);
+    require_ascending(desc.grid_p_im,"grid_p_im");
+    const real lo=settings.min_pa>0 ? settings.min_pa:desc.grid_p_im.front();
+    const real hi=settings.max_pa>0 ? settings.max_pa:desc.grid_p_im.back();
+    if(!(lo>0 && hi>lo && settings.relative_error>0 && settings.relative_error<=0.1) || settings.max_points<5 || settings.max_points>1024 || settings.max_passes<1 || settings.max_passes>12)
+        throw std::runtime_error("adaptive pressure sampling: invalid bounds/tolerance/budget");
+    CycleModelDesc sampling=desc;
+    sampling.grid_p_im={lo,hi};
+    for(real p:desc.grid_p_im)if(p>lo && p<hi)sampling.grid_p_im.push_back(p);
+    std::sort(sampling.grid_p_im.begin(),sampling.grid_p_im.end());
+    sampling.grid_p_im.erase(std::unique(sampling.grid_p_im.begin(),sampling.grid_p_im.end()),sampling.grid_p_im.end());
+    // Adaptive pressure resolution is not capped by Preview's fixed-grid row
+    // count. Quality still controls RPM count and cycle accuracy in each task.
+    std::size_t offset=0;
+    const std::size_t budget=(settings.max_passes+1)*settings.max_points*(desc.grid_rpm.size()+40);
+    MapGenerationControl stages;
+    stages.cancel=control ? control->cancel:nullptr;
+    stages.on_progress=[&](std::size_t done,std::size_t){if(control && control->on_progress)control->on_progress(std::min(offset+done,budget-1),budget);};
+    std::vector<std::unique_ptr<EngineMapGenTask>> history;
+    auto run=[&](const CycleModelDesc& d){auto m=generate_fixed_engine_maps(d,fuel,quality,pool,&stages,&history);offset+=d.grid_rpm.size()*d.grid_p_im.size()+40;return m;};
+    auto current=run(sampling);
+    for(int pass=0;pass<settings.max_passes;++pass) {
+        if(stages.cancel && stages.cancel->load(std::memory_order_relaxed))throw GenerationCancelled();
+        CycleModelDesc probe=sampling;
+        for(std::size_t j=1;j<sampling.grid_p_im.size();++j)
+            for(int q=1;q<4;++q)probe.grid_p_im.push_back(sampling.grid_p_im[j-1]+(sampling.grid_p_im[j]-sampling.grid_p_im[j-1])*real(q)/real(4));
+        std::sort(probe.grid_p_im.begin(),probe.grid_p_im.end());
+        probe.grid_p_im.erase(std::unique(probe.grid_p_im.begin(),probe.grid_p_im.end()),probe.grid_p_im.end());
+        if(probe.grid_p_im.size()>settings.max_points)throw std::runtime_error("adaptive pressure sampling: point budget exhausted before validation converged");
+        auto tested=run(probe);
+        std::vector<real> failing;
+        for(real p:probe.grid_p_im) {
+            if(std::binary_search(sampling.grid_p_im.begin(),sampling.grid_p_im.end(),p))continue;
+            real error=0;
+            auto check=[&](const Table2D& actual,const Table2D& old){error=std::max(error,pressure_error(actual,old,p));};
+            check(tested->maps.ve,current->maps.ve);
+            check(tested->maps.pmep_excess_pa,current->maps.pmep_excess_pa);
+            check(tested->t_exh_k,current->t_exh_k);check(tested->h_exh_w,current->h_exh_w);
+            // eta_i is on fresh-air mass, not pressure; compare on each pressure
+            // probe's actual mass so the generated efficiency curve also refines.
+            const real rt=real(287.05)*real(288.15);
+            for(real rpm:tested->maps.ve.x) {
+                const real air=tested->maps.ve.value(rpm,p)*p/rt*v_disp_of(desc)*real(0.5);
+                const real a=tested->maps.eta_i.value(rpm,air),b=current->maps.eta_i.value(rpm,air);
+                error=std::max(error,std::abs(a-b)/std::max(real(1e-6),std::abs(a)));
+            }
+            if(error>settings.relative_error*real(0.5))failing.push_back(p);
+        }
+        if(failing.empty()) {
+            auto result=std::make_shared<EngineMaps>(*tested);
+            reduce_pressure_axis(result->maps.ve,settings.relative_error*real(0.5));
+            reduce_pressure_axis(result->maps.pmep_excess_pa,settings.relative_error*real(0.5));
+            reduce_pressure_axis(result->t_exh_k,settings.relative_error*real(0.5));
+            reduce_pressure_axis(result->h_exh_w,settings.relative_error*real(0.5));
+            reduce_pressure_axis(result->maps.eta_i,settings.relative_error*real(0.5));
+            result->generator_version=engine_map_generator_version(desc);
+            if(control && control->on_progress)control->on_progress(budget,budget);
+            return result;
+        }
+        sampling.grid_p_im.insert(sampling.grid_p_im.end(),failing.begin(),failing.end());
+        std::sort(sampling.grid_p_im.begin(),sampling.grid_p_im.end());
+        current=run(sampling);
+    }
+    throw std::runtime_error("adaptive pressure sampling: pass budget exhausted before validation converged");
 }
 
 void validate_engine_map_generation(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {

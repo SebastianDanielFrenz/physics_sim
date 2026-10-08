@@ -65,7 +65,7 @@ inline constexpr std::uint32_t kPipeGeneratorVersion = 3;
 inline constexpr std::uint32_t kGeneratorVersion = kPipeGeneratorVersion; // the newest path
 
 [[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {
-    return desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion;
+    return (desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion) + (desc.pressure_sampling.enabled ? 256 : 0);
 }
 
 // The numeric values are folded into the .psmaps cache key, the content hash
@@ -158,6 +158,9 @@ public:
     [[nodiscard]] std::size_t point_count() const;
     [[nodiscard]] std::size_t grid_point_count() const;
     void run_point(std::size_t i);
+    // Before dispatch: reuse successful points from an identical engine/fuel/
+    // quality task. Grid coordinates may differ. Returns the reused slot count.
+    std::size_t reuse_points_from(const EngineMapGenTask& previous);
     // Engine garage P1 (validate-only loads): builds, without running anything,
     // what run_point(0) would build - for a pipe-bearing desc the CycleEngine
     // (its pipe network, installation and CFL checks), for a lumped one nothing
