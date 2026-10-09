@@ -7,13 +7,13 @@ import tempfile
 import unittest
 
 from meanline import (Compressor, Gas, Generator, P_REF, T_REF, Turbine,
-                      compressor_point, nozzle_flux, turbine_point)
+                      compressor_point, nozzle_flux, turbine_point, normal_shock_pressure_retention)
 
 
 class MeanlineTests(unittest.TestCase):
     def setUp(self):
         self.profile = json.loads(Path(__file__).with_name("standard_geometry.json").read_text())
-        self.c = Compressor(**self.profile["compressor"])
+        self.c = replace(Compressor(**self.profile["compressor"]), shock_model="unsupported")
         self.t = Turbine(**self.profile["turbine"])
 
     def test_nozzle_matches_nasa_sonic_formula(self):
@@ -22,6 +22,35 @@ class MeanlineTests(unittest.TestCase):
         self.assertAlmostEqual(nozzle_flux(P_REF, P_REF * 0.1, T_REF, g), expected, places=10)
         self.assertEqual(nozzle_flux(P_REF, P_REF * 0.1, T_REF), nozzle_flux(P_REF, P_REF * 0.4, T_REF))
         self.assertEqual(nozzle_flux(P_REF, P_REF, T_REF), 0)
+
+    def test_normal_shock_pressure_and_entropy(self):
+        self.assertEqual(normal_shock_pressure_retention(.8), 1)
+        self.assertEqual(normal_shock_pressure_retention(1), 1)
+        self.assertAlmostEqual(normal_shock_pressure_retention(2), .7208738614847454, places=12)
+        previous = 1
+        for mach in (1.001, 1.1, 1.5, 2, 3, 5):
+            retained = normal_shock_pressure_retention(mach)
+            self.assertLessEqual(retained, previous)
+            self.assertGreater(retained, 0)
+            previous = retained
+        with self.assertRaises(ValueError):
+            normal_shock_pressure_retention(float("nan"))
+
+    def test_inlet_shock_is_coupled_to_continuity_and_energy(self):
+        shock = replace(self.c, shock_model="inlet_normal_entropy")
+        old = compressor_point(self.c, 140000, .3)
+        result = compressor_point(shock, 140000, .3)
+        self.assertEqual(old["status"], "transonic_unmodelled")
+        self.assertEqual(result["status"], "ok")
+        self.assertLess(result["pressure_ratio"], old["pressure_ratio"])
+        self.assertGreater(result["shock_entropy_j_kg_k"], 0)
+        self.assertLess(abs(result["continuity_residual_kg_s"]), 1e-10)
+        self.assertLess(abs(result["energy_residual_w"]), 1e-8)
+        changed = compressor_point(shock, 280000, .3, 2*P_REF, 4*T_REF)
+        self.assertAlmostEqual(result["pressure_ratio"], changed["pressure_ratio"], places=10)
+        self.assertAlmostEqual(result["shock_entropy_j_kg_k"], changed["shock_entropy_j_kg_k"], places=10)
+        for key in ("pressure_ratio", "specific_work_j_kg"):
+            self.assertEqual(compressor_point(shock, 100000, .3)[key], compressor_point(self.c, 100000, .3)[key])
 
     def test_nozzle_corrected_similarity(self):
         reference = nozzle_flux(P_REF, P_REF / 3, T_REF)

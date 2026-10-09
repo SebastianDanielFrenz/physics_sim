@@ -2487,6 +2487,11 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
     const auto hw=read_json_file(hw_path);
     require_format(hw,"turbo",1,hw_path);
     drivetrain::TurboPairDesc t;
+    if(cfg.contains("compressible_exhaust")) {
+        if(!cfg.at("compressible_exhaust").is_boolean())
+            throw std::runtime_error(path+": compressible_exhaust must be boolean");
+        t.compressible_exhaust=cfg.at("compressible_exhaust").get<bool>();
+    }
     t.rotor_inertia_kgm2=require_positive(hw,"rotor_inertia_kgm2",hw_path)*count;
     t.reference_rpm=require_positive(hw,"reference_rpm",hw_path);
     // Pressures in turbo files are bar (owner rule 2026-10-02: files and
@@ -2733,7 +2738,7 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         auto sm=std::make_shared<drivetrain::TurboStageMaps>();
         sm->source=sj.at("source").get<std::string>();
         sm->solver=sj.at("solver").get<std::string>();
-        if(sm->source.empty() || sm->solver!="meanline-3" || !sj.at("provenance").is_object())
+        if(sm->source.empty() || (sm->solver!="meanline-3" && sm->solver!="meanline-4") || !sj.at("provenance").is_object())
             throw std::runtime_error(stage_path+": unsupported solver or missing provenance");
         sm->reference_pa=require_positive(sj,"reference_pressure_bar",stage_path)*real(1e5);
         sm->compressor_reference_k=require_positive(sj,"compressor_reference_temperature_k",stage_path);

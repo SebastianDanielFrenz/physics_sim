@@ -16,7 +16,7 @@ from pathlib import Path
 import tempfile
 import threading
 
-VERSION = "meanline-3"
+VERSION = "meanline-4"
 P_REF = 101325.0
 T_REF = 288.15
 
@@ -76,6 +76,24 @@ def subsonic_velocity(mdot, area, pt, tt, gas):
     return mach * math.sqrt(gas.gamma * gas.r * ts), mach
 
 
+def normal_shock_pressure_retention(mach, gas=Gas()):
+    """Perfect-gas total-pressure retention; unity on the subsonic branch.
+
+    NASA normal-shock relation, evaluated in log space. Total enthalpy is
+    unchanged; the associated entropy rise is -R*log(retention). Using the
+    full inlet relative Mach represents an assumed normal shock, not a
+    resolved blade shock angle or a transonic passage-flow solution.
+    """
+    if not math.isfinite(mach) or mach < 0:
+        raise ValueError("finite nonnegative shock Mach required")
+    if mach <= 1:
+        return 1.0
+    g, m2 = gas.gamma, mach * mach
+    log_ratio = (g * math.log((g + 1) * m2 / ((g - 1) * m2 + 2))
+                 + math.log((g + 1) / (2 * g * m2 - (g - 1)))) / (g - 1)
+    return math.exp(log_ratio)
+
+
 @dataclass(frozen=True)
 class Compressor:
     inducer_mm: float
@@ -89,6 +107,7 @@ class Compressor:
     passage_loss: float
     incidence_loss: float
     diffuser_loss: float
+    shock_model: str = "unsupported"
 
     def validate(self):
         if not 0 < self.hub_mm < self.inducer_mm < self.exducer_mm:
@@ -101,6 +120,8 @@ class Compressor:
             raise ValueError("invalid compressor blade angle")
         if min(self.passage_loss, self.incidence_loss, self.diffuser_loss) < 0:
             raise ValueError("loss coefficients must be nonnegative")
+        if self.shock_model not in ("unsupported", "inlet_normal_entropy"):
+            raise ValueError("unknown compressor shock model")
 
 
 def compressor_point(c, rpm, mdot, pt=P_REF, tt=T_REF, gas=Gas()):
@@ -123,6 +144,9 @@ def compressor_point(c, rpm, mdot, pt=P_REF, tt=T_REF, gas=Gas()):
     u1 = omega * math.sqrt((c.inducer_mm**2 + c.hub_mm**2) / 2) * 0.0005
     inlet_static_k = tt / (1 + (gas.gamma - 1) / 2 * mach1 * mach1)
     inlet_relative_mach = math.hypot(cm1, u1) / math.sqrt(gas.gamma * gas.r * inlet_static_k)
+    shock_retention = (normal_shock_pressure_retention(inlet_relative_mach, gas)
+                       if c.shock_model == "inlet_normal_entropy" else 1.0)
+    shock_entropy = -gas.r * math.log(shock_retention)
     incidence = cm1 - u1 * math.tan(math.radians(c.inlet_angle_deg))
     cot_beta = 1 / math.tan(math.radians(c.exit_angle_deg))
 
@@ -141,7 +165,11 @@ def compressor_point(c, rpm, mdot, pt=P_REF, tt=T_REF, gas=Gas()):
         if isentropic <= 0:
             return None
         tout = tt + work / gas.cp
-        pout = pt * (1 + isentropic / (gas.cp * tt)) ** (gas.gamma / (gas.gamma - 1))
+        # Entropy is frame invariant: at unchanged Euler work/total enthalpy,
+        # inlet shock entropy reduces outlet total pressure by this factor.
+        # Apply INSIDE continuity solve; a post-hoc pressure adjustment would
+        # violate the computed outlet mass-flow balance.
+        pout = pt * (1 + isentropic / (gas.cp * tt)) ** (gas.gamma / (gas.gamma - 1)) * shock_retention
         # Absolute velocity is needed for outlet STATIC density (not total).
         ts = tout - (cm2**2 + cu2**2) / (2 * gas.cp)
         if ts <= 0:
@@ -177,12 +205,17 @@ def compressor_point(c, rpm, mdot, pt=P_REF, tt=T_REF, gas=Gas()):
     cm2 = (lo + hi) / 2
     predicted, work, loss, tout, pout, ts, cu2 = state(cm2)
     relative_mach = math.sqrt(cm2**2 + (cu2 - u2)**2) / math.sqrt(gas.gamma * gas.r * ts)
-    # A relative Mach >1 needs shocks/transonic passage physics that this
-    # subsonic solver does not contain. It is NOT a physical shaft RPM cap.
-    status = "relative_choke" if relative_mach >= 1 else "transonic_unmodelled" if inlet_relative_mach >= 1 else "ok"
+    # Supersonic exit/passage choking remains unresolved. Inlet shock loss
+    # is optional and explicitly approximate, never a physical RPM limiter.
+    status = "relative_choke" if relative_mach >= 1 else "transonic_unmodelled" if inlet_relative_mach >= 1 and c.shock_model == "unsupported" else "ok"
+    if pout <= pt:
+        status = "no_positive_pressure_rise"
+    effective_isentropic = gas.cp * tt * ((pout / pt) ** ((gas.gamma - 1) / gas.gamma) - 1)
     return {"status": status, "pressure_ratio": pout / pt,
             "outlet_total_k": tout, "specific_work_j_kg": work,
-            "shaft_power_w": mdot * work, "efficiency": (work - loss) / work,
+            "shaft_power_w": mdot * work, "efficiency": effective_isentropic / work,
+            "shock_model": c.shock_model, "shock_pressure_retention": shock_retention,
+            "shock_entropy_j_kg_k": shock_entropy,
             "inlet_mach": mach1, "inlet_relative_mach": inlet_relative_mach,
             "exit_relative_mach": relative_mach,
             "incidence_risk": abs(incidence) / max(u1, 1e-12),
@@ -267,7 +300,8 @@ class Generator:
             item.validate()
         # Reject nonfinite geometry BEFORE hashing or sampling.
         for item in (self.c, self.t):
-            if any(not math.isfinite(v) for v in asdict(item).values()):
+            if any(not isinstance(v, (int, float)) or not math.isfinite(v)
+                   for k, v in asdict(item).items() if k != "shock_model"):
                 raise ValueError("nonfinite geometry")
         if not profile.get("source") or not profile.get("provenance"):
             raise ValueError("source and provenance required")
@@ -329,6 +363,7 @@ class Generator:
                   "turbine_expansion_ratio": expansions,
                   "compressor": completed[:n], "turbine": completed[n:],
                   "validation": {"manufacturer_calibrated": False,
+                    "compressor_shock": self.c.shock_model + "; assumed inlet shock only; supersonic outlet/passage not resolved",
                     "surge": "incidence risk only; unsteady surge not resolved",
                     "turbine": "impulse-stage approximation; reaction/volute losses not resolved",
                     "coverage": "invalid/choked points are explicit; no extrapolation is certified"}}

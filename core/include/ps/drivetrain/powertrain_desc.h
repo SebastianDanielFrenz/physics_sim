@@ -367,6 +367,7 @@ struct TurboPairDesc {
     real compressor_efficiency = 0.72;
     real turbine_efficiency = 0.70;
     real turbine_area_m2 = 0.0015;
+    bool compressible_exhaust = false; // installation opt-in; legacy replay compatibility
     // Effective (Cd x geometric) flow area of the wastegate port(s) of the pair, in parallel with
     // the turbine; absent = kDefaultWastegateAreaRatio x turbine_area_m2 [AS] (docs/data_formats/
     // turbo.md: a 50 mm poppet valve, Cd 0.6, ~1180 mm2, against the hyper turbo's 500 mm2 throat).

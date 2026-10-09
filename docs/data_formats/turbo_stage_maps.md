@@ -55,8 +55,15 @@ The legacy fallback keeps its old approximation, clearly diagnosed.
 stored in every map. Manufacturer wheel diameters do not make assumed
 internal geometry manufacturer-accurate. The first turbine solver is an
 impulse-stage approximation, **not** a validated radial reaction stage.
-Transonic shocks, resolved surge, housing/volute losses, variable gas
-properties and rotor damage are not implemented.
+Solver `meanline-4` offers compressor `shock_model: "inlet_normal_entropy"`.
+It applies perfect-gas normal-shock entropy from inlet relative Mach inside
+the outlet continuity solve, preserving Euler work/total enthalpy. The full
+normal-shock orientation is an explicit assumption, not resolved blade-flow
+physics. Default absent/`unsupported` preserves explicit transonic rejection.
+Supersonic outlet/passage choking remains unsupported. Points report shock
+pressure retention and entropy. Old `meanline-3` maps remain loadable.
+Resolved surge, housing/volute losses, variable gas properties and rotor
+damage are not implemented.
 
 Cache: SHA-256 identity of solver, resolved stage geometry/gas and operating
 point, independent of the sweep grid, stored as atomic per-point JSON.
@@ -77,3 +84,12 @@ See vault **PHYS-068** for design rationale, validation results and remaining
 work. Physics sources: [NASA nozzle flow](https://www.grc.nasa.gov/www/k-12/BGP/mflchk.html),
 [finite-blade slip equation](https://www.mdpi.com/1996-1073/8/5/4317),
 [Garrett reference hardware/maps](https://www.garrettmotion.com/racing-and-performance/performance-catalog/turbo/gtx3582r-gen-ii/).
+
+Authored installations can set `compressible_exhaust: true` in the
+`physics_sim.turbo_configuration/1` file. This replaces ambient-density
+incompressible exhaust pressure with a common compressible nozzle inverse
+for turbine plus wastegate effective area. Choked flow scales linearly with
+upstream pressure. Turbine efficiency/head remain authored; no generated
+compressor/turbine map is selected by this option. Absent/false retains legacy
+replay behavior; the true option is included in engine state hashing.
+Normal-shock reference: https://www.grc.nasa.gov/WWW/BGH/normal.html .

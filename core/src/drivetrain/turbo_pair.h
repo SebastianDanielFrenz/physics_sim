@@ -52,6 +52,24 @@ public:
     static constexpr real kExhaustCp = 1100.0;
     // Gas constant of the vent orifice, the same value as SimulatedEngine::kGasConstant.
     static constexpr real kGasConstant = 287.05;
+    // Invert the compressible convergent-nozzle relation. Once choked, flow
+    // is linear in upstream total pressure, not quadratic in ambient-density
+    // velocity. Both turbine and bypass see this common upstream pressure.
+    static real compressible_exhaust_pressure(real flow, real area, real downstream, real temperature) {
+        if(flow<=real(0)) return downstream;
+        constexpr real gamma=real(1.33);
+        const real critical_ratio=ps::math::pow(real(2)/(gamma+real(1)),gamma/(gamma-real(1)));
+        const real critical_pressure=downstream/critical_ratio;
+        const real critical_flow=area*TurboStageMaps::nozzle_flux(critical_pressure,downstream,temperature,gamma,kGasConstant);
+        if(flow>=critical_flow) return critical_pressure*(flow/critical_flow);
+        real lo=downstream,hi=critical_pressure;
+        for(int i=0;i<24;++i) {
+            const real mid=(lo+hi)*real(.5);
+            if(area*TurboStageMaps::nozzle_flux(mid,downstream,temperature,gamma,kGasConstant)<flow) lo=mid;
+            else hi=mid;
+        }
+        return (lo+hi)*real(.5);
+    }
     explicit TurboPair(const TurboPairDesc& d) : desc(d) {
         if (desc.exhaust_wall_initial_k > real(0.0)) wall_k = desc.exhaust_wall_initial_k;
     }
@@ -211,6 +229,8 @@ public:
         }
         const real rho = ambient_pa/(real(287.05)*exhaust_k);
         exhaust_pa = ambient_pa + total_flow*total_flow/(real(2.0)*rho*flow_area*flow_area);
+        if(desc.compressible_exhaust)
+            exhaust_pa=compressible_exhaust_pressure(total_flow,flow_area,ambient_pa,exhaust_k);
         turbine_w = turbine_flow*kExhaustCp*exhaust_k*desc.turbine_efficiency*
             (real(1.0)-ps::math::pow(ambient_pa/exhaust_pa,real(0.24812030075188)));
 

@@ -132,6 +132,49 @@ TEST_CASE("Generated-stage hold remains finite and converges with timestep", "[t
     CHECK(a.second==Catch::Approx(b.second).epsilon(.02));
 }
 
+TEST_CASE("Authored exhaust nozzle conserves mass at low and extreme flow", "[turbo_stage][turbo_exhaust]") {
+    using namespace ps::drivetrain;
+    for(double area:{.0005,.00336}) for(double k:{500.,1300.}) for(double flow:{0.,.05,.5,2.,10.}) {
+        const auto pressure=TurboPair::compressible_exhaust_pressure(flow,area,101325,k);
+        CHECK(pressure>=101325);
+        CHECK(area*TurboStageMaps::nozzle_flux(pressure,101325,k,1.33,287.05)==Catch::Approx(flow).margin(2e-6));
+    }
+    const double p1=TurboPair::compressible_exhaust_pressure(2,.001,101325,1300);
+    const double p2=TurboPair::compressible_exhaust_pressure(4,.001,101325,1300);
+    CHECK(p2==Catch::Approx(2*p1).epsilon(1e-10)); // choked flow scales linearly, not quadratically
+}
+
+TEST_CASE("Authored hyper high boost exhaust diagnostic", "[.turbo_exhaust_hyper]") {
+    using namespace ps::drivetrain;
+    ps::jobs::JobSystem pool(6);
+    ps::io::EngineMapOptions options;
+    options.pool=&pool;
+    options.cache_dir=(std::filesystem::temp_directory_path()/"ps_i7d_engine_cache").string();
+    auto base=std::get<SimulatedEngineDesc>(ps::io::load_engine_json(
+        std::string(PS_SOURCE_DIR)+"/data/engines/hyper_v8_one1_audio.json",options));
+    for(double boost:{1.8,4.3,30.}) for(double crank_rpm:{4000.,7500.,8000.}) {
+        for(bool compressible:{false,true}) {
+            base.turbo_pair->target_boost_pa=boost*1e5;
+            base.turbo_pair->compressible_exhaust=compressible;
+            SimulatedEngine engine(base);
+            Sensors sensors;
+            const double omega=crank_rpm*6.283185307179586/60;
+            sensors.omega=omega;sensors.ignition=1;
+            PreSolveResult result;
+            double kw=0;
+            for(int i=0;i<16*960;++i) {
+                result=engine.pre_solve(sensors,ThrottleCommand{1,0,1},TcuRequest{},1./960);
+                (void)engine.post_solve(omega,1./960);
+                if(i>=15*960) kw+=(result.tau0-result.friction_cap_kinetic)*omega/1000/960;
+            }
+            std::printf("[authored hyper] compressible %d target %.1f crank %.0f actual %.3f exhaust %.3f barabs mean %.1f kW\n",
+                compressible,boost,crank_rpm,result.boost_bar,result.p_exhaust_pa/1e5,kw);
+            CHECK(std::isfinite(kw));
+            if(compressible) CHECK(kw>0);
+        }
+    }
+}
+
 TEST_CASE("Experimental generated turbo on the held hyper engine", "[.turbo_stage_hyper]") {
     using namespace ps::drivetrain;
     const auto installation=std::filesystem::path(PS_SOURCE_DIR)/"out/turbo_sim/examples/standard/configuration.json";
