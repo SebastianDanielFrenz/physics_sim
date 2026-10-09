@@ -9,8 +9,9 @@
 #include <vector>
 
 namespace ps::drivetrain {
-// Lumped mean-value model with a quasi-steady authored compressor head curve,
-// shaft energy balance and a bypass wastegate. Not an OEM compressor map.
+// Lumped shaft/charge model with optional offline geometry stage maps.
+// Legacy authored approximation remains an explicitly diagnosed fallback.
+// Neither source is an OEM-calibrated compressor map.
 class TurboPair {
 public:
     TurboPairDesc desc;
@@ -18,6 +19,8 @@ public:
     real exhaust_pa = 101325.0, wastegate = 0.0;
     real boost_integral = 0.0; // PI controller's integral (closing) term, [0, 1]
     real compressor_w = 0.0, turbine_w = 0.0;
+    bool compressor_stage_used=false, turbine_stage_used=false; // explicit coverage diagnostics
+    bool stage_map_fallback=false;
     // Sound/HUD outputs of the latest step (I7d D1), derived from the state
     // above and the step's inputs: never hashed, never read back by the model.
     real compressor_flow_kg_s = 0.0;  // total compressor mass flow (the pair)
@@ -58,7 +61,8 @@ public:
                                  compressor_flow_kg_s=0; compressor_pr=1; intercooler_dp_pa=0; compressor_outlet_pa=p;
                                  bov_opening=0; bov_flow_kg_s=0; bov_latched=false; surge_active=false;
                                  wall_k = desc.exhaust_wall_initial_k > real(0.0) ? desc.exhaust_wall_initial_k : t;
-                                 port_k=t; exhaust_k=t; gas_to_wall_w=0; wall_to_ambient_w=0; }
+                                 port_k=t; exhaust_k=t; gas_to_wall_w=0; wall_to_ambient_w=0;
+                                 compressor_stage_used=turbine_stage_used=stage_map_fallback=false; }
     // plate: the throttle plate position in [0, 1]; it scales the boost target.
     // port_k: the exhaust gas temperature at the cylinder ports (the engine's own energy
     // balance, engine_simulated.cpp); exhaust_kg_s the exhaust mass flow. Only numerical
@@ -84,8 +88,35 @@ public:
         bov_flow_kg_s = vent;
         const real comp_flow = std::max(real(0.0),air_kg_s) + vent;
         const real flow = comp_flow/desc.max_mass_flow_kg_s;
-        const real head = desc.maps ? desc.maps->head_pa.value(std::sqrt(speed2),flow) :
-            desc.reference_head_pa*speed2*std::max(real(0.0),real(1.0)-flow*flow);
+        // Generated tables accelerate the analytic approximation inside their
+        // sampled domain; outside it evaluate that same law without clamping.
+        const real speed=std::sqrt(speed2);
+        const real speed_edge=desc.maps ? desc.maps->head_pa.x.back():real(1.5);
+        const bool overspeed=speed>speed_edge;
+        // Extend the terminal speed line with compressor affinity scaling:
+        // flow capacity grows with speed, pressure head with speed squared.
+        // A fixed choke flow at every speed would make an unattainable boost
+        // request feed unlimited shaft energy into an unchanged flow ceiling.
+        const real ratio=overspeed ? speed/speed_edge:real(1.0);
+        const real corrected_flow=flow/ratio;
+        real head=desc.maps ?
+            desc.maps->head_pa.value(std::min(speed,speed_edge),corrected_flow)*ratio*ratio:
+            desc.reference_head_pa*speed2*std::max(real(0.0),real(1.0)-corrected_flow*corrected_flow);
+
+        const auto* stages=desc.maps ? desc.maps->stages.get():nullptr;
+        compressor_stage_used=false; turbine_stage_used=false; stage_map_fallback=false;
+        real stage_work=0, stage_slope=0;
+        if(stages) {
+            const real theta=ambient_k/stages->compressor_reference_k;
+            const real nc=stages->snap(stages->compressor_pr.x,rpm()/std::sqrt(theta));
+            const real wc=stages->snap(stages->compressor_pr.y,comp_flow/stages->units*std::sqrt(theta)/(ambient_pa/stages->reference_pa));
+            if(stages->compressor_covered(nc,wc)) {
+                compressor_stage_used=true;
+                head=ambient_pa*(stages->compressor_pr.value(nc,wc)-real(1));
+                stage_work=stages->compressor_work_j_kg.value(nc,wc)*theta;
+                stage_slope=-ambient_pa*stages->compressor_pr.dvalue_dy(nc,wc)*wc;
+            } else stage_map_fallback=true;
+        }
         // Pressure equilibrium includes compressor capacity; actual manifold
         // filling remains the engine's existing mass balance through its throttle.
         // I7d D4: the compressor makes head above ambient, the cooler drops dp of it; charge_pa is
@@ -94,11 +125,21 @@ public:
         const real dp = desc.intercooler_dp_pa_at_max_flow*flow*flow;
         const real desired = ambient_pa + head - dp;
         const real charge_old = charge_pa;
-        charge_pa += h/(real(0.025)+h)*(desired-charge_pa);
+        const real alpha=h/(real(0.025)+h);
+        // Resolve the stiff pressure/flow feedback semi-implicitly outside
+        // the table domain. The flow/head slope grows with rotor energy;
+        // damping the iteration changes its transient, not its equilibrium.
+        // Near an open throttle the pressure difference is small and the
+        // orifice's flow sensitivity is much greater than density alone.
+        const real flow_gain=p_im>real(0.0) && charge_old>p_im ?
+            real(1.0)+real(0.5)*p_im/std::max(ambient_pa*real(0.001),charge_old-p_im):real(1.0);
+        const real slope=compressor_stage_used ? std::max(real(0),stage_slope*flow_gain/std::max(ambient_pa,charge_old)) : !overspeed ? real(0.0) :
+            real(2.0)*desc.reference_head_pa*speed_edge*speed_edge*flow*flow*flow_gain/std::max(ambient_pa,charge_old);
+        charge_pa += alpha/(real(1.0)+alpha*slope)*(desired-charge_pa);
         const real pr = std::max(real(1.0),(charge_pa+dp)/ambient_pa);
         intercooler_dp_pa = dp; compressor_outlet_pa = charge_pa + dp;
         const real rise = ps::math::pow(pr,real(2.0/7.0))-real(1.0);
-        const real outlet_k = ambient_k*(desc.maps ? desc.maps->compressor_temperature_ratio.evaluate(pr) : real(1.0)+rise/desc.compressor_efficiency);
+        const real outlet_k = compressor_stage_used ? ambient_k+stage_work/stages->compressor_cp : ambient_k*(desc.maps && pr<=desc.maps->compressor_temperature_ratio.x.back() ? desc.maps->compressor_temperature_ratio.evaluate(pr) : real(1.0)+rise/desc.compressor_efficiency);
         charge_k = ambient_k + (outlet_k-ambient_k)*(real(1.0)-desc.intercooler_effectiveness);
         // The compressor power is bounded by the head the CURRENT rotor speed makes at this flow:
         // charge_pa lags the head by 25 ms, and after a lift the slowing wheel must not keep paying
@@ -106,7 +147,7 @@ public:
         // compressor work). Outlet temperature and the published ratio stay on the charge state.
         const real pr_wheel = real(1.0) + std::max(real(0.0),head)/ambient_pa;
         const real rise_w = pr <= pr_wheel ? rise : ps::math::pow(pr_wheel,real(2.0/7.0))-real(1.0);
-        compressor_w = comp_flow*real(1005.0)*ambient_k*rise_w/desc.compressor_efficiency;
+        compressor_w = compressor_stage_used ? comp_flow*stage_work : comp_flow*real(1005.0)*ambient_k*rise_w/desc.compressor_efficiency;
         compressor_flow_kg_s = comp_flow; compressor_pr = pr;
         if (desc.surge_line) {
             // pr is the compressor outlet over ambient, flow the pair's fraction of its max
@@ -126,7 +167,7 @@ public:
         // plain PI lacks. The integral is the closing effort in [0, 1] and
         // stops integrating while the output is saturated in the direction
         // the error pushes (conditional anti-windup; spool-up otherwise winds
-        // it to 1 and overshoots onto the rotor speed cap). Below 10 % plate
+        // it to 1 and overshoots the boost target). Below 10 % plate
         // no boost is requested: wastegate commanded open, integral reset.
         real opening = real(1.0);
         if (plate < real(0.10)) {
@@ -172,9 +213,21 @@ public:
         exhaust_pa = ambient_pa + total_flow*total_flow/(real(2.0)*rho*flow_area*flow_area);
         turbine_w = turbine_flow*kExhaustCp*exhaust_k*desc.turbine_efficiency*
             (real(1.0)-ps::math::pow(ambient_pa/exhaust_pa,real(0.24812030075188)));
+
+        real starting_torque=0;
+        if(stages) {
+            real p=0, power=0;
+            if(stages->turbine_at(rpm(),total_flow,ambient_pa,exhaust_k,desc.wastegate_area()*wastegate,p,power,starting_torque)) {
+                turbine_stage_used=true; exhaust_pa=p; turbine_w=power;
+            } else stage_map_fallback=true;
+        }
         const real loss = desc.shaft_loss_w_at_reference*speed2;
-        energy_j = std::clamp(energy_j+h*(turbine_w-compressor_w-loss),real(0.0),
-            real(0.5)*desc.rotor_inertia_kgm2*wr*wr*real(2.25));
+        // No artificial rotor-speed ceiling: shaft power determines speed.
+        // Overspeed damage/protection is a separate future model.
+        const bool at_rest=energy_j==real(0);
+        energy_j = std::max(real(0.0),energy_j+h*(turbine_w-compressor_w-loss));
+        if(at_rest && turbine_stage_used && starting_torque>real(0))
+            energy_j+=real(0.5)*h*h*starting_torque*starting_torque/desc.rotor_inertia_kgm2;
         if (desc.blow_off_valve) {
             const auto& v = *desc.blow_off_valve;
             const real command = std::clamp((charge_pa-p_im-v.crack_dp_pa)/(v.full_open_dp_pa-v.crack_dp_pa),real(0.0),real(1.0));

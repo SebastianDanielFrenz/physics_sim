@@ -326,6 +326,7 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
         f.pod(desc.pressure_sampling.min_pa); f.pod(desc.pressure_sampling.max_pa);
         f.pod(desc.pressure_sampling.relative_error); f.pod(desc.pressure_sampling.max_points);
         f.pod(desc.pressure_sampling.max_passes);
+        f.pod(desc.pressure_sampling.allow_budget_limit);
     }
     // C17a follow-up: the Tier 1b spark schedule and the Tier 2 ignition
     // delay, folded (behind a tag) only when present / non-zero so every

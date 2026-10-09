@@ -721,6 +721,17 @@ anti-lag, the wastegate/BOV/anti-lag/surge sound-state fields and the turbo
 format docs - plan out/i7d_completion_plan.md (D1-D6). Then I7e (rotary
 R26B), N2O, and fuel mass feeding back into the chassis.
 
+
+Status 2026-10-09 (PHYS-068): preliminary offline compressor/turbine stage
+simulation implemented in tools/turbo_sim. Geometry-driven compressor Euler
+work/slip/continuity and compressible impulse-stage turbine, resumable point
+cache, adaptive sampling/full-map cache, provenance and opt-in runtime
+interpolation are available. Format: docs/data_formats/turbo_stage_maps.md.
+Default vehicle hardware remains authored. Internal geometry/loss assumptions,
+transonic compressor coverage, radial-reaction/volute fidelity and measured-map
+calibration remain pending; this is not a completed validated turbo model.
+Details, validation results and design rationale: vault PHYS-068.
+
 Order change (Sebastian, 2026-10-04): N2O comes right after I7d, wet system
 first (the kit's own fuel jet keeps the mixture; dry later). A knock limit
 (C17b, knock-limited spark) must exist at some point anyway. I7e (rotary

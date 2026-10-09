@@ -755,19 +755,37 @@ EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& f
     sampling.grid_p_im.erase(std::unique(sampling.grid_p_im.begin(),sampling.grid_p_im.end()),sampling.grid_p_im.end());
     // Adaptive pressure resolution is not capped by Preview's fixed-grid row
     // count. Quality still controls RPM count and cycle accuracy in each task.
-    std::size_t offset=0;
+    std::size_t stage=0;
     const std::size_t budget=(settings.max_passes+1)*settings.max_points*(desc.grid_rpm.size()+40);
     MapGenerationControl stages;
     stages.cancel=control ? control->cancel:nullptr;
-    stages.on_progress=[&](std::size_t done,std::size_t){if(control && control->on_progress)control->on_progress(std::min(offset+done,budget-1),budget);};
+    stages.on_progress=[&](std::size_t done,std::size_t total){if(control && control->on_progress) { const double start=1.0-std::pow(0.5,double(stage)); const double span=std::pow(0.5,double(stage+1)); control->on_progress(std::min(std::size_t((start+span*double(done)/double(std::max(std::size_t(1),total)))*budget),budget-1),budget); }};
     std::vector<std::unique_ptr<EngineMapGenTask>> history;
-    auto run=[&](const CycleModelDesc& d){auto m=generate_fixed_engine_maps(d,fuel,quality,pool,&stages,&history);offset+=d.grid_rpm.size()*d.grid_p_im.size()+40;return m;};
+    auto run=[&](const CycleModelDesc& d){auto m=generate_fixed_engine_maps(d,fuel,quality,pool,&stages,&history);++stage;if(control && control->on_partial_maps)control->on_partial_maps(m);return m;};
+    if(sampling.grid_p_im.size()>settings.max_points)throw std::runtime_error("adaptive pressure sampling: seed grid exceeds point budget");
+    // An opt-in display snapshot uses only endpoints; all of these points
+    // are reused by the seed grid. Preview callbacks never affect final maps.
+    if(control && control->on_partial_maps && sampling.grid_p_im.size()>2) {
+        auto coarse=sampling;coarse.grid_p_im={lo,hi};run(coarse);
+    }
     auto current=run(sampling);
+    auto bounded_result=[&]() -> EngineMapsPtr {
+        auto result=std::make_shared<EngineMaps>(*current);
+        result->maps.source += "; pressure sampling budget limited (interpolation tolerance not certified)";
+        result->generator_version=engine_map_generator_version(desc);
+        result->content_hash=engine_maps_content_hash(*result);
+        if(control && control->on_progress)control->on_progress(budget,budget);
+        return result;
+    };
+    std::vector<std::pair<real,real>> active;
+    for(std::size_t j=1;j<sampling.grid_p_im.size();++j)active.emplace_back(sampling.grid_p_im[j-1],sampling.grid_p_im[j]);
     for(int pass=0;pass<settings.max_passes;++pass) {
         if(stages.cancel && stages.cancel->load(std::memory_order_relaxed))throw GenerationCancelled();
+        if(settings.allow_budget_limit && sampling.grid_p_im.size()>=settings.max_points)return bounded_result();
         CycleModelDesc probe=sampling;
-        for(std::size_t j=1;j<sampling.grid_p_im.size();++j)
-            for(int q=1;q<4;++q)probe.grid_p_im.push_back(sampling.grid_p_im[j-1]+(sampling.grid_p_im[j]-sampling.grid_p_im[j-1])*real(q)/real(4));
+        for(const auto& interval:active)
+            if(!settings.allow_budget_limit || probe.grid_p_im.size()<settings.max_points)
+                probe.grid_p_im.push_back((interval.first+interval.second)*real(0.5));
         std::sort(probe.grid_p_im.begin(),probe.grid_p_im.end());
         probe.grid_p_im.erase(std::unique(probe.grid_p_im.begin(),probe.grid_p_im.end()),probe.grid_p_im.end());
         if(probe.grid_p_im.size()>settings.max_points)throw std::runtime_error("adaptive pressure sampling: point budget exhausted before validation converged");
@@ -803,10 +821,21 @@ EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& f
             if(control && control->on_progress)control->on_progress(budget,budget);
             return result;
         }
-        sampling.grid_p_im.insert(sampling.grid_p_im.end(),failing.begin(),failing.end());
-        std::sort(sampling.grid_p_im.begin(),sampling.grid_p_im.end());
-        current=run(sampling);
+        // Retain all validation samples, including passing midpoints. Refine
+        // only children of intervals which failed; certified intervals need
+        // no more expensive cycle solves.
+        std::vector<std::pair<real,real>> next;
+        for(const auto& interval:active) {
+            bool failed=false;
+            for(real p:failing)if(p>interval.first && p<interval.second){failed=true;break;}
+            if(!failed)continue;
+            for(int q=0;q<2;++q)next.emplace_back(interval.first+(interval.second-interval.first)*real(q)/real(2),interval.first+(interval.second-interval.first)*real(q+1)/real(2));
+        }
+        active=std::move(next);
+        sampling=std::move(probe);
+        current=std::move(tested);
     }
+    if(settings.allow_budget_limit)return bounded_result();
     throw std::runtime_error("adaptive pressure sampling: pass budget exhausted before validation converged");
 }
 

@@ -8,8 +8,9 @@ The cycle block accepts an optional `pressure_sampling` object:
   "min_kpa": 25,
   "max_kpa": 600,
   "relative_error": 0.02,
-  "max_points": 512,
-  "max_passes": 8
+  "max_points": 24,
+  "max_passes": 8,
+  "allow_budget_limit": true
 }
 ```
 
@@ -18,7 +19,7 @@ Pressures are absolute. Omitted or zero bounds use the endpoints of
 different engines can have different seeds and bounds. Sampling is opt-in,
 so existing authored grids and cache keys retain their legacy behavior.
 
-Each interval is evaluated at its quarter, half and three-quarter pressures
+Each interval is evaluated at its midpoint pressure
 over the selected RPM rows. The generator compares those actual cycle results
 with interpolation of the previous maps, including efficiency at the resulting
 fresh-air mass. Intervals exceeding tolerance receive additional nodes.
@@ -34,7 +35,10 @@ to final table reduction. This is sampled interpolation control, not a proof of
 accuracy between arbitrarily narrow unsampled features or of physical validity
 outside the engine model's calibration.
 
-Budget exhaustion throws an explicit convergence error. Cancellation propagates
+Budget exhaustion throws an explicit convergence error by default. With
+`allow_budget_limit: true`, the generator returns the computed map within the
+point budget and marks its source as budget limited: interpolation tolerance
+is not certified. Garage defaults use this bounded policy (24 points, 5% target). Cancellation propagates
 between and during passes. Adaptive settings and an adaptive generator version
 participate in cache identity. Cached tables retain their independently selected
 axes. The cold generation can be more expensive, while warm cache hits reuse the

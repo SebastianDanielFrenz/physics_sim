@@ -215,3 +215,41 @@ TEST_CASE("D1: the engine publishes the turbo sound state, 0 without a turbo", "
     CHECK(n.compressor_flow_kg_s == 0.0);
     CHECK(n.compressor_pressure_ratio == 0.0);
 }
+
+TEST_CASE("Turbo rotor energy remains uncapped above former speed ceiling", "[turbo_uncapped]") {
+    TurboPairDesc desc;
+    TurboPair pair(desc);
+    const real wr=desc.reference_rpm*real(6.2831853071795864769/60.0);
+    pair.energy_j=real(0.5)*desc.rotor_inertia_kgm2*wr*wr*real(4.0);
+    const real before=pair.energy_j;
+    pair.step(kH,kPamb,kTamb,real(0.1),real(0.15),real(1000.0),real(1.0));
+    const real loss=desc.shaft_loss_w_at_reference*real(4.0);
+    CHECK(pair.energy_j==Catch::Approx(std::max(real(0.0),before+kH*(pair.turbine_w-pair.compressor_w-loss))));
+    CHECK(pair.rpm()>desc.reference_rpm*real(1.5));
+    for(int i=0;i<9600;++i)pair.step(kH,kPamb,kTamb,real(0.1),real(0.15),real(1000.0),real(1.0));
+    CHECK(std::isfinite(pair.energy_j));CHECK(std::isfinite(pair.charge_pa));
+    CHECK(std::isfinite(pair.rpm()));CHECK(pair.energy_j>=real(0.0));
+}
+
+TEST_CASE("Turbo lookup domains do not impose an overspeed pressure ceiling", "[turbo_uncapped]") {
+    TurboPairDesc plain;
+    auto maps=std::make_shared<TurboPerformanceMaps>();
+    maps->head_pa.x={0,1.5};maps->head_pa.y={0,1};
+    maps->head_pa.values={0,0,plain.reference_head_pa*2.25,0};
+    maps->compressor_temperature_ratio.x={1,2};maps->compressor_temperature_ratio.y={1,1.3};
+    auto tabulated=plain;tabulated.maps=maps;
+    TurboPair direct(plain),cached(tabulated);
+    const real wr=plain.reference_rpm*real(6.2831853071795864769/60.0);
+    direct.energy_j=cached.energy_j=real(0.5)*plain.rotor_inertia_kgm2*wr*wr*real(4.0);
+    direct.charge_pa=cached.charge_pa=kPamb*real(5.0);
+    direct.step(kH,kPamb,kTamb,real(0.1),real(0.15),real(1000),real(1));
+    cached.step(kH,kPamb,kTamb,real(0.1),real(0.15),real(1000),real(1));
+    TurboPair at_edge(tabulated);
+    at_edge.energy_j=real(0.5)*plain.rotor_inertia_kgm2*wr*wr*real(2.25);
+    at_edge.charge_pa=kPamb*real(5.0);
+    at_edge.step(kH,kPamb,kTamb,real(0.1),real(0.15),real(1000),real(1));
+    CHECK(cached.charge_pa>at_edge.charge_pa);
+    CHECK(cached.rpm()>plain.reference_rpm*real(1.5));
+    CHECK(cached.charge_k==Catch::Approx(direct.charge_k).epsilon(0.01));
+    CHECK(std::isfinite(cached.energy_j));
+}

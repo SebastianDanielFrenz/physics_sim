@@ -1,0 +1,34 @@
+{
+  "format": "physics_sim.turbo_geometry/1",
+  "name": "garage_standard_preliminary",
+  "source": "Preliminary geometry-driven meanline model. Wheel diameters match the existing GTX3582R-class hardware; internal geometry and loss coefficients are ASSUMED, not reverse-engineered or manufacturer-calibrated.",
+  "provenance": {
+    "wheel_diameters": "Published Garrett GTX3582R Gen II: compressor 66/82 mm and turbine 68/62 mm; https://www.garrettmotion.com/racing-and-performance/performance-catalog/turbo/gtx3582r-gen-ii/",
+    "internal_geometry": "ASSUMED: 22 mm hub, 6 mm exit width, 12 effective blades, 60 degree compressor exit angle and 24 degree inlet angle; 500 mm2 effective turbine throat inherited from authored hardware",
+    "losses": "ASSUMED: area blockage 0.90, passage/incidence/diffuser loss coefficients 0.20/0.60/0.40, turbine nozzle efficiency 0.95 and rotor velocity retention 0.85; slip velocity from Stodola finite-blade correlation. Transonic compressor points are explicitly unsupported.",
+    "compressor_equations": "Euler work, Stodola slip velocity, ideal-gas continuity, stagnation/static energy and isentropic pressure with explicit loss work. No authored head curve. Slip reference https://www.mdpi.com/1996-1073/8/5/4317",
+    "turbine_equations": "NASA Glenn compressible convergent-nozzle flow https://www.grc.nasa.gov/www/k-12/BGP/mflchk.html plus preliminary impulse-rotor Euler triangle; NOT a validated radial reaction stage"
+  },
+  "compressor": {
+    "inducer_mm": 66,
+    "exducer_mm": 82,
+    "hub_mm": 22,
+    "exit_width_mm": 6,
+    "blades": 12,
+    "exit_angle_deg": 60,
+    "inlet_angle_deg": 24,
+    "blockage": 0.90,
+    "passage_loss": 0.20,
+    "incidence_loss": 0.60,
+    "diffuser_loss": 0.40
+  },
+  "turbine": {
+    "diameter_mm": 68,
+    "effective_throat_mm2": 500,
+    "nozzle_angle_deg": 20,
+    "nozzle_efficiency": 0.95,
+    "rotor_velocity_retention": 0.85
+  },
+  "air": {"r": 287.05, "gamma": 1.4},
+  "exhaust": {"r": 287.05, "gamma": 1.33}
+}

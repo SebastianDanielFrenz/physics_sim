@@ -65,7 +65,7 @@ inline constexpr std::uint32_t kPipeGeneratorVersion = 3;
 inline constexpr std::uint32_t kGeneratorVersion = kPipeGeneratorVersion; // the newest path
 
 [[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {
-    return (desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion) + (desc.pressure_sampling.enabled ? 257 : 0);
+    return (desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion) + (desc.pressure_sampling.enabled ? 259 : 0);
 }
 
 // The numeric values are folded into the .psmaps cache key, the content hash
@@ -107,9 +107,13 @@ public:
 //   escaping it is held until the running points have finished, then rethrown.
 //   If the calling thread is itself a pool worker (nested use) it cannot poll
 //   and all calls are delivered after the points have finished.
+struct EngineMaps;
 struct MapGenerationControl {
     const std::atomic<bool>* cancel = nullptr;
     std::function<void(std::size_t done, std::size_t total)> on_progress;
+    // Immutable coarse map snapshots, on the calling thread after each stage.
+    // Display only: not final/certified and never stored in the map cache.
+    std::function<void(std::shared_ptr<const EngineMaps>)> on_partial_maps;
 };
 
 struct EngineMaps {

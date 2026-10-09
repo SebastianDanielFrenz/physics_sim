@@ -42,7 +42,14 @@ TEST_CASE("adaptive engine maps converge and retain independent cached axes", "[
     auto d=ps::test::make_generic_i4_cycle_desc();d.grid_rpm={2000,4000};d.grid_p_im={40000,90000};
     auto fuel=ps::test::mvem::gasoline();const auto legacy=engine_map_cache_key(d,fuel,MapQuality::Preview);
     d.pressure_sampling.enabled=true;d.pressure_sampling.relative_error=0.05;
-    auto result=generate_engine_maps(d,fuel,MapQuality::Preview);
+    bool intermediate=false;std::size_t previous=0;
+    MapGenerationControl progress;
+    progress.on_progress=[&](std::size_t done,std::size_t total) {
+        CHECK(done>=previous);CHECK(done<=total);previous=done;
+        if(done*100/total>=1 && done<total)intermediate=true;
+    };
+    auto result=generate_engine_maps(d,fuel,MapQuality::Preview,nullptr,&progress);
+    CHECK(intermediate);
     CHECK(result->generator_version==engine_map_generator_version(d));
     CHECK(result->maps.ve.y.front()==Approx(40000));CHECK(result->maps.ve.y.back()==Approx(90000));
     CHECK(result->maps.ve.validate().empty());CHECK(result->maps.eta_i.validate().empty());
@@ -57,7 +64,18 @@ TEST_CASE("adaptive engine maps converge and retain independent cached axes", "[
     CHECK(cached->maps.pmep_excess_pa.y==result->maps.pmep_excess_pa.y);
     CHECK(cached->content_hash==result->content_hash);
     ps::jobs::JobSystem workers(2);
-    auto parallel=generate_engine_maps(d,fuel,MapQuality::Preview,&workers);
+    int snapshots=0;
+    EngineMapsPtr first_snapshot;
+    MapGenerationControl streaming;
+    streaming.on_partial_maps=[&](EngineMapsPtr snapshot) {
+        ++snapshots;if(!first_snapshot)first_snapshot=snapshot;
+        CHECK(snapshot->maps.ve.validate().empty());
+        CHECK(snapshot->maps.eta_i.validate().empty());
+    };
+    auto parallel=generate_engine_maps(d,fuel,MapQuality::Preview,&workers,&streaming);
+    CHECK(snapshots>=2);
+    CHECK(first_snapshot->maps.ve.y.front()==Approx(40000));
+    CHECK(first_snapshot->maps.ve.y.back()==Approx(90000));
     CHECK(engine_maps_content_hash(*parallel)==engine_maps_content_hash(*result));
     auto extended=d;
     extended.pressure_sampling.max_pa=600000;
@@ -70,5 +88,13 @@ TEST_CASE("adaptive engine maps converge and retain independent cached axes", "[
     std::atomic<bool> cancel{true};MapGenerationControl control;control.cancel=&cancel;
     CHECK_THROWS_AS(generate_engine_maps(d,fuel,MapQuality::Preview,nullptr,&control),GenerationCancelled);
     d.pressure_sampling.max_points=5;
+    d.pressure_sampling.relative_error=0.000001;
     CHECK_THROWS(generate_engine_maps(d,fuel,MapQuality::Preview));
+    d.pressure_sampling.allow_budget_limit=true;
+    auto bounded=generate_engine_maps(d,fuel,MapQuality::Preview);
+    CHECK(bounded->maps.ve.y.size()<=5);
+    CHECK(bounded->maps.ve.y.front()==Approx(40000));
+    CHECK(bounded->maps.ve.y.back()==Approx(90000));
+    CHECK(bounded->maps.source.find("budget limited")!=std::string::npos);
+    CHECK(bounded->content_hash==engine_maps_content_hash(*bounded));
 }

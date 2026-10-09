@@ -1745,10 +1745,11 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
         const auto& a = cj.at("pressure_sampling");
         if (!a.is_object()) throw std::runtime_error(cctx + ": pressure_sampling must be an object");
         for (auto it=a.begin(); it!=a.end(); ++it)
-            if (it.key()!="enabled" && it.key()!="min_kpa" && it.key()!="max_kpa" && it.key()!="relative_error" && it.key()!="max_points" && it.key()!="max_passes")
+            if (it.key()!="enabled" && it.key()!="min_kpa" && it.key()!="max_kpa" && it.key()!="relative_error" && it.key()!="max_points" && it.key()!="max_passes" && it.key()!="allow_budget_limit")
                 throw std::runtime_error(cctx + ": unknown pressure_sampling field " + it.key());
         auto& p = d.pressure_sampling;
         p.enabled = a.value("enabled", true);
+        p.allow_budget_limit = a.value("allow_budget_limit", false);
         p.min_pa = a.value("min_kpa", real(0)) * real(1000);
         p.max_pa = a.value("max_kpa", real(0)) * real(1000);
         p.relative_error = a.value("relative_error", real(0.01));
@@ -2238,6 +2239,18 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                 drivetrain::MapGenerationControl control;
                 control.cancel = opt.cancel;
                 control.on_progress = opt.on_progress;
+                if(opt.on_partial_engine)control.on_partial_maps=[&](EngineMapsPtr partial) {
+                    auto preview=e;const auto& g=partial->maps;
+                    if(!have_ve)preview.maps.ve=g.ve;
+                    if(!have_eta_i)preview.maps.eta_i=g.eta_i;
+                    if(!have_f_lambda)preview.maps.f_lambda=g.f_lambda;
+                    if(!have_eta_spark)preview.maps.eta_spark=g.eta_spark;
+                    if(!have_theta_mbt)preview.maps.theta_mbt_deg=g.theta_mbt_deg;
+                    if(!have_friction)preview.maps.friction_torque_nm=g.friction_torque_nm;
+                    if(!preview.maps.has_pmep_excess){preview.maps.pmep_excess_pa=g.pmep_excess_pa;preview.maps.has_pmep_excess=g.has_pmep_excess;}
+                    preview.maps.source=g.source;preview.maps_pending=false;
+                    opt.on_partial_engine(preview);
+                };
                 // A cancelled generation throws here, before the cache store: no file is written.
                 gen = generate_engine_maps(*e.cycle, e.fuels.front(), opt.quality, opt.pool, &control);
                 drivetrain::store_cached_engine_maps(opt.cache_dir, cache_key, *gen);
@@ -2710,6 +2723,69 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         } catch(...) { /* An unwritable cache does not prevent driving. */ } }
     }
     maps->content_hash=key;
+
+    // Explicit opt-in: authored maps stay distinguishable from preliminary
+    // offline results. Geometry generation NEVER runs during vehicle loading.
+    if(hw.contains("performance_map")) {
+        const auto stage_path=resolve_path(std::filesystem::path(hw_path).parent_path().string(),hw.at("performance_map").get<std::string>());
+        const auto sj=read_json_file(stage_path);
+        require_format(sj,"turbo_stage_maps",1,stage_path);
+        auto sm=std::make_shared<drivetrain::TurboStageMaps>();
+        sm->source=sj.at("source").get<std::string>();
+        sm->solver=sj.at("solver").get<std::string>();
+        if(sm->source.empty() || sm->solver!="meanline-3" || !sj.at("provenance").is_object())
+            throw std::runtime_error(stage_path+": unsupported solver or missing provenance");
+        sm->reference_pa=require_positive(sj,"reference_pressure_bar",stage_path)*real(1e5);
+        sm->compressor_reference_k=require_positive(sj,"compressor_reference_temperature_k",stage_path);
+        sm->turbine_reference_k=require_positive(sj,"turbine_reference_temperature_k",stage_path);
+        const auto& gas=sj.at("geometry").at("exhaust");
+        sm->exhaust_r=require_positive(gas,"r",stage_path);
+        sm->exhaust_gamma=require_positive(gas,"gamma",stage_path);
+        if(!(sm->exhaust_gamma>1 && sm->exhaust_gamma<=1.67)) throw std::runtime_error(stage_path+": invalid exhaust gamma");
+        const auto& air=sj.at("geometry").at("air");
+        const real air_r=require_positive(air,"r",stage_path), air_gamma=require_positive(air,"gamma",stage_path);
+        if(!(air_gamma>1 && air_gamma<=1.67)) throw std::runtime_error(stage_path+": invalid air gamma");
+        sm->compressor_cp=air_r*air_gamma/(air_gamma-real(1));
+        sm->units=count;
+        const auto speeds=sj.at("corrected_rpm").get<std::vector<real>>();
+        const auto flows=sj.at("compressor_corrected_flow_kg_s").get<std::vector<real>>();
+        const auto expansions=sj.at("turbine_expansion_ratio").get<std::vector<real>>();
+        sm->compressor_pr.x=sm->compressor_work_j_kg.x=sm->turbine_flow_kg_s.x=sm->turbine_work_j_kg.x=sm->turbine_torque_nm_per_kg_s.x=speeds;
+        sm->compressor_pr.y=sm->compressor_work_j_kg.y=flows;
+        for(real er:expansions) {
+            const real chi=sm->turbine_coordinate(er);
+            sm->turbine_flow_kg_s.y.push_back(chi); sm->turbine_work_j_kg.y.push_back(chi);
+            sm->turbine_torque_nm_per_kg_s.y.push_back(chi);
+        }
+        if(sj.at("compressor").size()!=speeds.size()*flows.size() || sj.at("turbine").size()!=speeds.size()*expansions.size())
+            throw std::runtime_error(stage_path+": inconsistent map dimensions");
+        for(const auto& point:sj.at("compressor")) {
+            const bool valid=point.at("status").get<std::string>()=="ok";
+            const real pr=valid ? point.at("pressure_ratio").get<real>():real(1);
+            const real work=valid ? point.at("specific_work_j_kg").get<real>():real(0);
+            if(!std::isfinite(pr) || !std::isfinite(work) || pr<1 || work<0)
+                throw std::runtime_error(stage_path+": invalid compressor point");
+            sm->compressor_valid.push_back(valid);
+            sm->compressor_pr.values.push_back(pr); sm->compressor_work_j_kg.values.push_back(work);
+        }
+        for(const auto& point:sj.at("turbine")) {
+            const real flow=point.at("mass_flow_kg_s").get<real>(), work=point.at("specific_work_j_kg").get<real>();
+            if(!std::isfinite(flow) || !std::isfinite(work) || flow<0 || point.at("status").get<std::string>()!="ok")
+                throw std::runtime_error(stage_path+": invalid turbine point");
+            const real torque=point.at("specific_torque_nm_per_kg_s").get<real>();
+            if(!std::isfinite(torque)) throw std::runtime_error(stage_path+": invalid turbine torque");
+            sm->turbine_torque_nm_per_kg_s.values.push_back(torque);
+            sm->turbine_flow_kg_s.values.push_back(flow); sm->turbine_work_j_kg.values.push_back(work);
+        }
+        for(const auto* table:{&sm->compressor_pr,&sm->compressor_work_j_kg,&sm->turbine_flow_kg_s,&sm->turbine_work_j_kg,&sm->turbine_torque_nm_per_kg_s})
+            if(const auto error=table->validate();!error.empty()) throw std::runtime_error(stage_path+": "+error);
+        if(speeds.front()<0 || flows.front()<0 || expansions.front()!=1)
+            throw std::runtime_error(stage_path+": invalid map axis domain (turbine must start at expansion ratio 1)");
+        // Hash the actual consumed file, including provenance; never reuse a
+        // key from its legacy authored curve or trust a supplied hash alone.
+        for(unsigned char b:sj.dump()) { key^=b; key*=1099511628211ULL; }
+        maps->content_hash=key; maps->stages=std::move(sm);
+    }
     t.maps=std::move(maps);
     return t;
 }

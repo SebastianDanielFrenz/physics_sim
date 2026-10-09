@@ -108,13 +108,14 @@ std::vector<Rec> run_lift_script(const TurboPairDesc& d, real lift_s, real reapp
         if (i < n_spool) {
             const real t = i * kH;
             const real air = 0.2 + 0.7 * t / 1.5;
-            p = {1.0, air, air * 1.07, air / 12.5 * 43e6};
+            // TurboPair::step takes port temperature in kelvin, not fuel power in watts.
+            p = {1.0, air, air * 1.07, 1173.15};
             p_im = pair.charge_pa - 1.5e4;
         } else if (i < n_spool + n_lift) {
             p = {0.0, 0.04, 0.045, 0.0};
             p_im = 3.0e4;
         } else {
-            p = {1.0, 0.9, 0.96, 0.9 / 12.5 * 43e6};
+            p = {1.0, 0.9, 0.96, 1173.15};
             p_im = pair.charge_pa - 1.5e4;
         }
         pair.step(kH, kPamb, kTamb, p.air, p.exhaust, p.port_k, p.plate, p_im, &psi_table());

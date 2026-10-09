@@ -36,6 +36,9 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
     ess.p_charge_pa=pre.p_charge_pa; ess.t_charge_k=pre.t_charge_k;
     ess.wastegate_opening=pre.wastegate_opening; ess.compressor_flow_kg_s=pre.compressor_flow_kg_s;
     ess.compressor_pressure_ratio=pre.compressor_pressure_ratio;
+    ess.turbo_compressor_stage_used=pre.turbo_compressor_stage_used;
+    ess.turbo_turbine_stage_used=pre.turbo_turbine_stage_used;
+    ess.turbo_stage_map_fallback=pre.turbo_stage_map_fallback;
     ess.bov_opening=pre.bov_opening; ess.bov_flow_kg_s=pre.bov_flow_kg_s;
     ess.bov_vent=pre.bov_vent; ess.bov_events=pre.bov_events;
     ess.surge_active=pre.surge_active; ess.surge_events=pre.surge_events;

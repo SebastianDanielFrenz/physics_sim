@@ -236,6 +236,7 @@ struct CycleModelDesc {
     // Each generated table gets its own reduced axis (eta_i remains air mass).
     struct PressureSampling {
         bool enabled = false;
+        bool allow_budget_limit = false;
         real min_pa = 0, max_pa = 0;
         real relative_error = 0.01;
         std::size_t max_points = 256;

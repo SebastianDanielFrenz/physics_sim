@@ -86,6 +86,8 @@ struct EngineMapOptions {
     // exception is rethrown after the running points finished). If the loading thread
     // is itself a worker of `pool`, the calls arrive after the points finished.
     std::function<void(std::size_t done, std::size_t total)> on_progress;
+    // Coarse engine snapshots during adaptive refinement; display only.
+    std::function<void(const drivetrain::SimulatedEngineDesc&)> on_partial_engine;
 
     // false = validate-only: resolve and validate everything a full load does
     // (every loader rejection fires with the same message, plus the generator's own

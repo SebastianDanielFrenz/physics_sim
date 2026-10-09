@@ -83,6 +83,7 @@ add_executable(ps_unit_tests
   test_turbo_surge.cpp
   test_turbo_intercooler.cpp
   test_turbo_io.cpp
+  test_turbo_stage_maps.cpp
   test_turbo_vehicle.cpp
   test_turbo_compressor_flow.cpp
   test_turbo_anti_lag.cpp
