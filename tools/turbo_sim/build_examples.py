@@ -36,7 +36,9 @@ def main():
         a=(g.exhaust.gamma-1)/g.exhaust.gamma
         chi=(1-40**(-a))**.5
         er=[(1-(chi*i/8)**2)**(-1/a) for i in range(9)]
-        result=g.adaptive_generate(n,w,er,max_passes=2,workers=3)
+        result=g.adaptive_generate(n,w,er,max_passes=5,max_speed_lines=129,max_flow_points=257,workers=3)
+        if result["sampling"]["budget_limited"]:
+            raise RuntimeError(name+": interpolation refinement did not meet its sampling target")
         directory=args.output_dir/name
         atomic_json(directory/"geometry.json",profile)
         atomic_json(directory/"stage_maps.json",result)

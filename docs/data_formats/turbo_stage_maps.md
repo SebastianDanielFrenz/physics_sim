@@ -93,3 +93,7 @@ upstream pressure. Turbine efficiency/head remain authored; no generated
 compressor/turbine map is selected by this option. Absent/false retains legacy
 replay behavior; the true option is included in engine state hashing.
 Normal-shock reference: https://www.grc.nasa.gov/WWW/BGH/normal.html .
+
+### Runtime mask boundary transition
+Valid compressor corners contribute their bilinear weights; unsupported corners contribute zero simulated weight. The remainder uses the explicitly diagnosed authored fallback. This makes coverage transitions continuous, preserves exact valid knots, and does not certify unsupported points. Compressor/turbine usage and fallback flags describe each step. The shipped example generator refines up to five passes with 129 speed / 257 flow budgets and refuses a budget-limited audit; the 3% target is sampled at cell centers, not a global error guarantee.
+

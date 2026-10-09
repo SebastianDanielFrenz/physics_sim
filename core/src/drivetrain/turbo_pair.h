@@ -128,11 +128,17 @@ public:
             const real theta=ambient_k/stages->compressor_reference_k;
             const real nc=stages->snap(stages->compressor_pr.x,rpm()/std::sqrt(theta));
             const real wc=stages->snap(stages->compressor_pr.y,comp_flow/stages->units*std::sqrt(theta)/(ambient_pa/stages->reference_pa));
-            if(stages->compressor_covered(nc,wc)) {
+            const auto sample=stages->compressor_sample(nc,wc);
+            if(sample.weight>real(0)) {
                 compressor_stage_used=true;
-                head=ambient_pa*(stages->compressor_pr.value(nc,wc)-real(1));
-                stage_work=stages->compressor_work_j_kg.value(nc,wc)*theta;
-                stage_slope=-ambient_pa*stages->compressor_pr.dvalue_dy(nc,wc)*wc;
+                const real old_head=head;
+                const real authored_work=real(1005)*ambient_k*(ps::math::pow(real(1)+std::max(real(0),head)/ambient_pa,real(2.0/7.0))-real(1))/desc.compressor_efficiency;
+                const real authored_slope=real(2)*desc.reference_head_pa*speed_edge*speed_edge*flow*flow;
+                head=(real(1)-sample.weight)*old_head+ambient_pa*(sample.pressure_ratio-sample.weight);
+                stage_work=(real(1)-sample.weight)*authored_work+sample.work*theta;
+                stage_slope=(real(1)-sample.weight)*authored_slope+
+                    (old_head+ambient_pa)*sample.weight_slope*wc-ambient_pa*sample.pressure_slope*wc;
+                stage_map_fallback=sample.weight<real(1)-real(1e-12);
             } else stage_map_fallback=true;
         }
         // Pressure equilibrium includes compressor capacity; actual manifold

@@ -58,6 +58,28 @@ TEST_CASE("Offline stage map loads provenance and rejects invalid data", "[turbo
     }
 }
 
+TEST_CASE("Compressor mask retains valid knots and blends boundary weight continuously", "[turbo_stage]") {
+    ps::drivetrain::TurboStageMaps m;
+    m.compressor_pr={{0,1,2},{0,1,2},{99,99,99,99,3,4,99,5,6}};
+    m.compressor_work_j_kg=m.compressor_pr;
+    m.compressor_valid={false,false,false,false,true,true,false,true,true};
+    CHECK(m.compressor_covered(1,1));
+    CHECK(m.compressor_covered(1,1.5));
+    CHECK_FALSE(m.compressor_covered(.5,1.5));
+    const auto edge=m.compressor_sample(1,1.5), half=m.compressor_sample(.5,1.5);
+    CHECK(edge.weight==Catch::Approx(1));
+    CHECK(edge.pressure_ratio==Catch::Approx(3.5));
+    CHECK(half.weight==Catch::Approx(.5));
+    CHECK(half.pressure_ratio==Catch::Approx(1.75));
+    CHECK(half.work==Catch::Approx(1.75)); // invalid sentinel 99 never enters
+    CHECK(m.compressor_sample(1-1e-8,1.5).pressure_ratio==Catch::Approx(edge.pressure_ratio).margin(1e-6));
+    const auto inside=m.compressor_sample(1.5,1.5);
+    CHECK(inside.weight==Catch::Approx(1));
+    CHECK(inside.pressure_slope==Catch::Approx(1));
+    CHECK(inside.weight_slope==Catch::Approx(0));
+    CHECK(m.compressor_sample(-1,1).weight==0);
+}
+
 TEST_CASE("Generated compressor work drives shaft and thermal outputs", "[turbo_stage]") {
     const auto d=load_stage();
     ps::drivetrain::TurboPair t(d);
