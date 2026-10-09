@@ -136,7 +136,9 @@ struct PowertrainSnapshot {
     EngineState engine_state = EngineState::Off;
     real speedo_mps = 0.0; // gearbox-output-derived, like a real speedo (spec section 7.6)
     real clutch_engagement = 0.0; // effective (min of pedal and auto)
-    std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift
+    bool traction_control_intervening=false;
+    real traction_torque_fraction=1, traction_estimated_speed_m_s=0, traction_positive_slip=0;
+    std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control
     std::vector<EngineSoundState> engines; // 0 or 1 in I3; capacity reused per snapshot slot (D8)
     DrivelineSoundState driveline;
     // PHYS-033 P4 I4 C8: per-differential torque-split summary, component-

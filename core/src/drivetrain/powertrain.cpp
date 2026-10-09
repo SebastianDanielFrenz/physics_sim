@@ -1857,6 +1857,9 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             // (manual_tcu.h). Without an engine there is no throttle stage
             // to speak of; fall back to the raw pedal exactly as before.
             s.throttle_request = engine_ ? last_throttle_command_.command : ctx.throttle;
+            // TC changes the available ECU request: launch clutch must not
+            // wait for full-pedal launch RPM after TC has limited that request.
+            if (ctx.traction_throttle_ceiling < real(1)) s.throttle_request = std::min(s.throttle_request,ctx.traction_throttle_ceiling);
             s.gear_request = ctx.gear_request;
             s.shift_up_count = ctx.shift_up_count;
             s.shift_down_count = ctx.shift_down_count;
@@ -1954,13 +1957,13 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             ni.gear = gearbox_ ? gearbox_->current_position() : 0;
             ni.speed_mps = approx_speed_mps();
             ni.engine_running = last_engine_result_.state == EngineState::Running;
-            ni.ignition_cut = ctx.tcu_ignition_cut;
+            ni.ignition_cut = ctx.tcu_ignition_cut || ctx.traction_ignition_cut;
             ni.p_intake_pa = engine_->intake_pressure_pa();
             ni.p_ambient_pa = ctx.ambient.pressure_pa;
             nitrous_->step(ni);
             s.nitrous = nitrous_->engine_input();
         }
-        const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut};
+        const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut || ctx.traction_ignition_cut};
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
         const auto& pre = last_engine_result_;
         if (nitrous_) nitrous_->observe(pre.limiter_active || pre.dfco_active, pre.fuel_supply_fraction < real(1.0));

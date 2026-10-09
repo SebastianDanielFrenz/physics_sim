@@ -66,6 +66,8 @@ struct ComponentSubstepCtx {
     bool gearbox_in_neutral = true;
     real tcu_throttle_floor = 0.0; // LAGGED one substep (engine_torque_map.h's TcuRequest, plan section 7.2's order-independence)
     bool tcu_ignition_cut = false; // LAGGED one substep
+    bool traction_ignition_cut = false; // fast TC combustion cut while throttle/boost catches up
+    real traction_throttle_ceiling = 1.0; // current sensor-only TC ECU request, not a pedal rewrite
     real tcu_throttle_ceiling = 1.0; // LAGGED one substep
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared

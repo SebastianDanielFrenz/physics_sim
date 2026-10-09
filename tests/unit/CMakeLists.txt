@@ -3,6 +3,7 @@
 # world stepping, jobs etc. arrive in P1.
 
 add_executable(ps_unit_tests
+  test_traction_control.cpp
   test_adaptive_pressure.cpp
   test_live_engine_ambient.cpp
   test_aerodynamics.cpp

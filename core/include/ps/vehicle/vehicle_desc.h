@@ -19,6 +19,7 @@
 #include "ps/vehicle/curve1d.h" // Curve1D (moved to its own header, PHYS-033 I2 commit 5a, to
                                  // break the vehicle_desc.h <-> powertrain_desc.h cycle below)
 #include "ps/vehicle/tyre_desc.h"
+#include "ps/vehicle/traction_control.h"
 
 #include <string>
 #include <vector>
@@ -146,6 +147,7 @@ struct SteeringDesc {
 using AeroDesc = aero::Desc;
 
 struct VehicleDesc {
+    TractionControlDesc traction_control;
     std::string name;
     std::string source; // mass/geometry provenance (PLAN.md section 8)
     std::vector<WheelDesc> wheels;

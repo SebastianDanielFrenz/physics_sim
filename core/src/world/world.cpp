@@ -700,6 +700,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", assist_clutch_default);
     channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", assist_blip_default);
     channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift", assist_shift_default);
+    channel_indices.assist_traction_control = ensure_control_channel_index(channel_prefix + "assist.traction_control",desc.traction_control.enabled?real(1):real(0));
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): resolve every control channel
     // this vehicle's powertrain components declare, same prefix convention

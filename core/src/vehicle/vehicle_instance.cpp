@@ -31,6 +31,8 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
     : chassis_(chassis), surfaces_(surfaces), control_indices_(control_indices), desc_(desc),
       powertrain_(desc_.powertrain, desc_.brake_system, desc_.wheels, desc_.controllers, desc_.name) {
     aero::validate(desc_.aero);
+    validate_traction_control(desc_.traction_control);
+    traction_sensors_.resize(desc_.wheels.size());
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
         wheels_.push_back(std::make_unique<WheelInstance>(w, create_pacejka_tyre_model(w.tyre)));
@@ -140,6 +142,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     const bool assist_auto_clutch = channel_values[control_indices_.assist_auto_clutch] > real(0.5);
     const bool assist_auto_blip = channel_values[control_indices_.assist_auto_blip] > real(0.5);
     const bool assist_auto_shift = channel_values[control_indices_.assist_auto_shift] > real(0.5);
+    const bool assist_traction = channel_values[control_indices_.assist_traction_control] > real(0.5);
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
     // channel's value, copied once per tick (not per substep, same
@@ -152,6 +155,13 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     const Pose pose0 = backend.get_pose(chassis_);
     const Motion motion0 = backend.get_motion(chassis_);
+    // Virtual ideal six-axis IMU: finite-difference acceleration, gravity
+    // compensated using attitude. Only this sensor reading reaches TC.
+    real imu_accel=0;
+    if(desc_.traction_control.enabled||assist_traction||traction_state_.initialized) {
+        if(imu_have_previous_&&tick_dt>0) imu_accel=pose0.orientation.inverse().rotate((motion0.linear-imu_previous_velocity_world_)/tick_dt).x;
+        imu_previous_velocity_world_=motion0.linear;imu_have_previous_=true;
+    }
     // PHYS-033 I1 W1: read ONCE per tick, at the tick-start rotation - Jolt
     // itself applies the whole tick's accumulated torque with the inverse
     // inertia at the rotation at STEP START (I1 plan section 2, condition
@@ -237,6 +247,15 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         drivetrain::ComponentSubstepCtx ctx;
         ctx.h = substep_dt;
         ctx.throttle = controls.throttle;
+        const real yaw=pose_s.orientation.inverse().rotate(twist_s.angular).z;
+        for(std::size_t i=0;i<wheels_.size();++i) {
+            const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
+            sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i)};
+        }
+        const real traction_fraction=step_traction_control(desc_.traction_control,traction_state_,traction_sensors_,imu_accel,yaw,
+            controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction,substep_dt);
+        ctx.traction_ignition_cut=assist_traction&&traction_fraction<real(.75)&&traction_state_.positive_slip>desc_.traction_control.target_slip+real(.04);
+        ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(controls.throttle,real(0),real(1))*traction_fraction:real(1);
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
         ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9
@@ -449,8 +468,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         // its launch-vs-shift speed proxy (powertrain.h's approx_speed_mps).
         snap.speedo_mps = powertrain_.approx_speed_mps();
 
+        snap.traction_control_intervening=traction_state_.intervening;
+        snap.traction_torque_fraction=traction_state_.torque_fraction;
+        snap.traction_estimated_speed_m_s=traction_state_.estimated_speed_m_s;
+        snap.traction_positive_slip=traction_state_.positive_slip;
         snap.clutch_engagement = powertrain_.has_clutch() ? powertrain_.clutch_engagement() : real(1.0);
-        snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u);
+        snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u) | (assist_traction ? 8u : 0u);
 
         // ps_audio A10 (vault PHYS-054): the fill itself now lives in
         // drivetrain::fill_engine_sound_state, shared with EngineRig, so a
@@ -533,6 +556,7 @@ void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRig
         hub_speeds[i] = radius > real(0.0) ? hub_speed_common / radius : real(0.0);
         wheels_[i]->reset_relaxation();
     }
+    traction_state_={};imu_have_previous_=false;imu_previous_velocity_world_={};
     powertrain_.reset(opts, hub_speeds);
     // Teleport resets actuator dynamics/commands, but does not create or discard prepaid energy.
     const real energy=aero_state_.fan_energy_j; aero_state_={}; aero_state_.fan_energy_j=energy;
@@ -547,6 +571,12 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
     // topology state, each lossy gear's lambda_mesh_prev) - see
     // powertrain.h's fold_state_hash.
     h = powertrain_.fold_state_hash(h);
+    h=fold_traction_control_hash(desc_.traction_control,traction_state_,h);
+    if(desc_.traction_control.enabled||traction_state_.initialized||traction_state_.enabled) {
+        for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)}) {
+            const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}
+        }
+    }
     return aero::fold_state_hash(desc_.aero,aero_state_,h);
 }
 

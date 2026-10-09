@@ -48,7 +48,7 @@ struct ControlChannelIndices {
     std::size_t shift_up_count = 0, shift_down_count = 0;
     std::size_t gear_request = 0;
     std::size_t ignition = 0, starter = 0;
-    std::size_t assist_auto_clutch = 0, assist_auto_blip = 0, assist_auto_shift = 0;
+    std::size_t assist_auto_clutch = 0, assist_auto_blip = 0, assist_auto_shift = 0, assist_traction_control = 0;
     // PHYS-033 P4 I4 C3 (plan section 2.4): one resolved World control-
     // channel index per drivetrain::Powertrain::declare_control_channels(...)
     // entry, same order - resolved in World::create_vehicle exactly like the
@@ -279,6 +279,10 @@ private:
     real wheelbase_ = 2.5;
     real rear_axle_x_ = 0.0;
 
+    TractionControlState traction_state_{};
+    std::vector<TractionWheelSensor> traction_sensors_;
+    Vec3 imu_previous_velocity_world_{}; // virtual accelerometer plumbing only; never supplied as TC speed
+    bool imu_have_previous_=false;
     aero::State aero_state_{};
     aero::Telemetry aero_telemetry_{};
     real prev_steer_avg_ = 0.0; // for SteeringDesc::steer_rate_limit
