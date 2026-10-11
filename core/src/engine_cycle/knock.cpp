@@ -12,13 +12,13 @@ namespace ps::engine_cycle {
 
 real octane_index(real ron, real mon) { return ron - kOctaneIndexK * (ron - mon); }
 
-real douaud_eyzat_inv_on_term(real oi) {
-    return ps::math::pow(oi / real(100.0), -kDouaudEyzatOnExponent) / kDouaudEyzatA_s;
+real douaud_eyzat_inv_on_term(real oi, real prefactor_s) {
+    return ps::math::pow(oi / real(100.0), -kDouaudEyzatOnExponent) / prefactor_s;
 }
 
-real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k) {
+real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k) {
     const real p_atm = p_pa / real(101325.0);
-    return inv_on_term * ps::math::exp(kDouaudEyzatPExponent * ps::math::log(p_atm) - kDouaudEyzatB_K / t_k);
+    return inv_on_term * ps::math::exp(kDouaudEyzatPExponent * ps::math::log(p_atm) - b_k / t_k);
 }
 
 namespace {
@@ -70,14 +70,27 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
     const real x = c0.x;
     const real ff = in.fuel_mass_fraction;
     if (!(ff >= real(0.0) && ff < real(1.0))) throw std::invalid_argument("knock_replay: fuel_mass_fraction must be in [0, 1)");
-    const real fa = (real(1.0) - ff) * m.gas.fresh.a + ff * kFuelVapourCvA_JkgK;
-    const real fb = (real(1.0) - ff) * m.gas.fresh.b + ff * kFuelVapourCvB_JkgK2;
+    const real fa = (real(1.0) - ff) * m.gas.fresh.a + ff * in.vapour_cv_scale * kFuelVapourCvA_JkgK;
+    const real fb = (real(1.0) - ff) * m.gas.fresh.b + ff * in.vapour_cv_scale * kFuelVapourCvB_JkgK2;
     const real fr = (real(1.0) - ff) * m.gas.fresh.r + ff * kFuelVapourR_JkgK;
     eg.a = (real(1.0) - x) * fa + x * m.gas.burned.a;
     eg.b = (real(1.0) - x) * fb + x * m.gas.burned.b;
     eg.r = (real(1.0) - x) * fr + x * m.gas.burned.r;
-    eg.t0 = c0.t;
+    eg.t0 = c0.t + in.end_gas_t0_offset_k;
     eg.p0 = c0.p;
+    if (!(eg.t0 > real(0.0))) throw std::invalid_argument("knock_replay: end-gas IVC temperature must stay > 0 K");
+    // P7b diagnostic lever: the single-zone (air + residual) isentrope, against which the bulk's wall-heat deficit is
+    // measured up to the Wiebe start.
+    EndGas sz;
+    sz.a = (real(1.0) - x) * m.gas.fresh.a + x * m.gas.burned.a;
+    sz.b = (real(1.0) - x) * m.gas.fresh.b + x * m.gas.burned.b;
+    sz.r = (real(1.0) - x) * m.gas.fresh.r + x * m.gas.burned.r;
+    sz.t0 = c0.t;
+    sz.p0 = c0.p;
+    bool wall = in.wall_heat_end_gas;
+    const real theta_burn = s.wiebe().theta0_deg;
+    real t_sz_isen = sz.t0;
+    real t_eg_isen = eg.t0;
 
     // End of the integral: the burned fraction end_burn_fraction, or EVO if that comes first.
     real theta_stop = s.wiebe().angle_at_fraction(in.end_burn_fraction);
@@ -89,7 +102,7 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
     KnockReplayResult r;
     real theta = in.ivc.crank_deg;
     real t_eg = eg.t0;
-    real f0 = douaud_eyzat_rate(in.inv_on_term, c0.p, t_eg);
+    real f0 = douaud_eyzat_rate(in.inv_on_term, c0.p, t_eg, in.activation_k);
     r.p_max_pa = c0.p;
     r.p_end_pa = c0.p;
     while (theta < theta_stop) {
@@ -99,9 +112,22 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
         const real* y = s.state().y;
         const CvState c = cv_state(m.gas, y[kCylM], y[kCylU], y[kCylMb], m.geom.eval(theta).v);
         if (c.p > r.p_max_pa) r.p_max_pa = c.p;
-        t_eg = eg.temperature(c.p, t_eg);
+        if (wall) {
+            // Bulk with wall heat, shifted by the vapour difference of the isentropes, until the Wiebe start; then the
+            // end-gas isentrope restarts from that state.
+            t_sz_isen = sz.temperature(c.p, t_sz_isen);
+            t_eg_isen = eg.temperature(c.p, t_eg_isen);
+            t_eg = t_eg_isen - (t_sz_isen - c.t);
+            if (theta >= theta_burn) {
+                eg.t0 = t_eg;
+                eg.p0 = c.p;
+                wall = false;
+            }
+        } else {
+            t_eg = eg.temperature(c.p, t_eg);
+        }
         r.p_end_pa = c.p;
-        const real f1 = douaud_eyzat_rate(in.inv_on_term, c.p, t_eg);
+        const real f1 = douaud_eyzat_rate(in.inv_on_term, c.p, t_eg, in.activation_k);
         r.integral += real(0.5) * (f0 + f1) * dth / rate_deg_s;
         f0 = f1;
         if (r.integral >= real(1.0)) {

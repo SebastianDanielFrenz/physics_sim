@@ -365,6 +365,13 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         if (!(desc.knock.margin_deg >= real(0.0) && desc.knock.margin_deg <= real(10.0))) {
             throw std::runtime_error("engine map generator: knock: margin_deg must be in [0, 10]");
         }
+        if (!desc.knock.lambda_target.x.empty()) {
+            const std::string err = desc.knock.lambda_target.validate();
+            if (!err.empty()) throw std::runtime_error("engine map generator: knock: lambda_target: " + err);
+            for (real v : desc.knock.lambda_target.values) {
+                if (!(v >= real(0.5) && v <= real(2.0))) throw std::runtime_error("engine map generator: knock: lambda_target values must be in [0.5, 2]");
+            }
+        }
         s.knock = true;
         s.knock_nf = desc.knock.fuels.size();
         s.knock_mbt_btdc = desc.ignition_delay_deg == real(0.0) ? -s.mbt_atdc : -(s.mbt_atdc - desc.ignition_delay_deg);
@@ -456,7 +463,11 @@ void EngineMapGenTask::run_point(std::size_t i) {
             kin.ivc = s.results[i].ivc;
             kin.ignition_delay_deg = s.desc.ignition_delay_deg;
             kin.burn_duration_deg = s.desc.burn_duration_deg;
-            kin.fuel_mass_fraction = real(1.0) / (real(1.0) + s.ops[i].lambda * s.afr);
+            // P7b (knock model v2): the replay runs at the ECU's lambda target of this node (enrichment raises the fuel
+            // vapour share of the end gas); the node's own cycle stays at lambda 1.
+            const Table2D& lt = s.desc.knock.lambda_target;
+            if (!lt.x.empty()) kin.op.lambda = lt.value(s.ops[i].rpm, s.ops[i].p_im_pa);
+            kin.fuel_mass_fraction = real(1.0) / (real(1.0) + kin.op.lambda * s.afr);
             for (std::size_t f = 0; f < s.knock_nf; ++f) {
                 kin.inv_on_term = s.knock_inv_on[f];
                 const engine_cycle::KnockLimitResult kr = engine_cycle::knock_limited_spark(kin, s.knock_mbt_btdc, s.desc.knock.margin_deg);

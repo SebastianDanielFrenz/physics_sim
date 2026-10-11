@@ -226,6 +226,10 @@ struct CycleModelDesc {
         bool enabled = false;
         real margin_deg = 0.0;          // subtracted from the knock-safe advance at knock-limited nodes, [0, 10]
         std::vector<KnockFuel> fuels;   // >= 1 when enabled
+        // P7b: the ECU's lambda target over (rpm, p_im Pa) - the loader copies SimulatedEngineDesc::ecu.lambda_target
+        // here for an engine that opts in. The knock replay of a node runs at this lambda (the grid node's own cycle
+        // stays at lambda 1, the generator's convention); empty = lambda 1.
+        Table2D lambda_target;
     } knock;
 
     // ---- Tier 2 (frozen literature; every value carries its citation in the JSON source) ----

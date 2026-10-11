@@ -43,6 +43,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -347,14 +348,23 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
     const Table2D& e10 = e.maps.theta_kl_by_fuel[1];
     const Table2D& e85 = e.maps.theta_kl_by_fuel[2];
     constexpr real kTol = 0.1; // two independent 0.05 deg bisections
-    std::size_t limited = 0, e85_gain = 0;
+    // P7b: the replay runs at the ECU lambda target; enrichment (more fuel vapour, a cooler end gas) may raise theta_kl
+    // with load. A p_im step may rise by at most kTol + kVapourDegPerLambda * (lambda drop): the vapour term moves
+    // theta_kl by +1.2..+2.4 deg for lambda 1 -> 0.80-0.90 (P7b budget, i.e. <= 12 deg per unit lambda), 20 [AS] bounds it.
+    constexpr real kVapourDegPerLambda = 20.0;
+    REQUIRE_FALSE(e.cycle->knock.lambda_target.values.empty());
+    const Table2D& lam = e.cycle->knock.lambda_target;
+    std::size_t limited = 0, e85_gain = 0, enriched_pairs = 0;
     for (std::size_t ix = 0; ix < t3.x.size(); ++ix) {
         for (std::size_t iy = 0; iy < t3.y.size(); ++iy) {
             INFO("rpm " << t3.x[ix] << " p_im " << t3.y[iy]);
             if (iy > 0) {
-                CHECK(kl_at(t3, ix, iy) <= kl_at(t3, ix, iy - 1) + kTol);
-                CHECK(kl_at(e10, ix, iy) <= kl_at(e10, ix, iy - 1) + kTol);
-                CHECK(kl_at(e85, ix, iy) <= kl_at(e85, ix, iy - 1) + kTol);
+                const real drop = std::max(real(0.0), lam.value(t3.x[ix], t3.y[iy - 1]) - lam.value(t3.x[ix], t3.y[iy]));
+                const real allow = kTol + kVapourDegPerLambda * drop;
+                enriched_pairs += kl_at(t3, ix, iy) > kl_at(t3, ix, iy - 1) + kTol ? 1 : 0;
+                CHECK(kl_at(t3, ix, iy) <= kl_at(t3, ix, iy - 1) + allow);
+                CHECK(kl_at(e10, ix, iy) <= kl_at(e10, ix, iy - 1) + allow);
+                CHECK(kl_at(e85, ix, iy) <= kl_at(e85, ix, iy - 1) + allow);
             }
             CHECK(kl_at(e10, ix, iy) >= kl_at(t3, ix, iy) - kTol);
             CHECK(kl_at(e85, ix, iy) >= kl_at(e10, ix, iy) - kTol);
@@ -364,7 +374,8 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
         }
         CHECK(kl_at(t3, ix, 0) >= e.maps.theta_mbt_deg.value(t3.x[ix], t3.y[0])); // 20 kPa: never knock-limited
     }
-    std::printf("K3: %zu of %zu tier3 nodes limited, E85 > E10 + 1 deg at %zu nodes\n", limited, t3.values.size(), e85_gain);
+    std::printf("K3: %zu of %zu tier3 nodes limited, E85 > E10 + 1 deg at %zu nodes, %zu tier3 p_im steps rise (enrichment)\n",
+                limited, t3.values.size(), e85_gain, enriched_pairs);
     CHECK(limited > 0);
     CHECK(e85_gain > 0);
 
@@ -663,12 +674,14 @@ TEST_CASE("P7 K8: the dyno on a P5 turbo conversion - Knock findings, never more
 // KV1 - the generated A25A's knock limit (tier3_e10_cert, margin 0, MBT tracking) against the spark its ECU actually ran
 // at WOT. Band declared before the asserted run: theta_kl - spark_meas in [-5, +10] deg at 2017-3571 rpm.
 //
-// [!mayfail]: the model is MORE knock-prone than the engine - theta_kl lies 4-13 deg below the measured spark at WOT
-// (out/garage_p7_progress.md). Discriminating measurement ("P7 diag: knock replay internals"): replayed from an IVC
-// state scaled to the MEASURED trapped air (the generated A25A over-traps 11-15 % at 3000-4500 rpm, the [AS] runner),
-// the Livengood-Wu integral at the measured spark is still 1.19-1.40 (> 1, knock) at every WOT row - so the trapped-air
-// excess explains part of the 3000-3571 rpm gap, the rest is the uncalibrated Douaud-Eyzat correlation / single-zone
-// end gas, a model limit (no constant was tuned to this data, D1).
+// [!mayfail] (P7b, after the calibration and the lambda-target replay): +1.50 / +1.35 / -3.75 / -6.22 deg at 2017 /
+// 2535 / 2996 / 3571 rpm - 3571 rpm is 1.2 deg outside the band. Discriminating measurement (test_knock_calibration.cpp
+// KV1-BC, asserted): the SAME calibrated model replayed at that row's measured boundary conditions - intake temperature,
+// cam, lambda and the measured trapped air - gives -2.24 deg, inside the band. The generated node traps 1/0.834 = 1.20x
+// the measured air there (the [AS] 709 mm runner's tuning peak, test_gen_engine_dyno's +40..+49 N*m air excess) and
+// that term alone moves theta_kl by +8.8 deg at this row (P7b budget, out/garage_p7b_progress.md); the ISA intake
+// temperature of the generator (288 K vs 306 K measured) moves it the other way by -4.9 deg. The miss is the generated
+// gas exchange, not the knock model; no knock constant may absorb it (fitted on the BC replay, P7b decision D2).
 TEST_CASE("P7 KV1: A25A knock limit vs measured WOT spark (2017-3571 rpm)", "[knock][drivetrain][cycle][!mayfail]") {
     const SimulatedEngineDesc e = load_sim(knock_engine("toyota_a25a_fks_gen.json", 0.0, true));
     REQUIRE(e.fuels[0].name == "tier3_e10_cert");

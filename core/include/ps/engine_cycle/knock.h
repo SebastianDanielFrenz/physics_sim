@@ -52,13 +52,28 @@ inline constexpr real kFuelVapourR_JkgK = 8314.462618 / 114.23;                 
 inline constexpr real kFuelVapourCvB_JkgK2 = ((425.0 - 188.9) / 0.11423) / (900.0 - 298.15);                     // [D]
 inline constexpr real kFuelVapourCvA_JkgK = 188.9 / 0.11423 - kFuelVapourR_JkgK - kFuelVapourCvB_JkgK2 * 298.15; // [D]
 
-inline constexpr std::uint32_t kKnockModelVersion = 1;
+// Engine garage P7b: the CALIBRATED set the generator uses (fitted on the Toyota A25A only - see docs/data_formats/engine.md
+// "Knock limit" and the P7b progress notes); the literature values above stay as the reference.
+//   kKnockCalPrefactorScale multiplies the Douaud-Eyzat pre-factor A (tau_cal = scale * tau_lit at equal B): fitted
+//     by least squares of theta_kl - measured spark over 17 A25A rows (7 WOT, 10 knock-limited lambda-1 rows) on a
+//     replay with the measured intake temperature, cam, lambda and trapped air: 1.2555 (rounded 1.26), rms 2.06 deg,
+//     mean +0.18 deg; +-10 % moves theta_kl by -+2.1 deg.
+//   kKnockCalActivationK replaces B: NOT fitted - a joint fit (scale, B) lands at B 3742 K with rms 2.065 vs 2.064 at
+//     3800 K (B is not identifiable from these rows), so B stays the literature value.
+inline constexpr real kKnockCalPrefactorScale = 1.26;          // [M] fitted on the Toyota A25A (P7b)
+inline constexpr real kKnockCalActivationK = kDouaudEyzatB_K; // [AS] literature (the fit cannot identify it)
+// v2 (P7b): the replay runs at the ECU's lambda target of the node (CycleModelDesc::knock.lambda_target) and uses the
+// calibrated constants.
+inline constexpr std::uint32_t kKnockModelVersion = 2;
 
 [[nodiscard]] real octane_index(real ron, real mon);
 
-// 1/tau [1/s] of the Douaud-Eyzat correlation; inv_on_term = (OI/100)^-3.402 / A (precomputed per fuel).
-[[nodiscard]] real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k);
-[[nodiscard]] real douaud_eyzat_inv_on_term(real octane_index);
+// 1/tau [1/s] of the Douaud-Eyzat correlation; inv_on_term = (OI/100)^-3.402 / A (precomputed per fuel), b_k the
+// activation temperature.
+[[nodiscard]] real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k = kKnockCalActivationK);
+// (OI/100)^-3.402 / (prefactor_s): prefactor_s defaults to the calibrated pre-factor A * kKnockCalPrefactorScale; pass
+// kDouaudEyzatA_s for the literature correlation.
+[[nodiscard]] real douaud_eyzat_inv_on_term(real octane_index, real prefactor_s = kDouaudEyzatA_s * kKnockCalPrefactorScale);
 
 struct KnockReplayInput {
     const CycleStepper* proto = nullptr; // any stepper built from the engine's CycleModelDesc (copied per replay)
@@ -70,7 +85,15 @@ struct KnockReplayInput {
     real fuel_mass_fraction = 0.0;       // fuel vapour share of the fresh charge, 1/(1 + lambda*AFR); 0 = air only
     real step_deg = kKnockReplayStepDeg;
     real end_burn_fraction = kKnockEndBurnFraction;
+    real activation_k = kKnockCalActivationK; // Douaud-Eyzat B [K]
     bool stop_at_knock = true;           // false: integrate to the end (diagnostics)
+    // Diagnostic levers (P7b budget; the generator leaves both at their defaults):
+    real end_gas_t0_offset_k = 0.0;      // added to the end gas's IVC temperature (e.g. a DI charge-cooling estimate)
+    real vapour_cv_scale = 1.0;          // multiplies the fuel-vapour cv fit (sensitivity of the [AS] iso-octane fit)
+    // true: the end gas follows the single-zone (bulk) temperature, which carries the Woschni wall heat, up to the Wiebe
+    // start - shifted by the fuel-vapour difference of the two isentropes - and is isentropic only after it; false
+    // (default): isentropic from IVC (an adiabatic core).
+    bool wall_heat_end_gas = false;
 };
 
 struct KnockReplayResult {

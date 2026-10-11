@@ -2235,6 +2235,7 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         if (knock_limited && !have_theta_kl_file) {
             e.cycle->knock.enabled = true;
             e.cycle->knock.margin_deg = knock_margin_deg;
+            e.cycle->knock.lambda_target = e.ecu.lambda_target; // P7b: the replay runs at the ECU's lambda
             for (const FuelDesc& f : e.fuels) {
                 if (!f.has_knock) {
                     throw std::runtime_error(ctx + ": ecu.ignition_strategy \"knock_limited\" needs a 'knock' block (RON/MON) in "
