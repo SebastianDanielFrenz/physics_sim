@@ -602,6 +602,9 @@ TEST_CASE("S1: snapshot reports fitted (distinguishable from off) and launch sta
         CHECK(pt.assist_fitted_bits == (1u | 2u | 4u | 8u | 32u));
         CHECK((pt.assist_active_bits & 16u) == 0u);
         CHECK_FALSE(pt.launch_control_active);
+        // the channel list of a car without the part is unchanged: no assist.launch_control
+        const std::vector<std::string> names = rig.world->control_channel_names();
+        CHECK(std::find(names.begin(), names.end(), "assist.launch_control") == names.end());
     }
     {
         vehicle::VehicleDesc d = sedan();
@@ -609,6 +612,10 @@ TEST_CASE("S1: snapshot reports fitted (distinguishable from off) and launch sta
         d.traction_control.fitted = false;
         add_launch(d, kLaunchRpm);
         auto rig = make_rig(d);
+        {
+            const std::vector<std::string> names = rig.world->control_channel_names();
+            CHECK(std::find(names.begin(), names.end(), "assist.launch_control") != names.end());
+        }
         rig.world->set_control("assist.auto_shift", 1.0); // ignored
         rig.world->set_control("assist.traction_control", 1.0);
         rig.world->set_control("assist.launch_control", 1.0);

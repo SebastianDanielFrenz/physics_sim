@@ -18,6 +18,7 @@ not what the example files under `data/` happen to contain. The loaders are:
 | oxidizer | `core/src/io/nitrous_io.cpp` (`load_oxidizer_json`) | `ps/drivetrain/oxidizer_desc.h` (`OxidizerDesc`) |
 | engine_thermal / cooling_system | `core/src/io/engine_thermal_io.cpp` (`load_engine_thermal_json`, `load_cooling_system_json`; the vehicle keys `cooling_system`/`engine_thermal_start` and the engine key `default_thermal` via `load_vehicle_json`) | `ps/drivetrain/engine_thermal_desc.h` (`EngineThermalDesc`, `CoolingSystemDesc`) |
 | n2o_bottle / nitrous_kit / nitrous_controller | `core/src/io/nitrous_io.cpp` (`load_n2o_bottle_json`, `load_nitrous_kit_json`, `load_nitrous_controller_json`; vehicle components via `load_vehicle_json`) | `ps/drivetrain/nitrous_desc.h` (`N2oBottleDesc`, `NitrousKitDesc`, `NitrousControllerDesc`) |
+| electronics (engine garage P8) | `core/src/io/electronics_io.cpp` (`load_electronics_json`; `controllers` entries of type `electronics` and `VehicleLoadOptions::electronics` via `load_vehicle_json`) | `ps/drivetrain/controller_desc.h` (`LaunchControlDesc`; fitment sets the `fitted` flags) ([electronics.md](electronics.md)) |
 | ecu / cam (engine garage P2) | `core/src/io/engine_parts.cpp` (`assemble_engine`: merged into the engine JSON before `read_engine_fields`; reached from `load_vehicle_json`, `load_engine_json`, `load_engine_json_from_string`) | none of their own - the merged fields fill `TorqueMapEngineDesc` / `SimulatedEngineDesc` ([ecu.md](ecu.md), [cam.md](cam.md)) |
 
 The powertrain **graph itself** (which ports may connect, what gets
@@ -43,6 +44,7 @@ the end of this file under "Discrepancies found".
 - [`fuel.md`](fuel.md) — `physics_sim.fuel/1`, `data/fuels/*.json`. Lower heating value, stoichiometric AFR, density — cited fuel properties, no combustion model.
 - [`engine_thermal.md`](engine_thermal.md) — `physics_sim.engine_thermal/1`, `data/engine_thermal/*.json`. The engine side of the lumped engine thermal model: capacities, heat split, oil viscosity friction, thermostat.
 - [`cooling_system.md`](cooling_system.md) — `physics_sim.cooling_system/1`, `data/cooling_systems/*.json`. The vehicle side: radiator, fan, gauge, warnings; naming one in a vehicle opts it in.
+- [`electronics.md`](electronics.md) — `physics_sim.electronics/1`, `data/electronics/*.json`. Assist fitment (`fitted` flags) and launch control (two-step); parts grafted onto a car through the user layer.
 - [`oxidizer.md`](oxidizer.md) — `physics_sim.oxidizer/1`, `data/oxidizers/*.json`. NIST nitrous-oxide saturation and gas properties, the HEM/Dyer jet-flow tables built from them.
 - [`nitrous.md`](nitrous.md) � `physics_sim.n2o_bottle/1`, `physics_sim.nitrous_kit/1`, `physics_sim.nitrous_controller/1` (`data/n2o_bottles/`, `data/nitrous_kits/`, `data/nitrous_controllers/`): the slot-in nitrous hardware parts, their overrides, control channels and the vehicle wiring.
 - [`climate.md`](climate.md) — `physics_sim.climate/1`, `data/climates/*.json`. Location, sun, calendar and seasons (W1); per-season weather regimes, transitions, lags, precipitation phase, humidity, diurnal temperature, lightning (W3).

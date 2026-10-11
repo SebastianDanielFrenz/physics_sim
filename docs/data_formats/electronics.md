@@ -21,7 +21,9 @@ unchanged, state hash included):
 
 **A not-fitted assist ignores its channel and stays off whatever the channel says.** Decision: it still
 *registers* its channel (stable channel list for scripts and adapters; the channel's default value is then `0`
-instead of the block's `enabled`), but `VehicleInstance` reads it as 0. Anti-lag: with `anti_lag_switch.fitted =
+instead of the block's `enabled`), but `VehicleInstance` reads it as 0. The one exception is `assist.launch_control`:
+a car registers it only when it has a `launch_control` component (every channel list of a car without one is
+unchanged); a part with `fitted: false` still registers it. Anti-lag: with `anti_lag_switch.fitted =
 false` the engine sees no channel (`Sensors::anti_lag_channel` NaN) and anti-lag runs on its configuration's
 `default_enabled` only.
 
