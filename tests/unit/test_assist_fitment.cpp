@@ -671,6 +671,37 @@ TEST_CASE("S3: launch control on the simulated engine - 1 vs 10 workers identica
     CHECK(w10.own_violations == 0);
 }
 
+TEST_CASE("S5: the launch latch is hashed state (and only on a car that has the component)", "[assist][drivetrain][vehicle][determinism]") {
+    // Armed at idle with the clutch in: the second limit (4000 rpm) is never reached, so the dynamics are identical
+    // to the disarmed run - the latch byte is the only difference. Control channels are not hashed.
+    const auto idle_hash = [](const vehicle::VehicleDesc& d, bool arm, bool* active_out) {
+        auto rig = make_rig(d);
+        World& w = *rig.world;
+        w.set_control("assist.auto_clutch", 0.0);
+        w.set_control("clutch", 1.0);
+        w.set_control("gear_request", 1.0);
+        w.set_control("throttle", 0.0);
+        prepare(rig);
+        ps_test::settle(w, 0.5);
+        w.set_control("assist.launch_control", arm ? 1.0 : 0.0);
+        ps_test::settle(w, 0.5);
+        if (active_out != nullptr) *active_out = w.powertrain_state(rig.vehicle).launch_control_active;
+        return w.state_hash();
+    };
+    vehicle::VehicleDesc d = sedan();
+    add_launch(d, kLaunchRpm, kMaxSpeed);
+    bool armed_active = false, idle_active = true;
+    const std::uint64_t armed = idle_hash(d, true, &armed_active);
+    const std::uint64_t disarmed = idle_hash(d, false, &idle_active);
+    std::printf("[S5] armed %016llx (active %d) disarmed %016llx (active %d)\n", static_cast<unsigned long long>(armed), armed_active,
+                static_cast<unsigned long long>(disarmed), idle_active);
+    CHECK(armed_active);
+    CHECK_FALSE(idle_active);
+    CHECK(armed != disarmed);
+    // A car without the component ignores the channel entirely: same hash armed or not.
+    CHECK(idle_hash(sedan(), true, nullptr) == idle_hash(sedan(), false, nullptr));
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // S4: the anti-lag fitted switch (hyper-like turbo engine in the sedan, the D5 vehicle fixture).
 // ---------------------------------------------------------------------------------------------------------------
