@@ -128,7 +128,9 @@ struct EngineFieldChange {
 // Manifold-pressure axis [Pa] for an engine that gets a turbo with the given gauge target (bar): the desc's nodes at or below
 // ambient (ISA sea level, isa_air.h), then rows above ambient spaced 60 kPa (the hyper's pitch) up to (1 + target + 0.2) bar
 // absolute, the last step 30..90 kPa. The hyper's 100 kPa node followed by 160 / 220 / 300 kPa is exactly boost_grid_p_im for
-// a 1.8 bar target on its own stock part. Throws std::invalid_argument for target <= 0 or fewer than two nodes at/below ambient.
+// a 1.8 bar target on its own stock part. P5: when the last node at/below ambient is more than 2 kPa under it (the A25A's 97.27 kPa),
+// a node at ISA ambient itself is added before the boosted rows (the A25A's axis ends 97.27, 101.325, 161.325, 200 kPa for 0.8 bar),
+// so the plenum near ambient does not interpolate toward the first boosted row. Throws std::invalid_argument for target <= 0 or fewer than two nodes at/below ambient.
 [[nodiscard]] std::vector<real> boost_grid_p_im(const CycleModelDesc& desc, real target_boost_bar);
 
 // The axis for an engine that loses its compressor: nodes up to 0.95 x ISA ambient (96.26 kPa) are kept; whatever lay between

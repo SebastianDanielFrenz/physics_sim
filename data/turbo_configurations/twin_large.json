@@ -1,0 +1,16 @@
+{
+  "format": "physics_sim.turbo_configuration/1",
+  "name": "twin_large",
+  "turbo": "../turbos/large_gtx42_class.json",
+  "count": 2,
+  "target_boost_bar": 0.8,
+  "intercooler_effectiveness": 0.75,
+  "boost_control": {
+    "source": "[A] The hyper twin's PID (kp 1, ki 1/s, kd 0.05 s, actuator lag 0.1 s) unchanged: gains per unit of target_boost_bar, from the 2026-10-02 gain sweep on hyper_v8_one1_audio.json; re-checked on the engine class of this template by tests/unit/test_forced_induction_conversions.cpp.",
+    "kp": 1.0,
+    "ki_per_s": 1.0,
+    "kd_s": 0.05,
+    "actuator_tau_s": 0.1
+  },
+  "source": "[AS] Forced-induction template of the engine garage (design 7.2): 2 x large_gtx42_class (GTX42-class, meant for 4-6 L of engine PER TURBO). Target 0.8 bar gauge [AS: a street-turbo value; the garage's boost_grid_p_im covers (1 + target + 0.2) bar absolute], intercooler effectiveness 0.75 [AS: a typical air-to-air core, below the hyper's optimistic 0.95], no blow-off valve, no anti-lag, no cooler pressure drop (all optional keys left out, so this template is bit-identical to a file that never heard of them). A swap package starts from the template matching the chosen hardware and count and edits a user copy; see docs/data_formats/turbo.md 'Templates'."
+}
