@@ -223,6 +223,14 @@ public:
     [[nodiscard]] const Wiebe& wiebe() const { return wiebe_; }
     [[nodiscard]] real theta_ivc() const { return theta_ivc_; }
     [[nodiscard]] real theta_evo() const { return theta_evo_; }
+    // Engine garage P7: the cylinder state (m, U, m_b) and this cylinder's own
+    // crank angle at the last IVC capture (the same step end as the values
+    // above; theta 0 / zeros before the first capture). Read only by the knock
+    // limit's closed-cycle replay (ps/engine_cycle/knock.h); never fed back.
+    [[nodiscard]] real ivc_crank_deg() const { return ivc_theta_; }
+    [[nodiscard]] real ivc_cyl_m() const { return ivc_m_; }
+    [[nodiscard]] real ivc_cyl_u() const { return ivc_u_; }
+    [[nodiscard]] real ivc_cyl_mb() const { return ivc_mb_; }
     [[nodiscard]] real lift_intake(real theta_deg) const;
     [[nodiscard]] real lift_exhaust(real theta_deg) const;
     // Woschni IVC reference (0 before the first IVC).
@@ -246,6 +254,7 @@ private:
     real m_air_conv_ = 0.0, m_fuel_ = 0.0, x_b_ivc_ = 0.0;
     real p_ref_ = 0.0, v_ref_ = 0.0, t_ref_ = 0.0;
     real p_max_ = 0.0;
+    real ivc_theta_ = 0.0, ivc_m_ = 0.0, ivc_u_ = 0.0, ivc_mb_ = 0.0; // P7 IVC snapshot (diagnostic, write-only here)
     PortSource ip_src_{}, ep_src_{};
     real res_ip_cda_ = 0.0, res_ep_cda_ = 0.0;
 };

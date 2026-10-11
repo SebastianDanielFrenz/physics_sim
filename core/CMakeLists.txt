@@ -83,6 +83,7 @@ add_library(ps_engine_cycle STATIC
   src/engine_cycle/waveguide_network.cpp
   src/engine_cycle/cycle_engine.cpp
   src/engine_cycle/step_team.cpp
+  src/engine_cycle/knock.cpp
 )
 
 target_include_directories(ps_engine_cycle PUBLIC

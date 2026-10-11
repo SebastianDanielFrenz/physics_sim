@@ -27,6 +27,7 @@
 #include "ps/engine_cycle/cycle_engine.h"
 #include "ps/engine_cycle/cycle_point.h"
 #include "ps/engine_cycle/cycle_stepper.h"
+#include "ps/engine_cycle/knock.h"
 #include "ps/engine_cycle/wiebe.h"
 #include "ps/jobs/job_system.h"
 
@@ -230,6 +231,16 @@ struct EngineMapGenTask::Impl {
     std::vector<SweepSite> spark_sites;
     std::vector<real> lambdas;
     int spark_ref = 0, lambda_ref = 0;
+    // Engine garage P7: knock-limited engines only (desc.knock.enabled). One
+    // knock search per grid node and fuel, run inside that node's own
+    // run_point job (slot i*nf + f, preallocated here: no allocation in jobs).
+    bool knock = false;
+    std::size_t knock_nf = 0;
+    real knock_mbt_btdc = 0.0;
+    std::vector<real> knock_inv_on;       // per fuel: douaud_eyzat_inv_on_term(OI)
+    std::vector<real> knock_kl;           // grid_n * nf, deg BTDC
+    std::vector<unsigned char> knock_flag; // bit 0 limited, bit 1 saturated
+    std::vector<int> knock_replays;
 };
 
 namespace {
@@ -348,6 +359,25 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
     }
     for (real lambda : s.lambdas) s.ops.push_back(make_op(kLambdaSite.rpm, kLambdaSite.p_pa, lambda, s.mbt_atdc));
     s.results.resize(s.ops.size());
+    if (desc.knock.enabled) {
+        // P7: validated here as well as in the loader (a desc built in C++ never passes the loader).
+        if (desc.knock.fuels.empty()) throw std::runtime_error("engine map generator: knock: the knock limit needs >= 1 fuel");
+        if (!(desc.knock.margin_deg >= real(0.0) && desc.knock.margin_deg <= real(10.0))) {
+            throw std::runtime_error("engine map generator: knock: margin_deg must be in [0, 10]");
+        }
+        s.knock = true;
+        s.knock_nf = desc.knock.fuels.size();
+        s.knock_mbt_btdc = desc.ignition_delay_deg == real(0.0) ? -s.mbt_atdc : -(s.mbt_atdc - desc.ignition_delay_deg);
+        for (const CycleModelDesc::KnockFuel& f : desc.knock.fuels) {
+            if (!(f.ron >= real(40.0) && f.ron <= real(130.0) && f.mon >= real(40.0) && f.mon <= f.ron)) {
+                throw std::runtime_error("engine map generator: knock: fuel '" + f.name + "' needs 40 <= mon <= ron <= 130");
+            }
+            s.knock_inv_on.push_back(engine_cycle::douaud_eyzat_inv_on_term(engine_cycle::octane_index(f.ron, f.mon)));
+        }
+        s.knock_kl.assign(s.grid_n * s.knock_nf, real(0.0));
+        s.knock_flag.assign(s.grid_n * s.knock_nf, 0);
+        s.knock_replays.assign(s.grid_n * s.knock_nf, 0);
+    }
     s.done.assign(s.ops.size(), 0);
     s.held.assign(s.ops.size(), 0);
     s.exceptions.resize(s.ops.size());
@@ -370,6 +400,7 @@ std::size_t EngineMapGenTask::reuse_points_from(const EngineMapGenTask& previous
         if(s.done[i])continue;
         auto found=index.find(key(s.ops[i],i<s.grid_n));if(found==index.end())continue;
         const auto j=found->second;s.results[i]=old.results[j];s.held[i]=old.held[j];s.done[i]=1;++count;
+        if(s.knock && i<s.grid_n)for(std::size_t f=0;f<s.knock_nf;++f){s.knock_kl[i*s.knock_nf+f]=old.knock_kl[j*s.knock_nf+f];s.knock_flag[i*s.knock_nf+f]=old.knock_flag[j*s.knock_nf+f];s.knock_replays[i*s.knock_nf+f]=0;}
     }
     return count;
 }
@@ -415,6 +446,24 @@ void EngineMapGenTask::run_point(std::size_t i) {
             s.results[i] = r.mean;
         } else {
             s.results[i] = engine_cycle::run_operating_point(*s.proto, s.ops[i], s.settings);
+        }
+        if (s.knock && i < s.grid_n) {
+            // P7: the knock-limited advance of this node for every listed fuel, by closed-cycle replays from the
+            // converged IVC state (no gas exchange rerun). Only the octane differs between the fuels.
+            engine_cycle::KnockReplayInput kin;
+            kin.proto = s.proto.get();
+            kin.op = s.ops[i];
+            kin.ivc = s.results[i].ivc;
+            kin.ignition_delay_deg = s.desc.ignition_delay_deg;
+            kin.burn_duration_deg = s.desc.burn_duration_deg;
+            for (std::size_t f = 0; f < s.knock_nf; ++f) {
+                kin.inv_on_term = s.knock_inv_on[f];
+                const engine_cycle::KnockLimitResult kr = engine_cycle::knock_limited_spark(kin, s.knock_mbt_btdc, s.desc.knock.margin_deg);
+                const std::size_t slot = i * s.knock_nf + f;
+                s.knock_kl[slot] = kr.theta_kl_btdc;
+                s.knock_flag[slot] = static_cast<unsigned char>((kr.limited ? 1 : 0) | (kr.saturated ? 2 : 0));
+                s.knock_replays[slot] = kr.replays;
+            }
         }
         s.done[i] = 1;
     } catch (...) {
@@ -631,6 +680,24 @@ EngineMapsPtr EngineMapGenTask::finish() {
         }
     }
     m.has_theta_kl = false;
+    if (s.knock) {
+        // P7: one theta_kl table per listed fuel on the grid axes; the first fuel's is the active one (the loader's
+        // fuels[0]; Powertrain selects the tank's fuel via select_knock_fuel).
+        m.theta_kl_by_fuel.resize(s.knock_nf);
+        for (std::size_t f = 0; f < s.knock_nf; ++f) {
+            Table2D& t = m.theta_kl_by_fuel[f];
+            grid_table(t);
+            for (std::size_t k = 0; k < s.grid_n; ++k) {
+                const std::size_t slot = k * s.knock_nf + f;
+                t.values[k] = s.knock_kl[slot];
+                if (s.knock_flag[slot] & 1) ++em.knock_limited_points;
+                if (s.knock_flag[slot] & 2) ++em.knock_saturated_points;
+                em.knock_replays += s.knock_replays[slot];
+            }
+        }
+        m.theta_kl_deg = m.theta_kl_by_fuel.front();
+        m.has_theta_kl = true;
+    }
     // N4: carry the cycle block's own citation (ps::CycleModelDesc::source,
     // required by the loader's read_cycle_block) through into the generated
     // maps' provenance note, so a generated engine's data source survives -
@@ -875,6 +942,11 @@ std::uint64_t engine_maps_content_hash(const EngineMaps& em) {
     if (m.has_pmep_excess) f.table(m.pmep_excess_pa);
     f.pod(m.has_theta_kl);
     if (m.has_theta_kl) f.table(m.theta_kl_deg);
+    // P7: per-fuel knock tables only when present (every map without them hashes as before).
+    if (!m.theta_kl_by_fuel.empty()) {
+        f.pod(static_cast<std::uint64_t>(m.theta_kl_by_fuel.size()));
+        for (const Table2D& t : m.theta_kl_by_fuel) f.table(t);
+    }
     f.table(em.t_exh_k);
     f.table(em.h_exh_w);
     f.pod(em.eta_spark_spread);

@@ -132,6 +132,14 @@ struct EngineMaps {
     // Grid nodes below the engine's closed-throttle manifold floor, generated
     // with the plenum held at the node pressure (diagnostic, not hashed).
     int held_plenum_points = 0;
+    // Engine garage P7 (knock-limited engines only; diagnostics, not hashed,
+    // not cached - 0 after a cache hit): grid nodes x fuels whose knock-safe
+    // advance lies below the search's upper bound (theta_MBT + 10), of which
+    // saturated at its lower bound (theta_MBT - 40), and the closed-cycle
+    // replays run.
+    int knock_limited_points = 0;
+    int knock_saturated_points = 0;
+    long knock_replays = 0;
     std::uint32_t generator_version = kLumpedGeneratorVersion; // set by finish() / the cache loader
     MapQuality quality = MapQuality::Full;
     std::uint64_t content_hash = 0; // engine_maps_content_hash(*this), filled by finish()

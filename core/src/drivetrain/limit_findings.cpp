@@ -50,6 +50,7 @@ const char* to_string(LimitUnit u) {
     case LimitUnit::Millimetre: return "mm";
     case LimitUnit::Kilogram: return "kg";
     case LimitUnit::Second: return "s";
+    case LimitUnit::CrankDegree: return "deg";
     }
     return "Unknown";
 }

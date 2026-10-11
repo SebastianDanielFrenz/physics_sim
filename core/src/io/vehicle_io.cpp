@@ -1909,9 +1909,38 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
 
     // --- ECU targets -------------------------------------------------------------
     if (!j.contains("ecu") || !j.at("ecu").is_object()) throw std::runtime_error(ctx + ": 'ecu' object is required");
+    // Engine garage P7: the ECU's ignition strategy. "schedule" (default, every engine before P7): the spark is the
+    // ECU table. "knock_limited": spark = min(table, theta_kl) with theta_kl generated from the cycle block and the
+    // fuels' octane (or given as maps.theta_kl_deg); the table may then be absent = MBT tracking (the ECU follows
+    // maps.theta_mbt_deg, filled at the end of this function).
+    bool knock_limited = false;
+    real knock_margin_deg = real(0.0);
+    bool knock_mbt_tracking = false;
     {
         const auto& ej = j.at("ecu");
         const std::string ectx = ctx + ".ecu";
+        if (ej.contains("ignition_strategy")) {
+            if (!ej.at("ignition_strategy").is_string()) throw std::runtime_error(ectx + ": 'ignition_strategy' must be a string");
+            const std::string st = ej.at("ignition_strategy").get<std::string>();
+            if (st == "knock_limited") {
+                knock_limited = true;
+            } else if (st != "schedule") {
+                throw std::runtime_error(ectx + ": ignition_strategy must be \"schedule\" or \"knock_limited\", got \"" + st + "\"");
+            }
+        }
+        if (ej.contains("knock_margin_deg")) {
+            if (!knock_limited) {
+                throw std::runtime_error(ectx + ": 'knock_margin_deg' needs ignition_strategy \"knock_limited\"");
+            }
+            if (!ej.at("knock_margin_deg").is_number()) throw std::runtime_error(ectx + ": 'knock_margin_deg' must be a number");
+            knock_margin_deg = ej.at("knock_margin_deg").get<real>();
+            if (!(knock_margin_deg >= real(0.0) && knock_margin_deg <= real(10.0))) {
+                throw std::runtime_error(ectx + ": 'knock_margin_deg' must be in [0, 10] deg, got " + std::to_string(knock_margin_deg));
+            }
+        } else if (knock_limited) {
+            throw std::runtime_error(ectx + ": ignition_strategy \"knock_limited\" needs 'knock_margin_deg' (deg crank the ECU "
+                                            "keeps below the knock limit, in [0, 10])");
+        }
         if (!ej.contains("lambda_target")) throw std::runtime_error(ectx + ": 'lambda_target' is required");
         e.ecu.lambda_target = read_engine_table(ej.at("lambda_target"), ectx + ".lambda_target", "p_im_kpa", kKpa, real(1.0));
         require_positive_y_axis(e.ecu.lambda_target, ectx + ".lambda_target", "p_im_kpa");
@@ -1926,6 +1955,8 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                 throw std::runtime_error(ectx + ": 'spark_advance_deg' must be absent when cycle.spark_advance_deg is "
                                                 "given (the ecu schedule is taken from the cycle block)");
             }
+        } else if (knock_limited && !ej.contains("spark_advance_deg")) {
+            knock_mbt_tracking = true; // P7: no table - the ECU tracks MBT, limited by theta_kl
         } else {
             if (!ej.contains("spark_advance_deg")) throw std::runtime_error(ectx + ": 'spark_advance_deg' is required");
             e.ecu.spark_advance_deg =
@@ -2043,6 +2074,12 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         }
 
         if (!has_cycle) require_maps_efficiency_below_one(e.maps, mctx);
+    }
+    // P7: a knock-limited engine without a cycle block has nothing to generate theta_kl from.
+    const bool have_theta_kl_file = e.maps.has_theta_kl;
+    if (knock_limited && !has_cycle && !have_theta_kl_file) {
+        throw std::runtime_error(ctx + ": ecu.ignition_strategy \"knock_limited\" needs a cycle block (to generate the knock "
+                                       "limit) or maps.theta_kl_deg");
     }
 
     // --- shared engine fields (same meaning/validation as torque_map) ------------
@@ -2191,6 +2228,20 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         // block's own table was rejected above) - the runtime then evaluates
         // exactly the table the generator ran its grid nodes at.
         if (!e.cycle->spark_advance_deg.x.empty()) e.ecu.spark_advance_deg = e.cycle->spark_advance_deg;
+        // Engine garage P7: the knock limit is a generator input only for an engine that opts in. Every listed fuel
+        // gets its own table (fuels order); each must carry a "knock" block. A file theta_kl_deg overrides the
+        // generated one (the complete-override rule) - nothing is generated for knock then.
+        if (knock_limited && !have_theta_kl_file) {
+            e.cycle->knock.enabled = true;
+            e.cycle->knock.margin_deg = knock_margin_deg;
+            for (const FuelDesc& f : e.fuels) {
+                if (!f.has_knock) {
+                    throw std::runtime_error(ctx + ": ecu.ignition_strategy \"knock_limited\" needs a 'knock' block (RON/MON) in "
+                                                   "every listed fuel; fuel '" + f.name + "' has none");
+                }
+                e.cycle->knock.fuels.push_back(CycleModelDesc::KnockFuel{f.name, f.knock.ron, f.knock.mon});
+            }
+        }
         // Engine garage P2: forced induction "none" on a pipe engine needs a grid the ambient intake path can reach
         // (the generator fails a node above ambient without a compressor supply - test_engine_map_gen_v2 G3).
         // Checked at load (also validate-only) so the message names the fix. Lumped engines generate between fixed
@@ -2225,7 +2276,7 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             e.cycle->intake->compressor_supply = e.turbo_pair.has_value();
         }
         const bool complete = have_ve && have_eta_i && have_f_lambda && have_eta_spark && have_theta_mbt && have_friction &&
-                              e.maps.has_pmep_excess;
+                              e.maps.has_pmep_excess && (!knock_limited || have_theta_kl_file);
         if (!complete) {
             // Generator errors propagate unwrapped (their own "engine map
             // generator: ..." / "CycleModelDesc: ..." messages) - no catch
@@ -2285,6 +2336,13 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                 e.maps.has_pmep_excess = g.has_pmep_excess;
                 note("pmep_excess_kpa");
             }
+            if (knock_limited && !have_theta_kl_file) {
+                // P7: the generated per-fuel knock tables; fuels[0]'s is active (Powertrain re-selects the tank's).
+                e.maps.theta_kl_deg = g.theta_kl_deg;
+                e.maps.theta_kl_by_fuel = g.theta_kl_by_fuel;
+                e.maps.has_theta_kl = g.has_theta_kl;
+                note("theta_kl_deg");
+            }
             e.maps.source = j.contains("maps") ? e.maps.source + " | generated from the cycle block (" + generated_keys + "): " + g.source
                                                : g.source;
             } // generate
@@ -2318,6 +2376,11 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         }
         }
     }
+
+    // Engine garage P7: an MBT-tracking knock-limited ECU follows the (final) theta_MBT map. Left empty while the maps
+    // are pending - a pending engine is refused by SimulatedEngine anyway, and the garage completes it with
+    // with_engine_maps, which keeps the ECU (so a pending MBT-tracking engine must be reloaded, see engine.md).
+    if (knock_mbt_tracking && !e.maps_pending) e.ecu.spark_advance_deg = e.maps.theta_mbt_deg;
 
     return e;
 }

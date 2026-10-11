@@ -279,8 +279,25 @@ struct SimulatedEngineMapsDesc {
     // no knock limit; present = spark used = min(ecu spark target, theta_kl).
     bool has_theta_kl = false;
     Table2D theta_kl_deg;                  // y = p_im [Pa]; [deg BTDC]
+    // Engine garage P7: a GENERATED knock limit carries one table per fuel of
+    // the engine's fuels list (same order); theta_kl_deg is the one of the
+    // fuel being burnt (fuels[0] as loaded; Powertrain selects the tank's fuel
+    // through select_knock_fuel below). Empty for a loaded (file) theta_kl
+    // and for every engine without a generated knock limit.
+    std::vector<Table2D> theta_kl_by_fuel;
     std::string source;                    // required (PLAN.md section 8)
 };
+
+// Engine garage P7: makes the knock table of fuel `fuel_index` (an index into
+// the engine's fuels list) the active theta_kl_deg. No-op without per-fuel
+// tables (a file override, or no knock limit); an index past the list keeps
+// the current table.
+inline void select_knock_fuel(SimulatedEngineMapsDesc& m, std::size_t fuel_index) {
+    if (fuel_index < m.theta_kl_by_fuel.size()) {
+        m.theta_kl_deg = m.theta_kl_by_fuel[fuel_index];
+        m.has_theta_kl = true;
+    }
+}
 
 // Open-loop engine-management targets.
 struct SimulatedEcuDesc {

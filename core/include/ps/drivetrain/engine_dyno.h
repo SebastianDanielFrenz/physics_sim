@@ -80,6 +80,7 @@ struct DynoSweepSpec {
         std::string turbo_configuration;  // the turbo configuration file (slot "forced_induction")
         std::string nitrous_kit;          // P3b-2: the nitrous kit file (slot "nitrous_kit")
         std::string n2o_bottle;           // P3b-2: the N2O bottle file (slot "n2o_bottle")
+        std::string fuel;                 // P7: the burnt fuel's file (the Knock finding's part)
     };
     PartFiles part_files;
     // P3b-2: how many turbos the engine's TurboPairDesc extensive values (wastegate_area_m2) are the sum of - the loader
@@ -108,6 +109,9 @@ struct DynoPoint {
     real p_intake_kpa = 0.0;  // NaN for a torque map (no manifold)
     real exhaust_k = 0.0;     // gas temperature at the exhaust ports; turbo engines only, NaN otherwise
     real charge_boost_bar = 0.0; // compressor outlet (charge) pressure minus ambient, bar; 0 without a turbo
+    // Engine garage P7: how far the knock limit holds the spark below the ECU schedule, deg (window mean for a stepped
+    // point); 0 without a knock limit or where it does not limit; NaN for a torque map.
+    real knock_retard_deg = 0.0;
     // Engine garage P3b-2 (a sweep with DynoSweepSpec::nitrous; window means over the settled window):
     real n2o_g_s = 0.0;       // N2O delivered to the engine, g/s; 0 without a kit or while the controller does not spray
     real kit_fuel_g_s = 0.0;  // kit fuel the engine booked, g/s (part of fuel_g_s); 0 likewise

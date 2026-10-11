@@ -120,6 +120,7 @@ void CycleStepper::reset(const OperatingPoint& op) {
     x_b_ivc_ = 0.0;
     p_ref_ = v_ref_ = t_ref_ = 0.0;
     p_max_ = 0.0;
+    ivc_theta_ = ivc_m_ = ivc_u_ = ivc_mb_ = 0.0;
 
     state_ = CycleState{};
     const GasModel& g = m.gas;
@@ -324,6 +325,10 @@ void CycleStepper::after_step(real theta_before, real dtheta) {
         p_ref_ = cyl.p;
         v_ref_ = ge.v;
         t_ref_ = cyl.t;
+        ivc_theta_ = theta_end;
+        ivc_m_ = state_.y[kCylM];
+        ivc_u_ = state_.y[kCylU];
+        ivc_mb_ = state_.y[kCylMb];
     }
     theta_ = theta_end;
 }

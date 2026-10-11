@@ -275,6 +275,7 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
         if (kl < spark_sched) {
             spark = kl;
             dspark_drpm = m.maps.theta_kl_deg.dvalue_dx(rpm, p);
+            e.knock_retard_deg = spark_sched - kl;
         }
     }
     // I7d D5: the anti-lag retard moves the applied spark from the scheduled
@@ -847,6 +848,7 @@ SimulatedEngine::SteadyPoint SimulatedEngine::steady_point(const SimulatedEngine
     sp.fuel_g_s = ev.m_fuel_rev * (omega / kTwoPi) * real(1000.0);
     sp.lambda = ev.lambda;
     sp.spark_deg = ev.spark_deg;
+    sp.knock_retard_deg = ev.knock_retard_deg;
     return sp;
 }
 
@@ -1368,6 +1370,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.p_intake_pa = p_im_;
     r.lambda = ev.lambda;
     r.spark_advance_deg = ev.spark_deg;
+    r.knock_retard_deg = ev.knock_retard_deg;
     r.exhaust_mass_flow_kg_s = ev.m_air_rev * std::abs(omega_old) / kTwoPi + booked_fuel_mass_kg_ / h;
     if (n2o_on_) {
         // N2O plan N2 (section 1.2 step 7): the N2O (decomposed or not) leaves through the exhaust too; the kit

@@ -1,5 +1,7 @@
 #include "map_cache.h"
 
+#include "ps/engine_cycle/knock.h"
+
 #include <atomic>
 #include <bit>
 #include <cstdio>
@@ -236,6 +238,12 @@ void write_maps_payload(Writer& w, const EngineMaps& m) {
     w.table(m.t_exh_k);
     w.table(m.h_exh_w);
     w.pod(m.eta_spark_spread);
+    // Engine garage P7: the per-fuel knock tables, as an optional TRAILING block written only when present - a file
+    // without it is byte-identical to before P7 (the reader takes the block only when bytes remain).
+    if (!m.maps.theta_kl_by_fuel.empty()) {
+        w.pod(static_cast<std::uint64_t>(m.maps.theta_kl_by_fuel.size()));
+        for (const Table2D& t : m.maps.theta_kl_by_fuel) w.table(t);
+    }
 }
 
 // Fills every field of *out except generator_version/quality/content_hash
@@ -250,6 +258,15 @@ void write_maps_payload(Writer& w, const EngineMaps& m) {
     if (!ok) return false;
     out.maps.has_pmep_excess = has_pmep != 0;
     out.maps.has_theta_kl = has_theta_kl != 0;
+    if (!r.at_end()) {
+        // P7 trailing knock block (see write_maps_payload). A count that cannot fit is a malformed file.
+        std::uint64_t n = 0;
+        if (!r.pod(n) || n == 0 || n > 64) return false;
+        out.maps.theta_kl_by_fuel.resize(static_cast<std::size_t>(n));
+        for (Table2D& t : out.maps.theta_kl_by_fuel) {
+            if (!r.table(t)) return false;
+        }
+    }
     return true;
 }
 
@@ -337,6 +354,22 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
         f.str("c17a2.spark_schedule");
         f.table(desc.spark_advance_deg);
         f.pod(desc.ignition_delay_deg);
+    }
+    // Engine garage P7: the knock limit, folded (behind a tag, with the knock
+    // model's own version) ONLY for an engine that opts in - every other
+    // engine's key is unchanged and a fuel's octane never reaches it. The
+    // opt-in flag alone moves the key; each listed fuel's name, RON and MON
+    // (in fuels order) and the margin do too.
+    if (desc.knock.enabled) {
+        f.str("p7.knock_limit");
+        f.pod(engine_cycle::kKnockModelVersion);
+        f.pod(desc.knock.margin_deg);
+        f.pod(static_cast<std::uint64_t>(desc.knock.fuels.size()));
+        for (const CycleModelDesc::KnockFuel& kf : desc.knock.fuels) {
+            f.str(kf.name);
+            f.pod(kf.ron);
+            f.pod(kf.mon);
+        }
     }
     // ps_audio A4: the intake/exhaust pipe pair + resolved installation,
     // folded only when present (both absent - the pre-A4 default for every

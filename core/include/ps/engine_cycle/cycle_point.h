@@ -22,6 +22,14 @@ struct PointResult {
     real p_max_pa = 0.0;      // peak cylinder pressure at step ends, last cycle
     real ca50_deg = 0.0;      // Wiebe CA50, deg after firing TDC (analytic)
     std::uint64_t steps = 0;
+    // Engine garage P7: the cylinder state at the last cycle's IVC capture
+    // (CycleStepper::ivc_*), the start of the knock limit's closed-cycle
+    // replay. Multi-cylinder (CycleEngine): the cylinder with the largest
+    // trapped mass (the knock-critical one). Read by nothing else.
+    struct Ivc {
+        real crank_deg = 0.0; // the cylinder's own crank angle at the capture
+        real m = 0.0, u = 0.0, mb = 0.0;
+    } ivc;
 };
 
 // D5 stepper settings. h_s is the requested step; the step actually used is

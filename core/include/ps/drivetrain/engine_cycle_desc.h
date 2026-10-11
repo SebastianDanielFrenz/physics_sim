@@ -210,6 +210,24 @@ struct CycleModelDesc {
     // spark and Wiebe start coincide (the pre-follow-up behaviour).
     real ignition_delay_deg = 0.0;
 
+    // Engine garage P7 (C17b part 1): the generated knock limit theta_kl(rpm,
+    // p_im). Filled by the loader from the ECU's ignition_strategy
+    // "knock_limited" (+ knock_margin_deg) and the engine's fuels list - one
+    // entry per listed fuel, in list order, each with the fuel's "knock"
+    // block. enabled == false (every engine that does not opt in): the
+    // generator computes no knock map and the cache key does not see this
+    // block at all, so its maps and key are bit-identical to before P7.
+    struct KnockFuel {
+        std::string name; // the fuel's name (diagnostic; folded into the key)
+        real ron = 0.0;
+        real mon = 0.0;
+    };
+    struct KnockLimit {
+        bool enabled = false;
+        real margin_deg = 0.0;          // subtracted from the knock-safe advance at knock-limited nodes, [0, 10]
+        std::vector<KnockFuel> fuels;   // >= 1 when enabled
+    } knock;
+
     // ---- Tier 2 (frozen literature; every value carries its citation in the JSON source) ----
     real wiebe_a = 5.0;           // Heywood 1988 section 9.2 [A: page]
     real wiebe_m = 2.0;

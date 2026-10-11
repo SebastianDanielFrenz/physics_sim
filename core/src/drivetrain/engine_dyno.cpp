@@ -185,6 +185,24 @@ void piston_speed_finding(Findings& out, const SimulatedEngineDesc& d, real rpm,
                                PartRef{"engine", engine_file, "/limiter/rpm"}));
 }
 
+// Engine garage P7: Knock - the knock limit holds the applied spark `retard` deg below the ECU schedule at this point.
+// Part: the burnt fuel's octane (the ECU's knock_margin_deg is the other lever, named in engine.md). Remedy: an unsolved
+// Simulated placeholder - the octane that clears it needs the cycle model's knock replay at this node (not inverted here).
+void knock_finding(Findings& out, const SimulatedEngineDesc& sim, real rpm, real retard, const std::string& fuel_file) {
+    if (!(retard > limits::kKnockNear.value)) return;
+    const LimitSeverity s = retard >= limits::kKnockLimiting.value ? LimitSeverity::Limiting : LimitSeverity::Near;
+    PartRef part{"fuel", fuel_file, "/knock/ron"};
+    LimitFinding f = make_finding(LimitKind::Knock, s, rpm, retard, limits::kKnockLimiting.value, LimitUnit::CrankDegree, part);
+    Remedy r;
+    r.part = std::move(part);
+    r.current = (!sim.fuels.empty() && sim.fuels.front().has_knock) ? sim.fuels.front().knock.ron : std::numeric_limits<real>::quiet_NaN();
+    r.unit = LimitUnit::Dimensionless;
+    r.cost = RemedyCost::Simulated;
+    r.solved = false;
+    f.remedy = std::move(r);
+    out.push_back(std::move(f));
+}
+
 // One point's findings are emitted in producer order; the sweep sorts them by kind (stable), so within a kind the emission
 // order is the documented one.
 void sort_point_findings(Findings& f) {
@@ -229,6 +247,7 @@ DynoPoint torque_map_point(const EngineTorqueMap::Desc& d, real rpm, real thrott
     p.torque_nm = net;
     p.power_kw = net * omega / real(1000.0);
     p.lambda = p.spark_deg = p.p_intake_kpa = p.exhaust_k = kNaN;
+    p.knock_retard_deg = kNaN;
     // Fuel at the same (rpm, theta_c) the runtime evaluates it: the fuel map at theta, or the crude constant-efficiency
     // model on the combustion torque theta*(w - m).
     if (d.has_fuel_map) {
@@ -255,6 +274,7 @@ DynoPoint steady_sim_point(const SimulatedEngineMaps& maps, real rpm, const Dyno
     p.bsfc_g_kwh = bsfc_g_kwh(p.fuel_g_s, p.power_kw);
     p.lambda = sp.lambda;
     p.spark_deg = sp.spark_deg;
+    p.knock_retard_deg = sp.knock_retard_deg;
     p.p_intake_kpa = sp.p_im_pa / real(1000.0);
     p.exhaust_k = kNaN; // no exhaust thermal model without a turbo
     p_im_pa_out = sp.p_im_pa;
@@ -269,6 +289,7 @@ struct WindowStats {
     long n = 0;
     real net_torque = 0.0, fuel_g_s = 0.0, boost_bar = 0.0, charge_boost_bar = 0.0, turbo_rpm = 0.0;
     real lambda = 0.0, spark_deg = 0.0, p_intake_pa = 0.0, exhaust_k = 0.0;
+    real knock_retard_deg = 0.0; // P7
     // Engine garage P3b-1: window measurements for the limit findings (never fed back, no state of the engine).
     long gate_full_n = 0;                        // substeps with the wastegate at/above kGateFull
     real gate_sum = 0.0;                         // sum of the opening
@@ -330,6 +351,7 @@ struct WindowStats {
         turbo_rpm += r.turbo_rpm;
         lambda += r.lambda;
         spark_deg += r.spark_advance_deg;
+        knock_retard_deg += r.knock_retard_deg;
         p_intake_pa += r.p_intake_pa;
         exhaust_k += r.exhaust_port_k;
         last = r;
@@ -496,6 +518,7 @@ DynoPoint settled_window_point(const SimulatedEngine& engine, const WindowStats&
     p.bsfc_g_kwh = bsfc_g_kwh(p.fuel_g_s, p.power_kw);
     p.lambda = w.mean(w.lambda);
     p.spark_deg = w.mean(w.spark_deg);
+    p.knock_retard_deg = w.mean(w.knock_retard_deg);
     p.p_intake_kpa = w.mean(w.p_intake_pa) / real(1000.0);
     p.exhaust_k = w.mean(w.exhaust_k);
     if (spec.nitrous.has_value()) {
@@ -744,6 +767,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             Findings f;
             limiter_findings(f, sim->limiter, rpm, spec.part_files.engine);
             piston_speed_finding(f, *sim, rpm, spec.part_files.engine);
+            knock_finding(f, *sim, rpm, result.points.back().knock_retard_deg, spec.part_files.fuel);
             EdgeAcc e;
             e.add(grid, rpm, p_im_pa);
             edge_findings(f, rpm, grid, e, spec.part_files.engine);
@@ -780,6 +804,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             // The limiter findings use the ORIGINAL limiter: the sweep moved it out of the way only to hold WOT.
             limiter_findings(per_point[i], sim->limiter, rpms[i], spec.part_files.engine);
             piston_speed_finding(per_point[i], *sim, rpms[i], spec.part_files.engine);
+            knock_finding(per_point[i], *sim, rpms[i], result.points[i].knock_retard_deg, spec.part_files.fuel);
             sort_point_findings(per_point[i]);
         } catch (...) {
             errors[i] = std::current_exception();

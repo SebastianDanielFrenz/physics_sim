@@ -662,6 +662,9 @@ private:
     // rebuild a new SimulatedEngineMaps - only .maps ever changes across a
     // hot swap, so this copy is retained unmodified past construction.
     std::optional<SimulatedEngineDesc> simulated_engine_desc_;
+    // Engine garage P7: index of the burnt fuel in the engine's fuels list (the tank's, else 0) - selects the
+    // per-fuel generated knock table at construction and on every replace_engine_maps.
+    std::size_t burnt_fuel_index_ = 0;
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached

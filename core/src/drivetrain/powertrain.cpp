@@ -170,7 +170,8 @@ namespace {
 // backstop for a code-built VehicleDesc).
 bool same_fuel(const FuelDesc& a, const FuelDesc& b) {
     return a.name == b.name && a.phase == b.phase && a.lhv_j_kg == b.lhv_j_kg && a.afr_stoich == b.afr_stoich &&
-           a.density_kg_m3 == b.density_kg_m3;
+           a.density_kg_m3 == b.density_kg_m3 && a.has_knock == b.has_knock &&
+           (!a.has_knock || (a.knock.model == b.knock.model && a.knock.ron == b.knock.ron && a.knock.mon == b.knock.mon));
 }
 
 Clutch::Desc to_clutch_desc(const ClutchDesc& c) {
@@ -1311,6 +1312,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             SimulatedEngineDesc burnt = *sim;
             burnt.fuels.assign(1, tank_desc ? tank_desc->fuel : sim->fuels.front());
+            // Engine garage P7: a generated knock limit has one table per listed fuel - use the burnt fuel's (the
+            // first match in the list, the same match the tank check above made). Without per-fuel tables a no-op.
+            burnt_fuel_index_ = 0;
+            if (tank_desc) {
+                for (std::size_t fi = 0; fi < sim->fuels.size(); ++fi) {
+                    if (same_fuel(sim->fuels[fi], tank_desc->fuel)) {
+                        burnt_fuel_index_ = fi;
+                        break;
+                    }
+                }
+            }
+            select_knock_fuel(burnt.maps, burnt_fuel_index_);
             auto sim_engine = std::make_unique<SimulatedEngine>(burnt);
             sim_engine_ptr_ = sim_engine.get(); // PHYS-033 P4 I7c C16b
             // I7d D5: resolve the anti-lag channel's slot like the other declared channels.
@@ -2505,6 +2518,7 @@ void Powertrain::request_replace_engine_maps(std::string_view component_id, Engi
     // (it reads geometry/ECU/limiter fields too, not just the map curves).
     SimulatedEngineDesc updated = *simulated_engine_desc_;
     updated.maps = new_engine_maps->maps;
+    select_knock_fuel(updated.maps, burnt_fuel_index_); // P7: the burnt fuel's knock table (no-op without per-fuel tables)
     // ALLOCATES (build_maps constructs a fresh SimulatedEngineMaps with its
     // own derived tables) - safe here: this runs on the caller's thread,
     // between World::step() calls, never inside a job (see this method's

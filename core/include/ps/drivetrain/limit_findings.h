@@ -46,7 +46,7 @@ enum class LimitKind : std::uint16_t {
     ValveFlowChoke = 15,       // not produced: no valve Mach diagnostic exists
     MeanPistonSpeed = 16,      // P3b-1
     MapGridEdge = 17,          // P3b-1: a map lookup is clamped at the edge of its grid
-    Knock = 18,                // not produced (C17b)
+    Knock = 18,                // engine garage P7: the knock limit holds the applied spark below the ECU schedule
 };
 
 // Near: within a margin of the limit (information); Limiting: this part caps the output here; Exceeded: the target is
@@ -67,6 +67,7 @@ enum class LimitUnit : std::uint8_t {
     Millimetre = 8,    // P3b-2: a jet diameter in the part file's own unit
     Kilogram = 9,      // P3b-2: a bottle content
     Second = 10,       // P3b-2: a duration
+    CrankDegree = 11,  // P7: a spark advance / retard, deg crank
 };
 
 // The part to change. slot: the part's role in physics_sim's vocabulary ("engine", "turbo", "forced_induction",

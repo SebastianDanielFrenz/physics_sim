@@ -5,5 +5,11 @@
   "lhv_j_kg": 44000000.0,
   "afr_stoich": 14.5,
   "density_kg_m3": 747.5,
-  "source": "Heywood, John B., Internal Combustion Engine Fundamentals, McGraw-Hill, 1988, Table 9.7 'Oxygenate properties', pp. 477-478, 'Gasoline' column: lower heating value 44.0 MJ/kg, stoichiometric (A/F) 14.5. Density: EN 228:2012 'Automotive fuels - Unleaded petrol', density at 15 degC, min 720.0 / max 775.0 kg/m^3 (test method EN ISO 3675 / EN ISO 12185); 747.5 kg/m^3 taken as the arithmetic midpoint of the standard's own stated range, since the standard itself states no single representative value."
+  "source": "Heywood, John B., Internal Combustion Engine Fundamentals, McGraw-Hill, 1988, Table 9.7 'Oxygenate properties', pp. 477-478, 'Gasoline' column: lower heating value 44.0 MJ/kg, stoichiometric (A/F) 14.5. Density: EN 228:2012 'Automotive fuels - Unleaded petrol', density at 15 degC, min 720.0 / max 775.0 kg/m^3 (test method EN ISO 3675 / EN ISO 12185); 747.5 kg/m^3 taken as the arithmetic midpoint of the standard's own stated range, since the standard itself states no single representative value.",
+  "knock": {
+    "model": "douaud_eyzat",
+    "ron": 95.0,
+    "mon": 85.0,
+    "source": "[AS] EN 228 'Automotive fuels - Unleaded petrol' minimum RON 95.0 / MON 85.0 for the 95-octane grade (the standard's own minimum, recalled - no copy of the standard is available locally, so [AS]); a real pump fuel meets or exceeds it, so using the minimum is the conservative (more knock-prone) choice - taken for the E0 base gasoline of this project's blend rule (data/fuels/e25.json). Heywood 1988 Table 9.7 (the source of this file's LHV/AFR) is not available locally for its octane rows."
+  }
 }
