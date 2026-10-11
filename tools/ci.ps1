@@ -743,6 +743,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/aero/|^core/src/io/aero_io\.(cpp|h)$|^core/include/ps/io/aero_coefficient_map_io\.h$'; Kind = 'topics'; Topics = @('aero', 'vehicle') },  # 8b04f0e aerodynamics + a949346 coefficient maps
     @{ Re = '^core/(include/ps|src)/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain', 'cycle') },  # cycle model + pipes; [cycle] also selects the [audio][cycle] voice tests (EngineCore is shared)
     @{ Re = '^audio/'; Kind = 'topics'; Topics = @('audio', 'cycle') },  # ps_audio A7
+    @{ Re = '^engine_tools/'; Kind = 'topics'; Topics = @('engine_tools', 'audio', 'drivetrain') },  # engine garage P6: ps_engine_tools audio bank baker
     @{ Re = '^tools/ps_engine_audio/|^data/scripts/engine_audio/'; Kind = 'topics'; Topics = @('audio', 'drivetrain') },  # ps_audio A10 listening tool + its scripts
     @{ Re = '^data/installations/'; Kind = 'topics'; Topics = @('io', 'cycle', 'audio') },  # ps_audio A4/A10 installation files
     @{ Re = '^core/(include/ps|src)/io/'; Kind = 'topics'; Topics = @('io'); AllScenarios = $true },
