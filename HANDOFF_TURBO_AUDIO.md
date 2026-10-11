@@ -31,7 +31,7 @@ Relevant files:
 - `audio/include/ps_audio/audio_bank.h`
 - `audio/src/audio_bank.cpp`
 - `audio/include/ps_audio/audio_bank_reference.h` (old sample-time playback, measurement/test reference only)
-- `tools/common/engine_bank_generator.cpp`
+- `engine_tools/src/audio_bank_prep.cpp` (the bank baker; was tools/common/engine_bank_generator.cpp until engine garage P6)
 - `adapters/godot/src/ps_simulation.cpp`
 - `audio/src/voice.cpp`
 
