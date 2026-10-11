@@ -1179,18 +1179,70 @@ Deviations from design section 6's Regen column (test K1 pins exactly this list)
   60 kPa [M, the hyper's 100 -> 160 -> 220 kPa pitch] up to (1 + target + 0.2) bar absolute [AS, design 7.3]; the last step is
   30-90 kPa (a shorter remainder merges into the top node). The hyper's own axis `[25, 50, 100, 160, 220, 300]` kPa is exactly
   `boost_grid_p_im` for its 1.8 bar target. Throws `std::invalid_argument` for a target <= 0 or fewer than two nodes at/below ambient.
+  P5: when the last node at or below ambient is more than 2 kPa under it [AS], a node AT ambient (101.325 kPa) is added before the
+  boosted rows. The A25A's axis stops at 97.27 kPa, so without it the first boosted row (161 kPa) sat one interval above the
+  last node and the plenum near ambient interpolated toward it; a Preview-quality boosted A25A then failed the engine's own
+  "steady torque is not non-decreasing in plate position" check (Sketch, with only three p_im rows, can still fail it for
+  the lumped A25A: use Preview or Full for a lumped boosted engine). The A25A axis for 0.8 bar ends `97.27, 101.325, 161.325, 200` kPa; the hyper
+  (100 kPa top) and the demo I4 (100 kPa top) get no extra node (gap under 2 kPa).
 - `ambient_grid_p_im(cycle)`: the axis of an engine that loses its compressor. Nodes up to 0.95 x ambient (96.26 kPa) are kept;
   anything between that cap and the old top collapses into one node at the cap [AS]. Reason [M]: the generator throws for a node the
   engine cannot reach with the throttle fully open, and the NA hyper's plenum peaks at 97.87 kPa at 8000 rpm, so the boosted engine's
   100 kPa WOT row is already unreachable; the first version of this helper (keep every node <= ambient) made the hyper's NA maps
-  fail with "plenum target 100000 Pa unreachable at 8000 rpm". Once engine garage P2's loader accepts `forced_induction: "none"`,
-  the loader should call this helper.
+  fail with "plenum target 100000 Pa unreachable at 8000 rpm". The loader's `forced_induction: "none"` path (P2) refuses a
+  boosted grid on a pipe engine; the garage calls this helper first (see "Adding or removing forced induction" below).
+  Known limit [M]: with the top node at 96.26 kPa the NA hyper's plenum (99-101 kPa at WOT, 3000-6000 rpm) reads the held top
+  row, and the dyno reports `MapGridEdge` Exceeded at every point; the held row is within a few percent of the true air, but the
+  advisor will keep saying it.
 - `extend_grid_rpm(cycle, limiter_rpm)`: unchanged when the axis covers the limiter; otherwise nodes continue at the last
   interval until within half an interval of the limiter, and the limiter itself is the last node (demo I4, limiter 8000:
   `..., 6500, 7000, 7500, 8000`).
 
 Tests: `tests/unit/test_engine_rules.cpp`, tag `[engine_rules]` (22 cases, 2.6 s in release): R1 table, S1/S2 shipped engines, C1-C11
 one crafted violation per rule, K1-K4 classification, G0-G3 helpers with Sketch-quality generation and dyno runs.
+
+### Adding or removing forced induction
+
+(Engine garage P5, design A13; guards `tests/unit/test_forced_induction_conversions.cpp` FI1-FI7.) A conversion is two
+edits and one slot, no code:
+
+1. **The slot.** `forced_induction` (user layer, vehicle engine component, or `default_forced_induction` in the engine
+   file) is a turbo configuration path (add) or `"none"` (remove). The shipped templates are
+   `data/turbo_configurations/{single,twin}_{small,medium,large}.json` ([turbo.md](turbo.md#hardware-family-and-templates-engine-garage-p5)
+   has the hardware, how to pick and the measured operating bands).
+2. **The grid.** Read the stock engine validate-only (`EngineMapOptions::generate = false`), take
+   `boost_grid_p_im(cycle, target_boost_bar)` (add; the template's `target_boost_pa / 1e5`) or `ambient_grid_p_im(cycle)`
+   (remove), and write it as `cycle.grid_p_im_kpa` into a user engine that `extends` the stock file:
+
+   ```json
+   { "extends": "demo_i4_pipes.json", "cycle": { "grid_p_im_kpa": [25, 30, 50, 70, 90, 100, 160, 200] } }
+   ```
+
+   Adding also needs the compression ratio under 10.5 (`check_buildable`, `CompressionRatio`); the stock A25A's 13 is
+   refused as `Exceeded`, so the conversion writes `"compression_ratio": 10` into the same user engine (the test does).
+
+The loader does the rest: for an engine with pipe blocks (`cycle.intake` + `exhaust`) it sets
+`intake.compressor_supply` iff a turbo exists, so every node above ambient is fed through the 1.05 x node-pressure supply
+path and generates; a lumped engine (no pipe blocks, e.g. `toyota_a25a_fks_gen`) needs no supply path - its cycle points
+run between fixed reservoirs at the node pressure, so nodes above ambient already generate and the flag does not exist.
+
+What the edit costs (`classify_engine_change`): stock -> boosted is `Maps` (the grid and, for a pipe engine, the flag move
+`engine_map_cache_key`; Full maps 2-5 s on 10 workers for the pipe engines, 0.4 s for the lumped A25A); boosted -> boosted
+with other hardware or count is `TurboTables` (the map key does not contain the hardware: the second load of a different
+template hits the same `.psmaps`, FI2/FI5). Boost and the lumped engine:
+
+- trapped air (ve x p) rises strictly with the node pressure; the A25A at CR 10 reaches 2.05 x the ambient row's air at the top
+  node (4500 rpm) and the dyno torque at 0.8 bar is 1.78-1.81 x the same engine without the compressor (FI1);
+- steady WOT charge pressure equals the target within 0.001 bar wherever the hardware is big enough (the brief's 0.05 bar
+  criterion); the manifold sits 0.02-0.06 bar under it through the throttle loss;
+- Sketch maps are for a dyno preview only and not reliable for a lumped boosted engine (3 p_im rows); Preview (with the
+  helper's ambient node) and Full generate and run.
+
+Removing a compressor: `forced_induction: "none"` with `ambient_grid_p_im` (the hyper loads and runs NA, 374 / 459 N*m at
+3000 / 6000 rpm against 1371 N*m boosted at 6000, FI4); with the old boosted grid the loader refuses with the message in
+the section above. Not modelled: the ECU tables of an engine clamp above their last row (the A25A's lambda and spark tables end
+at 105 kPa) and there is no knock limit yet (C17b), so a boosted A25A runs its NA spark and lambda at 2 bar absolute - a
+convertible engine's torque at high boost is optimistic by what knock control would take.
 
 ## Part slots, `extends` and the user layer (engine garage P2)
 

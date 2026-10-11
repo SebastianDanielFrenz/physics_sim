@@ -445,6 +445,88 @@ measured map) and `data/turbo_configurations/hyper_twin_default.json` (count 2,
 `data/engines/hyper_v8_one1_audio.json`'s `default_forced_induction` and used by
 `data/vehicles/car_hyper.json`.
 
+## Hardware family and templates (engine garage P5)
+
+For a conversion (an engine that had no turbo and gets one through the `forced_induction` slot, see
+[engine.md](engine.md#adding-or-removing-forced-induction)) the garage needs hardware of more than one size. Three
+files in `data/turbos/` follow the hyper file's format and approximation level; six templates in
+`data/turbo_configurations/` (single and twin of each) are what a swap package starts from.
+
+### Hardware
+
+| File | Class | Compressor / turbine wheel (inducer/exducer, tip) | `rotor_inertia_kgm2` | `reference_rpm` | `max_mass_flow_kg_s` | `turbine_area_m2` | `wastegate_area_m2` | eff. (comp / turb) | `shaft_loss_w_at_reference` | Rated power per turbo (informational) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `small_gt28_class.json` | GT28 | 48/60 mm, 50 mm | 4.85e-5 | 164000 | 0.32 | 2.677e-4 | 6.318e-4 (2.36 x throat) | 0.76 / 0.76 | 321 | 150-250 kW (1.6-2.0 L of engine per turbo) |
+| `medium_gtx30_class.json` | GTX30 | 57/71 mm, 59 mm | 1.12e-4 | 139000 | 0.45 | 3.749e-4 | 8.848e-4 (2.36 x throat) | 0.78 / 0.78 | 450 | 250-400 kW (2.5-3.5 L per turbo) |
+| `large_gtx42_class.json` | GTX42 | 76/94 mm, 78 mm | 4.52e-4 | 105000 | 0.79 | 6.57e-4 | 1.971e-3 (3.0 x throat) | 0.80 / 0.80 | 788 | 600-800 kW (4-6 L per turbo) |
+
+All numbers are [AS] or [D]; nothing was downloaded and no wheel dimension was re-read from a datasheet (each file's
+`source` says so). Method, the same for all three, anchored on `hyper_turbo_approx.json` (GTX3582R-class, 66/82 mm, 68 mm
+turbine, 0.6 kg/s, 120000 rpm, `reference_head_bar` 4.5):
+
+- **Size [AS].** Garrett names its types by frame and compressor exducer in mm (the last two digits), recalled from the
+  manufacturer's naming, not re-read: GT28 -> 60 mm, GTX30 -> 71 mm, GTX42 -> 94 mm exducer. The inducer follows the anchor's
+  trim (0.805 x exducer), the turbine tip diameter its 0.83 x exducer.
+- **Similarity [D].** Same stage tip speed, so `reference_rpm` = 120000 x 82 / D2 (rounded to 1000) and
+  `reference_head_bar` is unchanged; flow, turbine throat and shaft loss scale with the exducer area, x (D2 / 82)^2.
+  `rpm * sqrt(max_mass_flow)` is therefore the same for the three files within 1 % (tested, FI6).
+- **Rotor inertia [D].** Disc formulas from the wheel sizes (compressor wheel, turbine wheel, shaft), on the hyper file's
+  basis of 2.3e-4 kg*m^2 for the GTX3582R-class; grows about with D^5. The `rotor_inertia_source` key of each file has the sum.
+- **Efficiencies [AS].** 0.76 / 0.78 / 0.80 (smaller wheels lose more to tip clearance and Reynolds effects; the anchor
+  uses 0.80).
+- **Wastegate port [AS].** 2.36 x the throat for small and medium (the anchor's ratio: one external gate, Cd 0.6). The large
+  file uses 3.0 x: at 2.36 x the 5 L hyper's single large turbo saturated its gate above 7000 rpm and ran to 0.994 bar at
+  8000 rpm (measured, FI3's sabotage). A bigger engine per turbo needs a bigger gate; this is data, not code.
+- `rated_power_kw_per_turbo` {min, max, source} is informational: the garage reads it to suggest hardware for an engine,
+  the loader ignores it (unknown keys of a hardware file are tolerated for exactly this kind of annotation).
+
+Like the hyper file these are not measured maps: no compressor map is cited, there is no `surge_line` and the
+`performance_map` is absent, so the quasi-steady head table applies (see "Compressor head" above).
+
+### Templates
+
+`data/turbo_configurations/{single,twin}_{small,medium,large}.json`: `count` 1 or 2, the matching hardware, `target_boost_bar`
+0.8 gauge [AS: a street-turbo value; P4's `boost_grid_p_im` covers (1 + target + 0.2) bar absolute], `intercooler_effectiveness`
+0.75 [AS: a typical air-to-air core, below the hyper's optimistic 0.95], `boost_control` the hyper twin's PID unchanged
+(kp 1, ki 1/s, kd 0.05 s, actuator lag 0.1 s; per unit of `target_boost_bar`, so it carries over; checked on the engines
+below). No blow-off valve, anti-lag, cooler pressure drop or `exhaust_thermal` override: the templates are bit-identical to
+files that never heard of those keys. A twin's `count` multiplies inertia, flow, throat, gate and shaft loss (loader rule);
+a twin makes sense from four cylinders up, but nothing enforces it (the pair is lumped, one exhaust and one intake). A user copy changes only what it needs:
+
+```json
+{ "extends": "../turbo_configurations/single_medium.json", "target_boost_bar": 1.2 }
+```
+
+(a higher target needs a lower compression ratio, `check_buildable` limits forced-induction engines to 10.5; and a grid
+that reaches 1 + target + 0.2 bar, which `boost_grid_p_im` gives for the new target).
+
+### How to pick
+
+Match the air flow, not the power wish: a turbo's job is to move the engine's air at the target pressure ratio. Rule of
+thumb from the three files' `rated_power_kw_per_turbo` bands: pick the size whose per-turbo band contains the engine's
+expected boosted power divided by the turbo count; a twin splits the exhaust and the air in two, which spools sooner at the
+same total flow (smaller wheels, less inertia each). Too small is a modelled outcome, not a block: the gate saturates and
+the charge runs away above the target while the rotor overspeeds (the limit advisor reports `WastegateSaturated`,
+`BoostAboveTarget`, `TurboRotorCap`, `CompressorChoke`). Too large is late spool: the charge stays under the target at low
+rpm (`BoostBelowTarget`).
+
+### Measured fit
+
+Dyno-held WOT (`run_dyno_sweep`, Sketch maps, ambient ISA, target 0.8 bar gauge; the charge gauge is the compressor outlet,
+the manifold sags 0.02-0.06 bar under it through the throttle; `tests/unit/test_forced_induction_conversions.cpp`, hidden
+case FI-D1 prints the full table):
+
+| Engine | Template | Holds 0.8 bar charge from | Notes |
+|---|---|---|---|
+| `demo_i4_pipes` (2.0 L, limiter 6800) | single_small | 2000 rpm (0.097 bar at 1500, 0.226 at 1750, not settled) | holds to 6500 |
+| | single_medium | 2500 rpm (0.143 at 2000, 0.301 at 2250, not settled) | holds to 6500 |
+| | single_large | 3500 rpm (0.079 at 2500, 0.193 at 3000, not settled; 0.318 at 3250) | holds to 6500 |
+| `hyper_v8_one1_audio` (5 L V8, stock 1.8 bar twin) | single_large | 2000 rpm | holds to 8000 (rotor 73000 rpm) |
+| | twin_medium | 2000 rpm | holds to 8000 |
+| | twin_small | 2000 rpm | holds to 6000, then 1.095 bar at 7000 and 1.396 bar at 8000 (gate saturated, rotor 327000 rpm, not settled) |
+| | twin_large | 3000 rpm (0.084 at 2000, 0.242 at 2500, not settled) | holds to 8000 |
+| `toyota_a25a_fks_gen` (2.5 L lumped, CR 10, Full maps) | single_medium | 3000 rpm at least (tested 3000 / 4500 / 6000: charge 0.801 / 0.800 / 0.800) | torque x1.78-1.81 over the same engine without the turbo |
+
 ## `extends` and the forced-induction slot (engine garage P2)
 
 Both files may name a parent with `"extends": "<path>"` (RFC 7396 merge patch, the child last; at most 8 parents,

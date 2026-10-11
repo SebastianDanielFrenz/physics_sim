@@ -1,0 +1,20 @@
+{
+  "format": "physics_sim.turbo/1",
+  "name": "medium_gtx30_class",
+  "source": "[AS] GTX30-class single-turbo approximation, NOT a measured map (no cited compressor map, same limit as the hyper file). Anchor: data/turbos/hyper_turbo_approx.json (Garrett GTX3582R-class, compressor 66/82 mm, turbine 68/62 mm, 0.6 kg/s, 120000 rpm reference). Wheel sizes are [AS]: Garrett names its GT/GTX types by frame and compressor exducer in mm (the last two digits: 3582 -> 82 mm, which is the 82 mm this repository's hyper file uses), the inducer follows the anchor's trim ((66/82)^2 = 65 %, i.e. inducer = 0.805 x exducer), the turbine tip diameter the anchor's 68/82 = 0.83 of the exducer. Recalled from the manufacturer's type naming; the wheel dimensions were not re-read from a datasheet (no downloads in this task). This unit: compressor 57/71 mm, turbine tip 59 mm. Scaling from the anchor [D]: reference_rpm at the anchor's tip speed (120000 x 82/71, rounded to 1000), reference_head_bar 4.5 unchanged (same tip speed, same stage), max_mass_flow x (71/82)^2 (exducer area; the hyper's 0.6 kg/s is the GTX3582R's published peak flow, about 590 kW by the 10 lb/min per 100 hp rule, so this unit's 0.45 kg/s is about 443 kW), shaft_loss likewise x (71/82)^2 (bearing loss tracks the shaft). Efficiencies 0.78 [AS] (smaller wheels lose more to tip clearance and Reynolds effects; the anchor uses 0.80). Intended use [AS]: 2.5-3.5 L of engine per turbo (about 250-400 kW per turbo at 1-1.5 bar boost), which is the band the garage shows. Turbine throat 375 mm2 [AS]: the anchor's 500 mm2 scaled x (71/82)^2 then unchanged. wastegate_area_m2 = 2.36 x the throat (anchor: 2.36; one external gate, geometric area = this / Cd 0.6 [AS] = 1475 mm2, a 43 mm poppet; the nzperformance.co.nz sizing guide quoted in the anchor gives 45 mm for 2-3 L singles and 50-60 mm for V8s). Checked by dyno against the engine class in tests/unit/test_forced_induction_conversions.cpp.",
+  "rated_power_kw_per_turbo": {
+    "min": 250,
+    "max": 400,
+    "source": "[AS] engine garage design 7.2 power class; informational (read by the garage, ignored by the loader), see docs/data_formats/turbo.md 'Hardware family'"
+  },
+  "wastegate_area_m2": 0.0008848,
+  "rotor_inertia_source": "[D] derived like the anchor's rotor_inertia_source (same formulas and same [AS] shape factors, which reproduce the anchor's 2.3e-4): each wheel a solid disc at its tip radius, I = m r^2/2, mass = density x swept cylinder x metal share. Turbine: Inconel 713C 7910 kg/m3, tip 59 mm, axial length 0.45 D [AS], metal share 0.25 [AS] -> 0.144 kg, 6.25e-05 kg m2. Compressor: forged aluminium 2618 2760 kg/m3, tip 71 mm, length 0.40 D [AS], share 0.25 [AS] -> 0.078 kg, 4.89e-05 kg m2. Shaft: steel 7850 kg/m3, 7.8 x 78 mm (the anchor's 9 x 90 mm scaled) -> 0.029 kg, 2.2e-07 kg m2. Sum 1.116e-04 -> 0.000112 per turbo.",
+  "rotor_inertia_kgm2": 0.000112,
+  "reference_rpm": 139000,
+  "max_mass_flow_kg_s": 0.45,
+  "compressor_efficiency": 0.78,
+  "turbine_efficiency": 0.78,
+  "turbine_area_m2": 0.0003749,
+  "shaft_loss_w_at_reference": 450,
+  "reference_head_bar": 4.5
+}
