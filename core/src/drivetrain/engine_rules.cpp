@@ -355,7 +355,7 @@ std::vector<real> boost_grid_p_im(const CycleModelDesc& desc, real target_boost_
     std::vector<real> out = nodes_at_or_below_ambient(desc);
     // Engine garage P5: a node AT ambient when the stock axis stops well short of it (see kBoostGridAmbientNodeGapPa).
     if (kIsaAirPressurePa - out.back() > tab::kBoostGridAmbientNodeGapPa.value) out.push_back(kIsaAirPressurePa);
-    const real top =std::round((tab::kBoostGridAmbientBar.value + target_boost_bar + tab::kBoostGridMargin.value) * real(1e5) *
+    const real top = std::round((tab::kBoostGridAmbientBar.value + target_boost_bar + tab::kBoostGridMargin.value) * real(1e5) *
                                 real(1e3)) /
                      real(1e3);
     const real p_last = out.back();
