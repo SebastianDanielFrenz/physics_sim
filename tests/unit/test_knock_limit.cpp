@@ -356,12 +356,22 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
         const Table2D& ta = a.maps.theta_kl_deg;
         const Table2D& tb = b.maps.theta_kl_deg;
         REQUIRE(ta.values.size() == tb.values.size());
+        int unchanged = 0;
+        int shifted = 0;
         for (std::size_t k = 0; k < ta.values.size(); ++k) {
             if (ta.values[k] > real(-30.0) + 3.0) { // margin 3 does not reach the -30 deg clamp
                 const bool unlimited = ta.values[k] == tb.values[k];
-                CHECK((unlimited || std::abs(ta.values[k] - tb.values[k] - 3.0) < 1e-12));
+                const bool moved = std::abs(ta.values[k] - tb.values[k] - 3.0) < 1e-12;
+                CHECK((unlimited || moved));
+                unchanged += unlimited ? 1 : 0;
+                shifted += moved ? 1 : 0;
             }
         }
+        // Both kinds must exist (the Sketch A25A has never-knocking light-load nodes and knock-limited WOT nodes): a margin
+        // applied to every node would pass the per-node check above with unchanged == 0.
+        INFO("unchanged " << unchanged << " shifted " << shifted);
+        CHECK(unchanged > 0);
+        CHECK(shifted > 0);
     }
 }
 

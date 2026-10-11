@@ -36,8 +36,74 @@ Whether a fuel is meant for spark or compression ignition is not a field
 here: any fuel autoignites given enough compression, so ignition type is a
 property of the *engine* (declared on the engine descriptor), not the fuel
 — a fuel's own contribution to that pairing is its ignition-quality numbers
-(octane/cetane), which will arrive alongside a future knock/autoignition
-model, not as a field on `FuelDesc`.
+(octane), carried by the optional `knock` block below (engine garage P7).
+
+## Optional `knock` block (engine garage P7)
+
+```json
+"knock": {
+  "model": "douaud_eyzat",
+  "ron": 92.0,
+  "mon": 84.0,
+  "source": "[C] EPA NVFEL Fuel Analysis Report 26781 ..."
+}
+```
+
+| Field | Type | Req./opt. | Validation | Meaning |
+|---|---|---|---|---|
+| `model` | string | required | must equal `"douaud_eyzat"` | autoignition correlation the octane numbers feed (Douaud & Eyzat 1978 ignition delay, see engine.md "Knock limit") |
+| `ron` | real | required | finite, in [40, 130] | Research Octane Number (ASTM D2699) |
+| `mon` | real | required | finite, in [40, 130], `mon <= ron` | Motor Octane Number (ASTM D2700) |
+| `source` | string | required | non-empty | citation with a [C]/[D]/[AS]/[M] tag |
+
+Unknown keys inside `knock` are rejected (`fuel '<name>': knock: unknown key
+'<key>' (allowed: model, ron, mon, source)`) - unlike the top level, a
+misspelt octane key must not leave a knock-limited engine without its data.
+Other rejections: a non-object block, a missing or non-string `model`, an
+unsupported model, a missing/non-numeric `ron`/`mon`, a value outside
+[40, 130], `mon > ron`, an empty `source`.
+
+The block is optional and only read when an engine opts in to the knock limit
+(ECU `ignition_strategy: "knock_limited"`, see ecu.md). An opted-in engine
+whose fuels lack a block is rejected at load (`fuel '<name>' has none`).
+A fuel used only by non-opted engines may carry a block without any effect:
+its RON/MON never enter a map cache key or hash then.
+
+Shipped values:
+
+| File | RON | MON | Tag | Basis |
+|---|---:|---:|---|---|
+| `gasoline.json` (E0) | 95.0 | 85.0 | [AS] | EN 228 95-octane grade minimum (recalled, no local copy) |
+| `e5.json` | 95.0 | 85.0 | [AS] | EN 228 95-octane grade minimum (E5 is sold as Super 95) |
+| `e10.json` | 95.0 | 85.0 | [AS] | EN 228 95-octane grade minimum (Super E10) |
+| `e25.json` | 100.91 | 87.04 | [D] | molar blend rule below (no E25 standard exists) |
+| `e85.json` | 104.0 | 88.0 | [AS] | EN 15293 minimum (recalled) |
+| `ethanol.json` (E100) | 108.6 | 89.7 | [AS] | recalled literature value (published 107-109 / 89-90) |
+| `tier3_e10_cert.json` | 92.0 | 84.0 | [C] | EPA NVFEL Report 26781, ASTM D2699/D2700 |
+| `diesel.json` | - | - | - | none: a compression-ignition fuel has no octane number |
+
+E5/E10/E85 take the standard's MINIMUM grade, not the blend rule: a pump
+fuel is sold to a grade, and the minimum is the conservative (more
+knock-prone) choice. Each file's `source` also prints the blend-rule value for
+comparison (E5 96.47/85.51, E10 97.77/85.96, E85 107.63/89.37 [D]).
+
+### Octane blend rule (E25 only)
+
+Octane numbers do not blend linearly in volume: ethanol's benefit is
+front-loaded. `e25.json` uses a molar-linear rule (its form after Anderson et
+al., SAE 2012-01-1274 - recalled, not verified locally, so the rule itself is
+[AS]):
+
+```
+x_e      = (v*rho_e/M_e) / (v*rho_e/M_e + (1-v)*rho_g/M_g)   (molar ethanol fraction)
+ON_blend = ON_g + x_e*(ON_e - ON_g)                           (RON and MON alike)
+```
+
+with `rho_e`/`rho_g` from `ethanol.json`/`gasoline.json`, `M_e` 46.07 g/mol
+[C] (C2H5OH) and `M_g` 100 g/mol [AS] (a typical gasoline mean molar mass).
+For v = 0.25: x_e = 0.434564, RON 100.91, MON 87.04 (volume-linear would give
+RON 98.40). `tests/unit/test_knock_limit.cpp` K1 recomputes this from the two
+loaded endpoint files.
 
 ## Minimal complete example
 

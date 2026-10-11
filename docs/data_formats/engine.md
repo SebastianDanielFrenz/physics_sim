@@ -481,7 +481,7 @@ clamped at every edge. A 1D curve is the usual `{"x": [...], "y": [...]}`.
 | `maps.theta_mbt_deg` | table, load `p_im_kpa` | yes | values in [-30, 70] | MBT spark advance [deg BTDC] |
 | `maps.friction_torque_nm` | curve, x = rpm | yes | x[0] == 0; y >= 0 | friction torque magnitude; y(0) is the Coulomb part |
 | `maps.pmep_excess_kpa` | table, load `p_im_kpa` | no (absent = 0) | signed, finite, \|value\| <= 1e6 | reserved: pumping loss beyond the ideal (p_em - p_im) term |
-| `maps.theta_kl_deg` | table, load `p_im_kpa` | no (absent = no limit) | values in [-30, 70] | reserved: knock-limited spark advance; spark used = min(ECU target, theta_kl) |
+| `maps.theta_kl_deg` | table, load `p_im_kpa` | no (absent = no limit) | values in [-30, 70] | knock-limited spark advance [deg BTDC]; spark used = min(ECU target, theta_kl). Generated for an engine whose ECU opts in (`ignition_strategy: "knock_limited"`, see "Knock limit" below); a file table wins over the generated one |
 | `inertia_kgm2` | number | yes | > 0 | as `torque_map` |
 | `breakaway_torque_nm` | number | no (0) | >= `maps.friction_torque_nm(0)` | static Coulomb capacity |
 | `idle_rpm`, `stall_rpm`, `fire_rpm`, `start_complete_rpm`, `dfco_enable_rpm`, `dfco_reenable_rpm` | number | no | same ordering rules as `torque_map` | |
@@ -648,8 +648,10 @@ the cycle block is only parsed and validated. With a cycle block every
 `maps.*` key is optional and the `maps` block itself may be absent. If
 `maps` is present, its `source` stays required and the loader appends
 `" | generated from the cycle block (<keys>): <generator source>"`; without
-`maps`, `source` is the generator's own. `theta_kl_deg` is never generated
-(knock is C17b). The efficiency sanity bound and the breakaway rule
+`maps`, `source` is the generator's own. `theta_kl_deg` is generated only for an
+engine whose ECU opts in to the knock limit (engine garage P7, "Knock limit"
+below); it is not one of the seven keys whose absence triggers generation, and
+a file `theta_kl_deg` still wins (nothing is generated for knock then). The efficiency sanity bound and the breakaway rule
 (`breakaway_torque_nm >= maps.friction_torque_nm(0)`) are checked on the
 MERGED maps; the value range checks above apply to file values only.
 `pmep_excess_kpa` values are signed, both generated and file-provided (I7c
@@ -911,6 +913,69 @@ release bookkeeping while the kit sprays; without a spray it is the pre-N3 balan
 
 Tests: `tests/unit/test_n2o_turbo.cpp` (T1-T6, `[n2o][turbo]`).
 
+## Knock limit (engine garage P7, C17b part 1)
+
+An engine opts in through its ECU (`ecu.ignition_strategy: "knock_limited"` plus `ecu.knock_margin_deg`, see
+[ecu.md](ecu.md)); every listed fuel then needs a `knock` block (RON/MON, [fuel.md](fuel.md)). With a cycle block the map
+generator adds one knock-limited spark table per listed fuel (`SimulatedEngineMapsDesc::theta_kl_by_fuel`, fuels order;
+`maps.theta_kl_deg` is the first fuel's). The runtime spark is `min(ECU target, theta_kl)` (the existing rule, unchanged).
+An engine that does not opt in is bit-identical to before P7: no table, nothing new in its map key or content hash.
+
+Model (`core/include/ps/engine_cycle/knock.h`, `core/src/engine_cycle/knock.cpp`, every grid node, every listed fuel):
+
+1. The node's converged cycle (the existing generator run, at its own spark) records the IVC state of the cylinder with the
+   largest trapped mass (`PointResult::ivc`: crank, m, U, m_b).
+2. A closed-cycle replay copies that state, switches the valves off and steps compression/burn/expansion with a trial spark
+   (fixed step `kKnockReplayStepDeg` 0.5 deg [AS]; 0.125 deg moves theta_kl < 0.5 deg, test K4). The trapped charge and
+   residual are those of the node's own spark (their change with spark is neglected [AS]).
+3. End gas: isentropic compression of the unburned charge from IVC along the single-zone pressure, cv = a + b*T per group,
+   solved by Newton. The unburned charge is fresh air + residual + **fuel vapour** at mass fraction 1/(1 + lambda*AFR) of
+   the generating fuel: the cycle model's fresh gas is air only (gas.h), which is harmless for its work but not for the end
+   gas - vapour raises the unburned cv ~16 % at 600 K and lowers the end-gas temperature ~140 K at 80 bar. Vapour cv: a
+   linear fit through iso-octane ideal-gas cp 188.9 J/(mol K) at 298.15 K and 425 at 900 K [AS, recalled], M 114.23 g/mol
+   [C]. Wall heat to the end gas is neglected.
+4. Douaud & Eyzat 1978 (SAE 780080, via Heywood 1988 sec. 9.6.2, not verified locally [AS]):
+   `tau [s] = 17.68e-3 * (OI/100)^3.402 * (p/1 atm)^-1.7 * exp(3800/T)` with the octane index `OI = RON - K*(RON - MON)`,
+   K 0.5 [AS] (= (R+M)/2). Livengood-Wu: knock when `integral dt/tau >= 1`, integrated from IVC to the Wiebe burned fraction
+   `kKnockEndBurnFraction` 0.90 [AS] or EVO, trapezoidal.
+5. theta_kl = the largest advance [deg BTDC] whose integral stays < 1, by bisection (0.05 deg [AS]) between theta_MBT - 40
+   and theta_MBT + 10 [D] (the eta_spark table's own edges; outside them the runtime has no efficiency data). A node knocking
+   even at theta_MBT - 40 saturates there (counted in the unhashed `EngineMaps` diagnostics). The ECU margin is subtracted at
+   KNOCK-LIMITED nodes only (theta_kl < theta_MBT + 10); a node that never knocks stays at theta_MBT + 10, so the runtime
+   min() leaves the ECU's own target there.
+
+Generation runs at the existing grid nodes (lambda 1, ISA, the cam schedule) - one replay set per node and fuel inside the
+same job as the node, allocation-free, bit-identical for any worker count; progress counts are unchanged. Cost on 10
+workers, knock off -> on [M]: a25a_gen Sketch 0.020 -> 0.030 s, Preview 0.051 -> 0.079 s, Full 0.352 -> 0.435 s;
+demo_i4_pipes 0.550 -> 0.556 / 1.188 -> 1.182 / 2.604 -> 2.740 s; hyper Sketch 0.735 -> 0.751 s (budget 1.5 s), Preview
+1.795 -> 1.793 s, Full 3.950 -> 4.010 s.
+
+Cache and hashes: with the opt-in the `.psmaps` key folds a "p7.knock_limit" tag, `kKnockModelVersion` 1, the margin and
+each fuel's name/RON/MON (in fuels order); the file carries an optional trailing knock block; the maps content hash folds the
+per-fuel tables only when present. All three are untouched without the opt-in (H3 table extended).
+
+MBT tracking: a knock-limited ECU may omit its spark table; the loader then fills `ecu.spark_advance_deg` from the generated
+`maps.theta_mbt_deg` (empty while the maps are pending), so the engine runs `min(MBT, theta_kl)`.
+
+Fuel at runtime: the Powertrain burns the tank's fuel (or `fuels[0]` without a tank) and selects that fuel's table at
+construction and on `replace_engine_maps`; no regeneration is needed for any listed fuel. A fuel not listed cannot be burnt
+(the existing tank rule).
+
+Validation (`tests/unit/test_knock_limit.cpp`, `[knock][drivetrain][cycle]`): K1 fuel blocks, K2 loader opt-in rules and
+overrides, K3 monotonicity/octane order/margin, K4 replay vs the cycle and an independent isentrope, K5 tank-fuel table
+selection, K6 determinism/zero alloc/progress/cancel, K7 change classes, K8 dyno Knock findings on a turbo conversion.
+KV1 compares the A25A (toyota_a25a_fks_gen, tier3_e10_cert, margin 0, MBT tracking) with its measured WOT spark (EPA NVFEL
+Report 26781, xlsx "High Load Final" rows 23-39, transcription checked against the workbook): theta_kl minus measured spark
+is -5.3, -4.3, -9.7, -12.8 deg at 2017/2535/2996/3571 rpm (declared band [-5, +10]) - the model is too knock-prone. KV1 is
+`[!mayfail]`: with the MEASURED trapped air (the cycle model traps x1.15-1.18 the measured air at 3000-4500 rpm) the
+Livengood-Wu integral at the measured spark is still 1.19-1.40, so the air excess explains only part of the miss; the rest is
+the uncalibrated Douaud-Eyzat constants and the 0.90 end fraction (0.8 / 0.9 / 0.95 give -4.3 / -6.8 / -8.3 deg at
+2017 rpm). Nothing is tuned. WOT net torque [N*m], measured / knock on / MBT knock off: 216.3 / 219.3 / 264.7 (2017),
+225.1 / 233.6 / 274.8 (2535), 217.8 / 246.9 / 297.9 (2996), 228.4 / 248.9 / 308.5 (3571).
+
+Not modelled: DI charge cooling (ethanol's latent heat - E85's real benefit is understated), the ECU's WOT enrichment
+(nodes run at lambda 1), a knock sensor/adaptive retard, cycle-to-cycle variation, cylinder-to-cylinder spread.
+
 ## Dyno sweep: `run_dyno_sweep` (engine garage P3, A9)
 
 `ps/drivetrain/engine_dyno.h`: a full-throttle (or part-throttle) dyno sweep of ONE engine over rpm, from the same
@@ -1008,7 +1073,7 @@ filled and the required values NaN, `solved = false`, until `solve_remedy` runs 
 | `ValveFlowChoke` (15) | not produced: no valve Mach diagnostic exists | - | - | - | later |
 | `MeanPistonSpeed` (16) | simulated piston engines: stroke x rpm / 30 | `Near` >= 23, `Limiting` >= 25, `Exceeded` >= 28 m/s | m/s / 25 | engine `/limiter/rpm` | P3b-1 |
 | `MapGridEdge` (17) | the (rpm, p_im) of the point against the axes of the engine's maps (a lookup outside is clamped silently): >= 5 % of the window outside | `Exceeded` outside either edge; `Near` within 2 % of the span of the p_im axis's UPPER edge (the rpm axis has no `Near`: a sweep ends at the limiter, which the grid ends at too) | p_im Pa or rpm / the edge | engine `/cycle/grid_p_im_kpa` / `/cycle/grid_rpm` (a generated engine) or `/maps/ve/p_im_kpa` / `/maps/ve/rpm` | P3b-1 |
-| `Knock` (18) | not produced | - | - | - | C17b |
+| `Knock` (18) | simulated engines with a knock limit (`maps.theta_kl_deg`): window mean of the knock retard = scheduled spark minus theta_kl (`DynoPoint::knock_retard_deg`; NaN on a torque map, 0 without a limit) | `Near` > 0.05 deg, `Limiting` >= 5 deg | deg crank / 5 deg | fuel `/knock/ron` (`DynoSweepSpec::part_files.fuel`) + an unsolved `Simulated` placeholder remedy (`current` = the first listed fuel's RON; the RON that clears the retard needs one map generation per trial - not inverted) | P7 |
 
 Every threshold is one entry of the table in `core/src/drivetrain/limit_thresholds.h`, tagged `[C]`/`[D]`/`[AS]`/`[M]`
 with its source (all `[AS]` or `[D]` today; the mean-piston-speed limit has no local source).
@@ -1172,6 +1237,12 @@ Deviations from design section 6's Regen column (test K1 pins exactly this list)
 - **Adding forced induction to a lumped (no pipe blocks) cycle engine** is `TurboTables` on its own: `compressor_supply` exists only
   with pipe blocks, so the key moves only when the garage also extends `grid_p_im` (then `Maps`, as designed).
 - **Cylinder count** is `Respawn` although the map key covers it (design 6.3: "a different engine: swap").
+
+Knock limit (engine garage P7): on an engine whose ECU opts in, the knock margin and every listed fuel's name/RON/MON are in
+the map key, so a margin edit, an octane edit of ANY listed fuel and a fuel-order change are `Maps`; on an engine that does
+not opt in a fuel's octane is no generator input, so editing or removing a `knock` block is `Runtime` (test K7). The burnt
+fuel selected by a fuel tank needs no regeneration: every listed fuel's table is generated with the maps, and the Powertrain
+picks the tank fuel's table at construction (and on `replace_engine_maps`).
 
 ### Grid helpers (A12)
 
