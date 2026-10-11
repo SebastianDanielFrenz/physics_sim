@@ -49,3 +49,18 @@ TEST_CASE("Audio bank prep P0: pre-move pin", "[audio][engine_tools][long]") {
                 static_cast<unsigned long long>(bank_content_hash(*bank)), stats.bytes, stats.seconds);
     CHECK(bank->channels > 0);
 }
+
+TEST_CASE("Audio bank prep P0b: pre-move pin, turbo hyper V8", "[audio][engine_tools][long]") {
+    const std::string engine = std::string(PS_SOURCE_DIR) + "/data/engines/hyper_v8_one1_audio.json";
+    const auto maps = std::filesystem::temp_directory_path() / "ps_audio_bank_prep_p0";
+    std::filesystem::remove_all(maps / "audio");
+    ps_tools::EngineAudioBankStats stats;
+    const auto bank = ps_tools::prepare_engine_audio_bank(engine, "", maps.string(), {}, &stats);
+    // Recorded on the pre-move generator: key 4e8cb3985c3f746c, content 79cc5e377994856c, 6380736 bytes.
+    CHECK(bank_content_hash(*bank) == 0x79cc5e377994856cULL);
+    CHECK(ps_tools::engine_audio_bank_key(engine, "") == 0x4e8cb3985c3f746cULL);
+    std::printf("P0b key %016llx content %016llx bytes %zu seconds %.2f\n",
+                static_cast<unsigned long long>(ps_tools::engine_audio_bank_key(engine, "")),
+                static_cast<unsigned long long>(bank_content_hash(*bank)), stats.bytes, stats.seconds);
+    CHECK(bank->channels > 0);
+}
