@@ -927,7 +927,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps /*nu
 duplicate), `throttle` (1.0; the engine's throttle COMMAND - an electronic engine's torque request, a mechanical
 engine's plate; no pedal map, throttle stage or TCU exists at engine level), `ambient` (ISA sea level), and for turbo
 engines `max_settle_s` (15 [C], the bench_hyper_calibration hold), `settle_window_s` (0.5 [AS]),
-`settle_boost_bar_per_s` (0.005 [AS]; 0 never converges), `anti_lag` (request the anti-lag channel).
+`settle_boost_bar_per_s` (0.005 [AS]; 0 never converges), `settle_torque_rel_per_s` (0.002 [AS]), `anti_lag` (request the anti-lag channel).
 
 `DynoPoint`: `rpm`, `torque_nm` (NET at the crank, Coulomb row included), `power_kw`, `boost_bar` (manifold gauge, 0
 without a turbo), `turbo_rpm`, `fuel_g_s`, `bsfc_g_kwh`, `lambda`, `spark_deg`, `p_intake_kpa`, `exhaust_k`,
@@ -942,7 +942,7 @@ Method per kind (the limiter is never applied - it shapes the operating line, no
 |---|---|---|
 | `torque_map` | net torque `w - (1 - throttle) * (w - m)` from the wot/motoring curves = what EngineTorqueMap delivers net of the Coulomb row (exactly `w` at throttle 1). Fuel: the fuel map at the point, else the crude `max(0, theta * (w - m) * omega) / (eta_i * LHV)` model. Governor and ambient ignored. | instant |
 | `simulated`, no turbo | the steady operating point `SimulatedEngine::steady_point(maps, rpm, command, ambient)` - an exact bisection of the manifold balance (and of the plate for a part-throttle torque request), the definition every node of the steady tables is built from: the table value at its nodes, equal to a stepped engine within 0.25 %. | instant |
-| `simulated`, turbo | the real runtime engine (TurboPair, wastegate PID, charge lag) stepped at 960 Hz with the crank held at the point's speed. Boost is averaged over windows of `settle_window_s`; the point has settled when two consecutive window means satisfy `abs(difference) / settle_window_s < settle_boost_bar_per_s`; the reported values are the means over that last window. The earliest exit is after two windows (1 s). Otherwise it stops at `max_settle_s` with `converged = false`. | 1 - 15 s simulated per point |
+| `simulated`, turbo | the real runtime engine (TurboPair, wastegate PID, charge lag) stepped at 960 Hz with the crank held at the point's speed. Boost and net torque are averaged over windows of `settle_window_s`; a window pair passes when the boost mean moved by less than `settle_boost_bar_per_s * settle_window_s` AND the torque mean by less than `settle_torque_rel_per_s` (0.2 %/s [AS]) of itself per second; the point has settled after TWO consecutive passing pairs (earliest exit 1.5 s) and reports the means over that last window. Otherwise it stops at `max_settle_s` with `converged = false` (a rotor still creeping, e.g. the hyper at 1950-2200 rpm). | 1 - 15 s simulated per point |
 
 Maps: `maps` null uses the desc's own. An `EngineMapsPtr` replaces a simulated engine's whole `maps` block exactly like
 `World::replace_engine_maps` and completes a `maps_pending` desc (the garage flow: validate-only load, then
