@@ -364,7 +364,7 @@ TEST_CASE("N7 whole car: car_hyper_n2o WOT pull report", "[.][diag][n2o]") {
 // ===========================================================================
 // Asserting tests (release, Windows, 2026-10-06, with margin).
 //
-// N7b (owner option b): car_hyper_n2o.json now carries the vehicle-level "turbo_configuration" override
+// N7b (owner option b): car_hyper_n2o.json now carries the vehicle-level "forced_induction" (pre-P2: "turbo_configuration") override
 // (../turbo_configurations/hyper_twin_n2o.json -> ../turbos/hyper_turbo_n2o.json, wastegate 1.4875e-3 m2 per turbo against the stock 1.18e-3)
 // and the kit custom_wet_plate_800_bigjet.json (3.81 mm N2O / 1.535 mm fuel, re-bisected). Dyno-held shot (settle 10 s, mean of 0.5 s):
 // MEAN GAIN OVER 3000-7000 rpm +596.1 kW = 799 hp (target 596.6 kW; jet bisection, same gate: 3.6 mm +530, 3.75 mm +577, 3.81 mm +596); wastegate at most 0.965 open (6000-7000 rpm), turbo at most 126500 rpm

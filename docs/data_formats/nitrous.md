@@ -230,3 +230,17 @@ skipped), no gear or road-speed condition, the bottle never committed (its press
 reports `n2o_g_s`, `kit_fuel_g_s` and the combined lambda and produces the findings `KitFuelLean`, `N2OBottleDuration` and
 `N2OBottlePressureDrop` (a `vs_fill` bottle only), with the remedies and `solve_power_target` described in
 `engine.md` ("Nitrous in the sweep", "Simulated remedies"). The kit controller's `min_gear` is not applied on a dyno.
+
+## `extends` and the user layer (engine garage P2)
+
+Bottle, kit and controller files may name a parent with `"extends": "<path>"` (RFC 7396 merge patch, the child last; at
+most 8 parents, cycles rejected; relative paths per file). A parent's relative paths are re-expressed for the child
+before the merge: a bottle's `"oxidizer"`, a kit's `"default_controller"`. Example — a bigger bottle of the same kind:
+
+```json
+{ "extends": "../n2o_bottles/bottle_10lb_950psi.json", "capacity_kg": 6.804 }
+```
+
+The user layer (`VehicleLoadOptions::part_overrides`, [vehicle.md](vehicle.md#user-layer-engine-garage-p2)) may replace
+an `n2o_bottle` or `nitrous_kit` component's `ref` and a kit's `controller` slot (relative to the vehicle file); the
+result equals writing the same keys into the vehicle file.

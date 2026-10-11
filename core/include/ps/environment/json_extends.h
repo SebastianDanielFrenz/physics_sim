@@ -21,6 +21,8 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include <filesystem>
+#include <functional>
+#include <string>
 
 namespace ps::io {
 
@@ -36,5 +38,32 @@ void json_merge_patch(nlohmann::json& target, const nlohmann::json& patch);
 // file) on an unreadable/invalid file, a non-object top level, a non-string or
 // empty `extends`, a cycle or a depth beyond `max_depth`.
 nlohmann::json load_json_with_extends(const std::filesystem::path& path, int max_depth = 8);
+
+// Engine garage P2: relative paths per file. A part format whose keys hold
+// relative paths (an engine's "fuels", a turbo configuration's "turbo", ...)
+// passes a rebase callback: before an ANCESTOR's object is merged, the
+// callback rewrites each of that object's path-valued keys from
+// `ancestor_dir` to `root_dir` (rebase_relative_path below), so the merged
+// object resolves every path against the root file's directory, exactly as
+// if the key had been written there. The root file's own keys are never
+// passed to the callback - a file without "extends" is returned unchanged.
+// An empty callback behaves like the two-argument overload.
+using ExtendsRebase = std::function<void(nlohmann::json& ancestor, const std::filesystem::path& ancestor_dir,
+                                         const std::filesystem::path& root_dir)>;
+nlohmann::json load_json_with_extends(const std::filesystem::path& path, int max_depth, const ExtendsRebase& rebase);
+
+// The same chain resolution for an object already in memory (e.g. parsed from
+// a string): `virtual_path` stands for the file the object would be (its
+// parent directory is the base of "extends" and of the rebase; its name only
+// appears in messages and never equals a real file in the cycle check).
+nlohmann::json resolve_json_extends(nlohmann::json root, const std::filesystem::path& virtual_path, int max_depth,
+                                    const ExtendsRebase& rebase);
+
+// A relative path written in a file in `from_dir`, re-expressed relative to
+// `to_dir` (forward slashes, lexically normalised). An absolute `value` is
+// returned unchanged; when no relative form exists (another drive) the
+// absolute path is returned.
+std::string rebase_relative_path(const std::string& value, const std::filesystem::path& from_dir,
+                                 const std::filesystem::path& to_dir);
 
 } // namespace ps::io

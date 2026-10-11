@@ -293,8 +293,11 @@ TEST_CASE("D4 loader: intercooler pressure drop", "[turbo][io][intercooler]") {
 
 // ---------------------------------------------------------------------------
 // N7b: a vehicle's engine component may override the engine file's
-// default_turbo_configuration ("turbo_configuration", a path relative to the
+// default_forced_induction ("forced_induction", a path relative to the
 // VEHICLE file; docs/data_formats/vehicle.md), modelled on "installation".
+// Engine garage P2 renamed the keys (default_turbo_configuration ->
+// default_forced_induction, turbo_configuration -> forced_induction); the old
+// names are rejected with a rename message.
 // The fixtures are the real car_hyper.json / hyper_v8_one1_audio.json with
 // every "../x.json" path made absolute and written to a scratch directory
 // (a copy next to nothing keeps relative paths from resolving), loaded at
@@ -379,22 +382,22 @@ std::string default_config_path() {
 
 } // namespace
 
-TEST_CASE("N7b: a vehicle-level 'turbo_configuration' equals putting the path into the engine file", "[turbo][io][vehicle]") {
+TEST_CASE("N7b: a vehicle-level 'forced_induction' equals putting the path into the engine file", "[turbo][io][vehicle]") {
     OverrideFixture f;
     // (a) the override on the vehicle's engine component, the stock engine file.
     json va = f.vehicle;
-    OverrideFixture::engine_component(va)["turbo_configuration"] = f.cfg_path;
+    OverrideFixture::engine_component(va)["forced_induction"] = f.cfg_path;
     const auto da = f.load(va, "va.json");
-    // (b) the same path as the engine file's own default_turbo_configuration, no override.
+    // (b) the same path as the engine file's own default_forced_induction, no override.
     json e = f.engine;
-    e["default_turbo_configuration"] = f.cfg_path;
+    e["default_forced_induction"] = f.cfg_path;
     json vb = f.vehicle;
     OverrideFixture::engine_component(vb)["ref"] = f.write("engine_b.json", e);
     const auto db = f.load(vb, "vb.json");
     // (c) the stock car (engine default), (d) the stock default named as an explicit override.
     const auto dc = f.load(f.vehicle, "vc.json");
     json vd = f.vehicle;
-    OverrideFixture::engine_component(vd)["turbo_configuration"] = default_config_path();
+    OverrideFixture::engine_component(vd)["forced_induction"] = default_config_path();
     const auto dd = f.load(vd, "vd.json");
     // (e) the repository car loaded directly: a file without the new key loads as before.
     ps::io::EngineMapOptions opt;
@@ -428,38 +431,67 @@ TEST_CASE("N7b: a vehicle-level 'turbo_configuration' equals putting the path in
     CHECK(hc1 == hash_after(dc, 20, 10)); // worker-count invariant
 }
 
-TEST_CASE("N7b: a vehicle-level 'turbo_configuration' is rejected by message", "[turbo][io][vehicle]") {
+TEST_CASE("N7b: a vehicle-level 'forced_induction' is rejected by message", "[turbo][io][vehicle]") {
     OverrideFixture f;
     SECTION("an empty string") {
         json v = f.vehicle;
-        OverrideFixture::engine_component(v)["turbo_configuration"] = "";
-        CHECK_THROWS_WITH(f.load(v, "r1.json"), ContainsSubstring("'turbo_configuration' must be a non-empty path string"));
+        OverrideFixture::engine_component(v)["forced_induction"] = "";
+        CHECK_THROWS_WITH(f.load(v, "r1.json"), ContainsSubstring("'forced_induction' must be a non-empty path string"));
     }
     SECTION("not a string") {
         json v = f.vehicle;
-        OverrideFixture::engine_component(v)["turbo_configuration"] = 3;
-        CHECK_THROWS_WITH(f.load(v, "r2.json"), ContainsSubstring("'turbo_configuration' must be a non-empty path string"));
-    }
-    SECTION("a simulated engine without default_turbo_configuration") {
-        json e = f.engine;
-        e.erase("default_turbo_configuration");
-        json v = f.vehicle;
-        OverrideFixture::engine_component(v)["ref"] = f.write("engine_noturbo.json", e);
-        OverrideFixture::engine_component(v)["turbo_configuration"] = f.cfg_path;
-        CHECK_THROWS_WITH(f.load(v, "r3.json"),
-                          ContainsSubstring("'turbo_configuration' is only allowed on a simulated engine whose file has 'default_turbo_configuration'"));
+        OverrideFixture::engine_component(v)["forced_induction"] = 3;
+        CHECK_THROWS_WITH(f.load(v, "r2.json"), ContainsSubstring("'forced_induction' must be a non-empty path string"));
     }
     SECTION("a torque_map engine") {
         json v = f.vehicle;
         auto& c = OverrideFixture::engine_component(v);
         c["ref"] = std::filesystem::weakly_canonical(std::filesystem::path(data_dir()) / "engines/i4_2l_na.json").generic_string();
-        c["turbo_configuration"] = f.cfg_path;
-        CHECK_THROWS_WITH(f.load(v, "r4.json"),
-                          ContainsSubstring("'turbo_configuration' is only allowed on a simulated engine whose file has 'default_turbo_configuration'"));
+        c["forced_induction"] = f.cfg_path;
+        CHECK_THROWS_WITH(f.load(v, "r4.json"), ContainsSubstring("'forced_induction' is only allowed on a simulated engine"));
     }
     SECTION("a missing configuration file") {
         json v = f.vehicle;
-        OverrideFixture::engine_component(v)["turbo_configuration"] = (f.dir / "does_not_exist.json").generic_string();
+        OverrideFixture::engine_component(v)["forced_induction"] = (f.dir / "does_not_exist.json").generic_string();
         CHECK_THROWS(f.load(v, "r5.json"));
     }
+    SECTION("the pre-P2 vehicle key 'turbo_configuration'") {
+        json v = f.vehicle;
+        OverrideFixture::engine_component(v)["turbo_configuration"] = f.cfg_path;
+        CHECK_THROWS_WITH(f.load(v, "r6.json"), ContainsSubstring("'turbo_configuration' was renamed 'forced_induction'"));
+    }
+    SECTION("the pre-P2 engine key 'default_turbo_configuration'") {
+        json e = f.engine;
+        e["default_turbo_configuration"] = e["default_forced_induction"];
+        e.erase("default_forced_induction");
+        json v = f.vehicle;
+        OverrideFixture::engine_component(v)["ref"] = f.write("engine_oldkey.json", e);
+        CHECK_THROWS_WITH(f.load(v, "r7.json"), ContainsSubstring("'default_turbo_configuration' was renamed 'default_forced_induction'"));
+    }
+}
+
+// Engine garage P2: a vehicle may now ADD forced induction to a simulated engine whose file has none (N7b
+// rejected that). The result equals the engine file naming the same configuration as its default.
+TEST_CASE("garage P2: a vehicle-level 'forced_induction' on an engine without a default", "[turbo][io][vehicle]") {
+    OverrideFixture f;
+    json e = f.engine;
+    e.erase("default_forced_induction");
+    json v = f.vehicle;
+    OverrideFixture::engine_component(v)["ref"] = f.write("engine_noturbo.json", e);
+    OverrideFixture::engine_component(v)["forced_induction"] = f.cfg_path;
+    const auto da = f.load(v, "add_fi.json");
+    json eb = f.engine;
+    eb["default_forced_induction"] = f.cfg_path;
+    json vb = f.vehicle;
+    OverrideFixture::engine_component(vb)["ref"] = f.write("engine_b2.json", eb);
+    const auto db = f.load(vb, "add_fi_b.json");
+    const auto& ea = sim_engine(da);
+    const auto& ebd = sim_engine(db);
+    REQUIRE(ea.turbo_pair.has_value());
+    REQUIRE(ebd.turbo_pair.has_value());
+    CHECK(ea.turbo_pair->target_boost_pa == Catch::Approx(1.6e5).epsilon(1e-12));
+    REQUIRE(ea.turbo_pair->maps != nullptr);
+    REQUIRE(ebd.turbo_pair->maps != nullptr);
+    CHECK(ea.turbo_pair->maps->content_hash == ebd.turbo_pair->maps->content_hash);
+    CHECK(hash_after(da, 20, 1) == hash_after(db, 20, 1));
 }

@@ -88,7 +88,7 @@ for this data calibration; integration build ownership stays with that chat.
 
 ## Configuration and live replacement
 
-The engine's `default_turbo_configuration` points to
+The engine's `default_forced_induction` (before engine garage P2: `default_turbo_configuration`) points to
 `data/turbo_configurations/hyper_twin_default.json`. That configuration names
 `data/turbos/hyper_turbo_approx.json`, turbine count, boost target and
 intercooler effectiveness. Hardware quantities such as shaft inertia, reference
@@ -164,3 +164,11 @@ Final complete staged-source native checks: 76,616 assertions in 27 cases passed
 ## Shutdown observation, 2026-10-03
 
 The first cold live-swap run completed generation, override and invalid-file fallback, then exited with Windows access violation 0xC0000005 during shutdown. A debugger run and six subsequent WASAPI live-swap/explicit-stop runs all exited zero, so the fault could not be reproduced or located; it is not claimed fixed. Dashboard/fuel and cockpit surface audio checks passed. Focused spatial lifecycle passed with endpoint rejection 0x80004001; downstream Atmos/headset output is not certified. Follow up with overnight sanitizer coverage and cold-cache shutdown reproduction. Logs: out/hyper_commit_verify/live_swap.log, shutdown_stack.log, shutdown_repeat_1.log through shutdown_repeat_6.log, dashboard.log, surface_audio.log, spatial_audio.log.
+
+## Part files (engine garage P2)
+
+The ECU calibration (throttle actuator, idle control, lambda and spark tables, idle rpm, fuel-cut limiter) lives in
+`data/ecus/hyper_v8_one1.json` and the valve lifts in `data/cams/hyper_v8_one1.json`; the engine names them with
+`default_ecu`/`default_cam`. They were moved verbatim: the assembled engine equals the pre-split file (same `.psmaps`
+key, turbo tables and state hash - `tests/unit/test_engine_parts.cpp` against
+`tests/support/fixtures/garage_p2/hyper_inline.json`). See `docs/data_formats/ecu.md` and `cam.md`.

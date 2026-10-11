@@ -603,7 +603,7 @@ cycle model is I7e).
 | `banks` | array of arrays of integers | no (one bank, every cylinder) | every `1..cylinders` covered exactly once | groups cylinder numbers into exhaust banks (source positions, A8+) - does not affect firing timing |
 | `bank_angle_deg` | number | no (0) | | the V angle between banks, geometry only |
 | `grid_rpm` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality rpm grid of the generated tables |
-| `grid_p_im_kpa` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality manifold-pressure grid. On a pipe engine with a `default_turbo_configuration`, every node is generated with the throttle fed from a fixed supply of max(ambient, 1.05 x the node pressure) at ISA temperature (a compressor outlet after an ideal intercooler) instead of the snorkel/airbox, so the grid may extend above ambient - cover the boost range, or boosted lookups hold the top row. Without a turbo a node the ambient path cannot reach fails the load. A node below the lowest manifold pressure the engine reaches with the throttle closed (valve overlap pushes exhaust back into the intake; long cams idle at a higher MAP) does not fail: it is generated with the plenum held at the node pressure, and the engine breathes little or nothing there. The turbo configuration file (`data/turbo_configurations/*.json`) gives `target_boost_bar` (gauge) and an optional `boost_control` block (`kp`, `ki_per_s`, `kd_s`, `actuator_tau_s`: PID on charge pressure driving the wastegate); the turbo hardware file gives `reference_head_bar`. Pressures in turbo files are bar. |
+| `grid_p_im_kpa` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality manifold-pressure grid. On a pipe engine with a `default_forced_induction`, every node is generated with the throttle fed from a fixed supply of max(ambient, 1.05 x the node pressure) at ISA temperature (a compressor outlet after an ideal intercooler) instead of the snorkel/airbox, so the grid may extend above ambient - cover the boost range, or boosted lookups hold the top row. Without a turbo a node the ambient path cannot reach fails the load. A node below the lowest manifold pressure the engine reaches with the throttle closed (valve overlap pushes exhaust back into the intake; long cams idle at a higher MAP) does not fail: it is generated with the plenum held at the node pressure, and the engine breathes little or nothing there. The turbo configuration file (`data/turbo_configurations/*.json`) gives `target_boost_bar` (gauge) and an optional `boost_control` block (`kp`, `ki_per_s`, `kd_s`, `actuator_tau_s`: PID on charge pressure driving the wastegate); the turbo hardware file gives `reference_head_bar`. Pressures in turbo files are bar. |
 
 Defaults in parentheses are the descriptor's literature values
 (`engine_cycle_desc.h`, each with its citation there). Unknown keys are
@@ -1191,3 +1191,108 @@ Deviations from design section 6's Regen column (test K1 pins exactly this list)
 
 Tests: `tests/unit/test_engine_rules.cpp`, tag `[engine_rules]` (22 cases, 2.6 s in release): R1 table, S1/S2 shipped engines, C1-C11
 one crafted violation per rule, K1-K4 classification, G0-G3 helpers with Sketch-quality generation and dyno runs.
+
+## Part slots, `extends` and the user layer (engine garage P2)
+
+An engine is assembled from part files before it is read (`core/src/io/engine_parts.cpp`). The assembly works on the
+JSON: the result is one engine object that the reader above sees exactly as if it had been written inline, so every
+field keeps its meaning and rejection, and the `.psmaps` key, the turbo-table key and the state hash come from the
+resolved content — an engine written as parts equals the same engine written inline
+(`tests/unit/test_engine_parts.cpp`; the shipped `hyper_v8_one1_audio.json` is split this way and is pinned against
+its pre-split form).
+
+### `extends`
+
+Every engine file may name a parent: `"extends": "<path>"` (relative to the file that writes it). The parent is read
+first, then the child is merged over it as an RFC 7396 merge patch: objects merge key by key, arrays and scalars
+replace, `null` removes an inherited key. Chains up to 8 parents; a cycle is rejected (`"extends cycle (a -> b -> a)"`),
+a deeper chain too (`"extends chain deeper than 8 parents"`). Relative paths stay relative to the file that wrote them:
+a parent's `fuel`, `fuels[]`, `default_ecu`, `default_cam`, `default_forced_induction`, `default_thermal` and
+`cycle.default_installation` are re-expressed for the child before the merge (a parent in another directory keeps
+working). The same rule holds for every engine-family part: [ECU](ecu.md), [cam](cam.md), turbo configuration and
+hardware ([turbo.md](turbo.md)), [installation](installation.md), nitrous bottle/kit/controller ([nitrous.md](nitrous.md));
+engine thermal and cooling files already had it.
+
+Example — a user copy of a shipped engine under its own name:
+
+```json
+{ "extends": "../engines/hyper_v8_one1_audio.json", "name": "my_v8" }
+```
+
+(to change the hyper's limiter, give it another ECU part through a slot, below - its calibration lives in
+`data/ecus/hyper_v8_one1.json`).
+
+### Slots
+
+| Slot | Engine file key | Vehicle engine component key | Part format |
+|---|---|---|---|
+| ECU | `default_ecu` | `ecu` | [`physics_sim.ecu/1`](ecu.md) |
+| cam | `default_cam` | `cam` | [`physics_sim.cam/1`](cam.md) |
+| forced induction | `default_forced_induction` (path or `"none"`) | `forced_induction` (path or `"none"`) | `physics_sim.turbo_configuration/1` ([turbo.md](turbo.md)) |
+| installation | `cycle.default_installation` | `installation` | `physics_sim.installation/1` |
+| thermal | `default_thermal` | `thermal` | `physics_sim.engine_thermal/1` |
+
+Resolution, bottom-up — the highest level that names a slot picks THE file for it:
+
+1. the engine's `extends` chain, deepest parent first, the engine file last;
+2. the engine's inline content;
+3. the engine file's `default_*` slots (relative to the file that wrote them);
+4. a vehicle engine component's slots (relative to the vehicle file);
+5. the user layer (`ps::io::VehicleLoadOptions::part_overrides`, [vehicle.md](vehicle.md#user-layer-engine-garage-p2)),
+   relative to the vehicle file — the user wins.
+
+A standalone engine load takes the same overrides as `EngineSlotOverrides` (slot name -> path or `"none"`, relative to
+the engine file, or to `base_dir` for `load_engine_json_from_string`).
+
+The chosen ECU file is merged over the engine's own top-level/`ecu`/`cycle` ECU fields, the chosen cam file into the
+`cycle` block. One engine object may not hold both a `default_ecu` and inline ECU fields (or `default_cam` and inline
+lifts) — `"'default_ecu' and the inline ECU field 'idle_control' - give the ECU either inline or as a part file, not
+both (a child engine removes an inherited field with null)"`. A vehicle- or user-level ECU/cam over an inline engine is
+fine: it is the override. Rejected: an unknown `default_*` key (`"unknown slot 'default_x' (engine slots: default_ecu,
+default_cam, default_forced_induction, default_thermal; default_installation lives in the cycle block)"`), an unknown
+override slot, a slot value that is not a non-empty string, `"none"` on any slot but forced induction.
+
+### Forced induction: the rename and `"none"`
+
+`default_turbo_configuration` was renamed `default_forced_induction` in P2; the old key is rejected
+(`"'default_turbo_configuration' was renamed 'default_forced_induction' (engine garage P2; a path or \"none\")"`). The
+shipped hyper was rewritten in the same commit. Values: a turbo configuration path, or `"none"`.
+
+- A path on a torque-map engine is rejected (`"... is only allowed on a simulated engine (a torque-map engine has no air
+  path to boost)"`).
+- A vehicle or user slot may now ADD forced induction to a simulated engine whose file has none (N7b rejected that);
+  the result equals the engine file naming the same configuration.
+- `"none"` removes it: the engine loads naturally aspirated, `compressor_supply` is false. On a pipe engine (one with
+  `cycle.intake`/`exhaust`) a generation grid above ambient is rejected at load, also validate-only, because the
+  generator cannot reach those nodes without a compressor:
+  `"forced induction is \"none\" ('forced_induction') but cycle.grid_p_im_kpa reaches 300.000000 kPa, above ambient
+  (101.325 kPa [C ISO 2533]) - ... Fix: give the engine a grid_p_im_kpa (and pressure_sampling.max_kpa) that a naturally
+  aspirated intake reaches - below ambient by the wide-open throttle and runner losses, so the top node a few kPa under
+  101.325 - e.g. a user engine that 'extends' this one and replaces cycle.grid_p_im_kpa"`. The check compares the top
+  grid node (and `pressure_sampling.max_kpa` when sampling is on) with 101.325 kPa; a node between the wide-open plenum
+  pressure and ambient still fails in the generator (the NA hyper reaches 97.87 kPa at 8000 rpm [M], so its test grid
+  tops out at 95 kPa [AS]). A lumped engine (no pipe blocks) generates between fixed reservoirs at the node pressure
+  and is left to the generator.
+
+### Engine mass (optional metadata)
+
+| Key | Type | Rule |
+|---|---|---|
+| `mass_kg` | number | > 0 and finite; `TorqueMapEngineDesc::mass_kg` / `SimulatedEngineDesc::mass_kg`, 0 when absent |
+| `mass_source` | string | requires `mass_kg`; a citation tag ([C]/[D]/[AS]/[M]) |
+
+Read by no physics; in no cache key and no state hash (`test_engine_map_cache.cpp` "garage P2 H3").
+
+### Engine from memory
+
+`ps::io::load_engine_json_from_string(text, base_dir, options, slots)` loads JSON text as if the identical bytes were a
+file in `base_dir`: relative `extends`, fuel, slot and installation paths resolve against `base_dir`; the descriptor,
+`.psmaps` key and runtime behaviour equal the file load. Messages name `<base_dir>/<engine string>`; malformed text
+gives `"... invalid JSON"`.
+
+### Cache keys
+
+The `.psmaps` key is `engine_map_cache_key` over the resolved `CycleModelDesc` + burnt fuel + quality, the turbo-table
+key is over the resolved turbo parameters — neither sees how the content was split into files. Slot path strings,
+`extends`, part `name`/`source` metadata, `mass_kg` and `mass_source` are not in any key; a different cam or ECU spark
+table is (it changes the resolved desc).

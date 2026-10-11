@@ -213,18 +213,21 @@ an engine whose cycle block has 'intake'/'exhaust' pipe blocks"` /
 [`engine.md`](engine.md)'s `default_installation` field and
 [`installation.md`](installation.md) for the referenced file's own format.
 
-Likewise an `engine` component may carry a vehicle-level `"turbo_configuration"`
-field (a string path resolved relative to the VEHICLE file's own directory) that
-replaces the engine's own `default_turbo_configuration` for this vehicle only
-(the engine garage step P2 will later rename it `"forced_induction"`). The
-replacement happens before the turbo tables and the engine maps are built, so
-the derived turbo cache key and the generated maps follow the file actually
-used; `compressor_supply` and the map keys behave exactly as with the engine's
-default. Only legal on a simulated engine whose file has
-`default_turbo_configuration` (`"'turbo_configuration' is only allowed on a
-simulated engine whose file has 'default_turbo_configuration'"`); must be a
-non-empty string (`"'turbo_configuration' must be a non-empty path string"`).
-Absent = bit-identical to before.
+Likewise an `engine` component may carry a vehicle-level `"forced_induction"`
+field (a string path resolved relative to the VEHICLE file's own directory, or
+`"none"`) that replaces the engine's own `default_forced_induction` for this
+vehicle only. Engine garage P2 renamed the key (it was `"turbo_configuration"`,
+now rejected: `"'turbo_configuration' was renamed 'forced_induction' (engine
+garage P2; a path or \"none\")"`). The replacement happens before the turbo
+tables and the engine maps are built, so the derived turbo cache key and the
+generated maps follow the file actually used; `compressor_supply` and the map
+keys behave exactly as with the engine's default. Legal on any simulated engine
+(since P2 also one whose file names no forced induction - the vehicle adds it);
+a torque-map engine is rejected (`"'forced_induction' is only allowed on a
+simulated engine ..."`); must be a non-empty string (`"'forced_induction' must
+be a non-empty path string or \"none\""`). Absent = bit-identical to before.
+See [Engine component slots](#engine-component-slots-engine-garage-p2) below for
+the other slots and `"none"`.
 
 #### `clutch` component fields
 
@@ -1147,3 +1150,50 @@ simplification fine for documentation, not for a real drivable vehicle.)
 - **A controller naming a component of the wrong kind**, e.g. `"clutch":
   "gearbox"` — throws `"controller '<id>' component 'gearbox' is not a
   clutch"`.
+
+## Engine component slots (engine garage P2)
+
+An `engine` component (with a `ref` or inline) may name part files that override the engine file's own slots for this
+vehicle. Every path is resolved relative to the VEHICLE file; the full resolution order and the part formats are in
+[engine.md](engine.md#part-slots-extends-and-the-user-layer-engine-garage-p2).
+
+| Key | Value | Replaces the engine's |
+|---|---|---|
+| `ecu` | path to a [`physics_sim.ecu/1`](ecu.md) file | `default_ecu` / inline ECU fields (merged over them) |
+| `cam` | path to a [`physics_sim.cam/1`](cam.md) file | `default_cam` / inline lifts |
+| `forced_induction` | path to a turbo configuration, or `"none"` | `default_forced_induction` (was `turbo_configuration`, see above) |
+| `installation` | path to an installation | `cycle.default_installation` (pipe engines only, unchanged since ps_audio A4) |
+| `thermal` | path to an engine thermal file | `default_thermal` (unchanged since engine thermal T1) |
+
+With a `ref`, a component may carry exactly `id`, `type`, `ref` and these five keys. On an inline engine an `ecu`
+OBJECT is still the engine's own inline `ecu` block (lambda/spark tables), an `ecu` STRING is the slot. A slot value
+must be a non-empty string (`"none"` only for `forced_induction`); the old `turbo_configuration` key is rejected with
+the rename message. Absent = bit-identical to before.
+
+## User layer (engine garage P2)
+
+`ps::io::load_vehicle_json(path, const VehicleLoadOptions&)` applies the player's part choices on top of the vehicle
+file — the last layer, so the user wins. The older overloads `load_vehicle_json(path)` and
+`load_vehicle_json(path, EngineMapOptions)` delegate to it with no overrides (bit-identical).
+
+```cpp
+struct PartOverride { std::string ref; std::map<std::string, std::string> slots; };
+struct VehicleLoadOptions { EngineMapOptions maps; std::map<std::string, PartOverride> part_overrides; };
+```
+
+`part_overrides` is keyed by powertrain component `id`. For that component:
+
+- `ref` (empty = keep) replaces its part file — legal for `engine`, `gearbox`, `n2o_bottle` and `nitrous_kit`
+  components. An inline component given a `ref` becomes `{id, type, ref}` (an inline engine keeps its string slots);
+  the new file is then read exactly like a `ref` written in the vehicle file.
+- `slots` set the component's slots by name: an engine's `ecu`, `cam`, `forced_induction` (path or `"none"`),
+  `installation`, `thermal`; a nitrous kit's `controller`. A user slot replaces the vehicle file's value for that slot.
+
+Paths resolve relative to the vehicle file (absolute paths as given), like the vehicle-level keys they replace — a
+garage that writes its parts under a user directory passes absolute paths. Rejected: an id with no powertrain component
+(`"part_overrides: no powertrain component with id 'x'"`), a component type without a part file (`"a 'clutch'
+component has no part file to override"`), an unknown slot name for the type, an engine `ecu` slot on an inline engine
+whose `ecu` block is inline.
+
+The user layer only edits the component JSON before it is read, so a user choice equals writing the same keys into the
+vehicle file: same descriptor, same `.psmaps`/turbo keys, same state hash.

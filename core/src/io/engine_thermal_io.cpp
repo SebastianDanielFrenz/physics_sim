@@ -5,6 +5,7 @@
 #include "ps/io/engine_thermal_io.h"
 
 #include "ps/environment/json_extends.h"
+#include "engine_parts.h"
 
 #include <nlohmann/json.hpp>
 
@@ -339,10 +340,9 @@ CoolingSystemDesc load_cooling_system_json(const std::string& path) {
 }
 
 std::string engine_default_thermal_path(const std::string& engine_json_path) {
-    std::ifstream in(engine_json_path);
-    if (!in) throw std::runtime_error(engine_json_path + ": cannot open file");
-    const json j = json::parse(in, nullptr, /*allow_exceptions=*/false);
-    if (j.is_discarded() || !j.is_object()) throw std::runtime_error(engine_json_path + ": not a JSON object");
+    // Engine garage P2: the engine's "extends" chain is resolved first (a parent's default_thermal is re-expressed
+    // relative to this file), like every engine load.
+    const json j = load_json_with_extends(std::filesystem::path(engine_json_path), 8, parts::rebase_engine_paths);
     if (!j.contains("default_thermal")) return {};
     if (!j.at("default_thermal").is_string() || j.at("default_thermal").get<std::string>().empty()) {
         throw std::runtime_error(engine_json_path + ": 'default_thermal' must be a non-empty path string");

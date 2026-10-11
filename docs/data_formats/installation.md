@@ -157,3 +157,15 @@ this table-driven, one field at a time).
 - **A position field given as `{"x":..,"y":..,"z":..}`.** Every `Vec3` in
   this loader (like every other `physics_sim.*` format) is a 3-element
   array `[x, y, z]`, not an object.
+
+## `extends` and the user layer (engine garage P2)
+
+An installation file may name a parent with `"extends": "<path>"` (RFC 7396 merge patch, the child last; at most 8
+parents, cycles rejected; the path relative to the file that writes it). An installation has no path-valued keys of
+its own. Note that a merge patch replaces arrays whole: a child that changes one exhaust element must give the whole
+`exhaust.elements` array.
+
+Besides the engine's `cycle.default_installation` and the vehicle component's `installation`, the user layer can set
+the slot (`VehicleLoadOptions::part_overrides["<engine id>"].slots["installation"]`, relative to the vehicle file) and
+a standalone engine load takes `EngineSlotOverrides{{"installation", path}}`; the highest level wins
+([engine.md](engine.md#slots)). The installation path itself is provenance only and not in the cache key (H3).
