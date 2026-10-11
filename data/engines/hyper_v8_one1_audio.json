@@ -34,135 +34,6 @@
     }
   },
   "throttle_input": "electronic",
-  "throttle_actuator_tau_s": 0.04,
-  "idle_control": {
-    "kp_per_rpm": 3e-05,
-    "ki_per_rpm_s": 6e-05,
-    "max_throttle": 0.1,
-    "max_torque_nm": 25
-  },
-  "ecu": {
-    "lambda_target": {
-      "rpm": [
-        0,
-        950,
-        3000,
-        6000,
-        8250
-      ],
-      "p_im_kpa": [
-        20,
-        100,
-        280
-      ],
-      "values": [
-        [
-          1,
-          1,
-          0.82
-        ],
-        [
-          1,
-          1,
-          0.82
-        ],
-        [
-          1,
-          1,
-          0.82
-        ],
-        [
-          1,
-          1,
-          0.82
-        ],
-        [
-          1,
-          1,
-          0.82
-        ]
-      ],
-      "source": "Authored boost enrichment, not a measured ECU calibration."
-    },
-    "spark_advance_deg": {
-      "rpm": [
-        0,
-        950,
-        3000,
-        4000,
-        4500,
-        5000,
-        6000,
-        7000,
-        7500,
-        8000,
-        8250
-      ],
-      "p_im_kpa": [
-        20,
-        100,
-        280
-      ],
-      "values": [
-        [
-          28,
-          28,
-          18
-        ],
-        [
-          28,
-          28,
-          18
-        ],
-        [
-          28,
-          28,
-          18
-        ],
-        [
-          28,
-          28,
-          18
-        ],
-        [
-          28,
-          28,
-          18
-        ],
-        [
-          28,
-          28,
-          14.5
-        ],
-        [
-          28,
-          28,
-          10.8
-        ],
-        [
-          28,
-          28,
-          16
-        ],
-        [
-          28,
-          28,
-          19
-        ],
-        [
-          28,
-          28,
-          18
-        ],
-        [
-          28,
-          28,
-          18
-        ]
-      ],
-      "source": "[AS] Explicit RPM-dependent high-load retard limits the strengthened midrange near 1371 Nm at 6000; high-RPM timing restores net 1 MW at 7500. Interpolated by manifold pressure. No generated knock-limit map; E5 safety is not established."
-    }
-  },
   "cycle": {
     "source": "[AS] Fixed published bore/stroke and compression, assumed firing topology and internals. 2026-10-03 high-RPM breathing calibration: two 38 mm intake and two 34 mm exhaust valves/cylinder; intake 270 deg / 12 mm, IVO 4 BTDC, IVC 86 ABDC; exhaust 264 deg / 12 mm, EVO 80 BBDC, EVC 4 ATDC; 8 deg overlap. High-lift Cd authored 0.50. Explicit 7500/8000 rpm generation nodes. No manufacturer cam, port or runner measurements.",
     "rod_mm": 155,
@@ -171,76 +42,6 @@
     "exhaust_valves": 2,
     "intake_valve_d_mm": 38,
     "exhaust_valve_d_mm": 34,
-    "intake_lift": {
-      "lift_mm_vs_deg": {
-        "x": [
-          0.0,
-          21.6,
-          45.9,
-          67.5,
-          89.1,
-          113.4,
-          135.0,
-          156.6,
-          180.9,
-          202.5,
-          224.1,
-          248.4,
-          270.0
-        ],
-        "y": [
-          0.0,
-          1.2,
-          4.8,
-          8.64,
-          11.04,
-          11.88,
-          12.0,
-          11.88,
-          11.04,
-          8.64,
-          4.8,
-          1.2,
-          0.0
-        ]
-      },
-      "phase_ref_deg": -4
-    },
-    "exhaust_lift": {
-      "lift_mm_vs_deg": {
-        "x": [
-          0.0,
-          21.12,
-          44.88,
-          66.0,
-          87.12,
-          110.88,
-          132.0,
-          153.12,
-          176.88,
-          198.0,
-          219.12,
-          242.88,
-          264.0
-        ],
-        "y": [
-          0.0,
-          1.2,
-          4.8,
-          8.64,
-          11.04,
-          11.88,
-          12.0,
-          11.88,
-          11.04,
-          8.64,
-          4.8,
-          1.2,
-          0.0
-        ]
-      },
-      "phase_ref_deg": 460
-    },
     "intake_port_cc": 150.0,
     "exhaust_port_cc": 250.0,
     "cd_vs_l_over_d": {
@@ -404,12 +205,8 @@
   "breakaway_torque_nm": 75.0,
   "fuel": "../fuels/e5.json",
   "ignition": "spark",
-  "idle_rpm": 950.0,
   "initial_state": "running",
-  "limiter": {
-    "type": "fuel_cut",
-    "rpm": 8250,
-    "hysteresis_rpm": 150
-  },
+  "default_ecu": "../ecus/hyper_v8_one1.json",
+  "default_cam": "../cams/hyper_v8_one1.json",
   "default_forced_induction": "../turbo_configurations/hyper_twin_default.json"
 }

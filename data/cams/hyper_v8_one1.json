@@ -1,0 +1,83 @@
+{
+  "format": "physics_sim.cam/1",
+  "name": "hyper_v8_one1",
+  "source": "Engine garage P2: the valve lift curves of engines/hyper_v8_one1_audio.json moved verbatim into a part file; every number and its source note are unchanged (authored [AS] lifts, see the engine cycle block source). fits records the engine it was drawn for: 2+2 valves, 38/34 mm heads.",
+  "fits": {
+    "family": "hyper_v8_one1",
+    "intake_valves": 2,
+    "exhaust_valves": 2,
+    "intake_valve_d_mm": [38, 38],
+    "exhaust_valve_d_mm": [34, 34],
+    "source": "[D] read from the cycle block of engines/hyper_v8_one1_audio.json at the P2 split"
+  },
+  "intake_lift": {
+    "lift_mm_vs_deg": {
+      "x": [
+        0.0,
+        21.6,
+        45.9,
+        67.5,
+        89.1,
+        113.4,
+        135.0,
+        156.6,
+        180.9,
+        202.5,
+        224.1,
+        248.4,
+        270.0
+      ],
+      "y": [
+        0.0,
+        1.2,
+        4.8,
+        8.64,
+        11.04,
+        11.88,
+        12.0,
+        11.88,
+        11.04,
+        8.64,
+        4.8,
+        1.2,
+        0.0
+      ]
+    },
+    "phase_ref_deg": -4
+  },
+  "exhaust_lift": {
+    "lift_mm_vs_deg": {
+      "x": [
+        0.0,
+        21.12,
+        44.88,
+        66.0,
+        87.12,
+        110.88,
+        132.0,
+        153.12,
+        176.88,
+        198.0,
+        219.12,
+        242.88,
+        264.0
+      ],
+      "y": [
+        0.0,
+        1.2,
+        4.8,
+        8.64,
+        11.04,
+        11.88,
+        12.0,
+        11.88,
+        11.04,
+        8.64,
+        4.8,
+        1.2,
+        0.0
+      ]
+    },
+    "phase_ref_deg": 460
+  }
+}

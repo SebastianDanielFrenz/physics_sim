@@ -2203,8 +2203,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                                          "') but cycle.grid_p_im_kpa reaches " + std::to_string(top / kKpa) +
                                          " kPa, above ambient (101.325 kPa [C ISO 2533]) - without a compressor the intake "
                                          "cannot reach those nodes. Fix: give the engine a grid_p_im_kpa (and "
-                                         "pressure_sampling.max_kpa) at or below ambient, e.g. a user engine that 'extends' "
-                                         "this one and replaces cycle.grid_p_im_kpa");
+                                         "pressure_sampling.max_kpa) that a naturally aspirated intake reaches - below "
+                                         "ambient by the wide-open throttle and runner losses, so the top node a few kPa "
+                                         "under 101.325 - e.g. a user engine that 'extends' this one and replaces "
+                                         "cycle.grid_p_im_kpa");
             }
         }
         // ps_audio A5 (PROVISIONAL P12): resolve the installation BEFORE the

@@ -1,0 +1,140 @@
+{
+  "format": "physics_sim.ecu/1",
+  "name": "hyper_v8_one1",
+  "source": "Engine garage P2: the ECU calibration of engines/hyper_v8_one1_audio.json moved verbatim into a part file (throttle actuator, idle control, lambda and spark tables, idle rpm, fuel-cut limiter); every number and its source note are unchanged - see the engine file and data/engines/HYPER_ONE1.md for their origin. Loading the engine gives the same desc, cache keys and state hash as before the split.",
+  "throttle_actuator_tau_s": 0.04,
+  "idle_control": {
+    "kp_per_rpm": 3e-05,
+    "ki_per_rpm_s": 6e-05,
+    "max_throttle": 0.1,
+    "max_torque_nm": 25
+  },
+  "ecu": {
+    "lambda_target": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        6000,
+        8250
+      ],
+      "p_im_kpa": [
+        20,
+        100,
+        280
+      ],
+      "values": [
+        [
+          1,
+          1,
+          0.82
+        ],
+        [
+          1,
+          1,
+          0.82
+        ],
+        [
+          1,
+          1,
+          0.82
+        ],
+        [
+          1,
+          1,
+          0.82
+        ],
+        [
+          1,
+          1,
+          0.82
+        ]
+      ],
+      "source": "Authored boost enrichment, not a measured ECU calibration."
+    },
+    "spark_advance_deg": {
+      "rpm": [
+        0,
+        950,
+        3000,
+        4000,
+        4500,
+        5000,
+        6000,
+        7000,
+        7500,
+        8000,
+        8250
+      ],
+      "p_im_kpa": [
+        20,
+        100,
+        280
+      ],
+      "values": [
+        [
+          28,
+          28,
+          18
+        ],
+        [
+          28,
+          28,
+          18
+        ],
+        [
+          28,
+          28,
+          18
+        ],
+        [
+          28,
+          28,
+          18
+        ],
+        [
+          28,
+          28,
+          18
+        ],
+        [
+          28,
+          28,
+          14.5
+        ],
+        [
+          28,
+          28,
+          10.8
+        ],
+        [
+          28,
+          28,
+          16
+        ],
+        [
+          28,
+          28,
+          19
+        ],
+        [
+          28,
+          28,
+          18
+        ],
+        [
+          28,
+          28,
+          18
+        ]
+      ],
+      "source": "[AS] Explicit RPM-dependent high-load retard limits the strengthened midrange near 1371 Nm at 6000; high-RPM timing restores net 1 MW at 7500. Interpolated by manifold pressure. No generated knock-limit map; E5 safety is not established."
+    }
+  },
+  "idle_rpm": 950.0,
+  "limiter": {
+    "type": "fuel_cut",
+    "rpm": 8250,
+    "hysteresis_rpm": 150
+  }
+}

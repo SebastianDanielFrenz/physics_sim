@@ -943,3 +943,65 @@ TEST_CASE("C16b review: cache hit vs fresh generation timing, pumping sign", "[.
         }
     }
 }
+
+// Engine garage P2 (design A8, A5): the engine mass metadata and the part-slot paths are not generator inputs, so
+// they never enter the .psmaps key. Measured through the loader (validate-only, instant): the same demo engine with
+// mass_kg/mass_source added, with its whole ECU and cam moved into part files named by default_ecu/default_cam, and
+// with its installation given as a slot by another spelling of the same path, all resolve to the same key.
+// mass_kg/mass_source live on SimulatedEngineDesc, which the key never sees; the slot paths are not stored in the
+// CycleModelDesc at all (installation_path is, and H3 above already excludes it). The last check is the
+// discriminating one: the same part-file route with a cam that really differs moves the key.
+TEST_CASE("garage P2 H3: mass_kg, mass_source and slot paths never enter the key", "[drivetrain][cycle][io]") {
+    namespace fs = std::filesystem;
+    using json = nlohmann::json;
+    const fs::path engines = fs::path(std::string(PS_SOURCE_DIR)) / "data" / "engines";
+    std::ifstream in(engines / "demo_i4_pipes.json");
+    const json base = json::parse(in);
+    io::EngineMapOptions o;
+    o.generate = false;
+    auto key = [&](const json& j, const io::EngineSlotOverrides& slots = {}) {
+        const auto p = io::load_engine_json_from_string(j.dump(), engines, o, slots);
+        const auto& e = std::get<SimulatedEngineDesc>(p);
+        return engine_map_cache_key(*e.cycle, e.fuels.front(), MapQuality::Full);
+    };
+    const std::uint64_t ref = key(base);
+
+    json m = base;
+    m["mass_kg"] = 141.5;
+    m["mass_source"] = "[AS] test";
+    CHECK(key(m) == ref);
+
+    // ECU and cam as part files in a scratch directory.
+    const fs::path dir = fs::temp_directory_path() / ("ps_h3_parts_" + std::to_string(reinterpret_cast<std::uintptr_t>(&m)));
+    fs::create_directories(dir);
+    json s = base;
+    json ecu = {{"format", "physics_sim.ecu/1"}, {"name", "h3"}};
+    for (const char* k : {"idle_rpm", "stall_rpm", "fire_rpm", "start_complete_rpm", "dfco_enable_rpm", "dfco_reenable_rpm",
+                          "idle_control", "limiter", "throttle_actuator_tau_s", "ecu"}) {
+        if (s.contains(k)) {
+            ecu[k] = s[k];
+            s.erase(k);
+        }
+    }
+    json cam = {{"format", "physics_sim.cam/1"}, {"name", "h3"}, {"intake_lift", s["cycle"]["intake_lift"]},
+                {"exhaust_lift", s["cycle"]["exhaust_lift"]}};
+    s["cycle"].erase("intake_lift");
+    s["cycle"].erase("exhaust_lift");
+    std::ofstream(dir / "ecu.json") << ecu.dump(2);
+    std::ofstream(dir / "cam.json") << cam.dump(2);
+    s["default_ecu"] = (dir / "ecu.json").generic_string();
+    s["default_cam"] = (dir / "cam.json").generic_string();
+    CHECK(key(s) == ref);
+
+    // The installation slot, the same file spelled through a detour.
+    const std::string detour = (engines / ".." / "engines" / ".." / "installations" / "demo_i4_exhaust.json").string();
+    CHECK(key(base, {{"installation", detour}}) == ref);
+
+    // Discriminating: a cam that really differs moves the key.
+    cam["intake_lift"]["phase_ref_deg"] = cam["intake_lift"]["phase_ref_deg"].get<double>() + 1.0;
+    std::ofstream(dir / "cam2.json") << cam.dump(2);
+    s["default_cam"] = (dir / "cam2.json").generic_string();
+    CHECK(key(s) != ref);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
