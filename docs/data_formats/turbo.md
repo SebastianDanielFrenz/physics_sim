@@ -46,8 +46,11 @@ exhaust flow `m`), turbine power from the turbine's share, compressor power
 bounded by the head the CURRENT rotor speed makes (`pr <= 1 + head(speed, flow) /
 p_amb`; the charge pressure lags the head by 25 ms, and a slowing wheel does not
 pay for stored charge), and a rotor
-energy balance (turbine power - compressor power - shaft loss) clamped at 2.25 x
-the energy at `reference_rpm`. The engine's throttle is fed from the charge
+energy balance (turbine power - compressor power - shaft loss) with NO rotor-speed
+ceiling since 16b12a7 (2026-10-09; it was clamped at 2.25 x the energy at
+`reference_rpm`, i.e. 1.5 x that speed): shaft power alone sets the speed, and the
+performance tables are evaluated outside their sampled speed range by the same law,
+unclamped. The dyno's TurboRotorCap finding reports the tables' speed edge. The engine's throttle is fed from the charge
 pressure/temperature and its exhaust back-pressure is the turbine inlet pressure.
 The exhaust gas temperature comes from the engine's own energy balance (see
 `exhaust_thermal` below): no temperature cap anywhere, only numerical guards.

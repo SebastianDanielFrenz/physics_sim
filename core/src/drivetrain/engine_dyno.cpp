@@ -155,14 +155,14 @@ void edge_findings(Findings& out, real rpm_tag, const GridProbe& g, const EdgeAc
 void limiter_findings(Findings& out, const EngineLimiterDesc& lim, real rpm, const std::string& engine_file) {
     constexpr real kEps = 1e-9;
     if (lim.type == LimiterType::FuelCut) {
-        LimitSeverity s;
+        LimitSeverity s = LimitSeverity::Near;
         if (rpm > lim.rpm + kEps) s = LimitSeverity::Exceeded;
         else if (rpm >= lim.rpm - kEps) s = LimitSeverity::Limiting;
         else if (rpm >= limits::kLimiterNear.value * lim.rpm) s = LimitSeverity::Near;
         else return;
         out.push_back(make_finding(LimitKind::FuelCut, s, rpm, rpm, lim.rpm, LimitUnit::RevPerMinute, PartRef{"engine", engine_file, "/limiter/rpm"}));
     } else {
-        LimitSeverity s;
+        LimitSeverity s = LimitSeverity::Near;
         if (rpm >= lim.rpm - kEps) s = LimitSeverity::Exceeded;
         else if (rpm > lim.rpm - lim.band_rpm) s = LimitSeverity::Limiting;
         else if (rpm > lim.rpm - limits::kSoftCutNearBands.value * lim.band_rpm) s = LimitSeverity::Near;
@@ -175,7 +175,7 @@ void limiter_findings(Findings& out, const EngineLimiterDesc& lim, real rpm, con
 void piston_speed_finding(Findings& out, const SimulatedEngineDesc& d, real rpm, const std::string& engine_file) {
     if (d.architecture != EngineArchitecture::Piston4Stroke) return;
     const real v = d.piston.stroke_m * rpm / real(30.0);
-    LimitSeverity s;
+    LimitSeverity s = LimitSeverity::Near;
     if (v >= limits::kPistonSpeedExceeded.value) s = LimitSeverity::Exceeded;
     else if (v >= limits::kPistonSpeedLimiting.value) s = LimitSeverity::Limiting;
     else if (v >= limits::kPistonSpeedNear.value) s = LimitSeverity::Near;
@@ -370,7 +370,7 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
     {
         const real edge_rpm = tp->speed_edge_rpm();
         const real f = w.rotor_max_rpm / edge_rpm;
-        LimitSeverity s;
+        LimitSeverity s = LimitSeverity::Near;
         bool hit = true;
         if (f > real(1.0)) s = LimitSeverity::Exceeded;
         else if (f >= limits::kRotorLimiting.value) s = LimitSeverity::Limiting;
@@ -620,7 +620,7 @@ std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const P
         const ClutchDesc* cl = std::get_if<ClutchDesc>(&c.params);
         if (cl == nullptr || !(cl->capacity_nm > real(0.0))) continue;
         const real static_capacity = cl->capacity_nm * cl->static_factor;
-        LimitSeverity s;
+        LimitSeverity s = LimitSeverity::Near;
         if (peak->torque_nm >= static_capacity) s = LimitSeverity::Limiting;
         else if (peak->torque_nm * margin >= static_capacity) s = LimitSeverity::Near;
         else continue;
