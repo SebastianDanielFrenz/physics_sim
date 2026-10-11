@@ -1,4 +1,5 @@
 #pragma once
+#include "ps/math/transcendental.h"
 #include "ps/types.h"
 #include <algorithm>
 #include <cmath>
@@ -41,9 +42,9 @@ inline real step_traction_control(const TractionControlDesc& d,TractionControlSt
     real reference=0;bool have_reference=false;
     for(const auto& w:wheels) {
         if(!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))continue;
-        const real c=std::cos(w.steer_rad);
+        real sn=0,c=1;ps::math::sincos(w.steer_rad,sn,c);
         if(c<.5)continue;
-        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*std::sin(w.steer_rad)-w.y_m*c))/c;
+        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
         if(!have_reference||std::abs(v)<std::abs(reference)){reference=v;have_reference=true;}
     }
     if(!have_reference){s.integral=0;s.torque_fraction=1;s.initialized=false;return 1;}
@@ -57,8 +58,8 @@ inline real step_traction_control(const TractionControlDesc& d,TractionControlSt
     const real direction=std::abs(s.estimated_speed_m_s)>.5 ? (s.estimated_speed_m_s<0?-1:1) : (reference<0?-1:1);
     for(const auto& w:wheels) {
         if(!w.driven||!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))continue;
-        const real c=std::cos(w.steer_rad);if(c<.5)continue;
-        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*std::sin(w.steer_rad)-w.y_m*c))/c;
+        real sn=0,c=1;ps::math::sincos(w.steer_rad,sn,c);if(c<.5)continue;
+        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
         s.positive_slip=std::max(s.positive_slip,direction*(v-s.estimated_speed_m_s)/std::max(d.reference_floor_m_s,std::abs(s.estimated_speed_m_s)));
     }
     const real error=s.positive_slip-d.target_slip;

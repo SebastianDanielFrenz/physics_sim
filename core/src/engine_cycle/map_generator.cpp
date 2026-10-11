@@ -759,7 +759,7 @@ EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& f
     const std::size_t budget=(settings.max_passes+1)*settings.max_points*(desc.grid_rpm.size()+40);
     MapGenerationControl stages;
     stages.cancel=control ? control->cancel:nullptr;
-    stages.on_progress=[&](std::size_t done,std::size_t total){if(control && control->on_progress) { const double start=1.0-std::pow(0.5,double(stage)); const double span=std::pow(0.5,double(stage+1)); control->on_progress(std::min(std::size_t((start+span*double(done)/double(std::max(std::size_t(1),total)))*budget),budget-1),budget); }};
+    stages.on_progress=[&](std::size_t done,std::size_t total){if(control && control->on_progress) { const double start=1.0-std::ldexp(1.0,-int(stage)); const double span=std::ldexp(1.0,-int(stage+1)); control->on_progress(std::min(std::size_t((start+span*double(done)/double(std::max(std::size_t(1),total)))*budget),budget-1),budget); }};
     std::vector<std::unique_ptr<EngineMapGenTask>> history;
     auto run=[&](const CycleModelDesc& d){auto m=generate_fixed_engine_maps(d,fuel,quality,pool,&stages,&history);++stage;if(control && control->on_partial_maps)control->on_partial_maps(m);return m;};
     if(sampling.grid_p_im.size()>settings.max_points)throw std::runtime_error("adaptive pressure sampling: seed grid exceeds point budget");
