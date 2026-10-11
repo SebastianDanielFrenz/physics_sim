@@ -1,0 +1,121 @@
+// ps/drivetrain/limit_findings.h - engine garage P3b-1: structured "limit findings" the dyno sweep measures, for the
+// garage's limit advisor (racing_game rg::LimitAdvisor, out/engine_garage_design.md section 18).
+//
+// A finding says WHAT limits (kind), HOW BAD (severity), WHERE (rpm; NaN = static), with the measured value and the limit
+// it is held against, and which PART to change (PartRef). Where the simulation can compute it, a finding carries a
+// quantified Remedy ("increase X by n x"). The advice TEXT is game data keyed by LimitKind; every number comes from here.
+//
+// Units are SI (Pa, K, N*m, m/s, kg/s, m^2) with ONE exception that follows the project's own convention everywhere
+// else: rotational speed is rpm (LimitUnit::RevPerMinute). Pressures are gauge where a finding says so (boost).
+//
+// Shipping increments: P3b-1 (this file's producers) = WastegateSaturated, BoostBelowTarget, BoostAboveTarget,
+// TurboRotorCap, CompressorSurge, CompressorChoke, ClutchCapacity, RevLimiter, FuelCut, MeanPistonSpeed, MapGridEdge;
+// not produced yet (value reserved, append-only): ChargeTemperature (no limit exists in any data file), GearboxInputTorque
+// (GearboxDesc carries no input-torque rating), KitFuelLean / InjectorDuty / N2OBottleDuration / N2OBottlePressureDrop
+// (nitrous is not part of the sweep - P3b-2), ValveFlowChoke (no valve Mach diagnostic exists), Knock (C17b).
+// docs/data_formats/engine.md "Dyno sweep" -> "Limit findings" has the thresholds and sources.
+#pragma once
+
+#include "ps/types.h"
+
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <string>
+
+namespace ps::drivetrain {
+
+// Stable, append-only values (they may be stored by a game or a save file): never renumber, never reuse.
+enum class LimitKind : std::uint16_t {
+    WastegateSaturated = 0,    // P3b-1: the wastegate has no authority left (fully open)
+    BoostBelowTarget = 1,      // P3b-1
+    BoostAboveTarget = 2,      // P3b-1
+    TurboRotorCap = 3,         // P3b-1: rotor at the end of the compressor head table's speed axis
+    CompressorSurge = 4,       // P3b-1: only with a surge line in the turbo hardware file
+    CompressorChoke = 5,       // P3b-1: flow near the compressor's flow capacity (max_mass_flow_kg_s)
+    ChargeTemperature = 6,     // not produced: no charge-temperature limit exists in any data file
+    ClutchCapacity = 7,        // P3b-1: check_driveline_limits
+    GearboxInputTorque = 8,    // not produced: GearboxDesc has no input-torque rating
+    KitFuelLean = 9,           // P3b-2 (nitrous)
+    InjectorDuty = 10,         // P3b-2 (nitrous)
+    N2OBottleDuration = 11,    // P3b-2 (nitrous)
+    N2OBottlePressureDrop = 12, // P3b-2 (nitrous)
+    RevLimiter = 13,           // P3b-1: a SoftCut limiter taper is reached
+    FuelCut = 14,              // P3b-1: a FuelCut limiter is reached
+    ValveFlowChoke = 15,       // not produced: no valve Mach diagnostic exists
+    MeanPistonSpeed = 16,      // P3b-1
+    MapGridEdge = 17,          // P3b-1: a map lookup is clamped at the edge of its grid
+    Knock = 18,                // not produced (C17b)
+};
+
+// Near: within a margin of the limit (information); Limiting: this part caps the output here; Exceeded: the target is
+// missed or a guard rail is hit (the result beyond it is not trustworthy). Ordered: a larger value is worse.
+enum class LimitSeverity : std::uint8_t { Near = 0, Limiting = 1, Exceeded = 2 };
+
+// A short enum rather than a string: no allocation, a game switches on it (display text and locale are game data), and a
+// typo cannot compile. to_string gives the stable symbol.
+enum class LimitUnit : std::uint8_t {
+    Dimensionless = 0, // ratios and counts
+    Fraction = 1,      // 0..1 (a gate opening, a share of a window)
+    Pascal = 2,
+    Kelvin = 3,
+    NewtonMetre = 4,
+    MetrePerSecond = 5,
+    RevPerMinute = 6,  // the one non-SI unit, like every rpm in this repo
+    SquareMetre = 7,
+};
+
+// The part to change. slot: the part's role in physics_sim's vocabulary ("engine", "turbo", "turbo_configuration",
+// "clutch", "gearbox"); the game maps its own slot names. file: the part file the descriptor came from. A descriptor does
+// not remember its file, so run_dyno_sweep fills it from DynoSweepSpec::part_files (empty when the caller gave none) and
+// check_driveline_limits takes it from its `clutch_file` argument. field: an RFC 6901 JSON pointer into that file
+// (e.g. "/wastegate_area_m2"); empty = the part as a whole.
+struct PartRef {
+    std::string slot;
+    std::string file;
+    std::string field;
+};
+
+enum class RemedyCost : std::uint8_t {
+    Closed = 0,    // a closed-form number computed with every sweep
+    Simulated = 1, // needs a bisection of dyno runs (P3b-2: solve_remedy)
+};
+
+// "Change `part` from `current` to at least `required_min` (`required_margin` leaves the table's safety margin)".
+// All three are in `unit`, in the part field's own terms. Ratios are derived, not stored.
+struct Remedy {
+    PartRef part;
+    real current = std::numeric_limits<real>::quiet_NaN();
+    real required_min = std::numeric_limits<real>::quiet_NaN();
+    real required_margin = std::numeric_limits<real>::quiet_NaN();
+    LimitUnit unit = LimitUnit::Dimensionless;
+    RemedyCost cost = RemedyCost::Closed;
+    bool solved = true; // Simulated remedies: false until solve_remedy ran (P3b-2); a Closed remedy is always solved
+
+    [[nodiscard]] real ratio_min() const { return required_min / current; }
+    [[nodiscard]] real ratio_margin() const { return required_margin / current; }
+};
+
+struct LimitFinding {
+    LimitKind kind = LimitKind::WastegateSaturated;
+    LimitSeverity severity = LimitSeverity::Near;
+    real rpm = std::numeric_limits<real>::quiet_NaN(); // NaN = static (not tied to a speed)
+    real value = 0.0;                                   // what was measured
+    real limit = 0.0;                                   // what it is held against
+    LimitUnit unit = LimitUnit::Dimensionless;          // of value and limit
+    PartRef part;
+    std::optional<Remedy> remedy;
+};
+
+// Stable symbols for logs and tests ("WastegateSaturated", "Near", "N*m", ...). An unknown value returns "Unknown".
+[[nodiscard]] const char* to_string(LimitKind k);
+[[nodiscard]] const char* to_string(LimitSeverity s);
+[[nodiscard]] const char* to_string(LimitUnit u);
+
+// The index range [first, first + count) of one dyno point's findings in DynoResult::limits.
+struct LimitRange {
+    std::uint32_t first = 0;
+    std::uint32_t count = 0;
+};
+
+} // namespace ps::drivetrain
