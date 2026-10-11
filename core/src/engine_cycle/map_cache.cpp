@@ -370,6 +370,7 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
             f.pod(kf.ron);
             f.pod(kf.mon);
         }
+        f.table(desc.knock.lambda_target); // P7b (knock model v2): the replay's lambda
     }
     // ps_audio A4: the intake/exhaust pipe pair + resolved installation,
     // folded only when present (both absent - the pre-A4 default for every

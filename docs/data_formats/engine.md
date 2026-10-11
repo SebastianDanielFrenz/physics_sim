@@ -930,12 +930,14 @@ Model (`core/include/ps/engine_cycle/knock.h`, `core/src/engine_cycle/knock.cpp`
    residual are those of the node's own spark (their change with spark is neglected [AS]).
 3. End gas: isentropic compression of the unburned charge from IVC along the single-zone pressure, cv = a + b*T per group,
    solved by Newton. The unburned charge is fresh air + residual + **fuel vapour** at mass fraction 1/(1 + lambda*AFR) of
-   the generating fuel: the cycle model's fresh gas is air only (gas.h), which is harmless for its work but not for the end
+   the generating fuel, with lambda = the ECU's lambda target at the node (P7b, knock model v2; the loader copies
+   `ecu.lambda_target` into the cycle's knock block, absent = 1; the node's own cycle still runs at lambda 1): the cycle model's fresh gas is air only (gas.h), which is harmless for its work but not for the end
    gas - vapour raises the unburned cv ~16 % at 600 K and lowers the end-gas temperature ~140 K at 80 bar. Vapour cv: a
    linear fit through iso-octane ideal-gas cp 188.9 J/(mol K) at 298.15 K and 425 at 900 K [AS, recalled], M 114.23 g/mol
    [C]. Wall heat to the end gas is neglected.
 4. Douaud & Eyzat 1978 (SAE 780080, via Heywood 1988 sec. 9.6.2, not verified locally [AS]):
-   `tau [s] = 17.68e-3 * (OI/100)^3.402 * (p/1 atm)^-1.7 * exp(3800/T)` with the octane index `OI = RON - K*(RON - MON)`,
+   `tau [s] = s_cal * 17.68e-3 * (OI/100)^3.402 * (p/1 atm)^-1.7 * exp(3800/T)`, `s_cal = kKnockCalPrefactorScale` 1.26
+   [M] (P7b, see "Calibration" below; B = 3800 K stays the literature value), with the octane index `OI = RON - K*(RON - MON)`,
    K 0.5 [AS] (= (R+M)/2). Livengood-Wu: knock when `integral dt/tau >= 1`, integrated from IVC to the Wiebe burned fraction
    `kKnockEndBurnFraction` 0.90 [AS] or EVO, trapezoidal.
 5. theta_kl = the largest advance [deg BTDC] whose integral stays < 1, by bisection (0.05 deg [AS]) between theta_MBT - 40
@@ -950,8 +952,8 @@ workers, knock off -> on [M]: a25a_gen Sketch 0.020 -> 0.030 s, Preview 0.051 ->
 demo_i4_pipes 0.550 -> 0.556 / 1.188 -> 1.182 / 2.604 -> 2.740 s; hyper Sketch 0.735 -> 0.751 s (budget 1.5 s), Preview
 1.795 -> 1.793 s, Full 3.950 -> 4.010 s.
 
-Cache and hashes: with the opt-in the `.psmaps` key folds a "p7.knock_limit" tag, `kKnockModelVersion` 1, the margin and
-each fuel's name/RON/MON (in fuels order); the file carries an optional trailing knock block; the maps content hash folds the
+Cache and hashes: with the opt-in the `.psmaps` key folds a "p7.knock_limit" tag, `kKnockModelVersion` 2 (P7b; was 1), the
+margin, each fuel's name/RON/MON (in fuels order) and the knock lambda target table; the file carries an optional trailing knock block; the maps content hash folds the
 per-fuel tables only when present. All three are untouched without the opt-in (H3 table extended).
 
 MBT tracking: a knock-limited ECU may omit its spark table; the loader then fills `ecu.spark_advance_deg` from the generated
@@ -962,19 +964,35 @@ construction and on `replace_engine_maps`; no regeneration is needed for any lis
 (the existing tank rule).
 
 Validation (`tests/unit/test_knock_limit.cpp`, `[knock][drivetrain][cycle]`): K1 fuel blocks, K2 loader opt-in rules and
-overrides, K3 monotonicity/octane order/margin, K4 replay vs the cycle and an independent isentrope, K5 tank-fuel table
-selection, K6 determinism/zero alloc/progress/cancel, K7 change classes, K8 dyno Knock findings on a turbo conversion.
-KV1 compares the A25A (toyota_a25a_fks_gen, tier3_e10_cert, margin 0, MBT tracking) with its measured WOT spark (EPA NVFEL
-Report 26781, xlsx "High Load Final" rows 23-39, transcription checked against the workbook): theta_kl minus measured spark
-is -5.3, -4.3, -9.7, -12.8 deg at 2017/2535/2996/3571 rpm (declared band [-5, +10]) - the model is too knock-prone. KV1 is
-`[!mayfail]`: with the MEASURED trapped air (the cycle model traps x1.15-1.18 the measured air at 3000-4500 rpm) the
-Livengood-Wu integral at the measured spark is still 1.19-1.40, so the air excess explains only part of the miss; the rest is
-the uncalibrated Douaud-Eyzat constants and the 0.90 end fraction (0.8 / 0.9 / 0.95 give -4.3 / -6.8 / -8.3 deg at
-2017 rpm). Nothing is tuned. WOT net torque [N*m], measured / knock on / MBT knock off: 216.3 / 219.3 / 264.7 (2017),
-225.1 / 233.6 / 274.8 (2535), 217.8 / 246.9 / 297.9 (2996), 228.4 / 248.9 / 308.5 (3571).
+overrides, K3 monotonicity/octane order/margin (a p_im step may rise by 0.1 + 20 deg per unit lambda drop [AS] - enrichment
+cools the end gas - and a Sketch section pins that the replay follows the lambda target), K4 replay vs the cycle and an
+independent isentrope, K5 tank-fuel table selection, K6 determinism/zero alloc/progress/cancel, K7 change classes, K8 dyno
+Knock findings on a turbo conversion.
 
-Not modelled: DI charge cooling (ethanol's latent heat - E85's real benefit is understated), the ECU's WOT enrichment
-(nodes run at lambda 1), a knock sensor/adaptive retard, cycle-to-cycle variation, cylinder-to-cylinder spread.
+Calibration (engine garage P7b, `tests/unit/test_knock_calibration.cpp`): ONE constant, the pre-factor scale, fitted on the
+17 A25A WOT training rows (EPA NVFEL Report 26781, xlsx "High Load Final" rows 23-39) with each row's MEASURED boundary
+conditions (KV1-BC: the IVC state of a cycle run at the measured rpm, MAP, IMT, cam phases and lambda, at the measured spark,
+its trapped mass scaled to the measured air; then the knock replay). Objective: rms of theta_kl minus measured spark, a
+0.1-step scan then golden section: 1.2555 -> 1.26, rms 2.06 deg, mean +0.18 deg. The activation temperature is not
+identifiable from these rows (a joint fit gives B 3742 K at rms 2.065 vs 2.064), so it stays 3800 K. Pre-factor +-10 % moves
+theta_kl by about -+2 deg. KV1-BC (asserted): every row within +-5 deg, rms 2.08, mean +0.24, and the rms rises at x0.9
+(2.97) and x1.1 (2.90). Generated KV1 (Full maps, ISA intake, the model's own air): +1.50 / +1.35 / -3.75 / -6.22 deg at
+2017/2535/2996/3571 rpm (declared band [-5, +10]); still `[!mayfail]`: at 3571 rpm the generated node traps 1.20x the
+measured air (+8.8 deg of the gap) and ISA instead of the measured IMT moves it -4.9 deg - the gas exchange, not the knock
+model; KV1-BC gives -2.24 deg at that row. WOT net torque [N*m], measured / knock on / MBT knock off: 216.3 / 239.6 / 264.7
+(2017), 225.1 / 250.8 / 274.8 (2535), 217.8 / 267.6 / 297.9 (2996), 228.4 / 274.0 / 308.5 (3571).
+
+Held-out check (KV2, band [-5, +10] committed before the fixture existed): the Mazda 2.0 SKYACTIV-G fixture
+(`tests/support/fixtures/mazda_skyactiv_g20/`, CR 13, EPA NVFEL Tier 2 fuel RON 97.1 / MON 88.2, tier table in its
+`cycle.source`; nothing tuned on it) gives -1.36 / +4.01 / +0.68 / -14.08 / -13.82 / -18.55 deg at 1747-3994 rpm - fails
+above 2500 rpm, `[!mayfail]`. KV2-T (asserted) discriminates: the IVC temperature at which the calibrated correlation
+reproduces the measured spark is 366-395 K at every Mazda row, inside the A25A rows' 360-423 K (A25A mean offset +1.1 K),
+while the cycle model's own Mazda charge is 415-490 K (mean offset -71.8 K) - the correlation transfers; the generated Mazda
+gas exchange (53-75 deg valve overlap, lumped runner, no 4-2-1 scavenging) is the error.
+
+Not modelled: DI charge cooling (ethanol's latent heat - E85's real benefit is understated; the calibrated pre-factor absorbs
+the A25A's own DI effect, so a port-injected engine may come out too advanced), a knock sensor/adaptive retard,
+cycle-to-cycle variation, cylinder-to-cylinder spread.
 
 ## Dyno sweep: `run_dyno_sweep` (engine garage P3, A9)
 
@@ -1238,8 +1256,9 @@ Deviations from design section 6's Regen column (test K1 pins exactly this list)
   with pipe blocks, so the key moves only when the garage also extends `grid_p_im` (then `Maps`, as designed).
 - **Cylinder count** is `Respawn` although the map key covers it (design 6.3: "a different engine: swap").
 
-Knock limit (engine garage P7): on an engine whose ECU opts in, the knock margin and every listed fuel's name/RON/MON are in
-the map key, so a margin edit, an octane edit of ANY listed fuel and a fuel-order change are `Maps`; on an engine that does
+Knock limit (engine garage P7): on an engine whose ECU opts in, the knock margin, every listed fuel's name/RON/MON and (P7b)
+the ECU lambda target are in the map key, so a margin edit, an octane edit of ANY listed fuel, a fuel-order change and a
+lambda-target edit are `Maps`; on an engine that does
 not opt in a fuel's octane is no generator input, so editing or removing a `knock` block is `Runtime` (test K7). The burnt
 fuel selected by a fuel tank needs no regeneration: every listed fuel's table is generated with the maps, and the Powertrain
 picks the tank fuel's table at construction (and on `replace_engine_maps`).

@@ -43,6 +43,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -142,6 +143,24 @@ constexpr SparkRow kWotSpark[] = {
     {4954.03, 96.4381, 4.3984367, 9.08713, 0.870633, 231.437},
 };
 constexpr std::size_t kKv1Rows = 4; // 2017-3571 rpm: the asserted band
+
+// Engine garage P7b - asserted bands, DECLARED (and committed) before the first comparison run of the calibrated model
+// and before the Mazda fixture existed. Every band is theta_kl(generated or replayed) minus the measured spark [deg].
+//   KV1 (A25A, training engine, generated Full maps, tier3_e10_cert, margin 0, MBT tracking): the P7 band [-5, +10] at
+//       the same four WOT rows 2017-3571 rpm (+ side: the ECU runs at or below its knock limit by its own margin; -5:
+//       the accuracy commonly attributed to a correlation-based knock prediction [AS]) - unchanged so the calibration
+//       cannot pick its own target.
+//   KV1-BC (A25A, the boundary-condition replay the constants are fitted on - measured rpm, MAP, IMT, cam, lambda and
+//       trapped air): every training row within [-5, +5] (a two-constant correlation that cannot reach +-5 on the engine
+//       it was fitted to is inadequate, whatever its mean).
+//   KV2 (Mazda 2.0 SKYACTIV-G, HELD OUT, tests/support/fixtures/mazda_skyactiv_g20 fixture, generated Full maps, Tier 2
+//       fuel RON 97.1 / MON 88.2 [C NVFEL 23945], margin 0, MBT tracking): [-5, +10] at every WOT row - the Steady State
+//       row with the highest torque per speed, kept where that torque is >= 95 % of the Max Torque Sweep torque at that
+//       speed (linear interpolation) - same band and rationale as KV1. No constant is tuned on the Mazda.
+constexpr real kKvBandLow = -5.0;
+constexpr real kKvBandHigh = 10.0;
+[[maybe_unused]] constexpr real kKvBcBand = 5.0;
+[[maybe_unused]] constexpr real kKv2WotTorqueFraction = 0.95;
 
 // The generator's operating point at a node (map_generator.cpp make_op: ISA intake/ambient, lambda 1, the cam schedule).
 ec::OperatingPoint node_op(const CycleModelDesc& c, real rpm, real p_pa, real spark_atdc) {
@@ -329,14 +348,23 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
     const Table2D& e10 = e.maps.theta_kl_by_fuel[1];
     const Table2D& e85 = e.maps.theta_kl_by_fuel[2];
     constexpr real kTol = 0.1; // two independent 0.05 deg bisections
-    std::size_t limited = 0, e85_gain = 0;
+    // P7b: the replay runs at the ECU lambda target; enrichment (more fuel vapour, a cooler end gas) may raise theta_kl
+    // with load. A p_im step may rise by at most kTol + kVapourDegPerLambda * (lambda drop): the vapour term moves
+    // theta_kl by +1.2..+2.4 deg for lambda 1 -> 0.80-0.90 (P7b budget, i.e. <= 12 deg per unit lambda), 20 [AS] bounds it.
+    constexpr real kVapourDegPerLambda = 20.0;
+    REQUIRE_FALSE(e.cycle->knock.lambda_target.values.empty());
+    const Table2D& lam = e.cycle->knock.lambda_target;
+    std::size_t limited = 0, e85_gain = 0, enriched_pairs = 0;
     for (std::size_t ix = 0; ix < t3.x.size(); ++ix) {
         for (std::size_t iy = 0; iy < t3.y.size(); ++iy) {
             INFO("rpm " << t3.x[ix] << " p_im " << t3.y[iy]);
             if (iy > 0) {
-                CHECK(kl_at(t3, ix, iy) <= kl_at(t3, ix, iy - 1) + kTol);
-                CHECK(kl_at(e10, ix, iy) <= kl_at(e10, ix, iy - 1) + kTol);
-                CHECK(kl_at(e85, ix, iy) <= kl_at(e85, ix, iy - 1) + kTol);
+                const real drop = std::max(real(0.0), lam.value(t3.x[ix], t3.y[iy - 1]) - lam.value(t3.x[ix], t3.y[iy]));
+                const real allow = kTol + kVapourDegPerLambda * drop;
+                enriched_pairs += kl_at(t3, ix, iy) > kl_at(t3, ix, iy - 1) + kTol ? 1 : 0;
+                CHECK(kl_at(t3, ix, iy) <= kl_at(t3, ix, iy - 1) + allow);
+                CHECK(kl_at(e10, ix, iy) <= kl_at(e10, ix, iy - 1) + allow);
+                CHECK(kl_at(e85, ix, iy) <= kl_at(e85, ix, iy - 1) + allow);
             }
             CHECK(kl_at(e10, ix, iy) >= kl_at(t3, ix, iy) - kTol);
             CHECK(kl_at(e85, ix, iy) >= kl_at(e10, ix, iy) - kTol);
@@ -346,9 +374,44 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
         }
         CHECK(kl_at(t3, ix, 0) >= e.maps.theta_mbt_deg.value(t3.x[ix], t3.y[0])); // 20 kPa: never knock-limited
     }
-    std::printf("K3: %zu of %zu tier3 nodes limited, E85 > E10 + 1 deg at %zu nodes\n", limited, t3.values.size(), e85_gain);
+    std::printf("K3: %zu of %zu tier3 nodes limited, E85 > E10 + 1 deg at %zu nodes, %zu tier3 p_im steps rise (enrichment)\n",
+                limited, t3.values.size(), e85_gain, enriched_pairs);
     CHECK(limited > 0);
     CHECK(e85_gain > 0);
+
+    SECTION("P7b: the replay runs at the ECU lambda target (Sketch)") {
+        // The same engine with a flat lambda 1 target: identical wherever the shipped target is 1, and an enriched
+        // knock-limited node sits later than its lambda 1 twin (more fuel vapour, a cooler end gas; P7b budget +0.68 deg
+        // mean over the A25A WOT rows). Guards the generator applying knock.lambda_target to the replay.
+        json flat = knock_engine("toyota_a25a_fks_gen.json", 0.0, true);
+        flat["ecu"]["lambda_target"] = {{"rpm", {600.0, 6900.0}}, {"p_im_kpa", {20.0, 105.0}}, {"values", {{1.0, 1.0}, {1.0, 1.0}}}};
+        const SimulatedEngineDesc a = load_sim(knock_engine("toyota_a25a_fks_gen.json", 0.0, true), MapQuality::Sketch);
+        const SimulatedEngineDesc b = load_sim(flat, MapQuality::Sketch);
+        const Table2D& ta = a.maps.theta_kl_deg;
+        const Table2D& tb = b.maps.theta_kl_deg;
+        REQUIRE(ta.values.size() == tb.values.size());
+        const Table2D& lt = a.cycle->knock.lambda_target;
+        int at_one = 0, enriched = 0;
+        for (std::size_t ix = 0; ix < ta.x.size(); ++ix) {
+            for (std::size_t iy = 0; iy < ta.y.size(); ++iy) {
+                const real l = lt.value(ta.x[ix], ta.y[iy]);
+                const real mbt = a.maps.theta_mbt_deg.value(ta.x[ix], ta.y[iy]);
+                INFO("rpm " << ta.x[ix] << " p_im " << ta.y[iy] << " lambda " << l);
+                if (l == real(1.0)) {
+                    CHECK(kl_at(ta, ix, iy) == kl_at(tb, ix, iy));
+                    ++at_one;
+                } else if (l < real(0.95) && kl_at(tb, ix, iy) < mbt + ec::kKnockSearchAboveMbtDeg - 0.5 &&
+                           kl_at(tb, ix, iy) > std::max(real(-30.0), mbt - ec::kKnockSearchBelowMbtDeg) + 0.5) {
+                    // limited, and saturated at neither search bound nor the -30 deg clamp
+                    CHECK(kl_at(ta, ix, iy) > kl_at(tb, ix, iy) + 0.2);
+                    ++enriched;
+                }
+            }
+        }
+        INFO("at lambda 1: " << at_one << ", enriched and limited: " << enriched);
+        CHECK(at_one > 0);
+        CHECK(enriched > 0);
+    }
 
     SECTION("the margin lowers exactly the limited nodes by itself (Sketch)") {
         const SimulatedEngineDesc a = load_sim(knock_engine("toyota_a25a_fks_gen.json", 0.0, true), MapQuality::Sketch);
@@ -575,6 +638,10 @@ TEST_CASE("P7 K7: classify_engine_change on a knock-limited engine", "[knock][dr
     b = a;
     std::swap(b.fuels[0], b.fuels[1]);
     CHECK(classify_engine_change(a, b) == EngineChange::Maps);
+    b = a;
+    REQUIRE_FALSE(b.ecu.lambda_target.values.empty());
+    b.ecu.lambda_target.values.back() -= 0.01; // P7b: the knock replay runs at the ECU lambda target
+    CHECK(classify_engine_change(a, b) == EngineChange::Maps);
 
     const SimulatedEngineDesc n = load_sim(json{{"extends", "toyota_a25a_fks_gen.json"}}, MapQuality::Full, false);
     SimulatedEngineDesc m = n;
@@ -582,6 +649,9 @@ TEST_CASE("P7 K7: classify_engine_change on a knock-limited engine", "[knock][dr
     CHECK(classify_engine_change(n, m) == EngineChange::Runtime);
     m = n;
     m.fuels[0].has_knock = false;
+    CHECK(classify_engine_change(n, m) == EngineChange::Runtime);
+    m = n;
+    m.ecu.lambda_target.values.back() -= 0.01; // no opt-in: the lambda target stays a runtime table
     CHECK(classify_engine_change(n, m) == EngineChange::Runtime);
 }
 
@@ -645,12 +715,14 @@ TEST_CASE("P7 K8: the dyno on a P5 turbo conversion - Knock findings, never more
 // KV1 - the generated A25A's knock limit (tier3_e10_cert, margin 0, MBT tracking) against the spark its ECU actually ran
 // at WOT. Band declared before the asserted run: theta_kl - spark_meas in [-5, +10] deg at 2017-3571 rpm.
 //
-// [!mayfail]: the model is MORE knock-prone than the engine - theta_kl lies 4-13 deg below the measured spark at WOT
-// (out/garage_p7_progress.md). Discriminating measurement ("P7 diag: knock replay internals"): replayed from an IVC
-// state scaled to the MEASURED trapped air (the generated A25A over-traps 11-15 % at 3000-4500 rpm, the [AS] runner),
-// the Livengood-Wu integral at the measured spark is still 1.19-1.40 (> 1, knock) at every WOT row - so the trapped-air
-// excess explains part of the 3000-3571 rpm gap, the rest is the uncalibrated Douaud-Eyzat correlation / single-zone
-// end gas, a model limit (no constant was tuned to this data, D1).
+// [!mayfail] (P7b, after the calibration and the lambda-target replay): +1.50 / +1.35 / -3.75 / -6.22 deg at 2017 /
+// 2535 / 2996 / 3571 rpm - 3571 rpm is 1.2 deg outside the band. Discriminating measurement (test_knock_calibration.cpp
+// KV1-BC, asserted): the SAME calibrated model replayed at that row's measured boundary conditions - intake temperature,
+// cam, lambda and the measured trapped air - gives -2.24 deg, inside the band. The generated node traps 1/0.834 = 1.20x
+// the measured air there (the [AS] 709 mm runner's tuning peak, test_gen_engine_dyno's +40..+49 N*m air excess) and
+// that term alone moves theta_kl by +8.8 deg at this row (P7b budget, out/garage_p7b_progress.md); the ISA intake
+// temperature of the generator (288 K vs 306 K measured) moves it the other way by -4.9 deg. The miss is the generated
+// gas exchange, not the knock model; no knock constant may absorb it (fitted on the BC replay, P7b decision D2).
 TEST_CASE("P7 KV1: A25A knock limit vs measured WOT spark (2017-3571 rpm)", "[knock][drivetrain][cycle][!mayfail]") {
     const SimulatedEngineDesc e = load_sim(knock_engine("toyota_a25a_fks_gen.json", 0.0, true));
     REQUIRE(e.fuels[0].name == "tier3_e10_cert");
@@ -674,8 +746,8 @@ TEST_CASE("P7 KV1: A25A knock limit vs measured WOT spark (2017-3571 rpm)", "[kn
         CHECK(on.net_torque_nm <= of.net_torque_nm + 1e-9);
         if (i < kKv1Rows) {
             INFO("rpm " << r.rpm << " theta_kl " << t << " measured " << r.spark_btdc);
-            CHECK(t - r.spark_btdc >= -5.0);
-            CHECK(t - r.spark_btdc <= 10.0);
+            CHECK(t - r.spark_btdc >= kKvBandLow);
+            CHECK(t - r.spark_btdc <= kKvBandHigh);
         }
     }
 }
@@ -795,5 +867,49 @@ TEST_CASE("P7 diag: generation time with the knock limit on and off", "[.][diag]
                             e.maps.theta_kl_by_fuel.size());
             }
         }
+    }
+}
+
+// P7b garage-range re-run (engine_rules NOT changed): the calibrated knock limit's cost of compression ratio, as WOT dyno
+// torque and mean knock retard - NA A25A at CR 13 / 14.5 / 16 and the FI1 conversion (single_medium) at CR 10 / 11 / 12,
+// Preview maps, MBT tracking, margin 2 deg, tier3_e10_cert.
+TEST_CASE("P7b diag: garage CR ranges with the calibrated knock limit", "[.][diag][knock][drivetrain][cycle][turbo]") {
+    const std::string sm = (kSrc / "data" / "turbo_configurations" / "single_medium.json").generic_string();
+    const SimulatedEngineDesc stock = load_sim(json{{"extends", "toyota_a25a_fks_gen.json"}}, MapQuality::Preview, false);
+    const TurboPairDesc tp = io::load_turbo_configuration_json(sm);
+    std::vector<real> boost_kpa;
+    for (real p : boost_grid_p_im(*stock.cycle, tp.target_boost_pa / 1e5)) boost_kpa.push_back(p / 1000.0);
+    struct Case {
+        bool boosted;
+        real cr;
+    };
+    for (const Case& c : {Case{false, 13.0}, Case{false, 14.5}, Case{false, 16.0}, Case{true, 10.0}, Case{true, 11.0}, Case{true, 12.0}}) {
+        json j = knock_engine("toyota_a25a_fks_gen.json", 2.0, true);
+        j["cycle"]["compression_ratio"] = c.cr;
+        io::EngineSlotOverrides slots;
+        if (c.boosted) {
+            j["cycle"]["grid_p_im_kpa"] = boost_kpa;
+            slots["forced_induction"] = sm;
+        }
+        io::EngineMapOptions o;
+        o.quality = MapQuality::Preview;
+        o.pool = &pool();
+        const ComponentParams on = io::load_engine_json_from_string(j.dump(), engines_dir(), o, slots);
+        ComponentParams off = on;
+        std::get<SimulatedEngineDesc>(off).maps.has_theta_kl = false;
+        DynoSweepSpec spec;
+        spec.rpm = {2000.0, 3000.0, 4000.0, 5000.0};
+        const DynoResult r_on = run_dyno_sweep(on, nullptr, spec, &pool());
+        const DynoResult r_off = run_dyno_sweep(off, nullptr, spec, &pool());
+        real retard = 0.0, t_on = 0.0, t_off = 0.0;
+        std::printf("GARAGE %s CR %4.1f:", c.boosted ? "boosted" : "NA     ", c.cr);
+        for (std::size_t i = 0; i < r_on.points.size(); ++i) {
+            const real kr = std::isfinite(r_on.points[i].knock_retard_deg) ? r_on.points[i].knock_retard_deg : 0.0;
+            retard += kr / real(r_on.points.size());
+            t_on += r_on.points[i].torque_nm;
+            t_off += r_off.points[i].torque_nm;
+            std::printf(" %4.0f: %6.1f/%6.1f N*m r %5.2f |", r_on.points[i].rpm, r_on.points[i].torque_nm, r_off.points[i].torque_nm, kr);
+        }
+        std::printf(" mean retard %.2f deg, torque knock on/off %.3f\n", retard, t_on / t_off);
     }
 }

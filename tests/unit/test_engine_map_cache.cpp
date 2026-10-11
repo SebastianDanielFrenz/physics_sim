@@ -589,6 +589,10 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         base.knock.enabled = true;
         base.knock.margin_deg = 2.0;
         base.knock.fuels = {{"e10", 95.0, 85.0}, {"e85", 104.0, 88.0}};
+        // P7b: the replay's lambda target (the loader copies ecu.lambda_target) is a generator input.
+        base.knock.lambda_target.x = {1000.0, 6000.0};
+        base.knock.lambda_target.y = {30000.0, 100000.0};
+        base.knock.lambda_target.values = {1.0, 1.0, 1.0, 0.85};
         const std::uint64_t base_key = engine_map_cache_key(base, ref_fuel, MapQuality::Preview);
         CHECK(base_key != ref_key);
         std::vector<std::pair<const char*, std::function<void(CycleModelDesc&)>>> edits;
@@ -598,6 +602,12 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         edits.emplace_back("knock.fuels[1].name", [&](CycleModelDesc& d) { d.knock.fuels[1].name += "x"; });
         edits.emplace_back("knock.fuels order", [&](CycleModelDesc& d) { std::swap(d.knock.fuels[0], d.knock.fuels[1]); });
         edits.emplace_back("knock.fuels count", [&](CycleModelDesc& d) { d.knock.fuels.pop_back(); });
+        edits.emplace_back("knock.lambda_target value",
+                           [&](CycleModelDesc& d) { d.knock.lambda_target.values[3] = bump(d.knock.lambda_target.values[3]); });
+        edits.emplace_back("knock.lambda_target x axis",
+                           [&](CycleModelDesc& d) { d.knock.lambda_target.x[1] = bump(d.knock.lambda_target.x[1]); });
+        edits.emplace_back("knock.lambda_target y axis",
+                           [&](CycleModelDesc& d) { d.knock.lambda_target.y[0] = bump(d.knock.lambda_target.y[0]); });
         for (const auto& [name, edit] : edits) {
             CycleModelDesc d = base;
             edit(d);

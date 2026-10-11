@@ -126,6 +126,7 @@ namespace {
     // Engine garage P7: a knock-limited engine's knock fuels are the engine's fuels list with their knock blocks (the
     // loader's rule), so a fuels-list or octane edit made on the desc alone is classified like a reloaded file (Maps).
     if (c.knock.enabled) {
+        c.knock.lambda_target = e.ecu.lambda_target; // P7b: the loader's rule (the replay's lambda)
         c.knock.fuels.clear();
         for (const FuelDesc& f : e.fuels) {
             c.knock.fuels.push_back(CycleModelDesc::KnockFuel{f.name, f.has_knock ? f.knock.ron : real(0.0), f.has_knock ? f.knock.mon : real(0.0)});
