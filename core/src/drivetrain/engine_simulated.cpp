@@ -638,6 +638,14 @@ void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real i
 // ---------------------------------------------------------------------------
 
 std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps(const SimulatedEngineDesc& desc) {
+    return build_maps_impl(desc, true);
+}
+
+std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_model_maps(const SimulatedEngineDesc& desc) {
+    return build_maps_impl(desc, false);
+}
+
+std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables) {
     if (desc.maps_pending) {
         throw std::runtime_error("SimulatedEngine: the engine's maps are pending (it was loaded with EngineMapOptions::generate = "
                                  "false); load it again with generate = true to run it");
@@ -687,7 +695,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps(const Sim
     // routine a SimulatedEngine's runtime refill uses).
     m->ref_p_pa = kIsaPressurePa;
     m->ref_t_k = kIsaTemperatureK;
-    {
+    if (steady_tables) { // engine garage P3: build_model_maps skips the ~70 ms derived grid (the dyno's NA path never reads it)
         const Ambient amb = make_ambient(kIsaPressurePa, kIsaTemperatureK);
         std::vector<real> rpm_axis;
         for (real r = real(500.0); r <= desc.limiter.rpm + real(250.0) + real(1e-9); r += real(250.0)) rpm_axis.push_back(r);
@@ -799,6 +807,47 @@ SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_pt
     set_ambient(kIsaPressurePa, kIsaTemperatureK);
     state_ = desc.initial_state == EngineInitialState::Running ? EngineState::Running : EngineState::Off;
     init_state_for(state_);
+}
+
+SimulatedEngine::SteadyPoint SimulatedEngine::steady_point(const SimulatedEngineMaps& m, real rpm, real command,
+                                                           const AmbientSample& ambient) {
+    const Ambient amb = make_ambient(ambient.pressure_pa, ambient.temperature_k);
+    const StarterDesc no_starter{};
+    const real omega = rpm / kRadPerSecToRpm;
+    const bool mech = m.throttle_input == ThrottleInput::Mechanical;
+    real plate = std::clamp(command, real(0.0), real(1.0));
+    if (!mech && plate > real(0.0) && plate < real(1.0)) {
+        // The electronic command is a torque REQUEST: the plate whose steady torque is mot + r*(wot - mot) - the same
+        // definition and 60-step bisection fill_steady_tables uses for the runtime's inverse_plate, evaluated exactly
+        // at this rpm instead of interpolated on the table. The idle controller's air (x_idle) is NOT added here:
+        // part-throttle points below the idle plate are off the garage's use (WOT sweeps).
+        const real wot = steady_net_torque(m, amb, no_starter, rpm, real(1.0), real(0.0), true);
+        const real mot = steady_net_torque(m, amb, no_starter, rpm, real(0.0), real(0.0), false);
+        const real target = mot + plate * (wot - mot);
+        if (steady_net_torque(m, amb, no_starter, rpm, real(0.0), real(0.0), true) >= target) {
+            plate = real(0.0);
+        } else {
+            real lo = real(0.0), hi = real(1.0);
+            for (int it = 0; it < 60; ++it) {
+                const real mid = real(0.5) * (lo + hi);
+                if (steady_net_torque(m, amb, no_starter, rpm, mid, real(0.0), true) < target) lo = mid;
+                else hi = mid;
+            }
+            plate = real(0.5) * (lo + hi);
+        }
+    }
+    // Both kinds: plate at `plate`, bypass closed - fill_steady_tables' steady_torque_nm definition.
+    const real p = steady_p(m, amb, omega, plate, real(0.0));
+    // Exactly steady_net_torque's evaluation (same call, same arguments), keeping the whole TorqueEval.
+    const TorqueEval ev = evaluate_torque_impl(m, amb, no_starter, omega, p, true, real(1.0), false, true, nullptr, real(1.0), real(2000.0));
+    SteadyPoint sp;
+    sp.net_torque_nm = ev.tau - m.c_k;
+    sp.p_im_pa = p;
+    sp.plate = plate;
+    sp.fuel_g_s = ev.m_fuel_rev * (omega / kTwoPi) * real(1000.0);
+    sp.lambda = ev.lambda;
+    sp.spark_deg = ev.spark_deg;
+    return sp;
 }
 
 void SimulatedEngine::set_ambient(real p_pa, real t_k) {

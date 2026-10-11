@@ -1,5 +1,6 @@
 #include "ps/drivetrain/engine_rig.h"
 
+#include "engine_params_util.h"
 #include "engine_sound_state.h"
 #include "powertrain.h"
 #include "ps/io/engine_thermal_io.h"
@@ -68,9 +69,16 @@ EngineRig::EngineRig(const std::string& engine_path, const io::EngineMapOptions&
     : EngineRig(engine_path, map_options, installation_override_path, Config{}) {}
 
 EngineRig::EngineRig(const std::string& engine_path, const io::EngineMapOptions& map_options,
-                      const std::string* installation_override_path, const Config& config) {
-    drivetrain::ComponentParams engine_params = io::load_engine_json(engine_path, map_options, installation_override_path);
+                      const std::string* installation_override_path, const Config& config)
+    : EngineRig(io::load_engine_json(engine_path, map_options, installation_override_path), config, &engine_path, 0) {}
 
+EngineRig::EngineRig(const drivetrain::ComponentParams& engine, drivetrain::EngineMapsPtr maps)
+    : EngineRig(engine, std::move(maps), Config{}) {}
+
+EngineRig::EngineRig(const drivetrain::ComponentParams& engine, drivetrain::EngineMapsPtr maps, const Config& config)
+    : EngineRig(drivetrain::with_engine_maps(engine, maps, "EngineRig"), config, nullptr, 0) {}
+
+EngineRig::EngineRig(drivetrain::ComponentParams engine_params, const Config& config, const std::string* engine_path, int) {
     drivetrain::PowertrainDesc pt;
     pt.components.push_back(drivetrain::ComponentDesc{"engine", std::move(engine_params)});
 
@@ -86,10 +94,14 @@ EngineRig::EngineRig(const std::string& engine_path, const io::EngineMapOptions&
     if (!config.cooling_system_path.empty()) {
         drivetrain::EngineThermalConfig tc;
         std::string thermal_path = config.engine_thermal_path;
-        if (thermal_path.empty()) thermal_path = io::engine_default_thermal_path(engine_path);
+        if (thermal_path.empty() && engine_path != nullptr) thermal_path = io::engine_default_thermal_path(*engine_path);
         if (thermal_path.empty()) {
-            throw std::runtime_error("EngineRig: a cooling_system needs an engine thermal file, but engine file '" + engine_path +
-                                      "' has no 'default_thermal' and Config::engine_thermal_path is empty");
+            throw std::runtime_error(
+                engine_path != nullptr
+                    ? "EngineRig: a cooling_system needs an engine thermal file, but engine file '" + *engine_path +
+                          "' has no 'default_thermal' and Config::engine_thermal_path is empty"
+                    : std::string("EngineRig: a cooling_system needs an engine thermal file, but this rig was built from a descriptor "
+                                  "(no file, no 'default_thermal') and Config::engine_thermal_path is empty"));
         }
         tc.engine = io::load_engine_thermal_json(thermal_path);
         tc.cooling = io::load_cooling_system_json(config.cooling_system_path);
@@ -97,7 +109,8 @@ EngineRig::EngineRig(const std::string& engine_path, const io::EngineMapOptions&
         pt.thermal = std::move(tc);
     }
 
-    impl_ = std::make_unique<Impl>(std::move(pt), config.dyno.enabled, config.tick_hz, config.substep_hz, engine_path);
+    impl_ = std::make_unique<Impl>(std::move(pt), config.dyno.enabled, config.tick_hz, config.substep_hz,
+                                   engine_path != nullptr ? *engine_path : std::string("engine"));
 
     vehicle::VehicleResetOptions ro;
     ro.engine_state = config.initial_engine_state;
