@@ -748,6 +748,9 @@ struct PowertrainDesc {
     // Engine thermal plan T1: present iff the vehicle opts in (names a cooling system). The Powertrain then
     // owns an EngineThermal; absent = no thermal state, every hash unchanged.
     std::optional<EngineThermalConfig> thermal;
+    // Engine garage P8 (A15): the car-side anti-lag switch. false = the car has no anti-lag switch: the engine's
+    // anti_lag channel is not read and anti-lag runs on its default_enabled only. Default true = unchanged.
+    bool anti_lag_fitted = true;
 };
 
 } // namespace ps::drivetrain

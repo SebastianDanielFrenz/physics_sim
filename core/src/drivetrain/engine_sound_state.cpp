@@ -24,6 +24,7 @@ EngineSoundState fill_engine_sound_state(const Powertrain& pt) {
     ess.starter_active = pre.starter_active;
     ess.limiter_active = pre.limiter_active;
     ess.dfco_active = pre.dfco_active;
+    ess.launch_active = pt.launch_control_active(); // engine garage P8
     // PHYS-033 P4 I7a C3: the throttle-command stage's combined command this
     // tick - sound only, never hashed.
     ess.throttle_command = pt.throttle_command();

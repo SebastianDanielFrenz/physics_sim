@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "launch_control",
+  "name": "Generic two-step launch control",
+  "source": "[AS] ASSUMED generic aftermarket two-step: a second rev limit at 4000 rpm while the car is stationary (speedo below 2 m/s, so a pull-away is held until the car is clearly moving) with the clutch in at arming. No manufacturer data: 4000 rpm is a typical mid-range launch speed for a naturally aspirated 6500-8000 rpm engine, below every shipped engine's own limiter. Behaviour documented in docs/data_formats/electronics.md.",
+  "rpm": 4000,
+  "max_speed_mps": 2.0,
+  "channel": "assist.launch_control"
+}

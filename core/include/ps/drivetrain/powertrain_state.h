@@ -29,6 +29,7 @@ struct EngineSoundState {
     std::uint64_t cut_mask = 0; // all ones while the limiter cuts or DFCO is active
     EngineState engine_state = EngineState::Off;
     bool starter_active = false, limiter_active = false, dfco_active = false;
+    bool launch_active = false; // engine garage P8 (A16): launch control's second limit is armed; NOT hashed
     // PHYS-033 P4 I7a C3: the throttle-command stage's combined command this
     // tick (pedal, through an optional pedal_map/linkage_curve, maxed with an
     // optional hand lever) - sound only, NOT hashed, like crank_angle above.
@@ -138,7 +139,11 @@ struct PowertrainSnapshot {
     real clutch_engagement = 0.0; // effective (min of pedal and auto)
     bool traction_control_intervening=false;
     real traction_torque_fraction=1, traction_estimated_speed_m_s=0, traction_positive_slip=0;
-    std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control
+    std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control, bit4 launch_control (switched on)
+    // Engine garage P8 (A15): which assists the car HAS (a HUD hides a not-fitted assist; fitted-but-off is a third
+    // state). Same bit layout as assist_active_bits plus bit5 = the anti-lag switch. Never hashed.
+    std::uint32_t assist_fitted_bits = 0;
+    bool launch_control_active = false; // engine garage P8: the second rev limit is armed (latched) - never hashed
     std::vector<EngineSoundState> engines; // 0 or 1 in I3; capacity reused per snapshot slot (D8)
     DrivelineSoundState driveline;
     // PHYS-033 P4 I4 C8: per-differential torque-split summary, component-

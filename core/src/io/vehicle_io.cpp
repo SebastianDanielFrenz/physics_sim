@@ -14,6 +14,7 @@
 #include "ps/engine_cycle/firing_order.h"
 #include "ps/io/engine_thermal_io.h"
 #include "ps/io/fuel_io.h"
+#include "ps/io/electronics_io.h"
 #include "ps/drivetrain/isa_air.h"
 
 #include <nlohmann/json.hpp>
@@ -2997,11 +2998,12 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
     // --- aero (plan section 4.4/9.1) ---------------------------------------
     if(j.contains("traction_control")) {
         const auto& tc=j.at("traction_control");if(!tc.is_object())throw std::runtime_error("traction_control must be an object");
-        for(auto it=tc.begin();it!=tc.end();++it)if(it.key()!="enabled"&&it.key()!="target_slip"&&it.key()!="reference_floor_m_s"&&it.key()!="kp"&&it.key()!="ki_per_s"&&it.key()!="attack_rate_per_s"&&it.key()!="recovery_rate_per_s")throw std::runtime_error("unknown traction_control field: "+it.key());
+        for(auto it=tc.begin();it!=tc.end();++it)if(it.key()!="enabled"&&it.key()!="fitted"&&it.key()!="target_slip"&&it.key()!="reference_floor_m_s"&&it.key()!="kp"&&it.key()!="ki_per_s"&&it.key()!="attack_rate_per_s"&&it.key()!="recovery_rate_per_s")throw std::runtime_error("unknown traction_control field: "+it.key());
         auto& d=v.traction_control;d.enabled=tc.value("enabled",d.enabled);
         d.target_slip=tc.value("target_slip",d.target_slip);d.reference_floor_m_s=tc.value("reference_floor_m_s",d.reference_floor_m_s);
         d.kp=tc.value("kp",d.kp);d.ki_per_s=tc.value("ki_per_s",d.ki_per_s);
         d.attack_rate_per_s=tc.value("attack_rate_per_s",d.attack_rate_per_s);d.recovery_rate_per_s=tc.value("recovery_rate_per_s",d.recovery_rate_per_s);
+        d.fitted=tc.value("fitted",d.fitted); // engine garage P8 (A15)
         ps::vehicle::validate_traction_control(d);
     }
     if (j.contains("aero")) {
@@ -3915,7 +3917,23 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
     }
     v.powertrain = p;
 
+    // Engine garage P8 (A15): the car-side anti-lag switch. Absent = fitted (every pre-P8 file unchanged).
+    if (j.contains("anti_lag_switch")) {
+        const auto& asw = j.at("anti_lag_switch");
+        if (!asw.is_object()) throw std::runtime_error("vehicle '" + v.name + "': anti_lag_switch must be an object");
+        for (auto it = asw.begin(); it != asw.end(); ++it) {
+            if (it.key() != "fitted") throw std::runtime_error("vehicle '" + v.name + "': unknown anti_lag_switch field: " + it.key());
+        }
+        if (asw.contains("fitted") && !asw.at("fitted").is_boolean()) {
+            throw std::runtime_error("vehicle '" + v.name + "': anti_lag_switch.fitted must be a boolean");
+        }
+        v.powertrain.anti_lag_fitted = asw.value("fitted", true);
+    }
+
     // --- controllers (plan section 4.2/9.1) ---------------------------------
+    // Engine garage P8: "electronics" entries ({"id", "type": "electronics", "ref"}) are collected here and applied
+    // after the manual_tcu (they may mark its assists fitted).
+    std::vector<std::pair<std::string, std::string>> electronics_entries; // id -> resolved part path, file order
     if (j.contains("controllers")) {
         for (const auto& cj : j.at("controllers")) {
             if (!cj.contains("id") || !cj.at("id").is_string() || cj.at("id").get<std::string>().empty()) {
@@ -3927,6 +3945,16 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
             }
             const std::string type = cj.at("type").get<std::string>();
             const std::string ctx = "vehicle '" + v.name + "': controllers['" + id + "']";
+            if (type == "electronics") {
+                if (!cj.contains("ref") || !cj.at("ref").is_string() || cj.at("ref").get<std::string>().empty()) {
+                    throw std::runtime_error(ctx + ": an 'electronics' entry needs a 'ref' (path to a physics_sim.electronics/1 file)");
+                }
+                for (const auto& e : electronics_entries) {
+                    if (e.first == id) throw std::runtime_error(ctx + ": duplicate controller id");
+                }
+                electronics_entries.emplace_back(id, resolve_path(base_dir, cj.at("ref").get<std::string>()));
+                continue;
+            }
             if (type != "manual_tcu") throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
 
             ps::drivetrain::ManualTcuDesc md;
@@ -3949,6 +3977,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
             if (cj.contains("auto_clutch")) {
                 const auto& acj = cj.at("auto_clutch");
                 md.auto_clutch.enabled = acj.value("enabled", md.auto_clutch.enabled);
+                md.auto_clutch.fitted = acj.value("fitted", md.auto_clutch.fitted); // engine garage P8 (A15)
                 md.auto_clutch.bite_rpm = acj.value("bite_rpm", md.auto_clutch.bite_rpm);
                 md.auto_clutch.full_rpm_min = acj.value("full_rpm_min", md.auto_clutch.full_rpm_min);
                 md.auto_clutch.full_rpm_max = acj.value("full_rpm_max", md.auto_clutch.full_rpm_max);
@@ -3982,6 +4011,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
             if (cj.contains("auto_blip")) {
                 const auto& abj = cj.at("auto_blip");
                 md.auto_blip.enabled = abj.value("enabled", md.auto_blip.enabled);
+                md.auto_blip.fitted = abj.value("fitted", md.auto_blip.fitted); // engine garage P8 (A15)
                 md.auto_blip.kp_per_rpm = abj.value("kp_per_rpm", md.auto_blip.kp_per_rpm);
                 md.auto_blip.max_throttle = abj.value("max_throttle", md.auto_blip.max_throttle);
                 md.auto_blip.upshift_cut = abj.value("upshift_cut", md.auto_blip.upshift_cut);
@@ -4030,6 +4060,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
             if (cj.contains("auto_shift")) {
                 const auto& asj = cj.at("auto_shift");
                 md.auto_shift.enabled = asj.value("enabled", md.auto_shift.enabled);
+                md.auto_shift.fitted = asj.value("fitted", md.auto_shift.fitted); // engine garage P8 (A15)
                 md.auto_shift.up_rpm_at_zero_throttle = asj.value("up_rpm_at_zero_throttle", md.auto_shift.up_rpm_at_zero_throttle);
                 md.auto_shift.up_rpm_at_full_throttle = asj.value("up_rpm_at_full_throttle", md.auto_shift.up_rpm_at_full_throttle);
                 md.auto_shift.down_rpm_at_zero_throttle = asj.value("down_rpm_at_zero_throttle", md.auto_shift.down_rpm_at_zero_throttle);
@@ -4043,6 +4074,80 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
     }
     if (v.controllers.size() > 1) {
         throw std::runtime_error("vehicle '" + v.name + "': at most one controller (manual_tcu) is supported in I3");
+    }
+
+    // --- electronics (engine garage P8, A15/A16, docs/data_formats/electronics.md) -----------------------------
+    // The user layer (load_options.electronics) is applied over the file's entries: a path replaces or adds, "none"
+    // removes. Then every part is loaded in order: a launch_control becomes a controller, an assist_fitment marks
+    // assists fitted.
+    {
+        for (const auto& kv : load_options.electronics) {
+            const std::string& eid = kv.first;
+            for (const auto& c : v.controllers) {
+                if (c.id == eid) {
+                    throw std::runtime_error("vehicle '" + v.name + "': electronics: id '" + eid + "' is the manual_tcu controller, not an electronics entry");
+                }
+            }
+            const auto it = std::find_if(electronics_entries.begin(), electronics_entries.end(),
+                                         [&](const auto& e) { return e.first == eid; });
+            if (kv.second.empty()) {
+                throw std::runtime_error("vehicle '" + v.name + "': electronics['" + eid + "']: the path must be non-empty (or \"none\" to remove)");
+            }
+            if (kv.second == "none") {
+                if (it == electronics_entries.end()) {
+                    throw std::runtime_error("vehicle '" + v.name + "': electronics: no electronics entry with id '" + eid + "' to remove");
+                }
+                electronics_entries.erase(it);
+            } else if (it != electronics_entries.end()) {
+                it->second = resolve_path(base_dir, kv.second);
+            } else {
+                electronics_entries.emplace_back(eid, resolve_path(base_dir, kv.second));
+            }
+        }
+        v.controllers.reserve(v.controllers.size() + electronics_entries.size()); // keeps `tcu` below valid
+        ps::drivetrain::ManualTcuDesc* tcu = nullptr;
+        for (auto& c : v.controllers) {
+            if (auto* t = std::get_if<ps::drivetrain::ManualTcuDesc>(&c.params)) tcu = t;
+        }
+        bool have_launch = false;
+        for (const auto& e : electronics_entries) {
+            const std::string ectx = "vehicle '" + v.name + "': electronics['" + e.first + "']";
+            const ElectronicsPart part = load_electronics_json(e.second);
+            if (part.kind == ElectronicsKind::LaunchControl) {
+                if (have_launch) throw std::runtime_error(ectx + ": at most one launch_control per vehicle");
+                have_launch = true;
+                // The second limit must lie strictly between the (first) engine's idle speed and its own limiter.
+                real idle_rpm = 0.0, limiter_rpm = 0.0;
+                bool have_engine = false;
+                for (const auto& comp : v.powertrain.components) {
+                    if (const auto* te = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&comp.params)) {
+                        idle_rpm = te->idle_rpm; limiter_rpm = te->limiter.rpm; have_engine = true; break;
+                    }
+                    if (const auto* se = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&comp.params)) {
+                        idle_rpm = se->idle_rpm; limiter_rpm = se->limiter.rpm; have_engine = true; break;
+                    }
+                }
+                if (!have_engine) throw std::runtime_error(ectx + ": launch_control needs an engine component");
+                if (!(part.launch.rpm > idle_rpm)) {
+                    throw std::runtime_error(ectx + ": launch rpm " + std::to_string(part.launch.rpm) + " must be above the engine's idle rpm " +
+                                             std::to_string(idle_rpm));
+                }
+                if (!(part.launch.rpm < limiter_rpm)) {
+                    throw std::runtime_error(ectx + ": launch rpm " + std::to_string(part.launch.rpm) + " must be below the engine's own limiter rpm " +
+                                             std::to_string(limiter_rpm));
+                }
+                v.controllers.push_back({e.first, part.launch});
+            } else {
+                for (const std::string& f : part.fits) {
+                    if (f == "traction_control") { v.traction_control.fitted = true; continue; }
+                    if (f == "anti_lag") { v.powertrain.anti_lag_fitted = true; continue; }
+                    if (tcu == nullptr) throw std::runtime_error(ectx + ": fits '" + f + "' but the vehicle has no manual_tcu");
+                    if (f == "auto_clutch") tcu->auto_clutch.fitted = true;
+                    else if (f == "auto_blip") tcu->auto_blip.fitted = true;
+                    else tcu->auto_shift.fitted = true;
+                }
+            }
+        }
     }
 
     return v;

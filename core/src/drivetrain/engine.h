@@ -129,6 +129,9 @@ struct ThrottleCommand {
 // EngineTorqueMap::TcuRequest.
 struct TcuRequest {
     bool ignition_cut = false; // upshift cut
+    // Engine garage P8 (A16): a SECOND rev limit in rpm, applied through the engine's own limiter (FuelCut with its
+    // hysteresis, SoftCut over its band) when 0 < limiter_rpm < the engine's limiter rpm. 0 = none.
+    real limiter_rpm = 0.0;
 };
 
 // Hoisted, unchanged except the new theta_c field (PHYS-033 P4 I7a C2, see

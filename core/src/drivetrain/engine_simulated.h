@@ -444,6 +444,7 @@ private:
     EngineState state_ = EngineState::Off;
     real idle_integrator_ = 0.0;
     bool limiter_cut_ = false;
+    real limiter_rpm_override_ = 0.0; // engine garage P8 (A16): TcuRequest::limiter_rpm of the current substep, NOT hashed
     bool dfco_active_ = false;
     real p_im_ = 0.0;
     real x_thr_ = 0.0;

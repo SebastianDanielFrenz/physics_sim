@@ -1,0 +1,7 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "assist_fitment",
+  "name": "Automated clutch, throttle blip and shift module",
+  "source": "[AS] ASSUMED retrofit module: marks the car's manual_tcu assists (auto clutch, auto blip, auto shift) as fitted. The assist parameters stay those of the car's own manual_tcu block; this part only supplies the hardware. Behaviour documented in docs/data_formats/electronics.md.",
+  "fits": ["auto_clutch", "auto_blip", "auto_shift"]
+}
