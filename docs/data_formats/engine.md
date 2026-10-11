@@ -927,11 +927,15 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps /*nu
 duplicate), `throttle` (1.0; the engine's throttle COMMAND - an electronic engine's torque request, a mechanical
 engine's plate; no pedal map, throttle stage or TCU exists at engine level), `ambient` (ISA sea level), and for turbo
 engines `max_settle_s` (15 [C], the bench_hyper_calibration hold), `settle_window_s` (0.5 [AS]),
-`settle_boost_bar_per_s` (0.005 [AS]; 0 never converges), `settle_torque_rel_per_s` (0.002 [AS]), `anti_lag` (request the anti-lag channel).
+`settle_boost_bar_per_s` (0.005 [AS]; 0 never converges), `settle_torque_rel_per_s` (0.002 [AS]), `anti_lag` (request the anti-lag channel),
+`part_files` (the files the descriptors came from, copied into the findings' `PartRef::file`: `engine`, `turbo`, `turbo_configuration`, `nitrous_kit`, `n2o_bottle`),
+`turbo_count` (1; how many turbos `TurboPairDesc`'s extensive values are the sum of - see "Simulated remedies") and `nitrous` (empty; an optional wet kit,
+see "Nitrous in the sweep").
 
 `DynoPoint`: `rpm`, `torque_nm` (NET at the crank, Coulomb row included), `power_kw`, `boost_bar` (manifold gauge, 0
 without a turbo), `turbo_rpm`, `fuel_g_s`, `bsfc_g_kwh`, `lambda`, `spark_deg`, `p_intake_kpa`, `exhaust_k`,
-`charge_boost_bar`, `converged`, `settle_s`. A quantity the engine kind does not model is NaN (a torque map has no
+`charge_boost_bar`, `converged`, `settle_s`, and (P3b-2, 0 / NaN without a kit that sprayed) `n2o_g_s`, `kit_fuel_g_s`,
+`lambda_combined` (the engine's combined lambda of fuel + kit fuel against the air and the N2O's oxygen). A quantity the engine kind does not model is NaN (a torque map has no
 lambda/spark/manifold/exhaust temperature; only a turbo engine has `exhaust_k`; `fuel_g_s` is NaN for a torque map
 without any fuel model). `DynoResult` is a struct (`points`) so later increments can add findings without changing
 the vector.
@@ -948,7 +952,7 @@ Maps: `maps` null uses the desc's own. An `EngineMapsPtr` replaces a simulated e
 `World::replace_engine_maps` and completes a `maps_pending` desc (the garage flow: validate-only load, then
 `generate_engine_maps`, then the sweep). A `maps_pending` desc without maps throws `std::runtime_error` ("... maps are
 pending ..."); maps given to a torque-map engine throw too. A bad spec (non-positive rpm, throttle outside 0..1, a
-non-positive window) throws `std::invalid_argument`. Nitrous is not part of the sweep.
+non-positive window) throws `std::invalid_argument`. A kit is optional ("Nitrous in the sweep").
 
 Threading: the turbo kind runs one job per point on `pool` (nullptr = serially); each job builds its own
 `SimulatedEngine` from shared immutable maps and writes its own slot, so the result is bit-identical for any worker
@@ -963,7 +967,8 @@ entry throws before any work. A sweep whose points all started before the flag w
 built from a descriptor needs `Config::engine_thermal_path` when it has a cooling system (there is no engine file to
 read `default_thermal` from).
 
-Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`), `tests/unit/test_limit_findings.cpp` (L1-L21, `[dyno]`, limit findings; ~5 s in release, not `[long]`).
+Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`), `tests/unit/test_limit_findings.cpp` (L1-L21, `[dyno]`, limit findings; ~5 s in release, not `[long]`),
+`tests/unit/test_limit_remedies.cpp` (R1-R13, `[dyno]` + `[n2o]`/`[turbo]`: nitrous in the sweep, kit/bottle findings, the solvers; R12 is `[long]`).
 
 ### Limit findings (engine garage P3b-1)
 
@@ -978,21 +983,26 @@ the limit), `Limiting` (this part caps the output here), `Exceeded` (the target 
 the `LimitUnit` enum of `value`/`limit` (SI; rotor and engine speed in rpm like everywhere in this repo; boost in Pa
 GAUGE). `part` is `{slot, file, field}`: `slot` one of `engine`, `turbo`, `turbo_configuration`, `clutch`; `field` an
 RFC 6901 pointer into the part file (empty = the part as a whole); `file` is filled from `DynoSweepSpec::part_files`
-(a descriptor does not remember its file; empty when the caller gave none). `remedy` (`{part, current, required_min,
-required_margin, unit, cost, solved}`, ratios derived) is present only where a closed-form number exists.
+(a descriptor does not remember its file; empty when the caller gave none); P3b-2 adds the slots `nitrous_kit` and `n2o_bottle`.
+`remedy` (`{part, current, required_min, required_margin, unit, cost, solved}`, ratios derived) is present where a number exists:
+`cost = Closed` (computed with every sweep, `solved` always true) or `cost = Simulated` (an UNSOLVED placeholder with `current`
+filled and the required values NaN, `solved = false`, until `solve_remedy` runs - see "Simulated remedies").
 
 | Kind (value) | Producer / measured quantity | Severity | `value` / `limit` | Part | Increment |
 |---|---|---|---|---|---|
-| `WastegateSaturated` (0) | turbo window: share of substeps with gate opening >= 0.98 | `Limiting` at >= 50 % of the window; `Exceeded` when mean boost is also > 2 % of the target above it; `Near` when the mean opening >= 0.92 | mean opening / 0.98 | turbo `/wastegate_area_m2` | P3b-1 |
+| `WastegateSaturated` (0) | turbo window: share of substeps with gate opening >= 0.98 | `Limiting` at >= 50 % of the window; `Exceeded` when mean boost is also > 2 % of the target above it; `Near` when the mean opening >= 0.92 | mean opening / 0.98 | turbo `/wastegate_area_m2` + Simulated placeholder (P3b-2) | P3b-1 |
 | `BoostBelowTarget` (1) | window mean charge pressure (gauge) vs the PID target (target x plate) | `Near` shortfall > 2 %, `Exceeded` > 5 % of `target_boost_pa` | charge Pa / target Pa | turbo (whole) | P3b-1 |
-| `BoostAboveTarget` (2) | same | `Near` overshoot > 2 %, `Exceeded` > 5 % | charge Pa / target Pa | turbo `/wastegate_area_m2` | P3b-1 |
-| `TurboRotorCap` (3) | window max rotor rpm vs the end of the compressor head table's speed axis (`head_pa.x.back() * reference_rpm`, 1.5 x without maps) | `Near` >= 90 %, `Limiting` >= 97 %, `Exceeded` > 100 % | rpm / edge rpm | turbo (whole) | P3b-1 |
+| `BoostAboveTarget` (2) | same | `Near` overshoot > 2 %, `Exceeded` > 5 % | charge Pa / target Pa | turbo `/wastegate_area_m2` + Simulated placeholder (P3b-2) | P3b-1 |
+| `TurboRotorCap` (3) | window max rotor rpm vs the end of the compressor head table's speed axis (`head_pa.x.back() * reference_rpm`, 1.5 x without maps) | `Near` >= 90 %, `Limiting` >= 97 %, `Exceeded` > 100 % | rpm / edge rpm | turbo (whole); Simulated placeholder on `/wastegate_area_m2` (P3b-2: tried first, "turbo hardware" if it cannot clear it) | P3b-1 |
 | `CompressorSurge` (4) | with a `surge_line` only: the engine's surge flag in >= 2 % of the window, or the minimum flow / surge-line flow ratio < 1.10 | `Exceeded` (flag), `Near` (margin) | min flow ratio / 1 | turbo `/surge_line` | P3b-1 |
 | `CompressorChoke` (5) | window max pair flow / `max_mass_flow_kg_s` - a capacity margin; the maps carry no per-speed choke line | `Near` >= 0.90, `Limiting` >= 1.0 | fraction / 1.0 | turbo `/max_mass_flow_kg_s` | P3b-1 |
 | `ChargeTemperature` (6) | not produced: no charge-temperature limit exists in any data file | - | - | - | later |
 | `ClutchCapacity` (7) | `check_driveline_limits`: peak sweep torque vs `capacity_nm * static_factor` | `Near` when peak x 1.3 >= static capacity, `Limiting` when peak >= it | N*m | clutch `/capacity_nm` + Closed remedy | P3b-1 |
 | `GearboxInputTorque` (8) | not produced: `GearboxDesc` has no input-torque rating (its synchro capacities are shift capacities) | - | - | - | later |
-| `KitFuelLean` .. `N2OBottlePressureDrop` (9-12) | nitrous is not part of the sweep | - | - | - | P3b-2 |
+| `KitFuelLean` (9) | sweep with a kit: window mean of the engine's combined lambda (fuel + kit fuel, the N2O's oxygen counted), over the substeps the charge model ran (the kit sprayed for >= half of the window) | `Near` >= 0.90, `Limiting` >= 1.00, `Exceeded` >= 1.10 | lambda / 0.90 | nitrous_kit `/fuel_jet_diameter_mm` + Closed remedy (mm) | P3b-2 |
+| `InjectorDuty` (10) | not produced: no injector model exists anywhere in `core/` (fuel is a mean flow) | - | - | - | later |
+| `N2OBottleDuration` (11) | sweep with a kit: bottle content / the N2O flow at the sweep's largest-flow point (the shortest life), static per sweep and tagged with that rpm | `Limiting` < 10 s, `Near` < 11 s | s / 10 s | n2o_bottle `/capacity_kg` + Closed remedy (kg) | P3b-2 |
+| `N2OBottlePressureDrop` (12) | only a bottle whose pressure falls with the fill (`vs_fill`, no heater on): the flow model's flux at the bottle pressure at the END of a 10 s pass over the flux at the start (same jet and manifold pressure) | `Exceeded` when the end gauge falls under the controller's bottle switch (`min_bottle_gauge_bar`), else `Limiting` < 0.80, `Near` < 0.90 | retention / 0.90 | n2o_bottle `/pressure`, no remedy | P3b-2 |
 | `RevLimiter` (13) | a `soft_cut` limiter: the swept rpm reaches the taper | `Near` within 2 bands below the zero-fuel rpm, `Limiting` inside the band, `Exceeded` at/above it | rpm / limiter rpm | engine `/limiter/rpm` | P3b-1 |
 | `FuelCut` (14) | a `fuel_cut` limiter: the swept rpm reaches the cut | `Near` >= 97 % of the cut rpm, `Limiting` at it, `Exceeded` above | rpm / limiter rpm | engine `/limiter/rpm` | P3b-1 |
 | `ValveFlowChoke` (15) | not produced: no valve Mach diagnostic exists | - | - | - | later |
@@ -1016,5 +1026,83 @@ of a clutch's static capacity (`capacity_nm * static_factor`). Its **Closed reme
 kinetic `capacity_nm`): `current = capacity_nm`, `required_min = peak / static_factor` (the smallest capacity that holds the
 peak), `required_margin = 1.3 * peak / static_factor` (the table's safety margin; both equal `peak` and `1.3 * peak` when
 `static_factor` is 1). The ratios `required_min / current` and `required_margin / current` are the "increase by n x" the
-advisor prints. Rev limiter and fuel cut findings have no remedy; Simulated remedies (wastegate area, jets, bottle) are
-P3b-2.
+advisor prints. Rev limiter and fuel cut findings have no remedy.
+
+#### Nitrous in the sweep (P3b-2)
+
+`DynoSweepSpec::nitrous` (`DynoNitrous{N2oBottleDesc bottle, NitrousKitDesc kit}`; `nitrous_from_powertrain(const
+PowertrainDesc&)` picks both out of a loaded vehicle) adds a wet kit to a simulated engine's sweep. The sweep reuses the car's
+own `NitrousSystem` (flow arithmetic, controller, safety), steps the engine at 960 Hz with the crank held (also without a
+turbo; the turbo findings are then skipped) and hands it `NitrousSystem::engine_input()` as `Sensors::nitrous` each
+substep, exactly as `Powertrain` does. Rules of a wheel-less rig:
+
+- The kit is armed and sprayed at full controller command: the progressive ramp is skipped and the controller's duty-time cap
+  (`max_active_s`) is off (bottle life is a finding of its own, `N2OBottleDuration`). The controller's rpm window,
+  `min_throttle_command` (so a part-throttle dyno never sprays), bottle-pressure switch and safety latch apply as authored.
+- There is no gearbox and no road speed on a dyno: the gear and speed conditions of the controller are met (`min_gear`
+  has nothing to read, as for `EngineRig`).
+- The bottle is never committed: its content, and so its pressure, stay at the descriptor fill for the whole point.
+- A torque-map engine ignores a kit in a car, so a sweep with one throws `std::invalid_argument`; so does a kit with an engine
+  that has no fuels. Without a kit the sweep is bit-identical to P3b-1.
+
+Measured against the independent dyno-held harness of `tests/validation/test_car_hyper_n2o.cpp` (`dyno_shot`, copied into
+`test_limit_remedies.cpp` R1): N2O and kit fuel flow equal to rounding, torque and power within 2.8e-4 (1.2e-3 at 7000 rpm,
+where the sweep stops at its 0.2 %/s criterion), combined lambda within 5e-4.
+
+#### Closed remedies of the nitrous kinds
+
+Both are computed with every sweep from the window's own numbers:
+
+- `KitFuelLean` -> the kit **fuel jet diameter** (`/fuel_jet_diameter_mm`, mm). The kit fuel that gives a combined lambda `L` is
+  `kit + total * (lambda_c / L - 1)` (`total` = ECU + kit fuel, both taken as unchanged), and the jet flow is `Cd * A * sqrt(2 rho dp)`
+  so the diameter scales with the square root of the flow. `required_min` reaches lambda 0.90 (the finding clears), `required_margin`
+  the 0.82 target [AS, the middle of the recalled 0.78-0.85 wet-shot range]. First order (the ECU's own fuel and the air are
+  held fixed): re-swept with the margin jet the hyper kit lands at 0.82 +- 0.015 (R4).
+- `N2OBottleDuration` -> the bottle **content** (`/capacity_kg`, kg): `required_min = 10 s x flow`, `required_margin` adds 10 %
+  that stays below the pickup tube [AS]. Applied, `required_min` is exactly 10 s (`Near`, the Near line is 11 s) and
+  `required_margin` clears (R5). The shipped 15 lb bottle (6.804 kg) lasts 27.6 s at 246.4 g/s: no finding.
+
+`N2OBottlePressureDrop` has no remedy (the pressure curve is the bottle's authored data).
+
+#### Simulated remedies: `solve_remedy`, `solve_power_target` (P3b-2)
+
+`ps/drivetrain/limit_remedies.h`. A sweep attaches an UNSOLVED `Remedy` placeholder (`cost = Simulated`, `solved = false`,
+`current` filled, `required_*` NaN) to `WastegateSaturated`, `BoostAboveTarget` and `TurboRotorCap`; the garage shows a
+"Calculate" button for it. Nothing in `run_dyno_sweep` solves, and a solve is only as good as the maps in the request (a
+Sketch-quality request gives a Sketch answer).
+
+```cpp
+struct RemedyRequest { ComponentParams engine; EngineMapsPtr maps; DynoSweepSpec spec; };
+struct RemedyOptions { jobs::JobSystem* pool; const std::atomic<bool>* cancel;
+                       std::function<void(size_t done, size_t total)> on_progress;
+                       real tolerance_rel = 0.005; size_t* evaluations_out; };
+Remedy solve_remedy(const RemedyRequest&, const LimitFinding&, const RemedyOptions& = {});
+PowerTargetResult solve_power_target(const RemedyRequest&, PowerTargetPart, real rpm, real target_gain_kw, const RemedyOptions& = {});
+```
+
+- **Wastegate kinds** (`WastegateSaturated`, `BoostAboveTarget`; `TurboRotorCap` additionally needs no rotor-cap finding): the
+  smallest wastegate area, searched as a factor 1..8 over the engine's current one, at which a settled point at `finding.rpm` has
+  none of the kinds - mean gate opening < 0.92 [AS] and the charge pressure within the 2 % band over the PID target. Result:
+  `part {turbo, file, /wastegate_area_m2}`, `current` = the engine's `wastegate_area()` / `spec.turbo_count` (the hardware FILE's
+  per-turbo value; the descriptor holds the installation total and does not remember the count), `required_min = factor x
+  current`, `required_margin = 1.10 x required_min` [AS, N7b's "+10 %"]. Not clear at 8x -> `solved = false`, NaN, and for
+  `TurboRotorCap` the part field is emptied ("the turbo hardware", no number). The solve is for the ONE rpm of the finding; the part needs
+  the largest over the findings of a sweep.
+- **`solve_power_target`**: the N2O jet diameter at which the dyno-held gain at `rpm` (settled power with the kit minus without) reaches
+  `target_gain_kw`; the fuel jet scales with it (the kit's fuel/N2O diameter ratio is kept). Candidates 0.5/1/2/4 x the current
+  jet bracket the answer, a target the largest cannot reach (or a kit the controller does not spray at that rpm) gives `solved =
+  false`. `required_min` is the upper, satisfying end of the final bracket (gain >= target), `required_margin` equals it.
+- **Search**: after one bracketing round, a FIXED 4-section per round (3 interior points evaluated together, one job each on `pool`)
+  until the bracket is narrower than `tolerance_rel` (0.5 % [AS], the N7 bisection tolerance) of its upper end. The evaluated
+  values depend on the request only, so the result is bit-identical for no pool, 1 or 10 workers. Wastegate solve: 4 + 3 x 4 = 16
+  evaluations, power target: 5 + 3 x 4 = 17 (about 0.55 s and 0.6 s on 10 workers with Sketch maps; each evaluation is a serial
+  single-point `run_dyno_sweep`, 0.1-0.15 s). Plain bisection would need about 10 evaluations but one round each.
+- **Progress / cancel** as in `generate_engine_maps` and `run_dyno_sweep`: `on_progress(done, total)` once per finished evaluation on
+  the CALLING thread, `total` an upper bound closed by a final `(total, total)`; the cancel flag is read before every round and
+  by every evaluation before it starts, a solve that sees it set throws `GenerationCancelled`, nothing partial is returned.
+
+Owner's example (R8): `car_hyper.json`'s stock wastegate (1.18e-3 m2 per turbo) with `car_hyper_n2o.json`'s 800 hp kit saturates
+the gate from 3000 rpm up. At 7000 rpm `solve_remedy` returns x1.320 (`required_min` 1.558e-3 m2) and x1.452 with the margin
+(1.714e-3 m2); at 5000 rpm x1.215, at 3000 rpm x1.0625. N7b shipped 1.4875e-3 m2 = x1.26 ("a bisection + 10 %", by the dyno-held
+criterion gate <= 0.965). The same N7b hardware under this criterion still shows `WastegateSaturated` `Near` at 7000 rpm (mean
+gate 0.96 >= 0.92), so the solve asks for more than N7b shipped; the difference is the stricter gate criterion, not the model.

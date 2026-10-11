@@ -8,11 +8,12 @@
 // Units are SI (Pa, K, N*m, m/s, kg/s, m^2) with ONE exception that follows the project's own convention everywhere
 // else: rotational speed is rpm (LimitUnit::RevPerMinute). Pressures are gauge where a finding says so (boost).
 //
-// Shipping increments: P3b-1 (this file's producers) = WastegateSaturated, BoostBelowTarget, BoostAboveTarget,
-// TurboRotorCap, CompressorSurge, CompressorChoke, ClutchCapacity, RevLimiter, FuelCut, MeanPistonSpeed, MapGridEdge;
-// not produced yet (value reserved, append-only): ChargeTemperature (no limit exists in any data file), GearboxInputTorque
-// (GearboxDesc carries no input-torque rating), KitFuelLean / InjectorDuty / N2OBottleDuration / N2OBottlePressureDrop
-// (nitrous is not part of the sweep - P3b-2), ValveFlowChoke (no valve Mach diagnostic exists), Knock (C17b).
+// Shipping increments: P3b-1 = WastegateSaturated, BoostBelowTarget, BoostAboveTarget, TurboRotorCap, CompressorSurge,
+// CompressorChoke, ClutchCapacity, RevLimiter, FuelCut, MeanPistonSpeed, MapGridEdge; P3b-2 = KitFuelLean, N2OBottleDuration,
+// N2OBottlePressureDrop (a sweep with DynoSweepSpec::nitrous) and the Simulated remedies (ps/drivetrain/limit_remedies.h);
+// not produced (value reserved, append-only): ChargeTemperature (no limit exists in any data file), GearboxInputTorque
+// (GearboxDesc carries no input-torque rating), InjectorDuty (no injector model exists: fuel is a mass flow), ValveFlowChoke
+// (no valve Mach diagnostic exists), Knock (C17b).
 // docs/data_formats/engine.md "Dyno sweep" -> "Limit findings" has the thresholds and sources.
 #pragma once
 
@@ -36,10 +37,10 @@ enum class LimitKind : std::uint16_t {
     ChargeTemperature = 6,     // not produced: no charge-temperature limit exists in any data file
     ClutchCapacity = 7,        // P3b-1: check_driveline_limits
     GearboxInputTorque = 8,    // not produced: GearboxDesc has no input-torque rating
-    KitFuelLean = 9,           // P3b-2 (nitrous)
-    InjectorDuty = 10,         // P3b-2 (nitrous)
-    N2OBottleDuration = 11,    // P3b-2 (nitrous)
-    N2OBottlePressureDrop = 12, // P3b-2 (nitrous)
+    KitFuelLean = 9,           // P3b-2: the combined lambda with the kit is too lean (Closed remedy: fuel jet)
+    InjectorDuty = 10,         // not produced: no injector model exists
+    N2OBottleDuration = 11,    // P3b-2: the bottle empties within a drag-strip pass (Closed remedy: bottle content)
+    N2OBottlePressureDrop = 12, // P3b-2: a bottle whose pressure falls with the fill loses N2O flow during the pass
     RevLimiter = 13,           // P3b-1: a SoftCut limiter taper is reached
     FuelCut = 14,              // P3b-1: a FuelCut limiter is reached
     ValveFlowChoke = 15,       // not produced: no valve Mach diagnostic exists
@@ -63,6 +64,9 @@ enum class LimitUnit : std::uint8_t {
     MetrePerSecond = 5,
     RevPerMinute = 6,  // the one non-SI unit, like every rpm in this repo
     SquareMetre = 7,
+    Millimetre = 8,    // P3b-2: a jet diameter in the part file's own unit
+    Kilogram = 9,      // P3b-2: a bottle content
+    Second = 10,       // P3b-2: a duration
 };
 
 // The part to change. slot: the part's role in physics_sim's vocabulary ("engine", "turbo", "turbo_configuration",
@@ -78,7 +82,7 @@ struct PartRef {
 
 enum class RemedyCost : std::uint8_t {
     Closed = 0,    // a closed-form number computed with every sweep
-    Simulated = 1, // needs a bisection of dyno runs (P3b-2: solve_remedy)
+    Simulated = 1, // needs a search over dyno runs (P3b-2: solve_remedy / solve_power_target, limit_remedies.h)
 };
 
 // "Change `part` from `current` to at least `required_min` (`required_margin` leaves the table's safety margin)".
@@ -90,7 +94,9 @@ struct Remedy {
     real required_margin = std::numeric_limits<real>::quiet_NaN();
     LimitUnit unit = LimitUnit::Dimensionless;
     RemedyCost cost = RemedyCost::Closed;
-    bool solved = true; // Simulated remedies: false until solve_remedy ran (P3b-2); a Closed remedy is always solved
+    // Simulated remedies: false on the placeholder a sweep attaches (current filled, the required values NaN) and on a solve
+    // that found no value; true after a successful solve_remedy (ps/drivetrain/limit_remedies.h). A Closed remedy is always solved.
+    bool solved = true;
 
     [[nodiscard]] real ratio_min() const { return required_min / current; }
     [[nodiscard]] real ratio_margin() const { return required_margin / current; }

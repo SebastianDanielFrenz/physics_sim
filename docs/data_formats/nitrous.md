@@ -220,3 +220,13 @@ bottle), `n2o_flow_fraction` (the progressive duty of the tick's last substep, 0
 `nitrous_arm`, default off; smoke test `tests/validation/test_car_sedan_gen_n2o.cpp`: a WOT 3rd-gear pull
 gains about +41 kW crank power at 4000-5500 rpm, reported only). Every Edelbrock number is as transcribed in `out/n2o_plan.md` section 9.2; the
 whole-kit check against the ratings (V2) is N5.
+
+## Dyno use (engine garage P3b-2)
+
+`run_dyno_sweep` (`ps/drivetrain/engine_dyno.h`) can sweep a simulated engine with a bottle and kit
+(`DynoSweepSpec::nitrous`; `nitrous_from_powertrain` picks both out of a loaded vehicle). It reuses `NitrousSystem` with the
+rules of a wheel-less rig: armed, sprayed at full controller command (the progressive ramp and the `max_active_s` duty cap are
+skipped), no gear or road-speed condition, the bottle never committed (its pressure is held at the descriptor fill). The sweep
+reports `n2o_g_s`, `kit_fuel_g_s` and the combined lambda and produces the findings `KitFuelLean`, `N2OBottleDuration` and
+`N2OBottlePressureDrop` (a `vs_fill` bottle only), with the remedies and `solve_power_target` described in
+`engine.md` ("Nitrous in the sweep", "Simulated remedies"). The kit controller's `min_gear` is not applied on a dyno.
