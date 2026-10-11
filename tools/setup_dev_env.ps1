@@ -81,6 +81,15 @@ function Test-CommandVersion {
 # Refresh PATH from machine+user (a shell opened before an install won't see
 # newly-installed tools until this is done).
 # ---------------------------------------------------------------------------
+# Major version of the GCC installation WSL clang takes its libstdc++ headers
+# from (clang -v "Selected GCC installation: .../gcc/x86_64-linux-gnu/<N>"),
+# or $null when it cannot be read.
+function Get-WslClangGccMajor {
+    $line = wsl --cd ~ -- bash -lc "clang++ -v 2>&1 | grep -i selected.gcc | head -n1"
+    if ("$line" -match '/(\d+)\s*$') { return $Matches[1] }
+    return $null
+}
+
 function Update-SessionPath {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -159,7 +168,10 @@ function Install-WingetPackage {
               '--accept-package-agreements', '--accept-source-agreements',
               '--disable-interactivity') + $ExtraArgs
     & winget @args
-    if ($LASTEXITCODE -ne 0) {
+    # Already installed with no applicable upgrade is success, not failure:
+    # 0x8A15002B UPDATE_NOT_APPLICABLE (-1978335189), 0x8A150061
+    # PACKAGE_ALREADY_INSTALLED (-1978335135).
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189 -and $LASTEXITCODE -ne -1978335135) {
         throw "winget install of $Id failed with exit code $LASTEXITCODE"
     }
 }
@@ -235,6 +247,13 @@ if ($CheckOnly) {
                 Write-Missing "$($tool.Name) (WSL) not found"
             }
         }
+        $gccMajor = Get-WslClangGccMajor
+        $hdr = wsl --cd ~ -- bash -lc "test -d /usr/include/c++/$gccMajor && echo yes"
+        if ($gccMajor -and $hdr -eq 'yes') {
+            Write-Ok "libstdc++ headers (WSL) -> clang uses GCC $gccMajor, /usr/include/c++/$gccMajor present"
+        } else {
+            Write-Missing "libstdc++ headers (WSL) for clang's selected GCC '$gccMajor' missing (libstdc++-$gccMajor-dev)"
+        }
     } else {
         Write-Missing "No Ubuntu WSL distro found (wsl -l -q)"
     }
@@ -295,6 +314,17 @@ if ($wslDistros -match 'Ubuntu') {
     wsl -u root -- apt-get install -y clang lld cmake ninja-build python3 git binutils
     if ($LASTEXITCODE -ne 0) {
         throw "WSL apt-get install failed with exit code $LASTEXITCODE"
+    }
+    # clang uses the HIGHEST GCC installation it finds under /usr/lib/gcc for its
+    # libstdc++ headers. Another package (e.g. gfortran-16) can pull in a newer
+    # GCC's runtime without its libstdc++ headers, and then every C++ build fails
+    # with "'cstdint' file not found" (2026-10-11). Install the matching -dev.
+    $gccMajor = Get-WslClangGccMajor
+    if ($gccMajor) {
+        wsl -u root -- apt-get install -y "libstdc++-$gccMajor-dev"
+        if ($LASTEXITCODE -ne 0) {
+            throw "WSL apt-get install libstdc++-$gccMajor-dev failed with exit code $LASTEXITCODE"
+        }
     }
 } else {
     Write-Host "No Ubuntu WSL distro found; install WSL2 + Ubuntu manually first (outside this script's scope - it does not install WSL itself)." -ForegroundColor Red
