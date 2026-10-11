@@ -1106,3 +1106,88 @@ the gate from 3000 rpm up. At 7000 rpm `solve_remedy` returns x1.320 (`required_
 (1.714e-3 m2); at 5000 rpm x1.215, at 3000 rpm x1.0625. N7b shipped 1.4875e-3 m2 = x1.26 ("a bisection + 10 %", by the dyno-held
 criterion gate <= 0.965). The same N7b hardware under this criterion still shows `WastegateSaturated` `Near` at 7000 rpm (mean
 gate 0.96 >= 0.92), so the solve asks for more than N7b shipped; the difference is the stricter gate criterion, not the model.
+
+## Buildability rules, change classes and grid helpers (engine garage P4, A10-A12)
+
+`ps/drivetrain/engine_rules.h` - pure functions of descriptors, for the garage; nothing here runs in `World::step`. Every number is
+in `core/src/drivetrain/engine_rules_table.h` (and P3b's `limit_thresholds.h` for the piston speed), each tagged [C] cited, [D]
+derived, [AS] assumed or [M] measured. Heywood (1988) has no readable copy in the repository or the vault, so every number the
+design attributes to it is [AS] "recalled", never [C]; no page numbers are claimed.
+
+### `check_buildable` (A10)
+
+`std::vector<BuildIssue> check_buildable(const ComponentParams&)` (overloads for `SimulatedEngineDesc` / `TorqueMapEngineDesc`).
+A `BuildIssue` is `{rule, severity, slot, field_pointer, message, source_label, value, limit, unit}`; `severity` is P3b's
+`LimitSeverity` (`Exceeded` = the garage refuses to save or drive it, `Limiting` = buildable but the rule caps the result, `Near`
+= worth telling the player), `field_pointer` an RFC 6901 pointer into the part file named by `slot` ("engine" or
+"turbo_configuration"), `source_label` the rule's tag text. Issues are ordered by rule, then pointer. `has_blocking_issue` is true
+when any is `Exceeded`. `BuildRule` values are append-only (0..10).
+
+| Rule | Pointer | Severity | Number | Source |
+|---|---|---|---|---|
+| `ValveLayout` (0) | `/cycle/intake_valves` | Exceeded | intake x exhaust in {1x1, 2x1, 2x2, 3x2} (2V, 3V, 4V, 5V) | [AS] design 6.2 |
+| `ValveDiameterBand` (1) | `/cycle/intake_valve_d_mm` | Exceeded | intake head over bore: 1 valve 0.34-0.52, 2 valves 0.28-0.44, 3 valves 0.22-0.34 | [AS] Heywood sec. 6.3 recalled, widened until the hyper (38/92 = 0.413) and the A25A-FKS (0.36) pass |
+| `ValvePackingRow` (2) | `/cycle/intake_valve_d_mm` (or exhaust) | Exceeded | n x d <= 0.866 x bore for a side with one or two valves | [D] chord of the bore circle at a row offset of B/4 ([AS] offset) |
+| `ValvePackingArea` (3) | `/cycle/intake_valve_d_mm` | Exceeded | sum of all valve d^2 <= 0.95 x densest packing of N equal circles in the bore circle (N = 2: 0.5, 3: 0.6462, 4: 0.6863, 5: 0.6852) x bore^2 | [D] packing densities; [AS] 0.95 share (the hyper uses 0.89 of the ideal) |
+| `ExhaustIntakeRatio` (4) | `/cycle/exhaust_valve_d_mm` | Exceeded | exhaust / intake diameter 0.78-0.90 | [AS] design 6.2 |
+| `RodRatio` (5) | `/cycle/rod_mm` | Exceeded | rod / (stroke / 2) = 3.0-4.2 (the A25A-FKS sits exactly on 3.0; 1e-9 relative slack) | [AS] design 6.3 |
+| `MeanPistonSpeed` (6) | `/limiter/rpm` | Near from 25 m/s, Exceeded from 28 m/s | stroke x limiter / 30 | P3b `kPistonSpeedLimiting` / `kPistonSpeedExceeded`, one step lower than the dyno (the stock hyper runs 26.2 m/s) |
+| `CompressionRatio` (7) | `/cycle/compression_ratio` | Exceeded | NA 8.0-14.5; with a turbo 7.0-10.5 | [AS] design 6.3 (no knock model) |
+| `LimiterAboveRpmGrid` (8) | `/cycle/grid_rpm` | Near / Limiting / Exceeded at 0-5 / 5-15 / >15 % over the last node | limiter vs the last rpm node | [AS]; stock demo I4: 6800 over 6500 = 4.6 % Near |
+| `BoostAbovePressureGrid` (9) | `/cycle/grid_p_im_kpa` | same graded | ISA ambient + boost target vs the last manifold node (or `pressure_sampling.max_pa`) | [AS] |
+| `LimiterAboveCurve` (10) | `/wot_torque_nm_vs_rpm`, `/motoring_torque_nm_vs_rpm` | graded as above | torque-map engine: limiter (or the governor's high idle, if lower) vs the last rpm of each curve | [AS] |
+
+Which rules apply: a simulated engine with a `cycle` block gets 0-9; a simulated engine without one (measured maps, e.g.
+`toyota_a25a_fks_sim`) only `MeanPistonSpeed` - its map axes are measured data the player cannot edit, and its VE axis ends below
+the limiter and below ambient (reported per dyno point by P3b); a torque-map engine only rule 10; a rotary engine and every other
+component nothing. The rules are static: they never call the generator.
+
+Shipped data (cases S1/S2): every `data/engines/*.json` has no `Limiting` and no `Exceeded`. Two `Near`: `demo_i4_pipes`
+(`LimiterAboveRpmGrid`, 4.6 %) and the hyper (`MeanPistonSpeed` 26.2 m/s at 8250 rpm).
+
+### `classify_engine_change` (A11)
+
+`EngineChange {None, Runtime, TurboTables, Maps, Respawn}`, ascending; the most expensive class over all changed fields wins.
+`list_engine_changes(before, after)` gives the per-field list (`{slot, pointer, change}`), `classify_engine_change` its maximum.
+
+| Class | Meaning | Derived from |
+|---|---|---|
+| `None` | nothing any consumer reads (provenance text, source paths) | all comparators equal |
+| `Runtime` | constructing the engine again from the descriptor (steady tables ~68 ms) | any other field difference |
+| `TurboTables` | the turbo's derived tables are keyed differently (ms, cached) | `turbo_table_key(a) != turbo_table_key(b)`, or a turbo appears/disappears |
+| `Maps` | the `.psmaps` must be regenerated (seconds to minutes) | `engine_map_cache_key` of the effective cycle (with `compressor_supply = turbo_pair.has_value()` as the loader sets it, fuel `fuels[0]`) differs, or a cycle block appears/disappears; piston bore/stroke on a cycle-class engine |
+| `Respawn` | a different engine; nothing carries over | engine kind (torque map <-> simulated), architecture, ignition, cylinder count |
+
+`Maps` and `TurboTables` are not parallel tables: the first calls the cache's own key, the second `turbo_table_key`, the same FNV-1a
+parameter list as `ps::io::load_turbo_configuration_json` (a test compares it with that loader's `maps->content_hash`), so a new key
+field added to either loader fails a test here. Fields outside both keys that still change the engine (limiter, idle, ECU tables,
+inertia, throttle body, idle control, starter, blow-off valve, anti-lag, exhaust thermal, wastegate area, intercooler pressure drop,
+banks, installation positions) are `Runtime`. Raising the limiter alone is `Runtime`; raising it together with
+`extend_grid_rpm` moves `grid_rpm`, hence `Maps` (design 6.1: "none inside the grid; M above it").
+
+Deviations from design section 6's Regen column (test K1 pins exactly this list):
+
+- **Wastegate size** and **intercooler pressure drop** are "T" in the design but `Runtime` here: neither is an input of the derived
+  tables or of the engine maps (the loader's turbo key does not contain them), the engine takes them at construction.
+- **Adding forced induction to a lumped (no pipe blocks) cycle engine** is `TurboTables` on its own: `compressor_supply` exists only
+  with pipe blocks, so the key moves only when the garage also extends `grid_p_im` (then `Maps`, as designed).
+- **Cylinder count** is `Respawn` although the map key covers it (design 6.3: "a different engine: swap").
+
+### Grid helpers (A12)
+
+- `boost_grid_p_im(cycle, target_boost_bar)`: the nodes at or below ISA ambient (101.325 kPa), then rows above ambient every
+  60 kPa [M, the hyper's 100 -> 160 -> 220 kPa pitch] up to (1 + target + 0.2) bar absolute [AS, design 7.3]; the last step is
+  30-90 kPa (a shorter remainder merges into the top node). The hyper's own axis `[25, 50, 100, 160, 220, 300]` kPa is exactly
+  `boost_grid_p_im` for its 1.8 bar target. Throws `std::invalid_argument` for a target <= 0 or fewer than two nodes at/below ambient.
+- `ambient_grid_p_im(cycle)`: the axis of an engine that loses its compressor. Nodes up to 0.95 x ambient (96.26 kPa) are kept;
+  anything between that cap and the old top collapses into one node at the cap [AS]. Reason [M]: the generator throws for a node the
+  engine cannot reach with the throttle fully open, and the NA hyper's plenum peaks at 97.87 kPa at 8000 rpm, so the boosted engine's
+  100 kPa WOT row is already unreachable; the first version of this helper (keep every node <= ambient) made the hyper's NA maps
+  fail with "plenum target 100000 Pa unreachable at 8000 rpm". Once engine garage P2's loader accepts `forced_induction: "none"`,
+  the loader should call this helper.
+- `extend_grid_rpm(cycle, limiter_rpm)`: unchanged when the axis covers the limiter; otherwise nodes continue at the last
+  interval until within half an interval of the limiter, and the limiter itself is the last node (demo I4, limiter 8000:
+  `..., 6500, 7000, 7500, 8000`).
+
+Tests: `tests/unit/test_engine_rules.cpp`, tag `[engine_rules]` (22 cases, 2.6 s in release): R1 table, S1/S2 shipped engines, C1-C11
+one crafted violation per rule, K1-K4 classification, G0-G3 helpers with Sketch-quality generation and dyno runs.
