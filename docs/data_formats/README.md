@@ -18,6 +18,7 @@ not what the example files under `data/` happen to contain. The loaders are:
 | oxidizer | `core/src/io/nitrous_io.cpp` (`load_oxidizer_json`) | `ps/drivetrain/oxidizer_desc.h` (`OxidizerDesc`) |
 | engine_thermal / cooling_system | `core/src/io/engine_thermal_io.cpp` (`load_engine_thermal_json`, `load_cooling_system_json`; the vehicle keys `cooling_system`/`engine_thermal_start` and the engine key `default_thermal` via `load_vehicle_json`) | `ps/drivetrain/engine_thermal_desc.h` (`EngineThermalDesc`, `CoolingSystemDesc`) |
 | n2o_bottle / nitrous_kit / nitrous_controller | `core/src/io/nitrous_io.cpp` (`load_n2o_bottle_json`, `load_nitrous_kit_json`, `load_nitrous_controller_json`; vehicle components via `load_vehicle_json`) | `ps/drivetrain/nitrous_desc.h` (`N2oBottleDesc`, `NitrousKitDesc`, `NitrousControllerDesc`) |
+| ecu / cam (engine garage P2) | `core/src/io/engine_parts.cpp` (`assemble_engine`: merged into the engine JSON before `read_engine_fields`; reached from `load_vehicle_json`, `load_engine_json`, `load_engine_json_from_string`) | none of their own - the merged fields fill `TorqueMapEngineDesc` / `SimulatedEngineDesc` ([ecu.md](ecu.md), [cam.md](cam.md)) |
 
 The powertrain **graph itself** (which ports may connect, what gets
 rejected) is additionally validated by `core/src/drivetrain/powertrain.cpp`

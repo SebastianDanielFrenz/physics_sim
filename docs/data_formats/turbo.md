@@ -6,7 +6,7 @@ A turbocharged simulated engine takes its turbo from TWO files, both loaded by
 
 - the **configuration** (`physics_sim.turbo_configuration/1`,
   `data/turbo_configurations/*.json`) is what an engine file names with
-  `default_turbo_configuration` (see [engine.md](engine.md#kind-simulated-the-mvem-engine)):
+  `default_forced_induction` (named `default_turbo_configuration` before engine garage P2; see [engine.md](engine.md#kind-simulated-the-mvem-engine)):
   how many turbos, the boost target, the intercooler and the boost controller;
 - the **hardware** (`physics_sim.turbo/1`, `data/turbos/*.json`) is one turbo's
   rotor, flow limit, efficiencies and turbine size, named by the configuration's
@@ -442,5 +442,24 @@ for physics:
 `data/turbos/hyper_turbo_approx.json` ([AS] per-turbo approximation, not a
 measured map) and `data/turbo_configurations/hyper_twin_default.json` (count 2,
 1.8 bar gauge, intercooler 0.95, the `boost_control` above), reached through
-`data/engines/hyper_v8_one1_audio.json`'s `default_turbo_configuration` and used by
+`data/engines/hyper_v8_one1_audio.json`'s `default_forced_induction` and used by
 `data/vehicles/car_hyper.json`.
+
+## `extends` and the forced-induction slot (engine garage P2)
+
+Both files may name a parent with `"extends": "<path>"` (RFC 7396 merge patch, the child last; at most 8 parents,
+cycles rejected; relative paths per file). A parent's own relative paths are re-expressed for the child before the
+merge: a configuration's `"turbo"`, a hardware file's `"performance_map"`. A configuration that only changes the
+boost target is therefore
+
+```json
+{ "extends": "../turbo_configurations/hyper_twin_default.json", "target_boost_bar": 1.6 }
+```
+
+anywhere on disk. The derived turbo tables and their cache key come from the resolved parameters, so such a file
+equals the same configuration written out (`tests/unit/test_engine_parts.cpp`).
+
+An engine names its configuration with `default_forced_induction` (renamed from `default_turbo_configuration`, which is
+now rejected), a vehicle engine component with `forced_induction` (was `turbo_configuration`), the user layer with
+`slots["forced_induction"]`; `"none"` at any level removes the turbo. See
+[engine.md](engine.md#forced-induction-the-rename-and-none).
