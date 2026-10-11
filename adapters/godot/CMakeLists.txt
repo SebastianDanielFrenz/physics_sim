@@ -14,7 +14,6 @@
 set(PS_GODOT_ADAPTER_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/demo/bin")
 
 add_library(ps_godot_adapter SHARED
-  ${PROJECT_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
   src/register_types.cpp
   src/frame_convert_core.cpp
   src/input_map_core.cpp
@@ -62,6 +61,7 @@ target_link_libraries(ps_godot_adapter
   PRIVATE
     ps_core
     ps_audio
+    ps_engine_tools
     godot-cpp
     nlohmann_json::nlohmann_json
     ps_options

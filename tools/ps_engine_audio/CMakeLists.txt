@@ -20,7 +20,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(miniaudio)
 
 add_executable(ps_engine_audio
-  ${PROJECT_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
   main.cpp
   wav_writer.cpp
   script.cpp
@@ -40,6 +39,7 @@ target_link_libraries(ps_engine_audio
   PRIVATE
     ps_core
     ps_audio
+    ps_engine_tools
     ps_headless_env
     nlohmann_json::nlohmann_json
     ps_warnings

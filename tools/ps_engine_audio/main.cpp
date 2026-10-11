@@ -22,12 +22,12 @@
 #include "ps/engine_cycle/cycle_engine.h" // RadiatingEnd, for the printed source list
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
-#include "engine_bank_generator.h"
 #include "engine_sound_glue.h"
 #include "ps_audio/audio_bank_reference.h"
 #include "ps_audio/engine_input.h"
 #include "ps_audio/source.h"
 #include "ps_audio/voice.h"
+#include "ps_engine_tools/audio_bank_prep.h"
 
 #include "headless_env.h"
 #include "script.h"
@@ -332,12 +332,15 @@ int main(int argc, char** argv) {
         ps_audio::Voice voice(voice_cycle, sim->fuels[0].lhv_j_kg, sim->fuels[0].afr_stoich, voice_settings);
         print_source_list(voice);
         if (args.audio_bank) {
-            ps_tools::EngineAudioBankStats bank_stats;
-            auto bank = ps_tools::prepare_engine_audio_bank(args.engine_path, "", args.engine_cache_dir, {}, &bank_stats);
+            // The bank is baked from the SAME resolved engine this tool voices (installation override included).
+            ps_engine_tools::AudioBankPrepOptions bank_options;
+            bank_options.cache_dir = args.engine_cache_dir;
+            const auto prep = ps_engine_tools::prepare_engine_audio_bank(*sim, nullptr, bank_options);
+            const auto& bank = prep.bank;
             std::fprintf(stderr,
                          "ps_engine_audio: audio bank %s in %.2f s: %d rows x 2 loads x %d channels, %.2f MB\n",
-                         bank_stats.cache_hit ? "loaded from cache" : "generated", bank_stats.seconds, bank->rows(),
-                         bank->channels, static_cast<double>(bank_stats.bytes) / 1.0e6);
+                         prep.cache_hit ? "loaded from cache" : "generated", prep.seconds, bank->rows(),
+                         bank->channels, static_cast<double>(prep.bytes) / 1.0e6);
             for (int r = 0; r < bank->rows(); ++r) {
                 std::fprintf(stderr, "  row %d: %.3f rpm, %d frames/cycle x %d cycles (%.3f s), p %.0f / %.0f Pa, crank0 %.3f / %.3f deg",
                              r, bank->rpms[static_cast<std::size_t>(r)], bank->frames_per_cycle[static_cast<std::size_t>(r)],
@@ -345,10 +348,10 @@ int main(int argc, char** argv) {
                              bank->plane_frames(r * 2) / voice.sample_rate_hz(), bank->pressures[static_cast<std::size_t>(r * 2)],
                              bank->pressures[static_cast<std::size_t>(r * 2 + 1)], bank->crank0_deg[static_cast<std::size_t>(r * 2)],
                              bank->crank0_deg[static_cast<std::size_t>(r * 2 + 1)]);
-                if (!bank_stats.removed_energy_fraction.empty())
+                if (!prep.removed_energy_fraction.empty())
                     std::fprintf(stderr, ", band-limit removed %.3g / %.3g of the energy",
-                                 bank_stats.removed_energy_fraction[static_cast<std::size_t>(r * 2)],
-                                 bank_stats.removed_energy_fraction[static_cast<std::size_t>(r * 2 + 1)]);
+                                 prep.removed_energy_fraction[static_cast<std::size_t>(r * 2)],
+                                 prep.removed_energy_fraction[static_cast<std::size_t>(r * 2 + 1)]);
                 std::fprintf(stderr, "\n");
             }
             voice.set_audio_bank(bank);

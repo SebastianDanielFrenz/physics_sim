@@ -1,4 +1,4 @@
-#include "engine_bank_generator.h"
+#include "ps_engine_tools/audio_bank_prep.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include "ps_simulation.h"
@@ -900,10 +900,12 @@ void PsSimulation::enqueue_bank_request(BankRequest request) {
                     engine_audio_bank_status_="Disabled";
                     continue;
                 }
-                auto bank=ps_tools::prepare_engine_audio_bank(task.engine_path,task.turbo_path,task.cache_dir,[this,&task] {
+                ps_engine_tools::AudioBankPrepOptions bank_options;bank_options.cache_dir=task.cache_dir;
+                bank_options.cancel_poll=[this,&task] {
                     std::lock_guard<std::mutex> lock(turbo_update_mutex_);
                     return bank_worker_stop_ || std::any_of(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){return r.vehicle_name==task.vehicle_name;});
-                });
+                };
+                auto bank=ps_engine_tools::prepare_engine_audio_bank_from_files(task.engine_path,task.turbo_path,bank_options).bank;
                 std::lock_guard<std::mutex> lock(turbo_update_mutex_);
                 const bool superseded=std::any_of(bank_requests_.begin(),bank_requests_.end(),[&](const auto& r){ return r.vehicle_name==task.vehicle_name; });
                 if(!bank_worker_stop_ && !superseded) {

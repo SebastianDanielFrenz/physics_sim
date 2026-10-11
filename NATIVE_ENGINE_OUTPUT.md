@@ -43,3 +43,43 @@ The existing Godot AudioStreamGenerator fallback is still render-fed. This commi
 Focused native output, threaded Runner, and zero-allocation checks: 32 assertions in six cases passed. Coverage includes exclusive ownership, independent delivery across a 126 ms main-thread pause, starvation counters, bounded queue, and voice-owner teardown with a live pump. Changed Godot adapter translation units compile independently; no game source or running game DLL was replaced.
 
 Actual hypercar synthesis benchmark at 48 kHz measured 15.682, 11.183 and 13.703 us/frame at 950, 3000 and 7500 RPM; longest measured block 4.293 ms. This quiet-machine benchmark does not establish margin under 1,300+ NPC CPU contention. Windows hardware endpoint behavior still needs an integrated road retest. Long sanitizer checks remain queued for the overnight owner.
+
+## Baking the audio bank (`ps_engine_tools`, engine garage P6)
+
+The crank-synchronous PSAB0002 bank (`ps_audio/audio_bank.h`) is baked by a library, not a tool source file:
+`engine_tools/` builds the STATIC target `ps_engine_tools` (links `ps_core` and `ps_audio`; neither links it, so
+`ps_audio_standalone` stays free of `ps_core`). Header `ps_engine_tools/audio_bank_prep.h`:
+
+```cpp
+ps_engine_tools::AudioBankPrepOptions o;
+o.cache_dir = "out/engine_cache";            // bank lives in <cache_dir>/audio/<key>.psab; empty = no disk access
+o.workers = 0;                               // 0 = half the hardware threads; 1 = the calling thread renders; bytes do not depend on it
+o.cancel = &flag;                            // std::atomic<bool>*  (and/or o.cancel_poll, a thread-safe std::function<bool()>)
+o.on_progress = [](size_t done, size_t total) { /* ... */ };
+auto r = ps_engine_tools::prepare_engine_audio_bank(sim_desc, /*forced_induction*/ nullptr, o);
+// r.bank (AudioBankPtr), r.cache_hit, r.key, r.path, r.seconds, r.bytes, r.removed_energy_fraction
+```
+
+- Input is the RESOLVED `SimulatedEngineDesc` (complete maps, `cycle` block, as any loader returns it, a garage edit
+  included); `forced_induction` non-null replaces `desc.turbo_pair` for the bake, null uses the desc as it is.
+  `prepare_engine_audio_bank_from_files(engine_path, turbo_path, o)` loads with `ps::io::load_engine_json` first
+  (tools and the Godot adapter hold paths). Bake from Full maps; a Sketch/Preview engine gets its own key and a
+  worse bank.
+- Cost: 10 planes (5 rpm rows x 2 pedals), 5256 render ticks in total [M]; demo_i4_pipes 2.8 s on 10 workers /
+  20 s on one, hyper V8 4.5 s warm [M]. A cache hit costs the operating-point settles (0.1 s [M]) and no progress call.
+- Cancel (mirrors the engine-map generator, `MapGenerationControl`): the flag is read before every operating point,
+  before each 200-frame tick of every plane and once more right before the file is published; once set, the call
+  throws `ps::drivetrain::GenerationCancelled` after the running ticks finished (latency one tick) and writes no
+  cache file and no temp file. A flag never observed means a normal return (a request, not a guarantee).
+- Progress: `on_progress(done, total)` once per finished tick, `done` = 1, 2, ..., `total` (strictly rising by 1;
+  `total` = 5256 for the shipped grid), always on the calling thread - workers only bump an atomic and the calling
+  thread polls it (a burst arrives as consecutive calls). Not called for a cache hit. The callback may allocate and
+  be slow, must not throw.
+- Cache key = FNV-1a over the generator identity (`kEngineAudioBankSettings`), `engine_map_cache_key` of the cycle
+  block with its first fuel (free text blanked), and the 10 operating points (manifold/charge pressure, charge
+  temperature, lambda, throttle position, spark advance) the recording takes from the MVEM engine. It therefore
+  moves with an ECU, cam, map, throttle, turbo or fuel change exactly when that reaches the sound, whichever part
+  file or user edit it came from, and not with free text, positions or the worker count. `engine_audio_bank_key`
+  computes it without recording (about 0.1-0.3 s [M]) - "does this edit need a rebake?".
+- Tests: `tests/unit/test_audio_bank_prep.cpp` (`[audio][engine_tools]`); the bank bytes are pinned against the
+  pre-move generator (demo_i4_pipes and the turbo hyper V8).

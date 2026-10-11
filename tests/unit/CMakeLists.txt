@@ -117,7 +117,7 @@ add_executable(ps_unit_tests
   test_audio_time_map.cpp
   test_audio_voice.cpp
   test_audio_bank.cpp
-  ${CMAKE_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
+  test_audio_bank_prep.cpp
   test_native_audio_output.cpp
   test_voice_threads.cpp
   test_engine_sound_glue.cpp
@@ -128,6 +128,7 @@ target_link_libraries(ps_unit_tests
   PRIVATE
     ps_core
     ps_audio
+    ps_engine_tools
     ps_test_catch_main
     ps_warnings
     ps_options

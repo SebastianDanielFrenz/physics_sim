@@ -11,7 +11,6 @@
 // out/audio_bank_crank_sync_progress.md.
 #include "cycle_fixtures.h"
 #include "cycle_pipe_fixtures.h"
-#include "engine_bank_generator.h"
 
 #include "ps/jobs/debug_alloc.h"
 #include "ps/jobs/job_system.h"
@@ -496,39 +495,8 @@ TEST_CASE("Audio bank B4: PSAB0002 round trip, damage, PSAB0001 and cache key", 
     CHECK_FALSE(old->crank_synchronous);
     CHECK(old->plane_frames(3) == 4800);
 
-    // The key moves with the generator settings.
-    const std::string engine = std::string(PS_SOURCE_DIR) + "/data/engines/hyper_v8_one1_audio.json";
-    const std::uint64_t key = ps_tools::engine_audio_bank_key(engine, "");
-    const std::uint64_t key_v1 = ps_tools::engine_audio_bank_key(engine, "", "engine-bank-v1:48000:950,2500,4500,6500,8000:0.12,1:24000:2s");
-    std::printf("Audio bank B4: key %016llx (v1 settings %016llx)\n", static_cast<unsigned long long>(key),
-                static_cast<unsigned long long>(key_v1));
-    CHECK(key != key_v1);
-    CHECK(std::string(ps_tools::kEngineAudioBankSettings).rfind("engine-bank-v2", 0) == 0);
-
-    // An old file at the current key's cache path is a silent miss: the
-    // generator goes on to generate (here: cancelled before the engine load).
-    std::ostringstream hex;
-    hex << std::hex << key;
-    const auto cached = dir / "audio" / (hex.str() + ".psab");
-    write_v1_file(cached.string(), key);
-    bool polled = false;
-    try {
-        (void)ps_tools::prepare_engine_audio_bank(engine, "", dir.string(), [&] { return polled = true; });
-        FAIL("an old PSAB0001 cache file was accepted");
-    } catch (const std::runtime_error&) {
-        // catch by type only (TOOL-019); the poll proves the miss path ran
-    }
-    CHECK(polled);
-    // A valid PSAB0002 file with the key is a hit (no generation, no poll).
-    auto hit_bank = std::make_shared<ps_audio::AudioBank>(*bank);
-    hit_bank->key = key;
-    ps_audio::write_audio_bank(*hit_bank, cached.string());
-    polled = false;
-    ps_tools::EngineAudioBankStats stats;
-    const auto hit = ps_tools::prepare_engine_audio_bank(engine, "", dir.string(), [&] { return polled = true; }, &stats);
-    CHECK_FALSE(polled);
-    CHECK(stats.cache_hit);
-    CHECK(hit->samples == bank->samples);
+    // The cache key, the old-file-is-a-miss and the valid-file-is-a-hit checks of the generator moved to
+    // test_audio_bank_prep.cpp with the generator (engine garage P6).
     std::filesystem::remove_all(dir);
 }
 
