@@ -828,3 +828,47 @@ TEST_CASE("P7 diag: generation time with the knock limit on and off", "[.][diag]
         }
     }
 }
+
+// P7b garage-range re-run (engine_rules NOT changed): the calibrated knock limit's cost of compression ratio, as WOT dyno
+// torque and mean knock retard - NA A25A at CR 13 / 14.5 / 16 and the FI1 conversion (single_medium) at CR 10 / 11 / 12,
+// Preview maps, MBT tracking, margin 2 deg, tier3_e10_cert.
+TEST_CASE("P7b diag: garage CR ranges with the calibrated knock limit", "[.][diag][knock][drivetrain][cycle][turbo]") {
+    const std::string sm = (kSrc / "data" / "turbo_configurations" / "single_medium.json").generic_string();
+    const SimulatedEngineDesc stock = load_sim(json{{"extends", "toyota_a25a_fks_gen.json"}}, MapQuality::Preview, false);
+    const TurboPairDesc tp = io::load_turbo_configuration_json(sm);
+    std::vector<real> boost_kpa;
+    for (real p : boost_grid_p_im(*stock.cycle, tp.target_boost_pa / 1e5)) boost_kpa.push_back(p / 1000.0);
+    struct Case {
+        bool boosted;
+        real cr;
+    };
+    for (const Case& c : {Case{false, 13.0}, Case{false, 14.5}, Case{false, 16.0}, Case{true, 10.0}, Case{true, 11.0}, Case{true, 12.0}}) {
+        json j = knock_engine("toyota_a25a_fks_gen.json", 2.0, true);
+        j["cycle"]["compression_ratio"] = c.cr;
+        io::EngineSlotOverrides slots;
+        if (c.boosted) {
+            j["cycle"]["grid_p_im_kpa"] = boost_kpa;
+            slots["forced_induction"] = sm;
+        }
+        io::EngineMapOptions o;
+        o.quality = MapQuality::Preview;
+        o.pool = &pool();
+        const ComponentParams on = io::load_engine_json_from_string(j.dump(), engines_dir(), o, slots);
+        ComponentParams off = on;
+        std::get<SimulatedEngineDesc>(off).maps.has_theta_kl = false;
+        DynoSweepSpec spec;
+        spec.rpm = {2000.0, 3000.0, 4000.0, 5000.0};
+        const DynoResult r_on = run_dyno_sweep(on, nullptr, spec, &pool());
+        const DynoResult r_off = run_dyno_sweep(off, nullptr, spec, &pool());
+        real retard = 0.0, t_on = 0.0, t_off = 0.0;
+        std::printf("GARAGE %s CR %4.1f:", c.boosted ? "boosted" : "NA     ", c.cr);
+        for (std::size_t i = 0; i < r_on.points.size(); ++i) {
+            const real kr = std::isfinite(r_on.points[i].knock_retard_deg) ? r_on.points[i].knock_retard_deg : 0.0;
+            retard += kr / real(r_on.points.size());
+            t_on += r_on.points[i].torque_nm;
+            t_off += r_off.points[i].torque_nm;
+            std::printf(" %4.0f: %6.1f/%6.1f N*m r %5.2f |", r_on.points[i].rpm, r_on.points[i].torque_nm, r_off.points[i].torque_nm, kr);
+        }
+        std::printf(" mean retard %.2f deg, torque knock on/off %.3f\n", retard, t_on / t_off);
+    }
+}
