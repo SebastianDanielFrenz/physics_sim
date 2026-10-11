@@ -90,9 +90,9 @@ inline constexpr Threshold kKitLambdaExceeded{"kit_lambda_exceeded", 1.10, "[AS]
 // The lambda the Closed fuel-jet remedy sizes to (middle of the 0.78-0.85 tuning range above).
 inline constexpr Threshold kKitLambdaTarget{"kit_lambda_target", 0.82, "[AS] middle of the recalled 0.78-0.85 wet-shot range"};
 // A full drag-strip pass: a quarter mile takes roughly 6-12 s for a 600-1000 hp car (recalled, no local source); the bottle must
-// last at least one pass. Near below 1.5 passes.
+// last at least one pass; Near below 1.1 passes (= the Closed remedy reserve below).
 inline constexpr Threshold kBottleDurationTarget{"bottle_duration_target_s", 10.0, "[AS] one drag-strip pass, ~6-12 s recalled"};
-inline constexpr Threshold kBottleDurationNearFactor{"bottle_duration_near_factor", 1.5, "[AS] Near below 1.5 passes"};
+inline constexpr Threshold kBottleDurationNearFactor{"bottle_duration_near_factor", 1.1, "[AS] Near below target x 1.1: the same 10 % as the Closed remedy reserve, so a bottle sized to the remedy margin is just clear"};
 // Share of the content that never reaches the pickup tube (liquid left when the bottle 'empties'): the Closed bottle remedy
 // asks for this much more than the flow needs.
 inline constexpr Threshold kBottleReserve{"bottle_reserve_factor", 1.10, "[AS] ~10 % of the liquid stays below the pickup"};
