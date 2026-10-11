@@ -65,28 +65,28 @@ namespace {
         *pointer = p;
         return true;
     };
-    if (a.compressible_exhaust != b.compressible_exhaust) return hit("turbo_configuration", "/compressible_exhaust");
+    if (a.compressible_exhaust != b.compressible_exhaust) return hit("forced_induction", "/compressible_exhaust");
     if (a.wastegate_area_m2.has_value() != b.wastegate_area_m2.has_value() ||
         (a.wastegate_area_m2 && *a.wastegate_area_m2 != *b.wastegate_area_m2)) {
         return hit("turbo", "/wastegate_area_m2");
     }
     if (a.intercooler_dp_pa_at_max_flow != b.intercooler_dp_pa_at_max_flow) {
-        return hit("turbo_configuration", "/intercooler_pressure_drop_bar_at_max_flow");
+        return hit("forced_induction", "/intercooler_pressure_drop_bar_at_max_flow");
     }
-    if (a.blow_off_valve.has_value() != b.blow_off_valve.has_value()) return hit("turbo_configuration", "/blow_off_valve");
+    if (a.blow_off_valve.has_value() != b.blow_off_valve.has_value()) return hit("forced_induction", "/blow_off_valve");
     if (a.blow_off_valve) {
         const auto& x = *a.blow_off_valve;
         const auto& y = *b.blow_off_valve;
         if (x.vent != y.vent || x.crack_dp_pa != y.crack_dp_pa || x.full_open_dp_pa != y.full_open_dp_pa ||
             x.effective_area_m2 != y.effective_area_m2 || x.tau_s != y.tau_s) {
-            return hit("turbo_configuration", "/blow_off_valve");
+            return hit("forced_induction", "/blow_off_valve");
         }
     }
     if (a.surge_line.has_value() != b.surge_line.has_value() ||
         (a.surge_line && !same(a.surge_line->flow_fraction_vs_pr, b.surge_line->flow_fraction_vs_pr))) {
         return hit("turbo", "/surge_line");
     }
-    if (a.anti_lag.has_value() != b.anti_lag.has_value()) return hit("turbo_configuration", "/anti_lag");
+    if (a.anti_lag.has_value() != b.anti_lag.has_value()) return hit("forced_induction", "/anti_lag");
     if (a.anti_lag) {
         const auto& x = *a.anti_lag;
         const auto& y = *b.anti_lag;
@@ -96,7 +96,7 @@ namespace {
             (x.spark_advance_deg && *x.spark_advance_deg != *y.spark_advance_deg) ||
             x.cylinder_cut_fraction != y.cylinder_cut_fraction || x.manifold_burn_fraction != y.manifold_burn_fraction ||
             x.lambda != y.lambda || x.boost_target_fraction != y.boost_target_fraction) {
-            return hit("turbo_configuration", "/anti_lag");
+            return hit("forced_induction", "/anti_lag");
         }
     }
     if (a.in_cylinder_wall_heat_fraction != b.in_cylinder_wall_heat_fraction ||
@@ -104,7 +104,7 @@ namespace {
         a.exhaust_wall_gas_conductance_w_k != b.exhaust_wall_gas_conductance_w_k ||
         a.exhaust_wall_ambient_conductance_w_k != b.exhaust_wall_ambient_conductance_w_k ||
         a.exhaust_wall_initial_k != b.exhaust_wall_initial_k) {
-        return hit("turbo_configuration", "/exhaust_thermal");
+        return hit("forced_induction", "/exhaust_thermal");
     }
     return false;
 }
@@ -176,9 +176,9 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
 
     // --- TurboTables / turbo Runtime ---
     if (a.turbo_pair.has_value() != b.turbo_pair.has_value()) {
-        push(out, "turbo_configuration", "", EngineChange::TurboTables);
+        push(out, "forced_induction", "", EngineChange::TurboTables);
     } else if (a.turbo_pair) {
-        if (turbo_tables_differ(*a.turbo_pair, *b.turbo_pair)) push(out, "turbo_configuration", "", EngineChange::TurboTables);
+        if (turbo_tables_differ(*a.turbo_pair, *b.turbo_pair)) push(out, "forced_induction", "", EngineChange::TurboTables);
         const char* pointer = "";
         const char* slot = "";
         if (turbo_runtime_differs(*a.turbo_pair, *b.turbo_pair, &pointer, &slot)) push(out, slot, pointer, EngineChange::Runtime);

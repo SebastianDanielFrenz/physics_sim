@@ -981,7 +981,7 @@ emission order; both are bit-identical for any worker count, like `points`. Noth
 A `LimitFinding` is `{kind, severity, rpm, value, limit, unit, part, remedy}`. `severity`: `Near` (within a margin of
 the limit), `Limiting` (this part caps the output here), `Exceeded` (the target is missed or a guard rail is hit). `unit` is
 the `LimitUnit` enum of `value`/`limit` (SI; rotor and engine speed in rpm like everywhere in this repo; boost in Pa
-GAUGE). `part` is `{slot, file, field}`: `slot` one of `engine`, `turbo`, `turbo_configuration`, `clutch`; `field` an
+GAUGE). `part` is `{slot, file, field}`: `slot` one of `engine`, `turbo`, `forced_induction`, `clutch`; `field` an
 RFC 6901 pointer into the part file (empty = the part as a whole); `file` is filled from `DynoSweepSpec::part_files`
 (a descriptor does not remember its file; empty when the caller gave none); P3b-2 adds the slots `nitrous_kit` and `n2o_bottle`.
 `remedy` (`{part, current, required_min, required_margin, unit, cost, solved}`, ratios derived) is present where a number exists:

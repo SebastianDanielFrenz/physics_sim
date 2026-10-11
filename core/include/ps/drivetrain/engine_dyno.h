@@ -77,7 +77,7 @@ struct DynoSweepSpec {
     struct PartFiles {
         std::string engine;               // the engine file (slot "engine")
         std::string turbo;                // the turbo hardware file (slot "turbo")
-        std::string turbo_configuration;  // the turbo configuration file (slot "turbo_configuration")
+        std::string turbo_configuration;  // the turbo configuration file (slot "forced_induction")
         std::string nitrous_kit;          // P3b-2: the nitrous kit file (slot "nitrous_kit")
         std::string n2o_bottle;           // P3b-2: the N2O bottle file (slot "n2o_bottle")
     };

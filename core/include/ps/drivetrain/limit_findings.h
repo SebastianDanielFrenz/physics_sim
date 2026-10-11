@@ -69,7 +69,7 @@ enum class LimitUnit : std::uint8_t {
     Second = 10,       // P3b-2: a duration
 };
 
-// The part to change. slot: the part's role in physics_sim's vocabulary ("engine", "turbo", "turbo_configuration",
+// The part to change. slot: the part's role in physics_sim's vocabulary ("engine", "turbo", "forced_induction",
 // "clutch", "gearbox"); the game maps its own slot names. file: the part file the descriptor came from. A descriptor does
 // not remember its file, so run_dyno_sweep fills it from DynoSweepSpec::part_files (empty when the caller gave none) and
 // check_driveline_limits takes it from its `clutch_file` argument. field: an RFC 6901 JSON pointer into that file

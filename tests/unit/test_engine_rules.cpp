@@ -113,7 +113,7 @@ void check_well_formed(const std::vector<BuildIssue>& v) {
         CHECK_FALSE(i.message.empty());
         CHECK_FALSE(i.field_pointer.empty());
         CHECK(i.field_pointer[0] == '/');
-        CHECK((i.slot == "engine" || i.slot == "turbo_configuration"));
+        CHECK((i.slot == "engine" || i.slot == "forced_induction"));
     }
 }
 

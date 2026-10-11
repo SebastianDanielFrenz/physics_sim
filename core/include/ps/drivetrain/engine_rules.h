@@ -45,7 +45,7 @@ enum class BuildRule : std::uint16_t {
 struct BuildIssue {
     BuildRule rule = BuildRule::ValveLayout;
     LimitSeverity severity = LimitSeverity::Near;
-    // Which part file the field lives in, in physics_sim's slot vocabulary ("engine" or "turbo_configuration").
+    // Which part file the field lives in, in physics_sim's slot vocabulary ("engine" or "forced_induction").
     std::string slot;
     // RFC 6901 JSON pointer into THAT file ("/cycle/intake_valve_d_mm", "/limiter/rpm", "/target_boost_bar").
     std::string field_pointer;
@@ -92,7 +92,7 @@ enum class EngineChange : std::uint8_t { None = 0, Runtime = 1, TurboTables = 2,
 
 // One changed field group: `pointer` is an RFC 6901 JSON pointer into the part file named by `slot`.
 struct EngineFieldChange {
-    std::string slot;    // "engine" or "turbo_configuration"
+    std::string slot;    // "engine" or "forced_induction"
     std::string pointer; // e.g. "/limiter/rpm"; "/cycle" for a change that moves the map key
     EngineChange change = EngineChange::Runtime;
 };
