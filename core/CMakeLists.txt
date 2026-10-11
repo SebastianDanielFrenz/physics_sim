@@ -231,6 +231,8 @@ add_library(ps_core STATIC
   src/drivetrain/engine_dyno.cpp
   src/drivetrain/limit_findings.cpp
   src/drivetrain/limit_remedies.cpp
+  src/drivetrain/engine_rules.cpp
+  src/drivetrain/engine_change.cpp
   src/drivetrain/nitrous_flow.cpp
   src/drivetrain/nitrous_system.cpp
   src/drivetrain/engine_thermal.cpp
