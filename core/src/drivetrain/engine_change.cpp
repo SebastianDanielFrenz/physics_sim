@@ -153,11 +153,12 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
     // --- Respawn: nothing can be rebuilt from the old engine ---
     if (a.architecture != b.architecture) push(out, "engine", "/architecture", EngineChange::Respawn);
     if (a.ignition != b.ignition) push(out, "engine", "/ignition", EngineChange::Respawn);
-    // The cylinder count: covered by the map key where both engines have a cycle block that carries it (then Maps, below);
-    // otherwise a different engine.
+    // The cylinder count: design 6.3 "a different engine: swap". The map key does cover it (cycle.cylinders), but a cylinder
+    // count is also the firing order, the inertia and the number of audio sources - nothing carries over, so Respawn wins.
     const bool both_cycle = a.cycle.has_value() && b.cycle.has_value();
-    const bool cycle_cylinders_moved = both_cycle && a.cycle->cylinders != b.cycle->cylinders;
-    if (a.piston.cylinders != b.piston.cylinders && !cycle_cylinders_moved) push(out, "engine", "/cylinders", EngineChange::Respawn);
+    if (a.piston.cylinders != b.piston.cylinders || (both_cycle && a.cycle->cylinders != b.cycle->cylinders)) {
+        push(out, "engine", "/cylinders", EngineChange::Respawn);
+    }
     if (a.rotary.rotors != b.rotary.rotors) push(out, "engine", "/cylinders", EngineChange::Respawn);
 
     // --- Maps: the generator's inputs, by the cache key itself ---
@@ -184,8 +185,10 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
     }
 
     // --- Runtime: everything else the engine constructor reads ---
-    rt(a.piston.bore_m != b.piston.bore_m, "/bore_mm");
-    rt(a.piston.stroke_m != b.piston.stroke_m, "/stroke_mm");
+    // Bore and stroke: the loader copies them into the cycle block (cycle.bore_m = piston.bore_m), so on a cycle-class engine they
+    // are generator inputs even when only the piston fields of a descriptor were edited (design 6.3: "M for every row").
+    if (a.piston.bore_m != b.piston.bore_m) push(out, "engine", "/bore_mm", both_cycle ? EngineChange::Maps : EngineChange::Runtime);
+    if (a.piston.stroke_m != b.piston.stroke_m) push(out, "engine", "/stroke_mm", both_cycle ? EngineChange::Maps : EngineChange::Runtime);
     rt(a.rotary.rotor_radius_m != b.rotary.rotor_radius_m || a.rotary.eccentricity_m != b.rotary.eccentricity_m ||
            a.rotary.rotor_width_m != b.rotary.rotor_width_m,
        "/rotary");

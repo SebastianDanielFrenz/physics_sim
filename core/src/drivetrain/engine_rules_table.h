@@ -90,6 +90,7 @@ inline constexpr Threshold kBoostGridMargin{"boost_grid_margin_bar", 0.2, "[AS] 
 inline constexpr Threshold kBoostGridAmbientBar{"boost_grid_ambient_bar", 1.0, "[AS] design section 7.3: '1 bar absolute' (the ISA 1.01325 is within the margin)"};
 inline constexpr Threshold kBoostGridStepPa{"boost_grid_step_pa", 60000.0, "[M] the hyper's boosted rows (100 -> 160 -> 220 kPa) are spaced 60 kPa; the last step is 80 kPa"};
 inline constexpr Threshold kBoostGridMinLastStepPa{"boost_grid_min_last_step_pa", 30000.0, "[AS] half a row pitch: a shorter last step is merged into the top node"};
+inline constexpr Threshold kNaGridTopFraction{"na_grid_top_fraction_of_ambient", 0.95, "[AS] the generator throws for a node the engine cannot reach with the throttle fully open; the NA hyper's plenum peaks at 97873 Pa (0.966 of ISA ambient) at 8000 rpm [M], so ambient_grid_p_im caps the top node at 0.95 of ambient"};
 inline constexpr Threshold kRelTolerance{"relative_tolerance", 1e-9, "[AS] comparison slack so a value exactly on a bound (the A25A's rod ratio 3.0000) passes"};
 
 inline constexpr Threshold kAllEngineRuleThresholds[] = {
@@ -97,7 +98,7 @@ inline constexpr Threshold kAllEngineRuleThresholds[] = {
     kIntake3Max,    kExhaustRatioMin, kExhaustRatioMax, kRowChordFraction, kPackDensity2, kPackDensity3,
     kPackDensity4,  kPackDensity5, kPackShare,     kRodRatioMin,    kRodRatioMax,  kCrNaMin,
     kCrNaMax,       kCrFiMin,      kCrFiMax,       kGridOvershootLimiting, kGridOvershootExceeded, kBoostGridMargin,
-    kBoostGridAmbientBar, kBoostGridStepPa, kBoostGridMinLastStepPa, kRelTolerance,
+    kBoostGridAmbientBar, kBoostGridStepPa, kBoostGridMinLastStepPa, kNaGridTopFraction, kRelTolerance,
 };
 inline constexpr std::size_t kAllEngineRuleThresholdCount = sizeof(kAllEngineRuleThresholds) / sizeof(kAllEngineRuleThresholds[0]);
 

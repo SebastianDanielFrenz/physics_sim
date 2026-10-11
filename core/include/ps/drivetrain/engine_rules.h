@@ -85,8 +85,9 @@ struct BuildIssue {
 //   TurboTables - the turbo's derived tables are keyed differently (a few ms, cached); the engine maps are untouched.
 //   Maps        - engine_map_cache_key moves: the .psmaps must be regenerated (seconds to minutes; the only class that starts
 //                 background generation).
-//   Respawn     - a different engine: kind, architecture, ignition type or cylinder count that no map key covers. Nothing can
-//                 be rebuilt from the old one.
+//   Respawn     - a different engine: kind (torque map <-> simulated), architecture, ignition type or cylinder count (design 6.3:
+//                 "a different engine: swap"; the map key covers the count too, but firing order, inertia and audio sources go
+//                 with it). Nothing can be rebuilt from the old one.
 enum class EngineChange : std::uint8_t { None = 0, Runtime = 1, TurboTables = 2, Maps = 3, Respawn = 4 };
 
 // One changed field group: `pointer` is an RFC 6901 JSON pointer into the part file named by `slot`.
@@ -105,8 +106,7 @@ struct EngineFieldChange {
 //   Maps        := engine_map_cache_key(effective cycle, fuels[0], Full) differs (or a cycle block appears/disappears), where
 //                  the effective cycle has intake->compressor_supply = turbo_pair.has_value() exactly as the loader sets it;
 //   TurboTables := the turbo's table key differs (turbo_table_key below), or a turbo appears/disappears;
-//   Respawn     := the component alternative, architecture or ignition differs, or the cylinder count differs where no cycle
-//                  block carries it in the map key;
+//   Respawn     := the engine kind, architecture, ignition or cylinder count differs;
 //   Runtime     := any other difference; None := no difference.
 // Both arguments must be an engine (TorqueMapEngineDesc or SimulatedEngineDesc); another alternative throws std::invalid_argument.
 [[nodiscard]] EngineChange classify_engine_change(const ComponentParams& before, const ComponentParams& after);
@@ -131,8 +131,11 @@ struct EngineFieldChange {
 // a 1.8 bar target on its own stock part. Throws std::invalid_argument for target <= 0 or fewer than two nodes at/below ambient.
 [[nodiscard]] std::vector<real> boost_grid_p_im(const CycleModelDesc& desc, real target_boost_bar);
 
-// The axis without nodes above ambient (a node above ambient fails the load without a turbo). The highest node at or below
-// ambient is kept, so wide-open-throttle still has a row. Throws std::invalid_argument if fewer than two nodes remain.
+// The axis for an engine that loses its compressor: nodes up to 0.95 x ISA ambient (96.26 kPa) are kept; whatever lay between
+// that cap and the old top (the boosted engine's 100 kPa WOT row, rows above ambient) collapses into one node at the cap. A
+// node above ambient fails the load without a turbo, and a node the engine cannot reach with the throttle fully open makes the
+// generator throw - the NA hyper's plenum peaks at 97.9 kPa at 8000 rpm, so its 100 kPa row is already unreachable. Throws
+// std::invalid_argument if fewer than two nodes remain.
 [[nodiscard]] std::vector<real> ambient_grid_p_im(const CycleModelDesc& desc);
 
 // The rpm axis extended so its last node reaches limiter_rpm: nodes continue at the last interval until within half an interval

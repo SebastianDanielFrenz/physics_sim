@@ -153,7 +153,7 @@ void check_cycle(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c)
                     s.add(BuildRule::ValvePackingRow, LimitSeverity::Exceeded, "engine", pointer,
                           std::string(name) + " valves " + mm(d) + " do not fit a " + mm(bore) + " bore with " +
                               std::to_string(ni + ne) + " valves: max " + mm(cap / real(n)),
-                          label_of(tab::kRowChordFraction), d, cap / real(n), LimitUnit::Millimetre);
+                          label_of(tab::kRowChordFraction), d * real(1000.0), cap / real(n) * real(1000.0), LimitUnit::Millimetre);
                 }
             };
             row(ni, di, "intake", "/cycle/intake_valve_d_mm");
@@ -278,14 +278,18 @@ std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e) {
 std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& e) {
     std::vector<BuildIssue> out;
     Sink s{out};
+    // A governed engine (the tractor's all-speed governor) never runs above its high idle: the fuel is cut there, and the
+    // overspeed limiter above it is a backstop, not an operating speed.
+    const real top_rpm = e.has_governor ? std::min(e.limiter.rpm, e.governor.high_idle_rpm) : e.limiter.rpm;
     const auto curve = [&](const vehicle::Curve1D& c, const char* pointer, const char* name) {
         if (c.x.empty()) return;
         LimitSeverity sev{};
-        if (overshoot_severity(e.limiter.rpm, c.x.back(), sev)) {
+        if (overshoot_severity(top_rpm, c.x.back(), sev)) {
             s.add(BuildRule::LimiterAboveCurve, sev, "engine", pointer,
-                  "the " + num(e.limiter.rpm, 5) + " rpm limiter is above the last rpm " + num(c.x.back(), 5) + " of the " + name +
+                  "the " + num(top_rpm, 5) + " rpm " + (e.has_governor && top_rpm < e.limiter.rpm ? "governor high idle" : "limiter") +
+                      " is above the last rpm " + num(c.x.back(), 5) + " of the " + name +
                       " curve (the curve is held flat beyond it); extend the curve to the limiter",
-                  label_of(tab::kGridOvershootLimiting), e.limiter.rpm, c.x.back(), LimitUnit::RevPerMinute);
+                  label_of(tab::kGridOvershootLimiting), top_rpm, c.x.back(), LimitUnit::RevPerMinute);
         }
     };
     curve(e.wot_torque_nm_vs_rpm, "/wot_torque_nm_vs_rpm", "full-load torque");
@@ -322,7 +326,27 @@ namespace {
 }
 } // namespace
 
-std::vector<real> ambient_grid_p_im(const CycleModelDesc& desc) { return nodes_at_or_below_ambient(desc); }
+std::vector<real> ambient_grid_p_im(const CycleModelDesc& desc) {
+    // Nodes up to the NA cap; if the old axis had nodes between the cap and ambient (a boosted engine's WOT row at 100 kPa, or a
+    // node above ambient), they collapse into one node at the cap - the generator throws for a node the engine cannot reach with
+    // the throttle fully open, which for a big-valve V8 is already below 98 kPa at the top of its rpm range.
+    const real cap = tab::kNaGridTopFraction.value * kIsaAirPressurePa;
+    std::vector<real> out;
+    bool capped = false;
+    for (real p : desc.grid_p_im) {
+        if (p <= cap) {
+            out.push_back(p);
+        } else {
+            capped = true;
+        }
+    }
+    if (capped && (out.empty() || out.back() < cap - real(1e-6))) out.push_back(cap);
+    if (out.size() < 2) {
+        throw std::invalid_argument("ambient_grid_p_im: the manifold-pressure axis needs at least two nodes at or below " +
+                                    num(cap / real(1e3), 6) + " kPa, found " + std::to_string(out.size()));
+    }
+    return out;
+}
 
 std::vector<real> boost_grid_p_im(const CycleModelDesc& desc, real target_boost_bar) {
     if (!(target_boost_bar > real(0.0)) || !std::isfinite(target_boost_bar)) {
