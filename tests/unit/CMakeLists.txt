@@ -117,6 +117,7 @@ add_executable(ps_unit_tests
   test_audio_time_map.cpp
   test_audio_voice.cpp
   test_audio_bank.cpp
+  test_audio_bank_prep.cpp
   ${CMAKE_SOURCE_DIR}/tools/common/engine_bank_generator.cpp
   test_native_audio_output.cpp
   test_voice_threads.cpp
