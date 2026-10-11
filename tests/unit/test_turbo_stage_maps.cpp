@@ -11,13 +11,29 @@
 #include "drivetrain/engine_simulated.h"
 #include "ps/jobs/job_system.h"
 #include <cstdio>
+#include <chrono>
+#include <cstdint>
+#include <string>
 
 namespace {
 using json=nlohmann::json;
 std::filesystem::path fixture() { return std::filesystem::path(PS_SOURCE_DIR)/"tests/fixtures/turbo_stage_small.json"; }
+// ctest runs every TEST_CASE as its own process, in parallel: a fixed directory shared by all of
+// them let one process truncate hardware.json/config.json while another was loading them (the
+// "Generated-stage hold" case failed only in the parallel run). One directory per process.
+struct StageMapDir {
+    std::filesystem::path path;
+    StageMapDir() {
+        const auto stamp=std::chrono::steady_clock::now().time_since_epoch().count();
+        path=std::filesystem::temp_directory_path()/("ps_stage_map_test_"+std::to_string(stamp)+"_"+
+            std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+        std::filesystem::create_directories(path);
+    }
+    ~StageMapDir() { std::error_code ec; std::filesystem::remove_all(path,ec); }
+};
 ps::drivetrain::TurboPairDesc load_stage(int count=1, const json* replacement=nullptr) {
-    const auto dir=std::filesystem::temp_directory_path()/"ps_stage_map_test";
-    std::filesystem::create_directories(dir);
+    static const StageMapDir stage_dir;
+    const auto& dir=stage_dir.path;
     json hw;
     std::ifstream(std::filesystem::path(PS_SOURCE_DIR)/"data/turbos/hyper_turbo_approx.json")>>hw;
     hw["performance_map"]=fixture().string();
