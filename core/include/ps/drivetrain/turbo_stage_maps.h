@@ -1,5 +1,6 @@
 #pragma once
 #include "ps/drivetrain/table2d.h"
+#include "ps/math/transcendental.h"
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -66,12 +67,12 @@ struct TurboStageMaps {
     // coefficient. This is also the independent wastegate bypass path.
     static real nozzle_flux(real p, real downstream, real k, real gamma, real r) {
         if(p<=downstream) return 0;
-        const real q=std::max(downstream/p,std::pow(real(2)/(gamma+real(1)),gamma/(gamma-real(1))));
+        const real q=std::max(downstream/p,ps::math::pow(real(2)/(gamma+real(1)),gamma/(gamma-real(1))));
         return p/std::sqrt(r*k)*std::sqrt(real(2)*gamma/(gamma-real(1)) *
-            (std::pow(q,real(2)/gamma)-std::pow(q,(gamma+real(1))/gamma)));
+            (ps::math::pow(q,real(2)/gamma)-ps::math::pow(q,(gamma+real(1))/gamma)));
     }
     real turbine_coordinate(real er) const {
-        return std::sqrt(std::max(real(0),real(1)-std::pow(er,-(exhaust_gamma-real(1))/exhaust_gamma)));
+        return std::sqrt(std::max(real(0),real(1)-ps::math::pow(er,-(exhaust_gamma-real(1))/exhaust_gamma)));
     }
     // No RPM/pressure clipping. Outside generated coverage the caller must
     // use an explicitly diagnosed fallback or request an offline extension.
@@ -85,7 +86,7 @@ struct TurboStageMaps {
             return units*turbine_flow_kg_s.value(nc,turbine_coordinate(er))*p/reference_pa*std::sqrt(turbine_reference_k/k) +
                 bypass_area*nozzle_flux(p,downstream,k,exhaust_gamma,exhaust_r);
         };
-        real lo=1, hi=std::pow(real(1)-turbine_flow_kg_s.y.back()*turbine_flow_kg_s.y.back(),-exhaust_gamma/(exhaust_gamma-real(1)));
+        real lo=1, hi=ps::math::pow(real(1)-turbine_flow_kg_s.y.back()*turbine_flow_kg_s.y.back(),-exhaust_gamma/(exhaust_gamma-real(1)));
         if(total_flow<flow_at(lo) || total_flow>flow_at(hi)) return false;
         for(int i=0;i<28;++i) { const real mid=(lo+hi)/2; if(flow_at(mid)<total_flow) lo=mid; else hi=mid; }
         const real er=(lo+hi)/2;

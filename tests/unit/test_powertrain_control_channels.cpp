@@ -112,6 +112,10 @@ const std::set<std::string> kExpectedBaseChannels = {
     "steer",   "throttle",  "brake",           "handbrake",        "clutch",
     "ignition", "starter",  "shift_up_count",  "shift_down_count", "gear_request",
     "assist.auto_clutch", "assist.auto_blip", "assist.auto_shift",
+    // 4a46c08 (traction control): world.cpp registers assist.traction_control for EVERY vehicle,
+    // exactly like the three assists above - always created, its DEFAULT follows
+    // VehicleDesc::traction_control.enabled (0 for every shipped vehicle).
+    "assist.traction_control",
 };
 
 // tractor.json additionally declares a "transfer_case" component (PHYS-033
