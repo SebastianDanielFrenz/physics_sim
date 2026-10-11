@@ -12,8 +12,11 @@
 
 #include <atomic>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
+#include <map>
 #include <string>
+#include <string_view>
 
 namespace ps::io {
 
@@ -104,6 +107,35 @@ struct EngineMapOptions {
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapOptions& options);
 
+// Engine garage P2 (design A6, docs/data_formats/vehicle.md "User layer"): the
+// player's edits, applied last (the user wins). Keyed by powertrain component
+// id. `ref` (empty = keep) replaces the component's part file; `slots` set the
+// component's slots by name - engine: "ecu", "cam", "forced_induction" (a path
+// or "none"), "installation", "thermal"; nitrous_kit: "controller". `ref` is
+// accepted for engine, gearbox, n2o_bottle and nitrous_kit components. Paths
+// resolve relative to the VEHICLE file's directory unless absolute - the same
+// rule as the vehicle-level slot they replace. An unknown component id, an
+// unknown slot name or a component type without a part file is rejected.
+struct PartOverride {
+    std::string ref;
+    std::map<std::string, std::string> slots;
+};
+
+struct VehicleLoadOptions {
+    EngineMapOptions maps;
+    std::map<std::string, PartOverride> part_overrides;
+};
+
+// The overloads above delegate here with no part_overrides (bit-identical).
+vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoadOptions& options);
+
+// Engine garage P2: slots for a standalone engine load (slot name -> path or
+// "none"), applied over the engine file's own default_* slots. Paths resolve
+// relative to the ENGINE's directory (load_engine_json: the file's own;
+// load_engine_json_from_string: base_dir) unless absolute. "thermal" is
+// accepted but only a vehicle reads it.
+using EngineSlotOverrides = std::map<std::string, std::string>;
+
 // ps_audio A10 (out/audio_plan.md section 6, EngineRig): loads a standalone
 // engine JSON file (format "physics_sim.engine/1", the same schema as a
 // vehicle's powertrain.components[] "ref"'d engine file) with no vehicle
@@ -126,6 +158,15 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
 drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path, const std::string& cache_dir = {});
 
 drivetrain::ComponentParams load_engine_json(const std::string& path, const EngineMapOptions& options = EngineMapOptions{},
-                                              const std::string* installation_override_path = nullptr);
+                                              const std::string* installation_override_path = nullptr,
+                                              const EngineSlotOverrides& slots = EngineSlotOverrides{});
+
+// Engine garage P2 (design A7): loads an engine from JSON text in memory, as
+// if the identical bytes were a file in `base_dir` (its relative paths -
+// "extends", fuels, slots - resolve against base_dir). Same desc, cache keys
+// and state hash as that file load; messages name "<base_dir>/<engine string>".
+drivetrain::ComponentParams load_engine_json_from_string(std::string_view json, const std::filesystem::path& base_dir,
+                                                          const EngineMapOptions& options = EngineMapOptions{},
+                                                          const EngineSlotOverrides& slots = EngineSlotOverrides{});
 
 } // namespace ps::io

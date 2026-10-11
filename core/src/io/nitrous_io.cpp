@@ -1,6 +1,7 @@
 #include "ps/io/nitrous_io.h"
 
 #include "nitrous_components.h"
+#include "engine_parts.h"
 #include "ps/drivetrain/isa_air.h"
 #include <filesystem>
 
@@ -541,19 +542,19 @@ drivetrain::OxidizerDesc load_oxidizer_json(const std::string& path) {
 
 
 drivetrain::N2oBottleDesc load_n2o_bottle_json(const std::string& path) {
-    const json j = read_json_file(path);
+    const json j = parts::load_part(path, parts::rebase_n2o_bottle_paths); // engine garage P2: "extends"
     require_format(j, "n2o_bottle", 1, path);
     return read_bottle_object(j, path);
 }
 
 drivetrain::NitrousControllerDesc load_nitrous_controller_json(const std::string& path) {
-    const json j = read_json_file(path);
+    const json j = parts::load_part(path); // engine garage P2: "extends"
     require_format(j, "nitrous_controller", 1, path);
     return read_controller_object(j, path);
 }
 
 drivetrain::NitrousKitDesc load_nitrous_kit_json(const std::string& path, const std::string& controller_override_path) {
-    const json j = read_json_file(path);
+    const json j = parts::load_part(path, parts::rebase_nitrous_kit_paths); // engine garage P2: "extends"
     require_format(j, "nitrous_kit", 1, path);
     return read_kit_object(j, path, controller_override_path);
 }

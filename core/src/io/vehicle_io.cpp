@@ -5,6 +5,7 @@
 #include "ps/io/vehicle_io.h"
 #include "aero_io.h"
 #include "nitrous_components.h"
+#include "engine_parts.h"
 
 #include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
@@ -13,6 +14,7 @@
 #include "ps/engine_cycle/firing_order.h"
 #include "ps/io/engine_thermal_io.h"
 #include "ps/io/fuel_io.h"
+#include "ps/drivetrain/isa_air.h"
 
 #include <nlohmann/json.hpp>
 
@@ -1781,7 +1783,7 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                                                           std::vector<std::string>* resolved_fuel_paths_out = nullptr,
                                                           const EngineMapOptions* map_options = nullptr,
                                                           const std::string* installation_override_path = nullptr,
-                                                          const std::string* turbo_configuration_override_path = nullptr) {
+                                                          const parts::AssembledEngine* assembled = nullptr) {
     using namespace ps::drivetrain;
     constexpr real kMm = real(1e-3);
     constexpr real kKpa = real(1000.0);
@@ -1805,17 +1807,13 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
     }
 
     SimulatedEngineDesc e;
-    if (j.contains("default_turbo_configuration")) {
-        // A vehicle component's own "turbo_configuration" (resolved relative to the VEHICLE file) replaces the engine's
-        // default here, before the turbo tables are built, so the derived cache key follows the file actually used.
-        const auto cfg_path = turbo_configuration_override_path != nullptr
-                                  ? *turbo_configuration_override_path
-                                  : resolve_path(engine_dir, j.at("default_turbo_configuration").get<std::string>());
+    // Engine garage P2: the forced-induction slot (engine default_forced_induction, the vehicle component's or the
+    // user layer's forced_induction) was resolved by parts::assemble_engine; the winning configuration is loaded
+    // here, before the turbo tables are built, so the derived cache key follows the file actually used.
+    if (assembled != nullptr && assembled->has_forced_induction) {
         // A validate-only load (generate = false) writes nothing, the derived turbo table cache included.
-        e.turbo_pair=load_turbo_configuration_json(cfg_path,(map_options && map_options->generate) ? map_options->cache_dir : std::string{});
-    } else if (turbo_configuration_override_path != nullptr) {
-        throw std::runtime_error(ctx + ": 'turbo_configuration' is only allowed on a simulated engine whose file has "
-                                  "'default_turbo_configuration'");
+        e.turbo_pair = load_turbo_configuration_json(assembled->forced_induction_path,
+                                                     (map_options && map_options->generate) ? map_options->cache_dir : std::string{});
     }
 
     // --- architecture + geometry -------------------------------------------
@@ -2193,6 +2191,22 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         // block's own table was rejected above) - the runtime then evaluates
         // exactly the table the generator ran its grid nodes at.
         if (!e.cycle->spark_advance_deg.x.empty()) e.ecu.spark_advance_deg = e.cycle->spark_advance_deg;
+        // Engine garage P2: forced induction "none" on a pipe engine needs a grid the ambient intake path can reach
+        // (the generator fails a node above ambient without a compressor supply - test_engine_map_gen_v2 G3).
+        // Checked at load (also validate-only) so the message names the fix. Lumped engines generate between fixed
+        // reservoirs at the node pressure and are left to the generator (design 7.3).
+        if (assembled != nullptr && assembled->forced_induction_none && e.cycle->intake.has_value() && e.cycle->exhaust.has_value()) {
+            real top = e.cycle->grid_p_im.empty() ? real(0.0) : e.cycle->grid_p_im.back();
+            if (e.cycle->pressure_sampling.enabled && e.cycle->pressure_sampling.max_pa > top) top = e.cycle->pressure_sampling.max_pa;
+            if (top > kIsaAirPressurePa) {
+                throw std::runtime_error(cctx + ": forced induction is \"none\" ('" + assembled->forced_induction_origin +
+                                         "') but cycle.grid_p_im_kpa reaches " + std::to_string(top / kKpa) +
+                                         " kPa, above ambient (101.325 kPa [C ISO 2533]) - without a compressor the intake "
+                                         "cannot reach those nodes. Fix: give the engine a grid_p_im_kpa (and "
+                                         "pressure_sampling.max_kpa) at or below ambient, e.g. a user engine that 'extends' "
+                                         "this one and replaces cycle.grid_p_im_kpa");
+            }
+        }
         // ps_audio A5 (PROVISIONAL P12): resolve the installation BEFORE the
         // generator runs - it is a generator input (the exhaust waveguide) and
         // part of the cache key. The vehicle component's override (already
@@ -2306,6 +2320,23 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
     return e;
 }
 
+// Engine garage P2 (design A8): optional engine mass metadata - data only, read by no physics and part of no
+// cache key or state hash (until the centre-of-mass request R5).
+void read_engine_mass(const json& j, const std::string& ctx, real& mass_kg, std::string& mass_source) {
+    if (j.contains("mass_kg")) {
+        if (!j.at("mass_kg").is_number()) throw std::runtime_error(ctx + ": 'mass_kg' must be a number");
+        mass_kg = j.at("mass_kg").get<real>();
+        if (!(mass_kg > real(0.0)) || !std::isfinite(mass_kg)) {
+            throw std::runtime_error(ctx + ": 'mass_kg' must be > 0 and finite, got " + std::to_string(mass_kg));
+        }
+    }
+    if (j.contains("mass_source")) {
+        if (!j.at("mass_source").is_string()) throw std::runtime_error(ctx + ": 'mass_source' must be a string");
+        if (!j.contains("mass_kg")) throw std::runtime_error(ctx + ": 'mass_source' without 'mass_kg'");
+        mass_source = j.at("mass_source").get<std::string>();
+    }
+}
+
 // PHYS-033 P4 I7a C5: thin dispatcher on "kind" - "torque_map" (or absent,
 // the only kind before C5) and, since PHYS-033 P4 I7b C10, "simulated"
 // (the MVEM engine, read_simulated_fields above).
@@ -2313,7 +2344,7 @@ ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::str
                                                    std::vector<std::string>* resolved_fuel_paths_out = nullptr,
                                                    const EngineMapOptions* map_options = nullptr,
                                                    const std::string* installation_override_path = nullptr,
-                                                   const std::string* turbo_configuration_override_path = nullptr) {
+                                                   const parts::AssembledEngine* assembled = nullptr) {
     // Default "torque_map" (rather than requiring the field) is deliberate,
     // not an oversight: every shipped data/engines/*.json file happens to
     // set "kind" explicitly today, but nothing REQUIRES a hand-authored or
@@ -2323,10 +2354,16 @@ ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::str
     // absent defaults to torque_map" pin test (the only place this default
     // path is actually exercised, since no shipped file omits it).
     const std::string kind = j.value("kind", std::string("torque_map"));
-    if (kind == "torque_map") return read_torque_map_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
+    if (kind == "torque_map") {
+        ps::drivetrain::TorqueMapEngineDesc e = read_torque_map_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
+        read_engine_mass(j, ctx, e.mass_kg, e.mass_source);
+        return e;
+    }
     if (kind == "simulated") {
-        return read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options, installation_override_path,
-                                     turbo_configuration_override_path);
+        ps::drivetrain::SimulatedEngineDesc e =
+            read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options, installation_override_path, assembled);
+        read_engine_mass(j, ctx, e.mass_kg, e.mass_source);
+        return e;
     }
     throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" or \"simulated\", got \"" + kind + "\"");
 }
@@ -2450,19 +2487,63 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
 json resolve_component_ref(const json& cj, const std::string& kind, const std::string& base_dir, const std::string& ctx) {
     if (!cj.contains("ref")) return cj;
     for (auto it = cj.begin(); it != cj.end(); ++it) {
-        // Engine thermal plan T1: an engine component may carry its per-vehicle "thermal" override next to "ref".
-        const bool thermal_override = kind == "engine" && it.key() == "thermal";
-        // N7b: likewise the per-vehicle "turbo_configuration" override (replaces the engine file's default_turbo_configuration).
-        const bool turbo_override = kind == "engine" && it.key() == "turbo_configuration";
-        if (it.key() != "id" && it.key() != "type" && it.key() != "ref" && !thermal_override && !turbo_override) {
-            throw std::runtime_error(ctx + ": a component with 'ref' may only contain 'id', 'type' and 'ref' "
-                                      "(found extra field '" + it.key() + "')");
+        // Engine garage P2: an engine component may carry its slots (ecu, cam, forced_induction, installation,
+        // thermal - the T1 "thermal" and N7b override, renamed forced_induction, among them) next to "ref".
+        const bool engine_slot = kind == "engine" && parts::is_engine_slot(it.key());
+        if (it.key() != "id" && it.key() != "type" && it.key() != "ref" && !engine_slot) {
+            throw std::runtime_error(ctx + ": a component with 'ref' may only contain 'id', 'type' and 'ref'" +
+                                     std::string(kind == "engine" ? " (and the engine slots ecu, cam, forced_induction, installation, thermal)"
+                                                                  : "") +
+                                     " (found extra field '" + it.key() + "')");
         }
     }
     const std::string path = resolve_path(base_dir, cj.at("ref").get<std::string>());
-    const json fj = read_json_file(path);
+    // Engine garage P2 (design A4): an engine file may "extends" a parent engine; relative paths stay per file.
+    const json fj = kind == "engine" ? parts::load_part(path, parts::rebase_engine_paths) : read_json_file(path);
     require_format(fj, kind, 1, path);
     return fj;
+}
+
+// Engine garage P2 (design A6): applies a user-layer PartOverride to a component's JSON. "ref" replaces the
+// referenced file (an inline engine/gearbox becomes {id, type, ref} plus the engine's string-valued slots); each
+// slot sets the component's own slot key. Paths keep the vehicle-level rule (relative to the vehicle file unless
+// absolute). Types: "ref" for engine, gearbox, n2o_bottle, nitrous_kit; slots for engine (ecu, cam,
+// forced_induction, installation, thermal) and nitrous_kit (controller).
+json apply_part_override(const json& cj, const std::string& type, const PartOverride& ov, const std::string& ctx) {
+    const std::string octx = ctx + ": part_overrides";
+    const bool ref_type = type == "engine" || type == "gearbox" || type == "n2o_bottle" || type == "nitrous_kit";
+    if (!ref_type) throw std::runtime_error(octx + ": a '" + type + "' component has no part file to override");
+    json out = cj;
+    if (!ov.ref.empty()) {
+        if (!cj.contains("ref")) {
+            json replaced = json::object();
+            replaced["id"] = cj.at("id");
+            replaced["type"] = cj.at("type");
+            if (type == "engine") {
+                for (const char* s : parts::kEngineSlots) {
+                    if (cj.contains(s) && cj.at(s).is_string()) replaced[s] = cj.at(s);
+                }
+            }
+            out = std::move(replaced);
+        }
+        out["ref"] = ov.ref;
+    }
+    for (const auto& kv : ov.slots) {
+        const bool ok = type == "engine" ? parts::is_engine_slot(kv.first) : (type == "nitrous_kit" && kv.first == "controller");
+        if (!ok) {
+            throw std::runtime_error(octx + ": unknown slot '" + kv.first + "' for a '" + type + "' component" +
+                                     (type == "engine" ? std::string(" (engine slots: ecu, cam, forced_induction, installation, thermal)")
+                                      : type == "nitrous_kit" ? std::string(" (nitrous kit slot: controller)")
+                                                              : std::string(" (it has no slots)")));
+        }
+        if (kv.second.empty()) throw std::runtime_error(octx + ": slot '" + kv.first + "' must be a non-empty path");
+        if (type == "engine" && !out.contains("ref") && kv.first == "ecu" && out.contains("ecu") && out.at("ecu").is_object()) {
+            throw std::runtime_error(octx + ": slot 'ecu' on an inline engine component whose 'ecu' block is inline - give the "
+                                     "user layer a 'ref' too, or move the engine to a file");
+        }
+        out[kv.first] = kv.second;
+    }
+    return out;
 }
 
 // PHYS-033 P4 I7a C5: the directory a component's OWN further relative paths
@@ -2479,12 +2560,13 @@ std::string component_ref_dir(const json& cj, const std::string& base_dir) {
 } // namespace
 
 drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path, const std::string& cache_dir) {
-    const json cfg=read_json_file(path);
+    // Engine garage P2 (design A4): a configuration and its hardware may "extends" a parent (relative paths per file).
+    const json cfg=parts::load_part(path,parts::rebase_turbo_configuration_paths);
     require_format(cfg,"turbo_configuration",1,path);
     const int count=require_positive_int(cfg,"count",path);
     if (count>8) throw std::runtime_error(path+": turbo count must be <= 8");
     const auto hw_path=resolve_path(std::filesystem::path(path).parent_path().string(),cfg.at("turbo").get<std::string>());
-    const auto hw=read_json_file(hw_path);
+    const auto hw=parts::load_part(hw_path,parts::rebase_turbo_hardware_paths);
     require_format(hw,"turbo",1,hw_path);
     drivetrain::TurboPairDesc t;
     if(cfg.contains("compressible_exhaust")) {
@@ -2802,7 +2884,7 @@ vehicle::TyreDesc load_tyre_json(const std::string& path) {
 }
 
 drivetrain::InstallationDesc load_installation_json(const std::string& path) {
-    const json j = read_json_file(path);
+    const json j = parts::load_part(path); // engine garage P2: "extends" (an installation has no path keys)
     return read_installation_object(j, path);
 }
 
@@ -2811,18 +2893,77 @@ drivetrain::InstallationDesc load_installation_json(const std::string& path) {
 // vehicle's "ref"'d engine component reaches, given the engine file's own
 // directory as the base for its further relative paths (fuel/installation),
 // exactly component_ref_dir's rule for a "ref"'d (non-inline) component.
+namespace {
+
+// Engine garage P2: the shared tail of load_engine_json / load_engine_json_from_string - an engine object whose
+// "extends" chain is resolved, its directory, the standalone slot overrides. Same assembly and reader a vehicle's
+// engine component reaches.
+drivetrain::ComponentParams load_engine_object(json j, const std::string& label, const std::string& engine_dir,
+                                               const EngineMapOptions& options, const std::string* installation_override_path,
+                                               const EngineSlotOverrides& slots) {
+    require_format(j, "engine", 1, label);
+    const std::string ctx = "engine '" + label + "'";
+    parts::SlotMap resolved;
+    if (installation_override_path != nullptr) resolved["installation"] = *installation_override_path;
+    for (const auto& kv : slots) {
+        if (!parts::is_engine_slot(kv.first)) {
+            throw std::runtime_error(ctx + ": unknown slot '" + kv.first + "' (engine slots: ecu, cam, forced_induction, installation, thermal)");
+        }
+        if (kv.second.empty()) throw std::runtime_error(ctx + ": slot '" + kv.first + "' must be a non-empty path");
+        if (kv.second == "none" && kv.first != "forced_induction") {
+            throw std::runtime_error(ctx + ": slot '" + kv.first + "': \"none\" is only allowed for 'forced_induction'");
+        }
+        resolved[kv.first] = kv.second == "none" ? kv.second : resolve_path(engine_dir, kv.second);
+    }
+    const parts::AssembledEngine assembled = parts::assemble_engine(std::move(j), engine_dir, ctx, resolved);
+    drivetrain::ComponentParams params =
+        read_engine_fields(assembled.j, ctx, engine_dir, /*resolved_fuel_paths_out=*/nullptr, &options,
+                           assembled.installation_path.empty() ? nullptr : &assembled.installation_path, &assembled);
+    if (slots.count("installation") != 0) {
+        const auto* sim = std::get_if<drivetrain::SimulatedEngineDesc>(&params);
+        if (sim == nullptr || !sim->cycle.has_value() || !sim->cycle->intake.has_value()) {
+            throw std::runtime_error(ctx + ": slot 'installation' is only allowed on a simulated engine with 'intake'/'exhaust' "
+                                     "pipe blocks");
+        }
+    }
+    return params;
+}
+
+} // namespace
+
+// ps_audio A10: a standalone engine file, no vehicle wrapping it. Same
+// dispatcher (read_engine_fields, in the anonymous namespace above) a
+// vehicle's "ref"'d engine component reaches, given the engine file's own
+// directory as the base for its further relative paths (fuel/installation),
+// exactly component_ref_dir's rule for a "ref"'d (non-inline) component.
 drivetrain::ComponentParams load_engine_json(const std::string& path, const EngineMapOptions& options,
-                                              const std::string* installation_override_path) {
-    const json j = read_json_file(path);
-    require_format(j, "engine", 1, path);
-    const std::string ctx = "engine '" + path + "'";
+                                              const std::string* installation_override_path, const EngineSlotOverrides& slots) {
+    json j = parts::load_part(path, parts::rebase_engine_paths);
     const std::string engine_dir = std::filesystem::path(path).parent_path().string();
-    return read_engine_fields(j, ctx, engine_dir, /*resolved_fuel_paths_out=*/nullptr, &options, installation_override_path);
+    return load_engine_object(std::move(j), path, engine_dir, options, installation_override_path, slots);
+}
+
+// Engine garage P2 (design A7): the same load from bytes in memory, as if they were a file in base_dir.
+drivetrain::ComponentParams load_engine_json_from_string(std::string_view text, const std::filesystem::path& base_dir,
+                                                          const EngineMapOptions& options, const EngineSlotOverrides& slots) {
+    // allow_exceptions = false: no parse exception object is ever caught (CLAUDE.md "Windows ASan caveat").
+    json root = json::parse(text.begin(), text.end(), nullptr, /*allow_exceptions=*/false);
+    const std::filesystem::path virtual_path = base_dir / "<engine string>";
+    if (root.is_discarded()) throw std::runtime_error(virtual_path.string() + ": invalid JSON");
+    json j = resolve_json_extends(std::move(root), virtual_path, 8, parts::rebase_engine_paths);
+    return load_engine_object(std::move(j), virtual_path.string(), base_dir.string(), options, nullptr, slots);
 }
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path) { return load_vehicle_json(path, EngineMapOptions{}); }
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapOptions& options) {
+    VehicleLoadOptions load_options;
+    load_options.maps = options;
+    return load_vehicle_json(path, load_options);
+}
+
+vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoadOptions& load_options) {
+    const EngineMapOptions& options = load_options.maps;
     const json j = read_json_file(path);
     require_vehicle_format(j, path);
     const std::string base_dir = std::filesystem::path(path).parent_path().string();
@@ -2878,70 +3019,63 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapO
     if (j.contains("powertrain")) {
         const auto& pj = j.at("powertrain");
         if (pj.contains("components")) {
-            for (const auto& cj : pj.at("components")) {
-                if (!cj.contains("id") || !cj.at("id").is_string() || cj.at("id").get<std::string>().empty()) {
+            // Engine garage P2 (design A6): every user-layer override must name a component of this vehicle.
+            for (const auto& ov : load_options.part_overrides) {
+                bool found = false;
+                for (const auto& c : pj.at("components")) {
+                    found = found || (c.contains("id") && c.at("id").is_string() && c.at("id").get<std::string>() == ov.first);
+                }
+                if (!found) {
+                    throw std::runtime_error("vehicle '" + v.name + "': part_overrides: no powertrain component with id '" + ov.first + "'");
+                }
+            }
+            for (const auto& cj_file : pj.at("components")) {
+                if (!cj_file.contains("id") || !cj_file.at("id").is_string() || cj_file.at("id").get<std::string>().empty()) {
                     throw std::runtime_error("vehicle '" + v.name + "': powertrain.components[]: 'id' is required and must be a non-empty string");
                 }
-                const std::string id = cj.at("id").get<std::string>();
+                const std::string id = cj_file.at("id").get<std::string>();
                 if (std::find(component_ids.begin(), component_ids.end(), id) != component_ids.end()) {
                     throw std::runtime_error("vehicle '" + v.name + "': powertrain.components[]: duplicate id '" + id + "'");
                 }
                 component_ids.push_back(id);
-                if (!cj.contains("type") || !cj.at("type").is_string()) {
+                if (!cj_file.contains("type") || !cj_file.at("type").is_string()) {
                     throw std::runtime_error("vehicle '" + v.name + "': powertrain.components['" + id + "']: 'type' is required");
                 }
-                const std::string type = cj.at("type").get<std::string>();
+                const std::string type = cj_file.at("type").get<std::string>();
                 const std::string ctx = "vehicle '" + v.name + "': powertrain.components['" + id + "']";
+                // Engine garage P2 (design A6): the user layer rewrites this component's "ref" and slot keys before it
+                // is read - the vehicle file as if it said this, so the user wins every slot it names.
+                json cj_user;
+                const auto override_it = load_options.part_overrides.find(id);
+                const bool has_user_layer = override_it != load_options.part_overrides.end();
+                if (has_user_layer) cj_user = apply_part_override(cj_file, type, override_it->second, ctx);
+                const json& cj = has_user_layer ? cj_user : cj_file;
 
                 if (type == "engine") {
-                    const json ej = resolve_component_ref(cj, "engine", base_dir, ctx);
+                    // Engine garage P2: the component's slots (vehicle level - the user layer, applied above, already
+                    // rewrote them), then the engine file with its "extends" chain, then the slot assembly (ECU and cam
+                    // parts merged; forced induction, installation and thermal resolved to paths). See engine_parts.h.
+                    const bool inline_engine = !cj.contains("ref");
+                    const parts::SlotMap slots = parts::read_component_slots(cj, base_dir, ctx, inline_engine);
+                    json ej = resolve_component_ref(cj, "engine", base_dir, ctx);
+                    if (inline_engine) parts::erase_component_slots(ej);
                     const std::string engine_dir = component_ref_dir(cj, base_dir);
+                    const parts::AssembledEngine assembled = parts::assemble_engine(std::move(ej), engine_dir, ctx, slots);
                     std::vector<std::string> fuel_paths;
-                    // ps_audio A5 (P12): a well-formed installation override
-                    // reaches the engine reader, which resolves it before any
-                    // map generation; a malformed one is rejected below with
-                    // A4's messages, exactly as before.
-                    std::string inst_override;
-                    const bool override_ok = cj.contains("installation") && cj.at("installation").is_string() &&
-                                             !cj.at("installation").get<std::string>().empty();
-                    if (override_ok) inst_override = resolve_path(base_dir, cj.at("installation").get<std::string>());
-                    // Same for the optional "turbo_configuration" override (a path relative to the vehicle file): a
-                    // malformed one is rejected below; a well-formed one reaches the engine reader, which rejects it on an
-                    // engine without default_turbo_configuration.
-                    std::string turbo_override;
-                    const bool turbo_override_ok = cj.contains("turbo_configuration") && cj.at("turbo_configuration").is_string() &&
-                                                   !cj.at("turbo_configuration").get<std::string>().empty();
-                    if (turbo_override_ok) turbo_override = resolve_path(base_dir, cj.at("turbo_configuration").get<std::string>());
-                    if (cj.contains("turbo_configuration") && !turbo_override_ok) {
-                        throw std::runtime_error(ctx + ": 'turbo_configuration' must be a non-empty path string");
-                    }
-                    if (turbo_override_ok && ej.value("kind", std::string("torque_map")) != "simulated") {
-                        throw std::runtime_error(ctx + ": 'turbo_configuration' is only allowed on a simulated engine whose file has "
-                                                  "'default_turbo_configuration'");
-                    }
-                    p.components.push_back({id, read_engine_fields(ej, ctx, engine_dir, &fuel_paths, &options,
-                                                                   override_ok ? &inst_override : nullptr,
-                                                                   turbo_override_ok ? &turbo_override : nullptr)});
+                    // ps_audio A5 (P12): the installation slot reaches the engine reader, which resolves it before any
+                    // map generation.
+                    p.components.push_back({id, read_engine_fields(assembled.j, ctx, engine_dir, &fuel_paths, &options,
+                                                                   assembled.installation_path.empty() ? nullptr
+                                                                                                       : &assembled.installation_path,
+                                                                   &assembled)});
                     engine_fuel_paths.emplace_back(id, std::move(fuel_paths)); // PHYS-033 P4 I7a C6: for the fluid-link check below
 
                     // Engine thermal plan T1 (section 9.1): the engine file's "default_thermal" (relative to the engine
-                    // file), overridable by this component's own "thermal" (relative to the vehicle file). Only used
-                    // when the vehicle names a cooling_system (opt-in) - resolved after the component loop.
-                    if (cj.contains("thermal")) {
-                        if (!cj.at("thermal").is_string() || cj.at("thermal").get<std::string>().empty()) {
-                            throw std::runtime_error(ctx + ": 'thermal' must be a non-empty path string");
-                        }
-                    }
-                    if (ej.contains("default_thermal") &&
-                        (!ej.at("default_thermal").is_string() || ej.at("default_thermal").get<std::string>().empty())) {
-                        throw std::runtime_error(ctx + ": 'default_thermal' must be a non-empty path string");
-                    }
+                    // file), overridable by this component's own "thermal" (relative to the vehicle file) - now the
+                    // "thermal" slot. Only used when the vehicle names a cooling_system (opt-in) - resolved after the
+                    // component loop.
                     if (thermal_engine_id.empty()) {
-                        if (cj.contains("thermal")) {
-                            thermal_engine_path = resolve_path(base_dir, cj.at("thermal").get<std::string>());
-                        } else if (ej.contains("default_thermal")) {
-                            thermal_engine_path = resolve_path(engine_dir, ej.at("default_thermal").get<std::string>());
-                        }
+                        thermal_engine_path = assembled.thermal_path;
                         thermal_engine_id = id;
                     }
 

@@ -411,5 +411,5 @@
     "rpm": 8250,
     "hysteresis_rpm": 150
   },
-  "default_turbo_configuration": "../turbo_configurations/hyper_twin_default.json"
+  "default_forced_induction": "../turbo_configurations/hyper_twin_default.json"
 }

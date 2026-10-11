@@ -133,6 +133,10 @@ struct TorqueMapEngineDesc {
     StarterDesc starter;
     Vec3 crank_axis_local = Vec3::zero(); // chassis frame, direction of +omega; zero = no rotor reaction (plan section 6.7)
     EngineInitialState initial_state = EngineInitialState::Running;
+    // Engine garage P2 (design A8): optional metadata, read by no physics and part of no cache key or state
+    // hash. 0 = not given.
+    real mass_kg = 0.0;
+    std::string mass_source;
     bool has_governor = false; // I4 C12: only meaningful (and validated) when true
     GovernorDesc governor;
     // PHYS-033 P4 I7a C3: how the throttle command physically reaches this
@@ -453,6 +457,10 @@ struct SimulatedEngineDesc {
     StarterDesc starter;
     Vec3 crank_axis_local = Vec3::zero();
     EngineInitialState initial_state = EngineInitialState::Running;
+    // Engine garage P2 (design A8): optional metadata, read by no physics and part of no cache key or state
+    // hash. 0 = not given.
+    real mass_kg = 0.0;
+    std::string mass_source;
 
     // Required and non-empty; fuels[0] is burnt unless a fuel tank selects
     // another entry (same rule as TorqueMapEngineDesc::fuels).
