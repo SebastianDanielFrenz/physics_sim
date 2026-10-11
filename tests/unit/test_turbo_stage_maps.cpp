@@ -46,7 +46,7 @@ ps::drivetrain::TurboPairDesc load_stage(int count=1, const json* replacement=nu
 }
 }
 
-TEST_CASE("Offline stage map loads provenance and rejects invalid data", "[turbo_stage]") {
+TEST_CASE("Offline stage map loads provenance and rejects invalid data", "[turbo_stage][drivetrain]") {
     const auto d=load_stage();
     REQUIRE(d.maps->stages);
     const auto& m=*d.maps->stages;
@@ -74,7 +74,7 @@ TEST_CASE("Offline stage map loads provenance and rejects invalid data", "[turbo
     }
 }
 
-TEST_CASE("Compressor mask retains valid knots and blends boundary weight continuously", "[turbo_stage]") {
+TEST_CASE("Compressor mask retains valid knots and blends boundary weight continuously", "[turbo_stage][drivetrain]") {
     ps::drivetrain::TurboStageMaps m;
     m.compressor_pr={{0,1,2},{0,1,2},{99,99,99,99,3,4,99,5,6}};
     m.compressor_work_j_kg=m.compressor_pr;
@@ -96,7 +96,7 @@ TEST_CASE("Compressor mask retains valid knots and blends boundary weight contin
     CHECK(m.compressor_sample(-1,1).weight==0);
 }
 
-TEST_CASE("Generated compressor work drives shaft and thermal outputs", "[turbo_stage]") {
+TEST_CASE("Generated compressor work drives shaft and thermal outputs", "[turbo_stage][drivetrain]") {
     const auto d=load_stage();
     ps::drivetrain::TurboPair t(d);
     t.energy_j=.5*d.rotor_inertia_kgm2*std::pow(120000*6.283185307179586/60,2);
@@ -108,7 +108,7 @@ TEST_CASE("Generated compressor work drives shaft and thermal outputs", "[turbo_
     CHECK_FALSE(t.stage_map_fallback);
 }
 
-TEST_CASE("Generated turbine starts from rest and scales twin units", "[turbo_stage]") {
+TEST_CASE("Generated turbine starts from rest and scales twin units", "[turbo_stage][drivetrain]") {
     const auto one=load_stage(1), two=load_stage(2);
     ps::drivetrain::TurboPair a(one), b(two);
     // Wall conductance is an INSTALLATION total, intentionally not count
@@ -126,7 +126,7 @@ TEST_CASE("Generated turbine starts from rest and scales twin units", "[turbo_st
     CHECK_FALSE(a.stage_map_fallback);
 }
 
-TEST_CASE("Stage map domain is not a rotor limiter", "[turbo_stage]") {
+TEST_CASE("Stage map domain is not a rotor limiter", "[turbo_stage][drivetrain]") {
     const auto d=load_stage();
     ps::drivetrain::TurboPair t(d);
     t.energy_j=.5*d.rotor_inertia_kgm2*std::pow(500000*6.283185307179586/60,2);
@@ -138,7 +138,7 @@ TEST_CASE("Stage map domain is not a rotor limiter", "[turbo_stage]") {
     CHECK(std::isfinite(t.energy_j));
 }
 
-TEST_CASE("Turbine inverse lookup reproduces compressible mass balance", "[turbo_stage]") {
+TEST_CASE("Turbine inverse lookup reproduces compressible mass balance", "[turbo_stage][drivetrain]") {
     const auto d=load_stage(2);
     const auto& m=*d.maps->stages;
     double pressure=0,power=0,torque=0;
@@ -153,7 +153,7 @@ TEST_CASE("Turbine inverse lookup reproduces compressible mass balance", "[turbo
     CHECK(pressure>pa);
 }
 
-TEST_CASE("Generated-stage hold remains finite and converges with timestep", "[turbo_stage]") {
+TEST_CASE("Generated-stage hold remains finite and converges with timestep", "[turbo_stage][drivetrain]") {
     const auto d=load_stage(2);
     auto run=[&](double h) {
         ps::drivetrain::TurboPair t(d);
@@ -170,7 +170,7 @@ TEST_CASE("Generated-stage hold remains finite and converges with timestep", "[t
     CHECK(a.second==Catch::Approx(b.second).epsilon(.02));
 }
 
-TEST_CASE("Authored exhaust nozzle conserves mass at low and extreme flow", "[turbo_stage][turbo_exhaust]") {
+TEST_CASE("Authored exhaust nozzle conserves mass at low and extreme flow", "[turbo_stage][turbo_exhaust][drivetrain]") {
     using namespace ps::drivetrain;
     for(double area:{.0005,.00336}) for(double k:{500.,1300.}) for(double flow:{0.,.05,.5,2.,10.}) {
         const auto pressure=TurboPair::compressible_exhaust_pressure(flow,area,101325,k);

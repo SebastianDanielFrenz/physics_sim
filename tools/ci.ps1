@@ -711,7 +711,7 @@ function Invoke-WslLane {
 # ===========================================================================
 # -Affected / -Topic: per-change runs
 # ===========================================================================
-$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'cycle', 'audio', 'environment', 'determinism', 'bench')
+$script:KnownTopics = @('math', 'jobs', 'world', 'backend', 'articulation', 'contact', 'terrain', 'vehicle', 'drivetrain', 'io', 'cycle', 'audio', 'environment', 'aero', 'determinism', 'bench')
 
 # Path -> topics. First matching rule wins; paths are repo-relative with '/'.
 # Kind: 'topics' (run Topics), 'everything' (foundational: default fast run),
@@ -740,6 +740,7 @@ $script:PathRules = @(
     @{ Re = '^core/(include/ps|src)/vehicle/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^core/(include/ps|src)/environment/'; Kind = 'topics'; Topics = @('environment', 'vehicle') },  # weather plan W1+: ps_environment (+ _io); the wheel reads its surface condition
     @{ Re = '^core/(include/ps|src)/drivetrain/'; Kind = 'topics'; Topics = @('drivetrain', 'vehicle') },
+    @{ Re = '^core/(include/ps|src)/aero/|^core/src/io/aero_io\.(cpp|h)$|^core/include/ps/io/aero_coefficient_map_io\.h$'; Kind = 'topics'; Topics = @('aero', 'vehicle') },  # 8b04f0e aerodynamics + a949346 coefficient maps
     @{ Re = '^core/(include/ps|src)/engine_cycle/'; Kind = 'topics'; Topics = @('drivetrain', 'cycle') },  # cycle model + pipes; [cycle] also selects the [audio][cycle] voice tests (EngineCore is shared)
     @{ Re = '^audio/'; Kind = 'topics'; Topics = @('audio', 'cycle') },  # ps_audio A7
     @{ Re = '^tools/ps_engine_audio/|^data/scripts/engine_audio/'; Kind = 'topics'; Topics = @('audio', 'drivetrain') },  # ps_audio A10 listening tool + its scripts
@@ -760,6 +761,7 @@ $script:PathRules = @(
     @{ Re = '^tests/(unit|validation|determinism)/[^/]+\.(cpp|h)$'; Kind = 'testfile' },
     @{ Re = '^(tools/sweep/|tests/bench/energy_study\.cpp$|tests/bench/bench_audio_voice\.cpp$)'; Kind = 'none'; Note = 'no ctest coverage; the release build still compiles it' },
     @{ Re = '^adapters/'; Kind = 'none'; Note = 'Godot adapter: not built by ci.ps1 - run adapters\godot\smoke_test.ps1' },
+    @{ Re = '^tools/turbo_sim/'; Kind = 'none'; Note = 'offline Python turbo stage-map generator (python -m unittest discover -s tools/turbo_sim); vehicle loading reads its finished JSON' },
     @{ Re = '^(data/models/|tools/(assetgen|trackgen|plots)/|tools/setup_dev_env\.ps1$)'; Kind = 'none'; Note = 'not used by core builds or tests' }
 )
 

@@ -14,7 +14,7 @@ std::array<TractionWheelSensor,4> sensors(real speed,bool awd=true) {
     return {{{speed,0,1,.8,awd},{speed,0,1,-.8,awd},{speed,0,-1,.8,true},{speed,0,-1,-.8,true}}};
 }
 }
-TEST_CASE("Sensor TC detects common AWD acceleration wheelspin without ground speed","[traction_control][unit]") {
+TEST_CASE("Sensor TC detects common AWD acceleration wheelspin without ground speed","[traction_control][vehicle][unit]") {
     TractionControlDesc d;TractionControlState s;auto w=sensors(0);
     step_traction_control(d,s,w,0,0,1,0,true,.01);
     // All four wheels agree but accelerate far faster than the IMU reports.
@@ -25,7 +25,7 @@ TEST_CASE("Sensor TC detects common AWD acceleration wheelspin without ground sp
     CHECK(step_traction_control(d,s,w,0,0,0,0,true,.01)==1);
     CHECK_FALSE(s.intervening);
 }
-TEST_CASE("Sensor TC preserves normal acceleration turns reverse and braking","[traction_control][unit]") {
+TEST_CASE("Sensor TC preserves normal acceleration turns reverse and braking","[traction_control][vehicle][unit]") {
     TractionControlDesc d;
     SECTION("normal AWD launch") {
         TractionControlState s;auto w=sensors(0);step_traction_control(d,s,w,0,0,1,0,true,.01);
@@ -54,7 +54,7 @@ TEST_CASE("Sensor TC preserves normal acceleration turns reverse and braking","[
         w=sensors(7);CHECK(step_traction_control(d,s,w,0,0,1,0,true,.01)==1);
     }
 }
-TEST_CASE("Sensor TC validation reset hash and throttle safety priority","[traction_control][unit]") {
+TEST_CASE("Sensor TC validation reset hash and throttle safety priority","[traction_control][vehicle][unit]") {
     TractionControlDesc d;TractionControlState s;CHECK(fold_traction_control_hash(d,s,42)==42);
     auto w=sensors(0);step_traction_control(d,s,w,0,0,1,0,true,.01);
     CHECK(fold_traction_control_hash(d,s,42)!=42);s={};CHECK(fold_traction_control_hash(d,s,42)==42);
@@ -64,7 +64,7 @@ TEST_CASE("Sensor TC validation reset hash and throttle safety priority","[tract
     ctx.tcu_throttle_floor=.7;ctx.tcu_throttle_ceiling=.9;ctx.traction_throttle_ceiling=.2;
     auto cmd=stage.evaluate(ctx);CHECK(cmd.command==.8);CHECK(cmd.ceiling==.2);CHECK(cmd.floor==.2);
 }
-TEST_CASE("Full hypercar TC reduces low-grip wheelspin with sensor-only feedback","[traction_control][vehicle]") {
+TEST_CASE("Full hypercar TC reduces low-grip wheelspin with sensor-only feedback","[traction_control][vehicle][long]") {
     jobs::JobSystem pool(10);io::EngineMapOptions opt;opt.pool=&pool;
     auto base=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
     for(auto& w:base.wheels)w.tyre.lambda_mux*=.25;

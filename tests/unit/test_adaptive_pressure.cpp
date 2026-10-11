@@ -10,7 +10,7 @@
 #include <filesystem>
 using namespace ps::drivetrain;
 using Catch::Approx;
-TEST_CASE("adaptive axes preserve nonlinear and signed maps independently", "[adaptive_pressure]") {
+TEST_CASE("adaptive axes preserve nonlinear and signed maps independently", "[adaptive_pressure][drivetrain][cycle]") {
     Table2D straight,curved;
     straight.x=curved.x={1000,5000};
     for(int j=0;j<=40;++j)straight.y.push_back(25000+2500*j);
@@ -23,7 +23,7 @@ TEST_CASE("adaptive axes preserve nonlinear and signed maps independently", "[ad
     CHECK(curved.y.size()<reference.y.size());
     for(auto p:reference.y)CHECK(pressure_error(reference,curved,p)<=0.005);
 }
-TEST_CASE("engine generation reuses sampled points across refinement passes", "[adaptive_pressure]") {
+TEST_CASE("engine generation reuses sampled points across refinement passes", "[adaptive_pressure][drivetrain][cycle]") {
     auto d=ps::test::make_generic_i4_cycle_desc();d.grid_rpm={2000,4000};d.grid_p_im={40000,90000};
     auto fuel=ps::test::mvem::gasoline();
     EngineMapGenTask first(d,fuel,MapQuality::Preview);
@@ -38,7 +38,7 @@ TEST_CASE("engine generation reuses sampled points across refinement passes", "[
     EngineMapGenTask other(d,fuel,MapQuality::Preview);
     CHECK_THROWS_AS(other.reuse_points_from(first),std::invalid_argument);
 }
-TEST_CASE("adaptive engine maps converge and retain independent cached axes", "[adaptive_pressure]") {
+TEST_CASE("adaptive engine maps converge and retain independent cached axes", "[adaptive_pressure][drivetrain][cycle]") {
     auto d=ps::test::make_generic_i4_cycle_desc();d.grid_rpm={2000,4000};d.grid_p_im={40000,90000};
     auto fuel=ps::test::mvem::gasoline();const auto legacy=engine_map_cache_key(d,fuel,MapQuality::Preview);
     d.pressure_sampling.enabled=true;d.pressure_sampling.relative_error=0.05;
