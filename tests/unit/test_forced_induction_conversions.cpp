@@ -481,6 +481,12 @@ TEST_CASE("FI5 cache keys: boosted vs naturally aspirated differ exactly by the 
     al.generate = false;
     const ComponentParams a25a_boost = convert(al);
     CHECK_FALSE(S(a25a_boost).cycle->intake.has_value());
+    // the stock A25A's compression ratio 13 is over the forced-induction band; the conversion has to lower it
+    CHECK(has_issue(check_buildable(a25a_boost), BuildRule::CompressionRatio));
+    Conversion al10 = al;
+    al10.compression_ratio = 10.0;
+    CHECK_FALSE(has_issue(check_buildable(convert(al10)), BuildRule::CompressionRatio));
+    std::printf("FI5 demo grid for single_small: %s kPa\n", kpa_list(b.cycle->grid_p_im).c_str());
     CHECK(engine_map_cache_key(*S(a25a_boost).cycle, S(a25a_stock).fuels.front(), MapQuality::Full) !=
           engine_map_cache_key(*S(a25a_stock).cycle, S(a25a_stock).fuels.front(), MapQuality::Full));
     CycleModelDesc same_grid = *S(a25a_stock).cycle;
@@ -626,6 +632,33 @@ TEST_CASE("FI7 boost_grid_p_im adds a node at ambient when the stock axis stops 
         std::printf("FI7 old axis refused: %s\n", ex.what());
     }
     CHECK(threw);
+}
+
+TEST_CASE("FI-D1 diagnostic: lowest rpm at which each single template holds the target on the demo I4 and the hyper V8",
+          "[.][diag][forced_induction]") {
+    // Source of the 'Measured fit' table in docs/data_formats/turbo.md. Prints the charge gauge per rpm; nothing asserted.
+    struct Row {
+        const char* base;
+        std::vector<const char*> tmpl;
+        std::vector<double> rpm;
+    };
+    const std::vector<Row> rows = {
+        {"demo_i4_pipes.json", {"single_small.json", "single_medium.json", "single_large.json"},
+         {1500, 1750, 2000, 2250, 2500, 2750, 3000, 3250, 3500, 3750, 4000, 4500, 5000, 5500, 6000, 6500}},
+        {"hyper_v8_one1_audio.json", {"single_large.json", "twin_small.json", "twin_medium.json", "twin_large.json"},
+         {2000, 2500, 3000, 3500, 4000, 5000, 6000, 7000, 8000}},
+    };
+    for (const Row& row : rows) {
+        for (const char* t : row.tmpl) {
+            Conversion cv;
+            cv.base = row.base;
+            cv.fi = t;
+            ComponentParams c = convert(cv);
+            const DynoResult r = run_dyno_sweep(c, nullptr, spec_at(row.rpm), &pool());
+            std::printf("FI-D1 %s + %s: charge gauge [bar] by rpm\n", row.base, t);
+            for (const DynoPoint& p : r.points) std::printf("FI-D1   %5.0f  %.3f%s\n", p.rpm, p.charge_boost_bar, p.converged ? "" : "  (not settled)");
+        }
+    }
 }
 // ---- cases-end ----
 
