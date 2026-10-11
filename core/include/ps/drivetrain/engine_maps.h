@@ -120,8 +120,10 @@ struct EngineMaps {
     // The runtime maps, C11 layout: ve, eta_i, f_lambda, eta_spark,
     // theta_mbt_deg, friction_torque_nm (empty when the cycle desc has no
     // friction model), pmep_excess_pa (has_pmep_excess = true; values may be
-    // negative - the runtime takes them signed), no theta_kl (C17b). source
-    // names the generator and its version.
+    // negative - the runtime takes them signed). theta_kl only for a
+    // knock-limited engine (CycleModelDesc::knock.enabled, engine garage P7):
+    // one table per knock fuel in theta_kl_by_fuel, theta_kl_deg = the first.
+    // source names the generator and its version.
     SimulatedEngineMapsDesc maps;
     // Diagnostics for I7d, not consumed by the runtime (rpm x p_im grid).
     Table2D t_exh_k; // mass-averaged exhaust-valve outflow temperature [K]

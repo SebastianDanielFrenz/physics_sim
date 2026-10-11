@@ -68,9 +68,14 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
 
     EndGas eg;
     const real x = c0.x;
-    eg.a = (real(1.0) - x) * m.gas.fresh.a + x * m.gas.burned.a;
-    eg.b = (real(1.0) - x) * m.gas.fresh.b + x * m.gas.burned.b;
-    eg.r = c0.r;
+    const real ff = in.fuel_mass_fraction;
+    if (!(ff >= real(0.0) && ff < real(1.0))) throw std::invalid_argument("knock_replay: fuel_mass_fraction must be in [0, 1)");
+    const real fa = (real(1.0) - ff) * m.gas.fresh.a + ff * kFuelVapourCvA_JkgK;
+    const real fb = (real(1.0) - ff) * m.gas.fresh.b + ff * kFuelVapourCvB_JkgK2;
+    const real fr = (real(1.0) - ff) * m.gas.fresh.r + ff * kFuelVapourR_JkgK;
+    eg.a = (real(1.0) - x) * fa + x * m.gas.burned.a;
+    eg.b = (real(1.0) - x) * fb + x * m.gas.burned.b;
+    eg.r = (real(1.0) - x) * fr + x * m.gas.burned.r;
     eg.t0 = c0.t;
     eg.p0 = c0.p;
 
@@ -86,6 +91,7 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
     real t_eg = eg.t0;
     real f0 = douaud_eyzat_rate(in.inv_on_term, c0.p, t_eg);
     r.p_max_pa = c0.p;
+    r.p_end_pa = c0.p;
     while (theta < theta_stop) {
         const real dth = std::min(in.step_deg, theta_stop - theta);
         s.step_live(theta, dth, dth / rate_deg_s);
@@ -94,6 +100,7 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
         const CvState c = cv_state(m.gas, y[kCylM], y[kCylU], y[kCylMb], m.geom.eval(theta).v);
         if (c.p > r.p_max_pa) r.p_max_pa = c.p;
         t_eg = eg.temperature(c.p, t_eg);
+        r.p_end_pa = c.p;
         const real f1 = douaud_eyzat_rate(in.inv_on_term, c.p, t_eg);
         r.integral += real(0.5) * (f0 + f1) * dth / rate_deg_s;
         f0 = f1;

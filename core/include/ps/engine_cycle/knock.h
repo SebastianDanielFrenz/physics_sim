@@ -6,10 +6,16 @@
 //         tau [s] = 17.68e-3 * (ON/100)^3.402 * (p/1 atm)^-1.7 * exp(3800/T)
 //     ON = the octane index OI = RON - K*S, S = RON - MON, K = 0.5 [AS] (= the anti-knock index (R+M)/2).
 //   * Livengood & Wu 1955: autoignition when integral_{IVC}^{t} dt/tau >= 1 [AS: cited by name, not verified locally].
-//   * End-gas temperature: isentropic compression of the unburned charge (the IVC mixture: fresh air plus the residual
-//     burned fraction, cv = a + b*T per group) from the IVC state along the single-zone pressure,
+//   * End-gas temperature: isentropic compression of the unburned charge from the IVC state along the single-zone
+//     pressure, cv = a + b*T per group,
 //         (a_m + r_m)*ln(T/T0) + b_m*(T - T0) = r_m*ln(p/p0),
 //     solved by Newton. Wall heat to the end gas is neglected (the single-zone pressure carries the wall loss).
+//     The charge is fresh air, the residual burned fraction AND the fuel vapour (KnockReplayInput::fuel_mass_fraction):
+//     the cycle model's fresh gas is air only (gas.h, "fuel vapour neglected"), which is harmless for its work but not
+//     for the end gas - iso-octane vapour at a lambda-1 mass fraction of 1/(1+AFR) raises the unburned cv by ~16 % at
+//     600 K (gamma ~1.31 instead of ~1.38) and lowers the end-gas temperature at 45 bar by ~100 K. Vapour cv is a
+//     linear fit through two iso-octane ideal-gas cp values (kFuelVapour*, [AS] recalled, not verified locally); the
+//     generator uses the generating fuel's AFR for every listed fuel (only the octane differs between the tables).
 //   * The integral runs until the Wiebe burned fraction reaches kKnockEndBurnFraction (0.90 [AS]: past it the end gas
 //     left is too small to matter) or EVO, whichever comes first; trapezoidal on a fixed kKnockReplayStepDeg grid.
 //   * theta_kl = the largest advance [deg BTDC] whose integral stays < 1, by bisection between the eta_spark table's own
@@ -39,6 +45,13 @@ inline constexpr real kKnockSearchBelowMbtDeg = 40.0; // [D] the eta_spark table
 inline constexpr real kKnockSearchAboveMbtDeg = 10.0; // [D] the eta_spark table's most advanced node
 inline constexpr real kKnockSearchToleranceDeg = 0.05; // [AS] bisection stop
 // The knock model's own version, folded into the map cache key of opted-in engines only (bump on any change above).
+// Fuel vapour in the end gas (iso-octane as the surrogate, like the burned-gas fit in engine_cycle_desc.h):
+// cp(298.15 K) = 188.9 J/(mol K), cp(900 K) = 425 J/(mol K) [AS, recalled NIST WebBook / TRC ideal-gas values, not
+// verified locally]; M = 114.23 g/mol; cv = cp - R; linear fit cv = a + b*T through the two points [D].
+inline constexpr real kFuelVapourR_JkgK = 8314.462618 / 114.23;                                                  // [D]
+inline constexpr real kFuelVapourCvB_JkgK2 = ((425.0 - 188.9) / 0.11423) / (900.0 - 298.15);                     // [D]
+inline constexpr real kFuelVapourCvA_JkgK = 188.9 / 0.11423 - kFuelVapourR_JkgK - kFuelVapourCvB_JkgK2 * 298.15; // [D]
+
 inline constexpr std::uint32_t kKnockModelVersion = 1;
 
 [[nodiscard]] real octane_index(real ron, real mon);
@@ -54,6 +67,7 @@ struct KnockReplayInput {
     real ignition_delay_deg = 0.0;       // Wiebe start = spark + delay
     real burn_duration_deg = 0.0;        // the desc's Wiebe duration
     real inv_on_term = 0.0;              // douaud_eyzat_inv_on_term(OI) of the fuel
+    real fuel_mass_fraction = 0.0;       // fuel vapour share of the fresh charge, 1/(1 + lambda*AFR); 0 = air only
     real step_deg = kKnockReplayStepDeg;
     real end_burn_fraction = kKnockEndBurnFraction;
     bool stop_at_knock = true;           // false: integrate to the end (diagnostics)
@@ -63,6 +77,7 @@ struct KnockReplayResult {
     real integral = 0.0;   // Livengood-Wu integral at the end (or where it first reached 1 with stop_at_knock)
     real p_max_pa = 0.0;   // peak single-zone pressure at step ends
     real t_end_gas_k = 0.0; // end-gas temperature at the end of the integral
+    real p_end_pa = 0.0;    // single-zone pressure there
     bool knock = false;    // integral >= 1
 };
 

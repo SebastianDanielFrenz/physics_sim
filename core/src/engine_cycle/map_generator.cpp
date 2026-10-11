@@ -456,6 +456,7 @@ void EngineMapGenTask::run_point(std::size_t i) {
             kin.ivc = s.results[i].ivc;
             kin.ignition_delay_deg = s.desc.ignition_delay_deg;
             kin.burn_duration_deg = s.desc.burn_duration_deg;
+            kin.fuel_mass_fraction = real(1.0) / (real(1.0) + s.ops[i].lambda * s.afr);
             for (std::size_t f = 0; f < s.knock_nf; ++f) {
                 kin.inv_on_term = s.knock_inv_on[f];
                 const engine_cycle::KnockLimitResult kr = engine_cycle::knock_limited_spark(kin, s.knock_mbt_btdc, s.desc.knock.margin_deg);

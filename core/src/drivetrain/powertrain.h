@@ -112,6 +112,10 @@ public:
 
     [[nodiscard]] NodeId hub_node(std::size_t wheel_index) const { return hub_nodes_[wheel_index]; }
     [[nodiscard]] real hub_omega(std::size_t wheel_index) const { return network_.omega(hub_nodes_[wheel_index]); }
+    // Engine garage P7 white-box hooks (tests): the simulated engine (nullptr for a torque-map engine) and the index of
+    // the burnt fuel in its fuels list, which selects the generated knock table.
+    [[nodiscard]] const SimulatedEngine* simulated_engine() const { return sim_engine_ptr_; }
+    [[nodiscard]] std::size_t burnt_fuel_index() const { return burnt_fuel_index_; }
     [[nodiscard]] real hub_inertia(std::size_t wheel_index) const { return network_.node_inertia(hub_nodes_[wheel_index]); }
     // Initial-condition seeding only (VehicleInstance's constructor, once -
     // matches network.h's ShaftNetwork::set_omega's own contract).
