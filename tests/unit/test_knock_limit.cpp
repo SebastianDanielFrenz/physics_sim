@@ -143,6 +143,24 @@ constexpr SparkRow kWotSpark[] = {
 };
 constexpr std::size_t kKv1Rows = 4; // 2017-3571 rpm: the asserted band
 
+// Engine garage P7b - asserted bands, DECLARED (and committed) before the first comparison run of the calibrated model
+// and before the Mazda fixture existed. Every band is theta_kl(generated or replayed) minus the measured spark [deg].
+//   KV1 (A25A, training engine, generated Full maps, tier3_e10_cert, margin 0, MBT tracking): the P7 band [-5, +10] at
+//       the same four WOT rows 2017-3571 rpm (+ side: the ECU runs at or below its knock limit by its own margin; -5:
+//       the accuracy commonly attributed to a correlation-based knock prediction [AS]) - unchanged so the calibration
+//       cannot pick its own target.
+//   KV1-BC (A25A, the boundary-condition replay the constants are fitted on - measured rpm, MAP, IMT, cam, lambda and
+//       trapped air): every training row within [-5, +5] (a two-constant correlation that cannot reach +-5 on the engine
+//       it was fitted to is inadequate, whatever its mean).
+//   KV2 (Mazda 2.0 SKYACTIV-G, HELD OUT, tests/support/fixtures/mazda_skyactiv_g20 fixture, generated Full maps, Tier 2
+//       fuel RON 97.1 / MON 88.2 [C NVFEL 23945], margin 0, MBT tracking): [-5, +10] at every WOT row - the Steady State
+//       row with the highest torque per speed, kept where that torque is >= 95 % of the Max Torque Sweep torque at that
+//       speed (linear interpolation) - same band and rationale as KV1. No constant is tuned on the Mazda.
+constexpr real kKvBandLow = -5.0;
+constexpr real kKvBandHigh = 10.0;
+[[maybe_unused]] constexpr real kKvBcBand = 5.0;
+[[maybe_unused]] constexpr real kKv2WotTorqueFraction = 0.95;
+
 // The generator's operating point at a node (map_generator.cpp make_op: ISA intake/ambient, lambda 1, the cam schedule).
 ec::OperatingPoint node_op(const CycleModelDesc& c, real rpm, real p_pa, real spark_atdc) {
     ec::OperatingPoint op;
@@ -674,8 +692,8 @@ TEST_CASE("P7 KV1: A25A knock limit vs measured WOT spark (2017-3571 rpm)", "[kn
         CHECK(on.net_torque_nm <= of.net_torque_nm + 1e-9);
         if (i < kKv1Rows) {
             INFO("rpm " << r.rpm << " theta_kl " << t << " measured " << r.spark_btdc);
-            CHECK(t - r.spark_btdc >= -5.0);
-            CHECK(t - r.spark_btdc <= 10.0);
+            CHECK(t - r.spark_btdc >= kKvBandLow);
+            CHECK(t - r.spark_btdc <= kKvBandHigh);
         }
     }
 }
