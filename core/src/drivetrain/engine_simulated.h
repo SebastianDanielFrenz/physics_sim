@@ -184,6 +184,28 @@ public:
     SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_ptr<const SimulatedEngineMaps> maps);
 
     [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_maps(const SimulatedEngineDesc& desc);
+    // Engine garage P3 (the dyno's naturally aspirated path): the same model data as build_maps WITHOUT the ISA derived
+    // tables (steady_wot_nm, steady_motoring_nm, steady_torque_nm, inverse_plate stay empty, idle_ff/idle_p_im/
+    // idle_cap_x stay 0; the grid costs about 70 ms). Valid ONLY for steady_point() below and the const evaluation
+    // functions; never hand it to a SimulatedEngine (its idle control and ECU demand read the tables).
+    [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_model_maps(const SimulatedEngineDesc& desc);
+
+    // Engine garage P3: the steady operating point of a NATURALLY ASPIRATED engine at `rpm` (> 0) and throttle
+    // `command` (electronic: the torque request, turned into a plate by the runtime's own inverse definition;
+    // mechanical: the plate position), fired, no starter, limiter ignored (like the steady tables), bypass closed,
+    // at `ambient`. The manifold pressure is the root of f(p) = 0 (steady_p), the torque the evaluate_torque_impl
+    // value net of the Coulomb row (tau - c_k) - exactly what steady_net_torque, hence every node of the steady
+    // tables, returns: at a table node and ISA the value is bit-identical to steady_wot_nm / steady_torque_nm.
+    // No turbo (a turbo engine's torque depends on the charge the pair builds: step it instead, see
+    // ps/drivetrain/engine_dyno.h).
+    struct SteadyPoint {
+        real net_torque_nm = 0.0; // net crank torque, Coulomb row included
+        real p_im_pa = 0.0;       // steady manifold pressure
+        real plate = 0.0;         // throttle plate position used
+        real fuel_g_s = 0.0;      // booked fuel flow at this rpm
+        real lambda = 0.0, spark_deg = 0.0;
+    };
+    [[nodiscard]] static SteadyPoint steady_point(const SimulatedEngineMaps& m, real rpm, real command, const AmbientSample& ambient);
 
     [[nodiscard]] PreSolveResult pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) override;
     [[nodiscard]] PostSolveResult post_solve(real omega_new, real h) override;
@@ -352,6 +374,7 @@ public:
     [[nodiscard]] const WorkSplit& last_work_split() const { return work_split_; }
 
 private:
+    [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables);
     void init_state_for(EngineState state);
     void set_live_ambient(real p_pa,real t_k);
     // Live control path: the ambient differs from the setup tables' OR the ECU's friction scale is not exactly 1.0

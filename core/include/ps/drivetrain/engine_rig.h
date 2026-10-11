@@ -20,6 +20,7 @@
 #pragma once
 
 #include "ps/drivetrain/energy_ledger.h"
+#include "ps/drivetrain/engine_maps.h" // EngineMapsPtr
 #include "ps/drivetrain/engine_thermal_desc.h"
 #include "ps/drivetrain/powertrain_desc.h" // LoadDynoDesc
 #include "ps/drivetrain/powertrain_state.h" // EngineSoundState, EngineState
@@ -79,6 +80,19 @@ public:
                         const std::string* installation_override_path = nullptr);
     EngineRig(const std::string& engine_path, const io::EngineMapOptions& map_options,
               const std::string* installation_override_path, const Config& config);
+    // Engine garage P3 (out/engine_garage_design.md 10.1/11.4 A9): the same rig from an engine DESCRIPTOR already
+    // in memory (ps::io::load_engine_json's result, or a vehicle's engine component), so a garage that edited or
+    // regenerated an engine does not round-trip through a file. `maps` (null = the desc's own) replaces a
+    // simulated engine's whole maps block exactly like World::replace_engine_maps (see the internal
+    // drivetrain/engine_params_util.h) and completes a maps_pending desc; a non-null `maps` on a torque-map engine
+    // throws. A simulated desc that is still maps_pending throws SimulatedEngine's "the engine's maps are pending"
+    // message. The path constructors above are thin wrappers over the same build, so a rig from a loaded desc is
+    // bit-identical to a rig from its path (test_engine_dyno D7). No installation override (a pipe engine's
+    // installation is already resolved inside the desc) and, without a path, no "default_thermal" fallback: a
+    // cooling_system then needs Config::engine_thermal_path. Two overloads for the same clang-cl nested-default
+    // reason as above.
+    EngineRig(const drivetrain::ComponentParams& engine, drivetrain::EngineMapsPtr maps);
+    EngineRig(const drivetrain::ComponentParams& engine, drivetrain::EngineMapsPtr maps, const Config& config);
     ~EngineRig();
     EngineRig(EngineRig&&) noexcept;
     EngineRig& operator=(EngineRig&&) noexcept;
@@ -125,6 +139,10 @@ public:
     void set_thermal_friction_scale_override_for_test(real k);
 
 private:
+    // The one real constructor (the public ones delegate). engine_path: the file the desc came from (nullptr =
+    // none), used only for the engine's "default_thermal" lookup and as the Powertrain's name. The trailing int
+    // only keeps this overload distinct from the public ones.
+    EngineRig(drivetrain::ComponentParams engine_params, const Config& config, const std::string* engine_path, int);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

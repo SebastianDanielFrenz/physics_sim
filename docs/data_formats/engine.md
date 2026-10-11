@@ -910,3 +910,57 @@ release bookkeeping while the kit sprays; without a spray it is the pre-N3 balan
   subtracted from the exhaust balance.
 
 Tests: `tests/unit/test_n2o_turbo.cpp` (T1-T6, `[n2o][turbo]`).
+
+## Dyno sweep: `run_dyno_sweep` (engine garage P3, A9)
+
+`ps/drivetrain/engine_dyno.h`: a full-throttle (or part-throttle) dyno sweep of ONE engine over rpm, from the same
+runtime engine the car drives. Not a file format; the call is documented here because it reads the engine file's
+tables.
+
+```cpp
+DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps /*null = the desc's own*/,
+                          const DynoSweepSpec& spec, jobs::JobSystem* pool = nullptr,
+                          const std::atomic<bool>* cancel = nullptr);
+```
+
+`DynoSweepSpec`: `rpm` (empty = idle_rpm up to the limiter in 250 rpm steps [AS], the limiter point last, no
+duplicate), `throttle` (1.0; the engine's throttle COMMAND - an electronic engine's torque request, a mechanical
+engine's plate; no pedal map, throttle stage or TCU exists at engine level), `ambient` (ISA sea level), and for turbo
+engines `max_settle_s` (15 [C], the bench_hyper_calibration hold), `settle_window_s` (0.5 [AS]),
+`settle_boost_bar_per_s` (0.005 [AS]; 0 never converges), `anti_lag` (request the anti-lag channel).
+
+`DynoPoint`: `rpm`, `torque_nm` (NET at the crank, Coulomb row included), `power_kw`, `boost_bar` (manifold gauge, 0
+without a turbo), `turbo_rpm`, `fuel_g_s`, `bsfc_g_kwh`, `lambda`, `spark_deg`, `p_intake_kpa`, `exhaust_k`,
+`charge_boost_bar`, `converged`, `settle_s`. A quantity the engine kind does not model is NaN (a torque map has no
+lambda/spark/manifold/exhaust temperature; only a turbo engine has `exhaust_k`; `fuel_g_s` is NaN for a torque map
+without any fuel model). `DynoResult` is a struct (`points`) so later increments can add findings without changing
+the vector.
+
+Method per kind (the limiter is never applied - it shapes the operating line, not what the engine can deliver):
+
+| Engine | Method | Cost |
+|---|---|---|
+| `torque_map` | net torque `w - (1 - throttle) * (w - m)` from the wot/motoring curves = what EngineTorqueMap delivers net of the Coulomb row (exactly `w` at throttle 1). Fuel: the fuel map at the point, else the crude `max(0, theta * (w - m) * omega) / (eta_i * LHV)` model. Governor and ambient ignored. | instant |
+| `simulated`, no turbo | the steady operating point `SimulatedEngine::steady_point(maps, rpm, command, ambient)` - an exact bisection of the manifold balance (and of the plate for a part-throttle torque request), the definition every node of the steady tables is built from: the table value at its nodes, equal to a stepped engine within 0.25 %. | instant |
+| `simulated`, turbo | the real runtime engine (TurboPair, wastegate PID, charge lag) stepped at 960 Hz with the crank held at the point's speed. Boost is averaged over windows of `settle_window_s`; the point has settled when two consecutive window means satisfy `abs(difference) / settle_window_s < settle_boost_bar_per_s`; the reported values are the means over that last window. The earliest exit is after two windows (1 s). Otherwise it stops at `max_settle_s` with `converged = false`. | 1 - 15 s simulated per point |
+
+Maps: `maps` null uses the desc's own. An `EngineMapsPtr` replaces a simulated engine's whole `maps` block exactly like
+`World::replace_engine_maps` and completes a `maps_pending` desc (the garage flow: validate-only load, then
+`generate_engine_maps`, then the sweep). A `maps_pending` desc without maps throws `std::runtime_error` ("... maps are
+pending ..."); maps given to a torque-map engine throw too. A bad spec (non-positive rpm, throttle outside 0..1, a
+non-positive window) throws `std::invalid_argument`. Nitrous is not part of the sweep.
+
+Threading: the turbo kind runs one job per point on `pool` (nullptr = serially); each job builds its own
+`SimulatedEngine` from shared immutable maps and writes its own slot, so the result is bit-identical for any worker
+count and for no pool. The instant kinds always run serially.
+
+Cancel: the flag is read (relaxed) before each point. Once set, that point and every point not yet started are skipped
+and the call throws `GenerationCancelled` after the running points finish; nothing partial is returned. A flag set on
+entry throws before any work. A sweep whose points all started before the flag was set completes normally.
+
+`EngineRig` has matching constructors from a descriptor, `EngineRig(const ComponentParams&, EngineMapsPtr [, Config])`
+(null maps = the desc's own); the path constructors are thin wrappers and bit-identical to the descriptor path. A rig
+built from a descriptor needs `Config::engine_thermal_path` when it has a cooling system (there is no engine file to
+read `default_thermal` from).
+
+Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`).
