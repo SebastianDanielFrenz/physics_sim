@@ -24,6 +24,13 @@ namespace {
 // ---- exact comparison helpers (any bit-level difference counts; NaN never occurs in a loaded descriptor) ------------------
 [[nodiscard]] bool same(const vehicle::Curve1D& a, const vehicle::Curve1D& b) { return a.x == b.x && a.y == b.y; }
 [[nodiscard]] bool same(const Table2D& a, const Table2D& b) { return a.x == b.x && a.y == b.y && a.values == b.values; }
+[[nodiscard]] bool same_tables(const std::vector<Table2D>& a, const std::vector<Table2D>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (!same(a[i], b[i])) return false;
+    }
+    return true;
+}
 [[nodiscard]] bool same(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 [[nodiscard]] bool same(const IdleControlDesc& a, const IdleControlDesc& b) {
     return a.kp_per_rpm == b.kp_per_rpm && a.ki_per_rpm_s == b.ki_per_rpm_s && a.max_throttle == b.max_throttle &&
@@ -38,7 +45,8 @@ namespace {
 // FuelDesc::source is provenance text only (the generator never reads it, engine_map_cache_key excludes it).
 [[nodiscard]] bool same(const FuelDesc& a, const FuelDesc& b) {
     return a.name == b.name && a.phase == b.phase && a.lhv_j_kg == b.lhv_j_kg && a.afr_stoich == b.afr_stoich &&
-           a.density_kg_m3 == b.density_kg_m3;
+           a.density_kg_m3 == b.density_kg_m3 && a.has_knock == b.has_knock &&
+           (!a.has_knock || (a.knock.model == b.knock.model && a.knock.ron == b.knock.ron && a.knock.mon == b.knock.mon));
 }
 [[nodiscard]] bool same(const std::vector<FuelDesc>& a, const std::vector<FuelDesc>& b) {
     if (a.size() != b.size()) return false;
@@ -115,6 +123,14 @@ namespace {
 [[nodiscard]] CycleModelDesc effective_cycle(const SimulatedEngineDesc& e) {
     CycleModelDesc c = *e.cycle;
     if (c.intake.has_value()) c.intake->compressor_supply = e.turbo_pair.has_value();
+    // Engine garage P7: a knock-limited engine's knock fuels are the engine's fuels list with their knock blocks (the
+    // loader's rule), so a fuels-list or octane edit made on the desc alone is classified like a reloaded file (Maps).
+    if (c.knock.enabled) {
+        c.knock.fuels.clear();
+        for (const FuelDesc& f : e.fuels) {
+            c.knock.fuels.push_back(CycleModelDesc::KnockFuel{f.name, f.has_knock ? f.knock.ron : real(0.0), f.has_knock ? f.knock.mon : real(0.0)});
+        }
+    }
     return c;
 }
 
@@ -206,7 +222,8 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
            !same(a.maps.eta_spark, b.maps.eta_spark) || !same(a.maps.theta_mbt_deg, b.maps.theta_mbt_deg) ||
            !same(a.maps.friction_torque_nm, b.maps.friction_torque_nm) || a.maps.has_pmep_excess != b.maps.has_pmep_excess ||
            !same(a.maps.pmep_excess_pa, b.maps.pmep_excess_pa) || a.maps.has_theta_kl != b.maps.has_theta_kl ||
-           !same(a.maps.theta_kl_deg, b.maps.theta_kl_deg) || a.maps_pending != b.maps_pending,
+           !same(a.maps.theta_kl_deg, b.maps.theta_kl_deg) || !same_tables(a.maps.theta_kl_by_fuel, b.maps.theta_kl_by_fuel) ||
+           a.maps_pending != b.maps_pending,
        "/maps");
     rt(a.inertia_kgm2 != b.inertia_kgm2, "/inertia_kgm2");
     rt(a.breakaway_torque_nm != b.breakaway_torque_nm, "/breakaway_torque_nm");

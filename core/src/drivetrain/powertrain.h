@@ -113,6 +113,10 @@ public:
 
     [[nodiscard]] NodeId hub_node(std::size_t wheel_index) const { return hub_nodes_[wheel_index]; }
     [[nodiscard]] real hub_omega(std::size_t wheel_index) const { return network_.omega(hub_nodes_[wheel_index]); }
+    // Engine garage P7 white-box hooks (tests): the simulated engine (nullptr for a torque-map engine) and the index of
+    // the burnt fuel in its fuels list, which selects the generated knock table.
+    [[nodiscard]] const SimulatedEngine* simulated_engine() const { return sim_engine_ptr_; }
+    [[nodiscard]] std::size_t burnt_fuel_index() const { return burnt_fuel_index_; }
     [[nodiscard]] real hub_inertia(std::size_t wheel_index) const { return network_.node_inertia(hub_nodes_[wheel_index]); }
     // Initial-condition seeding only (VehicleInstance's constructor, once -
     // matches network.h's ShaftNetwork::set_omega's own contract).
@@ -667,6 +671,9 @@ private:
     // rebuild a new SimulatedEngineMaps - only .maps ever changes across a
     // hot swap, so this copy is retained unmodified past construction.
     std::optional<SimulatedEngineDesc> simulated_engine_desc_;
+    // Engine garage P7: index of the burnt fuel in the engine's fuels list (the tank's, else 0) - selects the
+    // per-fuel generated knock table at construction and on every replace_engine_maps.
+    std::size_t burnt_fuel_index_ = 0;
     NodeId engine_crank_;
     FrictionRowId engine_friction_row_; // engine-to-ground Coulomb friction (plan section 5.1 row 2)
     EngineTorqueMap::PreSolveResult last_engine_result_{}; // this substep's pre_solve() output, cached

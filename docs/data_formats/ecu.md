@@ -44,6 +44,7 @@ own metadata; they are not merged into the engine. Every other key must be one o
 | `limiter` | the rev limiter block |
 | `throttle_actuator_tau_s` | electronic throttle actuator lag |
 | `ecu.lambda_target`, `ecu.spark_advance_deg` | the simulated engine's `ecu` block tables |
+| `ecu.ignition_strategy`, `ecu.knock_margin_deg` | engine garage P7 knock-limit opt-in (below) |
 | `cycle.spark_advance_deg` | the cycle block's spark schedule (copied into `ecu.spark_advance_deg` by the loader, as inline) |
 | `cycle.cam` | the cam phaser schedule of the cycle block |
 | `*_source` | a source note next to any of the above (top level, inside `ecu` or `cycle`) |
@@ -51,6 +52,33 @@ own metadata; they are not merged into the engine. Every other key must be one o
 A part may carry any subset; it is merged as given (a partial ECU leaves the
 engine's other inline fields alone). `cycle.*` keys need an engine with a
 `cycle` block.
+
+## Knock-limit opt-in (engine garage P7)
+
+Inside the `ecu` object (inline in an engine or in an ECU part):
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `ignition_strategy` | string | `"schedule"` | `"schedule"`: the spark is the ECU table (every engine before P7). `"knock_limited"`: the runtime spark is `min(table, theta_kl)`; theta_kl is generated from the cycle block for every listed fuel (or taken from `maps.theta_kl_deg`) |
+| `knock_margin_deg` | real, deg crank | required with `"knock_limited"` | how far the ECU stays below the knock-onset spark; in [0, 10] |
+
+With `"knock_limited"` the spark table may be omitted (and a cycle block's
+`spark_advance_deg` removed with `null` in a child engine): the ECU then tracks
+MBT - `ecu.spark_advance_deg` is filled from the generated `maps.theta_mbt_deg`
+after map generation - and the knock limit retards it where needed. A
+validate-only (pending) load leaves that table empty until the maps exist.
+Opting in moves the engine's map cache key (the octane numbers of its fuels and
+the margin join it); an engine that does not opt in is bit-identical to before
+P7. See engine.md "Knock limit".
+
+Rejections (engine reader, after the merge):
+
+- `ignition_strategy` not a string, or not `"schedule"`/`"knock_limited"`
+- `knock_margin_deg` without `ignition_strategy "knock_limited"`
+- `"knock_limited"` without `knock_margin_deg`
+- `knock_margin_deg` not a number or outside [0, 10]
+- `"knock_limited"` on an engine with neither a cycle block nor `maps.theta_kl_deg`
+- `"knock_limited"` with a listed fuel that has no `knock` block (fuel.md)
 
 ## Rejections
 

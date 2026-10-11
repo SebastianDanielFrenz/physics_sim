@@ -101,6 +101,15 @@ inline constexpr Threshold kBottleReserve{"bottle_reserve_factor", 1.10, "[AS] ~
 inline constexpr Threshold kBottleFlowRetentionNear{"bottle_flow_retention_near", 0.90, "[AS] a 10 % flow loss over one pass is visible on the power"};
 inline constexpr Threshold kBottleFlowRetentionLimiting{"bottle_flow_retention_limiting", 0.80, "[AS] 20 % flow loss over one pass"};
 
+// --- Knock (engine garage P7; a knock-limited engine, ECU ignition_strategy "knock_limited") ---------------------------------
+// Retard = ECU schedule - theta_kl where the knock limit holds the applied spark below the schedule. The generator's own
+// bisection stops at 0.05 deg (ps/engine_cycle/knock.h kKnockSearchToleranceDeg), so a smaller retard is search noise.
+inline constexpr Threshold kKnockNear{"knock_near_retard_deg", 0.05, "[D] the knock search's own 0.05 deg bisection tolerance (knock.h)"};
+// Limiting: the retard costs a visible share of the torque. The generated eta_spark curves lose roughly 1-3 % at 5 deg from
+// MBT (measured on the shipped generated A25A, see engine.md 'Knock limit'), so 5 deg of knock retard is where the fuel or
+// the ECU margin caps the output. A judgement, not a physical edge.
+inline constexpr Threshold kKnockLimiting{"knock_limiting_retard_deg", 5.0, "[AS] ~1-3 % torque on the generated eta_spark curves"};
+
 // --- Simulated remedies (ps/drivetrain/limit_remedies.h) -------------------------------------------------------------------
 // required_margin / required_min of a solved wastegate area (the N7b procedure: bisected, then +10 %).
 inline constexpr Threshold kWastegateRemedyMargin{"wastegate_remedy_margin", 1.10, "[AS] N7b: the bisected area plus 10 %"};
@@ -110,7 +119,7 @@ inline constexpr Threshold kAllLimitThresholds[] = {
     kRotorLimiting,   kSurgeNearMargin, kSurgeMinFraction,      kChokeNear,          kChokeLimiting,     kLimiterNear,
     kSoftCutNearBands, kPistonSpeedNear, kPistonSpeedLimiting,   kPistonSpeedExceeded, kEdgeMinFraction,   kEdgeNearFraction,
     kDrivelineMargin, kKitLambdaNear,   kKitLambdaLimiting,     kKitLambdaExceeded, kKitLambdaTarget,   kBottleDurationTarget, kBottleDurationNearFactor,
-    kBottleReserve,   kBottleFlowRetentionNear, kBottleFlowRetentionLimiting, kWastegateRemedyMargin,
+    kBottleReserve,   kBottleFlowRetentionNear, kBottleFlowRetentionLimiting, kWastegateRemedyMargin, kKnockNear, kKnockLimiting,
 };
 inline constexpr std::size_t kAllLimitThresholdCount = sizeof(kAllLimitThresholds) / sizeof(kAllLimitThresholds[0]);
 

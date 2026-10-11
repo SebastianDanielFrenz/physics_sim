@@ -75,6 +75,41 @@ FuelDesc read_fuel_object(const json& j) {
     d.source = j.value("source", std::string());
     if (d.source.empty()) throw std::runtime_error("fuel '" + d.name + "': 'source' is required (PLAN.md section 8)");
 
+    // Engine garage P7: optional knock block. Unknown keys are rejected here (unlike the top level, which predates
+    // the rule): a misspelt octane key must not silently leave a knock-limited engine without its fuel data.
+    if (j.contains("knock")) {
+        const json& k = j.at("knock");
+        const std::string where = "fuel '" + d.name + "': knock: ";
+        if (!k.is_object()) throw std::runtime_error(where + "must be an object");
+        for (auto it = k.begin(); it != k.end(); ++it) {
+            const std::string& key = it.key();
+            if (key != "model" && key != "ron" && key != "mon" && key != "source") {
+                throw std::runtime_error(where + "unknown key '" + key + "' (allowed: model, ron, mon, source)");
+            }
+        }
+        if (!k.contains("model") || !k.at("model").is_string()) throw std::runtime_error(where + "'model' is required (\"douaud_eyzat\")");
+        const std::string model = k.at("model").get<std::string>();
+        if (model != "douaud_eyzat") throw std::runtime_error(where + "model \"" + model + "\" is not supported (only \"douaud_eyzat\")");
+        d.knock.model = ps::drivetrain::FuelKnockModel::DouaudEyzat;
+        const auto number = [&](const char* key) -> real {
+            if (!k.contains(key) || !k.at(key).is_number()) throw std::runtime_error(where + "'" + key + "' is required and must be a number");
+            const real v = k.at(key).get<real>();
+            if (!std::isfinite(v) || v < real(40.0) || v > real(130.0)) {
+                throw std::runtime_error(where + "'" + key + "' must be in [40, 130], got " + std::to_string(v));
+            }
+            return v;
+        };
+        d.knock.ron = number("ron");
+        d.knock.mon = number("mon");
+        if (d.knock.mon > d.knock.ron) {
+            throw std::runtime_error(where + "mon (" + std::to_string(d.knock.mon) + ") must not exceed ron (" + std::to_string(d.knock.ron) +
+                                     "): a fuel's sensitivity RON - MON is >= 0");
+        }
+        d.knock.source = k.value("source", std::string());
+        if (d.knock.source.empty()) throw std::runtime_error(where + "'source' is required (PLAN.md section 8)");
+        d.has_knock = true;
+    }
+
     return d;
 }
 

@@ -133,7 +133,7 @@ TEST_CASE("L1 thresholds: every entry is sourced ([C]/[D]/[AS]/[M]), named, fini
         CHECK(src.size() > 8); // a tag alone is not a source
         CHECK(names.insert(t.name).second);
     }
-    CHECK(limits::kAllLimitThresholdCount == 29);
+    CHECK(limits::kAllLimitThresholdCount == 31); // P7: + kKnockNear, kKnockLimiting
     // The ordered pairs a severity ladder depends on.
     CHECK(limits::kGateNear.value < limits::kGateFull.value);
     CHECK(limits::kBoostBandNear.value < limits::kBoostBandExceeded.value);
@@ -176,7 +176,7 @@ TEST_CASE("L2 kinds, severities, units: stable values and symbols", "[drivetrain
     CHECK(LimitSeverity::Near < LimitSeverity::Limiting);
     CHECK(LimitSeverity::Limiting < LimitSeverity::Exceeded);
     std::set<std::string> units;
-    for (int u = 0; u <= 10; ++u) CHECK(units.insert(to_string(static_cast<LimitUnit>(u))).second);
+    for (int u = 0; u <= 11; ++u) CHECK(units.insert(to_string(static_cast<LimitUnit>(u))).second);
     CHECK(std::string(to_string(LimitUnit::NewtonMetre)) == "N*m");
     CHECK(std::string(to_string(LimitUnit::RevPerMinute)) == "rpm");
     Remedy r;

@@ -214,6 +214,7 @@ struct PreSolveResult {
     real p_intake_pa = 0.0;           // intake manifold pressure p_im
     real lambda = 0.0;                 // commanded air/fuel ratio / stoichiometric (the ECU's lambda target)
     real spark_advance_deg = 0.0;      // applied spark advance (ECU target, knock-limited)
+    real knock_retard_deg = 0.0;       // engine garage P7: schedule minus the knock limit where it limits, else 0 (diagnostic)
     real exhaust_mass_flow_kg_s = 0.0; // (air + booked fuel) per revolution * rev/s (+ N2O while it flows)
     // N2O plan N2 (section 6): the wet charge model's state, 0 unless the charge model ran this substep. Never
     // hashed, never read back for physics.

@@ -548,6 +548,8 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         edits.emplace_back("gas.burned.cv_b_j_kgk2", [&](CycleModelDesc& d) { d.gas.burned.cv_b_j_kgk2 = bump(d.gas.burned.cv_b_j_kgk2); });
         edits.emplace_back("gas.burned.gamma_flow", [&](CycleModelDesc& d) { d.gas.burned.gamma_flow = bump(d.gas.burned.gamma_flow); });
         edits.emplace_back("source", [&](CycleModelDesc& d) { d.source += "x"; });
+        // Engine garage P7: the knock opt-in flag alone moves the key (the fixture has no knock limit).
+        edits.emplace_back("knock.enabled", [&](CycleModelDesc& d) { d.knock.enabled = true; });
 
         for (const auto& [name, edit] : edits) {
             CycleModelDesc d = ref_desc;
@@ -579,6 +581,41 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
             INFO(name);
             CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) != base_key);
         }
+    }
+
+    SECTION("engine garage P7: with a knock limit, every knock field bumps the key; a fuel's own octane never does") {
+        const auto bump = [](real v) { return std::nextafter(v, real(1e300)); };
+        CycleModelDesc base = ref_desc;
+        base.knock.enabled = true;
+        base.knock.margin_deg = 2.0;
+        base.knock.fuels = {{"e10", 95.0, 85.0}, {"e85", 104.0, 88.0}};
+        const std::uint64_t base_key = engine_map_cache_key(base, ref_fuel, MapQuality::Preview);
+        CHECK(base_key != ref_key);
+        std::vector<std::pair<const char*, std::function<void(CycleModelDesc&)>>> edits;
+        edits.emplace_back("knock.margin_deg", [&](CycleModelDesc& d) { d.knock.margin_deg = bump(d.knock.margin_deg); });
+        edits.emplace_back("knock.fuels[0].ron", [&](CycleModelDesc& d) { d.knock.fuels[0].ron = bump(d.knock.fuels[0].ron); });
+        edits.emplace_back("knock.fuels[1].mon", [&](CycleModelDesc& d) { d.knock.fuels[1].mon = bump(d.knock.fuels[1].mon); });
+        edits.emplace_back("knock.fuels[1].name", [&](CycleModelDesc& d) { d.knock.fuels[1].name += "x"; });
+        edits.emplace_back("knock.fuels order", [&](CycleModelDesc& d) { std::swap(d.knock.fuels[0], d.knock.fuels[1]); });
+        edits.emplace_back("knock.fuels count", [&](CycleModelDesc& d) { d.knock.fuels.pop_back(); });
+        for (const auto& [name, edit] : edits) {
+            CycleModelDesc d = base;
+            edit(d);
+            INFO(name);
+            CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) != base_key);
+        }
+        // The generator reads octane from desc.knock (filled by the loader), never from the FuelDesc it is handed:
+        // a fuel's knock block is outside the key, for opted-in engines too.
+        FuelDesc f = ref_fuel;
+        f.has_knock = true;
+        f.knock.ron = 99.0;
+        f.knock.mon = 88.0;
+        CHECK(engine_map_cache_key(base, f, MapQuality::Preview) == base_key);
+        CHECK(engine_map_cache_key(ref_desc, f, MapQuality::Preview) == ref_key);
+        // Not opted in: a knock block filled but disabled leaves the key untouched (only `enabled` gates it).
+        CycleModelDesc off = base;
+        off.knock.enabled = false;
+        CHECK(engine_map_cache_key(off, ref_fuel, MapQuality::Preview) == ref_key);
     }
 
     // ps_audio A4 (out/audio_plan.md section 3.1/3.2/3.3): the intake/exhaust

@@ -29,6 +29,21 @@ enum class FuelPhase {
     Liquid,
 };
 
+// Engine garage P7 (C17b part 1): optional knock resistance of a fuel, read by the map generator's
+// knock-limit map (ps/engine_cycle/knock.h) - and only for an engine that opts in (ECU
+// ignition_strategy "knock_limited"). Absent = the fuel has no knock data (diesel, or a file that
+// predates P7); an opted-in engine listing such a fuel is rejected by the loader.
+enum class FuelKnockModel {
+    DouaudEyzat, // "douaud_eyzat": Douaud & Eyzat 1978 induction-time correlation on an octane index
+};
+
+struct FuelKnockDesc {
+    FuelKnockModel model = FuelKnockModel::DouaudEyzat;
+    real ron = 0.0; // research octane number (ASTM D2699 / EN ISO 5164), in [40, 130], ron >= mon
+    real mon = 0.0; // motor octane number (ASTM D2700 / EN ISO 5163), in [40, 130]
+    std::string source; // provenance of the two numbers (required, non-empty)
+};
+
 struct FuelDesc {
     std::string name;   // e.g. "gasoline", "diesel" - informational only
     FuelPhase phase = FuelPhase::Liquid;
@@ -42,6 +57,11 @@ struct FuelDesc {
     // table or problem, and page/edition each numeric value above was read
     // from. Required, must be non-empty.
     std::string source;
+
+    // Engine garage P7: optional "knock" block (see FuelKnockDesc). Not a heating/stoichiometry
+    // property: nothing outside an opted-in engine's knock map reads it.
+    bool has_knock = false;
+    FuelKnockDesc knock;
 };
 
 } // namespace ps::drivetrain

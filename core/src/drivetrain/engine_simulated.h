@@ -204,6 +204,7 @@ public:
         real plate = 0.0;         // throttle plate position used
         real fuel_g_s = 0.0;      // booked fuel flow at this rpm
         real lambda = 0.0, spark_deg = 0.0;
+        real knock_retard_deg = 0.0; // engine garage P7: schedule - theta_kl where the knock limit holds the spark, else 0
     };
     [[nodiscard]] static SteadyPoint steady_point(const SimulatedEngineMaps& m, real rpm, real command, const AmbientSample& ambient);
 
@@ -286,6 +287,9 @@ public:
         real m_fuel_rev = 0.0;   // kg per crank revolution, fired (fire fraction and s_starve applied)
         real fire = 0.0;         // gate * soft-cut taper, before s_starve
         real lambda = 0.0, spark_deg = 0.0, theta_mbt_deg = 0.0;
+        // Engine garage P7: how far the knock limit holds the spark below the schedule (schedule - kit retard),
+        // 0 when it does not limit. Diagnostic (the dyno's Knock finding), never read by the dynamics.
+        real knock_retard_deg = 0.0;
         real eta_i = 0.0, f_lambda = 0.0, eta_spark = 0.0;
         // I7d D5: tau_comb at the SCHEDULED spark with every injected charge fired (no anti-lag retard,
         // spark setting or cylinder cut; the anti-lag lambda applies); equal to tau_comb without anti-lag.

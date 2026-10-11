@@ -45,7 +45,7 @@ void require_part_format(const json& j, const std::string& kind, const std::stri
 constexpr const char* kEcuTopKeys[] = {"idle_rpm",        "stall_rpm",         "fire_rpm",
                                        "start_complete_rpm", "dfco_enable_rpm", "dfco_reenable_rpm",
                                        "idle_control",    "limiter",           "throttle_actuator_tau_s"};
-constexpr const char* kEcuBlockKeys[] = {"lambda_target", "spark_advance_deg"}; // engine "ecu" object
+constexpr const char* kEcuBlockKeys[] = {"lambda_target", "spark_advance_deg", "ignition_strategy", "knock_margin_deg"}; // engine "ecu" object (P7: + knock opt-in)
 constexpr const char* kEcuCycleKeys[] = {"spark_advance_deg", "cam"};         // engine "cycle" object
 constexpr const char* kCamKeys[] = {"intake_lift", "exhaust_lift"};           // engine "cycle" object
 
@@ -93,7 +93,7 @@ json ecu_patch(const json& part, const std::string& path) {
                 const bool ok = (k == "ecu" ? in_list(kk, kEcuBlockKeys) : in_list(kk, kEcuCycleKeys)) || ends_with_source(kk);
                 if (!ok) {
                     throw std::runtime_error(path + ": '" + k + "." + kk + "' is not an ECU field (an ECU part may set " + k +
-                                             (k == "ecu" ? ".lambda_target, ecu.spark_advance_deg" : ".spark_advance_deg, cycle.cam") +
+                                             (k == "ecu" ? ".lambda_target, ecu.spark_advance_deg, ecu.ignition_strategy, ecu.knock_margin_deg" : ".spark_advance_deg, cycle.cam") +
                                              " and *_source notes)");
                 }
             }
