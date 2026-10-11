@@ -10,6 +10,7 @@
 namespace ps::vehicle {
 struct TractionControlDesc {
     bool enabled=false; // runtime channel default; legacy native vehicles unchanged
+    bool fitted=true;   // engine garage P8 (A15): false = the car has no TC, the channel is ignored. Not hashed (default true = unchanged).
     real target_slip=.08, reference_floor_m_s=2.0;
     real kp=2.0, ki_per_s=6.0, attack_rate_per_s=20.0, recovery_rate_per_s=8.0;
 };

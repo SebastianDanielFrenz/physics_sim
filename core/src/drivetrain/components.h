@@ -57,6 +57,7 @@ struct ComponentSubstepCtx {
     real ignition = 1.0; // channel "ignition"
     real starter = 0.0;  // channel "starter"
     bool assist_auto_clutch = true, assist_auto_blip = true, assist_auto_shift = false;
+    bool assist_launch_control = false; // engine garage P8: arm switch (channel on AND fitted); read only with a launch_control
     bool first_substep_of_tick = false;
 
     // --- computed by Powertrain::pre_solve_components's controller phase,

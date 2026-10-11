@@ -31,7 +31,7 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `brake_system` | [brake_system object](#brake_system) | optional | no corners, no handbrake | see below | direct-torque friction brakes |
 | `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
-| `controllers` | array of [controller objects](#controllers) | optional | empty | at most 1 entry, else `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"` | driver-assist logic (auto-clutch, auto-blip, auto-shift) |
+| `controllers` | array of [controller objects](#controllers) | optional | empty | at most 1 entry, else `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"` | driver-assist logic (auto-clutch, auto-blip, auto-shift); P8 adds `electronics` entries (launch control, assist fitment), see [below](#controllers) |
 | `cooling_system` | string | optional | path relative to the vehicle file; a `physics_sim.cooling_system/1` file ([cooling_system.md](cooling_system.md)); needs an engine component whose engine file names a `default_thermal` (or whose component carries a `thermal` override), else the load throws | **opts the vehicle in to the lumped engine/oil thermal model** (coolant and oil temperature, thermostat, radiator, fan, oil-viscosity friction, gauge, `vehicle<i>.thermal.*` telemetry). Absent = no thermal state, every hash and CSV header as before |
 | `engine_thermal_start` | string | optional | `"warm"` (default) or `"ambient"`; rejected without a `cooling_system` | `"warm"`: coolant at the thermostat's 25 % opening point (91 C by default), oil at the friction reference temperature (95 C, friction scale exactly 1); `"ambient"`: cold soak at the first tick's ambient temperature. A scenario's vehicle entry may give its own `engine_thermal_start`, which wins |
 
@@ -955,6 +955,16 @@ Apart from the three `upshift_*` fields above, none of the numeric
 sub-fields inside `auto_blip`/`auto_shift` are range-validated by the
 loader beyond the defaults shown.
 
+**Engine garage P8 (fitment, [electronics.md](electronics.md)).** `auto_clutch`, `auto_blip` and `auto_shift` each take an
+optional `"fitted"` bool (default `true`); `false` makes the assist ignore its `assist.*` channel (the channel is still
+registered, default 0). The vehicle-level `traction_control` block takes the same `fitted` key, and an optional
+top-level `"anti_lag_switch": {"fitted": false}` removes the car-side anti-lag switch (the engine's anti-lag channel is
+then ignored; `default_enabled` rules). The `controllers` array also accepts entries `{"id", "type": "electronics",
+"ref": "<physics_sim.electronics/1 file>"}` (path relative to the vehicle file) next to the one `manual_tcu`: a
+`launch_control` part (second rev limit, channel `assist.launch_control`, registered only on a car that has one) or an
+`assist_fitment` part (sets `fitted` to `true` for the assists it lists). At most one `manual_tcu` and one
+`launch_control`; ids are unique across all controllers.
+
 ## Control channels a vehicle reads
 
 Not part of the JSON format, but relevant context for anyone editing a
@@ -1197,3 +1207,8 @@ whose `ecu` block is inline.
 
 The user layer only edits the component JSON before it is read, so a user choice equals writing the same keys into the
 vehicle file: same descriptor, same `.psmaps`/turbo keys, same state hash.
+
+**Electronics (engine garage P8).** `VehicleLoadOptions::electronics` (`std::map<std::string, std::string>`) is keyed by
+a `controllers` entry id: a path to a `physics_sim.electronics/1` file replaces that entry's part or adds a new entry
+(grafting launch control onto a car that has none), `"none"` removes the entry. Details and rejections:
+[electronics.md](electronics.md).

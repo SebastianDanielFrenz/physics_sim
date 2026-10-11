@@ -750,6 +750,7 @@ $script:PathRules = @(
     @{ Re = '^data/(vehicles|tyres|engines|gearboxes)/'; Kind = 'topics'; Topics = @('vehicle') },
     @{ Re = '^data/fuels/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },
     @{ Re = '^data/(engine_thermal|cooling_systems)/'; Kind = 'topics'; Topics = @('io', 'drivetrain', 'vehicle') },  # engine thermal T1 part files
+    @{ Re = '^data/electronics/'; Kind = 'topics'; Topics = @('io', 'drivetrain', 'vehicle') },  # engine garage P8 electronics parts (launch control, assist fitment)
     @{ Re = '^data/oxidizers/|^tools/oxidizerdata/'; Kind = 'topics'; Topics = @('io', 'drivetrain') },  # N2O N0 property data + its generator
     @{ Re = '^data/(climates|weather_presets|weather_classes|surface_conditions|tyre_profiles)/'; Kind = 'topics'; Topics = @('environment', 'io', 'vehicle') },  # weather plan data files
     @{ Re = '^data/surfaces/'; Kind = 'topics'; Topics = @('vehicle', 'terrain', 'io') },

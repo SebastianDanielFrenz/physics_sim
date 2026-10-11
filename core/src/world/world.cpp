@@ -689,18 +689,27 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     // toggled from the gamepad/HUD); the TCU desc's own `enabled` flags are
     // only these channels' defaults. No manual_tcu: created, default 0,
     // ignored.
+    // Engine garage P8 (A15): a NOT-FITTED assist still registers its channel (stable channel list) but with
+    // default 0, and VehicleInstance ignores the channel.
     real assist_clutch_default = real(0.0), assist_blip_default = real(0.0), assist_shift_default = real(0.0);
+    std::string launch_channel_name = "assist.launch_control";
+    bool has_launch_control = false; // the channel is registered only for a car that has the part (list unchanged for every other car)
     for (const drivetrain::ControllerDesc& cd : desc.controllers) {
         if (const auto* tcu = std::get_if<drivetrain::ManualTcuDesc>(&cd.params)) {
-            assist_clutch_default = tcu->auto_clutch.enabled ? real(1.0) : real(0.0);
-            assist_blip_default = tcu->auto_blip.enabled ? real(1.0) : real(0.0);
-            assist_shift_default = tcu->auto_shift.enabled ? real(1.0) : real(0.0);
+            assist_clutch_default = (tcu->auto_clutch.enabled && tcu->auto_clutch.fitted) ? real(1.0) : real(0.0);
+            assist_blip_default = (tcu->auto_blip.enabled && tcu->auto_blip.fitted) ? real(1.0) : real(0.0);
+            assist_shift_default = (tcu->auto_shift.enabled && tcu->auto_shift.fitted) ? real(1.0) : real(0.0);
+        } else if (const auto* lc = std::get_if<drivetrain::LaunchControlDesc>(&cd.params)) {
+            launch_channel_name = lc->channel;
+            has_launch_control = true;
         }
     }
     channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", assist_clutch_default);
     channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", assist_blip_default);
     channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift", assist_shift_default);
-    channel_indices.assist_traction_control = ensure_control_channel_index(channel_prefix + "assist.traction_control",desc.traction_control.enabled?real(1):real(0));
+    channel_indices.assist_traction_control = ensure_control_channel_index(channel_prefix + "assist.traction_control",(desc.traction_control.enabled&&desc.traction_control.fitted)?real(1):real(0));
+    // engine garage P8: never read on a car without the part (VehicleInstance gates it on fit_launch_)
+    if (has_launch_control) channel_indices.assist_launch_control = ensure_control_channel_index(channel_prefix + launch_channel_name, real(0));
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): resolve every control channel
     // this vehicle's powertrain components declare, same prefix convention

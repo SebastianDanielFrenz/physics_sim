@@ -27,6 +27,7 @@
 #include "engine_thermal.h"
 #include "engine_torque_map.h"
 #include "gearbox.h"
+#include "launch_control.h"
 #include "manual_tcu.h"
 #include "network.h"
 #include "nitrous_system.h"
@@ -430,6 +431,10 @@ public:
     // already-applied output (last_throttle_command_ above, a different
     // quantity: EngineSoundState::throttle_command only).
     [[nodiscard]] const TcuThrottleLimits& tcu_request_debug() const { return tcu_prev_request_; }
+    // Engine garage P8: launch control present / currently holding its second limit.
+    [[nodiscard]] bool has_launch_control() const { return launch_.has_value(); }
+    [[nodiscard]] bool launch_control_active() const { return launch_.has_value() && launch_->active(); }
+    [[nodiscard]] real launch_control_rpm() const { return launch_.has_value() ? launch_->desc().rpm : real(0.0); }
     [[nodiscard]] real idle_integrator() const { return has_engine() ? engine_->idle_integrator() : real(0.0); }
     // Fills out[wheel_index] with the torque of the diff row driving that
     // hub (coef*lambda, plan section 4.5), per diff (I4 C4), 0 for every
@@ -779,6 +784,9 @@ private:
     // throttle_stage.h); TcuThrottleLimits (namespace scope, above) is the
     // DIFFERENT thing this always was: the TCU's own lagged Outputs.
     std::unique_ptr<ManualTcu> tcu_;
+    // Engine garage P8 (A16): present iff the vehicle has a launch_control controller.
+    std::optional<LaunchControl> launch_;
+    bool anti_lag_fitted_ = true; // engine garage P8 (A15): PowertrainDesc::anti_lag_fitted
     TcuThrottleLimits tcu_prev_request_{}; // LAGGED one substep, fed into the engine (plan section 7.2)
 
     // --- rotor reaction (plan section 6.7) --------------------------------
