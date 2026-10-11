@@ -194,8 +194,9 @@ TEST_CASE("R1 nitrous sweep equals the dyno-held reference harness (hyper + 800 
 TEST_CASE("R2 a sweep without a kit, or with a kit the controller does not spray, is the plain sweep", "[drivetrain][dyno][n2o][turbo]") {
     // Bit-identity of the no-kit path is also pinned by test_engine_dyno (D*) and L18, which did not change. Here: the kit's rpm
     // window excludes every swept point -> the engine input is the empty block each substep -> every point equals the no-kit sweep
-    // bit for bit (both stepped), with the nitrous columns at their defaults. Recorded sabotage: the dyno ignoring the
-    // controller's min_rpm (always full command) -> torque differs.
+    // bit for bit (both stepped), with the nitrous columns at their defaults. Recorded sabotage: the dyno handing the
+    // controller a speed inside its window (843 rad/s = 8050 rpm instead of the held crank speed) -> the kit sprays,
+    // torque 3124 vs 1220 Nm and 12 checks fail.
     const Car& c = n2o_car();
     DynoNitrous nit = *c.nitrous;
     nit.kit.controller.min_rpm = 8000.0;
@@ -316,8 +317,8 @@ TEST_CASE("R4 KitFuelLean: a shrunk fuel jet is found and its Closed jet remedy 
     // fuel jet to 0.7x leaves 0.49x of the kit fuel -> lambda_c 1.02 (Limiting); 0.5x -> 1.14 (Exceeded); 0.8x -> 0.96 (Near).
     // The remedy sizes the jet from the finding's own window (kit fuel ~ jet area, so d ~ sqrt(flow); ECU fuel and air taken as
     // unchanged - first order): applied and re-swept, required_min lands on lambda_c = 0.90 and required_margin on 0.82.
-    // Recorded sabotage: d scaling linearly with the flow (instead of sqrt) -> the applied jets miss by tens of percent in
-    // lambda (|lambda_c - 0.82| ~0.2 instead of < 0.015).
+    // Recorded sabotage: d scaling linearly with the flow (instead of sqrt) -> the applied jets are far too big: lambda_c 0.576
+    // at required_margin (target 0.82) and 0.753 at required_min (0.90), both bounds (0.015) fail.
     const Car& c = n2o_car();
     const DynoResult shipped = sweep(c.engine, c.nitrous, {3000.0, 5000.0, 7000.0});
     CHECK_FALSE(any_kind(shipped, LimitKind::KitFuelLean));
@@ -569,7 +570,8 @@ TEST_CASE("R9 TurboRotorCap: the wastegate clears one that came from a saturated
     // area clears it as clears the wastegate/boost kinds (the predicate for TurboRotorCap includes all three).
     // (b) target_boost 3 bar abs: at 6000 rpm the gate is shut and the rotor still hits the cap - a bigger gate changes nothing:
     // solved = false, part "turbo hardware" (empty field), no number.
-    // Recorded sabotage: the rotor kind left out of the TurboRotorCap predicate -> (b) reports solved = true at factor 1.
+    // Recorded sabotage: the rotor kind left out of the TurboRotorCap predicate (a boost-only predicate) -> (b) reports
+    // solved = true with numbers and a non-empty field (4 checks fail).
     const Car& c = n2o_car();
     const ComponentParams stock = stock_hardware_engine();
     {
@@ -603,14 +605,18 @@ TEST_CASE("R10 solve_power_target: the N2O jet for a power gain, an unreachable 
     // The kit's dyno-held gain at 5000 rpm is ~590 kW (Sketch maps). Asking for 450 kW solves for a smaller jet pair (the fuel jet
     // keeps the kit's diameter ratio); applied and re-swept the gain reaches the target (>= target, within ~2 % above: the
     // 0.5 % diameter tolerance is ~1 % in flow), and 2 % smaller in diameter it does not.
-    // Recorded sabotage: the comparison inverted (gain <= target counts as satisfied) -> the solve picks the largest candidate
-    // and the re-swept gain is far above 450 kW (the upper CHECK fails).
+    // Recorded sabotage: the comparison inverted (gain <= target counts as satisfied) -> the solve collapses to a ~0.002 mm jet
+    // (re-swept gain -31 kW, "g >= target" fails) and the unreachable target is reported solved (6 checks fail).
     const Car& c = n2o_car();
     RemedyRequest rq = request_for(c.engine, *c.nitrous, {5000.0});
     RemedyOptions o;
     o.pool = &pool10();
     const double target = 450.0;
+    const auto t0 = std::chrono::steady_clock::now();
     const PowerTargetResult res = solve_power_target(rq, PowerTargetPart::NitrousJet, 5000.0, target, o);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("[R10] power-target solve at 5000 rpm: jet %.4f mm (shipped %.4f), %zu evaluations, %.2f s on 10 workers\n", res.nitrous_jet.required_min, c.nitrous->kit.nitrous_jet_diameter_mm,
+                res.evaluations, seconds);
     REQUIRE(res.solved);
     CHECK(res.nitrous_jet.cost == RemedyCost::Simulated);
     CHECK(res.nitrous_jet.solved);
@@ -656,8 +662,9 @@ TEST_CASE("R10 solve_power_target: the N2O jet for a power gain, an unreachable 
 }
 
 TEST_CASE("R11 solve progress and cancel: calling-thread progress, a closing (total, total), a pre-set or mid-solve flag throws GenerationCancelled", "[drivetrain][dyno][n2o][turbo]") {
-    // Progress/cancel contract of P1/P3 (EngineMapOptions, run_dyno_sweep), for both solvers. Recorded sabotage: dropping the
-    // cancel check between rounds -> the mid-solve flag is never seen and the solve returns (the THROWS check fails).
+    // Progress/cancel contract of P1/P3 (EngineMapOptions, run_dyno_sweep), for both solvers. Recorded sabotage: the flag never
+    // read (cancelled() returning false, evaluations given no flag) -> the pre-set and the mid-solve THROWS checks fail and the
+    // solve runs to the end (17 progress calls, 16 evaluations; 8 checks fail).
     const Car& c = n2o_car();
     const ComponentParams stock = stock_hardware_engine();
     const RemedyRequest wg = request_for(stock, *c.nitrous, {5000.0});
@@ -721,9 +728,8 @@ TEST_CASE("R11 solve progress and cancel: calling-thread progress, a closing (to
 
 TEST_CASE("R12 a solve is bit-identical for no pool, 1 worker and 10 workers", "[drivetrain][dyno][n2o][turbo][long]") {
     // The 4-section search evaluates the same values whatever the pool; each evaluation is a serial single-point sweep.
-    // Recorded sabotage: the interior points chosen from completion order (ok[] read before the round finished) is not
-    // expressible here; instead the guard is the equality itself - the earlier design of a shared bracket updated by
-    // whichever evaluation finished first gave different required_min between 1 and 10 workers.
+    // Recorded sabotage: the interior fractions scaled by 1.03 whenever a pool was used -> required_min 1.43252e-3 vs
+    // 1.43352e-3 and the power-target jet 3.3578 vs 3.3561 mm (8 checks fail).
     const Car& c = n2o_car();
     const ComponentParams stock = stock_hardware_engine();
     const RemedyRequest wg = request_for(stock, *c.nitrous, {5000.0});
