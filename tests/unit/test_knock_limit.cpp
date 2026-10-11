@@ -638,6 +638,10 @@ TEST_CASE("P7 K7: classify_engine_change on a knock-limited engine", "[knock][dr
     b = a;
     std::swap(b.fuels[0], b.fuels[1]);
     CHECK(classify_engine_change(a, b) == EngineChange::Maps);
+    b = a;
+    REQUIRE_FALSE(b.ecu.lambda_target.values.empty());
+    b.ecu.lambda_target.values.back() -= 0.01; // P7b: the knock replay runs at the ECU lambda target
+    CHECK(classify_engine_change(a, b) == EngineChange::Maps);
 
     const SimulatedEngineDesc n = load_sim(json{{"extends", "toyota_a25a_fks_gen.json"}}, MapQuality::Full, false);
     SimulatedEngineDesc m = n;
@@ -645,6 +649,9 @@ TEST_CASE("P7 K7: classify_engine_change on a knock-limited engine", "[knock][dr
     CHECK(classify_engine_change(n, m) == EngineChange::Runtime);
     m = n;
     m.fuels[0].has_knock = false;
+    CHECK(classify_engine_change(n, m) == EngineChange::Runtime);
+    m = n;
+    m.ecu.lambda_target.values.back() -= 0.01; // no opt-in: the lambda target stays a runtime table
     CHECK(classify_engine_change(n, m) == EngineChange::Runtime);
 }
 
