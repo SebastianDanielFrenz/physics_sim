@@ -963,7 +963,7 @@ entry throws before any work. A sweep whose points all started before the flag w
 built from a descriptor needs `Config::engine_thermal_path` when it has a cooling system (there is no engine file to
 read `default_thermal` from).
 
-Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`), `tests/unit/test_limit_findings.cpp` (`[dyno]`, limit findings).
+Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`), `tests/unit/test_limit_findings.cpp` (L1-L21, `[dyno]`, limit findings; ~5 s in release, not `[long]`).
 
 ### Limit findings (engine garage P3b-1)
 
@@ -997,7 +997,7 @@ required_margin, unit, cost, solved}`, ratios derived) is present only where a c
 | `FuelCut` (14) | a `fuel_cut` limiter: the swept rpm reaches the cut | `Near` >= 97 % of the cut rpm, `Limiting` at it, `Exceeded` above | rpm / limiter rpm | engine `/limiter/rpm` | P3b-1 |
 | `ValveFlowChoke` (15) | not produced: no valve Mach diagnostic exists | - | - | - | later |
 | `MeanPistonSpeed` (16) | simulated piston engines: stroke x rpm / 30 | `Near` >= 23, `Limiting` >= 25, `Exceeded` >= 28 m/s | m/s / 25 | engine `/limiter/rpm` | P3b-1 |
-| `MapGridEdge` (17) | the (rpm, p_im) of the point against the axes of the engine's maps (a lookup outside is clamped silently): >= 5 % of the window outside | `Exceeded` outside either edge; `Near` within 2 % of the span of an UPPER edge | p_im Pa or rpm / the edge | engine `/cycle/grid_p_im_kpa` / `/cycle/grid_rpm` (a generated engine) or `/maps/ve/p_im_kpa` / `/maps/ve/rpm` | P3b-1 |
+| `MapGridEdge` (17) | the (rpm, p_im) of the point against the axes of the engine's maps (a lookup outside is clamped silently): >= 5 % of the window outside | `Exceeded` outside either edge; `Near` within 2 % of the span of the p_im axis's UPPER edge (the rpm axis has no `Near`: a sweep ends at the limiter, which the grid ends at too) | p_im Pa or rpm / the edge | engine `/cycle/grid_p_im_kpa` / `/cycle/grid_rpm` (a generated engine) or `/maps/ve/p_im_kpa` / `/maps/ve/rpm` | P3b-1 |
 | `Knock` (18) | not produced | - | - | - | C17b |
 
 Every threshold is one entry of the table in `core/src/drivetrain/limit_thresholds.h`, tagged `[C]`/`[D]`/`[AS]`/`[M]`

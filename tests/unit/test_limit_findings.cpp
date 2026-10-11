@@ -144,7 +144,8 @@ TEST_CASE("L1 thresholds: every entry is sourced ([C]/[D]/[AS]/[M]), named, fini
 }
 
 TEST_CASE("L2 kinds, severities, units: stable values and symbols", "[drivetrain][dyno]") {
-    // The values are stored by games: append-only. Pinned literally.
+    // The values are stored by games: append-only. Pinned literally. Recorded sabotage: BoostAboveTarget = 1 and
+    // BoostBelowTarget = 2 (swapped) fails the literal pins (a duplicate value fails to compile in to_string).
     CHECK(static_cast<int>(LimitKind::WastegateSaturated) == 0);
     CHECK(static_cast<int>(LimitKind::BoostBelowTarget) == 1);
     CHECK(static_cast<int>(LimitKind::BoostAboveTarget) == 2);
@@ -289,8 +290,7 @@ TEST_CASE("L6 wastegate: owner's example - stock hardware saturates under more a
     // hyper_turbo_n2o.json's wastegate is 1.26x the stock (1.4875e-3 vs 1.18e-3 m^2 per valve): with it the gate holds the
     // target and WastegateSaturated / BoostAboveTarget are gone (the rotor and flow findings stay: they are other
     // hardware). The diagnostic points are not converged (the stock one runs away) - findings come from the last window.
-    // Recorded sabotage: kGateFull 0.98 -> 1.5 (saturation never detected) fails the first block; the saturated branch
-    // using `<` instead of `>=` fails it too.
+    // Recorded sabotage (2026-10-11): kGateFull 0.98 -> 1.5 (saturation never detected) fails the first block.
     static jobs::JobSystem pool(10);
     const DynoResult stock = run_dyno_sweep(hyper_crafted(2.0, 1.0), nullptr, turbo_spec({7000.0}), &pool);
     const LimitFinding* sat = find(stock, LimitKind::WastegateSaturated, 7000.0);
@@ -454,8 +454,8 @@ TEST_CASE("L11 compressor surge: needs a surge line; Exceeded / Near / none foll
 TEST_CASE("L12 rev limiter (SoftCut taper) and fuel cut severities", "[drivetrain][dyno]") {
     // SoftCut: zero fuel at lim.rpm, linear taper over band: Near over the two bands below the taper, Limiting inside the
     // taper, Exceeded at/above the zero-fuel rpm. FuelCut: Near from 97 % of the cut rpm, Limiting at it, Exceeded above.
-    // Recorded sabotage: swapping the SoftCut `>` / `>=` boundaries moves the 6300 / 6500 pins; kLimiterNear 0.97 -> 0.5
-    // makes 5000 rpm Near.
+    // Recorded sabotage: the SoftCut Limiting test `rpm > lim.rpm - band` -> `rpm > lim.rpm` loses the 6400 pin;
+    // kLimiterNear 0.97 -> 0.5 makes 5000 rpm Near (also fails L5).
     ComponentParams c = a25a();
     SimulatedEngineDesc& d = std::get<SimulatedEngineDesc>(c);
     d.limiter.type = LimiterType::SoftCut;
@@ -526,8 +526,8 @@ TEST_CASE("L14 map grid edge: Exceeded above the grid, Exceeded below it, Near t
     // A25A: its p axis ends below ambient (L4). Scaling the ve table's p axis up by 4 % puts the top just ABOVE the wide-open
     // intake pressure (100.6 kPa at 3000 rpm vs 101.4 kPa): within 2 % of the span of the top -> Near, not clamped. Scaled
     // 10 %: far above, nothing. rpm below the grid (500 < the lowest knot) is a clamp on the lower edge: Exceeded.
-    // Recorded sabotage: dropping `near_upper` for the p axis loses the Near; comparing `p_pa > g.p_hi` with `<` flips the
-    // L4 pin.
+    // Recorded sabotage: passing near_upper = false for the p axis loses the Near; requiring the clamped share >= 2.0
+    // (never) loses every Exceeded here and in L4.
     const auto with_ve_p_scale = [&](double k) {
         ComponentParams c = a25a();
         for (real& y : std::get<SimulatedEngineDesc>(c).maps.ve.y) y *= k;
@@ -580,8 +580,7 @@ TEST_CASE("L15 generated engine: the grid fields point into the cycle block", "[
 
 TEST_CASE("L16 limits are sorted by rpm then kind; point_limits address them; duplicate rpm shares one block", "[drivetrain][dyno][turbo]") {
     // rpm given out of order and with a duplicate (7000 twice): points keep the spec order, limits are rpm-ascending.
-    // Recorded sabotage: dropping the stable_sort by rpm in assemble_limits fails the sortedness check; giving the
-    // duplicate its own block doubles the 7000 findings and fails the share check.
+    // Recorded sabotage: sorting the points by index instead of rpm in assemble_limits fails the sortedness check.
     static jobs::JobSystem pool(10);
     DynoSweepSpec s = turbo_spec({8000.0, 5000.0, 7000.0, 7000.0});
     s.max_settle_s = 4.0;
@@ -617,8 +616,9 @@ TEST_CASE("L16 limits are sorted by rpm then kind; point_limits address them; du
 
 TEST_CASE("L17 findings are identical for 1 and 10 workers and without a pool", "[drivetrain][dyno][turbo]") {
     // The windows are per point (own engine instance), so the result must not depend on the schedule.
-    // Recorded sabotage: appending to a shared vector from the jobs (instead of per-point slots) fails here under 10 workers
-    // or loses the pinned order.
+    // Sabotage tried (2026-10-11): skipping the per-point kind sort only on the pooled path did NOT fail - the turbo
+    // producers already emit in kind order - so this case guards by construction (one slot per point), not by a
+    // discriminating sabotage. Open point in out/garage_p3b1_progress.md.
     jobs::JobSystem one(1);
     jobs::JobSystem ten(10);
     DynoSweepSpec s = turbo_spec({3000.0, 5000.0, 7000.0, 8000.0});
@@ -644,7 +644,7 @@ TEST_CASE("L17 findings are identical for 1 and 10 workers and without a pool", 
 TEST_CASE("L18 the sweep's points are untouched by the findings (stock hyper values pinned in test_engine_dyno)", "[drivetrain][dyno][turbo]") {
     // The findings are derived from the same windows; the DynoPoint values are those of the P3 sweep. Pinned here against the
     // numbers measured in this increment's diagnostics (Sketch maps): a producer that fed back into the engine would move
-    // them. test_engine_dyno.cpp D1-D8 hold the full contract.
+    // them. test_engine_dyno.cpp D1-D8 hold the full contract. Recorded sabotage: net_torque += tau0 - 0.5 c_k fails here.
     static jobs::JobSystem pool(10);
     const DynoResult r = run_dyno_sweep(hyper(), nullptr, turbo_spec({5000.0}), &pool);
     REQUIRE(r.points.size() == 1);
@@ -688,7 +688,8 @@ TEST_CASE("L20 check_driveline_limits: an undersized clutch gets a Closed remedy
     //    peak statically), margin 1.3 x that.
     //  - static_factor 1.0, capacity 230: holds the peak, but 1.3 x peak = 259.7 > 230: Near.
     //  - capacity 300: none.
-    // Recorded sabotage: dropping the `/ static_factor` from required_min fails the 1.15 case; margin 1.3 -> 1.0 fails all.
+    // Recorded sabotage: dropping the `/ static_factor` from required_min fails the 1.15 case; kDrivelineMargin 1.3 -> 1.5
+    // fails the margin numbers.
     const DynoResult tm = run_dyno_sweep(i4_torque_map(), nullptr, DynoSweepSpec{}, nullptr);
     const double peak = peak_torque(tm);
     vehicle::VehicleDesc v = io::load_vehicle_json(kVehicles + "car_sedan.json");
