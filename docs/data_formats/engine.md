@@ -963,4 +963,58 @@ entry throws before any work. A sweep whose points all started before the flag w
 built from a descriptor needs `Config::engine_thermal_path` when it has a cooling system (there is no engine file to
 read `default_thermal` from).
 
-Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`).
+Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`), `tests/unit/test_limit_findings.cpp` (`[dyno]`, limit findings).
+
+### Limit findings (engine garage P3b-1)
+
+`DynoResult::limits` (`ps/drivetrain/limit_findings.h`) is the list of things the sweep found limiting, for the garage's
+limit advisor (the advice TEXT is game data keyed by `LimitKind`; every number comes from the simulation). It is empty
+when nothing is within a margin of a limit (a torque-map engine below its limiter). `DynoResult::point_limits[i]` is the
+`{first, count}` range of `limits` that belongs to `points[i]`. `limits` is sorted by rpm, then `LimitKind` value, then
+emission order; both are bit-identical for any worker count, like `points`. Nothing here is hashed or fed back.
+
+A `LimitFinding` is `{kind, severity, rpm, value, limit, unit, part, remedy}`. `severity`: `Near` (within a margin of
+the limit), `Limiting` (this part caps the output here), `Exceeded` (the target is missed or a guard rail is hit). `unit` is
+the `LimitUnit` enum of `value`/`limit` (SI; rotor and engine speed in rpm like everywhere in this repo; boost in Pa
+GAUGE). `part` is `{slot, file, field}`: `slot` one of `engine`, `turbo`, `turbo_configuration`, `clutch`; `field` an
+RFC 6901 pointer into the part file (empty = the part as a whole); `file` is filled from `DynoSweepSpec::part_files`
+(a descriptor does not remember its file; empty when the caller gave none). `remedy` (`{part, current, required_min,
+required_margin, unit, cost, solved}`, ratios derived) is present only where a closed-form number exists.
+
+| Kind (value) | Producer / measured quantity | Severity | `value` / `limit` | Part | Increment |
+|---|---|---|---|---|---|
+| `WastegateSaturated` (0) | turbo window: share of substeps with gate opening >= 0.98 | `Limiting` at >= 50 % of the window; `Exceeded` when mean boost is also > 2 % of the target above it; `Near` when the mean opening >= 0.92 | mean opening / 0.98 | turbo `/wastegate_area_m2` | P3b-1 |
+| `BoostBelowTarget` (1) | window mean charge pressure (gauge) vs the PID target (target x plate) | `Near` shortfall > 2 %, `Exceeded` > 5 % of `target_boost_pa` | charge Pa / target Pa | turbo (whole) | P3b-1 |
+| `BoostAboveTarget` (2) | same | `Near` overshoot > 2 %, `Exceeded` > 5 % | charge Pa / target Pa | turbo `/wastegate_area_m2` | P3b-1 |
+| `TurboRotorCap` (3) | window max rotor rpm vs the end of the compressor head table's speed axis (`head_pa.x.back() * reference_rpm`, 1.5 x without maps) | `Near` >= 90 %, `Limiting` >= 97 %, `Exceeded` > 100 % | rpm / edge rpm | turbo (whole) | P3b-1 |
+| `CompressorSurge` (4) | with a `surge_line` only: the engine's surge flag in >= 2 % of the window, or the minimum flow / surge-line flow ratio < 1.10 | `Exceeded` (flag), `Near` (margin) | min flow ratio / 1 | turbo `/surge_line` | P3b-1 |
+| `CompressorChoke` (5) | window max pair flow / `max_mass_flow_kg_s` - a capacity margin; the maps carry no per-speed choke line | `Near` >= 0.90, `Limiting` >= 1.0 | fraction / 1.0 | turbo `/max_mass_flow_kg_s` | P3b-1 |
+| `ChargeTemperature` (6) | not produced: no charge-temperature limit exists in any data file | - | - | - | later |
+| `ClutchCapacity` (7) | `check_driveline_limits`: peak sweep torque vs `capacity_nm * static_factor` | `Near` when peak x 1.3 >= static capacity, `Limiting` when peak >= it | N*m | clutch `/capacity_nm` + Closed remedy | P3b-1 |
+| `GearboxInputTorque` (8) | not produced: `GearboxDesc` has no input-torque rating (its synchro capacities are shift capacities) | - | - | - | later |
+| `KitFuelLean` .. `N2OBottlePressureDrop` (9-12) | nitrous is not part of the sweep | - | - | - | P3b-2 |
+| `RevLimiter` (13) | a `soft_cut` limiter: the swept rpm reaches the taper | `Near` within 2 bands below the zero-fuel rpm, `Limiting` inside the band, `Exceeded` at/above it | rpm / limiter rpm | engine `/limiter/rpm` | P3b-1 |
+| `FuelCut` (14) | a `fuel_cut` limiter: the swept rpm reaches the cut | `Near` >= 97 % of the cut rpm, `Limiting` at it, `Exceeded` above | rpm / limiter rpm | engine `/limiter/rpm` | P3b-1 |
+| `ValveFlowChoke` (15) | not produced: no valve Mach diagnostic exists | - | - | - | later |
+| `MeanPistonSpeed` (16) | simulated piston engines: stroke x rpm / 30 | `Near` >= 23, `Limiting` >= 25, `Exceeded` >= 28 m/s | m/s / 25 | engine `/limiter/rpm` | P3b-1 |
+| `MapGridEdge` (17) | the (rpm, p_im) of the point against the axes of the engine's maps (a lookup outside is clamped silently): >= 5 % of the window outside | `Exceeded` outside either edge; `Near` within 2 % of the span of an UPPER edge | p_im Pa or rpm / the edge | engine `/cycle/grid_p_im_kpa` / `/cycle/grid_rpm` (a generated engine) or `/maps/ve/p_im_kpa` / `/maps/ve/rpm` | P3b-1 |
+| `Knock` (18) | not produced | - | - | - | C17b |
+
+Every threshold is one entry of the table in `core/src/drivetrain/limit_thresholds.h`, tagged `[C]`/`[D]`/`[AS]`/`[M]`
+with its source (all `[AS]` or `[D]` today; the mean-piston-speed limit has no local source).
+
+Static findings (the limiters, the piston speed) are tagged with the swept rpm like the rest. A torque-map engine only
+produces `RevLimiter`/`FuelCut`. `MapGridEdge` is detected from the same operands the lookup receives (`rpm`, `p_im`) against
+the `ve` table's axes, outside the engine's hot path, so no hash or allocation changes; the `eta_i` table's air-mass axis
+is not checked.
+
+#### Driveline limits
+
+`check_driveline_limits(const DynoResult&, const PowertrainDesc&, clutch_file = {})` covers what the engine-only sweep
+cannot see. It returns a `ClutchCapacity` finding at the rpm of the sweep's peak net torque when that torque is within 1.3 x
+of a clutch's static capacity (`capacity_nm * static_factor`). Its **Closed remedy** is in the part field's own terms (the
+kinetic `capacity_nm`): `current = capacity_nm`, `required_min = peak / static_factor` (the smallest capacity that holds the
+peak), `required_margin = 1.3 * peak / static_factor` (the table's safety margin; both equal `peak` and `1.3 * peak` when
+`static_factor` is 1). The ratios `required_min / current` and `required_margin / current` are the "increase by n x" the
+advisor prints. Rev limiter and fuel cut findings have no remedy; Simulated remedies (wastegate area, jets, bottle) are
+P3b-2.

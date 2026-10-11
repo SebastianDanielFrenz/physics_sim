@@ -21,12 +21,14 @@
 #pragma once
 
 #include "ps/drivetrain/engine_maps.h"
+#include "ps/drivetrain/limit_findings.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/jobs/job_system.h"
 #include "ps/types.h"
 #include "ps/world/ambient.h"
 
 #include <atomic>
+#include <string>
 #include <vector>
 
 namespace ps::drivetrain {
@@ -55,6 +57,14 @@ struct DynoSweepSpec {
     // (false). It only acts below the block's arm_below_command, so at throttle 1 it changes nothing. Ignored by
     // every other engine.
     bool anti_lag = false;
+    // Engine garage P3b-1: the part files the descriptor came from, copied into the findings' PartRef::file. A descriptor
+    // does not remember its file, so the caller (the garage) supplies them; empty = unknown. Paths are used as given.
+    struct PartFiles {
+        std::string engine;               // the engine file (slot "engine")
+        std::string turbo;                // the turbo hardware file (slot "turbo")
+        std::string turbo_configuration;  // the turbo configuration file (slot "turbo_configuration")
+    };
+    PartFiles part_files;
 };
 
 struct DynoPoint {
@@ -81,9 +91,18 @@ struct DynoPoint {
 
 struct DynoResult {
     // One per swept rpm, in the order of the spec (or ascending for the default grid). Bit-identical for any worker
-    // count. Engine garage P3b appends the limit findings here (and per-point index ranges into them) without
-    // changing this vector.
+    // count.
     std::vector<DynoPoint> points;
+    // Engine garage P3b-1: the limit findings measured in the sweep (ps/drivetrain/limit_findings.h), sorted by rpm
+    // ascending, then LimitKind value, then emission order (a stable sort; the two axes of one MapGridEdge are
+    // emitted p_im first). A finding with a NaN rpm (static) would sort first; run_dyno_sweep produces none.
+    // Bit-identical for any worker count, like `points`. Empty when nothing is within a margin of a limit (a torque-map
+    // engine below its limiter, a quiet NA engine, ...).
+    std::vector<LimitFinding> limits;
+    // point_limits[i] = the range of `limits` that belongs to points[i] (same size as `points`): the findings whose rpm
+    // equals points[i].rpm. A point without findings has count 0 (first is then the insertion position, still valid to
+    // read as an empty range). Two points with the same rpm share one block, and their identical findings are not doubled.
+    std::vector<LimitRange> point_limits;
 };
 
 // Sweeps `engine` (a TorqueMapEngineDesc or SimulatedEngineDesc; anything else throws std::invalid_argument).
@@ -104,5 +123,19 @@ struct DynoResult {
 // request, not a guarantee (the semantics of MapGenerationControl::cancel, engine garage P1).
 [[nodiscard]] DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, const DynoSweepSpec& spec,
                                         jobs::JobSystem* pool = nullptr, const std::atomic<bool>* cancel = nullptr);
+
+// Engine garage P3b-1: limits of the DRIVELINE the engine-only sweep does not see. Compares the sweep's peak net crank
+// torque (the maximum torque_nm over `dyno.points`, taken at the point with that torque) with every clutch of `powertrain`:
+// a clutch holds up to its STATIC capacity capacity_nm * static_factor. Findings (all rpm = the peak point's rpm, slot
+// "clutch", field "/capacity_nm"):
+//   ClutchCapacity   Near when peak >= static capacity / 1.3, Limiting when peak >= static capacity.
+// Each carries a Closed Remedy in the field's own terms (the KINETIC capacity_nm): current = capacity_nm, required_min =
+// peak / static_factor (the smallest capacity that holds the peak), required_margin = 1.3 * peak / static_factor (the
+// table's safety margin, limit_thresholds.h kDrivelineMargin). With static_factor == 1 these are peak and 1.3 * peak.
+// A gearbox input-torque rating does not exist in GearboxDesc, so GearboxInputTorque is not produced. `clutch_file`
+// fills PartRef::file (empty = unknown). A sweep without a positive torque, or a powertrain without a clutch, returns {}.
+// Sorted like DynoResult::limits.
+[[nodiscard]] std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain,
+                                                               const std::string& clutch_file = {});
 
 } // namespace ps::drivetrain

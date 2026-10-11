@@ -75,6 +75,9 @@ public:
     }
     real omega() const { return std::sqrt(real(2.0)*energy_j/desc.rotor_inertia_kgm2); }
     real rpm() const { return omega()*real(60.0/6.2831853071795864769); }
+    // Rotor speed at the end of the compressor head table's speed axis (the same edge step() uses: beyond it the head is
+    // extended by affinity scaling instead of looked up). Diagnostic only - the limit findings' "rotor cap".
+    real speed_edge_rpm() const { return (desc.maps ? desc.maps->head_pa.x.back() : real(1.5))*desc.reference_rpm; }
     void reset(real p, real t) { energy_j=0; charge_pa=p; charge_k=t; exhaust_pa=p; wastegate=0; boost_integral=0;
                                  compressor_flow_kg_s=0; compressor_pr=1; intercooler_dp_pa=0; compressor_outlet_pa=p;
                                  bov_opening=0; bov_flow_kg_s=0; bov_latched=false; surge_active=false;

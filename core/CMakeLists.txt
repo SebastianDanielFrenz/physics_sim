@@ -229,6 +229,7 @@ add_library(ps_core STATIC
   src/drivetrain/engine_sound_state.cpp
   src/drivetrain/engine_rig.cpp
   src/drivetrain/engine_dyno.cpp
+  src/drivetrain/limit_findings.cpp
   src/drivetrain/nitrous_flow.cpp
   src/drivetrain/nitrous_system.cpp
   src/drivetrain/engine_thermal.cpp
