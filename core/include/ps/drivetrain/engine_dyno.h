@@ -13,7 +13,9 @@
 //     and charge lag, stepped at the car's 960 Hz substep rate with the crank held at the point's speed (the
 //     bench_hyper_calibration pattern), until the boost settles or max_settle_s elapse.
 // No vehicle pedal map, throttle stage or TCU limit exists at engine level: `throttle` IS the engine's throttle
-// command (electronic engines: a torque request; mechanical: the plate). Nitrous is out of scope (P3b).
+// command (electronic engines: a torque request; mechanical: the plate).
+// Nitrous (engine garage P3b-2): DynoSweepSpec::nitrous adds a wet kit to a SIMULATED engine's sweep, always on the stepped
+// path (docs/data_formats/engine.md "Dyno sweep" -> "Nitrous in the sweep").
 //
 // Units: rpm [rev/min], torque [N*m, NET at the crank, the Coulomb row included], power [kW], boost [bar gauge],
 // turbo_rpm [rev/min of one rotor], fuel [g/s], BSFC [g/kWh], lambda [-], spark [deg BTDC], p_intake [kPa abs],
@@ -28,10 +30,23 @@
 #include "ps/world/ambient.h"
 
 #include <atomic>
+#include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace ps::drivetrain {
+
+// Engine garage P3b-2: the nitrous hardware of a sweep - the bottle and kit descriptors exactly as the vehicle loader produces
+// them (the N2oBottleDesc / NitrousKitDesc components of a PowertrainDesc, controller included). nitrous_from_powertrain picks
+// them out of a loaded vehicle.
+struct DynoNitrous {
+    N2oBottleDesc bottle;
+    NitrousKitDesc kit;
+};
+
+// The bottle and kit components of `pt` (the first of each; fluid links are not consulted), or nullopt when either is missing.
+[[nodiscard]] std::optional<DynoNitrous> nitrous_from_powertrain(const PowertrainDesc& pt);
 
 struct DynoSweepSpec {
     // Points to evaluate, in this order (each finite and > 0). Empty = the engine's idle_rpm up to its limiter rpm in
@@ -63,8 +78,18 @@ struct DynoSweepSpec {
         std::string engine;               // the engine file (slot "engine")
         std::string turbo;                // the turbo hardware file (slot "turbo")
         std::string turbo_configuration;  // the turbo configuration file (slot "turbo_configuration")
+        std::string nitrous_kit;          // P3b-2: the nitrous kit file (slot "nitrous_kit")
+        std::string n2o_bottle;           // P3b-2: the N2O bottle file (slot "n2o_bottle")
     };
     PartFiles part_files;
+    // P3b-2: how many turbos the engine's TurboPairDesc extensive values (wastegate_area_m2) are the sum of - the loader
+    // multiplies the hardware file's per-turbo value by the configuration's count and a descriptor does not remember it. Only
+    // the wastegate Remedy's current/required values divide by it, so they are in the hardware FILE's per-turbo terms.
+    int turbo_count = 1;
+    // P3b-2: an optional wet kit. Armed and sprayed at the controller's full command; empty (default) = the sweep is
+    // bit-identical to before. A simulated engine only (a torque-map engine ignores a kit in the car, so a sweep with one
+    // throws std::invalid_argument); the engine is then always stepped (also without a turbo). Rules in engine.md.
+    std::optional<DynoNitrous> nitrous;
 };
 
 struct DynoPoint {
@@ -83,6 +108,12 @@ struct DynoPoint {
     real p_intake_kpa = 0.0;  // NaN for a torque map (no manifold)
     real exhaust_k = 0.0;     // gas temperature at the exhaust ports; turbo engines only, NaN otherwise
     real charge_boost_bar = 0.0; // compressor outlet (charge) pressure minus ambient, bar; 0 without a turbo
+    // Engine garage P3b-2 (a sweep with DynoSweepSpec::nitrous; window means over the settled window):
+    real n2o_g_s = 0.0;       // N2O delivered to the engine, g/s; 0 without a kit or while the controller does not spray
+    real kit_fuel_g_s = 0.0;  // kit fuel the engine booked, g/s (part of fuel_g_s); 0 likewise
+    // The charge's combined lambda with the kit (O2-equivalent air over the stoichiometric demand of ECU + kit fuel); NaN
+    // without a kit or while the controller does not spray. `lambda` stays the ECU's own target.
+    real lambda_combined = std::numeric_limits<real>::quiet_NaN();
     // true: the settled window met the convergence criterion (always true for the instant kinds). false: the point
     // hit max_settle_s first (e.g. a low-rpm turbo equilibrium that keeps drifting); its values are the last window.
     bool converged = true;

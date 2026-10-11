@@ -133,7 +133,7 @@ TEST_CASE("L1 thresholds: every entry is sourced ([C]/[D]/[AS]/[M]), named, fini
         CHECK(src.size() > 8); // a tag alone is not a source
         CHECK(names.insert(t.name).second);
     }
-    CHECK(limits::kAllLimitThresholdCount == 19);
+    CHECK(limits::kAllLimitThresholdCount == 29);
     // The ordered pairs a severity ladder depends on.
     CHECK(limits::kGateNear.value < limits::kGateFull.value);
     CHECK(limits::kBoostBandNear.value < limits::kBoostBandExceeded.value);
@@ -176,7 +176,7 @@ TEST_CASE("L2 kinds, severities, units: stable values and symbols", "[drivetrain
     CHECK(LimitSeverity::Near < LimitSeverity::Limiting);
     CHECK(LimitSeverity::Limiting < LimitSeverity::Exceeded);
     std::set<std::string> units;
-    for (int u = 0; u <= 7; ++u) CHECK(units.insert(to_string(static_cast<LimitUnit>(u))).second);
+    for (int u = 0; u <= 10; ++u) CHECK(units.insert(to_string(static_cast<LimitUnit>(u))).second);
     CHECK(std::string(to_string(LimitUnit::NewtonMetre)) == "N*m");
     CHECK(std::string(to_string(LimitUnit::RevPerMinute)) == "rpm");
     Remedy r;
@@ -223,7 +223,7 @@ TEST_CASE("L3 stock hyper: only its legitimate findings", "[drivetrain][dyno][tu
     CHECK(cut->part.field == "/limiter/rpm");
     CHECK(cut->value == 8250.0);
     CHECK(cut->limit == 8250.0);
-    // The P3b-1 kinds carry no remedy (Closed remedies are the driveline's; the rest are P3b-2 solve_remedy).
+    // The stock hyper has no wastegate or rotor finding, so no Simulated placeholder; the other P3b-1 kinds carry no remedy.
     for (const LimitFinding& f : r.limits) CHECK_FALSE(f.remedy.has_value());
 }
 
@@ -763,7 +763,7 @@ TEST_CASE("L20 check_driveline_limits: an undersized clutch gets a Closed remedy
 }
 
 TEST_CASE("L21 not-produced kinds stay absent", "[drivetrain][dyno][turbo]") {
-    // ChargeTemperature, GearboxInputTorque, ValveFlowChoke, Knock and the nitrous kinds are not produced in P3b-1.
+    // ChargeTemperature, GearboxInputTorque, ValveFlowChoke, Knock and InjectorDuty are never produced; the nitrous kinds only with a kit (test_limit_remedies.cpp).
     static jobs::JobSystem pool(10);
     const DynoResult r = run_dyno_sweep(hyper_crafted(2.0, 1.0), nullptr, turbo_spec({7000.0, 8000.0}), &pool);
     for (LimitKind k : {LimitKind::ChargeTemperature, LimitKind::GearboxInputTorque, LimitKind::ValveFlowChoke, LimitKind::Knock,

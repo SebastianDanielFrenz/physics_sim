@@ -47,6 +47,9 @@ const char* to_string(LimitUnit u) {
     case LimitUnit::MetrePerSecond: return "m/s";
     case LimitUnit::RevPerMinute: return "rpm";
     case LimitUnit::SquareMetre: return "m^2";
+    case LimitUnit::Millimetre: return "mm";
+    case LimitUnit::Kilogram: return "kg";
+    case LimitUnit::Second: return "s";
     }
     return "Unknown";
 }

@@ -107,6 +107,7 @@ add_executable(ps_unit_tests
   test_engine_map_control.cpp
   test_engine_dyno.cpp
   test_limit_findings.cpp
+  test_limit_remedies.cpp
   test_spark_schedule.cpp
   test_engine_installation_io.cpp
   test_engine_hot_swap.cpp

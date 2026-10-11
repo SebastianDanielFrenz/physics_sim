@@ -10,6 +10,7 @@
 #include "engine_simulated.h"
 #include "engine_torque_map.h"
 #include "limit_thresholds.h"
+#include "nitrous_system.h"
 #include "powertrain.h" // to_engine_desc
 
 #include <algorithm>
@@ -278,6 +279,11 @@ struct WindowStats {
     real surge_min_ratio = kInf;                 // min over substeps of flow fraction / surge-line flow (pr > 1.05 only)
     real flow_frac_max = 0.0;                    // max pair flow / max_mass_flow_kg_s
     EdgeAcc edge;
+    // Engine garage P3b-2: the nitrous window (all zero without a kit).
+    real n2o_kg_s_sum = 0.0;                     // sum of the delivered N2O flow, kg/s
+    real kit_fuel_g_s_sum = 0.0;                 // sum of the engine's booked kit fuel, g/s
+    real lam_c_sum = 0.0;                        // sum of n2o_lambda_combined over the substeps the charge model ran
+    long lam_c_n = 0;
     PreSolveResult last;
 
     // Constants of the point that the window samples are measured against.
@@ -290,8 +296,14 @@ struct WindowStats {
     };
 
     void clear() { *this = WindowStats{}; }
-    void add(const PreSolveResult& r, real c_k, real p_amb, const Probe& probe) {
+    void add(const PreSolveResult& r, real c_k, real p_amb, const Probe& probe, real n2o_kg_s = 0.0) {
         ++n;
+        n2o_kg_s_sum += n2o_kg_s;
+        kit_fuel_g_s_sum += r.n2o_kit_fuel_g_s;
+        if (r.n2o_lambda_combined > real(0.0)) {
+            lam_c_sum += r.n2o_lambda_combined;
+            ++lam_c_n;
+        }
         gate_sum += r.wastegate_opening;
         if (r.wastegate_opening >= limits::kGateFull.value) ++gate_full_n;
         if (r.throttle_position >= real(0.10)) {
@@ -327,13 +339,31 @@ struct WindowStats {
 
 // The turbo findings of one settled window (engine garage P3b-1). Reads the window maxima/fractions in `w` and the turbo's
 // descriptor; appends in producer order (the sweep sorts them by kind afterwards).
-void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const WindowStats& w, real rpm, const DynoSweepSpec::PartFiles& files) {
+// A Simulated remedy as the sweep attaches it: the part and its current value, the required values still NaN, unsolved
+// (limit_remedies.h solve_remedy fills it).
+Remedy simulated_placeholder(PartRef part, real current, LimitUnit unit) {
+    Remedy r;
+    r.part = std::move(part);
+    r.current = current;
+    r.unit = unit;
+    r.cost = RemedyCost::Simulated;
+    r.solved = false;
+    return r;
+}
+
+void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const WindowStats& w, real rpm, const DynoSweepSpec& spec) {
+    const DynoSweepSpec::PartFiles& files = spec.part_files;
     const TurboPair* tp = engine.turbo();
     if (tp == nullptr || w.n == 0) return;
     const TurboPairDesc& td = tp->desc;
     const real nf = real(w.n);
     const real mean_open = w.gate_sum / nf;
     const real sat_fraction = real(w.gate_full_n) / nf;
+    // Wastegate area in the hardware FILE's terms (per turbo): the descriptor holds the installation total.
+    const real wg_file_area = td.wastegate_area() / real(std::max(1, spec.turbo_count));
+    const auto wg_placeholder = [&] {
+        return simulated_placeholder(PartRef{"turbo", files.turbo, "/wastegate_area_m2"}, wg_file_area, LimitUnit::SquareMetre);
+    };
 
     // Boost against the PID target (target x plate); both are means over the substeps that had a target.
     bool have_target = w.target_n > 0;
@@ -350,8 +380,10 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
         if (sat_fraction >= limits::kGateSaturatedFraction.value) {
             const LimitSeverity s = (have_target && over > limits::kBoostBandNear.value) ? LimitSeverity::Exceeded : LimitSeverity::Limiting;
             out.push_back(make_finding(LimitKind::WastegateSaturated, s, rpm, mean_open, limits::kGateFull.value, LimitUnit::Fraction, part));
+            out.back().remedy = wg_placeholder();
         } else if (mean_open >= limits::kGateNear.value) {
             out.push_back(make_finding(LimitKind::WastegateSaturated, LimitSeverity::Near, rpm, mean_open, limits::kGateFull.value, LimitUnit::Fraction, part));
+            out.back().remedy = wg_placeholder();
         }
     }
     // BoostAboveTarget / BoostBelowTarget.
@@ -360,6 +392,7 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
             const LimitSeverity s = over > limits::kBoostBandExceeded.value ? LimitSeverity::Exceeded : LimitSeverity::Near;
             out.push_back(make_finding(LimitKind::BoostAboveTarget, s, rpm, charge_gauge, target_gauge, LimitUnit::Pascal,
                                        PartRef{"turbo", files.turbo, "/wastegate_area_m2"}));
+            out.back().remedy = wg_placeholder();
         } else if (-over > limits::kBoostBandNear.value) {
             const LimitSeverity s = -over > limits::kBoostBandExceeded.value ? LimitSeverity::Exceeded : LimitSeverity::Near;
             out.push_back(make_finding(LimitKind::BoostBelowTarget, s, rpm, charge_gauge, target_gauge, LimitUnit::Pascal,
@@ -379,6 +412,7 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
         if (hit) {
             out.push_back(make_finding(LimitKind::TurboRotorCap, s, rpm, w.rotor_max_rpm, edge_rpm, LimitUnit::RevPerMinute,
                                        PartRef{"turbo", files.turbo, ""}));
+            out.back().remedy = wg_placeholder(); // solve_remedy tries the wastegate first
         }
     }
     // CompressorSurge: only with a surge line in the hardware file (no line, no flag, no margin).
@@ -405,12 +439,51 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
     }
 }
 
+// KitFuelLean (P3b-2) from one settled window: the mean combined lambda over the substeps the charge model ran (needs the kit to
+// have sprayed for at least half of the window). The Closed remedy sizes the kit FUEL jet from the window's own flows: the
+// O2-equivalent air demand is lambda_c * (ECU + kit fuel), so the kit fuel that gives a lambda L is
+// kit + total * (lambda_c / L - 1), with the ECU's own fuel taken as unchanged; the jet flow is Cd * A * sqrt(2 rho dp) at the
+// operating point's dp, so the diameter scales with sqrt(flow). required_min reaches kKitLambdaNear (the finding clears),
+// required_margin the target lambda. The first-order assumption (ECU fuel and air independent of the kit jet) is verified by
+// re-sweeping in the tests.
+void kit_lean_finding(Findings& out, const WindowStats& w, real rpm, const DynoSweepSpec& spec) {
+    if (!spec.nitrous.has_value() || w.n == 0 || w.lam_c_n * 2 < w.n) return;
+    const real lam = w.lam_c_sum / real(w.lam_c_n);
+    LimitSeverity s = LimitSeverity::Near;
+    if (lam >= limits::kKitLambdaExceeded.value) s = LimitSeverity::Exceeded;
+    else if (lam >= limits::kKitLambdaLimiting.value) s = LimitSeverity::Limiting;
+    else if (lam >= limits::kKitLambdaNear.value) s = LimitSeverity::Near;
+    else return;
+    const NitrousKitDesc& kit = spec.nitrous->kit;
+    LimitFinding f = make_finding(LimitKind::KitFuelLean, s, rpm, lam, limits::kKitLambdaNear.value, LimitUnit::Dimensionless,
+                                  PartRef{"nitrous_kit", spec.part_files.nitrous_kit, "/fuel_jet_diameter_mm"});
+    const real total = w.fuel_g_s / real(w.n);
+    const real kit_fuel = w.kit_fuel_g_s_sum / real(w.n);
+    if (kit_fuel > real(0.0) && total > kit_fuel) {
+        const auto jet_for = [&](real lambda_goal) {
+            const real kit_needed = kit_fuel + total * (lam / lambda_goal - real(1.0));
+            return kit.fuel_jet_diameter_mm * std::sqrt(std::max(kit_needed, kit_fuel) / kit_fuel);
+        };
+        Remedy r;
+        r.part = f.part;
+        r.current = kit.fuel_jet_diameter_mm;
+        r.required_min = jet_for(limits::kKitLambdaNear.value);
+        r.required_margin = jet_for(limits::kKitLambdaTarget.value);
+        r.unit = LimitUnit::Millimetre;
+        r.cost = RemedyCost::Closed;
+        r.solved = true;
+        f.remedy = std::move(r);
+    }
+    out.push_back(std::move(f));
+}
+
 // THE per-point settled-window evaluation: everything a point reports is derived from one window of samples (means in
 // `w`, the final substep's PreSolveResult in `w.last`) and the engine instance that produced them. The limit findings
 // (P3b-1) are produced here from the same window (turbo_window_findings) next to the DynoPoint this returns.
 DynoPoint settled_window_point(const SimulatedEngine& engine, const WindowStats& w, real rpm, real omega, bool converged,
                                real settle_s, const DynoSweepSpec& spec, const GridProbe& grid, Findings& findings) {
-    turbo_window_findings(findings, engine, w, rpm, spec.part_files);
+    turbo_window_findings(findings, engine, w, rpm, spec);
+    kit_lean_finding(findings, w, rpm, spec);
     edge_findings(findings, rpm, grid, w.edge, spec.part_files.engine);
     DynoPoint p;
     p.rpm = rpm;
@@ -425,15 +498,40 @@ DynoPoint settled_window_point(const SimulatedEngine& engine, const WindowStats&
     p.spark_deg = w.mean(w.spark_deg);
     p.p_intake_kpa = w.mean(w.p_intake_pa) / real(1000.0);
     p.exhaust_k = w.mean(w.exhaust_k);
+    if (spec.nitrous.has_value()) {
+        p.n2o_g_s = w.n2o_kg_s_sum / real(w.n) * real(1000.0);
+        p.kit_fuel_g_s = w.kit_fuel_g_s_sum / real(w.n);
+        if (w.lam_c_n > 0) p.lambda_combined = w.lam_c_sum / real(w.lam_c_n);
+    }
     const bool finite = std::isfinite(p.torque_nm) && std::isfinite(p.boost_bar) && std::isfinite(p.turbo_rpm);
     p.converged = converged && finite;
     p.settle_s = settle_s;
     return p;
 }
 
-DynoPoint turbo_point(const SimulatedEngineDesc& desc, const std::shared_ptr<const SimulatedEngineMaps>& maps, real rpm,
-                      const DynoSweepSpec& spec, Findings& findings) {
+// The kit as the dyno runs it (engine garage P3b-2): the controller's progressive ramp is skipped (full command from the first
+// substep - "sprayed at full controller command") and its duty-time safety is off (a point may run up to max_settle_s; the
+// bottle duration is a finding of its own). The bottle-pressure switch, the rpm/throttle windows and the safety latch of the
+// controller stay as authored. Gear and road-speed conditions do not exist on a dyno (see engine.md).
+NitrousKitDesc dyno_kit(const NitrousKitDesc& k) {
+    NitrousKitDesc d = k;
+    d.controller.progressive = NitrousProgressiveDesc{1.0, 0.0, 0.0};
+    d.controller.safety.max_active_s = real(0.0);
+    return d;
+}
+
+// The stepped kind: the real runtime engine with the crank held. With a turbo (TurboPair, wastegate PID, charge lag) or
+// without one when a nitrous kit is present (then the engine is the same SimulatedEngine, the turbo findings are skipped).
+DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<const SimulatedEngineMaps>& maps, real rpm,
+                        const DynoSweepSpec& spec, Findings& findings) {
     SimulatedEngine engine(desc, maps);
+    // The nitrous system is the car's own (nitrous_system.h): the same flow arithmetic feeds Sensors::nitrous. The bottle is
+    // never committed, so it stays at its descriptor fill and its pressure is held for the whole point.
+    std::unique_ptr<NitrousSystem> nsys;
+    if (spec.nitrous.has_value()) {
+        nsys = std::make_unique<NitrousSystem>(spec.nitrous->bottle, dyno_kit(spec.nitrous->kit), desc.fuels.front().density_kg_m3, -1, -1, -1);
+    }
+    const real heater_channel = (spec.nitrous.has_value() && spec.nitrous->bottle.has_heater) ? spec.nitrous->bottle.heater.default_on : real(0.0);
     engine.reset(EngineState::Running); // seeded Running, ignition on, no starter (a held crank never starts the engine)
 
     const real h = real(1.0) / kStepHz;
@@ -453,7 +551,7 @@ DynoPoint turbo_point(const SimulatedEngineDesc& desc, const std::shared_ptr<con
 
     WindowStats::Probe probe;
     probe.ambient_pa = spec.ambient.pressure_pa;
-    {
+    if (engine.turbo() != nullptr) {
         const TurboPairDesc& td = engine.turbo()->desc;
         probe.target_boost_pa = td.target_boost_pa;
         probe.max_mass_flow_kg_s = td.max_mass_flow_kg_s;
@@ -475,9 +573,30 @@ DynoPoint turbo_point(const SimulatedEngineDesc& desc, const std::shared_ptr<con
     for (; k < windows; ++k) {
         w.clear();
         for (long i = 0; i < window_steps; ++i) {
+            if (nsys) {
+                // What Powertrain::pre_solve_components hands NitrousSystem::step, for a wheel-less rig: armed, the throttle
+                // command as the pedal, no gearbox (no gear condition) and no road speed (the speed condition is met).
+                NitrousInputs ni;
+                ni.h = h;
+                ni.arm = real(1.0);
+                ni.heater = heater_channel;
+                ni.purge = real(0.0);
+                ni.throttle_command = throttle.command;
+                ni.omega = omega;
+                ni.has_gearbox = false;
+                ni.gear = 0;
+                ni.speed_mps = std::numeric_limits<real>::max();
+                ni.engine_running = true;
+                ni.ignition_cut = false;
+                ni.p_intake_pa = engine.intake_pressure_pa();
+                ni.p_ambient_pa = spec.ambient.pressure_pa;
+                nsys->step(ni);
+                s.nitrous = nsys->engine_input();
+            }
             const PreSolveResult r = engine.pre_solve(s, throttle, TcuRequest{}, h);
+            if (nsys) nsys->observe(r.limiter_active || r.dfco_active, r.fuel_supply_fraction < real(1.0));
             (void)engine.post_solve(omega, h);
-            w.add(r, c_k, spec.ambient.pressure_pa, probe);
+            w.add(r, c_k, spec.ambient.pressure_pa, probe, s.nitrous.mdot_n_kg_s);
         }
         const real boost = w.mean(w.boost_bar);
         const real torque = w.mean(w.net_torque);
@@ -498,6 +617,75 @@ DynoPoint turbo_point(const SimulatedEngineDesc& desc, const std::shared_ptr<con
     return settled_window_point(engine, w, rpm, omega, converged, real(k * window_steps) * h, spec, grid, findings);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Bottle findings (engine garage P3b-2): static per sweep, tagged with the rpm of the sweep's largest N2O flow (the shortest
+// bottle life). Both read only the points' window means and the descriptors.
+void bottle_findings(std::vector<Findings>& per_point, const DynoResult& result, const DynoSweepSpec& spec, const SimulatedEngineDesc& sim) {
+    if (!spec.nitrous.has_value()) return;
+    std::size_t worst = result.points.size();
+    for (std::size_t i = 0; i < result.points.size(); ++i) {
+        if (result.points[i].n2o_g_s > real(0.0) && (worst == result.points.size() || result.points[i].n2o_g_s > result.points[worst].n2o_g_s)) worst = i;
+    }
+    if (worst == result.points.size()) return; // the controller never sprayed in this sweep
+    const DynoPoint& pt = result.points[worst];
+    const N2oBottleDesc& bottle = spec.nitrous->bottle;
+    const NitrousKitDesc& kit = spec.nitrous->kit;
+    const real flow_kg_s = pt.n2o_g_s * real(0.001);
+    Findings& out = per_point[worst];
+
+    // N2OBottleDuration: the bottle content over the flow at its worst point.
+    if (bottle.initial_kg > real(0.0)) {
+        const real duration = bottle.initial_kg / flow_kg_s;
+        const real target = limits::kBottleDurationTarget.value;
+        const LimitSeverity s = duration < target ? LimitSeverity::Limiting : LimitSeverity::Near;
+        if (duration < target * limits::kBottleDurationNearFactor.value) {
+            LimitFinding f = make_finding(LimitKind::N2OBottleDuration, s, pt.rpm, duration, target, LimitUnit::Second,
+                                          PartRef{"n2o_bottle", spec.part_files.n2o_bottle, "/capacity_kg"});
+            Remedy r;
+            r.part = f.part;
+            r.current = bottle.initial_kg;
+            r.required_min = target * flow_kg_s;
+            r.required_margin = target * flow_kg_s * limits::kBottleReserve.value;
+            r.unit = LimitUnit::Kilogram;
+            r.cost = RemedyCost::Closed;
+            r.solved = true;
+            f.remedy = std::move(r);
+            out.push_back(std::move(f));
+        }
+    }
+
+    // N2OBottlePressureDrop: only a bottle whose pressure falls with the fill (vs_fill; a constant or temperature-set pressure
+    // does not drop, and a heater holds its set point). The flow at the END of a target-length pass over the flow at the
+    // start, at the same jet and manifold pressure (the flow model's flux ratio); the fill at the end is the start fill less
+    // target x the start flow.
+    const bool heater_on = bottle.has_heater && bottle.heater.default_on >= real(0.5);
+    if (bottle.pressure.mode == N2oPressureMode::VsFill && !heater_on && bottle.capacity_kg > real(0.0)) {
+        const NitrousSystem sys(bottle, kit, sim.fuels.front().density_kg_m3, -1, -1, -1);
+        const real target = limits::kBottleDurationTarget.value;
+        const real fill_end = std::max(real(0.0), bottle.initial_kg - target * flow_kg_s);
+        const real p0 = sys.bottle_pressure_pa(bottle.initial_kg, false);
+        const real p1 = sys.bottle_pressure_pa(fill_end, false);
+        const real p_im = std::isfinite(pt.p_intake_kpa) ? pt.p_intake_kpa * real(1000.0) : spec.ambient.pressure_pa;
+        const auto flux = [&](real pb) { return kit.flow_model == NitrousFlowModel::Hem ? sys.tables().g_hem(pb) : sys.tables().g_dyer(pb, p_im); };
+        const real g0 = flux(p0);
+        if (g0 > real(0.0)) {
+            const real retention = flux(p1) / g0;
+            const real gauge_end_bar = (p1 - kIsaAirPressurePa) * real(1.0e-5);
+            LimitSeverity s = LimitSeverity::Near;
+            bool hit = true;
+            if (kit.controller.safety.min_bottle_gauge_bar > real(0.0) && gauge_end_bar < kit.controller.safety.min_bottle_gauge_bar) s = LimitSeverity::Exceeded;
+            else if (retention < limits::kBottleFlowRetentionLimiting.value) s = LimitSeverity::Limiting;
+            else if (retention < limits::kBottleFlowRetentionNear.value) s = LimitSeverity::Near;
+            else hit = false;
+            if (hit) {
+                out.push_back(make_finding(LimitKind::N2OBottlePressureDrop, s, pt.rpm, retention, limits::kBottleFlowRetentionNear.value,
+                                           LimitUnit::Fraction, PartRef{"n2o_bottle", spec.part_files.n2o_bottle, "/pressure"}));
+            }
+        }
+    }
+    sort_point_findings(out);
+}
+
 struct Shared {
     const std::atomic<bool>* cancel = nullptr;
     std::atomic<bool> skipped{false}; // some point observed the cancel flag and did not run
@@ -515,6 +703,9 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
     DynoResult result;
 
     if (const TorqueMapEngineDesc* tm = std::get_if<TorqueMapEngineDesc>(&resolved)) {
+        if (spec.nitrous.has_value()) {
+            throw std::invalid_argument("run_dyno_sweep: a nitrous kit needs a simulated engine (the torque-map engine ignores the kit)");
+        }
         const EngineTorqueMap::Desc d = to_engine_desc(*tm);
         const std::vector<real> rpms = spec.rpm.empty() ? default_rpm_grid(d.idle_rpm, d.limiter.rpm) : spec.rpm;
         result.points.reserve(rpms.size());
@@ -536,7 +727,10 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
 
     const std::vector<real> rpms = spec.rpm.empty() ? default_rpm_grid(sim->idle_rpm, sim->limiter.rpm) : spec.rpm;
 
-    if (!sim->turbo_pair.has_value()) {
+    if (spec.nitrous.has_value() && sim->fuels.empty()) {
+        throw std::invalid_argument("run_dyno_sweep: a nitrous kit needs an engine with a fuel (its kit-jet density)");
+    }
+    if (!sim->turbo_pair.has_value() && !spec.nitrous.has_value()) {
         // build_model_maps throws SimulatedEngine's "maps are pending" / rotary / geometry messages like the engine would.
         const std::shared_ptr<const SimulatedEngineMaps> m = SimulatedEngine::build_model_maps(*sim);
         result.points.reserve(rpms.size());
@@ -560,7 +754,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
         return result;
     }
 
-    // Turbo: the limiter is a time-domain fuel-cut latch, not what the engine can deliver; moved above the swept range
+    // Turbo (or a kit): the limiter is a time-domain fuel-cut latch, not what the engine can deliver; moved above the swept range
     // so the limiter point itself is a normal WOT point (the instant kinds ignore it the same way). Only when needed:
     // a descriptor whose limiter already lies above every point is used as it is (bit-identical to the bench).
     SimulatedEngineDesc d = *sim;
@@ -582,7 +776,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             return;
         }
         try {
-            result.points[i] = turbo_point(d, m, rpms[i], spec, per_point[i]);
+            result.points[i] = stepped_point(d, m, rpms[i], spec, per_point[i]);
             // The limiter findings use the ORIGINAL limiter: the sweep moved it out of the way only to hold WOT.
             limiter_findings(per_point[i], sim->limiter, rpms[i], spec.part_files.engine);
             piston_speed_finding(per_point[i], *sim, rpms[i], spec.part_files.engine);
@@ -603,8 +797,20 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
     for (const std::exception_ptr& e : errors) {
         if (e) std::rethrow_exception(e);
     }
+    bottle_findings(per_point, result, spec, *sim);
     assemble_limits(result, per_point);
     return result;
+}
+
+std::optional<DynoNitrous> nitrous_from_powertrain(const PowertrainDesc& pt) {
+    const N2oBottleDesc* bottle = nullptr;
+    const NitrousKitDesc* kit = nullptr;
+    for (const ComponentDesc& c : pt.components) {
+        if (bottle == nullptr) bottle = std::get_if<N2oBottleDesc>(&c.params);
+        if (kit == nullptr) kit = std::get_if<NitrousKitDesc>(&c.params);
+    }
+    if (bottle == nullptr || kit == nullptr) return std::nullopt;
+    return DynoNitrous{*bottle, *kit};
 }
 
 std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain, const std::string& clutch_file) {

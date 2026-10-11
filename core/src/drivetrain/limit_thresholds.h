@@ -79,11 +79,38 @@ inline constexpr Threshold kEdgeNearFraction{"grid_edge_near_span_fraction", 0.0
 // Near starts when peak torque exceeds 1/factor of the static capacity.
 inline constexpr Threshold kDrivelineMargin{"driveline_torque_margin", 1.3, "[AS] design section 18 (owner-visible 'x1.3')"};
 
+// --- Nitrous kit (engine garage P3b-2; a sweep with DynoSweepSpec::nitrous) -----------------------------------------------
+// Combined lambda of the charge with the kit (the engine's n2o_lambda_combined: O2-equivalent air over the stoichiometric air
+// demand of ECU fuel + kit fuel; the N2O's oxygen counts). Wet-kit tuning guides run gasoline at roughly 11.5-12.5:1 under
+// the shot (lambda ~0.78-0.85 at a 14.7:1 stoichiometric ratio, recalled, no local source); lean of ~0.90 is where the
+// published warnings about detonation damage start, and lambda >= 1 under N2O is the textbook piston-melting condition.
+inline constexpr Threshold kKitLambdaNear{"kit_lambda_near", 0.90, "[AS] recalled tuning-guide ceiling for a safe wet shot (~12.5:1 gasoline = 0.85, plus margin)"};
+inline constexpr Threshold kKitLambdaLimiting{"kit_lambda_limiting", 1.00, "[AS] stoichiometric: no fuel margin left under the shot"};
+inline constexpr Threshold kKitLambdaExceeded{"kit_lambda_exceeded", 1.10, "[AS] 10 % lean of stoichiometric: the shot burns the engine"};
+// The lambda the Closed fuel-jet remedy sizes to (middle of the 0.78-0.85 tuning range above).
+inline constexpr Threshold kKitLambdaTarget{"kit_lambda_target", 0.82, "[AS] middle of the recalled 0.78-0.85 wet-shot range"};
+// A full drag-strip pass: a quarter mile takes roughly 6-12 s for a 600-1000 hp car (recalled, no local source); the bottle must
+// last at least one pass. Near below 1.5 passes.
+inline constexpr Threshold kBottleDurationTarget{"bottle_duration_target_s", 10.0, "[AS] one drag-strip pass, ~6-12 s recalled"};
+inline constexpr Threshold kBottleDurationNearFactor{"bottle_duration_near_factor", 1.5, "[AS] Near below 1.5 passes"};
+// Share of the content that never reaches the pickup tube (liquid left when the bottle 'empties'): the Closed bottle remedy
+// asks for this much more than the flow needs.
+inline constexpr Threshold kBottleReserve{"bottle_reserve_factor", 1.10, "[AS] ~10 % of the liquid stays below the pickup"};
+// Bottle pressure falling with the fill (a vs_fill bottle): N2O flow at the END of a target-duration pass over the flow at the
+// start (the same jet and manifold, the flow model's flux ratio).
+inline constexpr Threshold kBottleFlowRetentionNear{"bottle_flow_retention_near", 0.90, "[AS] a 10 % flow loss over one pass is visible on the power"};
+inline constexpr Threshold kBottleFlowRetentionLimiting{"bottle_flow_retention_limiting", 0.80, "[AS] 20 % flow loss over one pass"};
+
+// --- Simulated remedies (ps/drivetrain/limit_remedies.h) -------------------------------------------------------------------
+// required_margin / required_min of a solved wastegate area (the N7b procedure: bisected, then +10 %).
+inline constexpr Threshold kWastegateRemedyMargin{"wastegate_remedy_margin", 1.10, "[AS] N7b: the bisected area plus 10 %"};
+
 inline constexpr Threshold kAllLimitThresholds[] = {
     kGateNear,        kGateFull,        kGateSaturatedFraction, kBoostBandNear,      kBoostBandExceeded, kRotorNear,
     kRotorLimiting,   kSurgeNearMargin, kSurgeMinFraction,      kChokeNear,          kChokeLimiting,     kLimiterNear,
     kSoftCutNearBands, kPistonSpeedNear, kPistonSpeedLimiting,   kPistonSpeedExceeded, kEdgeMinFraction,   kEdgeNearFraction,
-    kDrivelineMargin,
+    kDrivelineMargin, kKitLambdaNear,   kKitLambdaLimiting,     kKitLambdaExceeded, kKitLambdaTarget,   kBottleDurationTarget, kBottleDurationNearFactor,
+    kBottleReserve,   kBottleFlowRetentionNear, kBottleFlowRetentionLimiting, kWastegateRemedyMargin,
 };
 inline constexpr std::size_t kAllLimitThresholdCount = sizeof(kAllLimitThresholds) / sizeof(kAllLimitThresholds[0]);
 
