@@ -1,0 +1,15 @@
+{
+  "format": "physics_sim.fuel/1",
+  "name": "tier2_cert_23945",
+  "phase": "liquid",
+  "lhv_j_kg": 42886950.82,
+  "afr_stoich": 14.544301214245705,
+  "density_kg_m3": 742.9982,
+  "source": "[C] EPA NVFEL Fuel Analysis Report 23945 (24-Apr-14), the Tier 2 certification fuel of the 2014 Mazda 2.0 SKYACTIV-G test data: Net Heat of Combustion (D3338) 18438.07 BTU/lb, weight fraction carbon (D3343) 0.86678, specific gravity 60/60 F (D4052) 0.74373, oxygenates 0.00 (E0). [D] lhv_j_kg = 18438.07 x 2326 J/kg (exact BTU/lb conversion); hydrogen by difference 0.13322 (no O, sulphur neglected); afr_stoich by Heywood 1988 sec. 3.2 (as tier3_e10_cert.json): (n_C + n_H/4) x (31.998 + 3.773 x 28.16); density = SG x 999.016 kg/m^3 (water at 60 F).",
+  "knock": {
+    "model": "douaud_eyzat",
+    "ron": 97.1,
+    "mon": 88.2,
+    "source": "[C] EPA NVFEL Fuel Analysis Report 23945: Research Octane 97.1, Motor Octane 88.2 ((R+M)/2 92.65)."
+  }
+}
