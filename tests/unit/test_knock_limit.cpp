@@ -379,6 +379,40 @@ TEST_CASE("P7 K3: generated A25A tables - monotone in p_im, octane order, unlimi
     CHECK(limited > 0);
     CHECK(e85_gain > 0);
 
+    SECTION("P7b: the replay runs at the ECU lambda target (Sketch)") {
+        // The same engine with a flat lambda 1 target: identical wherever the shipped target is 1, and an enriched
+        // knock-limited node sits later than its lambda 1 twin (more fuel vapour, a cooler end gas; P7b budget +0.68 deg
+        // mean over the A25A WOT rows). Guards the generator applying knock.lambda_target to the replay.
+        json flat = knock_engine("toyota_a25a_fks_gen.json", 0.0, true);
+        flat["ecu"]["lambda_target"] = {{"rpm", {600.0, 6900.0}}, {"p_im_kpa", {20.0, 105.0}}, {"values", {{1.0, 1.0}, {1.0, 1.0}}}};
+        const SimulatedEngineDesc a = load_sim(knock_engine("toyota_a25a_fks_gen.json", 0.0, true), MapQuality::Sketch);
+        const SimulatedEngineDesc b = load_sim(flat, MapQuality::Sketch);
+        const Table2D& ta = a.maps.theta_kl_deg;
+        const Table2D& tb = b.maps.theta_kl_deg;
+        REQUIRE(ta.values.size() == tb.values.size());
+        const Table2D& lt = a.cycle->knock.lambda_target;
+        int at_one = 0, enriched = 0;
+        for (std::size_t ix = 0; ix < ta.x.size(); ++ix) {
+            for (std::size_t iy = 0; iy < ta.y.size(); ++iy) {
+                const real l = lt.value(ta.x[ix], ta.y[iy]);
+                const real mbt = a.maps.theta_mbt_deg.value(ta.x[ix], ta.y[iy]);
+                INFO("rpm " << ta.x[ix] << " p_im " << ta.y[iy] << " lambda " << l);
+                if (l == real(1.0)) {
+                    CHECK(kl_at(ta, ix, iy) == kl_at(tb, ix, iy));
+                    ++at_one;
+                } else if (l < real(0.95) && kl_at(tb, ix, iy) < mbt + ec::kKnockSearchAboveMbtDeg - 0.5 &&
+                           kl_at(tb, ix, iy) > std::max(real(-30.0), mbt - ec::kKnockSearchBelowMbtDeg) + 0.5) {
+                    // limited, and saturated at neither search bound nor the -30 deg clamp
+                    CHECK(kl_at(ta, ix, iy) > kl_at(tb, ix, iy) + 0.2);
+                    ++enriched;
+                }
+            }
+        }
+        INFO("at lambda 1: " << at_one << ", enriched and limited: " << enriched);
+        CHECK(at_one > 0);
+        CHECK(enriched > 0);
+    }
+
     SECTION("the margin lowers exactly the limited nodes by itself (Sketch)") {
         const SimulatedEngineDesc a = load_sim(knock_engine("toyota_a25a_fks_gen.json", 0.0, true), MapQuality::Sketch);
         const SimulatedEngineDesc b = load_sim(knock_engine("toyota_a25a_fks_gen.json", 3.0, true), MapQuality::Sketch);
