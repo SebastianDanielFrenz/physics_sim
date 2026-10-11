@@ -909,8 +909,9 @@ TEST_CASE("G1 boost_grid_p_im: a turbo attached to the pipe I4 in code generates
 TEST_CASE("G2 ambient_grid_p_im: the hyper with its turbo removed in code generates and runs naturally aspirated",
           "[engine_rules][drivetrain][cycle][turbo]") {
     // Recorded sabotage: ambient_grid_p_im keeps the 160 kPa node: generate_engine_maps throws for the NA engine (a node
-    // above ambient needs a compressor-fed throttle) -> case fails. NOTE (progress file): once engine garage P2's loader
-    // "none" path exists this should load the hyper with forced_induction "none" instead of editing the descriptor.
+    // above ambient needs a compressor-fed throttle) -> case fails. Engine garage P5: the same conversion through
+    // the loader's forced_induction "none" slot is guarded by tests/unit/test_forced_induction_conversions.cpp FI4 (including the
+    // loader's refusal of the boosted grid); this case keeps the descriptor-level view.
     ComponentParams c = clean_hyper();
     SimulatedEngineDesc& e = S(c);
     e.turbo_pair.reset();
