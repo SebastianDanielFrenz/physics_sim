@@ -230,7 +230,8 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
 SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, const Ambient& amb, const StarterDesc& starter,
                                                  real omega, real p, bool fired, real s_starve, bool starter_active,
                                                  bool ignore_limiter = false, const AntiLagDesc* als = nullptr, real k_fric = real(1.0),
-                                                 real hyd_ref_rpm = real(2000.0), const NitrousCharge* nc = nullptr) {
+                                                 real hyd_ref_rpm = real(2000.0), const NitrousCharge* nc = nullptr,
+                                                 real limiter_rpm_override = real(0.0)) {
     SimulatedEngine::TorqueEval e;
     const real rpm = std::abs(omega) * kRadPerSecToRpm;
     const real s_w = sign(omega);
@@ -253,8 +254,10 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     real fire = real(0.0), dfire_drpm = real(0.0);
     if (fired) {
         if (m.limiter.type == LimiterType::SoftCut && !ignore_limiter) {
-            fire = std::clamp((m.limiter.rpm - rpm) / m.limiter.band_rpm, real(0.0), real(1.0));
-            const bool in_band = rpm < m.limiter.rpm && rpm > m.limiter.rpm - m.limiter.band_rpm;
+            // Engine garage P8 (A16): launch control's second limit replaces the limiter speed while it is below it.
+            const real lim_rpm = (limiter_rpm_override > real(0.0) && limiter_rpm_override < m.limiter.rpm) ? limiter_rpm_override : m.limiter.rpm;
+            fire = std::clamp((lim_rpm - rpm) / m.limiter.band_rpm, real(0.0), real(1.0));
+            const bool in_band = rpm < lim_rpm && rpm > lim_rpm - m.limiter.band_rpm;
             dfire_drpm = in_band ? real(-1.0) / m.limiter.band_rpm : real(0.0);
         } else {
             fire = real(1.0);
@@ -996,11 +999,11 @@ SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
         auto result = evaluate_torque_impl(*maps_,Ambient{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)},starter_,omega,p_im,fired,s_starve,starter_active,
-                                           false,als,plant_k_,hyd_ref_rpm_,nc);
+                                           false,als,plant_k_,hyd_ref_rpm_,nc,limiter_rpm_override_);
         return result;
     }
     return evaluate_torque_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega, p_im, fired, s_starve, starter_active,
-                                false, als, plant_k_, hyd_ref_rpm_, nc);
+                                false, als, plant_k_, hyd_ref_rpm_, nc, limiter_rpm_override_);
 }
 
 void SimulatedEngine::clear_anti_lag_state() {
@@ -1012,6 +1015,7 @@ void SimulatedEngine::clear_anti_lag_state() {
 
 PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const ThrottleCommand& throttle, const TcuRequest& tcu, real h) {
     const SimulatedEngineMaps& m = *maps_;
+    limiter_rpm_override_ = tcu.limiter_rpm; // engine garage P8: not hashed, rewritten every substep
     const bool mech = m.throttle_input == ThrottleInput::Mechanical;
     // Physical atmosphere follows every finite change, including microscopic altitude motion.
     // Control uses the current operating point; never refill the whole steady grid in a job.
@@ -1199,12 +1203,14 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     }
 
     bool limiter_active = false;
+    // Engine garage P8 (A16): launch control's second limit (set at the top of pre_solve) replaces the limiter speed.
+    const real lim_rpm = (limiter_rpm_override_ > real(0.0) && limiter_rpm_override_ < m.limiter.rpm) ? limiter_rpm_override_ : m.limiter.rpm;
     if (m.limiter.type == LimiterType::FuelCut) {
-        if (rpm >= m.limiter.rpm) limiter_cut_ = true;
-        else if (rpm <= m.limiter.rpm - m.limiter.hysteresis_rpm) limiter_cut_ = false;
+        if (rpm >= lim_rpm) limiter_cut_ = true;
+        else if (rpm <= lim_rpm - m.limiter.hysteresis_rpm) limiter_cut_ = false;
         limiter_active = limiter_cut_;
     } else {
-        limiter_active = rpm > m.limiter.rpm - m.limiter.band_rpm;
+        limiter_active = rpm > lim_rpm - m.limiter.band_rpm;
     }
 
     // (3) actuator

@@ -33,6 +33,24 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
     aero::validate(desc_.aero);
     validate_traction_control(desc_.traction_control);
     traction_sensors_.resize(desc_.wheels.size());
+    {
+        // Engine garage P8 (A15): fitment. Without a manual_tcu there is nothing to un-fit (the flags stay true and
+        // the powertrain ignores them), but the SNAPSHOT reports the auto_* assists as not fitted.
+        bool have_tcu = false;
+        for (const drivetrain::ControllerDesc& cd : desc_.controllers) {
+            if (const auto* tcu = std::get_if<drivetrain::ManualTcuDesc>(&cd.params)) {
+                have_tcu = true;
+                fit_clutch_ = tcu->auto_clutch.fitted;
+                fit_blip_ = tcu->auto_blip.fitted;
+                fit_shift_ = tcu->auto_shift.fitted;
+            } else if (const auto* lc = std::get_if<drivetrain::LaunchControlDesc>(&cd.params)) {
+                fit_launch_ = lc->fitted;
+            }
+        }
+        fit_traction_ = desc_.traction_control.fitted;
+        fitted_bits_ = ((have_tcu && fit_clutch_) ? 1u : 0u) | ((have_tcu && fit_blip_) ? 2u : 0u) | ((have_tcu && fit_shift_) ? 4u : 0u) |
+                       (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u);
+    }
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
         wheels_.push_back(std::make_unique<WheelInstance>(w, create_pacejka_tyre_model(w.tyre)));
@@ -139,10 +157,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     const real shift_down_count = channel_values[control_indices_.shift_down_count];
     const real ignition = channel_values[control_indices_.ignition];
     const real starter = channel_values[control_indices_.starter];
-    const bool assist_auto_clutch = channel_values[control_indices_.assist_auto_clutch] > real(0.5);
-    const bool assist_auto_blip = channel_values[control_indices_.assist_auto_blip] > real(0.5);
-    const bool assist_auto_shift = channel_values[control_indices_.assist_auto_shift] > real(0.5);
-    const bool assist_traction = channel_values[control_indices_.assist_traction_control] > real(0.5);
+    // Engine garage P8 (A15): a not-fitted assist ignores its channel and stays off.
+    const bool assist_auto_clutch = fit_clutch_ && channel_values[control_indices_.assist_auto_clutch] > real(0.5);
+    const bool assist_auto_blip = fit_blip_ && channel_values[control_indices_.assist_auto_blip] > real(0.5);
+    const bool assist_auto_shift = fit_shift_ && channel_values[control_indices_.assist_auto_shift] > real(0.5);
+    const bool assist_traction = fit_traction_ && channel_values[control_indices_.assist_traction_control] > real(0.5);
+    const bool assist_launch = fit_launch_ && channel_values[control_indices_.assist_launch_control] > real(0.5);
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
     // channel's value, copied once per tick (not per substep, same
@@ -268,6 +288,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         ctx.assist_auto_clutch = assist_auto_clutch;
         ctx.assist_auto_blip = assist_auto_blip;
         ctx.assist_auto_shift = assist_auto_shift;
+        ctx.assist_launch_control = assist_launch;
         ctx.first_substep_of_tick = (s == 0);
         // PHYS-033 P4 I4 C3: points at this tick's already-copied component-
         // channel buffer (see the per-tick copy above) - rebuilt each
@@ -473,7 +494,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.traction_estimated_speed_m_s=traction_state_.estimated_speed_m_s;
         snap.traction_positive_slip=traction_state_.positive_slip;
         snap.clutch_engagement = powertrain_.has_clutch() ? powertrain_.clutch_engagement() : real(1.0);
-        snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u) | (assist_traction ? 8u : 0u);
+        snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u) | (assist_traction ? 8u : 0u) |
+                                (assist_launch ? 16u : 0u);
+        snap.assist_fitted_bits = fitted_bits_;
+        snap.launch_control_active = powertrain_.launch_control_active();
 
         // ps_audio A10 (vault PHYS-054): the fill itself now lives in
         // drivetrain::fill_engine_sound_state, shared with EngineRig, so a

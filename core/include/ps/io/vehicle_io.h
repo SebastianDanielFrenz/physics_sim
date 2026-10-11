@@ -124,6 +124,12 @@ struct PartOverride {
 struct VehicleLoadOptions {
     EngineMapOptions maps;
     std::map<std::string, PartOverride> part_overrides;
+    // Engine garage P8 (A16, docs/data_formats/electronics.md): the user layer's electronics, keyed by the vehicle's
+    // `controllers` entry id. A path (relative to the vehicle file unless absolute) to a physics_sim.electronics/1
+    // file replaces that entry's part or ADDS a new entry (how launch control is grafted onto a car without it);
+    // "none" removes the entry (a vehicle-file entry, or one added earlier). An id that is a manual_tcu entry is
+    // rejected.
+    std::map<std::string, std::string> electronics;
 };
 
 // The overloads above delegate here with no part_overrides (bit-identical).

@@ -1,0 +1,7 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "assist_fitment",
+  "name": "Anti-lag driver switch",
+  "source": "[AS] ASSUMED retrofit part: fits the car-side anti-lag switch, so the engine's anti_lag channel is read; without it anti-lag runs on its default_enabled only. An engine without an anti_lag block in its turbo configuration is unaffected. Behaviour documented in docs/data_formats/electronics.md.",
+  "fits": ["anti_lag"]
+}

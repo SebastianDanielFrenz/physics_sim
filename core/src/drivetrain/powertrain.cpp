@@ -1323,7 +1323,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                         break;
                     }
                 }
-                anti_lag_channel_live_ = anti_lag_channel_slot_ >= 0;
+                anti_lag_channel_live_ = anti_lag_channel_slot_ >= 0 && pt.anti_lag_fitted; // P8: no switch fitted = default_enabled only
             }
             simulated_engine_desc_ = std::move(burnt);
             engine_ = std::move(sim_engine);
@@ -1619,12 +1619,47 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     }
 
     // --- Phase L: controllers (plan section 4.2/9.1) -------------------------
-    if (controllers.size() > 1) {
-        throw std::runtime_error("vehicle '" + vehicle_name + "': at most one controller (manual_tcu) is supported in I3");
+    {
+        // At most one manual_tcu and (engine garage P8) at most one launch_control.
+        int n_tcu = 0, n_launch = 0;
+        for (const ControllerDesc& cd : controllers) {
+            if (std::holds_alternative<ManualTcuDesc>(cd.params)) ++n_tcu;
+            else ++n_launch;
+        }
+        if (n_tcu > 1) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': at most one controller (manual_tcu) is supported in I3");
+        }
+        if (n_launch > 1) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': at most one launch_control controller is supported");
+        }
     }
+    anti_lag_fitted_ = pt.anti_lag_fitted;
     for (const ControllerDesc& cd : controllers) {
+        if (const auto* lc = std::get_if<LaunchControlDesc>(&cd.params)) {
+            // Engine garage P8 (A16): the second limit lies strictly between the engine's idle and its own limiter.
+            real idle = real(0.0), limit = real(0.0);
+            bool have_engine = false;
+            for (const ComponentDesc& c : pt.components) {
+                if (const auto* te = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+                    idle = te->idle_rpm; limit = te->limiter.rpm; have_engine = true; break;
+                }
+                if (const auto* se = std::get_if<SimulatedEngineDesc>(&c.params)) {
+                    idle = se->idle_rpm; limit = se->limiter.rpm; have_engine = true; break;
+                }
+            }
+            if (!have_engine) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': launch_control controller '" + cd.id + "' needs an engine component");
+            }
+            if (!(lc->rpm > idle) || !(lc->rpm < limit) || !(lc->max_speed_mps > real(0.0)) || !std::isfinite(lc->rpm) ||
+                !std::isfinite(lc->max_speed_mps)) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': launch_control controller '" + cd.id +
+                                          "': rpm must lie between the engine's idle and its own limiter and max_speed_mps must be > 0");
+            }
+            launch_.emplace(*lc);
+            continue;
+        }
         const auto* tcu_desc = std::get_if<ManualTcuDesc>(&cd.params);
-        if (tcu_desc == nullptr) continue; // unreachable (ControllerParams has only ManualTcuDesc in I3)
+        if (tcu_desc == nullptr) continue;
         auto check_ref = [&](const std::string& id, const char* expect_type, auto&& type_matches) {
             const auto it = component_index_of.find(id);
             if (it == component_index_of.end()) {
@@ -1963,7 +1998,15 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             nitrous_->step(ni);
             s.nitrous = nitrous_->engine_input();
         }
-        const EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut || ctx.traction_ignition_cut};
+        EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut || ctx.traction_ignition_cut};
+        if (launch_) { // engine garage P8 (A16): the second rev limit, through the engine's own limiter
+            LaunchControl::Inputs li;
+            li.switch_on = ctx.assist_launch_control;
+            li.speed_mps = approx_speed_mps();
+            li.has_clutch = clutch_ != nullptr;
+            li.clutch_engagement = ctx.clutch_engaged_fraction;
+            req.limiter_rpm = launch_->step(li);
+        }
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
         const auto& pre = last_engine_result_;
         if (nitrous_) nitrous_->observe(pre.limiter_active || pre.dfco_active, pre.fuel_supply_fraction < real(1.0));
@@ -2383,6 +2426,7 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         if (gearbox_in_ != clutch_out_) network_.set_omega(gearbox_in_, clutch_out_target);
     }
     if (tcu_) tcu_->reset(opts.clutch_locked);
+    if (launch_) launch_->reset();
     tcu_prev_request_ = {};
 
     // 6b. PHYS-033 P4 I4 C13: compliant shafts not already set at both ends
@@ -2435,6 +2479,7 @@ std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     if (engine_) h = engine_->fold_state_hash(h);
     if (gearbox_) h = gearbox_->fold_state_hash(h);
     if (tcu_) h = tcu_->fold_state_hash(h);
+    if (launch_) h = launch_->fold_state_hash(h); // engine garage P8: hashed only when the component exists
     if (gearbox_) {
         const auto* bytes = reinterpret_cast<const unsigned char*>(&gearbox_lambda_mesh_prev_);
         for (std::size_t i = 0; i < sizeof(gearbox_lambda_mesh_prev_); ++i) {
@@ -2487,7 +2532,7 @@ void Powertrain::replace_turbo_configuration(std::string_view component_id,const
     simulated_engine_desc_->turbo_pair=desc;
     // I7d D5: channels are declared at build time only; a swapped-in anti_lag block naming that channel
     // keeps reading it, any other falls back to its default_enabled (Sensors::anti_lag_channel NaN).
-    anti_lag_channel_live_ = anti_lag_channel_slot_ >= 0 && desc.anti_lag && desc.anti_lag->channel == anti_lag_channel_name_;
+    anti_lag_channel_live_ = anti_lag_fitted_ && anti_lag_channel_slot_ >= 0 && desc.anti_lag && desc.anti_lag->channel == anti_lag_channel_name_;
 }
 
 void Powertrain::request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps) {

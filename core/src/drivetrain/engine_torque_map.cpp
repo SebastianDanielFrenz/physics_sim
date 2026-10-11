@@ -179,13 +179,15 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     // --- 6.1.5: limiter ---------------------------------------------------------
     real f_lim = real(1.0);
     bool limiter_active = false;
+    // Engine garage P8 (A16): launch control's second limit replaces the limiter speed while it is below it.
+    const real lim_rpm = (tcu.limiter_rpm > real(0.0) && tcu.limiter_rpm < desc_.limiter.rpm) ? tcu.limiter_rpm : desc_.limiter.rpm;
     if (desc_.limiter.type == LimiterType::FuelCut) {
-        if (rpm >= desc_.limiter.rpm) limiter_cut_ = true;
-        else if (rpm <= desc_.limiter.rpm - desc_.limiter.hysteresis_rpm) limiter_cut_ = false;
+        if (rpm >= lim_rpm) limiter_cut_ = true;
+        else if (rpm <= lim_rpm - desc_.limiter.hysteresis_rpm) limiter_cut_ = false;
         f_lim = limiter_cut_ ? real(0.0) : real(1.0);
         limiter_active = limiter_cut_;
     } else { // SoftCut
-        f_lim = std::clamp((desc_.limiter.rpm - rpm) / desc_.limiter.band_rpm, real(0.0), real(1.0));
+        f_lim = std::clamp((lim_rpm - rpm) / desc_.limiter.band_rpm, real(0.0), real(1.0));
         limiter_active = f_lim < real(1.0);
     }
 
@@ -295,7 +297,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
         dtau_domega -= kRadPerSecToRpm * ((k_plant - real(1.0)) * f_hyd_ref * hyd_shape.slope_per_rpm);
     }
     if (desc_.limiter.type == LimiterType::SoftCut) {
-        const bool in_band = rpm < desc_.limiter.rpm && rpm > desc_.limiter.rpm - desc_.limiter.band_rpm;
+        const bool in_band = rpm < lim_rpm && rpm > lim_rpm - desc_.limiter.band_rpm;
         const real dflim_domega = in_band ? -kRadPerSecToRpm / desc_.limiter.band_rpm : real(0.0);
         dtau_domega += theta_eff * (w_rpm - m_rpm) * dflim_domega * s_starve;
     }

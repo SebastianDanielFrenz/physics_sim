@@ -16,6 +16,9 @@ namespace ps::drivetrain {
 
 struct AutoClutchDesc {
     bool enabled = true; // default of the runtime assist.* channel (World::create_vehicle); the channel is the switch
+    // Engine garage P8 (A15): hardware fitment. false = the car does not have this assist: its channel is still
+    // registered (stable channel list, default 0) but ignored - the assist stays off whatever the channel says.
+    bool fitted = true;
     real bite_rpm = 1100.0;      // engagement 0 at or below this engine speed (launch law)
     real full_rpm_min = 1600.0;  // engagement 1 at this rpm with throttle 0 ...
     real full_rpm_max = 3000.0;  // ... and at this rpm with throttle 1
@@ -87,6 +90,7 @@ struct AutoClutchDesc {
 
 struct AutoBlipDesc {
     bool enabled = true; // default of the runtime assist.* channel (World::create_vehicle); the channel is the switch
+    bool fitted = true;  // engine garage P8 (A15): see AutoClutchDesc::fitted
     real kp_per_rpm = 0.002;
     real max_throttle = 1.0;
     bool upshift_cut = true;
@@ -107,6 +111,7 @@ struct AutoBlipDesc {
 
 struct AutoShiftDesc {
     bool enabled = false; // default of the runtime assist.* channel (World::create_vehicle); the channel is the switch
+    bool fitted = true;   // engine garage P8 (A15): see AutoClutchDesc::fitted
     real up_rpm_at_zero_throttle = 2500.0, up_rpm_at_full_throttle = 6300.0;
     real down_rpm_at_zero_throttle = 1300.0, down_rpm_at_full_throttle = 2800.0;
     real min_time_in_gear_s = 1.0;
@@ -125,9 +130,21 @@ struct ManualTcuDesc {
     int max_pending_steps = 2;
 };
 
-// Closed, visited exhaustively - I3 has exactly one controller kind (at
-// most one manual_tcu per vehicle, plan section 9.1); I5 adds more.
-using ControllerParams = std::variant<ManualTcuDesc>;
+// Engine garage P8 (A16, docs/data_formats/electronics.md): launch control (two-step). A second rev limit
+// `rpm` that acts through the engine's own limiter (fuel cut or soft cut per the engine's limiter type) while it
+// is active. Active from the moment the channel is on, the car is (nearly) stationary (speedo below
+// max_speed_mps) and the clutch is effectively in (engagement < kClutchInEngagement), until the channel goes
+// off or the speed exceeds max_speed_mps; the latch is what lets the car launch with the limit still held.
+// Hashed state only while the component exists.
+struct LaunchControlDesc {
+    real rpm = 0.0;                                   // second limiter speed; > engine idle, < the engine's own limiter
+    real max_speed_mps = 2.0;                         // active only below this speedo speed; releases above it
+    std::string channel = "assist.launch_control";   // runtime arm switch (plain 0/1 level)
+    bool fitted = true;                               // false: the channel is ignored (A15)
+};
+
+// Closed, visited exhaustively - at most one manual_tcu and at most one launch_control per vehicle.
+using ControllerParams = std::variant<ManualTcuDesc, LaunchControlDesc>;
 
 struct ControllerDesc {
     std::string id;

@@ -49,6 +49,7 @@ struct ControlChannelIndices {
     std::size_t gear_request = 0;
     std::size_t ignition = 0, starter = 0;
     std::size_t assist_auto_clutch = 0, assist_auto_blip = 0, assist_auto_shift = 0, assist_traction_control = 0;
+    std::size_t assist_launch_control = 0; // engine garage P8: only read when the vehicle has a launch_control controller
     // PHYS-033 P4 I4 C3 (plan section 2.4): one resolved World control-
     // channel index per drivetrain::Powertrain::declare_control_channels(...)
     // entry, same order - resolved in World::create_vehicle exactly like the
@@ -279,6 +280,10 @@ private:
     real wheelbase_ = 2.5;
     real rear_axle_x_ = 0.0;
 
+    // Engine garage P8 (A15): which assists this car has FITTED (a not-fitted assist ignores its channel). Computed
+    // once in the constructor from the TCU blocks, traction_control.fitted and the launch_control controller.
+    bool fit_clutch_ = true, fit_blip_ = true, fit_shift_ = true, fit_traction_ = true, fit_launch_ = false;
+    std::uint32_t fitted_bits_ = 0; // snapshot layout: bit0 auto_clutch .. bit3 traction_control, bit4 launch_control, bit5 anti_lag switch
     TractionControlState traction_state_{};
     std::vector<TractionWheelSensor> traction_sensors_;
     Vec3 imu_previous_velocity_world_{}; // virtual accelerometer plumbing only; never supplied as TC speed

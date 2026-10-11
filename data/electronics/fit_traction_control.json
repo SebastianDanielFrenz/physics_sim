@@ -1,0 +1,7 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "assist_fitment",
+  "name": "Traction control module",
+  "source": "[AS] ASSUMED retrofit module: marks the car's traction_control (ps/vehicle/traction_control.h) as fitted. The controller parameters stay those of the car's own traction_control block (or the defaults). Behaviour documented in docs/data_formats/electronics.md.",
+  "fits": ["traction_control"]
+}
