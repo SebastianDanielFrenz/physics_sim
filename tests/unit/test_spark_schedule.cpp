@@ -236,7 +236,7 @@ vehicle::VehicleDesc load_engine(const json& engine) {
     json v;
     v["format"] = "physics_sim.vehicle/2";
     v["source"] = "test fixture, not a real vehicle (test_spark_schedule.cpp)";
-    v["wheels"] = json::array({{{"name", "FL"}}});
+    v["wheels"] = json::array({{{"name", "FL"}, {"tyre", {{"source", "test fixture"}}}}});
     v["powertrain"] = {{"components", json::array({engine})}};
     TempDir d;
     const auto p = d.write("vehicle.json", v);

@@ -791,7 +791,7 @@ nlohmann::json minimal_vehicle(bool engine_has_fuels) {
     v["format"] = "physics_sim.vehicle/2";
     v["name"] = "mini";
     v["source"] = "test fixture, not a real vehicle (test_fuel_tank.cpp)";
-    v["wheels"] = nlohmann::json::array({{{"name", "FL"}}});
+    v["wheels"] = nlohmann::json::array({{{"name", "FL"}, {"tyre", {{"source", "test fixture"}}}}});
     v["powertrain"] = {{"components", nlohmann::json::array({e, t})}, {"fluid", nlohmann::json::array({{"tank.out", "engine.fuel"}})}};
     return v;
 }

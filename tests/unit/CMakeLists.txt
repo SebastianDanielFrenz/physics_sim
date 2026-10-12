@@ -48,6 +48,7 @@ add_executable(ps_unit_tests
   test_tyre_rolling_resistance.cpp
   test_vehicle_ackermann_symmetry.cpp
   test_vehicle_io_validation.cpp
+  test_tyre_injection.cpp
   test_vehicle_parallel_alloc.cpp
   test_wheel_contact_frame.cpp
   test_powertrain_network.cpp

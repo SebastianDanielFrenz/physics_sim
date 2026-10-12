@@ -437,7 +437,7 @@ std::string minimal_vehicle_json_with_components(const std::string& components_c
     return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       )") + components_csv + R"(

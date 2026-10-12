@@ -41,8 +41,8 @@ std::string minimal_vehicle_json(double ackermann_fraction) {
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
   "wheels": [
-    { "name": "FL", "steered": true, "is_front": true },
-    { "name": "FR", "steered": true, "is_front": true }
+    { "name": "FL", "tyre": { "source": "test fixture" }, "steered": true, "is_front": true },
+    { "name": "FR", "tyre": { "source": "test fixture" }, "steered": true, "is_front": true }
   ],
   "steering": { "ackermann_fraction": )" + std::to_string(ackermann_fraction) + R"( }
 })";
@@ -110,7 +110,7 @@ std::string vehicle_json_with_format(const std::string& format_field) {
     return std::string(R"({
 )") + format_field + R"(
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ]
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ]
 })";
 }
 
@@ -153,7 +153,7 @@ TEST_CASE("load_vehicle_json rejects legacy /1 fields under /2", "[unit][vehicle
         const std::string json = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL", "driven": true } ]
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" }, "driven": true } ]
 })";
         TempJsonFile f(json, "vehicle_driven");
         REQUIRE_THROWS_WITH(io::load_vehicle_json(f.path.string()), ContainsSubstring("driven"));
@@ -162,7 +162,7 @@ TEST_CASE("load_vehicle_json rejects legacy /1 fields under /2", "[unit][vehicle
         const std::string json = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "drive": { "final_drive_ratio": 3.7 }
 })";
         TempJsonFile f(json, "vehicle_drive_key");
@@ -172,7 +172,7 @@ TEST_CASE("load_vehicle_json rejects legacy /1 fields under /2", "[unit][vehicle
         const std::string json = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "brakes": { "max_torque_front": 2200.0 }
 })";
         TempJsonFile f(json, "vehicle_brakes_key");
@@ -189,7 +189,7 @@ TEST_CASE("load_vehicle_json accepts differential efficiency < 1 (I2 ban lifted)
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0, "efficiency": )") +
@@ -225,7 +225,7 @@ TEST_CASE("load_vehicle_json parses a lockable differential and rejects a bad 'l
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "diff", "type": "differential", "kind": "open", "ratio": 1.0)") +
@@ -290,7 +290,7 @@ TEST_CASE("load_vehicle_json validates differential 'kind' (I4 C6: locked/viscou
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "diff", "type": "differential", "kind": ")") +
@@ -359,7 +359,7 @@ TEST_CASE("load_vehicle_json validates clutch_lsd/torsen differential fields (I4
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "diff", "type": "differential", "kind": ")") +
@@ -465,7 +465,7 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
@@ -509,7 +509,7 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
         rejects(std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 0.0, "front_ratio": 1.0,
@@ -524,7 +524,7 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
         rejects(std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 0.0,
@@ -539,7 +539,7 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
         rejects(std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0 }
@@ -553,7 +553,7 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
@@ -568,7 +568,7 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
@@ -583,7 +583,7 @@ TEST_CASE("load_vehicle_json validates transfer_case fields (I4 C9)", "[unit][ve
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
@@ -611,7 +611,7 @@ TEST_CASE("load_vehicle_json validates park_lock fields (I4 C10)", "[unit][vehic
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "park", "type": "park_lock", "capacity_nm": 30000.0, "static_factor": 1.0,
@@ -652,7 +652,7 @@ TEST_CASE("load_vehicle_json validates park_lock fields (I4 C10)", "[unit][vehic
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "park", "type": "park_lock", "capacity_nm": 0.0 }
@@ -677,7 +677,7 @@ TEST_CASE("load_vehicle_json validates park_lock fields (I4 C10)", "[unit][vehic
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "park",  "type": "park_lock", "capacity_nm": 30000.0 },
@@ -705,7 +705,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "pto", "type": "pto", "ratios": { "540": 3.61 }, "capacity_nm": 500.0)") +
@@ -748,7 +748,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         std::string ok = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "pto", "type": "pto", "ratios": { "540": 3.61, "1000": 1.95 }, "capacity_nm": 500.0,
@@ -777,7 +777,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [ { "id": "pto", "type": "pto", "capacity_nm": 500.0 } ],
     "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
@@ -789,7 +789,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [ { "id": "pto", "type": "pto", "ratios": {}, "capacity_nm": 500.0 } ],
     "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
@@ -801,7 +801,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [ { "id": "pto", "type": "pto", "ratios": { "750": 2.0 }, "capacity_nm": 500.0 } ],
     "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
@@ -813,7 +813,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [ { "id": "pto", "type": "pto", "ratios": { "540": 0.0 }, "capacity_nm": 500.0 } ],
     "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
@@ -825,7 +825,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [ { "id": "pto", "type": "pto", "ratios": { "540": 3.61 }, "capacity_nm": 0.0 } ],
     "shafts": [ { "ports": ["pto.in", "wheel:FL"] } ]
@@ -862,7 +862,7 @@ TEST_CASE("load_vehicle_json validates pto fields (I4 C11)", "[unit][vehicle][io
         std::string bad = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "pto",  "type": "pto", "ratios": { "540": 3.61 }, "capacity_nm": 500.0 },
@@ -889,7 +889,7 @@ TEST_CASE("load_vehicle_json validates load_dyno fields (I4 C11)", "[unit][vehic
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "dyno", "type": "load_dyno")") +
@@ -979,7 +979,7 @@ TEST_CASE("load_vehicle_json validates load_dyno fields (I4 C11)", "[unit][vehic
         std::string ok = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "dyno1", "type": "load_dyno", "torque_nm": 10.0 },
@@ -1007,7 +1007,7 @@ TEST_CASE("load_vehicle_json validates compliant shaft fields (I4 C13)", "[unit]
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" }, { "name": "RL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } }, { "name": "RL" } ],
   "powertrain": {)") +
                compliance + R"(
     "components": [
@@ -1100,7 +1100,7 @@ std::string minimal_i3_vehicle_json(const std::string& engine_component, const s
     return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       )") + engine_component + R"(,
@@ -1490,7 +1490,7 @@ TEST_CASE("load_vehicle_json rejects nonzero auto_blip blip/ramp values on a man
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       )") + mechanical_engine_json + R"(,
@@ -1590,7 +1590,7 @@ TEST_CASE("load_vehicle_json rejects a throttle_control 'kind' that disagrees wi
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       )") + engine_json(throttle_input) + R"(,
@@ -1644,7 +1644,7 @@ TEST_CASE("load_vehicle_json throttle_control hand_lever_channel vs. a governed 
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "engine", "type": "engine", "kind": "torque_map", )") + engine_extra + R"(
@@ -1704,7 +1704,7 @@ TEST_CASE("load_vehicle_json validates throttle_control pedal_map/linkage_curve 
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "engine", "type": "engine", "kind": "torque_map", )") + engine_input + R"(
@@ -1802,7 +1802,7 @@ TEST_CASE("load_vehicle_json throttle_control engine reference cross-checks (ord
         const std::string json = std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "throttle", "type": "throttle_control", "engine": "engine", "kind": "electronic" },
@@ -1831,7 +1831,7 @@ TEST_CASE("load_vehicle_json throttle_control engine reference cross-checks (ord
         const std::string json = std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "engine", "type": "engine", "kind": "torque_map",
@@ -1861,7 +1861,7 @@ TEST_CASE("load_vehicle_json throttle_control engine reference cross-checks (ord
         const std::string json = std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "engine", "type": "engine", "kind": "torque_map",
@@ -1891,7 +1891,7 @@ TEST_CASE("load_vehicle_json throttle_control engine reference cross-checks (ord
         const std::string json = std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL" }, { "name": "FR" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } } ],
   "powertrain": {
     "components": [
       { "id": "throttle", "type": "throttle_control", "engine": "engine", "kind": "electronic" }
@@ -2008,7 +2008,7 @@ TEST_CASE("load_vehicle_json accepts a 'format'-less inline tyre object (not a s
     const std::string json = R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL", "tyre": { "name": "inline_tyre", "source": "inline fixture" } } ]
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" }, "tyre": { "name": "inline_tyre", "source": "inline fixture" } } ]
 })";
     TempJsonFile f(json, "vehicle_inline_tyre");
     REQUIRE_NOTHROW(io::load_vehicle_json(f.path.string()));
