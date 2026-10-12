@@ -771,6 +771,13 @@ TEST_CASE("P10 R3: held-crank steady points meet the vacuum target, the open pla
             CHECK(h.plate > 0.999);
             CHECK_FALSE(h.vacuum);
         }
+        if (req == req_node) {
+            // Guard (added with the sabotage record, not a validation bound): on the plate-open node the ECU bisects the
+            // manifold pressure at which its own plant makes the target, so the held point is exact to the bisection
+            // resolution - holding the vacuum target there instead misses by 1.73 N*m, inside the declared 3 % above.
+            CHECK(std::abs(h.torque_nm - t.torque_target_nm) <= kEqualTorqueTolNm);
+            CHECK(h.p_im_pa > e.ambient_pressure() - lc.vacuum_pa);
+        }
     }
 }
 
@@ -807,6 +814,34 @@ TEST_CASE("P10 R4: torque steps move u by the documented lag and rate cap, landi
     CHECK(mismatches == 0);
     CHECK(capped > 50); // the 0.1 -> 0.8 step is rate-limited
     CHECK(e.lift_u() == lc.idle_u);
+}
+
+// The plate is solved every substep against the lift the plant has NOW (not the target lift), so while the shaft moves
+// through the vacuum range the manifold stays at the vacuum target. With the throttle actuator lag set to 0 the plate is
+// the solved one on every substep, so p_im holds within kVacuumBandPa of p_amb - vacuum throughout the u transient.
+TEST_CASE("P10 R7: the manifold holds the vacuum target while the lift moves", "[vvl][drivetrain][cycle]") {
+    SimulatedEngineDesc d = n52();
+    d.throttle_actuator_tau_s = 0.0;
+    SimulatedEngine e(d, family_maps());
+    const real p_t = e.ambient_pressure() - d.lift_control.vacuum_pa;
+    REQUIRE(e.lift_targets(2000.0, 0.15).vacuum_mode);
+    REQUIRE(e.lift_targets(2000.0, 0.5).vacuum_mode);
+    e.reset(EngineState::Running);
+    for (int i = 0; i < 960; ++i) (void)step(e, 2000.0, 0.15); // settle at the low end of the vacuum range
+    real worst = 0.0;
+    int moving = 0;
+    for (real cmd : {0.5, 0.15}) {
+        for (int i = 0; i < 960; ++i) {
+            (void)step(e, 2000.0, cmd);
+            if (e.lift_u() != e.lift_u_target()) {
+                ++moving;
+                worst = std::max(worst, std::abs(e.p_im() - p_t));
+            }
+        }
+    }
+    std::printf("P10 R7: %d substeps with the shaft moving, worst |p_im - target| %.3f Pa\n", moving, worst);
+    CHECK(moving > 100);
+    CHECK(worst <= kVacuumBandPa);
 }
 
 TEST_CASE("P10 R5: idle holds on the minimum lift, a pedal blip returns to idle", "[vvl][drivetrain][cycle]") {
@@ -1132,6 +1167,22 @@ TEST_CASE("P10 P1: progress spans every node set, a cancel in the first writes n
     for (const auto& c : sets) total += engine_map_progress_total(c, d.fuels.front(), MapQuality::Sketch);
     const std::size_t t0 = engine_map_progress_total(sets.front(), d.fuels.front(), MapQuality::Sketch);
     CHECK(engine_map_progress_total(*d.cycle, d.fuels.front(), MapQuality::Sketch) == total);
+    {
+        // generate_engine_profile_maps (the library path, not the loader's own per-set loop below): one count over every
+        // set, on the calling thread.
+        std::vector<std::size_t> done, tot;
+        MapGenerationControl c;
+        c.on_progress = [&](std::size_t a, std::size_t b) {
+            done.push_back(a);
+            tot.push_back(b);
+        };
+        (void)generate_engine_profile_maps(*d.cycle, d.fuels.front(), MapQuality::Sketch, &pool10(), &c);
+        REQUIRE(done.size() == total);
+        for (std::size_t i = 0; i < done.size(); ++i) {
+            CHECK(done[i] == i + 1);
+            CHECK(tot[i] == total);
+        }
+    }
     const Parts dir("p1_cache");
     {
         std::vector<std::size_t> done, tot;
