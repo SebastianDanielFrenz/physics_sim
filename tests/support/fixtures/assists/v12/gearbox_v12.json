@@ -1,0 +1,63 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "hyper_7mt_v12",
+  "type": "manual",
+  "source": "TEST FIXTURE (assists I2 V12): data/gearboxes/hyper_7mt.json with forward_ratios x[1,1,1,1,0.96,0.93,0.8] (owner garage setup).",
+  "forward_ratios": [
+    3.1,
+    2.2,
+    1.65,
+    1.3,
+    1.0176,
+    0.8091,
+    0.576
+  ],
+  "forward_efficiency": [
+    0.97,
+    0.97,
+    0.97,
+    0.97,
+    0.97,
+    0.97,
+    0.97
+  ],
+  "reverse_ratios": [
+    -3.55
+  ],
+  "reverse_efficiency": [
+    0.95
+  ],
+  "input_inertia_kgm2": 0.01,
+  "output_inertia_kgm2": 0.015,
+  "input_axis_local": [
+    0,
+    1,
+    0
+  ],
+  "output_axis_local": [
+    0,
+    -1,
+    0
+  ],
+  "synchro": {
+    "forward_capacity_nm": [
+      140,
+      130,
+      120,
+      110,
+      100,
+      90,
+      80
+    ],
+    "reverse_capacity_nm": [
+      140
+    ],
+    "static_factor": 1.0,
+    "max_dog_mismatch_rad_s": 5.0
+  },
+  "neutral_phase_s": 0.06,
+  "dog_release_torque_nm": 60.0,
+  "grind_after_s": 0.25,
+  "abort_after_s": 1.0,
+  "initial_gear": 0
+}
