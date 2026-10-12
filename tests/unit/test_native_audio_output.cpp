@@ -60,7 +60,13 @@ TEST_CASE("Native output pump feeds a separate device consumer while render thre
 }
 TEST_CASE("Native output separates synthesis starvation from device short reads", "[native_output]") {
     auto source=std::make_shared<FixtureSource>(); source->available=false;
-    OutputPump pump(source,5); pump.start(); std::this_thread::sleep_for(std::chrono::milliseconds(10)); pump.stop();
+    OutputPump pump(source,5); pump.start();
+    // Wait for the pump thread to have hit the starving source instead of a fixed 10 ms sleep: under the parallel
+    // phase-A ctest load the thread was not scheduled within 10 ms once (2026-10-12, 0 short reads).
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(pump.stats().source_short_reads==0 && std::chrono::steady_clock::now()<deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    pump.stop();
     std::vector<float> out(480); CHECK(pump.read(out.data(),240)==0);
     CHECK(pump.stats().source_short_reads>0); CHECK(pump.stats().source_missing_frames>0);
     CHECK(pump.stats().output_short_reads==1); CHECK(pump.stats().output_missing_frames==240);

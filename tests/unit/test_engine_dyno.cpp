@@ -367,7 +367,10 @@ TEST_CASE("Dyno: max_settle_s caps a turbo point and marks it not converged", "[
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-TEST_CASE("Dyno D5: cancel", "[drivetrain][dyno][turbo]") {
+TEST_CASE("Dyno D5: cancel", "[drivetrain][dyno][turbo][walltime]") {
+    // [walltime]: the mid-sweep section bounds the cancelled sweep by a multiple of one point's measured wall time; under
+    // the parallel phase-A ctest load (24 jobs on linux-release) that bound was missed once (2026-10-12, passes 10/10 alone),
+    // so the case runs in tools/ci.ps1's serial phase B like the timing-asserting benches.
     DynoSweepSpec spec;
     spec.rpm.clear();
     for (int i = 0; i < 40; ++i) spec.rpm.push_back(3000.0 + 100.0 * i);
