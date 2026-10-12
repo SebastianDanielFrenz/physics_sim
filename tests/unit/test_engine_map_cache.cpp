@@ -815,6 +815,76 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         CycleModelDesc rebuilt = fixture_desc();
         CHECK(engine_map_cache_key(rebuilt, ref_fuel, MapQuality::Preview) == ref_key);
     }
+
+    SECTION("garage P9: one key per cam profile - each the single-lift key of that profile's lifts, ids never enter") {
+        const auto bump = [](real v) { return std::nextafter(v, real(1e300)); };
+        // A profile-free desc keys exactly as before (the one engine_map_cache_key).
+        const std::vector<std::uint64_t> plain = engine_map_profile_cache_keys(ref_desc, ref_fuel, MapQuality::Preview);
+        REQUIRE(plain.size() == 1);
+        CHECK(plain[0] == ref_key);
+
+        // Profile 0 = the fixture's own lifts, profile 1 = the same with a raised intake curve.
+        CycleModelDesc hi_single = ref_desc;
+        for (real& y : hi_single.intake_lift.lift_m_vs_deg.y) y = y * real(1.25);
+        const std::uint64_t hi_key = engine_map_cache_key(hi_single, ref_fuel, MapQuality::Preview);
+        REQUIRE(hi_key != ref_key);
+        CycleModelDesc base = ref_desc;
+        base.cam_profiles.push_back({"low", ref_desc.intake_lift, ref_desc.exhaust_lift});
+        base.cam_profiles.push_back({"high", hi_single.intake_lift, hi_single.exhaust_lift});
+        const std::vector<std::uint64_t> keys = engine_map_profile_cache_keys(base, ref_fuel, MapQuality::Preview);
+        REQUIRE(keys.size() == 2);
+        CHECK(keys[0] == ref_key);
+        CHECK(keys[1] == hi_key);
+        // The single-set key refuses a profile desc (it would silently key profile 0 only).
+        CHECK_THROWS(engine_map_cache_key(base, ref_fuel, MapQuality::Preview));
+        // Quality moves every profile's key.
+        const std::vector<std::uint64_t> full = engine_map_profile_cache_keys(base, ref_fuel, MapQuality::Full);
+        CHECK(full[0] != keys[0]);
+        CHECK(full[1] != keys[1]);
+
+        // Every lift field of a profile moves that profile's key and no other.
+        std::vector<std::pair<const char*, std::function<void(CycleModelDesc::CamProfile&)>>> edits;
+        edits.emplace_back("intake_lift.phase_ref_deg", [&](CycleModelDesc::CamProfile& p) { p.intake_lift.phase_ref_deg = bump(p.intake_lift.phase_ref_deg); });
+        edits.emplace_back("exhaust_lift.phase_ref_deg", [&](CycleModelDesc::CamProfile& p) { p.exhaust_lift.phase_ref_deg = bump(p.exhaust_lift.phase_ref_deg); });
+        edits.emplace_back("intake_lift curve x", [&](CycleModelDesc::CamProfile& p) { p.intake_lift.lift_m_vs_deg.x.front() = bump(p.intake_lift.lift_m_vs_deg.x.front()); });
+        edits.emplace_back("intake_lift curve y", [&](CycleModelDesc::CamProfile& p) { p.intake_lift.lift_m_vs_deg.y.front() = bump(p.intake_lift.lift_m_vs_deg.y.front()); });
+        edits.emplace_back("exhaust_lift curve x", [&](CycleModelDesc::CamProfile& p) { p.exhaust_lift.lift_m_vs_deg.x.front() = bump(p.exhaust_lift.lift_m_vs_deg.x.front()); });
+        edits.emplace_back("exhaust_lift curve y", [&](CycleModelDesc::CamProfile& p) { p.exhaust_lift.lift_m_vs_deg.y.front() = bump(p.exhaust_lift.lift_m_vs_deg.y.front()); });
+        for (std::size_t k = 0; k < 2; ++k) {
+            for (const auto& [name, edit] : edits) {
+                CycleModelDesc d = base;
+                edit(d.cam_profiles[k]);
+                const std::vector<std::uint64_t> e = engine_map_profile_cache_keys(d, ref_fuel, MapQuality::Preview);
+                INFO("profile " << k << " field " << name);
+                CHECK(e[k] != keys[k]);
+                CHECK(e[1 - k] == keys[1 - k]);
+            }
+        }
+
+        // A non-lift desc field moves every profile's key (each per-profile desc carries it).
+        {
+            CycleModelDesc d = base;
+            d.compression_ratio = bump(d.compression_ratio);
+            const std::vector<std::uint64_t> e = engine_map_profile_cache_keys(d, ref_fuel, MapQuality::Preview);
+            CHECK(e[0] != keys[0]);
+            CHECK(e[1] != keys[1]);
+        }
+        // Renaming a profile moves no key (a label; the generator never reads it).
+        {
+            CycleModelDesc d = base;
+            d.cam_profiles[0].id = "low_renamed";
+            d.cam_profiles[1].id = "vtec";
+            CHECK(engine_map_profile_cache_keys(d, ref_fuel, MapQuality::Preview) == keys);
+        }
+        // Swapping the profile order swaps the keys (the order is the cam order the ECU switches along).
+        {
+            CycleModelDesc d = base;
+            std::swap(d.cam_profiles[0], d.cam_profiles[1]);
+            const std::vector<std::uint64_t> e = engine_map_profile_cache_keys(d, ref_fuel, MapQuality::Preview);
+            CHECK(e[0] == keys[1]);
+            CHECK(e[1] == keys[0]);
+        }
+    }
 }
 
 TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files are never picked up", "[drivetrain][cycle][io]") {
