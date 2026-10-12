@@ -26,6 +26,7 @@
 #include "ps/jobs/debug_alloc.h"
 #include "ps/jobs/job_system.h"
 #include "ps/math/transcendental.h"
+#include "ps/vehicle/tyre_model.h"
 #include "ps/vehicle/vehicle_reset.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -122,6 +123,13 @@ struct Case {
     bool stop_at_100 = false;
     bool arm_alloc = false;
     bool keep_hashes = false;
+    // V12 reproduction only: racing_game test_hyper_rear_travel.cpp's start - chassis half z 0.12, settle 2 s in N
+    // with the ignition off and no handbrake, then ignition + starter, throttle 1 once Running, auto-shift from N,
+    // tyre rolling-resistance speed law "quadratic" (rg::SessionConfig's default).
+    bool racing_rig = false;
+    // V12 reproduction only: > 0 replaces the mesh ground by rg::Session's untagged static box {h, h, 0.5}, top at z 0.
+    real ground_box_half = 0.0;
+    real substep_window_t0 = 1e9, substep_window_t1 = -1; // racing_rig trace: per-substep wheel dump in [t0, t1]
 };
 
 struct Result {
@@ -140,8 +148,84 @@ struct Result {
     std::uint64_t final_hash = 0;
 };
 
+Result run_racing_rig(const Case& c, const vehicle::VehicleDesc& desc, ps_test::VehicleTestRig& rig, const Vec3& dir) {
+    World& w = *rig.world;
+    const real anti_stall = anti_stall_of(desc);
+    w.set_control("assist.traction_control", static_cast<real>(c.mode));
+    w.set_control("ignition", 0.0);
+    for (int i = 0; i < 480; ++i) w.step();
+    Result r;
+    r.fz_rear_settled = w.wheel_telemetry(rig.vehicle, 2).fz + w.wheel_telemetry(rig.vehicle, 3).fz;
+    w.set_control("ignition", 1.0);
+    w.set_control("starter", 1.0);
+    w.set_control("assist.auto_shift", 1.0);
+    w.set_control("assist.auto_clutch", 1.0);
+    w.set_control("assist.auto_blip", 1.0);
+    w.set_control("gear_request", drivetrain::kGearRequestNone);
+    bool started = false;
+    real prev_e = -1, fz_win = 0;
+    const int n = static_cast<int>(c.seconds * 240.0 + 0.5);
+    if (c.trace) std::printf("    t    kmh g   rpm st     e   tcFr  boost  fzR_max4  vz\n");
+    for (int k = 0; k < n; ++k) {
+        if (!started && w.powertrain_state(rig.vehicle).engine_state == drivetrain::EngineState::Running) {
+            w.set_control("starter", 0.0);
+            started = true;
+        }
+        const real v_now = dot(w.get_motion(rig.chassis).linear, dir);
+        w.set_control("throttle", !started ? 0.0 : (c.pattern == Pattern::V12Modulated && v_now < 40.0 / 3.6 ? 0.6 : 1.0));
+        w.step();
+        const auto& pt = w.powertrain_state(rig.vehicle);
+        const real v = dot(w.get_motion(rig.chassis).linear, dir);
+        r.v_min = std::min(r.v_min, v);
+        if (started) r.rpm_min = std::min(r.rpm_min, pt.engine_rpm);
+        r.rpm_max = std::max(r.rpm_max, pt.engine_rpm);
+        if (started && prev_e >= 0 && pt.clutch_engagement < prev_e - 1e-9 && pt.engine_rpm < anti_stall) ++r.dumps;
+        prev_e = pt.clutch_engagement;
+        if (w.powertrain_debug(rig.vehicle).tc_via_clutch) r.cap_ticks += 1;
+        const std::size_t ns = w.vehicle_substep_telemetry_count(rig.vehicle);
+        const real tk = (k + 1) / 240.0;
+        if (c.trace && tk >= c.substep_window_t0 && tk <= c.substep_window_t1) {
+            const Vec3 p = w.get_pose(rig.chassis).position;
+            std::printf("  tick t %.4f chassis x %.4f y %.4f z %.4f\n", tk, p.x, p.y, p.z);
+            for (std::size_t s = 0; s < ns; ++s) {
+                std::printf("   sub %zu", s);
+                for (std::size_t wi = 0; wi < 4; ++wi) {
+                    const auto& tw = w.wheel_substep_telemetry(rig.vehicle, s, wi);
+                    std::printf(" | w%zu x %.5f fz %8.0f fx %7.0f kap %+.3f", wi, tw.compression, tw.fz, tw.fx, tw.slip_ratio);
+                }
+                std::printf("\n");
+            }
+        }
+        for (std::size_t s = 0; s < ns; ++s) {
+            const real fz = w.wheel_substep_telemetry(rig.vehicle, s, 2).fz + w.wheel_substep_telemetry(rig.vehicle, s, 3).fz;
+            fz_win = std::max(fz_win, fz);
+            if (r.t100 < 0) r.fz_rear_peak_substep = std::max(r.fz_rear_peak_substep, fz);
+        }
+        if (started && !r.stalled && pt.engine_state == drivetrain::EngineState::Stalled) {
+            r.stalled = true;
+            r.t_stall = (k + 1) / 240.0;
+        }
+        if (c.keep_hashes) r.hashes.push_back(w.state_hash());
+        if (c.trace && k % 4 == 3) {
+            std::printf("%6.3f %6.2f %d %5.0f %d %5.3f %6.3f %6.3f %8.0f %6.3f\n", (k + 1) / 240.0, v * 3.6, pt.gear, pt.engine_rpm,
+                        int(pt.engine_state), pt.clutch_engagement, pt.traction_torque_fraction,
+                        pt.engines.empty() ? 0.0 : pt.engines[0].boost_bar, fz_win, w.get_motion(rig.chassis).linear.z);
+            fz_win = 0;
+        }
+        if (r.t100 < 0 && v >= kV100) {
+            r.t100 = (k + 1) / 240.0;
+            if (c.stop_at_100) break;
+        }
+    }
+    r.v_end = dot(w.get_motion(rig.chassis).linear, dir);
+    r.final_hash = w.state_hash();
+    return r;
+}
+
 Result run_case(const Case& c) {
-    const vehicle::VehicleDesc& desc = c.v12 ? v12_desc() : hyper_desc();
+    vehicle::VehicleDesc desc = c.v12 ? v12_desc() : hyper_desc();
+    if (c.racing_rig)
+        for (auto& wd : desc.wheels) vehicle::select_rolling_resistance_speed_law(wd.tyre, vehicle::RollingResistanceSpeedLaw::Quadratic);
     const real anti_stall = anti_stall_of(desc);
 
     ps_test::VehicleTestRig rig;
@@ -159,9 +243,13 @@ Result run_case(const Case& c) {
     ground.motion = BodyMotionType::Static;
     ground.friction = 1.0;
     ground.pose.orientation = tilt;
+    if (c.ground_box_half > 0) {
+        ground.shape = BoxShape{Vec3{c.ground_box_half, c.ground_box_half, 0.5}};
+        ground.pose.position = Vec3{0.0, 0.0, -0.5};
+    }
     rig.world->create_body(ground);
     BodyDesc chassis;
-    chassis.shape = BoxShape{Vec3{2.0, 0.4, 0.15}};
+    chassis.shape = BoxShape{Vec3{2.0, 0.4, c.racing_rig ? 0.12 : 0.15}};
     chassis.motion = BodyMotionType::Dynamic;
     chassis.mass = kMass;
     chassis.friction = 0.5;
@@ -173,6 +261,8 @@ Result run_case(const Case& c) {
     rig.vehicle = rig.world->create_vehicle(desc, rig.chassis);
     World& w = *rig.world;
     const Vec3 dir = tilt.rotate(Vec3::unit_x());
+
+    if (c.racing_rig) return run_racing_rig(c, desc, rig, dir);
 
     const int gear = c.pattern == Pattern::Gear2 ? 2 : 1;
     w.set_control("assist.traction_control", static_cast<real>(c.mode));
@@ -590,6 +680,33 @@ TEST_CASE("I2a spring-back diag", "[.][diag][assist]") {
     }
     if (!dump_sub.empty())
         std::printf("I2a mean per cycle: J %+8.1f N*s dv %+7.4f m/s\n", j_sum / dump_sub.size(), dv_sum / dump_sub.size());
+}
+
+// Hidden: V12 with racing_game's own rig start (see Case::racing_rig); PS_I2_V12_TRACE=1 prints a 4-tick trace.
+TEST_CASE("I2 V12 racing rig diag", "[.][diag][assist]") {
+    const bool trace = !env_string("PS_I2_V12_TRACE").empty();
+    const std::string box = env_string("PS_I2_V12_GROUND_BOX"); // e.g. 20000 = rg::Session's ground
+    struct M { int mode; Pattern p; };
+    for (const M m : {M{1, Pattern::V12Launch}, M{3, Pattern::V12Launch}, M{0, Pattern::V12Launch}, M{0, Pattern::V12Modulated}}) {
+        Case c;
+        c.v12 = true;
+        c.racing_rig = true;
+        c.surface = "asphalt";
+        c.grade = 0.0;
+        c.v0 = 0.0;
+        c.mode = m.mode;
+        c.pattern = m.p;
+        c.seconds = 40.0;
+        c.stop_at_100 = true;
+        c.trace = trace && m.mode == 1;
+        c.ground_box_half = box.empty() ? 0.0 : std::atof(box.c_str());
+        const std::string win = env_string("PS_I2_V12_WINDOW"); // "t0,t1"
+        if (!win.empty() && win.find(',') != std::string::npos) {
+            c.substep_window_t0 = std::atof(win.substr(0, win.find(',')).c_str());
+            c.substep_window_t1 = std::atof(win.substr(win.find(',') + 1).c_str());
+        }
+        print_row("V12r", c, run_case(c));
+    }
 }
 
 // Hidden: one row per case for the progress file (env PS_I2_ROW = v1|v2|v3|v4; prints, asserts nothing).
