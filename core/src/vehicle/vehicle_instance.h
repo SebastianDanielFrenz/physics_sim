@@ -54,6 +54,7 @@ struct ControlChannelIndices {
     std::size_t assist_auto_clutch = 0, assist_auto_blip = 0, assist_auto_shift = 0, assist_traction_control = 0;
     std::size_t assist_launch_control = 0; // engine garage P8: only read when the vehicle has a launch_control controller
     std::size_t assist_aero_control = 0;   // assists I5: only read when the car's assist_unit aero_control is fitted
+    std::size_t assist_drive_mode = 0;     // assists I7: only read when the car has a drive_modes part
     // PHYS-033 P4 I4 C3 (plan section 2.4): one resolved World control-
     // channel index per drivetrain::Powertrain::declare_control_channels(...)
     // entry, same order - resolved in World::create_vehicle exactly like the
@@ -303,6 +304,18 @@ private:
     // offered-mode bits. Both are pure functions of desc_, computed once in the constructor.
     std::array<TractionControlDesc, kTractionModeCount> tc_mode_desc_{};
     std::uint8_t tc_modes_available_bits_ = kTractionModesBaseBits;
+    // Assists I7: drive-mode state, hashed only on a car with a drive_modes part. initialised = the first tick has seen
+    // the mode (no override at spawn: the TC channel's default already equals the default mode's TC default); last_mode =
+    // the effective drive mode of the previous tick; tc_override = a mode change set the TC request to
+    // tc_override_code and the driver has not touched the TC channel since (last_tc_channel = its value then).
+    struct DriveModeState {
+        bool initialised = false;
+        std::uint8_t last_mode = 0;
+        bool tc_override = false;
+        std::uint8_t tc_override_code = 0;
+        real last_tc_channel = 0;
+    };
+    DriveModeState drive_state_{};
     // Assists I5: the assist unit's rear-wing automation. fit_aero_ = block present AND the car has the named surface;
     // the surface index and the launch-control hook are plain per-tick inputs, none of it hashed.
     bool fit_aero_ = false;

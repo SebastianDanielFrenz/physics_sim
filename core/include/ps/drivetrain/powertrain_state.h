@@ -148,6 +148,11 @@ struct PowertrainSnapshot {
     // 3 Sport, 4 Drift), effective = the mode run after the unavailable-mode fallback, available_bits = one bit per
     // code the car offers (0 when TC is not fitted). A UI offers exactly the available bits. Never hashed.
     std::uint8_t traction_mode_requested = 0, traction_mode_effective = 0, traction_modes_available_bits = 0;
+    // Assists I7 (PHYS-074): drive mode. requested = the channel assist.drive_mode as a code (0 eco, 1 normal, 2 sport),
+    // effective = the mode run (an unoffered request maps to the part's default mode), available_bits = one bit per code the
+    // car offers (0 on a car without a drive_modes part, which also has no channel). A UI offers exactly the available
+    // bits. The effective traction mode above already includes the drive mode's TC default. Never hashed.
+    std::uint8_t drive_mode_requested = 0, drive_mode_effective = 0, drive_modes_available_bits = 0;
     // Assists I5 (PHYS-074): the assist unit's rear-wing automation owns its surface this tick (channel
     // assist.aero_control on and fitted; assist_active_bits bit6), and the offset it asked for in degrees (0 when not
     // active). Never hashed.

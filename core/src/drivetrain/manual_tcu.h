@@ -80,6 +80,11 @@ public:
         // clutch's kinetic capacity (N*m) applied to the auto-clutch output e_auto (+inf = none). The TCU's own
         // e_auto state is not changed by it.
         real clutch_capacity_cap_nm = std::numeric_limits<real>::infinity();
+        // Assists I7: the effective drive mode's overrides of AutoShiftDesc's four rpm points and of AutoClutchDesc::
+        // close_time_s (NaN = the car's own value; a NaN compares false and is never used as a threshold).
+        real up_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), up_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
+        real down_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), down_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
+        real close_time_s = std::numeric_limits<real>::quiet_NaN();
     };
 
     struct Outputs {

@@ -115,6 +115,11 @@ struct AutoShiftDesc {
     real up_rpm_at_zero_throttle = 2500.0, up_rpm_at_full_throttle = 6300.0;
     real down_rpm_at_zero_throttle = 1300.0, down_rpm_at_full_throttle = 2800.0;
     real min_time_in_gear_s = 1.0;
+    // Assists I7 (owner 2026-10-13): kickdown bypass. A downshift request (engine rpm below the downshift point) made
+    // while the throttle COMMAND (the throttle stage's output: car pedal curve and drive-mode bend applied) is at or
+    // above this value ignores min_time_in_gear_s. 0 = no bypass (every car that does not set it is bit-identical).
+    // [AS] 0.95 on car_hyper_n2o.
+    real kickdown_throttle = 0.0;
 };
 
 // The loader-facing descriptor for a "manual_tcu" controller (plan section

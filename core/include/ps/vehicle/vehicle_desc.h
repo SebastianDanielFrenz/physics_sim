@@ -20,6 +20,7 @@
                                  // break the vehicle_desc.h <-> powertrain_desc.h cycle below)
 #include "ps/vehicle/tyre_desc.h"
 #include "ps/vehicle/assist_unit_desc.h"
+#include "ps/vehicle/drive_modes_desc.h"
 #include "ps/vehicle/traction_control.h"
 
 #include <optional>
@@ -153,6 +154,9 @@ struct VehicleDesc {
     // Assists I1: the assist unit electronics part (grade + traction-control mode table), attached by the loader
     // from an `electronics` controller entry or the user layer. Absent = TC exactly as before.
     std::optional<AssistUnitDesc> assist_unit;
+    // Assists I7: the drive_modes electronics part (Eco / Normal / Sport), a car-specific part attached like the
+    // assist unit (at most one). Absent = no assist.drive_mode channel, every vehicle bit-identical.
+    std::optional<DriveModesDesc> drive_modes;
     std::string name;
     std::string source; // mass/geometry provenance (PLAN.md section 8)
     std::vector<WheelDesc> wheels;

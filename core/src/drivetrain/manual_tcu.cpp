@@ -43,6 +43,10 @@ std::uint64_t fnv1a(std::uint64_t h, const T& v) {
 } // namespace
 
 ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_of_tick) {
+    // Assists I7: a drive mode's override of the post-shift close time (NaN = the car's own value) and of the four
+    // auto-shift rpm points. Unset (NaN) is bit-identical to the pre-I7 reads of desc_.
+    const auto pick = [](real override_value, real own) { return std::isnan(override_value) ? own : override_value; };
+    const real close_time_s = pick(s.close_time_s, desc_.auto_clutch.close_time_s);
     // --- 6.5.1: request arbitration (once per tick only) --------------------
     int desired_target = s.gearbox_target; // default: no change
     if (first_substep_of_tick) {
@@ -82,12 +86,19 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                 const real out_rpm = std::abs(s.gearbox_out_omega) * kRadPerSecToRpm;
                 if (s.gearbox_current == 0) {
                     if (s.throttle_request > kDriverThrottleThreshold && out_rpm < real(100.0)) desired_target = 1;
-                } else if (s.gearbox_current >= 1 && time_in_gear_ >= desc_.auto_shift.min_time_in_gear_s) {
-                    const real up_th = lerp(desc_.auto_shift.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_full_throttle, s.throttle_request);
-                    const real down_th =
-                        lerp(desc_.auto_shift.down_rpm_at_zero_throttle, desc_.auto_shift.down_rpm_at_full_throttle, s.throttle_request);
-                    if (engine_rpm > up_th && s.gearbox_current < s.max_gear) desired_target = s.gearbox_current + 1;
-                    else if (engine_rpm < down_th && s.gearbox_current > 1) desired_target = s.gearbox_current - 1;
+                } else if (s.gearbox_current >= 1) {
+                    // Assists I7 kickdown bypass: a downshift with the throttle command at or above kickdown_throttle
+                    // (0 = never) ignores min_time_in_gear_s; upshifts always wait for it.
+                    const bool dwell_ok = time_in_gear_ >= desc_.auto_shift.min_time_in_gear_s;
+                    const bool kickdown = desc_.auto_shift.kickdown_throttle > real(0.0) && s.throttle_request >= desc_.auto_shift.kickdown_throttle;
+                    if (dwell_ok || kickdown) {
+                        const real up_th = lerp(pick(s.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_zero_throttle),
+                                                pick(s.up_rpm_at_full_throttle, desc_.auto_shift.up_rpm_at_full_throttle), s.throttle_request);
+                        const real down_th = lerp(pick(s.down_rpm_at_zero_throttle, desc_.auto_shift.down_rpm_at_zero_throttle),
+                                                  pick(s.down_rpm_at_full_throttle, desc_.auto_shift.down_rpm_at_full_throttle), s.throttle_request);
+                        if (dwell_ok && engine_rpm > up_th && s.gearbox_current < s.max_gear) desired_target = s.gearbox_current + 1;
+                        else if (engine_rpm < down_th && s.gearbox_current > 1) desired_target = s.gearbox_current - 1;
+                    }
                 }
             }
         }
@@ -191,7 +202,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             rate = real(1.0) / desc_.auto_clutch.open_time_s;
         } else {
             e_tgt = torque_following_close() ? sync_close_target(s) : real(1.0);
-            rate = real(1.0) / desc_.auto_clutch.close_time_s;
+            rate = real(1.0) / close_time_s;
         }
     } else if (mode_ == ClutchMode::Locked) {
         if (s.engine_omega * kRadPerSecToRpm < desc_.auto_clutch.anti_stall_rpm ||
@@ -245,7 +256,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             }
         }
         rate = (e_tgt >= e_auto_) ? desc_.auto_clutch.engage_rate_per_s : desc_.auto_clutch.release_rate_per_s;
-        if (sync_closing) rate = real(1.0) / desc_.auto_clutch.close_time_s;
+        if (sync_closing) rate = real(1.0) / close_time_s;
         if (engaging_from_neutral) rate = std::max(rate, real(1.0) / desc_.auto_clutch.open_time_s);
         // Anti-stall panic dump (PHYS-033 P4 I3 C8 smoke-test finding, see
         // AutoClutchDesc::anti_stall_release_rate_per_s's own comment):

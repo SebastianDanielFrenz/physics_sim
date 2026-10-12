@@ -84,6 +84,13 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
             fit_aero_ = true;
             aero_control_surface_ = *aero_surface;
         }
+        if (desc_.drive_modes) {
+            try {
+                validate_drive_modes(*desc_.drive_modes);
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error("vehicle '" + desc_.name + "': " + e.what());
+            }
+        }
         tc_mode_desc_ = resolve_traction_mode_descs(desc_.traction_control, desc_.assist_unit);
         tc_modes_available_bits_ = traction_modes_available_bits(desc_.assist_unit, fit_traction_);
         fitted_bits_ = ((have_tcu && fit_clutch_) ? 1u : 0u) | ((have_tcu && fit_blip_) ? 2u : 0u) | ((have_tcu && fit_shift_) ? 4u : 0u) |
@@ -201,11 +208,46 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     const bool assist_auto_shift = fit_shift_ && channel_values[control_indices_.assist_auto_shift] > real(0.5);
     // Assists I1: the requested mode code, and the mode actually run (a stateless function of channel and desc). A car
     // without a unit offers Off/On only, so a value > 0.5 is On exactly as before the unit existed.
-    const TractionMode tc_mode_requested = traction_mode_requested(channel_values[control_indices_.assist_traction_control]);
+    //
+    // Assists I7 (drive modes): on a car with a drive_modes part the effective drive mode is resolved first (a pure
+    // function of the assist.drive_mode channel and the desc). When the effective mode CHANGES, the TC request becomes
+    // that mode's traction_control_default and stays there (an "override") until the driver changes the
+    // assist.traction_control channel value, from which tick on the channel wins again. A mode without a default
+    // leaves a running override alone. State (last mode, override, last seen TC channel value) is hashed only here.
+    real tc_channel_value = channel_values[control_indices_.assist_traction_control];
+    const DriveModeParams* drive_params = nullptr;
+    DriveMode drive_mode_req = DriveMode::Normal, drive_mode_eff = DriveMode::Normal;
+    if (desc_.drive_modes) {
+        const DriveModesDesc& dm = *desc_.drive_modes;
+        drive_mode_req = drive_mode_requested(dm, channel_values[control_indices_.assist_drive_mode]);
+        drive_mode_eff = resolve_drive_mode(dm, drive_mode_req);
+        drive_params = &dm.params[static_cast<std::size_t>(drive_mode_eff)];
+        if (!drive_state_.initialised) {
+            drive_state_.initialised = true;
+            drive_state_.last_mode = static_cast<std::uint8_t>(drive_mode_eff);
+            drive_state_.last_tc_channel = tc_channel_value;
+        } else if (static_cast<std::uint8_t>(drive_mode_eff) != drive_state_.last_mode) {
+            drive_state_.last_mode = static_cast<std::uint8_t>(drive_mode_eff);
+            if (drive_params->traction_control_default) {
+                drive_state_.tc_override = true;
+                drive_state_.tc_override_code = static_cast<std::uint8_t>(*drive_params->traction_control_default);
+                drive_state_.last_tc_channel = tc_channel_value;
+            }
+        } else if (drive_state_.tc_override && tc_channel_value != drive_state_.last_tc_channel) {
+            drive_state_.tc_override = false; // the driver touched the TC channel: it wins again
+        }
+        if (drive_state_.tc_override) tc_channel_value = static_cast<real>(drive_state_.tc_override_code);
+    }
+    const TractionMode tc_mode_requested = traction_mode_requested(tc_channel_value);
     const TractionMode tc_mode_effective = resolve_traction_mode(tc_modes_available_bits_, tc_mode_requested);
     const bool assist_traction = tc_mode_effective != TractionMode::Off;
     const TractionControlDesc& tc_desc = tc_mode_desc_[static_cast<std::size_t>(tc_mode_effective)];
-    const bool assist_launch = fit_launch_ && channel_values[control_indices_.assist_launch_control] > real(0.5);
+    const bool assist_launch = fit_launch_ && channel_values[control_indices_.assist_launch_control] > real(0.5) &&
+                               (drive_params == nullptr || drive_params->launch_control_allowed);
+    // The drive mode's pedal bend, applied to the throttle the TC / launch ceilings are fractions of, so a ceiling stays
+    // a fraction of the COMMAND the engine sees (the car's own pedal curve is not applied here - none of the cars with
+    // a TC has one).
+    const real ceiling_throttle = (drive_params != nullptr && drive_params->pedal_bend) ? pedal_bend_apply(*drive_params->pedal_bend, controls.throttle) : controls.throttle;
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
     // channel's value, copied once per tick (not per substep, same
@@ -368,14 +410,14 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         // TC's output reaches the powertrain only when TC is really on and not suspended by the launch control.
         const real traction_fraction=(assist_traction&&!lc_owns)?traction_fraction_raw:real(1);
         ctx.traction_ignition_cut=assist_traction&&!lc_owns&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
-        ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(controls.throttle,real(0),real(1))*traction_fraction:real(1);
+        ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*traction_fraction:real(1);
         if(lc_owns||lc_out.overlay) {
             // overlay = the soft hand-over: traction control is back, the launch limit and the clutch fraction stay
             // in force until the fraction has climbed to 1 (launch_assist.h)
             ctx.launch_limiter_rpm=lc_out.limiter_rpm;
             ctx.launch_hold_clutch=lc_out.hold_clutch;
             ctx.launch_clutch_ramp=lc_out.clutch_ramp;
-            ctx.launch_throttle_ceiling=lc_out.ceiling<real(1)?std::clamp(controls.throttle,real(0),real(1))*lc_out.ceiling:real(1);
+            ctx.launch_throttle_ceiling=lc_out.ceiling<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*lc_out.ceiling:real(1);
         }
         // Assists I2 (PHYS-074 D-LS1/D-LS2), gated on TC's effective mode != Off (coordinator decision 2026-10-12;
         // a car with its own traction_control block and no assist unit counts too): the TC fraction and floor for
@@ -408,6 +450,15 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         ctx.assist_auto_blip = assist_auto_blip;
         ctx.assist_auto_shift = assist_auto_shift;
         ctx.assist_launch_control = assist_launch;
+        if (drive_params != nullptr) { // assists I7: the effective drive mode's throttle bend, shift/close overrides, nitrous gate
+            if (drive_params->pedal_bend) { ctx.drive_bend_x = drive_params->pedal_bend->x; ctx.drive_bend_y = drive_params->pedal_bend->y; }
+            if (drive_params->up_rpm_at_zero_throttle) ctx.drive_up_rpm_zero = *drive_params->up_rpm_at_zero_throttle;
+            if (drive_params->up_rpm_at_full_throttle) ctx.drive_up_rpm_full = *drive_params->up_rpm_at_full_throttle;
+            if (drive_params->down_rpm_at_zero_throttle) ctx.drive_down_rpm_zero = *drive_params->down_rpm_at_zero_throttle;
+            if (drive_params->down_rpm_at_full_throttle) ctx.drive_down_rpm_full = *drive_params->down_rpm_at_full_throttle;
+            if (drive_params->clutch_close_time_s) ctx.drive_close_time_s = *drive_params->clutch_close_time_s;
+            ctx.nitrous_arm_allowed = drive_params->nitrous_arm_allowed;
+        }
         ctx.first_substep_of_tick = (s == 0);
         // PHYS-033 P4 I4 C3: points at this tick's already-copied component-
         // channel buffer (see the per-tick copy above) - rebuilt each
@@ -625,6 +676,11 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.traction_mode_requested = static_cast<std::uint8_t>(tc_mode_requested);
         snap.traction_mode_effective = static_cast<std::uint8_t>(tc_mode_effective);
         snap.traction_modes_available_bits = tc_modes_available_bits_;
+        if (desc_.drive_modes) { // assists I7
+            snap.drive_mode_requested = static_cast<std::uint8_t>(drive_mode_req);
+            snap.drive_mode_effective = static_cast<std::uint8_t>(drive_mode_eff);
+            snap.drive_modes_available_bits = desc_.drive_modes->modes_bits;
+        }
         snap.launch_control_active = powertrain_.launch_control_active() || (launch_ && launch_->owns());
         snap.launch_phase = launch_ ? static_cast<std::uint8_t>(launch_->phase()) : std::uint8_t(0);
         snap.launch_slip_target = launch_ ? launch_slip_target_ : real(0);
@@ -712,7 +768,7 @@ void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRig
         hub_speeds[i] = radius > real(0.0) ? hub_speed_common / radius : real(0.0);
         wheels_[i]->reset_relaxation();
     }
-    traction_state_={};imu_have_previous_=false;imu_previous_velocity_world_={};
+    traction_state_={};drive_state_={};imu_have_previous_=false;imu_previous_velocity_world_={};
     if(launch_){launch_->reset();aero_launch_request_=false;}
     powertrain_.reset(opts, hub_speeds);
     // Teleport resets actuator dynamics/commands, but does not create or discard prepaid energy.
@@ -746,6 +802,26 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
             fold(d.target_slip);fold(d.kp);fold(d.ki_per_s);fold(d.attack_rate_per_s);fold(d.recovery_rate_per_s);
             fold(d.min_fraction);fold(d.ignition_cut);
         }
+    }
+    if(desc_.drive_modes) {
+        // Assists I7: the mode table (desc) and the mode state (last effective mode, the TC override and the last seen
+        // TC channel value), only on a car with a drive_modes part.
+        const auto fold=[&](const auto& v){const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}};
+        const std::uint64_t tag=0x445249564d4f4445ULL;fold(tag);
+        const DriveModesDesc& dm=*desc_.drive_modes;
+        fold(dm.modes_bits);fold(static_cast<std::uint8_t>(dm.default_mode));
+        for(int m=0;m<kDriveModeCount;++m) {
+            if(!(dm.modes_bits&drive_mode_bit(static_cast<DriveMode>(m))))continue;
+            const DriveModeParams& p=dm.params[static_cast<std::size_t>(m)];
+            fold(static_cast<std::uint8_t>(m));
+            fold(static_cast<std::uint8_t>(p.pedal_bend?1:0));if(p.pedal_bend){fold(p.pedal_bend->x);fold(p.pedal_bend->y);}
+            for(const std::optional<real>* o:{&p.up_rpm_at_zero_throttle,&p.up_rpm_at_full_throttle,&p.down_rpm_at_zero_throttle,&p.down_rpm_at_full_throttle,&p.clutch_close_time_s}) {
+                fold(static_cast<std::uint8_t>(*o?1:0));if(*o)fold(**o);
+            }
+            fold(static_cast<std::uint8_t>(p.traction_control_default?static_cast<int>(*p.traction_control_default)+1:0));
+            fold(p.launch_control_allowed);fold(p.nitrous_arm_allowed);
+        }
+        fold(drive_state_.initialised);fold(drive_state_.last_mode);fold(drive_state_.tc_override);fold(drive_state_.tc_override_code);fold(drive_state_.last_tc_channel);
     }
     if(desc_.traction_control.enabled||traction_state_.initialized||traction_state_.enabled) {
         for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)}) {

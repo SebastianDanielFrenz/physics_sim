@@ -707,7 +707,12 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", assist_clutch_default);
     channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", assist_blip_default);
     channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift", assist_shift_default);
-    channel_indices.assist_traction_control = ensure_control_channel_index(channel_prefix + "assist.traction_control",ps::vehicle::traction_default_channel_value(desc.traction_control,desc.assist_unit));
+    channel_indices.assist_traction_control = ensure_control_channel_index(channel_prefix + "assist.traction_control",ps::vehicle::traction_default_channel_value(desc.traction_control,desc.assist_unit,desc.drive_modes));
+    // assists I7: registered only on a car with a drive_modes part; default = the part's default mode code.
+    if (desc.drive_modes) {
+        channel_indices.assist_drive_mode = ensure_control_channel_index(channel_prefix + "assist.drive_mode",
+                                                                         static_cast<real>(static_cast<int>(desc.drive_modes->default_mode)));
+    }
     // assists I5: registered only on a car whose assist unit carries a fitted aero_control (the channel list is
     // unchanged for every other car); default = the block's default_enabled.
     if (const auto aero_surface = ps::vehicle::find_aero_control_surface(desc.aero, desc.assist_unit)) {
