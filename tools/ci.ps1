@@ -694,12 +694,85 @@ function Invoke-WslSanitizerPair {
     }
 }
 
+# Native Linux ARM64 (aarch64) guard: cross-compile + link ps_core, ps_engine_cycle,
+# ps_audio, ps_environment, ps_run (preset linux-aarch64-check, toolchain file
+# cmake/toolchains/aarch64-linux-gnu-clang.cmake) and, when qemu-user is present,
+# run one scenario. SKIP (a passing step whose detail starts with "SKIP") when the
+# WSL cross toolchain is absent: install it with
+#   tools\setup_dev_env.ps1 -Aarch64Cross
+# The aarch64 hash is REPORTED against linux-release's ps_run, never asserted
+# (x86 bit-identity is not a requirement for ARM). -Only linux-aarch64-check runs it alone.
+function Invoke-WslAarch64Check {
+    Write-Host ""
+    Write-Host "=== WSL leg: linux-aarch64-check (cross-compile to aarch64-linux-gnu) ===" -ForegroundColor Cyan
+    $legStart = Get-Date
+    $tmpl = @'
+repo='@@REPO@@'
+bd='@@BUILD@@/linux-aarch64-check'
+printf '#include <vector>\nint main(){}\n' > /tmp/ps_a64_probe.cpp
+if ! clang++ --target=aarch64-linux-gnu -fsyntax-only /tmp/ps_a64_probe.cpp > /dev/null 2>&1; then echo 'PS_A64_STATE=skip'; exit 0; fi
+cd "$repo" || exit 1
+d='@@BUILD@@/linux-release/_deps'
+fc=''
+if [ -d "$d/joltphysics-src" ] && [ -d "$d/nlohmann_json-src" ] && [ -d "$d/miniaudio-src" ]; then
+  fc="-DFETCHCONTENT_SOURCE_DIR_JOLTPHYSICS=$d/joltphysics-src -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=$d/nlohmann_json-src -DFETCHCONTENT_SOURCE_DIR_MINIAUDIO=$d/miniaudio-src"
+fi
+cmake --preset linux-aarch64-check -B "$bd" $fc > "$bd.configure.log" 2>&1 || { echo 'PS_A64_STATE=configure_failed'; tail -40 "$bd.configure.log"; exit 0; }
+echo 'PS_A64_STATE=configured'
+cmake --build "$bd" --target ps_core ps_engine_cycle ps_audio ps_environment ps_environment_io ps_engine_tools ps_run > "$bd.build.log" 2>&1 || { echo 'PS_A64_STATE=build_failed'; tail -60 "$bd.build.log"; exit 0; }
+echo 'PS_A64_STATE=built'
+
+run64="$bd/tools/ps_run/ps_run"
+if command -v qemu-aarch64 > /dev/null 2>&1; then
+  h64=$(qemu-aarch64 -L /usr/aarch64-linux-gnu "$run64" data/scenarios/free_fall.json /tmp/ps_a64_ff.csv --workers 2 2>&1 | grep -o 'state_hash=0x[0-9a-f]*' | head -1)
+  h86=''
+  if [ -x '@@BUILD@@/linux-release/tools/ps_run/ps_run' ]; then
+    h86=$('@@BUILD@@/linux-release/tools/ps_run/ps_run' data/scenarios/free_fall.json /tmp/ps_x86_ff.csv --workers 2 2>&1 | grep -o 'state_hash=0x[0-9a-f]*' | head -1)
+  fi
+  if [ -z "$h64" ]; then echo 'PS_A64_STATE=run_failed'; else echo "PS_A64_STATE=ran aarch64 ${h64} x86 ${h86:-n/a}"; fi
+else
+  echo 'PS_A64_STATE=no_qemu'
+fi
+'@
+    $lines = ($tmpl.Replace('@@REPO@@', $script:WslRepoRoot).Replace('@@BUILD@@', $script:WslBuildRoot)) -split "`r?`n"
+    $t = Measure-Command { $script:a64Out = Invoke-WslScript -Name 'aarch64_check.sh' -Lines $lines }
+    $stateLine = ($script:a64Out | Select-String 'PS_A64_STATE=' | Select-Object -Last 1)
+    $state = if ($stateLine) { ($stateLine.ToString() -replace '^.*PS_A64_STATE=', '').Trim() } else { 'no_output' }
+    $script:LegTimings.Add([pscustomobject]@{ Leg = 'linux-aarch64-check'; TotalSeconds = ((Get-Date) - $legStart).TotalSeconds })
+    switch -Regex ($state) {
+        '^skip$' {
+            Add-Result -Leg 'linux-aarch64-check' -Stage 'check' -Pass $true -Seconds $t.TotalSeconds -Detail 'SKIP: no aarch64 libstdc++/glibc headers in WSL (install: tools\setup_dev_env.ps1 -Aarch64Cross)'
+        }
+        '^(configure_failed|build_failed)$' {
+            Add-Result -Leg 'linux-aarch64-check' -Stage ($state -replace '_failed$', '') -Pass $false -Seconds $t.TotalSeconds -Detail 'cross-compile failed, tail of the log below'
+            Write-Host (($script:a64Out | Select-Object -Last 60) -join "`n")
+        }
+        '^run_failed$' {
+            Add-Result -Leg 'linux-aarch64-check' -Stage 'smoke' -Pass $false -Seconds $t.TotalSeconds -Detail 'ps_run free_fall under qemu-aarch64 printed no state_hash'
+        }
+        '^no_qemu$' {
+            Add-Result -Leg 'linux-aarch64-check' -Stage 'build' -Pass $true -Seconds $t.TotalSeconds -Detail 'ps_core/ps_audio/ps_run cross-compiled; smoke run SKIPPED (qemu-user absent: setup_dev_env.ps1 -Aarch64Cross)'
+        }
+        '^ran ' {
+            $m = [regex]::Match($state, 'aarch64 state_hash=(0x[0-9a-f]+) x86 (.*)$')
+            $x86 = $m.Groups[2].Value.Trim()
+            $cmp = if ($x86 -eq 'n/a') { 'x86 reference not built this run' } elseif ($x86 -eq "state_hash=$($m.Groups[1].Value)") { 'free_fall hash equals linux-release (informational)' } else { "free_fall hash differs from linux-release ($x86; informational, not required)" }
+            Add-Result -Leg 'linux-aarch64-check' -Stage 'build+smoke' -Pass $true -Seconds $t.TotalSeconds -Detail "cross-compiled and ran under qemu: $cmp"
+        }
+        default {
+            Add-Result -Leg 'linux-aarch64-check' -Stage 'check' -Pass $false -Seconds $t.TotalSeconds -Detail "unexpected state '$state'"
+            Write-Host (($script:a64Out | Select-Object -Last 40) -join "`n")
+        }
+    }
+}
+
 function Invoke-WslLane {
     # Default run: linux-release runs unit + determinism only - the physics
     # is the same code as the Windows release leg; what Linux adds is the
     # compiler/libstdc++ and the cross-platform hash compare.
     $linuxKind = if ($Full) { 'release' } else { 'unit' }
     if (Should-Run 'linux-release') { Invoke-WslLeg -Preset 'linux-release' -LegKind $linuxKind }
+    if (Should-Run 'linux-aarch64-check') { Invoke-WslAarch64Check }
     $pair = @('linux-asan-ubsan', 'linux-tsan') | Where-Object { Should-RunSanitizerLeg $_ }
     if (@($pair).Count -eq 2) {
         Invoke-WslSanitizerPair -Presets $pair

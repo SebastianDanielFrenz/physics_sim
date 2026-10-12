@@ -11,6 +11,15 @@ namespace {
 inline void cpu_relax() {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     _mm_pause();
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    // ARM64 spin-wait hint (the counterpart of x86 PAUSE). `yield` is a NOP on
+    // cores without SMT but is the architecturally defined hint; GCC and clang
+    // take the asm form, MSVC its intrinsic.
+#if defined(_MSC_VER) && defined(_M_ARM64)
+    __yield();
+#else
+    __asm__ __volatile__("yield" ::: "memory");
+#endif
 #else
     std::this_thread::yield();
 #endif

@@ -27,6 +27,8 @@
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
+#elif defined(_M_ARM64) && defined(_MSC_VER)
+#include <intrin.h>  // __yield() (cpu_relax in step_team.cpp); aarch64 GCC/clang use inline asm instead
 #endif
 
 namespace ps::engine_cycle {
