@@ -1,0 +1,16 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "assist_unit",
+  "name": "Racing Assists",
+  "grade": "racing",
+  "traction_control": {
+    "modes": ["off", "on", "relaxed", "sport", "drift"],
+    "default_mode": "on",
+    "mode_params": {
+      "relaxed": { "target_slip": 0.12, "kp": 2.0, "ki_per_s": 5.0, "attack_rate_per_s": 15.0, "recovery_rate_per_s": 8.0, "min_fraction": 0.0, "ignition_cut": true },
+      "sport":   { "target_slip": 0.18, "kp": 1.5, "ki_per_s": 4.0, "attack_rate_per_s": 10.0, "recovery_rate_per_s": 10.0, "min_fraction": 0.15, "ignition_cut": false },
+      "drift":   { "target_slip": 0.35, "kp": 1.0, "ki_per_s": 2.0, "attack_rate_per_s": 6.0, "recovery_rate_per_s": 12.0, "min_fraction": 0.35, "ignition_cut": false }
+    }
+  },
+  "source": "[AS] Grade table proposal (assists plan I1, vault PHYS-074; owner approved the grade mapping 2026-10-12): Racing = traction control Off/On/Relaxed/Sport/Drift, plus launch control and aero automation (declared by the grade table, loaded by assists I4/I5). Mode 'on' is the car's own traction_control block. Per-mode values are assumed starting points (plan B1 table), measured against the V6 ordering band in tests/unit/test_assist_unit.cpp."
+}

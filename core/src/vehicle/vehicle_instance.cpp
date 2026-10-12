@@ -48,6 +48,8 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
             }
         }
         fit_traction_ = desc_.traction_control.fitted;
+        tc_mode_desc_ = resolve_traction_mode_descs(desc_.traction_control, desc_.assist_unit);
+        tc_modes_available_bits_ = traction_modes_available_bits(desc_.assist_unit, fit_traction_);
         fitted_bits_ = ((have_tcu && fit_clutch_) ? 1u : 0u) | ((have_tcu && fit_blip_) ? 2u : 0u) | ((have_tcu && fit_shift_) ? 4u : 0u) |
                        (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u);
     }
@@ -161,7 +163,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     const bool assist_auto_clutch = fit_clutch_ && channel_values[control_indices_.assist_auto_clutch] > real(0.5);
     const bool assist_auto_blip = fit_blip_ && channel_values[control_indices_.assist_auto_blip] > real(0.5);
     const bool assist_auto_shift = fit_shift_ && channel_values[control_indices_.assist_auto_shift] > real(0.5);
-    const bool assist_traction = fit_traction_ && channel_values[control_indices_.assist_traction_control] > real(0.5);
+    // Assists I1: the requested mode code, and the mode actually run (a stateless function of channel and desc). A car
+    // without a unit offers Off/On only, so a value > 0.5 is On exactly as before the unit existed.
+    const TractionMode tc_mode_requested = traction_mode_requested(channel_values[control_indices_.assist_traction_control]);
+    const TractionMode tc_mode_effective = resolve_traction_mode(tc_modes_available_bits_, tc_mode_requested);
+    const bool assist_traction = tc_mode_effective != TractionMode::Off;
+    const TractionControlDesc& tc_desc = tc_mode_desc_[static_cast<std::size_t>(tc_mode_effective)];
     const bool assist_launch = fit_launch_ && channel_values[control_indices_.assist_launch_control] > real(0.5);
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
@@ -272,9 +279,9 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
             sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i)};
         }
-        const real traction_fraction=step_traction_control(desc_.traction_control,traction_state_,traction_sensors_,imu_accel,yaw,
+        const real traction_fraction=step_traction_control(tc_desc,traction_state_,traction_sensors_,imu_accel,yaw,
             controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction,substep_dt);
-        ctx.traction_ignition_cut=assist_traction&&traction_fraction<real(.75)&&traction_state_.positive_slip>desc_.traction_control.target_slip+real(.04);
+        ctx.traction_ignition_cut=assist_traction&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
         ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(controls.throttle,real(0),real(1))*traction_fraction:real(1);
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
@@ -497,6 +504,9 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u) | (assist_traction ? 8u : 0u) |
                                 (assist_launch ? 16u : 0u);
         snap.assist_fitted_bits = fitted_bits_;
+        snap.traction_mode_requested = static_cast<std::uint8_t>(tc_mode_requested);
+        snap.traction_mode_effective = static_cast<std::uint8_t>(tc_mode_effective);
+        snap.traction_modes_available_bits = tc_modes_available_bits_;
         snap.launch_control_active = powertrain_.launch_control_active();
 
         // ps_audio A10 (vault PHYS-054): the fill itself now lives in
@@ -596,6 +606,23 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
     // powertrain.h's fold_state_hash.
     h = powertrain_.fold_state_hash(h);
     h=fold_traction_control_hash(desc_.traction_control,traction_state_,h);
+    if(desc_.assist_unit&&desc_.assist_unit->has_traction_control&&
+       (desc_.assist_unit->traction_control.modes_bits&~kTractionModesBaseBits)!=0) {
+        // Assists I1 (D-TC6): the mode table (desc only), only on a car whose unit offers modes beyond Off/On - a
+        // unit with just Off/On (Street) adds nothing the base desc does not already say, so such a car hashes like
+        // one without a unit. The effective mode is a pure function of channel and desc, so it is not folded.
+        const auto fold=[&](const auto& v){const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}};
+        const std::uint64_t tag=0x4153534953544d44ULL;fold(tag);
+        const AssistTractionDesc& t=desc_.assist_unit->traction_control;
+        fold(t.modes_bits);fold(static_cast<std::uint8_t>(t.default_mode));
+        for(int m=2;m<kTractionModeCount;++m) {
+            if(!(t.modes_bits&traction_mode_bit(static_cast<TractionMode>(m))))continue;
+            const TractionControlDesc& d=tc_mode_desc_[static_cast<std::size_t>(m)];
+            fold(static_cast<std::uint8_t>(m));
+            fold(d.target_slip);fold(d.kp);fold(d.ki_per_s);fold(d.attack_rate_per_s);fold(d.recovery_rate_per_s);
+            fold(d.min_fraction);fold(d.ignition_cut);
+        }
+    }
     if(desc_.traction_control.enabled||traction_state_.initialized||traction_state_.enabled) {
         for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)}) {
             const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}

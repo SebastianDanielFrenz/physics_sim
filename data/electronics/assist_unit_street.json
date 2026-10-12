@@ -1,0 +1,11 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "assist_unit",
+  "name": "Street Assists",
+  "grade": "street",
+  "traction_control": {
+    "modes": ["off", "on"],
+    "default_mode": "on"
+  },
+  "source": "[AS] Grade table proposal (assists plan I1, vault PHYS-074; owner approved the grade mapping 2026-10-12): Street = traction control Off/On, no launch control, no aero automation. Mode 'on' is the car's own traction_control block."
+}

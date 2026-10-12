@@ -6,6 +6,7 @@
 #pragma once
 
 #include "ps/drivetrain/controller_desc.h"
+#include "ps/vehicle/assist_unit_desc.h"
 
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@ namespace ps::io {
 enum class ElectronicsKind {
     LaunchControl, // launch_control: a second rev limit (two-step)
     AssistFitment, // assist_fitment: marks assists as fitted (fits)
+    AssistUnit,    // assist_unit (assists I1): grade + traction-control mode table
 };
 
 struct ElectronicsPart {
@@ -22,6 +24,7 @@ struct ElectronicsPart {
     std::string name, source;
     drivetrain::LaunchControlDesc launch; // kind == LaunchControl
     std::vector<std::string> fits;        // kind == AssistFitment; each one of kElectronicsAssistNames
+    vehicle::AssistUnitDesc unit;         // kind == AssistUnit
 };
 
 // The assist names an assist_fitment part may list (and a vehicle's `fitted` switches cover).

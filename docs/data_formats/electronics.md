@@ -57,7 +57,8 @@ format has no path-valued keys. Unknown keys are rejected (`"unknown electronics
 | `fits` | (`assist_fitment` only) non-empty list of `auto_clutch`, `auto_blip`, `auto_shift`, `traction_control`, `anti_lag` | sets those assists' `fitted` to `true`; `auto_*` need a `manual_tcu` on the car (`"fits 'auto_shift' but the vehicle has no manual_tcu"`) |
 
 Shipped parts (all `[AS]`): `launch_two_step_generic.json` (4000 rpm, 2 m/s), `fit_auto_assists.json`,
-`fit_traction_control.json`, `fit_anti_lag_switch.json`.
+`fit_traction_control.json`, `fit_anti_lag_switch.json`, and the assist units `assist_unit_street.json`,
+`assist_unit_sport.json`, `assist_unit_racing.json` ([below](#assist-unit)).
 
 ## Adding a part to a car
 
@@ -94,3 +95,80 @@ The one latch byte is hashed only on a vehicle that has the component. Snapshot:
 launch_control_active` and `EngineSoundState::launch_active` (unhashed); the usual `limiter_active` flag also shows
 the cut. Interaction with anti-lag (D5): none — anti-lag acts on a closed throttle with a boosted turbo engine and
 reads its own channel; a launch limit and anti-lag active together are not specially handled.
+
+## Assist unit (assists I1, vault PHYS-074) {#assist-unit}
+
+`kind: "assist_unit"` is the driver-assist electronics of a car, graded **Street / Sport / Racing** (owner names,
+2026-10-12). Descriptor `ps::vehicle::AssistUnitDesc` (`ps/vehicle/assist_unit_desc.h`), stored as
+`VehicleDesc::assist_unit`; attached like every other part (a `controllers` entry of type `electronics`, or
+`VehicleLoadOptions::electronics`: a path replaces/adds, `"none"` removes). At most one per vehicle
+(`"at most one assist_unit per vehicle"`). A unit adds no controller. `fitted: false` on the car's
+`traction_control` block still wins over everything: no modes are available and the channel is ignored.
+
+```json
+{ "format": "physics_sim.electronics/1", "kind": "assist_unit", "name": "Racing Assists", "grade": "racing",
+  "traction_control": { "modes": ["off", "on", "relaxed", "sport", "drift"], "default_mode": "on",
+    "mode_params": { "sport": { "target_slip": 0.18, "kp": 1.5, "ki_per_s": 4.0, "attack_rate_per_s": 10.0,
+                                "recovery_rate_per_s": 10.0, "min_fraction": 0.15, "ignition_cut": false } } },
+  "source": "[AS] ..." }
+```
+
+**Grades.** The grade decides which *blocks* a unit may carry; the `modes` list is the unit's own data, so the
+grade-to-mode mapping is a data edit. Approved mapping (owner 2026-10-12), shipped as one file per grade
+(`data/electronics/assist_unit_{street,sport,racing}.json`, all `[AS]`):
+
+| Grade | Traction-control modes | Launch control block | Aero-control block |
+|---|---|---|---|
+| `street` | Off, On | not allowed | not allowed |
+| `sport` | Off, On, Relaxed, Sport | allowed (assists I4) | not allowed |
+| `racing` | Off, On, Relaxed, Sport, Drift | allowed (assists I4) | allowed (assists I5) |
+
+`launch_control` / `aero_control` keys: rejected `"grade 'street' does not allow 'launch_control'"` when the grade
+forbids them, `"'launch_control' in an assist_unit is not implemented yet (assists plan I4/I5)"` when it allows them
+(I1 does not load them).
+
+**Traction-control channel.** One channel `assist.traction_control`, append-only codes:
+
+| Code | Mode | Parameters |
+|---|---|---|
+| 0 | Off | no TC |
+| 1 | On | the car's own `traction_control` block, never stored in the unit: bit-identical to a car without a unit |
+| 2 | Relaxed | `mode_params.relaxed` overrides |
+| 3 | Sport | `mode_params.sport` overrides |
+| 4 | Drift | `mode_params.drift` overrides |
+
+Each tick: `requested = value > 0.5 ? clamp(round(value), 1, 4) : 0` (the pre-unit rule `> 0.5` is kept, so a car with
+no unit behaves as before and codes 2-4 are On there); `effective` = the fallback below. The channel's default value is
+the unit's `default_mode`; without a unit with a `traction_control` block, the base block's `enabled` (0/1); 0 when
+`fitted` is false.
+
+**Unavailable modes.** The requested code maps, statelessly (every tick, never latched), to the nearest available
+mode with *more* intervention, by the rank On > Relaxed > Sport > Drift > Off (the codes are not ordered by
+intervention). If no available mode is more intervening, the most intervening available mode is used. **Off is never
+substituted**; if Off itself is not offered, Off maps to the least intervening available mode. Not fitted: Off.
+The snapshot (`PowertrainSnapshot`, never hashed) carries `traction_mode_requested`, `traction_mode_effective` and
+`traction_modes_available_bits` (bit *n* = code *n* is offered; 0 when TC is not fitted) so a UI offers only fitted modes.
+
+**Per-mode parameters.** `mode_params` is an object keyed `relaxed` / `sport` / `drift` (a key for `off` or `on` is
+rejected: `"'on' takes no parameters"`; a key for a mode not in `modes` is rejected). Every field is an optional
+override of the car's own `traction_control` block (an unset field inherits the car's value):
+
+| Key | Meaning | Default |
+|---|---|---|
+| `target_slip`, `kp`, `ki_per_s`, `attack_rate_per_s`, `recovery_rate_per_s` | the controller's gains (finite, `> 0`; `target_slip < 1`) | the car's value |
+| `min_fraction` | torque floor: the TC never cuts below this fraction, `[0, 1)` | `0` (today) |
+| `ignition_cut` | whether a deep intervention may cut ignition | `true` (today) |
+
+Switching modes keeps the controller's integral and fraction (no jump). Plan-B1 starting values (`[AS]`, measured
+against the V6 ordering band in `tests/unit/test_assist_unit.cpp`): Relaxed 0.12/2/5/15/8, floor 0, cut; Sport
+0.18/1.5/4/10/10, floor 0.15, no cut; Drift 0.35/1/2/6/12, floor 0.35, no cut.
+
+**Rejections** (each asserted in `test_assist_unit.cpp` R1): `'grade' is required`, `unknown grade "<x>"`, unknown key
+(`unknown electronics field`), `'modes' is required and must be a non-empty array`, `'modes' entries must be one of
+off, on, relaxed, sport, drift`, `duplicate mode '<m>' in 'modes'`, `'modes' must contain at least one mode other than
+'off'`, `'default_mode' is required`, `'default_mode' "<m>" is not one of the listed 'modes'`, `mode_params: unknown mode`,
+`takes no parameters`, `mode_params for '<m>' but '<m>' is not in 'modes'`, per-field range messages.
+
+**Hash.** The resolved mode table is folded into the vehicle's state hash only for a unit whose `modes` go beyond
+Off/On (a Street unit hashes exactly like a car without a unit). The effective mode is a pure function of channel and
+desc and is not state.
