@@ -115,6 +115,7 @@ add_executable(ps_unit_tests
   test_spark_schedule.cpp
   test_knock_limit.cpp
   test_knock_calibration.cpp
+  test_gas_exchange.cpp
   test_engine_installation_io.cpp
   test_engine_hot_swap.cpp
   test_firing_order.cpp
