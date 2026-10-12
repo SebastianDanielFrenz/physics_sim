@@ -31,6 +31,7 @@ struct PedalBend {
 // out = bend(in), in clamped to [0, 1]. Only + - * / and comparisons (determinism rule: no libm).
 [[nodiscard]] constexpr real pedal_bend_apply(const PedalBend& b, real in) {
     const real v = in < real(0) ? real(0) : (in > real(1) ? real(1) : in);
+    if (v >= real(1)) return real(1); // the end points are exact (full pedal stays exactly 1)
     return v <= b.x ? v * (b.y / b.x) : b.y + (v - b.x) * ((real(1) - b.y) / (real(1) - b.x));
 }
 

@@ -250,6 +250,7 @@ PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPul
     // Assists I2 (owner Q2): car_hyper_n2o carries the Racing assist unit, TC default On. The pull bands
     // were measured without TC (a WOT pull through the gears), so TC is switched off explicitly.
     w.set_control("assist.traction_control", 0.0);
+    w.set_control("assist.drive_mode", 2.0); // assists I7: the car's default drive mode (Normal) forbids the nitrous arm; Sport allows it. Set before the first tick: no TC override
     w.set_control("assist.aero_control", 0.0); // and the unit's wing automation (assists I5 measured the 5th-gear pull moving 1.18 -> 1.97 s to 7800 rpm with it on)
     ps_test::settle(w, 2.0);
     res.bottle0 = w.n2o_bottle_mass(rig.vehicle);
