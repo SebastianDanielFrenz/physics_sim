@@ -944,8 +944,11 @@ TEST_CASE("P9 P1: progress spans both profiles, cancel in the second writes no c
         o.pool = &pool10();
         o.cache_dir = (dir.dir / "cancel").string();
         o.cancel = &cancel;
+        // Cancel on the first set's LAST progress call: the second set's generation checks the flag before it starts, so
+        // the cancel always lands in the second set. (Cancelling at t0 + 1 raced: under ctest load every point of the
+        // second set could already be running when the flag was set, and the generation then completed.)
         o.on_progress = [&](std::size_t a, std::size_t) {
-            if (a == t0 + 1) cancel.store(true);
+            if (a == t0) cancel.store(true);
         };
         CHECK_THROWS_AS(io::load_engine_json(kEngineFile, o), GenerationCancelled);
         std::size_t files = 0;
