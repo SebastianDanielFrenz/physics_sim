@@ -64,17 +64,12 @@
   },
   "inertia_kgm2": 0.12,
   "breakaway_torque_nm": 30.0,
-  "stall_rpm": 400,
-  "fire_rpm": 100,
-  "start_complete_rpm": 550,
-  "dfco_enable_rpm": 1300,
-  "dfco_reenable_rpm": 1000,
   "starter": {
     "stall_torque_nm": 140.0,
     "free_speed_rpm": 400.0,
     "interlock": "clutch_or_neutral"
   },
-  "fields_source": "[AS] inertia 0.12 kg*m^2; breakaway 30 N*m (>= the F4 friction at rest, 10.6 N*m); stall/start_complete 400/550 rpm, DFCO 1300/1000 rpm and the starter as engines/toyota_a25a_fks_gen.json; fire_rpm 100 [C] the SI minimum starting speed (40-100 rpm) cited in engines/i4_2l_na.json.",
+  "fields_source": "[AS] inertia 0.12 kg*m^2; breakaway 30 N*m (>= the F4 friction at rest, 10.6 N*m); the starter as engines/toyota_a25a_fks_gen.json. The state-machine speeds live in the ECU part.",
   "crank_axis_local": [0, 1, 0],
   "initial_state": "running",
   "fuels": ["../fuels/e5.json", "../fuels/e10.json"],

@@ -515,6 +515,11 @@ void EngineMapGenTask::run_point(std::size_t i) {
             s.results[i] = r.mean;
         } else {
             s.results[i] = engine_cycle::run_operating_point(*s.proto, s.ops[i], s.settings);
+            // Engine garage P9: a lumped grid node that does not breathe (a long-overlap cam at a low manifold
+            // pressure: the exhaust fills the intake - the K20A's high VTEC profile at 20 kPa from 5500 rpm) is filled
+            // in finish() from the nearest breathing node above, as P7d does for held pipe nodes. Such a node made
+            // finish() throw before, so every engine that loaded before generates bit-identical maps.
+            if (i < s.grid_n && !node_breathes(s.desc, s.lhv, s.afr, s.ops[i].p_im_pa, s.results[i])) s.nonbreathing[i] = 1;
         }
         const bool knock_point = i < s.grid_n || (s.wot && i >= s.wot_base);
         if (s.knock && knock_point && !s.nonbreathing[i]) {

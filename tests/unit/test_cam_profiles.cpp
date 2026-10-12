@@ -71,7 +71,6 @@
 #include <fstream>
 #include <limits>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <variant>
 #include <vector>
@@ -118,13 +117,6 @@ json read_json(const std::string& path) {
     std::ifstream f(path);
     REQUIRE(f.good());
     return json::parse(f);
-}
-
-std::string read_text(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    std::stringstream s;
-    s << f.rdbuf();
-    return s.str();
 }
 
 // The K20A loaded with Full maps (shared .psmaps cache in the temp directory).
@@ -949,8 +941,10 @@ TEST_CASE("P9 diag: generation time per quality on 10 workers", "[.][diag][vvl]"
         const auto t = std::chrono::steady_clock::now();
         const EngineMapsPtr m = generate_engine_profile_maps(*d.cycle, d.fuels.front(), q, &pool10());
         const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
-        std::printf("P9 diag: quality %d, both profiles %.3f s (hash %016llx / %016llx)\n", static_cast<int>(q), s,
-                    static_cast<unsigned long long>(m->content_hash), static_cast<unsigned long long>(m->cam_profiles.at(0)->content_hash));
+        std::printf("P9 diag: quality %d, both profiles %.3f s (hash %016llx / %016llx), non-breathing filled %d / %d\n",
+                    static_cast<int>(q), s, static_cast<unsigned long long>(m->content_hash),
+                    static_cast<unsigned long long>(m->cam_profiles.at(0)->content_hash), m->nonbreathing_points,
+                    m->cam_profiles.at(0)->nonbreathing_points);
     }
 }
 
@@ -969,7 +963,7 @@ TEST_CASE("P9 diag: ECU spark table = min over the profiles' generated MBT spark
         std::printf("  [");
         for (std::size_t j = 0; j < lo.y.size(); ++j) {
             const real v = std::min(lo.at(i, j), hi.at(i, j));
-            std::printf("%s%.1f", j ? ", " : "", std::floor(v * 10.0) / 10.0);
+            std::printf("%s%.10g", j ? ", " : "", v);
         }
         std::printf("]%s\n", i + 1 < lo.x.size() ? "," : "");
     }

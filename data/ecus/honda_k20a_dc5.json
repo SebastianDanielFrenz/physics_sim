@@ -1,7 +1,7 @@
 {
   "format": "physics_sim.ecu/1",
   "name": "honda_k20a_dc5",
-  "source": "Engine garage P9: the ECU of engines/honda_k20a_dc5.json - idle control, lambda and spark tables, limiter and the VTEC switching rule. Sources per key below.",
+  "source": "Engine garage P9: the ECU of engines/honda_k20a_dc5.json - idle control, lambda and spark tables, limiter and the VTEC switching rule. Sources per key below; idle_rpm 800, stall/start_complete 400/550 rpm, DFCO 1300/1000 rpm, the idle-control gains and throttle_actuator_tau_s are [AS] copies of engines/toyota_a25a_fks_gen.json's values; fire_rpm 100 [C] the SI minimum starting speed (40-100 rpm) cited in engines/i4_2l_na.json; limiter 8400 rpm [C] the fact book's maximum permitted engine speed (https://www.honda.co.jp/factbook/auto/INTEGRA/200107/07.html), fuel cut with a 150 rpm hysteresis [AS].",
   "throttle_actuator_tau_s": 0.05,
   "idle_control": {
     "kp_per_rpm": 3e-05,
@@ -22,13 +22,18 @@
       "rpm": [0, 8400],
       "p_im_kpa": [20, 100],
       "values": [
-        [25, 25],
-        [25, 25]
+        [16.73105104, 16.73105104],
+        [16.73105104, 16.73105104]
       ],
-      "source": "placeholder"
+      "source": "[D] the minimum over the two cam profiles of the generator's MBT spark (theta_mbt_deg of each profile's generated maps, printed by the hidden case 'P9 diag: ECU spark table = min over the profiles' generated MBT spark' in tests/unit/test_cam_profiles.cpp): with the engine's fixed Wiebe (CA50 8 deg ATDC, burn 40.3205 deg, delay 3.8632 deg) both profiles' MBT is the same constant 16.731 deg BTDC, so the engine runs at MBT on either cam. No Honda spark calibration was available; knock is not modelled for this engine."
     }
   },
   "idle_rpm": 800.0,
+  "stall_rpm": 400,
+  "fire_rpm": 100,
+  "start_complete_rpm": 550,
+  "dfco_enable_rpm": 1300,
+  "dfco_reenable_rpm": 1000,
   "limiter": {
     "type": "fuel_cut",
     "rpm": 8400,

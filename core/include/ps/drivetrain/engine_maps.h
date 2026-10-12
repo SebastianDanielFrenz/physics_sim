@@ -155,6 +155,8 @@ struct EngineMaps {
     // eta_i outside (0, 1)) and were filled from the nearest breathing node
     // above on their rpm line; author p_im rows dropped because they lie at or
     // above the lowest wide-open-throttle plenum pressure (or ambient).
+    // Engine garage P9: a lumped engine's grid nodes that do not breathe are
+    // filled and counted the same way (they used to make the load throw).
     int nonbreathing_points = 0;
     int wot_dropped_rows = 0;
     // Engine garage P7 (knock-limited engines only; diagnostics, not hashed,
