@@ -49,12 +49,27 @@ int physical_core_count() {
 
 #elif defined(__linux__)
 
+namespace {
+// /proc/cpuinfo has no usable "physical id"/"core id" lines to count, so fall
+// back to the logical count. x86 assumes SMT (2 threads per core, halve);
+// aarch64 mobile/handheld SoCs (e.g. the Steam Frame's) have no SMT, and
+// /proc/cpuinfo on ARM never carries the core-id lines, so the halving would
+// always apply and leave half the cores idle: use the logical count there.
+int fallback_core_count() {
+    const unsigned hc = std::thread::hardware_concurrency();
+#if defined(__aarch64__) || defined(__arm__)
+    return static_cast<int>(std::max(1u, hc));
+#else
+    return static_cast<int>(std::max(1u, hc >= 2 ? hc / 2 : hc));
+#endif
+}
+}  // namespace
+
 int physical_core_count() {
     // Count distinct (physical_id, core_id) pairs from /proc/cpuinfo.
     std::FILE* f = std::fopen("/proc/cpuinfo", "r");
     if (!f) {
-        const unsigned hc = std::thread::hardware_concurrency();
-        return static_cast<int>(std::max(1u, hc >= 2 ? hc / 2 : hc));
+        return fallback_core_count();
     }
     std::set<std::pair<int, int>> cores;
     int physical_id = 0;
@@ -71,8 +86,7 @@ int physical_core_count() {
     }
     std::fclose(f);
     if (cores.empty()) {
-        const unsigned hc = std::thread::hardware_concurrency();
-        return static_cast<int>(std::max(1u, hc >= 2 ? hc / 2 : hc));
+        return fallback_core_count();
     }
     return static_cast<int>(cores.size());
 }

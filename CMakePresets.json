@@ -114,6 +114,16 @@
       }
     },
     {
+      "name": "linux-aarch64-check",
+      "displayName": "Linux / clang cross / aarch64 (compile+link check, runs under qemu-user)",
+      "inherits": "linux-base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/aarch64-linux-gnu-clang.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PS_BUILD_TESTS": "OFF"
+      }
+    },
+    {
       "name": "linux-asan-ubsan",
       "displayName": "Linux / clang / ASan+UBSan",
       "inherits": "linux-base",
@@ -144,6 +154,10 @@
     { "name": "msvc-debug", "configurePreset": "msvc-debug" },
     { "name": "msvc-release", "configurePreset": "msvc-release" },
     { "name": "linux-release", "configurePreset": "linux-release" },
+    {
+      "name": "linux-aarch64-check", "configurePreset": "linux-aarch64-check",
+      "targets": ["ps_core", "ps_engine_cycle", "ps_audio", "ps_environment", "ps_environment_io", "ps_engine_tools", "ps_run"]
+    },
     { "name": "linux-asan-ubsan", "configurePreset": "linux-asan-ubsan" },
     { "name": "linux-tsan", "configurePreset": "linux-tsan" }
   ],

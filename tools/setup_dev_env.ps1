@@ -13,6 +13,13 @@
     Do not install anything. Only verify every tool (Windows + WSL), print
     its version, and exit with a non-zero code if anything is missing.
 
+.PARAMETER Aarch64Cross
+    Only the OPTIONAL WSL aarch64 cross toolchain (clang --target=aarch64-linux-gnu
+    needs the arm64 libstdc++ headers + glibc headers, plus qemu-user to run the
+    result): installs it (apt as root in WSL, no password) or, with -CheckOnly,
+    verifies it. Used by the linux-aarch64-check CI step (tools/ci.ps1), which
+    reports SKIP when this is absent. Not part of the default install/check.
+
 .PARAMETER BlenderLocation
     Optional install directory passed to winget's --location for the Blender
     MSI (e.g. a custom drive/path). Ignored if Blender is already found by
@@ -33,6 +40,7 @@
 [CmdletBinding()]
 param(
     [switch]$CheckOnly,
+    [switch]$Aarch64Cross,
     [string]$BlenderLocation
 )
 
@@ -174,6 +182,52 @@ function Install-WingetPackage {
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189 -and $LASTEXITCODE -ne -1978335135) {
         throw "winget install of $Id failed with exit code $LASTEXITCODE"
     }
+}
+
+# ---------------------------------------------------------------------------
+# Optional WSL aarch64 cross toolchain (-Aarch64Cross only; native Linux ARM64
+# support: cmake/toolchains/aarch64-linux-gnu-clang.cmake, preset
+# linux-aarch64-check). Packages are named after the GCC major WSL clang uses
+# for its native libstdc++ headers; clang looks for the cross installation
+# under /usr/lib/gcc-cross/aarch64-linux-gnu/<N>.
+# ---------------------------------------------------------------------------
+function Get-WslAarch64CrossPackages {
+    param([string]$GccMajor)
+    return @("libstdc++-$GccMajor-dev-arm64-cross", 'libc6-dev-arm64-cross', 'qemu-user')
+}
+
+function Test-WslAarch64Cross {
+    param([string]$GccMajor)
+    $d = wsl --cd ~ -- bash -lc "test -d /usr/lib/gcc-cross/aarch64-linux-gnu/$GccMajor && test -d /usr/aarch64-linux-gnu/include/c++/$GccMajor && echo yes"
+    if ($d -eq 'yes') { Write-Ok "aarch64 libstdc++ headers (WSL) -> /usr/aarch64-linux-gnu/include/c++/$GccMajor" }
+    else { Write-Missing "aarch64 libstdc++ headers (WSL) for GCC $GccMajor missing (libstdc++-$GccMajor-dev-arm64-cross)" }
+    $d = wsl --cd ~ -- bash -lc "test -f /usr/aarch64-linux-gnu/include/stdio.h && echo yes"
+    if ($d -eq 'yes') { Write-Ok "aarch64 glibc headers (WSL) -> /usr/aarch64-linux-gnu/include" }
+    else { Write-Missing "aarch64 glibc headers (WSL) missing (libc6-dev-arm64-cross)" }
+    $d = wsl --cd ~ -- bash -lc "command -v qemu-aarch64 >/dev/null && qemu-aarch64 --version | head -n1"
+    if ($LASTEXITCODE -eq 0 -and $d) { Write-Ok "qemu-aarch64 (WSL) -> $d" }
+    else { Write-Missing "qemu-aarch64 (WSL) not found (qemu-user; only needed to RUN aarch64 binaries)" }
+}
+
+if ($Aarch64Cross) {
+    Write-Section "WSL aarch64 cross toolchain (optional)"
+    $wslDistros = (wsl -l -q 2>$null) -replace "`0", ""
+    if (-not ($wslDistros -match 'Ubuntu')) {
+        Write-Host "No Ubuntu WSL distro found." -ForegroundColor Red
+        exit 1
+    }
+    $gccMajor = Get-WslClangGccMajor
+    if (-not $gccMajor) { Write-Host "Cannot read WSL clang's selected GCC major." -ForegroundColor Red; exit 1 }
+    if (-not $CheckOnly) {
+        $pkgs = Get-WslAarch64CrossPackages -GccMajor $gccMajor
+        Write-Host "apt-get install (as root in WSL, idempotent): $($pkgs -join ' ')"
+        wsl -u root -- apt-get install -y @pkgs
+        if ($LASTEXITCODE -ne 0) { throw "WSL apt-get install of the aarch64 cross packages failed with exit code $LASTEXITCODE" }
+    }
+    Test-WslAarch64Cross -GccMajor $gccMajor
+    if ($script:AllOk) { Write-Host "aarch64 cross toolchain present." -ForegroundColor Green; exit 0 }
+    Write-Host "aarch64 cross toolchain incomplete. Install: tools\setup_dev_env.ps1 -Aarch64Cross" -ForegroundColor Red
+    exit 1
 }
 
 # ===========================================================================

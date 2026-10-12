@@ -18,7 +18,12 @@
 
 #include "ps/types.h"
 
-#if defined(__AVX2__) || (defined(_MSC_VER) && defined(__clang__) && defined(__AVX2__))
+// AVX2 path: x86-64 with AVX2 only. On aarch64 (Linux ARM64 / Steam Frame) and
+// every other target PS_SIMD_SCALAR is used and <immintrin.h> is never included;
+// the scalar path is bit-identical to the AVX2 one by design (no NEON backend:
+// the hot pipe kernel is memory-bound at its current size and a NEON f64x2
+// pair would need its own equivalence test - not worth it until profiled on ARM).
+#if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && defined(__AVX2__)
 #define PS_SIMD_AVX2 1
 #else
 #define PS_SIMD_SCALAR 1

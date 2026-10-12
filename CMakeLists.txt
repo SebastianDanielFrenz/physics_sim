@@ -78,6 +78,43 @@ endif()
 project(physics_sim LANGUAGES CXX)
 
 # --------------------------------------------------------------------------
+# Target architecture (native Linux ARM64 / Steam Frame support). Every
+# x86-only flag below (/arch:AVX2, -mavx2 -mfma, Jolt's USE_AVX2 & co.) is
+# gated on PS_TARGET_X86 so an aarch64 target never sees them; on x86 the
+# gate is TRUE and every compile line is byte-identical to before.
+#
+# The TARGET, not the host, decides: CMAKE_SYSTEM_PROCESSOR is the target when
+# a toolchain file sets it (cmake/toolchains/aarch64-linux-gnu-clang.cmake),
+# but a plain `--target=` given through CMAKE_CXX_COMPILER_TARGET or
+# CMAKE_CXX_FLAGS does not change it, and MSVC/clang-cl report their target in
+# CMAKE_CXX_COMPILER_ARCHITECTURE_ID. First hit wins, most specific first.
+# Undetectable (empty) counts as x86 so nothing changes for a build that never
+# set any of them.
+# --------------------------------------------------------------------------
+set(PS_TARGET_ARCH "")
+if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID)
+  set(PS_TARGET_ARCH "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+elseif(CMAKE_CXX_COMPILER_TARGET)
+  string(REGEX MATCH "^[^-]+" PS_TARGET_ARCH "${CMAKE_CXX_COMPILER_TARGET}")
+elseif(CMAKE_CXX_FLAGS MATCHES "--target=([A-Za-z0-9_]+)")
+  set(PS_TARGET_ARCH "${CMAKE_MATCH_1}")
+elseif(CMAKE_SYSTEM_PROCESSOR)
+  set(PS_TARGET_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+string(TOLOWER "${PS_TARGET_ARCH}" PS_TARGET_ARCH)
+if(PS_TARGET_ARCH STREQUAL "" OR PS_TARGET_ARCH MATCHES "^(x86_64|amd64|x64|x86|i[3-6]86)$")
+  set(PS_TARGET_X86 TRUE)
+else()
+  set(PS_TARGET_X86 FALSE)
+endif()
+if(PS_TARGET_ARCH MATCHES "^(aarch64|arm64|arm64ec)$")
+  set(PS_TARGET_AARCH64 TRUE)
+else()
+  set(PS_TARGET_AARCH64 FALSE)
+endif()
+message(STATUS "physics_sim target architecture: '${PS_TARGET_ARCH}' (x86: ${PS_TARGET_X86}, aarch64: ${PS_TARGET_AARCH64})")
+
+# --------------------------------------------------------------------------
 # Phase 0 ("Toolchain and skeleton"). This file wires up dependencies and
 # empty placeholder targets only. Real simulation code (math, jobs, world,
 # vehicle, aero, ...) starts in P1. See PLAN.md and the repo's CLAUDE.md.
@@ -180,7 +217,10 @@ if(MSVC)
     # Jolt's own CMakeLists.txt picks it up as part of its inherited
     # CMAKE_CXX_FLAGS baseline too, the same mechanism already used for
     # the FMA-contraction flag below.
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
+    # x86 only (a Windows-on-ARM64 cl has no /arch:AVX2).
+    if(PS_TARGET_X86)
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
+    endif()
   endif()
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffp-contract=off")
@@ -197,9 +237,21 @@ include(FetchContent)
 # release tag as of 2026-09-21.
 set(DOUBLE_PRECISION ON CACHE BOOL "" FORCE)               # D2: needed for aircraft / large farm maps
 set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)   # D2/D7: also forces /fp:precise and -ffp-contract=off, and disables USE_FMADD, inside Jolt's own build
-set(USE_AVX2 ON CACHE BOOL "" FORCE)                       # matches PLAN.md section 2 (already Jolt's default; explicit for documentation)
-set(USE_FMADD OFF CACHE BOOL "" FORCE)                     # explicit; CROSS_PLATFORM_DETERMINISTIC already forces this off internally
-set(USE_AVX512 OFF CACHE BOOL "" FORCE)                    # 5900X (Zen 3) has no AVX-512
+if(PS_TARGET_X86)
+  set(USE_AVX2 ON CACHE BOOL "" FORCE)                     # matches PLAN.md section 2 (already Jolt's default; explicit for documentation)
+  set(USE_FMADD OFF CACHE BOOL "" FORCE)                   # explicit; CROSS_PLATFORM_DETERMINISTIC already forces this off internally
+  set(USE_AVX512 OFF CACHE BOOL "" FORCE)                  # 5900X (Zen 3) has no AVX-512
+else()
+  # Non-x86 target (aarch64): Jolt's Jolt.cmake adds no instruction-set flag
+  # and defines no JPH_USE_* macro there (ARM64 branch "uses no special
+  # commandline flags"; its Core.h then picks NEON from the compiler's
+  # predefined __aarch64__/__ARM_NEON). Force every x86 feature OFF anyway so
+  # a stale cache or a preset cannot ask for them. FMA contraction stays off
+  # (CROSS_PLATFORM_DETERMINISTIC, -ffp-contract=off on every non-MSVC target).
+  foreach(_ps_x86_opt USE_AVX512 USE_AVX2 USE_AVX USE_SSE4_1 USE_SSE4_2 USE_LZCNT USE_TZCNT USE_F16C USE_FMADD)
+    set(${_ps_x86_opt} OFF CACHE BOOL "" FORCE)
+  endforeach()
+endif()
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)           # third-party code: warnings-as-errors is our own targets' business only, not Jolt's (see ps_warnings below); Jolt's own /Wall /WX default is not something we want breaking CI on a newer compiler
 # Jolt defaults both of these OFF (its own CMakeLists.txt), trading a
 # little codegen for RTTI/exception machinery it does not use internally.
@@ -360,10 +412,19 @@ if(MSVC)
   # handler used, but unwind semantics are not enabled"), which /WX (via
   # ps_warnings) then turns into a hard error - found by actually building
   # the msvc-release leg, not by inspection.
-  target_compile_options(ps_options INTERFACE /arch:AVX2 /fp:precise /EHsc)
-else()
+  if(PS_TARGET_X86)
+    target_compile_options(ps_options INTERFACE /arch:AVX2 /fp:precise /EHsc)
+  else()
+    # Windows-on-ARM64: /arch:AVX2 is x86-only.
+    target_compile_options(ps_options INTERFACE /fp:precise /EHsc)
+  endif()
+elseif(PS_TARGET_X86)
   target_compile_options(ps_options INTERFACE -mavx2 -mfma)
 endif()
+# Any non-MSVC, non-x86 target (aarch64-linux-gnu): ps_options adds nothing.
+# FMA contraction is already off via the global -ffp-contract=off above
+# (clang defaults to contraction ON for aarch64, so this flag matters there);
+# NEON/FMA availability is the baseline of armv8-a, no -march flag needed.
 
 # ===========================================================================
 # Placeholder targets (PLAN.md section 4 layout).
