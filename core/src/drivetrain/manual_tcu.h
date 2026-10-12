@@ -135,6 +135,7 @@ public:
         e_auto_ = clutch_locked ? real(1.0) : real(0.0);
         reverse_hold_ = false;
         anti_stall_released_ = false;
+        kickdown_spent_ = false;
     }
 
 private:
@@ -177,6 +178,9 @@ private:
 
     // Auto-shift state (plan section 6.5.4).
     real time_in_gear_ = 0.0;
+    // Assists I7: the kickdown bypass was spent by a gear change and the command has not dropped below
+    // kickdown_throttle since (hashed only when set).
+    bool kickdown_spent_ = false;
 
     // The shift in progress started as an upshift (6.5.3's upshift cut).
     bool upshift_cut_armed_ = false;

@@ -88,9 +88,13 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                     if (s.throttle_request > kDriverThrottleThreshold && out_rpm < real(100.0)) desired_target = 1;
                 } else if (s.gearbox_current >= 1) {
                     // Assists I7 kickdown bypass: a downshift with the throttle command at or above kickdown_throttle
-                    // (0 = never) ignores min_time_in_gear_s; upshifts always wait for it.
+                    // (0 = never) ignores min_time_in_gear_s; upshifts always wait for it. The bypass is a driver action:
+                    // it is spent by a gear change and re-armed only once the command has fallen below kickdown_throttle,
+                    // so a pedal held at full throttle through an upshift cannot bounce the car back down on the rpm
+                    // collapse that follows the shift (measured, H2: Sport pull 2-3 bounces with the plain rule).
                     const bool dwell_ok = time_in_gear_ >= desc_.auto_shift.min_time_in_gear_s;
-                    const bool kickdown = desc_.auto_shift.kickdown_throttle > real(0.0) && s.throttle_request >= desc_.auto_shift.kickdown_throttle;
+                    const bool kickdown = desc_.auto_shift.kickdown_throttle > real(0.0) && s.throttle_request >= desc_.auto_shift.kickdown_throttle &&
+                                          !kickdown_spent_;
                     if (dwell_ok || kickdown) {
                         const real up_th = lerp(pick(s.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_zero_throttle),
                                                 pick(s.up_rpm_at_full_throttle, desc_.auto_shift.up_rpm_at_full_throttle), s.throttle_request);
@@ -107,12 +111,15 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // time_in_gear_ tracks dwell in the CURRENT gear, reset on any gear change
     // and by a manual override above; only meaningful for auto-shift.
     if (!last_target_seen_valid_ || last_target_seen_ != s.gearbox_current) {
+        if (last_target_seen_valid_ && desc_.auto_shift.kickdown_throttle > real(0.0)) kickdown_spent_ = true; // a gear change spends the kickdown (re-armed below)
         time_in_gear_ = real(0.0);
         last_target_seen_ = s.gearbox_current;
         last_target_seen_valid_ = true;
     } else {
         time_in_gear_ += h;
     }
+
+    if (s.throttle_request < desc_.auto_shift.kickdown_throttle) kickdown_spent_ = false;
 
     // --- 6.5.2: auto-clutch ---------------------------------------------------
     const real rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
@@ -437,6 +444,7 @@ std::uint64_t ManualTcu::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, throttle_ceiling_);
     // Folded only when set, so vehicles that never trigger them hash as before.
     if (reverse_hold_) h = fnv1a(h, reverse_hold_);
+    if (kickdown_spent_) h = fnv1a(h, std::uint8_t(3));
     if (anti_stall_released_) h = fnv1a(h, std::uint8_t(2));
     return h;
 }

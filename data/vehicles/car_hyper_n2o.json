@@ -441,7 +441,7 @@
         "up_rpm_at_full_throttle": 8000,
         "down_rpm_at_zero_throttle": 1300,
         "down_rpm_at_full_throttle": 3500,
-        "min_time_in_gear_s": 1.0,
+        "min_time_in_gear_s": 2.0,
         "kickdown_throttle": 0.95
       },
       "max_pending_steps": 2

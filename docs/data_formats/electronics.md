@@ -301,3 +301,61 @@ slewed command moves is already hashed. Tests: `tests/unit/test_assist_aero.cpp`
 **Hash.** The resolved mode table is folded into the vehicle's state hash only for a unit whose `modes` go beyond
 Off/On (a Street unit hashes exactly like a car without a unit). The effective mode is a pure function of channel and
 desc and is not state.
+
+## Drive modes (assists I7, vault PHYS-074) {#drive-modes}
+
+`kind: "drive_modes"`, `ps::vehicle::DriveModesDesc` (`ps/vehicle/drive_modes_desc.h`), stored as `VehicleDesc::drive_modes`.
+A **car-specific** part (it overrides numbers of the car's own `manual_tcu`): attached like the other electronics parts, as a
+`controllers` entry of type `electronics` or through `VehicleLoadOptions::electronics` (`"none"` removes it). At most one per
+car (`"at most one drive_modes per vehicle"`); `extends` works (RFC 7396, so a `null` mode removes it); unknown keys are
+rejected at every level. Shipped: `data/electronics/drive_modes_car_hyper_n2o.json` (owner values 2026-10-13, `[AS]`),
+attached to `car_hyper_n2o`. Alternative (a block inside the assist unit): rejected - the unit files are generic per grade,
+the mode numbers belong to one car's gearing and engine.
+
+```json
+{ "format": "physics_sim.electronics/1", "kind": "drive_modes", "default_mode": "normal",
+  "modes": {
+    "eco":    { "pedal_bend": { "x": 0.6, "y": 0.3 },
+                "auto_shift": { "up_rpm_at_zero_throttle": 1800, "up_rpm_at_full_throttle": 6500,
+                                "down_rpm_at_zero_throttle": 1100, "down_rpm_at_full_throttle": 2800 },
+                "auto_clutch": { "close_time_s": 0.15 }, "traction_control_default": "on",
+                "launch_control_allowed": false, "nitrous_arm_allowed": false },
+    "normal": { "...": "..." }, "sport": { "...": "..." } } }
+```
+
+| Key | Meaning / rejection |
+|---|---|
+| `modes` | required non-empty object keyed `eco` / `normal` / `sport`; a mode is **offered** iff it is listed |
+| `default_mode` | required, one of the listed modes (the channel default and the target of an unoffered request) |
+| `pedal_bend` `{x, y}` | one optional point: `x` in `(0, 1)`, `y` in `[0, 1]` (`"pedal_bend x must be in (0, 1)"` / `"... y must be in [0, 1]"`, `"needs both 'x' and 'y'"`); piecewise linear through `(0,0)`, `(x,y)`, `(1,1)`. Absent = identity (bit-identical) |
+| `auto_shift` | any of the four `up_rpm_at_*`, `down_rpm_at_*` of the car's `auto_shift` (rpm `> 0`); a missing key keeps the car's. The merged values must keep `down < up` at zero and at full throttle (`"... downshift rpm must stay below the upshift rpm ..."`) |
+| `auto_clutch.close_time_s` | `> 0`; overrides `auto_clutch.close_time_s` (the post-shift close rate `1/close_time_s`) |
+| `traction_control_default` | `off`/`on`/`relaxed`/`sport`/`drift`: the TC mode the car switches to when this mode becomes effective |
+| `launch_control_allowed`, `nitrous_arm_allowed` | booleans, default `true` |
+
+An override needs the car's `manual_tcu` (every shipped car has one).
+
+**Channel** `assist.drive_mode`, registered only on a car with the part: `0` eco, `1` normal, `2` sport (append-only), rounded
+and clamped; default = the part's `default_mode` code. A request for a mode the part does not offer maps to the part's
+`default_mode` `[AS]` (drive modes have no intervention order, so the TC rule "nearest more-intervening" has no analogue; the
+default is the one mode the owner approved, and clamping to a neighbour could select Sport on a car that forbids it).
+
+**Pedal bend.** `out = bend(normal(pedal))`, applied in the throttle-command stage after the car's own `pedal_map` /
+linkage curve and before the hand lever. The TCU (launch law, auto-shift thresholds, kickdown) and the traction/launch throttle
+ceilings work on this command; TC's pedal gating and launch-control arming stay on the raw pedal (driver intent).
+
+**Traction-control default per mode.** In physics, not in the game: when the *effective* drive mode changes and the new mode
+has `traction_control_default`, the effective TC mode becomes it (through the I1 availability fallback of the car's unit) and
+stays so until the driver changes the `assist.traction_control` channel value (a changed *value*; writing the same value is not
+seen). A change of mode re-applies the default over the driver's choice. A mode without a default leaves a running override
+alone. At spawn there is no override: the TC channel default is the default mode's `traction_control_default`.
+
+**Gates.** `launch_control_allowed false`: the launch-control assist cannot arm (both the unit's and a P8 two-step are driven
+through the same `assist.launch_control` gate on the unit). `nitrous_arm_allowed false`: the kit's arm input is forced to 0.
+
+**Kickdown.** `auto_shift.kickdown_throttle` in the car's `manual_tcu` ([vehicle.md](vehicle.md)); spent by a gear change, re-armed when the command drops below it. `car_hyper_n2o` uses `min_time_in_gear_s` 2.0 `[AS]` (measured on an accelerating pull: 1.0 s bounces once in Normal and Sport, 1.5 s still once in Sport, 2.0 s none in any mode).
+
+**Snapshot** (`PowertrainSnapshot`, never hashed): `drive_mode_requested`, `drive_mode_effective`,
+`drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport; all 0 without the part). **Hash:** the desc and the state (last
+effective mode, TC override flag/code, last seen TC channel value) are folded only on a car with the part, so every other
+car and scenario hashes as before. Tests: `tests/unit/test_assist_drive_modes.cpp` ([assist][vehicle][drivetrain]).
