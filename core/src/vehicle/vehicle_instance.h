@@ -15,6 +15,7 @@
 #include "ps/world/ambient.h"
 #include "ps/world/ids.h"
 
+#include <array>
 #include <cstdint>
 #include <string_view>
 #include <vector>
@@ -284,6 +285,10 @@ private:
     // once in the constructor from the TCU blocks, traction_control.fitted and the launch_control controller.
     bool fit_clutch_ = true, fit_blip_ = true, fit_shift_ = true, fit_traction_ = true, fit_launch_ = false;
     std::uint32_t fitted_bits_ = 0; // snapshot layout: bit0 auto_clutch .. bit3 traction_control, bit4 launch_control, bit5 anti_lag switch
+    // Assists I1: per-mode controller parameters (index = TractionMode code; 0 and 1 are the car's own desc) and the
+    // offered-mode bits. Both are pure functions of desc_, computed once in the constructor.
+    std::array<TractionControlDesc, kTractionModeCount> tc_mode_desc_{};
+    std::uint8_t tc_modes_available_bits_ = kTractionModesBaseBits;
     TractionControlState traction_state_{};
     std::vector<TractionWheelSensor> traction_sensors_;
     Vec3 imu_previous_velocity_world_{}; // virtual accelerometer plumbing only; never supplied as TC speed

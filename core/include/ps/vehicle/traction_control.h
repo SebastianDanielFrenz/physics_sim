@@ -13,6 +13,11 @@ struct TractionControlDesc {
     bool fitted=true;   // engine garage P8 (A15): false = the car has no TC, the channel is ignored. Not hashed (default true = unchanged).
     real target_slip=.08, reference_floor_m_s=2.0;
     real kp=2.0, ki_per_s=6.0, attack_rate_per_s=20.0, recovery_rate_per_s=8.0;
+    // Assists I1 (PHYS-074): per-mode extras, set only by an assist unit's mode table. The defaults are today's
+    // controller (torque fraction may reach 0, ignition cut allowed), so a car without a unit is bit-identical.
+    // Not folded into the state hash (a unit folds its resolved mode table itself).
+    real min_fraction=0.0;
+    bool ignition_cut=true;
 };
 struct TractionWheelSensor {
     real peripheral_speed_m_s=0, steer_rad=0, x_m=0, y_m=0;
@@ -25,6 +30,7 @@ struct TractionControlState {
 inline void validate_traction_control(const TractionControlDesc& d) {
     for(real v:{d.target_slip,d.reference_floor_m_s,d.kp,d.ki_per_s,d.attack_rate_per_s,d.recovery_rate_per_s})
         if(!std::isfinite(v)||v<=0)throw std::invalid_argument("traction_control: parameters must be finite and positive");
+    if(!std::isfinite(d.min_fraction)||d.min_fraction<0||d.min_fraction>=1)throw std::invalid_argument("traction_control: min_fraction must be in [0, 1)");
     if(d.target_slip>=1)throw std::invalid_argument("traction_control: target_slip must be below 1");
 }
 // SENSOR-ONLY interface: no ground speed, GPS, true tyre slip, contact/load or surface.
@@ -68,7 +74,7 @@ inline real step_traction_control(const TractionControlDesc& d,TractionControlSt
     // integrator must not hold the launch clutch at idle for seconds.
     const real integral_step=(error<0&&s.positive_slip<d.target_slip*.25)?-d.recovery_rate_per_s:d.ki_per_s*error;
     s.integral=std::clamp(s.integral+integral_step*dt,real(0),real(1));
-    const real desired=std::clamp(real(1)-d.kp*std::max(real(0),error)-s.integral,real(0),real(1));
+    const real desired=std::clamp(real(1)-d.kp*std::max(real(0),error)-s.integral,d.min_fraction,real(1));
     const real rate=desired<s.torque_fraction?d.attack_rate_per_s:d.recovery_rate_per_s;
     s.torque_fraction+=std::clamp(desired-s.torque_fraction,-rate*dt,rate*dt);
     s.intervening=s.torque_fraction<.995;return s.torque_fraction;

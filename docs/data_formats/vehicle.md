@@ -965,6 +965,11 @@ then ignored; `default_enabled` rules). The `controllers` array also accepts ent
 `assist_fitment` part (sets `fitted` to `true` for the assists it lists). At most one `manual_tcu` and one
 `launch_control`; ids are unique across all controllers.
 
+**Assist unit (assists I1).** The `electronics` entry may also be an `assist_unit` part (grade Street / Sport / Racing and a
+traction-control mode table, channel `assist.traction_control` codes 0 Off, 1 On, 2 Relaxed, 3 Sport, 4 Drift). It adds no
+controller: the loader stores it as `VehicleDesc::assist_unit` (at most one per vehicle). The car's own `traction_control`
+block is mode On. Without a unit the channel keeps its pre-unit meaning (`> 0.5` is on). See [electronics.md](electronics.md#assist-unit).
+
 ## Control channels a vehicle reads
 
 Not part of the JSON format, but relevant context for anyone editing a
@@ -1211,4 +1216,4 @@ vehicle file: same descriptor, same `.psmaps`/turbo keys, same state hash.
 **Electronics (engine garage P8).** `VehicleLoadOptions::electronics` (`std::map<std::string, std::string>`) is keyed by
 a `controllers` entry id: a path to a `physics_sim.electronics/1` file replaces that entry's part or adds a new entry
 (grafting launch control onto a car that has none), `"none"` removes the entry. Details and rejections:
-[electronics.md](electronics.md).
+[electronics.md](electronics.md). The same map attaches an `assist_unit` (id of your choice, e.g. `"assist"`).

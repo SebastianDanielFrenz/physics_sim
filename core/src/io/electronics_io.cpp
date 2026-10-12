@@ -36,6 +36,112 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     return v;
 }
 
+[[nodiscard]] int traction_mode_from_name(const std::string& n) {
+    for (int i = 0; i < vehicle::kTractionModeCount; ++i) {
+        if (n == vehicle::kTractionModeNames[i]) return i;
+    }
+    return -1;
+}
+
+[[nodiscard]] real optional_positive(const json& j, const char* key, const std::string& ctx) {
+    if (!j.at(key).is_number()) throw std::runtime_error(ctx + ": '" + key + "' must be a number");
+    const real v = j.at(key).get<real>();
+    if (!std::isfinite(v) || !(v > real(0.0))) throw std::runtime_error(ctx + ": '" + key + "' must be finite and > 0");
+    return v;
+}
+
+void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& part) {
+    reject_unknown(j, {"format", "kind", "name", "source", "extends", "grade", "traction_control", "launch_control", "aero_control"}, path);
+    part.kind = ElectronicsKind::AssistUnit;
+    if (!j.contains("grade") || !j.at("grade").is_string()) {
+        throw std::runtime_error(path + ": 'grade' is required (\"street\", \"sport\" or \"racing\")");
+    }
+    const std::string grade = j.at("grade").get<std::string>();
+    int gi = -1;
+    for (int i = 0; i < 3; ++i) {
+        if (grade == vehicle::kAssistGrades[i].id) gi = i;
+    }
+    if (gi < 0) throw std::runtime_error(path + ": unknown grade \"" + grade + "\" (expected \"street\", \"sport\" or \"racing\")");
+    part.unit.grade = static_cast<vehicle::AssistGrade>(gi);
+    const vehicle::AssistGradeInfo& info = vehicle::assist_grade_info(part.unit.grade);
+    for (const char* blk : {"launch_control", "aero_control"}) {
+        if (!j.contains(blk)) continue;
+        const bool allowed = std::string(blk) == "launch_control" ? info.allows_launch_control : info.allows_aero_control;
+        if (!allowed) throw std::runtime_error(path + ": grade '" + grade + "' does not allow '" + blk + "'");
+        throw std::runtime_error(path + ": '" + blk + "' in an assist_unit is not implemented yet (assists plan I4/I5)");
+    }
+    if (!j.contains("traction_control")) return;
+    const json& tc = j.at("traction_control");
+    const std::string ctx = path + ": traction_control";
+    if (!tc.is_object()) throw std::runtime_error(ctx + " must be an object");
+    for (auto it = tc.begin(); it != tc.end(); ++it) {
+        if (it.key() != "modes" && it.key() != "default_mode" && it.key() != "mode_params") {
+            throw std::runtime_error(ctx + ": unknown field '" + it.key() + "'");
+        }
+    }
+    part.unit.has_traction_control = true;
+    vehicle::AssistTractionDesc& t = part.unit.traction_control;
+    if (!tc.contains("modes") || !tc.at("modes").is_array() || tc.at("modes").empty()) {
+        throw std::runtime_error(ctx + ": 'modes' is required and must be a non-empty array of mode names");
+    }
+    t.modes_bits = 0;
+    for (const json& m : tc.at("modes")) {
+        const int mi = m.is_string() ? traction_mode_from_name(m.get<std::string>()) : -1;
+        if (mi < 0) throw std::runtime_error(ctx + ": 'modes' entries must be one of off, on, relaxed, sport, drift");
+        const std::uint8_t bit = vehicle::traction_mode_bit(static_cast<vehicle::TractionMode>(mi));
+        if (t.modes_bits & bit) throw std::runtime_error(ctx + ": duplicate mode '" + m.get<std::string>() + "' in 'modes'");
+        t.modes_bits = static_cast<std::uint8_t>(t.modes_bits | bit);
+    }
+    if (t.modes_bits == vehicle::traction_mode_bit(vehicle::TractionMode::Off)) {
+        throw std::runtime_error(ctx + ": 'modes' must contain at least one mode other than 'off'");
+    }
+    if (!tc.contains("default_mode") || !tc.at("default_mode").is_string()) {
+        throw std::runtime_error(ctx + ": 'default_mode' is required (a mode name listed in 'modes')");
+    }
+    const int dm = traction_mode_from_name(tc.at("default_mode").get<std::string>());
+    if (dm < 0 || !(t.modes_bits & vehicle::traction_mode_bit(static_cast<vehicle::TractionMode>(dm)))) {
+        throw std::runtime_error(ctx + ": 'default_mode' \"" + tc.at("default_mode").get<std::string>() + "\" is not one of the listed 'modes'");
+    }
+    t.default_mode = static_cast<vehicle::TractionMode>(dm);
+    if (!tc.contains("mode_params")) return;
+    const json& mp = tc.at("mode_params");
+    if (!mp.is_object()) throw std::runtime_error(ctx + ": 'mode_params' must be an object");
+    for (auto it = mp.begin(); it != mp.end(); ++it) {
+        const int mi = traction_mode_from_name(it.key());
+        if (mi < 0) throw std::runtime_error(ctx + ": mode_params: unknown mode '" + it.key() + "'");
+        if (mi == 0 || mi == 1) {
+            throw std::runtime_error(ctx + ": mode_params: '" + it.key() + "' takes no parameters (mode 'on' is the car's own traction_control block)");
+        }
+        if (!(t.modes_bits & vehicle::traction_mode_bit(static_cast<vehicle::TractionMode>(mi)))) {
+            throw std::runtime_error(ctx + ": mode_params for '" + it.key() + "' but '" + it.key() + "' is not in 'modes'");
+        }
+        const std::string mctx = ctx + ".mode_params." + it.key();
+        const json& o = it.value();
+        if (!o.is_object()) throw std::runtime_error(mctx + " must be an object");
+        vehicle::TractionModeParams& p = t.params[static_cast<std::size_t>(mi)];
+        for (auto f = o.begin(); f != o.end(); ++f) {
+            const std::string& k = f.key();
+            if (k == "target_slip") p.target_slip = optional_positive(o, "target_slip", mctx);
+            else if (k == "kp") p.kp = optional_positive(o, "kp", mctx);
+            else if (k == "ki_per_s") p.ki_per_s = optional_positive(o, "ki_per_s", mctx);
+            else if (k == "attack_rate_per_s") p.attack_rate_per_s = optional_positive(o, "attack_rate_per_s", mctx);
+            else if (k == "recovery_rate_per_s") p.recovery_rate_per_s = optional_positive(o, "recovery_rate_per_s", mctx);
+            else if (k == "min_fraction") {
+                if (!f.value().is_number()) throw std::runtime_error(mctx + ": 'min_fraction' must be a number");
+                const real v = f.value().get<real>();
+                if (!std::isfinite(v) || v < real(0.0) || v >= real(1.0)) throw std::runtime_error(mctx + ": 'min_fraction' must be in [0, 1)");
+                p.min_fraction = v;
+            } else if (k == "ignition_cut") {
+                if (!f.value().is_boolean()) throw std::runtime_error(mctx + ": 'ignition_cut' must be a boolean");
+                p.ignition_cut = f.value().get<bool>();
+            } else {
+                throw std::runtime_error(mctx + ": unknown field '" + k + "'");
+            }
+        }
+        if (p.target_slip && *p.target_slip >= real(1.0)) throw std::runtime_error(mctx + ": 'target_slip' must be below 1");
+    }
+}
+
 } // namespace
 
 ElectronicsPart load_electronics_json(const std::string& path) {
@@ -49,7 +155,7 @@ ElectronicsPart load_electronics_json(const std::string& path) {
                                  "\" (expected \"physics_sim.electronics/1\")");
     }
     if (!j.contains("kind") || !j.at("kind").is_string()) {
-        throw std::runtime_error(path + ": 'kind' is required (\"launch_control\" or \"assist_fitment\")");
+        throw std::runtime_error(path + ": 'kind' is required (\"launch_control\", \"assist_fitment\" or \"assist_unit\")");
     }
     const std::string kind = j.at("kind").get<std::string>();
 
@@ -88,8 +194,10 @@ ElectronicsPart load_electronics_json(const std::string& path) {
             }
             part.fits.push_back(n);
         }
+    } else if (kind == "assist_unit") {
+        read_assist_unit(j, path, part);
     } else {
-        throw std::runtime_error(path + ": unknown electronics kind \"" + kind + "\" (expected \"launch_control\" or \"assist_fitment\")");
+        throw std::runtime_error(path + ": unknown electronics kind \"" + kind + "\" (expected \"launch_control\", \"assist_fitment\" or \"assist_unit\")");
     }
     return part;
 }

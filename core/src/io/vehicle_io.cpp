@@ -4393,6 +4393,15 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                                              std::to_string(limiter_rpm));
                 }
                 v.controllers.push_back({e.first, part.launch});
+            } else if (part.kind == ElectronicsKind::AssistUnit) {
+                if (v.assist_unit) throw std::runtime_error(ectx + ": at most one assist_unit per vehicle");
+                // Every offered mode must resolve to a valid controller against the car's own traction_control block.
+                try {
+                    (void)ps::vehicle::resolve_traction_mode_descs(v.traction_control, std::optional<ps::vehicle::AssistUnitDesc>(part.unit));
+                } catch (const std::invalid_argument& ex) {
+                    throw std::runtime_error(ectx + ": " + ex.what());
+                }
+                v.assist_unit = part.unit;
             } else {
                 for (const std::string& f : part.fits) {
                     if (f == "traction_control") { v.traction_control.fitted = true; continue; }

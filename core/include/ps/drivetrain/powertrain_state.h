@@ -143,6 +143,10 @@ struct PowertrainSnapshot {
     // Engine garage P8 (A15): which assists the car HAS (a HUD hides a not-fitted assist; fitted-but-off is a third
     // state). Same bit layout as assist_active_bits plus bit5 = the anti-lag switch. Never hashed.
     std::uint32_t assist_fitted_bits = 0;
+    // Assists I1 (PHYS-074): traction-control mode. requested = the channel value as a mode code (0 Off, 1 On, 2 Relaxed,
+    // 3 Sport, 4 Drift), effective = the mode run after the unavailable-mode fallback, available_bits = one bit per
+    // code the car offers (0 when TC is not fitted). A UI offers exactly the available bits. Never hashed.
+    std::uint8_t traction_mode_requested = 0, traction_mode_effective = 0, traction_modes_available_bits = 0;
     bool launch_control_active = false; // engine garage P8: the second rev limit is armed (latched) - never hashed
     std::vector<EngineSoundState> engines; // 0 or 1 in I3; capacity reused per snapshot slot (D8)
     DrivelineSoundState driveline;
