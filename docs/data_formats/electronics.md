@@ -189,10 +189,12 @@ on). Exactly one launch rpm form is required; every other key is optional (owner
 | `arm_max_speed_mps` | 0.5 | > 0 | speedo speed must be below this to arm and stay armed |
 | `handover_speed_mps` | 6 | > arm_max_speed_mps | hand over to traction control above this speed |
 | `max_launch_s` | 3 | > 0 | ... or after this long |
-| `clutch_ramp_s` | 0.25 | >= 0 | clutch capacity ramp 0 -> 1 after release |
-| `slip_target` | On 0.10, Relaxed 0.12, Sport 0.14, Drift 0.20 | each (0, 1), keys `off`/`on`/`relaxed`/`sport`/`drift` | rear-slip target of the launch PI per effective traction-control mode (Off mirrors On) |
+| `clutch_ramp_s` | 0.25 | >= 0 | fastest rise of the clutch capacity fraction, 1 / `clutch_ramp_s` per s (also the soft hand-over close) |
+| `clutch_up_per_s` | 6 | > 0 | rise rate of the fraction below the slip target, scaled by `1 - slip/target` (capped by the ramp rate) |
+| `clutch_down_per_s` | 12 | > 0 | fall rate of the fraction above the target, scaled by `slip/target - 1` |
+| `slip_target` | On 0.10, Relaxed 0.12, Sport 0.14, Drift 0.20 | each (0, 1), keys `off`/`on`/`relaxed`/`sport`/`drift` | rear-slip target of the launch regulator per effective traction-control mode (Off mirrors On) |
 | `slip_floor_mps` | 1.0 | > 0 | speed floor in the slip denominator (TC's formula with this floor) |
-| `kp`, `ki_per_s`, `attack_rate_per_s`, `recovery_rate_per_s` | 2, 6, 20, 8 | > 0 | the slip PI (TC mode On's values) |
+| `kp`, `ki_per_s`, `attack_rate_per_s`, `recovery_rate_per_s` | 2, 6, 20, 8 | > 0 | the throttle-ceiling slip PI (TC mode On's values) |
 | `min_fraction` | 0.05 | [0, 1) | floor of the PI's throttle fraction |
 
 Rejections (each asserted in `tests/unit/test_assist_launch.cpp` L2): `grade '<g>' does not allow 'launch_control'`,
@@ -223,14 +225,25 @@ ramp, the PI's ceiling and integral, hashed ONLY on a car that carries the block
    the aero hook `set_aero_launch_request(true)` asks for the launch wing offset. Leaves to Idle when the channel,
    auto-clutch or engine stops, throttle < 0.5, speed >= `arm_max_speed_mps`, gear != 1 or a shift starts; to Launch
    when brake < `release_brake`.
-3. *Launch*: the limiter is lifted; the clutch capacity ramps 0 -> 1 over `clutch_ramp_s` on the torque-following law
-   of the auto-clutch (`min(ramp, 1) * max(0, T_demand + T_sync)`, so it never exceeds what the engine and the
-   synchronising torque can carry: no dump at the launch rpm); the engine's throttle ceiling comes from a slip PI on
-   the driven wheels' worst positive slip (TC's formula, `slip_floor_mps`) toward `slip_target[effective mode]`. Leaves
-   to Handover on speed > `handover_speed_mps`, time > `max_launch_s`, throttle < 0.5, a shift, gear != 1, or the
-   channel/auto-clutch/engine stopping.
-4. *Handover*: one tick. Traction control starts from the PI's last ceiling (its fraction and integral are seeded, no
-   torque jump) and runs again; the wing returns to the aero controller; then Idle.
+3. *Launch*: the launch limit **stays** at the launch rpm (the engine is the held source: boost keeps building under
+   load, so the clutch, not the engine, limits the torque). The clutch is the torque limiter: its capacity fraction `c`
+   (0..1) multiplies the torque-following capacity of the auto-clutch (`min(c, 1) * max(0, T_demand + T_sync)`, so it
+   never exceeds what the engine and the synchronising torque can carry) and is regulated on the driven wheels' worst
+   positive slip (TC's formula, `slip_floor_mps`) against `slip_target[effective mode]`: `rel = slip/target - 1`; below
+   the target `c` rises at `min(1/clutch_ramp_s, clutch_up_per_s * min(1, -rel))`, above it falls at
+   `clutch_down_per_s * rel`. The engine's throttle ceiling comes from TC's one-sided slip PI on the same slip as the
+   second, slower line. Leaves to Handover on speed > `handover_speed_mps` or time > `max_launch_s` (*soft*), or on
+   throttle < 0.5, a shift, gear != 1, or the channel/auto-clutch/engine stopping (*hard*).
+4. *Handover*: traction control starts from the PI's last ceiling (its fraction and integral are seeded, no torque
+   jump) and runs again; the wing returns to the aero controller. After a *soft* hand-over whose `c` is still below 1
+   the launch limit and `c` stay in force (`c` climbing at the ramp rate) until `c` reaches 1, so the clutch reaches
+   the plain torque-following close without a step and the engine is not released against a half-open clutch; after
+   a hard one (or `c` already 1) nothing is kept. Then Idle at the next tick's first substep.
+
+**Boost and the launch rpm.** The unloaded engine builds boost against the closed clutch only as fast as the limiter
+cycling allows. Measured on car_hyper (1.5 s armed): 4500 rpm 0.29 bar, 5000 0.57 (steady), 5500 0.97, 6000 1.4. The
+shipped Racing unit uses the owner's 4500 (0.288 bar at release); a car that wants more boost at the line sets a higher
+`launch_rpm` (`test_assist_launch.cpp` V8d: 0.502 bar at 5000).
 
 **Precedence with the low-speed fix (assists I2, D-LS1..3).** While the launch control owns the car (Armed, Launch)
 the powertrain sees traction control neutral (fraction 1, no ceiling, no ignition cut), so TC's crawl-speed clutch cap

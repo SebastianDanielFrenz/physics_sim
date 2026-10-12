@@ -32,7 +32,21 @@
 //        the block's own hashed bytes: the comparison is on the chassis pose/velocity, bit for bit
 //   V11  1 vs 10 workers: equal state hash every tick of a V8 launch; zero own allocation per tick with LC active
 //
-// RECORDED SABOTAGES: see the end of the file (filled after the first measured run).
+// DEVIATION (measured, reported to the owner): the boost band (>= 0.4 bar) is NOT met at the owner's launch_rpm 4500: 0.288 bar
+//   at the last Armed tick. V8a/V8b therefore assert a measured floor (0.25 bar [AS]); V8d keeps the original 0.4 bar band
+//   and shows it is met at launch_rpm 5000 (0.502 bar). Boost vs launch rpm (unloaded, 1.5 s): 4500 0.29 | 5000 0.57
+//   (steady) | 5500 0.97 | 6000 1.4 bar.
+//
+// RECORDED SABOTAGES (temporary env-switched edits in launch_assist.h / vehicle_instance.cpp, reverted; each rebuilt and run
+// on the shown test, Windows release, 2026-10-13):
+//   1  TC not suspended while LC owns the car        -> P1: tc_via_clutch ticks 83 == 0 and the finite-cap check fail
+//   2  aero launch request never set                 -> V8a: wing 0.00 deg, |10 - 0| <= 1 fails
+//   3  no slip regulator (clutch follows the ramp)   -> V8a: kappa 0.4496 vs 0.10, |diff| 0.35 <= 0.05 fails
+//   4  launch limit not applied while Armed          -> V8a: armed rpm dev_max 2298 > 150 (+ wing, stalled-phase checks)
+//   5  launch limit kept after a hard hand-over      -> S3: limiter_rpm 4500 == 0 fails (every hard reason)
+//   6  arming without the brake condition            -> S1/Arm1: Armed seen without brake (1 == 0), limiter 4500 == 0 fail
+//   7  clutch not held open while Armed              -> Arm1 (car creeps, rpm 2221 > 4300 band) and V8a (armed rpm dev_max 2630, boost 0.064)
+//   8  clutch fraction capped at 0.3 in Launch       -> V8c [long]: 0-100 km/h 4.842 s vs baseline 4.733 s, <= fails
 
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/drivetrain/powertrain_desc.h"
@@ -179,6 +193,8 @@ TEST_CASE("L1: the shipped units carry launch control; Street does not", "[assis
     CHECK(r.handover_speed_mps == 6.0);
     CHECK(r.max_launch_s == 3.0);
     CHECK(r.clutch_ramp_s == 0.25);
+    CHECK(r.clutch_up_per_s == 6.0);
+    CHECK(r.clutch_down_per_s == 12.0);
     CHECK(r.slip_target[1] == 0.10); // On
     CHECK(r.slip_target[3] == 0.14); // Sport
     CHECK(r.slip_target[4] == 0.20); // Drift
@@ -227,15 +243,19 @@ TEST_CASE("L2: launch_control rejections", "[assist][io]") {
     CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"handover_speed_mps":0.4})"), ContainsSubstring("handover_speed_mps must exceed arm_max_speed_mps"));
     CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"min_fraction":1})"), ContainsSubstring("min_fraction must be in [0, 1)"));
     CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"kp":0})"), ContainsSubstring("must be finite and > 0"));
+    CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"clutch_up_per_s":0})"), ContainsSubstring("must be finite and > 0"));
+    CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"clutch_down_per_s":-1})"), ContainsSubstring("must be finite and > 0"));
     // slip_target
     CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"slip_target":3})"), ContainsSubstring("'slip_target' must be an object"));
     CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"slip_target":{"turbo":0.1}})"), ContainsSubstring("slip_target: unknown mode 'turbo'"));
     CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"slip_target":{"on":0}})"), ContainsSubstring("slip_target values must be in (0, 1)"));
     CHECK_THROWS_WITH(racing(R"({"launch_rpm":4500,"slip_target":{"sport":1.0}})"), ContainsSubstring("slip_target values must be in (0, 1)"));
     // a valid block parses to what it says
-    const auto ok = racing(R"({"launch_rpm":3000,"default_enabled":true,"slip_target":{"on":0.07,"drift":0.3}})").unit.launch_control;
+    const auto ok = racing(R"({"launch_rpm":3000,"default_enabled":true,"clutch_up_per_s":5,"slip_target":{"on":0.07,"drift":0.3}})").unit.launch_control;
     REQUIRE(ok.has_value());
     CHECK(ok->launch_rpm == 3000.0);
+    CHECK(ok->clutch_up_per_s == 5.0);
+    CHECK(ok->clutch_down_per_s == 12.0);
     CHECK(ok->default_enabled);
     CHECK(ok->slip_target[1] == 0.07);
     CHECK(ok->slip_target[0] == 0.07);
