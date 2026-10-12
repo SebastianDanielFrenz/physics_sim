@@ -1,0 +1,79 @@
+{
+  "extends": "engine.json",
+  "name": "mazda_skyactiv_g20_p7c_pipes",
+  "source": "P7c HELD-OUT EXPERIMENT (NOT a shipped engine, NOT the KV2 fixture): engine.json with the pipe-mode geometry committed in 7b61a6e BEFORE any run of it (rule: out/garage_p7c_progress.md section 4), unchanged. Its first run failed the declared A3 window at every row and could not generate Full maps (1500 rpm / 70 kPa: VE 0.0009 - overlap backflow holds the part-throttle pipe plenum), so it was moved out of engine.json (PROVISIONAL D6) and kept here so the experiment stays reproducible. RFC 7396 patch: null removes the lumped runner keys.",
+  "cycle": {
+    "runner_length_mm": null,
+    "runner_length_mm_source": null,
+    "runner_diameter_mm": null,
+    "runner_diameter_mm_source": null,
+    "intake": {
+      "source": "P7c pipe mode (A5 CycleEngine). Runner pipe = the existing Tier 3 [AS] rule, unchanged: quarter-wave 4L/a = the intake-open time (331.09 deg span) at 4000 rpm (Mazda peak-torque speed [C]), a = 340.29 m/s -> 1173.6092 mm; flow area = the total intake valve head area -> 42.5113 mm, d_in = d_out. Plenum = intake_manifold_volume_l 2.3972 L (1.2 x V_d [AS]); throttle bore = throttle_body.diameter_mm 46.0387 mm [AS] (both existing). Rule declared in out/garage_p7c_progress.md section 4 before any run.",
+      "throttle_bore_m": 0.0460387,
+      "plenum_m3": 0.0023972,
+      "runners": [
+        {
+          "cylinders": "all",
+          "length_m": 1.1736092,
+          "d_in_m": 0.0425113,
+          "d_out_m": 0.0425113
+        }
+      ],
+      "interface": "throttle_inlet"
+    },
+    "exhaust": {
+      "source": "P7c: the cited long 4-2-1 manifold (SAE 2019-01-0249 [C]: the Mazda incorporates a long 4-2-1 exhaust manifold to delay the arrival of the exhaust pressure peak past the overlap period, minimising internal EGR). Pairs (1,4) / (2,3) [D: firing order 1-3-4-2, partners 360 deg apart]. Length rule [D]: the cylinder blowing down during cylinder j's overlap fires 180 deg after j (the other pair), its pulse travels 2 (Lp + Ls) to j's port and must arrive after j's EVC at the cited peak-torque speed 4000 rpm [C]: cam phases of the nearest WOT row (3994.42 rpm, exhaust retard 10.1081 deg [M]) give EVC 24.108 deg after GE-TDC and the other pair's EVO (1 mm, pulse front [AS]) 29.892 deg before it -> 54.0 deg = 2.2532 ms; a = 625.6 m/s (burned gas, gamma 1.298, at the row's measured mean port temperature 1037.14 K [M]) -> Lp + Ls = 0.7048 m, split equally [AS]. Diameters [AS]: primary area = both exhaust valve heads (sqrt(2) x 25.05 mm = 35.43 mm), secondary area = two primaries (50.10 mm), collector to the flange d 50.10 mm x 0.1 m [AS].",
+      "primaries": [
+        {
+          "cylinders": "all",
+          "length_m": 0.3524,
+          "d_m": 0.03543
+        }
+      ],
+      "merges": [
+        {
+          "from": [
+            1,
+            4
+          ],
+          "into": "y14",
+          "length_m": 0.3524,
+          "d_m": 0.0501
+        },
+        {
+          "from": [
+            2,
+            3
+          ],
+          "into": "y23",
+          "length_m": 0.3524,
+          "d_m": 0.0501
+        },
+        {
+          "from": [
+            "y14",
+            "y23"
+          ],
+          "into": "flange",
+          "length_m": 0.1,
+          "d_m": 0.0501
+        }
+      ],
+      "interface": "flange"
+    },
+    "default_installation": "installation.json",
+    "grid_rpm": [
+      1000.0,
+      1250.0,
+      1500.0,
+      1750.0,
+      2000.0,
+      2500.0,
+      3000.0,
+      3500.0,
+      4000.0,
+      4500.0
+    ],
+    "grid_source": "[AS] reduced grid around the KV2 WOT rows (1747-3994 rpm, 97-98 kPa); high loads only - the cam tables hold the WOT phases at every p_im, and at 20-60 kPa their 60-75 deg overlap makes the lumped cycle unstable (no IVC state). P7c: grid_rpm ends at 4500 [AS] (was 6000) - the KV2 rows end at 3994 rpm and, in pipe mode, the [AS] 46 mm throttle cannot hold the 100 kPa node within the 2 % trim tolerance above ~5000 rpm (estimate 1/2 rho (u/Cd)^2 = 2.4 kPa at 5000 and 3.4 kPa at 6000 rpm, VE 1, ISA); an unreachable node throws."
+  }
+}

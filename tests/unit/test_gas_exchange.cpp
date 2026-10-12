@@ -9,6 +9,7 @@
 //   diag "P7c budget"  the per-term gap of the lumped cycle model at every row (generator conventions -> measured
 //                      boundary conditions, one lever at a time), written to out/garage_p7c_progress.md.
 #include "ps/drivetrain/engine_maps.h"
+#include "ps/drivetrain/isa_air.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/engine_cycle/cycle_engine.h"
 #include "ps/engine_cycle/cycle_point.h"
@@ -146,6 +147,13 @@ const Engine& mazda() {
     return e;
 }
 
+// The P7c held-out pipe experiment (geometry committed in 7b61a6e before any run; moved to a variant file after it
+// failed, progress file D6).
+const Engine& mazda_pipes() {
+    static const Engine e(load_sim(json{{"extends", "engine_pipes_p7c.json"}}, kMazdaDir, MapQuality::Sketch, false));
+    return e;
+}
+
 real measured_air_g_s(const Engine& e, const Row& r) {
     return r.air_g_s > 0.0 ? r.air_g_s : r.fuel_g_s * r.lambda * e.f->afr_stoich;
 }
@@ -158,6 +166,8 @@ struct Lever {
     int exhaust = 0;       // exhaust reservoir pressure: 0 ISA 101.325 kPa, 1 cell pressure, 2 catalyst inlet pressure
     bool backflow_t = false; // reservoir backflow gas at the measured exhaust port temperature (else the desc's 800 K)
     real runner_scale = 1.0; // runner length x (sensitivity only)
+    real woschni_gx_scale = 1.0; // gas-exchange Woschni C1 x (0 = no wall heat while a valve is open; sensitivity)
+    real exh_len_scale = 1.0;    // pipe engines: primaries and pair merges x (sensitivity)
     // P7c experiment: pipe mode (A5 CycleEngine) with the runner as a 1D pipe of the same length/diameter.
     bool pipe = false;
     real prim_len = 0.4, prim_d = 0.038, plenum_m3 = 0.004, throttle_bore = 0.074;
@@ -200,6 +210,44 @@ ec::OperatingPoint make_op(const CycleModelDesc& c0, const Row& r, const Lever& 
     return op;
 }
 
+// One CycleEngine (pipe mode) run of a pipe-bearing description at a row.
+GxResult run_pipe_desc(const CycleModelDesc& c, const Engine& e, const Row& r, const Lever& lv) {
+    const ec::OperatingPoint op = make_op(*e.c, r, lv);
+    ec::CycleEngine eng(c, e.f->lhv_j_kg, e.f->afr_stoich, op, ec::CycleEngineSettings{});
+    const ec::CycleEngineResult res = eng.run();
+    const real ncyl = real(c.cylinders);
+    GxResult o;
+    o.air_g_s = res.mean.m_air_j_cyc * ncyl * r.rpm / 120.0 * 1000.0;
+    o.trapped_g_s = o.air_g_s;
+    const ec::CycleModel& m = eng.cylinder(0).model();
+    const real v_ivc = m.geom.eval(res.mean.ivc.crank_deg).v;
+    const ec::CvState iv = ec::cv_state(m.gas, res.mean.ivc.m, res.mean.ivc.u, res.mean.ivc.mb, v_ivc);
+    o.t_ivc = iv.t;
+    o.x_ivc = iv.x;
+    o.p_ivc_kpa = iv.p / 1000.0;
+    o.t_exh = res.mean.t_exh_k;
+    o.imep_gross_kpa = res.mean.w_gross_j / m.geom.v_d / 1000.0;
+    o.pmep_kpa = -res.mean.w_pump_j / m.geom.v_d / 1000.0;
+    o.backflow_ev_frac = res.plenum_error_rel;  // pipe mode: plenum trim error in this slot
+    return o;
+}
+
+// The engine's own pipe description (a pipe-mode engine such as the P7c Mazda fixture). The installation models the
+// exhaust system's loss, so the exhaust lever 2 (catalyst-inlet reservoir) falls back to 1 (cell pressure); the runner
+// scale scales every runner pipe.
+GxResult run_row_own_pipes(const Engine& e, const Row& r, const Lever& lv0) {
+    CycleModelDesc c = *e.c;
+    Lever lv = lv0;
+    if (lv.exhaust == 2) lv.exhaust = 1;
+    for (RunnerPipeDesc& rp : c.intake->runners) rp.length_m *= lv.runner_scale;
+    for (PrimaryPipeDesc& pp : c.exhaust->primaries) pp.length_m *= lv.exh_len_scale;
+    for (MergeCycleDesc& mg : c.exhaust->merges)
+        if (mg.into != c.exhaust->interface) mg.length_m *= lv.exh_len_scale;
+    c.woschni_c1_gx *= lv.woschni_gx_scale;
+    if (lv.backflow_t) c.exhaust_backflow_temperature_k = r.t_exh_port_c + 273.15;
+    return run_pipe_desc(c, e, r, lv);
+}
+
 GxResult run_row_pipe(const Engine& e, const Row& r, const Lever& lv) {
     CycleModelDesc c = *e.c;
     IntakeCycleDesc in;
@@ -226,34 +274,19 @@ GxResult run_row_pipe(const Engine& e, const Row& r, const Lever& lv) {
     c.runner_length_m = 0.0;
     c.runner_diameter_m = 0.0;
     if (lv.backflow_t) c.exhaust_backflow_temperature_k = r.t_exh_port_c + 273.15;
-    const ec::OperatingPoint op = make_op(*e.c, r, lv);
-    ec::CycleEngine eng(c, e.f->lhv_j_kg, e.f->afr_stoich, op, ec::CycleEngineSettings{});
-    const ec::CycleEngineResult res = eng.run();
-    const real ncyl = real(c.cylinders);
-    GxResult o;
-    o.air_g_s = res.mean.m_air_j_cyc * ncyl * r.rpm / 120.0 * 1000.0;
-    o.trapped_g_s = o.air_g_s;
-    const ec::CycleModel& m = eng.cylinder(0).model();
-    const real v_ivc = m.geom.eval(res.mean.ivc.crank_deg).v;
-    const ec::CvState iv = ec::cv_state(m.gas, res.mean.ivc.m, res.mean.ivc.u, res.mean.ivc.mb, v_ivc);
-    o.t_ivc = iv.t;
-    o.x_ivc = iv.x;
-    o.p_ivc_kpa = iv.p / 1000.0;
-    o.t_exh = res.mean.t_exh_k;
-    o.imep_gross_kpa = res.mean.w_gross_j / m.geom.v_d / 1000.0;
-    o.pmep_kpa = -res.mean.w_pump_j / m.geom.v_d / 1000.0;
-    o.backflow_ev_frac = res.plenum_error_rel;  // pipe mode: plenum trim error in this slot
-    return o;
+    return run_pipe_desc(c, e, r, lv);
 }
 
 GxResult run_row(const Engine& e, const Row& r, const Lever& lv) {
+    if (e.c->intake.has_value()) return run_row_own_pipes(e, r, lv);
     if (lv.pipe) return run_row_pipe(e, r, lv);
     const CycleModelDesc& c0 = *e.c;
     const ec::CycleStepper* proto = e.proto.get();
     std::unique_ptr<ec::CycleStepper> own;
-    if (lv.runner_scale != 1.0 || lv.backflow_t) {
+    if (lv.runner_scale != 1.0 || lv.backflow_t || lv.woschni_gx_scale != 1.0) {
         CycleModelDesc c = c0;
         c.runner_length_m *= lv.runner_scale;
+        c.woschni_c1_gx *= lv.woschni_gx_scale;
         if (lv.backflow_t) c.exhaust_backflow_temperature_k = r.t_exh_port_c + 273.15;
         own = std::make_unique<ec::CycleStepper>(c, e.f->lhv_j_kg, e.f->afr_stoich);
         proto = own.get();
@@ -352,6 +385,8 @@ std::vector<Term> lumped_terms() {
     with("BC1 + backflow T measured", [](Lever& l) { l.imt = l.cam = l.fire = l.backflow_t = true; l.exhaust = 2; });
     with("BC1, runner x0.5 (sensitivity)", [](Lever& l) { l.imt = l.cam = l.fire = true; l.exhaust = 2; l.runner_scale = 0.5; });
     with("BC1, runner x0.1 (no ram, sensitivity)", [](Lever& l) { l.imt = l.cam = l.fire = true; l.exhaust = 2; l.runner_scale = 0.1; });
+    with("G0, no gas-exchange wall heat (sensitivity)", [](Lever& l) { l.woschni_gx_scale = 0.0; });
+    with("BC1, no gas-exchange wall heat (sensitivity)", [](Lever& l) { l.imt = l.cam = l.fire = true; l.exhaust = 2; l.woschni_gx_scale = 0.0; });
     return terms;
 }
 
@@ -413,7 +448,14 @@ void budget(const char* name, const Engine& e, const Row* rows, std::size_t n, c
 
 TEST_CASE("P7c diag: gas-exchange budget per term at the A25A and Mazda WOT rows", "[.][diag][gas_exchange][cycle]") {
     budget("A25A", a25a(), kA25a, kNA25a, lumped_terms());
-    budget("Mazda (held out; existing fixture, no geometry change)", mazda(), kMazda, kNMazda, lumped_terms());
+    budget("Mazda (held out; lumped KV2 fixture)", mazda(), kMazda, kNMazda, lumped_terms());
+    std::vector<Term> pt = lumped_terms();
+    Lever l421;
+    l421.exh_len_scale = 1.494 / 0.7048;
+    pt.push_back({"G0, 4-2-1 sized at 1747 rpm (x2.12) - POST-HOC sensitivity, not adopted", l421});
+    l421.exhaust = 1;
+    pt.push_back({"G0 + cell ambient, 4-2-1 x2.12 - POST-HOC sensitivity", l421});
+    budget("Mazda P7c pipe experiment (engine_pipes_p7c.json)", mazda_pipes(), kMazda, kNMazda, pt);
 }
 
 TEST_CASE("P7c diag: candidate runner/exhaust models at the A25A WOT rows", "[.][diag][gas_exchange][cycle]") {
@@ -479,4 +521,140 @@ TEST_CASE("P7c diag: model-only fine runner sweep A25A lumped", "[.][diag][gas_e
     std::vector<real> sc;
     for (real x = 0.30; x <= 1.001; x += 0.05) sc.push_back(x);
     runner_sweep("A25A fine", a25a(), 97.0, sc, false, 1000.0, 6600.0, 50.0, true);
+}
+
+namespace {
+
+// The runtime's own trapped air at a row: VE of the generated Full maps at (rpm, MAP), applied at the cell temperature
+// (SimulatedEngine: m_cyl = ve p / (R T_amb) V_d rpm / 120).
+real runtime_air_g_s(const SimulatedEngineDesc& d, const Engine& e, const Row& r) {
+    const real v_d = e.proto->model().geom.v_d * real(e.c->cylinders);
+    const real ve = d.maps.ve.value(r.rpm, r.map_kpa * 1000.0);
+    return ve * r.map_kpa * 1000.0 / (kIsaAirGasConstantJKgK * (r.t_cell_c + 273.15)) * v_d * r.rpm / 120.0 * 1000.0;
+}
+
+const SimulatedEngineDesc& a25a_full() {
+    static const SimulatedEngineDesc d =
+        load_sim(json{{"extends", "toyota_a25a_fks_gen.json"}}, kSrc / "data" / "engines", MapQuality::Full, true);
+    return d;
+}
+
+const SimulatedEngineDesc& mazda_full() {
+    static const SimulatedEngineDesc d = load_sim(json{{"extends", "engine.json"}}, kMazdaDir, MapQuality::Full, true);
+    return d;
+}
+
+} // namespace
+
+// A1/A2 (declared in commit e6bc6a5 before the fixed model ran). [!mayfail]: the A25A is unchanged (progress file D1)
+// and its runtime air is 14-19 % too high at H29..H37 (R_air 0.834-0.864) - the discriminating measurement is
+// "P7c: the A25A's air excess is the runner's ram" below plus the runner sweep ("P7c diag: model-only fine runner sweep
+// A25A lumped"): the [AS] 709 mm quarter-wave runner puts a VE 1.12 ram peak at 3500-4000 rpm that the measured VE
+// (0.88-0.95 there) does not have; no cited A25A runner length exists (PHYS-055 rejected the 0.25 L runner as a fit).
+TEST_CASE("P7c A1/A2: generated trapped air at the WOT rows within +-6 %", "[gas_exchange][cycle][drivetrain][!mayfail]") {
+    const SimulatedEngineDesc& da = a25a_full();
+    const SimulatedEngineDesc& dm = mazda_full();
+    std::printf("A1 A25A   row    rpm    MAP  meas_g_s  model_g_s  R_air\n");
+    for (std::size_t i = 0; i < kNA25a; ++i) {
+        const Row& r = kA25a[i];
+        const real meas = measured_air_g_s(a25a(), r);
+        const real model = runtime_air_g_s(da, a25a(), r);
+        const bool h_row = r.tag[0] == 'H';
+        std::printf("A1 A25A %5s %6.0f %6.2f %8.3f %9.3f %7.3f%s\n", r.tag, r.rpm, r.map_kpa, meas, model, meas / model,
+                    h_row ? "" : "  (reported)");
+        if (h_row) {
+            INFO("A25A " << r.tag << " R_air " << meas / model);
+            CHECK(meas / model >= kAirBandLow);
+            CHECK(meas / model <= kAirBandHigh);
+        }
+    }
+    for (std::size_t i = 0; i < kNMazda; ++i) {
+        const Row& r = kMazda[i];
+        const real meas = measured_air_g_s(mazda(), r);
+        const real model = runtime_air_g_s(dm, mazda(), r);
+        std::printf("A2 Mazda %5s %6.0f %6.2f %8.3f %9.3f %7.3f (reported, band %.2f..%.2f)\n", r.tag, r.rpm, r.map_kpa, meas,
+                    model, meas / model, kAirBandLow, kAirBandHigh);
+    }
+}
+
+// A3 (declared in commit e6bc6a5 before the fixed model ran): the held-out Mazda's generated IVC temperature at
+// generator conventions inside the A25A rows' spark-consistent range. Checked for the pipe experiment (the declared
+// fixed model) and the lumped KV2 fixture. [!mayfail]: both fail - the discriminating measurement is the per-term
+// budget ("P7c diag: gas-exchange budget ..."): the Mazda's model charge is 40-240 K hotter than spark-consistent from
+// the residual of its 60-75 deg overlap (pipe experiment x_ivc up to 0.50 at a part-throttle node), the [AS] runner's
+// ram and the late IVC's compression before IVC (p_ivc 150-260 kPa at MAP 97-98), and gas-exchange wall heat.
+TEST_CASE("P7c A3: the Mazda's generated IVC temperature lies in the KV2-T range", "[gas_exchange][cycle][knock][!mayfail]") {
+    constexpr real kSparkConsistentP7b[] = {372.2, 376.8, 394.5, 366.5, 391.9, 387.6};
+    const Engine* engines[] = {&mazda_pipes(), &mazda()};
+    const char* names[] = {"pipe experiment", "lumped fixture"};
+    for (int k = 0; k < 2; ++k) {
+        const std::vector<GxResult> g = run_all(*engines[k], kMazda, kNMazda, Lever{});
+        for (std::size_t i = 0; i < kNMazda; ++i) {
+            std::printf("A3 %-15s %5s %6.0f rpm: T_ivc %6.1f K (band %.1f..%.1f), spark-consistent (P7b) %6.1f K, diff %+6.1f K, "
+                        "x_ivc %.3f, p_ivc %.1f kPa\n",
+                        names[k], kMazda[i].tag, kMazda[i].rpm, g[i].t_ivc, kTivcLow, kTivcHigh, kSparkConsistentP7b[i],
+                        g[i].t_ivc - kSparkConsistentP7b[i], g[i].x_ivc, g[i].p_ivc_kpa);
+            INFO(names[k] << " " << kMazda[i].tag << " T_ivc " << g[i].t_ivc);
+            CHECK(g[i].t_ivc >= kTivcLow);
+            CHECK(g[i].t_ivc <= kTivcHigh);
+        }
+    }
+}
+
+// The discriminating measurement behind A1's [!mayfail]: at H32 (3571 rpm) the A25A's lumped cycle at generator
+// conventions inducts 20 % more than measured with the shipped [AS] runner, while the same cycle at the row's measured
+// boundary conditions with the runner halved lands inside the A1 band - the excess is the runner's ram, not the
+// boundary conditions (BC1 at full length stays at 0.842).
+TEST_CASE("P7c: the A25A's air excess is the runner's ram", "[gas_exchange][cycle]") {
+    const Engine& e = a25a();
+    const Row& r = kA25a[3];
+    REQUIRE(std::string(r.tag) == "H32");
+    const real meas = measured_air_g_s(e, r);
+    Lever bc1;
+    bc1.imt = bc1.cam = bc1.fire = true;
+    bc1.exhaust = 2;
+    Lever half = bc1;
+    half.runner_scale = 0.5;
+    const real g0 = meas / run_row(e, r, Lever{}).air_g_s;
+    const real b1 = meas / run_row(e, r, bc1).air_g_s;
+    const real bh = meas / run_row(e, r, half).air_g_s;
+    std::printf("P7c ram H32: R_air G0 %.3f, BC1 %.3f, BC1 runner x0.5 %.3f\n", g0, b1, bh);
+    CHECK(g0 < 0.82);
+    CHECK(b1 < kAirBandLow - 0.05);
+    CHECK(bh >= kAirBandLow);
+    CHECK(bh <= kAirBandHigh);
+}
+
+// Provenance pin of the held-out pipe experiment: the variant keeps exactly the geometry committed in 7b61a6e before
+// its first run (out/garage_p7c_progress.md section 4), so the recorded A3 failure stays reproducible.
+TEST_CASE("P7c: the Mazda pipe experiment keeps its pre-run geometry", "[gas_exchange][cycle][io]") {
+    const CycleModelDesc& c = *mazda_pipes().c;
+    REQUIRE(c.intake.has_value());
+    REQUIRE(c.exhaust.has_value());
+    REQUIRE(c.installation.has_value());
+    CHECK(c.runner_length_m == 0.0);
+    REQUIRE(c.intake->runners.size() == 1);
+    CHECK(c.intake->runners[0].length_m == 1.1736092);
+    CHECK(c.intake->runners[0].d_in_m == 0.0425113);
+    CHECK(c.intake->throttle_bore_m == 0.0460387);
+    CHECK(c.intake->plenum_m3 == 0.0023972);
+    REQUIRE(c.exhaust->primaries.size() == 1);
+    CHECK(c.exhaust->primaries[0].length_m == 0.3524);
+    CHECK(c.exhaust->primaries[0].d_m == 0.03543);
+    REQUIRE(c.exhaust->merges.size() == 3);
+    CHECK(c.exhaust->merges[0].length_m == 0.3524);
+    CHECK(c.exhaust->merges[2].length_m == 0.1);
+    CHECK(c.exhaust->merges[2].d_m == 0.0501);
+    bool cat = false;
+    for (const ExhaustElementDesc& el : c.installation->exhaust.elements) {
+        if (el.type == ExhaustElementType::Catalyst) {
+            cat = true;
+            CHECK(el.k_loss == 94.49);
+        }
+    }
+    CHECK(cat);
+    CHECK(c.grid_rpm.back() == 4500.0);
+    // The KV2 fixture itself stays lumped (the experiment is not adopted, D6).
+    CHECK_FALSE(mazda().c->intake.has_value());
+    CHECK(mazda().c->runner_length_m == 1.1736092);
 }

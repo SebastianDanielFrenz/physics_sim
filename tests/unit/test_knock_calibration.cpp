@@ -17,6 +17,7 @@
 //     MAP is the ECU's knock retard, not MBT behaviour.
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/engine_cycle/cycle_engine.h"
 #include "ps/engine_cycle/cycle_point.h"
 #include "ps/engine_cycle/cycle_stepper.h"
 #include "ps/engine_cycle/gas.h"
@@ -170,7 +171,11 @@ BcResult bc_replay(const Engine& e, const TrainRow& r, const Bc& o) {
         op.intake_advance_deg = c.cam.intake_advance_deg.x.empty() ? 0.0 : c.cam.intake_advance_deg.value(op.rpm, op.p_im_pa);
         op.exhaust_retard_deg = c.cam.exhaust_retard_deg.x.empty() ? 0.0 : c.cam.exhaust_retard_deg.value(op.rpm, op.p_im_pa);
     }
-    const ec::PointResult pr = ec::run_operating_point(*e.proto, op, ec::StepperSettings{ec::kStepFull, ec::kCyclesFull});
+    // A pipe-mode engine (the P7c Mazda fixture) runs its own pipes and installation (A5 CycleEngine, the generator's
+    // pipe path) with the throttle trimmed to the row's MAP; a lumped one the single-cylinder cycle point.
+    const ec::PointResult pr =
+        c.intake.has_value() ? ec::CycleEngine(c, f.lhv_j_kg, f.afr_stoich, op, ec::CycleEngineSettings{}).run().mean
+                             : ec::run_operating_point(*e.proto, op, ec::StepperSettings{ec::kStepFull, ec::kCyclesFull});
     ec::KnockReplayInput kin;
     kin.proto = e.proto.get();
     kin.op = op;
