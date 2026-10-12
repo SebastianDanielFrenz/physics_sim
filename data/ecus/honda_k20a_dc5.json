@@ -1,0 +1,46 @@
+{
+  "format": "physics_sim.ecu/1",
+  "name": "honda_k20a_dc5",
+  "source": "Engine garage P9: the ECU of engines/honda_k20a_dc5.json - idle control, lambda and spark tables, limiter and the VTEC switching rule. Sources per key below.",
+  "throttle_actuator_tau_s": 0.05,
+  "idle_control": {
+    "kp_per_rpm": 3e-05,
+    "ki_per_rpm_s": 6e-05,
+    "max_throttle": 0.1
+  },
+  "ecu": {
+    "lambda_target": {
+      "rpm": [0, 8400],
+      "p_im_kpa": [20, 80, 100],
+      "values": [
+        [1.0, 1.0, 0.88],
+        [1.0, 1.0, 0.88]
+      ],
+      "source": "[AS] stoichiometric to 80 kPa, power enrichment to lambda 0.88 at wide open throttle (no Honda calibration available)."
+    },
+    "spark_advance_deg": {
+      "rpm": [0, 8400],
+      "p_im_kpa": [20, 100],
+      "values": [
+        [25, 25],
+        [25, 25]
+      ],
+      "source": "placeholder"
+    }
+  },
+  "idle_rpm": 800.0,
+  "limiter": {
+    "type": "fuel_cut",
+    "rpm": 8400,
+    "hysteresis_rpm": 150
+  },
+  "switching": {
+    "type": "discrete",
+    "rpm_on": 6000,
+    "rpm_off": 5800,
+    "min_p_im_kpa": 40,
+    "min_oil_c": 60,
+    "transition_s": 0.05,
+    "source": "rpm_on 6000 [C] Honda Integra Type R (DC5) fact book 2001.07 p.07, 'VTEC switching 6000 rpm' (https://www.honda.co.jp/factbook/auto/INTEGRA/200107/07.html); rpm_off 5800 [AS] (a 200 rpm hysteresis; Honda publishes none - Hondata FlashPro exposes separate engage/disengage speeds without stock values, https://www.hondata.com/help/flashpro/vtec_parameters.htm); min_p_im_kpa 40 [AS] from Hondata's tuning guidance (NA minimum-MAP window ~40 kPa at 6000-6500 rpm, https://hondata.com/help/flashpro/tuning_vtec_point.htm - tuner guidance, not a stock value); min_oil_c 60 [AS] (no OEM figure; forum figures 60-65 C are anecdotal); transition_s 0.05 [AS] (oil-pressure-driven lock pins; no measured engagement time found)."
+  }
+}
