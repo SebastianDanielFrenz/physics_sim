@@ -31,6 +31,7 @@ A cam needs an engine with a `cycle` block.
 | `name`, `source` | no | the part's own metadata (not merged) |
 | `intake_lift`, `exhaust_lift` | no | merged into `cycle` as given (a cam may carry one of them) |
 | `profiles` | no | engine garage P9: discrete cam profiles (VTEC-style), see below; excludes the two keys above |
+| `intake_lift_family` | no | engine garage P10: a continuous intake lift family (Valvetronic-style), see below; excludes `intake_lift` and `profiles` |
 | `*_source` | no | source notes, merged into `cycle` |
 | `fits` | no | compatibility metadata, checked, not merged |
 
@@ -83,6 +84,48 @@ Shipped: `data/cams/honda_k20a_dc5_vtec.json` (written by
 `tools/enginedata/k20a_vtec_cam.py`; every lift number [AS], no OEM K20A lift
 data exists).
 
+## `intake_lift_family` — continuous intake lift (engine garage P10)
+
+A cam whose intake lift the ECU varies continuously (BMW Valvetronic and
+similar: an eccentric shaft sets the intake lift and duration; the exhaust
+lift is fixed). The family is a set of nodes over the normalised shaft
+position `u` (0 = minimum lift, 1 = full lift):
+
+```json
+"intake_lift_family": [
+  { "u": 0.0, "intake_lift": { ... } },
+  { "u": 0.15, "intake_lift": { ... } },
+  ...
+  { "u": 1.0, "intake_lift": { ... } }
+],
+"exhaust_lift": { ... }
+```
+
+- **2 to 8** nodes (`CycleModelDesc::kMinLiftNodes` / `kMaxLiftNodes`), `u` in
+  `[0, 1]`, strictly ascending, the last exactly `u = 1`;
+- each node carries `u` and an `intake_lift` in the engine's lift format
+  ([engine.md](engine.md), `cycle` block); `source` / `*_source` notes are
+  allowed inside a node, any other key is rejected;
+- the exhaust lift stays a single top-level `exhaust_lift`;
+- the u = 1 node's lift is also the engine's `intake_lift` (every
+  single-lift reader sees full lift);
+- the engine then generates **one complete map set per node** (each with its
+  own `.psmaps` file, keyed exactly like the single-lift engine written with
+  that node's intake lift - `cycle_desc_for_lift_node`), and needs an ECU with
+  a `"lift_control"` block ([ecu.md](ecu.md#lift_control--continuous-intake-lift-engine-garage-p10));
+  a family without lift_control (or the reverse) is rejected;
+- with a family the engine needs `throttle_input` `"electronic"`, no forced
+  induction, no `maps` block, and (with a knock-limited ECU) a spark table;
+- a part file is the WHOLE cam, as for profiles.
+
+`check_buildable` checks the family (rules `LiftFamilyOrder`, `LiftMinimumBand`
+and `CamLiftOverValve` per node, [engine.md](engine.md#intake-lift-family-continuous-lift-engine-garage-p10)).
+
+Shipped: `data/cams/bmw_n52b30_valvetronic.json` (written by
+`tools/enginedata/n52_valvetronic_cam.py`; the 0.18-9.9 mm lift range and the
+full-lift durations are cited, the node shapes, the node `u` values and the
+fixed centre lines are [AS] - no OEM lift-curve set was available).
+
 ## Rejections
 
 - format other than `physics_sim.cam/1`
@@ -92,6 +135,16 @@ data exists).
   (an engine `cycle` block writing both: `"'profiles' and 'intake_lift'/'exhaust_lift' together ..."`)
 - `"'profiles' must hold exactly 2 profiles ..."`, `"duplicate profile id '<id>'"`,
   `"'id' must be a non-empty string"`, `"unknown key '<key>' (a profile has id, intake_lift, exhaust_lift)"`
+- `profiles` and `intake_lift_family` together:
+  `"a cam has either 'profiles' (P9) or 'intake_lift_family' (P10), not both"`
+- `intake_lift_family` next to a top-level `intake_lift`:
+  `"a cam with 'intake_lift_family' carries the intake lift inside each node, not at the top level ..."`
+  (an engine `cycle` block: `"'intake_lift_family' and 'intake_lift' together ..."`)
+- `"'intake_lift_family' must be an array of {u, intake_lift}"`, `"... must hold 2 to 8 nodes, got <n>"`,
+  `"unknown key '<key>' (a lift node has u, intake_lift)"`, `"'u' must lie in [0, 1], got <u>"`,
+  `"the nodes' 'u' must be strictly ascending (...)"`, `"the last 'intake_lift_family' node must be u = 1 (full lift), got u = <u>"`
+- a family without an ECU `lift_control` block: `"the cam has an intake lift family (cycle.intake_lift_family) but the ECU has no 'lift_control' block ..."`
+- a family with a `maps` block, forced induction, a non-electronic throttle, or a knock-limited ECU without a spark table
 - profiles without an ECU `switching` block: `"the cam has profiles (cycle.profiles) but the ECU has no 'switching' block ..."`
 - an engine with `default_cam` **and** inline `cycle.intake_lift`/`exhaust_lift`:
   `"'default_cam' and the inline cam field 'cycle.<key>' - give the cam either inline or as a part file, not both ..."`
