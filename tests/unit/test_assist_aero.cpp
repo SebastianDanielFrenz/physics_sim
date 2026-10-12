@@ -653,7 +653,7 @@ const VehicleDesc& hyper_racing() {
         o.maps.pool = &pool;
         o.maps.cache_dir = std::string(PS_SOURCE_DIR) + "/out/assists_i5_cache";
         fs::create_directories(o.maps.cache_dir);
-        o.electronics["assist"] = kRacing;
+        o.electronics["assists"] = kRacing; // Assists I2: car_hyper ships this unit under id "assists"; same id = replace
         return io::load_vehicle_json(kData + "/vehicles/car_hyper.json", o);
     }();
     return desc;

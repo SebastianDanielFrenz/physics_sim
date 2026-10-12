@@ -17,6 +17,9 @@ struct WheelTelemetry {
     real fz = 0.0;
     real omega = 0.0;
     real compression = 0.0;
+    // Assists I2a (diag): the contact patch's longitudinal velocity along the ground-plane rolling direction this
+    // substep (m/s) - the Vx of the slip relaxation ODE. Never hashed, no telemetry channel.
+    real vx_contact = 0.0;
     SurfaceId surface = kInvalidSurfaceId;
 };
 

@@ -70,7 +70,7 @@ Box/Sphere shape with no per-triangle material).
   "format": "physics_sim.surfaces/1",
   "surfaces": {
     "asphalt": { "lambda_mu": 1.0, "crr": 0.013 },
-    "grass":   { "lambda_mu": 0.42, "crr": 0.08 }
+    "grass":   { "lambda_mu": 0.6,  "crr": 0.08 }
   }
 }
 ```

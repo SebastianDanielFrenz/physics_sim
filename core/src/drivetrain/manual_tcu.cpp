@@ -256,7 +256,15 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
             rate = std::max(rate, desc_.auto_clutch.anti_stall_release_rate_per_s);
         }
         const real slip_rpm = std::abs(s.engine_omega - s.gearbox_in_omega) * kRadPerSecToRpm;
-        if (slip_rpm < desc_.auto_clutch.lock_slip_rpm && rpm > desc_.auto_clutch.bite_rpm && s.gearbox_current != 0) {
+        // Assists I2 (PHYS-074 D-LS2): no Locked transition while the input rpm the ground speed implies is below
+        // anti_stall_rpm - the clutch would lock onto spinning wheels, and the Locked anti-stall then dumps it as
+        // soon as traction control pulls the wheels (and the locked engine) down. Unlocked, the friction row still
+        // sticks physically whenever capacity exceeds the torque; only the Locked-mode bookkeeping waits. NaN (no
+        // reference: TC Off) compares false - the pre-I2 behaviour.
+        const bool lock_onto_spin =
+            s.ground_speed_mps * s.ground_speed_to_input_omega * kRadPerSecToRpm < desc_.auto_clutch.anti_stall_rpm;
+        if (slip_rpm < desc_.auto_clutch.lock_slip_rpm && rpm > desc_.auto_clutch.bite_rpm && s.gearbox_current != 0 &&
+            !lock_onto_spin) {
             mode_ = ClutchMode::Locked;
             e_tgt = real(1.0);
             rate = desc_.auto_clutch.engage_rate_per_s;
@@ -385,6 +393,10 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     ManualTcu::Outputs out;
     out.gearbox_target = desired_target;
     out.e_auto = s.assist_auto_clutch ? e_auto_ : real(1.0);
+    // Assists I2 (PHYS-074 D-LS1): traction control's crawl-speed clutch-capacity cap, on the output only (the e_auto
+    // state keeps following its own law, so the clutch is back where the law has it once TC recovers).
+    if (s.assist_auto_clutch && s.clutch_capacity_cap_nm < std::numeric_limits<real>::infinity() && desc_.clutch_capacity_nm > real(0.0))
+        out.e_auto = std::min(out.e_auto, std::max(real(0.0), s.clutch_capacity_cap_nm) / desc_.clutch_capacity_nm);
     out.throttle_floor = s.assist_auto_blip ? throttle_floor : real(0.0);
     out.ignition_cut = s.assist_auto_blip && ignition_cut;
     out.throttle_ceiling = s.assist_auto_blip ? throttle_ceiling_ : real(1.0);

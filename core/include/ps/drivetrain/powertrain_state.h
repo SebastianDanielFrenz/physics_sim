@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace ps::drivetrain {
@@ -219,6 +220,10 @@ struct PowertrainDebug {
     real engine_torque_demand = 0.0;
     bool ignition_cut = false;
     real throttle_ceiling = 1.0;
+    // Assists I2 (PHYS-074 D-LS1): the last substep's traction-control clutch-capacity cap (N*m; +inf = TC acts through
+    // the engine, or not at all) and whether the TCU inhibited a Locked transition onto spinning wheels (D-LS2).
+    real clutch_capacity_cap_tc = std::numeric_limits<real>::infinity();
+    bool tc_via_clutch = false;
     // PHYS-033 P4 I4 C8 (plan section 3.1): each differential's lock/LSD/
     // viscous transfer torque (Differential::transfer_torque, component-
     // array order) - see Powertrain::fill_diff_transfer_torque_debug and

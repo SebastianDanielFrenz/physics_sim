@@ -94,7 +94,7 @@
         "deep": "[AS] as asphalt.deep",
         "soil": "[M] Rawls et al. 1982 sandy loam as dirt [C, not re-checked]",
         "canopy.capacity_mm": "[AS] 0.5 mm canopy interception storage, inside the grass/crop 0.2-1 mm range (interception literature)",
-        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry ratio (vault RACE-002), mean 0.67, applied to the class dry lambda (grass 0.42 in surfaces.json)"
+        "friction.wet_grass": "[D] Cenek/Jamieson/McLarin wet/dry ratio (vault RACE-002), mean 0.67, applied to the class dry lambda (grass 0.6 in surfaces.json since assists I2; was 0.42)"
       }
     },
     "concrete": {

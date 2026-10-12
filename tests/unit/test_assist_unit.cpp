@@ -657,7 +657,7 @@ const VehicleDesc& hyper_racing() {
         o.maps.pool = &pool;
         o.maps.cache_dir = (fs::temp_directory_path() / "ps_assists_diag_cache").string();
         fs::create_directories(o.maps.cache_dir);
-        o.electronics["assist"] = kRacing;
+        o.electronics["assists"] = kRacing; // Assists I2: car_hyper ships this unit under id "assists"; same id = replace, not a second unit
         return io::load_vehicle_json(kData + "/vehicles/car_hyper.json", o);
     }();
     return desc;

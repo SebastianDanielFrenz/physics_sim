@@ -72,6 +72,10 @@ TEST_CASE("Full hypercar TC reduces low-grip wheelspin with sensor-only feedback
     const auto run=[&](bool enabled,int workers=1) {
         auto desc=base;desc.traction_control.enabled=enabled;
         auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.5,0,workers);
+        // Assists I2 (owner Q2): car_hyper carries the Racing assist unit, whose channel default (On) wins over
+        // traction_control.enabled - the channel is set explicitly so 'off' is really off.
+        rig.world->set_control("assist.traction_control",enabled?1.0:0.0);
+        rig.world->set_control("assist.aero_control",0.0); // the same unit's wing automation (assists I5) stays out of the TC comparison
         ps_test::settle(*rig.world,.5);rig.world->set_control("gear_request",1);rig.world->set_control("throttle",1);
         Result out;
         for(int tick=0;tick<1920;++tick) {

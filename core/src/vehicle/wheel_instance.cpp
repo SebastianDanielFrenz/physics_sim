@@ -379,6 +379,7 @@ WheelSubstepOutput WheelInstance::post_solve(real omega_new) {
     last_telemetry_.fz = pre_fz_;
     last_telemetry_.omega = omega_new;
     last_telemetry_.compression = x_;
+    last_telemetry_.vx_contact = pre_vx_contact_; // assists I2a diag, unhashed
     last_telemetry_.surface = contact_surface_;
 
     x_prev_ = x_;

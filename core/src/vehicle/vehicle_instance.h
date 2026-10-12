@@ -111,6 +111,12 @@ public:
 
     [[nodiscard]] std::size_t wheel_count() const { return wheels_.size(); }
     [[nodiscard]] const WheelTelemetry& wheel_telemetry(std::size_t i) const { return wheels_[i]->telemetry(); }
+    // Assists I2a (diag only): wheel i's telemetry after substep s of the last tick (s < substep_telemetry_count()).
+    static constexpr std::size_t kMaxSubstepTelemetry = 16;
+    [[nodiscard]] std::size_t substep_telemetry_count() const { return substep_telemetry_count_; }
+    [[nodiscard]] const WheelTelemetry& substep_wheel_telemetry(std::size_t s, std::size_t i) const {
+        return substep_telemetry_[s * wheels_.size() + i];
+    }
     [[nodiscard]] const std::string& wheel_name(std::size_t i) const { return wheels_[i]->desc().name; }
     // PLAN.md M1, task 2 of the P3 fix-up phase: see wheel_state.h.
     [[nodiscard]] WheelState wheel_state(std::size_t i) const { return wheels_[i]->wheel_state(); }
@@ -190,6 +196,8 @@ public:
         dbg.engine_torque_demand = powertrain_.engine_torque_demand();
         dbg.ignition_cut = powertrain_.tcu_request_debug().ignition_cut;
         dbg.throttle_ceiling = powertrain_.tcu_request_debug().throttle_ceiling;
+        dbg.clutch_capacity_cap_tc = powertrain_.clutch_capacity_cap_tc(); // assists I2
+        dbg.tc_via_clutch = powertrain_.tc_via_clutch();
         dbg.awd_clutch_torque = powertrain_.awd_clutch_torque(); // PHYS-033 P4 I4 C9
         dbg.awd_clutch_slip = powertrain_.awd_clutch_slip();
         dbg.park_lock_torque = powertrain_.park_lock_torque(); // PHYS-033 P4 I4 C10
@@ -300,6 +308,8 @@ private:
     bool aero_launch_request_ = false;
     TractionControlState traction_state_{};
     std::vector<TractionWheelSensor> traction_sensors_;
+    std::vector<WheelTelemetry> substep_telemetry_; // assists I2a diag: kMaxSubstepTelemetry x wheels, sized at construction
+    std::size_t substep_telemetry_count_ = 0;
     Vec3 imu_previous_velocity_world_{}; // virtual accelerometer plumbing only; never supplied as TC speed
     bool imu_have_previous_=false;
     aero::State aero_state_{};

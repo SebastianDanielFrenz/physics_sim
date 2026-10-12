@@ -27,6 +27,7 @@
 #include "ps/world/ambient.h"
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace ps::drivetrain {
@@ -70,6 +71,14 @@ struct ComponentSubstepCtx {
     bool traction_ignition_cut = false; // fast TC combustion cut while throttle/boost catches up
     real traction_throttle_ceiling = 1.0; // current sensor-only TC ECU request, not a pedal rewrite
     real tcu_throttle_ceiling = 1.0; // LAGGED one substep
+    // Assists I2 (PHYS-074 D-LS1/D-LS2): set by VehicleInstance ONLY while traction control's effective mode is not
+    // Off - this substep's TC torque fraction (1 = not intervening), the running mode's min_fraction (T_floor), and
+    // the TC ground-speed estimate (m/s along the chassis forward axis). With TC Off they keep these defaults and the
+    // crawl-speed clutch path and the lock-onto-spin inhibit are inactive (bit-identical to before). Read only by
+    // Powertrain's controller phase; never hashed.
+    real traction_torque_fraction = 1.0;
+    real traction_floor_fraction = 0.0;
+    real ground_speed_mps = std::numeric_limits<real>::quiet_NaN();
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
     // control channel's current value, in Powertrain::declare_control_

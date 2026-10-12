@@ -1,0 +1,15 @@
+{
+  "extends": "../../../../../data/engines/hyper_v8_one1_audio.json",
+  "cycle": {
+    "pressure_sampling": {
+      "enabled": true,
+      "min_kpa": 25,
+      "max_kpa": 1649.3400875633492,
+      "relative_error": 0.05,
+      "max_points": 24,
+      "max_passes": 8,
+      "allow_budget_limit": true
+    }
+  },
+  "source": "TEST FIXTURE (assists I2 V12): hyper_v8_one1_audio.json plus the pressure_sampling block racing_game's garage adds to an engine whose turbo/engine options are edited (vehicle_setup.cpp: min = grid front, max = max(grid back, 101.325 + 100 * target_boost_bar), relative_error 0.05, 24 points, 8 passes, allow_budget_limit)."
+}
