@@ -1,0 +1,52 @@
+{
+  "format": "physics_sim.ecu/1",
+  "name": "bmw_n52b30",
+  "source": "Engine garage P10: the ECU of engines/bmw_n52b30.json - idle control, lambda and spark tables, limiter and the Valvetronic lift strategy. Sources per key below; idle_rpm 700, stall/start_complete 400/550 rpm, DFCO 1300/1000 rpm, the idle-control gains and throttle_actuator_tau_s are [AS] copies of engines/toyota_a25a_fks_gen.json's values (idle 700 instead of 800 [AS]); fire_rpm 100 [C] the SI minimum starting speed (40-100 rpm) cited in engines/i4_2l_na.json; limiter 7000 rpm [C] the maximum engine speed (https://en.wikipedia.org/wiki/BMW_N52), fuel cut with a 150 rpm hysteresis [AS].",
+  "throttle_actuator_tau_s": 0.05,
+  "idle_control": {
+    "kp_per_rpm": 3e-05,
+    "ki_per_rpm_s": 6e-05,
+    "max_throttle": 0.1
+  },
+  "ecu": {
+    "lambda_target": {
+      "rpm": [0, 7000],
+      "p_im_kpa": [20, 100],
+      "values": [
+        [1.0, 1.0],
+        [1.0, 1.0]
+      ],
+      "source": "[AS] stoichiometric everywhere. A Valvetronic engine runs its manifold a few kPa below ambient at every part load, so a power enrichment keyed to manifold pressure (the A25A/K20A tables) would enrich the whole part-load range; the N52's own full-load enrichment is keyed to load, which the table cannot express. No BMW calibration available."
+    },
+    "spark_advance_deg": {
+      "rpm": [0, 7000],
+      "p_im_kpa": [20, 100],
+      "values": [
+        [16.73105104, 16.73105104],
+        [16.73105104, 16.73105104]
+      ],
+      "source": "[D] the generator's MBT spark at every lift node (theta_mbt_deg of each node's generated maps, printed by the hidden case 'P10 diag: ECU spark table = min over the lift nodes' generated MBT spark' in tests/unit/test_lift_family.cpp): with the engine's fixed Wiebe (CA50 8 deg ATDC, burn 40.3205 deg, delay 3.8632 deg) the MBT spark is the same constant at every node, so the engine runs at MBT at every lift. No BMW spark calibration was available; knock is not modelled for this engine."
+    }
+  },
+  "idle_rpm": 700.0,
+  "stall_rpm": 400,
+  "fire_rpm": 100,
+  "start_complete_rpm": 550,
+  "dfco_enable_rpm": 1300,
+  "dfco_reenable_rpm": 1000,
+  "limiter": {
+    "type": "fuel_cut",
+    "rpm": 7000,
+    "hysteresis_rpm": 150
+  },
+  "lift_control": {
+    "type": "continuous",
+    "actuator_tau_s": 0.05,
+    "max_rate_per_s": 3.3333333333,
+    "min_u": 0.0,
+    "idle_u": 0.0,
+    "plate_open_above_u": 0.5,
+    "vacuum_target_kpa": 5.0,
+    "source": "max_rate_per_s 1/0.3 s [C] the eccentric shaft runs from minimum to maximum lift in 300 ms; vacuum_target_kpa 5 [C] the ECU holds about 50 mbar of manifold vacuum (for the brake booster and the purge valve); idle_u = min_u = 0 [C] idle runs at minimum lift with the throttle 3.5-4 % open - all three from https://www.fenderbender.com/running-a-shop/operations/article/33028956/how-to-repair-bmw-valvetronic-systems (Scot Manna 2017). actuator_tau_s 0.05 [AS] (the electric motor and worm drive; no figure found); plate_open_above_u 0.5 [AS] (above it the throttle is fully open and the lift alone sets the load; below it the throttle holds the vacuum target)."
+  }
+}

@@ -39,7 +39,10 @@ enum class BuildRule : std::uint16_t {
     // Engine garage P9 (an engine with cam profiles only):
     CamSwitchWindow = 11,      // switch rpm outside the generated rpm grid, or rpm_on/limiter or the hysteresis outside its band
     CamProfileOrder = 12,      // the second ("high") profile has less peak lift or less lift area than the first
-    CamLiftOverValve = 13,     // a profile's peak lift over its valve head diameter is above the band
+    CamLiftOverValve = 13,     // a profile's (P10: a lift node's) peak lift over its valve head diameter is above the band
+    // Engine garage P10 (an engine with a continuous intake lift family only):
+    LiftFamilyOrder = 14,      // a lift node has no more peak lift or lift area than the node below it (not monotone in u)
+    LiftMinimumBand = 15,      // the minimum-lift node's peak lift is below the band, or too large a share of full lift
 };
 
 // A violation of a static rule. severity reuses P3b's LimitSeverity so one advisor handles both record kinds:

@@ -97,6 +97,13 @@ struct DynoSweepSpec {
     // dyno); for a stepped engine the running ECU itself decides from its low-cam start. 0 / 1 = hold that profile at
     // every point (two sweeps give both WOT curves; their crossing is where the switch belongs).
     int cam_profile = -1;
+    // Engine garage P10 (an engine with an intake lift family; ignored by every other engine): -1 (default) = the u = 1
+    // node, i.e. full lift - the WOT sweep is exactly the engine without the family. k >= 0 = hold lift node k (ascending u,
+    // the last node is u = 1) at every point, with `throttle` read as THAT node's own torque request (its own inverse plate,
+    // like a single-lift engine) - a cheap part-load / low-lift curve. The dyno does not run the ECU's lift strategy (the
+    // blended plant between nodes has no steady solver; forced induction with a family is rejected by the loader). With a
+    // kit the engine is stepped, and the running ECU sets the lift itself (lift_node is then ignored).
+    int lift_node = -1;
 };
 
 struct DynoPoint {
@@ -131,6 +138,8 @@ struct DynoPoint {
     // Engine garage P9: the cam profile the point ran on (0 = low/only, 1 = high); for a stepped point the ECU's latched
     // request at the end of the window. Always 0 for an engine without cam profiles.
     int cam_profile = 0;
+    // Engine garage P10: the intake lift u the point ran on (1 for an engine without a lift family).
+    real lift_u = 1.0;
 };
 
 struct DynoResult {

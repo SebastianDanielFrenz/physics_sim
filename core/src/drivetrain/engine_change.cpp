@@ -187,8 +187,18 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
         // Engine garage P9: one key per cam profile (a profile-free engine: its one key, unchanged). A different
         // profile count is a different engine structure (the runtime swaps every profile set together and refuses a
         // count change) - Respawn; a lift edit in a profile moves that profile's key - Maps.
+        // Engine garage P10: the same for a continuous lift family - the node count and the node u values are the
+        // structure the runtime's tables are indexed by (a hot swap refuses a different lift_u), so either is Respawn; a
+        // lift edit inside a node moves that node's key - Maps.
+        const auto node_u = [](const CycleModelDesc& c) {
+            std::vector<real> u;
+            for (const auto& n : c.lift_family) u.push_back(n.u);
+            return u;
+        };
         if (ca.cam_profiles.size() != cb.cam_profiles.size()) {
             push(out, "cam", "/profiles", EngineChange::Respawn);
+        } else if (node_u(ca) != node_u(cb)) {
+            push(out, "cam", "/intake_lift_family", EngineChange::Respawn);
         } else if (engine_map_profile_cache_keys(ca, key_fuel(a), MapQuality::Full) !=
                    engine_map_profile_cache_keys(cb, key_fuel(b), MapQuality::Full)) {
             push(out, "engine", "/cycle", EngineChange::Maps);
@@ -230,13 +240,23 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
            a.cam_switching.min_p_im_pa != b.cam_switching.min_p_im_pa || a.cam_switching.min_oil_c != b.cam_switching.min_oil_c ||
            a.cam_switching.transition_s != b.cam_switching.transition_s,
        "/ecu/switching");
-    rt(!same(a.maps.ve, b.maps.ve) || !same(a.maps.eta_i, b.maps.eta_i) || !same(a.maps.f_lambda, b.maps.f_lambda) ||
-           !same(a.maps.eta_spark, b.maps.eta_spark) || !same(a.maps.theta_mbt_deg, b.maps.theta_mbt_deg) ||
-           !same(a.maps.friction_torque_nm, b.maps.friction_torque_nm) || a.maps.has_pmep_excess != b.maps.has_pmep_excess ||
-           !same(a.maps.pmep_excess_pa, b.maps.pmep_excess_pa) || a.maps.has_theta_kl != b.maps.has_theta_kl ||
-           !same(a.maps.theta_kl_deg, b.maps.theta_kl_deg) || !same_tables(a.maps.theta_kl_by_fuel, b.maps.theta_kl_by_fuel) ||
-           !same(a.maps.wot_p_im_pa, b.maps.wot_p_im_pa) || a.maps_pending != b.maps_pending,
-       "/maps");
+    // Engine garage P10: the lift strategy is ECU runtime data too (the node maps do not depend on it).
+    rt(a.lift_control.actuator_tau_s != b.lift_control.actuator_tau_s || a.lift_control.max_rate_per_s != b.lift_control.max_rate_per_s ||
+           a.lift_control.min_u != b.lift_control.min_u || a.lift_control.idle_u != b.lift_control.idle_u ||
+           a.lift_control.plate_open_u != b.lift_control.plate_open_u || a.lift_control.vacuum_pa != b.lift_control.vacuum_pa,
+       "/ecu/lift_control");
+    const auto maps_differ = [&](const SimulatedEngineMapsDesc& x, const SimulatedEngineMapsDesc& y) {
+        return !same(x.ve, y.ve) || !same(x.eta_i, y.eta_i) || !same(x.f_lambda, y.f_lambda) || !same(x.eta_spark, y.eta_spark) ||
+               !same(x.theta_mbt_deg, y.theta_mbt_deg) || !same(x.friction_torque_nm, y.friction_torque_nm) ||
+               x.has_pmep_excess != y.has_pmep_excess || !same(x.pmep_excess_pa, y.pmep_excess_pa) ||
+               x.has_theta_kl != y.has_theta_kl || !same(x.theta_kl_deg, y.theta_kl_deg) ||
+               !same_tables(x.theta_kl_by_fuel, y.theta_kl_by_fuel) || !same(x.wot_p_im_pa, y.wot_p_im_pa);
+    };
+    bool node_maps_differ = a.lift_node_maps.size() != b.lift_node_maps.size();
+    for (std::size_t k = 0; !node_maps_differ && k < a.lift_node_maps.size(); ++k) {
+        node_maps_differ = maps_differ(a.lift_node_maps[k], b.lift_node_maps[k]);
+    }
+    rt(maps_differ(a.maps, b.maps) || node_maps_differ || a.maps_pending != b.maps_pending, "/maps");
     rt(a.inertia_kgm2 != b.inertia_kgm2, "/inertia_kgm2");
     rt(a.breakaway_torque_nm != b.breakaway_torque_nm, "/breakaway_torque_nm");
     rt(a.idle_rpm != b.idle_rpm, "/idle_rpm");

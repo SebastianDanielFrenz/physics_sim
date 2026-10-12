@@ -109,6 +109,14 @@ inline constexpr Threshold kCamHysteresisMax{"cam_switch_hysteresis_max_rpm", 10
 // data; the 35 mm valve itself is a vendor listing).
 inline constexpr Threshold kCamLiftOverValveMax{"cam_peak_lift_over_valve_d_max", 0.40, "[AS] 0.35 seen on an aftermarket K20 race cam (junauto.co.jp), widened; beyond it more lift adds no flow area and stresses the valve train"};
 
+// --- Engine garage P10: continuous intake lift (Valvetronic-style) -----------------------------------------------------------
+// Minimum lift: BMW's second Valvetronic generation runs 0.18 mm at minimum [C] fenderbender.com 'How to repair BMW Valvetronic
+// systems' (Scot Manna 2017); the full lift of the N52 is 9.9 mm [C] mymotorlist.com/engines/bmw/n52b30 (secondary page), so the
+// minimum node is 0.018 of full lift. Below ~0.1 mm the valve barely leaves its seat (seat and lash tolerances) [AS]; a minimum
+// node above a quarter of full lift leaves the light-load range to the throttle, which the strategy is meant to avoid [AS].
+inline constexpr Threshold kLiftMinPeakMinMm{"lift_min_node_peak_min_mm", 0.1, "[AS] below ~0.1 mm the valve barely leaves its seat (BMW's second-generation minimum is 0.18 mm, fenderbender.com Scot Manna 2017)"};
+inline constexpr Threshold kLiftMinPeakMaxFraction{"lift_min_node_peak_max_fraction_of_full", 0.25, "[AS] BMW N52 0.18 of 9.9 mm = 0.018 (fenderbender.com; mymotorlist.com); above a quarter of full lift the throttle sets the light loads"};
+
 inline constexpr Threshold kAllEngineRuleThresholds[] = {
     kLayoutSource,  kIntake1Min,   kIntake1Max,    kIntake2Min,     kIntake2Max,   kIntake3Min,
     kIntake3Max,    kExhaustRatioMin, kExhaustRatioMax, kRowChordFraction, kPackDensity2, kPackDensity3,
@@ -116,6 +124,7 @@ inline constexpr Threshold kAllEngineRuleThresholds[] = {
     kCrNaMax,       kCrFiMin,      kCrFiMax,       kGridOvershootLimiting, kGridOvershootExceeded, kBoostGridMargin,
     kBoostGridAmbientBar, kBoostGridStepPa, kBoostGridMinLastStepPa, kBoostGridAmbientNodeGapPa, kNaGridTopFraction, kRelTolerance,
     kCamSwitchFractionMin, kCamSwitchFractionMax, kCamHysteresisMin, kCamHysteresisMax, kCamLiftOverValveMax,
+    kLiftMinPeakMinMm, kLiftMinPeakMaxFraction,
 };
 inline constexpr std::size_t kAllEngineRuleThresholdCount = sizeof(kAllEngineRuleThresholds) / sizeof(kAllEngineRuleThresholds[0]);
 
