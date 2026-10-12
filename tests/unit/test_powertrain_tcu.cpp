@@ -593,6 +593,7 @@ TEST_CASE("Hyper auto-clutch re-locks rolling seventh-gear WOT without tyre spin
     auto desc=ps::io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
     for(real kmh : {70.,80.,100.}) {
         auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.5);
+        rig.world->set_control("assist.traction_control",0); // Assists I2 (Q2): Racing unit TC default On; this tests the auto-clutch alone
         ps_test::settle(*rig.world,.5);
         auto motion=rig.world->get_motion(rig.chassis); motion.linear={kmh/3.6,0,0};
         rig.world->backend().set_motion(rig.chassis,motion);
@@ -651,6 +652,7 @@ TEST_CASE("Hyper auto clutch protects a running crank while sliding backwards in
     const auto desc=ps::io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
     for(real kmh : {60.,120.,200.}) {
         auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.5);
+        rig.world->set_control("assist.traction_control",0); // Assists I2 (Q2): Racing unit TC default On; this tests the auto-clutch alone
         ps_test::settle(*rig.world,.5);
         auto motion=rig.world->get_motion(rig.chassis); motion.linear={70./3.6,0,0};
         rig.world->backend().set_motion(rig.chassis,motion);

@@ -73,6 +73,9 @@ struct Rig {
     ps_test::VehicleTestRig rig;
     explicit Rig(const CarSpec& car)
         : rig(ps_test::build_vehicle_rig_from_desc(desc_of(car), 1500.0, Vec3{2.0, 0.4, 0.15}, car.origin_height, kSlopeGrade)) {
+        // Assists I2 (owner Q2): car_hyper carries the Racing assist unit (TC default On); these cases test the
+        // auto-clutch's reverse-rotation hold alone, so TC is off explicitly (a no-op on car_sedan).
+        rig.world->set_control("assist.traction_control", 0.0);
         rig.world->set_control("handbrake", 1.0);
         ps_test::settle(*rig.world, 1.0);
         vehicle::VehicleResetOptions reset;

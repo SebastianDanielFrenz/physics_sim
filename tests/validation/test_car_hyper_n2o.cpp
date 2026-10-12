@@ -247,6 +247,9 @@ PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPul
     auto rig = ps_test::build_vehicle_rig_from_desc(desc, kMass, kHalfExtents, kOriginHeight, 0.0, 4);
     World& w = *rig.world;
     const real dt = w.dt();
+    // Assists I2 (owner Q2): car_hyper_n2o carries the Racing assist unit, TC default On. The pull bands
+    // were measured without TC (a WOT pull through the gears), so TC is switched off explicitly.
+    w.set_control("assist.traction_control", 0.0);
     ps_test::settle(w, 2.0);
     res.bottle0 = w.n2o_bottle_mass(rig.vehicle);
     const real tank0 = w.fuel_tank_mass(rig.vehicle);
