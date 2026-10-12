@@ -547,7 +547,7 @@ const SimulatedEngineDesc& mazda_full() {
 } // namespace
 
 // A1/A2 (declared in commit e6bc6a5 before the fixed model ran). [!mayfail]: the A25A is unchanged (progress file D1)
-// and its runtime air is 14-19 % too high at H29..H37 (R_air 0.834-0.864) - the discriminating measurement is
+// and its runtime air is 16-20 % too high at H29..H37 (R_air 0.834-0.864) - the discriminating measurement is
 // "P7c: the A25A's air excess is the runner's ram" below plus the runner sweep ("P7c diag: model-only fine runner sweep
 // A25A lumped"): the [AS] 709 mm quarter-wave runner puts a VE 1.12 ram peak at 3500-4000 rpm that the measured VE
 // (0.88-0.95 there) does not have; no cited A25A runner length exists (PHYS-055 rejected the 0.25 L runner as a fit).
