@@ -1094,7 +1094,15 @@ EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& f
 
 std::size_t engine_map_progress_total(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {
     // Engine garage P9: what generate_engine_maps reports as `total` (fixed grid: one per point; adaptive pressure
-    // sampling: the staged budget of generate_engine_maps above).
+    // sampling: the staged budget of generate_engine_maps above). A desc with cam profiles: the sum over the profiles
+    // (what generate_engine_profile_maps reports).
+    if (!desc.cam_profiles.empty()) {
+        std::size_t total = 0;
+        for (std::size_t k = 0; k < desc.cam_profiles.size(); ++k) {
+            total += engine_map_progress_total(cycle_desc_for_cam_profile(desc, k), fuel, quality);
+        }
+        return total;
+    }
     const auto& settings = desc.pressure_sampling;
     if (settings.enabled) {
         return (static_cast<std::size_t>(settings.max_passes) + 1) * settings.max_points * (desc.grid_rpm.size() + 40);

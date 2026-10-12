@@ -12,7 +12,7 @@ import json
 import math
 import os
 
-STEP = 10.0  # deg crank between knots
+STEP = 10.0  # deg crank between knots (approximately: the knot count is even so the peak is a knot)
 
 # (id, intake (duration deg, peak mm), exhaust (duration deg, peak mm)) - all [AS]
 PROFILES = [
@@ -24,7 +24,7 @@ EXHAUST_CENTRE = 720.0 - 110.0  # deg (110 before gas-exchange TDC)
 
 
 def lift_curve(duration, peak_mm, centre):
-    n = int(round(duration / STEP))
+    n = 2 * int(round(duration / (2.0 * STEP)))  # even: a knot sits on the peak
     xs, ys = [], []
     for i in range(n + 1):
         x = duration * i / n

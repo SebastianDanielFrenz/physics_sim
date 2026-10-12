@@ -265,8 +265,9 @@ void validate_engine_map_generation(const CycleModelDesc& desc, const FuelDesc& 
                                                                         MapQuality quality);
 
 // Engine garage P9: the `total` a generate_engine_maps run on this profile-free desc reports to on_progress (the
-// fixed grid's point count; for adaptive pressure sampling the run's progress budget). A multi-profile load reports
-// the sum over the profiles it generates.
+// fixed grid's point count; for adaptive pressure sampling the run's progress budget). A desc with cam profiles gives
+// the sum over its profiles (generate_engine_profile_maps' total); a multi-profile load reports the sum over the
+// profiles it generates (a cache hit generates nothing).
 [[nodiscard]] std::size_t engine_map_progress_total(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
 
 // Engine garage P9: generate_engine_maps for a desc WITH cam profiles (without: exactly generate_engine_maps). Each
