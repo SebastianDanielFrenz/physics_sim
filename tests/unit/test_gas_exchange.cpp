@@ -10,6 +10,7 @@
 //                      boundary conditions, one lever at a time), written to out/garage_p7c_progress.md.
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/engine_cycle/cycle_engine.h"
 #include "ps/engine_cycle/cycle_point.h"
 #include "ps/engine_cycle/cycle_stepper.h"
 #include "ps/engine_cycle/gas.h"
@@ -135,6 +136,11 @@ struct Lever {
     int exhaust = 0;       // exhaust reservoir pressure: 0 ISA 101.325 kPa, 1 cell pressure, 2 catalyst inlet pressure
     bool backflow_t = false; // reservoir backflow gas at the measured exhaust port temperature (else the desc's 800 K)
     real runner_scale = 1.0; // runner length x (sensitivity only)
+    // P7c experiment: pipe mode (A5 CycleEngine) with the runner as a 1D pipe of the same length/diameter.
+    bool pipe = false;
+    real prim_len = 0.4, prim_d = 0.038, plenum_m3 = 0.004, throttle_bore = 0.074;
+    bool merge_421 = false;  // 4-2-1 (1+4, 2+3) instead of 4-into-1
+    real merge_len = 0.3;
 };
 
 struct GxResult {
@@ -154,7 +160,72 @@ real gen_spark_atdc(const CycleModelDesc& c, real rpm, real p_pa) {
     return ec::Wiebe::theta0_for_ca50(c.wiebe_a, c.wiebe_m, c.burn_duration_deg, c.ca50_mbt_deg_atdc);
 }
 
+ec::OperatingPoint make_op(const CycleModelDesc& c0, const Row& r, const Lever& lv) {
+    ec::OperatingPoint op;
+    op.rpm = r.rpm;
+    op.p_im_pa = r.map_kpa * 1000.0;
+    op.t_im_k = lv.imt ? r.imt_c + 273.15 : 288.15;
+    op.p_amb_pa = lv.exhaust == 0 ? 101325.0 : (lv.exhaust == 1 ? r.p_cell_kpa * 1000.0 : r.p_cat_kpa * 1000.0);
+    op.lambda = lv.fire ? r.lambda : 1.0;
+    op.spark_deg_atdc = lv.fire ? -r.spark_btdc + c0.ignition_delay_deg : gen_spark_atdc(c0, r.rpm, op.p_im_pa);
+    if (lv.cam) {
+        op.intake_advance_deg = r.icam_adv;
+        op.exhaust_retard_deg = r.ecam_ret;
+    } else {
+        op.intake_advance_deg = c0.cam.intake_advance_deg.x.empty() ? 0.0 : c0.cam.intake_advance_deg.value(op.rpm, op.p_im_pa);
+        op.exhaust_retard_deg = c0.cam.exhaust_retard_deg.x.empty() ? 0.0 : c0.cam.exhaust_retard_deg.value(op.rpm, op.p_im_pa);
+    }
+    return op;
+}
+
+GxResult run_row_pipe(const Engine& e, const Row& r, const Lever& lv) {
+    CycleModelDesc c = *e.c;
+    IntakeCycleDesc in;
+    in.throttle_bore_m = lv.throttle_bore;
+    in.plenum_m3 = lv.plenum_m3;
+    in.runners.push_back(RunnerPipeDesc{{}, c.runner_length_m * lv.runner_scale, c.runner_diameter_m, c.runner_diameter_m});
+    in.interface = "throttle_inlet";
+    in.source = "[AS] P7c diag";
+    ExhaustCycleDesc ex;
+    ex.primaries.push_back(PrimaryPipeDesc{{}, lv.prim_len, lv.prim_d});
+    auto cyl = [](int n) { MergeSourceRef s; s.is_cylinder = true; s.cylinder = n; return s; };
+    auto named = [](const char* n) { MergeSourceRef s; s.name = n; return s; };
+    if (lv.merge_421) {
+        ex.merges.push_back(MergeCycleDesc{{cyl(1), cyl(4)}, "y14", lv.merge_len, lv.prim_d * 1.2});
+        ex.merges.push_back(MergeCycleDesc{{cyl(2), cyl(3)}, "y23", lv.merge_len, lv.prim_d * 1.2});
+        ex.merges.push_back(MergeCycleDesc{{named("y14"), named("y23")}, "flange", 0.3, lv.prim_d * 1.4});
+    } else {
+        ex.merges.push_back(MergeCycleDesc{{cyl(1), cyl(2), cyl(3), cyl(4)}, "flange", lv.merge_len, lv.prim_d * 1.4});
+    }
+    ex.interface = "flange";
+    ex.source = "[AS] P7c diag";
+    c.intake = in;
+    c.exhaust = ex;
+    c.runner_length_m = 0.0;
+    c.runner_diameter_m = 0.0;
+    if (lv.backflow_t) c.exhaust_backflow_temperature_k = r.t_exh_port_c + 273.15;
+    const ec::OperatingPoint op = make_op(*e.c, r, lv);
+    ec::CycleEngine eng(c, e.f->lhv_j_kg, e.f->afr_stoich, op, ec::CycleEngineSettings{});
+    const ec::CycleEngineResult res = eng.run();
+    const real ncyl = real(c.cylinders);
+    GxResult o;
+    o.air_g_s = res.mean.m_air_j_cyc * ncyl * r.rpm / 120.0 * 1000.0;
+    o.trapped_g_s = o.air_g_s;
+    const ec::CycleModel& m = eng.cylinder(0).model();
+    const real v_ivc = m.geom.eval(res.mean.ivc.crank_deg).v;
+    const ec::CvState iv = ec::cv_state(m.gas, res.mean.ivc.m, res.mean.ivc.u, res.mean.ivc.mb, v_ivc);
+    o.t_ivc = iv.t;
+    o.x_ivc = iv.x;
+    o.p_ivc_kpa = iv.p / 1000.0;
+    o.t_exh = res.mean.t_exh_k;
+    o.imep_gross_kpa = res.mean.w_gross_j / m.geom.v_d / 1000.0;
+    o.pmep_kpa = -res.mean.w_pump_j / m.geom.v_d / 1000.0;
+    o.backflow_ev_frac = res.plenum_error_rel;  // pipe mode: plenum trim error in this slot
+    return o;
+}
+
 GxResult run_row(const Engine& e, const Row& r, const Lever& lv) {
+    if (lv.pipe) return run_row_pipe(e, r, lv);
     const CycleModelDesc& c0 = *e.c;
     const ec::CycleStepper* proto = e.proto.get();
     std::unique_ptr<ec::CycleStepper> own;
@@ -234,11 +305,12 @@ std::vector<GxResult> run_all(const Engine& e, const Row* rows, std::size_t n, c
     return out;
 }
 
-void budget(const char* name, const Engine& e, const Row* rows, std::size_t n) {
-    struct Term {
-        const char* name;
-        Lever lv;
-    };
+struct Term {
+    const char* name;
+    Lever lv;
+};
+
+std::vector<Term> lumped_terms() {
     std::vector<Term> terms;
     const Lever g0;
     terms.push_back({"G0 generator conventions (ISA T_im, exhaust 101.3 kPa, cam table, lambda 1, node spark)", g0});
@@ -258,6 +330,28 @@ void budget(const char* name, const Engine& e, const Row* rows, std::size_t n) {
     with("BC1 + backflow T measured", [](Lever& l) { l.imt = l.cam = l.fire = l.backflow_t = true; l.exhaust = 2; });
     with("BC1, runner x0.5 (sensitivity)", [](Lever& l) { l.imt = l.cam = l.fire = true; l.exhaust = 2; l.runner_scale = 0.5; });
     with("BC1, runner x0.1 (no ram, sensitivity)", [](Lever& l) { l.imt = l.cam = l.fire = true; l.exhaust = 2; l.runner_scale = 0.1; });
+    return terms;
+}
+
+std::vector<Term> candidate_terms() {
+    std::vector<Term> terms;
+    const Lever g0;
+    auto with = [&](const char* nm, auto&& f) {
+        Lever l = g0;
+        f(l);
+        terms.push_back({nm, l});
+    };
+    with("G0 lumped (as shipped)", [](Lever&) {});
+    with("G0 pipe mode, primaries 0.4 m 4-1", [](Lever& l) { l.pipe = true; });
+    with("G0 pipe mode, primaries 0.2 m 4-1", [](Lever& l) { l.pipe = true; l.prim_len = 0.2; });
+    with("G0 pipe mode, primaries 0.8 m 4-1", [](Lever& l) { l.pipe = true; l.prim_len = 0.8; });
+    with("G0 pipe mode, primaries 0.4 m 4-2-1 0.3 m", [](Lever& l) { l.pipe = true; l.merge_421 = true; });
+    with("G0 pipe mode, plenum 8 L", [](Lever& l) { l.pipe = true; l.plenum_m3 = 0.008; });
+    with("BC1 pipe mode 0.4 m 4-1", [](Lever& l) { l.pipe = true; l.imt = l.cam = l.fire = true; l.exhaust = 2; });
+    return terms;
+}
+
+void budget(const char* name, const Engine& e, const Row* rows, std::size_t n, const std::vector<Term>& terms) {
     std::vector<std::vector<GxResult>> res;
     for (const Term& t : terms) res.push_back(run_all(e, rows, n, t.lv));
     std::printf("\n=== %s: measured / model air (inducted) per row\n%-72s", name, "lever");
@@ -296,6 +390,71 @@ void budget(const char* name, const Engine& e, const Row* rows, std::size_t n) {
 } // namespace
 
 TEST_CASE("P7c diag: gas-exchange budget per term at the A25A and Mazda WOT rows", "[.][diag][gas_exchange][cycle]") {
-    budget("A25A", a25a(), kA25a, kNA25a);
-    budget("Mazda (held out; existing fixture, no geometry change)", mazda(), kMazda, kNMazda);
+    budget("A25A", a25a(), kA25a, kNA25a, lumped_terms());
+    budget("Mazda (held out; existing fixture, no geometry change)", mazda(), kMazda, kNMazda, lumped_terms());
+}
+
+TEST_CASE("P7c diag: candidate runner/exhaust models at the A25A WOT rows", "[.][diag][gas_exchange][cycle]") {
+    budget("A25A candidates", a25a(), kA25a, kNA25a, candidate_terms());
+}
+
+namespace {
+
+// Model-only sweep (no measured rows): WOT VE at ISA (generator conventions, cam tables, lambda 1, node spark) over rpm
+// for scaled runner lengths, lumped slug or 1D pipe mode. VE = inducted air / (rho_ISA(p_im) V_d n/2).
+void runner_sweep(const char* name, const Engine& e, real map_kpa, const std::vector<real>& scales, bool pipe, real n0 = 1500.0,
+                  real n1 = 6500.0, real dn = 250.0, bool quiet = false) {
+    std::vector<real> rpms;
+    for (real n = n0; n <= n1 + 1.0; n += dn) rpms.push_back(n);
+    std::printf("\n=== %s runner sweep (%s), p_im %.1f kPa, ISA: VE\n  scale L[mm]  ", name, pipe ? "pipe" : "lumped", map_kpa);
+    for (real n : rpms) std::printf(" %5.0f", n);
+    std::printf("   peak\n");
+    const real rho = map_kpa * 1000.0 / (287.05 * 288.15);
+    const real vd = e.proto->model().geom.v_d * real(e.c->cylinders);
+    auto ve_of = [&](real sc) {
+        std::vector<Row> rows(rpms.size());
+        for (std::size_t i = 0; i < rpms.size(); ++i) {
+            rows[i] = Row{"sw", rpms[i], map_kpa, 15.0, 1.0, 0, 0, 0, 0, 0, 15.0, 101.325, 101.325, 600.0};
+        }
+        Lever lv;
+        lv.runner_scale = sc;
+        lv.pipe = pipe;
+        const std::vector<GxResult> res = run_all(e, rows.data(), rows.size(), lv);
+        std::vector<real> ve(rpms.size());
+        for (std::size_t i = 0; i < rpms.size(); ++i) ve[i] = res[i].air_g_s / 1000.0 / (rho * vd * rpms[i] / 120.0);
+        return ve;
+    };
+    const std::vector<real> base = ve_of(0.05);  // ~no ram
+    for (real sc : scales) {
+        const std::vector<real> ve = ve_of(sc);
+        std::printf("  %5.2f %6.1f ", sc, e.c->runner_length_m * sc * 1000.0);
+        real best = 0.0, best_n = 0.0, num = 0.0, den = 0.0;
+        for (std::size_t i = 0; i < rpms.size(); ++i) {
+            if (ve[i] > best) {
+                best = ve[i];
+                best_n = rpms[i];
+            }
+            const real g = ve[i] - base[i];
+            if (g > 0.0) {
+                num += g * rpms[i];
+                den += g;
+            }
+            if (!quiet) std::printf(" %5.3f", ve[i]);
+        }
+        std::printf("   peak %.3f @ %.0f; ram-gain centroid %.0f rpm\n", best, best_n, den > 0.0 ? num / den : 0.0);
+    }
+}
+
+} // namespace
+
+TEST_CASE("P7c diag: model-only runner length sweep (A25A)", "[.][diag][gas_exchange][cycle]") {
+    const std::vector<real> sc{1.0, 0.85, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2};
+    runner_sweep("A25A", a25a(), 97.0, sc, false);
+    runner_sweep("A25A", a25a(), 97.0, sc, true);
+}
+
+TEST_CASE("P7c diag: model-only fine runner sweep A25A lumped", "[.][diag][gas_exchange][cycle]") {
+    std::vector<real> sc;
+    for (real x = 0.30; x <= 1.001; x += 0.05) sc.push_back(x);
+    runner_sweep("A25A fine", a25a(), 97.0, sc, false, 1000.0, 6600.0, 50.0, true);
 }
