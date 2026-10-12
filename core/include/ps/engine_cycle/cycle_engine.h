@@ -63,6 +63,11 @@ struct CycleEngineSettings {
     // Extra trim cycles allowed when the measured cycle misses trim_tolerance
     // (see CycleEngine::run). 0 = the plain settling schedule only.
     int max_extra_trim_cycles = 12;  // [A]
+    // Engine garage P7d: run with the throttle at its maximum Cd*A for the
+    // whole run and no trim - the wide-open-throttle state; the plenum
+    // pressure is free (op.p_im_pa only seeds the network and the cylinders).
+    // false = the trimmed point, bit-identical to before this field existed.
+    bool wide_open_throttle = false;
 };
 
 struct CycleEngineResult {
@@ -83,6 +88,9 @@ struct CycleEngineResult {
     real mass_scale_kg = 0.0;
     real air_change_rel = 0.0;  // |air(last) - air(previous cycle)| / air(last), all cylinders
     int extra_trim_cycles = 0;  // cycles added because the measured cycle missed the trim tolerance
+    // Engine garage P7d (diagnostic): time mean of the plenum's burned
+    // fraction over the measured cycle (0 in reservoir mode).
+    real plenum_burned_mean = 0.0;
     std::uint64_t steps_per_cycle = 0;
     real h_s = 0.0;
     int cylinders = 0;

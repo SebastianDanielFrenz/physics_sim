@@ -14,6 +14,7 @@
 #include "hydrodynamic_friction.h"
 #include "psi_table.h"
 
+#include "ps/drivetrain/map_pressure_index.h"
 #include "ps/math/transcendental.h"
 
 #include <algorithm>
@@ -204,8 +205,16 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
         dm_thr_dp = -k * (ps - q * dpsi);
     }
     const real rpm = std::abs(omega) * kRadPerSecToRpm;
-    const real ve = m.maps.ve.value(rpm, p);
-    const real dve_dp = m.maps.ve.dvalue_dy(rpm, p);
+    real ve, dve_dp;
+    if (has_wot_rows(m.maps)) {
+        // Engine garage P7d: generated WOT rows - the tables are read at the warped coordinate (map_pressure_index.h).
+        const MapPressureIndex ix = map_pressure_index(m.maps, rpm, p, amb.p_amb);
+        ve = m.maps.ve.value(rpm, ix.y);
+        dve_dp = m.maps.ve.dvalue_dy(rpm, ix.y) * ix.dy_dp;
+    } else {
+        ve = m.maps.ve.value(rpm, p);
+        dve_dp = m.maps.ve.dvalue_dy(rpm, p);
+    }
     const real vol_rate = m.v_disp_m3 * m.c_cycle * std::max(omega, real(0.0)) / kTwoPi; // m^3/s swept (VE 1)
     real dm_cyl_dp = real(0.0);
     if (nc && omega > real(0.0) && nc->mdot_n_kg_s > real(0.0) && nc->oxidizer) {
@@ -241,8 +250,14 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     const bool n2o = nc != nullptr && omega > real(0.0) && nc->mdot_n_kg_s > real(0.0) && nc->oxidizer != nullptr;
 
     // air per revolution (and its rpm slope at frozen p)
-    const real ve = m.maps.ve.value(rpm, p);
-    const real dve_drpm = m.maps.ve.dvalue_dx(rpm, p);
+    // Engine garage P7d: with generated WOT rows every p_im-axis table (ve, theta_kl, pmep_excess) is read at the warped
+    // coordinate yp; its rpm slope adds the table's d/dy times dy/drpm. Without them yp == p and the old reads run.
+    const bool wot_rows = has_wot_rows(m.maps);
+    const MapPressureIndex ix = wot_rows ? map_pressure_index(m.maps, rpm, p, amb.p_amb) : MapPressureIndex{p, real(1.0), real(0.0)};
+    const real yp = ix.y;
+    const real ve = m.maps.ve.value(rpm, yp);
+    const real dve_drpm = wot_rows ? m.maps.ve.dvalue_dx(rpm, yp) + m.maps.ve.dvalue_dy(rpm, yp) * ix.dy_drpm
+                                   : m.maps.ve.dvalue_dx(rpm, p);
     const real air_per_ve = p / amb.r_t * m.v_disp_m3 * m.c_cycle;
     e.m_air_rev = ve * air_per_ve;
     const real dma_drpm = dve_drpm * air_per_ve;
@@ -274,10 +289,11 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     real spark = spark_sched;
     real dspark_drpm = m.ecu.spark_advance_deg.dvalue_dx(rpm, p);
     if (m.maps.has_theta_kl) {
-        const real kl = m.maps.theta_kl_deg.value(rpm, p);
+        const real kl = m.maps.theta_kl_deg.value(rpm, yp);
         if (kl < spark_sched) {
             spark = kl;
-            dspark_drpm = m.maps.theta_kl_deg.dvalue_dx(rpm, p);
+            dspark_drpm = wot_rows ? m.maps.theta_kl_deg.dvalue_dx(rpm, yp) + m.maps.theta_kl_deg.dvalue_dy(rpm, yp) * ix.dy_drpm
+                                   : m.maps.theta_kl_deg.dvalue_dx(rpm, p);
             e.knock_retard_deg = spark_sched - kl;
         }
     }
@@ -299,7 +315,7 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     real spark_applied_nr = spark_applied;
     if (n2o && nc->retard_deg != real(0.0)) {
         real spark_nr = spark_target;
-        if (m.maps.has_theta_kl) spark_nr = std::min(spark_nr, m.maps.theta_kl_deg.value(rpm, p));
+        if (m.maps.has_theta_kl) spark_nr = std::min(spark_nr, m.maps.theta_kl_deg.value(rpm, yp));
         if (als && als->spark_advance_deg) spark_applied_nr = spark_applied;
         else if (als && als->retard_deg > real(0.0)) spark_applied_nr = spark_nr - als->retard_deg;
         else spark_applied_nr = spark_nr;
@@ -440,8 +456,9 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     // pumping (ideal gas exchange + optional excess), friction (Coulomb part excluded)
     real pmep = real(0.0), dpmep_drpm = real(0.0);
     if (m.maps.has_pmep_excess) {
-        pmep = m.maps.pmep_excess_pa.value(rpm, p);
-        dpmep_drpm = m.maps.pmep_excess_pa.dvalue_dx(rpm, p);
+        pmep = m.maps.pmep_excess_pa.value(rpm, yp);
+        dpmep_drpm = wot_rows ? m.maps.pmep_excess_pa.dvalue_dx(rpm, yp) + m.maps.pmep_excess_pa.dvalue_dy(rpm, yp) * ix.dy_drpm
+                              : m.maps.pmep_excess_pa.dvalue_dx(rpm, p);
     }
     e.tau_pump = -s_w * (amb.p_amb - p + pmep) * vc_2pi;
     const real f_rpm = m.maps.friction_torque_nm.evaluate(rpm);
@@ -662,6 +679,25 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
     if (desc.maps.friction_torque_nm.x.empty() || desc.maps.friction_torque_nm.x.front() != real(0.0)) {
         throw std::runtime_error("SimulatedEngine: maps.friction_torque_nm must start at rpm 0");
     }
+    if (desc.ecu.spark_advance_deg.x.empty() || desc.ecu.spark_advance_deg.y.empty()) {
+        // Engine garage P7d: read unconditionally by evaluate_torque (an empty table was an access violation there).
+        throw std::runtime_error("SimulatedEngine: ecu.spark_advance_deg is empty");
+    }
+    if (has_wot_rows(desc.maps)) {
+        // Engine garage P7d: map_pressure_index's preconditions (the generator produces exactly this).
+        const SimulatedEngineMapsDesc& mm = desc.maps;
+        const vehicle::Curve1D& w = mm.wot_p_im_pa;
+        bool ok = mm.ve.y.size() >= 2 && w.x.size() == w.y.size() && w.x.size() >= 1;
+        for (std::size_t i = 0; ok && i < w.x.size(); ++i) {
+            ok = std::isfinite(w.y[i]) && w.y[i] > mm.ve.y[mm.ve.y.size() - 2] && (i == 0 || w.x[i] > w.x[i - 1]);
+        }
+        if (ok && mm.has_pmep_excess) ok = mm.pmep_excess_pa.y == mm.ve.y;
+        if (ok && mm.has_theta_kl) ok = mm.theta_kl_deg.y == mm.ve.y;
+        if (!ok) {
+            throw std::runtime_error("SimulatedEngine: maps.wot_p_im_pa needs ascending rpm, every value above the second-highest ve "
+                                     "row, and ve/pmep_excess/theta_kl on one p_im axis");
+        }
+    }
 
     auto m = std::make_shared<SimulatedEngineMaps>();
     m->throttle_input = desc.throttle_input;
@@ -751,6 +787,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
     if (m->maps.has_pmep_excess) f.table(m->maps.pmep_excess_pa);
     f.pod(m->maps.has_theta_kl);
     if (m->maps.has_theta_kl) f.table(m->maps.theta_kl_deg);
+    if (has_wot_rows(m->maps)) f.curve(m->maps.wot_p_im_pa); // engine garage P7d: only when present
     f.pod(m->lhv_j_kg);
     f.pod(m->afr_stoich);
     f.pod(m->c_k);

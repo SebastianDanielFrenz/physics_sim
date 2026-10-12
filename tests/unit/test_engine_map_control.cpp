@@ -112,7 +112,8 @@ bool same_maps(const SimulatedEngineMapsDesc& a, const SimulatedEngineMapsDesc& 
     return same_bits(a.ve, b.ve) && same_bits(a.eta_i, b.eta_i) && same_bits(a.f_lambda, b.f_lambda) &&
            same_bits(a.eta_spark, b.eta_spark) && same_bits(a.theta_mbt_deg, b.theta_mbt_deg) &&
            same_bits(a.friction_torque_nm, b.friction_torque_nm) && a.has_pmep_excess == b.has_pmep_excess &&
-           same_bits(a.pmep_excess_pa, b.pmep_excess_pa);
+           same_bits(a.pmep_excess_pa, b.pmep_excess_pa) && a.has_theta_kl == b.has_theta_kl &&
+           same_bits(a.theta_kl_deg, b.theta_kl_deg) && same_bits(a.wot_p_im_pa, b.wot_p_im_pa); // P7d: + WOT curve, knock
 }
 
 bool same_engine_maps(const EngineMaps& a, const EngineMaps& b) {
@@ -704,13 +705,20 @@ TEST_CASE("Garage P1 T4b: Sketch of a pipe engine is complete and worker-count i
     const EngineMapsPtr a = generate_engine_maps(d, fuel, MapQuality::Sketch, &ten);
     const EngineMapsPtr b = generate_engine_maps(d, fuel, MapQuality::Sketch);
     CHECK(a->quality == MapQuality::Sketch);
-    CHECK(a->generator_version == kPipeGeneratorVersion);
+    CHECK(a->generator_version == kPipeWotGeneratorVersion); // engine garage P7d: ambient-fed pipe engine
     CHECK(same_engine_maps(*a, *b));
     // (Loading pipe-engine maps into a SimulatedEngine is covered through the loader by the A5/A6 tests; the
     // generic mvem_fixtures base engine used by engine_on() is built for the lumped fixture's grid.)
     for (const real v : a->maps.ve.values) CHECK((std::isfinite(v) && v > 0.0));
     CHECK(a->maps.ve.x.size() == 4);
-    CHECK(a->maps.ve.y.size() == 3);
+    // Engine garage P7d: the Sketch rows (lowest, nearest ambient, top) below every WOT plenum pressure, plus the WOT
+    // row at 101325 Pa (was 3 author rows).
+    std::printf("T4b Sketch p rows:");
+    for (const real y : a->maps.ve.y) std::printf(" %.0f", y);
+    std::printf(" (dropped %d)\n", a->wot_dropped_rows);
+    CHECK(a->maps.ve.y.size() == 4); // 30, 60, 90 kPa + WOT (dropped 0)
+    CHECK(a->maps.ve.y.back() == 101325.0);
+    CHECK(a->maps.wot_p_im_pa.x == a->maps.ve.x);
     CHECK(engine_map_cache_key(d, fuel, MapQuality::Sketch) != engine_map_cache_key(d, fuel, MapQuality::Preview));
 }
 

@@ -28,6 +28,12 @@ namespace ps::drivetrain {
         throw std::runtime_error(std::string(who) + ": explicit engine maps were given, but the engine is not a simulated engine");
     }
     SimulatedEngineDesc updated = *sim;
+    // Engine garage P7d (a P7 gap): a knock-limited engine without an ECU spark table tracks MBT (the loader sets
+    // ecu.spark_advance_deg = maps.theta_mbt_deg, vehicle_io.cpp) - but only once its maps exist, so a validate-only
+    // (pending) load reaches here with an empty table. Apply the same rule to the maps that complete it.
+    if (updated.maps_pending && updated.ecu.spark_advance_deg.x.empty() && maps->maps.has_theta_kl) {
+        updated.ecu.spark_advance_deg = maps->maps.theta_mbt_deg;
+    }
     updated.maps = maps->maps;
     updated.maps_pending = false;
     return ComponentParams{std::move(updated)};

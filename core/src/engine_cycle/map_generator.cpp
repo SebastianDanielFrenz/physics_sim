@@ -238,9 +238,19 @@ struct EngineMapGenTask::Impl {
     std::size_t knock_nf = 0;
     real knock_mbt_btdc = 0.0;
     std::vector<real> knock_inv_on;       // per fuel: douaud_eyzat_inv_on_term(OI)
-    std::vector<real> knock_kl;           // grid_n * nf, deg BTDC
+    std::vector<real> knock_kl;           // (grid_n + wot_n) * nf, deg BTDC (row = grid node, then WOT point)
     std::vector<unsigned char> knock_flag; // bit 0 limited, bit 1 saturated
     std::vector<int> knock_replays;
+    // Engine garage P7d. Every pipe engine: a held grid node whose cycle does not breathe is flagged here (finish()
+    // fills it from the nearest breathing node above). Ambient-fed pipe engines (engine_map_generates_wot_rows): one
+    // wide-open-throttle point per rpm-axis value at ops[wot_base + ir]; grid node trim failures are recorded in
+    // node_status (1 throttle saturated, 2 not settled) and judged in finish(), which knows which rows it keeps.
+    std::vector<unsigned char> nonbreathing;
+    bool wot = false;
+    std::size_t wot_base = 0, wot_n = 0;
+    engine_cycle::CycleEngineSettings wot_settings;
+    std::vector<real> p_mean;              // cycle-mean plenum pressure per point (pipe engines)
+    std::vector<unsigned char> node_status;
 };
 
 namespace {
@@ -318,6 +328,11 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         s.engine_settings.h_s = s.settings.h_s;
         s.engine_settings.settling_cycles = full ? engine_cycle::kEngineSettlingCyclesFull : engine_cycle::kEngineSettlingCyclesPreview;
     }
+    s.wot = engine_map_generates_wot_rows(desc);
+    if (s.wot) {
+        s.wot_settings = s.engine_settings;
+        s.wot_settings.wide_open_throttle = true;
+    }
     // C17a follow-up: Tier 1b spark schedule (empty = mbt_tracking) and Tier 2
     // ignition delay (Wiebe start = spark + delay).
     if (!(desc.ignition_delay_deg >= real(0.0)) || !(desc.ignition_delay_deg <= real(60.0))) {
@@ -358,7 +373,21 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         }
     }
     for (real lambda : s.lambdas) s.ops.push_back(make_op(kLambdaSite.rpm, kLambdaSite.p_pa, lambda, s.mbt_atdc));
+    if (s.wot) {
+        // P7d: the wide-open-throttle state of every rpm-axis value, appended after the sweeps (their indices are
+        // unchanged). The plenum is free; p_im_pa = ambient only seeds the network and selects the ECU spark/cam at the
+        // WOT condition.
+        s.wot_base = s.ops.size();
+        for (real rpm : s.rpm_axis) {
+            const real start = scheduled ? -desc.spark_advance_deg.value(rpm, kPamb) + desc.ignition_delay_deg : s.mbt_atdc;
+            s.ops.push_back(make_op(rpm, kPamb, real(1.0), start));
+        }
+        s.wot_n = s.ops.size() - s.wot_base;
+        s.node_status.assign(s.grid_n, 0);
+    }
     s.results.resize(s.ops.size());
+    s.p_mean.assign(s.ops.size(), real(0.0));
+    s.nonbreathing.assign(s.ops.size(), 0);
     if (desc.knock.enabled) {
         // P7: validated here as well as in the loader (a desc built in C++ never passes the loader).
         if (desc.knock.fuels.empty()) throw std::runtime_error("engine map generator: knock: the knock limit needs >= 1 fuel");
@@ -381,9 +410,9 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
             }
             s.knock_inv_on.push_back(engine_cycle::douaud_eyzat_inv_on_term(engine_cycle::octane_index(f.ron, f.mon)));
         }
-        s.knock_kl.assign(s.grid_n * s.knock_nf, real(0.0));
-        s.knock_flag.assign(s.grid_n * s.knock_nf, 0);
-        s.knock_replays.assign(s.grid_n * s.knock_nf, 0);
+        s.knock_kl.assign((s.grid_n + s.wot_n) * s.knock_nf, real(0.0));
+        s.knock_flag.assign((s.grid_n + s.wot_n) * s.knock_nf, 0);
+        s.knock_replays.assign((s.grid_n + s.wot_n) * s.knock_nf, 0);
     }
     s.done.assign(s.ops.size(), 0);
     s.held.assign(s.ops.size(), 0);
@@ -399,18 +428,37 @@ std::size_t EngineMapGenTask::reuse_points_from(const EngineMapGenTask& previous
     Impl& s=*impl_;const Impl& old=*previous.impl_;
     if(s.reuse_key!=old.reuse_key)throw std::invalid_argument("engine point reuse: engine/fuel/quality mismatch");
     using Key=std::array<real,10>;
-    auto key=[](const engine_cycle::OperatingPoint& p,bool grid){return Key{p.rpm,p.p_im_pa,p.t_im_k,p.p_amb_pa,p.p_supply_pa,p.lambda,p.spark_deg_atdc,p.intake_advance_deg,p.exhaust_retard_deg,grid ? real(1):real(0)};};
+    // P7d: kind 1 = grid node, 2 = wide-open-throttle point, 0 = sweep point (a WOT point never stands in for a node).
+    auto kind=[](const Impl& t,std::size_t i){return i<t.grid_n ? real(1) : (t.wot && i>=t.wot_base ? real(2) : real(0));};
+    auto key=[](const engine_cycle::OperatingPoint& p,real k){return Key{p.rpm,p.p_im_pa,p.t_im_k,p.p_amb_pa,p.p_supply_pa,p.lambda,p.spark_deg_atdc,p.intake_advance_deg,p.exhaust_retard_deg,k};};
+    auto knock_row=[](const Impl& t,std::size_t i){return i<t.grid_n ? i : t.grid_n+(i-t.wot_base);};
     std::map<Key,std::size_t> index;
-    for(std::size_t i=0;i<old.ops.size();++i)if(old.done[i] && !old.exceptions[i])index.emplace(key(old.ops[i],i<old.grid_n),i);
+    for(std::size_t i=0;i<old.ops.size();++i)if(old.done[i] && !old.exceptions[i])index.emplace(key(old.ops[i],kind(old,i)),i);
     std::size_t count=0;
     for(std::size_t i=0;i<s.ops.size();++i) {
         if(s.done[i])continue;
-        auto found=index.find(key(s.ops[i],i<s.grid_n));if(found==index.end())continue;
+        auto found=index.find(key(s.ops[i],kind(s,i)));if(found==index.end())continue;
         const auto j=found->second;s.results[i]=old.results[j];s.held[i]=old.held[j];s.done[i]=1;++count;
-        if(s.knock && i<s.grid_n)for(std::size_t f=0;f<s.knock_nf;++f){s.knock_kl[i*s.knock_nf+f]=old.knock_kl[j*s.knock_nf+f];s.knock_flag[i*s.knock_nf+f]=old.knock_flag[j*s.knock_nf+f];s.knock_replays[i*s.knock_nf+f]=0;}
+        s.p_mean[i]=old.p_mean[j];s.nonbreathing[i]=old.nonbreathing[j];
+        if(s.wot && i<s.grid_n)s.node_status[i]=old.wot ? old.node_status[j] : 0;
+        if(s.knock && kind(s,i)!=real(0)){const std::size_t a=knock_row(s,i),b=knock_row(old,j);for(std::size_t f=0;f<s.knock_nf;++f){s.knock_kl[a*s.knock_nf+f]=old.knock_kl[b*s.knock_nf+f];s.knock_flag[a*s.knock_nf+f]=old.knock_flag[b*s.knock_nf+f];s.knock_replays[a*s.knock_nf+f]=0;}}
     }
     return count;
 }
+
+namespace {
+
+// P7d: the per-node checks finish() applies to a grid node's raw cycle result (net fresh air, VE and the gross eta_i
+// range), with finish()'s own expressions. A held node failing them does not breathe.
+bool node_breathes(const CycleModelDesc& d, real lhv, real afr, real p, const engine_cycle::PointResult& r) {
+    if (!(r.m_air_j_cyc > real(0.0))) return false;
+    const real air_per_ve = p / (kRGas * kTref) * v_disp_of(d) * kCCycle;
+    const real ve = real(d.cylinders) * r.m_air_j_cyc * kCCycle / air_per_ve;
+    const real eta = r.w_gross_j * afr / (lhv * r.m_air_j_cyc);
+    return ve > real(0.0) && ve < real(1e3) && eta > real(0.0) && eta < real(1.0);
+}
+
+} // namespace
 
 void EngineMapGenTask::run_point(std::size_t i) {
     Impl& s = *impl_;
@@ -421,7 +469,9 @@ void EngineMapGenTask::run_point(std::size_t i) {
             // One engine per point (PROVISIONAL P7): built here, then run()
             // allocates nothing. The result is the per-cylinder mean, the
             // same per-cylinder quantities the v1 path extracts.
-            engine_cycle::CycleEngineResult r = engine_cycle::CycleEngine(s.desc, s.lhv, s.afr, s.ops[i], s.engine_settings).run();
+            const bool wot_point = s.wot && i >= s.wot_base;
+            engine_cycle::CycleEngineResult r =
+                engine_cycle::CycleEngine(s.desc, s.lhv, s.afr, s.ops[i], wot_point ? s.wot_settings : s.engine_settings).run();
             if (i < s.grid_n && !r.throttle_saturated && r.plenum_error_rel > s.engine_settings.trim_tolerance) {
                 // The plenum stays above the node with the throttle closed:
                 // the node is below the lowest manifold pressure this engine
@@ -436,8 +486,16 @@ void EngineMapGenTask::run_point(std::size_t i) {
                 held.p_supply_pa = held.p_im_pa;
                 r = engine_cycle::CycleEngine(s.desc, s.lhv, s.afr, held, s.engine_settings).run();
                 s.held[i] = 1;
+                // P7d: below the floor the held cycle may not breathe at all (long overlap: the exhaust fills the
+                // intake); finish() fills such a node from the nearest breathing node above (D2). Its trim state does
+                // not matter then, and its knock search is skipped.
+                if (!node_breathes(s.desc, s.lhv, s.afr, s.ops[i].p_im_pa, r.mean)) s.nonbreathing[i] = 1;
             }
-            if (i < s.grid_n) {
+            s.p_mean[i] = r.p_plenum_mean_pa;
+            if (i < s.grid_n && s.wot) {
+                // P7d: judged in finish(), which drops the rows at or above the lowest WOT plenum pressure.
+                s.node_status[i] = r.throttle_saturated ? 1 : (!(std::abs(r.plenum_error_rel) <= s.engine_settings.trim_tolerance) ? 2 : 0);
+            } else if (i < s.grid_n && !s.nonbreathing[i]) {
                 if (r.throttle_saturated) {
                     throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[i].p_im_pa) +
                                              " Pa unreachable at " + std::to_string(s.ops[i].rpm) +
@@ -454,7 +512,8 @@ void EngineMapGenTask::run_point(std::size_t i) {
         } else {
             s.results[i] = engine_cycle::run_operating_point(*s.proto, s.ops[i], s.settings);
         }
-        if (s.knock && i < s.grid_n) {
+        const bool knock_point = i < s.grid_n || (s.wot && i >= s.wot_base);
+        if (s.knock && knock_point && !s.nonbreathing[i]) {
             // P7: the knock-limited advance of this node for every listed fuel, by closed-cycle replays from the
             // converged IVC state (no gas exchange rerun). Only the octane differs between the fuels.
             engine_cycle::KnockReplayInput kin;
@@ -471,7 +530,7 @@ void EngineMapGenTask::run_point(std::size_t i) {
             for (std::size_t f = 0; f < s.knock_nf; ++f) {
                 kin.inv_on_term = s.knock_inv_on[f];
                 const engine_cycle::KnockLimitResult kr = engine_cycle::knock_limited_spark(kin, s.knock_mbt_btdc, s.desc.knock.margin_deg);
-                const std::size_t slot = i * s.knock_nf + f;
+                const std::size_t slot = (i < s.grid_n ? i : s.grid_n + (i - s.wot_base)) * s.knock_nf + f;
                 s.knock_kl[slot] = kr.theta_kl_btdc;
                 s.knock_flag[slot] = static_cast<unsigned char>((kr.limited ? 1 : 0) | (kr.saturated ? 2 : 0));
                 s.knock_replays[slot] = kr.replays;
@@ -522,21 +581,93 @@ EngineMapsPtr EngineMapGenTask::finish() {
     em.quality = s.quality;
     em.generator_version = s.version;
 
+    // P7d (progress file D1): the output p_im axis. Without WOT rows it is the author axis. With them, the author rows
+    // strictly below min(ambient, the lowest WOT plenum pressure) - the others are dropped - and one top row at ambient
+    // holding each rpm's wide-open-throttle state (its own plenum pressure is wot_p_im_pa, read by map_pressure_index).
+    std::size_t kept = np;
+    if (s.wot) {
+        real p_wot_min = kPamb;
+        for (std::size_t ir = 0; ir < nr; ++ir) p_wot_min = std::min(p_wot_min, s.p_mean[s.wot_base + ir]);
+        kept = 0;
+        while (kept < np && s.p_axis[kept] < p_wot_min) ++kept;
+        // ... and (D1b) while the highest kept row traps at least as much air as the WOT state on any rpm line (near WOT
+        // the trimmed engine can breathe slightly more than wide open - Mazda 2500 rpm 100 kPa: 97.27 vs 96.76 at
+        // p_wot 100.32 kPa), drop it too: eta_i is resampled over air, which must rise strictly up to the WOT node.
+        // A non-breathing (filled) node takes the WOT VE at a lower pressure and always passes.
+        auto air_of = [&](std::size_t si, real p) {
+            const real air_per_ve = p / r_t * v_disp * kCCycle; // finish()'s own expressions below
+            return cyl * s.results[si].m_air_j_cyc * kCCycle / air_per_ve * air_per_ve;
+        };
+        while (kept > 0) {
+            bool below = true;
+            for (std::size_t ir = 0; ir < nr && below; ++ir) {
+                const std::size_t si = ir * np + (kept - 1);
+                if (s.nonbreathing[si]) continue;
+                below = air_of(si, s.p_axis[kept - 1]) < air_of(s.wot_base + ir, s.p_mean[s.wot_base + ir]);
+            }
+            if (below) break;
+            --kept;
+        }
+        em.wot_dropped_rows = static_cast<int>(np - kept);
+        // The kept rows' trim failures, deferred from run_point, in index order (the message run_point throws otherwise).
+        // A dropped row above ambient is an author error on an ambient-fed engine, not a near-WOT row: it fails as before
+        // (A5 G3), with run_point's message when its trim failed and a plain one when a ram-tuned cycle reached it.
+        for (std::size_t ir = 0; ir < nr; ++ir) {
+            for (std::size_t ip = 0; ip < np; ++ip) {
+                const std::size_t k = ir * np + ip;
+                if (ip >= kept) {
+                    if (!(s.p_axis[ip] > kPamb)) continue;
+                    if (s.node_status[k] != 1) {
+                        throw std::runtime_error("engine map generator: grid_p_im row " + std::to_string(s.p_axis[ip]) +
+                                                 " Pa lies above the ambient " + std::to_string(kPamb) +
+                                                 " Pa of an ambient-fed engine (no forced induction)");
+                    }
+                } else if (s.nonbreathing[k] || s.node_status[k] == 0) {
+                    continue;
+                }
+                if (s.node_status[k] == 1) {
+                    throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[k].p_im_pa) +
+                                             " Pa unreachable at " + std::to_string(s.ops[k].rpm) +
+                                             " rpm (throttle fully open: mean plenum " + std::to_string(s.p_mean[k]) + " Pa)");
+                }
+                throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[k].p_im_pa) +
+                                         " Pa not settled at " + std::to_string(s.ops[k].rpm) + " rpm (mean plenum " +
+                                         std::to_string(s.p_mean[k]) + " Pa)");
+            }
+        }
+        if (kept == 0) {
+            throw std::runtime_error("engine map generator: no grid_p_im row lies below the wide-open-throttle plenum pressure (" +
+                                     std::to_string(p_wot_min) + " Pa)");
+        }
+    }
+    const std::size_t npo = s.wot ? kept + 1 : np; // output rows
+    std::vector<real> y_out(s.p_axis.begin(), s.p_axis.begin() + static_cast<std::ptrdiff_t>(kept));
+    if (s.wot) y_out.push_back(kPamb);
+    // Output node (ir, ipo) -> its point index, and the pressure its VE and pumping refer to.
+    auto src = [&](std::size_t ir, std::size_t ipo) { return ipo < kept ? ir * np + ipo : s.wot_base + ir; };
+    auto p_node = [&](std::size_t ir, std::size_t ipo) { return ipo < kept ? s.p_axis[ipo] : s.p_mean[s.wot_base + ir]; };
+
     auto grid_table = [&](Table2D& t) {
         t.x = s.rpm_axis;
-        t.y = s.p_axis;
-        t.values.assign(nr * np, real(0.0));
+        t.y = y_out;
+        t.values.assign(nr * npo, real(0.0));
     };
     grid_table(m.ve);
     grid_table(m.pmep_excess_pa);
     grid_table(em.t_exh_k);
     grid_table(em.h_exh_w);
-    std::vector<real> node_air(nr * np), node_eta(nr * np);
+    std::vector<real> node_air(nr * npo), node_eta(nr * npo);
+    std::vector<unsigned char> fill(nr * npo, 0); // P7d D2: non-breathing held node, filled from the node above
     for (std::size_t ir = 0; ir < nr; ++ir) {
-        for (std::size_t ip = 0; ip < np; ++ip) {
-            const std::size_t k = ir * np + ip;
-            const engine_cycle::PointResult& r = s.results[k];
-            const real p = s.p_axis[ip];
+        for (std::size_t ip = 0; ip < npo; ++ip) {
+            const std::size_t k = ir * npo + ip;
+            if (s.nonbreathing[src(ir, ip)]) {
+                fill[k] = 1;
+                ++em.nonbreathing_points;
+                continue;
+            }
+            const engine_cycle::PointResult& r = s.results[src(ir, ip)];
+            const real p = p_node(ir, ip);
             if (!(r.m_air_j_cyc > real(0.0))) {
                 throw std::runtime_error("engine map generator: no net fresh air at " + std::to_string(s.rpm_axis[ir]) +
                                          " rpm / " + std::to_string(p) + " Pa");
@@ -603,7 +734,7 @@ EngineMapsPtr EngineMapGenTask::finish() {
         for (unsigned char h : s.held) em.held_plenum_points += h;
     }
     m.theta_mbt_deg.x = {s.rpm_axis.front(), s.rpm_axis.back()};
-    m.theta_mbt_deg.y = {s.p_axis.front(), s.p_axis.back()};
+    m.theta_mbt_deg.y = {y_out.front(), y_out.back()};
     // theta_MBT (spark, deg BTDC): the MBT Wiebe start minus the ignition
     // delay; constant (fixed Wiebe), kept as a map. delay 0 -> exactly -mbt_atdc.
     m.theta_mbt_deg.values.assign(4, d.ignition_delay_deg == real(0.0) ? -s.mbt_atdc
@@ -614,9 +745,11 @@ EngineMapsPtr EngineMapGenTask::finish() {
     // runtime makes, so its eta_i * eta_spark reproduces the node.
     if (!d.spark_advance_deg.x.empty()) {
         for (std::size_t ir = 0; ir < nr; ++ir) {
-            for (std::size_t ip = 0; ip < np; ++ip) {
-                const std::size_t k = ir * np + ip;
-                const real rpm = s.rpm_axis[ir], p = s.p_axis[ip];
+            for (std::size_t ip = 0; ip < npo; ++ip) {
+                const std::size_t k = ir * npo + ip;
+                if (fill[k]) continue;
+                // The node's own operating point (a WOT point ran at the ECU spark at ambient).
+                const real rpm = s.rpm_axis[ir], p = s.ops[src(ir, ip)].p_im_pa;
                 const real x = d.spark_advance_deg.value(rpm, p) - m.theta_mbt_deg.value(rpm, p);
                 const real es = m.eta_spark.evaluate(x);
                 if (!(es > real(0.0))) {
@@ -633,10 +766,33 @@ EngineMapsPtr EngineMapGenTask::finish() {
         }
     }
 
+    // P7d D2: a non-breathing held node takes the nearest breathing node above on its rpm line (a constant-VE clamp:
+    // node air = VE x its own air_per_ve stays below the node above).
+    for (std::size_t ir = 0; ir < nr; ++ir) {
+        for (std::size_t ip = npo; ip-- > 0;) {
+            const std::size_t k = ir * npo + ip;
+            if (!fill[k]) continue;
+            if (ip + 1 >= npo) {
+                throw std::runtime_error("engine map generator: no breathing node above the held node at " +
+                                         std::to_string(s.rpm_axis[ir]) + " rpm / " + std::to_string(y_out[ip]) + " Pa");
+            }
+            m.ve.values[k] = m.ve.values[k + 1];
+            node_eta[k] = node_eta[k + 1];
+            m.pmep_excess_pa.values[k] = m.pmep_excess_pa.values[k + 1];
+            em.t_exh_k.values[k] = em.t_exh_k.values[k + 1];
+            em.h_exh_w.values[k] = em.h_exh_w.values[k + 1];
+            node_air[k] = m.ve.values[k] * (y_out[ip] / r_t * v_disp * kCCycle);
+        }
+    }
+    if (s.wot) {
+        m.wot_p_im_pa.x = s.rpm_axis;
+        for (std::size_t ir = 0; ir < nr; ++ir) m.wot_p_im_pa.y.push_back(s.p_mean[s.wot_base + ir]);
+    }
+
     // eta_i over rpm x m_air_rev: union axis, per-line piecewise-linear resampling.
     for (std::size_t ir = 0; ir < nr; ++ir) {
-        for (std::size_t ip = 1; ip < np; ++ip) {
-            if (!(node_air[ir * np + ip] > node_air[ir * np + ip - 1])) {
+        for (std::size_t ip = 1; ip < npo; ++ip) {
+            if (!(node_air[ir * npo + ip] > node_air[ir * npo + ip - 1])) {
                 throw std::runtime_error("engine map generator: air mass not strictly increasing in p_im at " +
                                          std::to_string(s.rpm_axis[ir]) + " rpm (eta_i resampling needs it)");
             }
@@ -649,15 +805,15 @@ EngineMapsPtr EngineMapGenTask::finish() {
     m.eta_i.y = yu;
     m.eta_i.values.assign(nr * yu.size(), real(0.0));
     for (std::size_t ir = 0; ir < nr; ++ir) {
-        const real* xa = &node_air[ir * np];
-        const real* ya = &node_eta[ir * np];
+        const real* xa = &node_air[ir * npo];
+        const real* ya = &node_eta[ir * npo];
         for (std::size_t iy = 0; iy < yu.size(); ++iy) {
             const real q = yu[iy];
             real v;
             if (q <= xa[0]) {
                 v = ya[0];
-            } else if (q >= xa[np - 1]) {
-                v = ya[np - 1];
+            } else if (q >= xa[npo - 1]) {
+                v = ya[npo - 1];
             } else {
                 std::size_t j = 1;
                 while (q > xa[j]) ++j; // xa[j-1] < q <= xa[j]
@@ -699,12 +855,20 @@ EngineMapsPtr EngineMapGenTask::finish() {
         for (std::size_t f = 0; f < s.knock_nf; ++f) {
             Table2D& t = m.theta_kl_by_fuel[f];
             grid_table(t);
-            for (std::size_t k = 0; k < s.grid_n; ++k) {
-                const std::size_t slot = k * s.knock_nf + f;
-                t.values[k] = s.knock_kl[slot];
-                if (s.knock_flag[slot] & 1) ++em.knock_limited_points;
-                if (s.knock_flag[slot] & 2) ++em.knock_saturated_points;
-                em.knock_replays += s.knock_replays[slot];
+            for (std::size_t ir = 0; ir < nr; ++ir) {
+                for (std::size_t ip = 0; ip < npo; ++ip) {
+                    const std::size_t k = ir * npo + ip;
+                    if (fill[k]) continue;
+                    const std::size_t si = src(ir, ip);
+                    const std::size_t slot = (si < s.grid_n ? si : s.grid_n + (si - s.wot_base)) * s.knock_nf + f;
+                    t.values[k] = s.knock_kl[slot];
+                    if (s.knock_flag[slot] & 1) ++em.knock_limited_points;
+                    if (s.knock_flag[slot] & 2) ++em.knock_saturated_points;
+                    em.knock_replays += s.knock_replays[slot];
+                }
+                for (std::size_t ip = npo; ip-- > 0;) {
+                    if (fill[ir * npo + ip]) t.values[ir * npo + ip] = t.values[ir * npo + ip + 1]; // P7d D2
+                }
             }
         }
         m.theta_kl_deg = m.theta_kl_by_fuel.front();
@@ -719,6 +883,7 @@ EngineMapsPtr EngineMapGenTask::finish() {
     m.source = std::string("generated by the ps::engine_cycle map generator v") + std::to_string(s.version) +
                (s.pipe ? " (PHYS-033 P4 I7c C16a; ps_audio A5 CycleEngine: every cylinder, pipes and installation)"
                        : " (PHYS-033 P4 I7c C16a)") +
+               (s.wot ? ", wide-open-throttle top row per rpm (engine garage P7d)" : "") +
                ", quality " + quality_name(s.quality) +
                ", from the engine file's cycle block" +
                (s.desc.source.empty() ? std::string() : " (cycle source: " + s.desc.source + ")");
@@ -962,6 +1127,8 @@ std::uint64_t engine_maps_content_hash(const EngineMaps& em) {
     f.table(em.t_exh_k);
     f.table(em.h_exh_w);
     f.pod(em.eta_spark_spread);
+    // P7d: the wide-open-throttle curve only when present (every map without it hashes as before).
+    if (!m.wot_p_im_pa.x.empty()) f.curve(m.wot_p_im_pa);
     return f.h;
 }
 

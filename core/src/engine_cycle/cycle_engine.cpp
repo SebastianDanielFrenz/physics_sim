@@ -595,6 +595,9 @@ CycleEngineResult CycleEngine::run() {
     real m0 = 0.0, x0 = 0.0, pl_mean = p_t;
     std::uint64_t k = 0;
     std::array<real, CycleEngineResult::kTraceCycles> trace_p{}, trace_c{};
+    const bool wot = settings_.wide_open_throttle && net;
+    if (wot) core_.set_throttle_cd_area(core_.throttle_cd_area_max());
+    real sum_x_last = 0.0;
     for (int cyc = 0; cyc < cycles; ++cyc) {
         const bool last = cyc == cycles - 1;
         for (std::size_t c = 0; c < nc; ++c) {
@@ -603,6 +606,7 @@ CycleEngineResult CycleEngine::run() {
             if (last) s.reset_peak_pressure();
         }
         if (last) {
+            sum_x_last = 0.0;
             m0 = core_.total_mass();
             x0 = net ? (net->exchange().ambient_mass_kg + net->exchange().waveguide_mass_kg +
                          net->exchange().source_mass_kg)
@@ -625,7 +629,9 @@ CycleEngineResult CycleEngine::run() {
             }
             step_all(k);
             if (net) {
-                sum_pl += net->volume_state(layout.plenum_volume).p;
+                const CvState plv = net->volume_state(layout.plenum_volume);
+                sum_pl += plv.p;
+                if (last) sum_x_last += plv.x;
                 sum_up += p_sup > 0.0 ? p_sup : layout.airbox_volume >= 0 ? net->volume_state(layout.airbox_volume).p : op_.p_amb_pa;
             }
         }
@@ -641,8 +647,8 @@ CycleEngineResult CycleEngine::run() {
             const real rn = static_cast<real>(n_);
             pl_mean = sum_pl / rn;
             const real p_up = sum_up / rn;
-            bool trim = !last;
-            if (last && extra < settings_.max_extra_trim_cycles && std::abs(pl_mean - p_t) > settings_.trim_tolerance * p_t &&
+            bool trim = !last && !wot;
+            if (last && !wot && extra < settings_.max_extra_trim_cycles && std::abs(pl_mean - p_t) > settings_.trim_tolerance * p_t &&
                 !(core_.throttle_cd_area() >= core_.throttle_cd_area_max() && pl_mean < p_t)) {
                 // Missed: keep trimming with the integral correction and
                 // measure again on the next cycle.
@@ -690,6 +696,7 @@ CycleEngineResult CycleEngine::run() {
     r.throttle_saturated = net && core_.throttle_cd_area() >= core_.throttle_cd_area_max() && r.plenum_error_rel < -settings_.trim_tolerance;
     r.air_change_rel = air_last > 0.0 ? std::fabs(air_last - air_prev) / air_last : 0.0;
     r.extra_trim_cycles = extra;
+    r.plenum_burned_mean = net ? sum_x_last / static_cast<real>(n_) : 0.0;
 
     real fuel = 0.0, res_in = 0.0, ev_m = 0.0, ev_mt = 0.0;
     PointResult& mr = r.mean;

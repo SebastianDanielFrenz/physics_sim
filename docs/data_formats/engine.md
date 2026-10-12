@@ -603,7 +603,7 @@ cycle model is I7e).
 | `banks` | array of arrays of integers | no (one bank, every cylinder) | every `1..cylinders` covered exactly once | groups cylinder numbers into exhaust banks (source positions, A8+) - does not affect firing timing |
 | `bank_angle_deg` | number | no (0) | | the V angle between banks, geometry only |
 | `grid_rpm` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality rpm grid of the generated tables |
-| `grid_p_im_kpa` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality manifold-pressure grid. On a pipe engine with a `default_forced_induction`, every node is generated with the throttle fed from a fixed supply of max(ambient, 1.05 x the node pressure) at ISA temperature (a compressor outlet after an ideal intercooler) instead of the snorkel/airbox, so the grid may extend above ambient - cover the boost range, or boosted lookups hold the top row. Without a turbo a node the ambient path cannot reach fails the load. A node below the lowest manifold pressure the engine reaches with the throttle closed (valve overlap pushes exhaust back into the intake; long cams idle at a higher MAP) does not fail: it is generated with the plenum held at the node pressure, and the engine breathes little or nothing there. The turbo configuration file (`data/turbo_configurations/*.json`) gives `target_boost_bar` (gauge) and an optional `boost_control` block (`kp`, `ki_per_s`, `kd_s`, `actuator_tau_s`: PID on charge pressure driving the wastegate); the turbo hardware file gives `reference_head_bar`. Pressures in turbo files are bar. |
+| `grid_p_im_kpa` | array | yes | >= 2 values, > 0, strictly ascending | Full-quality manifold-pressure grid. On a pipe engine with a `default_forced_induction`, every node is generated with the throttle fed from a fixed supply of max(ambient, 1.05 x the node pressure) at ISA temperature (a compressor outlet after an ideal intercooler) instead of the snorkel/airbox, so the grid may extend above ambient - cover the boost range, or boosted lookups hold the top row. Without a turbo a node the ambient path cannot reach fails the load. A node below the lowest manifold pressure the engine reaches with the throttle closed (valve overlap pushes exhaust back into the intake; long cams idle at a higher MAP) does not fail: it is generated with the plenum held at the node pressure, and the engine breathes little or nothing there (a held node that does not breathe at all is filled from the node above it, engine garage P7d, see "Wide-open-throttle row" below). On a pipe engine WITHOUT forced induction the top of the generated axis is not the authored grid: rows at or above the engine's wide-open-throttle plenum pressure are replaced by one wide-open-throttle row (same section), and a row above ISA ambient still fails the load. The turbo configuration file (`data/turbo_configurations/*.json`) gives `target_boost_bar` (gauge) and an optional `boost_control` block (`kp`, `ki_per_s`, `kd_s`, `actuator_tau_s`: PID on charge pressure driving the wastegate); the turbo hardware file gives `reference_head_bar`. Pressures in turbo files are bar. |
 
 Defaults in parentheses are the descriptor's literature values
 (`engine_cycle_desc.h`, each with its citation there). Unknown keys are
@@ -673,6 +673,62 @@ air-mass-per-revolution axis per rpm line. `eta_spark` is the mean of a
 spark sweep at three sites, `f_lambda` a lambda sweep at 3000 rpm / 80 kPa.
 The fuel is the engine's first `fuels` entry. At every grid node the
 runtime reproduces the cycle model's net torque exactly (1e-9).
+
+**Wide-open-throttle row (engine garage P7d, generator version 4).** Applies
+to a cycle engine with `intake`/`exhaust` pipe blocks, no forced induction
+and no `pressure_sampling` (`ps::drivetrain::engine_map_generates_wot_rows`).
+Before P7d such an engine's top grid rows were trimmed to a plenum pressure
+the open throttle may not reach: a pipe intake loses pressure across snorkel,
+airbox and throttle, so the wide-open plenum sits below ambient and varies
+with rpm (ram tuning), and a long-overlap cam failed the load outright.
+Now the generator also runs one point per rpm-axis value with the throttle
+held fully open and no trim (`CycleEngineSettings::wide_open_throttle`).
+- The output p_im axis is: the authored rows strictly below the lowest
+  wide-open plenum pressure of any rpm, then ONE top row at 101325 Pa
+  holding each rpm's wide-open state. A kept row is also dropped while it
+  traps at least as much air as the wide-open state on some rpm line (near
+  wide open a trimmed cycle can breathe slightly more; `eta_i` is resampled
+  over air, which must rise up to the top row). `EngineMaps::wot_dropped_rows`
+  counts the dropped rows.
+- Each rpm's wide-open plenum pressure is stored as
+  `maps.wot_p_im_pa` (a `Curve1D` over the rpm axis). `ve`,
+  `pmep_excess_pa` and `theta_kl_deg` are read at
+  `ps::drivetrain::map_pressure_index(maps, rpm, p_im, p_ambient)`
+  (`ps/drivetrain/map_pressure_index.h`): the pressure is referred to ISA
+  (`q = p_im x 101325 / p_ambient`), authored rows are read at `q`, and the band
+  between the last authored row and `wot_p_im_pa(rpm)` is stretched onto the
+  top row, so at ISA every authored node and every wide-open node reads
+  exactly. Without the curve (file maps, lumped and compressor-fed engines)
+  the index is the plain pressure and nothing changes. The dyno's grid
+  probe uses the same index.
+- A held node (below the closed-throttle floor) whose cycle does not breathe
+  (no net fresh air, VE <= 0 or `eta_i` outside (0, 1)) is filled from the
+  nearest breathing node above it on the same rpm line
+  (`EngineMaps::nonbreathing_points`). This applies to every pipe engine; on
+  the shipped ones no held node needs it, so their maps are unchanged.
+- An authored row above ISA ambient (101.325 kPa) still fails the load:
+  `"engine map generator: grid_p_im row ... Pa lies above the ambient ... Pa of
+  an ambient-fed engine (no forced induction)"`, or the old
+  `"plenum target ... Pa unreachable at ... rpm"` message when its trim failed.
+  A trim failure of a KEPT row fails with the old messages. No row below the
+  wide-open pressure fails with `"no grid_p_im row lies below the
+  wide-open-throttle plenum pressure"`.
+- A file `maps` block cannot mix with the generated top row: when the
+  generator produces the curve, the file gives either all of `ve`,
+  `pmep_excess_kpa` and `theta_kl` (the latter only for a knock-limited
+  engine) or none of them, otherwise the load fails with "... carry a
+  wide-open-throttle row (engine garage P7d); give all of ve, pmep_excess_kpa
+  and theta_kl in the maps block, or none of them".
+- Versions: `kLumpedGeneratorVersion` 1 (no pipes), `kPipeGeneratorVersion` 3
+  (pipe engines with forced induction or `pressure_sampling`, unchanged; an
+  adaptive engine still adds 259 as before),
+  `kPipeWotGeneratorVersion` 4 (this path); `kGeneratorVersion` = 4. The
+  version is in the `.psmaps` key, so every ambient-fed pipe engine
+  regenerates once. The cache file gains an optional tagged trailing block
+  holding the curve; the maps' content hash folds the curve only when it
+  exists (lumped and compressor-fed content hashes are unchanged).
+- Cost: one extra point per rpm value (Sketch 8, Preview <= 10, Full the whole
+  rpm axis). `on_progress`'s `total` includes them.
 
 **Quality.** `ps::io::EngineMapOptions` (`ps/io/vehicle_io.h`, the
 `load_vehicle_json(path, options)` / `load_scenario(path, options)`

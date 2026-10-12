@@ -5,6 +5,7 @@
 // to_engine_desc), SimulatedEngine::steady_point (the definition of the engine's steady tables), or the stepped
 // SimulatedEngine itself (pre_solve/post_solve with TurboPair, wastegate PID, charge lag). No physics lives here.
 #include "ps/drivetrain/engine_dyno.h"
+#include "ps/drivetrain/map_pressure_index.h"
 
 #include "engine_params_util.h"
 #include "engine_simulated.h"
@@ -93,12 +94,22 @@ struct GridProbe {
     real rpm_lo = 0.0, rpm_hi = 0.0, p_lo = 0.0, p_hi = 0.0;
     const char* rpm_field = "";
     const char* p_field = "";
+    // Engine garage P7d: generated WOT rows - the manifold pressure is compared in the tables' own (warped) coordinate
+    // (map_pressure_index at the sweep's ambient), and reaching the top (WOT) row is the design, not "near" an edge.
+    const SimulatedEngineMapsDesc* warp = nullptr;
+    real ambient_pa = 0.0;
+    bool p_near_upper = true;
 };
 
-GridProbe make_grid_probe(const SimulatedEngineDesc& d, const SimulatedEngineMaps& m) {
+GridProbe make_grid_probe(const SimulatedEngineDesc& d, const SimulatedEngineMaps& m, real ambient_pa) {
     GridProbe g;
     const Table2D& ve = m.maps.ve;
     if (ve.x.empty() || ve.y.empty()) return g;
+    if (has_wot_rows(m.maps)) {
+        g.warp = &m.maps;
+        g.ambient_pa = ambient_pa;
+        g.p_near_upper = false;
+    }
     g.valid = true;
     g.rpm_lo = ve.x.front();
     g.rpm_hi = ve.x.back();
@@ -114,7 +125,8 @@ GridProbe make_grid_probe(const SimulatedEngineDesc& d, const SimulatedEngineMap
 struct EdgeAcc {
     long n = 0, p_above = 0, p_below = 0, rpm_above = 0, rpm_below = 0;
     real p_max = -kInf, p_min = kInf, rpm_max = -kInf, rpm_min = kInf;
-    void add(const GridProbe& g, real rpm, real p_pa) {
+    void add(const GridProbe& g, real rpm, real p_in_pa) {
+        const real p_pa = g.warp != nullptr ? map_pressure_index(*g.warp, rpm, p_in_pa, g.ambient_pa).y : p_in_pa;
         ++n;
         if (p_pa > g.p_hi) ++p_above;
         if (p_pa < g.p_lo) ++p_below;
@@ -146,7 +158,7 @@ void emit_edge_axis(Findings& out, real rpm_tag, long n, long above, long below,
 
 void edge_findings(Findings& out, real rpm_tag, const GridProbe& g, const EdgeAcc& e, const std::string& engine_file) {
     if (!g.valid || e.n == 0) return;
-    emit_edge_axis(out, rpm_tag, e.n, e.p_above, e.p_below, e.p_max, e.p_min, g.p_lo, g.p_hi, LimitUnit::Pascal, g.p_field, engine_file, true);
+    emit_edge_axis(out, rpm_tag, e.n, e.p_above, e.p_below, e.p_max, e.p_min, g.p_lo, g.p_hi, LimitUnit::Pascal, g.p_field, engine_file, g.p_near_upper);
     emit_edge_axis(out, rpm_tag, e.n, e.rpm_above, e.rpm_below, e.rpm_max, e.rpm_min, g.rpm_lo, g.rpm_hi, LimitUnit::RevPerMinute,
                    g.rpm_field, engine_file, false);
 }
@@ -580,7 +592,7 @@ DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<c
         probe.max_mass_flow_kg_s = td.max_mass_flow_kg_s;
         probe.surge = td.surge_line.has_value() ? &*td.surge_line : nullptr;
     }
-    const GridProbe grid = make_grid_probe(desc, engine.maps());
+    const GridProbe grid = make_grid_probe(desc, engine.maps(), spec.ambient.pressure_pa);
     probe.grid = grid;
 
     WindowStats w;
@@ -759,7 +771,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
         result.points.reserve(rpms.size());
         std::vector<Findings> per_point;
         per_point.reserve(rpms.size());
-        const GridProbe grid = make_grid_probe(*sim, *m);
+        const GridProbe grid = make_grid_probe(*sim, *m, spec.ambient.pressure_pa);
         for (real rpm : rpms) {
             if (cancelled(cancel)) throw GenerationCancelled();
             real p_im_pa = 0.0;
