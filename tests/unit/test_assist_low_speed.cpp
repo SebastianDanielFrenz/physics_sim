@@ -467,7 +467,7 @@ TEST_CASE("I2 V2: 12 % WOT crawl from 0.4 m/s, TC On/Relaxed/Sport/Drift", "[ass
 // |v|), so TC allows ~0.16 m/s of wheel overspeed, kappa ~3.5 at 0.046 m/s; lowering the floor (env
 // PS_I2_TC_FLOOR, diag only) gives v_end 1.07 / 0.046 / 0.13 m/s at 1.0 / 0.5 / 0.25 m/s - not monotone, no fix.
 // Outside D-LS1..3 (a TC slip-reference question at crawl), reported as an open point.
-TEST_CASE("I2 V2 low grip: lambda_mu 0.35, 12 % WOT, TC On/Relaxed/Sport/Drift", "[assist][vehicle][drivetrain][long][!mayfail]") {
+TEST_CASE("I2 V2 low grip: lambda_mu 0.35, 12 % WOT, TC On/Relaxed/Sport/Drift", "[assist][vehicle][drivetrain][!mayfail]") {
     for (int mode = 1; mode <= 4; ++mode) {
         Case c;
         c.surface = "fx_lambda_035";
@@ -616,7 +616,7 @@ TEST_CASE("I2 V11: 1 vs 10 workers equal hash (V2, V12) and zero own allocation 
 // rear kappa_eq mean first crosses zero (or 0.25 s), the chassis velocity change along the slope over the same
 // window, and kappa_eq at the dump. Surfaces from tests/support/fixtures/assists/surfaces_racing_game.json, whose
 // "grass" keeps Part A's lambda_mu 0.42 (shipped grass is 0.6 since I2). Env: PS_I2A_SURFACE (grass | grass_rg |
-// asphalt), PS_I2A_GRADE (0.12), PS_I2A_DUMPS_TRACED (3).
+// asphalt), PS_I2A_GRADE (0.12), PS_I2A_DUMPS_TRACED (3), PS_I2A_MODE (TC code, 1 = On).
 TEST_CASE("I2a spring-back diag", "[.][diag][assist]") {
     const std::string se = env_string("PS_I2A_SURFACE"), ge = env_string("PS_I2A_GRADE"), te = env_string("PS_I2A_DUMPS_TRACED");
     const std::string surface = se.empty() ? "grass" : se;
@@ -653,7 +653,8 @@ TEST_CASE("I2a spring-back diag", "[.][diag][assist]") {
     rig.vehicle = rig.world->create_vehicle(desc, rig.chassis);
     World& w = *rig.world;
     const Vec3 dir = tilt.rotate(Vec3::unit_x());
-    w.set_control("assist.traction_control", 1.0);
+    const std::string me = env_string("PS_I2A_MODE");
+    w.set_control("assist.traction_control", me.empty() ? 1.0 : std::stod(me));
     w.set_control("assist.auto_clutch", 1.0);
     w.set_control("handbrake", 1.0);
     w.set_control("gear_request", 1.0);
