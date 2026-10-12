@@ -226,6 +226,9 @@ Result run_case(const Case& c) {
     vehicle::VehicleDesc desc = c.v12 ? v12_desc() : hyper_desc();
     if (c.racing_rig)
         for (auto& wd : desc.wheels) vehicle::select_rolling_resistance_speed_law(wd.tyre, vehicle::RollingResistanceSpeedLaw::Quadratic);
+    // Diag only (env PS_I2_TC_FLOOR, m/s): override TC mode On's reference_floor_m_s (default 2.0) - the open-point
+    // experiment for the lambda 0.35 crawl, see the V2 low-grip case. Unset in every asserted run.
+    if (const std::string floor = env_string("PS_I2_TC_FLOOR"); !floor.empty()) desc.traction_control.reference_floor_m_s = std::stod(floor);
     const real anti_stall = anti_stall_of(desc);
 
     ps_test::VehicleTestRig rig;
@@ -234,8 +237,13 @@ Result run_case(const Case& c) {
     cfg.substep_rate_hz = 960.0;
     cfg.job_workers = c.workers;
     rig.world = std::make_unique<World>(cfg);
-    rig.surfaces = std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
-    const SurfaceId sid = rig.surfaces->id_for(c.surface);
+    // "fx_<name>": <name> from the assists fixture table (fx_grass = Part A's grass 0.42, fx_lambda_035 = lambda_mu
+    // 0.35), every other name from the shipped data/surfaces/surfaces.json.
+    const bool fixture_surface = c.surface.rfind("fx_", 0) == 0;
+    rig.surfaces = std::make_shared<io::SurfaceTable>(
+        std::string(PS_SOURCE_DIR) +
+        (fixture_surface ? "/tests/support/fixtures/assists/surfaces_racing_game.json" : "/data/surfaces/surfaces.json"));
+    const SurfaceId sid = rig.surfaces->id_for(fixture_surface ? c.surface.substr(3) : c.surface);
     const real theta = math::atan(-c.grade);
     const Quat tilt = Quat::from_axis_angle(Vec3::unit_y(), theta);
     BodyDesc ground;
@@ -371,7 +379,10 @@ void print_row(const char* tag, const Case& c, const Result& r) {
     std::fflush(stdout);
 }
 
-const std::vector<std::string> kSurfaces = {"grass", "low_mu", "dirt", "asphalt"};
+// The four shipped surfaces plus two fixture rows (added after the first post-fix run, bands unchanged): grass 0.6
+// made V1 pass even with the fix sabotaged, so Part A's grass 0.42 (fx_grass) and a lambda_mu 0.35 surface
+// (fx_lambda_035, the lowest grip the grip rule keeps at 12 %; low_mu is excluded at 8 and 12 %) are covered too.
+const std::vector<std::string> kSurfaces = {"grass", "low_mu", "dirt", "asphalt", "fx_grass", "fx_lambda_035"};
 
 // V1/V2/V4 bands, [AS] (brief).
 void check_v1(const Case& c, const Result& r) {
@@ -434,7 +445,8 @@ TEST_CASE("I2 V1: 8 % crawl at pedal 0.5 from 0.4 m/s, every TC mode", "[assist]
 }
 
 TEST_CASE("I2 V2: 12 % WOT crawl from 0.4 m/s, TC On/Relaxed/Sport/Drift", "[assist][vehicle][drivetrain][long]") {
-    for (const auto& s : kSurfaces)
+    for (const auto& s : kSurfaces) {
+        if (s == "fx_lambda_035") continue; // its own [!mayfail] case below
         for (int mode = 1; mode <= 4; ++mode) {
             Case c;
             c.surface = s;
@@ -445,6 +457,27 @@ TEST_CASE("I2 V2: 12 % WOT crawl from 0.4 m/s, TC On/Relaxed/Sport/Drift", "[ass
             print_row("V2", c, r);
             check_v2(c, r);
         }
+    }
+}
+
+// V2 on lambda_mu 0.35 (fixture), the band of V2 unchanged. [!mayfail] with the discriminating measurement: the grip
+// rule keeps this surface (F_req 2922 N < F_avail 3719 N, peak Fx), but every TC mode AND TC Off creep at 0.046 m/s
+// for the whole 8 s [M] - a sliding equilibrium: the rear tyres run far past peak slip and the sliding Fx (0.78-0.82 of
+// peak at kappa 3, pinned for every shipped tyre by test_pacejka_tyre_model: ~2975 N) about balances F_req. At crawl the TC slip reference is max(2.0 m/s reference_floor,
+// |v|), so TC allows ~0.16 m/s of wheel overspeed, kappa ~3.5 at 0.046 m/s; lowering the floor (env
+// PS_I2_TC_FLOOR, diag only) gives v_end 1.07 / 0.046 / 0.13 m/s at 1.0 / 0.5 / 0.25 m/s - not monotone, no fix.
+// Outside D-LS1..3 (a TC slip-reference question at crawl), reported as an open point.
+TEST_CASE("I2 V2 low grip: lambda_mu 0.35, 12 % WOT, TC On/Relaxed/Sport/Drift", "[assist][vehicle][drivetrain][long][!mayfail]") {
+    for (int mode = 1; mode <= 4; ++mode) {
+        Case c;
+        c.surface = "fx_lambda_035";
+        c.grade = 0.12;
+        c.throttle = 1.0;
+        c.mode = mode;
+        const Result r = run_case(c);
+        print_row("V2", c, r);
+        check_v2(c, r);
+    }
 }
 
 TEST_CASE("I2 V2 short: 12 % WOT crawl on grass, TC On", "[assist][vehicle][drivetrain]") {
@@ -459,7 +492,7 @@ TEST_CASE("I2 V2 short: 12 % WOT crawl on grass, TC On", "[assist][vehicle][driv
     check_v2(c, r);
 }
 
-TEST_CASE("I2 V3: grass 12 % WOT, TC On, reaches 8 m/s in 8 s", "[assist][vehicle][drivetrain][long]") {
+TEST_CASE("I2 V3: grass 12 % WOT, TC On, reaches 8 m/s in 8 s", "[assist][vehicle][drivetrain]") {
     Case c;
     c.surface = "grass";
     c.grade = 0.12;

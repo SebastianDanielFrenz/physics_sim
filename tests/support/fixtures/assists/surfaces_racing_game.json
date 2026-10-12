@@ -1,6 +1,6 @@
 {
   "format": "physics_sim.surfaces/1",
-  "description": "Test fixture for tests/unit/test_assist_slope_crawl_diag.cpp (assists plan Part A). asphalt and grass are copied from data/surfaces/surfaces.json; grass_rg copies racing_game's game-owned grass entry (racing_game data/surfaces/surfaces.json at 2026-10-12: lambda_mu 0.63, crr 0.08 - an owner handling adjustment there, RACE-002, not a measurement) so the crawl diagnosis can run on the surface the owner drove on.",
+  "description": "Test fixture for tests/unit/test_assist_slope_crawl_diag.cpp (assists plan Part A). asphalt and grass are copied from data/surfaces/surfaces.json; grass_rg copies racing_game's game-owned grass entry (racing_game data/surfaces/surfaces.json at 2026-10-12: lambda_mu 0.63, crr 0.08 - an owner handling adjustment there, RACE-002, not a measurement) so the crawl diagnosis can run on the surface the owner drove on. Assists I2 (tests/unit/test_assist_low_speed.cpp) also runs V1/V2/V4 on grass (0.42) and on lambda_035.",
   "fields": {
     "lambda_mu": "Pacejka-style friction scale relative to dry asphalt = 1.0.",
     "crr": "Rolling-resistance coefficient (dimensionless, F_roll = crr * N)."
@@ -23,6 +23,12 @@
       "lambda_mu": 0.63,
       "crr": 0.08,
       "source": "COPIED from racing_game data/surfaces/surfaces.json grass (owner adjustment 0.42 -> 0.84 -> 0.63, RACE-002); not a measurement."
+    },
+    "lambda_035": {
+      "display_name": "Low-grip test surface",
+      "lambda_mu": 0.35,
+      "crr": 0.08,
+      "source": "[AS] assists I2 fixture: the lowest-grip case the V1/V2/V4 grip rule keeps on 12 % (shipped low_mu is excluded there); crr copied from grass."
     }
   }
 }

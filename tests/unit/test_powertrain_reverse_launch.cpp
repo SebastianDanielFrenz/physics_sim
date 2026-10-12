@@ -76,6 +76,7 @@ struct Rig {
         // Assists I2 (owner Q2): car_hyper carries the Racing assist unit (TC default On); these cases test the
         // auto-clutch's reverse-rotation hold alone, so TC is off explicitly (a no-op on car_sedan).
         rig.world->set_control("assist.traction_control", 0.0);
+        rig.world->set_control("assist.aero_control", 0.0); // and the unit's wing automation (assists I5)
         rig.world->set_control("handbrake", 1.0);
         ps_test::settle(*rig.world, 1.0);
         vehicle::VehicleResetOptions reset;
