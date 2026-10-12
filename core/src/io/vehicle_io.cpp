@@ -4588,16 +4588,16 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 if (v.drive_modes) throw std::runtime_error(ectx + ": at most one drive_modes per vehicle");
                 for (int m = 0; m < ps::vehicle::kDriveModeCount; ++m) {
                     if (!(part.drive_modes.modes_bits & ps::vehicle::drive_mode_bit(static_cast<ps::vehicle::DriveMode>(m)))) continue;
-                    const ps::vehicle::DriveModeParams& p = part.drive_modes.params[static_cast<std::size_t>(m)];
-                    const bool shift = p.up_rpm_at_zero_throttle || p.up_rpm_at_full_throttle || p.down_rpm_at_zero_throttle || p.down_rpm_at_full_throttle;
-                    if ((shift || p.clutch_close_time_s) && tcu == nullptr) {
+                    const ps::vehicle::DriveModeParams& dmp = part.drive_modes.params[static_cast<std::size_t>(m)];
+                    const bool shift = dmp.up_rpm_at_zero_throttle || dmp.up_rpm_at_full_throttle || dmp.down_rpm_at_zero_throttle || dmp.down_rpm_at_full_throttle;
+                    if ((shift || dmp.clutch_close_time_s) && tcu == nullptr) {
                         throw std::runtime_error(ectx + ": mode '" + ps::vehicle::kDriveModeNames[m] + "' overrides auto_shift / auto_clutch but the vehicle has no manual_tcu");
                     }
                     if (shift) {
-                        const real uz = p.up_rpm_at_zero_throttle.value_or(tcu->auto_shift.up_rpm_at_zero_throttle);
-                        const real uf = p.up_rpm_at_full_throttle.value_or(tcu->auto_shift.up_rpm_at_full_throttle);
-                        const real dz = p.down_rpm_at_zero_throttle.value_or(tcu->auto_shift.down_rpm_at_zero_throttle);
-                        const real df = p.down_rpm_at_full_throttle.value_or(tcu->auto_shift.down_rpm_at_full_throttle);
+                        const real uz = dmp.up_rpm_at_zero_throttle.value_or(tcu->auto_shift.up_rpm_at_zero_throttle);
+                        const real uf = dmp.up_rpm_at_full_throttle.value_or(tcu->auto_shift.up_rpm_at_full_throttle);
+                        const real dz = dmp.down_rpm_at_zero_throttle.value_or(tcu->auto_shift.down_rpm_at_zero_throttle);
+                        const real df = dmp.down_rpm_at_full_throttle.value_or(tcu->auto_shift.down_rpm_at_full_throttle);
                         if (!(dz < uz) || !(df < uf)) {
                             throw std::runtime_error(ectx + ": mode '" + ps::vehicle::kDriveModeNames[m] +
                                                      "': the merged auto-shift downshift rpm must stay below the upshift rpm at zero and at full throttle");

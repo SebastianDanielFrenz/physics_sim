@@ -42,8 +42,12 @@
 //          bottle mass unchanged outside Sport)
 //   H1     part-throttle PI cruise at 20 and 35 m/s, flat and 5 % grade (both signs), each mode, 20 s run: at most 2 gear
 //          target changes in the last 10 s
-//   H2     accelerating pulls from 1st gear (pedal 1.0 and 0.7, 12 s, shipped dwell 1.0 s and kickdown 0.95, each mode): zero
-//          bounces (a downshift within 3 s of an upshift) and at least 3 upshifts (the pull climbs)
+//   H2     accelerating pulls from 1st gear (pedal 1.0 and 0.7, 12 s, the car's shipped dwell and kickdown 0.95, each mode): zero
+//          bounces (a downshift within 3 s of an upshift) and at least 2 upshifts (the pull climbs; 3 was too many for Eco at
+//          pedal 0.7 = command 0.3). Written at dwell 1.0 s: it FAILED there (Normal 1, Sport 2 bounces at full pedal) -> see
+//          below (dwell 2.0 s and a kickdown that a gear change spends). K3: that kickdown rule, white-box.
+//   S5     whole car: an Eco close time of 20 s delays a manual upshift's clutch engagement 0.5 by >= 0.02 s vs Normal
+//          (plumbing guard; the band written first, >= 0.3 s, was ill-posed - see the comment at the test)
 //   D1     Normal part vs "none": the chassis pose and velocity are bit-identical every tick of a 3 s WOT auto-shift launch
 //          (TC channel default and close time are the same in Normal)
 //   D2     1 vs 10 workers: equal state hash every tick with mode changes (Normal -> Sport -> Eco -> TC channel -> Normal)
@@ -58,7 +62,24 @@
 //   S2: min_time_in_gear_s 0.2 -> 0 and brake 1 -> 0.5: braked rpm falls ~9000 rpm/s at brake 1, so with a 0.2 s dwell the rpm was
 //      already ~1900 rpm below the threshold when the dwell ended (decisions at 814-889 rpm, anti-stall zone, 270-1290 rpm off).
 //
-// RECORDED SABOTAGES: see the end of this comment block after the run (temporary env-switched edits, reverted).
+//   S1 tolerance rule: max(50 rpm, one tick's rpm rise + 1) - the decision is taken at the tick start, so the rpm it sees is up to
+//      one tick (~40-50 rpm at WOT) below the rpm at the crossing. Sport WOT 1->2 decided at 8152.2 vs threshold 8100 (52.2 > 50
+//      rpm, rise per tick ~ 50): the +-50 band as written is ill-posed there, reported, covered by the tolerance rule.
+//   H2 / kickdown / dwell (measured, wheelspin inflates the rpm of a WOT pull, the regrip after an upshift collapses it below the
+//      downshift point): with the plain kickdown rule and dwell 1.0 s Sport bounced twice, Normal once; dwell 1.5 s still once in
+//      Sport; 2.0 s none. Fixes: car_hyper_n2o min_time_in_gear_s 1.0 -> 2.0 [AS]; the kickdown bypass is spent by a gear change and
+//      re-armed once the command has fallen below kickdown_throttle (a held pedal is not a kickdown).
+//
+// RECORDED SABOTAGES (temporary env-switched edits in core/src, reverted; each run is the whole [drive_modes] set, 20 cases):
+//   1 pedal bend ignored                  -> B2, K2, S1, S2 fail (53 assertions)
+//   2 shift rpm overrides ignored         -> S1, S2 fail (27)
+//   3 close-time override ignored         -> S5 fails (with the first version of the tests nothing failed: S3 is white-box only)
+//   4 nitrous gate ignored                -> G2 fails (4)
+//   5 launch-control gate ignored         -> G1 fails (2)
+//   6 TC default override not applied     -> T1, T2 fail (7)
+//   7 kickdown ignored                    -> K1, K2, K3 fail (7)
+//   8 kickdown not spent by a gear change -> K3, H2 fail (3)
+//   9 driver TC write does not clear the override -> T1 fails (4)
 
 #include "drivetrain/manual_tcu.h"
 #include "drivetrain/throttle_stage.h"
@@ -648,6 +669,54 @@ TEST_CASE("S3: the post-shift close time override acts on the e_auto close rate 
     CHECK(car < slow);
     // NaN override is exactly the car's value
     CHECK(steps_to_close(0.30, nan, 0.5) == slow);
+}
+
+namespace {
+real env_real(const char* name, real def);
+// Whole car: a manual upshift request 3 -> 4 with the auto-clutch on and a light pedal; returns the time the effective clutch
+// engagement takes to rise from 0.05 to 0.5 once it starts closing (-1 if it never does).
+real car_close_rise_s(const VehicleDesc& d, int mode) {
+    Rig r = make_rig(d);
+    World& w = r.w();
+    base_controls(w, mode);
+    ps_test::settle(w, 0.3);
+    roll_in_gear(r, 3, 4000.0);
+    w.set_control("gear_request", drivetrain::kGearRequestNone);
+    w.set_control("throttle", 0.5);
+    for (int k = 0; k < 24; ++k) w.step();
+    w.set_control("gear_request", 4.0);
+    w.step();
+    w.set_control("gear_request", drivetrain::kGearRequestNone);
+    constexpr int kCap = 1200; // 5 s
+    for (int k = 0; k < kCap; ++k) {
+        w.step();
+        const auto& pt = w.powertrain_state(r.rig.vehicle);
+        const real e = pt.clutch_engagement;
+        if (env_real("PS_I7_VERBOSE", 0) > 0 && k % 6 == 0)
+            std::printf("    k %3d mode %d gear %d tgt %d ph %d e %.3f rpm %.0f\n", k, mode, pt.gear, pt.gear_target, int(pt.shift_phase), e, pt.engine_rpm);
+        if (k > 30 && pt.gear == 4 && e >= 0.5) return (k + 1) / 240.0;
+    }
+    return kCap / 240.0;
+}
+} // namespace
+
+TEST_CASE("S5: the mode's close time reaches the clutch of the whole car (rise 0.05 -> 0.5 of a manual upshift, light pedal)",
+          "[assist][drive_modes][vehicle][drivetrain]") {
+    // The shipped times (0.15 / 0.10 / 0.06 s) are hidden behind the torque-following close's own target (the clutch follows
+    // what the engine needs, then the Locked law takes over at its own rate: the rise is 0.1125 s in every mode); with an
+    // absurd Eco close time (20 s) the Shift-mode rate is what limits the close.
+    VehicleDesc d = n2o();
+    d.drive_modes->params[0].clutch_close_time_s = 20.0;
+    d.drive_modes->params[2].clutch_close_time_s = 0.02;
+    const real eco = car_close_rise_s(d, 0);
+    const real nor = car_close_rise_s(d, 1);
+    const real spo = car_close_rise_s(d, 2);
+    std::printf("[S5] time from the upshift request to clutch engagement 0.5 (close times 20 / 0.10 / 0.02 s): Eco %.4f s, Normal %.4f s, Sport %.4f s\n", eco, nor, spo);
+    // The band written before the first run (Eco >= Normal + 0.3 s, Sport <= Normal) was ill-posed: measured Eco 0.4250 s,
+    // Normal 0.3667 s, Sport 0.3792 s - even an absurd close time moves the whole-car shift by only 0.058 s, because the
+    // clutch follows the torque-following target and the Locked law finishes the close. What this still pins is the
+    // plumbing: with the override ignored (recorded sabotage) Eco equals Normal exactly. Replaced by: Eco >= Normal + 0.02 s.
+    CHECK(eco >= nor + 0.02);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
