@@ -36,7 +36,13 @@
 //        from the target, sits on the target (<= 1e-9 rad) whenever the slew limit does not bind, and at 2.0 s has
 //        reached the airbrake target 45 deg (0.785398 rad) within 1e-6 rad.
 //
-// Every guard has a recorded sabotage (out/assists_i5_progress.md in the worktree).
+// RECORDED SABOTAGES (2026-10-12, each performed by hand via a temporary env switch, then reverted; "x" = failing checks):
+//   S1 forward speed taken from the ground velocity (wind ignored) ........ W2 fails (4 assertions, lines "headwind/tailwind")
+//   S2 airbrake speed gate 20 m/s -> 0 m/s ................................ W0, W1 (gate checks) and W2 fail
+//   S3 World command not restored after the substeps ...................... C2 fails (offset stays on the controller value)
+//   S4 airbrake wins over the launch hook (priority swapped) .............. L1 fails (launch target 10 deg not held)
+//   S5 channel registered on a wingless car (fitment ignores the surface) . F2 and F3 fail
+// All five pass again unmodified: 13 test cases, 1388 assertions.
 
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/drivetrain/powertrain_desc.h"
