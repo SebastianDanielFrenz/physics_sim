@@ -313,6 +313,72 @@ void check_cam_profiles(Sink& s, const SimulatedEngineDesc& e, const CycleModelD
     }
 }
 
+// Engine garage P10: a continuous intake lift family - monotone in u (the ECU's lift strategy inverts torque over u), the
+// minimum node inside its band, and every node's lift under the valve band (the exhaust lift is the engine's single one).
+void check_lift_family(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c) {
+    const auto& f = c.lift_family;
+    if (f.size() < 2) return;
+    const auto node_ptr = [](std::size_t k) { return "/intake_lift_family/" + std::to_string(k) + "/intake_lift"; };
+    for (std::size_t k = 1; k < f.size(); ++k) {
+        real pk0 = 0.0, ar0 = 0.0, pk1 = 0.0, ar1 = 0.0;
+        lift_figures(f[k - 1].intake_lift, pk0, ar0);
+        lift_figures(f[k].intake_lift, pk1, ar1);
+        if (!(pk1 > pk0) || !(ar1 > ar0)) {
+            s.add(BuildRule::LiftFamilyOrder, LimitSeverity::Limiting, "cam", node_ptr(k),
+                  "intake lift node u = " + num(f[k].u, 3) + " has no more lift than node u = " + num(f[k - 1].u, 3) + ": peak " +
+                      mm(pk1) + " vs " + mm(pk0) + ", area " + num(ar1 * real(1e3), 4) + " vs " + num(ar0 * real(1e3), 4) +
+                      " mm*deg (the ECU's lift strategy needs the load to rise with u)",
+                  "[D] the ECU interpolates its torque targets over u, which assumes lift (and air) rising with u", pk1, pk0,
+                  LimitUnit::Millimetre);
+        }
+    }
+    // The minimum node: the ECU's min_u if it is a node, else the first node.
+    std::size_t kmin = 0;
+    for (std::size_t k = 0; k < f.size(); ++k) {
+        if (f[k].u == e.lift_control.min_u) kmin = k;
+    }
+    real pk_min = 0.0, ar_min = 0.0, pk_full = 0.0, ar_full = 0.0;
+    lift_figures(f[kmin].intake_lift, pk_min, ar_min);
+    lift_figures(f.back().intake_lift, pk_full, ar_full);
+    const real min_mm = pk_min * real(1000.0);
+    if (below(min_mm, tab::kLiftMinPeakMinMm.value)) {
+        s.add(BuildRule::LiftMinimumBand, LimitSeverity::Near, "cam", node_ptr(kmin),
+              "the minimum intake lift is " + mm(pk_min) + " (band >= " + num(tab::kLiftMinPeakMinMm.value, 3) +
+                  " mm; BMW's second-generation Valvetronic runs 0.18 mm)",
+              label_of(tab::kLiftMinPeakMinMm), min_mm, tab::kLiftMinPeakMinMm.value, LimitUnit::Millimetre);
+    }
+    if (pk_full > real(0.0) && above(pk_min / pk_full, tab::kLiftMinPeakMaxFraction.value)) {
+        s.add(BuildRule::LiftMinimumBand, LimitSeverity::Near, "cam", node_ptr(kmin),
+              "the minimum intake lift " + mm(pk_min) + " is " + num(pk_min / pk_full, 3) + " of the " + mm(pk_full) +
+                  " full lift (band <= " + num(tab::kLiftMinPeakMaxFraction.value, 3) +
+                  "): the throttle, not the lift, sets the light loads",
+              label_of(tab::kLiftMinPeakMaxFraction), pk_min / pk_full, tab::kLiftMinPeakMaxFraction.value, LimitUnit::Fraction);
+    }
+    // Lift over valve head: every intake node and the exhaust lift.
+    for (std::size_t k = 0; k < f.size() && c.intake_valve_d_m > real(0.0); ++k) {
+        real pk = 0.0, ar = 0.0;
+        lift_figures(f[k].intake_lift, pk, ar);
+        const real d = c.intake_valve_d_m;
+        if (above(pk / d, tab::kCamLiftOverValveMax.value)) {
+            s.add(BuildRule::CamLiftOverValve, LimitSeverity::Limiting, "cam", node_ptr(k),
+                  "intake lift node u = " + num(f[k].u, 3) + " lifts the intake valves " + mm(pk) + ", " + num(pk / d, 3) +
+                      " of their " + mm(d) + " head (band <= " + num(tab::kCamLiftOverValveMax.value, 3) + ")",
+                  label_of(tab::kCamLiftOverValveMax), pk / d, tab::kCamLiftOverValveMax.value, LimitUnit::Dimensionless);
+        }
+    }
+    if (c.exhaust_valve_d_m > real(0.0)) {
+        real pk = 0.0, ar = 0.0;
+        lift_figures(c.exhaust_lift, pk, ar);
+        const real d = c.exhaust_valve_d_m;
+        if (above(pk / d, tab::kCamLiftOverValveMax.value)) {
+            s.add(BuildRule::CamLiftOverValve, LimitSeverity::Limiting, "cam", "/exhaust_lift",
+                  "the exhaust lift " + mm(pk) + " is " + num(pk / d, 3) + " of the " + mm(d) + " exhaust valve head (band <= " +
+                      num(tab::kCamLiftOverValveMax.value, 3) + ")",
+                  label_of(tab::kCamLiftOverValveMax), pk / d, tab::kCamLiftOverValveMax.value, LimitUnit::Dimensionless);
+        }
+    }
+}
+
 void sort_issues(std::vector<BuildIssue>& v) {
     std::stable_sort(v.begin(), v.end(), [](const BuildIssue& a, const BuildIssue& b) {
         if (a.rule != b.rule) return static_cast<int>(a.rule) < static_cast<int>(b.rule);
@@ -338,6 +404,8 @@ const char* to_string(BuildRule r) {
     case BuildRule::CamSwitchWindow: return "CamSwitchWindow";
     case BuildRule::CamProfileOrder: return "CamProfileOrder";
     case BuildRule::CamLiftOverValve: return "CamLiftOverValve";
+    case BuildRule::LiftFamilyOrder: return "LiftFamilyOrder";
+    case BuildRule::LiftMinimumBand: return "LiftMinimumBand";
     }
     return "Unknown";
 }
@@ -349,6 +417,7 @@ std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e) {
         check_mean_piston_speed(s, e.piston.stroke_m, e.limiter.rpm);
         if (e.cycle.has_value()) check_cycle(s, e, *e.cycle);
         if (e.cycle.has_value()) check_cam_profiles(s, e, *e.cycle); // engine garage P9
+        if (e.cycle.has_value()) check_lift_family(s, e, *e.cycle);  // engine garage P10
     }
     sort_issues(out);
     return out;

@@ -275,6 +275,8 @@ ps::drivetrain::SimulatedEngineDesc effective_engine(const ps::drivetrain::Simul
     // Engine garage P9: a cam-switching engine has two cylinder models; the bank records one engine. Refused until the bank
     // grows a profile axis (open point G10) - silently baking the low cam would mis-voice everything above the switch.
     if (engine.has_cam_profiles()) throw std::runtime_error("Audio bank does not support an engine with cam profiles yet (engine garage P9, open point G10)");
+    // Engine garage P10: likewise a continuous intake lift family (one cylinder model per lift node; the bank has no u axis).
+    if (engine.has_lift_family()) throw std::runtime_error("Audio bank does not support an engine with an intake lift family yet (engine garage P10, open point G10)");
     auto desc = engine;
     if (forced_induction) desc.turbo_pair = *forced_induction;
     return desc;

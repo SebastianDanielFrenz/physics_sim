@@ -44,6 +44,7 @@ own metadata; they are not merged into the engine. Every other key must be one o
 | `limiter` | the rev limiter block |
 | `throttle_actuator_tau_s` | electronic throttle actuator lag |
 | `switching` | engine garage P9: the cam-profile switching rule (below) |
+| `lift_control` | engine garage P10: the continuous intake-lift strategy (below) |
 | `ecu.lambda_target`, `ecu.spark_advance_deg` | the simulated engine's `ecu` block tables |
 | `ecu.ignition_strategy`, `ecu.knock_margin_deg` | engine garage P7 knock-limit opt-in (below) |
 | `cycle.spark_advance_deg` | the cycle block's spark schedule (copied into `ecu.spark_advance_deg` by the loader, as inline) |
@@ -125,6 +126,63 @@ A switching edit is change class Runtime (`classify_engine_change`, pointer
 `/ecu/switching`); `check_buildable` grades the window (rule `CamSwitchWindow`,
 [engine.md](engine.md)).
 
+## `lift_control` — continuous intake lift (engine garage P10)
+
+The strategy by which the ECU sets the intake lift `u` and the throttle plate
+of a cam with an `intake_lift_family`
+([cam.md](cam.md#intake_lift_family--continuous-intake-lift-engine-garage-p10)).
+It must come with such a cam, and a family needs it.
+
+```json
+"lift_control": { "type": "continuous", "actuator_tau_s": 0.05, "max_rate_per_s": 3.333,
+                  "min_u": 0.0, "idle_u": 0.0, "plate_open_above_u": 0.5, "vacuum_target_kpa": 5.0 }
+```
+
+| Key | Meaning | Range |
+|---|---|---|
+| `type` | `"continuous"` (the only type) | |
+| `actuator_tau_s` | first-order lag of the eccentric shaft toward its target | `[0, 1]` s, 0 = no lag |
+| `max_rate_per_s` | the shaft's rate cap (full stroke = `1 / max_rate_per_s` s) | `> 0` |
+| `min_u` | the lowest lift the ECU commands | `[0, 1)`, a node `u` |
+| `idle_u` | the lift at idle, in DFCO and with the pedal released | `[min_u, 1)`, a node `u` |
+| `plate_open_above_u` | from this lift up the plate is fully open and the lift alone sets the load | `(min_u, 1]`, a node `u` |
+| `vacuum_target_kpa` | the manifold vacuum the plate holds below `plate_open_above_u` | `[0, 30]` kPa |
+| `source`, `*_source` | notes | |
+
+`min_u`, `idle_u` and `plate_open_above_u` must each be one of the cam's node
+`u` values (the ECU's tables are exact at the nodes).
+
+Runtime (`SimulatedEngine`, every substep before the throttle actuator), with
+the request `r` = the throttle command (after the throttle stage, the TCU limits
+and the launch-control limit) and the torque target `T* = mot + r (wot - mot)` of
+the **u = 1** node (the same torque a single-lift engine asks for):
+
+- `r >= 1`: `u = 1`, plate open (WOT is exactly the u = 1 node);
+- `T*` below the `min_u` node's torque at the vacuum target: `u = min_u`, and the
+  plate holds the manifold pressure at which that node makes `T*` (bisection, down
+  to 5 % of ambient [AS]);
+- the vacuum range `min_u .. plate_open_above_u`: the plate holds
+  `p_amb - vacuum_target_kpa` and `u` interpolates linearly between the nodes'
+  steady torques at that pressure;
+- `T*` between the `plate_open_above_u` node's vacuum and open-plate torque: `u`
+  rests on that node and the plate holds the pressure at which it makes `T*`;
+- above: plate open, `u` interpolates between the nodes' open-plate torques;
+- pedal released (`r < 0.01`; idle, DFCO, an ignition cut): `u = idle_u`, plate
+  closed apart from the idle air.
+
+The shaft follows its target as `u += h/(tau+h) * (u* - u)`, capped at
+`max_rate_per_s * h`, and snaps onto the target within 1e-6 [AS]. The plate
+is solved against the lift the plant has NOW, so the manifold holds its
+target while the shaft moves. Between nodes the plant is the linear blend of
+the two bracketing node sets (exactly one node at a node). Decisions
+(PROVISIONAL, out/garage_p10_progress.md): node values linear in `u`; the
+request scale from the u = 1 node; idle on the `idle_u` node with the plate;
+lambda follows the engine's `ecu.lambda_target` at every lift.
+
+A `lift_control` edit is change class Runtime (`classify_engine_change`, pointer
+`/ecu/lift_control`); an edit to the family (a node's lift) is Maps, a change of
+the node `u` values Respawn.
+
 ## Rejections
 
 - `format` missing or other than `physics_sim.ecu/1` (`"<path>: unsupported 'format' \"...\" (expected \"physics_sim.ecu/1\")"`)
@@ -144,6 +202,14 @@ A switching edit is change class Runtime (`classify_engine_change`, pointer
   profiles ..."`) or on an engine without a `cycle` block
 - on a profile engine: a knock-limited ECU without a spark table (MBT tracking
   is not supported with profiles yet)
+- `lift_control`: an unknown key, `type` other than `"continuous"`, a missing or
+  non-finite value, `actuator_tau_s` outside `[0, 1]`, `max_rate_per_s <= 0`,
+  `min_u` outside `[0, 1)`, `idle_u` outside `[min_u, 1)`, `plate_open_above_u`
+  outside `(min_u, 1]`, `vacuum_target_kpa` outside `[0, 30]`; a value that is
+  not a node `u` (`"'min_u' = 0.1 is not one of the cam's intake_lift_family node
+  u values ..."`); `lift_control` without a lift family (`"the ECU has a
+  'lift_control' block but the cam has no intake lift family ..."`) or on an
+  engine without a `cycle` block
 
 The merged engine is then validated by the engine reader as usual (ranges,
 table shapes, a fuel-cut limiter's hysteresis, ...).

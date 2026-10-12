@@ -32,6 +32,18 @@ inline void set_engine_maps(SimulatedEngineDesc& desc, const EngineMaps& maps, c
         if (!p) throw std::runtime_error(std::string(who) + ": a null cam profile map set");
         desc.cam_profile_maps.push_back(p->maps);
     }
+    // Engine garage P10: the lift nodes below u = 1 (EngineMaps::lift_nodes, ascending u) into lift_node_maps.
+    const std::size_t want_nodes = desc.lift_u.empty() ? 0 : desc.lift_u.size() - 1;
+    if (maps.lift_nodes.size() != want_nodes) {
+        throw std::runtime_error(std::string(who) + ": the engine maps carry " + std::to_string(maps.lift_nodes.size() + 1) +
+                                 " intake lift node set(s), the engine has " + std::to_string(want_nodes + 1) +
+                                 " (engine garage P10: every lift node's maps are replaced together)");
+    }
+    desc.lift_node_maps.clear();
+    for (const auto& p : maps.lift_nodes) {
+        if (!p) throw std::runtime_error(std::string(who) + ": a null intake lift node map set");
+        desc.lift_node_maps.push_back(p->maps);
+    }
 }
 
 // `maps` null: `engine` unchanged. Otherwise `engine` must hold a SimulatedEngineDesc (else std::runtime_error);

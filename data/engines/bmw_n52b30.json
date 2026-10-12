@@ -1,0 +1,82 @@
+{
+  "format": "physics_sim.engine/1",
+  "name": "bmw_n52b30",
+  "kind": "simulated",
+  "source": "Engine garage P10: BMW N52B30 (2005-2009, 195 kW version) - a 3.0 L DOHC inline six with Valvetronic continuously variable intake lift, as a lumped cycle-model description; every runtime map is GENERATED at load, one complete set per intake lift node (cam part ../cams/bmw_n52b30_valvetronic.json, lift strategy in ../ecus/bmw_n52b30.json). Cited: bore x stroke 85.0 x 88.0 mm, 2996 cm3, compression ratio 10.7, intake valve 34.2 mm, exhaust valve 29 mm (https://mymotorlist.com/engines/bmw/n52b30/, a secondary page); 195 kW at 6600 rpm and 315 N*m at 2750-4250 rpm, 7000 rpm maximum speed, DOHC 4 valves per cylinder, double VANOS, electronic throttle, firing order 1-5-3-6-2-4 (https://en.wikipedia.org/wiki/BMW_N52). Rod, runner, ports, plenum, throttle, spark, lambda, friction and the rest are [AS] or rules copied from engines/toyota_a25a_fks_gen.json; nothing is fitted to the published ratings or to any dyno curve (the comparison is reported, tests/unit/test_lift_family.cpp). The 3-stage DISA intake of the higher-output versions and the double-VANOS phasing are not modelled - fixed cam centre lines.",
+  "architecture": "piston_4stroke",
+  "bore_mm": 85.0,
+  "stroke_mm": 88.0,
+  "cylinders": 6,
+  "geometry_source": "[C] bore 85.0 mm, stroke 88.0 mm, 2996 cm3, 6 cylinders: https://mymotorlist.com/engines/bmw/n52b30/ and https://en.wikipedia.org/wiki/BMW_N52.",
+  "intake_manifold_volume_l": 3.5947,
+  "intake_manifold_volume_source": "[AS] plenum = 1.2 x V_d (2.99562 L), the i7c plan rule used for the A25A (engines/toyota_a25a_fks_gen.json); no N52 plenum volume found.",
+  "throttle_body": {
+    "diameter_mm": 76.0,
+    "count": 1,
+    "discharge_coefficient": 0.8,
+    "area_fraction_vs_position": {
+      "x": [0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0],
+      "y": [0.0026313886, 0.012, 0.03, 0.12, 0.4, 0.75, 1.0]
+    }
+  },
+  "throttle_body_source": "[AS] bore 76 mm: the K20A's cited 62 mm (engines/honda_k20a_dc5.json) scaled by sqrt(2996/1998) = 75.9 mm, no N52 throttle bore found; discharge coefficient 0.8 and the area-fraction curve copied from engines/toyota_a25a_fks_gen.json.",
+  "throttle_input": "electronic",
+  "throttle_input_source": "[C] electronic throttle (https://en.wikipedia.org/wiki/BMW_N52); Valvetronic keeps it for idle, vacuum and limp-home (fenderbender, Scot Manna 2017, see the ECU part).",
+  "cycle": {
+    "source": "Engine garage P10: lumped (no pipe blocks) C15a cycle description of the BMW N52B30; per-key sources below. The intake lift family and the exhaust lift come from the cam part.",
+    "rod_mm": 144.35,
+    "rod_mm_source": "[AS] 144.35 mm centre-to-centre, the figure commonly quoted for the N52 (not verified against a citable page); l/r = 3.28.",
+    "compression_ratio": 10.7,
+    "compression_ratio_source": "[C] 10.7:1, https://mymotorlist.com/engines/bmw/n52b30/.",
+    "intake_valves": 2,
+    "exhaust_valves": 2,
+    "intake_valves_source": "[C] DOHC, 4 valves per cylinder (https://en.wikipedia.org/wiki/BMW_N52).",
+    "intake_valve_d_mm": 34.2,
+    "exhaust_valve_d_mm": 29.0,
+    "intake_valve_d_mm_source": "[C] intake 34.2 mm, exhaust 29 mm: https://mymotorlist.com/engines/bmw/n52b30/ (a secondary page).",
+    "runner_length_mm": 1033.0,
+    "runner_diameter_mm": 48.366,
+    "runner_length_mm_source": "[AS] the A25A rule (engines/toyota_a25a_fks_gen.json): quarter-wave period 4L/a = the full-lift intake-open time (255 deg [C]) at 3500 rpm, the middle of the cited 2750-4250 rpm torque plateau [C], a = 340.29 m/s -> L = 1033.0 mm. Diameter: runner flow area = the total intake valve head area (2 x 34.2 mm heads -> 48.37 mm) [AS]. No N52 runner length is published here; the real base-engine manifold has no DISA.",
+    "intake_port_cc": 146.99,
+    "exhaust_port_cc": 330.26,
+    "intake_port_cc_source": "[AS] the A25A rule: 80 mm x the total intake valve head area (1837.3 mm2); 250 mm x the total exhaust valve head area (1321.0 mm2).",
+    "cd_vs_l_over_d": {
+      "x": [0.0, 0.1, 0.2, 0.3],
+      "y": [0.65, 0.62, 0.55, 0.45]
+    },
+    "cd_vs_l_over_d_source": "[AS] copied from engines/toyota_a25a_fks_gen.json (Heywood 1988 Fig. 6-19 shape, recalled); the small-lift end (l/d 0.005 at 0.18 mm) is the curve's own l/d = 0 value.",
+    "ignition_delay_deg": 3.8632,
+    "wiebe_a": 5.0,
+    "wiebe_m": 2.0,
+    "burn_duration_deg": 40.3205,
+    "ca50_mbt_deg_atdc": 8.0,
+    "wiebe_source": "[AS] copied from engines/toyota_a25a_fks_gen.json: burn duration 40.3205 deg and ignition delay 3.8632 deg are that file's [D] values from the MIT 2.61 lecture 9 'modern fast-burn' figures, applied unchanged at every lift (the faster burn the high in-cylinder velocity of a small Valvetronic lift gives is not modelled); Wiebe a 5, m 2, CA50 at MBT 8 deg ATDC are the descriptor defaults.",
+    "friction": {
+      "model": "polynomial_piston_speed",
+      "a_kpa": 66.61952180224716,
+      "b_kpa": 0.09108507619924966,
+      "c_kpa": 0.34680954153442134
+    },
+    "friction_source": "[AS] the F4 FMEP polynomial of engines/toyota_a25a_fks_gen.json (fitted on a third engine, the EPA 2013 Ecotec LCV motored rows) applied unchanged; Valvetronic's own valvetrain friction is not modelled.",
+    "firing_order": [1, 5, 3, 6, 2, 4],
+    "firing_order_source": "[C] 1-5-3-6-2-4, https://en.wikipedia.org/wiki/BMW_N52.",
+    "grid_rpm": [700, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6600, 7000],
+    "grid_p_im_kpa": [20, 30, 40, 50, 60, 70, 80, 90, 95, 100],
+    "grid_source": "[AS] idle to the 7000 rpm limit with a node at the cited 6600 rpm power speed; 20-100 kPa with a 95 kPa node (Valvetronic part load runs the manifold a few kPa below ambient)."
+  },
+  "inertia_kgm2": 0.15,
+  "breakaway_torque_nm": 35.0,
+  "starter": {
+    "stall_torque_nm": 180.0,
+    "free_speed_rpm": 400.0,
+    "interlock": "clutch_or_neutral"
+  },
+  "fields_source": "[AS] inertia 0.15 kg*m^2; breakaway 35 N*m (>= the F4 friction at rest, 15.9 N*m); starter stall torque 180 N*m (the A25A file's 140 N*m scaled for the larger engine). The state-machine speeds live in the ECU part.",
+  "crank_axis_local": [0, 1, 0],
+  "initial_state": "running",
+  "fuels": ["../fuels/e5.json", "../fuels/e10.json"],
+  "fuels_source": "[AS] EN 228 E5/E10 (the European N52 runs on 95 RON premium).",
+  "ignition": "spark",
+  "default_ecu": "../ecus/bmw_n52b30.json",
+  "default_cam": "../cams/bmw_n52b30_valvetronic.json"
+}

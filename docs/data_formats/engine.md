@@ -1448,6 +1448,70 @@ Tests: `tests/unit/test_cam_profiles.cpp` (`[vvl][drivetrain][cycle]`: L1-L3 loa
 the cache, R1 blend, V1-V2 WOT crossing and switching, H1 hash and hot swap, D1 dyno, C1 change classes, B1 rules, Z1 zero
 allocation, P1 progress/cancel, A1 audio refusal; hidden `[.][diag]` timing, spark table, V1 inputs).
 
+## Intake lift family: continuous lift (engine garage P10)
+
+A cycle-block engine whose cam carries `intake_lift_family`
+([cam.md](cam.md#intake_lift_family--continuous-intake-lift-engine-garage-p10)) and whose ECU carries
+`lift_control` ([ecu.md](ecu.md#lift_control--continuous-intake-lift-engine-garage-p10)) - BMW Valvetronic and similar
+continuously variable intake lift, the load set by the lift instead of the throttle plate.
+
+Generation (PROVISIONAL, out/garage_p10_progress.md): one complete map set per lift node over the engine's own
+`grid_rpm x grid_p_im` - maps over (rpm, p_im, u) as a stack of full grids, not a 3D table. Node k's set comes from
+`cycle_desc_for_lift_node(desc, k)` (the desc with that node's intake lift and no family), so each set keys exactly like
+the single-lift engine written with that lift (`engine_map_profile_cache_keys`: u = 1 first, then ascending u; test H3
+extended) and an engine without a family keys and generates exactly as before. The loader looks every set up first and
+generates only the missing ones; progress is one count over all generated sets, cancel stops the whole load and writes no
+file of that run. Sketch / Preview / Full for the shipped N52 (6 nodes, 10 workers, cold): 0.11 / 0.29 / 1.22 s.
+
+Runtime (`SimulatedEngine`): the u = 1 set is the engine's `maps`, the others are `EngineMaps::lift_nodes` (ascending u),
+each with its own steady tables. The plant at lift `u` is the linear blend of the two node sets bracketing `u`
+(`node_k + w (node_k+1 - node_k)`, exactly one node at a node - test R1). The ECU sets `u` and the plate every substep from
+the torque request (strategy in ecu.md); `u` is hashed only on an engine with a family. No allocation per substep or tick
+(test Z1). With the family the other ECU functions do:
+
+- **idle**: `u = idle_u`; the idle feed-forward, the PI and its authority cap run on the `idle_u` node's tables, the plate
+  carries the idle air (the shipped N52 idles at 700.0 rpm exactly, test R5);
+- **DFCO**: the pedal is released, so `u = idle_u` and the plate closes; the fuel cut and its re-enable run unchanged on
+  the idle node;
+- **limiter** (and **launch control**, which only lowers the limiter speed): unchanged - the fuel cut / soft cut acts on
+  fuelling at the limiter rpm; the lift keeps following the request;
+- **torque_demand** (the clutch's view): the steady torque of the plant at the current `u` and plate (the blended steady
+  tables), as for a single-lift engine at its plate;
+- **turbo**: not supported - a family with forced induction is rejected (the boost controller works on the plate the lift
+  strategy holds open); a mechanical throttle and cam profiles are rejected too;
+- **hot swap** (`World::replace_engine_maps`): the new maps must have the same node `u` values and `idle_u`; every node set
+  swaps together at the consuming tick.
+
+Consumers:
+
+- **dyno** (`run_dyno_sweep`): WOT runs the u = 1 node (bit-identical to the engine without the family, test D1);
+  `DynoSweepSpec::lift_node` holds node k instead (its open-plate curve - the part-load lift line, steady path only, out
+  of range throws); `DynoPoint::lift_u` reports the lift;
+- **classify_engine_change**: a `lift_control` edit is Runtime (`/ecu/lift_control`), a node's lift edit Maps, a change of
+  the node `u` values Respawn (`/intake_lift_family`);
+- **check_buildable**: `LiftFamilyOrder` (14, Limiting) - every node must have more peak lift AND more lift area than the
+  one below it; `LiftMinimumBand` (15, Near) - the `min_u` node's peak lift between 0.1 mm and 0.25 of full lift [AS];
+  `CamLiftOverValve` per node and for the exhaust lift;
+- **audio**: the audio bank (`prepare_engine_audio_bank`) and the live voice refuse an engine with a family (the voice
+  runs one cycle model; open point G10).
+
+Shipped: `data/engines/bmw_n52b30.json` (BMW N52B30, 195 kW, lumped cycle block; bore, stroke, compression ratio, valve
+heads, ratings, firing order cited in the file) with `data/ecus/bmw_n52b30.json` (300 ms full stroke, 50 mbar vacuum,
+idle at minimum lift cited; tau and `plate_open_above_u` [AS]) and `data/cams/bmw_n52b30_valvetronic.json` (from
+`tools/enginedata/n52_valvetronic_cam.py`; 0.18-9.9 mm lift range and full-lift durations cited, the shapes and the fixed
+centre lines [AS]; double VANOS and the DISA intake not modelled). No vehicle uses it (no cited N52 gearing was available).
+Not fitted to any dyno. Measured (Full maps, dyno-held): peak 403.0 N*m at 4000 rpm vs the cited 315 N*m at 2750-4250
+(the air excess of the [AS] quarter-wave runner, as for the A25A and the K20A), 195.9 kW at 6000 rpm vs the cited 195 at
+6600. Part-load fuel at equal brake torque, 2000 rpm, family vs throttled at full lift: 2.35 / 1.22 / 0.59 / 0.15 % less
+at 2 / 3 / 4 / 5 bar BMEP, pumping 0.719 vs 0.792 bar at 2 bar - below the declared bands (test V1, [!mayfail]): the
+small-lift events keep the [AS] fixed centre line and close near BDC; the same family opening at the full-lift IVO
+(early intake closing) saves 8.1 / 6.7 / 5.8 / 4.6 % (hidden diag).
+
+Tests: `tests/unit/test_lift_family.cpp` (`[vvl][drivetrain][cycle]`: L1-L3 loader/rejections/extends, L4 a pipe engine
+with a family (P7d WOT row per node), K1-K2 keys and the cache, G1 generation, R1-R7 blend, ECU strategy, torque steps
+with the lag, idle and blip, WOT, the vacuum hold while the lift moves, V1 part-load fuel [long][!mayfail], H1 hash and hot swap, D1 dyno, C1 change classes, B1 rules, Z1 zero allocation, P1 progress/cancel, A1 audio
+refusal; hidden `[.][diag]` timing, spark, part-load table, the EIVC measurement, the car pulling away).
+
 ## Part slots, `extends` and the user layer (engine garage P2)
 
 An engine is assembled from part files before it is read (`core/src/io/engine_parts.cpp`). The assembly works on the

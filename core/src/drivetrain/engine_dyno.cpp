@@ -652,6 +652,7 @@ DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<c
     }
     DynoPoint p = settled_window_point(engine, w, rpm, omega, converged, real(k * window_steps) * h, spec, grid, findings);
     p.cam_profile = engine.cam_high_requested() ? 1 : 0; // engine garage P9
+    p.lift_u = engine.lift_u();                           // engine garage P10 (1 without a family)
     return p;
 }
 
@@ -788,8 +789,21 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
                     profile = lo.p_im_pa >= m->cam_switching.min_p_im_pa ? 1 : 0;
                 }
             }
-            result.points.push_back(steady_sim_point(profile == 1 ? *m->cam_high : *m, rpm, spec, p_im_pa));
+            // Engine garage P10: a held lift node (see DynoSweepSpec::lift_node); the default is the u = 1 node (*m itself).
+            const SimulatedEngineMaps* plant = profile == 1 ? m->cam_high.get() : m.get();
+            real lift_u = 1.0;
+            if (m->has_lift_family() && spec.lift_node >= 0) {
+                const std::size_t k = static_cast<std::size_t>(spec.lift_node);
+                if (k >= m->lift_u.size()) {
+                    throw std::invalid_argument("run_dyno_sweep: lift_node " + std::to_string(k) + " is out of range (the engine has " +
+                                                std::to_string(m->lift_u.size()) + " lift nodes)");
+                }
+                if (k + 1 < m->lift_u.size()) plant = m->lift_nodes[k].get();
+                lift_u = m->lift_u[k];
+            }
+            result.points.push_back(steady_sim_point(*plant, rpm, spec, p_im_pa));
             result.points.back().cam_profile = profile;
+            result.points.back().lift_u = lift_u;
             Findings f;
             limiter_findings(f, sim->limiter, rpm, spec.part_files.engine);
             piston_speed_finding(f, *sim, rpm, spec.part_files.engine);

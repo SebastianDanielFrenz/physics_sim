@@ -301,14 +301,9 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
 }
 
 std::vector<std::uint64_t> engine_map_profile_cache_keys(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {
+    // P9 cam profiles in profile order; P10 lift nodes u = 1 first, then ascending u (engine_map_set_descs).
     std::vector<std::uint64_t> keys;
-    if (desc.cam_profiles.empty()) {
-        keys.push_back(engine_map_cache_key(desc, fuel, quality));
-        return keys;
-    }
-    for (std::size_t k = 0; k < desc.cam_profiles.size(); ++k) {
-        keys.push_back(engine_map_cache_key(cycle_desc_for_cam_profile(desc, k), fuel, quality));
-    }
+    for (const CycleModelDesc& d : engine_map_set_descs(desc)) keys.push_back(engine_map_cache_key(d, fuel, quality));
     return keys;
 }
 
@@ -319,6 +314,11 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     if (!desc.cam_profiles.empty()) {
         throw std::runtime_error("engine_map_cache_key: the cycle desc has cam profiles - key each profile "
                                  "(engine_map_profile_cache_keys / cycle_desc_for_cam_profile)");
+    }
+    // Engine garage P10: likewise one key per lift node (cycle_desc_for_lift_node), never the family itself.
+    if (!desc.lift_family.empty()) {
+        throw std::runtime_error("engine_map_cache_key: the cycle desc has an intake lift family - key each node "
+                                 "(engine_map_profile_cache_keys / cycle_desc_for_lift_node)");
     }
     KeyFnv f{14695981039346656037ULL};
     // CycleModelDesc, every field incl. source (the generated maps carry it

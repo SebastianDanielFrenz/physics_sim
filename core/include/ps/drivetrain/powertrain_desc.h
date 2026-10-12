@@ -316,6 +316,23 @@ struct CamSwitchingDesc {
     real transition_s = 0.0; // >= 0
 };
 
+// Engine garage P10: the ECU's continuous intake-lift strategy (Valvetronic-style; an ECU part's "lift_control" block,
+// docs/data_formats/ecu.md). u is the normalised eccentric-shaft position of the cam's intake_lift_family (u = 1 full
+// lift). With the pedal pressed the ECU turns the torque request into a target u through its steady torque model at the
+// current rpm (piecewise linear over the lift nodes) and holds the plate fully open at and above plate_open_u, or at the
+// manifold vacuum target below it; a request below the min_u node's torque keeps u at min_u and closes the plate on that
+// node's own inverse. Pedal released (idle, DFCO): u = idle_u and the idle controller works on the plate as on any
+// engine. The shaft follows its target with a first-order lag of actuator_tau_s, its speed capped at max_rate_per_s.
+// min_u, idle_u and plate_open_u must each be one of the family's node u values (the ECU's tables are exact there).
+struct LiftControlDesc {
+    real actuator_tau_s = 0.0;  // >= 0 (0 = no lag)
+    real max_rate_per_s = 0.0;  // > 0: |du/dt| cap (a full stroke takes 1/max_rate_per_s)
+    real min_u = 0.0;           // a node; the lowest u the ECU commands with the pedal pressed
+    real idle_u = 0.0;          // a node >= min_u; idle and DFCO run there
+    real plate_open_u = 1.0;    // a node in (min_u, 1]: at and above it the plate is fully open
+    real vacuum_pa = 0.0;       // >= 0 (file: kPa): below plate_open_u the plate holds p_amb - vacuum_pa
+};
+
 // Open-loop engine-management targets.
 struct SimulatedEcuDesc {
     Table2D lambda_target;     // y = p_im [Pa]; values in [0.5, 2]
@@ -488,6 +505,15 @@ struct SimulatedEngineDesc {
     std::vector<SimulatedEngineMapsDesc> cam_profile_maps;
     CamSwitchingDesc cam_switching;
     [[nodiscard]] bool has_cam_profiles() const { return !cam_profile_ids.empty(); }
+    // Engine garage P10 (Valvetronic-style continuous intake lift): empty = no lift family (every engine before P10;
+    // bit-identical). Non-empty: every node's u in ascending order, the last exactly 1.0 (CycleModelDesc::lift_family);
+    // `maps` above is the u = 1 node's set (the same engine without the family) and lift_node_maps[k] node k's (k < N-1,
+    // each generated from its own intake lift); lift_control is the ECU's strategy. A lift-family engine generates every
+    // map from its cycle block (no file "maps" block) and needs an electronic throttle and no forced induction.
+    std::vector<real> lift_u;
+    std::vector<SimulatedEngineMapsDesc> lift_node_maps;
+    LiftControlDesc lift_control;
+    [[nodiscard]] bool has_lift_family() const { return !lift_u.empty(); }
 
     // Shared with the graph engine, same meaning and validation.
     real inertia_kgm2 = 0.0;          // > 0
