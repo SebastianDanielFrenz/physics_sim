@@ -1,0 +1,28 @@
+{
+  "format": "physics_sim.surfaces/1",
+  "description": "Test fixture for tests/unit/test_assist_slope_crawl_diag.cpp (assists plan Part A). asphalt and grass are copied from data/surfaces/surfaces.json; grass_rg copies racing_game's game-owned grass entry (racing_game data/surfaces/surfaces.json at 2026-10-12: lambda_mu 0.63, crr 0.08 - an owner handling adjustment there, RACE-002, not a measurement) so the crawl diagnosis can run on the surface the owner drove on.",
+  "fields": {
+    "lambda_mu": "Pacejka-style friction scale relative to dry asphalt = 1.0.",
+    "crr": "Rolling-resistance coefficient (dimensionless, F_roll = crr * N)."
+  },
+  "surfaces": {
+    "asphalt": {
+      "display_name": "Dry asphalt",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "COPIED from data/surfaces/surfaces.json."
+    },
+    "grass": {
+      "display_name": "Dry grass on firm soil",
+      "lambda_mu": 0.42,
+      "crr": 0.08,
+      "source": "COPIED from data/surfaces/surfaces.json."
+    },
+    "grass_rg": {
+      "display_name": "Dry grass (racing_game value)",
+      "lambda_mu": 0.63,
+      "crr": 0.08,
+      "source": "COPIED from racing_game data/surfaces/surfaces.json grass (owner adjustment 0.42 -> 0.84 -> 0.63, RACE-002); not a measurement."
+    }
+  }
+}
