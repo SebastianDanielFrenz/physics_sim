@@ -180,7 +180,7 @@ on). Exactly one launch rpm form is required; every other key is optional (owner
 
 | Key | Default | Range | Meaning |
 |---|---|---|---|
-| `launch_rpm` | - | > 0 | absolute launch rpm held against the open clutch (Racing unit: 4500, car_hyper's value) |
+| `launch_rpm` | - | > 0 | absolute launch rpm held against the open clutch (Racing unit: 5000 [AS], car_hyper's value tuned by V8 to boost >= 0.4 bar) |
 | `launch_rpm_fraction` | - | (0, 1) | the same as a fraction of the engine's rev limiter (Sport unit: 0.55). Exactly one of the two |
 | `default_enabled` | `false` | boolean or 0/1 | the channel's default |
 | `arm_throttle` | 0.9 | (0.5, 1] | throttle must exceed this to arm |
@@ -210,7 +210,7 @@ control, not both` (and again by `VehicleInstance`'s backstop for a code-built d
 switched on by launch control (owner Q6); a car that wants it sets its own anti-lag channel.
 
 **Car-specific launch rpm.** A generic unit fits any engine through `launch_rpm_fraction` (Sport: 0.55 of the limiter);
-the Racing unit carries car_hyper's absolute 4500. A car with another engine attaches a unit file that `extends` the
+the Racing unit carries car_hyper's absolute 5000. A car with another engine attaches a unit file that `extends` the
 shipped one and sets its own `launch_rpm` (setting `launch_rpm_fraction` there needs `launch_rpm` cleared: the
 merge-patch rule `"launch_rpm": null`), or uses the fraction form.
 
@@ -241,9 +241,11 @@ ramp, the PI's ceiling and integral, hashed ONLY on a car that carries the block
    a hard one (or `c` already 1) nothing is kept. Then Idle at the next tick's first substep.
 
 **Boost and the launch rpm.** The unloaded engine builds boost against the closed clutch only as fast as the limiter
-cycling allows. Measured on car_hyper (1.5 s armed): 4500 rpm 0.29 bar, 5000 0.57 (steady), 5500 0.97, 6000 1.4. The
-shipped Racing unit uses the owner's 4500 (0.288 bar at release); a car that wants more boost at the line sets a higher
-`launch_rpm` (`test_assist_launch.cpp` V8d: 0.502 bar at 5000).
+cycling allows, so boost at release is a function of the launch rpm. Measured on car_hyper (1.5 s armed): 4500 rpm
+0.29 bar, 5000 0.50 (0.57 steady), 5500 0.97, 6000 1.4. The Racing unit therefore ships `launch_rpm` 5000 `[AS]`,
+tuned by `test_assist_launch.cpp` V8 to boost >= 0.4 bar (V8d records the 4500 miss). The Sport unit's
+`launch_rpm_fraction` 0.55 gives 4537 rpm on car_hyper (V8e prints its boost; it is a generic fit-any-engine unit, not
+tuned for car_hyper's boost).
 
 **Precedence with the low-speed fix (assists I2, D-LS1..3).** While the launch control owns the car (Armed, Launch)
 the powertrain sees traction control neutral (fraction 1, no ceiling, no ignition cut), so TC's crawl-speed clutch cap

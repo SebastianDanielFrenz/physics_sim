@@ -11,7 +11,7 @@
 //   D*  Idle equals no block (trajectory), 1 vs 10 workers equal hash (V11), zero own allocation per tick
 //
 // BANDS COMMITTED BEFORE THE FIRST RUN (assists plan B6 V8/V9/V11, brief assists_i4; all [AS]):
-//   V8   on car_hyper with the shipped Racing unit (launch_rpm 4500), asphalt, brake 1 + throttle 1 from rest:
+//   V8   on car_hyper with the shipped Racing unit (launch_rpm 5000 [AS, tuned by V8], asphalt, brake 1 + throttle 1 from rest:
 //        - Armed: every tick of the last 0.5 s of a 1.5 s Armed window has engine rpm within launch_rpm +- 150
 //        - boost at the last Armed tick >= 0.4 bar
 //        - mean rear (wheels 2, 3) slip_ratio over 0.2-1.0 s after release within slip_target +- 0.05, for TC mode
@@ -32,10 +32,14 @@
 //        the block's own hashed bytes: the comparison is on the chassis pose/velocity, bit for bit
 //   V11  1 vs 10 workers: equal state hash every tick of a V8 launch; zero own allocation per tick with LC active
 //
-// DEVIATION (measured, reported to the owner): the boost band (>= 0.4 bar) is NOT met at the owner's launch_rpm 4500: 0.288 bar
-//   at the last Armed tick. V8a/V8b therefore assert a measured floor (0.25 bar [AS]); V8d keeps the original 0.4 bar band
-//   and shows it is met at launch_rpm 5000 (0.502 bar). Boost vs launch rpm (unloaded, 1.5 s): 4500 0.29 | 5000 0.57
-//   (steady) | 5500 0.97 | 6000 1.4 bar.
+// TUNING (coordinator decision, owner Q7 "[AS] data defaults, tuned by V8"): the boost band (>= 0.4 bar) is met by the DATA, not
+//   by a relaxed band. At launch_rpm 4500 the boost at release was 0.288 bar (miss); the Racing unit therefore ships
+//   launch_rpm 5000 (0.502 bar, V8d records both). Boost vs launch rpm (unloaded, 1.5 s): 4500 0.29 | 5000 0.50 (0.57
+//   steady) | 5500 0.97 | 6000 1.4 bar.
+// CORRECTION of the armed-rpm band (no widening of +-150): the +-150 is measured on the last 0.5 s of the 1.5 s hold, i.e. after
+//   the approach (the rpm first reaches launch_rpm - 150 within the first ~0.3 s, V8a prints t_reach). Inside the hold
+//   the engine's own fuel-cut hysteresis (150 rpm on car_hyper) cycles the rpm between launch_rpm - 150 and
+//   launch_rpm: V8a prints max/p95/mean of |rpm - launch_rpm| over the window and over the whole hold after t_reach.
 //
 // RECORDED SABOTAGES (temporary env-switched edits in launch_assist.h / vehicle_instance.cpp, reverted; each rebuilt and run
 // on the shown test, Windows release, 2026-10-13):
@@ -104,7 +108,6 @@ const std::string kUnitHead = R"({"format":"physics_sim.electronics/1","kind":"a
 // V8 bands (committed before the first run).
 constexpr real kArmedRpmTol = 150.0;
 constexpr real kBoostMinBar = 0.4;           // the brief's band (V8d)
-constexpr real kBoostMeasuredFloorBar = 0.25; // [AS] measured 0.288 bar at launch_rpm 4500, after the first run (V8a/V8b)
 constexpr real kKappaTol = 0.05;
 constexpr real kWingTolDeg = 1.0;
 constexpr real kArmedWindowS = 1.5;
@@ -183,7 +186,7 @@ TEST_CASE("L1: the shipped units carry launch control; Street does not", "[assis
     const io::ElectronicsPart racing = io::load_electronics_json(kRacing);
     REQUIRE(racing.unit.launch_control.has_value());
     const LaunchAssistDesc& r = *racing.unit.launch_control;
-    CHECK(r.launch_rpm == 4500.0);
+    CHECK(r.launch_rpm == 5000.0);
     CHECK(r.launch_rpm_fraction == 0.0);
     CHECK_FALSE(r.default_enabled);
     CHECK(r.arm_throttle == 0.9);
@@ -207,7 +210,7 @@ TEST_CASE("L1: the shipped units carry launch control; Street does not", "[assis
     CHECK(sport.unit.launch_control->launch_rpm == 0.0);
     CHECK(sport.unit.launch_control->launch_rpm_fraction == 0.55);
     CHECK(launch_assist_rpm(*sport.unit.launch_control, 8250.0) == Catch::Approx(0.55 * 8250.0));
-    CHECK(launch_assist_rpm(*racing.unit.launch_control, 8250.0) == 4500.0);
+    CHECK(launch_assist_rpm(*racing.unit.launch_control, 8250.0) == 5000.0);
 
     CHECK_FALSE(io::load_electronics_json(kStreet).unit.launch_control.has_value());
 }
@@ -746,8 +749,8 @@ TEST_CASE("Arm1: arming logic through a real World (car_sedan, Racing unit)", "[
         const auto& pt = s.w().powertrain_state(s.rig.vehicle);
         CHECK(pt.launch_control_active);
         CHECK(pt.launch_slip_target == Catch::Approx(0.10)); // mode On is the default
-        CHECK(pt.engine_rpm > 4300.0);
-        CHECK(pt.engine_rpm < 4700.0);
+        CHECK(pt.engine_rpm > 5000.0 - 200.0); // the Racing unit's launch_rpm (L1) +- the limiter hysteresis margin
+        CHECK(pt.engine_rpm < 5000.0 + 200.0);
         CHECK(pt.clutch_engagement < 0.05);
         CHECK(std::abs(s.w().get_motion(s.rig.chassis).linear.x) < 0.2);
     }
@@ -909,6 +912,10 @@ LaunchRig make_hyper_rig(const VehicleDesc& desc, int workers) {
 struct LaunchRun {
     bool armed_seen = false, launch_seen = false, stalled = false;
     real armed_rpm_dev_max = 0, armed_rpm_mean = 0;
+    real armed_rpm_dev_p95 = 0, armed_rpm_dev_mean = 0; // over the committed window (last 0.5 s of the hold)
+    real armed_rpm_t_reach = -1;                       // first time the rpm reaches launch_rpm - 150, from arming
+    real armed_hold_dev_max = 0, armed_hold_dev_p95 = 0, armed_hold_dev_mean = 0; // from t_reach to the end of the hold
+    real armed_rpm_over_max = 0, armed_rpm_under_max = 0; // signed extremes over the hold (rpm - launch_rpm)
     real boost_at_release = -1;
     real wing_deg_at_release = -1;
     real kappa_mean = 0, kappa_max = 0, kappa_min = 0, t_handover = -1, v_at_1s = 0, v_at_end = 0;
@@ -970,15 +977,24 @@ LaunchRun run_launch(const VehicleDesc& desc_in, const LaunchOpts& o) {
     const int n_arm = o.lc ? static_cast<int>(o.armed_s * 240.0 + 0.5) : 0;
     real rpm_sum = 0;
     int rpm_n = 0;
+    const real lrpm = o.lc ? launch_assist_rpm(*desc.assist_unit->launch_control, 8250.0) : 0.0; // 8250 = car_hyper's limiter
+    std::vector<real> win_dev, hold_dev;
     for (int k = 0; k < n_arm; ++k) {
         w.step();
         const auto& pt = w.powertrain_state(v);
         if (pt.launch_phase == 1) r.armed_seen = true;
         if (k >= n_arm - 120) {
-            const real dev = std::abs(pt.engine_rpm - 4500.0);
+            const real dev = std::abs(pt.engine_rpm - lrpm);
             r.armed_rpm_dev_max = std::max(r.armed_rpm_dev_max, dev);
+            win_dev.push_back(dev);
             rpm_sum += pt.engine_rpm;
             ++rpm_n;
+        }
+        if (o.lc && r.armed_rpm_t_reach < 0 && pt.engine_rpm >= lrpm - 150.0) r.armed_rpm_t_reach = (k + 1) / 240.0;
+        if (o.lc && r.armed_rpm_t_reach >= 0) {
+            hold_dev.push_back(std::abs(pt.engine_rpm - lrpm));
+            r.armed_rpm_over_max = std::max(r.armed_rpm_over_max, pt.engine_rpm - lrpm);
+            r.armed_rpm_under_max = std::max(r.armed_rpm_under_max, lrpm - pt.engine_rpm);
         }
         if (pt.engine_state == drivetrain::EngineState::Stalled) r.stalled = true;
         if (o.keep_hashes) r.hashes.push_back(w.state_hash());
@@ -989,6 +1005,18 @@ LaunchRun run_launch(const VehicleDesc& desc_in, const LaunchOpts& o) {
     }
     if (o.lc) {
         r.armed_rpm_mean = rpm_n ? rpm_sum / rpm_n : 0;
+        const auto stats = [](std::vector<real> v, real& mx, real& p95, real& mean) {
+            if (v.empty()) return;
+            std::sort(v.begin(), v.end());
+            mx = v.back();
+            p95 = v[static_cast<std::size_t>(0.95 * static_cast<real>(v.size() - 1))];
+            real sum = 0;
+            for (real x : v) sum += x;
+            mean = sum / static_cast<real>(v.size());
+        };
+        real dummy = 0;
+        stats(win_dev, dummy, r.armed_rpm_dev_p95, r.armed_rpm_dev_mean);
+        stats(hold_dev, r.armed_hold_dev_max, r.armed_hold_dev_p95, r.armed_hold_dev_mean);
         const auto& pt = w.powertrain_state(v);
         r.boost_at_release = pt.engines.empty() ? 0.0 : pt.engines[0].boost_bar;
         r.wing_deg_at_release = w.vehicle_aero_telemetry(v).surfaces[lr.wing].offset_rad * 180.0 / 3.141592653589793;
@@ -1052,9 +1080,7 @@ void check_v8(int mode, const LaunchRun& r) {
     CHECK(r.launch_seen);
     CHECK_FALSE(r.stalled);
     CHECK(r.armed_rpm_dev_max <= kArmedRpmTol);
-    // The brief's >= 0.4 bar band (kBoostMinBar) does NOT hold at the owner's launch_rpm 4500 (measured 0.288 bar, see
-    // V8d): this asserts the measured value minus margin instead; V8d carries the original band and the rpm dependence.
-    CHECK(r.boost_at_release >= kBoostMeasuredFloorBar);
+    CHECK(r.boost_at_release >= kBoostMinBar);
     CHECK(std::abs(r.kappa_mean - slip_target_of(mode)) <= kKappaTol);
     CHECK(std::abs(r.wing_deg_at_release - 10.0) <= kWingTolDeg);
 }
@@ -1068,6 +1094,9 @@ TEST_CASE("V8a: hyper + Racing unit, asphalt from rest, TC On - armed rpm, boost
     const LaunchRun r = run_launch(hyper_racing(), o);
     std::printf("V8a On: armed rpm mean %.0f dev_max %.0f, boost %.3f bar, wing %.2f deg, kappa(0.2-1.0 s) %.4f (target %.2f), stalled %d\n",
                 r.armed_rpm_mean, r.armed_rpm_dev_max, r.boost_at_release, r.wing_deg_at_release, r.kappa_mean, slip_target_of(1), int(r.stalled));
+    std::printf("V8a armed rpm vs launch_rpm: committed window (last 0.5 s) dev max %.1f p95 %.1f mean %.1f | t_reach(launch-150) %.3f s; hold after t_reach dev max %.1f p95 %.1f mean %.1f, overshoot max %.1f, undershoot max %.1f\n",
+                r.armed_rpm_dev_max, r.armed_rpm_dev_p95, r.armed_rpm_dev_mean, r.armed_rpm_t_reach, r.armed_hold_dev_max, r.armed_hold_dev_p95, r.armed_hold_dev_mean,
+                r.armed_rpm_over_max, r.armed_rpm_under_max);
     check_v8(1, r);
 }
 
@@ -1080,28 +1109,41 @@ TEST_CASE("V8b: hyper + Racing unit, asphalt from rest, TC Sport", "[assist][veh
     check_v8(3, r);
 }
 
-TEST_CASE("V8d: boost at release - the brief's >= 0.4 bar needs a launch_rpm above the owner's 4500", "[assist][vehicle][drivetrain]") {
-    // Measured (1.5 s armed, unloaded, fuel-cut limiter cycling at launch_rpm): 4500 rpm 0.31 bar (0.288 at this test's
-    // 1.5 s window), 5000 0.57, 5500 0.97, 6000 1.4. The owner's Q7 value 4500 therefore misses the brief's 0.4 bar band
-    // (reported, not tuned); the discriminating check is that the band is met once the launch rpm is raised.
-    {
+TEST_CASE("V8d: boost at release depends on the launch rpm - 4500 misses the 0.4 bar band, the shipped 5000 meets it", "[assist][vehicle][drivetrain]") {
+    // Record of the tuning (owner Q7 "[AS] data defaults, tuned by V8"): measured 1.5 s armed, unloaded, fuel-cut limiter
+    // cycling at launch_rpm: 4500 -> 0.288 bar (miss), 5000 -> 0.502 (shipped), 5500 0.97, 6000 1.4 (earlier sweep).
+    real boost[2] = {0, 0};
+    int i = 0;
+    for (const real rpm : {4500.0, 5000.0}) {
         VehicleDesc d = hyper_racing();
+        d.assist_unit->launch_control->launch_rpm = rpm;
         LaunchOpts o;
         o.mode = 1;
         const LaunchRun r = run_launch(d, o);
-        INFO("launch_rpm 4500, boost " << r.boost_at_release);
-        CHECK(r.boost_at_release < kBoostMinBar); // documents the miss; flips when the data or the engine changes
-    }
-    {
-        VehicleDesc d = hyper_racing();
-        d.assist_unit->launch_control->launch_rpm = 5000.0;
-        LaunchOpts o;
-        o.mode = 1;
-        const LaunchRun r = run_launch(d, o);
-        std::printf("V8d launch_rpm 5000: boost %.3f bar, stalled %d\n", r.boost_at_release, int(r.stalled));
-        CHECK(r.boost_at_release >= kBoostMinBar);
+        std::printf("V8d launch_rpm %.0f: boost %.3f bar, armed dev_max %.0f, stalled %d\n", rpm, r.boost_at_release, r.armed_rpm_dev_max, int(r.stalled));
         CHECK_FALSE(r.stalled);
+        boost[i++] = r.boost_at_release;
     }
+    CHECK(boost[0] < kBoostMinBar); // documents the miss; flips when the data or the engine changes
+    CHECK(boost[1] >= kBoostMinBar);
+    CHECK(boost[1] > boost[0]);
+}
+
+TEST_CASE("V8e: the Sport unit (launch_rpm_fraction 0.55) on car_hyper - rpm and boost, report only", "[assist][vehicle][drivetrain]") {
+    // 0.55 x car_hyper's 8250 rpm limiter = 4537.5 rpm: close to the old 4500, so far below the 0.4 bar the Racing unit
+    // needed 5000 for. The Sport unit is a generic fit-any-engine unit; it is NOT tuned for car_hyper's boost, so only
+    // the structural checks are asserted and the numbers are printed.
+    const VehicleDesc sport = load_hyper(kSport);
+    LaunchOpts o;
+    o.mode = 1;
+    const LaunchRun r = run_launch(sport, o);
+    std::printf("V8e Sport unit on car_hyper: launch rpm %.1f, armed rpm mean %.0f dev_max %.0f, boost %.3f bar, kappa %.4f (target %.2f), stalled %d\n",
+                0.55 * 8250.0, r.armed_rpm_mean, r.armed_rpm_dev_max, r.boost_at_release, r.kappa_mean, sport.assist_unit->launch_control->slip_target[1],
+                int(r.stalled));
+    CHECK(r.armed_seen);
+    CHECK(r.launch_seen);
+    CHECK_FALSE(r.stalled);
+    // (the +-150 armed-rpm band is asserted for the tuned Racing unit in V8a/V8b, not for this generic unit: dev_max is printed above)
 }
 
 TEST_CASE("V8c [long]: 0-100 km/h with launch control <= the TC-On WOT auto-clutch launch without it", "[assist][vehicle][drivetrain][long]") {
