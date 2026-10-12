@@ -494,6 +494,11 @@ TEST_CASE("I2 V4 short: roll back at -0.8 m/s then WOT on grass 8 %, TC On", "[a
     check_v4(c, r);
 }
 
+// V12 is a REGRESSION GUARD, not a proof of the fix: on this mesh ground its bands already pass before D-LS1..3
+// (measured pre-fix: t100 On 5.47 s, Sport 6.02, Off 6.21, pedal 0.6 to 40 km/h 9.26; peak rear axle fz 12.0-12.9 kN
+// vs 3 x 8.53 kN settled). The owner's hop does not come from the TC/clutch coupling: it is a wheel shape-cast artefact
+// on rg::Session's untagged {h, h, 0.5} ground box for h >= 5 km (RL compression 0.031 -> 0.105 m in one substep,
+// fz 554 kN), reproduced by the hidden "I2 V12 racing rig diag" with PS_I2_V12_GROUND_BOX=20000 (separate follow-up).
 TEST_CASE("I2 V12: owner high-boost setup launch on asphalt", "[assist][vehicle][drivetrain][long]") {
     auto launch = [](int mode, Pattern p) {
         Case c;
@@ -576,7 +581,9 @@ TEST_CASE("I2 V11: 1 vs 10 workers equal hash (V2, V12) and zero own allocation 
 // hub omega, kappa_eq, alpha_eq, fx and contact Vx (WheelTelemetry::vx_contact) around each anti-stall dump, and per
 // dump cycle the spring-back: J = integral of the rear axle's fx over the window from the dump substep until the
 // rear kappa_eq mean first crosses zero (or 0.25 s), the chassis velocity change along the slope over the same
-// window, and kappa_eq at the dump. Env: PS_I2A_SURFACE (grass), PS_I2A_GRADE (0.12), PS_I2A_DUMPS_TRACED (3).
+// window, and kappa_eq at the dump. Surfaces from tests/support/fixtures/assists/surfaces_racing_game.json, whose
+// "grass" keeps Part A's lambda_mu 0.42 (shipped grass is 0.6 since I2). Env: PS_I2A_SURFACE (grass | grass_rg |
+// asphalt), PS_I2A_GRADE (0.12), PS_I2A_DUMPS_TRACED (3).
 TEST_CASE("I2a spring-back diag", "[.][diag][assist]") {
     const std::string se = env_string("PS_I2A_SURFACE"), ge = env_string("PS_I2A_GRADE"), te = env_string("PS_I2A_DUMPS_TRACED");
     const std::string surface = se.empty() ? "grass" : se;
@@ -590,7 +597,8 @@ TEST_CASE("I2a spring-back diag", "[.][diag][assist]") {
     cfg.substep_rate_hz = 960.0;
     cfg.job_workers = 4;
     rig.world = std::make_unique<World>(cfg);
-    rig.surfaces = std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/data/surfaces/surfaces.json");
+    // Part A's surface: the fixture's "grass" is the shipped grass as it was then (lambda_mu 0.42), "grass_rg" 0.63.
+    rig.surfaces = std::make_shared<io::SurfaceTable>(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/assists/surfaces_racing_game.json");
     const SurfaceId sid = rig.surfaces->id_for(surface);
     const Quat tilt = Quat::from_axis_angle(Vec3::unit_y(), math::atan(-grade));
     BodyDesc ground;
