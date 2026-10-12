@@ -79,6 +79,16 @@ struct ComponentSubstepCtx {
     real traction_torque_fraction = 1.0;
     real traction_floor_fraction = 0.0;
     real ground_speed_mps = std::numeric_limits<real>::quiet_NaN();
+    // Assists I4 (PHYS-074 D-LC1): set by VehicleInstance ONLY while the assist unit's launch control owns the car
+    // (phases Armed and Launch). limiter_rpm > 0: the second rev limit (TcuRequest::limiter_rpm); hold_clutch: the
+    // auto-clutch output is forced open; clutch_ramp >= 0: the torque-following launch clutch cap scaled by this 0..1
+    // ramp (Powertrain::pre_solve_components); throttle_ceiling: the slip PI's fraction of the driver's command, a
+    // third ceiling next to the TCU's and traction control's (throttle_stage.h). Defaults = no launch control, so a
+    // car without the block is bit-identical. Never hashed.
+    real launch_limiter_rpm = 0.0;
+    bool launch_hold_clutch = false;
+    real launch_clutch_ramp = -1.0;
+    real launch_throttle_ceiling = 1.0;
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
     // control channel's current value, in Powertrain::declare_control_

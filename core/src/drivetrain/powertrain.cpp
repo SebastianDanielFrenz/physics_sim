@@ -1951,6 +1951,26 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.ground_speed_mps = ctx.ground_speed_mps; // assists I2 (D-LS2), NaN with TC Off
             s.ground_speed_to_input_omega = ground_to_in;
             s.clutch_capacity_cap_nm = clutch_capacity_cap_tc_; // assists I2 (D-LS1)
+            // Assists I4 (PHYS-074 D-LC1): the unit's launch control owns the clutch while Armed (held open) and
+            // Launch (a torque-following capacity, ramped 0 -> 1 over the unit's clutch_ramp_s). VehicleInstance
+            // suspends traction control in those phases (ctx.traction_torque_fraction stays 1), so the I2 cap above
+            // is +inf then; the min() keeps the precedence explicit and bit-identical when neither is active.
+            //   Launch cap = ramp * max(0, sign(slip) * T_engine + T_sync): the TCU's own torque-following close law
+            //   (ManualTcu::sync_close_target) - the clutch carries what the engine makes plus a bounded
+            //   synchronising torque that pulls the held-rpm engine onto the input shaft, so the wheels never see
+            //   more than T_engine + max_sync_torque_nm through the clutch. T_engine is the engine's demand at the
+            //   throttle command INCLUDING the launch ceiling (previous substep), so the slip PI's cut shows up in
+            //   the cap as well.
+            if (ctx.launch_hold_clutch) {
+                s.clutch_capacity_cap_nm = real(0.0);
+            } else if (ctx.launch_clutch_ramp >= real(0.0) && engine_) {
+                const real slip = s.engine_omega - s.gearbox_in_omega;
+                const real dir = slip >= real(0.0) ? real(1.0) : real(-1.0);
+                const AutoClutchDesc& ac = tcu_->desc().auto_clutch;
+                const real t_sync = std::min(tcu_->desc().engine_inertia * std::abs(slip) / ac.sync_time_s, ac.max_sync_torque_nm);
+                const real t = std::max(real(0.0), dir * last_engine_result_.torque_demand + t_sync);
+                s.clutch_capacity_cap_nm = std::min(s.clutch_capacity_cap_nm, std::min(ctx.launch_clutch_ramp, real(1.0)) * t);
+            }
             s.gear_request = ctx.gear_request;
             s.shift_up_count = ctx.shift_up_count;
             s.shift_down_count = ctx.shift_down_count;
@@ -2056,6 +2076,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.nitrous = nitrous_->engine_input();
         }
         EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut || ctx.traction_ignition_cut};
+        if (ctx.launch_limiter_rpm > real(0.0)) req.limiter_rpm = ctx.launch_limiter_rpm; // assists I4: the unit's launch control (Armed)
         if (launch_) { // engine garage P8 (A16): the second rev limit, through the engine's own limiter
             LaunchControl::Inputs li;
             li.switch_on = ctx.assist_launch_control;

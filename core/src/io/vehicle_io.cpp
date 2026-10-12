@@ -4557,6 +4557,26 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 } catch (const std::invalid_argument& ex) {
                     throw std::runtime_error(ectx + ": " + ex.what());
                 }
+                if (part.unit.launch_control) {
+                    // Assists I4: the launch rpm must lie strictly between the engine's idle and its own limiter (the
+                    // P8 rule), resolved against this car's engine for a launch_rpm_fraction unit.
+                    real idle_rpm = 0.0, limiter_rpm = 0.0;
+                    bool have_engine = false;
+                    for (const auto& comp : v.powertrain.components) {
+                        if (const auto* te = std::get_if<ps::drivetrain::TorqueMapEngineDesc>(&comp.params)) {
+                            idle_rpm = te->idle_rpm; limiter_rpm = te->limiter.rpm; have_engine = true; break;
+                        }
+                        if (const auto* se = std::get_if<ps::drivetrain::SimulatedEngineDesc>(&comp.params)) {
+                            idle_rpm = se->idle_rpm; limiter_rpm = se->limiter.rpm; have_engine = true; break;
+                        }
+                    }
+                    if (!have_engine) throw std::runtime_error(ectx + ": launch_control needs an engine component");
+                    const real rpm = ps::vehicle::launch_assist_rpm(*part.unit.launch_control, limiter_rpm);
+                    if (!(rpm > idle_rpm) || !(rpm < limiter_rpm)) {
+                        throw std::runtime_error(ectx + ": launch rpm " + std::to_string(rpm) + " must lie between the engine's idle rpm " +
+                                                 std::to_string(idle_rpm) + " and its own limiter rpm " + std::to_string(limiter_rpm));
+                    }
+                }
                 v.assist_unit = part.unit;
             } else {
                 for (const std::string& f : part.fits) {
@@ -4568,6 +4588,12 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     else tcu->auto_shift.fitted = true;
                 }
             }
+        }
+        // Assists I4 (owner Q5): a car has EITHER a P8 two-step (a launch_control electronics part) OR an assist-unit
+        // launch control, never both - checked after the loop so the order of the two entries does not matter.
+        if (have_launch && v.assist_unit && v.assist_unit->launch_control) {
+            throw std::runtime_error("vehicle '" + v.name +
+                                     "': launch control: a car has either a two-step (launch_control) or an assist-unit launch control, not both");
         }
     }
 

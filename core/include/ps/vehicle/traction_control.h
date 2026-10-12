@@ -79,6 +79,23 @@ inline real step_traction_control(const TractionControlDesc& d,TractionControlSt
     s.torque_fraction+=std::clamp(desired-s.torque_fraction,-rate*dt,rate*dt);
     s.intervening=s.torque_fraction<.995;return s.torque_fraction;
 }
+// Assists I4 (launch control): the driven wheels' worst positive slip against a given speed estimate, in TC's own
+// formula (steer- and yaw-compensated peripheral speeds, direction from the estimate) but with the caller's speed
+// floor instead of d.reference_floor_m_s. Sensor-only like step_traction_control; 0 without a finite input. Does not
+// touch the controller state.
+inline real traction_driven_slip(std::span<const TractionWheelSensor> wheels,real estimate_m_s,real imu_yaw_rate_rad_s,
+        real reference_floor_m_s,real fallback_direction=1) {
+    if(!std::isfinite(estimate_m_s)||!std::isfinite(imu_yaw_rate_rad_s)||!(reference_floor_m_s>0))return 0;
+    const real direction=std::abs(estimate_m_s)>.5 ? (estimate_m_s<0?-1:1) : fallback_direction;
+    real slip=0;
+    for(const auto& w:wheels) {
+        if(!w.driven||!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))continue;
+        real sn=0,c=1;ps::math::sincos(w.steer_rad,sn,c);if(c<.5)continue;
+        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
+        slip=std::max(slip,direction*(v-estimate_m_s)/std::max(reference_floor_m_s,std::abs(estimate_m_s)));
+    }
+    return slip;
+}
 inline std::uint64_t fold_traction_control_hash(const TractionControlDesc& d,const TractionControlState& s,std::uint64_t h) {
     if(!d.enabled&&!s.initialized&&!s.enabled)return h;
     const auto fold=[&](const auto& v){const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}};

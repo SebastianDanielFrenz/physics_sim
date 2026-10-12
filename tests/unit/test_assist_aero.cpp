@@ -235,8 +235,8 @@ TEST_CASE("F1: aero_control loader defaults, ranges and rejections", "[assist][a
     // grade table: Street and Sport reject the block with the I1 message
     CHECK_THROWS_WITH(load(R"("grade":"street","aero_control":{}})"), ContainsSubstring("grade 'street' does not allow 'aero_control'"));
     CHECK_THROWS_WITH(load(R"("grade":"sport","aero_control":{}})"), ContainsSubstring("grade 'sport' does not allow 'aero_control'"));
-    // launch control stays rejected until assists I4
-    CHECK_THROWS_WITH(load(R"("grade":"racing","launch_control":{}})"), ContainsSubstring("'launch_control' in an assist_unit is not implemented yet"));
+    // launch control loads since assists I4 (tests/unit/test_assist_launch.cpp)
+    CHECK(load(R"("grade":"racing","launch_control":{"launch_rpm":4500}})").unit.launch_control.has_value());
     // shape and unknown keys
     CHECK_THROWS_WITH(load(R"("grade":"racing","aero_control":3})"), ContainsSubstring("aero_control must be an object"));
     CHECK_THROWS_WITH(load(R"("grade":"racing","aero_control":{"bogus":1}})"), ContainsSubstring("aero_control: unknown field 'bogus'"));

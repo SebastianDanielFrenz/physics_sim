@@ -49,6 +49,37 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
             }
         }
         fit_traction_ = desc_.traction_control.fitted;
+        if (desc_.assist_unit && desc_.assist_unit->launch_control) {
+            // Assists I4 (D-LC1): the unit's launch control. A car has either the P8 two-step (a launch_control
+            // controller) or this one (owner Q5): both would drive TcuRequest::limiter_rpm.
+            for (const drivetrain::ControllerDesc& cd : desc_.controllers) {
+                if (std::holds_alternative<drivetrain::LaunchControlDesc>(cd.params)) {
+                    throw std::runtime_error("vehicle '" + desc_.name +
+                                             "': launch control: a car has either a two-step (launch_control) or an assist-unit launch control, not both");
+                }
+            }
+            if (!assist_grade_info(desc_.assist_unit->grade).allows_launch_control) {
+                throw std::runtime_error("vehicle '" + desc_.name + "': the assist unit's grade does not allow launch control");
+            }
+            const LaunchAssistDesc& l = *desc_.assist_unit->launch_control;
+            try {
+                validate_launch_assist(l);
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error("vehicle '" + desc_.name + "': " + e.what());
+            }
+            real idle = real(0), limit = real(0);
+            bool have_engine = false;
+            for (const drivetrain::ComponentDesc& c : desc_.powertrain.components) {
+                if (const auto* te = std::get_if<drivetrain::TorqueMapEngineDesc>(&c.params)) { idle = te->idle_rpm; limit = te->limiter.rpm; have_engine = true; break; }
+                if (const auto* se = std::get_if<drivetrain::SimulatedEngineDesc>(&c.params)) { idle = se->idle_rpm; limit = se->limiter.rpm; have_engine = true; break; }
+            }
+            const real rpm = launch_assist_rpm(l, limit);
+            if (!have_engine || !(rpm > idle) || !(rpm < limit)) {
+                throw std::runtime_error("vehicle '" + desc_.name + "': launch control: the launch rpm must lie between the engine's idle and its own limiter");
+            }
+            launch_.emplace(l, rpm);
+            fit_launch_ = true;
+        }
         if (const auto aero_surface = find_aero_control_surface(desc_.aero, desc_.assist_unit)) {
             fit_aero_ = true;
             aero_control_surface_ = *aero_surface;
@@ -301,18 +332,61 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
             sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i)};
         }
-        const real traction_fraction=step_traction_control(tc_desc,traction_state_,traction_sensors_,imu_accel,yaw,
-            controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction,substep_dt);
-        ctx.traction_ignition_cut=assist_traction&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
+        // Assists I4 (D-LC1): the unit's launch control decides first, from the previous substep's sensors (its own
+        // powertrain reads and TC's estimator state), so this substep's TC call already knows whether the controller
+        // owns the car. While it does (Armed, Launch) traction control is SUSPENDED - it still runs, because the
+        // slip PI needs its ground-speed estimate - and its outputs are not handed to the powertrain.
+        LaunchAssist::Outputs lc_out;
+        if(launch_) {
+            LaunchAssist::Inputs li;
+            li.enabled=assist_launch;
+            li.auto_clutch=assist_auto_clutch;
+            li.engine_running=powertrain_.has_engine()&&powertrain_.last_engine_result().state==drivetrain::EngineTorqueMap::EngineState::Running;
+            li.throttle=controls.throttle;li.brake=controls.brake;
+            li.speed_mps=powertrain_.approx_speed_mps();
+            if(powertrain_.has_gearbox()) {
+                const auto& gb=powertrain_.gearbox();
+                li.gear=gb.current_position();
+                li.shifting=gb.target()!=gb.current_position()||gb.phase()!=drivetrain::Gearbox::Phase::Idle;
+            }
+            li.slip_valid=traction_state_.initialized;
+            li.slip=traction_driven_slip(traction_sensors_,traction_state_.estimated_speed_m_s,yaw,launch_->desc().slip_floor_mps);
+            launch_slip_target_=launch_->desc().slip_target[static_cast<std::size_t>(tc_mode_effective)];
+            li.slip_target=launch_slip_target_;
+            li.dt=substep_dt;li.first_substep_of_tick=(s==0);
+            lc_out=launch_->step(li);
+            if(lc_out.handover&&assist_traction&&traction_state_.initialized) {
+                // Handover: TC starts from the launch ceiling (no jump): desired = 1 - kp*err - integral, so with
+                // integral = 1 - ceiling the unloaded law sits at the ceiling.
+                traction_state_.torque_fraction=std::clamp(lc_out.handover_ceiling,tc_desc.min_fraction,real(1));
+                traction_state_.integral=std::clamp(real(1)-traction_state_.torque_fraction,real(0),real(1));
+            }
+        }
+        const bool lc_owns=lc_out.owns;
+        const real traction_fraction_raw=step_traction_control(tc_desc,traction_state_,traction_sensors_,imu_accel,yaw,
+            controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction||lc_owns,substep_dt);
+        // TC's output reaches the powertrain only when TC is really on and not suspended by the launch control.
+        const real traction_fraction=(assist_traction&&!lc_owns)?traction_fraction_raw:real(1);
+        ctx.traction_ignition_cut=assist_traction&&!lc_owns&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
         ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(controls.throttle,real(0),real(1))*traction_fraction:real(1);
+        if(lc_owns||lc_out.overlay) {
+            // overlay = the soft hand-over: traction control is back, the launch limit and the clutch fraction stay
+            // in force until the fraction has climbed to 1 (launch_assist.h)
+            ctx.launch_limiter_rpm=lc_out.limiter_rpm;
+            ctx.launch_hold_clutch=lc_out.hold_clutch;
+            ctx.launch_clutch_ramp=lc_out.clutch_ramp;
+            ctx.launch_throttle_ceiling=lc_out.ceiling<real(1)?std::clamp(controls.throttle,real(0),real(1))*lc_out.ceiling:real(1);
+        }
         // Assists I2 (PHYS-074 D-LS1/D-LS2), gated on TC's effective mode != Off (coordinator decision 2026-10-12;
         // a car with its own traction_control block and no assist unit counts too): the TC fraction and floor for
         // the crawl-speed clutch path, and the ground-speed reference for the auto-clutch lock decision - the TC
         // estimate once initialised, else the mean undriven-wheel peripheral speed, NaN without either. With TC Off
         // the ctx keeps its defaults (fraction 1, NaN), so a TC-off car is bit-identical. Unhashed.
-        if(assist_traction) {
+        if(assist_traction&&!lc_owns) {
             ctx.traction_torque_fraction=traction_fraction;
             ctx.traction_floor_fraction=tc_desc.min_fraction;
+        }
+        if(assist_traction||lc_owns) {
             if(traction_state_.initialized) {
                 ctx.ground_speed_mps=traction_state_.estimated_speed_m_s;
             } else {
@@ -468,6 +542,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     }
 
     if (assist_aero) aero_state_.surface_command[aero_control_surface_] = aero_world_command; // I5: the World's command stands
+    // Assists I4: the launch control's aero request for the NEXT tick's controller (yield order LC > airbrake > cruise).
+    if (launch_) aero_launch_request_ = launch_->owns();
 
     // PHYS-033 P4 I2 commit 5b (plan section 8): this tick's balance_error,
     // from the ledger deltas since begin_tick() above.
@@ -549,7 +625,9 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.traction_mode_requested = static_cast<std::uint8_t>(tc_mode_requested);
         snap.traction_mode_effective = static_cast<std::uint8_t>(tc_mode_effective);
         snap.traction_modes_available_bits = tc_modes_available_bits_;
-        snap.launch_control_active = powertrain_.launch_control_active();
+        snap.launch_control_active = powertrain_.launch_control_active() || (launch_ && launch_->owns());
+        snap.launch_phase = launch_ ? static_cast<std::uint8_t>(launch_->phase()) : std::uint8_t(0);
+        snap.launch_slip_target = launch_ ? launch_slip_target_ : real(0);
         snap.aero_control_active = assist_aero;
         snap.aero_control_target_deg = aero_control_target_deg;
 
@@ -635,6 +713,7 @@ void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRig
         wheels_[i]->reset_relaxation();
     }
     traction_state_={};imu_have_previous_=false;imu_previous_velocity_world_={};
+    if(launch_){launch_->reset();aero_launch_request_=false;}
     powertrain_.reset(opts, hub_speeds);
     // Teleport resets actuator dynamics/commands, but does not create or discard prepaid energy.
     const real energy=aero_state_.fan_energy_j; aero_state_={}; aero_state_.fan_energy_j=energy;
@@ -650,6 +729,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
     // powertrain.h's fold_state_hash.
     h = powertrain_.fold_state_hash(h);
     h=fold_traction_control_hash(desc_.traction_control,traction_state_,h);
+    if(launch_)h=launch_->fold_state_hash(h); // assists I4: hashed only on a car that carries the block
     if(desc_.assist_unit&&desc_.assist_unit->has_traction_control&&
        (desc_.assist_unit->traction_control.modes_bits&~kTractionModesBaseBits)!=0) {
         // Assists I1 (D-TC6): the mode table (desc only), only on a car whose unit offers modes beyond Off/On - a
