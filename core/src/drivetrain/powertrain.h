@@ -431,6 +431,10 @@ public:
     // already-applied output (last_throttle_command_ above, a different
     // quantity: EngineSoundState::throttle_command only).
     [[nodiscard]] const TcuThrottleLimits& tcu_request_debug() const { return tcu_prev_request_; }
+    // Assists I2 (PHYS-074 D-LS1): the last substep's TC clutch-capacity cap (+inf = none) and whether TC acted
+    // through the clutch (crawl regime). Unhashed, tests/debug only.
+    [[nodiscard]] real clutch_capacity_cap_tc() const { return clutch_capacity_cap_tc_; }
+    [[nodiscard]] bool tc_via_clutch() const { return tc_via_clutch_; }
     // Engine garage P8: launch control present / currently holding its second limit.
     [[nodiscard]] bool has_launch_control() const { return launch_.has_value(); }
     [[nodiscard]] bool launch_control_active() const { return launch_.has_value() && launch_->active(); }
@@ -788,6 +792,8 @@ private:
     std::optional<LaunchControl> launch_;
     bool anti_lag_fitted_ = true; // engine garage P8 (A15): PowertrainDesc::anti_lag_fitted
     TcuThrottleLimits tcu_prev_request_{}; // LAGGED one substep, fed into the engine (plan section 7.2)
+    real clutch_capacity_cap_tc_ = std::numeric_limits<real>::infinity(); // assists I2, debug only, unhashed
+    bool tc_via_clutch_ = false;                                            // assists I2, debug only, unhashed
 
     // --- rotor reaction (plan section 6.7) --------------------------------
     struct RotorPort {

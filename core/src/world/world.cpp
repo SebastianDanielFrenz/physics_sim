@@ -919,6 +919,14 @@ const vehicle::WheelTelemetry& World::wheel_telemetry(VehicleId id, std::size_t 
     return vehicle_system_->at(id).wheel_telemetry(wheel_index);
 }
 
+std::size_t World::vehicle_substep_telemetry_count(VehicleId id) const {
+    return vehicle_system_->at(id).substep_telemetry_count();
+}
+
+const vehicle::WheelTelemetry& World::wheel_substep_telemetry(VehicleId id, std::size_t substep, std::size_t wheel_index) const {
+    return vehicle_system_->at(id).substep_wheel_telemetry(substep, wheel_index);
+}
+
 const std::string& World::wheel_name(VehicleId id, std::size_t wheel_index) const {
     return vehicle_system_->at(id).wheel_name(wheel_index);
 }

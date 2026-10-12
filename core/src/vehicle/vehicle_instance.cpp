@@ -33,6 +33,7 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
     aero::validate(desc_.aero);
     validate_traction_control(desc_.traction_control);
     traction_sensors_.resize(desc_.wheels.size());
+    substep_telemetry_.resize(kMaxSubstepTelemetry * desc_.wheels.size());
     {
         // Engine garage P8 (A15): fitment. Without a manual_tcu there is nothing to un-fit (the flags stay true and
         // the powertrain ignores them), but the SNAPSHOT reports the auto_* assists as not fitted.
@@ -256,6 +257,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     // and do not update twist per wheel.
     Pose pose_s = pose0;
     Motion twist_s = motion0;
+    substep_telemetry_count_ = std::min(num_substeps, kMaxSubstepTelemetry);
     for (std::size_t s = 0; s < num_substeps; ++s) {
         const Vec3 com = pose_s.position;
 
@@ -338,6 +340,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             const real omega_new = powertrain_.hub_omega(i);
             const WheelSubstepOutput out = wheels_[i]->post_solve(omega_new);
             powertrain_.add_wheel_energy(out.wheel_out_j, out.tyre_loss_j);
+            // Assists I2a (diag only, unhashed, preallocated): this substep's wheel telemetry.
+            if (s < kMaxSubstepTelemetry) substep_telemetry_[s * wheels_.size() + i] = wheels_[i]->telemetry();
             // PHYS-033 I1b defect 2 fix (decision D-B): ONE force vector per
             // wheel (already resolved along the ground-plane contact frame,
             // WheelInstance::post_solve's own assemble_contact_wrench),

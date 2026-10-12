@@ -306,6 +306,10 @@ public:
                               const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {});
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
+    // Assists I2a (diagnostics, same live-state contract as wheel_telemetry): each substep's wheel telemetry of the
+    // last tick, substep < vehicle_substep_telemetry_count (at most 16). Never hashed.
+    [[nodiscard]] std::size_t vehicle_substep_telemetry_count(VehicleId id) const;
+    [[nodiscard]] const vehicle::WheelTelemetry& wheel_substep_telemetry(VehicleId id, std::size_t substep, std::size_t wheel_index) const;
     [[nodiscard]] const std::string& wheel_name(VehicleId id, std::size_t wheel_index) const;
     // PLAN.md M1, task 2 of the P3 fix-up phase: steer angle, suspension
     // travel, integrated spin angle, load and slip - everything a render/
