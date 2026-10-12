@@ -1,0 +1,18 @@
+{
+  "format": "physics_sim.installation/1",
+  "source": "P7c test fixture (NOT shipped): intake/exhaust plumbing of the held-out Mazda 2.0 SKYACTIV-G for the pipe-mode generator. The EPA NVFEL test package [C] runs the engine with its stock airbox and the Mazda3 factory exhaust (catalyst and muffler); no dimensions of either are in the local sources. Intake: airbox 0.010 m3 [AS, the demo installation's], no snorkel [AS] (without a snorkel the pipe network feeds the throttle straight from ambient and the airbox volume is not modelled - no airbox/snorkel loss), inlet position [AS, unused by the generator]. Exhaust chain geometry = data/installations/demo_i4_exhaust.json's generic [AS] chain (pipe 0.4 m x 50 mm, catalyst 0.16 m x 100 mm, pipe 1.2 m x 50 mm, expansion chamber 0.35 m x 120 mm, tailpipe 0.5 m x 50 mm, outlet). Catalyst k_loss 94.49 [D]: it lumps the whole measured downstream loss (catalyst, muffler, tailpipe) - the median over the six WOT rows (1747-3994 rpm) of the k that makes the model's own quasi-steady catalyst drop r_lin u + 1/2 k rho u^2 equal the measured catalyst-inlet gauge pressure p_cat - p_cell [M] at the measured exhaust flow (air + fuel) [M], with rho at the waveguide gas state (101.325 kPa, 800 K, burned: 0.43575 kg/m3), the monolith r_lin 178.77 Pa s/m (400 cpsi / 6.5 mil, cycle_engine.cpp) and u over the 100 mm substrate; per row 128.3 / 83.8 / 84.5 / 103.7 / 115.8 / 85.3 (<scratchpad>/p7c/kcat.py). Declared in out/garage_p7c_progress.md section 4 before any run.",
+  "intake": {
+    "airbox_m3": 0.010,
+    "inlet_position_m": [0.9, 0.3, 0.5]
+  },
+  "exhaust": {
+    "elements": [
+      { "type": "pipe", "length_m": 0.4, "d_m": 0.05 },
+      { "type": "catalyst", "length_m": 0.16, "d_m": 0.10, "k_loss": 94.49 },
+      { "type": "pipe", "length_m": 1.2, "d_m": 0.05 },
+      { "type": "expansion_chamber", "length_m": 0.35, "d_m": 0.12 },
+      { "type": "pipe", "length_m": 0.5, "d_m": 0.05 },
+      { "type": "outlet", "position_m": [-2.0, 0.0, 0.3] }
+    ]
+  }
+}
