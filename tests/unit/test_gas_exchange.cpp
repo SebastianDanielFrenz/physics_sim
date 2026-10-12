@@ -99,6 +99,28 @@ constexpr Row kMazda[] = {
 };
 constexpr std::size_t kNMazda = std::size(kMazda);
 
+// ---------------------------------------------------------------------------------------------------------------------
+// P7c ACCEPTANCE WINDOWS - declared and committed BEFORE the first run of the fixed model (the commit is the proof).
+// The fix chosen (out/garage_p7c_progress.md D1-D5): the A25A is left as it is; the held-out Mazda fixture moves to pipe
+// mode with its cited 4-2-1 exhaust (geometry rule in the progress file, committed before any Mazda run with it).
+//
+//   A1  trapped air, A25A WOT rows H23..H39: R_air = measured air / runtime air, runtime air =
+//       VE_gen(rpm, MAP) x MAP / (R_air x T_cell) x V_d x rpm / 120 - VE_gen from the generated Full maps (the runtime's
+//       own lookup, VE applied at ambient = cell temperature). Band [kAirBandLow, kAirBandHigh] = +-6 % (the brief's
+//       suggestion). The S rows are reported only. Expected to FAIL at H29..H37 with the unchanged A25A (D1).
+//   A2  the Mazda WOT rows M78..M133 reported against the same band (held out: reported, not tuned).
+//   A3  the Mazda's generated IVC temperature (generator conventions: ISA intake, 101.325 kPa ambient, the cam tables,
+//       lambda 1, the node's spark; run at the row's rpm and MAP) inside the KV2-T spark-consistent range of the A25A
+//       rows, [kTivcLow, kTivcHigh] K (P7b KV2-T: 359.8 .. 423.0 K), at every Mazda WOT row, no extra margin; the
+//       distance to each row's own spark-consistent value (P7b: 372.2 / 376.8 / 394.5 / 366.5 / 391.9 / 387.6 K) is
+//       reported.
+//   A4  KV1 and KV2 keep their [-5, +10] deg bands (test_knock_limit.cpp / test_knock_calibration.cpp), unchanged.
+//   A5  test_gen_engine_dyno S1/S2 reported before/after; its window is tightened only if it passes cleanly.
+constexpr real kAirBandLow = 0.94;
+constexpr real kAirBandHigh = 1.06;
+constexpr real kTivcLow = 359.8;
+constexpr real kTivcHigh = 423.0;
+
 struct Engine {
     SimulatedEngineDesc desc;
     const CycleModelDesc* c = nullptr;
