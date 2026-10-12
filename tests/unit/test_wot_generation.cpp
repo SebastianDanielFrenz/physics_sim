@@ -423,6 +423,7 @@ TEST_CASE("P7d W8a: the WOT row is the wide-open-throttle cycle at its own plenu
     const SimulatedEngineDesc& sd = mazda_pipes_desc();
     const EngineMapsPtr m = mazda_pipes_sketch();
     const SimulatedEngineMapsDesc& mm = m->maps;
+    REQUIRE(has_wot_rows(mm));
     const std::size_t np = mm.ve.y.size();
     for (std::size_t ir : {std::size_t(0), mm.ve.x.size() / 2, mm.ve.x.size() - 1}) {
         const real rpm = mm.ve.x[ir];
