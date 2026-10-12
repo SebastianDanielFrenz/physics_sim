@@ -95,6 +95,64 @@ void read_aero_control(const json& a, const std::string& path, vehicle::AssistUn
     unit.aero_control = c;
 }
 
+// Assists I4: the launch_control block (D-LC1). Ranges are validate_launch_assist's; the loader adds key-specific
+// type checks and the "exactly one of launch_rpm / launch_rpm_fraction" rule.
+void read_launch_control(const json& a, const std::string& path, vehicle::AssistUnitDesc& unit) {
+    const std::string ctx = path + ": launch_control";
+    if (!a.is_object()) throw std::runtime_error(ctx + " must be an object");
+    vehicle::LaunchAssistDesc d;
+    const auto number = [&](const json& v, const std::string& key) {
+        if (!v.is_number()) throw std::runtime_error(ctx + ": '" + key + "' must be a number");
+        const real x = v.get<real>();
+        if (!std::isfinite(x)) throw std::runtime_error(ctx + ": '" + key + "' must be finite");
+        return x;
+    };
+    for (auto it = a.begin(); it != a.end(); ++it) {
+        const std::string& k = it.key();
+        const json& v = it.value();
+        if (k == "launch_rpm") d.launch_rpm = number(v, k);
+        else if (k == "launch_rpm_fraction") d.launch_rpm_fraction = number(v, k);
+        else if (k == "default_enabled") {
+            if (!v.is_boolean() && !(v.is_number() && (v.get<real>() == real(0) || v.get<real>() == real(1)))) {
+                throw std::runtime_error(ctx + ": 'default_enabled' must be a boolean or 0/1");
+            }
+            d.default_enabled = v.is_boolean() ? v.get<bool>() : v.get<real>() == real(1);
+        } else if (k == "arm_throttle") d.arm_throttle = number(v, k);
+        else if (k == "arm_brake") d.arm_brake = number(v, k);
+        else if (k == "release_brake") d.release_brake = number(v, k);
+        else if (k == "arm_max_speed_mps") d.arm_max_speed_mps = number(v, k);
+        else if (k == "handover_speed_mps") d.handover_speed_mps = number(v, k);
+        else if (k == "max_launch_s") d.max_launch_s = number(v, k);
+        else if (k == "clutch_ramp_s") d.clutch_ramp_s = number(v, k);
+        else if (k == "clutch_up_per_s") d.clutch_up_per_s = number(v, k);
+        else if (k == "clutch_down_per_s") d.clutch_down_per_s = number(v, k);
+        else if (k == "slip_floor_mps") d.slip_floor_mps = number(v, k);
+        else if (k == "kp") d.kp = number(v, k);
+        else if (k == "ki_per_s") d.ki_per_s = number(v, k);
+        else if (k == "attack_rate_per_s") d.attack_rate_per_s = number(v, k);
+        else if (k == "recovery_rate_per_s") d.recovery_rate_per_s = number(v, k);
+        else if (k == "min_fraction") d.min_fraction = number(v, k);
+        else if (k == "slip_target") {
+            if (!v.is_object()) throw std::runtime_error(ctx + ": 'slip_target' must be an object keyed by traction mode name");
+            for (auto m = v.begin(); m != v.end(); ++m) {
+                const int mi = traction_mode_from_name(m.key());
+                if (mi < 0) throw std::runtime_error(ctx + ": slip_target: unknown mode '" + m.key() + "'");
+                d.slip_target[static_cast<std::size_t>(mi)] = number(m.value(), "slip_target." + m.key());
+            }
+            if (!v.contains("off") && v.contains("on")) d.slip_target[0] = d.slip_target[1];
+        } else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
+    }
+    if (!((d.launch_rpm > real(0)) != (d.launch_rpm_fraction > real(0)))) {
+        throw std::runtime_error(ctx + ": exactly one of 'launch_rpm' (> 0) and 'launch_rpm_fraction' (in (0, 1)) is required");
+    }
+    try {
+        vehicle::validate_launch_assist(d);
+    } catch (const std::invalid_argument& e) {
+        throw std::runtime_error(path + ": " + e.what());
+    }
+    unit.launch_control = d;
+}
+
 void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& part) {
     reject_unknown(j, {"format", "kind", "name", "source", "extends", "grade", "traction_control", "launch_control", "aero_control"}, path);
     part.kind = ElectronicsKind::AssistUnit;
@@ -113,10 +171,8 @@ void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& p
         if (!j.contains(blk)) continue;
         const bool allowed = std::string(blk) == "launch_control" ? info.allows_launch_control : info.allows_aero_control;
         if (!allowed) throw std::runtime_error(path + ": grade '" + grade + "' does not allow '" + blk + "'");
-        if (std::string(blk) == "launch_control") {
-            throw std::runtime_error(path + ": '" + blk + "' in an assist_unit is not implemented yet (assists plan I4)");
-        }
     }
+    if (j.contains("launch_control")) read_launch_control(j.at("launch_control"), path, part.unit);
     if (j.contains("aero_control")) read_aero_control(j.at("aero_control"), path, part.unit);
     if (!j.contains("traction_control")) return;
     const json& tc = j.at("traction_control");

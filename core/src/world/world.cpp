@@ -716,7 +716,14 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
                                                                            desc.assist_unit->aero_control->default_enabled ? real(1) : real(0));
     }
     // engine garage P8: never read on a car without the part (VehicleInstance gates it on fit_launch_)
-    if (has_launch_control) channel_indices.assist_launch_control = ensure_control_channel_index(channel_prefix + launch_channel_name, real(0));
+    // assists I4: a car whose assist unit carries a launch_control block has the channel too (name assist.launch_control,
+    // default = the block's default_enabled); a car with BOTH variants is rejected by the loader and VehicleInstance.
+    real launch_default = real(0);
+    if (desc.assist_unit && desc.assist_unit->launch_control) {
+        has_launch_control = true;
+        launch_default = desc.assist_unit->launch_control->default_enabled ? real(1) : real(0);
+    }
+    if (has_launch_control) channel_indices.assist_launch_control = ensure_control_channel_index(channel_prefix + launch_channel_name, launch_default);
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): resolve every control channel
     // this vehicle's powertrain components declare, same prefix convention

@@ -968,7 +968,7 @@ then ignored; `default_enabled` rules). The `controllers` array also accepts ent
 **Assist unit (assists I1).** The `electronics` entry may also be an `assist_unit` part (grade Street / Sport / Racing and a
 traction-control mode table, channel `assist.traction_control` codes 0 Off, 1 On, 2 Relaxed, 3 Sport, 4 Drift). It adds no
 controller: the loader stores it as `VehicleDesc::assist_unit` (at most one per vehicle). The car's own `traction_control`
-block is mode On. Without a unit the channel keeps its pre-unit meaning (`> 0.5` is on). A Racing unit's `aero_control` block (assists I5) additionally automates the car's `rear_wing` surface through the channel `assist.aero_control`, registered only when the car's aero block has the named surface. See [electronics.md](electronics.md#assist-unit).
+block is mode On. Without a unit the channel keeps its pre-unit meaning (`> 0.5` is on). A Racing unit's `aero_control` block (assists I5) additionally automates the car's `rear_wing` surface through the channel `assist.aero_control`, registered only when the car's aero block has the named surface. A Sport or Racing unit's `launch_control` block (assists I4) makes the unit a launch control too (channel `assist.launch_control`, registered on a car with either that block or a P8 `launch_control` part; both on one car is rejected). See [electronics.md](electronics.md#assist-unit).
 
 ## Control channels a vehicle reads
 

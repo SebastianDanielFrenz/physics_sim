@@ -1,7 +1,6 @@
 // ps/vehicle/assist_unit_desc.h - the assist unit (assists plan I1, vault PHYS-074, docs/data_formats/electronics.md):
-// a car's driver-assist electronics part, graded Street / Sport / Racing. I1 carries the traction-control mode table
-// only plus (assists I5) the aero automation block; launch control (assists I4) is declared in the grade table but
-// not yet loaded.
+// a car's driver-assist electronics part, graded Street / Sport / Racing. I1 carries the traction-control mode table,
+// assists I5 the aero automation block and assists I4 the launch control block (grades Sport and Racing).
 #pragma once
 
 #include "ps/aero/aerodynamics.h"
@@ -80,11 +79,70 @@ struct AeroControlDesc {
     real launch_offset_deg = 10;       // [AS] the offset a launch control (assists I4) asks for
 };
 
+// Assists I4 (D-LC1, vault PHYS-074): launch control as a grade-gated assist of the unit. Phases Idle / Armed / Launch /
+// Handover (core/src/vehicle/launch_assist.h). Every default is an [AS] (owner Q7, plan B3); the thresholds are data so
+// a car's own unit file can override them through "extends".
+struct LaunchAssistDesc {
+    // The launch rpm held against the open clutch (through the engine's own limiter, TcuRequest::limiter_rpm): exactly
+    // one of the two is set. launch_rpm is absolute (a car-specific part, e.g. car_hyper 4500 [AS]); launch_rpm_fraction
+    // is a fraction of the engine's rev limiter (a generic unit that fits any engine). Resolved by launch_assist_rpm().
+    real launch_rpm = 0;
+    real launch_rpm_fraction = 0;
+    bool default_enabled = false;        // the channel assist.launch_control's default (0/1)
+    real arm_throttle = 0.9;             // [AS] Q7: throttle above this arms
+    real arm_brake = 0.5;                // [AS] Q7: brake above this arms
+    real release_brake = 0.2;            // [AS] Q7: brake below this in Armed starts the launch
+    real arm_max_speed_mps = 0.5;        // [AS] Q7: arms (and stays armed) only below this speedo speed
+    real handover_speed_mps = 6;         // [AS] Q7: Launch ends above this speed ...
+    real max_launch_s = 3;               // [AS] Q7: ... or after this long
+    real clutch_ramp_s = 0.25;           // [AS] Q7: the clutch capacity ramps 0 -> 1 over this time at the release (the fastest it may close)
+    // The clutch capacity fraction c (assists I4 design, measured: PHYS-074 notes): dc/dt = min(1/clutch_ramp_s,
+    // clutch_up_per_s * min(1, 1 - slip/target)) below the slip target, -clutch_down_per_s * (slip/target - 1) above it.
+    real clutch_up_per_s = 6.0;          // [AS] growth rate scale below the target (measured on car_hyper, asphalt)
+    real clutch_down_per_s = 12.0;       // [AS] pull-back rate scale above the target
+    // Slip target per TRACTION MODE CODE (0 Off, 1 On, 2 Relaxed, 3 Sport, 4 Drift) of the rear driven-wheel slip
+    // ratio. [AS] Q7: On 0.10, Sport 0.14, Drift 0.2; Relaxed 0.12 between On and Sport; Off runs the On value.
+    std::array<real, kTractionModeCount> slip_target = {real(0.10), real(0.10), real(0.12), real(0.14), real(0.20)};
+    real slip_floor_mps = 1.0;           // [AS] slip = (v_driven - v_est) / max(|v_est|, floor): TC's formula with a smaller floor (TC: 2 m/s)
+    // The slip PI (TC's law: ceiling = clamp(1 - kp * max(0, slip - target) - integral, min_fraction, 1), rate limited).
+    real kp = 2.0, ki_per_s = 6.0, attack_rate_per_s = 20.0, recovery_rate_per_s = 8.0; // [AS] TC mode On's values
+    real min_fraction = 0.05;            // [AS] the ceiling never drops below this share of the driver's command
+};
+
+[[nodiscard]] inline real launch_assist_rpm(const LaunchAssistDesc& d, real engine_limiter_rpm) {
+    return d.launch_rpm > real(0) ? d.launch_rpm : d.launch_rpm_fraction * engine_limiter_rpm;
+}
+
+// Range checks shared by the loader and VehicleInstance (code-built descs). Throws std::invalid_argument.
+inline void validate_launch_assist(const LaunchAssistDesc& d) {
+    const auto fin = [](real v) { return std::isfinite(v); };
+    if (!((d.launch_rpm > real(0)) != (d.launch_rpm_fraction > real(0))) || !fin(d.launch_rpm) || !fin(d.launch_rpm_fraction) ||
+        d.launch_rpm < real(0) || d.launch_rpm_fraction < real(0) || d.launch_rpm_fraction >= real(1)) {
+        throw std::invalid_argument("launch_control: exactly one of launch_rpm (> 0) and launch_rpm_fraction (in (0, 1)) is required");
+    }
+    if (!fin(d.arm_throttle) || d.arm_throttle <= real(0.5) || d.arm_throttle > real(1)) throw std::invalid_argument("launch_control: arm_throttle must be in (0.5, 1]");
+    if (!fin(d.arm_brake) || d.arm_brake <= real(0) || d.arm_brake > real(1)) throw std::invalid_argument("launch_control: arm_brake must be in (0, 1]");
+    if (!fin(d.release_brake) || d.release_brake < real(0) || !(d.release_brake < d.arm_brake)) {
+        throw std::invalid_argument("launch_control: release_brake must be in [0, arm_brake)");
+    }
+    for (real v : {d.arm_max_speed_mps, d.handover_speed_mps, d.max_launch_s, d.slip_floor_mps, d.kp, d.ki_per_s, d.attack_rate_per_s, d.recovery_rate_per_s,
+                   d.clutch_up_per_s, d.clutch_down_per_s}) {
+        if (!fin(v) || !(v > real(0))) throw std::invalid_argument("launch_control: speeds, times, floor and gains must be finite and > 0");
+    }
+    if (!fin(d.clutch_ramp_s) || d.clutch_ramp_s < real(0)) throw std::invalid_argument("launch_control: clutch_ramp_s must be >= 0");
+    if (!(d.handover_speed_mps > d.arm_max_speed_mps)) throw std::invalid_argument("launch_control: handover_speed_mps must exceed arm_max_speed_mps");
+    if (!fin(d.min_fraction) || d.min_fraction < real(0) || d.min_fraction >= real(1)) throw std::invalid_argument("launch_control: min_fraction must be in [0, 1)");
+    for (real v : d.slip_target) {
+        if (!fin(v) || !(v > real(0)) || v >= real(1)) throw std::invalid_argument("launch_control: slip_target values must be in (0, 1)");
+    }
+}
+
 struct AssistUnitDesc {
     AssistGrade grade = AssistGrade::Street;
     bool has_traction_control = false; // false: TC stays as the car's base desc defines it (modes Off/On)
     AssistTractionDesc traction_control;
     std::optional<AeroControlDesc> aero_control; // present: the unit carries rear-wing automation (grade racing)
+    std::optional<LaunchAssistDesc> launch_control; // present: the unit carries launch control (assists I4, grades sport and racing)
 };
 
 // Fitment (assists I5, decision recorded in docs/data_formats/electronics.md): the controller is fitted iff the unit

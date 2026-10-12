@@ -313,7 +313,8 @@ TEST_CASE("R1: assist_unit rejections", "[assist][io]") {
     // grade table: blocks a grade does not allow / allows but are not loaded yet
     CHECK_THROWS_WITH(load(R"("grade":"street","launch_control":{}})"), ContainsSubstring("grade 'street' does not allow 'launch_control'"));
     CHECK_THROWS_WITH(load(R"("grade":"sport","aero_control":{}})"), ContainsSubstring("grade 'sport' does not allow 'aero_control'"));
-    CHECK_THROWS_WITH(load(R"("grade":"racing","launch_control":{}})"), ContainsSubstring("'launch_control' in an assist_unit is not implemented yet"));
+    CHECK_THROWS_WITH(load(R"("grade":"racing","launch_control":{}})"), ContainsSubstring("exactly one of 'launch_rpm'"));
+    CHECK(load(R"("grade":"racing","launch_control":{"launch_rpm":4500}})").unit.launch_control.has_value()); // assists I4 loads it (tests/unit/test_assist_launch.cpp)
     CHECK(load(R"("grade":"racing","aero_control":{}})").unit.aero_control.has_value()); // assists I5 loads it (tests/unit/test_assist_aero.cpp)
     // traction_control block
     CHECK_THROWS_WITH(load(R"("grade":"street","traction_control":{"modes":[],"default_mode":"on"}})"), ContainsSubstring("'modes' is required"));

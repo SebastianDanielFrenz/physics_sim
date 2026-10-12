@@ -22,15 +22,16 @@ unchanged, state hash included):
 **A not-fitted assist ignores its channel and stays off whatever the channel says.** Decision: it still
 *registers* its channel (stable channel list for scripts and adapters; the channel's default value is then `0`
 instead of the block's `enabled`), but `VehicleInstance` reads it as 0. The one exception is `assist.launch_control`:
-a car registers it only when it has a `launch_control` component (every channel list of a car without one is
-unchanged); a part with `fitted: false` still registers it. Anti-lag: with `anti_lag_switch.fitted =
+a car registers it only when it has a `launch_control` component or an assist unit with a `launch_control` block (every
+channel list of a car without one is unchanged); a part with `fitted: false` still registers it. Anti-lag: with `anti_lag_switch.fitted =
 false` the engine sees no channel (`Sensors::anti_lag_channel` NaN) and anti-lag runs on its configuration's
 `default_enabled` only.
 
 Snapshot: `VehicleSnapshot::powertrain.assist_fitted_bits` has the same layout as `assist_active_bits` (bit0
 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control, bit4 launch_control) plus bit5 = anti-lag
 switch and bit6 = aero automation (assists I5, [below](#assist-aero)). A HUD shows three states: hidden (bit not set in `assist_fitted_bits`), fitted and off, fitted and on
-(`assist_active_bits`; bit4 = launch_control switched on). A car without a `manual_tcu` reports the auto_* assists
+(`assist_active_bits`; bit4 = launch_control switched on; since assists I4 bit4 means "launch control" for either
+variant, the P8 two-step part or the assist unit's `launch_control` block - a car has one of them, never both). A car without a `manual_tcu` reports the auto_* assists
 as not fitted. Never hashed.
 
 ## Part file
@@ -124,8 +125,8 @@ grade-to-mode mapping is a data edit. Approved mapping (owner 2026-10-12), shipp
 | `racing` | Off, On, Relaxed, Sport, Drift | allowed (assists I4) | allowed ([below](#assist-aero), assists I5) |
 
 `launch_control` / `aero_control` keys: rejected `"grade 'street' does not allow 'launch_control'"` when the grade
-forbids them. `launch_control` is not loaded yet: `"'launch_control' in an assist_unit is not implemented yet (assists
-plan I4)"` when the grade allows it. `aero_control` loads since assists I5 ([below](#assist-aero)).
+forbids them. `launch_control` loads since assists I4 ([below](#assist-launch)), `aero_control` since assists I5
+([below](#assist-aero)).
 
 **Traction-control channel.** One channel `assist.traction_control`, append-only codes:
 
@@ -169,6 +170,76 @@ off, on, relaxed, sport, drift`, `duplicate mode '<m>' in 'modes'`, `'modes' mus
 'off'`, `'default_mode' is required`, `'default_mode' "<m>" is not one of the listed 'modes'`, `mode_params: unknown mode`,
 `takes no parameters`, `mode_params for '<m>' but '<m>' is not in 'modes'`, per-field range messages.
 
+### Launch control (assists I4) {#assist-launch}
+
+Block `launch_control` of an assist unit (grades `sport` and `racing`; Street rejects it with the grade message).
+`ps::vehicle::LaunchAssistDesc`, controller `core/src/vehicle/launch_assist.h`. Channel `assist.launch_control` (a
+plain 0/1 level, `>= 0.5` = on; registered on a car that has the block OR a P8 two-step part; default = the block's
+`default_enabled`, shipped `false` `[AS]` so a car carrying the unit launches as before until the assist is switched
+on). Exactly one launch rpm form is required; every other key is optional (owner Q7, all `[AS]`):
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `launch_rpm` | - | > 0 | absolute launch rpm held against the open clutch (Racing unit: 4500, car_hyper's value) |
+| `launch_rpm_fraction` | - | (0, 1) | the same as a fraction of the engine's rev limiter (Sport unit: 0.55). Exactly one of the two |
+| `default_enabled` | `false` | boolean or 0/1 | the channel's default |
+| `arm_throttle` | 0.9 | (0.5, 1] | throttle must exceed this to arm |
+| `arm_brake` | 0.5 | (0, 1] | brake must exceed this to arm |
+| `release_brake` | 0.2 | [0, arm_brake) | brake below this in Armed starts the launch |
+| `arm_max_speed_mps` | 0.5 | > 0 | speedo speed must be below this to arm and stay armed |
+| `handover_speed_mps` | 6 | > arm_max_speed_mps | hand over to traction control above this speed |
+| `max_launch_s` | 3 | > 0 | ... or after this long |
+| `clutch_ramp_s` | 0.25 | >= 0 | clutch capacity ramp 0 -> 1 after release |
+| `slip_target` | On 0.10, Relaxed 0.12, Sport 0.14, Drift 0.20 | each (0, 1), keys `off`/`on`/`relaxed`/`sport`/`drift` | rear-slip target of the launch PI per effective traction-control mode (Off mirrors On) |
+| `slip_floor_mps` | 1.0 | > 0 | speed floor in the slip denominator (TC's formula with this floor) |
+| `kp`, `ki_per_s`, `attack_rate_per_s`, `recovery_rate_per_s` | 2, 6, 20, 8 | > 0 | the slip PI (TC mode On's values) |
+| `min_fraction` | 0.05 | [0, 1) | floor of the PI's throttle fraction |
+
+Rejections (each asserted in `tests/unit/test_assist_launch.cpp` L2): `grade '<g>' does not allow 'launch_control'`,
+`launch_control must be an object`, `launch_control: unknown field '<k>'`, `exactly one of 'launch_rpm' (> 0) and
+'launch_rpm_fraction' (in (0, 1)) is required`, per-field range messages, `slip_target: unknown mode`, `slip_target
+values must be in (0, 1)`. At vehicle load the resolved launch rpm must lie strictly between the engine's idle rpm and
+its own limiter (`launch rpm <x> must lie between the engine's idle rpm <i> and its own limiter rpm <l>`).
+
+**Q5 (owner): either variant, never both.** A car has EITHER the P8 two-step (a `launch_control` electronics part,
+above) OR an assist unit with a `launch_control` block. Both on one car is rejected at load, whatever the order of the
+entries: `vehicle '<name>': launch control: a car has either a two-step (launch_control) or an assist-unit launch
+control, not both` (and again by `VehicleInstance`'s backstop for a code-built descriptor). Anti-lag is **not**
+switched on by launch control (owner Q6); a car that wants it sets its own anti-lag channel.
+
+**Car-specific launch rpm.** A generic unit fits any engine through `launch_rpm_fraction` (Sport: 0.55 of the limiter);
+the Racing unit carries car_hyper's absolute 4500. A car with another engine attaches a unit file that `extends` the
+shipped one and sets its own `launch_rpm` (setting `launch_rpm_fraction` there needs `launch_rpm` cleared: the
+merge-patch rule `"launch_rpm": null`), or uses the fraction form.
+
+**Phases** (`launch_phase` in the snapshot: 0 Idle, 1 Armed, 2 Launch, 3 Handover; one hashed byte plus a timer, a
+ramp, the PI's ceiling and integral, hashed ONLY on a car that carries the block):
+
+1. *Idle -> Armed*: channel on, the auto-clutch assist on, engine Running, throttle > `arm_throttle`, brake >
+   `arm_brake`, speedo speed < `arm_max_speed_mps`, gearbox in gear 1 and not shifting.
+2. *Armed*: the engine's second rev limit = the launch rpm through the engine's own limiter (the P8 `TcuRequest::
+   limiter_rpm` path: fuel cut with its hysteresis, soft cut over its band), the auto-clutch is held open (capacity
+   0), traction control is suspended (its estimator keeps running, so the slip PI has a speed estimate at release),
+   the aero hook `set_aero_launch_request(true)` asks for the launch wing offset. Leaves to Idle when the channel,
+   auto-clutch or engine stops, throttle < 0.5, speed >= `arm_max_speed_mps`, gear != 1 or a shift starts; to Launch
+   when brake < `release_brake`.
+3. *Launch*: the limiter is lifted; the clutch capacity ramps 0 -> 1 over `clutch_ramp_s` on the torque-following law
+   of the auto-clutch (`min(ramp, 1) * max(0, T_demand + T_sync)`, so it never exceeds what the engine and the
+   synchronising torque can carry: no dump at the launch rpm); the engine's throttle ceiling comes from a slip PI on
+   the driven wheels' worst positive slip (TC's formula, `slip_floor_mps`) toward `slip_target[effective mode]`. Leaves
+   to Handover on speed > `handover_speed_mps`, time > `max_launch_s`, throttle < 0.5, a shift, gear != 1, or the
+   channel/auto-clutch/engine stopping.
+4. *Handover*: one tick. Traction control starts from the PI's last ceiling (its fraction and integral are seeded, no
+   torque jump) and runs again; the wing returns to the aero controller; then Idle.
+
+**Precedence with the low-speed fix (assists I2, D-LS1..3).** While the launch control owns the car (Armed, Launch)
+the powertrain sees traction control neutral (fraction 1, no ceiling, no ignition cut), so TC's crawl-speed clutch cap
+and its lock inhibit never act; the launch clutch cap and throttle ceiling are the only interventions. In Idle and
+Handover the I2 path is untouched. (Tests: `test_assist_launch.cpp` P1.)
+
+Snapshot (never hashed): `PowertrainSnapshot::launch_phase`, `launch_slip_target` (the effective mode's target, 0
+without the block), `launch_control_active` (also true while the unit's LC is Armed/Launch).
+
 ### Aero automation (assists I5) {#assist-aero}
 
 Block `aero_control` of an assist unit (grade `racing` only; Street and Sport reject it with the grade message above).
@@ -190,8 +261,8 @@ the defaults are racing_game's `rg/environment.h` values, all `[D]`). Every key 
 the vehicle's own wind), read at tick start; `target = cruise_offset * clamp((v - ramp_start)/(ramp_end - ramp_start),
 0, 1)`; if `v >= airbrake_min_speed`: `demand = clamp((brake - brake_start)/(brake_full - brake_start), 0, 1)` and
 `target += (airbrake_offset - target) * demand`; launch hook set: `target = launch_offset` instead (yield order launch
-control > airbrake > cruise; the hook is `VehicleInstance::set_aero_launch_request`, always false until the launch
-control of assists I4); `radians = target * pi / 180`; `limit = radians >= 0 ? max_offset_rad : -min_offset_rad`;
+control > airbrake > cruise; the hook is `VehicleInstance::set_aero_launch_request`, true while the assist unit's launch
+control is Armed or Launching, [below](#assist-launch)); `radians = target * pi / 180`; `limit = radians >= 0 ? max_offset_rad : -min_offset_rad`;
 `command = limit > 0 ? clamp(radians / limit, -1, 1) : 0`. The brake input is the `brake` channel (the handbrake is
 not read). The command goes through the surface's own `rate_rad_s` slew like any command.
 

@@ -153,7 +153,13 @@ struct PowertrainSnapshot {
     // active). Never hashed.
     bool aero_control_active = false;
     real aero_control_target_deg = 0;
-    bool launch_control_active = false; // engine garage P8: the second rev limit is armed (latched) - never hashed
+    bool launch_control_active = false; // engine garage P8: the second rev limit is armed (latched) - never hashed. Assists I4: also true while the assist unit's launch control is Armed or Launch
+    // Assists I4 (PHYS-074 D-LC1): the assist unit's launch control phase (0 Idle, 1 Armed, 2 Launch, 3 Handover; 0 on a
+    // car without the block or with the P8 two-step) and the slip target of the effective traction mode it controls
+    // toward (0 without the block). Never hashed. assist_fitted_bits/assist_active_bits bit 4 mean "launch control" for
+    // either variant (P8 two-step or unit): fitted = the car has one, active = its channel is on.
+    std::uint8_t launch_phase = 0;
+    real launch_slip_target = 0;
     std::vector<EngineSoundState> engines; // 0 or 1 in I3; capacity reused per snapshot slot (D8)
     DrivelineSoundState driveline;
     // PHYS-033 P4 I4 C8: per-differential torque-split summary, component-

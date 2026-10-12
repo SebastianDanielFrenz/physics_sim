@@ -6,6 +6,7 @@
 #pragma once
 
 #include "../drivetrain/powertrain.h"
+#include "launch_assist.h"
 #include "wheel_instance.h"
 
 #include "ps/drivetrain/powertrain_state.h"
@@ -17,6 +18,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -306,6 +308,10 @@ private:
     bool fit_aero_ = false;
     std::size_t aero_control_surface_ = 0;
     bool aero_launch_request_ = false;
+    // Assists I4: the assist unit's launch control (present iff the unit carries the block, which is also what fits the
+    // assist). Its hashed state is folded only then; launch_slip_target_ is the last substep's snapshot value.
+    std::optional<LaunchAssist> launch_;
+    real launch_slip_target_ = 0;
     TractionControlState traction_state_{};
     std::vector<TractionWheelSensor> traction_sensors_;
     std::vector<WheelTelemetry> substep_telemetry_; // assists I2a diag: kMaxSubstepTelemetry x wheels, sized at construction

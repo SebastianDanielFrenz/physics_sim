@@ -94,7 +94,7 @@ public:
         out.command = command;
         if (kind_ == ThrottleInput::Electronic) {
             out.floor = ctx.tcu_throttle_floor;
-            out.ceiling = std::min(ctx.tcu_throttle_ceiling,ctx.traction_throttle_ceiling);
+            out.ceiling = std::min(std::min(ctx.tcu_throttle_ceiling,ctx.traction_throttle_ceiling),ctx.launch_throttle_ceiling); // launch_*: assists I4, 1 = none
             out.floor = std::min(out.floor,out.ceiling); // safety intervention takes priority over auto-blip
         } else {
             out.floor = real(0.0);

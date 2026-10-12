@@ -11,5 +11,13 @@
       "sport":   { "target_slip": 0.18, "kp": 1.5, "ki_per_s": 4.0, "attack_rate_per_s": 10.0, "recovery_rate_per_s": 10.0, "min_fraction": 0.15, "ignition_cut": false }
     }
   },
-  "source": "[AS] Grade table proposal (assists plan I1, vault PHYS-074; owner approved the grade mapping 2026-10-12): Sport = traction control Off/On/Relaxed/Sport, plus launch control (declared by the grade table, loaded by assists I4). Mode 'on' is the car's own traction_control block. Per-mode values are assumed starting points (plan B1 table), measured against the V6 ordering band in tests/unit/test_assist_unit.cpp."
+  "launch_control": {
+    "launch_rpm_fraction": 0.55,
+    "default_enabled": false,
+    "arm_throttle": 0.9, "arm_brake": 0.5, "release_brake": 0.2, "arm_max_speed_mps": 0.5,
+    "handover_speed_mps": 6.0, "max_launch_s": 3.0, "clutch_ramp_s": 0.25, "clutch_up_per_s": 6.0, "clutch_down_per_s": 12.0,
+    "slip_floor_mps": 1.0, "kp": 2.0, "ki_per_s": 6.0, "attack_rate_per_s": 20.0, "recovery_rate_per_s": 8.0, "min_fraction": 0.05,
+    "slip_target": { "on": 0.10, "relaxed": 0.12, "sport": 0.14 }
+  },
+  "source": "[AS] Grade table proposal (assists plan I1, vault PHYS-074; owner approved the grade mapping 2026-10-12): Sport = traction control Off/On/Relaxed/Sport, plus launch control (assists I4). Mode 'on' is the car's own traction_control block. Per-mode values are assumed starting points (plan B1 table), measured against the V6 ordering band in tests/unit/test_assist_unit.cpp. Assists I4 (D-LC1): launch_control block - launch_rpm_fraction 0.55 of the engine's rev limiter [AS] (a generic unit that fits any engine; 0.55 x car_hyper's 8250 = 4538, close to the Racing unit's 4500); other numbers as the Racing unit (owner Q7 [AS] defaults, clutch regulator rates [AS]); default_enabled false [AS]."
 }
