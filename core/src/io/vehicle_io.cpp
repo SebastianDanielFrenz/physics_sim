@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <set>
 #include <stdexcept>
 
 namespace ps::io {
@@ -112,11 +113,28 @@ void require_vehicle_format(const json& j, const std::string& path) {
     }
 }
 
+// The ONE post-parse validation of a TyreDesc: read_tyre_object (file / inline tyre) ends in it, and a desc injected
+// through VehicleLoadOptions::tyres goes through it unchanged, so both paths accept exactly the same tyres.
+void validate_tyre_desc(const TyreDesc& d) {
+    if (d.source.empty()) throw std::runtime_error("tyre '" + d.name + "': 'source' is required (PLAN.md section 8)");
+    if (d.rolling_resistance_v_eps <= real(0.0)) {
+        throw std::runtime_error("tyre '" + d.name + "': rolling_resistance_v_eps must be > 0, got " +
+                                  std::to_string(d.rolling_resistance_v_eps));
+    }
+    if (d.low_speed_damping_ratio < real(0.0) || d.low_speed_damping_ratio > real(2.0)) {
+        throw std::runtime_error("tyre '" + d.name + "': low_speed_damping_ratio must be in [0, 2], got " +
+                                  std::to_string(d.low_speed_damping_ratio));
+    }
+    if (d.low_speed_damping_vx <= real(0.0)) {
+        throw std::runtime_error("tyre '" + d.name + "': low_speed_damping_vx must be > 0, got " +
+                                  std::to_string(d.low_speed_damping_vx));
+    }
+}
+
 TyreDesc read_tyre_object(const json& j) {
     TyreDesc d;
     d.name = j.value("name", std::string());
     d.source = j.value("source", std::string());
-    if (d.source.empty()) throw std::runtime_error("tyre '" + d.name + "': 'source' is required (PLAN.md section 8)");
 
     d.unloaded_radius = j.value("unloaded_radius", d.unloaded_radius);
     d.width = j.value("width", d.width);
@@ -187,10 +205,6 @@ TyreDesc read_tyre_object(const json& j) {
             ps::vehicle::RollingResistanceSpeedLaw::Quadratic : ps::vehicle::RollingResistanceSpeedLaw::FourthPower);
     }
     d.rolling_resistance_v_eps = j.value("rolling_resistance_v_eps", d.rolling_resistance_v_eps);
-    if (d.rolling_resistance_v_eps <= real(0.0)) {
-        throw std::runtime_error("tyre '" + d.name + "': rolling_resistance_v_eps must be > 0, got " +
-                                  std::to_string(d.rolling_resistance_v_eps));
-    }
     d.relaxation_length_x = j.value("relaxation_length_x", d.relaxation_length_x);
     d.relaxation_length_y = j.value("relaxation_length_y", d.relaxation_length_y);
     d.lambda_mux = j.value("lambda_mux", d.lambda_mux);
@@ -199,14 +213,6 @@ TyreDesc read_tyre_object(const json& j) {
     // PHYS-033 I1: additive fields, tyre/1 unchanged.
     d.low_speed_damping_ratio = j.value("low_speed_damping_ratio", d.low_speed_damping_ratio);
     d.low_speed_damping_vx = j.value("low_speed_damping_vx", d.low_speed_damping_vx);
-    if (d.low_speed_damping_ratio < real(0.0) || d.low_speed_damping_ratio > real(2.0)) {
-        throw std::runtime_error("tyre '" + d.name + "': low_speed_damping_ratio must be in [0, 2], got " +
-                                  std::to_string(d.low_speed_damping_ratio));
-    }
-    if (d.low_speed_damping_vx <= real(0.0)) {
-        throw std::runtime_error("tyre '" + d.name + "': low_speed_damping_vx must be > 0, got " +
-                                  std::to_string(d.low_speed_damping_vx));
-    }
 
     if (j.contains("longitudinal")) {
         const auto& g = j.at("longitudinal");
@@ -246,6 +252,7 @@ TyreDesc read_tyre_object(const json& j) {
         const auto& g = j.at("overturning");
         d.qsx1 = g.value("qsx1", d.qsx1); d.qsx2 = g.value("qsx2", d.qsx2); d.qsx3 = g.value("qsx3", d.qsx3);
     }
+    validate_tyre_desc(d);
     return d;
 }
 
@@ -282,7 +289,9 @@ SuspensionDesc read_suspension(const json& j) {
     return s;
 }
 
-WheelDesc read_wheel(const json& j, const std::string& base_dir) {
+// `injected` (VehicleLoadOptions::tyres, keyed by wheel name; nullptr = none) REPLACES the wheel's file "tyre", which
+// is then not read at all. The caller has already checked that a tyre exists one way or the other.
+WheelDesc read_wheel(const json& j, const std::string& base_dir, const TyreDesc* injected) {
     WheelDesc w;
     w.name = j.value("name", std::string("wheel"));
     w.attachment_local = read_vec3(j.value("attachment_local", json()), w.attachment_local);
@@ -294,7 +303,12 @@ WheelDesc read_wheel(const json& j, const std::string& base_dir) {
     w.wheel_inertia = j.value("wheel_inertia", w.wheel_inertia);
     if (j.contains("suspension")) w.suspension = read_suspension(j.at("suspension"));
     w.arb_partner = j.value("arb_partner", w.arb_partner);
-    if (j.contains("tyre")) w.tyre = read_tyre_ref(j.at("tyre"), base_dir);
+    if (injected != nullptr) {
+        validate_tyre_desc(*injected);
+        w.tyre = *injected;
+    } else if (j.contains("tyre")) {
+        w.tyre = read_tyre_ref(j.at("tyre"), base_dir);
+    }
     // W6 (weather plan 7.5): a physics_sim.tyre_profile/1 path/name. Stored
     // only; W6 resolves the environment's default_tyre_profile (W7 per-wheel).
     w.tyre_profile = j.value("tyre_profile", w.tyre_profile);
@@ -3402,7 +3416,27 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
     if (!j.contains("wheels") || !j.at("wheels").is_array() || j.at("wheels").empty()) {
         throw std::runtime_error("vehicle " + path + " has no 'wheels' array");
     }
-    for (const auto& wj : j.at("wheels")) v.wheels.push_back(read_wheel(wj, base_dir));
+    // Injected tyres (VehicleLoadOptions::tyres): every key must name a wheel of this file (typo guard); a wheel with
+    // neither an injected desc nor a "tyre" key is a load error (it used to get a default-constructed TyreDesc).
+    {
+        std::set<std::string> wheel_names;
+        for (const auto& wj : j.at("wheels")) wheel_names.insert(wj.value("name", std::string("wheel")));
+        for (const auto& kv : load_options.tyres) {
+            if (wheel_names.count(kv.first) == 0) {
+                throw std::runtime_error("vehicle " + path + ": VehicleLoadOptions::tyres: no wheel named '" + kv.first + "'");
+            }
+        }
+    }
+    for (const auto& wj : j.at("wheels")) {
+        const std::string wheel_name = wj.value("name", std::string("wheel"));
+        const auto inj = load_options.tyres.find(wheel_name);
+        const TyreDesc* injected = inj != load_options.tyres.end() ? &inj->second : nullptr;
+        if (injected == nullptr && !wj.contains("tyre")) {
+            throw std::runtime_error("vehicle " + path + ": wheel '" + wheel_name +
+                                      "': no tyre (give a \"tyre\" path/object or VehicleLoadOptions::tyres)");
+        }
+        v.wheels.push_back(read_wheel(wj, base_dir, injected));
+    }
 
     v.steering = read_steering(j.value("steering", json()));
     v.brake_system = read_brake_system(j.value("brake_system", json()));

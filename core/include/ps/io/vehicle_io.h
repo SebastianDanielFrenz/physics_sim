@@ -130,6 +130,14 @@ struct VehicleLoadOptions {
     // "none" removes the entry (a vehicle-file entry, or one added earlier). An id that is a manual_tcu entry is
     // rejected.
     std::map<std::string, std::string> electronics;
+    // Injected tyres, keyed by WHEEL NAME (WheelDesc::name) - how a game that builds its tyres in memory (compound +
+    // size) hands them to the loader instead of writing tyre files. An injected desc REPLACES the wheel's own "tyre"
+    // (path or inline object) when both exist - the user layer wins, like part_overrides; the file tyre is then not
+    // read at all. It gets the same validation a file tyre gets (read_tyre_object's: non-empty `source`,
+    // rolling_resistance_v_eps > 0, low_speed_damping_ratio in [0, 2], low_speed_damping_vx > 0). A key that names no
+    // wheel of the vehicle file is rejected. Independent of the map: a wheel with neither an injected desc nor a
+    // "tyre" key is a load error ("wheel '<name>': no tyre (...)"), also without any options.
+    std::map<std::string, vehicle::TyreDesc> tyres;
 };
 
 // The overloads above delegate here with no part_overrides (bit-identical).
