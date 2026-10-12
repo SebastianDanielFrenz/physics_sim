@@ -34,6 +34,7 @@ physics_sim/
     enginedata/                       python engine-data generators, dev only: a25a_mb_engine.py (PHYS-033 P4 I7c C17a fallback M-B: EPA NVFEL A25A xlsx -> data/engines/toyota_a25a_fks_sim.json; --sabotage {transpose_ve,reverse_ve_rows,kpa_as_pa} for the data test's corruption check); a25a_gen_engine.py (I7c C17a M-A: out/a25a/a25a_tables.json -> data/engines/toyota_a25a_fks_gen.json's cycle block, deterministic, same bytes on re-run); k20a_vtec_cam.py (garage P9: writes data/cams/honda_k20a_dc5_vtec.json, [AS] lifts)
     turbo_sim/                        offline Python (stdlib) turbo stage-map generator: meanline.py (physics_sim.turbo_geometry/1 -> physics_sim.turbo_stage_maps/1), build_examples.py, benchmark_maps.py, test_meanline.py (python -m unittest discover -s tools/turbo_sim); not CTest; ci.ps1 PathRules kind none
     assetgen/                         Godot art-asset generator (Python; coordinate source ownership before edits); hyper_topology_check.py verifies final hypercar node topology, flow selection ranges/hash and rig; data/models/car_hyper/GEOMETRY.md describes visual closure and unresolved CFD preparation
+  cmake/toolchains/aarch64-linux-gnu-clang.cmake   clang cross toolchain for native Linux ARM64 (Steam Frame; merge 774196c, vault PHYS-073): --target aarch64-linux-gnu + lld, optional env PS_AARCH64_SYSROOT (Steam Runtime 4 ARM64 SDK later, untested) / PS_AARCH64_GCC_TOOLCHAIN, qemu as CMAKE_CROSSCOMPILING_EMULATOR when present; preset linux-aarch64-check
   core/
     include/ps/                       public API headers (no Jolt or Godot types); target ps_core (STATIC)
       version.h                       ps::version_string(), ps::jolt_backend_self_check()
@@ -328,6 +329,7 @@ physics_sim/
   `bench_contact_coupling`, `bench_terrain_tiles` and fetch Catch2.
 - `PS_BUILD_GODOT_ADAPTER` (default `OFF`): fetch godot-cpp and build
   `adapters/godot`.
+- `PS_TARGET_X86` / `PS_TARGET_AARCH64` (derived after project(), not user options): target from CMAKE_CXX_COMPILER_ARCHITECTURE_ID, CMAKE_CXX_COMPILER_TARGET, `--target=` in CMAKE_CXX_FLAGS, then CMAKE_SYSTEM_PROCESSOR (empty = x86). `/arch:AVX2`, `-mavx2 -mfma` and Jolt's USE_AVX2/USE_FMADD/USE_AVX512 apply only on x86 (x86 compile lines byte-identical to before, checked over all 563 compile_commands entries for release/msvc-release/linux-release); on aarch64 every Jolt x86 option is forced OFF (Jolt picks NEON itself), `-ffp-contract=off` stays (clang contracts by default on aarch64), ps::simd takes its scalar path (no NEON backend), step_team spins with `yield`, topology.cpp returns the logical core count on ARM (no 'core id' in /proc/cpuinfo).
 - `PS_SANITIZER_BUILD` (default `OFF`): set `ON` explicitly by the `asan`,
   `linux-asan-ubsan` and `linux-tsan` presets; wall-clock bench bounds are
   reported, not asserted, on such a build (see `bench_terrain_tiles`
@@ -376,6 +378,7 @@ never under `/mnt/s`):
 |---|---|
 | `linux-release` | Release |
 | `linux-asan-ubsan` | Debug + AddressSanitizer + UndefinedBehaviorSanitizer |
+| `linux-aarch64-check` | Release cross build for aarch64 (toolchain file above, PS_BUILD_TESTS OFF): ps_core, ps_engine_cycle, ps_audio, ps_environment(_io), ps_engine_tools, ps_run; run under `qemu-aarch64 -L /usr/aarch64-linux-gnu` |
 | `linux-tsan` | Debug + ThreadSanitizer |
 
 ## Job system (`core/src/jobs/`, PLAN.md D8)
@@ -1905,6 +1908,8 @@ lanes have exited: each built leg's `walltime` tests, one leg at a time,
 nothing else running. Then the cross-platform hash compare. The summary adds
 a per-phase wall-clock table.
 
+WSL lane step `linux-aarch64-check` (after `linux-release`, also `-Only linux-aarch64-check`): cross-builds the aarch64 preset and, with qemu, runs free_fall and reports its hash vs linux-release (informational; all 20 HashCheckScenarios matched x86 bit for bit on 2026-10-12, not a requirement); SKIP (passing) when the cross headers are absent, FAIL on a configure/build error.
+
 Legs: clang-cl `debug`, `release`, `asan`; cl `msvc-release`; a grep that
 fails the run if anything under `core/` includes a Godot/GDExtension header;
 WSL `linux-release`, `linux-asan-ubsan`, `linux-tsan` (its test preset sets
@@ -1990,4 +1995,5 @@ selectable via `ctest -L`/`-LE`; repeated `-L` are ANDed):
 ```powershell
 tools\setup_dev_env.ps1             # install everything (idempotent)
 tools\setup_dev_env.ps1 -CheckOnly  # verify only, prints versions, exits non-zero if anything is missing
+tools\setup_dev_env.ps1 -Aarch64Cross [-CheckOnly]  # optional: WSL aarch64 cross headers (libstdc++/libc6-dev-arm64-cross) + qemu-user, via wsl -u root
 ```
