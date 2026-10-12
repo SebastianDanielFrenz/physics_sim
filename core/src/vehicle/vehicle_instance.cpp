@@ -305,6 +305,22 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction,substep_dt);
         ctx.traction_ignition_cut=assist_traction&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
         ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(controls.throttle,real(0),real(1))*traction_fraction:real(1);
+        // Assists I2 (PHYS-074 D-LS1/D-LS2), gated on TC's effective mode != Off (coordinator decision 2026-10-12;
+        // a car with its own traction_control block and no assist unit counts too): the TC fraction and floor for
+        // the crawl-speed clutch path, and the ground-speed reference for the auto-clutch lock decision - the TC
+        // estimate once initialised, else the mean undriven-wheel peripheral speed, NaN without either. With TC Off
+        // the ctx keeps its defaults (fraction 1, NaN), so a TC-off car is bit-identical. Unhashed.
+        if(assist_traction) {
+            ctx.traction_torque_fraction=traction_fraction;
+            ctx.traction_floor_fraction=tc_desc.min_fraction;
+            if(traction_state_.initialized) {
+                ctx.ground_speed_mps=traction_state_.estimated_speed_m_s;
+            } else {
+                real undriven_sum=0;int undriven=0;
+                for(const auto& sensor:traction_sensors_) if(!sensor.driven){undriven_sum+=sensor.peripheral_speed_m_s;++undriven;}
+                if(undriven>0)ctx.ground_speed_mps=undriven_sum/static_cast<real>(undriven);
+            }
+        }
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
         ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9

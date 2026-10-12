@@ -15,6 +15,7 @@
 #include "ps/types.h"
 
 #include <cstdint>
+#include <limits>
 
 namespace ps::drivetrain {
 
@@ -68,6 +69,17 @@ public:
         // engine's PREVIOUS substep (one substep lagged, like every other
         // engine<->TCU exchange - plan section 7.2).
         real engine_torque_nm = 0.0;
+        // Assists I2 (PHYS-074 D-LS2): the vehicle's ground-speed reference (m/s, signed along the chassis forward
+        // axis; NaN = none - only set while traction control's effective mode is not Off) and the factor that turns
+        // it into the gearbox-input omega of the CURRENT gear at no tyre slip (ratio_gear * speedo ratio / speedo
+        // radius; 0 in neutral). Below anti_stall_rpm the Launch law does not take the Locked transition: a lock
+        // there would be onto spinning wheels. Unhashed inputs.
+        real ground_speed_mps = std::numeric_limits<real>::quiet_NaN();
+        real ground_speed_to_input_omega = 0.0;
+        // Assists I2 (PHYS-074 D-LS1): traction control acting through the auto-clutch at crawl speed - a cap on the
+        // clutch's kinetic capacity (N*m) applied to the auto-clutch output e_auto (+inf = none). The TCU's own
+        // e_auto state is not changed by it.
+        real clutch_capacity_cap_nm = std::numeric_limits<real>::infinity();
     };
 
     struct Outputs {
@@ -90,6 +102,7 @@ public:
     [[nodiscard]] Outputs step(const Sensors& s, real h, bool first_substep_of_tick);
 
     [[nodiscard]] ClutchMode clutch_mode() const { return mode_; }
+    [[nodiscard]] const Desc& desc() const { return desc_; }
     [[nodiscard]] real e_auto() const { return e_auto_; }
     [[nodiscard]] int pending() const { return pending_; }
 

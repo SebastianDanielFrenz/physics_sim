@@ -1881,6 +1881,42 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             ctx.tcu_ignition_cut = tcu_prev_request_.ignition_cut;
             ctx.tcu_throttle_ceiling = tcu_prev_request_.throttle_ceiling;
 
+            // Assists I2 (PHYS-074 D-LS1/D-LS3): at crawl speed traction control acts through the auto-clutch.
+            // In 1st at idle the rim of car_hyper turns 3.49 m/s [D], so a clutch locked below ~3 m/s forces
+            // wheelspin and an engine-torque cut can only remove it by dragging the locked engine below anti-stall
+            // (the Part A limit cycle). While the auto-clutch is in Launch or Locked mode with the ground-speed
+            // input rpm below 1.25 x anti_stall_rpm [AS], the engine keeps the driver's command (no TC ceiling, no
+            // TC ignition cut, and the launch law sees that command) and the TC fraction caps the clutch's
+            // capacity instead: cap = f * T_d + (1 - f) * T_floor, T_floor = max(0, min_fraction * T_d), T_d the
+            // engine's demand at the driver's command (previous substep, like every engine -> TCU exchange). The
+            // clutch slips instead of pulling the engine down. Everywhere else (Shift mode, faster, manual clutch,
+            // TC not intervening, TC Off - ctx.traction_torque_fraction stays 1 then) the engine-ceiling path is
+            // unchanged. TCU mode = last substep's (lagged).
+            const int cur_gear = gearbox_->current_position();
+            const real ground_to_in = (cur_gear != 0 && speedo_radius_ > real(0.0))
+                                          ? gearbox_->ratio_for_position(cur_gear) * speedo_ratio_ / speedo_radius_
+                                          : real(0.0);
+            tc_via_clutch_ = false;
+            clutch_capacity_cap_tc_ = std::numeric_limits<real>::infinity();
+            if (engine_ && ctx.assist_auto_clutch && ctx.traction_torque_fraction < real(1.0) && cur_gear != 0 &&
+                tcu_->desc().clutch_capacity_nm > real(0.0)) {
+                // Crawl band in BOTH clutch modes: a Launch-mode-only gate without it kept a slipping clutch with the
+                // engine on the limiter up to 12 m/s in the hyper TC test (measured, PROVISIONAL decision 5).
+                constexpr real kTcClutchCrawlBand = real(1.25); // [AS] plan B2, x anti_stall_rpm
+                const real ground_in_rpm = ctx.ground_speed_mps * ground_to_in * (real(60.0) / (real(2.0) * real(3.14159265358979323846)));
+                const bool crawl = ground_in_rpm < kTcClutchCrawlBand * tcu_->desc().auto_clutch.anti_stall_rpm; // NaN: false
+                const ManualTcu::ClutchMode mode = tcu_->clutch_mode();
+                tc_via_clutch_ = crawl && (mode == ManualTcu::ClutchMode::Launch || mode == ManualTcu::ClutchMode::Locked);
+            }
+            if (tc_via_clutch_) {
+                const real f = ctx.traction_torque_fraction;
+                const real t_d = last_engine_result_.torque_demand;
+                const real t_floor = std::max(real(0.0), ctx.traction_floor_fraction * t_d);
+                clutch_capacity_cap_tc_ = std::max(real(0.0), f * t_d + (real(1.0) - f) * t_floor);
+                ctx.traction_throttle_ceiling = real(1.0);
+                ctx.traction_ignition_cut = false;
+            }
+
             // PHYS-033 P4 I7a C5b (owner ruling 2026-09-26): the throttle-
             // command stage is evaluated HERE, before the TCU, so the TCU's
             // launch law / auto-shift thresholds / auto-blip act on the
@@ -1910,7 +1946,11 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.throttle_request = engine_ ? last_throttle_command_.command : ctx.throttle;
             // TC changes the available ECU request: launch clutch must not
             // wait for full-pedal launch RPM after TC has limited that request.
+            // Assists I2 (D-LS3): not while TC acts through the clutch (ctx.traction_throttle_ceiling is 1 then).
             if (ctx.traction_throttle_ceiling < real(1)) s.throttle_request = std::min(s.throttle_request,ctx.traction_throttle_ceiling);
+            s.ground_speed_mps = ctx.ground_speed_mps; // assists I2 (D-LS2), NaN with TC Off
+            s.ground_speed_to_input_omega = ground_to_in;
+            s.clutch_capacity_cap_nm = clutch_capacity_cap_tc_; // assists I2 (D-LS1)
             s.gear_request = ctx.gear_request;
             s.shift_up_count = ctx.shift_up_count;
             s.shift_down_count = ctx.shift_down_count;

@@ -149,6 +149,70 @@ TEST_CASE("ManualTcu: auto-clutch launch law gives e(rpm), then Launch -> Locked
     CHECK(tcu.clutch_mode() == ManualTcu::ClutchMode::Launch);
 }
 
+// Assists I2 (PHYS-074 D-LS2): no Launch -> Locked transition while the input rpm the ground speed implies is below
+// anti_stall_rpm (a lock onto spinning wheels); NaN ground speed (TC Off) keeps the old transition. White-box: only
+// the sabotage-free path can tell D-LS2 apart, the whole-vehicle cases are covered by D-LS1 as well.
+TEST_CASE("ManualTcu: assists I2 D-LS2 - no Locked transition onto spinning wheels", "[unit][drivetrain][tcu][assist]") {
+    ManualTcu::Desc d;
+    d.auto_clutch.bite_rpm = 1100.0;
+    d.auto_clutch.full_rpm_min = 1600.0;
+    d.auto_clutch.full_rpm_max = 3000.0;
+    d.auto_clutch.lock_slip_rpm = 80.0;
+    d.auto_clutch.anti_stall_rpm = 950.0;
+    d.auto_clutch.engage_rate_per_s = 4.0;
+    const real h = 1.0 / 960.0;
+    auto run = [&](real ground_mps) {
+        ManualTcu tcu(d);
+        ManualTcu::Sensors s = base_sensors();
+        s.gearbox_current = 1;
+        s.gearbox_target = 1;
+        s.engine_omega = rpm_to_omega(1200.0);
+        s.gearbox_in_omega = rpm_to_omega(1170.0); // slip 30 < 80, rpm > bite: the old code locks
+        s.ground_speed_to_input_omega = 40.0;      // [AS] rad/s of input per m/s of ground speed
+        s.ground_speed_mps = ground_mps;
+        for (int i = 0; i < 300; ++i) (void)tcu.step(s, h, i == 0);
+        return tcu.clutch_mode();
+    };
+    CHECK(run(std::numeric_limits<real>::quiet_NaN()) == ManualTcu::ClutchMode::Locked); // TC Off: unchanged
+    CHECK(run(1.0) == ManualTcu::ClutchMode::Launch);  // 1 m/s -> 382 rpm < 950: wheels would be spinning
+    CHECK(run(2.4) == ManualTcu::ClutchMode::Launch);  // 917 rpm < 950
+    CHECK(run(2.6) == ManualTcu::ClutchMode::Locked);  // 993 rpm >= 950
+}
+
+// Assists I2 (PHYS-074 D-LS1): the TC clutch-capacity cap acts on the output e_auto only (cap / capacity), never on
+// the TCU's own e_auto state; +inf (no cap) and a manual clutch leave the output alone.
+TEST_CASE("ManualTcu: assists I2 D-LS1 - clutch capacity cap on the output only", "[unit][drivetrain][tcu][assist]") {
+    ManualTcu::Desc d;
+    d.auto_clutch.bite_rpm = 1100.0;
+    d.auto_clutch.full_rpm_min = 1600.0;
+    d.auto_clutch.full_rpm_max = 3000.0;
+    d.auto_clutch.lock_slip_rpm = 80.0;
+    d.auto_clutch.anti_stall_rpm = 950.0;
+    d.clutch_capacity_nm = 1000.0;
+    ManualTcu tcu(d);
+    const real h = 1.0 / 960.0;
+    ManualTcu::Sensors s = base_sensors();
+    s.gearbox_current = 1;
+    s.gearbox_target = 1;
+    s.engine_omega = rpm_to_omega(1350.0); // launch law target 0.5
+    s.gearbox_in_omega = 0.0;
+    for (int i = 0; i < 2000; ++i) (void)tcu.step(s, h, i == 0);
+    REQUIRE(tcu.e_auto() == Catch::Approx(0.5).margin(0.02));
+    const real e_state = tcu.e_auto();
+    s.clutch_capacity_cap_nm = 200.0;
+    auto out = tcu.step(s, h, false);
+    CHECK(out.e_auto == Catch::Approx(0.2).margin(1e-12));
+    CHECK(tcu.e_auto() == Catch::Approx(e_state).margin(1e-3)); // the state keeps following the launch law
+    s.clutch_capacity_cap_nm = 900.0;                             // above the law's own value: no effect
+    out = tcu.step(s, h, false);
+    CHECK(out.e_auto == Catch::Approx(tcu.e_auto()).margin(1e-12));
+    s.clutch_capacity_cap_nm = -5.0; // clamped at 0
+    CHECK(tcu.step(s, h, false).e_auto == real(0.0));
+    s.clutch_capacity_cap_nm = 200.0;
+    s.assist_auto_clutch = false; // manual clutch: the cap is not applied
+    CHECK(tcu.step(s, h, false).e_auto == real(1.0));
+}
+
 // PHYS-033 P4 I3 (C8 smoke-test finding): hard braking in gear at moderate
 // speed dropped engine rpm from well above anti_stall_rpm to a full stall in
 // well under a second, even though the anti-stall transition (Locked ->
@@ -594,6 +658,7 @@ TEST_CASE("Hyper auto-clutch re-locks rolling seventh-gear WOT without tyre spin
     for(real kmh : {70.,80.,100.}) {
         auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.5);
         rig.world->set_control("assist.traction_control",0); // Assists I2 (Q2): Racing unit TC default On; this tests the auto-clutch alone
+        rig.world->set_control("assist.aero_control",0); // and the unit's wing automation (assists I5)
         ps_test::settle(*rig.world,.5);
         auto motion=rig.world->get_motion(rig.chassis); motion.linear={kmh/3.6,0,0};
         rig.world->backend().set_motion(rig.chassis,motion);
@@ -653,6 +718,7 @@ TEST_CASE("Hyper auto clutch protects a running crank while sliding backwards in
     for(real kmh : {60.,120.,200.}) {
         auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.5);
         rig.world->set_control("assist.traction_control",0); // Assists I2 (Q2): Racing unit TC default On; this tests the auto-clutch alone
+        rig.world->set_control("assist.aero_control",0); // and the unit's wing automation (assists I5)
         ps_test::settle(*rig.world,.5);
         auto motion=rig.world->get_motion(rig.chassis); motion.linear={70./3.6,0,0};
         rig.world->backend().set_motion(rig.chassis,motion);
