@@ -6,6 +6,47 @@
 //                       trim error, throttle Cd*A / max, saturation, extra trim cycles, VE, eta_i, residual at IVC,
 //                       plenum burned fraction - and per grid rpm the wide-open-throttle state (throttle at its
 //                       maximum Cd*A, plenum free). Written to out/garage_p7d_progress.md section 1.
+//
+// ---------------------------------------------------------------------------------------------------------------------
+// P7d VALIDATION WINDOWS - declared and committed BEFORE the first run of the fixed generator (the commit is the proof).
+// Fix (progress file D1-D3): ambient-fed pipe engines get one wide-open-throttle row per rpm as the top row of their
+// p_im-axis tables, read through a per-rpm warp (map_pressure_index); non-breathing held nodes are filled from the nearest
+// breathing node above. Hard windows (asserted):
+//   W1  the Mazda pipe experiment (engine_pipes_p7c.json) generates Sketch, Preview and Full maps without throwing.
+//   W5h the hyper (compressor_supply) map content hash and cache key are unchanged at every quality (pins recorded by
+//       "P7d diag: before/after report" on the unchanged generator, kHyper* below once recorded).
+//   W6  test_car_sedan_pipes (idle/limiter/launch checks) passes in its existing bounds (run as is).
+//   W7h hyper Sketch generation on 10 workers < 1.5 s (P1 budget; reported with every other time).
+//   W8  guards, each with a recorded sabotage: (a) the runtime lookup reproduces every kept node and every WOT node
+//       (VE value at the node, air = VE x air_per_ve(p) at p_wot) to <= 1e-15 relative, at ISA; (b) 1 vs 10 workers
+//       identical content hash (Mazda pipe Preview); (c) zero allocation inside generation jobs; (d) P1 progress 1..total
+//       on the calling thread with total = point_count incl. the WOT points, cancel throws GenerationCancelled and
+//       writes no cache file; (e) lumped engines (toyota_a25a_fks_gen, the lumped Mazda KV2 fixture) keep their content
+//       hash and key at every quality (pins recorded on the unchanged generator); (f) the warp is the identity without a
+//       WOT curve, continuous at the last author row, its dy/dp and dy/drpm match central differences (1e-6 rel);
+//       (g) the loader rejects an authored p_im-axis table mixed with generated WOT rows; (h) the .psmaps round trip
+//       keeps the WOT curve, a file without one is byte-identical to the old format.
+//   W9  every tools/ci.ps1 $script:HashCheckScenarios scenario hashes as before at 1 and 10 workers (none loads a pipe
+//       engine).
+// Reported (not asserted; held out or before/after):
+//   W2  Mazda WOT trapped air at the EPA rows M78..M133 through the runtime's own lookup (map_pressure_index at the row's
+//       cell pressure, VE applied at the cell temperature): R_air = measured / model against P7c A2's band 0.94..1.06.
+//   W3  Mazda WOT-state IVC temperature (the wide-open-throttle cycle at each row's rpm, generator conventions) against
+//       P7c A3's band 359.8..423.0 K.
+//   W4  KV2 (test_knock_calibration.cpp) on the pipe experiment's generated Full knock table at the rows, through the
+//       runtime's lookup, against KV2's band [-5, +10] deg - report only, the KV2 fixture stays lumped (a switch is only
+//       proposed if every row is inside the band and the rms is clearly lower than the lumped fixture's).
+//   W5  demo_i4_pipes and hyper WOT dyno (steady/settled) torque, p_intake and fuel flow at 1000/2000/3000/4000/5000/6000
+//       rpm (hyper 2000/4000/6000), before and after.
+//   W7  generation time Sketch/Preview/Full on 10 workers (no cache) for demo_i4_pipes, the hyper and the Mazda pipe
+//       experiment, before and after.
+// Pins recorded on the unchanged generator (commit before the fix; "P7d diag: before/after report"), {key, content hash}
+// for Sketch, Preview, Full - W5h (hyper) and W8e (lumped) assert them unchanged after the fix:
+//   hyper_v8_one1_audio          1ad2c691e62cb8c1/91e6da1cfbac2a2f  5ac81ea2929831e3/c7990547a1831263  bacd729a3c627552/dbdeea7f720c19bd
+//   toyota_a25a_fks_gen (lumped) a8a8c52be9ff3c39/33733fe864e42cfa  e89e1d3c966ab55b/fe26a4fdc04d367e  48a371344034f8ca/4d5bed459c60c684
+//   Mazda KV2 fixture (lumped)   b4443bd5f36341a3/18777e7a1e565ce8  744ee3c546f7c881/7d4f1c9f430b93b3  d45437bcf0c20bf0/d543d9180958b80e
+// Before the fix the Mazda pipe experiment throws at Sketch, Preview and Full.
+#include "ps/drivetrain/engine_dyno.h"
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/isa_air.h"
 #include "ps/drivetrain/powertrain_desc.h"
@@ -21,6 +62,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -172,4 +214,64 @@ TEST_CASE("P7d diag: measure the pipe generator's grid nodes and the WOT state",
 TEST_CASE("P7d diag: measure demo_i4_pipes and the hyper", "[.][diag][cycle][pipe]") {
     measure("demo_i4_pipes", load_desc("demo_i4_pipes.json", kEngines), true);
     measure("hyper_v8_one1_audio", load_desc("hyper_v8_one1_audio.json", kEngines), true);
+}
+
+namespace {
+
+struct Gen {
+    EngineMapsPtr maps;
+    std::uint64_t key = 0;
+    double seconds = 0.0;
+    bool threw = false;
+};
+
+Gen generate(const SimulatedEngineDesc& sd, MapQuality q) {
+    Gen g;
+    g.key = engine_map_cache_key(*sd.cycle, sd.fuels[0], q);
+    const auto t0 = std::chrono::steady_clock::now();
+    try {
+        g.maps = generate_engine_maps(*sd.cycle, sd.fuels[0], q, &pool());
+    } catch (...) {
+        g.threw = true;
+    }
+    g.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return g;
+}
+
+const char* qname(MapQuality q) { return q == MapQuality::Full ? "Full" : q == MapQuality::Preview ? "Preview" : "Sketch"; }
+
+void report(const char* name, const SimulatedEngineDesc& sd, const std::vector<real>& dyno_rpm) {
+    EngineMapsPtr full;
+    for (MapQuality q : {MapQuality::Sketch, MapQuality::Preview, MapQuality::Full}) {
+        const Gen g = generate(sd, q);
+        if (g.threw) {
+            std::printf("W7 %-28s %-7s key %016llx THREW after %.3f s\n", name, qname(q), static_cast<unsigned long long>(g.key),
+                        g.seconds);
+            continue;
+        }
+        std::printf("W7 %-28s %-7s key %016llx hash %016llx v%u held %d %.3f s\n", name, qname(q),
+                    static_cast<unsigned long long>(g.key), static_cast<unsigned long long>(g.maps->content_hash),
+                    g.maps->generator_version, g.maps->held_plenum_points, g.seconds);
+        if (q == MapQuality::Full) full = g.maps;
+    }
+    if (!full || dyno_rpm.empty()) return;
+    DynoSweepSpec spec;
+    spec.rpm = dyno_rpm;
+    const DynoResult r = run_dyno_sweep(ComponentParams{sd}, full, spec, &pool());
+    for (const DynoPoint& p : r.points) {
+        std::printf("W5 %-28s %6.0f rpm torque %8.3f N*m  p_intake %7.3f kPa  fuel %7.4f g/s  boost %6.3f bar%s\n", name, p.rpm,
+                    p.torque_nm, p.p_intake_kpa, p.fuel_g_s, p.boost_bar, p.converged ? "" : " (not converged)");
+    }
+}
+
+} // namespace
+
+// W5/W7 and the W5h/W8e pins: run once on the unchanged generator ("before") and once on the fixed one ("after").
+TEST_CASE("P7d diag: before/after report (keys, hashes, times, WOT dyno)", "[.][diag][cycle][pipe]") {
+    const std::vector<real> demo_rpm{1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0};
+    report("Mazda P7c pipe experiment", load_desc("engine_pipes_p7c.json", kMazdaDir), {1500.0, 1750.0, 2000.0, 2500.0, 3000.0, 4000.0});
+    report("demo_i4_pipes", load_desc("demo_i4_pipes.json", kEngines), demo_rpm);
+    report("hyper_v8_one1_audio", load_desc("hyper_v8_one1_audio.json", kEngines), {2000.0, 4000.0, 6000.0});
+    report("toyota_a25a_fks_gen (lumped)", load_desc("toyota_a25a_fks_gen.json", kEngines), {});
+    report("Mazda KV2 fixture (lumped)", load_desc("engine.json", kMazdaDir), {});
 }
