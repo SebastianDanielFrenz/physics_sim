@@ -708,6 +708,13 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     channel_indices.assist_auto_blip = ensure_control_channel_index(channel_prefix + "assist.auto_blip", assist_blip_default);
     channel_indices.assist_auto_shift = ensure_control_channel_index(channel_prefix + "assist.auto_shift", assist_shift_default);
     channel_indices.assist_traction_control = ensure_control_channel_index(channel_prefix + "assist.traction_control",ps::vehicle::traction_default_channel_value(desc.traction_control,desc.assist_unit));
+    // assists I5: registered only on a car whose assist unit carries a fitted aero_control (the channel list is
+    // unchanged for every other car); default = the block's default_enabled.
+    if (const auto aero_surface = ps::vehicle::find_aero_control_surface(desc.aero, desc.assist_unit)) {
+        (void)aero_surface;
+        channel_indices.assist_aero_control = ensure_control_channel_index(channel_prefix + "assist.aero_control",
+                                                                           desc.assist_unit->aero_control->default_enabled ? real(1) : real(0));
+    }
     // engine garage P8: never read on a car without the part (VehicleInstance gates it on fit_launch_)
     if (has_launch_control) channel_indices.assist_launch_control = ensure_control_channel_index(channel_prefix + launch_channel_name, real(0));
 

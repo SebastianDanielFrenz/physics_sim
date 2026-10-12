@@ -49,10 +49,14 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
             }
         }
         fit_traction_ = desc_.traction_control.fitted;
+        if (const auto aero_surface = find_aero_control_surface(desc_.aero, desc_.assist_unit)) {
+            fit_aero_ = true;
+            aero_control_surface_ = *aero_surface;
+        }
         tc_mode_desc_ = resolve_traction_mode_descs(desc_.traction_control, desc_.assist_unit);
         tc_modes_available_bits_ = traction_modes_available_bits(desc_.assist_unit, fit_traction_);
         fitted_bits_ = ((have_tcu && fit_clutch_) ? 1u : 0u) | ((have_tcu && fit_blip_) ? 2u : 0u) | ((have_tcu && fit_shift_) ? 4u : 0u) |
-                       (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u);
+                       (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u) | (fit_aero_ ? 64u : 0u);
     }
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
@@ -183,6 +187,22 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     const Pose pose0 = backend.get_pose(chassis_);
     const Motion motion0 = backend.get_motion(chassis_);
+    // Assists I5 (D-AE1): rear-wing automation. With the channel on the controller OWNS the surface command for this
+    // tick (stateless: a pure function of the forward airspeed, the brake channel and the launch hook); the World's
+    // own command is parked in a local and put back after the substeps, so with the channel off - or later switched
+    // off - World::set_aero_surface_command stands exactly as it did. forward airspeed = chassis-frame x of (chassis
+    // velocity - the vehicle's own wind), read at tick start like racing_game's law did.
+    const bool assist_aero = fit_aero_ && channel_values[control_indices_.assist_aero_control] >= real(0.5);
+    real aero_control_target_deg = 0;
+    real aero_world_command = 0;
+    if (assist_aero) {
+        const aero::SurfaceDesc& wing = desc_.aero.surfaces[aero_control_surface_];
+        const real forward_speed = pose0.orientation.inverse().rotate(motion0.linear - env.wind_world).x;
+        aero_world_command = aero_state_.surface_command[aero_control_surface_];
+        aero_state_.surface_command[aero_control_surface_] =
+            aero_control_command(*desc_.assist_unit->aero_control, wing.max_offset_rad, wing.min_offset_rad, forward_speed, controls.brake,
+                                 aero_launch_request_, &aero_control_target_deg);
+    }
     // Virtual ideal six-axis IMU: finite-difference acceleration, gravity
     // compensated using attitude. Only this sensor reading reaches TC.
     real imu_accel=0;
@@ -431,6 +451,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         pose_s.orientation = integrate_orientation(pose_s.orientation, twist_s.angular, substep_dt);
     }
 
+    if (assist_aero) aero_state_.surface_command[aero_control_surface_] = aero_world_command; // I5: the World's command stands
+
     // PHYS-033 P4 I2 commit 5b (plan section 8): this tick's balance_error,
     // from the ledger deltas since begin_tick() above.
     powertrain_.end_tick();
@@ -506,12 +528,14 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.traction_positive_slip=traction_state_.positive_slip;
         snap.clutch_engagement = powertrain_.has_clutch() ? powertrain_.clutch_engagement() : real(1.0);
         snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u) | (assist_traction ? 8u : 0u) |
-                                (assist_launch ? 16u : 0u);
+                                (assist_launch ? 16u : 0u) | (assist_aero ? 64u : 0u);
         snap.assist_fitted_bits = fitted_bits_;
         snap.traction_mode_requested = static_cast<std::uint8_t>(tc_mode_requested);
         snap.traction_mode_effective = static_cast<std::uint8_t>(tc_mode_effective);
         snap.traction_modes_available_bits = tc_modes_available_bits_;
         snap.launch_control_active = powertrain_.launch_control_active();
+        snap.aero_control_active = assist_aero;
+        snap.aero_control_target_deg = aero_control_target_deg;
 
         // ps_audio A10 (vault PHYS-054): the fill itself now lives in
         // drivetrain::fill_engine_sound_state, shared with EngineRig, so a

@@ -51,6 +51,7 @@ struct ControlChannelIndices {
     std::size_t ignition = 0, starter = 0;
     std::size_t assist_auto_clutch = 0, assist_auto_blip = 0, assist_auto_shift = 0, assist_traction_control = 0;
     std::size_t assist_launch_control = 0; // engine garage P8: only read when the vehicle has a launch_control controller
+    std::size_t assist_aero_control = 0;   // assists I5: only read when the car's assist_unit aero_control is fitted
     // PHYS-033 P4 I4 C3 (plan section 2.4): one resolved World control-
     // channel index per drivetrain::Powertrain::declare_control_channels(...)
     // entry, same order - resolved in World::create_vehicle exactly like the
@@ -216,6 +217,9 @@ public:
     void set_aero_surface_command(std::size_t surface, real command);
     void set_aero_fan_command(std::size_t fan, real command);
     void credit_aero_fan_energy(real joules);
+    // Assists I5: the hook a launch control (assists I4) sets each tick BEFORE step_tick - while true the aero
+    // controller asks for launch_offset_deg (yield order LC > airbrake > cruise). Never hashed, always false in I5.
+    void set_aero_launch_request(bool request) { aero_launch_request_ = request; }
 
     // PHYS-033 I1 W1: called ONLY from vehicle::System::note_body_wrench,
     // itself called only from World::stage_gather (sequential, fixed
@@ -292,11 +296,16 @@ private:
     // Engine garage P8 (A15): which assists this car has FITTED (a not-fitted assist ignores its channel). Computed
     // once in the constructor from the TCU blocks, traction_control.fitted and the launch_control controller.
     bool fit_clutch_ = true, fit_blip_ = true, fit_shift_ = true, fit_traction_ = true, fit_launch_ = false;
-    std::uint32_t fitted_bits_ = 0; // snapshot layout: bit0 auto_clutch .. bit3 traction_control, bit4 launch_control, bit5 anti_lag switch
+    std::uint32_t fitted_bits_ = 0; // snapshot layout: bit0 auto_clutch .. bit3 traction_control, bit4 launch_control, bit5 anti_lag switch, bit6 aero_control (assists I5)
     // Assists I1: per-mode controller parameters (index = TractionMode code; 0 and 1 are the car's own desc) and the
     // offered-mode bits. Both are pure functions of desc_, computed once in the constructor.
     std::array<TractionControlDesc, kTractionModeCount> tc_mode_desc_{};
     std::uint8_t tc_modes_available_bits_ = kTractionModesBaseBits;
+    // Assists I5: the assist unit's rear-wing automation. fit_aero_ = block present AND the car has the named surface;
+    // the surface index and the launch-control hook are plain per-tick inputs, none of it hashed.
+    bool fit_aero_ = false;
+    std::size_t aero_control_surface_ = 0;
+    bool aero_launch_request_ = false;
     TractionControlState traction_state_{};
     std::vector<TractionWheelSensor> traction_sensors_;
     std::vector<WheelTelemetry> substep_telemetry_; // assists I2a diag: kMaxSubstepTelemetry x wheels, sized at construction

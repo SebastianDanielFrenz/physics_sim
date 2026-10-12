@@ -142,12 +142,17 @@ struct PowertrainSnapshot {
     real traction_torque_fraction=1, traction_estimated_speed_m_s=0, traction_positive_slip=0;
     std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control, bit4 launch_control (switched on)
     // Engine garage P8 (A15): which assists the car HAS (a HUD hides a not-fitted assist; fitted-but-off is a third
-    // state). Same bit layout as assist_active_bits plus bit5 = the anti-lag switch. Never hashed.
+    // state). Same bit layout as assist_active_bits plus bit5 = the anti-lag switch; bit6 = aero automation (assists I5; fitted = the unit's aero_control block with a surface the car has, active = the controller owns the surface this tick). Never hashed.
     std::uint32_t assist_fitted_bits = 0;
     // Assists I1 (PHYS-074): traction-control mode. requested = the channel value as a mode code (0 Off, 1 On, 2 Relaxed,
     // 3 Sport, 4 Drift), effective = the mode run after the unavailable-mode fallback, available_bits = one bit per
     // code the car offers (0 when TC is not fitted). A UI offers exactly the available bits. Never hashed.
     std::uint8_t traction_mode_requested = 0, traction_mode_effective = 0, traction_modes_available_bits = 0;
+    // Assists I5 (PHYS-074): the assist unit's rear-wing automation owns its surface this tick (channel
+    // assist.aero_control on and fitted; assist_active_bits bit6), and the offset it asked for in degrees (0 when not
+    // active). Never hashed.
+    bool aero_control_active = false;
+    real aero_control_target_deg = 0;
     bool launch_control_active = false; // engine garage P8: the second rev limit is armed (latched) - never hashed
     std::vector<EngineSoundState> engines; // 0 or 1 in I3; capacity reused per snapshot slot (D8)
     DrivelineSoundState driveline;

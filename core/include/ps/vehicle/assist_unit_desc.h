@@ -1,13 +1,16 @@
 // ps/vehicle/assist_unit_desc.h - the assist unit (assists plan I1, vault PHYS-074, docs/data_formats/electronics.md):
 // a car's driver-assist electronics part, graded Street / Sport / Racing. I1 carries the traction-control mode table
-// only; launch control and aero automation (assists I4/I5) are declared in the grade table but not yet loaded.
+// only plus (assists I5) the aero automation block; launch control (assists I4) is declared in the grade table but
+// not yet loaded.
 #pragma once
 
+#include "ps/aero/aerodynamics.h"
 #include "ps/types.h"
 #include "ps/vehicle/traction_control.h"
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -61,11 +64,48 @@ struct AssistTractionDesc {
     std::array<TractionModeParams, kTractionModeCount> params{};
 };
 
+// Assists I5 (D-AE1, vault PHYS-074): rear-wing automation, a port of racing_game's law (core/src/session.cpp, the
+// "automatic_rear_wing" block). Every default below is racing_game's value [D] (rg/environment.h, environment.cpp);
+// launch_offset_deg is an [AS] (plan B4: the car_hyper maximum-downforce offset, 9-11 deg [D]).
+struct AeroControlDesc {
+    std::string surface = "rear_wing"; // the aero surface this controller owns (looked up by name in the car's aero block)
+    bool default_enabled = false;      // the channel assist.aero_control's default (0/1)
+    real cruise_offset_deg = 4;        // [D] racing_game cruise_wing_offset_deg
+    real cruise_ramp_start_m_s = 10;   // [D] racing_game session.cpp literal: cruise ramp (v - 10) / 20
+    real cruise_ramp_end_m_s = 30;     // [D] ... 10 + 20
+    real airbrake_offset_deg = 45;     // [D] racing_game airbrake_wing_offset_deg
+    real airbrake_min_speed_m_s = 20;  // [D] racing_game airbrake_min_speed_m_s
+    real airbrake_brake_start = 0.45;  // [D] racing_game airbrake_threshold
+    real airbrake_brake_full = 1.0;    // [D] racing_game's literal 1
+    real launch_offset_deg = 10;       // [AS] the offset a launch control (assists I4) asks for
+};
+
 struct AssistUnitDesc {
     AssistGrade grade = AssistGrade::Street;
     bool has_traction_control = false; // false: TC stays as the car's base desc defines it (modes Off/On)
     AssistTractionDesc traction_control;
+    std::optional<AeroControlDesc> aero_control; // present: the unit carries rear-wing automation (grade racing)
 };
+
+// Fitment (assists I5, decision recorded in docs/data_formats/electronics.md): the controller is fitted iff the unit
+// carries the block AND the car's aero block has a surface of that name. A unit naming a surface the car lacks is NOT
+// a load error - a generic Racing unit stays attachable to a wingless car - it is simply not fitted (bit 6 of
+// assist_fitted_bits 0, no channel). Returns the surface index.
+[[nodiscard]] inline std::optional<std::size_t> find_aero_control_surface(const aero::Desc& aero, const std::optional<AssistUnitDesc>& unit) {
+    if (!unit || !unit->aero_control) return std::nullopt;
+    for (std::size_t i = 0; i < aero.surfaces.size(); ++i) {
+        if (aero.surfaces[i].name == unit->aero_control->surface) return i;
+    }
+    return std::nullopt;
+}
+
+// The law. forward_speed = chassis-frame x of (chassis velocity - wind) [m/s]; brake in [0, 1] (clamped here).
+// `launch` is the hook a launch control (assists I4) sets: it makes target = launch_offset_deg and yields over the
+// airbrake and cruise terms (order LC > airbrake > cruise). Returns the surface command in [-1, 1] and the target
+// offset in degrees. Stateless, only + - * / and comparisons (no libm).
+// Implemented in core/src/vehicle/assist_unit.cpp.
+[[nodiscard]] real aero_control_command(const AeroControlDesc& c, real max_offset_rad, real min_offset_rad, real forward_speed, real brake, bool launch,
+                                        real* target_deg_out = nullptr);
 
 // Channel value -> requested mode code. Non-finite or <= 0.5 is Off (the pre-assist-unit rule `value > 0.5`), otherwise
 // clamp(round(value), 1, 4).
