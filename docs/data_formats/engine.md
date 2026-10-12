@@ -1507,9 +1507,9 @@ at 2 / 3 / 4 / 5 bar BMEP, pumping 0.719 vs 0.792 bar at 2 bar - below the decla
 small-lift events keep the [AS] fixed centre line and close near BDC; the same family opening at the full-lift IVO
 (early intake closing) saves 8.1 / 6.7 / 5.8 / 4.6 % (hidden diag).
 
-Tests: `tests/unit/test_lift_family.cpp` (`[vvl][drivetrain][cycle]`: L1-L3 loader/rejections/extends, K1-K2 keys and
-the cache, G1 generation, R1-R6 blend, ECU strategy, torque steps with the lag, idle and blip, WOT, V1 part-load fuel
-[long], H1 hash and hot swap, D1 dyno, C1 change classes, B1 rules, Z1 zero allocation, P1 progress/cancel, A1 audio
+Tests: `tests/unit/test_lift_family.cpp` (`[vvl][drivetrain][cycle]`: L1-L3 loader/rejections/extends, L4 a pipe engine
+with a family (P7d WOT row per node), K1-K2 keys and the cache, G1 generation, R1-R7 blend, ECU strategy, torque steps
+with the lag, idle and blip, WOT, the vacuum hold while the lift moves, V1 part-load fuel [long][!mayfail], H1 hash and hot swap, D1 dyno, C1 change classes, B1 rules, Z1 zero allocation, P1 progress/cancel, A1 audio
 refusal; hidden `[.][diag]` timing, spark, part-load table, the EIVC measurement, the car pulling away).
 
 ## Part slots, `extends` and the user layer (engine garage P2)
