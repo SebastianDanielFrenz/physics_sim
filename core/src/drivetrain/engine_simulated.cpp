@@ -1174,21 +1174,33 @@ real SimulatedEngine::node_wot(std::size_t k, real rpm) const {
     return live_steady() ? live_steady_torque_on(lift_node(k), rpm, 1, true) : lift_node_tables(k).steady_wot_nm.evaluate(rpm);
 }
 
-real SimulatedEngine::node_inverse_plate(std::size_t k, real rpm, real request) const {
-    return live_steady() ? live_inverse_plate_on(lift_node(k), rpm, request) : lift_node_tables(k).inverse_plate.value(rpm, request);
-}
-
 // Node k's net torque with its manifold held at p_target (fired, no starter, limiter ignored: steady_net_torque's
-// evaluation at that pressure), at the current ambient and the ECU's friction estimate. Never above the node's own WOT
-// (a target the open plate cannot hold is the node at plate 1).
-real SimulatedEngine::node_vacuum_torque(std::size_t k, real rpm, real p_target) const {
+// evaluation at that pressure), at the current ambient and the ECU's friction estimate. node_vacuum_torque is never above
+// the node's own WOT (a target the open plate cannot hold is the node at plate 1).
+real SimulatedEngine::node_torque_at_p(std::size_t k, real rpm, real p) const {
     const SimulatedEngineMaps& mm = lift_node(k);
     const real clamped_rpm = std::clamp(rpm, steady_.steady_torque_nm.x.front(), steady_.steady_torque_nm.x.back());
     const real omega = clamped_rpm / kRadPerSecToRpm;
     const Ambient amb{p_amb_, r_t_, inv_sqrt_rt_};
-    const real tau = evaluate_torque_impl(mm, amb, StarterDesc{}, omega, p_target, true, real(1.0), false, true, nullptr, ecu_k_,
-                                          hyd_ref_rpm_).tau - mm.c_k;
-    return std::min(tau, node_wot(k, rpm));
+    return evaluate_torque_impl(mm, amb, StarterDesc{}, omega, p, true, real(1.0), false, true, nullptr, ecu_k_, hyd_ref_rpm_).tau -
+           mm.c_k;
+}
+
+real SimulatedEngine::node_vacuum_torque(std::size_t k, real rpm, real p_target) const {
+    return std::min(node_torque_at_p(k, rpm, p_target), node_wot(k, rpm));
+}
+
+// The manifold pressure in [p_lo, p_hi] at which node k makes `target` (node_torque_at_p rises with p: more air, less
+// pumping); a fixed 30-step bisection [AS] (resolution (p_hi - p_lo) / 2^30, below 1e-4 Pa), clamped to the interval.
+real SimulatedEngine::node_pressure_for_torque(std::size_t k, real rpm, real target, real p_lo, real p_hi) const {
+    if (node_torque_at_p(k, rpm, p_lo) >= target) return p_lo;
+    if (node_torque_at_p(k, rpm, p_hi) <= target) return p_hi;
+    for (int it = 0; it < 30; ++it) {
+        const real mid = real(0.5) * (p_lo + p_hi);
+        if (node_torque_at_p(k, rpm, mid) < target) p_lo = mid;
+        else p_hi = mid;
+    }
+    return real(0.5) * (p_lo + p_hi);
 }
 
 // The plate that holds the manifold at p_target with the lift at u (f(p_target, x) = 0 of the blended model): the throttle
@@ -1233,13 +1245,13 @@ SimulatedEngine::LiftTargets SimulatedEngine::lift_targets(real rpm, real reques
         if (uu[k] == lc.plate_open_u) kopen = k;
     }
     const real p_t = p_amb_ - lc.vacuum_pa;
-    // Below the min node's vacuum torque: rest at min_u, the plate on that node's inverse.
+    const real omega_t = std::clamp(rpm, real(1.0), steady_.steady_torque_nm.x.back()) / kRadPerSecToRpm;
+    // Below the min node's vacuum torque: rest at min_u, the plate holds the manifold where that node makes the target.
     real v_lo = node_vacuum_torque(kmin, rpm, p_t);
     if (target <= v_lo) {
-        const real mot = node_motoring(kmin, rpm), wot = node_wot(kmin, rpm);
-        const real r = wot > mot ? (target - mot) / (wot - mot) : real(0.0);
         t.u = uu[kmin];
-        t.plate = node_inverse_plate(kmin, rpm, std::clamp(r, real(0.0), real(1.0)));
+        t.p_target_pa = node_pressure_for_torque(kmin, rpm, target, kLiftMinPressureFraction * p_amb_, p_t);
+        t.plate = vacuum_plate(omega_t, t.p_target_pa, t.u, nullptr);
         return t;
     }
     // The vacuum range min_u .. plate_open_u.
@@ -1249,18 +1261,20 @@ SimulatedEngine::LiftTargets SimulatedEngine::lift_targets(real rpm, real reques
             const real s = v_hi > v_lo ? (target - v_lo) / (v_hi - v_lo) : real(1.0);
             t.u = uu[k] + std::clamp(s, real(0.0), real(1.0)) * (uu[k + 1] - uu[k]);
             t.vacuum_mode = true;
-            t.plate = vacuum_plate(std::clamp(rpm, real(1.0), steady_.steady_torque_nm.x.back()) / kRadPerSecToRpm, p_t, t.u, nullptr);
+            t.p_target_pa = p_t;
+            t.plate = vacuum_plate(omega_t, p_t, t.u, nullptr);
             return t;
         }
         v_lo = v_hi;
     }
-    // At plate_open_u between its vacuum and open-plate torque: the plate opens on that node's inverse.
+    // At plate_open_u between its vacuum and open-plate torque: the plate opens to the manifold pressure at which that
+    // node makes the target (exact on the model; the node's inverse_plate table missed by up to 10 N*m where a small
+    // lift's torque saturates over a short plate travel - garage P10 R3 first run).
     real w_lo = node_wot(kopen, rpm);
     if (target <= w_lo) {
-        const real mot = node_motoring(kopen, rpm);
-        const real r = w_lo > mot ? (target - mot) / (w_lo - mot) : real(1.0);
         t.u = uu[kopen];
-        t.plate = node_inverse_plate(kopen, rpm, std::clamp(r, real(0.0), real(1.0)));
+        t.p_target_pa = node_pressure_for_torque(kopen, rpm, target, p_t, p_amb_);
+        t.plate = vacuum_plate(omega_t, t.p_target_pa, t.u, nullptr);
         return t;
     }
     // Plate open, lift between the nodes' open-plate torques.
@@ -1731,9 +1745,9 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
                 if (std::abs(lt.u - u_next) <= kLiftSnap) u_next = lt.u;
                 u_ = std::clamp(u_next, m.lift_u.front(), real(1.0));
             }
-            // Vacuum mode: the plate holds the target at the lift the plant has NOW (the manifold stays at the target while
-            // the shaft moves); otherwise the target's own plate.
-            x_plate = lt.vacuum_mode ? vacuum_plate(omega_old, p_amb_ - lc.vacuum_pa, u_, nc) : lt.plate;
+            // A pressure target (the vacuum range, or the lift resting on the min_u / plate_open_u node): the plate holds it
+            // at the lift the plant has NOW (the manifold stays at the target while the shaft moves); otherwise plate open.
+            x_plate = lt.p_target_pa > real(0.0) ? vacuum_plate(omega_old, lt.p_target_pa, u_, nc) : lt.plate;
         } else {
             x_plate = inverse_plate_target(rpm, theta_req);
         }

@@ -194,6 +194,9 @@ public:
     // Engine garage P10: the lift actuator lands exactly on its target once within this distance (u units) [AS] - the
     // first-order lag alone never arrives, and u = 1 must be exactly the u = 1 node (bit-identical WOT).
     static constexpr real kLiftSnap = 1e-6;
+    // Engine garage P10: the lowest manifold pressure the ECU's min_u pressure search goes down to, as a fraction of
+    // ambient [AS] (below every closed-plate manifold pressure the generated grids reach, 20 kPa for the N52).
+    static constexpr real kLiftMinPressureFraction = 0.05;
 
     explicit SimulatedEngine(const SimulatedEngineDesc& desc);
     // Reuse an already-built maps object (must come from build_maps(desc)
@@ -270,10 +273,14 @@ public:
     void set_lift_override(real u);
     // The ECU's lift strategy at (rpm, request) evaluated stand-alone (no state change): the u target and the plate
     // target pre_solve would command with u already at that target, from the current ambient/friction estimate. For
-    // tests and the dyno's part-load option. Throws without a family.
+    // tests. Throws without a family. p_target_pa > 0: the plate holds the manifold at that pressure (pre_solve
+    // recomputes the plate for the lift the shaft has NOW) - the vacuum target in the vacuum range (vacuum_mode), the
+    // pressure at which the min_u / plate_open_u node makes the target torque where the lift rests on those nodes;
+    // -1 where the plate is simply open (plate 1).
     struct LiftTargets {
         real u = 1.0, plate = 1.0, torque_target_nm = 0.0;
         bool vacuum_mode = false;
+        real p_target_pa = -1.0;
     };
     [[nodiscard]] LiftTargets lift_targets(real rpm, real request) const;
 
@@ -457,8 +464,9 @@ private:
     [[nodiscard]] const SimulatedSteadyTables& idle_tables() const;
     [[nodiscard]] real node_motoring(std::size_t k, real rpm) const;
     [[nodiscard]] real node_wot(std::size_t k, real rpm) const;
-    [[nodiscard]] real node_inverse_plate(std::size_t k, real rpm, real request) const;
+    [[nodiscard]] real node_torque_at_p(std::size_t k, real rpm, real p) const;
     [[nodiscard]] real node_vacuum_torque(std::size_t k, real rpm, real p_target) const;
+    [[nodiscard]] real node_pressure_for_torque(std::size_t k, real rpm, real target, real p_lo, real p_hi) const;
     [[nodiscard]] real vacuum_plate(real omega, real p_target, real u, const NitrousCharge* nc) const;
     // Engine garage P10 state: u_ (hashed only with a family), its target and plate mode (derived each substep, not
     // hashed), the override hook, and each lower node's steady tables (sized at construction, swapped with the pending

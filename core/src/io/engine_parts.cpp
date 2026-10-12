@@ -147,13 +147,13 @@ json cam_patch(const json& part, const std::string& path, const json& engine_cyc
     // engine's single lifts (RFC 7396 null); a single-lift cam removes an engine's profiles. A merge then never leaves
     // both; the engine reader's "profiles and intake_lift/exhaust_lift together" rejection fires only for an engine file
     // that writes both itself.
+    if (part.contains("profiles") && part.contains("intake_lift_family")) {
+        throw std::runtime_error(path + ": a cam has either 'profiles' (P9) or 'intake_lift_family' (P10), not both");
+    }
     if (part.contains("profiles")) {
         if (part.contains("intake_lift") || part.contains("exhaust_lift")) {
             throw std::runtime_error(path + ": a cam with 'profiles' carries intake_lift/exhaust_lift inside each profile, not at "
                                      "the top level");
-        }
-        if (part.contains("intake_lift_family")) {
-            throw std::runtime_error(path + ": a cam has either 'profiles' (P9) or 'intake_lift_family' (P10), not both");
         }
         for (const char* k : {"intake_lift", "exhaust_lift", "intake_lift_family"}) {
             if (engine_cycle.contains(k)) patch[k] = nullptr;
