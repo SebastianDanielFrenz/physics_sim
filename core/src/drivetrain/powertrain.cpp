@@ -1326,6 +1326,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             select_knock_fuel(burnt.maps, burnt_fuel_index_);
             for (auto& pm : burnt.cam_profile_maps) select_knock_fuel(pm, burnt_fuel_index_); // engine garage P9
+            for (auto& pm : burnt.lift_node_maps) select_knock_fuel(pm, burnt_fuel_index_);   // engine garage P10
             auto sim_engine = std::make_unique<SimulatedEngine>(burnt);
             sim_engine_ptr_ = sim_engine.get(); // PHYS-033 P4 I7c C16b
             // I7d D5: resolve the anti-lag channel's slot like the other declared channels.
@@ -2568,6 +2569,7 @@ void Powertrain::request_replace_engine_maps(std::string_view component_id, Engi
     set_engine_maps(updated, *new_engine_maps, "replace_engine_maps"); // P9: every cam profile's set together
     select_knock_fuel(updated.maps, burnt_fuel_index_); // P7: the burnt fuel's knock table (no-op without per-fuel tables)
     for (auto& pm : updated.cam_profile_maps) select_knock_fuel(pm, burnt_fuel_index_);
+    for (auto& pm : updated.lift_node_maps) select_knock_fuel(pm, burnt_fuel_index_); // P10: every lift node's set
     // ALLOCATES (build_maps constructs a fresh SimulatedEngineMaps with its
     // own derived tables) - safe here: this runs on the caller's thread,
     // between World::step() calls, never inside a job (see this method's

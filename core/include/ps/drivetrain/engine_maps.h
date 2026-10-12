@@ -175,8 +175,24 @@ struct EngineMaps {
     // other engine. Not folded into content_hash (each set keeps its own); a hot swap (World::replace_engine_maps)
     // of a profile engine needs exactly as many as the engine has extra profiles - all sets swap together.
     std::vector<std::shared_ptr<const EngineMaps>> cam_profiles;
+    // Engine garage P10: for a lift-family engine (Valvetronic-style), this object is the u = 1 node's set and lift_nodes
+    // holds the sets of the nodes below it, in ascending u (CycleModelDesc::lift_family[0 .. N-2]), each a complete
+    // EngineMaps generated from its own intake lift with its own content hash and .psmaps file. Empty for every other
+    // engine; not folded into content_hash; a hot swap carries every node set together (as cam_profiles).
+    std::vector<std::shared_ptr<const EngineMaps>> lift_nodes;
 };
 using EngineMapsPtr = std::shared_ptr<const EngineMaps>;
+
+// Engine garage P10: `desc` with lift node k's intake lift in intake_lift and lift_family cleared - the family-free desc
+// the generator, engine_map_cache_key and validate_engine_map_generation take for that node (k = N-1 is u = 1, the
+// engine without the family). k must be < desc.lift_family.size() (std::out_of_range otherwise).
+[[nodiscard]] inline CycleModelDesc cycle_desc_for_lift_node(const CycleModelDesc& desc, std::size_t k) {
+    const CycleModelDesc::LiftNode& n = desc.lift_family.at(k);
+    CycleModelDesc d = desc;
+    d.intake_lift = n.intake_lift;
+    d.lift_family.clear();
+    return d;
+}
 
 // Engine garage P9: `desc` with cam profile k's lifts in intake_lift/exhaust_lift and cam_profiles cleared - the
 // profile-free desc the generator, engine_map_cache_key and validate_engine_map_generation take for that profile.
@@ -188,6 +204,23 @@ using EngineMapsPtr = std::shared_ptr<const EngineMaps>;
     d.exhaust_lift = p.exhaust_lift;
     d.cam_profiles.clear();
     return d;
+}
+
+// Engine garage P10: the single-set descs of every map set an engine generates, in EngineMaps order - the primary set
+// first (`maps`), then the further sets: cam profiles 0, 1 (P9; extras in EngineMaps::cam_profiles); lift nodes N-1
+// (u = 1), then 0 .. N-2 (P10; extras in EngineMaps::lift_nodes); otherwise just {desc}.
+[[nodiscard]] inline std::vector<CycleModelDesc> engine_map_set_descs(const CycleModelDesc& desc) {
+    std::vector<CycleModelDesc> out;
+    if (!desc.cam_profiles.empty()) {
+        for (std::size_t k = 0; k < desc.cam_profiles.size(); ++k) out.push_back(cycle_desc_for_cam_profile(desc, k));
+    } else if (!desc.lift_family.empty()) {
+        const std::size_t n = desc.lift_family.size();
+        out.push_back(cycle_desc_for_lift_node(desc, n - 1));
+        for (std::size_t k = 0; k + 1 < n; ++k) out.push_back(cycle_desc_for_lift_node(desc, k));
+    } else {
+        out.push_back(desc);
+    }
+    return out;
 }
 
 // One generation job split into independent points. Construct, call
@@ -260,14 +293,15 @@ void validate_engine_map_generation(const CycleModelDesc& desc, const FuelDesc& 
 [[nodiscard]] std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
 
 // Engine garage P9: one cache key per cam profile (engine_map_cache_key of cycle_desc_for_cam_profile(desc, k)), in
-// profile order; a desc without profiles gives the one engine_map_cache_key.
+// profile order; a desc without profiles gives the one engine_map_cache_key. P10: a lift-family desc gives one key per
+// lift node in engine_map_set_descs order (u = 1 first, then ascending u).
 [[nodiscard]] std::vector<std::uint64_t> engine_map_profile_cache_keys(const CycleModelDesc& desc, const FuelDesc& fuel,
                                                                         MapQuality quality);
 
 // Engine garage P9: the `total` a generate_engine_maps run on this profile-free desc reports to on_progress (the
 // fixed grid's point count; for adaptive pressure sampling the run's progress budget). A desc with cam profiles gives
 // the sum over its profiles (generate_engine_profile_maps' total); a multi-profile load reports the sum over the
-// profiles it generates (a cache hit generates nothing).
+// profiles it generates (a cache hit generates nothing). P10: a lift-family desc likewise sums over its lift nodes.
 [[nodiscard]] std::size_t engine_map_progress_total(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
 
 // Engine garage P9: generate_engine_maps for a desc WITH cam profiles (without: exactly generate_engine_maps). Each
@@ -275,6 +309,8 @@ void validate_engine_map_generation(const CycleModelDesc& desc, const FuelDesc& 
 // `pool`); the result is profile 0's EngineMaps with the further sets in cam_profiles. Progress: one count over all
 // profiles (total = the sum of engine_map_progress_total), on the calling thread; cancel stops the whole run (no set is
 // returned); on_partial_maps sees profile 0's partial sets only. No cache access (the loader keys and stores each set).
+// P10: a lift-family desc generates every node the same way, in engine_map_set_descs order (u = 1 first); the result is
+// the u = 1 set with the lower nodes in lift_nodes (ascending u); on_partial_maps sees the u = 1 set's partial sets.
 [[nodiscard]] EngineMapsPtr generate_engine_profile_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
                                                          jobs::JobSystem* pool = nullptr,
                                                          const MapGenerationControl* control = nullptr);

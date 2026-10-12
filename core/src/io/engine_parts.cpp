@@ -45,10 +45,12 @@ void require_part_format(const json& j, const std::string& kind, const std::stri
 constexpr const char* kEcuTopKeys[] = {"idle_rpm",        "stall_rpm",         "fire_rpm",
                                        "start_complete_rpm", "dfco_enable_rpm", "dfco_reenable_rpm",
                                        "idle_control",    "limiter",           "throttle_actuator_tau_s",
-                                       "switching"}; // engine garage P9: the cam-profile switching rule
+                                       "switching",   // engine garage P9: the cam-profile switching rule
+                                       "lift_control"}; // engine garage P10: the continuous intake-lift strategy
 constexpr const char* kEcuBlockKeys[] = {"lambda_target", "spark_advance_deg", "ignition_strategy", "knock_margin_deg"}; // engine "ecu" object (P7: + knock opt-in)
 constexpr const char* kEcuCycleKeys[] = {"spark_advance_deg", "cam"};         // engine "cycle" object
-constexpr const char* kCamKeys[] = {"intake_lift", "exhaust_lift", "profiles"}; // engine "cycle" object (P9: + profiles)
+constexpr const char* kCamKeys[] = {"intake_lift", "exhaust_lift", "profiles", // engine "cycle" object (P9: + profiles,
+                                    "intake_lift_family"};                     // P10: + intake_lift_family)
 
 template <std::size_t N>
 bool in_list(const std::string& k, const char* const (&list)[N]) {
@@ -138,7 +140,7 @@ json cam_patch(const json& part, const std::string& path, const json& engine_cyc
             patch[k] = it.value();
         } else {
             throw std::runtime_error(path + ": '" + k + "' is not a cam field (a cam part sets intake_lift, exhaust_lift, profiles, "
-                                     "fits)");
+                                     "intake_lift_family, fits)");
         }
     }
     // Engine garage P9: a cam part is the WHOLE cam. A profile cam carries its lifts inside each profile, so it removes the
@@ -150,11 +152,26 @@ json cam_patch(const json& part, const std::string& path, const json& engine_cyc
             throw std::runtime_error(path + ": a cam with 'profiles' carries intake_lift/exhaust_lift inside each profile, not at "
                                      "the top level");
         }
-        for (const char* k : {"intake_lift", "exhaust_lift"}) {
+        if (part.contains("intake_lift_family")) {
+            throw std::runtime_error(path + ": a cam has either 'profiles' (P9) or 'intake_lift_family' (P10), not both");
+        }
+        for (const char* k : {"intake_lift", "exhaust_lift", "intake_lift_family"}) {
             if (engine_cycle.contains(k)) patch[k] = nullptr;
         }
-    } else if (engine_cycle.contains("profiles")) {
-        patch["profiles"] = nullptr;
+    } else if (part.contains("intake_lift_family")) {
+        // Engine garage P10: a lift-family cam carries every intake lift inside its nodes and keeps one top-level
+        // exhaust_lift; it removes the engine's single intake lift and any cam profiles.
+        if (part.contains("intake_lift")) {
+            throw std::runtime_error(path + ": a cam with 'intake_lift_family' carries the intake lift inside each node, not at "
+                                     "the top level");
+        }
+        for (const char* k : {"intake_lift", "profiles"}) {
+            if (engine_cycle.contains(k)) patch[k] = nullptr;
+        }
+    } else {
+        for (const char* k : {"profiles", "intake_lift_family"}) {
+            if (engine_cycle.contains(k)) patch[k] = nullptr;
+        }
     }
     if (part.contains("fits")) {
         const json& fits = part.at("fits");

@@ -194,6 +194,21 @@ struct CycleModelDesc {
     };
     static constexpr std::size_t kMaxCamProfiles = 2; // one ECU switching rule (rpm_on/rpm_off) selects between two
     std::vector<CamProfile> cam_profiles;
+    // Engine garage P10 (Valvetronic-style continuous intake lift, docs/data_formats/cam.md "intake_lift_family"): empty =
+    // a fixed intake lift (every engine before P10; generator, keys and maps unchanged). Non-empty: kMinLiftNodes ..
+    // kMaxLiftNodes nodes in strictly ascending u (the normalised eccentric-shaft position, u >= 0, the last exactly 1 =
+    // full lift), each with its own intake lift; intake_lift above holds the u = 1 node's lift (the loader copies it) and
+    // exhaust_lift stays the engine's one exhaust lift. The generator runs once per node on cycle_desc_for_lift_node(desc,
+    // k) - a desc with that node's intake lift and this list cleared - so each node's .psmaps key is the key of the same
+    // engine written with that intake lift alone, and the u = 1 set is exactly the engine without the family. Mutually
+    // exclusive with cam_profiles (the loader rejects both). The generator and engine_map_cache_key reject a non-empty list.
+    struct LiftNode {
+        real u = 0.0;
+        ValveLiftProfile intake_lift;
+    };
+    static constexpr std::size_t kMinLiftNodes = 2;
+    static constexpr std::size_t kMaxLiftNodes = 8;
+    std::vector<LiftNode> lift_family;
     int intake_valves = 2;
     int exhaust_valves = 2;
     real intake_valve_d_m = 0.0;  // valve head (inner seat) diameter

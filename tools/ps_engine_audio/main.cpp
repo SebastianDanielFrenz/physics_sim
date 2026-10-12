@@ -303,6 +303,11 @@ int main(int argc, char** argv) {
             throw std::runtime_error("ps_engine_audio: '" + args.engine_path +
                                       "' switches cam profiles (engine garage P9); the voice has no cam switching yet (open point G10)");
         }
+        if (sim->has_lift_family()) {
+            throw std::runtime_error("ps_engine_audio: '" + args.engine_path +
+                                      "' has a continuous intake lift family (engine garage P10); the voice renders one fixed "
+                                      "intake lift (open point G10)");
+        }
         if (sim->fuels.empty()) {
             throw std::runtime_error("ps_engine_audio: '" + args.engine_path + "' has no fuel");
         }

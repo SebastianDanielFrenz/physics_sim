@@ -459,6 +459,7 @@ constexpr const char* kSimulatedOnlyEngineKeys[] = {
     "rotor_radius_mm", "eccentricity_mm", "rotor_width_mm",    "rotors",
     "intake_manifold_volume_l", "throttle_body", "throttle_actuator_tau_s", "ecu", "maps", "cycle",
     "switching", // engine garage P9: cam-profile switching (needs a cycle block with profiles)
+    "lift_control", // engine garage P10: continuous intake-lift strategy (needs a cycle block with intake_lift_family)
 };
 
 ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
@@ -1018,6 +1019,8 @@ constexpr const char* kCycleKeys[] = {
     "intake", "exhaust", "default_installation", "resolution",
     // Engine garage P9: discrete cam profiles (VTEC-style), docs/data_formats/cam.md "profiles".
     "profiles",
+    // Engine garage P10: continuous intake lift (Valvetronic-style), docs/data_formats/cam.md "intake_lift_family".
+    "intake_lift_family",
 };
 
 std::vector<real> read_cycle_grid(const json& cj, const char* key, real scale, const std::string& cctx) {
@@ -1562,6 +1565,56 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
         }
         d.intake_lift = d.cam_profiles.front().intake_lift;
         d.exhaust_lift = d.cam_profiles.front().exhaust_lift;
+        if (cj.contains("intake_lift_family")) {
+            throw std::runtime_error(cctx + ": 'profiles' and 'intake_lift_family' together - discrete cam profiles (P9) and a "
+                                      "continuous intake lift family (P10) are mutually exclusive");
+        }
+    } else if (cj.contains("intake_lift_family")) {
+        // Engine garage P10: Valvetronic-style continuous intake lift. Nodes over the normalised eccentric-shaft position u
+        // in strictly ascending order, the last exactly u = 1 (full lift); the exhaust lift stays fixed. intake_lift then
+        // holds the u = 1 node's lift (the generator and key per node: cycle_desc_for_lift_node).
+        if (cj.contains("intake_lift")) {
+            throw std::runtime_error(cctx + ": 'intake_lift_family' and 'intake_lift' together - with a lift family every intake "
+                                      "lift lives inside its node (the u = 1 node is the full lift)");
+        }
+        const json& fj = cj.at("intake_lift_family");
+        if (!fj.is_array()) {
+            throw std::runtime_error(cctx + ": 'intake_lift_family' must be an array of {u, intake_lift}");
+        }
+        if (fj.size() < CycleModelDesc::kMinLiftNodes || fj.size() > CycleModelDesc::kMaxLiftNodes) {
+            throw std::runtime_error(cctx + ": 'intake_lift_family' must hold " + std::to_string(CycleModelDesc::kMinLiftNodes) +
+                                      " to " + std::to_string(CycleModelDesc::kMaxLiftNodes) + " nodes, got " +
+                                      std::to_string(fj.size()));
+        }
+        for (std::size_t k = 0; k < fj.size(); ++k) {
+            const std::string nctx = cctx + ".intake_lift_family[" + std::to_string(k) + "]";
+            const json& n = fj[k];
+            if (!n.is_object()) throw std::runtime_error(nctx + " must be an object");
+            for (auto it = n.begin(); it != n.end(); ++it) {
+                const std::string& key = it.key();
+                const bool note = key == "source" || (key.size() > 7 && key.compare(key.size() - 7, 7, "_source") == 0);
+                if (key != "u" && key != "intake_lift" && !note) {
+                    throw std::runtime_error(nctx + ": unknown key '" + key + "' (a lift node has u, intake_lift)");
+                }
+            }
+            CycleModelDesc::LiftNode ln;
+            ln.u = require_number(n, "u", nctx);
+            if (!(ln.u >= real(0.0) && ln.u <= real(1.0))) {
+                throw std::runtime_error(nctx + ": 'u' must lie in [0, 1], got " + std::to_string(ln.u));
+            }
+            if (!d.lift_family.empty() && !(ln.u > d.lift_family.back().u)) {
+                throw std::runtime_error(nctx + ": the nodes' 'u' must be strictly ascending (" + std::to_string(ln.u) +
+                                          " after " + std::to_string(d.lift_family.back().u) + ")");
+            }
+            ln.intake_lift = read_cycle_lift(n, "intake_lift", nctx);
+            d.lift_family.push_back(std::move(ln));
+        }
+        if (d.lift_family.back().u != real(1.0)) {
+            throw std::runtime_error(cctx + ": the last 'intake_lift_family' node must be u = 1 (full lift), got u = " +
+                                      std::to_string(d.lift_family.back().u));
+        }
+        d.intake_lift = d.lift_family.back().intake_lift;
+        d.exhaust_lift = read_cycle_lift(cj, "exhaust_lift", cctx);
     } else {
         d.intake_lift = read_cycle_lift(cj, "intake_lift", cctx);
         d.exhaust_lift = read_cycle_lift(cj, "exhaust_lift", cctx);
@@ -2251,6 +2304,52 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         }
     }
 
+    // --- engine garage P10: the ECU's continuous intake-lift strategy (docs/data_formats/ecu.md "lift_control") ---------
+    // Node membership of min_u/idle_u/plate_open_above_u is checked against the cam's family below (cycle block).
+    const bool has_lift_control = j.contains("lift_control");
+    if (has_lift_control) {
+        const json& lj = j.at("lift_control");
+        const std::string lctx = ctx + ".lift_control";
+        if (!lj.is_object()) throw std::runtime_error(lctx + " must be an object");
+        for (auto it = lj.begin(); it != lj.end(); ++it) {
+            const std::string& k = it.key();
+            const bool note = k == "source" || (k.size() > 7 && k.compare(k.size() - 7, 7, "_source") == 0);
+            if (k != "type" && k != "actuator_tau_s" && k != "max_rate_per_s" && k != "min_u" && k != "idle_u" &&
+                k != "plate_open_above_u" && k != "vacuum_target_kpa" && !note) {
+                throw std::runtime_error(lctx + ": unknown key '" + k +
+                                          "' (lift_control has type, actuator_tau_s, max_rate_per_s, min_u, idle_u, "
+                                          "plate_open_above_u, vacuum_target_kpa)");
+            }
+        }
+        if (!lj.contains("type") || !lj.at("type").is_string() || lj.at("type").get<std::string>() != "continuous") {
+            throw std::runtime_error(lctx + ": 'type' must be \"continuous\" (the only lift-control type)");
+        }
+        LiftControlDesc& lc = e.lift_control;
+        lc.actuator_tau_s = require_number(lj, "actuator_tau_s", lctx);
+        lc.max_rate_per_s = require_number(lj, "max_rate_per_s", lctx);
+        lc.min_u = require_number(lj, "min_u", lctx);
+        lc.idle_u = require_number(lj, "idle_u", lctx);
+        lc.plate_open_u = require_number(lj, "plate_open_above_u", lctx);
+        lc.vacuum_pa = require_number(lj, "vacuum_target_kpa", lctx) * kKpa;
+        for (real v : {lc.actuator_tau_s, lc.max_rate_per_s, lc.min_u, lc.idle_u, lc.plate_open_u, lc.vacuum_pa}) {
+            if (!std::isfinite(v)) throw std::runtime_error(lctx + ": every value must be finite");
+        }
+        if (!(lc.actuator_tau_s >= real(0.0) && lc.actuator_tau_s <= real(1.0))) {
+            throw std::runtime_error(lctx + ": 'actuator_tau_s' must be in [0, 1] s");
+        }
+        if (!(lc.max_rate_per_s > real(0.0))) throw std::runtime_error(lctx + ": 'max_rate_per_s' must be > 0");
+        if (!(lc.min_u >= real(0.0) && lc.min_u < real(1.0))) throw std::runtime_error(lctx + ": 'min_u' must be in [0, 1)");
+        if (!(lc.idle_u >= lc.min_u && lc.idle_u < real(1.0))) {
+            throw std::runtime_error(lctx + ": 'idle_u' must be in [min_u, 1)");
+        }
+        if (!(lc.plate_open_u > lc.min_u && lc.plate_open_u <= real(1.0))) {
+            throw std::runtime_error(lctx + ": 'plate_open_above_u' must be in (min_u, 1]");
+        }
+        if (!(lc.vacuum_pa >= real(0.0) && lc.vacuum_pa <= real(30.0) * kKpa)) {
+            throw std::runtime_error(lctx + ": 'vacuum_target_kpa' must be in [0, 30] kPa");
+        }
+    }
+
     // --- fuel (required) + ignition (required, spark only in I7b) -----------------
     if (j.contains("fuels") && j.contains("fuel")) {
         throw std::runtime_error(ctx + ": 'fuels' and 'fuel' are mutually exclusive ('fuel' is shorthand for a one-entry 'fuels')");
@@ -2306,6 +2405,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
     }
 
     // --- I7c C16a: maps generated from the 0D cycle model --------------------
+    if (!has_cycle && has_lift_control) {
+        throw std::runtime_error(ctx + ": the ECU has a 'lift_control' block but the engine has no cycle block - an intake lift "
+                                  "family is generated from a cycle block's cam (docs/data_formats/cam.md)");
+    }
     if (!has_cycle && has_switching) {
         throw std::runtime_error(ctx + ": the ECU has a 'switching' block but the engine has no cycle block - cam profiles are "
                                   "generated from a cycle block's cam (docs/data_formats/cam.md)");
@@ -2335,6 +2438,51 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         } else if (has_switching) {
             throw std::runtime_error(ctx + ": the ECU has a 'switching' block but the cam has no profiles - give the engine a cam with "
                                       "'profiles' (docs/data_formats/cam.md), or remove the switching block");
+        }
+        // Engine garage P10: an intake lift family and the ECU's lift_control come as a pair.
+        if (!e.cycle->lift_family.empty()) {
+            if (!has_lift_control) {
+                throw std::runtime_error(ctx + ": the cam has an intake lift family (cycle.intake_lift_family) but the ECU has no "
+                                          "'lift_control' block - give the ECU part a lift strategy (docs/data_formats/ecu.md), or "
+                                          "use a single-lift cam");
+            }
+            if (j.contains("maps")) {
+                throw std::runtime_error(ctx + ": an engine with an intake lift family generates every map from its cycle block, one "
+                                          "set per lift node - a 'maps' block is not supported with a lift family");
+            }
+            if (knock_mbt_tracking) {
+                throw std::runtime_error(ctx + ": a knock-limited ECU without a spark table (MBT tracking) is not supported with an "
+                                          "intake lift family yet - give the ECU a spark schedule");
+            }
+            if (e.turbo_pair.has_value()) {
+                throw std::runtime_error(ctx + ": an intake lift family with forced induction is not supported (the boost controller "
+                                          "works on the throttle plate, which the lift strategy holds open) - remove the forced "
+                                          "induction or use a single-lift cam");
+            }
+            if (e.throttle_input != ThrottleInput::Electronic) {
+                throw std::runtime_error(ctx + ": an intake lift family needs throttle_input \"electronic\" (the ECU sets the lift "
+                                          "and the plate from the torque request)");
+            }
+            auto is_node = [&](real u) {
+                for (const auto& n : e.cycle->lift_family) {
+                    if (n.u == u) return true;
+                }
+                return false;
+            };
+            const LiftControlDesc& lc = e.lift_control;
+            const std::pair<const char*, real> named[] = {{"min_u", lc.min_u}, {"idle_u", lc.idle_u},
+                                                          {"plate_open_above_u", lc.plate_open_u}};
+            for (const auto& nv : named) {
+                if (!is_node(nv.second)) {
+                    throw std::runtime_error(ctx + ".lift_control: '" + std::string(nv.first) + "' = " + std::to_string(nv.second) +
+                                              " is not one of the cam's intake_lift_family node u values (the ECU's tables "
+                                              "are exact at the nodes)");
+                }
+            }
+            for (const auto& n : e.cycle->lift_family) e.lift_u.push_back(n.u);
+        } else if (has_lift_control) {
+            throw std::runtime_error(ctx + ": the ECU has a 'lift_control' block but the cam has no intake lift family - give the "
+                                      "engine a cam with 'intake_lift_family' (docs/data_formats/cam.md), or remove lift_control");
         }
         // C17a follow-up: the cycle's spark schedule IS the ECU's (the ecu
         // block's own table was rejected above) - the runtime then evaluates
@@ -2392,16 +2540,15 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                               e.maps.has_pmep_excess && (!knock_limited || have_theta_kl_file);
         const bool have_pmep_file = e.maps.has_pmep_excess; // P7d: before the generated table is copied in
         const std::string mctx_gen = ctx + ".maps";
-        if (!e.cycle->cam_profiles.empty()) {
-            // Engine garage P9: one complete map set per cam profile, each with its own .psmaps key (the key of the same
+        if (!e.cycle->cam_profiles.empty() || !e.cycle->lift_family.empty()) {
+            // Engine garage P9 (P10: likewise one set per intake lift node, u = 1 first): one complete map set per cam profile, each with its own .psmaps key (the key of the same
             // engine written with that cam alone). Progress reports the sum over the profiles that are generated (cache
             // hits add nothing); the cancel flag stops the whole load; the cache files are written only after every set
             // exists, so a cancelled load leaves no trace (the P1 contract).
             const EngineMapOptions defaults{};
             const EngineMapOptions& opt = map_options != nullptr ? *map_options : defaults;
-            const std::size_t np = e.cycle->cam_profiles.size();
-            std::vector<CycleModelDesc> pdesc;
-            for (std::size_t k = 0; k < np; ++k) pdesc.push_back(drivetrain::cycle_desc_for_cam_profile(*e.cycle, k));
+            const std::vector<CycleModelDesc> pdesc = drivetrain::engine_map_set_descs(*e.cycle);
+            const std::size_t np = pdesc.size();
             if (!opt.generate) {
                 for (const CycleModelDesc& d : pdesc) drivetrain::validate_engine_map_generation(d, e.fuels.front(), opt.quality);
                 e.maps_pending = true;
@@ -2440,6 +2587,8 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                             preview.maps = partial->maps;
                             preview.cam_profile_ids.clear();
                             preview.cam_profile_maps.clear();
+                            preview.lift_u.clear(); // P10: the u = 1 set alone (the engine without the family)
+                            preview.lift_node_maps.clear();
                             preview.maps_pending = false;
                             opt.on_partial_engine(preview);
                         };
@@ -2452,7 +2601,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                     if (generated[k]) drivetrain::store_cached_engine_maps(opt.cache_dir, keys[k], *gens[k]);
                 }
                 e.maps = gens[0]->maps;
-                for (std::size_t k = 1; k < np; ++k) e.cam_profile_maps.push_back(gens[k]->maps);
+                for (std::size_t k = 1; k < np; ++k) {
+                    if (e.cycle->lift_family.empty()) e.cam_profile_maps.push_back(gens[k]->maps);
+                    else e.lift_node_maps.push_back(gens[k]->maps);
+                }
             }
         } else if (!complete) {
             // Generator errors propagate unwrapped (their own "engine map
@@ -2564,6 +2716,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         for (std::size_t k = 0; k < e.cam_profile_maps.size(); ++k) {
             // Engine garage P9: every further cam profile's generated set passes the same efficiency check.
             require_maps_efficiency_below_one(e.cam_profile_maps[k], mctx + " (cam profile '" + e.cam_profile_ids.at(k + 1) + "')");
+        }
+        for (std::size_t k = 0; k < e.lift_node_maps.size(); ++k) {
+            // Engine garage P10: every lift node's generated set passes the same efficiency check.
+            require_maps_efficiency_below_one(e.lift_node_maps[k], mctx + " (intake lift node u = " + std::to_string(e.lift_u.at(k)) + ")");
         }
         if (e.breakaway_torque_nm < e.maps.friction_torque_nm.evaluate(real(0.0))) {
             throw std::runtime_error(ctx + ": breakaway_torque_nm must be >= maps.friction_torque_nm(0)");

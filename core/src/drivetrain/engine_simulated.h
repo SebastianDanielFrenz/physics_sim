@@ -115,6 +115,14 @@ struct SimulatedEngineMaps {
     // present, so a hot swap of these maps swaps every profile set at once.
     std::shared_ptr<const SimulatedEngineMaps> cam_high;
     CamSwitchingDesc cam_switching;
+    // Engine garage P10: a continuous intake lift family (Valvetronic-style). This object is the u = 1 node's complete
+    // model; lift_nodes holds the nodes below it (ascending u, same desc on each node's own generated maps, each with its
+    // own steady tables); lift_u every node's u (the last 1.0); lift_control the ECU strategy. Empty without a family.
+    // Folded into content_hash only when present (every node's hash, the u values and the strategy constants).
+    std::vector<std::shared_ptr<const SimulatedEngineMaps>> lift_nodes;
+    std::vector<real> lift_u;
+    LiftControlDesc lift_control;
+    [[nodiscard]] bool has_lift_family() const { return !lift_u.empty(); }
     std::uint64_t content_hash = 0;
 };
 
@@ -183,6 +191,9 @@ public:
     // bringing the ~0.3 s idle manifold lag near the 0.04 s actuator lag.
     static constexpr real kIdleFillGain = 4.0;
     static constexpr real kIdleFillDx = 1e-4; // forward-difference step for df/dx
+    // Engine garage P10: the lift actuator lands exactly on its target once within this distance (u units) [AS] - the
+    // first-order lag alone never arrives, and u = 1 must be exactly the u = 1 node (bit-identical WOT).
+    static constexpr real kLiftSnap = 1e-6;
 
     explicit SimulatedEngine(const SimulatedEngineDesc& desc);
     // Reuse an already-built maps object (must come from build_maps(desc)
@@ -245,6 +256,26 @@ public:
     // Used by the dyno to hold a profile; never set by World. Not hashed (a held engine is a test harness).
     void set_cam_blend_override(real w) { cam_override_ = w; if (w >= real(0.0)) { cam_w_ = std::clamp(w, real(0.0), real(1.0)); cam_high_ = cam_w_ >= real(0.5); } }
     [[nodiscard]] std::uint64_t steady_rebuild_count() const { return steady_rebuilds_; }
+    // Engine garage P10 (continuous intake lift; 1.0 / no-ops without a family): the eccentric-shaft position u the plant
+    // runs at (every model lookup is the linear blend of the two lift nodes bracketing u, exactly node k's model at u =
+    // u_k, the u = 1 node at u = 1), the ECU's target of the latest pre_solve, and whether that pre_solve set the plate
+    // from the vacuum target (true) or a node's own inverse / plate 1 (false).
+    [[nodiscard]] real lift_u() const { return u_; }
+    [[nodiscard]] real lift_u_target() const { return u_target_; }
+    [[nodiscard]] bool lift_vacuum_mode() const { return lift_vacuum_mode_; }
+    // Lift node k's steady tables (k < lift node count - 1; the u = 1 node's are steady_tables()).
+    [[nodiscard]] const SimulatedSteadyTables& steady_tables_lift_node(std::size_t k) const { return steady_nodes_.at(k); }
+    // White-box/test hook: hold u at `u` (clamped to the family's range); -1 = ECU control. Not hashed (a held engine is a
+    // test harness, like set_cam_blend_override). No-op without a family.
+    void set_lift_override(real u);
+    // The ECU's lift strategy at (rpm, request) evaluated stand-alone (no state change): the u target and the plate
+    // target pre_solve would command with u already at that target, from the current ambient/friction estimate. For
+    // tests and the dyno's part-load option. Throws without a family.
+    struct LiftTargets {
+        real u = 1.0, plate = 1.0, torque_target_nm = 0.0;
+        bool vacuum_mode = false;
+    };
+    [[nodiscard]] LiftTargets lift_targets(real rpm, real request) const;
 
     // --- white-box accessors ------------------------------------------------
     [[nodiscard]] EngineState state() const { return state_; }
@@ -410,6 +441,36 @@ private:
     [[nodiscard]] real steady_torque(real rpm, real plate) const;
     [[nodiscard]] real inverse_plate_target(real rpm, real request) const;
     void step_cam_switching(const Sensors& sensors, real rpm, real h);
+    // Engine garage P10: the plant's model pair at the current state - (lo, nullptr, 0) for a plain engine, the cam
+    // profiles blended by cam_w_ (P9), or the two lift nodes bracketing u_ (P10). Every model evaluation blends over it.
+    struct PlantPair {
+        const SimulatedEngineMaps* lo = nullptr;
+        const SimulatedEngineMaps* hi = nullptr;
+        real w = 0.0;
+    };
+    [[nodiscard]] PlantPair plant_pair() const;
+    [[nodiscard]] PlantPair lift_pair_at(real u) const;
+    [[nodiscard]] const SimulatedSteadyTables& tables_for(const SimulatedEngineMaps* mm) const;
+    [[nodiscard]] const SimulatedEngineMaps& lift_node(std::size_t k) const;
+    [[nodiscard]] const SimulatedSteadyTables& lift_node_tables(std::size_t k) const;
+    [[nodiscard]] const SimulatedEngineMaps& idle_maps() const;
+    [[nodiscard]] const SimulatedSteadyTables& idle_tables() const;
+    [[nodiscard]] real node_motoring(std::size_t k, real rpm) const;
+    [[nodiscard]] real node_wot(std::size_t k, real rpm) const;
+    [[nodiscard]] real node_inverse_plate(std::size_t k, real rpm, real request) const;
+    [[nodiscard]] real node_vacuum_torque(std::size_t k, real rpm, real p_target) const;
+    [[nodiscard]] real vacuum_plate(real omega, real p_target, real u, const NitrousCharge* nc) const;
+    // Engine garage P10 state: u_ (hashed only with a family), its target and plate mode (derived each substep, not
+    // hashed), the override hook, and each lower node's steady tables (sized at construction, swapped with the pending
+    // set on a hot swap, refilled with the others by set_ambient).
+    real u_ = 1.0;
+    real u_target_ = 1.0;
+    bool lift_vacuum_mode_ = false;
+    real u_override_ = -1.0;
+    std::size_t idle_node_ = 0;
+    real u_act_h_ = -1.0, u_act_a_ = 0.0;
+    std::vector<SimulatedSteadyTables> steady_nodes_;
+    std::vector<SimulatedSteadyTables> pending_steady_nodes_;
     // Engine garage P9: cam switching state (hashed only with cam profiles) and the override hook.
     bool cam_high_ = false;
     real cam_w_ = 0.0;

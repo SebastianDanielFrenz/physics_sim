@@ -719,14 +719,26 @@ SimulatedEngine::TorqueEval blend(const SimulatedEngine::TorqueEval& a, const Si
     return r;
 }
 
-// f evaluated on the low profile's maps, on the high one's, or both blended - exactly the single-profile value at
-// w <= 0 and w >= 1, and always the low (only) profile for an engine without cam profiles.
-template <class F>
-auto on_cam_profiles(const SimulatedEngineMaps& lo, real w, F&& f) -> decltype(f(lo)) {
-    const SimulatedEngineMaps* hi = lo.cam_high.get();
-    if (hi == nullptr || !(w > real(0.0))) return f(lo);
-    if (w >= real(1.0)) return f(*hi);
-    return blend(f(lo), f(*hi), w);
+// f evaluated on a model pair (SimulatedEngine::plant_pair): the low (only) model, the high one, or both blended -
+// exactly f(lo) at w <= 0 or without hi, f(hi) at w >= 1. P9: the cam profiles blended by the cam weight (for an
+// engine without profiles always the one model); P10: the two lift nodes bracketing u.
+template <class P, class F>
+auto on_plant(const P& pp, F&& f) -> decltype(f(*pp.lo)) {
+    if (pp.hi == nullptr || !(pp.w > real(0.0))) return f(*pp.lo);
+    if (pp.w >= real(1.0)) return f(*pp.hi);
+    return blend(f(*pp.lo), f(*pp.hi), pp.w);
+}
+
+// Engine garage P10: the smallest x with c(x) = y on a nondecreasing piecewise-linear curve (clamped to its x range).
+real invert_nondecreasing(const vehicle::Curve1D& c, real y) {
+    if (c.x.empty()) return real(0.0);
+    if (y <= c.y.front()) return c.x.front();
+    for (std::size_t i = 0; i + 1 < c.x.size(); ++i) {
+        if (y <= c.y[i + 1] && c.y[i + 1] > c.y[i]) {
+            return c.x[i] + (y - c.y[i]) / (c.y[i + 1] - c.y[i]) * (c.x[i + 1] - c.x[i]);
+        }
+    }
+    return c.x.back();
 }
 
 } // namespace
@@ -754,6 +766,30 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
         (desc.cam_profile_ids.size() != CycleModelDesc::kMaxCamProfiles || desc.cam_profile_maps.size() + 1 != desc.cam_profile_ids.size())) {
         throw std::runtime_error("SimulatedEngine: an engine with cam profiles needs exactly 2 profile ids and the second profile's "
                                  "maps in cam_profile_maps (engine garage P9)");
+    }
+    if (desc.has_lift_family()) {
+        // Engine garage P10 backstop for code-built descs (the loader rejects all of these with its own messages).
+        const std::vector<real>& uu = desc.lift_u;
+        bool ok = uu.size() >= CycleModelDesc::kMinLiftNodes && uu.size() <= CycleModelDesc::kMaxLiftNodes &&
+                  desc.lift_node_maps.size() + 1 == uu.size() && uu.back() == real(1.0) && uu.front() >= real(0.0);
+        for (std::size_t k = 1; ok && k < uu.size(); ++k) ok = uu[k] > uu[k - 1];
+        if (!ok) {
+            throw std::runtime_error("SimulatedEngine: an intake lift family needs 2..8 strictly ascending lift_u ending at 1 and one "
+                                     "lift_node_maps entry per node below u = 1 (engine garage P10)");
+        }
+        if (desc.has_cam_profiles()) throw std::runtime_error("SimulatedEngine: an intake lift family and cam profiles are exclusive");
+        if (desc.turbo_pair) throw std::runtime_error("SimulatedEngine: an intake lift family with forced induction is not supported");
+        if (desc.throttle_input != ThrottleInput::Electronic) {
+            throw std::runtime_error("SimulatedEngine: an intake lift family needs an electronic throttle");
+        }
+        const LiftControlDesc& lc = desc.lift_control;
+        auto is_node = [&](real u) { return std::find(uu.begin(), uu.end(), u) != uu.end(); };
+        if (!is_node(lc.min_u) || !is_node(lc.idle_u) || !is_node(lc.plate_open_u) || !(lc.idle_u >= lc.min_u) ||
+            !(lc.plate_open_u > lc.min_u) || !(lc.max_rate_per_s > real(0.0)) || !(lc.actuator_tau_s >= real(0.0)) ||
+            !(lc.vacuum_pa >= real(0.0))) {
+            throw std::runtime_error("SimulatedEngine: lift_control needs min_u <= idle_u and min_u < plate_open_u, each a lift node, "
+                                     "max_rate_per_s > 0, actuator_tau_s >= 0, vacuum >= 0");
+        }
     }
     if (!(desc.intake_manifold_volume_m3 > real(0.0))) throw std::runtime_error("SimulatedEngine: intake_manifold_volume_m3 must be > 0");
     if (desc.maps.friction_torque_nm.x.empty() || desc.maps.friction_torque_nm.x.front() != real(0.0)) {
@@ -902,6 +938,32 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
         f.pod(m->cam_switching.min_oil_c);
         f.pod(m->cam_switching.transition_s);
     }
+    if (desc.has_lift_family()) {
+        // Engine garage P10: every lower lift node is the same engine on its own generated maps (its own steady tables);
+        // the node hashes, u values and strategy constants join this hash only here, so every other engine keeps its
+        // byte layout. This object is the u = 1 node.
+        const std::size_t nn = desc.lift_u.size();
+        m->lift_nodes.reserve(nn - 1);
+        for (std::size_t k = 0; k + 1 < nn; ++k) {
+            SimulatedEngineDesc nd = desc;
+            nd.maps = desc.lift_node_maps[k];
+            nd.lift_u.clear();
+            nd.lift_node_maps.clear();
+            m->lift_nodes.push_back(build_maps_impl(nd, steady_tables));
+        }
+        m->lift_u = desc.lift_u;
+        m->lift_control = desc.lift_control;
+        f.pod(static_cast<std::uint64_t>(nn));
+        for (real u : m->lift_u) f.pod(u);
+        for (const auto& node : m->lift_nodes) f.pod(node->content_hash);
+        const LiftControlDesc& lc = m->lift_control;
+        f.pod(lc.actuator_tau_s);
+        f.pod(lc.max_rate_per_s);
+        f.pod(lc.min_u);
+        f.pod(lc.idle_u);
+        f.pod(lc.plate_open_u);
+        f.pod(lc.vacuum_pa);
+    }
     m->content_hash = f.h;
     return m;
 }
@@ -935,8 +997,23 @@ SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_pt
     if (desc.has_cam_profiles() != (maps_->cam_high != nullptr)) {
         throw std::runtime_error("SimulatedEngine: the desc and its maps disagree on cam profiles (engine garage P9)");
     }
+    if (desc.has_lift_family() != maps_->has_lift_family() || desc.lift_u.size() != maps_->lift_u.size()) {
+        throw std::runtime_error("SimulatedEngine: the desc and its maps disagree on the intake lift family (engine garage P10)");
+    }
     seed_steady_tables(steady_, *maps_);
     if (maps_->cam_high) seed_steady_tables(steady_hi_, *maps_->cam_high);
+    if (maps_->has_lift_family()) {
+        // Engine garage P10: one steady-table set per lower lift node (plus the pending set a hot swap prefills), all
+        // sized here so the swap is a buffer exchange.
+        const std::size_t nn = maps_->lift_u.size();
+        steady_nodes_.resize(nn - 1);
+        pending_steady_nodes_.resize(nn - 1);
+        for (std::size_t k = 0; k + 1 < nn; ++k) seed_steady_tables(steady_nodes_[k], *maps_->lift_nodes[k]);
+        idle_node_ = static_cast<std::size_t>(
+            std::find(maps_->lift_u.begin(), maps_->lift_u.end(), maps_->lift_control.idle_u) - maps_->lift_u.begin());
+        u_ = maps_->lift_control.idle_u;
+        u_target_ = u_;
+    }
     set_ambient(kIsaPressurePa, kIsaTemperatureK);
     state_ = desc.initial_state == EngineInitialState::Running ? EngineState::Running : EngineState::Off;
     init_state_for(state_);
@@ -998,6 +1075,11 @@ void SimulatedEngine::set_ambient(real p_pa, real t_k) {
                                steady_hi_, false);
             steady_hi_.t_k = t_k;
         }
+        for (std::size_t k = 0; k < steady_nodes_.size(); ++k) { // engine garage P10: every lower lift node
+            fill_steady_tables(*maps_->lift_nodes[k], make_ambient(p_pa, t_k), desc_idle_rpm_, idle_.max_throttle, idle_.max_torque_nm,
+                               steady_nodes_[k], false);
+            steady_nodes_[k].t_k = t_k;
+        }
         ++steady_rebuilds_;
     }
 }
@@ -1008,7 +1090,7 @@ void SimulatedEngine::set_live_ambient(real p_pa,real t_k) {
     if(live_steady()) {
         // Stack-only scalar output; no table vectors are populated or allocated.
         IdleControlOut idle;
-        fill_idle_control(*maps_,make_ambient(p_pa,t_k),desc_idle_rpm_,idle_.max_throttle,idle_.max_torque_nm,idle,24,ecu_k_,hyd_ref_rpm_);
+        fill_idle_control(idle_maps(),make_ambient(p_pa,t_k),desc_idle_rpm_,idle_.max_throttle,idle_.max_torque_nm,idle,24,ecu_k_,hyd_ref_rpm_);
         live_idle_ff_=idle.idle_ff; live_idle_p_im_=idle.idle_p_im; live_idle_cap_x_=idle.idle_cap_x;
     }
 }
@@ -1041,24 +1123,192 @@ real SimulatedEngine::live_inverse_plate_on(const SimulatedEngineMaps& m,real rp
     return (lo+hi)*real(.5);
 }
 
+// Engine garage P10: the model pair every plant evaluation blends over.
+SimulatedEngine::PlantPair SimulatedEngine::plant_pair() const {
+    if (maps_->has_lift_family()) return lift_pair_at(u_);
+    return PlantPair{maps_.get(), maps_->cam_high.get(), cam_w_};
+}
+
+// The two lift nodes bracketing u: (node k, node k+1, w) with u_k < u <= u_{k+1}, so w = 1 (node k+1 exactly) at a node
+// and the u = 1 node (maps_) at u = 1; below the first node the first node alone.
+SimulatedEngine::PlantPair SimulatedEngine::lift_pair_at(real u) const {
+    const std::vector<real>& uu = maps_->lift_u;
+    if (!(u > uu.front())) return PlantPair{&lift_node(0), nullptr, real(0.0)};
+    std::size_t k = 0;
+    while (k + 2 < uu.size() && u > uu[k + 1]) ++k;
+    const real w = std::min(real(1.0), (u - uu[k]) / (uu[k + 1] - uu[k]));
+    return PlantPair{&lift_node(k), &lift_node(k + 1), w};
+}
+
+const SimulatedSteadyTables& SimulatedEngine::tables_for(const SimulatedEngineMaps* mm) const {
+    if (mm == maps_.get()) return steady_;
+    if (mm == maps_->cam_high.get()) return steady_hi_;
+    for (std::size_t k = 0; k < steady_nodes_.size(); ++k) {
+        if (mm == maps_->lift_nodes[k].get()) return steady_nodes_[k];
+    }
+    return steady_;
+}
+
+const SimulatedEngineMaps& SimulatedEngine::lift_node(std::size_t k) const {
+    return k + 1 < maps_->lift_u.size() ? *maps_->lift_nodes[k] : *maps_;
+}
+
+const SimulatedSteadyTables& SimulatedEngine::lift_node_tables(std::size_t k) const {
+    return k + 1 < maps_->lift_u.size() ? steady_nodes_[k] : steady_;
+}
+
+// Idle and DFCO run on the idle lift node (the only model without a family / with cam profiles: the low profile).
+const SimulatedEngineMaps& SimulatedEngine::idle_maps() const {
+    return maps_->has_lift_family() ? lift_node(idle_node_) : *maps_;
+}
+
+const SimulatedSteadyTables& SimulatedEngine::idle_tables() const {
+    return maps_->has_lift_family() ? lift_node_tables(idle_node_) : steady_;
+}
+
+real SimulatedEngine::node_motoring(std::size_t k, real rpm) const {
+    return live_steady() ? live_steady_torque_on(lift_node(k), rpm, 0, false) : lift_node_tables(k).steady_motoring_nm.evaluate(rpm);
+}
+
+real SimulatedEngine::node_wot(std::size_t k, real rpm) const {
+    return live_steady() ? live_steady_torque_on(lift_node(k), rpm, 1, true) : lift_node_tables(k).steady_wot_nm.evaluate(rpm);
+}
+
+real SimulatedEngine::node_inverse_plate(std::size_t k, real rpm, real request) const {
+    return live_steady() ? live_inverse_plate_on(lift_node(k), rpm, request) : lift_node_tables(k).inverse_plate.value(rpm, request);
+}
+
+// Node k's net torque with its manifold held at p_target (fired, no starter, limiter ignored: steady_net_torque's
+// evaluation at that pressure), at the current ambient and the ECU's friction estimate. Never above the node's own WOT
+// (a target the open plate cannot hold is the node at plate 1).
+real SimulatedEngine::node_vacuum_torque(std::size_t k, real rpm, real p_target) const {
+    const SimulatedEngineMaps& mm = lift_node(k);
+    const real clamped_rpm = std::clamp(rpm, steady_.steady_torque_nm.x.front(), steady_.steady_torque_nm.x.back());
+    const real omega = clamped_rpm / kRadPerSecToRpm;
+    const Ambient amb{p_amb_, r_t_, inv_sqrt_rt_};
+    const real tau = evaluate_torque_impl(mm, amb, StarterDesc{}, omega, p_target, true, real(1.0), false, true, nullptr, ecu_k_,
+                                          hyd_ref_rpm_).tau - mm.c_k;
+    return std::min(tau, node_wot(k, rpm));
+}
+
+// The plate that holds the manifold at p_target with the lift at u (f(p_target, x) = 0 of the blended model): the throttle
+// flow is linear in the plate's area fraction, so the fraction is the cylinder flow over the open-plate flow, inverted on
+// the area-fraction curve. 1 when even the open plate cannot hold it.
+real SimulatedEngine::vacuum_plate(real omega, real p_target, real u, const NitrousCharge* nc) const {
+    const Ambient amb{p_amb_, r_t_, inv_sqrt_rt_};
+    const ManifoldRhs r1 = on_plant(lift_pair_at(u), [&](const SimulatedEngineMaps& mm) {
+        return manifold_rhs_impl(mm, amb, p_target, omega, real(1.0), real(0.0), nc);
+    });
+    const real frac1 = maps_->area_fraction.evaluate(real(1.0));
+    if (!(r1.m_thr > real(0.0)) || !(r1.m_cyl < r1.m_thr)) return real(1.0);
+    const real frac = frac1 * std::max(real(0.0), r1.m_cyl) / r1.m_thr;
+    return std::clamp(invert_nondecreasing(maps_->area_fraction, frac), real(0.0), real(1.0));
+}
+
+// Engine garage P10: the ECU's continuous-lift strategy (docs/data_formats/ecu.md "lift_control"). The request scale is
+// the u = 1 node's (T* = mot + r * (wot - mot), the same torque a plain engine asks for); along u the ECU knows each node's
+// steady torque - below plate_open_u at the vacuum target, at and above it with the plate open - and inverts that
+// piecewise-linear curve. Below the min_u node's vacuum torque the lift rests at min_u and the plate closes on that node's
+// own inverse; between the plate_open_u node's vacuum and open-plate torque the lift rests there and the plate opens on
+// that node's inverse. PROVISIONAL (garage P10): node values linear in u between nodes, the same blend the plant uses, so
+// the inversion is exact wherever the plant reaches the vacuum target.
+SimulatedEngine::LiftTargets SimulatedEngine::lift_targets(real rpm, real request) const {
+    if (!maps_->has_lift_family()) throw std::runtime_error("SimulatedEngine::lift_targets: the engine has no intake lift family");
+    LiftTargets t;
+    const std::vector<real>& uu = maps_->lift_u;
+    const std::size_t nn = uu.size();
+    const LiftControlDesc& lc = maps_->lift_control;
+    const real mot1 = node_motoring(nn - 1, rpm);
+    const real wot1 = node_wot(nn - 1, rpm);
+    const real target = mot1 + request * (wot1 - mot1);
+    t.torque_target_nm = target;
+    if (!(request < real(1.0))) {
+        t.u = real(1.0);
+        t.plate = real(1.0);
+        return t;
+    }
+    std::size_t kmin = 0, kopen = 0;
+    for (std::size_t k = 0; k < nn; ++k) {
+        if (uu[k] == lc.min_u) kmin = k;
+        if (uu[k] == lc.plate_open_u) kopen = k;
+    }
+    const real p_t = p_amb_ - lc.vacuum_pa;
+    // Below the min node's vacuum torque: rest at min_u, the plate on that node's inverse.
+    real v_lo = node_vacuum_torque(kmin, rpm, p_t);
+    if (target <= v_lo) {
+        const real mot = node_motoring(kmin, rpm), wot = node_wot(kmin, rpm);
+        const real r = wot > mot ? (target - mot) / (wot - mot) : real(0.0);
+        t.u = uu[kmin];
+        t.plate = node_inverse_plate(kmin, rpm, std::clamp(r, real(0.0), real(1.0)));
+        return t;
+    }
+    // The vacuum range min_u .. plate_open_u.
+    for (std::size_t k = kmin; k < kopen; ++k) {
+        const real v_hi = node_vacuum_torque(k + 1, rpm, p_t);
+        if (target <= v_hi) {
+            const real s = v_hi > v_lo ? (target - v_lo) / (v_hi - v_lo) : real(1.0);
+            t.u = uu[k] + std::clamp(s, real(0.0), real(1.0)) * (uu[k + 1] - uu[k]);
+            t.vacuum_mode = true;
+            t.plate = vacuum_plate(std::clamp(rpm, real(1.0), steady_.steady_torque_nm.x.back()) / kRadPerSecToRpm, p_t, t.u, nullptr);
+            return t;
+        }
+        v_lo = v_hi;
+    }
+    // At plate_open_u between its vacuum and open-plate torque: the plate opens on that node's inverse.
+    real w_lo = node_wot(kopen, rpm);
+    if (target <= w_lo) {
+        const real mot = node_motoring(kopen, rpm);
+        const real r = w_lo > mot ? (target - mot) / (w_lo - mot) : real(1.0);
+        t.u = uu[kopen];
+        t.plate = node_inverse_plate(kopen, rpm, std::clamp(r, real(0.0), real(1.0)));
+        return t;
+    }
+    // Plate open, lift between the nodes' open-plate torques.
+    for (std::size_t k = kopen; k + 1 < nn; ++k) {
+        const real w_hi = node_wot(k + 1, rpm);
+        if (target <= w_hi) {
+            const real s = w_hi > w_lo ? (target - w_lo) / (w_hi - w_lo) : real(1.0);
+            t.u = uu[k] + std::clamp(s, real(0.0), real(1.0)) * (uu[k + 1] - uu[k]);
+            t.plate = real(1.0);
+            return t;
+        }
+        w_lo = w_hi;
+    }
+    t.u = real(1.0);
+    t.plate = real(1.0);
+    return t;
+}
+
+void SimulatedEngine::set_lift_override(real u) {
+    if (!maps_->has_lift_family()) return;
+    u_override_ = u;
+    if (u >= real(0.0)) {
+        u_ = std::clamp(u, maps_->lift_u.front(), real(1.0));
+        u_target_ = u_;
+    }
+}
+
 // Engine garage P9: the ECU's steady demand model per cam profile (each profile's own tables or live solve), blended.
+// P10: a lift-family engine's request scale (motoring, WOT) is the u = 1 node's; steady_torque blends over the lift pair.
 real SimulatedEngine::steady_motoring(real rpm) const {
-    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
-        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+    if (maps_->has_lift_family()) return node_motoring(maps_->lift_u.size() - 1, rpm);
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = tables_for(&mm);
         return live_steady() ? live_steady_torque_on(mm, rpm, 0, false) : t.steady_motoring_nm.evaluate(rpm);
     });
 }
 
 real SimulatedEngine::steady_wot(real rpm) const {
-    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
-        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+    if (maps_->has_lift_family()) return node_wot(maps_->lift_u.size() - 1, rpm);
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = tables_for(&mm);
         return live_steady() ? live_steady_torque_on(mm, rpm, 1, true) : t.steady_wot_nm.evaluate(rpm);
     });
 }
 
 real SimulatedEngine::steady_torque(real rpm, real plate) const {
-    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
-        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = tables_for(&mm);
         return live_steady() ? live_steady_torque_on(mm, rpm, plate, true) : t.steady_torque_nm.value(rpm, plate);
     });
 }
@@ -1066,8 +1316,8 @@ real SimulatedEngine::steady_torque(real rpm, real plate) const {
 // The electronic plate target: each profile's own inverse, blended (the plate at which the blended steady torque
 // meets the request lies between the two; blending the plates is the PROVISIONAL first-order approximation).
 real SimulatedEngine::inverse_plate_target(real rpm, real request) const {
-    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
-        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = tables_for(&mm);
         return live_steady() ? live_inverse_plate_on(mm, rpm, request) : t.inverse_plate.value(rpm, request);
     });
 }
@@ -1119,6 +1369,10 @@ void SimulatedEngine::request_replace_maps(std::shared_ptr<const SimulatedEngine
         throw std::runtime_error("SimulatedEngine::request_replace_maps: the new maps must have the same cam profiles as the "
                                  "running engine (engine garage P9: every profile set swaps together)");
     }
+    if (new_maps->lift_u != maps_->lift_u || new_maps->lift_control.idle_u != maps_->lift_control.idle_u) {
+        throw std::runtime_error("SimulatedEngine::request_replace_maps: the new maps must have the same intake lift nodes as the "
+                                 "running engine (engine garage P10: every lift node set swaps together)");
+    }
     SimulatedSteadyTables& t = pending_steady_;
     seed_steady_tables(t, *new_maps);
     if (p_amb_ != t.p_pa || t_amb_ != t.t_k) {
@@ -1132,6 +1386,15 @@ void SimulatedEngine::request_replace_maps(std::shared_ptr<const SimulatedEngine
             fill_steady_tables(*new_maps->cam_high, make_ambient(p_amb_, t_amb_), desc_idle_rpm_, idle_.max_throttle,
                                idle_.max_torque_nm, th, false);
             th.t_k = t_amb_;
+        }
+    }
+    for (std::size_t k = 0; k < pending_steady_nodes_.size(); ++k) { // engine garage P10: every lower lift node
+        SimulatedSteadyTables& tn = pending_steady_nodes_[k];
+        seed_steady_tables(tn, *new_maps->lift_nodes[k]);
+        if (p_amb_ != tn.p_pa || t_amb_ != tn.t_k) {
+            fill_steady_tables(*new_maps->lift_nodes[k], make_ambient(p_amb_, t_amb_), desc_idle_rpm_, idle_.max_throttle,
+                               idle_.max_torque_nm, tn, false);
+            tn.t_k = t_amb_;
         }
     }
     pending_maps_ = std::move(new_maps);
@@ -1149,6 +1412,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::apply_pending_maps_s
     if(!identical) {
         std::swap(steady_, pending_steady_);
         if(maps_->cam_high) std::swap(steady_hi_, pending_steady_hi_); // P9: every profile set swaps together
+        std::swap(steady_nodes_, pending_steady_nodes_); // P10: every lift node set swaps together (equal sizes; no-op if empty)
         if(live_steady()) set_live_ambient(p_amb_,t_amb_); // request may have preceded a newer atmospheric sample
     } // Identical maps must preserve the control cache/algorithm and remain invisible at any altitude.
     return old;
@@ -1156,13 +1420,18 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::apply_pending_maps_s
 
 void SimulatedEngine::init_state_for(EngineState state) {
     const SimulatedEngineMaps& m = *maps_;
+    if (maps_->has_lift_family() && u_override_ < real(0.0)) { // engine garage P10: every state starts at the idle lift
+        u_ = maps_->lift_control.idle_u;
+        u_target_ = u_;
+    }
+    const SimulatedSteadyTables& it = idle_tables(); // P10: the idle lift node's (the only set otherwise)
     if (state == EngineState::Running) {
-        p_im_ = live_steady()?live_idle_p_im_:steady_.idle_p_im;
+        p_im_ = live_steady()?live_idle_p_im_:it.idle_p_im;
         if (m.throttle_input == ThrottleInput::Mechanical) {
             x_thr_ = real(0.0);
-            x_iac_ = live_steady()?live_idle_ff_:steady_.idle_ff;
+            x_iac_ = live_steady()?live_idle_ff_:it.idle_ff;
         } else {
-            x_thr_ = live_steady()?live_idle_ff_:steady_.idle_ff;
+            x_thr_ = live_steady()?live_idle_ff_:it.idle_ff;
             x_iac_ = real(0.0);
         }
     } else {
@@ -1193,12 +1462,12 @@ SimulatedEngine::ManifoldRhs SimulatedEngine::manifold_rhs(real p_im, real omega
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
         const Ambient amb{turbo_->charge_pa,rt,real(1.0)/std::sqrt(rt)};
-        return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
             return manifold_rhs_impl(mm, amb, p_im, omega, x_thr, x_iac, nc);
         });
     }
     const Ambient amb{p_amb_, r_t_, inv_sqrt_rt_};
-    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
         return manifold_rhs_impl(mm, amb, p_im, omega, x_thr, x_iac, nc);
     });
 }
@@ -1208,13 +1477,13 @@ SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
         const Ambient amb{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)};
-        return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
             return evaluate_torque_impl(mm,amb,starter_,omega,p_im,fired,s_starve,starter_active,
                                         false,als,plant_k_,hyd_ref_rpm_,nc,limiter_rpm_override_);
         });
     }
     const Ambient amb{p_amb_, r_t_, inv_sqrt_rt_};
-    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
         return evaluate_torque_impl(mm, amb, starter_, omega, p_im, fired, s_starve, starter_active,
                                     false, als, plant_k_, hyd_ref_rpm_, nc, limiter_rpm_override_);
     });
@@ -1335,7 +1604,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
 
     // Idle PI in ACTUATOR units: plate position (electronic) or bypass
     // valve opening (mechanical); feed-forward = maps.idle_ff.
-    real ff = live_steady()?live_idle_ff_:steady_.idle_ff;
+    real ff = live_steady()?live_idle_ff_:idle_tables().idle_ff; // P10: the idle lift node's
     // Boost-aware idle feed-forward (2026-10-06, car_hyper idle hunt after a free rev): after a lift the
     // turbo rotors spin down over tens of seconds and keep the supply ahead of the plate far above ambient
     // (3.1 bar abs at the lift, still 1.2 bar 20 s later). The feed-forward above is solved against the
@@ -1366,7 +1635,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     }
     // Authority cap (IdleControlDesc::max_torque_nm, owner 2026-09-29): enough
     // to creep in gear, not a hidden launch aid.
-    const real idle_cap=live_steady()?live_idle_cap_x_:steady_.idle_cap_x;
+    const real idle_cap=live_steady()?live_idle_cap_x_:idle_tables().idle_cap_x;
     const real cap = idle_cap > real(0.0) ? std::min(idle_cap, idle_.max_throttle) : idle_.max_throttle;
     real theta_idle = real(0.0);
     if ((state_ == EngineState::Running || state_ == EngineState::Cranking) && !dfco_active_) {
@@ -1434,7 +1703,41 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         if (als_active_) x_thr_ = std::max(x_thr_, als->plate_floor); // I7d D5: anti-lag throttle kicker
         x_iac_ = x_idle;
     } else {
-        real x_target = std::max(inverse_plate_target(rpm, theta_req), x_idle);
+        real x_plate = real(0.0);
+        if (m.has_lift_family()) {
+            // Engine garage P10: the lift strategy. Pedal pressed: u and the plate from the torque request (lift_targets);
+            // released (idle, DFCO, an ignition cut): the idle lift, plate closed apart from the idle air. The shaft follows
+            // its target through a first-order lag capped at max_rate_per_s, and lands exactly on it within kLiftSnap.
+            const LiftControlDesc& lc = m.lift_control;
+            LiftTargets lt;
+            lt.u = lc.idle_u;
+            lt.plate = real(0.0);
+            if (theta_req >= real(0.01)) lt = lift_targets(rpm, theta_req);
+            u_target_ = lt.u;
+            lift_vacuum_mode_ = lt.vacuum_mode;
+            if (u_override_ >= real(0.0)) {
+                u_target_ = u_;
+            } else {
+                real u_next = lt.u;
+                if (lc.actuator_tau_s > real(0.0)) {
+                    if (h != u_act_h_) {
+                        u_act_h_ = h;
+                        u_act_a_ = h / (lc.actuator_tau_s + h);
+                    }
+                    u_next = u_ + u_act_a_ * (lt.u - u_);
+                }
+                const real max_step = lc.max_rate_per_s * h;
+                u_next = std::clamp(u_next, u_ - max_step, u_ + max_step);
+                if (std::abs(lt.u - u_next) <= kLiftSnap) u_next = lt.u;
+                u_ = std::clamp(u_next, m.lift_u.front(), real(1.0));
+            }
+            // Vacuum mode: the plate holds the target at the lift the plant has NOW (the manifold stays at the target while
+            // the shaft moves); otherwise the target's own plate.
+            x_plate = lt.vacuum_mode ? vacuum_plate(omega_old, p_amb_ - lc.vacuum_pa, u_, nc) : lt.plate;
+        } else {
+            x_plate = inverse_plate_target(rpm, theta_req);
+        }
+        real x_target = std::max(x_plate, x_idle);
         if (als_active_) x_target = std::max(x_target, als->plate_floor); // I7d D5: anti-lag bypass air
         if (!(actuator_tau_s_ > real(0.0))) {
             x_thr_ = x_target;
@@ -1575,14 +1878,14 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     if (turbo_ && comb && !dfco_active_ && !tcu.ignition_cut) {
         const real rt = kGasConstant * turbo_->charge_k;
         const Ambient exh_amb{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)};
-        const auto uncut = on_cam_profiles(m, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        const auto uncut = on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
             return evaluate_torque_impl(mm, exh_amb, starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_,
                                         hyd_ref_rpm_, nc);
         });
         r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
     } else if (n2o_on_ && comb && !dfco_active_ && !tcu.ignition_cut) {
         const Ambient amb_now{p_amb_, r_t_, inv_sqrt_rt_};
-        const auto uncut = on_cam_profiles(m, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        const auto uncut = on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
             return evaluate_torque_impl(mm, amb_now, starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_,
                                         hyd_ref_rpm_, nc);
         });
@@ -1796,6 +2099,8 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
     }
     // Engine garage P9: appended only with cam profiles, so every other engine keeps its byte layout.
     if (maps_->cam_high) { f.pod(cam_high_); f.pod(cam_w_); }
+    // Engine garage P10: appended only with an intake lift family (u_target_ and the plate mode are derived each substep).
+    if (maps_->has_lift_family()) f.pod(u_);
     return f.h;
 }
 

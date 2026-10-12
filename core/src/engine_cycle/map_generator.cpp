@@ -270,6 +270,10 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         throw std::runtime_error("engine map generator: the cycle desc has cam profiles - generate each profile's "
                                  "cycle_desc_for_cam_profile(desc, k)");
     }
+    if (!desc.lift_family.empty()) { // engine garage P10: one task per lift node
+        throw std::runtime_error("engine map generator: the cycle desc has an intake lift family - generate each node's "
+                                 "cycle_desc_for_lift_node(desc, k)");
+    }
     Impl& s = *impl_;
     s.desc = desc;
     CycleModelDesc invariant=desc;
@@ -1096,11 +1100,9 @@ std::size_t engine_map_progress_total(const CycleModelDesc& desc, const FuelDesc
     // Engine garage P9: what generate_engine_maps reports as `total` (fixed grid: one per point; adaptive pressure
     // sampling: the staged budget of generate_engine_maps above). A desc with cam profiles: the sum over the profiles
     // (what generate_engine_profile_maps reports).
-    if (!desc.cam_profiles.empty()) {
+    if (!desc.cam_profiles.empty() || !desc.lift_family.empty()) { // P9 profiles / P10 lift nodes: the sum
         std::size_t total = 0;
-        for (std::size_t k = 0; k < desc.cam_profiles.size(); ++k) {
-            total += engine_map_progress_total(cycle_desc_for_cam_profile(desc, k), fuel, quality);
-        }
+        for (const CycleModelDesc& d : engine_map_set_descs(desc)) total += engine_map_progress_total(d, fuel, quality);
         return total;
     }
     const auto& settings = desc.pressure_sampling;
@@ -1112,12 +1114,10 @@ std::size_t engine_map_progress_total(const CycleModelDesc& desc, const FuelDesc
 
 EngineMapsPtr generate_engine_profile_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
                                            jobs::JobSystem* pool, const MapGenerationControl* control) {
-    if (desc.cam_profiles.empty()) return generate_engine_maps(desc, fuel, quality, pool, control);
+    if (desc.cam_profiles.empty() && desc.lift_family.empty()) return generate_engine_maps(desc, fuel, quality, pool, control);
     if (control && control->cancel && control->cancel->load(std::memory_order_relaxed)) throw GenerationCancelled();
-    const std::size_t np = desc.cam_profiles.size();
-    std::vector<CycleModelDesc> pdesc;
-    pdesc.reserve(np);
-    for (std::size_t k = 0; k < np; ++k) pdesc.push_back(cycle_desc_for_cam_profile(desc, k));
+    const std::vector<CycleModelDesc> pdesc = engine_map_set_descs(desc); // P9 profiles / P10 u = 1 first, then ascending u
+    const std::size_t np = pdesc.size();
     std::vector<std::size_t> points(np, 0);
     std::size_t total = 0;
     if (control && control->on_progress) {
@@ -1138,7 +1138,10 @@ EngineMapsPtr generate_engine_profile_maps(const CycleModelDesc& desc, const Fue
         offset += points[k];
     }
     auto out = std::make_shared<EngineMaps>(*gens.front());
-    for (std::size_t k = 1; k < np; ++k) out->cam_profiles.push_back(gens[k]);
+    for (std::size_t k = 1; k < np; ++k) {
+        if (desc.lift_family.empty()) out->cam_profiles.push_back(gens[k]);
+        else out->lift_nodes.push_back(gens[k]);
+    }
     return out;
 }
 

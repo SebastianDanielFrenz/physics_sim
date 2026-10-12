@@ -59,6 +59,11 @@ std::unique_ptr<VehicleVoice> VehicleVoice::try_create(const ps::vehicle::Vehicl
         out_reason = "the simulated engine switches cam profiles (engine garage P9) - the live voice has no cam switching yet (open point G10)";
         return nullptr;
     }
+    if (sim->has_lift_family()) {
+        // Engine garage P10: a continuous intake lift family is one cylinder model per lift node; the voice renders one.
+        out_reason = "the simulated engine has a continuous intake lift family (engine garage P10) - the live voice renders one fixed intake lift (open point G10)";
+        return nullptr;
+    }
     out_reason = "ok";
 
     // ps_audio A11 live dx (see vehicle_voice.h's header comment for the
