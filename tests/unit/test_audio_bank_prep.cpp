@@ -13,6 +13,9 @@
 // 1d178f47cb870602 (4253824 bytes), hyper_v8_one1_audio 79cc5e377994856c (6380736 bytes). The cache KEY is
 // deliberately not pinned against the old value: it changed (P6 point 3, see audio_bank_prep.h) - the old
 // keys were ef8ced1e30d5013d / 4e8cb3985c3f746c.
+// Engine garage P7d re-pinned demo_i4_pipes to 1b0b7ef18220095b (was 1d178f47cb870602, same 4253824 bytes; key
+// 4c6a6ffa5db5cc23 -> 4109ceae432c96b0): its generated maps gained the wide-open-throttle top row (generator v4), and
+// the bank records the runtime engine on those maps. The hyper (compressor-fed, generator v3) is unchanged.
 //
 // Each guard has a recorded sabotage (out/garage_p6_progress.md).
 #include "cycle_pipe_fixtures.h"
@@ -188,7 +191,7 @@ TEST_CASE("Audio bank prep P1: demo_i4_pipes bank equals the pre-move generator;
                 static_cast<unsigned long long>(r10.key), static_cast<unsigned long long>(bank_content_hash(*r10.bank)), r10.bytes,
                 log10.done.size(), log10.total);
     CHECK_FALSE(r10.cache_hit);
-    CHECK(bank_content_hash(*r10.bank) == 0x1d178f47cb870602ULL);  // pre-move generator
+    CHECK(bank_content_hash(*r10.bank) == 0x1b0b7ef18220095bULL);  // pre-move generator; P7d maps (was 0x1d178f47cb870602)
     CHECK(r10.bytes == 4253824);
     CHECK(r10.bank->key == r10.key);
     CHECK(r10.path == tools::audio_bank_cache_path(dir10.string(), r10.key));
@@ -226,7 +229,7 @@ TEST_CASE("Audio bank prep P1: demo_i4_pipes bank equals the pre-move generator;
     std::printf("P1: 1 worker %.2f s\n", r1.seconds);
     CHECK_FALSE(r1.cache_hit);
     CHECK(r1.key == r10.key);
-    CHECK(bank_content_hash(*r1.bank) == 0x1d178f47cb870602ULL);
+    CHECK(bank_content_hash(*r1.bank) == 0x1b0b7ef18220095bULL);
     CHECK(read_file(r1.path) == read_file(r10.path));  // the cache files are byte-identical
     CHECK(log1.done.size() == log10.done.size());
     CHECK(log1.strictly_by_one());
