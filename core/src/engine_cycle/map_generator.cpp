@@ -266,6 +266,10 @@ const char* quality_name(MapQuality q) {
 
 EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality)
     : impl_(std::make_unique<Impl>()) {
+    if (!desc.cam_profiles.empty()) { // engine garage P9: one task per profile, never the profile list itself
+        throw std::runtime_error("engine map generator: the cycle desc has cam profiles - generate each profile's "
+                                 "cycle_desc_for_cam_profile(desc, k)");
+    }
     Impl& s = *impl_;
     s.desc = desc;
     CycleModelDesc invariant=desc;
@@ -511,6 +515,11 @@ void EngineMapGenTask::run_point(std::size_t i) {
             s.results[i] = r.mean;
         } else {
             s.results[i] = engine_cycle::run_operating_point(*s.proto, s.ops[i], s.settings);
+            // Engine garage P9: a lumped grid node that does not breathe (a long-overlap cam at a low manifold
+            // pressure: the exhaust fills the intake - the K20A's high VTEC profile at 20 kPa from 5500 rpm) is filled
+            // in finish() from the nearest breathing node above, as P7d does for held pipe nodes. Such a node made
+            // finish() throw before, so every engine that loaded before generates bit-identical maps.
+            if (i < s.grid_n && !node_breathes(s.desc, s.lhv, s.afr, s.ops[i].p_im_pa, s.results[i])) s.nonbreathing[i] = 1;
         }
         const bool knock_point = i < s.grid_n || (s.wot && i >= s.wot_base);
         if (s.knock && knock_point && !s.nonbreathing[i]) {
@@ -1081,6 +1090,56 @@ EngineMapsPtr generate_engine_maps(const CycleModelDesc& desc, const FuelDesc& f
     }
     if(settings.allow_budget_limit)return bounded_result();
     throw std::runtime_error("adaptive pressure sampling: pass budget exhausted before validation converged");
+}
+
+std::size_t engine_map_progress_total(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {
+    // Engine garage P9: what generate_engine_maps reports as `total` (fixed grid: one per point; adaptive pressure
+    // sampling: the staged budget of generate_engine_maps above). A desc with cam profiles: the sum over the profiles
+    // (what generate_engine_profile_maps reports).
+    if (!desc.cam_profiles.empty()) {
+        std::size_t total = 0;
+        for (std::size_t k = 0; k < desc.cam_profiles.size(); ++k) {
+            total += engine_map_progress_total(cycle_desc_for_cam_profile(desc, k), fuel, quality);
+        }
+        return total;
+    }
+    const auto& settings = desc.pressure_sampling;
+    if (settings.enabled) {
+        return (static_cast<std::size_t>(settings.max_passes) + 1) * settings.max_points * (desc.grid_rpm.size() + 40);
+    }
+    return EngineMapGenTask(desc, fuel, quality).point_count();
+}
+
+EngineMapsPtr generate_engine_profile_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
+                                           jobs::JobSystem* pool, const MapGenerationControl* control) {
+    if (desc.cam_profiles.empty()) return generate_engine_maps(desc, fuel, quality, pool, control);
+    if (control && control->cancel && control->cancel->load(std::memory_order_relaxed)) throw GenerationCancelled();
+    const std::size_t np = desc.cam_profiles.size();
+    std::vector<CycleModelDesc> pdesc;
+    pdesc.reserve(np);
+    for (std::size_t k = 0; k < np; ++k) pdesc.push_back(cycle_desc_for_cam_profile(desc, k));
+    std::vector<std::size_t> points(np, 0);
+    std::size_t total = 0;
+    if (control && control->on_progress) {
+        for (std::size_t k = 0; k < np; ++k) total += (points[k] = engine_map_progress_total(pdesc[k], fuel, quality));
+    }
+    std::vector<EngineMapsPtr> gens;
+    std::size_t offset = 0;
+    for (std::size_t k = 0; k < np; ++k) {
+        MapGenerationControl c;
+        c.cancel = control ? control->cancel : nullptr;
+        if (control && control->on_progress) {
+            c.on_progress = [control, offset, total](std::size_t done, std::size_t) {
+                control->on_progress(std::min(offset + done, total), total);
+            };
+        }
+        if (k == 0 && control && control->on_partial_maps) c.on_partial_maps = control->on_partial_maps;
+        gens.push_back(generate_engine_maps(pdesc[k], fuel, quality, pool, &c));
+        offset += points[k];
+    }
+    auto out = std::make_shared<EngineMaps>(*gens.front());
+    for (std::size_t k = 1; k < np; ++k) out->cam_profiles.push_back(gens[k]);
+    return out;
 }
 
 void validate_engine_map_generation(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {

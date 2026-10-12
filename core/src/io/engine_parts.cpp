@@ -44,10 +44,11 @@ void require_part_format(const json& j, const std::string& kind, const std::stri
 // ---- ECU part (physics_sim.ecu/1): a patch restricted to the ECU-owned engine paths --------------------------
 constexpr const char* kEcuTopKeys[] = {"idle_rpm",        "stall_rpm",         "fire_rpm",
                                        "start_complete_rpm", "dfco_enable_rpm", "dfco_reenable_rpm",
-                                       "idle_control",    "limiter",           "throttle_actuator_tau_s"};
+                                       "idle_control",    "limiter",           "throttle_actuator_tau_s",
+                                       "switching"}; // engine garage P9: the cam-profile switching rule
 constexpr const char* kEcuBlockKeys[] = {"lambda_target", "spark_advance_deg", "ignition_strategy", "knock_margin_deg"}; // engine "ecu" object (P7: + knock opt-in)
 constexpr const char* kEcuCycleKeys[] = {"spark_advance_deg", "cam"};         // engine "cycle" object
-constexpr const char* kCamKeys[] = {"intake_lift", "exhaust_lift"};           // engine "cycle" object
+constexpr const char* kCamKeys[] = {"intake_lift", "exhaust_lift", "profiles"}; // engine "cycle" object (P9: + profiles)
 
 template <std::size_t N>
 bool in_list(const std::string& k, const char* const (&list)[N]) {
@@ -136,8 +137,24 @@ json cam_patch(const json& part, const std::string& path, const json& engine_cyc
         if (in_list(k, kCamKeys) || ends_with_source(k)) {
             patch[k] = it.value();
         } else {
-            throw std::runtime_error(path + ": '" + k + "' is not a cam field (a cam part sets intake_lift, exhaust_lift, fits)");
+            throw std::runtime_error(path + ": '" + k + "' is not a cam field (a cam part sets intake_lift, exhaust_lift, profiles, "
+                                     "fits)");
         }
+    }
+    // Engine garage P9: a cam part is the WHOLE cam. A profile cam carries its lifts inside each profile, so it removes the
+    // engine's single lifts (RFC 7396 null); a single-lift cam removes an engine's profiles. A merge then never leaves
+    // both; the engine reader's "profiles and intake_lift/exhaust_lift together" rejection fires only for an engine file
+    // that writes both itself.
+    if (part.contains("profiles")) {
+        if (part.contains("intake_lift") || part.contains("exhaust_lift")) {
+            throw std::runtime_error(path + ": a cam with 'profiles' carries intake_lift/exhaust_lift inside each profile, not at "
+                                     "the top level");
+        }
+        for (const char* k : {"intake_lift", "exhaust_lift"}) {
+            if (engine_cycle.contains(k)) patch[k] = nullptr;
+        }
+    } else if (engine_cycle.contains("profiles")) {
+        patch["profiles"] = nullptr;
     }
     if (part.contains("fits")) {
         const json& fits = part.at("fits");

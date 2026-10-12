@@ -54,6 +54,11 @@ std::unique_ptr<VehicleVoice> VehicleVoice::try_create(const ps::vehicle::Vehicl
         out_reason = "the simulated engine has no fuel";
         return nullptr;
     }
+    if (sim->has_cam_profiles()) {
+        // Engine garage P9: the live voice renders ONE cylinder model; switching it is open point G10.
+        out_reason = "the simulated engine switches cam profiles (engine garage P9) - the live voice has no cam switching yet (open point G10)";
+        return nullptr;
+    }
     out_reason = "ok";
 
     // ps_audio A11 live dx (see vehicle_voice.h's header comment for the

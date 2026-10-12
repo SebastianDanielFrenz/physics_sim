@@ -299,6 +299,10 @@ int main(int argc, char** argv) {
                                       "' has no \"cycle\" block (ps_audio::Voice needs the live cycle model, not "
                                       "pre-generated maps alone)");
         }
+        if (sim->has_cam_profiles()) {
+            throw std::runtime_error("ps_engine_audio: '" + args.engine_path +
+                                      "' switches cam profiles (engine garage P9); the voice has no cam switching yet (open point G10)");
+        }
         if (sim->fuels.empty()) {
             throw std::runtime_error("ps_engine_audio: '" + args.engine_path + "' has no fuel");
         }

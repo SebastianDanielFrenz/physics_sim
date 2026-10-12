@@ -1106,6 +1106,13 @@ entry throws before any work. A sweep whose points all started before the flag w
 built from a descriptor needs `Config::engine_thermal_path` when it has a cooling system (there is no engine file to
 read `default_thermal` from).
 
+Cam profiles (engine garage P9): `DynoSweepSpec::cam_profile` -1 (default) runs each point on the profile the ECU holds
+in steady state when the sweep comes up from below - high iff `rpm >= switching.rpm_on` and the low profile's steady
+manifold pressure there is `>= min_p_im` (the oil condition counts as met: the dyno has no thermal model); a stepped
+(turbo) engine lets its running ECU decide from a low-cam start. `0` / `1` hold that profile at every point - two sweeps
+give both WOT curves, whose crossing is where the switch belongs. `DynoPoint::cam_profile` reports the profile the point
+ran on (always 0 without profiles). Test D1 in `tests/unit/test_cam_profiles.cpp`.
+
 Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`), `tests/unit/test_limit_findings.cpp` (L1-L21, `[dyno]`, limit findings; ~5 s in release, not `[long]`),
 `tests/unit/test_limit_remedies.cpp` (R1-R13, `[dyno]` + `[n2o]`/`[turbo]`: nitrous in the sweep, kit/bottle findings, the solvers; R12 is `[long]`).
 
@@ -1259,8 +1266,8 @@ design attributes to it is [AS] "recalled", never [C]; no page numbers are claim
 A `BuildIssue` is `{rule, severity, slot, field_pointer, message, source_label, value, limit, unit}`; `severity` is P3b's
 `LimitSeverity` (`Exceeded` = the garage refuses to save or drive it, `Limiting` = buildable but the rule caps the result, `Near`
 = worth telling the player), `field_pointer` an RFC 6901 pointer into the part file named by `slot` ("engine" or
-"turbo_configuration"), `source_label` the rule's tag text. Issues are ordered by rule, then pointer. `has_blocking_issue` is true
-when any is `Exceeded`. `BuildRule` values are append-only (0..10).
+"turbo_configuration"; engine garage P9 adds "ecu" and "cam"), `source_label` the rule's tag text. Issues are ordered by rule,
+then pointer. `has_blocking_issue` is true when any is `Exceeded`. `BuildRule` values are append-only (0..13).
 
 | Rule | Pointer | Severity | Number | Source |
 |---|---|---|---|---|
@@ -1275,14 +1282,18 @@ when any is `Exceeded`. `BuildRule` values are append-only (0..10).
 | `LimiterAboveRpmGrid` (8) | `/cycle/grid_rpm` | Near / Limiting / Exceeded at 0-5 / 5-15 / >15 % over the last node | limiter vs the last rpm node | [AS]; stock demo I4: 6800 over 6500 = 4.6 % Near |
 | `BoostAbovePressureGrid` (9) | `/cycle/grid_p_im_kpa` | same graded | ISA ambient + boost target vs the last manifold node (or `pressure_sampling.max_pa`) | [AS] |
 | `LimiterAboveCurve` (10) | `/wot_torque_nm_vs_rpm`, `/motoring_torque_nm_vs_rpm` | graded as above | torque-map engine: limiter (or the governor's high idle, if lower) vs the last rpm of each curve | [AS] |
+| `CamSwitchWindow` (11) | ECU `/switching/rpm_on`, `/switching/rpm_off` | Limiting when the switch band leaves `grid_rpm`; Near otherwise | `rpm_on / limiter` 0.45-0.85; hysteresis `rpm_on - rpm_off` 50-1000 rpm | [AS] Honda VTEC 0.60-0.72 of the limiter, widened; no OEM hysteresis found |
+| `CamProfileOrder` (12) | cam `/profiles/1/intake_lift` (or exhaust) | Near | the second ("high") profile has less peak lift or less lift area than the first | [D] |
+| `CamLiftOverValve` (13) | cam `/profiles/<k>/intake_lift` (or exhaust) | Limiting | peak lift / valve head diameter <= 0.40 | [AS] 0.35 on an aftermarket K20 race cam (junauto.co.jp), widened; L/d 0.25 = curtain area equals seat area |
 
-Which rules apply: a simulated engine with a `cycle` block gets 0-9; a simulated engine without one (measured maps, e.g.
+Which rules apply: a simulated engine with a `cycle` block gets 0-9, plus 11-13 when its cam has profiles; a simulated engine without one (measured maps, e.g.
 `toyota_a25a_fks_sim`) only `MeanPistonSpeed` - its map axes are measured data the player cannot edit, and its VE axis ends below
 the limiter and below ambient (reported per dyno point by P3b); a torque-map engine only rule 10; a rotary engine and every other
 component nothing. The rules are static: they never call the generator.
 
 Shipped data (cases S1/S2): every `data/engines/*.json` has no `Limiting` and no `Exceeded`. Two `Near`: `demo_i4_pipes`
-(`LimiterAboveRpmGrid`, 4.6 %) and the hyper (`MeanPistonSpeed` 26.2 m/s at 8250 rpm).
+(`LimiterAboveRpmGrid`, 4.6 %) and the hyper (`MeanPistonSpeed` 26.2 m/s at 8250 rpm). The P9 `honda_k20a_dc5` has no issue at
+all (test B1: switch at 6000 / 8400 = 0.714, hysteresis 200 rpm, L/d 0.23-0.35).
 
 ### `classify_engine_change` (A11)
 
@@ -1318,6 +1329,11 @@ lambda-target edit are `Maps`; on an engine that does
 not opt in a fuel's octane is no generator input, so editing or removing a `knock` block is `Runtime` (test K7). The burnt
 fuel selected by a fuel tank needs no regeneration: every listed fuel's table is generated with the maps, and the Powertrain
 picks the tank fuel's table at construction (and on `replace_engine_maps`).
+
+Cam profiles (engine garage P9): the ECU `switching` rule is `Runtime` (the maps do not depend on it; pointer
+`/ecu/switching`); a lift edit inside a profile moves that profile's key and is `Maps`; a different profile count (adding
+or removing the profiles, i.e. a single-lift cam <-> a profile cam) is `Respawn` - the runtime swaps every set together and
+refuses a count change; a profile `id` rename is `None` (a label, not in any key). Test C1.
 
 ### Grid helpers (A12)
 
@@ -1389,6 +1405,48 @@ Removing a compressor: `forced_induction: "none"` with `ambient_grid_p_im` (the 
 the section above. Not modelled: the ECU tables of an engine clamp above their last row (the A25A's lambda and spark tables end
 at 105 kPa) and there is no knock limit yet (C17b), so a boosted A25A runs its NA spark and lambda at 2 bar absolute - a
 convertible engine's torque at high boost is optimistic by what knock control would take.
+
+## Cam profiles: discrete switching (engine garage P9)
+
+A cycle-block engine whose cam carries `profiles` ([cam.md](cam.md#profiles--discrete-cam-profiles-engine-garage-p9))
+and whose ECU carries `switching` ([ecu.md](ecu.md#switching--cam-profile-switching-engine-garage-p9)) - Honda VTEC and
+similar two-lobe systems.
+
+Generation: one complete map set per profile, from `cycle_desc_for_cam_profile(desc, k)` (the desc with profile k's lifts
+in `intake_lift`/`exhaust_lift` and no profiles), one after the other, each run itself parallel. Each set has its own
+`.psmaps` file under its own key, `engine_map_profile_cache_keys` = `engine_map_cache_key` of each per-profile desc - the
+same key a single-lift engine written with those lifts gets, so a desc without profiles keys exactly as before (test H3
+extended). The loader looks every set up first and generates only the missing ones; progress is one count over all
+generated sets (`engine_map_progress_total` sums over the profiles), cancel stops the whole load and writes no file of
+that run. Lumped and pipe engines, including the P7d wide-open-throttle row, run unchanged per profile. Sketch / Preview /
+Full for the shipped K20A (both profiles, 10 workers): 0.03 / 0.08 / 0.39 s.
+
+Non-breathing lumped nodes (P9, generator change): a lumped grid node whose cycle has no net fresh air (a long-overlap
+high cam at a low manifold pressure pushes the charge back out) is filled from the nearest breathing node above, as P7d
+does for pipe engines (`EngineMaps::nonbreathing_points`, unhashed). Before P9 such a node threw ("no net fresh air"), so
+every engine that loaded before is bit-identical. The K20A high cam fills 34-36 of its 171 Full nodes, all at or below
+30 kPa.
+
+Runtime (`SimulatedEngine`): every set gets its own steady tables; the ECU latches a profile with hysteresis and a blend
+weight `w` ramps over `transition_s` (rule in ecu.md). Every model lookup is `low + w * (high - low)`, exactly one profile
+at `w = 0` and `w = 1` (test R1, 1e-12). Idle control runs on the low profile. The switching state is hashed only on an
+engine with profiles; the hot swap (`World::replace_engine_maps`) needs a maps object whose `cam_profiles` holds exactly
+the engine's extra sets and swaps them together. No allocation per substep or tick (test Z1).
+
+Not supported (rejected): the audio bank and the live voice for a profile engine (the voice runs one cycle model; open
+point G10); a knock-limited ECU without a spark table (MBT tracking with profiles); more than two profiles.
+
+Shipped: `data/engines/honda_k20a_dc5.json` (Honda K20A, Integra Type R DC5, lumped cycle block; geometry, compression,
+power/torque ratings, the VTEC point and the limiter cited in the file) with `data/ecus/honda_k20a_dc5.json` and
+`data/cams/honda_k20a_dc5_vtec.json` (lift curves [AS] from `tools/enginedata/k20a_vtec_cam.py` - no OEM lift data). Not
+fitted to any dyno. Measured (Full maps, dyno-held, both profiles): the WOT curves cross at 4421 rpm against the 6000 rpm
+switch point (test V1, [!mayfail], the crossing follows the assumed cam/runner data - see the hidden diag), peak 252.6 N*m
+vs the cited 206 (the air excess of the [AS] quarter-wave runner, as for the A25A), 165.8 kW at 7000 rpm vs the cited 162
+at 8000.
+
+Tests: `tests/unit/test_cam_profiles.cpp` (`[vvl][drivetrain][cycle]`: L1-L3 loader/rejections/extends, K1-K2 keys and
+the cache, R1 blend, V1-V2 WOT crossing and switching, H1 hash and hot swap, D1 dyno, C1 change classes, B1 rules, Z1 zero
+allocation, P1 progress/cancel, A1 audio refusal; hidden `[.][diag]` timing, spark table, V1 inputs).
 
 ## Part slots, `extends` and the user layer (engine garage P2)
 

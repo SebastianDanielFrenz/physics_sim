@@ -91,6 +91,12 @@ struct DynoSweepSpec {
     // bit-identical to before. A simulated engine only (a torque-map engine ignores a kit in the car, so a sweep with one
     // throws std::invalid_argument); the engine is then always stepped (also without a turbo). Rules in engine.md.
     std::optional<DynoNitrous> nitrous;
+    // Engine garage P9 (an engine with cam profiles; ignored by every other engine): -1 (default) = the profile the ECU
+    // holds in steady state when the sweep comes up from below - high iff rpm >= switching.rpm_on and the low profile's
+    // steady manifold pressure at that point is >= min_p_im (the oil condition counts as met: no thermal model on the
+    // dyno); for a stepped engine the running ECU itself decides from its low-cam start. 0 / 1 = hold that profile at
+    // every point (two sweeps give both WOT curves; their crossing is where the switch belongs).
+    int cam_profile = -1;
 };
 
 struct DynoPoint {
@@ -122,6 +128,9 @@ struct DynoPoint {
     // hit max_settle_s first (e.g. a low-rpm turbo equilibrium that keeps drifting); its values are the last window.
     bool converged = true;
     real settle_s = 0.0;      // simulated seconds the point ran (0 for the instant kinds)
+    // Engine garage P9: the cam profile the point ran on (0 = low/only, 1 = high); for a stepped point the ECU's latched
+    // request at the end of the window. Always 0 for an engine without cam profiles.
+    int cam_profile = 0;
 };
 
 struct DynoResult {

@@ -181,6 +181,19 @@ struct CycleModelDesc {
 
     ValveLiftProfile intake_lift;
     ValveLiftProfile exhaust_lift;
+    // Engine garage P9 (VTEC-style discrete cam-profile switching, docs/data_formats/cam.md "profiles"): empty = one
+    // cam (every engine before P9; the generator, the cache key and every map are unchanged). Non-empty: exactly
+    // kMaxCamProfiles profiles; intake_lift/exhaust_lift above hold profile 0's lifts (the loader copies them) and the
+    // generator runs once per profile on cycle_desc_for_cam_profile(desc, k) - a desc with these lifts substituted and
+    // this list cleared, so each profile's .psmaps key is the key of the same engine written with that cam alone (the
+    // profile id is never part of a key). The generator and engine_map_cache_key reject a desc whose list is non-empty.
+    struct CamProfile {
+        std::string id;
+        ValveLiftProfile intake_lift;
+        ValveLiftProfile exhaust_lift;
+    };
+    static constexpr std::size_t kMaxCamProfiles = 2; // one ECU switching rule (rpm_on/rpm_off) selects between two
+    std::vector<CamProfile> cam_profiles;
     int intake_valves = 2;
     int exhaust_valves = 2;
     real intake_valve_d_m = 0.0;  // valve head (inner seat) diameter

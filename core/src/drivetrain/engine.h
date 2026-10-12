@@ -107,6 +107,10 @@ struct Sensors {
     real friction_scale = 1.0;
     real ecu_friction_scale = 1.0;
     real friction_reference_rpm = 2000.0;
+    // Engine garage P9: the oil temperature the ECU reads (deg C) - Powertrain fills it from EngineThermal's oil lump
+    // (one tick old). NaN = no thermal model: a cam-switching ECU then treats its min_oil_c condition as met (a warm
+    // engine, the thermal plan's warm-start default). Read only by an engine with cam profiles; never hashed.
+    real oil_temperature_c = std::numeric_limits<real>::quiet_NaN();
 };
 // PHYS-033 P4 I7a C3: the throttle_stage.h stage's own output - a single
 // combined command plus the TCU-forwarded (electronic) or fixed (mechanical)

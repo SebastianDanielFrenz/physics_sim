@@ -654,6 +654,81 @@ void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real i
     t.p_pa = amb.p_amb;
 }
 
+// Engine garage P9: the per-engine steady tables start as a copy of the shared maps' own (built at ISA).
+void seed_steady_tables(SimulatedSteadyTables& t, const SimulatedEngineMaps& m) {
+    t.p_pa = m.ref_p_pa;
+    t.t_k = m.ref_t_k;
+    t.steady_wot_nm = m.steady_wot_nm;
+    t.steady_motoring_nm = m.steady_motoring_nm;
+    t.steady_torque_nm = m.steady_torque_nm;
+    t.inverse_plate = m.inverse_plate;
+    t.idle_ff = m.idle_ff;
+    t.idle_p_im = m.idle_p_im;
+    t.idle_cap_x = m.idle_cap_x;
+}
+
+// Engine garage P9 cam blend: (1 - w) * a + w * b. VTEC engages cylinder by cylinder (each rocker's lock pin moves
+// when its own lobe is on the base circle), so during the transition a fraction w of the charges runs on the high
+// lobes: every extensive output (air, fuel, torque terms and their derivatives) is the weighted sum of the two
+// profiles' values; intensive diagnostics (lambda, spark, efficiencies) are reported as the same weighted mean.
+real blend(real a, real b, real w) { return a + w * (b - a); }
+
+SimulatedEngine::ManifoldRhs blend(const SimulatedEngine::ManifoldRhs& a, const SimulatedEngine::ManifoldRhs& b, real w) {
+    SimulatedEngine::ManifoldRhs r;
+    r.f = blend(a.f, b.f, w);
+    r.dfdp = blend(a.dfdp, b.dfdp, w);
+    r.m_thr = blend(a.m_thr, b.m_thr, w);
+    r.m_cyl = blend(a.m_cyl, b.m_cyl, w);
+    return r;
+}
+
+SimulatedEngine::TorqueEval blend(const SimulatedEngine::TorqueEval& a, const SimulatedEngine::TorqueEval& b, real w) {
+    SimulatedEngine::TorqueEval r;
+    r.tau = blend(a.tau, b.tau, w);
+    r.dtau_domega = blend(a.dtau_domega, b.dtau_domega, w);
+    r.tau_comb = blend(a.tau_comb, b.tau_comb, w);
+    r.tau_pump = blend(a.tau_pump, b.tau_pump, w);
+    r.tau_fric = blend(a.tau_fric, b.tau_fric, w);
+    r.tau_start = blend(a.tau_start, b.tau_start, w);
+    r.m_air_rev = blend(a.m_air_rev, b.m_air_rev, w);
+    r.m_fuel_rev = blend(a.m_fuel_rev, b.m_fuel_rev, w);
+    r.fire = blend(a.fire, b.fire, w);
+    r.lambda = blend(a.lambda, b.lambda, w);
+    r.spark_deg = blend(a.spark_deg, b.spark_deg, w);
+    r.theta_mbt_deg = blend(a.theta_mbt_deg, b.theta_mbt_deg, w);
+    r.knock_retard_deg = blend(a.knock_retard_deg, b.knock_retard_deg, w);
+    r.eta_i = blend(a.eta_i, b.eta_i, w);
+    r.f_lambda = blend(a.f_lambda, b.f_lambda, w);
+    r.eta_spark = blend(a.eta_spark, b.eta_spark, w);
+    r.tau_comb_unretarded = blend(a.tau_comb_unretarded, b.tau_comb_unretarded, w);
+    r.tau_comb_no_n2o_retard = blend(a.tau_comb_no_n2o_retard, b.tau_comb_no_n2o_retard, w);
+    r.cut_fraction = blend(a.cut_fraction, b.cut_fraction, w);
+    r.charge.t_in_k = blend(a.charge.t_in_k, b.charge.t_in_k, w);
+    r.charge.t_mix_k = blend(a.charge.t_mix_k, b.charge.t_mix_k, w);
+    r.charge.air_kg_rev = blend(a.charge.air_kg_rev, b.charge.air_kg_rev, w);
+    r.charge.n2o_kg_rev = blend(a.charge.n2o_kg_rev, b.charge.n2o_kg_rev, w);
+    r.charge.ecu_fuel_kg_rev = blend(a.charge.ecu_fuel_kg_rev, b.charge.ecu_fuel_kg_rev, w);
+    r.charge.kit_fuel_kg_rev = blend(a.charge.kit_fuel_kg_rev, b.charge.kit_fuel_kg_rev, w);
+    r.charge.o2_equiv_air_kg_rev = blend(a.charge.o2_equiv_air_kg_rev, b.charge.o2_equiv_air_kg_rev, w);
+    r.charge.lambda_combined = blend(a.charge.lambda_combined, b.charge.lambda_combined, w);
+    r.charge.overflow = a.charge.overflow || b.charge.overflow;
+    r.n2o_rev = blend(a.n2o_rev, b.n2o_rev, w);
+    r.n2o_burnt_rev = blend(a.n2o_burnt_rev, b.n2o_burnt_rev, w);
+    r.kit_fuel_rev = blend(a.kit_fuel_rev, b.kit_fuel_rev, w);
+    r.burnt_fuel_rev = blend(a.burnt_fuel_rev, b.burnt_fuel_rev, w);
+    return r;
+}
+
+// f evaluated on the low profile's maps, on the high one's, or both blended - exactly the single-profile value at
+// w <= 0 and w >= 1, and always the low (only) profile for an engine without cam profiles.
+template <class F>
+auto on_cam_profiles(const SimulatedEngineMaps& lo, real w, F&& f) -> decltype(f(lo)) {
+    const SimulatedEngineMaps* hi = lo.cam_high.get();
+    if (hi == nullptr || !(w > real(0.0))) return f(lo);
+    if (w >= real(1.0)) return f(*hi);
+    return blend(f(lo), f(*hi), w);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -675,6 +750,11 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
         throw std::runtime_error("SimulatedEngine: rotary architecture is not implemented yet (I7e C13)");
     }
     if (desc.fuels.empty()) throw std::runtime_error("SimulatedEngine: at least one fuel is required");
+    if (desc.has_cam_profiles() &&
+        (desc.cam_profile_ids.size() != CycleModelDesc::kMaxCamProfiles || desc.cam_profile_maps.size() + 1 != desc.cam_profile_ids.size())) {
+        throw std::runtime_error("SimulatedEngine: an engine with cam profiles needs exactly 2 profile ids and the second profile's "
+                                 "maps in cam_profile_maps (engine garage P9)");
+    }
     if (!(desc.intake_manifold_volume_m3 > real(0.0))) throw std::runtime_error("SimulatedEngine: intake_manifold_volume_m3 must be > 0");
     if (desc.maps.friction_torque_nm.x.empty() || desc.maps.friction_torque_nm.x.front() != real(0.0)) {
         throw std::runtime_error("SimulatedEngine: maps.friction_torque_nm must start at rpm 0");
@@ -806,6 +886,22 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
     f.pod(m->idle_p_im);
     // Owner 2026-09-29: folded only when set, so engines without it hash as before.
     if (desc.idle.max_torque_nm > real(0.0)) f.pod(desc.idle.max_torque_nm);
+    if (desc.has_cam_profiles()) {
+        // Engine garage P9: the high profile is the same engine on its own generated maps (its own steady tables);
+        // its hash and the switching rule join this hash only here, so a profile-free engine keeps its byte layout.
+        SimulatedEngineDesc hd = desc;
+        hd.maps = desc.cam_profile_maps.front();
+        hd.cam_profile_ids.clear();
+        hd.cam_profile_maps.clear();
+        m->cam_high = build_maps_impl(hd, steady_tables);
+        m->cam_switching = desc.cam_switching;
+        f.pod(m->cam_high->content_hash);
+        f.pod(m->cam_switching.rpm_on);
+        f.pod(m->cam_switching.rpm_off);
+        f.pod(m->cam_switching.min_p_im_pa);
+        f.pod(m->cam_switching.min_oil_c);
+        f.pod(m->cam_switching.transition_s);
+    }
     m->content_hash = f.h;
     return m;
 }
@@ -836,15 +932,11 @@ SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_pt
     // C12: the per-engine derived tables start as a copy of the shared
     // maps' own (built at ref_p_pa/ref_t_k = ISA), so set_ambient(ISA)
     // below refills nothing.
-    steady_.p_pa = maps_->ref_p_pa;
-    steady_.t_k = maps_->ref_t_k;
-    steady_.steady_wot_nm = maps_->steady_wot_nm;
-    steady_.steady_motoring_nm = maps_->steady_motoring_nm;
-    steady_.steady_torque_nm = maps_->steady_torque_nm;
-    steady_.inverse_plate = maps_->inverse_plate;
-    steady_.idle_ff = maps_->idle_ff;
-    steady_.idle_p_im = maps_->idle_p_im;
-    steady_.idle_cap_x = maps_->idle_cap_x;
+    if (desc.has_cam_profiles() != (maps_->cam_high != nullptr)) {
+        throw std::runtime_error("SimulatedEngine: the desc and its maps disagree on cam profiles (engine garage P9)");
+    }
+    seed_steady_tables(steady_, *maps_);
+    if (maps_->cam_high) seed_steady_tables(steady_hi_, *maps_->cam_high);
     set_ambient(kIsaPressurePa, kIsaTemperatureK);
     state_ = desc.initial_state == EngineInitialState::Running ? EngineState::Running : EngineState::Off;
     init_state_for(state_);
@@ -901,6 +993,11 @@ void SimulatedEngine::set_ambient(real p_pa, real t_k) {
     if (p_pa != steady_.p_pa || t_k != steady_.t_k) {
         fill_steady_tables(*maps_, make_ambient(p_pa, t_k), desc_idle_rpm_, idle_.max_throttle, idle_.max_torque_nm, steady_, false);
         steady_.t_k = t_k;
+        if (maps_->cam_high) {
+            fill_steady_tables(*maps_->cam_high, make_ambient(p_pa, t_k), desc_idle_rpm_, idle_.max_throttle, idle_.max_torque_nm,
+                               steady_hi_, false);
+            steady_hi_.t_k = t_k;
+        }
         ++steady_rebuilds_;
     }
 }
@@ -917,23 +1014,83 @@ void SimulatedEngine::set_live_ambient(real p_pa,real t_k) {
 }
 
 real SimulatedEngine::live_steady_torque(real rpm,real plate,bool fired) const {
+    return live_steady_torque_on(*maps_,rpm,plate,fired);
+}
+
+real SimulatedEngine::live_steady_torque_on(const SimulatedEngineMaps& m,real rpm,real plate,bool fired) const {
     const real clamped_rpm=std::clamp(rpm,steady_.steady_torque_nm.x.front(),steady_.steady_torque_nm.x.back());
-    return steady_net_torque(*maps_,make_ambient(p_amb_,t_amb_),StarterDesc{},clamped_rpm,plate,real(0),fired,ecu_k_,hyd_ref_rpm_);
+    return steady_net_torque(m,make_ambient(p_amb_,t_amb_),StarterDesc{},clamped_rpm,plate,real(0),fired,ecu_k_,hyd_ref_rpm_);
 }
 
 real SimulatedEngine::live_inverse_plate(real rpm,real request) const {
+    return live_inverse_plate_on(*maps_,rpm,request);
+}
+
+real SimulatedEngine::live_inverse_plate_on(const SimulatedEngineMaps& m,real rpm,real request) const {
     if(request<=0) return 0;
     if(request>=1) return 1;
-    const real mot=live_steady_torque(rpm,0,false), wot=live_steady_torque(rpm,1,true);
+    const real mot=live_steady_torque_on(m,rpm,0,false), wot=live_steady_torque_on(m,rpm,1,true);
     const real target=mot+request*(wot-mot);
-    if(live_steady_torque(rpm,0,true)>=target) return 0;
+    if(live_steady_torque_on(m,rpm,0,true)>=target) return 0;
     real lo=0, hi=1;
     // Plate uncertainty <= 2^-24: no whole RPM/request grid and no altitude hysteresis.
     for(int i=0;i<24;++i) {
         const real mid=(lo+hi)*real(.5);
-        if(live_steady_torque(rpm,mid,true)<target) lo=mid; else hi=mid;
+        if(live_steady_torque_on(m,rpm,mid,true)<target) lo=mid; else hi=mid;
     }
     return (lo+hi)*real(.5);
+}
+
+// Engine garage P9: the ECU's steady demand model per cam profile (each profile's own tables or live solve), blended.
+real SimulatedEngine::steady_motoring(real rpm) const {
+    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+        return live_steady() ? live_steady_torque_on(mm, rpm, 0, false) : t.steady_motoring_nm.evaluate(rpm);
+    });
+}
+
+real SimulatedEngine::steady_wot(real rpm) const {
+    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+        return live_steady() ? live_steady_torque_on(mm, rpm, 1, true) : t.steady_wot_nm.evaluate(rpm);
+    });
+}
+
+real SimulatedEngine::steady_torque(real rpm, real plate) const {
+    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+        return live_steady() ? live_steady_torque_on(mm, rpm, plate, true) : t.steady_torque_nm.value(rpm, plate);
+    });
+}
+
+// The electronic plate target: each profile's own inverse, blended (the plate at which the blended steady torque
+// meets the request lies between the two; blending the plates is the PROVISIONAL first-order approximation).
+real SimulatedEngine::inverse_plate_target(real rpm, real request) const {
+    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        const SimulatedSteadyTables& t = &mm == maps_.get() ? steady_ : steady_hi_;
+        return live_steady() ? live_inverse_plate_on(mm, rpm, request) : t.inverse_plate.value(rpm, request);
+    });
+}
+
+void SimulatedEngine::step_cam_switching(const Sensors& sensors, real rpm, real h) {
+    if (!maps_->cam_high || cam_override_ >= real(0.0)) return;
+    const CamSwitchingDesc& sw = maps_->cam_switching;
+    // PROVISIONAL (garage P9): no thermal model -> the oil condition counts as met (a warm engine).
+    const bool oil_ok = std::isfinite(sensors.oil_temperature_c) ? sensors.oil_temperature_c >= sw.min_oil_c : true;
+    const bool hold_ok = state_ == EngineState::Running && p_im_ >= sw.min_p_im_pa && oil_ok;
+    if (!cam_high_) {
+        if (hold_ok && rpm >= sw.rpm_on) cam_high_ = true;
+    } else if (!hold_ok || rpm < sw.rpm_off) {
+        cam_high_ = false;
+    }
+    const real target = cam_high_ ? real(1.0) : real(0.0);
+    if (!(sw.transition_s > real(0.0))) {
+        cam_w_ = target;
+    } else if (cam_w_ < target) {
+        cam_w_ = std::min(target, cam_w_ + h / sw.transition_s);
+    } else if (cam_w_ > target) {
+        cam_w_ = std::max(target, cam_w_ - h / sw.transition_s);
+    }
 }
 
 void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
@@ -958,19 +1115,24 @@ void SimulatedEngine::request_replace_maps(std::shared_ptr<const SimulatedEngine
     // from the maps' own ISA tables, refill iff the current ambient differs.
     // Caller thread, between steps (allocates: copy-assignment may grow the
     // vectors the first time) - see the header comment.
+    if ((new_maps->cam_high != nullptr) != (maps_->cam_high != nullptr)) {
+        throw std::runtime_error("SimulatedEngine::request_replace_maps: the new maps must have the same cam profiles as the "
+                                 "running engine (engine garage P9: every profile set swaps together)");
+    }
     SimulatedSteadyTables& t = pending_steady_;
-    t.p_pa = new_maps->ref_p_pa;
-    t.t_k = new_maps->ref_t_k;
-    t.steady_wot_nm = new_maps->steady_wot_nm;
-    t.steady_motoring_nm = new_maps->steady_motoring_nm;
-    t.steady_torque_nm = new_maps->steady_torque_nm;
-    t.inverse_plate = new_maps->inverse_plate;
-    t.idle_ff = new_maps->idle_ff;
-    t.idle_p_im = new_maps->idle_p_im;
-    t.idle_cap_x = new_maps->idle_cap_x;
+    seed_steady_tables(t, *new_maps);
     if (p_amb_ != t.p_pa || t_amb_ != t.t_k) {
         fill_steady_tables(*new_maps, make_ambient(p_amb_, t_amb_), desc_idle_rpm_, idle_.max_throttle, idle_.max_torque_nm, t, false);
         t.t_k = t_amb_;
+    }
+    if (new_maps->cam_high) {
+        SimulatedSteadyTables& th = pending_steady_hi_;
+        seed_steady_tables(th, *new_maps->cam_high);
+        if (p_amb_ != th.p_pa || t_amb_ != th.t_k) {
+            fill_steady_tables(*new_maps->cam_high, make_ambient(p_amb_, t_amb_), desc_idle_rpm_, idle_.max_throttle,
+                               idle_.max_torque_nm, th, false);
+            th.t_k = t_amb_;
+        }
     }
     pending_maps_ = std::move(new_maps);
 }
@@ -986,6 +1148,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::apply_pending_maps_s
     // (same sizes) for the next request to overwrite. No refill here.
     if(!identical) {
         std::swap(steady_, pending_steady_);
+        if(maps_->cam_high) std::swap(steady_hi_, pending_steady_hi_); // P9: every profile set swaps together
         if(live_steady()) set_live_ambient(p_amb_,t_amb_); // request may have preceded a newer atmospheric sample
     } // Identical maps must preserve the control cache/algorithm and remain invisible at any altitude.
     return old;
@@ -1020,6 +1183,7 @@ void SimulatedEngine::reset(EngineState state) {
     dfco_active_ = false;
     n2o_on_ = false; // N2O plan N2: re-derived from the next substep's sensors
     n2o_in_kg_ = n2o_burnt_kg_ = kit_fuel_kg_ = n2o_dh_j_kg_ = burnt_fuel_kg_ = real(0.0);
+    if (cam_override_ < real(0.0)) { cam_high_ = false; cam_w_ = real(0.0); } // P9: the ECU starts on the low cam
     init_state_for(state);
 }
 
@@ -1028,21 +1192,32 @@ real SimulatedEngine::psi(real pr, real* dpsi_dpr) const { return psi_lookup(map
 SimulatedEngine::ManifoldRhs SimulatedEngine::manifold_rhs(real p_im, real omega, real x_thr, real x_iac, const NitrousCharge* nc) const {
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
-        return manifold_rhs_impl(*maps_, Ambient{turbo_->charge_pa,rt,real(1.0)/std::sqrt(rt)},p_im,omega,x_thr,x_iac,nc);
+        const Ambient amb{turbo_->charge_pa,rt,real(1.0)/std::sqrt(rt)};
+        return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+            return manifold_rhs_impl(mm, amb, p_im, omega, x_thr, x_iac, nc);
+        });
     }
-    return manifold_rhs_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, p_im, omega, x_thr, x_iac, nc);
+    const Ambient amb{p_amb_, r_t_, inv_sqrt_rt_};
+    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        return manifold_rhs_impl(mm, amb, p_im, omega, x_thr, x_iac, nc);
+    });
 }
 
 SimulatedEngine::TorqueEval SimulatedEngine::evaluate_torque(real omega, real p_im, bool fired, real s_starve, bool starter_active,
                                                              const AntiLagDesc* als, const NitrousCharge* nc) const {
     if (turbo_) {
         const real rt = kGasConstant*turbo_->charge_k;
-        auto result = evaluate_torque_impl(*maps_,Ambient{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)},starter_,omega,p_im,fired,s_starve,starter_active,
-                                           false,als,plant_k_,hyd_ref_rpm_,nc,limiter_rpm_override_);
-        return result;
+        const Ambient amb{turbo_->exhaust_pa,rt,real(1.0)/std::sqrt(rt)};
+        return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+            return evaluate_torque_impl(mm,amb,starter_,omega,p_im,fired,s_starve,starter_active,
+                                        false,als,plant_k_,hyd_ref_rpm_,nc,limiter_rpm_override_);
+        });
     }
-    return evaluate_torque_impl(*maps_, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega, p_im, fired, s_starve, starter_active,
-                                false, als, plant_k_, hyd_ref_rpm_, nc, limiter_rpm_override_);
+    const Ambient amb{p_amb_, r_t_, inv_sqrt_rt_};
+    return on_cam_profiles(*maps_, cam_w_, [&](const SimulatedEngineMaps& mm) {
+        return evaluate_torque_impl(mm, amb, starter_, omega, p_im, fired, s_starve, starter_active,
+                                    false, als, plant_k_, hyd_ref_rpm_, nc, limiter_rpm_override_);
+    });
 }
 
 void SimulatedEngine::clear_anti_lag_state() {
@@ -1115,6 +1290,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     }
     state_ = next;
     const bool starter_active = (state_ == EngineState::Cranking);
+    step_cam_switching(sensors, rpm, h); // engine garage P9: a no-op without cam profiles
 
     // (2) engine management. theta_req is the torque request (electronic)
     // or, on a mechanical linkage, only the DFCO trigger - the plate itself
@@ -1258,7 +1434,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         if (als_active_) x_thr_ = std::max(x_thr_, als->plate_floor); // I7d D5: anti-lag throttle kicker
         x_iac_ = x_idle;
     } else {
-        real x_target = std::max(live_steady()?live_inverse_plate(rpm,theta_req):steady_.inverse_plate.value(rpm, theta_req), x_idle);
+        real x_target = std::max(inverse_plate_target(rpm, theta_req), x_idle);
         if (als_active_) x_target = std::max(x_target, als->plate_floor); // I7d D5: anti-lag bypass air
         if (!(actuator_tau_s_ > real(0.0))) {
             x_thr_ = x_target;
@@ -1379,13 +1555,14 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     r.governor_setpoint_rpm = real(0.0);
     {
         const real s = sign(omega_old);
-        const real mot = live_steady()?live_steady_torque(rpm,0,false):steady_.steady_motoring_nm.evaluate(rpm);
+        // Engine garage P9: each lookup is blended over the cam profiles (the demand follows the active cam).
+        const real mot = steady_motoring(rpm);
         if (mech) {
-            r.torque_demand = comb ? (live_steady()?live_steady_torque(rpm,x_thr_,true):steady_.steady_torque_nm.value(rpm, x_thr_)) : s * mot;
+            r.torque_demand = comb ? steady_torque(rpm, x_thr_) : s * mot;
         } else {
-            const real wot = live_steady()?live_steady_torque(rpm,1,true):steady_.steady_wot_nm.evaluate(rpm);
+            const real wot = steady_wot(rpm);
             real demand = s * mot + (comb ? theta_req : real(0.0)) * (wot - mot);
-            if (comb && !dfco_active_ && theta_idle > real(0.0)) demand = std::max(demand, live_steady()?live_steady_torque(rpm,theta_idle,true):steady_.steady_torque_nm.value(rpm, theta_idle));
+            if (comb && !dfco_active_ && theta_idle > real(0.0)) demand = std::max(demand, steady_torque(rpm, theta_idle));
             r.torque_demand = demand;
         }
     }
@@ -1397,13 +1574,18 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // N2O plan N2: the same rule carries the torque a nitrous shot adds (the steady tables have no N2O either).
     if (turbo_ && comb && !dfco_active_ && !tcu.ignition_cut) {
         const real rt = kGasConstant * turbo_->charge_k;
-        const auto uncut = evaluate_torque_impl(m,
-            Ambient{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)},
-            starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_, hyd_ref_rpm_, nc);
+        const Ambient exh_amb{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)};
+        const auto uncut = on_cam_profiles(m, cam_w_, [&](const SimulatedEngineMaps& mm) {
+            return evaluate_torque_impl(mm, exh_amb, starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_,
+                                        hyd_ref_rpm_, nc);
+        });
         r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
     } else if (n2o_on_ && comb && !dfco_active_ && !tcu.ignition_cut) {
-        const auto uncut = evaluate_torque_impl(m, Ambient{p_amb_, r_t_, inv_sqrt_rt_}, starter_, omega_old, p_im_, true, real(1.0), false,
-                                                true, als_eval, ecu_k_, hyd_ref_rpm_, nc);
+        const Ambient amb_now{p_amb_, r_t_, inv_sqrt_rt_};
+        const auto uncut = on_cam_profiles(m, cam_w_, [&](const SimulatedEngineMaps& mm) {
+            return evaluate_torque_impl(mm, amb_now, starter_, omega_old, p_im_, true, real(1.0), false, true, als_eval, ecu_k_,
+                                        hyd_ref_rpm_, nc);
+        });
         r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
     }
     r.theta_c = std::clamp(ev.fire * s_starve * p_im_ / p_amb_, real(0.0), real(1.0));
@@ -1612,6 +1794,8 @@ std::uint64_t SimulatedEngine::fold_state_hash(std::uint64_t seed) const {
             }
         }
     }
+    // Engine garage P9: appended only with cam profiles, so every other engine keeps its byte layout.
+    if (maps_->cam_high) { f.pod(cam_high_); f.pod(cam_w_); }
     return f.h;
 }
 

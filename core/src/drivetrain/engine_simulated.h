@@ -72,6 +72,7 @@
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -109,6 +110,11 @@ struct SimulatedEngineMaps {
     real idle_ff = 0.0;                   // idle feed-forward: plate (electronic) / bypass (mechanical)
     real idle_p_im = 0.0;                 // steady manifold pressure at idle_rpm with idle_ff
     real idle_cap_x = 0.0;                // idle authority cap (IdleControlDesc::max_torque_nm), 0 = none
+    // Engine garage P9: the high cam profile's complete model (same desc, that profile's generated maps; its own
+    // steady tables) and the ECU's switching rule. Null without cam profiles. Folded into content_hash only when
+    // present, so a hot swap of these maps swaps every profile set at once.
+    std::shared_ptr<const SimulatedEngineMaps> cam_high;
+    CamSwitchingDesc cam_switching;
     std::uint64_t content_hash = 0;
 };
 
@@ -228,6 +234,16 @@ public:
     // Nonfinite/nonpositive ambient is ignored. steady_rebuild_count counts full grids.
     void set_ambient(real p_pa, real t_k);
     [[nodiscard]] const SimulatedSteadyTables& steady_tables() const { return steady_; }
+    // Engine garage P9: the high cam profile's steady tables (empty without cam profiles).
+    [[nodiscard]] const SimulatedSteadyTables& steady_tables_high_cam() const { return steady_hi_; }
+    // Engine garage P9 cam switching (false/0 without cam profiles): the ECU's latched profile request and the
+    // blend weight w in [0, 1] (the fraction of the charge drawn through the high-lift lobes; every model lookup
+    // is (1 - w) * low + w * high, exactly the single-profile path at w = 0 and w = 1).
+    [[nodiscard]] bool cam_high_requested() const { return cam_high_; }
+    [[nodiscard]] real cam_blend() const { return cam_w_; }
+    // White-box/test hook: force the blend weight (and the latched request: w >= 0.5 -> high). -1 = ECU control.
+    // Used by the dyno to hold a profile; never set by World. Not hashed (a held engine is a test harness).
+    void set_cam_blend_override(real w) { cam_override_ = w; if (w >= real(0.0)) { cam_w_ = std::clamp(w, real(0.0), real(1.0)); cam_high_ = cam_w_ >= real(0.5); } }
     [[nodiscard]] std::uint64_t steady_rebuild_count() const { return steady_rebuilds_; }
 
     // --- white-box accessors ------------------------------------------------
@@ -385,7 +401,21 @@ private:
     // (engine thermal plan T1: the setup tables assume k = 1; a cold engine's ECU models the extra friction live).
     [[nodiscard]] bool live_steady() const { return p_amb_!=steady_.p_pa || t_amb_!=steady_.t_k || ecu_k_!=real(1.0); }
     [[nodiscard]] real live_steady_torque(real rpm,real plate,bool fired) const;
+    [[nodiscard]] real live_steady_torque_on(const SimulatedEngineMaps& m,real rpm,real plate,bool fired) const;
     [[nodiscard]] real live_inverse_plate(real rpm,real request) const;
+    [[nodiscard]] real live_inverse_plate_on(const SimulatedEngineMaps& m,real rpm,real request) const;
+    // Engine garage P9: the steady demand-model lookups pre_solve uses, blended over the cam profiles by cam_w_.
+    [[nodiscard]] real steady_motoring(real rpm) const;
+    [[nodiscard]] real steady_wot(real rpm) const;
+    [[nodiscard]] real steady_torque(real rpm, real plate) const;
+    [[nodiscard]] real inverse_plate_target(real rpm, real request) const;
+    void step_cam_switching(const Sensors& sensors, real rpm, real h);
+    // Engine garage P9: cam switching state (hashed only with cam profiles) and the override hook.
+    bool cam_high_ = false;
+    real cam_w_ = 0.0;
+    real cam_override_ = -1.0;
+    SimulatedSteadyTables steady_hi_;
+    SimulatedSteadyTables pending_steady_hi_;
 
     std::optional<TurboPair> turbo_;
     // Turbo feeds (hashed), all written by the previous substep: turbo_air_kg_s_ = the THROTTLE-path mass

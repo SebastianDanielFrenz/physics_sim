@@ -94,12 +94,28 @@ inline constexpr Threshold kBoostGridAmbientNodeGapPa{"boost_grid_ambient_node_g
 inline constexpr Threshold kNaGridTopFraction{"na_grid_top_fraction_of_ambient", 0.95, "[AS] the generator throws for a node the engine cannot reach with the throttle fully open; the NA hyper's plenum peaks at 97873 Pa (0.966 of ISA ambient) at 8000 rpm [M], so ambient_grid_p_im caps the top node at 0.95 of ambient"};
 inline constexpr Threshold kRelTolerance{"relative_tolerance", 1e-9, "[AS] comparison slack so a value exactly on a bound (the A25A's rod ratio 3.0000) passes"};
 
+// --- Engine garage P9: discrete cam-profile switching (VTEC-style) ----------------------------------------------------------
+// Switch speed over the limiter: Honda's own figures put the switch at 0.60-0.72 of the limit - B16A ~4800-5200 rpm of 8000
+// [C] global.honda B16A page; K20A DC5 6000 of 8400 rpm [C] Honda Integra fact book 2001.07; FD2 5800 of 8400 [C] Civic Type R
+// fact book 2007.03; S2000 F20C ~6000 of 9000 [C] hondanews S2000 powertrain. The band is that range widened [AS].
+inline constexpr Threshold kCamSwitchFractionMin{"cam_switch_over_limiter_min", 0.45, "[AS] Honda VTEC 0.60-0.72 of the limiter (B16A, K20A DC5/FD2, F20C; sources in the comment above), widened"};
+inline constexpr Threshold kCamSwitchFractionMax{"cam_switch_over_limiter_max", 0.85, "[AS] Honda VTEC 0.60-0.72 of the limiter, widened; above it the high cam serves a sliver of the band"};
+// Hysteresis rpm_on - rpm_off: no OEM value found (Hondata exposes engage/disengage rpm without stock numbers [C] hondata.com
+// FlashPro 'VTEC parameters' help page).
+inline constexpr Threshold kCamHysteresisMin{"cam_switch_hysteresis_min_rpm", 50.0, "[AS] below ~50 rpm a WOT pull's speed ripple toggles the solenoid (no OEM hysteresis found)"};
+inline constexpr Threshold kCamHysteresisMax{"cam_switch_hysteresis_max_rpm", 1000.0, "[AS] beyond ~1000 rpm the engine runs the wrong cam for a large part of a lift (no OEM hysteresis found)"};
+// Peak lift over valve head diameter: the curtain area pi*d*L equals the seat area pi*d^2/4 at L/d = 0.25; production and
+// street-tuning cams stay below ~0.35 (JUN K20 Type 0 high lobe 12.2 mm on a 35 mm valve = 0.35 [C] junauto.co.jp, vendor
+// data; the 35 mm valve itself is a vendor listing).
+inline constexpr Threshold kCamLiftOverValveMax{"cam_peak_lift_over_valve_d_max", 0.40, "[AS] 0.35 seen on an aftermarket K20 race cam (junauto.co.jp), widened; beyond it more lift adds no flow area and stresses the valve train"};
+
 inline constexpr Threshold kAllEngineRuleThresholds[] = {
     kLayoutSource,  kIntake1Min,   kIntake1Max,    kIntake2Min,     kIntake2Max,   kIntake3Min,
     kIntake3Max,    kExhaustRatioMin, kExhaustRatioMax, kRowChordFraction, kPackDensity2, kPackDensity3,
     kPackDensity4,  kPackDensity5, kPackShare,     kRodRatioMin,    kRodRatioMax,  kCrNaMin,
     kCrNaMax,       kCrFiMin,      kCrFiMax,       kGridOvershootLimiting, kGridOvershootExceeded, kBoostGridMargin,
     kBoostGridAmbientBar, kBoostGridStepPa, kBoostGridMinLastStepPa, kBoostGridAmbientNodeGapPa, kNaGridTopFraction, kRelTolerance,
+    kCamSwitchFractionMin, kCamSwitchFractionMax, kCamHysteresisMin, kCamHysteresisMax, kCamLiftOverValveMax,
 };
 inline constexpr std::size_t kAllEngineRuleThresholdCount = sizeof(kAllEngineRuleThresholds) / sizeof(kAllEngineRuleThresholds[0]);
 

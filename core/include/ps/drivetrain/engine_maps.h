@@ -44,6 +44,7 @@
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 namespace ps::jobs {
 class JobSystem;
@@ -154,6 +155,8 @@ struct EngineMaps {
     // eta_i outside (0, 1)) and were filled from the nearest breathing node
     // above on their rpm line; author p_im rows dropped because they lie at or
     // above the lowest wide-open-throttle plenum pressure (or ambient).
+    // Engine garage P9: a lumped engine's grid nodes that do not breathe are
+    // filled and counted the same way (they used to make the load throw).
     int nonbreathing_points = 0;
     int wot_dropped_rows = 0;
     // Engine garage P7 (knock-limited engines only; diagnostics, not hashed,
@@ -167,8 +170,25 @@ struct EngineMaps {
     std::uint32_t generator_version = kLumpedGeneratorVersion; // set by finish() / the cache loader
     MapQuality quality = MapQuality::Full;
     std::uint64_t content_hash = 0; // engine_maps_content_hash(*this), filled by finish()
+    // Engine garage P9: for a cam-profile engine, the map sets of profiles 1..N-1 (this object is profile 0's), each
+    // a complete EngineMaps generated from its own lifts with its own content hash and .psmaps file. Empty for every
+    // other engine. Not folded into content_hash (each set keeps its own); a hot swap (World::replace_engine_maps)
+    // of a profile engine needs exactly as many as the engine has extra profiles - all sets swap together.
+    std::vector<std::shared_ptr<const EngineMaps>> cam_profiles;
 };
 using EngineMapsPtr = std::shared_ptr<const EngineMaps>;
+
+// Engine garage P9: `desc` with cam profile k's lifts in intake_lift/exhaust_lift and cam_profiles cleared - the
+// profile-free desc the generator, engine_map_cache_key and validate_engine_map_generation take for that profile.
+// k must be < desc.cam_profiles.size() (std::out_of_range otherwise).
+[[nodiscard]] inline CycleModelDesc cycle_desc_for_cam_profile(const CycleModelDesc& desc, std::size_t k) {
+    const CycleModelDesc::CamProfile& p = desc.cam_profiles.at(k);
+    CycleModelDesc d = desc;
+    d.intake_lift = p.intake_lift;
+    d.exhaust_lift = p.exhaust_lift;
+    d.cam_profiles.clear();
+    return d;
+}
 
 // One generation job split into independent points. Construct, call
 // run_point(i) exactly once for every i in [0, point_count()) - from any
@@ -238,6 +258,26 @@ void validate_engine_map_generation(const CycleModelDesc& desc, const FuelDesc& 
 // is "<cache_dir>/<key as 16 lower-case hex digits>.psmaps". Implemented in
 // ps_core (map_cache.cpp).
 [[nodiscard]] std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
+
+// Engine garage P9: one cache key per cam profile (engine_map_cache_key of cycle_desc_for_cam_profile(desc, k)), in
+// profile order; a desc without profiles gives the one engine_map_cache_key.
+[[nodiscard]] std::vector<std::uint64_t> engine_map_profile_cache_keys(const CycleModelDesc& desc, const FuelDesc& fuel,
+                                                                        MapQuality quality);
+
+// Engine garage P9: the `total` a generate_engine_maps run on this profile-free desc reports to on_progress (the
+// fixed grid's point count; for adaptive pressure sampling the run's progress budget). A desc with cam profiles gives
+// the sum over its profiles (generate_engine_profile_maps' total); a multi-profile load reports the sum over the
+// profiles it generates (a cache hit generates nothing).
+[[nodiscard]] std::size_t engine_map_progress_total(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality);
+
+// Engine garage P9: generate_engine_maps for a desc WITH cam profiles (without: exactly generate_engine_maps). Each
+// profile's set is generated from cycle_desc_for_cam_profile(desc, k), one after the other (each run itself parallel on
+// `pool`); the result is profile 0's EngineMaps with the further sets in cam_profiles. Progress: one count over all
+// profiles (total = the sum of engine_map_progress_total), on the calling thread; cancel stops the whole run (no set is
+// returned); on_partial_maps sees profile 0's partial sets only. No cache access (the loader keys and stores each set).
+[[nodiscard]] EngineMapsPtr generate_engine_profile_maps(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
+                                                         jobs::JobSystem* pool = nullptr,
+                                                         const MapGenerationControl* control = nullptr);
 
 // FNV-1a over every field of `maps` except content_hash itself, in a fixed
 // order (source string excluded - not model data).

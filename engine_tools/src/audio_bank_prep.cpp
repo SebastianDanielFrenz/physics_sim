@@ -272,6 +272,9 @@ ps::drivetrain::SimulatedEngineDesc effective_engine(const ps::drivetrain::Simul
     if (engine.maps_pending) throw std::runtime_error("Audio bank requires complete engine maps (maps_pending)");
     if (!engine.cycle) throw std::runtime_error("Audio bank requires a simulated cycle engine");
     if (engine.fuels.empty()) throw std::runtime_error("Audio bank requires an engine with a fuel");
+    // Engine garage P9: a cam-switching engine has two cylinder models; the bank records one engine. Refused until the bank
+    // grows a profile axis (open point G10) - silently baking the low cam would mis-voice everything above the switch.
+    if (engine.has_cam_profiles()) throw std::runtime_error("Audio bank does not support an engine with cam profiles yet (engine garage P9, open point G10)");
     auto desc = engine;
     if (forced_induction) desc.turbo_pair = *forced_induction;
     return desc;

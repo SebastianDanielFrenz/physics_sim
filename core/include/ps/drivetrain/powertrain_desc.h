@@ -304,6 +304,18 @@ inline void select_knock_fuel(SimulatedEngineMapsDesc& m, std::size_t fuel_index
     }
 }
 
+// Engine garage P9: the ECU's discrete cam-profile switching rule (an ECU part's "switching" block,
+// docs/data_formats/ecu.md). The engine holds the HIGH profile (index 1) while rpm >= rpm_on was reached with
+// p_im >= min_p_im_pa and oil >= min_oil_c, and drops back to the low profile (index 0) below rpm_off or as soon as
+// either condition is lost; the blend weight ramps linearly over transition_s (0 = a step).
+struct CamSwitchingDesc {
+    real rpm_on = 0.0;       // > rpm_off
+    real rpm_off = 0.0;      // > the engine's idle_rpm
+    real min_p_im_pa = 0.0;  // >= 0 (file: kPa)
+    real min_oil_c = 0.0;    // deg C; an engine without a thermal model counts as warm (gate always met)
+    real transition_s = 0.0; // >= 0
+};
+
 // Open-loop engine-management targets.
 struct SimulatedEcuDesc {
     Table2D lambda_target;     // y = p_im [Pa]; values in [0.5, 2]
@@ -468,6 +480,14 @@ struct SimulatedEngineDesc {
     // hence a World vehicle, an EngineRig or a Powertrain - throws. False for every ordinary
     // load, including a load that generated Sketch maps.
     bool maps_pending = false;
+    // Engine garage P9 (VTEC-style switching): empty = an engine without cam profiles (every engine before P9;
+    // bit-identical). Non-empty: the profile ids in cam order (exactly CycleModelDesc::kMaxCamProfiles), `maps` above
+    // is profile 0's map set, cam_profile_maps[k-1] profile k's (each generated from its own lifts), and cam_switching
+    // is the ECU's rule. A profile engine always generates every map from its cycle block (no file "maps" block).
+    std::vector<std::string> cam_profile_ids;
+    std::vector<SimulatedEngineMapsDesc> cam_profile_maps;
+    CamSwitchingDesc cam_switching;
+    [[nodiscard]] bool has_cam_profiles() const { return !cam_profile_ids.empty(); }
 
     // Shared with the graph engine, same meaning and validation.
     real inertia_kgm2 = 0.0;          // > 0
