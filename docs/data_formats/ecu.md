@@ -43,6 +43,7 @@ own metadata; they are not merged into the engine. Every other key must be one o
 | `idle_control` | the idle PI block |
 | `limiter` | the rev limiter block |
 | `throttle_actuator_tau_s` | electronic throttle actuator lag |
+| `switching` | engine garage P9: the cam-profile switching rule (below) |
 | `ecu.lambda_target`, `ecu.spark_advance_deg` | the simulated engine's `ecu` block tables |
 | `ecu.ignition_strategy`, `ecu.knock_margin_deg` | engine garage P7 knock-limit opt-in (below) |
 | `cycle.spark_advance_deg` | the cycle block's spark schedule (copied into `ecu.spark_advance_deg` by the loader, as inline) |
@@ -80,6 +81,50 @@ Rejections (engine reader, after the merge):
 - `"knock_limited"` on an engine with neither a cycle block nor `maps.theta_kl_deg`
 - `"knock_limited"` with a listed fuel that has no `knock` block (fuel.md)
 
+## `switching` — cam-profile switching (engine garage P9)
+
+The rule by which the ECU selects between the two profiles of a profile cam
+([cam.md](cam.md#profiles--discrete-cam-profiles-engine-garage-p9)). It must
+come with such a cam, and a profile cam needs it.
+
+```json
+"switching": { "type": "discrete", "rpm_on": 6000, "rpm_off": 5800,
+               "min_p_im_kpa": 40, "min_oil_c": 60, "transition_s": 0.05 }
+```
+
+| Key | Meaning | Range |
+|---|---|---|
+| `type` | `"discrete"` (the only type; continuous lift is P10) | |
+| `rpm_on` | go to the high profile at or above this speed | `rpm_off < rpm_on < limiter.rpm` |
+| `rpm_off` | back to the low profile below this speed (hysteresis) | `idle_rpm < rpm_off` |
+| `min_p_im_kpa` | the high profile is held only at or above this manifold pressure | `>= 0` |
+| `min_oil_c` | ... and at or above this oil temperature | `[-40, 150]` |
+| `transition_s` | the blend ramp from one profile to the other | `[0, 2]`, 0 = one substep |
+| `source`, `*_source` | notes | |
+
+Runtime (`SimulatedEngine`, once per substep after the state machine): with
+`hold = Running && p_im >= min_p_im && oil >= min_oil_c`, the ECU goes high when
+`hold && rpm >= rpm_on` and low when `!hold || rpm < rpm_off`. A blend weight
+`w` follows at `h / transition_s` per substep; every model lookup (manifold
+flow, torque, fuel, the steady demand tables and the electronic throttle's
+inverse) is `low + w * (high - low)` - the fraction of cylinders already on the
+high lobe - and exactly the single profile at `w = 0` and `w = 1`. Decisions
+(PROVISIONAL, out/garage_p9_progress.md):
+
+- without an engine thermal model the oil temperature is unknown and the oil
+  condition counts as met (a warm engine); with one, `Sensors::oil_temperature_c`
+  is the thermal model's oil lump;
+- idle control (feed-forward, PI authority cap, boost idle) runs on the low
+  profile - hence `idle_rpm < rpm_off`;
+- the clutch's torque demand follows the blended steady tables;
+- the switching state (`cam_high`, `w`) enters the state hash only on an
+  engine with profiles; `reset()` returns to the low profile;
+- one spark table serves both profiles (per-profile spark is an open point).
+
+A switching edit is change class Runtime (`classify_engine_change`, pointer
+`/ecu/switching`); `check_buildable` grades the window (rule `CamSwitchWindow`,
+[engine.md](engine.md)).
+
 ## Rejections
 
 - `format` missing or other than `physics_sim.ecu/1` (`"<path>: unsupported 'format' \"...\" (expected \"physics_sim.ecu/1\")"`)
@@ -92,6 +137,13 @@ Rejections (engine reader, after the merge):
   `"'default_ecu' and the inline ECU field '<key>' - give the ECU either inline or as a part file, not both (a child engine removes an inherited field with null)"`
 - `"none"` as an ECU (`"none"` is only for forced induction)
 - `default_ecu` / `ecu` not a non-empty string
+- `switching`: an unknown key, `type` other than `"discrete"`, a missing or
+  non-finite value, `rpm_off >= rpm_on`, the band outside `idle_rpm .. limiter.rpm`,
+  `min_p_im_kpa < 0`, `min_oil_c` or `transition_s` out of range; `switching`
+  without a profile cam (`"the ECU has a 'switching' block but the cam has no
+  profiles ..."`) or on an engine without a `cycle` block
+- on a profile engine: a knock-limited ECU without a spark table (MBT tracking
+  is not supported with profiles yet)
 
 The merged engine is then validated by the engine reader as usual (ranges,
 table shapes, a fuel-cut limiter's hysteresis, ...).

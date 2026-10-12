@@ -30,6 +30,7 @@ A cam needs an engine with a `cycle` block.
 | `format` | yes | `"physics_sim.cam/1"` |
 | `name`, `source` | no | the part's own metadata (not merged) |
 | `intake_lift`, `exhaust_lift` | no | merged into `cycle` as given (a cam may carry one of them) |
+| `profiles` | no | engine garage P9: discrete cam profiles (VTEC-style), see below; excludes the two keys above |
 | `*_source` | no | source notes, merged into `cycle` |
 | `fits` | no | compatibility metadata, checked, not merged |
 
@@ -47,10 +48,51 @@ are not checked. Lift geometry itself is checked only by the engine reader
 (first and last lift exactly 0, ascending crank angles, ...); `fits` does not
 check lift against valve-to-piston clearance — there is no such model.
 
+## `profiles` — discrete cam profiles (engine garage P9)
+
+A cam with two lift sets the ECU switches between (Honda VTEC and similar: a
+low and a high lobe, one oil-pressure-driven switch):
+
+```json
+"profiles": [
+  { "id": "low",  "intake_lift": { ... }, "exhaust_lift": { ... } },
+  { "id": "high", "intake_lift": { ... }, "exhaust_lift": { ... } }
+]
+```
+
+- exactly **2** profiles, low first (`CycleModelDesc::kMaxCamProfiles`: one
+  ECU switching rule selects between two; three-stage VTEC is an open point);
+- `id`: a non-empty string, unique; a label only (renaming it moves no cache
+  key and is change class None);
+- each profile carries both `intake_lift` and `exhaust_lift` in the engine's
+  lift format ([engine.md](engine.md), `cycle` block); `*_source` notes are
+  allowed inside a profile, any other key is rejected;
+- the engine then generates **one complete map set per profile** (each with
+  its own `.psmaps` file, keyed exactly like the single-lift engine written
+  with that profile's lifts), and needs an ECU with a `"switching"` block
+  ([ecu.md](ecu.md#switching--cam-profile-switching-engine-garage-p9)) - a cam
+  with profiles and an ECU without switching (or the reverse) is rejected;
+- profile 0's lifts are also the engine's `intake_lift`/`exhaust_lift` (every
+  single-lift reader sees the low cam);
+- a part file is the WHOLE cam: a profile cam slotted onto an engine with
+  single lifts replaces them, a single-lift cam slotted onto a profile engine
+  removes the profiles. Through `"extends"`, a child that turns a profile cam
+  into a single-lift one sets `"profiles": null` and gives both lifts.
+
+Shipped: `data/cams/honda_k20a_dc5_vtec.json` (written by
+`tools/enginedata/k20a_vtec_cam.py`; every lift number [AS], no OEM K20A lift
+data exists).
+
 ## Rejections
 
 - format other than `physics_sim.cam/1`
-- any other top-level key: `"'<key>' is not a cam field (a cam part sets intake_lift, exhaust_lift, fits)"`
+- any other top-level key: `"'<key>' is not a cam field (a cam part sets intake_lift, exhaust_lift, profiles, fits)"`
+- `profiles` next to a top-level `intake_lift`/`exhaust_lift`:
+  `"a cam with 'profiles' carries intake_lift/exhaust_lift inside each profile, not at the top level"`
+  (an engine `cycle` block writing both: `"'profiles' and 'intake_lift'/'exhaust_lift' together ..."`)
+- `"'profiles' must hold exactly 2 profiles ..."`, `"duplicate profile id '<id>'"`,
+  `"'id' must be a non-empty string"`, `"unknown key '<key>' (a profile has id, intake_lift, exhaust_lift)"`
+- profiles without an ECU `switching` block: `"the cam has profiles (cycle.profiles) but the ECU has no 'switching' block ..."`
 - an engine with `default_cam` **and** inline `cycle.intake_lift`/`exhaust_lift`:
   `"'default_cam' and the inline cam field 'cycle.<key>' - give the cam either inline or as a part file, not both ..."`
 - a cam on an engine without a `cycle` block; `"none"` as a cam
