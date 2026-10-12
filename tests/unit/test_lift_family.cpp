@@ -58,6 +58,7 @@
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/engine_rig.h"
 #include "ps/drivetrain/engine_rules.h"
+#include "ps/drivetrain/map_pressure_index.h"
 #include "ps/io/surface_table.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/debug_alloc.h"
@@ -544,6 +545,60 @@ TEST_CASE("P10 L3: extends on a lift-family cam, and a cam that removes the fami
 // =====================================================================================================================
 // K: keys and generator
 // =====================================================================================================================
+
+// A PIPE engine with a lift family (the brief: lumped and pipe engines): demo_i4_pipes with its intake lift as the u = 1
+// node and a small-lift node at u = 0.5 [AS] (0.3 of the lift over half the duration, same centre line). Each node set is that node's single-lift pipe generation, with the P7d
+// wide-open-throttle row (an ambient-fed pipe engine), and the engine runs through the lift strategy.
+TEST_CASE("P10 L4: a pipe engine with a two-node lift family", "[vvl][drivetrain][cycle][pipe]") {
+    json e = read_json(kEngineDir + "/demo_i4_pipes.json");
+    const json full = e["cycle"]["intake_lift"];
+    json half = full;
+    for (auto& y : half["lift_mm_vs_deg"]["y"]) y = y.get<real>() * 0.3;
+    {
+        json& x = half["lift_mm_vs_deg"]["x"];
+        const real mid = 0.5 * (x.front().get<real>() + x.back().get<real>());
+        for (auto& v : x) v = mid + 0.5 * (v.get<real>() - mid);
+    }
+    e["cycle"].erase("intake_lift");
+    e["cycle"]["intake_lift_family"] = json::array({json{{"u", 0.5}, {"intake_lift", half}}, json{{"u", 1.0}, {"intake_lift", full}}});
+    e["lift_control"] = json{{"type", "continuous"}, {"actuator_tau_s", 0.05}, {"max_rate_per_s", 3.0}, {"min_u", 0.5},
+                             {"idle_u", 0.5},         {"plate_open_above_u", 1.0}, {"vacuum_target_kpa", 5.0}};
+    io::EngineMapOptions pending;
+    pending.generate = false;
+    const SimulatedEngineDesc pd = std::get<SimulatedEngineDesc>(io::load_engine_json_from_string(e.dump(), kEngineDir, pending, {}));
+    REQUIRE(pd.cycle);
+    REQUIRE(pd.cycle->lift_family.size() == 2);
+    REQUIRE(pd.cycle->intake.has_value()); // the pipe pair survives the family
+    const FuelDesc& fuel = pd.fuels.front();
+    const EngineMapsPtr m = generate_engine_profile_maps(*pd.cycle, fuel, MapQuality::Sketch, &pool10());
+    REQUIRE(m->lift_nodes.size() == 1);
+    const EngineMapsPtr single = generate_engine_maps(cycle_desc_for_lift_node(*pd.cycle, 0), fuel, MapQuality::Sketch, &pool10());
+    CHECK(single->content_hash == m->lift_nodes[0]->content_hash);
+    CHECK(has_wot_rows(m->maps));
+    CHECK(has_wot_rows(m->lift_nodes[0]->maps));
+    // The two nodes' wide-open-throttle plenum curves differ (the small lift breathes less).
+    CHECK(m->maps.wot_p_im_pa.y != m->lift_nodes[0]->maps.wot_p_im_pa.y);
+
+    io::EngineMapOptions o;
+    o.quality = MapQuality::Sketch;
+    o.pool = &pool10();
+    const SimulatedEngineDesc d = std::get<SimulatedEngineDesc>(io::load_engine_json_from_string(e.dump(), kEngineDir, o, {}));
+    REQUIRE(d.lift_u == std::vector<real>{0.5, 1.0});
+    SimulatedEngine eng(d);
+    eng.reset(EngineState::Running);
+    CHECK(eng.lift_u() == 0.5);
+    PreSolveResult r{};
+    for (int i = 0; i < 960; ++i) r = step(eng, 3000.0, 0.6);
+    std::printf("P10 L4: request 0.6 at 3000 rpm: u %.4f (target %.4f), vacuum mode %d, plate %.4f, p_im %.0f Pa\n", eng.lift_u(),
+                eng.lift_u_target(), eng.lift_vacuum_mode() ? 1 : 0, eng.x_thr(), eng.p_im());
+    CHECK(r.state == EngineState::Running);
+    CHECK(std::isfinite(r.tau0));
+    CHECK(eng.lift_u() > 0.5);
+    CHECK(eng.lift_u() <= 1.0);
+    for (int i = 0; i < 960; ++i) (void)step(eng, 3000.0, 1.0);
+    CHECK(eng.lift_u() == 1.0);
+    CHECK(eng.x_thr() > 0.999);
+}
 
 TEST_CASE("P10 K1: per-node cache keys", "[vvl][drivetrain][cycle]") {
     const SimulatedEngineDesc& d = n52_pending();
