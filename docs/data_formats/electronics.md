@@ -29,7 +29,7 @@ false` the engine sees no channel (`Sensors::anti_lag_channel` NaN) and anti-lag
 
 Snapshot: `VehicleSnapshot::powertrain.assist_fitted_bits` has the same layout as `assist_active_bits` (bit0
 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control, bit4 launch_control) plus bit5 = anti-lag
-switch. A HUD shows three states: hidden (bit not set in `assist_fitted_bits`), fitted and off, fitted and on
+switch and bit6 = aero automation (assists I5, [below](#assist-aero)). A HUD shows three states: hidden (bit not set in `assist_fitted_bits`), fitted and off, fitted and on
 (`assist_active_bits`; bit4 = launch_control switched on). A car without a `manual_tcu` reports the auto_* assists
 as not fitted. Never hashed.
 
@@ -121,11 +121,11 @@ grade-to-mode mapping is a data edit. Approved mapping (owner 2026-10-12), shipp
 |---|---|---|---|
 | `street` | Off, On | not allowed | not allowed |
 | `sport` | Off, On, Relaxed, Sport | allowed (assists I4) | not allowed |
-| `racing` | Off, On, Relaxed, Sport, Drift | allowed (assists I4) | allowed (assists I5) |
+| `racing` | Off, On, Relaxed, Sport, Drift | allowed (assists I4) | allowed ([below](#assist-aero), assists I5) |
 
 `launch_control` / `aero_control` keys: rejected `"grade 'street' does not allow 'launch_control'"` when the grade
-forbids them, `"'launch_control' in an assist_unit is not implemented yet (assists plan I4/I5)"` when it allows them
-(I1 does not load them).
+forbids them. `launch_control` is not loaded yet: `"'launch_control' in an assist_unit is not implemented yet (assists
+plan I4)"` when the grade allows it. `aero_control` loads since assists I5 ([below](#assist-aero)).
 
 **Traction-control channel.** One channel `assist.traction_control`, append-only codes:
 
@@ -168,6 +168,49 @@ against the V6 ordering band in `tests/unit/test_assist_unit.cpp`): Relaxed 0.12
 off, on, relaxed, sport, drift`, `duplicate mode '<m>' in 'modes'`, `'modes' must contain at least one mode other than
 'off'`, `'default_mode' is required`, `'default_mode' "<m>" is not one of the listed 'modes'`, `mode_params: unknown mode`,
 `takes no parameters`, `mode_params for '<m>' but '<m>' is not in 'modes'`, per-field range messages.
+
+### Aero automation (assists I5) {#assist-aero}
+
+Block `aero_control` of an assist unit (grade `racing` only; Street and Sport reject it with the grade message above).
+`ps::vehicle::AeroControlDesc`, a port of racing_game's rear-wing law (`core/src/session.cpp`, "automatic_rear_wing";
+the defaults are racing_game's `rg/environment.h` values, all `[D]`). Every key is optional:
+
+| Key | Default | Range (racing_game's where it has one) | Meaning |
+|---|---|---|---|
+| `surface` | `"rear_wing"` | non-empty string | the car's aero surface (by name) the controller owns |
+| `default_enabled` | `false` | boolean or 0/1 | the channel's default value; the shipped Racing unit sets `true` `[AS, owner: Racing = aero automation]` |
+| `cruise_offset_deg` | 4 | [-8, 55] | wing offset at and above `cruise_ramp_end_m_s` |
+| `cruise_ramp_start_m_s` / `cruise_ramp_end_m_s` | 10 / 30 | [0, 150], end > start | the cruise offset ramps linearly with airspeed between them |
+| `airbrake_offset_deg` | 45 | [0, 55] | offset at full airbrake demand |
+| `airbrake_min_speed_m_s` | 20 | [0, 150] | the airbrake term exists only at or above this airspeed |
+| `airbrake_brake_start` / `airbrake_brake_full` | 0.45 / 1.0 | [0, 0.99] / [0.01, 1], full > start | brake channel range mapped to demand 0..1 |
+| `launch_offset_deg` | 10 `[AS]` | [-8, 55] | the offset a launch control asks for (the car_hyper maximum-downforce offset is 9-11 deg `[D]`) |
+
+**The law** (stateless, every tick, `ps::vehicle::aero_control_command`): `v` = chassis-frame x of (chassis velocity -
+the vehicle's own wind), read at tick start; `target = cruise_offset * clamp((v - ramp_start)/(ramp_end - ramp_start),
+0, 1)`; if `v >= airbrake_min_speed`: `demand = clamp((brake - brake_start)/(brake_full - brake_start), 0, 1)` and
+`target += (airbrake_offset - target) * demand`; launch hook set: `target = launch_offset` instead (yield order launch
+control > airbrake > cruise; the hook is `VehicleInstance::set_aero_launch_request`, always false until the launch
+control of assists I4); `radians = target * pi / 180`; `limit = radians >= 0 ? max_offset_rad : -min_offset_rad`;
+`command = limit > 0 ? clamp(radians / limit, -1, 1) : 0`. The brake input is the `brake` channel (the handbrake is
+not read). The command goes through the surface's own `rate_rad_s` slew like any command.
+
+**Fitment.** The controller is fitted iff the unit carries the block AND the car's `aero.surfaces` has a surface of
+that name. **A unit naming a surface the car lacks is not a load error**: it is simply not fitted (bit 6 of
+`assist_fitted_bits` 0, no channel), so one generic Racing unit attaches to a wingless car. (Alternative: reject at
+load. Rejected: it makes a unit car-specific, and a UI that offers one Racing unit to every car would need to know the
+car's aero first.)
+
+**Channel** `assist.aero_control`, registered only on a car where the controller is fitted (every other car's channel
+list is unchanged); default = `default_enabled`; `>= 0.5` is on. With the channel on, the controller owns the
+surface's command each tick and the World command (`World::set_aero_surface_command`) for that surface is ignored; with
+it off the World command stands exactly as without the unit (the controller only borrows the command for the tick's
+substeps and puts the World's value back, so nothing is latched).
+
+**Snapshot** (`PowertrainSnapshot`, never hashed): `aero_control_active`, `aero_control_target_deg` (0 when not
+active), bit 6 of `assist_fitted_bits` and `assist_active_bits`. **Hash:** no new state; the desc block is not folded
+(a car with the channel off hashes exactly like the same car with a unit without the block), the surface offset that the
+slewed command moves is already hashed. Tests: `tests/unit/test_assist_aero.cpp` ([assist][aero]).
 
 **Hash.** The resolved mode table is folded into the vehicle's state hash only for a unit whose `modes` go beyond
 Off/On (a Street unit hashes exactly like a car without a unit). The effective mode is a pure function of channel and

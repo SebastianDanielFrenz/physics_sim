@@ -50,6 +50,51 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     return v;
 }
 
+// Assists I5: the aero_control block. Ranges copy racing_game's loader (environment.cpp: cruise_wing_offset_deg
+// [-8, 55], airbrake_wing_offset_deg [0, 55], airbrake_min_speed_m_s [0, 150], airbrake_threshold [0, 0.99]);
+// the ramp, brake_full and launch_offset_deg ranges are this port's own [AS].
+void read_aero_control(const json& a, const std::string& path, vehicle::AssistUnitDesc& unit) {
+    const std::string ctx = path + ": aero_control";
+    if (!a.is_object()) throw std::runtime_error(ctx + " must be an object");
+    vehicle::AeroControlDesc c;
+    const auto number = [&](const char* key, real lo, real hi) {
+        const json& v = a.at(key);
+        if (!v.is_number()) throw std::runtime_error(ctx + ": '" + key + "' must be a number");
+        const real x = v.get<real>();
+        if (!std::isfinite(x) || x < lo || x > hi) {
+            throw std::runtime_error(ctx + ": '" + key + "' must be in [" + std::to_string(lo) + ", " + std::to_string(hi) + "]");
+        }
+        return x;
+    };
+    for (auto it = a.begin(); it != a.end(); ++it) {
+        const std::string& k = it.key();
+        if (k == "surface") {
+            if (!it.value().is_string() || it.value().get<std::string>().empty()) throw std::runtime_error(ctx + ": 'surface' must be a non-empty string");
+            c.surface = it.value().get<std::string>();
+        } else if (k == "default_enabled") {
+            if (!it.value().is_boolean() && !(it.value().is_number() && (it.value().get<real>() == real(0) || it.value().get<real>() == real(1)))) {
+                throw std::runtime_error(ctx + ": 'default_enabled' must be a boolean or 0/1");
+            }
+            c.default_enabled = it.value().is_boolean() ? it.value().get<bool>() : it.value().get<real>() == real(1);
+        } else if (k == "cruise_offset_deg") c.cruise_offset_deg = number("cruise_offset_deg", -8, 55);
+        else if (k == "cruise_ramp_start_m_s") c.cruise_ramp_start_m_s = number("cruise_ramp_start_m_s", 0, 150);
+        else if (k == "cruise_ramp_end_m_s") c.cruise_ramp_end_m_s = number("cruise_ramp_end_m_s", 0, 150);
+        else if (k == "airbrake_offset_deg") c.airbrake_offset_deg = number("airbrake_offset_deg", 0, 55);
+        else if (k == "airbrake_min_speed_m_s") c.airbrake_min_speed_m_s = number("airbrake_min_speed_m_s", 0, 150);
+        else if (k == "airbrake_brake_start") c.airbrake_brake_start = number("airbrake_brake_start", 0, 0.99);
+        else if (k == "airbrake_brake_full") c.airbrake_brake_full = number("airbrake_brake_full", 0.01, 1);
+        else if (k == "launch_offset_deg") c.launch_offset_deg = number("launch_offset_deg", -8, 55);
+        else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
+    }
+    if (!(c.cruise_ramp_end_m_s > c.cruise_ramp_start_m_s)) {
+        throw std::runtime_error(ctx + ": 'cruise_ramp_end_m_s' must be greater than 'cruise_ramp_start_m_s'");
+    }
+    if (!(c.airbrake_brake_full > c.airbrake_brake_start)) {
+        throw std::runtime_error(ctx + ": 'airbrake_brake_full' must be greater than 'airbrake_brake_start'");
+    }
+    unit.aero_control = c;
+}
+
 void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& part) {
     reject_unknown(j, {"format", "kind", "name", "source", "extends", "grade", "traction_control", "launch_control", "aero_control"}, path);
     part.kind = ElectronicsKind::AssistUnit;
@@ -68,8 +113,11 @@ void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& p
         if (!j.contains(blk)) continue;
         const bool allowed = std::string(blk) == "launch_control" ? info.allows_launch_control : info.allows_aero_control;
         if (!allowed) throw std::runtime_error(path + ": grade '" + grade + "' does not allow '" + blk + "'");
-        throw std::runtime_error(path + ": '" + blk + "' in an assist_unit is not implemented yet (assists plan I4/I5)");
+        if (std::string(blk) == "launch_control") {
+            throw std::runtime_error(path + ": '" + blk + "' in an assist_unit is not implemented yet (assists plan I4)");
+        }
     }
+    if (j.contains("aero_control")) read_aero_control(j.at("aero_control"), path, part.unit);
     if (!j.contains("traction_control")) return;
     const json& tc = j.at("traction_control");
     const std::string ctx = path + ": traction_control";

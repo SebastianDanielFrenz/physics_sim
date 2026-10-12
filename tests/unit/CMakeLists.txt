@@ -6,6 +6,7 @@ add_executable(ps_unit_tests
   test_traction_control.cpp
   test_assist_fitment.cpp
   test_assist_unit.cpp
+  test_assist_aero.cpp
   test_assist_slope_crawl_diag.cpp
   test_adaptive_pressure.cpp
   test_live_engine_ambient.cpp
