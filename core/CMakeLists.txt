@@ -212,6 +212,7 @@ add_library(ps_core STATIC
   src/vehicle/pacejka_tyre_model.cpp
   src/vehicle/tir_parser.cpp
   src/vehicle/wheel_instance.cpp
+  src/vehicle/assist_unit.cpp
   src/vehicle/vehicle_instance.cpp
   src/vehicle/system.cpp
   src/io/vehicle_io.cpp

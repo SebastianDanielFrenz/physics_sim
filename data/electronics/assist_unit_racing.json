@@ -12,5 +12,17 @@
       "drift":   { "target_slip": 0.35, "kp": 1.0, "ki_per_s": 2.0, "attack_rate_per_s": 6.0, "recovery_rate_per_s": 12.0, "min_fraction": 0.35, "ignition_cut": false }
     }
   },
-  "source": "[AS] Grade table proposal (assists plan I1, vault PHYS-074; owner approved the grade mapping 2026-10-12): Racing = traction control Off/On/Relaxed/Sport/Drift, plus launch control and aero automation (declared by the grade table, loaded by assists I4/I5). Mode 'on' is the car's own traction_control block. Per-mode values are assumed starting points (plan B1 table), measured against the V6 ordering band in tests/unit/test_assist_unit.cpp."
+  "aero_control": {
+    "surface": "rear_wing",
+    "default_enabled": true,
+    "cruise_offset_deg": 4.0,
+    "cruise_ramp_start_m_s": 10.0,
+    "cruise_ramp_end_m_s": 30.0,
+    "airbrake_offset_deg": 45.0,
+    "airbrake_min_speed_m_s": 20.0,
+    "airbrake_brake_start": 0.45,
+    "airbrake_brake_full": 1.0,
+    "launch_offset_deg": 10.0
+  },
+  "source": "[AS] Grade table proposal (assists plan I1, vault PHYS-074; owner approved the grade mapping 2026-10-12): Racing = traction control Off/On/Relaxed/Sport/Drift, plus launch control (declared by the grade table, loaded by assists I4) and aero automation (assists I5: the rear-wing law of racing_game core/src/session.cpp with its rg/environment.h defaults [D]; launch_offset_deg 10 is [AS] = the car_hyper maximum-downforce offset 9-11 deg [D]; default_enabled true [AS, owner: Racing = aero automation]). Mode 'on' is the car's own traction_control block. Per-mode values are assumed starting points (plan B1 table), measured against the V6 ordering band in tests/unit/test_assist_unit.cpp."
 }
