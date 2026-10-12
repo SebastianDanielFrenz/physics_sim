@@ -1007,7 +1007,7 @@ TEST_CASE("load_vehicle_json validates compliant shaft fields (I4 C13)", "[unit]
         return std::string(R"({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle",
-  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } }, { "name": "RL" } ],
+  "wheels": [ { "name": "FL", "tyre": { "source": "test fixture" } }, { "name": "FR", "tyre": { "source": "test fixture" } }, { "name": "RL", "tyre": { "source": "test fixture" } } ],
   "powertrain": {)") +
                compliance + R"(
     "components": [

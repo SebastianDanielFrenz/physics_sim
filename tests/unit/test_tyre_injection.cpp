@@ -58,10 +58,10 @@ struct TempVehicle {
 };
 
 std::string vehicle_with_wheels(const std::string& wheels_json) {
-    return R"({
+    return R"JSON({
   "format": "physics_sim.vehicle/2",
   "source": "test fixture, not a real vehicle (test_tyre_injection.cpp)",
-  "wheels": )" + wheels_json + "\n}";
+  "wheels": )JSON" + wheels_json + "\n}";
 }
 
 const char* kInlineTyre = R"({ "name": "file tyre", "source": "test fixture", "pkx1": 11.0 })";
