@@ -80,6 +80,11 @@ public:
         // clutch's kinetic capacity (N*m) applied to the auto-clutch output e_auto (+inf = none). The TCU's own
         // e_auto state is not changed by it.
         real clutch_capacity_cap_nm = std::numeric_limits<real>::infinity();
+        // Assists I7: the effective drive mode's overrides of AutoShiftDesc's four rpm points and of AutoClutchDesc::
+        // close_time_s (NaN = the car's own value; a NaN compares false and is never used as a threshold).
+        real up_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), up_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
+        real down_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), down_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
+        real close_time_s = std::numeric_limits<real>::quiet_NaN();
     };
 
     struct Outputs {
@@ -130,6 +135,7 @@ public:
         e_auto_ = clutch_locked ? real(1.0) : real(0.0);
         reverse_hold_ = false;
         anti_stall_released_ = false;
+        kickdown_spent_ = false;
     }
 
 private:
@@ -172,6 +178,9 @@ private:
 
     // Auto-shift state (plan section 6.5.4).
     real time_in_gear_ = 0.0;
+    // Assists I7: the kickdown bypass was spent by a gear change and the command has not dropped below
+    // kickdown_throttle since (hashed only when set).
+    bool kickdown_spent_ = false;
 
     // The shift in progress started as an upshift (6.5.3's upshift cut).
     bool upshift_cut_armed_ = false;

@@ -441,7 +441,8 @@
         "up_rpm_at_full_throttle": 8000,
         "down_rpm_at_zero_throttle": 1300,
         "down_rpm_at_full_throttle": 3500,
-        "min_time_in_gear_s": 1.0
+        "min_time_in_gear_s": 2.0,
+        "kickdown_throttle": 0.95
       },
       "max_pending_steps": 2
     },
@@ -449,6 +450,11 @@
       "id": "assists",
       "type": "electronics",
       "ref": "../electronics/assist_unit_racing.json"
+    },
+    {
+      "id": "drive_modes",
+      "type": "electronics",
+      "ref": "../electronics/drive_modes_car_hyper_n2o.json"
     }
   ]
 }

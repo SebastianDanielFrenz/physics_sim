@@ -4478,6 +4478,10 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 md.auto_shift.down_rpm_at_zero_throttle = asj.value("down_rpm_at_zero_throttle", md.auto_shift.down_rpm_at_zero_throttle);
                 md.auto_shift.down_rpm_at_full_throttle = asj.value("down_rpm_at_full_throttle", md.auto_shift.down_rpm_at_full_throttle);
                 md.auto_shift.min_time_in_gear_s = asj.value("min_time_in_gear_s", md.auto_shift.min_time_in_gear_s);
+                md.auto_shift.kickdown_throttle = asj.value("kickdown_throttle", md.auto_shift.kickdown_throttle); // assists I7
+                if (!std::isfinite(md.auto_shift.kickdown_throttle) || md.auto_shift.kickdown_throttle < real(0.0) || md.auto_shift.kickdown_throttle > real(1.0)) {
+                    throw std::runtime_error(ctx + ".auto_shift: kickdown_throttle must be in [0, 1] (0 = no bypass)");
+                }
             }
             md.max_pending_steps = cj.value("max_pending_steps", md.max_pending_steps);
 
@@ -4578,6 +4582,29 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     }
                 }
                 v.assist_unit = part.unit;
+            } else if (part.kind == ElectronicsKind::DriveModes) {
+                // Assists I7: a car-specific part, at most one. Its auto-shift / auto-clutch overrides need the car's manual_tcu,
+                // and each offered mode's merged thresholds must keep a hysteresis (down below up at zero and at full throttle).
+                if (v.drive_modes) throw std::runtime_error(ectx + ": at most one drive_modes per vehicle");
+                for (int m = 0; m < ps::vehicle::kDriveModeCount; ++m) {
+                    if (!(part.drive_modes.modes_bits & ps::vehicle::drive_mode_bit(static_cast<ps::vehicle::DriveMode>(m)))) continue;
+                    const ps::vehicle::DriveModeParams& dmp = part.drive_modes.params[static_cast<std::size_t>(m)];
+                    const bool shift = dmp.up_rpm_at_zero_throttle || dmp.up_rpm_at_full_throttle || dmp.down_rpm_at_zero_throttle || dmp.down_rpm_at_full_throttle;
+                    if ((shift || dmp.clutch_close_time_s) && tcu == nullptr) {
+                        throw std::runtime_error(ectx + ": mode '" + ps::vehicle::kDriveModeNames[m] + "' overrides auto_shift / auto_clutch but the vehicle has no manual_tcu");
+                    }
+                    if (shift) {
+                        const real uz = dmp.up_rpm_at_zero_throttle.value_or(tcu->auto_shift.up_rpm_at_zero_throttle);
+                        const real uf = dmp.up_rpm_at_full_throttle.value_or(tcu->auto_shift.up_rpm_at_full_throttle);
+                        const real dz = dmp.down_rpm_at_zero_throttle.value_or(tcu->auto_shift.down_rpm_at_zero_throttle);
+                        const real df = dmp.down_rpm_at_full_throttle.value_or(tcu->auto_shift.down_rpm_at_full_throttle);
+                        if (!(dz < uz) || !(df < uf)) {
+                            throw std::runtime_error(ectx + ": mode '" + ps::vehicle::kDriveModeNames[m] +
+                                                     "': the merged auto-shift downshift rpm must stay below the upshift rpm at zero and at full throttle");
+                        }
+                    }
+                }
+                v.drive_modes = part.drive_modes;
             } else {
                 for (const std::string& f : part.fits) {
                     if (f == "traction_control") { v.traction_control.fitted = true; continue; }

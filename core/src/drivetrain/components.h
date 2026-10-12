@@ -89,6 +89,16 @@ struct ComponentSubstepCtx {
     bool launch_hold_clutch = false;
     real launch_clutch_ramp = -1.0;
     real launch_throttle_ceiling = 1.0;
+    // Assists I7 (PHYS-074): the effective drive mode's per-substep inputs, set by VehicleInstance ONLY on a car with a
+    // drive_modes part. pedal bend: out = bend(command) applied by the throttle stage AFTER the car's own pedal curve and
+    // BEFORE the hand lever (drive_bend_x > 0 = active). The shift fields override the TCU's AutoShiftDesc /
+    // close_time_s (NaN = the car's own value). nitrous_arm_allowed false = the nitrous system sees arm 0. Defaults =
+    // no drive modes, so every other car is bit-identical. Never hashed (pure functions of the hashed mode state).
+    real drive_bend_x = 0.0, drive_bend_y = 0.0;
+    real drive_up_rpm_zero = std::numeric_limits<real>::quiet_NaN(), drive_up_rpm_full = std::numeric_limits<real>::quiet_NaN();
+    real drive_down_rpm_zero = std::numeric_limits<real>::quiet_NaN(), drive_down_rpm_full = std::numeric_limits<real>::quiet_NaN();
+    real drive_close_time_s = std::numeric_limits<real>::quiet_NaN();
+    bool nitrous_arm_allowed = true;
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): every generic component-declared
     // control channel's current value, in Powertrain::declare_control_

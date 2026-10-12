@@ -43,6 +43,7 @@
 
 #include "ps/drivetrain/powertrain_desc.h" // ThrottleInput
 #include "ps/vehicle/curve1d.h"
+#include "ps/vehicle/drive_modes_desc.h" // pedal_bend_apply (assists I7)
 
 #include <algorithm>
 
@@ -83,7 +84,10 @@ public:
     // out_raw_hand_lever (0 without a hand lever) - one read of the channel
     // serving both the command and Powertrain's published hand_throttle.
     [[nodiscard]] ThrottleCommand evaluate(const ComponentSubstepCtx& ctx, real& out_raw_hand_lever) const {
-        const real pedal_prime = has_curve_ ? curve_.evaluate(ctx.throttle) : ctx.throttle;
+        real pedal_prime = has_curve_ ? curve_.evaluate(ctx.throttle) : ctx.throttle;
+        if (ctx.drive_bend_x > real(0.0)) { // assists I7: the drive mode's one-point bend, on top of the car's curve
+            pedal_prime = vehicle::pedal_bend_apply(vehicle::PedalBend{ctx.drive_bend_x, ctx.drive_bend_y}, pedal_prime);
+        }
         real command = pedal_prime;
         out_raw_hand_lever = raw_hand_lever(ctx);
         if (has_hand_lever()) {

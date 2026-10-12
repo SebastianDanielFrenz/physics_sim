@@ -1,0 +1,32 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "drive_modes",
+  "name": "car_hyper_n2o drive modes",
+  "default_mode": "normal",
+  "modes": {
+    "eco": {
+      "pedal_bend": { "x": 0.6, "y": 0.3 },
+      "auto_shift": { "up_rpm_at_zero_throttle": 1800, "up_rpm_at_full_throttle": 6500, "down_rpm_at_zero_throttle": 1100, "down_rpm_at_full_throttle": 2800 },
+      "auto_clutch": { "close_time_s": 0.15 },
+      "traction_control_default": "on",
+      "launch_control_allowed": false,
+      "nitrous_arm_allowed": false
+    },
+    "normal": {
+      "auto_shift": { "up_rpm_at_zero_throttle": 2500, "up_rpm_at_full_throttle": 8000, "down_rpm_at_zero_throttle": 1300, "down_rpm_at_full_throttle": 3500 },
+      "auto_clutch": { "close_time_s": 0.10 },
+      "traction_control_default": "on",
+      "launch_control_allowed": false,
+      "nitrous_arm_allowed": false
+    },
+    "sport": {
+      "pedal_bend": { "x": 0.6, "y": 0.8 },
+      "auto_shift": { "up_rpm_at_zero_throttle": 3500, "up_rpm_at_full_throttle": 8100, "down_rpm_at_zero_throttle": 2000, "down_rpm_at_full_throttle": 5000 },
+      "auto_clutch": { "close_time_s": 0.06 },
+      "traction_control_default": "relaxed",
+      "launch_control_allowed": true,
+      "nitrous_arm_allowed": true
+    }
+  },
+  "source": "[AS] Owner-approved values (2026-10-13, relayed by the racing_game coordinator; assists plan I7, vault PHYS-074): ECO: pedal bend 0.6 -> 0.3, auto-shift up 1800 / 6500 rpm (zero / full throttle), down 1100 / 2800, post-shift clutch close 0.15 s, traction control default On, launch control no, N2O no. Normal: no bend, up 2500 / 8000, down 1300 / 3500, close 0.10 s, TC On, LC no, N2O no. Sport: bend 0.6 -> 0.8, up 3500 / 8100, down 2000 / 5000, close 0.06 s, TC Relaxed, LC yes, N2O yes. Default Normal. The Normal numbers equal car_hyper_n2o's own manual_tcu values (auto_shift thresholds, auto_clutch close_time_s 0.1), so Normal changes nothing but the two gates. The close time maps onto AutoClutchDesc::close_time_s, the post-shift e_auto close rate 1/close_time_s (the shift-close ramp of the torque-following close). The bend composes on top of the car's pedal curve (car_hyper_n2o has none yet). Wing automation stays on in all modes (the Racing assist unit's, independent of the mode)."
+}

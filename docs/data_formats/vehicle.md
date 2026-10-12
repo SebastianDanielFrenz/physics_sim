@@ -950,6 +950,7 @@ type throws `"controllers['<id>']: unknown type \"<type>\""`.
 | `up_rpm_at_zero_throttle` / `up_rpm_at_full_throttle` | real (rpm) | `2500` / `6300` | upshift rpm thresholds, interpolated by throttle |
 | `down_rpm_at_zero_throttle` / `down_rpm_at_full_throttle` | real (rpm) | `1300` / `2800` | downshift rpm thresholds |
 | `min_time_in_gear_s` | real (s) | `1.0` | shift-hysteresis timer |
+| `kickdown_throttle` | real | `0` | assists I7: a **downshift** whose rpm condition holds at a throttle command `>=` this value ignores `min_time_in_gear_s` (upshifts always wait for it). The bypass is a driver action: a gear change spends it and it is re-armed only once the command has fallen below this value, so a pedal held at full throttle through an upshift cannot bounce back down (hashed only while spent). The compared value is the throttle COMMAND (after the pedal curve and a drive mode's bend). `0` = off (every shipped car except `car_hyper_n2o`, `0.95` `[AS]`). Must be in `[0, 1]`, else `"auto_shift: kickdown_throttle must be in [0, 1] (0 = no bypass)"` |
 
 Apart from the three `upshift_*` fields above, none of the numeric
 sub-fields inside `auto_blip`/`auto_shift` are range-validated by the

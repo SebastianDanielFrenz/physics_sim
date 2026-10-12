@@ -1951,6 +1951,11 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.ground_speed_mps = ctx.ground_speed_mps; // assists I2 (D-LS2), NaN with TC Off
             s.ground_speed_to_input_omega = ground_to_in;
             s.clutch_capacity_cap_nm = clutch_capacity_cap_tc_; // assists I2 (D-LS1)
+            s.up_rpm_at_zero_throttle = ctx.drive_up_rpm_zero; // assists I7: the drive mode's auto-shift / close-time overrides (NaN = the car's)
+            s.up_rpm_at_full_throttle = ctx.drive_up_rpm_full;
+            s.down_rpm_at_zero_throttle = ctx.drive_down_rpm_zero;
+            s.down_rpm_at_full_throttle = ctx.drive_down_rpm_full;
+            s.close_time_s = ctx.drive_close_time_s;
             // Assists I4 (PHYS-074 D-LC1): the unit's launch control owns the clutch while Armed (held open) and
             // Launch (a torque-following capacity, ramped 0 -> 1 over the unit's clutch_ramp_s). VehicleInstance
             // suspends traction control in those phases (ctx.traction_torque_fraction stays 1), so the I2 cap above
@@ -2061,6 +2066,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
                 return (ctx.channels != nullptr && slot >= 0 && slot < ctx.channel_count) ? ctx.channels[slot] : fallback;
             };
             ni.arm = channel(nitrous_->arm_slot(), nitrous_->kit().controller.arm_default);
+            if (!ctx.nitrous_arm_allowed) ni.arm = real(0.0); // assists I7: the effective drive mode forbids arming
             ni.heater = channel(nitrous_->heater_slot(), nitrous_->bottle().has_heater ? nitrous_->bottle().heater.default_on : real(0.0));
             ni.purge = channel(nitrous_->purge_slot(), real(0.0));
             ni.throttle_command = throttle_cmd.command;
