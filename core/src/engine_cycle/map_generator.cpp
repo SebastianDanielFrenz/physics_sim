@@ -608,16 +608,23 @@ EngineMapsPtr EngineMapGenTask::finish() {
             if (below) break;
             --kept;
         }
-        if (kept == 0) {
-            throw std::runtime_error("engine map generator: no grid_p_im row lies below the wide-open-throttle plenum pressure (" +
-                                     std::to_string(p_wot_min) + " Pa)");
-        }
         em.wot_dropped_rows = static_cast<int>(np - kept);
         // The kept rows' trim failures, deferred from run_point, in index order (the message run_point throws otherwise).
+        // A dropped row above ambient is an author error on an ambient-fed engine, not a near-WOT row: it fails as before
+        // (A5 G3), with run_point's message when its trim failed and a plain one when a ram-tuned cycle reached it.
         for (std::size_t ir = 0; ir < nr; ++ir) {
-            for (std::size_t ip = 0; ip < kept; ++ip) {
+            for (std::size_t ip = 0; ip < np; ++ip) {
                 const std::size_t k = ir * np + ip;
-                if (s.nonbreathing[k] || s.node_status[k] == 0) continue;
+                if (ip >= kept) {
+                    if (!(s.p_axis[ip] > kPamb)) continue;
+                    if (s.node_status[k] != 1) {
+                        throw std::runtime_error("engine map generator: grid_p_im row " + std::to_string(s.p_axis[ip]) +
+                                                 " Pa lies above the ambient " + std::to_string(kPamb) +
+                                                 " Pa of an ambient-fed engine (no forced induction)");
+                    }
+                } else if (s.nonbreathing[k] || s.node_status[k] == 0) {
+                    continue;
+                }
                 if (s.node_status[k] == 1) {
                     throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[k].p_im_pa) +
                                              " Pa unreachable at " + std::to_string(s.ops[k].rpm) +
@@ -627,6 +634,10 @@ EngineMapsPtr EngineMapGenTask::finish() {
                                          " Pa not settled at " + std::to_string(s.ops[k].rpm) + " rpm (mean plenum " +
                                          std::to_string(s.p_mean[k]) + " Pa)");
             }
+        }
+        if (kept == 0) {
+            throw std::runtime_error("engine map generator: no grid_p_im row lies below the wide-open-throttle plenum pressure (" +
+                                     std::to_string(p_wot_min) + " Pa)");
         }
     }
     const std::size_t npo = s.wot ? kept + 1 : np; // output rows
