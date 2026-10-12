@@ -16,7 +16,7 @@
       "display_name": "Dry grass on firm soil",
       "lambda_mu": 0.42,
       "crr": 0.08,
-      "source": "COPIED from data/surfaces/surfaces.json."
+      "source": "COPIED from data/surfaces/surfaces.json as it was at assists Part A (0.42; the shipped value is 0.6 since assists I2) - kept so Part A and the I2a before/after diag run on the surface the limit cycle was found on."
     },
     "grass_rg": {
       "display_name": "Dry grass (racing_game value)",

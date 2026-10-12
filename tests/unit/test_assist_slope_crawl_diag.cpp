@@ -6,7 +6,7 @@
 // Rig: car_hyper.json (maps generated once, cached under the system temp dir) on a TILTED flat mesh ground tagged
 // with one named surface (20 m cells - flat_surface_mesh), chassis box 1500 kg {2, .4, .15} at 0.5 m like
 // test_traction_control.cpp. The ground rises in +X (the car faces uphill). Surfaces: physics_sim's own
-// data/surfaces/surfaces.json (grass lambda_mu 0.42, crr 0.08) and the test fixture
+// data/surfaces/surfaces.json (grass lambda_mu 0.42 at Part A, 0.6 since assists I2; crr 0.08) and the test fixture
 // tests/support/fixtures/assists/surfaces_racing_game.json, which copies racing_game's game-owned grass
 // (lambda_mu 0.63, crr 0.08 - the surface the owner actually drove on) under the name "grass_rg".
 //

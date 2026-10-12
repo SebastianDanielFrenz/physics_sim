@@ -347,10 +347,11 @@ TEST_CASE("Full-throttle acceleration on grass/dirt is lower than on asphalt", "
 
     INFO("speed_asphalt=" << speed_asphalt << " speed_dirt=" << speed_dirt << " speed_grass=" << speed_grass << " m/s after "
                            << run_seconds << " s");
-    // data/surfaces/surfaces.json: lambda_mu asphalt=1.0 > dirt=0.6 >
-    // grass=0.42, and crr asphalt=0.013 < dirt=0.04 < grass=0.08 - both
-    // effects point the same way (lower grip AND more rolling resistance),
-    // so the ordering is unambiguous even though full_throttle on the
+    // data/surfaces/surfaces.json: lambda_mu asphalt=1.0 > dirt=0.6 =
+    // grass=0.6 (grass was 0.42 until assists I2, owner 2026-10-12), and crr
+    // asphalt=0.013 < dirt=0.04 < grass=0.08 - dirt vs grass is now decided by
+    // rolling resistance alone, asphalt vs dirt by both effects (lower grip AND
+    // more rolling resistance), even though full_throttle on the
     // lower-grip surfaces is traction- rather than torque-limited (some
     // wheelspin is expected there, unlike the asphalt case above).
     CHECK(speed_asphalt > speed_dirt);
