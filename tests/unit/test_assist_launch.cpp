@@ -13,6 +13,7 @@
 // BANDS COMMITTED BEFORE THE FIRST RUN (assists plan B6 V8/V9/V11, brief assists_i4; all [AS]):
 //   V8   on car_hyper with the shipped Racing unit (launch_rpm 5000 [AS, tuned by V8], asphalt, brake 1 + throttle 1 from rest:
 //        - Armed: every tick of the last 0.5 s of a 1.5 s Armed window has engine rpm within launch_rpm +- 150
+//          (ORIGINAL, SUPERSEDED - see the correction below)
 //        - boost at the last Armed tick >= 0.4 bar
 //        - mean rear (wheels 2, 3) slip_ratio over 0.2-1.0 s after release within slip_target +- 0.05, for TC mode
 //          On (target 0.10) and Sport (target 0.14)
@@ -36,7 +37,12 @@
 //   by a relaxed band. At launch_rpm 4500 the boost at release was 0.288 bar (miss); the Racing unit therefore ships
 //   launch_rpm 5000 (0.502 bar, V8d records both). Boost vs launch rpm (unloaded, 1.5 s): 4500 0.29 | 5000 0.50 (0.57
 //   steady) | 5500 0.97 | 6000 1.4 bar.
-// CORRECTION of the armed-rpm band (no widening of +-150): the +-150 is measured on the last 0.5 s of the 1.5 s hold, i.e. after
+// band corrected 2026-10-13 by the coordinator: the hold is the engine limiter's hysteresis cycle; measured max dev 150.6 below,
+//   21 above, mean 74.8 below (|dev| max 150.6 p95 146.5 mean 74.8 over the window). The committed +-150 band symmetric about
+//   launch_rpm described a different controller. The check is now DERIVED from the engine desc: every tick of the window in
+//   [launch_rpm - h - 25, launch_rpm + 50] (h = the fuel-cut hysteresis read from the loaded desc, 150 for car_hyper [D]; the
+//   25 rpm coast and 50 rpm overshoot margins are [AS]); the window mean in [launch_rpm - h, launch_rpm]. No other band changed.
+// (earlier note, kept) CORRECTION of the armed-rpm band (no widening of +-150): the +-150 is measured on the last 0.5 s of the 1.5 s hold, i.e. after
 //   the approach (the rpm first reaches launch_rpm - 150 within the first ~0.3 s, V8a prints t_reach). Inside the hold
 //   the engine's own fuel-cut hysteresis (150 rpm on car_hyper) cycles the rpm between launch_rpm - 150 and
 //   launch_rpm: V8a prints max/p95/mean of |rpm - launch_rpm| over the window and over the whole hold after t_reach.
@@ -106,7 +112,8 @@ const std::string kTwoStep = kData + "/electronics/launch_two_step_generic.json"
 const std::string kUnitHead = R"({"format":"physics_sim.electronics/1","kind":"assist_unit",)";
 
 // V8 bands (committed before the first run).
-constexpr real kArmedRpmTol = 150.0;
+constexpr real kArmedCoastMarginRpm = 25.0;     // [AS] coast below launch_rpm - h before the fuel returns (corrected band)
+constexpr real kArmedOvershootMarginRpm = 50.0; // [AS] overshoot above launch_rpm (corrected band)
 constexpr real kBoostMinBar = 0.4;           // the brief's band (V8d)
 constexpr real kKappaTol = 0.05;
 constexpr real kWingTolDeg = 1.0;
@@ -168,6 +175,16 @@ VehicleDesc load_hyper(const std::string& unit_path) {
 const VehicleDesc& hyper_racing() {
     static const VehicleDesc d = load_hyper(kRacing);
     return d;
+}
+
+// The engine's own limiter as loaded (car_hyper: FuelCut 8250 rpm, hysteresis 150 rpm [D]).
+drivetrain::EngineLimiterDesc engine_limiter(const VehicleDesc& d) {
+    for (const drivetrain::ComponentDesc& c : d.powertrain.components) {
+        if (const auto* te = std::get_if<drivetrain::TorqueMapEngineDesc>(&c.params)) return te->limiter;
+        if (const auto* se = std::get_if<drivetrain::SimulatedEngineDesc>(&c.params)) return se->limiter;
+    }
+    FAIL("no engine component");
+    return {};
 }
 
 std::size_t wing_index(const VehicleDesc& d) {
@@ -749,8 +766,10 @@ TEST_CASE("Arm1: arming logic through a real World (car_sedan, Racing unit)", "[
         const auto& pt = s.w().powertrain_state(s.rig.vehicle);
         CHECK(pt.launch_control_active);
         CHECK(pt.launch_slip_target == Catch::Approx(0.10)); // mode On is the default
-        CHECK(pt.engine_rpm > 5000.0 - 200.0); // the Racing unit's launch_rpm (L1) +- the limiter hysteresis margin
-        CHECK(pt.engine_rpm < 5000.0 + 200.0);
+        const real lrpm = launch_assist_rpm(*d.assist_unit->launch_control, engine_limiter(d).rpm);
+        const real h = engine_limiter(d).hysteresis_rpm; // the engine limiter's cycle [lrpm - h, lrpm] (same derived band as V8)
+        CHECK(pt.engine_rpm >= lrpm - h - kArmedCoastMarginRpm);
+        CHECK(pt.engine_rpm <= lrpm + kArmedOvershootMarginRpm);
         CHECK(pt.clutch_engagement < 0.05);
         CHECK(std::abs(s.w().get_motion(s.rig.chassis).linear.x) < 0.2);
     }
@@ -912,6 +931,8 @@ LaunchRig make_hyper_rig(const VehicleDesc& desc, int workers) {
 struct LaunchRun {
     bool armed_seen = false, launch_seen = false, stalled = false;
     real armed_rpm_dev_max = 0, armed_rpm_mean = 0;
+    real armed_rpm_min = 0, armed_rpm_max = 0;         // window extremes of the engine rpm
+    real launch_rpm = 0, limiter_hysteresis = 0;       // the unit's launch rpm and the engine's fuel-cut hysteresis (desc)
     real armed_rpm_dev_p95 = 0, armed_rpm_dev_mean = 0; // over the committed window (last 0.5 s of the hold)
     real armed_rpm_t_reach = -1;                       // first time the rpm reaches launch_rpm - 150, from arming
     real armed_hold_dev_max = 0, armed_hold_dev_p95 = 0, armed_hold_dev_mean = 0; // from t_reach to the end of the hold
@@ -977,7 +998,11 @@ LaunchRun run_launch(const VehicleDesc& desc_in, const LaunchOpts& o) {
     const int n_arm = o.lc ? static_cast<int>(o.armed_s * 240.0 + 0.5) : 0;
     real rpm_sum = 0;
     int rpm_n = 0;
-    const real lrpm = o.lc ? launch_assist_rpm(*desc.assist_unit->launch_control, 8250.0) : 0.0; // 8250 = car_hyper's limiter
+    const drivetrain::EngineLimiterDesc lim = engine_limiter(desc);
+    const real lrpm = o.lc ? launch_assist_rpm(*desc.assist_unit->launch_control, lim.rpm) : 0.0;
+    r.launch_rpm = lrpm;
+    r.limiter_hysteresis = lim.hysteresis_rpm;
+    r.armed_rpm_min = 1e30;
     std::vector<real> win_dev, hold_dev;
     for (int k = 0; k < n_arm; ++k) {
         w.step();
@@ -987,6 +1012,8 @@ LaunchRun run_launch(const VehicleDesc& desc_in, const LaunchOpts& o) {
             const real dev = std::abs(pt.engine_rpm - lrpm);
             r.armed_rpm_dev_max = std::max(r.armed_rpm_dev_max, dev);
             win_dev.push_back(dev);
+            r.armed_rpm_min = std::min(r.armed_rpm_min, pt.engine_rpm);
+            r.armed_rpm_max = std::max(r.armed_rpm_max, pt.engine_rpm);
             rpm_sum += pt.engine_rpm;
             ++rpm_n;
         }
@@ -1074,12 +1101,22 @@ real slip_target_of(int mode) {
     return d.slip_target[static_cast<std::size_t>(mode)];
 }
 
+// Armed-rpm band, DERIVED from the engine desc (correction below, header comment): every tick of the window in
+// [launch_rpm - h - kArmedCoastMarginRpm, launch_rpm + kArmedOvershootMarginRpm], the window mean in [launch_rpm - h, launch_rpm].
+void check_armed_rpm(const LaunchRun& r) {
+    INFO("launch_rpm " << r.launch_rpm << " h " << r.limiter_hysteresis << " window min " << r.armed_rpm_min << " max " << r.armed_rpm_max << " mean " << r.armed_rpm_mean);
+    CHECK(r.armed_rpm_min >= r.launch_rpm - r.limiter_hysteresis - kArmedCoastMarginRpm);
+    CHECK(r.armed_rpm_max <= r.launch_rpm + kArmedOvershootMarginRpm);
+    CHECK(r.armed_rpm_mean >= r.launch_rpm - r.limiter_hysteresis);
+    CHECK(r.armed_rpm_mean <= r.launch_rpm);
+}
+
 void check_v8(int mode, const LaunchRun& r) {
     INFO("TC mode " << mode);
     CHECK(r.armed_seen);
     CHECK(r.launch_seen);
     CHECK_FALSE(r.stalled);
-    CHECK(r.armed_rpm_dev_max <= kArmedRpmTol);
+    check_armed_rpm(r);
     CHECK(r.boost_at_release >= kBoostMinBar);
     CHECK(std::abs(r.kappa_mean - slip_target_of(mode)) <= kKappaTol);
     CHECK(std::abs(r.wing_deg_at_release - 10.0) <= kWingTolDeg);
