@@ -560,6 +560,7 @@ NitrousKitDesc dyno_kit(const NitrousKitDesc& k) {
 DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<const SimulatedEngineMaps>& maps, real rpm,
                         const DynoSweepSpec& spec, Findings& findings) {
     SimulatedEngine engine(desc, maps);
+    if (maps->cam_high && spec.cam_profile >= 0) engine.set_cam_blend_override(spec.cam_profile > 0 ? real(1.0) : real(0.0)); // P9
     // The nitrous system is the car's own (nitrous_system.h): the same flow arithmetic feeds Sensors::nitrous. The bottle is
     // never committed, so it stays at its descriptor fill and its pressure is held for the whole point.
     std::unique_ptr<NitrousSystem> nsys;
@@ -649,7 +650,9 @@ DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<c
         prev_boost = boost;
         prev_torque = torque;
     }
-    return settled_window_point(engine, w, rpm, omega, converged, real(k * window_steps) * h, spec, grid, findings);
+    DynoPoint p = settled_window_point(engine, w, rpm, omega, converged, real(k * window_steps) * h, spec, grid, findings);
+    p.cam_profile = engine.cam_high_requested() ? 1 : 0; // engine garage P9
+    return p;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -775,7 +778,18 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
         for (real rpm : rpms) {
             if (cancelled(cancel)) throw GenerationCancelled();
             real p_im_pa = 0.0;
-            result.points.push_back(steady_sim_point(*m, rpm, spec, p_im_pa));
+            // Engine garage P9: the profile this point runs on (see DynoSweepSpec::cam_profile).
+            int profile = 0;
+            if (m->cam_high) {
+                if (spec.cam_profile >= 0) {
+                    profile = spec.cam_profile > 0 ? 1 : 0;
+                } else if (rpm >= m->cam_switching.rpm_on) {
+                    const SimulatedEngine::SteadyPoint lo = SimulatedEngine::steady_point(*m, rpm, spec.throttle, spec.ambient);
+                    profile = lo.p_im_pa >= m->cam_switching.min_p_im_pa ? 1 : 0;
+                }
+            }
+            result.points.push_back(steady_sim_point(profile == 1 ? *m->cam_high : *m, rpm, spec, p_im_pa));
+            result.points.back().cam_profile = profile;
             Findings f;
             limiter_findings(f, sim->limiter, rpm, spec.part_files.engine);
             piston_speed_finding(f, *sim, rpm, spec.part_files.engine);

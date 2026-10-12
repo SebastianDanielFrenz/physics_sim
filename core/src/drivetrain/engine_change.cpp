@@ -184,7 +184,13 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
     } else if (both_cycle) {
         const CycleModelDesc ca = effective_cycle(a);
         const CycleModelDesc cb = effective_cycle(b);
-        if (engine_map_cache_key(ca, key_fuel(a), MapQuality::Full) != engine_map_cache_key(cb, key_fuel(b), MapQuality::Full)) {
+        // Engine garage P9: one key per cam profile (a profile-free engine: its one key, unchanged). A different
+        // profile count is a different engine structure (the runtime swaps every profile set together and refuses a
+        // count change) - Respawn; a lift edit in a profile moves that profile's key - Maps.
+        if (ca.cam_profiles.size() != cb.cam_profiles.size()) {
+            push(out, "cam", "/profiles", EngineChange::Respawn);
+        } else if (engine_map_profile_cache_keys(ca, key_fuel(a), MapQuality::Full) !=
+                   engine_map_profile_cache_keys(cb, key_fuel(b), MapQuality::Full)) {
             push(out, "engine", "/cycle", EngineChange::Maps);
         } else if (cycle_nonkey_differs(*a.cycle, *b.cycle)) {
             push(out, "engine", "/cycle", EngineChange::Runtime);
@@ -219,6 +225,11 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
     rt(a.idle_bypass_area_m2 != b.idle_bypass_area_m2 || !same(a.idle, b.idle), "/idle_control");
     rt(!same(a.ecu.lambda_target, b.ecu.lambda_target), "/ecu/lambda_target");
     rt(!same(a.ecu.spark_advance_deg, b.ecu.spark_advance_deg), "/ecu/spark_advance_deg");
+    // Engine garage P9: the switching rule is ECU runtime data (the maps do not depend on it).
+    rt(a.cam_switching.rpm_on != b.cam_switching.rpm_on || a.cam_switching.rpm_off != b.cam_switching.rpm_off ||
+           a.cam_switching.min_p_im_pa != b.cam_switching.min_p_im_pa || a.cam_switching.min_oil_c != b.cam_switching.min_oil_c ||
+           a.cam_switching.transition_s != b.cam_switching.transition_s,
+       "/ecu/switching");
     rt(!same(a.maps.ve, b.maps.ve) || !same(a.maps.eta_i, b.maps.eta_i) || !same(a.maps.f_lambda, b.maps.f_lambda) ||
            !same(a.maps.eta_spark, b.maps.eta_spark) || !same(a.maps.theta_mbt_deg, b.maps.theta_mbt_deg) ||
            !same(a.maps.friction_torque_nm, b.maps.friction_torque_nm) || a.maps.has_pmep_excess != b.maps.has_pmep_excess ||

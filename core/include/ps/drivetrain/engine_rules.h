@@ -36,6 +36,10 @@ enum class BuildRule : std::uint16_t {
     LimiterAboveRpmGrid = 8,   // the limiter is above the last rpm node of the generated maps
     BoostAbovePressureGrid = 9, // ambient + boost target is above the last manifold-pressure node
     LimiterAboveCurve = 10,    // torque-map engine: the limiter is above the last rpm of its torque curves
+    // Engine garage P9 (an engine with cam profiles only):
+    CamSwitchWindow = 11,      // switch rpm outside the generated rpm grid, or rpm_on/limiter or the hysteresis outside its band
+    CamProfileOrder = 12,      // the second ("high") profile has less peak lift or less lift area than the first
+    CamLiftOverValve = 13,     // a profile's peak lift over its valve head diameter is above the band
 };
 
 // A violation of a static rule. severity reuses P3b's LimitSeverity so one advisor handles both record kinds:

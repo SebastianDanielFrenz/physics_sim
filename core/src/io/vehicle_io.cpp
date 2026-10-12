@@ -458,6 +458,7 @@ constexpr const char* kSimulatedOnlyEngineKeys[] = {
     "architecture",  "bore_mm",           "stroke_mm",         "cylinders",
     "rotor_radius_mm", "eccentricity_mm", "rotor_width_mm",    "rotors",
     "intake_manifold_volume_l", "throttle_body", "throttle_actuator_tau_s", "ecu", "maps", "cycle",
+    "switching", // engine garage P9: cam-profile switching (needs a cycle block with profiles)
 };
 
 ps::drivetrain::TorqueMapEngineDesc read_torque_map_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
@@ -1015,6 +1016,8 @@ constexpr const char* kCycleKeys[] = {
     // pipe cell-size "resolution" block. See read_intake_block/
     // read_exhaust_block/read_resolution_block below.
     "intake", "exhaust", "default_installation", "resolution",
+    // Engine garage P9: discrete cam profiles (VTEC-style), docs/data_formats/cam.md "profiles".
+    "profiles",
 };
 
 std::vector<real> read_cycle_grid(const json& cj, const char* key, real scale, const std::string& cctx) {
@@ -1520,8 +1523,49 @@ ps::drivetrain::CycleModelDesc read_cycle_block(const json& cj, const std::strin
     d.exhaust_valves = require_positive_int(cj, "exhaust_valves", cctx);
     d.intake_valve_d_m = require_positive(cj, "intake_valve_d_mm", cctx) * kMm;
     d.exhaust_valve_d_m = require_positive(cj, "exhaust_valve_d_mm", cctx) * kMm;
-    d.intake_lift = read_cycle_lift(cj, "intake_lift", cctx);
-    d.exhaust_lift = read_cycle_lift(cj, "exhaust_lift", cctx);
+    if (cj.contains("profiles")) {
+        // Engine garage P9: VTEC-style discrete cam profiles. Each profile carries both lifts; the single lifts are then
+        // profile 0's (generator and key per profile: cycle_desc_for_cam_profile).
+        if (cj.contains("intake_lift") || cj.contains("exhaust_lift")) {
+            throw std::runtime_error(cctx + ": 'profiles' and 'intake_lift'/'exhaust_lift' together - with cam profiles every lift "
+                                      "lives inside its profile");
+        }
+        const json& pj = cj.at("profiles");
+        if (!pj.is_array()) throw std::runtime_error(cctx + ": 'profiles' must be an array of {id, intake_lift, exhaust_lift}");
+        if (pj.size() != CycleModelDesc::kMaxCamProfiles) {
+            throw std::runtime_error(cctx + ": 'profiles' must hold exactly " + std::to_string(CycleModelDesc::kMaxCamProfiles) +
+                                      " profiles (low, then high: one ECU switching rule selects between two), got " +
+                                      std::to_string(pj.size()));
+        }
+        for (std::size_t k = 0; k < pj.size(); ++k) {
+            const std::string pctx = cctx + ".profiles[" + std::to_string(k) + "]";
+            const json& p = pj[k];
+            if (!p.is_object()) throw std::runtime_error(pctx + " must be an object");
+            for (auto it = p.begin(); it != p.end(); ++it) {
+                const std::string& key = it.key();
+                const bool note = key == "source" || (key.size() > 7 && key.compare(key.size() - 7, 7, "_source") == 0);
+                if (key != "id" && key != "intake_lift" && key != "exhaust_lift" && !note) {
+                    throw std::runtime_error(pctx + ": unknown key '" + key + "' (a profile has id, intake_lift, exhaust_lift)");
+                }
+            }
+            if (!p.contains("id") || !p.at("id").is_string() || p.at("id").get<std::string>().empty()) {
+                throw std::runtime_error(pctx + ": 'id' must be a non-empty string");
+            }
+            CycleModelDesc::CamProfile cp;
+            cp.id = p.at("id").get<std::string>();
+            for (const auto& prev : d.cam_profiles) {
+                if (prev.id == cp.id) throw std::runtime_error(pctx + ": duplicate profile id '" + cp.id + "'");
+            }
+            cp.intake_lift = read_cycle_lift(p, "intake_lift", pctx);
+            cp.exhaust_lift = read_cycle_lift(p, "exhaust_lift", pctx);
+            d.cam_profiles.push_back(std::move(cp));
+        }
+        d.intake_lift = d.cam_profiles.front().intake_lift;
+        d.exhaust_lift = d.cam_profiles.front().exhaust_lift;
+    } else {
+        d.intake_lift = read_cycle_lift(cj, "intake_lift", cctx);
+        d.exhaust_lift = read_cycle_lift(cj, "exhaust_lift", cctx);
+    }
     // ps_audio A4: 'intake'/'exhaust' (the finite-volume pipe pair) must be
     // given together (a manifold with no exhaust plumbing modeled, or vice
     // versa, is not a supported configuration) or not at all. When absent,
@@ -2163,6 +2207,50 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         throw std::runtime_error(ctx + ": dfco_reenable_rpm must be < dfco_enable_rpm");
     }
 
+    // --- engine garage P9: the ECU's cam-profile switching rule (docs/data_formats/ecu.md "switching") ------------------
+    const bool has_switching = j.contains("switching");
+    if (has_switching) {
+        const json& sj = j.at("switching");
+        const std::string sctx = ctx + ".switching";
+        if (!sj.is_object()) throw std::runtime_error(sctx + " must be an object");
+        for (auto it = sj.begin(); it != sj.end(); ++it) {
+            const std::string& k = it.key();
+            const bool note = k == "source" || (k.size() > 7 && k.compare(k.size() - 7, 7, "_source") == 0);
+            if (k != "type" && k != "rpm_on" && k != "rpm_off" && k != "min_p_im_kpa" && k != "min_oil_c" && k != "transition_s" &&
+                !note) {
+                throw std::runtime_error(sctx + ": unknown key '" + k +
+                                          "' (switching has type, rpm_on, rpm_off, min_p_im_kpa, min_oil_c, transition_s)");
+            }
+        }
+        if (!sj.contains("type") || !sj.at("type").is_string() || sj.at("type").get<std::string>() != "discrete") {
+            throw std::runtime_error(sctx + ": 'type' must be \"discrete\" (the only switching type; continuous lift is P10)");
+        }
+        CamSwitchingDesc& cs = e.cam_switching;
+        cs.rpm_on = require_number(sj, "rpm_on", sctx);
+        cs.rpm_off = require_number(sj, "rpm_off", sctx);
+        cs.min_p_im_pa = require_number(sj, "min_p_im_kpa", sctx) * kKpa;
+        cs.min_oil_c = require_number(sj, "min_oil_c", sctx);
+        cs.transition_s = require_number(sj, "transition_s", sctx);
+        for (real v : {cs.rpm_on, cs.rpm_off, cs.min_p_im_pa, cs.min_oil_c, cs.transition_s}) {
+            if (!std::isfinite(v)) throw std::runtime_error(sctx + ": every value must be finite");
+        }
+        if (!(cs.rpm_off < cs.rpm_on)) {
+            throw std::runtime_error(sctx + ": rpm_off must be < rpm_on (the hysteresis band), got rpm_on " + std::to_string(cs.rpm_on) +
+                                      ", rpm_off " + std::to_string(cs.rpm_off));
+        }
+        if (!(cs.rpm_off > e.idle_rpm) || !(cs.rpm_on < e.limiter.rpm)) {
+            throw std::runtime_error(sctx + ": the switching band must lie between idle_rpm and limiter.rpm (idle_rpm < rpm_off < "
+                                      "rpm_on < limiter.rpm) - the idle controller runs on the low profile");
+        }
+        if (!(cs.min_p_im_pa >= real(0.0))) throw std::runtime_error(sctx + ": 'min_p_im_kpa' must be >= 0");
+        if (!(cs.min_oil_c >= real(-40.0) && cs.min_oil_c <= real(150.0))) {
+            throw std::runtime_error(sctx + ": 'min_oil_c' must be in [-40, 150] deg C");
+        }
+        if (!(cs.transition_s >= real(0.0) && cs.transition_s <= real(2.0))) {
+            throw std::runtime_error(sctx + ": 'transition_s' must be in [0, 2] s");
+        }
+    }
+
     // --- fuel (required) + ignition (required, spark only in I7b) -----------------
     if (j.contains("fuels") && j.contains("fuel")) {
         throw std::runtime_error(ctx + ": 'fuels' and 'fuel' are mutually exclusive ('fuel' is shorthand for a one-entry 'fuels')");
@@ -2218,6 +2306,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
     }
 
     // --- I7c C16a: maps generated from the 0D cycle model --------------------
+    if (!has_cycle && has_switching) {
+        throw std::runtime_error(ctx + ": the ECU has a 'switching' block but the engine has no cycle block - cam profiles are "
+                                  "generated from a cycle block's cam (docs/data_formats/cam.md)");
+    }
     if (has_cycle) {
         const std::string cctx = ctx + ".cycle";
         if (e.architecture != EngineArchitecture::Piston4Stroke) {
@@ -2225,6 +2317,25 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                                       "I7e)");
         }
         e.cycle = read_cycle_block(j.at("cycle"), cctx, engine_dir, e.piston, have_friction);
+        // Engine garage P9: cam profiles and the ECU's switching rule come as a pair.
+        if (!e.cycle->cam_profiles.empty()) {
+            if (!has_switching) {
+                throw std::runtime_error(ctx + ": the cam has profiles (cycle.profiles) but the ECU has no 'switching' block - give the "
+                                          "ECU part a switching rule (docs/data_formats/ecu.md), or use a single-lift cam");
+            }
+            if (j.contains("maps")) {
+                throw std::runtime_error(ctx + ": an engine with cam profiles generates every map from its cycle block, one set per "
+                                          "profile - a 'maps' block is not supported with profiles");
+            }
+            if (knock_mbt_tracking) {
+                throw std::runtime_error(ctx + ": a knock-limited ECU without a spark table (MBT tracking) is not supported with cam "
+                                          "profiles yet - give the ECU a spark schedule");
+            }
+            for (const auto& p : e.cycle->cam_profiles) e.cam_profile_ids.push_back(p.id);
+        } else if (has_switching) {
+            throw std::runtime_error(ctx + ": the ECU has a 'switching' block but the cam has no profiles - give the engine a cam with "
+                                      "'profiles' (docs/data_formats/cam.md), or remove the switching block");
+        }
         // C17a follow-up: the cycle's spark schedule IS the ECU's (the ecu
         // block's own table was rejected above) - the runtime then evaluates
         // exactly the table the generator ran its grid nodes at.
@@ -2281,7 +2392,69 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                               e.maps.has_pmep_excess && (!knock_limited || have_theta_kl_file);
         const bool have_pmep_file = e.maps.has_pmep_excess; // P7d: before the generated table is copied in
         const std::string mctx_gen = ctx + ".maps";
-        if (!complete) {
+        if (!e.cycle->cam_profiles.empty()) {
+            // Engine garage P9: one complete map set per cam profile, each with its own .psmaps key (the key of the same
+            // engine written with that cam alone). Progress reports the sum over the profiles that are generated (cache
+            // hits add nothing); the cancel flag stops the whole load; the cache files are written only after every set
+            // exists, so a cancelled load leaves no trace (the P1 contract).
+            const EngineMapOptions defaults{};
+            const EngineMapOptions& opt = map_options != nullptr ? *map_options : defaults;
+            const std::size_t np = e.cycle->cam_profiles.size();
+            std::vector<CycleModelDesc> pdesc;
+            for (std::size_t k = 0; k < np; ++k) pdesc.push_back(drivetrain::cycle_desc_for_cam_profile(*e.cycle, k));
+            if (!opt.generate) {
+                for (const CycleModelDesc& d : pdesc) drivetrain::validate_engine_map_generation(d, e.fuels.front(), opt.quality);
+                e.maps_pending = true;
+            } else {
+                if (opt.cancel != nullptr && opt.cancel->load(std::memory_order_relaxed)) throw drivetrain::GenerationCancelled();
+                std::vector<std::uint64_t> keys(np, 0);
+                std::vector<EngineMapsPtr> gens(np);
+                std::vector<bool> generated(np, false);
+                for (std::size_t k = 0; k < np; ++k) {
+                    keys[k] = drivetrain::engine_map_cache_key(pdesc[k], e.fuels.front(), opt.quality);
+                    gens[k] = drivetrain::load_cached_engine_maps(opt.cache_dir, keys[k], drivetrain::engine_map_generator_version(pdesc[k]));
+                }
+                std::vector<std::size_t> points(np, 0);
+                std::size_t total = 0;
+                if (opt.on_progress) {
+                    for (std::size_t k = 0; k < np; ++k) {
+                        if (!gens[k]) points[k] = drivetrain::engine_map_progress_total(pdesc[k], e.fuels.front(), opt.quality);
+                        total += points[k];
+                    }
+                }
+                std::size_t offset = 0;
+                for (std::size_t k = 0; k < np; ++k) {
+                    if (gens[k]) continue;
+                    if (opt.generation_count_out != nullptr) ++*opt.generation_count_out;
+                    drivetrain::MapGenerationControl control;
+                    control.cancel = opt.cancel;
+                    if (opt.on_progress) {
+                        control.on_progress = [&opt, offset, total](std::size_t done, std::size_t) {
+                            opt.on_progress(std::min(offset + done, total), total);
+                        };
+                    }
+                    if (k == 0 && opt.on_partial_engine) {
+                        // A preview of the low profile alone (its partial maps; the other profiles are not generated yet).
+                        control.on_partial_maps = [&](EngineMapsPtr partial) {
+                            SimulatedEngineDesc preview = e;
+                            preview.maps = partial->maps;
+                            preview.cam_profile_ids.clear();
+                            preview.cam_profile_maps.clear();
+                            preview.maps_pending = false;
+                            opt.on_partial_engine(preview);
+                        };
+                    }
+                    gens[k] = generate_engine_maps(pdesc[k], e.fuels.front(), opt.quality, opt.pool, &control);
+                    generated[k] = true;
+                    offset += points[k];
+                }
+                for (std::size_t k = 0; k < np; ++k) {
+                    if (generated[k]) drivetrain::store_cached_engine_maps(opt.cache_dir, keys[k], *gens[k]);
+                }
+                e.maps = gens[0]->maps;
+                for (std::size_t k = 1; k < np; ++k) e.cam_profile_maps.push_back(gens[k]->maps);
+            }
+        } else if (!complete) {
             // Generator errors propagate unwrapped (their own "engine map
             // generator: ..." / "CycleModelDesc: ..." messages) - no catch
             // by reference here (vault TOOL-019, the Windows ASan leg).
@@ -2388,6 +2561,10 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             }
         }
         require_maps_efficiency_below_one(e.maps, mctx);
+        for (std::size_t k = 0; k < e.cam_profile_maps.size(); ++k) {
+            // Engine garage P9: every further cam profile's generated set passes the same efficiency check.
+            require_maps_efficiency_below_one(e.cam_profile_maps[k], mctx + " (cam profile '" + e.cam_profile_ids.at(k + 1) + "')");
+        }
         if (e.breakaway_torque_nm < e.maps.friction_torque_nm.evaluate(real(0.0))) {
             throw std::runtime_error(ctx + ": breakaway_torque_nm must be >= maps.friction_torque_nm(0)");
         }

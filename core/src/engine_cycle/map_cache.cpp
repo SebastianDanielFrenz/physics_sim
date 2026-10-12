@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -299,8 +300,26 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     return engine_map_cache_key(desc, fuel, quality, engine_map_generator_version(desc));
 }
 
+std::vector<std::uint64_t> engine_map_profile_cache_keys(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality) {
+    std::vector<std::uint64_t> keys;
+    if (desc.cam_profiles.empty()) {
+        keys.push_back(engine_map_cache_key(desc, fuel, quality));
+        return keys;
+    }
+    for (std::size_t k = 0; k < desc.cam_profiles.size(); ++k) {
+        keys.push_back(engine_map_cache_key(cycle_desc_for_cam_profile(desc, k), fuel, quality));
+    }
+    return keys;
+}
+
 std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& fuel, MapQuality quality,
                                    std::uint32_t generator_version) {
+    // Engine garage P9: a cam-profile desc has one key PER PROFILE (engine_map_profile_cache_keys); keying the list
+    // itself would make the profile id part of the key and lose the per-profile cache reuse.
+    if (!desc.cam_profiles.empty()) {
+        throw std::runtime_error("engine_map_cache_key: the cycle desc has cam profiles - key each profile "
+                                 "(engine_map_profile_cache_keys / cycle_desc_for_cam_profile)");
+    }
     KeyFnv f{14695981039346656037ULL};
     // CycleModelDesc, every field incl. source (the generated maps carry it
     // as EngineMaps::source - see map_cache.h's PROVISIONAL DECISION).

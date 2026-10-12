@@ -238,6 +238,81 @@ void check_cycle(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c)
     }
 }
 
+// Engine garage P9: peak lift (m) and the lift area (m*deg, trapezoids over the profile's own knots) of one lift curve.
+void lift_figures(const ValveLiftProfile& p, real& peak, real& area) {
+    peak = real(0.0);
+    area = real(0.0);
+    const auto& x = p.lift_m_vs_deg.x;
+    const auto& y = p.lift_m_vs_deg.y;
+    for (std::size_t i = 0; i < y.size(); ++i) {
+        peak = std::max(peak, y[i]);
+        if (i > 0) area += real(0.5) * (y[i] + y[i - 1]) * (x[i] - x[i - 1]);
+    }
+}
+
+void check_cam_profiles(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c) {
+    if (c.cam_profiles.size() < 2) return;
+    const CamSwitchingDesc& sw = e.cam_switching;
+    // --- the switch window ---
+    if (!c.grid_rpm.empty() && (sw.rpm_off < c.grid_rpm.front() || sw.rpm_on > c.grid_rpm.back())) {
+        const bool low = sw.rpm_off < c.grid_rpm.front();
+        s.add(BuildRule::CamSwitchWindow, LimitSeverity::Limiting, "ecu", low ? "/switching/rpm_off" : "/switching/rpm_on",
+              "the cam switch (" + num(sw.rpm_off, 5) + "-" + num(sw.rpm_on, 5) + " rpm) lies outside the generated rpm grid " +
+                  num(c.grid_rpm.front(), 5) + "-" + num(c.grid_rpm.back(), 5) + " rpm (lookups hold the edge row there)",
+              label_of(tab::kGridOvershootLimiting), low ? sw.rpm_off : sw.rpm_on, low ? c.grid_rpm.front() : c.grid_rpm.back(),
+              LimitUnit::RevPerMinute);
+    }
+    if (e.limiter.rpm > real(0.0)) {
+        const real frac = sw.rpm_on / e.limiter.rpm;
+        if (below(frac, tab::kCamSwitchFractionMin.value) || above(frac, tab::kCamSwitchFractionMax.value)) {
+            const bool low = below(frac, tab::kCamSwitchFractionMin.value);
+            s.add(BuildRule::CamSwitchWindow, LimitSeverity::Near, "ecu", "/switching/rpm_on",
+                  "the cam switches at " + num(sw.rpm_on, 5) + " rpm, " + num(frac, 3) + " of the " + num(e.limiter.rpm, 5) +
+                      " rpm limiter (production VTEC: 0.60-0.72)",
+                  label_of(low ? tab::kCamSwitchFractionMin : tab::kCamSwitchFractionMax), frac,
+                  low ? tab::kCamSwitchFractionMin.value : tab::kCamSwitchFractionMax.value, LimitUnit::Fraction);
+        }
+    }
+    const real hyst = sw.rpm_on - sw.rpm_off;
+    if (below(hyst, tab::kCamHysteresisMin.value) || above(hyst, tab::kCamHysteresisMax.value)) {
+        const bool low = below(hyst, tab::kCamHysteresisMin.value);
+        s.add(BuildRule::CamSwitchWindow, LimitSeverity::Near, "ecu", "/switching/rpm_off",
+              "the cam switch hysteresis is " + num(hyst, 4) + " rpm (band " + num(tab::kCamHysteresisMin.value, 3) + "-" +
+                  num(tab::kCamHysteresisMax.value, 4) + " rpm)",
+              label_of(low ? tab::kCamHysteresisMin : tab::kCamHysteresisMax), hyst,
+              low ? tab::kCamHysteresisMin.value : tab::kCamHysteresisMax.value, LimitUnit::RevPerMinute);
+    }
+    // --- profile sanity ---
+    for (int valve = 0; valve < 2; ++valve) {
+        const char* name = valve == 0 ? "intake" : "exhaust";
+        real pk0 = 0.0, ar0 = 0.0, pk1 = 0.0, ar1 = 0.0;
+        lift_figures(valve == 0 ? c.cam_profiles[0].intake_lift : c.cam_profiles[0].exhaust_lift, pk0, ar0);
+        lift_figures(valve == 0 ? c.cam_profiles[1].intake_lift : c.cam_profiles[1].exhaust_lift, pk1, ar1);
+        if (below(pk1, pk0) || below(ar1, ar0)) {
+            s.add(BuildRule::CamProfileOrder, LimitSeverity::Near, "cam",
+                  std::string("/profiles/1/") + name + "_lift",
+                  std::string("the second cam profile ('") + c.cam_profiles[1].id + "') has less " + name +
+                      " lift than the first ('" + c.cam_profiles[0].id + "'): peak " + mm(pk1) + " vs " + mm(pk0) +
+                      "; the ECU switches to it at high rpm",
+                  "[D] the switching rule selects profile 2 above rpm_on, so it is the high-speed cam", pk1, pk0,
+                  LimitUnit::Millimetre);
+        }
+        const real d = valve == 0 ? c.intake_valve_d_m : c.exhaust_valve_d_m;
+        for (std::size_t k = 0; k < c.cam_profiles.size() && d > real(0.0); ++k) {
+            real pk = 0.0, ar = 0.0;
+            lift_figures(valve == 0 ? c.cam_profiles[k].intake_lift : c.cam_profiles[k].exhaust_lift, pk, ar);
+            if (above(pk / d, tab::kCamLiftOverValveMax.value)) {
+                s.add(BuildRule::CamLiftOverValve, LimitSeverity::Limiting, "cam",
+                      "/profiles/" + std::to_string(k) + "/" + name + "_lift",
+                      std::string("cam profile '") + c.cam_profiles[k].id + "' lifts the " + name + " valves " + mm(pk) +
+                          ", " + num(pk / d, 3) + " of their " + mm(d) + " head (band <= " +
+                          num(tab::kCamLiftOverValveMax.value, 3) + ")",
+                      label_of(tab::kCamLiftOverValveMax), pk / d, tab::kCamLiftOverValveMax.value, LimitUnit::Dimensionless);
+            }
+        }
+    }
+}
+
 void sort_issues(std::vector<BuildIssue>& v) {
     std::stable_sort(v.begin(), v.end(), [](const BuildIssue& a, const BuildIssue& b) {
         if (a.rule != b.rule) return static_cast<int>(a.rule) < static_cast<int>(b.rule);
@@ -260,6 +335,9 @@ const char* to_string(BuildRule r) {
     case BuildRule::LimiterAboveRpmGrid: return "LimiterAboveRpmGrid";
     case BuildRule::BoostAbovePressureGrid: return "BoostAbovePressureGrid";
     case BuildRule::LimiterAboveCurve: return "LimiterAboveCurve";
+    case BuildRule::CamSwitchWindow: return "CamSwitchWindow";
+    case BuildRule::CamProfileOrder: return "CamProfileOrder";
+    case BuildRule::CamLiftOverValve: return "CamLiftOverValve";
     }
     return "Unknown";
 }
@@ -270,6 +348,7 @@ std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e) {
     if (e.architecture == EngineArchitecture::Piston4Stroke) {
         check_mean_piston_speed(s, e.piston.stroke_m, e.limiter.rpm);
         if (e.cycle.has_value()) check_cycle(s, e, *e.cycle);
+        if (e.cycle.has_value()) check_cam_profiles(s, e, *e.cycle); // engine garage P9
     }
     sort_issues(out);
     return out;
