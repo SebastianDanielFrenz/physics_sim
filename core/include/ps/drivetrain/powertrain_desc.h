@@ -285,6 +285,11 @@ struct SimulatedEngineMapsDesc {
     // through select_knock_fuel below). Empty for a loaded (file) theta_kl
     // and for every engine without a generated knock limit.
     std::vector<Table2D> theta_kl_by_fuel;
+    // Engine garage P7d: GENERATED maps of an ambient-fed pipe engine only (never an engine-file key). x = the rpm
+    // axis, y = the cycle-mean plenum pressure with the throttle wide open at ISA ambient [Pa] - the WOT state the
+    // top row of ve/pmep_excess_pa/theta_kl_deg (y = 101325 Pa) holds. Non-empty: every p_im-axis lookup goes through
+    // map_pressure_index (ps/drivetrain/map_pressure_index.h). Empty: the plain absolute p_im lookup, as before.
+    vehicle::Curve1D wot_p_im_pa;
     std::string source;                    // required (PLAN.md section 8)
 };
 

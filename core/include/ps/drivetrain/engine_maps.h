@@ -60,12 +60,27 @@ namespace ps::drivetrain {
 // the catalyst gained its laminar substrate resistance (cycle_engine.cpp), so
 // every pipe engine's maps moved and its v2 cache files must not be reused.
 // engine_map_generator_version() picks the one a desc uses.
+// Engine garage P7d: 4, an AMBIENT-FED pipe engine (no compressor_supply, no
+// adaptive pressure sampling) gains one wide-open-throttle row per rpm as the
+// top row of its p_im-axis tables (SimulatedEngineMapsDesc::wot_p_im_pa, read
+// through map_pressure_index); a compressor-fed pipe engine and an adaptive
+// one keep 3 (their maps are unchanged).
 inline constexpr std::uint32_t kLumpedGeneratorVersion = 1;
 inline constexpr std::uint32_t kPipeGeneratorVersion = 3;
-inline constexpr std::uint32_t kGeneratorVersion = kPipeGeneratorVersion; // the newest path
+inline constexpr std::uint32_t kPipeWotGeneratorVersion = 4;
+inline constexpr std::uint32_t kGeneratorVersion = kPipeWotGeneratorVersion; // the newest path
+
+// Engine garage P7d: true when the generator adds the wide-open-throttle rows
+// (pipe engine fed from ambient through its throttle, fixed p_im grid).
+[[nodiscard]] inline bool engine_map_generates_wot_rows(const CycleModelDesc& desc) {
+    return desc.intake.has_value() && !desc.intake->compressor_supply && !desc.pressure_sampling.enabled;
+}
 
 [[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {
-    return (desc.intake.has_value() ? kPipeGeneratorVersion : kLumpedGeneratorVersion) + (desc.pressure_sampling.enabled ? 259 : 0);
+    const std::uint32_t base = !desc.intake.has_value()            ? kLumpedGeneratorVersion
+                               : engine_map_generates_wot_rows(desc) ? kPipeWotGeneratorVersion
+                                                                     : kPipeGeneratorVersion;
+    return base + (desc.pressure_sampling.enabled ? 259 : 0);
 }
 
 // The numeric values are folded into the .psmaps cache key, the content hash
@@ -134,6 +149,13 @@ struct EngineMaps {
     // Grid nodes below the engine's closed-throttle manifold floor, generated
     // with the plenum held at the node pressure (diagnostic, not hashed).
     int held_plenum_points = 0;
+    // Engine garage P7d (diagnostics, not hashed, not cached - 0 after a cache
+    // hit): held grid nodes that do not breathe (no net fresh air, VE <= 0 or
+    // eta_i outside (0, 1)) and were filled from the nearest breathing node
+    // above on their rpm line; author p_im rows dropped because they lie at or
+    // above the lowest wide-open-throttle plenum pressure (or ambient).
+    int nonbreathing_points = 0;
+    int wot_dropped_rows = 0;
     // Engine garage P7 (knock-limited engines only; diagnostics, not hashed,
     // not cached - 0 after a cache hit): grid nodes x fuels whose knock-safe
     // advance lies below the search's upper bound (theta_MBT + 10), of which

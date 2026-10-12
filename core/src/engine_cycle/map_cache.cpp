@@ -223,6 +223,9 @@ private:
     std::size_t pos_ = 0;
 };
 
+// Engine garage P7d: marks the trailing wide-open-throttle block (an arbitrary 64-bit marker, never a knock count).
+constexpr std::uint64_t kWotBlockTag = 0x31765424F5744F37ULL;
+
 void write_maps_payload(Writer& w, const EngineMaps& m) {
     w.table(m.maps.ve);
     w.table(m.maps.eta_i);
@@ -244,6 +247,12 @@ void write_maps_payload(Writer& w, const EngineMaps& m) {
         w.pod(static_cast<std::uint64_t>(m.maps.theta_kl_by_fuel.size()));
         for (const Table2D& t : m.maps.theta_kl_by_fuel) w.table(t);
     }
+    // Engine garage P7d: the wide-open-throttle curve, a TAGGED trailing block after the knock block, written only when
+    // present (a file without it is byte-identical to before P7d). The tag cannot be a knock count (those are 1..64).
+    if (!m.maps.wot_p_im_pa.x.empty()) {
+        w.pod(kWotBlockTag);
+        w.curve(m.maps.wot_p_im_pa);
+    }
 }
 
 // Fills every field of *out except generator_version/quality/content_hash
@@ -258,16 +267,22 @@ void write_maps_payload(Writer& w, const EngineMaps& m) {
     if (!ok) return false;
     out.maps.has_pmep_excess = has_pmep != 0;
     out.maps.has_theta_kl = has_theta_kl != 0;
-    if (!r.at_end()) {
-        // P7 trailing knock block (see write_maps_payload). A count that cannot fit is a malformed file.
-        std::uint64_t n = 0;
-        if (!r.pod(n) || n == 0 || n > 64) return false;
+    if (r.at_end()) return true;
+    // P7 trailing knock block, then the P7d tagged WOT block (see write_maps_payload). A count that cannot fit, an
+    // unknown tag or bytes after the WOT block are a malformed file.
+    std::uint64_t n = 0;
+    if (!r.pod(n)) return false;
+    if (n != kWotBlockTag) {
+        if (n == 0 || n > 64) return false;
         out.maps.theta_kl_by_fuel.resize(static_cast<std::size_t>(n));
         for (Table2D& t : out.maps.theta_kl_by_fuel) {
             if (!r.table(t)) return false;
         }
+        if (r.at_end()) return true;
+        if (!r.pod(n) || n != kWotBlockTag) return false;
     }
-    return true;
+    return r.curve(out.maps.wot_p_im_pa) && !out.maps.wot_p_im_pa.x.empty() &&
+           out.maps.wot_p_im_pa.x.size() == out.maps.wot_p_im_pa.y.size();
 }
 
 constexpr char kMagic[8] = {'P', 'S', 'M', 'A', 'P', 'S', '0', '1'};

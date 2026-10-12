@@ -223,6 +223,7 @@ struct Gen {
     std::uint64_t key = 0;
     double seconds = 0.0;
     bool threw = false;
+    std::string what;
 };
 
 Gen generate(const SimulatedEngineDesc& sd, MapQuality q) {
@@ -231,8 +232,9 @@ Gen generate(const SimulatedEngineDesc& sd, MapQuality q) {
     const auto t0 = std::chrono::steady_clock::now();
     try {
         g.maps = generate_engine_maps(*sd.cycle, sd.fuels[0], q, &pool());
-    } catch (...) {
+    } catch (const std::exception& e) { // diag only (release); the asan leg never runs [.] cases
         g.threw = true;
+        g.what = e.what();
     }
     g.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return g;
@@ -245,8 +247,8 @@ void report(const char* name, const SimulatedEngineDesc& sd, const std::vector<r
     for (MapQuality q : {MapQuality::Sketch, MapQuality::Preview, MapQuality::Full}) {
         const Gen g = generate(sd, q);
         if (g.threw) {
-            std::printf("W7 %-28s %-7s key %016llx THREW after %.3f s\n", name, qname(q), static_cast<unsigned long long>(g.key),
-                        g.seconds);
+            std::printf("W7 %-28s %-7s key %016llx THREW after %.3f s: %s\n", name, qname(q), static_cast<unsigned long long>(g.key),
+                        g.seconds, g.what.c_str());
             continue;
         }
         std::printf("W7 %-28s %-7s key %016llx hash %016llx v%u held %d %.3f s\n", name, qname(q),
@@ -257,7 +259,13 @@ void report(const char* name, const SimulatedEngineDesc& sd, const std::vector<r
     if (!full || dyno_rpm.empty()) return;
     DynoSweepSpec spec;
     spec.rpm = dyno_rpm;
-    const DynoResult r = run_dyno_sweep(ComponentParams{sd}, full, spec, &pool());
+    DynoResult r;
+    try {
+        r = run_dyno_sweep(ComponentParams{sd}, full, spec, &pool());
+    } catch (const std::exception& e) { // diag only (release)
+        std::printf("W5 %-28s dyno THREW: %s\n", name, e.what());
+        return;
+    }
     for (const DynoPoint& p : r.points) {
         std::printf("W5 %-28s %6.0f rpm torque %8.3f N*m  p_intake %7.3f kPa  fuel %7.4f g/s  boost %6.3f bar%s\n", name, p.rpm,
                     p.torque_nm, p.p_intake_kpa, p.fuel_g_s, p.boost_bar, p.converged ? "" : " (not converged)");
@@ -268,6 +276,7 @@ void report(const char* name, const SimulatedEngineDesc& sd, const std::vector<r
 
 // W5/W7 and the W5h/W8e pins: run once on the unchanged generator ("before") and once on the fixed one ("after").
 TEST_CASE("P7d diag: before/after report (keys, hashes, times, WOT dyno)", "[.][diag][cycle][pipe]") {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     const std::vector<real> demo_rpm{1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0};
     report("Mazda P7c pipe experiment", load_desc("engine_pipes_p7c.json", kMazdaDir), {1500.0, 1750.0, 2000.0, 2500.0, 3000.0, 4000.0});
     report("demo_i4_pipes", load_desc("demo_i4_pipes.json", kEngines), demo_rpm);

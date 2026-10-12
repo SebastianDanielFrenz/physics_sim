@@ -224,7 +224,7 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
            !same(a.maps.friction_torque_nm, b.maps.friction_torque_nm) || a.maps.has_pmep_excess != b.maps.has_pmep_excess ||
            !same(a.maps.pmep_excess_pa, b.maps.pmep_excess_pa) || a.maps.has_theta_kl != b.maps.has_theta_kl ||
            !same(a.maps.theta_kl_deg, b.maps.theta_kl_deg) || !same_tables(a.maps.theta_kl_by_fuel, b.maps.theta_kl_by_fuel) ||
-           a.maps_pending != b.maps_pending,
+           !same(a.maps.wot_p_im_pa, b.maps.wot_p_im_pa) || a.maps_pending != b.maps_pending,
        "/maps");
     rt(a.inertia_kgm2 != b.inertia_kgm2, "/inertia_kgm2");
     rt(a.breakaway_torque_nm != b.breakaway_torque_nm, "/breakaway_torque_nm");

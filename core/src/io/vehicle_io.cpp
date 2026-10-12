@@ -2279,6 +2279,8 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
         }
         const bool complete = have_ve && have_eta_i && have_f_lambda && have_eta_spark && have_theta_mbt && have_friction &&
                               e.maps.has_pmep_excess && (!knock_limited || have_theta_kl_file);
+        const bool have_pmep_file = e.maps.has_pmep_excess; // P7d: before the generated table is copied in
+        const std::string mctx_gen = ctx + ".maps";
         if (!complete) {
             // Generator errors propagate unwrapped (their own "engine map
             // generator: ..." / "CycleModelDesc: ..." messages) - no catch
@@ -2317,6 +2319,7 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                     if(!have_theta_mbt)preview.maps.theta_mbt_deg=g.theta_mbt_deg;
                     if(!have_friction)preview.maps.friction_torque_nm=g.friction_torque_nm;
                     if(!preview.maps.has_pmep_excess){preview.maps.pmep_excess_pa=g.pmep_excess_pa;preview.maps.has_pmep_excess=g.has_pmep_excess;}
+                    if(!have_ve && !have_pmep_file && !have_theta_kl_file)preview.maps.wot_p_im_pa=g.wot_p_im_pa; // P7d
                     preview.maps.source=g.source;preview.maps_pending=false;
                     opt.on_partial_engine(preview);
                 };
@@ -2325,6 +2328,18 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
                 drivetrain::store_cached_engine_maps(opt.cache_dir, cache_key, *gen);
             }
             const SimulatedEngineMapsDesc& g = gen->maps;
+            if (!g.wot_p_im_pa.x.empty()) {
+                // Engine garage P7d: generated ve/pmep_excess/theta_kl carry a wide-open-throttle top row read through
+                // map_pressure_index; a file table on the plain p_im axis cannot share the engine with them.
+                const bool gen_p_tables = !have_ve || !have_pmep_file || (knock_limited && !have_theta_kl_file);
+                const bool file_p_tables = have_ve || have_pmep_file || have_theta_kl_file;
+                if (gen_p_tables && file_p_tables) {
+                    throw std::runtime_error(mctx_gen + ": the generated maps of this pipe engine carry a wide-open-throttle row "
+                                             "(engine garage P7d); give all of ve, pmep_excess_kpa and theta_kl in the maps "
+                                             "block, or none of them");
+                }
+                if (gen_p_tables) e.maps.wot_p_im_pa = g.wot_p_im_pa;
+            }
             std::string generated_keys;
             auto note = [&](const char* k) { generated_keys += generated_keys.empty() ? k : std::string(", ") + k; };
             if (!have_ve) { e.maps.ve = g.ve; note("ve"); }
