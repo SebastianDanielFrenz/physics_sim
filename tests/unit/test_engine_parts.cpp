@@ -45,6 +45,8 @@ namespace {
 namespace fs = std::filesystem;
 
 std::string data_dir() { return std::string(PS_SOURCE_DIR) + "/data"; }
+// Reference-car variants that are no longer shipped in data/vehicles (owner 2026-10-13) live here.
+std::string fixture_vehicles_dir() { return std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles"; }
 std::string data_path(const std::string& rel) { return fs::weakly_canonical(fs::path(data_dir()) / rel).generic_string(); }
 
 json read_json(const std::string& path) {

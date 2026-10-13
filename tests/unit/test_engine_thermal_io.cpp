@@ -131,7 +131,9 @@ void check_cooling_bad(const char* what, const Mutator& m, const char* message) 
 
 // A vehicle file copy whose relative paths are made absolute so it can live in a temp directory.
 json absolutised_vehicle(const std::string& name) {
-    const std::string path = kRoot + "/data/vehicles/" + name;
+    // Reference-car variants are fixtures (owner 2026-10-13); car_sedan.json and the other shipped cars stay in data/vehicles.
+    const std::string fixture = kRoot + "/tests/support/fixtures/vehicles/" + name;
+    const std::string path = std::filesystem::exists(fixture) ? fixture : kRoot + "/data/vehicles/" + name;
     json v = read_json(path);
     const std::filesystem::path base = std::filesystem::path(path).parent_path();
     auto absolutise = [&](json& node, const char* key) {
