@@ -2006,6 +2006,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         r.turbo_compressor_stage_used=turbo_->compressor_stage_used;
         r.turbo_turbine_stage_used=turbo_->turbine_stage_used;
         r.turbo_stage_map_fallback=turbo_->stage_map_fallback;
+        r.turbo_compressor_stage_extended=turbo_->compressor_stage_extended;
         r.bov_opening=turbo_->bov_opening; r.bov_flow_kg_s=turbo_->bov_flow_kg_s;
         r.bov_vent=turbo_->desc.blow_off_valve ? static_cast<std::uint8_t>(turbo_->desc.blow_off_valve->vent) : std::uint8_t(0);
         r.bov_events=turbo_->bov_events;

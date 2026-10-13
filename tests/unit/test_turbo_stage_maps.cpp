@@ -133,7 +133,10 @@ TEST_CASE("Stage map domain is not a rotor limiter", "[turbo_stage][drivetrain]"
     t.step(1.0/960,101325,288.15,.2,.21,1000,1);
     CHECK(t.rpm()>400000);
     CHECK(t.stage_map_fallback);
-    CHECK_FALSE(t.compressor_stage_used);
+    // Stage seam S0: above the highest speed line the compressor reads the map's affinity continuation (flagged as a
+    // fallback); before S0 it took the authored law and compressor_stage_used was false here.
+    CHECK(t.compressor_stage_used);
+    CHECK(t.compressor_stage_extended);
     CHECK_FALSE(t.turbine_stage_used);
     CHECK(std::isfinite(t.energy_j));
 }

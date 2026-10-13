@@ -8,6 +8,9 @@
 
 #include "ps/drivetrain/isa_air.h"
 #include "ps/drivetrain/limit_policy.h"
+#include "ps/drivetrain/turbo_maps.h"
+#include "ps/drivetrain/turbo_stage_maps.h"
+#include "ps/math/transcendental.h"
 
 #include <algorithm>
 #include <cmath>
@@ -436,8 +439,94 @@ const char* to_string(BuildRule r) {
     case BuildRule::LiftFamilyOrder: return "LiftFamilyOrder";
     case BuildRule::LiftMinimumBand: return "LiftMinimumBand";
     case BuildRule::GearboxRating: return "GearboxRating";
+    case BuildRule::TurboStageMapCoverage: return "TurboStageMapCoverage";
     }
     return "Unknown";
+}
+
+std::vector<BuildIssue> check_turbo_stage_coverage(const SimulatedEngineDesc& e, const LimitPolicy* /*policy*/) {
+    std::vector<BuildIssue> out;
+    if (e.architecture != EngineArchitecture::Piston4Stroke || !e.turbo_pair.has_value()) return out;
+    const TurboPairDesc& td = *e.turbo_pair;
+    if (!td.maps || !td.maps->stages) return out;
+    const TurboStageMaps& m = *td.maps->stages;
+    const std::vector<real>& nx = m.compressor_pr.x;
+    real n_top = real(-1.0);
+    for (std::size_t i = nx.size(); i-- > 0;) {
+        if (m.line_has_data(i)) { n_top = nx[i]; break; }
+    }
+    if (!(n_top > real(0.0)) || m.units < 1) return out;
+
+    // The engine's air flow at the target boost, at ISA (the map's reference inlet, so corrected flow = flow per turbo).
+    const real p_amb = m.reference_pa, t_amb = m.compressor_reference_k;
+    const real p_charge = p_amb + td.target_boost_pa;
+    const real pr_req = (p_charge + td.intercooler_dp_pa_at_max_flow) / p_amb;
+    const real kappa = m.air_kappa, r_air = m.compressor_cp * m.air_kappa;
+    const real t_out = t_amb * (real(1.0) + (ps::math::pow(pr_req, kappa) - real(1.0)) / td.compressor_efficiency);
+    const real t_charge = t_out - td.intercooler_effectiveness * (t_out - t_amb);
+    const real rho = p_charge / (r_air * t_charge);
+    const real vd = real(e.piston.cylinders) * real(0.25) * real(3.14159265358979323846) * e.piston.bore_m * e.piston.bore_m * e.piston.stroke_m;
+    const bool have_ve = !e.maps_pending && !e.maps.ve.values.empty();
+    real air_max = real(0.0), rpm_at_max = real(0.0);
+    constexpr int kRpmSteps = 16; // sampling resolution, not an advice number
+    for (int k = 0; k < kRpmSteps; ++k) {
+        const real n = e.idle_rpm + (e.limiter.rpm - e.idle_rpm) * real(k) / real(kRpmSteps - 1);
+        const real ve = have_ve ? e.maps.ve.value(n, p_charge) : real(1.0); // [AS] 1.0 while the maps are pending
+        const real air = ve * rho * vd * n / real(120.0);
+        if (air > air_max) { air_max = air; rpm_at_max = n; }
+    }
+    if (!(air_max > real(0.0))) return out;
+
+    // At each flow: the rotor speed that makes pr_req (bisection on the continuation, monotone in speed), then coverage.
+    constexpr int kFlowSteps = 16; // sampling resolution, not an advice number
+    int first_bad = 0;
+    bool unreached = false;
+    real bad_wc = real(0.0), bad_n = real(0.0), bad_top_pr = real(0.0);
+    for (int j = 1; j <= kFlowSteps && first_bad == 0; ++j) {
+        const real wc = air_max * real(j) / real(kFlowSteps) / real(m.units);
+        const real pr_top = m.compressor_extended(n_top, wc).pressure_ratio;
+        if (pr_top < pr_req) {
+            first_bad = j; unreached = true; bad_wc = wc; bad_top_pr = pr_top;
+            break;
+        }
+        real lo = real(0.0), hi = n_top;
+        for (int it = 0; it < 60; ++it) {
+            const real mid = real(0.5) * (lo + hi);
+            if (m.compressor_extended(mid, wc).pressure_ratio >= pr_req) hi = mid; else lo = mid;
+        }
+        if (!m.compressor_covered(hi, wc)) { first_bad = j; bad_wc = wc; bad_n = hi; }
+    }
+    if (first_bad == 0) return out;
+    // Every later flow of the same operating line: once the target needs more speed than the map has, the rest does too.
+    const real fraction = real(first_bad - 1) / real(kFlowSteps);
+    BuildIssue b;
+    b.rule = BuildRule::TurboStageMapCoverage;
+    b.slot = "forced_induction";
+    b.field_pointer = "/turbo";
+    b.value = fraction;
+    b.limit = real(1.0);
+    b.unit = LimitUnit::Fraction;
+    b.source_label = "[D] the stage map's own validity mask (TurboStageMaps::compressor_covered); engine air at target boost "
+                     "from VE x displacement (VE 1.0 [AS] while the maps are pending), the turbo's compressor efficiency and "
+                     "intercooler effectiveness";
+    const std::string need = "the " + num(td.target_boost_pa / real(1e5), 4) + " bar target (pressure ratio " + num(pr_req, 4) +
+                             ") at " + num(bad_wc, 4) + " kg/s per turbo";
+    const std::string engine_air = "the engine's maximum air flow is " + num(air_max, 4) + " kg/s at " + num(rpm_at_max, 5) +
+                                   " rpm, the map covers the target only up to " + num(fraction * real(100.0), 3) + " % of it";
+    if (unreached) {
+        b.severity = LimitSeverity::Limiting;
+        b.message = "turbo stage map: " + need + " needs a rotor speed above the map's highest speed line " + num(n_top, 6) +
+                    " rpm (pressure ratio " + num(bad_top_pr, 4) + " there); " + engine_air +
+                    " - beyond it the compressor runs on the map's affinity extrapolation; use a larger turbo or a map with "
+                    "higher speed lines";
+    } else {
+        b.severity = LimitSeverity::Near;
+        b.message = "turbo stage map: " + need + " lies at " + num(bad_n, 6) +
+                    " rpm outside the map's certified cells (beyond a speed line's choke edge or below its lowest line); " +
+                    engine_air + " - beyond it the compressor runs on the map's continuation, not on certified data";
+    }
+    out.push_back(std::move(b));
+    return out;
 }
 
 std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e, const LimitPolicy* policy) {
@@ -449,6 +538,7 @@ std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e, const Limi
         if (e.cycle.has_value()) check_cam_profiles(s, e, *e.cycle); // engine garage P9
         if (e.cycle.has_value()) check_lift_family(s, e, *e.cycle);  // engine garage P10
     }
+    for (BuildIssue& b : check_turbo_stage_coverage(e, policy)) out.push_back(std::move(b)); // stage seam S0
     sort_issues(out);
     return out;
 }
