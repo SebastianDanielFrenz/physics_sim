@@ -384,3 +384,44 @@ TEST_CASE("B0 part-throttle dyno", "[.][diag][boost_b0]") {
     }
     SUCCEED();
 }
+
+// The N7 whole-car pull of tests/validation/test_car_hyper_n2o.cpp (same rig, controls and shift rule), traced around the
+// shifts: PS_B0_GEAR the pull gear (default 5), PS_B0_ARM 1 arms the shot, PS_B0_EVERY ticks between lines (default 4).
+TEST_CASE("B0 N2O pull trace", "[.][diag][boost_b0]") {
+    const vehicle::VehicleDesc desc = load_car("stock");
+    const int pull_gear = static_cast<int>(env_num("PS_B0_GEAR", 5.0));
+    const bool arm = env_num("PS_B0_ARM", 0.0) > 0.5;
+    const int every = static_cast<int>(env_num("PS_B0_EVERY", 4.0));
+    auto rig = ps_test::build_vehicle_rig_from_desc(desc, 1500.0, Vec3{2.0, 0.4, 0.15}, 0.5, 0.0, 4);
+    World& w = *rig.world;
+    const real dt = w.dt();
+    w.set_control("assist.traction_control", 0.0);
+    w.set_control("assist.drive_mode", 2.0);
+    w.set_control("assist.aero_control", 0.0);
+    ps_test::settle(w, 2.0);
+    w.set_control("gear_request", 1.0);
+    w.set_control("throttle", 1.0);
+    bool armed = false;
+    for (int t = 0; t < static_cast<int>(30.0 / dt); ++t) {
+        w.step();
+        const auto& st = w.powertrain_state(rig.vehicle);
+        const auto dbg = w.powertrain_debug(rig.vehicle);
+        const auto& es = st.engines.at(0);
+        const bool idle = st.shift_phase == drivetrain::ShiftPhase::Idle;
+        if (idle && st.gear >= 1 && st.gear < pull_gear && st.engine_rpm >= 7000.0) w.set_control("gear_request", static_cast<real>(st.gear + 1));
+        const bool in_pull = st.gear == pull_gear && idle && st.clutch_engagement >= 0.999;
+        if (in_pull && !armed) {
+            armed = true;
+            std::printf("B0N ARM t=%.4f rpm=%.0f\n", t * dt, st.engine_rpm);
+            if (arm) w.set_control("nitrous_arm", 1.0);
+        }
+        const real kappa = std::max(w.wheel_state(rig.vehicle, 2).slip_ratio, w.wheel_state(rig.vehicle, 3).slip_ratio);
+        if (t % every == 0 || (armed && st.engine_rpm >= 7800.0))
+            std::printf("B0N t=%.4f gear=%d tgt=%d ph=%d rpm=%5.0f kmh=%6.1f eng=%.3f slip=%7.1f cut=%d plate=%.3f charge=%5.2f wg=%.3f turbo=%6.0f n2o=%5.1f kappa=%.3f\n",
+                        t * dt, int(st.gear), int(st.gear_target), int(st.shift_phase), st.engine_rpm, w.get_motion(rig.chassis).linear.x * 3.6,
+                        st.clutch_engagement, dbg.clutch_slip * 60.0 / (2.0 * 3.14159265358979), dbg.ignition_cut ? 1 : 0, es.throttle_position,
+                        (es.p_charge_pa - 101325.0) / 1e5, es.wastegate_opening, es.turbo_rpm, es.n2o_flow_g_s, kappa);
+        if (armed && st.engine_rpm >= 7800.0) break;
+    }
+    SUCCEED();
+}
