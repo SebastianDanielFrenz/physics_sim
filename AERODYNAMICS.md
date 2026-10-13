@@ -138,13 +138,17 @@ A vehicle may carry an **assist unit** with an `aero_control` block (grade Racin
 [electronics.md](docs/data_formats/electronics.md#assist-aero), vault PHYS-074). The vehicle layer, not the aero model,
 then runs racing_game's rear-wing law per tick: target offset = `cruise_offset_deg` (4) ramped over 10..30 m/s of
 forward **airspeed** (chassis velocity minus the vehicle's own wind), blended toward `airbrake_offset_deg` (45) by the
-`brake` channel between 0.45 and 1.0 once airspeed is at least 20 m/s; a launch hook (for the launch control of assists
-I4) replaces both with `launch_offset_deg`. The target becomes a surface command (`radians / max_offset_rad`, or
+`brake` channel between 0.45 and 1.0 once airspeed is at least 20 m/s; while the assist unit's launch control owns the car
+(phase Armed or Launch, assists I4) both are replaced by `launch_offset_deg` (10). The launch request is the launch control's
+state at the end of the previous tick, so the wing follows it one tick later; the Handover phase and the P8 two-step launch
+limit do not request it. Order: launch control > airbrake > cruise. The target becomes a surface command (`radians / max_offset_rad`, or
 `/ -min_offset_rad` for a negative target) which the surface's `rate_rad_s` slews as usual. Channel
-`assist.aero_control` (registered only when the car has the named surface) switches it: on, the controller owns that
+`assist.aero_control` (registered only when the car has the named surface; default = the block's `default_enabled`, `true` in
+the shipped Racing unit; on at `>= 0.5`) switches it: on, the controller owns that
 surface's command and `World::set_aero_surface_command` for it is ignored; off, the World command stands as before. The
 controller is stateless and adds no hashed state. Snapshot: `aero_control_active`, `aero_control_target_deg`, bit 6 of
-the assist bit masks.
+`assist_fitted_bits` / `assist_active_bits`. The whole assist picture (all channels, precedence, bit table) is in
+[electronics.md "Assists overview"](docs/data_formats/electronics.md#assists-overview).
 
 `vehicle_aero_telemetry(vehicle)` is a stepping-thread live accessor.
 Render/readout threads use the frame-latched `WorldSnapshot::vehicles[i].aero`.

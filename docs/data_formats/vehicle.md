@@ -31,7 +31,7 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `brake_system` | [brake_system object](#brake_system) | optional | no corners, no handbrake | see below | direct-torque friction brakes |
 | `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
-| `controllers` | array of [controller objects](#controllers) | optional | empty | at most 1 entry, else `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"` | driver-assist logic (auto-clutch, auto-blip, auto-shift); P8 adds `electronics` entries (launch control, assist fitment), see [below](#controllers) |
+| `controllers` | array of [controller objects](#controllers) | optional | empty | at most one `manual_tcu` entry (else `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"`); `electronics` entries are additional and are not counted by that cap | driver-assist logic (auto-clutch, auto-blip, auto-shift); P8 adds `electronics` entries (launch control, assist fitment), see [below](#controllers) |
 | `cooling_system` | string | optional | path relative to the vehicle file; a `physics_sim.cooling_system/1` file ([cooling_system.md](cooling_system.md)); needs an engine component whose engine file names a `default_thermal` (or whose component carries a `thermal` override), else the load throws | **opts the vehicle in to the lumped engine/oil thermal model** (coolant and oil temperature, thermostat, radiator, fan, oil-viscosity friction, gauge, `vehicle<i>.thermal.*` telemetry). Absent = no thermal state, every hash and CSV header as before |
 | `engine_thermal_start` | string | optional | `"warm"` (default) or `"ambient"`; rejected without a `cooling_system` | `"warm"`: coolant at the thermostat's 25 % opening point (91 C by default), oil at the friction reference temperature (95 C, friction scale exactly 1); `"ambient"`: cold soak at the first tick's ambient temperature. A scenario's vehicle entry may give its own `engine_thermal_start`, which wins |
 
@@ -898,8 +898,9 @@ vehicle-construction time and additionally rejects:
 
 ## Controllers
 
-`"controllers"` is an array of `{id, type, ...}`; at most one entry, and I3
-supports exactly one `type`: `"manual_tcu"` (`ManualTcuDesc`). An unknown
+`"controllers"` is an array of `{id, type, ...}`: at most one `"manual_tcu"` entry (`ManualTcuDesc`; a second one
+throws `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"`) plus any number of
+`"electronics"` entries (see the P8 and assist-unit paragraphs below and [electronics.md](electronics.md)). An unknown
 type throws `"controllers['<id>']: unknown type \"<type>\""`.
 
 | Field | Type | Req./opt. | Default | Validation | Meaning |
@@ -971,6 +972,30 @@ traction-control mode table, channel `assist.traction_control` codes 0 Off, 1 On
 controller: the loader stores it as `VehicleDesc::assist_unit` (at most one per vehicle). The car's own `traction_control`
 block is mode On. Without a unit the channel keeps its pre-unit meaning (`> 0.5` is on). A Racing unit's `aero_control` block (assists I5) additionally automates the car's `rear_wing` surface through the channel `assist.aero_control`, registered only when the car's aero block has the named surface. A Sport or Racing unit's `launch_control` block (assists I4) makes the unit a launch control too (channel `assist.launch_control`, registered on a car with either that block or a P8 `launch_control` part; both on one car is rejected). See [electronics.md](electronics.md#assist-unit).
 
+**Drive modes (assists I7).** The `electronics` entry may also be a `drive_modes` part (car-specific: pedal bend, auto-shift
+rpm points, post-shift clutch close time, a traction-control default, launch-control and N2O gates; at most one per
+vehicle; needs the car's `manual_tcu`). Channel `assist.drive_mode`. See [electronics.md](electronics.md#drive-modes).
+
+### The `traction_control` block
+
+Top-level optional object (`ps::vehicle::TractionControlDesc`, `core/src/io/vehicle_io.cpp`); the car's own traction
+controller and, with an assist unit, the definition of TC mode **On** (code 1). Sensor-only (wheel peripheral speeds and
+an IMU, no ground truth). Unknown keys throw `"unknown traction_control field: <key>"`.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | default of the `assist.traction_control` channel when no unit or drive mode sets one (no shipped vehicle file carries the block, so `false` applies; `car_hyper*` get their default from the Racing unit / drive mode) |
+| `fitted` | bool | `true` | `false`: the car has no TC, the channel is ignored |
+| `target_slip` | real | `0.08` | positive-slip target; must be `< 1` |
+| `reference_floor_m_s` | real | `2.0` | speed floor in the slip denominator |
+| `kp`, `ki_per_s` | real | `2.0`, `6.0` | proportional gain / integral rate |
+| `attack_rate_per_s`, `recovery_rate_per_s` | real | `20.0`, `8.0` | slew rates of the torque fraction (down / up) |
+
+All numeric keys must be finite and `> 0` (`"traction_control: parameters must be finite and positive"`,
+`"traction_control: target_slip must be below 1"`). All defaults `[AS]`. The per-mode extras (`min_fraction`,
+`ignition_cut`) exist only in an assist unit's `mode_params`; the block itself cannot set them. The assist unit's
+Relaxed / Sport / Drift modes override these keys per mode.
+
 ## Control channels a vehicle reads
 
 Not part of the JSON format, but relevant context for anyone editing a
@@ -979,13 +1004,25 @@ vehicle file and then driving it from a scenario's `control_events` (see
 at vehicle-creation time (`core/src/world/world.cpp`) — `"steer"`,
 `"throttle"`, `"brake"`, `"handbrake"`, `"clutch"`, `"shift_up_count"`,
 `"shift_down_count"`, `"gear_request"`, `"ignition"`, `"starter"`,
-`"assist.auto_clutch"`, `"assist.auto_blip"`, `"assist.auto_shift"`. The
+`"assist.auto_clutch"`, `"assist.auto_blip"`, `"assist.auto_shift"`, `"assist.traction_control"`. The
 first vehicle created in a `World` reads the bare names; every subsequent
 vehicle reads a `"v<index>."`-prefixed version (e.g. `"v1.steer"`).
-The three `assist.*` channels (> 0.5 means on) are the runtime on/off
+The three `assist.auto_*` channels (> 0.5 means on) are the runtime on/off
 switches for the `manual_tcu` driver aids; each one's value when the
 vehicle is created is its controller block's `enabled` flag (0 if the
-vehicle has no `manual_tcu`).
+vehicle has no `manual_tcu`, or if the block is `fitted: false`).
+
+**Assist channels (assists I1-I7).** `assist.traction_control` is registered on every car: codes 0 Off, 1 On (the car's
+own `traction_control` block), 2 Relaxed, 3 Sport, 4 Drift (`value > 0.5 ? clamp(round(value), 1, 4) : 0`), default = the
+default drive mode's `traction_control_default` (a car with the `drive_modes` part), else the assist unit's `default_mode`,
+else the block's `enabled`, 0 when the block is not fitted. Registered **only** on a car that has the corresponding part:
+`assist.launch_control` (a P8 `launch_control` part, whose `channel` key may rename it, or an assist unit's
+`launch_control` block; default 0 or the block's `default_enabled`), `assist.aero_control` (an assist unit's `aero_control`
+block AND a car aero surface of that name; default the block's `default_enabled`; on at `>= 0.5`), `assist.drive_mode` (the
+`drive_modes` part; 0 eco, 1 normal, 2 sport; default the part's `default_mode`). A N2O kit adds its controller's arm
+channel (shipped: `"nitrous_arm"`). On/off is a strict `> 0.5` for all of these except `assist.aero_control`. The one
+page that lists every channel with its precedence rules and the snapshot bits is
+[electronics.md "Assists overview"](electronics.md#assists-overview).
 
 **Component-declared channels (I4 C3):** beyond the fixed list above, each
 powertrain component that needs one declares its own channel name and

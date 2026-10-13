@@ -7,6 +7,94 @@
 A car has only the electronics it was built with (garage decision D11); everything else is grafted on as a part. The
 physics refuses an assist the car does not have, so a script or another client cannot switch it on either.
 
+## Assists overview (assists I6, vault PHYS-074) {#assists-overview}
+
+One page for "which assist lives where, which channel switches it, what wins when two want the same thing". Every
+statement below was checked against the code on 2026-10-13 (`core/src/world/world.cpp` channel registration,
+`core/src/vehicle/vehicle_instance.cpp`, `core/include/ps/vehicle/{assist_unit,drive_modes}_desc.h`); the detail
+sections further down are the per-feature reference.
+
+### Where each assist lives and how it is switched
+
+All driver-assist channels are plain `World::set_control` channels (a `"v<index>."` prefix for the second and later
+vehicle, see [vehicle.md](vehicle.md#control-channels-a-vehicle-reads)). "On" means a **strict** `> 0.5` for every
+channel except `assist.aero_control`, where it is `>= 0.5`.
+
+| Assist | Lives in | Channel | Registered | Default value | Codes |
+|---|---|---|---|---|---|
+| auto clutch, auto blip, auto shift | the `manual_tcu` controller's `auto_clutch` / `auto_blip` / `auto_shift` blocks ([vehicle.md](vehicle.md#controllers)) | `assist.auto_clutch`, `assist.auto_blip`, `assist.auto_shift` | always, on every car | the block's `enabled` AND `fitted` (0 without a `manual_tcu`) | 0 / 1 |
+| traction control | the vehicle's `traction_control` block (= mode On), plus an optional assist unit's mode table | `assist.traction_control` | always, on every car | 0 when `fitted` is false; else the default drive mode's `traction_control_default` if the car has the `drive_modes` part and that mode has one; else the unit's `default_mode` (unit with a TC block); else the block's `enabled` | 0 Off, 1 On (the car's own block), 2 Relaxed, 3 Sport, 4 Drift; `requested = value > 0.5 ? clamp(round(value), 1, 4) : 0` |
+| launch control | EITHER the P8 two-step part (`kind: launch_control`) OR the assist unit's `launch_control` block (grades Sport/Racing); never both | `assist.launch_control` (the P8 part may rename it with its `channel` key) | only on a car with one of the two (a P8 part with `fitted: false` still registers it) | 0 for the P8 part; the unit block's `default_enabled` (shipped `false`) | 0 / 1 |
+| rear-wing automation | the assist unit's `aero_control` block (grade Racing) | `assist.aero_control` | only when the unit has the block AND the car's `aero.surfaces` has the named surface | the block's `default_enabled` (shipped Racing unit: `true`) | 0 / 1, on at `>= 0.5` |
+| drive modes | the car-specific `drive_modes` electronics part | `assist.drive_mode` | only on a car with the part | the part's `default_mode` | 0 eco, 1 normal, 2 sport (rounded and clamped; a mode the part does not list maps to its `default_mode`) |
+| anti-lag switch | the engine's anti-lag configuration and the vehicle key `anti_lag_switch.fitted` | the configuration's own `channel` (default `anti_lag`; not an `assist.*` name) | by the engine | the configuration's `default_enabled` | 0 / 1 |
+| N2O arm (not an assist, but gated by drive modes) | the nitrous controller part's `arm_channel` | shipped kits: `nitrous_arm` | with a nitrous kit | the controller's | 0 / 1 |
+
+Who owns which file: the **assist unit** is generic per grade (`data/electronics/assist_unit_{street,sport,racing}.json`,
+one file per grade, any car can take one); **drive modes** are car-specific numbers (they override that car's own
+`manual_tcu`); the **P8 parts** (`launch_two_step_generic.json`, `fit_*.json`) are the older, simpler fitment and
+launch-limit parts. All three attach as a `controllers` entry of type `electronics` or through
+`VehicleLoadOptions::electronics` (a path replaces/adds, `"none"` removes).
+
+### Precedence: what wins when two assists want the same thing
+
+1. **Launch control over traction control.** While the unit's launch control *owns* the car (phase Armed or Launch)
+   the powertrain sees TC neutral: fraction 1, no throttle ceiling, no ignition cut. TC's estimator keeps running, so
+   at Handover TC resumes seeded from the launch controller's last throttle ceiling (no torque jump). I2's crawl-speed
+   clutch cap (item 6) does not act while LC owns the car.
+2. **Rear wing: launch control over airbrake over cruise.** The wing law yields `launch_offset_deg` while the unit's LC
+   owns the car, else the airbrake blend, else the cruise ramp. The launch request is the LC's state at the END of the
+   previous tick, so the wing follows LC by **one tick**; Handover does not ask for the launch offset. Only the *unit's*
+   launch control asks for it, never the P8 two-step.
+3. **Drive modes gate two assists.** `launch_control_allowed: false` makes `assist.launch_control` read as off (this also
+   switches the P8 two-step off, and `assist_active_bits` bit4 with it); `nitrous_arm_allowed: false` forces the kit's arm
+   input to 0 whatever `nitrous_arm` says.
+4. **Drive mode over the driver's TC choice, until the driver changes it.** When the *effective* drive mode changes and
+   the new mode has a `traction_control_default`, the effective TC mode becomes that default and stays so until the
+   `assist.traction_control` channel **value changes**. Writing the same value again does not release it (see the UI
+   pitfalls below). A mode without a default leaves a running override alone. The snapshot's `traction_mode_requested`
+   already includes the override.
+5. **Pedal bend.** A drive mode's bend is applied after the car's own pedal curve; the auto-shift, launch law, kickdown
+   and the TC/LC throttle ceilings work on the *bent* command (ceilings are fractions of it), while TC's pedal gating
+   and LC arming use the raw pedal (driver intent).
+6. **I2 low-speed clutch cap.** Only while the effective TC mode is not Off, the auto-clutch is in Launch/Locked, the
+   ground-speed input rpm of the current gear is below 1.25 x `anti_stall_rpm` `[AS]`, and launch control does not own
+   the car: the TC fraction caps the *clutch* capacity instead of the engine.
+7. **Unavailable TC modes** fall back to the nearest available mode with *more* intervention (On > Relaxed > Sport >
+   Drift); Off is never substituted ([below](#assist-unit)).
+8. **Launch control needs more than its own channel:** the auto-clutch assist on, the engine Running, gear 1, throttle
+   and brake past the arming thresholds ([below](#assist-launch)).
+
+### Snapshot bits and fields (`PowertrainSnapshot`, never hashed)
+
+| Bit | Assist | `assist_fitted_bits` (the car HAS it) | `assist_active_bits` (on now) |
+|---|---|---|---|
+| 0 | auto clutch | `manual_tcu` present and `fitted` | channel `> 0.5` and fitted |
+| 1 | auto blip | same | same |
+| 2 | auto shift | same | same |
+| 3 | traction control | the `traction_control` block is fitted | the **effective** mode is not Off |
+| 4 | launch control | the car has the P8 part or the unit block | channel `> 0.5` AND the effective drive mode allows launch control (not "the car is launching": that is `launch_phase`) |
+| 5 | anti-lag switch | `anti_lag_switch.fitted` (default true) | **never set** (the switch is the engine's own channel; fitted-only) |
+| 6 | rear-wing automation | the unit's `aero_control` block and a surface of that name | channel `>= 0.5` and fitted |
+
+A HUD shows hidden (fitted bit clear), fitted-off, fitted-on. Other fields: `traction_mode_requested` /
+`traction_mode_effective` / `traction_modes_available_bits` (bit *n* = code *n* is offered; 0 when TC is not fitted);
+`drive_mode_requested` / `drive_mode_effective` / `drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport; all 0
+without the part); `launch_phase` (0 Idle, 1 Armed, 2 Launch, 3 Handover), `launch_slip_target`, `launch_control_active`
+(true while the unit's LC is Armed/Launch, or the P8 two-step is latched); `aero_control_active`,
+`aero_control_target_deg`.
+
+### UI pitfalls
+
+- **Cycling the TC mode after a drive-mode change.** A button that cycles from `traction_mode_effective` and writes the
+  next code can write exactly the value the channel already holds (e.g. the driver set 3, the drive mode then forced 2,
+  the button wants 3 again). The physics reads that as "no driver change" and keeps the drive mode's override. Write a
+  value that differs from the channel's last value, or cycle from the channel value rather than from the effective mode
+  (guard: `tests/unit/test_assist_all_together.cpp` P1).
+- **Do not write `assist.traction_control` on a drive-mode change.** The physics applies the mode's default itself; a
+  client write of a different code silently wins over the mode default.
+- **A request the part or unit does not offer is not an error.** Offer only the bits in the `*_available_bits` fields.
+
 ## Fitment: the `fitted` flag (A15)
 
 Every assist that has a runtime channel carries `fitted` (default `true`, so every file written before P8 is
@@ -30,7 +118,7 @@ false` the engine sees no channel (`Sensors::anti_lag_channel` NaN) and anti-lag
 Snapshot: `VehicleSnapshot::powertrain.assist_fitted_bits` has the same layout as `assist_active_bits` (bit0
 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control, bit4 launch_control) plus bit5 = anti-lag
 switch and bit6 = aero automation (assists I5, [below](#assist-aero)). A HUD shows three states: hidden (bit not set in `assist_fitted_bits`), fitted and off, fitted and on
-(`assist_active_bits`; bit4 = launch_control switched on; since assists I4 bit4 means "launch control" for either
+(`assist_active_bits`; bit4 = the launch-control channel is on and the effective drive mode allows it; since assists I4 bit4 means "launch control" for either
 variant, the P8 two-step part or the assist unit's `launch_control` block - a car has one of them, never both). A car without a `manual_tcu` reports the auto_* assists
 as not fitted. Never hashed.
 
@@ -53,7 +141,7 @@ format has no path-valued keys. Unknown keys are rejected (`"unknown electronics
 |---|---|---|
 | `rpm` | required, finite, `> 0` | the second rev limit. The vehicle loader additionally requires the (first) engine's idle rpm `< rpm <` its own limiter rpm (`"launch rpm R must be below the engine's own limiter rpm L"`) |
 | `max_speed_mps` | required, finite, `> 0` | the control is active only below this speedo speed (m/s) and releases above it |
-| `channel` | optional, default `"assist.launch_control"` | runtime arm switch, a plain 0/1 level (`>= 0.5` = on); resolved with the vehicle's channel prefix |
+| `channel` | optional, default `"assist.launch_control"` | runtime arm switch, a plain 0/1 level (on = `> 0.5`); resolved with the vehicle's channel prefix |
 | `fitted` | optional bool, default `true` | `false`: the channel is ignored |
 | `fits` | (`assist_fitment` only) non-empty list of `auto_clutch`, `auto_blip`, `auto_shift`, `traction_control`, `anti_lag` | sets those assists' `fitted` to `true`; `auto_*` need a `manual_tcu` on the car (`"fits 'auto_shift' but the vehicle has no manual_tcu"`) |
 
@@ -174,7 +262,7 @@ off, on, relaxed, sport, drift`, `duplicate mode '<m>' in 'modes'`, `'modes' mus
 
 Block `launch_control` of an assist unit (grades `sport` and `racing`; Street rejects it with the grade message).
 `ps::vehicle::LaunchAssistDesc`, controller `core/src/vehicle/launch_assist.h`. Channel `assist.launch_control` (a
-plain 0/1 level, `>= 0.5` = on; registered on a car that has the block OR a P8 two-step part; default = the block's
+plain 0/1 level, on = `> 0.5`; registered on a car that has the block OR a P8 two-step part; default = the block's
 `default_enabled`, shipped `false` `[AS]` so a car carrying the unit launches as before until the assist is switched
 on). Exactly one launch rpm form is required; every other key is optional (owner Q7, all `[AS]`):
 
@@ -222,7 +310,7 @@ ramp, the PI's ceiling and integral, hashed ONLY on a car that carries the block
 2. *Armed*: the engine's second rev limit = the launch rpm through the engine's own limiter (the P8 `TcuRequest::
    limiter_rpm` path: fuel cut with its hysteresis, soft cut over its band), the auto-clutch is held open (capacity
    0), traction control is suspended (its estimator keeps running, so the slip PI has a speed estimate at release),
-   the aero hook `set_aero_launch_request(true)` asks for the launch wing offset. Leaves to Idle when the channel,
+   the aero hook `set_aero_launch_request(true)` (set at the end of the previous tick, so the wing follows one tick later) asks for the launch wing offset. Leaves to Idle when the channel,
    auto-clutch or engine stops, throttle < 0.5, speed >= `arm_max_speed_mps`, gear != 1 or a shift starts; to Launch
    when brake < `release_brake`.
 3. *Launch*: the launch limit **stays** at the launch rpm (the engine is the held source: boost keeps building under
@@ -277,7 +365,7 @@ the vehicle's own wind), read at tick start; `target = cruise_offset * clamp((v 
 0, 1)`; if `v >= airbrake_min_speed`: `demand = clamp((brake - brake_start)/(brake_full - brake_start), 0, 1)` and
 `target += (airbrake_offset - target) * demand`; launch hook set: `target = launch_offset` instead (yield order launch
 control > airbrake > cruise; the hook is `VehicleInstance::set_aero_launch_request`, true while the assist unit's launch
-control is Armed or Launching, [below](#assist-launch)); `radians = target * pi / 180`; `limit = radians >= 0 ? max_offset_rad : -min_offset_rad`;
+control is Armed or Launching, [above](#assist-launch); the request is the previous tick's state, so the wing lags LC by one tick); `radians = target * pi / 180`; `limit = radians >= 0 ? max_offset_rad : -min_offset_rad`;
 `command = limit > 0 ? clamp(radians / limit, -1, 1) : 0`. The brake input is the `brake` channel (the handbrake is
 not read). The command goes through the surface's own `rate_rad_s` slew like any command.
 
@@ -298,7 +386,7 @@ active), bit 6 of `assist_fitted_bits` and `assist_active_bits`. **Hash:** no ne
 (a car with the channel off hashes exactly like the same car with a unit without the block), the surface offset that the
 slewed command moves is already hashed. Tests: `tests/unit/test_assist_aero.cpp` ([assist][aero]).
 
-**Hash.** The resolved mode table is folded into the vehicle's state hash only for a unit whose `modes` go beyond
+**Hash (the unit's TC mode table).** The resolved mode table is folded into the vehicle's state hash only for a unit whose `modes` go beyond
 Off/On (a Street unit hashes exactly like a car without a unit). The effective mode is a pure function of channel and
 desc and is not state.
 
