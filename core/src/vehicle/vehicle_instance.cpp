@@ -414,6 +414,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         const real traction_fraction=(assist_traction&&!lc_owns)?traction_fraction_raw:real(1);
         ctx.traction_ignition_cut=assist_traction&&!lc_owns&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
         ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*traction_fraction:real(1);
+        ctx.assist_ceiling_as_retard=tc_desc.ignition_cut; // pedal P1 (b): TC/LC ceilings as spark retard (engine.h)
         if(lc_owns||lc_out.overlay) {
             // overlay = the soft hand-over: traction control is back, the launch limit and the clutch fraction stay
             // in force until the fraction has climbed to 1 (launch_assist.h)

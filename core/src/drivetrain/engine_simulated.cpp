@@ -1677,8 +1677,19 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
     // (2) engine management. theta_req is the torque request (electronic)
     // or, on a mechanical linkage, only the DFCO trigger - the plate itself
     // follows the command below and is not closed by the ignition cut.
-    const real theta_cmd = std::max(std::min(throttle.command, throttle.ceiling), throttle.floor);
-    const real theta_req = tcu.ignition_cut ? real(0.0) : theta_cmd;
+    // Pedal P1 (b): on a turbo engine with a pedal envelope a traction/launch-control ceiling is a torque fraction at
+    // the CURRENT boost when the running TractionControlDesc::ignition_cut is true (assist_as_retard): the plate and
+    // the gate follow the driver's command under the TCU's own ceiling, and step (5) below retards the combustion
+    // by f = assist_ceiling / command (the lost indicated work stays in the cylinder energy balance and leaves as
+    // exhaust enthalpy). A traction-only ignition cut (TcuRequest::traction_cut) then keeps the plate too. Without
+    // assist_as_retard, on an NA engine or without an envelope, the merged ceiling closes the plate (pre-(b) path):
+    // closing the plate under a boosted ceiling bled the boost the hand-over then needs (V8c, pedal P1 progress).
+    const bool assist_retard = throttle.assist_as_retard && !mech && turbo_ && envelope_;
+    const bool assist_capped = assist_retard && throttle.assist_ceiling < throttle.command;
+    const real theta_cmd = assist_capped ? std::max(std::min(throttle.command, throttle.tcu_ceiling), throttle.floor)
+                                         : std::max(std::min(throttle.command, throttle.ceiling), throttle.floor);
+    const bool plate_cut = tcu.ignition_cut && !(assist_retard && tcu.traction_cut);
+    const real theta_req = plate_cut ? real(0.0) : theta_cmd;
 
     // I7d D5 anti-lag: decided on the ECU's command theta_cmd (an upshift ignition cut does not disarm it -
     // the cut itself still suppresses combustion below). Arms while the command is at or above
@@ -1986,6 +1997,18 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         booked_fuel_mass_kg_ = available;
         ev = evaluate_torque(omega_old, p_im_, fired, s_starve, starter_active, als_eval, nc);
     }
+    // Pedal P1 (b): the assist ceiling as spark retard (see step (2)). Charge, fuel and N2O stay as metered; only the
+    // indicated work drops to f = assist_ceiling / command [D] of the evaluated value. tau_comb_ below is what the
+    // exhaust energy balance subtracts as indicated work, so the retarded work reaches the turbine. The analytic
+    // slope dtau_domega is left unscaled (PROVISIONAL [AS]: it only linearises the implicit solve; measured on the
+    // V8/V11 runs with it unscaled).
+    real f_retard = real(1.0);
+    if (assist_capped && fired && !tcu.ignition_cut && ev.tau_comb > real(0.0)) {
+        f_retard = std::clamp(throttle.assist_ceiling / throttle.command, real(0.0), real(1.0));
+        ev.tau -= (real(1.0) - f_retard) * ev.tau_comb;
+        ev.tau_comb *= f_retard;
+        ev.tau_comb_no_n2o_retard *= f_retard; // the N3 kit-retard diagnostic keeps counting the kit's retard only
+    }
     // N2O plan N2 bookings for post_solve (section 1.3/4): every delivered kg enters the engine; the fired,
     // fuelled share decomposes (fire * s_starve, the same factor as the charge model's n2o_burnt_rev); the rest
     // passes through. Without a turning crank there is no charge model: all of it passes through [AS].
@@ -2073,6 +2096,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         });
         r.torque_demand = std::max(r.torque_demand, uncut.tau - sign(omega_old) * m.c_k);
     }
+    // Pedal P1 (b): under an assist retard the demand the auto-clutch follows is the retarded torque itself.
+    if (f_retard < real(1.0)) r.torque_demand = ev.tau - sign(omega_old) * m.c_k;
     r.theta_c = std::clamp(ev.fire * s_starve * p_im_ / p_amb_, real(0.0), real(1.0));
     r.fuel_flow_g_s = booked_fuel_mass_kg_ / h * real(1000.0);
     r.fuel_supply_fraction = s_starve;

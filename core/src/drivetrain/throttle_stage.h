@@ -104,6 +104,9 @@ public:
             out.floor = ctx.tcu_throttle_floor;
             out.ceiling = std::min(std::min(ctx.tcu_throttle_ceiling,ctx.traction_throttle_ceiling),ctx.launch_throttle_ceiling); // launch_*: assists I4, 1 = none
             out.floor = std::min(out.floor,out.ceiling); // safety intervention takes priority over auto-blip
+            out.tcu_ceiling = ctx.tcu_throttle_ceiling; // pedal P1 (b), engine.h ThrottleCommand
+            out.assist_ceiling = std::min(ctx.traction_throttle_ceiling,ctx.launch_throttle_ceiling);
+            out.assist_as_retard = ctx.assist_ceiling_as_retard;
         } else {
             out.floor = real(0.0);
             out.ceiling = real(1.0);

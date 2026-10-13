@@ -70,6 +70,10 @@ struct ComponentSubstepCtx {
     bool tcu_ignition_cut = false; // LAGGED one substep
     bool traction_ignition_cut = false; // fast TC combustion cut while throttle/boost catches up
     real traction_throttle_ceiling = 1.0; // current sensor-only TC ECU request, not a pedal rewrite
+    // Pedal P1 (b): the running TractionControlDesc::ignition_cut (VehicleInstance). True: the TC/LC throttle ceilings
+    // act as spark retard at the current boost on a turbo engine with a pedal envelope (engine.h ThrottleCommand);
+    // false: they close the plate. Never hashed.
+    bool assist_ceiling_as_retard = false;
     real tcu_throttle_ceiling = 1.0; // LAGGED one substep
     // Assists I2 (PHYS-074 D-LS1/D-LS2): set by VehicleInstance ONLY while traction control's effective mode is not
     // Off - this substep's TC torque fraction (1 = not intervening), the running mode's min_fraction (T_floor), and

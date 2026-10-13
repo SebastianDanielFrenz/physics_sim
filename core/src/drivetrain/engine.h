@@ -123,6 +123,15 @@ struct ThrottleCommand {
     real command = 0.0; // pedal (through an optional pedal_map/linkage_curve), maxed with an optional hand lever
     real floor = 0.0;   // electronic: the TCU's lagged auto-blip floor; mechanical: 0 (fixed, no auto-blip)
     real ceiling = 1.0; // electronic: the TCU's lagged post-upshift-cut ceiling; mechanical: 1 (fixed)
+    // Pedal P1 (b): ceiling = min(tcu_ceiling, assist_ceiling). assist_ceiling is the traction-control / launch-control
+    // part alone (1 = none). With assist_as_retard (electronic only; VehicleInstance sets it from the running
+    // TractionControlDesc::ignition_cut) a turbo engine with a pedal envelope maps an assist ceiling to a torque
+    // fraction at the CURRENT boost (spark retard, the lost work goes to the exhaust) and keeps its plate and gate on
+    // the driver's command under the TCU's ceiling only; without it every engine closes the plate to `ceiling` (the
+    // pre-(b) path). Mechanical: 1/1/false.
+    real tcu_ceiling = 1.0;
+    real assist_ceiling = 1.0;
+    bool assist_as_retard = false;
 };
 // From the TCU (one substep lagged - plan section 7.2's deliberate order
 // independence). Trimmed to ignition_cut only (PHYS-033 P4 I7a C3):
@@ -140,6 +149,11 @@ struct TcuRequest {
     // ramp). A turbo engine then holds its boost controller (wastegate position and PID integral) instead of treating
     // the closed plate as "no boost requested". Not set by traction control, launch control or a driver lift.
     bool hold_boost_control = false;
+    // Pedal P1 (b): ignition_cut is set and comes from traction control alone (not from the TCU's shift cut). An
+    // engine that maps assist ceilings to retard (ThrottleCommand::assist_as_retard) keeps its plate on the command
+    // under such a cut - it stays a combustion cut. Default false: a caller that sets only ignition_cut keeps the
+    // plate-closing meaning.
+    bool traction_cut = false;
 };
 
 // Pedal plan P1 (out/transmission_pedal_plan.md 2.2/2.3): the manual pedal law T*(c) = Z + c (F - Z) at one rpm.

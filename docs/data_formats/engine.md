@@ -1087,6 +1087,16 @@ between two torques the engine can make at the current speed:
 - `IEngine::request_envelope(rpm)` reports `Z`, `F`, `T_fc` and `T_cut` in the current state (tests, HUD).
 - The engine's torque demand to the TCU is `T*` while fired (the motoring torque in fuel cut).
 
+**Assist ceilings on a turbo engine** (pedal P1 (b)). Traction control and launch control limit the engine through a
+throttle ceiling (a fraction of the driver's command). On a turbo engine with the pedal envelope, when the running
+traction-control mode has `ignition_cut: true` (the default; electronics.md), that ceiling is a torque fraction at the
+CURRENT boost: the plate and the wastegate keep following the driver's command (under the TCU's own shift ceiling only),
+and the combustion torque is retarded to `f = ceiling / command` with the charge and fuel unchanged, so the lost
+indicated work leaves as exhaust enthalpy and keeps the turbine spun. TC's deep ignition cut then also keeps the plate.
+With `ignition_cut: false` (the shipped Sport/Drift modes), on an NA engine or without an envelope, the ceiling closes
+the plate as before. The auto-clutch follows the retarded torque. Auto-shift always reads the driver's command, never
+the ceiling (pedal P1 (a)).
+
 ## Dyno sweep: `run_dyno_sweep` (engine garage P3, A9)
 
 `ps/drivetrain/engine_dyno.h`: a full-throttle (or part-throttle) dyno sweep of ONE engine over rpm, from the same

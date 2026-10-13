@@ -270,7 +270,7 @@ override of the car's own `traction_control` block (an unset field inherits the 
 |---|---|---|
 | `target_slip`, `kp`, `ki_per_s`, `attack_rate_per_s`, `recovery_rate_per_s` | the controller's gains (finite, `> 0`; `target_slip < 1`) | the car's value |
 | `min_fraction` | torque floor: the TC never cuts below this fraction, `[0, 1)` | `0` (today) |
-| `ignition_cut` | whether a deep intervention may cut ignition | `true` (today) |
+| `ignition_cut` | whether a deep intervention may cut ignition; also how TC and launch-control throttle ceilings act on a turbo engine with a pedal envelope: `true` = spark retard at the current boost (plate and wastegate held on the driver's command), `false` = the plate closes to the ceiling (engine.md "Assist ceilings on a turbo engine") | `true` (today) |
 
 Switching modes keeps the controller's integral and fraction (no jump). Plan-B1 starting values (`[AS]`, measured
 against the V6 ordering band in `tests/unit/test_assist_unit.cpp`): Relaxed 0.12/2/5/15/8, floor 0, cut; Sport
