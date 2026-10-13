@@ -650,7 +650,15 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     // Built here (not Phase K below) so the state loop just below can call
     // ratio_for_position directly instead of constructing a throwaway
     // Gearbox per state.
-    if (gearbox_desc) gearbox_ = std::make_unique<Gearbox>(to_gearbox_desc(*gearbox_desc));
+    if (gearbox_desc) {
+        gearbox_ = std::make_unique<Gearbox>(to_gearbox_desc(*gearbox_desc));
+        // Transmission plan T0: the sound-side data (tooth form, tooth counts, fallback mesh order) - never hashed.
+        gearbox_sound_.gear_type = gearbox_desc->gear_type;
+        gearbox_sound_.forward_teeth = gearbox_desc->forward_teeth;
+        gearbox_sound_.reverse_teeth = gearbox_desc->reverse_teeth;
+        gearbox_sound_.input_pair_teeth = gearbox_desc->input_pair_teeth;
+        gearbox_sound_.mesh_order = gearbox_desc->mesh_order;
+    }
 
     std::unordered_map<std::uint16_t, int> rigid_row_touch_count; // NodeId::index -> how many rigid-row TERMS touch it (across every state)
     auto register_rigid_row = [&](int state, RigidRow row) {
@@ -2334,10 +2342,16 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
         const real eff = cur == 0 ? real(1.0) : gearbox_->efficiency_for_position(cur);
         if (cur == 0 || eff >= real(1.0)) {
             gearbox_lambda_mesh_prev_ = real(0.0);
+            // Transmission plan T0 (sound only, never hashed): the transmitted torque of a lossless engaged gear is the
+            // same node-balance reconstruction with no own loss term; neutral carries none.
+            gearbox_mesh_load_nm_ = cur == 0 ? real(0.0)
+                                             : std::abs(reconstruct_mesh_torque(gearbox_in_, real(1.0), real(0.0), network_, assembly_,
+                                                                                gearbox_omega_old_in_, ctx.h));
         } else {
             const real omega_new_in = network_.omega(gearbox_in_);
             gearbox_lambda_mesh_prev_ =
                 reconstruct_mesh_torque(gearbox_in_, real(1.0), gearbox_own_loss_tau_, network_, assembly_, gearbox_omega_old_in_, ctx.h);
+            gearbox_mesh_load_nm_ = std::abs(gearbox_lambda_mesh_prev_);
             ledger_.gear_loss += -ctx.h * omega_new_in * gearbox_own_loss_tau_;
         }
         const real v_syn = network_.row_velocity(gearbox_synchro_row_);
@@ -2656,4 +2670,32 @@ std::uint64_t Powertrain::simulated_engine_steady_rebuild_count() const {
     return sim_engine_ptr_ != nullptr ? sim_engine_ptr_->steady_rebuild_count() : 0;
 }
 
+void Powertrain::fill_gearbox_sound(DrivelineSoundState& out) const {
+    out.gear_type = static_cast<std::uint8_t>(gearbox_sound_.gear_type);
+    out.mesh_frequency_hz[0] = real(0.0);
+    out.mesh_frequency_hz[1] = real(0.0);
+    out.mesh_load_nm = real(0.0);
+    if (!gearbox_) return;
+    constexpr real kTwoPiRad = real(2.0) * real(3.14159265358979323846);
+    const real w_in = std::abs(network_.omega(gearbox_in_));
+    const GearTeeth& pair = gearbox_sound_.input_pair_teeth;
+    // Input pair (constant mesh, turns whenever the input shaft turns): teeth of the input-shaft gear, else the fallback order.
+    if (pair.drive > 0) out.mesh_frequency_hz[0] = w_in * static_cast<real>(pair.drive) / kTwoPiRad;
+    else if (gearbox_sound_.mesh_order > real(0.0)) out.mesh_frequency_hz[0] = w_in * gearbox_sound_.mesh_order / kTwoPiRad;
+    const int pos = gearbox_->current_position();
+    if (pos == 0) return; // neutral: no gear mesh carries a load, nothing meshes at the gear's frequency
+    // Active gear: the shaft that drives it is the layshaft when an input pair exists (w_in * z_a / z_b), else the input shaft.
+    const std::vector<GearTeeth>& list = pos > 0 ? gearbox_sound_.forward_teeth : gearbox_sound_.reverse_teeth;
+    const std::size_t idx = static_cast<std::size_t>(pos > 0 ? pos - 1 : -pos - 1);
+    if (idx < list.size() && list[idx].drive > 0) {
+        real w_drive_shaft = w_in;
+        if (pair.drive > 0 && pair.driven > 0) w_drive_shaft = w_in * static_cast<real>(pair.drive) / static_cast<real>(pair.driven);
+        out.mesh_frequency_hz[1] = w_drive_shaft * static_cast<real>(list[idx].drive) / kTwoPiRad;
+    } else if (gearbox_sound_.mesh_order > real(0.0)) {
+        out.mesh_frequency_hz[1] = w_in * gearbox_sound_.mesh_order / kTwoPiRad;
+    }
+    out.mesh_load_nm = gearbox_mesh_load_nm_;
+}
+
 } // namespace ps::drivetrain
+

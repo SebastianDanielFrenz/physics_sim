@@ -43,6 +43,8 @@ enum class BuildRule : std::uint16_t {
     // Engine garage P10 (an engine with a continuous intake lift family only):
     LiftFamilyOrder = 14,      // a lift node has no more peak lift or lift area than the node below it (not monotone in u)
     LiftMinimumBand = 15,      // the minimum-lift node's peak lift is below the band, or too large a share of full lift
+    // Transmission plan T0 (a gearbox with rated_input_torque_nm only; check_gearbox_rating below, not check_buildable):
+    GearboxRating = 16,        // the engine's peak net torque (boost and nitrous gain included) is over the gearbox's rating
 };
 
 // A violation of a static rule. severity reuses P3b's LimitSeverity so one advisor handles both record kinds:
@@ -83,6 +85,22 @@ struct BuildIssue {
 [[nodiscard]] const char* to_string(BuildRule r);
 
 // ---------------------------------------------------------------------------------------------------------------------------
+// Transmission plan T0: gearbox rating
+// ---------------------------------------------------------------------------------------------------------------------------
+
+// Peak net crank torque of a torque-map engine: the maximum of its full-load curve up to the limiter (the dyno's WOT curve).
+// A simulated engine has no closed form (its boosted F(n) needs the steady model): sweep it (run_dyno_sweep, with
+// DynoSweepSpec::nitrous when a kit is fitted, so the kit's gain is in the peak) and pass the maximum of DynoPoint::torque_nm.
+[[nodiscard]] real peak_net_torque_nm(const TorqueMapEngineDesc& engine);
+
+// GearboxRating: `peak_torque_nm` (see above) against the gearbox's rated_input_torque_nm. No rating (0) or no excess: {}.
+// Over the rating by 0-5 % Near, 5-15 % Limiting, more than 15 % Exceeded (has_blocking_issue = the garage refuses; rules table
+// engine_rules_table.h kGearboxOver*). Slot "gearbox", field_pointer "/rated_input_torque_nm", value = the peak, limit = the
+// rating, unit N*m. The powertrain overload checks every gearbox component (each reports separately).
+[[nodiscard]] std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& gearbox, real peak_torque_nm);
+[[nodiscard]] std::vector<BuildIssue> check_gearbox_rating(const PowertrainDesc& powertrain, real peak_torque_nm);
+
+// ---------------------------------------------------------------------------------------------------------------------------
 // A11: classify_engine_change
 // ---------------------------------------------------------------------------------------------------------------------------
 
@@ -121,6 +139,18 @@ struct EngineFieldChange {
 [[nodiscard]] EngineChange classify_engine_change(const TorqueMapEngineDesc& before, const TorqueMapEngineDesc& after);
 
 [[nodiscard]] const char* to_string(EngineChange c);
+
+// Transmission plan T0 (7.3): what a gearbox edit costs, for the manual kinds (Manual, Sequential).
+//   None    - only data no consumer of the physics reads: gear_type, tooth counts, mesh_order (sound side).
+//   Runtime - applies by constructing the powertrain's gearbox again from the descriptor, nothing else: rated_input_torque_nm,
+//             efficiencies, synchro capacities / static factor / dog window, neutral phase, dog release torque, grind and abort
+//             times, initial gear.
+//   Respawn - a different gearbox: kind (Manual <-> Sequential), gear count (forward or reverse), any ratio, input / output
+//             inertia or axis (the node set and its rows change).
+// Ascending cost = ascending enum value, like EngineChange (compare with <); the most expensive changed field wins.
+enum class GearboxChange : std::uint8_t { None = 0, Runtime = 1, Respawn = 2 };
+[[nodiscard]] GearboxChange classify_gearbox_change(const GearboxDesc& before, const GearboxDesc& after);
+[[nodiscard]] const char* to_string(GearboxChange c);
 
 // The key of a turbo's derived tables, the same FNV-1a over the same parameter list as ps::io::load_turbo_configuration_json
 // (core/src/io/vehicle_io.cpp), computed from the descriptor: for a descriptor straight from that loader (no performance_map)

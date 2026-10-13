@@ -185,10 +185,16 @@ struct DynoResult {
 // Each carries a Closed Remedy in the field's own terms (the KINETIC capacity_nm): current = capacity_nm, required_min =
 // peak / static_factor (the smallest capacity that holds the peak), required_margin = 1.3 * peak / static_factor (the
 // table's safety margin, limit_thresholds.h kDrivelineMargin). With static_factor == 1 these are peak and 1.3 * peak.
-// A gearbox input-torque rating does not exist in GearboxDesc, so GearboxInputTorque is not produced. `clutch_file`
-// fills PartRef::file (empty = unknown). A sweep without a positive torque, or a powertrain without a clutch, returns {}.
-// Sorted like DynoResult::limits.
+// Transmission plan T0: GearboxDesc::rated_input_torque_nm (> 0) of every gearbox component is held against the same peak:
+//   GearboxInputTorque  rpm = the peak point's rpm, slot "gearbox", field "/rated_input_torque_nm", value = peak, limit = the
+//                       rating. Produced only when the peak is OVER the rating: 0-5 % over Near, 5-15 % Limiting, more than 15 %
+//                       Exceeded (engine_rules_table.h kGearboxOver*; the same grading as BuildRule::GearboxRating).
+//                       Closed Remedy: current = rating, required_min = peak, required_margin = 1.1 * peak.
+// `clutch_file` / `gearbox_file` fill PartRef::file (empty = unknown). A sweep without a positive torque returns {}; a
+// powertrain without a clutch / a rated gearbox produces no such finding. Sorted like DynoResult::limits (by kind, ClutchCapacity
+// before GearboxInputTorque). With a nitrous kit in the sweep (DynoSweepSpec::nitrous) the peak already includes its gain.
 [[nodiscard]] std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain,
-                                                               const std::string& clutch_file = {});
+                                                               const std::string& clutch_file = {},
+                                                               const std::string& gearbox_file = {});
 
 } // namespace ps::drivetrain

@@ -385,4 +385,36 @@ EngineChange classify_engine_change(const TorqueMapEngineDesc& before, const Tor
     return worst;
 }
 
+// ---- Transmission plan T0 (7.3): gearbox changes ---------------------------------------------------------------------------
+// Every GearboxDesc field is listed exactly once below (tests/unit/test_gearbox_rating.cpp mutates each one); a field added to
+// GearboxDesc must be added here, or it reads as None.
+GearboxChange classify_gearbox_change(const GearboxDesc& a, const GearboxDesc& b) {
+    // Respawn: the node set / rows change.
+    if (a.type != b.type || a.forward_ratios != b.forward_ratios || a.reverse_ratios != b.reverse_ratios ||
+        a.input_inertia_kgm2 != b.input_inertia_kgm2 || a.output_inertia_kgm2 != b.output_inertia_kgm2 ||
+        !same(a.input_axis_local, b.input_axis_local) || !same(a.output_axis_local, b.output_axis_local)) {
+        return GearboxChange::Respawn;
+    }
+    // Runtime: the gearbox is constructed again from the descriptor.
+    if (a.forward_efficiency != b.forward_efficiency || a.reverse_efficiency != b.reverse_efficiency ||
+        a.synchro.forward_capacity_nm != b.synchro.forward_capacity_nm || a.synchro.reverse_capacity_nm != b.synchro.reverse_capacity_nm ||
+        a.synchro.static_factor != b.synchro.static_factor || a.synchro.max_dog_mismatch_rad_s != b.synchro.max_dog_mismatch_rad_s ||
+        a.neutral_phase_s != b.neutral_phase_s || a.dog_release_torque_nm != b.dog_release_torque_nm ||
+        a.grind_after_s != b.grind_after_s || a.abort_after_s != b.abort_after_s || a.initial_gear != b.initial_gear ||
+        a.rated_input_torque_nm != b.rated_input_torque_nm) {
+        return GearboxChange::Runtime;
+    }
+    // None: gear_type, forward_teeth, reverse_teeth, input_pair_teeth, mesh_order (sound side only).
+    return GearboxChange::None;
+}
+
+const char* to_string(GearboxChange c) {
+    switch (c) {
+    case GearboxChange::None: return "None";
+    case GearboxChange::Runtime: return "Runtime";
+    case GearboxChange::Respawn: return "Respawn";
+    }
+    return "Unknown";
+}
+
 } // namespace ps::drivetrain

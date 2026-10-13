@@ -117,6 +117,17 @@ inline constexpr Threshold kCamLiftOverValveMax{"cam_peak_lift_over_valve_d_max"
 inline constexpr Threshold kLiftMinPeakMinMm{"lift_min_node_peak_min_mm", 0.1, "[AS] below ~0.1 mm the valve barely leaves its seat (BMW's second-generation minimum is 0.18 mm, fenderbender.com Scot Manna 2017)"};
 inline constexpr Threshold kLiftMinPeakMaxFraction{"lift_min_node_peak_max_fraction_of_full", 0.25, "[AS] BMW N52 0.18 of 9.9 mm = 0.018 (fenderbender.com; mymotorlist.com); above a quarter of full lift the throttle sets the light loads"};
 
+// --- Transmission plan T0: gearbox input-torque rating --------------------------------------------------------------------------
+// Peak net crank torque (the dyno's, boosted and with a fitted nitrous kit's gain) over a gearbox's rated_input_torque_nm. The
+// rating is a limit, so the grading starts when the peak is OVER it: 0-5 % over Near, 5-15 % Limiting, beyond 15 % Exceeded (the
+// garage refuses; owner 2026-10-13: warn at Near/Limiting, refuse only Exceeded). Same bands as the grid-coverage rules above, so
+// one advisor reads both. These three numbers are config-to-be (increment L0 moves every refusal limit and advice threshold into
+// a config file; keep them here and in limit_thresholds.h until then).
+inline constexpr Threshold kGearboxOverLimiting{"gearbox_rating_over_limiting", 0.05, "[AS] transmission plan 7.1: 5 % over the rating; a gearbox is rated with margin, so the first few percent over are a warning (no gearbox wear model exists)"};
+inline constexpr Threshold kGearboxOverExceeded{"gearbox_rating_over_exceeded", 0.15, "[AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused"};
+// The Closed remedy asks for this factor over the peak (required_margin); required_min is the peak itself.
+inline constexpr Threshold kGearboxRemedyMargin{"gearbox_rating_remedy_margin", 1.10, "[AS] transmission plan 7.1: required rating = peak x 1.1"};
+
 inline constexpr Threshold kAllEngineRuleThresholds[] = {
     kLayoutSource,  kIntake1Min,   kIntake1Max,    kIntake2Min,     kIntake2Max,   kIntake3Min,
     kIntake3Max,    kExhaustRatioMin, kExhaustRatioMax, kRowChordFraction, kPackDensity2, kPackDensity3,
@@ -125,6 +136,7 @@ inline constexpr Threshold kAllEngineRuleThresholds[] = {
     kBoostGridAmbientBar, kBoostGridStepPa, kBoostGridMinLastStepPa, kBoostGridAmbientNodeGapPa, kNaGridTopFraction, kRelTolerance,
     kCamSwitchFractionMin, kCamSwitchFractionMax, kCamHysteresisMin, kCamHysteresisMax, kCamLiftOverValveMax,
     kLiftMinPeakMinMm, kLiftMinPeakMaxFraction,
+    kGearboxOverLimiting, kGearboxOverExceeded, kGearboxRemedyMargin,
 };
 inline constexpr std::size_t kAllEngineRuleThresholdCount = sizeof(kAllEngineRuleThresholds) / sizeof(kAllEngineRuleThresholds[0]);
 

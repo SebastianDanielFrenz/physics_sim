@@ -1,0 +1,15 @@
+{
+  "extends": "../../../../data/gearboxes/hyper_7mt.json",
+  "name": "trans_t0_rated_900",
+  "source": "Test fixture (transmission plan T0): hyper_7mt with a rated input torque of 900 N*m, ASSUMED (a rating test number, not a real gearbox). Straight-cut with ASSUMED tooth counts; the counts are not cross-checked against the ratios.",
+  "rated_input_torque_nm": 900,
+  "gear_type": "straight_cut",
+  "teeth": {
+    "input_pair": { "drive": 23, "driven": 31 },
+    "forward": [
+      { "drive": 13, "driven": 29 }, { "drive": 17, "driven": 29 }, { "drive": 20, "driven": 28 }, { "drive": 23, "driven": 27 },
+      { "drive": 26, "driven": 26 }, { "drive": 29, "driven": 25 }, { "drive": 31, "driven": 24 }
+    ],
+    "reverse": [ { "drive": 12, "driven": 31 } ]
+  }
+}

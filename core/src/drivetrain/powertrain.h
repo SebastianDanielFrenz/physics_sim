@@ -326,6 +326,9 @@ public:
     [[nodiscard]] real gearbox_output_ratio_magnitude() const;
     [[nodiscard]] real gearbox_out_omega() const { return gearbox_ ? network_.omega(gearbox_out_) : real(0.0); }
     [[nodiscard]] real gearbox_in_omega() const { return gearbox_ ? network_.omega(gearbox_in_) : real(0.0); }
+    // Transmission plan T0: fills DrivelineSoundState's gear_type / mesh_frequency_hz / mesh_load_nm from the CURRENT network
+    // state (allocation-free, reads only; no gearbox = all zero). Sound only - nothing here is hashed.
+    void fill_gearbox_sound(DrivelineSoundState& out) const;
     [[nodiscard]] real engine_omega() const { return engine_ ? network_.omega(engine_crank_) : real(0.0); }
     [[nodiscard]] real driven_wheel_mean_radius() const { return driven_wheel_mean_radius_; }
     // Speedo-formula (plan section 7.6) road-speed proxy, fed to the TCU as
@@ -737,6 +740,15 @@ private:
     FrictionRowId gearbox_synchro_row_; // plan section 5.1 row 1
     real gearbox_lambda_mesh_prev_ = 0.0; // STATE: persists substep to substep (plan section 5.4/7.7)
     real gearbox_own_loss_tau_ = 0.0;     // this substep's own mesh-loss torque, stashed pre_solve -> post_solve
+    // Transmission plan T0 (sound only, NEVER hashed): |transmitted torque| of the engaged gear (0 in neutral), and the
+    // gearbox's tooth data copied at construction.
+    real gearbox_mesh_load_nm_ = 0.0;
+    struct GearboxSoundData {
+        GearType gear_type = GearType::Helical;
+        std::vector<GearTeeth> forward_teeth, reverse_teeth;
+        GearTeeth input_pair_teeth;
+        real mesh_order = 0.0;
+    } gearbox_sound_;
     real gearbox_omega_old_in_ = 0.0;
     Gearbox::StepResult last_gearbox_result_{}; // this substep's phase_step output, cached for the TCU's sensors next substep
 

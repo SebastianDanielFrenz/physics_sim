@@ -2905,6 +2905,71 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
     if (g.initial_gear < -static_cast<int>(g.reverse_ratios.size()) || g.initial_gear > static_cast<int>(g.forward_ratios.size())) {
         throw std::runtime_error(ctx + ": initial_gear is out of range");
     }
+
+    // Transmission plan T0: rating and sound data (never hashed, in no key).
+    if (j.contains("rated_input_torque_nm")) {
+        const json& rj = j.at("rated_input_torque_nm");
+        if (!rj.is_number() || !std::isfinite(rj.get<real>()) || !(rj.get<real>() > real(0.0))) {
+            throw std::runtime_error(ctx + ": rated_input_torque_nm must be a number > 0");
+        }
+        g.rated_input_torque_nm = rj.get<real>();
+    }
+    if (j.contains("gear_type")) {
+        const json& tj = j.at("gear_type");
+        const std::string gt = tj.is_string() ? tj.get<std::string>() : std::string();
+        if (gt == "helical") g.gear_type = ps::drivetrain::GearType::Helical;
+        else if (gt == "straight_cut") g.gear_type = ps::drivetrain::GearType::StraightCut;
+        else throw std::runtime_error(ctx + ": gear_type must be \"helical\" or \"straight_cut\"");
+    }
+    if (j.contains("mesh_order")) {
+        const json& mj = j.at("mesh_order");
+        if (!mj.is_number() || !std::isfinite(mj.get<real>()) || !(mj.get<real>() > real(0.0))) {
+            throw std::runtime_error(ctx + ": mesh_order must be a number > 0");
+        }
+        g.mesh_order = mj.get<real>();
+    }
+    if (j.contains("teeth")) {
+        const json& tj = j.at("teeth");
+        if (!tj.is_object()) throw std::runtime_error(ctx + ": teeth must be an object {forward, reverse, input_pair}");
+        for (auto it = tj.begin(); it != tj.end(); ++it) {
+            if (it.key() != "forward" && it.key() != "reverse" && it.key() != "input_pair") {
+                throw std::runtime_error(ctx + ".teeth: unknown key '" + it.key() + "' (expected forward, reverse, input_pair)");
+            }
+        }
+        auto read_pair = [&](const json& pj, const std::string& where) {
+            ps::drivetrain::GearTeeth t;
+            if (!pj.is_object() || !pj.contains("drive") || !pj.contains("driven")) {
+                throw std::runtime_error(ctx + "." + where + ": a tooth pair needs {\"drive\", \"driven\"}");
+            }
+            for (auto it = pj.begin(); it != pj.end(); ++it) {
+                if (it.key() != "drive" && it.key() != "driven") {
+                    throw std::runtime_error(ctx + "." + where + ": unknown key '" + it.key() + "' (expected drive, driven)");
+                }
+            }
+            const json& dj = pj.at("drive");
+            const json& nj = pj.at("driven");
+            if (!dj.is_number_integer() || !nj.is_number_integer() || dj.get<long long>() < 1 || nj.get<long long>() < 1) {
+                throw std::runtime_error(ctx + "." + where + ": tooth counts must be integers >= 1");
+            }
+            t.drive = dj.get<int>();
+            t.driven = nj.get<int>();
+            return t;
+        };
+        auto read_list = [&](const char* key, std::vector<ps::drivetrain::GearTeeth>& out, std::size_t expected) {
+            if (!tj.contains(key)) return;
+            const json& lj = tj.at(key);
+            if (!lj.is_array()) throw std::runtime_error(ctx + ".teeth." + key + " must be an array");
+            if (lj.size() != expected) {
+                throw std::runtime_error(ctx + ": teeth." + key + " must have the same length as " + key + "_ratios");
+            }
+            for (std::size_t i = 0; i < lj.size(); ++i) {
+                out.push_back(read_pair(lj[i], std::string("teeth.") + key + "[" + std::to_string(i) + "]"));
+            }
+        };
+        read_list("forward", g.forward_teeth, g.forward_ratios.size());
+        read_list("reverse", g.reverse_teeth, g.reverse_ratios.size());
+        if (tj.contains("input_pair")) g.input_pair_teeth = read_pair(tj.at("input_pair"), "teeth.input_pair");
+    }
     return g;
 }
 
@@ -2914,7 +2979,12 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
 // fields from (either the external file's own top-level object, format-
 // checked, or `cj` itself for an inline component).
 json resolve_component_ref(const json& cj, const std::string& kind, const std::string& base_dir, const std::string& ctx) {
-    if (!cj.contains("ref")) return cj;
+    if (!cj.contains("ref")) {
+        if (kind == "gearbox" && cj.contains("extends")) {
+            throw std::runtime_error(ctx + ": 'extends' is only available in a gearbox part file (referenced with 'ref')");
+        }
+        return cj;
+    }
     for (auto it = cj.begin(); it != cj.end(); ++it) {
         // Engine garage P2: an engine component may carry its slots (ecu, cam, forced_induction, installation,
         // thermal - the T1 "thermal" and N7b override, renamed forced_induction, among them) next to "ref".
@@ -2928,7 +2998,10 @@ json resolve_component_ref(const json& cj, const std::string& kind, const std::s
     }
     const std::string path = resolve_path(base_dir, cj.at("ref").get<std::string>());
     // Engine garage P2 (design A4): an engine file may "extends" a parent engine; relative paths stay per file.
-    const json fj = kind == "engine" ? parts::load_part(path, parts::rebase_engine_paths) : read_json_file(path);
+    // Transmission plan T0: a gearbox file may "extends" a parent gearbox (it has no path-valued key to rebase).
+    const json fj = kind == "engine"    ? parts::load_part(path, parts::rebase_engine_paths)
+                    : kind == "gearbox" ? parts::load_part(path)
+                                        : read_json_file(path);
     require_format(fj, kind, 1, path);
     return fj;
 }

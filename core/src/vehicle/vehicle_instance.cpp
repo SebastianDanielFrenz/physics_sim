@@ -711,6 +711,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         dl.gear = snap.gear;
         dl.grind_active = powertrain_.has_gearbox() ? powertrain_.last_gearbox_result().grind_active : false;
         dl.grind_events = powertrain_.has_gearbox() ? powertrain_.gearbox().grind_events() : 0u;
+        powertrain_.fill_gearbox_sound(dl); // transmission plan T0: gear_type / mesh_frequency_hz / mesh_load_nm
 
         snap.diff_count = powertrain_.fill_diff_snapshot(snap.diffs); // PHYS-033 P4 I4 C8
         snap.awd_engagement = powertrain_.awd_engagement(); // PHYS-033 P4 I4 C9

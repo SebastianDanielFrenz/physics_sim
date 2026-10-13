@@ -32,6 +32,50 @@ thresholds).
 | `grind_after_s` | real (s) | optional | `0.25` | none | synchronising for longer than this produces a "grind" event |
 | `abort_after_s` | real (s) | optional | `1.0` | none | synchronising for longer than this gives up and returns to neutral |
 | `initial_gear` | int | optional | `0` | must be within `[-reverse_ratios.size(), forward_ratios.size()]`, else `"<ctx>: initial_gear is out of range"` | starting position; `0` = neutral, `k > 0` = forward gear k, `-k` = reverse gear Rk |
+| `rated_input_torque_nm` | real (N·m) | optional | `0` (= unrated, never checked) | number `> 0`, else `"<ctx>: rated_input_torque_nm must be a number > 0"` | the largest steady input torque the box is built for (transmission plan T0). Compared with the engine's peak net torque (boosted, incl. a nitrous kit when the sweep has one): see [Rating check](#rating-check) |
+| `gear_type` | string | optional | `"helical"` | `"helical"` or `"straight_cut"`, else `"<ctx>: gear_type must be \"helical\" or \"straight_cut\""` | tooth form; sound only (straight-cut = gear whine), published as `DrivelineSoundState::gear_type` (0/1). Never hashed |
+| `teeth` | object, see [below](#teeth) | optional | no tooth data | see below | tooth counts for the mesh frequencies. Sound only |
+| `mesh_order` | real | optional | `0` (unset) | number `> 0`, else `"<ctx>: mesh_order must be a number > 0"` | fallback mesh order (teeth per input revolution) used where no tooth counts exist |
+
+A gearbox **part file** (`ref`) may carry `"extends": "<path>"` (relative to
+the file; RFC 7396 merge patch, chains up to depth 8, cycles rejected — the
+same rule as the engine-family parts). `extends` inside an inline gearbox
+component is rejected (`"'extends' is only available in a gearbox part file
+(referenced with 'ref')"`); a vehicle can swap a gearbox through the user
+layer (`VehicleLoadOptions::part_overrides["gearbox"]`).
+
+### `teeth`
+
+| Key | Type | Validation | Meaning |
+|---|---|---|---|
+| `forward` | array of `{drive, driven}` | same length as `forward_ratios` (`"teeth.forward must have the same length as forward_ratios"`) | tooth counts of each forward gear's pair on the layshaft/output side; `drive` is the gear on the driving shaft |
+| `reverse` | array of `{drive, driven}` | same length as `reverse_ratios` | same for reverse |
+| `input_pair` | `{drive, driven}` | both keys required (`"a tooth pair needs"`) | the constant-mesh pair from the input shaft to the layshaft |
+
+Counts are integers `>= 1` (`"tooth counts must be integers >= 1"`); unknown
+keys are rejected (`"teeth: unknown key '<key>'"`). The counts are **not**
+cross-checked against the ratios.
+
+Mesh frequencies (`DrivelineSoundState::mesh_frequency_hz[2]`, 0 where
+unknown): `[0]` = `|w_in| * input_pair.drive / (2 pi)`; `[1]` = the engaged
+gear, `|w_layshaft| * forward/reverse_teeth[gear].drive / (2 pi)` with
+`w_layshaft = w_in * input_pair.drive / input_pair.driven` (`= w_in` without
+an input pair); `0` in neutral. Without tooth counts `mesh_order` stands in:
+`|w_in| * mesh_order / (2 pi)`. `DrivelineSoundState::mesh_load_nm` is the
+torque through the engaged mesh (`|` node-balance reaction at the input `|`,
+0 in neutral), computed for lossless boxes as well. None of these fields is
+hashed.
+
+### Rating check
+
+`check_buildable` rule `GearboxRating` (`BuildRule` 16) and the dyno finding
+`LimitKind::GearboxInputTorque` (8) grade `peak / rated - 1` when positive:
+`> 0` Near, `> 5 %` Limiting, `> 15 %` Exceeded (all `[AS]`, `rules::
+kGearboxOverLimiting/Exceeded`). Only Exceeded blocks the garage. The Closed
+remedy asks for `peak` (minimum) and `1.1 * peak` (margin, `kGearboxRemedyMargin`)
+at `/rated_input_torque_nm`. The peak of a torque-map engine is
+`peak_net_torque_nm` (the WOT curve maximum up to the limiter); a simulated
+engine's peak comes from the dyno sweep, so boost and nitrous count.
 
 ### `synchro`
 
