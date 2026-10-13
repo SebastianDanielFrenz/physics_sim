@@ -1769,7 +1769,8 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         // I7d D5: an anti-lag boost target holds the wastegate PID toward boost_target_fraction of the target
         // boost while active (a plate below 10 % would otherwise command it open).
         const real boost_plate = (als_active_ && als->boost_target_fraction > x_thr_) ? als->boost_target_fraction : x_thr_;
-        turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_port_k_,boost_plate,p_im_,&maps_->psi);
+        turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_port_k_,boost_plate,p_im_,&maps_->psi,
+                     tcu.hold_boost_control);
     }
 
     // (4) air step, omega frozen at omega_old

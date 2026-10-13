@@ -136,6 +136,10 @@ struct TcuRequest {
     // Engine garage P8 (A16): a SECOND rev limit in rpm, applied through the engine's own limiter (FuelCut with its
     // hysteresis, SoftCut over its band) when 0 < limiter_rpm < the engine's limiter rpm. 0 = none.
     real limiter_rpm = 0.0;
+    // Boost B0: a gearshift is in progress (the ManualTcu's upshift ignition cut or its post-shift throttle-ceiling
+    // ramp). A turbo engine then holds its boost controller (wastegate position and PID integral) instead of treating
+    // the closed plate as "no boost requested". Not set by traction control, launch control or a driver lift.
+    bool hold_boost_control = false;
 };
 
 // Hoisted, unchanged except the new theta_c field (PHYS-033 P4 I7a C2, see
