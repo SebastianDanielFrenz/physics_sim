@@ -177,6 +177,10 @@ OperatingPoint settle_operating_point(const ps::drivetrain::SimulatedEngineDesc&
     op.pedal = kPedals[load];
     op.omega = g.rpm * kTwoPi / 60.0;
     ps::drivetrain::SimulatedEngine engine(desc);
+    // Pedal plan P1: the light-load plane is a recipe (pedal 0.12 on the pre-P1 law), not a driver's pedal - each plane
+    // stores the intake pressure it was recorded at and playback places it by that. Keeping the recipe keeps every baked
+    // bank (and its pins) unchanged.
+    engine.set_pedal_law_override(0);
     ps::drivetrain::Sensors sensors;
     sensors.omega = op.omega;
     sensors.ignition = 1;
