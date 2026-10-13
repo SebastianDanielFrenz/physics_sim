@@ -693,6 +693,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     // default 0, and VehicleInstance ignores the channel.
     real assist_clutch_default = real(0.0), assist_blip_default = real(0.0), assist_shift_default = real(0.0);
     std::string launch_channel_name = "assist.launch_control";
+    bool launch_not_fitted = false;  // a P8 launch_control controller with fitted = false
     bool has_launch_control = false; // the channel is registered only for a car that has the part (list unchanged for every other car)
     for (const drivetrain::ControllerDesc& cd : desc.controllers) {
         if (const auto* tcu = std::get_if<drivetrain::ManualTcuDesc>(&cd.params)) {
@@ -702,6 +703,7 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         } else if (const auto* lc = std::get_if<drivetrain::LaunchControlDesc>(&cd.params)) {
             launch_channel_name = lc->channel;
             has_launch_control = true;
+            launch_not_fitted = !lc->fitted;
         }
     }
     channel_indices.assist_auto_clutch = ensure_control_channel_index(channel_prefix + "assist.auto_clutch", assist_clutch_default);
@@ -728,6 +730,9 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         has_launch_control = true;
         launch_default = desc.assist_unit->launch_control->default_enabled ? real(1) : real(0);
     }
+    // assists I7b: with a drive_modes part whose default mode sets launch_control_default, that is the channel default
+    // (like the TC channel); a not-fitted P8 two-step keeps default 0 (it ignores the channel anyway).
+    if (has_launch_control && !launch_not_fitted) launch_default = ps::vehicle::launch_control_default_channel_value(launch_default, desc.drive_modes);
     if (has_launch_control) channel_indices.assist_launch_control = ensure_control_channel_index(channel_prefix + launch_channel_name, launch_default);
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): resolve every control channel

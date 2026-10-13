@@ -11,6 +11,7 @@ add_executable(ps_unit_tests
   test_assist_low_speed.cpp
   test_assist_launch.cpp
   test_assist_drive_modes.cpp
+  test_assist_launch_default.cpp
   test_assist_all_together.cpp
   test_adaptive_pressure.cpp
   test_live_engine_ambient.cpp
