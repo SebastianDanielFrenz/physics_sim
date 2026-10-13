@@ -24,6 +24,18 @@
 //        and one released by a driver write of a different value, have DIFFERENT state hashes; with the launch_control_default
 //        keys stripped from the part, the Normal -> Sport change leaves LC off (no default, nothing folded).
 //
+// RECORDED SABOTAGES (temporary edits in core/src or the desc header, reverted; each run is the whole LD* set, 6 cases):
+//   1 mode change does not apply launch_control_default        -> LD1, LD2, LD3, LD6 fail (29 assertions)
+//   2 a driver channel change does not clear the override      -> LD1, LD6 fail (3)
+//   3 any tick clears the override (a same-value rewrite does) -> LD1, LD6 fail (22)
+//   4 LC channel spawn default ignores the default mode        -> LD2 fails (2)
+//   5 override state not folded into the hash                  -> LD6 fails (1)
+//   6 launch_control_allowed gate removed                      -> LD1 fails (1; the existing G1 also covers it)
+//   7 loader accepts default true next to allowed false        -> LD4 fails (1)
+// Set-up fault of the first run (test, not code): LD1's last block expected LC on in Normal after a channel write of 1; the
+// shipped Normal does not ALLOW LC, so the allowed gate (correctly) kept it off - the expectation was changed to the gate,
+// no band widened.
+//
 // BANDS COMMITTED BEFORE THE FIRST RUN (assists plan I7b, brief assists_i7b_lc_default; all [AS]):
 //   LD1/LD2 exact equalities on bit4 and the channel value as listed; LD3 armed seen in Sport (>= 1 tick) and 0 ticks in
 //   Normal/Eco within 360 ticks; LD5 first differing hash index == size, own allocation == 0; LD6 hash inequality /

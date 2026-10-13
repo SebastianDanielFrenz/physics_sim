@@ -24,7 +24,7 @@ channel except `assist.aero_control`, where it is `>= 0.5`.
 |---|---|---|---|---|---|
 | auto clutch, auto blip, auto shift | the `manual_tcu` controller's `auto_clutch` / `auto_blip` / `auto_shift` blocks ([vehicle.md](vehicle.md#controllers)) | `assist.auto_clutch`, `assist.auto_blip`, `assist.auto_shift` | always, on every car | the block's `enabled` AND `fitted` (0 without a `manual_tcu`) | 0 / 1 |
 | traction control | the vehicle's `traction_control` block (= mode On), plus an optional assist unit's mode table | `assist.traction_control` | always, on every car | 0 when `fitted` is false; else the default drive mode's `traction_control_default` if the car has the `drive_modes` part and that mode has one; else the unit's `default_mode` (unit with a TC block); else the block's `enabled` | 0 Off, 1 On (the car's own block), 2 Relaxed, 3 Sport, 4 Drift; `requested = value > 0.5 ? clamp(round(value), 1, 4) : 0` |
-| launch control | EITHER the P8 two-step part (`kind: launch_control`) OR the assist unit's `launch_control` block (grades Sport/Racing); never both | `assist.launch_control` (the P8 part may rename it with its `channel` key) | only on a car with one of the two (a P8 part with `fitted: false` still registers it) | 0 for the P8 part; the unit block's `default_enabled` (shipped `false`) | 0 / 1 |
+| launch control | EITHER the P8 two-step part (`kind: launch_control`) OR the assist unit's `launch_control` block (grades Sport/Racing); never both | `assist.launch_control` (the P8 part may rename it with its `channel` key) | only on a car with one of the two (a P8 part with `fitted: false` still registers it) | 0 for the P8 part; the unit block's `default_enabled` (shipped `false`); in both cases the default drive mode's `launch_control_default` when the car has the `drive_modes` part and that mode sets one | 0 / 1 |
 | rear-wing automation | the assist unit's `aero_control` block (grade Racing) | `assist.aero_control` | only when the unit has the block AND the car's `aero.surfaces` has the named surface | the block's `default_enabled` (shipped Racing unit: `true`) | 0 / 1, on at `>= 0.5` |
 | drive modes | the car-specific `drive_modes` electronics part | `assist.drive_mode` | only on a car with the part | the part's `default_mode` | 0 eco, 1 normal, 2 sport (rounded and clamped; a mode the part does not list maps to its `default_mode`) |
 | anti-lag switch | the engine's anti-lag configuration and the vehicle key `anti_lag_switch.fitted` | the configuration's own `channel` (default `anti_lag`; not an `assist.*` name) | by the engine | the configuration's `default_enabled` | 0 / 1 |
@@ -48,12 +48,22 @@ launch-limit parts. All three attach as a `controllers` entry of type `electroni
    launch control asks for it, never the P8 two-step.
 3. **Drive modes gate two assists.** `launch_control_allowed: false` makes `assist.launch_control` read as off (this also
    switches the P8 two-step off, and `assist_active_bits` bit4 with it); `nitrous_arm_allowed: false` forces the kit's arm
-   input to 0 whatever `nitrous_arm` says.
+   input to 0 whatever `nitrous_arm` says. The gate is the outermost layer: it also overrides a `launch_control_default`
+   (rule 4b).
 4. **Drive mode over the driver's TC choice, until the driver changes it.** When the *effective* drive mode changes and
    the new mode has a `traction_control_default`, the effective TC mode becomes that default and stays so until the
    `assist.traction_control` channel **value changes**. Writing the same value again does not release it (see the UI
    pitfalls below). A mode without a default leaves a running override alone. The snapshot's `traction_mode_requested`
    already includes the override.
+4b. **Drive mode over the driver's launch-control switch, until the driver changes it (assists I7b).** The same rule for
+   the launch-control *enable*: when the effective drive mode changes and the new mode has a `launch_control_default`
+   (a boolean), the effective enable of `assist.launch_control` becomes that value and stays so until the channel
+   **value changes** (a rewrite of the same value is not seen; from an override that is *on* with the channel at 0 the
+   driver therefore needs two writes to switch it off: 1, then 0). Precedence, outermost first: `fitted` ->
+   `launch_control_allowed` (a mode that does not allow LC never arms, whatever the default or the channel) -> the
+   override -> the channel (`> 0.5`). Shipped `car_hyper_n2o`: Sport `true`, Eco and Normal `false` (owner, 2026-10-13: "turn
+   LC on when Sport mode is activated"). Arming itself still needs the conditions of rule 8. A mode without a default
+   leaves a running override alone; at spawn there is no override, the channel default is the default mode's value.
 5. **Pedal bend.** A drive mode's bend is applied after the car's own pedal curve; the auto-shift, launch law, kickdown
    and the TC/LC throttle ceilings work on the *bent* command (ceilings are fractions of it), while TC's pedal gating
    and LC arming use the raw pedal (driver intent).
@@ -419,6 +429,7 @@ the mode numbers belong to one car's gearing and engine.
 | `auto_shift` | any of the four `up_rpm_at_*`, `down_rpm_at_*` of the car's `auto_shift` (rpm `> 0`); a missing key keeps the car's. The merged values must keep `down < up` at zero and at full throttle (`"... downshift rpm must stay below the upshift rpm ..."`) |
 | `auto_clutch.close_time_s` | `> 0`; overrides `auto_clutch.close_time_s` (the post-shift close rate `1/close_time_s`) |
 | `traction_control_default` | `off`/`on`/`relaxed`/`sport`/`drift`: the TC mode the car switches to when this mode becomes effective |
+| `launch_control_default` | optional boolean (assists I7b): the launch-control enable the car switches to when this mode becomes effective (see below). `true` next to `launch_control_allowed: false` in the same mode is rejected (`"launch_control_default true contradicts launch_control_allowed false"`: the data would promise an enable the gate forbids). On a car without a fitted launch control it is ignored (like `traction_control_default` on a car without TC: the part is car-specific but may be shared through `extends`) |
 | `launch_control_allowed`, `nitrous_arm_allowed` | booleans, default `true` |
 
 An override needs the car's `manual_tcu` (every shipped car has one).
@@ -438,6 +449,15 @@ stays so until the driver changes the `assist.traction_control` channel value (a
 seen). A change of mode re-applies the default over the driver's choice. A mode without a default leaves a running override
 alone. At spawn there is no override: the TC channel default is the default mode's `traction_control_default`.
 
+**Launch-control default per mode (assists I7b).** Exactly the TC rule, for the on/off enable of `assist.launch_control`: when
+the *effective* drive mode changes and the new mode has `launch_control_default`, the effective enable becomes it and stays so
+until the driver changes the channel *value*; a mode change re-applies it over the driver's choice. At spawn the channel
+default is the default mode's `launch_control_default` (like the TC channel), no override. Not visible as a new field:
+`assist_active_bits` bit 4 is the effective enable (after the allowed gate) and `launch_phase` shows the arming. Hash: the
+mode table's `launch_control_default` values and the override state (flag, value, last seen channel value) are folded **only**
+on a car with at least one offered mode that sets one; every other car (including a `drive_modes` part without the key)
+hashes as before.
+
 **Gates.** `launch_control_allowed false`: the launch-control assist cannot arm (both the unit's and a P8 two-step are driven
 through the same `assist.launch_control` gate on the unit). `nitrous_arm_allowed false`: the kit's arm input is forced to 0.
 
@@ -446,4 +466,6 @@ through the same `assist.launch_control` gate on the unit). `nitrous_arm_allowed
 **Snapshot** (`PowertrainSnapshot`, never hashed): `drive_mode_requested`, `drive_mode_effective`,
 `drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport; all 0 without the part). **Hash:** the desc and the state (last
 effective mode, TC override flag/code, last seen TC channel value) are folded only on a car with the part, so every other
-car and scenario hashes as before. Tests: `tests/unit/test_assist_drive_modes.cpp` ([assist][vehicle][drivetrain]).
+car and scenario hashes as before (the I7b launch-control override state: see above). Tests:
+`tests/unit/test_assist_drive_modes.cpp` ([assist][vehicle][drivetrain]), `tests/unit/test_assist_launch_default.cpp` (I7b,
+LD1-LD6).

@@ -1017,7 +1017,7 @@ own `traction_control` block), 2 Relaxed, 3 Sport, 4 Drift (`value > 0.5 ? clamp
 default drive mode's `traction_control_default` (a car with the `drive_modes` part), else the assist unit's `default_mode`,
 else the block's `enabled`, 0 when the block is not fitted. Registered **only** on a car that has the corresponding part:
 `assist.launch_control` (a P8 `launch_control` part, whose `channel` key may rename it, or an assist unit's
-`launch_control` block; default 0 or the block's `default_enabled`), `assist.aero_control` (an assist unit's `aero_control`
+`launch_control` block; default 0 or the block's `default_enabled`, or the default drive mode's `launch_control_default`), `assist.aero_control` (an assist unit's `aero_control`
 block AND a car aero surface of that name; default the block's `default_enabled`; on at `>= 0.5`), `assist.drive_mode` (the
 `drive_modes` part; 0 eco, 1 normal, 2 sport; default the part's `default_mode`). A N2O kit adds its controller's arm
 channel (shipped: `"nitrous_arm"`). On/off is a strict `> 0.5` for all of these except `assist.aero_control`. The one
