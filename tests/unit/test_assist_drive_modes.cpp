@@ -570,7 +570,7 @@ TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [lo
             w.set_control("assist.auto_shift", 1.0);
             w.set_control("gear_request", drivetrain::kGearRequestNone);
             w.set_control("throttle", pedals[pi]);
-            const real cmd = bend_of(p, pedals[pi]);
+            const real cmd = pedals[pi]; // pedal P1 re-pin: no drive-mode bend on a manual (was bend_of(p, pedal))
             const std::vector<Event> ev = run_shifts(r, +1, 2, 25.0);
             INFO("mode " << mode << " pedal " << pedals[pi] << " command " << cmd);
             REQUIRE(ev.size() == 2);
@@ -593,6 +593,36 @@ TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [lo
     }
 }
 
+// Pedal plan P1 diag: S1's 1->2 pull traced (PS_S1_MODE, PS_S1_PEDAL x100).
+TEST_CASE("P1 S1 diag: upshift pull trace", "[.][diag][pedal]") {
+    const VehicleDesc d = shift_test_desc();
+    for (const int mode : {1, 2}) {
+        for (const real pedal : {1.0, 0.7}) {
+            Rig r = make_rig(d);
+            World& w = r.w();
+            base_controls(w, mode);
+            ps_test::settle(w, 0.3);
+            roll_in_gear(r, 1, 2200.0);
+            w.set_control("assist.auto_shift", 1.0);
+            w.set_control("gear_request", drivetrain::kGearRequestNone);
+            w.set_control("throttle", pedal);
+            int prev_gt = -99;
+            for (int k = 0; k < 240 * 8; ++k) {
+                w.step();
+                const auto& pt = w.powertrain_state(r.rig.vehicle);
+                const auto dbg = w.powertrain_debug(r.rig.vehicle);
+                if (pt.gear_target != prev_gt || k % 24 == 0)
+                    std::printf("[P1 S1 diag] mode %d pedal %.2f t %5.3f g %d gt %d ph %d rpm %6.0f v %6.2f boost %5.2f thr_eff %.3f e %.3f kR %+.3f\n", mode,
+                                pedal, (k + 1) / 240.0, pt.gear, pt.gear_target, int(pt.shift_phase), pt.engine_rpm, pt.speedo_mps,
+                                pt.engines.empty() ? 0.0 : pt.engines[0].boost_bar, dbg.throttle_eff, pt.clutch_engagement,
+                                0.5 * (w.wheel_telemetry(r.rig.vehicle, 2).slip_ratio + w.wheel_telemetry(r.rig.vehicle, 3).slip_ratio));
+                prev_gt = pt.gear_target;
+                if (pt.gear >= 3) break;
+            }
+        }
+    }
+}
+
 TEST_CASE("S2: downshift decision rpm per mode on a braked deceleration in 4th gear [long]", "[assist][drive_modes][vehicle][drivetrain][long]") {
     const VehicleDesc d = shift_test_desc(0.0); // dwell 0: the rpm threshold alone decides (the braked rpm falls ~2000 rpm/s, faster than a 0.2 s dwell allows a crossing to be seen)
     std::array<std::array<real, 2>, 3> dec{};
@@ -600,7 +630,7 @@ TEST_CASE("S2: downshift decision rpm per mode on a braked deceleration in 4th g
     for (int mode = 0; mode < 3; ++mode) {
         const DriveModeParams& p = mp(d, static_cast<DriveMode>(mode));
         for (int pi = 0; pi < 2; ++pi) {
-            const real cmd = bend_of(p, pedals[pi]);
+            const real cmd = pedals[pi]; // pedal P1 re-pin: no drive-mode bend on a manual (was bend_of(p, pedal))
             const real thr = lerp(*p.down_rpm_at_zero_throttle, *p.down_rpm_at_full_throttle, cmd);
             Rig r = make_rig(d);
             World& w = r.w();

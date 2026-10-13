@@ -375,6 +375,9 @@ TEST_CASE("C17a-MA S2: generated A25A WOT BSFC vs EPA NVFEL", "[drivetrain][vali
     }
 }
 
+// Pedal plan P1 re-pin (2026-10-13): the law is T* = Z + r (F - Z) (request_envelope after the hold), was
+// mot + r (wot - mot); against the old target the P1 engine misses by up to 5.94e-2 of the span (largest at r 0.1, where
+// Z - mot is a large share). r = 1 is unchanged (bit-identical, err ~1e-15).
 TEST_CASE("C17a-MA S4: electronic pedal law on the generated maps", "[drivetrain][validation]") {
     const auto car = load_gen_car();
     const SimulatedEngineDesc* d = sim_engine_of(car);
@@ -392,7 +395,8 @@ TEST_CASE("C17a-MA S4: electronic pedal law on the generated maps", "[drivetrain
         REQUIRE(span > 0.0);
         for (const real r : {real(0.1), real(0.3), real(0.6), real(1.0)}) {
             const DynoResult s = dyno_hold(eng, rpm, r, isa);
-            const real target = mot + r * span;
+            const PedalEnvelope env = eng.request_envelope(rpm);
+            const real target = r < real(1.0) ? env.z_nm + r * (env.f_nm - env.z_nm) : wot;
             const real err_span = (s.brake_nm - target) / span;
             worst = std::max(worst, std::abs(err_span));
             std::printf("S4 rpm %6.0f r %.1f: T %9.4f target %9.4f (mot %8.3f wot %8.3f) err/span %+.3e "

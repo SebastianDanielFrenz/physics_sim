@@ -1176,6 +1176,21 @@ TEST_CASE("P1 V8 diag: launch kappa, efficient vs spooled split", "[.][diag][ped
     }
 }
 
+// Pedal plan P1 diag: the V8c 0-100 runs traced (with and without launch control).
+TEST_CASE("P1 V8c diag: 0-100 traces", "[.][diag][pedal]") {
+    for (const bool lc : {true, false}) {
+        LaunchOpts o;
+        o.mode = 1;
+        o.to_100 = true;
+        o.lc = lc;
+        o.print = true;
+        o.print_every = 24;
+        std::printf("[P1 V8c diag] lc %d\n", int(lc));
+        const LaunchRun r = run_launch(hyper_racing(), o);
+        std::printf("[P1 V8c diag] lc %d t100 %.3f\n", int(lc), r.t_to_100);
+    }
+}
+
 TEST_CASE("V8d: boost at release depends on the launch rpm - 4500 misses the 0.4 bar band, the shipped 5000 meets it", "[assist][vehicle][drivetrain]") {
     // Record of the tuning (owner Q7 "[AS] data defaults, tuned by V8"): measured 1.5 s armed, unloaded, fuel-cut limiter
     // cycling at launch_rpm: 4500 -> 0.288 bar (miss), 5000 -> 0.502 (shipped), 5500 0.97, 6000 1.4 (earlier sweep).

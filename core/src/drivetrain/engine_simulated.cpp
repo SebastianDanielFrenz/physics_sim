@@ -1895,20 +1895,20 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
             // against the CURRENT exhaust and charge state, the boost target clamped to
             // [p_amb, min(p_amb + target, p_amb * PR_full(n))]. Efficient (gate first): p* at or below ambient -> gate open,
             // the plate holds p* from the supply; above -> plate open, the gate holds p* plus the throttle's own drop.
-            // Spooled: the target sits at the cap and the plate holds p*.
+            // Spooled: the target sits at the cap p_cap and the plate holds p*.
             const FullLoadEnvelope& env = *envelope_;
-            const real cap = std::max(p_amb_, std::min(p_amb_ + turbo_->desc.target_boost_pa,
+            const real p_cap = std::max(p_amb_, std::min(p_amb_ + turbo_->desc.target_boost_pa,
                                                        p_amb_ * env.pressure_ratio.evaluate(rpm)));
-            const real p_star = boost_pressure_for_torque(omega_old, pedal_target_nm_, kLiftMinPressureFraction * p_amb_, cap);
+            const real p_star = boost_pressure_for_torque(omega_old, pedal_target_nm_, kLiftMinPressureFraction * p_amb_, p_cap);
             const bool spooled = pedal_law_override_ == 2 || (pedal_law_override_ < 0 && part_load_boost_ == PartLoadBoost::Spooled);
             if (spooled) {
-                boost_target_pa_ = cap;
+                boost_target_pa_ = p_cap;
                 x_plate = holding_plate(omega_old, p_star);
             } else if (p_star <= p_amb_) {
                 boost_target_pa_ = p_amb_;
                 x_plate = holding_plate(omega_old, p_star);
             } else {
-                boost_target_pa_ = std::clamp(p_star + std::max(real(0.0), turbo_->charge_pa - p_im_), p_amb_, cap);
+                boost_target_pa_ = std::clamp(p_star + std::max(real(0.0), turbo_->charge_pa - p_im_), p_amb_, p_cap);
                 x_plate = real(1.0);
             }
         } else {
