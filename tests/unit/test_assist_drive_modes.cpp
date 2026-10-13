@@ -555,6 +555,13 @@ TEST_CASE("B2: through a real World - a manual car's throttle command is the ped
 // ---------------------------------------------------------------------------------------------------------------
 // S: auto-shift points and close time.
 // ---------------------------------------------------------------------------------------------------------------
+// Pedal P1 re-pin (2026-10-13, coordinator): S1 runs with traction control On (assist.traction_control 1, was 0 = Off).
+// The test checks the drive modes' shift points, not wheelspin. With TC Off the hyper spins its rears at WOT in 1st
+// (mean rear kappa 0.85 at the 1->2 shift [M]), the speedo-derived shift point is reached by wheelspin and auto-shift
+// hunts 1 <-> 2 (Sport and Normal; on master too, two 1->2 events each). Under P1 the second 1->2 follows a dwell and
+// misses the exact-crossing check (decision rpm_prev2 6839.8 vs threshold 6720 [M]) - KNOWN BEHAVIOUR with TC Off,
+// not a shift-point fault. The thresholds are read at the driver's command (pedal P1: shift_throttle_request, before
+// the TC ceiling), so TC On does not move them.
 TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [long]", "[assist][drive_modes][vehicle][drivetrain][long]") {
     const VehicleDesc d = shift_test_desc();
     std::array<std::array<real, 2>, 3> first_up{}; // [mode][pedal index]
@@ -564,7 +571,7 @@ TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [lo
         for (int pi = 0; pi < 2; ++pi) {
             Rig r = make_rig(d);
             World& w = r.w();
-            base_controls(w, mode);
+            base_controls(w, mode, 1.0); // pedal P1 re-pin: TC On (was Off, see the header)
             ps_test::settle(w, 0.3);
             roll_in_gear(r, 1, 2200.0);
             w.set_control("assist.auto_shift", 1.0);
@@ -596,11 +603,13 @@ TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [lo
 // Pedal plan P1 diag: S1's 1->2 pull traced (PS_S1_MODE, PS_S1_PEDAL x100).
 TEST_CASE("P1 S1 diag: upshift pull trace", "[.][diag][pedal]") {
     const VehicleDesc d = shift_test_desc();
-    for (const int mode : {1, 2}) {
+    for (const real tc : {0.0, 1.0})
+    for (const int mode : {0, 1, 2}) {
         for (const real pedal : {1.0, 0.7}) {
+            std::printf("[P1 S1 diag] ---- tc %.0f mode %d pedal %.2f\n", tc, mode, pedal);
             Rig r = make_rig(d);
             World& w = r.w();
-            base_controls(w, mode);
+            base_controls(w, mode, tc);
             ps_test::settle(w, 0.3);
             roll_in_gear(r, 1, 2200.0);
             w.set_control("assist.auto_shift", 1.0);

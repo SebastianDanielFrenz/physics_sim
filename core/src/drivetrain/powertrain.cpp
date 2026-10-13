@@ -1961,6 +1961,9 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             // (manual_tcu.h). Without an engine there is no throttle stage
             // to speak of; fall back to the raw pedal exactly as before.
             s.throttle_request = engine_ ? last_throttle_command_.command : ctx.throttle;
+            // Pedal P1: the gear choice reads the driver's request, before the TC ceiling below (V8c: the ceiling
+            // at the launch-control hand-over made auto-shift take 2nd at 7.4 m/s and lug at 1430 rpm).
+            s.shift_throttle_request = s.throttle_request;
             // TC changes the available ECU request: launch clutch must not
             // wait for full-pedal launch RPM after TC has limited that request.
             // Assists I2 (D-LS3): not while TC acts through the clutch (ctx.traction_throttle_ceiling is 1 then).

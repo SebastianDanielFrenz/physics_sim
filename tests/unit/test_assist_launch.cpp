@@ -57,6 +57,9 @@
 //   6  arming without the brake condition            -> S1/Arm1: Armed seen without brake (1 == 0), limiter 4500 == 0 fail
 //   7  clutch not held open while Armed              -> Arm1 (car creeps, rpm 2221 > 4300 band) and V8a (armed rpm dev_max 2630, boost 0.064)
 //   8  clutch fraction capped at 0.3 in Launch       -> V8c [long]: 0-100 km/h 4.842 s vs baseline 4.733 s, <= fails
+//   9  (pedal P1 (a), 2026-10-13) auto-shift reads min(command, TC ceiling) again instead of the driver's command
+//      (powertrain.cpp shift_throttle_request set after the ceiling) -> V8c: 5.442 s vs 4.588 s (2nd taken at 7.4 m/s,
+//      lugs at 1430 rpm); with (a) 4.933 vs 4.642 s [M] - the remaining gap is the TC ceiling bleeding boost (pedal P1 (b))
 
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/drivetrain/powertrain_desc.h"

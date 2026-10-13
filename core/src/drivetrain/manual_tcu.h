@@ -56,6 +56,11 @@ public:
         // equals the raw pedal exactly, so this is a no-op for those (every
         // shipped sedan).
         real throttle_request = 0.0;
+        // Pedal P1 (coordinator decision on V8c): the DRIVER's torque request for the gear choice - auto-shift
+        // thresholds, kickdown and the N -> 1 auto-select - taken BEFORE traction control's ECU ceiling. A traction
+        // intervention must not make the box upshift (a real TCU shifts on driver demand). throttle_request keeps the
+        // TC-limited value for the launch law (assists TC commit 4a46c08). NaN = throttle_request (white-box callers).
+        real shift_throttle_request = std::numeric_limits<real>::quiet_NaN();
         real gear_request = real(-100.0); // compare against ps::drivetrain::kGearRequestNone
         real shift_up_count = 0.0, shift_down_count = 0.0;
         bool assist_auto_clutch = true, assist_auto_blip = true, assist_auto_shift = false;
