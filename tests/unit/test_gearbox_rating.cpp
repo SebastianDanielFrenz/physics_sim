@@ -207,7 +207,9 @@ TEST_CASE("G1 gearbox loader: rating, gear_type, teeth, mesh_order round-trip; e
     CHECK(c.forward_ratios.size() == 7);
 
     // mesh_order alone, and a gearbox with only a rating.
-    const GearboxDesc& o = gearbox_in(sedan_with(write_patch("g1_order", "\"mesh_order\": 3.5, \"rated_input_torque_nm\": 410")));
+    // Keep the desc alive: gearbox_in returns a reference into it.
+    const vehicle::VehicleDesc vorder = sedan_with(write_patch("g1_order", "\"mesh_order\": 3.5, \"rated_input_torque_nm\": 410"));
+    const GearboxDesc& o = gearbox_in(vorder);
     CHECK(o.mesh_order == 3.5);
     CHECK(o.rated_input_torque_nm == 410.0);
     CHECK(o.forward_teeth.empty());
