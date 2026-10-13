@@ -38,10 +38,13 @@ temperature, efficiency, choking and energy residual.
 
 `ok` compressor corners are required for interpolation. Choked, no-positive-
 head and `transonic_unmodelled` points are retained as explicit coverage data.
-Outside coverage the current runtime uses the legacy authored approximation
-and publishes `turbo_stage_map_fallback=true`; it does **not** clamp shaft RPM
-to the last line. `turbo_compressor_stage_used` and `turbo_turbine_stage_used`
-identify actual consumers in `PreSolveResult` / `EngineSoundState`.
+Outside the compressor's coverage the runtime reads the map's own
+continuation (stage seam S0, see "Runtime mask boundary transition") and
+publishes `turbo_stage_map_fallback=true` and
+`turbo_compressor_stage_extended=true`; it does **not** clamp shaft RPM to the
+last line. `turbo_compressor_stage_used` and `turbo_turbine_stage_used`
+identify actual consumers in `PreSolveResult` / `EngineSoundState`. Outside
+the turbine's coverage the legacy authored approximation remains.
 The current garage HUD does not yet display these new diagnostics.
 
 The turbine's per-flow torque is interpolated, then multiplied by actual
@@ -95,5 +98,11 @@ replay behavior; the true option is included in engine state hashing.
 Normal-shock reference: https://www.grc.nasa.gov/WWW/BGH/normal.html .
 
 ### Runtime mask boundary transition
-Valid compressor corners contribute their bilinear weights; unsupported corners contribute zero simulated weight. The remainder uses the explicitly diagnosed authored fallback. This makes coverage transitions continuous, preserves exact valid knots, and does not certify unsupported points. Compressor/turbine usage and fallback flags describe each step. The shipped example generator refines up to five passes with 129 speed / 257 flow budgets and refuses a budget-limited audit; the 3% target is sampled at cell centers, not a global error guarantee.
+Inside coverage (every corner of the bilinear cell valid) the compressor uses the valid corners' bilinear values, unchanged. Since stage seam S0 (2026-10-13) any point whose cell has an unsupported corner reads `TurboStageMaps::compressor_extended`, the map's own continuation, instead of blending the authored head/work law in (that law was 2.5-4x below the map near the choke edge: charge and Euler work jumped where the blend weight came in, and at a fixed flow the charge could FALL with rotor speed - standard map 1.659 -> 1.569 bar at 100-105k rpm, 0.77 kg/s):
+
+- along a speed line, valid knots interpolate linearly in flow; beyond the line's last valid knot (its choke edge) the pressure ratio falls linearly to 1 at the line's first invalid knot (the generator's "choked / no positive head" verdict; one more knot at the last spacing when the axis ends valid) and stays 1; the specific Euler work is held at the edge value (the impeller still turns the flow in choke; the lost head becomes charge heat through the work). Below a line's first valid knot both are held flat;
+- between two speed lines with data, the two line values blend linearly in corrected speed - at the same flow up to the smaller of the two edge flows (the covered bilinear rule, so the value is continuous across the coverage boundary), choke-aligned beyond it: the edge flow and the choke knot interpolate in speed and each line is read at the same relative position of its own interval (the beta-line idea, applied only outside coverage; reading both lines at one flow there makes a speed-density engine's charge saw-tooth between lines, measured 1.775 / 1.864 / 2.241 bar at 110 / 115 / 120k on the standard map);
+- below the lowest / above the highest line with data: compressor affinity from that line (flow f N_line/N; PR^kappa - 1 and work scale with (N/N_line)^2, kappa = (gamma - 1)/gamma of the map's air).
+
+The extension is continuous in (speed, flow), equals the covered values at the boundary and, on a map whose lines are ordered, never falls with speed at a fixed flow (tests/unit/test_turbo_stage_seam.cpp). It is never certified: the fallback flag stays set. Garage check: `drivetrain::check_turbo_stage_coverage` (BuildRule `TurboStageMapCoverage`, part of `check_buildable`; and `EngineMapOptions::warnings_out` at load) reports when the engine's air flow at the target boost needs points outside the certified cells (Near) or above the map's highest speed line (Limiting) - docs/data_formats/engine.md "Buildability rules". Compressor/turbine usage and fallback flags describe each step. The shipped example generator refines up to five passes with 129 speed / 257 flow budgets and refuses a budget-limited audit; the 3% target is sampled at cell centers, not a global error guarantee.
 

@@ -1338,11 +1338,13 @@ then pointer. `has_blocking_issue` is true when any is `Exceeded`. `BuildRule` v
 | `CamSwitchWindow` (11) | ECU `/switching/rpm_on`, `/switching/rpm_off` | Limiting when the switch band leaves `grid_rpm`; Near otherwise | `rpm_on / limiter` 0.45-0.85; hysteresis `rpm_on - rpm_off` 50-1000 rpm | [AS] Honda VTEC 0.60-0.72 of the limiter, widened; no OEM hysteresis found |
 | `CamProfileOrder` (12) | cam `/profiles/1/intake_lift` (or exhaust) | Near | the second ("high") profile has less peak lift or less lift area than the first | [D] |
 | `CamLiftOverValve` (13) | cam `/profiles/<k>/intake_lift` (or exhaust) | Limiting | peak lift / valve head diameter <= 0.40 | [AS] 0.35 on an aftermarket K20 race cam (junauto.co.jp), widened; L/d 0.25 = curtain area equals seat area |
+| `TurboStageMapCoverage` (17) | forced_induction `/turbo` | Limiting when the target pressure ratio needs a rotor speed above the stage map's highest speed line; Near when it is reached on the map but outside its certified cells | the engine's maximum air flow at the target boost (idle..limiter, 16 steps; VE from the maps at the charge pressure, 1.0 [AS] while pending; charge temperature from the turbo's compressor efficiency and intercooler effectiveness) split into 16 flows, each tested at the speed that makes `(ambient + target + intercooler drop) / ambient` on the map's continuation; value = the first uncovered flow over the maximum | [D] the stage map's validity mask; stage seam S0 (`check_turbo_stage_coverage`, also reported at load through `EngineMapOptions::warnings_out`); no advice number - severity is structural |
 
 Which rules apply: a simulated engine with a `cycle` block gets 0-9, plus 11-13 when its cam has profiles; a simulated engine without one (measured maps, e.g.
 `toyota_a25a_fks_sim`) only `MeanPistonSpeed` - its map axes are measured data the player cannot edit, and its VE axis ends below
 the limiter and below ambient (reported per dyno point by P3b); a torque-map engine only rule 10; a rotary engine and every other
-component nothing. The rules are static: they never call the generator.
+component nothing. Rule 17 applies to every simulated piston engine whose turbo has a stage map (with or without a cycle block).
+The rules are static: they never call the generator.
 
 Shipped data (cases S1/S2): every `data/engines/*.json` has no `Limiting` and no `Exceeded`. Two `Near`: `demo_i4_pipes`
 (`LimiterAboveRpmGrid`, 4.6 %) and the hyper (`MeanPistonSpeed` 26.2 m/s at 8250 rpm). The P9 `honda_k20a_dc5` has no issue at

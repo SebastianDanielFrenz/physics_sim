@@ -1,0 +1,17 @@
+{
+  "format": "physics_sim.turbo_configuration/1",
+  "name": "hyper_twin_standard_n2o",
+  "turbo": "turbo_standard.json",
+  "count": 2,
+  "target_boost_bar": 1.8,
+  "intercooler_effectiveness": 0.95,
+  "boost_control": {
+    "source": "[A] PID on charge pressure (per unit of target_boost_bar, derivative on the measurement) and wastegate actuator lag; gains from a sweep on hyper_v8_one1_audio.json, 2026-10-02",
+    "kp": 1.0,
+    "ki_per_s": 1.0,
+    "kd_s": 0.05,
+    "actuator_tau_s": 0.1
+  },
+  "source": "TEST FIXTURE (stage seam S0): racing_game data/turbo_configurations/hyper_twin_standard_n2o.json (read 2026-10-13) with turbo re-pointed to turbo_standard.json. Original source text: Game turbo hardware fitment. Common 1.8 bar baseline; player boost calibration is applied independently.",
+  "compressible_exhaust": true
+}

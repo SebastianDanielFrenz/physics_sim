@@ -24,6 +24,9 @@ public:
     real compressor_w = 0.0, turbine_w = 0.0;
     bool compressor_stage_used=false, turbine_stage_used=false; // explicit coverage diagnostics
     bool stage_map_fallback=false;
+    // Stage seam S0: the compressor value came from the map's own continuation outside its certified coverage
+    // (TurboStageMaps::compressor_extended; then compressor_stage_used and stage_map_fallback are both set). Never hashed.
+    bool compressor_stage_extended=false;
     // Sound/HUD outputs of the latest step (I7d D1), derived from the state
     // above and the step's inputs: never hashed, never read back by the model.
     real compressor_flow_kg_s = 0.0;  // total compressor mass flow (the pair)
@@ -86,7 +89,7 @@ public:
                                  bov_opening=0; bov_flow_kg_s=0; bov_latched=false; surge_active=false;
                                  wall_k = desc.exhaust_wall_initial_k > real(0.0) ? desc.exhaust_wall_initial_k : t;
                                  port_k=t; exhaust_k=t; gas_to_wall_w=0; wall_to_ambient_w=0;
-                                 compressor_stage_used=turbine_stage_used=stage_map_fallback=false; }
+                                 compressor_stage_used=turbine_stage_used=stage_map_fallback=compressor_stage_extended=false; }
     // plate: the throttle plate position in [0, 1]; it scales the boost target.
     // port_k: the exhaust gas temperature at the cylinder ports (the engine's own energy
     // balance, engine_simulated.cpp); exhaust_kg_s the exhaust mass flow. Only numerical
@@ -135,14 +138,28 @@ public:
             desc.reference_head_pa*speed2*std::max(real(0.0),real(1.0)-corrected_flow*corrected_flow);
 
         const auto* stages=desc.maps ? desc.maps->stages.get():nullptr;
-        compressor_stage_used=false; turbine_stage_used=false; stage_map_fallback=false;
+        compressor_stage_used=false; turbine_stage_used=false; stage_map_fallback=false; compressor_stage_extended=false;
         real stage_work=0, stage_slope=0;
         if(stages) {
             const real theta=ambient_k/stages->compressor_reference_k;
             const real nc=stages->snap(stages->compressor_pr.x,rpm()/std::sqrt(theta));
             const real wc=stages->snap(stages->compressor_pr.y,comp_flow/stages->units*std::sqrt(theta)/(ambient_pa/stages->reference_pa));
             const auto sample=stages->compressor_sample(nc,wc);
-            if(sample.weight>real(0)) {
+            if(sample.weight<real(1)-real(1e-12)) {
+                // Stage seam S0: outside the certified coverage (any unsupported corner carries weight) the map's own
+                // continuation replaces the authored head/work law (TurboStageMaps::compressor_extended): head falls to
+                // zero at the diagnosed choke knot, Euler work is held at the edge, affinity outside the speed lines.
+                // Inside coverage (the else branch) the arithmetic is unchanged. The authored law under-stated head and
+                // work ~2.5-4x near the choke edge, so the rotor free-wheeled through it and charge/work jumped where the
+                // blend weight came in (boost B0 item 3).
+                const auto ext=stages->compressor_extended(nc,wc);
+                compressor_stage_used=true; compressor_stage_extended=true; stage_map_fallback=true;
+                head=ambient_pa*(ext.pressure_ratio-real(1));
+                stage_work=ext.work*theta;
+                stage_slope=-ambient_pa*ext.pressure_slope*wc;
+            } else {
+                // Covered: the pre-S0 arithmetic unchanged (the residual weight below 1e-12 still takes the authored
+                // terms, so every in-coverage value stays bit-identical).
                 compressor_stage_used=true;
                 const real old_head=head;
                 const real authored_work=real(1005)*ambient_k*(ps::math::pow(real(1)+std::max(real(0),head)/ambient_pa,real(2.0/7.0))-real(1))/desc.compressor_efficiency;
@@ -151,8 +168,7 @@ public:
                 stage_work=(real(1)-sample.weight)*authored_work+sample.work*theta;
                 stage_slope=(real(1)-sample.weight)*authored_slope+
                     (old_head+ambient_pa)*sample.weight_slope*wc-ambient_pa*sample.pressure_slope*wc;
-                stage_map_fallback=sample.weight<real(1)-real(1e-12);
-            } else stage_map_fallback=true;
+            }
         }
         // Pressure equilibrium includes compressor capacity; actual manifold
         // filling remains the engine's existing mass balance through its throttle.
