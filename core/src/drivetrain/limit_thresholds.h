@@ -6,6 +6,13 @@
 // the physics - they only decide when a measurement is worth telling the player about.
 //
 // kAllLimitThresholds lists every entry so a test can assert that none is untagged and none is unused.
+//
+// L0 CLASSIFICATION (owner 2026-10-13: refusal limits and advice thresholds are config values): EVERY entry of this file is
+// POLICY - it decides only what the player is told or refused - and is a field of ps::drivetrain::LimitPolicy
+// (ps/drivetrain/limit_policy.h) under the same name; the `value` here is the COMPILED DEFAULT of that field (and
+// data/limit_policies/default.json repeats it; tests/unit/test_limit_policy.cpp pins the two together). The consumers
+// (engine_dyno.cpp, limit_remedies.cpp) read the policy, never these constants. Count: 31 POLICY, 0 NOT POLICY.
+// A new entry here needs a LimitPolicy field and a row in limit_policy_table.h, or limit_policy.cpp's static_assert fails.
 #pragma once
 
 #include "ps/types.h"

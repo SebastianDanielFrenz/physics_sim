@@ -11,7 +11,6 @@
 #include "engine_simulated.h"
 #include "engine_torque_map.h"
 #include "gearbox_rating.h"
-#include "limit_thresholds.h"
 #include "nitrous_system.h"
 #include "powertrain.h" // to_engine_desc
 
@@ -142,13 +141,13 @@ struct EdgeAcc {
 
 // `near_upper`: report "near" the upper edge. The rpm axis does not: a sweep ends at the limiter, which a grid built for the
 // engine ends at too, so touching the top rpm is the design, only going past it is a finding.
-void emit_edge_axis(Findings& out, real rpm_tag, long n, long above, long below, real vmax, real vmin, real lo, real hi, LimitUnit unit,
+void emit_edge_axis(Findings& out, const LimitPolicy& pol, real rpm_tag, long n, long above, long below, real vmax, real vmin, real lo, real hi, LimitUnit unit,
                     const char* field, const std::string& engine_file, bool near_upper) {
-    const real min_frac = limits::kEdgeMinFraction.value;
+    const real min_frac = pol.grid_edge_min_window_fraction;
     const real nf = real(n);
     if (real(above) / nf >= min_frac) {
         out.push_back(make_finding(LimitKind::MapGridEdge, LimitSeverity::Exceeded, rpm_tag, vmax, hi, unit, PartRef{"engine", engine_file, field}));
-    } else if (near_upper && vmax >= hi - limits::kEdgeNearFraction.value * (hi - lo)) {
+    } else if (near_upper && vmax >= hi - pol.grid_edge_near_span_fraction * (hi - lo)) {
         out.push_back(make_finding(LimitKind::MapGridEdge, LimitSeverity::Near, rpm_tag, vmax, hi, unit, PartRef{"engine", engine_file, field}));
     }
     // A lower edge is the normal idle / closed-throttle region: only a clamp is reported, never "near".
@@ -157,55 +156,55 @@ void emit_edge_axis(Findings& out, real rpm_tag, long n, long above, long below,
     }
 }
 
-void edge_findings(Findings& out, real rpm_tag, const GridProbe& g, const EdgeAcc& e, const std::string& engine_file) {
+void edge_findings(Findings& out, const LimitPolicy& pol, real rpm_tag, const GridProbe& g, const EdgeAcc& e, const std::string& engine_file) {
     if (!g.valid || e.n == 0) return;
-    emit_edge_axis(out, rpm_tag, e.n, e.p_above, e.p_below, e.p_max, e.p_min, g.p_lo, g.p_hi, LimitUnit::Pascal, g.p_field, engine_file, g.p_near_upper);
-    emit_edge_axis(out, rpm_tag, e.n, e.rpm_above, e.rpm_below, e.rpm_max, e.rpm_min, g.rpm_lo, g.rpm_hi, LimitUnit::RevPerMinute,
+    emit_edge_axis(out, pol, rpm_tag, e.n, e.p_above, e.p_below, e.p_max, e.p_min, g.p_lo, g.p_hi, LimitUnit::Pascal, g.p_field, engine_file, g.p_near_upper);
+    emit_edge_axis(out, pol, rpm_tag, e.n, e.rpm_above, e.rpm_below, e.rpm_max, e.rpm_min, g.rpm_lo, g.rpm_hi, LimitUnit::RevPerMinute,
                    g.rpm_field, engine_file, false);
 }
 
 // RevLimiter (SoftCut taper) / FuelCut (latch): the swept rpm reaches the limiter. The dyno never applies the limiter, so a
 // point at or above it is one the engine would not hold.
-void limiter_findings(Findings& out, const EngineLimiterDesc& lim, real rpm, const std::string& engine_file) {
+void limiter_findings(Findings& out, const LimitPolicy& pol, const EngineLimiterDesc& lim, real rpm, const std::string& engine_file) {
     constexpr real kEps = 1e-9;
     if (lim.type == LimiterType::FuelCut) {
         LimitSeverity s = LimitSeverity::Near;
         if (rpm > lim.rpm + kEps) s = LimitSeverity::Exceeded;
         else if (rpm >= lim.rpm - kEps) s = LimitSeverity::Limiting;
-        else if (rpm >= limits::kLimiterNear.value * lim.rpm) s = LimitSeverity::Near;
+        else if (rpm >= pol.limiter_near_fraction * lim.rpm) s = LimitSeverity::Near;
         else return;
         out.push_back(make_finding(LimitKind::FuelCut, s, rpm, rpm, lim.rpm, LimitUnit::RevPerMinute, PartRef{"engine", engine_file, "/limiter/rpm"}));
     } else {
         LimitSeverity s = LimitSeverity::Near;
         if (rpm >= lim.rpm - kEps) s = LimitSeverity::Exceeded;
         else if (rpm > lim.rpm - lim.band_rpm) s = LimitSeverity::Limiting;
-        else if (rpm > lim.rpm - limits::kSoftCutNearBands.value * lim.band_rpm) s = LimitSeverity::Near;
+        else if (rpm > lim.rpm - pol.soft_cut_near_bands * lim.band_rpm) s = LimitSeverity::Near;
         else return;
         out.push_back(make_finding(LimitKind::RevLimiter, s, rpm, rpm, lim.rpm, LimitUnit::RevPerMinute, PartRef{"engine", engine_file, "/limiter/rpm"}));
     }
 }
 
 // MeanPistonSpeed = stroke * rpm / 30 against the table. The lever the player has is the limiter, hence its field.
-void piston_speed_finding(Findings& out, const SimulatedEngineDesc& d, real rpm, const std::string& engine_file) {
+void piston_speed_finding(Findings& out, const LimitPolicy& pol, const SimulatedEngineDesc& d, real rpm, const std::string& engine_file) {
     if (d.architecture != EngineArchitecture::Piston4Stroke) return;
     const real v = d.piston.stroke_m * rpm / real(30.0);
     LimitSeverity s = LimitSeverity::Near;
-    if (v >= limits::kPistonSpeedExceeded.value) s = LimitSeverity::Exceeded;
-    else if (v >= limits::kPistonSpeedLimiting.value) s = LimitSeverity::Limiting;
-    else if (v >= limits::kPistonSpeedNear.value) s = LimitSeverity::Near;
+    if (v >= pol.piston_speed_exceeded_mps) s = LimitSeverity::Exceeded;
+    else if (v >= pol.piston_speed_limiting_mps) s = LimitSeverity::Limiting;
+    else if (v >= pol.piston_speed_near_mps) s = LimitSeverity::Near;
     else return;
-    out.push_back(make_finding(LimitKind::MeanPistonSpeed, s, rpm, v, limits::kPistonSpeedLimiting.value, LimitUnit::MetrePerSecond,
+    out.push_back(make_finding(LimitKind::MeanPistonSpeed, s, rpm, v, pol.piston_speed_limiting_mps, LimitUnit::MetrePerSecond,
                                PartRef{"engine", engine_file, "/limiter/rpm"}));
 }
 
 // Engine garage P7: Knock - the knock limit holds the applied spark `retard` deg below the ECU schedule at this point.
 // Part: the burnt fuel's octane (the ECU's knock_margin_deg is the other lever, named in engine.md). Remedy: an unsolved
 // Simulated placeholder - the octane that clears it needs the cycle model's knock replay at this node (not inverted here).
-void knock_finding(Findings& out, const SimulatedEngineDesc& sim, real rpm, real retard, const std::string& fuel_file) {
-    if (!(retard > limits::kKnockNear.value)) return;
-    const LimitSeverity s = retard >= limits::kKnockLimiting.value ? LimitSeverity::Limiting : LimitSeverity::Near;
+void knock_finding(Findings& out, const LimitPolicy& pol, const SimulatedEngineDesc& sim, real rpm, real retard, const std::string& fuel_file) {
+    if (!(retard > pol.knock_near_retard_deg)) return;
+    const LimitSeverity s = retard >= pol.knock_limiting_retard_deg ? LimitSeverity::Limiting : LimitSeverity::Near;
     PartRef part{"fuel", fuel_file, "/knock/ron"};
-    LimitFinding f = make_finding(LimitKind::Knock, s, rpm, retard, limits::kKnockLimiting.value, LimitUnit::CrankDegree, part);
+    LimitFinding f = make_finding(LimitKind::Knock, s, rpm, retard, pol.knock_limiting_retard_deg, LimitUnit::CrankDegree, part);
     Remedy r;
     r.part = std::move(part);
     r.current = (!sim.fuels.empty() && sim.fuels.front().has_knock) ? sim.fuels.front().knock.ron : std::numeric_limits<real>::quiet_NaN();
@@ -326,6 +325,7 @@ struct WindowStats {
         real target_boost_pa = 0.0;
         real max_mass_flow_kg_s = 1.0;
         const SurgeLineDesc* surge = nullptr;
+        real gate_full = 0.98; // LimitPolicy::gate_full_opening of the sweep (set by stepped_point)
         GridProbe grid;
     };
 
@@ -339,7 +339,7 @@ struct WindowStats {
             ++lam_c_n;
         }
         gate_sum += r.wastegate_opening;
-        if (r.wastegate_opening >= limits::kGateFull.value) ++gate_full_n;
+        if (r.wastegate_opening >= probe.gate_full) ++gate_full_n;
         if (r.throttle_position >= real(0.10)) {
             ++target_n;
             target_gauge_sum += probe.target_boost_pa * std::min(r.throttle_position, real(1.0));
@@ -387,6 +387,7 @@ Remedy simulated_placeholder(PartRef part, real current, LimitUnit unit) {
 }
 
 void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const WindowStats& w, real rpm, const DynoSweepSpec& spec) {
+    const LimitPolicy& pol = resolve_limit_policy(spec.policy);
     const DynoSweepSpec::PartFiles& files = spec.part_files;
     const TurboPair* tp = engine.turbo();
     if (tp == nullptr || w.n == 0) return;
@@ -412,24 +413,24 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
     // WastegateSaturated.
     {
         const PartRef part{"turbo", files.turbo, "/wastegate_area_m2"};
-        if (sat_fraction >= limits::kGateSaturatedFraction.value) {
-            const LimitSeverity s = (have_target && over > limits::kBoostBandNear.value) ? LimitSeverity::Exceeded : LimitSeverity::Limiting;
-            out.push_back(make_finding(LimitKind::WastegateSaturated, s, rpm, mean_open, limits::kGateFull.value, LimitUnit::Fraction, part));
+        if (sat_fraction >= pol.gate_saturated_window_fraction) {
+            const LimitSeverity s = (have_target && over > pol.boost_band_near) ? LimitSeverity::Exceeded : LimitSeverity::Limiting;
+            out.push_back(make_finding(LimitKind::WastegateSaturated, s, rpm, mean_open, pol.gate_full_opening, LimitUnit::Fraction, part));
             out.back().remedy = wg_placeholder();
-        } else if (mean_open >= limits::kGateNear.value) {
-            out.push_back(make_finding(LimitKind::WastegateSaturated, LimitSeverity::Near, rpm, mean_open, limits::kGateFull.value, LimitUnit::Fraction, part));
+        } else if (mean_open >= pol.gate_near_opening) {
+            out.push_back(make_finding(LimitKind::WastegateSaturated, LimitSeverity::Near, rpm, mean_open, pol.gate_full_opening, LimitUnit::Fraction, part));
             out.back().remedy = wg_placeholder();
         }
     }
     // BoostAboveTarget / BoostBelowTarget.
     if (have_target) {
-        if (over > limits::kBoostBandNear.value) {
-            const LimitSeverity s = over > limits::kBoostBandExceeded.value ? LimitSeverity::Exceeded : LimitSeverity::Near;
+        if (over > pol.boost_band_near) {
+            const LimitSeverity s = over > pol.boost_band_exceeded ? LimitSeverity::Exceeded : LimitSeverity::Near;
             out.push_back(make_finding(LimitKind::BoostAboveTarget, s, rpm, charge_gauge, target_gauge, LimitUnit::Pascal,
                                        PartRef{"turbo", files.turbo, "/wastegate_area_m2"}));
             out.back().remedy = wg_placeholder();
-        } else if (-over > limits::kBoostBandNear.value) {
-            const LimitSeverity s = -over > limits::kBoostBandExceeded.value ? LimitSeverity::Exceeded : LimitSeverity::Near;
+        } else if (-over > pol.boost_band_near) {
+            const LimitSeverity s = -over > pol.boost_band_exceeded ? LimitSeverity::Exceeded : LimitSeverity::Near;
             out.push_back(make_finding(LimitKind::BoostBelowTarget, s, rpm, charge_gauge, target_gauge, LimitUnit::Pascal,
                                        PartRef{"turbo", files.turbo, ""}));
         }
@@ -441,8 +442,8 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
         LimitSeverity s = LimitSeverity::Near;
         bool hit = true;
         if (f > real(1.0)) s = LimitSeverity::Exceeded;
-        else if (f >= limits::kRotorLimiting.value) s = LimitSeverity::Limiting;
-        else if (f >= limits::kRotorNear.value) s = LimitSeverity::Near;
+        else if (f >= pol.rotor_limiting_fraction) s = LimitSeverity::Limiting;
+        else if (f >= pol.rotor_near_fraction) s = LimitSeverity::Near;
         else hit = false;
         if (hit) {
             out.push_back(make_finding(LimitKind::TurboRotorCap, s, rpm, w.rotor_max_rpm, edge_rpm, LimitUnit::RevPerMinute,
@@ -453,10 +454,10 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
     // CompressorSurge: only with a surge line in the hardware file (no line, no flag, no margin).
     if (td.surge_line.has_value()) {
         const PartRef part{"turbo", files.turbo, "/surge_line"};
-        if (real(w.surge_n) / nf >= limits::kSurgeMinFraction.value) {
+        if (real(w.surge_n) / nf >= pol.surge_min_window_fraction) {
             out.push_back(make_finding(LimitKind::CompressorSurge, LimitSeverity::Exceeded, rpm, w.surge_min_ratio, real(1.0),
                                        LimitUnit::Dimensionless, part));
-        } else if (w.surge_min_ratio < limits::kSurgeNearMargin.value) {
+        } else if (w.surge_min_ratio < pol.surge_near_flow_ratio) {
             out.push_back(make_finding(LimitKind::CompressorSurge, LimitSeverity::Near, rpm, w.surge_min_ratio, real(1.0),
                                        LimitUnit::Dimensionless, part));
         }
@@ -466,10 +467,10 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
     {
         const real f = w.flow_frac_max;
         const PartRef part{"turbo", files.turbo, "/max_mass_flow_kg_s"};
-        if (f >= limits::kChokeLimiting.value) {
-            out.push_back(make_finding(LimitKind::CompressorChoke, LimitSeverity::Limiting, rpm, f, limits::kChokeLimiting.value, LimitUnit::Fraction, part));
-        } else if (f >= limits::kChokeNear.value) {
-            out.push_back(make_finding(LimitKind::CompressorChoke, LimitSeverity::Near, rpm, f, limits::kChokeLimiting.value, LimitUnit::Fraction, part));
+        if (f >= pol.choke_limiting_flow_fraction) {
+            out.push_back(make_finding(LimitKind::CompressorChoke, LimitSeverity::Limiting, rpm, f, pol.choke_limiting_flow_fraction, LimitUnit::Fraction, part));
+        } else if (f >= pol.choke_near_flow_fraction) {
+            out.push_back(make_finding(LimitKind::CompressorChoke, LimitSeverity::Near, rpm, f, pol.choke_limiting_flow_fraction, LimitUnit::Fraction, part));
         }
     }
 }
@@ -482,15 +483,16 @@ void turbo_window_findings(Findings& out, const SimulatedEngine& engine, const W
 // required_margin the target lambda. The first-order assumption (ECU fuel and air independent of the kit jet) is verified by
 // re-sweeping in the tests.
 void kit_lean_finding(Findings& out, const WindowStats& w, real rpm, const DynoSweepSpec& spec) {
+    const LimitPolicy& pol = resolve_limit_policy(spec.policy);
     if (!spec.nitrous.has_value() || w.n == 0 || w.lam_c_n * 2 < w.n) return;
     const real lam = w.lam_c_sum / real(w.lam_c_n);
     LimitSeverity s = LimitSeverity::Near;
-    if (lam >= limits::kKitLambdaExceeded.value) s = LimitSeverity::Exceeded;
-    else if (lam >= limits::kKitLambdaLimiting.value) s = LimitSeverity::Limiting;
-    else if (lam >= limits::kKitLambdaNear.value) s = LimitSeverity::Near;
+    if (lam >= pol.kit_lambda_exceeded) s = LimitSeverity::Exceeded;
+    else if (lam >= pol.kit_lambda_limiting) s = LimitSeverity::Limiting;
+    else if (lam >= pol.kit_lambda_near) s = LimitSeverity::Near;
     else return;
     const NitrousKitDesc& kit = spec.nitrous->kit;
-    LimitFinding f = make_finding(LimitKind::KitFuelLean, s, rpm, lam, limits::kKitLambdaNear.value, LimitUnit::Dimensionless,
+    LimitFinding f = make_finding(LimitKind::KitFuelLean, s, rpm, lam, pol.kit_lambda_near, LimitUnit::Dimensionless,
                                   PartRef{"nitrous_kit", spec.part_files.nitrous_kit, "/fuel_jet_diameter_mm"});
     const real total = w.fuel_g_s / real(w.n);
     const real kit_fuel = w.kit_fuel_g_s_sum / real(w.n);
@@ -502,8 +504,8 @@ void kit_lean_finding(Findings& out, const WindowStats& w, real rpm, const DynoS
         Remedy r;
         r.part = f.part;
         r.current = kit.fuel_jet_diameter_mm;
-        r.required_min = jet_for(limits::kKitLambdaNear.value);
-        r.required_margin = jet_for(limits::kKitLambdaTarget.value);
+        r.required_min = jet_for(pol.kit_lambda_near);
+        r.required_margin = jet_for(pol.kit_lambda_target);
         r.unit = LimitUnit::Millimetre;
         r.cost = RemedyCost::Closed;
         r.solved = true;
@@ -519,7 +521,7 @@ DynoPoint settled_window_point(const SimulatedEngine& engine, const WindowStats&
                                real settle_s, const DynoSweepSpec& spec, const GridProbe& grid, Findings& findings) {
     turbo_window_findings(findings, engine, w, rpm, spec);
     kit_lean_finding(findings, w, rpm, spec);
-    edge_findings(findings, rpm, grid, w.edge, spec.part_files.engine);
+    edge_findings(findings, resolve_limit_policy(spec.policy), rpm, grid, w.edge, spec.part_files.engine);
     DynoPoint p;
     p.rpm = rpm;
     p.torque_nm = w.mean(w.net_torque);
@@ -588,6 +590,7 @@ DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<c
 
     WindowStats::Probe probe;
     probe.ambient_pa = spec.ambient.pressure_pa;
+    probe.gate_full = resolve_limit_policy(spec.policy).gate_full_opening;
     if (engine.turbo() != nullptr) {
         const TurboPairDesc& td = engine.turbo()->desc;
         probe.target_boost_pa = td.target_boost_pa;
@@ -661,6 +664,7 @@ DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<c
 // Bottle findings (engine garage P3b-2): static per sweep, tagged with the rpm of the sweep's largest N2O flow (the shortest
 // bottle life). Both read only the points' window means and the descriptors.
 void bottle_findings(std::vector<Findings>& per_point, const DynoResult& result, const DynoSweepSpec& spec, const SimulatedEngineDesc& sim) {
+    const LimitPolicy& pol = resolve_limit_policy(spec.policy);
     if (!spec.nitrous.has_value()) return;
     std::size_t worst = result.points.size();
     for (std::size_t i = 0; i < result.points.size(); ++i) {
@@ -676,16 +680,16 @@ void bottle_findings(std::vector<Findings>& per_point, const DynoResult& result,
     // N2OBottleDuration: the bottle content over the flow at its worst point.
     if (bottle.initial_kg > real(0.0)) {
         const real duration = bottle.initial_kg / flow_kg_s;
-        const real target = limits::kBottleDurationTarget.value;
+        const real target = pol.bottle_duration_target_s;
         const LimitSeverity s = duration < target ? LimitSeverity::Limiting : LimitSeverity::Near;
-        if (duration < target * limits::kBottleDurationNearFactor.value) {
+        if (duration < target * pol.bottle_duration_near_factor) {
             LimitFinding f = make_finding(LimitKind::N2OBottleDuration, s, pt.rpm, duration, target, LimitUnit::Second,
                                           PartRef{"n2o_bottle", spec.part_files.n2o_bottle, "/capacity_kg"});
             Remedy r;
             r.part = f.part;
             r.current = bottle.initial_kg;
             r.required_min = target * flow_kg_s;
-            r.required_margin = target * flow_kg_s * limits::kBottleReserve.value;
+            r.required_margin = target * flow_kg_s * pol.bottle_reserve_factor;
             r.unit = LimitUnit::Kilogram;
             r.cost = RemedyCost::Closed;
             r.solved = true;
@@ -701,7 +705,7 @@ void bottle_findings(std::vector<Findings>& per_point, const DynoResult& result,
     const bool heater_on = bottle.has_heater && bottle.heater.default_on >= real(0.5);
     if (bottle.pressure.mode == N2oPressureMode::VsFill && !heater_on && bottle.capacity_kg > real(0.0)) {
         const NitrousSystem sys(bottle, kit, sim.fuels.front().density_kg_m3, -1, -1, -1);
-        const real target = limits::kBottleDurationTarget.value;
+        const real target = pol.bottle_duration_target_s;
         const real fill_end = std::max(real(0.0), bottle.initial_kg - target * flow_kg_s);
         const real p0 = sys.bottle_pressure_pa(bottle.initial_kg, false);
         const real p1 = sys.bottle_pressure_pa(fill_end, false);
@@ -714,11 +718,11 @@ void bottle_findings(std::vector<Findings>& per_point, const DynoResult& result,
             LimitSeverity s = LimitSeverity::Near;
             bool hit = true;
             if (kit.controller.safety.min_bottle_gauge_bar > real(0.0) && gauge_end_bar < kit.controller.safety.min_bottle_gauge_bar) s = LimitSeverity::Exceeded;
-            else if (retention < limits::kBottleFlowRetentionLimiting.value) s = LimitSeverity::Limiting;
-            else if (retention < limits::kBottleFlowRetentionNear.value) s = LimitSeverity::Near;
+            else if (retention < pol.bottle_flow_retention_limiting) s = LimitSeverity::Limiting;
+            else if (retention < pol.bottle_flow_retention_near) s = LimitSeverity::Near;
             else hit = false;
             if (hit) {
-                out.push_back(make_finding(LimitKind::N2OBottlePressureDrop, s, pt.rpm, retention, limits::kBottleFlowRetentionNear.value,
+                out.push_back(make_finding(LimitKind::N2OBottlePressureDrop, s, pt.rpm, retention, pol.bottle_flow_retention_near,
                                            LimitUnit::Fraction, PartRef{"n2o_bottle", spec.part_files.n2o_bottle, "/pressure"}));
             }
         }
@@ -736,6 +740,7 @@ struct Shared {
 DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, const DynoSweepSpec& spec, jobs::JobSystem* pool,
                           const std::atomic<bool>* cancel) {
     validate_spec(spec);
+    const LimitPolicy& pol = resolve_limit_policy(spec.policy);
     // Cancelled before it started: nothing built, no point run (MapGenerationControl::cancel semantics).
     if (cancelled(cancel)) throw GenerationCancelled();
 
@@ -755,7 +760,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             if (cancelled(cancel)) throw GenerationCancelled();
             result.points.push_back(torque_map_point(d, rpm, spec.throttle));
             Findings f;
-            limiter_findings(f, tm->limiter, rpm, spec.part_files.engine);
+            limiter_findings(f, pol, tm->limiter, rpm, spec.part_files.engine);
             per_point.push_back(std::move(f));
         }
         assemble_limits(result, per_point);
@@ -806,12 +811,12 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             result.points.back().cam_profile = profile;
             result.points.back().lift_u = lift_u;
             Findings f;
-            limiter_findings(f, sim->limiter, rpm, spec.part_files.engine);
-            piston_speed_finding(f, *sim, rpm, spec.part_files.engine);
-            knock_finding(f, *sim, rpm, result.points.back().knock_retard_deg, spec.part_files.fuel);
+            limiter_findings(f, pol, sim->limiter, rpm, spec.part_files.engine);
+            piston_speed_finding(f, pol, *sim, rpm, spec.part_files.engine);
+            knock_finding(f, pol, *sim, rpm, result.points.back().knock_retard_deg, spec.part_files.fuel);
             EdgeAcc e;
             e.add(grid, rpm, p_im_pa);
-            edge_findings(f, rpm, grid, e, spec.part_files.engine);
+            edge_findings(f, pol, rpm, grid, e, spec.part_files.engine);
             sort_point_findings(f);
             per_point.push_back(std::move(f));
         }
@@ -843,9 +848,9 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
         try {
             result.points[i] = stepped_point(d, m, rpms[i], spec, per_point[i]);
             // The limiter findings use the ORIGINAL limiter: the sweep moved it out of the way only to hold WOT.
-            limiter_findings(per_point[i], sim->limiter, rpms[i], spec.part_files.engine);
-            piston_speed_finding(per_point[i], *sim, rpms[i], spec.part_files.engine);
-            knock_finding(per_point[i], *sim, rpms[i], result.points[i].knock_retard_deg, spec.part_files.fuel);
+            limiter_findings(per_point[i], pol, sim->limiter, rpms[i], spec.part_files.engine);
+            piston_speed_finding(per_point[i], pol, *sim, rpms[i], spec.part_files.engine);
+            knock_finding(per_point[i], pol, *sim, rpms[i], result.points[i].knock_retard_deg, spec.part_files.fuel);
             sort_point_findings(per_point[i]);
         } catch (...) {
             errors[i] = std::current_exception();
@@ -880,7 +885,8 @@ std::optional<DynoNitrous> nitrous_from_powertrain(const PowertrainDesc& pt) {
 }
 
 std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain, const std::string& clutch_file,
-                                                 const std::string& gearbox_file) {
+                                                 const std::string& gearbox_file, const LimitPolicy* policy) {
+    const LimitPolicy& pol = resolve_limit_policy(policy);
     std::vector<LimitFinding> out;
     // The peak net torque and where it occurs (the first such point on a tie).
     const DynoPoint* peak = nullptr;
@@ -888,7 +894,7 @@ std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const P
         if (std::isfinite(p.torque_nm) && (peak == nullptr || p.torque_nm > peak->torque_nm)) peak = &p;
     }
     if (peak == nullptr || !(peak->torque_nm > real(0.0))) return out;
-    const real margin = limits::kDrivelineMargin.value;
+    const real margin = pol.driveline_torque_margin;
     for (const ComponentDesc& c : powertrain.components) {
         const ClutchDesc* cl = std::get_if<ClutchDesc>(&c.params);
         if (cl == nullptr || !(cl->capacity_nm > real(0.0))) continue;
@@ -916,14 +922,14 @@ std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const P
         const GearboxDesc* gb = std::get_if<GearboxDesc>(&c.params);
         if (gb == nullptr) continue;
         LimitSeverity s{};
-        if (!gearbox_rating_severity(peak->torque_nm, gb->rated_input_torque_nm, s)) continue;
+        if (!gearbox_rating_severity(peak->torque_nm, gb->rated_input_torque_nm, pol, s)) continue;
         LimitFinding f = make_finding(LimitKind::GearboxInputTorque, s, peak->rpm, peak->torque_nm, gb->rated_input_torque_nm,
                                       LimitUnit::NewtonMetre, PartRef{"gearbox", gearbox_file, "/rated_input_torque_nm"});
         Remedy r;
         r.part = f.part;
         r.current = gb->rated_input_torque_nm;
         r.required_min = peak->torque_nm;
-        r.required_margin = rules::kGearboxRemedyMargin.value * peak->torque_nm;
+        r.required_margin = pol.gearbox_rating_remedy_margin * peak->torque_nm;
         r.unit = LimitUnit::NewtonMetre;
         r.cost = RemedyCost::Closed;
         r.solved = true;

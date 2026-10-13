@@ -221,6 +221,7 @@ add_library(ps_core STATIC
   src/io/engine_thermal_io.cpp
   src/io/engine_parts.cpp
   src/io/electronics_io.cpp
+  src/io/limit_policy_io.cpp
 
   src/drivetrain/box_lcp.cpp
   src/drivetrain/network.cpp
@@ -236,6 +237,7 @@ add_library(ps_core STATIC
   src/drivetrain/limit_findings.cpp
   src/drivetrain/limit_remedies.cpp
   src/drivetrain/engine_rules.cpp
+  src/drivetrain/limit_policy.cpp
   src/drivetrain/engine_change.cpp
   src/drivetrain/nitrous_flow.cpp
   src/drivetrain/nitrous_system.cpp

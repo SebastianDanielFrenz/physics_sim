@@ -12,6 +12,19 @@
 // [C]; no page numbers are claimed.
 //
 // kAllEngineRuleThresholds lists every entry so a test can assert that none is untagged and none is unused.
+//
+// L0 CLASSIFICATION (owner 2026-10-13: refusal limits and advice thresholds are config values). 27 entries are POLICY (they decide
+// only what the player is told or refused) and are fields of ps::drivetrain::LimitPolicy (ps/drivetrain/limit_policy.h) under
+// the same name, `value` being the COMPILED DEFAULT (data/limit_policies/default.json repeats it; tests/unit/test_limit_policy.cpp
+// pins the two together): kIntake1/2/3 Min/Max, kExhaustRatioMin/Max, kPackShare, kRodRatioMin/Max, kCrNa/Fi Min/Max,
+// kGridOvershootLimiting/Exceeded, kCamSwitchFraction Min/Max, kCamHysteresis Min/Max, kCamLiftOverValveMax, kLiftMinPeak
+// MinMm/MaxFraction, kGearboxOverLimiting/Exceeded/RemedyMargin. The other 13 are NOT POLICY and stay constexpr, read directly:
+// they are mathematics or something a generator / loader / grid helper BUILDS from, and none may become configurable (a value
+// in an engine_map_cache_key, a turbo key or a hash must not move with a config file): kLayoutSource (the production valve-layout
+// list), kRowChordFraction, kPackDensity2/3/4/5 (circle-packing results), kBoostGridMargin / AmbientBar / StepPa / MinLastStepPa /
+// AmbientNodeGapPa and kNaGridTopFraction (boost_grid_p_im / ambient_grid_p_im build the pressure axes of generated maps), kRelTolerance
+// (comparison slack). A new entry here is POLICY unless it is one of those; it then needs a LimitPolicy field and a row in
+// limit_policy_table.h (limit_policy.cpp's static_assert fails otherwise).
 #pragma once
 
 #include "ps/types.h"
@@ -121,8 +134,7 @@ inline constexpr Threshold kLiftMinPeakMaxFraction{"lift_min_node_peak_max_fract
 // Peak net crank torque (the dyno's, boosted and with a fitted nitrous kit's gain) over a gearbox's rated_input_torque_nm. The
 // rating is a limit, so the grading starts when the peak is OVER it: 0-5 % over Near, 5-15 % Limiting, beyond 15 % Exceeded (the
 // garage refuses; owner 2026-10-13: warn at Near/Limiting, refuse only Exceeded). Same bands as the grid-coverage rules above, so
-// one advisor reads both. These three numbers are config-to-be (increment L0 moves every refusal limit and advice threshold into
-// a config file; keep them here and in limit_thresholds.h until then).
+// one advisor reads both. These three numbers are POLICY (increment L0): the compiled defaults of LimitPolicy::gearbox_rating_*.
 inline constexpr Threshold kGearboxOverLimiting{"gearbox_rating_over_limiting", 0.05, "[AS] transmission plan 7.1: 5 % over the rating; a gearbox is rated with margin, so the first few percent over are a warning (no gearbox wear model exists)"};
 inline constexpr Threshold kGearboxOverExceeded{"gearbox_rating_over_exceeded", 0.15, "[AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused"};
 // The Closed remedy asks for this factor over the peak (required_margin); required_min is the peak itself.

@@ -7,6 +7,7 @@
 #include "limit_thresholds.h"
 
 #include "ps/drivetrain/isa_air.h"
+#include "ps/drivetrain/limit_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -33,25 +34,36 @@ namespace tab = rules;
 [[nodiscard]] bool below(real v, real lo) { return v < lo * (real(1.0) - tab::kRelTolerance.value); }
 [[nodiscard]] bool above(real v, real hi) { return v > hi * (real(1.0) + tab::kRelTolerance.value); }
 
+// A rule number that is NOT policy (a mathematical constant or a build-time rule): the table's own source text.
 template <class T>
 [[nodiscard]] const char* label_of(const T& t) {
     return t.source;
 }
 
+// The source label of a POLICY number (L0): the table's text while the policy holds the compiled default, else a label that
+// says the number was overridden (the default's source would claim a citation the override does not have).
+template <class T>
+[[nodiscard]] std::string plab(const T& t, real current) {
+    if (current == t.value) return t.source;
+    return std::string("[policy] ") + t.name + " = " + num(current, 6) + " from a limit policy (default " + num(t.value, 6) +
+           "; default source: " + t.source + ")";
+}
+
 // Relative overshoot of `need` over `edge` -> severity: any is Near, beyond kGridOvershootLimiting Limiting, beyond
 // kGridOvershootExceeded Exceeded. Returns false when there is no overshoot.
-[[nodiscard]] bool overshoot_severity(real need, real edge, LimitSeverity& out) {
+[[nodiscard]] bool overshoot_severity(const LimitPolicy& pol, real need, real edge, LimitSeverity& out) {
     if (!(need > edge)) return false;
     const real rel = (need - edge) / edge;
-    out = rel > tab::kGridOvershootExceeded.value   ? LimitSeverity::Exceeded
-          : rel > tab::kGridOvershootLimiting.value ? LimitSeverity::Limiting
+    out = rel > pol.grid_overshoot_exceeded   ? LimitSeverity::Exceeded
+          : rel > pol.grid_overshoot_limiting ? LimitSeverity::Limiting
                                                      : LimitSeverity::Near;
     return true;
 }
 
 struct Sink {
     std::vector<BuildIssue>& out;
-    void add(BuildRule rule, LimitSeverity sev, const char* slot, std::string pointer, std::string message, const char* source,
+    const LimitPolicy& pol;
+    void add(BuildRule rule, LimitSeverity sev, const char* slot, std::string pointer, std::string message, std::string source,
              real value, real limit, LimitUnit unit) {
         BuildIssue b;
         b.rule = rule;
@@ -59,7 +71,7 @@ struct Sink {
         b.slot = slot;
         b.field_pointer = std::move(pointer);
         b.message = std::move(message);
-        b.source_label = source;
+        b.source_label = std::move(source);
         b.value = value;
         b.limit = limit;
         b.unit = unit;
@@ -81,11 +93,27 @@ struct Sink {
     }
 }
 
-void intake_band(int ni, real& lo, real& hi, const tab::Threshold*& lo_t) {
+// The intake valve diameter band of a layout and the source labels of its two ends.
+void intake_band(const LimitPolicy& pol, int ni, real& lo, real& hi, std::string& lo_label, std::string& hi_label) {
     switch (ni) {
-    case 1: lo = tab::kIntake1Min.value; hi = tab::kIntake1Max.value; lo_t = &tab::kIntake1Max; return;
-    case 2: lo = tab::kIntake2Min.value; hi = tab::kIntake2Max.value; lo_t = &tab::kIntake2Max; return;
-    default: lo = tab::kIntake3Min.value; hi = tab::kIntake3Max.value; lo_t = &tab::kIntake3Max; return;
+    case 1:
+        lo = pol.intake_d_over_bore_1v_min;
+        hi = pol.intake_d_over_bore_1v_max;
+        lo_label = plab(tab::kIntake1Min, lo);
+        hi_label = plab(tab::kIntake1Max, hi);
+        return;
+    case 2:
+        lo = pol.intake_d_over_bore_2v_min;
+        hi = pol.intake_d_over_bore_2v_max;
+        lo_label = plab(tab::kIntake2Min, lo);
+        hi_label = plab(tab::kIntake2Max, hi);
+        return;
+    default:
+        lo = pol.intake_d_over_bore_3v_min;
+        hi = pol.intake_d_over_bore_3v_max;
+        lo_label = plab(tab::kIntake3Min, lo);
+        hi_label = plab(tab::kIntake3Max, hi);
+        return;
     }
 }
 
@@ -93,19 +121,19 @@ void check_mean_piston_speed(Sink& s, real stroke_m, real limiter_rpm) {
     if (!(stroke_m > real(0.0)) || !(limiter_rpm > real(0.0))) return;
     const real v = stroke_m * limiter_rpm / real(30.0);
     LimitSeverity sev{};
-    const char* label = nullptr;
+    std::string label;
     real limit = 0.0;
     // P3b's thresholds, one step lower: the dyno reports Limiting from 25 m/s because the part caps output there; as a static
     // rule 25 m/s is only 'unusual for a road engine' (the shipped hyper runs 26.2 m/s at its stock limiter), refusal starts
     // where P3b says Exceeded.
-    if (v >= limits::kPistonSpeedExceeded.value) {
+    if (v >= s.pol.piston_speed_exceeded_mps) {
         sev = LimitSeverity::Exceeded;
-        limit = limits::kPistonSpeedExceeded.value;
-        label = label_of(limits::kPistonSpeedExceeded);
-    } else if (v >= limits::kPistonSpeedLimiting.value) {
+        limit = s.pol.piston_speed_exceeded_mps;
+        label = plab(limits::kPistonSpeedExceeded, s.pol.piston_speed_exceeded_mps);
+    } else if (v >= s.pol.piston_speed_limiting_mps) {
         sev = LimitSeverity::Near;
-        limit = limits::kPistonSpeedLimiting.value;
-        label = label_of(limits::kPistonSpeedLimiting);
+        limit = s.pol.piston_speed_limiting_mps;
+        label = plab(limits::kPistonSpeedLimiting, s.pol.piston_speed_limiting_mps);
     } else {
         return;
     }
@@ -133,8 +161,8 @@ void check_cycle(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c)
     if (bore > real(0.0) && di > real(0.0) && de > real(0.0)) {
         if (layout_ok) {
             real lo = 0.0, hi = 0.0;
-            const tab::Threshold* t = nullptr;
-            intake_band(ni, lo, hi, t);
+            std::string lo_label, hi_label;
+            intake_band(s.pol, ni, lo, hi, lo_label, hi_label);
             const real frac = di / bore;
             if (below(frac, lo) || above(frac, hi)) {
                 const bool low = below(frac, lo);
@@ -142,7 +170,7 @@ void check_cycle(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c)
                       "intake valve diameter " + mm(di) + " is " + num(frac, 3) + " of the " + mm(bore) + " bore; " +
                           std::to_string(ni + ne) + "-valve heads allow " + num(lo, 3) + "-" + num(hi, 3) + " (" +
                           mm(lo * bore) + " to " + mm(hi * bore) + ")",
-                      label_of(low ? (ni == 1 ? tab::kIntake1Min : ni == 2 ? tab::kIntake2Min : tab::kIntake3Min) : *t), frac,
+                      low ? lo_label : hi_label, frac,
                       low ? lo : hi, LimitUnit::Dimensionless);
             }
             // Row rule per side (one or two valves).
@@ -161,54 +189,54 @@ void check_cycle(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c)
             row(ne, de, "exhaust", "/cycle/exhaust_valve_d_mm");
             // Area rule over all valves.
             const real total = real(ni) * di * di + real(ne) * de * de;
-            const real cap = tab::kPackShare.value * ideal_density(ni + ne) * bore * bore;
+            const real cap = s.pol.pack_share_of_ideal * ideal_density(ni + ne) * bore * bore;
             if (above(total, cap)) {
                 const real scale = std::sqrt(cap / total);
                 s.add(BuildRule::ValvePackingArea, LimitSeverity::Exceeded, "engine", "/cycle/intake_valve_d_mm",
                       "the " + std::to_string(ni + ne) + " valve heads cover " + num(total / (bore * bore), 3) +
                           " of the bore diameter squared; at most " + num(cap / (bore * bore), 3) +
                           " fits (scale every valve by " + num(scale, 3) + ")",
-                      label_of(tab::kPackShare), total / (bore * bore), cap / (bore * bore), LimitUnit::Dimensionless);
+                      plab(tab::kPackShare, s.pol.pack_share_of_ideal), total / (bore * bore), cap / (bore * bore), LimitUnit::Dimensionless);
             }
         }
         const real ratio = de / di;
-        if (below(ratio, tab::kExhaustRatioMin.value) || above(ratio, tab::kExhaustRatioMax.value)) {
-            const bool low = below(ratio, tab::kExhaustRatioMin.value);
+        if (below(ratio, s.pol.exhaust_over_intake_min) || above(ratio, s.pol.exhaust_over_intake_max)) {
+            const bool low = below(ratio, s.pol.exhaust_over_intake_min);
             s.add(BuildRule::ExhaustIntakeRatio, LimitSeverity::Exceeded, "engine", "/cycle/exhaust_valve_d_mm",
                   "exhaust valve " + mm(de) + " over intake valve " + mm(di) + " is " + num(ratio, 3) + "; production heads run " +
-                      num(tab::kExhaustRatioMin.value, 2) + "-" + num(tab::kExhaustRatioMax.value, 2) + " (" +
-                      mm(tab::kExhaustRatioMin.value * di) + " to " + mm(tab::kExhaustRatioMax.value * di) + ")",
-                  label_of(low ? tab::kExhaustRatioMin : tab::kExhaustRatioMax), ratio,
-                  low ? tab::kExhaustRatioMin.value : tab::kExhaustRatioMax.value, LimitUnit::Dimensionless);
+                      num(s.pol.exhaust_over_intake_min, 2) + "-" + num(s.pol.exhaust_over_intake_max, 2) + " (" +
+                      mm(s.pol.exhaust_over_intake_min * di) + " to " + mm(s.pol.exhaust_over_intake_max * di) + ")",
+                  low ? plab(tab::kExhaustRatioMin, s.pol.exhaust_over_intake_min) : plab(tab::kExhaustRatioMax, s.pol.exhaust_over_intake_max), ratio,
+                  low ? s.pol.exhaust_over_intake_min : s.pol.exhaust_over_intake_max, LimitUnit::Dimensionless);
         }
     }
 
     // --- rod ratio: rod length over crank radius (stroke / 2) ---
     if (c.rod_m > real(0.0) && c.stroke_m > real(0.0)) {
         const real r = c.rod_m / (c.stroke_m * real(0.5));
-        if (below(r, tab::kRodRatioMin.value) || above(r, tab::kRodRatioMax.value)) {
-            const bool low = below(r, tab::kRodRatioMin.value);
+        if (below(r, s.pol.rod_over_crank_radius_min) || above(r, s.pol.rod_over_crank_radius_max)) {
+            const bool low = below(r, s.pol.rod_over_crank_radius_min);
             s.add(BuildRule::RodRatio, LimitSeverity::Exceeded, "engine", "/cycle/rod_mm",
                   "rod " + mm(c.rod_m) + " over the crank radius " + mm(c.stroke_m * real(0.5)) + " is " + num(r, 3) +
-                      "; allowed " + num(tab::kRodRatioMin.value, 2) + "-" + num(tab::kRodRatioMax.value, 2) + " (rod " +
-                      mm(tab::kRodRatioMin.value * c.stroke_m * real(0.5)) + " to " +
-                      mm(tab::kRodRatioMax.value * c.stroke_m * real(0.5)) + ")",
-                  label_of(low ? tab::kRodRatioMin : tab::kRodRatioMax), r,
-                  low ? tab::kRodRatioMin.value : tab::kRodRatioMax.value, LimitUnit::Dimensionless);
+                      "; allowed " + num(s.pol.rod_over_crank_radius_min, 2) + "-" + num(s.pol.rod_over_crank_radius_max, 2) + " (rod " +
+                      mm(s.pol.rod_over_crank_radius_min * c.stroke_m * real(0.5)) + " to " +
+                      mm(s.pol.rod_over_crank_radius_max * c.stroke_m * real(0.5)) + ")",
+                  low ? plab(tab::kRodRatioMin, s.pol.rod_over_crank_radius_min) : plab(tab::kRodRatioMax, s.pol.rod_over_crank_radius_max), r,
+                  low ? s.pol.rod_over_crank_radius_min : s.pol.rod_over_crank_radius_max, LimitUnit::Dimensionless);
         }
     }
 
     // --- compression ratio by aspiration ---
     if (c.compression_ratio > real(0.0)) {
         const bool forced = e.turbo_pair.has_value();
-        const real lo = forced ? tab::kCrFiMin.value : tab::kCrNaMin.value;
-        const real hi = forced ? tab::kCrFiMax.value : tab::kCrNaMax.value;
+        const real lo = forced ? s.pol.cr_forced_min : s.pol.cr_na_min;
+        const real hi = forced ? s.pol.cr_forced_max : s.pol.cr_na_max;
         if (below(c.compression_ratio, lo) || above(c.compression_ratio, hi)) {
             const bool low = below(c.compression_ratio, lo);
             s.add(BuildRule::CompressionRatio, LimitSeverity::Exceeded, "engine", "/cycle/compression_ratio",
                   "compression ratio " + num(c.compression_ratio, 4) + " is outside " + num(lo, 3) + "-" + num(hi, 3) +
                       (forced ? " for a forced-induction engine" : " for a naturally aspirated engine"),
-                  label_of(forced ? (low ? tab::kCrFiMin : tab::kCrFiMax) : (low ? tab::kCrNaMin : tab::kCrNaMax)),
+                  forced ? (low ? plab(tab::kCrFiMin, lo) : plab(tab::kCrFiMax, hi)) : (low ? plab(tab::kCrNaMin, lo) : plab(tab::kCrNaMax, hi)),
                   c.compression_ratio, low ? lo : hi, LimitUnit::Dimensionless);
         }
     }
@@ -217,11 +245,11 @@ void check_cycle(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c)
     if (!c.grid_rpm.empty()) {
         const real top = c.grid_rpm.back();
         LimitSeverity sev{};
-        if (overshoot_severity(e.limiter.rpm, top, sev)) {
+        if (overshoot_severity(s.pol, e.limiter.rpm, top, sev)) {
             s.add(BuildRule::LimiterAboveRpmGrid, sev, "engine", "/cycle/grid_rpm",
                   "the " + num(e.limiter.rpm, 5) + " rpm limiter is above the last rpm node " + num(top, 5) +
                       " of the generated maps (lookups hold the last row); extend the grid to the limiter",
-                  label_of(tab::kGridOvershootLimiting), e.limiter.rpm, top, LimitUnit::RevPerMinute);
+                  plab(tab::kGridOvershootLimiting, s.pol.grid_overshoot_limiting), e.limiter.rpm, top, LimitUnit::RevPerMinute);
         }
     }
     if (e.turbo_pair.has_value() && !c.grid_p_im.empty()) {
@@ -229,12 +257,12 @@ void check_cycle(Sink& s, const SimulatedEngineDesc& e, const CycleModelDesc& c)
         if (c.pressure_sampling.enabled && c.pressure_sampling.max_pa > real(0.0)) top = std::max(top, c.pressure_sampling.max_pa);
         const real need = kIsaAirPressurePa + e.turbo_pair->target_boost_pa;
         LimitSeverity sev{};
-        if (overshoot_severity(need, top, sev)) {
+        if (overshoot_severity(s.pol, need, top, sev)) {
             s.add(BuildRule::BoostAbovePressureGrid, sev, "engine", "/cycle/grid_p_im_kpa",
                   "ambient plus the " + num(e.turbo_pair->target_boost_pa / real(1e5), 3) + " bar boost target is " +
                       num(need / real(1e3), 5) + " kPa, above the last manifold-pressure node " + num(top / real(1e3), 5) +
                       " kPa of the generated maps; add rows up to " + num(need / real(1e3), 5) + " kPa",
-                  label_of(tab::kGridOvershootLimiting), need, top, LimitUnit::Pascal);
+                  plab(tab::kGridOvershootLimiting, s.pol.grid_overshoot_limiting), need, top, LimitUnit::Pascal);
         }
     }
 }
@@ -260,28 +288,28 @@ void check_cam_profiles(Sink& s, const SimulatedEngineDesc& e, const CycleModelD
         s.add(BuildRule::CamSwitchWindow, LimitSeverity::Limiting, "ecu", low ? "/switching/rpm_off" : "/switching/rpm_on",
               "the cam switch (" + num(sw.rpm_off, 5) + "-" + num(sw.rpm_on, 5) + " rpm) lies outside the generated rpm grid " +
                   num(c.grid_rpm.front(), 5) + "-" + num(c.grid_rpm.back(), 5) + " rpm (lookups hold the edge row there)",
-              label_of(tab::kGridOvershootLimiting), low ? sw.rpm_off : sw.rpm_on, low ? c.grid_rpm.front() : c.grid_rpm.back(),
+              plab(tab::kGridOvershootLimiting, s.pol.grid_overshoot_limiting), low ? sw.rpm_off : sw.rpm_on, low ? c.grid_rpm.front() : c.grid_rpm.back(),
               LimitUnit::RevPerMinute);
     }
     if (e.limiter.rpm > real(0.0)) {
         const real frac = sw.rpm_on / e.limiter.rpm;
-        if (below(frac, tab::kCamSwitchFractionMin.value) || above(frac, tab::kCamSwitchFractionMax.value)) {
-            const bool low = below(frac, tab::kCamSwitchFractionMin.value);
+        if (below(frac, s.pol.cam_switch_over_limiter_min) || above(frac, s.pol.cam_switch_over_limiter_max)) {
+            const bool low = below(frac, s.pol.cam_switch_over_limiter_min);
             s.add(BuildRule::CamSwitchWindow, LimitSeverity::Near, "ecu", "/switching/rpm_on",
                   "the cam switches at " + num(sw.rpm_on, 5) + " rpm, " + num(frac, 3) + " of the " + num(e.limiter.rpm, 5) +
                       " rpm limiter (production VTEC: 0.60-0.72)",
-                  label_of(low ? tab::kCamSwitchFractionMin : tab::kCamSwitchFractionMax), frac,
-                  low ? tab::kCamSwitchFractionMin.value : tab::kCamSwitchFractionMax.value, LimitUnit::Fraction);
+                  low ? plab(tab::kCamSwitchFractionMin, s.pol.cam_switch_over_limiter_min) : plab(tab::kCamSwitchFractionMax, s.pol.cam_switch_over_limiter_max), frac,
+                  low ? s.pol.cam_switch_over_limiter_min : s.pol.cam_switch_over_limiter_max, LimitUnit::Fraction);
         }
     }
     const real hyst = sw.rpm_on - sw.rpm_off;
-    if (below(hyst, tab::kCamHysteresisMin.value) || above(hyst, tab::kCamHysteresisMax.value)) {
-        const bool low = below(hyst, tab::kCamHysteresisMin.value);
+    if (below(hyst, s.pol.cam_switch_hysteresis_min_rpm) || above(hyst, s.pol.cam_switch_hysteresis_max_rpm)) {
+        const bool low = below(hyst, s.pol.cam_switch_hysteresis_min_rpm);
         s.add(BuildRule::CamSwitchWindow, LimitSeverity::Near, "ecu", "/switching/rpm_off",
-              "the cam switch hysteresis is " + num(hyst, 4) + " rpm (band " + num(tab::kCamHysteresisMin.value, 3) + "-" +
-                  num(tab::kCamHysteresisMax.value, 4) + " rpm)",
-              label_of(low ? tab::kCamHysteresisMin : tab::kCamHysteresisMax), hyst,
-              low ? tab::kCamHysteresisMin.value : tab::kCamHysteresisMax.value, LimitUnit::RevPerMinute);
+              "the cam switch hysteresis is " + num(hyst, 4) + " rpm (band " + num(s.pol.cam_switch_hysteresis_min_rpm, 3) + "-" +
+                  num(s.pol.cam_switch_hysteresis_max_rpm, 4) + " rpm)",
+              low ? plab(tab::kCamHysteresisMin, s.pol.cam_switch_hysteresis_min_rpm) : plab(tab::kCamHysteresisMax, s.pol.cam_switch_hysteresis_max_rpm), hyst,
+              low ? s.pol.cam_switch_hysteresis_min_rpm : s.pol.cam_switch_hysteresis_max_rpm, LimitUnit::RevPerMinute);
     }
     // --- profile sanity ---
     for (int valve = 0; valve < 2; ++valve) {
@@ -302,13 +330,13 @@ void check_cam_profiles(Sink& s, const SimulatedEngineDesc& e, const CycleModelD
         for (std::size_t k = 0; k < c.cam_profiles.size() && d > real(0.0); ++k) {
             real pk = 0.0, ar = 0.0;
             lift_figures(valve == 0 ? c.cam_profiles[k].intake_lift : c.cam_profiles[k].exhaust_lift, pk, ar);
-            if (above(pk / d, tab::kCamLiftOverValveMax.value)) {
+            if (above(pk / d, s.pol.cam_peak_lift_over_valve_d_max)) {
                 s.add(BuildRule::CamLiftOverValve, LimitSeverity::Limiting, "cam",
                       "/profiles/" + std::to_string(k) + "/" + name + "_lift",
                       std::string("cam profile '") + c.cam_profiles[k].id + "' lifts the " + name + " valves " + mm(pk) +
                           ", " + num(pk / d, 3) + " of their " + mm(d) + " head (band <= " +
-                          num(tab::kCamLiftOverValveMax.value, 3) + ")",
-                      label_of(tab::kCamLiftOverValveMax), pk / d, tab::kCamLiftOverValveMax.value, LimitUnit::Dimensionless);
+                          num(s.pol.cam_peak_lift_over_valve_d_max, 3) + ")",
+                      plab(tab::kCamLiftOverValveMax, s.pol.cam_peak_lift_over_valve_d_max), pk / d, s.pol.cam_peak_lift_over_valve_d_max, LimitUnit::Dimensionless);
             }
         }
     }
@@ -342,40 +370,40 @@ void check_lift_family(Sink& s, const SimulatedEngineDesc& e, const CycleModelDe
     lift_figures(f[kmin].intake_lift, pk_min, ar_min);
     lift_figures(f.back().intake_lift, pk_full, ar_full);
     const real min_mm = pk_min * real(1000.0);
-    if (below(min_mm, tab::kLiftMinPeakMinMm.value)) {
+    if (below(min_mm, s.pol.lift_min_node_peak_min_mm)) {
         s.add(BuildRule::LiftMinimumBand, LimitSeverity::Near, "cam", node_ptr(kmin),
-              "the minimum intake lift is " + mm(pk_min) + " (band >= " + num(tab::kLiftMinPeakMinMm.value, 3) +
+              "the minimum intake lift is " + mm(pk_min) + " (band >= " + num(s.pol.lift_min_node_peak_min_mm, 3) +
                   " mm; BMW's second-generation Valvetronic runs 0.18 mm)",
-              label_of(tab::kLiftMinPeakMinMm), min_mm, tab::kLiftMinPeakMinMm.value, LimitUnit::Millimetre);
+              plab(tab::kLiftMinPeakMinMm, s.pol.lift_min_node_peak_min_mm), min_mm, s.pol.lift_min_node_peak_min_mm, LimitUnit::Millimetre);
     }
-    if (pk_full > real(0.0) && above(pk_min / pk_full, tab::kLiftMinPeakMaxFraction.value)) {
+    if (pk_full > real(0.0) && above(pk_min / pk_full, s.pol.lift_min_node_peak_max_fraction_of_full)) {
         s.add(BuildRule::LiftMinimumBand, LimitSeverity::Near, "cam", node_ptr(kmin),
               "the minimum intake lift " + mm(pk_min) + " is " + num(pk_min / pk_full, 3) + " of the " + mm(pk_full) +
-                  " full lift (band <= " + num(tab::kLiftMinPeakMaxFraction.value, 3) +
+                  " full lift (band <= " + num(s.pol.lift_min_node_peak_max_fraction_of_full, 3) +
                   "): the throttle, not the lift, sets the light loads",
-              label_of(tab::kLiftMinPeakMaxFraction), pk_min / pk_full, tab::kLiftMinPeakMaxFraction.value, LimitUnit::Fraction);
+              plab(tab::kLiftMinPeakMaxFraction, s.pol.lift_min_node_peak_max_fraction_of_full), pk_min / pk_full, s.pol.lift_min_node_peak_max_fraction_of_full, LimitUnit::Fraction);
     }
     // Lift over valve head: every intake node and the exhaust lift.
     for (std::size_t k = 0; k < f.size() && c.intake_valve_d_m > real(0.0); ++k) {
         real pk = 0.0, ar = 0.0;
         lift_figures(f[k].intake_lift, pk, ar);
         const real d = c.intake_valve_d_m;
-        if (above(pk / d, tab::kCamLiftOverValveMax.value)) {
+        if (above(pk / d, s.pol.cam_peak_lift_over_valve_d_max)) {
             s.add(BuildRule::CamLiftOverValve, LimitSeverity::Limiting, "cam", node_ptr(k),
                   "intake lift node u = " + num(f[k].u, 3) + " lifts the intake valves " + mm(pk) + ", " + num(pk / d, 3) +
-                      " of their " + mm(d) + " head (band <= " + num(tab::kCamLiftOverValveMax.value, 3) + ")",
-                  label_of(tab::kCamLiftOverValveMax), pk / d, tab::kCamLiftOverValveMax.value, LimitUnit::Dimensionless);
+                      " of their " + mm(d) + " head (band <= " + num(s.pol.cam_peak_lift_over_valve_d_max, 3) + ")",
+                  plab(tab::kCamLiftOverValveMax, s.pol.cam_peak_lift_over_valve_d_max), pk / d, s.pol.cam_peak_lift_over_valve_d_max, LimitUnit::Dimensionless);
         }
     }
     if (c.exhaust_valve_d_m > real(0.0)) {
         real pk = 0.0, ar = 0.0;
         lift_figures(c.exhaust_lift, pk, ar);
         const real d = c.exhaust_valve_d_m;
-        if (above(pk / d, tab::kCamLiftOverValveMax.value)) {
+        if (above(pk / d, s.pol.cam_peak_lift_over_valve_d_max)) {
             s.add(BuildRule::CamLiftOverValve, LimitSeverity::Limiting, "cam", "/exhaust_lift",
                   "the exhaust lift " + mm(pk) + " is " + num(pk / d, 3) + " of the " + mm(d) + " exhaust valve head (band <= " +
-                      num(tab::kCamLiftOverValveMax.value, 3) + ")",
-                  label_of(tab::kCamLiftOverValveMax), pk / d, tab::kCamLiftOverValveMax.value, LimitUnit::Dimensionless);
+                      num(s.pol.cam_peak_lift_over_valve_d_max, 3) + ")",
+                  plab(tab::kCamLiftOverValveMax, s.pol.cam_peak_lift_over_valve_d_max), pk / d, s.pol.cam_peak_lift_over_valve_d_max, LimitUnit::Dimensionless);
         }
     }
 }
@@ -412,9 +440,9 @@ const char* to_string(BuildRule r) {
     return "Unknown";
 }
 
-std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e) {
+std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e, const LimitPolicy* policy) {
     std::vector<BuildIssue> out;
-    Sink s{out};
+    Sink s{out, resolve_limit_policy(policy)};
     if (e.architecture == EngineArchitecture::Piston4Stroke) {
         check_mean_piston_speed(s, e.piston.stroke_m, e.limiter.rpm);
         if (e.cycle.has_value()) check_cycle(s, e, *e.cycle);
@@ -425,21 +453,21 @@ std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& e) {
     return out;
 }
 
-std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& e) {
+std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& e, const LimitPolicy* policy) {
     std::vector<BuildIssue> out;
-    Sink s{out};
+    Sink s{out, resolve_limit_policy(policy)};
     // A governed engine (the tractor's all-speed governor) never runs above its high idle: the fuel is cut there, and the
     // overspeed limiter above it is a backstop, not an operating speed.
     const real top_rpm = e.has_governor ? std::min(e.limiter.rpm, e.governor.high_idle_rpm) : e.limiter.rpm;
     const auto curve = [&](const vehicle::Curve1D& c, const char* pointer, const char* name) {
         if (c.x.empty()) return;
         LimitSeverity sev{};
-        if (overshoot_severity(top_rpm, c.x.back(), sev)) {
+        if (overshoot_severity(s.pol, top_rpm, c.x.back(), sev)) {
             s.add(BuildRule::LimiterAboveCurve, sev, "engine", pointer,
                   "the " + num(top_rpm, 5) + " rpm " + (e.has_governor && top_rpm < e.limiter.rpm ? "governor high idle" : "limiter") +
                       " is above the last rpm " + num(c.x.back(), 5) + " of the " + name +
                       " curve (the curve is held flat beyond it); extend the curve to the limiter",
-                  label_of(tab::kGridOvershootLimiting), top_rpm, c.x.back(), LimitUnit::RevPerMinute);
+                  plab(tab::kGridOvershootLimiting, s.pol.grid_overshoot_limiting), top_rpm, c.x.back(), LimitUnit::RevPerMinute);
         }
     };
     curve(e.wot_torque_nm_vs_rpm, "/wot_torque_nm_vs_rpm", "full-load torque");
@@ -448,9 +476,9 @@ std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& e) {
     return out;
 }
 
-std::vector<BuildIssue> check_buildable(const ComponentParams& engine) {
-    if (const auto* sim = std::get_if<SimulatedEngineDesc>(&engine)) return check_buildable(*sim);
-    if (const auto* tm = std::get_if<TorqueMapEngineDesc>(&engine)) return check_buildable(*tm);
+std::vector<BuildIssue> check_buildable(const ComponentParams& engine, const LimitPolicy* policy) {
+    if (const auto* sim = std::get_if<SimulatedEngineDesc>(&engine)) return check_buildable(*sim, policy);
+    if (const auto* tm = std::get_if<TorqueMapEngineDesc>(&engine)) return check_buildable(*tm, policy);
     return {};
 }
 
@@ -464,10 +492,11 @@ real peak_net_torque_nm(const TorqueMapEngineDesc& e) {
     return peak;
 }
 
-std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& g, real peak_torque_nm) {
+std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& g, real peak_torque_nm, const LimitPolicy* policy) {
+    const LimitPolicy& pol = resolve_limit_policy(policy);
     std::vector<BuildIssue> out;
     LimitSeverity sev{};
-    if (!gearbox_rating_severity(peak_torque_nm, g.rated_input_torque_nm, sev)) return out;
+    if (!gearbox_rating_severity(peak_torque_nm, g.rated_input_torque_nm, pol, sev)) return out;
     const real over_pct = (peak_torque_nm / g.rated_input_torque_nm - real(1.0)) * real(100.0);
     BuildIssue b;
     b.rule = BuildRule::GearboxRating;
@@ -476,9 +505,12 @@ std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& g, real peak_tor
     b.field_pointer = "/rated_input_torque_nm";
     b.message = "the engine's peak " + num(peak_torque_nm, 4) + " N*m is " + num(over_pct, 3) + " % over the gearbox's rated input torque " +
                 num(g.rated_input_torque_nm, 4) + " N*m" +
-                (sev == LimitSeverity::Exceeded ? " (more than " + num(tab::kGearboxOverExceeded.value * real(100.0), 3) + " % over: refused); fit a stronger gearbox"
-                                                : "; a stronger gearbox would carry it");
-    b.source_label = label_of(sev == LimitSeverity::Exceeded ? tab::kGearboxOverExceeded : tab::kGearboxOverLimiting);
+                (sev == LimitSeverity::Exceeded
+                     ? " (more than " + num(pol.gearbox_rating_over_exceeded * real(100.0), 3) + " % over" + (pol.refuses(sev) ? ": refused" : "") +
+                           "); fit a stronger gearbox"
+                     : "; a stronger gearbox would carry it");
+    b.source_label = sev == LimitSeverity::Exceeded ? plab(tab::kGearboxOverExceeded, pol.gearbox_rating_over_exceeded)
+                                                    : plab(tab::kGearboxOverLimiting, pol.gearbox_rating_over_limiting);
     b.value = peak_torque_nm;
     b.limit = g.rated_input_torque_nm;
     b.unit = LimitUnit::NewtonMetre;
@@ -486,19 +518,20 @@ std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& g, real peak_tor
     return out;
 }
 
-std::vector<BuildIssue> check_gearbox_rating(const PowertrainDesc& pt, real peak_torque_nm) {
+std::vector<BuildIssue> check_gearbox_rating(const PowertrainDesc& pt, real peak_torque_nm, const LimitPolicy* policy) {
     std::vector<BuildIssue> out;
     for (const ComponentDesc& c : pt.components) {
         if (const auto* g = std::get_if<GearboxDesc>(&c.params)) {
-            std::vector<BuildIssue> one = check_gearbox_rating(*g, peak_torque_nm);
+            std::vector<BuildIssue> one = check_gearbox_rating(*g, peak_torque_nm, policy);
             for (BuildIssue& b : one) out.push_back(std::move(b));
         }
     }
     return out;
 }
 
-bool has_blocking_issue(const std::vector<BuildIssue>& issues) {
-    return std::any_of(issues.begin(), issues.end(), [](const BuildIssue& i) { return i.severity == LimitSeverity::Exceeded; });
+bool has_blocking_issue(const std::vector<BuildIssue>& issues, const LimitPolicy* policy) {
+    const LimitPolicy& pol = resolve_limit_policy(policy);
+    return std::any_of(issues.begin(), issues.end(), [&pol](const BuildIssue& i) { return pol.refuses(i.severity); });
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------

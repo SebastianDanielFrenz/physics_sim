@@ -10,6 +10,7 @@
 
 #include "ps/drivetrain/engine_cycle_desc.h"
 #include "ps/drivetrain/limit_findings.h"
+#include "ps/drivetrain/limit_policy.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/types.h"
 
@@ -75,12 +76,17 @@ struct BuildIssue {
 //                             at 5761 rpm below its 6500 rpm limiter and 97.5 kPa below ambient; P3b reports it per dyno point);
 //   torque map              : the limiter against the last rpm of its torque curves (there is no geometry to check).
 // Other component kinds: nothing applies, an empty vector.
-[[nodiscard]] std::vector<BuildIssue> check_buildable(const ComponentParams& engine);
-[[nodiscard]] std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& engine);
-[[nodiscard]] std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& engine);
+//
+// Increment L0: every band (valve size, rod ratio, compression ratio, piston speed, grid overshoot, cam / lift bands) is a
+// LimitPolicy value (ps/drivetrain/limit_policy.h); `policy` nullptr = default_limit_policy(), the compiled defaults (every
+// result bit-identical to before L0). A BuildIssue::source_label says so when its number is a policy override.
+[[nodiscard]] std::vector<BuildIssue> check_buildable(const ComponentParams& engine, const LimitPolicy* policy = nullptr);
+[[nodiscard]] std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& engine, const LimitPolicy* policy = nullptr);
+[[nodiscard]] std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& engine, const LimitPolicy* policy = nullptr);
 
-// True iff any issue is Exceeded (the garage must refuse).
-[[nodiscard]] bool has_blocking_issue(const std::vector<BuildIssue>& issues);
+// True iff the policy refuses any issue's severity (L0: LimitPolicy::refuses; the default rule refuses Exceeded only, owner
+// 2026-10-13: warn at Near/Limiting, refuse only Exceeded - and that rule is itself configuration, refuse_at).
+[[nodiscard]] bool has_blocking_issue(const std::vector<BuildIssue>& issues, const LimitPolicy* policy = nullptr);
 
 [[nodiscard]] const char* to_string(BuildRule r);
 
@@ -97,8 +103,9 @@ struct BuildIssue {
 // Over the rating by 0-5 % Near, 5-15 % Limiting, more than 15 % Exceeded (has_blocking_issue = the garage refuses; rules table
 // engine_rules_table.h kGearboxOver*). Slot "gearbox", field_pointer "/rated_input_torque_nm", value = the peak, limit = the
 // rating, unit N*m. The powertrain overload checks every gearbox component (each reports separately).
-[[nodiscard]] std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& gearbox, real peak_torque_nm);
-[[nodiscard]] std::vector<BuildIssue> check_gearbox_rating(const PowertrainDesc& powertrain, real peak_torque_nm);
+// L0: the 5 % / 15 % grades are LimitPolicy::gearbox_rating_over_limiting / _exceeded (`policy` nullptr = the defaults).
+[[nodiscard]] std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& gearbox, real peak_torque_nm, const LimitPolicy* policy = nullptr);
+[[nodiscard]] std::vector<BuildIssue> check_gearbox_rating(const PowertrainDesc& powertrain, real peak_torque_nm, const LimitPolicy* policy = nullptr);
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // A11: classify_engine_change

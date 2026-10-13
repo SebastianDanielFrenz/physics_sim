@@ -24,6 +24,7 @@
 
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/limit_findings.h"
+#include "ps/drivetrain/limit_policy.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/jobs/job_system.h"
 #include "ps/types.h"
@@ -104,6 +105,11 @@ struct DynoSweepSpec {
     // blended plant between nodes has no steady solver; forced induction with a family is rejected by the loader). With a
     // kit the engine is stepped, and the running ECU sets the lift itself (lift_node is then ignored).
     int lift_node = -1;
+    // Increment L0: the thresholds the limit findings (and the Closed remedies attached to them) are graded with
+    // (ps/drivetrain/limit_policy.h). nullptr = default_limit_policy() = the compiled defaults, bit-identical to before L0.
+    // Not part of the physics: it never changes a DynoPoint, only which findings exist and their severities / remedy margins.
+    // The pointee must outlive the call (solve_remedy copies the spec, so it must outlive that too).
+    const LimitPolicy* policy = nullptr;
 };
 
 struct DynoPoint {
@@ -190,11 +196,13 @@ struct DynoResult {
 //                       rating. Produced only when the peak is OVER the rating: 0-5 % over Near, 5-15 % Limiting, more than 15 %
 //                       Exceeded (engine_rules_table.h kGearboxOver*; the same grading as BuildRule::GearboxRating).
 //                       Closed Remedy: current = rating, required_min = peak, required_margin = 1.1 * peak.
-// `clutch_file` / `gearbox_file` fill PartRef::file (empty = unknown). A sweep without a positive torque returns {}; a
+// `clutch_file` / `gearbox_file` fill PartRef::file (empty = unknown). `policy` (L0, nullptr = defaults): the x1.3 clutch margin
+// (driveline_torque_margin) and the gearbox rating grades / remedy margin (gearbox_rating_*). A sweep without a positive torque returns {}; a
 // powertrain without a clutch / a rated gearbox produces no such finding. Sorted like DynoResult::limits (by kind, ClutchCapacity
 // before GearboxInputTorque). With a nitrous kit in the sweep (DynoSweepSpec::nitrous) the peak already includes its gain.
 [[nodiscard]] std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain,
                                                                const std::string& clutch_file = {},
-                                                               const std::string& gearbox_file = {});
+                                                               const std::string& gearbox_file = {},
+                                                               const LimitPolicy* policy = nullptr);
 
 } // namespace ps::drivetrain
