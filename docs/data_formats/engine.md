@@ -1118,6 +1118,8 @@ Tests: `tests/unit/test_engine_dyno.cpp` (D1-D8, `[dyno]`), `tests/unit/test_lim
 
 ### Limit findings (engine garage P3b-1)
 
+**Thresholds are configuration (increment L0):** every Near / Limiting / Exceeded band, the window fractions and the remedy margins below are entries of a `LimitPolicy` (`DynoSweepSpec::policy`; nullptr = the compiled defaults quoted here); whether Exceeded REFUSES is the policy's `refuse_at`. See [limit_policy.md](limit_policy.md).
+
 `DynoResult::limits` (`ps/drivetrain/limit_findings.h`) is the list of things the sweep found limiting, for the garage's
 limit advisor (the advice TEXT is game data keyed by `LimitKind`; every number comes from the simulation). It is empty
 when nothing is within a margin of a limit (a torque-map engine below its limiter). `DynoResult::point_limits[i]` is the
@@ -1165,6 +1167,8 @@ the `ve` table's axes, outside the engine's hot path, so no hash or allocation c
 is not checked.
 
 #### Driveline limits
+
+**Thresholds are configuration (increment L0):** the clutch margin and the gearbox rating grades are policy entries (`check_driveline_limits(..., policy)`). See [limit_policy.md](limit_policy.md).
 
 `check_driveline_limits(const DynoResult&, const PowertrainDesc&, clutch_file = {})` covers what the engine-only sweep
 cannot see. It returns a `ClutchCapacity` finding at the rpm of the sweep's peak net torque when that torque is within 1.3 x
@@ -1221,6 +1225,8 @@ Both are computed with every sweep from the window's own numbers:
 
 #### Simulated remedies: `solve_remedy`, `solve_power_target` (P3b-2)
 
+**Thresholds are configuration (increment L0):** the wastegate margin is a policy entry (`RemedyRequest::spec.policy`). See [limit_policy.md](limit_policy.md).
+
 `ps/drivetrain/limit_remedies.h`. A sweep attaches an UNSOLVED `Remedy` placeholder (`cost = Simulated`, `solved = false`,
 `current` filled, `required_*` NaN) to `WastegateSaturated`, `BoostAboveTarget` and `TurboRotorCap`; the garage shows a
 "Calculate" button for it. Nothing in `run_dyno_sweep` solves, and a solve is only as good as the maps in the request (a
@@ -1263,6 +1269,8 @@ criterion gate <= 0.965). The same N7b hardware under this criterion still shows
 gate 0.96 >= 0.92), so the solve asks for more than N7b shipped; the difference is the stricter gate criterion, not the model.
 
 ## Buildability rules, change classes and grid helpers (engine garage P4, A10-A12)
+
+**Thresholds are configuration (increment L0):** the rule bands (valve, rod, compression ratio, grid overshoot, cam, lift, gearbox rating) are policy entries (`check_buildable(engine, policy)`, `has_blocking_issue(issues, policy)`); the packing densities, the valve-layout list and the grid helpers' constants are NOT policy and stay in code. See [limit_policy.md](limit_policy.md).
 
 `ps/drivetrain/engine_rules.h` - pure functions of descriptors, for the garage; nothing here runs in `World::step`. Every number is
 in `core/src/drivetrain/engine_rules_table.h` (and P3b's `limit_thresholds.h` for the piston speed), each tagged [C] cited, [D]

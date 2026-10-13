@@ -1,0 +1,266 @@
+{
+  "format": "physics_sim.limit_policy/1",
+  "source": "The compiled defaults of ps::drivetrain::LimitPolicy, entry by entry (increment L0, owner decision 2026-10-13: refusal limits and advice thresholds are configuration). Every number is the literal that was a constexpr in core/src/drivetrain/limit_thresholds.h / engine_rules_table.h before L0, with its source text. tests/unit/test_limit_policy.cpp asserts this file equals the compiled defaults entry by entry.",
+  "refuse_at": "exceeded",
+  "warn_at": "near",
+  "turbo": {
+    "gate_near_opening": {
+      "value": 0.92,
+      "source": "[AS] N7 wastegate-sizing margin (design section 18): opening <= 0.92"
+    },
+    "gate_full_opening": {
+      "value": 0.98,
+      "source": "[AS] 2 % below the actuator's asymptote"
+    },
+    "gate_saturated_window_fraction": {
+      "value": 0.5,
+      "source": "[AS] half of the settled window"
+    },
+    "boost_band_near": {
+      "value": 0.02,
+      "source": "[AS] >> the 20 Pa ripple measured on the hyper (PHYS-058)"
+    },
+    "boost_band_exceeded": {
+      "value": 0.05,
+      "source": "[AS] 5 % of the target boost"
+    },
+    "rotor_near_fraction": {
+      "value": 0.9,
+      "source": "[AS] 10 % below the table edge"
+    },
+    "rotor_limiting_fraction": {
+      "value": 0.97,
+      "source": "[AS] 3 % below the table edge: within the turbine's reach in one more step of load"
+    },
+    "surge_near_flow_ratio": {
+      "value": 1.1,
+      "source": "[AS] twice TurboPair's 1.05 exit hysteresis"
+    },
+    "surge_min_window_fraction": {
+      "value": 0.02,
+      "source": "[AS] 2 % of the window (~10 substeps at 960 Hz x 0.5 s)"
+    },
+    "choke_near_flow_fraction": {
+      "value": 0.9,
+      "source": "[AS] 10 % below the flow capacity"
+    },
+    "choke_limiting_flow_fraction": {
+      "value": 1.0,
+      "source": "[D] the head table's normalised flow = 1 (turbo_pair.h)"
+    },
+    "wastegate_remedy_margin": {
+      "value": 1.1,
+      "source": "[AS] N7b: the bisected area plus 10 %"
+    }
+  },
+  "limiter": {
+    "limiter_near_fraction": {
+      "value": 0.97,
+      "source": "[AS] 3 % below the cut rpm"
+    },
+    "soft_cut_near_bands": {
+      "value": 2.0,
+      "source": "[AS] two bands below the zero-fuel rpm"
+    }
+  },
+  "piston_speed": {
+    "piston_speed_near_mps": {
+      "value": 23.0,
+      "source": "[AS] just above the A25A's 22.4 m/s [D]"
+    },
+    "piston_speed_limiting_mps": {
+      "value": 25.0,
+      "source": "[AS] F1 2.4 L V8 era peak ~25 m/s, recalled"
+    },
+    "piston_speed_exceeded_mps": {
+      "value": 28.0,
+      "source": "[AS] 12 % above the race-engine ceiling"
+    }
+  },
+  "map_grid": {
+    "grid_edge_min_window_fraction": {
+      "value": 0.05,
+      "source": "[AS] 5 % of the window"
+    },
+    "grid_edge_near_span_fraction": {
+      "value": 0.02,
+      "source": "[AS] 2 % of the axis span"
+    }
+  },
+  "driveline": {
+    "driveline_torque_margin": {
+      "value": 1.3,
+      "source": "[AS] design section 18 (owner-visible 'x1.3')"
+    }
+  },
+  "nitrous": {
+    "kit_lambda_near": {
+      "value": 0.9,
+      "source": "[AS] recalled tuning-guide ceiling for a safe wet shot (~12.5:1 gasoline = 0.85, plus margin)"
+    },
+    "kit_lambda_limiting": {
+      "value": 1.0,
+      "source": "[AS] stoichiometric: no fuel margin left under the shot"
+    },
+    "kit_lambda_exceeded": {
+      "value": 1.1,
+      "source": "[AS] 10 % lean of stoichiometric: the shot burns the engine"
+    },
+    "kit_lambda_target": {
+      "value": 0.82,
+      "source": "[AS] middle of the recalled 0.78-0.85 wet-shot range"
+    },
+    "bottle_duration_target_s": {
+      "value": 10.0,
+      "source": "[AS] one drag-strip pass, ~6-12 s recalled"
+    },
+    "bottle_duration_near_factor": {
+      "value": 1.1,
+      "source": "[AS] Near below target x 1.1: the same 10 % as the Closed remedy reserve, so a bottle sized to the remedy margin is just clear"
+    },
+    "bottle_reserve_factor": {
+      "value": 1.1,
+      "source": "[AS] ~10 % of the liquid stays below the pickup"
+    },
+    "bottle_flow_retention_near": {
+      "value": 0.9,
+      "source": "[AS] a 10 % flow loss over one pass is visible on the power"
+    },
+    "bottle_flow_retention_limiting": {
+      "value": 0.8,
+      "source": "[AS] 20 % flow loss over one pass"
+    }
+  },
+  "knock": {
+    "knock_near_retard_deg": {
+      "value": 0.05,
+      "source": "[D] the knock search's own 0.05 deg bisection tolerance (knock.h)"
+    },
+    "knock_limiting_retard_deg": {
+      "value": 5.0,
+      "source": "[AS] ~1-3 % torque on the generated eta_spark curves"
+    }
+  },
+  "valves": {
+    "intake_d_over_bore_1v_min": {
+      "value": 0.34,
+      "source": "[AS] Heywood 1988 sec. 6.3 recalled (2-valve heads ~0.4-0.5 of bore), widened by 15 %"
+    },
+    "intake_d_over_bore_1v_max": {
+      "value": 0.52,
+      "source": "[AS] Heywood 1988 sec. 6.3 recalled; just above the Ford Kent 0.475 (recalled)"
+    },
+    "intake_d_over_bore_2v_min": {
+      "value": 0.28,
+      "source": "[AS] 20 % below the A25A-FKS 0.36 (repo [AS], Heywood Table 6.2 recalled 0.35-0.37)"
+    },
+    "intake_d_over_bore_2v_max": {
+      "value": 0.44,
+      "source": "[AS] widened over the hyper 0.413 [M] and the Honda K20A-like 0.407 (recalled)"
+    },
+    "intake_d_over_bore_3v_min": {
+      "value": 0.22,
+      "source": "[AS] 5-valve heads (3 intake) recalled ~0.28-0.33, widened"
+    },
+    "intake_d_over_bore_3v_max": {
+      "value": 0.34,
+      "source": "[AS] 5-valve heads recalled ~0.28-0.33, widened"
+    },
+    "exhaust_over_intake_min": {
+      "value": 0.78,
+      "source": "[AS] design section 6.2 (production range 0.78-0.90)"
+    },
+    "exhaust_over_intake_max": {
+      "value": 0.9,
+      "source": "[AS] design section 6.2; the hyper (34/38 = 0.895) is the closest shipped engine"
+    },
+    "pack_share_of_ideal": {
+      "value": 0.95,
+      "source": "[AS] the hyper packs 0.89 of the ideal 4-circle density [M]; 0.95 leaves it 6 % of room and still refuses valves with no web between the seats"
+    }
+  },
+  "rod": {
+    "rod_over_crank_radius_min": {
+      "value": 3.0,
+      "source": "[AS] design section 6.3; Heywood sec. 2.1 recalls R = 3-4 for small and medium engines. The Toyota A25A-FKS (155.1 / 51.7) sits exactly on it [M]"
+    },
+    "rod_over_crank_radius_max": {
+      "value": 4.2,
+      "source": "[AS] design section 6.3"
+    }
+  },
+  "compression": {
+    "cr_na_min": {
+      "value": 8.0,
+      "source": "[AS] production gasoline engines since the 1980s run 8-14"
+    },
+    "cr_na_max": {
+      "value": 14.5,
+      "source": "[AS] Mazda SkyActiv-G 14.0 (recalled); the A25A-FKS runs 13.0 [C] SAE 2019-01-0249 via the repo data"
+    },
+    "cr_forced_min": {
+      "value": 7.0,
+      "source": "[AS] low-compression turbo engines (recalled 7.5-8.5)"
+    },
+    "cr_forced_max": {
+      "value": 10.5,
+      "source": "[AS] design section 6.3: no knock model, so forced induction is limited to <= 10.5"
+    }
+  },
+  "grid_coverage": {
+    "grid_overshoot_limiting": {
+      "value": 0.05,
+      "source": "[AS] 5 % past the last node: clamped numbers start to matter (the shipped demo I4: limiter 6800 over a 6500 grid = 4.6 %)"
+    },
+    "grid_overshoot_exceeded": {
+      "value": 0.15,
+      "source": "[AS] 15 % past the last node"
+    }
+  },
+  "cam": {
+    "cam_switch_over_limiter_min": {
+      "value": 0.45,
+      "source": "[AS] Honda VTEC 0.60-0.72 of the limiter (B16A, K20A DC5/FD2, F20C; sources in the comment above), widened"
+    },
+    "cam_switch_over_limiter_max": {
+      "value": 0.85,
+      "source": "[AS] Honda VTEC 0.60-0.72 of the limiter, widened; above it the high cam serves a sliver of the band"
+    },
+    "cam_switch_hysteresis_min_rpm": {
+      "value": 50.0,
+      "source": "[AS] below ~50 rpm a WOT pull's speed ripple toggles the solenoid (no OEM hysteresis found)"
+    },
+    "cam_switch_hysteresis_max_rpm": {
+      "value": 1000.0,
+      "source": "[AS] beyond ~1000 rpm the engine runs the wrong cam for a large part of a lift (no OEM hysteresis found)"
+    },
+    "cam_peak_lift_over_valve_d_max": {
+      "value": 0.4,
+      "source": "[AS] 0.35 seen on an aftermarket K20 race cam (junauto.co.jp), widened; beyond it more lift adds no flow area and stresses the valve train"
+    }
+  },
+  "lift": {
+    "lift_min_node_peak_min_mm": {
+      "value": 0.1,
+      "source": "[AS] below ~0.1 mm the valve barely leaves its seat (BMW's second-generation minimum is 0.18 mm, fenderbender.com Scot Manna 2017)"
+    },
+    "lift_min_node_peak_max_fraction_of_full": {
+      "value": 0.25,
+      "source": "[AS] BMW N52 0.18 of 9.9 mm = 0.018 (fenderbender.com; mymotorlist.com); above a quarter of full lift the throttle sets the light loads"
+    }
+  },
+  "gearbox": {
+    "gearbox_rating_over_limiting": {
+      "value": 0.05,
+      "source": "[AS] transmission plan 7.1: 5 % over the rating; a gearbox is rated with margin, so the first few percent over are a warning (no gearbox wear model exists)"
+    },
+    "gearbox_rating_over_exceeded": {
+      "value": 0.15,
+      "source": "[AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused"
+    },
+    "gearbox_rating_remedy_margin": {
+      "value": 1.1,
+      "source": "[AS] transmission plan 7.1: required rating = peak x 1.1"
+    }
+  }
+}

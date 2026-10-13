@@ -3,7 +3,6 @@
 // stepped model); this file only chooses the values to try and reads the findings / powers back. No physics lives here.
 #include "ps/drivetrain/limit_remedies.h"
 
-#include "limit_thresholds.h"
 
 #include <algorithm>
 #include <cmath>
@@ -182,7 +181,7 @@ Remedy solve_remedy(const RemedyRequest& rq, const LimitFinding& finding, const 
         });
     }
     out.required_min = hi * out.current;
-    out.required_margin = out.required_min * limits::kWastegateRemedyMargin.value;
+    out.required_margin = out.required_min * resolve_limit_policy(rq.spec.policy).wastegate_remedy_margin;
     out.solved = true;
     tr.finish();
     return out;
