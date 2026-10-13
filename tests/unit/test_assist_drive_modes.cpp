@@ -452,15 +452,38 @@ TEST_CASE("L3: attach to a car - generic car, two parts, extends, none, merged h
 // ---------------------------------------------------------------------------------------------------------------
 // B: pedal bend.
 // ---------------------------------------------------------------------------------------------------------------
+TEST_CASE("B1b: the drive-mode bend is gated by gearbox kind (pedal plan P1)", "[assist][drive_modes][vehicle][drivetrain][pedal]") {
+    using namespace ps::drivetrain;
+    // No shipped gearbox kind takes the bend: a manual and a sequential gearbox keep the driver's pedal.
+    CHECK_FALSE(gearbox_takes_drive_bend(GearboxType::Manual));
+    CHECK_FALSE(gearbox_takes_drive_bend(GearboxType::Sequential));
+    Curve1D curve;
+    curve.x = {0.0, 0.5, 1.0};
+    curve.y = {0.0, 0.3, 1.0};
+    ThrottleStage manual; // configured as Powertrain does for a manual gearbox
+    manual.configure(ThrottleInput::Electronic, true, curve, -1, gearbox_takes_drive_bend(GearboxType::Manual));
+    for (int i = 0; i <= 20; ++i) {
+        const real pedal = 0.05 * i;
+        ComponentSubstepCtx ctx;
+        ctx.throttle = pedal;
+        ctx.drive_bend_x = 0.6;
+        ctx.drive_bend_y = 0.3;
+        INFO("pedal " << pedal);
+        CHECK(manual.evaluate(ctx).command == curve.evaluate(pedal)); // the bend is skipped bit for bit
+    }
+}
+
 TEST_CASE("B1: ThrottleStage composes the bend after the car's pedal curve and before the hand lever", "[assist][drive_modes][vehicle][drivetrain]") {
     using namespace ps::drivetrain;
     Curve1D curve;
     curve.x = {0.0, 0.5, 1.0};
     curve.y = {0.0, 0.3, 1.0}; // a non-trivial car curve
+    // Pedal plan P1: the bend applies only on a stage configured for a power-request transmission (apply_drive_bend);
+    // B1b checks the gate itself.
     ThrottleStage st;
-    st.configure(ThrottleInput::Electronic, true, curve, -1);
+    st.configure(ThrottleInput::Electronic, true, curve, -1, /*apply_drive_bend=*/true);
     ThrottleStage plain;
-    plain.configure(ThrottleInput::Electronic, true, curve, -1);
+    plain.configure(ThrottleInput::Electronic, true, curve, -1, /*apply_drive_bend=*/true);
     for (const auto& b : {PedalBend{0.6, 0.3}, PedalBend{0.6, 0.8}, PedalBend{0.25, 0.0}, PedalBend{0.9, 1.0}}) {
         for (int i = 0; i <= 20; ++i) {
             const real pedal = 0.05 * i;
@@ -488,7 +511,7 @@ TEST_CASE("B1: ThrottleStage composes the bend after the car's pedal curve and b
     }
     // the hand lever still wins after the bend (max of the two)
     ThrottleStage hand;
-    hand.configure(ThrottleInput::Electronic, false, Curve1D{}, 0);
+    hand.configure(ThrottleInput::Electronic, false, Curve1D{}, 0, /*apply_drive_bend=*/true);
     const real channels[1] = {0.5};
     ComponentSubstepCtx ctx;
     ctx.channels = channels;

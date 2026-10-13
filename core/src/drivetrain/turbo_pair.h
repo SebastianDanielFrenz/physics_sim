@@ -96,9 +96,13 @@ public:
     // orifice only; both are ignored without a blow-off valve.
     // hold_control (Boost B0): a gearshift is in progress (TcuRequest::hold_boost_control); the boost
     // controller holds its state - see the boost-control comment below.
+    // target_pa (Pedal plan P1): the ECU's charge-pressure target (Pa abs) from the manual pedal law; < 0 = the
+    // pre-P1 plate law (target = ambient + target_boost * plate). At or below ambient the wastegate is commanded
+    // open and the integral reset (the plate < 10 % rule of the plate law); above, the PID chases
+    // min(target_pa, ambient + target_boost). hold_control wins over both.
     void step(real h, real ambient_pa, real ambient_k, real air_kg_s, real exhaust_kg_s,
               real port_gas_k, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr,
-              bool hold_control = false) {
+              bool hold_control = false, real target_pa = real(-1.0)) {
         const real wr = desc.reference_rpm*real(6.2831853071795864769/60.0);
         const real speed2 = real(2.0)*energy_j/(desc.rotor_inertia_kgm2*wr*wr);
         // Vent flow at the START of the step state (valve opening, charge state
@@ -216,11 +220,12 @@ public:
         real opening = real(1.0);
         if (hold_control) {
             opening = wastegate;
-        } else if (plate < real(0.10)) {
+        } else if (target_pa >= real(0.0) ? !(target_pa > ambient_pa) : plate < real(0.10)) {
             boost_integral = real(0.0);
         } else {
             const real scale = std::min(desc.target_boost_pa,kBoostErrorScalePa);
-            const real target = ambient_pa + desc.target_boost_pa*std::min(plate,real(1.0));
+            const real target = target_pa >= real(0.0) ? std::min(target_pa, ambient_pa + desc.target_boost_pa)
+                                                       : ambient_pa + desc.target_boost_pa*std::min(plate,real(1.0));
             const real e = (target-charge_pa)/scale;
             const real rate = (charge_pa-charge_old)/(h*scale);
             const real closing = desc.wastegate_kp*e - desc.wastegate_kd_s*rate + boost_integral;

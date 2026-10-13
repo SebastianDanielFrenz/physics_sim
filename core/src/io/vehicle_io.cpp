@@ -2053,6 +2053,18 @@ ps::drivetrain::SimulatedEngineDesc read_simulated_fields(const json& j, const s
             throw std::runtime_error(ectx + ": ignition_strategy \"knock_limited\" needs 'knock_margin_deg' (deg crank the ECU "
                                             "keeps below the knock limit, in [0, 10])");
         }
+        // Pedal plan P1 (2.5): the ECU's part-load boost strategy on a turbo engine - "efficient" (default: wastegate first,
+        // the turbo spools only for torque the atmospheric engine cannot make) or "spooled" (the rotor is kept at the boost
+        // cap and the plate throttles; sharper response, more fuel). Read on every engine, used only with forced induction.
+        if (ej.contains("part_load_boost")) {
+            if (!ej.at("part_load_boost").is_string()) throw std::runtime_error(ectx + ": 'part_load_boost' must be a string");
+            const std::string pl = ej.at("part_load_boost").get<std::string>();
+            if (pl == "spooled") {
+                e.part_load_boost = PartLoadBoost::Spooled;
+            } else if (pl != "efficient") {
+                throw std::runtime_error(ectx + ": part_load_boost must be \"efficient\" or \"spooled\", got \"" + pl + "\"");
+            }
+        }
         if (!ej.contains("lambda_target")) throw std::runtime_error(ectx + ": 'lambda_target' is required");
         e.ecu.lambda_target = read_engine_table(ej.at("lambda_target"), ectx + ".lambda_target", "p_im_kpa", kKpa, real(1.0));
         require_positive_y_axis(e.ecu.lambda_target, ectx + ".lambda_target", "p_im_kpa");

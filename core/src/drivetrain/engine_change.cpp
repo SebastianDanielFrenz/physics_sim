@@ -235,6 +235,7 @@ std::vector<EngineFieldChange> list_simulated(const SimulatedEngineDesc& a, cons
     rt(a.idle_bypass_area_m2 != b.idle_bypass_area_m2 || !same(a.idle, b.idle), "/idle_control");
     rt(!same(a.ecu.lambda_target, b.ecu.lambda_target), "/ecu/lambda_target");
     rt(!same(a.ecu.spark_advance_deg, b.ecu.spark_advance_deg), "/ecu/spark_advance_deg");
+    rt(a.part_load_boost != b.part_load_boost, "/ecu/part_load_boost"); // pedal P1: an ECU strategy switch
     // Engine garage P9: the switching rule is ECU runtime data (the maps do not depend on it).
     rt(a.cam_switching.rpm_on != b.cam_switching.rpm_on || a.cam_switching.rpm_off != b.cam_switching.rpm_off ||
            a.cam_switching.min_p_im_pa != b.cam_switching.min_p_im_pa || a.cam_switching.min_oil_c != b.cam_switching.min_oil_c ||

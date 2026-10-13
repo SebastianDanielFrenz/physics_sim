@@ -142,6 +142,21 @@ struct TcuRequest {
     bool hold_boost_control = false;
 };
 
+// Pedal plan P1 (out/transmission_pedal_plan.md 2.2/2.3): the manual pedal law T*(c) = Z + c (F - Z) at one rpm.
+// z_nm: the zero-pedal torque in the current ECU state (fuel cut: the cut torque; otherwise the idle controller's).
+// f_nm: the full-load torque (graph: the WOT curve; simulated NA: the steady WOT; turbo: the dyno-settled WOT curve
+// built at engine construction, refreshed for the live ambient). fired_floor_nm: the smallest FIRED torque (plate at
+// the dashpot / idle position) - the upper edge of the DFCO residual band; NaN where the engine has no band (graph).
+// manual_law: false where the engine keeps the pre-P1 law (governor, mechanical linkage). cut_nm: the fuel-cut torque
+// (motoring at a closed plate) the DFCO band is measured from. All net crank torque.
+struct PedalEnvelope {
+    real cut_nm = 0.0;
+    real z_nm = 0.0;
+    real f_nm = 0.0;
+    real fired_floor_nm = 0.0;
+    bool manual_law = false;
+};
+
 // Hoisted, unchanged except the new theta_c field (PHYS-033 P4 I7a C2, see
 // its own comment below), from EngineTorqueMap::PreSolveResult.
 struct PreSolveResult {
@@ -326,6 +341,11 @@ public:
     // returns its manifold pressure; the graph engine has no manifold and
     // returns the ambient pressure of its last Sensors. Never hashed.
     [[nodiscard]] virtual real intake_pressure_pa() const = 0;
+
+    // Pedal plan P1 (out/transmission_pedal_plan.md 2.2): the manual pedal law's envelope at `rpm` in the
+    // engine's CURRENT ECU state (DFCO latch, idle controller output of the last pre_solve, ambient, friction
+    // estimate). Net crank torque, N*m. Never hashed; for tests and the later automatic power request.
+    [[nodiscard]] virtual PedalEnvelope request_envelope(real rpm) const = 0;
 
     [[nodiscard]] virtual std::uint64_t fold_state_hash(std::uint64_t seed) const = 0;
 

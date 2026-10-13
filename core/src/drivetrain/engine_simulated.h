@@ -74,6 +74,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -144,6 +145,29 @@ struct SimulatedSteadyTables {
     real idle_cap_x = 0.0;
 };
 
+// Pedal plan P1 (out/transmission_pedal_plan.md 2.2, Boost B0 addition 1): a turbo engine's full-load envelope F(n) -
+// the dyno-SETTLED reachable WOT state (run at throttle 1 with the crank held, engine_dyno.cpp's stepped point, ISA,
+// rotor starting at rest; the end-of-window value where a point does not settle), never the configured target. Built
+// once per (maps, turbo hardware, ECU) at engine construction by full_load_envelope() (memoised process-wide) over
+// idle .. just below the limiter in the dyno's 250 rpm steps; Curve1D clamps outside. x = rpm everywhere.
+struct FullLoadEnvelope {
+    vehicle::Curve1D torque_nm;      // F_ref: settled net crank torque
+    vehicle::Curve1D pressure_ratio; // PR_full: settled charge pressure (after the intercooler) / ambient
+    vehicle::Curve1D charge_k;       // settled charge temperature
+    vehicle::Curve1D exhaust_ratio;  // settled turbine-inlet pressure / ambient
+    // F_ref - M_ref: the dyno torque minus the steady model's torque at the same charge/exhaust state (ISA, ECU k = 1).
+    // The live refresh after an ambient or friction-estimate change is F = offset + M_live (plan 2.2).
+    vehicle::Curve1D model_offset_nm;
+    std::uint64_t key = 0; // the memo key it was built for
+};
+
+class SimulatedEngine;
+// Pedal plan P1: the memoised envelope of a turbo engine with an electronic throttle (nullptr otherwise, and for null
+// maps). Allocates and runs ~30 held-crank dyno points (0.2 s for the hyper) on a miss: construction / caller thread
+// only, never a job. Implemented in engine_dyno.cpp (it reuses the dyno's stepped point).
+[[nodiscard]] std::shared_ptr<const FullLoadEnvelope> full_load_envelope(const SimulatedEngineDesc& desc,
+                                                                        const std::shared_ptr<const SimulatedEngineMaps>& maps);
+
 // N2O plan N2 (out/n2o_plan.md section 1.2): the wet-kit flows the engine's charge model
 // reads, from Sensors::nitrous. Constant MASS flows: per crank revolution they are
 // n = mdot_n_kg_s * 2*pi/omega and kf = mdot_kf_kg_s * 2*pi/omega, so their share of the
@@ -202,6 +226,11 @@ public:
     // Reuse an already-built maps object (must come from build_maps(desc)
     // on an equal desc - not checked beyond non-null).
     SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_ptr<const SimulatedEngineMaps> maps);
+    // Pedal plan P1: with an explicit full-load envelope (the two constructors above take full_load_envelope(desc,
+    // maps)). nullptr on a turbo engine = no envelope: a part-throttle command then runs the pre-P1 law (only the
+    // envelope's own WOT dyno points are built this way - they never leave throttle 1).
+    SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_ptr<const SimulatedEngineMaps> maps,
+                    std::shared_ptr<const FullLoadEnvelope> envelope);
 
     [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_maps(const SimulatedEngineDesc& desc);
     // Engine garage P3 (the dyno's naturally aspirated path): the same model data as build_maps WITHOUT the ISA derived
@@ -235,6 +264,10 @@ public:
     [[nodiscard]] real crank_angle() const override { return crank_angle_; }
     [[nodiscard]] real idle_rpm() const override { return desc_idle_rpm_; }
     [[nodiscard]] real intake_pressure_pa() const override { return p_im_; }
+    // Pedal plan P1 (2.2/2.3): Z, F and the fired floor T_fc at rpm in the current ECU state (the idle controller output
+    // and DFCO latch of the last pre_solve, the live ambient and friction estimate). manual_law false on a mechanical
+    // linkage.
+    [[nodiscard]] PedalEnvelope request_envelope(real rpm) const override;
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
     void reset(EngineState state) override;
 
@@ -324,7 +357,24 @@ public:
     // behaviour - callers quantise ambient).
     std::shared_ptr<const SimulatedEngineMaps> apply_pending_maps_swap();
 
+    // Pedal plan P1: also rebuilds the full-load envelope for the new hardware (full_load_envelope, a dyno run on a
+    // memo miss) - caller thread, between steps.
     void replace_turbo_configuration(const TurboPairDesc& desc);
+    // Pedal plan P1 white-box: the envelope in use (nullptr: NA engine, mechanical throttle, or built without one).
+    [[nodiscard]] const FullLoadEnvelope* full_load_envelope_ptr() const { return envelope_.get(); }
+    // Pedal plan P1 test hook (a held engine is a harness, never set by World; not hashed): -1 = the engine's own law,
+    // 0 = the pre-P1 law for every command (two-sided idle PI, max(), boost target ambient + target*plate - the "old
+    // split" the fuel comparison runs against), 1 = efficient split, 2 = spooled split (turbo only).
+    void set_pedal_law_override(int mode) { pedal_law_override_ = mode; }
+    // The charge-pressure target the boost controller chased in the last pre_solve (Pa abs; -1 = the pre-P1 plate law).
+    [[nodiscard]] real boost_target_pa() const { return boost_target_pa_; }
+    // The manual law's torque target T* of the last pre_solve (NaN outside the 0.01 <= c < 1 branch).
+    [[nodiscard]] real pedal_torque_target_nm() const { return pedal_target_nm_; }
+    // Torque the steady model makes at the turbo state (charge supply p_charge/t_charge, turbine inlet p_exhaust), plate
+    // 1, fired, ECU friction scale k: steady manifold pressure, net of the Coulomb row. Static so the envelope builder can
+    // compute M_ref; allocation-free.
+    [[nodiscard]] static real boosted_model_torque(const SimulatedEngineMaps& m, real rpm, real p_charge_pa, real t_charge_k,
+                                                   real p_exhaust_pa, real k_ecu, real hyd_ref_rpm);
 
     // Torque at an arbitrary (omega, p_im) with the given combustion gate
     // (true = fired, the soft-cut taper still applies), starvation factor
@@ -468,6 +518,25 @@ private:
     [[nodiscard]] real node_vacuum_torque(std::size_t k, real rpm, real p_target) const;
     [[nodiscard]] real node_pressure_for_torque(std::size_t k, real rpm, real target, real p_lo, real p_hi) const;
     [[nodiscard]] real vacuum_plate(real omega, real p_target, real u, const NitrousCharge* nc) const;
+    // Pedal plan P1 helpers (engine_simulated.cpp, "manual pedal law"). All const, allocation-free.
+    [[nodiscard]] real steady_idle_torque(real rpm, real plate) const; // the idle model's (idle lift node / low cam) table
+    [[nodiscard]] real full_load_torque(real rpm) const;               // F(n)
+    // Turbo: net torque at manifold pressure p with the CURRENT charge temperature and turbine-inlet pressure, and the
+    // pressure in [p_lo, p_hi] at which it equals target (fixed bisection).
+    [[nodiscard]] real boost_torque_at_p(real omega, real p) const;
+    [[nodiscard]] real boost_pressure_for_torque(real omega, real target, real p_lo, real p_hi) const;
+    // The plate that holds the manifold at p_target from the CURRENT supply (turbo charge or ambient); 1 if it cannot.
+    [[nodiscard]] real holding_plate(real omega, real p_target) const;
+    int pedal_law_override_ = -1;
+    real boost_target_pa_ = -1.0;
+    real pedal_target_nm_ = std::numeric_limits<real>::quiet_NaN();
+    real theta_idle_last_ = 0.0; // NOT hashed: the idle controller output of the last pre_solve (request_envelope)
+    PartLoadBoost part_load_boost_ = PartLoadBoost::Efficient;
+    std::shared_ptr<const FullLoadEnvelope> envelope_;
+    std::shared_ptr<const FullLoadEnvelope> pending_envelope_; // queued with pending_maps_; keeps the old one after a swap
+    // A copy of the construction desc (electronic engines only): what full_load_envelope needs to rebuild the envelope
+    // on a turbo-configuration or maps swap. Shared, never written after construction / a swap.
+    std::shared_ptr<const SimulatedEngineDesc> envelope_desc_;
     // Engine garage P10 state: u_ (hashed only with a family), its target and plate mode (derived each substep, not
     // hashed), the override hook, and each lower node's steady tables (sized at construction, swapped with the pending
     // set on a hot swap, refilled with the others by set_ambient).
@@ -528,6 +597,9 @@ private:
     // Boost-aware idle feed-forward cache (pre_solve): the quantised charge pressure/temperature and turbine-inlet
     // pressure plus the ambient feed-forward it was solved for; boost_idle_ff_ is a pure function of them (not hashed).
     static constexpr real kBoostIdleThresholdPa = 1000.0;
+    // Pedal plan P1 (2.3) [D]: the DFCO residual band's hysteresis, a fraction of the request span F - T_cut (fuel cut is
+    // re-entered only once the target lies this far below the fired floor).
+    static constexpr real kPedalDfcoHysteresis = 0.01;
     real boost_idle_p_ = -1.0, boost_idle_t_ = -1.0, boost_idle_exh_ = -1.0, boost_idle_base_ff_ = -1.0, boost_idle_ff_ = 0.0;
     // Engine thermal plan T1 (vault PHYS-063): the oil-viscosity friction scale. plant_k_ = the PLANT's k (the
     // physical friction: tau_fric and its slope in d; T1b: never the Coulomb caps); ecu_k_ = the ECU's quantised estimate

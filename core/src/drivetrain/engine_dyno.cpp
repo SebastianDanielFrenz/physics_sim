@@ -19,6 +19,8 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -560,9 +562,15 @@ NitrousKitDesc dyno_kit(const NitrousKitDesc& k) {
 
 // The stepped kind: the real runtime engine with the crank held. With a turbo (TurboPair, wastegate PID, charge lag) or
 // without one when a nitrous kit is present (then the engine is the same SimulatedEngine, the turbo findings are skipped).
+// Pedal plan P1: envelope = the full-load envelope a part-throttle point runs against (nullptr at WOT and while the
+// envelope itself is built); end_state (optional) receives the turbo's charge/exhaust state at the end of the run.
+struct EndState {
+    real charge_pa = 0.0, charge_k = 0.0, exhaust_pa = 0.0;
+};
 DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<const SimulatedEngineMaps>& maps, real rpm,
-                        const DynoSweepSpec& spec, Findings& findings) {
-    SimulatedEngine engine(desc, maps);
+                        const DynoSweepSpec& spec, Findings& findings,
+                        const std::shared_ptr<const FullLoadEnvelope>& envelope = nullptr, EndState* end_state = nullptr) {
+    SimulatedEngine engine(desc, maps, envelope);
     if (maps->cam_high && spec.cam_profile >= 0) engine.set_cam_blend_override(spec.cam_profile > 0 ? real(1.0) : real(0.0)); // P9
     // The nitrous system is the car's own (nitrous_system.h): the same flow arithmetic feeds Sensors::nitrous. The bottle is
     // never committed, so it stays at its descriptor fill and its pressure is held for the whole point.
@@ -654,6 +662,11 @@ DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<c
         prev_boost = boost;
         prev_torque = torque;
     }
+    if (end_state != nullptr && engine.turbo() != nullptr) {
+        end_state->charge_pa = engine.turbo()->charge_pa;
+        end_state->charge_k = engine.turbo()->charge_k;
+        end_state->exhaust_pa = engine.turbo()->exhaust_pa;
+    }
     DynoPoint p = settled_window_point(engine, w, rpm, omega, converged, real(k * window_steps) * h, spec, grid, findings);
     p.cam_profile = engine.cam_high_requested() ? 1 : 0; // engine garage P9
     p.lift_u = engine.lift_u();                           // engine garage P10 (1 without a family)
@@ -736,6 +749,106 @@ struct Shared {
 };
 
 } // namespace
+
+// ---------------------------------------------------------------------------------------------------------------
+// Pedal plan P1 (engine_simulated.h FullLoadEnvelope): the dyno-settled WOT curve of a turbo engine, memoised.
+namespace {
+
+struct EnvelopeHash {
+    std::uint64_t h = 14695981039346656037ULL;
+    template <class T> void pod(const T& v) {
+        const auto* b = reinterpret_cast<const unsigned char*>(&v);
+        for (std::size_t i = 0; i < sizeof(T); ++i) {
+            h ^= b[i];
+            h *= 1099511628211ULL;
+        }
+    }
+    void opt(const std::optional<real>& v) {
+        pod(v.has_value());
+        if (v) pod(*v);
+    }
+};
+
+// Every input the WOT run reads besides the maps (whose content hash covers the model, limiter and ECU tables).
+std::uint64_t envelope_key(const SimulatedEngineDesc& d, const SimulatedEngineMaps& m) {
+    EnvelopeHash f;
+    f.pod(m.content_hash);
+    const TurboPairDesc& t = *d.turbo_pair;
+    f.pod(t.maps ? t.maps->content_hash : std::uint64_t{0});
+    f.pod(t.reference_head_pa); f.pod(t.target_boost_pa); f.pod(t.rotor_inertia_kgm2); f.pod(t.reference_rpm);
+    f.pod(t.max_mass_flow_kg_s); f.pod(t.compressor_efficiency); f.pod(t.turbine_efficiency); f.pod(t.turbine_area_m2);
+    f.pod(t.compressible_exhaust); f.opt(t.wastegate_area_m2); f.pod(t.intercooler_effectiveness);
+    f.pod(t.shaft_loss_w_at_reference); f.pod(t.wastegate_kp); f.pod(t.wastegate_ki_per_s); f.pod(t.wastegate_kd_s);
+    f.pod(t.wastegate_actuator_tau_s); f.pod(t.intercooler_dp_pa_at_max_flow);
+    f.pod(t.blow_off_valve.has_value());
+    if (t.blow_off_valve) {
+        const BlowOffValveDesc& b = *t.blow_off_valve;
+        f.pod(b.vent); f.pod(b.crack_dp_pa); f.pod(b.full_open_dp_pa); f.pod(b.effective_area_m2); f.pod(b.tau_s);
+    }
+    f.pod(t.in_cylinder_wall_heat_fraction); f.pod(t.exhaust_wall_heat_capacity_j_k);
+    f.pod(t.exhaust_wall_gas_conductance_w_k); f.pod(t.exhaust_wall_ambient_conductance_w_k); f.pod(t.exhaust_wall_initial_k);
+    f.pod(d.throttle_actuator_tau_s); f.pod(d.idle_rpm); f.pod(d.limiter.rpm); f.pod(d.limiter.type); f.pod(d.limiter.band_rpm);
+    f.pod(d.limiter.hysteresis_rpm);
+    return f.h;
+}
+
+std::mutex g_envelope_mutex;
+std::vector<std::pair<std::uint64_t, std::shared_ptr<const FullLoadEnvelope>>> g_envelopes; // FIFO, kEnvelopeMemo entries
+constexpr std::size_t kEnvelopeMemo = 32; // [AS] distinct engines/turbo configurations per process
+
+} // namespace
+
+std::shared_ptr<const FullLoadEnvelope> full_load_envelope(const SimulatedEngineDesc& desc,
+                                                           const std::shared_ptr<const SimulatedEngineMaps>& maps) {
+    if (!maps || !desc.turbo_pair || desc.throttle_input != ThrottleInput::Electronic || desc.maps_pending ||
+        desc.architecture != EngineArchitecture::Piston4Stroke || !desc.turbo_pair->maps) {
+        return nullptr;
+    }
+    const std::uint64_t key = envelope_key(desc, *maps);
+    {
+        std::lock_guard<std::mutex> lock(g_envelope_mutex);
+        for (const auto& e : g_envelopes) {
+            if (e.first == key) return e.second;
+        }
+    }
+    // WOT, ISA, crank held, rotor from rest (SimulatedEngine::reset): the lower (cold) branch where a held point has two -
+    // reachable from either start state, so a part-load target taken from it can be held from both (owner v12 fixture:
+    // 152 vs 588 kW at 5000 rpm / c 0.5 cold vs spun on the pre-P1 law). idle .. just below the limiter (the fuel-cut latch
+    // or the soft cut's band), the dyno's 250 rpm steps; end-of-window values where a point does not settle (15 s).
+    const real band = desc.limiter.type == LimiterType::SoftCut ? desc.limiter.band_rpm : real(1.0);
+    const real top = std::max(desc.idle_rpm + real(1.0), desc.limiter.rpm - band);
+    const std::vector<real> rpms = default_rpm_grid(desc.idle_rpm, top);
+    DynoSweepSpec spec;
+    spec.throttle = real(1.0);
+    auto env = std::make_shared<FullLoadEnvelope>();
+    env->key = key;
+    for (real rpm : rpms) {
+        Findings ignored;
+        EndState st;
+        const DynoPoint p = stepped_point(desc, maps, rpm, spec, ignored, nullptr, &st);
+        const real amb = spec.ambient.pressure_pa;
+        const real m_ref = SimulatedEngine::boosted_model_torque(*maps, rpm, st.charge_pa, st.charge_k, st.exhaust_pa, real(1.0),
+                                                                 real(2000.0));
+        env->torque_nm.x.push_back(rpm);
+        env->torque_nm.y.push_back(p.torque_nm);
+        env->pressure_ratio.x.push_back(rpm);
+        env->pressure_ratio.y.push_back(st.charge_pa / amb);
+        env->charge_k.x.push_back(rpm);
+        env->charge_k.y.push_back(st.charge_k);
+        env->exhaust_ratio.x.push_back(rpm);
+        env->exhaust_ratio.y.push_back(st.exhaust_pa / amb);
+        env->model_offset_nm.x.push_back(rpm);
+        env->model_offset_nm.y.push_back(p.torque_nm - m_ref);
+    }
+    std::shared_ptr<const FullLoadEnvelope> out = std::move(env);
+    std::lock_guard<std::mutex> lock(g_envelope_mutex);
+    for (const auto& e : g_envelopes) {
+        if (e.first == key) return e.second; // another thread built it meanwhile: one object per key
+    }
+    if (g_envelopes.size() >= kEnvelopeMemo) g_envelopes.erase(g_envelopes.begin());
+    g_envelopes.emplace_back(key, out);
+    return out;
+}
 
 DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, const DynoSweepSpec& spec, jobs::JobSystem* pool,
                           const std::atomic<bool>* cancel) {
@@ -834,6 +947,9 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
         if (!(d.limiter.rpm - band > top)) d.limiter.rpm = top + band + real(1.0);
     }
     const std::shared_ptr<const SimulatedEngineMaps> m = SimulatedEngine::build_maps(d); // throws if maps_pending
+    // Pedal plan P1: a part-throttle point runs the manual law against this sweep's own WOT envelope (built once, before the
+    // jobs; WOT points need none).
+    const std::shared_ptr<const FullLoadEnvelope> envelope = spec.throttle < real(1.0) ? full_load_envelope(d, m) : nullptr;
 
     result.points.assign(rpms.size(), DynoPoint{});
     std::vector<Findings> per_point(rpms.size());
@@ -846,7 +962,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             return;
         }
         try {
-            result.points[i] = stepped_point(d, m, rpms[i], spec, per_point[i]);
+            result.points[i] = stepped_point(d, m, rpms[i], spec, per_point[i], envelope);
             // The limiter findings use the ORIGINAL limiter: the sweep moved it out of the way only to hold WOT.
             limiter_findings(per_point[i], pol, sim->limiter, rpms[i], spec.part_files.engine);
             piston_speed_finding(per_point[i], pol, *sim, rpms[i], spec.part_files.engine);

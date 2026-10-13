@@ -971,8 +971,17 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
 SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc) : SimulatedEngine(desc, build_maps(desc)) {}
 
 SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_ptr<const SimulatedEngineMaps> maps)
+    : SimulatedEngine(desc, maps, full_load_envelope(desc, maps)) {}
+
+SimulatedEngine::SimulatedEngine(const SimulatedEngineDesc& desc, std::shared_ptr<const SimulatedEngineMaps> maps,
+                                 std::shared_ptr<const FullLoadEnvelope> envelope)
     : maps_(std::move(maps)) {
     if (!maps_) throw std::runtime_error("SimulatedEngine: null maps");
+    envelope_ = std::move(envelope);
+    // Pedal plan P1: the ECU's part-load boost strategy and (electronic engines) the desc a turbo or maps swap rebuilds
+    // the full-load envelope from.
+    part_load_boost_ = desc.part_load_boost;
+    if (desc.throttle_input == ThrottleInput::Electronic) envelope_desc_ = std::make_shared<const SimulatedEngineDesc>(desc);
     if (desc.maps_pending) {
         throw std::runtime_error("SimulatedEngine: the engine's maps are pending (it was loaded with EngineMapOptions::generate = "
                                  "false); load it again with generate = true to run it");
@@ -1336,6 +1345,86 @@ real SimulatedEngine::inverse_plate_target(real rpm, real request) const {
     });
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Pedal plan P1 (out/transmission_pedal_plan.md 2.2-2.5): the manual pedal law's building blocks.
+
+// The idle model's fired steady torque at an idle-air plate: the idle lift node's (P10), else the plant's (cam blend).
+real SimulatedEngine::steady_idle_torque(real rpm, real plate) const {
+    if (maps_->has_lift_family()) {
+        return live_steady() ? live_steady_torque_on(lift_node(idle_node_), rpm, plate, true)
+                             : lift_node_tables(idle_node_).steady_torque_nm.value(rpm, plate);
+    }
+    return steady_torque(rpm, plate);
+}
+
+// F(n): steady WOT (naturally aspirated, or a turbo engine without an envelope); a turbo engine's dyno-settled full-load
+// torque, refreshed through the steady model at the live ambient / ECU friction estimate (plan 2.2):
+// F = (F_ref - M_ref) + M(p_amb * PR_full capped at p_amb + target, T_c scaled with T_amb [AS], p_amb * p_exh_ratio).
+real SimulatedEngine::full_load_torque(real rpm) const {
+    if (!(turbo_ && envelope_)) return steady_wot(rpm);
+    const FullLoadEnvelope& e = *envelope_;
+    if (!live_steady()) return e.torque_nm.evaluate(rpm);
+    const real pc = std::min(p_amb_ * e.pressure_ratio.evaluate(rpm), p_amb_ + turbo_->desc.target_boost_pa);
+    const real tc = e.charge_k.evaluate(rpm) * (t_amb_ / kIsaTemperatureK);
+    const real px = p_amb_ * e.exhaust_ratio.evaluate(rpm);
+    return e.model_offset_nm.evaluate(rpm) + boosted_model_torque(*maps_, rpm, pc, tc, px, ecu_k_, hyd_ref_rpm_);
+}
+
+real SimulatedEngine::boosted_model_torque(const SimulatedEngineMaps& m, real rpm, real p_charge_pa, real t_charge_k,
+                                           real p_exhaust_pa, real k_ecu, real hyd_ref_rpm) {
+    const real omega = rpm / kRadPerSecToRpm;
+    const Ambient sup = make_ambient(p_charge_pa, t_charge_k);
+    const Ambient exh = make_ambient(p_exhaust_pa, t_charge_k);
+    const real p = steady_p(m, sup, omega, real(1.0), real(0.0));
+    return evaluate_torque_impl(m, exh, StarterDesc{}, omega, p, true, real(1.0), false, true, nullptr, k_ecu, hyd_ref_rpm).tau - m.c_k;
+}
+
+// Net fired torque at manifold pressure p against the CURRENT turbine-inlet pressure and charge temperature (exactly
+// what evaluate_torque sees), limiter ignored, the ECU's friction estimate, no N2O (the ECU's own model).
+real SimulatedEngine::boost_torque_at_p(real omega, real p) const {
+    const real rt = kGasConstant * turbo_->charge_k;
+    const Ambient exh{turbo_->exhaust_pa, rt, real(1.0) / std::sqrt(rt)};
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
+        return evaluate_torque_impl(mm, exh, StarterDesc{}, omega, p, true, real(1.0), false, true, nullptr, ecu_k_, hyd_ref_rpm_).tau -
+               mm.c_k;
+    });
+}
+
+// The manifold pressure in [p_lo, p_hi] at which boost_torque_at_p meets target (it rises with p); a fixed 30-step
+// bisection [AS] (as node_pressure_for_torque), clamped to the interval.
+real SimulatedEngine::boost_pressure_for_torque(real omega, real target, real p_lo, real p_hi) const {
+    if (boost_torque_at_p(omega, p_lo) >= target) return p_lo;
+    if (boost_torque_at_p(omega, p_hi) <= target) return p_hi;
+    for (int it = 0; it < 30; ++it) {
+        const real mid = real(0.5) * (p_lo + p_hi);
+        if (boost_torque_at_p(omega, mid) < target) p_lo = mid;
+        else p_hi = mid;
+    }
+    return real(0.5) * (p_lo + p_hi);
+}
+
+// The plate holding the manifold at p_target from the current supply (vacuum_plate's construction on manifold_rhs, which
+// reads the turbo's charge state): the throttle flow is linear in the area fraction. 1 when the open plate cannot hold it.
+real SimulatedEngine::holding_plate(real omega, real p_target) const {
+    const ManifoldRhs r1 = manifold_rhs(p_target, omega, real(1.0), real(0.0), nullptr);
+    const real frac1 = maps_->area_fraction.evaluate(real(1.0));
+    if (!(r1.m_thr > real(0.0)) || !(r1.m_cyl < r1.m_thr)) return real(1.0);
+    const real frac = frac1 * std::max(real(0.0), r1.m_cyl) / r1.m_thr;
+    return std::clamp(invert_nondecreasing(maps_->area_fraction, frac), real(0.0), real(1.0));
+}
+
+PedalEnvelope SimulatedEngine::request_envelope(real rpm) const {
+    PedalEnvelope e;
+    e.manual_law = maps_->throttle_input == ThrottleInput::Electronic;
+    const real t_cut = steady_motoring(rpm);
+    const real ff = live_steady() ? live_idle_ff_ : idle_tables().idle_ff;
+    e.fired_floor_nm = steady_idle_torque(rpm, std::min(ff, idle_.max_throttle));
+    e.cut_nm = t_cut;
+    e.z_nm = dfco_active_ ? t_cut : steady_idle_torque(rpm, theta_idle_last_);
+    e.f_nm = full_load_torque(rpm);
+    return e;
+}
+
 void SimulatedEngine::step_cam_switching(const Sensors& sensors, real rpm, real h) {
     if (!maps_->cam_high || cam_override_ >= real(0.0)) return;
     const CamSwitchingDesc& sw = maps_->cam_switching;
@@ -1370,6 +1459,13 @@ void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
     } else {
         turbo_.emplace(desc);
         turbo_->reset(p_amb_,t_amb_);
+    }
+    // Pedal plan P1: F(n) belongs to the hardware - rebuild the full-load envelope (memoised; a dyno run on a miss).
+    if (envelope_desc_) {
+        auto d = std::make_shared<SimulatedEngineDesc>(*envelope_desc_);
+        d->turbo_pair = desc;
+        envelope_ = full_load_envelope(*d, maps_);
+        envelope_desc_ = std::move(d);
     }
 }
 
@@ -1411,6 +1507,8 @@ void SimulatedEngine::request_replace_maps(std::shared_ptr<const SimulatedEngine
             tn.t_k = t_amb_;
         }
     }
+    // Pedal plan P1: the new maps' full-load envelope, built here on the caller thread (never in the tick).
+    pending_envelope_ = envelope_desc_ ? full_load_envelope(*envelope_desc_, new_maps) : nullptr;
     pending_maps_ = std::move(new_maps);
 }
 
@@ -1427,6 +1525,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::apply_pending_maps_s
         std::swap(steady_, pending_steady_);
         if(maps_->cam_high) std::swap(steady_hi_, pending_steady_hi_); // P9: every profile set swaps together
         std::swap(steady_nodes_, pending_steady_nodes_); // P10: every lift node set swaps together (equal sizes; no-op if empty)
+        std::swap(envelope_, pending_envelope_); // pedal P1: the old envelope is released by the next request (caller thread)
         if(live_steady()) set_live_ambient(p_amb_,t_amb_); // request may have preceded a newer atmospheric sample
     } // Identical maps must preserve the control cache/algorithm and remain invisible at any altitude.
     return old;
@@ -1610,7 +1709,30 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         }
     }
 
-    if (state_ == EngineState::Running && theta_req < real(0.01) && rpm > dfco_enable_rpm_ && !als_active_) {
+    // Pedal plan P1 (2.2/2.3): the manual pedal law on an electronic throttle for 0.01 <= c < 1. Outside that range (and
+    // with the test override 0) every line below is the pre-P1 code: c = 0 and c = 1 are bit-identical by construction.
+    const bool part_law = !mech && pedal_law_override_ != 0 && theta_req >= real(0.01) && theta_req < real(1.0);
+    real t_cut = real(0.0), t_fc = real(0.0), f_full = real(0.0);
+    if (part_law) {
+        // The request scale's ends: T_cut (fuel cut, plate closed) and F (full load), and the fired floor T_fc (the dashpot
+        // plate's fired torque - the least a fuelled engine makes at this speed).
+        t_cut = steady_motoring(rpm);
+        const real ff0 = live_steady() ? live_idle_ff_ : idle_tables().idle_ff;
+        t_fc = steady_idle_torque(rpm, std::min(ff0, idle_.max_throttle));
+        f_full = full_load_torque(rpm);
+        // DFCO residual band with hysteresis (plan 2.3): with Z = T_cut the target T*_cut = T_cut + c(F - T_cut); fuel
+        // cut is entered where T*_cut lies below the fired floor by more than kPedalDfcoHysteresis of the span, and left
+        // once T*_cut reaches the floor (or below the re-enable speed, or for anti-lag).
+        const real t_star_cut = t_cut + theta_req * (std::max(f_full, t_cut) - t_cut);
+        if (!dfco_active_) {
+            if (state_ == EngineState::Running && rpm > dfco_enable_rpm_ && !als_active_ &&
+                t_star_cut < t_fc - kPedalDfcoHysteresis * (std::max(f_full, t_cut) - t_cut)) {
+                dfco_active_ = true;
+            }
+        } else if (state_ != EngineState::Running || rpm < dfco_reenable_rpm_ || als_active_ || t_star_cut >= t_fc) {
+            dfco_active_ = false;
+        }
+    } else if (state_ == EngineState::Running && theta_req < real(0.01) && rpm > dfco_enable_rpm_ && !als_active_) {
         dfco_active_ = true;
     } else if (theta_req >= real(0.01) || rpm < dfco_reenable_rpm_ || als_active_) {
         dfco_active_ = false;
@@ -1661,7 +1783,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         // With the pedal pressed the pre-2026-09-29 two-sided law stays: the
         // idle air backs off above idle so part-throttle torque is the pedal's.
         const real e = desc_idle_rpm_ - rpm;
-        if (theta_req < real(0.01)) {
+        if (theta_req < real(0.01) || part_law) { // pedal P1: the manual law keeps the released-pedal (one-sided) form
             theta_idle = std::clamp(ff + idle_.kp_per_rpm * std::max(e, real(0.0)) + idle_integrator_, real(0.0), std::max(cap, ff));
             idle_integrator_ = std::clamp(idle_integrator_ + idle_.ki_per_rpm_s * e * h, real(0.0), std::max(cap - ff, real(0.0)));
         } else {
@@ -1700,6 +1822,26 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         }
     }
 
+    // Pedal plan P1: Z = the c = 0 torque in the current state (T_cut in fuel cut, else the idle controller's fired torque),
+    // T* = Z + c(F - Z), and its request on the steady scale r = (T* - T_cut)/(WOT_amb - T_cut) for the plate inverse
+    // (exactly c for an atmospheric engine whose Z is T_cut). A turbo engine with an envelope splits T* between plate
+    // and wastegate below (gate first; ECU option "spooled").
+    theta_idle_last_ = theta_idle;
+    real request = theta_req;
+    bool turbo_split = false;
+    boost_target_pa_ = real(-1.0);
+    pedal_target_nm_ = std::numeric_limits<real>::quiet_NaN();
+    if (part_law) {
+        const real z = dfco_active_ ? t_cut : steady_idle_torque(rpm, theta_idle);
+        const real t_star = z + theta_req * (std::max(f_full, z) - z);
+        pedal_target_nm_ = t_star;
+        turbo_split = turbo_ && envelope_ && !als_active_ && omega_old > real(0.0);
+        if (!turbo_split) {
+            const real wot = steady_wot(rpm);
+            request = wot > t_cut ? std::clamp((t_star - t_cut) / (wot - t_cut), real(0.0), real(1.0)) : real(1.0);
+        }
+    }
+
     bool limiter_active = false;
     // Engine garage P8 (A16): launch control's second limit (set at the top of pre_solve) replaces the limiter speed.
     const real lim_rpm = (limiter_rpm_override_ > real(0.0) && limiter_rpm_override_ < m.limiter.rpm) ? limiter_rpm_override_ : m.limiter.rpm;
@@ -1726,7 +1868,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
             LiftTargets lt;
             lt.u = lc.idle_u;
             lt.plate = real(0.0);
-            if (theta_req >= real(0.01)) lt = lift_targets(rpm, theta_req);
+            if (theta_req >= real(0.01)) lt = lift_targets(rpm, request);
             u_target_ = lt.u;
             lift_vacuum_mode_ = lt.vacuum_mode;
             if (u_override_ >= real(0.0)) {
@@ -1748,8 +1890,29 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
             // A pressure target (the vacuum range, or the lift resting on the min_u / plate_open_u node): the plate holds it
             // at the lift the plant has NOW (the manifold stays at the target while the shaft moves); otherwise plate open.
             x_plate = lt.p_target_pa > real(0.0) ? vacuum_plate(omega_old, lt.p_target_pa, u_, nc) : lt.plate;
+        } else if (turbo_split) {
+            // Pedal plan P1 turbo split (2.4, Boost B0 addition 2): the manifold pressure p* at which the engine makes T*
+            // against the CURRENT exhaust and charge state, the boost target clamped to
+            // [p_amb, min(p_amb + target, p_amb * PR_full(n))]. Efficient (gate first): p* at or below ambient -> gate open,
+            // the plate holds p* from the supply; above -> plate open, the gate holds p* plus the throttle's own drop.
+            // Spooled: the target sits at the cap and the plate holds p*.
+            const FullLoadEnvelope& env = *envelope_;
+            const real cap = std::max(p_amb_, std::min(p_amb_ + turbo_->desc.target_boost_pa,
+                                                       p_amb_ * env.pressure_ratio.evaluate(rpm)));
+            const real p_star = boost_pressure_for_torque(omega_old, pedal_target_nm_, kLiftMinPressureFraction * p_amb_, cap);
+            const bool spooled = pedal_law_override_ == 2 || (pedal_law_override_ < 0 && part_load_boost_ == PartLoadBoost::Spooled);
+            if (spooled) {
+                boost_target_pa_ = cap;
+                x_plate = holding_plate(omega_old, p_star);
+            } else if (p_star <= p_amb_) {
+                boost_target_pa_ = p_amb_;
+                x_plate = holding_plate(omega_old, p_star);
+            } else {
+                boost_target_pa_ = std::clamp(p_star + std::max(real(0.0), turbo_->charge_pa - p_im_), p_amb_, cap);
+                x_plate = real(1.0);
+            }
         } else {
-            x_plate = inverse_plate_target(rpm, theta_req);
+            x_plate = inverse_plate_target(rpm, request);
         }
         real x_target = std::max(x_plate, x_idle);
         if (als_active_) x_target = std::max(x_target, als->plate_floor); // I7d D5: anti-lag bypass air
@@ -1770,7 +1933,7 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         // boost while active (a plate below 10 % would otherwise command it open).
         const real boost_plate = (als_active_ && als->boost_target_fraction > x_thr_) ? als->boost_target_fraction : x_thr_;
         turbo_->step(h,p_amb_,t_amb_,turbo_air_kg_s_,turbo_exhaust_kg_s_,turbo_port_k_,boost_plate,p_im_,&maps_->psi,
-                     tcu.hold_boost_control);
+                     tcu.hold_boost_control,boost_target_pa_);
     }
 
     // (4) air step, omega frozen at omega_old
@@ -1877,6 +2040,10 @@ PreSolveResult SimulatedEngine::pre_solve(const Sensors& sensors, const Throttle
         const real mot = steady_motoring(rpm);
         if (mech) {
             r.torque_demand = comb ? steady_torque(rpm, x_thr_) : s * mot;
+        } else if (part_law) {
+            // Pedal plan P1: the manual law's own target (T* >= the idle controller's torque by construction); fuel cut
+            // and an unfired engine demand the motoring torque.
+            r.torque_demand = (comb && !dfco_active_) ? pedal_target_nm_ : s * mot;
         } else {
             const real wot = steady_wot(rpm);
             real demand = s * mot + (comb ? theta_req : real(0.0)) * (wot - mot);
