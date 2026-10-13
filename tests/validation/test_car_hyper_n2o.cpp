@@ -422,6 +422,13 @@ TEST_CASE("N7 whole car: car_hyper_n2o WOT pull report", "[.][diag][n2o]") {
 //     1.5 s = the 1 s ramp plus the 0.5 s it takes to pass the 6000 rpm bin), gain at 6000 and 7000 rpm 500-700 kW = the dyno test's
 //     per-point band for this kit (was 300-430 / 380-540, partial flow).
 // Ledgers unchanged: balance_error 4.3e-16, bottle closure <= 7.7e-13 kg, tank 1.9e-13 kg, N2O energy closure 4.8e-15.
+// Confirming run after these bands were committed (5d95a95): all 8 [n2o] validation cases pass, 211 assertions, values exactly as above.
+// RECORDED SABOTAGES (2026-10-13):
+//   PS_SABOTAGE_N7_JET=0.8 (N2O jet 3.81 -> 3.05 mm) on the 6th-gear pull: max flow 157.7 g/s, N2O 806.9 g, pull 5.42 s vs baseline
+//     8.00 s, gain +403.2/+385.2 kW - 5 asserts fail (max flow > 241, N2O > 880, pull < 0.65 x baseline, both gains > 500).
+//   PS_SABOTAGE_N7_NO_TC_RUNUP=1 (the old TC-off run-up): both pulls still PASS (3rd: arm 2849 rpm / 66.5 km/h after run-up wheelspin,
+//     pull 0.433 s vs 1.150 s, N2O 34.6 g, kappa 1.49; 6th: arm 4895 rpm, 4.29 s vs 8.17 s, +627.2/+652.8 kW) - recorded as a
+//     robustness result, not a detection: the bands check the pull, and with the new entry shifts they no longer depend on the run-up.
 // ===========================================================================
 namespace {
 
