@@ -1069,12 +1069,13 @@ between two torques the engine can make at the current speed:
   the fired floor `T_fc` (the dashpot plate's fired torque); it is re-entered only `0.01 (F - T_cut)` below `T_fc`
   (hysteresis), and left once it reaches `T_fc`. The band is a few % of pedal.
 - **Turbo engine**: `F` is the dyno-SETTLED reachable WOT curve, never the configured boost target: at construction the
-  engine runs the dyno's held-crank WOT point (`run_dyno_sweep`'s stepped kind, ISA, the rotor starting at rest, 250 rpm
-  steps from idle to just below the limiter; the end-of-window value where a point does not settle) and keeps torque,
-  charge pressure ratio `PR_full`, charge temperature and turbine-inlet pressure ratio per rpm (memoised per maps +
-  turbo hardware + ECU; ~0.2 s for the hyper on a miss). The rotor-at-rest start is the lower branch where a held point has
-  two, reachable from both start states, so a part-load target taken from it can be held whether the rotor was spun
-  or not. A live ambient or friction-estimate change refreshes `F` through the steady model at the same pressure ratio
+  engine runs the dyno's held-crank WOT point (`run_dyno_sweep`'s stepped kind, ISA, 250 rpm steps from idle to just
+  below the limiter; the end-of-window value where a point does not settle) twice per rpm - the rotor starting at rest,
+  and pre-spun (5 s WOT at `min(top, rpm + 1500)`, then the crank ramped down at 250 rpm/s) - and keeps the higher
+  torque with its charge pressure ratio `PR_full`, charge temperature and turbine-inlet pressure ratio (memoised per
+  maps + turbo hardware + ECU; ~0.6 s for the hyper on a miss). Where a held point has two branches (the hyper at
+  1950 rpm: a cold rotor creeps for minutes at ~465 N*m, a spun one holds 1.8 bar and 1168 N*m) `F` is the spooled one,
+  so full pedal gives `F` without a step at `c = 1`. A live ambient or friction-estimate change refreshes `F` through the steady model at the same pressure ratio
   (`F = (F_ref - M_ref) + M_live`). The ECU solves the manifold pressure `p*` at which the engine makes `T*` against the
   present exhaust and charge state, and splits it by `ecu.part_load_boost`:
   - `"efficient"` (default, wastegate first): `p* <= p_amb` - wastegate open, the plate holds `p*`; above - plate open,

@@ -23,7 +23,8 @@
 //       band (target and F come from the same request_envelope): F within 1 % of the dyno-settled envelope table.
 //   H2  hyper ascending sweeps at 2000/3000/4000/5000/6000/7000 rpm: (a)-(c) as N*, settle 4.0 s / mean 1.0 s.
 //       (e) ADDED 2026-10-13 with the spun-branch envelope (coordinator decision 3), before its first run: no step at
-//       c = 1 - |T(1) - F| <= 0.02 F + 5 N*m (pre-fix: 2000 rpm F 464.86 vs T(1) 599.31 after the sweep).
+//       c = 1 - |T(1) - F| <= 0.02 F + 5 N*m (pre-fix: 2000 rpm F 464.86 vs T(1) 599.31 after the sweep; with the
+//       pre-spun branch [M] 2000 rpm F 1171.53 vs T(1) 1175.88).
 //   H3  hyper cold (rotor at rest) vs spun (3 s WOT first) at 5000 rpm, c = 0.3/0.5/0.7, 20 s each: |T_cold - T_spun|
 //       <= 0.01 F + 1 N*m (no cold/spun bistability).
 //   V12 owner fixture (tests/support/fixtures/assists/v12, 15.48 bar target) at 5000 rpm, a cold engine per c = 0.1 ...
@@ -59,8 +60,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <variant>
@@ -467,6 +470,64 @@ void check_world(const std::string& name, const vehicle::VehicleDesc& desc) {
     CHECK(a.worst_balance <= 5e-8);
 }
 } // namespace
+
+// Hidden diagnosis (not a band): the hyper's WOT history at a held rpm - after an ascending sweep to c = 0.98 (4 s per
+// step), then c = 1 for 30 s; and a fresh engine pre-spun as the envelope builder does. PS_PEDAL_DIAG_RPM (default 2000).
+TEST_CASE("P1 H2 diag: WOT history at a held rpm", "[.][diag][pedal]") {
+    const SimulatedEngineDesc d = load_sim("hyper_v8_one1_audio.json");
+    real rpm = 2000.0;
+#if defined(_MSC_VER) || defined(_WIN32)
+    char* buf = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&buf, &len, "PS_PEDAL_DIAG_RPM") == 0 && buf != nullptr) {
+        if (*buf) rpm = std::stod(buf);
+        std::free(buf);
+    }
+#else
+    if (const char* v = std::getenv("PS_PEDAL_DIAG_RPM"); v && *v) rpm = std::stod(v);
+#endif
+    // Envelope memo miss: the first construction in this process builds it (cold and pre-spun run per grid rpm).
+    const auto t0 = std::chrono::steady_clock::now();
+    SimulatedEngine e(d);
+    std::printf("[pedal H2 diag] engine construction incl. envelope build %.3f s\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    e.reset(EngineState::Running);
+    for (int k = 0; k <= 49; ++k) (void)hold(e, rpm, 0.02 * k, k == 0 ? 3.0 : 4.0, 1.0);
+    for (int s = 1; s <= 30; ++s) {
+        const Mean m = hold(e, rpm, 1.0, 1.0, 1.0);
+        std::printf("[pedal H2 diag] %.0f rpm after sweep, c 1, t %2d s: T %8.2f boost %.3f bar\n", rpm, s, m.torque, m.boost_bar);
+    }
+    std::printf("[pedal H2 diag] envelope F %.2f\n", e.request_envelope(rpm).f_nm);
+    if (const FullLoadEnvelope* env = e.full_load_envelope_ptr())
+        for (std::size_t i = 0; i < env->torque_nm.x.size(); ++i)
+            std::printf("[pedal H2 diag] envelope node %6.0f rpm: F %8.2f PR %.3f\n", env->torque_nm.x[i], env->torque_nm.y[i],
+                        env->pressure_ratio.y[i]);
+    const real top = d.limiter.rpm - (d.limiter.type == LimiterType::SoftCut ? d.limiter.band_rpm : 1.0);
+    // The envelope builder's pre-spin (engine_dyno.cpp): WOT 5 s at min(top, rpm + 1500), a crank ramp down to rpm, held.
+    for (real ramp : {1000.0, 250.0}) {
+        SimulatedEngine f(d);
+        f.reset(EngineState::Running);
+        const real start = std::min(top, rpm + 1500.0);
+        (void)hold(f, start, 1.0, 5.0, 1.0);
+        const long n = static_cast<long>((start - rpm) / ramp / kH + 0.5);
+        for (long i = 1; i <= n; ++i) {
+            const real r_i = start + (rpm - start) * static_cast<real>(i) / static_cast<real>(n);
+            Sensors sp;
+            sp.omega = r_i * kTwoPi / 60.0;
+            sp.ignition = 1.0;
+            const PreSolveResult r = f.pre_solve(sp, ThrottleCommand{1.0, 0.0, 1.0}, TcuRequest{}, kH);
+            (void)f.post_solve(sp.omega, kH);
+            if (i % 480 == 0)
+                std::printf("[pedal H2 diag] ramp %.0f rpm/s at %6.0f rpm: tau0 %8.2f charge %.3f bar gate %.3f integral %.3f\n", ramp, r_i,
+                            r.tau0, (f.turbo()->charge_pa - 101325.0) / 1e5, f.turbo()->wastegate, f.turbo()->boost_integral);
+        }
+        for (int s = 1; s <= 10; ++s) {
+            const Mean m = hold(f, rpm, 1.0, 1.0, 1.0);
+            std::printf("[pedal H2 diag] ramp %.0f held %.0f rpm t %2d s: T %8.2f boost %.3f bar gate %.3f integral %.3f\n", ramp, rpm, s,
+                        m.torque, m.boost_bar, f.turbo()->wastegate, f.turbo()->boost_integral);
+        }
+    }
+}
 
 TEST_CASE("P1 W1: World part pedal - 1 vs 10 workers, zero allocation, ledger closure (car_sedan_sim)", "[pedal][drivetrain][vehicle][determinism]") {
     check_world("car_sedan_sim", load_vehicle(kData + "/vehicles/car_sedan_sim.json"));

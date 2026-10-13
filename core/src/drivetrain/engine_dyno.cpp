@@ -563,13 +563,21 @@ NitrousKitDesc dyno_kit(const NitrousKitDesc& k) {
 // The stepped kind: the real runtime engine with the crank held. With a turbo (TurboPair, wastegate PID, charge lag) or
 // without one when a nitrous kit is present (then the engine is the same SimulatedEngine, the turbo findings are skipped).
 // Pedal plan P1: envelope = the full-load envelope a part-throttle point runs against (nullptr at WOT and while the
-// envelope itself is built); end_state (optional) receives the turbo's charge/exhaust state at the end of the run.
+// envelope itself is built); end_state (optional) receives the turbo's charge/exhaust state at the end of the run;
+// pre_spin_rpm > 0 first runs kPreSpinS of WOT with the crank at that speed (a spun rotor and a full charge), ramps the
+// crank down to rpm at kPreSpinRampRpmPerS, then holds rpm as usual - the spooled state a slow creep would take minutes
+// to reach from rest.
 struct EndState {
     real charge_pa = 0.0, charge_k = 0.0, exhaust_pa = 0.0;
 };
+constexpr real kPreSpinS = 5.0;                // [AS] WOT at the pre-spin speed (hyper 3rd-gear spool to 90 % in 1.37 s, B0)
+constexpr real kPreSpinAboveRpm = 1500.0;      // [AS] pre-spin speed = min(top of the grid, rpm + this)
+constexpr real kPreSpinRampRpmPerS = 250.0;    // [AS] crank ramp down to the held rpm (hyper 1950 rpm: 1000 rpm/s lands
+                                               // below the closed gate's holding point, 250 rpm/s holds 1.8 bar, measured)
 DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<const SimulatedEngineMaps>& maps, real rpm,
                         const DynoSweepSpec& spec, Findings& findings,
-                        const std::shared_ptr<const FullLoadEnvelope>& envelope = nullptr, EndState* end_state = nullptr) {
+                        const std::shared_ptr<const FullLoadEnvelope>& envelope = nullptr, EndState* end_state = nullptr,
+                        real pre_spin_rpm = 0.0) {
     SimulatedEngine engine(desc, maps, envelope);
     if (maps->cam_high && spec.cam_profile >= 0) engine.set_cam_blend_override(spec.cam_profile > 0 ? real(1.0) : real(0.0)); // P9
     // The nitrous system is the car's own (nitrous_system.h): the same flow arithmetic feeds Sensors::nitrous. The bottle is
@@ -607,6 +615,26 @@ DynoPoint stepped_point(const SimulatedEngineDesc& desc, const std::shared_ptr<c
     }
     const GridProbe grid = make_grid_probe(desc, engine.maps(), spec.ambient.pressure_pa);
     probe.grid = grid;
+
+    if (pre_spin_rpm > real(0.0)) {
+        Sensors sp = s;
+        sp.omega = pre_spin_rpm * kTwoPiRad / real(60.0);
+        const long n_pre = static_cast<long>(std::floor(kPreSpinS * kStepHz + real(0.5)));
+        for (long i = 0; i < n_pre; ++i) {
+            (void)engine.pre_solve(sp, ThrottleCommand{real(1.0), real(0.0), real(1.0)}, TcuRequest{}, h);
+            (void)engine.post_solve(sp.omega, h);
+        }
+        // Then down to rpm at kPreSpinRampRpmPerS, still WOT, so the wastegate PID follows and the charge stays at its
+        // target wherever the closed gate can hold it (an instant drop leaves the high-rpm gate opening while the exhaust
+        // energy collapses, and the rotor falls back onto the slow creep a cold start shows - hyper 2000 rpm, measured).
+        const long n_ramp = static_cast<long>(std::floor((pre_spin_rpm - rpm) / kPreSpinRampRpmPerS * kStepHz + real(0.5)));
+        for (long i = 1; i <= n_ramp; ++i) {
+            const real r_i = pre_spin_rpm + (rpm - pre_spin_rpm) * real(i) / real(n_ramp);
+            sp.omega = r_i * kTwoPiRad / real(60.0);
+            (void)engine.pre_solve(sp, ThrottleCommand{real(1.0), real(0.0), real(1.0)}, TcuRequest{}, h);
+            (void)engine.post_solve(sp.omega, h);
+        }
+    }
 
     WindowStats w;
     // Convergence (measured on the hyper, see engine.md "Dyno sweep"): a window pair passes when the boost mean moved
@@ -811,10 +839,11 @@ std::shared_ptr<const FullLoadEnvelope> full_load_envelope(const SimulatedEngine
             if (e.first == key) return e.second;
         }
     }
-    // WOT, ISA, crank held, rotor from rest (SimulatedEngine::reset): the lower (cold) branch where a held point has two -
-    // reachable from either start state, so a part-load target taken from it can be held from both (owner v12 fixture:
-    // 152 vs 588 kW at 5000 rpm / c 0.5 cold vs spun on the pre-P1 law). idle .. just below the limiter (the fuel-cut latch
-    // or the soft cut's band), the dyno's 250 rpm steps; end-of-window values where a point does not settle (15 s).
+    // WOT, ISA, crank held, run twice per rpm: rotor from rest (SimulatedEngine::reset) and pre-spun (kPreSpinS of WOT at
+    // min(top, rpm + kPreSpinAboveRpm), then a crank ramp down); the higher settled torque and its charge/exhaust state are kept (coordinator decision
+    // 2026-10-13: F is the reachable state, so full pedal makes F - no step at c = 1 where a held point has two branches;
+    // hyper 1950 rpm: cold ~465 N*m creeping for minutes vs 1169 N*m at 1.8 bar spun). idle .. just below the limiter (the fuel-cut latch or the soft cut's band),
+    // the dyno's 250 rpm steps; end-of-window values where a point does not settle (15 s).
     const real band = desc.limiter.type == LimiterType::SoftCut ? desc.limiter.band_rpm : real(1.0);
     const real top = std::max(desc.idle_rpm + real(1.0), desc.limiter.rpm - band);
     const std::vector<real> rpms = default_rpm_grid(desc.idle_rpm, top);
@@ -824,8 +853,12 @@ std::shared_ptr<const FullLoadEnvelope> full_load_envelope(const SimulatedEngine
     env->key = key;
     for (real rpm : rpms) {
         Findings ignored;
-        EndState st;
-        const DynoPoint p = stepped_point(desc, maps, rpm, spec, ignored, nullptr, &st);
+        EndState st_cold, st_spun;
+        const DynoPoint p_cold = stepped_point(desc, maps, rpm, spec, ignored, nullptr, &st_cold);
+        const DynoPoint p_spun = stepped_point(desc, maps, rpm, spec, ignored, nullptr, &st_spun, std::min(top, rpm + kPreSpinAboveRpm));
+        const bool spun = p_spun.torque_nm > p_cold.torque_nm;
+        const DynoPoint& p = spun ? p_spun : p_cold;
+        const EndState& st = spun ? st_spun : st_cold;
         const real amb = spec.ambient.pressure_pa;
         const real m_ref = SimulatedEngine::boosted_model_torque(*maps, rpm, st.charge_pa, st.charge_k, st.exhaust_pa, real(1.0),
                                                                  real(2000.0));

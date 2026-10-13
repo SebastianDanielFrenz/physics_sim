@@ -382,12 +382,16 @@ TEST_CASE("C11 T2 manifold time constant; linearly-implicit air step at the smal
     }
 }
 
-TEST_CASE("C11 T4a electronic pedal law: steady torque = motoring + request*(wot - motoring)", "[drivetrain][engine][mvem]") {
+// Pedal plan P1 re-pin (2026-10-13): the electronic law is now T* = Z + r (F - Z) (Z = the idle air's fired torque, or the
+// cut torque in DFCO; F = steady WOT; request_envelope), was motoring + r (wot - motoring). With the old target the P1
+// engine misses by 1.2-5.1 % of the span (largest at r 0.1, where Z - motoring is a larger share).
+TEST_CASE("C11 T4a electronic pedal law: steady torque = Z + request*(F - Z)", "[drivetrain][engine][mvem]") {
     const auto desc = fx::electronic_engine();
     const real ck = elec_maps()->c_k;
-    auto steady_net = [&](real rpm, real r, real ignition) {
+    auto steady_net = [&](real rpm, real r, real ignition, PedalEnvelope* env = nullptr) {
         SimulatedEngine e(desc, elec_maps());
         const PreSolveResult res = hold(e, w_of(rpm), r, 2880, kH, ignition);
+        if (env != nullptr) *env = e.request_envelope(rpm);
         return res.tau0 - ck;
     };
     struct Pt {
@@ -406,9 +410,10 @@ TEST_CASE("C11 T4a electronic pedal law: steady torque = motoring + request*(wot
         const Pt& p = pts[i];
         const real wot = steady_net(p.rpm, 1.0, 1.0);
         const real mot = steady_net(p.rpm, 0.0, 0.0);
-        const real t = steady_net(p.rpm, p.r, 1.0);
-        const real target = mot + p.r * (wot - mot);
-        const real err = std::abs(t - target) / (wot - mot);
+        PedalEnvelope env;
+        const real t = steady_net(p.rpm, p.r, 1.0, &env);
+        const real target = env.z_nm + p.r * (env.f_nm - env.z_nm);
+        const real err = std::abs(t - target) / (env.f_nm - env.z_nm);
         (i < 16 ? worst_grid : worst_off) = std::max(i < 16 ? worst_grid : worst_off, err);
         std::printf("[C11 T4a] %.0f rpm r %.2f: mot %.3f wot %.3f -> %.4f vs %.4f N*m (%.4f %% of span)\n", p.rpm, p.r, mot, wot, t, target, 100.0 * err);
         CHECK(err < 0.01);
@@ -421,10 +426,15 @@ TEST_CASE("C11 T4a electronic pedal law: steady torque = motoring + request*(wot
         const PreSolveResult r0 = hold(e, w, 0.3, 2880);
         const real t_hi = steady_net(3000.0, 0.6, 1.0) + ck;
         const real x_old = e.x_thr();
-        const real target = e.maps().inverse_plate.value(3000.0, 0.6);
+        // Pedal P1 re-pin: the plate target is the inverse at the torque-equivalent request of T* (not at the pedal); it is
+        // taken as the plate a fresh engine settles at with pedal 0.6 (the lag converges to it). Was inverse_plate(3000,
+        // 0.6) to 1e-15; with P1 that misses by 4.8e-5.
+        SimulatedEngine e_ss(desc, elec_maps());
+        (void)hold(e_ss, w, 0.6, 2880);
+        const real target = e_ss.x_thr();
         const PreSolveResult r1 = hold(e, w, 0.6, 1);
         const real a = kH / (0.05 + kH);
-        CHECK(std::abs(e.x_thr() - (x_old + a * (target - x_old))) < 1e-15);
+        CHECK(std::abs(e.x_thr() - (x_old + a * (target - x_old))) < 1e-9);
         const real frac1 = (r1.tau0 - r0.tau0) / (t_hi - r0.tau0);
         int n90 = 1;
         real tau = r1.tau0;
@@ -708,7 +718,14 @@ TEST_CASE("C11 T7 state machine, DFCO, limiter, idle PI, ignition cut", "[drivet
         CHECK_FALSE(r.dfco_active);
         r = hold(e, w_of(2500.0), 0.0, 1);
         CHECK(r.dfco_active);
+        // Pedal P1 re-pin: 0.02 now lies in the plan-2.3 DFCO residual band (fuel stays cut while T_cut + c (F - T_cut) is
+        // below the fired floor); the pedal that leaves DFCO is the band edge (was CHECK_FALSE at 0.02).
         r = hold(e, w_of(2500.0), 0.02, 1);
+        const PedalEnvelope env = e.request_envelope(2500.0);
+        const real c_exit = (env.fired_floor_nm - env.cut_nm) / (env.f_nm - env.cut_nm);
+        INFO("c_exit " << c_exit);
+        CHECK(r.dfco_active == (0.02 < c_exit));
+        r = hold(e, w_of(2500.0), c_exit + 0.005, 1);
         CHECK_FALSE(r.dfco_active);
     }
     SECTION("FuelCut limiter with hysteresis") {

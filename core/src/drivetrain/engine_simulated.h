@@ -147,7 +147,7 @@ struct SimulatedSteadyTables {
 
 // Pedal plan P1 (out/transmission_pedal_plan.md 2.2, Boost B0 addition 1): a turbo engine's full-load envelope F(n) -
 // the dyno-SETTLED reachable WOT state (run at throttle 1 with the crank held, engine_dyno.cpp's stepped point, ISA,
-// rotor starting at rest; the end-of-window value where a point does not settle), never the configured target. Built
+// the higher of a rotor-at-rest and a pre-spun run per rpm; the end-of-window value where a point does not settle), never the configured target. Built
 // once per (maps, turbo hardware, ECU) at engine construction by full_load_envelope() (memoised process-wide) over
 // idle .. just below the limiter in the dyno's 250 rpm steps; Curve1D clamps outside. x = rpm everywhere.
 struct FullLoadEnvelope {
@@ -163,7 +163,7 @@ struct FullLoadEnvelope {
 
 class SimulatedEngine;
 // Pedal plan P1: the memoised envelope of a turbo engine with an electronic throttle (nullptr otherwise, and for null
-// maps). Allocates and runs ~30 held-crank dyno points (0.2 s for the hyper) on a miss: construction / caller thread
+// maps). Allocates and runs ~30 held-crank dyno points (cold and pre-spun, 0.6 s for the hyper) on a miss: construction / caller thread
 // only, never a job. Implemented in engine_dyno.cpp (it reuses the dyno's stepped point).
 [[nodiscard]] std::shared_ptr<const FullLoadEnvelope> full_load_envelope(const SimulatedEngineDesc& desc,
                                                                         const std::shared_ptr<const SimulatedEngineMaps>& maps);
