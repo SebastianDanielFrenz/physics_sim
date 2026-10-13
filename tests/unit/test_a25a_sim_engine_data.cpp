@@ -50,7 +50,7 @@ namespace {
 
 std::string sim_car_path() { return std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_sim.json"; }
 std::string sim_engine_path() { return std::string(PS_SOURCE_DIR) + "/data/engines/toyota_a25a_fks_sim.json"; }
-std::string c7_car_path() { return std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_fuel.json"; }
+std::string c7_car_path() { return std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_fuel.json"; }
 
 const SimulatedEngineDesc* sim_engine_of(const ps::vehicle::VehicleDesc& d) {
     for (const auto& c : d.powertrain.components) {

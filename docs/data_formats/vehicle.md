@@ -1,6 +1,7 @@
 # Vehicle format — `physics_sim.vehicle/2`
 
-Files: `data/vehicles/*.json`. Loader: `ps::io::load_vehicle_json`
+Files: `data/vehicles/*.json` (five shipped cars; the other reference variants are test fixtures in
+`tests/support/fixtures/vehicles/`, same format, part paths `../../../../data/...`). Loader: `ps::io::load_vehicle_json`
 (`core/src/io/vehicle_io.cpp`); public descriptor:
 `ps::vehicle::VehicleDesc` (`core/include/ps/vehicle/vehicle_desc.h`).
 Powertrain-graph validation beyond parsing happens separately in

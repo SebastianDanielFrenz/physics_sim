@@ -818,7 +818,9 @@ bool PsSimulation::spawn_vehicle(const String& vehicle_name, const String& vehic
         // which is fine once but a needless wait on every "drive.ps1" run.
         // Derived from the vehicle file's own path rather than a new
         // GDExtension parameter: <repo_root>/out/godot_engine_cache, where
-        // repo_root is two directories up from data/vehicles/<file>.json.
+        // repo_root is two directories up from data/vehicles/<file>.json, or
+        // (a reference-car fixture, owner 2026-10-13) four directories up
+        // from tests/support/fixtures/vehicles/<file>.json.
         // A vehicle with no simulated/cycle engine ignores cache_dir
         // entirely (EngineMapOptions' own contract), so this is a no-op
         // for every non-pipe-engine vehicle.
@@ -826,7 +828,9 @@ bool PsSimulation::spawn_vehicle(const String& vehicle_name, const String& vehic
         {
             const std::string vpath = to_std_string(vehicle_json_absolute_path);
             const std::filesystem::path vehicle_dir = std::filesystem::path(vpath).parent_path();
-            const std::filesystem::path repo_root = vehicle_dir.parent_path().parent_path();
+            std::filesystem::path repo_root = vehicle_dir.parent_path().parent_path();
+            if (vehicle_dir.parent_path().filename() == "fixtures" && vehicle_dir.filename() == "vehicles")
+                repo_root = vehicle_dir.parent_path().parent_path().parent_path().parent_path();
             map_options.cache_dir = (repo_root / "out" / "godot_engine_cache").string();
         }
         // A cache miss generates the maps here (car_hyper's 8 x 6 grid is

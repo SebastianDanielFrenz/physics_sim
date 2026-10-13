@@ -832,16 +832,16 @@ TEST_CASE("Garage P1 timing: Sketch and Full map generation on 1/10/22 workers",
     auto from_vehicle = [&](const char* name, const char* file) {
         io::EngineMapOptions o;
         o.generate = false; // validate-only: instant, gives the resolved desc
-        const vehicle::VehicleDesc v = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/" + file, o);
+        const vehicle::VehicleDesc v = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/" + file, o);
         for (const auto& c : v.powertrain.components) {
             if (const auto* e = std::get_if<SimulatedEngineDesc>(&c.params)) {
                 if (e->cycle.has_value()) engines.push_back({name, *e->cycle, e->fuels.front()});
             }
         }
     };
-    from_vehicle("hyper_v8_one1_audio", "car_hyper.json");
-    from_vehicle("demo_i4_pipes", "car_sedan_pipes.json");
-    from_vehicle("toyota_a25a_fks_gen", "car_sedan_gen.json");
+    from_vehicle("hyper_v8_one1_audio", "data/vehicles/car_hyper.json");
+    from_vehicle("demo_i4_pipes", "tests/support/fixtures/vehicles/car_sedan_pipes.json");
+    from_vehicle("toyota_a25a_fks_gen", "tests/support/fixtures/vehicles/car_sedan_gen.json");
     // boosted demo_i4_pipes: a test-local copy with a compressor and two grid rows above ambient
     for (const Engine& e : std::vector<Engine>(engines)) {
         if (e.name != "demo_i4_pipes") continue;

@@ -1,5 +1,5 @@
 // tests/validation/test_vehicle_787b_shuffle.cpp - driveline shuffle after a
-// throttle lift-off on data/vehicles/car_sedan_787b.json (owner request
+// throttle lift-off on tests/support/fixtures/vehicles/car_sedan_787b.json (owner request
 // 2026-09-26: "the shaft should play a major role in the frequency
 // oscillation that can be heard after lifting off the accelerator").
 //
@@ -132,7 +132,7 @@ namespace {
 constexpr real kPi = 3.14159265358979323846;
 constexpr real kRpmToRadS = 2.0 * kPi / 60.0;
 
-std::string vehicle_path() { return std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_787b.json"; }
+std::string vehicle_path() { return std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_787b.json"; }
 
 // A force at the chassis CoM opposing its current velocity, magnitude set by
 // the test before each World::step() (same write-before-step pattern as

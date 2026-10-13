@@ -4,7 +4,9 @@
 Writes, reproducibly (stdlib only, byte-identical on unchanged inputs):
     data/engines/toyota_a25a_fks_gen.json   "kind": "simulated", a C15a "cycle" block, NO "maps" block
                                             (the loader runs the C16a map generator on it)
-    data/vehicles/car_sedan_gen.json        data/vehicles/car_sedan_sim.json with only the engine ref swapped
+    tests/support/fixtures/vehicles/car_sedan_gen.json
+                                            data/vehicles/car_sedan_sim.json with only the engine ref swapped
+                                            (a fixture since 2026-10-13: part paths rebased to ../../../../data/...)
     data/scenarios/vehicle_gen_engine.json  data/scenarios/vehicle_sim_engine.json's bodies/events on car_sedan_gen
                                             plus one throttle lift-off event (PROVISIONAL, see below)
 
@@ -36,7 +38,7 @@ from a25a_author import build_schedule_grid  # noqa: E402  (the SAME IDW griddin
 
 WT = Path(__file__).resolve().parents[2]
 ENGINE_JSON = WT / "data" / "engines" / "toyota_a25a_fks_gen.json"
-VEHICLE_JSON = WT / "data" / "vehicles" / "car_sedan_gen.json"
+VEHICLE_JSON = WT / "tests" / "support" / "fixtures" / "vehicles" / "car_sedan_gen.json"
 SCENARIO_JSON = WT / "data" / "scenarios" / "vehicle_gen_engine.json"
 BASE_VEHICLE_JSON = WT / "data" / "vehicles" / "car_sedan_sim.json"
 BASE_SCENARIO_JSON = WT / "data" / "scenarios" / "vehicle_sim_engine.json"
@@ -411,6 +413,18 @@ def dump_compact(obj, indent: int = 0) -> str:
     return sp + json.dumps(obj)
 
 
+def rebase_part_paths(node):
+    """data/vehicles/x.json -> tests/support/fixtures/vehicles/x.json: every "../part/file.json" value becomes
+    "../../../../data/part/file.json" (pure path values only; free text is untouched)."""
+    if isinstance(node, dict):
+        return {k: rebase_part_paths(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [rebase_part_paths(v) for v in node]
+    if isinstance(node, str) and node.startswith("../") and node.endswith(".json") and " " not in node:
+        return "../../../../data/" + node[3:]
+    return node
+
+
 def vehicle_json() -> dict:
     base = json.loads(BASE_VEHICLE_JSON.read_text(encoding="utf-8"))
     out = {}
@@ -433,14 +447,14 @@ def vehicle_json() -> dict:
             out[k] = pt
         else:
             out[k] = v
-    return out
+    return rebase_part_paths(out)
 
 
 def scenario_json() -> dict:
     base = json.loads(BASE_SCENARIO_JSON.read_text(encoding="utf-8"))
     base["name"] = "vehicle_gen_engine"
     for v in base["vehicles"]:
-        v["vehicle_json_path"] = "../vehicles/car_sedan_gen.json"
+        v["vehicle_json_path"] = "../../tests/support/fixtures/vehicles/car_sedan_gen.json"
     ev = base["control_events"]
     # PROVISIONAL: one throttle lift-off before the brake event so the S5 effect assertion
     # "p_im < 40 kPa within 0.5 s of lift-off" has a lift-off to observe.

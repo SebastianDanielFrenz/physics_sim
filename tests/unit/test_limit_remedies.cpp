@@ -237,7 +237,7 @@ TEST_CASE("R3 dyno rules: ramp skipped, duty-time cap off, naturally aspirated e
 
     // A naturally aspirated simulated engine with a kit is stepped, not the instant steady point.
     const ComponentParams a25a = io::load_engine_json(kEngines + "toyota_a25a_fks_sim.json");
-    const vehicle::VehicleDesc sedan = io::load_vehicle_json(kVehicles + "car_sedan_gen_n2o.json", map_options(MapQuality::Sketch));
+    const vehicle::VehicleDesc sedan = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_gen_n2o.json", map_options(MapQuality::Sketch));
     const auto sedan_kit = nitrous_from_powertrain(sedan.powertrain);
     REQUIRE(sedan_kit.has_value());
     DynoSweepSpec na = spec_at({4500.0}, std::nullopt);

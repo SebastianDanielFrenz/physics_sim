@@ -529,7 +529,7 @@ TEST_CASE("P7 K5: the Powertrain burns the tank fuel's knock table", "[knock][dr
     eng["fuels"] = json::array({fuel_path("e10"), fuel_path("e85")});
     const std::string eng_path = td.write("engine.json", eng);
     // car_sedan_gen.json with every relative path made absolute, the engine above and (optionally) a fuel tank.
-    const std::filesystem::path vdir = kSrc / "data" / "vehicles";
+    const std::filesystem::path vdir = kSrc / "tests" / "support" / "fixtures" / "vehicles";
     json v = json::parse(std::ifstream(vdir / "car_sedan_gen.json"));
     std::function<void(json&)> absolutise = [&](json& n) {
         if (n.is_object() || n.is_array()) {

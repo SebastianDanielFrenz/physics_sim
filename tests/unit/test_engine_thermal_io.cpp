@@ -131,7 +131,9 @@ void check_cooling_bad(const char* what, const Mutator& m, const char* message) 
 
 // A vehicle file copy whose relative paths are made absolute so it can live in a temp directory.
 json absolutised_vehicle(const std::string& name) {
-    const std::string path = kRoot + "/data/vehicles/" + name;
+    // Reference-car variants are fixtures (owner 2026-10-13); car_sedan.json and the other shipped cars stay in data/vehicles.
+    const std::string fixture = kRoot + "/tests/support/fixtures/vehicles/" + name;
+    const std::string path = std::filesystem::exists(fixture) ? fixture : kRoot + "/data/vehicles/" + name;
     json v = read_json(path);
     const std::filesystem::path base = std::filesystem::path(path).parent_path();
     auto absolutise = [&](json& node, const char* key) {
@@ -254,11 +256,11 @@ TEST_CASE("I8 extends chain: a user file overrides only what it names", "[therma
 
 TEST_CASE("I8 vehicle opt-in keys", "[thermal][drivetrain][io]") {
     SECTION("shipped thermal vehicles opt in, shipped plain vehicles do not") {
-        const auto sim = io::load_vehicle_json(kRoot + "/data/vehicles/car_sedan_sim_thermal.json");
+        const auto sim = io::load_vehicle_json(kRoot + "/tests/support/fixtures/vehicles/car_sedan_sim_thermal.json");
         REQUIRE(sim.powertrain.thermal.has_value());
         CHECK(sim.powertrain.thermal->start == ThermalStartKind::Warm);
         CHECK(sim.powertrain.thermal->engine.displacement_l == Approx(2.487));
-        const auto graph = io::load_vehicle_json(kRoot + "/data/vehicles/car_sedan_thermal.json");
+        const auto graph = io::load_vehicle_json(kRoot + "/tests/support/fixtures/vehicles/car_sedan_thermal.json");
         REQUIRE(graph.powertrain.thermal.has_value());
         CHECK(graph.powertrain.thermal->engine.displacement_l == 2.0);
         CHECK(graph.powertrain.thermal->engine.motoring_friction_fraction == 0.6);

@@ -6,7 +6,7 @@
 // afr_stoich from the fuel file's own measured elemental mass fractions,
 // a demonstration that a single corrupted digit is caught by this file's
 // own literal-comparison style, and a whole-vehicle WOT-launch smoke case
-// (data/vehicles/car_sedan_fuel.json) mirroring test_reference_cars.cpp's
+// (tests/support/fixtures/vehicles/car_sedan_fuel.json) mirroring test_reference_cars.cpp's
 // pattern to prove the new engine+fuel+tank combination actually drives.
 //
 // This file loads BOTH data files through the production loaders
@@ -38,7 +38,7 @@ using Catch::Approx;
 namespace {
 
 std::string fuel_path() { return std::string(PS_SOURCE_DIR) + "/data/fuels/tier3_e10_cert.json"; }
-std::string car_sedan_fuel_path() { return std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_fuel.json"; }
+std::string car_sedan_fuel_path() { return std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_fuel.json"; }
 
 // toyota_a25a_fks.json is referenced only through car_sedan_fuel.json's
 // powertrain (no standalone engine loader exists, per vehicle_io.h's own

@@ -216,7 +216,7 @@ bottle), `n2o_flow_fraction` (the progressive duty of the tick's last substep, 0
 | `data/nitrous_kits/edelbrock_70060_square_150.json` | Edelbrock #70060 Performer RPM plate, 68/68 jets, 150 hp | jets 1.7272 mm; the sheet's 5-7 deg retard is NOT in the shared default controller (PROVISIONAL, N5) |
 | `data/nitrous_controllers/edelbrock_basic.json` | arm switch `nitrous_arm`, WOT switch 0.95, 3000-6200 rpm, on/off, 2 deg retard | retard [C 70011 sheet 1-3 deg midpoint], the rest [AS] |
 
-`data/vehicles/car_sedan_gen_n2o.json` is `car_sedan_gen.json` with the bottle and the 50 hp kit (arm channel
+`tests/support/fixtures/vehicles/car_sedan_gen_n2o.json` (a test fixture, not a shipped car) is `car_sedan_gen.json` with the bottle and the 50 hp kit (arm channel
 `nitrous_arm`, default off; smoke test `tests/validation/test_car_sedan_gen_n2o.cpp`: a WOT 3rd-gear pull
 gains about +41 kW crank power at 4000-5500 rpm, reported only). Every Edelbrock number is as transcribed in `out/n2o_plan.md` section 9.2; the
 whole-kit check against the ratings (V2) is N5.

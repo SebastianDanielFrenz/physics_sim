@@ -119,7 +119,7 @@ foreach ($a in $args) {
 # from the data files so the text cannot go stale.
 # ---------------------------------------------------------------------------
 if ($ShowHelp) {
-    $vehicles = (Get-ChildItem (Join-Path $repoRoot 'data\vehicles') -Filter '*.json' |
+    $vehicles = (Get-ChildItem (Join-Path $repoRoot 'data\vehicles'), (Join-Path $repoRoot 'tests\support\fixtures\vehicles') -Filter '*.json' |
         ForEach-Object { $_.BaseName }) -join ', '
     $groundJson = Join-Path $repoRoot 'data\tracks\test_ground\test_ground.json'
     $spawns = if (Test-Path $groundJson) {
@@ -160,7 +160,9 @@ Anything else is forwarded to the demo (placed after Godot's own "--").
 A literal "--" is optional; everything after it is forwarded unchanged.
 
 DEMO FLAGS (main.gd)
-  --m1-vehicle=NAME          vehicle file data/vehicles/NAME.json (default car_sedan)
+  --m1-vehicle=NAME          vehicle file data/vehicles/NAME.json, else
+                             tests/support/fixtures/vehicles/NAME.json (default car_sedan;
+                             a value with a / or ending in .json is a repo-relative path)
                              $vehicles
                              chassis and art come from main.gd's VEHICLE_TABLE: only
                              car_sedan and tractor have entries, every other file uses
