@@ -45,6 +45,10 @@ struct DriveModeParams {
     // The traction mode the car switches to when this drive mode becomes effective (until the driver changes the
     // assist.traction_control channel). Resolved through the assist-unit availability fallback.
     std::optional<TractionMode> traction_control_default;
+    // Assists I7b: the launch-control ENABLE the car switches to when this drive mode becomes effective (until the driver
+    // changes the assist.launch_control channel value) - the same rule as traction_control_default. Unset = this mode
+    // does not touch the enable. launch_control_allowed still gates on top: a mode that does not allow LC never arms.
+    std::optional<bool> launch_control_default;
     bool launch_control_allowed = true;
     bool nitrous_arm_allowed = true;
 };
@@ -79,6 +83,25 @@ struct DriveModesDesc {
     return traction_default_channel_value(base, unit);
 }
 
+// Assists I7b: true iff any OFFERED mode sets launch_control_default. Gates the extra state and hash fold, so a part that
+// sets none (and every car without the part) hashes exactly as before I7b.
+[[nodiscard]] inline bool any_launch_control_default(const DriveModesDesc& d) {
+    for (int m = 0; m < kDriveModeCount; ++m) {
+        if ((d.modes_bits & drive_mode_bit(static_cast<DriveMode>(m))) && d.params[static_cast<std::size_t>(m)].launch_control_default) return true;
+    }
+    return false;
+}
+
+// The assist.launch_control channel's default with drive modes: the default drive mode's launch_control_default when it
+// has one, else `base` (the unit block's default_enabled, or 0).
+[[nodiscard]] inline real launch_control_default_channel_value(real base, const std::optional<DriveModesDesc>& modes) {
+    if (modes) {
+        const auto& lc = modes->params[static_cast<std::size_t>(modes->default_mode)].launch_control_default;
+        if (lc) return *lc ? real(1) : real(0);
+    }
+    return base;
+}
+
 // Range checks shared by the loader and VehicleInstance (code-built descs). Throws std::invalid_argument.
 inline void validate_drive_modes(const DriveModesDesc& d) {
     const auto fin = [](real v) { return std::isfinite(v); };
@@ -90,6 +113,9 @@ inline void validate_drive_modes(const DriveModesDesc& d) {
         if (p.pedal_bend) {
             if (!fin(p.pedal_bend->x) || !(p.pedal_bend->x > real(0)) || !(p.pedal_bend->x < real(1))) throw std::invalid_argument(ctx + "pedal_bend x must be in (0, 1)");
             if (!fin(p.pedal_bend->y) || p.pedal_bend->y < real(0) || p.pedal_bend->y > real(1)) throw std::invalid_argument(ctx + "pedal_bend y must be in [0, 1]");
+        }
+        if (p.launch_control_default && *p.launch_control_default && !p.launch_control_allowed) {
+            throw std::invalid_argument(ctx + "launch_control_default true contradicts launch_control_allowed false");
         }
         for (const std::optional<real>* r : {&p.up_rpm_at_zero_throttle, &p.up_rpm_at_full_throttle, &p.down_rpm_at_zero_throttle, &p.down_rpm_at_full_throttle}) {
             if (*r && (!fin(**r) || !(**r > real(0)))) throw std::invalid_argument(ctx + "auto-shift rpm values must be finite and > 0");

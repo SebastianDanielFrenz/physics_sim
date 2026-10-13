@@ -314,8 +314,13 @@ private:
         bool tc_override = false;
         std::uint8_t tc_override_code = 0;
         real last_tc_channel = 0;
+        // Assists I7b: the launch-control enable override (see launch_control_default); hashed only with lc_default_state_.
+        bool lc_override = false;
+        bool lc_override_on = false;
+        real last_lc_channel = 0;
     };
     DriveModeState drive_state_{};
+    bool lc_default_state_ = false; // I7b: some offered drive mode sets launch_control_default
     // Assists I5: the assist unit's rear-wing automation. fit_aero_ = block present AND the car has the named surface;
     // the surface index and the launch-control hook are plain per-tick inputs, none of it hashed.
     bool fit_aero_ = false;

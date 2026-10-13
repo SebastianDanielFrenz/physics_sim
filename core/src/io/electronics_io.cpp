@@ -155,7 +155,7 @@ void read_launch_control(const json& a, const std::string& path, vehicle::Assist
 
 // Assists I7: the drive_modes part (kind "drive_modes"). Keys per mode: pedal_bend {x, y}, auto_shift {the four rpm
 // points, each optional}, auto_clutch {close_time_s}, traction_control_default (a traction mode name),
-// launch_control_allowed, nitrous_arm_allowed. A mode is offered iff it has an entry in "modes" (an empty object is
+// launch_control_default (bool, I7b), launch_control_allowed, nitrous_arm_allowed. A mode is offered iff it has an entry in "modes" (an empty object is
 // a valid "no overrides" mode). Ranges are validate_drive_modes'.
 void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& part) {
     reject_unknown(j, {"format", "kind", "name", "source", "extends", "default_mode", "modes"}, path);
@@ -221,7 +221,8 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
                 const int tm = v.is_string() ? traction_mode_from_name(v.get<std::string>()) : -1;
                 if (tm < 0) throw std::runtime_error(ctx + ": 'traction_control_default' must be one of off, on, relaxed, sport, drift");
                 p.traction_control_default = static_cast<vehicle::TractionMode>(tm);
-            } else if (k == "launch_control_allowed") p.launch_control_allowed = boolean(v, ctx, k);
+            } else if (k == "launch_control_default") p.launch_control_default = boolean(v, ctx, k);
+            else if (k == "launch_control_allowed") p.launch_control_allowed = boolean(v, ctx, k);
             else if (k == "nitrous_arm_allowed") p.nitrous_arm_allowed = boolean(v, ctx, k);
             else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
         }
