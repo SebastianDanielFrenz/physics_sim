@@ -23,8 +23,8 @@
 //       40 m/s. (First run of the 5 s variant failed N on a too-short timeline - a setup fault, so the script was retimed to
 //       12.5 s; A1/A2 and the N thresholds themselves were not touched. The run takes about 1 s in release, so there is
 //       no [long] variant and no separate short one.)
-//   P1  UI pitfall guard (report-and-assert, no run comparison): rewriting the SAME assist.traction_control value does not
-//       release a drive mode's TC override (effective stays the mode default); writing a different value releases it.
+//   P1  UI guard (assert, no run comparison; assists I7c semantics): after a drive-mode change the TC channel itself holds the
+//       mode's code, and ONE write of any value - even the value the driver had before - takes effect at once.
 //
 // RECORDED SABOTAGES: see out/assists_i6_progress.md (temporary env-switched edits in core/src, reverted).
 
@@ -242,21 +242,25 @@ TEST_CASE("V11-all: car_hyper_n2o with every assist live - 1 vs 10 workers equal
     check_all_together(full_script());
 }
 
-TEST_CASE("P1: rewriting the same TC channel value does not release a drive mode's TC override; a different value does", "[assist][vehicle][drivetrain]") {
+// Assists I7c (old -> new): P1 used to guard "rewriting the SAME TC value does not release a drive mode's override"; the
+// override state is gone - the mode change WRITES its default into the channel - so the pitfall inverts: the channel reads
+// the mode's code after the change, and ONE write of any value (including 3, the value the driver had before) takes effect.
+TEST_CASE("P1: after a drive-mode change the TC channel holds the mode's code; one write of any value (even a repeat of the earlier one) takes effect", "[assist][vehicle][drivetrain]") {
     auto rig = ps_test::build_vehicle_rig_from_desc(hyper_n2o(), 1500, {2, .4, .15}, .5, 0.0, 1);
     World& w = *rig.world;
     w.set_control("assist.drive_mode", 1.0); // Normal: TC default On
     w.set_control("assist.traction_control", 3.0);
     w.set_control("assist.aero_control", 0.0);
     ps_test::settle(w, 0.2);
-    REQUIRE(w.powertrain_state(rig.vehicle).traction_mode_effective == 3); // spawn: no override, the driver's value runs
-    w.set_control("assist.drive_mode", 2.0); // Sport: TC default Relaxed -> override
+    REQUIRE(w.powertrain_state(rig.vehicle).traction_mode_effective == 3); // spawn: no write, the driver's value runs
+    w.set_control("assist.drive_mode", 2.0); // Sport: TC default Relaxed -> written into the channel
     ps_test::settle(w, 0.05);
     CHECK(w.powertrain_state(rig.vehicle).traction_mode_effective == 2);
-    CHECK(w.powertrain_state(rig.vehicle).traction_mode_requested == 2); // the snapshot's requested already includes the override
-    w.set_control("assist.traction_control", 3.0); // the same value again: not seen as a driver change
+    CHECK(w.powertrain_state(rig.vehicle).traction_mode_requested == 2);
+    CHECK(w.get_control("assist.traction_control") == 2.0); // I7c: the channel equals what the car does
+    w.set_control("assist.traction_control", 3.0); // one press: the value the driver had before wins at once
     ps_test::settle(w, 0.05);
-    CHECK(w.powertrain_state(rig.vehicle).traction_mode_effective == 2);
+    CHECK(w.powertrain_state(rig.vehicle).traction_mode_effective == 3);
     w.set_control("assist.traction_control", 4.0); // a different value: the driver wins
     ps_test::settle(w, 0.05);
     CHECK(w.powertrain_state(rig.vehicle).traction_mode_effective == 4);

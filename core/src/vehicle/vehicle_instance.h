@@ -19,10 +19,17 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
 namespace ps::vehicle {
+
+// Assists I7c: a control-channel write a vehicle queues during its step (index into World's flat channel array).
+struct PendingChannelWrite {
+    std::size_t index = 0;
+    real value = 0;
+};
 
 // PLAN.md P2/M1 step 3's named control channels, read by World and handed
 // down here (out/handover_p3.md decision 5: global, not per-vehicle, for
@@ -101,6 +108,12 @@ public:
     // array, indexed by control_indices_ below.
     void step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                     real tick_dt, real substep_rate_hz);
+
+    // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the
+    // pipeline in vehicle id order. Valid until the next step_tick / reset.
+    [[nodiscard]] std::span<const PendingChannelWrite> pending_channel_writes() const {
+        return std::span<const PendingChannelWrite>(pending_writes_.data(), pending_write_count_);
+    }
 
     // World::reset_vehicle (plan section 4.5). Call only between ticks,
     // never from a job (same contract as World::reset_vehicle itself).
@@ -304,23 +317,22 @@ private:
     // offered-mode bits. Both are pure functions of desc_, computed once in the constructor.
     std::array<TractionControlDesc, kTractionModeCount> tc_mode_desc_{};
     std::uint8_t tc_modes_available_bits_ = kTractionModesBaseBits;
-    // Assists I7: drive-mode state, hashed only on a car with a drive_modes part. initialised = the first tick has seen
-    // the mode (no override at spawn: the TC channel's default already equals the default mode's TC default); last_mode =
-    // the effective drive mode of the previous tick; tc_override = a mode change set the TC request to
-    // tc_override_code and the driver has not touched the TC channel since (last_tc_channel = its value then).
+    // Assists I7 / I7c: drive-mode state, hashed only on a car with a drive_modes part. initialised = the first tick has
+    // seen the mode (no write at spawn: the TC / LC channel defaults already equal the default mode's); last_mode = the
+    // effective drive mode of the previous tick. There is NO override state (I7c): on a mode change the mode's
+    // traction_control_default / launch_control_default is used for that tick and queued as a pending channel write
+    // (pending_writes_) that World::step applies to the control channel after the pipeline, so the channel always
+    // equals what the car does and the driver's next write (any value) wins at once.
     struct DriveModeState {
         bool initialised = false;
         std::uint8_t last_mode = 0;
-        bool tc_override = false;
-        std::uint8_t tc_override_code = 0;
-        real last_tc_channel = 0;
-        // Assists I7b: the launch-control enable override (see launch_control_default); hashed only with lc_default_state_.
-        bool lc_override = false;
-        bool lc_override_on = false;
-        real last_lc_channel = 0;
     };
     DriveModeState drive_state_{};
     bool lc_default_state_ = false; // I7b: some offered drive mode sets launch_control_default
+    // Assists I7c: channel writes a drive-mode change queues from inside step_tick (a vehicle job cannot touch World's
+    // channel map). At most two (TC code, LC enable); cleared at the start of every step_tick; never hashed.
+    std::array<PendingChannelWrite, 2> pending_writes_{};
+    std::size_t pending_write_count_ = 0;
     // Assists I5: the assist unit's rear-wing automation. fit_aero_ = block present AND the car has the named surface;
     // the surface index and the launch-control hook are plain per-tick inputs, none of it hashed.
     bool fit_aero_ = false;

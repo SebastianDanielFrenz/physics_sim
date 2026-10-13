@@ -462,6 +462,17 @@ void World::step() {
 
     pipeline_->run(*job_system_);
 
+    // Assists I7c: control-channel writes the vehicles queued during their step (a drive-mode change writes its TC /
+    // launch-control default into the channel itself). Applied HERE - sequentially, on the sim thread, after every job
+    // has finished - in vehicle id order, straight into the flat channel array (no allocation). When two vehicles name
+    // the same (global) channel the later vehicle overwrites the earlier one. A set_control made before the next
+    // step() therefore wins over the physics' write from the next tick on.
+    for (std::size_t vi = 0; vi < vehicle_system_->count(); ++vi) {
+        for (const vehicle::PendingChannelWrite& w : vehicle_system_->at(VehicleId{static_cast<id_index_t>(vi), 1}).pending_channel_writes()) {
+            control_channel_values_[w.index] = w.value;
+        }
+    }
+
     const auto tick_t1 = std::chrono::steady_clock::now();
     const double tick_ns = std::max(
         1.0, std::chrono::duration<double, std::nano>(tick_t1 - tick_t0).count());
