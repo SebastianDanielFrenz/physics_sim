@@ -524,7 +524,11 @@ TEST_CASE("B1: ThrottleStage composes the bend after the car's pedal curve and b
     CHECK(hand.evaluate(ctx).command == 1.0);
 }
 
-TEST_CASE("B2: through a real World - the throttle command is the bend of the pedal per mode", "[assist][drive_modes][vehicle][drivetrain]") {
+// Pedal plan P1 re-pin (2026-10-13): the drive-mode bend applies only to automatic/DCT/CVT gearboxes (ThrottleStage's
+// apply_drive_bend, gated by gearbox kind - B1b). car_hyper_n2o has a manual gearbox, so its throttle command is the
+// pedal in EVERY mode now; pre-P1 Eco/Sport carried the bend (Eco pedal 0.6 -> 0.3, Sport 0.6 -> 0.8), which this case
+// pinned to 1e-12. The bend curve itself is still pinned by B1 (ThrottleStage with apply_drive_bend = true).
+TEST_CASE("B2: through a real World - a manual car's throttle command is the pedal in every mode (pedal P1 bend gate)", "[assist][drive_modes][vehicle][drivetrain]") {
     const VehicleDesc& d = n2o();
     for (int mode = 0; mode < 3; ++mode) {
         Rig r = make_rig(d);
@@ -536,19 +540,15 @@ TEST_CASE("B2: through a real World - the throttle command is the bend of the pe
             w.step();
             w.step();
             const real cmd = w.powertrain_state(r.rig.vehicle).engines.at(0).throttle_command;
-            const real expect = bend_of(mp(d, static_cast<DriveMode>(mode)), pedal);
             INFO("mode " << mode << " pedal " << pedal);
-            if (mode == 1) CHECK(cmd == pedal); // Normal: no bend, exactly the pedal (the car has no pedal curve)
-            else CHECK(std::abs(cmd - expect) <= kBendTol);
+            CHECK(cmd == pedal); // no bend on a manual, exactly the pedal (the car has no pedal curve)
         }
-        // the bend point
+        // the bend point (pre-P1: Eco 0.3, Sport 0.8)
         w.set_control("throttle", 0.6);
         w.step();
         w.step();
         const real at_x = w.powertrain_state(r.rig.vehicle).engines.at(0).throttle_command;
-        if (mode == 0) CHECK(std::abs(at_x - 0.3) <= kBendTol);
-        if (mode == 1) CHECK(at_x == 0.6);
-        if (mode == 2) CHECK(std::abs(at_x - 0.8) <= kBendTol);
+        CHECK(at_x == 0.6);
     }
 }
 
@@ -847,6 +847,10 @@ TEST_CASE("K3: the kickdown bypass is spent by a gear change and re-armed only w
     CHECK(tick() == 2);
 }
 
+// Pedal plan P1 re-pin (2026-10-13): the Eco bend no longer applies on this manual car (B2), so the kickdown threshold
+// (0.95, on the command) is met at the pedal itself: pre-P1 pedal 0.96 -> Eco command 0.93 gave no kickdown and 0.98 ->
+// 0.965 did; now 0.94 gives none and 0.96 kicks down (measured 0.004 s). The threshold is still on the command - the
+// pedal == the command here; the bent case returns with an automatic gearbox kind.
 TEST_CASE("K2: kickdown on a real car right after a reset; the Eco threshold is on the command, not the pedal", "[assist][drive_modes][vehicle][drivetrain]") {
     struct Result {
         real t_down = -1;
@@ -882,11 +886,12 @@ TEST_CASE("K2: kickdown on a real car right after a reset; the Eco threshold is 
         CHECK(a.t_down <= kKickdownMaxS);
         CHECK(b.t_down < 0);
     }
-    // Eco: the threshold is on the command (bend of the pedal). Pedal 0.96 -> command 0.93 < 0.95: no kickdown; 0.98 -> 0.965: kickdown
+    // Eco: the threshold is on the command. On this manual the command is the pedal (no bend, pedal P1): 0.94 < 0.95 no
+    // kickdown, 0.96 kickdown. The Eco bend values themselves (0.96 -> 0.93, 0.98 -> 0.965) stay pinned on the curve.
     CHECK(std::abs(bend_of(mp(with_kd, DriveMode::Eco), 0.96) - 0.93) <= 1e-12);
     CHECK(std::abs(bend_of(mp(with_kd, DriveMode::Eco), 0.98) - 0.965) <= 1e-12);
-    const Result low = run(with_kd, 0, 0.96, kNoKickdownHoldS);
-    const Result high = run(with_kd, 0, 0.98, 1.0);
+    const Result low = run(with_kd, 0, 0.94, kNoKickdownHoldS);
+    const Result high = run(with_kd, 0, 0.96, 1.0);
     CHECK(low.t_down < 0);
     CHECK(high.t_down > 0);
     CHECK(high.t_down <= kKickdownMaxS);
