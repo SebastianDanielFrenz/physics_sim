@@ -22,6 +22,8 @@
 //       the last 1 s within +-3 % of Z + 0.5 (F - Z) (request_envelope at the end). ADDED after sabotage S3 passed the
 //       band (target and F come from the same request_envelope): F within 1 % of the dyno-settled envelope table.
 //   H2  hyper ascending sweeps at 2000/3000/4000/5000/6000/7000 rpm: (a)-(c) as N*, settle 4.0 s / mean 1.0 s.
+//       (e) ADDED 2026-10-13 with the spun-branch envelope (coordinator decision 3), before its first run: no step at
+//       c = 1 - |T(1) - F| <= 0.02 F + 5 N*m (pre-fix: 2000 rpm F 464.86 vs T(1) 599.31 after the sweep).
 //   H3  hyper cold (rotor at rest) vs spun (3 s WOT first) at 5000 rpm, c = 0.3/0.5/0.7, 20 s each: |T_cold - T_spun|
 //       <= 0.01 F + 1 N*m (no cold/spun bistability).
 //   V12 owner fixture (tests/support/fixtures/assists/v12, 15.48 bar target) at 5000 rpm, a cold engine per c = 0.1 ...
@@ -173,6 +175,10 @@ void check_bands(const std::string& name, const SimulatedEngineDesc& d, bool tur
                 CHECK(ts[k + 1] - ts[k] > 0.0); // (c)
                 min_step = std::min(min_step, ts[k + 1] - ts[k]);
             }
+        }
+        if (turbo) { // (e): F is the reachable full load - full pedal makes F, no step at c = 1
+            INFO("(e) T(1) " << ts.back() << " F " << env0.f_nm);
+            CHECK(std::abs(ts.back() - env0.f_nm) <= 0.02 * env0.f_nm + 5.0);
         }
         if (!turbo && rpm <= d.idle_rpm + 300.0) { // (d): fresh engines at c = 0 and c = 0.05
             SimulatedEngine e0(d), e5(d);
