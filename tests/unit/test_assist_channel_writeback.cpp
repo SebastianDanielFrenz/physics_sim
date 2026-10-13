@@ -36,7 +36,14 @@
 //   tick after a write); W7 first differing hash index == size, own allocation == 0, >= 4 physics writes seen; W8 adopted
 //   count and values exactly as listed, vector data pointer unchanged; W9 the stated booleans for all 30 + 2 ticks.
 //
-// RECORDED SABOTAGES (temporary env-free edits, reverted): see out/assists_i7c_progress.md.
+// RECORDED SABOTAGES (temporary env-switched edits in core/src and channel_mirror.h, reverted; run = [assist][world] + LD1,
+// LD6, T1, P1):
+//   1 World::step drops the pending writes                      -> LD1, LD6, P1, T1, W1, W2, W3, W5, W6, W7, W9 fail (23 assertions)
+//   2 pending-write count never cleared (stale writes re-applied) -> W1, W2 ... fail (22 assertions)
+//   3 mirror stores unconditionally instead of compare_exchange  -> W8 fails (3)
+//   6 the LC write goes to the TC channel                        -> LD1, LD6, P1, T1, W1, W2, W3, W6, W7, W9 fail (23)
+//   7 a surviving heap allocation per queued write               -> W7 fails (own alloc 4 / 4 instead of 0 / 0; 2 assertions)
+//   (the id-order rule cannot be observed black-box: vehicles use disjoint channel names, see electronics.md rule 4c.)
 
 #include "ps/drivetrain/powertrain_state.h"
 #include "ps/io/electronics_io.h"

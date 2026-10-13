@@ -29,7 +29,7 @@
 //        is nothing but the channel to differ; with the launch_control_default keys stripped from the part, the Normal ->
 //        Sport change leaves LC off and the channel untouched.
 //
-// RECORDED SABOTAGES (temporary edits in core/src or the desc header, reverted; each run is the whole LD* set, 6 cases):
+// RECORDED SABOTAGES of I7b (SUPERSEDED by I7c: sabotages 2, 3 and 5 name the deleted override state; the I7c sabotages are\n// recorded in test_assist_channel_writeback.cpp and out/assists_i7c_progress.md; 1, 4, 6, 7 still apply as listed):
 //   1 mode change does not apply launch_control_default        -> LD1, LD2, LD3, LD6 fail (29 assertions)
 //   2 a driver channel change does not clear the override      -> LD1, LD6 fail (3)
 //   3 any tick clears the override (a same-value rewrite does) -> LD1, LD6 fail (22)
