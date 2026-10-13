@@ -9,6 +9,9 @@
 #include <vector>
 
 namespace ps::drivetrain {
+// Boost B0: the boost PID's error normaliser cap, [D] the 1.8 bar target the shipped gains were swept at
+// (hyper_twin_default.json boost_control, vault PHYS-058). Targets <= 1.8 bar keep normalising by their own target.
+inline constexpr real kBoostErrorScalePa = 1.8e5;
 // Lumped shaft/charge model with optional offline geometry stage maps.
 // Legacy authored approximation remains an explicitly diagnosed fallback.
 // Neither source is an OEM-calibrated compressor map.
@@ -91,8 +94,11 @@ public:
     // p_im / psi (I7d D2): the manifold pressure the valve diaphragm senses and the
     // engine's tabulated Psi(pr) (SimulatedEngineMaps::psi), used by the vent
     // orifice only; both are ignored without a blow-off valve.
+    // hold_control (Boost B0): a gearshift is in progress (TcuRequest::hold_boost_control); the boost
+    // controller holds its state - see the boost-control comment below.
     void step(real h, real ambient_pa, real ambient_k, real air_kg_s, real exhaust_kg_s,
-              real port_gas_k, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr) {
+              real port_gas_k, real plate, real p_im = real(0.0), const std::vector<real>* psi = nullptr,
+              bool hold_control = false) {
         const real wr = desc.reference_rpm*real(6.2831853071795864769/60.0);
         const real speed2 = real(2.0)*energy_j/(desc.rotor_inertia_kgm2*wr*wr);
         // Vent flow at the START of the step state (valve opening, charge state
@@ -187,22 +193,36 @@ public:
         // charge pressure after the intercooler (the throttle's upstream
         // pressure), toward ambient + target_boost_pa * plate. Its output is
         // the wastegate opening command; the actuator follows with a
-        // first-order lag. The error is normalised by target_boost_pa, so
-        // the gains are per unit of full boost. The rotor already integrates
-        // net shaft power, so the derivative term (on the measurement, not
-        // the error, so a target step does not kick) supplies the damping a
-        // plain PI lacks. The integral is the closing effort in [0, 1] and
-        // stops integrating while the output is saturated in the direction
-        // the error pushes (conditional anti-windup; spool-up otherwise winds
-        // it to 1 and overshoots the boost target). Below 10 % plate
-        // no boost is requested: wastegate commanded open, integral reset.
+        // first-order lag. The error is normalised by min(target_boost_pa,
+        // kBoostErrorScalePa) (Boost B0; before it by target_boost_pa alone,
+        // which made a 15.5 bar garage target's loop 8.6x weaker per Pa than
+        // the 1.8 bar one the gains were swept at - identical for every
+        // target <= 1.8 bar). The rotor already integrates net shaft power,
+        // so the derivative term (on the measurement, not the error, so a
+        // target step does not kick) supplies the damping a plain PI lacks.
+        // The integral is the closing effort in [0, 1] and stops integrating
+        // while the output is saturated in the direction the error pushes
+        // (conditional anti-windup; spool-up otherwise winds it to 1 and
+        // overshoots the boost target). Below 10 % plate no boost is
+        // requested: wastegate commanded open, integral reset - except while a
+        // gearshift is in progress (hold_control, Boost B0): the upshift's
+        // ignition cut and post-shift throttle-ceiling ramp close the plate
+        // for ~0.1-0.2 s, and throwing the controller away there opened the
+        // gate to ~0.98 and cost the rotor 130k -> 73k rpm and 2.4-3.1 s of
+        // boost after every high-gear upshift; the controller now holds (gate
+        // command = its current position, integral and error history frozen)
+        // until the TCU releases the throttle. Surge protection is the
+        // blow-off valve's job (I7d D2), never this rule's.
         real opening = real(1.0);
-        if (plate < real(0.10)) {
+        if (hold_control) {
+            opening = wastegate;
+        } else if (plate < real(0.10)) {
             boost_integral = real(0.0);
         } else {
+            const real scale = std::min(desc.target_boost_pa,kBoostErrorScalePa);
             const real target = ambient_pa + desc.target_boost_pa*std::min(plate,real(1.0));
-            const real e = (target-charge_pa)/desc.target_boost_pa;
-            const real rate = (charge_pa-charge_old)/(h*desc.target_boost_pa);
+            const real e = (target-charge_pa)/scale;
+            const real rate = (charge_pa-charge_old)/(h*scale);
             const real closing = desc.wastegate_kp*e - desc.wastegate_kd_s*rate + boost_integral;
             const bool saturated = (closing >= real(1.0) && e > real(0.0)) || (closing <= real(0.0) && e < real(0.0));
             if (!saturated) boost_integral = std::clamp(boost_integral + h*desc.wastegate_ki_per_s*e,real(0.0),real(1.0));

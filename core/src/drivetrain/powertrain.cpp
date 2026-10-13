@@ -2090,6 +2090,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.nitrous = nitrous_->engine_input();
         }
         EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut || ctx.traction_ignition_cut};
+        req.hold_boost_control = ctx.tcu_ignition_cut || ctx.tcu_throttle_ceiling < real(1.0); // Boost B0: shift in progress
         if (ctx.launch_limiter_rpm > real(0.0)) req.limiter_rpm = ctx.launch_limiter_rpm; // assists I4: the unit's launch control (Armed)
         if (launch_) { // engine garage P8 (A16): the second rev limit, through the engine's own limiter
             LaunchControl::Inputs li;
