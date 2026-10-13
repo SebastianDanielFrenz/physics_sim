@@ -1084,6 +1084,13 @@ TEST_CASE("P6: tractor governor path over vehicle_tractor_i4.json's control even
     // control-event driven and unchanged. The spot values below are the new
     // recording; this test is now a frozen regression of the governor path,
     // no longer a comparison against the pre-C3 code.
+    // Re-recorded 2026-10-14 (D0 dog release spike): JoltRigidBackend::shape_cast
+    // now re-casts a phantom wheel hit, and this scenario has one (a rear wheel
+    // cast at fraction 0 / penetration 0.186 m with a true fraction of 0.5005,
+    // between ticks 300 and 1200), so throttle_eff/engine_torque_demand/
+    // idle_integrator and the tick 1200/2000 spot values moved (were
+    // 0xe98a0abededffaf0 / 0x0c44a2d22c8a534d / 0xb405d2355f44b66c, all
+    // 0xc0cbc7fdc6150a48); hand_throttle and governor_setpoint_rpm unchanged.
     auto fnv = [](std::uint64_t h, double v) {
         unsigned char b[8];
         std::memcpy(b, &v, 8);
@@ -1122,14 +1129,14 @@ TEST_CASE("P6: tractor governor path over vehicle_tractor_i4.json's control even
     REQUIRE(ticks == 2400);
     CHECK(h_field[0] == 0x09c190b1bd78f7f9ULL); // hand_throttle
     CHECK(h_field[1] == 0x1ece9dfdcfa3ddecULL); // governor_setpoint_rpm
-    CHECK(h_field[2] == 0xe98a0abededffaf0ULL); // throttle_eff
-    CHECK(h_field[3] == 0x0c44a2d22c8a534dULL); // engine_torque_demand
-    CHECK(h_field[4] == 0xb405d2355f44b66cULL); // idle_integrator
-    CHECK(h_all == 0xc0cbc7fdc6150a48ULL);
+    CHECK(h_field[2] == 0x1a3c135097220ae3ULL); // throttle_eff
+    CHECK(h_field[3] == 0x95d05f6efcdca84dULL); // engine_torque_demand
+    CHECK(h_field[4] == 0x7987fbcaf6da7c84ULL); // idle_integrator
+    CHECK(h_all == 0x91f8fbf30f9b9a27ULL);
     const double expected[3][5] = {
         {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.ff2a1524a2dddp-3, 0x1.6c7680ec27068p+6, -0x1.b5de0d29ea85bp-4},
-        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.e4d9f9a92e738p-4, 0x1.028e6a8a8b010p+3, -0x1.b5de0d29ea85bp-4},
-        {0x0.0000000000000p+0, 0x1.a900000000000p+9, 0x1.ab9d39d427288p-4, -0x1.2c3be4b3887a0p+0, 0x1.d28ab98965e3cp-9},
+        {0x1.3333333333333p-1, 0x1.bd00000000000p+10, 0x1.e39e60c5b38e7p-4, 0x1.f8f72e4069cb0p+2, -0x1.b5de0d29ea85bp-4},
+        {0x0.0000000000000p+0, 0x1.a900000000000p+9, 0x1.ab9d4ecceba88p-4, -0x1.2c3978bc9bf80p+0, 0x1.d287f44e2ceaep-9},
     };
     for (int t = 0; t < 3; ++t) {
         for (int k = 0; k < 5; ++k) {
