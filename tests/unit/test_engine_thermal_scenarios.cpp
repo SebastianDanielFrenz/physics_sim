@@ -318,7 +318,7 @@ void report(const char* tag, const ColdStart& r) {
 // I2 - cold idle holds
 // ---------------------------------------------------------------------------------------------------------------
 TEST_CASE("I2 cold idle holds: car_sedan_sim_thermal from an ambient start at 20 C", "[thermal][drivetrain]") {
-    const ColdStart r = run_cold_start("vehicles/car_sedan_sim_thermal.json", 20.0, 36.0, 3.0);
+    const ColdStart r = run_cold_start("../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json", 20.0, 36.0, 3.0);
     report("I2 20 C", r);
     CHECK(r.k_start > 2.0);
     REQUIRE(r.t_running > 0.0);
@@ -332,13 +332,13 @@ TEST_CASE("I2 cold idle holds: car_sedan_sim_thermal from an ambient start at 20
 
 // T1b: the -10 C case uses the shipped starter (T1 needed a bench starter of 2 x k x breakaway while the caps scaled).
 TEST_CASE("I2 cold idle holds (long): 120 s at 20 C and 60 s at -10 C", "[thermal][drivetrain][long]") {
-    const ColdStart a = run_cold_start("vehicles/car_sedan_sim_thermal.json", 20.0, 125.0, 3.0);
+    const ColdStart a = run_cold_start("../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json", 20.0, 125.0, 3.0);
     report("I2 long 20 C", a);
     CHECK(a.t_running > 0.0);
     CHECK_FALSE(a.stalled_after);
     CHECK(a.min_rpm >= 725.0);
     CHECK(a.max_rpm <= 875.0);
-    const ColdStart b = run_cold_start("vehicles/car_sedan_sim_thermal.json", -10.0, 65.0, 5.0);
+    const ColdStart b = run_cold_start("../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json", -10.0, 65.0, 5.0);
     report("I2 long -10 C", b);
     CHECK(b.k_start > 5.0);
     REQUIRE(b.t_running > 0.0);
@@ -353,7 +353,7 @@ TEST_CASE("I2 cold idle holds (long): 120 s at 20 C and 60 s at -10 C", "[therma
 // (550 rpm). The "552 rpm at k = 1" margin was a measuring artefact: max_crank_rpm is the last cranking sample, taken
 // just before the switch to Running at 550 rpm; at k = 1 combustion during cranking has about +10 N*m of margin there.
 TEST_CASE("I2 graph engine (car_sedan_thermal): the baseline at k = 1 starts", "[thermal][drivetrain]") {
-    const ColdStart r = run_cold_start("vehicles/car_sedan_thermal.json", 95.0, 12.0, 3.0); // ambient start at 95 C: k = 1
+    const ColdStart r = run_cold_start("../tests/support/fixtures/vehicles/car_sedan_thermal.json", 95.0, 12.0, 3.0); // ambient start at 95 C: k = 1
     report("I2 graph baseline", r);
     CHECK(r.k_start == Approx(1.0).margin(1e-3));
     REQUIRE(r.t_running > 0.0);
@@ -362,7 +362,7 @@ TEST_CASE("I2 graph engine (car_sedan_thermal): the baseline at k = 1 starts", "
 }
 
 TEST_CASE("I2 graph engine (car_sedan_thermal) from an ambient start at 20 C starts and idles", "[thermal][drivetrain]") {
-    const ColdStart r = run_cold_start("vehicles/car_sedan_thermal.json", 20.0, 36.0, 3.0);
+    const ColdStart r = run_cold_start("../tests/support/fixtures/vehicles/car_sedan_thermal.json", 20.0, 36.0, 3.0);
     report("I2 graph 20 C", r);
     CHECK(r.k_start == Approx(1.535).margin(0.01)); // the graph engine's own hydrodynamic_fraction 0.2
     REQUIRE(r.t_running > 0.0);
@@ -384,7 +384,7 @@ TEST_CASE("I9 cold crank and start at -30 C with the shipped starter", "[thermal
         const char* file;
         real k30;
     };
-    for (const Case c : {Case{"vehicles/car_sedan_sim_thermal.json", 12.72}, Case{"vehicles/car_sedan_thermal.json", 5.69}}) {
+    for (const Case c : {Case{"../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json", 12.72}, Case{"../tests/support/fixtures/vehicles/car_sedan_thermal.json", 5.69}}) {
         INFO(c.file);
         const ColdStart r = run_cold_start(c.file, -30.0, 40.0, 10.0);
         report(c.file, r);
@@ -534,12 +534,12 @@ TEST_CASE("I6 cold-engine fuel penalty: 1200 s at the I3 point, cold/warm in [1.
 
 TEST_CASE("DIAG graph start sweep", "[.][diag]") {
     for (real amb : {95.0, 60.0, 40.0, 30.0, 20.0, 10.0}) {
-        const ColdStart r = run_cold_start("vehicles/car_sedan_thermal.json", amb, 20.0, 10.0);
+        const ColdStart r = run_cold_start("../tests/support/fixtures/vehicles/car_sedan_thermal.json", amb, 20.0, 10.0);
         WARN("graph ambient " << amb << " C");
         report("graph", r);
     }
     for (real amb : {95.0, 20.0}) {
-        const ColdStart r = run_cold_start("vehicles/car_sedan_sim_thermal.json", amb, 20.0, 10.0);
+        const ColdStart r = run_cold_start("../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json", amb, 20.0, 10.0);
         WARN("sim ambient " << amb << " C");
         report("sim", r);
     }

@@ -1,5 +1,5 @@
 // ps_audio A11 (owner ruling 2026-09-29, "can I drive the same engine that
-// drives the audio?"): data/vehicles/car_sedan_pipes.json is the first
+// drives the audio?"): tests/support/fixtures/vehicles/car_sedan_pipes.json is the first
 // vehicle whose REAL physics engine is a pipe-network `"kind": "simulated"`
 // engine with NO map override (data/engines/demo_i4_pipes.json's "cycle"
 // block generates VE/eta_i/friction maps at load time, I7c C16a) - every
@@ -78,7 +78,7 @@ TEST_CASE("car_sedan_pipes.json: idles, free-revs to the limiter and back, launc
     // car_sedan_pipes_rwd.json (owner 2026-09-29, "give me RWD"): car_sedan_rwd.json with the same engine.
     const std::string name = GENERATE(std::string("car_sedan_pipes"), std::string("car_sedan_pipes_rwd"));
     CAPTURE(name);
-    const std::string path = std::string(PS_SOURCE_DIR) + "/data/vehicles/" + name + ".json";
+    const std::string path = std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/" + name + ".json";
     const vehicle::VehicleDesc desc = io::load_vehicle_json(path);
     real idle_rpm_desc = -1.0, limiter_rpm_desc = -1.0, hysteresis_rpm_desc = -1.0;
     for (const auto& c : desc.powertrain.components) {

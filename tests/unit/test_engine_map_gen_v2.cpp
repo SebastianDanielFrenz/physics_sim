@@ -107,7 +107,7 @@ TEST_CASE("A5 V7: lumped engines keep generator v1 bit-identical", "[drivetrain]
         io::EngineMapOptions opt;
         opt.quality = MapQuality::Preview;
         opt.pool = &pool;
-        const vehicle::VehicleDesc v = io::load_vehicle_json(src("data/vehicles/car_sedan_gen.json"), opt);
+        const vehicle::VehicleDesc v = io::load_vehicle_json(src("tests/support/fixtures/vehicles/car_sedan_gen.json"), opt);
         const SimulatedEngineDesc* e = nullptr;
         for (const auto& c : v.powertrain.components) {
             if (const auto* s = std::get_if<SimulatedEngineDesc>(&c.params)) e = s;

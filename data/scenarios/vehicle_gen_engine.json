@@ -55,7 +55,7 @@
     {
       "name": "car",
       "chassis_body": "chassis",
-      "vehicle_json_path": "../vehicles/car_sedan_gen.json"
+      "vehicle_json_path": "../../tests/support/fixtures/vehicles/car_sedan_gen.json"
     }
   ],
   "control_events": [

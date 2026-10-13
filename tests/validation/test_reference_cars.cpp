@@ -3,8 +3,8 @@
 // baseline". Covers the three reference sedan variants as a single simple
 // pass/fail smoke:
 //   - data/vehicles/car_sedan.json     (FWD: driven FL, FR; 60/40 static split)
-//   - data/vehicles/car_sedan_rwd.json (RWD: driven RL, RR; 50/50 static split)
-//   - data/vehicles/car_sedan_awd.json (AWD: open centre diff -> open front +
+//   - tests/support/fixtures/vehicles/car_sedan_rwd.json (RWD: driven RL, RR; 50/50 static split)
+//   - tests/support/fixtures/vehicles/car_sedan_awd.json (AWD: open centre diff -> open front +
 //     rear diffs, all four driven; 50/50 static split, same body as the RWD
 //     reference)
 //
@@ -105,11 +105,11 @@ const std::array<CarConfig, 3> kCars = {{
     // RWD: measured max_driven_kappa=3.0000 (the +-3.0 clamp: lock-up transient at t = 1.11 s, see the header
     // comment; was 0.1032 before the derived tyre speed term), max_undriven_kappa=0.0690 (was 0.0011),
     // speed@3s=12.4831.
-    {"/data/vehicles/car_sedan_rwd.json", "RWD (car_sedan_rwd)", {false, false, true, true}, 3.1, 0.10, 7.0},
+    {"/tests/support/fixtures/vehicles/car_sedan_rwd.json", "RWD (car_sedan_rwd)", {false, false, true, true}, 3.1, 0.10, 7.0},
     // AWD: measured max_driven_kappa=1.3615 (open centre diff still spins
     // the less-loaded front axle, see header comment), no undriven wheels,
     // speed@3s=12.4359.
-    {"/data/vehicles/car_sedan_awd.json", "AWD (car_sedan_awd)", {true, true, true, true}, 1.8, 0.0, 7.0},
+    {"/tests/support/fixtures/vehicles/car_sedan_awd.json", "AWD (car_sedan_awd)", {true, true, true, true}, 1.8, 0.0, 7.0},
 }};
 
 constexpr real kMass = 1500.0;
@@ -227,7 +227,7 @@ TEST_CASE("Reference sedan car_sedan_gen (generated-map engine): idle, WOT launc
         jobs::JobSystem pool(10);
         io::EngineMapOptions opt;
         opt.pool = &pool;
-        desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_gen.json", opt);
+        desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_gen.json", opt);
     }
     auto rig = ps_test::build_vehicle_rig_from_desc(desc, kMass, kHalfExtents, kOriginHeight, /*slope_grade=*/0.0,
                                                     /*job_workers=*/4);

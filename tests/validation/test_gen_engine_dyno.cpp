@@ -57,7 +57,7 @@ namespace {
 constexpr real kPi = 3.14159265358979323846;
 constexpr real kH = 1.0 / 960.0;
 
-std::string gen_car_path() { return std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_gen.json"; }
+std::string gen_car_path() { return std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_gen.json"; }
 std::string mb_car_path() { return std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_sim.json"; }
 
 const SimulatedEngineDesc* sim_engine_of(const ps::vehicle::VehicleDesc& d) {

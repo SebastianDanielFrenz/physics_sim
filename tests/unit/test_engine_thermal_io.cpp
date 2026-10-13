@@ -254,11 +254,11 @@ TEST_CASE("I8 extends chain: a user file overrides only what it names", "[therma
 
 TEST_CASE("I8 vehicle opt-in keys", "[thermal][drivetrain][io]") {
     SECTION("shipped thermal vehicles opt in, shipped plain vehicles do not") {
-        const auto sim = io::load_vehicle_json(kRoot + "/data/vehicles/car_sedan_sim_thermal.json");
+        const auto sim = io::load_vehicle_json(kRoot + "/tests/support/fixtures/vehicles/car_sedan_sim_thermal.json");
         REQUIRE(sim.powertrain.thermal.has_value());
         CHECK(sim.powertrain.thermal->start == ThermalStartKind::Warm);
         CHECK(sim.powertrain.thermal->engine.displacement_l == Approx(2.487));
-        const auto graph = io::load_vehicle_json(kRoot + "/data/vehicles/car_sedan_thermal.json");
+        const auto graph = io::load_vehicle_json(kRoot + "/tests/support/fixtures/vehicles/car_sedan_thermal.json");
         REQUIRE(graph.powertrain.thermal.has_value());
         CHECK(graph.powertrain.thermal->engine.displacement_l == 2.0);
         CHECK(graph.powertrain.thermal->engine.motoring_friction_fraction == 0.6);

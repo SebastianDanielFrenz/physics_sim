@@ -207,7 +207,7 @@ Rig make_rig(const vehicle::VehicleDesc& desc, int workers = 1, real tick_hz = 2
     return rig;
 }
 
-vehicle::VehicleDesc thermal_desc(const char* file = "vehicles/car_sedan_sim_thermal.json") {
+vehicle::VehicleDesc thermal_desc(const char* file = "../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json") {
     return io::load_vehicle_json(data_path(file));
 }
 
@@ -224,7 +224,7 @@ const EngineThermalSnapshot& snapshot_thermal(const Rig& r) { return r.world->po
 } // namespace
 
 TEST_CASE("C3 World: a thermal vehicle publishes state, snapshot, telemetry and a closed thermal ledger", "[thermal][drivetrain]") {
-    for (const char* file : {"vehicles/car_sedan_sim_thermal.json", "vehicles/car_sedan_thermal.json"}) {
+    for (const char* file : {"../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json", "../tests/support/fixtures/vehicles/car_sedan_thermal.json"}) {
         INFO(file);
         Rig rig = make_rig(thermal_desc(file));
         World& w = *rig.world;

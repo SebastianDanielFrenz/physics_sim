@@ -1,20 +1,20 @@
 {
   "format": "physics_sim.vehicle/2",
-  "name": "car_sedan_pipes_rwd",
-  "source": "Owner request 2026-09-29 ('give me RWD'): data/vehicles/car_sedan_rwd.json (RWD 50/50 reference variant) with its engine swapped for engines/demo_i4_pipes.json - the [AS] generic 2.0 L NA I4 with intake/exhaust pipe blocks whose generated maps drive the physics and whose live pipe model drives the Godot engine voice, exactly as in car_sedan_pipes.json (the FWD 60/40 car). Everything else is car_sedan_rwd.json unchanged (geometry, suspension, 300 N*m clutch - the clutch car_sedan_pipes.json uses too - sedan_6mt, open rear diff 4.06, tyres, brakes, aero, tcu). Checked by tests/validation/test_car_sedan_pipes.cpp (the same idle, free-rev and launch checks as the FWD car).",
+  "name": "car_sedan_awd",
+  "source": "Reference AWD variant of data/vehicles/car_sedan.json (owner request 2026-09-25: FWD/RWD/AWD reference cars as simple baselines; car_sedan.json = FWD reference, car_sedan_rwd.json = RWD reference). Identical to car_sedan_rwd.json (50/50 static split, wheel attachments on data/models/car_sedan/car_sedan.rig.json's susp_* pivots, springs/dampers/ARBs, tyres, engine, clutch, gearbox, brakes, aero, driver aids - see that file's own source field for every number) except the driveline: gearbox.out -> open centre differential (ratio 1.0, lossless, 50/50 torque split, carrier inertia 0.01 kg*m^2 - a plain bevel/planetary centre diff as in early permanent-AWD saloons) -> front and rear open axle differentials (final drive 4.06, efficiency 0.97, the same unit as the FWD/RWD variants so overall gearing is unchanged) -> all four hubs. No centre lock, viscous coupling or LSD: this is the simplest AWD baseline (an open centre diff lets one spinning wheel take all the drive, which is expected behaviour for this layout, not a bug). The rear-axle handbrake acts on RL/RR only, so on its own it holds the car only through the gearbox when a gear is engaged.",
   "wheels": [
     { "name": "FL", "attachment_local": [1.35, 0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 61312.5, "damper_bump_rate": 3400.0, "damper_rebound_rate": 5000.0, "bump_stop_rate": 400000.0, "arb_rate": 15000.0 },
-      "arb_partner": 1, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": true, "is_front": true },
+      "arb_partner": 1, "tyre": "../../../../data/tyres/passenger_car_225_45r17.json", "steered": true, "is_front": true },
     { "name": "FR", "attachment_local": [1.35, -0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 61312.5, "damper_bump_rate": 3400.0, "damper_rebound_rate": 5000.0, "bump_stop_rate": 400000.0, "arb_rate": 15000.0 },
-      "arb_partner": 0, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": true, "is_front": true },
+      "arb_partner": 0, "tyre": "../../../../data/tyres/passenger_car_225_45r17.json", "steered": true, "is_front": true },
     { "name": "RL", "attachment_local": [-1.35, 0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 61312.5, "damper_bump_rate": 3400.0, "damper_rebound_rate": 5000.0, "bump_stop_rate": 400000.0, "arb_rate": 10000.0 },
-      "arb_partner": 3, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": false, "is_front": false },
+      "arb_partner": 3, "tyre": "../../../../data/tyres/passenger_car_225_45r17.json", "steered": false, "is_front": false },
     { "name": "RR", "attachment_local": [-1.35, -0.78, -0.343], "wheel_radius": 0.317, "wheel_width": 0.225, "wheel_mass": 18.0, "wheel_inertia": 0.905,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.18, "spring_rate": 61312.5, "damper_bump_rate": 3400.0, "damper_rebound_rate": 5000.0, "bump_stop_rate": 400000.0, "arb_rate": 10000.0 },
-      "arb_partner": 2, "tyre": "../tyres/passenger_car_225_45r17.json", "steered": false, "is_front": false }
+      "arb_partner": 2, "tyre": "../../../../data/tyres/passenger_car_225_45r17.json", "steered": false, "is_front": false }
   ],
   "steering": { "max_wheel_angle": 0.5236, "ackermann_fraction": 1.0, "rear_steer_fraction": 0.0, "steer_rate_limit": 0.0 },
   "brake_system": {
@@ -26,20 +26,28 @@
   "aero": { "drag_area_m2": 0.68 },
   "powertrain": {
     "components": [
-      { "id": "engine",  "type": "engine",  "ref": "../engines/demo_i4_pipes.json" },
+      { "id": "engine",  "type": "engine",  "ref": "../../../../data/engines/i4_2l_na.json" },
       { "id": "clutch",  "type": "clutch",  "capacity_nm": 300.0, "static_factor": 1.15,
         "engagement_vs_pedal": { "x": [0.0, 0.30, 0.45, 0.60, 0.75, 1.0], "y": [1.0, 1.0, 0.55, 0.15, 0.0, 0.0] },
         "out_inertia_kgm2": 0.004, "axis_local": [0, 1, 0] },
-      { "id": "gearbox", "type": "gearbox", "ref": "../gearboxes/sedan_6mt.json" },
-      { "id": "diff",    "type": "differential", "kind": "open", "ratio": 4.06, "efficiency": 0.97,
+      { "id": "gearbox", "type": "gearbox", "ref": "../../../../data/gearboxes/sedan_6mt.json" },
+      { "id": "centre",  "type": "differential", "kind": "open", "ratio": 1.0, "efficiency": 1.0,
+        "carrier_inertia_kgm2": 0.01, "carrier_axis_local": [1, 0, 0] },
+      { "id": "front",   "type": "differential", "kind": "open", "ratio": 4.06, "efficiency": 0.97,
+        "carrier_inertia_kgm2": 0.02, "carrier_axis_local": [0, 1, 0] },
+      { "id": "rear",    "type": "differential", "kind": "open", "ratio": 4.06, "efficiency": 0.97,
         "carrier_inertia_kgm2": 0.02, "carrier_axis_local": [0, 1, 0] }
     ],
     "shafts": [
       { "ports": ["engine.crank", "clutch.in"] },
       { "ports": ["clutch.out", "gearbox.in"] },
-      { "ports": ["gearbox.out", "diff.carrier"] },
-      { "ports": ["diff.left", "wheel:RL"] },
-      { "ports": ["diff.right", "wheel:RR"] }
+      { "ports": ["gearbox.out", "centre.carrier"] },
+      { "ports": ["centre.left", "front.carrier"] },
+      { "ports": ["centre.right", "rear.carrier"] },
+      { "ports": ["front.left", "wheel:FL"] },
+      { "ports": ["front.right", "wheel:FR"] },
+      { "ports": ["rear.left", "wheel:RL"] },
+      { "ports": ["rear.right", "wheel:RR"] }
     ],
     "compliance": "rigid",
     "rotor_reaction": true

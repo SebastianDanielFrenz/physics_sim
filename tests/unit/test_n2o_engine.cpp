@@ -634,7 +634,7 @@ TEST_CASE("N2 E7: NACA MR E5F26 IMEP increase vs N2O/air ratio on the generated 
         jobs::JobSystem pool(10);
         io::EngineMapOptions opt;
         opt.pool = &pool;
-        car = io::load_vehicle_json(data_path("vehicles/car_sedan_gen.json"), opt);
+        car = io::load_vehicle_json(data_path("../tests/support/fixtures/vehicles/car_sedan_gen.json"), opt);
     }
     const SimulatedEngineDesc* gen = find_component<SimulatedEngineDesc>(car);
     REQUIRE(gen != nullptr);

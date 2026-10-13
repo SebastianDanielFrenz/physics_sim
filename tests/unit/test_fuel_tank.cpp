@@ -1249,7 +1249,7 @@ TEST_CASE("C6 T10: starvation scales tau_comb and every combustion d term by s (
 }
 
 // ---------------------------------------------------------------------------
-// C7 review F5: data/vehicles/tractor_fuel.json (the tractor + a full 182.19 kg
+// C7 review F5: tests/support/fixtures/vehicles/tractor_fuel.json (the tractor + a full 182.19 kg
 // diesel tank, see that file's own "source" field) is currently loaded by no
 // test/script/adapter - a smoke test only, not a physics acceptance test:
 // the file loads via the production path, the crude no-map diesel engine
@@ -1264,7 +1264,7 @@ TEST_CASE("C6 T10: starvation scales tau_comb and every combustion d term by s (
 // immediately.
 // ---------------------------------------------------------------------------
 TEST_CASE("C7 F5: tractor_fuel.json loads, idles without stalling and burns down its diesel tank", "[unit][drivetrain][fuel][vehicle]") {
-    vehicle::VehicleDesc desc = io::load_vehicle_json(data_path("vehicles/tractor_fuel.json"));
+    vehicle::VehicleDesc desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/tractor_fuel.json");
     const real capacity_kg = tank_of(desc).capacity_kg;
     REQUIRE(capacity_kg == Catch::Approx(182.19).margin(1e-9));
 

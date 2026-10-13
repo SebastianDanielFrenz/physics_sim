@@ -29,7 +29,7 @@
     {
       "name": "car",
       "chassis_body": "chassis",
-      "vehicle_json_path": "../vehicles/car_sedan_sim_thermal.json",
+      "vehicle_json_path": "../../tests/support/fixtures/vehicles/car_sedan_sim_thermal.json",
       "engine_thermal_start": "ambient"
     }
   ],

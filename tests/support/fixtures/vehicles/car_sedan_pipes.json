@@ -20,7 +20,7 @@
         "arb_rate": 15000.0
       },
       "arb_partner": 1,
-      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
       "steered": true,
       "is_front": true
     },
@@ -41,7 +41,7 @@
         "arb_rate": 15000.0
       },
       "arb_partner": 0,
-      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
       "steered": true,
       "is_front": true
     },
@@ -62,7 +62,7 @@
         "arb_rate": 10000.0
       },
       "arb_partner": 3,
-      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
       "steered": false,
       "is_front": false
     },
@@ -83,7 +83,7 @@
         "arb_rate": 10000.0
       },
       "arb_partner": 2,
-      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
       "steered": false,
       "is_front": false
     }
@@ -127,7 +127,7 @@
       {
         "id": "engine",
         "type": "engine",
-        "ref": "../engines/demo_i4_pipes.json"
+        "ref": "../../../../data/engines/demo_i4_pipes.json"
       },
       {
         "id": "clutch",
@@ -144,7 +144,7 @@
       {
         "id": "gearbox",
         "type": "gearbox",
-        "ref": "../gearboxes/sedan_6mt.json"
+        "ref": "../../../../data/gearboxes/sedan_6mt.json"
       },
       {
         "id": "diff",

@@ -159,7 +159,10 @@ already absolute, it is used as-is; otherwise it is resolved relative to the
 parent_path()`), never relative to the current working directory or to
 `data/` itself. This is why every shipped vehicle file writes tyre/engine/
 gearbox paths as `"../tyres/..."`, `"../engines/..."`, `"../gearboxes/..."`
-— they live in `data/vehicles/`, one level below `data/`. A scenario file
+— they live in `data/vehicles/`, one level below `data/`. The reference-car
+variants that are no longer shipped (owner 2026-10-13: `data/vehicles/` keeps only `car_sedan`, `car_sedan_sim`,
+`car_hyper`, `car_hyper_n2o`, `tractor`) are test fixtures in `tests/support/fixtures/vehicles/` and write the same
+paths as `"../../../../data/tyres/..."` etc. A scenario file
 resolves `vehicle_json_path`, `terrain.spec_path` and `surface_table_path`
 the same way, relative to the scenario file's own directory
 (`core/src/io/scenario.cpp`).

@@ -484,10 +484,23 @@ func _ready() -> void:
 			_env_day = a.substr(len("--m1-day=")).to_int()
 		elif a.begins_with("--m1-vehicle="):
 			# Picks data/vehicles/<name>.json instead of the exported default -
-			# e.g. car_sedan (FWD reference), car_sedan_rwd (RWD reference),
-			# tractor (MFWD - see VEHICLE_TABLE above for its chassis/model/
-			# spawn resolution just below).
-			vehicle_relative_path = "data/vehicles/%s.json" % a.substr(len("--m1-vehicle="))
+			# e.g. car_sedan (FWD reference), car_hyper, tractor (MFWD - see
+			# VEHICLE_TABLE above for its chassis/model/spawn resolution just
+			# below). Only five cars ship in data/vehicles (owner 2026-10-13);
+			# the other reference variants (car_sedan_pipes - the one with
+			# engine sound -, car_sedan_rwd, ...) are test fixtures in
+			# tests/support/fixtures/vehicles/, found by the same bare name
+			# when data/vehicles has no such file. A value containing "/" or
+			# ending in ".json" is taken as a repo-relative path as given.
+			var vehicle_arg: String = a.substr(len("--m1-vehicle="))
+			if vehicle_arg.contains("/") or vehicle_arg.ends_with(".json"):
+				vehicle_relative_path = vehicle_arg
+			else:
+				vehicle_relative_path = "data/vehicles/%s.json" % vehicle_arg
+				if not FileAccess.file_exists(_repo_root().path_join(vehicle_relative_path)):
+					var fixture_path := "tests/support/fixtures/vehicles/%s.json" % vehicle_arg
+					if FileAccess.file_exists(_repo_root().path_join(fixture_path)):
+						vehicle_relative_path = fixture_path
 
 	# Tractor demo (2026-09-28): resolve the chassis mass/half-extents/
 	# z-offset, art model and default spawn for whichever vehicle

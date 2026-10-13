@@ -1,5 +1,5 @@
 // tests/validation/test_car_sedan_gen_n2o.cpp -- N2O plan N2 smoke test of the shipped
-// nitrous car data/vehicles/car_sedan_gen_n2o.json (car_sedan_gen + the 10 lb 950 psi
+// nitrous car tests/support/fixtures/vehicles/car_sedan_gen_n2o.json (car_sedan_gen + the 10 lb 950 psi
 // bottle + the Edelbrock 70011 50 hp kit + edelbrock_basic controller, arm channel
 // "nitrous_arm"). A WOT pull: launch in 1st, upshift at 5500 rpm to 2nd and 3rd, arm the
 // kit once 3rd is in and the auto-clutch has locked, pull to 6000 rpm. The same script
@@ -129,7 +129,7 @@ TEST_CASE("car_sedan_gen_n2o: WOT 3rd-gear pull with the 50 hp kit armed once th
         jobs::JobSystem pool(10);
         io::EngineMapOptions opt;
         opt.pool = &pool;
-        desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan_gen_n2o.json", opt);
+        desc = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_gen_n2o.json", opt);
     }
     const PullResult with = pull(desc, true);
     const PullResult base = pull(desc, false);

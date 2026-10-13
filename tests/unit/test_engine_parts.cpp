@@ -230,8 +230,8 @@ TEST_CASE("garage P2: an extends chain equals the inline file (key, desc, state 
     CHECK(rig_trace(a, 240) == rig_trace(b, 240));
 
     // The same through a vehicle: identical state hash.
-    json v = read_json(data_dir() + "/vehicles/car_sedan_pipes.json");
-    absolutize(v, fs::path(data_dir()) / "vehicles");
+    json v = read_json(fixture_vehicles_dir() + "/car_sedan_pipes.json");
+    absolutize(v, fs::path(fixture_vehicles_dir()));
     component(v, "engine")["ref"] = child;
     const auto va = ps::io::load_vehicle_json(td.write("va.json", v), preview());
     component(v, "engine")["ref"] = inline_path;
@@ -337,8 +337,8 @@ TEST_CASE("garage P2: each slot at engine, vehicle and user level wins bottom-up
     eng["default_ecu"] = "../ecus/e.json";
     eng["default_cam"] = "../cams/e.json";
     const std::string eng_path = td.write("engines/eng.json", eng);
-    json v = read_json(data_dir() + "/vehicles/car_sedan_pipes.json");
-    absolutize(v, fs::path(data_dir()) / "vehicles");
+    json v = read_json(fixture_vehicles_dir() + "/car_sedan_pipes.json");
+    absolutize(v, fs::path(fixture_vehicles_dir()));
     component(v, "engine")["ref"] = eng_path;
     const std::string inst_v = data_path("installations/demo_i4_exhaust.json");
 
@@ -406,8 +406,8 @@ TEST_CASE("garage P2: each slot at engine, vehicle and user level wins bottom-up
         CHECK_THROWS_WITH(load(h, o), ContainsSubstring("above ambient"));
     }
     SECTION("thermal: engine default < vehicle < user") {
-        json t = read_json(data_dir() + "/vehicles/car_sedan_thermal.json");
-        absolutize(t, fs::path(data_dir()) / "vehicles");
+        json t = read_json(fixture_vehicles_dir() + "/car_sedan_thermal.json");
+        absolutize(t, fs::path(fixture_vehicles_dir()));
         auto src = [&](const json& vehicle, const ps::io::VehicleLoadOptions& o) {
             const auto d = load(vehicle, o);
             REQUIRE(d.powertrain.thermal.has_value());
@@ -432,7 +432,7 @@ TEST_CASE("garage P2: each slot at engine, vehicle and user level wins bottom-up
 // gearbox ref" reads 6 == 7 forward ratios, "an engine ref" keeps the pipe engine.
 // ---------------------------------------------------------------------------
 TEST_CASE("garage P2: the user layer replaces part files and rejects what it cannot apply", "[io][drivetrain]") {
-    const std::string car = data_dir() + "/vehicles/car_sedan_pipes.json";
+    const std::string car = fixture_vehicles_dir() + "/car_sedan_pipes.json";
     ps::io::VehicleLoadOptions o;
     o.maps = validate_only();
     SECTION("no overrides = the plain load") {
@@ -441,14 +441,14 @@ TEST_CASE("garage P2: the user layer replaces part files and rejects what it can
         CHECK(key_of(sim_engine(a)) == key_of(sim_engine(b)));
     }
     SECTION("an engine ref (relative to the vehicle file)") {
-        o.part_overrides["engine"].ref = "../engines/toyota_a25a_fks_gen.json";
+        o.part_overrides["engine"].ref = "../../../../data/engines/toyota_a25a_fks_gen.json";
         const auto d = ps::io::load_vehicle_json(car, o);
         const auto& e = sim_engine(d);
         REQUIRE(e.cycle.has_value());
         CHECK_FALSE(e.cycle->intake.has_value()); // the A25A has no pipe blocks
     }
     SECTION("a gearbox ref") {
-        o.part_overrides["gearbox"].ref = "../gearboxes/hyper_7mt.json";
+        o.part_overrides["gearbox"].ref = "../../../../data/gearboxes/hyper_7mt.json";
         const auto d = ps::io::load_vehicle_json(car, o);
         bool found = false;
         for (const auto& c : d.powertrain.components)

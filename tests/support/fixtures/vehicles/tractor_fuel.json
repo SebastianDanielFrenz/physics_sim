@@ -5,16 +5,16 @@
   "wheels": [
     { "name": "FL", "attachment_local": [1.82, 0.95, -0.5], "wheel_radius": 0.8, "wheel_width": 0.48, "wheel_mass": 80.0, "wheel_inertia": 25.6,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 515025.0, "damper_bump_rate": 18600.0, "damper_rebound_rate": 24000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
-      "arb_partner": -1, "tyre": "../tyres/tractor_front.json", "steered": true, "is_front": true },
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_front.json", "steered": true, "is_front": true },
     { "name": "FR", "attachment_local": [1.82, -0.95, -0.5], "wheel_radius": 0.8, "wheel_width": 0.48, "wheel_mass": 80.0, "wheel_inertia": 25.6,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 515025.0, "damper_bump_rate": 18600.0, "damper_rebound_rate": 24000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
-      "arb_partner": -1, "tyre": "../tyres/tractor_front.json", "steered": true, "is_front": true },
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_front.json", "steered": true, "is_front": true },
     { "name": "RL", "attachment_local": [-0.98, 0.95, -0.275], "wheel_radius": 1.025, "wheel_width": 0.62, "wheel_mass": 150.0, "wheel_inertia": 78.8,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 956475.0, "damper_bump_rate": 34500.0, "damper_rebound_rate": 45000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
-      "arb_partner": -1, "tyre": "../tyres/tractor_rear.json", "steered": false, "is_front": false },
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_rear.json", "steered": false, "is_front": false },
     { "name": "RR", "attachment_local": [-0.98, -0.95, -0.275], "wheel_radius": 1.025, "wheel_width": 0.62, "wheel_mass": 150.0, "wheel_inertia": 78.8,
       "suspension": { "axis": [0, 0, 1], "travel_max": 0.04, "spring_rate": 956475.0, "damper_bump_rate": 34500.0, "damper_rebound_rate": 45000.0, "bump_stop_rate": 2000000.0, "arb_rate": 0.0 },
-      "arb_partner": -1, "tyre": "../tyres/tractor_rear.json", "steered": false, "is_front": false }
+      "arb_partner": -1, "tyre": "../../../../data/tyres/tractor_rear.json", "steered": false, "is_front": false }
   ],
   "steering": { "max_wheel_angle": 0.6, "ackermann_fraction": 1.0, "rear_steer_fraction": 0.0, "steer_rate_limit": 0.0 },
   "brake_system": {
@@ -26,11 +26,11 @@
   "aero": { "drag_area_m2": 4.0 },
   "powertrain": {
     "components": [
-      { "id": "engine",  "type": "engine",  "ref": "../engines/diesel_i4_4l5_turbo.json" },
+      { "id": "engine",  "type": "engine",  "ref": "../../../../data/engines/diesel_i4_4l5_turbo.json" },
       { "id": "clutch",  "type": "clutch",  "capacity_nm": 900.0, "static_factor": 1.2,
         "engagement_vs_pedal": { "x": [0.0, 0.35, 0.55, 0.70, 1.0], "y": [1.0, 1.0, 0.4, 0.0, 0.0] },
         "out_inertia_kgm2": 0.03, "axis_local": [-1, 0, 0] },
-      { "id": "gearbox", "type": "gearbox", "ref": "../gearboxes/tractor_12f4r.json" },
+      { "id": "gearbox", "type": "gearbox", "ref": "../../../../data/gearboxes/tractor_12f4r.json" },
       { "id": "transfer", "type": "transfer_case", "rear_ratio": 1.0, "front_ratio": 1.0,
         "clutch": { "capacity_nm": 2500.0, "static_factor": 1.2, "engage_time_s": 0.3 },
         "channel": "awd", "in_inertia_kgm2": 0.02, "front_inertia_kgm2": 0.05, "axis_local": [-1, 0, 0] },
@@ -44,7 +44,7 @@
       { "id": "pto", "type": "pto", "ratios": { "540": 3.61, "1000": 1.95 },
         "capacity_nm": 700.0, "static_factor": 1.2, "engage_time_s": 1.5, "efficiency": 0.96,
         "out_inertia_kgm2": 0.05, "disengaged_brake_time_s": 1.0, "channel": "pto", "speed_channel": "pto_speed" },
-      { "id": "tank", "type": "fuel_tank", "fuel": "../fuels/diesel.json", "capacity_kg": 182.19, "initial_kg": 182.19 }
+      { "id": "tank", "type": "fuel_tank", "fuel": "../../../../data/fuels/diesel.json", "capacity_kg": 182.19, "initial_kg": 182.19 }
     ],
     "shafts": [
       { "ports": ["engine.crank", "clutch.in", "pto.in"] },
