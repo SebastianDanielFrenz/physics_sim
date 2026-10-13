@@ -12,7 +12,8 @@
 //       check_driveline_limits (GearboxInputTorque, rpm = the peak point's rpm, required_min == peak, required_margin ==
 //       1.1 * peak to 1e-12); rated 1500 -> no finding; rated 1250 (extends chain) -> Limiting (10 %); the finding sorts after
 //       a ClutchCapacity finding.
-//   G5  torque map (i4, peak 199.8 +- 0.05): rating 185 -> Limiting, 170 -> Exceeded, 200 -> none.
+//   G5  torque map (i4): peak_net_torque_nm == 200.0 (curve knot max; the dyno's sampled peak 199.8 is within 0.2 % and never above):
+//       rating 199 -> Near, 185 -> Limiting, 170 -> Exceeded, 200 -> none.
 //   G6  classify_gearbox_change: the table in the case (None / Runtime / Respawn), symmetric, worst field wins.
 //   G7  sound fields (World, car_sedan with a straight-cut gearbox with tooth counts): mesh_frequency_hz[0] ==
 //       |w_in| * z_a / (2 pi) and [1] == |w_in| * (z_a / z_b) * z_drive(gear) / (2 pi), relative 1e-12 on EVERY tick of a
@@ -134,7 +135,7 @@ const ComponentParams& i4_torque_map() {
 }
 DynoSweepSpec hyper_spec() {
     DynoSweepSpec s;
-    s.rpm = {5000.0, 6000.0, 7000.0};
+    s.rpm = {2500.0, 5000.0, 6000.0, 7000.0}; // the first point (low boost) must NOT be the peak: it guards "peak point" vs "first point"
     return s;
 }
 const DynoResult& hyper_dyno() {
@@ -311,6 +312,7 @@ TEST_CASE("G4 hyper: a 900 N*m box is Exceeded (rule and finding), 1500 is clear
     const DynoResult& dyno = hyper_dyno();
     const DynoPoint& pk = peak_point(dyno);
     REQUIRE(pk.torque_nm > 1300.0);
+    REQUIRE(pk.rpm != dyno.points.front().rpm);
 
     const auto load = [&](const char* file) {
         io::VehicleLoadOptions o;
@@ -384,7 +386,8 @@ TEST_CASE("G5 torque-map engine: peak_net_torque_nm and the rating grades", "[dr
     // Recorded sabotage: taking the curve's LAST point (4550+ rpm, lower than the peak) instead of the maximum reports 185 as Near.
     const auto& tm = std::get<TorqueMapEngineDesc>(i4_torque_map());
     const double peak = peak_net_torque_nm(tm);
-    CHECK(peak == Catch::Approx(199.8).margin(0.05));
+    CHECK(peak == 200.0); // the curve's knot maximum (4500 rpm); the dyno's sampled net peak is 199.8
+    CHECK(static_cast<int>(check_gearbox_rating(rated(199.0), peak)[0].severity) == static_cast<int>(LimitSeverity::Near));
     const auto sev = [&](double rating) {
         const auto issues = check_gearbox_rating(rated(rating), peak);
         return issues.empty() ? -1 : static_cast<int>(issues[0].severity);
@@ -392,9 +395,10 @@ TEST_CASE("G5 torque-map engine: peak_net_torque_nm and the rating grades", "[dr
     CHECK(sev(185.0) == static_cast<int>(LimitSeverity::Limiting));
     CHECK(sev(170.0) == static_cast<int>(LimitSeverity::Exceeded));
     CHECK(sev(200.0) == -1);
-    // The dyno of the torque map agrees with the closed form.
+    // The dyno of the torque map agrees with the closed form within its rpm sampling (199.8 vs 200, never above).
     const DynoResult dyno = run_dyno_sweep(i4_torque_map(), nullptr, DynoSweepSpec{}, nullptr);
-    CHECK(peak_point(dyno).torque_nm == Catch::Approx(peak).epsilon(1e-12));
+    CHECK(peak_point(dyno).torque_nm <= peak);
+    CHECK(peak_point(dyno).torque_nm == Catch::Approx(peak).epsilon(0.002));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -564,7 +568,7 @@ TEST_CASE("G8 mesh_load_nm is the torque through the engaged gear (clutch torque
     // Recorded sabotages: publishing the lagged hashed variable (gearbox_lambda_mesh_prev_) leaves the lossless box at 0 and
     // fails its rows; publishing the torque at the OUTPUT (times the ratio) fails the 3 % band by a factor of 3.5.
     for (const bool lossless : {false, true}) {
-        INFO(lossless ? "lossless box" : "lossy box");
+        INFO((lossless ? "lossless box" : "lossy box"));
         vehicle::VehicleDesc desc = sedan_with("");
         if (lossless) {
             GearboxDesc& g = gearbox_in(desc);

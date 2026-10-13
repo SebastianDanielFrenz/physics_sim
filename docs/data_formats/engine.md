@@ -1144,7 +1144,7 @@ filled and the required values NaN, `solved = false`, until `solve_remedy` runs 
 | `CompressorChoke` (5) | window max pair flow / `max_mass_flow_kg_s` - a capacity margin; the maps carry no per-speed choke line | `Near` >= 0.90, `Limiting` >= 1.0 | fraction / 1.0 | turbo `/max_mass_flow_kg_s` | P3b-1 |
 | `ChargeTemperature` (6) | not produced: no charge-temperature limit exists in any data file | - | - | - | later |
 | `ClutchCapacity` (7) | `check_driveline_limits`: peak sweep torque vs `capacity_nm * static_factor` | `Near` when peak x 1.3 >= static capacity, `Limiting` when peak >= it | N*m | clutch `/capacity_nm` + Closed remedy | P3b-1 |
-| `GearboxInputTorque` (8) | not produced: `GearboxDesc` has no input-torque rating (its synchro capacities are shift capacities) | - | - | - | later |
+| `GearboxInputTorque` (8) | `check_driveline_limits`: peak sweep torque (boosted, with a kit when the sweep has one) vs the gearbox's `rated_input_torque_nm` (unrated = 0 = skipped), graded when the peak is OVER the rating | `Near` > 0 %, `Limiting` > 5 %, `Exceeded` > 15 % over | N*m | gearbox `/rated_input_torque_nm` + Closed remedy (`required_min` = peak, `required_margin` = 1.1 x peak) | trans T0 |
 | `KitFuelLean` (9) | sweep with a kit: window mean of the engine's combined lambda (fuel + kit fuel, the N2O's oxygen counted), over the substeps the charge model ran (the kit sprayed for >= half of the window) | `Near` >= 0.90, `Limiting` >= 1.00, `Exceeded` >= 1.10 | lambda / 0.90 | nitrous_kit `/fuel_jet_diameter_mm` + Closed remedy (mm) | P3b-2 |
 | `InjectorDuty` (10) | not produced: no injector model exists anywhere in `core/` (fuel is a mean flow) | - | - | - | later |
 | `N2OBottleDuration` (11) | sweep with a kit: bottle content / the N2O flow at the sweep's largest-flow point (the shortest life), static per sweep and tagged with that rpm | `Limiting` < 10 s, `Near` < 11 s | s / 10 s | n2o_bottle `/capacity_kg` + Closed remedy (kg) | P3b-2 |
@@ -1173,6 +1173,15 @@ kinetic `capacity_nm`): `current = capacity_nm`, `required_min = peak / static_f
 peak), `required_margin = 1.3 * peak / static_factor` (the table's safety margin; both equal `peak` and `1.3 * peak` when
 `static_factor` is 1). The ratios `required_min / current` and `required_margin / current` are the "increase by n x" the
 advisor prints. Rev limiter and fuel cut findings have no remedy.
+
+Trans T0 (`check_driveline_limits(dyno, powertrain, clutch_file = {}, gearbox_file = {})`): a gearbox with
+`rated_input_torque_nm` also gets a `GearboxInputTorque` finding at the peak point's rpm (sorted after `ClutchCapacity`,
+`PartRef{"gearbox", gearbox_file, "/rated_input_torque_nm"}`). Unlike the clutch rule it grades only a peak OVER the rating
+(`kGearboxOverLimiting` 5 %, `kGearboxOverExceeded` 15 %, remedy margin `kGearboxRemedyMargin` 1.10, all `[AS]` in
+`engine_rules_table.h`). The build-time twin is `check_gearbox_rating(GearboxDesc | PowertrainDesc, peak_nm)` (`BuildRule::GearboxRating`
+16, slot `gearbox`): `check_buildable` is static, so the caller passes the peak - `peak_net_torque_nm(TorqueMapEngineDesc)` for a
+torque map, the dyno's peak for a simulated engine. `classify_gearbox_change(a, b)` -> `GearboxChange` {None: gear_type, teeth,
+mesh_order; Runtime: rating, efficiencies, synchro, shift timing, initial_gear; Respawn: type, ratios, inertias, axes}.
 
 #### Nitrous in the sweep (P3b-2)
 
