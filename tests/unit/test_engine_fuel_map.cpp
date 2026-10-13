@@ -1017,7 +1017,7 @@ nlohmann::json vehicle_with_engine(const nlohmann::json& engine_component) {
     nlohmann::json v;
     v["format"] = "physics_sim.vehicle/2";
     v["source"] = "test fixture, not a real vehicle (test_engine_fuel_map.cpp)";
-    v["wheels"] = nlohmann::json::array({{{"name", "FL"}}});
+    v["wheels"] = nlohmann::json::array({{{"name", "FL"}, {"tyre", {{"source", "test fixture"}}}}});
     v["powertrain"] = {{"components", nlohmann::json::array({engine_component})}};
     return v;
 }

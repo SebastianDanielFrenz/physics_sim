@@ -107,7 +107,7 @@ json vehicle_with_components(const json& components) {
     json v;
     v["format"] = "physics_sim.vehicle/2";
     v["source"] = "test fixture, not a real vehicle (test_simulated_engine_io.cpp)";
-    v["wheels"] = json::array({{{"name", "FL"}}});
+    v["wheels"] = json::array({{{"name", "FL"}, {"tyre", {{"source", "test fixture"}}}}});
     v["powertrain"] = {{"components", components}};
     return v;
 }
@@ -664,7 +664,7 @@ TEST_CASE("C10: throttle_control and manual_tcu input-type checks cover simulate
         json v;
         v["format"] = "physics_sim.vehicle/2";
         v["source"] = "test fixture, not a real vehicle (test_simulated_engine_io.cpp)";
-        v["wheels"] = json::array({{{"name", "FL"}}, {{"name", "FR"}}});
+        v["wheels"] = json::array({{{"name", "FL"}, {"tyre", {{"source", "test fixture"}}}}, {{"name", "FR"}, {"tyre", {{"source", "test fixture"}}}}});
         v["powertrain"] = {
             {"components",
              json::array({base_mechanical_engine(),

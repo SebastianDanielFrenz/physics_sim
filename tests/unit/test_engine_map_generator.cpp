@@ -277,7 +277,7 @@ json vehicle_with_engine(const json& engine) {
     json v;
     v["format"] = "physics_sim.vehicle/2";
     v["source"] = "test fixture, not a real vehicle (test_engine_map_generator.cpp)";
-    v["wheels"] = json::array({{{"name", "FL"}}});
+    v["wheels"] = json::array({{{"name", "FL"}, {"tyre", {{"source", "test fixture"}}}}});
     v["powertrain"] = {{"components", json::array({engine})}};
     return v;
 }

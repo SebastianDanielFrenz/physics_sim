@@ -62,7 +62,7 @@ One entry of the top-level `wheels` array (`ps::vehicle::WheelDesc`).
 | `wheel_inertia` | real (kg·m²) | optional | `0.9` | **must be > 0**, checked not by `vehicle_io.cpp` but by `Powertrain::Powertrain` (`core/src/drivetrain/powertrain.cpp`), which every `World::create_vehicle` call runs unconditionally (even for a vehicle with an empty `powertrain` block) — so `load_vehicle_json` alone won't catch a bad value, but building the vehicle into a `World` will: `"vehicle '<name>': wheel '<wheel>' has non-positive wheel_inertia (needed as the drivetrain hub's own inertia)"` | spin inertia about the wheel's own axis; also the drivetrain hub node's inertia |
 | `suspension` | [suspension object](#suspension) | optional | all fields at their own defaults | see below | per-corner spring/damper/ARB |
 | `arb_partner` | int | optional | `-1` | **not range-checked** by the loader (see README "Discrepancies found") | index into `wheels[]` of this wheel's anti-roll-bar pair; `-1` = none |
-| `tyre` | [tyre reference](tyre.md) | optional | empty `TyreDesc` (all its own defaults) | see `tyre.md` | inline tyre object, a path to a standalone tyre JSON, or a path to a `.tir` file |
+| `tyre` | [tyre reference](tyre.md) | **required** unless `VehicleLoadOptions::tyres` injects one for this wheel's `name` | none (a wheel with neither is a load error: `vehicle <file>: wheel '<name>': no tyre (give a "tyre" path/object or VehicleLoadOptions::tyres)`; it used to get an empty default `TyreDesc`) | see `tyre.md` | inline tyre object, a path to a standalone tyre JSON, or a path to a `.tir` file; an injected desc replaces it (see "Injected tyres" below) |
 | `tyre_profile` | string | optional | `""` | none (stored as-is; not resolved yet) | path or name of a [`physics_sim.tyre_profile/1`](tyre_profile.md) file for the surface condition grip. W6 stores it but resolves every wheel through the environment's `default_tyre_profile`; the per-wheel lookup is W7 |
 | `steered` | bool | optional | `false` | none | whether this wheel responds to the `"steer"` control channel |
 | `is_front` | bool | optional | `true` | none | selects the Ackermann-axle-averaging group and the rear-steer sign (see below); does **not** by itself pick a `brake_system` corner (that matches by `name`) |
@@ -1218,3 +1218,11 @@ vehicle file: same descriptor, same `.psmaps`/turbo keys, same state hash.
 a `controllers` entry id: a path to a `physics_sim.electronics/1` file replaces that entry's part or adds a new entry
 (grafting launch control onto a car that has none), `"none"` removes the entry. Details and rejections:
 [electronics.md](electronics.md). The same map attaches an `assist_unit` (id of your choice, e.g. `"assist"`).
+
+**Injected tyres.** `VehicleLoadOptions::tyres` (`std::map<std::string, vehicle::TyreDesc>`) is keyed by WHEEL NAME
+(`WheelDesc::name`): a game that builds its tyres in memory (compound + size) passes the descs instead of writing tyre
+files. An injected desc REPLACES the wheel's own `"tyre"` (path or inline object) when both exist — the user wins, like
+`part_overrides` — and the file tyre is then not read at all. It gets the same validation as a file tyre (one function,
+`validate_tyre_desc`: non-empty `source`, `rolling_resistance_v_eps` > 0, `low_speed_damping_ratio` in [0, 2],
+`low_speed_damping_vx` > 0). A key that names no wheel is rejected (`"VehicleLoadOptions::tyres: no wheel named 'x'"`).
+Unknown keys inside a wheel object (e.g. a game's own `"tyre_spec"`) are ignored by the loader, as before.
