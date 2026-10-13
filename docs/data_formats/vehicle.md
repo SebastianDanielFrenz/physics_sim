@@ -975,6 +975,9 @@ block is mode On. Without a unit the channel keeps its pre-unit meaning (`> 0.5`
 **Drive modes (assists I7).** The `electronics` entry may also be a `drive_modes` part (car-specific: pedal bend, auto-shift
 rpm points, post-shift clutch close time, a traction-control default, launch-control and N2O gates; at most one per
 vehicle; needs the car's `manual_tcu`). Channel `assist.drive_mode`. See [electronics.md](electronics.md#drive-modes).
+A mode's `traction_control_default` / `launch_control_default` is written into the `assist.traction_control` /
+`assist.launch_control` channel by the physics (assists I7c; `World::step` applies it after the tick, so `get_control` reads it right
+after `step()` and one driver write of any value wins) - clients that mirror the channels must adopt it (electronics.md rule 4c).
 
 ### The `traction_control` block
 

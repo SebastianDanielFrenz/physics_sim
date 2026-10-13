@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include "ps_simulation.h"
+#include "channel_mirror.h"
 
 #include <filesystem>
 #include <algorithm>
@@ -236,9 +237,12 @@ void PsSimulation::rebuild_post_step_and_start() {
         // Control channels: the only writer of VALUES from here on is the
         // Godot main thread (set_control), the only writer of KEYS was
         // load_scenario() before start() ran - see the header comment.
-        for (auto& kv : control_channels_) {
-            world_->set_control(kv.first, static_cast<ps::real>(kv.second.load(std::memory_order_relaxed)));
-        }
+        // Assists I7c: push_channels also records what it pushed, so post_step can adopt a channel the PHYSICS wrote
+        // during the step (a drive-mode change writes its TC / launch-control default into the channel) - see
+        // channel_mirror.h. Without that mirror this push would overwrite the physics' write with the stale value.
+        ps_godot::push_channels(control_channels_, pushed_channels_, [this](const std::string& name, float v) {
+            world_->set_control(name, static_cast<ps::real>(v));
+        });
 
         // PLAN.md M1 "reset vehicle" - applied here (sim thread, right
         // before World::step()) so a live reset never races
@@ -324,6 +328,9 @@ void PsSimulation::rebuild_post_step_and_start() {
     });
 
     sim_thread_->set_post_step([this]() {
+        // Assists I7c: adopt channel values the physics wrote during this step (a user write made meanwhile wins).
+        ps_godot::adopt_world_channel_writes(control_channels_, pushed_channels_,
+                                             [this](const std::string& name) { return world_->get_control(name); });
         AdapterSnapshot snap;
         snap.tick = world_->tick();
         if (const ps::environment::EnvironmentSnapshot* env = world_->environment_snapshot()) {

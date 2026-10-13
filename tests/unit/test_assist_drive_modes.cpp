@@ -31,9 +31,10 @@
 //          0.3 s; with kickdown_throttle 0 the target stays 4 for the first 0.9 s (Normal and Sport; Eco likewise). The Eco
 //          threshold is on the COMMAND: pedal 0.96 (command 0.93) does not kick down for 0.9 s, pedal 0.98 (command 0.965)
 //          does within 0.3 s
-//   T1     TC default: after a mode change the effective TC mode is the mode's default (Normal on 1, Sport relaxed 2, Eco on 1);
-//          a changed TC channel value wins until the next mode change; at spawn the TC channel default is the default
-//          mode's and no override exists; Sport TC default Relaxed on a Street-unit car resolves to On (I1 fallback)
+//   T1     TC default: after a mode change the effective TC mode is the mode's default (Normal on 1, Sport relaxed 2, Eco on 1)
+//          and (assists I7c) the physics writes that code into the TC channel (get_control); a driver write wins until the next
+//          mode change; at spawn the TC channel default is the default mode's and nothing is written; Sport TC default Relaxed
+//          on a Street-unit car resolves to On (I1 fallback)
 //   C1     channel default = default mode code, available bits 0b111 (0b101 with eco removed), a car without the part: bits 0,
 //          no snapshot fields; an unoffered request maps to the part's default mode
 //   G1     brake 1 + throttle 1 from rest in 1st gear with assist.launch_control 1 for 1.5 s: launch_phase Armed (1) seen in
@@ -76,10 +77,10 @@
 //   3 close-time override ignored         -> S5 fails (with the first version of the tests nothing failed: S3 is white-box only)
 //   4 nitrous gate ignored                -> G2 fails (4)
 //   5 launch-control gate ignored         -> G1 fails (2)
-//   6 TC default override not applied     -> T1, T2 fail (7)
+//   6 TC default override not applied     -> T1, T2 fail (7)   [I7c: the default is a channel write now; re-recorded in test_assist_channel_writeback.cpp]
 //   7 kickdown ignored                    -> K1, K2, K3 fail (7)
 //   8 kickdown not spent by a gear change -> K3, H2 fail (3)
-//   9 driver TC write does not clear the override -> T1 fails (4)
+//   9 driver TC write does not clear the override -> T1 fails (4)   [I7c: the override state no longer exists]
 
 #include "drivetrain/manual_tcu.h"
 #include "drivetrain/throttle_stage.h"
@@ -871,7 +872,7 @@ TEST_CASE("K2: kickdown on a real car right after a reset; the Eco threshold is 
 // ---------------------------------------------------------------------------------------------------------------
 // T / C: traction-control default, channel, snapshot.
 // ---------------------------------------------------------------------------------------------------------------
-TEST_CASE("T1: the effective TC mode follows the drive mode's default; a TC channel change wins; spawn has no override", "[assist][drive_modes][vehicle][drivetrain]") {
+TEST_CASE("T1: the effective TC mode follows the drive mode's default (written into the channel, I7c); a TC channel write wins; spawn writes nothing", "[assist][drive_modes][vehicle][drivetrain]") {
     const VehicleDesc& d = n2o();
     Rig r = make_rig(d, 1);
     World& w = r.w();
@@ -879,7 +880,7 @@ TEST_CASE("T1: the effective TC mode follows the drive mode's default; a TC chan
     const auto tc_eff = [&] { return static_cast<int>(w.powertrain_state(v).traction_mode_effective); };
     const auto tc_req = [&] { return static_cast<int>(w.powertrain_state(v).traction_mode_requested); };
     const auto dm_eff = [&] { return static_cast<int>(w.powertrain_state(v).drive_mode_effective); };
-    // spawn: channel defaults are the default mode's (Normal: TC On = 1); no override
+    // spawn: channel defaults are the default mode's (Normal: TC On = 1); nothing is written
     CHECK(w.get_control("assist.drive_mode") == 1.0);
     CHECK(w.get_control("assist.traction_control") == 1.0);
     w.step();
@@ -891,6 +892,7 @@ TEST_CASE("T1: the effective TC mode follows the drive mode's default; a TC chan
     CHECK(dm_eff() == 2);
     CHECK(tc_req() == 2);
     CHECK(tc_eff() == 2);
+    CHECK(w.get_control("assist.traction_control") == 2.0); // I7c: the physics wrote the mode's code into the channel
     // the driver sets TC to Sport (3): it wins ...
     w.set_control("assist.traction_control", 3.0);
     w.step();
@@ -901,11 +903,12 @@ TEST_CASE("T1: the effective TC mode follows the drive mode's default; a TC chan
     w.set_control("assist.traction_control", 4.0);
     w.step();
     CHECK(tc_eff() == 4);
-    // Sport -> Eco: the mode default On (1) again, over the driver's 4
+    // Sport -> Eco: the mode default On (1) again, over the driver's 4 - written into the channel
     w.set_control("assist.drive_mode", 0.0);
     w.step();
     CHECK(dm_eff() == 0);
     CHECK(tc_eff() == 1);
+    CHECK(w.get_control("assist.traction_control") == 1.0);
     // Eco -> Normal: On
     w.set_control("assist.drive_mode", 1.0);
     w.step();
@@ -921,7 +924,7 @@ TEST_CASE("T1: the effective TC mode follows the drive mode's default; a TC chan
 
 TEST_CASE("T2: spawn in a non-default-TC mode, an unavailable TC default (I1 fallback), a part whose default mode is Sport", "[assist][drive_modes][vehicle][drivetrain][io]") {
     TempDir td("t2");
-    // default_mode sport: the TC channel default is Relaxed (2) at spawn, no override, a later switch to Normal re-applies On
+    // default_mode sport: the TC channel default is Relaxed (2) at spawn, nothing written, a later switch to Normal writes On
     {
         const std::string p = part_with(td, "sport_default.json", [](json& j) { j["default_mode"] = "sport"; });
         const VehicleDesc d = load_n2o(with_modes(p));

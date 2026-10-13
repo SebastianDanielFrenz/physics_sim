@@ -42,12 +42,13 @@ struct DriveModeParams {
     std::optional<real> up_rpm_at_zero_throttle, up_rpm_at_full_throttle, down_rpm_at_zero_throttle, down_rpm_at_full_throttle;
     // Overrides AutoClutchDesc::close_time_s (the post-shift e_auto close rate 1/close_time_s).
     std::optional<real> clutch_close_time_s;
-    // The traction mode the car switches to when this drive mode becomes effective (until the driver changes the
-    // assist.traction_control channel). Resolved through the assist-unit availability fallback.
+    // The traction mode the car switches to when this drive mode becomes effective: the physics WRITES that code into
+    // the assist.traction_control channel (assists I7c; applied by World::step after the tick, so a caller sees it via
+    // get_control), and the driver's next write of any value wins. Resolved through the assist-unit availability fallback.
     std::optional<TractionMode> traction_control_default;
-    // Assists I7b: the launch-control ENABLE the car switches to when this drive mode becomes effective (until the driver
-    // changes the assist.launch_control channel value) - the same rule as traction_control_default. Unset = this mode
-    // does not touch the enable. launch_control_allowed still gates on top: a mode that does not allow LC never arms.
+    // Assists I7b/I7c: the launch-control ENABLE the car switches to when this drive mode becomes effective: written into
+    // the assist.launch_control channel (1 / 0) exactly like traction_control_default. Unset = this mode does not touch
+    // the enable. launch_control_allowed still gates on top: a mode that does not allow LC never arms.
     std::optional<bool> launch_control_default;
     bool launch_control_allowed = true;
     bool nitrous_arm_allowed = true;

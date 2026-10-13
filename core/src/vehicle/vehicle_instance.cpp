@@ -211,18 +211,14 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     // without a unit offers Off/On only, so a value > 0.5 is On exactly as before the unit existed.
     //
     // Assists I7 (drive modes): on a car with a drive_modes part the effective drive mode is resolved first (a pure
-    // function of the assist.drive_mode channel and the desc). When the effective mode CHANGES, the TC request becomes
-    // that mode's traction_control_default and stays there (an "override") until the driver changes the
-    // assist.traction_control channel value, from which tick on the channel wins again. A mode without a default
-    // leaves a running override alone. State (last mode, override, last seen TC channel value) is hashed only here.
-    //
-    // Assists I7b: the launch-control ENABLE follows the same rule with launch_control_default: a mode change to a mode
-    // that sets one makes the effective enable that value until the driver changes the assist.launch_control channel
-    // VALUE (a rewrite of the same value is not seen). The state is kept only on a car that has a mode setting one
-    // (lc_default_state_), and the LC channel is read only when the assist is fitted (its index is unset otherwise).
+    // function of the assist.drive_mode channel and the desc). When the effective mode CHANGES, the mode's
+    // traction_control_default (and, I7b, launch_control_default) is the request for this tick AND is queued as a
+    // pending write of the control channel itself (assists I7c; World::step applies it after the pipeline), so the
+    // channel always equals what the car does and the driver's next write wins, whatever its value. A mode without a
+    // default leaves the channel alone. Only (initialised, last_mode) is state, hashed only on a car with the part.
     real tc_channel_value = channel_values[control_indices_.assist_traction_control];
     real lc_channel_value = fit_launch_ ? channel_values[control_indices_.assist_launch_control] : real(0);
-    bool lc_override_on = false, lc_override_active = false;
+    pending_write_count_ = 0;
     const DriveModeParams* drive_params = nullptr;
     DriveMode drive_mode_req = DriveMode::Normal, drive_mode_eff = DriveMode::Normal;
     if (desc_.drive_modes) {
@@ -233,37 +229,23 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         if (!drive_state_.initialised) {
             drive_state_.initialised = true;
             drive_state_.last_mode = static_cast<std::uint8_t>(drive_mode_eff);
-            drive_state_.last_tc_channel = tc_channel_value;
-            drive_state_.last_lc_channel = lc_channel_value;
         } else if (static_cast<std::uint8_t>(drive_mode_eff) != drive_state_.last_mode) {
             drive_state_.last_mode = static_cast<std::uint8_t>(drive_mode_eff);
             if (drive_params->traction_control_default) {
-                drive_state_.tc_override = true;
-                drive_state_.tc_override_code = static_cast<std::uint8_t>(*drive_params->traction_control_default);
-                drive_state_.last_tc_channel = tc_channel_value;
+                tc_channel_value = static_cast<real>(static_cast<std::uint8_t>(*drive_params->traction_control_default));
+                pending_writes_[pending_write_count_++] = {control_indices_.assist_traction_control, tc_channel_value};
             }
-            if (lc_default_state_ && drive_params->launch_control_default) {
-                drive_state_.lc_override = true;
-                drive_state_.lc_override_on = *drive_params->launch_control_default;
-                drive_state_.last_lc_channel = lc_channel_value;
-            }
-        } else {
-            if (drive_state_.tc_override && tc_channel_value != drive_state_.last_tc_channel) {
-                drive_state_.tc_override = false; // the driver touched the TC channel: it wins again
-            }
-            if (drive_state_.lc_override && lc_channel_value != drive_state_.last_lc_channel) {
-                drive_state_.lc_override = false; // ... and the LC channel likewise
+            if (fit_launch_ && lc_default_state_ && drive_params->launch_control_default) {
+                lc_channel_value = *drive_params->launch_control_default ? real(1) : real(0);
+                pending_writes_[pending_write_count_++] = {control_indices_.assist_launch_control, lc_channel_value};
             }
         }
-        if (drive_state_.tc_override) tc_channel_value = static_cast<real>(drive_state_.tc_override_code);
-        lc_override_active = drive_state_.lc_override;
-        lc_override_on = drive_state_.lc_override_on;
     }
     const TractionMode tc_mode_requested = traction_mode_requested(tc_channel_value);
     const TractionMode tc_mode_effective = resolve_traction_mode(tc_modes_available_bits_, tc_mode_requested);
     const bool assist_traction = tc_mode_effective != TractionMode::Off;
     const TractionControlDesc& tc_desc = tc_mode_desc_[static_cast<std::size_t>(tc_mode_effective)];
-    const bool assist_launch = fit_launch_ && (lc_override_active ? lc_override_on : lc_channel_value > real(0.5)) &&
+    const bool assist_launch = fit_launch_ && lc_channel_value > real(0.5) &&
                                (drive_params == nullptr || drive_params->launch_control_allowed);
     // The drive mode's pedal bend, applied to the throttle the TC / launch ceilings are fractions of, so a ceiling stays
     // a fraction of the COMMAND the engine sees (the car's own pedal curve is not applied here - none of the cars with
@@ -789,7 +771,7 @@ void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRig
         hub_speeds[i] = radius > real(0.0) ? hub_speed_common / radius : real(0.0);
         wheels_[i]->reset_relaxation();
     }
-    traction_state_={};drive_state_={};imu_have_previous_=false;imu_previous_velocity_world_={};
+    traction_state_={};drive_state_={};pending_write_count_=0;imu_have_previous_=false;imu_previous_velocity_world_={};
     if(launch_){launch_->reset();aero_launch_request_=false;}
     powertrain_.reset(opts, hub_speeds);
     // Teleport resets actuator dynamics/commands, but does not create or discard prepaid energy.
@@ -843,10 +825,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
             fold(p.launch_control_allowed);fold(p.nitrous_arm_allowed);
             if(lc_default_state_)fold(static_cast<std::uint8_t>(p.launch_control_default?(*p.launch_control_default?2:1):0)); // I7b: only with a launch_control_default
         }
-        fold(drive_state_.initialised);fold(drive_state_.last_mode);fold(drive_state_.tc_override);fold(drive_state_.tc_override_code);fold(drive_state_.last_tc_channel);
-        if(lc_default_state_) { // I7b: the launch-control override, only on a car whose modes set a launch_control_default
-            fold(drive_state_.lc_override);fold(drive_state_.lc_override_on);fold(drive_state_.last_lc_channel);
-        }
+        fold(drive_state_.initialised);fold(drive_state_.last_mode);
     }
     if(desc_.traction_control.enabled||traction_state_.initialized||traction_state_.enabled) {
         for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)}) {

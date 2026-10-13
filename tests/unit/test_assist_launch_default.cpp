@@ -1,16 +1,20 @@
 // tests/unit/test_assist_launch_default.cpp - assists plan I7b (vault PHYS-074): the per-drive-mode launch-control DEFAULT.
-// A drive mode may set `launch_control_default` (bool). Like the traction-control default (I7): when the EFFECTIVE drive
-// mode changes to a mode that sets one, the effective launch-control enable becomes that value and stays until the driver
-// changes the assist.launch_control channel VALUE (a rewrite of the same value is not seen); launch_control_allowed still
-// gates on top. Owner decision 2026-10-13: "turn LC on when Sport mode is activated".
+// A drive mode may set `launch_control_default` (bool). When the EFFECTIVE drive mode changes to a mode that sets one, the
+// effective launch-control enable becomes that value; launch_control_allowed still gates on top. Owner decision 2026-10-13:
+// "turn LC on when Sport mode is activated".
+//
+// ASSISTS I7c (2026-10-13, owner-approved): the default is no longer an override held until the channel VALUE changes; the
+// physics WRITES it into the assist.launch_control channel (World::step applies the write after the tick), so the channel
+// always equals what the car does and a UI toggle needs ONE press. LD1, LD2 (comment), LD6 changed meaning, see below; the new
+// semantics are guarded in test_assist_channel_writeback.cpp (W*).
 //
 //   LD1  state machine through a World on car_hyper_n2o (assist_active_bits bit4 = the effective enable, read one tick after a
-//        write): spawn in Normal -> bit4 clear, LC channel 0; Normal -> Sport -> bit4 set with the channel untouched (== 0);
-//        Sport -> Normal -> clear; Normal -> Sport -> Eco -> Sport sets it again; a driver write of a DIFFERENT value wins
-//        until the next mode change (Sport, override on, last seen 0: write 1 releases and keeps it on, write 0 then turns
-//        it OFF while still in Sport); a same-value rewrite (0, 0, 0 ... for 20 ticks) does not release the override.
+//        write): spawn in Normal -> bit4 clear, LC channel 0; Normal -> Sport -> bit4 set AND the channel now reads 1 (I7c;
+//        was: channel untouched == 0); Sport -> Normal -> clear, channel 0; Normal -> Sport -> Eco -> Sport sets it again;
+//        a rewrite of the value the channel already holds changes nothing (was: "does not release the override"); ONE
+//        write of 0 in Sport turns LC off at once (was: needed a changed value first) and one write of 1 turns it on.
 //   LD2  spawn: default_mode sport (part edited) -> the LC channel default reads 1 and bit4 is set on the first tick, no
-//        override; a default mode that sets no launch_control_default keeps the channel default 0; a car without the part
+//        write; a default mode that sets no launch_control_default keeps the channel default 0; a car without the part
 //        (and car_hyper) behave as before: channel 0, writing 1 switches it on, mode channel does nothing.
 //   LD3  arming: from Normal, switch to Sport with NO assist.launch_control write, throttle 1 + brake 1 from rest in 1st gear
 //        -> launch_phase Armed (1) seen within 1.5 s (360 ticks); the same in Normal (allowed edited to true so only the
@@ -20,9 +24,10 @@
 //        not fitted loads (ignored, mirrors traction_control_default).
 //   LD5  determinism: 1 vs 10 workers, equal state hash on every tick with mode changes and LC writes mid-run; zero own
 //        allocation per tick (debug_alloc).
-//   LD6  hash coverage: two runs whose physics is identical (effective LC on in both), one with the override still active
-//        and one released by a driver write of a different value, have DIFFERENT state hashes; with the launch_control_default
-//        keys stripped from the part, the Normal -> Sport change leaves LC off (no default, nothing folded).
+//   LD6  no hidden state (I7c; was: the override state is hashed): two runs whose physics is identical, one where the driver
+//        ALSO writes the value the channel already holds (1) after the Normal -> Sport change, have EQUAL state hashes - there
+//        is nothing but the channel to differ; with the launch_control_default keys stripped from the part, the Normal ->
+//        Sport change leaves LC off and the channel untouched.
 //
 // RECORDED SABOTAGES (temporary edits in core/src or the desc header, reverted; each run is the whole LD* set, 6 cases):
 //   1 mode change does not apply launch_control_default        -> LD1, LD2, LD3, LD6 fail (29 assertions)
@@ -165,20 +170,21 @@ void write_lc(Rig& r, real v) {
 
 } // namespace
 
-TEST_CASE("LD1: a mode change sets the effective LC enable; a changed channel value wins; a same-value rewrite does not", "[assist][drive_modes][vehicle][drivetrain]") {
+TEST_CASE("LD1: a mode change sets the effective LC enable and writes the channel; one driver write of any value wins at once", "[assist][drive_modes][vehicle][drivetrain]") {
     Rig r = make_rig(n2o());
     World& w = r.w();
     base_controls(w, 1);
     CHECK(w.get_control("assist.launch_control") == 0.0);
     w.step();
     CHECK_FALSE(lc_on(r));
-    // Normal -> Sport: on, channel untouched
+    // Normal -> Sport: on, and the channel now says so (I7c)
     drive_mode(r, 2);
     CHECK(lc_on(r));
-    CHECK(w.get_control("assist.launch_control") == 0.0);
-    // Sport -> Normal: off
+    CHECK(w.get_control("assist.launch_control") == 1.0);
+    // Sport -> Normal: off, channel 0
     drive_mode(r, 1);
     CHECK_FALSE(lc_on(r));
+    CHECK(w.get_control("assist.launch_control") == 0.0);
     // Normal -> Sport -> Eco -> Sport: on, off, on
     drive_mode(r, 2);
     CHECK(lc_on(r));
@@ -186,37 +192,39 @@ TEST_CASE("LD1: a mode change sets the effective LC enable; a changed channel va
     CHECK_FALSE(lc_on(r));
     drive_mode(r, 2);
     CHECK(lc_on(r));
-    // a same-value rewrite (the channel stays 0) does not release the override
+    // a rewrite of the value the channel holds (1) changes nothing
     for (int k = 0; k < 20; ++k) {
-        write_lc(r, 0.0);
+        write_lc(r, 1.0);
         INFO("tick " << k);
         CHECK(lc_on(r));
     }
-    // a different value releases it: 1 keeps LC on (the channel now says 1) ...
-    write_lc(r, 1.0);
-    CHECK(lc_on(r));
-    // ... and 0 then turns it OFF while still in Sport (the channel wins)
+    // ONE write of 0 turns it OFF while still in Sport (was: the first write of the old value 0 was invisible)
     write_lc(r, 0.0);
     CHECK_FALSE(lc_on(r));
     w.step();
     CHECK_FALSE(lc_on(r));
+    CHECK(w.get_control("assist.launch_control") == 0.0);
+    // ... and one write of 1 turns it back on
+    write_lc(r, 1.0);
+    CHECK(lc_on(r));
     // the next mode change applies the default again, over the driver's 0
+    write_lc(r, 0.0);
     drive_mode(r, 1);
     CHECK_FALSE(lc_on(r));
     drive_mode(r, 2);
     CHECK(lc_on(r));
-    // Sport -> Normal with the channel at 1 (driver on): the Normal default (off) wins over the channel
-    write_lc(r, 1.0);
-    CHECK(lc_on(r));
+    CHECK(w.get_control("assist.launch_control") == 1.0);
+    // Sport -> Normal with the channel at 1 (driver on): the Normal default (off) is written over the channel
     drive_mode(r, 1);
     CHECK_FALSE(lc_on(r));
+    CHECK(w.get_control("assist.launch_control") == 0.0);
     // ... and afterwards the driver's channel wins over the default, but Normal does not ALLOW LC (shipped part), so the
-    // allowed gate keeps it off whatever the channel says (set-up fault of the first run: this was written as CHECK(on))
+    // allowed gate keeps it off whatever the channel says (set-up fault of the first I7b run: this was written as CHECK(on))
     write_lc(r, 0.0);
     CHECK_FALSE(lc_on(r));
     write_lc(r, 1.0);
     CHECK_FALSE(lc_on(r));
-    drive_mode(r, 2); // Sport allows it again: the default (on) re-applies
+    drive_mode(r, 2); // Sport allows it again: the default (on) is written again
     CHECK(lc_on(r));
 }
 
@@ -229,7 +237,7 @@ TEST_CASE("LD2: spawn default, a default mode without a default, cars without th
         CHECK(w.get_control("assist.launch_control") == 1.0);
         w.step();
         CHECK(lc_on(r));
-        // no override at spawn: a driver write of 0 (a change from the default 1) turns it off at once
+        // no write at spawn: a driver write of 0 turns it off at once
         write_lc(r, 0.0);
         CHECK_FALSE(lc_on(r));
     }
@@ -397,25 +405,26 @@ TEST_CASE("LD5: 1 vs 10 workers equal hash every tick with mode changes and LC w
 }
 
 namespace {
-// Normal -> Sport at tick 5; then optionally the driver writes LC 1 (a change from the seen 0: releases the override while
-// the effective enable stays on). Returns the hash after 10 ticks.
-std::uint64_t hash_after(const VehicleDesc& d, bool release) {
+// Normal -> Sport at tick 5; then optionally the driver writes LC 1 - the value the physics has just written into the channel
+// (I7c). Returns the hash after 10 ticks.
+std::uint64_t hash_after(const VehicleDesc& d, bool rewrite) {
     Rig r = make_rig(d, 1);
     World& w = r.w();
     base_controls(w, 1);
     for (int k = 0; k < 5; ++k) w.step();
     w.set_control("assist.drive_mode", 2.0);
     w.step();
-    if (release) w.set_control("assist.launch_control", 1.0);
+    REQUIRE(w.get_control("assist.launch_control") == 1.0);
+    if (rewrite) w.set_control("assist.launch_control", 1.0);
     for (int k = 0; k < 4; ++k) w.step();
     REQUIRE(lc_on(r));
     return w.state_hash();
 }
 } // namespace
 
-TEST_CASE("LD6: the override state is hashed; a part without a launch_control_default folds and enables nothing", "[assist][drive_modes][vehicle][drivetrain]") {
+TEST_CASE("LD6: there is no hidden override state; a part without a launch_control_default enables nothing and writes nothing", "[assist][drive_modes][vehicle][drivetrain]") {
     TempDir td("ld6");
-    CHECK(hash_after(n2o(), false) != hash_after(n2o(), true));
+    CHECK(hash_after(n2o(), false) == hash_after(n2o(), true));
     // stripped of every launch_control_default: Normal -> Sport leaves LC off
     const std::string p = part_with(td, "stripped.json", [](json& j) {
         for (const char* m : {"eco", "normal", "sport"}) j["modes"][m].erase("launch_control_default");

@@ -50,20 +50,31 @@ launch-limit parts. All three attach as a `controllers` entry of type `electroni
    switches the P8 two-step off, and `assist_active_bits` bit4 with it); `nitrous_arm_allowed: false` forces the kit's arm
    input to 0 whatever `nitrous_arm` says. The gate is the outermost layer: it also overrides a `launch_control_default`
    (rule 4b).
-4. **Drive mode over the driver's TC choice, until the driver changes it.** When the *effective* drive mode changes and
-   the new mode has a `traction_control_default`, the effective TC mode becomes that default and stays so until the
-   `assist.traction_control` channel **value changes**. Writing the same value again does not release it (see the UI
-   pitfalls below). A mode without a default leaves a running override alone. The snapshot's `traction_mode_requested`
-   already includes the override.
-4b. **Drive mode over the driver's launch-control switch, until the driver changes it (assists I7b).** The same rule for
-   the launch-control *enable*: when the effective drive mode changes and the new mode has a `launch_control_default`
-   (a boolean), the effective enable of `assist.launch_control` becomes that value and stays so until the channel
-   **value changes** (a rewrite of the same value is not seen; from an override that is *on* with the channel at 0 the
-   driver therefore needs two writes to switch it off: 1, then 0). Precedence, outermost first: `fitted` ->
-   `launch_control_allowed` (a mode that does not allow LC never arms, whatever the default or the channel) -> the
-   override -> the channel (`> 0.5`). Shipped `car_hyper_n2o`: Sport `true`, Eco and Normal `false` (owner, 2026-10-13: "turn
-   LC on when Sport mode is activated"). Arming itself still needs the conditions of rule 8. A mode without a default
-   leaves a running override alone; at spawn there is no override, the channel default is the default mode's value.
+4. **Drive mode writes the driver's TC choice (assists I7c).** When the *effective* drive mode changes and the new mode has a
+   `traction_control_default`, the effective TC request for that tick is the default AND the physics **writes the code into the
+   `assist.traction_control` channel itself** (applied by `World::step` after the tick, so `get_control` returns it right after
+   `step()`). There is no override state: the channel always equals what the car does, and the driver's next write of **any**
+   value (including the value the channel held before the mode change) wins on the next tick - one press. A mode without a
+   default leaves the channel alone. The snapshot's `traction_mode_requested` is the channel/default code. Same tick: when the
+   driver writes the channel in the very tick the mode changes, the mode default wins for that tick and is written over the
+   driver's value; the next tick's driver write wins.
+4b. **Drive mode writes the driver's launch-control switch (assists I7b, I7c).** The same rule for the launch-control *enable*:
+   when the effective drive mode changes and the new mode has a `launch_control_default` (a boolean), the physics writes `1` /
+   `0` into `assist.launch_control` (only on a car where the assist is fitted; an unfitted car has no such channel and ignores
+   the default). Precedence, outermost first: `fitted` -> `launch_control_allowed` (a mode that does not allow LC never arms,
+   whatever the default or the channel) -> the channel (`> 0.5`). Shipped `car_hyper_n2o`: Sport `true`, Eco and Normal `false`
+   (owner, 2026-10-13: "turn LC on when Sport mode is activated"). Arming itself still needs the conditions of rule 8. At spawn
+   nothing is written: the channel default is the default mode's value.
+4c. **Channel writes by the physics (assists I7c).** A vehicle cannot write `World`'s channel map from inside its job, so each
+   vehicle queues at most two pending writes (TC code, LC enable) in its step; `World::step` applies them sequentially after the
+   pipeline, in vehicle id order, straight into the flat channel array (no allocation). Vehicles with the same global channel
+   name (only vehicle 0 uses bare names; vehicle *i* uses `v<i>.`) would overwrite each other in id order - the later vehicle
+   wins. A `set_control` between steps therefore wins from the next tick on. `ps_run` scenario `control_events` and the
+   determinism harness are ordinary `set_control` calls: a physics-written value persists in the map until something writes it.
+   **Adapters that re-send every channel each tick must mirror the physics' writes back** (otherwise the next push puts the stale
+   value over them): after each step, for every channel whose World value differs from the value pushed before that step, adopt
+   the World value with a compare-exchange from the pushed value (a user write made meanwhile wins). Reference:
+   `adapters/godot/src/channel_mirror.h` (`push_channels` / `adopt_world_channel_writes`, Godot-free).
 5. **Pedal bend.** A drive mode's bend is applied after the car's own pedal curve; the auto-shift, launch law, kickdown
    and the TC/LC throttle ceilings work on the *bent* command (ceilings are fractions of it), while TC's pedal gating
    and LC arming use the raw pedal (driver intent).
@@ -96,13 +107,14 @@ without the part); `launch_phase` (0 Idle, 1 Armed, 2 Launch, 3 Handover), `laun
 
 ### UI pitfalls
 
-- **Cycling the TC mode after a drive-mode change.** A button that cycles from `traction_mode_effective` and writes the
-  next code can write exactly the value the channel already holds (e.g. the driver set 3, the drive mode then forced 2,
-  the button wants 3 again). The physics reads that as "no driver change" and keeps the drive mode's override. Write a
-  value that differs from the channel's last value, or cycle from the channel value rather than from the effective mode
-  (guard: `tests/unit/test_assist_all_together.cpp` P1).
-- **Do not write `assist.traction_control` on a drive-mode change.** The physics applies the mode's default itself; a
-  client write of a different code silently wins over the mode default.
+- **Cycling the TC mode after a drive-mode change.** Since assists I7c the channel holds the mode's code after a change, so a
+  button that cycles from the channel value (or from `traction_mode_effective`) and writes the next code always changes the
+  channel and takes effect with one press, including a write of the value the driver had chosen before the mode change
+  (guard: `tests/unit/test_assist_all_together.cpp` P1, `tests/unit/test_assist_channel_writeback.cpp` W1-W3).
+- **Do not write `assist.traction_control` / `assist.launch_control` on a drive-mode change.** The physics writes the mode's
+  default itself; a client write of a different value in the same tick is overwritten (the mode default wins that tick).
+- **Re-read the channel after a mode change.** The channel value may change during `step()` (physics write); a client that
+  keeps its own copy of the channels must adopt it (see rule 4c).
 - **A request the part or unit does not offer is not an error.** Offer only the bits in the `*_available_bits` fields.
 
 ## Fitment: the `fitted` flag (A15)
@@ -445,18 +457,18 @@ ceilings work on this command; TC's pedal gating and launch-control arming stay 
 
 **Traction-control default per mode.** In physics, not in the game: when the *effective* drive mode changes and the new mode
 has `traction_control_default`, the effective TC mode becomes it (through the I1 availability fallback of the car's unit) and
-stays so until the driver changes the `assist.traction_control` channel value (a changed *value*; writing the same value is not
-seen). A change of mode re-applies the default over the driver's choice. A mode without a default leaves a running override
-alone. At spawn there is no override: the TC channel default is the default mode's `traction_control_default`.
+(assists I7c) the physics writes the mode's code into the `assist.traction_control` channel, applied by `World::step` after the
+tick (the channel keeps the raw code even where the fallback maps it to another mode). The driver's next write of any value
+wins. A mode without a default leaves the channel alone. At spawn nothing is written: the TC channel default is the default
+mode's `traction_control_default`.
 
-**Launch-control default per mode (assists I7b).** Exactly the TC rule, for the on/off enable of `assist.launch_control`: when
-the *effective* drive mode changes and the new mode has `launch_control_default`, the effective enable becomes it and stays so
-until the driver changes the channel *value*; a mode change re-applies it over the driver's choice. At spawn the channel
-default is the default mode's `launch_control_default` (like the TC channel), no override. Not visible as a new field:
-`assist_active_bits` bit 4 is the effective enable (after the allowed gate) and `launch_phase` shows the arming. Hash: the
-mode table's `launch_control_default` values and the override state (flag, value, last seen channel value) are folded **only**
-on a car with at least one offered mode that sets one; every other car (including a `drive_modes` part without the key)
-hashes as before.
+**Launch-control default per mode (assists I7b, I7c).** Exactly the TC rule, for the on/off enable of `assist.launch_control`:
+when the *effective* drive mode changes and the new mode has `launch_control_default`, the physics writes `1` / `0` into the
+channel (only where the assist is fitted). At spawn the channel default is the default mode's `launch_control_default` (like the
+TC channel). Not visible as a new field: `assist_active_bits` bit 4 is the effective enable (after the allowed gate) and
+`launch_phase` shows the arming. Hash: the mode table's `launch_control_default` values are folded **only** on a car with at
+least one offered mode that sets one; every other car (including a `drive_modes` part without the key) hashes as before.
+Since I7c there is no override state (it was a flag, value and last seen channel value per assist).
 
 **Gates.** `launch_control_allowed false`: the launch-control assist cannot arm (both the unit's and a P8 two-step are driven
 through the same `assist.launch_control` gate on the unit). `nitrous_arm_allowed false`: the kit's arm input is forced to 0.
@@ -464,8 +476,7 @@ through the same `assist.launch_control` gate on the unit). `nitrous_arm_allowed
 **Kickdown.** `auto_shift.kickdown_throttle` in the car's `manual_tcu` ([vehicle.md](vehicle.md)); spent by a gear change, re-armed when the command drops below it. `car_hyper_n2o` uses `min_time_in_gear_s` 2.0 `[AS]` (measured on an accelerating pull: 1.0 s bounces once in Normal and Sport, 1.5 s still once in Sport, 2.0 s none in any mode).
 
 **Snapshot** (`PowertrainSnapshot`, never hashed): `drive_mode_requested`, `drive_mode_effective`,
-`drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport; all 0 without the part). **Hash:** the desc and the state (last
-effective mode, TC override flag/code, last seen TC channel value) are folded only on a car with the part, so every other
-car and scenario hashes as before (the I7b launch-control override state: see above). Tests:
+`drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport; all 0 without the part). **Hash:** the desc and the state (initialised flag,
+last effective mode) are folded only on a car with the part, so every other car and scenario hashes as before. Tests:
 `tests/unit/test_assist_drive_modes.cpp` ([assist][vehicle][drivetrain]), `tests/unit/test_assist_launch_default.cpp` (I7b,
-LD1-LD6).
+LD1-LD6), `tests/unit/test_assist_channel_writeback.cpp` (I7c, W1-W9).

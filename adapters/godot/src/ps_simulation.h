@@ -707,6 +707,7 @@ private:
     TripleBuffer<AdapterSnapshot> adapter_snapshots_;
 
     std::unordered_map<std::string, std::atomic<float>> control_channels_; // see set_control's doc comment above
+    std::vector<float> pushed_channels_; // sim thread only: what pre_step pushed this tick (channel_mirror.h, assists I7c)
     godot::String last_error_;
     // Weather plan W5: the surface table's names in SurfaceId order, cached by
     // install_environment (setup, main thread) for get_surface_temperature_c.
