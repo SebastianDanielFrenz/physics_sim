@@ -2113,6 +2113,16 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             li.clutch_engagement = ctx.clutch_engaged_fraction;
             req.limiter_rpm = launch_->step(li);
         }
+        // TC crawl rev hold: while traction control caps the auto-clutch instead of the engine (tc_via_clutch_), the
+        // engine keeps the driver's command, so without a limit the slipping clutch lets it run to the limiter. Hold
+        // it at the launch law's full-engagement rpm for this command (the rpm a normal auto-clutch launch slips at),
+        // through the engine's own limiter like launch control.
+        if (tc_via_clutch_ && tcu_) {
+            const auto& ac = tcu_->desc().auto_clutch;
+            const real cmd = std::clamp(last_throttle_command_.command, real(0.0), real(1.0));
+            const real hold = ac.full_rpm_min + cmd * (ac.full_rpm_max - ac.full_rpm_min);
+            req.limiter_rpm = req.limiter_rpm > real(0.0) ? std::min(req.limiter_rpm, hold) : hold;
+        }
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
         const auto& pre = last_engine_result_;
         if (nitrous_) nitrous_->observe(pre.limiter_active || pre.dfco_active, pre.fuel_supply_fraction < real(1.0));
