@@ -217,6 +217,12 @@ namespace {
 
 constexpr int kPullGear = 3;
 constexpr real kShiftRpm = 7000.0;
+// B0R: the upshift INTO the pull gear (see the header above the asserting tests). 3rd: 4500 rpm [AS] = the earliest 2->3 shift the rule
+// allows (any value <= 4700 gives the same arm point, 3713 rpm / 87.9 km/h), the closest reproducible state to the original 3rd-gear arm
+// point (3220-3269 rpm) with the 5000 rpm bin inside the pull. 6th: 6000 rpm [AS], so that the 6000 rpm bin lies past the 1 s
+// progressive ramp (arm 4887 rpm / 221 km/h; entering at 7000 the 6000 bin sees half flow: +354 kW).
+constexpr real kEntryShiftRpm3 = 4500.0;
+constexpr real kEntryShiftRpm6 = 6000.0;
 constexpr real kEndRpm = 7800.0;
 constexpr real kMass = 1500.0;
 const Vec3 kHalfExtents{2.0, 0.4, 0.15};
@@ -239,17 +245,19 @@ struct PullResult {
     real worst_balance = 0.0, worst_bottle = 0.0, worst_closure = 0.0, worst_tank = 0.0;
     real n2o_kg = 0.0, kit_fuel_kg = 0.0, unburnt_kg = 0.0;
     int spray_ticks = 0, locked_ticks = 0, unlocked_ticks = 0;
-    real arm_rpm = 0.0, t_arm = -1.0, t_end = 0.0, bottle0 = 0.0, max_kappa = 0.0, max_slip_rpm = 0.0, v_end = 0.0;
+    real arm_rpm = 0.0, t_arm = -1.0, t_end = 0.0, bottle0 = 0.0, max_kappa = 0.0, max_slip_rpm = 0.0, v_end = 0.0, v_arm = 0.0;
 };
 
-PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPullGear, real end_rpm = kEndRpm) {
+PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPullGear, real end_rpm = kEndRpm, real entry_shift_rpm = kShiftRpm) {
     PullResult res;
     auto rig = ps_test::build_vehicle_rig_from_desc(desc, kMass, kHalfExtents, kOriginHeight, 0.0, 4);
     World& w = *rig.world;
     const real dt = w.dt();
-    // Assists I2 (owner Q2): car_hyper_n2o carries the Racing assist unit, TC default On. The pull bands
-    // were measured without TC (a WOT pull through the gears), so TC is switched off explicitly.
-    w.set_control("assist.traction_control", 0.0);
+    // Assists I2 (owner Q2): car_hyper_n2o carries the Racing assist unit, TC default On. B0R: the run-up through
+    // the lower gears runs with TC On (mode 1, the car's own traction_control block) and TC is switched Off at the
+    // arm point, so the pull itself is measured without TC (see the header above the asserting tests for why). Recorded sabotage
+    // PS_SABOTAGE_N7_NO_TC_RUNUP=1: the old TC-off run-up.
+    w.set_control("assist.traction_control", envs("PS_SABOTAGE_N7_NO_TC_RUNUP").empty() ? 1.0 : 0.0);
     w.set_control("assist.drive_mode", 2.0); // assists I7: the car's default drive mode (Normal) forbids the nitrous arm; Sport allows it. Set before the first tick: no TC override
     w.set_control("assist.aero_control", 0.0); // and the unit's wing automation (assists I5 measured the 5th-gear pull moving 1.18 -> 1.97 s to 7800 rpm with it on)
     ps_test::settle(w, 2.0);
@@ -282,13 +290,16 @@ PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPul
         if (es.n2o_active) ++res.spray_ticks;
         const real work = work_of();
         const bool idle = st.shift_phase == drivetrain::ShiftPhase::Idle;
-        if (idle && st.gear >= 1 && st.gear < pull_gear && st.engine_rpm >= kShiftRpm) w.set_control("gear_request", static_cast<real>(st.gear + 1));
+        const real shift_rpm = st.gear + 1 == pull_gear ? entry_shift_rpm : kShiftRpm;
+        if (idle && st.gear >= 1 && st.gear < pull_gear && st.engine_rpm >= shift_rpm) w.set_control("gear_request", static_cast<real>(st.gear + 1));
         const bool in_pull = st.gear == pull_gear && idle && st.clutch_engagement >= 0.999;
         if (in_pull && !armed) {
             armed = true;
             res.arm_rpm = st.engine_rpm;
             res.t_arm = t * dt;
+            res.v_arm = w.get_motion(rig.chassis).linear.x;
             if (arm) w.set_control("nitrous_arm", 1.0);
+            w.set_control("assist.traction_control", 0.0); // the pull itself without TC
         }
         if (armed && in_pull) {
             const drivetrain::PowertrainDebug dbg = w.powertrain_debug(rig.vehicle);
@@ -380,9 +391,44 @@ TEST_CASE("N7 whole car: car_hyper_n2o WOT pull report", "[.][diag][n2o]") {
 // gate 1.000, turbo 180000 rpm, boost above 1.9 bar at 5000-7000 rpm, mean gain +691.5 kW (927 hp) - 12 asserts fail (wastegate_max < 0.98,
 // turbo_rpm_max < 0.95 x cap, boost < 1.9, per-point gain < 700, mean gain < 640); with the shipped configuration all pass.
 //
-// Whole-car pull (3rd gear, armed at the 3rd-gear clutch lock, 3269 rpm, progressive 0.4 -> 1.0 over 1 s; measured with this kit and gate):
-// the clutch stays locked (83 of 83 ticks, 0.0 rpm slip), rear wheelspin max kappa 1.24 (baseline 0.77; physics, not fixed), the 7800 rpm mark is
-// reached at t 5.29 s against 6.27 s without spray; balance_error 4.8e-16, bottle closure 9.7e-16 kg, N2O energy closure 2.5e-15.
+// Whole-car pulls - RE-BASELINED B0R (2026-10-13, after the boost B0 merge de43b93). Every pull band below was RE-MEASURED.
+// Why: the old pull bands (N7/N7b, 2026-10-06) were measured on a boost-control bug. Every upshift reset the wastegate PID and opened the gate
+// (B0 item 2), so after each shift the boost fell to 0.73-0.98 bar (gate 0.95-0.99) and took 1-2 s to recover. That collapse acted as an
+// accidental traction control during the TC-off run-up (the car still spun 1st-3rd, kappa 0.6-0.9 at the 7000 rpm shift points), and it put
+// the no-shot baseline of each pull inside the post-shift boost hole. With B0 (the boost controller held through a shift) the old procedure
+// spins the rear tyres through 3rd and 4th (4th kappa 0.18 -> 0.43 at 1.9 bar, 136-155 km/h), the 4->5 shift comes at 155 km/h instead of
+// 203, and the shot then spins 5th (kappa 0.68) - the old 5th-gear test failed 7 asserts, the 3rd-gear one 2 (N2O 28.7 g, timing).
+// Procedure (both pulls, pull()): the run-up through the lower gears drives with TC On (assist.traction_control 1, the car's own
+// traction_control block), TC is switched Off at the arm point so the pull itself is measured without TC. Reason: the arm state then no
+// longer depends on run-up wheelspin, i.e. on details of the boost control - with the hold and with the hold disabled the 5th-gear arm point
+// was 5735 rpm / 208.9 km/h vs 5672 rpm / 208.5 km/h. Arming at a fixed speed is the same thing here (rpm and speed are tied once TC holds
+// the tyres); a shift rpm is used because the existing rule is rpm-based.
+// 5th -> 6th gear (the second pull): in 5th no arm point gives a pull that covers the 1 s progressive ramp with the tyres holding. With TC
+// run-up and entry shifts of 7000/6000/5500/5000 rpm the 5th-gear pull lasts 0.90/0.70/0.64/0.65 s and the shot spins the tyres
+// (kappa 0.26/0.52/0.62/0.65): the full-boost hypercar plus the 800 hp shot exceeds the rear grip below ~200 km/h and reaches 7800 rpm in under
+// 1 s above it. In 6th (entry 7000/6500/6000/5500 rpm) the pull lasts 3.2-4.7 s, kappa 0.08-0.22, full flow is reached and the gains at
+// 6000/7000 rpm are full-flow gains. Entry 6000 rpm is used (kEntryShiftRpm6). The test was renamed from "... in 5th gear ..." accordingly.
+// Measured (release, Windows, 2026-10-13, master e1f91b0 + this file), old -> new; "old" = the old procedure with the B0 hold disabled
+// (temporary switch, i.e. the pre-B0 behaviour), measured the same day:
+//   3rd-gear pull: arm 3220 -> 3713 rpm (87.9 km/h); 7800 rpm 0.99 s before the baseline (absolute t 5.27 vs 6.26 s) -> pull 0.296 s vs
+//     0.825 s; N2O 42.9 -> 35.6 g; max flow 142.2 g/s; locked 84 -> 72 of 72 ticks, 0.0 rpm slip; max kappa 1.28 -> 1.02 (baseline
+//     0.77 both); gain +116.5/+161.0/+224.9 -> +163.9/+218.7/+277.1 kW at 5000/6000/7000 rpm. Bands kept except the timing:
+//     "t_end < base.t_end - 0.5 s" (absolute; 0.529 s now, margin 6 %) -> "pull time < 0.5 x baseline pull time" (0.359 now): the shot
+//     halves the time to 7800 rpm.
+//   6th-gear pull (was 5th): arm 5677 rpm (5th) -> 4887 rpm (6th, 221.1 km/h); pull 1.19 s -> 4.30 s (baseline 4.14 -> 8.00 s); locked/spray
+//     287/286 -> 1032/1031 ticks; max kappa 0.23 -> 0.12 (baseline 0.04); max flow 246.4 g/s (unchanged); N2O 219.7 -> 984.6 g;
+//     gain at 6000/7000 rpm +383.6/+502.8 -> +626.3/+650.0 kW. New bands: locked/spray >= 900 (was 200), kappa < 0.3 (was 0.6), flow
+//     241-251 g/s (unchanged), N2O 880-1090 g (was 170-240), pull time in (1.5 s, 0.65 x baseline) (was < 1.6 s and baseline > 3.5 s;
+//     1.5 s = the 1 s ramp plus the 0.5 s it takes to pass the 6000 rpm bin), gain at 6000 and 7000 rpm 500-700 kW = the dyno test's
+//     per-point band for this kit (was 300-430 / 380-540, partial flow).
+// Ledgers unchanged: balance_error 4.3e-16, bottle closure <= 7.7e-13 kg, tank 1.9e-13 kg, N2O energy closure 4.8e-15.
+// Confirming run after these bands were committed (5d95a95): all 8 [n2o] validation cases pass, 211 assertions, values exactly as above.
+// RECORDED SABOTAGES (2026-10-13):
+//   PS_SABOTAGE_N7_JET=0.8 (N2O jet 3.81 -> 3.05 mm) on the 6th-gear pull: max flow 157.7 g/s, N2O 806.9 g, pull 5.42 s vs baseline
+//     8.00 s, gain +403.2/+385.2 kW - 5 asserts fail (max flow > 241, N2O > 880, pull < 0.65 x baseline, both gains > 500).
+//   PS_SABOTAGE_N7_NO_TC_RUNUP=1 (the old TC-off run-up): both pulls still PASS (3rd: arm 2849 rpm / 66.5 km/h after run-up wheelspin,
+//     pull 0.433 s vs 1.150 s, N2O 34.6 g, kappa 1.49; 6th: arm 4895 rpm, 4.29 s vs 8.17 s, +627.2/+652.8 kW) - recorded as a
+//     robustness result, not a detection: the bands check the pull, and with the new entry shifts they no longer depend on the run-up.
 // ===========================================================================
 namespace {
 
@@ -556,11 +602,14 @@ TEST_CASE("N7 car_hyper_n2o: dyno-held shot at 3000-7000 rpm", "[n2o][vehicle][d
 
 TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull with the shot", "[n2o][vehicle][drivetrain][validation][long]") {
     const vehicle::VehicleDesc desc = load_car("car_hyper_n2o.json");
-    const PullResult with = pull(desc, true);
-    const PullResult base = pull(desc, false);
-    std::printf("[N7 pull] armed %.0f rpm, %.0f rpm at %.2f s (baseline %.2f s), sprayed %d ticks, N2O %.1f g, balance %.2e, bottle %.2e, tank %.2e, closure %.2e, locked %d unlocked %d, max slip %.2f rpm, kappa %.2f (baseline %.2f)\n",
-                with.arm_rpm, kEndRpm, with.t_end, base.t_end, with.spray_ticks, with.n2o_kg * 1e3, with.worst_balance, with.worst_bottle, with.worst_tank, with.worst_closure,
-                with.locked_ticks, with.unlocked_ticks, with.max_slip_rpm, with.max_kappa, base.max_kappa);
+    const PullResult with = pull(desc, true, kPullGear, kEndRpm, kEntryShiftRpm3);
+    const PullResult base = pull(desc, false, kPullGear, kEndRpm, kEntryShiftRpm3);
+    std::printf("[N7 pull] armed %.0f rpm at %.1f km/h (baseline %.0f rpm, %.1f km/h), %.0f rpm after %.3f s (baseline %.3f s), sprayed %d ticks, N2O %.1f g, balance %.2e, bottle %.2e, tank %.2e, closure %.2e, locked %d unlocked %d, max slip %.2f rpm, kappa %.2f (baseline %.2f)\n",
+                with.arm_rpm, with.v_arm * 3.6, base.arm_rpm, base.v_arm * 3.6, kEndRpm, with.t_end - with.t_arm, base.t_end - base.t_arm, with.spray_ticks, with.n2o_kg * 1e3,
+                with.worst_balance, with.worst_bottle, with.worst_tank, with.worst_closure, with.locked_ticks, with.unlocked_ticks, with.max_slip_rpm, with.max_kappa, base.max_kappa);
+    real max_flow3 = 0.0;
+    for (const Sample& s : with.pull) max_flow3 = std::max(max_flow3, s.flow_g_s);
+    std::printf("[N7 pull] max flow %.1f g/s\n", max_flow3);
     // No stall, the clutch locked on every pull tick (the 3400 N*m clutch carries the shot), nothing else in the driveline slips.
     CHECK_FALSE(with.stalled);
     CHECK_FALSE(base.stalled);
@@ -568,7 +617,7 @@ TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull with the shot", "[n2o][vehicle][
     CHECK(with.unlocked_ticks == 0);
     CHECK(with.max_slip_rpm < 1.0);
     CHECK(with.spray_ticks >= 50);
-    // The shot sprayed (progressive flow, 0.4 -> 1.0 over 1 s, so about 40 g in the 0.36 s pull); the bottle drops by exactly what flowed.
+    // The shot sprayed (progressive flow, 0.4 -> 1.0 over 1 s, so about 36 g in the 0.3 s pull); the bottle drops by exactly what flowed.
     CHECK(with.n2o_kg * 1e3 > 30.0);
     CHECK(with.n2o_kg * 1e3 < 50.0);
     CHECK(with.unburnt_kg < 1e-9); // the whole N2O is accounted as burnt charge (nothing overflows)
@@ -580,7 +629,7 @@ TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull with the shot", "[n2o][vehicle][
     CHECK(with.worst_closure <= 1e-9);
     // The spray gets to the end rpm sooner; the crank power with the shot is higher at every sampled rpm. The wheelspin it causes is physics:
     // reported, only bounded here against a runaway (the tyre model clamps the slip ratio at +-3).
-    CHECK(with.t_end < base.t_end - 0.5);
+    CHECK(with.t_end - with.t_arm < 0.5 * (base.t_end - base.t_arm)); // B0R: was t_end < base.t_end - 0.5 s (see the header)
     for (real rpm : {5000.0, 6000.0, 7000.0}) {
         const real gain_kw = (power_at(with, rpm) - power_at(base, rpm)) * 1e-3;
         std::printf("[N7 pull] %.0f rpm: gain %+.1f kW (partial flow)\n", rpm, gain_kw);
@@ -591,45 +640,49 @@ TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull with the shot", "[n2o][vehicle][
     CHECK(with.max_kappa >= base.max_kappa);
 }
 
-// The 3rd-gear pull above is short (0.36 s, rear wheelspin). In 5th the tyres hold (max kappa 0.26), the progressive flow reaches its full
-// 246.4 g/s at t = 1 s and the pull lasts 1.1 s with the shot against 4.9 s without (5646 -> 7800 rpm); measured with the N7b kit and gate: clutch
-// locked 265/265, 197 g N2O, crank power gain +366 kW at 6000 rpm and +480 kW at 7000 rpm over the baseline pull, v_end 66.5 m/s (baseline 80.2 m/s,
-// the baseline pull simply lasts 3.8 s longer: not a speed comparison), balance 4.8e-16, bottle 2.6e-14 kg, tank 4.1e-13 kg, closure 3.7e-15.
-TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull in 5th gear reaches full flow", "[n2o][vehicle][drivetrain][validation][long]") {
-    const vehicle::VehicleDesc desc = load_car("car_hyper_n2o.json");
-    constexpr int kGear = 5;
-    const PullResult with = pull(desc, true, kGear);
-    const PullResult base = pull(desc, false, kGear);
+// The 3rd-gear pull above is short (0.3 s, rear wheelspin). In 6th (B0R: was 5th, see the header) the tyres hold, the progressive flow
+// reaches its full 246.4 g/s at t = 1 s and the gains at 6000/7000 rpm are full-flow gains. Recorded sabotage: PS_SABOTAGE_N7_JET=<scale>
+// scales the kit's N2O jet diameter (results in the header).
+TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull in 6th gear reaches full flow", "[n2o][vehicle][drivetrain][validation][long]") {
+    vehicle::VehicleDesc desc = load_car("car_hyper_n2o.json");
+    if (const std::string s = envs("PS_SABOTAGE_N7_JET"); !s.empty())
+        for (auto& c : desc.powertrain.components)
+            if (auto* k = std::get_if<drivetrain::NitrousKitDesc>(&c.params)) k->nitrous_jet_diameter_mm *= std::stod(s);
+    constexpr int kGear = 6;
+    const PullResult with = pull(desc, true, kGear, kEndRpm, kEntryShiftRpm6);
+    const PullResult base = pull(desc, false, kGear, kEndRpm, kEntryShiftRpm6);
     real max_flow = 0.0;
     for (const Sample& s : with.pull) max_flow = std::max(max_flow, s.flow_g_s);
-    std::printf("[N7 pull5] armed %.0f rpm, %.0f rpm after %.2f s (baseline %.2f s), sprayed %d ticks, N2O %.1f g, max flow %.1f g/s, balance %.2e, bottle %.2e, tank %.2e, closure %.2e, locked %d unlocked %d, max slip %.2f rpm, kappa %.2f (baseline %.2f), v_end %.1f (baseline %.1f)\n",
+    std::printf("[N7 pull6] armed at %.1f km/h (baseline %.1f km/h)\n", with.v_arm * 3.6, base.v_arm * 3.6);
+    std::printf("[N7 pull6] armed %.0f rpm, %.0f rpm after %.2f s (baseline %.2f s), sprayed %d ticks, N2O %.1f g, max flow %.1f g/s, balance %.2e, bottle %.2e, tank %.2e, closure %.2e, locked %d unlocked %d, max slip %.2f rpm, kappa %.2f (baseline %.2f), v_end %.1f (baseline %.1f)\n",
                 with.arm_rpm, kEndRpm, with.t_end - with.t_arm, base.t_end - base.t_arm, with.spray_ticks, with.n2o_kg * 1e3, max_flow, with.worst_balance, with.worst_bottle,
                 with.worst_tank, with.worst_closure, with.locked_ticks, with.unlocked_ticks, with.max_slip_rpm, with.max_kappa, base.max_kappa, with.v_end, base.v_end);
     CHECK_FALSE(with.stalled);
     CHECK_FALSE(base.stalled);
-    CHECK(with.locked_ticks >= 200);
+    CHECK(with.locked_ticks >= 900);
     CHECK(with.unlocked_ticks == 0);
     CHECK(with.max_slip_rpm < 1.0);
-    CHECK(with.spray_ticks >= 200);
-    CHECK(with.max_kappa < 0.6); // the tyres hold in 5th: no wheelspin runaway
+    CHECK(with.spray_ticks >= 900);
+    CHECK(with.max_kappa < 0.3); // the tyres hold in 6th: no wheelspin runaway
     // Full flow (Cd*A*G_HEM = 246.4 g/s) is reached once the 1 s progressive ramp ends, never exceeded.
     CHECK(max_flow > 241.0);
     CHECK(max_flow < 251.0);
-    CHECK(with.n2o_kg * 1e3 > 170.0);
-    CHECK(with.n2o_kg * 1e3 < 240.0);
+    CHECK(with.n2o_kg * 1e3 > 880.0);
+    CHECK(with.n2o_kg * 1e3 < 1090.0);
     CHECK(with.unburnt_kg < 1e-9);
     CHECK(with.worst_balance <= 5e-8);
     CHECK(with.worst_bottle <= 1e-12);
     CHECK(with.worst_tank <= 2e-12);
     CHECK(with.worst_closure <= 1e-9);
-    // The shot cuts the time to 7800 rpm to a quarter; crank power gain at 6000/7000 rpm (the mean over the 500 rpm bins).
-    CHECK(with.t_end - with.t_arm < 1.6);
-    CHECK(base.t_end - base.t_arm > 3.5);
+    // The pull covers the 1 s ramp and the 6000 rpm bin after it; the shot cuts the time to 7800 rpm well below the baseline's.
+    CHECK(with.t_end - with.t_arm > 1.5);
+    CHECK(with.t_end - with.t_arm < 0.65 * (base.t_end - base.t_arm));
+    // Crank power gain at 6000/7000 rpm (the mean over the 500 rpm bins), at full flow: inside the dyno test's per-point band for this kit.
     const real g6 = (power_at(with, 6000.0) - power_at(base, 6000.0)) * 1e-3;
     const real g7 = (power_at(with, 7000.0) - power_at(base, 7000.0)) * 1e-3;
-    std::printf("[N7 pull5] crank power gain %+.1f kW at 6000 rpm, %+.1f kW at 7000 rpm\n", g6, g7);
-    CHECK(g6 > 300.0);
-    CHECK(g6 < 430.0);
-    CHECK(g7 > 380.0);
-    CHECK(g7 < 540.0);
+    std::printf("[N7 pull6] crank power gain %+.1f kW at 6000 rpm, %+.1f kW at 7000 rpm\n", g6, g7);
+    CHECK(g6 > 500.0);
+    CHECK(g6 < 700.0);
+    CHECK(g7 > 500.0);
+    CHECK(g7 < 700.0);
 }
