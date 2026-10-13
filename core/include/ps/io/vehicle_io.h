@@ -17,6 +17,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ps::io {
 
@@ -103,6 +104,11 @@ struct EngineMapOptions {
     // that depend on generated numbers (an unreachable plenum node, VE or eta_i out of
     // range) fire only when generating. Instant: milliseconds.
     bool generate = true;
+
+    // Stage seam S0: load-time advisories. Non-null = every simulated engine this load reads appends one line per
+    // drivetrain::check_turbo_stage_coverage issue ("<engine context>: <severity>: <message>") - a turbo stage map that does
+    // not cover the engine's operating range at the target boost. Advisory only: the load result is identical either way.
+    std::vector<std::string>* warnings_out = nullptr;
 };
 
 vehicle::VehicleDesc load_vehicle_json(const std::string& path, const EngineMapOptions& options);

@@ -51,6 +51,7 @@ struct EngineSoundState {
     real wastegate_opening = 0.0;          // wastegate actuator position, 1 = fully open
     real compressor_flow_kg_s = 0.0;       // total compressor mass flow (the pair)
     bool turbo_compressor_stage_used=false, turbo_turbine_stage_used=false, turbo_stage_map_fallback=false;
+    bool turbo_compressor_stage_extended=false; // stage seam S0: compressor outside the stage map's coverage, read from its continuation
     real compressor_pressure_ratio = 0.0;  // compressor outlet over ambient, >= 1 with a turbo
     // PHYS-033 P4 I7d D2: blow-off valve, 0 without a valve. NOT hashed.
     real bov_opening = 0.0;                // valve position in [0, 1]

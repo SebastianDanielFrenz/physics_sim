@@ -46,6 +46,8 @@ enum class BuildRule : std::uint16_t {
     LiftMinimumBand = 15,      // the minimum-lift node's peak lift is below the band, or too large a share of full lift
     // Transmission plan T0 (a gearbox with rated_input_torque_nm only; check_gearbox_rating below, not check_buildable):
     GearboxRating = 16,        // the engine's peak net torque (boost and nitrous gain included) is over the gearbox's rating
+    // Stage seam S0 (a turbo with an offline stage map only; check_turbo_stage_coverage below, also part of check_buildable):
+    TurboStageMapCoverage = 17, // the target boost at the engine's air flow lies outside the stage map's certified coverage
 };
 
 // A violation of a static rule. severity reuses P3b's LimitSeverity so one advisor handles both record kinds:
@@ -80,6 +82,20 @@ struct BuildIssue {
 // Increment L0: every band (valve size, rod ratio, compression ratio, piston speed, grid overshoot, cam / lift bands) is a
 // LimitPolicy value (ps/drivetrain/limit_policy.h); `policy` nullptr = default_limit_policy(), the compiled defaults (every
 // result bit-identical to before L0). A BuildIssue::source_label says so when its number is a policy override.
+// Stage seam S0: TurboStageMapCoverage. For a simulated engine whose turbo pair carries an offline stage map
+// (TurboStageMaps): the engine's maximum air flow at the target boost (piston engines; idle..limiter in 16 steps, VE from the
+// maps at the charge pressure - 1.0 [AS] while the maps are pending -, charge temperature from the turbo's compressor
+// efficiency and intercooler effectiveness) is split into 16 flows; at each, the rotor speed that makes the target pressure
+// ratio (charge + intercooler drop) is found on the map's continuation (TurboStageMaps::compressor_extended, monotone in
+// speed) and tested against the certified coverage (compressor_covered). Severity is structural, no advice number:
+//   Limiting - at some flow the target is not reached below the highest speed line with data (the rotor would run above the
+//              map: affinity extrapolation);
+//   Near     - reached on the map, but at some flow the operating point is outside the certified cells (beyond a line's
+//              choke edge, between lines where one is choked, or below the lowest line).
+// One issue at most; value = the first uncovered flow over the engine's maximum air flow, limit 1, unit Fraction; slot
+// "forced_induction", field_pointer "/turbo". Nothing for an engine without a stage-map turbo.
+[[nodiscard]] std::vector<BuildIssue> check_turbo_stage_coverage(const SimulatedEngineDesc& engine, const LimitPolicy* policy = nullptr);
+
 [[nodiscard]] std::vector<BuildIssue> check_buildable(const ComponentParams& engine, const LimitPolicy* policy = nullptr);
 [[nodiscard]] std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& engine, const LimitPolicy* policy = nullptr);
 [[nodiscard]] std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& engine, const LimitPolicy* policy = nullptr);

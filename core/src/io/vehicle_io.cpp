@@ -16,6 +16,7 @@
 #include "ps/io/fuel_io.h"
 #include "ps/io/electronics_io.h"
 #include "ps/drivetrain/isa_air.h"
+#include "ps/drivetrain/engine_rules.h"
 
 #include <nlohmann/json.hpp>
 
@@ -2792,6 +2793,12 @@ ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::str
         ps::drivetrain::SimulatedEngineDesc e =
             read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options, installation_override_path, assembled);
         read_engine_mass(j, ctx, e.mass_kg, e.mass_source);
+        if (map_options != nullptr && map_options->warnings_out != nullptr) {
+            // Stage seam S0: advisory only, nothing of the result depends on it.
+            for (const auto& issue : ps::drivetrain::check_turbo_stage_coverage(e)) {
+                map_options->warnings_out->push_back(ctx + ": " + ps::drivetrain::to_string(issue.severity) + ": " + issue.message);
+            }
+        }
         return e;
     }
     throw std::runtime_error(ctx + ": engine 'kind' must be \"torque_map\" or \"simulated\", got \"" + kind + "\"");
@@ -3335,6 +3342,7 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         const real air_r=require_positive(air,"r",stage_path), air_gamma=require_positive(air,"gamma",stage_path);
         if(!(air_gamma>1 && air_gamma<=1.67)) throw std::runtime_error(stage_path+": invalid air gamma");
         sm->compressor_cp=air_r*air_gamma/(air_gamma-real(1));
+        sm->air_kappa=(air_gamma-real(1))/air_gamma; // stage seam S0: the affinity extension's isentropic exponent
         sm->units=count;
         const auto speeds=sj.at("corrected_rpm").get<std::vector<real>>();
         const auto flows=sj.at("compressor_corrected_flow_kg_s").get<std::vector<real>>();
