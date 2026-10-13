@@ -102,6 +102,16 @@ struct DrivelineSoundState {
     std::int8_t gear = 0;
     bool grind_active = false;
     std::uint32_t grind_events = 0; // sound only, not hashed
+    // Transmission plan T0 (game answers G5/G8; sound only, never hashed): what a gear-whine voice needs.
+    //   gear_type          : GearType as an integer (0 helical, 1 straight_cut) of the gearbox, 0 without one;
+    //   mesh_frequency_hz  : [0] the constant-mesh input pair, [1] the engaged gear, each |w_shaft| / (2 pi) * teeth of the
+    //                        driving gear (the layshaft turns at w_in * z_a / z_b when an input pair is given); with no tooth
+    //                        count known the fallback is |w_in| / (2 pi) * mesh_order, with neither it is 0; [1] is 0 in neutral;
+    //   mesh_load_nm       : |torque transmitted through the engaged gear| (the node-balance reaction at the gearbox input,
+    //                        this substep's, 0 in neutral).
+    std::uint8_t gear_type = 0;
+    real mesh_frequency_hz[2] = {0.0, 0.0};
+    real mesh_load_nm = 0.0;
 };
 
 // PHYS-033 P4 I4 C8 (plan section 3.1): one differential's adapter-facing

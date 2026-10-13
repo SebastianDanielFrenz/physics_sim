@@ -1,0 +1,7 @@
+{
+  "extends": "gearbox_rated_900.json",
+  "name": "trans_t0_chain",
+  "source": "Test fixture (transmission plan T0): a two-level extends chain (hyper_7mt <- gearbox_rated_900 <- this): rating overridden to 1250 N*m ASSUMED, helical again; everything else inherited.",
+  "rated_input_torque_nm": 1250,
+  "gear_type": "helical"
+}

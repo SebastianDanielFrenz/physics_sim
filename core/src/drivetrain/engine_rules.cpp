@@ -3,6 +3,7 @@
 #include "ps/drivetrain/engine_rules.h"
 
 #include "engine_rules_table.h"
+#include "gearbox_rating.h"
 #include "limit_thresholds.h"
 
 #include "ps/drivetrain/isa_air.h"
@@ -406,6 +407,7 @@ const char* to_string(BuildRule r) {
     case BuildRule::CamLiftOverValve: return "CamLiftOverValve";
     case BuildRule::LiftFamilyOrder: return "LiftFamilyOrder";
     case BuildRule::LiftMinimumBand: return "LiftMinimumBand";
+    case BuildRule::GearboxRating: return "GearboxRating";
     }
     return "Unknown";
 }
@@ -450,6 +452,49 @@ std::vector<BuildIssue> check_buildable(const ComponentParams& engine) {
     if (const auto* sim = std::get_if<SimulatedEngineDesc>(&engine)) return check_buildable(*sim);
     if (const auto* tm = std::get_if<TorqueMapEngineDesc>(&engine)) return check_buildable(*tm);
     return {};
+}
+
+real peak_net_torque_nm(const TorqueMapEngineDesc& e) {
+    real peak = real(0.0);
+    const vehicle::Curve1D& c = e.wot_torque_nm_vs_rpm;
+    for (std::size_t i = 0; i < c.x.size() && i < c.y.size(); ++i) {
+        if (c.x[i] > e.limiter.rpm && i > 0) break; // the curve is held flat beyond its last node; the limiter ends the sweep
+        peak = std::max(peak, c.y[i]);
+    }
+    return peak;
+}
+
+std::vector<BuildIssue> check_gearbox_rating(const GearboxDesc& g, real peak_torque_nm) {
+    std::vector<BuildIssue> out;
+    LimitSeverity sev{};
+    if (!gearbox_rating_severity(peak_torque_nm, g.rated_input_torque_nm, sev)) return out;
+    const real over_pct = (peak_torque_nm / g.rated_input_torque_nm - real(1.0)) * real(100.0);
+    BuildIssue b;
+    b.rule = BuildRule::GearboxRating;
+    b.severity = sev;
+    b.slot = "gearbox";
+    b.field_pointer = "/rated_input_torque_nm";
+    b.message = "the engine's peak " + num(peak_torque_nm, 4) + " N*m is " + num(over_pct, 3) + " % over the gearbox's rated input torque " +
+                num(g.rated_input_torque_nm, 4) + " N*m" +
+                (sev == LimitSeverity::Exceeded ? " (more than " + num(tab::kGearboxOverExceeded.value * real(100.0), 3) + " % over: refused); fit a stronger gearbox"
+                                                : "; a stronger gearbox would carry it");
+    b.source_label = label_of(sev == LimitSeverity::Exceeded ? tab::kGearboxOverExceeded : tab::kGearboxOverLimiting);
+    b.value = peak_torque_nm;
+    b.limit = g.rated_input_torque_nm;
+    b.unit = LimitUnit::NewtonMetre;
+    out.push_back(std::move(b));
+    return out;
+}
+
+std::vector<BuildIssue> check_gearbox_rating(const PowertrainDesc& pt, real peak_torque_nm) {
+    std::vector<BuildIssue> out;
+    for (const ComponentDesc& c : pt.components) {
+        if (const auto* g = std::get_if<GearboxDesc>(&c.params)) {
+            std::vector<BuildIssue> one = check_gearbox_rating(*g, peak_torque_nm);
+            for (BuildIssue& b : one) out.push_back(std::move(b));
+        }
+    }
+    return out;
 }
 
 bool has_blocking_issue(const std::vector<BuildIssue>& issues) {

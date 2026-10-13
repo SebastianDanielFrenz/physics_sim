@@ -11,8 +11,8 @@
 // Shipping increments: P3b-1 = WastegateSaturated, BoostBelowTarget, BoostAboveTarget, TurboRotorCap, CompressorSurge,
 // CompressorChoke, ClutchCapacity, RevLimiter, FuelCut, MeanPistonSpeed, MapGridEdge; P3b-2 = KitFuelLean, N2OBottleDuration,
 // N2OBottlePressureDrop (a sweep with DynoSweepSpec::nitrous) and the Simulated remedies (ps/drivetrain/limit_remedies.h);
-// not produced (value reserved, append-only): ChargeTemperature (no limit exists in any data file), GearboxInputTorque
-// (GearboxDesc carries no input-torque rating), InjectorDuty (no injector model exists: fuel is a mass flow), ValveFlowChoke
+// T0 adds GearboxInputTorque (check_driveline_limits against GearboxDesc::rated_input_torque_nm);
+// not produced (value reserved, append-only): ChargeTemperature (no limit exists in any data file), InjectorDuty (no injector model exists: fuel is a mass flow), ValveFlowChoke
 // (no valve Mach diagnostic exists), Knock (C17b).
 // docs/data_formats/engine.md "Dyno sweep" -> "Limit findings" has the thresholds and sources.
 #pragma once
@@ -36,7 +36,7 @@ enum class LimitKind : std::uint16_t {
     CompressorChoke = 5,       // P3b-1: flow near the compressor's flow capacity (max_mass_flow_kg_s)
     ChargeTemperature = 6,     // not produced: no charge-temperature limit exists in any data file
     ClutchCapacity = 7,        // P3b-1: check_driveline_limits
-    GearboxInputTorque = 8,    // not produced: GearboxDesc has no input-torque rating
+    GearboxInputTorque = 8,    // transmission plan T0: check_driveline_limits, a gearbox rated_input_torque_nm below the dyno peak
     KitFuelLean = 9,           // P3b-2: the combined lambda with the kit is too lean (Closed remedy: fuel jet)
     InjectorDuty = 10,         // not produced: no injector model exists
     N2OBottleDuration = 11,    // P3b-2: the bottle empties within a drag-strip pass (Closed remedy: bottle content)

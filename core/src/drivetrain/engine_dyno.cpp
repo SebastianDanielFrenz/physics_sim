@@ -10,6 +10,7 @@
 #include "engine_params_util.h"
 #include "engine_simulated.h"
 #include "engine_torque_map.h"
+#include "gearbox_rating.h"
 #include "limit_thresholds.h"
 #include "nitrous_system.h"
 #include "powertrain.h" // to_engine_desc
@@ -878,7 +879,8 @@ std::optional<DynoNitrous> nitrous_from_powertrain(const PowertrainDesc& pt) {
     return DynoNitrous{*bottle, *kit};
 }
 
-std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain, const std::string& clutch_file) {
+std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const PowertrainDesc& powertrain, const std::string& clutch_file,
+                                                 const std::string& gearbox_file) {
     std::vector<LimitFinding> out;
     // The peak net torque and where it occurs (the first such point on a tie).
     const DynoPoint* peak = nullptr;
@@ -902,6 +904,26 @@ std::vector<LimitFinding> check_driveline_limits(const DynoResult& dyno, const P
         r.current = cl->capacity_nm;
         r.required_min = peak->torque_nm / cl->static_factor;
         r.required_margin = margin * peak->torque_nm / cl->static_factor;
+        r.unit = LimitUnit::NewtonMetre;
+        r.cost = RemedyCost::Closed;
+        r.solved = true;
+        f.remedy = std::move(r);
+        out.push_back(std::move(f));
+    }
+    // Transmission plan T0: a gearbox's rated input torque against the same peak. Graded over the rating, not under it
+    // (gearbox_rating.h); the Closed remedy names the rating field: required_min = the peak, required_margin = peak x 1.1.
+    for (const ComponentDesc& c : powertrain.components) {
+        const GearboxDesc* gb = std::get_if<GearboxDesc>(&c.params);
+        if (gb == nullptr) continue;
+        LimitSeverity s{};
+        if (!gearbox_rating_severity(peak->torque_nm, gb->rated_input_torque_nm, s)) continue;
+        LimitFinding f = make_finding(LimitKind::GearboxInputTorque, s, peak->rpm, peak->torque_nm, gb->rated_input_torque_nm,
+                                      LimitUnit::NewtonMetre, PartRef{"gearbox", gearbox_file, "/rated_input_torque_nm"});
+        Remedy r;
+        r.part = f.part;
+        r.current = gb->rated_input_torque_nm;
+        r.required_min = peak->torque_nm;
+        r.required_margin = rules::kGearboxRemedyMargin.value * peak->torque_nm;
         r.unit = LimitUnit::NewtonMetre;
         r.cost = RemedyCost::Closed;
         r.solved = true;

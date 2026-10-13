@@ -1,0 +1,6 @@
+{
+  "extends": "../../../../data/gearboxes/hyper_7mt.json",
+  "name": "trans_t0_rated_1500",
+  "source": "Test fixture (transmission plan T0): hyper_7mt with a rated input torque of 1500 N*m, ASSUMED (a rating test number, not a real gearbox).",
+  "rated_input_torque_nm": 1500
+}

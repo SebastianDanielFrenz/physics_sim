@@ -1,0 +1,15 @@
+{
+  "extends": "../../../../data/gearboxes/sedan_6mt.json",
+  "name": "trans_t0_sedan_teeth",
+  "source": "Test fixture (transmission plan T0): sedan_6mt with ASSUMED tooth counts (not a real gearbox; the counts are not cross-checked against the ratios) and a rated input torque of 320 N*m ASSUMED.",
+  "rated_input_torque_nm": 320,
+  "gear_type": "straight_cut",
+  "teeth": {
+    "input_pair": { "drive": 19, "driven": 41 },
+    "forward": [
+      { "drive": 14, "driven": 38 }, { "drive": 18, "driven": 33 }, { "drive": 22, "driven": 31 },
+      { "drive": 26, "driven": 28 }, { "drive": 30, "driven": 26 }, { "drive": 33, "driven": 24 }
+    ],
+    "reverse": [ { "drive": 13, "driven": 36 } ]
+  }
+}

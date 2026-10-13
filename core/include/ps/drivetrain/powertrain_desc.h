@@ -557,8 +557,27 @@ struct SynchroDesc {
     real static_factor = 1.0;
     real max_dog_mismatch_rad_s = 5.0;     // at the input shaft
 };
+// Transmission plan T0 (out/transmission_pedal_plan.md 6.3/7.1): gear tooth form. Sound and (data) efficiency only; the
+// physics never reads it (a straight-cut mesh differs in its transmission error, a sound-side effect).
+enum class GearType : std::uint8_t { Helical = 0, StraightCut = 1 };
+// Tooth counts of one gear mesh: `drive` on the driving wheel, `driven` on the driven one; 0 = unknown.
+struct GearTeeth {
+    int drive = 0;
+    int driven = 0;
+};
 struct GearboxDesc {
     GearboxType type = GearboxType::Manual;
+    // T0: optional (0 = not rated, no checks). Maximum torque the input shaft is built for [N*m]. Never hashed, in no key; read
+    // by check_gearbox_rating / check_driveline_limits only.
+    real rated_input_torque_nm = 0.0;
+    // T0, sound only (never hashed): published in DrivelineSoundState. `forward_teeth` / `reverse_teeth` are empty or sized like
+    // the ratio arrays (a gear's {drive, driven} teeth); `input_pair_teeth` is the constant-mesh pair of a layshaft box
+    // (drive = the gear on the input shaft), {0, 0} = none; `mesh_order` > 0 is the fallback (teeth on the driving gear) used
+    // where no tooth count is known, 0 = none.
+    GearType gear_type = GearType::Helical;
+    std::vector<GearTeeth> forward_teeth, reverse_teeth;
+    GearTeeth input_pair_teeth;
+    real mesh_order = 0.0;
     std::vector<real> forward_ratios;    // > 0, strictly decreasing (1st first). w_in = ratio * w_out
     std::vector<real> reverse_ratios;    // < 0, R1 first (the slowest reverse)
     std::vector<real> forward_efficiency, reverse_efficiency; // (0, 1], same lengths as the ratios above
