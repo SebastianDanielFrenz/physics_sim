@@ -62,6 +62,7 @@ struct ControlChannelIndices {
     std::size_t assist_launch_control = 0; // engine garage P8: only read when the vehicle has a launch_control controller
     std::size_t assist_aero_control = 0;   // assists I5: only read when the car's assist_unit aero_control is fitted
     std::size_t assist_drive_mode = 0;     // assists I7: only read when the car has a drive_modes part
+    std::size_t epb = 0;                   // Q3 / I8: only read when the car has an epb part
     // PHYS-033 P4 I4 C3 (plan section 2.4): one resolved World control-
     // channel index per drivetrain::Powertrain::declare_control_channels(...)
     // entry, same order - resolved in World::create_vehicle exactly like the
@@ -328,6 +329,15 @@ private:
         std::uint8_t last_mode = 0;
     };
     DriveModeState drive_state_{};
+    // Q3 / I8: electronic parking brake state, hashed only on a car with an epb part. last_level = the epb channel level
+    // (>= 0.5) of the previous tick (rising-edge detection); refused = the held request was refused (dropped until the
+    // level falls); state = EpbState code. Kept across reset() (a teleport does not release a parking brake).
+    struct EpbRuntime {
+        bool last_level = false;
+        bool refused = false;
+        std::uint8_t state = 0;
+    };
+    EpbRuntime epb_{};
     bool lc_default_state_ = false; // I7b: some offered drive mode sets launch_control_default
     // Assists I7c: channel writes a drive-mode change queues from inside step_tick (a vehicle job cannot touch World's
     // channel map). At most two (TC code, LC enable); cleared at the start of every step_tick; never hashed.

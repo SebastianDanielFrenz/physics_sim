@@ -726,6 +726,9 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         channel_indices.assist_drive_mode = ensure_control_channel_index(channel_prefix + "assist.drive_mode",
                                                                          static_cast<real>(static_cast<int>(desc.drive_modes->default_mode)));
     }
+    // Q3 / I8: the EPB switch level, registered only on a car with an epb part (the channel list is unchanged for every
+    // other car); default 0 = released.
+    if (desc.epb) channel_indices.epb = ensure_control_channel_index(channel_prefix + "epb", real(0));
     // assists I5: registered only on a car whose assist unit carries a fitted aero_control (the channel list is
     // unchanged for every other car); default = the block's default_enabled.
     if (const auto aero_surface = ps::vehicle::find_aero_control_surface(desc.aero, desc.assist_unit)) {

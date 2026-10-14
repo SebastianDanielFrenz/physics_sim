@@ -4796,6 +4796,13 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     }
                 }
                 v.drive_modes = part.drive_modes;
+            } else if (part.kind == ElectronicsKind::Epb) {
+                // Q3 / I8: at most one, and it drives the car's handbrake rows, so the car must have them.
+                if (v.epb) throw std::runtime_error(ectx + ": at most one epb per vehicle");
+                if (v.brake_system.handbrake.wheels.empty() || !(v.brake_system.handbrake.max_torque_nm > real(0))) {
+                    throw std::runtime_error(ectx + ": epb needs brake_system.handbrake rows (wheels and max_torque_nm > 0)");
+                }
+                v.epb = part.epb;
             } else {
                 for (const std::string& f : part.fits) {
                     if (f == "traction_control") { v.traction_control.fitted = true; continue; }

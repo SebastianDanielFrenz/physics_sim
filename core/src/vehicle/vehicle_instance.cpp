@@ -94,10 +94,20 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
             }
             lc_default_state_ = any_launch_control_default(*desc_.drive_modes);
         }
+        if (desc_.epb) { // Q3 / I8 backstop for code-built descs (the loader checks the same)
+            try {
+                validate_epb(*desc_.epb);
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error("vehicle '" + desc_.name + "': " + e.what());
+            }
+            if (desc_.brake_system.handbrake.wheels.empty() || !(desc_.brake_system.handbrake.max_torque_nm > real(0))) {
+                throw std::runtime_error("vehicle '" + desc_.name + "': epb needs brake_system.handbrake rows (wheels and max_torque_nm > 0)");
+            }
+        }
         tc_mode_desc_ = resolve_traction_mode_descs(desc_.traction_control, desc_.assist_unit);
         tc_modes_available_bits_ = traction_modes_available_bits(desc_.assist_unit, fit_traction_);
         fitted_bits_ = ((have_tcu && fit_clutch_) ? 1u : 0u) | ((have_tcu && fit_blip_) ? 2u : 0u) | ((have_tcu && fit_shift_) ? 4u : 0u) |
-                       (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u) | (fit_aero_ ? 64u : 0u);
+                       (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u) | (fit_aero_ ? 64u : 0u) | (desc_.epb ? 128u : 0u);
     }
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
@@ -265,6 +275,37 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     const Pose pose0 = backend.get_pose(chassis_);
     const Motion motion0 = backend.get_motion(chassis_);
+    // Q3 / I8: the electronic parking brake (epb_desc.h, docs/data_formats/electronics.md "epb"). Owner rule: "No,
+    // unless special modes are used (racing, drift), the parking brake should refuse to engage while speed is
+    // significant." Decided once per tick from the channel level, the chassis speed at the tick start and the effective
+    // drive mode's epb_mode (else the part's). It acts only through the handbrake rows (controls.handbrake raised to 1),
+    // so TC and the brake system see exactly what a pulled handbrake gives; brakes are untouched while released/refused.
+    if (desc_.epb) {
+        const EpbDesc& ed = *desc_.epb;
+        const bool level = channel_values[control_indices_.epb] >= real(0.5);
+        const EpbMode mode = (drive_params != nullptr && drive_params->epb_mode) ? *drive_params->epb_mode : ed.epb_mode;
+        const real speed = motion0.linear.length();
+        if (!level) {
+            epb_.state = static_cast<std::uint8_t>(EpbState::Released);
+            epb_.refused = false;
+        } else if (epb_.refused) {
+            epb_.state = static_cast<std::uint8_t>(EpbState::Released); // dropped, never pended: needs a new rising edge
+        } else if (mode == EpbMode::Handbrake) {
+            epb_.state = static_cast<std::uint8_t>(EpbState::Handbrake);
+        } else if (epb_.state == static_cast<std::uint8_t>(EpbState::Latched)) {
+            // park_only, already latched: stays latched whatever the speed
+        } else if (epb_.state == static_cast<std::uint8_t>(EpbState::Handbrake) || !epb_.last_level) {
+            // a new request: a rising edge, or a handbrake-mode application that met park_only by a mode switch
+            if (speed < ed.max_engage_speed_mps) {
+                epb_.state = static_cast<std::uint8_t>(EpbState::Latched);
+            } else {
+                epb_.state = static_cast<std::uint8_t>(EpbState::Released);
+                epb_.refused = true;
+            }
+        }
+        epb_.last_level = level;
+        if (epb_.state != static_cast<std::uint8_t>(EpbState::Released)) controls.handbrake = std::max(controls.handbrake, real(1));
+    }
     // Assists I5 (D-AE1): rear-wing automation. With the channel on the controller OWNS the surface command for this
     // tick (stateless: a pure function of the forward airspeed, the brake channel and the launch hook); the World's
     // own command is parked in a local and put back after the substeps, so with the channel off - or later switched
@@ -679,6 +720,11 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u) | (assist_traction ? 8u : 0u) |
                                 (assist_launch ? 16u : 0u) | (assist_aero ? 64u : 0u);
         snap.assist_fitted_bits = fitted_bits_;
+        if (desc_.epb) { // Q3 / I8
+            snap.epb_state = epb_.state;
+            snap.epb_refused = epb_.refused;
+            if (epb_.state != 0) snap.assist_active_bits |= 128u;
+        }
         snap.traction_mode_requested = static_cast<std::uint8_t>(tc_mode_requested);
         snap.traction_mode_effective = static_cast<std::uint8_t>(tc_mode_effective);
         snap.traction_modes_available_bits = tc_modes_available_bits_;
@@ -830,6 +876,20 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
             if(lc_default_state_)fold(static_cast<std::uint8_t>(p.launch_control_default?(*p.launch_control_default?2:1):0)); // I7b: only with a launch_control_default
         }
         fold(drive_state_.initialised);fold(drive_state_.last_mode);
+    }
+    if(desc_.epb) {
+        // Q3 / I8: the EPB desc, the per-drive-mode epb_mode (folded here, not in the drive-mode block, so a car without
+        // the part hashes exactly as before) and the EPB state - only on a car with an epb part.
+        const auto fold=[&](const auto& v){const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}};
+        const std::uint64_t tag=0x4550425041524b31ULL;fold(tag);
+        fold(desc_.epb->max_engage_speed_mps);fold(static_cast<std::uint8_t>(desc_.epb->epb_mode));
+        if(desc_.drive_modes) {
+            for(int m=0;m<kDriveModeCount;++m) {
+                const auto& em=desc_.drive_modes->params[static_cast<std::size_t>(m)].epb_mode;
+                fold(static_cast<std::uint8_t>(em?static_cast<int>(*em)+1:0));
+            }
+        }
+        fold(epb_.last_level);fold(epb_.refused);fold(epb_.state);
     }
     if(desc_.traction_control.enabled||traction_state_.initialized||traction_state_.enabled) {
         for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)}) {

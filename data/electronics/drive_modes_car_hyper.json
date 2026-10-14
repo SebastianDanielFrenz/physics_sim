@@ -1,0 +1,42 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "drive_modes",
+  "name": "car_hyper drive modes",
+  "default_mode": "normal",
+  "modes": {
+    "eco": {
+      "pedal_bend": { "x": 0.6, "y": 0.3 },
+      "auto_shift": { "up_rpm_at_zero_throttle": 1800, "up_rpm_at_full_throttle": 6500, "down_rpm_at_zero_throttle": 1100, "down_rpm_at_full_throttle": 2800 },
+      "auto_clutch": { "close_time_s": 0.15 },
+      "traction_control_default": "on",
+      "launch_control_default": false,
+      "launch_control_allowed": false,
+      "nitrous_arm_allowed": false,
+      "epb_mode": "park_only"
+    },
+    "normal": {
+      "epb_mode": "park_only"
+    },
+    "sport": {
+      "pedal_bend": { "x": 0.6, "y": 0.8 },
+      "auto_shift": { "up_rpm_at_zero_throttle": 3500, "up_rpm_at_full_throttle": 8100, "down_rpm_at_zero_throttle": 2000, "down_rpm_at_full_throttle": 5000 },
+      "auto_clutch": { "close_time_s": 0.06 },
+      "traction_control_default": "relaxed",
+      "launch_control_default": true,
+      "launch_control_allowed": true,
+      "nitrous_arm_allowed": true,
+      "epb_mode": "park_only"
+    },
+    "racing": {
+      "pedal_bend": { "x": 0.6, "y": 0.8 },
+      "auto_shift": { "up_rpm_at_zero_throttle": 4500, "up_rpm_at_full_throttle": 8100, "down_rpm_at_zero_throttle": 2500, "down_rpm_at_full_throttle": 5500 },
+      "auto_clutch": { "close_time_s": 0.04 },
+      "traction_control_default": "sport",
+      "launch_control_default": true,
+      "launch_control_allowed": true,
+      "nitrous_arm_allowed": true,
+      "epb_mode": "handbrake"
+    }
+  },
+  "source": "[AS] Q3 / I8 (queue item, docs/next_steps_brief.md): car_hyper's drive modes. Eco, Sport and Racing copy car_hyper_n2o's part (drive_modes_car_hyper_n2o.json: owner-approved Eco/Sport values, Racing [AS] - see its source). Normal overrides NOTHING (no bend, the car's own manual_tcu shift points 2500/8000/1300/3500 and close 0.1 s, no TC or LC default, LC allowed as before), so car_hyper in its default mode drives bit-identically to the car without the part - the launch control of its Racing assist unit keeps working in Normal as before (open owner decision: car_hyper_n2o's Normal does NOT allow LC). nitrous_arm_allowed is inert (no kit). epb_mode: park_only in Eco / Normal / Sport, handbrake in Racing."
+}

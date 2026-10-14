@@ -49,6 +49,15 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     if (!std::isfinite(v) || !(v > real(0.0))) throw std::runtime_error(ctx + ": '" + key + "' must be finite and > 0");
     return v;
 }
+// Q3 / I8: "park_only" | "handbrake".
+[[nodiscard]] vehicle::EpbMode epb_mode_from(const json& v, const std::string& ctx) {
+    if (v.is_string()) {
+        for (int i = 0; i < 2; ++i) {
+            if (v.get<std::string>() == vehicle::kEpbModeNames[i]) return static_cast<vehicle::EpbMode>(i);
+        }
+    }
+    throw std::runtime_error(ctx + ": 'epb_mode' must be \"park_only\" or \"handbrake\"");
+}
 
 // Assists I5: the aero_control block. Ranges copy racing_game's loader (environment.cpp: cruise_wing_offset_deg
 // [-8, 55], airbrake_wing_offset_deg [0, 55], airbrake_min_speed_m_s [0, 150], airbrake_threshold [0, 0.99]);
@@ -168,7 +177,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
         return -1;
     };
     if (!j.contains("modes") || !j.at("modes").is_object() || j.at("modes").empty()) {
-        throw std::runtime_error(path + ": 'modes' is required and must be a non-empty object keyed by mode name (eco, normal, sport)");
+        throw std::runtime_error(path + ": 'modes' is required and must be a non-empty object keyed by mode name (eco, normal, sport, racing)");
     }
     const auto number = [&](const json& v, const std::string& ctx, const std::string& key) {
         if (!v.is_number()) throw std::runtime_error(ctx + ": '" + key + "' must be a number");
@@ -182,7 +191,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
     };
     for (auto it = j.at("modes").begin(); it != j.at("modes").end(); ++it) {
         const int mi = mode_index(it.key());
-        if (mi < 0) throw std::runtime_error(path + ": modes: unknown mode '" + it.key() + "' (expected eco, normal or sport)");
+        if (mi < 0) throw std::runtime_error(path + ": modes: unknown mode '" + it.key() + "' (expected eco, normal, sport or racing)");
         const std::string ctx = path + ": modes." + it.key();
         if (!it.value().is_object()) throw std::runtime_error(ctx + " must be an object");
         d.modes_bits = static_cast<std::uint8_t>(d.modes_bits | vehicle::drive_mode_bit(static_cast<vehicle::DriveMode>(mi)));
@@ -225,6 +234,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
             } else if (k == "launch_control_default") p.launch_control_default = boolean(v, ctx, k);
             else if (k == "launch_control_allowed") p.launch_control_allowed = boolean(v, ctx, k);
             else if (k == "nitrous_arm_allowed") p.nitrous_arm_allowed = boolean(v, ctx, k);
+            else if (k == "epb_mode") p.epb_mode = epb_mode_from(v, ctx);
             else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
         }
     }
@@ -336,6 +346,20 @@ void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& p
     }
 }
 
+// Q3 / I8: the electronic parking brake part (kind "epb"): max_engage_speed_mps (required, finite > 0), epb_mode
+// (optional, default park_only). Drives the car's handbrake rows; the vehicle loader requires them.
+void read_epb(const json& j, const std::string& path, ElectronicsPart& part) {
+    reject_unknown(j, {"format", "kind", "name", "source", "extends", "max_engage_speed_mps", "epb_mode"}, path);
+    part.kind = ElectronicsKind::Epb;
+    part.epb.max_engage_speed_mps = require_positive(j, "max_engage_speed_mps", path);
+    if (j.contains("epb_mode")) part.epb.epb_mode = epb_mode_from(j.at("epb_mode"), path);
+    try {
+        vehicle::validate_epb(part.epb);
+    } catch (const std::invalid_argument& e) {
+        throw std::runtime_error(path + ": " + e.what());
+    }
+}
+
 } // namespace
 
 ElectronicsPart load_electronics_json(const std::string& path) {
@@ -349,7 +373,7 @@ ElectronicsPart load_electronics_json(const std::string& path) {
                                  "\" (expected \"physics_sim.electronics/1\")");
     }
     if (!j.contains("kind") || !j.at("kind").is_string()) {
-        throw std::runtime_error(path + ": 'kind' is required (\"launch_control\", \"assist_fitment\", \"assist_unit\" or \"drive_modes\")");
+        throw std::runtime_error(path + ": 'kind' is required (\"launch_control\", \"assist_fitment\", \"assist_unit\", \"drive_modes\" or \"epb\")");
     }
     const std::string kind = j.at("kind").get<std::string>();
 
@@ -399,8 +423,10 @@ ElectronicsPart load_electronics_json(const std::string& path) {
         read_assist_unit(j, path, part);
     } else if (kind == "drive_modes") {
         read_drive_modes(j, path, part);
+    } else if (kind == "epb") {
+        read_epb(j, path, part);
     } else {
-        throw std::runtime_error(path + ": unknown electronics kind \"" + kind + "\" (expected \"launch_control\", \"assist_fitment\", \"assist_unit\" or \"drive_modes\")");
+        throw std::runtime_error(path + ": unknown electronics kind \"" + kind + "\" (expected \"launch_control\", \"assist_fitment\", \"assist_unit\", \"drive_modes\" or \"epb\")");
     }
     return part;
 }
