@@ -94,6 +94,17 @@ The engine's `default_forced_induction` (before engine garage P2: `default_turbo
 intercooler effectiveness. Hardware quantities such as shaft inertia, reference
 speed, flow capacity, turbine area, efficiencies and shaft losses live in the
 separate turbo file; per-turbo quantities are multiplied by turbine count.
+Since 2026-10-14 (BOV round 3) the configuration (and `hyper_twin_n2o.json`) also
+carries a recirculating blow-off valve (1330 mm2 per turbo, crack 1.1 bar, full
+open 1.6 bar, tau 20 ms, [AS]; see `docs/data_formats/turbo.md` "Shipped files"
+and "blow_off_valve"): it caps the in-shift charge peak below 3 bar gauge, leaves
+WOT unchanged and stays shut at idle and steady cruise. After a lift-off the rotor
+spins down faster with the valve than without it - the compressor keeps pushing
+the vented air at the speed line's pressure ratio while DFCO has removed the
+turbine power; the lumped model is the plenum flow balance and an independent
+re-derivation of it matches the spin-down (`tests/unit/test_hyper_bov.cpp` H5).
+(Round 1's 920 mm2 valve failed the 2->3 spike and recovery bands once pedal P1
+changed the low-gear shifts.)
 
 Rotor energy integrates turbine power minus compressor power and shaft loss.
 Compressor pressure/temperature feed the manifold and acoustic intake supply;

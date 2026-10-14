@@ -917,6 +917,10 @@ TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy
     std::printf("[turbo dyno] load incl. map generation: %.2f s\n",std::chrono::duration<double>(std::chrono::steady_clock::now()-t_load).count());
     auto desc=std::get<SimulatedEngineDesc>(loaded);
     REQUIRE(desc.turbo_pair.has_value());
+    // 2026-10-13: the shipped hyper twin configuration now carries a blow-off valve (hyper BOV). This case measures the
+    // shaft-loss spin-down of a stopped engine (the 20 s decay below), which the valve's vent flow (extra compressor load) changes by design; it keeps its subject by
+    // clearing the valve. The valve itself is covered by test_turbo_bov.cpp and test_hyper_bov.cpp.
+    desc.turbo_pair->blow_off_valve.reset();
     SimulatedEngine boosted(desc);
     auto na_desc=desc; na_desc.turbo_pair.reset();
     SimulatedEngine na(na_desc);

@@ -180,23 +180,38 @@ crack), 0, 1)`, evaluated at the END of the turbo step; the opening follows it
 with a first-order lag `h/(tau + h)`. The vent flow of the NEXT step is the
 isentropic orifice flow `opening * A * p_charge / sqrt(R * T_charge) * Psi(p_amb/p_charge)`
 (the engine's shared tabulated Psi, so choked above the critical ratio) and is ADDED
-to the compressor flow: the compressor moves more air at a lower head (the head
-map falls with flow) and its power draw rises, so in this model the rotor of a
-lifted engine decelerates FASTER with the valve than without it (pair-level lift
-test: 0 rpm vs 33152 rpm after 500 ms). What the valve buys is a compressor that
-stays off its surge line (D3's flag), not a spinning rotor. The vent adds no mass
-to the intake - it leaves the system. The crack pressure must exceed the idle vacuum
-(ambient - idle manifold, ~0.7 bar) or the valve opens at every closed-throttle
-point. The valve opening is dynamic state: it is hashed (together with the valve
-parameters) only when a valve exists. The block is NOT part of the derived-map
-cache key (it changes nothing the maps contain).
+to the compressor flow. The vent adds no mass to the intake - it leaves the system.
 
-Known limit (measured, I7d D2): the lumped model has no plenum between the
-compressor and the throttle, and its quasi-steady charge pressure follows the rotor.
-When the throttle closes the rotor of the hyper V8 collapses within ~50 ms even without
-a valve, and the charge pressure goes with it, so a valve with a crack pressure of
-0.9 bar opens only to ~13 % at a lift-off. A valve that opens in time needs a low
-crack pressure and a short lag.
+What this is (checked 2026-10-14, BOV round 3): the lumped model is the quasi-steady
+plenum mass balance between compressor and throttle - the compressor flow on its
+speed line equals engine flow + vent flow (the charge-volume term `V/(RT) dp/dt` is
+the 25 ms charge lag), and the compressor work is that flow times the isentropic head
+of the operating point over the efficiency, with no extra unloading term. The charge
+pressure therefore settles where the valve characteristic meets the speed line, and
+the rotor decelerates by the work of the air it still pushes through the valve. On
+the hyper V8 held at 6000 rpm, a lift with the valve open recirculates 0.5-0.9 kg/s
+at a pressure ratio of 1.4-2.5 (50-90 kW against ~28 kJ in the rotors) while DFCO
+removes almost all turbine power (105 -> 8 kW within 5 ms), so the rotor spins down
+FASTER with the valve than without it. An independent re-derivation of the same
+balance (`tests/unit/test_hyper_bov.cpp` H5, its own bisection of the speed line
+against the orifice, fed only the engine flow, turbine power and manifold pressure)
+follows the simulated rotor within 2.3 % and the charge within 0.03 bar for one
+second after the lift; the plenum volume does not matter on that time scale (0.2 pp
+of retention with an explicit 10 L plenum, offline derivation). Without a valve the
+compressor dead-heads at a flow fraction of ~0.01 - deep surge, which the lumped
+model flags (D3) but does not cycle - so the valve-less rotor keeps ~86 % of its
+speed for a second; that is an upper bound, not a real compressor. Two map facts
+shape the sizing: the authored head law `H_ref s^2 (1 - f^2)` with a constant
+efficiency absorbs no power at choke (`f = 1`), so a valve large enough to pull the
+compressor to choke unloads it, while a half-open valve holds it near its
+maximum-power flow (`f ~ 0.58`); and a real map's Euler work stays finite near choke,
+so on a measured map the same valve would decelerate the rotor faster than here.
+
+The crack pressure must exceed the idle vacuum (ambient - idle manifold, ~0.7 bar)
+or the valve opens at every closed-throttle point. The valve opening is dynamic
+state: it is hashed (together with the valve parameters) only when a valve exists.
+The block is NOT part of the derived-map cache key (it changes nothing the maps
+contain).
 
 ### `exhaust_thermal` (optional)
 
@@ -443,7 +458,20 @@ for physics:
 measured map) and `data/turbo_configurations/hyper_twin_default.json` (count 2,
 1.8 bar gauge, intercooler 0.95, the `boost_control` above), reached through
 `data/engines/hyper_v8_one1_audio.json`'s `default_forced_induction` and used by
-`data/vehicles/car_hyper.json`.
+`data/vehicles/car_hyper.json`. `hyper_twin_default.json` and `hyper_twin_n2o.json` (the N2O car's
+configuration) carry a `blow_off_valve` since 2026-10-13 (owner: "Add BOV to hypercar", after boost B0
+holds the wastegate through the shift cut and the closed-plate charge spike without a valve rose to 5.4-6.2
+bar gauge): recirculate, 920 mm2 per turbo (the pair vents its full `max_mass_flow_kg_s` of 1.2 kg/s at the
+1.8 bar target, choked orifice at 2.8 bar abs / 294 K), crack 1.1 bar, full open 1.6 bar, tau 30 ms - all
+[AS], rule in each file's `source`. Measured on `car_hyper_n2o` (release, stock WOT with auto-shift): in-shift
+charge peak (shift start to 0.5 s after the new gear) 0.60 / 0.96 / 1.82 / 2.82 / 2.80 / 2.72 bar gauge on
+1->2 .. 6->7 (6.15 / 5.71 / 5.38 on 4->5 .. 6->7 without the valve); the valve is shut at idle and at 60 and
+120 km/h steady cruise and does not touch the WOT torque (bit-identical on the dyno hold at 3000/5000/7000
+rpm, the valve stays shut). The price is the model limit described above: the vent flow is compressor load, so
+after a lift the rotor decays faster (6000 rpm hold, lift at 2 s: 36.3k rpm after 0.5 s and 23.5k after 1 s,
+91.2k / 89.3k without the valve), and the boost after a WOT upshift needs 0.6-0.7 s to come back (it never
+dipped below 90 % after 4->5..6->7 before). Pins: `tests/unit/test_hyper_bov.cpp` H1-H4. The P5 templates
+({single,twin}_{small,medium,large}) carry no valve.
 
 ## Hardware family and templates (engine garage P5)
 

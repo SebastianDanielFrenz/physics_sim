@@ -48,6 +48,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <variant>
@@ -307,7 +308,45 @@ DriveResult drive(const ps::vehicle::VehicleDesc& desc, real seconds, real hold_
     return res;
 }
 
+// Diagnostic knob for the hidden "V1 BOV diag": an environment variable as a number, `def` when unset.
+real env_real(const char* name, real def) {
+#if defined(_MSC_VER) || defined(_WIN32)
+    char* buf = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&buf, &len, name) != 0 || buf == nullptr) return def;
+    const real v = std::stod(buf);
+    std::free(buf);
+    return v;
+#else
+    const char* e = std::getenv(name);
+    return e ? std::stod(e) : def;
+#endif
+}
+
 } // namespace
+
+// Hidden diagnostic (hyper BOV round 3): V1 with car_hyper_n2o's blow-off valve overridden from the environment
+// (PS_BOV_NONE=1 removes it; PS_BOV_AREA_MM2 per turbo / PS_BOV_CRACK_BAR / PS_BOV_FULL_BAR / PS_BOV_TAU_S).
+TEST_CASE("V1 BOV diag", "[.][diag][hyper_bov]") {
+    auto desc = load_car(false);
+    for (auto& c : desc.powertrain.components)
+        if (auto* s = std::get_if<SimulatedEngineDesc>(&c.params)) {
+            if (!s->turbo_pair->blow_off_valve) continue;
+            auto& v = *s->turbo_pair->blow_off_valve;
+            v.effective_area_m2 = env_real("PS_BOV_AREA_MM2", v.effective_area_m2 * 1e6 / 2.0) * 1e-6 * 2.0;
+            v.crack_dp_pa = env_real("PS_BOV_CRACK_BAR", v.crack_dp_pa / 1e5) * 1e5;
+            v.full_open_dp_pa = env_real("PS_BOV_FULL_BAR", v.full_open_dp_pa / 1e5) * 1e5;
+            v.tau_s = env_real("PS_BOV_TAU_S", v.tau_s);
+            std::printf("valve pair area %.1f mm2, crack %.2f, full %.2f bar, tau %.3f s\n", v.effective_area_m2 * 1e6,
+                        v.crack_dp_pa / 1e5, v.full_open_dp_pa / 1e5, v.tau_s);
+            if (env_real("PS_BOV_NONE", 0.0) > 0.5) {
+                s->turbo_pair->blow_off_valve.reset();
+                std::printf("valve REMOVED\n");
+            }
+        }
+    const DriveResult r = drive(desc, 40.0, 0.0);
+    for (const Upshift& u : r.upshifts) std::printf("V1diag %d->%d recovery %.3f s\n", u.from, u.to, u.recovery_s);
+}
 
 TEST_CASE("B1: a held boost controller keeps wastegate and integral bit-exact through a closed plate", "[turbo][drivetrain]") {
     TurboPair pair(tb::hyper_like_pair());

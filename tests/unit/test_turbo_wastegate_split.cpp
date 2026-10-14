@@ -250,9 +250,13 @@ TEST_CASE("WG2: compressor power is bounded by the head of the current rotor spe
 
 TEST_CASE("WG3: shipped hyper V8 lift without anti-lag - the rotor never reaches 0 rpm (measured)",
           "[turbo][sim_engine][hyper][wastegate]") {
-    const SimulatedEngineDesc base = load_hyper();
+    SimulatedEngineDesc base = load_hyper();
     REQUIRE(base.turbo_pair.has_value());
     REQUIRE_FALSE(base.turbo_pair->anti_lag.has_value());
+    // 2026-10-13: the shipped hyper twin configuration now carries a blow-off valve (hyper BOV). This case measures the
+    // wastegate-split floors of the rotor after a lift (turbine side only), which the valve's vent flow (extra compressor load) changes by design; it keeps its subject by
+    // clearing the valve. The valve itself is covered by test_turbo_bov.cpp and test_hyper_bov.cpp.
+    base.turbo_pair->blow_off_valve.reset();
     const LiftTrace t = run_lift(base, 6000.0, base.idle_rpm, 2 * 960, 2 * 960, 8 * 960);
     print_lift("WG3 shipped", t);
     CHECK(t.min_rotor_after_lift > 0.0);
