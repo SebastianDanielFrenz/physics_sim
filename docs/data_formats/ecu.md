@@ -47,6 +47,7 @@ own metadata; they are not merged into the engine. Every other key must be one o
 | `lift_control` | engine garage P10: the continuous intake-lift strategy (below) |
 | `ecu.lambda_target`, `ecu.spark_advance_deg` | the simulated engine's `ecu` block tables |
 | `ecu.ignition_strategy`, `ecu.knock_margin_deg` | engine garage P7 knock-limit opt-in (below) |
+| `ecu.part_load_boost` | pedal P1: `"efficient"` (default) or `"spooled"` - a turbo engine's part-load boost strategy ([engine.md](engine.md#the-manual-pedal-law-pedal-plan-p1)); read on every engine, used only with forced induction; a change is Runtime |
 | `cycle.spark_advance_deg` | the cycle block's spark schedule (copied into `ecu.spark_advance_deg` by the loader, as inline) |
 | `cycle.cam` | the cam phaser schedule of the cycle block |
 | `*_source` | a source note next to any of the above (top level, inside `ecu` or `cycle`) |

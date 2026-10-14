@@ -93,6 +93,7 @@ add_executable(ps_unit_tests
   test_simulated_engine.cpp
   test_turbo_pair.cpp
   test_boost_b0_diag.cpp
+  test_pedal_law.cpp
   test_boost_shift_hold.cpp
   test_turbo_bov.cpp
   test_turbo_surge.cpp

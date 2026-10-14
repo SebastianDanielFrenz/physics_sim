@@ -1050,6 +1050,53 @@ Not modelled: DI charge cooling (ethanol's latent heat - E85's real benefit is u
 the A25A's own DI effect, so a port-injected engine may come out too advanced), a knock sensor/adaptive retard,
 cycle-to-cycle variation, cylinder-to-cylinder spread.
 
+## The manual pedal law (pedal plan P1)
+
+On every engine with an electronic throttle and no governor the pedal (after the car's pedal map) is a torque request
+between two torques the engine can make at the current speed:
+
+`T*(c) = Z(n) + c * (F(n) - Z(n))`
+
+- `Z(n)` is what the engine does at a released pedal in its current state: the fuel-cut torque while in DFCO, else the
+  torque of the idle controller's air. `F(n)` is full load. `c = 0` and `c = 1` run the pre-P1 code unchanged
+  (bit-identical); the law applies for `0.01 <= c < 1`.
+- **Graph engine** (`torque_map`): the torque is affine in the fuel fraction, so the law is `theta = theta_idle + c (1 -
+  theta_idle)` (exactly 1 at `c = 1`). A governor or a mechanical linkage keeps the old `max(pedal, idle)`.
+- **Simulated engine, atmospheric**: `F` = steady WOT; the idle controller keeps its released-pedal (one-sided) form under
+  the pedal, so `T*` never drops below the idle torque; the plate comes from the existing inverse at
+  `r = (T* - T_cut) / (WOT - T_cut)`. A lift-family engine feeds the same `r` to its lift strategy.
+- **DFCO residual band** (plan 2.3): above `dfco_enable_rpm` the fuel stays cut while `T_cut + c (F - T_cut)` lies below
+  the fired floor `T_fc` (the dashpot plate's fired torque); it is re-entered only `0.01 (F - T_cut)` below `T_fc`
+  (hysteresis), and left once it reaches `T_fc`. The band is a few % of pedal.
+- **Turbo engine**: `F` is the dyno-SETTLED reachable WOT curve, never the configured boost target: at construction the
+  engine runs the dyno's held-crank WOT point (`run_dyno_sweep`'s stepped kind, ISA, 250 rpm steps from idle to just
+  below the limiter; the end-of-window value where a point does not settle) twice per rpm - the rotor starting at rest,
+  and pre-spun (5 s WOT at `min(top, rpm + 1500)`, then the crank ramped down at 250 rpm/s) - and keeps the higher
+  torque with its charge pressure ratio `PR_full`, charge temperature and turbine-inlet pressure ratio (memoised per
+  maps + turbo hardware + ECU; ~0.6 s for the hyper on a miss). Where a held point has two branches (the hyper at
+  1950 rpm: a cold rotor creeps for minutes at ~465 N*m, a spun one holds 1.8 bar and 1168 N*m) `F` is the spooled one,
+  so full pedal gives `F` without a step at `c = 1`. A live ambient or friction-estimate change refreshes `F` through the steady model at the same pressure ratio
+  (`F = (F_ref - M_ref) + M_live`). The ECU solves the manifold pressure `p*` at which the engine makes `T*` against the
+  present exhaust and charge state, and splits it by `ecu.part_load_boost`:
+  - `"efficient"` (default, wastegate first): `p* <= p_amb` - wastegate open, the plate holds `p*`; above - plate open,
+    the wastegate PID chases `p*` plus the throttle's own drop.
+  - `"spooled"`: the boost target stays at the cap and the plate holds `p*` (sharper response, more fuel).
+
+  The boost target is clamped to `[p_amb, min(p_amb + target_boost, p_amb * PR_full(n))]`. A gearshift's
+  `hold_boost_control` (Boost B0) still freezes the controller, and anti-lag keeps its own target.
+- `IEngine::request_envelope(rpm)` reports `Z`, `F`, `T_fc` and `T_cut` in the current state (tests, HUD).
+- The engine's torque demand to the TCU is `T*` while fired (the motoring torque in fuel cut).
+
+**Assist ceilings on a turbo engine** (pedal P1 (b)). Traction control and launch control limit the engine through a
+throttle ceiling (a fraction of the driver's command). On a turbo engine with the pedal envelope, when the running
+traction-control mode has `ignition_cut: true` (the default; electronics.md), that ceiling is a torque fraction at the
+CURRENT boost: the plate and the wastegate keep following the driver's command (under the TCU's own shift ceiling only),
+and the combustion torque is retarded to `f = ceiling / command` with the charge and fuel unchanged, so the lost
+indicated work leaves as exhaust enthalpy and keeps the turbine spun. TC's deep ignition cut then also keeps the plate.
+With `ignition_cut: false` (the shipped Sport/Drift modes), on an NA engine or without an envelope, the ceiling closes
+the plate as before. The auto-clutch follows the retarded torque. Auto-shift always reads the driver's command, never
+the ceiling (pedal P1 (a)).
+
 ## Dyno sweep: `run_dyno_sweep` (engine garage P3, A9)
 
 `ps/drivetrain/engine_dyno.h`: a full-throttle (or part-throttle) dyno sweep of ONE engine over rpm, from the same

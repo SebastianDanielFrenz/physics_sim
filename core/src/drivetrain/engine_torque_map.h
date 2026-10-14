@@ -112,6 +112,12 @@ public:
         // of the warm curve. Set by the Powertrain from the engine thermal file; 1.0 (and unused: k stays 1.0)
         // without thermal.
         real thermal_friction_fraction = 1.0;
+        // Pedal plan P1 (out/transmission_pedal_plan.md 2.2): true = the manual pedal law theta = theta_idle +
+        // c*(1 - theta_idle) (torque Z + c*(F - Z) exactly), false = the pre-P1 theta = max(c, theta_idle). Set by the
+        // Powertrain for an electronic throttle stage on an engine without a governor (owner: every engine with an
+        // ECU; a governor is a speed law, a mechanical linkage has no ECU). Default false: a code-built Desc keeps
+        // the pre-P1 law.
+        bool manual_pedal_law = false;
     };
 
     explicit EngineTorqueMap(Desc desc);
@@ -132,6 +138,10 @@ public:
     [[nodiscard]] real idle_rpm() const override { return desc_.idle_rpm; }
     // No manifold: the ambient pressure of the last Sensors (N2O plan N1; never hashed).
     [[nodiscard]] real intake_pressure_pa() const override { return p_ambient_last_; }
+    // Pedal plan P1: Z = m + theta_idle_last*(w - m) (m in fuel cut), F = w; no residual band (fired_floor NaN).
+    [[nodiscard]] PedalEnvelope request_envelope(real rpm) const override;
+    // Pedal plan P1: the Powertrain decides the law once its throttle stage kind is known (build time only).
+    void set_manual_pedal_law(bool on) { desc_.manual_pedal_law = on; }
 
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const override;
 
@@ -162,6 +172,7 @@ private:
 
     real crank_angle_ = 0.0; // NOT hashed
     real p_ambient_last_ = 101325.0; // NOT hashed (intake_pressure_pa)
+    real theta_idle_last_ = 0.0;     // NOT hashed: the idle controller output of the last pre_solve (request_envelope)
 
     // Stashed by pre_solve, read back by post_solve.
     real tau0_ = 0.0, d_ = 0.0, omega_old_ = 0.0;

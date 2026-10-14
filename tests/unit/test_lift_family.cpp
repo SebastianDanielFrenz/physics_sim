@@ -261,6 +261,9 @@ struct HeldPoint {
     real u = 1.0, plate = 0.0, u_target = 1.0;
     bool vacuum = false;
     real command = 0.0;
+    // Pedal plan P1: the torque-equivalent request the ECU hands lift_targets at the last substep,
+    // (T* - T_cut) / (WOT - T_cut) with T* = Z + command (F - Z) (request_envelope; F = steady WOT on this engine).
+    real request = 0.0;
 };
 
 HeldPoint held_point(const SimulatedEngineDesc& d, const std::shared_ptr<const SimulatedEngineMaps>& m, real rpm, real command) {
@@ -296,6 +299,8 @@ HeldPoint held_point(const SimulatedEngineDesc& d, const std::shared_ptr<const S
     h.u_target = e.lift_u_target();
     h.plate = e.x_thr();
     h.vacuum = e.lift_vacuum_mode();
+    const PedalEnvelope env = e.request_envelope(rpm);
+    h.request = std::clamp((e.pedal_torque_target_nm() - env.cut_nm) / (env.f_nm - env.cut_nm), 0.0, 1.0);
     return h;
 }
 
@@ -753,10 +758,15 @@ TEST_CASE("P10 R3: held-crank steady points meet the vacuum target, the open pla
     REQUIRE(req_vac > 0);
     REQUIRE(req_open > 0);
     REQUIRE(req_node > 0);
+    // Pedal plan P1 re-pin (2026-10-13): the pedal is no longer the lift request. The held point at pedal `req` is compared
+    // with lift_targets at the request the ECU actually forms, (T* - T_cut)/(WOT - T_cut) (HeldPoint::request); pre-P1 the
+    // pedal WAS the request (lift_targets(rpm, req)), measured with the P1 law: req 0.22 -> u 0.2267 vs 0.2026, torque
+    // 49.0 vs 35.0 N*m; req 0.88 torque 270.66 vs 268.52; req 0.955 u 0.6138 vs 0.6068. The pedal still selects the three
+    // regimes (vacuum range, the plate-open node, open plate).
     for (real req : {req_vac, req_node, req_open}) {
-        const auto t = e.lift_targets(rpm, req);
         const HeldPoint h = held_point(d, m, rpm, req);
-        INFO("request " << req << ": u " << h.u << " (target " << t.u << ") plate " << h.plate << " p_im " << h.p_im_pa
+        const auto t = e.lift_targets(rpm, h.request);
+        INFO("pedal " << req << " request " << h.request << ": u " << h.u << " (target " << t.u << ") plate " << h.plate << " p_im " << h.p_im_pa
                         << " torque " << h.torque_nm << " vs target " << t.torque_target_nm << " drift " << h.drift_nm);
         std::printf("P10 R3: request %.3f u %.4f plate %.6f vacuum %d p_im %.0f Pa torque %.3f target %.3f N*m\n", req, h.u, h.plate,
                     h.vacuum ? 1 : 0, h.p_im_pa, h.torque_nm, t.torque_target_nm);
@@ -771,7 +781,7 @@ TEST_CASE("P10 R3: held-crank steady points meet the vacuum target, the open pla
             CHECK(h.plate > 0.999);
             CHECK_FALSE(h.vacuum);
         }
-        if (req == req_node) {
+        if (t.u == lc.plate_open_u) { // pedal P1: the node plateau (was req == req_node)
             // Guard (added with the sabotage record, not a validation bound): on the plate-open node the ECU bisects the
             // manifold pressure at which its own plant makes the target, so the held point is exact to the bisection
             // resolution - holding the vacuum target there instead misses by 1.73 N*m, inside the declared 3 % above.

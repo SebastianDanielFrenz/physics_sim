@@ -1107,7 +1107,7 @@ GenScenarioRun run_gen_engine_scenario(ps::io::Scenario sc, int workers) {
 
 TEST_CASE("State hash for the generated-map engine scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
-    constexpr std::uint64_t kRecorded = 0x194fc20db754f52cULL; // 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x84518e7edcdc3b6a): re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0x4030651924c4dbd2, recorded 2026-09-29 (owner-requested SimulatedEngine idle rework: pedal-released one-sided PI, DFCO dashpot, manifold-fill term; was 0x5e88a765a7e748e4, recorded 2026-09-28 at the C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
+    constexpr std::uint64_t kRecorded = 0x2164909873144ac3ULL; // 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0x194fc20db754f52c); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x84518e7edcdc3b6a): re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0x4030651924c4dbd2, recorded 2026-09-29 (owner-requested SimulatedEngine idle rework: pedal-released one-sided PI, DFCO dashpot, manifold-fill term; was 0x5e88a765a7e748e4, recorded 2026-09-28 at the C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
     const ps::io::Scenario sc = load_gen_engine_scenario();
     const std::uint64_t reference = run_gen_engine_scenario(sc, 1).hash;
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
@@ -1146,11 +1146,11 @@ TEST_CASE("W4: scenarios without a weather environment keep their pre-W4 state h
     struct Pin { const char* file; std::uint64_t hash; };
     const Pin pins[] = {
         {"vehicle_step_steer.json", 0xe77fd6569d82786cULL},
-        {"vehicle_powertrain.json", 0xaadddd7bcd24ac15ULL},
+        {"vehicle_powertrain.json", 0xec3f01c51673f663ULL}, // pedal P1, was 0xaadddd7bcd24ac15
         {"vehicle_tractor_i4.json", 0xee2c08f11ee76f55ULL}, // D0 phantom wheel cast fix, was 0x44327cc4b10c57b5
         {"vehicle_fuel_tank.json", 0xb08736ed4b3a8d4fULL},
-        {"vehicle_sim_engine.json", 0x3aed0da9057e5829ULL},
-        {"vehicle_gen_engine.json", 0x194fc20db754f52cULL},
+        {"vehicle_sim_engine.json", 0x92b0090ff4b70656ULL}, // pedal P1, was 0x3aed0da9057e5829
+        {"vehicle_gen_engine.json", 0x2164909873144ac3ULL}, // pedal P1, was 0x194fc20db754f52c
         {"environment_day.json", 0xce55f12949e0ee73ULL},
     };
     for (const Pin& p : pins) {
@@ -1167,7 +1167,7 @@ TEST_CASE("W4: scenarios without a weather environment keep their pre-W4 state h
 // sim clock. The same file belongs in tools/ci.ps1's Windows-vs-Linux hash compare (coordinator).
 TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24 workers and really runs the weather",
           "[determinism][environment][vehicle][heavy][world][io]") {
-    constexpr std::uint64_t kRecorded = 0xa3ca509638ae73ccULL; // 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x2520d724148fa822): recorded 2026-10-05 (W4), ps_run at 1 and 10 workers
+    constexpr std::uint64_t kRecorded = 0x6dd1b38a446aed23ULL; // 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0xa3ca509638ae73cc); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x2520d724148fa822): recorded 2026-10-05 (W4), ps_run at 1 and 10 workers
     const std::uint64_t reference = run_scenario_file("environment_weather.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     CHECK(reference == kRecorded);
@@ -1197,7 +1197,7 @@ TEST_CASE("W4: the weather scenario hashes identically across 1, 2, 4, 10 and 24
 // Windows-vs-Linux hash compare (coordinator).
 TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4, 10 and 24 workers and really steps the grid",
           "[determinism][environment][vehicle][heavy][world][io]") {
-    constexpr std::uint64_t kRecorded = 0xcef127a9c2643925ULL; // 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x64326439851d8dfc): re-recorded 2026-10-05 (W6: water film/drain/soil state hashed, wet grip active; was 0x030df2de793ce721 at W5)
+    constexpr std::uint64_t kRecorded = 0xa413eb2036d292e8ULL; // 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0xcef127a9c2643925); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x64326439851d8dfc): re-recorded 2026-10-05 (W6: water film/drain/soil state hashed, wet grip active; was 0x030df2de793ce721 at W5)
     const std::uint64_t reference = run_scenario_file("environment_surface.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     CHECK(reference == kRecorded);
@@ -1246,7 +1246,7 @@ TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4,
 // 0xba94bad06472d25c, a.hash == b.hash).
 TEST_CASE("Engine thermal: vehicle_thermal.json hashes identically across 1, 2, 4, 10 and 24 workers; T_o is hashed",
           "[determinism][thermal][vehicle][drivetrain][heavy][world][io]") {
-    constexpr std::uint64_t kRecorded = 0x3178e9e670d1cb5dULL; // 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0xd7205b0b06295bd8): re-recorded 2026-10-05 (T1b friction split, fire_rpm 100; T1 C6 was 0x74d75aa6d229faa0), ps_run at 1/2/4/10/24 workers
+    constexpr std::uint64_t kRecorded = 0xfb37e62eaf06cabbULL; // 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0x3178e9e670d1cb5d); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0xd7205b0b06295bd8): re-recorded 2026-10-05 (T1b friction split, fire_rpm 100; T1 C6 was 0x74d75aa6d229faa0), ps_run at 1/2/4/10/24 workers
     const std::uint64_t reference = run_scenario_file("vehicle_thermal.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     CHECK(reference == kRecorded);

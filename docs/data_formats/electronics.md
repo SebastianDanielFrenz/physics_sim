@@ -77,7 +77,9 @@ launch-limit parts. All three attach as a `controllers` entry of type `electroni
    `adapters/godot/src/channel_mirror.h` (`push_channels` / `adopt_world_channel_writes`, Godot-free).
 5. **Pedal bend.** A drive mode's bend is applied after the car's own pedal curve; the auto-shift, launch law, kickdown
    and the TC/LC throttle ceilings work on the *bent* command (ceilings are fractions of it), while TC's pedal gating
-   and LC arming use the raw pedal (driver intent).
+   and LC arming use the raw pedal (driver intent). Pedal plan P1: the bend applies only with a gearbox that turns the
+   pedal into a power request (automatic, DCT, CVT - decided by gearbox kind when the car is built). Manual and
+   sequential gearboxes - every shipped car - keep the driver's pedal, so the bend is inert today.
 6. **I2 low-speed clutch cap.** Only while the effective TC mode is not Off, the auto-clutch is in Launch/Locked, the
    ground-speed input rpm of the current gear is below 1.25 x `anti_stall_rpm` `[AS]`, and launch control does not own
    the car: the TC fraction caps the *clutch* capacity instead of the engine.
@@ -268,7 +270,7 @@ override of the car's own `traction_control` block (an unset field inherits the 
 |---|---|---|
 | `target_slip`, `kp`, `ki_per_s`, `attack_rate_per_s`, `recovery_rate_per_s` | the controller's gains (finite, `> 0`; `target_slip < 1`) | the car's value |
 | `min_fraction` | torque floor: the TC never cuts below this fraction, `[0, 1)` | `0` (today) |
-| `ignition_cut` | whether a deep intervention may cut ignition | `true` (today) |
+| `ignition_cut` | whether a deep intervention may cut ignition; also how TC and launch-control throttle ceilings act on a turbo engine with a pedal envelope: `true` = spark retard at the current boost (plate and wastegate held on the driver's command), `false` = the plate closes to the ceiling (engine.md "Assist ceilings on a turbo engine") | `true` (today) |
 
 Switching modes keeps the controller's integral and fraction (no jump). Plan-B1 starting values (`[AS]`, measured
 against the V6 ordering band in `tests/unit/test_assist_unit.cpp`): Relaxed 0.12/2/5/15/8, floor 0, cut; Sport
@@ -452,7 +454,8 @@ and clamped; default = the part's `default_mode` code. A request for a mode the 
 default is the one mode the owner approved, and clamping to a neighbour could select Sport on a car that forbids it).
 
 **Pedal bend.** `out = bend(normal(pedal))`, applied in the throttle-command stage after the car's own `pedal_map` /
-linkage curve and before the hand lever. The TCU (launch law, auto-shift thresholds, kickdown) and the traction/launch throttle
+linkage curve and before the hand lever - only with an automatic, DCT or CVT gearbox (pedal plan P1; none is shipped, so
+on every current car the bend is skipped bit for bit and the key is accepted but inert). The TCU (launch law, auto-shift thresholds, kickdown) and the traction/launch throttle
 ceilings work on this command; TC's pedal gating and launch-control arming stay on the raw pedal (driver intent).
 
 **Traction-control default per mode.** In physics, not in the game: when the *effective* drive mode changes and the new mode

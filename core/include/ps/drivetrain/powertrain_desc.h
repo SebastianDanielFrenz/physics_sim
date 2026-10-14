@@ -467,6 +467,13 @@ struct TurboPairDesc {
     real exhaust_wall_initial_k = 0.0;               // wall temperature at reset; 0 = ambient (cold start)
 };
 
+// Pedal plan P1 (out/transmission_pedal_plan.md 2.5, owner Q1): how a turbo engine's ECU makes part-load torque.
+// Efficient (default): wastegate first - the plate opens fully before boost is built, the boost target is just high
+// enough for the request. Spooled: the boost target stays at the full-load charge pressure and the plate throttles
+// (sharper response after a part-throttle cruise, more fuel). The ECU part's "ecu.part_load_boost"; ignored without
+// forced induction.
+enum class PartLoadBoost : std::uint8_t { Efficient = 0, Spooled = 1 };
+
 struct SimulatedEngineDesc {
     EngineArchitecture architecture = EngineArchitecture::Piston4Stroke;
     PistonGeometryDesc piston; // meaningful iff architecture == Piston4Stroke
@@ -484,6 +491,7 @@ struct SimulatedEngineDesc {
     real throttle_actuator_tau_s = 0.0;   // electronic only (the loader rejects it on a mechanical engine)
     real idle_bypass_area_m2 = 0.0;       // mechanical only (idle_control.bypass_area_mm2 in the file)
     SimulatedEcuDesc ecu;
+    PartLoadBoost part_load_boost = PartLoadBoost::Efficient; // pedal plan P1 (2.5); "ecu.part_load_boost"
     SimulatedEngineMapsDesc maps;
     // PHYS-033 P4 I7c C16a: the engine file's "cycle" block, if any. The loader
     // runs the map generator (ps/drivetrain/engine_maps.h) on it and fills

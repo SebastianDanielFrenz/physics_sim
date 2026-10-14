@@ -54,8 +54,12 @@ public:
     // Build-time only (Powertrain's constructor), never per-tick/substep.
     // `hand_lever_channel_slot` is the already-resolved index into
     // ComponentSubstepCtx::channels (-1 = no hand lever for this stage).
-    void configure(ThrottleInput kind, bool has_curve, const vehicle::Curve1D& curve, int hand_lever_channel_slot) {
+    // apply_drive_bend (pedal plan P1): the drive mode's pedal bend is applied only when true - an automatic,
+    // DCT or CVT transmission (gearbox_takes_drive_bend); with a manual or sequential gearbox the bend is skipped.
+    void configure(ThrottleInput kind, bool has_curve, const vehicle::Curve1D& curve, int hand_lever_channel_slot,
+                   bool apply_drive_bend = false) {
         kind_ = kind;
+        apply_drive_bend_ = apply_drive_bend;
         has_curve_ = has_curve;
         curve_ = curve;
         hand_lever_channel_slot_ = hand_lever_channel_slot;
@@ -85,7 +89,7 @@ public:
     // serving both the command and Powertrain's published hand_throttle.
     [[nodiscard]] ThrottleCommand evaluate(const ComponentSubstepCtx& ctx, real& out_raw_hand_lever) const {
         real pedal_prime = has_curve_ ? curve_.evaluate(ctx.throttle) : ctx.throttle;
-        if (ctx.drive_bend_x > real(0.0)) { // assists I7: the drive mode's one-point bend, on top of the car's curve
+        if (apply_drive_bend_ && ctx.drive_bend_x > real(0.0)) { // assists I7 bend; pedal plan P1: automatic/DCT/CVT only
             pedal_prime = vehicle::pedal_bend_apply(vehicle::PedalBend{ctx.drive_bend_x, ctx.drive_bend_y}, pedal_prime);
         }
         real command = pedal_prime;
@@ -100,6 +104,9 @@ public:
             out.floor = ctx.tcu_throttle_floor;
             out.ceiling = std::min(std::min(ctx.tcu_throttle_ceiling,ctx.traction_throttle_ceiling),ctx.launch_throttle_ceiling); // launch_*: assists I4, 1 = none
             out.floor = std::min(out.floor,out.ceiling); // safety intervention takes priority over auto-blip
+            out.tcu_ceiling = ctx.tcu_throttle_ceiling; // pedal P1 (b), engine.h ThrottleCommand
+            out.assist_ceiling = std::min(ctx.traction_throttle_ceiling,ctx.launch_throttle_ceiling);
+            out.assist_as_retard = ctx.assist_ceiling_as_retard;
         } else {
             out.floor = real(0.0);
             out.ceiling = real(1.0);
@@ -112,6 +119,19 @@ private:
     bool has_curve_ = false;
     vehicle::Curve1D curve_;
     int hand_lever_channel_slot_ = -1; // into ComponentSubstepCtx::channels
+    bool apply_drive_bend_ = false;    // pedal plan P1: build-time gate by gearbox kind
 };
+
+// Pedal plan P1 (out/transmission_pedal_plan.md 2.1, owner clarification 2026-10-13): the drive-mode pedal bend
+// belongs to a transmission that turns the pedal into a power request (automatic, DCT, CVT - none exists yet). A
+// manual or sequential gearbox keeps the driver's pedal untouched.
+[[nodiscard]] constexpr bool gearbox_takes_drive_bend(GearboxType type) {
+    switch (type) {
+        case GearboxType::Manual:
+        case GearboxType::Sequential:
+            return false;
+    }
+    return false;
+}
 
 } // namespace ps::drivetrain

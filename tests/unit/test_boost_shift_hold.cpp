@@ -19,6 +19,11 @@
 //   V1  [long] stock car_hyper_n2o, WOT from rest with auto-shift, 40 s: recovery (new-gear engagement -> charge back
 //       >= 90 % of its max over the 0.25 s before the shift began, after a dip) 4->5, 5->6, 6->7 <= 2.0 s each,
 //       1->2, 2->3, 3->4 <= 0.89/0.91/1.13 s (pre-B0 + 0.1 s, measured with the first metric version)
+//       Metric rule change (pedal P1 (b), 2026-10-13, coordinator): an upshift whose charge never dips below 90 % before
+//       the NEXT upshift begins now counts as recovery 0 (before: 0 only after 3 s without a dip, else -1 = fail). With
+//       traction control's ceiling as spark retard the plate stays open in the low gears, the boost holds 1.6-1.9 bar
+//       through 1->2, 2->3 and 3->4 (minima 1.82/1.74/1.61 vs thresholds 1.75/1.68/1.58 bar [M]) and the next upshift
+//       comes within 3 s, so the old rule reported a held boost as "never recovered". Bands unchanged.
 //   V2  [long][!mayfail] owner setup (assists V12 fixture + drive_modes_car_hyper_n2o, min_time_in_gear 2.0, kickdown
 //       0.95), speed hold at 300 km/h, 60 s: <= 1 gear change in the last 20 s - fails with every controller variant,
 //       see the case (a plant limit, P1/shift policy)
@@ -260,6 +265,9 @@ DriveResult drive(const ps::vehicle::VehicleDesc& desc, real seconds, real hold_
             if (pt.gear > 0) {
                 if (last_gear > 0 && pt.gear != last_gear) res.gear_change_t.push_back(t);
                 if (last_gear > 0 && pt.gear > last_gear) {
+                    // Pedal P1 (b): the previous upshift is still open without a dip below 90 % - the boost held
+                    // through it until this shift began, so it counts as recovered (0), like "no dip in 3 s".
+                    if (pending_ref >= 0.0 && !dipped && !res.upshifts.empty()) res.upshifts.back().recovery_s = 0.0;
                     res.upshifts.push_back(Upshift{last_gear, int(pt.gear), -1.0});
                     pending_ref = shift_ref;
                     pending_t = t;
@@ -428,5 +436,8 @@ TEST_CASE("V3: the owner's setup keeps its boost through the upshifts at a stead
 //   S3 error normalised by the target again: B3 fails at the first step (gate 0.00515 vs 0); B1, B2, V1, V3 pass.
 //   S4 the Powertrain never sets TcuRequest::hold_boost_control: V1 fails (as S1); B1-B3, V3 pass (they drive the
 //      pair/engine directly).
+//   S5 (pedal P1 (b), new V1 metric) gate open at each shift again (Powertrain never sets hold_boost_control, the
+//      pre-B0 behaviour): V1 fails - 1->2 -1, 2->3 1.283, 3->4 1.642, 4->5 1.833, 5->6 2.292, 6->7 2.229 s; with the
+//      hold 0/0/0/0/0/0 s (TC ceiling as spark retard keeps the plate open, the boost never dips below 90 %).
 //   V3 is an integration guard: it fails only with BOTH the hold and the normaliser removed (pre-B0 exploration run:
 //      266.5-389.7 km/h); S1 alone 381.7-389.0, S3 alone 383.7-390.2 km/h.

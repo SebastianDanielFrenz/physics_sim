@@ -1298,10 +1298,13 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             fuel_tank_ = std::make_unique<FuelTank>(tank_desc->fuel, tank_desc->capacity_kg, tank_desc->initial_kg);
         }
+        EngineTorqueMap* tm_engine_ptr = nullptr;
         if (tm) {
             EngineTorqueMap::Desc tm_desc = to_engine_desc(*tm, tank_desc);
             if (pt.thermal.has_value()) tm_desc.thermal_friction_fraction = pt.thermal->engine.motoring_friction_fraction;
-            engine_ = std::make_unique<EngineTorqueMap>(std::move(tm_desc));
+            auto tm_engine = std::make_unique<EngineTorqueMap>(std::move(tm_desc));
+            tm_engine_ptr = tm_engine.get(); // pedal plan P1: the law is set once the throttle stage kind is known
+            engine_ = std::move(tm_engine);
         } else {
             // PHYS-033 P4 I7b C12: SimulatedEngine::build_maps takes LHV/AFR
             // from fuels[0], so the engine is built from a copy whose fuels
@@ -1498,7 +1501,13 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 }
             }
         }
-        throttle_stage_.configure(throttle_kind, throttle_has_curve, throttle_curve, hand_lever_channel_slot);
+        // Pedal plan P1 (out/transmission_pedal_plan.md 2.1): the drive-mode pedal bend acts only through an
+        // automatic, DCT or CVT transmission; decided here from the gearbox kind (a gearbox swap is a respawn).
+        const bool drive_bend = gearbox_desc != nullptr && gearbox_takes_drive_bend(gearbox_desc->type);
+        throttle_stage_.configure(throttle_kind, throttle_has_curve, throttle_curve, hand_lever_channel_slot, drive_bend);
+        // Pedal plan P1 (2.2): the manual pedal law on every engine with an ECU - an electronic stage on an engine
+        // without a governor. The simulated engine decides it from its own throttle_input (the stage kind matches it).
+        if (tm_engine_ptr != nullptr) tm_engine_ptr->set_manual_pedal_law(throttle_kind == ThrottleInput::Electronic && !e_has_governor);
     }
     if (clutch_component_index >= 0) {
         const auto& c = std::get<ClutchDesc>(pt.components[static_cast<std::size_t>(clutch_component_index)].params);
@@ -1952,6 +1961,9 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             // (manual_tcu.h). Without an engine there is no throttle stage
             // to speak of; fall back to the raw pedal exactly as before.
             s.throttle_request = engine_ ? last_throttle_command_.command : ctx.throttle;
+            // Pedal P1: the gear choice reads the driver's request, before the TC ceiling below (V8c: the ceiling
+            // at the launch-control hand-over made auto-shift take 2nd at 7.4 m/s and lug at 1430 rpm).
+            s.shift_throttle_request = s.throttle_request;
             // TC changes the available ECU request: launch clutch must not
             // wait for full-pedal launch RPM after TC has limited that request.
             // Assists I2 (D-LS3): not while TC acts through the clutch (ctx.traction_throttle_ceiling is 1 then).
@@ -2091,6 +2103,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         }
         EngineTorqueMap::TcuRequest req{ctx.tcu_ignition_cut || ctx.traction_ignition_cut};
         req.hold_boost_control = ctx.tcu_ignition_cut || ctx.tcu_throttle_ceiling < real(1.0); // Boost B0: shift in progress
+        req.traction_cut = ctx.traction_ignition_cut && !ctx.tcu_ignition_cut; // pedal P1 (b), engine.h TcuRequest
         if (ctx.launch_limiter_rpm > real(0.0)) req.limiter_rpm = ctx.launch_limiter_rpm; // assists I4: the unit's launch control (Armed)
         if (launch_) { // engine garage P8 (A16): the second rev limit, through the engine's own limiter
             LaunchControl::Inputs li;

@@ -452,15 +452,38 @@ TEST_CASE("L3: attach to a car - generic car, two parts, extends, none, merged h
 // ---------------------------------------------------------------------------------------------------------------
 // B: pedal bend.
 // ---------------------------------------------------------------------------------------------------------------
+TEST_CASE("B1b: the drive-mode bend is gated by gearbox kind (pedal plan P1)", "[assist][drive_modes][vehicle][drivetrain][pedal]") {
+    using namespace ps::drivetrain;
+    // No shipped gearbox kind takes the bend: a manual and a sequential gearbox keep the driver's pedal.
+    CHECK_FALSE(gearbox_takes_drive_bend(GearboxType::Manual));
+    CHECK_FALSE(gearbox_takes_drive_bend(GearboxType::Sequential));
+    Curve1D curve;
+    curve.x = {0.0, 0.5, 1.0};
+    curve.y = {0.0, 0.3, 1.0};
+    ThrottleStage manual; // configured as Powertrain does for a manual gearbox
+    manual.configure(ThrottleInput::Electronic, true, curve, -1, gearbox_takes_drive_bend(GearboxType::Manual));
+    for (int i = 0; i <= 20; ++i) {
+        const real pedal = 0.05 * i;
+        ComponentSubstepCtx ctx;
+        ctx.throttle = pedal;
+        ctx.drive_bend_x = 0.6;
+        ctx.drive_bend_y = 0.3;
+        INFO("pedal " << pedal);
+        CHECK(manual.evaluate(ctx).command == curve.evaluate(pedal)); // the bend is skipped bit for bit
+    }
+}
+
 TEST_CASE("B1: ThrottleStage composes the bend after the car's pedal curve and before the hand lever", "[assist][drive_modes][vehicle][drivetrain]") {
     using namespace ps::drivetrain;
     Curve1D curve;
     curve.x = {0.0, 0.5, 1.0};
     curve.y = {0.0, 0.3, 1.0}; // a non-trivial car curve
+    // Pedal plan P1: the bend applies only on a stage configured for a power-request transmission (apply_drive_bend);
+    // B1b checks the gate itself.
     ThrottleStage st;
-    st.configure(ThrottleInput::Electronic, true, curve, -1);
+    st.configure(ThrottleInput::Electronic, true, curve, -1, /*apply_drive_bend=*/true);
     ThrottleStage plain;
-    plain.configure(ThrottleInput::Electronic, true, curve, -1);
+    plain.configure(ThrottleInput::Electronic, true, curve, -1, /*apply_drive_bend=*/true);
     for (const auto& b : {PedalBend{0.6, 0.3}, PedalBend{0.6, 0.8}, PedalBend{0.25, 0.0}, PedalBend{0.9, 1.0}}) {
         for (int i = 0; i <= 20; ++i) {
             const real pedal = 0.05 * i;
@@ -488,7 +511,7 @@ TEST_CASE("B1: ThrottleStage composes the bend after the car's pedal curve and b
     }
     // the hand lever still wins after the bend (max of the two)
     ThrottleStage hand;
-    hand.configure(ThrottleInput::Electronic, false, Curve1D{}, 0);
+    hand.configure(ThrottleInput::Electronic, false, Curve1D{}, 0, /*apply_drive_bend=*/true);
     const real channels[1] = {0.5};
     ComponentSubstepCtx ctx;
     ctx.channels = channels;
@@ -501,7 +524,11 @@ TEST_CASE("B1: ThrottleStage composes the bend after the car's pedal curve and b
     CHECK(hand.evaluate(ctx).command == 1.0);
 }
 
-TEST_CASE("B2: through a real World - the throttle command is the bend of the pedal per mode", "[assist][drive_modes][vehicle][drivetrain]") {
+// Pedal plan P1 re-pin (2026-10-13): the drive-mode bend applies only to automatic/DCT/CVT gearboxes (ThrottleStage's
+// apply_drive_bend, gated by gearbox kind - B1b). car_hyper_n2o has a manual gearbox, so its throttle command is the
+// pedal in EVERY mode now; pre-P1 Eco/Sport carried the bend (Eco pedal 0.6 -> 0.3, Sport 0.6 -> 0.8), which this case
+// pinned to 1e-12. The bend curve itself is still pinned by B1 (ThrottleStage with apply_drive_bend = true).
+TEST_CASE("B2: through a real World - a manual car's throttle command is the pedal in every mode (pedal P1 bend gate)", "[assist][drive_modes][vehicle][drivetrain]") {
     const VehicleDesc& d = n2o();
     for (int mode = 0; mode < 3; ++mode) {
         Rig r = make_rig(d);
@@ -513,25 +540,28 @@ TEST_CASE("B2: through a real World - the throttle command is the bend of the pe
             w.step();
             w.step();
             const real cmd = w.powertrain_state(r.rig.vehicle).engines.at(0).throttle_command;
-            const real expect = bend_of(mp(d, static_cast<DriveMode>(mode)), pedal);
             INFO("mode " << mode << " pedal " << pedal);
-            if (mode == 1) CHECK(cmd == pedal); // Normal: no bend, exactly the pedal (the car has no pedal curve)
-            else CHECK(std::abs(cmd - expect) <= kBendTol);
+            CHECK(cmd == pedal); // no bend on a manual, exactly the pedal (the car has no pedal curve)
         }
-        // the bend point
+        // the bend point (pre-P1: Eco 0.3, Sport 0.8)
         w.set_control("throttle", 0.6);
         w.step();
         w.step();
         const real at_x = w.powertrain_state(r.rig.vehicle).engines.at(0).throttle_command;
-        if (mode == 0) CHECK(std::abs(at_x - 0.3) <= kBendTol);
-        if (mode == 1) CHECK(at_x == 0.6);
-        if (mode == 2) CHECK(std::abs(at_x - 0.8) <= kBendTol);
+        CHECK(at_x == 0.6);
     }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // S: auto-shift points and close time.
 // ---------------------------------------------------------------------------------------------------------------
+// Pedal P1 re-pin (2026-10-13, coordinator): S1 runs with traction control On (assist.traction_control 1, was 0 = Off).
+// The test checks the drive modes' shift points, not wheelspin. With TC Off the hyper spins its rears at WOT in 1st
+// (mean rear kappa 0.85 at the 1->2 shift [M]), the speedo-derived shift point is reached by wheelspin and auto-shift
+// hunts 1 <-> 2 (Sport and Normal; on master too, two 1->2 events each). Under P1 the second 1->2 follows a dwell and
+// misses the exact-crossing check (decision rpm_prev2 6839.8 vs threshold 6720 [M]) - KNOWN BEHAVIOUR with TC Off,
+// not a shift-point fault. The thresholds are read at the driver's command (pedal P1: shift_throttle_request, before
+// the TC ceiling), so TC On does not move them.
 TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [long]", "[assist][drive_modes][vehicle][drivetrain][long]") {
     const VehicleDesc d = shift_test_desc();
     std::array<std::array<real, 2>, 3> first_up{}; // [mode][pedal index]
@@ -541,13 +571,13 @@ TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [lo
         for (int pi = 0; pi < 2; ++pi) {
             Rig r = make_rig(d);
             World& w = r.w();
-            base_controls(w, mode);
+            base_controls(w, mode, 1.0); // pedal P1 re-pin: TC On (was Off, see the header)
             ps_test::settle(w, 0.3);
             roll_in_gear(r, 1, 2200.0);
             w.set_control("assist.auto_shift", 1.0);
             w.set_control("gear_request", drivetrain::kGearRequestNone);
             w.set_control("throttle", pedals[pi]);
-            const real cmd = bend_of(p, pedals[pi]);
+            const real cmd = pedals[pi]; // pedal P1 re-pin: no drive-mode bend on a manual (was bend_of(p, pedal))
             const std::vector<Event> ev = run_shifts(r, +1, 2, 25.0);
             INFO("mode " << mode << " pedal " << pedals[pi] << " command " << cmd);
             REQUIRE(ev.size() == 2);
@@ -570,6 +600,38 @@ TEST_CASE("S1: upshift decision rpm per mode on a WOT and a light-pedal pull [lo
     }
 }
 
+// Pedal plan P1 diag: S1's 1->2 pull traced (PS_S1_MODE, PS_S1_PEDAL x100).
+TEST_CASE("P1 S1 diag: upshift pull trace", "[.][diag][pedal]") {
+    const VehicleDesc d = shift_test_desc();
+    for (const real tc : {0.0, 1.0})
+    for (const int mode : {0, 1, 2}) {
+        for (const real pedal : {1.0, 0.7}) {
+            std::printf("[P1 S1 diag] ---- tc %.0f mode %d pedal %.2f\n", tc, mode, pedal);
+            Rig r = make_rig(d);
+            World& w = r.w();
+            base_controls(w, mode, tc);
+            ps_test::settle(w, 0.3);
+            roll_in_gear(r, 1, 2200.0);
+            w.set_control("assist.auto_shift", 1.0);
+            w.set_control("gear_request", drivetrain::kGearRequestNone);
+            w.set_control("throttle", pedal);
+            int prev_gt = -99;
+            for (int k = 0; k < 240 * 8; ++k) {
+                w.step();
+                const auto& pt = w.powertrain_state(r.rig.vehicle);
+                const auto dbg = w.powertrain_debug(r.rig.vehicle);
+                if (pt.gear_target != prev_gt || k % 24 == 0)
+                    std::printf("[P1 S1 diag] mode %d pedal %.2f t %5.3f g %d gt %d ph %d rpm %6.0f v %6.2f boost %5.2f thr_eff %.3f e %.3f kR %+.3f\n", mode,
+                                pedal, (k + 1) / 240.0, pt.gear, pt.gear_target, int(pt.shift_phase), pt.engine_rpm, pt.speedo_mps,
+                                pt.engines.empty() ? 0.0 : pt.engines[0].boost_bar, dbg.throttle_eff, pt.clutch_engagement,
+                                0.5 * (w.wheel_telemetry(r.rig.vehicle, 2).slip_ratio + w.wheel_telemetry(r.rig.vehicle, 3).slip_ratio));
+                prev_gt = pt.gear_target;
+                if (pt.gear >= 3) break;
+            }
+        }
+    }
+}
+
 TEST_CASE("S2: downshift decision rpm per mode on a braked deceleration in 4th gear [long]", "[assist][drive_modes][vehicle][drivetrain][long]") {
     const VehicleDesc d = shift_test_desc(0.0); // dwell 0: the rpm threshold alone decides (the braked rpm falls ~2000 rpm/s, faster than a 0.2 s dwell allows a crossing to be seen)
     std::array<std::array<real, 2>, 3> dec{};
@@ -577,7 +639,7 @@ TEST_CASE("S2: downshift decision rpm per mode on a braked deceleration in 4th g
     for (int mode = 0; mode < 3; ++mode) {
         const DriveModeParams& p = mp(d, static_cast<DriveMode>(mode));
         for (int pi = 0; pi < 2; ++pi) {
-            const real cmd = bend_of(p, pedals[pi]);
+            const real cmd = pedals[pi]; // pedal P1 re-pin: no drive-mode bend on a manual (was bend_of(p, pedal))
             const real thr = lerp(*p.down_rpm_at_zero_throttle, *p.down_rpm_at_full_throttle, cmd);
             Rig r = make_rig(d);
             World& w = r.w();
@@ -824,6 +886,10 @@ TEST_CASE("K3: the kickdown bypass is spent by a gear change and re-armed only w
     CHECK(tick() == 2);
 }
 
+// Pedal plan P1 re-pin (2026-10-13): the Eco bend no longer applies on this manual car (B2), so the kickdown threshold
+// (0.95, on the command) is met at the pedal itself: pre-P1 pedal 0.96 -> Eco command 0.93 gave no kickdown and 0.98 ->
+// 0.965 did; now 0.94 gives none and 0.96 kicks down (measured 0.004 s). The threshold is still on the command - the
+// pedal == the command here; the bent case returns with an automatic gearbox kind.
 TEST_CASE("K2: kickdown on a real car right after a reset; the Eco threshold is on the command, not the pedal", "[assist][drive_modes][vehicle][drivetrain]") {
     struct Result {
         real t_down = -1;
@@ -859,11 +925,12 @@ TEST_CASE("K2: kickdown on a real car right after a reset; the Eco threshold is 
         CHECK(a.t_down <= kKickdownMaxS);
         CHECK(b.t_down < 0);
     }
-    // Eco: the threshold is on the command (bend of the pedal). Pedal 0.96 -> command 0.93 < 0.95: no kickdown; 0.98 -> 0.965: kickdown
+    // Eco: the threshold is on the command. On this manual the command is the pedal (no bend, pedal P1): 0.94 < 0.95 no
+    // kickdown, 0.96 kickdown. The Eco bend values themselves (0.96 -> 0.93, 0.98 -> 0.965) stay pinned on the curve.
     CHECK(std::abs(bend_of(mp(with_kd, DriveMode::Eco), 0.96) - 0.93) <= 1e-12);
     CHECK(std::abs(bend_of(mp(with_kd, DriveMode::Eco), 0.98) - 0.965) <= 1e-12);
-    const Result low = run(with_kd, 0, 0.96, kNoKickdownHoldS);
-    const Result high = run(with_kd, 0, 0.98, 1.0);
+    const Result low = run(with_kd, 0, 0.94, kNoKickdownHoldS);
+    const Result high = run(with_kd, 0, 0.96, 1.0);
     CHECK(low.t_down < 0);
     CHECK(high.t_down > 0);
     CHECK(high.t_down <= kKickdownMaxS);

@@ -3,6 +3,7 @@
 #include "hydrodynamic_friction.h"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <stdexcept>
 
@@ -174,7 +175,15 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
         idle_integrator_ = real(0.0);
         theta_idle = real(0.0);
     }
-    const real theta_eff = std::max(theta_req, theta_idle);
+    theta_idle_last_ = theta_idle;
+    // Pedal plan P1 (out/transmission_pedal_plan.md 2.2): the manual pedal law adds the pedal ON TOP of the idle
+    // controller's own output, so the torque is m + theta*(w - m) = Z + c*(F - Z) exactly (linear between the
+    // zero-pedal ECU state and WOT, never below the idle controller). c = 1 gives exactly 1 (theta_idle*0 = 0); c = 0
+    // gives exactly theta_idle. A governor or a mechanical linkage keeps the max() (manual_pedal_law false).
+    // theta_idle + (1 - theta_idle) need not round to 1, so c >= 1 is taken exactly.
+    const real theta_eff = desc_.manual_pedal_law
+                               ? (theta_req >= real(1.0) ? real(1.0) : theta_idle + theta_req * (real(1.0) - theta_idle))
+                               : std::max(theta_req, theta_idle);
 
     // --- 6.1.5: limiter ---------------------------------------------------------
     real f_lim = real(1.0);
@@ -344,6 +353,18 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.fuel_flow_g_s = fuel_flow_g_s; // delivered flow (== demand unless starving)
     r.fuel_supply_fraction = s_starve;
     return r;
+}
+
+PedalEnvelope EngineTorqueMap::request_envelope(real rpm) const {
+    PedalEnvelope e;
+    const real m = desc_.motoring_torque_nm_vs_rpm.evaluate(rpm);
+    const real w = desc_.wot_torque_nm_vs_rpm.evaluate(rpm);
+    e.cut_nm = m;
+    e.z_nm = dfco_active_ ? m : m + theta_idle_last_ * (w - m);
+    e.f_nm = w;
+    e.fired_floor_nm = std::numeric_limits<real>::quiet_NaN();
+    e.manual_law = desc_.manual_pedal_law;
+    return e;
 }
 
 EngineTorqueMap::PostSolveResult EngineTorqueMap::post_solve(real omega_new, real h) {

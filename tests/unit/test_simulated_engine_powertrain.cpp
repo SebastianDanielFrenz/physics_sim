@@ -414,19 +414,24 @@ TEST_CASE("C12 T3: the ambient sample drives the manifold and bounded live pedal
                 100.0 * (torque_ratio / density_ratio - 1.0));
     CHECK(std::abs(torque_ratio / density_ratio - 1.0) < 0.05);
 
+    // Pedal plan P1 re-pin (2026-10-13): the law is T* = Z + r (F - Z) (request_envelope at the altitude ambient), was
+    // motoring + r (wot - motoring); against the old target the P1 engine misses by 2.21/1.52/0.83 % of the span at
+    // r 0.2/0.45/0.7 (worst 0.0221 vs the 0.01 band).
     SECTION("(c) the electronic pedal law holds at altitude") {
         const real ck = maps->c_k;
-        auto steady_net = [&](real r, real ignition) {
+        auto steady_net = [&](real r, real ignition, PedalEnvelope* env = nullptr) {
             SimulatedEngine e(desc, maps);
-            return hold(e, kAlt, w, r, 2880, ignition).pre.tau0 - ck;
+            const real t = hold(e, kAlt, w, r, 2880, ignition).pre.tau0 - ck;
+            if (env != nullptr) *env = e.request_envelope(rpm);
+            return t;
         };
-        const real wot = steady_net(1.0, 1.0);
-        const real mot = steady_net(0.0, 0.0);
         real worst = 0.0;
         for (real r : {0.2, 0.45, 0.7}) {
-            const real t = steady_net(r, 1.0);
-            const real err = std::abs(t - (mot + r * (wot - mot))) / (wot - mot);
-            std::printf("[C12 T3c] altitude r %.2f: %.4f vs %.4f N*m (%.4f %% of span)\n", r, t, mot + r * (wot - mot), 100.0 * err);
+            PedalEnvelope env;
+            const real t = steady_net(r, 1.0, &env);
+            const real target = env.z_nm + r * (env.f_nm - env.z_nm);
+            const real err = std::abs(t - target) / (env.f_nm - env.z_nm);
+            std::printf("[C12 T3c] altitude r %.2f: %.4f vs %.4f N*m (%.4f %% of span)\n", r, t, target, 100.0 * err);
             worst = std::max(worst, err);
         }
         CHECK(worst < 0.01);

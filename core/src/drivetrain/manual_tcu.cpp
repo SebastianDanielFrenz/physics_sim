@@ -46,6 +46,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     // Assists I7: a drive mode's override of the post-shift close time (NaN = the car's own value) and of the four
     // auto-shift rpm points. Unset (NaN) is bit-identical to the pre-I7 reads of desc_.
     const auto pick = [](real override_value, real own) { return std::isnan(override_value) ? own : override_value; };
+    const real shift_req = pick(s.shift_throttle_request, s.throttle_request); // pedal P1: driver demand, before the TC ceiling
     const real close_time_s = pick(s.close_time_s, desc_.auto_clutch.close_time_s);
     // --- 6.5.1: request arbitration (once per tick only) --------------------
     int desired_target = s.gearbox_target; // default: no change
@@ -85,7 +86,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                 const real engine_rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
                 const real out_rpm = std::abs(s.gearbox_out_omega) * kRadPerSecToRpm;
                 if (s.gearbox_current == 0) {
-                    if (s.throttle_request > kDriverThrottleThreshold && out_rpm < real(100.0)) desired_target = 1;
+                    if (shift_req > kDriverThrottleThreshold && out_rpm < real(100.0)) desired_target = 1;
                 } else if (s.gearbox_current >= 1) {
                     // Assists I7 kickdown bypass: a downshift with the throttle command at or above kickdown_throttle
                     // (0 = never) ignores min_time_in_gear_s; upshifts always wait for it. The bypass is a driver action:
@@ -93,13 +94,13 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                     // so a pedal held at full throttle through an upshift cannot bounce the car back down on the rpm
                     // collapse that follows the shift (measured, H2: Sport pull 2-3 bounces with the plain rule).
                     const bool dwell_ok = time_in_gear_ >= desc_.auto_shift.min_time_in_gear_s;
-                    const bool kickdown = desc_.auto_shift.kickdown_throttle > real(0.0) && s.throttle_request >= desc_.auto_shift.kickdown_throttle &&
+                    const bool kickdown = desc_.auto_shift.kickdown_throttle > real(0.0) && shift_req >= desc_.auto_shift.kickdown_throttle &&
                                           !kickdown_spent_;
                     if (dwell_ok || kickdown) {
                         const real up_th = lerp(pick(s.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_zero_throttle),
-                                                pick(s.up_rpm_at_full_throttle, desc_.auto_shift.up_rpm_at_full_throttle), s.throttle_request);
+                                                pick(s.up_rpm_at_full_throttle, desc_.auto_shift.up_rpm_at_full_throttle), shift_req);
                         const real down_th = lerp(pick(s.down_rpm_at_zero_throttle, desc_.auto_shift.down_rpm_at_zero_throttle),
-                                                  pick(s.down_rpm_at_full_throttle, desc_.auto_shift.down_rpm_at_full_throttle), s.throttle_request);
+                                                  pick(s.down_rpm_at_full_throttle, desc_.auto_shift.down_rpm_at_full_throttle), shift_req);
                         if (dwell_ok && engine_rpm > up_th && s.gearbox_current < s.max_gear) desired_target = s.gearbox_current + 1;
                         else if (engine_rpm < down_th && s.gearbox_current > 1) desired_target = s.gearbox_current - 1;
                     }
@@ -119,7 +120,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
         time_in_gear_ += h;
     }
 
-    if (s.throttle_request < desc_.auto_shift.kickdown_throttle) kickdown_spent_ = false;
+    if (shift_req < desc_.auto_shift.kickdown_throttle) kickdown_spent_ = false;
 
     // --- 6.5.2: auto-clutch ---------------------------------------------------
     const real rpm = std::abs(s.engine_omega) * kRadPerSecToRpm;
