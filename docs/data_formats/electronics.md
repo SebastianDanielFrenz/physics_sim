@@ -26,7 +26,8 @@ channel except `assist.aero_control`, where it is `>= 0.5`.
 | traction control | the vehicle's `traction_control` block (= mode On), plus an optional assist unit's mode table | `assist.traction_control` | always, on every car | 0 when `fitted` is false; else the default drive mode's `traction_control_default` if the car has the `drive_modes` part and that mode has one; else the unit's `default_mode` (unit with a TC block); else the block's `enabled` | 0 Off, 1 On (the car's own block), 2 Relaxed, 3 Sport, 4 Drift; `requested = value > 0.5 ? clamp(round(value), 1, 4) : 0` |
 | launch control | EITHER the P8 two-step part (`kind: launch_control`) OR the assist unit's `launch_control` block (grades Sport/Racing); never both | `assist.launch_control` (the P8 part may rename it with its `channel` key) | only on a car with one of the two (a P8 part with `fitted: false` still registers it) | 0 for the P8 part; the unit block's `default_enabled` (shipped `false`); in both cases the default drive mode's `launch_control_default` when the car has the `drive_modes` part and that mode sets one | 0 / 1 |
 | rear-wing automation | the assist unit's `aero_control` block (grade Racing) | `assist.aero_control` | only when the unit has the block AND the car's `aero.surfaces` has the named surface | the block's `default_enabled` (shipped Racing unit: `true`) | 0 / 1, on at `>= 0.5` |
-| drive modes | the car-specific `drive_modes` electronics part | `assist.drive_mode` | only on a car with the part | the part's `default_mode` | 0 eco, 1 normal, 2 sport (rounded and clamped; a mode the part does not list maps to its `default_mode`) |
+| drive modes | the car-specific `drive_modes` electronics part | `assist.drive_mode` | only on a car with the part | the part's `default_mode` | 0 eco, 1 normal, 2 sport, 3 racing (rounded and clamped; a mode the part does not list maps to its `default_mode`) |
+| electronic parking brake (Q3 / I8) | the `epb` electronics part ([below](#epb)) on the car's handbrake rows | `epb` (not an `assist.*` name) | only on a car with the part | 0 | level 0 / 1, on at `>= 0.5`; per drive mode `park_only` (refused at speed) or `handbrake` |
 | anti-lag switch | the engine's anti-lag configuration and the vehicle key `anti_lag_switch.fitted` | the configuration's own `channel` (default `anti_lag`; not an `assist.*` name) | by the engine | the configuration's `default_enabled` | 0 / 1 |
 | N2O arm (not an assist, but gated by drive modes) | the nitrous controller part's `arm_channel` | shipped kits: `nitrous_arm` | with a nitrous kit | the controller's | 0 / 1 |
 
@@ -99,11 +100,12 @@ launch-limit parts. All three attach as a `controllers` entry of type `electroni
 | 4 | launch control | the car has the P8 part or the unit block | channel `> 0.5` AND the effective drive mode allows launch control (not "the car is launching": that is `launch_phase`) |
 | 5 | anti-lag switch | `anti_lag_switch.fitted` (default true) | **never set** (the switch is the engine's own channel; fitted-only) |
 | 6 | rear-wing automation | the unit's `aero_control` block and a surface of that name | channel `>= 0.5` and fitted |
+| 7 | electronic parking brake | the car has the `epb` part | `epb_state` != 0 (latched or applied as handbrake) |
 
 A HUD shows hidden (fitted bit clear), fitted-off, fitted-on. Other fields: `traction_mode_requested` /
 `traction_mode_effective` / `traction_modes_available_bits` (bit *n* = code *n* is offered; 0 when TC is not fitted);
-`drive_mode_requested` / `drive_mode_effective` / `drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport; all 0
-without the part); `launch_phase` (0 Idle, 1 Armed, 2 Launch, 3 Handover), `launch_slip_target`, `launch_control_active`
+`drive_mode_requested` / `drive_mode_effective` / `drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport, 3 racing; all 0
+without the part); `epb_state` (0 released, 1 latched, 2 handbrake) and `epb_refused` ([below](#epb)); `launch_phase` (0 Idle, 1 Armed, 2 Launch, 3 Handover), `launch_slip_target`, `launch_control_active`
 (true while the unit's LC is Armed/Launch, or the P8 two-step is latched); `aero_control_active`,
 `aero_control_target_deg`.
 
@@ -422,8 +424,9 @@ desc and is not state.
 A **car-specific** part (it overrides numbers of the car's own `manual_tcu`): attached like the other electronics parts, as a
 `controllers` entry of type `electronics` or through `VehicleLoadOptions::electronics` (`"none"` removes it). At most one per
 car (`"at most one drive_modes per vehicle"`); `extends` works (RFC 7396, so a `null` mode removes it); unknown keys are
-rejected at every level. Shipped: `data/electronics/drive_modes_car_hyper_n2o.json` (owner values 2026-10-13, `[AS]`),
-attached to `car_hyper_n2o`. Alternative (a block inside the assist unit): rejected - the unit files are generic per grade,
+rejected at every level. Shipped: `data/electronics/drive_modes_car_hyper_n2o.json` (owner values 2026-10-13, `[AS]`; racing added in Q3 / I8 `[AS]`),
+attached to `car_hyper_n2o`, and `data/electronics/drive_modes_car_hyper.json` (Q3 / I8: normal overrides nothing, racing
+`[AS]`) attached to `car_hyper`. Alternative (a block inside the assist unit): rejected - the unit files are generic per grade,
 the mode numbers belong to one car's gearing and engine.
 
 ```json
@@ -439,7 +442,7 @@ the mode numbers belong to one car's gearing and engine.
 
 | Key | Meaning / rejection |
 |---|---|
-| `modes` | required non-empty object keyed `eco` / `normal` / `sport`; a mode is **offered** iff it is listed |
+| `modes` | required non-empty object keyed `eco` / `normal` / `sport` / `racing` (Q3 / I8); a mode is **offered** iff it is listed |
 | `default_mode` | required, one of the listed modes (the channel default and the target of an unoffered request) |
 | `pedal_bend` `{x, y}` | one optional point: `x` in `(0, 1)`, `y` in `[0, 1]` (`"pedal_bend x must be in (0, 1)"` / `"... y must be in [0, 1]"`, `"needs both 'x' and 'y'"`); piecewise linear through `(0,0)`, `(x,y)`, `(1,1)`. Absent = identity (bit-identical) |
 | `auto_shift` | any of the four `up_rpm_at_*`, `down_rpm_at_*` of the car's `auto_shift` (rpm `> 0`); a missing key keeps the car's. The merged values must keep `down < up` at zero and at full throttle (`"... downshift rpm must stay below the upshift rpm ..."`) |
@@ -447,10 +450,11 @@ the mode numbers belong to one car's gearing and engine.
 | `traction_control_default` | `off`/`on`/`relaxed`/`sport`/`drift`: the TC mode the car switches to when this mode becomes effective |
 | `launch_control_default` | optional boolean (assists I7b): the launch-control enable the car switches to when this mode becomes effective (see below). `true` next to `launch_control_allowed: false` in the same mode is rejected (`"launch_control_default true contradicts launch_control_allowed false"`: the data would promise an enable the gate forbids). On a car without a fitted launch control it is ignored (like `traction_control_default` on a car without TC: the part is car-specific but may be shared through `extends`) |
 | `launch_control_allowed`, `nitrous_arm_allowed` | booleans, default `true` |
+| `epb_mode` | optional `park_only` / `handbrake` (Q3 / I8): the EPB law in this mode; absent = the `epb` part's own `epb_mode`. Ignored on a car without the part |
 
 An override needs the car's `manual_tcu` (every shipped car has one).
 
-**Channel** `assist.drive_mode`, registered only on a car with the part: `0` eco, `1` normal, `2` sport (append-only), rounded
+**Channel** `assist.drive_mode`, registered only on a car with the part: `0` eco, `1` normal, `2` sport, `3` racing (append-only; Q3 / I8 added racing, so a value `>= 3` now means racing), rounded
 and clamped; default = the part's `default_mode` code. A request for a mode the part does not offer maps to the part's
 `default_mode` `[AS]` (drive modes have no intervention order, so the TC rule "nearest more-intervening" has no analogue; the
 default is the one mode the owner approved, and clamping to a neighbour could select Sport on a car that forbids it).
@@ -481,7 +485,39 @@ through the same `assist.launch_control` gate on the unit). `nitrous_arm_allowed
 **Kickdown.** `auto_shift.kickdown_throttle` in the car's `manual_tcu` ([vehicle.md](vehicle.md)); spent by a gear change, re-armed when the command drops below it. `car_hyper_n2o` uses `min_time_in_gear_s` 2.0 `[AS]` (measured on an accelerating pull: 1.0 s bounces once in Normal and Sport, 1.5 s still once in Sport, 2.0 s none in any mode).
 
 **Snapshot** (`PowertrainSnapshot`, never hashed): `drive_mode_requested`, `drive_mode_effective`,
-`drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport; all 0 without the part). **Hash:** the desc and the state (initialised flag,
+`drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport, 3 racing; all 0 without the part). **Hash:** the desc and the state (initialised flag,
 last effective mode) are folded only on a car with the part, so every other car and scenario hashes as before. Tests:
 `tests/unit/test_assist_drive_modes.cpp` ([assist][vehicle][drivetrain]), `tests/unit/test_assist_launch_default.cpp` (I7b,
 LD1-LD6), `tests/unit/test_assist_channel_writeback.cpp` (I7c, W1-W9).
+
+## Electronic parking brake (Q3 / I8) {#epb}
+
+`kind: "epb"`, `ps::vehicle::EpbDesc` (`ps/vehicle/epb_desc.h`), stored as `VehicleDesc::epb`; at most one per car, attached
+like the other parts. Shipped: `data/electronics/epb_generic.json` (`car_hyper`, `car_hyper_n2o`). The car needs
+`brake_system.handbrake` rows (wheels and `max_torque_nm > 0`): the EPB acts only through them (`controls.handbrake` raised to
+1), it has no rows of its own; the gearbox park pawl (`park_lock`) stays separate.
+
+```json
+{ "format": "physics_sim.electronics/1", "kind": "epb", "max_engage_speed_mps": 2.0, "epb_mode": "park_only" }
+```
+
+| Key | Meaning / rejection |
+|---|---|
+| `max_engage_speed_mps` | finite `> 0`, default 2.0 `[AS]`: the `park_only` gate on the chassis speed at the tick start |
+| `epb_mode` | `park_only` (default) / `handbrake`: the law when the effective drive mode sets no `epb_mode` |
+
+Owner rule, verbatim: "No, unless special modes are used (racing, drift), the parking brake should refuse to engage while
+speed is significant." **Channel** `epb`, a level (on at `>= 0.5`), default 0, registered only with the part. Law per tick
+(mode = the effective drive mode's `epb_mode`, else the part's):
+
+- level 0: released, refusal cleared.
+- `handbrake`: applied at any speed (`epb_state` 2).
+- `park_only`: a NEW request (a rising edge, or a `handbrake` application that meets `park_only` through a mode switch)
+  latches (`epb_state` 1) below `max_engage_speed_mps`, else it is **refused** (`epb_refused`, state 0) and dropped - never
+  pended: it engages only after the level falls and rises again, even if the car slows or the mode changes. Once latched it
+  stays latched whatever the speed until the level falls.
+
+There is no retry latch in physics or in racing_game. The state survives a vehicle reset. **Snapshot** (never hashed):
+`epb_state`, `epb_refused`, `assist_fitted_bits` / `assist_active_bits` bit 7. **Hash:** the desc, the per-mode `epb_mode`
+values and the state (last level, refused, state) are folded only on a car with the part; no shipped scenario uses one.
+Tests: `tests/unit/test_epb.cpp` L1-L2 C1 E1-E5 R1 ([epb], five recorded sabotages).
