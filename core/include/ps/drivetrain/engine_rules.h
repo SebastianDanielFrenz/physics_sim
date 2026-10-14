@@ -96,6 +96,31 @@ struct BuildIssue {
 // "forced_induction", field_pointer "/turbo". Nothing for an engine without a stage-map turbo.
 [[nodiscard]] std::vector<BuildIssue> check_turbo_stage_coverage(const SimulatedEngineDesc& engine, const LimitPolicy* policy = nullptr);
 
+// The numbers behind check_turbo_stage_coverage (same arithmetic; the check reads them): the engine's air demand at the
+// target boost as 16 per-turbo corrected flows, each with the rotor speed that makes the target pressure ratio on the
+// map's continuation and whether that point is certified. A runtime map extension (ps/drivetrain/turbo_meanline.h
+// extend_sampling_for_demand) samples densely around these points. applies = false (no steps) for an engine the check
+// skips.
+struct TurboStageDemand {
+    static constexpr int kRpmSteps = 16;  // engine speeds idle..limiter sampled for the maximum air flow
+    static constexpr int kFlowSteps = 16; // the maximum air flow split into this many flows
+    bool applies = false;
+    real pressure_ratio = 0;     // (charge + intercooler drop) / reference inlet pressure
+    real air_max_kg_s = 0;       // whole engine, at rpm_at_max
+    real rpm_at_max = 0;
+    real top_speed_line_rpm = 0; // the map's highest speed line with data
+    int units = 1;
+    struct Step {
+        real flow_kg_s = 0;              // per turbo, corrected (= actual at the map's reference inlet)
+        real rotor_rpm = 0;              // corrected speed making pressure_ratio; top_speed_line_rpm when !reached
+        real top_line_pressure_ratio = 0; // the continuation's pressure ratio on the top line at this flow
+        bool reached = false;            // the target is reached at or below the top line
+        bool covered = false;            // (rotor_rpm, flow) lies in certified cells
+    };
+    std::vector<Step> steps;
+};
+[[nodiscard]] TurboStageDemand turbo_stage_demand(const SimulatedEngineDesc& engine);
+
 [[nodiscard]] std::vector<BuildIssue> check_buildable(const ComponentParams& engine, const LimitPolicy* policy = nullptr);
 [[nodiscard]] std::vector<BuildIssue> check_buildable(const SimulatedEngineDesc& engine, const LimitPolicy* policy = nullptr);
 [[nodiscard]] std::vector<BuildIssue> check_buildable(const TorqueMapEngineDesc& engine, const LimitPolicy* policy = nullptr);
