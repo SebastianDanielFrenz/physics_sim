@@ -163,7 +163,8 @@ format has no path-valued keys. Unknown keys are rejected (`"unknown electronics
 
 | Key | `launch_control` | Meaning / rejection |
 |---|---|---|
-| `rpm` | required, finite, `> 0` | the second rev limit. The vehicle loader additionally requires the (first) engine's idle rpm `< rpm <` its own limiter rpm (`"launch rpm R must be below the engine's own limiter rpm L"`) |
+| `rpm` | required, finite, `> 0` | the second rev limit. The vehicle loader requires it above the (first) engine's idle rpm (`"launch rpm R must be above the engine's idle rpm I"`). G1: an `rpm` at or above `max_limiter_fraction` x the engine's limiter (a low garage limiter) is no longer a load error: it is held at that cap (or, when the cap is not above idle, at the midpoint of idle and the limiter), with the load warning `"<ctx>: Limiting: launch rpm R is at or above C (F % of the L rpm limiter): held at H rpm"` |
+| `max_limiter_fraction` | optional, `(0, 1)`, default 0.8 `[AS]` | G1: the cap above as a fraction of the limiter. Shipped launch rpms sit at 0.55-0.62 of their limiter; 0.8 leaves room for the limiter's own hysteresis below the second limit |
 | `max_speed_mps` | required, finite, `> 0` | the control is active only below this speedo speed (m/s) and releases above it |
 | `channel` | optional, default `"assist.launch_control"` | runtime arm switch, a plain 0/1 level (on = `> 0.5`); resolved with the vehicle's channel prefix |
 | `fitted` | optional bool, default `true` | `false`: the channel is ignored |
@@ -308,12 +309,13 @@ on). Exactly one launch rpm form is required; every other key is optional (owner
 | `slip_floor_mps` | 1.0 | > 0 | speed floor in the slip denominator (TC's formula with this floor) |
 | `kp`, `ki_per_s`, `attack_rate_per_s`, `recovery_rate_per_s` | 2, 6, 20, 8 | > 0 | the throttle-ceiling slip PI (TC mode On's values) |
 | `min_fraction` | 0.05 | [0, 1) | floor of the PI's throttle fraction |
+| `max_limiter_fraction` | 0.8 | (0, 1) | G1: a resolved launch rpm at or above this fraction of the engine's limiter (a low garage limiter) is held at it, with a load warning (`"... held at H rpm"`); see below |
 
 Rejections (each asserted in `tests/unit/test_assist_launch.cpp` L2): `grade '<g>' does not allow 'launch_control'`,
 `launch_control must be an object`, `launch_control: unknown field '<k>'`, `exactly one of 'launch_rpm' (> 0) and
 'launch_rpm_fraction' (in (0, 1)) is required`, per-field range messages, `slip_target: unknown mode`, `slip_target
 values must be in (0, 1)`. At vehicle load the resolved launch rpm must lie strictly between the engine's idle rpm and
-its own limiter (`launch rpm <x> must lie between the engine's idle rpm <i> and its own limiter rpm <l>`).
+its own limiter (`launch rpm <x> must lie between the engine's idle rpm <i> and its own limiter rpm <l>`). G1: a resolved rpm at or above `max_limiter_fraction` x the limiter is not an error but is held at that cap (the midpoint of idle and the limiter when the cap is not above idle); the error remains for an rpm at or below idle that the cap does not lift.
 
 **Q5 (owner): either variant, never both.** A car has EITHER the P8 two-step (a `launch_control` electronics part,
 above) OR an assist unit with a `launch_control` block. Both on one car is rejected at load, whatever the order of the
