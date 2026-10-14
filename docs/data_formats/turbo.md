@@ -459,18 +459,22 @@ measured map) and `data/turbo_configurations/hyper_twin_default.json` (count 2,
 1.8 bar gauge, intercooler 0.95, the `boost_control` above), reached through
 `data/engines/hyper_v8_one1_audio.json`'s `default_forced_induction` and used by
 `data/vehicles/car_hyper.json`. `hyper_twin_default.json` and `hyper_twin_n2o.json` (the N2O car's
-configuration) carry a `blow_off_valve` since 2026-10-13 (owner: "Add BOV to hypercar", after boost B0
-holds the wastegate through the shift cut and the closed-plate charge spike without a valve rose to 5.4-6.2
-bar gauge): recirculate, 920 mm2 per turbo (the pair vents its full `max_mass_flow_kg_s` of 1.2 kg/s at the
-1.8 bar target, choked orifice at 2.8 bar abs / 294 K), crack 1.1 bar, full open 1.6 bar, tau 30 ms - all
-[AS], rule in each file's `source`. Measured on `car_hyper_n2o` (release, stock WOT with auto-shift): in-shift
-charge peak (shift start to 0.5 s after the new gear) 0.60 / 0.96 / 1.82 / 2.82 / 2.80 / 2.72 bar gauge on
-1->2 .. 6->7 (6.15 / 5.71 / 5.38 on 4->5 .. 6->7 without the valve); the valve is shut at idle and at 60 and
-120 km/h steady cruise and does not touch the WOT torque (bit-identical on the dyno hold at 3000/5000/7000
-rpm, the valve stays shut). The price is the model limit described above: the vent flow is compressor load, so
-after a lift the rotor decays faster (6000 rpm hold, lift at 2 s: 36.3k rpm after 0.5 s and 23.5k after 1 s,
-91.2k / 89.3k without the valve), and the boost after a WOT upshift needs 0.6-0.7 s to come back (it never
-dipped below 90 % after 4->5..6->7 before). Pins: `tests/unit/test_hyper_bov.cpp` H1-H4. The P5 templates
+configuration) carry a `blow_off_valve` since 2026-10-14 (owner: "Add BOV to hypercar", then "Fix model, then
+ship BOV"; boost B0 holds the wastegate through the shift cut and without a valve the closed-plate charge spike
+reaches 4.7-8.2 bar gauge on `car_hyper_n2o`): recirculate, 1330 mm2 per turbo (the pair passes its full
+`max_mass_flow_kg_s` of 1.2 kg/s at the lowest choked charge pressure, 1.918 bar abs, 294 K), crack 1.1 bar,
+full open 1.6 bar, tau 20 ms - all [AS], rule in each file's `source`. No model change: the lumped
+compressor already balances delivered flow = engine + vent on the speed line (see `blow_off_valve` above).
+Measured on `car_hyper_n2o` (release, master 1e07c0e, stock WOT with auto-shift): in-shift charge peak (shift
+start to 0.5 s after the new gear) 2.895 / 2.887 / 2.698 / 2.674 / 2.684 / 2.629 bar gauge on 1->2 .. 6->7
+(8.216 / 6.546 / 4.729 / 4.901 / 5.761 / 5.379 without the valve; the round-1 920 mm2 valve left 2->3 at 3.03
+bar and its boost recovery at 2.0 s); boost recovery after each upshift 0.34-0.83 s; the valve is shut at idle
+and at 60 and 120 km/h steady cruise and does not touch the WOT torque (bit-identical on the dyno hold at
+3000/5000/7000 rpm). After a lift (6000 rpm hold, lift at 2 s) the rotor is at 39.0k rpm after 0.5 s and 22.5k
+after 1 s (91.2k / 89.3k without the valve - an upper bound: without a valve the lumped model dead-heads at
+f ~ 0.01 instead of surging); the spin-down follows an independent quasi-steady flow balance within 6.2 % (H5).
+Larger valves still lower the spike, because the authored head law absorbs no power at choke - a map artefact,
+open. Pins: `tests/unit/test_hyper_bov.cpp` H1-H5. The P5 templates
 ({single,twin}_{small,medium,large}) carry no valve.
 
 ## Hardware family and templates (engine garage P5)
