@@ -262,6 +262,12 @@ TEST_CASE("Rolling law enters vehicle hash before contact and remains worker det
         World world(cfg);
         vehicle::VehicleDesc car; car.name = "rolling_hash";
         vehicle::WheelDesc wheel; wheel.name = "test_wheel";
+        // "Before contact": the wheel must not touch anything. The default SuspensionDesc axis (0,0,-1) at attachment 0 put the
+        // wheel cast inside its own 0.4 m chassis box (a fraction-0 self-hit, fallback normal = axis, long_dir -x), which fired
+        // wheel_instance.cpp's contact-frame assert on every Debug leg since accf416 [M, pedal P1 2026-10-14: also at 180b770,
+        // before D0]. Shipped axis convention (+z, toward full bump) and the wheel hung 1 m below the chassis: no hit at all.
+        wheel.suspension.axis = Vec3{0.0, 0.0, 1.0};
+        wheel.attachment_local = Vec3{0.0, 0.0, -1.0};
         if (restore) vehicle::select_rolling_resistance_speed_law(wheel.tyre, vehicle::RollingResistanceSpeedLaw::Quadratic);
         vehicle::select_rolling_resistance_speed_law(wheel.tyre, law);
         car.wheels.push_back(wheel);
