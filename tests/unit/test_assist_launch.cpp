@@ -60,6 +60,8 @@
 //   9  (pedal P1 (a), 2026-10-13) auto-shift reads min(command, TC ceiling) again instead of the driver's command
 //      (powertrain.cpp shift_throttle_request set after the ceiling) -> V8c: 5.442 s vs 4.588 s (2nd taken at 7.4 m/s,
 //      lugs at 1430 rpm); with (a) 4.933 vs 4.642 s [M] - the remaining gap is the TC ceiling bleeding boost (pedal P1 (b))
+//  10  (pedal P1 (b)) TC/LC ceilings close the plate again (vehicle_instance.cpp assist_ceiling_as_retard = false)
+//      -> V8c: 4.933 s vs 4.642 s fails; with (b) (ceiling = spark retard at the current boost) 4.508 vs 4.650 s [M]
 
 #include "ps/backend/i_rigid_backend.h"
 #include "ps/drivetrain/powertrain_desc.h"

@@ -436,5 +436,8 @@ TEST_CASE("V3: the owner's setup keeps its boost through the upshifts at a stead
 //   S3 error normalised by the target again: B3 fails at the first step (gate 0.00515 vs 0); B1, B2, V1, V3 pass.
 //   S4 the Powertrain never sets TcuRequest::hold_boost_control: V1 fails (as S1); B1-B3, V3 pass (they drive the
 //      pair/engine directly).
+//   S5 (pedal P1 (b), new V1 metric) gate open at each shift again (Powertrain never sets hold_boost_control, the
+//      pre-B0 behaviour): V1 fails - 1->2 -1, 2->3 1.283, 3->4 1.642, 4->5 1.833, 5->6 2.292, 6->7 2.229 s; with the
+//      hold 0/0/0/0/0/0 s (TC ceiling as spark retard keeps the plate open, the boost never dips below 90 %).
 //   V3 is an integration guard: it fails only with BOTH the hold and the normaliser removed (pre-B0 exploration run:
 //      266.5-389.7 km/h); S1 alone 381.7-389.0, S3 alone 383.7-390.2 km/h.
