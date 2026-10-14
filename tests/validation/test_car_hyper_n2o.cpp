@@ -217,11 +217,13 @@ namespace {
 
 constexpr int kPullGear = 3;
 constexpr real kShiftRpm = 7000.0;
-// B0R: the upshift INTO the pull gear (see the header above the asserting tests). 3rd: 4500 rpm [AS] = the earliest 2->3 shift the rule
-// allows (any value <= 4700 gives the same arm point, 3713 rpm / 87.9 km/h), the closest reproducible state to the original 3rd-gear arm
-// point (3220-3269 rpm) with the 5000 rpm bin inside the pull. 6th: 6000 rpm [AS], so that the 6000 rpm bin lies past the 1 s
-// progressive ramp (arm 4887 rpm / 221 km/h; entering at 7000 the 6000 bin sees half flow: +354 kW).
-constexpr real kEntryShiftRpm3 = 4500.0;
+// B0R: the upshift INTO the pull gear (see the header above the asserting tests). 6th: 6000 rpm [AS], so that the 6000 rpm bin lies past
+// the 1 s progressive ramp (arm 4887 rpm / 221 km/h; entering at 7000 the 6000 bin sees half flow: +354 kW).
+// 3rd, pedal P1 (b) re-baseline (2026-10-14): run-up 1->2 at 5500 rpm, 2->3 at 4000 rpm [AS] (B0R: 7000 / 4500; with a 1->2 at 7000
+// the car lands in 2nd at ~4970 rpm, so every 2->3 entry <= 4700 gave the same arm point). kRunupShiftRpm3 applies to the shifts
+// below the one into the pull gear. Why and the sweep the values come from: the header above the asserting tests.
+constexpr real kRunupShiftRpm3 = 5500.0;
+constexpr real kEntryShiftRpm3 = 4000.0;
 constexpr real kEntryShiftRpm6 = 6000.0;
 constexpr real kEndRpm = 7800.0;
 constexpr real kMass = 1500.0;
@@ -248,7 +250,8 @@ struct PullResult {
     real arm_rpm = 0.0, t_arm = -1.0, t_end = 0.0, bottle0 = 0.0, max_kappa = 0.0, max_slip_rpm = 0.0, v_end = 0.0, v_arm = 0.0;
 };
 
-PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPullGear, real end_rpm = kEndRpm, real entry_shift_rpm = kShiftRpm) {
+PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPullGear, real end_rpm = kEndRpm, real entry_shift_rpm = kShiftRpm,
+                real runup_shift_rpm = kShiftRpm) {
     PullResult res;
     auto rig = ps_test::build_vehicle_rig_from_desc(desc, kMass, kHalfExtents, kOriginHeight, 0.0, 4);
     World& w = *rig.world;
@@ -290,7 +293,7 @@ PullResult pull(const vehicle::VehicleDesc& desc, bool arm, int pull_gear = kPul
         if (es.n2o_active) ++res.spray_ticks;
         const real work = work_of();
         const bool idle = st.shift_phase == drivetrain::ShiftPhase::Idle;
-        const real shift_rpm = st.gear + 1 == pull_gear ? entry_shift_rpm : kShiftRpm;
+        const real shift_rpm = st.gear + 1 == pull_gear ? entry_shift_rpm : runup_shift_rpm;
         if (idle && st.gear >= 1 && st.gear < pull_gear && st.engine_rpm >= shift_rpm) w.set_control("gear_request", static_cast<real>(st.gear + 1));
         const bool in_pull = st.gear == pull_gear && idle && st.clutch_engagement >= 0.999;
         if (in_pull && !armed) {
@@ -339,6 +342,22 @@ real power_at(const PullResult& r, real rpm, real t_min = 0.0) {
 }
 
 } // namespace
+
+// Pedal P1 (b) diag: the 3rd-gear pull's run-up procedure swept (run-up shift rpm x 2->3 entry rpm).
+TEST_CASE("N7 diag: 3rd-gear run-up sweep", "[.][diag][n2o]") {
+    const vehicle::VehicleDesc desc = load_car("car_hyper_n2o.json");
+    for (real runup : {7000.0, 6500.0, 6000.0, 5500.0, 5000.0}) {
+        for (real entry : {4500.0, 4000.0}) {
+            const PullResult with = pull(desc, true, kPullGear, kEndRpm, entry, runup);
+            const PullResult base = pull(desc, false, kPullGear, kEndRpm, entry, runup);
+            std::printf("[N7 sweep] runup %.0f entry %.0f: arm %.0f rpm %.1f km/h (base %.0f, %.1f), pull %.3f s (base %.3f), locked %d unl %d spray %d, N2O %.1f g, kappa %.2f (base %.2f)",
+                        runup, entry, with.arm_rpm, with.v_arm * 3.6, base.arm_rpm, base.v_arm * 3.6, with.t_end - with.t_arm, base.t_end - base.t_arm,
+                        with.locked_ticks, with.unlocked_ticks, with.spray_ticks, with.n2o_kg * 1e3, with.max_kappa, base.max_kappa);
+            for (real rpm : {5000.0, 6000.0, 7000.0}) std::printf(" g%.0f %+.1f", rpm, (power_at(with, rpm) - power_at(base, rpm)) * 1e-3);
+            std::printf("\n");
+        }
+    }
+}
 
 TEST_CASE("N7 dyno: car_hyper_n2o table", "[.][diag][n2o]") {
     const vehicle::VehicleDesc car = load_car("car_hyper_n2o.json");
@@ -423,12 +442,39 @@ TEST_CASE("N7 whole car: car_hyper_n2o WOT pull report", "[.][diag][n2o]") {
 //     per-point band for this kit (was 300-430 / 380-540, partial flow).
 // Ledgers unchanged: balance_error 4.3e-16, bottle closure <= 7.7e-13 kg, tank 1.9e-13 kg, N2O energy closure 4.8e-15.
 // Confirming run after these bands were committed (5d95a95): all 8 [n2o] validation cases pass, 211 assertions, values exactly as above.
+// 3rd-gear pull RE-BASELINED, pedal P1 (b) (2026-10-14; bands unchanged). Why: with the pedal P1 change (b), TC On on a turbo engine
+// with ignition_cut retards the spark instead of closing the plate, so the boost is held through the TC-On run-up. The car
+// therefore reaches 3rd with more rpm and boost: arm 3713 -> 4147 rpm / 89.8 km/h (about 9 % rear slip, the On mode's target, which
+// the run-up now actually reaches), and 7800 rpm comes after 0.188 s against a 0.392 s baseline. That is a 46-tick pull:
+// locked/spray 46/45 < 50, N2O 21.1 g < 30. The bands check a pull that covers >= 50 ticks and the 5000 rpm bin; that pull no
+// longer existed. Procedure old -> new: run-up 1->2 at 7000 -> 5500 rpm, 2->3 at 4500 -> 4000 rpm (kRunupShiftRpm3,
+// kEntryShiftRpm3); TC On in the run-up and TC Off at the arm point, unchanged. With a 1->2 at 7000 the car lands in 2nd at
+// ~4970 rpm, above any useful 2->3 point, so a lower arm point needs the earlier 1->2.
+// Sweep (hidden "N7 diag: 3rd-gear run-up sweep", run-up x entry -> arm rpm, pull with/base s, locked, N2O g):
+//   7000 x 4500/4000: 4147, 0.188/0.392, 46, 21.1 | 6500 x 4500: 3829, 0.238/0.571, 58, 27.6 | 6500 x 4000: 3877, 0.221/0.492, 54, 25.4
+//   6000 x 4500: 3474, 0.267/0.750, 65, 31.5 | 6000 x 4000: 3517, 0.250/0.658, 61, 29.2 | 5500 x 4500: 3448, 0.267/0.704, 65, 31.5
+//   5500 x 4000: 3122, 0.283/0.908, 69, 33.8 | 5000 x 4500: 3551, 0.258/0.654, 63, 30.4 | 5000 x 4000: 3080, 0.283/0.904, 69, 33.8
+// 5500 x 4000 is used: it is the pull the B0R bands were measured on (B0R 0.296 s, 72 ticks, 35.6 g), it arms near the original N7
+// point (3220-3269 rpm), and it has the largest N2O margin (+12.7 % over the 30 g floor; 6000 x 4500 would leave 5 %).
+// Measured (release, Windows, 2026-10-14, pedal-p1 c6cdb68 + this file): arm 3122 rpm / 72.3 km/h; pull 0.283 s vs 0.908 s (0.31 x);
+//   locked 69 of 69, spray 68, 0.0 rpm slip; N2O 33.8 g, max flow 140.3 g/s; kappa 1.42 (baseline 0.99); gain +216.1/+228.5/+275.8 kW
+//   at 5000/6000/7000 rpm; balance 4.5e-16, bottle 6.9e-16 kg, tank 6.6e-14 kg, closure 3.7e-15.
+// 6th-gear pull re-measured on the same build (procedure unchanged): arm 4897 rpm / 221.6 km/h, 4.28 s vs 8.25 s, locked/spray
+//   1029/1028, kappa 0.12 (baseline 0.04), max flow 246.4 g/s, N2O 981.5 g, gain +624.6/+649.4 kW - inside every band.
+// All 9 [n2o] cases in ps_validation_tests pass (211 assertions).
 // RECORDED SABOTAGES (2026-10-13):
 //   PS_SABOTAGE_N7_JET=0.8 (N2O jet 3.81 -> 3.05 mm) on the 6th-gear pull: max flow 157.7 g/s, N2O 806.9 g, pull 5.42 s vs baseline
 //     8.00 s, gain +403.2/+385.2 kW - 5 asserts fail (max flow > 241, N2O > 880, pull < 0.65 x baseline, both gains > 500).
 //   PS_SABOTAGE_N7_NO_TC_RUNUP=1 (the old TC-off run-up): both pulls still PASS (3rd: arm 2849 rpm / 66.5 km/h after run-up wheelspin,
 //     pull 0.433 s vs 1.150 s, N2O 34.6 g, kappa 1.49; 6th: arm 4895 rpm, 4.29 s vs 8.17 s, +627.2/+652.8 kW) - recorded as a
 //     robustness result, not a detection: the bands check the pull, and with the new entry shifts they no longer depend on the run-up.
+// RECORDED SABOTAGES (pedal P1 (b), 2026-10-14):
+//   PS_SABOTAGE_N7_OLD_RUNUP=1 (the B0R shift points 7000/4500 on the 3rd-gear pull): arm 4147 rpm / 89.8 km/h, pull 0.188 s vs
+//     0.392 s, N2O 21.1 g - 3 asserts fail (locked >= 50: 46, spray >= 50: 45, N2O > 30 g: 21.1); this is the CI failure the re-baseline fixes.
+//   PS_SABOTAGE_N7_NO_TC_RUNUP=1, re-run: both pulls still PASS (3rd: arm 2804 rpm / 65.6 km/h, 0.458 s vs 1.129 s, locked 111,
+//     N2O 33.4 g, kappa 1.49; 6th: arm 4909 rpm, 4.27 s vs 8.04 s, +626.5/+655.8 kW).
+//   PS_SABOTAGE_N7_JET=0.8, re-run: the 6th-gear pull fails the same 5 asserts (max flow 157.7 g/s, N2O 804.9 g, 5.40 s vs 8.25 s,
+//     +402.3/+385.2 kW); the 3rd-gear pull ignores this variable.
 // ===========================================================================
 namespace {
 
@@ -602,8 +648,12 @@ TEST_CASE("N7 car_hyper_n2o: dyno-held shot at 3000-7000 rpm", "[n2o][vehicle][d
 
 TEST_CASE("N7 car_hyper_n2o: whole-car WOT pull with the shot", "[n2o][vehicle][drivetrain][validation][long]") {
     const vehicle::VehicleDesc desc = load_car("car_hyper_n2o.json");
-    const PullResult with = pull(desc, true, kPullGear, kEndRpm, kEntryShiftRpm3);
-    const PullResult base = pull(desc, false, kPullGear, kEndRpm, kEntryShiftRpm3);
+    // Recorded sabotage PS_SABOTAGE_N7_OLD_RUNUP=1: the B0R shift points (run-up 7000, 2->3 at 4500 rpm), results in the header.
+    const bool old_runup = !envs("PS_SABOTAGE_N7_OLD_RUNUP").empty();
+    const real entry3 = old_runup ? 4500.0 : kEntryShiftRpm3;
+    const real runup3 = old_runup ? kShiftRpm : kRunupShiftRpm3;
+    const PullResult with = pull(desc, true, kPullGear, kEndRpm, entry3, runup3);
+    const PullResult base = pull(desc, false, kPullGear, kEndRpm, entry3, runup3);
     std::printf("[N7 pull] armed %.0f rpm at %.1f km/h (baseline %.0f rpm, %.1f km/h), %.0f rpm after %.3f s (baseline %.3f s), sprayed %d ticks, N2O %.1f g, balance %.2e, bottle %.2e, tank %.2e, closure %.2e, locked %d unlocked %d, max slip %.2f rpm, kappa %.2f (baseline %.2f)\n",
                 with.arm_rpm, with.v_arm * 3.6, base.arm_rpm, base.v_arm * 3.6, kEndRpm, with.t_end - with.t_arm, base.t_end - base.t_arm, with.spray_ticks, with.n2o_kg * 1e3,
                 with.worst_balance, with.worst_bottle, with.worst_tank, with.worst_closure, with.locked_ticks, with.unlocked_ticks, with.max_slip_rpm, with.max_kappa, base.max_kappa);
