@@ -142,7 +142,7 @@ L = 3 or more.
 
 ### 2.1 Queue (owner-approved order after the usage reset)
 
-**Q1. BOV round 3: blow-off valve on the hypercar (parked WIP)**
+**Q1. BOV round 3: blow-off valve on the hypercar - DONE 2026-10-14 (merge 09d150c, pushed 8970138; the notes below are history)**
 - **Branch:** `worktree-agent-a568f29eff6504a9c`, WIP commit 75cfcdb on 1e07c0e. Worktree
   `.claude/worktrees/agent-a568f29eff6504a9c`. Progress file `out/hyper_bov_r3_progress.md` inside that
   worktree. Brief: `docs/handoff/briefs/hyper_bov_r3.md`.
