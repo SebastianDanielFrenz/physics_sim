@@ -817,7 +817,7 @@ TEST_CASE("Terrain prefetch on hashes like prefetch off at 1, 4 and 24 workers (
 // re-deriving this saturation argument for the new build.
 TEST_CASE("State hash for the tractor I4 control-channel exercise scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
-    constexpr std::uint64_t kRecorded = 0x44327cc4b10c57b5ULL; // 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0xe471f1f3e5ad4328): re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0xac386af7129b9ffe
+    constexpr std::uint64_t kRecorded = 0xee2c08f11ee76f55ULL; // 2026-10-14 D0 dog release spike: JoltRigidBackend::shape_cast re-casts a phantom wheel hit (this scenario has one, a rear wheel cast at fraction 0 / penetration 0.186 m with a true fraction of 0.5005) - moved this hash (was 0x44327cc4b10c57b5); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0xe471f1f3e5ad4328): re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0xac386af7129b9ffe
     const std::uint64_t reference = run_scenario_file("vehicle_tractor_i4.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     REQUIRE(reference == kRecorded);
@@ -1147,7 +1147,7 @@ TEST_CASE("W4: scenarios without a weather environment keep their pre-W4 state h
     const Pin pins[] = {
         {"vehicle_step_steer.json", 0xe77fd6569d82786cULL},
         {"vehicle_powertrain.json", 0xec3f01c51673f663ULL}, // pedal P1, was 0xaadddd7bcd24ac15
-        {"vehicle_tractor_i4.json", 0x44327cc4b10c57b5ULL},
+        {"vehicle_tractor_i4.json", 0xee2c08f11ee76f55ULL}, // D0 phantom wheel cast fix, was 0x44327cc4b10c57b5
         {"vehicle_fuel_tank.json", 0xb08736ed4b3a8d4fULL},
         {"vehicle_sim_engine.json", 0x92b0090ff4b70656ULL}, // pedal P1, was 0x3aed0da9057e5829
         {"vehicle_gen_engine.json", 0x2164909873144ac3ULL}, // pedal P1, was 0x194fc20db754f52c

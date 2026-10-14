@@ -14,6 +14,7 @@ add_executable(ps_unit_tests
   test_assist_launch_default.cpp
   test_assist_channel_writeback.cpp
   test_assist_all_together.cpp
+  test_dog_release_spike.cpp
   test_adaptive_pressure.cpp
   test_live_engine_ambient.cpp
   test_aerodynamics.cpp
