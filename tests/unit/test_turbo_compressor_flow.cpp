@@ -197,6 +197,10 @@ TEST_CASE("CF1: the compressor flow is the throttle flow of the previous substep
 TEST_CASE("CF2: hyper V8 lift-off spin-down (measured, energy bound)", "[turbo][sim_engine][hyper][compressor_flow]") {
     SimulatedEngineDesc base = load_hyper();
     REQUIRE(base.turbo_pair.has_value());
+    // 2026-10-13: the shipped hyper twin configuration now carries a blow-off valve (hyper BOV). This case measures the
+    // lift-off energy bound (compressor power from the engine's own flow, no vent), which the valve's vent flow (extra compressor load) changes by design; it keeps its subject by
+    // clearing the valve. The valve itself is covered by test_turbo_bov.cpp and test_hyper_bov.cpp.
+    base.turbo_pair->blow_off_valve.reset();
     // Shipped data (rotor 2.3e-4 kg*m^2 per turbo since the review fix; the x5 test rig on the old 2e-5 [AS]
     // rotor is gone, see the header).
     const TurboPairDesc& t = *base.turbo_pair;

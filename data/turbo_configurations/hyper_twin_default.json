@@ -12,5 +12,13 @@
     "kd_s": 0.05,
     "actuator_tau_s": 0.1
   },
+  "blow_off_valve": {
+    "vent": "recirculate",
+    "crack_dp_bar": 1.1,
+    "full_open_dp_bar": 1.6,
+    "effective_area_mm2": 1330,
+    "tau_s": 0.02,
+    "source": "[AS] 2026-10-14 (owner: 'Add BOV to hypercar', then 'Fix model, then ship BOV'; boost B0 holds the wastegate through the shift cut and without a valve the closed-plate charge spike reaches 4.7-8.2 bar gauge on car_hyper_n2o [M]). Not a measured valve; every number ASSUMED by a rule. Recirculating: the vent returns to the compressor inlet (the lumped model charges the vent flow as compressor flow at the speed-line operating point, the same law as with the valve shut - turbo.md). Area 1330 mm2 per turbo (Cd included) [DERIVED by the rule]: the open pair swallows the pair's FULL max_mass_flow_kg_s (data/turbos/hyper_turbo_approx.json: 0.6 kg/s per turbo, 1.2 kg/s the pair) already at the LOWEST charge pressure at which the orifice is still choked, p* = p_amb/0.5283 = 1.918 bar abs (0.9 bar gauge, half the 1.8 bar target), at the intercooled charge temperature 294 K: A = 1.2*sqrt(287.05*294.2)/(0.6847*1.918e5) = 2.655e-3 m2 for the pair. (Round 1 sized it to pass the max flow at the 2.8 bar abs target, 920 mm2: on the pedal-P1 master that left the 2->3 in-shift peak at 3.03 bar gauge and the 2->3 boost recovery at 2.0 s - the half-open valve held the compressor near its maximum-power flow.) Crack 1.1 bar and full-open 1.6 bar (charge minus manifold pressure): crack above the closed-throttle differences the valve must not touch - idle vacuum (ambient minus ~0.3 bar manifold = 0.7 bar) and a 60 km/h cruise, where a 0.9 bar crack opened the valve to 3.6 % [M] - plus margin; full open at 1.6 bar, well under the 2+ bar of a plate closing at 1.8 bar charge. Tau 20 ms ASSUMED (a diaphragm valve opening within the 25 ms charge lag). Measured with this valve: tests/unit/test_hyper_bov.cpp H1-H5."
+  },
   "source": "[AS] Authored twin configuration; 1.8 bar charge target unchanged. Intercooler effectiveness 0.95 is an optimistic steady-ISA assumption, not a measured cooler; no heat-soak or cooler pressure-loss model."
 }

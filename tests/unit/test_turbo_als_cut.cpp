@@ -385,8 +385,12 @@ TEST_CASE("AC5: anti_lag extension loader - values and rejections", "[turbo][io]
 
 TEST_CASE("AC6: hyper V8 rally ALS at 6000 rpm - realistic bypass air, crank torque near zero (measured)",
           "[turbo][drivetrain][anti_lag][sim_engine][hyper]") {
-    const SimulatedEngineDesc base = load_hyper();
+    SimulatedEngineDesc base = load_hyper();
     REQUIRE(base.turbo_pair.has_value());
+    // 2026-10-13: the shipped hyper twin configuration now carries a blow-off valve (hyper BOV). This case measures the
+    // rotor and bypass-air numbers of the anti-lag path, which the valve's vent flow (extra compressor load) changes by design; it keeps its subject by
+    // clearing the valve. The valve itself is covered by test_turbo_bov.cpp and test_hyper_bov.cpp.
+    base.turbo_pair->blow_off_valve.reset();
     const auto maps = SimulatedEngine::build_maps(base);
     SimulatedEngineDesc d5 = base, als = base;
     d5.turbo_pair->anti_lag = tb::hyper_like_anti_lag();
