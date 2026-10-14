@@ -1427,6 +1427,23 @@ public:
             JPH::ShapeCastSettings settings;
             JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
             physics_system_.GetNarrowPhaseQuery().CastShape(cast, settings, to_rvec3(start_pose.position), collector);
+            // D0 (dog release spike): with the default settings Jolt's GJK cast of a cylinder that is nearly axis
+            // aligned against a very large thin box (the 1000 m test-rig ground) occasionally reports a phantom -
+            // fraction 0 / "started penetrating" (penetration 0.18 m with 0.07 m true clearance) or a miss with the
+            // ground inside the sweep [M: 3 wrong of 200000 near-aligned random wheel casts]. A wheel fed that hit
+            // jumps to full bump for one substep (xdot ~70 m/s, Fz ~540 kN, hub +1300 rad/s, the car kicked). Only
+            // such a SUSPICIOUS result is re-cast with the shrunken shape plus convex radius (Jolt's own
+            // VehicleCollisionTesterCastCylinder mode) and replaced when that cast finds a clean hit (fraction > 0);
+            // a genuine start-in-penetration or a genuine miss stays as it was. Every non-suspicious cast is
+            // bit-identical to before [M: 0 wrong of 200000 with the re-cast]; of the shipped scenarios only
+            // vehicle_tractor_i4.json met one (a rear wheel: fraction 0, penetration 0.186 m, true fraction 0.5005).
+            if (!collector.HadHit() || collector.mHit.mFraction <= 0.0f) {
+                JPH::ShapeCastSettings recheck_settings;
+                recheck_settings.mUseShrunkenShapeAndConvexRadius = true;
+                JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> recheck;
+                physics_system_.GetNarrowPhaseQuery().CastShape(cast, recheck_settings, to_rvec3(start_pose.position), recheck);
+                if (recheck.HadHit() && recheck.mHit.mFraction > 0.0f) collector = recheck;
+            }
             ShapeCastHit out;
             if (collector.HadHit()) {
                 const Vec3 start_w = from_rvec3(cast.mCenterOfMassStart.GetTranslation());
