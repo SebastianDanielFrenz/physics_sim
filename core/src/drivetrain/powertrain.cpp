@@ -117,6 +117,7 @@ EngineTorqueMap::Desc to_engine_desc(const TorqueMapEngineDesc& e) {
     // TorqueMapEngineDesc::ignition/fuels/indicated_efficiency at all - see
     // EngineTorqueMap::Desc's own comment.
     d.has_fuel_model = has_fuel_model(e);
+    d.rolloff = rpm_rolloff(e); // G1: disarmed while the limiter lies inside the curves' data
     if (!e.has_fuel_map && !e.fuels.empty()) {
         d.fuel = e.fuels.front(); // crude path: fuels[0] is the ACTIVE fuel (order matters)
         // Heywood, John B., Internal Combustion Engine Fundamentals,
@@ -1683,12 +1684,19 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             if (!have_engine) {
                 throw std::runtime_error("vehicle '" + vehicle_name + "': launch_control controller '" + cd.id + "' needs an engine component");
             }
-            if (!(lc->rpm > idle) || !(lc->rpm < limit) || !(lc->max_speed_mps > real(0.0)) || !std::isfinite(lc->rpm) ||
-                !std::isfinite(lc->max_speed_mps)) {
+            // G1: an rpm at or above max_limiter_fraction of the limiter (a low garage limiter) is held there instead of
+            // being rejected (the loader warns); below that the part's own rpm runs unchanged.
+            const LaunchRpmFit fit = fit_launch_rpm(lc->rpm, idle, limit, lc->max_limiter_fraction);
+            if (!(lc->rpm > idle) || !(limit > idle) || !(fit.rpm > idle) || !(fit.rpm < limit) || !(lc->max_speed_mps > real(0.0)) ||
+                !std::isfinite(lc->rpm) || !std::isfinite(lc->max_speed_mps) || !(lc->max_limiter_fraction > real(0.0)) ||
+                !(lc->max_limiter_fraction < real(1.0))) {
                 throw std::runtime_error("vehicle '" + vehicle_name + "': launch_control controller '" + cd.id +
-                                          "': rpm must lie between the engine's idle and its own limiter and max_speed_mps must be > 0");
+                                          "': rpm must lie between the engine's idle and its own limiter, max_speed_mps must be > 0 and "
+                                          "max_limiter_fraction in (0, 1)");
             }
-            launch_.emplace(*lc);
+            LaunchControlDesc fitted = *lc;
+            fitted.rpm = fit.rpm;
+            launch_.emplace(fitted);
             continue;
         }
         const auto* tcu_desc = std::get_if<ManualTcuDesc>(&cd.params);
@@ -1721,6 +1729,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             md.engine_inertia = network_.node_inertia(clutch_in_);
             md.clutch_capacity_nm = clutch_->desc().capacity_nm;
         }
+        // G1: the auto-shift cap against the engine's effective limiter (check_ref above guarantees the engine exists).
+        md.shift_rpm_cap = tcu_desc->auto_shift.max_limiter_fraction *
+                           effective_limiter_rpm(pt.components[static_cast<std::size_t>(component_index_of.at(tcu_desc->engine))].params);
         tcu_ = std::make_unique<ManualTcu>(md);
     }
 

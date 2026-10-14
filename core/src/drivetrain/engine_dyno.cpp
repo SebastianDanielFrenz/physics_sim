@@ -199,6 +199,16 @@ void piston_speed_finding(Findings& out, const LimitPolicy& pol, const Simulated
                                PartRef{"engine", engine_file, "/limiter/rpm"}));
 }
 
+// G1: BeyondEngineData - the point lies above the engine's own data and the roll-off (armed: the limiter lies above the
+// data) cuts the fired torque there. value = rpm, limit = the data's top rpm; the lever is the limiter. Nothing while
+// disarmed, so every engine whose limiter lies inside its data reports exactly what it did before G1.
+void beyond_data_finding(Findings& out, const RpmRolloff& r, real rpm, const std::string& engine_file) {
+    if (!r.active(rpm)) return;
+    const LimitSeverity s = rpm >= r.end_rpm ? LimitSeverity::Exceeded : LimitSeverity::Limiting;
+    out.push_back(make_finding(LimitKind::BeyondEngineData, s, rpm, rpm, r.start_rpm, LimitUnit::RevPerMinute,
+                               PartRef{"engine", engine_file, "/limiter/rpm"}));
+}
+
 // Engine garage P7: Knock - the knock limit holds the applied spark `retard` deg below the ECU schedule at this point.
 // Part: the burnt fuel's octane (the ECU's knock_margin_deg is the other lever, named in engine.md). Remedy: an unsolved
 // Simulated placeholder - the octane that clears it needs the cycle model's knock replay at this node (not inverted here).
@@ -250,8 +260,12 @@ void assemble_limits(DynoResult& result, std::vector<Findings>& per_point) {
 // ---------------------------------------------------------------------------------------------------------------
 // Torque map: the WOT curve, instant.
 DynoPoint torque_map_point(const EngineTorqueMap::Desc& d, real rpm, real throttle) {
-    const real w = d.wot_torque_nm_vs_rpm.evaluate(rpm);
+    const real w_curve = d.wot_torque_nm_vs_rpm.evaluate(rpm);
     const real m = d.motoring_torque_nm_vs_rpm.evaluate(rpm);
+    // G1: past the curves' data an armed roll-off scales the combustion span (EngineTorqueMap::pre_solve's own rule).
+    const bool roll = d.rolloff.active(rpm);
+    const real roll_f = roll ? d.rolloff.factor(rpm) : real(1.0);
+    const real w = roll ? m + (w_curve - m) * roll_f : w_curve;
     // tau0 - c_k = (m + c_k) + theta*(w - m) - c_k, i.e. motoring plus theta of the combustion span. Written as
     // w - (1 - theta)*(w - m) so that theta == 1 returns the curve value w EXACTLY (m + 1*(w - m) can differ by an ulp).
     const real net = w - (real(1.0) - throttle) * (w - m);
@@ -265,7 +279,7 @@ DynoPoint torque_map_point(const EngineTorqueMap::Desc& d, real rpm, real thrott
     // Fuel at the same (rpm, theta_c) the runtime evaluates it: the fuel map at theta, or the crude constant-efficiency
     // model on the combustion torque theta*(w - m).
     if (d.has_fuel_map) {
-        p.fuel_g_s = d.fuel_map.value(rpm, throttle);
+        p.fuel_g_s = roll ? d.fuel_map.value(rpm, throttle) * roll_f : d.fuel_map.value(rpm, throttle);
     } else if (d.has_fuel_model) {
         p.fuel_g_s = std::max(real(0.0), throttle * (w - m) * omega) / (d.eta_i * d.fuel.lhv_j_kg) * real(1000.0);
     } else {
@@ -907,6 +921,8 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             result.points.push_back(torque_map_point(d, rpm, spec.throttle));
             Findings f;
             limiter_findings(f, pol, tm->limiter, rpm, spec.part_files.engine);
+            beyond_data_finding(f, d.rolloff, rpm, spec.part_files.engine);
+            sort_point_findings(f);
             per_point.push_back(std::move(f));
         }
         assemble_limits(result, per_point);
@@ -963,6 +979,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             EdgeAcc e;
             e.add(grid, rpm, p_im_pa);
             edge_findings(f, pol, rpm, grid, e, spec.part_files.engine);
+            beyond_data_finding(f, m->rolloff, rpm, spec.part_files.engine);
             sort_point_findings(f);
             per_point.push_back(std::move(f));
         }
@@ -977,7 +994,12 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
     {
         const real top = *std::max_element(rpms.begin(), rpms.end());
         const real band = d.limiter.type == LimiterType::SoftCut ? d.limiter.band_rpm : real(0.0);
-        if (!(d.limiter.rpm - band > top)) d.limiter.rpm = top + band + real(1.0);
+        if (!(d.limiter.rpm - band > top)) {
+            // G1: the moved limiter must not arm a roll-off the real engine does not have (an engine whose limiter is the
+            // top of its data); an armed one keeps its start and end (they do not depend on the limiter).
+            if (!rpm_rolloff(d).armed()) d.rpm_rolloff_band_fraction = real(0.0);
+            d.limiter.rpm = top + band + real(1.0);
+        }
     }
     const std::shared_ptr<const SimulatedEngineMaps> m = SimulatedEngine::build_maps(d); // throws if maps_pending
     // Pedal plan P1: a part-throttle point runs the manual law against this sweep's own WOT envelope (built once, before the
@@ -1000,6 +1022,7 @@ DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, con
             limiter_findings(per_point[i], pol, sim->limiter, rpms[i], spec.part_files.engine);
             piston_speed_finding(per_point[i], pol, *sim, rpms[i], spec.part_files.engine);
             knock_finding(per_point[i], pol, *sim, rpms[i], result.points[i].knock_retard_deg, spec.part_files.fuel);
+            beyond_data_finding(per_point[i], m->rolloff, rpms[i], spec.part_files.engine);
             sort_point_findings(per_point[i]);
         } catch (...) {
             errors[i] = std::current_exception();

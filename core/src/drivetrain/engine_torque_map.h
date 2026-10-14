@@ -27,6 +27,7 @@
 #include "engine.h"
 
 #include "ps/drivetrain/fuel_desc.h" // FuelDesc (PHYS-033 P4 I7a C5)
+#include "ps/drivetrain/limiter_range.h" // RpmRolloff (G1)
 #include "ps/drivetrain/table2d.h"   // Table2D (PHYS-033 P4 I7a C5, the optional fuel map)
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h"
@@ -118,6 +119,9 @@ public:
         // ECU; a governor is a speed law, a mechanical linkage has no ECU). Default false: a code-built Desc keeps
         // the pre-P1 law.
         bool manual_pedal_law = false;
+        // G1 (limiter_range.h): the roll-off of the combustion span (WOT - motoring) and of the fuel past the curves' data.
+        // Set by to_engine_desc from rpm_rolloff(TorqueMapEngineDesc); default disarmed (factor 1 everywhere, bit-identical).
+        RpmRolloff rolloff;
     };
 
     explicit EngineTorqueMap(Desc desc);

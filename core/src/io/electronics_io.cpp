@@ -132,6 +132,7 @@ void read_launch_control(const json& a, const std::string& path, vehicle::Assist
         else if (k == "attack_rate_per_s") d.attack_rate_per_s = number(v, k);
         else if (k == "recovery_rate_per_s") d.recovery_rate_per_s = number(v, k);
         else if (k == "min_fraction") d.min_fraction = number(v, k);
+        else if (k == "max_limiter_fraction") d.max_limiter_fraction = number(v, k); // G1
         else if (k == "slip_target") {
             if (!v.is_object()) throw std::runtime_error(ctx + ": 'slip_target' must be an object keyed by traction mode name");
             for (auto m = v.begin(); m != v.end(); ++m) {
@@ -357,10 +358,17 @@ ElectronicsPart load_electronics_json(const std::string& path) {
     if (j.contains("source") && j.at("source").is_string()) part.source = j.at("source").get<std::string>();
 
     if (kind == "launch_control") {
-        reject_unknown(j, {"format", "kind", "name", "source", "extends", "rpm", "max_speed_mps", "channel", "fitted"}, path);
+        reject_unknown(j, {"format", "kind", "name", "source", "extends", "rpm", "max_speed_mps", "channel", "fitted", "max_limiter_fraction"}, path);
         part.kind = ElectronicsKind::LaunchControl;
         part.launch.rpm = require_positive(j, "rpm", path);
         part.launch.max_speed_mps = require_positive(j, "max_speed_mps", path);
+        if (j.contains("max_limiter_fraction")) { // G1: the clamp of rpm against a low engine limiter
+            const json& f = j.at("max_limiter_fraction");
+            if (!f.is_number() || !std::isfinite(f.get<real>()) || !(f.get<real>() > real(0.0)) || !(f.get<real>() < real(1.0))) {
+                throw std::runtime_error(path + ": 'max_limiter_fraction' must be a number in (0, 1)");
+            }
+            part.launch.max_limiter_fraction = f.get<real>();
+        }
         if (j.contains("channel")) {
             if (!j.at("channel").is_string() || j.at("channel").get<std::string>().empty()) {
                 throw std::runtime_error(path + ": 'channel' must be a non-empty string");

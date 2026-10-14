@@ -120,6 +120,11 @@ struct AutoShiftDesc {
     // above this value ignores min_time_in_gear_s. 0 = no bypass (every car that does not set it is bit-identical).
     // [AS] 0.95 on car_hyper_n2o.
     real kickdown_throttle = 0.0;
+    // G1 (ps/drivetrain/limiter_range.h shift_point_scale): when the higher upshift point (the car's own or a drive mode's
+    // override) lies above this fraction of the engine's effective limiter (effective_limiter_rpm: a low garage limiter, a
+    // soft cut's taper, a governor or an armed roll-off), all four points are scaled down by one factor. Key
+    // "max_limiter_fraction" in the auto_shift block, in (0, 1]. [AS] 0.985 (kDefaultShiftLimiterFraction).
+    real max_limiter_fraction = 0.985;
 };
 
 // The loader-facing descriptor for a "manual_tcu" controller (plan section
@@ -146,6 +151,10 @@ struct LaunchControlDesc {
     real max_speed_mps = 2.0;                         // active only below this speedo speed; releases above it
     std::string channel = "assist.launch_control";   // runtime arm switch (plain 0/1 level)
     bool fitted = true;                               // false: the channel is ignored (A15)
+    // G1 (ps/drivetrain/limiter_range.h fit_launch_rpm): an rpm at or above this fraction of the engine's limiter (a low
+    // garage limiter) is clamped to it with a load warning instead of being a load error. Part key "max_limiter_fraction",
+    // in (0, 1). [AS] 0.8 (kDefaultLaunchLimiterFraction).
+    real max_limiter_fraction = 0.8;
 };
 
 // Closed, visited exhaustively - at most one manual_tcu and at most one launch_control per vehicle.

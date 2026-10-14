@@ -1,6 +1,7 @@
 #include "vehicle_instance.h"
 
 #include "../drivetrain/engine_sound_state.h"
+#include "ps/drivetrain/limiter_range.h"
 #include "ps/math/transcendental.h"
 
 #include <algorithm>
@@ -73,7 +74,8 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
                 if (const auto* te = std::get_if<drivetrain::TorqueMapEngineDesc>(&c.params)) { idle = te->idle_rpm; limit = te->limiter.rpm; have_engine = true; break; }
                 if (const auto* se = std::get_if<drivetrain::SimulatedEngineDesc>(&c.params)) { idle = se->idle_rpm; limit = se->limiter.rpm; have_engine = true; break; }
             }
-            const real rpm = launch_assist_rpm(l, limit);
+            // G1: a resolved rpm at or above max_limiter_fraction of the limiter (a low garage limiter) is held there.
+            const real rpm = drivetrain::fit_launch_rpm(launch_assist_rpm(l, limit), idle, limit, l.max_limiter_fraction).rpm;
             if (!have_engine || !(rpm > idle) || !(rpm < limit)) {
                 throw std::runtime_error("vehicle '" + desc_.name + "': launch control: the launch rpm must lie between the engine's idle and its own limiter");
             }
