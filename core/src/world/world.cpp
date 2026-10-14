@@ -1016,6 +1016,16 @@ void World::replace_turbo_configuration(VehicleId id,std::string_view component_
     vehicle_system_->at(id).replace_turbo_configuration(component_id,desc);
 }
 
+drivetrain::PreparedTurboEnvelope World::prepare_turbo_envelope(VehicleId id,std::string_view component_id,const drivetrain::TurboPairDesc& desc) const {
+    if(!vehicle_system_->contains(id)) throw std::runtime_error("prepare_turbo_envelope: unknown vehicle");
+    return vehicle_system_->at(id).prepare_turbo_envelope(component_id,desc);
+}
+
+void World::replace_turbo_configuration(VehicleId id,std::string_view component_id,const drivetrain::PreparedTurboEnvelope& prepared) {
+    if(!vehicle_system_->contains(id)) throw std::runtime_error("replace_turbo_configuration: unknown vehicle");
+    vehicle_system_->at(id).replace_turbo_configuration(component_id,prepared.turbo,&prepared);
+}
+
 void World::replace_engine_maps(VehicleId id, std::string_view component_id, drivetrain::EngineMapsPtr new_maps) {
     // Documented (world.h) to throw for an unknown vehicle id; System::at is a
     // plain operator[], so check here rather than index out of bounds.
