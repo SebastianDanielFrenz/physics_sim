@@ -303,7 +303,15 @@ TEST_CASE("L3: launch rpm against the engine; Q5 - a two-step and an assist-unit
     CHECK(load_sedan(with_unit(kRacing)).assist_unit->launch_control.has_value());
     CHECK(load_sedan(with_unit(kSport)).assist_unit->launch_control.has_value()); // fraction 0.55 -> 3740 rpm
     CHECK_THROWS_WITH(load_sedan(with_unit(racing_with_launch(td, "lo.json", {{"launch_rpm", 700}}))), ContainsSubstring("must lie between the engine's idle rpm"));
-    CHECK_THROWS_WITH(load_sedan(with_unit(racing_with_launch(td, "hi.json", {{"launch_rpm", 7000}}))), ContainsSubstring("must lie between the engine's idle rpm"));
+    {
+        // G1 (limiter_range.h fit_launch_rpm): above the limiter is no longer a load error - the rpm is held at
+        // max_limiter_fraction (0.8 [AS]) x 6800 = 5440 rpm [D] by VehicleInstance and the load warns.
+        io::VehicleLoadOptions o = with_unit(racing_with_launch(td, "hi.json", {{"launch_rpm", 7000}}));
+        std::vector<std::string> warn;
+        o.maps.warnings_out = &warn;
+        CHECK_NOTHROW(load_sedan(o));
+        CHECK(std::any_of(warn.begin(), warn.end(), [](const std::string& w) { return w.find("held at 5440 rpm") != std::string::npos; }));
+    }
     CHECK_THROWS_WITH(load_sedan(with_unit(racing_with_launch(td, "fr.json", {{"launch_rpm_fraction", 0.05}}))),
                       ContainsSubstring("must lie between the engine's idle rpm"));
 
