@@ -240,6 +240,7 @@ cockpit plan)
   List them in the brief as allowed-to-move. Tell the peer.
 
 **Q5. Turbo full-load envelope rebuild off the calling thread**
+- **Status:** done on claude/envelope-off-thread (option b, prebuilt envelope; see CLAUDE.md "turbo_envelope (Q5)").
 - **Problem:** `full_load_envelope` in `core/src/drivetrain/engine_dyno.cpp` takes 0.61 s on a hypercar
   cache miss. It runs on the caller thread when the turbo configuration is replaced
   (`World::replace_turbo_configuration`).

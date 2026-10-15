@@ -11,6 +11,7 @@
 #include "ps/drivetrain/energy_ledger.h"
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/powertrain_state.h"
+#include "ps/drivetrain/turbo_envelope.h"
 #include "ps/io/telemetry.h"
 #include "ps/jobs/job_system.h"
 #include "ps/jobs/task_graph.h"
@@ -375,6 +376,13 @@ public:
     // for an unknown vehicle id, an unknown/mismatched component id, a
     // component that is not a simulated engine, or null maps.
     void replace_turbo_configuration(VehicleId id, std::string_view component_id, const drivetrain::TurboPairDesc& desc);
+    // Q5: the same swap with the full-load envelope built off this thread (ps/drivetrain/turbo_envelope.h). prepare_*:
+    // caller thread between steps, cheap. replace (prepared): installs prepared.turbo, takes the prebuilt envelope when its
+    // maps are still the engine's (else builds synchronously), never allocates an envelope in a tick. Both throw like
+    // replace_turbo_configuration for an unknown vehicle/component.
+    [[nodiscard]] drivetrain::PreparedTurboEnvelope prepare_turbo_envelope(VehicleId id, std::string_view component_id,
+                                                                           const drivetrain::TurboPairDesc& desc) const;
+    void replace_turbo_configuration(VehicleId id, std::string_view component_id, const drivetrain::PreparedTurboEnvelope& prepared);
     void replace_engine_maps(VehicleId id, std::string_view component_id, drivetrain::EngineMapsPtr new_maps);
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value for this vehicle

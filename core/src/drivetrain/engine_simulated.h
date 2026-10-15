@@ -62,6 +62,8 @@
 // tank's, else fuels[0]). Rotary geometry is refused here (C13).
 
 #pragma once
+
+#include "ps/drivetrain/turbo_envelope.h"
 #include "turbo_pair.h"
 
 #include "engine.h"
@@ -162,6 +164,8 @@ struct FullLoadEnvelope {
 };
 
 class SimulatedEngine;
+// Q5 test hook: drops the process-wide envelope memo so a second build is an independent run (bit-identity tests).
+void clear_full_load_envelope_memo();
 // Pedal plan P1: the memoised envelope of a turbo engine with an electronic throttle (nullptr otherwise, and for null
 // maps). Allocates and runs ~30 held-crank dyno points (cold and pre-spun, 0.6 s for the hyper) on a miss: construction / caller thread
 // only, never a job. Implemented in engine_dyno.cpp (it reuses the dyno's stepped point).
@@ -359,7 +363,10 @@ public:
 
     // Pedal plan P1: also rebuilds the full-load envelope for the new hardware (full_load_envelope, a dyno run on a
     // memo miss) - caller thread, between steps.
-    void replace_turbo_configuration(const TurboPairDesc& desc);
+    // Q5: with `prepared` (from prepare_turbo_envelope, built by build_turbo_envelope) the envelope is taken from it when it
+    // was built for this engine's current maps; otherwise (or without) it is built here as before.
+    void replace_turbo_configuration(const TurboPairDesc& desc, const PreparedTurboEnvelope* prepared = nullptr);
+    [[nodiscard]] PreparedTurboEnvelope prepare_turbo_envelope(const TurboPairDesc& desc) const;
     // Pedal plan P1 white-box: the envelope in use (nullptr: NA engine, mechanical throttle, or built without one).
     [[nodiscard]] const FullLoadEnvelope* full_load_envelope_ptr() const { return envelope_.get(); }
     // Pedal plan P1 test hook (a held engine is a harness, never set by World; not hashed): -1 = the engine's own law,

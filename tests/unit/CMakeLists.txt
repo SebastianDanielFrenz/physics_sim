@@ -140,6 +140,7 @@ add_executable(ps_unit_tests
   test_wot_generation.cpp
   test_engine_installation_io.cpp
   test_engine_hot_swap.cpp
+  test_turbo_envelope_prebuilt.cpp
   test_firing_order.cpp
   test_audio_time_map.cpp
   test_audio_voice.cpp
