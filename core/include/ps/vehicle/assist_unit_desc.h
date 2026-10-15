@@ -5,6 +5,7 @@
 
 #include "ps/aero/aerodynamics.h"
 #include "ps/types.h"
+#include "ps/vehicle/abs_esc_desc.h"
 #include "ps/vehicle/traction_control.h"
 
 #include <array>
@@ -150,6 +151,8 @@ struct AssistUnitDesc {
     AssistTractionDesc traction_control;
     std::optional<AeroControlDesc> aero_control; // present: the unit carries rear-wing automation (grade racing)
     std::optional<LaunchAssistDesc> launch_control; // present: the unit carries launch control (assists I4, grades sport and racing)
+    std::optional<AbsDesc> abs; // present: the unit carries anti-lock brakes (assists I5 part 2, any grade)
+    std::optional<EscDesc> esc; // present: the unit carries stability control (assists I6, any grade; needs abs)
 };
 
 // Fitment (assists I5, decision recorded in docs/data_formats/electronics.md): the controller is fitted iff the unit

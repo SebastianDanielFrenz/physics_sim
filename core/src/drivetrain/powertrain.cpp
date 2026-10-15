@@ -1042,6 +1042,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         row.corner_max_nm = cit == corner_max_of.end() ? real(0.0) : cit->second;
         const auto hit = hand_max_of.find(wn);
         row.handbrake_max_nm = hit == hand_max_of.end() ? real(0.0) : hit->second;
+        row.wheel = wi;
         brake_rows.push_back(row);
     }
 

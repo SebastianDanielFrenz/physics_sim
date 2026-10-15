@@ -143,7 +143,8 @@ result is the pre-G1 one bit for bit. Inside the data an armed engine is bit-ide
 - Torque map: `f` scales the combustion span `w(rpm) - m(rpm)` (WOT minus motoring) and the fuel flow. Motoring torque
   is untouched.
 - Simulated engine: `f` scales the volumetric efficiency (and its derivatives), so air mass, fuel, heat release and
-  torque follow through the cycle. Friction and pumping are untouched.
+  torque follow through the cycle. The pumping excess (`pmep_excess`) is the gas-exchange loss of that air flow and is
+  scaled by the same `f`; the ideal pumping term and friction are untouched.
 - The analytic slopes carry `df/drpm = -1/(n_z - n_e)` inside the band, so the implicit engine step sees a consistent
   Jacobian.
 - At and above `n_z` the engine makes no fired torque. It is then a pure brake (its motoring torque), so it cannot be
@@ -156,7 +157,7 @@ result is the pre-G1 one bit for bit. Inside the data an armed engine is bit-ide
    rising friction. Torque falls; it is not held. Of the simple shapes, falling to zero is the conservative one.
 2. Falling to zero at once at `n_e` would be a torque step. That step chatters against the limiter and breaks the
    derivative the implicit step uses. A linear fall keeps torque continuous and the slope bounded.
-3. Only the fired part rolls off. Friction and pumping are mechanical and already authored as rising with rpm, so the
+3. Only the fired part (and the flow-driven pumping excess) rolls off. Friction and the ideal pumping are mechanical and already authored as rising with rpm, so the
    engine above `n_z` behaves as a motored engine. That gives a natural rev ceiling with no extra state.
 4. `b = 0.2` `[AS]`. This is a guess with no citation. It is a band of 20 % of the data's top (1400 rpm on a 7000 rpm
    engine), wide enough that the per-tick torque change at any plausible rpm rate is small. It is short enough that an

@@ -470,6 +470,11 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
         pmep = m.maps.pmep_excess_pa.value(rpm, yp);
         dpmep_drpm = wot_rows ? m.maps.pmep_excess_pa.dvalue_dx(rpm, yp) + m.maps.pmep_excess_pa.dvalue_dy(rpm, yp) * ix.dy_drpm
                               : m.maps.pmep_excess_pa.dvalue_dx(rpm, p);
+        if (m.rolloff.active(rpm)) { // G1: the excess is the gas-exchange loss of the air flow, which the roll-off has cut
+            const real rf = m.rolloff.factor(rpm);
+            dpmep_drpm = dpmep_drpm * rf + pmep * m.rolloff.slope_per_rpm(rpm);
+            pmep *= rf;
+        }
     }
     e.tau_pump = -s_w * (amb.p_amb - p + pmep) * vc_2pi;
     const real f_rpm = m.maps.friction_torque_nm.evaluate(rpm);

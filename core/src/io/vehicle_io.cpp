@@ -4722,6 +4722,12 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                                                         " rpm limiter): held at " + fmt_rpm(fit.rpm) + " rpm");
                     }
                 }
+                // ABS / ESC act through the car's service-brake corners, so the car must have them.
+                if (part.unit.abs) {
+                    bool any_corner = false;
+                    for (const auto& c : v.brake_system.corners) any_corner = any_corner || c.max_torque_nm > real(0);
+                    if (!any_corner) throw std::runtime_error(ectx + ": abs needs brake_system.corners with max_torque_nm > 0");
+                }
                 v.assist_unit = part.unit;
             } else if (part.kind == ElectronicsKind::DriveModes) {
                 // Assists I7: a car-specific part, at most one. Its auto-shift / auto-clutch overrides need the car's manual_tcu,
@@ -4746,6 +4752,13 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     }
                 }
                 v.drive_modes = part.drive_modes;
+            } else if (part.kind == ElectronicsKind::Epb) {
+                // Q3 / I8: at most one, and it drives the car's handbrake rows, so the car must have them.
+                if (v.epb) throw std::runtime_error(ectx + ": at most one epb per vehicle");
+                if (v.brake_system.handbrake.wheels.empty() || !(v.brake_system.handbrake.max_torque_nm > real(0))) {
+                    throw std::runtime_error(ectx + ": epb needs brake_system.handbrake rows (wheels and max_torque_nm > 0)");
+                }
+                v.epb = part.epb;
             } else {
                 for (const std::string& f : part.fits) {
                     if (f == "traction_control") { v.traction_control.fitted = true; continue; }

@@ -726,6 +726,9 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         channel_indices.assist_drive_mode = ensure_control_channel_index(channel_prefix + "assist.drive_mode",
                                                                          static_cast<real>(static_cast<int>(desc.drive_modes->default_mode)));
     }
+    // Q3 / I8: the EPB switch level, registered only on a car with an epb part (the channel list is unchanged for every
+    // other car); default 0 = released.
+    if (desc.epb) channel_indices.epb = ensure_control_channel_index(channel_prefix + "epb", real(0));
     // assists I5: registered only on a car whose assist unit carries a fitted aero_control (the channel list is
     // unchanged for every other car); default = the block's default_enabled.
     if (const auto aero_surface = ps::vehicle::find_aero_control_surface(desc.aero, desc.assist_unit)) {
@@ -745,6 +748,16 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     // (like the TC channel); a not-fitted P8 two-step keeps default 0 (it ignores the channel anyway).
     if (has_launch_control && !launch_not_fitted) launch_default = ps::vehicle::launch_control_default_channel_value(launch_default, desc.drive_modes);
     if (has_launch_control) channel_indices.assist_launch_control = ensure_control_channel_index(channel_prefix + launch_channel_name, launch_default);
+    // ABS / ESC: registered only on a car whose assist unit carries the block (the channel list is unchanged for every
+    // other car). Defaults: the default drive mode's abs_default / esc_default, else the block's own default.
+    if (desc.assist_unit && desc.assist_unit->abs) {
+        channel_indices.assist_abs = ensure_control_channel_index(channel_prefix + "assist.abs",
+                                                                  ps::vehicle::abs_default_channel_value(*desc.assist_unit->abs, desc.drive_modes));
+    }
+    if (desc.assist_unit && desc.assist_unit->esc) {
+        channel_indices.assist_esc = ensure_control_channel_index(channel_prefix + "assist.esc",
+                                                                  ps::vehicle::esc_default_channel_value(*desc.assist_unit->esc, desc.drive_modes));
+    }
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): resolve every control channel
     // this vehicle's powertrain components declare, same prefix convention

@@ -43,6 +43,10 @@ struct ComponentSubstepCtx {
     real throttle = 0.0;
     real brake = 0.0;
     real handbrake = 0.0;
+    // ABS / ESC (assists I5 part 2 / I6): the per-wheel SERVICE brake command (indexed by wheel, 0..1), set by
+    // VehicleInstance only while ABS or ESC runs on a car with the blocks. nullptr = every corner reads `brake`
+    // (bit-identical to before). The handbrake share is never modulated. Never hashed.
+    const real* wheel_brake = nullptr;
     // PHYS-033 P4 I7b C9: ambient atmospheric sample (ps/world/ambient.h),
     // from VehicleTickEnv::ambient - copied once per tick like the channel
     // inputs below. Never hashed (an environment input, not sim state).
@@ -506,6 +510,7 @@ public:
         FrictionRowId row;
         real corner_max_nm = 0.0;
         real handbrake_max_nm = 0.0;
+        std::size_t wheel = 0; // the hub's wheel index (ComponentSubstepCtx::wheel_brake)
     };
 
     DirectTorqueBrakes(std::vector<Row> rows, real static_factor) : rows_(std::move(rows)), static_factor_(static_factor) {}
