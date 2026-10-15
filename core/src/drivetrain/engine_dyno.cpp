@@ -897,6 +897,11 @@ std::shared_ptr<const FullLoadEnvelope> full_load_envelope(const SimulatedEngine
     return out;
 }
 
+void clear_full_load_envelope_memo() {
+    std::lock_guard<std::mutex> lock(g_envelope_mutex);
+    g_envelopes.clear();
+}
+
 DynoResult run_dyno_sweep(const ComponentParams& engine, EngineMapsPtr maps, const DynoSweepSpec& spec, jobs::JobSystem* pool,
                           const std::atomic<bool>* cancel) {
     validate_spec(spec);

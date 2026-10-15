@@ -2659,10 +2659,16 @@ void Powertrain::request_fuel_tank_mass(real kg) {
 
 // PHYS-033 P4 I7c C16b -----------------------------------------------------
 
-void Powertrain::replace_turbo_configuration(std::string_view component_id,const TurboPairDesc& desc) {
+PreparedTurboEnvelope Powertrain::prepare_turbo_envelope(std::string_view component_id,const TurboPairDesc& desc) const {
+    if(!sim_engine_ptr_ || component_id!=engine_component_id_)
+        throw std::runtime_error("prepare_turbo_envelope: unknown simulated engine");
+    return sim_engine_ptr_->prepare_turbo_envelope(desc);
+}
+
+void Powertrain::replace_turbo_configuration(std::string_view component_id,const TurboPairDesc& desc,const PreparedTurboEnvelope* prepared) {
     if(!sim_engine_ptr_ || component_id!=engine_component_id_)
         throw std::runtime_error("replace_turbo_configuration: unknown simulated engine");
-    sim_engine_ptr_->replace_turbo_configuration(desc);
+    sim_engine_ptr_->replace_turbo_configuration(desc,prepared);
     simulated_engine_desc_->turbo_pair=desc;
     // I7d D5: channels are declared at build time only; a swapped-in anti_lag block naming that channel
     // keeps reading it, any other falls back to its default_enabled (Sensors::anti_lag_channel NaN).

@@ -1477,7 +1477,24 @@ void SimulatedEngine::step_cam_switching(const Sensors& sensors, real rpm, real 
     }
 }
 
-void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
+PreparedTurboEnvelope SimulatedEngine::prepare_turbo_envelope(const TurboPairDesc& desc) const {
+    PreparedTurboEnvelope p;
+    p.turbo = desc;
+    p.maps = maps_;
+    if (envelope_desc_) {
+        auto d = std::make_shared<SimulatedEngineDesc>(*envelope_desc_);
+        d->turbo_pair = desc;
+        p.desc = std::move(d);
+    }
+    return p;
+}
+
+void build_turbo_envelope(PreparedTurboEnvelope& p) {
+    p.envelope = p.desc ? full_load_envelope(*p.desc, p.maps) : nullptr;
+    p.built = true;
+}
+
+void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc, const PreparedTurboEnvelope* prepared) {
     if(!desc.maps) throw std::runtime_error("replace_turbo_configuration: missing prepared maps");
     if(turbo_) {
         // Preserve shaft angular speed, manifold and charge states; replacing
@@ -1495,7 +1512,9 @@ void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
     if (envelope_desc_) {
         auto d = std::make_shared<SimulatedEngineDesc>(*envelope_desc_);
         d->turbo_pair = desc;
-        envelope_ = full_load_envelope(*d, maps_);
+        // Q5: a prebuilt envelope is valid only for the maps it was built against (same object: the pure function's inputs).
+        if (prepared && prepared->built && prepared->maps == maps_) envelope_ = prepared->envelope;
+        else envelope_ = full_load_envelope(*d, maps_);
         envelope_desc_ = std::move(d);
     }
 }

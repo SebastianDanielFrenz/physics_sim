@@ -36,6 +36,7 @@
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/energy_ledger.h"
+#include "ps/drivetrain/turbo_envelope.h"
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/drivetrain/powertrain_state.h"
@@ -289,7 +290,9 @@ public:
     // pointer on the engine for apply_pending_engine_maps_swap to pick up at
     // the next tick boundary. Throws std::runtime_error for an unknown/
     // mismatched component_id, a non-simulated engine, or null maps.
-    void replace_turbo_configuration(std::string_view component_id, const TurboPairDesc& desc);
+    void replace_turbo_configuration(std::string_view component_id, const TurboPairDesc& desc,
+                                     const PreparedTurboEnvelope* prepared = nullptr);
+    [[nodiscard]] PreparedTurboEnvelope prepare_turbo_envelope(std::string_view component_id, const TurboPairDesc& desc) const;
     void request_replace_engine_maps(std::string_view component_id, EngineMapsPtr new_engine_maps);
     // Applies any queued engine-maps swap (no-op if none pending or no
     // simulated engine). MUST be called sequentially, outside any job,
