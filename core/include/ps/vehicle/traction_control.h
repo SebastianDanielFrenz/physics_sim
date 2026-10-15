@@ -18,6 +18,14 @@ struct TractionControlDesc {
     // Not folded into the state hash (a unit folds its resolved mode table itself).
     real min_fraction=0.0;
     bool ignition_cut=true;
+    // Stuck-cut escape: the slip estimate is propagated with the IMU while the pedal is held and only re-anchors on
+    // coast, so an offset picked up in a slide, a bounce or a collision never decays. At crawl speed the slip
+    // denominator is the 2 m/s floor, i.e. an offset of 0.16 m/s alone reads as the 8 % target and 0.5 m/s as 25 %
+    // slip: the controller cuts to its floor, the cut removes every real wheelspin and the offset keeps the cut in
+    // place for as long as the pedal is down. Once the fraction has sat at its floor for stuck_hold_s the estimate is
+    // pulled to the wheel reference at stuck_reanchor_per_s. A cut torque lets real wheelspin die in a fraction of a
+    // second, so after the hold the wheels are the better sensor. [AS] Not hashed.
+    real stuck_hold_s=1.25, stuck_reanchor_per_s=4.0;
 };
 struct TractionWheelSensor {
     real peripheral_speed_m_s=0, steer_rad=0, x_m=0, y_m=0;
@@ -25,10 +33,11 @@ struct TractionWheelSensor {
 };
 struct TractionControlState {
     real estimated_speed_m_s=0, integral=0, torque_fraction=1, positive_slip=0;
+    real cut_time_s=0; // time the fraction has sat at its floor (stuck-cut escape); not hashed
     bool initialized=false, enabled=false, intervening=false;
 };
 inline void validate_traction_control(const TractionControlDesc& d) {
-    for(real v:{d.target_slip,d.reference_floor_m_s,d.kp,d.ki_per_s,d.attack_rate_per_s,d.recovery_rate_per_s})
+    for(real v:{d.target_slip,d.reference_floor_m_s,d.kp,d.ki_per_s,d.attack_rate_per_s,d.recovery_rate_per_s,d.stuck_hold_s,d.stuck_reanchor_per_s})
         if(!std::isfinite(v)||v<=0)throw std::invalid_argument("traction_control: parameters must be finite and positive");
     if(!std::isfinite(d.min_fraction)||d.min_fraction<0||d.min_fraction>=1)throw std::invalid_argument("traction_control: min_fraction must be in [0, 1)");
     if(d.target_slip>=1)throw std::invalid_argument("traction_control: target_slip must be below 1");
@@ -44,7 +53,7 @@ inline real step_traction_control(const TractionControlDesc& d,TractionControlSt
     s.enabled=enabled;s.intervening=false;s.positive_slip=0;
     if(!enabled||wheels.empty()||!std::isfinite(imu_acceleration_m_s2)||!std::isfinite(imu_yaw_rate_rad_s)||
        !std::isfinite(pedal)||!std::isfinite(brake)||!std::isfinite(dt)||dt<=0) {
-        s.integral=0;s.torque_fraction=1;s.initialized=false;return 1;
+        s.integral=0;s.torque_fraction=1;s.cut_time_s=0;s.initialized=false;return 1;
     }
     real reference=0;bool have_reference=false;
     for(const auto& w:wheels) {
@@ -54,14 +63,16 @@ inline real step_traction_control(const TractionControlDesc& d,TractionControlSt
         const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
         if(!have_reference||std::abs(v)<std::abs(reference)){reference=v;have_reference=true;}
     }
-    if(!have_reference){s.integral=0;s.torque_fraction=1;s.initialized=false;return 1;}
+    if(!have_reference){s.integral=0;s.torque_fraction=1;s.cut_time_s=0;s.initialized=false;return 1;}
     if(!s.initialized){s.estimated_speed_m_s=reference;s.initialized=true;}
     else s.estimated_speed_m_s+=imu_acceleration_m_s2*dt;
     if(pedal<=.02||brake>.05) {
         // Coast reanchors from wheel sensors; braking is never a TC event.
         s.estimated_speed_m_s+=(reference-s.estimated_speed_m_s)*std::min(real(1),dt*real(4));
-        s.integral=0;s.torque_fraction=1;return 1;
+        s.integral=0;s.torque_fraction=1;s.cut_time_s=0;return 1;
     }
+    // Stuck-cut escape (see TractionControlDesc::stuck_hold_s): keeps pulling until the slip is back under a quarter of the target (the integrator then unwinds fast).
+    if(s.cut_time_s>d.stuck_hold_s)s.estimated_speed_m_s+=(reference-s.estimated_speed_m_s)*std::min(real(1),dt*d.stuck_reanchor_per_s);
     const real direction=std::abs(s.estimated_speed_m_s)>.5 ? (s.estimated_speed_m_s<0?-1:1) : (reference<0?-1:1);
     for(const auto& w:wheels) {
         if(!w.driven||!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))continue;
@@ -69,6 +80,8 @@ inline real step_traction_control(const TractionControlDesc& d,TractionControlSt
         const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
         s.positive_slip=std::max(s.positive_slip,direction*(v-s.estimated_speed_m_s)/std::max(d.reference_floor_m_s,std::abs(s.estimated_speed_m_s)));
     }
+    if(s.torque_fraction<=d.min_fraction+real(.02))s.cut_time_s+=dt;
+    else if(s.positive_slip<d.target_slip*real(.25))s.cut_time_s=0;
     const real error=s.positive_slip-d.target_slip;
     // Unwind quickly once wheelspin has actually stopped; a saturated PI
     // integrator must not hold the launch clutch at idle for seconds.

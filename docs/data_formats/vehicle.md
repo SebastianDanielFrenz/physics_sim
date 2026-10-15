@@ -994,6 +994,7 @@ an IMU, no ground truth). Unknown keys throw `"unknown traction_control field: <
 | `reference_floor_m_s` | real | `2.0` | speed floor in the slip denominator |
 | `kp`, `ki_per_s` | real | `2.0`, `6.0` | proportional gain / integral rate |
 | `attack_rate_per_s`, `recovery_rate_per_s` | real | `20.0`, `8.0` | slew rates of the torque fraction (down / up) |
+| `stuck_hold_s`, `stuck_reanchor_per_s` | real | `1.25`, `4.0` | stuck-cut escape: once the torque fraction has sat at its floor for `stuck_hold_s`, the speed estimate is pulled to the wheel reference at `stuck_reanchor_per_s` (an IMU-integration offset otherwise keeps a crawl-speed cut in place while the pedal is down) |
 
 All numeric keys must be finite and `> 0` (`"traction_control: parameters must be finite and positive"`,
 `"traction_control: target_slip must be below 1"`). All defaults `[AS]`. The per-mode extras (`min_fraction`,
