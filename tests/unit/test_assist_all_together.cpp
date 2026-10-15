@@ -164,7 +164,9 @@ Observed run_script(const Script& s, int workers, bool trace = false) {
         if (prev_target != -99 && pt.gear_target > prev_target) ++o.upshifts;
         if (prev_target != -99 && pt.gear_target < prev_target) {
             ++o.downshifts;
-            if (prev_command >= 0.95) ++o.kickdowns;
+            // A kickdown can fire on the very tick the pedal reaches full travel, so the command of that tick counts too.
+            const real now_command = pt.engines.empty() ? real(0) : pt.engines[0].throttle_command;
+            if (prev_command >= 0.95 || now_command >= 0.95) ++o.kickdowns;
         }
         prev_target = pt.gear_target;
         const real command = pt.engines.empty() ? real(0) : pt.engines[0].throttle_command;

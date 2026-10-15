@@ -3487,12 +3487,11 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
     // --- aero (plan section 4.4/9.1) ---------------------------------------
     if(j.contains("traction_control")) {
         const auto& tc=j.at("traction_control");if(!tc.is_object())throw std::runtime_error("traction_control must be an object");
-        for(auto it=tc.begin();it!=tc.end();++it)if(it.key()!="enabled"&&it.key()!="fitted"&&it.key()!="target_slip"&&it.key()!="reference_floor_m_s"&&it.key()!="kp"&&it.key()!="ki_per_s"&&it.key()!="attack_rate_per_s"&&it.key()!="recovery_rate_per_s"&&it.key()!="stuck_hold_s"&&it.key()!="stuck_reanchor_per_s")throw std::runtime_error("unknown traction_control field: "+it.key());
+        for(auto it=tc.begin();it!=tc.end();++it)if(it.key()!="enabled"&&it.key()!="fitted"&&it.key()!="target_slip"&&it.key()!="reference_floor_m_s"&&it.key()!="kp"&&it.key()!="ki_per_s"&&it.key()!="attack_rate_per_s"&&it.key()!="recovery_rate_per_s")throw std::runtime_error("unknown traction_control field: "+it.key());
         auto& d=v.traction_control;d.enabled=tc.value("enabled",d.enabled);
         d.target_slip=tc.value("target_slip",d.target_slip);d.reference_floor_m_s=tc.value("reference_floor_m_s",d.reference_floor_m_s);
         d.kp=tc.value("kp",d.kp);d.ki_per_s=tc.value("ki_per_s",d.ki_per_s);
         d.attack_rate_per_s=tc.value("attack_rate_per_s",d.attack_rate_per_s);d.recovery_rate_per_s=tc.value("recovery_rate_per_s",d.recovery_rate_per_s);
-        d.stuck_hold_s=tc.value("stuck_hold_s",d.stuck_hold_s);d.stuck_reanchor_per_s=tc.value("stuck_reanchor_per_s",d.stuck_reanchor_per_s);
         d.fitted=tc.value("fitted",d.fitted); // engine garage P8 (A15)
         ps::vehicle::validate_traction_control(d);
     }

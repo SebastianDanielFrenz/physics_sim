@@ -18,70 +18,124 @@ struct TractionControlDesc {
     // Not folded into the state hash (a unit folds its resolved mode table itself).
     real min_fraction=0.0;
     bool ignition_cut=true;
-    // Stuck-cut escape: the slip estimate is propagated with the IMU while the pedal is held and only re-anchors on
-    // coast, so an offset picked up in a slide, a bounce or a collision never decays. At crawl speed the slip
-    // denominator is the 2 m/s floor, i.e. an offset of 0.16 m/s alone reads as the 8 % target and 0.5 m/s as 25 %
-    // slip: the controller cuts to its floor, the cut removes every real wheelspin and the offset keeps the cut in
-    // place for as long as the pedal is down. Once the fraction has sat at its floor for stuck_hold_s the estimate is
-    // pulled to the wheel reference at stuck_reanchor_per_s. A cut torque lets real wheelspin die in a fraction of a
-    // second, so after the hold the wheels are the better sensor. [AS] Not hashed.
-    real stuck_hold_s=1.25, stuck_reanchor_per_s=4.0;
 };
 struct TractionWheelSensor {
     real peripheral_speed_m_s=0, steer_rad=0, x_m=0, y_m=0;
     bool driven=false;
+    bool braked=false; // this corner's brake (service or handbrake) is applied - the per-wheel brake signal an ESC reads
+};
+// Which wheel evidence the speed estimate was corrected with in the last call (step_traction_control).
+enum class TractionReference : std::uint8_t {
+    None=0,       // not initialised
+    Direct=1,     // a free wheel (not driven, or coasting, and not braked) or the standstill update: a measurement
+    LowerBound=2, // braking without a free wheel: no wheel is faster than the car, the fastest one is a lower bound
+    UpperBound=3, // driving without a free wheel (AWD): no wheel is slower than the car, the slowest one is an upper bound
 };
 struct TractionControlState {
     real estimated_speed_m_s=0, integral=0, torque_fraction=1, positive_slip=0;
-    real cut_time_s=0; // time the fraction has sat at its floor (stuck-cut escape); not hashed
+    // Speed-estimator state (hashed): the wheel reference of the last call, its low-passed rate of change and how
+    // long that rate has agreed with the IMU.
+    real wheel_reference_m_s=0, wheel_accel_m_s2=0, consistent_s=0;
+    TractionReference reference=TractionReference::None;
     bool initialized=false, enabled=false, intervening=false;
 };
+// Speed-estimator constants (step_traction_control). [AS] all; not data keys - they describe the estimator, not a car.
+inline constexpr real kTractionDirectGainPerS=20.0;     // correction gain toward a free wheel / a violated bound, 1/s
+inline constexpr real kTractionDirectMaxRate=20.0;      // ... rate cap, m/s^2 (a bouncing wheel cannot yank the estimate)
+inline constexpr real kTractionConsistentGainPerS=5.0;  // AWD: gain toward the slowest wheel once the evidence below holds, 1/s
+inline constexpr real kTractionConsistentMaxRate=3.0;   // ... rate cap, m/s^2
+inline constexpr real kTractionConsistentTolerance=1.0; // |wheel reference rate - IMU| that counts as agreeing, m/s^2
+inline constexpr real kTractionConsistentHoldS=0.1;     // ... for this long
+inline constexpr real kTractionConsistentMaxFraction=0.3; // ... and only while the drive torque is cut to at most this fraction
+inline constexpr real kTractionWheelAccelTauS=0.03;     // low-pass of the wheel reference rate, s
+inline constexpr real kTractionStandstillSpeed=0.05;    // standstill update: every wheel below this, m/s
+inline constexpr real kTractionStandstillAccel=0.3;     // ... and |IMU| below this, m/s^2
 inline void validate_traction_control(const TractionControlDesc& d) {
-    for(real v:{d.target_slip,d.reference_floor_m_s,d.kp,d.ki_per_s,d.attack_rate_per_s,d.recovery_rate_per_s,d.stuck_hold_s,d.stuck_reanchor_per_s})
+    for(real v:{d.target_slip,d.reference_floor_m_s,d.kp,d.ki_per_s,d.attack_rate_per_s,d.recovery_rate_per_s})
         if(!std::isfinite(v)||v<=0)throw std::invalid_argument("traction_control: parameters must be finite and positive");
     if(!std::isfinite(d.min_fraction)||d.min_fraction<0||d.min_fraction>=1)throw std::invalid_argument("traction_control: min_fraction must be in [0, 1)");
     if(d.target_slip>=1)throw std::invalid_argument("traction_control: target_slip must be below 1");
 }
-// SENSOR-ONLY interface: no ground speed, GPS, true tyre slip, contact/load or surface.
-// IMU acceleration is gravity-compensated longitudinal acceleration, m/s^2.
-// An AWD controller cannot observe constant common-mode wheelspin from wheel
-// speeds alone. It propagates its wheel-initialized estimate with the IMU and
-// only reanchors on coast; the estimate is explicitly not a GPS speed reading.
+// A wheel's speed sensor as the ground speed it implies at the vehicle origin: steer- and yaw-compensated
+// (v = vx + tan(steer)*vy for a free-rolling wheel). False for a non-finite reading or more than 60 deg of steer.
+inline bool traction_wheel_ground_speed(const TractionWheelSensor& w,real imu_yaw_rate_rad_s,real& v) {
+    if(!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))return false;
+    real sn=0,c=1;ps::math::sincos(w.steer_rad,sn,c);
+    if(c<.5)return false;
+    v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
+    return true;
+}
+// SENSOR-ONLY interface: no ground speed, GPS, true tyre slip, contact/load or surface. The inputs are the wheel speed
+// sensors, the per-corner brake signal, the IMU's longitudinal acceleration (gravity-compensated, m/s^2) and yaw rate.
+//
+// Speed estimate (the vehicle reference speed of an ESC): predicted with the IMU every call, then corrected with
+// the wheels, so an offset picked up anywhere (a slide, a kerb, the IMU missing the rotating-frame term, switching
+// TC off and on) decays instead of staying:
+//  - Direct: a free wheel (not braked; not driven, or every wheel while coasting) rolls at ground speed. The
+//    estimate is pulled to the fastest free wheel at kTractionDirectGainPerS, rate-capped. A standstill (every wheel
+//    below kTractionStandstillSpeed, IMU quiet) is a direct measurement of 0.
+//  - LowerBound (braking, no free wheel): braked wheels can only be slower than the car. The estimate is pulled up
+//    to the fastest wheel when below it; above it only the IMU acts. Locked wheels can no longer drag it to zero.
+//  - UpperBound (driving, no free wheel: AWD): driven wheels can only be faster. Above the slowest wheel the
+//    estimate is pulled down; below it, toward it only while the drive torque is cut (fraction at most
+//    kTractionConsistentMaxFraction) and the slowest wheel's rate has matched the IMU for kTractionConsistentHoldS:
+//    a cut wheel that keeps pace with the body is rolling, not spinning. Constant common-mode wheelspin with torque
+//    on is not observable from these sensors and is not corrected.
 inline real step_traction_control(const TractionControlDesc& d,TractionControlState& s,
         std::span<const TractionWheelSensor> wheels,real imu_acceleration_m_s2,
         real imu_yaw_rate_rad_s,real pedal,real brake,bool enabled,real dt) {
     s.enabled=enabled;s.intervening=false;s.positive_slip=0;
+    const auto reset=[&]{s.integral=0;s.torque_fraction=1;s.initialized=false;s.reference=TractionReference::None;
+                         s.wheel_reference_m_s=0;s.wheel_accel_m_s2=0;s.consistent_s=0;};
     if(!enabled||wheels.empty()||!std::isfinite(imu_acceleration_m_s2)||!std::isfinite(imu_yaw_rate_rad_s)||
-       !std::isfinite(pedal)||!std::isfinite(brake)||!std::isfinite(dt)||dt<=0) {
-        s.integral=0;s.torque_fraction=1;s.cut_time_s=0;s.initialized=false;return 1;
-    }
-    real reference=0;bool have_reference=false;
+       !std::isfinite(pedal)||!std::isfinite(brake)||!std::isfinite(dt)||dt<=0){reset();return 1;}
+    const bool coast=pedal<=.02;
+    real sum=0,max_abs=0;int valid=0;
+    for(const auto& w:wheels){real v;if(!traction_wheel_ground_speed(w,imu_yaw_rate_rad_s,v))continue;sum+=v;max_abs=std::max(max_abs,std::abs(v));++valid;}
+    if(valid==0){reset();return 1;}
+    const real direction=s.initialized&&std::abs(s.estimated_speed_m_s)>.5 ? (s.estimated_speed_m_s<0?-1:1) : (sum<0?-1:1);
+    // Fastest free wheel, fastest wheel, slowest wheel - all in the direction of travel.
+    real free_best=0,fastest=0,slowest=0;bool have_free=false,have_any=false,any_braked=false;
     for(const auto& w:wheels) {
-        if(!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))continue;
-        real sn=0,c=1;ps::math::sincos(w.steer_rad,sn,c);
-        if(c<.5)continue;
-        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
-        if(!have_reference||std::abs(v)<std::abs(reference)){reference=v;have_reference=true;}
+        real v;if(!traction_wheel_ground_speed(w,imu_yaw_rate_rad_s,v))continue;
+        const real dv=direction*v;
+        if(!have_any){fastest=slowest=dv;have_any=true;}else{fastest=std::max(fastest,dv);slowest=std::min(slowest,dv);}
+        if(w.braked){any_braked=true;continue;}
+        if(w.driven&&!coast)continue;
+        if(!have_free||dv>free_best){free_best=dv;have_free=true;}
     }
-    if(!have_reference){s.integral=0;s.torque_fraction=1;s.cut_time_s=0;s.initialized=false;return 1;}
-    if(!s.initialized){s.estimated_speed_m_s=reference;s.initialized=true;}
-    else s.estimated_speed_m_s+=imu_acceleration_m_s2*dt;
-    if(pedal<=.02||brake>.05) {
-        // Coast reanchors from wheel sensors; braking is never a TC event.
-        s.estimated_speed_m_s+=(reference-s.estimated_speed_m_s)*std::min(real(1),dt*real(4));
-        s.integral=0;s.torque_fraction=1;s.cut_time_s=0;return 1;
+    TractionReference kind;real measured;
+    if(max_abs<kTractionStandstillSpeed&&std::abs(imu_acceleration_m_s2)<kTractionStandstillAccel){kind=TractionReference::Direct;measured=0;}
+    else if(have_free){kind=TractionReference::Direct;measured=direction*free_best;}
+    else if(any_braked){kind=TractionReference::LowerBound;measured=direction*fastest;}
+    else {kind=TractionReference::UpperBound;measured=direction*slowest;}
+    if(!s.initialized) {
+        s.estimated_speed_m_s=measured;s.initialized=true;
+        s.wheel_accel_m_s2=imu_acceleration_m_s2;s.consistent_s=0;
+    } else {
+        s.estimated_speed_m_s+=imu_acceleration_m_s2*dt;
+        if(kind!=s.reference){s.wheel_accel_m_s2=imu_acceleration_m_s2;s.consistent_s=0;}
+        else {
+            const real raw=(measured-s.wheel_reference_m_s)/dt;
+            s.wheel_accel_m_s2+=(raw-s.wheel_accel_m_s2)*std::min(real(1),dt/kTractionWheelAccelTauS);
+            s.consistent_s=std::abs(s.wheel_accel_m_s2-imu_acceleration_m_s2)<=kTractionConsistentTolerance?s.consistent_s+dt:0;
+        }
+        const real error=measured-s.estimated_speed_m_s;
+        const bool hard=kind==TractionReference::Direct||(kind==TractionReference::LowerBound&&direction*error>0)||
+                        (kind==TractionReference::UpperBound&&direction*error<0);
+        if(hard) {
+            s.estimated_speed_m_s+=std::clamp(error*std::min(real(1),dt*kTractionDirectGainPerS),-kTractionDirectMaxRate*dt,kTractionDirectMaxRate*dt);
+        } else if(kind==TractionReference::UpperBound&&s.consistent_s>=kTractionConsistentHoldS&&s.torque_fraction<=kTractionConsistentMaxFraction) {
+            s.estimated_speed_m_s+=std::clamp(error*std::min(real(1),dt*kTractionConsistentGainPerS),-kTractionConsistentMaxRate*dt,kTractionConsistentMaxRate*dt);
+        }
     }
-    // Stuck-cut escape (see TractionControlDesc::stuck_hold_s): keeps pulling until the slip is back under a quarter of the target (the integrator then unwinds fast).
-    if(s.cut_time_s>d.stuck_hold_s)s.estimated_speed_m_s+=(reference-s.estimated_speed_m_s)*std::min(real(1),dt*d.stuck_reanchor_per_s);
-    const real direction=std::abs(s.estimated_speed_m_s)>.5 ? (s.estimated_speed_m_s<0?-1:1) : (reference<0?-1:1);
+    s.reference=kind;s.wheel_reference_m_s=measured;
+    if(coast||brake>.05){s.integral=0;s.torque_fraction=1;return 1;} // braking is never a TC event
+    const real slip_direction=std::abs(s.estimated_speed_m_s)>.5 ? (s.estimated_speed_m_s<0?-1:1) : direction;
     for(const auto& w:wheels) {
-        if(!w.driven||!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))continue;
-        real sn=0,c=1;ps::math::sincos(w.steer_rad,sn,c);if(c<.5)continue;
-        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
-        s.positive_slip=std::max(s.positive_slip,direction*(v-s.estimated_speed_m_s)/std::max(d.reference_floor_m_s,std::abs(s.estimated_speed_m_s)));
+        real v;if(!w.driven||!traction_wheel_ground_speed(w,imu_yaw_rate_rad_s,v))continue;
+        s.positive_slip=std::max(s.positive_slip,slip_direction*(v-s.estimated_speed_m_s)/std::max(d.reference_floor_m_s,std::abs(s.estimated_speed_m_s)));
     }
-    if(s.torque_fraction<=d.min_fraction+real(.02))s.cut_time_s+=dt;
-    else if(s.positive_slip<d.target_slip*real(.25))s.cut_time_s=0;
     const real error=s.positive_slip-d.target_slip;
     // Unwind quickly once wheelspin has actually stopped; a saturated PI
     // integrator must not hold the launch clutch at idle for seconds.
@@ -102,9 +156,7 @@ inline real traction_driven_slip(std::span<const TractionWheelSensor> wheels,rea
     const real direction=std::abs(estimate_m_s)>.5 ? (estimate_m_s<0?-1:1) : fallback_direction;
     real slip=0;
     for(const auto& w:wheels) {
-        if(!w.driven||!std::isfinite(w.peripheral_speed_m_s)||!std::isfinite(w.steer_rad))continue;
-        real sn=0,c=1;ps::math::sincos(w.steer_rad,sn,c);if(c<.5)continue;
-        const real v=(w.peripheral_speed_m_s-imu_yaw_rate_rad_s*(w.x_m*sn-w.y_m*c))/c;
+        real v;if(!w.driven||!traction_wheel_ground_speed(w,imu_yaw_rate_rad_s,v))continue;
         slip=std::max(slip,direction*(v-estimate_m_s)/std::max(reference_floor_m_s,std::abs(estimate_m_s)));
     }
     return slip;
@@ -115,6 +167,7 @@ inline std::uint64_t fold_traction_control_hash(const TractionControlDesc& d,con
     const std::uint64_t tag=0x5452414354494f4eULL;fold(tag);fold(d.enabled);
     fold(d.target_slip);fold(d.reference_floor_m_s);fold(d.kp);fold(d.ki_per_s);fold(d.attack_rate_per_s);fold(d.recovery_rate_per_s);
     fold(s.estimated_speed_m_s);fold(s.integral);fold(s.torque_fraction);fold(s.initialized);fold(s.enabled);
+    fold(s.wheel_reference_m_s);fold(s.wheel_accel_m_s2);fold(s.consistent_s);fold(static_cast<std::uint8_t>(s.reference));
     return h;
 }
 }

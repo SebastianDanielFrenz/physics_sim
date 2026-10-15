@@ -994,12 +994,18 @@ an IMU, no ground truth). Unknown keys throw `"unknown traction_control field: <
 | `reference_floor_m_s` | real | `2.0` | speed floor in the slip denominator |
 | `kp`, `ki_per_s` | real | `2.0`, `6.0` | proportional gain / integral rate |
 | `attack_rate_per_s`, `recovery_rate_per_s` | real | `20.0`, `8.0` | slew rates of the torque fraction (down / up) |
-| `stuck_hold_s`, `stuck_reanchor_per_s` | real | `1.25`, `4.0` | stuck-cut escape: once the torque fraction has sat at its floor for `stuck_hold_s`, the speed estimate is pulled to the wheel reference at `stuck_reanchor_per_s` (an IMU-integration offset otherwise keeps a crawl-speed cut in place while the pedal is down) |
 
 All numeric keys must be finite and `> 0` (`"traction_control: parameters must be finite and positive"`,
 `"traction_control: target_slip must be below 1"`). All defaults `[AS]`. The per-mode extras (`min_fraction`,
 `ignition_cut`) exist only in an assist unit's `mode_params`; the block itself cannot set them. The assist unit's
 Relaxed / Sport / Drift modes override these keys per mode.
+
+The slip is measured against a ground-speed estimate the controller keeps itself (no key sets it): the IMU's
+longitudinal acceleration predicts it, and every substep the wheels correct it - free wheels (not braked, not driven,
+or every wheel while coasting) as a measurement, braked wheels as a lower bound, driven wheels of a car without a free
+wheel (AWD) as an upper bound, and a standstill as 0. The per-corner brake signal comes from `brake_system` (a corner
+counts as braked when its service brake or the handbrake acts on it). Constant common-mode wheelspin of an AWD car
+with torque on cannot be seen from these sensors. Constants and limits: `ps/vehicle/traction_control.h`.
 
 ## Control channels a vehicle reads
 

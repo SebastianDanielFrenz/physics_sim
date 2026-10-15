@@ -344,6 +344,7 @@ private:
     real launch_slip_target_ = 0;
     TractionControlState traction_state_{};
     std::vector<TractionWheelSensor> traction_sensors_;
+    std::vector<std::uint8_t> traction_brake_bits_; // per wheel: bit0 service brake fitted, bit1 handbrake fitted (TC brake signal)
     std::vector<WheelTelemetry> substep_telemetry_; // assists I2a diag: kMaxSubstepTelemetry x wheels, sized at construction
     std::size_t substep_telemetry_count_ = 0;
     Vec3 imu_previous_velocity_world_{}; // virtual accelerometer plumbing only; never supplied as TC speed
