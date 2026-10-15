@@ -271,7 +271,7 @@ WeatherSegment WeatherTimeline::next_segment(const WeatherSegment& s) const {
     return n;
 }
 
-void WeatherTimeline::ensure(WeatherCursor& c, real t_lo, real t_hi) const {
+void WeatherTimeline::ensure_window(WeatherCursor& c, real t_lo, real t_hi) const {
     const std::int64_t R = kRingSegments;
     auto at = [&](std::int64_t i) -> WeatherSegment& { return c.ring_[static_cast<std::size_t>(i % R)]; };
     auto oldest = [&]() { return c.newest_ - (R - 1) > 0 ? c.newest_ - (R - 1) : std::int64_t{0}; };
@@ -343,7 +343,7 @@ int WeatherTimeline::cells_of(const WeatherSegment& segment, WeatherCell* out, i
 
 WeatherSegment WeatherTimeline::segment_at(real t, WeatherCursor& c) const {
     if (mode_ != WeatherMode::Dynamic) throw std::logic_error("WeatherTimeline::segment_at: Preset mode has no segments");
-    ensure(c, t, t);
+    ensure_window(c, t, t);
     return find(c, t);
 }
 
@@ -482,7 +482,7 @@ real WeatherTimeline::published_precip_at(real t, WeatherCursor& c) const {
 real WeatherTimeline::precipitation_mm(real t_a, real t_b, WeatherCursor& c) const {
     if (!std::isfinite(t_a) || !std::isfinite(t_b) || t_b < t_a || t_b - t_a > kMaxAccumulationWindowS * (1.0 + 1e-12))
         throw std::invalid_argument("WeatherTimeline::precipitation_mm: need 0 <= t_b - t_a <= 6 h");
-    if (mode_ == WeatherMode::Dynamic) ensure(c, t_a, t_b);
+    if (mode_ == WeatherMode::Dynamic) ensure_window(c, t_a, t_b);
     if (overrides_.empty()) return base_precip_integral(t_a, t_b, c);
 
     real bp[2 + 4 * kMaxOverrides];
@@ -524,7 +524,7 @@ real WeatherTimeline::precipitation_mm(real t_a, real t_b, WeatherCursor& c) con
 WeatherSample WeatherTimeline::evaluate(real t, WeatherCursor& c) const {
     WeatherSample s;
     s.t_env = t;
-    if (mode_ == WeatherMode::Dynamic) ensure(c, t - kMaxAccumulationWindowS, t);
+    if (mode_ == WeatherMode::Dynamic) ensure_window(c, t - kMaxAccumulationWindowS, t);
     const Base b = base_at(t, c);
     Blend B;
     blend_weights(t, B);
@@ -624,7 +624,7 @@ int WeatherTimeline::lightning_events(real t, real max_age_s, WeatherCursor& c, 
     const std::int64_t bin_hi = static_cast<std::int64_t>(std::floor(t / kLightningBinS));
     const real B0 = static_cast<real>(bin_lo) * kLightningBinS;
     const real B1 = static_cast<real>(bin_hi + 1) * kLightningBinS;
-    if (mode_ == WeatherMode::Dynamic) ensure(c, B0, B1);
+    if (mode_ == WeatherMode::Dynamic) ensure_window(c, B0, B1);
 
     std::vector<LightningEvent>& ev = c.scratch_;
     std::vector<std::uint64_t>& ev_bin = c.scratch_bin_;
