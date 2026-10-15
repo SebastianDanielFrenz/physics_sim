@@ -7,6 +7,7 @@
 
 #include "ps/types.h"
 #include "ps/vehicle/assist_unit_desc.h"
+#include "ps/vehicle/epb_desc.h"
 
 #include <array>
 #include <cmath>
@@ -17,10 +18,11 @@
 
 namespace ps::vehicle {
 
-// Mode CODES of the channel `assist.drive_mode`. Append-only (owner: Eco, Normal, Sport).
-enum class DriveMode : std::uint8_t { Eco = 0, Normal = 1, Sport = 2 };
-inline constexpr int kDriveModeCount = 3;
-inline constexpr const char* kDriveModeNames[kDriveModeCount] = {"eco", "normal", "sport"};
+// Mode CODES of the channel `assist.drive_mode`. Append-only (owner: Eco, Normal, Sport; Racing added by Q3 / I8).
+enum class DriveMode : std::uint8_t { Eco = 0, Normal = 1, Sport = 2, Racing = 3 };
+inline constexpr int kDriveModeCount = 4;
+inline constexpr const char* kDriveModeNames[kDriveModeCount] = {"eco", "normal", "sport", "racing"};
+inline constexpr std::uint8_t kDriveModeAllBits = static_cast<std::uint8_t>((1u << kDriveModeCount) - 1u);
 [[nodiscard]] constexpr std::uint8_t drive_mode_bit(DriveMode m) { return static_cast<std::uint8_t>(1u << static_cast<unsigned>(m)); }
 
 // One bend point: pedal 0 -> 0, bend_x -> bend_y, 1 -> 1, piecewise linear. x in (0, 1), y in [0, 1] (owner).
@@ -52,6 +54,12 @@ struct DriveModeParams {
     std::optional<bool> launch_control_default;
     bool launch_control_allowed = true;
     bool nitrous_arm_allowed = true;
+    // Q3 / I8: the EPB mode while this drive mode runs (unset = the epb part's own epb_mode). Ignored without an epb part.
+    std::optional<EpbMode> epb_mode;
+    // ABS / ESC: the assist.abs enable and the assist.esc mode the car switches to when this drive mode becomes effective,
+    // written into the channels like traction_control_default. Ignored on a car whose unit lacks the block.
+    std::optional<bool> abs_default;
+    std::optional<EscMode> esc_default;
 };
 
 struct DriveModesDesc {
@@ -60,11 +68,12 @@ struct DriveModesDesc {
     std::array<DriveModeParams, kDriveModeCount> params{};
 };
 
-// Channel value -> requested mode code: round to nearest, clamp to 0..2; non-finite is the default mode.
+// Channel value -> requested mode code: round to nearest, clamp to 0..kDriveModeCount-1; non-finite is the default mode.
+// (Q3: a value of 3 used to clamp to Sport; it now requests Racing, which an unoffered part maps to its default mode.)
 [[nodiscard]] inline DriveMode drive_mode_requested(const DriveModesDesc& d, real channel_value) {
     if (!std::isfinite(channel_value)) return d.default_mode;
     const real r = std::round(channel_value);
-    return static_cast<DriveMode>(r <= real(0) ? 0 : (r >= real(2) ? 2 : static_cast<int>(r)));
+    return static_cast<DriveMode>(r <= real(0) ? 0 : (r >= real(kDriveModeCount - 1) ? kDriveModeCount - 1 : static_cast<int>(r)));
 }
 
 // The mode actually run. A mode the part does not offer maps, statelessly, to the part's default mode (drive modes
@@ -103,10 +112,26 @@ struct DriveModesDesc {
     return base;
 }
 
+// The assist.abs / assist.esc channel defaults: the default drive mode's value when it sets one, else the unit block's.
+[[nodiscard]] inline real abs_default_channel_value(const AbsDesc& abs, const std::optional<DriveModesDesc>& modes) {
+    if (modes) {
+        const auto& v = modes->params[static_cast<std::size_t>(modes->default_mode)].abs_default;
+        if (v) return *v ? real(1) : real(0);
+    }
+    return abs.default_enabled ? real(1) : real(0);
+}
+[[nodiscard]] inline real esc_default_channel_value(const EscDesc& esc, const std::optional<DriveModesDesc>& modes) {
+    if (modes) {
+        const auto& v = modes->params[static_cast<std::size_t>(modes->default_mode)].esc_default;
+        if (v) return static_cast<real>(static_cast<int>(*v));
+    }
+    return static_cast<real>(static_cast<int>(esc.default_mode));
+}
+
 // Range checks shared by the loader and VehicleInstance (code-built descs). Throws std::invalid_argument.
 inline void validate_drive_modes(const DriveModesDesc& d) {
     const auto fin = [](real v) { return std::isfinite(v); };
-    if (d.modes_bits == 0 || (d.modes_bits & ~std::uint8_t(0b111)) != 0) throw std::invalid_argument("drive_modes: modes must be a non-empty subset of eco, normal, sport");
+    if (d.modes_bits == 0 || (d.modes_bits & static_cast<std::uint8_t>(~kDriveModeAllBits)) != 0) throw std::invalid_argument("drive_modes: modes must be a non-empty subset of eco, normal, sport, racing");
     if (!(d.modes_bits & drive_mode_bit(d.default_mode))) throw std::invalid_argument("drive_modes: default_mode is not one of the offered modes");
     for (int m = 0; m < kDriveModeCount; ++m) {
         const DriveModeParams& p = d.params[static_cast<std::size_t>(m)];
@@ -121,6 +146,8 @@ inline void validate_drive_modes(const DriveModesDesc& d) {
         for (const std::optional<real>* r : {&p.up_rpm_at_zero_throttle, &p.up_rpm_at_full_throttle, &p.down_rpm_at_zero_throttle, &p.down_rpm_at_full_throttle}) {
             if (*r && (!fin(**r) || !(**r > real(0)))) throw std::invalid_argument(ctx + "auto-shift rpm values must be finite and > 0");
         }
+        if (p.esc_default && static_cast<int>(*p.esc_default) >= kEscModeCount) throw std::invalid_argument(ctx + "unknown esc_default");
+        if (p.epb_mode && static_cast<unsigned>(*p.epb_mode) > 1u) throw std::invalid_argument(ctx + "unknown epb_mode");
         if (p.clutch_close_time_s && (!fin(*p.clutch_close_time_s) || !(*p.clutch_close_time_s > real(0)))) throw std::invalid_argument(ctx + "clutch_close_time_s must be finite and > 0");
     }
 }

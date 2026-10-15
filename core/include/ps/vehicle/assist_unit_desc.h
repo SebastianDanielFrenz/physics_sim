@@ -5,6 +5,7 @@
 
 #include "ps/aero/aerodynamics.h"
 #include "ps/types.h"
+#include "ps/vehicle/abs_esc_desc.h"
 #include "ps/vehicle/traction_control.h"
 
 #include <array>
@@ -107,6 +108,10 @@ struct LaunchAssistDesc {
     // The slip PI (TC's law: ceiling = clamp(1 - kp * max(0, slip - target) - integral, min_fraction, 1), rate limited).
     real kp = 2.0, ki_per_s = 6.0, attack_rate_per_s = 20.0, recovery_rate_per_s = 8.0; // [AS] TC mode On's values
     real min_fraction = 0.05;            // [AS] the ceiling never drops below this share of the driver's command
+    // G1 (ps/drivetrain/limiter_range.h fit_launch_rpm): a resolved launch rpm at or above this fraction of the engine's
+    // limiter (a low garage limiter) is clamped to it with a load warning instead of being a load error. In (0, 1).
+    // [AS] 0.8 (kDefaultLaunchLimiterFraction).
+    real max_limiter_fraction = 0.8;
 };
 
 [[nodiscard]] inline real launch_assist_rpm(const LaunchAssistDesc& d, real engine_limiter_rpm) {
@@ -132,6 +137,9 @@ inline void validate_launch_assist(const LaunchAssistDesc& d) {
     if (!fin(d.clutch_ramp_s) || d.clutch_ramp_s < real(0)) throw std::invalid_argument("launch_control: clutch_ramp_s must be >= 0");
     if (!(d.handover_speed_mps > d.arm_max_speed_mps)) throw std::invalid_argument("launch_control: handover_speed_mps must exceed arm_max_speed_mps");
     if (!fin(d.min_fraction) || d.min_fraction < real(0) || d.min_fraction >= real(1)) throw std::invalid_argument("launch_control: min_fraction must be in [0, 1)");
+    if (!fin(d.max_limiter_fraction) || !(d.max_limiter_fraction > real(0)) || !(d.max_limiter_fraction < real(1))) {
+        throw std::invalid_argument("launch_control: max_limiter_fraction must be in (0, 1)");
+    }
     for (real v : d.slip_target) {
         if (!fin(v) || !(v > real(0)) || v >= real(1)) throw std::invalid_argument("launch_control: slip_target values must be in (0, 1)");
     }
@@ -143,6 +151,8 @@ struct AssistUnitDesc {
     AssistTractionDesc traction_control;
     std::optional<AeroControlDesc> aero_control; // present: the unit carries rear-wing automation (grade racing)
     std::optional<LaunchAssistDesc> launch_control; // present: the unit carries launch control (assists I4, grades sport and racing)
+    std::optional<AbsDesc> abs; // present: the unit carries anti-lock brakes (assists I5 part 2, any grade)
+    std::optional<EscDesc> esc; // present: the unit carries stability control (assists I6, any grade; needs abs)
 };
 
 // Fitment (assists I5, decision recorded in docs/data_formats/electronics.md): the controller is fitted iff the unit

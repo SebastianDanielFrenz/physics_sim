@@ -49,6 +49,15 @@ void reject_unknown(const json& j, std::initializer_list<const char*> allowed, c
     if (!std::isfinite(v) || !(v > real(0.0))) throw std::runtime_error(ctx + ": '" + key + "' must be finite and > 0");
     return v;
 }
+// Q3 / I8: "park_only" | "handbrake".
+[[nodiscard]] vehicle::EpbMode epb_mode_from(const json& v, const std::string& ctx) {
+    if (v.is_string()) {
+        for (int i = 0; i < 2; ++i) {
+            if (v.get<std::string>() == vehicle::kEpbModeNames[i]) return static_cast<vehicle::EpbMode>(i);
+        }
+    }
+    throw std::runtime_error(ctx + ": 'epb_mode' must be \"park_only\" or \"handbrake\"");
+}
 
 // Assists I5: the aero_control block. Ranges copy racing_game's loader (environment.cpp: cruise_wing_offset_deg
 // [-8, 55], airbrake_wing_offset_deg [0, 55], airbrake_min_speed_m_s [0, 150], airbrake_threshold [0, 0.99]);
@@ -132,6 +141,7 @@ void read_launch_control(const json& a, const std::string& path, vehicle::Assist
         else if (k == "attack_rate_per_s") d.attack_rate_per_s = number(v, k);
         else if (k == "recovery_rate_per_s") d.recovery_rate_per_s = number(v, k);
         else if (k == "min_fraction") d.min_fraction = number(v, k);
+        else if (k == "max_limiter_fraction") d.max_limiter_fraction = number(v, k); // G1
         else if (k == "slip_target") {
             if (!v.is_object()) throw std::runtime_error(ctx + ": 'slip_target' must be an object keyed by traction mode name");
             for (auto m = v.begin(); m != v.end(); ++m) {
@@ -153,6 +163,13 @@ void read_launch_control(const json& a, const std::string& path, vehicle::Assist
     unit.launch_control = d;
 }
 
+[[nodiscard]] int esc_mode_from_name(const std::string& n) {
+    for (int i = 0; i < vehicle::kEscModeCount; ++i) {
+        if (n == vehicle::kEscModeNames[i]) return i;
+    }
+    return -1;
+}
+
 // Assists I7: the drive_modes part (kind "drive_modes"). Keys per mode: pedal_bend {x, y}, auto_shift {the four rpm
 // points, each optional}, auto_clutch {close_time_s}, traction_control_default (a traction mode name),
 // launch_control_default (bool, I7b), launch_control_allowed, nitrous_arm_allowed. A mode is offered iff it has an entry in "modes" (an empty object is
@@ -167,7 +184,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
         return -1;
     };
     if (!j.contains("modes") || !j.at("modes").is_object() || j.at("modes").empty()) {
-        throw std::runtime_error(path + ": 'modes' is required and must be a non-empty object keyed by mode name (eco, normal, sport)");
+        throw std::runtime_error(path + ": 'modes' is required and must be a non-empty object keyed by mode name (eco, normal, sport, racing)");
     }
     const auto number = [&](const json& v, const std::string& ctx, const std::string& key) {
         if (!v.is_number()) throw std::runtime_error(ctx + ": '" + key + "' must be a number");
@@ -181,7 +198,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
     };
     for (auto it = j.at("modes").begin(); it != j.at("modes").end(); ++it) {
         const int mi = mode_index(it.key());
-        if (mi < 0) throw std::runtime_error(path + ": modes: unknown mode '" + it.key() + "' (expected eco, normal or sport)");
+        if (mi < 0) throw std::runtime_error(path + ": modes: unknown mode '" + it.key() + "' (expected eco, normal, sport or racing)");
         const std::string ctx = path + ": modes." + it.key();
         if (!it.value().is_object()) throw std::runtime_error(ctx + " must be an object");
         d.modes_bits = static_cast<std::uint8_t>(d.modes_bits | vehicle::drive_mode_bit(static_cast<vehicle::DriveMode>(mi)));
@@ -224,6 +241,13 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
             } else if (k == "launch_control_default") p.launch_control_default = boolean(v, ctx, k);
             else if (k == "launch_control_allowed") p.launch_control_allowed = boolean(v, ctx, k);
             else if (k == "nitrous_arm_allowed") p.nitrous_arm_allowed = boolean(v, ctx, k);
+            else if (k == "epb_mode") p.epb_mode = epb_mode_from(v, ctx);
+            else if (k == "abs_default") p.abs_default = boolean(v, ctx, k);
+            else if (k == "esc_default") {
+                const int em = v.is_string() ? esc_mode_from_name(v.get<std::string>()) : -1;
+                if (em < 0) throw std::runtime_error(ctx + ": 'esc_default' must be one of off, on, sport");
+                p.esc_default = static_cast<vehicle::EscMode>(em);
+            }
             else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
         }
     }
@@ -242,8 +266,125 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
     }
 }
 
+// ABS / ESC (assists I5 part 2 / I6): the abs and esc blocks. Every key is optional (the AbsDesc / EscDesc defaults);
+// ranges are validate_abs / validate_esc's.
+void read_abs(const json& a, const std::string& path, vehicle::AssistUnitDesc& unit) {
+    const std::string ctx = path + ": abs";
+    if (!a.is_object()) throw std::runtime_error(ctx + " must be an object");
+    vehicle::AbsDesc d;
+    for (auto it = a.begin(); it != a.end(); ++it) {
+        const std::string& k = it.key();
+        if (k == "default_enabled") {
+            if (!it.value().is_boolean()) throw std::runtime_error(ctx + ": 'default_enabled' must be a boolean");
+            d.default_enabled = it.value().get<bool>();
+        } else if (k == "rear_select_low") {
+            if (!it.value().is_boolean()) throw std::runtime_error(ctx + ": 'rear_select_low' must be a boolean");
+            d.rear_select_low = it.value().get<bool>();
+        } else if (k == "target_slip") d.target_slip = optional_positive(a, "target_slip", ctx);
+        else if (k == "min_speed_mps") d.min_speed_mps = optional_positive(a, "min_speed_mps", ctx);
+        else if (k == "slip_floor_mps") d.slip_floor_mps = optional_positive(a, "slip_floor_mps", ctx);
+        else if (k == "kp") d.kp = optional_positive(a, "kp", ctx);
+        else if (k == "ki_per_s") d.ki_per_s = optional_positive(a, "ki_per_s", ctx);
+        else if (k == "release_rate_per_s") d.release_rate_per_s = optional_positive(a, "release_rate_per_s", ctx);
+        else if (k == "apply_rate_per_s") d.apply_rate_per_s = optional_positive(a, "apply_rate_per_s", ctx);
+        else if (k == "reanchor_rate_per_s") d.reanchor_rate_per_s = optional_positive(a, "reanchor_rate_per_s", ctx);
+        else if (k == "front_split_rate_per_s") d.front_split_rate_per_s = optional_positive(a, "front_split_rate_per_s", ctx);
+        else if (k == "reanchor_scale") {
+            if (!it.value().is_number()) throw std::runtime_error(ctx + ": 'reanchor_scale' must be a number");
+            d.reanchor_scale = it.value().get<real>();
+        } else if (k == "front_split_max") {
+            if (!it.value().is_number()) throw std::runtime_error(ctx + ": 'front_split_max' must be a number");
+            d.front_split_max = it.value().get<real>();
+        } else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
+    }
+    try {
+        vehicle::validate_abs(d);
+    } catch (const std::invalid_argument& e) {
+        throw std::runtime_error(path + ": " + e.what());
+    }
+    unit.abs = d;
+}
+
+void read_esc_mode_params(const json& o, const std::string& ctx, vehicle::EscModeParams& p) {
+    if (!o.is_object()) throw std::runtime_error(ctx + " must be an object");
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const std::string& k = it.key();
+        if (!it.value().is_number()) throw std::runtime_error(ctx + ": '" + k + "' must be a number");
+        const real v = it.value().get<real>();
+        if (k == "deadband_rad_s") p.deadband_rad_s = v;
+        else if (k == "deadband_fraction") p.deadband_fraction = v;
+        else if (k == "brake_gain_per_rad_s") p.brake_gain_per_rad_s = v;
+        else if (k == "max_brake") p.max_brake = v;
+        else if (k == "torque_gain_per_rad_s") p.torque_gain_per_rad_s = v;
+        else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
+    }
+}
+
+// esc: modes (array of off / on / sport, "on" required), default_mode, the vehicle-level keys, the mode parameters of
+// mode on at the top level and "mode_params": {"sport": {overrides}} (sport starts from on's values).
+void read_esc(const json& a, const std::string& path, vehicle::AssistUnitDesc& unit) {
+    const std::string ctx = path + ": esc";
+    if (!a.is_object()) throw std::runtime_error(ctx + " must be an object");
+    vehicle::EscDesc d;
+    vehicle::EscModeParams base;
+    json base_params = json::object();
+    for (auto it = a.begin(); it != a.end(); ++it) {
+        const std::string& k = it.key();
+        if (k == "modes") {
+            if (!it.value().is_array() || it.value().empty()) throw std::runtime_error(ctx + ": 'modes' must be a non-empty array of mode names");
+            d.modes_bits = 0;
+            for (const json& m : it.value()) {
+                const int mi = m.is_string() ? esc_mode_from_name(m.get<std::string>()) : -1;
+                if (mi < 0) throw std::runtime_error(ctx + ": 'modes' entries must be one of off, on, sport");
+                const std::uint8_t bit = vehicle::esc_mode_bit(static_cast<vehicle::EscMode>(mi));
+                if (d.modes_bits & bit) throw std::runtime_error(ctx + ": duplicate mode '" + m.get<std::string>() + "' in 'modes'");
+                d.modes_bits = static_cast<std::uint8_t>(d.modes_bits | bit);
+            }
+        } else if (k == "default_mode" || k == "mode_params") {
+            // read below, after 'modes'
+        } else if (k == "characteristic_speed_mps") d.characteristic_speed_mps = optional_positive(a, "characteristic_speed_mps", ctx);
+        else if (k == "max_lateral_accel_mps2") d.max_lateral_accel_mps2 = optional_positive(a, "max_lateral_accel_mps2", ctx);
+        else if (k == "min_speed_mps") d.min_speed_mps = optional_positive(a, "min_speed_mps", ctx);
+        else if (k == "brake_rate_per_s") d.brake_rate_per_s = optional_positive(a, "brake_rate_per_s", ctx);
+        else if (k == "deadband_rad_s" || k == "deadband_fraction" || k == "brake_gain_per_rad_s" || k == "max_brake" || k == "torque_gain_per_rad_s") {
+            base_params[k] = it.value();
+        } else throw std::runtime_error(ctx + ": unknown field '" + k + "'");
+    }
+    if (!(d.modes_bits & vehicle::esc_mode_bit(vehicle::EscMode::On))) throw std::runtime_error(ctx + ": 'modes' must contain 'on'");
+    read_esc_mode_params(base_params, ctx, base);
+    for (auto& p : d.params) p = base;
+    if (a.contains("default_mode")) {
+        const json& v = a.at("default_mode");
+        const int mi = v.is_string() ? esc_mode_from_name(v.get<std::string>()) : -1;
+        if (mi < 0 || !(d.modes_bits & vehicle::esc_mode_bit(static_cast<vehicle::EscMode>(mi)))) {
+            throw std::runtime_error(ctx + ": 'default_mode' must be one of the listed 'modes'");
+        }
+        d.default_mode = static_cast<vehicle::EscMode>(mi);
+    }
+    if (a.contains("mode_params")) {
+        const json& mp = a.at("mode_params");
+        if (!mp.is_object()) throw std::runtime_error(ctx + ": 'mode_params' must be an object");
+        for (auto it = mp.begin(); it != mp.end(); ++it) {
+            const int mi = esc_mode_from_name(it.key());
+            if (mi != static_cast<int>(vehicle::EscMode::Sport)) {
+                throw std::runtime_error(ctx + ": mode_params: only 'sport' takes parameters (mode 'on' is the block's own keys), got '" + it.key() + "'");
+            }
+            if (!(d.modes_bits & vehicle::esc_mode_bit(vehicle::EscMode::Sport))) {
+                throw std::runtime_error(ctx + ": mode_params for 'sport' but 'sport' is not in 'modes'");
+            }
+            read_esc_mode_params(it.value(), ctx + ".mode_params.sport", d.params[static_cast<std::size_t>(vehicle::EscMode::Sport)]);
+        }
+    }
+    try {
+        vehicle::validate_esc(d);
+    } catch (const std::invalid_argument& e) {
+        throw std::runtime_error(path + ": " + e.what());
+    }
+    unit.esc = d;
+}
+
 void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& part) {
-    reject_unknown(j, {"format", "kind", "name", "source", "extends", "grade", "traction_control", "launch_control", "aero_control"}, path);
+    reject_unknown(j, {"format", "kind", "name", "source", "extends", "grade", "traction_control", "launch_control", "aero_control", "abs", "esc"}, path);
     part.kind = ElectronicsKind::AssistUnit;
     if (!j.contains("grade") || !j.at("grade").is_string()) {
         throw std::runtime_error(path + ": 'grade' is required (\"street\", \"sport\" or \"racing\")");
@@ -263,6 +404,9 @@ void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& p
     }
     if (j.contains("launch_control")) read_launch_control(j.at("launch_control"), path, part.unit);
     if (j.contains("aero_control")) read_aero_control(j.at("aero_control"), path, part.unit);
+    if (j.contains("esc") && !j.contains("abs")) throw std::runtime_error(path + ": 'esc' needs an 'abs' block (ESC brakes single wheels through the ABS modulation)");
+    if (j.contains("abs")) read_abs(j.at("abs"), path, part.unit);
+    if (j.contains("esc")) read_esc(j.at("esc"), path, part.unit);
     if (!j.contains("traction_control")) return;
     const json& tc = j.at("traction_control");
     const std::string ctx = path + ": traction_control";
@@ -335,6 +479,20 @@ void read_assist_unit(const json& j, const std::string& path, ElectronicsPart& p
     }
 }
 
+// Q3 / I8: the electronic parking brake part (kind "epb"): max_engage_speed_mps (required, finite > 0), epb_mode
+// (optional, default park_only). Drives the car's handbrake rows; the vehicle loader requires them.
+void read_epb(const json& j, const std::string& path, ElectronicsPart& part) {
+    reject_unknown(j, {"format", "kind", "name", "source", "extends", "max_engage_speed_mps", "epb_mode"}, path);
+    part.kind = ElectronicsKind::Epb;
+    part.epb.max_engage_speed_mps = require_positive(j, "max_engage_speed_mps", path);
+    if (j.contains("epb_mode")) part.epb.epb_mode = epb_mode_from(j.at("epb_mode"), path);
+    try {
+        vehicle::validate_epb(part.epb);
+    } catch (const std::invalid_argument& e) {
+        throw std::runtime_error(path + ": " + e.what());
+    }
+}
+
 } // namespace
 
 ElectronicsPart load_electronics_json(const std::string& path) {
@@ -348,7 +506,7 @@ ElectronicsPart load_electronics_json(const std::string& path) {
                                  "\" (expected \"physics_sim.electronics/1\")");
     }
     if (!j.contains("kind") || !j.at("kind").is_string()) {
-        throw std::runtime_error(path + ": 'kind' is required (\"launch_control\", \"assist_fitment\", \"assist_unit\" or \"drive_modes\")");
+        throw std::runtime_error(path + ": 'kind' is required (\"launch_control\", \"assist_fitment\", \"assist_unit\", \"drive_modes\" or \"epb\")");
     }
     const std::string kind = j.at("kind").get<std::string>();
 
@@ -357,10 +515,17 @@ ElectronicsPart load_electronics_json(const std::string& path) {
     if (j.contains("source") && j.at("source").is_string()) part.source = j.at("source").get<std::string>();
 
     if (kind == "launch_control") {
-        reject_unknown(j, {"format", "kind", "name", "source", "extends", "rpm", "max_speed_mps", "channel", "fitted"}, path);
+        reject_unknown(j, {"format", "kind", "name", "source", "extends", "rpm", "max_speed_mps", "channel", "fitted", "max_limiter_fraction"}, path);
         part.kind = ElectronicsKind::LaunchControl;
         part.launch.rpm = require_positive(j, "rpm", path);
         part.launch.max_speed_mps = require_positive(j, "max_speed_mps", path);
+        if (j.contains("max_limiter_fraction")) { // G1: the clamp of rpm against a low engine limiter
+            const json& f = j.at("max_limiter_fraction");
+            if (!f.is_number() || !std::isfinite(f.get<real>()) || !(f.get<real>() > real(0.0)) || !(f.get<real>() < real(1.0))) {
+                throw std::runtime_error(path + ": 'max_limiter_fraction' must be a number in (0, 1)");
+            }
+            part.launch.max_limiter_fraction = f.get<real>();
+        }
         if (j.contains("channel")) {
             if (!j.at("channel").is_string() || j.at("channel").get<std::string>().empty()) {
                 throw std::runtime_error(path + ": 'channel' must be a non-empty string");
@@ -391,8 +556,10 @@ ElectronicsPart load_electronics_json(const std::string& path) {
         read_assist_unit(j, path, part);
     } else if (kind == "drive_modes") {
         read_drive_modes(j, path, part);
+    } else if (kind == "epb") {
+        read_epb(j, path, part);
     } else {
-        throw std::runtime_error(path + ": unknown electronics kind \"" + kind + "\" (expected \"launch_control\", \"assist_fitment\", \"assist_unit\" or \"drive_modes\")");
+        throw std::runtime_error(path + ": unknown electronics kind \"" + kind + "\" (expected \"launch_control\", \"assist_fitment\", \"assist_unit\", \"drive_modes\" or \"epb\")");
     }
     return part;
 }

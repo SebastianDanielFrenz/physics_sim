@@ -12,7 +12,10 @@ add_executable(ps_unit_tests
   test_assist_slope_crawl_diag.cpp
   test_assist_low_speed.cpp
   test_assist_launch.cpp
+  test_limiter_range.cpp
   test_assist_drive_modes.cpp
+  test_epb.cpp
+  test_abs_esc.cpp
   test_assist_launch_default.cpp
   test_assist_channel_writeback.cpp
   test_assist_all_together.cpp
@@ -142,6 +145,7 @@ add_executable(ps_unit_tests
   test_wot_generation.cpp
   test_engine_installation_io.cpp
   test_engine_hot_swap.cpp
+  test_turbo_envelope_prebuilt.cpp
   test_firing_order.cpp
   test_audio_time_map.cpp
   test_audio_voice.cpp

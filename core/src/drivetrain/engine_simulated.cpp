@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -215,6 +216,11 @@ SimulatedEngine::ManifoldRhs manifold_rhs_impl(const SimulatedEngineMaps& m, con
         ve = m.maps.ve.value(rpm, p);
         dve_dp = m.maps.ve.dvalue_dy(rpm, p);
     }
+    if (m.rolloff.active(rpm)) { // G1: the breathing roll-off past the maps' data (factor < 1 only there)
+        const real rf = m.rolloff.factor(rpm);
+        ve *= rf;
+        dve_dp *= rf;
+    }
     const real vol_rate = m.v_disp_m3 * m.c_cycle * std::max(omega, real(0.0)) / kTwoPi; // m^3/s swept (VE 1)
     real dm_cyl_dp = real(0.0);
     if (nc && omega > real(0.0) && nc->mdot_n_kg_s > real(0.0) && nc->oxidizer) {
@@ -255,9 +261,14 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
     const bool wot_rows = has_wot_rows(m.maps);
     const MapPressureIndex ix = wot_rows ? map_pressure_index(m.maps, rpm, p, amb.p_amb) : MapPressureIndex{p, real(1.0), real(0.0)};
     const real yp = ix.y;
-    const real ve = m.maps.ve.value(rpm, yp);
-    const real dve_drpm = wot_rows ? m.maps.ve.dvalue_dx(rpm, yp) + m.maps.ve.dvalue_dy(rpm, yp) * ix.dy_drpm
-                                   : m.maps.ve.dvalue_dx(rpm, p);
+    real ve = m.maps.ve.value(rpm, yp);
+    real dve_drpm = wot_rows ? m.maps.ve.dvalue_dx(rpm, yp) + m.maps.ve.dvalue_dy(rpm, yp) * ix.dy_drpm
+                             : m.maps.ve.dvalue_dx(rpm, p);
+    if (m.rolloff.active(rpm)) { // G1: the breathing roll-off (manifold_rhs_impl applies the same factor to the plenum balance)
+        const real rf = m.rolloff.factor(rpm);
+        dve_drpm = dve_drpm * rf + ve * m.rolloff.slope_per_rpm(rpm);
+        ve *= rf;
+    }
     const real air_per_ve = p / amb.r_t * m.v_disp_m3 * m.c_cycle;
     e.m_air_rev = ve * air_per_ve;
     const real dma_drpm = dve_drpm * air_per_ve;
@@ -459,6 +470,11 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
         pmep = m.maps.pmep_excess_pa.value(rpm, yp);
         dpmep_drpm = wot_rows ? m.maps.pmep_excess_pa.dvalue_dx(rpm, yp) + m.maps.pmep_excess_pa.dvalue_dy(rpm, yp) * ix.dy_drpm
                               : m.maps.pmep_excess_pa.dvalue_dx(rpm, p);
+        if (m.rolloff.active(rpm)) { // G1: the excess is the gas-exchange loss of the air flow, which the roll-off has cut
+            const real rf = m.rolloff.factor(rpm);
+            dpmep_drpm = dpmep_drpm * rf + pmep * m.rolloff.slope_per_rpm(rpm);
+            pmep *= rf;
+        }
     }
     e.tau_pump = -s_w * (amb.p_amb - p + pmep) * vc_2pi;
     const real f_rpm = m.maps.friction_torque_nm.evaluate(rpm);
@@ -593,22 +609,31 @@ void fill_idle_control(const SimulatedEngineMaps& m,const Ambient& amb,real idle
 // runtime refill never throws).
 void fill_steady_tables(const SimulatedEngineMaps& m, const Ambient& amb, real idle_rpm, real idle_max_x, real idle_max_torque_nm,
                         SimulatedSteadyTables& t,
-                        bool check_monotone) {
+                        bool check_monotone, real monotone_tolerance = real(0.0)) {
     const StarterDesc no_starter{};
     const std::vector<real>& rpm_axis = t.steady_torque_nm.x;
     const std::vector<real>& plate_axis = t.steady_torque_nm.y;
     for (std::size_t ir = 0; ir < rpm_axis.size(); ++ir) {
         const real rpm = rpm_axis[ir];
+        // G1 plateau tolerance: a point may lie below the highest torque of the row so far (row_max, at a smaller plate) by at
+        // most monotone_tolerance x the row's largest |torque| so far (row_peak); 0 = the exact pre-G1 check (1e-9 N*m) -
+        // identical to comparing with the previous point while the row is non-decreasing, which every row that passed was.
+        real row_peak = real(0.0);
+        real row_max = -std::numeric_limits<real>::infinity();
         for (std::size_t ix = 0; ix < plate_axis.size(); ++ix) {
             const real v = steady_net_torque(m, amb, no_starter, rpm, plate_axis[ix], real(0.0), true);
-            if (check_monotone && ix > 0 && v < t.steady_torque_nm.values[ir * plate_axis.size() + ix - 1] - real(1e-9)) {
+            const real allowed = std::max(real(1e-9), monotone_tolerance * row_peak);
+            row_peak = std::max(row_peak, std::abs(v));
+            if (check_monotone && ix > 0 && v < row_max - allowed) {
                 throw std::runtime_error("SimulatedEngine: steady torque is not non-decreasing in plate position (rpm " +
                                          std::to_string(rpm) + ", plate " + std::to_string(plate_axis[ix - 1]) + " -> " +
                                          std::to_string(plate_axis[ix]) + ": " +
                                          std::to_string(t.steady_torque_nm.values[ir * plate_axis.size() + ix - 1]) +
-                                         " -> " + std::to_string(v) + " N*m)");
+                                         " -> " + std::to_string(v) + " N*m; row maximum so far " + std::to_string(row_max) +
+                                         " N*m, plate_monotone_tolerance " + std::to_string(monotone_tolerance) + ")");
             }
             t.steady_torque_nm.values[ir * plate_axis.size() + ix] = v;
+            row_max = std::max(row_max, v);
         }
         t.steady_wot_nm.y[ir] = t.steady_torque_nm.values[ir * plate_axis.size() + plate_axis.size() - 1];
         t.steady_motoring_nm.y[ir] = steady_net_torque(m, amb, no_starter, rpm, real(0.0), real(0.0), false);
@@ -753,7 +778,8 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_model_maps(con
     return build_maps_impl(desc, false);
 }
 
-std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables) {
+std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables,
+                                                                           const RpmRolloff* rolloff) {
     if (desc.maps_pending) {
         throw std::runtime_error("SimulatedEngine: the engine's maps are pending (it was loaded with EngineMapOptions::generate = "
                                  "false); load it again with generate = true to run it");
@@ -831,6 +857,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
     m->afr_stoich = desc.fuels.front().afr_stoich;
     m->c_k = desc.maps.friction_torque_nm.evaluate(real(0.0));
     m->limiter = desc.limiter;
+    m->rolloff = rolloff != nullptr ? *rolloff : rpm_rolloff(desc); // G1: before the steady tables, which read it
     if (desc.breakaway_torque_nm < m->c_k) {
         throw std::runtime_error("SimulatedEngine: breakaway_torque_nm must be >= maps.friction_torque_nm(0)");
     }
@@ -871,7 +898,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
             for (int i = 0; i <= kReq; ++i) t.inverse_plate.y.push_back(real(i) / real(kReq));
             t.inverse_plate.values.assign(rpm_axis.size() * t.inverse_plate.y.size(), real(0.0));
         }
-        fill_steady_tables(*m, amb, desc.idle_rpm, desc.idle.max_throttle, desc.idle.max_torque_nm, t, true);
+        fill_steady_tables(*m, amb, desc.idle_rpm, desc.idle.max_throttle, desc.idle.max_torque_nm, t, true, desc.plate_monotone_tolerance);
         m->steady_wot_nm = std::move(t.steady_wot_nm);
         m->steady_motoring_nm = std::move(t.steady_motoring_nm);
         m->steady_torque_nm = std::move(t.steady_torque_nm);
@@ -911,6 +938,10 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
     f.pod(m->limiter.rpm);
     f.pod(m->limiter.hysteresis_rpm);
     f.pod(m->limiter.band_rpm);
+    if (m->rolloff.armed()) { // G1: folded only when armed, so every engine inside its data keeps its byte layout
+        f.pod(m->rolloff.start_rpm);
+        f.pod(m->rolloff.end_rpm);
+    }
     f.vec(m->psi);
     f.pod(m->ref_p_pa);
     f.pod(m->ref_t_k);
@@ -929,7 +960,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
         hd.maps = desc.cam_profile_maps.front();
         hd.cam_profile_ids.clear();
         hd.cam_profile_maps.clear();
-        m->cam_high = build_maps_impl(hd, steady_tables);
+        m->cam_high = build_maps_impl(hd, steady_tables, &m->rolloff);
         m->cam_switching = desc.cam_switching;
         f.pod(m->cam_high->content_hash);
         f.pod(m->cam_switching.rpm_on);
@@ -949,7 +980,7 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
             nd.maps = desc.lift_node_maps[k];
             nd.lift_u.clear();
             nd.lift_node_maps.clear();
-            m->lift_nodes.push_back(build_maps_impl(nd, steady_tables));
+            m->lift_nodes.push_back(build_maps_impl(nd, steady_tables, &m->rolloff));
         }
         m->lift_u = desc.lift_u;
         m->lift_control = desc.lift_control;
@@ -1446,7 +1477,24 @@ void SimulatedEngine::step_cam_switching(const Sensors& sensors, real rpm, real 
     }
 }
 
-void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
+PreparedTurboEnvelope SimulatedEngine::prepare_turbo_envelope(const TurboPairDesc& desc) const {
+    PreparedTurboEnvelope p;
+    p.turbo = desc;
+    p.maps = maps_;
+    if (envelope_desc_) {
+        auto d = std::make_shared<SimulatedEngineDesc>(*envelope_desc_);
+        d->turbo_pair = desc;
+        p.desc = std::move(d);
+    }
+    return p;
+}
+
+void build_turbo_envelope(PreparedTurboEnvelope& p) {
+    p.envelope = p.desc ? full_load_envelope(*p.desc, p.maps) : nullptr;
+    p.built = true;
+}
+
+void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc, const PreparedTurboEnvelope* prepared) {
     if(!desc.maps) throw std::runtime_error("replace_turbo_configuration: missing prepared maps");
     if(turbo_) {
         // Preserve shaft angular speed, manifold and charge states; replacing
@@ -1464,7 +1512,9 @@ void SimulatedEngine::replace_turbo_configuration(const TurboPairDesc& desc) {
     if (envelope_desc_) {
         auto d = std::make_shared<SimulatedEngineDesc>(*envelope_desc_);
         d->turbo_pair = desc;
-        envelope_ = full_load_envelope(*d, maps_);
+        // Q5: a prebuilt envelope is valid only for the maps it was built against (same object: the pure function's inputs).
+        if (prepared && prepared->built && prepared->maps == maps_) envelope_ = prepared->envelope;
+        else envelope_ = full_load_envelope(*d, maps_);
         envelope_desc_ = std::move(d);
     }
 }

@@ -97,10 +97,20 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                     const bool kickdown = desc_.auto_shift.kickdown_throttle > real(0.0) && shift_req >= desc_.auto_shift.kickdown_throttle &&
                                           !kickdown_spent_;
                     if (dwell_ok || kickdown) {
-                        const real up_th = lerp(pick(s.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_zero_throttle),
-                                                pick(s.up_rpm_at_full_throttle, desc_.auto_shift.up_rpm_at_full_throttle), shift_req);
-                        const real down_th = lerp(pick(s.down_rpm_at_zero_throttle, desc_.auto_shift.down_rpm_at_zero_throttle),
-                                                  pick(s.down_rpm_at_full_throttle, desc_.auto_shift.down_rpm_at_full_throttle), shift_req);
+                        real up_z = pick(s.up_rpm_at_zero_throttle, desc_.auto_shift.up_rpm_at_zero_throttle);
+                        real up_f = pick(s.up_rpm_at_full_throttle, desc_.auto_shift.up_rpm_at_full_throttle);
+                        real dn_z = pick(s.down_rpm_at_zero_throttle, desc_.auto_shift.down_rpm_at_zero_throttle);
+                        real dn_f = pick(s.down_rpm_at_full_throttle, desc_.auto_shift.down_rpm_at_full_throttle);
+                        // G1: points above the effective limiter's cap are scaled down together (1 = untouched, bit for bit).
+                        const real k = shift_point_scale(up_z, up_f, desc_.shift_rpm_cap);
+                        if (k != real(1.0)) {
+                            up_z *= k;
+                            up_f *= k;
+                            dn_z *= k;
+                            dn_f *= k;
+                        }
+                        const real up_th = lerp(up_z, up_f, shift_req);
+                        const real down_th = lerp(dn_z, dn_f, shift_req);
                         if (dwell_ok && engine_rpm > up_th && s.gearbox_current < s.max_gear) desired_target = s.gearbox_current + 1;
                         else if (engine_rpm < down_th && s.gearbox_current > 1) desired_target = s.gearbox_current - 1;
                     }

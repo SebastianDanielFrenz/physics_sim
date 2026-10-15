@@ -11,7 +11,7 @@
 // Shipping increments: P3b-1 = WastegateSaturated, BoostBelowTarget, BoostAboveTarget, TurboRotorCap, CompressorSurge,
 // CompressorChoke, ClutchCapacity, RevLimiter, FuelCut, MeanPistonSpeed, MapGridEdge; P3b-2 = KitFuelLean, N2OBottleDuration,
 // N2OBottlePressureDrop (a sweep with DynoSweepSpec::nitrous) and the Simulated remedies (ps/drivetrain/limit_remedies.h);
-// T0 adds GearboxInputTorque (check_driveline_limits against GearboxDesc::rated_input_torque_nm);
+// T0 adds GearboxInputTorque (check_driveline_limits against GearboxDesc::rated_input_torque_nm); G1 adds BeyondEngineData;
 // not produced (value reserved, append-only): ChargeTemperature (no limit exists in any data file), InjectorDuty (no injector model exists: fuel is a mass flow), ValveFlowChoke
 // (no valve Mach diagnostic exists), Knock (C17b).
 // docs/data_formats/engine.md "Dyno sweep" -> "Limit findings" has the thresholds and sources.
@@ -47,6 +47,8 @@ enum class LimitKind : std::uint16_t {
     MeanPistonSpeed = 16,      // P3b-1
     MapGridEdge = 17,          // P3b-1: a map lookup is clamped at the edge of its grid
     Knock = 18,                // engine garage P7: the knock limit holds the applied spark below the ECU schedule
+    BeyondEngineData = 19,     // G1: the point lies above the engine's own data, where an armed roll-off cuts the fired torque
+                               // (ps/drivetrain/limiter_range.h): Limiting inside the band, Exceeded at/after its end
 };
 
 // Near: within a margin of the limit (information); Limiting: this part caps the output here; Exceeded: the target is

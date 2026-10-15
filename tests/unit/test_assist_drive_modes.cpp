@@ -35,7 +35,7 @@
 //          and (assists I7c) the physics writes that code into the TC channel (get_control); a driver write wins until the next
 //          mode change; at spawn the TC channel default is the default mode's and nothing is written; Sport TC default Relaxed
 //          on a Street-unit car resolves to On (I1 fallback)
-//   C1     channel default = default mode code, available bits 0b111 (0b101 with eco removed), a car without the part: bits 0,
+//   C1     channel default = default mode code, available bits 0b1111 since Q3 / I8 added Racing (0b111 before; 0b1110 with eco removed), a car without the part: bits 0,
 //          no snapshot fields; an unoffered request maps to the part's default mode
 //   G1     brake 1 + throttle 1 from rest in 1st gear with assist.launch_control 1 for 1.5 s: launch_phase Armed (1) seen in
 //          Sport, never in Eco or Normal
@@ -305,7 +305,7 @@ TEST_CASE("L1: the shipped part carries the owner's values", "[assist][drive_mod
     const io::ElectronicsPart p = io::load_electronics_json(kPart);
     REQUIRE(p.kind == io::ElectronicsKind::DriveModes);
     const DriveModesDesc& d = p.drive_modes;
-    CHECK(d.modes_bits == 0b111);
+    CHECK(d.modes_bits == 0b1111); // Q3 / I8: Racing added (its values: test_epb.cpp L2)
     CHECK(d.default_mode == DriveMode::Normal);
     const DriveModeParams& eco = d.params[0];
     const DriveModeParams& nor = d.params[1];
@@ -412,7 +412,7 @@ TEST_CASE("L3: attach to a car - generic car, two parts, extends, none, merged h
     // a generic car accepts the part (every shipped car has a manual_tcu)
     const VehicleDesc sedan = load_sedan(with_modes(kPart));
     REQUIRE(sedan.drive_modes.has_value());
-    CHECK(sedan.drive_modes->modes_bits == 0b111);
+    CHECK(sedan.drive_modes->modes_bits == 0b1111);
     CHECK_FALSE(load_sedan().drive_modes.has_value());
     // two parts on one car
     io::VehicleLoadOptions two;
@@ -431,7 +431,7 @@ TEST_CASE("L3: attach to a car - generic car, two parts, extends, none, merged h
                            {"modes", {{"eco", nullptr}, {"sport", {{"auto_clutch", {{"close_time_s", 0.04}}}}}}}}
                           .dump(1));
     const io::ElectronicsPart cp = io::load_electronics_json(child);
-    CHECK(cp.drive_modes.modes_bits == 0b110);
+    CHECK(cp.drive_modes.modes_bits == 0b1110); // Q3 / I8: racing inherited (0b110 before)
     CHECK(*cp.drive_modes.params[2].clutch_close_time_s == 0.04);
     CHECK(cp.drive_modes.params[2].pedal_bend->y == 0.8); // inherited
     CHECK(cp.drive_modes.default_mode == DriveMode::Normal);
@@ -1031,10 +1031,10 @@ TEST_CASE("C1: channel, default, available bits, snapshot, unoffered request", "
         CHECK(w.get_control("assist.drive_mode") == 1.0);
         w.step();
         const auto& pt = w.powertrain_state(r.rig.vehicle);
-        CHECK(pt.drive_modes_available_bits == 0b111);
+        CHECK(pt.drive_modes_available_bits == 0b1111);
         CHECK(pt.drive_mode_requested == 1);
         CHECK(pt.drive_mode_effective == 1);
-        for (int code = 0; code < 3; ++code) {
+        for (int code = 0; code < 4; ++code) {
             w.set_control("assist.drive_mode", static_cast<real>(code));
             w.step();
             CHECK(w.powertrain_state(r.rig.vehicle).drive_mode_requested == code);
@@ -1043,7 +1043,7 @@ TEST_CASE("C1: channel, default, available bits, snapshot, unoffered request", "
         // out-of-range and fractional requests: round + clamp
         w.set_control("assist.drive_mode", 7.0);
         w.step();
-        CHECK(w.powertrain_state(r.rig.vehicle).drive_mode_effective == 2);
+        CHECK(w.powertrain_state(r.rig.vehicle).drive_mode_effective == 3); // Q3 / I8: clamps to Racing (was Sport)
         w.set_control("assist.drive_mode", -3.0);
         w.step();
         CHECK(w.powertrain_state(r.rig.vehicle).drive_mode_effective == 0);
@@ -1058,7 +1058,7 @@ TEST_CASE("C1: channel, default, available bits, snapshot, unoffered request", "
         Rig r = make_rig(d, 1);
         World& w = r.w();
         w.step();
-        CHECK(w.powertrain_state(r.rig.vehicle).drive_modes_available_bits == 0b110);
+        CHECK(w.powertrain_state(r.rig.vehicle).drive_modes_available_bits == 0b1110);
         w.set_control("assist.drive_mode", 0.0);
         w.step();
         CHECK(w.powertrain_state(r.rig.vehicle).drive_mode_requested == 0);

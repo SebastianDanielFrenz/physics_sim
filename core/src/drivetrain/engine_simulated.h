@@ -62,11 +62,14 @@
 // tank's, else fuels[0]). Rotary geometry is refused here (C13).
 
 #pragma once
+
+#include "ps/drivetrain/turbo_envelope.h"
 #include "turbo_pair.h"
 
 #include "engine.h"
 #include "nitrous_flow.h"
 #include "ps/drivetrain/isa_air.h"
+#include "ps/drivetrain/limiter_range.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/types.h"
@@ -97,6 +100,10 @@ struct SimulatedEngineMaps {
     real lhv_j_kg = 0.0, afr_stoich = 0.0; // fuels[0]
     real c_k = 0.0;                // maps.friction_torque_nm(0): the Coulomb row's kinetic capacity
     EngineLimiterDesc limiter;     // runtime only: the steady tables below IGNORE it (like EngineTorqueMap's torque_demand)
+    // G1 (limiter_range.h): the volumetric-efficiency roll-off past the maps' data, one for the whole engine (every cam
+    // profile / lift node carries the same one). Disarmed (the default and every engine whose limiter lies inside its
+    // maps) reads exactly as before G1; armed, it is folded into content_hash.
+    RpmRolloff rolloff;
 
     // --- derived at construction ------------------------------------------
     std::vector<real> psi;         // kPsiIntervals + 1 knots, pr = i/kPsiIntervals
@@ -162,6 +169,8 @@ struct FullLoadEnvelope {
 };
 
 class SimulatedEngine;
+// Q5 test hook: drops the process-wide envelope memo so a second build is an independent run (bit-identity tests).
+void clear_full_load_envelope_memo();
 // Pedal plan P1: the memoised envelope of a turbo engine with an electronic throttle (nullptr otherwise, and for null
 // maps). Allocates and runs ~30 held-crank dyno points (cold and pre-spun, 0.6 s for the hyper) on a miss: construction / caller thread
 // only, never a job. Implemented in engine_dyno.cpp (it reuses the dyno's stepped point).
@@ -359,7 +368,10 @@ public:
 
     // Pedal plan P1: also rebuilds the full-load envelope for the new hardware (full_load_envelope, a dyno run on a
     // memo miss) - caller thread, between steps.
-    void replace_turbo_configuration(const TurboPairDesc& desc);
+    // Q5: with `prepared` (from prepare_turbo_envelope, built by build_turbo_envelope) the envelope is taken from it when it
+    // was built for this engine's current maps; otherwise (or without) it is built here as before.
+    void replace_turbo_configuration(const TurboPairDesc& desc, const PreparedTurboEnvelope* prepared = nullptr);
+    [[nodiscard]] PreparedTurboEnvelope prepare_turbo_envelope(const TurboPairDesc& desc) const;
     // Pedal plan P1 white-box: the envelope in use (nullptr: NA engine, mechanical throttle, or built without one).
     [[nodiscard]] const FullLoadEnvelope* full_load_envelope_ptr() const { return envelope_.get(); }
     // Pedal plan P1 test hook (a held engine is a harness, never set by World; not hashed): -1 = the engine's own law,
@@ -482,7 +494,10 @@ public:
     [[nodiscard]] const WorkSplit& last_work_split() const { return work_split_; }
 
 private:
-    [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables);
+    // rolloff: null = rpm_rolloff(desc); the cam-profile / lift-node sub-builds pass the parent's (their desc copy lists
+    // only their own maps).
+    [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables,
+                                                                                   const RpmRolloff* rolloff = nullptr);
     void init_state_for(EngineState state);
     void set_live_ambient(real p_pa,real t_k);
     // Live control path: the ambient differs from the setup tables' OR the ECU's friction scale is not exactly 1.0

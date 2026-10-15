@@ -115,6 +115,74 @@ this reason when its `governor` block was added. A `soft_cut` limiter with
 no `governor` block is unaffected by C12 and keeps its pre-existing
 behaviour exactly.
 
+### Beyond the authored rpm range (G1)
+
+A garage may set `limiter.rpm` anywhere from 2000 to 20000 rpm. An engine's data (a torque map's curves, a simulated
+engine's maps or cycle grid) ends at some rpm `n_e`; a limiter above `n_e` lets the engine fire where nothing was authored.
+Before G1 every table was edge-clamped there, so the top row was held flat to any speed: an engine authored to 7000 rpm
+made its 7000 rpm torque at 20000 rpm, and its power rose without bound. The law below replaces that hold.
+Implementation: `ps/drivetrain/limiter_range.h`, tests `tests/unit/test_limiter_range.cpp`.
+
+**`n_e`, the authored top.**
+- Torque map: the top of the WOT, motoring and fuel-map rpm axes.
+- Simulated engine: the top of every engine map's rpm axis (`ve`, `eta_i`, MBT, friction, pmep excess, knock limit, the
+  WOT plenum rows), over every cam profile and lift node; the cycle `grid_rpm` while the maps are pending.
+- The ECU tables (`ecu.lambda_target`, `ecu.spark_advance_deg`) are control, not engine data, and do not count.
+
+**When it is armed.** Only when the engine can fire above its data: `fired_top > n_e`, where `fired_top` is the limiter
+rpm, or a governor's high idle when that is lower. An engine whose limiter lies inside its data is disarmed, and every
+result is the pre-G1 one bit for bit. Inside the data an armed engine is bit-identical too: the code branches on
+`rpm > n_e` and runs the old expressions below it.
+
+**The law.** `n_z = n_e (1 + b)`, with `b` = `rpm_rolloff_band_fraction`. The fired part of the torque is multiplied by
+
+    f(rpm) = 1                          rpm <= n_e
+           = (n_z - rpm) / (n_z - n_e)  n_e < rpm < n_z
+           = 0                          rpm >= n_z
+
+- Torque map: `f` scales the combustion span `w(rpm) - m(rpm)` (WOT minus motoring) and the fuel flow. Motoring torque
+  is untouched.
+- Simulated engine: `f` scales the volumetric efficiency (and its derivatives), so air mass, fuel, heat release and
+  torque follow through the cycle. The pumping excess (`pmep_excess`) is the gas-exchange loss of that air flow and is
+  scaled by the same `f`; the ideal pumping term and friction are untouched.
+- The analytic slopes carry `df/drpm = -1/(n_z - n_e)` inside the band, so the implicit engine step sees a consistent
+  Jacobian.
+- At and above `n_z` the engine makes no fired torque. It is then a pure brake (its motoring torque), so it cannot be
+  driven past `n_z` under power. `effective_limiter_rpm` is the lowest of the FuelCut rpm, a SoftCut's taper start, a
+  governor's high idle and the armed `n_z`. Auto-shift scales against it (vehicle.md `auto_shift`), and the dyno sweeps
+  up to the limiter as before.
+
+**Why this law.**
+1. Holding the top row is not physical. Past its design speed an engine's breathing collapses: valve float, port choke,
+   rising friction. Torque falls; it is not held. Of the simple shapes, falling to zero is the conservative one.
+2. Falling to zero at once at `n_e` would be a torque step. That step chatters against the limiter and breaks the
+   derivative the implicit step uses. A linear fall keeps torque continuous and the slope bounded.
+3. Only the fired part (and the flow-driven pumping excess) rolls off. Friction and the ideal pumping are mechanical and already authored as rising with rpm, so the
+   engine above `n_z` behaves as a motored engine. That gives a natural rev ceiling with no extra state.
+4. `b = 0.2` `[AS]`. This is a guess with no citation. It is a band of 20 % of the data's top (1400 rpm on a 7000 rpm
+   engine), wide enough that the per-tick torque change at any plausible rpm rate is small. It is short enough that an
+   engine never makes meaningful power far beyond what was authored.
+5. Configurable per engine file: `"rpm_rolloff_band_fraction"`, a number in `(0, 1]`, default 0.2.
+
+**Findings.**
+- Load: with `EngineMapOptions::warnings_out`, an armed engine adds `"<ctx>: Limiting: the L rpm limiter is above the
+  engine's data (it ends at n_e rpm): the fired torque rolls off to zero at n_z rpm"`.
+- Dyno: `run_dyno_sweep` adds `BeyondEngineData` findings (see "Limit findings" below).
+
+**Shipped engines.** Every shipped engine file is disarmed at its own limiter except `demo_i4_pipes.json`, the `[AS]`
+audio demo. It names no limiter, so it takes the default 6800 rpm `[D]` above its cycle grid's 6500 rpm top `[D]`, and its
+roll-off is armed over 6500..7800 rpm. Its 6500..6800 rpm strip, previously the edge-clamped 6500 row, now rolls off
+(f(6800) = 0.77). This is the one shipped behaviour G1 moves; it is outside the engine's data by construction.
+
+**Plate monotonicity tolerance (simulated engines).** Map generation checks that steady torque does not fall with
+throttle plate position along each rpm row. Since G1 a point may lie below the row's maximum so far by at most
+`plate_monotone_tolerance` x the row's largest |torque|.
+- Engine-file key `"plate_monotone_tolerance"`, a number in `[0, 0.05]`, default 0.04 `[AS]`. 0 is the exact pre-G1
+  check.
+- Measured on `toyota_a25a_fks_gen.json` `[M]`: Sketch quality dips 3.0 % (rpm 1500), Preview 0.11 %, Full none. The
+  default is the Sketch dip x 1.33; 0.025 still throws on Sketch.
+- A row that passed the old check passes the new one with identical values: the tables are not changed, only accepted.
+
 ### `governor`
 
 `GovernorDesc` (PHYS-033 P4 I4 C12) — an all-speed diesel governor with
@@ -1204,6 +1272,7 @@ filled and the required values NaN, `solved = false`, until `solve_remedy` runs 
 | `MeanPistonSpeed` (16) | simulated piston engines: stroke x rpm / 30 | `Near` >= 23, `Limiting` >= 25, `Exceeded` >= 28 m/s | m/s / 25 | engine `/limiter/rpm` | P3b-1 |
 | `MapGridEdge` (17) | the (rpm, p_im) of the point against the axes of the engine's maps (a lookup outside is clamped silently): >= 5 % of the window outside | `Exceeded` outside either edge; `Near` within 2 % of the span of the p_im axis's UPPER edge (the rpm axis has no `Near`: a sweep ends at the limiter, which the grid ends at too) | p_im Pa or rpm / the edge | engine `/cycle/grid_p_im_kpa` / `/cycle/grid_rpm` (a generated engine) or `/maps/ve/p_im_kpa` / `/maps/ve/rpm` | P3b-1 |
 | `Knock` (18) | simulated engines with a knock limit (`maps.theta_kl_deg`): window mean of the knock retard = scheduled spark minus theta_kl (`DynoPoint::knock_retard_deg`; NaN on a torque map, 0 without a limit) | `Near` > 0.05 deg, `Limiting` >= 5 deg | deg crank / 5 deg | fuel `/knock/ron` (`DynoSweepSpec::part_files.fuel`) + an unsolved `Simulated` placeholder remedy (`current` = the first listed fuel's RON; the RON that clears the retard needs one map generation per trial - not inverted) | P7 |
+| `BeyondEngineData` (19) | G1, an engine with an armed roll-off (see "Beyond the authored rpm range"): the swept rpm lies above the engine's data `n_e` | `Limiting` inside the band (`n_e < rpm < n_z`), `Exceeded` at/above `n_z` (no fired torque there) | rpm / `n_e` | engine `/limiter/rpm` | G1 |
 
 Every threshold is one entry of the table in `core/src/drivetrain/limit_thresholds.h`, tagged `[C]`/`[D]`/`[AS]`/`[M]`
 with its source (all `[AS]` or `[D]` today; the mean-piston-speed limit has no local source).

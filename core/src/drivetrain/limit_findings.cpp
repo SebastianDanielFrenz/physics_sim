@@ -24,6 +24,7 @@ const char* to_string(LimitKind k) {
     case LimitKind::MeanPistonSpeed: return "MeanPistonSpeed";
     case LimitKind::MapGridEdge: return "MapGridEdge";
     case LimitKind::Knock: return "Knock";
+    case LimitKind::BeyondEngineData: return "BeyondEngineData";
     }
     return "Unknown";
 }
