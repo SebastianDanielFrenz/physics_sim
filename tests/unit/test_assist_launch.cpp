@@ -128,7 +128,10 @@ constexpr real kKappaTol = 0.05;
 // [M] On 0.0431 (target 0.10), Sport 0.0786 (target 0.14); with part_load_boost "spooled" 0.0568 / 0.1342 (hidden diag
 // "P1 V8 diag"). The band is now the P1 measurement +- kKappaP1Tol, the target band stays as the upper bound. Open point:
 // a TCU ceiling intervention could keep the driver's boost target (out/pedal_p1_progress.md).
-constexpr real kKappaP1On = 0.0431, kKappaP1Sport = 0.0786; // [M] pedal P1
+// TC estimator fix (PR #8): the speed estimate the launch slip regulator reads is now corrected from the free front
+// wheels. Measured On 0.0574 with the previous estimator, 0.0587 with the new one (estimate within 0.03 m/s of the
+// true speed over the window); re-pinned to the new measurement.
+constexpr real kKappaP1On = 0.0587, kKappaP1Sport = 0.0786; // [M] pedal P1, On re-measured after the TC estimator fix
 constexpr real kKappaP1Tol = 0.015;                         // [AS]
 constexpr real kWingTolDeg = 1.0;
 constexpr real kArmedWindowS = 1.5;

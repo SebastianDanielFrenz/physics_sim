@@ -1001,6 +1001,13 @@ All numeric keys must be finite and `> 0` (`"traction_control: parameters must b
 `ignition_cut`) exist only in an assist unit's `mode_params`; the block itself cannot set them. The assist unit's
 Relaxed / Sport / Drift modes override these keys per mode.
 
+The slip is measured against a ground-speed estimate the controller keeps itself (no key sets it): the IMU's
+longitudinal acceleration predicts it, and every substep the wheels correct it - free wheels (not braked, not driven,
+or every wheel while coasting) as a measurement, braked wheels as a lower bound, driven wheels of a car without a free
+wheel (AWD) as an upper bound, and a standstill as 0. The per-corner brake signal comes from `brake_system` (a corner
+counts as braked when its service brake or the handbrake acts on it). Constant common-mode wheelspin of an AWD car
+with torque on cannot be seen from these sensors. Constants and limits: `ps/vehicle/traction_control.h`.
+
 ## Control channels a vehicle reads
 
 Not part of the JSON format, but relevant context for anyone editing a

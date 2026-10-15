@@ -34,6 +34,14 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
     aero::validate(desc_.aero);
     validate_traction_control(desc_.traction_control);
     traction_sensors_.resize(desc_.wheels.size());
+    traction_brake_bits_.assign(desc_.wheels.size(), 0);
+    for (std::size_t i = 0; i < desc_.wheels.size(); ++i) {
+        for (const auto& c : desc_.brake_system.corners)
+            if (c.wheel == desc_.wheels[i].name && c.max_torque_nm > 0) traction_brake_bits_[i] |= 1;
+        if (desc_.brake_system.handbrake.max_torque_nm > 0)
+            for (const auto& n : desc_.brake_system.handbrake.wheels)
+                if (n == desc_.wheels[i].name) traction_brake_bits_[i] |= 2;
+    }
     abs_esc_state_.resize(desc_.wheels.size());
     wheel_brake_.assign(desc_.wheels.size(), real(0));
     is_front_.resize(desc_.wheels.size());
@@ -359,12 +367,11 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
                                  aero_launch_request_, &aero_control_target_deg);
     }
     // Virtual ideal six-axis IMU: finite-difference acceleration, gravity
-    // compensated using attitude. Only this sensor reading reaches TC.
+    // compensated using attitude. Only this sensor reading reaches TC and ABS/ESC. Sampled every tick whether or not they run: a
+    // sample left over from before an assist was switched off would read as one huge acceleration when it comes back on.
     real imu_accel=0;
-    if(desc_.traction_control.enabled||assist_traction||traction_state_.initialized||assist_abs||assist_esc||abs_esc_state_.initialized) {
-        if(imu_have_previous_&&tick_dt>0) imu_accel=pose0.orientation.inverse().rotate((motion0.linear-imu_previous_velocity_world_)/tick_dt).x;
-        imu_previous_velocity_world_=motion0.linear;imu_have_previous_=true;
-    }
+    if(imu_have_previous_&&tick_dt>0) imu_accel=pose0.orientation.inverse().rotate((motion0.linear-imu_previous_velocity_world_)/tick_dt).x;
+    imu_previous_velocity_world_=motion0.linear;imu_have_previous_=true;
     // PHYS-033 I1 W1: read ONCE per tick, at the tick-start rotation - Jolt
     // itself applies the whole tick's accumulated torque with the inverse
     // inertia at the rotation at STEP START (I1 plan section 2, condition
@@ -454,7 +461,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         const real yaw=pose_s.orientation.inverse().rotate(twist_s.angular).z;
         for(std::size_t i=0;i<wheels_.size();++i) {
             const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
-            sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i)};
+            const bool braked=((traction_brake_bits_[i]&1)&&controls.brake>real(.05))||((traction_brake_bits_[i]&2)&&controls.handbrake>real(.05));
+            sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i),braked};
         }
         // Assists I5 part 2 / I6: ABS and ESC (abs_esc.h) from the same sensors. Off (or not fitted) leaves
         // ctx.wheel_brake null, so every brake row reads ctx.brake exactly as before.
@@ -482,6 +490,11 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         } else if (abs_esc_state_.initialized) {
             abs_esc_state_.reset(); // both switched off: the next switch-on starts from the wheels again
         }
+        // A wheel ABS/ESC is braking (ESC also without the pedal) only bounds TC's speed estimate from below; it is
+        // not a free wheel the estimator may track directly.
+        if (assist_abs || assist_esc)
+            for (std::size_t i = 0; i < wheels_.size(); ++i)
+                if (wheel_brake_[i] > real(.05)) traction_sensors_[i].braked = true;
         // Assists I4 (D-LC1): the unit's launch control decides first, from the previous substep's sensors (its own
         // powertrain reads and TC's estimator state), so this substep's TC call already knows whether the controller
         // owns the car. While it does (Armed, Launch) traction control is SUSPENDED - it still runs, because the
