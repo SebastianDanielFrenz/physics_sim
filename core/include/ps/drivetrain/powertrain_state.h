@@ -171,6 +171,14 @@ struct PowertrainSnapshot {
     // assist_active_bits bit7 = EPB fitted / applied (state != 0). Never hashed.
     std::uint8_t epb_state = 0;
     bool epb_refused = false;
+    // Assists I5 part 2 / I6 (docs/data_formats/electronics.md "abs" / "esc"): abs_active = some wheel's service brake is
+    // scaled below 0.995 on the last substep; esc_active = ESC brakes a wheel or cuts torque; abs_reference_speed_m_s =
+    // the controllers' reference speed (sensor estimate); esc_yaw_rate_target = the bicycle-model target (rad/s, 0 when
+    // ESC does not run); esc mode codes 0 off / 1 on / 2 sport, available_bits one bit per offered code (0 without ESC).
+    // assist_fitted_bits / assist_active_bits bit8 = ABS (fitted / switched on), bit9 = ESC. Never hashed.
+    bool abs_active = false, esc_active = false;
+    real abs_reference_speed_m_s = 0, esc_yaw_rate_target = 0;
+    std::uint8_t esc_mode_requested = 0, esc_mode_effective = 0, esc_modes_available_bits = 0;
     // Assists I5 (PHYS-074): the assist unit's rear-wing automation owns its surface this tick (channel
     // assist.aero_control on and fitted; assist_active_bits bit6), and the offset it asked for in degrees (0 when not
     // active). Never hashed.
@@ -279,6 +287,11 @@ struct PowertrainDebug {
     // only, never hashed (theta itself is hashed by Powertrain).
     std::array<real, kMaxCompliantShafts> shaft_twist_rad{};
     std::array<real, kMaxCompliantShafts> shaft_torque{};
+    // Assists I5 part 2 / I6: the last substep's ABS scale (1 = untouched), ESC brake command and resulting service
+    // command per wheel (WheelDesc order, first 8 wheels). Tests only, never hashed.
+    std::array<real, 8> abs_wheel_scale{1, 1, 1, 1, 1, 1, 1, 1};
+    std::array<real, 8> esc_wheel_brake{};
+    std::array<real, 8> wheel_brake_command{};
 };
 
 } // namespace ps::drivetrain

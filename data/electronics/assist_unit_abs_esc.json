@@ -1,0 +1,38 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "assist_unit",
+  "name": "Street ABS and ESC",
+  "grade": "street",
+  "abs": {
+    "default_enabled": true,
+    "target_slip": 0.12,
+    "min_speed_mps": 2.0,
+    "slip_floor_mps": 3.0,
+    "kp": 3.0,
+    "ki_per_s": 30.0,
+    "release_rate_per_s": 60.0,
+    "apply_rate_per_s": 15.0,
+    "reanchor_rate_per_s": 10.0,
+    "reanchor_scale": 0.05,
+    "rear_select_low": true,
+    "front_split_max": 0.2,
+    "front_split_rate_per_s": 0.4
+  },
+  "esc": {
+    "modes": ["off", "on", "sport"],
+    "default_mode": "on",
+    "characteristic_speed_mps": 25.0,
+    "max_lateral_accel_mps2": 8.5,
+    "min_speed_mps": 5.0,
+    "brake_rate_per_s": 10.0,
+    "deadband_rad_s": 0.05,
+    "deadband_fraction": 0.10,
+    "brake_gain_per_rad_s": 2.0,
+    "max_brake": 0.8,
+    "torque_gain_per_rad_s": 1.0,
+    "mode_params": {
+      "sport": { "deadband_rad_s": 0.10, "deadband_fraction": 0.20, "max_brake": 0.6 }
+    }
+  },
+  "source": "[AS] Assists I5 part 2 / I6 (docs/next_steps_brief.md 2.2b): a generic street ABS + ESC unit. Every number is an assumption tuned on car_sedan (tests/unit/test_abs_esc.cpp): target slip 0.12 = the peak of a passenger tyre (0.10-0.15), characteristic speed 25 m/s (passenger car 20-30 m/s), lateral limit 8.5 m/s2 (~0.87 g dry), front split 0.2 growing at 0.4 1/s (split-mu yaw-moment build-up, A3), reanchor below scale 0.05, ESC brake gain 2 per rad/s capped at 0.8. No traction_control block: TC stays the car's own."
+}

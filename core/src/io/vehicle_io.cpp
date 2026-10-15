@@ -4722,6 +4722,12 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                                                         " rpm limiter): held at " + fmt_rpm(fit.rpm) + " rpm");
                     }
                 }
+                // ABS / ESC act through the car's service-brake corners, so the car must have them.
+                if (part.unit.abs) {
+                    bool any_corner = false;
+                    for (const auto& c : v.brake_system.corners) any_corner = any_corner || c.max_torque_nm > real(0);
+                    if (!any_corner) throw std::runtime_error(ectx + ": abs needs brake_system.corners with max_torque_nm > 0");
+                }
                 v.assist_unit = part.unit;
             } else if (part.kind == ElectronicsKind::DriveModes) {
                 // Assists I7: a car-specific part, at most one. Its auto-shift / auto-clutch overrides need the car's manual_tcu,

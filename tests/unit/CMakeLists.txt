@@ -13,6 +13,7 @@ add_executable(ps_unit_tests
   test_limiter_range.cpp
   test_assist_drive_modes.cpp
   test_epb.cpp
+  test_abs_esc.cpp
   test_assist_launch_default.cpp
   test_assist_channel_writeback.cpp
   test_assist_all_together.cpp
