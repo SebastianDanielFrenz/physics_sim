@@ -279,7 +279,7 @@ private:
     WeatherSegment first_segment() const;
     WeatherSegment next_segment(const WeatherSegment& s) const;
     void draw_segment(WeatherSegment& s) const;
-    void ensure(WeatherCursor& c, real t_lo, real t_hi) const;
+    void ensure_window(WeatherCursor& c, real t_lo, real t_hi) const;
     const WeatherSegment& find(const WeatherCursor& c, real t) const;
     template <class F> void for_each_cell(const WeatherSegment& s, F&& f) const;
     Base base_at(real t, WeatherCursor& c) const;
