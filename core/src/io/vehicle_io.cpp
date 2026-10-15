@@ -6,6 +6,7 @@
 #include "aero_io.h"
 #include "nitrous_components.h"
 #include "engine_parts.h"
+#include "turbo_stage_json.h"
 
 #include "../engine_cycle/map_cache.h"
 #include "../vehicle/tir_parser.h"
@@ -3378,58 +3379,7 @@ drivetrain::TurboPairDesc load_turbo_configuration_json(const std::string& path,
         const auto stage_path=resolve_path(std::filesystem::path(hw_path).parent_path().string(),hw.at("performance_map").get<std::string>());
         const auto sj=read_json_file(stage_path);
         require_format(sj,"turbo_stage_maps",1,stage_path);
-        auto sm=std::make_shared<drivetrain::TurboStageMaps>();
-        sm->source=sj.at("source").get<std::string>();
-        sm->solver=sj.at("solver").get<std::string>();
-        if(sm->source.empty() || (sm->solver!="meanline-3" && sm->solver!="meanline-4") || !sj.at("provenance").is_object())
-            throw std::runtime_error(stage_path+": unsupported solver or missing provenance");
-        sm->reference_pa=require_positive(sj,"reference_pressure_bar",stage_path)*real(1e5);
-        sm->compressor_reference_k=require_positive(sj,"compressor_reference_temperature_k",stage_path);
-        sm->turbine_reference_k=require_positive(sj,"turbine_reference_temperature_k",stage_path);
-        const auto& gas=sj.at("geometry").at("exhaust");
-        sm->exhaust_r=require_positive(gas,"r",stage_path);
-        sm->exhaust_gamma=require_positive(gas,"gamma",stage_path);
-        if(!(sm->exhaust_gamma>1 && sm->exhaust_gamma<=1.67)) throw std::runtime_error(stage_path+": invalid exhaust gamma");
-        const auto& air=sj.at("geometry").at("air");
-        const real air_r=require_positive(air,"r",stage_path), air_gamma=require_positive(air,"gamma",stage_path);
-        if(!(air_gamma>1 && air_gamma<=1.67)) throw std::runtime_error(stage_path+": invalid air gamma");
-        sm->compressor_cp=air_r*air_gamma/(air_gamma-real(1));
-        sm->air_kappa=(air_gamma-real(1))/air_gamma; // stage seam S0: the affinity extension's isentropic exponent
-        sm->units=count;
-        const auto speeds=sj.at("corrected_rpm").get<std::vector<real>>();
-        const auto flows=sj.at("compressor_corrected_flow_kg_s").get<std::vector<real>>();
-        const auto expansions=sj.at("turbine_expansion_ratio").get<std::vector<real>>();
-        sm->compressor_pr.x=sm->compressor_work_j_kg.x=sm->turbine_flow_kg_s.x=sm->turbine_work_j_kg.x=sm->turbine_torque_nm_per_kg_s.x=speeds;
-        sm->compressor_pr.y=sm->compressor_work_j_kg.y=flows;
-        for(real er:expansions) {
-            const real chi=sm->turbine_coordinate(er);
-            sm->turbine_flow_kg_s.y.push_back(chi); sm->turbine_work_j_kg.y.push_back(chi);
-            sm->turbine_torque_nm_per_kg_s.y.push_back(chi);
-        }
-        if(sj.at("compressor").size()!=speeds.size()*flows.size() || sj.at("turbine").size()!=speeds.size()*expansions.size())
-            throw std::runtime_error(stage_path+": inconsistent map dimensions");
-        for(const auto& point:sj.at("compressor")) {
-            const bool valid=point.at("status").get<std::string>()=="ok";
-            const real pr=valid ? point.at("pressure_ratio").get<real>():real(1);
-            const real work=valid ? point.at("specific_work_j_kg").get<real>():real(0);
-            if(!std::isfinite(pr) || !std::isfinite(work) || pr<1 || work<0)
-                throw std::runtime_error(stage_path+": invalid compressor point");
-            sm->compressor_valid.push_back(valid);
-            sm->compressor_pr.values.push_back(pr); sm->compressor_work_j_kg.values.push_back(work);
-        }
-        for(const auto& point:sj.at("turbine")) {
-            const real flow=point.at("mass_flow_kg_s").get<real>(), work=point.at("specific_work_j_kg").get<real>();
-            if(!std::isfinite(flow) || !std::isfinite(work) || flow<0 || point.at("status").get<std::string>()!="ok")
-                throw std::runtime_error(stage_path+": invalid turbine point");
-            const real torque=point.at("specific_torque_nm_per_kg_s").get<real>();
-            if(!std::isfinite(torque)) throw std::runtime_error(stage_path+": invalid turbine torque");
-            sm->turbine_torque_nm_per_kg_s.values.push_back(torque);
-            sm->turbine_flow_kg_s.values.push_back(flow); sm->turbine_work_j_kg.values.push_back(work);
-        }
-        for(const auto* table:{&sm->compressor_pr,&sm->compressor_work_j_kg,&sm->turbine_flow_kg_s,&sm->turbine_work_j_kg,&sm->turbine_torque_nm_per_kg_s})
-            if(const auto error=table->validate();!error.empty()) throw std::runtime_error(stage_path+": "+error);
-        if(speeds.front()<0 || flows.front()<0 || expansions.front()!=1)
-            throw std::runtime_error(stage_path+": invalid map axis domain (turbine must start at expansion ratio 1)");
+        auto sm=detail::stage_maps_from_json(sj,count,stage_path); // shared with ps::io::turbo_stage_maps_from_json
         // Hash the actual consumed file, including provenance; never reuse a
         // key from its legacy authored curve or trust a supplied hash alone.
         for(unsigned char b:sj.dump()) { key^=b; key*=1099511628211ULL; }

@@ -444,18 +444,18 @@ const char* to_string(BuildRule r) {
     return "Unknown";
 }
 
-std::vector<BuildIssue> check_turbo_stage_coverage(const SimulatedEngineDesc& e, const LimitPolicy* /*policy*/) {
-    std::vector<BuildIssue> out;
-    if (e.architecture != EngineArchitecture::Piston4Stroke || !e.turbo_pair.has_value()) return out;
+TurboStageDemand turbo_stage_demand(const SimulatedEngineDesc& e) {
+    TurboStageDemand d;
+    if (e.architecture != EngineArchitecture::Piston4Stroke || !e.turbo_pair.has_value()) return d;
     const TurboPairDesc& td = *e.turbo_pair;
-    if (!td.maps || !td.maps->stages) return out;
+    if (!td.maps || !td.maps->stages) return d;
     const TurboStageMaps& m = *td.maps->stages;
     const std::vector<real>& nx = m.compressor_pr.x;
     real n_top = real(-1.0);
     for (std::size_t i = nx.size(); i-- > 0;) {
         if (m.line_has_data(i)) { n_top = nx[i]; break; }
     }
-    if (!(n_top > real(0.0)) || m.units < 1) return out;
+    if (!(n_top > real(0.0)) || m.units < 1) return d;
 
     // The engine's air flow at the target boost, at ISA (the map's reference inlet, so corrected flow = flow per turbo).
     const real p_amb = m.reference_pa, t_amb = m.compressor_reference_k;
@@ -468,33 +468,57 @@ std::vector<BuildIssue> check_turbo_stage_coverage(const SimulatedEngineDesc& e,
     const real vd = real(e.piston.cylinders) * real(0.25) * real(3.14159265358979323846) * e.piston.bore_m * e.piston.bore_m * e.piston.stroke_m;
     const bool have_ve = !e.maps_pending && !e.maps.ve.values.empty();
     real air_max = real(0.0), rpm_at_max = real(0.0);
-    constexpr int kRpmSteps = 16; // sampling resolution, not an advice number
-    for (int k = 0; k < kRpmSteps; ++k) {
-        const real n = e.idle_rpm + (e.limiter.rpm - e.idle_rpm) * real(k) / real(kRpmSteps - 1);
+    for (int k = 0; k < TurboStageDemand::kRpmSteps; ++k) {
+        const real n = e.idle_rpm + (e.limiter.rpm - e.idle_rpm) * real(k) / real(TurboStageDemand::kRpmSteps - 1);
         const real ve = have_ve ? e.maps.ve.value(n, p_charge) : real(1.0); // [AS] 1.0 while the maps are pending
         const real air = ve * rho * vd * n / real(120.0);
         if (air > air_max) { air_max = air; rpm_at_max = n; }
     }
-    if (!(air_max > real(0.0))) return out;
+    if (!(air_max > real(0.0))) return d;
+    d.applies = true;
+    d.pressure_ratio = pr_req;
+    d.air_max_kg_s = air_max;
+    d.rpm_at_max = rpm_at_max;
+    d.top_speed_line_rpm = n_top;
+    d.units = m.units;
 
     // At each flow: the rotor speed that makes pr_req (bisection on the continuation, monotone in speed), then coverage.
-    constexpr int kFlowSteps = 16; // sampling resolution, not an advice number
+    for (int j = 1; j <= TurboStageDemand::kFlowSteps; ++j) {
+        TurboStageDemand::Step st;
+        st.flow_kg_s = air_max * real(j) / real(TurboStageDemand::kFlowSteps) / real(m.units);
+        st.top_line_pressure_ratio = m.compressor_extended(n_top, st.flow_kg_s).pressure_ratio;
+        if (st.top_line_pressure_ratio < pr_req) {
+            st.reached = false; st.rotor_rpm = n_top;
+        } else {
+            real lo = real(0.0), hi = n_top;
+            for (int it = 0; it < 60; ++it) {
+                const real mid = real(0.5) * (lo + hi);
+                if (m.compressor_extended(mid, st.flow_kg_s).pressure_ratio >= pr_req) hi = mid; else lo = mid;
+            }
+            st.reached = true; st.rotor_rpm = hi; st.covered = m.compressor_covered(hi, st.flow_kg_s);
+        }
+        d.steps.push_back(st);
+    }
+    return d;
+}
+
+std::vector<BuildIssue> check_turbo_stage_coverage(const SimulatedEngineDesc& e, const LimitPolicy* /*policy*/) {
+    std::vector<BuildIssue> out;
+    const TurboStageDemand d = turbo_stage_demand(e);
+    if (!d.applies) return out;
+    const TurboPairDesc& td = *e.turbo_pair;
+    const real pr_req = d.pressure_ratio, air_max = d.air_max_kg_s, rpm_at_max = d.rpm_at_max, n_top = d.top_speed_line_rpm;
+    constexpr int kFlowSteps = TurboStageDemand::kFlowSteps;
     int first_bad = 0;
     bool unreached = false;
     real bad_wc = real(0.0), bad_n = real(0.0), bad_top_pr = real(0.0);
     for (int j = 1; j <= kFlowSteps && first_bad == 0; ++j) {
-        const real wc = air_max * real(j) / real(kFlowSteps) / real(m.units);
-        const real pr_top = m.compressor_extended(n_top, wc).pressure_ratio;
-        if (pr_top < pr_req) {
-            first_bad = j; unreached = true; bad_wc = wc; bad_top_pr = pr_top;
+        const TurboStageDemand::Step& st = d.steps[std::size_t(j - 1)];
+        if (!st.reached) {
+            first_bad = j; unreached = true; bad_wc = st.flow_kg_s; bad_top_pr = st.top_line_pressure_ratio;
             break;
         }
-        real lo = real(0.0), hi = n_top;
-        for (int it = 0; it < 60; ++it) {
-            const real mid = real(0.5) * (lo + hi);
-            if (m.compressor_extended(mid, wc).pressure_ratio >= pr_req) hi = mid; else lo = mid;
-        }
-        if (!m.compressor_covered(hi, wc)) { first_bad = j; bad_wc = wc; bad_n = hi; }
+        if (!st.covered) { first_bad = j; bad_wc = st.flow_kg_s; bad_n = st.rotor_rpm; }
     }
     if (first_bad == 0) return out;
     // Every later flow of the same operating line: once the target needs more speed than the map has, the rest does too.
