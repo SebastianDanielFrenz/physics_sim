@@ -21,6 +21,7 @@
 #include "ps/vehicle/tyre_desc.h"
 #include "ps/vehicle/assist_unit_desc.h"
 #include "ps/vehicle/drive_modes_desc.h"
+#include "ps/vehicle/epb_desc.h"
 #include "ps/vehicle/traction_control.h"
 
 #include <optional>
@@ -157,6 +158,9 @@ struct VehicleDesc {
     // Assists I7: the drive_modes electronics part (Eco / Normal / Sport), a car-specific part attached like the
     // assist unit (at most one). Absent = no assist.drive_mode channel, every vehicle bit-identical.
     std::optional<DriveModesDesc> drive_modes;
+    // Q3 / I8: the electronic parking brake part (kind `epb`), at most one. Drives brake_system.handbrake; channel `epb`
+    // registered only with it. Its state is hashed only with it.
+    std::optional<EpbDesc> epb;
     std::string name;
     std::string source; // mass/geometry provenance (PLAN.md section 8)
     std::vector<WheelDesc> wheels;

@@ -18,11 +18,13 @@
 #include "ps/io/electronics_io.h"
 #include "ps/drivetrain/isa_air.h"
 #include "ps/drivetrain/engine_rules.h"
+#include "ps/drivetrain/limiter_range.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -39,6 +41,13 @@ using ps::vehicle::VehicleDesc;
 using ps::vehicle::WheelDesc;
 using ps::vehicle::SuspensionDesc;
 using ps::vehicle::SteeringDesc;
+
+// G1 load warnings: a number as the message shows it ("8250", "98.5").
+std::string fmt_rpm(real v) {
+    char b[32];
+    std::snprintf(b, sizeof b, "%.6g", static_cast<double>(v));
+    return b;
+}
 using ps::drivetrain::BrakeSystemDesc;
 using ps::drivetrain::PowertrainDesc;
 
@@ -2783,6 +2792,26 @@ void read_engine_mass(const json& j, const std::string& ctx, real& mass_kg, std:
 // PHYS-033 P4 I7a C5: thin dispatcher on "kind" - "torque_map" (or absent,
 // the only kind before C5) and, since PHYS-033 P4 I7b C10, "simulated"
 // (the MVEM engine, read_simulated_fields above).
+
+// G1 (ps/drivetrain/limiter_range.h): the engine file's optional "rpm_rolloff_band_fraction", in (0, 1].
+real read_rolloff_band_fraction(const json& j, const std::string& ctx, real fallback) {
+    if (!j.contains("rpm_rolloff_band_fraction")) return fallback;
+    const json& v = j.at("rpm_rolloff_band_fraction");
+    if (!v.is_number() || !std::isfinite(v.get<real>()) || !(v.get<real>() > real(0.0)) || v.get<real>() > real(1.0)) {
+        throw std::runtime_error(ctx + ": 'rpm_rolloff_band_fraction' must be a number in (0, 1]");
+    }
+    return v.get<real>();
+}
+
+// G1 load warning: the limiter lies above the engine's data, so the fired torque rolls off past it.
+template <class Engine>
+void warn_rpm_rolloff(const Engine& e, const std::string& ctx, std::vector<std::string>& out) {
+    const ps::drivetrain::RpmRolloff r = ps::drivetrain::rpm_rolloff(e);
+    if (!r.armed()) return;
+    out.push_back(ctx + ": Limiting: the " + fmt_rpm(ps::drivetrain::fired_top_rpm(e)) + " rpm limiter is above the engine's data (it ends at " +
+                  fmt_rpm(r.start_rpm) + " rpm): the fired torque rolls off to zero at " + fmt_rpm(r.end_rpm) + " rpm");
+}
+
 ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::string& ctx, const std::string& engine_dir,
                                                    std::vector<std::string>* resolved_fuel_paths_out = nullptr,
                                                    const EngineMapOptions* map_options = nullptr,
@@ -2800,17 +2829,28 @@ ps::drivetrain::ComponentParams read_engine_fields(const json& j, const std::str
     if (kind == "torque_map") {
         ps::drivetrain::TorqueMapEngineDesc e = read_torque_map_fields(j, ctx, engine_dir, resolved_fuel_paths_out);
         read_engine_mass(j, ctx, e.mass_kg, e.mass_source);
+        e.rpm_rolloff_band_fraction = read_rolloff_band_fraction(j, ctx, e.rpm_rolloff_band_fraction);
+        if (map_options != nullptr && map_options->warnings_out != nullptr) warn_rpm_rolloff(e, ctx, *map_options->warnings_out);
         return e;
     }
     if (kind == "simulated") {
         ps::drivetrain::SimulatedEngineDesc e =
             read_simulated_fields(j, ctx, engine_dir, resolved_fuel_paths_out, map_options, installation_override_path, assembled);
         read_engine_mass(j, ctx, e.mass_kg, e.mass_source);
+        e.rpm_rolloff_band_fraction = read_rolloff_band_fraction(j, ctx, e.rpm_rolloff_band_fraction);
+        if (j.contains("plate_monotone_tolerance")) { // G1
+            const json& v = j.at("plate_monotone_tolerance");
+            if (!v.is_number() || !std::isfinite(v.get<real>()) || v.get<real>() < real(0.0) || v.get<real>() > real(0.05)) {
+                throw std::runtime_error(ctx + ": 'plate_monotone_tolerance' must be a number in [0, 0.05]");
+            }
+            e.plate_monotone_tolerance = v.get<real>();
+        }
         if (map_options != nullptr && map_options->warnings_out != nullptr) {
             // Stage seam S0: advisory only, nothing of the result depends on it.
             for (const auto& issue : ps::drivetrain::check_turbo_stage_coverage(e)) {
                 map_options->warnings_out->push_back(ctx + ": " + ps::drivetrain::to_string(issue.severity) + ": " + issue.message);
             }
+            warn_rpm_rolloff(e, ctx, *map_options->warnings_out); // G1
         }
         return e;
     }
@@ -4556,6 +4596,11 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 md.auto_shift.down_rpm_at_full_throttle = asj.value("down_rpm_at_full_throttle", md.auto_shift.down_rpm_at_full_throttle);
                 md.auto_shift.min_time_in_gear_s = asj.value("min_time_in_gear_s", md.auto_shift.min_time_in_gear_s);
                 md.auto_shift.kickdown_throttle = asj.value("kickdown_throttle", md.auto_shift.kickdown_throttle); // assists I7
+                md.auto_shift.max_limiter_fraction = asj.value("max_limiter_fraction", md.auto_shift.max_limiter_fraction); // G1
+                if (!std::isfinite(md.auto_shift.max_limiter_fraction) || !(md.auto_shift.max_limiter_fraction > real(0.0)) ||
+                    md.auto_shift.max_limiter_fraction > real(1.0)) {
+                    throw std::runtime_error(ctx + ".auto_shift: max_limiter_fraction must be in (0, 1]");
+                }
                 if (!std::isfinite(md.auto_shift.kickdown_throttle) || md.auto_shift.kickdown_throttle < real(0.0) || md.auto_shift.kickdown_throttle > real(1.0)) {
                     throw std::runtime_error(ctx + ".auto_shift: kickdown_throttle must be in [0, 1] (0 = no bypass)");
                 }
@@ -4625,9 +4670,18 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     throw std::runtime_error(ectx + ": launch rpm " + std::to_string(part.launch.rpm) + " must be above the engine's idle rpm " +
                                              std::to_string(idle_rpm));
                 }
-                if (!(part.launch.rpm < limiter_rpm)) {
-                    throw std::runtime_error(ectx + ": launch rpm " + std::to_string(part.launch.rpm) + " must be below the engine's own limiter rpm " +
-                                             std::to_string(limiter_rpm));
+                // G1: a launch rpm at or above max_limiter_fraction of the limiter (a low garage limiter) is clamped there by
+                // the Powertrain; the load warns instead of failing.
+                const ps::drivetrain::LaunchRpmFit fit =
+                    ps::drivetrain::fit_launch_rpm(part.launch.rpm, idle_rpm, limiter_rpm, part.launch.max_limiter_fraction);
+                if (!(limiter_rpm > idle_rpm)) {
+                    throw std::runtime_error(ectx + ": the engine's limiter rpm " + std::to_string(limiter_rpm) + " must be above its idle rpm " +
+                                             std::to_string(idle_rpm));
+                }
+                if (fit.clamped && options.warnings_out != nullptr) {
+                    options.warnings_out->push_back(ectx + ": Limiting: launch rpm " + fmt_rpm(part.launch.rpm) + " is at or above " +
+                                                    fmt_rpm(fit.cap) + " (" + fmt_rpm(part.launch.max_limiter_fraction * 100.0) +
+                                                    " % of the " + fmt_rpm(limiter_rpm) + " rpm limiter): held at " + fmt_rpm(fit.rpm) + " rpm");
                 }
                 v.controllers.push_back({e.first, part.launch});
             } else if (part.kind == ElectronicsKind::AssistUnit) {
@@ -4652,11 +4706,27 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                         }
                     }
                     if (!have_engine) throw std::runtime_error(ectx + ": launch_control needs an engine component");
-                    const real rpm = ps::vehicle::launch_assist_rpm(*part.unit.launch_control, limiter_rpm);
-                    if (!(rpm > idle_rpm) || !(rpm < limiter_rpm)) {
+                    const ps::vehicle::LaunchAssistDesc& la = *part.unit.launch_control;
+                    const real rpm = ps::vehicle::launch_assist_rpm(la, limiter_rpm);
+                    // G1: an rpm at or above max_limiter_fraction of the limiter (a low garage limiter) is clamped there by
+                    // VehicleInstance; the load warns instead of failing. Below idle stays an error (no limiter causes it) -
+                    // except where the clamp itself brings it above idle (an absolute launch_rpm over a low limiter).
+                    const ps::drivetrain::LaunchRpmFit fit = ps::drivetrain::fit_launch_rpm(rpm, idle_rpm, limiter_rpm, la.max_limiter_fraction);
+                    if (!(limiter_rpm > idle_rpm) || !(fit.rpm > idle_rpm) || !(fit.rpm < limiter_rpm)) {
                         throw std::runtime_error(ectx + ": launch rpm " + std::to_string(rpm) + " must lie between the engine's idle rpm " +
                                                  std::to_string(idle_rpm) + " and its own limiter rpm " + std::to_string(limiter_rpm));
                     }
+                    if (fit.clamped && options.warnings_out != nullptr) {
+                        options.warnings_out->push_back(ectx + ": Limiting: launch rpm " + fmt_rpm(rpm) + " is at or above " + fmt_rpm(fit.cap) +
+                                                        " (" + fmt_rpm(la.max_limiter_fraction * 100.0) + " % of the " + fmt_rpm(limiter_rpm) +
+                                                        " rpm limiter): held at " + fmt_rpm(fit.rpm) + " rpm");
+                    }
+                }
+                // ABS / ESC act through the car's service-brake corners, so the car must have them.
+                if (part.unit.abs) {
+                    bool any_corner = false;
+                    for (const auto& c : v.brake_system.corners) any_corner = any_corner || c.max_torque_nm > real(0);
+                    if (!any_corner) throw std::runtime_error(ectx + ": abs needs brake_system.corners with max_torque_nm > 0");
                 }
                 v.assist_unit = part.unit;
             } else if (part.kind == ElectronicsKind::DriveModes) {
@@ -4682,6 +4752,13 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     }
                 }
                 v.drive_modes = part.drive_modes;
+            } else if (part.kind == ElectronicsKind::Epb) {
+                // Q3 / I8: at most one, and it drives the car's handbrake rows, so the car must have them.
+                if (v.epb) throw std::runtime_error(ectx + ": at most one epb per vehicle");
+                if (v.brake_system.handbrake.wheels.empty() || !(v.brake_system.handbrake.max_torque_nm > real(0))) {
+                    throw std::runtime_error(ectx + ": epb needs brake_system.handbrake rows (wheels and max_torque_nm > 0)");
+                }
+                v.epb = part.epb;
             } else {
                 for (const std::string& f : part.fits) {
                     if (f == "traction_control") { v.traction_control.fitted = true; continue; }
@@ -4698,6 +4775,40 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
         if (have_launch && v.assist_unit && v.assist_unit->launch_control) {
             throw std::runtime_error("vehicle '" + v.name +
                                      "': launch control: a car has either a two-step (launch_control) or an assist-unit launch control, not both");
+        }
+    }
+
+    // G1: auto-shift points above the engine's effective limiter are scaled down at run time (ManualTcu, limiter_range.h
+    // shift_point_scale); tell the caller, for the car's own points and for every drive mode that overrides them.
+    if (options.warnings_out != nullptr) {
+        for (const auto& c : v.controllers) {
+            const auto* tcu = std::get_if<ps::drivetrain::ManualTcuDesc>(&c.params);
+            if (tcu == nullptr) continue;
+            real cap = real(0.0);
+            for (const auto& comp : v.powertrain.components) {
+                if (comp.id == tcu->engine) cap = tcu->auto_shift.max_limiter_fraction * ps::drivetrain::effective_limiter_rpm(comp.params);
+            }
+            const auto check = [&](const std::string& where, real uz, real uf, real dz, real df) {
+                const real k = ps::drivetrain::shift_point_scale(uz, uf, cap);
+                if (k == real(1.0)) return;
+                options.warnings_out->push_back("vehicle '" + v.name + "': manual_tcu '" + c.id + "' auto_shift" + where + ": Limiting: the upshift at " +
+                                                fmt_rpm(std::max(uz, uf)) + " rpm is above " + fmt_rpm(cap) + " rpm (" +
+                                                fmt_rpm(tcu->auto_shift.max_limiter_fraction * real(100.0)) +
+                                                " % of the effective limiter): the shift points are scaled by " + fmt_rpm(k) + " (up " +
+                                                fmt_rpm(uz * k) + "/" + fmt_rpm(uf * k) + ", down " + fmt_rpm(dz * k) + "/" + fmt_rpm(df * k) + " rpm)");
+            };
+            const ps::drivetrain::AutoShiftDesc& a = tcu->auto_shift;
+            check("", a.up_rpm_at_zero_throttle, a.up_rpm_at_full_throttle, a.down_rpm_at_zero_throttle, a.down_rpm_at_full_throttle);
+            if (v.drive_modes) {
+                for (int m = 0; m < ps::vehicle::kDriveModeCount; ++m) {
+                    if (!(v.drive_modes->modes_bits & ps::vehicle::drive_mode_bit(static_cast<ps::vehicle::DriveMode>(m)))) continue;
+                    const ps::vehicle::DriveModeParams& dmp = v.drive_modes->params[static_cast<std::size_t>(m)];
+                    if (!(dmp.up_rpm_at_zero_throttle || dmp.up_rpm_at_full_throttle || dmp.down_rpm_at_zero_throttle || dmp.down_rpm_at_full_throttle)) continue;
+                    check(std::string(" (drive mode '") + ps::vehicle::kDriveModeNames[m] + "')", dmp.up_rpm_at_zero_throttle.value_or(a.up_rpm_at_zero_throttle),
+                          dmp.up_rpm_at_full_throttle.value_or(a.up_rpm_at_full_throttle), dmp.down_rpm_at_zero_throttle.value_or(a.down_rpm_at_zero_throttle),
+                          dmp.down_rpm_at_full_throttle.value_or(a.down_rpm_at_full_throttle));
+                }
+            }
         }
     }
 

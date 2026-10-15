@@ -267,12 +267,24 @@ TEST_CASE("LD2: spawn default, a default mode without a default, cars without th
         CHECK_FALSE(lc_on(r));
     }
     {
-        // car_hyper: no drive modes part at all, the same
-        Rig r = make_rig(load_car(kHyper));
+        // car_hyper with its drive modes part removed (Q3 / I8 gave car_hyper one): the same
+        io::VehicleLoadOptions none;
+        none.electronics["drive_modes"] = "none";
+        Rig r = make_rig(load_car(kHyper, none));
         World& w = r.w();
         w.step();
         CHECK_FALSE(lc_on(r));
         CHECK(w.powertrain_state(r.rig.vehicle).drive_modes_available_bits == 0);
+        write_lc(r, 1.0);
+        CHECK(lc_on(r));
+    }
+    {
+        // Q3 / I8: car_hyper with its own part in Normal (no launch_control_default there): LC follows its own channel
+        Rig r = make_rig(load_car(kHyper));
+        World& w = r.w();
+        w.step();
+        CHECK_FALSE(lc_on(r));
+        CHECK(w.powertrain_state(r.rig.vehicle).drive_modes_available_bits == 0b1111);
         write_lc(r, 1.0);
         CHECK(lc_on(r));
     }
@@ -427,7 +439,8 @@ TEST_CASE("LD6: there is no hidden override state; a part without a launch_contr
     CHECK(hash_after(n2o(), false) == hash_after(n2o(), true));
     // stripped of every launch_control_default: Normal -> Sport leaves LC off
     const std::string p = part_with(td, "stripped.json", [](json& j) {
-        for (const char* m : {"eco", "normal", "sport"}) j["modes"][m].erase("launch_control_default");
+        for (const char* m : {"eco", "normal", "sport", "racing"}) // racing added with Q3 (it defaults LC on)
+            j["modes"][m].erase("launch_control_default");
     });
     const VehicleDesc d = load_car(kHyperN2o, with_modes(p));
     CHECK_FALSE(any_launch_control_default(*d.drive_modes));

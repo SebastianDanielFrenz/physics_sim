@@ -196,6 +196,11 @@ struct TorqueMapEngineDesc {
     // fix N9) alongside a fuel_map specifically, since the map would never
     // consult it.
     real indicated_efficiency = 0.0;
+    // G1 (docs/data_formats/engine.md "Beyond the authored rpm range"): past the highest rpm of the WOT, motoring and fuel
+    // curves (ps/drivetrain/limiter_range.h authored_top_rpm), the combustion span (WOT - motoring) and the fuel roll off
+    // linearly to zero over this fraction of that rpm - armed only when the limiter (or a governor's high idle) lies above
+    // the data. Engine file key "rpm_rolloff_band_fraction", in (0, 1]. [AS] 0.2.
+    real rpm_rolloff_band_fraction = 0.2;
 };
 
 // PHYS-033 P4 I7a C5d: true whenever this engine has ANY fuel source (a
@@ -542,6 +547,18 @@ struct SimulatedEngineDesc {
     // another entry (same rule as TorqueMapEngineDesc::fuels).
     std::vector<FuelDesc> fuels;
     EngineIgnition ignition = EngineIgnition::Spark; // required; only "spark" in I7b (a CI combustion model is later)
+    // G1: past the highest rpm of the engine's own maps (limiter_range.h authored_top_rpm) the volumetric efficiency - and
+    // with it air, fuel, fired torque and exhaust flow - rolls off linearly to zero over this fraction of that rpm; armed
+    // only when the limiter lies above the maps. Engine file key "rpm_rolloff_band_fraction", in (0, 1]. [AS] 0.2.
+    real rpm_rolloff_band_fraction = 0.2;
+    // G1: the build-time check that the steady torque rises with plate position at every rpm (the steady tables, the basis
+    // of the electronic throttle's inverse) tolerates a point lying below the row's highest torque at a smaller plate by up
+    // to this fraction of the row's largest |torque| so far - a WOT plateau, where the plate no longer restricts the flow
+    // and the generated maps' interpolation leaves a dip. [M] toyota_a25a_fks_gen (2026-10-14, Linux release): Sketch maps
+    // 3.0 % (1500 rpm, 203.03 -> 196.92 N*m), Preview 0.11 % (1250 rpm), Full none. Not part of any map, cache key or
+    // state hash: it only decides whether a load throws. Engine file key "plate_monotone_tolerance", in [0, 0.05]; 0 = the
+    // pre-G1 1e-9 N*m check. [AS] 0.04 (the Sketch dip x 1.33).
+    real plate_monotone_tolerance = 0.04;
 };
 
 // A simulated engine always has a fuel model (the loader requires fuels).

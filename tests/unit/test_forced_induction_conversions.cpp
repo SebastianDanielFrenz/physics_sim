@@ -73,6 +73,7 @@ struct Conversion {
     real compression_ratio = 0.0;
     bool generate = true;
     std::vector<real> grid_override; // non-empty: this axis [Pa] instead of the helper's
+    real plate_tolerance = -1.0;     // >= 0: the engine's plate_monotone_tolerance instead of the default
 };
 
 std::vector<real> conversion_grid(const Conversion& cv) {
@@ -90,7 +91,9 @@ ComponentParams convert(const Conversion& cv) {
     std::string text = "{\"extends\": \"" + cv.base + "\", \"cycle\": {";
     if (!grid.empty()) text += "\"grid_p_im_kpa\": " + kpa_list(grid);
     if (cv.compression_ratio > 0.0) text += std::string(grid.empty() ? "" : ", ") + "\"compression_ratio\": " + std::to_string(cv.compression_ratio);
-    text += "}}";
+    text += "}";
+    if (cv.plate_tolerance >= 0.0) text += ", \"plate_monotone_tolerance\": " + std::to_string(cv.plate_tolerance);
+    text += "}";
     io::EngineMapOptions o;
     o.quality = cv.q;
     o.pool = &pool();
@@ -622,6 +625,9 @@ TEST_CASE("FI7 boost_grid_p_im adds a node at ambient when the stock axis stops 
     Conversion old = cv;
     old.grid_override = g;
     old.grid_override.erase(std::find(old.grid_override.begin(), old.grid_override.end(), kIsaAirPressurePa));
+    // The exact check (tolerance 0): the default plate_monotone_tolerance (G1, 0.04) accepts this axis's dip, so the
+    // pre-G1 refusal is reproduced with the tolerance switched off.
+    old.plate_tolerance = 0.0;
     bool threw = false;
     try {
         ComponentParams co = convert(old);

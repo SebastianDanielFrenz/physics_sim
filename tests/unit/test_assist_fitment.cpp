@@ -541,10 +541,15 @@ TEST_CASE("R2: vehicle-level electronics rejections", "[assist][io][drivetrain][
     const std::string car = kData + "/vehicles/car_sedan.json";
     const std::string head = R"({"format":"physics_sim.electronics/1","kind":"launch_control",)";
     // i4_2l_na.json: limiter 6800, idle 800
-    CHECK_THROWS_WITH(load_desc(car, graft(head + R"("rpm":7000,"max_speed_mps":2})")),
-                      ContainsSubstring("must be below the engine's own limiter rpm"));
-    CHECK_THROWS_WITH(load_desc(car, graft(head + R"("rpm":6800,"max_speed_mps":2})")),
-                      ContainsSubstring("must be below the engine's own limiter rpm"));
+    // G1 (limiter_range.h fit_launch_rpm): at or above the limiter is no longer a load error - the two-step is held at
+    // max_limiter_fraction (0.8 [AS]) x 6800 = 5440 rpm [D] by the Powertrain and the load warns.
+    for (const char* rpm : {"7000", "6800"}) {
+        io::VehicleLoadOptions o = graft(head + "\"rpm\":" + rpm + ",\"max_speed_mps\":2}");
+        std::vector<std::string> warn;
+        o.maps.warnings_out = &warn;
+        CHECK_NOTHROW(load_desc(car, o));
+        CHECK(std::any_of(warn.begin(), warn.end(), [](const std::string& w) { return w.find("held at 5440 rpm") != std::string::npos; }));
+    }
     CHECK_THROWS_WITH(load_desc(car, graft(head + R"("rpm":800,"max_speed_mps":2})")), ContainsSubstring("must be above the engine's idle rpm"));
     CHECK_THROWS_WITH(load_desc(car, graft(head + R"("rpm":500,"max_speed_mps":2})")), ContainsSubstring("must be above the engine's idle rpm"));
     CHECK_THROWS_WITH(load_desc(car, graft(head + R"("rpm":4000,"max_speed_mps":-2})")), ContainsSubstring("'max_speed_mps' must be finite and > 0"));

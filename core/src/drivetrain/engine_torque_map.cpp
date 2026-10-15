@@ -236,7 +236,12 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
         tau_hyd_ = -(s * ((k_plant - real(1.0)) * f_hyd_ref * hyd_shape.value));
         tau_smooth_ += tau_hyd_;
     }
-    const real tau_comb_demand = theta_c_demand * (w_rpm - m_rpm);
+    // G1 (limiter_range.h): past the curves' data an armed roll-off scales the combustion span and the fuel by
+    // rolloff.factor(rpm). Inside the data (or disarmed) span is the pre-G1 (w_rpm - m_rpm) exactly.
+    const bool roll = desc_.rolloff.active(rpm);
+    const real roll_f = roll ? desc_.rolloff.factor(rpm) : real(1.0);
+    const real span = roll ? (w_rpm - m_rpm) * roll_f : (w_rpm - m_rpm);
+    const real tau_comb_demand = theta_c_demand * span;
 
     // PHYS-033 P4 I7a C5/C5d: fuel DEMAND at this substep-start rpm and the
     // commanded theta_c (the map's own "load" axis - see
@@ -246,7 +251,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     // touched when there is no fuel model at all.
     real fuel_flow_g_s = real(0.0);
     if (desc_.has_fuel_map) {
-        const real mdot_g_s = desc_.fuel_map.value(rpm, theta_c_demand);
+        const real mdot_g_s = roll ? desc_.fuel_map.value(rpm, theta_c_demand) * roll_f : desc_.fuel_map.value(rpm, theta_c_demand);
         mdot_kg_s_ = mdot_g_s / real(1000.0);
         fuel_flow_g_s = mdot_g_s;
     } else if (desc_.has_fuel_model) {
@@ -298,9 +303,11 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
 
     const real m_slope = curve_slope_at(desc_.motoring_torque_nm_vs_rpm, rpm);
     const real w_slope = curve_slope_at(desc_.wot_torque_nm_vs_rpm, rpm);
+    // G1: d(span)/drpm; the roll-off adds (w - m) * dfactor/drpm (the curves are flat past their data).
+    const real span_slope = roll ? (w_slope - m_slope) * roll_f + (w_rpm - m_rpm) * desc_.rolloff.slope_per_rpm(rpm) : (w_slope - m_slope);
     // PHYS-033 P4 I7a C6: each combustion term times s_starve (x*1.0 == x
     // when not starving - same operands, same order as pre-C6).
-    real dtau_domega = kRadPerSecToRpm * m_slope + theta_c_demand * kRadPerSecToRpm * (w_slope - m_slope) * s_starve;
+    real dtau_domega = kRadPerSecToRpm * m_slope + theta_c_demand * kRadPerSecToRpm * span_slope * s_starve;
     // Thermal T1b: d(tau_hyd)/domega = -s * dF'(rpm) * K * s = -K * dF'(rpm) (only while turning: s != 0).
     if (k_plant != real(1.0) && s != real(0.0)) {
         dtau_domega -= kRadPerSecToRpm * ((k_plant - real(1.0)) * f_hyd_ref * hyd_shape.slope_per_rpm);
@@ -308,7 +315,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     if (desc_.limiter.type == LimiterType::SoftCut) {
         const bool in_band = rpm < lim_rpm && rpm > lim_rpm - desc_.limiter.band_rpm;
         const real dflim_domega = in_band ? -kRadPerSecToRpm / desc_.limiter.band_rpm : real(0.0);
-        dtau_domega += theta_eff * (w_rpm - m_rpm) * dflim_domega * s_starve;
+        dtau_domega += theta_eff * span * dflim_domega * s_starve;
     }
     // PHYS-033 P4 I4 C12: tau_comb = theta_eff*f_lim*(w-m); when the governor
     // is the active argument (governor_engaged), theta_eff == theta_gov and
@@ -319,7 +326,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     // exactly the spec's own formula.
     if (governor_engaged) {
         const real dgov_domega = -kRadPerSecToRpm / governor_band;
-        dtau_domega += f_lim * (w_rpm - m_rpm) * dgov_domega * s_starve;
+        dtau_domega += f_lim * span * dgov_domega * s_starve;
     }
     if (starter_in_speed_range) dtau_domega -= desc_.starter.stall_torque_nm / omega_s0;
     const real d = std::max(-dtau_domega, real(0.0));
@@ -340,7 +347,7 @@ EngineTorqueMap::PreSolveResult EngineTorqueMap::pre_solve(const Sensors& sensor
     r.starter_active = starter_active;
     r.torque_estimate = tau_smooth_ + tau_comb_;
     r.governor_setpoint_rpm = governor_setpoint_rpm;
-    r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * (w_rpm - m_rpm);
+    r.torque_demand = s * m_rpm + (comb ? theta_eff : real(0.0)) * span;
     // Thermal T1b: the ECU's estimate of the cold-oil increment (the ECU k; skipped at k == 1, bit-identical).
     if (k_ecu != real(1.0)) {
         r.torque_demand -= s * ((k_ecu - real(1.0)) * f_hyd_ref * hydrodynamic_speed_shape(rpm, n_ref).value);
@@ -360,8 +367,14 @@ PedalEnvelope EngineTorqueMap::request_envelope(real rpm) const {
     const real m = desc_.motoring_torque_nm_vs_rpm.evaluate(rpm);
     const real w = desc_.wot_torque_nm_vs_rpm.evaluate(rpm);
     e.cut_nm = m;
-    e.z_nm = dfco_active_ ? m : m + theta_idle_last_ * (w - m);
-    e.f_nm = w;
+    if (desc_.rolloff.active(rpm)) { // G1: the rolled-off full load (and idle state) past the curves' data
+        const real span = (w - m) * desc_.rolloff.factor(rpm);
+        e.z_nm = dfco_active_ ? m : m + theta_idle_last_ * span;
+        e.f_nm = m + span;
+    } else {
+        e.z_nm = dfco_active_ ? m : m + theta_idle_last_ * (w - m);
+        e.f_nm = w;
+    }
     e.fired_floor_nm = std::numeric_limits<real>::quiet_NaN();
     e.manual_law = desc_.manual_pedal_law;
     return e;

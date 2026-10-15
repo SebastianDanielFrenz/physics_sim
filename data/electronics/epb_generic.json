@@ -1,0 +1,8 @@
+{
+  "format": "physics_sim.electronics/1",
+  "kind": "epb",
+  "name": "generic electronic parking brake",
+  "max_engage_speed_mps": 2.0,
+  "epb_mode": "park_only",
+  "source": "[AS] Q3 / I8 (queue item, docs/next_steps_brief.md). An electronic parking brake on the car's own handbrake rows (brake_system.handbrake). max_engage_speed_mps 2.0 [AS]: 7.2 km/h, about walking pace - a production EPB applied above a few km/h either refuses or brakes dynamically; this model refuses (owner rule, verbatim: 'No, unless special modes are used (racing, drift), the parking brake should refuse to engage while speed is significant.'). epb_mode park_only by default; a drive_modes part overrides it per mode (car_hyper / car_hyper_n2o: handbrake in Racing)."
+}

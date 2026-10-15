@@ -12,6 +12,7 @@
 #include "gearbox.h" // Gearbox::Phase only
 
 #include "ps/drivetrain/controller_desc.h" // AutoClutchDesc/AutoBlipDesc/AutoShiftDesc (public, plan section 4.2)
+#include "ps/drivetrain/limiter_range.h"
 #include "ps/types.h"
 
 #include <cstdint>
@@ -34,6 +35,10 @@ public:
         // legacy fixed-rate close (e_auto -> 1 at 1/close_time_s).
         real engine_inertia = 0.0;
         real clutch_capacity_nm = 0.0;
+        // G1: filled by Powertrain = auto_shift.max_limiter_fraction * effective_limiter_rpm(engine)
+        // (ps/drivetrain/limiter_range.h). The four auto-shift points (the car's own or a drive mode's) are scaled by
+        // shift_point_scale(..., shift_rpm_cap) each time they are read; 0 (a bare ManualTcu) = no cap.
+        real shift_rpm_cap = 0.0;
     };
 
     enum class ClutchMode : std::uint8_t { Launch, Locked, Shift };

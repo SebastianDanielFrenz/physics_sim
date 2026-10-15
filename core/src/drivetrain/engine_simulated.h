@@ -69,6 +69,7 @@
 #include "engine.h"
 #include "nitrous_flow.h"
 #include "ps/drivetrain/isa_air.h"
+#include "ps/drivetrain/limiter_range.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/drivetrain/table2d.h"
 #include "ps/types.h"
@@ -99,6 +100,10 @@ struct SimulatedEngineMaps {
     real lhv_j_kg = 0.0, afr_stoich = 0.0; // fuels[0]
     real c_k = 0.0;                // maps.friction_torque_nm(0): the Coulomb row's kinetic capacity
     EngineLimiterDesc limiter;     // runtime only: the steady tables below IGNORE it (like EngineTorqueMap's torque_demand)
+    // G1 (limiter_range.h): the volumetric-efficiency roll-off past the maps' data, one for the whole engine (every cam
+    // profile / lift node carries the same one). Disarmed (the default and every engine whose limiter lies inside its
+    // maps) reads exactly as before G1; armed, it is folded into content_hash.
+    RpmRolloff rolloff;
 
     // --- derived at construction ------------------------------------------
     std::vector<real> psi;         // kPsiIntervals + 1 knots, pr = i/kPsiIntervals
@@ -489,7 +494,10 @@ public:
     [[nodiscard]] const WorkSplit& last_work_split() const { return work_split_; }
 
 private:
-    [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables);
+    // rolloff: null = rpm_rolloff(desc); the cam-profile / lift-node sub-builds pass the parent's (their desc copy lists
+    // only their own maps).
+    [[nodiscard]] static std::shared_ptr<const SimulatedEngineMaps> build_maps_impl(const SimulatedEngineDesc& desc, bool steady_tables,
+                                                                                   const RpmRolloff* rolloff = nullptr);
     void init_state_for(EngineState state);
     void set_live_ambient(real p_pa,real t_k);
     // Live control path: the ambient differs from the setup tables' OR the ECU's friction scale is not exactly 1.0
