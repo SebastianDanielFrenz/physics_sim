@@ -56,6 +56,10 @@ struct DriveModeParams {
     bool nitrous_arm_allowed = true;
     // Q3 / I8: the EPB mode while this drive mode runs (unset = the epb part's own epb_mode). Ignored without an epb part.
     std::optional<EpbMode> epb_mode;
+    // ABS / ESC: the assist.abs enable and the assist.esc mode the car switches to when this drive mode becomes effective,
+    // written into the channels like traction_control_default. Ignored on a car whose unit lacks the block.
+    std::optional<bool> abs_default;
+    std::optional<EscMode> esc_default;
 };
 
 struct DriveModesDesc {
@@ -108,6 +112,22 @@ struct DriveModesDesc {
     return base;
 }
 
+// The assist.abs / assist.esc channel defaults: the default drive mode's value when it sets one, else the unit block's.
+[[nodiscard]] inline real abs_default_channel_value(const AbsDesc& abs, const std::optional<DriveModesDesc>& modes) {
+    if (modes) {
+        const auto& v = modes->params[static_cast<std::size_t>(modes->default_mode)].abs_default;
+        if (v) return *v ? real(1) : real(0);
+    }
+    return abs.default_enabled ? real(1) : real(0);
+}
+[[nodiscard]] inline real esc_default_channel_value(const EscDesc& esc, const std::optional<DriveModesDesc>& modes) {
+    if (modes) {
+        const auto& v = modes->params[static_cast<std::size_t>(modes->default_mode)].esc_default;
+        if (v) return static_cast<real>(static_cast<int>(*v));
+    }
+    return static_cast<real>(static_cast<int>(esc.default_mode));
+}
+
 // Range checks shared by the loader and VehicleInstance (code-built descs). Throws std::invalid_argument.
 inline void validate_drive_modes(const DriveModesDesc& d) {
     const auto fin = [](real v) { return std::isfinite(v); };
@@ -126,6 +146,7 @@ inline void validate_drive_modes(const DriveModesDesc& d) {
         for (const std::optional<real>* r : {&p.up_rpm_at_zero_throttle, &p.up_rpm_at_full_throttle, &p.down_rpm_at_zero_throttle, &p.down_rpm_at_full_throttle}) {
             if (*r && (!fin(**r) || !(**r > real(0)))) throw std::invalid_argument(ctx + "auto-shift rpm values must be finite and > 0");
         }
+        if (p.esc_default && static_cast<int>(*p.esc_default) >= kEscModeCount) throw std::invalid_argument(ctx + "unknown esc_default");
         if (p.epb_mode && static_cast<unsigned>(*p.epb_mode) > 1u) throw std::invalid_argument(ctx + "unknown epb_mode");
         if (p.clutch_close_time_s && (!fin(*p.clutch_close_time_s) || !(*p.clutch_close_time_s > real(0)))) throw std::invalid_argument(ctx + "clutch_close_time_s must be finite and > 0");
     }

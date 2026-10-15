@@ -34,6 +34,10 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
     aero::validate(desc_.aero);
     validate_traction_control(desc_.traction_control);
     traction_sensors_.resize(desc_.wheels.size());
+    abs_esc_state_.resize(desc_.wheels.size());
+    wheel_brake_.assign(desc_.wheels.size(), real(0));
+    is_front_.resize(desc_.wheels.size());
+    for (std::size_t i = 0; i < desc_.wheels.size(); ++i) is_front_[i] = desc_.wheels[i].is_front ? 1 : 0;
     substep_telemetry_.resize(kMaxSubstepTelemetry * desc_.wheels.size());
     {
         // Engine garage P8 (A15): fitment. Without a manual_tcu there is nothing to un-fit (the flags stay true and
@@ -104,10 +108,27 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
                 throw std::runtime_error("vehicle '" + desc_.name + "': epb needs brake_system.handbrake rows (wheels and max_torque_nm > 0)");
             }
         }
+        if (desc_.assist_unit && (desc_.assist_unit->abs || desc_.assist_unit->esc)) {
+            // Assists I5 part 2 / I6 backstop for code-built descs (the loader checks the same).
+            const AssistUnitDesc& u = *desc_.assist_unit;
+            try {
+                if (u.abs) validate_abs(*u.abs);
+                if (u.esc) validate_esc(*u.esc);
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error("vehicle '" + desc_.name + "': " + e.what());
+            }
+            if (u.esc && !u.abs) throw std::runtime_error("vehicle '" + desc_.name + "': esc needs an 'abs' block");
+            bool service = false;
+            for (const auto& c : desc_.brake_system.corners) if (c.max_torque_nm > real(0)) service = true;
+            if (!service) throw std::runtime_error("vehicle '" + desc_.name + "': abs needs a service brake corner with max_torque_nm > 0");
+            fit_abs_ = u.abs.has_value();
+            fit_esc_ = u.esc.has_value();
+        }
         tc_mode_desc_ = resolve_traction_mode_descs(desc_.traction_control, desc_.assist_unit);
         tc_modes_available_bits_ = traction_modes_available_bits(desc_.assist_unit, fit_traction_);
         fitted_bits_ = ((have_tcu && fit_clutch_) ? 1u : 0u) | ((have_tcu && fit_blip_) ? 2u : 0u) | ((have_tcu && fit_shift_) ? 4u : 0u) |
-                       (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u) | (fit_aero_ ? 64u : 0u) | (desc_.epb ? 128u : 0u);
+                       (fit_traction_ ? 8u : 0u) | (fit_launch_ ? 16u : 0u) | (desc_.powertrain.anti_lag_fitted ? 32u : 0u) | (fit_aero_ ? 64u : 0u) | (desc_.epb ? 128u : 0u) |
+                       (fit_abs_ ? 256u : 0u) | (fit_esc_ ? 512u : 0u);
     }
     wheels_.reserve(desc_.wheels.size());
     for (const WheelDesc& w : desc_.wheels) {
@@ -230,6 +251,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     // default leaves the channel alone. Only (initialised, last_mode) is state, hashed only on a car with the part.
     real tc_channel_value = channel_values[control_indices_.assist_traction_control];
     real lc_channel_value = fit_launch_ ? channel_values[control_indices_.assist_launch_control] : real(0);
+    real abs_channel_value = fit_abs_ ? channel_values[control_indices_.assist_abs] : real(0);
+    real esc_channel_value = fit_esc_ ? channel_values[control_indices_.assist_esc] : real(0);
     pending_write_count_ = 0;
     const DriveModeParams* drive_params = nullptr;
     DriveMode drive_mode_req = DriveMode::Normal, drive_mode_eff = DriveMode::Normal;
@@ -251,8 +274,21 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
                 lc_channel_value = *drive_params->launch_control_default ? real(1) : real(0);
                 pending_writes_[pending_write_count_++] = {control_indices_.assist_launch_control, lc_channel_value};
             }
+            if (fit_abs_ && drive_params->abs_default) { // assists I5 part 2: the mode's ABS default, like the TC default
+                abs_channel_value = *drive_params->abs_default ? real(1) : real(0);
+                pending_writes_[pending_write_count_++] = {control_indices_.assist_abs, abs_channel_value};
+            }
+            if (fit_esc_ && drive_params->esc_default) { // assists I6
+                esc_channel_value = static_cast<real>(static_cast<std::uint8_t>(*drive_params->esc_default));
+                pending_writes_[pending_write_count_++] = {control_indices_.assist_esc, esc_channel_value};
+            }
         }
     }
+    // Assists I5 part 2 / I6: ABS on/off (>= 0.5) and the ESC mode run (an unoffered request maps like TC's).
+    const bool assist_abs = fit_abs_ && abs_channel_value >= real(0.5);
+    const EscMode esc_mode_req = fit_esc_ ? esc_mode_requested(esc_channel_value) : EscMode::Off;
+    const EscMode esc_mode_eff = fit_esc_ ? resolve_esc_mode(desc_.assist_unit->esc->modes_bits, esc_mode_req) : EscMode::Off;
+    const bool assist_esc = esc_mode_eff != EscMode::Off;
     const TractionMode tc_mode_requested = traction_mode_requested(tc_channel_value);
     const TractionMode tc_mode_effective = resolve_traction_mode(tc_modes_available_bits_, tc_mode_requested);
     const bool assist_traction = tc_mode_effective != TractionMode::Off;
@@ -325,7 +361,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     // Virtual ideal six-axis IMU: finite-difference acceleration, gravity
     // compensated using attitude. Only this sensor reading reaches TC.
     real imu_accel=0;
-    if(desc_.traction_control.enabled||assist_traction||traction_state_.initialized) {
+    if(desc_.traction_control.enabled||assist_traction||traction_state_.initialized||assist_abs||assist_esc||abs_esc_state_.initialized) {
         if(imu_have_previous_&&tick_dt>0) imu_accel=pose0.orientation.inverse().rotate((motion0.linear-imu_previous_velocity_world_)/tick_dt).x;
         imu_previous_velocity_world_=motion0.linear;imu_have_previous_=true;
     }
@@ -420,6 +456,32 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
             sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i)};
         }
+        // Assists I5 part 2 / I6: ABS and ESC (abs_esc.h) from the same sensors. Off (or not fitted) leaves
+        // ctx.wheel_brake null, so every brake row reads ctx.brake exactly as before.
+        real esc_fraction = 1;
+        if (assist_abs || assist_esc) {
+            real front_sum = 0; int front_n = 0;
+            for (std::size_t i = 0; i < wheels_.size(); ++i) if (is_front_[i]) { front_sum += traction_sensors_[i].steer_rad; ++front_n; }
+            esc_front_angle_ = front_n > 0 ? front_sum / static_cast<real>(front_n) : real(0);
+            AbsEscInputs ai;
+            ai.wheels = traction_sensors_;
+            ai.is_front = is_front_;
+            ai.imu_accel = imu_accel;
+            ai.yaw_rate = yaw;
+            ai.brake = controls.brake;
+            ai.handbrake = controls.handbrake;
+            ai.front_wheel_angle = esc_front_angle_;
+            ai.wheelbase = wheelbase_;
+            ai.dt = substep_dt;
+            ai.abs = assist_abs ? &*desc_.assist_unit->abs : nullptr;
+            ai.esc = fit_esc_ ? &*desc_.assist_unit->esc : nullptr;
+            ai.esc_mode = esc_mode_eff;
+            ai.wheel_brake_out = wheel_brake_;
+            step_abs_esc(abs_esc_state_, ai);
+            esc_fraction = abs_esc_state_.esc_torque_fraction;
+        } else if (abs_esc_state_.initialized) {
+            abs_esc_state_.reset(); // both switched off: the next switch-on starts from the wheels again
+        }
         // Assists I4 (D-LC1): the unit's launch control decides first, from the previous substep's sensors (its own
         // powertrain reads and TC's estimator state), so this substep's TC call already knows whether the controller
         // owns the car. While it does (Armed, Launch) traction control is SUSPENDED - it still runs, because the
@@ -454,7 +516,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         const real traction_fraction_raw=step_traction_control(tc_desc,traction_state_,traction_sensors_,imu_accel,yaw,
             controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction||lc_owns,substep_dt);
         // TC's output reaches the powertrain only when TC is really on and not suspended by the launch control.
-        const real traction_fraction=(assist_traction&&!lc_owns)?traction_fraction_raw:real(1);
+        const real traction_fraction=std::min((assist_traction&&!lc_owns)?traction_fraction_raw:real(1),esc_fraction); // I6: ESC's torque cut
         ctx.traction_ignition_cut=assist_traction&&!lc_owns&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
         ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*traction_fraction:real(1);
         ctx.assist_ceiling_as_retard=tc_desc.ignition_cut; // pedal P1 (b): TC/LC ceilings as spark retard (engine.h)
@@ -486,6 +548,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         }
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
+        if (assist_abs || assist_esc) ctx.wheel_brake = wheel_brake_.data(); // assists I5 part 2 / I6
         ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9
         ctx.clutch_pedal = clutch_pedal;
         ctx.gear_request = gear_request;
@@ -725,6 +788,15 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             snap.epb_refused = epb_.refused;
             if (epb_.state != 0) snap.assist_active_bits |= 128u;
         }
+        if (assist_abs) snap.assist_active_bits |= 256u; // assists I5 part 2 / I6
+        if (assist_esc) snap.assist_active_bits |= 512u;
+        snap.abs_active = abs_esc_state_.abs_active && assist_abs;
+        snap.esc_active = abs_esc_state_.esc_active && assist_esc;
+        snap.abs_reference_speed_m_s = (fit_abs_ || fit_esc_) ? abs_esc_state_.reference_speed_m_s : real(0);
+        snap.esc_yaw_rate_target = assist_esc ? abs_esc_state_.yaw_rate_target : real(0);
+        snap.esc_mode_requested = static_cast<std::uint8_t>(esc_mode_req);
+        snap.esc_mode_effective = static_cast<std::uint8_t>(esc_mode_eff);
+        snap.esc_modes_available_bits = fit_esc_ ? desc_.assist_unit->esc->modes_bits : std::uint8_t(0);
         snap.traction_mode_requested = static_cast<std::uint8_t>(tc_mode_requested);
         snap.traction_mode_effective = static_cast<std::uint8_t>(tc_mode_effective);
         snap.traction_modes_available_bits = tc_modes_available_bits_;
@@ -821,7 +893,7 @@ void VehicleInstance::reset(const vehicle::VehicleResetOptions& opts, const IRig
         hub_speeds[i] = radius > real(0.0) ? hub_speed_common / radius : real(0.0);
         wheels_[i]->reset_relaxation();
     }
-    traction_state_={};drive_state_={};pending_write_count_=0;imu_have_previous_=false;imu_previous_velocity_world_={};
+    traction_state_={};drive_state_={};pending_write_count_=0;imu_have_previous_=false;imu_previous_velocity_world_={};abs_esc_state_.reset();std::fill(wheel_brake_.begin(),wheel_brake_.end(),real(0));
     if(launch_){launch_->reset();aero_launch_request_=false;}
     powertrain_.reset(opts, hub_speeds);
     // Teleport resets actuator dynamics/commands, but does not create or discard prepaid energy.
@@ -890,6 +962,34 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
             }
         }
         fold(epb_.last_level);fold(epb_.refused);fold(epb_.state);
+    }
+    if(fit_abs_||fit_esc_) {
+        // Assists I5 part 2 / I6: the ABS / ESC desc and state plus the IMU memory they share with TC - only on a car
+        // whose assist unit carries a block, so every other car hashes exactly as before.
+        const auto fold=[&](const auto& v){const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}};
+        if(fit_abs_) {
+            const AbsDesc& a=*desc_.assist_unit->abs;
+            for(real v:{a.target_slip,a.min_speed_mps,a.slip_floor_mps,a.kp,a.ki_per_s,a.release_rate_per_s,a.apply_rate_per_s,a.reanchor_rate_per_s})fold(v);
+            fold(a.default_enabled);fold(a.rear_select_low);fold(a.reanchor_scale);fold(a.front_split_max);fold(a.front_split_rate_per_s);
+        }
+        if(fit_esc_) {
+            const EscDesc& e=*desc_.assist_unit->esc;
+            fold(e.modes_bits);fold(static_cast<std::uint8_t>(e.default_mode));
+            for(real v:{e.characteristic_speed_mps,e.max_lateral_accel_mps2,e.min_speed_mps,e.brake_rate_per_s})fold(v);
+            for(int m=1;m<kEscModeCount;++m) {
+                const EscModeParams& p=e.params[static_cast<std::size_t>(m)];
+                for(real v:{p.deadband_rad_s,p.deadband_fraction,p.brake_gain_per_rad_s,p.max_brake,p.torque_gain_per_rad_s})fold(v);
+            }
+        }
+        if(desc_.drive_modes) {
+            for(int m=0;m<kDriveModeCount;++m) {
+                const DriveModeParams& p=desc_.drive_modes->params[static_cast<std::size_t>(m)];
+                fold(static_cast<std::uint8_t>(p.abs_default?(*p.abs_default?2:1):0));
+                fold(static_cast<std::uint8_t>(p.esc_default?static_cast<int>(*p.esc_default)+1:0));
+            }
+        }
+        h=fold_abs_esc_hash(abs_esc_state_,h);
+        for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)})fold(v);
     }
     if(desc_.traction_control.enabled||traction_state_.initialized||traction_state_.enabled) {
         for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)}) {

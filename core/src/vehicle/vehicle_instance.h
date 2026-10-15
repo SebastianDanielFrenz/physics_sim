@@ -6,6 +6,7 @@
 #pragma once
 
 #include "../drivetrain/powertrain.h"
+#include "abs_esc.h"
 #include "launch_assist.h"
 #include "wheel_instance.h"
 
@@ -63,6 +64,8 @@ struct ControlChannelIndices {
     std::size_t assist_aero_control = 0;   // assists I5: only read when the car's assist_unit aero_control is fitted
     std::size_t assist_drive_mode = 0;     // assists I7: only read when the car has a drive_modes part
     std::size_t epb = 0;                   // Q3 / I8: only read when the car has an epb part
+    std::size_t assist_abs = 0;            // ABS (I5 part 2): only read when the car's assist unit carries an abs block
+    std::size_t assist_esc = 0;            // ESC (I6): only read when the car's assist unit carries an esc block
     // PHYS-033 P4 I4 C3 (plan section 2.4): one resolved World control-
     // channel index per drivetrain::Powertrain::declare_control_channels(...)
     // entry, same order - resolved in World::create_vehicle exactly like the
@@ -225,6 +228,11 @@ public:
         dbg.pto_clutch_slip = powertrain_.pto_clutch_slip();
         dbg.dyno_torque = powertrain_.dyno_torque();
         powertrain_.fill_shaft_debug(dbg.shaft_twist_rad, dbg.shaft_torque); // PHYS-033 P4 I4 C13
+        for (std::size_t i = 0; i < wheel_brake_.size() && i < 8; ++i) { // assists I5 part 2 / I6
+            dbg.abs_wheel_scale[i] = abs_esc_state_.applied[i];
+            dbg.esc_wheel_brake[i] = abs_esc_state_.esc_brake[i];
+            dbg.wheel_brake_command[i] = wheel_brake_[i];
+        }
         return dbg;
     }
 
@@ -341,7 +349,7 @@ private:
     bool lc_default_state_ = false; // I7b: some offered drive mode sets launch_control_default
     // Assists I7c: channel writes a drive-mode change queues from inside step_tick (a vehicle job cannot touch World's
     // channel map). At most two (TC code, LC enable); cleared at the start of every step_tick; never hashed.
-    std::array<PendingChannelWrite, 2> pending_writes_{};
+    std::array<PendingChannelWrite, 4> pending_writes_{}; // TC, LC, ABS, ESC
     std::size_t pending_write_count_ = 0;
     // Assists I5: the assist unit's rear-wing automation. fit_aero_ = block present AND the car has the named surface;
     // the surface index and the launch-control hook are plain per-tick inputs, none of it hashed.
@@ -352,6 +360,14 @@ private:
     // assist). Its hashed state is folded only then; launch_slip_target_ is the last substep's snapshot value.
     std::optional<LaunchAssist> launch_;
     real launch_slip_target_ = 0;
+    // Assists I5 part 2 / I6: ABS and ESC (abs_esc.h). fit_* = the assist unit carries the block; the state is hashed
+    // only on a fitted car. wheel_brake_ is the per-wheel service command handed to the brake rows (ctx.wheel_brake) on a
+    // substep where either runs; is_front_ caches WheelDesc::is_front. All sized once in the constructor.
+    bool fit_abs_ = false, fit_esc_ = false;
+    AbsEscState abs_esc_state_{};
+    std::vector<real> wheel_brake_;
+    std::vector<std::uint8_t> is_front_;
+    real esc_front_angle_ = 0; // last substep's mean front road-wheel angle (snapshot only)
     TractionControlState traction_state_{};
     std::vector<TractionWheelSensor> traction_sensors_;
     std::vector<WheelTelemetry> substep_telemetry_; // assists I2a diag: kMaxSubstepTelemetry x wheels, sized at construction
