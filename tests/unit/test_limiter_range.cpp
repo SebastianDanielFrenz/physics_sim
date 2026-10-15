@@ -547,6 +547,21 @@ TEST_CASE("P1: the plate check tolerates a small dip (toyota_a25a_fks_gen, Sketc
     CHECK_FALSE(r.points.empty());
 }
 
+// P2: inside the roll-off band the pumping excess (gas-exchange loss of the flow the roll-off cut) rolls off with the flow.
+// Before, toyota_a25a_fks_gen at a 20000 rpm limiter threw "not non-decreasing in plate position" at rpm 8250: the
+// plenum fills toward ambient on a cut air flow while the full pmep_excess of the WOT row stayed, so torque fell as the plate opened.
+TEST_CASE("P2: a 20000 rpm limiter builds the steady tables (toyota_a25a_fks_gen, Sketch and Preview)", "[limiter_range][drivetrain][cycle][long]") {
+    for (const MapQuality q : {MapQuality::Sketch, MapQuality::Preview}) {
+        io::EngineMapOptions o;
+        o.quality = q;
+        o.pool = &pool();
+        o.cache_dir = cache_dir();
+        SimulatedEngineDesc d = std::get<SimulatedEngineDesc>(io::load_engine_json(kData + "/engines/toyota_a25a_fks_gen.json", o));
+        d.limiter.rpm = 20000.0;
+        CHECK_NOTHROW(SimulatedEngine::build_maps(d));
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // E: every shipped car at both garage extremes.
 // ---------------------------------------------------------------------------------------------------------------
