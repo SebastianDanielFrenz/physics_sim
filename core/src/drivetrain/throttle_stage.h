@@ -130,6 +130,9 @@ private:
         case GearboxType::Manual:
         case GearboxType::Sequential:
             return false;
+        case GearboxType::Automatic:
+        case GearboxType::DualClutch:
+            return true; // automatic gearbox plan A1
     }
     return false;
 }

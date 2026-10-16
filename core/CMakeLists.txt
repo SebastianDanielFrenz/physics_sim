@@ -232,6 +232,7 @@ add_library(ps_core STATIC
   src/drivetrain/engine_simulated.cpp
   src/drivetrain/gearbox.cpp
   src/drivetrain/manual_tcu.cpp
+  src/drivetrain/auto_transmission.cpp
   src/drivetrain/engine_sound_state.cpp
   src/drivetrain/engine_rig.cpp
   src/drivetrain/engine_dyno.cpp

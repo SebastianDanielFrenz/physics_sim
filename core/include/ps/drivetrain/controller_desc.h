@@ -157,8 +157,54 @@ struct LaunchControlDesc {
     real max_limiter_fraction = 0.8;
 };
 
-// Closed, visited exhaustively - at most one manual_tcu and at most one launch_control per vehicle.
-using ControllerParams = std::variant<ManualTcuDesc, LaunchControlDesc>;
+// Automatic gearbox plan A1: the shift schedule of an automatic_tcu, in gearbox INPUT rpm (the turbine of an
+// Automatic, the engine of a DualClutch) so it moves with the engine, not with the final drive or the tyre size.
+// Upshift above lerp(up_zero, up_full, throttle), downshift below lerp(down_zero, down_full, throttle).
+struct ShiftScheduleDesc {
+    real up_rpm_at_zero_throttle = 2000.0, up_rpm_at_full_throttle = 6000.0;
+    real down_rpm_at_zero_throttle = 1100.0, down_rpm_at_full_throttle = 3200.0;
+};
+
+// Automatic gearbox plan A1: the TCU of an Automatic or DualClutch gearbox.
+// Selector through the existing gear_request channel (kGearRequestNone = no change): 0 = N, any negative value = R,
+// a positive value k = D with gears up to min(k, forward gears) (so a large value is plain D, 1..n hold the box at or
+// below that gear like an L/2/3 position). Park is N plus the park_lock component (channel park_lock), as before.
+// shift_up_count / shift_down_count in D step the box one gear (manual mode, "tiptronic"/paddles); manual mode ends
+// after manual_timeout_s without a press (0 = never) or when gear_request changes. The channel
+// kTransmissionModeChannel (declared with default 0 = D by every Automatic/DualClutch gearbox; 1 = S) selects the sport
+// schedule. Driver demand = the throttle stage's command (pedal map, drive mode applied).
+inline constexpr const char* kTransmissionModeChannel = "transmission.mode";
+
+struct AutomaticTcuDesc {
+    std::string gearbox, engine;
+    ShiftScheduleDesc schedule;       // D
+    ShiftScheduleDesc sport_schedule; // S (mode channel >= 0.5)
+    real min_time_in_gear_s = 0.8;    // > = 0, upshift dwell (a downshift by kickdown or the stall guard ignores it)
+    real kickdown_throttle = 0.9;     // command at or above: skip-downshift to the lowest gear whose input rpm stays
+    real kickdown_max_rpm = 5500.0;   // ... at or below this (and above the downshift line); 0..1 / > 0
+    real manual_timeout_s = 0.0;      // >= 0, see above
+    real manual_up_rpm = 0.0;         // manual mode: forced upshift at this input rpm (0 = the full-throttle up line)
+    // Torque reduction while the on-coming clutch pulls the engine down in a power-on upshift (inertia phase): the
+    // engine's throttle is capped at this fraction (1 = none).
+    real upshift_torque_fraction = 0.7;
+    // Automatic only: lock-up policy. Engaged in gear >= min_gear with the turbine above engage_rpm and the throttle
+    // command at or below max_throttle; released below release_rpm, above max_throttle + 0.1, and during every shift.
+    bool lockup_enabled = true;
+    int lockup_min_gear = 3;
+    real lockup_engage_rpm = 1400.0, lockup_release_rpm = 1100.0;
+    real lockup_max_throttle = 0.8;
+    // DualClutch only: launch on clutch slip. The starting clutch's engagement e goes 0 at bite_rpm -> 1 at
+    // lerp(full_rpm_min, full_rpm_max, throttle) of ENGINE rpm; once |slip| < lock_slip_rpm it locks (e = 1) until the
+    // engine falls below anti_stall_rpm. creep_torque_nm = the capacity the clutch keeps at idle without throttle in D/R
+    // (the creep), 0 = none.
+    real launch_bite_rpm = 1000.0, launch_full_rpm_min = 1500.0, launch_full_rpm_max = 3500.0;
+    real launch_lock_slip_rpm = 100.0, launch_anti_stall_rpm = 600.0;
+    real creep_torque_nm = 40.0;
+};
+
+// Closed, visited exhaustively - at most one transmission controller (manual_tcu or automatic_tcu) and at most one
+// launch_control per vehicle. AutomaticTcuDesc appended last (automatic gearbox plan A1).
+using ControllerParams = std::variant<ManualTcuDesc, LaunchControlDesc, AutomaticTcuDesc>;
 
 struct ControllerDesc {
     std::string id;

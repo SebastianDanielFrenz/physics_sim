@@ -62,6 +62,7 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
             }
         }
         fit_traction_ = desc_.traction_control.fitted;
+        has_manual_tcu_ = have_tcu;
         if (desc_.assist_unit && desc_.assist_unit->launch_control) {
             // Assists I4 (D-LC1): the unit's launch control. A car has either the P8 two-step (a launch_control
             // controller) or this one (owner Q5): both would drive TcuRequest::limiter_rpm.
@@ -503,7 +504,9 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         if(launch_) {
             LaunchAssist::Inputs li;
             li.enabled=assist_launch;
-            li.auto_clutch=assist_auto_clutch;
+            // Automatic gearbox plan A1: the unit's launch control holds the car on the manual_tcu's auto-clutch; a
+            // clutch-to-clutch box (automatic_tcu) has none, so the launch control never arms there.
+            li.auto_clutch=assist_auto_clutch&&has_manual_tcu_;
             li.engine_running=powertrain_.has_engine()&&powertrain_.last_engine_result().state==drivetrain::EngineTorqueMap::EngineState::Running;
             li.throttle=controls.throttle;li.brake=controls.brake;
             li.speed_mps=powertrain_.approx_speed_mps();
@@ -738,7 +741,18 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             const auto& gb = powertrain_.gearbox();
             snap.gear = static_cast<std::int8_t>(gb.current_position());
             snap.gear_target = static_cast<std::int8_t>(gb.target());
-            if (powertrain_.has_tcu() && powertrain_.tcu_clutch_mode() == drivetrain::ManualTcu::ClutchMode::Shift) {
+            if (powertrain_.has_auto()) {
+                // Automatic gearbox plan A1: the clutch-to-clutch phases onto the manual names.
+                using AP = drivetrain::AutoTransmission::Phase;
+                switch (powertrain_.auto_trans().phase()) {
+                    case AP::Idle: snap.shift_phase = drivetrain::ShiftPhase::Idle; break;
+                    case AP::Preselect: snap.shift_phase = drivetrain::ShiftPhase::Selecting; break;
+                    case AP::Torque: snap.shift_phase = drivetrain::ShiftPhase::Releasing; break;
+                    case AP::Inertia: snap.shift_phase = drivetrain::ShiftPhase::Synchronising; break;
+                    case AP::Engage:
+                    case AP::Closing: snap.shift_phase = drivetrain::ShiftPhase::ClutchClosing; break;
+                }
+            } else if (powertrain_.has_tcu() && powertrain_.tcu_clutch_mode() == drivetrain::ManualTcu::ClutchMode::Shift) {
                 switch (gb.phase()) {
                     case drivetrain::Gearbox::Phase::Idle:
                         // ClutchOpening precedes the gearbox's own phases
@@ -793,6 +807,16 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         snap.traction_estimated_speed_m_s=traction_state_.estimated_speed_m_s;
         snap.traction_positive_slip=traction_state_.positive_slip;
         snap.clutch_engagement = powertrain_.has_clutch() ? powertrain_.clutch_engagement() : real(1.0);
+        if (powertrain_.has_auto()) {
+            const auto& at = powertrain_.auto_trans();
+            snap.clutch_engagement = at.launch_engagement();
+            snap.transmission_kind = at.desc().dual_clutch ? 2 : 1;
+            snap.transmission_selector = static_cast<std::int8_t>(at.selector());
+            snap.transmission_manual_mode = at.manual_mode();
+            snap.transmission_sport_mode = powertrain_.transmission_sport_mode();
+            snap.converter_speed_ratio = powertrain_.converter_speed_ratio();
+            snap.lockup_engagement = powertrain_.lockup_engagement();
+        }
         snap.assist_active_bits = (assist_auto_clutch ? 1u : 0u) | (assist_auto_blip ? 2u : 0u) | (assist_auto_shift ? 4u : 0u) | (assist_traction ? 8u : 0u) |
                                 (assist_launch ? 16u : 0u) | (assist_aero ? 64u : 0u);
         snap.assist_fitted_bits = fitted_bits_;
