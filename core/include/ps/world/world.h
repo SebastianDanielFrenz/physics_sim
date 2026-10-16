@@ -347,6 +347,11 @@ public:
     // PowertrainEnergy::n2o_external_added; throws for a vehicle without a bottle or a NaN mass).
     [[nodiscard]] real n2o_bottle_mass(VehicleId id) const;
     void set_n2o_bottle_mass(VehicleId id, real kg);
+    // Contents mass (vehicle::ContentsMassDesc): the fuel + N2O mass the chassis body carries right now on top of
+    // its dry mass (0 when the vehicle does not opt in), and that dry mass (the chassis BodyDesc mass; 0 without
+    // opt-in). The body's mass is dry + this; it trails the true contents by less than update_threshold_kg.
+    [[nodiscard]] real chassis_contents_mass(VehicleId id) const;
+    [[nodiscard]] real chassis_dry_mass(VehicleId id) const;
     // Engine thermal plan T1 (vault PHYS-063): a vehicle with a cooling_system keeps lumped coolant/oil temperatures.
     // engine_thermal_state returns the live values in deg C (sim thread only; throws for a vehicle without thermal),
     // set_engine_thermal_state queues a new state for the next tick boundary (wax/play follow the coolant, fan off;
@@ -454,6 +459,16 @@ public:
     [[nodiscard]] const jobs::TaskGraph& pipeline() const { return *pipeline_; }
 
 private:
+    // Contents mass, one entry per vehicle (index == VehicleId.index; vehicles are never destroyed).
+    struct ContentsMassState {
+        bool enabled = false;
+        BodyId chassis{};
+        real dry_kg = 0.0;
+        real applied_kg = 0.0; // contents currently in the body mass
+        real threshold_kg = 0.1;
+    };
+    std::vector<ContentsMassState> contents_mass_;
+    void apply_contents_mass(bool force);
     void build_pipeline();
     // PLAN.md P4 I0 (PHYS-033 section 8, Q4): returns channel's index into
     // control_channel_values_, creating a slot the first time `channel` is

@@ -1417,6 +1417,12 @@ not on `ps_core`'s public include path).
     `fuel_external_added`; sim thread between steps only);
     `reset_vehicle` does not refill. The chassis mass does not change with
     fuel in I7a (PLAN.md "Fuel mass moves the chassis" - later).
+  - Contents mass (racing_game PR #22, docs/data_formats/vehicle.md "Contents mass"): optional VehicleDesc::contents_mass
+    {enabled, update_threshold_kg 0.1}; with it the chassis body mass = its creation (dry) mass + fuel tank + N2O bottle
+    contents, the initial fill applied in create_vehicle, then semi-live at the start of World::step whenever the contents
+    moved by the threshold (IRigidBackend::set_mass: Jolt ScaleToMass of the shape's mass properties, COM unchanged);
+    applied kg hashed only when enabled, off = bit-identical (no shipped vehicle enables it); World::chassis_contents_mass/
+    chassis_dry_mass. Tests tests/unit/test_contents_mass.cpp [contents_mass].
   - Engine thermal (engine thermal plan T1/T1b, out/engine_thermal_plan.md, vault PHYS-063; engine_thermal.h/.cpp,
     descriptors ps/drivetrain/engine_thermal_desc.h, loader ps/io/engine_thermal_io.h) - a Powertrain-owned member
     like the fuel tank, opt-in (a vehicle with a cooling_system and an engine with thermal data): two lumps (engine

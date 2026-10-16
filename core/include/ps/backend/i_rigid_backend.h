@@ -352,6 +352,11 @@ public:
     // body whose mass changes, e.g. fuel burn, loader bucket fill).
     [[nodiscard]] virtual real get_mass(BodyId id) const = 0;
     [[nodiscard]] virtual Mat3 get_inertia_world(BodyId id) const = 0; // about world-space COM
+    // Contents mass: sets a dynamic body's mass and rescales its inertia to it, exactly as at creation (the shape's
+    // own mass properties scaled to `mass`, centre of mass unchanged). Call between steps only (never from a job);
+    // the next step integrates with the new mass. A static or kinematic body, or a non-finite / non-positive mass,
+    // is ignored. Deterministic: the same call sequence gives bit-identical mass properties.
+    virtual void set_mass(BodyId id, real mass) = 0;
 
     // Accumulates a force+torque (about the body's world-space COM) for the
     // step about to run; cleared after step(). Must only be called from

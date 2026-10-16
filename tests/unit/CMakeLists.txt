@@ -93,6 +93,7 @@ add_executable(ps_unit_tests
   test_throttle_control.cpp
   test_engine_fuel_map.cpp
   test_fuel_tank.cpp
+  test_contents_mass.cpp
   test_ambient.cpp
   test_cited_engine_data.cpp
   test_simulated_engine_io.cpp

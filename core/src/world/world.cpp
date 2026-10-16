@@ -459,6 +459,8 @@ void World::step() {
     // and the old maps released, here - on the calling (sim) thread, before
     // the pipeline, outside any job (every pipeline stage runs as a job).
     vehicle_system_->apply_pending_engine_maps_swaps();
+    // Contents mass: the chassis bodies of opted-in vehicles carry their tank / bottle contents (semi-live).
+    apply_contents_mass(false);
 
     pipeline_->run(*job_system_);
 
@@ -607,6 +609,29 @@ void World::step() {
     sim_time_ += dt_;
 }
 
+void World::apply_contents_mass(bool force) {
+    for (std::size_t vi = 0; vi < contents_mass_.size(); ++vi) {
+        ContentsMassState& cm = contents_mass_[vi];
+        if (!cm.enabled) continue;
+        const VehicleId id{static_cast<id_index_t>(vi), 1};
+        const real contents = std::max(real(0.0), vehicle_system_->at(id).fuel_tank_mass()) +
+                              std::max(real(0.0), vehicle_system_->at(id).n2o_bottle_mass());
+        if (!force && std::abs(contents - cm.applied_kg) < cm.threshold_kg) continue;
+        backend_->set_mass(cm.chassis, cm.dry_kg + contents);
+        cm.applied_kg = contents;
+    }
+}
+
+real World::chassis_contents_mass(VehicleId id) const {
+    if (id.index >= contents_mass_.size() || !contents_mass_[id.index].enabled) return 0.0;
+    return contents_mass_[id.index].applied_kg;
+}
+
+real World::chassis_dry_mass(VehicleId id) const {
+    if (id.index >= contents_mass_.size() || !contents_mass_[id.index].enabled) return 0.0;
+    return contents_mass_[id.index].dry_kg;
+}
+
 std::uint64_t World::state_hash() const {
     std::uint64_t h = 14695981039346656037ULL; // FNV-1a offset basis
     h ^= tick_;
@@ -622,6 +647,16 @@ std::uint64_t World::state_hash() const {
     // Weather plan W2: the environment's clock anchor folds in only while one
     // is installed, so a World without one hashes exactly as before.
     if (environment_) h = environment_->fold_state_hash(h);
+    // Contents mass: only opted-in vehicles fold in, so every other World hashes exactly as before.
+    for (std::size_t vi = 0; vi < contents_mass_.size(); ++vi) {
+        if (!contents_mass_[vi].enabled) continue;
+        const double kg = static_cast<double>(contents_mass_[vi].applied_kg);
+        const unsigned char* b = reinterpret_cast<const unsigned char*>(&kg);
+        for (std::size_t k = 0; k < sizeof(kg); ++k) {
+            h ^= b[k];
+            h *= 1099511628211ULL;
+        }
+    }
     return h;
 }
 
@@ -783,6 +818,22 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
     backend_->set_integrate_sub_threshold_rotation(chassis, true);
 
     const VehicleId id = vehicle_system_->create(desc, chassis, surface_table_.get(), channel_indices);
+    if (contents_mass_.size() <= id.index) contents_mass_.resize(id.index + 1);
+    if (desc.contents_mass.enabled) {
+        vehicle::validate_contents_mass(desc.contents_mass);
+        ContentsMassState& cm = contents_mass_[id.index];
+        cm.enabled = true;
+        cm.chassis = chassis;
+        cm.dry_kg = backend_->get_mass(chassis);
+        cm.applied_kg = 0.0;
+        cm.threshold_kg = desc.contents_mass.update_threshold_kg;
+        if (!(cm.dry_kg > real(0.0))) throw std::runtime_error("contents_mass: the chassis body has no dynamic mass");
+        // The initial fill (initial_kg of the tank / bottle) at once: the first tick already runs with it.
+        const real contents = std::max(real(0.0), vehicle_system_->at(id).fuel_tank_mass()) +
+                              std::max(real(0.0), vehicle_system_->at(id).n2o_bottle_mass());
+        backend_->set_mass(chassis, cm.dry_kg + contents);
+        cm.applied_kg = contents;
+    }
     vehicle_air_.resize(vehicle_system_->count()); // weather plan W4; default (valid == false) until the environment fills it
     // PLAN.md P3 scope item 7: register this vehicle's per-wheel telemetry
     // channels now (setup time, not a hot path) so the CSV header names
