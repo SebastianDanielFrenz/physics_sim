@@ -188,7 +188,9 @@ Clutch::Desc to_clutch_desc(const ClutchDesc& c) {
 
 Gearbox::Desc to_gearbox_desc(const GearboxDesc& g) {
     Gearbox::Desc d;
-    d.type = g.type == GearboxType::Manual ? GearboxKind::Manual : GearboxKind::Sequential;
+    // Automatic gearbox plan A1: an Automatic/DualClutch box keeps a Gearbox object only for its ratio/efficiency
+    // lookups and the current position (synced from the AutoTransmission every substep, never phase-stepped).
+    d.type = g.type == GearboxType::Sequential ? GearboxKind::Sequential : GearboxKind::Manual;
     d.forward_ratios = g.forward_ratios;
     d.reverse_ratios = g.reverse_ratios;
     d.forward_efficiency = g.forward_efficiency;
@@ -197,6 +199,10 @@ Gearbox::Desc to_gearbox_desc(const GearboxDesc& g) {
     d.output_inertia_kgm2 = g.output_inertia_kgm2;
     d.synchro.forward_capacity_nm = g.synchro.forward_capacity_nm;
     d.synchro.reverse_capacity_nm = g.synchro.reverse_capacity_nm;
+    if (is_clutch_to_clutch(g.type)) {
+        d.synchro.forward_capacity_nm.assign(g.forward_ratios.size(), real(0.0));
+        d.synchro.reverse_capacity_nm.assign(g.reverse_ratios.size(), real(0.0));
+    }
     d.synchro.static_factor = g.synchro.static_factor;
     d.synchro.max_dog_mismatch_rad_s = g.synchro.max_dog_mismatch_rad_s;
     d.neutral_phase_s = g.neutral_phase_s;
@@ -270,6 +276,9 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             // has one) is already declared by the TorqueMapEngineDesc branch
             // above, so no separate declaration is needed for that case.
             if (!tcd->hand_lever_channel.empty()) add(ChannelDecl{tcd->hand_lever_channel, real(0.0)});
+        } else if (const auto* gb = std::get_if<GearboxDesc>(&c.params)) {
+            // Automatic gearbox plan A1: the D/S mode switch of an Automatic/DualClutch box (default 0 = D).
+            if (is_clutch_to_clutch(gb->type)) add(ChannelDecl{kTransmissionModeChannel, real(0.0)});
         }
     }
     for (const ChannelDecl& decl : test_only_extra) add(decl);
@@ -312,6 +321,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     int pto_component_index = -1;           // I4 C11
     int throttle_control_component_index = -1; // I7a C3
     std::string pto_out_port_key;           // I4 C11: exempt from the "not connected" check below
+    std::string turbine_port_key;           // automatic gearbox plan A1: the converter turbine (internal, no shaft)
     for (std::size_t ci = 0; ci < pt.components.size(); ++ci) {
         const ComponentDesc& c = pt.components[ci];
         if (c.id.empty()) throw std::runtime_error("vehicle '" + vehicle_name + "': a powertrain component has an empty id");
@@ -344,8 +354,17 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 throw std::runtime_error("vehicle '" + vehicle_name + "': more than one gearbox component - I3 supports at most one");
             }
             gearbox_component_index = static_cast<int>(ci);
-            add_port(component_port_key(c.id, "in"), g->input_inertia_kgm2, g->input_axis_local);
-            add_port(component_port_key(c.id, "out"), g->output_inertia_kgm2, g->output_axis_local);
+            if (g->type == GearboxType::Automatic && g->converter) {
+                // Automatic gearbox plan A1: `in` is the converter's pump; the turbine is an internal port carrying
+                // the turbine and the gear set's input inertia (not connected by a shaft - exempt below).
+                add_port(component_port_key(c.id, "in"), g->converter->pump_inertia_kgm2, g->input_axis_local);
+                add_port(component_port_key(c.id, "out"), g->output_inertia_kgm2, g->output_axis_local);
+                turbine_port_key = component_port_key(c.id, "turbine");
+                add_port(turbine_port_key, g->converter->turbine_inertia_kgm2 + g->input_inertia_kgm2, g->input_axis_local);
+            } else {
+                add_port(component_port_key(c.id, "in"), g->input_inertia_kgm2, g->input_axis_local);
+                add_port(component_port_key(c.id, "out"), g->output_inertia_kgm2, g->output_axis_local);
+            }
         } else if (const auto* gp = std::get_if<GearPairDesc>(&c.params)) {
             add_port(component_port_key(c.id, "in"), gp->inertia_in_kgm2, gp->in_axis_local);
             add_port(component_port_key(c.id, "out"), gp->inertia_out_kgm2, gp->out_axis_local);
@@ -583,7 +602,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         // I4 C11 (plan section 3.5): the pto's own `out` port is exempt - it
         // may stand alone (disengaged stub brake only, no external load).
         const bool is_pto_out_port = !pto_out_port_key.empty() && port_key[static_cast<std::size_t>(p)] == pto_out_port_key;
-        if (!is_wheel_port && !is_pto_out_port && !port_in_any_shaft[static_cast<std::size_t>(p)]) {
+        const bool is_turbine_port = !turbine_port_key.empty() && port_key[static_cast<std::size_t>(p)] == turbine_port_key;
+        if (!is_wheel_port && !is_pto_out_port && !is_turbine_port && !port_in_any_shaft[static_cast<std::size_t>(p)]) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain port '" + port_key[static_cast<std::size_t>(p)] +
                                       "' is not connected by any shaft");
         }
@@ -629,7 +649,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     // diffs in component order. No lockable diff -> s == g, and every loop
     // below emits exactly the pre-C5 row list (the sedan's hashes).
     const GearboxDesc* gearbox_desc = gearbox_component_index >= 0 ? std::get_if<GearboxDesc>(&pt.components[static_cast<std::size_t>(gearbox_component_index)].params) : nullptr;
-    const int num_gear_states = gearbox_desc ? static_cast<int>(gearbox_desc->reverse_ratios.size()) + 1 + static_cast<int>(gearbox_desc->forward_ratios.size()) : 1;
+    const bool c2c_gearbox = gearbox_desc && is_clutch_to_clutch(gearbox_desc->type);
+    // Automatic gearbox plan A1: a clutch-to-clutch box has ONE topology state (its gears are friction rows).
+    const int num_gear_states = (gearbox_desc && !c2c_gearbox) ? static_cast<int>(gearbox_desc->reverse_ratios.size()) + 1 + static_cast<int>(gearbox_desc->forward_ratios.size()) : 1;
     int lockable_count = 0;
     for (const ComponentDesc& c : pt.components) {
         if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) lockable_count += d->lockable ? 1 : 0;
@@ -706,7 +728,8 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
 
     NodeId gearbox_in_n{}, gearbox_out_n{};
     if (gearbox_desc) {
-        gearbox_in_n = node_for_key(component_port_key(pt.components[static_cast<std::size_t>(gearbox_component_index)].id, "in"));
+        gearbox_in_n = node_for_key(turbine_port_key.empty() ? component_port_key(pt.components[static_cast<std::size_t>(gearbox_component_index)].id, "in")
+                                                             : turbine_port_key);
         gearbox_out_n = node_for_key(component_port_key(pt.components[static_cast<std::size_t>(gearbox_component_index)].id, "out"));
     }
 
@@ -721,7 +744,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             row.terms.emplace_back(db.right.index, -db.ratio / real(2.0));
             register_rigid_row(state, std::move(row));
         }
-        if (gearbox_desc) {
+        if (gearbox_desc && !c2c_gearbox) {
             const int g = state % num_gear_states; // == state without a lockable diff
             const int position = g - static_cast<int>(gearbox_desc->reverse_ratios.size());
             if (position != 0) {
@@ -962,6 +985,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         gearbox_in_ = gearbox_in_n;
         gearbox_out_ = gearbox_out_n;
         synchro_row = builder.add_friction_row(gearbox_in_, gearbox_out_);
+        if (c2c_gearbox) {
+            // Automatic gearbox plan A1: the second shift clutch (row B; row A is the synchro slot above), then the
+            // torque converter's lock-up clutch (pump -> turbine) and its implicit slip coupling. Only a clutch-to-
+            // clutch box adds these, so every Manual/Sequential vehicle's row ids are unchanged.
+            shift_row_b_ = builder.add_friction_row(gearbox_in_, gearbox_out_);
+            if (!turbine_port_key.empty()) {
+                converter_pump_ = node_for_key(component_port_key(pt.components[static_cast<std::size_t>(gearbox_component_index)].id, "in"));
+                lockup_row_ = builder.add_friction_row(converter_pump_, gearbox_in_);
+                converter_coupling_ = builder.add_coupling(converter_pump_, gearbox_in_);
+                converter_.emplace(*gearbox_desc->converter);
+            }
+        }
     }
     // I4 C9 (plan section 3.3): the transfer_case's own `front` friction row,
     // appended AFTER clutch/engine/synchro above so no pre-existing vehicle's
@@ -1656,13 +1691,32 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     // --- Phase L: controllers (plan section 4.2/9.1) -------------------------
     {
         // At most one manual_tcu and (engine garage P8) at most one launch_control.
-        int n_tcu = 0, n_launch = 0;
+        int n_tcu = 0, n_launch = 0, n_auto = 0;
         for (const ControllerDesc& cd : controllers) {
             if (std::holds_alternative<ManualTcuDesc>(cd.params)) ++n_tcu;
-            else ++n_launch;
+            else if (std::holds_alternative<LaunchControlDesc>(cd.params)) ++n_launch;
+            else ++n_auto;
         }
         if (n_tcu > 1) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': at most one controller (manual_tcu) is supported in I3");
+        }
+        // Automatic gearbox plan A1: one transmission controller - manual_tcu for a Manual/Sequential box,
+        // automatic_tcu (required) for an Automatic/DualClutch box; no driver clutch with a clutch-to-clutch box.
+        if (n_tcu + n_auto > 1) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': at most one transmission controller (manual_tcu or automatic_tcu)");
+        }
+        if (c2c_gearbox) {
+            if (n_tcu > 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': a manual_tcu cannot drive an automatic or dual_clutch gearbox - use automatic_tcu");
+            }
+            if (n_auto == 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': an automatic or dual_clutch gearbox needs an automatic_tcu controller");
+            }
+            if (clutch_component_index >= 0) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': an automatic or dual_clutch gearbox has no separate clutch component");
+            }
+        } else if (n_auto > 0) {
+            throw std::runtime_error("vehicle '" + vehicle_name + "': an automatic_tcu needs an automatic or dual_clutch gearbox");
         }
         if (n_launch > 1) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': at most one launch_control controller is supported");
@@ -1698,6 +1752,42 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             LaunchControlDesc fitted = *lc;
             fitted.rpm = fit.rpm;
             launch_.emplace(fitted);
+            continue;
+        }
+        if (const auto* at = std::get_if<AutomaticTcuDesc>(&cd.params)) {
+            const auto git = component_index_of.find(at->gearbox);
+            if (git == component_index_of.end() || git->second != gearbox_component_index) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': controller '" + cd.id + "' gearbox '" + at->gearbox +
+                                          "' is not this vehicle's gearbox component");
+            }
+            const auto eit = component_index_of.find(at->engine);
+            if (eit == component_index_of.end() || eit->second != engine_component_index) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': controller '" + cd.id + "' engine '" + at->engine +
+                                          "' is not this vehicle's engine component");
+            }
+            AutoTransmission::Desc ad;
+            ad.dual_clutch = gearbox_desc->type == GearboxType::DualClutch;
+            ad.forward_ratios = gearbox_desc->forward_ratios;
+            ad.reverse_ratios = gearbox_desc->reverse_ratios;
+            ad.clutch = gearbox_desc->shift_clutch;
+            ad.tcu = *at;
+            ad.initial_gear = gearbox_desc->initial_gear;
+            if (gearbox_desc->converter) {
+                ad.has_lockup = true;
+                ad.lockup_capacity_nm = gearbox_desc->converter->lockup_capacity_nm;
+                ad.lockup_static_factor = gearbox_desc->converter->lockup_static_factor;
+                ad.lockup_engage_time_s = gearbox_desc->converter->lockup_engage_time_s;
+                ad.lockup_release_time_s = gearbox_desc->converter->lockup_release_time_s;
+            }
+            auto_ = std::make_unique<AutoTransmission>(std::move(ad));
+            const std::vector<ChannelDecl> decls = declare_control_channels(pt);
+            for (std::size_t i = 0; i < decls.size(); ++i) {
+                if (decls[i].name == kTransmissionModeChannel) {
+                    mode_channel_slot_ = i;
+                    has_mode_channel_ = true;
+                    break;
+                }
+            }
             continue;
         }
         const auto* tcu_desc = std::get_if<ManualTcuDesc>(&cd.params);
@@ -2029,15 +2119,53 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             tcu_prev_request_.throttle_floor = out.throttle_floor;
             tcu_prev_request_.ignition_cut = out.ignition_cut;
             tcu_prev_request_.throttle_ceiling = out.throttle_ceiling;
+        } else if (auto_) {
+            // Automatic gearbox plan A1: the automatic TCU and the clutch-to-clutch shift machine. Same lagged
+            // engine limits as the manual TCU (the torque reduction of a power-on upshift is a throttle ceiling).
+            ctx.tcu_throttle_floor = tcu_prev_request_.throttle_floor;
+            ctx.tcu_ignition_cut = tcu_prev_request_.ignition_cut;
+            ctx.tcu_throttle_ceiling = tcu_prev_request_.throttle_ceiling;
+            if (engine_) last_throttle_command_ = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
+            AutoTransmission::Sensors as;
+            as.engine_omega = engine_ ? network_.omega(engine_crank_) : real(0.0);
+            as.input_omega = network_.omega(gearbox_in_);
+            as.output_omega = network_.omega(gearbox_out_);
+            as.throttle = engine_ ? last_throttle_command_.command : ctx.throttle;
+            as.gear_request = ctx.gear_request;
+            as.shift_up_count = ctx.shift_up_count;
+            as.shift_down_count = ctx.shift_down_count;
+            as.mode_channel = (has_mode_channel_ && ctx.channels != nullptr && static_cast<int>(mode_channel_slot_) < ctx.channel_count)
+                                  ? ctx.channels[mode_channel_slot_]
+                                  : real(0.0);
+            last_mode_channel_ = as.mode_channel;
+            as.input_torque_prev = std::abs(network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_));
+            as.first_substep = ctx.first_substep_of_tick;
+            as.h = ctx.h;
+            last_auto_out_ = auto_->step(as);
+            gearbox_->reset_to(last_auto_out_.current); // ratio/efficiency lookups and current_position() for readers
+            tcu_prev_request_.throttle_floor = real(0.0);
+            tcu_prev_request_.ignition_cut = false;
+            tcu_prev_request_.throttle_ceiling = last_auto_out_.throttle_ceiling;
         }
 
-        Gearbox::StepInput gin;
-        gin.omega1 = network_.omega(gearbox_in_);
-        gin.omega2 = network_.omega(gearbox_out_);
-        gin.lambda_mesh_prev = gearbox_lambda_mesh_prev_;
-        gin.h = ctx.h;
-        last_gearbox_result_ = gearbox_->phase_step(gin);
-        ctx.gearbox_in_neutral = (last_gearbox_result_.current == 0);
+        if (auto_) {
+            last_gearbox_result_ = Gearbox::StepResult{};
+            last_gearbox_result_.state_index = 0; // a clutch-to-clutch box has one topology state
+            last_gearbox_result_.current = last_auto_out_.current;
+            last_gearbox_result_.target = last_auto_out_.target;
+            ctx.gearbox_in_neutral = (last_auto_out_.current == 0);
+            // The engine's start interlock and stall logic: an Automatic couples through its converter (always
+            // "engaged": the starter works only in N), a DualClutch through its launch clutch.
+            ctx.clutch_engaged_fraction = last_auto_out_.launch_engagement;
+        } else {
+            Gearbox::StepInput gin;
+            gin.omega1 = network_.omega(gearbox_in_);
+            gin.omega2 = network_.omega(gearbox_out_);
+            gin.lambda_mesh_prev = gearbox_lambda_mesh_prev_;
+            gin.h = ctx.h;
+            last_gearbox_result_ = gearbox_->phase_step(gin);
+            ctx.gearbox_in_neutral = (last_gearbox_result_.current == 0);
+        }
     }
 
     // --- step 3b: a possible topology-state switch (plan section 5.3; I4 C5
@@ -2067,7 +2195,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     // manual transmission at all (none shipped, but structurally possible)
     // still needs it evaluated here) ------------------------------------
     if (engine_) {
-        if (!(gearbox_ && tcu_)) {
+        if (!(gearbox_ && (tcu_ || auto_))) {
             last_throttle_command_ = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
         }
         const ThrottleCommand& throttle_cmd = last_throttle_command_;
@@ -2153,9 +2281,41 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         } else {
             gearbox_own_loss_tau_ = real(0.0);
         }
-        assembly_.set_friction_capacity(gearbox_synchro_row_, last_gearbox_result_.synchro_cap_static, last_gearbox_result_.synchro_cap_kinetic);
-        if (last_gearbox_result_.synchro_target_ratio != real(0.0)) {
-            assembly_.set_friction_row_ratio(gearbox_synchro_row_, last_gearbox_result_.synchro_target_ratio);
+        if (auto_) {
+            // Automatic gearbox plan A1: the two shift clutches (row A in the synchro slot, row B), the lock-up
+            // clutch and the converter.
+            const AutoTransmission::RowCmd& ra = last_auto_out_.row[0];
+            const AutoTransmission::RowCmd& rb = last_auto_out_.row[1];
+            assembly_.set_friction_row_ratio(gearbox_synchro_row_, ra.ratio);
+            assembly_.set_friction_capacity(gearbox_synchro_row_, ra.cap_static, ra.cap_kinetic);
+            assembly_.set_friction_row_ratio(shift_row_b_, rb.ratio);
+            assembly_.set_friction_capacity(shift_row_b_, rb.cap_static, rb.cap_kinetic);
+            if (converter_) {
+                assembly_.set_friction_capacity(lockup_row_, last_auto_out_.lockup_cap_static, last_auto_out_.lockup_cap_kinetic);
+                const real wp = network_.omega(converter_pump_);
+                const real wt = network_.omega(gearbox_in_);
+                const TorqueConverter::Result cr = converter_->evaluate(wp, wt);
+                conv_tau_p_ = cr.tau_pump;
+                conv_tau_t_ = cr.tau_turbine;
+                conv_c_ = cr.slip_slope;
+                conv_v_old_ = wp - wt;
+                conv_sr_ = cr.speed_ratio;
+                // The pump torque's own growth with pump speed at a fixed speed ratio (|T_p| ~ w^2), less the part the
+                // slip coupling already carries, as an implicit damping on the pump node.
+                conv_d_pump_ = std::abs(wp) > real(1e-6)
+                                   ? std::max(real(0.0), real(2.0) * std::abs(cr.tau_pump) / std::abs(wp) - conv_c_ * std::abs(cr.speed_ratio))
+                                   : real(0.0);
+                if (cr.overrun) conv_d_pump_ = real(0.0);
+                assembly_.torque(converter_pump_, conv_tau_p_ + conv_c_ * conv_v_old_, conv_d_pump_);
+                assembly_.torque(gearbox_in_, conv_tau_t_ - conv_c_ * conv_v_old_, real(0.0));
+                assembly_.set_coupling(converter_coupling_, real(1.0), real(1.0), conv_c_);
+                conv_wp_old_ = wp;
+            }
+        } else {
+            assembly_.set_friction_capacity(gearbox_synchro_row_, last_gearbox_result_.synchro_cap_static, last_gearbox_result_.synchro_cap_kinetic);
+            if (last_gearbox_result_.synchro_target_ratio != real(0.0)) {
+                assembly_.set_friction_row_ratio(gearbox_synchro_row_, last_gearbox_result_.synchro_target_ratio);
+            }
         }
     }
 
@@ -2376,7 +2536,11 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
     if (gearbox_) {
         const int cur = gearbox_->current_position();
         const real eff = cur == 0 ? real(1.0) : gearbox_->efficiency_for_position(cur);
-        if (cur == 0 || eff >= real(1.0)) {
+        if (auto_) {
+            // Automatic gearbox plan A1: the own loss torque applied in pre_solve is booked here; the lagged mesh
+            // torque is set from the shift rows below (no node-balance reconstruction).
+            ledger_.gear_loss += -ctx.h * network_.omega(gearbox_in_) * gearbox_own_loss_tau_;
+        } else if (cur == 0 || eff >= real(1.0)) {
             gearbox_lambda_mesh_prev_ = real(0.0);
             // Transmission plan T0 (sound only, never hashed): the transmitted torque of a lossless engaged gear is the
             // same node-balance reconstruction with no own loss term; neutral carries none.
@@ -2390,9 +2554,28 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
             gearbox_mesh_load_nm_ = std::abs(gearbox_lambda_mesh_prev_);
             ledger_.gear_loss += -ctx.h * omega_new_in * gearbox_own_loss_tau_;
         }
-        const real v_syn = network_.row_velocity(gearbox_synchro_row_);
-        const real lambda_syn = network_.row_lambda(gearbox_synchro_row_);
-        ledger_.synchro_loss += -ctx.h * v_syn * lambda_syn;
+        if (auto_) {
+            // Automatic gearbox plan A1: the shift clutches' slip goes to clutch_loss; the mesh torque for the
+            // lagged gear loss is what the two rows carried.
+            const real la = network_.row_lambda(gearbox_synchro_row_), lb = network_.row_lambda(shift_row_b_);
+            ledger_.clutch_loss += -ctx.h * network_.row_velocity(gearbox_synchro_row_) * la;
+            ledger_.clutch_loss += -ctx.h * network_.row_velocity(shift_row_b_) * lb;
+            gearbox_lambda_mesh_prev_ = cur == 0 ? real(0.0) : la + lb;
+            gearbox_mesh_load_nm_ = std::abs(la + lb);
+            if (converter_) {
+                const real wp = network_.omega(converter_pump_);
+                const real wt = network_.omega(gearbox_in_);
+                const real v_new = network_.coupling_velocity(converter_coupling_);
+                const real f_p = conv_tau_p_ + conv_c_ * conv_v_old_ - conv_c_ * v_new - conv_d_pump_ * (wp - conv_wp_old_);
+                const real f_t = conv_tau_t_ - conv_c_ * conv_v_old_ + conv_c_ * v_new;
+                ledger_.converter_loss += -ctx.h * (f_p * wp + f_t * wt);
+                ledger_.converter_loss += -ctx.h * network_.row_velocity(lockup_row_) * network_.row_lambda(lockup_row_);
+            }
+        } else {
+            const real v_syn = network_.row_velocity(gearbox_synchro_row_);
+            const real lambda_syn = network_.row_lambda(gearbox_synchro_row_);
+            ledger_.synchro_loss += -ctx.h * v_syn * lambda_syn;
+        }
     }
     for (auto& c : components_) c->post_solve(ctx, network_, assembly_, ledger_);
 }
@@ -2408,6 +2591,7 @@ void Powertrain::end_tick() {
                              (L.integrator_loss - L0.integrator_loss) + (L.diff_loss - L0.diff_loss) +
                              (L.awd_clutch_loss - L0.awd_clutch_loss) + (L.pto_clutch_loss - L0.pto_clutch_loss) +
                              (L.external_absorbed - L0.external_absorbed);
+    if (converter_) ledger_.balance_error += L.converter_loss - L0.converter_loss; // automatic gearbox plan A1
     if (!compliant_.empty()) {
         ledger_.balance_error += (L.shaft_pe - L0.shaft_pe) + (L.shaft_damping_loss - L0.shaft_damping_loss);
     }
@@ -2551,7 +2735,15 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
     //    this node); in Neutral, matches engine crank if clutch_locked
     //    (mirrors the Launch law's own "In gearbox N: e_tgt = 1" rule),
     //    else 0 (freewheeling at rest).
-    if (gearbox_) {
+    if (gearbox_ && auto_) {
+        // Automatic gearbox plan A1: no clutch. An Automatic's turbine takes the driveline's speed in gear and
+        // the engine's in N (the converter is then coupled); a DualClutch's input IS the crank, set above.
+        if (converter_ && gearbox_in_ != engine_crank_) {
+            network_.set_omega(gearbox_in_, gear != 0 ? driveline_in_omega : engine_omega_target);
+        }
+        auto_->reset(gear, opts.clutch_locked);
+        last_auto_out_ = {};
+    } else if (gearbox_) {
         const real clutch_out_target =
             gear != 0 ? driveline_in_omega : (opts.clutch_locked ? engine_omega_target : real(0.0));
         network_.set_omega(clutch_out_, clutch_out_target);
@@ -2614,6 +2806,7 @@ std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     if (gearbox_) h = gearbox_->fold_state_hash(h);
     if (tcu_) h = tcu_->fold_state_hash(h);
     if (launch_) h = launch_->fold_state_hash(h); // engine garage P8: hashed only when the component exists
+    if (auto_) h = auto_->fold_state_hash(h); // automatic gearbox plan A1: only for an Automatic/DualClutch
     if (gearbox_) {
         const auto* bytes = reinterpret_cast<const unsigned char*>(&gearbox_lambda_mesh_prev_);
         for (std::size_t i = 0; i < sizeof(gearbox_lambda_mesh_prev_); ++i) {

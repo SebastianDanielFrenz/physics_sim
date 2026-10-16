@@ -575,7 +575,47 @@ struct ClutchDesc {
     Vec3 axis_local = Vec3::zero();       // shared by both ports (one physical shaft), plan section 6.7
 };
 
-enum class GearboxType { Manual, Sequential };
+// Automatic gearbox plan A1: Automatic = a planetary torque-converter automatic (gear changes clutch to clutch, a
+// torque converter between the input port and the gear set, no driver clutch); DualClutch = a dual-clutch box (two wet
+// clutches, odd and even gears on their own shafts, the next gear preselected, launch on clutch slip). Both shift
+// through two friction rows (the off-going and the on-coming clutch) instead of a dog and a synchro, and are driven by
+// an automatic_tcu controller (controller_desc.h). Appended: Manual/Sequential keep their values.
+enum class GearboxType { Manual, Sequential, Automatic, DualClutch };
+
+// Automatic gearbox plan A1: the hydrodynamic torque converter of an Automatic gearbox (physics_sim.gearbox/1
+// "converter" block). Bolted to the box's input: port `in` of the gearbox is the pump (impeller, on the engine side),
+// the turbine is an internal node of the gearbox carrying turbine_inertia_kgm2 + the box's input_inertia_kgm2.
+//   speed ratio  SR = w_turbine / w_pump (forward flow, |w_pump| >= |w_turbine|)
+//   pump torque  T_p = (n_pump_rpm / K(SR))^2   (K = k_factor, rpm / sqrt(N*m); T_p grows with the pump speed squared)
+//   turbine      T_t = TR(SR) * T_p             (TR = torque_ratio, the multiplication; TR(SR) * SR <= 1)
+// Between the last k_factor point and SR = 1 the capacity 1/K^2 falls linearly to 0 (no torque at SR = 1). Overrun
+// (|w_turbine| > |w_pump|, coasting) uses the same capacity with the roles swapped and TR = 1. The lock-up clutch is a
+// friction row pump -> turbine: kinetic capacity e * lockup_capacity_nm, e ramped by the TCU's lock-up command.
+struct TorqueConverterDesc {
+    vehicle::Curve1D k_factor;      // x = SR in [0, 1) strictly increasing, starting at 0; y = K > 0 (rpm / sqrt(N*m))
+    vehicle::Curve1D torque_ratio;  // x = SR in [0, 1], y = TR >= 1 at SR 0 down to 1; TR(SR) * SR <= 1
+    real pump_inertia_kgm2 = 0.0;    // the `in` port of an Automatic (replaces GearboxDesc::input_inertia_kgm2 there)
+    real turbine_inertia_kgm2 = 0.0; // added to the internal turbine node (with GearboxDesc::input_inertia_kgm2)
+    real lockup_capacity_nm = 0.0;   // KINETIC capacity of the lock-up clutch at engagement 1, > 0
+    real lockup_static_factor = 1.1; // >= 1
+    real lockup_engage_time_s = 0.6; // > 0, engagement 0 -> 1
+    real lockup_release_time_s = 0.15; // > 0, engagement 1 -> 0
+};
+
+// Automatic gearbox plan A1: the two shift clutches of an Automatic or DualClutch gearbox (the clutch packs or brakes
+// of a planetary box, the two input clutches of a DCT), referred to the gear set's input shaft. Each is a friction row
+// input -> output whose ratio is the gear it holds; the engaged one holds at capacity_nm (kinetic), static_factor above.
+struct ShiftClutchDesc {
+    real capacity_nm = 0.0;    // KINETIC capacity at engagement 1, input-referred, > 0
+    real static_factor = 1.15; // >= 1
+    real torque_phase_s = 0.15;   // > 0: off-going ramps out while the on-coming ramps in (the handover)
+    real max_inertia_phase_s = 0.6; // > 0: the on-coming clutch is declared locked after this long at full capacity
+    real sync_slip_rad_s = 3.0;  // > 0: |on-coming slip| below this ends the inertia phase
+    real engage_time_s = 0.35;   // > 0: N -> D / N -> R engagement ramp of the first clutch
+    // DualClutch only: time to preselect a gear that is not the one already waiting on the idle shaft (synchro on the
+    // idle shaft); 0 = always preselected.
+    real preselect_time_s = 0.0;
+};
 struct SynchroDesc {
     std::vector<real> forward_capacity_nm; // per forward gear, input-shaft torque; 0 = no synchro (dog only)
     std::vector<real> reverse_capacity_nm; // per reverse gear
@@ -614,7 +654,16 @@ struct GearboxDesc {
     real grind_after_s = 0.25;         // synchronising longer than this -> grind event
     real abort_after_s = 1.0;          // synchronising longer than this -> give up, stay in N
     int initial_gear = 0;              // 0 = N, k > 0 forward, -k reverse Rk
+    // Automatic gearbox plan A1: Automatic and DualClutch only (the loader requires shift_clutch for both and converter
+    // for Automatic, and rejects either on Manual/Sequential). Never read by a Manual/Sequential box.
+    ShiftClutchDesc shift_clutch;
+    std::optional<TorqueConverterDesc> converter;
 };
+
+// Automatic gearbox plan A1: true for the clutch-to-clutch kinds (no dog, no synchro, no driver clutch).
+[[nodiscard]] constexpr bool is_clutch_to_clutch(GearboxType t) {
+    return t == GearboxType::Automatic || t == GearboxType::DualClutch;
+}
 
 struct GearPairDesc {
     real ratio = 1.0;

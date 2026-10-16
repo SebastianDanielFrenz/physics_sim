@@ -58,6 +58,11 @@ struct PowertrainEnergy {
     // load_dyno, so this stays exactly 0 everywhere except a test that adds
     // one in code - hash-neutral (load_dyno itself is stateless, not hashed).
     real external_absorbed = 0.0;
+    // Automatic gearbox plan A1: the torque converter's dissipation (pump and turbine torques times the new speeds, the
+    // implicit slip coupling included) plus the lock-up clutch's slip (-h*v*lambda), cumulative, >= 0 in forward flow.
+    // 0 for every vehicle without a converter. The shift clutches' slip of an Automatic/DualClutch box goes to
+    // clutch_loss.
+    real converter_loss = 0.0;
 
     // PHYS-033 P4 I4 C13: compliant shafts (PowertrainDesc::compliance ==
     // Compliant). shaft_pe = sum(1/2*k*theta^2) over every compliant shaft,

@@ -1,0 +1,27 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "sedan_7dct",
+  "type": "dual_clutch",
+  "source": "Plausible 7-speed wet dual-clutch transmission for a 2.0 L passenger car, NOT a specific gearbox [AS]. Odd gears on one input shaft and clutch, even gears and reverse on the other; the next gear is preselected on the idle shaft. Ratios a near-geometric progression in the passenger-DCT range (1st ~3.6, 7th ~0.65; Naunheimer et al., Automotive Transmissions, 2nd ed., Springer 2011, ch. 6 - verify before citing). Efficiencies 0.96-0.98 [AS] (spur gearing like a manual plus wet-clutch drag). Shift clutches 350 N*m kinetic input-referred each [AS]; handover (torque phase) 0.06 s, inertia-phase bound 0.3 s [AS] (DCT shift times of tens to a few hundred ms); preselect 0.12 s for a gear not already waiting on the idle shaft [AS]. Launch on clutch slip and the creep torque are TCU data (automatic_tcu.launch, creep_torque_nm). Automatic gearbox plan A1.",
+  "forward_ratios":     [3.60, 2.40, 1.65, 1.21, 0.95, 0.79, 0.65],
+  "forward_efficiency": [0.96, 0.965, 0.97, 0.975, 0.98, 0.975, 0.97],
+  "reverse_ratios":     [-3.40],
+  "reverse_efficiency": [0.95],
+  "input_inertia_kgm2": 0.020,
+  "output_inertia_kgm2": 0.015,
+  "input_axis_local": [0, 1, 0],
+  "output_axis_local": [0, -1, 0],
+  "initial_gear": 0,
+  "rated_input_torque_nm": 350.0,
+  "gear_type": "helical",
+  "mesh_order": 21,
+  "shift_clutch": {
+    "capacity_nm": 350.0,
+    "static_factor": 1.15,
+    "torque_phase_s": 0.06,
+    "max_inertia_phase_s": 0.3,
+    "sync_slip_rad_s": 3.0,
+    "engage_time_s": 0.25,
+    "preselect_time_s": 0.12
+  }
+}

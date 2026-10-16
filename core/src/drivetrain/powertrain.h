@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "auto_transmission.h"
 #include "clutch.h"
 #include "components.h"
 #include "energy_store.h"
@@ -32,6 +33,7 @@
 #include "network.h"
 #include "nitrous_system.h"
 #include "throttle_stage.h"
+#include "torque_converter.h"
 
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/controller_desc.h"
@@ -382,6 +384,21 @@ public:
     [[nodiscard]] real dyno_torque() const { return load_dynos_.empty() ? real(0.0) : load_dynos_.front()->torque(); }
 
     [[nodiscard]] bool has_tcu() const { return tcu_ != nullptr; }
+    // Automatic gearbox plan A1: an Automatic or DualClutch gearbox with its automatic_tcu (nullptr otherwise).
+    [[nodiscard]] bool has_auto() const { return auto_ != nullptr; }
+    [[nodiscard]] const AutoTransmission& auto_trans() const { return *auto_; }
+    [[nodiscard]] const AutoTransmission::Outputs& last_auto_outputs() const { return last_auto_out_; }
+    [[nodiscard]] bool has_converter() const { return converter_.has_value(); }
+    // Converter speed ratio this substep (0 without a converter) and the lock-up engagement (0 without).
+    [[nodiscard]] real converter_speed_ratio() const { return converter_ ? conv_sr_ : real(0.0); }
+    [[nodiscard]] real lockup_engagement() const { return auto_ ? auto_->lockup_engagement() : real(0.0); }
+    [[nodiscard]] bool transmission_sport_mode() const { return auto_ != nullptr && last_mode_channel_ >= real(0.5); }
+    [[nodiscard]] real converter_pump_torque() const { return converter_ ? conv_tau_p_ : real(0.0); }
+    [[nodiscard]] real converter_turbine_torque() const { return converter_ ? conv_tau_t_ : real(0.0); }
+    // Torque through the two shift rows (input-referred, signed sum), 0 without an automatic box.
+    [[nodiscard]] real shift_rows_torque() const {
+        return auto_ ? network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_) : real(0.0);
+    }
     // Only meaningful when has_tcu() - PowertrainSnapshot's shift_phase
     // derivation (plan section 6.5.2's ClutchOpening/ClutchClosing bracket
     // the gearbox's own mechanical phases).
@@ -807,6 +824,20 @@ private:
     std::optional<LaunchControl> launch_;
     bool anti_lag_fitted_ = true; // engine garage P8 (A15): PowertrainDesc::anti_lag_fitted
     TcuThrottleLimits tcu_prev_request_{}; // LAGGED one substep, fed into the engine (plan section 7.2)
+    // --- automatic gearbox plan A1 (nullptr / empty for every Manual/Sequential vehicle) ---
+    // Row A of the shift clutches is gearbox_synchro_row_ (the slot a Manual box uses for its synchro), row B its own.
+    std::unique_ptr<AutoTransmission> auto_;
+    AutoTransmission::Outputs last_auto_out_{};
+    FrictionRowId shift_row_b_{};
+    std::size_t mode_channel_slot_ = 0;
+    bool has_mode_channel_ = false;
+    real last_mode_channel_ = 0.0; // unhashed, snapshot only
+    // Torque converter (Automatic): pump = the gearbox's `in` port node, turbine = gearbox_in_.
+    std::optional<TorqueConverter> converter_;
+    NodeId converter_pump_{};
+    FrictionRowId lockup_row_{};
+    CouplingId converter_coupling_{};
+    real conv_tau_p_ = 0.0, conv_tau_t_ = 0.0, conv_c_ = 0.0, conv_v_old_ = 0.0, conv_sr_ = 0.0, conv_d_pump_ = 0.0, conv_wp_old_ = 0.0; // this substep, unhashed
     real clutch_capacity_cap_tc_ = std::numeric_limits<real>::infinity(); // assists I2, debug only, unhashed
     bool tc_via_clutch_ = false;                                            // assists I2, debug only, unhashed
 

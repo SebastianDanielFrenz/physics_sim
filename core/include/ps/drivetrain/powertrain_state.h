@@ -149,6 +149,14 @@ struct PowertrainSnapshot {
     EngineState engine_state = EngineState::Off;
     real speedo_mps = 0.0; // gearbox-output-derived, like a real speedo (spec section 7.6)
     real clutch_engagement = 0.0; // effective (min of pedal and auto)
+    // Automatic gearbox plan A1 (never hashed): transmission kind 0 manual/sequential, 1 Automatic (torque converter),
+    // 2 DualClutch; selector the TCU's lever position (-1 R, 0 N/P, k > 0 D limited to gear k), manual_mode = paddles
+    // or shift keys took over, sport_mode = the sport schedule (transmission.mode >= 0.5), converter_speed_ratio
+    // turbine/pump, lockup_engagement 0..1, shift_clutch_engagement the launch engagement of a DualClutch (1 else).
+    std::uint8_t transmission_kind = 0;
+    std::int8_t transmission_selector = 0;
+    bool transmission_manual_mode = false, transmission_sport_mode = false;
+    real converter_speed_ratio = 0.0, lockup_engagement = 0.0;
     bool traction_control_intervening=false;
     real traction_torque_fraction=1, traction_estimated_speed_m_s=0, traction_positive_slip=0;
     std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control, bit4 launch_control (switched on)

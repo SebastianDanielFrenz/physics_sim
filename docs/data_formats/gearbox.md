@@ -17,7 +17,7 @@ thresholds).
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
 | `format` | string | required (standalone file only) | — | must equal `"physics_sim.gearbox/1"` | see README |
-| `type` | string | optional | `"manual"` | must be `"manual"` or `"sequential"`, else `"<ctx>: gearbox 'type' must be \"manual\" or \"sequential\", got \"<type>\""` | selector behaviour (manual = H-pattern with neutral between every gear; sequential = up/down through an ordered list, e.g. a tractor range-and-gear box flattened into one sequence) |
+| `type` | string | optional | `"manual"` | `"manual"`, `"sequential"`, `"automatic"` or `"dual_clutch"`, else `"<ctx>: gearbox 'type' must be \"manual\", \"sequential\", \"automatic\" or \"dual_clutch\", got \"<type>\""` | selector behaviour (manual = H-pattern with neutral between every gear; sequential = up/down through an ordered list, e.g. a tractor range-and-gear box flattened into one sequence; automatic = torque-converter planetary box, see [Automatic and dual-clutch gearboxes](#automatic-and-dual-clutch-gearboxes); dual_clutch = two wet clutches on odd/even shafts, same section) |
 | `forward_ratios` | array of real | **required** | — | must be present (`"<ctx>: 'forward_ratios' is required"`); every ratio `> 0`; **strictly decreasing**, 1st gear first (`"<ctx>.forward_ratios: must be strictly decreasing (1st first)"`) | `omega_in = ratio * omega_out` per forward gear, 1st listed first |
 | `reverse_ratios` | array of real | optional | empty | every ratio `< 0` (`"<ctx>.reverse_ratios: every ratio must be < 0"`) | reverse ratios, R1 (slowest) first |
 | `forward_efficiency` | array of real | **required** | — | must be present (`"<ctx>: 'forward_efficiency' is required"`); **same length** as `forward_ratios` (`"<ctx>: forward_efficiency must have the same length as forward_ratios"`); every value in `(0, 1]` (`"<ctx>.forward_efficiency: every value must be in (0, 1]"`) | mesh efficiency per forward gear |
@@ -92,6 +92,72 @@ An **empty** `forward_capacity_nm`/`reverse_capacity_nm` array is
 automatically padded to zeros matching the ratio-array length (`"0 entries
 meaning dog only is fine, an EMPTY array is not"` per the loader's own
 comment) — you never need to spell out an all-zero array by hand.
+
+## Automatic and dual-clutch gearboxes
+
+Automatic gearbox plan A1. A gearbox of type `"automatic"` or `"dual_clutch"` has no synchros and no dog clutches:
+two **shift clutches** (row A and row B, friction rows from the gear set's input to its output whose ratio is the gear
+each holds) do every gear change clutch-to-clutch. The vehicle has no separate `clutch` component; the engine crank is
+shafted straight to the gearbox `in` port. An `automatic_tcu` controller (see vehicle.md "Controllers") drives the
+selector, the shift schedule and (automatic) the lock-up clutch or (dual_clutch) the launch on clutch slip.
+
+`synchro`, `neutral_phase_s`, `dog_release_torque_nm`, `grind_after_s` and `abort_after_s` are ignored by these types.
+`initial_gear` must be 0 (`"<ctx>: a clutch-to-clutch gearbox starts in N (initial_gear 0)"` - the box starts in
+N, the TCU selects D/R). A manual or sequential gearbox with `shift_clutch` or `converter` is rejected (`"<ctx>:
+'shift_clutch' and 'converter' are for \"automatic\" and \"dual_clutch\" gearboxes only"`).
+
+Shift sequence (both types): **Engage** (N -> D/R, the first clutch ramps in over `engage_time_s`), **Preselect**
+(dual_clutch only, a gear not already waiting on the idle shaft takes `preselect_time_s`), **Torque phase** (the
+off-going clutch ramps out while the on-coming ramps in over `torque_phase_s`, each held at
+`C_h = min(C, 1.3 max(|input torque|, 0.15 C))`), **Inertia phase** (the on-coming clutch pulls the input shaft to the
+new gear's speed; in a power-on upshift its capacity is `min(C, 1.5 C_h)` and the engine throttle is capped at the TCU's
+`upshift_torque_fraction`; ends when `|slip| < sync_slip_rad_s` or after `max_inertia_phase_s`), **Closing** (the
+on-coming clutch ramps to full capacity). A dual_clutch box preselects the next gear on the idle shaft while it holds a
+gear: `cur + 1` when the input rpm is above the midpoint of the current up/down lines, else `cur - 1`.
+
+### `shift_clutch`
+
+Required for both types (`"<ctx>: 'shift_clutch' is required for this gearbox type"`); unknown keys rejected
+(`"<ctx>.shift_clutch: unknown key '<key>'"`).
+
+| Field | Type | Default | Validation | Meaning |
+|---|---|---|---|---|
+| `capacity_nm` | real (N·m, input-referred) | **required** | `> 0` | kinetic capacity of each shift clutch at engagement 1 |
+| `static_factor` | real | `1.15` | `>= 1` | static capacity = `static_factor * kinetic` |
+| `torque_phase_s` | real (s) | `0.15` | `> 0` | handover duration (off-going out, on-coming in) |
+| `max_inertia_phase_s` | real (s) | `0.6` | `> 0` | the inertia phase ends after this long at the latest |
+| `sync_slip_rad_s` | real (rad/s) | `3.0` | `> 0` | on-coming slip below this ends the inertia phase |
+| `engage_time_s` | real (s) | `0.35` | `> 0` | N -> D / N -> R engagement ramp |
+| `preselect_time_s` | real (s) | `0` | `>= 0`; dual_clutch only (`"preselect_time_s is for dual_clutch gearboxes only"`) | time to preselect a gear not already waiting on the idle shaft; 0 = always preselected |
+
+### `converter`
+
+Required for `"automatic"` (`"<ctx>: 'converter' is required for an automatic gearbox"`), rejected for `"dual_clutch"`
+(`"<ctx>: a dual_clutch gearbox has no 'converter'"`). Unknown keys rejected.
+
+| Field | Type | Default | Validation | Meaning |
+|---|---|---|---|---|
+| `k_factor` | Curve1D `{x, y}` | **required** | x = speed ratio SR starting at 0, strictly increasing, below 1; every K `> 0` | capacity factor K(SR) in rpm/sqrt(N·m): pump torque = (pump rpm / K)². Between the last point and SR 1 the capacity falls linearly to 0 (the coupling point) |
+| `torque_ratio` | Curve1D `{x, y}` | **required** | x starts at 0 within [0, 1]; every TR `>= 1`; non-increasing; `TR(SR) * SR <= 1` (no efficiency above 1) | turbine torque / pump torque |
+| `pump_inertia_kgm2` | real | `0` | `> 0` | inertia of the `in` port (replaces `input_inertia_kgm2` there) |
+| `turbine_inertia_kgm2` | real | `0` | `>= 0`; turbine + `input_inertia_kgm2` must be `> 0` | inertia of the internal turbine node (with `input_inertia_kgm2`) |
+| `lockup_capacity_nm` | real (N·m) | **required** | `> 0` | kinetic capacity of the lock-up clutch (pump -> turbine) |
+| `lockup_static_factor` | real | `1.1` | `>= 1` | static factor |
+| `lockup_engage_time_s` / `lockup_release_time_s` | real (s) | `0.6` / `0.15` | `> 0` | lock-up ramp times |
+
+Model: forward flow (|pump| >= |turbine|) pump torque `-sign * C(SR) * rpm_pump²`, turbine torque `TR(SR)` times that;
+overrun (turbine faster) the same law with pump and turbine swapped and TR 1. The Powertrain applies the explicit
+torques plus an implicit pump-turbine coupling of slope `|dT/dw_turbine|`, so the converter is stable at any substep.
+The converter's slip loss and the shift/lock-up clutch slip losses are booked as `PowertrainEnergy::converter_loss`
+(converter and lock-up clutch) and `clutch_loss` (the shift clutches), both in `balance_error`.
+
+Ports: `in` (pump; the engine crank) and `out`, as for a manual box. The turbine is an internal node with no port.
+
+Shipped data (all [AS]): `data/gearboxes/sedan_8at.json` (8-speed automatic, 4.70-0.67, rated 400 N·m, stall about
+2400 rpm against the sedan engine) and `data/gearboxes/sedan_7dct.json` (7-speed dual clutch, 3.6-0.65, 350 N·m
+clutches, handover 0.06 s, preselect 0.12 s). Test cars: `tests/support/fixtures/vehicles/car_sedan_at.json`,
+`car_sedan_dct.json`; tests `tests/validation/test_automatic_gearbox.cpp`, `tests/unit/test_automatic_gearbox_io.cpp`
+(`[drivetrain][automatic]`).
 
 ## Ports
 

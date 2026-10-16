@@ -32,7 +32,7 @@ resolution for `"tyre"`/`"ref"` references, coordinate conventions (ISO
 | `brake_system` | [brake_system object](#brake_system) | optional | no corners, no handbrake | see below | direct-torque friction brakes |
 | `aero` | [aero object](#aero) | optional | all zero (no aerodynamics) | see [Aero](#aero) | legacy `drag_area_m2` bluff-body drag, or the explicit model: anisotropic body drag/moments, lifting surfaces with actuators, ground effect, suction fans and a drafting wake; model description in `AERODYNAMICS.md` |
 | `powertrain` | [powertrain object](#powertrain-graph) | optional | empty (no components, no shafts) | see below | the engine/clutch/gearbox/differential graph |
-| `controllers` | array of [controller objects](#controllers) | optional | empty | at most one `manual_tcu` entry (else `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"`); `electronics` entries are additional and are not counted by that cap | driver-assist logic (auto-clutch, auto-blip, auto-shift); P8 adds `electronics` entries (launch control, assist fitment), see [below](#controllers) |
+| `controllers` | array of [controller objects](#controllers) | optional | empty | at most one `manual_tcu` or `automatic_tcu` entry (else `"vehicle '<name>': at most one controller (manual_tcu or automatic_tcu) is supported"`); `electronics` entries are additional and are not counted by that cap | driver-assist logic (auto-clutch, auto-blip, auto-shift); P8 adds `electronics` entries (launch control, assist fitment), see [below](#controllers) |
 | `cooling_system` | string | optional | path relative to the vehicle file; a `physics_sim.cooling_system/1` file ([cooling_system.md](cooling_system.md)); needs an engine component whose engine file names a `default_thermal` (or whose component carries a `thermal` override), else the load throws | **opts the vehicle in to the lumped engine/oil thermal model** (coolant and oil temperature, thermostat, radiator, fan, oil-viscosity friction, gauge, `vehicle<i>.thermal.*` telemetry). Absent = no thermal state, every hash and CSV header as before |
 | `engine_thermal_start` | string | optional | `"warm"` (default) or `"ambient"`; rejected without a `cooling_system` | `"warm"`: coolant at the thermostat's 25 % opening point (91 C by default), oil at the friction reference temperature (95 C, friction scale exactly 1); `"ambient"`: cold soak at the first tick's ambient temperature. A scenario's vehicle entry may give its own `engine_thermal_start`, which wins |
 
@@ -899,8 +899,9 @@ vehicle-construction time and additionally rejects:
 
 ## Controllers
 
-`"controllers"` is an array of `{id, type, ...}`: at most one `"manual_tcu"` entry (`ManualTcuDesc`; a second one
-throws `"vehicle '<name>': at most one controller (manual_tcu) is supported in I3"`) plus any number of
+`"controllers"` is an array of `{id, type, ...}`: at most one transmission controller, `"manual_tcu"`
+(`ManualTcuDesc`) or `"automatic_tcu"` (`AutomaticTcuDesc`, see [below](#automatic_tcu)) (a second one
+throws `"vehicle '<name>': at most one controller (manual_tcu or automatic_tcu) is supported"`) plus any number of
 `"electronics"` entries (see the P8 and assist-unit paragraphs below and [electronics.md](electronics.md)). An unknown
 type throws `"controllers['<id>']: unknown type \"<type>\""`.
 
@@ -980,6 +981,47 @@ vehicle; needs the car's `manual_tcu`). Channel `assist.drive_mode`. See [electr
 A mode's `traction_control_default` / `launch_control_default` is written into the `assist.traction_control` /
 `assist.launch_control` channel by the physics (assists I7c; `World::step` applies it after the tick, so `get_control` reads it right
 after `step()` and one driver write of any value wins) - clients that mirror the channels must adopt it (electronics.md rule 4c).
+
+### `automatic_tcu`
+
+Automatic gearbox plan A1. The controller of an `"automatic"` or `"dual_clutch"` gearbox
+([gearbox.md](gearbox.md#automatic-and-dual-clutch-gearboxes)). Pairing rules (Powertrain build):
+an automatic/dual_clutch gearbox needs one (`"an automatic or dual_clutch gearbox needs an automatic_tcu controller"`),
+a `manual_tcu` cannot drive one (`"a manual_tcu cannot drive an automatic or dual_clutch gearbox - use automatic_tcu"`),
+an `automatic_tcu` needs one (`"an automatic_tcu needs an automatic or dual_clutch gearbox"`) and such a vehicle has no
+`clutch` component (`"an automatic or dual_clutch gearbox has no separate clutch component"`). A `drive_modes`
+electronics part needs a `manual_tcu`, so it cannot be fitted with an automatic_tcu. Unknown keys are rejected
+(`"<ctx>: unknown key '<key>'"`).
+
+**Selector** through the existing channels (no new selector channel): `gear_request` 0 = N, any negative value = R,
+`k > 0` = D with gears up to `min(k, forward gears)` (a large value is plain D, 1..n hold the box at or below that gear
+like L/2/3); P = N plus a `park_lock` component (channel `park_lock`). `shift_up_count` / `shift_down_count` in D step
+one gear (manual mode, paddles); manual mode ends after `manual_timeout_s` without a press (0 = never) or on a
+`gear_request` change. Channel `transmission.mode` (declared with default 0 by every automatic/dual_clutch gearbox):
+`>= 0.5` selects `sport_schedule`. Driver demand = the throttle stage's command.
+
+| Field | Type | Default | Validation | Meaning |
+|---|---|---|---|---|
+| `gearbox`, `engine` | string (component id) | **required** | must reference components (`"'gearbox' and 'engine' (component id references) are required"`) | what the TCU drives |
+| `schedule` | object `{up_rpm_at_zero_throttle, up_rpm_at_full_throttle, down_rpm_at_zero_throttle, down_rpm_at_full_throttle}` | 2000 / 6000 / 1100 / 3200 | every downshift rpm `> 0` and below the upshift rpm at the same throttle | D schedule in gearbox INPUT rpm (turbine of an automatic, engine of a dual clutch), interpolated linearly in the throttle command |
+| `sport_schedule` | same | same as the defaults | same | S schedule |
+| `min_time_in_gear_s` | real (s) | `0.8` | `>= 0` | upshift dwell (kickdown and the stall guard ignore it) |
+| `kickdown_throttle`, `kickdown_max_rpm` | real, real (rpm) | `0.9`, `5500` | `[0, 1]`, `> 0` | at or above this command: downshift to the lowest gear whose input rpm stays at or below `kickdown_max_rpm` (automatic; a dual_clutch steps one gear - see Limits) |
+| `manual_timeout_s` | real (s) | `0` | `>= 0` | see above |
+| `manual_up_rpm` | real (rpm) | `0` | `>= 0` | manual mode: forced upshift at this input rpm (0 = the full-throttle up line) |
+| `upshift_torque_fraction` | real | `0.7` | `(0, 1]` | engine throttle cap during a power-on upshift's inertia phase |
+| `lockup` | object `{enabled, min_gear, engage_rpm, release_rpm, max_throttle}` | true, 3, 1400, 1100, 0.8 | `min_gear >= 1`, `0 < release_rpm < engage_rpm`, `max_throttle` in [0, 1] | automatic only: lock-up engaged in gear >= `min_gear` with the turbine above `engage_rpm` and the command at or below `max_throttle`; released below `release_rpm`, above `max_throttle + 0.1` and during every shift |
+| `launch` | object `{bite_rpm, full_rpm_min, full_rpm_max, lock_slip_rpm, anti_stall_rpm}` | 1000, 1500, 3500, 100, 600 | `anti_stall_rpm > 0`, `0 < bite_rpm < full_rpm_min <= full_rpm_max`, `lock_slip_rpm > 0` | dual_clutch only: launch on clutch slip - engagement 0 at `bite_rpm` -> 1 at `lerp(full_rpm_min, full_rpm_max, throttle)` of engine rpm; locks once `|slip| < lock_slip_rpm` until the engine falls below `anti_stall_rpm` |
+| `creep_torque_nm` | real (N·m) | `40` | `>= 0` | dual_clutch: clutch capacity kept at idle in D/R without throttle (creep); an automatic creeps through its converter |
+
+Snapshot (never hashed): `PowertrainSnapshot::transmission_kind` (0 manual/sequential, 1 automatic, 2 dual_clutch),
+`transmission_selector` (-1 R, 0 N/P, k > 0 D limited to gear k), `transmission_manual_mode`, `transmission_sport_mode`,
+`converter_speed_ratio`, `lockup_engagement`; `gear` is the gear held. TCU state (phase, timers, preselect candidate) is hashed only for a vehicle with an automatic_tcu,
+so every manual car's hash is unchanged.
+
+Limits (A1): a dual_clutch kickdown steps one gear per shift; the dual_clutch launch rpm is the clutch equilibrium
+(capacity x engagement = engine torque, about 2200 rpm for the 350 N·m test box), not a target; no CVT; all shipped
+data [AS].
 
 ### The `traction_control` block
 

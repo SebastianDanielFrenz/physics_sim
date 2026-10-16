@@ -2889,7 +2889,12 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
     const std::string type = j.value("type", std::string("manual"));
     if (type == "manual") g.type = ps::drivetrain::GearboxType::Manual;
     else if (type == "sequential") g.type = ps::drivetrain::GearboxType::Sequential;
-    else throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\" or \"sequential\", got \"" + type + "\"");
+    else if (type == "automatic") g.type = ps::drivetrain::GearboxType::Automatic;
+    else if (type == "dual_clutch") g.type = ps::drivetrain::GearboxType::DualClutch;
+    else {
+        throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\", \"sequential\", \"automatic\" or \"dual_clutch\", got \"" +
+                                 type + "\"");
+    }
 
     if (!j.contains("forward_ratios")) throw std::runtime_error(ctx + ": 'forward_ratios' is required");
     for (const auto& v : j.at("forward_ratios")) g.forward_ratios.push_back(v.get<real>());
@@ -2964,6 +2969,114 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
     g.initial_gear = j.value("initial_gear", g.initial_gear);
     if (g.initial_gear < -static_cast<int>(g.reverse_ratios.size()) || g.initial_gear > static_cast<int>(g.forward_ratios.size())) {
         throw std::runtime_error(ctx + ": initial_gear is out of range");
+    }
+
+    // Automatic gearbox plan A1: the shift clutches (Automatic, DualClutch) and the torque converter (Automatic).
+    {
+        const bool c2c = ps::drivetrain::is_clutch_to_clutch(g.type);
+        if (!c2c && (j.contains("shift_clutch") || j.contains("converter"))) {
+            throw std::runtime_error(ctx + ": 'shift_clutch' and 'converter' are for \"automatic\" and \"dual_clutch\" gearboxes only");
+        }
+        if (c2c) {
+            if (j.contains("synchro")) throw std::runtime_error(ctx + ": a clutch-to-clutch gearbox has no 'synchro' block");
+            if (!j.contains("shift_clutch")) throw std::runtime_error(ctx + ": 'shift_clutch' is required for this gearbox type");
+            const json& sj = j.at("shift_clutch");
+            if (!sj.is_object()) throw std::runtime_error(ctx + ".shift_clutch: must be an object");
+            static const char* const kShiftKeys[] = {"capacity_nm",   "static_factor", "torque_phase_s",  "max_inertia_phase_s",
+                                                    "sync_slip_rad_s", "engage_time_s", "preselect_time_s"};
+            for (auto it = sj.begin(); it != sj.end(); ++it) {
+                if (std::find_if(std::begin(kShiftKeys), std::end(kShiftKeys), [&](const char* k) { return it.key() == k; }) ==
+                    std::end(kShiftKeys)) {
+                    throw std::runtime_error(ctx + ".shift_clutch: unknown key '" + it.key() + "'");
+                }
+            }
+            auto num = [&](const json& o, const char* key, real def, const std::string& where) {
+                if (!o.contains(key)) return def;
+                const json& v = o.at(key);
+                if (!v.is_number() || !std::isfinite(v.get<real>())) throw std::runtime_error(where + ": '" + key + "' must be a finite number");
+                return v.get<real>();
+            };
+            ps::drivetrain::ShiftClutchDesc& sc = g.shift_clutch;
+            const std::string sctx = ctx + ".shift_clutch";
+            if (!sj.contains("capacity_nm")) throw std::runtime_error(sctx + ": 'capacity_nm' is required");
+            sc.capacity_nm = num(sj, "capacity_nm", sc.capacity_nm, sctx);
+            sc.static_factor = num(sj, "static_factor", sc.static_factor, sctx);
+            sc.torque_phase_s = num(sj, "torque_phase_s", sc.torque_phase_s, sctx);
+            sc.max_inertia_phase_s = num(sj, "max_inertia_phase_s", sc.max_inertia_phase_s, sctx);
+            sc.sync_slip_rad_s = num(sj, "sync_slip_rad_s", sc.sync_slip_rad_s, sctx);
+            sc.engage_time_s = num(sj, "engage_time_s", sc.engage_time_s, sctx);
+            sc.preselect_time_s = num(sj, "preselect_time_s", sc.preselect_time_s, sctx);
+            if (!(sc.capacity_nm > real(0.0))) throw std::runtime_error(sctx + ": capacity_nm must be > 0");
+            if (sc.static_factor < real(1.0)) throw std::runtime_error(sctx + ": static_factor must be >= 1");
+            if (!(sc.torque_phase_s > real(0.0)) || !(sc.max_inertia_phase_s > real(0.0)) || !(sc.sync_slip_rad_s > real(0.0)) ||
+                !(sc.engage_time_s > real(0.0))) {
+                throw std::runtime_error(sctx + ": torque_phase_s, max_inertia_phase_s, sync_slip_rad_s and engage_time_s must be > 0");
+            }
+            if (sc.preselect_time_s < real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s must be >= 0");
+            if (g.type == ps::drivetrain::GearboxType::DualClutch && j.contains("converter")) {
+                throw std::runtime_error(ctx + ": a dual_clutch gearbox has no 'converter'");
+            }
+            if (g.type == ps::drivetrain::GearboxType::Automatic) {
+                if (sc.preselect_time_s != real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s is for dual_clutch gearboxes only");
+                if (!j.contains("converter")) throw std::runtime_error(ctx + ": 'converter' is required for an automatic gearbox");
+                const json& cj = j.at("converter");
+                const std::string cctx = ctx + ".converter";
+                if (!cj.is_object()) throw std::runtime_error(cctx + ": must be an object");
+                static const char* const kConvKeys[] = {"k_factor",           "torque_ratio",         "pump_inertia_kgm2",
+                                                       "turbine_inertia_kgm2", "lockup_capacity_nm",   "lockup_static_factor",
+                                                       "lockup_engage_time_s", "lockup_release_time_s"};
+                for (auto it = cj.begin(); it != cj.end(); ++it) {
+                    if (std::find_if(std::begin(kConvKeys), std::end(kConvKeys), [&](const char* k) { return it.key() == k; }) ==
+                        std::end(kConvKeys)) {
+                        throw std::runtime_error(cctx + ": unknown key '" + it.key() + "'");
+                    }
+                }
+                ps::drivetrain::TorqueConverterDesc tc;
+                if (!cj.contains("k_factor") || !cj.contains("torque_ratio")) {
+                    throw std::runtime_error(cctx + ": 'k_factor' and 'torque_ratio' are required");
+                }
+                tc.k_factor = read_curve(cj.at("k_factor"));
+                tc.torque_ratio = read_curve(cj.at("torque_ratio"));
+                require_ascending(tc.k_factor, cctx + ".k_factor");
+                require_ascending(tc.torque_ratio, cctx + ".torque_ratio");
+                if (tc.k_factor.x.front() != real(0.0) || !(tc.k_factor.x.back() < real(1.0))) {
+                    throw std::runtime_error(cctx + ".k_factor: x must start at 0 and stay below 1");
+                }
+                for (real k : tc.k_factor.y) {
+                    if (!(k > real(0.0))) throw std::runtime_error(cctx + ".k_factor: every K must be > 0");
+                }
+                if (tc.torque_ratio.x.front() != real(0.0) || tc.torque_ratio.x.back() > real(1.0)) {
+                    throw std::runtime_error(cctx + ".torque_ratio: x must start at 0 and stay within [0, 1]");
+                }
+                for (std::size_t i = 0; i < tc.torque_ratio.x.size(); ++i) {
+                    const real tr = tc.torque_ratio.y[i];
+                    if (tr < real(1.0)) throw std::runtime_error(cctx + ".torque_ratio: every ratio must be >= 1");
+                    if (tr * tc.torque_ratio.x[i] > real(1.0) + real(1e-12)) {
+                        throw std::runtime_error(cctx + ".torque_ratio: TR(SR) * SR must be <= 1 (no efficiency above 1)");
+                    }
+                    if (i > 0 && tr > tc.torque_ratio.y[i - 1]) {
+                        throw std::runtime_error(cctx + ".torque_ratio: must be non-increasing");
+                    }
+                }
+                tc.pump_inertia_kgm2 = num(cj, "pump_inertia_kgm2", tc.pump_inertia_kgm2, cctx);
+                tc.turbine_inertia_kgm2 = num(cj, "turbine_inertia_kgm2", tc.turbine_inertia_kgm2, cctx);
+                tc.lockup_capacity_nm = num(cj, "lockup_capacity_nm", tc.lockup_capacity_nm, cctx);
+                tc.lockup_static_factor = num(cj, "lockup_static_factor", tc.lockup_static_factor, cctx);
+                tc.lockup_engage_time_s = num(cj, "lockup_engage_time_s", tc.lockup_engage_time_s, cctx);
+                tc.lockup_release_time_s = num(cj, "lockup_release_time_s", tc.lockup_release_time_s, cctx);
+                if (!(tc.pump_inertia_kgm2 > real(0.0)) || !(tc.turbine_inertia_kgm2 + g.input_inertia_kgm2 > real(0.0))) {
+                    throw std::runtime_error(cctx + ": pump_inertia_kgm2 must be > 0 and turbine_inertia_kgm2 + input_inertia_kgm2 > 0");
+                }
+                if (tc.turbine_inertia_kgm2 < real(0.0)) throw std::runtime_error(cctx + ": turbine_inertia_kgm2 must be >= 0");
+                if (!(tc.lockup_capacity_nm > real(0.0))) throw std::runtime_error(cctx + ": lockup_capacity_nm must be > 0");
+                if (tc.lockup_static_factor < real(1.0)) throw std::runtime_error(cctx + ": lockup_static_factor must be >= 1");
+                if (!(tc.lockup_engage_time_s > real(0.0)) || !(tc.lockup_release_time_s > real(0.0))) {
+                    throw std::runtime_error(cctx + ": lockup_engage_time_s and lockup_release_time_s must be > 0");
+                }
+                g.converter = std::move(tc);
+            }
+            if (g.initial_gear != 0) throw std::runtime_error(ctx + ": a clutch-to-clutch gearbox starts in N (initial_gear 0)");
+        }
     }
 
     // Transmission plan T0: rating and sound data (never hashed, in no key).
@@ -3117,6 +3230,110 @@ std::string component_ref_dir(const json& cj, const std::string& base_dir) {
     if (!cj.contains("ref")) return base_dir;
     const std::string path = resolve_path(base_dir, cj.at("ref").get<std::string>());
     return std::filesystem::path(path).parent_path().string();
+}
+
+// Automatic gearbox plan A1: an "automatic_tcu" controller (docs/data_formats/vehicle.md). Unknown keys rejected.
+ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::string& ctx, const std::vector<std::string>& component_ids) {
+    static const char* const kKeys[] = {"id",          "type",           "gearbox",  "engine",         "schedule",       "sport_schedule",
+                                        "min_time_in_gear_s", "kickdown_throttle", "kickdown_max_rpm", "manual_timeout_s", "manual_up_rpm",
+                                        "upshift_torque_fraction", "lockup", "launch", "creep_torque_nm"};
+    for (auto it = cj.begin(); it != cj.end(); ++it) {
+        if (std::find_if(std::begin(kKeys), std::end(kKeys), [&](const char* k) { return it.key() == k; }) == std::end(kKeys)) {
+            throw std::runtime_error(ctx + ": unknown key '" + it.key() + "'");
+        }
+    }
+    auto num = [](const json& o, const char* key, real def, const std::string& where) {
+        if (!o.contains(key)) return def;
+        const json& v = o.at(key);
+        if (!v.is_number() || !std::isfinite(v.get<real>())) throw std::runtime_error(where + ": '" + key + "' must be a finite number");
+        return v.get<real>();
+    };
+    auto check_keys = [](const json& o, std::initializer_list<const char*> keys, const std::string& where) {
+        if (!o.is_object()) throw std::runtime_error(where + ": must be an object");
+        for (auto it = o.begin(); it != o.end(); ++it) {
+            bool ok = false;
+            for (const char* k : keys) ok = ok || it.key() == k;
+            if (!ok) throw std::runtime_error(where + ": unknown key '" + it.key() + "'");
+        }
+    };
+    ps::drivetrain::AutomaticTcuDesc d;
+    if (!cj.contains("gearbox") || !cj.contains("engine") || !cj.at("gearbox").is_string() || !cj.at("engine").is_string()) {
+        throw std::runtime_error(ctx + ": 'gearbox' and 'engine' (component id references) are required");
+    }
+    d.gearbox = cj.at("gearbox").get<std::string>();
+    d.engine = cj.at("engine").get<std::string>();
+    for (const std::string* ref : {&d.gearbox, &d.engine}) {
+        if (std::find(component_ids.begin(), component_ids.end(), *ref) == component_ids.end()) {
+            throw std::runtime_error(ctx + ": references unknown component '" + *ref + "'");
+        }
+    }
+    auto read_schedule = [&](const char* key, ps::drivetrain::ShiftScheduleDesc& sch) {
+        if (!cj.contains(key)) return;
+        const std::string w = ctx + "." + key;
+        const json& o = cj.at(key);
+        check_keys(o, {"up_rpm_at_zero_throttle", "up_rpm_at_full_throttle", "down_rpm_at_zero_throttle", "down_rpm_at_full_throttle"}, w);
+        sch.up_rpm_at_zero_throttle = num(o, "up_rpm_at_zero_throttle", sch.up_rpm_at_zero_throttle, w);
+        sch.up_rpm_at_full_throttle = num(o, "up_rpm_at_full_throttle", sch.up_rpm_at_full_throttle, w);
+        sch.down_rpm_at_zero_throttle = num(o, "down_rpm_at_zero_throttle", sch.down_rpm_at_zero_throttle, w);
+        sch.down_rpm_at_full_throttle = num(o, "down_rpm_at_full_throttle", sch.down_rpm_at_full_throttle, w);
+        if (!(sch.down_rpm_at_zero_throttle > real(0.0)) || !(sch.down_rpm_at_zero_throttle < sch.up_rpm_at_zero_throttle) ||
+            !(sch.down_rpm_at_full_throttle < sch.up_rpm_at_full_throttle) || !(sch.down_rpm_at_full_throttle > real(0.0))) {
+            throw std::runtime_error(w + ": every downshift rpm must be > 0 and below the upshift rpm at the same throttle");
+        }
+    };
+    read_schedule("schedule", d.schedule);
+    if (cj.contains("sport_schedule")) {
+        read_schedule("sport_schedule", d.sport_schedule);
+    } else {
+        d.sport_schedule = d.schedule;
+    }
+    d.min_time_in_gear_s = num(cj, "min_time_in_gear_s", d.min_time_in_gear_s, ctx);
+    d.kickdown_throttle = num(cj, "kickdown_throttle", d.kickdown_throttle, ctx);
+    d.kickdown_max_rpm = num(cj, "kickdown_max_rpm", d.kickdown_max_rpm, ctx);
+    d.manual_timeout_s = num(cj, "manual_timeout_s", d.manual_timeout_s, ctx);
+    d.manual_up_rpm = num(cj, "manual_up_rpm", d.manual_up_rpm, ctx);
+    d.upshift_torque_fraction = num(cj, "upshift_torque_fraction", d.upshift_torque_fraction, ctx);
+    d.creep_torque_nm = num(cj, "creep_torque_nm", d.creep_torque_nm, ctx);
+    if (d.min_time_in_gear_s < real(0.0) || d.manual_timeout_s < real(0.0) || d.manual_up_rpm < real(0.0) || d.creep_torque_nm < real(0.0)) {
+        throw std::runtime_error(ctx + ": min_time_in_gear_s, manual_timeout_s, manual_up_rpm and creep_torque_nm must be >= 0");
+    }
+    if (d.kickdown_throttle < real(0.0) || d.kickdown_throttle > real(1.0) || !(d.kickdown_max_rpm > real(0.0))) {
+        throw std::runtime_error(ctx + ": kickdown_throttle must be in [0, 1] and kickdown_max_rpm > 0");
+    }
+    if (!(d.upshift_torque_fraction > real(0.0)) || d.upshift_torque_fraction > real(1.0)) {
+        throw std::runtime_error(ctx + ": upshift_torque_fraction must be in (0, 1]");
+    }
+    if (cj.contains("lockup")) {
+        const json& o = cj.at("lockup");
+        const std::string w = ctx + ".lockup";
+        check_keys(o, {"enabled", "min_gear", "engage_rpm", "release_rpm", "max_throttle"}, w);
+        if (o.contains("enabled") && !o.at("enabled").is_boolean()) throw std::runtime_error(w + ": 'enabled' must be a boolean");
+        d.lockup_enabled = o.value("enabled", d.lockup_enabled);
+        if (o.contains("min_gear") && !o.at("min_gear").is_number_integer()) throw std::runtime_error(w + ": 'min_gear' must be an integer");
+        d.lockup_min_gear = o.value("min_gear", d.lockup_min_gear);
+        d.lockup_engage_rpm = num(o, "engage_rpm", d.lockup_engage_rpm, w);
+        d.lockup_release_rpm = num(o, "release_rpm", d.lockup_release_rpm, w);
+        d.lockup_max_throttle = num(o, "max_throttle", d.lockup_max_throttle, w);
+        if (d.lockup_min_gear < 1 || !(d.lockup_release_rpm > real(0.0)) || !(d.lockup_release_rpm < d.lockup_engage_rpm) ||
+            d.lockup_max_throttle < real(0.0) || d.lockup_max_throttle > real(1.0)) {
+            throw std::runtime_error(w + ": min_gear >= 1, 0 < release_rpm < engage_rpm and max_throttle in [0, 1] required");
+        }
+    }
+    if (cj.contains("launch")) {
+        const json& o = cj.at("launch");
+        const std::string w = ctx + ".launch";
+        check_keys(o, {"bite_rpm", "full_rpm_min", "full_rpm_max", "lock_slip_rpm", "anti_stall_rpm"}, w);
+        d.launch_bite_rpm = num(o, "bite_rpm", d.launch_bite_rpm, w);
+        d.launch_full_rpm_min = num(o, "full_rpm_min", d.launch_full_rpm_min, w);
+        d.launch_full_rpm_max = num(o, "full_rpm_max", d.launch_full_rpm_max, w);
+        d.launch_lock_slip_rpm = num(o, "lock_slip_rpm", d.launch_lock_slip_rpm, w);
+        d.launch_anti_stall_rpm = num(o, "anti_stall_rpm", d.launch_anti_stall_rpm, w);
+        if (!(d.launch_anti_stall_rpm > real(0.0)) || !(d.launch_bite_rpm > real(0.0)) || !(d.launch_full_rpm_min > d.launch_bite_rpm) ||
+            d.launch_full_rpm_max < d.launch_full_rpm_min || !(d.launch_lock_slip_rpm > real(0.0))) {
+            throw std::runtime_error(w + ": need anti_stall_rpm > 0, 0 < bite_rpm < full_rpm_min <= full_rpm_max and lock_slip_rpm > 0");
+        }
+    }
+    return d;
 }
 
 } // namespace
@@ -4484,6 +4701,10 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 electronics_entries.emplace_back(id, resolve_path(base_dir, cj.at("ref").get<std::string>()));
                 continue;
             }
+            if (type == "automatic_tcu") {
+                v.controllers.push_back({id, read_automatic_tcu(cj, ctx, component_ids)});
+                continue;
+            }
             if (type != "manual_tcu") throw std::runtime_error(ctx + ": unknown type \"" + type + "\"");
 
             ps::drivetrain::ManualTcuDesc md;
@@ -4611,7 +4832,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
         }
     }
     if (v.controllers.size() > 1) {
-        throw std::runtime_error("vehicle '" + v.name + "': at most one controller (manual_tcu) is supported in I3");
+        throw std::runtime_error("vehicle '" + v.name + "': at most one controller (manual_tcu or automatic_tcu) is supported");
     }
 
     // --- electronics (engine garage P8, A15/A16, docs/data_formats/electronics.md) -----------------------------

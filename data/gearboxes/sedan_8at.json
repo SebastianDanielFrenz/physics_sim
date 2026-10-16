@@ -1,0 +1,36 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "sedan_8at",
+  "type": "automatic",
+  "source": "Plausible 8-speed planetary torque-converter automatic for a 2.0-3.0 L passenger car, NOT a specific gearbox [AS]. Ratios patterned after the published spread of current 8-speed planetary automatics (1st ~4.7, 6th 1.00 direct, 8th ~0.67, spread ~7; Naunheimer et al., Automotive Transmissions, 2nd ed., Springer 2011, ch. 6 - verify before citing). Efficiencies 0.95-0.975 per gear [AS] (planetary sets plus pump drag; direct drive best). Shift clutches: input-referred kinetic capacity 400 N*m, about twice the sedan engine's 200 N*m peak [AS]; torque phase 0.15 s and inertia-phase bound 0.6 s [AS] (a passenger automatic shifts in roughly 0.2-0.5 s). Converter [AS]: K-factor 179 rpm/sqrt(N*m) at stall (K_SI = K_imperial / 1.1644; stall ~2400 rpm against a ~180 N*m engine), rising towards the coupling point; torque ratio 2.0 at stall falling to 1.0 at the coupling point SR 0.85 (typical 1.8-2.4 stall ratio). Pump 0.08, turbine 0.03 kg*m^2 [AS]. Lock-up clutch 400 N*m kinetic, engage 0.6 s / release 0.15 s [AS]. Automatic gearbox plan A1.",
+  "forward_ratios":     [4.70, 3.13, 2.10, 1.67, 1.29, 1.00, 0.84, 0.67],
+  "forward_efficiency": [0.95, 0.955, 0.96, 0.965, 0.97, 0.975, 0.97, 0.965],
+  "reverse_ratios":     [-3.30],
+  "reverse_efficiency": [0.94],
+  "input_inertia_kgm2": 0.010,
+  "output_inertia_kgm2": 0.015,
+  "input_axis_local": [0, 1, 0],
+  "output_axis_local": [0, -1, 0],
+  "initial_gear": 0,
+  "rated_input_torque_nm": 400.0,
+  "gear_type": "helical",
+  "mesh_order": 23,
+  "shift_clutch": {
+    "capacity_nm": 400.0,
+    "static_factor": 1.15,
+    "torque_phase_s": 0.15,
+    "max_inertia_phase_s": 0.6,
+    "sync_slip_rad_s": 3.0,
+    "engage_time_s": 0.35
+  },
+  "converter": {
+    "k_factor":     { "x": [0.0, 0.3, 0.5, 0.7, 0.8, 0.9], "y": [179.0, 181.0, 186.0, 200.0, 220.0, 280.0] },
+    "torque_ratio": { "x": [0.0, 0.3, 0.5, 0.7, 0.85, 1.0], "y": [2.0, 1.75, 1.5, 1.25, 1.0, 1.0] },
+    "pump_inertia_kgm2": 0.08,
+    "turbine_inertia_kgm2": 0.03,
+    "lockup_capacity_nm": 400.0,
+    "lockup_static_factor": 1.1,
+    "lockup_engage_time_s": 0.6,
+    "lockup_release_time_s": 0.15
+  }
+}
