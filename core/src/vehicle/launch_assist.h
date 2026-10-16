@@ -20,9 +20,10 @@
 //              gear != 1, channel/auto-clutch/engine stopping ("hard").
 //   Handover : traction control runs again and starts from the PI's last ceiling (the caller seeds its fraction and
 //              integral, no jump), the wing returns to the aero controller. After a SOFT hand-over the launch limit and
-//              the clutch fraction stay in force until c has climbed to 1 at the ramp rate (so the clutch reaches the
-//              plain torque-following close without a step and the engine is not released against a half-open
-//              clutch); after a HARD one nothing is kept. -> Idle.
+//              the clutch fraction stay in force until c has climbed to 1 (so the clutch reaches the plain
+//              torque-following close without a step and the engine is not released against a half-open clutch); c
+//              climbs at the ramp rate while the slip is at or below the target and is pulled back above it, open-loop
+//              again after max_launch_s in the overlay; after a HARD one nothing is kept. -> Idle.
 //
 // Precedence with the low-speed fix (assists I2, D-LS1..3): while LaunchAssist owns the car (Armed, Launch) the
 // powertrain sees TC neutral (fraction 1, no ceiling, no ignition cut), so TC's crawl-speed clutch cap never fires;
@@ -100,6 +101,7 @@ public:
             if (hard || soft) {
                 phase_ = LaunchPhase::Handover;
                 keep_ = soft && !hard && cfrac_ < real(1);
+                t_overlay_ = real(0);
                 out.handover = true;
                 out.handover_ceiling = ceiling_;
                 break;
@@ -124,8 +126,18 @@ public:
         }
         case LaunchPhase::Handover:
             if (keep_) {
+                // The clutch keeps regulating the slip until it is closed: it climbs at the ramp rate only while the
+                // driven wheels are at or below the target and is pulled back above it (an open-loop ramp dumped the
+                // held launch-rpm engine, at full boost, into the wheels: slip 2.0 on car_hyper in the Sport TC mode).
+                // After max_launch_s in the overlay the ramp is open-loop again, so the hand-over always ends.
                 const real ramp_rate = desc_.clutch_ramp_s > real(0) ? real(1) / desc_.clutch_ramp_s : real(1e9);
-                cfrac_ = std::min(real(1), cfrac_ + ramp_rate * in.dt);
+                t_overlay_ += in.dt;
+                real rate = ramp_rate;
+                if (in.slip_valid && t_overlay_ <= desc_.max_launch_s) {
+                    const real rel = in.slip / in.slip_target - real(1);
+                    if (rel > real(0)) rate = -desc_.clutch_down_per_s * rel;
+                }
+                cfrac_ = std::clamp(cfrac_ + rate * in.dt, real(0), real(1));
                 if (cfrac_ >= real(1) || !common_ok) keep_ = false;
             }
             if (!keep_ && in.first_substep_of_tick) phase_ = LaunchPhase::Idle;
@@ -157,6 +169,7 @@ public:
         ceiling_ = real(1);
         integral_ = real(0);
         keep_ = false;
+        t_overlay_ = real(0);
     }
 
     // FNV-1a over the phase byte and the state reals (fixed order) plus the resolved launch rpm; the caller folds it
@@ -178,6 +191,7 @@ public:
         fold(cfrac_);
         fold(ceiling_);
         fold(integral_);
+        fold(t_overlay_);
         return h;
     }
 
@@ -186,7 +200,7 @@ private:
     real launch_rpm_ = 0;
     LaunchPhase phase_ = LaunchPhase::Idle;
     bool keep_ = false;
-    real t_ = 0, cfrac_ = 0, ceiling_ = 1, integral_ = 0;
+    real t_ = 0, cfrac_ = 0, ceiling_ = 1, integral_ = 0, t_overlay_ = 0;
 };
 
 } // namespace ps::vehicle

@@ -7,8 +7,8 @@
     "modes": ["off", "on", "relaxed", "sport", "drift"],
     "default_mode": "on",
     "mode_params": {
-      "relaxed": { "target_slip": 0.12, "kp": 2.0, "ki_per_s": 5.0, "attack_rate_per_s": 15.0, "recovery_rate_per_s": 8.0, "min_fraction": 0.0, "ignition_cut": true },
-      "sport":   { "target_slip": 0.18, "kp": 1.5, "ki_per_s": 4.0, "attack_rate_per_s": 10.0, "recovery_rate_per_s": 10.0, "min_fraction": 0.15, "ignition_cut": false },
+      "relaxed": { "target_slip": 0.12, "kp": 4.0, "ki_per_s": 8.0, "attack_rate_per_s": 15.0, "recovery_rate_per_s": 8.0, "min_fraction": 0.0, "ignition_cut": true },
+      "sport":   { "target_slip": 0.18, "kp": 4.0, "ki_per_s": 8.0, "attack_rate_per_s": 10.0, "recovery_rate_per_s": 10.0, "min_fraction": 0.15, "ignition_cut": true },
       "drift":   { "target_slip": 0.35, "kp": 1.0, "ki_per_s": 2.0, "attack_rate_per_s": 6.0, "recovery_rate_per_s": 12.0, "min_fraction": 0.35, "ignition_cut": false }
     }
   },

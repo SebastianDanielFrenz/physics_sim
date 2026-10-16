@@ -6,6 +6,7 @@ add_executable(ps_unit_tests
   test_traction_control.cpp
   test_traction_control_low_speed.cpp
   test_traction_control_drift.cpp
+  test_traction_control_owner_repro.cpp
   test_assist_fitment.cpp
   test_assist_unit.cpp
   test_assist_aero.cpp
