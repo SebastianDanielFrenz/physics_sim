@@ -984,8 +984,9 @@ after `step()` and one driver write of any value wins) - clients that mirror the
 
 ### `automatic_tcu`
 
-Automatic gearbox plan A1. The controller of an `"automatic"` or `"dual_clutch"` gearbox
-([gearbox.md](gearbox.md#automatic-and-dual-clutch-gearboxes)). Pairing rules (Powertrain build):
+Automatic gearbox plan A1. The controller of an `"automatic"`, `"dual_clutch"` or (CVT plan C1) `"cvt"` gearbox
+([gearbox.md](gearbox.md#automatic-and-dual-clutch-gearboxes), [CVT](gearbox.md#cvt-gearboxes)); the cvt kind counts
+as automatic in every rule below. Pairing rules (Powertrain build):
 an automatic/dual_clutch gearbox needs one (`"an automatic or dual_clutch gearbox needs an automatic_tcu controller"`),
 a `manual_tcu` cannot drive one (`"a manual_tcu cannot drive an automatic or dual_clutch gearbox - use automatic_tcu"`),
 an `automatic_tcu` needs one (`"an automatic_tcu needs an automatic or dual_clutch gearbox"`) and such a vehicle has no
@@ -1013,15 +1014,28 @@ one gear (manual mode, paddles); manual mode ends after `manual_timeout_s` witho
 | `lockup` | object `{enabled, min_gear, engage_rpm, release_rpm, max_throttle}` | true, 3, 1400, 1100, 0.8 | `min_gear >= 1`, `0 < release_rpm < engage_rpm`, `max_throttle` in [0, 1] | automatic only: lock-up engaged in gear >= `min_gear` with the turbine above `engage_rpm` and the command at or below `max_throttle`; released below `release_rpm`, above `max_throttle + 0.1` and during every shift |
 | `launch` | object `{bite_rpm, full_rpm_min, full_rpm_max, lock_slip_rpm, anti_stall_rpm}` | 1000, 1500, 3500, 100, 600 | `anti_stall_rpm > 0`, `0 < bite_rpm < full_rpm_min <= full_rpm_max`, `lock_slip_rpm > 0` | dual_clutch only: launch on clutch slip - engagement 0 at `bite_rpm` -> 1 at `lerp(full_rpm_min, full_rpm_max, throttle)` of engine rpm; locks once `|slip| < lock_slip_rpm` until the engine falls below `anti_stall_rpm` |
 | `creep_torque_nm` | real (N·m) | `40` | `>= 0` | dual_clutch: clutch capacity kept at idle in D/R without throttle (creep); an automatic creeps through its converter |
+| `cvt` | object, see below | **required** on a cvt gearbox | rejected on any other (`"... the automatic_tcu's 'cvt' block is for a cvt gearbox only"`); a cvt without it: `"... a cvt gearbox needs the automatic_tcu's 'cvt' block (its ratio law)"` | the variator's ratio law |
 
-Snapshot (never hashed): `PowertrainSnapshot::transmission_kind` (0 manual/sequential, 1 automatic, 2 dual_clutch),
+**`cvt` ratio law** (CVT plan C1, `CvtTcuDesc`; unknown keys rejected): `target_rpm_vs_throttle` (Curve1D, **required**,
+throttle x within [0, 1], every rpm `> 0`), `sport_target_rpm_vs_throttle` (optional, same rules; empty = the D curve),
+`min_rpm_vs_output_rpm` (optional, x = gearbox output rpm `>= 0`), `stepped_sport` (bool, default `true`). Continuous
+mode: the TCU aims the input (turbine of a converter CVT, else the engine) at
+`n_t = max(target_rpm_vs_throttle(command), min_rpm_vs_output_rpm(output rpm))`, i.e. the ratio `n_t / output rpm`
+clamped to `[ratio_high, ratio_low]` (`ratio_low` at a standstill), moved at most `ratio_rate_per_s` in ln r. S
+(`transmission.mode >= 0.5`): with `stepped_sport` the variator runs through its virtual `steps` on the
+`sport_schedule`'s shift lines with `min_time_in_gear_s` dwell (the step nearest the current ratio first), moving at
+`step_rate_per_s`; without it the S target curve. `shift_up_count` / `shift_down_count` always select the steps
+(manual mode with its timeout and forced up/down shifts, as for a stepped box).
+
+Snapshot (never hashed): `PowertrainSnapshot::transmission_kind` (0 manual/sequential, 1 automatic, 2 dual_clutch, 3 cvt;
+cvt also `cvt_ratio`, `cvt_step` (0 = continuous), `cvt_belt_capacity_nm`, `cvt_clamp_force_n`, `cvt_belt_slip_rad_s`),
 `transmission_selector` (-1 R, 0 N/P, k > 0 D limited to gear k), `transmission_manual_mode`, `transmission_sport_mode`,
 `converter_speed_ratio`, `lockup_engagement`; `gear` is the gear held. TCU state (phase, timers, preselect candidate) is hashed only for a vehicle with an automatic_tcu,
 so every manual car's hash is unchanged.
 
 Limits (A1): a dual_clutch kickdown steps one gear per shift; the dual_clutch launch rpm is the clutch equilibrium
-(capacity x engagement = engine torque, about 2200 rpm for the 350 N·m test box), not a target; no CVT; all shipped
-data [AS].
+(capacity x engagement = engine torque, about 2200 rpm for the 350 N·m test box), not a target (the assist unit's launch control sets
+one, see electronics.md "DCT launch control"); all shipped data [AS].
 
 ### The `traction_control` block
 

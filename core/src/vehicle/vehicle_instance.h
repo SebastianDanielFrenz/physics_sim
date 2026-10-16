@@ -325,6 +325,7 @@ private:
     // Engine garage P8 (A15): which assists this car has FITTED (a not-fitted assist ignores its channel). Computed
     // once in the constructor from the TCU blocks, traction_control.fitted and the launch_control controller.
     bool fit_clutch_ = true, fit_blip_ = true, fit_shift_ = true, fit_traction_ = true, fit_launch_ = false;
+    bool launch_on_dct_ = false; // the assist unit's launch control drives a DualClutch's launch clutch
     bool has_manual_tcu_ = false; // automatic gearbox plan A1: the assist unit's launch control needs the manual_tcu
     std::uint32_t fitted_bits_ = 0; // snapshot layout: bit0 auto_clutch .. bit3 traction_control, bit4 launch_control, bit5 anti_lag switch, bit6 aero_control (assists I5)
     // Assists I1: per-mode controller parameters (index = TractionMode code; 0 and 1 are the car's own desc) and the

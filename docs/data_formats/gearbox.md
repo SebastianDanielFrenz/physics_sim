@@ -17,10 +17,10 @@ thresholds).
 | Field | Type | Req./opt. | Default | Validation | Meaning |
 |---|---|---|---|---|---|
 | `format` | string | required (standalone file only) | — | must equal `"physics_sim.gearbox/1"` | see README |
-| `type` | string | optional | `"manual"` | `"manual"`, `"sequential"`, `"automatic"` or `"dual_clutch"`, else `"<ctx>: gearbox 'type' must be \"manual\", \"sequential\", \"automatic\" or \"dual_clutch\", got \"<type>\""` | selector behaviour (manual = H-pattern with neutral between every gear; sequential = up/down through an ordered list, e.g. a tractor range-and-gear box flattened into one sequence; automatic = torque-converter planetary box, see [Automatic and dual-clutch gearboxes](#automatic-and-dual-clutch-gearboxes); dual_clutch = two wet clutches on odd/even shafts, same section) |
-| `forward_ratios` | array of real | **required** | — | must be present (`"<ctx>: 'forward_ratios' is required"`); every ratio `> 0`; **strictly decreasing**, 1st gear first (`"<ctx>.forward_ratios: must be strictly decreasing (1st first)"`) | `omega_in = ratio * omega_out` per forward gear, 1st listed first |
+| `type` | string | optional | `"manual"` | `"manual"`, `"sequential"`, `"automatic"`, `"dual_clutch"` or `"cvt"`, else `"<ctx>: gearbox 'type' must be \"manual\", \"sequential\", \"automatic\", \"dual_clutch\" or \"cvt\", got \"<type>\""` | selector behaviour (manual = H-pattern with neutral between every gear; sequential = up/down through an ordered list, e.g. a tractor range-and-gear box flattened into one sequence; automatic = torque-converter planetary box, see [Automatic and dual-clutch gearboxes](#automatic-and-dual-clutch-gearboxes); dual_clutch = two wet clutches on odd/even shafts, same section; cvt = push-belt variator, see [CVT gearboxes](#cvt-gearboxes)) |
+| `forward_ratios` | array of real | **required** (rejected on a `cvt`, which fills it from `cvt.steps`) | — | must be present (`"<ctx>: 'forward_ratios' is required"`); every ratio `> 0`; **strictly decreasing**, 1st gear first (`"<ctx>.forward_ratios: must be strictly decreasing (1st first)"`) | `omega_in = ratio * omega_out` per forward gear, 1st listed first |
 | `reverse_ratios` | array of real | optional | empty | every ratio `< 0` (`"<ctx>.reverse_ratios: every ratio must be < 0"`) | reverse ratios, R1 (slowest) first |
-| `forward_efficiency` | array of real | **required** | — | must be present (`"<ctx>: 'forward_efficiency' is required"`); **same length** as `forward_ratios` (`"<ctx>: forward_efficiency must have the same length as forward_ratios"`); every value in `(0, 1]` (`"<ctx>.forward_efficiency: every value must be in (0, 1]"`) | mesh efficiency per forward gear |
+| `forward_efficiency` | array of real | **required** (rejected on a `cvt`, filled from `cvt.efficiency_vs_ratio` at each step) | — | must be present (`"<ctx>: 'forward_efficiency' is required"`); **same length** as `forward_ratios` (`"<ctx>: forward_efficiency must have the same length as forward_ratios"`); every value in `(0, 1]` (`"<ctx>.forward_efficiency: every value must be in (0, 1]"`) | mesh efficiency per forward gear |
 | `reverse_efficiency` | array of real | optional (required if `reverse_ratios` non-empty) | empty | **same length** as `reverse_ratios` (`"<ctx>: reverse_efficiency must have the same length as reverse_ratios"`); every value in `(0, 1]` | mesh efficiency per reverse gear |
 | `input_inertia_kgm2` | real (kg·m²) | optional | `0` | none | inertia at the `in` port |
 | `output_inertia_kgm2` | real (kg·m²) | optional | `0` | none | inertia at the `out` port |
@@ -158,6 +158,59 @@ Shipped data (all [AS]): `data/gearboxes/sedan_8at.json` (8-speed automatic, 4.7
 clutches, handover 0.06 s, preselect 0.12 s). Test cars: `tests/support/fixtures/vehicles/car_sedan_at.json`,
 `car_sedan_dct.json`; tests `tests/validation/test_automatic_gearbox.cpp`, `tests/unit/test_automatic_gearbox_io.cpp`
 (`[drivetrain][automatic]`).
+
+
+## CVT gearboxes
+
+CVT plan C1. A gearbox of type `"cvt"` is a push-belt continuously variable transmission: a forward/reverse clutch
+set (`shift_clutch`, required as for the clutch-to-clutch types) and, optionally, a torque `converter` ahead of a
+variator whose ratio is a state. It is a clutch-to-clutch kind for the powertrain wiring: no `clutch` component, the
+engine crank shafted straight to `in`, an `automatic_tcu` with a [`cvt` ratio law](vehicle.md#automatic_tcu) required.
+The variator ratio is the ratio of the one friction row from the gear set's input to its output; its capacity is
+`min(forward clutch capacity, belt capacity)`. D is one gear (gear 1), plus N and R.
+
+`forward_ratios` / `forward_efficiency` are rejected (`"<ctx>: a cvt gearbox has no 'forward_ratios'/'forward_efficiency'
+(the variator's cvt.steps and efficiency_vs_ratio replace them)"`); the loader fills them from `cvt.steps` and the
+efficiency at each step, for position readers. Exactly one reverse ratio (`"<ctx>: a cvt gearbox has exactly one reverse
+ratio"`; the value includes the variator's launch ratio); no `preselect_time_s`. A `cvt` block on another type is
+rejected (`"<ctx>: 'cvt' is for \"cvt\" gearboxes only"`).
+
+**Launch.** With a `converter` the box launches through it and its lock-up clutch (lock-up policy of the TCU,
+`lockup.min_gear` counts D as gear 1). Without one the forward clutch slips like a dual-clutch launch clutch (the TCU's
+`launch` and `creep_torque_nm`); the variator is held at `ratio_low` until that clutch has locked, and the clamping
+force is raised to the clutch's full static capacity while it slips under throttle (so the lock-up never slips the belt).
+
+### `cvt`
+
+Unknown keys rejected (`"<ctx>.cvt: unknown key '<key>'"`); `ratio_low`, `ratio_high`, `steps`, `efficiency_vs_ratio`
+and `belt` are required (`"<ctx>.cvt: '<key>' is required"`).
+
+| Field | Type | Default | Validation | Meaning |
+|---|---|---|---|---|
+| `ratio_low` / `ratio_high` | real | **required** | `ratio_low > ratio_high > 0` | launch (largest) and overdrive ratios, `omega_in = r * omega_out` |
+| `ratio_rate_per_s` | real (ln r / s) | `1.0` | `> 0` | fastest ratio change in the continuous mode |
+| `step_rate_per_s` | real (ln r / s) | `4.0` | `> 0` | fastest ratio change between the virtual steps (stepped mode) |
+| `steps` | array of real | **required** | at least two, strictly decreasing (1st first), within `[ratio_high, ratio_low]` | the virtual steps of the stepped mode (S / paddles) |
+| `efficiency_vs_ratio` | Curve1D `{x, y}` | **required** | x ascending, every y in `(0, 1]` | variator mechanical efficiency at the current ratio (applied as the lagged mesh loss, booked in `gear_loss`) |
+| `pump_drag_nm`, `pump_drag_nm_per_kn` | real | `0`, `0` | `>= 0` | hydraulic pump drag on the input: `pump_drag_nm + pump_drag_nm_per_kn * F / 1000`, faded in over the first 10 rad/s of input speed (`gear_loss`) |
+| `belt` | object | **required** | see below | the belt and its clamping force |
+
+`belt` (unknown keys rejected): `friction_coefficient` (`0.09`, `> 0`), `sheave_half_angle_deg` (`11`, in (0, 45)),
+`pulley_radius_sum_m` (`0.2`, `> 0`), `clamp_force_min_n` / `clamp_force_max_n` (`5000` / `40000`, `0 < min <= max`),
+`clamp_safety_factor` (`1.3`, `>= 1`), `clamp_time_constant_s` (`0.05`, `> 0`), `static_factor` (`1.1`, `>= 1`).
+
+Model: drive pulley running radius `R_p = pulley_radius_sum_m / (1 + r)`; belt capacity at the input
+`C_belt = 2 mu F R_p / cos(beta)`. The clamping force `F` lags (`clamp_time_constant_s`) toward
+`clamp_safety_factor * max(|input torque|, |engine torque demand|) / (2 mu R_p / cos(beta))`, clamped to
+`[clamp_force_min_n, clamp_force_max_n]`. A torque above the belt's capacity slips the row (static capacity
+`static_factor * C_belt`); the slip loss is booked in `clutch_loss`. Ratio, virtual step, step timer and clamping force
+are hashed only on a cvt.
+
+Shipped data (all [AS], `source` field in each file): `data/gearboxes/sedan_cvt.json` (2.63-0.38, converter from
+`sedan_8at.json`, 450 N·m forward clutch) and `data/gearboxes/sedan_cvt_clutch.json` (same variator, 300 N·m wet
+starting clutch, no converter). Test cars `tests/support/fixtures/vehicles/car_sedan_cvt.json`,
+`car_sedan_cvt_clutch.json`; tests `tests/validation/test_cvt_gearbox.cpp`, `tests/unit/test_cvt_gearbox_io.cpp`
+(`[cvt]`).
 
 ## Ports
 

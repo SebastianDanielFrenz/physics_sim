@@ -580,7 +580,10 @@ struct ClutchDesc {
 // clutches, odd and even gears on their own shafts, the next gear preselected, launch on clutch slip). Both shift
 // through two friction rows (the off-going and the on-coming clutch) instead of a dog and a synchro, and are driven by
 // an automatic_tcu controller (controller_desc.h). Appended: Manual/Sequential keep their values.
-enum class GearboxType { Manual, Sequential, Automatic, DualClutch };
+// CVT plan C1: Cvt = a push-belt (or chain) continuously variable transmission: a forward/reverse clutch set and
+// optionally a torque converter ahead of a variator whose ratio is a state (GearboxDesc::cvt); one friction row carries
+// the variator ratio, its capacity is the belt's clamping-force limit (and the launch clutch's while it slips).
+enum class GearboxType { Manual, Sequential, Automatic, DualClutch, Cvt };
 
 // Automatic gearbox plan A1: the hydrodynamic torque converter of an Automatic gearbox (physics_sim.gearbox/1
 // "converter" block). Bolted to the box's input: port `in` of the gearbox is the pump (impeller, on the engine side),
@@ -615,6 +618,40 @@ struct ShiftClutchDesc {
     // DualClutch only: time to preselect a gear that is not the one already waiting on the idle shaft (synchro on the
     // idle shaft); 0 = always preselected.
     real preselect_time_s = 0.0;
+};
+// CVT plan C1: the push belt between the two variator pulleys (physics_sim.gearbox/1 "cvt"."belt").
+//   drive pulley running radius  R_p = pulley_radius_sum_m / (1 + r)   (r = variator ratio = R_driven / R_drive; the
+//                                                                      belt length keeps R_drive + R_driven ~ constant)
+//   belt torque capacity at the input  C_belt = 2 * mu * F * R_p / cos(beta)   (mu friction_coefficient, beta the
+//                                                                              sheave half angle, F the clamping force)
+// The clamping force F is a state: a first-order lag (clamp_time_constant_s) toward
+// clamp_safety_factor * T_in * cos(beta) / (2 * mu * R_p), T_in = max(|input torque last substep|, |engine torque
+// demand|), clamped to [clamp_force_min_n, clamp_force_max_n]. A torque above C_belt slips the belt (the row goes
+// kinetic); static capacity = static_factor * C_belt.
+struct CvtBeltDesc {
+    real friction_coefficient = 0.09;
+    real sheave_half_angle_deg = 11.0;
+    real pulley_radius_sum_m = 0.2;
+    real clamp_force_min_n = 5000.0, clamp_force_max_n = 40000.0;
+    real clamp_safety_factor = 1.3;
+    real clamp_time_constant_s = 0.05;
+    real static_factor = 1.1;
+};
+// CVT plan C1: the variator (physics_sim.gearbox/1 "cvt" block). ratio_low (the launch ratio, numerically largest) >
+// ratio_high (overdrive) > 0. The ratio moves toward the TCU's target at most ratio_rate_per_s (in ln r per second) in
+// the continuous mode and step_rate_per_s between the virtual steps of the stepped mode (`steps`, strictly decreasing,
+// within [ratio_high, ratio_low]; they are also the box's forward_ratios for position readers). Losses: the variator's
+// efficiency_vs_ratio (x = ratio ascending, y in (0, 1]) as the lagged mesh loss, plus the hydraulic pump's drag
+// pump_drag_nm + pump_drag_nm_per_kn * F/1000 on the input. Launch: through `converter` when the box has one (a
+// converter CVT), else on the shift_clutch (the forward clutch slips like a dual-clutch box's launch clutch).
+// The reverse gear is reverse_ratios[0] (exactly one; the variator is held at ratio_low in R and the value includes it).
+struct CvtDesc {
+    real ratio_low = 2.5, ratio_high = 0.4;
+    real ratio_rate_per_s = 1.0, step_rate_per_s = 4.0;
+    std::vector<real> steps;
+    vehicle::Curve1D efficiency_vs_ratio;
+    real pump_drag_nm = 0.0, pump_drag_nm_per_kn = 0.0;
+    CvtBeltDesc belt;
 };
 struct SynchroDesc {
     std::vector<real> forward_capacity_nm; // per forward gear, input-shaft torque; 0 = no synchro (dog only)
@@ -658,11 +695,14 @@ struct GearboxDesc {
     // for Automatic, and rejects either on Manual/Sequential). Never read by a Manual/Sequential box.
     ShiftClutchDesc shift_clutch;
     std::optional<TorqueConverterDesc> converter;
+    // CVT plan C1: Cvt only (required there, rejected elsewhere). `converter` is allowed on a Cvt too.
+    std::optional<CvtDesc> cvt;
 };
 
-// Automatic gearbox plan A1: true for the clutch-to-clutch kinds (no dog, no synchro, no driver clutch).
+// Automatic gearbox plan A1: true for the clutch-to-clutch kinds (no dog, no synchro, no driver clutch, an
+// automatic_tcu, the gear set as friction rows). CVT plan C1: a Cvt counts too (its variator is such a row).
 [[nodiscard]] constexpr bool is_clutch_to_clutch(GearboxType t) {
-    return t == GearboxType::Automatic || t == GearboxType::DualClutch;
+    return t == GearboxType::Automatic || t == GearboxType::DualClutch || t == GearboxType::Cvt;
 }
 
 struct GearPairDesc {

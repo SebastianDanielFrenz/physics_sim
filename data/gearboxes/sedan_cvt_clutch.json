@@ -1,0 +1,74 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "sedan_cvt_clutch",
+  "type": "cvt",
+  "source": "Plausible push-belt CVT with a wet multi-plate starting clutch instead of a torque converter (the launch slips that clutch, like a dual-clutch box's) for a 2.0 L passenger car. Variator [AS], NOT a specific gearbox: steel push belt, ratio 2.63 (launch) to 0.38 (overdrive), spread ~6.9, in the range of current passenger push-belt CVTs (spreads 5.5-7.3; e.g. Naunheimer et al., Automotive Transmissions, 2nd ed., Springer 2011, ch. 6, and Srivastava/Haque, A review on belt and chain CVT, Mech. Mach. Theory 2009 - verify before citing). Ratio rate 1.2 ln-units/s continuous, 6.0 between the seven virtual steps of the stepped mode [AS]. Efficiency 0.86 at launch ratio, 0.92 near 1:1, 0.90 in overdrive [AS] (published push-belt CVT mechanical efficiencies 0.85-0.93). Pump drag 2 N*m + 0.08 N*m per kN clamping force [AS]. Belt [AS]: traction coefficient 0.09, sheave half angle 11 deg, drive+driven running radius 0.2 m, clamping force 4-45 kN with safety factor 1.3 over max(input torque, engine demand) and a 50 ms lag: belt capacity ~455 N*m at the launch ratio and the maximum force, ~1.4x the converter's stall turbine torque against the 2.0 L sedan engine. Reverse -2.60 (planetary reverse x launch ratio) [AS]. CVT plan C1. Starting clutch 300 N*m kinetic input-referred [AS] (1.5x the engine's 200 N*m peak).",
+  "reverse_ratios": [
+    -2.6
+  ],
+  "reverse_efficiency": [
+    0.85
+  ],
+  "input_inertia_kgm2": 0.025,
+  "output_inertia_kgm2": 0.02,
+  "input_axis_local": [
+    0,
+    1,
+    0
+  ],
+  "output_axis_local": [
+    0,
+    -1,
+    0
+  ],
+  "initial_gear": 0,
+  "rated_input_torque_nm": 250.0,
+  "gear_type": "helical",
+  "shift_clutch": {
+    "capacity_nm": 300.0,
+    "static_factor": 1.15,
+    "torque_phase_s": 0.15,
+    "max_inertia_phase_s": 0.6,
+    "sync_slip_rad_s": 3.0,
+    "engage_time_s": 0.35
+  },
+  "cvt": {
+    "ratio_low": 2.63,
+    "ratio_high": 0.38,
+    "ratio_rate_per_s": 1.2,
+    "step_rate_per_s": 6.0,
+    "steps": [
+      2.4,
+      1.62,
+      1.18,
+      0.92,
+      0.72,
+      0.56,
+      0.44
+    ],
+    "efficiency_vs_ratio": {
+      "x": [
+        0.38,
+        1.0,
+        2.63
+      ],
+      "y": [
+        0.9,
+        0.92,
+        0.86
+      ]
+    },
+    "pump_drag_nm": 2.0,
+    "pump_drag_nm_per_kn": 0.08,
+    "belt": {
+      "friction_coefficient": 0.09,
+      "sheave_half_angle_deg": 11.0,
+      "pulley_radius_sum_m": 0.2,
+      "clamp_force_min_n": 4000.0,
+      "clamp_force_max_n": 45000.0,
+      "clamp_safety_factor": 1.3,
+      "clamp_time_constant_s": 0.05,
+      "static_factor": 1.1
+    }
+  }
+}

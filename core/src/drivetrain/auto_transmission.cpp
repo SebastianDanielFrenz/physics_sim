@@ -1,5 +1,7 @@
 #include "auto_transmission.h"
 
+#include "ps/math/transcendental.h"
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -37,10 +39,16 @@ AutoTransmission::AutoTransmission(Desc desc) : desc_(std::move(desc)) {
     const int n = forward_count(), m = reverse_count();
     if (n < 1) throw std::runtime_error("AutoTransmission: needs at least one forward gear");
     if (desc_.initial_gear < -m || desc_.initial_gear > n) throw std::runtime_error("AutoTransmission: initial_gear out of range");
+    if (desc_.cvt) {
+        if (!desc_.tcu.cvt) throw std::runtime_error("AutoTransmission: a cvt gearbox needs the automatic_tcu's cvt block");
+        if (desc_.dual_clutch) throw std::runtime_error("AutoTransmission: a cvt is not a dual-clutch box");
+        cos_beta_ = ps::math::cos(desc_.cvt_desc.belt.sheave_half_angle_deg * real(3.14159265358979323846) / real(180.0));
+    }
     reset(desc_.initial_gear, false);
 }
 
 real AutoTransmission::ratio(int gear) const {
+    if (gear > 0 && desc_.cvt) return ratio_; // CVT plan C1: D is the variator
     if (gear > 0) return desc_.forward_ratios[static_cast<std::size_t>(gear - 1)];
     if (gear < 0) return desc_.reverse_ratios[static_cast<std::size_t>(-gear - 1)];
     return real(1.0);
@@ -73,6 +81,107 @@ void AutoTransmission::reset(int gear, bool clutch_locked) {
     e_lock_ = real(0.0);
     launch_locked_ = clutch_locked && gear != 0;
     e_launch_ = launch_locked_ ? real(1.0) : real(0.0);
+    if (desc_.cvt) {
+        ratio_ = desc_.cvt_desc.ratio_low;
+        step_ = 0;
+        t_step_ = real(0.0);
+        clamp_ = desc_.cvt_desc.belt.clamp_force_min_n;
+    }
+}
+
+int AutoTransmission::nearest_step() const {
+    int best = 1;
+    real best_d = std::abs(desc_.forward_ratios[0] - ratio_) / desc_.forward_ratios[0];
+    for (int k = 2; k <= forward_count(); ++k) {
+        const real r = desc_.forward_ratios[static_cast<std::size_t>(k - 1)];
+        const real d = std::abs(r - ratio_) / r;
+        if (d < best_d) {
+            best_d = d;
+            best = k;
+        }
+    }
+    return best;
+}
+
+real AutoTransmission::belt_capacity() const {
+    const CvtBeltDesc& b = desc_.cvt_desc.belt;
+    const real rp = b.pulley_radius_sum_m / (real(1.0) + ratio_);
+    return real(2.0) * b.friction_coefficient * clamp_ * rp / cos_beta_;
+}
+
+// CVT plan C1: the variator's target ratio (continuous or stepped), its rate-limited motion and the clamping force.
+void AutoTransmission::update_cvt(const Sensors& s, real th) {
+    const CvtDesc& c = desc_.cvt_desc;
+    const AutomaticTcuDesc& t = desc_.tcu;
+    const CvtTcuDesc& law = *t.cvt;
+    const real out_rpm = std::abs(s.output_omega) * kRadPerSecToRpm;
+    const bool sport = s.mode_channel >= real(0.5);
+    const int n = forward_count();
+    const int top = std::clamp(selector_ > 0 ? selector_ : n, 1, n);
+    real r_t = c.ratio_low;
+    real rate = c.ratio_rate_per_s;
+    auto step_rpm = [&](int k) { return desc_.forward_ratios[static_cast<std::size_t>(k - 1)] * out_rpm; };
+    t_step_ += s.h;
+    if (cur_ > 0 && (manual_ || (sport && law.stepped_sport))) {
+        const ShiftScheduleDesc& sch = sport ? t.sport_schedule : t.schedule;
+        if (manual_) {
+            manual_gear_ = std::clamp(manual_gear_, 1, top);
+            const real forced_up = t.manual_up_rpm > real(0.0) ? t.manual_up_rpm : sch.up_rpm_at_full_throttle;
+            if (step_rpm(manual_gear_) > forced_up && manual_gear_ < top) ++manual_gear_;
+            else if (step_rpm(manual_gear_) < sch.down_rpm_at_zero_throttle && manual_gear_ > 1) --manual_gear_;
+            if (manual_gear_ != step_) t_step_ = real(0.0);
+            step_ = manual_gear_;
+        } else {
+            if (step_ == 0) {
+                step_ = std::min(nearest_step(), top);
+                t_step_ = real(0.0);
+            }
+            const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
+            const real dn = lerp(sch.down_rpm_at_zero_throttle, sch.down_rpm_at_full_throttle, th);
+            const bool dwell = t_step_ >= t.min_time_in_gear_s;
+            const real r = step_rpm(step_);
+            if (dwell && r > up && step_ < top && step_rpm(step_ + 1) > dn) {
+                ++step_;
+                t_step_ = real(0.0);
+            } else if (step_ > 1 && step_rpm(step_ - 1) < up * real(0.95) && ((dwell && r < dn) || r < sch.down_rpm_at_zero_throttle)) {
+                --step_;
+                t_step_ = real(0.0);
+            } else if (step_ > top) {
+                step_ = top;
+                t_step_ = real(0.0);
+            }
+        }
+        r_t = desc_.forward_ratios[static_cast<std::size_t>(step_ - 1)];
+        rate = c.step_rate_per_s;
+    } else {
+        step_ = 0;
+        if (cur_ > 0) {
+            const vehicle::Curve1D& curve =
+                (sport && !law.stepped_sport && !law.sport_target_rpm_vs_throttle.x.empty()) ? law.sport_target_rpm_vs_throttle : law.target_rpm_vs_throttle;
+            real n_t = curve.evaluate(th);
+            if (!law.min_rpm_vs_output_rpm.x.empty()) n_t = std::max(n_t, law.min_rpm_vs_output_rpm.evaluate(out_rpm));
+            r_t = out_rpm > real(1.0) ? std::clamp(n_t / out_rpm, c.ratio_high, c.ratio_low) : c.ratio_low;
+        }
+    }
+    // A launch-clutch CVT stays in the launch ratio until its clutch has locked.
+    if (cur_ > 0 && slip_launch() && !launch_locked_) r_t = c.ratio_low;
+    if (r_t != ratio_) {
+        const real lr = ps::math::log(ratio_), lt = ps::math::log(r_t);
+        const real d = rate * s.h;
+        ratio_ = (std::abs(lt - lr) <= d) ? r_t : ps::math::exp(lr + (lt > lr ? d : -d));
+        ratio_ = std::clamp(ratio_, c.ratio_high, c.ratio_low);
+    }
+    // Clamping force: lag toward the force that carries max(|input torque|, |engine demand|) x the safety factor.
+    const CvtBeltDesc& b = c.belt;
+    const real rp = b.pulley_radius_sum_m / (real(1.0) + ratio_);
+    const real per_n = real(2.0) * b.friction_coefficient * rp / cos_beta_; // N*m of capacity per N of clamping force
+    real t_in = std::max(std::abs(s.input_torque_prev), std::abs(s.engine_torque_demand));
+    // During a starting-clutch launch the clamp is raised to what the clutch can carry once it locks, so the lock-up
+    // (which syncs the engine through the clutch's static capacity) never slips the belt. Not while creeping (no throttle).
+    if (cur_ > 0 && slip_launch() && !launch_locked_ && th >= kLaunchMinThrottle)
+        t_in = std::max(t_in, desc_.clutch.static_factor * desc_.clutch.capacity_nm);
+    const real f_t = std::clamp(b.clamp_safety_factor * t_in / per_n, b.clamp_force_min_n, b.clamp_force_max_n);
+    clamp_ += (f_t - clamp_) * std::min(real(1.0), s.h / b.clamp_time_constant_s);
 }
 
 void AutoTransmission::choose_target(const Sensors& s, real th) {
@@ -103,7 +212,8 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
         if (selector_ > 0 && (d_up != 0 || d_dn != 0)) {
             if (!manual_) {
                 manual_ = true;
-                manual_gear_ = std::clamp(cur_ > 0 ? cur_ : 1, 1, selector_);
+                // CVT plan C1: manual mode starts on the virtual step nearest the variator's ratio.
+                manual_gear_ = std::clamp(desc_.cvt ? (cur_ > 0 ? nearest_step() : 1) : (cur_ > 0 ? cur_ : 1), 1, selector_);
             }
             manual_gear_ = std::clamp(manual_gear_ + static_cast<int>(d_up) - static_cast<int>(d_dn), 1, selector_);
             manual_t_ = real(0.0);
@@ -139,7 +249,11 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
             tgt_ = cur_; // rolling back fast in R: hold R until slow
             return;
         }
-        tgt_ = (cur_ < 0) ? 0 : (manual_ ? manual_gear_ : 1);
+        tgt_ = (cur_ < 0) ? 0 : ((manual_ && !desc_.cvt) ? manual_gear_ : 1);
+        return;
+    }
+    if (desc_.cvt) { // CVT plan C1: D is one gear; the variator law runs in update_cvt
+        tgt_ = 1;
         return;
     }
     if (phase_ != Phase::Idle) return; // one decision per completed shift
@@ -211,7 +325,7 @@ void AutoTransmission::complete_shift() {
 }
 
 void AutoTransmission::update_launch(const Sensors& s, real th) {
-    if (!desc_.dual_clutch) {
+    if (!slip_launch()) {
         e_launch_ = real(1.0);
         return;
     }
@@ -221,6 +335,18 @@ void AutoTransmission::update_launch(const Sensors& s, real th) {
         return;
     }
     if (phase_ != Phase::Idle && phase_ != Phase::Engage) return;
+    // DCT launch control (assist unit): Armed holds the clutch open, Launch sets its capacity directly.
+    if (s.launch_hold_open) {
+        e_launch_ = real(0.0);
+        launch_locked_ = false;
+        return;
+    }
+    if (s.launch_cap_nm >= real(0.0)) {
+        const real C = desc_.clutch.capacity_nm;
+        e_launch_ = C > real(0.0) ? std::clamp(s.launch_cap_nm / C, real(0.0), real(1.0)) : real(0.0);
+        launch_locked_ = false;
+        return;
+    }
     const AutomaticTcuDesc& t = desc_.tcu;
     const real ne = std::abs(s.engine_omega) * kRadPerSecToRpm;
     const real slip_rpm = std::abs(s.input_omega - ratio(cur_) * s.output_omega) * kRadPerSecToRpm;
@@ -369,6 +495,7 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     update_launch(s, th);
     update_lockup(s, th);
     update_preselect(s, th);
+    if (desc_.cvt) update_cvt(s, th);
 
     // --- row commands ---
     Outputs o;
@@ -376,7 +503,7 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     RowCmd& onc = o.row[1 - slot_];
     act.ratio = ratio(cur_);
     onc.ratio = ratio(phase_ == Phase::Idle || phase_ == Phase::Engage || phase_ == Phase::Closing ? (pre_ != 0 ? pre_ : cur_) : next_);
-    const real e = desc_.dual_clutch ? e_launch_ : real(1.0);
+    const real e = slip_launch() ? e_launch_ : real(1.0);
     switch (phase_) {
         case Phase::Idle:
             act.cap_kinetic = cur_ != 0 ? C * e : real(0.0);
@@ -407,6 +534,20 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     }
     act.cap_static = cd.static_factor * act.cap_kinetic;
     onc.cap_static = cd.static_factor * onc.cap_kinetic;
+    if (desc_.cvt) {
+        // CVT plan C1: one row; the belt limits it (row B carries the same ratio at no capacity).
+        const real belt = belt_capacity();
+        if (cur_ != 0) {
+            act.cap_static = std::min(act.cap_static, desc_.cvt_desc.belt.static_factor * belt);
+            act.cap_kinetic = std::min(act.cap_kinetic, belt);
+        }
+        onc.ratio = act.ratio;
+        onc.cap_static = onc.cap_kinetic = real(0.0);
+        o.cvt_ratio = ratio_;
+        o.cvt_step = step_;
+        o.belt_capacity_nm = belt;
+        o.clamp_force_n = clamp_;
+    }
     if (desc_.has_lockup) {
         o.lockup_cap_kinetic = e_lock_ * desc_.lockup_capacity_nm;
         o.lockup_cap_static = desc_.lockup_static_factor * o.lockup_cap_kinetic;
@@ -415,7 +556,7 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     o.current = cur_;
     o.target = tgt_;
     o.phase = phase_;
-    o.launch_engagement = desc_.dual_clutch ? (phase_ == Phase::Idle || phase_ == Phase::Engage ? e_launch_ * (phase_ == Phase::Engage ? e_engage_ : real(1.0)) : real(1.0))
+    o.launch_engagement = slip_launch() ? (phase_ == Phase::Idle || phase_ == Phase::Engage ? e_launch_ * (phase_ == Phase::Engage ? e_engage_ : real(1.0)) : real(1.0))
                                             : real(1.0);
     if (cur_ == 0) o.launch_engagement = real(0.0);
     return o;
@@ -451,6 +592,12 @@ std::uint64_t AutoTransmission::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, e_lock_);
     h = fnv1a(h, e_launch_);
     h = fnv1a(h, launch_locked_);
+    if (desc_.cvt) { // CVT plan C1: only a cvt folds its variator (every other box's hash unchanged)
+        h = fnv1a(h, ratio_);
+        h = fnv1a(h, step_);
+        h = fnv1a(h, t_step_);
+        h = fnv1a(h, clamp_);
+    }
     return h;
 }
 

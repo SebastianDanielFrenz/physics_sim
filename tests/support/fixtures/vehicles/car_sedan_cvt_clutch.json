@@ -1,0 +1,288 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "car_sedan_cvt_clutch",
+  "source": "CVT plan C1 test fixture: as car_sedan_cvt but with the starting-clutch CVT data/gearboxes/sedan_cvt_clutch.json: the forward clutch launches on slip (bite 1000, full 1500-3500 engine rpm, lock below 100 rpm slip, 40 N*m creep) [AS].",
+  "wheels": [
+    {
+      "name": "FL",
+      "attachment_local": [
+        1.08,
+        0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 1,
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "FR",
+      "attachment_local": [
+        1.08,
+        -0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 0,
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "RL",
+      "attachment_local": [
+        -1.62,
+        0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 3,
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    },
+    {
+      "name": "RR",
+      "attachment_local": [
+        -1.62,
+        -0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 2,
+      "tyre": "../../../../data/tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    }
+  ],
+  "steering": {
+    "max_wheel_angle": 0.5236,
+    "ackermann_fraction": 1.0,
+    "rear_steer_fraction": 0.0,
+    "steer_rate_limit": 0.0
+  },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      {
+        "wheel": "FL",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "FR",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "RL",
+        "max_torque_nm": 1600.0
+      },
+      {
+        "wheel": "RR",
+        "max_torque_nm": 1600.0
+      }
+    ],
+    "handbrake": {
+      "wheels": [
+        "RL",
+        "RR"
+      ],
+      "max_torque_nm": 1600.0
+    }
+  },
+  "aero": {
+    "drag_area_m2": 0.68
+  },
+  "powertrain": {
+    "components": [
+      {
+        "id": "engine",
+        "type": "engine",
+        "ref": "../../../../data/engines/i4_2l_na.json"
+      },
+      {
+        "id": "gearbox",
+        "type": "gearbox",
+        "ref": "../../../../data/gearboxes/sedan_cvt_clutch.json"
+      },
+      {
+        "id": "diff",
+        "type": "differential",
+        "kind": "open",
+        "ratio": 4.06,
+        "efficiency": 0.97,
+        "carrier_inertia_kgm2": 0.02,
+        "carrier_axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "park",
+        "type": "park_lock",
+        "capacity_nm": 1500.0,
+        "static_factor": 1.0,
+        "max_engage_speed_rad_s": 1.0,
+        "channel": "park_lock"
+      }
+    ],
+    "shafts": [
+      {
+        "ports": [
+          "engine.crank",
+          "gearbox.in"
+        ]
+      },
+      {
+        "ports": [
+          "gearbox.out",
+          "diff.carrier",
+          "park.shaft"
+        ]
+      },
+      {
+        "ports": [
+          "diff.left",
+          "wheel:FL"
+        ]
+      },
+      {
+        "ports": [
+          "diff.right",
+          "wheel:FR"
+        ]
+      }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true
+  },
+  "controllers": [
+    {
+      "id": "tcu",
+      "type": "automatic_tcu",
+      "gearbox": "gearbox",
+      "engine": "engine",
+      "schedule": {
+        "up_rpm_at_zero_throttle": 2000,
+        "up_rpm_at_full_throttle": 5800,
+        "down_rpm_at_zero_throttle": 1100,
+        "down_rpm_at_full_throttle": 3000
+      },
+      "sport_schedule": {
+        "up_rpm_at_zero_throttle": 2800,
+        "up_rpm_at_full_throttle": 6500,
+        "down_rpm_at_zero_throttle": 1800,
+        "down_rpm_at_full_throttle": 4000
+      },
+      "min_time_in_gear_s": 0.6,
+      "kickdown_throttle": 0.9,
+      "kickdown_max_rpm": 5500,
+      "manual_timeout_s": 0.0,
+      "upshift_torque_fraction": 1.0,
+      "creep_torque_nm": 40.0,
+      "launch": {
+        "bite_rpm": 1000,
+        "full_rpm_min": 1500,
+        "full_rpm_max": 3500,
+        "lock_slip_rpm": 100,
+        "anti_stall_rpm": 600
+      },
+      "cvt": {
+        "target_rpm_vs_throttle": {
+          "x": [
+            0.0,
+            0.2,
+            0.5,
+            0.8,
+            1.0
+          ],
+          "y": [
+            1300,
+            1700,
+            2600,
+            4200,
+            5600
+          ]
+        },
+        "min_rpm_vs_output_rpm": {
+          "x": [
+            0,
+            2000,
+            6000
+          ],
+          "y": [
+            1200,
+            1500,
+            2200
+          ]
+        },
+        "stepped_sport": true
+      }
+    }
+  ]
+}
