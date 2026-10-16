@@ -3,14 +3,16 @@
 // and the steady-state solver (ps/drivetrain/engine_thermal_steady.h). White-box: core/src is on the include path.
 // Tags [thermal][drivetrain].
 //
-// Worked example: tests/support/fixtures/thermal/i4_2l_na_jacket.json (the generic 2 L I4 thermal file plus a
-// jacket, all [AS]) with the sedan cooling system.
+// Worked example: data/engine_thermal/i4_2l_na.json (the generic 2 L I4, whose jacket comes from
+// class_si_passenger.json, all [AS]) with the sedan cooling system. The jacket-less baseline is
+// tests/support/fixtures/thermal/i4_2l_na_no_jacket.json (the same file with "water_jacket": null).
 //
 // J1 loader values and rejections; J2 more wetted area / film coefficient / pump flow -> lower metal temperature;
 // J3 ledger closure with a jacket; J4 steady solver == long transient (with and without a jacket); J5 a file
 // without the new keys is bit-identical to the same model with them at their neutral values (the shipped
 // thermal scenario hash is pinned in tests/determinism/test_worker_count_hash.cpp); J6 World: worker-count
-// invariant hash, the jacket changes the hash, zero own allocation.
+// invariant hash, the jacket changes the hash, zero own allocation; J7 every shipped engine has a jacket, and the
+// jacket telemetry channels exist only with one.
 //
 // Sabotage record (each applied once to core/src/drivetrain/engine_thermal.cpp, measured, then reverted):
 //   J3: the jacket ledger books block-air at the coolant instead of the metal temperature: worst |balance| /
@@ -44,6 +46,7 @@
 #include <initializer_list>
 #include <memory>
 #include <string>
+#include <utility>
 
 using namespace ps;
 using namespace ps::drivetrain;
@@ -56,8 +59,8 @@ namespace {
 const std::string kRoot = PS_SOURCE_DIR;
 constexpr real kC = kCelsiusToKelvin;
 
-std::string jacket_file() { return kRoot + "/tests/support/fixtures/thermal/i4_2l_na_jacket.json"; }
-std::string plain_file() { return kRoot + "/data/engine_thermal/i4_2l_na.json"; }
+std::string jacket_file() { return kRoot + "/data/engine_thermal/i4_2l_na.json"; }
+std::string plain_file() { return kRoot + "/tests/support/fixtures/thermal/i4_2l_na_no_jacket.json"; }
 std::string sedan_cooling() { return kRoot + "/data/cooling_systems/sedan.json"; }
 
 EngineThermalConfig config(const std::string& engine_file) {
@@ -404,7 +407,7 @@ struct Rig {
 Rig make_rig(bool jacket, int workers) {
     vehicle::VehicleDesc desc = io::load_vehicle_json(kRoot + "/tests/support/fixtures/vehicles/car_sedan_thermal.json");
     REQUIRE(desc.powertrain.thermal.has_value());
-    if (jacket) desc.powertrain.thermal->engine = io::load_engine_thermal_json(jacket_file());
+    desc.powertrain.thermal->engine = io::load_engine_thermal_json(jacket ? jacket_file() : plain_file());
     Rig rig;
     WorldConfig cfg;
     cfg.job_workers = workers;
@@ -476,6 +479,39 @@ TEST_CASE("J6 World: a water-jacket vehicle is worker-count invariant, hashed an
     CHECK(da::own_violation_count() == 0);
 }
 
+TEST_CASE("J7 every shipped engine has a water jacket; the jacket channels appear in the telemetry",
+          "[thermal][drivetrain][io]") {
+    // Owner ruling 2026-10-16: every shipped engine gets a jacket. The class file carries it; every engine file
+    // extends the class file. A loadable file is one with a displacement (the class file alone is not).
+    int engines = 0;
+    for (const auto& e : std::filesystem::directory_iterator(kRoot + "/data/engine_thermal")) {
+        if (e.path().extension() != ".json") continue;
+        std::ifstream in(e.path());
+        const json j = json::parse(in);
+        if (!j.contains("displacement_l") && !j.contains("extends")) continue; // a part file meant to be extended
+        const EngineThermalDesc d = io::load_engine_thermal_json(e.path().string());
+        INFO(e.path().filename().string());
+        CHECK(d.water_jacket.enabled);
+        CHECK(d.water_jacket.wetted_area_m2 > 0.0);
+        ++engines;
+    }
+    CHECK(engines >= 2);
+    CHECK_FALSE(io::load_engine_thermal_json(plain_file()).water_jacket.enabled);
+
+    auto channel = [](World& w, const std::string& name) {
+        const auto& names = w.telemetry().channel_names();
+        return std::find(names.begin(), names.end(), name) != names.end();
+    };
+    Rig jacket = make_rig(true, 1);
+    Rig plain = make_rig(false, 1);
+    for (const char* n : {"vehicle0.thermal.metal_c", "vehicle0.thermal.jacket_heat_w",
+                          "vehicle0.thermal.coolant_flow_l_min"}) {
+        CHECK(channel(*jacket.world, n));
+        CHECK_FALSE(channel(*plain.world, n)); // a jacket-less vehicle keeps its old CSV header
+    }
+    CHECK(channel(*plain.world, "vehicle0.thermal.coolant_c"));
+}
+
 TEST_CASE("J diag steady temperatures of the worked example", "[.][diag][thermal]") {
     struct Variant {
         const char* name;
@@ -494,6 +530,24 @@ TEST_CASE("J diag steady temperatures of the worked example", "[.][diag][thermal
     hot.engine_rpm = 5000.0;
     const Load loads[] = {{"cruise 3000 rpm, wall 12 kW, friction 3 kW, 25 C, 25 m/s", cruise_input()},
                           {"hot 5000 rpm, wall 35 kW, friction 3 kW, 25 C, 5 m/s", hot}};
+    // Shipped A25A (2.487 L) at a light cruise and at full load near the power peak.
+    {
+        SteadyThermalInput a_cruise = cruise_input(8000.0);
+        a_cruise.engine_rpm = 2000.0;
+        a_cruise.friction_heat_w = 1500.0;
+        SteadyThermalInput a_hard = cruise_input(45000.0);
+        a_hard.engine_rpm = 6000.0;
+        a_hard.friction_heat_w = 8000.0;
+        a_hard.ram_speed_mps = 40.0;
+        const std::string a25a = kRoot + "/data/engine_thermal/toyota_a25a_fks.json";
+        for (const auto& [name, in] : {std::pair<const char*, SteadyThermalInput>{"A25A cruise 2000 rpm, wall 8 kW, friction 1.5 kW, 25 m/s", a_cruise},
+                                       std::pair<const char*, SteadyThermalInput>{"A25A hard 6000 rpm, wall 45 kW, friction 8 kW, 40 m/s", a_hard}}) {
+            const SteadyThermalResult r = solve_steady_thermal(config(a25a), in);
+            WARN(name << ": coolant " << r.coolant_c << " metal " << r.metal_c << " oil " << r.oil_c << " x "
+                      << r.thermostat_opening << " fan " << r.fan_on << " G_j " << r.jacket_conductance_w_k
+                      << " bounded " << r.bounded);
+        }
+    }
     for (const Load& load : loads) {
         WARN(load.name);
         for (const Variant& v : variants) {

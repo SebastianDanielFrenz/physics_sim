@@ -601,6 +601,11 @@ void World::step() {
             row.push_back(th.friction_heat_w);
             row.push_back(th.radiator_heat_w);
             row.push_back(th.friction_scale);
+            if (thermal_telemetry_channels_[vi].front().jacket) {
+                row.push_back(th.metal_c);
+                row.push_back(th.jacket_heat_w);
+                row.push_back(th.coolant_flow_l_min);
+            }
         }
     }
     telemetry_->record_row(tick_, sim_time_, std::move(row));
@@ -1004,6 +1009,12 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         tc.q_friction_w = telemetry_->register_channel(th_prefix + "q_friction_w");
         tc.q_radiator_w = telemetry_->register_channel(th_prefix + "q_radiator_w");
         tc.friction_scale = telemetry_->register_channel(th_prefix + "friction_scale");
+        if (vehicle_system_->at(id).thermal()->has_water_jacket()) {
+            tc.jacket = true;
+            tc.metal_c = telemetry_->register_channel(th_prefix + "metal_c");
+            tc.jacket_heat_w = telemetry_->register_channel(th_prefix + "jacket_heat_w");
+            tc.coolant_flow_l_min = telemetry_->register_channel(th_prefix + "coolant_flow_l_min");
+        }
         thermal_channels.push_back(tc);
     }
 
