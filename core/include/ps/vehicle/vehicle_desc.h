@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <stdexcept>
+
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/controller_desc.h"
 #include "ps/drivetrain/powertrain_desc.h"
@@ -150,7 +152,24 @@ struct SteeringDesc {
 // separate Cd/frontal-area pair. 0 == no aero drag (I2/P3 behaviour).
 using AeroDesc = aero::Desc;
 
+// Contents mass (racing_game PR #22, owner: "count fuel, which means live or semi-live updates"): with `enabled`,
+// the chassis body carries the fuel tank and N2O bottle contents on top of its own (dry) mass. The chassis BodyDesc
+// mass is the DRY mass; World::create_vehicle adds the initial contents at once and World::step re-applies dry +
+// contents at the tick boundary whenever the contents moved by update_threshold_kg or more since the last update (a
+// tank refill through set_fuel_tank_mass included). The inertia is rescaled with the mass as at creation (uniform
+// density, centre of mass unchanged): the contents are not a point mass at the tank. Off (the default) = every
+// vehicle bit-identical to before. Deterministic: a pure function of the simulated contents.
+struct ContentsMassDesc {
+    bool enabled = false;
+    real update_threshold_kg = 0.1; // > 0: semi-live, the body mass is never more than this off the true contents
+};
+inline void validate_contents_mass(const ContentsMassDesc& d) {
+    if (!(d.update_threshold_kg > real(0.0)) || !(d.update_threshold_kg < real(1000.0)))
+        throw std::runtime_error("contents_mass.update_threshold_kg must be in (0, 1000)");
+}
+
 struct VehicleDesc {
+    ContentsMassDesc contents_mass;
     TractionControlDesc traction_control;
     // Assists I1: the assist unit electronics part (grade + traction-control mode table), attached by the loader
     // from an `electronics` controller entry or the user layer. Absent = TC exactly as before.

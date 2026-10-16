@@ -1089,6 +1089,31 @@ PHYS-033 P4 I7a C6: a vehicle with a `fuel_tank` adds
 tank registers no such channel, so every shipped vehicle's CSV header is
 unchanged.
 
+## Contents mass
+
+Optional top-level block. With it the chassis body carries the fuel tank and N2O bottle contents on top of the
+mass it was created with (its dry mass).
+
+```json
+"contents_mass": { "enabled": true, "update_threshold_kg": 0.1, "source": "..." }
+```
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `enabled` | bool | false | off: the vehicle behaves and hashes exactly as without the block |
+| `update_threshold_kg` | number in (0, 1000) | 0.1 | the body mass is updated at a tick boundary once the contents moved this much since the last update |
+| `source` | string | - | free text, ignored |
+
+- The initial fill (`initial_kg` of the tank, the bottle fill) is applied when the vehicle is created, so the
+  first tick already runs with it.
+- During the drive the update is semi-live: at the start of `World::step`, before the pipeline, whenever
+  |contents - applied| >= the threshold. A refuel through `World::set_fuel_tank_mass` is picked up the same way.
+- The inertia is rescaled with the mass (uniform density: the chassis shape's own inertia at the new mass). The
+  centre of mass does not move.
+- The applied contents mass is folded into the state hash only for vehicles with the block enabled.
+- `World::chassis_contents_mass(id)` / `World::chassis_dry_mass(id)` read it back (0 without the block).
+- Unknown keys and an out-of-range threshold are rejected (`contents_mass: ...`).
+
 ## Aero
 
 `aero` is read by `core/src/io/aero_io.cpp` (`read_aero`) and validated by

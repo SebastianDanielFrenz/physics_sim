@@ -3538,6 +3538,17 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
     if (j.contains("aero")) {
         v.aero=read_aero(j.at("aero"),base_dir);
     }
+    if (j.contains("contents_mass")) {
+        const auto& cm = j.at("contents_mass");
+        if (!cm.is_object()) throw std::runtime_error("vehicle " + path + ": contents_mass must be an object");
+        for (auto it = cm.begin(); it != cm.end(); ++it) {
+            if (it.key() != "enabled" && it.key() != "update_threshold_kg" && it.key() != "source")
+                throw std::runtime_error("vehicle " + path + ": contents_mass: unknown key '" + it.key() + "'");
+        }
+        v.contents_mass.enabled = cm.value("enabled", v.contents_mass.enabled);
+        v.contents_mass.update_threshold_kg = cm.value("update_threshold_kg", v.contents_mass.update_threshold_kg);
+        ps::vehicle::validate_contents_mass(v.contents_mass);
+    }
 
     // --- powertrain (plan section 9.1) --------------------------------------
     PowertrainDesc p;

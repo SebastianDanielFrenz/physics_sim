@@ -1294,6 +1294,19 @@ public:
         return inv_mass > 0.0f ? real(1.0f / inv_mass) : 0.0;
     }
 
+    void set_mass(BodyId id, real mass) override {
+        if (!(mass > real(0.0)) || !std::isfinite(mass)) return;
+        JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
+        if (!body || !body->IsDynamic()) return;
+        // The creation path's CalculateInertia override (BodyCreationSettings::GetMassProperties, inertia multiplier
+        // 1): the shape's mass properties scaled to the new mass.
+        JPH::MassProperties props = body->GetShape()->GetMassProperties();
+        props.ScaleToMass(static_cast<float>(mass));
+        props.mInertia(3, 3) = 1.0f;
+        JPH::MotionProperties* mp = body->GetMotionProperties();
+        mp->SetMassProperties(mp->GetAllowedDOFs(), props);
+    }
+
     Mat3 get_inertia_world(BodyId id) const override {
         const JPH::Body* body = physics_system_.GetBodyLockInterfaceNoLock().TryGetBody(lookup(id));
         if (!body || body->IsStatic()) return Mat3::zero();
