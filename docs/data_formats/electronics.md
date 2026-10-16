@@ -540,7 +540,7 @@ the mode numbers belong to one car's gearing and engine.
 | `abs_default` | optional boolean (I5 part 2): written into `assist.abs` when this mode becomes effective (same rule as `traction_control_default`); ignored on a car without the `abs` block |
 | `esc_default` | optional `off` / `on` / `sport` (I6): written into `assist.esc` the same way; ignored on a car without the `esc` block |
 
-Shift and clutch-close overrides require a `manual_tcu` or `automatic_tcu`. On automatic/DCT boxes, the shift points override the active D/S schedule, and the close time controls the shift-clutch engagement ramp. Driving-mode pedal, traction-control, launch-control, nitrous and EPB rules remain available with either controller.
+Shift and clutch-close overrides require a `manual_tcu` or `automatic_tcu`. On automatic/DCT boxes, the shift points override the active D/S schedule, and the close time controls the shift-clutch engagement ramp. Traction-control, launch-control, nitrous and EPB mode rules remain available with either controller. The pedal plan P1 policy is unchanged: mode-specific pedal bends apply to automatic/DCT/CVT gearboxes; manual and sequential gearboxes keep their unbent pedal mapping.
 
 **Channel** `assist.drive_mode`, registered only on a car with the part: `0` eco, `1` normal, `2` sport, `3` racing (append-only; Q3 / I8 added racing, so a value `>= 3` now means racing), rounded
 and clamped; default = the part's `default_mode` code. A request for a mode the part does not offer maps to the part's
