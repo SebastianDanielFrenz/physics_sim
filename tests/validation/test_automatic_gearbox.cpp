@@ -9,6 +9,7 @@
 // give the same state hash every tick. Measured numbers are printed by every case.
 
 #include "vehicle_test_helpers.h"
+#include "../../core/src/drivetrain/auto_transmission.h"
 
 #include "ps/io/vehicle_io.h"
 
@@ -363,4 +364,39 @@ TEST_CASE("Slip-launch transmissions survive repeated hard stops and part-thrott
         }
         CHECK(r.max_balance_ratio <= 5e-8);
     }
+}
+TEST_CASE("DCT drive modes override shift points and clutch close time at runtime", "[automatic][drive_modes_auto]") {
+    using drivetrain::AutoTransmission;
+    AutoTransmission::Desc desc;
+    desc.dual_clutch = true;
+    desc.forward_ratios = {3.0, 2.0, 1.0};
+    desc.reverse_ratios = {-3.0};
+    desc.tcu.min_time_in_gear_s = 0.0;
+    desc.tcu.schedule = {5000.0, 5000.0, 800.0, 800.0};
+    desc.tcu.sport_schedule = desc.tcu.schedule;
+    AutoTransmission::Sensors s;
+    s.engine_omega = s.input_omega = 3000.0 * 3.14159265358979323846 / 30.0;
+    s.output_omega = s.input_omega / 3.0;
+    s.gear_request = 99.0;
+    s.throttle = 0.3;
+    s.first_substep = true;
+    s.h = 0.01;
+    AutoTransmission tcu(desc);
+    tcu.reset(1, true);
+    CHECK(tcu.step(s).target == 1); // the default schedule holds first at 3000 rpm
+    s.up_rpm_at_zero_throttle = s.up_rpm_at_full_throttle = 2000.0;
+    s.down_rpm_at_zero_throttle = s.down_rpm_at_full_throttle = 1000.0;
+    CHECK(tcu.step(s).target == 2); // changing mode immediately changes its decision
+
+    AutoTransmission standard(desc), fast(desc);
+    s.up_rpm_at_zero_throttle = s.up_rpm_at_full_throttle = 5000.0;
+    for (int i = 0; i < 3; ++i) {
+        (void)standard.step(s);
+    }
+    CHECK(standard.step(s).phase == AutoTransmission::Phase::Engage);
+    s.close_time_s = 0.02;
+    for (int i = 0; i < 3; ++i) {
+        (void)fast.step(s);
+    }
+    CHECK(fast.step(s).phase == AutoTransmission::Phase::Idle);
 }

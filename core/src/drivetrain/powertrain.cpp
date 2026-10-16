@@ -2143,6 +2143,11 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             as.input_omega = network_.omega(gearbox_in_);
             as.output_omega = network_.omega(gearbox_out_);
             as.throttle = engine_ ? last_throttle_command_.command : ctx.throttle;
+            as.up_rpm_at_zero_throttle = ctx.drive_up_rpm_zero;
+            as.up_rpm_at_full_throttle = ctx.drive_up_rpm_full;
+            as.down_rpm_at_zero_throttle = ctx.drive_down_rpm_zero;
+            as.down_rpm_at_full_throttle = ctx.drive_down_rpm_full;
+            as.close_time_s = ctx.drive_close_time_s;
             as.gear_request = ctx.gear_request;
             as.shift_up_count = ctx.shift_up_count;
             as.shift_down_count = ctx.shift_down_count;

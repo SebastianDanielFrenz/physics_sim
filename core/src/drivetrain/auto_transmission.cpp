@@ -110,6 +110,15 @@ real AutoTransmission::belt_capacity() const {
 }
 
 // CVT plan C1: the variator's target ratio (continuous or stepped), its rate-limited motion and the clamping force.
+ShiftScheduleDesc AutoTransmission::active_schedule(const Sensors& s) const {
+    ShiftScheduleDesc sch = s.mode_channel >= real(0.5) ? desc_.tcu.sport_schedule : desc_.tcu.schedule;
+    if (std::isfinite(s.up_rpm_at_zero_throttle)) sch.up_rpm_at_zero_throttle = s.up_rpm_at_zero_throttle;
+    if (std::isfinite(s.up_rpm_at_full_throttle)) sch.up_rpm_at_full_throttle = s.up_rpm_at_full_throttle;
+    if (std::isfinite(s.down_rpm_at_zero_throttle)) sch.down_rpm_at_zero_throttle = s.down_rpm_at_zero_throttle;
+    if (std::isfinite(s.down_rpm_at_full_throttle)) sch.down_rpm_at_full_throttle = s.down_rpm_at_full_throttle;
+    return sch;
+}
+
 void AutoTransmission::update_cvt(const Sensors& s, real th) {
     const CvtDesc& c = desc_.cvt_desc;
     const AutomaticTcuDesc& t = desc_.tcu;
@@ -123,7 +132,7 @@ void AutoTransmission::update_cvt(const Sensors& s, real th) {
     auto step_rpm = [&](int k) { return desc_.forward_ratios[static_cast<std::size_t>(k - 1)] * out_rpm; };
     t_step_ += s.h;
     if (cur_ > 0 && (manual_ || (sport && law.stepped_sport))) {
-        const ShiftScheduleDesc& sch = sport ? t.sport_schedule : t.schedule;
+        const ShiftScheduleDesc sch = active_schedule(s);
         if (manual_) {
             manual_gear_ = std::clamp(manual_gear_, 1, top);
             const real forced_up = t.manual_up_rpm > real(0.0) ? t.manual_up_rpm : sch.up_rpm_at_full_throttle;
@@ -258,7 +267,7 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     }
     if (phase_ != Phase::Idle) return; // one decision per completed shift
     const int g = cur_;
-    const ShiftScheduleDesc& sch = s.mode_channel >= real(0.5) ? t.sport_schedule : t.schedule;
+    const ShiftScheduleDesc sch = active_schedule(s);
     const real r = in_rpm(g);
     const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
     const real dn = lerp(sch.down_rpm_at_zero_throttle, sch.down_rpm_at_full_throttle, th);
@@ -385,8 +394,7 @@ void AutoTransmission::update_preselect(const Sensors& s, real th) {
         t_pre_ = real(0.0);
         return;
     }
-    const AutomaticTcuDesc& t = desc_.tcu;
-    const ShiftScheduleDesc& sch = s.mode_channel >= real(0.5) ? t.sport_schedule : t.schedule;
+    const ShiftScheduleDesc sch = active_schedule(s);
     const real r = std::abs(ratio(cur_) * s.output_omega) * kRadPerSecToRpm;
     const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
     const real dn = lerp(sch.down_rpm_at_zero_throttle, sch.down_rpm_at_full_throttle, th);
@@ -429,7 +437,8 @@ void AutoTransmission::update_lockup(const Sensors& s, real th) {
 
 AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     const real th = std::clamp(s.throttle, real(0.0), real(1.0));
-    const ShiftClutchDesc& cd = desc_.clutch;
+    ShiftClutchDesc cd = desc_.clutch;
+    if (std::isfinite(s.close_time_s)) cd.engage_time_s = s.close_time_s;
     const real C = cd.capacity_nm;
     time_in_gear_ += s.h;
 
