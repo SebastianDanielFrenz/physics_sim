@@ -337,3 +337,30 @@ TEST_CASE("Automatic/DualClutch A1: 1 vs 10 workers identical state hash every t
         CHECK(same);
     }
 }
+
+TEST_CASE("Slip-launch transmissions survive repeated hard stops and part-throttle relaunches",
+          "[validation][vehicle][drivetrain][automatic][dct_stop_start]") {
+    for (const char* file : {"car_sedan_dct.json", "car_sedan_cvt_clutch.json"}) {
+        INFO(file);
+        Run r(file);
+        ps_test::settle(r.w(), 1.0);
+        r.w().set_control("gear_request", kD);
+        r.w().set_control("throttle", 1.0);
+        r.run(8.0);
+        REQUIRE(r.speed() > 10.0);
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            INFO(cycle);
+            r.w().set_control("throttle", 0.0);
+            r.w().set_control("brake", 1.0);
+            r.run(8.0);
+            CHECK(r.speed() < 0.25);
+            CHECK_FALSE(r.stalled);
+            r.w().set_control("brake", 0.0);
+            r.w().set_control("throttle", 0.3);
+            r.run(5.0);
+            CHECK(r.speed() > 1.0);
+            CHECK_FALSE(r.stalled);
+        }
+        CHECK(r.max_balance_ratio <= 5e-8);
+    }
+}
