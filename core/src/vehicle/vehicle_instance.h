@@ -168,6 +168,7 @@ public:
     [[nodiscard]] const drivetrain::EngineThermalSnapshot& thermal_snapshot() const { return powertrain_.thermal_snapshot(); }
     [[nodiscard]] const drivetrain::EngineThermal* thermal() const { return powertrain_.thermal(); }
     void request_thermal_state(const drivetrain::EngineThermalState& s) { powertrain_.request_thermal_state(s); }
+    void request_cooling_capacity(const drivetrain::CoolingCapacity& c) { powertrain_.request_cooling_capacity(c); }
     [[nodiscard]] const drivetrain::NitrousSystem* nitrous_system() const { return powertrain_.nitrous(); }
     // PHYS-033 P4 I7c C16b: backs World::replace_engine_maps (queues) and
     // vehicle::System::apply_pending_engine_maps_swaps (applies, from

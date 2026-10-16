@@ -124,7 +124,8 @@ real EngineThermal::radiator_conductance(real air_mass_flow_kg_s, real coolant_m
     const CoolingSystemDesc::Radiator& r = cfg_.cooling.radiator;
     const real c_a = air_mass_flow_kg_s * kCpAir;
     const real c_c = coolant_mass_flow_kg_s * cfg_.engine.coolant_cp_j_kg_k;
-    const real ua = r.ua_ref_w_k * ps::math::pow(air_mass_flow_kg_s / r.air_mass_flow_ref_kg_s, r.ua_exponent);
+    const real ua = r.ua_ref_w_k * ps::math::pow(air_mass_flow_kg_s / r.air_mass_flow_ref_kg_s, r.ua_exponent) *
+                    capacity_.radiator_ua_scale;
     const real c_min = std::min(c_a, c_c);
     const real c_max = std::max(c_a, c_c);
     const real cr = c_min / c_max;
@@ -186,6 +187,10 @@ void EngineThermal::begin_tick() {
         has_pending_ = false;
         set_state(pending_);
     }
+    if (has_pending_capacity_) {
+        has_pending_capacity_ = false;
+        capacity_ = pending_capacity_;
+    }
 }
 
 void EngineThermal::step(real engine_rpm) {
@@ -209,7 +214,7 @@ void EngineThermal::step(real engine_rpm) {
 
     // 3. Conductances.
     const real ram = std::max(0.0, env_.ram_speed_mps);
-    const real v_face = std::max(c.radiator.ram_coefficient * ram, fan_on_ ? c.fan.face_velocity_m_s : 0.0);
+    const real v_face = std::max(c.radiator.ram_coefficient * ram, fan_on_ ? c.fan.face_velocity_m_s * capacity_.fan_flow_scale : 0.0);
     const real rho_air = env_.ambient_pressure_pa / (kGasConstantAir * t_a);
     const real m_air = rho_air * c.radiator.frontal_area_m2 * v_face;
     const real pump_l_min = e.pump_l_min_per_krpm * (std::max(0.0, engine_rpm) / 1000.0);
@@ -261,6 +266,8 @@ void EngineThermal::step(real engine_rpm) {
     snapshot_.thermostat_opening = x;
     snapshot_.fan_on = fan_on_;
     snapshot_.fan_power_w = fan_on_ ? c.fan.power_w : 0.0;
+    snapshot_.radiator_ua_scale = capacity_.radiator_ua_scale;
+    snapshot_.fan_flow_scale = capacity_.fan_flow_scale;
     snapshot_.radiator_heat_w = g_rad * (t_e_ - t_a);
     snapshot_.wall_heat_w = e_wall / dt;
     snapshot_.friction_heat_w = friction_ / dt;
@@ -293,6 +300,12 @@ std::uint64_t EngineThermal::fold_state_hash(std::uint64_t seed) const {
     fold(&t_play_, sizeof(t_play_));
     const std::uint8_t fan = fan_on_ ? 1 : 0;
     fold(&fan, sizeof(fan));
+    // The cooling capacity is an input like the controls, but it persists; fold it once it is not the default so a
+    // damaged run hashes differently, while every run at (1, 1) keeps its previous hash.
+    if (capacity_.radiator_ua_scale != 1.0 || capacity_.fan_flow_scale != 1.0) {
+        fold(&capacity_.radiator_ua_scale, sizeof(capacity_.radiator_ua_scale));
+        fold(&capacity_.fan_flow_scale, sizeof(capacity_.fan_flow_scale));
+    }
     return h;
 }
 

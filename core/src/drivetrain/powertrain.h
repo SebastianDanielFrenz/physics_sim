@@ -212,6 +212,9 @@ public:
     // Queues a new coolant/oil state for the NEXT begin_tick() (wax/play follow the coolant, fan off). Throws
     // std::runtime_error for a vehicle without thermal or a non-finite value.
     void request_thermal_state(const EngineThermalState& s);
+    // Queues new cooling-system capacity factors for the NEXT begin_tick() (see CoolingCapacity). Throws
+    // std::runtime_error for a vehicle without thermal or a factor that is not finite or outside [0, 1e3].
+    void request_cooling_capacity(const CoolingCapacity& c);
     // Test hook (plan U9): pins both friction scales; see EngineThermal.
     void thermal_friction_scale_override_for_test(real k) {
         if (thermal_) thermal_->set_friction_scale_override_for_test(k);

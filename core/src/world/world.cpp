@@ -1075,6 +1075,11 @@ void World::set_engine_thermal_state(VehicleId id, const drivetrain::EngineTherm
     vehicle_system_->at(id).request_thermal_state(state);
 }
 
+void World::set_engine_cooling_capacity(VehicleId id, const drivetrain::CoolingCapacity& capacity) {
+    if (!vehicle_system_->contains(id)) throw std::runtime_error("set_engine_cooling_capacity: unknown vehicle");
+    vehicle_system_->at(id).request_cooling_capacity(capacity);
+}
+
 void World::replace_turbo_configuration(VehicleId id,std::string_view component_id,const drivetrain::TurboPairDesc& desc) {
     if(!vehicle_system_->contains(id)) throw std::runtime_error("replace_turbo_configuration: unknown vehicle");
     vehicle_system_->at(id).replace_turbo_configuration(component_id,desc);

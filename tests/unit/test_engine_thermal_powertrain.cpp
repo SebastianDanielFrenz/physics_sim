@@ -331,3 +331,44 @@ TEST_CASE("C3 World: thermal state is hashed and worker-count invariant", "[ther
     CHECK(h1 == h10);
     CHECK(h1 != h_perturbed);
 }
+
+TEST_CASE("Cooling capacity: (1, 1) is bit-identical, a damaged radiator/fan runs hotter, rejections", "[thermal][drivetrain][cooling_capacity]") {
+    // Idle at part throttle is too gentle to need the radiator; start the coolant hot instead (thermostat open, fan on)
+    // and compare where it is 10 s later.
+    const auto run = [](const drivetrain::CoolingCapacity* cap, int workers) {
+        Rig rig = make_rig(thermal_desc(), workers);
+        World& w = *rig.world;
+        w.set_control("throttle", 0.4);
+        for (int t = 0; t < 240; ++t) w.step();
+        w.set_engine_thermal_state(rig.vehicle, EngineThermalState{104.0, 100.0}); // thermostat open, fan on
+        if (cap) w.set_engine_cooling_capacity(rig.vehicle, *cap);
+        for (int t = 0; t < 2400; ++t) w.step();
+        struct Out {
+            std::uint64_t hash;
+            real coolant_c, radiator_w, ua_scale, fan_scale;
+        };
+        const auto& th = snapshot_thermal(rig);
+        return Out{w.state_hash(), w.engine_thermal_state(rig.vehicle).coolant_c, th.radiator_heat_w, th.radiator_ua_scale, th.fan_flow_scale};
+    };
+    const auto base = run(nullptr, 1);
+    const drivetrain::CoolingCapacity unity{};
+    const auto same = run(&unity, 1);
+    CHECK(same.hash == base.hash); // explicit (1, 1) == never set, bit for bit
+    CHECK(same.coolant_c == base.coolant_c);
+
+    const drivetrain::CoolingCapacity damaged{0.3, 0.3};
+    const auto hot1 = run(&damaged, 1);
+    const auto hot4 = run(&damaged, 4);
+    INFO("coolant base " << base.coolant_c << " C, damaged " << hot1.coolant_c << " C");
+    CHECK(hot1.ua_scale == 0.3);
+    CHECK(hot1.fan_scale == 0.3);
+    CHECK(hot1.coolant_c > base.coolant_c + 0.5);
+    CHECK(hot1.hash != base.hash);
+    CHECK(hot1.hash == hot4.hash); // worker-count invariant
+
+    Rig rig = make_rig(thermal_desc());
+    REQUIRE_THROWS_WITH(rig.world->set_engine_cooling_capacity(rig.vehicle, drivetrain::CoolingCapacity{-0.1, 1.0}), ContainsSubstring("[0, 1e3]"));
+    REQUIRE_THROWS_WITH(rig.world->set_engine_cooling_capacity(rig.vehicle, drivetrain::CoolingCapacity{1.0, std::nan("")}), ContainsSubstring("[0, 1e3]"));
+    Rig plain = make_rig(io::load_vehicle_json(data_path("vehicles/car_sedan_sim.json")));
+    REQUIRE_THROWS_WITH(plain.world->set_engine_cooling_capacity(plain.vehicle, unity), ContainsSubstring("no cooling_system"));
+}
