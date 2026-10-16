@@ -136,6 +136,7 @@ add_executable(ps_unit_tests
   test_limit_policy.cpp
   test_gearbox_rating.cpp
   test_automatic_gearbox_io.cpp
+  test_cvt_gearbox_io.cpp
   test_limit_remedies.cpp
   test_engine_rules.cpp
   test_cam_profiles.cpp
@@ -316,12 +317,20 @@ add_executable(ps_environment_standalone
 
 target_link_libraries(ps_environment_standalone
   PRIVATE
-    $<LINK_LIBRARY:WHOLE_ARCHIVE,ps_environment>
     $<LINK_LIBRARY:WHOLE_ARCHIVE,ps_environment_io>
     nlohmann_json::nlohmann_json
     ps_warnings
     ps_options
 )
+
+# ps_environment_io links ps_environment PUBLIC, so ps_environment reaches this
+# target twice: as the transitive dependency (default feature) and, if listed
+# here, as WHOLE_ARCHIVE. CMake < 3.30 rejects one item with two features
+# ("has already occurred with the feature 'WHOLE_ARCHIVE'"). List it once
+# (transitively) and override its feature instead (LINK_LIBRARY_OVERRIDE,
+# CMake >= 3.24; the project minimum is 3.25).
+set_property(TARGET ps_environment_standalone PROPERTY
+  LINK_LIBRARY_OVERRIDE_ps_environment WHOLE_ARCHIVE)
 
 target_include_directories(ps_environment_standalone PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
 target_compile_definitions(ps_environment_standalone PRIVATE PS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

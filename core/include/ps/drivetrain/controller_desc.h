@@ -8,7 +8,9 @@
 #pragma once
 
 #include "ps/types.h"
+#include "ps/vehicle/curve1d.h"
 
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -175,6 +177,20 @@ struct ShiftScheduleDesc {
 // schedule. Driver demand = the throttle stage's command (pedal map, drive mode applied).
 inline constexpr const char* kTransmissionModeChannel = "transmission.mode";
 
+// CVT plan C1: the ratio law of an automatic_tcu driving a Cvt gearbox ("cvt" block, required there, rejected
+// elsewhere). Continuous mode: the variator aims at the input rpm (turbine of a converter CVT, engine otherwise)
+//   n_t = max(target_rpm_vs_throttle(throttle), min_rpm_vs_output_rpm(gearbox output rpm)),  r_t = n_t / output rpm
+// clamped to the variator's range (ratio_low at a standstill). In S (transmission.mode >= 0.5) the TCU either aims at
+// sport_target_rpm_vs_throttle (stepped_sport false) or runs the variator through its virtual steps on the
+// sport_schedule's shift lines (stepped_sport true, default); paddles / shift keys always select the steps (manual
+// mode, timeout and forced shifts as for a stepped box). Curves: x ascending; throttle x in [0, 1]; rpm y > 0.
+struct CvtTcuDesc {
+    vehicle::Curve1D target_rpm_vs_throttle;
+    vehicle::Curve1D sport_target_rpm_vs_throttle; // empty = target_rpm_vs_throttle
+    vehicle::Curve1D min_rpm_vs_output_rpm;        // empty = none
+    bool stepped_sport = true;
+};
+
 struct AutomaticTcuDesc {
     std::string gearbox, engine;
     ShiftScheduleDesc schedule;       // D
@@ -200,6 +216,9 @@ struct AutomaticTcuDesc {
     real launch_bite_rpm = 1000.0, launch_full_rpm_min = 1500.0, launch_full_rpm_max = 3500.0;
     real launch_lock_slip_rpm = 100.0, launch_anti_stall_rpm = 600.0;
     real creep_torque_nm = 40.0;
+    // CVT plan C1: Cvt only (see CvtTcuDesc). A Cvt with a converter uses the lock-up policy above (lockup_min_gear
+    // counts D as gear 1), one without launches on the launch_* law above.
+    std::optional<CvtTcuDesc> cvt;
 };
 
 // Closed, visited exhaustively - at most one transmission controller (manual_tcu or automatic_tcu) and at most one

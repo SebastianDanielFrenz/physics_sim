@@ -354,7 +354,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
                 throw std::runtime_error("vehicle '" + vehicle_name + "': more than one gearbox component - I3 supports at most one");
             }
             gearbox_component_index = static_cast<int>(ci);
-            if (g->type == GearboxType::Automatic && g->converter) {
+            if ((g->type == GearboxType::Automatic || g->type == GearboxType::Cvt) && g->converter) { // CVT plan C1: a converter CVT too
                 // Automatic gearbox plan A1: `in` is the converter's pump; the turbine is an internal port carrying
                 // the turbine and the gear set's input inertia (not connected by a shaft - exempt below).
                 add_port(component_port_key(c.id, "in"), g->converter->pump_inertia_kgm2, g->input_axis_local);
@@ -1767,6 +1767,18 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             }
             AutoTransmission::Desc ad;
             ad.dual_clutch = gearbox_desc->type == GearboxType::DualClutch;
+            // CVT plan C1: a cvt gearbox and the automatic_tcu's cvt block come together.
+            const bool is_cvt = gearbox_desc->type == GearboxType::Cvt;
+            if (is_cvt != at->cvt.has_value()) {
+                throw std::runtime_error("vehicle '" + vehicle_name + "': controller '" + cd.id +
+                                          (is_cvt ? "': a cvt gearbox needs the automatic_tcu's 'cvt' block (its ratio law)"
+                                                  : "': the automatic_tcu's 'cvt' block is for a cvt gearbox only"));
+            }
+            if (is_cvt) {
+                if (!gearbox_desc->cvt) throw std::runtime_error("vehicle '" + vehicle_name + "': a cvt gearbox needs its 'cvt' (variator) block");
+                ad.cvt = true;
+                ad.cvt_desc = *gearbox_desc->cvt;
+            }
             ad.forward_ratios = gearbox_desc->forward_ratios;
             ad.reverse_ratios = gearbox_desc->reverse_ratios;
             ad.clutch = gearbox_desc->shift_clutch;
@@ -2139,6 +2151,21 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
                                   : real(0.0);
             last_mode_channel_ = as.mode_channel;
             as.input_torque_prev = std::abs(network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_));
+            if (engine_) as.engine_torque_demand = last_engine_result_.torque_demand;
+            // DCT launch control (the assist unit's launch_control, VehicleInstance arms it only on a DualClutch): Armed
+            // holds the launch clutch open; Launch gives it the manual TCU's torque-following cap,
+            //   ramp * max(0, sign(slip) * T_engine + T_sync),  T_sync = min(kLcSyncNmPerRadS * |slip|, kLcSyncFraction * C),
+            // so the clutch carries what the held-rpm engine makes plus a bounded synchronising torque.
+            as.launch_hold_open = ctx.launch_hold_clutch;
+            if (ctx.launch_clutch_ramp >= real(0.0) && engine_) {
+                constexpr real kLcSyncNmPerRadS = real(0.5), kLcSyncFraction = real(0.2); // [AS]
+                const real slip = as.input_omega - auto_->ratio(auto_->current()) * as.output_omega;
+                const real dir = slip >= real(0.0) ? real(1.0) : real(-1.0);
+                const real C = auto_->desc().clutch.capacity_nm;
+                const real t_sync = std::min(kLcSyncNmPerRadS * std::abs(slip), kLcSyncFraction * C);
+                const real t = std::max(real(0.0), dir * last_engine_result_.torque_demand + t_sync);
+                as.launch_cap_nm = std::min(ctx.launch_clutch_ramp, real(1.0)) * t;
+            }
             as.first_substep = ctx.first_substep_of_tick;
             as.h = ctx.h;
             last_auto_out_ = auto_->step(as);
@@ -2274,13 +2301,20 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     if (gearbox_) {
         gearbox_omega_old_in_ = network_.omega(gearbox_in_);
         const int cur = gearbox_->current_position();
-        const real eff = cur == 0 ? real(1.0) : gearbox_->efficiency_for_position(cur);
+        real eff = cur == 0 ? real(1.0) : gearbox_->efficiency_for_position(cur);
+        const CvtDesc* cvt = (auto_ && auto_->desc().cvt) ? &auto_->desc().cvt_desc : nullptr;
+        if (cvt && cur > 0) eff = cvt->efficiency_vs_ratio.evaluate(last_auto_out_.cvt_ratio); // CVT plan C1
         if (cur != 0 && eff < real(1.0)) {
             gearbox_own_loss_tau_ = -(real(1.0) - eff) * std::abs(gearbox_lambda_mesh_prev_) * sign(gearbox_omega_old_in_);
-            assembly_.torque(gearbox_in_, gearbox_own_loss_tau_, real(0.0));
         } else {
             gearbox_own_loss_tau_ = real(0.0);
         }
+        if (cvt) {
+            // CVT plan C1: the hydraulic pump's drag on the input, faded in over the first 10 rad/s [AS].
+            const real drag = cvt->pump_drag_nm + cvt->pump_drag_nm_per_kn * last_auto_out_.clamp_force_n * real(1e-3);
+            gearbox_own_loss_tau_ -= drag * std::clamp(gearbox_omega_old_in_ / real(10.0), real(-1.0), real(1.0));
+        }
+        if (gearbox_own_loss_tau_ != real(0.0)) assembly_.torque(gearbox_in_, gearbox_own_loss_tau_, real(0.0));
         if (auto_) {
             // Automatic gearbox plan A1: the two shift clutches (row A in the synchro slot, row B), the lock-up
             // clutch and the converter.
