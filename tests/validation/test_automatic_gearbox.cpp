@@ -400,3 +400,14 @@ TEST_CASE("DCT drive modes override shift points and clutch close time at runtim
     }
     CHECK(fast.step(s).phase == AutoTransmission::Phase::Idle);
 }
+
+TEST_CASE("Automatic transmission vehicles accept driving-mode electronics", "[automatic][drive_modes_auto][io]") {
+    io::VehicleLoadOptions options;
+    options.electronics["drive_modes"] = std::string(PS_SOURCE_DIR) + "/data/electronics/drive_modes_car_hyper_n2o.json";
+    for (const char* file : {"car_sedan_at.json", "car_sedan_dct.json", "car_sedan_cvt.json", "car_sedan_cvt_clutch.json"}) {
+        INFO(file);
+        const auto desc = io::load_vehicle_json(fixture(file), options);
+        REQUIRE(desc.drive_modes.has_value());
+        CHECK(desc.drive_modes->modes_bits == 15);
+    }
+}
