@@ -230,8 +230,8 @@ reads its own channel; a launch limit and anti-lag active together are not speci
 ```json
 { "format": "physics_sim.electronics/1", "kind": "assist_unit", "name": "Racing Assists", "grade": "racing",
   "traction_control": { "modes": ["off", "on", "relaxed", "sport", "drift"], "default_mode": "on",
-    "mode_params": { "sport": { "target_slip": 0.18, "kp": 1.5, "ki_per_s": 4.0, "attack_rate_per_s": 10.0,
-                                "recovery_rate_per_s": 10.0, "min_fraction": 0.15, "ignition_cut": false } } },
+    "mode_params": { "sport": { "target_slip": 0.18, "kp": 4.0, "ki_per_s": 8.0, "attack_rate_per_s": 10.0,
+                                "recovery_rate_per_s": 10.0, "min_fraction": 0.15, "ignition_cut": true } } },
   "source": "[AS] ..." }
 ```
 
@@ -358,9 +358,12 @@ ramp, the PI's ceiling and integral, hashed ONLY on a car that carries the block
    throttle < 0.5, a shift, gear != 1, or the channel/auto-clutch/engine stopping (*hard*).
 4. *Handover*: traction control starts from the PI's last ceiling (its fraction and integral are seeded, no torque
    jump) and runs again; the wing returns to the aero controller. After a *soft* hand-over whose `c` is still below 1
-   the launch limit and `c` stay in force (`c` climbing at the ramp rate) until `c` reaches 1, so the clutch reaches
-   the plain torque-following close without a step and the engine is not released against a half-open clutch; after
-   a hard one (or `c` already 1) nothing is kept. Then Idle at the next tick's first substep.
+   the launch limit and `c` stay in force until `c` reaches 1, so the clutch reaches the plain torque-following close
+   without a step and the engine is not released against a half-open clutch. `c` keeps regulating the slip there: it
+   climbs at the ramp rate only while the slip is at or below the target and falls at `clutch_down_per_s * rel` above
+   it (racing_game PR #5: an open-loop ramp dumped the held launch-rpm engine, at full boost, into the wheels: slip
+   2.0 on car_hyper in the Racing drive mode); after `max_launch_s` in this overlay the ramp is open-loop again, so
+   the hand-over always ends. After a hard one (or `c` already 1) nothing is kept. Then Idle at the next tick's first substep.
 
 **Boost and the launch rpm.** The unloaded engine builds boost against the closed clutch only as fast as the limiter
 cycling allows, so boost at release is a function of the launch rpm. Measured on car_hyper (1.5 s armed): 4500 rpm

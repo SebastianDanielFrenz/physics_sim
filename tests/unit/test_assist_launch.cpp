@@ -131,7 +131,10 @@ constexpr real kKappaTol = 0.05;
 // TC estimator fix (PR #8): the speed estimate the launch slip regulator reads is now corrected from the free front
 // wheels. Measured On 0.0574 with the previous estimator, 0.0587 with the new one (estimate within 0.03 m/s of the
 // true speed over the window); re-pinned to the new measurement.
-constexpr real kKappaP1On = 0.0587, kKappaP1Sport = 0.0786; // [M] pedal P1, On re-measured after the TC estimator fix
+// racing_game PR #5: the Racing unit's Sport mode now has ignition_cut true, so its launch ceiling retards the spark at
+// the driver's boost target (the open point above, for Sport) instead of closing the plate: Sport 0.0786 -> 0.0940
+// (target 0.14); re-pinned.
+constexpr real kKappaP1On = 0.0587, kKappaP1Sport = 0.0940; // [M] pedal P1, On re-measured after the TC estimator fix, Sport after PR #5
 constexpr real kKappaP1Tol = 0.015;                         // [AS]
 constexpr real kWingTolDeg = 1.0;
 constexpr real kArmedWindowS = 1.5;

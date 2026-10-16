@@ -289,7 +289,8 @@ TEST_CASE("R0: the shipped grade files load with the approved grade mapping", "[
     CHECK(st.unit.traction_control.default_mode == TractionMode::On);
     CHECK(*ra.unit.traction_control.params[4].target_slip == 0.35);
     CHECK(*ra.unit.traction_control.params[3].min_fraction == 0.15);
-    CHECK(*ra.unit.traction_control.params[3].ignition_cut == false);
+    CHECK(*ra.unit.traction_control.params[3].ignition_cut == true); // racing_game PR #5: Sport retards at the boost
+    CHECK(*ra.unit.traction_control.params[4].ignition_cut == false);
     CHECK(ra.name == "Racing Assists");
     // the grade table: which blocks a grade may carry
     CHECK_FALSE(assist_grade_info(AssistGrade::Street).allows_launch_control);

@@ -1161,7 +1161,7 @@ traction-control mode has `ignition_cut: true` (the default; electronics.md), th
 CURRENT boost: the plate and the wastegate keep following the driver's command (under the TCU's own shift ceiling only),
 and the combustion torque is retarded to `f = ceiling / command` with the charge and fuel unchanged, so the lost
 indicated work leaves as exhaust enthalpy and keeps the turbine spun. TC's deep ignition cut then also keeps the plate.
-With `ignition_cut: false` (the shipped Sport/Drift modes), on an NA engine or without an envelope, the ceiling closes
+With `ignition_cut: false` (the shipped Drift mode; Sport cuts since racing_game PR #5, see electronics.md), on an NA engine or without an envelope, the ceiling closes
 the plate as before. The auto-clutch follows the retarded torque. Auto-shift always reads the driver's command, never
 the ceiling (pedal P1 (a)).
 
