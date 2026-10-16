@@ -136,6 +136,7 @@ add_executable(ps_unit_tests
   test_limit_policy.cpp
   test_gearbox_rating.cpp
   test_automatic_gearbox_io.cpp
+  test_cvt_gearbox_io.cpp
   test_limit_remedies.cpp
   test_engine_rules.cpp
   test_cam_profiles.cpp

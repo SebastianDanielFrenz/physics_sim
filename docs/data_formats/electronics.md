@@ -331,6 +331,16 @@ entries: `vehicle '<name>': launch control: a car has either a two-step (launch_
 control, not both` (and again by `VehicleInstance`'s backstop for a code-built descriptor). Anti-lag is **not**
 switched on by launch control (owner Q6); a car that wants it sets its own anti-lag channel.
 
+**DCT launch control** (CVT plan C1 follow-up). On a car with an `automatic_tcu` the block arms only behind a
+`dual_clutch` gearbox: its TCU owns the launch clutch, so it stands in for the auto-clutch condition of phase 1 (a
+torque-converter automatic or a CVT never arms - the converter's stall speed caps the revs). Armed, the TCU holds the
+launch clutch open while the engine is held at the launch rpm; in Launch and Handover the clutch capacity is the
+regulator's fraction times `max(0, T_demand + T_sync)`, `T_sync = min(0.5 |slip rad/s|, 0.2 C)` [AS], so the clutch
+both carries the engine torque and pulls the revs down. The gear-1 / not-shifting condition counts a decided or running
+clutch-to-clutch shift as shifting. Measured on `car_sedan_dct.json` with the Racing unit (launch 5000 rpm, TC On target
+0.10, `tests/validation/test_cvt_gearbox.cpp` `[launch]`): armed at 4847-4995 rpm with the car still, front slip mean
+0.095 over 0.2-1.0 s after the brake release (max 0.101), 0-100 km/h 8.73 s against 8.92 s for the plain DCT launch.
+
 **Car-specific launch rpm.** A generic unit fits any engine through `launch_rpm_fraction` (Sport: 0.55 of the limiter);
 the Racing unit carries car_hyper's absolute 5000. A car with another engine attaches a unit file that `extends` the
 shipped one and sets its own `launch_rpm` (setting `launch_rpm_fraction` there needs `launch_rpm` cleared: the

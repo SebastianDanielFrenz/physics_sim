@@ -17,6 +17,16 @@
 // A DualClutch steps one gear at a time (odd and even gears alternate shafts) and has to preselect a gear that is not
 // already waiting on the idle shaft (preselect_time_s); an Automatic may skip gears. A DualClutch launches on clutch
 // slip (engagement e from engine rpm), an Automatic through its converter (e = 1).
+//
+// CVT plan C1 (Desc::cvt): a Cvt uses the same machine with ONE row (row A, the variator) whose ratio is the variator
+// state ratio_; the gears are D (1), N and R only (no gear change), so the shift phases are only the N -> D/R engagement.
+// Each substep the TCU picks a target ratio (continuous: input rpm target vs throttle and output rpm; stepped: the
+// virtual steps in S or manual mode) and the ratio follows it at the variator's rate limit (in ln r). Row capacity =
+// min(forward clutch capacity x launch engagement, belt capacity 2 mu F R_p / cos(beta)) with the clamping force F a
+// lagged state (CvtBeltDesc). Without a converter the forward clutch launches on slip like a DualClutch's.
+//
+// DCT launch control (the assist unit's launch_control on a DualClutch, Sensors::launch_hold_open/launch_cap_nm): while
+// Armed the launch clutch is held open, during Launch its capacity is the launch controller's torque-following cap.
 #pragma once
 
 #include "ps/drivetrain/controller_desc.h"
@@ -41,6 +51,8 @@ public:
         bool has_lockup = false; // Automatic with a converter
         real lockup_capacity_nm = 0.0, lockup_static_factor = 1.0;
         real lockup_engage_time_s = 0.6, lockup_release_time_s = 0.15;
+        bool cvt = false; // CVT plan C1: forward_ratios = the virtual steps, cvt_desc the variator, tcu.cvt the ratio law
+        CvtDesc cvt_desc;
     };
 
     struct RowCmd {
@@ -57,6 +69,10 @@ public:
         real shift_up_count = 0.0, shift_down_count = 0.0;
         real mode_channel = 0.0;     // kTransmissionModeChannel, >= 0.5 = sport schedule
         real input_torque_prev = 0.0; // |torque the two shift rows carried last substep| (input-referred)
+        real engine_torque_demand = 0.0; // CVT plan C1: the engine's demand last substep (clamping-force feed-forward)
+        // DCT launch control (assist unit): hold the launch clutch open (Armed) / its kinetic capacity (Launch, < 0 none).
+        bool launch_hold_open = false;
+        real launch_cap_nm = -1.0;
         bool first_substep = false;
         real h = 0.0;
     };
@@ -68,6 +84,10 @@ public:
         int current = 0, target = 0;
         Phase phase = Phase::Idle;
         real launch_engagement = 1.0; // DualClutch: the active clutch's engagement e; Automatic: 1
+        // CVT plan C1 (0 on other boxes): variator ratio, virtual step (0 = continuous), belt capacity, clamping force.
+        real cvt_ratio = 0.0;
+        int cvt_step = 0;
+        real belt_capacity_nm = 0.0, clamp_force_n = 0.0;
     };
 
     explicit AutoTransmission(Desc desc);
@@ -83,7 +103,12 @@ public:
     [[nodiscard]] bool manual_mode() const { return manual_; }
     [[nodiscard]] real lockup_engagement() const { return e_lock_; }
     [[nodiscard]] int preselected() const { return pre_; }
-    [[nodiscard]] real launch_engagement() const { return desc_.dual_clutch ? e_launch_ : real(1.0); }
+    [[nodiscard]] real launch_engagement() const { return slip_launch() ? e_launch_ : real(1.0); }
+    // DualClutch, or a Cvt without a converter: the box launches on clutch slip.
+    [[nodiscard]] bool slip_launch() const { return desc_.dual_clutch || (desc_.cvt && !desc_.has_lockup); }
+    [[nodiscard]] real cvt_ratio() const { return ratio_; }
+    [[nodiscard]] int cvt_step() const { return step_; }
+    [[nodiscard]] real clamp_force() const { return clamp_; }
     [[nodiscard]] bool upshifting() const { return upshift_; }
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
@@ -98,6 +123,9 @@ private:
     void update_launch(const Sensors& s, real th);
     void update_lockup(const Sensors& s, real th);
     void update_preselect(const Sensors& s, real th);
+    void update_cvt(const Sensors& s, real th);
+    [[nodiscard]] int nearest_step() const;
+    [[nodiscard]] real belt_capacity() const;
 
     Desc desc_;
     // Shift machine.
@@ -128,6 +156,12 @@ private:
     // Launch (DualClutch).
     real e_launch_ = 0.0;
     bool launch_locked_ = false;
+    // CVT (hashed only with Desc::cvt).
+    real ratio_ = 1.0;  // variator ratio
+    int step_ = 0;      // virtual step of the stepped mode, 0 = continuous
+    real t_step_ = 0.0; // time on the current step (stepped S dwell)
+    real clamp_ = 0.0;  // belt clamping force [N]
+    real cos_beta_ = 1.0; // unhashed constant
 };
 
 } // namespace ps::drivetrain

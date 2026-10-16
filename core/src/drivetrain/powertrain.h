@@ -395,6 +395,14 @@ public:
     [[nodiscard]] bool transmission_sport_mode() const { return auto_ != nullptr && last_mode_channel_ >= real(0.5); }
     [[nodiscard]] real converter_pump_torque() const { return converter_ ? conv_tau_p_ : real(0.0); }
     [[nodiscard]] real converter_turbine_torque() const { return converter_ ? conv_tau_t_ : real(0.0); }
+    // CVT plan C1: |variator row slip| [rad/s at the input] while the belt (not the forward clutch) sets its capacity,
+    // 0 otherwise (and on every other box).
+    [[nodiscard]] real cvt_belt_slip_rad_s() const {
+        if (!auto_ || !auto_->desc().cvt || last_auto_out_.current == 0) return real(0.0);
+        if (!(last_auto_out_.row[0].cap_kinetic >= last_auto_out_.belt_capacity_nm)) return real(0.0);
+        const real v = network_.row_velocity(gearbox_synchro_row_);
+        return v < real(0.0) ? -v : v;
+    }
     // Torque through the two shift rows (input-referred, signed sum), 0 without an automatic box.
     [[nodiscard]] real shift_rows_torque() const {
         return auto_ ? network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_) : real(0.0);

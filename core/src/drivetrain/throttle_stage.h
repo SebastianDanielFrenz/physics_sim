@@ -132,6 +132,7 @@ private:
             return false;
         case GearboxType::Automatic:
         case GearboxType::DualClutch:
+        case GearboxType::Cvt:
             return true; // automatic gearbox plan A1
     }
     return false;

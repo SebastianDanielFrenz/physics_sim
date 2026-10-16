@@ -164,7 +164,7 @@ TEST_CASE("Automatic A1 io: gearbox rejections", "[io][drivetrain][automatic]") 
     // A manual box may not carry the clutch-to-clutch blocks.
     INFO("manual with shift_clutch");
     CHECK_THROWS_WITH(load_with_gearbox("car_sedan_at.json", gearbox_patch("manual_sc", "sedan_6mt.json", "\"shift_clutch\": {\"capacity_nm\": 300}")),
-                      ContainsSubstring("for \"automatic\" and \"dual_clutch\" gearboxes only"));
+                      ContainsSubstring("for \"automatic\", \"dual_clutch\" and \"cvt\" gearboxes only"));
 }
 
 TEST_CASE("Automatic A1 io: automatic_tcu rejections", "[io][drivetrain][automatic]") {

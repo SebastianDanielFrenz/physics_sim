@@ -2884,6 +2884,83 @@ ps::drivetrain::ClutchDesc read_clutch_fields(const json& cj, const std::string&
     return c;
 }
 
+// CVT plan C1: the "cvt" block of a cvt gearbox (docs/data_formats/gearbox.md). Unknown keys rejected.
+ps::drivetrain::CvtDesc read_cvt_block(const json& o, const std::string& ctx) {
+    auto check_keys = [](const json& b, std::initializer_list<const char*> keys, const std::string& where) {
+        if (!b.is_object()) throw std::runtime_error(where + ": must be an object");
+        for (auto it = b.begin(); it != b.end(); ++it) {
+            bool ok = false;
+            for (const char* k : keys) ok = ok || it.key() == k;
+            if (!ok) throw std::runtime_error(where + ": unknown key '" + it.key() + "'");
+        }
+    };
+    auto num = [](const json& b, const char* key, real def, const std::string& where) {
+        if (!b.contains(key)) return def;
+        const json& v = b.at(key);
+        if (!v.is_number() || !std::isfinite(v.get<real>())) throw std::runtime_error(where + ": '" + key + "' must be a finite number");
+        return v.get<real>();
+    };
+    check_keys(o, {"ratio_low", "ratio_high", "ratio_rate_per_s", "step_rate_per_s", "steps", "efficiency_vs_ratio", "pump_drag_nm",
+                   "pump_drag_nm_per_kn", "belt"},
+               ctx);
+    ps::drivetrain::CvtDesc c;
+    for (const char* k : {"ratio_low", "ratio_high", "steps", "efficiency_vs_ratio", "belt"}) {
+        if (!o.contains(k)) throw std::runtime_error(ctx + ": '" + k + "' is required");
+    }
+    c.ratio_low = num(o, "ratio_low", c.ratio_low, ctx);
+    c.ratio_high = num(o, "ratio_high", c.ratio_high, ctx);
+    c.ratio_rate_per_s = num(o, "ratio_rate_per_s", c.ratio_rate_per_s, ctx);
+    c.step_rate_per_s = num(o, "step_rate_per_s", c.step_rate_per_s, ctx);
+    c.pump_drag_nm = num(o, "pump_drag_nm", c.pump_drag_nm, ctx);
+    c.pump_drag_nm_per_kn = num(o, "pump_drag_nm_per_kn", c.pump_drag_nm_per_kn, ctx);
+    if (!(c.ratio_high > real(0.0)) || !(c.ratio_low > c.ratio_high)) throw std::runtime_error(ctx + ": need ratio_low > ratio_high > 0");
+    if (!(c.ratio_rate_per_s > real(0.0)) || !(c.step_rate_per_s > real(0.0))) {
+        throw std::runtime_error(ctx + ": ratio_rate_per_s and step_rate_per_s must be > 0");
+    }
+    if (c.pump_drag_nm < real(0.0) || c.pump_drag_nm_per_kn < real(0.0)) throw std::runtime_error(ctx + ": pump drag terms must be >= 0");
+    if (!o.at("steps").is_array()) throw std::runtime_error(ctx + ".steps: must be an array");
+    for (const auto& v : o.at("steps")) {
+        if (!v.is_number() || !std::isfinite(v.get<real>())) throw std::runtime_error(ctx + ".steps: every step must be a finite number");
+        c.steps.push_back(v.get<real>());
+    }
+    if (c.steps.size() < 2) throw std::runtime_error(ctx + ".steps: needs at least two virtual steps");
+    for (std::size_t i = 0; i < c.steps.size(); ++i) {
+        if (c.steps[i] > c.ratio_low || c.steps[i] < c.ratio_high) throw std::runtime_error(ctx + ".steps: every step must lie within [ratio_high, ratio_low]");
+        if (i > 0 && !(c.steps[i] < c.steps[i - 1])) throw std::runtime_error(ctx + ".steps: must be strictly decreasing (1st first)");
+    }
+    c.efficiency_vs_ratio = read_curve(o.at("efficiency_vs_ratio"));
+    if (c.efficiency_vs_ratio.x.empty()) throw std::runtime_error(ctx + ".efficiency_vs_ratio: needs at least one point");
+    require_ascending(c.efficiency_vs_ratio, ctx + ".efficiency_vs_ratio");
+    for (real e : c.efficiency_vs_ratio.y) {
+        if (!(e > real(0.0)) || e > real(1.0)) throw std::runtime_error(ctx + ".efficiency_vs_ratio: every efficiency must be in (0, 1]");
+    }
+    const json& b = o.at("belt");
+    const std::string bctx = ctx + ".belt";
+    check_keys(b, {"friction_coefficient", "sheave_half_angle_deg", "pulley_radius_sum_m", "clamp_force_min_n", "clamp_force_max_n",
+                   "clamp_safety_factor", "clamp_time_constant_s", "static_factor"},
+               bctx);
+    ps::drivetrain::CvtBeltDesc& bd = c.belt;
+    bd.friction_coefficient = num(b, "friction_coefficient", bd.friction_coefficient, bctx);
+    bd.sheave_half_angle_deg = num(b, "sheave_half_angle_deg", bd.sheave_half_angle_deg, bctx);
+    bd.pulley_radius_sum_m = num(b, "pulley_radius_sum_m", bd.pulley_radius_sum_m, bctx);
+    bd.clamp_force_min_n = num(b, "clamp_force_min_n", bd.clamp_force_min_n, bctx);
+    bd.clamp_force_max_n = num(b, "clamp_force_max_n", bd.clamp_force_max_n, bctx);
+    bd.clamp_safety_factor = num(b, "clamp_safety_factor", bd.clamp_safety_factor, bctx);
+    bd.clamp_time_constant_s = num(b, "clamp_time_constant_s", bd.clamp_time_constant_s, bctx);
+    bd.static_factor = num(b, "static_factor", bd.static_factor, bctx);
+    if (!(bd.friction_coefficient > real(0.0)) || !(bd.pulley_radius_sum_m > real(0.0)) || !(bd.sheave_half_angle_deg > real(0.0)) ||
+        !(bd.sheave_half_angle_deg < real(45.0))) {
+        throw std::runtime_error(bctx + ": need friction_coefficient > 0, pulley_radius_sum_m > 0 and sheave_half_angle_deg in (0, 45)");
+    }
+    if (!(bd.clamp_force_min_n > real(0.0)) || !(bd.clamp_force_max_n >= bd.clamp_force_min_n)) {
+        throw std::runtime_error(bctx + ": need 0 < clamp_force_min_n <= clamp_force_max_n");
+    }
+    if (bd.clamp_safety_factor < real(1.0) || bd.static_factor < real(1.0) || !(bd.clamp_time_constant_s > real(0.0))) {
+        throw std::runtime_error(bctx + ": clamp_safety_factor and static_factor must be >= 1, clamp_time_constant_s > 0");
+    }
+    return c;
+}
+
 ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string& ctx) {
     ps::drivetrain::GearboxDesc g;
     const std::string type = j.value("type", std::string("manual"));
@@ -2891,13 +2968,29 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
     else if (type == "sequential") g.type = ps::drivetrain::GearboxType::Sequential;
     else if (type == "automatic") g.type = ps::drivetrain::GearboxType::Automatic;
     else if (type == "dual_clutch") g.type = ps::drivetrain::GearboxType::DualClutch;
+    else if (type == "cvt") g.type = ps::drivetrain::GearboxType::Cvt;
     else {
-        throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\", \"sequential\", \"automatic\" or \"dual_clutch\", got \"" +
+        throw std::runtime_error(ctx + ": gearbox 'type' must be \"manual\", \"sequential\", \"automatic\", \"dual_clutch\" or \"cvt\", got \"" +
                                  type + "\"");
     }
 
-    if (!j.contains("forward_ratios")) throw std::runtime_error(ctx + ": 'forward_ratios' is required");
-    for (const auto& v : j.at("forward_ratios")) g.forward_ratios.push_back(v.get<real>());
+    // CVT plan C1: the variator block. Its virtual steps become forward_ratios and their efficiency the variator's
+    // efficiency at that ratio, so the file carries neither array.
+    if (g.type == ps::drivetrain::GearboxType::Cvt) {
+        if (j.contains("forward_ratios") || j.contains("forward_efficiency")) {
+            throw std::runtime_error(ctx + ": a cvt gearbox has no 'forward_ratios'/'forward_efficiency' (the variator's cvt.steps and "
+                                           "cvt.efficiency_vs_ratio replace them)");
+        }
+        if (!j.contains("cvt")) throw std::runtime_error(ctx + ": 'cvt' is required for a cvt gearbox");
+        g.cvt = read_cvt_block(j.at("cvt"), ctx + ".cvt");
+        g.forward_ratios = g.cvt->steps;
+        for (real r : g.cvt->steps) g.forward_efficiency.push_back(g.cvt->efficiency_vs_ratio.evaluate(r));
+    } else if (j.contains("cvt")) {
+        throw std::runtime_error(ctx + ": 'cvt' is for \"cvt\" gearboxes only");
+    }
+
+    if (g.type != ps::drivetrain::GearboxType::Cvt && !j.contains("forward_ratios")) throw std::runtime_error(ctx + ": 'forward_ratios' is required");
+    if (g.type != ps::drivetrain::GearboxType::Cvt) for (const auto& v : j.at("forward_ratios")) g.forward_ratios.push_back(v.get<real>());
     for (std::size_t i = 0; i < g.forward_ratios.size(); ++i) {
         if (g.forward_ratios[i] <= real(0.0)) throw std::runtime_error(ctx + ".forward_ratios: every ratio must be > 0");
         if (i > 0 && !(g.forward_ratios[i] < g.forward_ratios[i - 1])) {
@@ -2911,8 +3004,10 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
         if (r >= real(0.0)) throw std::runtime_error(ctx + ".reverse_ratios: every ratio must be < 0");
     }
 
-    if (!j.contains("forward_efficiency")) throw std::runtime_error(ctx + ": 'forward_efficiency' is required");
-    for (const auto& v : j.at("forward_efficiency")) g.forward_efficiency.push_back(v.get<real>());
+    if (g.type != ps::drivetrain::GearboxType::Cvt) {
+        if (!j.contains("forward_efficiency")) throw std::runtime_error(ctx + ": 'forward_efficiency' is required");
+        for (const auto& v : j.at("forward_efficiency")) g.forward_efficiency.push_back(v.get<real>());
+    }
     if (j.contains("reverse_efficiency")) {
         for (const auto& v : j.at("reverse_efficiency")) g.reverse_efficiency.push_back(v.get<real>());
     }
@@ -2975,7 +3070,7 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
     {
         const bool c2c = ps::drivetrain::is_clutch_to_clutch(g.type);
         if (!c2c && (j.contains("shift_clutch") || j.contains("converter"))) {
-            throw std::runtime_error(ctx + ": 'shift_clutch' and 'converter' are for \"automatic\" and \"dual_clutch\" gearboxes only");
+            throw std::runtime_error(ctx + ": 'shift_clutch' and 'converter' are for \"automatic\", \"dual_clutch\" and \"cvt\" gearboxes only");
         }
         if (c2c) {
             if (j.contains("synchro")) throw std::runtime_error(ctx + ": a clutch-to-clutch gearbox has no 'synchro' block");
@@ -3016,7 +3111,12 @@ ps::drivetrain::GearboxDesc read_gearbox_fields(const json& j, const std::string
             if (g.type == ps::drivetrain::GearboxType::DualClutch && j.contains("converter")) {
                 throw std::runtime_error(ctx + ": a dual_clutch gearbox has no 'converter'");
             }
-            if (g.type == ps::drivetrain::GearboxType::Automatic) {
+            const bool is_cvt = g.type == ps::drivetrain::GearboxType::Cvt;
+            if (is_cvt) {
+                if (sc.preselect_time_s != real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s is for dual_clutch gearboxes only");
+                if (g.reverse_ratios.size() != 1) throw std::runtime_error(ctx + ": a cvt gearbox has exactly one reverse ratio");
+            }
+            if (g.type == ps::drivetrain::GearboxType::Automatic || (is_cvt && j.contains("converter"))) {
                 if (sc.preselect_time_s != real(0.0)) throw std::runtime_error(sctx + ": preselect_time_s is for dual_clutch gearboxes only");
                 if (!j.contains("converter")) throw std::runtime_error(ctx + ": 'converter' is required for an automatic gearbox");
                 const json& cj = j.at("converter");
@@ -3236,7 +3336,7 @@ std::string component_ref_dir(const json& cj, const std::string& base_dir) {
 ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::string& ctx, const std::vector<std::string>& component_ids) {
     static const char* const kKeys[] = {"id",          "type",           "gearbox",  "engine",         "schedule",       "sport_schedule",
                                         "min_time_in_gear_s", "kickdown_throttle", "kickdown_max_rpm", "manual_timeout_s", "manual_up_rpm",
-                                        "upshift_torque_fraction", "lockup", "launch", "creep_torque_nm"};
+                                        "upshift_torque_fraction", "lockup", "launch", "creep_torque_nm", "cvt"};
     for (auto it = cj.begin(); it != cj.end(); ++it) {
         if (std::find_if(std::begin(kKeys), std::end(kKeys), [&](const char* k) { return it.key() == k; }) == std::end(kKeys)) {
             throw std::runtime_error(ctx + ": unknown key '" + it.key() + "'");
@@ -3332,6 +3432,35 @@ ps::drivetrain::AutomaticTcuDesc read_automatic_tcu(const json& cj, const std::s
             d.launch_full_rpm_max < d.launch_full_rpm_min || !(d.launch_lock_slip_rpm > real(0.0))) {
             throw std::runtime_error(w + ": need anti_stall_rpm > 0, 0 < bite_rpm < full_rpm_min <= full_rpm_max and lock_slip_rpm > 0");
         }
+    }
+    if (cj.contains("cvt")) {
+        // CVT plan C1: the ratio law of a cvt gearbox (CvtTcuDesc). Whether the gearbox IS a cvt is checked when the
+        // powertrain is built (the controller references the gearbox component).
+        const json& o = cj.at("cvt");
+        const std::string w = ctx + ".cvt";
+        check_keys(o, {"target_rpm_vs_throttle", "sport_target_rpm_vs_throttle", "min_rpm_vs_output_rpm", "stepped_sport"}, w);
+        ps::drivetrain::CvtTcuDesc c;
+        if (!o.contains("target_rpm_vs_throttle")) throw std::runtime_error(w + ": 'target_rpm_vs_throttle' is required");
+        auto rpm_curve = [&](const char* key, bool throttle_x) {
+            Curve1D cv = read_curve(o.at(key));
+            require_ascending(cv, w + "." + key);
+            for (real y : cv.y) {
+                if (!(y > real(0.0)) || !std::isfinite(y)) throw std::runtime_error(w + "." + key + ": every rpm must be > 0");
+            }
+            if (throttle_x && (cv.x.front() < real(0.0) || cv.x.back() > real(1.0))) {
+                throw std::runtime_error(w + "." + key + ": throttle x must lie within [0, 1]");
+            }
+            if (!throttle_x && cv.x.front() < real(0.0)) throw std::runtime_error(w + "." + key + ": output rpm x must be >= 0");
+            return cv;
+        };
+        c.target_rpm_vs_throttle = rpm_curve("target_rpm_vs_throttle", true);
+        if (o.contains("sport_target_rpm_vs_throttle")) c.sport_target_rpm_vs_throttle = rpm_curve("sport_target_rpm_vs_throttle", true);
+        if (o.contains("min_rpm_vs_output_rpm")) c.min_rpm_vs_output_rpm = rpm_curve("min_rpm_vs_output_rpm", false);
+        if (o.contains("stepped_sport")) {
+            if (!o.at("stepped_sport").is_boolean()) throw std::runtime_error(w + ": 'stepped_sport' must be a boolean");
+            c.stepped_sport = o.at("stepped_sport").get<bool>();
+        }
+        d.cvt = std::move(c);
     }
     return d;
 }

@@ -63,6 +63,8 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
         }
         fit_traction_ = desc_.traction_control.fitted;
         has_manual_tcu_ = have_tcu;
+        for (const drivetrain::ComponentDesc& c : desc_.powertrain.components) // DCT launch control
+            if (const auto* g = std::get_if<drivetrain::GearboxDesc>(&c.params)) launch_on_dct_ = g->type == drivetrain::GearboxType::DualClutch;
         if (desc_.assist_unit && desc_.assist_unit->launch_control) {
             // Assists I4 (D-LC1): the unit's launch control. A car has either the P8 two-step (a launch_control
             // controller) or this one (owner Q5): both would drive TcuRequest::limiter_rpm.
@@ -504,9 +506,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         if(launch_) {
             LaunchAssist::Inputs li;
             li.enabled=assist_launch;
-            // Automatic gearbox plan A1: the unit's launch control holds the car on the manual_tcu's auto-clutch; a
-            // clutch-to-clutch box (automatic_tcu) has none, so the launch control never arms there.
-            li.auto_clutch=assist_auto_clutch&&has_manual_tcu_;
+            // Automatic gearbox plan A1: the unit's launch control holds the car on the manual_tcu's auto-clutch. A
+            // DualClutch's TCU always owns its launch clutch, so it arms there too (DCT launch control); a converter
+            // automatic or a CVT never arms (the converter's stall speed caps the revs).
+            li.auto_clutch=has_manual_tcu_?assist_auto_clutch:launch_on_dct_;
             li.engine_running=powertrain_.has_engine()&&powertrain_.last_engine_result().state==drivetrain::EngineTorqueMap::EngineState::Running;
             li.throttle=controls.throttle;li.brake=controls.brake;
             li.speed_mps=powertrain_.approx_speed_mps();
@@ -514,6 +517,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
                 const auto& gb=powertrain_.gearbox();
                 li.gear=gb.current_position();
                 li.shifting=gb.target()!=gb.current_position()||gb.phase()!=drivetrain::Gearbox::Phase::Idle;
+                if(powertrain_.has_auto()) { // DCT launch control: a decided or running clutch-to-clutch shift
+                    const auto& at=powertrain_.auto_trans();
+                    li.shifting=li.shifting||at.target()!=at.current()||(at.phase()!=drivetrain::AutoTransmission::Phase::Idle&&at.phase()!=drivetrain::AutoTransmission::Phase::Engage);
+                }
             }
             li.slip_valid=traction_state_.initialized;
             li.slip=traction_driven_slip(traction_sensors_,traction_state_.estimated_speed_m_s,yaw,launch_->desc().slip_floor_mps);
@@ -810,7 +817,15 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         if (powertrain_.has_auto()) {
             const auto& at = powertrain_.auto_trans();
             snap.clutch_engagement = at.launch_engagement();
-            snap.transmission_kind = at.desc().dual_clutch ? 2 : 1;
+            snap.transmission_kind = at.desc().cvt ? 3 : (at.desc().dual_clutch ? 2 : 1);
+            if (at.desc().cvt) { // CVT plan C1
+                const auto& ao = powertrain_.last_auto_outputs();
+                snap.cvt_ratio = ao.cvt_ratio;
+                snap.cvt_step = static_cast<std::int8_t>(ao.cvt_step);
+                snap.cvt_belt_capacity_nm = ao.belt_capacity_nm;
+                snap.cvt_clamp_force_n = ao.clamp_force_n;
+                snap.cvt_belt_slip_rad_s = powertrain_.cvt_belt_slip_rad_s();
+            }
             snap.transmission_selector = static_cast<std::int8_t>(at.selector());
             snap.transmission_manual_mode = at.manual_mode();
             snap.transmission_sport_mode = powertrain_.transmission_sport_mode();
