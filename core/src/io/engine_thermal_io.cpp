@@ -246,6 +246,46 @@ EngineThermalDesc load_engine_thermal_json(const std::string& path) {
         if (!(d.pump_l_min_per_krpm > 0.0)) p.fail("pump flow must be > 0");
     }
 
+    if (const json* wj = r.child("water_jacket")) {
+        Reader w(*wj, "water_jacket", path);
+        // Exactly one of an absolute key and its per-litre twin; returns the absolute value.
+        const auto pick = [&](const char* abs_key, const char* per_l_key) -> real {
+            const bool a = w.has(abs_key), l = w.has(per_l_key);
+            if (a == l) w.fail(std::string("exactly one of \"") + abs_key + "\" and \"" + per_l_key + "\" is required");
+            if (l) {
+                if (!(d.displacement_l > 0.0)) w.fail(std::string("\"") + per_l_key + "\" requires \"displacement_l\" > 0");
+                w.mark(abs_key);
+                return w.number(per_l_key, true, 0.0) * d.displacement_l;
+            }
+            w.mark(per_l_key);
+            return w.number(abs_key, true, 0.0);
+        };
+        EngineThermalDesc::WaterJacket& j = d.water_jacket;
+        j.enabled = true;
+        j.wetted_area_m2 = pick("wetted_area_m2", "wetted_area_m2_per_l");
+        j.coolant_volume_l = pick("coolant_volume_l", "coolant_volume_l_per_l");
+        j.reference_flow_l_min = pick("reference_flow_l_min", "reference_flow_l_min_per_l");
+        j.htc_ref_w_m2_k = w.number("htc_ref_w_m2_k", true, 0.0);
+        j.htc_min_w_m2_k = w.number("htc_min_w_m2_k", true, 0.0);
+        j.flow_exponent = w.number("flow_exponent", false, 0.8);
+        w.finish();
+        if (!(j.wetted_area_m2 > 0.0 && j.wetted_area_m2 <= 20.0)) w.fail("wetted area must be in (0, 20] m2");
+        if (!(j.coolant_volume_l > 0.0 && j.coolant_volume_l <= 100.0)) w.fail("coolant volume must be in (0, 100] l");
+        if (!(j.reference_flow_l_min > 0.0 && j.reference_flow_l_min <= 5000.0)) {
+            w.fail("reference flow must be in (0, 5000] l/min");
+        }
+        if (!(j.htc_ref_w_m2_k >= 100.0 && j.htc_ref_w_m2_k <= 50000.0)) w.fail("\"htc_ref_w_m2_k\" must be in [100, 50000]");
+        if (!(j.htc_min_w_m2_k >= 0.0 && j.htc_min_w_m2_k <= j.htc_ref_w_m2_k)) {
+            w.fail("\"htc_min_w_m2_k\" must be in [0, htc_ref_w_m2_k]");
+        }
+        if (!(j.flow_exponent >= 0.3 && j.flow_exponent <= 1.0)) w.fail("\"flow_exponent\" must be in [0.3, 1.0]");
+        const real c_coolant = j.coolant_volume_l / 1000.0 * d.coolant_density_kg_m3 * d.coolant_cp_j_kg_k;
+        if (!(d.engine_capacity_j_k - c_coolant >= 0.1 * d.engine_capacity_j_k)) {
+            w.fail("the coolant lump (" + std::to_string(c_coolant) + " J/K) leaves less than 10 % of the engine capacity (" +
+                   std::to_string(d.engine_capacity_j_k) + " J/K) for the metal; the engine capacity includes the coolant");
+        }
+    }
+
     {
         Reader t(r.object("thermostat"), "thermostat", path);
         const real open_c = t.number("open_c", true, 0.0);
@@ -304,6 +344,12 @@ CoolingSystemDesc load_cooling_system_json(const std::string& path) {
         if (!(d.fan.face_velocity_m_s >= 0.0) || !(d.fan.power_w >= 0.0)) c.fail("fan velocity and power must be >= 0");
         d.fan.on_k = on_c + kCelsiusToKelvin;
         d.fan.off_k = off_c + kCelsiusToKelvin;
+    }
+    if (const json* pj = r.child("pump")) {
+        Reader c(*pj, "pump", path);
+        d.pump.flow_factor = c.number("flow_factor", true, 1.0);
+        c.finish();
+        if (!(d.pump.flow_factor > 0.0 && d.pump.flow_factor <= 4.0)) c.fail("\"flow_factor\" must be in (0, 4]");
     }
     if (const json* oc = r.child("oil_cooler")) {
         Reader c(*oc, "oil_cooler", path);

@@ -85,6 +85,7 @@ add_executable(ps_unit_tests
   test_engine_thermal_powertrain.cpp
   test_engine_thermal_coupling.cpp
   test_engine_thermal_scenarios.cpp
+  test_engine_thermal_jacket.cpp
   test_n2o_flow.cpp
   test_n2o_system.cpp
   test_n2o_controller.cpp

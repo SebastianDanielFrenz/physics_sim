@@ -1445,6 +1445,17 @@ not on `ps_core`'s public include path).
     test_engine_thermal_scenarios.cpp (I2-I6, I9; [long] warm-up runs) - [thermal][drivetrain]; scenario
     data/scenarios/vehicle_thermal.json 0xfb37e62eaf06cabb (pedal P1, was 0x3178e9e670d1cb5d; tyre crr d1e1144, was 0xd7205b0b06295bd8) at 1/2/4/10/24 workers, hash-compared (ScenarioTopics
     vehicle+drivetrain). Notes out/thermal_t1_progress.md, out/thermal_t1b_progress.md.
+    Water jacket (block cooling, optional, docs engine_thermal.md "Water jacket"): engine_thermal `water_jacket`
+    {wetted_area_m2(_per_l), coolant_volume_l(_per_l), reference_flow_l_min(_per_l), htc_ref_w_m2_k,
+    htc_min_w_m2_k, flow_exponent 0.8} splits the engine lump into metal (C_engine - C_coolant) and coolant, joined
+    by G = A*max(htc_min, htc_ref*(Q/Q_ref)^n) at the full pump flow; wall heat/friction/block-air/oil act on the
+    metal, radiator/thermostat/fan/gauge on the coolant; 3-lump backward Euler, metal hashed only with a jacket.
+    cooling_system `pump.flow_factor` (0, 4] scales the pump flow (absent = 1, bit-identical). Snapshot metal_c,
+    jacket_heat_w, jacket_conductance_w_k, coolant_flow_l_min (unhashed; also PsSimulation::get_engine_thermal).
+    ps/drivetrain/engine_thermal_steady.h solve_steady_thermal = the fixed point of the step for constant inputs
+    (bisection on the coolant temperature; thermostat play offset, fan off/on/cycling) plus the shared helpers.
+    Tests test_engine_thermal_jacket.cpp J1-J6 [thermal][drivetrain]; fixture
+    tests/support/fixtures/thermal/i4_2l_na_jacket.json. No shipped engine carries a jacket.
   - `DirectTorqueBrakes` - one friction row per corner (`Row{row,
     corner_max_nm, handbrake_max_nm}`, service and handbrake capacities
     merged per hub at graph-build time) - the exact-Coulomb replacement for
