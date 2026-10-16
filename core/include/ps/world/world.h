@@ -363,6 +363,12 @@ public:
     // bit for bit. Throws for an unknown vehicle, a vehicle without thermal, or a factor not finite / outside [0, 1e3].
     // The effective factors are in PowertrainSnapshot::thermal (radiator_ua_scale, fan_flow_scale).
     void set_engine_cooling_capacity(VehicleId id, const drivetrain::CoolingCapacity& capacity);
+    // Runtime engine-internals wear (worn bearings / pistons): EngineWear::friction_scale multiplies the plant's friction
+    // scale k(T_oil) (more friction torque, more heat into the oil). Queued for the next tick boundary, kept until the
+    // next call (reset_vehicle does not touch it). 1.0 = as new, bit for bit. Needs the engine thermal model (the friction
+    // scale lives there). Throws for an unknown vehicle, a vehicle without thermal, or a factor not finite / outside
+    // [0, 1e3]. The effective factor is PowertrainSnapshot::thermal.wear_friction_scale.
+    void set_engine_wear(VehicleId id, const drivetrain::EngineWear& wear);
     // PHYS-033 P4 I7c C16b: replaces a vehicle's simulated engine's runtime
     // maps (e.g. a background Full-quality regeneration replacing a Preview
     // one, or a tuned/edited map file/cache hit) - EngineMapsPtr is the C16a

@@ -124,6 +124,17 @@ struct CoolingCapacity {
     real fan_flow_scale = 1.0;
 };
 
+// World::set_engine_wear's argument: runtime wear of the engine internals (worn
+// crank bearings, scuffed pistons and rings in the racing_game damage model).
+// friction_scale multiplies the PLANT's oil-viscosity friction scale k(T_oil)
+// (the hydrodynamic friction torque and the heat it puts into the oil); the
+// ECU's estimate is not touched (it does not know the engine is worn). 1.0 =
+// as new; multiplying by exactly 1.0 changes no bit, so the default is a
+// strict no-op. Must be finite and in [0, 1e3].
+struct EngineWear {
+    real friction_scale = 1.0;
+};
+
 // Bits of EngineThermalSnapshot::warning_bits.
 constexpr std::uint32_t kThermalWarningOverheat = 1u << 0;
 constexpr std::uint32_t kThermalWarningCold = 1u << 1;
@@ -144,6 +155,7 @@ struct EngineThermalSnapshot {
     real friction_scale = 1.0;     // plant k
     real radiator_ua_scale = 1.0;  // the CoolingCapacity in effect this tick
     real fan_flow_scale = 1.0;
+    real wear_friction_scale = 1.0; // the EngineWear in effect this tick (already folded into friction_scale)
 };
 
 } // namespace ps::drivetrain

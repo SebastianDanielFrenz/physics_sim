@@ -140,6 +140,7 @@ void EngineThermal::rebuild_scales() {
         return;
     }
     plant_k_ = k_curve_.evaluate(t_o_);
+    if (wear_.friction_scale != 1.0) plant_k_ *= wear_.friction_scale; // worn internals (EngineWear); the ECU's k is not
     // The ECU's oil temperature reading is quantised to 1 K relative to T_ref, so a warm start (oil exactly T_ref)
     // and every temperature within half a kelvin of it give exactly the reference scale 1.0.
     const real t_ref = cfg_.engine.oil.reference_temperature_k;
@@ -190,6 +191,13 @@ void EngineThermal::begin_tick() {
     if (has_pending_capacity_) {
         has_pending_capacity_ = false;
         capacity_ = pending_capacity_;
+    }
+    if (has_pending_wear_) {
+        has_pending_wear_ = false;
+        wear_ = pending_wear_;
+        rebuild_scales();
+        snapshot_.friction_scale = plant_k_;
+        snapshot_.wear_friction_scale = wear_.friction_scale;
     }
 }
 
@@ -265,9 +273,13 @@ void EngineThermal::step(real engine_rpm) {
     snapshot_.oil_c = t_o_ - kCelsiusToKelvin;
     snapshot_.thermostat_opening = x;
     snapshot_.fan_on = fan_on_;
-    snapshot_.fan_power_w = fan_on_ ? c.fan.power_w : 0.0;
+    // A damaged fan (fan_flow_scale < 1) turns slower. Fan affinity laws: flow ~ speed, power ~ speed^3, so the electrical
+    // power it draws goes with the cube of the flow factor. Skipped at exactly 1 (bit for bit the loaded power_w).
+    const real fs = capacity_.fan_flow_scale;
+    snapshot_.fan_power_w = fan_on_ ? (fs == 1.0 ? c.fan.power_w : c.fan.power_w * fs * fs * fs) : 0.0;
     snapshot_.radiator_ua_scale = capacity_.radiator_ua_scale;
     snapshot_.fan_flow_scale = capacity_.fan_flow_scale;
+    snapshot_.wear_friction_scale = wear_.friction_scale;
     snapshot_.radiator_heat_w = g_rad * (t_e_ - t_a);
     snapshot_.wall_heat_w = e_wall / dt;
     snapshot_.friction_heat_w = friction_ / dt;
@@ -306,6 +318,7 @@ std::uint64_t EngineThermal::fold_state_hash(std::uint64_t seed) const {
         fold(&capacity_.radiator_ua_scale, sizeof(capacity_.radiator_ua_scale));
         fold(&capacity_.fan_flow_scale, sizeof(capacity_.fan_flow_scale));
     }
+    if (wear_.friction_scale != 1.0) fold(&wear_.friction_scale, sizeof(wear_.friction_scale)); // same rule as the capacity
     return h;
 }
 
