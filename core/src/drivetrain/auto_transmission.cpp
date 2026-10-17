@@ -351,6 +351,10 @@ void AutoTransmission::update_launch(const Sensors& s, real th) {
         launch_locked_ = false;
         return;
     }
+    if (s.clutch_capacity_cap_nm < desc_.clutch.capacity_nm) {
+        launch_locked_ = false;
+        e_launch_ = std::min(e_launch_, std::max(real(0.0), s.clutch_capacity_cap_nm / desc_.clutch.capacity_nm));
+    }
     if (phase_ != Phase::Idle && phase_ != Phase::Engage && phase_ != Phase::Closing) return;
     // DCT launch control (assist unit): Armed holds the clutch open, Launch sets its capacity directly.
     if (s.launch_hold_open) {
@@ -549,6 +553,14 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     if (slip_launch() && s.engine_omega * kRadPerSecToRpm < desc_.tcu.launch_anti_stall_rpm) {
         act.cap_kinetic = onc.cap_kinetic = real(0.0);
     }
+    // TC owns a TOTAL input-referred capacity: sharing it keeps a handover
+    // from applying the limit once per clutch (and doubling the allowance).
+    const real sum_capacity = act.cap_kinetic + onc.cap_kinetic;
+    if (sum_capacity > s.clutch_capacity_cap_nm && sum_capacity > real(0.0)) {
+        const real scale = std::max(real(0.0), s.clutch_capacity_cap_nm) / sum_capacity;
+        act.cap_kinetic *= scale;
+        onc.cap_kinetic *= scale;
+    }
     act.cap_static = cd.static_factor * act.cap_kinetic;
     onc.cap_static = cd.static_factor * onc.cap_kinetic;
     if (desc_.cvt) {
@@ -575,6 +587,7 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     o.phase = phase_;
     o.launch_engagement = slip_launch() ? (phase_ == Phase::Idle || phase_ == Phase::Engage ? e_launch_ * (phase_ == Phase::Engage ? e_engage_ : real(1.0)) : real(1.0))
                                             : real(1.0);
+    if (slip_launch()) o.launch_engagement = std::min(o.launch_engagement, s.clutch_capacity_cap_nm / C);
     if (cur_ == 0 || (slip_launch() && s.engine_omega * kRadPerSecToRpm < desc_.tcu.launch_anti_stall_rpm))
         o.launch_engagement = real(0.0);
     return o;

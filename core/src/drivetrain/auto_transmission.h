@@ -80,6 +80,7 @@ public:
         // DCT launch control (assist unit): hold the launch clutch open (Armed) / its kinetic capacity (Launch, < 0 none).
         bool launch_hold_open = false;
         real launch_cap_nm = -1.0;
+        real clutch_capacity_cap_nm = std::numeric_limits<real>::infinity(); // low-speed TC, shared by both rows
         bool first_substep = false;
         real h = 0.0;
     };

@@ -411,3 +411,38 @@ TEST_CASE("Automatic transmission vehicles accept driving-mode electronics", "[a
         CHECK(desc.drive_modes->modes_bits == 15);
     }
 }
+
+TEST_CASE("DCT crawl traction capacity is shared across the shift rows", "[automatic][dct_corner]") {
+    using drivetrain::AutoTransmission;
+    AutoTransmission::Desc desc;
+    desc.dual_clutch = true;
+    desc.forward_ratios = {3.0, 2.0, 1.0};
+    desc.reverse_ratios = {-3.0};
+    desc.clutch.capacity_nm = 1900.0;
+    desc.tcu.min_time_in_gear_s = 0.0;
+    AutoTransmission tcu(desc);
+    tcu.reset(1, true);
+    AutoTransmission::Sensors s;
+    const real rpm = 3.14159265358979323846 / 30.0;
+    s.engine_omega = s.input_omega = 5000.0 * rpm;
+    s.output_omega = s.input_omega / 3.0;
+    s.gear_request = 99.0;
+    s.first_substep = true;
+    s.h = 0.01;
+    s.throttle = 0.5;
+    s.clutch_capacity_cap_nm = 20.0;
+    (void)tcu.step(s); // seed paddle counters before requesting a shift
+    s.shift_up_count = 1.0;
+    bool torque_phase = false, inertia_phase = false, closing_phase = false;
+    for (int i = 0; i < 100; ++i) {
+        const auto out = tcu.step(s);
+        CHECK(out.row[0].cap_kinetic + out.row[1].cap_kinetic <= 20.0 + 1e-10);
+        CHECK(out.launch_engagement <= 20.0 / desc.clutch.capacity_nm + 1e-10);
+        torque_phase |= out.phase == AutoTransmission::Phase::Torque;
+        inertia_phase |= out.phase == AutoTransmission::Phase::Inertia;
+        closing_phase |= out.phase == AutoTransmission::Phase::Closing;
+    }
+    CHECK(torque_phase);
+    CHECK(inertia_phase);
+    CHECK(closing_phase);
+}

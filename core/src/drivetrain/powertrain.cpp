@@ -2137,8 +2137,26 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             ctx.tcu_throttle_floor = tcu_prev_request_.throttle_floor;
             ctx.tcu_ignition_cut = tcu_prev_request_.ignition_cut;
             ctx.tcu_throttle_ceiling = tcu_prev_request_.throttle_ceiling;
+            // DCT/clutch-CVT crawl: preserve idle combustion and meter the
+            // traction-control torque through clutch slip, as for the AMT.
+            tc_via_clutch_ = false;
+            clutch_capacity_cap_tc_ = std::numeric_limits<real>::infinity();
+            const int gear = auto_->current();
+            if (engine_ && auto_->slip_launch() && gear != 0 && ctx.traction_torque_fraction < real(1.0) && speedo_radius_ > real(0.0)) {
+                const real ground_rpm = std::abs(ctx.ground_speed_mps * auto_->ratio(gear) * speedo_ratio_ / speedo_radius_) * real(60.0) / (real(2.0) * real(3.14159265358979323846));
+                if (ground_rpm < real(1.25) * auto_->desc().tcu.launch_anti_stall_rpm) {
+                    const real f = ctx.traction_torque_fraction;
+                    const real demand = std::max(real(0.0), last_engine_result_.torque_demand);
+                    const real floor = std::max(real(0.0), ctx.traction_floor_fraction * demand);
+                    clutch_capacity_cap_tc_ = f * demand + (real(1.0) - f) * floor;
+                    tc_via_clutch_ = true;
+                    ctx.traction_throttle_ceiling = real(1.0);
+                    ctx.traction_ignition_cut = false;
+                }
+            }
             if (engine_) last_throttle_command_ = throttle_stage_.evaluate(ctx, last_throttle_hand_lever_raw_);
             AutoTransmission::Sensors as;
+            as.clutch_capacity_cap_nm = clutch_capacity_cap_tc_;
             as.engine_omega = engine_ ? network_.omega(engine_crank_) : real(0.0);
             as.input_omega = network_.omega(gearbox_in_);
             as.output_omega = network_.omega(gearbox_out_);
@@ -2293,6 +2311,12 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             const auto& ac = tcu_->desc().auto_clutch;
             const real cmd = std::clamp(last_throttle_command_.command, real(0.0), real(1.0));
             const real hold = ac.full_rpm_min + cmd * (ac.full_rpm_max - ac.full_rpm_min);
+            req.limiter_rpm = req.limiter_rpm > real(0.0) ? std::min(req.limiter_rpm, hold) : hold;
+        }
+        if (tc_via_clutch_ && auto_) {
+            const auto& t = auto_->desc().tcu;
+            const real cmd = std::clamp(last_throttle_command_.command, real(0.0), real(1.0));
+            const real hold = t.launch_full_rpm_min + cmd * (t.launch_full_rpm_max - t.launch_full_rpm_min);
             req.limiter_rpm = req.limiter_rpm > real(0.0) ? std::min(req.limiter_rpm, hold) : hold;
         }
         last_engine_result_ = engine_->pre_solve(s, throttle_cmd, req, ctx.h);
