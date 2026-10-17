@@ -2,22 +2,8 @@
 // Diagnostic environment reads do not modify the environment.
 #define _CRT_SECURE_NO_WARNINGS
 #endif
-// Traction control speed-estimate drift (owner, PR #8: "fix the drift of sensed values").
-//
-// The sensor-only TC keeps a ground-speed estimate from the virtual IMU and the wheel speed sensors. These cases drive
-// the full hypercar (car_hyper.json, RWD, Racing assist unit, TC mode On) through the manoeuvres that used to leave a
-// lasting offset in that estimate - braking with locked wheels, a handbrake slide, slopes, a kerb, switching TC off and
-// on - and then crawl with the pedal down, the situation of the owner's log (cut at 5-6 km/h for 17 s). The error is
-// estimate minus the chassis's true longitudinal velocity (chassis frame x, at contact-patch height), read every tick; it is only scored while
-// the estimator runs (pedal down, after its first 0.25 s).
-//
-// Bands (written before the fix was run): during the crawl phases |error| <= 0.10 m/s (0.05 slip at the 2 m/s floor,
-// below the 0.08 target), and over the whole run |error| <= 0.5 m/s outside the 0.5 s after a slide or a kerb hit.
-// The torque fraction may not sit below 0.1 for more than 0.3 s while the driven wheels' true slip ratio is below the
-// target. A kerb hit is detected from the chassis itself (|dvx/dt| > 4 m/s^2 at 20 % throttle, or a pitch rate
-// above 0.15 rad/s while it bounces); the crawl band is not applied until 0.5 s after the last such tick either
-// (first run: a 0.33 m/s transient while the wheels ride the kerb, gone within 0.2 s), the transient itself is held to
-// the 0.5 m/s whole-run band (impact_max).
+// Physics-state TC regressions: braking, slides, slopes, kerbs and re-enabling.
+// The legacy snapshot speed field must track actual chassis longitudinal speed.
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
 #include "ps/vehicle/traction_control.h"
@@ -66,7 +52,6 @@ DriftResult drive(const char* name, real seconds, real grade, const std::functio
     w.set_control("gear_request", 1);
     DriftResult r;
     real scored_for = 0, settle_left = 0, cut_run = 0, vx_prev = 0;
-    const real contact_z = desc.wheels[0].attachment_local.z - desc.wheels[0].wheel_radius;
     const bool trace = std::getenv("PS_TC_DRIFT_TRACE") != nullptr;
     const int ticks = int(seconds * 240);
     for (int k = 0; k < ticks; ++k) {
@@ -80,11 +65,10 @@ DriftResult drive(const char* name, real seconds, real grade, const std::functio
         w.step();
         const auto pt = w.powertrain_state(rig.vehicle);
         const Pose p = w.get_pose(rig.chassis);
-        // Truth at contact-patch height under the chassis origin (what a rolling wheel sees): x of v + w x (0, 0, z_c).
-        // Without the pitch term a kerb bounce reads as a 0.1 m/s estimate error that is only the reference point.
+        // The compatibility telemetry speed is actual chassis longitudinal velocity.
         const Vec3 omega_body = p.orientation.inverse().rotate(w.get_motion(rig.chassis).angular);
         const real vx_origin = p.orientation.inverse().rotate(w.get_motion(rig.chassis).linear).x;
-        const real vx = vx_origin + omega_body.y * contact_z;
+        const real vx = vx_origin;
         const real err = pt.traction_estimated_speed_m_s - vx;
         const bool impact = impact_settle && k > 0 && (std::abs(vx_origin - vx_prev) * 240 > 4.0 || std::abs(omega_body.y) > 0.15);
         vx_prev = vx_origin;

@@ -377,7 +377,8 @@ private:
     std::vector<std::uint8_t> is_front_;
     real esc_front_angle_ = 0; // last substep's mean front road-wheel angle (snapshot only)
     TractionControlState traction_state_{};
-    std::vector<TractionWheelSensor> traction_sensors_;
+    std::vector<TractionWheelSensor> traction_sensors_; // ABS / ESC sensors only
+    std::vector<TractionWheelState> traction_wheels_;
     std::vector<std::uint8_t> traction_brake_bits_; // per wheel: bit0 service brake fitted, bit1 handbrake fitted (TC brake signal)
     std::vector<WheelTelemetry> substep_telemetry_; // assists I2a diag: kMaxSubstepTelemetry x wheels, sized at construction
     std::size_t substep_telemetry_count_ = 0;

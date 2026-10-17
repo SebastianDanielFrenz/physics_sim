@@ -1,8 +1,8 @@
 // core/src/vehicle/abs_esc.h - INTERNAL: the per-substep ABS / ESC law (assists I5 part 2 / I6). The descriptors are
 // public in ps/vehicle/abs_esc_desc.h; docs/data_formats/electronics.md "abs" / "esc" is the description of the law.
 //
-// Sensor-only like traction control: the inputs are the wheels' peripheral speeds (TractionWheelSensor, steer and yaw
-// compensated exactly as TC does), the gyro yaw rate, the IMU longitudinal acceleration, the brake / handbrake
+// Sensor-only ABS / ESC: the inputs are the wheels' peripheral speeds (TractionWheelSensor, steer and yaw
+// compensated for steering and yaw), the gyro yaw rate, the IMU longitudinal acceleration, the brake / handbrake
 // channels and the front road-wheel angle. The output is one service-brake command per wheel (ctx.wheel_brake) and an
 // engine torque fraction. Every buffer is sized once (AbsEscState::resize) - step_abs_esc never allocates.
 #pragma once
@@ -66,7 +66,7 @@ struct AbsEscInputs {
     std::span<real> wheel_brake_out;         // per wheel: service command after ABS / ESC
 };
 
-// Ground-equivalent speed of a wheel from its sensor (TC's formula); NaN when the wheel is steered past 60 deg.
+// Ground-equivalent speed of a wheel from its sensor; NaN when the wheel is steered past 60 deg.
 [[nodiscard]] inline real abs_wheel_ground_speed(const TractionWheelSensor& w, real yaw) {
     if (!std::isfinite(w.peripheral_speed_m_s) || !std::isfinite(w.steer_rad)) return std::numeric_limits<real>::quiet_NaN();
     real sn = 0, c = 1;

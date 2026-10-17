@@ -232,17 +232,17 @@ TEST_CASE("U3: mode descs are the car's block plus overrides; On and Off are the
 // P: the step function's per-mode knobs.
 // ---------------------------------------------------------------------------------------------------------------
 namespace {
-std::array<TractionWheelSensor, 4> spin_sensors(real speed, real driven_speed) {
-    return {{{speed, 0, 1, .8, false}, {speed, 0, 1, -.8, false}, {driven_speed, 0, -1, .8, true}, {driven_speed, 0, -1, -.8, true}}};
+std::array<TractionWheelState, 4> spin_sensors(real speed, real driven_speed) {
+    return {{{speed,speed,3500,false,true}, {speed,speed,3500,false,true}, {driven_speed,speed,3500,true,true}, {driven_speed,speed,3500,true,true}}};
 }
 real run_spin(const TractionControlDesc& d, real* out_min = nullptr) {
     TractionControlState s;
     auto w = spin_sensors(10, 10);
-    step_traction_control(d, s, w, 0, 0, 1, 0, true, .01);
+    step_traction_control(d, s, w, 10, 1, 0, true, .01);
     real lo = 1;
     w = spin_sensors(10, 16); // 60 % common wheelspin on the driven axle
     for (int i = 0; i < 300; ++i) {
-        step_traction_control(d, s, w, 0, 0, 1, 0, true, .01);
+        step_traction_control(d, s, w, 10, 1, 0, true, .01);
         lo = std::min(lo, s.torque_fraction);
     }
     if (out_min) *out_min = lo;
