@@ -146,6 +146,7 @@ struct PowertrainSnapshot {
     std::int8_t gear = 0, gear_target = 0;
     ShiftPhase shift_phase = ShiftPhase::Idle;
     real engine_rpm = 0.0;
+    real drive_power_w = 0.0; // crank -> transmission, includes coupling losses; negative on overrun; telemetry only
     EngineState engine_state = EngineState::Off;
     real speedo_mps = 0.0; // gearbox-output-derived, like a real speedo (spec section 7.6)
     real clutch_engagement = 0.0; // effective (min of pedal and auto)

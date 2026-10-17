@@ -34,6 +34,7 @@
 #include "ps/types.h"
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace ps::drivetrain {
@@ -67,12 +68,19 @@ public:
         real throttle = 0.0;     // driver's command (throttle stage, before traction ceilings)
         real gear_request = kGearRequestNone;
         real shift_up_count = 0.0, shift_down_count = 0.0;
+        // Drive-mode overrides; NaN keeps the selected D/S schedule or gearbox close time.
+        real up_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN();
+        real up_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
+        real down_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN();
+        real down_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
+        real close_time_s = std::numeric_limits<real>::quiet_NaN();
         real mode_channel = 0.0;     // kTransmissionModeChannel, >= 0.5 = sport schedule
         real input_torque_prev = 0.0; // |torque the two shift rows carried last substep| (input-referred)
         real engine_torque_demand = 0.0; // CVT plan C1: the engine's demand last substep (clamping-force feed-forward)
         // DCT launch control (assist unit): hold the launch clutch open (Armed) / its kinetic capacity (Launch, < 0 none).
         bool launch_hold_open = false;
         real launch_cap_nm = -1.0;
+        real clutch_capacity_cap_nm = std::numeric_limits<real>::infinity(); // low-speed TC, shared by both rows
         bool first_substep = false;
         real h = 0.0;
     };
@@ -117,6 +125,7 @@ public:
     [[nodiscard]] int reverse_count() const { return static_cast<int>(desc_.reverse_ratios.size()); }
 
 private:
+    [[nodiscard]] ShiftScheduleDesc active_schedule(const Sensors& s) const;
     void choose_target(const Sensors& s, real th);
     void start_shift(int next, const Sensors& s, real th);
     void complete_shift();

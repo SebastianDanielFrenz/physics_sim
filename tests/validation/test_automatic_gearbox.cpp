@@ -9,6 +9,7 @@
 // give the same state hash every tick. Measured numbers are printed by every case.
 
 #include "vehicle_test_helpers.h"
+#include "../../core/src/drivetrain/auto_transmission.h"
 
 #include "ps/io/vehicle_io.h"
 
@@ -335,5 +336,143 @@ TEST_CASE("Automatic/DualClutch A1: 1 vs 10 workers identical state hash every t
         std::printf("[automatic determinism] %s gear %d hash 0x%016llx\n", file, a.pt().gear,
                     static_cast<unsigned long long>(a.w().state_hash()));
         CHECK(same);
+    }
+}
+
+TEST_CASE("Slip-launch transmissions survive repeated hard stops and part-throttle relaunches",
+          "[validation][vehicle][drivetrain][automatic][dct_stop_start]") {
+    for (const char* file : {"car_sedan_dct.json", "car_sedan_cvt_clutch.json"}) {
+        INFO(file);
+        Run r(file);
+        ps_test::settle(r.w(), 1.0);
+        r.w().set_control("gear_request", kD);
+        r.w().set_control("throttle", 1.0);
+        r.run(8.0);
+        REQUIRE(r.speed() > 10.0);
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            INFO(cycle);
+            r.w().set_control("throttle", 0.0);
+            r.w().set_control("brake", 1.0);
+            r.run(8.0);
+            CHECK(r.speed() < 0.25);
+            CHECK_FALSE(r.stalled);
+            r.w().set_control("brake", 0.0);
+            r.w().set_control("throttle", 0.3);
+            r.run(5.0);
+            CHECK(r.speed() > 1.0);
+            CHECK_FALSE(r.stalled);
+        }
+        CHECK(r.max_balance_ratio <= 5e-8);
+    }
+}
+TEST_CASE("DCT drive modes override shift points and clutch close time at runtime", "[automatic][drive_modes_auto]") {
+    using drivetrain::AutoTransmission;
+    AutoTransmission::Desc desc;
+    desc.dual_clutch = true;
+    desc.forward_ratios = {3.0, 2.0, 1.0};
+    desc.reverse_ratios = {-3.0};
+    desc.tcu.min_time_in_gear_s = 0.0;
+    desc.tcu.schedule = {5000.0, 5000.0, 800.0, 800.0};
+    desc.tcu.sport_schedule = desc.tcu.schedule;
+    AutoTransmission::Sensors s;
+    s.engine_omega = s.input_omega = 3000.0 * 3.14159265358979323846 / 30.0;
+    s.output_omega = s.input_omega / 3.0;
+    s.gear_request = 99.0;
+    s.throttle = 0.3;
+    s.first_substep = true;
+    s.h = 0.01;
+    AutoTransmission tcu(desc);
+    tcu.reset(1, true);
+    CHECK(tcu.step(s).target == 1); // the default schedule holds first at 3000 rpm
+    s.up_rpm_at_zero_throttle = s.up_rpm_at_full_throttle = 2000.0;
+    s.down_rpm_at_zero_throttle = s.down_rpm_at_full_throttle = 1000.0;
+    CHECK(tcu.step(s).target == 2); // changing mode immediately changes its decision
+
+    AutoTransmission standard(desc), fast(desc);
+    s.up_rpm_at_zero_throttle = s.up_rpm_at_full_throttle = 5000.0;
+    for (int i = 0; i < 3; ++i) {
+        (void)standard.step(s);
+    }
+    CHECK(standard.step(s).phase == AutoTransmission::Phase::Engage);
+    s.close_time_s = 0.02;
+    for (int i = 0; i < 3; ++i) {
+        (void)fast.step(s);
+    }
+    CHECK(fast.step(s).phase == AutoTransmission::Phase::Idle);
+}
+
+TEST_CASE("Automatic transmission vehicles accept driving-mode electronics", "[automatic][drive_modes_auto][io]") {
+    io::VehicleLoadOptions options;
+    options.electronics["drive_modes"] = std::string(PS_SOURCE_DIR) + "/data/electronics/drive_modes_car_hyper_n2o.json";
+    for (const char* file : {"car_sedan_at.json", "car_sedan_dct.json", "car_sedan_cvt.json", "car_sedan_cvt_clutch.json"}) {
+        INFO(file);
+        const auto desc = io::load_vehicle_json(fixture(file), options);
+        REQUIRE(desc.drive_modes.has_value());
+        CHECK(desc.drive_modes->modes_bits == 15);
+    }
+}
+
+TEST_CASE("DCT crawl traction capacity is shared across the shift rows", "[automatic][dct_corner]") {
+    using drivetrain::AutoTransmission;
+    AutoTransmission::Desc desc;
+    desc.dual_clutch = true;
+    desc.forward_ratios = {3.0, 2.0, 1.0};
+    desc.reverse_ratios = {-3.0};
+    desc.clutch.capacity_nm = 1900.0;
+    desc.tcu.min_time_in_gear_s = 0.0;
+    AutoTransmission tcu(desc);
+    tcu.reset(1, true);
+    AutoTransmission::Sensors s;
+    const real rpm = 3.14159265358979323846 / 30.0;
+    s.engine_omega = s.input_omega = 5000.0 * rpm;
+    s.output_omega = s.input_omega / 3.0;
+    s.gear_request = 99.0;
+    s.first_substep = true;
+    s.h = 0.01;
+    s.throttle = 0.5;
+    s.clutch_capacity_cap_nm = 20.0;
+    (void)tcu.step(s); // seed paddle counters before requesting a shift
+    s.shift_up_count = 1.0;
+    bool torque_phase = false, inertia_phase = false, closing_phase = false;
+    for (int i = 0; i < 100; ++i) {
+        const auto out = tcu.step(s);
+        CHECK(out.row[0].cap_kinetic + out.row[1].cap_kinetic <= 20.0 + 1e-10);
+        CHECK(out.launch_engagement <= 20.0 / desc.clutch.capacity_nm + 1e-10);
+        torque_phase |= out.phase == AutoTransmission::Phase::Torque;
+        inertia_phase |= out.phase == AutoTransmission::Phase::Inertia;
+        closing_phase |= out.phase == AutoTransmission::Phase::Closing;
+    }
+    CHECK(torque_phase);
+    CHECK(inertia_phase);
+    CHECK(closing_phase);
+}
+
+TEST_CASE("Live transmission power is signed and populated for every gearbox kind", "[automatic][drive_power]") {
+    for (const std::string& file : {std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json",
+                                   fixture("car_sedan_at.json"), fixture("car_sedan_dct.json"),
+                                   fixture("car_sedan_cvt.json"), fixture("car_sedan_cvt_clutch.json")}) {
+        INFO(file);
+        auto rig = ps_test::build_vehicle_rig(file, kMass, kHalfExtents, kOriginHeight, 0.0, 4);
+        auto& world = *rig.world;
+        ps_test::settle(world, 1.0);
+        const bool manual = world.powertrain_state(rig.vehicle).transmission_kind == 0;
+        world.set_control("gear_request", manual ? 1.0 : kD);
+        world.set_control("throttle", 0.4);
+        real peak = 0.0, overrun = 0.0;
+        for (int i = 0; i < 240 * 8; ++i) {
+            if (i == 240 * 6) world.set_control("throttle", 0.0);
+            world.step();
+            const auto& pt = world.powertrain_state(rig.vehicle);
+            REQUIRE(std::isfinite(pt.drive_power_w));
+            if (manual && !pt.engines.empty()) {
+                const real old_power = -pt.driveline.clutch_torque * pt.engines[0].omega;
+                CHECK(std::abs(pt.drive_power_w - old_power) < 1e-8);
+            }
+            if (i < 240 * 6) peak = std::max(peak, pt.drive_power_w);
+            else overrun = std::min(overrun, pt.drive_power_w);
+        }
+        std::printf("[drive power] %s peak=%.3f kW overrun=%.3f kW\n", file.c_str(), double(peak/1000.0), double(overrun/1000.0));
+        CHECK(peak > 1000.0);
+        CHECK(overrun < -100.0);
     }
 }

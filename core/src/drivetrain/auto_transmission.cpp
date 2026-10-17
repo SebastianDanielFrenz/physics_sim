@@ -14,7 +14,7 @@ constexpr real kHoldFloorFraction = real(0.15);  // [AS] of the rated capacity
 constexpr real kInertiaBoost = real(1.5);        // [AS] on-coming capacity over C_h in a power-on upshift's inertia phase
 constexpr real kPowerOnThrottle = real(0.1);     // [AS] downshift with the command above this = power on
 constexpr real kInhibitRpm = real(300.0);        // [AS] no direction change above this input rpm in 1st / R1
-constexpr real kLaunchRateUp = real(4.0), kLaunchRateDown = real(12.0), kLaunchRateStall = real(40.0); // 1/s [AS]
+constexpr real kLaunchRateUp = real(4.0), kLaunchRateDown = real(12.0); // 1/s [AS]
 constexpr real kLaunchMinThrottle = real(0.05);
 
 template <typename T>
@@ -110,6 +110,15 @@ real AutoTransmission::belt_capacity() const {
 }
 
 // CVT plan C1: the variator's target ratio (continuous or stepped), its rate-limited motion and the clamping force.
+ShiftScheduleDesc AutoTransmission::active_schedule(const Sensors& s) const {
+    ShiftScheduleDesc sch = s.mode_channel >= real(0.5) ? desc_.tcu.sport_schedule : desc_.tcu.schedule;
+    if (std::isfinite(s.up_rpm_at_zero_throttle)) sch.up_rpm_at_zero_throttle = s.up_rpm_at_zero_throttle;
+    if (std::isfinite(s.up_rpm_at_full_throttle)) sch.up_rpm_at_full_throttle = s.up_rpm_at_full_throttle;
+    if (std::isfinite(s.down_rpm_at_zero_throttle)) sch.down_rpm_at_zero_throttle = s.down_rpm_at_zero_throttle;
+    if (std::isfinite(s.down_rpm_at_full_throttle)) sch.down_rpm_at_full_throttle = s.down_rpm_at_full_throttle;
+    return sch;
+}
+
 void AutoTransmission::update_cvt(const Sensors& s, real th) {
     const CvtDesc& c = desc_.cvt_desc;
     const AutomaticTcuDesc& t = desc_.tcu;
@@ -123,7 +132,7 @@ void AutoTransmission::update_cvt(const Sensors& s, real th) {
     auto step_rpm = [&](int k) { return desc_.forward_ratios[static_cast<std::size_t>(k - 1)] * out_rpm; };
     t_step_ += s.h;
     if (cur_ > 0 && (manual_ || (sport && law.stepped_sport))) {
-        const ShiftScheduleDesc& sch = sport ? t.sport_schedule : t.schedule;
+        const ShiftScheduleDesc sch = active_schedule(s);
         if (manual_) {
             manual_gear_ = std::clamp(manual_gear_, 1, top);
             const real forced_up = t.manual_up_rpm > real(0.0) ? t.manual_up_rpm : sch.up_rpm_at_full_throttle;
@@ -258,7 +267,7 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     }
     if (phase_ != Phase::Idle) return; // one decision per completed shift
     const int g = cur_;
-    const ShiftScheduleDesc& sch = s.mode_channel >= real(0.5) ? t.sport_schedule : t.schedule;
+    const ShiftScheduleDesc sch = active_schedule(s);
     const real r = in_rpm(g);
     const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
     const real dn = lerp(sch.down_rpm_at_zero_throttle, sch.down_rpm_at_full_throttle, th);
@@ -334,7 +343,19 @@ void AutoTransmission::update_launch(const Sensors& s, real th) {
         launch_locked_ = false;
         return;
     }
-    if (phase_ != Phase::Idle && phase_ != Phase::Engage) return;
+    // Emergency pressure dump must run during handover/closing too. A normal
+    // release ramp can drag a light crank through its stall threshold in one
+    // wheel-lock transient; rotation against the engine is not healthy rpm.
+    if (s.engine_omega * kRadPerSecToRpm < desc_.tcu.launch_anti_stall_rpm) {
+        e_launch_ = real(0.0);
+        launch_locked_ = false;
+        return;
+    }
+    if (s.clutch_capacity_cap_nm < desc_.clutch.capacity_nm) {
+        launch_locked_ = false;
+        e_launch_ = std::min(e_launch_, std::max(real(0.0), s.clutch_capacity_cap_nm / desc_.clutch.capacity_nm));
+    }
+    if (phase_ != Phase::Idle && phase_ != Phase::Engage && phase_ != Phase::Closing) return;
     // DCT launch control (assist unit): Armed holds the clutch open, Launch sets its capacity directly.
     if (s.launch_hold_open) {
         e_launch_ = real(0.0);
@@ -360,12 +381,7 @@ void AutoTransmission::update_launch(const Sensors& s, real th) {
     real e_tgt = th >= kLaunchMinThrottle ? std::clamp((ne - t.launch_bite_rpm) / std::max(full - t.launch_bite_rpm, real(1.0)), real(0.0), real(1.0))
                                           : real(0.0);
     if (C > real(0.0)) e_tgt = std::max(e_tgt, std::min(real(1.0), t.creep_torque_nm / C));
-    real down_rate = kLaunchRateDown;
-    if (ne < t.launch_anti_stall_rpm) {
-        e_tgt = real(0.0);
-        down_rate = kLaunchRateStall;
-    }
-    e_launch_ = slew(e_launch_, e_tgt, kLaunchRateUp, down_rate, s.h);
+    e_launch_ = slew(e_launch_, e_tgt, kLaunchRateUp, kLaunchRateDown, s.h);
     if (slip_rpm < t.launch_lock_slip_rpm && ne >= t.launch_bite_rpm && th >= kLaunchMinThrottle) {
         launch_locked_ = true;
         e_launch_ = real(1.0);
@@ -382,8 +398,7 @@ void AutoTransmission::update_preselect(const Sensors& s, real th) {
         t_pre_ = real(0.0);
         return;
     }
-    const AutomaticTcuDesc& t = desc_.tcu;
-    const ShiftScheduleDesc& sch = s.mode_channel >= real(0.5) ? t.sport_schedule : t.schedule;
+    const ShiftScheduleDesc sch = active_schedule(s);
     const real r = std::abs(ratio(cur_) * s.output_omega) * kRadPerSecToRpm;
     const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
     const real dn = lerp(sch.down_rpm_at_zero_throttle, sch.down_rpm_at_full_throttle, th);
@@ -426,7 +441,8 @@ void AutoTransmission::update_lockup(const Sensors& s, real th) {
 
 AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     const real th = std::clamp(s.throttle, real(0.0), real(1.0));
-    const ShiftClutchDesc& cd = desc_.clutch;
+    ShiftClutchDesc cd = desc_.clutch;
+    if (std::isfinite(s.close_time_s)) cd.engage_time_s = s.close_time_s;
     const real C = cd.capacity_nm;
     time_in_gear_ += s.h;
 
@@ -532,6 +548,19 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
             break;
         }
     }
+    // Both shift rows can transmit wheel braking torque. Opening only the
+    // current row leaves the oncoming clutch able to stall the engine.
+    if (slip_launch() && s.engine_omega * kRadPerSecToRpm < desc_.tcu.launch_anti_stall_rpm) {
+        act.cap_kinetic = onc.cap_kinetic = real(0.0);
+    }
+    // TC owns a TOTAL input-referred capacity: sharing it keeps a handover
+    // from applying the limit once per clutch (and doubling the allowance).
+    const real sum_capacity = act.cap_kinetic + onc.cap_kinetic;
+    if (sum_capacity > s.clutch_capacity_cap_nm && sum_capacity > real(0.0)) {
+        const real scale = std::max(real(0.0), s.clutch_capacity_cap_nm) / sum_capacity;
+        act.cap_kinetic *= scale;
+        onc.cap_kinetic *= scale;
+    }
     act.cap_static = cd.static_factor * act.cap_kinetic;
     onc.cap_static = cd.static_factor * onc.cap_kinetic;
     if (desc_.cvt) {
@@ -558,7 +587,9 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
     o.phase = phase_;
     o.launch_engagement = slip_launch() ? (phase_ == Phase::Idle || phase_ == Phase::Engage ? e_launch_ * (phase_ == Phase::Engage ? e_engage_ : real(1.0)) : real(1.0))
                                             : real(1.0);
-    if (cur_ == 0) o.launch_engagement = real(0.0);
+    if (slip_launch()) o.launch_engagement = std::min(o.launch_engagement, s.clutch_capacity_cap_nm / C);
+    if (cur_ == 0 || (slip_launch() && s.engine_omega * kRadPerSecToRpm < desc_.tcu.launch_anti_stall_rpm))
+        o.launch_engagement = real(0.0);
     return o;
 }
 
