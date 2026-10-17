@@ -4,7 +4,9 @@
 // NitrousSystem: no port, node or row, not an IComponent.
 //
 // State: two lumps (engine = block + head + coolant; oil = oil + oil-wetted
-// metal), the thermostat wax temperature (first-order lag), the thermostat's
+// metal) - or, with the optional water jacket (EngineThermalDesc::water_jacket),
+// three: the engine lump split into metal and coolant joined by the jacket
+// conductance G_j(pump flow) - the thermostat wax temperature (first-order lag), the thermostat's
 // play (backlash) state and the fan on/off bit. One backward-Euler closed-form
 // 2x2 step per tick (unconditionally stable, exact ledger closure), after the
 // substep loop; the control states update explicitly from the previous
@@ -22,9 +24,9 @@
 // construction (PLAN.md D8). Thermal runs in simulation time only - nothing
 // here reads the environment clock.
 //
-// Hashed state: T_e, T_o, T_wax, T_play, fan_on - nothing else (the heat
-// accumulators are zero at every tick boundary; ledger and snapshot are not
-// hashed).
+// Hashed state: T_e, T_o, T_wax, T_play, fan_on, and T_metal only with a water
+// jacket - nothing else (the heat accumulators are zero at every tick boundary;
+// ledger and snapshot are not hashed). With a jacket T_e is the COOLANT lump.
 
 #pragma once
 
@@ -53,7 +55,8 @@ struct EngineThermalLedger {
     real block_air_out = 0.0;
     real oil_air_out = 0.0;
     real heater_out = 0.0; // T7
-    real stored = 0.0;     // C_e*(T_e - T_e0) + C_o*(T_o - T_o0) since construction/last set_state baseline carried
+    real jacket_transfer = 0.0; // metal -> coolant through the water jacket (internal, not in the balance)
+    real stored = 0.0;     // C_e*(T_e - T_e0) + C_o*(T_o - T_o0) (+ C_metal*(T_m - T_m0)) since the last baseline
     real balance_error = 0.0;
     real abs_flow_sum = 0.0; // sum of |flows| booked, for the relative closure check
 };
@@ -84,7 +87,9 @@ public:
     [[nodiscard]] const EngineThermalSnapshot& snapshot() const { return snapshot_; }
     [[nodiscard]] const EngineThermalLedger& ledger() const { return ledger_; }
     [[nodiscard]] const EngineThermalConfig& config() const { return cfg_; }
-    [[nodiscard]] real engine_temperature_k() const { return t_e_; }
+    [[nodiscard]] real engine_temperature_k() const { return t_e_; } // the coolant lump with a water jacket
+    [[nodiscard]] real metal_temperature_k() const { return has_jacket_ ? t_m_ : t_e_; }
+    [[nodiscard]] bool has_water_jacket() const { return has_jacket_; }
     [[nodiscard]] real oil_temperature_k() const { return t_o_; }
     [[nodiscard]] real wax_temperature_k() const { return t_wax_; }
     [[nodiscard]] real play_temperature_k() const { return t_play_; }
@@ -156,9 +161,14 @@ private:
     EngineThermalConfig cfg_;
     ThermalEnv env_;
 
-    // Hashed state.
+    // Hashed state (t_m_ only with a water jacket).
     real t_e_ = 0.0, t_o_ = 0.0, t_wax_ = 0.0, t_play_ = 0.0;
     bool fan_on_ = false;
+    real t_m_ = 0.0;
+
+    // Water jacket: lump capacities (metal = engine lump - coolant), fixed at construction.
+    bool has_jacket_ = false;
+    real c_metal_ = 0.0, c_coolant_ = 0.0;
 
     // Not hashed.
     real released_ = 0.0, friction_ = 0.0, dt_acc_ = 0.0; // accumulators, zero at tick boundaries
@@ -180,7 +190,7 @@ private:
     vehicle::Curve1D k_curve_;
 
     // Ledger bookkeeping: the balance is (stored change since the baseline) - (in - out since the baseline) + carry.
-    real t_e0_ = 0.0, t_o0_ = 0.0;
+    real t_e0_ = 0.0, t_o0_ = 0.0, t_m0_ = 0.0;
     real in_since_ = 0.0, out_since_ = 0.0, balance_carry_ = 0.0;
     EngineThermalLedger ledger_;
     EngineThermalSnapshot snapshot_;

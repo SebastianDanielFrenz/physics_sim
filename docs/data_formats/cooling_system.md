@@ -26,6 +26,7 @@ keys are rejected. `extends` works as in `engine_thermal.md`.
 | `source` | string | required | non-empty | provenance with [C]/[D]/[M]/[AS] tags |
 | `radiator` | object | required | below | cross-flow eps-NTU radiator |
 | `fan` | object | required | below | on/off fan with hysteresis |
+| `pump` | object | optional | `flow_factor` required, in `(0, 4]` | multiplies the engine's coolant pump flow (a pump upgrade); absent = 1, bit-identical |
 | `oil_cooler` | object | optional | `air_w_k_per_m_s >= 0` (default 0) | added to the oil-air conductance's ram term |
 | `gauge` | object | required | below | needle position vs coolant temperature |
 | `warnings` | object | required | `overheat_c`, `cold_c`, `cold_c < overheat_c` | warning bit thresholds on coolant temperature |

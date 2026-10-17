@@ -342,7 +342,14 @@ TEST_CASE("Cooling capacity: (1, 1) is bit-identical, a damaged radiator/fan run
         for (int t = 0; t < 240; ++t) w.step();
         w.set_engine_thermal_state(rig.vehicle, EngineThermalState{104.0, 100.0}); // thermostat open, fan on
         if (cap) w.set_engine_cooling_capacity(rig.vehicle, *cap);
-        for (int t = 0; t < 2400; ++t) w.step();
+        real peak_fan_power_w = 0.0;
+        bool fan_was_on = false;
+        for (int t = 0; t < 2400; ++t) {
+            w.step();
+            const auto& sample = snapshot_thermal(rig);
+            fan_was_on = fan_was_on || sample.fan_on;
+            peak_fan_power_w = std::max(peak_fan_power_w, sample.fan_power_w);
+        }
         struct Out {
             std::uint64_t hash;
             real coolant_c, radiator_w, ua_scale, fan_scale, fan_power_w;
@@ -350,7 +357,7 @@ TEST_CASE("Cooling capacity: (1, 1) is bit-identical, a damaged radiator/fan run
         };
         const auto& th = snapshot_thermal(rig);
         return Out{w.state_hash(), w.engine_thermal_state(rig.vehicle).coolant_c, th.radiator_heat_w, th.radiator_ua_scale, th.fan_flow_scale,
-                   th.fan_power_w, th.fan_on};
+                   peak_fan_power_w, fan_was_on};
     };
     const auto base = run(nullptr, 1);
     const drivetrain::CoolingCapacity unity{};
@@ -367,6 +374,7 @@ TEST_CASE("Cooling capacity: (1, 1) is bit-identical, a damaged radiator/fan run
     CHECK(hot1.coolant_c > base.coolant_c + 0.5);
     CHECK(hot1.hash != base.hash);
     CHECK(hot1.hash == hot4.hash); // worker-count invariant
+    // Compare fan-on samples: a healthy fan may cycle off before the final tick.
     // Fan power: the loaded power_w at (1, 1), the cube of the flow factor when the fan is damaged (affinity laws).
     REQUIRE(base.fan_on);
     REQUIRE(hot1.fan_on);

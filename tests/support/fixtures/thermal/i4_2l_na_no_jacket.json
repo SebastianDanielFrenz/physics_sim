@@ -1,0 +1,6 @@
+{
+  "format": "physics_sim.engine_thermal/1",
+  "extends": "../../../../data/engine_thermal/i4_2l_na.json",
+  "source": "Test fixture: the generic 2.0 L I4 thermal file with its inherited water_jacket deleted (RFC 7396 null), i.e. the two-lump model every engine had before the jacket was added to the class file. Keeps the jacket-less path tested and is the baseline of the jacket comparisons in tests/unit/test_engine_thermal_jacket.cpp.",
+  "water_jacket": null
+}

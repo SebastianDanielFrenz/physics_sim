@@ -385,7 +385,7 @@ public:
     // assist_auto_shift, from the race-free per-tick snapshot (same path as
     // the wheel getters below) - empty Dictionary for an unknown vehicle.
     [[nodiscard]] godot::Dictionary get_vehicle_powertrain(const godot::String& vehicle_name) const;
-    // Engine thermal plan T1 (vault PHYS-063): coolant_c/oil_c/thermostat_opening/fan_on/gauge (0..1 needle)/
+    // Engine thermal plan T1 (vault PHYS-063): coolant_c/oil_c/metal_c/jacket_heat_w/coolant_flow_l_min/thermostat_opening/fan_on/gauge (0..1 needle)/
     // radiator_heat_w/wall_heat_w/friction_heat_w/friction_scale/warning_bits, from the same race-free per-tick
     // snapshot. Empty Dictionary for an unknown vehicle; has_thermal false (and no other key) for a vehicle
     // without a cooling_system.

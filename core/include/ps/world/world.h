@@ -637,9 +637,12 @@ private:
 
     // Engine thermal plan T1: vehicle<i>.thermal.{coolant_c,oil_c,thermostat,fan,q_wall_w,q_friction_w,q_radiator_w,
     // friction_scale}, registered (and recorded) only for a vehicle with a cooling_system, right after its n2o
-    // channels. Outer index == VehicleId.index; inner 0 or 1.
+    // channels. Outer index == VehicleId.index; inner 0 or 1. With a water jacket three more follow:
+    // {metal_c,jacket_heat_w,coolant_flow_l_min} (absent without one, so a jacket-less CSV keeps its old header).
     struct ThermalTelemetryChannels {
         std::size_t coolant_c, oil_c, thermostat, fan, q_wall_w, q_friction_w, q_radiator_w, friction_scale;
+        bool jacket = false;
+        std::size_t metal_c = 0, jacket_heat_w = 0, coolant_flow_l_min = 0;
     };
     std::vector<std::vector<ThermalTelemetryChannels>> thermal_telemetry_channels_;
 

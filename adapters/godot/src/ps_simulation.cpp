@@ -1281,6 +1281,9 @@ Dictionary PsSimulation::get_engine_thermal(const String& vehicle_name) const {
     if (!t.has_thermal) return d;
     d["coolant_c"] = static_cast<double>(t.coolant_c);
     d["oil_c"] = static_cast<double>(t.oil_c);
+    d["metal_c"] = static_cast<double>(t.metal_c);
+    d["jacket_heat_w"] = static_cast<double>(t.jacket_heat_w);
+    d["coolant_flow_l_min"] = static_cast<double>(t.coolant_flow_l_min);
     d["thermostat_opening"] = static_cast<double>(t.thermostat_opening);
     d["fan_on"] = t.fan_on;
     d["gauge"] = static_cast<double>(t.gauge);

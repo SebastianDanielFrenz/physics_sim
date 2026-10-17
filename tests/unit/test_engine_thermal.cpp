@@ -133,6 +133,7 @@ void run_constant_case(real dt, real seconds, real& err_e, real& err_o) {
     EngineThermalConfig cfg = sedan_a25a_config();
     cfg.engine.thermostat.open_k = 2000.0; // thermostat never opens: x = 0, G_rad = 0, constant conductances
     cfg.engine.thermostat.full_open_k = 2100.0;
+    cfg.engine.water_jacket.enabled = false; // the exact solution below is the two-lump model (jacket: J4)
     EngineThermal th(cfg);
     const real t_amb = 20.0 + kC;
     th.set_env(ThermalEnv{t_amb, 101325.0, 0.0, 0.0});
