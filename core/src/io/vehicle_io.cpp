@@ -3941,7 +3941,33 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 if (has_user_layer) cj_user = apply_part_override(cj_file, type, override_it->second, ctx);
                 const json& cj = has_user_layer ? cj_user : cj_file;
 
-                if (type == "engine") {
+                const auto electric_keys=[&](const json& obj,std::initializer_list<const char*> allowed,const std::string& where) {
+                    for(auto it=obj.begin();it!=obj.end();++it) {
+                        bool found=false;for(const char* key:allowed)if(it.key()==key){found=true;break;}
+                        if(!found)throw std::runtime_error(where+": unknown electric component field '"+it.key()+"'");
+                    }
+                };
+                if (type == "battery") {
+                    electric_keys(cj,{"id","type","capacity_kwh","initial_soc","max_discharge_w","max_charge_w","mass_kg"},ctx);
+                    ps::drivetrain::BatteryDesc b;
+                    b.capacity_kwh=cj.value("capacity_kwh",b.capacity_kwh);b.initial_soc=cj.value("initial_soc",b.initial_soc);
+                    b.max_discharge_w=cj.value("max_discharge_w",b.max_discharge_w);b.max_charge_w=cj.value("max_charge_w",b.max_charge_w);
+                    b.mass_kg=cj.value("mass_kg",b.mass_kg);
+                    p.components.push_back({id,b});
+                } else if(type == "electric_motor") {
+                    electric_keys(cj,{"id","type","battery","peak_torque_nm","max_power_w","max_rpm","inertia_kgm2","efficiency",
+                        "regen_torque_nm","mass_kg","axis_local","ready_channel","throttle_channel","regen_channel","direction_channel"},ctx);
+                    ps::drivetrain::ElectricMotorDesc m;
+                    m.battery=cj.at("battery").get<std::string>();
+                    m.peak_torque_nm=cj.value("peak_torque_nm",m.peak_torque_nm);m.max_power_w=cj.value("max_power_w",m.max_power_w);
+                    m.max_rpm=cj.value("max_rpm",m.max_rpm);m.inertia_kgm2=cj.value("inertia_kgm2",m.inertia_kgm2);
+                    m.efficiency=cj.value("efficiency",m.efficiency);m.regen_torque_nm=cj.value("regen_torque_nm",m.regen_torque_nm);
+                    m.mass_kg=cj.value("mass_kg",m.mass_kg);m.axis_local=read_vec3(cj.value("axis_local",json()),m.axis_local);
+                    m.ready_channel=cj.value("ready_channel",m.ready_channel);
+                    m.throttle_channel=cj.value("throttle_channel",std::string{});m.regen_channel=cj.value("regen_channel",std::string{});
+                    m.direction_channel=cj.value("direction_channel",std::string{});
+                    p.components.push_back({id,m});
+                } else if (type == "engine") {
                     // Engine garage P2: the component's slots (vehicle level - the user layer, applied above, already
                     // rewrote them), then the engine file with its "extends" chain, then the slot assembly (ECU and cam
                     // parts merged; forced induction, installation and thermal resolved to paths). See engine_parts.h.

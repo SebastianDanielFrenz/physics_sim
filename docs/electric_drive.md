@@ -1,0 +1,15 @@
+# Electric drives
+
+Vehicle powertrain components may include any number of `electric_motor` machines and `battery` stores alongside the existing combustion engine, gearbox and shaft components. Motor port `shaft` connects through the usual `shafts`; the motor's `battery` names a battery component. A motor does not occupy the single combustion-engine slot. Motors may share a battery, share an ICE shaft, or drive independent axles. Electrical resources are separate from fuel/fluid links.
+
+`battery`: `capacity_kwh`, `initial_soc` (0..1), `max_discharge_w`, `max_charge_w`, `mass_kg`. Runtime energy uses joules through IEnergyStore. The shared store allocates each substep's charge/discharge budget in component-array order. There is no voltage, thermal, cell-resistance or degradation model in this increment.
+
+`electric_motor`: `battery`, `peak_torque_nm`, `max_power_w`, `max_rpm`, `inertia_kgm2`, `efficiency` (0..1, exclusive zero), `regen_torque_nm`, `mass_kg`, `axis_local`. A sampled constant-torque/constant-power envelope controls the shaft torque, with a rotor-inertia prediction for the substep's power budget. Torque is zero beyond max_rpm. Mechanical work uses solved shaft speed; electrical energy accounts for fixed motor/inverter efficiency. Regeneration uses an implicit damping torque to avoid reversing the rotor at a stop. Existing friction brakes remain independent; brake blending is a future controller task.
+
+`ready_channel` defaults to `electric.ready` (registered default 1), independent of combustion ignition. Optional `throttle_channel`, `regen_channel`, `direction_channel` override the vehicle pedal/brake and selected gearbox/EV direction. These seams allow an eventual hybrid supervisor to command machines independently without rewriting the motor. This increment proves a shared ICE shaft with ignition off; a hybrid strategy, engine-start scheduling and torque blending are not implemented here.
+
+Without a gearbox, selector requests latch D (>0), N (0), R (<0); spawn is N. An ordinary gearbox retains its normal controller, and machines follow its selected direction. TC acts on the electric torque ceiling using physical contact slip. There is no idle, starter, clutch or launch-controller requirement for an EV. Reset does not refill the battery.
+
+PowertrainSnapshot adds `electric_fitted`, `electric_ready`, `electric_motor_count`, `motor_rpm` (fastest machine), `motor_torque_nm` (signed sum), `electric_power_w` (signed mechanical sum), `battery_soc` (energy-weighted), `battery_capacity_kwh` and `battery_power_w` (positive discharge). The new cumulative energy terms are `electric_out`, `battery_draw`, `electric_loss`; the mechanical ledger includes electric_out. EV speedo uses driven-hub rotation. Fixed-reduction EVs publish transmission_kind=4 and D/N/R through transmission_selector. Combustion engine state remains Off on an EV; adapters must display READY rather than infer readiness from combustion state.
+
+All fixture ratings are authored test parameters, not production-car measurements. `data/vehicles/car_electric.json` is a two-axle 600 kW sedan testbed with a shared 90 kWh pack.

@@ -371,7 +371,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
                                  aero_launch_request_, &aero_control_target_deg);
     }
     // Virtual ideal six-axis IMU: finite-difference acceleration, gravity
-    // compensated using attitude. Only this sensor reading reaches TC and ABS/ESC. Sampled every tick whether or not they run: a
+    // compensated using attitude. Only this sensor reading reaches ABS/ESC (TC uses physical contact state). Sampled every tick whether or not they run: a
     // sample left over from before an assist was switched off would read as one huge acceleration when it comes back on.
     real imu_accel=0;
     if(imu_have_previous_&&tick_dt>0) imu_accel=pose0.orientation.inverse().rotate((motion0.linear-imu_previous_velocity_world_)/tick_dt).x;
@@ -874,6 +874,23 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         dl.clutch_slip = powertrain_.has_clutch() ? powertrain_.clutch_slip() : real(0.0);
         dl.clutch_torque = powertrain_.clutch_torque();
         snap.drive_power_w = powertrain_.transmission_input_power_w();
+        snap.electric_fitted=powertrain_.has_electric_motors();
+        if(snap.electric_fitted) {
+            if(!powertrain_.has_gearbox()) {
+                snap.transmission_kind=4; // single-speed electric drive
+                const int direction=powertrain_.electric_direction()<0?-1:(powertrain_.electric_direction()>0?1:0);
+                snap.transmission_selector=static_cast<std::int8_t>(direction);
+                snap.gear=static_cast<decltype(snap.gear)>(direction);
+            }
+            snap.electric_motor_count=static_cast<std::uint8_t>(powertrain_.electric_motor_count());
+            snap.electric_ready=powertrain_.electric_ready();
+            snap.motor_rpm=powertrain_.electric_rpm();snap.motor_torque_nm=powertrain_.electric_torque_nm();
+            snap.electric_power_w=powertrain_.electric_power_w();
+            if(!powertrain_.has_engine())snap.drive_power_w=snap.electric_power_w;
+            snap.battery_soc=powertrain_.battery_soc();snap.battery_capacity_kwh=powertrain_.battery_capacity_kwh();
+            snap.battery_power_w=powertrain_.battery_power_w();
+        }
+
         dl.gear = snap.gear;
         dl.grind_active = powertrain_.has_gearbox() ? powertrain_.last_gearbox_result().grind_active : false;
         dl.grind_events = powertrain_.has_gearbox() ? powertrain_.gearbox().grind_events() : 0u;

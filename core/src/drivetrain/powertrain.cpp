@@ -276,6 +276,10 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             // has one) is already declared by the TorqueMapEngineDesc branch
             // above, so no separate declaration is needed for that case.
             if (!tcd->hand_lever_channel.empty()) add(ChannelDecl{tcd->hand_lever_channel, real(0.0)});
+        } else if (const auto* motor = std::get_if<ElectricMotorDesc>(&c.params)) {
+            add(ChannelDecl{motor->ready_channel,real(1)});
+            for(const auto* name:{&motor->throttle_channel,&motor->regen_channel,&motor->direction_channel})
+                if(!name->empty())add(ChannelDecl{*name,real(0)});
         } else if (const auto* gb = std::get_if<GearboxDesc>(&c.params)) {
             // Automatic gearbox plan A1: the D/S mode switch of an Automatic/DualClutch box (default 0 = D).
             if (is_clutch_to_clutch(gb->type)) add(ChannelDecl{kTransmissionModeChannel, real(0.0)});
@@ -328,7 +332,9 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         if (!component_index_of.emplace(c.id, static_cast<int>(ci)).second) {
             throw std::runtime_error("vehicle '" + vehicle_name + "': powertrain component id '" + c.id + "' is not unique");
         }
-        if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) {
+        if (const auto* motor = std::get_if<ElectricMotorDesc>(&c.params)) {
+            add_port(component_port_key(c.id,"shaft"),motor->inertia_kgm2,motor->axis_local);
+        } else if (const auto* e = std::get_if<TorqueMapEngineDesc>(&c.params)) {
             if (engine_component_index >= 0) {
                 throw std::runtime_error("vehicle '" + vehicle_name + "': more than one engine component - I3 supports at most one");
             }
@@ -1851,8 +1857,21 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     // last) - engine/clutch/gearbox are NOT here (typed members instead, see
     // this file's own top comment). -------------------------------------------
     components_.reserve(pt.components.size() + 1);
+    std::unordered_map<std::string,Battery*> battery_of;
+    for(const auto& c:pt.components) if(const auto* b=std::get_if<BatteryDesc>(&c.params)) {
+        auto store=std::make_unique<Battery>(*b);battery_of[c.id]=store.get();batteries_.push_back(std::move(store));
+    }
+
     for (const ComponentDesc& c : pt.components) {
-        if (const auto* g = std::get_if<GearPairDesc>(&c.params)) {
+        if (const auto* motor = std::get_if<ElectricMotorDesc>(&c.params)) {
+            const auto store=battery_of.find(motor->battery);
+            if(store==battery_of.end())throw std::runtime_error("electric motor battery reference is missing or is not a battery: "+motor->battery);
+            const auto decls=declare_control_channels(pt);
+            const auto slot=[&](const std::string& name){for(std::size_t i=0;i<decls.size();++i)if(decls[i].name==name)return static_cast<int>(i);return -1;};
+            auto machine=std::make_unique<ElectricMotor>(node_for_key(component_port_key(c.id,"shaft")),*motor,*store->second,
+                slot(motor->throttle_channel),slot(motor->regen_channel),slot(motor->direction_channel),slot(motor->ready_channel));
+            electric_motors_.push_back(machine.get());components_.push_back(std::move(machine));
+        } else if (const auto* g = std::get_if<GearPairDesc>(&c.params)) {
             components_.push_back(std::make_unique<GearPair>(node_for_key(component_port_key(c.id, "in")),
                                                                node_for_key(component_port_key(c.id, "out")), *g));
         } else if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
@@ -2382,6 +2401,12 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         }
     }
 
+    if(!electric_motors_.empty()) {
+        if(gearbox_)electric_direction_=static_cast<real>(gearbox_->current_position());
+        else if(ctx.gear_request!=kGearRequestNone)electric_direction_=ctx.gear_request<0?-1:(ctx.gear_request>0?1:0);
+        ctx.electric_direction=electric_direction_;
+    }
+    for(auto& b:batteries_) b->begin_substep(ctx.h);
     for (auto& c : components_) c->pre_solve(ctx, network_, assembly_);
 
     // --- PHYS-033 P4 I4 C13: compliant shafts (see CompliantShaft in
@@ -2646,7 +2671,7 @@ void Powertrain::post_solve_components(const ComponentSubstepCtx& ctx) {
 void Powertrain::end_tick() {
     const PowertrainEnergy L = ledger_;
     const PowertrainEnergy& L0 = ledger_tick_start_;
-    ledger_.balance_error = (L.rotor_ke - L0.rotor_ke) - (L.engine_out - L0.engine_out) - (L.starter_in - L0.starter_in) -
+    ledger_.balance_error = (L.rotor_ke - L0.rotor_ke) - (L.electric_out - L0.electric_out) - (L.engine_out - L0.engine_out) - (L.starter_in - L0.starter_in) -
                              (L.external_reset - L0.external_reset) + (L.wheel_out - L0.wheel_out) +
                              (L.tyre_loss - L0.tyre_loss) + (L.brake_loss - L0.brake_loss) + (L.gear_loss - L0.gear_loss) +
                              (L.clutch_loss - L0.clutch_loss) + (L.synchro_loss - L0.synchro_loss) +
@@ -2885,6 +2910,11 @@ real Powertrain::clutch_slip() const {
 
 std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = network_.fold_state_hash(seed);
+    for(const auto& b:batteries_)h=b->fold_state_hash(h);
+    if(!electric_motors_.empty()) {
+        const auto* b=reinterpret_cast<const unsigned char*>(&electric_direction_);
+        for(std::size_t i=0;i<sizeof(electric_direction_);++i){h^=b[i];h*=1099511628211ULL;}
+    }
     for (const auto& c : components_) h = c->fold_state_hash(h);
     if (engine_) h = engine_->fold_state_hash(h);
     if (gearbox_) h = gearbox_->fold_state_hash(h);
