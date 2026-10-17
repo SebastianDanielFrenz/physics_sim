@@ -881,6 +881,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         dl.gear_load_torque = real(0.0); // deferred with PowertrainDebug's mesh torques (commit 7)
         dl.clutch_slip = powertrain_.has_clutch() ? powertrain_.clutch_slip() : real(0.0);
         dl.clutch_torque = powertrain_.clutch_torque();
+        snap.drive_power_w = powertrain_.transmission_input_power_w();
         dl.gear = snap.gear;
         dl.grind_active = powertrain_.has_gearbox() ? powertrain_.last_gearbox_result().grind_active : false;
         dl.grind_events = powertrain_.has_gearbox() ? powertrain_.gearbox().grind_events() : 0u;

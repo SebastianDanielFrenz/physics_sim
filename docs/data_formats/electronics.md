@@ -507,7 +507,7 @@ FMVSS 126 sine with dwell on a rear-grip x0.75 fixture: ESC on YRR 0.19 / 0.00, 
 ## Drive modes (assists I7, vault PHYS-074) {#drive-modes}
 
 `kind: "drive_modes"`, `ps::vehicle::DriveModesDesc` (`ps/vehicle/drive_modes_desc.h`), stored as `VehicleDesc::drive_modes`.
-A **car-specific** part (it overrides numbers of the car's own `manual_tcu`): attached like the other electronics parts, as a
+A **car-specific** part (it overrides numbers of the car's transmission controller): attached like the other electronics parts, as a
 `controllers` entry of type `electronics` or through `VehicleLoadOptions::electronics` (`"none"` removes it). At most one per
 car (`"at most one drive_modes per vehicle"`); `extends` works (RFC 7396, so a `null` mode removes it); unknown keys are
 rejected at every level. Shipped: `data/electronics/drive_modes_car_hyper_n2o.json` (owner values 2026-10-13, `[AS]`; racing added in Q3 / I8 `[AS]`),
@@ -540,7 +540,7 @@ the mode numbers belong to one car's gearing and engine.
 | `abs_default` | optional boolean (I5 part 2): written into `assist.abs` when this mode becomes effective (same rule as `traction_control_default`); ignored on a car without the `abs` block |
 | `esc_default` | optional `off` / `on` / `sport` (I6): written into `assist.esc` the same way; ignored on a car without the `esc` block |
 
-An override needs the car's `manual_tcu` (every shipped car has one).
+Shift and clutch-close overrides require a `manual_tcu` or `automatic_tcu`. On automatic/DCT boxes, the shift points override the active D/S schedule, and the close time controls the shift-clutch engagement ramp. Traction-control, launch-control, nitrous and EPB mode rules remain available with either controller. The pedal plan P1 policy is unchanged: mode-specific pedal bends apply to automatic/DCT/CVT gearboxes; manual and sequential gearboxes keep their unbent pedal mapping.
 
 **Channel** `assist.drive_mode`, registered only on a car with the part: `0` eco, `1` normal, `2` sport, `3` racing (append-only; Q3 / I8 added racing, so a value `>= 3` now means racing), rounded
 and clamped; default = the part's `default_mode` code. A request for a mode the part does not offer maps to the part's
