@@ -12,6 +12,7 @@
 #include "../../core/src/drivetrain/auto_transmission.h"
 
 #include "ps/io/vehicle_io.h"
+#include "ps/vehicle/vehicle_reset.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -474,5 +475,32 @@ TEST_CASE("Live transmission power is signed and populated for every gearbox kin
         std::printf("[drive power] %s peak=%.3f kW overrun=%.3f kW\n", file.c_str(), double(peak/1000.0), double(overrun/1000.0));
         CHECK(peak > 1000.0);
         CHECK(overrun < -100.0);
+    }
+}
+
+TEST_CASE("Automatic, DCT and CVT reset preserves idle and starter operation", "[automatic][respawn]") {
+    for (const char* file : {"car_sedan_at.json", "car_sedan_dct.json", "car_sedan_cvt.json", "car_sedan_cvt_clutch.json"}) {
+        INFO(file);
+        Run r(file);
+        r.w().set_control("gear_request", kD);
+        r.w().set_control("throttle", 0.5);
+        r.run(5.0);
+        r.w().set_control("throttle", 0.0);
+        r.w().set_control("brake", 1.0);
+        r.w().set_control("gear_request", 0.0);
+        vehicle::VehicleResetOptions opts;
+        opts.gear = 0;
+        opts.clutch_locked = false;
+        r.w().reset_vehicle(r.rig.vehicle, opts);
+        r.run(1.0);
+        CHECK(r.pt().engine_state == drivetrain::EngineState::Running);
+        CHECK(r.pt().engine_rpm > 500.0);
+        r.w().set_control("ignition", 0.0);
+        r.run(2.0);
+        r.w().set_control("ignition", 1.0);
+        r.w().set_control("starter", 1.0);
+        r.run(4.0);
+        CHECK(r.pt().engine_state == drivetrain::EngineState::Running);
+        CHECK(r.pt().engine_rpm > 500.0);
     }
 }
