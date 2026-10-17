@@ -25,6 +25,7 @@
 #include "clutch.h"
 #include "components.h"
 #include "energy_store.h"
+#include "electric_drive.h"
 #include "engine_thermal.h"
 #include "engine_torque_map.h"
 #include "gearbox.h"
@@ -348,6 +349,11 @@ public:
     // radius of the hubs reached from gearbox.out (== driven_wheel_mean_
     // radius_ for every single-diff vehicle), see powertrain.cpp.
     [[nodiscard]] real approx_speed_mps() const {
+        if(!gearbox_&&!electric_motors_.empty()) {
+            real sum=0;int count=0;
+            for(std::size_t i=0;i<hub_nodes_.size();++i)if(driven_[i]){sum+=network_.omega(hub_nodes_[i]);++count;}
+            return count>0?std::abs(sum/static_cast<real>(count))*driven_wheel_mean_radius_:0;
+        }
         const real r_fd = gearbox_output_ratio_magnitude();
         return r_fd > real(0.0) ? std::abs(gearbox_out_omega()) / r_fd * speedo_radius_ : real(0.0);
     }
@@ -368,6 +374,16 @@ public:
     // PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): park pawl.
     // nullptr/0/false for every vehicle without one - same nullable-pointer
     // pattern as transfer_case_ above.
+    [[nodiscard]] real electric_direction() const {return electric_direction_;}
+    [[nodiscard]] bool electric_ready() const {for(const auto* m:electric_motors_)if(m->ready&&battery_soc()>0)return true;return false;}
+    [[nodiscard]] std::size_t electric_motor_count() const {return electric_motors_.size();}
+    [[nodiscard]] bool has_electric_motors() const {return !electric_motors_.empty();}
+    [[nodiscard]] real electric_power_w() const {real p=0;for(const auto* m:electric_motors_)p+=m->power_w;return p;}
+    [[nodiscard]] real electric_torque_nm() const {real t=0;for(const auto* m:electric_motors_)t+=m->torque_nm;return t;}
+    [[nodiscard]] real electric_rpm() const {real r=0;for(const auto* m:electric_motors_)r=std::max(r,m->rpm);return r;}
+    [[nodiscard]] real battery_soc() const {real j=0,c=0;for(const auto& b:batteries_){j+=b->content();c+=b->capacity();}return c>0?j/c:0;}
+    [[nodiscard]] real battery_capacity_kwh() const {real j=0;for(const auto& b:batteries_)j+=b->capacity();return j/3600000;}
+    [[nodiscard]] real battery_power_w() const {real p=0;for(const auto* m:electric_motors_)p+=m->battery_power_w;return p;}
     [[nodiscard]] bool has_park_lock() const { return park_lock_ != nullptr; }
     [[nodiscard]] real park_lock_engaged() const { return (park_lock_ && park_lock_->engaged()) ? real(1.0) : real(0.0); }
     [[nodiscard]] real park_lock_torque() const { return park_lock_ ? network_.row_lambda(park_lock_row_) : real(0.0); }
@@ -653,6 +669,9 @@ private:
     ShaftNetwork network_;
     Assembly assembly_;
     Assembly projection_assembly_; // dedicated scratch for apply_topology_switch, never touches assembly_
+    real electric_direction_=0; // latched fixed-reduction selector; N at spawn
+    std::vector<std::unique_ptr<Battery>> batteries_;
+    std::vector<ElectricMotor*> electric_motors_; // owned by components_, component-array order
     std::vector<std::unique_ptr<IComponent>> components_; // gear_pair(s), differential(s), then brakes (appended last)
     // Non-owning aliases into components_, pt.components order (empty if
     // this vehicle's powertrain has no differential) - the debug reads and

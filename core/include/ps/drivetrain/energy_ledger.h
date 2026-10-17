@@ -20,6 +20,9 @@ struct PowertrainEnergy {
     real integrator_loss = 0.0; // 1/2*Delta(omega)^T*J*Delta(omega), cumulative, >= 0 (linearly-implicit Euler's own dissipation;
                                 // with compliant shafts it also carries their spring residual and may then decrease - see shaft_pe)
     real rotor_ke = 0.0;        // 1/2*sum(J_i*omega_i^2), instantaneous (NOT cumulative - "stored" in the plan's own naming)
+    real electric_out = 0; // signed motor mechanical work, J
+    real battery_draw = 0; // signed electrical energy withdrawn, J; negative = regeneration
+    real electric_loss = 0; // motor/inverter conversion loss, J
     real balance_error = 0.0;   // per-tick closure residual (plan section 8); should stay near 0 (< 1e-9 relative)
 
     // PHYS-033 I3 (plan section 7.3): additive, all 0 until a caller actually

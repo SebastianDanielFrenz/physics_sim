@@ -12,6 +12,7 @@
 // LSD/locked diffs, transfer case, park lock, pto and (C13) compliant shafts.
 
 #pragma once
+#include "ps/drivetrain/electric_drive_desc.h"
 
 #include "ps/drivetrain/engine_cycle_desc.h" // CycleModelDesc (PHYS-033 P4 I7c C16a, SimulatedEngineDesc::cycle)
 #include "ps/drivetrain/engine_thermal_desc.h" // EngineThermalConfig (engine thermal plan T1, PowertrainDesc::thermal)
@@ -911,7 +912,7 @@ struct FuelTankDesc {
 // it (no port, node or row - like FuelTankDesc they are wired by fluid links).
 using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc,
                                       ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc, FuelTankDesc,
-                                      SimulatedEngineDesc, N2oBottleDesc, NitrousKitDesc>;
+                                      SimulatedEngineDesc, N2oBottleDesc, NitrousKitDesc, BatteryDesc, ElectricMotorDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty

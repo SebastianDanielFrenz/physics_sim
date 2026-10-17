@@ -39,6 +39,7 @@ namespace ps::drivetrain {
 // independent of ps::vehicle::ControlInputs/ManualTcu so this stays a plain
 // value type with no dependency on vehicle_instance.h or manual_tcu.h.
 struct ComponentSubstepCtx {
+    real electric_direction = 1.0; // actual selected gearbox direction, or the EV selector
     real h = 0.0;
     real throttle = 0.0;
     real brake = 0.0;
