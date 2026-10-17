@@ -393,6 +393,7 @@ public:
     [[nodiscard]] real converter_speed_ratio() const { return converter_ ? conv_sr_ : real(0.0); }
     [[nodiscard]] real lockup_engagement() const { return auto_ ? auto_->lockup_engagement() : real(0.0); }
     [[nodiscard]] bool transmission_sport_mode() const { return auto_ != nullptr && last_mode_channel_ >= real(0.5); }
+    [[nodiscard]] real transmission_input_power_w() const; // signed crank-side power, all gearbox kinds
     [[nodiscard]] real converter_pump_torque() const { return converter_ ? conv_tau_p_ : real(0.0); }
     [[nodiscard]] real converter_turbine_torque() const { return converter_ ? conv_tau_t_ : real(0.0); }
     // CVT plan C1: |variator row slip| [rad/s at the input] while the belt (not the forward clutch) sets its capacity,

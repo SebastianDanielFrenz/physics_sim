@@ -446,3 +446,33 @@ TEST_CASE("DCT crawl traction capacity is shared across the shift rows", "[autom
     CHECK(inertia_phase);
     CHECK(closing_phase);
 }
+
+TEST_CASE("Live transmission power is signed and populated for every gearbox kind", "[automatic][drive_power]") {
+    for (const std::string& file : {std::string(PS_SOURCE_DIR) + "/data/vehicles/car_sedan.json",
+                                   fixture("car_sedan_at.json"), fixture("car_sedan_dct.json"),
+                                   fixture("car_sedan_cvt.json"), fixture("car_sedan_cvt_clutch.json")}) {
+        INFO(file);
+        auto rig = ps_test::build_vehicle_rig(file, kMass, kHalfExtents, kOriginHeight, 0.0, 4);
+        auto& world = *rig.world;
+        ps_test::settle(world, 1.0);
+        const bool manual = world.powertrain_state(rig.vehicle).transmission_kind == 0;
+        world.set_control("gear_request", manual ? 1.0 : kD);
+        world.set_control("throttle", 0.4);
+        real peak = 0.0, overrun = 0.0;
+        for (int i = 0; i < 240 * 8; ++i) {
+            if (i == 240 * 6) world.set_control("throttle", 0.0);
+            world.step();
+            const auto& pt = world.powertrain_state(rig.vehicle);
+            REQUIRE(std::isfinite(pt.drive_power_w));
+            if (manual && !pt.engines.empty()) {
+                const real old_power = -pt.driveline.clutch_torque * pt.engines[0].omega;
+                CHECK(std::abs(pt.drive_power_w - old_power) < 1e-8);
+            }
+            if (i < 240 * 6) peak = std::max(peak, pt.drive_power_w);
+            else overrun = std::min(overrun, pt.drive_power_w);
+        }
+        std::printf("[drive power] %s peak=%.3f kW overrun=%.3f kW\n", file.c_str(), double(peak/1000.0), double(overrun/1000.0));
+        CHECK(peak > 1000.0);
+        CHECK(overrun < -100.0);
+    }
+}

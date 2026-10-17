@@ -2968,6 +2968,24 @@ std::uint64_t Powertrain::simulated_engine_steady_rebuild_count() const {
     return sim_engine_ptr_ != nullptr ? sim_engine_ptr_->steady_rebuild_count() : 0;
 }
 
+real Powertrain::transmission_input_power_w() const {
+    if (!engine_) return real(0.0);
+    real reaction = clutch_torque();
+    if (auto_) {
+        if (converter_) {
+            // Same solved pump reaction as the converter's energy ledger,
+            // plus the mechanical lock-up path in parallel with the fluid.
+            const real wp = network_.omega(converter_pump_);
+            const real slip = network_.coupling_velocity(converter_coupling_);
+            reaction = conv_tau_p_ + conv_c_ * conv_v_old_ - conv_c_ * slip
+                       - conv_d_pump_ * (wp - conv_wp_old_) + network_.row_lambda(lockup_row_);
+        } else {
+            reaction = network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_);
+        }
+    }
+    return -reaction * engine_omega();
+}
+
 void Powertrain::fill_gearbox_sound(DrivelineSoundState& out) const {
     out.gear_type = static_cast<std::uint8_t>(gearbox_sound_.gear_type);
     out.mesh_frequency_hz[0] = real(0.0);
