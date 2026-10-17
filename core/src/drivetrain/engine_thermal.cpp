@@ -144,7 +144,7 @@ real EngineThermal::radiator_effectiveness(real ntu, real cr) {
 }
 
 real EngineThermal::radiator_conductance(real air_mass_flow_kg_s, real coolant_mass_flow_kg_s) const {
-    return radiator_conductance_w_k(cfg_, air_mass_flow_kg_s, coolant_mass_flow_kg_s);
+    return radiator_conductance_w_k(cfg_, air_mass_flow_kg_s, coolant_mass_flow_kg_s, capacity_.radiator_ua_scale);
 }
 
 void EngineThermal::rebuild_scales() {
@@ -154,6 +154,7 @@ void EngineThermal::rebuild_scales() {
         return;
     }
     plant_k_ = k_curve_.evaluate(t_o_);
+    if (wear_.friction_scale != 1.0) plant_k_ *= wear_.friction_scale; // worn internals (EngineWear); the ECU's k is not
     // The ECU's oil temperature reading is quantised to 1 K relative to T_ref, so a warm start (oil exactly T_ref)
     // and every temperature within half a kelvin of it give exactly the reference scale 1.0.
     const real t_ref = cfg_.engine.oil.reference_temperature_k;
@@ -205,6 +206,17 @@ void EngineThermal::begin_tick() {
         has_pending_ = false;
         set_state(pending_);
     }
+    if (has_pending_capacity_) {
+        has_pending_capacity_ = false;
+        capacity_ = pending_capacity_;
+    }
+    if (has_pending_wear_) {
+        has_pending_wear_ = false;
+        wear_ = pending_wear_;
+        rebuild_scales();
+        snapshot_.friction_scale = plant_k_;
+        snapshot_.wear_friction_scale = wear_.friction_scale;
+    }
 }
 
 void EngineThermal::step(real engine_rpm) {
@@ -228,7 +240,7 @@ void EngineThermal::step(real engine_rpm) {
 
     // 3. Conductances.
     const real ram = std::max(0.0, env_.ram_speed_mps);
-    const real m_air = radiator_air_mass_flow_kg_s(c, ram, fan_on_, t_a, env_.ambient_pressure_pa);
+    const real m_air = radiator_air_mass_flow_kg_s(c, ram, fan_on_, t_a, env_.ambient_pressure_pa, capacity_.fan_flow_scale);
     const real pump_l_min = coolant_pump_flow_l_min(cfg_, engine_rpm);
     const real m_coolant = x * pump_l_min / 60000.0 * e.coolant_density_kg_m3;
     const real g_rad = radiator_conductance(m_air, m_coolant);
@@ -320,7 +332,13 @@ void EngineThermal::step(real engine_rpm) {
     snapshot_.oil_c = t_o_ - kCelsiusToKelvin;
     snapshot_.thermostat_opening = x;
     snapshot_.fan_on = fan_on_;
-    snapshot_.fan_power_w = fan_on_ ? c.fan.power_w : 0.0;
+    // A damaged fan (fan_flow_scale < 1) turns slower. Fan affinity laws: flow ~ speed, power ~ speed^3, so the electrical
+    // power it draws goes with the cube of the flow factor. Skipped at exactly 1 (bit for bit the loaded power_w).
+    const real fs = capacity_.fan_flow_scale;
+    snapshot_.fan_power_w = fan_on_ ? (fs == 1.0 ? c.fan.power_w : c.fan.power_w * fs * fs * fs) : 0.0;
+    snapshot_.radiator_ua_scale = capacity_.radiator_ua_scale;
+    snapshot_.fan_flow_scale = capacity_.fan_flow_scale;
+    snapshot_.wear_friction_scale = wear_.friction_scale;
     snapshot_.radiator_heat_w = g_rad * (t_e_ - t_a);
     snapshot_.metal_c = (has_jacket_ ? t_m_ : t_e_) - kCelsiusToKelvin;
     snapshot_.wall_heat_w = e.wall_heat_fraction * released_ / dt;
@@ -356,6 +374,13 @@ std::uint64_t EngineThermal::fold_state_hash(std::uint64_t seed) const {
     const std::uint8_t fan = fan_on_ ? 1 : 0;
     fold(&fan, sizeof(fan));
     if (has_jacket_) fold(&t_m_, sizeof(t_m_));
+    // The cooling capacity is an input like the controls, but it persists; fold it once it is not the default so a
+    // damaged run hashes differently, while every run at (1, 1) keeps its previous hash.
+    if (capacity_.radiator_ua_scale != 1.0 || capacity_.fan_flow_scale != 1.0) {
+        fold(&capacity_.radiator_ua_scale, sizeof(capacity_.radiator_ua_scale));
+        fold(&capacity_.fan_flow_scale, sizeof(capacity_.fan_flow_scale));
+    }
+    if (wear_.friction_scale != 1.0) fold(&wear_.friction_scale, sizeof(wear_.friction_scale)); // same rule as the capacity
     return h;
 }
 
@@ -392,19 +417,19 @@ ThermalCapacities thermal_capacities(const EngineThermalDesc& engine) {
 }
 
 real radiator_air_mass_flow_kg_s(const CoolingSystemDesc& cooling, real ram_speed_mps, bool fan_on, real ambient_k,
-                                 real ambient_pressure_pa) {
+                                 real ambient_pressure_pa, real fan_flow_scale) {
     const real ram = std::max(0.0, ram_speed_mps);
-    const real v_face = std::max(cooling.radiator.ram_coefficient * ram, fan_on ? cooling.fan.face_velocity_m_s : 0.0);
+    const real v_face = std::max(cooling.radiator.ram_coefficient * ram, fan_on ? cooling.fan.face_velocity_m_s * fan_flow_scale : 0.0);
     const real rho_air = ambient_pressure_pa / (kGasConstantAir * ambient_k);
     return rho_air * cooling.radiator.frontal_area_m2 * v_face;
 }
 
-real radiator_conductance_w_k(const EngineThermalConfig& cfg, real air_mass_flow_kg_s, real coolant_mass_flow_kg_s) {
+real radiator_conductance_w_k(const EngineThermalConfig& cfg, real air_mass_flow_kg_s, real coolant_mass_flow_kg_s, real radiator_ua_scale) {
     if (!(air_mass_flow_kg_s > 0.0) || !(coolant_mass_flow_kg_s > 0.0)) return 0.0;
     const CoolingSystemDesc::Radiator& r = cfg.cooling.radiator;
     const real c_a = air_mass_flow_kg_s * kCpAir;
     const real c_c = coolant_mass_flow_kg_s * cfg.engine.coolant_cp_j_kg_k;
-    const real ua = r.ua_ref_w_k * ps::math::pow(air_mass_flow_kg_s / r.air_mass_flow_ref_kg_s, r.ua_exponent);
+    const real ua = r.ua_ref_w_k * ps::math::pow(air_mass_flow_kg_s / r.air_mass_flow_ref_kg_s, r.ua_exponent) * radiator_ua_scale;
     const real c_min = std::min(c_a, c_c);
     const real c_max = std::max(c_a, c_c);
     const real cr = c_min / c_max;

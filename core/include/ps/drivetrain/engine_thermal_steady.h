@@ -30,9 +30,9 @@ struct ThermalCapacities {
 
 // Radiator air mass flow (kg/s): rho_air(p, T) * frontal area * max(ram_coefficient * ram, fan face velocity if on).
 [[nodiscard]] real radiator_air_mass_flow_kg_s(const CoolingSystemDesc& cooling, real ram_speed_mps, bool fan_on, real ambient_k,
-                                              real ambient_pressure_pa);
+                                              real ambient_pressure_pa, real fan_flow_scale = 1.0);
 // Radiator conductance G_rad = eps * C_min (W/K), cross-flow both unmixed; 0 if either flow is <= 0.
-[[nodiscard]] real radiator_conductance_w_k(const EngineThermalConfig& cfg, real air_mass_flow_kg_s, real coolant_mass_flow_kg_s);
+[[nodiscard]] real radiator_conductance_w_k(const EngineThermalConfig& cfg, real air_mass_flow_kg_s, real coolant_mass_flow_kg_s, real radiator_ua_scale = 1.0);
 
 struct SteadyThermalInput {
     real engine_rpm = 0.0;

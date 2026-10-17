@@ -212,6 +212,12 @@ public:
     // Queues a new coolant/oil state for the NEXT begin_tick() (wax/play follow the coolant, fan off). Throws
     // std::runtime_error for a vehicle without thermal or a non-finite value.
     void request_thermal_state(const EngineThermalState& s);
+    // Queues new cooling-system capacity factors for the NEXT begin_tick() (see CoolingCapacity). Throws
+    // std::runtime_error for a vehicle without thermal or a factor that is not finite or outside [0, 1e3].
+    void request_cooling_capacity(const CoolingCapacity& c);
+    // Queues new engine-internals wear for the NEXT begin_tick() (see EngineWear). Throws std::runtime_error for a
+    // vehicle without thermal or a factor that is not finite or outside [0, 1e3].
+    void request_engine_wear(const EngineWear& w);
     // Test hook (plan U9): pins both friction scales; see EngineThermal.
     void thermal_friction_scale_override_for_test(real k) {
         if (thermal_) thermal_->set_friction_scale_override_for_test(k);
@@ -393,6 +399,7 @@ public:
     [[nodiscard]] real converter_speed_ratio() const { return converter_ ? conv_sr_ : real(0.0); }
     [[nodiscard]] real lockup_engagement() const { return auto_ ? auto_->lockup_engagement() : real(0.0); }
     [[nodiscard]] bool transmission_sport_mode() const { return auto_ != nullptr && last_mode_channel_ >= real(0.5); }
+    [[nodiscard]] real transmission_input_power_w() const; // signed crank-side power, all gearbox kinds
     [[nodiscard]] real converter_pump_torque() const { return converter_ ? conv_tau_p_ : real(0.0); }
     [[nodiscard]] real converter_turbine_torque() const { return converter_ ? conv_tau_t_ : real(0.0); }
     // CVT plan C1: |variator row slip| [rad/s at the input] while the belt (not the forward clutch) sets its capacity,
