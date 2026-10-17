@@ -10,61 +10,78 @@
 using namespace ps;
 using namespace ps::vehicle;
 namespace {
-std::array<TractionWheelSensor,4> sensors(real speed,bool awd=true) {
-    return {{{speed,0,1,.8,awd},{speed,0,1,-.8,awd},{speed,0,-1,.8,true},{speed,0,-1,-.8,true}}};
+std::array<TractionWheelState,4> wheels(real ground, real peripheral) {
+    return {{{peripheral,ground,3500,true,true},{peripheral,ground,3500,true,true},
+             {peripheral,ground,3500,true,true},{peripheral,ground,3500,true,true}}};
 }
 }
-TEST_CASE("Sensor TC detects common AWD acceleration wheelspin without ground speed","[traction_control][vehicle][unit]") {
-    TractionControlDesc d;TractionControlState s;auto w=sensors(0);
-    step_traction_control(d,s,w,0,0,1,0,true,.01);
-    // All four wheels agree but accelerate far faster than the IMU reports.
-    for(int i=1;i<=100;++i){w=sensors(i*.08);step_traction_control(d,s,w,1,0,1,0,true,.01);}
-    CHECK(s.estimated_speed_m_s==Catch::Approx(1));CHECK(s.positive_slip>3);CHECK(s.torque_fraction<.1);
-    CHECK(s.intervening);
-    // Coast removes the intervention, reanchors only from wheel sensors.
-    CHECK(step_traction_control(d,s,w,0,0,0,0,true,.01)==1);
+TEST_CASE("Physics TC cuts actual forward reverse and standstill spin", "[traction_control][unit]") {
+    for (real sign : {real(-1),real(1)}) {
+        TractionControlDesc d; TractionControlState s;
+        auto w = wheels(sign*10,sign*20);
+        for(int i=0;i<50;++i)step_traction_control(d,s,w,sign*10,1,0,true,.004);
+        CHECK(s.positive_slip == Catch::Approx(1)); CHECK(s.torque_fraction < .2);
+        CHECK(s.intervening);
+        w=wheels(0,sign*5);
+        CHECK(traction_driven_slip(w,2)==Catch::Approx(2.5));
+        w=wheels(sign*10,sign*8);
+        CHECK(traction_driven_slip(w,2)==0);
+    }
+}
+TEST_CASE("Physics TC ignores estimator history and releases the logged false cut", "[traction_control][unit][low_speed]") {
+    TractionControlDesc d; d.min_fraction=.15; TractionControlState s;
+    s.initialized=true; s.estimated_speed_m_s=3.9623; s.torque_fraction=.15;
+    auto w=wheels(27.39/3.6,27.39/3.6*1.02);
+    for(int i=0;i<40;++i)step_traction_control(d,s,w,27.39/3.6,1,0,true,.004);
+    CHECK(s.estimated_speed_m_s==Catch::Approx(27.39/3.6));
+    CHECK(s.positive_slip==Catch::Approx(.02)); CHECK(s.torque_fraction==1);
     CHECK_FALSE(s.intervening);
 }
-TEST_CASE("Sensor TC preserves normal acceleration turns reverse and braking","[traction_control][vehicle][unit]") {
-    TractionControlDesc d;
-    SECTION("normal AWD launch") {
-        TractionControlState s;auto w=sensors(0);step_traction_control(d,s,w,0,0,1,0,true,.01);
-        for(int i=1;i<=500;++i){w=sensors(i*.03);CHECK(step_traction_control(d,s,w,3,0,1,0,true,.01)==1);}
-    }
-    SECTION("one driven wheel spinning with nondriven speed references") {
-        TractionControlState s;auto w=sensors(10,false);step_traction_control(d,s,w,0,0,.7,0,true,.01);
-        w[2].peripheral_speed_m_s=25;
-        for(int i=0;i<20;++i)step_traction_control(d,s,w,0,0,.7,0,true,.01);
-        CHECK(s.intervening);CHECK(s.estimated_speed_m_s==10);
-    }
-    SECTION("yaw compensation") {
-        TractionControlState s;auto w=sensors(10);
-        for(auto& wheel:w)wheel.peripheral_speed_m_s=10-wheel.y_m*.5;
-        CHECK(step_traction_control(d,s,w,0,.5,1,0,true,.01)==1);
-    }
-    SECTION("reverse AWD acceleration wheelspin") {
-        TractionControlState s;auto w=sensors(-10);step_traction_control(d,s,w,0,0,1,0,true,.01);w=sensors(-25);
-        for(int i=0;i<20;++i)step_traction_control(d,s,w,0,0,1,0,true,.01);
-        CHECK(s.intervening);
-        CHECK(step_traction_control(d,s,w,0,0,1,1,true,.01)==1);
-        CHECK(step_traction_control(d,s,w,0,0,1,0,false,.01)==1);
-    }
-    SECTION("slower rolling wheels are not positive spin") {
-        TractionControlState s;auto w=sensors(10);step_traction_control(d,s,w,0,0,1,0,true,.01);
-        w=sensors(7);CHECK(step_traction_control(d,s,w,0,0,1,0,true,.01)==1);
-    }
+TEST_CASE("Physics TC allows airborne wheel acceleration and reacts on landing", "[traction_control][unit]") {
+    TractionControlDesc d; TractionControlState s;
+    auto w=wheels(10,50);
+    for(auto& c:w)c.contact=false;
+    s.torque_fraction=.1;
+    CHECK(step_traction_control(d,s,w,10,1,0,true,.004)==1);
+    CHECK_FALSE(s.intervening); CHECK(s.positive_slip==0);
+    // One spinning airborne corner must not cut three rolling loaded wheels.
+    w=wheels(10,10); w[0].peripheral_speed_m_s=50; w[0].contact=false;
+    CHECK(step_traction_control(d,s,w,10,1,0,true,.004)==1);
+    w[0].contact=true; w[0].normal_load_n=0;
+    CHECK(step_traction_control(d,s,w,10,1,0,true,.004)==1);
+    w[0].normal_load_n=3500;
+    for(int i=0;i<50;++i)step_traction_control(d,s,w,10,1,0,true,.004);
+    CHECK(s.intervening); CHECK(s.torque_fraction<.2);
+    w=wheels(10,10);
+    for(int i=0;i<40;++i)step_traction_control(d,s,w,10,1,0,true,.004);
+    CHECK(s.torque_fraction==1);
 }
-TEST_CASE("Sensor TC validation reset hash and throttle safety priority","[traction_control][vehicle][unit]") {
+TEST_CASE("Physics TC respects per-patch corner speed, driven wheels and braking", "[traction_control][unit]") {
+    TractionControlDesc d; TractionControlState s;
+    auto w=wheels(10,10);
+    for(int i=0;i<4;++i)w[i].peripheral_speed_m_s=w[i].ground_speed_m_s=8+i;
+    CHECK(step_traction_control(d,s,w,10,1,0,true,.004)==1);
+    w[0].peripheral_speed_m_s=40;w[0].driven=false;
+    CHECK(step_traction_control(d,s,w,10,1,0,true,.004)==1);
+    w[1].peripheral_speed_m_s=40;
+    for(int i=0;i<50;++i)step_traction_control(d,s,w,10,1,0,true,.004);
+    CHECK(s.intervening);
+    CHECK(step_traction_control(d,s,w,10,1,1,true,.004)==1);
+    CHECK(step_traction_control(d,s,w,10,0,0,true,.004)==1);
+    CHECK(step_traction_control(d,s,w,10,1,0,false,.004)==1);
+}
+TEST_CASE("Physics TC validates data and preserves throttle safety priority", "[traction_control][unit]") {
     TractionControlDesc d;TractionControlState s;CHECK(fold_traction_control_hash(d,s,42)==42);
-    auto w=sensors(0);step_traction_control(d,s,w,0,0,1,0,true,.01);
-    CHECK(fold_traction_control_hash(d,s,42)!=42);s={};CHECK(fold_traction_control_hash(d,s,42)==42);
+    auto w=wheels(10,20);step_traction_control(d,s,w,10,1,0,true,.004);
+    CHECK(fold_traction_control_hash(d,s,42)!=42);
+    CHECK(step_traction_control(d,s,w,10,1,0,true,0)==1);CHECK_FALSE(s.initialized);
     d.target_slip=0;CHECK_THROWS(validate_traction_control(d));d.target_slip=.08;
     d.kp=std::numeric_limits<real>::infinity();CHECK_THROWS(validate_traction_control(d));
     drivetrain::ThrottleStage stage;drivetrain::ComponentSubstepCtx ctx;ctx.throttle=.8;
     ctx.tcu_throttle_floor=.7;ctx.tcu_throttle_ceiling=.9;ctx.traction_throttle_ceiling=.2;
     auto cmd=stage.evaluate(ctx);CHECK(cmd.command==.8);CHECK(cmd.ceiling==.2);CHECK(cmd.floor==.2);
 }
-TEST_CASE("Full hypercar TC reduces low-grip wheelspin with sensor-only feedback","[traction_control][vehicle][long]") {
+TEST_CASE("Full hypercar TC reduces low-grip wheelspin with physical contact feedback","[traction_control][vehicle][long]") {
     jobs::JobSystem pool(10);io::EngineMapOptions opt;opt.pool=&pool;
     auto base=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json",opt);
     for(auto& w:base.wheels)w.tyre.lambda_mux*=.25;
@@ -94,4 +111,30 @@ TEST_CASE("Full hypercar TC reduces low-grip wheelspin with sensor-only feedback
     std::printf("TC probe off slip=%.4f v=%.3f on slip=%.4f v=%.3f min_fraction=%.3f cuts=%d\n",off.mean_slip,off.speed,on.mean_slip,on.speed,on.min_fraction,on.cuts);
     CHECK(on.cuts>0);CHECK(on.min_fraction<.8);CHECK(on.mean_slip<off.mean_slip*.7);CHECK(on.speed>off.speed);
     const auto parallel=run(true,4);CHECK(parallel.mean_slip==on.mean_slip);CHECK(parallel.speed==on.speed);CHECK(parallel.hashes==on.hashes);
+}
+
+TEST_CASE("Airborne vehicle accelerates its driven wheels without a TC cut", "[traction_control][vehicle][unit]") {
+    auto desc=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_sedan.json");
+    desc.traction_control.enabled=true;
+    auto rig=ps_test::build_vehicle_rig_from_desc(desc,1500,{2,.4,.15},.6,0,4);
+    auto& world=*rig.world;
+    auto pose=world.get_pose(rig.chassis);pose.position.z+=10;
+    world.backend().set_pose(rig.chassis,pose);
+    world.backend().set_motion(rig.chassis,{});
+    world.reset_vehicle(rig.vehicle,{.gear=1});
+    world.set_control("assist.traction_control",1);
+    world.set_control("throttle",1);
+    world.set_control("gear_request",1);
+    real max_wheel_speed=0;
+    for(int tick=0;tick<120;++tick) {
+        world.step();
+        const auto pt=world.powertrain_state(rig.vehicle);
+        CHECK_FALSE(pt.traction_control_intervening);
+        CHECK(pt.traction_torque_fraction==1);
+        for(std::size_t i=0;i<desc.wheels.size();++i) {
+            CHECK(world.wheel_telemetry(rig.vehicle,i).fz==0);
+            max_wheel_speed=std::max(max_wheel_speed,std::abs(world.wheel_omega(rig.vehicle,i)));
+        }
+    }
+    CHECK(max_wheel_speed>10);
 }

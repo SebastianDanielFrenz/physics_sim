@@ -1040,8 +1040,8 @@ one, see electronics.md "DCT launch control"); all shipped data [AS].
 ### The `traction_control` block
 
 Top-level optional object (`ps::vehicle::TractionControlDesc`, `core/src/io/vehicle_io.cpp`); the car's own traction
-controller and, with an assist unit, the definition of TC mode **On** (code 1). Sensor-only (wheel peripheral speeds and
-an IMU, no ground truth). Unknown keys throw `"unknown traction_control field: <key>"`.
+controller and, with an assist unit, the definition of TC mode **On** (code 1). Uses actual physics contact velocities,
+hub speeds and loaded contact state. Unknown keys throw `"unknown traction_control field: <key>"`.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -1049,7 +1049,7 @@ an IMU, no ground truth). Unknown keys throw `"unknown traction_control field: <
 | `fitted` | bool | `true` | `false`: the car has no TC, the channel is ignored |
 | `target_slip` | real | `0.08` | positive-slip target; must be `< 1` |
 | `reference_floor_m_s` | real | `2.0` | speed floor in the slip denominator |
-| `kp`, `ki_per_s` | real | `2.0`, `6.0` | proportional gain / integral rate |
+| `kp`, `ki_per_s` | real | `2.0`, `6.0` | proportional cut gain / excess-slip reduction rate |
 | `attack_rate_per_s`, `recovery_rate_per_s` | real | `20.0`, `8.0` | slew rates of the torque fraction (down / up) |
 
 All numeric keys must be finite and `> 0` (`"traction_control: parameters must be finite and positive"`,
@@ -1057,12 +1057,17 @@ All numeric keys must be finite and `> 0` (`"traction_control: parameters must b
 `ignition_cut`) exist only in an assist unit's `mode_params`; the block itself cannot set them. The assist unit's
 Relaxed / Sport / Drift modes override these keys per mode.
 
-The slip is measured against a ground-speed estimate the controller keeps itself (no key sets it): the IMU's
-longitudinal acceleration predicts it, and every substep the wheels correct it - free wheels (not braked, not driven,
-or every wheel while coasting) as a measurement, braked wheels as a lower bound, driven wheels of a car without a free
-wheel (AWD) as an upper bound, and a standstill as 0. The per-corner brake signal comes from `brake_system` (a corner
-counts as braked when its service brake or the handbrake acts on it). Constant common-mode wheelspin of an AWD car
-with torque on cannot be seen from these sensors. Constants and limits: `ps/vehicle/traction_control.h`.
+Every substep, TC compares each loaded driven wheel's peripheral speed with the chassis velocity at that contact
+patch, projected along its physical rolling direction. Slip is the positive excess speed in the direction of travel,
+divided by `max(abs(contact_speed), reference_floor_m_s)`. This handles reverse and cornering without estimating speed.
+Unloaded or airborne corners do not contribute. If all driven contacts are airborne/unloaded, TC releases its cut and
+allows wheel acceleration. Coasting, braking and switching TC off also clear the cut. Landing resumes regulation from
+current contact state; there is no retained speed-estimator or integral error.
+
+Excess slip lowers the bounded torque ceiling using `kp` and `ki_per_s`, limited by `attack_rate_per_s` and the mode's
+`min_fraction`. Below target, the ceiling recovers at up to `recovery_rate_per_s`; no-spin recovery from zero takes at
+most its reciprocal. The legacy snapshot field `traction_estimated_speed_m_s` now reports actual chassis longitudinal
+velocity (the name is retained for consumers); per-wheel regulation uses each contact patch's own velocity.
 
 ## Control channels a vehicle reads
 

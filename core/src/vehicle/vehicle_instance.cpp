@@ -34,6 +34,7 @@ VehicleInstance::VehicleInstance(const VehicleDesc& desc, BodyId chassis, const 
     aero::validate(desc_.aero);
     validate_traction_control(desc_.traction_control);
     traction_sensors_.resize(desc_.wheels.size());
+    traction_wheels_.resize(desc_.wheels.size());
     traction_brake_bits_.assign(desc_.wheels.size(), 0);
     for (std::size_t i = 0; i < desc_.wheels.size(); ++i) {
         for (const auto& c : desc_.brake_system.corners)
@@ -466,6 +467,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
             const bool braked=((traction_brake_bits_[i]&1)&&controls.brake>real(.05))||((traction_brake_bits_[i]&2)&&controls.handbrake>real(.05));
             sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i),braked};
+            const auto& frame = wheels_[i]->contact_frame();
+            traction_wheels_[i] = {sensor.peripheral_speed_m_s,
+                dot(twist_s.velocity_at(frame.point - pose_s.position), frame.long_dir),
+                wheels_[i]->telemetry().fz, sensor.driven, wheels_[i]->hit_ground()};
         }
         // Assists I5 part 2 / I6: ABS and ESC (abs_esc.h) from the same sensors. Off (or not fitted) leaves
         // ctx.wheel_brake null, so every brake row reads ctx.brake exactly as before.
@@ -500,8 +505,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
                 if (wheel_brake_[i] > real(.05)) traction_sensors_[i].braked = true;
         // Assists I4 (D-LC1): the unit's launch control decides first, from the previous substep's sensors (its own
         // powertrain reads and TC's estimator state), so this substep's TC call already knows whether the controller
-        // owns the car. While it does (Armed, Launch) traction control is SUSPENDED - it still runs, because the
-        // slip PI needs its ground-speed estimate - and its outputs are not handed to the powertrain.
+        // owns the car. While it does (Armed, Launch), TC outputs are not handed to the powertrain;
+        // launch control reads the same physical contact slip directly.
         LaunchAssist::Outputs lc_out;
         if(launch_) {
             LaunchAssist::Inputs li;
@@ -522,21 +527,19 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
                     li.shifting=li.shifting||at.target()!=at.current()||(at.phase()!=drivetrain::AutoTransmission::Phase::Idle&&at.phase()!=drivetrain::AutoTransmission::Phase::Engage);
                 }
             }
-            li.slip_valid=traction_state_.initialized;
-            li.slip=traction_driven_slip(traction_sensors_,traction_state_.estimated_speed_m_s,yaw,launch_->desc().slip_floor_mps);
+            li.slip_valid=true;
+            li.slip=traction_driven_slip(traction_wheels_,launch_->desc().slip_floor_mps);
             launch_slip_target_=launch_->desc().slip_target[static_cast<std::size_t>(tc_mode_effective)];
             li.slip_target=launch_slip_target_;
             li.dt=substep_dt;li.first_substep_of_tick=(s==0);
             lc_out=launch_->step(li);
             if(lc_out.handover&&assist_traction&&traction_state_.initialized) {
-                // Handover: TC starts from the launch ceiling (no jump): desired = 1 - kp*err - integral, so with
-                // integral = 1 - ceiling the unloaded law sits at the ceiling.
+                // Handover starts from the launch ceiling and recovers using current contact slip.
                 traction_state_.torque_fraction=std::clamp(lc_out.handover_ceiling,tc_desc.min_fraction,real(1));
-                traction_state_.integral=std::clamp(real(1)-traction_state_.torque_fraction,real(0),real(1));
             }
         }
         const bool lc_owns=lc_out.owns;
-        const real traction_fraction_raw=step_traction_control(tc_desc,traction_state_,traction_sensors_,imu_accel,yaw,
+        const real traction_fraction_raw=step_traction_control(tc_desc,traction_state_,traction_wheels_,pose_s.orientation.inverse().rotate(twist_s.linear).x,
             controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction||lc_owns,substep_dt);
         // TC's output reaches the powertrain only when TC is really on and not suspended by the launch control.
         const real traction_fraction=std::min((assist_traction&&!lc_owns)?traction_fraction_raw:real(1),esc_fraction); // I6: ESC's torque cut
@@ -551,24 +554,13 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             ctx.launch_clutch_ramp=lc_out.clutch_ramp;
             ctx.launch_throttle_ceiling=lc_out.ceiling<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*lc_out.ceiling:real(1);
         }
-        // Assists I2 (PHYS-074 D-LS1/D-LS2), gated on TC's effective mode != Off (coordinator decision 2026-10-12;
-        // a car with its own traction_control block and no assist unit counts too): the TC fraction and floor for
-        // the crawl-speed clutch path, and the ground-speed reference for the auto-clutch lock decision - the TC
-        // estimate once initialised, else the mean undriven-wheel peripheral speed, NaN without either. With TC Off
-        // the ctx keeps its defaults (fraction 1, NaN), so a TC-off car is bit-identical. Unhashed.
+        // The clutch uses actual chassis speed; TC/LC uses actual per-patch slip.
         if(assist_traction&&!lc_owns) {
             ctx.traction_torque_fraction=traction_fraction;
             ctx.traction_floor_fraction=tc_desc.min_fraction;
         }
-        if(assist_traction||lc_owns) {
-            if(traction_state_.initialized) {
-                ctx.ground_speed_mps=traction_state_.estimated_speed_m_s;
-            } else {
-                real undriven_sum=0;int undriven=0;
-                for(const auto& sensor:traction_sensors_) if(!sensor.driven){undriven_sum+=sensor.peripheral_speed_m_s;++undriven;}
-                if(undriven>0)ctx.ground_speed_mps=undriven_sum/static_cast<real>(undriven);
-            }
-        }
+        if(assist_traction||lc_owns)
+            ctx.ground_speed_mps=pose_s.orientation.inverse().rotate(twist_s.linear).x;
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
         if (assist_abs || assist_esc) ctx.wheel_brake = wheel_brake_.data(); // assists I5 part 2 / I6
@@ -1043,11 +1035,6 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         }
         h=fold_abs_esc_hash(abs_esc_state_,h);
         for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)})fold(v);
-    }
-    if(desc_.traction_control.enabled||traction_state_.initialized||traction_state_.enabled) {
-        for(real v:{imu_previous_velocity_world_.x,imu_previous_velocity_world_.y,imu_previous_velocity_world_.z,real(imu_have_previous_?1:0)}) {
-            const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}
-        }
     }
     return aero::fold_state_hash(desc_.aero,aero_state_,h);
 }

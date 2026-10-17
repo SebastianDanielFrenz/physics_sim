@@ -281,7 +281,7 @@ override of the car's own `traction_control` block (an unset field inherits the 
 | `min_fraction` | torque floor: the TC never cuts below this fraction, `[0, 1)` | `0` (today) |
 | `ignition_cut` | whether a deep intervention may cut ignition; also how TC and launch-control throttle ceilings act on a turbo engine with a pedal envelope: `true` = spark retard at the current boost (plate and wastegate held on the driver's command), `false` = the plate closes to the ceiling (engine.md "Assist ceilings on a turbo engine") | `true` (today) |
 
-Switching modes keeps the controller's integral and fraction (no jump). Plan-B1 starting values (`[AS]`, measured
+Switching modes keeps the torque ceiling, clamped to the new mode's floor; there is no estimator or integral. Plan-B1 starting values (`[AS]`, measured
 against the V6 ordering band in `tests/unit/test_assist_unit.cpp`): Relaxed 0.12/2/5/15/8, floor 0, cut; Sport
 0.18/1.5/4/10/10, floor 0.15, no cut; Drift 0.35/1/2/6/12, floor 0.35, no cut.
 
@@ -353,7 +353,7 @@ ramp, the PI's ceiling and integral, hashed ONLY on a car that carries the block
    `arm_brake`, speedo speed < `arm_max_speed_mps`, gearbox in gear 1 and not shifting.
 2. *Armed*: the engine's second rev limit = the launch rpm through the engine's own limiter (the P8 `TcuRequest::
    limiter_rpm` path: fuel cut with its hysteresis, soft cut over its band), the auto-clutch is held open (capacity
-   0), traction control is suspended (its estimator keeps running, so the slip PI has a speed estimate at release),
+   0), traction control is suspended (its physical slip feedback keeps updating),
    the aero hook `set_aero_launch_request(true)` (set at the end of the previous tick, so the wing follows one tick later) asks for the launch wing offset. Leaves to Idle when the channel,
    auto-clutch or engine stops, throttle < 0.5, speed >= `arm_max_speed_mps`, gear != 1 or a shift starts; to Launch
    when brake < `release_brake`.
@@ -439,8 +439,8 @@ desc and is not state.
 
 ## ABS and ESC (assists I5 part 2 / I6) {#abs-esc}
 
-Two blocks of the assist unit (`kind: assist_unit`, any grade). Both are sensor-only like traction control: they read
-the wheels' peripheral speeds (steer and yaw compensated exactly as TC does), the gyro yaw rate, the IMU longitudinal
+Two blocks of the assist unit (`kind: assist_unit`, any grade). ABS and ESC remain sensor-based: they read
+the wheels' peripheral speeds (steer and yaw compensated), the gyro yaw rate, the IMU longitudinal
 acceleration, the brake / handbrake channels and the mean front road-wheel angle - never the ground speed, a tyre slip,
 a contact load or a surface. Both act only through the car's own service-brake rows (DirectTorqueBrakes): each corner's
 row reads its own command instead of the brake channel. Descriptors `ps/vehicle/abs_esc_desc.h`, law

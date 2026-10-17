@@ -164,6 +164,7 @@ struct PowertrainSnapshot {
     std::int8_t cvt_step = 0;
     real cvt_belt_capacity_nm = 0.0, cvt_clamp_force_n = 0.0, cvt_belt_slip_rad_s = 0.0;
     bool traction_control_intervening=false;
+    // Compatibility name: traction_estimated_speed_m_s is actual chassis longitudinal velocity (no estimator).
     real traction_torque_fraction=1, traction_estimated_speed_m_s=0, traction_positive_slip=0;
     std::uint32_t assist_active_bits = 0; // bit0 auto_clutch, bit1 auto_blip, bit2 auto_shift, bit3 traction_control, bit4 launch_control (switched on)
     // Engine garage P8 (A15): which assists the car HAS (a HUD hides a not-fitted assist; fitted-but-off is a third
