@@ -2726,7 +2726,10 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         gear = std::clamp(gear, -static_cast<int>(gearbox_->desc().reverse_ratios.size()),
                            static_cast<int>(gearbox_->desc().forward_ratios.size()));
         gearbox_->reset_to(gear);
-        network_.set_topology_state(gearbox_->state_index_for_position(gear) + gear_state_count_ * lock_bits);
+        // Automatic/DCT/CVT ratios use friction rows in one gearbox topology state.
+        // Manual position indices (N follows reverse) would select an invalid state or a diff-lock bit here.
+        const int gear_state = auto_ ? 0 : gearbox_->state_index_for_position(gear);
+        network_.set_topology_state(gear_state + gear_state_count_ * lock_bits);
     }
     std::fill(lock_pending_.begin(), lock_pending_.end(), std::uint8_t{0});
 
@@ -2850,6 +2853,7 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
         be_next_ = true;
         topo_switched_this_substep_ = false;
     }
+
 
     // 7. Clear every friction row's stick flags/warm-start set (no shift, no
     //    stale LCP active-set guess carried across the teleport).
