@@ -96,6 +96,21 @@ public:
         pending_ = s;
         has_pending_ = true;
     }
+    // World::set_engine_cooling_capacity: queued, applied at the next begin_tick(). Unhashed while it is the
+    // default (1, 1); folded into the state hash once either factor differs from 1.
+    void request_cooling_capacity(const CoolingCapacity& c) {
+        pending_capacity_ = c;
+        has_pending_capacity_ = true;
+    }
+    [[nodiscard]] const CoolingCapacity& cooling_capacity() const { return capacity_; }
+    // World::set_engine_wear: queued, applied at the next begin_tick() (the friction scales are rebuilt then, so the
+    // engine sees the new friction in that same tick). Unhashed while it is the default 1; folded once it differs.
+    void request_engine_wear(const EngineWear& w) {
+        pending_wear_ = w;
+        has_pending_wear_ = true;
+    }
+    [[nodiscard]] const EngineWear& engine_wear() const { return wear_; }
+
     // Immediate version for construction-time code and tests (EngineRig): same effect as a request applied now.
     void set_state(const EngineThermalState& s);
 
@@ -150,6 +165,12 @@ private:
     bool ambient_start_pending_ = false;
     bool has_pending_ = false;
     EngineThermalState pending_;
+    CoolingCapacity capacity_;
+    CoolingCapacity pending_capacity_;
+    bool has_pending_capacity_ = false;
+    EngineWear wear_;
+    EngineWear pending_wear_;
+    bool has_pending_wear_ = false;
     real plant_k_ = 1.0, ecu_k_ = 1.0;
     std::optional<real> override_k_;
 

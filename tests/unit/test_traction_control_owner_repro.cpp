@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+// Diagnostic environment reads do not modify the environment.
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 // racing_game PR #5 report "TC is still broken (low speed / standstill, and not enough wheelspin prevention at
 // ~180 km/h)". Drives the full car_hyper (Racing assist unit, auto-clutch, auto-shift) through full- and part-throttle
 // launches, launch-control launches in every drive mode and a full-throttle pull through 180 km/h, and reports the true

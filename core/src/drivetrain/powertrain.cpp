@@ -2683,6 +2683,23 @@ void Powertrain::request_thermal_state(const EngineThermalState& st) {
     thermal_->request_state(st);
 }
 
+void Powertrain::request_cooling_capacity(const CoolingCapacity& c) {
+    if (!thermal_) throw std::runtime_error("set_engine_cooling_capacity: this vehicle has no cooling_system");
+    const auto ok = [](real v) { return std::isfinite(v) && v >= 0.0 && v <= 1e3; };
+    if (!ok(c.radiator_ua_scale) || !ok(c.fan_flow_scale)) {
+        throw std::runtime_error("set_engine_cooling_capacity: factors must be finite and in [0, 1e3]");
+    }
+    thermal_->request_cooling_capacity(c);
+}
+
+void Powertrain::request_engine_wear(const EngineWear& w) {
+    if (!thermal_) throw std::runtime_error("set_engine_wear: this vehicle has no cooling_system (the friction scale lives in the thermal model)");
+    if (!(std::isfinite(w.friction_scale) && w.friction_scale >= 0.0 && w.friction_scale <= 1e3)) {
+        throw std::runtime_error("set_engine_wear: friction_scale must be finite and in [0, 1e3]");
+    }
+    thermal_->request_engine_wear(w);
+}
+
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
     // 1. Snapshot total rotational KE BEFORE any change (signed delta booked
     //    as ledger_.external_reset below - unlike apply_topology_switch's
