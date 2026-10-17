@@ -75,6 +75,24 @@ struct EngineThermalDesc {
         real hysteresis_k = 0.0;
         real time_constant_s = 0.0;
     } thermostat;
+
+    // Optional water jacket (block cooling, docs/data_formats/engine_thermal.md "Water jacket"). Absent (enabled
+    // false) = the original two-lump model, bit for bit. Present: the engine lump splits into a METAL lump
+    // (C_engine - C_coolant) and a COOLANT lump (C_coolant = coolant_volume_l * density * cp), joined by the jacket
+    // conductance G_j = wetted_area_m2 * h(Q), h(Q) = max(htc_min, htc_ref * (Q / reference_flow)^flow_exponent)
+    // (Dittus-Boelter: Nu ~ Re^0.8 at fixed geometry), Q = the pump flow (l/min) - the full pump flow passes the
+    // jacket whatever the thermostat does (the bypass returns it to the pump). Wall heat, the engine share of the
+    // friction heat, block-air convection and the oil exchange act on the metal; the radiator, thermostat, fan,
+    // gauge and warnings on the coolant.
+    struct WaterJacket {
+        bool enabled = false;
+        real wetted_area_m2 = 0.0;       // coolant-side wetted area of block + head passages
+        real coolant_volume_l = 0.0;     // coolant in the whole circuit (the coolant lump)
+        real htc_ref_w_m2_k = 0.0;       // jacket film coefficient at reference_flow_l_min
+        real reference_flow_l_min = 0.0; // pump flow at which htc_ref applies
+        real flow_exponent = 0.8;        // h ~ Q^n
+        real htc_min_w_m2_k = 0.0;       // floor (natural convection / nucleate boiling at no flow)
+    } water_jacket;
 };
 
 struct CoolingSystemDesc {
@@ -92,6 +110,11 @@ struct CoolingSystemDesc {
         real power_w = 0.0;           // reported only (a future electrical bus)
     } fan;
     real oil_cooler_air_w_k_per_m_s = 0.0; // added to the oil-air conductance's ram term
+    // Optional pump upgrade: multiplies the engine's pump flow (radiator coolant flow and, with a water jacket, the
+    // jacket flow). Default 1 (x * 1.0 is exact, so a file without "pump" is bit-identical).
+    struct Pump {
+        real flow_factor = 1.0;
+    } pump;
     vehicle::Curve1D gauge_x_k_y;          // coolant temperature (K) -> needle position 0..1
     struct Warnings {
         real overheat_k = 0.0, cold_k = 0.0;
@@ -113,6 +136,28 @@ struct EngineThermalState {
     real coolant_c = 0.0, oil_c = 0.0;
 };
 
+// World::set_engine_cooling_capacity's argument: runtime factors on the
+// cooling system (a damaged radiator or fan, a blocked grille). 1.0 = the
+// cooling_system data as loaded; multiplying by exactly 1.0 changes no bit, so
+// the default is a strict no-op. radiator_ua_scale scales the radiator's UA
+// (the heat-exchanger conductance before the effectiveness), fan_flow_scale
+// the fan's face velocity. Both must be finite and in [0, 1e3].
+struct CoolingCapacity {
+    real radiator_ua_scale = 1.0;
+    real fan_flow_scale = 1.0;
+};
+
+// World::set_engine_wear's argument: runtime wear of the engine internals (worn
+// crank bearings, scuffed pistons and rings in the racing_game damage model).
+// friction_scale multiplies the PLANT's oil-viscosity friction scale k(T_oil)
+// (the hydrodynamic friction torque and the heat it puts into the oil); the
+// ECU's estimate is not touched (it does not know the engine is worn). 1.0 =
+// as new; multiplying by exactly 1.0 changes no bit, so the default is a
+// strict no-op. Must be finite and in [0, 1e3].
+struct EngineWear {
+    real friction_scale = 1.0;
+};
+
 // Bits of EngineThermalSnapshot::warning_bits.
 constexpr std::uint32_t kThermalWarningOverheat = 1u << 0;
 constexpr std::uint32_t kThermalWarningCold = 1u << 1;
@@ -126,11 +171,19 @@ struct EngineThermalSnapshot {
     bool fan_on = false;
     real fan_power_w = 0.0;        // for a future electrical bus
     real radiator_heat_w = 0.0;    // this tick's G_rad * (T_e' - T_a)
-    real wall_heat_w = 0.0;        // this tick's mean wall heat into the engine lump
+    real wall_heat_w = 0.0;        // this tick's mean wall heat into the engine lump (the metal lump with a jacket)
+    // Water jacket (EngineThermalDesc::water_jacket). Without one: metal_c == coolant_c, the jacket fields 0.
+    real metal_c = 0.0;                // metal lump temperature
+    real jacket_heat_w = 0.0;          // this tick's G_j * (T_metal' - T_coolant')
+    real jacket_conductance_w_k = 0.0; // this tick's G_j
+    real coolant_flow_l_min = 0.0;     // this tick's pump flow
     real friction_heat_w = 0.0;    // this tick's mean friction heat (engine + oil lumps)
     real gauge = 0.0;              // 0..1 needle position from the gauge curve
     std::uint32_t warning_bits = 0;
     real friction_scale = 1.0;     // plant k
+    real radiator_ua_scale = 1.0;  // the CoolingCapacity in effect this tick
+    real fan_flow_scale = 1.0;
+    real wear_friction_scale = 1.0; // the EngineWear in effect this tick (already folded into friction_scale)
 };
 
 } // namespace ps::drivetrain

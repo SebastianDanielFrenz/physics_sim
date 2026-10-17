@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+// Diagnostic environment reads do not modify the environment.
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 // Traction control speed-estimate drift (owner, PR #8: "fix the drift of sensed values").
 //
 // The sensor-only TC keeps a ground-speed estimate from the virtual IMU and the wheel speed sensors. These cases drive

@@ -1246,7 +1246,7 @@ TEST_CASE("W5: the surface condition scenario hashes identically across 1, 2, 4,
 // 0xba94bad06472d25c, a.hash == b.hash).
 TEST_CASE("Engine thermal: vehicle_thermal.json hashes identically across 1, 2, 4, 10 and 24 workers; T_o is hashed",
           "[determinism][thermal][vehicle][drivetrain][heavy][world][io]") {
-    constexpr std::uint64_t kRecorded = 0xfb37e62eaf06cabbULL; // 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0x3178e9e670d1cb5d); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0xd7205b0b06295bd8): re-recorded 2026-10-05 (T1b friction split, fire_rpm 100; T1 C6 was 0x74d75aa6d229faa0), ps_run at 1/2/4/10/24 workers
+    constexpr std::uint64_t kRecorded = 0x79bdd9ac60402967ULL; // 2026-10-16 block cooling: every shipped engine gets a water jacket (class_si_passenger.json), the A25A's metal lump is now hashed - moved this hash (was 0xfb37e62eaf06cabb); 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0x3178e9e670d1cb5d); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0xd7205b0b06295bd8): re-recorded 2026-10-05 (T1b friction split, fire_rpm 100; T1 C6 was 0x74d75aa6d229faa0), ps_run at 1/2/4/10/24 workers
     const std::uint64_t reference = run_scenario_file("vehicle_thermal.json", 1);
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
     CHECK(reference == kRecorded);

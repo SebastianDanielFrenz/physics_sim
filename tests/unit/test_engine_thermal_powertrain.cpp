@@ -331,3 +331,107 @@ TEST_CASE("C3 World: thermal state is hashed and worker-count invariant", "[ther
     CHECK(h1 == h10);
     CHECK(h1 != h_perturbed);
 }
+
+TEST_CASE("Cooling capacity: (1, 1) is bit-identical, a damaged radiator/fan runs hotter, rejections", "[thermal][drivetrain][cooling_capacity]") {
+    // Idle at part throttle is too gentle to need the radiator; start the coolant hot instead (thermostat open, fan on)
+    // and compare where it is 10 s later.
+    const auto run = [](const drivetrain::CoolingCapacity* cap, int workers) {
+        Rig rig = make_rig(thermal_desc(), workers);
+        World& w = *rig.world;
+        w.set_control("throttle", 0.4);
+        for (int t = 0; t < 240; ++t) w.step();
+        w.set_engine_thermal_state(rig.vehicle, EngineThermalState{104.0, 100.0}); // thermostat open, fan on
+        if (cap) w.set_engine_cooling_capacity(rig.vehicle, *cap);
+        real peak_fan_power_w = 0.0;
+        bool fan_was_on = false;
+        for (int t = 0; t < 2400; ++t) {
+            w.step();
+            const auto& sample = snapshot_thermal(rig);
+            fan_was_on = fan_was_on || sample.fan_on;
+            peak_fan_power_w = std::max(peak_fan_power_w, sample.fan_power_w);
+        }
+        struct Out {
+            std::uint64_t hash;
+            real coolant_c, radiator_w, ua_scale, fan_scale, fan_power_w;
+            bool fan_on;
+        };
+        const auto& th = snapshot_thermal(rig);
+        return Out{w.state_hash(), w.engine_thermal_state(rig.vehicle).coolant_c, th.radiator_heat_w, th.radiator_ua_scale, th.fan_flow_scale,
+                   peak_fan_power_w, fan_was_on};
+    };
+    const auto base = run(nullptr, 1);
+    const drivetrain::CoolingCapacity unity{};
+    const auto same = run(&unity, 1);
+    CHECK(same.hash == base.hash); // explicit (1, 1) == never set, bit for bit
+    CHECK(same.coolant_c == base.coolant_c);
+
+    const drivetrain::CoolingCapacity damaged{0.3, 0.3};
+    const auto hot1 = run(&damaged, 1);
+    const auto hot4 = run(&damaged, 4);
+    INFO("coolant base " << base.coolant_c << " C, damaged " << hot1.coolant_c << " C");
+    CHECK(hot1.ua_scale == 0.3);
+    CHECK(hot1.fan_scale == 0.3);
+    CHECK(hot1.coolant_c > base.coolant_c + 0.5);
+    CHECK(hot1.hash != base.hash);
+    CHECK(hot1.hash == hot4.hash); // worker-count invariant
+    // Compare fan-on samples: a healthy fan may cycle off before the final tick.
+    // Fan power: the loaded power_w at (1, 1), the cube of the flow factor when the fan is damaged (affinity laws).
+    REQUIRE(base.fan_on);
+    REQUIRE(hot1.fan_on);
+    CHECK(base.fan_power_w > 0.0);
+    CHECK(same.fan_power_w == base.fan_power_w);
+    CHECK(hot1.fan_power_w == Approx(base.fan_power_w * 0.3 * 0.3 * 0.3).epsilon(1e-12));
+
+    Rig rig = make_rig(thermal_desc());
+    REQUIRE_THROWS_WITH(rig.world->set_engine_cooling_capacity(rig.vehicle, drivetrain::CoolingCapacity{-0.1, 1.0}), ContainsSubstring("[0, 1e3]"));
+    REQUIRE_THROWS_WITH(rig.world->set_engine_cooling_capacity(rig.vehicle, drivetrain::CoolingCapacity{1.0, std::nan("")}), ContainsSubstring("[0, 1e3]"));
+    Rig plain = make_rig(io::load_vehicle_json(data_path("vehicles/car_sedan_sim.json")));
+    REQUIRE_THROWS_WITH(plain.world->set_engine_cooling_capacity(plain.vehicle, unity), ContainsSubstring("no cooling_system"));
+}
+
+TEST_CASE("Engine wear: 1.0 is bit-identical, worn internals add friction and oil heat, rejections", "[thermal][drivetrain][engine_wear]") {
+    // Part throttle for 10 s, then 20 s with or without worn internals; compare friction heat, oil and engine speed.
+    const auto run = [](const drivetrain::EngineWear* wear, int workers) {
+        Rig rig = make_rig(thermal_desc(), workers);
+        World& w = *rig.world;
+        w.set_control("throttle", 0.5);
+        for (int t = 0; t < 2400; ++t) w.step();
+        if (wear) w.set_engine_wear(rig.vehicle, *wear);
+        real friction_w = 0.0;
+        for (int t = 0; t < 4800; ++t) {
+            w.step();
+            friction_w += snapshot_thermal(rig).friction_heat_w / 4800.0;
+        }
+        struct Out {
+            std::uint64_t hash;
+            real oil_c, friction_w, rpm, k, wear_k;
+        };
+        const auto& th = snapshot_thermal(rig);
+        return Out{w.state_hash(), w.engine_thermal_state(rig.vehicle).oil_c, friction_w, w.powertrain_state(rig.vehicle).engine_rpm,
+                   th.friction_scale, th.wear_friction_scale};
+    };
+    const auto base = run(nullptr, 1);
+    const drivetrain::EngineWear unity{};
+    const auto same = run(&unity, 1);
+    CHECK(same.hash == base.hash); // explicit 1.0 == never set, bit for bit
+    CHECK(same.oil_c == base.oil_c);
+
+    const drivetrain::EngineWear worn{3.0};
+    const auto w1 = run(&worn, 1);
+    const auto w4 = run(&worn, 4);
+    INFO("friction base " << base.friction_w << " W, worn " << w1.friction_w << " W; oil " << base.oil_c << " / " << w1.oil_c
+                          << " C; rpm " << base.rpm << " / " << w1.rpm);
+    CHECK(w1.wear_k == 3.0);
+    CHECK(w1.k == Approx(3.0 * base.k).epsilon(0.05)); // the plant's k carries the wear (oil temperatures differ slightly)
+    CHECK(w1.friction_w > base.friction_w * 1.3);
+    CHECK(w1.oil_c > base.oil_c);
+    CHECK(w1.rpm < base.rpm); // the same throttle turns a worn engine slower
+    CHECK(w1.hash != base.hash);
+    CHECK(w1.hash == w4.hash); // worker-count invariant
+
+    Rig rig = make_rig(thermal_desc());
+    REQUIRE_THROWS_WITH(rig.world->set_engine_wear(rig.vehicle, drivetrain::EngineWear{-1.0}), ContainsSubstring("[0, 1e3]"));
+    REQUIRE_THROWS_WITH(rig.world->set_engine_wear(rig.vehicle, drivetrain::EngineWear{std::nan("")}), ContainsSubstring("[0, 1e3]"));
+    Rig plain = make_rig(io::load_vehicle_json(data_path("vehicles/car_sedan_sim.json")));
+    REQUIRE_THROWS_WITH(plain.world->set_engine_wear(plain.vehicle, unity), ContainsSubstring("no cooling_system"));
+}

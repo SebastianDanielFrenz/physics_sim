@@ -48,6 +48,7 @@ engine file changes neither its map content hash nor its cache key.
 | `coolant` | object | required | `cp_j_kg_k`, `density_kg_m3` both `> 0` | 50/50 glycol |
 | `pump` | object | required | exactly one of `l_min_per_krpm` or `l_min_per_krpm_per_l`, `> 0` | coolant pump flow per 1000 rpm |
 | `thermostat` | object | required | below | |
+| `water_jacket` | object | optional | below | an explicit metal-to-coolant path; absent (or `null` over an inherited one) = the two-lump model, bit-identical to before. Every shipped engine has one through `class_si_passenger.json` |
 | `ecu` | | reserved | rejected | reserved for increment T2 |
 
 `oil`: `kv40_mm2_s`, `kv100_mm2_s` (`kv40 > kv100 > 0`), `density_15c_kg_m3`
@@ -68,6 +69,119 @@ ones multiply the chassis ram air speed).
 
 `thermostat`: `open_c < full_open_c`, `hysteresis_k >= 0`,
 `time_constant_s > 0` (the wax lag).
+
+## Water jacket
+
+Without `water_jacket` the engine lump is block, head and coolant at one
+temperature, and the radiator and thermostat read that temperature. With it the
+engine lump splits into two lumps:
+
+- metal: capacity `C_metal = capacity.engine_j_k - C_coolant`;
+- coolant: capacity `C_coolant = coolant_volume_l / 1000 * coolant.density_kg_m3 * coolant.cp_j_kg_k`.
+
+They are joined by the jacket conductance
+
+`G_jacket = wetted_area_m2 * h(Q)`, `h(Q) = max(htc_min_w_m2_k, htc_ref_w_m2_k * (Q / reference_flow_l_min)^flow_exponent)`
+
+with `Q` the coolant pump flow (`pump` x rpm / 1000 x the cooling system's
+`pump.flow_factor`). The jacket always sees the whole pump flow; the thermostat
+only decides how much of it goes through the radiator. `flow_exponent` 0.8 is
+the Dittus-Boelter exponent of turbulent forced convection (Nu ~ Re^0.8).
+
+Wall heat, the friction heat share of the engine lump, the block-to-air loss
+and the oil exchange act on the metal. The radiator, thermostat, fan, gauge and
+warnings act on the coolant. A bigger wetted area, a higher `htc_ref_w_m2_k` or
+a faster pump (`pump.flow_factor`) lower the metal temperature (and with it the
+oil temperature) at a steady load; the coolant temperature is still set by the
+thermostat and radiator.
+
+| Field | Unit | Req./opt. | Validation | Meaning |
+|---|---|---|---|---|
+| `wetted_area_m2` **or** `wetted_area_m2_per_l` | m2 (m2 per litre) | exactly one | `(0, 20]` m2 after scaling | coolant-wetted jacket wall area |
+| `coolant_volume_l` **or** `coolant_volume_l_per_l` | L (L per litre) | exactly one | `(0, 100]` L after scaling | coolant held in the jacket and the circuit |
+| `reference_flow_l_min` **or** `reference_flow_l_min_per_l` | l/min (l/min per litre) | exactly one | `(0, 5000]` l/min after scaling | the pump flow at which the film coefficient equals `htc_ref_w_m2_k` |
+| `htc_ref_w_m2_k` | W/(m2 K) | required | `[100, 50000]` | film coefficient at the reference flow |
+| `htc_min_w_m2_k` | W/(m2 K) | required | `[0, htc_ref_w_m2_k]` | floor at low flow (natural convection, an engine at rest) |
+| `flow_exponent` | - | optional, default 0.8 | `[0.3, 1.0]` | `h ~ Q^n` |
+
+The `_per_l` forms multiply by `displacement_l`. The metal must keep at least
+10 % of `capacity.engine_j_k` (a coolant volume that leaves less is rejected).
+Unknown keys are rejected.
+
+State: the metal temperature joins the hashed state only when a jacket is
+present. A warm or ambient start, and `set_engine_thermal_state`, set the metal
+to the coolant temperature. Snapshot fields (never hashed): `metal_c`,
+`jacket_heat_w` (metal to coolant), `jacket_conductance_w_k`,
+`coolant_flow_l_min`. Telemetry CSV: a vehicle whose engine has a jacket also
+records `vehicle<i>.thermal.metal_c`, `.jacket_heat_w` and
+`.coolant_flow_l_min`, after `.friction_scale`; without a jacket these columns
+are absent, so the header is as before. The Godot `get_engine_thermal`
+dictionary carries `metal_c`, `jacket_heat_w` and `coolant_flow_l_min`.
+
+The coolant gauge, the overheat and cold warnings, the thermostat and the fan
+read the coolant, never the metal (owner ruling 2026-10-16: the metal
+temperature is published, no gauge or warning reads it).
+
+Shipped data: `class_si_passenger.json` carries the jacket (0.2 m2/L, 3.0 L/L,
+5000 W/(m2 K) at 30 l/min per litre, exponent 0.8, floor 500 W/(m2 K), all
+[AS], reasoning in its `source`), so `i4_2l_na.json` and `toyota_a25a_fks.json`
+inherit it. A user file may delete it with `"water_jacket": null`
+(`tests/support/fixtures/thermal/i4_2l_na_no_jacket.json` does) or override any
+field.
+
+Steady state without a time history:
+`ps::drivetrain::solve_steady_thermal(EngineThermalConfig, SteadyThermalInput)`
+(`ps/drivetrain/engine_thermal_steady.h`) returns the coolant, metal and oil
+temperatures, thermostat opening, fan state, conductances and heat flows the
+model settles at for a constant rpm, wall heat, friction heat, ambient and ram
+speed. It uses the same helpers as the runtime step
+(`coolant_pump_flow_l_min`, `water_jacket_conductance_w_k`,
+`radiator_conductance_w_k`, `thermal_capacities`) and works with and without a
+jacket (without one `metal_c` equals `coolant_c`).
+
+Worked example: the shipped `data/engine_thermal/i4_2l_na.json` (2.0 L), whose
+jacket comes from `class_si_passenger.json`:
+
+```json
+"water_jacket": {
+  "wetted_area_m2_per_l": 0.2,
+  "coolant_volume_l_per_l": 3.0,
+  "htc_ref_w_m2_k": 5000.0,
+  "reference_flow_l_min_per_l": 30.0,
+  "flow_exponent": 0.8,
+  "htc_min_w_m2_k": 500.0
+}
+```
+
+This gives 0.4 m2, 6 L (21726 J/K of coolant, 31474 J/K left for the metal)
+and h = 5000 W/(m2 K) at 60 l/min. Steady state from `solve_steady_thermal` with the sedan cooling
+system at 25 C (the thermostat holds the coolant in its band, so the coolant
+barely moves and the jacket shows in the metal and the oil). The "no jacket"
+row is `tests/support/fixtures/thermal/i4_2l_na_no_jacket.json`.
+
+Cruise, 3000 rpm, 12 kW wall heat, 3 kW friction, 25 m/s:
+
+| Variant | Coolant C | Metal C | Oil C |
+|---|---|---|---|
+| no jacket | 88.55 | 88.55 | 85.44 |
+| shipped jacket | 88.54 | 93.67 | 89.24 |
+| jacket, wetted area x2 (or `htc_ref_w_m2_k` x2) | 88.54 | 91.15 | 87.37 |
+| jacket, `pump.flow_factor` 1.5 | 88.36 | 92.11 | 88.09 |
+
+Hard running, 5000 rpm, 35 kW wall heat, 3 kW friction, 5 m/s (fan on):
+
+| Variant | Coolant C | Metal C | Oil C |
+|---|---|---|---|
+| no jacket | 89.82 | 89.82 | 96.94 |
+| shipped jacket | 89.78 | 101.63 | 107.22 |
+| jacket, wetted area x2 | 89.80 | 95.75 | 102.10 |
+| jacket, `pump.flow_factor` 1.5 | 89.22 | 97.82 | 103.90 |
+
+The shipped A25A (2.487 L): 2000 rpm, 8 kW wall heat, 1.5 kW friction, 25 m/s:
+coolant 88.26, metal 90.51, oil 79.00; 6000 rpm, 45 kW wall heat, 8 kW
+friction, 40 m/s: coolant 88.94, metal 99.05, oil 100.09.
+
+(Measured with the `[.][diag]` case in `tests/unit/test_engine_thermal_jacket.cpp`.)
 
 ## Friction law
 
@@ -111,3 +225,6 @@ idle authority rise by `dF(idle) / (wot(idle) - motoring(idle))` with the ECU
   `pump`): exactly one is allowed. Delete the parent's with `null` when
   overriding in the other form.
 - `friction_scale_max`: rejected (no cap).
+- `water_jacket` with a coolant volume so large that the metal keeps under
+  10 % of `capacity.engine_j_k`: rejected. Raise the engine capacity or lower
+  the volume.
