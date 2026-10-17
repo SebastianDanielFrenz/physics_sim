@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+// Diagnostic environment reads do not modify the environment.
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 // tests/unit/test_abs_esc.cpp - assists I5 part 2 (ABS) and I6 (ESC), docs/next_steps_brief.md 2.2b: two new blocks of the
 // assist unit (electronics kind `assist_unit`, keys `abs` and `esc`), channels assist.abs (0/1) and assist.esc (mode code
 // 0 off / 1 on / 2 sport), registered only on a car whose unit carries the block.
