@@ -73,6 +73,7 @@ struct KnockReplayInput {
     real end_burn_fraction = kKnockEndBurnFraction;
     real activation_k = kKnockCalActivationK; // Douaud-Eyzat B [K]
     real p_exponent = kKnockCalPressureExponent; // Douaud-Eyzat pressure exponent n in (p/1 atm)^-n
+    real dilution_exponent = kKnockCalDilutionExponent; // rate x (1 - x_res)^gamma, x_res = end-gas residual fraction
     bool stop_at_knock = true;           // false: integrate to the end (diagnostics)
     // Diagnostic levers (P7b budget; the generator leaves both at their defaults):
     real end_gas_t0_offset_k = 0.0;      // added to the end gas's IVC temperature (e.g. a DI charge-cooling estimate)

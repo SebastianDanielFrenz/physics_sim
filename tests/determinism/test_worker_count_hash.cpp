@@ -1107,7 +1107,7 @@ GenScenarioRun run_gen_engine_scenario(ps::io::Scenario sc, int workers) {
 
 TEST_CASE("State hash for the generated-map engine scenario is identical across 1, 2, 4, 10 and 24 workers",
           "[determinism][vehicle][drivetrain][heavy][world]") {
-    constexpr std::uint64_t kRecorded = 0x82bf30120b3212bbULL; // 2026-10-18 knock opt-in of toyota_a25a_fks_gen moved this hash (was 0x2164909873144ac3); 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0x194fc20db754f52c); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x84518e7edcdc3b6a): re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0x4030651924c4dbd2, recorded 2026-09-29 (owner-requested SimulatedEngine idle rework: pedal-released one-sided PI, DFCO dashpot, manifold-fill term; was 0x5e88a765a7e748e4, recorded 2026-09-28 at the C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
+    constexpr std::uint64_t kRecorded = 0x2fad7071a9ce65c1ULL; // 2026-10-19 knock model v4 (residual dilution) moved this hash (was 0x82bf30120b3212bb at v3, 0x785c1851b2424506 at v2); 2026-10-18 knock opt-in of toyota_a25a_fks_gen moved this hash (was 0x2164909873144ac3); 2026-10-13 pedal plan P1 (manual pedal law T* = Z + c (F - Z) on electronic engines) moved this hash (was 0x194fc20db754f52c); 2026-10-06 tyre rolling-resistance derived speed term moved this hash (was 0x84518e7edcdc3b6a): re-recorded 2026-10-04: ca118ec's instant anti-stall release (Locked below anti_stall_rpm on engine OR signed input rpm) with the rolling re-close restored to rolling_reengage_rpm (vault PHYS-040); was 0x4030651924c4dbd2, recorded 2026-09-29 (owner-requested SimulatedEngine idle rework: pedal-released one-sided PI, DFCO dashpot, manifold-fill term; was 0x5e88a765a7e748e4, recorded 2026-09-28 at the C17a second follow-up: cited burn_duration_deg/ignition_delay_deg, PLAN.md "Second follow-up rulings" commit 69a3856, vault PHYS-055; ps_run 1/2/4/10/24 workers; was 0xbc61f26e2d05379e at the measured-spark-schedule follow-up)
     const ps::io::Scenario sc = load_gen_engine_scenario();
     const std::uint64_t reference = run_gen_engine_scenario(sc, 1).hash;
     INFO("reference hash=0x" << std::hex << reference << " recorded=0x" << kRecorded);
@@ -1150,7 +1150,7 @@ TEST_CASE("W4: scenarios without a weather environment keep their pre-W4 state h
         {"vehicle_tractor_i4.json", 0xee2c08f11ee76f55ULL}, // D0 phantom wheel cast fix, was 0x44327cc4b10c57b5
         {"vehicle_fuel_tank.json", 0xb08736ed4b3a8d4fULL},
         {"vehicle_sim_engine.json", 0x92b0090ff4b70656ULL}, // pedal P1, was 0x3aed0da9057e5829
-        {"vehicle_gen_engine.json", 0x82bf30120b3212bbULL}, // knock opt-in 2026-10-18, was 0x2164909873144ac3; pedal P1, was 0x194fc20db754f52c
+        {"vehicle_gen_engine.json", 0x2fad7071a9ce65c1ULL}, // knock model v4 2026-10-19, was 0x82bf30120b3212bb (v3); knock opt-in 2026-10-18, was 0x2164909873144ac3; pedal P1, was 0x194fc20db754f52c
         {"environment_day.json", 0xce55f12949e0ee73ULL},
     };
     for (const Pin& p : pins) {

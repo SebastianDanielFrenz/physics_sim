@@ -534,24 +534,24 @@ TEST_CASE("P7d W8c/W8d: WOT points keep the P1 allocation, progress and cancel c
 // (pins recorded on the unchanged generator, header). Keys always; the fast hashes here, the hyper's slow ones [long].
 TEST_CASE("P7d W5h/W8e: the hyper and lumped engines keep their keys and map hashes", "[cycle][pipe][drivetrain]") {
     check_pins("toyota_a25a_fks_gen.json", kEngines,
-               {{MapQuality::Sketch, 0x50a520e845bf33aeull, 0x91493ba0aa6d2056ull},
-                {MapQuality::Preview, 0x10afc8d79953ba8cull, 0xdfc38141f2df2239ull},
-                {MapQuality::Full, 0xb0aa74dfef89771dull, 0xaa3187a949822436ull}},
+               {{MapQuality::Sketch, 0x7d4f5df61b83fd3dull, 0x75f0658d60c662b8ull},
+                {MapQuality::Preview, 0xbd44b606c7ef765full, 0x4e108f53ec6e4541ull},
+                {MapQuality::Full, 0x1d4a09fe71b9b9ceull, 0x470361fea395f4f3ull}},
                true);
     check_pins("engine.json", kMazdaDir,
-               {{MapQuality::Sketch, 0x49a290a081c1fa9full, 0xa6a58f49fb5a910cull},
-                {MapQuality::Preview, 0x09ad388fd556817dull, 0xb230dfde9faf68c7ull},
-                {MapQuality::Full, 0x69b28c877f20c4ecull, 0x3d5416b178fc547aull}},
+               {{MapQuality::Sketch, 0xd64488ea1fff9442ull, 0x1bb312f8a650b0f4ull},
+                {MapQuality::Preview, 0x964f30d973941b20ull, 0xbafd38470361fbabull},
+                {MapQuality::Full, 0x3649dce1c9c9d7b1ull, 0x94534cc297971f9eull}},
                true);
-    check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x4c3dd07602c6e22cull, 0x6340770281914410ull}}, true);
+    check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x98217b790e718eb9ull, 0xa09334bc88debc6cull}}, true);
     check_pins("hyper_v8_one1_audio.json", kEngines,
-               {{MapQuality::Preview, 0x8c332886af325b4eull, 0}, {MapQuality::Full, 0x2c2dd48f056817dfull, 0}}, false);
+               {{MapQuality::Preview, 0xd816d389badd07dbull, 0}, {MapQuality::Full, 0x381c278164a74b4aull, 0}}, false);
 }
 
 TEST_CASE("P7d W5h: the hyper keeps its Preview and Full map hashes", "[cycle][pipe][drivetrain][turbo][long]") {
     check_pins("hyper_v8_one1_audio.json", kEngines,
-               {{MapQuality::Preview, 0x8c332886af325b4eull, 0x76cef2b77b805bd3ull},
-                {MapQuality::Full, 0x2c2dd48f056817dfull, 0xc66052a08c41ba14ull}},
+               {{MapQuality::Preview, 0xd816d389badd07dbull, 0xc962e26f4009c30bull},
+                {MapQuality::Full, 0x381c278164a74b4aull, 0xd1dee97c3fdcaa0cull}},
                true);
 }
 

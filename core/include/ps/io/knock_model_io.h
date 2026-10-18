@@ -1,4 +1,4 @@
-// ps/io/knock_model_io.h - knock model v3: load a physics_sim.knock_model/1 file (data/knock_models/*.json) into the
+// ps/io/knock_model_io.h - knock model v3/v4: load a physics_sim.knock_model/1 file (data/knock_models/*.json) into the
 // replay's parameter set. Every parameter is {"value": number, "source": string}; unknown keys, a missing source, a
 // wrong model/format/version and non-positive values are rejected (std::runtime_error naming the file and key).
 #pragma once

@@ -260,7 +260,7 @@ TEST_CASE("CF3: steady WOT boost and torque by speed", "[turbo][sim_engine][hype
     // answers the gate more slowly; the last-second means moved tau0 -0.01..+0.26 %, boost -0.11..+0.10 %,
     // rotor -0.87..+0.04 % (the largest at 7500/8000 rpm). Was 1257.6810/1.7820/79088.8, 1368.4982/1.7693/86046.5,
     // 1406.0689/1.7321/106902.6, 1309.3552/1.7027/138720.8, 1220.4495/1.6988/145471.0 (258f5c2).
-    // Re-recorded 2026-10-19 for the hyper on E85 with the knock limit (margin 2) under knock model v3, which does not
+    // Re-recorded 2026-10-19 for the hyper on E85 with the knock limit (margin 2) under knock model v3 (v4: identical), which does not
     // bind at WOT (knock retard 0 at every point of the engine WOT table): tau0 -0.4..-1.2 %, boost -0.01..+0.01 %,
     // rotor -0.6..+0.01 % - the fuel change, not the knock limit. Was 1257.5909/1.7819/79091.6, 1369.2901/1.7710/86075.2,
     // 1406.5556/1.7333/106941.9, 1309.6103/1.7009/137741.7, 1223.6028/1.7006/144205.3 (E5, no knock limit).

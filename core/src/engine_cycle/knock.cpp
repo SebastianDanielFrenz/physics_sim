@@ -68,6 +68,10 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
 
     EndGas eg;
     const real x = c0.x;
+    // Residual dilution (knock model): a constant factor on the rate, the end gas's residual fraction is fixed at IVC.
+    const real inv_on_dil = in.dilution_exponent == real(0.0)
+                                ? in.inv_on_term
+                                : in.inv_on_term * ps::math::pow(real(1.0) - x, in.dilution_exponent);
     const real ff = in.fuel_mass_fraction;
     if (!(ff >= real(0.0) && ff < real(1.0))) throw std::invalid_argument("knock_replay: fuel_mass_fraction must be in [0, 1)");
     const real fa = (real(1.0) - ff) * m.gas.fresh.a + ff * in.vapour_cv_scale * kFuelVapourCvA_JkgK;
@@ -102,7 +106,7 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
     KnockReplayResult r;
     real theta = in.ivc.crank_deg;
     real t_eg = eg.t0;
-    real f0 = douaud_eyzat_rate(in.inv_on_term, c0.p, t_eg, in.activation_k, in.p_exponent);
+    real f0 = douaud_eyzat_rate(inv_on_dil, c0.p, t_eg, in.activation_k, in.p_exponent);
     r.p_max_pa = c0.p;
     r.p_end_pa = c0.p;
     while (theta < theta_stop) {
@@ -127,7 +131,7 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
             t_eg = eg.temperature(c.p, t_eg);
         }
         r.p_end_pa = c.p;
-        const real f1 = douaud_eyzat_rate(in.inv_on_term, c.p, t_eg, in.activation_k, in.p_exponent);
+        const real f1 = douaud_eyzat_rate(inv_on_dil, c.p, t_eg, in.activation_k, in.p_exponent);
         r.integral += real(0.5) * (f0 + f1) * dth / rate_deg_s;
         f0 = f1;
         if (r.integral >= real(1.0)) {

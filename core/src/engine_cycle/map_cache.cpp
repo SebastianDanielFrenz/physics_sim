@@ -410,6 +410,7 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
         f.pod(desc.knock.model.pressure_exponent);
         f.pod(desc.knock.model.activation_k);
         f.pod(desc.knock.model.octane_index_k);
+        f.pod(desc.knock.model.dilution_exponent);
     }
     // ps_audio A4: the intake/exhaust pipe pair + resolved installation,
     // folded only when present (both absent - the pre-A4 default for every

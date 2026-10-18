@@ -260,7 +260,7 @@ struct CycleModelDesc {
         // stays at lambda 1, the generator's convention); empty = lambda 1.
         Table2D lambda_target;
         // Knock model v3: the Douaud-Eyzat parameter set of the replay (defaults = the calibrated compiled set, equal to
-        // data/knock_models/douaud_eyzat_v3.json). Folded into the cache key of an opted-in engine.
+        // data/knock_models/douaud_eyzat_v4.json). Folded into the cache key of an opted-in engine.
         engine_cycle::KnockModelParams model;
     } knock;
 
