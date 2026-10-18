@@ -115,7 +115,7 @@ TEST_CASE("A5 V7: lumped engines keep generator v1 bit-identical", "[drivetrain]
         REQUIRE(e != nullptr);
         REQUIRE(e->cycle.has_value());
         REQUIRE_FALSE(e->cycle->intake.has_value());
-        check_v1("a25a_gen", *e->cycle, e->fuels.front(), pool, {"a25a_gen", 0xfe26a4fdc04d367eULL, 0xe89e1d3c966ab55bULL});
+        check_v1("a25a_gen", *e->cycle, e->fuels.front(), pool, {"a25a_gen", 0x085d8a07a6b240f0ULL, 0xf2ca7a1214684832ULL /* re-pinned 2026-10-18: knock opt-in of the shipped A25A (octane + margin join key and hash); was 0xfe26a4fdc04d367e, 0xe89e1d3c966ab55b */});
     }
 }
 

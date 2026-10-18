@@ -51,12 +51,25 @@ const ComponentParams& hyper() {
     static const ComponentParams c = load_vo("hyper_v8_one1_audio.json");
     return c;
 }
+// 2026-10-18: the shipped hyper is knock-limited (lambda target and fuel octane are map inputs for it). The classification
+// rows for lambda_target / fuels[1] were recorded on the schedule-only engine, so they run on the hyper with the knock block off.
+const ComponentParams& hyper_schedule() {
+    static const ComponentParams c = [] {
+        ComponentParams p = load_vo("hyper_v8_one1_audio.json");
+        auto& e = std::get<SimulatedEngineDesc>(p);
+        e.cycle->knock = {};
+        return p;
+    }();
+    return c;
+}
 const ComponentParams& demo_i4() {
     static const ComponentParams c = load_vo("demo_i4_pipes.json");
     return c;
 }
 const ComponentParams& a25a_gen() {
-    static const ComponentParams c = load_vo("toyota_a25a_fks_gen.json");
+    // 2026-10-18: the shipped A25A gen is knock-limited; the classification tables below were recorded on the schedule-only engine.
+    static const ComponentParams c = io::load_engine_json_from_string(
+        R"({"extends": "toyota_a25a_fks_gen.json", "ecu": {"ignition_strategy": null, "knock_margin_deg": null}})", kEngines, validate_only());
     return c;
 }
 const ComponentParams& a25a_sim() {
@@ -486,7 +499,7 @@ TEST_CASE("K1 classification table: every row of design section 6's Regen column
         {"/dfco_enable_rpm", "none", hyper, [](E& e) { e.dfco_enable_rpm += 100.0; }, EngineChange::Runtime},
         {"/idle_control/kp", "none", hyper, [](E& e) { e.idle.kp_per_rpm *= 1.5; }, EngineChange::Runtime},
         {"/idle_control/max_torque_nm", "none", hyper, [](E& e) { e.idle.max_torque_nm += 5.0; }, EngineChange::Runtime},
-        {"/ecu/lambda_target", "none", hyper, [](E& e) { e.ecu.lambda_target.values.push_back(1.0); }, EngineChange::Runtime},
+        {"/ecu/lambda_target", "none", hyper_schedule, [](E& e) { e.ecu.lambda_target.values.push_back(1.0); }, EngineChange::Runtime},
         {"/ecu/spark_advance_deg", "none", hyper, [](E& e) { e.ecu.spark_advance_deg.values.push_back(1.0); }, EngineChange::Runtime},
         {"/cycle/spark_advance_deg (schedule)", "M", a25a_gen,
          [](E& e) { e.cycle->spark_advance_deg.values.push_back(1.0); }, EngineChange::Maps},
@@ -571,7 +584,7 @@ TEST_CASE("K1 classification table: every row of design section 6's Regen column
          [](E& e) { e.cycle->installation->exhaust.elements.back().position_m = Vec3{9.0, 9.0, 9.0}; }, EngineChange::Runtime},
         // --- fuel ---
         {"fuel lhv (the generator's fuel)", "M", hyper, [](E& e) { e.fuels.front().lhv_j_kg *= 0.9; }, EngineChange::Maps},
-        {"fuels[1] only (not the generator's)", "none", hyper,
+        {"fuels[1] only (not the generator's)", "none", hyper_schedule,
          [](E& e) {
              e.fuels.push_back(e.fuels.front());
              e.fuels.back().name = "other";
@@ -666,6 +679,7 @@ TEST_CASE("K3 key-coverage walk: a field moves the map key iff it classifies as 
     // Recorded sabotage: the classifier drops the Maps branch for cycle.intake (runners/throttle bore/plenum): those rows read
     // Runtime while the independent key moves -> case fails on exactly those rows.
     ComponentParams base = demo_i4();
+    S(base).cycle->knock = {}; // 2026-10-18: recorded on the schedule-only engine (the shipped one is knock-limited now)
     REQUIRE(S(base).cycle->intake.has_value());
     REQUIRE(S(base).cycle->exhaust.has_value());
     REQUIRE(S(base).cycle->installation.has_value());

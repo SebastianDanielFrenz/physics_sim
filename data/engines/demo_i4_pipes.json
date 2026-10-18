@@ -18,6 +18,8 @@
   "throttle_actuator_tau_s": 0.04,
   "idle_control": { "kp_per_rpm": 3e-05, "ki_per_rpm_s": 6e-05, "max_throttle": 0.1, "max_torque_nm": 15.0 },
   "ecu": {
+    "ignition_strategy": "knock_limited",
+    "knock_margin_deg": 2.0,
     "lambda_target": { "rpm": [0.0, 7000.0], "p_im_kpa": [20.0, 100.0], "values": [[1.0, 1.0], [1.0, 0.9]] },
     "spark_advance_deg": { "rpm": [0.0, 7000.0], "p_im_kpa": [20.0, 100.0], "values": [[30.0, 20.0], [40.0, 30.0]] }
   },

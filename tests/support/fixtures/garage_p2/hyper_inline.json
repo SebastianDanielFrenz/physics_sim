@@ -42,6 +42,8 @@
     "max_torque_nm": 25
   },
   "ecu": {
+    "ignition_strategy": "knock_limited",
+    "knock_margin_deg": 2.0,
     "lambda_target": {
       "rpm": [
         0,

@@ -104,6 +104,14 @@ json knock_engine(const char* base, real margin, bool mbt) {
     return j;
 }
 
+// Knock opt-in pins removed (owner 2026-10-18 opted every cycle engine in; these cases need the schedule-only engine).
+json no_knock(const char* base) {
+    json j;
+    j["extends"] = base;
+    j["ecu"] = {{"ignition_strategy", nullptr}, {"knock_margin_deg", nullptr}};
+    return j;
+}
+
 ComponentParams load_params(const json& j, MapQuality q = MapQuality::Full, bool generate = true) {
     io::EngineMapOptions o;
     o.quality = q;
@@ -271,7 +279,7 @@ TEST_CASE("P7 K1: fuel knock block - shipped values, the E25 blend rule, every r
 // ---------------------------------------------------------------------------------------------------------------------
 TEST_CASE("P7 K2: the ECU opt-in - rejections, a file theta_kl wins, MBT tracking, no opt-in no table", "[knock][drivetrain][cycle][io]") {
     SECTION("an engine that does not opt in has no knock table and no knock in its cycle desc") {
-        const SimulatedEngineDesc e = load_sim(json{{"extends", "toyota_a25a_fks_gen.json"}}, MapQuality::Sketch);
+        const SimulatedEngineDesc e = load_sim(no_knock("toyota_a25a_fks_gen.json"), MapQuality::Sketch);
         CHECK_FALSE(e.maps.has_theta_kl);
         CHECK(e.maps.theta_kl_by_fuel.empty());
         CHECK_FALSE(e.cycle->knock.enabled);
@@ -281,10 +289,11 @@ TEST_CASE("P7 K2: the ECU opt-in - rejections, a file theta_kl wins, MBT trackin
         json j = knock_engine("toyota_a25a_fks_gen.json", 2.0, false);
         j["ecu"]["ignition_strategy"] = "adaptive";
         CHECK_THAT(load_error(j), ContainsSubstring("ignition_strategy must be \"schedule\" or \"knock_limited\""));
-        j = json{{"extends", "toyota_a25a_fks_gen.json"}, {"ecu", {{"knock_margin_deg", 2.0}}}};
+        j = no_knock("toyota_a25a_fks_gen.json");
+        j["ecu"]["knock_margin_deg"] = 2.0;
         CHECK_THAT(load_error(j), ContainsSubstring("'knock_margin_deg' needs ignition_strategy"));
         j = knock_engine("toyota_a25a_fks_gen.json", 2.0, false);
-        j["ecu"].erase("knock_margin_deg");
+        j["ecu"]["knock_margin_deg"] = nullptr;
         CHECK_THAT(load_error(j), ContainsSubstring("needs 'knock_margin_deg'"));
         j = knock_engine("toyota_a25a_fks_gen.json", 10.5, false);
         CHECK_THAT(load_error(j), ContainsSubstring("must be in [0, 10]"));
@@ -643,7 +652,7 @@ TEST_CASE("P7 K7: classify_engine_change on a knock-limited engine", "[knock][dr
     b.ecu.lambda_target.values.back() -= 0.01; // P7b: the knock replay runs at the ECU lambda target
     CHECK(classify_engine_change(a, b) == EngineChange::Maps);
 
-    const SimulatedEngineDesc n = load_sim(json{{"extends", "toyota_a25a_fks_gen.json"}}, MapQuality::Full, false);
+    const SimulatedEngineDesc n = load_sim(no_knock("toyota_a25a_fks_gen.json"), MapQuality::Full, false);
     SimulatedEngineDesc m = n;
     m.fuels[1].knock.ron += 1.0; // no opt-in: the octane is no generator input
     CHECK(classify_engine_change(n, m) == EngineChange::Runtime);
