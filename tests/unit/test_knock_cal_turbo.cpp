@@ -697,10 +697,7 @@ TEST_CASE("KCB diag: fine grid", "[.][diag][knock][knock_cal]") { fine_grid(true
 TEST_CASE("KCB diag: fine grid with the trapped-air rule", "[.][diag][knock][knock_cal]") { fine_grid(false); }
 
 TEST_CASE("KCB diag: chosen model and its sensitivities", "[.][diag][knock][knock_cal]") {
-    Model m;
-    m.p_exp = 1.05;
-    m.b_k = 5800.0;
-    m.scale = 0.012;
+    const Model m; // the compiled knock model v4
     struct V {
         const char* name;
         BcOpt o;
