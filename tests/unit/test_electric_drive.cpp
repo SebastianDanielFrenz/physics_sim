@@ -170,3 +170,36 @@ TEST_CASE("Hybrid rejects charging without generator hardware and stops ICE afte
  w.set_control("assist.drive_mode",0);for(int i=0;i<1200;++i)w.step();
  CHECK(w.powertrain_state(rig.vehicle).engine_state==EngineState::Off);
 }
+TEST_CASE("Hybrid and fuel cell evolution is identical across worker counts", "[ev][hybrid_control][fuel_cell][determinism]") {
+ for(const char* fixture:{"car_hybrid.json","car_fuel_cell.json"}) {
+  INFO(fixture);
+  const auto run=[&](int workers) {
+   auto d=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/"+fixture);
+   auto rig=ps_test::build_vehicle_rig_from_desc(d,1800,{2,.4,.15},.6,0,workers);auto& w=*rig.world;
+   w.set_control("gear_request",99);w.set_control("throttle",.5);
+   std::vector<std::uint64_t> hashes;
+   for(int i=0;i<1200;++i) {
+    if(i==240)w.set_control("assist.drive_mode",2);
+    if(i==480)w.set_control("electric.ready",0);
+    if(i==600){w.set_control("electric.ready",1);w.reset_vehicle(rig.vehicle,{.gear=0,.engine_state=EngineState::Off});w.set_control("gear_request",99);}
+    if(i==960){w.set_control("gear_request",0);w.set_control("throttle",0);}
+    w.step();hashes.push_back(w.state_hash());
+   }
+   return hashes;
+  };
+  CHECK(run(1)==run(8));
+ }
+}
+TEST_CASE("Fuel cell DC supply supplements the battery while obeying its source power rating", "[ev][fuel_cell]") {
+ auto d=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_fuel_cell.json");
+ for(auto& c:d.powertrain.components) {
+  if(auto* b=std::get_if<BatteryDesc>(&c.params)){b->max_discharge_w=10000;b->initial_soc=.4;}
+  if(auto* f=std::get_if<FuelCellDesc>(&c.params))f->max_power_w=30000;
+ }
+ auto rig=ps_test::build_vehicle_rig_from_desc(d,1850,{2,.4,.15},.6,0,4);auto& w=*rig.world;
+ w.set_control("gear_request",1);w.set_control("throttle",1);
+ real peak_traction=0,peak_stack=0;
+ for(int i=0;i<1200;++i){w.step();const auto p=w.powertrain_state(rig.vehicle);peak_traction=std::max(peak_traction,p.electric_power_w);peak_stack=std::max(peak_stack,p.fuel_cell_power_w);}
+ CHECK(peak_stack>29000);CHECK(peak_stack<=30000.01);
+ CHECK(peak_traction>10000);CHECK(peak_traction<=40000.01);
+}
