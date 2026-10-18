@@ -932,8 +932,8 @@ TEST_CASE("KCB holdout: Honda L15B7 Tier 2 and Ford 2.7 EcoBoost at measured bou
 }
 
 TEST_CASE("KCB report: Ford 1.6 EcoBoost and Mazda 2.5 T at measured boundary conditions", "[knock][knock_cal][!mayfail]") {
-    // Not fitted, no claim: Ford 1.6 (bore/stroke [AS]) and Mazda 2.5 T (cooled EGR not modelled) read 2.6-5.2 deg too
-    // knock-resistant on average with knock model v3 - outside the held-out band (v4: see the printed table).
+    // Not fitted, no claim: Ford 1.6 (bore/stroke [AS]) and Mazda 2.5 T (cooled EGR not modelled) read 0.9-4.0 deg too
+    // knock-resistant on average with knock model v4 (rms 4.3-5.4, v3 4.7-6.5) - outside the held-out band.
     const std::vector<std::string> names = {"ford_16_t2", "ford_16_levIII", "mazda_25t_t2", "mazda_25t_t3"};
     prepare_named(names);
     for (const std::string& n : names) check_package(n, kHoldRms, kBandMax);
