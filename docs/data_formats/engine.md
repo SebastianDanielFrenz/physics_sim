@@ -1060,8 +1060,11 @@ Model (`core/include/ps/engine_cycle/knock.h`, `core/src/engine_cycle/knock.cpp`
    linear fit through iso-octane ideal-gas cp 188.9 J/(mol K) at 298.15 K and 425 at 900 K [AS, recalled], M 114.23 g/mol
    [C]. Wall heat to the end gas is neglected.
 4. Douaud & Eyzat 1978 (SAE 780080, via Heywood 1988 sec. 9.6.2, not verified locally [AS]):
-   `tau [s] = s_cal * 17.68e-3 * (OI/100)^3.402 * (p/1 atm)^-1.7 * exp(3800/T)`, `s_cal = kKnockCalPrefactorScale` 1.26
-   [M] (P7b, see "Calibration" below; B = 3800 K stays the literature value), with the octane index `OI = RON - K*(RON - MON)`,
+   `tau [s] = s_cal * 17.68e-3 * (OI/100)^3.402 * (p/1 atm)^-n * exp(B/T)` (literature n 1.7, B 3800 K). Knock model v3
+   (knock calibration phase B, see "Calibration v3" below): `s_cal` 0.012, `n` 1.05, `B` 5800 K, all [M], in
+   `data/knock_models/douaud_eyzat_v3.json` (physics_sim.knock_model/1, `ps::io::load_knock_model_json`) and as the compiled
+   defaults in `core/include/ps/engine_cycle/knock_model.h` (a test pins file == compiled); the generator reads them from
+   `CycleModelDesc::knock.model`. With the octane index `OI = RON - K*(RON - MON)`,
    K 0.5 [AS] (= (R+M)/2). Livengood-Wu: knock when `integral dt/tau >= 1`, integrated from IVC to the Wiebe burned fraction
    `kKnockEndBurnFraction` 0.90 [AS] or EVO, trapezoidal.
 5. theta_kl = the largest advance [deg BTDC] whose integral stays < 1, by bisection (0.05 deg [AS]) between theta_MBT - 40
@@ -1076,8 +1079,9 @@ workers, knock off -> on [M]: a25a_gen Sketch 0.020 -> 0.030 s, Preview 0.051 ->
 demo_i4_pipes 0.550 -> 0.556 / 1.188 -> 1.182 / 2.604 -> 2.740 s; hyper Sketch 0.735 -> 0.751 s (budget 1.5 s), Preview
 1.795 -> 1.793 s, Full 3.950 -> 4.010 s.
 
-Cache and hashes: with the opt-in the `.psmaps` key folds a "p7.knock_limit" tag, `kKnockModelVersion` 2 (P7b; was 1), the
-margin, each fuel's name/RON/MON (in fuels order) and the knock lambda target table; the file carries an optional trailing knock block; the maps content hash folds the
+Cache and hashes: with the opt-in the `.psmaps` key folds a "p7.knock_limit" tag, `kKnockModelVersion` 3 (knock calibration
+phase B; 2 at P7b, 1 at P7), the margin, each fuel's name/RON/MON (in fuels order), the knock lambda target table and (v3) the
+four model parameters `knock.model` (pre-factor scale, pressure exponent, activation temperature, octane-index K); the file carries an optional trailing knock block; the maps content hash folds the
 per-fuel tables only when present. All three are untouched without the opt-in (H3 table extended).
 
 MBT tracking: a knock-limited ECU may omit its spark table; the loader then fills `ecu.spark_advance_deg` from the generated
@@ -1088,12 +1092,47 @@ construction and on `replace_engine_maps`; no regeneration is needed for any lis
 (the existing tank rule).
 
 Validation (`tests/unit/test_knock_limit.cpp`, `[knock][drivetrain][cycle]`): K1 fuel blocks, K2 loader opt-in rules and
-overrides, K3 monotonicity/octane order/margin (a p_im step may rise by 0.1 + 20 deg per unit lambda drop [AS] - enrichment
-cools the end gas - and a Sketch section pins that the replay follows the lambda target), K4 replay vs the cycle and an
+overrides, K3 monotonicity/octane order/margin (a p_im step may rise by 0.1 + 35 deg per unit lambda drop [AS] where the
+limit binds (theta_kl < MBT; v3 measures up to 32, v2 12) - enrichment cools the end gas - and a Sketch section pins that the
+replay follows the lambda target), K4 replay vs the cycle and an
 independent isentrope, K5 tank-fuel table selection, K6 determinism/zero alloc/progress/cancel, K7 change classes, K8 dyno
 Knock findings on a turbo conversion.
 
-Calibration (engine garage P7b, `tests/unit/test_knock_calibration.cpp`): ONE constant, the pre-factor scale, fitted on the
+Calibration v3 (knock calibration phase B, 2026-10-19, `tests/unit/test_knock_cal_turbo.cpp` `[knock][knock_cal]`): the v2
+model below is 10-19 deg too knock-prone on the boosted EPA NVFEL rows (MAP to 240 kPa) at their measured boundary
+conditions; one pre-factor cannot fit them and the A25A together (best common scale: rms 4.94 deg, both engines ~5). v3 fits
+the pre-factor scale, the pressure exponent n and the activation temperature B jointly on the envelope rows (highest-torque
+row per 50 rpm bin) of the A25A (17 rows) and the Honda L15B7 on EPA Tier 3 E10 (15 rows, MAP 98-196 kPa), KV1-BC's rule
+throughout (trapped = measured air, measured IMT/lambda/cam phases, exhaust reservoir at ambient as in the generator; measured
+ECU spark taken as theta_kl with margin 0, so the model absorbs the OEM margin), constrained to every A25A row within +-5 deg;
+grid n 0.95-1.40 x B 4000-6000 K with a golden-section scale per cell. Result (envelope rows, theta_kl - measured spark, deg):
+
+| package (fuel RON/MON) | role | n | mean | rms | max abs |
+|---|---|---|---|---|---|
+| Toyota A25A (Tier 3 E10 92/84) | fit (KV1-BC) | 17 | +0.51 | 2.94 | 4.93 |
+| Honda L15B7 (Tier 3 E10 91.0/83.5) | fit | 15 | -0.62 | 2.87 | 6.00 |
+| Honda L15B7 (Tier 2 E0 96.1/88.5) | held out (octane) | 15 | +1.53 | 2.61 | 5.73 |
+| Ford 2.7 EcoBoost cell 9 Tier 2 | held out | 12 | +0.97 | 1.59 | 3.05 |
+| Ford 2.7 EcoBoost cell 9 LEV III | held out | 12 | -0.95 | 1.32 | 2.58 |
+| Ford 2.7 EcoBoost HD1 Tier 2 | held out | 13 | +0.11 | 1.90 | 5.83 |
+| Ford 2.7 EcoBoost HD Tier 3 | held out | 13 | +2.66 | 3.14 | 5.38 |
+| Ford 1.6 EcoBoost Tier 2 | report | 14 | +5.22 | 6.45 | 10.23 |
+| Ford 1.6 EcoBoost LEV III | report | 15 | +4.95 | 5.85 | 9.30 |
+| Mazda 2.5 T Tier 2 | report | 11 | +5.18 | 6.37 | 8.94 |
+| Mazda 2.5 T Tier 3 | report | 11 | +2.57 | 4.74 | 7.50 |
+
+Asserted (declared before the run): A25A every row within +-5 deg, Honda T3 rms <= 3.0 and max <= 6.5; held out rms <= 3.5
+and max <= 6.5; the compiled set is the minimum of the constrained objective against scale x0.9/x1.1, n +-0.05 and B +-200 K
+(each with its own best scale). Ford 1.6 (bore/stroke [AS]) and Mazda 2.5 T (cooled EGR not modelled) read too advanced and
+stay `[!mayfail]`. Sensitivity to the assumed IVC (intake cam +-10 deg on every row): Ford 2.7 envelope rms 1.1-3.7 (cell 9
+Tier 2 1.59 -> 1.91/1.64), Honda T3 2.87 -> 2.18/4.21, A25A 2.94 -> 2.83/3.43 - the Ford 2.7's unknown cam zero does not
+change the conclusion. Boundary-condition alternatives rejected: exhaust at the measured turbine-inlet pressure (more hot
+residual) makes every boosted fit worse (Honda T3 rms 13.5); the delivered-air rule (trapped = measured x model trapping
+efficiency) transfers worse (Ford 1.6 8.6, Mazda 13.6). Known: the v3 octane response between the two fuels of one engine
+(Honda T2 vs T3, Ford LEV III vs Tier 2) is about twice the measured one (it follows (OI/100)^3.402 at the new n and B).
+
+Calibration v2 (engine garage P7b, `tests/unit/test_knock_calibration.cpp`, superseded by v3; the KV1-BC per-row band is
+still asserted with v3: rms 2.94, mean +0.51): ONE constant, the pre-factor scale, fitted on the
 17 A25A WOT training rows (EPA NVFEL Report 26781, xlsx "High Load Final" rows 23-39) with each row's MEASURED boundary
 conditions (KV1-BC: the IVC state of a cycle run at the measured rpm, MAP, IMT, cam phases and lambda, at the measured spark,
 its trapped mass scaled to the measured air; then the knock replay). Objective: rms of theta_kl minus measured spark, a

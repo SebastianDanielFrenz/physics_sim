@@ -856,3 +856,21 @@ TEST_CASE("KCB report: Ford 1.6 EcoBoost and Mazda 2.5 T at measured boundary co
     prepare_named(names);
     for (const std::string& n : names) check_package(n, kHoldRms, kBandMax);
 }
+
+// Step 2 evidence: the best pre-factor alone (v2 shape n 1.7, B 3800 K) under the v3 fit boundary conditions.
+TEST_CASE("KCB diag: pre-factor-only fit under the fit BC", "[.][diag][knock][knock_cal]") {
+    prepare_named({"a25a_kv1bc", "honda_l15b7_t3"});
+    Model m;
+    m.p_exp = ec::kDouaudEyzatPExponent;
+    m.b_k = ec::kDouaudEyzatB_K;
+    m.scale = kV2Scale;
+    m = fit_scale(m, std::log10(kV2Scale) - 1.5, std::log10(kV2Scale) + 1.5);
+    real ra = 0.0, rh = 0.0;
+    const real r = fit_rms(m, &ra, &rh);
+    std::printf("pre-factor only (n 1.7, B 3800): scale %.4g combined rms %.3f A25A %.3f Honda T3 %.3f\n", m.scale, r, ra, rh);
+    for (const char* n : {"a25a_kv1bc", "honda_l15b7_t3"}) {
+        const Set* s = find_set(n);
+        const Stats st = stats(*s->pk, eval_all(*s->pk, s->pr, m), true);
+        std::printf("  %-16s mean %+6.2f rms %5.2f max %5.2f\n", n, st.mean, st.rms, st.max_abs);
+    }
+}
