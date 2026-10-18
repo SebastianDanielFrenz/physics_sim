@@ -2287,7 +2287,13 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         ctx.assist_auto_clutch=true;ctx.assist_auto_shift=true;
         if(hybrid_disconnect_)ctx.gear_request=0;
         else if(auto_)ctx.gear_request=hybrid_selector_<0?-1:real(99);
-        else ctx.gear_request=hybrid_selector_<0?-1:(gearbox_->current_position()==0?1:kGearRequestNone);
+        else {
+            // Manual-TCU gearbox: select 1st only from a settled neutral (D chosen from N, or traction resuming after the
+            // disconnect). A shift passes through position 0 while Releasing/Selecting; asking for 1st then reverted every
+            // upshift (and, as a valid request, discarded the driver's shift_up_count presses) - the car never left 1st.
+            const bool settled_neutral=gearbox_->current_position()==0&&gearbox_->phase()==Gearbox::Phase::Idle&&gearbox_->target()==0;
+            ctx.gear_request=hybrid_selector_<0?-1:(settled_neutral?1:kGearRequestNone);
+        }
     }
 
     // --- plan section 7.2 step 3: controllers -------------------------------
