@@ -13,6 +13,7 @@ and writes, per package,
 
     out/epa_turbo/<package>_rows.json                          every row of the three data sheets (all columns)
     tests/support/fixtures/epa_turbo/<package>_rows.json       the compact copy for tests: the selected high-load rows
+    tests/support/fixtures/epa_turbo/<package>_light_rows.json the compact light-load copy (phase B's no-knock check)
 
 Usage:   python -I tools/enginedata/epa_turbo_extract.py [--src DIR] [--stats]
 
@@ -31,6 +32,16 @@ So `envelope` is the WOT / maximum-load row per speed (what a WOT dyno curve wou
 rows are the near-WOT and part-boost rows below it. Nothing else is filtered: ECU protection rows (lambda < 0.9, spark
 collapsed) stay in and are visible through their lambda / spark / turbine-inlet temperature. Phase B decides what is
 "knock limited"; this extraction only removes the part-load (naturally aspirated) rows.
+
+LIGHT-LOAD SELECTION (phase B, the <package>_light_rows.json copy): fired rows with
+    map_kpa <= 60, 0.95 <= lambda <= 1.05, bmep_bar >= 0.3
+- throttled, stoichiometric, positive work. The engine ran at the measured spark there without knock, so the true
+knock-limited spark is at least the measured spark: a one-sided check, nothing is fitted to these rows' spark.
+
+LIGHT-LOAD SELECTION (phase B, the <package>_light_rows.json copy): fired rows with
+    map_kpa <= 60, 0.95 <= lambda <= 1.05, bmep_bar >= 0.3
+- throttled, stoichiometric, positive work. The engine ran at the measured spark there without knock, so the true
+knock-limited spark is at least the measured spark: a one-sided check, nothing is fitted to these rows' spark.
 
 Units, all explicit in the keys: rpm; Nm; bar; degC; kPa absolute (kPaA in the workbooks); deg crank (CAD);
 g/s; spark_btdc_deg is the "Average Spark Timing Across all Cylinders" (CAD BTDC, negative = after TDC).
@@ -58,6 +69,9 @@ FIXTURE_DIR = WT / "tests" / "support" / "fixtures" / "epa_turbo"
 
 DATA_SHEETS = ["Steady State", "High Load Initial", "High Load Final"]
 BMEP_FRACTION = 0.5
+LIGHT_MAP_KPA = 60.0
+LIGHT_LAMBDA = (0.95, 1.05)
+LIGHT_BMEP_BAR = 0.3
 SPEED_BIN_RPM = 50
 
 # package key -> (directory fragment, engine, fuel file/name, fuel report, cam convention)
@@ -266,6 +280,22 @@ def compact(d: dict) -> dict:
     return c
 
 
+def is_light(r: dict) -> bool:
+    return (r.get("map_kpa", 1e9) <= LIGHT_MAP_KPA and LIGHT_LAMBDA[0] <= r.get("lambda", 0.0) <= LIGHT_LAMBDA[1]
+            and r["bmep_bar"] >= LIGHT_BMEP_BAR and "spark_btdc_deg" in r)
+
+
+def compact_light(d: dict) -> dict:
+    c = {k: v for k, v in d.items() if k not in ("rows", "row_count_all", "columns")}
+    keep = [r for r in d["rows"] if is_light(r)]
+    c["selection"] = (f"light load: map_kpa <= {LIGHT_MAP_KPA}, {LIGHT_LAMBDA[0]} <= lambda <= {LIGHT_LAMBDA[1]}, "
+                      f"bmep_bar >= {LIGHT_BMEP_BAR} (no-knock check: true knock limit >= measured spark)")
+    c["row_count_all"] = d["row_count_all"]
+    c["row_count_selected"] = len(keep)
+    c["rows"] = keep
+    return c
+
+
 def dump(path: Path, obj: dict) -> None:
     """Header keys on one line each, one row per line (diff friendly), compact separators."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -307,6 +337,7 @@ def main() -> int:
             continue
         dump(OUT_DIR / f"{key}_rows.json", d)
         dump(FIXTURE_DIR / f"{key}_rows.json", compact(d))
+        dump(FIXTURE_DIR / f"{key}_light_rows.json", compact_light(d))
     return 0
 
 

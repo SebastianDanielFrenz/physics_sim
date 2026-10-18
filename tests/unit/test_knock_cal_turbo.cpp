@@ -103,10 +103,12 @@ SimulatedEngineDesc load_desc(const std::filesystem::path& file) {
     return *e;
 }
 
-std::unique_ptr<Package> load_package(const std::string& rows_name, const std::string& engine_dir) {
+// light = true: the package's light-load rows (<pkg>_light_rows.json, the no-knock check), set name "<pkg>_light", every
+// row flagged envelope so the envelope-only preparation keeps them.
+std::unique_ptr<Package> load_package(const std::string& rows_name, const std::string& engine_dir, bool light = false) {
     auto pk = std::make_unique<Package>();
-    pk->name = rows_name;
-    std::ifstream in(kFix / (rows_name + "_rows.json"));
+    pk->name = light ? rows_name + "_light" : rows_name;
+    std::ifstream in(kFix / (rows_name + (light ? "_light_rows.json" : "_rows.json")));
     REQUIRE(in.good());
     const json j = json::parse(in);
     pk->desc = load_desc(kFix / engine_dir / "engine.json");
@@ -114,7 +116,7 @@ std::unique_ptr<Package> load_package(const std::string& rows_name, const std::s
     REQUIRE(pk->fuel.has_knock);
     pk->proto = std::make_unique<ec::CycleStepper>(*pk->desc.cycle, pk->fuel.lhv_j_kg, pk->fuel.afr_stoich);
     for (const json& r : j.at("rows")) {
-        if (!r.at("high_load").get<bool>()) continue;
+        if (!light && !r.at("high_load").get<bool>()) continue;
         auto num = [&](const char* k) { return (r.contains(k) && r.at(k).is_number()) ? r.at(k).get<real>() : std::nan(""); };
         Row w{};
         w.rpm = num("rpm");
@@ -128,7 +130,7 @@ std::unique_ptr<Package> load_package(const std::string& rows_name, const std::s
         w.has_ecam = std::isfinite(num("exhaust_cam_ret_deg"));
         w.icam_adv = w.has_icam ? num("intake_cam_adv_deg") : 0.0;
         w.ecam_ret = w.has_ecam ? num("exhaust_cam_ret_deg") : 0.0;
-        w.envelope = r.at("envelope");
+        w.envelope = light ? true : r.at("envelope").get<bool>();
         w.row = r.at("row");
         if (!(std::isfinite(w.rpm) && std::isfinite(w.map_kpa) && std::isfinite(w.imt_c) && std::isfinite(w.lambda) &&
               std::isfinite(w.spark_btdc) && std::isfinite(w.fuel_g_s))) {
@@ -273,6 +275,7 @@ struct Model {
     real p_exp = ec::kKnockCalPressureExponent;
     real b_k = ec::kKnockCalActivationK;
     real k_oi = ec::kOctaneIndexK;
+    real gamma = 0.0; // residual-dilution exponent: rate x (1 - x_res)^gamma (harness emulation, constant per row)
 };
 
 struct Res {
@@ -289,7 +292,7 @@ std::vector<Res> eval_all(const Package& pk, const std::vector<Prepared>& pr, co
         for (std::size_t i = b; i < e; ++i) {
             if (!pr[i].ok) continue;
             ec::KnockReplayInput kin = pr[i].kin;
-            kin.inv_on_term = inv_on;
+            kin.inv_on_term = m.gamma == 0.0 ? inv_on : inv_on * std::pow(1.0 - pr[i].x_ivc, m.gamma);
             kin.p_exponent = m.p_exp;
             kin.activation_k = m.b_k;
             const ec::KnockLimitResult kl = ec::knock_limited_spark(kin, pr[i].mbt_btdc, 0.0);
@@ -327,6 +330,33 @@ Stats stats(const Package& pk, const std::vector<Res>& r, bool envelope_only) {
     return s;
 }
 
+// Light-load no-knock check: the engine ran there at the measured spark without knock, so the model's knock limit must
+// not lie below the spark the generator would ask for there, min(measured spark, the model's MBT). Violation per row =
+// max(0, min(spark, MBT) - theta_kl) where the search reports a limit, else 0.
+struct LightStats {
+    int n = 0, limited = 0, violated = 0;
+    real rms = 0.0, max_v = 0.0;
+};
+
+LightStats light_stats(const std::vector<Prepared>& pr, const std::vector<Res>& r) {
+    LightStats s;
+    real sq = 0.0;
+    for (std::size_t i = 0; i < r.size(); ++i) {
+        if (!r[i].ok) continue;
+        ++s.n;
+        if (!r[i].limited) continue;
+        ++s.limited;
+        const real v = std::max(real(0.0), std::min(pr[i].spark, pr[i].mbt_btdc) - r[i].theta_kl);
+        if (v > 0.0) ++s.violated;
+        sq += v * v;
+        s.max_v = std::max(s.max_v, v);
+    }
+    if (s.n > 0) s.rms = std::sqrt(sq / s.n);
+    return s;
+}
+
+bool is_light_set(const std::string& name) { return name.size() > 6 && name.compare(name.size() - 6, 6, "_light") == 0; }
+
 struct Set {
     std::unique_ptr<Package> pk;
     std::vector<Prepared> pr;
@@ -351,6 +381,15 @@ std::vector<Set>& sets() {
         add(load_package("ford_16_levIII", "ford_16"));
         add(load_package("mazda_25t_t2", "mazda_25t"));
         add(load_package("mazda_25t_t3", "mazda_25t"));
+        // Light-load no-knock rows (one-sided check, see light_violation).
+        add(load_package("honda_l15b7_t3", "honda_l15b7", true));
+        add(load_package("honda_l15b7_t2", "honda_l15b7", true));
+        add(load_package("ford_27_t2_cell9", "ford_27", true));
+        add(load_package("ford_27_levIII_cell9", "ford_27", true));
+        add(load_package("ford_16_t2", "ford_16", true));
+        add(load_package("ford_16_levIII", "ford_16", true));
+        add(load_package("mazda_25t_t2", "mazda_25t", true));
+        add(load_package("mazda_25t_t3", "mazda_25t", true));
         return v;
     }();
     return s;
@@ -873,4 +912,146 @@ TEST_CASE("KCB diag: pre-factor-only fit under the fit BC", "[.][diag][knock][kn
         const Stats st = stats(*s->pk, eval_all(*s->pk, s->pr, m), true);
         std::printf("  %-16s mean %+6.2f rms %5.2f max %5.2f\n", n, st.mean, st.rms, st.max_abs);
     }
+}
+
+// Idle-region check: theta_kl vs the ECU spark target at low rpm / low p_im of demo_i4_pipes (Full maps).
+TEST_CASE("KCB diag: demo_i4_pipes knock limit near idle", "[.][diag][knock][knock_cal]") {
+    jobs::JobSystem pool(10);
+    io::EngineMapOptions o;
+    o.quality = MapQuality::Full;
+    o.pool = &pool;
+    o.cache_dir = (std::filesystem::temp_directory_path() / "ps_kcb_engine_maps").string();
+    const SimulatedEngineDesc d =
+        std::get<SimulatedEngineDesc>(io::load_engine_json(std::string(PS_SOURCE_DIR) + "/data/engines/demo_i4_pipes.json", o));
+    const Table2D& kl = d.maps.theta_kl_deg;
+    const Table2D& sp = d.ecu.spark_advance_deg;
+    for (real rpm : {700.0, 800.0, 900.0, 1000.0, 1200.0, 1500.0}) {
+        for (real p : {20000.0, 25000.0, 30000.0, 35000.0, 40000.0, 50000.0})
+            std::printf("rpm %5.0f p %6.0f theta_kl %7.2f ecu %7.2f%s\n", rpm, p, kl.value(rpm, p), sp.value(rpm, p),
+                        kl.value(rpm, p) < sp.value(rpm, p) ? "  LIMITED" : "");
+    }
+}
+
+// v2 vs v3 knock limit over the whole generated grid of every shipped opted-in engine (Full maps, the desc's own
+// fuel order): theta_kl - the ECU target where limited, for the low-load region (p_im <= 50 kPa) and the rest.
+TEST_CASE("KCB diag: v2 vs v3 knock limit across the grid", "[.][diag][knock][knock_cal]") {
+    jobs::JobSystem pool(10);
+    // honda_k20a_dc5 has cam profiles (one map set per profile; generate_engine_maps refuses a profile desc) - left out.
+    for (const char* file : {"demo_i4_pipes.json", "toyota_a25a_fks_gen.json", "bmw_n52b30.json", "hyper_v8_one1_audio.json"}) {
+        io::EngineMapOptions o;
+        o.quality = MapQuality::Preview;
+        o.pool = &pool;
+        o.generate = false;
+        const SimulatedEngineDesc d = std::get<SimulatedEngineDesc>(io::load_engine_json(std::string(PS_SOURCE_DIR) + "/data/engines/" + file, o));
+        REQUIRE(d.cycle.has_value());
+        for (int v = 2; v <= 3; ++v) {
+            CycleModelDesc c = *d.cycle;
+            if (v == 2) {
+                c.knock.model.prefactor_scale = kV2Scale;
+                c.knock.model.pressure_exponent = ec::kDouaudEyzatPExponent;
+                c.knock.model.activation_k = ec::kDouaudEyzatB_K;
+            }
+            const EngineMapsPtr m = generate_engine_maps(c, d.fuels[0], MapQuality::Preview, &pool);
+            const Table2D& kl = m->maps.theta_kl_deg;
+            const Table2D& mbt = m->maps.theta_mbt_deg;
+            std::printf("== %s v%d (theta_kl - MBT at the nodes, '.' = not limited)\n       ", file, v);
+            for (real p : kl.y) std::printf("%6.0f", p / 1000.0);
+            std::printf("\n");
+            for (std::size_t ix = 0; ix < kl.x.size(); ++ix) {
+                std::printf("%6.0f ", kl.x[ix]);
+                for (std::size_t iy = 0; iy < kl.y.size(); ++iy) {
+                    const real dlt = kl.values[ix * kl.y.size() + iy] - mbt.value(kl.x[ix], kl.y[iy]);
+                    if (dlt >= 0.0) std::printf("     .");
+                    else std::printf("%6.1f", dlt);
+                }
+                std::printf("\n");
+            }
+        }
+    }
+}
+
+// Light-load no-knock rows of every package (one-sided: theta_kl >= min(spark, MBT)) for v2, v3 and the literature
+// constants, plus the worst rows of v3.
+TEST_CASE("KCB diag: light-load no-knock rows", "[.][diag][knock][knock_cal]") {
+    const BcOpt o = fit_bc();
+    for (Set& s : sets())
+        if (is_light_set(s.pk->name)) s.pr = prepare_all(*s.pk, o);
+    Model v2;
+    v2.scale = kV2Scale;
+    v2.p_exp = ec::kDouaudEyzatPExponent;
+    v2.b_k = ec::kDouaudEyzatB_K;
+    const Model v3;
+    Model lit = v2;
+    lit.scale = 1.0;
+    for (const auto& [title, m] : {std::pair<const char*, Model>{"v2", v2}, {"v3", v3}, {"literature", lit}}) {
+        std::printf("== %s: scale %.4g n %.3f B %.0f\n", title, m.scale, m.p_exp, m.b_k);
+        for (const Set& s : sets()) {
+            if (!is_light_set(s.pk->name)) continue;
+            const LightStats l = light_stats(s.pr, eval_all(*s.pk, s.pr, m));
+            std::printf("  %-28s n %3d limited %3d violated %3d rms_v %5.2f max_v %5.2f\n", s.pk->name.c_str(), l.n, l.limited, l.violated, l.rms, l.max_v);
+        }
+    }
+    for (const Set& s : sets()) {
+        if (!is_light_set(s.pk->name)) continue;
+        const std::vector<Res> r = eval_all(*s.pk, s.pr, v3);
+        std::printf("-- v3 rows %s (rpm map spark mbt theta_kl T_ivc x_ivc air_ratio)\n", s.pk->name.c_str());
+        for (std::size_t i = 0; i < r.size(); ++i) {
+            if (!r[i].ok || !r[i].limited) continue;
+            const Row& w = s.pk->rows[i];
+            std::printf("   %5.0f %5.1f %6.1f %6.1f %7.2f %6.1f %5.3f %5.2f\n", w.rpm, w.map_kpa, w.spark_btdc, s.pr[i].mbt_btdc, r[i].theta_kl,
+                        s.pr[i].t_ivc, s.pr[i].x_ivc, s.pr[i].air_ratio);
+        }
+    }
+}
+
+// Step 2 candidate: a residual-dilution factor (1 - x_res)^gamma on the ignition rate, on top of (scale, n, B); every
+// point gets its own best pre-factor under the constrained fit objective; light-load violations summed over every
+// light set (one-sided, not part of the objective).
+TEST_CASE("KCB diag: dilution grid", "[.][diag][knock][knock_cal]") {
+    g_kv1bc_penalty = true;
+    const BcOpt o = fit_bc();
+    prepare_sets(o);
+    std::printf("%5s %5s %6s %8s %6s %6s %6s %6s %6s %6s | %4s %6s %4s %6s\n", "gamma", "n", "B", "scale", "fit", "A25A", "maxA", "H3", "maxH3",
+                "hold", "vH3", "maxvH3", "vAll", "maxv");
+    for (real gamma : {0.0, 1.0, 2.0, 3.0, 4.0, 6.0}) {
+        for (real n : {1.05, 1.2, 1.35, 1.5, 1.7}) {
+            for (real b : {3800.0, 4600.0, 5200.0, 5800.0}) {
+                Model m;
+                m.p_exp = n;
+                m.b_k = b;
+                m.gamma = gamma;
+                const real centre = std::log10(kV2Scale) + (n - ec::kDouaudEyzatPExponent) * std::log10(50.0) - (b - 3800.0) / 850.0 * 0.4343;
+                m = fit_scale(m, centre - 1.5, centre + 1.5);
+                real ra = 0, rh = 0;
+                const real r = fit_rms(m, &ra, &rh);
+                real maxa = 0, maxh = 0, hsq = 0;
+                int hn = 0, vh = 0, vall = 0;
+                real maxvh = 0, maxv = 0;
+                for (const Set& s : sets()) {
+                    const std::vector<Res> res = eval_all(*s.pk, s.pr, m);
+                    const std::string& nm = s.pk->name;
+                    if (is_light_set(nm)) {
+                        const LightStats l = light_stats(s.pr, res);
+                        vall += l.violated;
+                        maxv = std::max(maxv, l.max_v);
+                        if (nm == "honda_l15b7_t3_light") {
+                            vh = l.violated;
+                            maxvh = l.max_v;
+                        }
+                        continue;
+                    }
+                    const Stats st = stats(*s.pk, res, true);
+                    if (nm == "a25a_kv1bc") maxa = st.max_abs;
+                    if (nm == "honda_l15b7_t3") maxh = st.max_abs;
+                    if (nm == "honda_l15b7_t2" || nm.rfind("ford_27", 0) == 0) {
+                        hsq += st.rms * st.rms * st.n;
+                        hn += st.n;
+                    }
+                }
+                std::printf("%5.1f %5.2f %6.0f %8.4g %6.3f %6.3f %6.2f %6.3f %6.2f %6.3f | %4d %6.2f %4d %6.2f\n", gamma, n, b, m.scale, r, ra, maxa, rh, maxh,
+                            std::sqrt(hsq / std::max(1, hn)), vh, maxvh, vall, maxv);
+            }
+        }
+    }
+    g_kv1bc_penalty = false;
 }
