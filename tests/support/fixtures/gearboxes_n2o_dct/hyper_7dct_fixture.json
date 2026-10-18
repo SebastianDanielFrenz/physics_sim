@@ -1,0 +1,27 @@
+{
+  "format": "physics_sim.gearbox/1",
+  "name": "hyper_7dct",
+  "type": "dual_clutch",
+  "source": "Game-owned 7-speed wet dual-clutch transaxle for the hypercar (automatic gearbox swap, 2026-10-16), NOT a specific gearbox [AS]. Ratios and efficiencies are physics_sim's hyper_7mt (data/gearboxes/hyper_7mt.json: 3.10-0.72, eta 0.97) so a swap keeps the car's gearing; odd gears on one input shaft and clutch, even gears and reverse on the other. Shift clutches 1900 N*m kinetic input-referred each, about 1.37 x the hyper V8's 1387 N*m peak (catalogue rating 1600 N*m) [AS]; handover (torque phase) 0.05 s, inertia-phase bound 0.25 s, preselect 0.10 s, engage 0.20 s [AS] (racing DCTs shift in tens of ms). Input inertia 0.03 kg*m^2 (two clutch packs), output 0.015 as hyper_7mt [AS].",
+  "forward_ratios":     [3.10, 2.20, 1.65, 1.30, 1.06, 0.87, 0.72],
+  "forward_efficiency": [0.97, 0.97, 0.97, 0.97, 0.97, 0.97, 0.97],
+  "reverse_ratios":     [-3.55],
+  "reverse_efficiency": [0.95],
+  "input_inertia_kgm2": 0.030,
+  "output_inertia_kgm2": 0.015,
+  "input_axis_local": [0, 1, 0],
+  "output_axis_local": [0, -1, 0],
+  "initial_gear": 0,
+  "rated_input_torque_nm": 1600.0,
+  "gear_type": "helical",
+  "mesh_order": 21,
+  "shift_clutch": {
+    "capacity_nm": 1900.0,
+    "static_factor": 1.15,
+    "torque_phase_s": 0.05,
+    "max_inertia_phase_s": 0.25,
+    "sync_slip_rad_s": 3.0,
+    "engage_time_s": 0.20,
+    "preselect_time_s": 0.10
+  }
+}

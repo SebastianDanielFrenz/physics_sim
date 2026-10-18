@@ -3,15 +3,18 @@
   "arm_channel": "nitrous_arm",
   "arm_default": 0,
   "min_throttle_command": 0.95,
+  "throttle_hysteresis": 0.2,
   "min_rpm": 5000,
   "max_rpm": 8100,
+  "max_rpm_fade_rpm": 300,
   "min_gear": 4,
   "max_gear": 99,
   "min_speed_mps": 0,
   "progressive": {
     "start_fraction": 0.4,
     "delay_s": 0.0,
-    "ramp_s": 1.0
+    "ramp_s": 1.0,
+    "resume_within_s": 0.25
   },
   "spark_retard_deg": 6.0,
   "safety": {
@@ -24,5 +27,5 @@
     "jet_diameter_mm": 1.0,
     "cd": 0.66
   },
-  "source": "A progressive wet-kit strategy for an ~800 hp shot on a rear-drive hypercar (N2O plan N7; every number [AS] unless stated). arm switch (channel nitrous_arm, default off) and a wide-open-throttle switch (min_throttle_command 0.95: a WOT microswitch closes near full travel). rpm window 3000-8100 rpm: 3000 because the dyno-held hyper V8 with the shot still makes torque and boost there (tests/validation/test_car_hyper_n2o.cpp), 8100 because the engine's fuel-cut limiter is 8250 rpm (engines/hyper_v8_one1_audio.json) and the spray must close before it. min_gear 2: no spray in 1st, where the rear tyres cannot carry even the stock torque. progressive start_fraction 0.4, ramp_s 1.0 s: 0.4 of the full flow at the moment the solenoid opens, then linear to full over 1 s - a pulse-width progressive controller as sold with big shots, here to keep the 800 hp from arriving as one torque step. spark_retard_deg 6.0: a typical large-shot retard (the Edelbrock 150 hp sheet, edelbrock_70060_square_150.json, lists 5-7 deg [C: Edelbrock Performer RPM nitrous plate kits #70060/#70061/#70063, Brochure 63-0003 Rev. 7/08, https://static.speedwaymotors.com/pdf/32570060.pdf, as transcribed in out/n2o_plan.md section 9.2]; a 6 deg midpoint is used here, the sheet does not cover 800 hp). Safety cuts: bottle below 55 bar gauge (~800 psig), fuel starvation, 35 s maximum spray (longer than the 30.9 s the 15 lb bottle lasts at WOT, so the bottle empties first). Purge solenoid jet 1.0 mm, Cd 0.66 (the shipped controller's value). PROVISIONAL."
+  "source": "A progressive wet-kit strategy for an ~800 hp shot on a rear-drive hypercar (N2O plan N7; every number [AS] unless stated). arm switch (channel nitrous_arm, default off) and a wide-open-throttle switch (min_throttle_command 0.95: a WOT microswitch closes near full travel). rpm window 3000-8100 rpm: 3000 because the dyno-held hyper V8 with the shot still makes torque and boost there (tests/validation/test_car_hyper_n2o.cpp), 8100 because the engine's fuel-cut limiter is 8250 rpm (engines/hyper_v8_one1_audio.json) and the spray must close before it. min_gear 2: no spray in 1st, where the rear tyres cannot carry even the stock torque. progressive start_fraction 0.4, ramp_s 1.0 s: 0.4 of the full flow at the moment the solenoid opens, then linear to full over 1 s - a pulse-width progressive controller as sold with big shots, here to keep the 800 hp from arriving as one torque step. spark_retard_deg 6.0: a typical large-shot retard (the Edelbrock 150 hp sheet, edelbrock_70060_square_150.json, lists 5-7 deg [C: Edelbrock Performer RPM nitrous plate kits #70060/#70061/#70063, Brochure 63-0003 Rev. 7/08, https://static.speedwaymotors.com/pdf/32570060.pdf, as transcribed in out/n2o_plan.md section 9.2]; a 6 deg midpoint is used here, the sheet does not cover 800 hp). Safety cuts: bottle below 55 bar gauge (~800 psig), fuel starvation, 35 s maximum spray (longer than the 30.9 s the 15 lb bottle lasts at WOT, so the bottle empties first). Purge solenoid jet 1.0 mm, Cd 0.66 (the shipped controller's value). PROVISIONAL. N2O rev-cycle fix (owner report, vault): throttle_hysteresis 0.20 (the solenoid stays open down to command 0.75; a hybrid supervisor's engine share is trimmed by traction control and otherwise chatters the 0.95 switch about 10 Hz), max_rpm_fade_rpm 300 (the flow tapers to zero over the last 300 rpm below max_rpm instead of closing at the edge: the hard close restarted the ramp and made a 500-1000 rpm, ~1 Hz cycle in top gear), progressive.resume_within_s 0.25 (a closure shorter than that holds the ramp instead of restarting it; a shift cut is longer). All [AS]."
 }

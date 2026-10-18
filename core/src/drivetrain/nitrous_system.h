@@ -130,6 +130,7 @@ private:
     real m_bottle_ = 0.0;
     bool solenoid_open_ = false;
     real t_active_ = 0.0;
+    real t_closed_ = 0.0;          // time since the solenoid closed while the ramp is held (hashed only while > 0)
     std::uint8_t latch_ = 0;       // NitrousSafetyCut value while a cut holds
     bool prev_engine_cut_ = false; // as the controller saw them
     bool prev_starving_ = false;

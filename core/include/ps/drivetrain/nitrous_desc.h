@@ -76,6 +76,11 @@ struct NitrousProgressiveDesc {
     real start_fraction = 1.0; // flow fraction while t_active < delay_s
     real delay_s = 0.0;
     real ramp_s = 0.0;         // 0: jump to 1 after the delay
+    // A closure shorter than this keeps the ramp where it was (the time counter is held, not reset), so a one-tick
+    // window/limiter/traction interruption does not restart the ramp at start_fraction (owner report, n2o-oscillation:
+    // a single-tick close at the rpm window edge restarted the ramp, and the torque dip made a ~1 Hz rev cycle). 0 = the
+    // old behaviour (every closure restarts the ramp). A shift cut is longer than the default, so it still restarts it.
+    real resume_within_s = 0.0;
 };
 
 struct NitrousSafetyDesc {
@@ -98,6 +103,14 @@ struct NitrousControllerDesc {
     real min_throttle_command = 0.95; // on the throttle stage's command
     real min_rpm = 0.0;
     real max_rpm = 1.0e9;
+    // Hysteresis on the throttle gate: once the solenoid is open it stays open until the command falls below
+    // min_throttle_command - throttle_hysteresis (an engine command hovering at the switch, e.g. a hybrid supervisor's
+    // power share, otherwise chatters the solenoid). 0 = the old single threshold.
+    real throttle_hysteresis = 0.0;
+    // The flow fades linearly to zero over the last max_rpm_fade_rpm below max_rpm instead of closing at the edge: a
+    // hard close there is a bang-bang limiter (the flow steps 1 -> 0 -> restarted ramp), a taper has negative rpm
+    // feedback and settles. 0 = the old hard edge.
+    real max_rpm_fade_rpm = 0.0;
     int min_gear = 1;                 // >= 1 (the loader rejects less): neutral (0) and reverse never spray; the system also enforces it
     int max_gear = 99;
     real min_speed_mps = 0.0;
