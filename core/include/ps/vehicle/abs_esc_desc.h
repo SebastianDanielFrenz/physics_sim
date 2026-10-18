@@ -31,6 +31,9 @@ struct AbsDesc {
     real apply_rate_per_s = 15.0;
     real reanchor_rate_per_s = 10.0;  // [AS] off the brake the reference speed relaxes toward the slowest wheel at this rate
     real reanchor_scale = 0.05;       // [AS] braking with every regulated wheel's scale <= this: relax toward the fastest wheel
+    // [AS] the relaxation toward the fastest wheel (reanchor_rate_per_s) may lower the reference speed at most this fast (on top
+    // of the integrated IMU). It exists to cancel a slow IMU runaway in a yaw slide; unbounded, it follows locked wheels on ice.
+    real reanchor_max_decel_mps2 = 2.0;
     bool rear_select_low = true;      // [AS] the rear axle runs the lower of its wheels' scales (split-mu yaw)
     // [AS] yaw-moment build-up limit (split mu): the higher front scale <= the lower one + split, split growing from 0 at
     // front_split_rate_per_s up to front_split_max while the front axle is regulated. 1 / any rate = no limit.
@@ -87,7 +90,7 @@ struct EscDesc {
 
 // Shared by the loader and VehicleInstance (code-built descs). Throw std::invalid_argument.
 inline void validate_abs(const AbsDesc& d) {
-    for (real v : {d.target_slip, d.min_speed_mps, d.slip_floor_mps, d.kp, d.ki_per_s, d.release_rate_per_s, d.apply_rate_per_s, d.reanchor_rate_per_s}) {
+    for (real v : {d.target_slip, d.min_speed_mps, d.slip_floor_mps, d.kp, d.ki_per_s, d.release_rate_per_s, d.apply_rate_per_s, d.reanchor_rate_per_s, d.reanchor_max_decel_mps2}) {
         if (!std::isfinite(v) || !(v > real(0))) throw std::invalid_argument("abs: parameters must be finite and > 0");
     }
     if (!(d.target_slip < real(1))) throw std::invalid_argument("abs: target_slip must be below 1");

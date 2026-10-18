@@ -132,7 +132,12 @@ inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
                         if (s.applied[i] > in.abs->reanchor_scale) all_released = false;
                     }
                     if (any && all_released) {
-                        s.reference_speed_m_s += (dir * fastest - s.reference_speed_m_s) * std::min(real(1), in.abs->reanchor_rate_per_s * dt);
+                        // The correction cancels a slow IMU runaway, so its pull-down is bounded: on very low grip every
+                        // wheel locks even at a few percent of the brake, the fastest wheel is then a locked wheel, and an
+                        // unbounded relaxation dragged the reference down with the wheels (ice: 27.8 -> 20 m/s in 0.25 s while
+                        // the car did 27.5) and ABS regulated against a slip error that was no longer there.
+                        const real pull = (dir * fastest - s.reference_speed_m_s) * std::min(real(1), in.abs->reanchor_rate_per_s * dt);
+                        s.reference_speed_m_s += dir * std::max(dir * pull, -in.abs->reanchor_max_decel_mps2 * dt);
                     }
                 }
                 // every wheel turns the other way faster than the reference: the car moves that way (e.g. after a spin)
