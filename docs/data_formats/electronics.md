@@ -450,7 +450,7 @@ row reads its own command instead of the brake channel. Descriptors `ps/vehicle/
 ```json
 "abs": { "default_enabled": true, "target_slip": 0.12, "min_speed_mps": 2.0, "slip_floor_mps": 3.0,
          "kp": 3.0, "ki_per_s": 30.0, "release_rate_per_s": 60.0, "apply_rate_per_s": 15.0,
-         "reanchor_rate_per_s": 10.0, "reanchor_scale": 0.05, "rear_select_low": true,
+         "reanchor_rate_per_s": 10.0, "reanchor_max_decel_mps2": 2.0, "reanchor_scale": 0.05, "rear_select_low": true,
          "front_split_max": 0.2, "front_split_rate_per_s": 0.4 },
 "esc": { "modes": ["off", "on", "sport"], "default_mode": "on",
          "characteristic_speed_mps": 25.0, "max_lateral_accel_mps2": 8.5, "min_speed_mps": 5.0, "brake_rate_per_s": 10.0,
@@ -469,7 +469,11 @@ largest |v|, else the smallest). Each substep it integrates the IMU acceleration
 - braking (brake or handbrake > 0.02): lifted to the fastest wheel in the direction of travel; set to the fastest wheel
   if every wheel turns the other way faster (a car sliding backward after a spin); when every regulated wheel's
   applied scale is at or below `reanchor_scale` it relaxes toward the fastest wheel at `reanchor_rate_per_s` (the
-  integrated IMU lacks the yaw-rate x lateral-velocity term and runs above the true speed in a slide);
+  integrated IMU lacks the yaw-rate x lateral-velocity term and runs above the true speed in a slide). That pull-down
+  is bounded: it may lower `v_ref` by at most `reanchor_max_decel_mps2` (default 2.0 [AS]) on top of the IMU term. On
+  very low grip (ice, lambda_mu 0.1) every wheel locks even at a few percent of the brake, the fastest wheel is then a
+  locked wheel, and the unbounded relaxation dragged `v_ref` down with the wheels (27.8 -> 20.2 m/s in 0.25 s while the
+  car did 27.5) - the slip error vanished and ABS held the lock;
 - not braking: relaxes toward the slowest wheel at `reanchor_rate_per_s`; while only ESC brakes, toward the slowest
   wheel ESC does not brake (it rolls freely, so its sensor speed is the longitudinal speed).
 
@@ -503,6 +507,10 @@ load-transfer-corrected estimate 38.37 m (-1.2 %), ABS off 44.32 m; heading chan
 braking 26.6 deg (ABS off -3.1 deg); split-mu 1.0 / 0.1 stop with a heading-holding driver 1.6 deg max (ABS off spins);
 FMVSS 126 sine with dwell on a rear-grip x0.75 fixture: ESC on YRR 0.19 / 0.00, lateral 3.16 m (bounds 0.35 / 0.20 /
 1.83 m), ESC off spins. `tests/validation/test_vehicle_braking.cpp` (PHYS-019) runs the same stop with the real unit.
+On lambda_mu 0.1 (ice, 100 km/h brake step, 10 s): before the bound the wheels sat at slip -0.5..-1.0 for 7.0 s and `v_ref` fell to
+0.02 x the true speed (218.1 m, 16.1 m/s left); with it the wheels hold slip -0.15 at a scale of 0.05, `v_ref` stays 0.7 m/s
+below the true speed (217.0 m, 15.9 m/s left). Lambda_mu 0.6 (dirt) 58.79 m and tyres x0.35 on asphalt 105.65 m, dry 37.92 m: unchanged
+to the digit (tests L3a-L3d).
 
 ## Drive modes (assists I7, vault PHYS-074) {#drive-modes}
 

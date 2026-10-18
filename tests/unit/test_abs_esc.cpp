@@ -57,6 +57,11 @@
 //       steer channel = -2 x heading change [rad] - 0.5 x yaw rate [rad/s] [AS], clamped to the steering-wheel angles the
 //       UN R13-H split-mu test permits (120 deg in the first 2 s, 240 deg after [C as recalled, not re-read]) at the
 //       assumed ratio 16; both runs (ABS on and off) use that driver. Bounds unchanged.
+//   L3a-d low grip (2026-10-18, racing_game defect): car_sedan + the unit, 100 km/h brake step on low_mu (0.1), dirt (0.6) and
+//       asphalt with the tyres x0.35: after 1 s no wheel at |kappa| > 0.5 for more than 0.5 s in a row, the reference speed
+//       within max(1 m/s, 8 %) of the chassis speed; L3d negative control: reanchor_max_decel_mps2 huge (pre-fix) locks on ice.
+//       Before the fix on ice: longest lock 6.975 s, vref/v down to 0.018, 218.1 m / 16.1 m/s left after 10 s; after: no lock,
+//       vref 0.7 m/s below v, 217.0 m / 15.9 m/s. Dirt 58.79 m and x0.35 105.65 m, dry A1 37.92 m: identical before and after.
 //   E1  ESC-1 FMVSS 126 sine with dwell [C 49 CFR 571.126 S5.2, S7.9]: car_sedan + the unit with REAR tyres lambda_muy x0.75
 //       (so the car oversteers; ESC off must fail - negative control), 80 km/h, gear neutral, coasting; steer amplitude
 //       A = min(6.5 x the steer channel giving 0.3 g lateral in a slow ramp at 80 km/h, the channel of 270 deg steering-wheel
@@ -100,6 +105,7 @@
 //   S7  ctx.wheel_brake is not handed to the brake rows                             -> A1 fails
 //   S8  a drive-mode change does not write assist.abs                               -> D1 fails
 //   S9  assist.abs registered on a car without the block                           -> C1 fails
+//   S10 reanchor_max_decel_mps2 unbounded (default 1e9)                             -> L3a, L3d fail (ice locks)
 // Diagnostics: PS_A3_DIAG=1 prints the A3 stop, PS_E1_DIAG=1 the sine-with-dwell runs (every 24 / 12 ticks).
 
 #include "ps/backend/i_rigid_backend.h"
@@ -379,7 +385,9 @@ MeshShape split_surface_mesh(real half_extent, real cell, SurfaceId asphalt_id, 
     return m;
 }
 
-Rig split_mu_rig(const VehicleDesc& desc) {
+// `surface_neg_y` / `surface_pos_y`: surfaces.json names of the y < 0 / y > 0 halves (A3: low_mu / asphalt; the low-grip
+// cases L3 below use one name for both halves).
+Rig split_mu_rig(const VehicleDesc& desc, const std::string& surface_neg_y = "low_mu", const std::string& surface_pos_y = "asphalt") {
     Rig r;
     r.desc_max_wheel_angle = desc.steering.max_wheel_angle;
     WorldConfig cfg;
@@ -388,7 +396,7 @@ Rig split_mu_rig(const VehicleDesc& desc) {
     r.rig.world->set_surface_table(surfaces);
     r.rig.surfaces = surfaces;
     BodyDesc ground;
-    ground.shape = split_surface_mesh(1000.0, 20.0, surfaces->id_for("asphalt"), surfaces->id_for("low_mu"));
+    ground.shape = split_surface_mesh(1000.0, 20.0, surfaces->id_for(surface_pos_y), surfaces->id_for(surface_neg_y));
     ground.motion = BodyMotionType::Static;
     ground.friction = 1.0;
     r.rig.world->create_body(ground);
@@ -534,6 +542,7 @@ TEST_CASE("L1: the shipped ABS/ESC unit and the loader rejections", "[abs][esc][
     CHECK(a.release_rate_per_s == def.release_rate_per_s);
     CHECK(a.apply_rate_per_s == def.apply_rate_per_s);
     CHECK(a.reanchor_rate_per_s == def.reanchor_rate_per_s);
+    CHECK(a.reanchor_max_decel_mps2 == def.reanchor_max_decel_mps2);
     CHECK(a.rear_select_low == def.rear_select_low);
     const EscDesc& e = *p.unit.esc;
     CHECK(e.modes_bits == 0b111);
@@ -557,6 +566,7 @@ TEST_CASE("L1: the shipped ABS/ESC unit and the loader rejections", "[abs][esc][
     rejects("esc_unknown.json", [](json& j) { j["esc"]["gain"] = 1.0; }, "esc: unknown field 'gain'");
     rejects("slip0.json", [](json& j) { j["abs"]["target_slip"] = 0.0; }, "'target_slip' must be finite and > 0");
     rejects("slip1.json", [](json& j) { j["abs"]["target_slip"] = 1.0; }, "target_slip must be below 1");
+    rejects("rmd0.json", [](json& j) { j["abs"]["reanchor_max_decel_mps2"] = 0.0; }, "'reanchor_max_decel_mps2' must be finite and > 0");
     rejects("noabs.json", [](json& j) { j.erase("abs"); }, "'esc' needs an 'abs' block");
     rejects("noon.json", [](json& j) { j["esc"]["modes"] = json::array({"off", "sport"}); j["esc"]["default_mode"] = "sport"; }, "'modes' must contain 'on'");
     rejects("maxb.json", [](json& j) { j["esc"]["max_brake"] = 1.2; }, "max_brake must be in [0, 1]");
@@ -692,6 +702,103 @@ TEST_CASE("A3: split-mu stop with a heading-holding driver - yaw stays bounded",
     CHECK(a.distance > 0);
     CHECK(std::abs(a.heading_change_deg) <= kA3MaxHeadingDeg);
     CHECK(std::abs(a.heading_change_deg) <= kA3Ratio * std::abs(b.heading_change_deg));
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// L3: ABS on low grip (defect found in racing_game: braking 1.0 as a step from 100 km/h on lambda_mu 0.1 left the sedan
+// and the hypercar locked, slip -0.7..-1.0, although abs_active read true; the hypercar's brake scale sat at 3-6 % and
+// the reference speed collapsed to ~3 m/s while the car still did 11 m/s). BANDS COMMITTED BEFORE THE FIRST RUN [AS]:
+//   after 1.0 s, while the true speed is above 5 m/s, no wheel stays at |kappa| > 0.5 for more than 0.5 s in a row
+//   [AS: a cycling controller dips a wheel for tens of ms]; the reference speed (the snapshot's abs_reference_speed_m_s)
+//   stays within max(1.0 m/s, 8 % of the true speed) of the chassis speed from 1.0 s on.
+//   Cases: low_mu (lambda_mu 0.1, ice) and dirt (0.6), both on the uniform 20 m-cell mesh, and asphalt with the tyre
+//   lambda_mux/muy x0.35 (snow-like, an intermediate grip).
+// ---------------------------------------------------------------------------------------------------------------
+struct LowGripRun {
+    real distance = 0, v_end = 0, t_end = 0;
+    real longest_lock_s = 0, lock_time_s = 0;
+    real max_ref_err = 0, min_ref_ratio = 1e9;
+};
+
+// max_decel > 0 overrides AbsDesc::reanchor_max_decel_mps2 (the negative control sets it huge = the pre-fix unbounded relaxation).
+LowGripRun low_grip_run(const std::string& surface, real tyre_scale, real max_s, real max_decel = -1, real v0 = kV100) {
+    VehicleDesc d = sedan_unit();
+    if (max_decel > 0) d.assist_unit->abs->reanchor_max_decel_mps2 = max_decel;
+    for (WheelDesc& w : d.wheels) { w.tyre.lambda_mux *= tyre_scale; w.tyre.lambda_muy *= tyre_scale; }
+    Rig r = split_mu_rig(d, surface, surface);
+    base_controls(r.w(), 1.0, 0.0);
+    roll(r, 0.0, 0);
+    ps_test::settle(r.w(), 0.5);
+    roll(r, v0, 0);
+    World& w = r.w();
+    const BodyId c = r.rig.chassis;
+    const Vec3 p0 = w.backend().get_pose(c).position;
+    w.set_control("brake", 1.0);
+    LowGripRun out;
+    real run = 0;
+    const int n = static_cast<int>(max_s * 240);
+    for (int k = 0; k < n; ++k) {
+        w.step();
+        const real t = (k + 1) / 240.0;
+        const real v = speed(w, c);
+        const real vref = r.pt().abs_reference_speed_m_s;
+        bool locked = false;
+        for (std::size_t i = 0; i < d.wheels.size(); ++i) {
+            if (std::abs(w.wheel_telemetry(r.rig.vehicle, i).slip_ratio) > 0.5) locked = true;
+        }
+        if (std::getenv("PS_L3_DIAG") && k % 60 == 0) {
+            const drivetrain::PowertrainDebug dbg = r.dbg();
+            std::printf("[%s x%.2f] t %.2f v %.2f vref %.2f kappa %.2f %.2f %.2f %.2f sc %.2f %.2f %.2f %.2f\n", surface.c_str(), tyre_scale, t, v, vref,
+                        w.wheel_telemetry(r.rig.vehicle, 0).slip_ratio, w.wheel_telemetry(r.rig.vehicle, 1).slip_ratio,
+                        w.wheel_telemetry(r.rig.vehicle, 2).slip_ratio, w.wheel_telemetry(r.rig.vehicle, 3).slip_ratio,
+                        dbg.abs_wheel_scale[0], dbg.abs_wheel_scale[1], dbg.abs_wheel_scale[2], dbg.abs_wheel_scale[3]);
+        }
+        if (t >= 1.0 && v > 5.0) {
+            if (locked) { run += 1.0 / 240; out.lock_time_s += 1.0 / 240; } else run = 0;
+            out.longest_lock_s = std::max(out.longest_lock_s, run);
+            const real err = std::abs(vref - v);
+            out.max_ref_err = std::max(out.max_ref_err, err - std::max(1.0, 0.08 * v)); // > 0 = outside the band
+            out.min_ref_ratio = std::min(out.min_ref_ratio, vref / v);
+        }
+        out.t_end = t;
+        if (v < kStopSpeed) break;
+    }
+    const Vec3 p = w.backend().get_pose(c).position;
+    out.distance = std::sqrt((p.x - p0.x) * (p.x - p0.x) + (p.y - p0.y) * (p.y - p0.y));
+    out.v_end = speed(w, c);
+    return out;
+}
+
+void check_low_grip(const LowGripRun& g) {
+    INFO("distance " << g.distance << " m in " << g.t_end << " s, v_end " << g.v_end << ", longest lock " << g.longest_lock_s << " s, lock time "
+                     << g.lock_time_s << " s, ref band excess " << g.max_ref_err << " m/s, min vref/v " << g.min_ref_ratio);
+    CHECK(g.longest_lock_s <= 0.5);
+    CHECK(g.max_ref_err <= 0);
+}
+
+TEST_CASE("L3a: ABS on ice (lambda_mu 0.1) does not stay locked and the reference speed tracks the chassis", "[abs][assist][vehicle]") {
+    check_low_grip(low_grip_run("low_mu", 1.0, 10.0));
+}
+
+TEST_CASE("L3b: ABS at lambda_mu 0.6 (dirt)", "[abs][assist][vehicle]") {
+    check_low_grip(low_grip_run("dirt", 1.0, 12.0));
+}
+
+TEST_CASE("L3c: ABS at snow-like grip (asphalt, tyre lambda_mu x0.35)", "[abs][assist][vehicle]") {
+    check_low_grip(low_grip_run("asphalt", 0.35, 12.0));
+}
+
+TEST_CASE("L3d: the bound on the reference speed's pull-down is what keeps ABS working on ice (negative control)", "[abs][assist][vehicle]") {
+    // reanchor_max_decel_mps2 huge = the pre-fix law (unbounded relaxation toward the fastest wheel): ice locks again.
+    const LowGripRun bad = low_grip_run("low_mu", 1.0, 10.0, 1e9);
+    const LowGripRun good = low_grip_run("low_mu", 1.0, 10.0);
+    INFO("unbounded: longest lock " << bad.longest_lock_s << " s, min vref/v " << bad.min_ref_ratio << "; bounded: longest lock "
+                                    << good.longest_lock_s << " s, min vref/v " << good.min_ref_ratio);
+    CHECK(bad.longest_lock_s > 2.0);
+    CHECK(bad.min_ref_ratio < 0.5);
+    CHECK(good.longest_lock_s <= 0.5);
+    CHECK(good.min_ref_ratio > 0.9);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

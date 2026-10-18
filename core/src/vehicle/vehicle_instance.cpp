@@ -1041,7 +1041,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         const auto fold=[&](const auto& v){const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}};
         if(fit_abs_) {
             const AbsDesc& a=*desc_.assist_unit->abs;
-            for(real v:{a.target_slip,a.min_speed_mps,a.slip_floor_mps,a.kp,a.ki_per_s,a.release_rate_per_s,a.apply_rate_per_s,a.reanchor_rate_per_s})fold(v);
+            for(real v:{a.target_slip,a.min_speed_mps,a.slip_floor_mps,a.kp,a.ki_per_s,a.release_rate_per_s,a.apply_rate_per_s,a.reanchor_rate_per_s,a.reanchor_max_decel_mps2})fold(v);
             fold(a.default_enabled);fold(a.rear_select_low);fold(a.reanchor_scale);fold(a.front_split_max);fold(a.front_split_rate_per_s);
         }
         if(fit_esc_) {
