@@ -80,8 +80,10 @@ const NitrousStatus& NitrousSystem::step(const NitrousInputs& in) {
 
     // Request (step 3).
     const bool armed = in.arm >= real(0.5);
-    const bool wot = in.throttle_command >= c.min_throttle_command;
-    if (!wot) latch_ = static_cast<std::uint8_t>(NitrousSafetyCut::None); // a cut holds until the command drops below the switch
+    // Throttle gate with hysteresis: an open solenoid stays open down to min_throttle_command - throttle_hysteresis.
+    const real wot_min = solenoid_open_ ? c.min_throttle_command - c.throttle_hysteresis : c.min_throttle_command;
+    const bool wot = in.throttle_command >= wot_min;
+    if (in.throttle_command < c.min_throttle_command) latch_ = static_cast<std::uint8_t>(NitrousSafetyCut::None); // a cut holds until the command drops below the switch
     const real rpm = std::abs(in.omega) * kRadPerSecToRpm;
     const bool rpm_ok = rpm >= c.min_rpm && rpm <= c.max_rpm;
     // Neutral (0) and reverse (< 0) never spray, whatever min_gear says (N2O plan N4: a hard rule, not a data default;
@@ -116,6 +118,8 @@ const NitrousStatus& NitrousSystem::step(const NitrousInputs& in) {
                        : real(1.0);
         }
     }
+    // Top-of-window taper: the flow fades to zero over the last max_rpm_fade_rpm below max_rpm.
+    if (open && c.max_rpm_fade_rpm > real(0.0)) frac *= std::clamp((c.max_rpm - rpm) / c.max_rpm_fade_rpm, real(0.0), real(1.0));
     s.flowing = open && m_bottle_ > real(0.0);
     s.flow_fraction = s.flowing ? frac : real(0.0);
 
@@ -162,9 +166,19 @@ const NitrousStatus& NitrousSystem::step(const NitrousInputs& in) {
     }
     s.mdot_kf_kg_s = mdot_kf;
 
-    // State advance: the active time counts while the solenoid is open, resets when it closes.
+    // State advance: the active time counts while the solenoid is open. A closure shorter than resume_within_s holds it
+    // (the ramp resumes); a longer one resets it.
     solenoid_open_ = open;
-    t_active_ = open ? t_active_ + in.h : real(0.0);
+    if (open) {
+        t_closed_ = real(0.0);
+        t_active_ += in.h;
+    } else if (t_active_ > real(0.0)) {
+        t_closed_ += in.h;
+        if (t_closed_ > c.progressive.resume_within_s) {
+            t_active_ = real(0.0);
+            t_closed_ = real(0.0);
+        }
+    }
 
     status_ = s;
     return status_;
@@ -208,6 +222,7 @@ std::uint64_t NitrousSystem::fold_state_hash(std::uint64_t seed) const {
     h = fold_bytes(h, &tables_hash, sizeof(tables_hash));
     h = fold_bytes(h, &m_bottle_, sizeof(m_bottle_));
     h = fold_bytes(h, &t_active_, sizeof(t_active_));
+    if (t_closed_ > real(0.0)) h = fold_bytes(h, &t_closed_, sizeof(t_closed_)); // only while a closure is being held: idle runs hash as before
     const std::uint8_t flags =
         static_cast<std::uint8_t>((solenoid_open_ ? 1u : 0u) | (prev_engine_cut_ ? 2u : 0u) | (prev_starving_ ? 4u : 0u));
     h = fold_bytes(h, &flags, sizeof(flags));

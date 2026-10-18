@@ -276,7 +276,7 @@ N2oBottleDesc read_bottle_object(const json& j, const std::string& path) {
 NitrousControllerDesc read_controller_object(const json& j, const std::string& path) {
     const std::string ctx = "nitrous_controller " + path;
     reject_unit_keys(j, ctx);
-    reject_unknown_keys(j, {"format", "arm_channel", "arm_default", "min_throttle_command", "min_rpm", "max_rpm", "min_gear", "max_gear",
+    reject_unknown_keys(j, {"format", "arm_channel", "arm_default", "min_throttle_command", "throttle_hysteresis", "min_rpm", "max_rpm", "max_rpm_fade_rpm", "min_gear", "max_gear",
                              "min_speed_mps", "progressive", "spark_retard_deg", "safety", "purge", "source"}, ctx);
     NitrousControllerDesc c;
     c.arm_channel = require_string(j, "arm_channel", ctx);
@@ -289,6 +289,14 @@ NitrousControllerDesc read_controller_object(const json& j, const std::string& p
     c.max_rpm = require_number(j, "max_rpm", ctx);
     if (!(c.min_rpm >= real(0.0))) throw std::runtime_error(ctx + ": 'min_rpm' must be >= 0");
     if (!(c.max_rpm > c.min_rpm)) throw std::runtime_error(ctx + ": 'max_rpm' must be above 'min_rpm'");
+    c.throttle_hysteresis = optional_number(j, "throttle_hysteresis", c.throttle_hysteresis, ctx);
+    if (!(c.throttle_hysteresis >= real(0.0) && c.throttle_hysteresis <= c.min_throttle_command)) {
+        throw std::runtime_error(ctx + ": 'throttle_hysteresis' must be in [0, min_throttle_command]");
+    }
+    c.max_rpm_fade_rpm = optional_number(j, "max_rpm_fade_rpm", c.max_rpm_fade_rpm, ctx);
+    if (!(c.max_rpm_fade_rpm >= real(0.0) && c.max_rpm_fade_rpm <= c.max_rpm - c.min_rpm)) {
+        throw std::runtime_error(ctx + ": 'max_rpm_fade_rpm' must be in [0, max_rpm - min_rpm]");
+    }
     c.min_gear = optional_int(j, "min_gear", c.min_gear, ctx);
     c.max_gear = optional_int(j, "max_gear", c.max_gear, ctx);
     if (c.min_gear < 1) throw std::runtime_error(ctx + ": 'min_gear' must be >= 1 (neutral and reverse never spray)");
@@ -300,10 +308,12 @@ NitrousControllerDesc read_controller_object(const json& j, const std::string& p
         const json& pj = j.at("progressive");
         const std::string pctx = ctx + ".progressive";
         if (!pj.is_object()) throw std::runtime_error(pctx + ": must be an object");
-        reject_unknown_keys(pj, {"start_fraction", "delay_s", "ramp_s"}, pctx);
+        reject_unknown_keys(pj, {"start_fraction", "delay_s", "ramp_s", "resume_within_s"}, pctx);
         c.progressive.start_fraction = optional_number(pj, "start_fraction", real(1.0), pctx);
         c.progressive.delay_s = optional_number(pj, "delay_s", real(0.0), pctx);
         c.progressive.ramp_s = optional_number(pj, "ramp_s", real(0.0), pctx);
+        c.progressive.resume_within_s = optional_number(pj, "resume_within_s", c.progressive.resume_within_s, pctx);
+        if (!(c.progressive.resume_within_s >= real(0.0))) throw std::runtime_error(pctx + ": 'resume_within_s' must be >= 0");
         if (!(c.progressive.start_fraction > real(0.0) && c.progressive.start_fraction <= real(1.0))) {
             throw std::runtime_error(pctx + ": 'start_fraction' must be in (0, 1]");
         }
