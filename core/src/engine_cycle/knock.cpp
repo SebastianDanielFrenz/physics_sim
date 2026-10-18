@@ -16,9 +16,9 @@ real douaud_eyzat_inv_on_term(real oi, real prefactor_s) {
     return ps::math::pow(oi / real(100.0), -kDouaudEyzatOnExponent) / prefactor_s;
 }
 
-real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k) {
+real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k, real p_exponent) {
     const real p_atm = p_pa / real(101325.0);
-    return inv_on_term * ps::math::exp(kDouaudEyzatPExponent * ps::math::log(p_atm) - b_k / t_k);
+    return inv_on_term * ps::math::exp(p_exponent * ps::math::log(p_atm) - b_k / t_k);
 }
 
 namespace {
@@ -102,7 +102,7 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
     KnockReplayResult r;
     real theta = in.ivc.crank_deg;
     real t_eg = eg.t0;
-    real f0 = douaud_eyzat_rate(in.inv_on_term, c0.p, t_eg, in.activation_k);
+    real f0 = douaud_eyzat_rate(in.inv_on_term, c0.p, t_eg, in.activation_k, in.p_exponent);
     r.p_max_pa = c0.p;
     r.p_end_pa = c0.p;
     while (theta < theta_stop) {
@@ -127,7 +127,7 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
             t_eg = eg.temperature(c.p, t_eg);
         }
         r.p_end_pa = c.p;
-        const real f1 = douaud_eyzat_rate(in.inv_on_term, c.p, t_eg, in.activation_k);
+        const real f1 = douaud_eyzat_rate(in.inv_on_term, c.p, t_eg, in.activation_k, in.p_exponent);
         r.integral += real(0.5) * (f0 + f1) * dth / rate_deg_s;
         f0 = f1;
         if (r.integral >= real(1.0)) {

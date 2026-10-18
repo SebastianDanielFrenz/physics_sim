@@ -70,7 +70,8 @@ inline constexpr std::uint32_t kKnockModelVersion = 2;
 
 // 1/tau [1/s] of the Douaud-Eyzat correlation; inv_on_term = (OI/100)^-3.402 / A (precomputed per fuel), b_k the
 // activation temperature.
-[[nodiscard]] real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k = kKnockCalActivationK);
+[[nodiscard]] real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k = kKnockCalActivationK,
+                                     real p_exponent = kDouaudEyzatPExponent);
 // (OI/100)^-3.402 / (prefactor_s): prefactor_s defaults to the calibrated pre-factor A * kKnockCalPrefactorScale; pass
 // kDouaudEyzatA_s for the literature correlation.
 [[nodiscard]] real douaud_eyzat_inv_on_term(real octane_index, real prefactor_s = kDouaudEyzatA_s * kKnockCalPrefactorScale);
@@ -86,6 +87,7 @@ struct KnockReplayInput {
     real step_deg = kKnockReplayStepDeg;
     real end_burn_fraction = kKnockEndBurnFraction;
     real activation_k = kKnockCalActivationK; // Douaud-Eyzat B [K]
+    real p_exponent = kDouaudEyzatPExponent;  // Douaud-Eyzat pressure exponent n in (p/1 atm)^-n
     bool stop_at_knock = true;           // false: integrate to the end (diagnostics)
     // Diagnostic levers (P7b budget; the generator leaves both at their defaults):
     real end_gas_t0_offset_k = 0.0;      // added to the end gas's IVC temperature (e.g. a DI charge-cooling estimate)
