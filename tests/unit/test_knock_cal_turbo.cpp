@@ -400,6 +400,10 @@ TEST_CASE("KCB diag: knock model at measured BCs on the EPA turbo rows", "[.][di
 namespace {
 
 // Combined rms of theta_kl - spark over the fit set: the A25A KV1-BC rows and the Honda L15B7 Tier 3 envelope rows.
+// g_kv1bc_penalty: the fit is constrained to keep every A25A row inside the KV1-BC band (+-5 deg, minus 0.05 deg slack):
+// a quadratic penalty on the excess is added to the objective (the reported rms is the plain rms).
+bool g_kv1bc_penalty = false;
+real fit_rms_obj(const Model& m);
 real fit_rms(const Model& m, real* a25a_rms = nullptr, real* honda_rms = nullptr) {
     real sq = 0.0;
     int n = 0;
@@ -415,6 +419,16 @@ real fit_rms(const Model& m, real* a25a_rms = nullptr, real* honda_rms = nullptr
     return std::sqrt(sq / n);
 }
 
+real fit_rms_obj(const Model& m) {
+    real pen = 0.0;
+    for (const Set& s : sets()) {
+        if (s.pk->name != "a25a_kv1bc") continue;
+        const Stats st = stats(*s.pk, eval_all(*s.pk, s.pr, m), true);
+        if (st.max_abs > 4.95) pen = 10.0 * (st.max_abs - 4.95) * (st.max_abs - 4.95) + 0.5 * (st.max_abs - 4.95);
+    }
+    return fit_rms(m) + pen;
+}
+
 // Golden-section search of log10(scale) for a fixed pressure exponent.
 Model fit_scale(Model m, real lo, real hi) {
     const real g = 0.5 * (std::sqrt(5.0) - 1.0);
@@ -423,7 +437,7 @@ Model fit_scale(Model m, real lo, real hi) {
     auto f = [&](real x) {
         Model t = m;
         t.scale = std::pow(10.0, x);
-        return fit_rms(t);
+        return g_kv1bc_penalty ? fit_rms_obj(t) : fit_rms(t);
     };
     real fc = f(c), fd = f(d);
     while (b - a > 0.002) {
@@ -573,13 +587,16 @@ void grid_nb(bool exh_measured) {
 TEST_CASE("KCB diag: grid over pressure exponent and activation temperature", "[.][diag][knock][knock_cal]") { grid_nb(false); }
 TEST_CASE("KCB diag: grid over pressure exponent and activation temperature with the measured exhaust", "[.][diag][knock][knock_cal]") { grid_nb(true); }
 
-TEST_CASE("KCB diag: fine grid", "[.][diag][knock][knock_cal]") {
+namespace {
+void fine_grid(bool delivered) {
+    g_kv1bc_penalty = true;
     BcOpt o;
     o.exh_measured = false;
+    o.delivered_air = delivered;
     prepare_sets(o);
     std::printf("%5s %6s %8s %6s %6s %6s %5s %5s %6s %6s\n", "n", "B", "scale", "rms", "A25A", "Honda", "maxA", "maxH", "meanA", "meanH");
-    for (real b = 4400.0; b <= 5801.0; b += 200.0) {
-        for (real n = 1.0; n <= 1.301; n += 0.05) {
+    for (real b = 4000.0; b <= 6001.0; b += 200.0) {
+        for (real n = 0.95; n <= 1.401; n += 0.05) {
             Model m;
             m.p_exp = n;
             m.b_k = b;
@@ -596,4 +613,43 @@ TEST_CASE("KCB diag: fine grid", "[.][diag][knock][knock_cal]") {
             std::printf("%5.2f %6.0f %8.4g %6.3f %6.3f %6.3f %5.2f %5.2f %+6.2f %+6.2f\n", n, b, m.scale, r, ra, rh, sa.max_abs, sh.max_abs, sa.mean, sh.mean);
         }
     }
+}
+} // namespace
+
+TEST_CASE("KCB diag: fine grid", "[.][diag][knock][knock_cal]") { fine_grid(true); }
+TEST_CASE("KCB diag: fine grid with the trapped-air rule", "[.][diag][knock][knock_cal]") { fine_grid(false); }
+
+TEST_CASE("KCB diag: chosen model and its sensitivities", "[.][diag][knock][knock_cal]") {
+    Model m;
+    m.p_exp = 1.05;
+    m.b_k = 5800.0;
+    m.scale = 0.012;
+    struct V {
+        const char* name;
+        BcOpt o;
+    };
+    V vs[5];
+    vs[0] = {"fit BC (trapped = measured air, exhaust ambient)", BcOpt{}};
+    vs[0].o.exh_measured = false;
+    vs[0].o.delivered_air = false;
+    vs[1] = vs[0];
+    vs[1].name = "exhaust = measured turbine inlet";
+    vs[1].o.exh_measured = true;
+    vs[2] = vs[0];
+    vs[2].name = "delivered air (model trapping efficiency)";
+    vs[2].o.delivered_air = true;
+    vs[3] = vs[0];
+    vs[3].name = "intake cam +10 deg (IVC 10 deg earlier)";
+    vs[3].o.icam_shift = 10.0;
+    vs[4] = vs[0];
+    vs[4].name = "intake cam -10 deg (IVC 10 deg later)";
+    vs[4].o.icam_shift = -10.0;
+    for (const V& v : vs) {
+        prepare_sets(v.o);
+        print_table(v.name, m);
+    }
+    prepare_sets(vs[0].o);
+    Model lit;
+    lit.scale = 1.0;
+    print_table("literature Douaud-Eyzat (scale 1, n 1.7, B 3800)", lit);
 }
