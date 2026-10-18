@@ -483,6 +483,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             ai.wheels = traction_sensors_;
             ai.is_front = is_front_;
             ai.imu_accel = imu_accel;
+            ai.ground_truth = fit_abs_ && desc_.assist_unit->abs->reference_speed == AbsReferenceSpeed::GroundTruth;
+            ai.ground_speed = pose_s.orientation.inverse().rotate(twist_s.linear).x; // the shadow chassis' own velocity, body x
             ai.yaw_rate = yaw;
             ai.brake = controls.brake;
             ai.handbrake = controls.handbrake;
@@ -1049,7 +1051,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         if(fit_abs_) {
             const AbsDesc& a=*desc_.assist_unit->abs;
             for(real v:{a.target_slip,a.min_speed_mps,a.slip_floor_mps,a.kp,a.ki_per_s,a.release_rate_per_s,a.apply_rate_per_s,a.reanchor_rate_per_s,a.reanchor_max_decel_mps2})fold(v);
-            fold(a.default_enabled);fold(a.rear_select_low);fold(a.reanchor_scale);fold(a.front_split_max);fold(a.front_split_rate_per_s);
+            fold(a.default_enabled);fold(static_cast<std::uint8_t>(a.reference_speed));fold(a.rear_select_low);fold(a.reanchor_scale);fold(a.front_split_max);fold(a.front_split_rate_per_s);
         }
         if(fit_esc_) {
             const EscDesc& e=*desc_.assist_unit->esc;

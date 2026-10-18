@@ -62,6 +62,17 @@
 //       within max(1 m/s, 8 %) of the chassis speed; L3d negative control: reanchor_max_decel_mps2 huge (pre-fix) locks on ice.
 //       Before the fix on ice: longest lock 6.975 s, vref/v down to 0.018, 218.1 m / 16.1 m/s left after 10 s; after: no lock,
 //       vref 0.7 m/s below v, 217.0 m / 15.9 m/s. Dirt 58.79 m and x0.35 105.65 m, dry A1 37.92 m: identical before and after.
+//   H1-H4 high speed (2026-10-18, owner drive: car_hyper_n2o at 300 km/h, a weave to ~17 deg sideslip, then full brake: v_ref ran
+//       ~9 m/s above the true speed, every wheel at the true speed read a 12 %+ slip, the brakes sat at scale ~0.04 for 4.5+ s).
+//       ROOT CAUSE (measured, H diag with PS_H_EST=1): the estimator integrates the IMU body-x acceleration, which in a slide is
+//       du/dt - r v_lat (no yaw-rate x lateral-velocity term); v_ref - u rose to +6.8 m/s within 1.4 s of the weave and then stayed
+//       +5..6 m/s for 10 s (the all-released pull-down needs EVERY regulated wheel's applied scale <= reanchor_scale 0.05 and the
+//       rear select-low settles at 0.0504, and is capped at 2 m/s^2 anyway). DESIGN (owner 2026-10-18): ABS/ESC are pointed at the
+//       simulation's chassis velocity (AbsDesc::reference_speed "ground_truth", default); the estimator stays as "estimated".
+//       H1 straight 300 -> 100 km/h within (v0-v1)/(0.85 a_est) [AS 0.85], a_est = A1's peak-mu estimate (no downforce/drag); H2 weave
+//       amp 0.1 and 0.3 at 0.7 Hz for 2 s: sideslip > 10 deg, 100 km/h within 2 s + that bound, v_ref - u <= 0.5 m/s after the weave,
+//       longest all-released stretch <= 0.5 s; H3 negative control: "estimated" in the same weave -> v_ref > 3 m/s over, released > 2 s;
+//       H4 ground truth: |v_ref - u_body_x| < 0.1 m/s every tick. L3/L4 run in BOTH modes. Flat ground reproduces; no bump surface needed.
 //   E1  ESC-1 FMVSS 126 sine with dwell [C 49 CFR 571.126 S5.2, S7.9]: car_sedan + the unit with REAR tyres lambda_muy x0.75
 //       (so the car oversteers; ESC off must fail - negative control), 80 km/h, gear neutral, coasting; steer amplitude
 //       A = min(6.5 x the steer channel giving 0.3 g lateral in a slow ramp at 80 km/h, the channel of 270 deg steering-wheel
@@ -106,6 +117,7 @@
 //   S8  a drive-mode change does not write assist.abs                               -> D1 fails
 //   S9  assist.abs registered on a car without the block                           -> C1 fails
 //   S10 reanchor_max_decel_mps2 unbounded (default 1e9)                             -> L3a, L3d fail (ice locks)
+//   S11 reference_speed estimated instead of ground truth                           -> H2, H4 fail (the H3 run is the same experiment)
 // Diagnostics: PS_A3_DIAG=1 prints the A3 stop, PS_E1_DIAG=1 the sine-with-dwell runs (every 24 / 12 ticks).
 
 #include "ps/backend/i_rigid_backend.h"
@@ -544,6 +556,8 @@ TEST_CASE("L1: the shipped ABS/ESC unit and the loader rejections", "[abs][esc][
     CHECK(a.reanchor_rate_per_s == def.reanchor_rate_per_s);
     CHECK(a.reanchor_max_decel_mps2 == def.reanchor_max_decel_mps2);
     CHECK(a.rear_select_low == def.rear_select_low);
+    CHECK(def.reference_speed == AbsReferenceSpeed::GroundTruth); // the default (owner 2026-10-18)
+    CHECK(a.reference_speed == AbsReferenceSpeed::GroundTruth);
     const EscDesc& e = *p.unit.esc;
     CHECK(e.modes_bits == 0b111);
     CHECK(e.default_mode == EscMode::On);
@@ -567,6 +581,12 @@ TEST_CASE("L1: the shipped ABS/ESC unit and the loader rejections", "[abs][esc][
     rejects("slip0.json", [](json& j) { j["abs"]["target_slip"] = 0.0; }, "'target_slip' must be finite and > 0");
     rejects("slip1.json", [](json& j) { j["abs"]["target_slip"] = 1.0; }, "target_slip must be below 1");
     rejects("rmd0.json", [](json& j) { j["abs"]["reanchor_max_decel_mps2"] = 0.0; }, "'reanchor_max_decel_mps2' must be finite and > 0");
+    rejects("refspeed_bad.json", [](json& j) { j["abs"]["reference_speed"] = "imu"; }, "'reference_speed' must be \"ground_truth\" or \"estimated\"");
+    rejects("refspeed_num.json", [](json& j) { j["abs"]["reference_speed"] = 1; }, "'reference_speed' must be \"ground_truth\" or \"estimated\"");
+    {
+        const std::string f = unit_with(td, "refspeed_est.json", [](json& j) { j["abs"]["reference_speed"] = "estimated"; });
+        CHECK(io::load_electronics_json(f).unit.abs->reference_speed == AbsReferenceSpeed::Estimated);
+    }
     rejects("noabs.json", [](json& j) { j.erase("abs"); }, "'esc' needs an 'abs' block");
     rejects("noon.json", [](json& j) { j["esc"]["modes"] = json::array({"off", "sport"}); j["esc"]["default_mode"] = "sport"; }, "'modes' must contain 'on'");
     rejects("maxb.json", [](json& j) { j["esc"]["max_brake"] = 1.2; }, "max_brake must be in [0, 1]");
@@ -722,8 +742,10 @@ struct LowGripRun {
 };
 
 // max_decel > 0 overrides AbsDesc::reanchor_max_decel_mps2 (the negative control sets it huge = the pre-fix unbounded relaxation).
-LowGripRun low_grip_run(const std::string& surface, real tyre_scale, real max_s, real max_decel = -1, real v0 = kV100) {
+LowGripRun low_grip_run(const std::string& surface, real tyre_scale, real max_s, real max_decel = -1, real v0 = kV100,
+                        AbsReferenceSpeed mode = AbsReferenceSpeed::Estimated) {
     VehicleDesc d = sedan_unit();
+    d.assist_unit->abs->reference_speed = mode;
     if (max_decel > 0) d.assist_unit->abs->reanchor_max_decel_mps2 = max_decel;
     for (WheelDesc& w : d.wheels) { w.tyre.lambda_mux *= tyre_scale; w.tyre.lambda_muy *= tyre_scale; }
     Rig r = split_mu_rig(d, surface, surface);
@@ -777,16 +799,26 @@ void check_low_grip(const LowGripRun& g) {
     CHECK(g.max_ref_err <= 0);
 }
 
+// L3a-c run in BOTH reference-speed modes: the estimator (the pre-2026-10-18 default, still selectable) and ground truth.
 TEST_CASE("L3a: ABS on ice (lambda_mu 0.1) does not stay locked and the reference speed tracks the chassis", "[abs][assist][vehicle]") {
-    check_low_grip(low_grip_run("low_mu", 1.0, 10.0));
+    for (AbsReferenceSpeed m : {AbsReferenceSpeed::Estimated, AbsReferenceSpeed::GroundTruth}) {
+        CAPTURE(static_cast<int>(m));
+        check_low_grip(low_grip_run("low_mu", 1.0, 10.0, -1, kV100, m));
+    }
 }
 
 TEST_CASE("L3b: ABS at lambda_mu 0.6 (dirt)", "[abs][assist][vehicle]") {
-    check_low_grip(low_grip_run("dirt", 1.0, 12.0));
+    for (AbsReferenceSpeed m : {AbsReferenceSpeed::Estimated, AbsReferenceSpeed::GroundTruth}) {
+        CAPTURE(static_cast<int>(m));
+        check_low_grip(low_grip_run("dirt", 1.0, 12.0, -1, kV100, m));
+    }
 }
 
 TEST_CASE("L3c: ABS at snow-like grip (asphalt, tyre lambda_mu x0.35)", "[abs][assist][vehicle]") {
-    check_low_grip(low_grip_run("asphalt", 0.35, 12.0));
+    for (AbsReferenceSpeed m : {AbsReferenceSpeed::Estimated, AbsReferenceSpeed::GroundTruth}) {
+        CAPTURE(static_cast<int>(m));
+        check_low_grip(low_grip_run("asphalt", 0.35, 12.0, -1, kV100, m));
+    }
 }
 
 TEST_CASE("L3d: the bound on the reference speed's pull-down is what keeps ABS working on ice (negative control)", "[abs][assist][vehicle]") {
@@ -813,7 +845,10 @@ struct LaunchBrakeRun {
     real v_launch_end = 0;
 };
 
-LaunchBrakeRun launch_then_brake(const VehicleDesc& d, bool abs_on, real throttle, real v_launch, real brake_s = 10.0) {
+LaunchBrakeRun launch_then_brake(const VehicleDesc& d0, bool abs_on, real throttle, real v_launch, real brake_s = 10.0,
+                                 AbsReferenceSpeed mode = AbsReferenceSpeed::Estimated) {
+    VehicleDesc d = d0;
+    if (d.assist_unit && d.assist_unit->abs) d.assist_unit->abs->reference_speed = mode;
     Rig r = make_rig(d);
     base_controls(r.w(), abs_on ? 1.0 : 0.0, 0.0);
     roll(r, 0.0, 1);
@@ -870,16 +905,18 @@ TEST_CASE("L4 diag: reference speed after a launch", "[.][diag][abs]") {
 // Bands written before the first run (L4 header above): v_ref within max(1 m/s, 8 %) of the true speed during the whole
 // stop (v > 3 m/s), and the ABS stop on dry asphalt shorter than the same stop with ABS off.
 void check_launch_brake(const VehicleDesc& d, const std::vector<real>& throttles) {
+  for (AbsReferenceSpeed mode : {AbsReferenceSpeed::Estimated, AbsReferenceSpeed::GroundTruth}) {
     for (real thr : throttles) {
-        CAPTURE(d.name, thr);
-        const LaunchBrakeRun on = launch_then_brake(d, true, thr, 20.0);
-        const LaunchBrakeRun off = launch_then_brake(d, false, thr, 20.0);
+        CAPTURE(d.name, thr, static_cast<int>(mode));
+        const LaunchBrakeRun on = launch_then_brake(d, true, thr, 20.0, 10.0, mode);
+        const LaunchBrakeRun off = launch_then_brake(d, false, thr, 20.0, 10.0, mode);
         CAPTURE(on.v_launch_end, on.max_ref_over, on.distance, off.distance, on.t_end, on.v_end);
         REQUIRE(on.v_launch_end > 19.0);
         CHECK(on.max_ref_excess <= 0.0);
         CHECK(on.v_end < kStopSpeed + 0.5);
         CHECK(on.distance < off.distance);
     }
+  }
 }
 
 TEST_CASE("L4a: after a part-throttle launch the ABS reference speed stays on the true speed (rear-driven car_hyper)", "[abs][assist][vehicle]") {
@@ -893,6 +930,161 @@ TEST_CASE("L4b: the same on the front-driven car_sedan", "[abs][assist][vehicle]
 TEST_CASE("L4c: and with every wheel driven (car_sedan_awd): no undriven wheel to anchor to", "[abs][assist][vehicle]") {
     static const VehicleDesc d = io::load_vehicle_json(kData + "/../tests/support/fixtures/vehicles/car_sedan_awd.json", with_unit());
     check_launch_brake(d, {0.5, 1.0});
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// H: ABS at high speed (owner drive 2026-10-18, car_hyper_n2o, 300 km/h, full brake: after a violent weave (sideslip ~17 deg, full
+// steering lock) every wheel's slip_ratio fell to 0.00 and the brakes stayed off for 4.5 s while ABS reported active; 300 -> 206 km/h
+// took 5.2 s at 3-5 m/s^2 (aero drag only). Evidence: out/owner_brake_300kmh.json.)
+// ---------------------------------------------------------------------------------------------------------------
+const VehicleDesc& hyper_n2o_unit() {
+    static const VehicleDesc d = io::load_vehicle_json(kData + "/vehicles/car_hyper_n2o.json", with_unit());
+    return d;
+}
+
+// body-x velocity of the chassis CoM = the "true" reference speed the wheel sensors are projected to (u of abs_wheel_ground_speed
+// when the car has no lateral velocity).
+real body_u(World& w, BodyId c) {
+    const Pose p = w.backend().get_pose(c);
+    return p.orientation.inverse().rotate(w.backend().get_motion(c).linear).x;
+}
+
+struct HighSpeedRun {
+    real t_to_100 = -1;        // seconds from the brake step to 100 km/h
+    real d_to_100 = -1;
+    real max_ref_over = -1e9;  // max (vref - u) once the weave is over
+    real max_ref_over_all = -1e9;
+    real longest_released_s = 0; // longest stretch with the mean service-brake scale <= 0.1 while braking above 30 m/s
+    real v_end = 0;
+    real max_sideslip_deg = 0;
+};
+
+// weave_amp: steer channel amplitude of a sine at weave_hz for weave_s seconds from the brake step (0 = straight).
+HighSpeedRun high_speed_brake(const VehicleDesc& d0, AbsReferenceSpeed mode, real v0, real weave_amp, real weave_hz, real weave_s, real max_s = 14.0) {
+    VehicleDesc d = d0;
+    d.assist_unit->abs->reference_speed = mode;
+    Rig r = settled_rig(d, v0, 1.0, 1.0, 7);
+    World& w = r.w();
+    const BodyId c = r.rig.chassis;
+    const Vec3 p0 = w.backend().get_pose(c).position;
+    w.set_control("assist.traction_control", 1.0);
+    w.set_control("brake", 1.0);
+    HighSpeedRun out;
+    real rel_run = 0;
+    const int n = static_cast<int>(max_s * 240);
+    for (int k = 0; k < n; ++k) {
+        const real t = k / 240.0;
+        if (weave_amp > 0 && t < weave_s) w.set_control("steer", weave_amp * std::sin(2 * kPi * weave_hz * t));
+        else w.set_control("steer", 0.0);
+        w.step();
+        const real tt = (k + 1) / 240.0;
+        const Motion m = w.backend().get_motion(c);
+        const real v = m.linear.length();
+        const real u = body_u(w, c);
+        const real vref = r.pt().abs_reference_speed_m_s;
+        const drivetrain::PowertrainDebug dbg = r.dbg();
+        real sc = 0;
+        for (int i = 0; i < 4; ++i) sc += dbg.abs_wheel_scale[i] / 4;
+        if (v > 5) {
+            const Vec3 vb = w.backend().get_pose(c).orientation.inverse().rotate(m.linear);
+            out.max_sideslip_deg = std::max(out.max_sideslip_deg, std::abs(deg(std::atan2(vb.y, vb.x))));
+        }
+        if (tt > weave_s + 0.5) out.max_ref_over = std::max(out.max_ref_over, vref - u);
+        out.max_ref_over_all = std::max(out.max_ref_over_all, vref - u);
+        if (v > 30) {
+            if (sc <= 0.1) { rel_run += 1.0 / 240; out.longest_released_s = std::max(out.longest_released_s, rel_run); } else rel_run = 0;
+        }
+        if (std::getenv("PS_H_DIAG") && k % 24 == 0) {
+            std::printf("t %.2f v %.1f u %.1f vref %.1f (%+.1f) yaw %.2f steer %.2f scale %.2f %.2f %.2f %.2f kappa %.2f %.2f %.2f %.2f\n", tt, v, u,
+                        vref, vref - u, m.angular.z, w.get_control("steer"), dbg.abs_wheel_scale[0], dbg.abs_wheel_scale[1],
+                        dbg.abs_wheel_scale[2], dbg.abs_wheel_scale[3], w.wheel_telemetry(r.rig.vehicle, 0).slip_ratio,
+                        w.wheel_telemetry(r.rig.vehicle, 1).slip_ratio, w.wheel_telemetry(r.rig.vehicle, 2).slip_ratio,
+                        w.wheel_telemetry(r.rig.vehicle, 3).slip_ratio);
+        }
+        if (out.t_to_100 < 0 && v < 100.0 / 3.6) {
+            out.t_to_100 = tt;
+            const Vec3 p = w.backend().get_pose(c).position;
+            out.d_to_100 = std::sqrt((p.x - p0.x) * (p.x - p0.x) + (p.y - p0.y) * (p.y - p0.y));
+        }
+        out.v_end = v;
+        if (out.t_to_100 > 0) break;
+    }
+    return out;
+}
+
+TEST_CASE("H diag: 300 km/h full brake", "[.][diag][abs]") {
+    const real amp = std::getenv("PS_H_AMP") ? std::atof(std::getenv("PS_H_AMP")) : 0.0;
+    const real hz = std::getenv("PS_H_HZ") ? std::atof(std::getenv("PS_H_HZ")) : 1.0;
+    const real ws = std::getenv("PS_H_WS") ? std::atof(std::getenv("PS_H_WS")) : 2.0;
+    const bool est = std::getenv("PS_H_EST") != nullptr;
+    const HighSpeedRun r = high_speed_brake(hyper_n2o_unit(), est ? AbsReferenceSpeed::Estimated : AbsReferenceSpeed::GroundTruth, 300.0 / 3.6, amp, hz, ws);
+    std::printf("== amp %.2f hz %.2f: t100 %.2f s d100 %.1f m, vref over max %.2f (after weave %.2f), longest released %.2f s, sideslip max %.1f deg\n",
+                amp, hz, r.t_to_100, r.d_to_100, r.max_ref_over_all, r.max_ref_over, r.longest_released_s, r.max_sideslip_deg);
+}
+
+// Bounds (written before the fix; the measured values are in the comments).
+// a_est = the load-transfer-corrected peak-mu deceleration of A1 (no downforce, no drag: a floor for a hypercar at 300 km/h).
+// A brake that holds 85 % of it reaches 100 km/h from 300 km/h within t_bound = (83.33 - 27.78) / (0.85 a_est) [AS 0.85: ABS
+// holds the slip near, not exactly at, the peak]; a weave adds its own duration (the car is not braking at the limit while it is
+// being thrown sideways).
+real hyper_a_est() {
+    Rig r = settled_rig(hyper_n2o_unit(), 300.0 / 3.6, 1.0, 1.0, 7);
+    const real h = r.w().backend().get_pose(r.rig.chassis).position.z;
+    const real v = 300.0 / 3.6;
+    return v * v / (2 * estimate_stop_distance(hyper_n2o_unit(), r.w().backend().get_mass(r.rig.chassis), h, v));
+}
+constexpr real kV300 = 300.0 / 3.6;
+
+TEST_CASE("H1: 300 km/h full brake on flat ground reaches 100 km/h within the peak-mu bound (ground-truth reference)", "[abs][assist][vehicle][long]") {
+    const real a_est = hyper_a_est();
+    const real t_bound = (kV300 - kV100) / (0.85 * a_est);
+    const HighSpeedRun gt = high_speed_brake(hyper_n2o_unit(), AbsReferenceSpeed::GroundTruth, kV300, 0, 1, 0);
+    const HighSpeedRun es = high_speed_brake(hyper_n2o_unit(), AbsReferenceSpeed::Estimated, kV300, 0, 1, 0);
+    INFO("a_est " << a_est << " m/s2, bound " << t_bound << " s; ground truth " << gt.t_to_100 << " s, estimated " << es.t_to_100 << " s");
+    REQUIRE(gt.t_to_100 > 0);
+    CHECK(gt.t_to_100 <= t_bound);
+    CHECK(gt.longest_released_s <= 0.5);
+    REQUIRE(es.t_to_100 > 0);   // straight and flat the estimator is fine (vref over max 0.10 m/s): the defect needs a slide
+    CHECK(es.t_to_100 <= t_bound);
+}
+
+// A weave at 300 km/h while braking (sine on the steer channel, 2 s): the car reaches ~19 deg of sideslip (owner's drive ~17 deg).
+// Measured before the fix (Estimated): v_ref ran 6.1-8.5 m/s above the body-x speed with every wheel at the true speed, the
+// service brakes sat at scale 0.04-0.05 for 8.6-10 s and 100 km/h was not reached in 14 s. Ground truth: 4.64 s (amp 0.1).
+TEST_CASE("H2: a weave under full brake from 300 km/h - the reference speed does not run away and the brakes do not stay off", "[abs][assist][vehicle][long]") {
+    const real a_est = hyper_a_est();
+    const real weave_s = 2.0;
+    const real t_bound = weave_s + (kV300 - kV100) / (0.85 * a_est);
+    for (real amp : {0.1, 0.3}) {
+        const HighSpeedRun gt = high_speed_brake(hyper_n2o_unit(), AbsReferenceSpeed::GroundTruth, kV300, amp, 0.7, weave_s);
+        CAPTURE(amp, a_est, t_bound, gt.t_to_100, gt.max_sideslip_deg, gt.max_ref_over, gt.longest_released_s);
+        CHECK(gt.max_sideslip_deg > 10.0); // the weave really is a slide
+        REQUIRE(gt.t_to_100 > 0);
+        CHECK(gt.t_to_100 <= t_bound);
+        CHECK(gt.max_ref_over <= 0.5);        // v_ref - u after the weave (one-substep sampling skew only)
+        CHECK(gt.longest_released_s <= 0.5);
+    }
+}
+
+TEST_CASE("H3: the estimator (reference_speed estimated) still fails the weave - the negative control that names the root cause", "[abs][assist][vehicle][long]") {
+    const HighSpeedRun es = high_speed_brake(hyper_n2o_unit(), AbsReferenceSpeed::Estimated, kV300, 0.1, 0.7, 2.0);
+    INFO("estimated: v_ref over " << es.max_ref_over << " m/s after the weave, longest released " << es.longest_released_s << " s, t100 " << es.t_to_100);
+    CHECK(es.max_ref_over > 3.0);
+    CHECK(es.longest_released_s > 2.0);
+}
+
+TEST_CASE("H4: in ground-truth mode the reference speed is the chassis speed along body x every tick", "[abs][assist][vehicle]") {
+    Rig r = settled_rig(hyper_n2o_unit(), kV300, 1.0, 1.0, 7);
+    World& w = r.w();
+    w.set_control("brake", 1.0);
+    real worst = 0;
+    for (int k = 0; k < 240; ++k) {
+        w.set_control("steer", 0.2 * std::sin(2 * kPi * 0.7 * k / 240.0));
+        w.step();
+        worst = std::max(worst, std::abs(r.pt().abs_reference_speed_m_s - body_u(w, r.rig.chassis)));
+    }
+    // one substep of the pose between the last substep's read and the tick end: <= a * dt = 20 * (1/960) per substep; allow one tick
+    CHECK(worst < 0.1);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

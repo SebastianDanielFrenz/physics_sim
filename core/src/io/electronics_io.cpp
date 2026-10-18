@@ -277,6 +277,12 @@ void read_abs(const json& a, const std::string& path, vehicle::AssistUnitDesc& u
         if (k == "default_enabled") {
             if (!it.value().is_boolean()) throw std::runtime_error(ctx + ": 'default_enabled' must be a boolean");
             d.default_enabled = it.value().get<bool>();
+        } else if (k == "reference_speed") {
+            if (!it.value().is_string()) throw std::runtime_error(ctx + ": 'reference_speed' must be \"ground_truth\" or \"estimated\"");
+            const std::string v = it.value().get<std::string>();
+            if (v == "ground_truth") d.reference_speed = vehicle::AbsReferenceSpeed::GroundTruth;
+            else if (v == "estimated") d.reference_speed = vehicle::AbsReferenceSpeed::Estimated;
+            else throw std::runtime_error(ctx + ": 'reference_speed' must be \"ground_truth\" or \"estimated\", got \"" + v + "\"");
         } else if (k == "rear_select_low") {
             if (!it.value().is_boolean()) throw std::runtime_error(ctx + ": 'rear_select_low' must be a boolean");
             d.rear_select_low = it.value().get<bool>();

@@ -56,6 +56,10 @@ struct AbsEscInputs {
     std::span<const TractionWheelSensor> wheels;
     std::span<const std::uint8_t> is_front; // 1 = front axle
     real imu_accel = 0, yaw_rate = 0;
+    // The simulation's own chassis velocity along the body x axis at the reference point (NaN = not provided). Used as v_ref
+    // when ground_truth is set (AbsReferenceSpeed::GroundTruth); the estimator below then does not run.
+    real ground_speed = std::numeric_limits<real>::quiet_NaN();
+    bool ground_truth = false;
     real brake = 0, handbrake = 0;
     real front_wheel_angle = 0; // mean front road-wheel angle, rad
     real wheelbase = 2.5;
@@ -126,7 +130,11 @@ inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
     bool braking = in.handbrake > real(.02) || in.brake > real(.02);
     if (!braking && have_free) vmin = vmin_free;
     else if (!braking) braking = true; // ESC brakes every wheel
-    if (have && std::isfinite(in.imu_accel)) {
+    if (in.ground_truth && std::isfinite(in.ground_speed)) {
+        // Ground truth (default): v_ref IS the chassis speed along body x. Nothing to integrate, lift or relax.
+        s.reference_speed_m_s = in.ground_speed;
+        s.initialized = true;
+    } else if (have && std::isfinite(in.imu_accel)) {
         if (!s.initialized) {
             s.reference_speed_m_s = braking ? vmax : vmin;
             s.initialized = true;

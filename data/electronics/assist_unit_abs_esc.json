@@ -5,6 +5,7 @@
   "grade": "street",
   "abs": {
     "default_enabled": true,
+    "reference_speed": "ground_truth",
     "target_slip": 0.12,
     "min_speed_mps": 2.0,
     "slip_floor_mps": 3.0,
