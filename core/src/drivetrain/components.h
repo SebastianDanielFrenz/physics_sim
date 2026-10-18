@@ -49,6 +49,9 @@ struct ComponentSubstepCtx {
     // VehicleInstance only while ABS or ESC runs on a car with the blocks. nullptr = every corner reads `brake`
     // (bit-identical to before). The handbrake share is never modulated. Never hashed.
     const real* wheel_brake = nullptr;
+    // ABS scale applied per wheel this substep (1 = not modulated), set with wheel_brake while ABS runs; nullptr without
+    // ABS. Read by the brake blending to withdraw the regeneration of a motor whose wheels ABS modulates.
+    const real* wheel_abs_scale = nullptr;
     // PHYS-033 P4 I7b C9: ambient atmospheric sample (ps/world/ambient.h),
     // from VehicleTickEnv::ambient - copied once per tick like the channel
     // inputs below. Never hashed (an environment input, not sim state).
@@ -517,6 +520,10 @@ public:
 
     DirectTorqueBrakes(std::vector<Row> rows, real static_factor) : rows_(std::move(rows)), static_factor_(static_factor) {}
 
+    // Brake blending: per-wheel service torque (N*m at the rim) the electric motors already supply this substep; the
+    // pads take only the rest. nullptr = no blending (the pads carry the whole request, as before).
+    void set_regen_reflected(const real* per_wheel) { regen_reflected_ = per_wheel; }
+
     void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
     void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
                      PowertrainEnergy& ledger) override;
@@ -524,6 +531,7 @@ public:
 private:
     std::vector<Row> rows_;
     real static_factor_;
+    const real* regen_reflected_ = nullptr;
 };
 
 } // namespace ps::drivetrain

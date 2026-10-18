@@ -564,6 +564,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
         if (assist_abs || assist_esc) ctx.wheel_brake = wheel_brake_.data(); // assists I5 part 2 / I6
+        if (assist_abs && abs_esc_state_.applied.size() == wheel_brake_.size()) ctx.wheel_abs_scale = abs_esc_state_.applied.data(); // brake blending: ABS withdraws regeneration
         ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9
         ctx.clutch_pedal = clutch_pedal;
         ctx.gear_request = gear_request;
@@ -899,6 +900,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             if(!powertrain_.has_engine())snap.drive_power_w=snap.electric_power_w;
             snap.battery_soc=powertrain_.battery_soc();snap.battery_capacity_kwh=powertrain_.battery_capacity_kwh();
             snap.battery_power_w=powertrain_.battery_power_w();
+            // Brake blending (docs/electric_drive.md): what the motors take of the brake request, what the pads keep.
+            snap.regen_power_w=powertrain_.regen_power_w();
+            snap.regen_brake_torque_nm=powertrain_.regen_brake_torque_nm();
+            snap.pad_brake_torque_nm=powertrain_.pad_brake_torque_nm();
+            const real blend_sum=snap.regen_brake_torque_nm+snap.pad_brake_torque_nm;
+            if(blend_sum>real(0)){snap.regen_brake_share=snap.regen_brake_torque_nm/blend_sum;snap.pad_brake_share=snap.pad_brake_torque_nm/blend_sum;}
         }
 
         dl.gear = snap.gear;

@@ -2042,7 +2042,123 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
         }
         lock_pending_.assign(locks_.size(), 0);
     }
-    components_.push_back(std::make_unique<DirectTorqueBrakes>(std::move(brake_rows), brakes.static_factor));
+    // --- Brake blending (regeneration first, docs/electric_drive.md): for every motor that regenerates from the brake
+    // pedal, walk the shaft graph from its node down to the wheel hubs it brakes, through gear pairs and differentials
+    // (nominal split, mesh efficiencies in the regeneration direction), giving the rim torque per unit of motor-shaft
+    // torque of each hub. A motor with no such path (behind a gearbox, a transfer case, ...) stays outside the scheme.
+    regen_cfg_ = brakes.regen_blend;
+    regen_corner_max_.assign(wheels.size(), real(0.0));
+    regen_wheel_nm_.assign(wheels.size(), real(0.0));
+    for (const auto& r : brake_rows) regen_corner_max_[r.wheel] = r.corner_max_nm;
+    if (brakes.regen_blend.enabled && !electric_motors_.empty()) {
+        struct GearEdge { NodeId in, out; real ratio, eff; };
+        struct DiffEdge { NodeId carrier, left, right; real ratio, eff; };
+        std::vector<GearEdge> gear_edges;
+        std::vector<DiffEdge> diff_edges;
+        for (const ComponentDesc& c : pt.components) {
+            if (const auto* g = std::get_if<GearPairDesc>(&c.params)) {
+                gear_edges.push_back({node_for_key(component_port_key(c.id, "in")), node_for_key(component_port_key(c.id, "out")),
+                                      std::abs(g->ratio), g->efficiency});
+            } else if (const auto* d = std::get_if<DifferentialDesc>(&c.params)) {
+                diff_edges.push_back({node_for_key(component_port_key(c.id, "carrier")), node_for_key(component_port_key(c.id, "left")),
+                                      node_for_key(component_port_key(c.id, "right")), std::abs(d->ratio), d->efficiency});
+            }
+        }
+        const std::size_t node_total = static_cast<std::size_t>(network_.node_count());
+        std::vector<std::vector<std::size_t>> wheels_of_node(node_total);
+        for (std::size_t wi = 0; wi < wheels.size(); ++wi) wheels_of_node[hub_nodes_[wi].index].push_back(wi);
+        std::size_t motor_i = 0;
+        for (const ComponentDesc& c : pt.components) {
+            const auto* md = std::get_if<ElectricMotorDesc>(&c.params);
+            if (md == nullptr) continue;
+            ElectricMotor* motor = electric_motors_[motor_i++];
+            if (md->crank_assist || !md->regen_channel.empty()) continue; // a generator / externally commanded regeneration
+            struct Item { NodeId node; real factor; };
+            std::vector<Item> stack{{node_for_key(component_port_key(c.id, "shaft")), real(1.0)}};
+            std::vector<char> visited(node_total, 0);
+            visited[stack.front().node.index] = 1;
+            std::vector<RegenHub> hubs;
+            while (!stack.empty()) {
+                const Item it = stack.back();
+                stack.pop_back();
+                const auto& hub_wheels = wheels_of_node[it.node.index];
+                if (!hub_wheels.empty()) {
+                    for (std::size_t wi : hub_wheels) {
+                        const real share = it.factor / static_cast<real>(hub_wheels.size());
+                        bool merged = false;
+                        for (RegenHub& h : hubs) if (h.wheel == wi) { h.share += share; merged = true; }
+                        if (!merged) hubs.push_back({wi, share, wheels[wi].wheel_radius});
+                    }
+                    continue;
+                }
+                std::vector<Item> next;
+                int branches = 0;
+                for (const GearEdge& g : gear_edges) {
+                    if (g.in == it.node && !visited[g.out.index]) { next.push_back({g.out, g.ratio / g.eff}); ++branches; }
+                    else if (g.out == it.node && !visited[g.in.index] && g.ratio > real(0.0)) { next.push_back({g.in, real(1.0) / (g.ratio * g.eff)}); ++branches; }
+                }
+                for (const DiffEdge& d : diff_edges) {
+                    if (d.carrier != it.node) continue;
+                    bool any = false;
+                    for (NodeId side : {d.left, d.right})
+                        if (!visited[side.index]) { next.push_back({side, d.ratio * real(0.5) / d.eff}); any = true; }
+                    if (any) ++branches;
+                }
+                // Several mechanical branches off one node: the split is dynamic; nominally equal here.
+                const real split = branches > 0 ? real(1.0) / static_cast<real>(branches) : real(1.0);
+                for (const Item& n : next) {
+                    visited[n.node.index] = 1;
+                    stack.push_back({n.node, it.factor * n.factor * split});
+                }
+            }
+            hubs.erase(std::remove_if(hubs.begin(), hubs.end(), [](const RegenHub& h) { return !(h.share > real(1e-9)) || !std::isfinite(h.share); }), hubs.end());
+            if (hubs.empty()) continue;
+            std::sort(hubs.begin(), hubs.end(), [](const RegenHub& a, const RegenHub& b) { return a.wheel < b.wheel; });
+            motor->enable_blend(brakes.regen_blend);
+            regen_maps_.push_back({motor, std::move(hubs)});
+        }
+    }
+    auto brakes_component = std::make_unique<DirectTorqueBrakes>(std::move(brake_rows), brakes.static_factor);
+    brakes_ = brakes_component.get();
+    components_.push_back(std::move(brakes_component));
+}
+
+// Brake blending, step 1 (before any component's pre_solve): hand each blended motor the rim brake request in its own
+// terms, the speed fade and whether ABS modulates a wheel it drives.
+void Powertrain::prepare_regen(const ComponentSubstepCtx& ctx) {
+    const real pedal = std::clamp(ctx.brake, real(0.0), real(1.0));
+    const RegenBlendDesc& cfg = regen_cfg_;
+    for (RegenMap& m : regen_maps_) {
+        real request = std::numeric_limits<real>::infinity(), speed = real(0.0);
+        bool abs_acts = false;
+        for (const RegenHub& h : m.hubs) {
+            request = std::min(request, regen_corner_max_[h.wheel] * pedal / h.share);
+            speed += std::abs(network_.omega(hub_nodes_[h.wheel])) * h.radius;
+            if (ctx.wheel_abs_scale != nullptr && ctx.wheel_abs_scale[h.wheel] < real(0.995)) abs_acts = true;
+        }
+        speed /= static_cast<real>(m.hubs.size());
+        const real fade = std::clamp((speed - cfg.fade_end_speed_mps) / (cfg.fade_start_speed_mps - cfg.fade_end_speed_mps), real(0.0), real(1.0));
+        m.motor->set_blend_feed(request, fade, abs_acts, ctx.h);
+    }
+}
+
+// Step 2 (after the motors' pre_solve, right before the brake rows'): the rim torque the motors supply per wheel, which
+// the pads then leave out of their capacity; and the snapshot sums.
+void Powertrain::reflect_regen(const ComponentSubstepCtx& ctx) {
+    std::fill(regen_wheel_nm_.begin(), regen_wheel_nm_.end(), real(0.0));
+    for (const RegenMap& m : regen_maps_)
+        for (const RegenHub& h : m.hubs) regen_wheel_nm_[h.wheel] += h.share * m.motor->regen_pred_nm;
+    real regen = real(0.0), pad = real(0.0);
+    for (std::size_t w = 0; w < regen_wheel_nm_.size(); ++w) {
+        const real service = ctx.wheel_brake != nullptr ? ctx.wheel_brake[w] : ctx.brake;
+        const real request = regen_corner_max_[w] * service;
+        const real taken = std::min(regen_wheel_nm_[w], std::max(real(0.0), request));
+        regen += taken;
+        pad += std::max(real(0.0), request) - taken;
+    }
+    blend_regen_nm_ = regen;
+    blend_pad_nm_ = pad;
+    brakes_->set_regen_reflected(regen_wheel_nm_.data());
 }
 
 void Powertrain::begin_substep() {
@@ -2489,7 +2605,11 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         ctx.electric_direction=electric_direction_;
     }
     for(auto& b:batteries_) b->begin_substep(ctx.h);
-    for (auto& c : components_) c->pre_solve(ctx, network_, assembly_);
+    if (!regen_maps_.empty()) prepare_regen(ctx);
+    for (auto& c : components_) {
+        if (!regen_maps_.empty() && c.get() == brakes_) reflect_regen(ctx); // every motor has run: the pads take the rest
+        c->pre_solve(ctx, network_, assembly_);
+    }
 
     // --- PHYS-033 P4 I4 C13: compliant shafts (see CompliantShaft in
     // powertrain.h). After any topology switch above, so v_old is the
@@ -2808,6 +2928,8 @@ void Powertrain::request_engine_wear(const EngineWear& w) {
 }
 
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
+    for (RegenMap& m : regen_maps_) m.motor->reset_blend();
+    blend_regen_nm_ = blend_pad_nm_ = real(0.0);
     // 1. Snapshot total rotational KE BEFORE any change (signed delta booked
     //    as ledger_.external_reset below - unlike apply_topology_switch's
     //    always-non-negative engagement_loss, a reset is an arbitrary

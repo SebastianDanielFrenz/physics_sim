@@ -19,6 +19,7 @@ struct ElectricMotorDesc {
     real inertia_kgm2 = .25;
     real efficiency = .95;
     real regen_torque_nm = 150;
+    real regen_power_w = 0; // regeneration power limit at the shaft; 0 = max_power_w
     real mass_kg = 80;
     Vec3 axis_local = Vec3::unit_y();
     // Bare throttle/brake/gear_request are defaults. Independent channels allow hybrid axle control.

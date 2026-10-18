@@ -565,7 +565,9 @@ void LoadDyno::post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& ne
 void DirectTorqueBrakes::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork&, Assembly& assembly) {
     for (const Row& r : rows_) {
         const real service = ctx.wheel_brake != nullptr ? ctx.wheel_brake[r.wheel] : ctx.brake;
-        const real cap_kinetic = std::max(real(0.0), r.corner_max_nm * service + r.handbrake_max_nm * ctx.handbrake);
+        real service_nm = r.corner_max_nm * service;
+        if (regen_reflected_ != nullptr) service_nm = std::max(real(0.0), service_nm - regen_reflected_[r.wheel]); // regeneration first
+        const real cap_kinetic = std::max(real(0.0), service_nm + r.handbrake_max_nm * ctx.handbrake);
         const real cap_static = static_factor_ * cap_kinetic;
         assembly.set_friction_capacity(r.row, cap_static, cap_kinetic);
     }
