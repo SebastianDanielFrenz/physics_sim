@@ -131,3 +131,53 @@ TEST_CASE("Hybrid DCT schedules on the pedal: part throttle shifts earlier than 
     CHECK(part.upshifts[0].rpm == Catch::Approx(5250.0).margin(5250.0 * 0.06));
     CHECK(part.upshifts[0].rpm < full.upshifts[0].rpm - 1500.0);
 }
+
+// A hybrid on a ManualTcu (non-DCT) gearbox: the supervisor used to ask for 1st whenever the gearbox passed through neutral,
+// which every shift does (releasing/selecting), so the car never left 1st (owner report 2026-10-18, car_city_bigbay).
+namespace {
+int run_manual_hybrid(double auto_shift_channel, bool presses, double seconds, int* peak_gear) {
+    vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/car_hybrid.json");
+    auto rig = ps_test::build_vehicle_rig_from_desc(d, 1800, {2, .4, .15}, .6, 0, 2, Vec3::unit_y(), 240.0, 960.0, 6000.0);
+    World& w = *rig.world;
+    w.reset_vehicle(rig.vehicle, {.gear = 0, .engine_state = drivetrain::EngineState::Off});
+    w.set_control("assist.drive_mode", 2.0);
+    w.set_control("assist.auto_shift", auto_shift_channel);
+    w.set_control("assist.traction_control", 0.0);
+    w.set_control("gear_request", 99.0);
+    w.set_control("throttle", 1.0);
+    int peak = 0;
+    double ups = 0.0;
+    const int n = static_cast<int>(seconds * 240.0);
+    for (int i = 0; i < n; ++i) {
+        const double t = i / 240.0;
+        // one press per second after the first second of launch
+        if (presses && t > 1.5 && ups < 1.0) { ups = 1.0; w.set_control("shift_up_count", ups); }
+        if (presses && t > 3.5 && ups < 2.0) { ups = 2.0; w.set_control("shift_up_count", ups); }
+        w.step();
+        peak = std::max(peak, static_cast<int>(w.powertrain_state(rig.vehicle).gear));
+    }
+    *peak_gear = peak;
+    return static_cast<int>(w.powertrain_state(rig.vehicle).gear);
+}
+} // namespace
+
+TEST_CASE("Hybrid on a manual gearbox upshifts 1->2->3 on driver presses, auto-shift channel off", "[hybrid][tcu][drivetrain][vehicle]") {
+    int peak = 0;
+    const int end = run_manual_hybrid(0.0, true, 6.0, &peak);
+    std::printf("[hybrid manual] presses, auto_shift channel 0: end gear %d, peak %d\n", end, peak);
+    CHECK(end >= 3);
+}
+
+TEST_CASE("Hybrid on a manual gearbox upshifts 1->2->3 on driver presses, auto-shift channel on", "[hybrid][tcu][drivetrain][vehicle]") {
+    int peak = 0;
+    const int end = run_manual_hybrid(1.0, true, 6.0, &peak);
+    std::printf("[hybrid manual] presses, auto_shift channel 1: end gear %d, peak %d\n", end, peak);
+    CHECK(end >= 3);
+}
+
+TEST_CASE("Hybrid on a manual gearbox leaves 1st by itself at full pedal (the supervisor owns auto-shift)", "[hybrid][tcu][drivetrain][vehicle]") {
+    int peak = 0;
+    run_manual_hybrid(1.0, false, 8.0, &peak);
+    std::printf("[hybrid manual] no presses, auto_shift 1: peak gear %d\n", peak);
+    CHECK(peak >= 2);
+}
