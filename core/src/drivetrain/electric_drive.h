@@ -73,7 +73,7 @@ public:
                 // acceptance, the low-speed fade; ABS acting on a wheel it drives withdraws it altogether.
                 const real power=desc_.regen_power_w>0?desc_.regen_power_w:desc_.max_power_w;
                 const real accept=(abs_now_||abs_hold_left_>0)?real(0):
-                    std::clamp((cfg_.full_soc-battery_.soc())/(cfg_.full_soc-cfg_.taper_start_soc),real(0),real(1))*fade_;
+                    std::clamp((cfg_.full_soc-battery_.soc())/(cfg_.full_soc-cfg_.taper_start_soc),real(0),real(1))*fade_*ramp_;
                 demand=std::min({desc_.regen_torque_nm,request_nm_,power/std::abs(omega)})*accept;
             }
             const real wanted=ctx.h*demand*std::abs(omega)*desc_.efficiency;
@@ -111,6 +111,12 @@ public:
                 const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}
             }
         }
+        // A motor behind a gearbox, clutch or transfer case also hashes its path ramp (state) and the gating configuration.
+        if(blend_&&dynamic_) {
+            for(real v:{ramp_,cfg_.path_ramp_s,cfg_.path_min_engagement,cfg_.clutch_capacity_margin}){
+                const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}
+            }
+        }
         for(const auto* name:{&desc_.battery,&desc_.ready_channel,&desc_.throttle_channel,&desc_.regen_channel,&desc_.direction_channel}){
             for(unsigned char c:*name){h^=c;h*=1099511628211ULL;}h^=0;h*=1099511628211ULL;
         }
@@ -120,23 +126,27 @@ public:
     real available_power() const {return std::min(desc_.max_power_w,desc_.peak_torque_nm*rpm*(2*3.14159265358979323846)/60);}
     bool is_crank_machine() const {return desc_.crank_assist;}
     // Brake blending (Powertrain wires it when the motor's rims are known and regen_blend is enabled).
-    void enable_blend(const RegenBlendDesc& cfg) {blend_=true;cfg_=cfg;}
+    // dynamic_paths: some path to the rims runs through a gearbox, the main clutch or a transfer case (the regeneration then
+    // ramps in over path_ramp_s whenever such a path closes again).
+    void enable_blend(const RegenBlendDesc& cfg,bool dynamic_paths=false) {blend_=true;cfg_=cfg;dynamic_=dynamic_paths;ramp_=1;}
     [[nodiscard]] bool blended() const {return blend_;}
     // Per substep, before pre_solve: the rim brake request in motor-shaft terms, the speed fade, ABS acting on a driven wheel.
-    void set_blend_feed(real request_nm,real fade,bool abs_active,real h) {
+    // path_open: at least one path to a rim is open this substep (always true outside a dynamic path set).
+    void set_blend_feed(real request_nm,real fade,bool abs_active,real h,bool path_open=true) {
         request_nm_=request_nm;fade_=fade;abs_now_=abs_active;
         abs_hold_left_=abs_active?cfg_.abs_hold_s:std::max(real(0),abs_hold_left_-h);
+        if(dynamic_) ramp_=!path_open?real(0):(cfg_.path_ramp_s>0?std::min(real(1),ramp_+h/cfg_.path_ramp_s):real(1));
     }
-    void reset_blend() {abs_hold_left_=0;abs_now_=false;request_nm_=0;fade_=0;regen_pred_nm=0;}
+    void reset_blend() {abs_hold_left_=0;abs_now_=false;request_nm_=0;fade_=0;regen_pred_nm=0;ramp_=1;}
     [[nodiscard]] real regen_efficiency() const {return desc_.efficiency;}
     bool ready=true;
     real torque_nm=0,power_w=0,battery_power_w=0,rpm=0;
     real regen_pred_nm=0; // this substep's regeneration torque magnitude at the shaft (implicit damping d x |omega_old|)
 private:
     real regen_d_=0;
-    bool blend_=false,abs_now_=false;
+    bool blend_=false,abs_now_=false,dynamic_=false;
     RegenBlendDesc cfg_{};
-    real request_nm_=0,fade_=0,abs_hold_left_=0;
+    real request_nm_=0,fade_=0,abs_hold_left_=0,ramp_=1;
     NodeId shaft_; ElectricMotorDesc desc_; Battery& battery_;
     int throttle_slot_=-1,regen_slot_=-1,direction_slot_=-1,ready_slot_=-1;
 };

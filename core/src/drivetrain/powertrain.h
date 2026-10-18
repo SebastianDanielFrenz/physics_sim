@@ -695,10 +695,23 @@ private:
     std::vector<FuelCell*> fuel_cells_; // aliases into components_
     std::vector<std::unique_ptr<Battery>> batteries_;
     std::vector<ElectricMotor*> electric_motors_; // owned by components_, component-array order
-    // Brake blending: per blended motor, the wheels it brakes and the rim torque per unit of motor-shaft torque (gear
-    // ratios and efficiencies down to the hub, an open differential's half), derived once at build from the shaft graph.
+    // Brake blending: per blended motor, the shaft nodes its torque reaches on the way to the rims, as a tree (parents
+    // before children), derived once at build from the shaft graph. An edge is fixed (gear pair, differential half,
+    // transfer-case rear output) or dynamic (the gearbox's engaged ratio, the main clutch, a transfer-case front output);
+    // the torque at a node per unit motor torque and the rim share of each hub are evaluated every substep over the OPEN
+    // edges, branches off one node splitting equally among the open ones.
+    enum class RegenEdge : std::uint8_t { Fixed, Gearbox, Clutch, TransferFront };
+    struct RegenNode { int parent; unsigned group; RegenEdge kind; real factor; std::vector<std::size_t> wheels; };
     struct RegenHub { std::size_t wheel; real share; real radius; };
-    struct RegenMap { ElectricMotor* motor; std::vector<RegenHub> hubs; };
+    struct RegenMap {
+        ElectricMotor* motor;
+        std::vector<RegenNode> nodes;           // [0] = the motor's own shaft
+        std::vector<RegenHub> hubs;             // every wheel reachable if every dynamic edge were open, wheel order
+        std::vector<real> factor;               // scratch: torque at the node per unit motor torque (0 = closed)
+        std::vector<unsigned> group_mask;       // scratch: per node, bit g set = an open child in branch group g
+        std::vector<char> open;                 // scratch: node reachable over open edges
+        bool dynamic = false;                   // some edge is not Fixed
+    };
     std::vector<RegenMap> regen_maps_;             // empty = nothing blended
     std::vector<real> regen_corner_max_, regen_wheel_nm_; // per wheel: service capacity at the rim, regeneration reflected there
     RegenBlendDesc regen_cfg_{};

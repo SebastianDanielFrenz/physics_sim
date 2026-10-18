@@ -407,7 +407,8 @@ BrakeSystemDesc read_brake_system(const json& j) {
         for (auto it = rj.begin(); it != rj.end(); ++it) {
             const std::string& k = it.key();
             if (k != "enabled" && k != "taper_start_soc" && k != "full_soc" && k != "fade_start_speed_mps" &&
-                k != "fade_end_speed_mps" && k != "abs_hold_s") {
+                k != "fade_end_speed_mps" && k != "abs_hold_s" && k != "path_min_engagement" && k != "clutch_capacity_margin" &&
+                k != "path_ramp_s") {
                 throw std::runtime_error("brake_system.regen_blend: unknown key '" + k + "'");
             }
             if (k == "enabled" ? !it.value().is_boolean() : !it.value().is_number()) {
@@ -421,6 +422,9 @@ BrakeSystemDesc read_brake_system(const json& j) {
         r.fade_start_speed_mps = rj.value("fade_start_speed_mps", r.fade_start_speed_mps);
         r.fade_end_speed_mps = rj.value("fade_end_speed_mps", r.fade_end_speed_mps);
         r.abs_hold_s = rj.value("abs_hold_s", r.abs_hold_s);
+        r.path_min_engagement = rj.value("path_min_engagement", r.path_min_engagement);
+        r.clutch_capacity_margin = rj.value("clutch_capacity_margin", r.clutch_capacity_margin);
+        r.path_ramp_s = rj.value("path_ramp_s", r.path_ramp_s);
         if (!(r.taper_start_soc >= real(0.0) && r.taper_start_soc < r.full_soc && r.full_soc <= real(1.0))) {
             throw std::runtime_error("brake_system.regen_blend: need 0 <= taper_start_soc < full_soc <= 1, got " +
                                      std::to_string(r.taper_start_soc) + " and " + std::to_string(r.full_soc));
@@ -431,6 +435,15 @@ BrakeSystemDesc read_brake_system(const json& j) {
         }
         if (!(r.abs_hold_s >= real(0.0)) || !std::isfinite(r.abs_hold_s)) {
             throw std::runtime_error("brake_system.regen_blend.abs_hold_s must be >= 0");
+        }
+        if (!(r.path_ramp_s >= real(0.0)) || !std::isfinite(r.path_ramp_s)) {
+            throw std::runtime_error("brake_system.regen_blend.path_ramp_s must be >= 0");
+        }
+        if (!(r.path_min_engagement > real(0.0) && r.path_min_engagement <= real(1.0))) {
+            throw std::runtime_error("brake_system.regen_blend.path_min_engagement must be in (0, 1]");
+        }
+        if (!(r.clutch_capacity_margin > real(0.0) && r.clutch_capacity_margin <= real(1.0))) {
+            throw std::runtime_error("brake_system.regen_blend.clutch_capacity_margin must be in (0, 1]");
         }
     }
     return b;

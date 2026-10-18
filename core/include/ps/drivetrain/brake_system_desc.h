@@ -39,6 +39,14 @@ struct RegenBlendDesc {
     // Sensor-only ABS handshake: regeneration on a motor is withdrawn while ABS acts on any wheel it drives and for
     // this long after the last intervention (so it does not chatter back into the lock).
     real abs_hold_s = 0.3;
+    // Motors whose path to the hubs runs through a gearbox, the main clutch or a transfer case (docs/electric_drive.md
+    // "Motors behind a gearbox"): a path through the main clutch or a transfer-case front output counts as closed below
+    // this engagement; a motor upstream of the clutch is limited to this fraction of the clutch's kinetic capacity.
+    real path_min_engagement = 0.95;
+    real clutch_capacity_margin = 0.9;
+    // After a path (a gear, the clutch, a transfer output) closes again the regeneration ramps in over this time so the
+    // reflected torque does not step; 0 = no ramp. An opening path withdraws it at once (the pads cover it that substep).
+    real path_ramp_s = 0.05;
 };
 
 struct BrakeSystemDesc {
