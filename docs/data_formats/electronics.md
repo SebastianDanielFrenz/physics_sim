@@ -466,7 +466,10 @@ rejected naming the field. A car needs a service brake corner with `max_torque_n
 
 **Reference speed** `v_ref` (shared, signed: forward > 0). Initialised from the wheels (braking: the wheel with the
 largest |v|, else the smallest). Each substep it integrates the IMU acceleration, then:
-- braking (brake or handbrake > 0.02): lifted to the fastest wheel in the direction of travel; set to the fastest wheel
+- braking (brake or handbrake > 0.02): lifted to the fastest UNDRIVEN wheel in the direction of travel (`abs_lift_speed`; a car
+  with every wheel driven uses the fastest wheel). A driven wheel still spins under power at brake onset, 12 % fast after a
+  full-throttle launch, and lifting to it left `v_ref` 0.7-2.7 m/s above the true speed: ABS then regulated against a slip the
+  car never had and the stop took 1.5-4.5x as long (car_hyper kept 22.9 m/s after 8 s). Set to the fastest wheel
   if every wheel turns the other way faster (a car sliding backward after a spin); when every regulated wheel's
   applied scale is at or below `reanchor_scale` it relaxes toward the fastest wheel at `reanchor_rate_per_s` (the
   integrated IMU lacks the yaw-rate x lateral-velocity term and runs above the true speed in a slide). That pull-down

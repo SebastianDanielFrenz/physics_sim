@@ -802,6 +802,100 @@ TEST_CASE("L3d: the bound on the reference speed's pull-down is what keeps ABS w
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// L4: the ABS reference speed after a driven launch (defect found in racing_game: after a part-throttle launch the reference
+// stayed ~1.5 m/s ABOVE the true speed, ABS then regulated to about zero slip, the deceleration fell to 1-2 m/s^2 below
+// 12 m/s and car_hyper still did 22.9 m/s after 8 s of full braking).
+// ---------------------------------------------------------------------------------------------------------------
+struct LaunchBrakeRun {
+    real distance = 0, v_end = 0, t_end = 0;
+    real max_ref_excess = -1e9; // max over the stop of |vref - v| - max(1 m/s, 8 % v); > 0 = outside the band
+    real max_ref_over = -1e9;   // max (vref - v)
+    real v_launch_end = 0;
+};
+
+LaunchBrakeRun launch_then_brake(const VehicleDesc& d, bool abs_on, real throttle, real v_launch, real brake_s = 10.0) {
+    Rig r = make_rig(d);
+    base_controls(r.w(), abs_on ? 1.0 : 0.0, 0.0);
+    roll(r, 0.0, 1);
+    ps_test::settle(r.w(), 0.5);
+    World& w = r.w();
+    const BodyId c = r.rig.chassis;
+    w.set_control("assist.auto_shift", 1.0);
+    w.set_control("throttle", throttle);
+    for (int k = 0; k < 240 * 40 && speed(w, c) < v_launch; ++k) w.step();
+    LaunchBrakeRun out;
+    out.v_launch_end = speed(w, c);
+    const Vec3 p0 = w.backend().get_pose(c).position;
+    w.set_control("throttle", 0.0);
+    w.set_control("brake", 1.0);
+    const int n = static_cast<int>(brake_s * 240);
+    for (int k = 0; k < n; ++k) {
+        w.step();
+        const real v = speed(w, c);
+        const real vref = r.pt().abs_reference_speed_m_s;
+        const real t = (k + 1) / 240.0;
+        if (abs_on && v > 3.0) {
+            out.max_ref_excess = std::max(out.max_ref_excess, std::abs(vref - v) - std::max(1.0, 0.08 * v));
+            out.max_ref_over = std::max(out.max_ref_over, vref - v);
+        }
+        if (std::getenv("PS_L4_DIAG") && k % 48 == 0)
+            std::printf("[%s] t %.2f v %.2f vref %.2f dv %.2f kappa %.2f %.2f %.2f %.2f\n", abs_on ? "abs" : "off", t, v, vref, vref - v,
+                        w.wheel_telemetry(r.rig.vehicle, 0).slip_ratio, w.wheel_telemetry(r.rig.vehicle, 1).slip_ratio,
+                        w.wheel_telemetry(r.rig.vehicle, 2).slip_ratio, w.wheel_telemetry(r.rig.vehicle, 3).slip_ratio);
+        out.t_end = t;
+        if (v < kStopSpeed) break;
+    }
+    const Vec3 p = w.backend().get_pose(c).position;
+    out.distance = std::sqrt((p.x - p0.x) * (p.x - p0.x) + (p.y - p0.y) * (p.y - p0.y));
+    out.v_end = speed(w, c);
+    return out;
+}
+
+const VehicleDesc& hyper_unit() {
+    static const VehicleDesc d = io::load_vehicle_json(kHyper, with_unit());
+    return d;
+}
+
+TEST_CASE("L4 diag: reference speed after a launch", "[.][diag][abs]") {
+    for (const VehicleDesc* d : {&sedan_unit(), &hyper_unit()}) {
+        for (real thr : {0.3, 0.5, 1.0}) {
+            const LaunchBrakeRun on = launch_then_brake(*d, true, thr, 20.0);
+            const LaunchBrakeRun off = launch_then_brake(*d, false, thr, 20.0);
+            std::printf("== %s throttle %.1f: launched to %.2f; ABS stop %.1f m in %.2f s (v_end %.2f), vref over max %.2f excess %.2f; off %.1f m in %.2f s\n",
+                        d->name.c_str(), thr, on.v_launch_end, on.distance, on.t_end, on.v_end, on.max_ref_over, on.max_ref_excess, off.distance, off.t_end);
+        }
+    }
+}
+
+// Bands written before the first run (L4 header above): v_ref within max(1 m/s, 8 %) of the true speed during the whole
+// stop (v > 3 m/s), and the ABS stop on dry asphalt shorter than the same stop with ABS off.
+void check_launch_brake(const VehicleDesc& d, const std::vector<real>& throttles) {
+    for (real thr : throttles) {
+        CAPTURE(d.name, thr);
+        const LaunchBrakeRun on = launch_then_brake(d, true, thr, 20.0);
+        const LaunchBrakeRun off = launch_then_brake(d, false, thr, 20.0);
+        CAPTURE(on.v_launch_end, on.max_ref_over, on.distance, off.distance, on.t_end, on.v_end);
+        REQUIRE(on.v_launch_end > 19.0);
+        CHECK(on.max_ref_excess <= 0.0);
+        CHECK(on.v_end < kStopSpeed + 0.5);
+        CHECK(on.distance < off.distance);
+    }
+}
+
+TEST_CASE("L4a: after a part-throttle launch the ABS reference speed stays on the true speed (rear-driven car_hyper)", "[abs][assist][vehicle]") {
+    check_launch_brake(hyper_unit(), {0.3, 0.5, 1.0});
+}
+
+TEST_CASE("L4b: the same on the front-driven car_sedan", "[abs][assist][vehicle]") {
+    check_launch_brake(sedan_unit(), {0.5, 1.0});
+}
+
+TEST_CASE("L4c: and with every wheel driven (car_sedan_awd): no undriven wheel to anchor to", "[abs][assist][vehicle]") {
+    static const VehicleDesc d = io::load_vehicle_json(kData + "/../tests/support/fixtures/vehicles/car_sedan_awd.json", with_unit());
+    check_launch_brake(d, {0.5, 1.0});
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // E: ESC.
 // ---------------------------------------------------------------------------------------------------------------
 TEST_CASE("E1: FMVSS 126 sine with dwell", "[esc][assist][vehicle][long]") {
