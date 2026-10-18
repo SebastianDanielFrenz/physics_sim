@@ -150,6 +150,7 @@ add_executable(ps_unit_tests
   test_knock_limit.cpp
   test_knock_all_engines_diag.cpp
   test_knock_calibration.cpp
+  test_knock_cal_fixtures.cpp
   test_gas_exchange.cpp
   test_wot_generation.cpp
   test_engine_installation_io.cpp

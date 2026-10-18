@@ -1,0 +1,6 @@
+{
+  "extends": "../../../../../data/turbo_configurations/twin_small.json",
+  "name": "ford_27_epa_turbo",
+  "target_boost_bar": 0.95,
+  "source": "[AS] [AS] two GT28-class turbos, one per bank; template twin_small.json with target_boost_bar 0.95 bar gauge = the highest-torque envelope row's MAP maximum (198.0 kPa abs, [M]) minus ISA 101.325 kPa, floored to 0.05 bar. Hardware and PID are the template's; boost is not a knock input (phase B replays the measured MAP/IMT)."
+}

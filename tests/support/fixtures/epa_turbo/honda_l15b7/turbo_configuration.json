@@ -1,0 +1,6 @@
+{
+  "extends": "../../../../../data/turbo_configurations/single_small.json",
+  "name": "honda_l15b7_epa_turbo",
+  "target_boost_bar": 0.9,
+  "source": "[AS] [AS] one GT28-class turbo (the real engine has a single-scroll MHI unit, not read here); template single_small.json with target_boost_bar 0.90 bar gauge = the highest-torque envelope row's MAP maximum (195.6 kPa abs, [M]) minus ISA 101.325 kPa, floored to 0.05 bar. Hardware and PID are the template's; boost is not a knock input (phase B replays the measured MAP/IMT)."
+}
