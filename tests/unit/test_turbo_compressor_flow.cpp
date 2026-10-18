@@ -260,9 +260,13 @@ TEST_CASE("CF3: steady WOT boost and torque by speed", "[turbo][sim_engine][hype
     // answers the gate more slowly; the last-second means moved tau0 -0.01..+0.26 %, boost -0.11..+0.10 %,
     // rotor -0.87..+0.04 % (the largest at 7500/8000 rpm). Was 1257.6810/1.7820/79088.8, 1368.4982/1.7693/86046.5,
     // 1406.0689/1.7321/106902.6, 1309.3552/1.7027/138720.8, 1220.4495/1.6988/145471.0 (258f5c2).
-    const Pre pre[] = {{3000.0, 1257.5909, 1.7819, 79091.6}, {4500.0, 1369.2901, 1.7710, 86075.2},
-                       {6000.0, 1406.5556, 1.7333, 106941.9}, {7500.0, 1309.6103, 1.7009, 137741.7},
-                       {8000.0, 1223.6028, 1.7006, 144205.3}};
+    // Re-recorded 2026-10-19 for the hyper on E85 with the knock limit (margin 2) under knock model v3, which does not
+    // bind at WOT (knock retard 0 at every point of the engine WOT table): tau0 -0.4..-1.2 %, boost -0.01..+0.01 %,
+    // rotor -0.6..+0.01 % - the fuel change, not the knock limit. Was 1257.5909/1.7819/79091.6, 1369.2901/1.7710/86075.2,
+    // 1406.5556/1.7333/106941.9, 1309.6103/1.7009/137741.7, 1223.6028/1.7006/144205.3 (E5, no knock limit).
+    const Pre pre[] = {{3000.0, 1252.1514, 1.7821, 79095.1}, {4500.0, 1361.0286, 1.7709, 86066.6},
+                       {6000.0, 1394.3545, 1.7334, 106812.2}, {7500.0, 1294.9342, 1.7011, 137083.9},
+                       {8000.0, 1208.5143, 1.7003, 143267.8}};
     for (real rpm : {3000.0, 4500.0, 6000.0, 7000.0, 7500.0, 7750.0, 8000.0, 8200.0}) {
         SimulatedEngine e(base);
         const real omega = rpm * 2.0 * kPi / 60.0;

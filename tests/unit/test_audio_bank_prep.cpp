@@ -191,7 +191,7 @@ TEST_CASE("Audio bank prep P1: demo_i4_pipes bank equals the pre-move generator;
                 static_cast<unsigned long long>(r10.key), static_cast<unsigned long long>(bank_content_hash(*r10.bank)), r10.bytes,
                 log10.done.size(), log10.total);
     CHECK_FALSE(r10.cache_hit);
-    CHECK(bank_content_hash(*r10.bank) == 0x5611596ff3be5702ULL /* re-pinned 2026-10-18, cause: knock opt-in of demo_i4_pipes; was 0x1b0b7ef18220095b */);  // pre-move generator; P7d maps (was 0x1d178f47cb870602)
+    CHECK(bank_content_hash(*r10.bank) == 0xc983bd04834bc403ULL /* re-pinned 2026-10-19, cause: knock model v3, was 0x5611596ff3be5702; 2026-10-18: knock opt-in of demo_i4_pipes, was 0x1b0b7ef18220095b */);  // pre-move generator; P7d maps (was 0x1d178f47cb870602)
     CHECK(r10.bytes == 4253824);
     CHECK(r10.bank->key == r10.key);
     CHECK(r10.path == tools::audio_bank_cache_path(dir10.string(), r10.key));
@@ -229,7 +229,7 @@ TEST_CASE("Audio bank prep P1: demo_i4_pipes bank equals the pre-move generator;
     std::printf("P1: 1 worker %.2f s\n", r1.seconds);
     CHECK_FALSE(r1.cache_hit);
     CHECK(r1.key == r10.key);
-    CHECK(bank_content_hash(*r1.bank) == 0x5611596ff3be5702ULL /* re-pinned 2026-10-18, cause: knock opt-in of demo_i4_pipes; was 0x1b0b7ef18220095b */);
+    CHECK(bank_content_hash(*r1.bank) == 0xc983bd04834bc403ULL /* re-pinned 2026-10-19, cause: knock model v3, was 0x5611596ff3be5702; 2026-10-18: knock opt-in of demo_i4_pipes, was 0x1b0b7ef18220095b */);
     CHECK(read_file(r1.path) == read_file(r10.path));  // the cache files are byte-identical
     CHECK(log1.done.size() == log10.done.size());
     CHECK(log1.strictly_by_one());
@@ -247,7 +247,7 @@ TEST_CASE("Audio bank prep P1b: turbo hyper V8 bank equals the pre-move generato
     std::printf("P1b: %.2f s, key %016llx, content %016llx, %zu bytes\n", r.seconds, static_cast<unsigned long long>(r.key),
                 static_cast<unsigned long long>(bank_content_hash(*r.bank)), r.bytes);
     CHECK_FALSE(r.cache_hit);
-    CHECK(bank_content_hash(*r.bank) == 0xe1cd3181553397a5ULL /* re-pinned 2026-10-18, cause: knock opt-in + E85 fuel of the hyper; was 0x56711496c481c4a7 (knock), 0x79cc5e377994856c (before) */);  // pre-move generator
+    CHECK(bank_content_hash(*r.bank) == 0xaed7766ad5d31620ULL /* re-pinned 2026-10-19, cause: knock model v3, was 0xe1cd3181553397a5; 2026-10-18: knock opt-in + E85 fuel of the hyper; was 0x56711496c481c4a7 (knock), 0x79cc5e377994856c (before) */);  // pre-move generator
     CHECK(r.bytes == 6380736);
     // The engine's default forced-induction file given explicitly is the same engine: same key, a hit.
     const auto again = tools::prepare_engine_audio_bank_from_files(

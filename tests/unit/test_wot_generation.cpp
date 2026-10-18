@@ -550,8 +550,8 @@ TEST_CASE("P7d W5h/W8e: the hyper and lumped engines keep their keys and map has
 
 TEST_CASE("P7d W5h: the hyper keeps its Preview and Full map hashes", "[cycle][pipe][drivetrain][turbo][long]") {
     check_pins("hyper_v8_one1_audio.json", kEngines,
-               {{MapQuality::Preview, 0x8c332886af325b4eull, 0xf6af07b96792892bull},
-                {MapQuality::Full, 0x2c2dd48f056817dfull, 0x56149891dd10434cull}},
+               {{MapQuality::Preview, 0x8c332886af325b4eull, 0x76cef2b77b805bd3ull},
+                {MapQuality::Full, 0x2c2dd48f056817dfull, 0xc66052a08c41ba14ull}},
                true);
 }
 
