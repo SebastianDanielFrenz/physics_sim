@@ -88,8 +88,8 @@ public:
     // out_raw_hand_lever (0 without a hand lever) - one read of the channel
     // serving both the command and Powertrain's published hand_throttle.
     [[nodiscard]] ThrottleCommand evaluate(const ComponentSubstepCtx& ctx, real& out_raw_hand_lever) const {
-        real pedal_prime = has_curve_ ? curve_.evaluate(ctx.throttle) : ctx.throttle;
-        if (apply_drive_bend_ && ctx.drive_bend_x > real(0.0)) { // assists I7 bend; pedal plan P1: automatic/DCT/CVT only
+        real pedal_prime = (has_curve_ && !ctx.throttle_is_command) ? curve_.evaluate(ctx.throttle) : ctx.throttle;
+        if (apply_drive_bend_ && !ctx.throttle_is_command && ctx.drive_bend_x > real(0.0)) { // assists I7 bend; pedal plan P1: automatic/DCT/CVT only
             pedal_prime = vehicle::pedal_bend_apply(vehicle::PedalBend{ctx.drive_bend_x, ctx.drive_bend_y}, pedal_prime);
         }
         real command = pedal_prime;

@@ -147,6 +147,9 @@ previous substep had neither limiter nor DFCO active.
     trimmed, so with N2O wheelspin the share fell below the 0.95 switch (to 0.84-0.90), the solenoid closed, the slip fell,
     the share rose and it reopened: a loop of about 10 Hz in 3rd-6th gear. The band has to be wider than that trim (TC
     fractions 0.90-0.96 gave shares 0.75-0.89), and a real TC intervention (share under 0.75) still closes the spray.
+    (Since the hybrid shift fix the supervisor no longer folds the TC ceiling into its request: at full pedal the engine
+    command stays 1 and the ceiling acts on the engine downstream, so this chatter source is gone for a hybrid; the band stays
+    as protection for a command that does hover, e.g. at part pedal.)
   * `max_rpm_fade_rpm` (300): the flow fraction is multiplied by `clamp((max_rpm - rpm) / max_rpm_fade_rpm, 0, 1)`, so the
     spray tapers to zero over the last band below `max_rpm` instead of closing at the edge. The hard close was a bang-bang
     limiter: in top gear (or any gear where the shot keeps the engine at the edge) the rpm reached `max_rpm`, the solenoid

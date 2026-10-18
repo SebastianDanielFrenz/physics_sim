@@ -689,7 +689,7 @@ private:
     Assembly projection_assembly_; // dedicated scratch for apply_topology_switch, never touches assembly_
     std::optional<HybridControlDesc> hybrid_;
     bool hybrid_charge_latched_=false,hybrid_ice_requested_=false,hybrid_disconnect_=true;
-    real hybrid_selector_=0,hybrid_idle_s_=0,hybrid_crank_s_=0,hybrid_requested_w_=0,hybrid_available_w_=0;
+    real hybrid_selector_=0,hybrid_idle_s_=0,hybrid_crank_s_=0,hybrid_requested_w_=0,hybrid_available_w_=0,hybrid_driver_command_=0;
     int hybrid_mode_slot_=-1,hybrid_ready_slot_=-1;
     real electric_direction_=0; // latched fixed-reduction selector; N at spawn
     std::vector<FuelCell*> fuel_cells_; // aliases into components_
