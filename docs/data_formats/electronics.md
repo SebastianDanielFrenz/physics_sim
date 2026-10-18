@@ -439,16 +439,17 @@ desc and is not state.
 
 ## ABS and ESC (assists I5 part 2 / I6) {#abs-esc}
 
-Two blocks of the assist unit (`kind: assist_unit`, any grade). ABS and ESC remain sensor-based: they read
-the wheels' peripheral speeds (steer and yaw compensated), the gyro yaw rate, the IMU longitudinal
-acceleration, the brake / handbrake channels and the mean front road-wheel angle - never the ground speed, a tyre slip,
-a contact load or a surface. Both act only through the car's own service-brake rows (DirectTorqueBrakes): each corner's
+Two blocks of the assist unit (`kind: assist_unit`, any grade). ABS and ESC read the wheels' peripheral speeds
+(steer and yaw compensated), the gyro yaw rate, the brake / handbrake channels and the mean front road-wheel angle - never
+a tyre slip, a contact load or a surface. The braking REFERENCE SPEED is, by default, the simulation's own chassis
+velocity (`reference_speed: "ground_truth"`, below); the sensor-only estimator (integrated IMU acceleration) remains as
+`reference_speed: "estimated"`. Both act only through the car's own service-brake rows (DirectTorqueBrakes): each corner's
 row reads its own command instead of the brake channel. Descriptors `ps/vehicle/abs_esc_desc.h`, law
 `core/src/vehicle/abs_esc.h` (per substep, allocation-free). Shipped part: `data/electronics/assist_unit_abs_esc.json`
 (grade street, every number [AS]); no shipped car carries it.
 
 ```json
-"abs": { "default_enabled": true, "target_slip": 0.12, "min_speed_mps": 2.0, "slip_floor_mps": 3.0,
+"abs": { "default_enabled": true, "reference_speed": "ground_truth", "target_slip": 0.12, "min_speed_mps": 2.0, "slip_floor_mps": 3.0,
          "kp": 3.0, "ki_per_s": 30.0, "release_rate_per_s": 60.0, "apply_rate_per_s": 15.0,
          "reanchor_rate_per_s": 10.0, "reanchor_max_decel_mps2": 2.0, "reanchor_scale": 0.05, "rear_select_low": true,
          "front_split_max": 0.2, "front_split_rate_per_s": 0.4 },
@@ -464,7 +465,18 @@ absent); unknown keys, `target_slip` outside (0, 1), `reanchor_scale` outside [0
 `max_brake` above 1, `esc` without `abs`, `esc.modes` without `"on"` and a `mode_params` entry for an unlisted mode are
 rejected naming the field. A car needs a service brake corner with `max_torque_nm > 0`.
 
-**Reference speed** `v_ref` (shared, signed: forward > 0). Initialised from the wheels (braking: the wheel with the
+**Reference speed** `v_ref` (shared, signed: forward > 0), selected by `abs.reference_speed` (a string, default
+`"ground_truth"`; ESC shares it):
+- `"ground_truth"` (default, owner decision 2026-10-18): `v_ref` is set every substep to the chassis velocity along the
+  body x axis at the chassis reference point, read from the simulation's shadow chassis (`pose.inverse * linear velocity`,
+  `.x`) - the point the wheel sensors are projected to. Nothing is integrated or relaxed; `reanchor_*` have no effect. Why:
+  the estimator ran away. In the owner's 300 km/h drive (car_hyper_n2o, a weave with ~17 deg sideslip) the integrated IMU
+  lacks the yaw-rate x lateral-velocity term, `v_ref` ended ~9 m/s above the true speed with every wheel at the true speed,
+  ABS read a 12 %+ slip on a free-rolling wheel and held the brakes released for 4.5 s (the 2 m/s^2 pull-down bound of
+  `reanchor_max_decel_mps2` is what made the recovery take that long). The per-wheel speeds stay sensor values.
+- `"estimated"`: the sensor-only estimator below (kept for cars/tests that must not read the simulation's state).
+
+Estimated mode: initialised from the wheels (braking: the wheel with the
 largest |v|, else the smallest). Each substep it integrates the IMU acceleration, then:
 - braking (brake or handbrake > 0.02): lifted to the fastest UNDRIVEN wheel in the direction of travel (`abs_lift_speed`; a car
   with every wheel driven uses the fastest wheel). A driven wheel still spins under power at brake onset, 12 % fast after a
