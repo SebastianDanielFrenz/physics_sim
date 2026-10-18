@@ -21,6 +21,7 @@
 #include "ps/engine_cycle/knock.h"
 #include "ps/engine_cycle/wiebe.h"
 #include "ps/io/fuel_io.h"
+#include "ps/io/knock_model_io.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
 
@@ -44,6 +45,9 @@ using json = nlohmann::json;
 namespace ec = ps::engine_cycle;
 
 namespace {
+
+// Knock model v2 (P7b) pre-factor scale at n 1.7 / B 3800 K: the diag grids below centre their scale search on it.
+constexpr real kV2Scale = 1.26;
 
 const std::filesystem::path kSrc = std::filesystem::path(PS_SOURCE_DIR);
 const std::filesystem::path kFix = kSrc / "tests" / "support" / "fixtures" / "epa_turbo";
@@ -178,7 +182,17 @@ struct BcOpt {
     //   trapped lambda = measured exhaust lambda x that efficiency (DI: all fuel is trapped). false: KV1-BC's rule,
     //   measured air = trapped air (exact for an NA engine without blow-through).
     bool delivered_air = true;
+    bool envelope_only = false; // prepare only the envelope rows (the asserted tests; the others stay ok = false)
 };
+
+// The boundary conditions of the knock model v3 fit (KV1-BC's rule): trapped = measured air, exhaust at ambient.
+BcOpt fit_bc() {
+    BcOpt o;
+    o.exh_measured = false;
+    o.delivered_air = false;
+    o.envelope_only = true;
+    return o;
+}
 
 // A prepared row: the knock search input at measured boundary conditions, octane set later.
 struct Prepared {
@@ -245,7 +259,10 @@ Prepared prepare(const Package& pk, const Row& r, const BcOpt& o) {
 std::vector<Prepared> prepare_all(const Package& pk, const BcOpt& o) {
     std::vector<Prepared> out(pk.rows.size());
     pool().parallel_for(pk.rows.size(), 1, [&](std::size_t b, std::size_t e) {
-        for (std::size_t i = b; i < e; ++i) out[i] = prepare(pk, pk.rows[i], o);
+        for (std::size_t i = b; i < e; ++i) {
+            if (o.envelope_only && !pk.rows[i].envelope) continue;
+            out[i] = prepare(pk, pk.rows[i], o);
+        }
     });
     return out;
 }
@@ -253,7 +270,7 @@ std::vector<Prepared> prepare_all(const Package& pk, const BcOpt& o) {
 // The model parameters under test (defaults = the shipped model).
 struct Model {
     real scale = ec::kKnockCalPrefactorScale;
-    real p_exp = ec::kDouaudEyzatPExponent;
+    real p_exp = ec::kKnockCalPressureExponent;
     real b_k = ec::kKnockCalActivationK;
     real k_oi = ec::kOctaneIndexK;
 };
@@ -482,7 +499,7 @@ void run_fit(bool exh_measured) {
         Model m;
         m.p_exp = n;
         // centre the scale search on the A25A pressure level: rate ~ p^n, p ~ 50 atm
-        const real centre = std::log10(ec::kKnockCalPrefactorScale) + (n - ec::kDouaudEyzatPExponent) * std::log10(50.0);
+        const real centre = std::log10(kV2Scale) + (n - ec::kDouaudEyzatPExponent) * std::log10(50.0);
         m = fit_scale(m, centre - 1.0, centre + 1.0);
         real ra = 0, rh = 0;
         const real r = fit_rms(m, &ra, &rh);
@@ -530,7 +547,7 @@ TEST_CASE("KCB diag: per-row residuals of a model", "[.][diag][knock][knock_cal]
     m.p_exp = 1.15;
     m.b_k = 5000.0;
     {
-        const real centre = std::log10(ec::kKnockCalPrefactorScale) + (m.p_exp - ec::kDouaudEyzatPExponent) * std::log10(50.0) -
+        const real centre = std::log10(kV2Scale) + (m.p_exp - ec::kDouaudEyzatPExponent) * std::log10(50.0) -
                             (m.b_k - 3800.0) / 850.0 * 0.4343;
         m = fit_scale(m, centre - 1.5, centre + 1.5);
     }
@@ -563,7 +580,7 @@ void grid_nb(bool exh_measured) {
             Model m;
             m.p_exp = n;
             m.b_k = b;
-            const real centre = std::log10(ec::kKnockCalPrefactorScale) + (n - ec::kDouaudEyzatPExponent) * std::log10(50.0) +
+            const real centre = std::log10(kV2Scale) + (n - ec::kDouaudEyzatPExponent) * std::log10(50.0) +
                                 -(b - 3800.0) / 850.0 * 0.4343;
             m = fit_scale(m, centre - 1.5, centre + 1.5);
             real ra = 0, rh = 0;
@@ -601,7 +618,7 @@ void fine_grid(bool delivered) {
             Model m;
             m.p_exp = n;
             m.b_k = b;
-            const real centre = std::log10(ec::kKnockCalPrefactorScale) + (n - ec::kDouaudEyzatPExponent) * std::log10(50.0) -
+            const real centre = std::log10(kV2Scale) + (n - ec::kDouaudEyzatPExponent) * std::log10(50.0) -
                                 (b - 3800.0) / 850.0 * 0.4343;
             m = fit_scale(m, centre - 1.5, centre + 1.5);
             real ra = 0, rh = 0;
@@ -684,4 +701,158 @@ TEST_CASE("KCB diag: engine WOT table", "[.][diag][knock][knock_cal]") {
             std::printf("%6.0f  %9.1f  %8.1f  %12.2f  %5.1f  %9.3f  %d" "\n", p.rpm, p.torque_nm, p.power_kw, p.knock_retard_deg,
                         p.spark_deg, p.boost_bar, p.converged ? 1 : 0);
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Knock model v3 (knock calibration phase B): asserted checks at MEASURED boundary conditions (fit_bc: trapped =
+// measured air, measured IMT/lambda/cam, exhaust at ambient). Like KV1-BC the measured ECU spark is taken as the knock
+// limit with margin 0 (it is the OEM's knock limit minus its own margin, so the calibrated model absorbs that margin).
+// Declared band (before the asserted run): fitted engines - every A25A row within +-5 deg (KV1-BC), Honda L15B7 Tier 3
+// envelope rms <= 3.0 deg and every row within +-6.5 deg; held out - envelope rms <= 3.5 deg and every row within
+// +-6.5 deg per package.
+namespace {
+constexpr real kFitRmsHonda = 3.0;
+constexpr real kBandMax = 6.5;
+constexpr real kHoldRms = 3.5;
+
+const Set* find_set(const std::string& name) {
+    for (const Set& s : sets())
+        if (s.pk->name == name) return &s;
+    return nullptr;
+}
+
+void prepare_named(const std::vector<std::string>& names) {
+    const BcOpt o = fit_bc();
+    for (Set& s : sets())
+        for (const std::string& n : names)
+            if (s.pk->name == n) s.pr = prepare_all(*s.pk, o);
+}
+
+void check_package(const std::string& name, real rms_bound, real max_bound) {
+    const Set* s = find_set(name);
+    REQUIRE(s != nullptr);
+    const Model m; // the compiled knock model v3
+    const std::vector<Res> r = eval_all(*s->pk, s->pr, m);
+    const Stats st = stats(*s->pk, r, true);
+    std::printf("KCB %-22s n %2d mean %+6.2f rms %5.2f max %5.2f\n", name.c_str(), st.n, st.mean, st.rms, st.max_abs);
+    INFO(name);
+    CHECK(st.n >= 10);
+    CHECK(st.rms <= rms_bound);
+    CHECK(st.max_abs <= max_bound);
+    for (std::size_t i = 0; i < r.size(); ++i) {
+        if (!r[i].ok) continue;
+        INFO("row " << s->pk->rows[i].row << " rpm " << s->pk->rows[i].rpm);
+        CHECK_FALSE(r[i].saturated);
+    }
+}
+} // namespace
+
+TEST_CASE("KCB knock model file equals the compiled knock model v3", "[knock][knock_cal][io]") {
+    const std::string path = std::string(PS_SOURCE_DIR) + "/data/knock_models/douaud_eyzat_v3.json";
+    const io::KnockModelFile f = io::load_knock_model_json(path);
+    const ec::KnockModelParams d;
+    CHECK(f.version == static_cast<int>(ec::kKnockModelVersion));
+    CHECK(f.prefactor_s == ec::kDouaudEyzatA_s);
+    CHECK(f.octane_exponent == ec::kDouaudEyzatOnExponent);
+    CHECK(f.params.octane_index_k == d.octane_index_k);
+    CHECK(f.params.prefactor_scale == d.prefactor_scale);
+    CHECK(f.params.pressure_exponent == d.pressure_exponent);
+    CHECK(f.params.activation_k == d.activation_k);
+    // The desc default is the same set (what the loader leaves in CycleModelDesc::knock.model).
+    const CycleModelDesc c;
+    CHECK(c.knock.model.prefactor_scale == d.prefactor_scale);
+    CHECK(c.knock.model.pressure_exponent == d.pressure_exponent);
+    CHECK(c.knock.model.activation_k == d.activation_k);
+    CHECK(c.knock.model.octane_index_k == d.octane_index_k);
+    // Rejections (matched by type only - TOOL-019 on the asan leg).
+    std::ifstream in(path);
+    json j;
+    in >> j;
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps_kcb_knock_model_file";
+    std::filesystem::create_directories(dir);
+    auto rejects = [&](const char* what, const json& bad) {
+        const std::string p = (dir / (std::string(what) + ".json")).string();
+        {
+            std::ofstream out(p);
+            out << bad.dump();
+        }
+        INFO(what);
+        CHECK_THROWS_AS(io::load_knock_model_json(p), std::runtime_error);
+    };
+    json a = j;
+    a["extra"] = 1;
+    rejects("unknown_key", a);
+    json b = j;
+    b["activation_k"].erase("source");
+    rejects("no_source", b);
+    json c2 = j;
+    c2["version"] = 2;
+    rejects("old_version", c2);
+    json e = j;
+    e["pressure_exponent"]["value"] = -1.0;
+    rejects("negative", e);
+    json g = j;
+    g.erase("prefactor_scale");
+    rejects("missing", g);
+}
+
+TEST_CASE("KCB fit: knock model v3 on the A25A and Honda L15B7 Tier 3 rows at measured boundary conditions", "[knock][knock_cal]") {
+    prepare_named({"a25a_kv1bc", "honda_l15b7_t3"});
+    // A25A: the KV1-BC band row by row (also the v3 fit's constraint).
+    {
+        const Set* s = find_set("a25a_kv1bc");
+        REQUIRE(s != nullptr);
+        const std::vector<Res> r = eval_all(*s->pk, s->pr, Model{});
+        const Stats st = stats(*s->pk, r, true);
+        std::printf("KCB %-22s n %2d mean %+6.2f rms %5.2f max %5.2f\n", "a25a_kv1bc", st.n, st.mean, st.rms, st.max_abs);
+        CHECK(st.n == 17);
+        for (std::size_t i = 0; i < r.size(); ++i) {
+            INFO("A25A row " << s->pk->rows[i].row << " rpm " << s->pk->rows[i].rpm);
+            CHECK(r[i].limited);
+            CHECK_FALSE(r[i].saturated);
+            CHECK(std::abs(r[i].diff) <= 5.0);
+        }
+    }
+    check_package("honda_l15b7_t3", kFitRmsHonda, kBandMax);
+    // The compiled set is the minimum of the constrained fit objective (rms over both sets plus the KV1-BC penalty):
+    // a drifted constant or a changed replay that moves the optimum fails here.
+    g_kv1bc_penalty = true;
+    const Model m0;
+    const real j0 = fit_rms_obj(m0);
+    auto worse = [&](const char* what, const Model& m) {
+        const real jm = fit_rms_obj(m);
+        std::printf("KCB objective %.4f vs %s %.4f\n", j0, what, jm);
+        INFO(what);
+        CHECK(j0 < jm);
+    };
+    Model a = m0, b = m0, c = m0, d = m0, e = m0, f = m0;
+    a.scale *= 0.9;
+    b.scale *= 1.1;
+    c.p_exp -= 0.05;
+    d.p_exp += 0.05;
+    e.b_k -= 200.0;
+    f.b_k += 200.0;
+    // Each neighbour gets its own best pre-factor (the scale and the shape parameters trade off).
+    for (Model* m : {&c, &d, &e, &f}) m->scale = fit_scale(*m, std::log10(m0.scale) - 0.5, std::log10(m0.scale) + 0.5).scale;
+    worse("scale x0.9", a);
+    worse("scale x1.1", b);
+    worse("n -0.05 (own best scale)", c);
+    worse("n +0.05 (own best scale)", d);
+    worse("B -200 K (own best scale)", e);
+    worse("B +200 K (own best scale)", f);
+    g_kv1bc_penalty = false;
+}
+
+TEST_CASE("KCB holdout: Honda L15B7 Tier 2 and Ford 2.7 EcoBoost at measured boundary conditions", "[knock][knock_cal]") {
+    const std::vector<std::string> names = {"honda_l15b7_t2", "ford_27_t2_cell9", "ford_27_levIII_cell9", "ford_27_t2_hd1", "ford_27_t3_hd"};
+    prepare_named(names);
+    for (const std::string& n : names) check_package(n, kHoldRms, kBandMax);
+}
+
+TEST_CASE("KCB report: Ford 1.6 EcoBoost and Mazda 2.5 T at measured boundary conditions", "[knock][knock_cal][!mayfail]") {
+    // Not fitted, no claim: Ford 1.6 (bore/stroke [AS]) and Mazda 2.5 T (cooled EGR not modelled) read 2.6-5.2 deg too
+    // knock-resistant on average with knock model v3 - outside the held-out band.
+    const std::vector<std::string> names = {"ford_16_t2", "ford_16_levIII", "mazda_25t_t2", "mazda_25t_t3"};
+    prepare_named(names);
+    for (const std::string& n : names) check_package(n, kHoldRms, kBandMax);
 }

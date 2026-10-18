@@ -416,7 +416,9 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
             if (!(f.ron >= real(40.0) && f.ron <= real(130.0) && f.mon >= real(40.0) && f.mon <= f.ron)) {
                 throw std::runtime_error("engine map generator: knock: fuel '" + f.name + "' needs 40 <= mon <= ron <= 130");
             }
-            s.knock_inv_on.push_back(engine_cycle::douaud_eyzat_inv_on_term(engine_cycle::octane_index(f.ron, f.mon)));
+            const engine_cycle::KnockModelParams& km = desc.knock.model;
+            s.knock_inv_on.push_back(engine_cycle::douaud_eyzat_inv_on_term(engine_cycle::octane_index(f.ron, f.mon, km.octane_index_k),
+                                                                             engine_cycle::kDouaudEyzatA_s * km.prefactor_scale));
         }
         s.knock_kl.assign((s.grid_n + s.wot_n) * s.knock_nf, real(0.0));
         s.knock_flag.assign((s.grid_n + s.wot_n) * s.knock_nf, 0);
@@ -535,6 +537,8 @@ void EngineMapGenTask::run_point(std::size_t i) {
             kin.ivc = s.results[i].ivc;
             kin.ignition_delay_deg = s.desc.ignition_delay_deg;
             kin.burn_duration_deg = s.desc.burn_duration_deg;
+            kin.activation_k = s.desc.knock.model.activation_k;      // knock model v3
+            kin.p_exponent = s.desc.knock.model.pressure_exponent;  // knock model v3
             // P7b (knock model v2): the replay runs at the ECU's lambda target of this node (enrichment raises the fuel
             // vapour share of the end gas); the node's own cycle stays at lambda 1.
             const Table2D& lt = s.desc.knock.lambda_target;

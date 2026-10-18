@@ -10,7 +10,7 @@
 
 namespace ps::engine_cycle {
 
-real octane_index(real ron, real mon) { return ron - kOctaneIndexK * (ron - mon); }
+real octane_index(real ron, real mon, real k) { return ron - k * (ron - mon); }
 
 real douaud_eyzat_inv_on_term(real oi, real prefactor_s) {
     return ps::math::pow(oi / real(100.0), -kDouaudEyzatOnExponent) / prefactor_s;
