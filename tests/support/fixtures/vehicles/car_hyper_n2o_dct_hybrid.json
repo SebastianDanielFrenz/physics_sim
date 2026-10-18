@@ -309,7 +309,7 @@
    {
     "id": "tank",
     "type": "fuel_tank",
-    "fuel": "../../../../data/fuels/e5.json",
+    "fuel": "../../../../data/fuels/e85.json",
     "capacity_kg": 56.236875,
     "initial_kg": 44.9895
    },

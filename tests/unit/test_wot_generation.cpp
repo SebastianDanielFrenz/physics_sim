@@ -529,6 +529,7 @@ TEST_CASE("P7d W8c/W8d: WOT points keep the P1 allocation, progress and cancel c
 }
 
 // 2026-10-18: pins re-recorded for the knock opt-in of the A25A gen and the hyper (cause: knock opt-in; octane + margin join the key and hash; the Mazda fixture is not opted in and kept its pins).
+// 2026-10-18 (2): hyper pins re-recorded again for the E85 fuel switch (cause: fuel E5 -> E85, knock RON 104).
 // W5h + W8e: compressor-fed pipe engines (the hyper) and lumped engines keep their key and content hash at every quality
 // (pins recorded on the unchanged generator, header). Keys always; the fast hashes here, the hyper's slow ones [long].
 TEST_CASE("P7d W5h/W8e: the hyper and lumped engines keep their keys and map hashes", "[cycle][pipe][drivetrain]") {
@@ -542,15 +543,15 @@ TEST_CASE("P7d W5h/W8e: the hyper and lumped engines keep their keys and map has
                 {MapQuality::Preview, 0x744ee3c546f7c881ull, 0x7d4f1c9f430b93b3ull},
                 {MapQuality::Full, 0xd45437bcf0c20bf0ull, 0xd543d9180958b80eull}},
                true);
-    check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x583e26484108171dull, 0xce37a2acf11fa581ull}}, true);
+    check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x5ebfe2bcf46a2e6eull, 0x8baf76c479733f20ull}}, true);
     check_pins("hyper_v8_one1_audio.json", kEngines,
-               {{MapQuality::Preview, 0x98337e58ed73903full, 0}, {MapQuality::Full, 0xf838d250973dd3aeull, 0}}, false);
+               {{MapQuality::Preview, 0x1eca8aac47feb54cull, 0}, {MapQuality::Full, 0xbec536b49e3471ddull, 0}}, false);
 }
 
 TEST_CASE("P7d W5h: the hyper keeps its Preview and Full map hashes", "[cycle][pipe][drivetrain][turbo][long]") {
     check_pins("hyper_v8_one1_audio.json", kEngines,
-               {{MapQuality::Preview, 0x98337e58ed73903full, 0x4d3cd9c8deccde3dull},
-                {MapQuality::Full, 0xf838d250973dd3aeull, 0x324b93f2526dc613ull}},
+               {{MapQuality::Preview, 0x1eca8aac47feb54cull, 0xf6af07b96792892bull},
+                {MapQuality::Full, 0xbec536b49e3471ddull, 0x56149891dd10434cull}},
                true);
 }
 
