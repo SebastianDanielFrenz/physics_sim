@@ -710,6 +710,8 @@ Open follow-ups:
 - Hybrid electronics and calibration (#21); pairs with racing_game powertrain-swap gate.
 - Damage physics: wear/limit sources for knock, piston speed, charge pipe, turbo overspeed and cooling (the API exists, #15).
 - Supercharger (needed for the Demon 170).
+- Series hybrid configurations (owner 2026-10-18, vault RACE-022): engine with no mechanical path to the wheels, crank generator as the source. Range extender (engine only recharges at low SOC); generator-style big-battery mode (battery first, generator adds power above the battery's discharge limit); generator-style small-battery mode (engine first, battery always recharged to 100 %, adds power above the generator's output). Mode by ECU tuning, default from the battery size; all thresholds config values.
+- Electric turbo (owner 2026-10-18): a motor-generator on the TurboPair rotor fed by the vehicle battery - spool assist (motor torque on the rotor, bounded by motor rating and battery power) and exhaust-energy harvest (generator mode charging the battery), both booked in the energy ledger and driven by the existing boost/wastegate control; variant: an electric compressor stage ahead of the turbo. Needs a battery (hybrid pack or a 48 V add-on pack).
 - Environment and traffic: weather W7, W8, W10, W11; per-wheel tyre profiles; P9 traffic budgets; R0 barrel roll (needs a replay); thermal re-measure; ARM64 / Steam Runtime sysroot.
 - Legacy proof gaps: remove the test_rev_limit_extremes workaround; rerun the long advisor; audit huge-thin-box phantom casts.
 - Re-audit: N2O overshoot (2.55 vs 1.8 bar target); N2O silent block in Normal mode; the P1b DFCO band; the A25A VE axis ending below ambient.
