@@ -280,6 +280,11 @@ std::vector<ChannelDecl> Powertrain::declare_control_channels(const PowertrainDe
             add(ChannelDecl{motor->ready_channel,real(1)});
             for(const auto* name:{&motor->throttle_channel,&motor->regen_channel,&motor->direction_channel})
                 if(!name->empty())add(ChannelDecl{*name,real(0)});
+        } else if(std::get_if<HybridControlDesc>(&c.params)) {
+            add(ChannelDecl{"assist.drive_mode",real(1)});
+            add(ChannelDecl{"electric.ready",real(1)});
+        } else if (const auto* cell = std::get_if<FuelCellDesc>(&c.params)) {
+            add(ChannelDecl{cell->ready_channel,real(1)});
         } else if (const auto* gb = std::get_if<GearboxDesc>(&c.params)) {
             // Automatic gearbox plan A1: the D/S mode switch of an Automatic/DualClutch box (default 0 = D).
             if (is_clutch_to_clutch(gb->type)) add(ChannelDecl{kTransmissionModeChannel, real(0.0)});
@@ -1863,6 +1868,28 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     }
 
     for (const ComponentDesc& c : pt.components) {
+        if (const auto* cell = std::get_if<FuelCellDesc>(&c.params)) {
+            const auto store=battery_of.find(cell->battery);
+            if(store==battery_of.end())throw std::runtime_error("fuel cell battery reference is missing: "+cell->battery);
+            const auto decls=declare_control_channels(pt);int ready=-1;
+            for(std::size_t i=0;i<decls.size();++i)if(decls[i].name==cell->ready_channel)ready=static_cast<int>(i);
+            auto stack=std::make_unique<FuelCell>(*cell,*store->second,ready);
+            fuel_cells_.push_back(stack.get());components_.push_back(std::move(stack));
+        }
+    }
+    for(const auto& c:pt.components)if(const auto* control=std::get_if<HybridControlDesc>(&c.params)) {
+        if(hybrid_)throw std::invalid_argument("only one hybrid supervisor is supported");
+        if(!engine_||!gearbox_||(!clutch_&&!auto_))throw std::invalid_argument("hybrid supervisor requires an ICE and disconnecting gearbox");
+        if(!std::isfinite(control->requested_power_w)||control->requested_power_w<=0||!std::isfinite(control->low_soc)||control->low_soc<0||
+           !std::isfinite(control->charge_target_soc)||control->charge_target_soc>1||control->low_soc>=control->charge_target_soc||
+           !std::isfinite(control->charge_rpm)||control->charge_rpm<=0||!std::isfinite(control->generator_fraction)||control->generator_fraction<0||control->generator_fraction>1||
+           !std::isfinite(control->stop_delay_s)||control->stop_delay_s<0||!std::isfinite(control->crank_timeout_s)||control->crank_timeout_s<=0)
+            throw std::invalid_argument("invalid hybrid controller calibration");
+        hybrid_=*control;
+        const auto decls=declare_control_channels(pt);
+        for(std::size_t i=0;i<decls.size();++i){if(decls[i].name=="assist.drive_mode")hybrid_mode_slot_=static_cast<int>(i);if(decls[i].name=="electric.ready")hybrid_ready_slot_=static_cast<int>(i);}
+    }
+    for (const ComponentDesc& c : pt.components) {
         if (const auto* motor = std::get_if<ElectricMotorDesc>(&c.params)) {
             const auto store=battery_of.find(motor->battery);
             if(store==battery_of.end())throw std::runtime_error("electric motor battery reference is missing or is not a battery: "+motor->battery);
@@ -1954,6 +1981,15 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             components_.push_back(std::move(dyno_comp));
         }
     }
+    if(hybrid_) {
+        bool generator=false,traction=false;
+        for(const auto& c:pt.components)if(const auto* m=std::get_if<ElectricMotorDesc>(&c.params)) {
+            const auto node=node_for_key(component_port_key(c.id,"shaft"));
+            if(m->crank_assist){if(node!=engine_crank_)throw std::invalid_argument("hybrid generator must share the engine crankshaft");generator=true;}
+            else if(node!=engine_crank_)traction=true;
+        }
+        if(!generator||!traction)throw std::invalid_argument("hybrid charging requires separate traction motor and crank generator");
+    }
     // Reconstruction modes resolved in Phase F (diffs_ is in the same
     // component order as diff_builds).
     for (std::size_t di = 0; di < diffs_.size(); ++di) {
@@ -2018,6 +2054,44 @@ void Powertrain::begin_substep() {
 
 void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     ComponentSubstepCtx ctx = ctx_in;
+    if(hybrid_) {
+        const auto channel=[&](int slot,real fallback){return ctx.channels&&slot>=0&&slot<ctx.channel_count?ctx.channels[slot]:fallback;};
+        const bool ready=channel(hybrid_ready_slot_,1)>.5;
+        const int mode=static_cast<int>(std::clamp(std::round(channel(hybrid_mode_slot_,1)),real(0),real(3)));
+        if(ctx_in.gear_request!=kGearRequestNone)hybrid_selector_=ctx_in.gear_request<0?-1:(ctx_in.gear_request>0?1:0);
+        if(battery_soc()<=hybrid_->low_soc)hybrid_charge_latched_=true;
+        if(battery_soc()>=hybrid_->charge_target_soc-real(1e-6))hybrid_charge_latched_=false;
+        real pack=0,motors=0,stack=0;
+        for(const auto& b:batteries_)if(b->soc()>0)pack+=b->desc.max_discharge_w;
+        for(const auto* c:fuel_cells_)if(c->hydrogen_kg>0)stack+=c->rated_power();
+        for(const auto* m:electric_motors_)if(!m->is_crank_machine())motors+=m->rated_power();
+        hybrid_available_w_=std::min(motors,pack+stack);
+        const real pedal=std::min(std::clamp(ctx.throttle,real(0),real(1)),ctx.traction_throttle_ceiling);
+        hybrid_requested_w_=pedal*hybrid_->requested_power_w;
+        const bool running=last_engine_result_.state==EngineState::Running;
+        const bool extra=mode!=0&&hybrid_requested_w_>hybrid_available_w_;
+        const bool traction=hybrid_selector_!=0&&mode!=0&&(extra||mode>=2);
+        const bool want=ready&&(hybrid_charge_latched_||mode>=2||extra);
+        hybrid_idle_s_=want?0:hybrid_idle_s_+ctx.h;
+        hybrid_ice_requested_=want||(ready&&running&&hybrid_idle_s_<hybrid_->stop_delay_s);
+        hybrid_crank_s_=(!hybrid_ice_requested_||running)?0:hybrid_crank_s_+ctx.h;
+        ctx.ignition=hybrid_ice_requested_?1:0;
+        ctx.starter=hybrid_ice_requested_&&!running&&hybrid_crank_s_<hybrid_->crank_timeout_s?1:0;
+        hybrid_disconnect_=!traction||!running;
+        ctx.electric_throttle=ready?std::clamp(hybrid_requested_w_/std::max(real(1),hybrid_available_w_),real(0),real(1)):0;
+        ctx.electric_charge=0;
+        ctx.throttle=traction?std::clamp((hybrid_requested_w_-hybrid_available_w_)/std::max(real(1),hybrid_->requested_power_w-hybrid_available_w_),real(0),real(1)):0;
+        if(hybrid_charge_latched_&&running&&hybrid_disconnect_) {
+            const real rpm=std::abs(network_.omega(engine_crank_))*60/(2*3.14159265358979323846);
+            const real taper=std::clamp((hybrid_->charge_target_soc-battery_soc())/real(.02),real(0),real(1));
+            ctx.electric_charge=rpm>engine_->idle_rpm()*real(1.4)?hybrid_->generator_fraction*taper:0;
+            ctx.throttle=std::clamp(real(.45)+real(.0006)*(hybrid_->charge_rpm-rpm),real(0),real(1));
+        }
+        ctx.assist_auto_clutch=true;ctx.assist_auto_shift=true;
+        if(hybrid_disconnect_)ctx.gear_request=0;
+        else if(auto_)ctx.gear_request=hybrid_selector_<0?-1:real(99);
+        else ctx.gear_request=hybrid_selector_<0?-1:(gearbox_->current_position()==0?1:kGearRequestNone);
+    }
 
     // --- plan section 7.2 step 3: controllers -------------------------------
     if (gearbox_) {
@@ -2180,6 +2254,13 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             as.input_omega = network_.omega(gearbox_in_);
             as.output_omega = network_.omega(gearbox_out_);
             as.throttle = engine_ ? last_throttle_command_.command : ctx.throttle;
+            if(hybrid_) {
+                const real rpm=std::abs(network_.omega(engine_crank_))*60/(2*3.14159265358979323846);
+                real available=0;for(const auto* m:electric_motors_)if(!m->is_crank_machine())available+=m->available_power();
+                available=std::min(available,hybrid_available_w_);
+                if(last_engine_result_.state==EngineState::Running)available+=std::max(real(0),engine_->request_envelope(rpm).f_nm)*rpm*(2*3.14159265358979323846)/60;
+                as.throttle=std::clamp(hybrid_requested_w_/std::max(real(1),available),real(0),real(1));
+            }
             as.up_rpm_at_zero_throttle = ctx.drive_up_rpm_zero;
             as.up_rpm_at_full_throttle = ctx.drive_up_rpm_full;
             as.down_rpm_at_zero_throttle = ctx.drive_down_rpm_zero;
@@ -2402,7 +2483,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     }
 
     if(!electric_motors_.empty()) {
-        if(gearbox_)electric_direction_=static_cast<real>(gearbox_->current_position());
+        if(hybrid_)electric_direction_=hybrid_selector_;
+        else if(gearbox_)electric_direction_=static_cast<real>(gearbox_->current_position());
         else if(ctx.gear_request!=kGearRequestNone)electric_direction_=ctx.gear_request<0?-1:(ctx.gear_request>0?1:0);
         ctx.electric_direction=electric_direction_;
     }
@@ -2911,6 +2993,7 @@ real Powertrain::clutch_slip() const {
 std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = network_.fold_state_hash(seed);
     for(const auto& b:batteries_)h=b->fold_state_hash(h);
+    if(hybrid_){for(real v:{real(hybrid_charge_latched_),hybrid_selector_,hybrid_idle_s_,hybrid_crank_s_}){const auto* bytes=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=bytes[i];h*=1099511628211ULL;}}}
     if(!electric_motors_.empty()) {
         const auto* b=reinterpret_cast<const unsigned char*>(&electric_direction_);
         for(std::size_t i=0;i<sizeof(electric_direction_);++i){h^=b[i];h*=1099511628211ULL;}

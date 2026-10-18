@@ -3956,7 +3956,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     p.components.push_back({id,b});
                 } else if(type == "electric_motor") {
                     electric_keys(cj,{"id","type","battery","peak_torque_nm","max_power_w","max_rpm","inertia_kgm2","efficiency",
-                        "regen_torque_nm","mass_kg","axis_local","ready_channel","throttle_channel","regen_channel","direction_channel"},ctx);
+                        "regen_torque_nm","mass_kg","axis_local","ready_channel","throttle_channel","regen_channel","direction_channel","crank_assist"},ctx);
                     ps::drivetrain::ElectricMotorDesc m;
                     m.battery=cj.at("battery").get<std::string>();
                     m.peak_torque_nm=cj.value("peak_torque_nm",m.peak_torque_nm);m.max_power_w=cj.value("max_power_w",m.max_power_w);
@@ -3966,7 +3966,23 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     m.ready_channel=cj.value("ready_channel",m.ready_channel);
                     m.throttle_channel=cj.value("throttle_channel",std::string{});m.regen_channel=cj.value("regen_channel",std::string{});
                     m.direction_channel=cj.value("direction_channel",std::string{});
+                    m.crank_assist=cj.value("crank_assist",false);
                     p.components.push_back({id,m});
+                } else if(type=="hybrid_control") {
+                    electric_keys(cj,{"id","type","requested_power_w","low_soc","charge_target_soc","charge_rpm","generator_fraction","stop_delay_s","crank_timeout_s"},ctx);
+                    ps::drivetrain::HybridControlDesc h;
+                    h.requested_power_w=cj.value("requested_power_w",h.requested_power_w);h.low_soc=cj.value("low_soc",h.low_soc);h.charge_target_soc=cj.value("charge_target_soc",h.charge_target_soc);
+                    h.charge_rpm=cj.value("charge_rpm",h.charge_rpm);h.generator_fraction=cj.value("generator_fraction",h.generator_fraction);
+                    h.stop_delay_s=cj.value("stop_delay_s",h.stop_delay_s);h.crank_timeout_s=cj.value("crank_timeout_s",h.crank_timeout_s);
+                    p.components.push_back({id,h});
+                } else if (type == "fuel_cell") {
+                    electric_keys(cj,{"id","type","battery","max_power_w","efficiency","target_soc","hydrogen_capacity_kg", "initial_hydrogen_kg","specific_energy_j_kg","mass_kg","ready_channel"},ctx);
+                    ps::drivetrain::FuelCellDesc f;f.battery=cj.at("battery").get<std::string>();
+                    f.max_power_w=cj.value("max_power_w",f.max_power_w);f.efficiency=cj.value("efficiency",f.efficiency);
+                    f.target_soc=cj.value("target_soc",f.target_soc);f.hydrogen_capacity_kg=cj.value("hydrogen_capacity_kg",f.hydrogen_capacity_kg);
+                    f.initial_hydrogen_kg=cj.value("initial_hydrogen_kg",f.initial_hydrogen_kg);f.specific_energy_j_kg=cj.value("specific_energy_j_kg",f.specific_energy_j_kg);
+                    f.mass_kg=cj.value("mass_kg",f.mass_kg);f.ready_channel=cj.value("ready_channel",f.ready_channel);
+                    p.components.push_back({id,f});
                 } else if (type == "engine") {
                     // Engine garage P2: the component's slots (vehicle level - the user layer, applied above, already
                     // rewrote them), then the engine file with its "extends" chain, then the slot assembly (ECU and cam

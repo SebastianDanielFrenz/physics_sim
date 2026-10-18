@@ -912,7 +912,7 @@ struct FuelTankDesc {
 // it (no port, node or row - like FuelTankDesc they are wired by fluid links).
 using ComponentParams = std::variant<TorqueMapEngineDesc, ClutchDesc, GearboxDesc, GearPairDesc, DifferentialDesc, TransferCaseDesc,
                                       ParkLockDesc, PtoDesc, LoadDynoDesc, ThrottleControlDesc, FuelTankDesc,
-                                      SimulatedEngineDesc, N2oBottleDesc, NitrousKitDesc, BatteryDesc, ElectricMotorDesc>;
+                                      SimulatedEngineDesc, N2oBottleDesc, NitrousKitDesc, BatteryDesc, ElectricMotorDesc, FuelCellDesc, HybridControlDesc>;
 
 struct ComponentDesc {
     std::string id; // unique, non-empty

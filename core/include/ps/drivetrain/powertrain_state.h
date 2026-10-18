@@ -143,6 +143,10 @@ inline constexpr std::size_t kMaxCompliantShafts = 8;
 // commit 6 wires VehicleInstance's real engine/clutch/gearbox/TCU state
 // into it.
 struct PowertrainSnapshot {
+    bool hybrid_fitted=false,hybrid_charging=false,hybrid_ice_requested=false;
+    real hybrid_charge_target_soc=0,hybrid_requested_power_w=0,hybrid_available_power_w=0;
+    bool fuel_cell_fitted=false;
+    real fuel_cell_hydrogen_kg=0,fuel_cell_power_w=0;
     bool electric_fitted=false, electric_ready=false;
     std::uint8_t electric_motor_count=0;
     real motor_rpm=0, motor_torque_nm=0, electric_power_w=0;

@@ -374,6 +374,14 @@ public:
     // PHYS-033 P4 I4 C10 (plan section 3.4, owner ruling): park pawl.
     // nullptr/0/false for every vehicle without one - same nullable-pointer
     // pattern as transfer_case_ above.
+    [[nodiscard]] bool has_hybrid_control() const {return hybrid_.has_value();}
+    [[nodiscard]] bool hybrid_charging() const {return hybrid_charge_latched_;}
+    [[nodiscard]] bool hybrid_ice_requested() const {return hybrid_ice_requested_;}
+    [[nodiscard]] real hybrid_target_soc() const {return hybrid_?hybrid_->charge_target_soc:0;}
+    [[nodiscard]] real hybrid_requested_power() const {return hybrid_requested_w_;}
+    [[nodiscard]] real hybrid_available_power() const {return hybrid_available_w_;}
+    [[nodiscard]] real hybrid_selector() const {return hybrid_selector_;}
+    [[nodiscard]] real electric_traction_power() const {real w=0;for(const auto* m:electric_motors_)if(!m->is_crank_machine())w+=m->power_w;return w;}
     [[nodiscard]] real electric_direction() const {return electric_direction_;}
     [[nodiscard]] bool electric_ready() const {for(const auto* m:electric_motors_)if(m->ready&&battery_soc()>0)return true;return false;}
     [[nodiscard]] std::size_t electric_motor_count() const {return electric_motors_.size();}
@@ -383,7 +391,10 @@ public:
     [[nodiscard]] real electric_rpm() const {real r=0;for(const auto* m:electric_motors_)r=std::max(r,m->rpm);return r;}
     [[nodiscard]] real battery_soc() const {real j=0,c=0;for(const auto& b:batteries_){j+=b->content();c+=b->capacity();}return c>0?j/c:0;}
     [[nodiscard]] real battery_capacity_kwh() const {real j=0;for(const auto& b:batteries_)j+=b->capacity();return j/3600000;}
-    [[nodiscard]] real battery_power_w() const {real p=0;for(const auto* m:electric_motors_)p+=m->battery_power_w;return p;}
+    [[nodiscard]] real battery_power_w() const {real p=0;for(const auto* m:electric_motors_)p+=m->battery_power_w;return p-fuel_cell_power_w();}
+    [[nodiscard]] real fuel_cell_hydrogen_kg() const {real kg=0;for(const auto* c:fuel_cells_)kg+=c->hydrogen_kg;return kg;}
+    [[nodiscard]] real fuel_cell_power_w() const {real w=0;for(const auto* c:fuel_cells_)w+=c->power_w;return w;}
+    [[nodiscard]] bool has_fuel_cells() const {return !fuel_cells_.empty();}
     [[nodiscard]] bool has_park_lock() const { return park_lock_ != nullptr; }
     [[nodiscard]] real park_lock_engaged() const { return (park_lock_ && park_lock_->engaged()) ? real(1.0) : real(0.0); }
     [[nodiscard]] real park_lock_torque() const { return park_lock_ ? network_.row_lambda(park_lock_row_) : real(0.0); }
@@ -669,7 +680,12 @@ private:
     ShaftNetwork network_;
     Assembly assembly_;
     Assembly projection_assembly_; // dedicated scratch for apply_topology_switch, never touches assembly_
+    std::optional<HybridControlDesc> hybrid_;
+    bool hybrid_charge_latched_=false,hybrid_ice_requested_=false,hybrid_disconnect_=true;
+    real hybrid_selector_=0,hybrid_idle_s_=0,hybrid_crank_s_=0,hybrid_requested_w_=0,hybrid_available_w_=0;
+    int hybrid_mode_slot_=-1,hybrid_ready_slot_=-1;
     real electric_direction_=0; // latched fixed-reduction selector; N at spawn
+    std::vector<FuelCell*> fuel_cells_; // aliases into components_
     std::vector<std::unique_ptr<Battery>> batteries_;
     std::vector<ElectricMotor*> electric_motors_; // owned by components_, component-array order
     std::vector<std::unique_ptr<IComponent>> components_; // gear_pair(s), differential(s), then brakes (appended last)

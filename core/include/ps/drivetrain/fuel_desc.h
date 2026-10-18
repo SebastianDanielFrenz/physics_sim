@@ -27,6 +27,8 @@ namespace ps::drivetrain {
 // single kg/m^3) and is deliberately not modelled yet.
 enum class FuelPhase {
     Liquid,
+    CompressedGas, // density is at the file's stated storage reference condition
+
 };
 
 // Engine garage P7 (C17b part 1): optional knock resistance of a fuel, read by the map generator's

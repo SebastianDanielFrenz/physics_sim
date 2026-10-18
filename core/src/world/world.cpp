@@ -620,7 +620,8 @@ void World::apply_contents_mass(bool force) {
         if (!cm.enabled) continue;
         const VehicleId id{static_cast<id_index_t>(vi), 1};
         const real contents = std::max(real(0.0), vehicle_system_->at(id).fuel_tank_mass()) +
-                              std::max(real(0.0), vehicle_system_->at(id).n2o_bottle_mass());
+                              std::max(real(0.0), vehicle_system_->at(id).n2o_bottle_mass()) +
+                              vehicle_system_->at(id).fuel_cell_hydrogen_kg();
         if (!force && std::abs(contents - cm.applied_kg) < cm.threshold_kg) continue;
         backend_->set_mass(cm.chassis, cm.dry_kg + contents);
         cm.applied_kg = contents;
@@ -835,7 +836,8 @@ VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis
         if (!(cm.dry_kg > real(0.0))) throw std::runtime_error("contents_mass: the chassis body has no dynamic mass");
         // The initial fill (initial_kg of the tank / bottle) at once: the first tick already runs with it.
         const real contents = std::max(real(0.0), vehicle_system_->at(id).fuel_tank_mass()) +
-                              std::max(real(0.0), vehicle_system_->at(id).n2o_bottle_mass());
+                              std::max(real(0.0), vehicle_system_->at(id).n2o_bottle_mass()) +
+                              vehicle_system_->at(id).fuel_cell_hydrogen_kg();
         backend_->set_mass(chassis, cm.dry_kg + contents);
         cm.applied_kg = contents;
     }

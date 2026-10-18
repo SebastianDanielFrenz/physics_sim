@@ -157,6 +157,7 @@ public:
     // PHYS-033 P4 I7a C6: backs World::fuel_tank_mass/set_fuel_tank_mass
     // (the set is applied at the next tick boundary - Powertrain::begin_tick).
     [[nodiscard]] bool has_fuel_tank() const { return powertrain_.has_fuel_tank(); }
+    [[nodiscard]] real fuel_cell_hydrogen_kg() const {return powertrain_.fuel_cell_hydrogen_kg();}
     [[nodiscard]] real fuel_tank_mass() const { return powertrain_.fuel_tank_mass(); }
     void request_fuel_tank_mass(real kg) { powertrain_.request_fuel_tank_mass(kg); }
     // N2O plan N1: backs World::n2o_bottle_mass/set_n2o_bottle_mass and the kit-only telemetry channels.

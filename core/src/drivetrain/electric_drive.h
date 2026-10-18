@@ -17,6 +17,7 @@ public:
     void withdraw(real j) override {joules_=std::max(real(0),joules_-std::max(real(0),j));}
     real set_content(real j) override {const real old=joules_;joules_=std::clamp(j,real(0),capacity());return joules_-old;}
     void begin_substep(real h) {discharge_left_=std::min(joules_,desc.max_discharge_w*h);charge_left_=std::min(capacity()-joules_,desc.max_charge_w*h);}
+    real supply(real j) {const real added=std::max(real(0),set_content(content()+j));discharge_left_+=added;return added;}
     real reserve_discharge(real j) {const real n=std::min(discharge_left_,std::max(real(0),j));discharge_left_-=n;return n;}
     real reserve_charge(real j) {const real n=std::min(charge_left_,std::max(real(0),j));charge_left_-=n;return n;}
     std::uint64_t fold_state_hash(std::uint64_t h) const override {
@@ -44,11 +45,11 @@ public:
         rpm=std::abs(omega)*60/(2*3.14159265358979323846);
         ready=channel(ready_slot_,real(1))>.5;
         if(ctx.h<=0||!ready)return;
-        const real request=channel(direction_slot_,ctx.electric_direction);
+        const real request=channel(direction_slot_,desc_.crank_assist?real(1):ctx.electric_direction);
         // N/unspecified is no propulsion; a gearbox-equipped hybrid can use its positive gear request too.
         const real direction=request==kGearRequestNone||request==0?0:(request<0?-1:1);
-        const real pedal=std::clamp(channel(throttle_slot_,ctx.throttle),real(0),real(1));
-        const real regen=std::clamp(channel(regen_slot_,ctx.brake),real(0),real(1));
+        const real pedal=std::clamp(channel(throttle_slot_,desc_.crank_assist&&ctx.electric_charge>=0?real(0):(ctx.electric_throttle>=0?ctx.electric_throttle:ctx.throttle)),real(0),real(1));
+        const real regen=std::clamp(channel(regen_slot_,desc_.crank_assist&&ctx.electric_charge>=0?ctx.electric_charge:ctx.brake),real(0),real(1));
         const real max_omega=desc_.max_rpm*(2*3.14159265358979323846)/60;
         if(pedal>.02&&regen<=.05&&direction!=0&&rpm<desc_.max_rpm) {
             real demand=desc_.peak_torque_nm*std::min(pedal,std::clamp(ctx.traction_throttle_ceiling,real(0),real(1)));
@@ -83,7 +84,7 @@ public:
         ledger.electric_loss+=electrical-work;
     }
     std::uint64_t fold_state_hash(std::uint64_t h) const override {
-        for(real v:{desc_.peak_torque_nm,desc_.max_power_w,desc_.max_rpm,desc_.efficiency,desc_.regen_torque_nm}){
+        for(real v:{desc_.peak_torque_nm,desc_.max_power_w,desc_.max_rpm,desc_.efficiency,desc_.regen_torque_nm,real(desc_.crank_assist)}){
             const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}
         }
         for(const auto* name:{&desc_.battery,&desc_.ready_channel,&desc_.throttle_channel,&desc_.regen_channel,&desc_.direction_channel}){
@@ -91,6 +92,9 @@ public:
         }
         return h;
     }
+    real rated_power() const {return desc_.max_power_w;}
+    real available_power() const {return std::min(desc_.max_power_w,desc_.peak_torque_nm*rpm*(2*3.14159265358979323846)/60);}
+    bool is_crank_machine() const {return desc_.crank_assist;}
     bool ready=true;
     real torque_nm=0,power_w=0,battery_power_w=0,rpm=0;
 private:
@@ -98,4 +102,44 @@ private:
     NodeId shaft_; ElectricMotorDesc desc_; Battery& battery_;
     int throttle_slot_=-1,regen_slot_=-1,direction_slot_=-1,ready_slot_=-1;
 };
+class FuelCell final : public IComponent {
+public:
+    FuelCell(FuelCellDesc desc,Battery& battery,int ready_slot)
+        :hydrogen_kg(desc.initial_hydrogen_kg),desc_(std::move(desc)),battery_(battery),ready_slot_(ready_slot) {
+        for(real v:{desc_.max_power_w,desc_.specific_energy_j_kg,desc_.hydrogen_capacity_kg,desc_.efficiency})
+            if(!std::isfinite(v)||v<=0)throw std::invalid_argument("invalid fuel cell power, fuel capacity or efficiency");
+        if(desc_.efficiency>1||!std::isfinite(desc_.target_soc)||desc_.target_soc<=0||desc_.target_soc>1||
+           !std::isfinite(hydrogen_kg)||hydrogen_kg<0||hydrogen_kg>desc_.hydrogen_capacity_kg||
+           !std::isfinite(desc_.mass_kg)||desc_.mass_kg<0)throw std::invalid_argument("invalid fuel cell state, mass or target SOC");
+    }
+    void pre_solve(const ComponentSubstepCtx& ctx,const ShaftNetwork&,Assembly&) override {
+        reserved_=0;power_w=0;
+        const bool ready=ctx.channels&&ready_slot_>=0&&ready_slot_<ctx.channel_count?ctx.channels[ready_slot_]>.5:true;
+        if(!ready||ctx.h<=0||hydrogen_kg<=0)return;
+        const real fraction=std::clamp((desc_.target_soc-battery_.soc())/real(.05),real(0),real(1));
+        const real available=hydrogen_kg*desc_.specific_energy_j_kg*desc_.efficiency;
+        reserved_=battery_.reserve_charge(std::min(available,ctx.h*desc_.max_power_w*fraction));
+        reserved_=battery_.supply(reserved_);
+    }
+    void post_solve(const ComponentSubstepCtx& ctx,const ShaftNetwork&,const Assembly&,PowertrainEnergy& ledger) override {
+        const real added=reserved_;
+        const real chemical=added/desc_.efficiency;
+        const real consumed=std::min(hydrogen_kg,chemical/desc_.specific_energy_j_kg);
+        hydrogen_kg=std::max(real(0),hydrogen_kg-consumed);
+        power_w=ctx.h>0?added/ctx.h:0;
+        ledger.fuel_cell_electric+=added;
+        ledger.fuel_cell_chemical+=chemical;
+        ledger.fuel_cell_loss+=chemical-added;
+    }
+    std::uint64_t fold_state_hash(std::uint64_t h) const override {
+        for(real v:{hydrogen_kg,desc_.max_power_w,desc_.efficiency,desc_.target_soc,desc_.specific_energy_j_kg}) {
+            const auto* b=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=b[i];h*=1099511628211ULL;}
+        }return h;
+    }
+    real rated_power() const {return desc_.max_power_w;}
+    real hydrogen_kg=0,power_w=0;
+private:
+    FuelCellDesc desc_;Battery& battery_;int ready_slot_=-1;real reserved_=0;
+};
+
 }

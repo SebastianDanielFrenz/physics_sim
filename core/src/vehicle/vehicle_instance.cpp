@@ -874,6 +874,16 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         dl.clutch_slip = powertrain_.has_clutch() ? powertrain_.clutch_slip() : real(0.0);
         dl.clutch_torque = powertrain_.clutch_torque();
         snap.drive_power_w = powertrain_.transmission_input_power_w();
+        snap.hybrid_fitted=powertrain_.has_hybrid_control();snap.hybrid_charging=powertrain_.hybrid_charging();snap.hybrid_ice_requested=powertrain_.hybrid_ice_requested();
+        snap.hybrid_charge_target_soc=powertrain_.hybrid_target_soc();snap.hybrid_requested_power_w=powertrain_.hybrid_requested_power();snap.hybrid_available_power_w=powertrain_.hybrid_available_power();
+        if(snap.hybrid_fitted){
+            if(!powertrain_.has_park_lock())snap.transmission_kind=4;
+            snap.transmission_selector=static_cast<std::int8_t>(powertrain_.hybrid_selector());
+            snap.drive_power_w+=powertrain_.electric_traction_power();
+        }
+        snap.fuel_cell_fitted=powertrain_.has_fuel_cells();
+        snap.fuel_cell_hydrogen_kg=powertrain_.fuel_cell_hydrogen_kg();
+        snap.fuel_cell_power_w=powertrain_.fuel_cell_power_w();
         snap.electric_fitted=powertrain_.has_electric_motors();
         if(snap.electric_fitted) {
             if(!powertrain_.has_gearbox()) {
