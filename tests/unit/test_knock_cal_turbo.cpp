@@ -12,6 +12,7 @@
 //
 // Row sets (declared before the fit, see the commit message): "envelope" = the highest-torque row per 50 rpm speed bin
 // (phase A's WOT definition); the fit uses the Honda L15B7 Tier 3 envelope rows plus the 17 A25A KV1-BC rows.
+#include "ps/drivetrain/engine_dyno.h"
 #include "ps/drivetrain/engine_maps.h"
 #include "ps/drivetrain/powertrain_desc.h"
 #include "ps/engine_cycle/cycle_point.h"
@@ -652,4 +653,35 @@ TEST_CASE("KCB diag: chosen model and its sensitivities", "[.][diag][knock][knoc
     Model lit;
     lit.scale = 1.0;
     print_table("literature Douaud-Eyzat (scale 1, n 1.7, B 3800)", lit);
+}
+
+// Step 3 table: WOT dyno rows of every shipped knock-limited engine with the CURRENT compiled knock model (run before
+// and after a model change). Full maps, own cache dir; the turbo hyper is the stepped dyno (15 s cap per point).
+TEST_CASE("KCB diag: engine WOT table", "[.][diag][knock][knock_cal]") {
+    jobs::JobSystem pool(10);
+    const std::filesystem::path cache = std::filesystem::temp_directory_path() / "ps_kcb_engine_maps";
+    std::filesystem::create_directories(cache);
+    struct E { const char* file; std::vector<real> rpm; };
+    const std::vector<E> engines = {
+        {"hyper_v8_one1_audio.json", {2000, 3000, 4000, 5000, 6000, 7000, 7500, 8000}},
+        {"demo_i4_pipes.json", {2000, 3000, 4000, 5000, 6000, 6500}},
+        {"honda_k20a_dc5.json", {2000, 3000, 4000, 5000, 6000, 7000, 8000}},
+        {"bmw_n52b30.json", {1500, 2500, 3500, 4500, 5500, 6500}},
+        {"toyota_a25a_fks_gen.json", {2000, 3000, 4000, 5000, 6000}},
+    };
+    for (const E& e : engines) {
+        io::EngineMapOptions o;
+        o.quality = MapQuality::Full;
+        o.pool = &pool;
+        o.cache_dir = cache.string();
+        const ComponentParams eng = io::load_engine_json(std::string(PS_SOURCE_DIR) + "/data/engines/" + e.file, o);
+        DynoSweepSpec spec;
+        spec.rpm = e.rpm;
+        const DynoResult r = run_dyno_sweep(eng, nullptr, spec, &pool);
+        std::printf("== %s\n", e.file);
+        std::printf("   rpm   torque_Nm  power_kW  knock_retard  spark  boost_bar  conv" "\n");
+        for (const DynoPoint& p : r.points)
+            std::printf("%6.0f  %9.1f  %8.1f  %12.2f  %5.1f  %9.3f  %d" "\n", p.rpm, p.torque_nm, p.power_kw, p.knock_retard_deg,
+                        p.spark_deg, p.boost_bar, p.converged ? 1 : 0);
+    }
 }
