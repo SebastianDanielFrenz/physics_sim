@@ -288,6 +288,7 @@ void read_abs(const json& a, const std::string& path, vehicle::AssistUnitDesc& u
         else if (k == "release_rate_per_s") d.release_rate_per_s = optional_positive(a, "release_rate_per_s", ctx);
         else if (k == "apply_rate_per_s") d.apply_rate_per_s = optional_positive(a, "apply_rate_per_s", ctx);
         else if (k == "reanchor_rate_per_s") d.reanchor_rate_per_s = optional_positive(a, "reanchor_rate_per_s", ctx);
+        else if (k == "reanchor_max_decel_mps2") d.reanchor_max_decel_mps2 = optional_positive(a, "reanchor_max_decel_mps2", ctx);
         else if (k == "front_split_rate_per_s") d.front_split_rate_per_s = optional_positive(a, "front_split_rate_per_s", ctx);
         else if (k == "reanchor_scale") {
             if (!it.value().is_number()) throw std::runtime_error(ctx + ": 'reanchor_scale' must be a number");

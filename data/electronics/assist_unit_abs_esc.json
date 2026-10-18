@@ -13,6 +13,7 @@
     "release_rate_per_s": 60.0,
     "apply_rate_per_s": 15.0,
     "reanchor_rate_per_s": 10.0,
+    "reanchor_max_decel_mps2": 2.0,
     "reanchor_scale": 0.05,
     "rear_select_low": true,
     "front_split_max": 0.2,

@@ -137,6 +137,8 @@ add_executable(ps_unit_tests
   test_limit_policy.cpp
   test_gearbox_rating.cpp
   test_electric_drive.cpp
+  test_brake_blend.cpp
+  test_brake_blend_gearbox.cpp
   test_automatic_gearbox_io.cpp
   test_cvt_gearbox_io.cpp
   test_limit_remedies.cpp

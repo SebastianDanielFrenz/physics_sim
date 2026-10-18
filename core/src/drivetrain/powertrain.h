@@ -386,6 +386,13 @@ public:
     [[nodiscard]] bool electric_ready() const {for(const auto* m:electric_motors_)if(m->ready&&battery_soc()>0)return true;return false;}
     [[nodiscard]] std::size_t electric_motor_count() const {return electric_motors_.size();}
     [[nodiscard]] bool has_electric_motors() const {return !electric_motors_.empty();}
+    // Brake blending (docs/electric_drive.md): power the brake regeneration pushes into the packs (battery side, >= 0),
+    // and the last substep's service brake torque at the rims (sum over wheels) from the motors / from the pads. Both
+    // torques are 0 for a car without blended motors (regen_blend disabled, no electric motor, or no known rim path).
+    [[nodiscard]] real regen_power_w() const {real p=0;for(const auto* m:electric_motors_)if(!m->is_crank_machine())p+=std::max(real(0),-m->battery_power_w);return p;}
+    [[nodiscard]] real regen_brake_torque_nm() const {return blend_regen_nm_;}
+    [[nodiscard]] real pad_brake_torque_nm() const {return blend_pad_nm_;}
+    [[nodiscard]] bool brake_blend_active() const {return !regen_maps_.empty();}
     [[nodiscard]] real electric_power_w() const {real p=0;for(const auto* m:electric_motors_)p+=m->power_w;return p;}
     [[nodiscard]] real electric_torque_nm() const {real t=0;for(const auto* m:electric_motors_)t+=m->torque_nm;return t;}
     [[nodiscard]] real electric_rpm() const {real r=0;for(const auto* m:electric_motors_)r=std::max(r,m->rpm);return r;}
@@ -688,6 +695,30 @@ private:
     std::vector<FuelCell*> fuel_cells_; // aliases into components_
     std::vector<std::unique_ptr<Battery>> batteries_;
     std::vector<ElectricMotor*> electric_motors_; // owned by components_, component-array order
+    // Brake blending: per blended motor, the shaft nodes its torque reaches on the way to the rims, as a tree (parents
+    // before children), derived once at build from the shaft graph. An edge is fixed (gear pair, differential half,
+    // transfer-case rear output) or dynamic (the gearbox's engaged ratio, the main clutch, a transfer-case front output);
+    // the torque at a node per unit motor torque and the rim share of each hub are evaluated every substep over the OPEN
+    // edges, branches off one node splitting equally among the open ones.
+    enum class RegenEdge : std::uint8_t { Fixed, Gearbox, Clutch, TransferFront };
+    struct RegenNode { int parent; unsigned group; RegenEdge kind; real factor; std::vector<std::size_t> wheels; };
+    struct RegenHub { std::size_t wheel; real share; real radius; };
+    struct RegenMap {
+        ElectricMotor* motor;
+        std::vector<RegenNode> nodes;           // [0] = the motor's own shaft
+        std::vector<RegenHub> hubs;             // every wheel reachable if every dynamic edge were open, wheel order
+        std::vector<real> factor;               // scratch: torque at the node per unit motor torque (0 = closed)
+        std::vector<unsigned> group_mask;       // scratch: per node, bit g set = an open child in branch group g
+        std::vector<char> open;                 // scratch: node reachable over open edges
+        bool dynamic = false;                   // some edge is not Fixed
+    };
+    std::vector<RegenMap> regen_maps_;             // empty = nothing blended
+    std::vector<real> regen_corner_max_, regen_wheel_nm_; // per wheel: service capacity at the rim, regeneration reflected there
+    RegenBlendDesc regen_cfg_{};
+    DirectTorqueBrakes* brakes_ = nullptr;         // alias into components_ (the last one)
+    real blend_regen_nm_ = 0, blend_pad_nm_ = 0;   // last substep, snapshot only (never hashed)
+    void prepare_regen(const ComponentSubstepCtx& ctx);
+    void reflect_regen(const ComponentSubstepCtx& ctx);
     std::vector<std::unique_ptr<IComponent>> components_; // gear_pair(s), differential(s), then brakes (appended last)
     // Non-owning aliases into components_, pt.components order (empty if
     // this vehicle's powertrain has no differential) - the debug reads and

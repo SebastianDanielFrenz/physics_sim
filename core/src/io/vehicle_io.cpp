@@ -401,6 +401,51 @@ BrakeSystemDesc read_brake_system(const json& j) {
     if (b.static_factor < real(1.0)) {
         throw std::runtime_error("brake_system.static_factor must be >= 1, got " + std::to_string(b.static_factor));
     }
+    if (j.contains("regen_blend")) {
+        const json& rj = j.at("regen_blend");
+        if (!rj.is_object()) throw std::runtime_error("brake_system.regen_blend must be an object");
+        for (auto it = rj.begin(); it != rj.end(); ++it) {
+            const std::string& k = it.key();
+            if (k != "enabled" && k != "taper_start_soc" && k != "full_soc" && k != "fade_start_speed_mps" &&
+                k != "fade_end_speed_mps" && k != "abs_hold_s" && k != "path_min_engagement" && k != "clutch_capacity_margin" &&
+                k != "path_ramp_s") {
+                throw std::runtime_error("brake_system.regen_blend: unknown key '" + k + "'");
+            }
+            if (k == "enabled" ? !it.value().is_boolean() : !it.value().is_number()) {
+                throw std::runtime_error("brake_system.regen_blend." + k + (k == "enabled" ? " must be a boolean" : " must be a number"));
+            }
+        }
+        auto& r = b.regen_blend;
+        r.enabled = rj.value("enabled", r.enabled);
+        r.taper_start_soc = rj.value("taper_start_soc", r.taper_start_soc);
+        r.full_soc = rj.value("full_soc", r.full_soc);
+        r.fade_start_speed_mps = rj.value("fade_start_speed_mps", r.fade_start_speed_mps);
+        r.fade_end_speed_mps = rj.value("fade_end_speed_mps", r.fade_end_speed_mps);
+        r.abs_hold_s = rj.value("abs_hold_s", r.abs_hold_s);
+        r.path_min_engagement = rj.value("path_min_engagement", r.path_min_engagement);
+        r.clutch_capacity_margin = rj.value("clutch_capacity_margin", r.clutch_capacity_margin);
+        r.path_ramp_s = rj.value("path_ramp_s", r.path_ramp_s);
+        if (!(r.taper_start_soc >= real(0.0) && r.taper_start_soc < r.full_soc && r.full_soc <= real(1.0))) {
+            throw std::runtime_error("brake_system.regen_blend: need 0 <= taper_start_soc < full_soc <= 1, got " +
+                                     std::to_string(r.taper_start_soc) + " and " + std::to_string(r.full_soc));
+        }
+        if (!(r.fade_end_speed_mps >= real(0.0) && r.fade_end_speed_mps < r.fade_start_speed_mps)) {
+            throw std::runtime_error("brake_system.regen_blend: need 0 <= fade_end_speed_mps < fade_start_speed_mps, got " +
+                                     std::to_string(r.fade_end_speed_mps) + " and " + std::to_string(r.fade_start_speed_mps));
+        }
+        if (!(r.abs_hold_s >= real(0.0)) || !std::isfinite(r.abs_hold_s)) {
+            throw std::runtime_error("brake_system.regen_blend.abs_hold_s must be >= 0");
+        }
+        if (!(r.path_ramp_s >= real(0.0)) || !std::isfinite(r.path_ramp_s)) {
+            throw std::runtime_error("brake_system.regen_blend.path_ramp_s must be >= 0");
+        }
+        if (!(r.path_min_engagement > real(0.0) && r.path_min_engagement <= real(1.0))) {
+            throw std::runtime_error("brake_system.regen_blend.path_min_engagement must be in (0, 1]");
+        }
+        if (!(r.clutch_capacity_margin > real(0.0) && r.clutch_capacity_margin <= real(1.0))) {
+            throw std::runtime_error("brake_system.regen_blend.clutch_capacity_margin must be in (0, 1]");
+        }
+    }
     return b;
 }
 
@@ -3956,12 +4001,14 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     p.components.push_back({id,b});
                 } else if(type == "electric_motor") {
                     electric_keys(cj,{"id","type","battery","peak_torque_nm","max_power_w","max_rpm","inertia_kgm2","efficiency",
-                        "regen_torque_nm","mass_kg","axis_local","ready_channel","throttle_channel","regen_channel","direction_channel","crank_assist"},ctx);
+                        "regen_torque_nm","regen_power_w","mass_kg","axis_local","ready_channel","throttle_channel","regen_channel","direction_channel","crank_assist"},ctx);
                     ps::drivetrain::ElectricMotorDesc m;
                     m.battery=cj.at("battery").get<std::string>();
                     m.peak_torque_nm=cj.value("peak_torque_nm",m.peak_torque_nm);m.max_power_w=cj.value("max_power_w",m.max_power_w);
                     m.max_rpm=cj.value("max_rpm",m.max_rpm);m.inertia_kgm2=cj.value("inertia_kgm2",m.inertia_kgm2);
                     m.efficiency=cj.value("efficiency",m.efficiency);m.regen_torque_nm=cj.value("regen_torque_nm",m.regen_torque_nm);
+                    m.regen_power_w=cj.value("regen_power_w",m.regen_power_w);
+                    if(!std::isfinite(m.regen_power_w)||m.regen_power_w<0)throw std::runtime_error("electric_motor '"+id+"': regen_power_w must be finite and >= 0");
                     m.mass_kg=cj.value("mass_kg",m.mass_kg);m.axis_local=read_vec3(cj.value("axis_local",json()),m.axis_local);
                     m.ready_channel=cj.value("ready_channel",m.ready_channel);
                     m.throttle_channel=cj.value("throttle_channel",std::string{});m.regen_channel=cj.value("regen_channel",std::string{});

@@ -75,6 +75,26 @@ struct AbsEscInputs {
     return (w.peripheral_speed_m_s - yaw * (w.x_m * sn - w.y_m * c)) / c;
 }
 
+// The speed the braking reference is lifted to, in the direction `dir` of travel: the fastest wheel that no drive torque can
+// spin above the ground. A driven wheel still turns under power at brake onset (a part-throttle launch leaves it several
+// percent fast, 12 % at full throttle) and lifting the reference to it left v_ref 0.7-2.7 m/s above the true speed: ABS then
+// regulated against a slip the car never had, released the brakes as the speed fell and the stop took 1.5-4.5x as long. With
+// at least one undriven wheel only undriven wheels count; a car with every wheel driven has no such wheel and keeps the fastest.
+[[nodiscard]] inline real abs_lift_speed(std::span<const TractionWheelSensor> wheels, real yaw, real dir) {
+    real fastest = 0, fastest_undriven = 0;
+    bool any_undriven = false;
+    for (const TractionWheelSensor& w : wheels) {
+        const real v = abs_wheel_ground_speed(w, yaw);
+        if (!std::isfinite(v)) continue;
+        fastest = std::max(fastest, dir * v);
+        if (!w.driven) {
+            any_undriven = true;
+            fastest_undriven = std::max(fastest_undriven, dir * v);
+        }
+    }
+    return any_undriven ? fastest_undriven : fastest;
+}
+
 inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
     const std::size_t n = in.wheels.size();
     s.abs_active = false;
@@ -115,11 +135,7 @@ inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
             const real dir = s.reference_speed_m_s >= 0 ? real(1) : real(-1);
             if (braking) {
                 // lifted to the wheel moving fastest in the reference's direction (a wheel turning the other way lifts nothing)
-                real fastest = 0;
-                for (std::size_t i = 0; i < n; ++i) {
-                    const real v = abs_wheel_ground_speed(in.wheels[i], in.yaw_rate);
-                    if (std::isfinite(v)) fastest = std::max(fastest, dir * v);
-                }
+                const real fastest = abs_lift_speed(in.wheels, in.yaw_rate, dir);
                 if (fastest > dir * s.reference_speed_m_s) s.reference_speed_m_s = dir * fastest;
                 // Every braked wheel fully released on the last substep and still slower than the reference: the
                 // integrated IMU has run away (it lacks the yaw-rate x lateral-velocity term in a slide), so the
@@ -132,7 +148,12 @@ inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
                         if (s.applied[i] > in.abs->reanchor_scale) all_released = false;
                     }
                     if (any && all_released) {
-                        s.reference_speed_m_s += (dir * fastest - s.reference_speed_m_s) * std::min(real(1), in.abs->reanchor_rate_per_s * dt);
+                        // The correction cancels a slow IMU runaway, so its pull-down is bounded: on very low grip every
+                        // wheel locks even at a few percent of the brake, the fastest wheel is then a locked wheel, and an
+                        // unbounded relaxation dragged the reference down with the wheels (ice: 27.8 -> 20 m/s in 0.25 s while
+                        // the car did 27.5) and ABS regulated against a slip error that was no longer there.
+                        const real pull = (dir * fastest - s.reference_speed_m_s) * std::min(real(1), in.abs->reanchor_rate_per_s * dt);
+                        s.reference_speed_m_s += dir * std::max(dir * pull, -in.abs->reanchor_max_decel_mps2 * dt);
                     }
                 }
                 // every wheel turns the other way faster than the reference: the car moves that way (e.g. after a spin)

@@ -151,6 +151,11 @@ struct PowertrainSnapshot {
     std::uint8_t electric_motor_count=0;
     real motor_rpm=0, motor_torque_nm=0, electric_power_w=0;
     real battery_soc=0, battery_capacity_kwh=0, battery_power_w=0;
+    // Brake blending (docs/electric_drive.md), last substep, never hashed. regen_power_w = power the brake regeneration
+    // pushes into the pack (W, battery side, >= 0); regen_brake_torque_nm / pad_brake_torque_nm = the service brake
+    // torque at the rims (sum over wheels) the motors / the pads supply; the shares are those over the total service
+    // request (regen + pad, 0 without a request or without blending).
+    real regen_power_w=0, regen_brake_torque_nm=0, pad_brake_torque_nm=0, regen_brake_share=0, pad_brake_share=0;
 
     std::int8_t gear = 0, gear_target = 0;
     ShiftPhase shift_phase = ShiftPhase::Idle;
