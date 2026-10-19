@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <fstream>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -352,97 +353,4 @@ TEST_CASE("Hybrid ICE start at 150 km/h with the fitting gear engaged directly (
     print("DCT 150 km/h pedal 1, gear 3 at start", run(kDct, sc));
     sc.proxy_fit_gear = 4;
     print("manual 150 km/h pedal 1, gear 4 at start", run(kManual, sc));
-}
-
-// Owner drive 2026-10-19 (hyper ICE + battery hybrid, 7-speed DCT): in 6th and 7th the engine sat at the limiter while the clutch
-// "slipped" with clutch_engagement 1.00. WOT from rest through the gears; prints engine rpm, the gearbox input rpm (the clutch's
-// other side), the slip, the engine's torque demand and the torque through the gear. boost > 0: the hyper's twin turbo
-// configuration with that gauge target (a garage tune), else the fixture's own 1.8 bar.
-namespace {
-
-vehicle::VehicleDesc load_dct_with_boost(double boost) {
-    if (boost <= 0.0) return load_fixture(kDct);
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps_dct_slip_diag";
-    std::filesystem::create_directories(dir);
-    const std::filesystem::path cfg = dir / "turbo_cfg.json";
-    {
-        std::ofstream f(cfg);
-        f << R"({"format": "physics_sim.turbo_configuration/1", "name": "diag", "extends": ")" << PS_SOURCE_DIR
-          << R"(/data/turbo_configurations/hyper_twin_default.json", "target_boost_bar": )" << boost << "}\n";
-    }
-    static jobs::JobSystem pool(10);
-    io::VehicleLoadOptions lo;
-    lo.maps.quality = drivetrain::MapQuality::Preview;
-    lo.maps.pool = &pool;
-    lo.maps.cache_dir = (std::filesystem::temp_directory_path() / "ps_hybrid_ice_start_cache").string();
-    lo.part_overrides["engine"].slots["forced_induction"] = cfg.string();
-    return io::load_vehicle_json(std::string(PS_SOURCE_DIR) + kDct, lo);
-}
-
-struct SlipResult {
-    double max_slip_rpm = 0.0;     // largest |engine - gearbox input| rpm in phase Idle above 30 km/h
-    double slip_time_s = 0.0;      // time with |slip| above 150 rpm in phase Idle
-    double top_kmh = 0.0;
-    double max_tgear = 0.0;        // largest torque through the gear
-};
-
-SlipResult run_dct_slip(double boost, bool verbose) {
-    vehicle::VehicleDesc desc = load_dct_with_boost(boost);
-    auto rig = ps_test::build_vehicle_rig_from_desc(desc, 1800.0, Vec3{2.0, 0.4, 0.15}, 0.5, 0.0, 4, Vec3::unit_y(), 240.0, 960.0, 8000.0);
-    World& w = *rig.world;
-    w.set_control("assist.drive_mode", 2.0);
-    w.set_control("electric.ready", 1.0);
-    w.set_control("gear_request", 99.0);
-    w.set_control("throttle", 0.0);
-    ps_test::settle(w, 1.0);
-    w.set_control("throttle", 1.0);
-    SlipResult r;
-    int last_gear = -9;
-    for (int i = 0; i < 240 * 70; ++i) {
-        w.step();
-        const auto& st = w.powertrain_state(rig.vehicle);
-        const auto& dl = st.driveline;
-        const double kmh = w.backend().get_motion(rig.chassis).linear.length() * 3.6;
-        const double eng = st.engine_rpm;
-        const double gbin = dl.gearbox_in_omega * 60.0 / (2.0 * 3.14159265358979323846);
-        const double slip = eng - gbin;
-        r.top_kmh = std::max(r.top_kmh, kmh);
-        r.max_tgear = std::max(r.max_tgear, double(dl.mesh_load_nm));
-        if (st.shift_phase == drivetrain::ShiftPhase::Idle && st.gear > 0 && kmh > 30) {
-            r.max_slip_rpm = std::max(r.max_slip_rpm, std::abs(slip));
-            if (std::abs(slip) > 150) r.slip_time_s += 1.0 / 240.0;
-        }
-        if (verbose && (st.gear != last_gear || i % 240 == 0)) {
-            const auto dbg = w.powertrain_debug(rig.vehicle);
-            std::printf("  t=%6.2f v=%5.0f gear=%d ph=%d eng=%6.0f gbin=%6.0f slip=%6.0f e=%.2f Tdem=%6.0f Tgear=%6.0f boost=%.2f\n", i / 240.0, kmh, st.gear,
-                        static_cast<int>(st.shift_phase), eng, gbin, slip, double(st.clutch_engagement), double(dbg.engine_torque_demand),
-                        double(dl.mesh_load_nm), double(st.engines.empty() ? 0 : st.engines[0].boost_bar));
-            last_gear = st.gear;
-        }
-    }
-    return r;
-}
-
-} // namespace
-
-TEST_CASE("DCT clutch slip at WOT through the gears (diag)", "[.][diag][dct_slip]") {
-    for (double boost : {3.8, 4.0, 4.5, 7.0}) {
-        std::printf("[dct slip] boost target %.1f bar (0 = fixture)\n", boost);
-        const SlipResult r = run_dct_slip(boost, true);
-        std::printf("[dct slip] boost %.1f: top %.0f km/h, max |slip| in Idle phase %.0f rpm, time with |slip| > 150 rpm %.2f s, max torque through the gear %.0f N*m\n",
-                    boost, r.top_kmh, r.max_slip_rpm, r.slip_time_s, r.max_tgear);
-    }
-}
-
-// Owner drive 2026-10-19: the ICE connects at 315 km/h and the car pulls on to 7th; slip between the engine and the gearbox input
-// (the DCT clutch) after every shift. Prints the whole pull.
-TEST_CASE("Hybrid ICE connect at 315 km/h then pull to top speed (diag)", "[.][diag][dct_slip]") {
-    for (const char* fx : {kDct, kManual}) {
-        Scenario sc;
-        sc.kmh = 315.0;
-        sc.pedal = step_pedal(1.0);
-        sc.seconds = 30.0;
-        sc.verbose = true;
-        print(fx == kDct ? "DCT 315 km/h" : "manual 315 km/h", run(fx, sc));
-    }
 }

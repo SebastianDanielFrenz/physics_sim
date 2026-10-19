@@ -99,6 +99,9 @@ struct EngineSoundState {
 
 struct DrivelineSoundState {
     real gearbox_in_omega = 0.0, gearbox_out_omega = 0.0, gear_load_torque = 0.0;
+    // Main clutch slip/torque. A DCT has no main clutch: it reads the active shift clutch
+    // (slip = row velocity, rad/s, positive when the engine runs ahead; torque = both rows' sum,
+    // negative while driving). Unhashed snapshot fields.
     real clutch_slip = 0.0, clutch_torque = 0.0;
     std::int8_t gear = 0;
     bool grind_active = false;

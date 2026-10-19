@@ -362,6 +362,13 @@ public:
     [[nodiscard]] real clutch_engagement() const { return last_clutch_result_.engagement; }
     [[nodiscard]] real clutch_slip() const; // omega(clutch.in) - omega(clutch.out)
     [[nodiscard]] real clutch_torque() const { return has_clutch() ? network_.row_lambda(clutch_row_) : real(0.0); }
+    // Clutch-to-clutch box without a converter (a DCT): the ACTIVE shift clutch, the one of the two rows carrying more
+    // torque (the one with the larger kinetic capacity while both carry none). Slip = engine-side minus gearbox side at
+    // the row's ratio [rad/s], positive while the engine runs ahead; torque = what both rows carry together [N*m].
+    // 0 on every other box (a manual box has clutch_slip()/clutch_torque(); a converter box has its own lock-up).
+    [[nodiscard]] bool has_shift_clutches() const { return auto_ != nullptr && !converter_ && !auto_->desc().cvt && c2c_shift_rows_; }
+    [[nodiscard]] real shift_clutch_slip() const;
+    [[nodiscard]] real shift_clutch_torque() const;
 
     // PHYS-033 P4 I4 C9 (plan section 3.3): MFWD transfer case. nullptr/0 for
     // every vehicle without one (car_sedan.json and every other pre-C9 file) -
@@ -915,6 +922,7 @@ private:
     std::unique_ptr<AutoTransmission> auto_;
     AutoTransmission::Outputs last_auto_out_{};
     FrictionRowId shift_row_b_{};
+    bool c2c_shift_rows_ = false; // the two shift-clutch rows (A in the synchro slot, B) exist
     std::size_t mode_channel_slot_ = 0;
     bool has_mode_channel_ = false;
     real last_mode_channel_ = 0.0; // unhashed, snapshot only

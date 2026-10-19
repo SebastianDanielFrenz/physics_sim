@@ -1002,6 +1002,7 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
             // torque converter's lock-up clutch (pump -> turbine) and its implicit slip coupling. Only a clutch-to-
             // clutch box adds these, so every Manual/Sequential vehicle's row ids are unchanged.
             shift_row_b_ = builder.add_friction_row(gearbox_in_, gearbox_out_);
+            c2c_shift_rows_ = true;
             if (!turbine_port_key.empty()) {
                 converter_pump_ = node_for_key(component_port_key(pt.components[static_cast<std::size_t>(gearbox_component_index)].id, "in"));
                 lockup_row_ = builder.add_friction_row(converter_pump_, gearbox_in_);
@@ -3254,6 +3255,27 @@ real Powertrain::gearbox_output_ratio_magnitude() const { return speedo_ratio_; 
 real Powertrain::clutch_slip() const {
     if (!clutch_) return real(0.0);
     return network_.omega(clutch_in_) - network_.omega(clutch_out_);
+}
+
+namespace {
+// The active shift clutch of a two-row box: the row carrying more torque; while both are at rest, the one commanded with
+// the larger kinetic capacity (row A on a tie).
+bool shift_clutch_row_b_is_active(real la, real lb, const AutoTransmission::RowCmd& ca, const AutoTransmission::RowCmd& cb) {
+    if (std::abs(lb) != std::abs(la)) return std::abs(lb) > std::abs(la);
+    return cb.cap_kinetic > ca.cap_kinetic;
+}
+} // namespace
+
+real Powertrain::shift_clutch_slip() const {
+    if (!has_shift_clutches()) return real(0.0);
+    const real la = network_.row_lambda(gearbox_synchro_row_), lb = network_.row_lambda(shift_row_b_);
+    const bool b = shift_clutch_row_b_is_active(la, lb, last_auto_out_.row[0], last_auto_out_.row[1]);
+    return network_.row_velocity(b ? shift_row_b_ : gearbox_synchro_row_);
+}
+
+real Powertrain::shift_clutch_torque() const {
+    if (!has_shift_clutches()) return real(0.0);
+    return network_.row_lambda(gearbox_synchro_row_) + network_.row_lambda(shift_row_b_);
 }
 
 std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {

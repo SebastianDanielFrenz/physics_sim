@@ -876,6 +876,11 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         dl.gear_load_torque = real(0.0); // deferred with PowertrainDebug's mesh torques (commit 7)
         dl.clutch_slip = powertrain_.has_clutch() ? powertrain_.clutch_slip() : real(0.0);
         dl.clutch_torque = powertrain_.clutch_torque();
+        // A DCT has no clutch component: the same two fields read its active shift clutch (the HUD's slip and load).
+        if (powertrain_.has_shift_clutches()) {
+            dl.clutch_slip = powertrain_.shift_clutch_slip();
+            dl.clutch_torque = powertrain_.shift_clutch_torque();
+        }
         snap.drive_power_w = powertrain_.transmission_input_power_w();
         snap.hybrid_fitted=powertrain_.has_hybrid_control();snap.hybrid_charging=powertrain_.hybrid_charging();snap.hybrid_ice_requested=powertrain_.hybrid_ice_requested();
         snap.hybrid_charge_target_soc=powertrain_.hybrid_target_soc();snap.hybrid_requested_power_w=powertrain_.hybrid_requested_power();snap.hybrid_available_power_w=powertrain_.hybrid_available_power();
