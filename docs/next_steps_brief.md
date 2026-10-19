@@ -483,6 +483,18 @@ Each is Opus design followed by Sonnet implementation, size L:
 - P8: terrain and soil (Bekker, ruts; the 159 m/s² tile-seam spike).
 - P10: deformation (proposal only on request).
 - P11: real-world geodata (done by geo2map / racing_game).
+- **Mechanical damage, optional toggle (owner 2026-10-19: "much later").** Today overload only slips clutches
+  (Coulomb rows; slip energy booked in the ledger); nothing wears or breaks, the gearbox rating feeds only the
+  garage advisor, and over-revs (12,900 rpm in 3rd on a hybrid drive) cost nothing. Scope when it comes:
+  - clutch temperature and wear from the already-booked slip energy (main, DCT packs, lock-up, LSD,
+    transfer case), with fade and failure thresholds in data;
+  - gearbox fatigue when driven above `rated_input_torque_nm` (damage accumulation, then a failed gear);
+  - engine over-rev damage (valve float/contact above a data limit), and turbo rotor overspeed (the owner
+    earlier left that as a garage warning only).
+  Rules: off by default and a World/vehicle setting, not a hidden constant. Off must be bit-identical, so
+  tests, the dyno and the garage are unaffected. Damage state is hashed only while on. Every threshold is
+  data with a source tag, and a repair/reset hook is needed for the game. Opus design first; it touches the
+  drivetrain components, the thermal model and limit findings.
 
 ### 2.10 [!mayfail] backlog and known failures
 - **Real failure on master (not mayfail):** `tests/validation/test_terrain_seam_crossing.cpp:512` (car_sedan
