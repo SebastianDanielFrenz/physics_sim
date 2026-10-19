@@ -313,7 +313,7 @@ constexpr double kN7bRatio = 1.4875e-3 / 1.18e-3;
 // Kit and bottle findings with their Closed remedies.
 
 TEST_CASE("R4 KitFuelLean: a shrunk fuel jet is found and its Closed jet remedy restores the lambda when applied", "[drivetrain][dyno][n2o]") {
-    // The shipped 800 hp kit runs lambda_c ~0.835 (above the 0.82 target, below the 0.90 Near line): no finding. Shrinking the
+    // The shipped 800 hp kit (E85 fuel jet 1.845 mm, re-jetted from the gasoline 1.535 mm) runs lambda_c ~0.83 (above the 0.82 target, below the 0.90 Near line): no finding. Shrinking the
     // fuel jet to 0.7x leaves 0.49x of the kit fuel -> lambda_c 1.02 (Limiting); 0.5x -> 1.14 (Exceeded); 0.8x -> 0.96 (Near).
     // The remedy sizes the jet from the finding's own window (kit fuel ~ jet area, so d ~ sqrt(flow); ECU fuel and air taken as
     // unchanged - first order): applied and re-swept, required_min lands on lambda_c = 0.90 and required_margin on 0.82.
