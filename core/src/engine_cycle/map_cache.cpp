@@ -562,9 +562,6 @@ void store_cached_engine_maps_impl(const std::string& cache_dir, std::uint64_t k
 // calls use error_code overloads, but path/string/vector construction can
 // still throw (bad_alloc, a path conversion error); any such exception is a
 // cache miss / a skipped write. Caught by type only (vault TOOL-019).
-EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key) {
-    return load_cached_engine_maps(cache_dir, key, kLumpedGeneratorVersion);
-}
 
 EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key, std::uint32_t generator_version) {
     if (cache_dir.empty()) return nullptr;
