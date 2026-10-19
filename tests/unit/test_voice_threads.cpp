@@ -78,7 +78,6 @@ LiveRun run_live(int threads, int samples) {
         ps_audio::LiveControl c;
         c.omega_rad_s = omega_of(1500.0 + 3000.0 * f);
         c.p_intake_pa = 50000.0 + 40000.0 * f;
-        c.start_of_burn_deg_atdc = eng.mbt_start_of_burn_deg();
         if (t >= 0.10 && t < 0.12) c.flags |= ps_audio::kInputIgnitionCut;
         if (t >= 0.16 && t < 0.20) c.flags |= ps_audio::kInputFuelCut;
         eng.step_sample(c, out.data());

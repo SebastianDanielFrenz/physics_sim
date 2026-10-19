@@ -1,0 +1,38 @@
+{
+  "format": "physics_sim.knock_model/1",
+  "model": "douaud_eyzat",
+  "version": 5,
+  "source": "Knock model v5 (burn law phase 2a, 2026-10-19; v4 knock calibration phase B): the parameter set of the map generator's knock replay, tau = scale * A * (OI/100)^on_exponent * (p/1 atm)^-pressure_exponent * exp(activation_k/T) / (1 - x_res)^dilution_exponent, integrated Livengood-Wu from IVC to the Wiebe burned fraction end_burn_fraction (or EVO) (ps/engine_cycle/knock.h), x_res = the end gas's residual mass fraction at IVC, every replay at the burn law's own per-cycle burn angles (ps/engine_cycle/burn_law.h). The compiled defaults in ps/engine_cycle/knock_model.h equal this file entry by entry (tests/unit/test_knock_cal_turbo.cpp 'KCB knock model file'). Fit: least squares of theta_kl - measured spark over the envelope rows of the Toyota A25A (EPA NVFEL, 17 rows, NA, KV1-BC) and the Honda L15B7 on EPA Tier 3 E10 (EPA NVFEL, 15 rows, MAP 98-196 kPa) at MEASURED boundary conditions (trapped air = measured air, measured intake temperature, lambda and cam phases, exhaust reservoir at ambient), constrained to every A25A row within +-7.5 deg and to the light-load no-knock rows of every EPA turbo package (tests/support/fixtures/epa_turbo/*_light_rows.json: the model's knock limit at most 3 deg [AS] below min(measured spark, MBT)); the v5 bands are 1.5x the v4 bands (A25A +-5, light 2 deg), declared before the final run, because under the burn law no cell of the v4 parameter space plus the end fraction meets the v4 bands (the boosted rows' residual is MAP-structured). The measured ECU spark is the knock limit minus the OEM's own margin; like KV1-BC the fit treats measured spark as theta_kl with margin 0, so the calibrated model absorbs the OEM margin. Held out: the envelope rows of the Honda L15B7 on Tier 2 E0 and of the Ford 2.7 EcoBoost (four packages); reported: Ford 1.6 EcoBoost, Mazda 2.5 T. The optimum lies on a flat n-B ridge; the shipped point is a coordinate-descent minimum at the KCB neighbour steps. Decision note: vault PHYS-069 (v4), PHYS-079 (v5), docs/data_formats/engine.md 'Knock limit'.",
+  "prefactor_s": {
+    "value": 0.01768,
+    "source": "[AS] Douaud & Eyzat 1978 (SAE 780080) via Heywood 1988 sec. 9.6.2, not verified locally"
+  },
+  "octane_exponent": {
+    "value": 3.402,
+    "source": "[AS] Douaud & Eyzat 1978 via Heywood 1988 sec. 9.6.2"
+  },
+  "octane_index_k": {
+    "value": 0.5,
+    "source": "[AS] OI = RON - K*(RON - MON); K 0.5 = the anti-knock index (R+M)/2. A pressure/temperature-dependent K (SAE 2012-01-1634) was considered and rejected: the test fuels' sensitivity S is 7.5-9, so the measured MAP trend would need K about -3"
+  },
+  "prefactor_scale": {
+    "value": 0.006095,
+    "source": "[M] fitted (see source); v2 1.26 at the literature n and B, v3 0.012, v4 0.004938"
+  },
+  "pressure_exponent": {
+    "value": 1.2,
+    "source": "[M] fitted; literature 1.7, v3 1.05, v4 0.95. On a flat ridge with activation_k: n +-0.05 raises the objective 3.985 -> 4.002 / 4.014 deg, B +-200 K -> 4.069 / 4.061 (each with its own best pre-factor)"
+  },
+  "activation_k": {
+    "value": 6400.0,
+    "source": "[M] fitted; literature 3800 K, v3 5800 K, v4 6100 K. Above 7000 K the A25A rows leave +-7.5 deg"
+  },
+  "dilution_exponent": {
+    "value": 4.0,
+    "source": "[M] fitted under the light-load no-knock constraint (the fit rows alone cannot identify it: residual fractions 0.03-0.10); v4 5.5; gamma 3 violates the light-load constraint. Form: a residual/EGR dilution factor on the ignition rate as used in EGR knock-integral correlations (e.g. SAE 2012-01-0707, not verified locally); the value is EFFECTIVE - it also absorbs the model's residual heating of the end gas - and is not a chemical constant"
+  },
+  "end_burn_fraction": {
+    "value": 0.75,
+    "source": "[M] fitted (knock model v5); up to v4 0.90 [AS] ('past it the end gas left is too small to matter'). EFFECTIVE: the single-zone replay exposes the end gas to the bulk pressure, which overstates the late, small end gas's exposure; neighbours at the fitted n, B, gamma: 0.70 raises the objective 3.985 -> 4.103 deg, 0.80 to 5.20 (light-load penalty); 0.90 meets no band set within 1.5x the v4 bands"
+  }
+}

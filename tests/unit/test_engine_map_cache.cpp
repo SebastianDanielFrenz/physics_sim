@@ -280,12 +280,12 @@ TEST_CASE("C16b H1: a cache hit is bit-for-bit identical to a fresh generation",
     SECTION("map_cache.h directly") {
         TempCacheDir cache;
         const std::uint64_t key = engine_map_cache_key(desc, fuel, MapQuality::Preview);
-        REQUIRE(load_cached_engine_maps(cache.path(), key) == nullptr); // empty dir: miss
+        REQUIRE(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr); // empty dir: miss
 
         const EngineMapsPtr fresh = generate_engine_maps(desc, fuel, MapQuality::Preview);
         store_cached_engine_maps(cache.path(), key, *fresh);
 
-        const EngineMapsPtr loaded = load_cached_engine_maps(cache.path(), key);
+        const EngineMapsPtr loaded = load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc));
         REQUIRE(loaded != nullptr);
         CHECK(same_engine_maps(*fresh, *loaded));
         CHECK(loaded->content_hash == fresh->content_hash);
@@ -367,8 +367,8 @@ TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, ne
         REQUIRE(bytes.size() > 40);
         bytes.resize(20);
         write_all(file, bytes);
-        CHECK_NOTHROW(load_cached_engine_maps(cache.path(), key));
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr);
+        CHECK_NOTHROW(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)));
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr);
     }
     SECTION("truncated: header intact, payload short") {
         make_valid_file();
@@ -376,14 +376,14 @@ TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, ne
         REQUIRE(bytes.size() > 50);
         bytes.resize(bytes.size() - 8);
         write_all(file, bytes);
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr);
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr);
     }
     SECTION("wrong magic") {
         make_valid_file();
         auto bytes = read_all(file);
         bytes[0] = 'X';
         write_all(file, bytes);
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr);
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr);
     }
     SECTION("wrong format_version") {
         make_valid_file();
@@ -391,7 +391,7 @@ TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, ne
         std::uint32_t bad = kPsMapsFormatVersion + 1;
         std::memcpy(bytes.data() + 8, &bad, sizeof(bad));
         write_all(file, bytes);
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr);
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr);
     }
     SECTION("wrong key recorded in the header") {
         make_valid_file();
@@ -399,7 +399,7 @@ TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, ne
         std::uint64_t bad = key ^ 0x1;
         std::memcpy(bytes.data() + 12, &bad, sizeof(bad));
         write_all(file, bytes);
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr);
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr);
     }
     SECTION("corrupted payload: content_hash mismatch") {
         make_valid_file();
@@ -407,12 +407,12 @@ TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, ne
         REQUIRE(bytes.size() > 60);
         bytes[55] = static_cast<char>(bytes[55] ^ 0xFF); // flip a byte well inside the payload
         write_all(file, bytes);
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr);
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr);
     }
     SECTION("nonexistent cache_dir") {
         std::filesystem::remove_all(cache.dir);
-        CHECK_NOTHROW(load_cached_engine_maps(cache.path(), key));
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr);
+        CHECK_NOTHROW(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)));
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr);
     }
 
     // Every corruption case above must self-heal: exactly the sequence
@@ -420,7 +420,7 @@ TEST_CASE("C16b H2: a corrupt or mismatched cache file is silently discarded, ne
     // leaves a GOOD file behind, and the next load hits it.
     const EngineMapsPtr regenerated = generate_engine_maps(desc, fuel, MapQuality::Preview);
     CHECK_NOTHROW(store_cached_engine_maps(cache.path(), key, *regenerated));
-    const EngineMapsPtr healed = load_cached_engine_maps(cache.path(), key);
+    const EngineMapsPtr healed = load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc));
     REQUIRE(healed != nullptr);
     CHECK(same_engine_maps(*regenerated, *healed));
 }
@@ -559,6 +559,62 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         }
     }
 
+    SECTION("burn law (vault PHYS-079): the mode and every law parameter bump the key") {
+        const auto bump = [](real v) { return std::nextafter(v, real(1e300)); };
+        REQUIRE(ref_desc.burn_law == CycleModelDesc::BurnLawMode::Standard);
+        std::vector<std::pair<const char*, std::function<void(CycleModelDesc&)>>> edits;
+        edits.emplace_back("burn_law mode", [&](CycleModelDesc& d) { d.burn_law = CycleModelDesc::BurnLawMode::Fixed; });
+        using P = engine_cycle::BurnLawParams;
+        const std::pair<const char*, real P::*> params[] = {
+            {"reference_rpm", &P::reference_rpm},
+            {"reference_unburned_temperature_k", &P::reference_unburned_temperature_k},
+            {"reference_unburned_pressure_pa", &P::reference_unburned_pressure_pa},
+            {"reference_residual_fraction", &P::reference_residual_fraction},
+            {"development_reference_deg", &P::development_reference_deg},
+            {"rapid_reference_deg", &P::rapid_reference_deg},
+            {"scale", &P::scale},
+            {"rpm_exponent", &P::rpm_exponent},
+            {"flame_speed_exponent", &P::flame_speed_exponent},
+            {"flame_speed_pressure_factor", &P::flame_speed_pressure_factor},
+            {"mk_phi_m", &P::mk_phi_m},
+            {"mk_b_m_m_s", &P::mk_b_m_m_s},
+            {"mk_b_2_m_s", &P::mk_b_2_m_s},
+            {"mk_alpha_0", &P::mk_alpha_0},
+            {"mk_alpha_phi", &P::mk_alpha_phi},
+            {"mk_beta_0", &P::mk_beta_0},
+            {"mk_beta_phi", &P::mk_beta_phi},
+            {"mk_t0_k", &P::mk_t0_k},
+            {"mk_p0_pa", &P::mk_p0_pa},
+            {"mk_phi_min", &P::mk_phi_min},
+            {"mk_phi_max", &P::mk_phi_max},
+            {"dilution_k", &P::dilution_k},
+            {"dilution_exponent", &P::dilution_exponent},
+            {"min_dilution_factor", &P::min_dilution_factor},
+            {"min_flame_speed_m_s", &P::min_flame_speed_m_s},
+            {"compression_exponent", &P::compression_exponent},
+        };
+        static_assert(sizeof(params) / sizeof(params[0]) == 26, "every BurnLawParams field has a row");
+        static_assert(sizeof(P) == 26 * sizeof(real), "a new BurnLawParams field needs a row here");
+        for (const auto& [name, field] : params) {
+            edits.emplace_back(name, [field = field, &bump](CycleModelDesc& d) {
+                d.burn_law_params.*field = bump(d.burn_law_params.*field);
+            });
+        }
+        for (const auto& [name, edit] : edits) {
+            CycleModelDesc d = ref_desc;
+            edit(d);
+            INFO("burn law field: " << name);
+            CHECK(engine_map_cache_key(d, ref_fuel, MapQuality::Preview) != ref_key);
+        }
+        // A Fixed desc does not read the law, so its parameters are outside its key.
+        CycleModelDesc fixed = ref_desc;
+        fixed.burn_law = CycleModelDesc::BurnLawMode::Fixed;
+        CycleModelDesc fixed2 = fixed;
+        fixed2.burn_law_params.scale = 2.0;
+        CHECK(engine_map_cache_key(fixed, ref_fuel, MapQuality::Preview) ==
+              engine_map_cache_key(fixed2, ref_fuel, MapQuality::Preview));
+    }
+
     SECTION("with a spark schedule present, every schedule value and the delay still bump the key (C17a follow-up)") {
         // The fields above start from an engine WITHOUT a schedule, where the
         // presence condition alone would change the key; this base has one.
@@ -608,6 +664,13 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
                            [&](CycleModelDesc& d) { d.knock.lambda_target.x[1] = bump(d.knock.lambda_target.x[1]); });
         edits.emplace_back("knock.lambda_target y axis",
                            [&](CycleModelDesc& d) { d.knock.lambda_target.y[0] = bump(d.knock.lambda_target.y[0]); });
+        // The knock model's parameter set (v3-v5), one row per field.
+        edits.emplace_back("knock.model.prefactor_scale", [&](CycleModelDesc& d) { d.knock.model.prefactor_scale = bump(d.knock.model.prefactor_scale); });
+        edits.emplace_back("knock.model.pressure_exponent", [&](CycleModelDesc& d) { d.knock.model.pressure_exponent = bump(d.knock.model.pressure_exponent); });
+        edits.emplace_back("knock.model.activation_k", [&](CycleModelDesc& d) { d.knock.model.activation_k = bump(d.knock.model.activation_k); });
+        edits.emplace_back("knock.model.octane_index_k", [&](CycleModelDesc& d) { d.knock.model.octane_index_k = bump(d.knock.model.octane_index_k); });
+        edits.emplace_back("knock.model.dilution_exponent", [&](CycleModelDesc& d) { d.knock.model.dilution_exponent = bump(d.knock.model.dilution_exponent); });
+        edits.emplace_back("knock.model.end_burn_fraction", [&](CycleModelDesc& d) { d.knock.model.end_burn_fraction = bump(d.knock.model.end_burn_fraction); });
         for (const auto& [name, edit] : edits) {
             CycleModelDesc d = base;
             edit(d);
@@ -900,7 +963,7 @@ TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files
         // "<key:016x>.psmaps" name map_cache.cpp's rename target uses.
         const auto stray = cache_file_path(cache, key);
         write_all(std::filesystem::path(stray.string() + ".1234.5678.tmp"), {'g', 'a', 'r', 'b', 'a', 'g', 'e'});
-        CHECK(load_cached_engine_maps(cache.path(), key) == nullptr); // no real file yet - the stray temp is not one
+        CHECK(load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc)) == nullptr); // no real file yet - the stray temp is not one
         const auto entries_before = cache.entries();
         REQUIRE(entries_before.size() == 1); // just the stray temp
 
@@ -909,7 +972,7 @@ TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files
         // The real file now exists and loads; the stray temp is untouched
         // debris (store never has to see or clean up someone else's temp
         // file - only its own, on a failed write, which this is not).
-        const EngineMapsPtr loaded = load_cached_engine_maps(cache.path(), key);
+        const EngineMapsPtr loaded = load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc));
         REQUIRE(loaded != nullptr);
         CHECK(same_engine_maps(*maps, *loaded));
 
@@ -932,7 +995,7 @@ TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files
         store_cached_engine_maps(cache.path(), key, *maps);
         const EngineMapsPtr maps2 = generate_engine_maps(desc, fuel, MapQuality::Preview);
         store_cached_engine_maps(cache.path(), key, *maps2); // overwrite via a fresh temp+rename, not an in-place write
-        const EngineMapsPtr loaded = load_cached_engine_maps(cache.path(), key);
+        const EngineMapsPtr loaded = load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc));
         REQUIRE(loaded != nullptr);
         CHECK(same_engine_maps(*maps, *loaded));
         const auto entries = cache.entries();
@@ -963,7 +1026,7 @@ TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files
         }
         threads.emplace_back([&] {
             while (writers_done.load() < kWriters) {
-                const EngineMapsPtr l = load_cached_engine_maps(cache.path(), key);
+                const EngineMapsPtr l = load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc));
                 if (!l) continue;
                 if (same_engine_maps(*maps, *l) && l->content_hash == maps->content_hash) {
                     loads_ok.fetch_add(1);
@@ -976,7 +1039,7 @@ TEST_CASE("C16b H4: store_cached_engine_maps writes atomically; stray temp files
         std::printf("2d concurrent: %d writers x %d stores, reader saw %d whole loads, %d bad\n", kWriters, kStoresEach,
                     loads_ok.load(), loads_bad.load());
         CHECK(loads_bad.load() == 0);
-        const EngineMapsPtr final_load = load_cached_engine_maps(cache.path(), key);
+        const EngineMapsPtr final_load = load_cached_engine_maps(cache.path(), key, engine_map_generator_version(desc));
         REQUIRE(final_load != nullptr);
         CHECK(same_engine_maps(*maps, *final_load));
         const auto entries = cache.entries();
@@ -1024,7 +1087,7 @@ TEST_CASE("C16b review: cache hit vs fresh generation timing, pumping sign", "[.
             EngineMapsPtr loaded;
             for (int r = 0; r < 5; ++r) {
                 const auto t0 = std::chrono::steady_clock::now();
-                loaded = load_cached_engine_maps(cache.path(), key);
+                loaded = load_cached_engine_maps(cache.path(), key, engine_map_generator_version(g.desc));
                 hit.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
             }
             REQUIRE(loaded);

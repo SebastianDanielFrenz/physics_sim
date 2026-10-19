@@ -411,6 +411,21 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
         f.pod(desc.knock.model.activation_k);
         f.pod(desc.knock.model.octane_index_k);
         f.pod(desc.knock.model.dilution_exponent);
+        f.pod(desc.knock.model.end_burn_fraction); // knock model v5 (burn law phase 2a)
+    }
+    // Burn law (design C, vault PHYS-079): a law engine folds the law's version and every parameter (H3 rows per
+    // field); a Fixed desc folds nothing here, so its key is the pre-law key (its generator version is too).
+    if (desc.burn_law == CycleModelDesc::BurnLawMode::Standard) {
+        const engine_cycle::BurnLawParams& b = desc.burn_law_params;
+        f.str("phys079.burn_law");
+        f.pod(engine_cycle::kBurnLawVersion);
+        for (real v : {b.reference_rpm, b.reference_unburned_temperature_k, b.reference_unburned_pressure_pa,
+                       b.reference_residual_fraction, b.development_reference_deg, b.rapid_reference_deg, b.scale,
+                       b.rpm_exponent, b.flame_speed_exponent, b.flame_speed_pressure_factor, b.mk_phi_m, b.mk_b_m_m_s, b.mk_b_2_m_s, b.mk_alpha_0,
+                       b.mk_alpha_phi, b.mk_beta_0, b.mk_beta_phi, b.mk_t0_k, b.mk_p0_pa, b.mk_phi_min, b.mk_phi_max, b.dilution_k,
+                       b.dilution_exponent, b.min_dilution_factor, b.min_flame_speed_m_s, b.compression_exponent}) {
+            f.pod(v);
+        }
     }
     // ps_audio A4: the intake/exhaust pipe pair + resolved installation,
     // folded only when present (both absent - the pre-A4 default for every

@@ -220,6 +220,9 @@ struct EngineMapGenTask::Impl {
     std::vector<std::exception_ptr> exceptions;
     std::size_t grid_n = 0;
     real mbt_atdc = 0.0;
+    // Burn law (design C): every point's burn follows the law from its own IVC state; the ops carry a spark mode
+    // (Spark / MbtOffset) instead of a Wiebe start. false (a Fixed desc): the pre-law ops, bit for bit.
+    bool law = false;
     bool finished = false;
     // ps_audio A5: pipe-bearing desc -> every point through CycleEngine
     // (generator v2); otherwise the unchanged v1 single-cylinder path.
@@ -353,7 +356,9 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         if (!err.empty()) throw std::runtime_error("engine map generator: spark_advance_deg: " + err);
     }
 
-    auto make_op = [&](real rpm, real p, real lambda, real spark_atdc) {
+    s.law = desc.burn_law == CycleModelDesc::BurnLawMode::Standard;
+    using SparkMode = engine_cycle::OperatingPoint::SparkMode;
+    auto make_op = [&](real rpm, real p, real lambda, real spark_atdc, SparkMode mode = SparkMode::WiebeStart) {
         engine_cycle::OperatingPoint op;
         op.rpm = rpm;
         op.p_im_pa = p;
@@ -361,35 +366,44 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
         op.p_amb_pa = kPamb;
         if (s.pipe && desc.intake->compressor_supply) op.p_supply_pa = std::max(kPamb, p * kBoostSupplyRatio);
         op.lambda = lambda;
+        op.spark_mode = mode;
         op.spark_deg_atdc = spark_atdc;
         op.intake_advance_deg = cam_value(desc.cam.intake_advance_deg, rpm, p);
         op.exhaust_retard_deg = cam_value(desc.cam.exhaust_retard_deg, rpm, p);
         return op;
     };
-    for (real rpm : s.rpm_axis) {
-        for (real p : s.p_axis) {
-            // Scheduled: the node runs at the ECU's spark (deg BTDC -> ATDC)
-            // plus the flame-development delay; mbt_tracking: the MBT Wiebe start.
-            const real start = scheduled ? -desc.spark_advance_deg.value(rpm, p) + desc.ignition_delay_deg : s.mbt_atdc;
-            s.ops.push_back(make_op(rpm, p, real(1.0), start));
+    // Burn law: a scheduled node runs at the ECU's spark (Spark mode, the law's delay added per cycle), an mbt_tracking
+    // node and every sweep point relative to the cycle's own MBT (MbtOffset). Fixed: the pre-law Wiebe starts.
+    auto node_op = [&](real rpm, real p) {
+        if (s.law) {
+            return scheduled ? make_op(rpm, p, real(1.0), -desc.spark_advance_deg.value(rpm, p), SparkMode::Spark)
+                             : make_op(rpm, p, real(1.0), real(0.0), SparkMode::MbtOffset);
         }
+        // Scheduled: the node runs at the ECU's spark (deg BTDC -> ATDC)
+        // plus the flame-development delay; mbt_tracking: the MBT Wiebe start.
+        const real start = scheduled ? -desc.spark_advance_deg.value(rpm, p) + desc.ignition_delay_deg : s.mbt_atdc;
+        return make_op(rpm, p, real(1.0), start);
+    };
+    for (real rpm : s.rpm_axis) {
+        for (real p : s.p_axis) s.ops.push_back(node_op(rpm, p));
     }
     s.grid_n = s.ops.size();
     for (const SweepSite& site : s.spark_sites) {
         for (real retard : s.spark_retard) {
-            s.ops.push_back(make_op(site.rpm, site.p_pa, real(1.0), s.mbt_atdc + retard));
+            s.ops.push_back(s.law ? make_op(site.rpm, site.p_pa, real(1.0), retard, SparkMode::MbtOffset)
+                                  : make_op(site.rpm, site.p_pa, real(1.0), s.mbt_atdc + retard));
         }
     }
-    for (real lambda : s.lambdas) s.ops.push_back(make_op(kLambdaSite.rpm, kLambdaSite.p_pa, lambda, s.mbt_atdc));
+    for (real lambda : s.lambdas) {
+        s.ops.push_back(s.law ? make_op(kLambdaSite.rpm, kLambdaSite.p_pa, lambda, real(0.0), SparkMode::MbtOffset)
+                              : make_op(kLambdaSite.rpm, kLambdaSite.p_pa, lambda, s.mbt_atdc));
+    }
     if (s.wot) {
         // P7d: the wide-open-throttle state of every rpm-axis value, appended after the sweeps (their indices are
         // unchanged). The plenum is free; p_im_pa = ambient only seeds the network and selects the ECU spark/cam at the
         // WOT condition.
         s.wot_base = s.ops.size();
-        for (real rpm : s.rpm_axis) {
-            const real start = scheduled ? -desc.spark_advance_deg.value(rpm, kPamb) + desc.ignition_delay_deg : s.mbt_atdc;
-            s.ops.push_back(make_op(rpm, kPamb, real(1.0), start));
-        }
+        for (real rpm : s.rpm_axis) s.ops.push_back(node_op(rpm, kPamb));
         s.wot_n = s.ops.size() - s.wot_base;
         s.node_status.assign(s.grid_n, 0);
     }
@@ -437,10 +451,10 @@ std::size_t EngineMapGenTask::grid_point_count() const { return impl_->grid_n; }
 std::size_t EngineMapGenTask::reuse_points_from(const EngineMapGenTask& previous) {
     Impl& s=*impl_;const Impl& old=*previous.impl_;
     if(s.reuse_key!=old.reuse_key)throw std::invalid_argument("engine point reuse: engine/fuel/quality mismatch");
-    using Key=std::array<real,10>;
+    using Key=std::array<real,11>;
     // P7d: kind 1 = grid node, 2 = wide-open-throttle point, 0 = sweep point (a WOT point never stands in for a node).
     auto kind=[](const Impl& t,std::size_t i){return i<t.grid_n ? real(1) : (t.wot && i>=t.wot_base ? real(2) : real(0));};
-    auto key=[](const engine_cycle::OperatingPoint& p,real k){return Key{p.rpm,p.p_im_pa,p.t_im_k,p.p_amb_pa,p.p_supply_pa,p.lambda,p.spark_deg_atdc,p.intake_advance_deg,p.exhaust_retard_deg,k};};
+    auto key=[](const engine_cycle::OperatingPoint& p,real k){return Key{p.rpm,p.p_im_pa,p.t_im_k,p.p_amb_pa,p.p_supply_pa,p.lambda,p.spark_deg_atdc,p.intake_advance_deg,p.exhaust_retard_deg,k,static_cast<real>(p.spark_mode)};};
     auto knock_row=[](const Impl& t,std::size_t i){return i<t.grid_n ? i : t.grid_n+(i-t.wot_base);};
     std::map<Key,std::size_t> index;
     for(std::size_t i=0;i<old.ops.size();++i)if(old.done[i] && !old.exceptions[i])index.emplace(key(old.ops[i],kind(old,i)),i);
@@ -462,6 +476,14 @@ namespace {
 // range), with finish()'s own expressions. A held node failing them does not breathe.
 bool node_breathes(const CycleModelDesc& d, real lhv, real afr, real p, const engine_cycle::PointResult& r) {
     if (!(r.m_air_j_cyc > real(0.0))) return false;
+    // Burn law: the cycle's burn follows its own IVC state, so a non-physical IVC residual fraction (negative or not
+    // finite - the low-MAP reverse-flow drain of the intake port, the same family the calibration rows meet) would set
+    // the burn itself (the N52's u = 1 node at 2500 rpm / 30 kPa: x = -0.56, VE 1.36). Such a node does not breathe;
+    // finish() fills it from the node above. Fixed engines keep the pre-law check (their maps stay bit-identical).
+    if (d.burn_law == CycleModelDesc::BurnLawMode::Standard &&
+        !(r.residual_frac >= real(0.0) && r.residual_frac < real(1.0))) {
+        return false;
+    }
     const real air_per_ve = p / (kRGas * kTref) * v_disp_of(d) * kCCycle;
     const real ve = real(d.cylinders) * r.m_air_j_cyc * kCCycle / air_per_ve;
     const real eta = r.w_gross_j * afr / (lhv * r.m_air_j_cyc);
@@ -535,11 +557,14 @@ void EngineMapGenTask::run_point(std::size_t i) {
             kin.proto = s.proto.get();
             kin.op = s.ops[i];
             kin.ivc = s.results[i].ivc;
-            kin.ignition_delay_deg = s.desc.ignition_delay_deg;
-            kin.burn_duration_deg = s.desc.burn_duration_deg;
+            // Burn law: the node cycle's own angles (the knock-critical cylinder's); Fixed: the constants.
+            kin.ignition_delay_deg = s.law ? s.results[i].burn.ignition_delay_deg : s.desc.ignition_delay_deg;
+            kin.burn_duration_deg = s.law ? s.results[i].burn.wiebe_duration_deg : s.desc.burn_duration_deg;
+            const real knock_mbt = s.law ? s.results[i].mbt_spark_btdc : s.knock_mbt_btdc;
             kin.activation_k = s.desc.knock.model.activation_k;      // knock model v3/v4
             kin.p_exponent = s.desc.knock.model.pressure_exponent;  // knock model v3/v4
             kin.dilution_exponent = s.desc.knock.model.dilution_exponent; // knock model v4
+            kin.end_burn_fraction = s.desc.knock.model.end_burn_fraction; // knock model v5
             // P7b (knock model v2): the replay runs at the ECU's lambda target of this node (enrichment raises the fuel
             // vapour share of the end gas); the node's own cycle stays at lambda 1.
             const Table2D& lt = s.desc.knock.lambda_target;
@@ -547,7 +572,7 @@ void EngineMapGenTask::run_point(std::size_t i) {
             kin.fuel_mass_fraction = real(1.0) / (real(1.0) + kin.op.lambda * s.afr);
             for (std::size_t f = 0; f < s.knock_nf; ++f) {
                 kin.inv_on_term = s.knock_inv_on[f];
-                const engine_cycle::KnockLimitResult kr = engine_cycle::knock_limited_spark(kin, s.knock_mbt_btdc, s.desc.knock.margin_deg);
+                const engine_cycle::KnockLimitResult kr = engine_cycle::knock_limited_spark(kin, knock_mbt, s.desc.knock.margin_deg);
                 const std::size_t slot = (i < s.grid_n ? i : s.grid_n + (i - s.wot_base)) * s.knock_nf + f;
                 s.knock_kl[slot] = kr.theta_kl_btdc;
                 s.knock_flag[slot] = static_cast<unsigned char>((kr.limited ? 1 : 0) | (kr.saturated ? 2 : 0));
@@ -751,12 +776,29 @@ EngineMapsPtr EngineMapGenTask::finish() {
         em.eta_spark_spread = spread;
         for (unsigned char h : s.held) em.held_plenum_points += h;
     }
-    m.theta_mbt_deg.x = {s.rpm_axis.front(), s.rpm_axis.back()};
-    m.theta_mbt_deg.y = {y_out.front(), y_out.back()};
-    // theta_MBT (spark, deg BTDC): the MBT Wiebe start minus the ignition
-    // delay; constant (fixed Wiebe), kept as a map. delay 0 -> exactly -mbt_atdc.
-    m.theta_mbt_deg.values.assign(4, d.ignition_delay_deg == real(0.0) ? -s.mbt_atdc
-                                                                        : -(s.mbt_atdc - d.ignition_delay_deg));
+    if (s.law) {
+        // Burn law: theta_MBT (spark, deg BTDC) per output node, the node cycle's own MBT spark (its burn angles at its
+        // IVC state; a scheduled node's cycle ran at the ECU spark, which moves its IVC state only through the
+        // residual). A non-breathing (filled) node takes the node above (P7d D2), top-down like the fill below.
+        grid_table(m.theta_mbt_deg);
+        for (std::size_t ir = 0; ir < nr; ++ir) {
+            for (std::size_t ip = npo; ip-- > 0;) {
+                const std::size_t k = ir * npo + ip;
+                if (fill[k]) {
+                    if (ip + 1 < npo) m.theta_mbt_deg.values[k] = m.theta_mbt_deg.values[k + 1];
+                    continue;
+                }
+                m.theta_mbt_deg.values[k] = s.results[src(ir, ip)].mbt_spark_btdc;
+            }
+        }
+    } else {
+        m.theta_mbt_deg.x = {s.rpm_axis.front(), s.rpm_axis.back()};
+        m.theta_mbt_deg.y = {y_out.front(), y_out.back()};
+        // theta_MBT (spark, deg BTDC): the MBT Wiebe start minus the ignition
+        // delay; constant (fixed Wiebe), kept as a map. delay 0 -> exactly -mbt_atdc.
+        m.theta_mbt_deg.values.assign(4, d.ignition_delay_deg == real(0.0) ? -s.mbt_atdc
+                                                                            : -(s.mbt_atdc - d.ignition_delay_deg));
+    }
     // C17a follow-up: with a spark schedule every grid node ran at the
     // scheduled spark; store the MBT-equivalent eta_i = eta_gross(scheduled)
     // / eta_spark(scheduled - theta_mbt), evaluated with exactly the calls the
@@ -812,7 +854,10 @@ EngineMapsPtr EngineMapGenTask::finish() {
         for (std::size_t ip = 1; ip < npo; ++ip) {
             if (!(node_air[ir * npo + ip] > node_air[ir * npo + ip - 1])) {
                 throw std::runtime_error("engine map generator: air mass not strictly increasing in p_im at " +
-                                         std::to_string(s.rpm_axis[ir]) + " rpm (eta_i resampling needs it)");
+                                         std::to_string(s.rpm_axis[ir]) + " rpm (eta_i resampling needs it): " +
+                                         std::to_string(y_out[ip - 1]) + " Pa -> " + std::to_string(node_air[ir * npo + ip - 1]) +
+                                         " kg, " + std::to_string(y_out[ip]) + " Pa -> " + std::to_string(node_air[ir * npo + ip]) +
+                                         " kg");
             }
         }
     }

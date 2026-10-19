@@ -331,8 +331,11 @@ SimulatedEngine::TorqueEval evaluate_torque_impl(const SimulatedEngineMaps& m, c
         else if (als && als->retard_deg > real(0.0)) spark_applied_nr = spark_nr - als->retard_deg;
         else spark_applied_nr = spark_nr;
     }
-    e.theta_mbt_deg = m.maps.theta_mbt_deg.value(rpm, p);
-    const real dmbt_drpm = m.maps.theta_mbt_deg.dvalue_dx(rpm, p);
+    // Burn law: theta_MBT is a per-node table on the generator's p_im axis (WOT top row included), read at yp like ve and
+    // theta_kl. A pre-law (constant) table reads the same at any coordinate.
+    e.theta_mbt_deg = m.maps.theta_mbt_deg.value(rpm, yp);
+    const real dmbt_drpm = wot_rows ? m.maps.theta_mbt_deg.dvalue_dx(rpm, yp) + m.maps.theta_mbt_deg.dvalue_dy(rpm, yp) * ix.dy_drpm
+                                    : m.maps.theta_mbt_deg.dvalue_dx(rpm, p);
 
     // N2O plan N2 (section 1.2 steps 1-4): the charge. Per rev n = mdot_n*2pi/omega (dn/drpm = -n/rpm, the
     // constant-mass-flow source), kit fuel kf likewise; the air a and T_mix from the two port balances

@@ -66,10 +66,17 @@ namespace ps::drivetrain {
 // top row of its p_im-axis tables (SimulatedEngineMapsDesc::wot_p_im_pa, read
 // through map_pressure_index); a compressor-fed pipe engine and an adaptive
 // one keep 3 (their maps are unchanged).
+// Burn law (design C, owner decision 2026-10-19): an engine on the law (CycleModelDesc::burn_law == Standard, every
+// cycle-block engine) generates per-cycle burn angles and a per-node theta_MBT, so each path has a law version -
+// lumped 5, compressor-fed/adaptive pipe 6, ambient-fed pipe with WOT rows 7 - and every law engine's .psmaps key
+// differs from its pre-law one. A Fixed-law desc (the "burn_law": "fixed" escape hatch) keeps 1/3/4 and its maps.
 inline constexpr std::uint32_t kLumpedGeneratorVersion = 1;
 inline constexpr std::uint32_t kPipeGeneratorVersion = 3;
 inline constexpr std::uint32_t kPipeWotGeneratorVersion = 4;
-inline constexpr std::uint32_t kGeneratorVersion = kPipeWotGeneratorVersion; // the newest path
+inline constexpr std::uint32_t kLawLumpedGeneratorVersion = 5;
+inline constexpr std::uint32_t kLawPipeGeneratorVersion = 6;
+inline constexpr std::uint32_t kLawPipeWotGeneratorVersion = 7;
+inline constexpr std::uint32_t kGeneratorVersion = kLawPipeWotGeneratorVersion; // the newest path
 
 // Engine garage P7d: true when the generator adds the wide-open-throttle rows
 // (pipe engine fed from ambient through its throttle, fixed p_im grid).
@@ -78,9 +85,10 @@ inline constexpr std::uint32_t kGeneratorVersion = kPipeWotGeneratorVersion; // 
 }
 
 [[nodiscard]] inline std::uint32_t engine_map_generator_version(const CycleModelDesc& desc) {
-    const std::uint32_t base = !desc.intake.has_value()            ? kLumpedGeneratorVersion
-                               : engine_map_generates_wot_rows(desc) ? kPipeWotGeneratorVersion
-                                                                     : kPipeGeneratorVersion;
+    const bool law = desc.burn_law == CycleModelDesc::BurnLawMode::Standard;
+    const std::uint32_t base = !desc.intake.has_value()              ? (law ? kLawLumpedGeneratorVersion : kLumpedGeneratorVersion)
+                               : engine_map_generates_wot_rows(desc) ? (law ? kLawPipeWotGeneratorVersion : kPipeWotGeneratorVersion)
+                                                                     : (law ? kLawPipeGeneratorVersion : kPipeGeneratorVersion);
     return base + (desc.pressure_sampling.enabled ? 259 : 0);
 }
 

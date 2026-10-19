@@ -14,6 +14,11 @@ and writes, per package,
     out/epa_turbo/<package>_rows.json                          every row of the three data sheets (all columns)
     tests/support/fixtures/epa_turbo/<package>_rows.json       the compact copy for tests: the selected high-load rows
     tests/support/fixtures/epa_turbo/<package>_light_rows.json the compact light-load copy (phase B's no-knock check)
+    tests/support/fixtures/burn_law/<package>_part_rows.json  the part-load copy (burn law calibration, vault PHYS-079)
+    tests/support/fixtures/burn_law/<package>_wot_rows.json   the WOT copy (burn law phase 1b: the envelope rows)
+
+Two naturally aspirated packages are read for the burn law only (part-load file only, `part_only`):
+    Toyota 2.5 L A25A-FKS Tier 3 (E10)    Mazda 2.0 L SKYACTIV-G Tier 2 (E0, has a measured inlet air flow)
 
 Usage:   python -I tools/enginedata/epa_turbo_extract.py [--src DIR] [--stats]
 
@@ -33,10 +38,13 @@ rows are the near-WOT and part-boost rows below it. Nothing else is filtered: EC
 collapsed) stay in and are visible through their lambda / spark / turbine-inlet temperature. Phase B decides what is
 "knock limited"; this extraction only removes the part-load (naturally aspirated) rows.
 
-LIGHT-LOAD SELECTION (phase B, the <package>_light_rows.json copy): fired rows with
-    map_kpa <= 60, 0.95 <= lambda <= 1.05, bmep_bar >= 0.3
-- throttled, stoichiometric, positive work. The engine ran at the measured spark there without knock, so the true
-knock-limited spark is at least the measured spark: a one-sided check, nothing is fitted to these rows' spark.
+PART-LOAD SELECTION (burn law, the <package>_part_rows.json copy): fired rows with
+    map_kpa <= 85, 0.95 <= lambda <= 1.05, bmep_bar >= 1.0, rpm >= 1000, spark and a fuel flow present
+- throttled, stoichiometric, clearly fired and off idle (idle spark carries a torque reserve, not MBT). The burn law
+calibration treats the measured spark there as MBT [AS]: no knock at these loads, no torque-reserve retard.
+
+WOT SELECTION (burn law phase 1b, the <package>_wot_rows.json copy): the envelope rows (highest torque of their 50-rpm
+bin) with rpm >= 1000 and spark, fuel flow, IMT and torque present. The burn law test applies its own lambda window.
 
 LIGHT-LOAD SELECTION (phase B, the <package>_light_rows.json copy): fired rows with
     map_kpa <= 60, 0.95 <= lambda <= 1.05, bmep_bar >= 0.3
@@ -66,12 +74,19 @@ WT = Path(__file__).resolve().parents[2]
 DEFAULT_SRC = Path(r"S:\claude_code\physics_sim\out\epa_turbo_dl")
 OUT_DIR = WT / "out" / "epa_turbo"
 FIXTURE_DIR = WT / "tests" / "support" / "fixtures" / "epa_turbo"
+BURN_DIR = WT / "tests" / "support" / "fixtures" / "burn_law"
+# burn law calibration sets (vault PHYS-079): training Ford 2.7 cell 9 Tier 2 + Honda L15B7 Tier 3; held out Ford 1.6
+# Tier 2, Mazda 2.5 T Tier 3, Mazda 2.0 Tier 2, A25A Tier 3.
+PART_PACKAGES = ("ford_27_t2_cell9", "honda_l15b7_t3", "ford_16_t2", "mazda_25t_t3", "mazda20_t2", "a25a_t3")
 
 DATA_SHEETS = ["Steady State", "High Load Initial", "High Load Final"]
 BMEP_FRACTION = 0.5
 LIGHT_MAP_KPA = 60.0
 LIGHT_LAMBDA = (0.95, 1.05)
 LIGHT_BMEP_BAR = 0.3
+PART_MAP_KPA = 85.0
+PART_BMEP_BAR = 1.0
+PART_MIN_RPM = 1000.0
 SPEED_BIN_RPM = 50
 
 # package key -> (directory fragment, engine, fuel file/name, fuel report, cam convention)
@@ -96,6 +111,12 @@ PACKAGES = {
                          fuel="epa_tier2_26864", report="26864", icam="ret", ecam="ret"),
     "mazda_25t_t3": dict(frag="2016-mazda-2-5-l-turbo-skyactiv-g-engine-tier-3", engine="mazda_25t_skyactiv",
                          fuel="tier3_e10_cert", report="26781", icam="ret", ecam="ret"),
+    # naturally aspirated, burn law only (part-load copy only). A25A: "Intake Cam Phaser Advance" / "Exhaust Cam Phaser
+    # Retard" @ 1 mm lift; Mazda 2.0: "Intake Cam Phaser Retard" / "Exhaust Cam Phaser Retard" (workbook parameter lists).
+    "a25a_t3": dict(frag="2018-toyota-2.5l-a25a-fks-engine-tier3", engine="toyota_a25a_fks_gen",
+                    fuel="tier3_e10_cert", report="26781", icam="adv", ecam="ret", part_only=True),
+    "mazda20_t2": dict(frag="2014-mazda-2.0l-skyactiv-engine-tier-2", engine="mazda_skyactiv_g20",
+                       fuel="tier2_cert_23945", report="23945", icam="ret", ecam="ret", part_only=True),
 }
 
 # workbook header (lower case) -> output key
@@ -127,6 +148,7 @@ HEADER_MAP = {
     "exhaust lambda": "lambda",
     "exhaust lambda left": "lambda_left",
     "exhaust lambda right": "lambda_right",
+    "inlet air flow": "air_g_s",
     "intake cam phase": "icam_raw",
     "exhaust cam phase": "ecam_raw",
     "valve overlap": "valve_overlap_deg",
@@ -296,6 +318,40 @@ def compact_light(d: dict) -> dict:
     return c
 
 
+def is_part(r: dict) -> bool:
+    return (r.get("map_kpa", 1e9) <= PART_MAP_KPA and LIGHT_LAMBDA[0] <= r.get("lambda", 0.0) <= LIGHT_LAMBDA[1]
+            and r.get("bmep_bar", 0.0) >= PART_BMEP_BAR and r.get("rpm", 0.0) >= PART_MIN_RPM and "spark_btdc_deg" in r
+            and ("fuel_meter_g_s" in r or "inj_fuel_g_s" in r) and "imt_c" in r)
+
+
+def compact_part(d: dict) -> dict:
+    c = {k: v for k, v in d.items() if k not in ("rows", "row_count_all", "columns")}
+    keep = [r for r in d["rows"] if is_part(r)]
+    c["selection"] = (f"part load: map_kpa <= {PART_MAP_KPA}, {LIGHT_LAMBDA[0]} <= lambda <= {LIGHT_LAMBDA[1]}, "
+                      f"bmep_bar >= {PART_BMEP_BAR}, rpm >= {PART_MIN_RPM}, spark, fuel flow and IMT present "
+                      "(burn law calibration: measured spark taken as MBT [AS])")
+    c["row_count_all"] = d["row_count_all"]
+    c["row_count_selected"] = len(keep)
+    c["rows"] = keep
+    return c
+
+
+def is_wot(r: dict) -> bool:
+    return (r["envelope"] and r.get("rpm", 0.0) >= PART_MIN_RPM and "spark_btdc_deg" in r and "torque_nm" in r
+            and ("fuel_meter_g_s" in r or "inj_fuel_g_s" in r) and "imt_c" in r and "map_kpa" in r and "lambda" in r)
+
+
+def compact_wot(d: dict) -> dict:
+    c = {k: v for k, v in d.items() if k not in ("rows", "row_count_all", "columns")}
+    keep = [r for r in d["rows"] if is_wot(r)]
+    c["selection"] = (f"WOT: envelope rows (highest torque of the {SPEED_BIN_RPM}-rpm bin), rpm >= {PART_MIN_RPM}, spark, "
+                      "torque, fuel flow, MAP, lambda and IMT present (burn law phase 1b: WOT indicated work at measured spark)")
+    c["row_count_all"] = d["row_count_all"]
+    c["row_count_selected"] = len(keep)
+    c["rows"] = keep
+    return c
+
+
 def dump(path: Path, obj: dict) -> None:
     """Header keys on one line each, one row per line (diff friendly), compact separators."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -334,6 +390,11 @@ def main() -> int:
         d = extract(key, args.src)
         print(stats(d))
         if args.stats:
+            continue
+        if key in PART_PACKAGES:
+            dump(BURN_DIR / f"{key}_part_rows.json", compact_part(d))
+            dump(BURN_DIR / f"{key}_wot_rows.json", compact_wot(d))
+        if PACKAGES[key].get("part_only"):
             continue
         dump(OUT_DIR / f"{key}_rows.json", d)
         dump(FIXTURE_DIR / f"{key}_rows.json", compact(d))

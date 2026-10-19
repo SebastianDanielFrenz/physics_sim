@@ -26,7 +26,7 @@ KnockModelFile load_knock_model_json(const std::string& path) {
     }
     static const char* const kKeys[] = {"format", "model", "version", "source", "prefactor_s", "octane_exponent",
                                         "octane_index_k", "prefactor_scale", "pressure_exponent", "activation_k",
-                                        "dilution_exponent"};
+                                        "dilution_exponent", "end_burn_fraction"};
     for (auto it = j.begin(); it != j.end(); ++it) {
         bool known = false;
         for (const char* k : kKeys) known = known || it.key() == k;
@@ -60,6 +60,8 @@ KnockModelFile load_knock_model_json(const std::string& path) {
     f.params.pressure_exponent = param("pressure_exponent");
     f.params.activation_k = param("activation_k");
     f.params.dilution_exponent = param("dilution_exponent", true);
+    f.params.end_burn_fraction = param("end_burn_fraction"); // knock model v5
+    if (!(f.params.end_burn_fraction < 1.0)) throw std::runtime_error(where + "end_burn_fraction.value must be in (0, 1)");
     if (!(f.params.octane_index_k <= 1.0)) throw std::runtime_error(where + "octane_index_k.value must be in (0, 1]");
     return f;
 }

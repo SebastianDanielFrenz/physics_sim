@@ -68,9 +68,13 @@ constexpr real kPi = 3.14159265358979323846;
 real w_of(real rpm) { return rpm * 2.0 * kPi / 60.0; }
 
 // test_engine_map_generator.cpp's fixture (the generic ASSUMED 2 L I4 on a
-// 4 x 3 grid, F4 friction).
+// 4 x 3 grid, F4 friction). Burn law (2026-10-19, vault PHYS-079): this file
+// tests the FIXED-burn mechanism (a given burn duration and ignition delay), so
+// the fixture and the JSON engine run burn_law Fixed; the law's own spark
+// handling is test_burn_law.cpp's.
 CycleModelDesc fixture_desc() {
     CycleModelDesc d = ps::test::make_generic_i4_cycle_desc();
+    d.burn_law = CycleModelDesc::BurnLawMode::Fixed;
     d.grid_rpm = {1000.0, 2500.0, 4000.0, 5500.0};
     d.grid_p_im = {30000.0, 60000.0, 95000.0};
     d.friction.model = FrictionModelDesc::Model::PolynomialPistonSpeed;
@@ -223,6 +227,7 @@ json scheduled_engine_json() {
     j["idle_control"] = {{"kp_per_rpm", 0.001}, {"ki_per_rpm_s", 0.004}, {"max_throttle", 0.2}};
     j["ecu"] = {{"lambda_target", {{"rpm", {0.0, 7000.0}}, {"p_im_kpa", {20.0, 100.0}}, {"values", {{1.0, 1.0}, {1.0, 1.0}}}}}};
     j["cycle"] = cycle_json(fixture_desc());
+    j["cycle"]["burn_law"] = "fixed";
     j["cycle"]["spark_advance_deg"] = schedule_json();
     j["cycle"]["ignition_delay_deg"] = kTestDelayDeg;
     j["inertia_kgm2"] = 0.15;

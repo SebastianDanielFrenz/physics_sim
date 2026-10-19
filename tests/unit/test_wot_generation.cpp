@@ -128,7 +128,14 @@ ec::OperatingPoint gen_op(const CycleModelDesc& d, real rpm, real p) {
     if (d.intake->compressor_supply) op.p_supply_pa = std::max(kIsaAirPressurePa, p * 1.05);
     op.lambda = 1.0;
     const bool scheduled = !d.spark_advance_deg.x.empty();
-    op.spark_deg_atdc = scheduled ? -d.spark_advance_deg.value(rpm, p) + d.ignition_delay_deg : mbt_atdc(d);
+    if (d.burn_law == CycleModelDesc::BurnLawMode::Standard) {
+        // Burn law (2026-10-19, vault PHYS-079): the generator's node_op - ECU spark in Spark mode (the law adds its own
+        // delay), MBT tracking relative to the cycle's own MBT.
+        op.spark_mode = scheduled ? ec::OperatingPoint::SparkMode::Spark : ec::OperatingPoint::SparkMode::MbtOffset;
+        op.spark_deg_atdc = scheduled ? -d.spark_advance_deg.value(rpm, p) : 0.0;
+    } else {
+        op.spark_deg_atdc = scheduled ? -d.spark_advance_deg.value(rpm, p) + d.ignition_delay_deg : mbt_atdc(d);
+    }
     op.intake_advance_deg = d.cam.intake_advance_deg.x.empty() ? 0.0 : d.cam.intake_advance_deg.value(rpm, p);
     op.exhaust_retard_deg = d.cam.exhaust_retard_deg.x.empty() ? 0.0 : d.cam.exhaust_retard_deg.value(rpm, p);
     return op;
@@ -397,7 +404,7 @@ TEST_CASE("P7d W1: the Mazda pipe experiment generates Sketch maps with a WOT to
     for (real y : m->maps.ve.y) std::printf(" %.0f", y);
     std::printf(", non-breathing filled %d, dropped rows %d, held %d\n", m->nonbreathing_points, m->wot_dropped_rows,
                 m->held_plenum_points);
-    CHECK(m->generator_version == kPipeWotGeneratorVersion);
+    CHECK(m->generator_version == kLawPipeWotGeneratorVersion); // burn law 2026-10-19 (was kPipeWotGeneratorVersion 4)
     CHECK(m->nonbreathing_points >= 1); // the long-overlap nodes the fix exists for
     for (real v : m->maps.ve.values) CHECK((std::isfinite(v) && v > 0.0));
     check_nodes_exact(*m);
@@ -533,15 +540,19 @@ TEST_CASE("P7d W8c/W8d: WOT points keep the P1 allocation, progress and cancel c
 // W5h + W8e: compressor-fed pipe engines (the hyper) and lumped engines keep their key and content hash at every quality
 // (pins recorded on the unchanged generator, header). Keys always; the fast hashes here, the hyper's slow ones [long].
 TEST_CASE("P7d W5h/W8e: the hyper and lumped engines keep their keys and map hashes", "[cycle][pipe][drivetrain]") {
+    // 2026-10-19 burn law F + knock model v5 (vault PHYS-079) moved the A25A gen and Mazda keys and hashes; was A25A
+    // 0x7d4f5df61b83fd3d/0x75f0658d60c662b8, 0xbd44b606c7ef765f/0x4e108f53ec6e4541, 0x1d4a09fe71b9b9ce/0x470361fea395f4f3,
+    // Mazda 0xd64488ea1fff9442/0x1bb312f8a650b0f4, 0x964f30d973941b20/0xbafd38470361fbab, 0x3649dce1c9c9d7b1/0x94534cc297971f9e.
+    // The hyper pins below are NOT re-pinned yet: they wait on the owner's hyper decision (octane/spark data).
     check_pins("toyota_a25a_fks_gen.json", kEngines,
-               {{MapQuality::Sketch, 0x7d4f5df61b83fd3dull, 0x75f0658d60c662b8ull},
-                {MapQuality::Preview, 0xbd44b606c7ef765full, 0x4e108f53ec6e4541ull},
-                {MapQuality::Full, 0x1d4a09fe71b9b9ceull, 0x470361fea395f4f3ull}},
+               {{MapQuality::Sketch, 0x2fe4dae6fb085a53ull, 0x9fa4fb02b889c7abull},
+                {MapQuality::Preview, 0xefef82d64e9ce131ull, 0x2e71479db8c0b848ull},
+                {MapQuality::Full, 0x4ff4d6cdf86724a0ull, 0x2eaa40899574544bull}},
                true);
     check_pins("engine.json", kMazdaDir,
-               {{MapQuality::Sketch, 0xd64488ea1fff9442ull, 0x1bb312f8a650b0f4ull},
-                {MapQuality::Preview, 0x964f30d973941b20ull, 0xbafd38470361fbabull},
-                {MapQuality::Full, 0x3649dce1c9c9d7b1ull, 0x94534cc297971f9eull}},
+               {{MapQuality::Sketch, 0x8140a538e6448b19ull, 0x23a4d1f462b9a556ull},
+                {MapQuality::Preview, 0xc135fd4992b0043bull, 0x117bd3ef7ecc0cf8ull},
+                {MapQuality::Full, 0x213b51413c7a47aaull, 0x7cec2a203265eb47ull}},
                true);
     check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x98217b790e718eb9ull, 0xa09334bc88debc6cull}}, true);
     check_pins("hyper_v8_one1_audio.json", kEngines,
@@ -622,7 +633,7 @@ TEST_CASE("P7d W8h: the map cache keeps the WOT curve and writes the old format 
     const std::string dir = td.path.generic_string();
     const EngineMapsPtr m = mazda_pipes_sketch();
     store_cached_engine_maps(dir, 1, *m);
-    const EngineMapsPtr hit = load_cached_engine_maps(dir, 1, kPipeWotGeneratorVersion);
+    const EngineMapsPtr hit = load_cached_engine_maps(dir, 1, m->generator_version); // the maps' own stamp (burn law: v7, 2026-10-19)
     REQUIRE(hit != nullptr);
     CHECK(hit->content_hash == m->content_hash);
     CHECK(hit->maps.wot_p_im_pa.x == m->maps.wot_p_im_pa.x);
@@ -633,7 +644,7 @@ TEST_CASE("P7d W8h: the map cache keeps the WOT curve and writes the old format 
     const EngineMapsPtr l = generate_engine_maps(*lumped.cycle, lumped.fuels[0], MapQuality::Sketch, &pool());
     store_cached_engine_maps(dir, 2, *l);
     CHECK(!file_has_wot_tag(td.path / "0000000000000002.psmaps"));
-    const EngineMapsPtr lhit = load_cached_engine_maps(dir, 2, kLumpedGeneratorVersion);
+    const EngineMapsPtr lhit = load_cached_engine_maps(dir, 2, l->generator_version); // burn law: v5 (2026-10-19)
     REQUIRE(lhit != nullptr);
     CHECK(lhit->content_hash == l->content_hash);
     CHECK(!has_wot_rows(lhit->maps));

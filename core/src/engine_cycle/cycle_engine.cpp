@@ -716,7 +716,11 @@ CycleEngineResult CycleEngine::run() {
         mr.h_exh_j += y[kAccEvEnthalpy];
         mr.p_max_pa = std::max(mr.p_max_pa, s.p_max());
         // P7: the knock replay starts from the cylinder with the largest trapped mass (first on a tie).
-        if (c == 0 || s.ivc_cyl_m() > mr.ivc.m) mr.ivc = PointResult::Ivc{s.ivc_crank_deg(), s.ivc_cyl_m(), s.ivc_cyl_u(), s.ivc_cyl_mb()};
+        if (c == 0 || s.ivc_cyl_m() > mr.ivc.m) {
+            mr.ivc = PointResult::Ivc{s.ivc_crank_deg(), s.ivc_cyl_m(), s.ivc_cyl_u(), s.ivc_cyl_mb()};
+            mr.burn = s.burn_angles(); // burn law: the replay runs this cylinder's own burn
+        }
+        mr.mbt_spark_btdc += s.mbt_spark_btdc();
     }
     const real inv = 1.0 / static_cast<real>(nc);
     mr.w_gross_j *= inv;
@@ -724,6 +728,7 @@ CycleEngineResult CycleEngine::run() {
     mr.m_air_j_cyc *= inv;
     mr.m_fuel_kg *= inv;
     mr.residual_frac *= inv;
+    mr.mbt_spark_btdc *= inv;
     mr.h_exh_j *= inv;
     mr.t_exh_k = ev_m > 0.0 ? ev_mt / ev_m : 0.0;
     mr.ca50_deg = core_.cylinder(0).wiebe().angle_at_fraction(0.5) - 360.0;

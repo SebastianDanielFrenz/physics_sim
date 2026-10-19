@@ -45,12 +45,10 @@
       "y": [0.65, 0.62, 0.55, 0.45]
     },
     "cd_vs_l_over_d_source": "[AS] copied from engines/toyota_a25a_fks_gen.json (Heywood 1988 Fig. 6-19 shape, recalled).",
-    "ignition_delay_deg": 3.8632,
     "wiebe_a": 5.0,
     "wiebe_m": 2.0,
-    "burn_duration_deg": 40.3205,
     "ca50_mbt_deg_atdc": 8.0,
-    "wiebe_source": "[AS] copied from engines/toyota_a25a_fks_gen.json: burn duration 40.3205 deg and ignition delay 3.8632 deg are that file's [D] values from the MIT 2.61 lecture 9 'modern fast-burn' figures (a generic modern pent-roof engine, applied here unchanged); Wiebe a 5, m 2, CA50 at MBT 8 deg ATDC are the descriptor defaults.",
+    "wiebe_source": "Tier 2: Wiebe a 5, m 2 (Heywood 1988 sec. 9.2.1); CA50 at MBT 8 deg ATDC (plan D11 MBT rule). Burn duration and ignition delay: the burn law (design C, owner decision 2026-10-19, vault PHYS-079; ps/engine_cycle/burn_law.h, data/burn_laws/default.json) sets both per cycle from the cycle's own IVC state; at the law's reference state they are the C17a [D] values 40.3205 / 3.8632 deg derived from MIT 2.61 lecture 9 (vault PHYS-055), which this file carried as constants before the law.",
     "friction": {
       "model": "polynomial_piston_speed",
       "a_kpa": 66.61952180224716,
