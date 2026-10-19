@@ -204,7 +204,7 @@ TEST_CASE("N2O: no rev cycle or solenoid chatter in the hybrid DCT pull", "[n2o]
     sp.car = "tests/support/fixtures/vehicles/car_hyper_n2o_dct_hybrid.json";
     sp.gear_request = 99.0;
     sp.mode = 3.0;
-    sp.seconds = 16.0;
+    sp.seconds = 22.0;
 
     {   // the shipped controller (data/nitrous_controllers/custom_wet_800.json) carries the fix values; the defaults stay the old behaviour
         const vehicle::VehicleDesc d = load_car_(sp.car);
@@ -229,8 +229,11 @@ TEST_CASE("N2O: no rev cycle or solenoid chatter in the hybrid DCT pull", "[n2o]
 
     // The control run must show the owner's symptom (otherwise this test would prove nothing).
     REQUIRE(before.top_gear_s > 3.0);
-    CHECK(before.swings >= 4);
-    CHECK(before.short_restarts >= 1); // 1-2 per pull depending on the kit fuel (E5 jet 1, E85 jet 2): a chaotic count; the symptom is the swings above
+    // The rev swings of the legacy controller (4+ before the hybrid shift fix) came with the hybrid's ICE command hovering
+    // below full pedal (the TC ceiling folded into the request); the supervisor now keeps it at 1, so the control run
+    // shows the solenoid symptom only (ramp restarts after short closures).
+    CHECK(before.closes > after.closes);
+    CHECK(before.short_restarts >= 1); // the count depends on the kit fuel jet (E5 vs the E85 re-jet): a chaotic count
 
     REQUIRE(after.top_gear_s > 3.0);
     CHECK(after.swings <= 1);

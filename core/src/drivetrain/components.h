@@ -41,6 +41,7 @@ namespace ps::drivetrain {
 struct ComponentSubstepCtx {
     real electric_throttle = -1, electric_charge = -1; // hybrid supervisor overrides; -1 uses ordinary controls
     real electric_direction = 1.0; // actual selected gearbox direction, or the EV selector
+    bool throttle_is_command = false; // hybrid supervisor: `throttle` is already the ICE's final command (pedal curve and drive-mode bend were applied to the driver's pedal before the split)
     real h = 0.0;
     real throttle = 0.0;
     real brake = 0.0;

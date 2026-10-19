@@ -2258,8 +2258,12 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         for(const auto* c:fuel_cells_)if(c->hydrogen_kg>0)stack+=c->rated_power();
         for(const auto* m:electric_motors_)if(!m->is_crank_machine())motors+=m->rated_power();
         hybrid_available_w_=std::min(motors,pack+stack);
-        const real pedal=std::min(std::clamp(ctx.throttle,real(0),real(1)),ctx.traction_throttle_ceiling);
-        hybrid_requested_w_=pedal*hybrid_->requested_power_w;
+        // The driver's command (pedal curve and drive-mode bend applied, BEFORE the TC/LC ceilings): the power request, the
+        // ICE/electric split and the shift schedule all read it. A TC ceiling is applied once, downstream, by the engine
+        // stage (min with the ICE command) and the motors (min with their pedal) - not folded into the request, which
+        // amplified it through the split (pedal 0.75 -> ICE 0.5) and pulled the shift schedule to part-throttle points.
+        hybrid_driver_command_=std::clamp(throttle_stage_.evaluate(ctx_in).command,real(0),real(1));
+        hybrid_requested_w_=hybrid_driver_command_*hybrid_->requested_power_w;
         const bool running=last_engine_result_.state==EngineState::Running;
         const bool extra=mode!=0&&hybrid_requested_w_>hybrid_available_w_;
         const bool traction=hybrid_selector_!=0&&mode!=0&&(extra||mode>=2);
@@ -2273,6 +2277,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         ctx.electric_throttle=ready?std::clamp(hybrid_requested_w_/std::max(real(1),hybrid_available_w_),real(0),real(1)):0;
         ctx.electric_charge=0;
         ctx.throttle=traction?std::clamp((hybrid_requested_w_-hybrid_available_w_)/std::max(real(1),hybrid_->requested_power_w-hybrid_available_w_),real(0),real(1)):0;
+        ctx.throttle_is_command=true;
         if(hybrid_charge_latched_&&running&&hybrid_disconnect_) {
             const real rpm=std::abs(network_.omega(engine_crank_))*60/(2*3.14159265358979323846);
             const real taper=std::clamp((hybrid_->charge_target_soc-battery_soc())/real(.02),real(0),real(1));
@@ -2282,7 +2287,13 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         ctx.assist_auto_clutch=true;ctx.assist_auto_shift=true;
         if(hybrid_disconnect_)ctx.gear_request=0;
         else if(auto_)ctx.gear_request=hybrid_selector_<0?-1:real(99);
-        else ctx.gear_request=hybrid_selector_<0?-1:(gearbox_->current_position()==0?1:kGearRequestNone);
+        else {
+            // Manual-TCU gearbox: select 1st only from a settled neutral (D chosen from N, or traction resuming after the
+            // disconnect). A shift passes through position 0 while Releasing/Selecting; asking for 1st then reverted every
+            // upshift (and, as a valid request, discarded the driver's shift_up_count presses) - the car never left 1st.
+            const bool settled_neutral=gearbox_->current_position()==0&&gearbox_->phase()==Gearbox::Phase::Idle&&gearbox_->target()==0;
+            ctx.gear_request=hybrid_selector_<0?-1:(settled_neutral?1:kGearRequestNone);
+        }
     }
 
     // --- plan section 7.2 step 3: controllers -------------------------------
@@ -2362,7 +2373,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             s.throttle_request = engine_ ? last_throttle_command_.command : ctx.throttle;
             // Pedal P1: the gear choice reads the driver's request, before the TC ceiling below (V8c: the ceiling
             // at the launch-control hand-over made auto-shift take 2nd at 7.4 m/s and lug at 1430 rpm).
-            s.shift_throttle_request = s.throttle_request;
+            s.shift_throttle_request = hybrid_ ? hybrid_driver_command_ : s.throttle_request; // hybrid: the driver's pedal, not the ICE share
             // TC changes the available ECU request: launch clutch must not
             // wait for full-pedal launch RPM after TC has limited that request.
             // Assists I2 (D-LS3): not while TC acts through the clutch (ctx.traction_throttle_ceiling is 1 then).
@@ -2446,13 +2457,10 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             as.input_omega = network_.omega(gearbox_in_);
             as.output_omega = network_.omega(gearbox_out_);
             as.throttle = engine_ ? last_throttle_command_.command : ctx.throttle;
-            if(hybrid_) {
-                const real rpm=std::abs(network_.omega(engine_crank_))*60/(2*3.14159265358979323846);
-                real available=0;for(const auto* m:electric_motors_)if(!m->is_crank_machine())available+=m->available_power();
-                available=std::min(available,hybrid_available_w_);
-                if(last_engine_result_.state==EngineState::Running)available+=std::max(real(0),engine_->request_envelope(rpm).f_nm)*rpm*(2*3.14159265358979323846)/60;
-                as.throttle=std::clamp(hybrid_requested_w_/std::max(real(1),available),real(0),real(1));
-            }
+            // Hybrid: the schedule reads the driver's pedal command (before the TC ceiling), as in every other car. It used to
+            // read requested / (motor + ICE envelope power), a fraction of the whole system's capability: ~0.3 at full pedal
+            // on the hypercar, i.e. the part-throttle upshift points (4100 rpm instead of ~8000 in Racing).
+            if(hybrid_)as.throttle=hybrid_driver_command_;
             as.up_rpm_at_zero_throttle = ctx.drive_up_rpm_zero;
             as.up_rpm_at_full_throttle = ctx.drive_up_rpm_full;
             as.down_rpm_at_zero_throttle = ctx.drive_down_rpm_zero;
