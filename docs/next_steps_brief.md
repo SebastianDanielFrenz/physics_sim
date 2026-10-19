@@ -325,6 +325,12 @@ Levers:
 
 **Owner decision pending:** the next step is either a knock/gas-exchange increment, or simply enabling
 knock_limited on the A25A-based cars.
+
+**Status 2026-10-19 (burn law F + knock v5, branch `burn-law-investigation`, vault PHYS-079):** knock fix in
+progress. Knock v5 over-predicts A25A part-load knock (limit 10-17 deg at 60-80 kPa against a measured
+knock-free 28.7 deg). The hyper on E85 at 1.8 bar comes out at 1319 N*m / 928 kW against the real One:1's
+1371 N*m / 1 MW on the same geometry, compression, boost and fuel. So the model is suspected, not the
+hardware, and boost/turbo retunes are on hold until the knock fix lands.
 - **Files:** `core/src/engine_cycle/*`, `map_generator.cpp`, `tests/unit/test_knock_calibration.cpp`,
   `test_gas_exchange.cpp`, fixtures `tests/support/fixtures/mazda_skyactiv_g20/`.
 - **Size:** L.
@@ -428,6 +434,21 @@ Each is Opus design followed by Sonnet implementation, size L:
 - I9: electric and hybrid.
 - Diesel simulated engines (need autoignition + direct injection).
 - Positive-displacement supercharger, a prerequisite for the owner's Demon 170 fun engine.
+- **Variable geometry turbos** (owner 2026-10-19; queued right after the knock fix above). Covers vane
+  VGT/VNT (pivoting and sliding vanes), variable-flow or switched twin-scroll turbine housings, and variable
+  compressor inlet geometry if the design finds data for it. The real One:1 uses a patented 3D-printed variable
+  turbine housing ("3D-VGT"); its mechanism is not published, so its data stays [AS]. Purpose: response and
+  low-rpm boost (One:1 press: full boost about 2700 rpm, 1000 N*m from 3000 rpm), not peak flow; the compressor
+  speed edge is unchanged by turbine-side geometry. The design must decide:
+  - how vane or flap position enters the turbine model (flow area, efficiency, the stage maps from
+    `tools/turbo_sim` gaining a geometry axis);
+  - the controller: vanes alone or vanes plus wastegate, PID or feed-forward, actuator lag;
+  - the hardware file format and garage part, limit findings (vane saturation), cache and table keys;
+  - cited VGT data, gasoline VGT temperature limits as data, and the audio bank.
+  Accept: car_hyper with a VGT pair keeps its rated points and reaches full boost earlier than the
+  fixed-geometry pair, measured. Files: `turbo_pair.h`, `turbo_maps.h`/`turbo_stage_maps.h`, the turbo IO,
+  `tools/turbo_sim`. Not alongside Q4/Q5/S0 follow-ups (same files). Moves car_hyper pins only if the hyper
+  adopts it.
 - Greitzer surge model.
 - MAF metering.
 
@@ -509,7 +530,7 @@ S0 follow-ups ──────────┘ one at a time, and never alongsi
 R0 barrel rolls ─┐
 W7 → W8 → W9 → W10 ─┤ wheel_instance.* / vehicle_instance.*: one writer at a time (I8 also edits vehicle_instance)
 W11 → racing_game game-server environment sync;  W13 needs geo2map
-knock/gas exchange ─> thermal T6;  owner decision first
+knock/gas exchange (burn law F, knock v5) ─> thermal T6; ─> variable geometry turbos
 A9 SIMD, ARM64, P10/K20A data, N6: independent lanes (ARM64 needs -Full at merge)
 ```
 
