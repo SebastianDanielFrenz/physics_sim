@@ -21,13 +21,30 @@
       "source": "[AS] stoichiometric to 80 kPa, power enrichment to lambda 0.88 at wide open throttle (no Honda calibration available)."
     },
     "spark_advance_deg": {
-      "rpm": [0, 8400],
-      "p_im_kpa": [20, 100],
+      "rpm": [800, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 5800, 6000, 6200, 6500, 7000, 7500, 8000, 8400],
+      "p_im_kpa": [20, 30, 40, 50, 60, 70, 80, 90, 100],
       "values": [
-        [16.73105104, 16.73105104],
-        [16.73105104, 16.73105104]
+        [24.4968713, 23.13139234, 22.8230416, 22.68879625, 22.60354341, 22.53822514, 22.48290537, 22.43266701, 22.37747529],
+        [25.03795212, 24.06637931, 23.91132931, 23.8451269, 23.7984136, 23.75843623, 23.72633482, 23.69865105, 23.67041472],
+        [26.47833742, 26.206699, 26.2599828, 26.2874254, 26.28715587, 26.26299849, 26.23227081, 26.20042879, 26.16818039],
+        [28.45667898, 28.41113455, 27.47081717, 27.16631589, 27.21268987, 27.43319187, 27.72941698, 28.03462629, 28.09576109],
+        [28.22495349, 28.31221831, 28.50226715, 28.80991678, 29.08087403, 29.27230378, 29.30023816, 29.30860755, 29.31461601],
+        [27.81194391, 27.81194391, 27.81194391, 27.81194391, 28.80806008, 29.51429782, 30.06879251, 30.4441354, 30.41089826],
+        [29.68576866, 29.68576866, 29.68576866, 29.68576866, 30.54402547, 30.99050602, 30.98556853, 30.97990272, 30.97357492],
+        [29.65488826, 30.15451449, 30.15451449, 30.97559162, 31.05662028, 31.11122857, 31.15100718, 31.17928691, 31.19957976],
+        [27.87215019, 29.65704371, 29.65704371, 29.65704371, 30.45936546, 30.86308149, 31.06426288, 31.11533117, 31.15532517],
+        [29.5235327, 29.5235327, 29.5235327, 29.5235327, 30.15544552, 30.58214326, 30.91668422, 31.18115577, 31.37513618],
+        [28.39880722, 28.39880722, 28.39880722, 29.97187697, 30.65575078, 31.11359813, 31.48484431, 31.73631115, 31.90753754],
+        [28.2959444, 28.2959444, 30.04293971, 30.7627944, 31.16408808, 31.45133008, 31.68080273, 31.89431508, 32.08690381],
+        [29.95083511, 29.95083511, 29.95083511, 30.64160084, 31.03891012, 31.31899861, 31.54049784, 31.72572799, 31.88646618],
+        [28.5795573, 28.5795573, 28.5795573, 29.77067354, 30.40254663, 30.81773031, 31.12780188, 31.38681202, 31.59649935],
+        [29.31255187, 29.31255187, 29.31255187, 29.31255187, 30.5409587, 31.21741987, 31.63120661, 31.74756129, 31.79299014],
+        [30.83192081, 30.83192081, 30.83192081, 32.14733516, 32.731172, 33.11121408, 33.29562877, 33.40572393, 33.48250885],
+        [31.0981877, 31.0981877, 32.68417633, 33.23162315, 33.52667048, 33.71934741, 33.86525449, 33.97847286, 34.0666063],
+        [31.04546177, 31.04546177, 32.28329349, 32.71812224, 32.95250289, 33.10250815, 33.20908371, 33.29015304, 33.35505715],
+        [30.51035149, 30.51035149, 30.51035149, 31.5578216, 32.03714031, 32.31245623, 32.50427618, 32.6484691, 32.7647426]
       ],
-      "source": "[D] the minimum over the two cam profiles of the generator's MBT spark (theta_mbt_deg of each profile's generated maps, printed by the hidden case 'P9 diag: ECU spark table = min over the profiles' generated MBT spark' in tests/unit/test_cam_profiles.cpp): with the engine's fixed Wiebe (CA50 8 deg ATDC, burn 40.3205 deg, delay 3.8632 deg) both profiles' MBT is the same constant 16.731 deg BTDC, so the engine runs at MBT on either cam. No Honda spark calibration was available; Knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg): runtime spark = min(this table, theta_kl)."
+      "source": "[D] the minimum over the two cam profiles of the generator's MBT spark at every grid node (theta_mbt_deg of each profile's generated maps, printed by the hidden case 'P9 diag: ECU spark table = min over the profiles' generated MBT spark' in tests/unit/test_cam_profiles.cpp). Burn law phase 2b (2026-10-19, vault PHYS-079): re-derived under burn law F - the Wiebe duration now follows each node's charge, so MBT varies 22.4-34.1 deg BTDC over the grid (was the constant 16.731 deg of the fixed 40.3 deg burn); the profiles differ by up to 5.4 deg below 7500 rpm (the minimum keeps the engine at or behind MBT on either cam). No Honda spark calibration was available; knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg): runtime spark = min(this table, theta_kl)."
     }
   },
   "idle_rpm": 800.0,
