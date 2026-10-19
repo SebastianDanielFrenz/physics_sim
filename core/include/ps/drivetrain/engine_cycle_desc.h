@@ -18,6 +18,7 @@
 
 #include "ps/drivetrain/installation_desc.h"
 #include "ps/drivetrain/table2d.h"
+#include "ps/engine_cycle/knock_model.h"
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h"
 
@@ -258,6 +259,9 @@ struct CycleModelDesc {
         // here for an engine that opts in. The knock replay of a node runs at this lambda (the grid node's own cycle
         // stays at lambda 1, the generator's convention); empty = lambda 1.
         Table2D lambda_target;
+        // Knock model v3: the Douaud-Eyzat parameter set of the replay (defaults = the calibrated compiled set, equal to
+        // data/knock_models/douaud_eyzat_v4.json). Folded into the cache key of an opted-in engine.
+        engine_cycle::KnockModelParams model;
     } knock;
 
     // ---- Tier 2 (frozen literature; every value carries its citation in the JSON source) ----

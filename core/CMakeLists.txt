@@ -223,6 +223,7 @@ add_library(ps_core STATIC
   src/io/engine_parts.cpp
   src/io/electronics_io.cpp
   src/io/limit_policy_io.cpp
+  src/io/knock_model_io.cpp
 
   src/drivetrain/box_lcp.cpp
   src/drivetrain/network.cpp

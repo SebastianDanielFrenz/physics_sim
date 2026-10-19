@@ -203,7 +203,7 @@
   },
   "inertia_kgm2": 0.3,
   "breakaway_torque_nm": 75.0,
-  "fuel": "../fuels/e5.json",
+  "fuel": "../fuels/e85.json",
   "ignition": "spark",
   "initial_state": "running",
   "default_ecu": "../ecus/hyper_v8_one1.json",

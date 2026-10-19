@@ -253,6 +253,38 @@ TEST_CASE("P1 N4: honda_k20a_dc5 bands (a)-(d)", "[pedal][drivetrain][cycle][vvl
 TEST_CASE("P1 N5: bmw_n52b30 bands (a)-(d)", "[pedal][drivetrain][cycle][vvl][long]") {
     check_bands("bmw_n52b30", load_sim("bmw_n52b30.json"), false);
 }
+TEST_CASE("P1 N5 diag: bmw_n52b30 700 rpm near full pedal", "[.][diag][pedal]") {
+    const SimulatedEngineDesc d = load_sim("bmw_n52b30.json");
+    for (real c : {0.9, 0.96, 0.98, 0.99, 1.0}) {
+        SimulatedEngine e(d);
+        e.reset(EngineState::Running);
+        Sensors s;
+        s.omega = 700.0 * kTwoPi / 60.0;
+        s.ignition = 1.0;
+        for (int i = 0; i < 960 * 4; ++i) {
+            const PreSolveResult r = e.pre_solve(s, ThrottleCommand{c, 0.0, 1.0}, TcuRequest{}, kH);
+            (void)e.post_solve(s.omega, kH);
+            if (i % 480 == 0 || i == 960 * 4 - 1)
+                std::printf("[N5 diag] c %.2f t %.2f u %.4f/%.4f tau_net %.2f p_im %.0f spark %.2f knock_retard %.2f plate %.4f\n", c, i * kH, e.lift_u(), e.lift_u_target(),
+                            r.tau0 - e.maps().c_k, r.p_intake_pa, r.spark_advance_deg, r.knock_retard_deg, r.throttle_eff);
+        }
+    }
+    SimulatedEngine e(d);
+    std::printf("[N5 diag] F(700) %.2f\n", e.request_envelope(700.0).f_nm);
+    // The steady tables sit on a 500, 750, 1000 ... rpm axis (build_maps), so F(700) = 0.2 T(500) + 0.8 T(750): the exact
+    // values at the two nodes and the interpolation they give, against the exact value at 700 (the knock-limited curve is
+    // strongly curved below the cycle grid's first rpm, 700).
+    {
+        const auto a = SimulatedEngine::steady_point(e.maps(), 500.0, 1.0, AmbientSample{});
+        const auto b = SimulatedEngine::steady_point(e.maps(), 750.0, 1.0, AmbientSample{});
+        std::printf("[N5 diag] exact T(500) %.2f (retard %.2f) T(750) %.2f (retard %.2f) -> linear at 700: %.2f\n", a.net_torque_nm, a.knock_retard_deg,
+                    b.net_torque_nm, b.knock_retard_deg, 0.2 * a.net_torque_nm + 0.8 * b.net_torque_nm);
+    }
+    const auto sp = SimulatedEngine::steady_point(e.maps(), 700.0, 1.0, AmbientSample{});
+    std::printf("[N5 diag] steady_point plate %.4f p_im %.0f net %.2f spark %.2f knock_retard %.2f lambda %.3f\n", sp.plate, sp.p_im_pa,
+                sp.net_torque_nm, sp.spark_deg, sp.knock_retard_deg, sp.lambda);
+}
+
 TEST_CASE("P1 H2: hyper bands (a)-(c)", "[pedal][drivetrain][turbo][long]") {
     check_bands("hyper_v8_one1_audio", load_sim("hyper_v8_one1_audio.json"), true);
 }

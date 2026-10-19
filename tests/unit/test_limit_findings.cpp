@@ -649,9 +649,10 @@ TEST_CASE("L18 the sweep's points are untouched by the findings (stock hyper val
     const DynoResult r = run_dyno_sweep(hyper(), nullptr, turbo_spec({5000.0}), &pool);
     REQUIRE(r.points.size() == 1);
     CHECK(r.points[0].converged);
-    CHECK(r.points[0].torque_nm == Catch::Approx(1378.5).margin(0.1));
+    // Re-pinned 2026-10-19 for the hyper on E85 with knock model v3, unchanged under v4 (was 1378.5 N*m / 91184 rpm on E5 without a knock limit).
+    CHECK(r.points[0].torque_nm == Catch::Approx(1369.06).margin(0.1));
     CHECK(r.points[0].boost_bar == Catch::Approx(1.759).margin(0.001));
-    CHECK(r.points[0].turbo_rpm == Catch::Approx(91184.0).margin(2.0));
+    CHECK(r.points[0].turbo_rpm == Catch::Approx(91172.9).margin(2.0));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

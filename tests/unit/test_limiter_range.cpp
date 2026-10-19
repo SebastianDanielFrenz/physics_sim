@@ -526,7 +526,9 @@ TEST_CASE("P1: the plate check tolerates a small dip (toyota_a25a_fks_gen, Sketc
     o.quality = MapQuality::Sketch;
     o.pool = &pool();
     o.cache_dir = cache_dir();
-    ComponentParams p = io::load_engine_json(kData + "/engines/toyota_a25a_fks_gen.json", o);
+    // knock opt-in (owner 2026-10-18) removed: this case is about the schedule-only engine's plate dip
+    const std::string sched = R"({"extends": "toyota_a25a_fks_gen.json", "ecu": {"ignition_strategy": null, "knock_margin_deg": null}})";
+    ComponentParams p = io::load_engine_json_from_string(sched, kData + "/engines", o);
     SimulatedEngineDesc d = std::get<SimulatedEngineDesc>(p);
     CHECK(d.plate_monotone_tolerance == 0.04);
     CHECK_NOTHROW(SimulatedEngine::build_maps(d));
@@ -536,7 +538,7 @@ TEST_CASE("P1: the plate check tolerates a small dip (toyota_a25a_fks_gen, Sketc
     CHECK_THROWS_WITH(SimulatedEngine::build_maps(d), ContainsSubstring("rpm 1500"));
     // Preview maps: 0.11 % dip [M] - the exact check throws, the default passes
     o.quality = MapQuality::Preview;
-    SimulatedEngineDesc pv = std::get<SimulatedEngineDesc>(io::load_engine_json(kData + "/engines/toyota_a25a_fks_gen.json", o));
+    SimulatedEngineDesc pv = std::get<SimulatedEngineDesc>(io::load_engine_json_from_string(sched, kData + "/engines", o));
     CHECK_NOTHROW(SimulatedEngine::build_maps(pv));
     pv.plate_monotone_tolerance = 0.0;
     CHECK_THROWS_WITH(SimulatedEngine::build_maps(pv), ContainsSubstring("not non-decreasing in plate"));

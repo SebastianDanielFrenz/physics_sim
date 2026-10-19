@@ -9,6 +9,8 @@
     "max_throttle": 0.1
   },
   "ecu": {
+    "ignition_strategy": "knock_limited",
+    "knock_margin_deg": 2.0,
     "lambda_target": {
       "rpm": [0, 7000],
       "p_im_kpa": [20, 100],
@@ -25,7 +27,7 @@
         [16.73105104, 16.73105104],
         [16.73105104, 16.73105104]
       ],
-      "source": "[D] the generator's MBT spark at every lift node (theta_mbt_deg of each node's generated maps, printed by the hidden case 'P10 diag: ECU spark table = min over the lift nodes' generated MBT spark' in tests/unit/test_lift_family.cpp): with the engine's fixed Wiebe (CA50 8 deg ATDC, burn 40.3205 deg, delay 3.8632 deg) the MBT spark is the same constant at every node, so the engine runs at MBT at every lift. No BMW spark calibration was available; knock is not modelled for this engine."
+      "source": "[D] the generator's MBT spark at every lift node (theta_mbt_deg of each node's generated maps, printed by the hidden case 'P10 diag: ECU spark table = min over the lift nodes' generated MBT spark' in tests/unit/test_lift_family.cpp): with the engine's fixed Wiebe (CA50 8 deg ATDC, burn 40.3205 deg, delay 3.8632 deg) the MBT spark is the same constant at every node, so the engine runs at MBT at every lift. No BMW spark calibration was available; Knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg): runtime spark = min(this table, theta_kl)."
     }
   },
   "idle_rpm": 700.0,
