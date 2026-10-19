@@ -285,6 +285,15 @@ TEST_CASE("P1 N5 diag: bmw_n52b30 700 rpm near full pedal", "[.][diag][pedal]") 
                 sp.net_torque_nm, sp.spark_deg, sp.knock_retard_deg, sp.lambda);
 }
 
+// Burn law phase 2b (2026-10-19): N5's bands with the generated knock limit switched off on every lift node (the ECU
+// table alone) - separates the knock limit from the rest of the 700 rpm inversion. Hidden; its CHECKs report only.
+TEST_CASE("P1 N5 diag: bmw_n52b30 bands with the knock limit off", "[.][diag][pedal]") {
+    SimulatedEngineDesc d = load_sim("bmw_n52b30.json");
+    d.maps.has_theta_kl = false;
+    for (SimulatedEngineMapsDesc& m : d.lift_node_maps) m.has_theta_kl = false;
+    check_bands("bmw_n52b30 knock off", d, false);
+}
+
 TEST_CASE("P1 H2: hyper bands (a)-(c)", "[pedal][drivetrain][turbo][long]") {
     check_bands("hyper_v8_one1_audio", load_sim("hyper_v8_one1_audio.json"), true);
 }

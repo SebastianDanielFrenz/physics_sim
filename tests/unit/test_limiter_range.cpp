@@ -37,6 +37,7 @@
 //   e  torque-map BeyondEngineData finding not emitted:     E1 (findings iff armed, car_sedan @20000) fails
 //   f  RpmRolloff::active from 0.95 n_e (inside the data):  R1 (active at 7000), S3 (torque and fuel differ inside) fail
 
+#define _CRT_SECURE_NO_WARNINGS // std::getenv in a hidden diag
 #include "ps/drivetrain/engine_dyno.h"
 #include "ps/drivetrain/limit_findings.h"
 #include "ps/drivetrain/limiter_range.h"
@@ -616,5 +617,106 @@ TEST_CASE("E1: every shipped car loads, drives and sweeps at a 2000 and a 20000 
             CHECK((beyond > 0) == (r.armed() && res.points.back().rpm > r.start_rpm));
             std::fflush(stdout);
         }
+    }
+}
+
+// Burn law phase 2b (2026-10-19): the A25A gen engine's steady-table plate dip, separated by cause. For each quality and
+// variant - (i) as shipped (knock limit on, margin 2), (ii) knock limit off (ignition_strategy unset), (iii) knock off
+// and the measured spark schedule clamped node by node to the generated MBT, (iv) knock on and the schedule clamped -
+// the largest relative dip (row maximum so far minus the point, over the row's largest |torque| so far: exactly the
+// quantity plate_monotone_tolerance bounds), where it sits, and the count of exactly decreasing steps (check 4). Hidden.
+TEST_CASE("G1 diag: A25A plate dip by cause", "[.][diag][limiter_range][drivetrain][cycle]") {
+    const std::string shipped = R"({"extends": "toyota_a25a_fks_gen.json"})";
+    const std::string noknock = R"({"extends": "toyota_a25a_fks_gen.json", "ecu": {"ignition_strategy": null, "knock_margin_deg": null}})";
+    auto clamp_to_mbt = [](SimulatedEngineDesc& d) {
+        Table2D& s = d.ecu.spark_advance_deg;
+        const std::size_t ny = s.y.size();
+        for (std::size_t ix = 0; ix < s.x.size(); ++ix)
+            for (std::size_t iy = 0; iy < ny; ++iy) {
+                real& v = s.values[ix * ny + iy];
+                v = std::min(v, d.maps.theta_mbt_deg.value(s.x[ix], s.y[iy])); // both tables: y = p_im [Pa]
+            }
+    };
+    for (const MapQuality q : {MapQuality::Sketch, MapQuality::Preview, MapQuality::Full}) {
+        io::EngineMapOptions o;
+        o.quality = q;
+        o.pool = &pool();
+        o.cache_dir = cache_dir();
+        const SimulatedEngineDesc base_on = std::get<SimulatedEngineDesc>(io::load_engine_json_from_string(shipped, kData + "/engines", o));
+        const SimulatedEngineDesc base_off = std::get<SimulatedEngineDesc>(io::load_engine_json_from_string(noknock, kData + "/engines", o));
+        struct V { const char* name; SimulatedEngineDesc d; };
+        std::vector<V> vs = {{"(i) shipped", base_on}, {"(ii) knock off", base_off}, {"(iii) off + clamp", base_off}, {"(iv) on + clamp", base_on}};
+        clamp_to_mbt(vs[2].d);
+        clamp_to_mbt(vs[3].d);
+        for (V& v : vs) {
+            v.d.plate_monotone_tolerance = 1.0;
+            const auto m = SimulatedEngine::build_maps(v.d);
+            const Table2D& t = m->steady_torque_nm;
+            const std::size_t ny = t.y.size();
+            real worst = 0.0, w_rpm = 0.0, w_plate = 0.0;
+            int dec = 0;
+            for (std::size_t ix = 0; ix < t.x.size(); ++ix) {
+                real peak = 0.0, rmax = -std::numeric_limits<real>::infinity();
+                for (std::size_t iy = 0; iy < ny; ++iy) {
+                    const real val = t.values[ix * ny + iy];
+                    if (iy > 0 && val < t.values[ix * ny + iy - 1]) ++dec;
+                    if (iy > 0 && peak > 0.0 && (rmax - val) / peak > worst) {
+                        worst = (rmax - val) / peak;
+                        w_rpm = t.x[ix];
+                        w_plate = t.y[iy];
+                    }
+                    peak = std::max(peak, std::abs(val));
+                    rmax = std::max(rmax, val);
+                }
+            }
+            std::printf("quality %d %-18s max dip %6.3f %% at rpm %5.0f plate %.3f, decreasing steps %d\n", static_cast<int>(q), v.name,
+                        100.0 * worst, w_rpm, w_plate, dec);
+        }
+        // the torque terms along p_im at the dip rows (knock off: the dip is not the knock limit's)
+        if (std::getenv("PS_G1_TERMS") == nullptr) continue;
+        SimulatedEngineDesc d = base_off;
+        d.plate_monotone_tolerance = 1.0;
+        const SimulatedEngine eng(d);
+        for (const real rpm : {real(1500.0), real(1750.0), real(2750.0)}) {
+            std::printf("  quality %d knock off, %.0f rpm\n   p_kPa    tau  tau_comb  tau_pump  tau_fric  air_mg  eta_i  eta_sp  spark    mbt\n",
+                        static_cast<int>(q), rpm);
+            for (real p = 25000.0; p <= 100000.0; p += 2500.0) {
+                const SimulatedEngine::TorqueEval e = eng.evaluate_torque(rpm / 9.549296585513721, p, true, 1.0, false);
+                std::printf("  %6.1f %7.2f %9.2f %9.2f %9.2f %7.2f %6.4f %7.4f %6.2f %6.2f\n", p / 1000.0, e.tau, e.tau_comb, e.tau_pump,
+                            e.tau_fric, e.m_air_rev * 1e6, e.eta_i, e.eta_spark, e.spark_deg, e.theta_mbt_deg);
+            }
+        }
+    }
+}
+
+// Burn law phase 2b (2026-10-19): demo_i4_pipes (car_sedan_pipes) WOT dyno up to its 6800 rpm fuel cut, Full maps, knock
+// limit as shipped and off - net torque, friction curve, applied spark, knock retard, manifold pressure, the roll-off
+// band, the steady WOT curve the ECU uses. Hidden.
+TEST_CASE("G1 diag: demo_i4_pipes WOT near the limiter", "[.][diag][limiter_range][drivetrain][cycle]") {
+    const char* env = std::getenv("PS_G1_ENGINE");
+    const std::string engine = env ? env : "demo_i4_pipes.json";
+    const std::string shipped = std::string(R"({"extends": ")") + engine + R"("})";
+    io::EngineMapOptions o;
+    o.quality = MapQuality::Full;
+    o.pool = &pool();
+    o.cache_dir = cache_dir();
+    const ComponentParams loaded = io::load_engine_json_from_string(shipped, kData + "/engines", o);
+    for (const bool knock : {true, false}) {
+        ComponentParams p = loaded;
+        SimulatedEngineDesc& d = std::get<SimulatedEngineDesc>(p);
+        if (!knock) d.maps.has_theta_kl = false; // the ECU table (MBT tracking for an engine without one) alone
+        const std::string* js = knock ? &shipped : nullptr;
+        const RpmRolloff r = rolloff_of(p);
+        const auto m = SimulatedEngine::build_maps(d);
+        std::printf("== %s (%s): limiter %.0f hyst %.0f, rolloff %s %.0f..%.0f, grid_rpm top %.0f\n", engine.c_str(),
+                    js != nullptr ? "shipped" : "knock off", d.limiter.rpm, d.limiter.hysteresis_rpm, r.armed() ? "armed" : "off", r.start_rpm,
+                    r.end_rpm, d.maps.ve.x.empty() ? 0.0 : d.maps.ve.x.back());
+        DynoSweepSpec spec;
+        spec.rpm = {5000, 5500, 6000, 6250, 6500, 6600, 6700, 6750, 6790, 6800};
+        const DynoResult res = run_dyno_sweep(p, nullptr, spec, &pool());
+        std::printf("   rpm  net_Nm  fric_Nm  steady_wot  spark  knock_ret  p_im_kPa  lambda\n");
+        for (const DynoPoint& pt : res.points)
+            std::printf("%6.0f %7.2f %8.2f %11.2f %6.2f %10.2f %9.2f %7.3f\n", pt.rpm, pt.torque_nm, d.maps.friction_torque_nm.evaluate(pt.rpm),
+                        m->steady_wot_nm.evaluate(pt.rpm), pt.spark_deg, pt.knock_retard_deg, pt.p_intake_kpa, pt.lambda);
     }
 }

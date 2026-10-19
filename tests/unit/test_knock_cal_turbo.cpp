@@ -179,6 +179,38 @@ std::unique_ptr<Package> load_a25a() {
     return pk;
 }
 
+// The A25A's EPA Tier 3 part-load rows (tests/support/fixtures/burn_law/a25a_t3_part_rows.json: MAP <= 85 kPa, lambda
+// 0.95-1.05, BMEP >= 1 bar, rpm >= 1000) - the A25A's own light/part-load no-knock rows, every row flagged envelope so
+// the envelope-only preparation keeps them. Engine and fuel as load_a25a (knock opted in, margin 0, no schedule).
+std::unique_ptr<Package> load_a25a_part() {
+    auto pk = std::make_unique<Package>();
+    pk->name = "a25a_part_light";
+    const std::unique_ptr<Package> base = load_a25a();
+    pk->desc = base->desc;
+    pk->fuel = base->fuel;
+    pk->proto = std::make_unique<ec::CycleStepper>(*pk->desc.cycle, pk->fuel.lhv_j_kg, pk->fuel.afr_stoich);
+    std::ifstream in(kSrc / "tests" / "support" / "fixtures" / "burn_law" / "a25a_t3_part_rows.json");
+    REQUIRE(in.good());
+    const json j = json::parse(in);
+    for (const json& r : j.at("rows")) {
+        Row w{};
+        w.rpm = r.at("rpm").get<real>();
+        w.map_kpa = r.at("map_kpa").get<real>();
+        w.imt_c = r.at("imt_c").get<real>();
+        w.lambda = r.at("lambda").get<real>();
+        w.spark_btdc = r.at("spark_btdc_deg").get<real>();
+        w.fuel_g_s = r.at("fuel_meter_g_s").get<real>();
+        w.exh_kpa = 0.0;
+        w.has_icam = w.has_ecam = true;
+        w.icam_adv = r.at("intake_cam_adv_deg").get<real>();
+        w.ecam_ret = r.at("exhaust_cam_ret_deg").get<real>();
+        w.envelope = true;
+        w.row = r.at("row");
+        pk->rows.push_back(w);
+    }
+    return pk;
+}
+
 // Boundary-condition switches for the per-row cycle point (sensitivities).
 struct BcOpt {
     bool exh_measured = true; // exhaust reservoir = measured turbine-inlet pressure (else ambient, the generator's choice)
@@ -396,6 +428,8 @@ std::vector<Set>& sets() {
         add(load_package("ford_16_levIII", "ford_16", true));
         add(load_package("mazda_25t_t2", "mazda_25t", true));
         add(load_package("mazda_25t_t3", "mazda_25t", true));
+        // Burn law phase 2b diag (PS_KCB_A25A_PART=1): the A25A's own part-load rows join the light-load constraint.
+        if (std::getenv("PS_KCB_A25A_PART") != nullptr) add(load_a25a_part());
         return v;
     }();
     return s;
@@ -1523,6 +1557,10 @@ TEST_CASE("KCB diag: hyper boost target at the knock limit", "[.][diag][knock][k
     for (real target : boosts) {
         CycleModelDesc c = *d.cycle;
         c.grid_p_im = boost_grid_p_im(*d.cycle, target);
+        // per-term budget switches: PS_HYPER_MARGIN overrides the ECU knock margin, PS_HYPER_NOKNOCK=1 drops the knock
+        // limit (plain MBT tracking)
+        if (const char* m = std::getenv("PS_HYPER_MARGIN")) c.knock.margin_deg = std::atof(m);
+        if (std::getenv("PS_HYPER_NOKNOCK") != nullptr) c.knock.enabled = false;
         const EngineMapsPtr maps = generate_engine_maps(c, d.fuels[0], MapQuality::Full, &jp);
         SimulatedEngineDesc e = d;
         e.cycle = c;
@@ -1602,3 +1640,86 @@ TEST_CASE("KCB diag: v5 coordinate descent", "[.][diag][knock][knock_cal]") {
     g_kv1bc_penalty = false;
     g_light_penalty = false;
 }
+
+// Burn law phase 2b: the A25A part-load rows (its own EPA Tier 3 MAP <= 85 kPa rows, measured spark, ECU logged no
+// knock) against a knock model at measured boundary conditions (KV1-BC's rule): per row theta_kl, min(spark, MBT) and
+// the violation, then per MAP band; then the fit numbers of the same model (A25A KV1-BC rows, Honda T3 rms, light-load
+// maximum over the turbo packages). Model from PS_KCB_SCALE/N/B/G/XB (defaults = shipped v5).
+TEST_CASE("KCB diag: A25A part-load rows against the knock model", "[.][diag][knock][knock_cal]") {
+    auto env = [](const char* k, real d) { const char* e = std::getenv(k); return e ? std::atof(e) : d; };
+    Model m;
+    m.scale = env("PS_KCB_SCALE", m.scale);
+    m.p_exp = env("PS_KCB_N", m.p_exp);
+    m.b_k = env("PS_KCB_B", m.b_k);
+    m.gamma = env("PS_KCB_G", m.gamma);
+    m.xb_end = env("PS_KCB_XB", m.xb_end);
+    if (std::getenv("PS_KCB_REFIT") != nullptr) { // refit the pre-factor alone, under the descent's penalised objective
+        g_kv1bc_penalty = true;
+        g_light_penalty = true;
+        prepare_sets(fit_bc());
+        const real centre = std::log10(kV2Scale) + (m.p_exp - ec::kDouaudEyzatPExponent) * std::log10(50.0) - (m.b_k - 3800.0) / 850.0 * 0.4343;
+        m = fit_scale(m, centre - 1.5, centre + 1.5);
+        std::printf("refit scale %.6g obj %.4f\n", m.scale, fit_rms_obj(m));
+    }
+    const std::unique_ptr<Package> pk = load_a25a_part();
+    BcOpt o = fit_bc();
+    const std::vector<Prepared> pr = prepare_all(*pk, o);
+    const std::vector<Res> r = eval_all(*pk, pr, m);
+    std::printf("model scale %.6g n %.3f B %.0f gamma %.2f xb %.3f\n", m.scale, m.p_exp, m.b_k, m.gamma, m.xb_end);
+    std::printf("  row   rpm   map  lam  spark    mbt     kl  viol  x_ivc  T_ivc  delay  dur  air\n");
+    struct Band { real lo, hi; int n = 0, viol = 0; real max_v = 0.0, sum_v = 0.0; };
+    Band bands[] = {{0, 40}, {40, 50}, {50, 60}, {60, 70}, {70, 80}, {80, 90}};
+    for (std::size_t i = 0; i < pk->rows.size(); ++i) {
+        if (!r[i].ok) continue;
+        const Row& w = pk->rows[i];
+        const real ref = std::min(pr[i].spark, pr[i].mbt_btdc);
+        const real v = r[i].limited ? std::max(real(0.0), ref - r[i].theta_kl) : 0.0;
+        std::printf("  r%-4d %5.0f %5.1f %4.2f %6.2f %6.2f %6.2f %5.2f %6.3f %6.1f %6.2f %5.1f %5.3f%s\n", w.row, w.rpm, w.map_kpa, w.lambda,
+                    w.spark_btdc, pr[i].mbt_btdc, r[i].limited ? r[i].theta_kl : std::nan(""), v, pr[i].x_ivc, pr[i].t_ivc,
+                    pr[i].kin.ignition_delay_deg, pr[i].kin.burn_duration_deg, pr[i].air_ratio, r[i].saturated ? " SAT" : "");
+        for (Band& b : bands) {
+            if (w.map_kpa < b.lo || w.map_kpa >= b.hi) continue;
+            ++b.n;
+            if (v > 0.0) ++b.viol;
+            b.max_v = std::max(b.max_v, v);
+            b.sum_v += v;
+        }
+    }
+    for (const Band& b : bands)
+        std::printf("band %3.0f-%3.0f kPa: n %2d violated %2d max %.2f mean %.2f deg\n", b.lo, b.hi, b.n, b.viol, b.max_v,
+                    b.n ? b.sum_v / b.n : 0.0);
+    // End-gas temperature scan (PS_KCB_DTSCAN): the part-load rows' largest violation with the end gas started dT colder
+    // than the IVC state (KnockReplayInput::end_gas_t0_offset_k) - how much too hot the part-load end gas would have to
+    // be for the model to agree with the measured no-knock spark.
+    if (std::getenv("PS_KCB_DTSCAN") != nullptr) {
+        for (const real dt : {0.0, -10.0, -20.0, -30.0, -40.0, -50.0, -60.0, -80.0}) {
+            std::vector<Prepared> q = pr;
+            for (Prepared& x : q) x.kin.end_gas_t0_offset_k += dt;
+            const LightStats ls = light_stats(q, eval_all(*pk, q, m));
+            std::printf("dT %+5.0f K: part rows limited %2d violated %2d max %.2f deg\n", dt, ls.limited, ls.violated, ls.max_v);
+        }
+    }
+    prepare_sets(fit_bc());
+    real a_rms = 0.0, h_rms = 0.0;
+    const real rms = fit_rms(m, &a_rms, &h_rms);
+    real a_max = 0.0;
+    for (const Set& s : sets())
+        if (s.pk->name == "a25a_kv1bc") a_max = stats(*s.pk, eval_all(*s.pk, s.pr, m), true).max_abs;
+    std::printf("fit: combined rms %.3f, A25A KV1-BC rms %.3f max %.3f, Honda T3 rms %.3f, light-load max violation %.3f deg\n",
+                rms, a_rms, a_max, h_rms, light_max_violation(m));
+    // Every set of the v5 calibration under this model: envelope stats (fit and held-out packages) or the one-sided
+    // light-load check, plus the saturated-row count.
+    for (const Set& s : sets()) {
+        const std::vector<Res> rs = eval_all(*s.pk, s.pr, m);
+        int sat = 0;
+        for (const Res& x : rs) sat += (x.ok && x.saturated) ? 1 : 0;
+        if (is_light_set(s.pk->name)) {
+            const LightStats ls = light_stats(s.pr, rs);
+            std::printf("  set %-28s light n %2d limited %2d violated %2d max %5.2f\n", s.pk->name.c_str(), ls.n, ls.limited, ls.violated, ls.max_v);
+        } else {
+            const Stats st = stats(*s.pk, rs, true);
+            std::printf("  set %-28s n %2d mean %+6.2f rms %5.2f max %5.2f sat %d\n", s.pk->name.c_str(), st.n, st.mean, st.rms, st.max_abs, sat);
+        }
+    }
+}
+

@@ -1,4 +1,5 @@
 // tests/unit/test_lift_family.cpp - engine garage P10: continuous intake lift (Valvetronic-style).
+#define _CRT_SECURE_NO_WARNINGS // std::getenv in the hidden diags
 //
 // Fixture: data/engines/bmw_n52b30.json (lumped cycle block, cam part data/cams/bmw_n52b30_valvetronic.json with an
 // intake lift family of six nodes u = 0, 0.15, 0.3, 0.5, 0.75, 1, ECU part data/ecus/bmw_n52b30.json with "lift_control").
@@ -1279,6 +1280,10 @@ TEST_CASE("P10 diag: ECU spark table = min over the lift nodes' generated MBT sp
     std::printf("P10 diag: theta_mbt over every node and grid point: %.10g .. %.10g deg\n", lo, hi);
     // Burn law phase 2b: the law's MBT varies over the grid, so print the node-wise minimum as the ECU table.
     const Table2D& b = *t.front();
+    // PS_P10_RULE=u1 prints the u = 1 node's MBT table instead of the minimum; PS_P10_VERBOSE=1 adds every node's value.
+    const char* rule_env = std::getenv("PS_P10_RULE");
+    const bool u1_rule = rule_env != nullptr && std::string(rule_env) == "u1";
+    const bool verbose = std::getenv("PS_P10_VERBOSE") != nullptr;
     for (const Table2D* x : t) {
         REQUIRE(x->x == b.x);
         REQUIRE(x->y == b.y);
@@ -1293,6 +1298,12 @@ TEST_CASE("P10 diag: ECU spark table = min over the lift nodes' generated MBT sp
         for (std::size_t j = 0; j < b.y.size(); ++j) {
             real v = 1e9;
             for (const Table2D* x : t) v = std::min(v, x->at(i, j));
+            if (u1_rule) v = b.at(i, j); // the u = 1 node's own MBT
+            if (verbose) {
+                std::printf("<");
+                for (const Table2D* x : t) std::printf("%.2f ", x->at(i, j));
+                std::printf(">");
+            }
             std::printf("%s%.10g", j ? ", " : "", v);
         }
         std::printf("]%s\n", i + 1 < b.x.size() ? "," : "");
