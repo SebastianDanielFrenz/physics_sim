@@ -705,7 +705,9 @@ TEST_CASE("Garage P1 T4b: Sketch of a pipe engine is complete and worker-count i
     const EngineMapsPtr a = generate_engine_maps(d, fuel, MapQuality::Sketch, &ten);
     const EngineMapsPtr b = generate_engine_maps(d, fuel, MapQuality::Sketch);
     CHECK(a->quality == MapQuality::Sketch);
-    CHECK(a->generator_version == kPipeWotGeneratorVersion); // engine garage P7d: ambient-fed pipe engine
+    // engine garage P7d: ambient-fed pipe engine. 2026-10-19 (burn law F, vault PHYS-079): the fixture runs the
+    // standard burn law, so it generates as the law's pipe-WOT version 7 (was kPipeWotGeneratorVersion 4).
+    CHECK(a->generator_version == kLawPipeWotGeneratorVersion);
     CHECK(same_engine_maps(*a, *b));
     // (Loading pipe-engine maps into a SimulatedEngine is covered through the loader by the A5/A6 tests; the
     // generic mvem_fixtures base engine used by engine_on() is built for the lumped fixture's grid.)
