@@ -138,6 +138,7 @@ add_executable(ps_unit_tests
   test_gearbox_rating.cpp
   test_electric_drive.cpp
   test_hybrid_shift.cpp
+  test_hybrid_ice_start_gear.cpp
   test_brake_blend.cpp
   test_brake_blend_gearbox.cpp
   test_automatic_gearbox_io.cpp
