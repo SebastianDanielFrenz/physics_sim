@@ -70,3 +70,63 @@ The reflection from a motor to the rims is a tree over the shaft graph, evaluate
 - The motor's request is limited by the tightest open hub; the pads of the corners it brakes are reduced by exactly the reflected torque, so the total is the request in every substep.
 - Not covered: a hybrid supervisor that opens the gearbox itself (`hybrid_control` selects neutral when no traction is wanted) removes the regeneration of a motor upstream of the gearbox by this rule; the pads then brake. A motor behind an automatic gearbox stays outside the scheme.
 - Hashing: the ramp state and the three configuration values are hashed only for a motor that has a dynamic path; a car without one hashes as before.
+
+## Envelope and dyno
+
+The motor law, the DC supply budget and the hybrid power split are public pure functions. The runtime calls them, so a garage chart
+and the car use one implementation. Extracting them changed no state hash; the pins are in tests/unit/test_electric_pins.cpp.
+
+- `ps/drivetrain/electric_envelope.h`:
+  - `motor_full_load_point(motor, rpm, electrical_budget_w, h, content_j = inf)` returns `{torque_nm, power_w, electrical_w, limit}`.
+    `limit` is one of `PeakTorque`, `RatedPower`, `BatteryDischarge`, `MaxRpm`, `Empty` (`Idle` when the motor does not drive).
+    This is the motor's own `pre_solve` law at full command: the rated-power corner uses the substep's rotor-inertia projection
+    `omega + h*T/J`, so the power stays just under `max_power_w`. The pack's grant scales the request; near empty the
+    residual-energy bound applies.
+  - Building blocks: `motor_drive_request`, `motor_drive_torque`, `motor_drives`.
+  - `battery_discharge_budget_w(battery, soc, h)` returns `min(content, max_discharge_w*h)/h`.
+  - `fuel_cell_supply_w(cell, battery, soc, hydrogen_kg, h)` is the stack's supply: `max_power_w`, scaled by a SOC ramp
+    `clamp((target_soc - soc)/0.05, 0, 1)`, and limited by the hydrogen on board and the pack's charge acceptance.
+- `ps/drivetrain/hybrid_split.h`:
+  - `hybrid_full_pedal_split(control, available_w, pedal, drive_mode, soc, charge_latched)` returns `{requested_w,
+    electric_command, engine_command, engine_coupled, engine_wanted, charge_latched}`.
+  - The supervisor's own step is `hybrid_power_split(control, HybridSplitInput)`.
+  - Rules: requested = pedal x `requested_power_w`. Electric command = `min(1, requested/available)`. The ICE is coupled in Normal
+    when the request exceeds the electric potential, and always in Sport and Racing. Its command is the deficit
+    `(requested - available)/(requested_power_w - available)`. A low SOC latches an engine start (Eco: decoupled, charging only).
+- `ps/drivetrain/powertrain_dyno.h`: `run_powertrain_dyno(vehicle, maps, PowertrainDynoSpec, pool, cancel)` returns one point per
+  axis value.
+  - Method: a chassis dyno. The car's own Powertrain is built without a chassis. Every hub is held at `v / r_i` by an implicit
+    speed hold (`-D (omega_new - target)`, `D = 1e6 N*m*s/rad`). The spec's axis (`EngineRpm` = gearbox input in the held gear,
+    `MotorRpm` of motor k, `GearboxOutputRpm`, `RoadSpeed`) sets `v` through the shaft's kinematic ratio at 1 m/s. Everything
+    else runs as in the car at 240/960 Hz: throttle stage, hybrid supervisor including start/stop and neutral when decoupled,
+    motor law, pack budget and allocation, fuel cell, gear/reduction/diff losses, clutch and engine.
+  - What is held: SOC and hydrogen are held at the spec values for the whole point. The gear is held through a dyno-only hook
+    (`Powertrain::set_dyno_gear_hold`; auto-shift is off, and a hybrid's disconnect still selects neutral). Automatic, DCT and CVT
+    gearboxes are rejected for now.
+  - Settling: like `run_dyno_sweep`. Window means over 0.5 s; two consecutive passing pairs on the wheel power (0.2 %/s) and, for
+    a turbo engine, on boost (0.005 bar/s); at least 1 s (three windows), at most 15 s.
+  - Per point: engine rpm, net crank torque (`tau0 - d*dw` plus the engine's Coulomb row, i.e. `run_dyno_sweep`'s `tau0 - c_k`)
+    and command; gear; each motor's rpm, torque, power, electrical power and limit; pack and stack power; system power at the hubs
+    and its torque at the axis shaft; boost; `battery_limited`; the supervisor's requested and available power, coupled and
+    charging flags; `converged` and `settle_s`.
+  - Execution: one job per point, each with its own Powertrain, so the result is bit-identical for any worker count. `cancel`
+    has `run_dyno_sweep`'s semantics (GenerationCancelled). There is no progress callback, as in `run_dyno_sweep`.
+  - Limits: no tyre slip, no aero load, no chassis; the hubs absorb whatever the powertrain gives. Gear-mesh losses are the
+    runtime's lagged reconstruction, so each mesh passes `P_out = P_in / (2 - eta)`.
+
+Sample sweeps (pedal 1, release build, 2026-10-19):
+
+| car | axis point | result |
+|---|---|---|
+| car_electric | 1000 rpm per motor | 2 x 600 N*m (PeakTorque), 123.2 kW at the hubs |
+| car_electric | 9000 rpm | 2 x 317.5 N*m (RatedPower), 586.7 kW; pack 629.9 kW |
+| car_electric, 100 kW pack | 3000 rpm | 2 x 150 N*m (BatteryDischarge), 92.4 kW, pack 99.2 kW |
+| car_fuel_cell | 3000 rpm | 377 kW mechanical, stack 150 kW, pack 246.9 kW net |
+| car_fuel_cell, 10 kW pack + 30 kW stack | 3000 rpm | 2 x 60 N*m, 37.7 kW mechanical |
+| car_hybrid Normal, 3rd | 3000 rpm | engine 187 N*m (WOT) + motor 286.4 N*m at 4714 rpm (pack-limited 148.8 kW), 190.1 kW at the hubs |
+| car_hybrid Eco, 3rd | 3000 rpm | engine off, neutral, motor only: 134.5 kW |
+| car_sedan, 3rd | 1500 / 4500 / 6000 rpm | engine 164 / 200 / 182 N*m, the WOT curve exactly (= `run_dyno_sweep`) |
+| car_hyper (twin turbo, Sketch maps), 4th | 3000 / 5000 / 7000 rpm | engine 1214.7 / 1369.1 / 1310.4 N*m at 1.78 / 1.76 / 1.71 bar (`run_dyno_sweep` within 4e-7), 359 / 675 / 905 kW at the hubs, settled in 5-6.5 s |
+
+Cost: 29 points for car_electric take 22 ms serial and 4.3 ms on 10 workers. The 12-point car_hybrid Normal sweep takes 30.5 ms
+serial and 9.0 ms on 10 workers. Tests: tests/unit/test_powertrain_dyno.cpp `[drivetrain][electric][dyno]`.

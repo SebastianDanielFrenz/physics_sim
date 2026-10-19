@@ -138,6 +138,7 @@ add_executable(ps_unit_tests
   test_gearbox_rating.cpp
   test_electric_drive.cpp
   test_electric_pins.cpp
+  test_powertrain_dyno.cpp
   test_hybrid_shift.cpp
   test_brake_blend.cpp
   test_brake_blend_gearbox.cpp

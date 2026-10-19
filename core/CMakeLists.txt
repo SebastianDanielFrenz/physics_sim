@@ -238,6 +238,7 @@ add_library(ps_core STATIC
   src/drivetrain/engine_rig.cpp
   src/drivetrain/engine_dyno.cpp
   src/drivetrain/electric_envelope.cpp
+  src/drivetrain/powertrain_dyno.cpp
   src/drivetrain/limit_findings.cpp
   src/drivetrain/limit_remedies.cpp
   src/drivetrain/engine_rules.cpp
