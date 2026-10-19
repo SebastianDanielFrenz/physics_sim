@@ -191,7 +191,7 @@ TEST_CASE("Audio bank prep P1: demo_i4_pipes bank equals the pre-move generator;
                 static_cast<unsigned long long>(r10.key), static_cast<unsigned long long>(bank_content_hash(*r10.bank)), r10.bytes,
                 log10.done.size(), log10.total);
     CHECK_FALSE(r10.cache_hit);
-    CHECK(bank_content_hash(*r10.bank) == 0x3bf1282f66ec4f9fULL /* re-pinned 2026-10-19, cause: knock model v4, was 0xc983bd04834bc403 (v3), 0x5611596ff3be5702; 2026-10-18: knock opt-in of demo_i4_pipes, was 0x1b0b7ef18220095b */);  // pre-move generator; P7d maps (was 0x1d178f47cb870602)
+    CHECK(bank_content_hash(*r10.bank) == 0x223721215604dc87ULL /* re-pinned 2026-10-19, cause: burn law F + knock v5 + MBT tracking (spark table removed), was 0x3bf1282f66ec4f9f (knock v4); knock model v4, was 0xc983bd04834bc403 (v3), 0x5611596ff3be5702; 2026-10-18: knock opt-in of demo_i4_pipes, was 0x1b0b7ef18220095b */);  // pre-move generator; P7d maps (was 0x1d178f47cb870602)
     CHECK(r10.bytes == 4253824);
     CHECK(r10.bank->key == r10.key);
     CHECK(r10.path == tools::audio_bank_cache_path(dir10.string(), r10.key));
@@ -229,7 +229,7 @@ TEST_CASE("Audio bank prep P1: demo_i4_pipes bank equals the pre-move generator;
     std::printf("P1: 1 worker %.2f s\n", r1.seconds);
     CHECK_FALSE(r1.cache_hit);
     CHECK(r1.key == r10.key);
-    CHECK(bank_content_hash(*r1.bank) == 0x3bf1282f66ec4f9fULL /* re-pinned 2026-10-19, cause: knock model v4, was 0xc983bd04834bc403 (v3), 0x5611596ff3be5702; 2026-10-18: knock opt-in of demo_i4_pipes, was 0x1b0b7ef18220095b */);
+    CHECK(bank_content_hash(*r1.bank) == 0x223721215604dc87ULL /* re-pinned 2026-10-19, cause: burn law F + knock v5 + MBT tracking (spark table removed), was 0x3bf1282f66ec4f9f (knock v4); knock model v4, was 0xc983bd04834bc403 (v3), 0x5611596ff3be5702; 2026-10-18: knock opt-in of demo_i4_pipes, was 0x1b0b7ef18220095b */);
     CHECK(read_file(r1.path) == read_file(r10.path));  // the cache files are byte-identical
     CHECK(log1.done.size() == log10.done.size());
     CHECK(log1.strictly_by_one());
