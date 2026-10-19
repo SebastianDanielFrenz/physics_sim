@@ -73,9 +73,11 @@ TEST_CASE("Electric pins: state hashes of EV, fuel-cell and hybrid pulls", "[ev]
     }
     const Pin pins[9] = {
         {"car_electric WOT", 0xa21b507ab32c71c9ull},
-        {"car_electric 100 kW pack WOT", 0x10546b0bd04eaa6dull},
+        // 2026-10-19 proportional discharge allocation (Battery::reserve_discharge): was 0x10546b0bd04eaa6d (component order).
+        {"car_electric 100 kW pack WOT", 0xa38a4372c053b432ull},
         {"car_fuel_cell WOT", 0x0610de97253cfd3full},
-        {"car_fuel_cell 10 kW pack + 30 kW stack WOT", 0x8e9e9bc42c01e683ull},
+        // 2026-10-19 proportional discharge allocation: was 0x8e9e9bc42c01e683 (component order).
+        {"car_fuel_cell 10 kW pack + 30 kW stack WOT", 0xa360e3419f34177eull},
         {"car_hybrid Eco WOT", 0x4c23b7286cd6f18full},
         {"car_hybrid Normal WOT", 0x2712a8e54088a401ull},
         {"car_hybrid Sport WOT", 0x9f0ef54b6962910cull},

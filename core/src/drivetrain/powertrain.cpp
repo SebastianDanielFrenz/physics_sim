@@ -2706,6 +2706,9 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     }
     for(auto& b:batteries_) b->begin_substep(ctx.h);
     if (!regen_maps_.empty()) prepare_regen(ctx);
+    // Discharge allocation: every motor that will drive this substep registers its request with its pack first, so a
+    // limited pack shares its budget in proportion (Battery::reserve_discharge; docs/electric_drive.md).
+    for(const ElectricMotor* m:electric_motors_) m->battery().add_drive_claim(m->drive_claim_j(ctx,network_));
     for (auto& c : components_) {
         if (!regen_maps_.empty() && c.get() == brakes_) reflect_regen(ctx); // every motor has run: the pads take the rest
         c->pre_solve(ctx, network_, assembly_);

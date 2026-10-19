@@ -2,7 +2,7 @@
 
 Vehicle powertrain components may include any number of `electric_motor` machines and `battery` stores alongside the existing combustion engine, gearbox and shaft components. Motor port `shaft` connects through the usual `shafts`; the motor's `battery` names a battery component. A motor does not occupy the single combustion-engine slot. Motors may share a battery, share an ICE shaft, or drive independent axles. Electrical resources are separate from fuel/fluid links.
 
-`battery`: `capacity_kwh`, `initial_soc` (0..1), `max_discharge_w`, `max_charge_w`, `mass_kg`. Runtime energy uses joules through IEnergyStore. The shared store allocates each substep's charge/discharge budget in component-array order. There is no voltage, thermal, cell-resistance or degradation model in this increment.
+`battery`: `capacity_kwh`, `initial_soc` (0..1), `max_discharge_w`, `max_charge_w`, `mass_kg`. Runtime energy uses joules through IEnergyStore. A shared store's discharge budget per substep is min(content, max_discharge_w x h), plus what a fuel cell adds that substep. When the motors that drive this substep ask for more than that, each gets a share proportional to its request (every driving motor registers its request before the motors run; see "Discharge allocation" below). The charge budget (regeneration, fuel-cell supply) is still granted in component-array order. There is no voltage, thermal, cell-resistance or degradation model in this increment.
 
 `electric_motor`: `battery`, `peak_torque_nm`, `max_power_w`, `max_rpm`, `inertia_kgm2`, `efficiency` (0..1, exclusive zero), `regen_torque_nm`, `mass_kg`, `axis_local`. A sampled constant-torque/constant-power envelope controls the shaft torque, with a rotor-inertia prediction for the substep's power budget. Torque is zero beyond max_rpm. Mechanical work uses solved shaft speed; electrical energy accounts for fixed motor/inverter efficiency. Regeneration uses an implicit damping torque to avoid reversing the rotor at a stop. Optional `regen_power_w` (default 0 = `max_power_w`) limits regeneration power at the shaft; negative is rejected. Brake blending: see below.
 
@@ -13,6 +13,31 @@ Without a gearbox, selector requests latch D (>0), N (0), R (<0); spawn is N. An
 PowertrainSnapshot adds `electric_fitted`, `electric_ready`, `electric_motor_count`, `motor_rpm` (fastest machine), `motor_torque_nm` (signed sum), `electric_power_w` (signed mechanical sum), `battery_soc` (energy-weighted), `battery_capacity_kwh` and `battery_power_w` (positive discharge). The new cumulative energy terms are `electric_out`, `battery_draw`, `electric_loss`; the mechanical ledger includes electric_out. EV speedo uses driven-hub rotation. Fixed-reduction EVs publish transmission_kind=4 and D/N/R through transmission_selector. Combustion engine state remains Off on an EV; adapters must display READY rather than infer readiness from combustion state.
 
 All fixture ratings are authored test parameters, not production-car measurements. `data/vehicles/car_electric.json` is a two-axle 600 kW sedan testbed with a shared 90 kWh pack.
+### Discharge allocation
+
+Decision (2026-10-19): a pack that cannot feed every driving motor splits its substep budget in proportion to the motors' requests.
+Before, the budget went in component-array order, so on a battery-limited dual-motor car the first motor took all of it and the
+second got nothing (car_electric with a 100 kW pack: the front motor 94 kW, the rear 0 at 3000 rpm and above; now 47/47 kW, same
+total). How it works: after the batteries open their substep budgets, the Powertrain asks every motor for the request it will make
+this substep (`ElectricMotor::drive_claim_j`, the same inputs and drive law as its `pre_solve`) and registers it with the motor's
+pack (`Battery::add_drive_claim`). In `Battery::reserve_discharge`, while the claims still to come are larger than both the budget
+left and the request, the request gets `left x request / claims`. Otherwise it gets `min(left, request)`, the old rule. So an
+unlimited pack, a sole motor, the last claimant and a request that registered no claim behave as before. Only cars whose pack is
+the limit change. Two pins moved: car_electric 100 kW and car_fuel_cell 10 kW + 30 kW stack. Every hybrid pin stayed the same,
+since there the generator only drives when the traction motor does not. The claims are not hashed; they are rebuilt every substep.
+
+Alternatives considered:
+- Keep component order. Simple and already deterministic. But the last motor drops to zero, which flips a dual-motor car's torque
+  split at the battery limit (a FWD car becomes RWD), and the outcome depends on the order in the file.
+- Equal shares per motor. Simple, but it wastes budget: a motor that asks for less than its share leaves energy unused unless the
+  shares are redistributed in a second pass. It also ignores the motors' different ratings.
+- A priority or torque-split setting (per-axle bias). This belongs to a future torque-vectoring controller; nothing calls for it yet.
+- Two passes inside the component loop. Not possible: the motors run inside the single component loop, and what the first motor is
+  granted must be known before the second motor runs.
+
+The proportional rule needs one extra pass over the motors per substep. It stays deterministic, and it is bit-identical wherever the
+pack is not the limit.
+
 ## Hydrogen and hybrid development packages
 
 `fuel_cell` is a lumped stack plus independent hydrogen tank feeding a named battery/DC bus. Fields: battery, max_power_w, efficiency, target_soc, hydrogen_capacity_kg, initial_hydrogen_kg, specific_energy_j_kg, mass_kg (dry stack/auxiliaries/tank), ready_channel. Generated electrical energy is limited by stack power, charge acceptance, available fuel and buffer headroom. It contributes to the DC supply budget in addition to the battery discharge limit. Conversion efficiency is fixed; no electrochemical/thermal stack or pressure dynamics are claimed. `fuel_cell_electric`, `fuel_cell_chemical`, `fuel_cell_loss` close the source conversion ledger. Hydrogen fill changes chassis contents mass when enabled. Snapshot fields separately report stack electrical power and remaining hydrogen; an ICE tank is independent.
