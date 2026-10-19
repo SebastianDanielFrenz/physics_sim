@@ -1,4 +1,5 @@
 #include "powertrain.h"
+#include "ps/drivetrain/hybrid_split.h"
 
 #include "engine_params_util.h"
 #include "engine_simulated.h"
@@ -2251,8 +2252,6 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         const bool ready=channel(hybrid_ready_slot_,1)>.5;
         const int mode=static_cast<int>(std::clamp(std::round(channel(hybrid_mode_slot_,1)),real(0),real(3)));
         if(ctx_in.gear_request!=kGearRequestNone)hybrid_selector_=ctx_in.gear_request<0?-1:(ctx_in.gear_request>0?1:0);
-        if(battery_soc()<=hybrid_->low_soc)hybrid_charge_latched_=true;
-        if(battery_soc()>=hybrid_->charge_target_soc-real(1e-6))hybrid_charge_latched_=false;
         real pack=0,motors=0,stack=0;
         for(const auto& b:batteries_)if(b->soc()>0)pack+=b->desc.max_discharge_w;
         for(const auto* c:fuel_cells_)if(c->hydrogen_kg>0)stack+=c->rated_power();
@@ -2263,20 +2262,30 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         // stage (min with the ICE command) and the motors (min with their pedal) - not folded into the request, which
         // amplified it through the split (pedal 0.75 -> ICE 0.5) and pulled the shift schedule to part-throttle points.
         hybrid_driver_command_=std::clamp(throttle_stage_.evaluate(ctx_in).command,real(0),real(1));
-        hybrid_requested_w_=hybrid_driver_command_*hybrid_->requested_power_w;
         const bool running=last_engine_result_.state==EngineState::Running;
-        const bool extra=mode!=0&&hybrid_requested_w_>hybrid_available_w_;
-        const bool traction=hybrid_selector_!=0&&mode!=0&&(extra||mode>=2);
-        const bool want=ready&&(hybrid_charge_latched_||mode>=2||extra);
+        // The split itself is the public pure function (ps/drivetrain/hybrid_split.h; the charge latch is updated in it).
+        HybridSplitInput split_in;
+        split_in.driver_command=hybrid_driver_command_;
+        split_in.available_w=hybrid_available_w_;
+        split_in.drive_mode=mode;
+        split_in.battery_soc=battery_soc();
+        split_in.charge_latched=hybrid_charge_latched_;
+        split_in.ready=ready;
+        split_in.selector=hybrid_selector_;
+        const HybridSplit split=hybrid_power_split(*hybrid_,split_in);
+        hybrid_charge_latched_=split.charge_latched;
+        const bool traction=split.engine_coupled;
+        const bool want=split.engine_wanted;
         hybrid_idle_s_=want?0:hybrid_idle_s_+ctx.h;
         hybrid_ice_requested_=want||(ready&&running&&hybrid_idle_s_<hybrid_->stop_delay_s);
         hybrid_crank_s_=(!hybrid_ice_requested_||running)?0:hybrid_crank_s_+ctx.h;
         ctx.ignition=hybrid_ice_requested_?1:0;
         ctx.starter=hybrid_ice_requested_&&!running&&hybrid_crank_s_<hybrid_->crank_timeout_s?1:0;
         hybrid_disconnect_=!traction||!running;
-        ctx.electric_throttle=ready?std::clamp(hybrid_requested_w_/std::max(real(1),hybrid_available_w_),real(0),real(1)):0;
+        hybrid_requested_w_=split.requested_w;
+        ctx.electric_throttle=split.electric_command;
         ctx.electric_charge=0;
-        ctx.throttle=traction?std::clamp((hybrid_requested_w_-hybrid_available_w_)/std::max(real(1),hybrid_->requested_power_w-hybrid_available_w_),real(0),real(1)):0;
+        ctx.throttle=split.engine_command;
         ctx.throttle_is_command=true;
         if(hybrid_charge_latched_&&running&&hybrid_disconnect_) {
             const real rpm=std::abs(network_.omega(engine_crank_))*60/(2*3.14159265358979323846);
@@ -2294,6 +2303,13 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             const bool settled_neutral=gearbox_->current_position()==0&&gearbox_->phase()==Gearbox::Phase::Idle&&gearbox_->target()==0;
             ctx.gear_request=hybrid_selector_<0?-1:(settled_neutral?1:kGearRequestNone);
         }
+    }
+
+    // Powertrain dyno (powertrain_dyno.cpp) only: hold the dyno's gear (a hybrid supervisor's disconnect keeps its neutral).
+    // dyno_gear_hold_ is kNoDynoGearHold in every car, so this is never taken at runtime and nothing here is hashed.
+    if (dyno_gear_hold_ != kNoDynoGearHold && gearbox_ && !auto_) {
+        ctx.assist_auto_shift = false;
+        if (!(hybrid_ && hybrid_disconnect_)) ctx.gear_request = static_cast<real>(dyno_gear_hold_);
     }
 
     // --- plan section 7.2 step 3: controllers -------------------------------
