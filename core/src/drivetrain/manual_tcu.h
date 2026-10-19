@@ -95,6 +95,10 @@ public:
         real up_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), up_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
         real down_rpm_at_zero_throttle = std::numeric_limits<real>::quiet_NaN(), down_rpm_at_full_throttle = std::numeric_limits<real>::quiet_NaN();
         real close_time_s = std::numeric_limits<real>::quiet_NaN();
+        // Hybrid ICE connect (rev-match window): no auto-shift decision while true, and the dwell timer is held at 0 so the
+        // first decision comes min_time_in_gear_s after the window closes (an engine still rising to the gear's input speed
+        // is not a reason to downshift). false = bit-identical to before.
+        bool defer_auto_shift = false;
     };
 
     struct Outputs {
