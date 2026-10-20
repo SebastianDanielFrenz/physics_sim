@@ -656,7 +656,8 @@ Decomp decompose(const ec::BurnLawParams& p, const ec::BurnLawInput& in) {
     d.l_p = p.mk_beta_0 * std::log(p.reference_unburned_pressure_pa / p_eff);
     d.l_d = std::log(dil(p.reference_residual_fraction) / dil(in.residual_fraction));
     d.g_rpm = std::pow(in.rpm / p.reference_rpm, p.rpm_exponent);
-    d.f = p.scale * d.g_rpm * std::exp(p.flame_speed_exponent * (d.l_phi + d.l_t + d.l_p + d.l_d));
+    d.f = p.scale * d.g_rpm * std::exp(p.flame_speed_exponent * (d.l_phi + d.l_t + d.l_p + d.l_d)) *
+          std::pow(d.pu / p.reference_unburned_pressure_pa, p.pressure_exponent); // phase 3 pressure term (1 at e_p 0)
     return d;
 }
 
@@ -1052,9 +1053,15 @@ TEST_CASE("BLC diag: joint fit option details", "[.][diag][burn_law_cal]") {
 }
 
 // =====================================================================================================================
-// The shipped fit (phase 1b, option F): rpm_exponent 0.2 [C] and flame_speed_pressure_factor 0 held, (ln s, e_s) fitted
-// jointly on the training packages' part-load MBT gaps (sigma 7 deg) and WOT work ratios (sigma 0.03 on ln r, WOT joint
-// rows), through the production evaluate_burn_law. Pass 2 re-prepares both row sets with the pass-1 constants.
+// The shipped fit (phase 3, 2026-10-20): rpm_exponent 0.2 [C] and flame_speed_pressure_factor 0 held, (ln s, e_s, e_p)
+// fitted on the training packages' part-load MBT gaps only (sigma 7 deg), through the production evaluate_burn_law. Pass 2
+// re-prepares the rows with the pass-1 constants.
+// Why the WOT work rows left the fit (phase 1b had them at sigma 0.03): the measured trapped air of a row is fuel x lambda
+// x AFR (or the inlet air flow), which counts blow-through air as trapped whenever MAP exceeds the exhaust pressure during
+// the valve overlap. The measured work per trapped air is then understated and f_needed biased slow: 25 of the 34 WOT
+// joint rows scavenge (Ford 2.7 1000-3001 rpm MAP - exhaust +7..+29 kPa, Honda 1605-2013, Ford 1.6 1301-3000, Mazda 2.5 T
+// 1300/1501), and through them the phase 1b law burned the clean rows ~1.33x too slowly (ln(f/f_need) +0.283 mean on the 9
+// rows with MAP <= exhaust). The clean rows are the WOT validation (BLC1 band 2), the scavenging rows are report only.
 // =====================================================================================================================
 namespace {
 
@@ -1068,11 +1075,12 @@ ec::BurnLawParams with_joint(const ec::BurnLawParams& base, const std::vector<re
     ec::BurnLawParams p = base;
     p.scale = std::exp(x[0]);
     p.flame_speed_exponent = x[1];
+    p.pressure_exponent = x[2];
     return p;
 }
 
-std::vector<real> law_joint_residuals(const Set& part, const std::vector<std::vector<Prepared>>& wot,
-                                      const ec::BurnLawParams& p, bool train) {
+// The part-load MBT gaps / sigma of one set (phase 3: the training set is the fit's only rows).
+std::vector<real> law_part_residuals(const Set& part, const ec::BurnLawParams& p, bool train) {
     std::vector<real> res;
     for (std::size_t k = 0; k < packages().size(); ++k) {
         if (packages()[k]->spec.train != train) continue;
@@ -1080,22 +1088,19 @@ std::vector<real> law_joint_residuals(const Set& part, const std::vector<std::ve
             if (w.ok) res.push_back((predicted_mbt(*packages()[k], p, w.in) - w.spark) / kSigmaDeg);
         }
     }
-    const auto& sc = wot_scans();
-    for (std::size_t k = 0; k < wot_packages().size(); ++k) {
-        if (wot_packages()[k]->spec.train != train) continue;
-        const Package& pk = *wot_packages()[k];
-        for (std::size_t i = 0; i < pk.rows.size(); ++i) {
-            if (!wot[k][i].ok || !sc[k][i].ok || !wot_joint_row(pk.rows[i])) continue;
-            res.push_back(std::log(interp_w(sc[k][i], law_f(p, wot[k][i].in)) / sc[k][i].w_meas) / kSigmaR);
-        }
-    }
     return res;
 }
 
-ec::BurnLawParams joint_fit(const Set& part, const std::vector<std::vector<Prepared>>& wot, const ec::BurnLawParams& start) {
+// A WOT joint row that cannot scavenge (declared phase 3, before the fit): the exhaust pressure is measured (turbine inlet,
+// else catalyst inlet) and MAP <= it, so no fresh charge blows through during the overlap and the measured trapped air is
+// the cylinder's.
+bool wot_clean_row(const Row& r) { return wot_joint_row(r) && std::isfinite(r.exh_kpa) && r.map_kpa <= r.exh_kpa; }
+bool wot_scavenging_row(const Row& r) { return wot_joint_row(r) && std::isfinite(r.exh_kpa) && r.map_kpa > r.exh_kpa; }
+
+ec::BurnLawParams joint_fit(const Set& part, const ec::BurnLawParams& start) {
     const std::vector<real> x = lm_generic(
-        [&](const std::vector<real>& v) { return law_joint_residuals(part, wot, with_joint(start, v), true); },
-        {std::log(start.scale), start.flame_speed_exponent});
+        [&](const std::vector<real>& v) { return law_part_residuals(part, with_joint(start, v), true); },
+        {std::log(start.scale), start.flame_speed_exponent, start.pressure_exponent});
     return with_joint(start, x);
 }
 
@@ -1104,26 +1109,30 @@ const Calibration& calibration() {
         Calibration out;
         const ec::BurnLawParams start; // the compiled defaults
         const Set s0 = prepare_set(start);
-        out.first = joint_fit(s0, wot_prepared_shipped(), start);
+        out.first = joint_fit(s0, start);
         out.set = prepare_set(out.first);
         out.wot = prepare_wot(out.first);
-        out.second = joint_fit(out.set, out.wot, out.first);
+        out.second = joint_fit(out.set, out.first);
         return out;
     }();
     return c;
 }
 
-// The declared phase 1b WOT bands (see the BLC1/BLC2 comments) evaluated for params p on the calibration's WOT rows.
+// The declared WOT bands (see the BLC1/BLC2 comments) evaluated for params p on the calibration's WOT rows.
 struct WotBandStats {
     int n = 0, out_rapid = 0, out_dev = 0, out_mbt = 0;
     real f_min = 1e9, f_max = 0, mbt_min = 1e9, mbt_max = -1e9, slope = 0;
     real lnr_train = 0, lnr_hold = 0, lnr_hold_const = 0;
     int n_train = 0, n_hold = 0;
+    // phase 3: ln(f_law / f_needed) on the non-scavenging joint rows of all six packages (rows whose f_needed is not finite
+    // counted apart), and the same on the scavenging rows (report only)
+    Stats clean, scav;
+    int clean_nonfinite = 0;
 };
 
 WotBandStats wot_band_stats(const Calibration& cal, const ec::BurnLawParams& p) {
     WotBandStats r;
-    std::vector<real> lt, lh, lhc;
+    std::vector<real> lt, lh, lhc, lclean, lscav;
     real sxx = 0, sxy = 0, sx = 0, sy = 0, nn = 0;
     const auto& sc = wot_scans();
     for (std::size_t k = 0; k < wot_packages().size(); ++k) {
@@ -1153,6 +1162,14 @@ WotBandStats wot_band_stats(const Calibration& cal, const ec::BurnLawParams& p) 
                 }
             }
             if (!sc[k][i].ok || !wot_joint_row(row)) continue;
+            if (wot_clean_row(row) || wot_scavenging_row(row)) {
+                const real fn = f_needed(sc[k][i]);
+                if (!std::isfinite(fn)) {
+                    if (wot_clean_row(row)) ++r.clean_nonfinite;
+                } else {
+                    (wot_clean_row(row) ? lclean : lscav).push_back(std::log(f / fn));
+                }
+            }
             const real lr = std::log(interp_w(sc[k][i], f) / sc[k][i].w_meas);
             if (pk.spec.train) {
                 lt.push_back(lr);
@@ -1168,20 +1185,29 @@ WotBandStats wot_band_stats(const Calibration& cal, const ec::BurnLawParams& p) 
     r.lnr_hold_const = stats_of(lhc).rms;
     r.n_train = int(lt.size());
     r.n_hold = int(lh.size());
+    r.clean = stats_of(lclean);
+    r.scav = stats_of(lscav);
     return r;
 }
 
 } // namespace
 
-// BLC1: the shipped constants are the joint fit, and the declared phase 1b bands that hold (declared before the fit;
-// part-load bands = the phase 1 rms + 1 deg, the WOT-work band = no worse than the constant burn on the held-out rows,
-// the direction band = a pooled WOT log-log slope of f over rpm <= 0.30, MIT 2.61 lec. 9 [C] rpm^0.2 + 0.1 [AS]).
+// BLC1: the shipped constants are the part-load fit, and the declared bands hold (measured 2026-10-20: part-load rms
+// training 6.21 / held out 4.72 deg; clean WOT n 9 mean +0.011 rms 0.164, 1 row without a finite f_needed; slope 0.116;
+// scavenging rows n 25 mean -0.290 rms 0.347, report only). Sabotage: the phase 1b constants (s 1.5742, e_s 0.3541, e_p 0)
+// fail bands 1 and 2 (rms 6.98 / 6.62 deg, clean WOT mean +0.287 rms 0.322). Phase 3 bands (declared 2026-10-20
+// before the final run): band 1 - the part-load MBT gap rms no worse than the phase 1b law's on the same rows (training
+// 6.95, held out 6.61 deg, measured on the phase 1b row table); band 2 - the non-scavenging WOT joint rows of all six
+// packages (wot_clean_row, n >= 8) |mean ln(f/f_needed)| <= 0.10 and rms <= 0.20 [AS] (phase 1b: +0.283 / 0.319); band 3 -
+// the direction band, pooled WOT log-log slope of f over rpm <= 0.30 (MIT 2.61 lec. 9 [C] rpm^0.2 + 0.1 [AS]), unchanged.
+// The phase 1b WOT-work band on the training rows (ln r rms <= 0.05) is gone with those rows' place in the fit; reported.
 // The second pass re-runs every row with the fitted constants; it moves them by less than the stated tolerance.
 TEST_CASE("BLC1 the burn law's shipped constants are the joint part-load + WOT fit", "[burn_law][cycle][long]") {
     const Calibration& cal = calibration();
     const ec::BurnLawParams shipped;
     CHECK(cal.second.scale == Catch::Approx(shipped.scale).epsilon(2e-3));
     CHECK(cal.second.flame_speed_exponent == Catch::Approx(shipped.flame_speed_exponent).margin(2e-3));
+    CHECK(cal.second.pressure_exponent == Catch::Approx(shipped.pressure_exponent).margin(2e-3));
     CHECK(shipped.rpm_exponent == 0.2);                 // [C], held
     CHECK(shipped.flame_speed_pressure_factor == 0.0);  // option F, held
     // Band 1: part-load MBT gap rms.
@@ -1201,9 +1227,10 @@ TEST_CASE("BLC1 the burn law's shipped constants are the joint part-load + WOT f
         v.insert(v.end(), g[k].after.begin(), g[k].after.end());
         if (packages()[k]->spec.train) before.insert(before.end(), g[k].before.begin(), g[k].before.end());
     }
+    INFO("part-load MBT gap rms train " << stats_of(train).rms << " hold " << stats_of(hold).rms);
     CHECK(stats_of(train).rms < stats_of(before).rms);
-    CHECK(stats_of(train).rms <= 7.81);
-    CHECK(stats_of(hold).rms <= 9.07);
+    CHECK(stats_of(train).rms <= 6.95);
+    CHECK(stats_of(hold).rms <= 6.61);
     // The WOT rows: the same failure rule, and the test-local option evaluator agrees with the production law (option F).
     for (std::size_t k = 0; k < wot_packages().size(); ++k) {
         const Package& pk = *wot_packages()[k];
@@ -1212,7 +1239,7 @@ TEST_CASE("BLC1 the burn law's shipped constants are the joint part-load + WOT f
         for (std::size_t q = 0; q < fixed.size(); ++q) {
             if (!cal.wot[k][q].ok && fixed[q].ok) ++law_only;
             if (!cal.wot[k][q].ok) continue;
-            const LawOpt o{shipped.flame_speed_pressure_factor, 0.0, 0.0};
+            const LawOpt o{shipped.flame_speed_pressure_factor, 0.0, shipped.pressure_exponent};
             CHECK(f_local(shipped, o, pk.desc.cycle->stroke_m, cal.wot[k][q].in) ==
                   Catch::Approx(law_f(shipped, cal.wot[k][q].in)).epsilon(1e-12));
         }
@@ -1221,10 +1248,15 @@ TEST_CASE("BLC1 the burn law's shipped constants are the joint part-load + WOT f
     // The direction band, and the WOT work on the training rows (the fit's own target, sigma 0.03).
     const WotBandStats w = wot_band_stats(cal, shipped);
     INFO("WOT ln r rms train " << w.lnr_train << " (n " << w.n_train << ") hold " << w.lnr_hold << " (n " << w.n_hold
-                               << ") constant burn hold " << w.lnr_hold_const << "; slope " << w.slope);
+                               << ") constant burn hold " << w.lnr_hold_const << "; slope " << w.slope << "; clean ln(f/f_need) n "
+                               << w.clean.n << " mean " << w.clean.mean << " rms " << w.clean.rms << " (not finite "
+                               << w.clean_nonfinite << "); scavenging n " << w.scav.n << " mean " << w.scav.mean << " rms "
+                               << w.scav.rms);
     CHECK(w.n_train >= 15);
     CHECK(w.n_hold >= 15);
-    CHECK(w.lnr_train <= 0.05);
+    CHECK(w.clean.n >= 8);
+    CHECK(std::abs(w.clean.mean) <= 0.10);
+    CHECK(w.clean.rms <= 0.20);
     CHECK(w.slope <= 0.30);
 }
 
@@ -1232,10 +1264,10 @@ TEST_CASE("BLC1 the burn law's shipped constants are the joint part-load + WOT f
 // 10-90 % in 15-30 deg, 0-10 % in 11-23 deg, MBT 10-30 deg BTDC. Basis MIT 2.61 lec. 9 [C] (fast-burn part load 0-10
 // ~15, 10-90 ~20 deg) and ITU MAK 493E LN07 [C] (WOT burns at or below the part-load anchor); widths [AS].
 // Band 3 as declared: the held-out WOT rows' work-ratio rms no worse than the constant burn's on the same rows.
-// [!mayfail], both measured just outside: band 2 - 2 of 51 rows over 30 deg 10-90 (Mazda 2.0 1869 rpm, A25A 5414 rpm,
-// Ford 2.7 4501 rpm over 23 deg 0-10 / 30 deg MBT); band 3 - 0.0741 vs the constant burn's 0.0726 (the A25A burns
-// faster than the training engines, ln r -0.07..-0.24, no law input separates it).
-TEST_CASE("BLC2 WOT burn angles inside the cited band, WOT work no worse than the constant burn", "[burn_law][cycle][long][!mayfail]") {
+// Phase 1b measured both just outside ([!mayfail] then): band 2 - 2 of 51 rows over 30 deg 10-90, band 3 - 0.0741 vs the
+// constant burn's 0.0726. Phase 3 (2026-10-20, the pressure term): every row inside - f 0.877-1.374, MBT 13.7-26.0 deg -
+// and held-out ln r rms 0.0695 vs 0.0726; [!mayfail] removed. Sabotage (phase 1b constants, e_p 0): the old failures.
+TEST_CASE("BLC2 WOT burn angles inside the cited band, WOT work no worse than the constant burn", "[burn_law][cycle][long]") {
     const Calibration& cal = calibration();
     const ec::BurnLawParams shipped;
     const WotBandStats w = wot_band_stats(cal, shipped);
@@ -1370,4 +1402,53 @@ TEST_CASE("BLC diag: five-engine WOT dyno table", "[.][diag][burn_law_cal]") {
             std::printf("\n");
         }
     }
+}
+
+// Burn law phase 3 (2026-10-20): every part-load and WOT row's law input and observed burn factor as CSV (env
+// PS_BLC_CSV = output path), for the offline term analysis. Part load: f_obs = the factor whose MBT equals the measured
+// spark (spark taken as MBT, the BLC rule). WOT: f_obs = f_needed (the decreasing-branch root of the work ratio; NaN if
+// the model never reaches the measured work, inf if still above at the slowest grid burn).
+TEST_CASE("BLC diag: row table as CSV", "[.][diag][burn_law_cal]") {
+    const char* path = std::getenv("PS_BLC_CSV");
+    REQUIRE(path != nullptr);
+    std::FILE* out = std::fopen(path, "w");
+    REQUIRE(out != nullptr);
+    std::fprintf(out, "pkg,train,kind,fit,rpm,map_kpa,lambda,spark,t_ivc,p_ivc,vr,x_res,stroke,cr,f_law,f_obs,r_law\n");
+    const ec::BurnLawParams p;
+    const Calibration& cal = calibration();
+    auto f_of_spark = [](const Package& pk, real spark) {
+        // MBT is linear in f (both angles scale with f): MBT(f) = mbt_of_f(pk, 1) + (f - 1) (mbt_of_f(pk, 2) - mbt_of_f(pk, 1))
+        const real m1 = mbt_of_f(pk, 1.0), m2 = mbt_of_f(pk, 2.0);
+        return 1.0 + (spark - m1) / (m2 - m1);
+    };
+    for (std::size_t k = 0; k < packages().size(); ++k) {
+        const Package& pk = *packages()[k];
+        const CycleModelDesc& c = *pk.desc.cycle;
+        for (std::size_t q = 0; q < pk.rows.size(); ++q) {
+            const Prepared& w = cal.set.rows[k][q];
+            if (!w.ok) continue;
+            const Row& r = pk.rows[q];
+            std::fprintf(out, "%s,%d,part,1,%.1f,%.2f,%.4f,%.2f,%.2f,%.1f,%.4f,%.5f,%.5f,%.3f,%.5f,%.5f,nan\n", pk.spec.key,
+                         pk.spec.train ? 1 : 0, r.rpm, r.map_kpa, r.lambda, r.spark_btdc, w.in.t_ivc_k, w.in.p_ivc_pa,
+                         w.in.volume_ratio, w.in.residual_fraction, c.stroke_m, c.compression_ratio, law_f(p, w.in),
+                         f_of_spark(pk, r.spark_btdc));
+        }
+    }
+    const auto& prep = wot_prepared_shipped();
+    const auto& sc = wot_scans();
+    for (std::size_t k = 0; k < wot_packages().size(); ++k) {
+        const Package& pk = *wot_packages()[k];
+        const CycleModelDesc& c = *pk.desc.cycle;
+        for (std::size_t q = 0; q < pk.rows.size(); ++q) {
+            const Prepared& w = prep[k][q];
+            if (!w.ok || !sc[k][q].ok) continue;
+            const Row& r = pk.rows[q];
+            const real fl = law_f(p, w.in);
+            std::fprintf(out, "%s,%d,wot,%d,%.1f,%.2f,%.4f,%.2f,%.2f,%.1f,%.4f,%.5f,%.5f,%.3f,%.5f,%.5f,%.5f\n", pk.spec.key,
+                         pk.spec.train ? 1 : 0, wot_fit_row(r) ? 1 : 0, r.rpm, r.map_kpa, r.lambda, r.spark_btdc, w.in.t_ivc_k,
+                         w.in.p_ivc_pa, w.in.volume_ratio, w.in.residual_fraction, c.stroke_m, c.compression_ratio, fl,
+                         f_needed(sc[k][q]), interp_w(sc[k][q], fl) / sc[k][q].w_meas);
+        }
+    }
+    std::fclose(out);
 }

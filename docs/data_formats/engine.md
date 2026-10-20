@@ -1208,9 +1208,10 @@ demo_i4_pipes 800 rpm 25/30 kPa no longer limited, 50 kPa -3.9 deg vs MBT (v3 -2
 Every cycle-block engine (`burn_law` `"standard"`, the default) takes each generated cycle's Wiebe duration and
 ignition delay from its own unburned-charge state at IVC (design C, owner decision 2026-10-19, vault PHYS-079;
 `ps/engine_cycle/burn_law.h`, parameters in `data/burn_laws/default.json`, `physics_sim.burn_law`, loaded by
-`ps::io::load_burn_law_json`, a test pins file == compiled defaults). Law F (`kBurnLawVersion` 2):
-f = scale (n/2000)^rpm_exponent (S_L,ref/S_L(phi, T_u, p_ref, x_res))^flame_speed_exponent with scale 1.5742 [M],
-rpm_exponent 0.2 [C], flame_speed_exponent 0.3541 [M], flame_speed_pressure_factor 0 [M]; development 15 f and rapid
+`ps::io::load_burn_law_json`, a test pins file == compiled defaults). Law (`kBurnLawVersion` 3, burn law phase 3):
+f = scale (n/2000)^rpm_exponent (S_L,ref/S_L(phi, T_u, p_ref, x_res))^flame_speed_exponent (p_u/p_ref)^pressure_exponent
+with scale 1.5633 [M], rpm_exponent 0.2 [C], flame_speed_exponent 0.3929 [M], flame_speed_pressure_factor 0 [M],
+pressure_exponent -0.2485 [M] (p_u the TDC unburned pressure, p_ref 1 MPa); development 15 f and rapid
 20 f deg [C] map onto the Wiebe (a 5, m 2) as duration 40.32 f and delay 3.86 f deg (the C17a constants at f = 1);
 MBT keeps CA50 at `ca50_mbt_deg_atdc`. The knock replay uses the node's own angles, the live engine voice applies the
 law at every IVC. Generator versions on the law: lumped 5, pipe 6, pipe WOT 7 (`kGeneratorVersion` 7); a `"fixed"`
@@ -1218,7 +1219,24 @@ engine keeps 1 / 3 / 4 and its old keys. Not modelled: the fuel's own flame spee
 for every fuel, E85 included), cooled EGR, turbulence other than through the rpm exponent. With MBT varying over the grid,
 a knock-limited ECU should omit its spark table (MBT tracking) unless it needs a schedule; the K20A and N52 tables (cam
 profiles / lift family require one) are the minimum of the generated MBT over their map sets. The fit and its outcomes:
-"Burn law phase 1b" below.
+"Burn law phase 3" and "Burn law phase 1b" below.
+
+Burn law phase 3 (2026-10-20, vault PHYS-079). Law F burned the high-load, low-rpm rows too slowly: on the WOT rows that
+cannot scavenge (MAP <= measured exhaust pressure; Honda L15B7 1000, Ford 1.6 2750, Mazda 2.0 1246/1497, A25A 1327-2997
+rpm) ln(f/f_needed) was +0.287 mean, rms 0.322 - the A25A's WOT MBT 22.5-24.2 deg BTDC against 16.4-16.8 implied by its
+measured work. Cause: phase 1b fitted the WOT work rows of the two turbo training engines, 25 of whose 34 joint rows have
+MAP above the exhaust pressure (+2..+29 kPa); their measured trapped air (fuel x lambda x AFR) counts the blow-through air
+of the overlap as trapped, understating the work per trapped air and biasing f_needed slow (1.25-1.51). The part-load
+rows themselves call for a pressure term (a regression of their residual on ln p_u gave -0.38; ITU MAK 493E LN07 [C]:
+higher induction pressure shortens combustion). Change: one new key `pressure_exponent` e_p in [-1, 1] (f *= (p_u/p_ref)^e_p,
+skipped at 0); (scale, flame_speed_exponent, pressure_exponent) fitted on the training part-load MBT rows only; the WOT
+rows validate. Bands declared before the final run (`BLC1`): part-load rms no worse than law F's (train 6.95, held out
+6.61 deg) - measured 6.21 / 4.72; non-scavenging WOT rows |mean ln(f/f_needed)| <= 0.10, rms <= 0.20 - measured +0.011 /
+0.164 (n 9); direction slope <= 0.30 - 0.116. `BLC2` now passes every band (f 0.877-1.374, MBT 13.7-26.0 deg, held-out
+ln r rms 0.0695 vs the constant burn's 0.0726) and lost its [!mayfail]. Scavenging rows (report only): mean -0.290, rms
+0.347 - the law burns faster than their biased f_needed. Effects: A25A gen steady torque monotone in plate on Full maps
+(C17a-MA check 4: 0 decreasing steps; law F 4, max dip 0.56 %), Preview 0.07 %, Sketch 2.4 % (law F 5.9 %; schedule-only
+variant 4.2 %, law F 8.9 %, constant burn 3.0 %); hyper at 1.8 bar E85 MBT 18.8 deg at 6000 rpm (law F 34.4).
 
 Knock refit under the burn law (burn law phase 1, 2026-10-19, vault PHYS-079; superseded by knock model v5 above).
 With the burn law (`ps/engine_cycle/burn_law.h`) every row's burn and MBT follow its own IVC state: at the WOT envelope rows

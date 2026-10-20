@@ -26,6 +26,7 @@ constexpr ParamKey kParams[] = {
     {"rpm_exponent", &engine_cycle::BurnLawParams::rpm_exponent},
     {"flame_speed_exponent", &engine_cycle::BurnLawParams::flame_speed_exponent},
     {"flame_speed_pressure_factor", &engine_cycle::BurnLawParams::flame_speed_pressure_factor},
+    {"pressure_exponent", &engine_cycle::BurnLawParams::pressure_exponent},
     {"mk_phi_m", &engine_cycle::BurnLawParams::mk_phi_m},
     {"mk_b_m_m_s", &engine_cycle::BurnLawParams::mk_b_m_m_s},
     {"mk_b_2_m_s", &engine_cycle::BurnLawParams::mk_b_2_m_s},

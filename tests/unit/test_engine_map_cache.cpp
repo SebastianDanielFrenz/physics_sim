@@ -592,9 +592,10 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
             {"min_dilution_factor", &P::min_dilution_factor},
             {"min_flame_speed_m_s", &P::min_flame_speed_m_s},
             {"compression_exponent", &P::compression_exponent},
+            {"pressure_exponent", &P::pressure_exponent},
         };
-        static_assert(sizeof(params) / sizeof(params[0]) == 26, "every BurnLawParams field has a row");
-        static_assert(sizeof(P) == 26 * sizeof(real), "a new BurnLawParams field needs a row here");
+        static_assert(sizeof(params) / sizeof(params[0]) == 27, "every BurnLawParams field has a row");
+        static_assert(sizeof(P) == 27 * sizeof(real), "a new BurnLawParams field needs a row here");
         for (const auto& [name, field] : params) {
             edits.emplace_back(name, [field = field, &bump](CycleModelDesc& d) {
                 d.burn_law_params.*field = bump(d.burn_law_params.*field);

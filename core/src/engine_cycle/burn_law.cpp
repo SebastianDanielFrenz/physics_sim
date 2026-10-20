@@ -60,6 +60,10 @@ std::string validate_burn_law(const BurnLawParams& p) {
     }
     if (!(p.reference_residual_fraction < real(1.0))) return "reference_residual_fraction must be < 1";
     if (!(p.flame_speed_pressure_factor <= real(1.0))) return "flame_speed_pressure_factor must be <= 1";
+    if (!finite(p.pressure_exponent)) return "pressure_exponent must be finite";
+    if (!(p.pressure_exponent >= real(-1.0) && p.pressure_exponent <= real(1.0))) {
+        return "pressure_exponent must be in [-1, 1]";
+    }
     if (!(p.mk_phi_max > p.mk_phi_min)) return "mk_phi_max must be > mk_phi_min";
     if (!(p.min_dilution_factor <= real(1.0))) return "min_dilution_factor must be <= 1";
     if (!(p.compression_exponent >= real(1.0) && p.compression_exponent <= real(1.67))) {
@@ -111,8 +115,10 @@ BurnAngles evaluate_burn_law(const BurnLawParams& p, real a, real m, const BurnL
     const real s_l = laminar_flame_speed(p, phi, t_u, p_eff, in.residual_fraction);
     const real s_ref = laminar_flame_speed(p, real(1.0), p.reference_unburned_temperature_k, p.reference_unburned_pressure_pa,
                                            p.reference_residual_fraction);
-    const real f = p.scale * ps::math::pow(std::max(in.rpm, real(1.0)) / p.reference_rpm, p.rpm_exponent) *
-                   ps::math::pow(s_ref / s_l, p.flame_speed_exponent);
+    real f = p.scale * ps::math::pow(std::max(in.rpm, real(1.0)) / p.reference_rpm, p.rpm_exponent) *
+             ps::math::pow(s_ref / s_l, p.flame_speed_exponent);
+    // The burn's own pressure term (phase 3); skipped at e_p = 0 so the phase-1b law stays bit-identical.
+    if (p.pressure_exponent != real(0.0)) f *= ps::math::pow(p_u / p_ref, p.pressure_exponent);
     BurnAngles b = angles_from_factor(p, a, m, f);
     b.flame_speed_m_s = s_l;
     b.t_unburned_k = t_u;

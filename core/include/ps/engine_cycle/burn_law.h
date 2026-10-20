@@ -15,7 +15,9 @@
 //   laminar pressure dependence only weakly (ITU MAK 493E LN07 [C]: higher induction pressure SHORTENS the combustion,
 //   faster-burning engines are less sensitive to p and T), and the joint part-load + WOT fit gives k_p ~ 0)
 //   burn angles, both scaled by one factor (the development : rapid split stays the cited 15 : 20 deg):
-//       f = s (n / n_ref)^e_n (S_L,ref / S_L(phi, T_u, p_eff, x))^e_s,   S_L,ref = S_L at the reference state (phi 1)
+//       f = s (n / n_ref)^e_n (S_L,ref / S_L(phi, T_u, p_eff, x))^e_s (p_u / p_ref)^e_p,
+//       S_L,ref = S_L at the reference state (phi 1); e_p (pressure_exponent, phase 3) is the burn's own pressure
+//       dependence outside the laminar flame speed - negative: a denser charge burns in fewer crank degrees
 //       dtheta_dev = dtheta_dev,ref f            (spark -> 10 % burned)
 //       dtheta_rapid = dtheta_rapid,ref f        (10 % -> 90 % burned)
 //   mapped onto the Wiebe function (fractions q_x = (-ln(1-x)/a)^(1/(m+1)) of its duration):
@@ -27,9 +29,11 @@
 //
 // Only the spark-to-CA50 angle (dtheta_dev + 0.4866 dtheta_rapid with a 5, m 2) is identifiable from MBT spark data,
 // which is why the split is held at the cited ratio. Phase 1b (2026-10-19): e_n is the cited 0.2 [C] (MIT 2.61 lec. 9:
-// burn angle ~ rpm^0.2), k_p 0, and only (s, e_s) are fitted [M] - jointly on part-load MBT rows and WOT gross indicated
-// work per trapped air at measured spark (tests/unit/test_burn_law_cal.cpp). Every constant is DATA: data/burn_laws/default.json carries the same numbers with
-// their source tags, loaded by ps::io::load_burn_law_json; a test pins file == compiled defaults.
+// burn angle ~ rpm^0.2), k_p 0. Phase 3 (2026-10-20): (s, e_s, e_p) fitted [M] on the training part-load MBT rows only;
+// the WOT rows (gross indicated work per trapped air at measured spark) validate on the non-scavenging rows - their
+// trapped air counts blow-through air wherever MAP exceeds the exhaust pressure (tests/unit/test_burn_law_cal.cpp).
+// Every constant is DATA: data/burn_laws/default.json carries the same numbers with their source tags, loaded by
+// ps::io::load_burn_law_json; a test pins file == compiled defaults.
 //
 // Not modelled: the fuel's own flame speed (one gasoline-like coefficient set for every fuel, E85 included), cooled
 // EGR (the residual is the cycle's own), turbulence other than through the speed exponent, charge motion devices.
@@ -44,7 +48,8 @@ namespace ps::engine_cycle {
 
 // Folded into the .psmaps key of every engine on the law (map_cache.cpp), next to every parameter value.
 // 2 (phase 1b): S_L at the effective pressure p_eff (flame_speed_pressure_factor).
-inline constexpr std::uint32_t kBurnLawVersion = 2;
+// 3 (phase 3, 2026-10-20): the burn factor's own pressure term (p_u / p_ref)^e_p (pressure_exponent).
+inline constexpr std::uint32_t kBurnLawVersion = 3;
 
 struct BurnLawParams {
     // Reference state of the cited angles [AS]: a typical part-load TDC unburned state (2000 rpm, ~50 kPa MAP, CR 10).
@@ -55,12 +60,15 @@ struct BurnLawParams {
     // Cited angles at the reference [C]: MIT 2.61 (2017) lecture 9 - spark to 10 % burned ~15 deg, 0-90 % ~35 deg.
     real development_reference_deg = 15.0;
     real rapid_reference_deg = 20.0;
-    // Overall scale and flame-speed exponent fitted [M] (test_burn_law_cal.cpp, joint part-load + WOT fit); the speed
-    // exponent cited [C] (MIT 2.61 lec. 9: burn angle ~ rpm^0.2); the pressure factor k_p (see the file comment) [M].
-    real scale = 1.5742;
+    // Overall scale, flame-speed exponent and pressure exponent fitted [M] (test_burn_law_cal.cpp, phase 3: training
+    // part-load MBT rows); the speed exponent cited [C] (MIT 2.61 lec. 9: burn angle ~ rpm^0.2); the pressure factor k_p
+    // (see the file comment) [M], held at 0.
+    real scale = 1.5633;
     real rpm_exponent = 0.2;
-    real flame_speed_exponent = 0.3541;
+    real flame_speed_exponent = 0.3929;
     real flame_speed_pressure_factor = 0.0;
+    // Pressure exponent of the burn factor [M] (phase 3; the sign is ITU MAK 493E LN07's [C]). 0 = the phase-1b law.
+    real pressure_exponent = -0.2485;
     // Metghalchi & Keck 1982, indolene [C] (via ITU MAK 493E lecture notes 7, slide 13).
     real mk_phi_m = 1.13;
     real mk_b_m_m_s = 0.2758;
@@ -107,7 +115,8 @@ struct BurnAngles {
 };
 
 // The parameters' own checks (empty = valid): every value finite, the angles/reference/guards > 0, exponents >= 0
-// where a sign makes no sense, flame_speed_pressure_factor in [0, 1], compression exponent in [1, 1.67].
+// where a sign makes no sense, flame_speed_pressure_factor in [0, 1], pressure_exponent in [-1, 1], compression exponent
+// in [1, 1.67].
 [[nodiscard]] std::string validate_burn_law(const BurnLawParams& p);
 
 // Laminar flame speed [m/s] at (phi, T_u, p_u, x_res), floored at min_flame_speed_m_s.

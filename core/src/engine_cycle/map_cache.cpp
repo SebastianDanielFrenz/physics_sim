@@ -423,7 +423,8 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
                        b.reference_residual_fraction, b.development_reference_deg, b.rapid_reference_deg, b.scale,
                        b.rpm_exponent, b.flame_speed_exponent, b.flame_speed_pressure_factor, b.mk_phi_m, b.mk_b_m_m_s, b.mk_b_2_m_s, b.mk_alpha_0,
                        b.mk_alpha_phi, b.mk_beta_0, b.mk_beta_phi, b.mk_t0_k, b.mk_p0_pa, b.mk_phi_min, b.mk_phi_max, b.dilution_k,
-                       b.dilution_exponent, b.min_dilution_factor, b.min_flame_speed_m_s, b.compression_exponent}) {
+                       b.dilution_exponent, b.min_dilution_factor, b.min_flame_speed_m_s, b.compression_exponent,
+                       b.pressure_exponent}) {
             f.pod(v);
         }
     }

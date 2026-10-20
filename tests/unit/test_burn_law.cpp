@@ -122,9 +122,10 @@ TEST_CASE("BL1 data/burn_laws/default.json equals the compiled burn law defaults
     CHECK(d.min_dilution_factor == c.min_dilution_factor);
     CHECK(d.min_flame_speed_m_s == c.min_flame_speed_m_s);
     CHECK(d.compression_exponent == c.compression_exponent);
-    // 26 parameters + format/model/version/source: a key added to the struct must also appear in the file.
-    static_assert(sizeof(ec::BurnLawParams) == 26 * sizeof(real), "a new BurnLawParams field needs a row here and in the file");
-    CHECK(default_json().size() == 30);
+    CHECK(d.pressure_exponent == c.pressure_exponent);
+    // 27 parameters + format/model/version/source: a key added to the struct must also appear in the file.
+    static_assert(sizeof(ec::BurnLawParams) == 27 * sizeof(real), "a new BurnLawParams field needs a row here and in the file");
+    CHECK(default_json().size() == 31);
 }
 
 TEST_CASE("BL2 the burn law loader rejects malformed files", "[burn_law][cycle][io]") {
@@ -151,6 +152,7 @@ TEST_CASE("BL2 the burn law loader rejects malformed files", "[burn_law][cycle][
         {"inverted phi range", [](json& j) { j["mk_phi_max"]["value"] = 0.7; }, "mk_phi_max must be > mk_phi_min"},
         {"pressure factor above 1", [](json& j) { j["flame_speed_pressure_factor"]["value"] = 1.5; }, "flame_speed_pressure_factor must be <= 1"},
         {"negative pressure factor", [](json& j) { j["flame_speed_pressure_factor"]["value"] = -0.1; }, "flame_speed_pressure_factor must be >= 0"},
+        {"pressure exponent below -1", [](json& j) { j["pressure_exponent"]["value"] = -1.5; }, "pressure_exponent must be in [-1, 1]"},
     };
     for (const Case& c : cases) {
         json j = base;
