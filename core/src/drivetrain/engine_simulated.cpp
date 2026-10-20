@@ -885,6 +885,16 @@ std::shared_ptr<const SimulatedEngineMaps> SimulatedEngine::build_maps_impl(cons
         const Ambient amb = make_ambient(kIsaPressurePa, kIsaTemperatureK);
         std::vector<real> rpm_axis;
         for (real r = real(500.0); r <= desc.limiter.rpm + real(250.0) + real(1e-9); r += real(250.0)) rpm_axis.push_back(r);
+        // Burn law phase 3 (2026-10-20): the idle speed is a node of its own. Between 500 and 750 rpm a knock-limited
+        // WOT curve is strongly curved, so the linear request envelope F(rpm) read between the 250 rpm nodes overstated
+        // the reachable WOT torque at a 700 rpm idle (N52: F 212.50 vs 207.84 N*m) and the pedal law was not monotone
+        // there (test_pedal_law.cpp P1 N5).
+        if (desc.idle_rpm > real(0.0)) {
+            const auto it = std::lower_bound(rpm_axis.begin(), rpm_axis.end(), desc.idle_rpm);
+            const bool on_node = (it != rpm_axis.end() && std::abs(*it - desc.idle_rpm) < real(1e-6)) ||
+                                 (it != rpm_axis.begin() && std::abs(*(it - 1) - desc.idle_rpm) < real(1e-6));
+            if (!on_node) rpm_axis.insert(it, desc.idle_rpm);
+        }
         std::vector<real> plate_axis;
         for (int i = 0; i <= 40; ++i) plate_axis.push_back(real(i) / real(40.0));
         SimulatedSteadyTables t;

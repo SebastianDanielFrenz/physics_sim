@@ -253,6 +253,78 @@ TEST_CASE("P1 N4: honda_k20a_dc5 bands (a)-(d)", "[pedal][drivetrain][cycle][vvl
 TEST_CASE("P1 N5: bmw_n52b30 bands (a)-(d)", "[pedal][drivetrain][cycle][vvl][long]") {
     check_bands("bmw_n52b30", load_sim("bmw_n52b30.json"), false);
 }
+// N5b (burn law phase 3, 2026-10-20): the short guard for N5's 700 rpm case. The steady tables carry the idle speed as
+// a node of their own, so the request envelope at idle is the exact steady WOT torque (it was the 500/750 rpm linear
+// interpolation, above what the knock-limited engine reaches at 700 rpm) and the pedal law stays
+// monotone up to full pedal there. Recorded sabotage (2026-10-20): the node insertion in build_maps
+// disabled -> all three checks fail (no 700 rpm node; F 212.50 vs exact 207.84 N*m; T(0.98) 208.16 > T(1) 207.84).
+TEST_CASE("P1 N5b: the idle speed is a steady-table node (bmw_n52b30, 700 rpm)", "[pedal][drivetrain][cycle][vvl]") {
+    const SimulatedEngineDesc d = load_sim("bmw_n52b30.json");
+    SimulatedEngine e0(d);
+    const real idle = d.idle_rpm;
+    const std::vector<real>& x = e0.maps().steady_wot_nm.x;
+    CHECK(std::find(x.begin(), x.end(), idle) != x.end());
+    const real f = e0.request_envelope(idle).f_nm;
+    const real exact = SimulatedEngine::steady_point(e0.maps(), idle, 1.0, AmbientSample{}).net_torque_nm;
+    std::printf("[N5b] idle %.0f rpm: F %.4f exact WOT %.4f N*m\n", idle, f, exact);
+    CHECK(std::abs(f - exact) <= 1e-9 * std::abs(exact));
+    real t[2] = {0.0, 0.0};
+    const real cs[2] = {0.98, 1.0};
+    for (int k = 0; k < 2; ++k) {
+        SimulatedEngine e(d);
+        e.reset(EngineState::Running);
+        Sensors s;
+        s.omega = idle * kTwoPi / 60.0;
+        s.ignition = 1.0;
+        real sum = 0.0;
+        int n = 0;
+        for (int i = 0; i < 960 * 2; ++i) {
+            const PreSolveResult r = e.pre_solve(s, ThrottleCommand{cs[k], 0.0, 1.0}, TcuRequest{}, kH);
+            (void)e.post_solve(s.omega, kH);
+            if (i >= 960 + 720) {
+                sum += r.tau0 - e.maps().c_k;
+                ++n;
+            }
+        }
+        t[k] = sum / n;
+    }
+    std::printf("[N5b] T(0.98) %.4f T(1) %.4f N*m\n", t[0], t[1]);
+    CHECK(t[1] > t[0]);
+}
+
+// Burn law phase 3 (2026-10-20): what the idle node changes besides N5 - the idle feed-forward, the idle manifold
+// pressure, the idle authority cap, F at idle, the settled idle torque/plate at c = 0, and the steady tables' build time
+// (median of 3 build_maps calls). Hidden; prints only.
+TEST_CASE("P1 N5 diag: idle node side effects", "[.][diag][pedal]") {
+    for (const char* f : {"toyota_a25a_fks_sim.json", "toyota_a25a_fks_gen.json", "demo_i4_pipes.json", "honda_k20a_dc5.json",
+                          "bmw_n52b30.json", "hyper_v8_one1_audio.json"}) {
+        const SimulatedEngineDesc d = load_sim(f);
+        real ms[3];
+        for (real& m : ms) {
+            const auto t0 = std::chrono::steady_clock::now();
+            (void)SimulatedEngine::build_maps(d);
+            m = std::chrono::duration<real, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        }
+        std::sort(ms, ms + 3);
+        SimulatedEngine e(d);
+        const SimulatedSteadyTables& st = e.steady_tables();
+        e.reset(EngineState::Running);
+        Sensors s;
+        s.omega = d.idle_rpm * kTwoPi / 60.0;
+        s.ignition = 1.0;
+        real tau = 0.0, plate = 0.0;
+        for (int i = 0; i < 960 * 3; ++i) {
+            const PreSolveResult r = e.pre_solve(s, ThrottleCommand{0.0, 0.0, 1.0}, TcuRequest{}, kH);
+            (void)e.post_solve(s.omega, kH);
+            tau = r.tau0 - e.maps().c_k;
+            plate = r.throttle_eff;
+        }
+        std::printf("[N5 side] %s idle %.0f nodes %zu idle_ff %.9f idle_p_im %.4f idle_cap_x %.9f F(idle) %.6f tau_idle %.6f plate %.9f build %.1f ms\n",
+                    f, d.idle_rpm, st.steady_wot_nm.x.size(), st.idle_ff, st.idle_p_im, st.idle_cap_x,
+                    e.request_envelope(d.idle_rpm).f_nm, tau, plate, ms[1]);
+    }
+}
+
 TEST_CASE("P1 N5 diag: bmw_n52b30 700 rpm near full pedal", "[.][diag][pedal]") {
     const SimulatedEngineDesc d = load_sim("bmw_n52b30.json");
     for (real c : {0.9, 0.96, 0.98, 0.99, 1.0}) {
@@ -271,7 +343,8 @@ TEST_CASE("P1 N5 diag: bmw_n52b30 700 rpm near full pedal", "[.][diag][pedal]") 
     }
     SimulatedEngine e(d);
     std::printf("[N5 diag] F(700) %.2f\n", e.request_envelope(700.0).f_nm);
-    // The steady tables sit on a 500, 750, 1000 ... rpm axis (build_maps), so F(700) = 0.2 T(500) + 0.8 T(750): the exact
+    // Before burn law phase 3 the steady tables sat on a 500, 750, 1000 ... rpm axis only (build_maps; idle is a node
+    // since, P1 N5b), so F(700) was 0.2 T(500) + 0.8 T(750): the exact
     // values at the two nodes and the interpolation they give, against the exact value at 700 (the knock-limited curve is
     // strongly curved below the cycle grid's first rpm, 700).
     {

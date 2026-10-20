@@ -17,7 +17,7 @@
 //     600 K (gamma ~1.31 instead of ~1.38) and lowers the end-gas temperature at 45 bar by ~100 K. Vapour cv is a
 //     linear fit through two iso-octane ideal-gas cp values (kFuelVapour*, [AS] recalled, not verified locally); the
 //     generator uses the generating fuel's AFR for every listed fuel (only the octane differs between the tables).
-//   * The integral runs until the Wiebe burned fraction reaches KnockModelParams::end_burn_fraction (knock model v6 0.90 [M], v5 0.75 [M];
+//   * The integral runs until the Wiebe burned fraction reaches KnockModelParams::end_burn_fraction (knock model v6 0.85 [M], v5 0.75 [M];
 //     0.90 [AS] up to v4, on the argument that past it the end gas
 //     left is too small to matter) or EVO, whichever comes first; trapezoidal on a fixed kKnockReplayStepDeg grid.
 //   * theta_kl = the largest advance [deg BTDC] whose integral stays < 1, by bisection between the eta_spark table's own
@@ -37,7 +37,7 @@
 
 namespace ps::engine_cycle {
 
-// End of the integral (Wiebe x_b): the calibrated knock model value (knock_model.h; v6 0.90 [M], v5 0.75 [M], 0.90 [AS] up to v4).
+// End of the integral (Wiebe x_b): the calibrated knock model value (knock_model.h; v6 0.85 [M], v5 0.75 [M], 0.90 [AS] up to v4).
 inline constexpr real kKnockEndBurnFraction = kKnockCalEndBurnFraction;
 inline constexpr real kKnockReplayStepDeg = 0.5;     // [AS] replay step; KN-C convergence test vs 0.125 deg
 inline constexpr real kKnockSearchBelowMbtDeg = 40.0; // [D] the eta_spark table's most retarded node (map_generator)
