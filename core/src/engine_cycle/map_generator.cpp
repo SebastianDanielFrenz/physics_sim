@@ -73,7 +73,7 @@ constexpr real kRGas = kIsaAirGasConstantJKgK;
 constexpr real kBoostSupplyRatio = 1.05;
 constexpr int kPreviewRpm = 10;
 constexpr int kPreviewPim = 6;
-// Engine garage P1: Sketch's reduced grid, at most 8 rpm values x 3 p_im rows.
+// Engine garage P1: Sketch's reduced grid, at most 8 rpm values x 4 p_im rows (3 rows until burn law phase 3).
 constexpr int kSketchRpm = 8;
 
 struct SweepSite {
@@ -150,19 +150,33 @@ std::vector<real> subsample(const std::vector<real>& v, int m) {
     return out;
 }
 
-// Sketch's p_im rows: the lowest node, the node nearest ambient and the top
-// node; when the node nearest ambient is itself the lowest or the top one, the
-// middle node (by index) stands in so the result keeps 3 rows (a grid of fewer
-// than 3 nodes keeps all of them). Strictly ascending by construction.
+// Sketch's p_im rows (kSketchGridVersion 2, burn law phase 3, 2026-10-20): the
+// lowest node, a part-load node, the highest node at or below ambient and the
+// top node. When that node is the top one (a grid capped below ambient), the
+// node below the top stands in for it; when it is the lowest one, the middle
+// node (by index). The part-load node is halfway by index between the lowest
+// node and the near-ambient one (if that is the lowest node's neighbour:
+// halfway between it and the top node). A grid of fewer than 5 nodes keeps
+// all of them; strictly ascending by construction.
+// Version 1 (engine garage P1) took 3 rows - lowest, NEAREST ambient (the
+// middle node when that was the top one), top. On the A25A grid (top 105 kPa,
+// the node nearest ambient) that left 58.6 -> 105 kPa as one linear span; the
+// ECU's measured spark retard at 92-97 kPa then made the steady torque fall by
+// 3.4 % between two plate steps at 1500 rpm and the steady-table plate check
+// refused the engine (test_limiter_range.cpp P1).
 std::vector<real> sketch_p_rows(const std::vector<real>& p) {
     const std::size_t n = p.size();
-    if (n <= 3) return p;
-    std::size_t nearest = 0;
-    for (std::size_t i = 1; i < n; ++i) {
-        if (std::abs(p[i] - kPamb) < std::abs(p[nearest] - kPamb)) nearest = i;
+    if (n <= 4) return p;
+    std::size_t amb = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (p[i] <= kPamb) amb = i;
     }
-    const std::size_t mid = (nearest == 0 || nearest == n - 1) ? (n - 1) / 2 : nearest;
-    return {p.front(), p[mid], p.back()};
+    if (amb == n - 1) amb = n - 2;
+    if (amb == 0) amb = (n - 1) / 2;
+    std::size_t part = amb / 2;
+    if (part == 0) part = (amb + n - 1) / 2;
+    if (part < amb) return {p.front(), p[part], p[amb], p.back()};
+    return {p.front(), p[amb], p[part], p.back()};
 }
 
 real cam_value(const Table2D& t, real rpm, real p) {

@@ -449,6 +449,10 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
     // v1 and v2 maps can never share a file.
     f.pod(generator_version);
     f.pod(static_cast<int>(quality));
+    // Burn law phase 3 (2026-10-20): Sketch's p_im row choice (map_generator.cpp sketch_p_rows) is not a desc field,
+    // so its version joins the key - a 3-row Sketch file under the same desc must miss. Folded only for Sketch, so
+    // Preview and Full keys are unchanged by it.
+    if (quality == MapQuality::Sketch) f.pod(kSketchGridVersion);
     return f.h;
 }
 

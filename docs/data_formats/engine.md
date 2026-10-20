@@ -814,11 +814,14 @@ only for the load. Measured on the ASSUMED 2 L I4 test fixture with a
 `EngineMapOptions` additions; every one is optional and changes no result).
 `MapQuality::Sketch` is a COMPLETE map set on a reduced grid for a dyno
 preview while an engine is being edited, never for driving a car: at most 8
-rpm values (the grid subsampled by index rounding, both ends kept) x 3 p_im
-rows (the lowest node, the node nearest ambient, the top node), the spark sweep
+rpm values (the grid subsampled by index rounding, both ends kept) x 4 p_im
+rows (the lowest node; a part-load node halfway by index to the next row; the highest node at or below ambient - the
+node below the top when that is the top one, the middle node when it is the lowest; the top node), the spark sweep
 at one site (3000 rpm / 80 kPa, retard {-10, 0, 5, 10, 20, 40} deg) and a lambda
-sweep of 5 ({0.6, 0.8, 1.0, 1.2, 1.5}), about 35 points, with Preview's step
-and cycle settings. It has its own `.psmaps` cache key and its own content;
+sweep of 5 ({0.6, 0.8, 1.0, 1.2, 1.5}), about 43 points, with Preview's step
+and cycle settings. It has its own `.psmaps` cache key (which also folds `kSketchGridVersion`, 2 since burn law phase
+3, 2026-10-20 - version 1 took 3 rows: lowest, nearest ambient, top, about 35 points; on the A25A grid that left
+58.6 -> 105 kPa as one span and the steady-table plate check refused the engine) and its own content;
 `MapQuality` values are `Preview` 0, `Full` 1, `Sketch` 2 (folded into the key,
 never renumber).
 - `cancel` (`const std::atomic<bool>*`): read before each point starts; once set
@@ -1814,7 +1817,7 @@ template hits the same `.psmaps`, FI2/FI5). Boost and the lumped engine:
   node (4500 rpm) and the dyno torque at 0.8 bar is 1.78-1.81 x the same engine without the compressor (FI1);
 - steady WOT charge pressure equals the target within 0.001 bar wherever the hardware is big enough (the brief's 0.05 bar
   criterion); the manifold sits 0.02-0.06 bar under it through the throttle loss;
-- Sketch maps are for a dyno preview only and not reliable for a lumped boosted engine (3 p_im rows); Preview (with the
+- Sketch maps are for a dyno preview only and not reliable for a lumped boosted engine (4 p_im rows; 3 before 2026-10-20); Preview (with the
   helper's ambient node) and Full generate and run.
 
 Removing a compressor: `forced_induction: "none"` with `ambient_grid_p_im` (the hyper loads and runs NA, 374 / 459 N*m at

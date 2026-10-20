@@ -8,7 +8,7 @@
 // Point set (fixed per quality, index order = assembly order):
 //   [0, G)        the rpm x p_im grid (Full: CycleModelDesc::grid_rpm x
 //                 grid_p_im; Preview: at most 10 x 6 of them, picked by index
-//                 rounding; Sketch: at most 8 x 3, see below), lambda 1, MBT
+//                 rounding; Sketch: at most 8 x 4, see below), lambda 1, MBT
 //                 spark, cam schedule at the point;
 //   then          spark sweep: retard {-10,-5,0,2,5,10,15,20,30,40} deg from
 //                 MBT at 2000 rpm/50 kPa, 3000/80, 5000/100 (sweep-major)
@@ -19,9 +19,14 @@
 // Sketch (engine garage P1, A1) is a COMPLETE map set on a reduced grid for a
 // dyno preview while the player edits an engine; it runs Preview's step and
 // cycle settings, is keyed apart from Preview and Full, and is never meant to
-// drive a car. Its rows: the lowest p_im node, the node nearest ambient (the
-// middle node when that is the lowest or the top one), and the top node -
-// on a boosted grid that brackets ambient and the top. Its rpm axis is the
+// drive a car. Its rows (kSketchGridVersion 2, burn law phase 3, 2026-10-20):
+// the lowest p_im node, a part-load node (halfway by index to the next row),
+// the highest node at or below ambient (the node below the top when that is
+// the top one, the middle node when it is the lowest one), and the top node -
+// on a boosted grid that brackets ambient and the top. Version 1 took 3 rows
+// (lowest, nearest ambient, top); on the A25A's grid that left 58.6 -> 105 kPa
+// as one linear span and the steady torque dipped 4.2 % between two plate
+// steps at 1500 rpm, which the steady-table plate check refused. Its rpm axis is the
 // grid subsampled to at most 8 values (index rounding, both ends kept).
 // Every point runs at the ISA intake state (288.15 K, 101325 Pa exhaust),
 // the reference the runtime's default ambient uses, so the runtime
@@ -96,6 +101,10 @@ inline constexpr std::uint32_t kGeneratorVersion = kLawPipeWotGeneratorVersion; 
 // and the .psmaps header: never renumber, only append (Sketch = 2 was added by
 // engine garage P1 without moving any existing key or pin).
 enum class MapQuality { Preview = 0, Full = 1, Sketch = 2 };
+
+// Version of Sketch's grid choice (the p_im rows and rpm subsampling, not desc fields), folded into a Sketch key only.
+// 1: 3 p_im rows (engine garage P1); 2: 4 rows, a part-load node added (burn law phase 3, 2026-10-20).
+inline constexpr int kSketchGridVersion = 2;
 
 // Thrown by a map generation that observed its cancel flag (see
 // MapGenerationControl, ps::io::EngineMapOptions::cancel). ps::io re-exports

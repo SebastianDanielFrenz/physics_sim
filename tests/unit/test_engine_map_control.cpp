@@ -607,19 +607,36 @@ TEST_CASE("Garage P1 T4: Sketch is a complete, deterministic, separately keyed m
         const CycleModelDesc big = big_grid_desc();
         CHECK(points_of(big, MapQuality::Full) == 12 * 20 + 30 + 9);
         CHECK(points_of(big, MapQuality::Preview) == 10 * 6 + 30 + 9);
-        CHECK(points_of(big, MapQuality::Sketch) == 8 * 3 + 6 + 5);
+        // 4 p_im rows since burn law phase 3 (2026-10-20; 8 * 3 + 6 + 5 = 35 points before).
+        CHECK(points_of(big, MapQuality::Sketch) == 8 * 4 + 6 + 5);
         const EngineMapsPtr m = generate_engine_maps(big, fuel, MapQuality::Sketch);
         CHECK(m->quality == MapQuality::Sketch);
         CHECK(m->maps.ve.x.size() <= 8);
-        CHECK(m->maps.ve.y.size() == 3);
+        CHECK(m->maps.ve.y.size() == 4);
         CHECK(m->maps.ve.x.size() == 8);
         CHECK(m->maps.ve.x.front() == big.grid_rpm.front());
         CHECK(m->maps.ve.x.back() == big.grid_rpm.back());
-        // the rows: the lowest node, the node nearest ambient, the top node
+        // the rows: the lowest node, the part-load node halfway by index to the node nearest ambient, that node, the top
+        // node (grid 20..115 kPa in 5 kPa steps: 20, 60, 100, 115 kPa)
         CHECK(m->maps.ve.y.front() == big.grid_p_im.front());
         CHECK(m->maps.ve.y.back() == big.grid_p_im.back());
-        CHECK(std::abs(m->maps.ve.y[1] - 101325.0) <= 2500.0 + 1e-9);
+        CHECK(m->maps.ve.y[1] == big.grid_p_im[8]);
+        CHECK(std::abs(m->maps.ve.y[2] - 101325.0) <= 2500.0 + 1e-9);
         CHECK_THAT(m->maps.source, ContainsSubstring("Sketch"));
+    }
+    SECTION("rows on a grid whose top node is the one nearest ambient (toyota_a25a_fks_gen's p_im axis)") {
+        // Burn law phase 3 (2026-10-20): the near-ambient row is the highest node at or below ambient (97.273 kPa), not
+        // the node nearest it (the 105 kPa top, which made version 1 fall back to the middle node, 58.636 kPa, and left
+        // 58.6 -> 105 kPa as one span). Recorded sabotage: the version 1 'nearest ambient' choice -> rows 20000 35455
+        // 58636 105000, both row checks fail.
+        CycleModelDesc d = fixture_desc();
+        d.grid_p_im = {20000.0, 27727.0, 35455.0, 43182.0, 50909.0, 58636.0, 66364.0, 74091.0, 81818.0, 89545.0, 97273.0, 105000.0};
+        const EngineMapsPtr m = generate_engine_maps(d, fuel, MapQuality::Sketch);
+        REQUIRE(m->maps.ve.y.size() == 4);
+        CHECK(m->maps.ve.y[0] == 20000.0);
+        CHECK(m->maps.ve.y[1] == 58636.0);
+        CHECK(m->maps.ve.y[2] == 97273.0);
+        CHECK(m->maps.ve.y[3] == 105000.0);
     }
     SECTION("complete: every table filled and finite, loads into a SimulatedEngine") {
         const CycleModelDesc d = fixture_desc();

@@ -535,7 +535,9 @@ TEST_CASE("P1: the plate check tolerates a small dip (toyota_a25a_fks_gen, Sketc
     CHECK_NOTHROW(SimulatedEngine::build_maps(d));
     d.plate_monotone_tolerance = 0.0; // the pre-G1 exact check
     CHECK_THROWS_WITH(SimulatedEngine::build_maps(d), ContainsSubstring("not non-decreasing in plate"));
-    d.plate_monotone_tolerance = 0.025; // below the measured 3.0 % Sketch dip [M]
+    // below the measured Sketch dip [M]: 2.89 % on the 4-row Sketch grid (burn law phase 3, 2026-10-20; 4.23 % on the
+    // 3-row grid with burn law v3 / knock v6, which the 0.04 default refused; 3.0 % before)
+    d.plate_monotone_tolerance = 0.025;
     CHECK_THROWS_WITH(SimulatedEngine::build_maps(d), ContainsSubstring("rpm 1500"));
     // Preview maps: 0.11 % dip [M] - the exact check throws, the default passes
     o.quality = MapQuality::Preview;
@@ -644,6 +646,9 @@ TEST_CASE("G1 diag: A25A plate dip by cause", "[.][diag][limiter_range][drivetra
         o.cache_dir = cache_dir();
         const SimulatedEngineDesc base_on = std::get<SimulatedEngineDesc>(io::load_engine_json_from_string(shipped, kData + "/engines", o));
         const SimulatedEngineDesc base_off = std::get<SimulatedEngineDesc>(io::load_engine_json_from_string(noknock, kData + "/engines", o));
+        std::printf("quality %d ve p rows:", static_cast<int>(q));
+        for (const real y : base_on.maps.ve.y) std::printf(" %.0f", y);
+        std::printf("\n");
         struct V { const char* name; SimulatedEngineDesc d; };
         std::vector<V> vs = {{"(i) shipped", base_on}, {"(ii) knock off", base_off}, {"(iii) off + clamp", base_off}, {"(iv) on + clamp", base_on}};
         clamp_to_mbt(vs[2].d);
