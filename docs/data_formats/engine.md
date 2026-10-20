@@ -1359,7 +1359,7 @@ filled and the required values NaN, `solved = false`, until `solve_remedy` runs 
 | `CompressorSurge` (4) | with a `surge_line` only: the engine's surge flag in >= 2 % of the window, or the minimum flow / surge-line flow ratio < 1.10 | `Exceeded` (flag), `Near` (margin) | min flow ratio / 1 | turbo `/surge_line` | P3b-1 |
 | `CompressorChoke` (5) | window max pair flow / `max_mass_flow_kg_s` - a capacity margin; the maps carry no per-speed choke line | `Near` >= 0.90, `Limiting` >= 1.0 | fraction / 1.0 | turbo `/max_mass_flow_kg_s` | P3b-1 |
 | `ChargeTemperature` (6) | not produced: no charge-temperature limit exists in any data file | - | - | - | later |
-| `ClutchCapacity` (7) | `check_driveline_limits`: peak sweep torque vs `capacity_nm * static_factor` | `Near` when peak x 1.3 >= static capacity, `Limiting` when peak >= it | N*m | clutch `/capacity_nm` + Closed remedy | P3b-1 |
+| `ClutchCapacity` (7) | `check_driveline_limits`: peak sweep torque vs `capacity_nm * static_factor` | `Near` when peak x 1.3 >= static capacity, `Limiting` when peak >= it, `Exceeded` when peak is more than 15 % over it (`gearbox_rating_over_exceeded`, owner 2026-10-20) | N*m | clutch `/capacity_nm` + Closed remedy | P3b-1 |
 | `GearboxInputTorque` (8) | `check_driveline_limits`: peak sweep torque (boosted, with a kit when the sweep has one) vs the gearbox's `rated_input_torque_nm` (unrated = 0 = skipped), graded when the peak is OVER the rating | `Near` > 0 %, `Limiting` > 5 %, `Exceeded` > 15 % over | N*m | gearbox `/rated_input_torque_nm` + Closed remedy (`required_min` = peak, `required_margin` = 1.1 x peak) | trans T0 |
 | `KitFuelLean` (9) | sweep with a kit: window mean of the engine's combined lambda (fuel + kit fuel, the N2O's oxygen counted), over the substeps the charge model ran (the kit sprayed for >= half of the window) | `Near` >= 0.90, `Limiting` >= 1.00, `Exceeded` >= 1.10 | lambda / 0.90 | nitrous_kit `/fuel_jet_diameter_mm` + Closed remedy (mm) | P3b-2 |
 | `InjectorDuty` (10) | not produced: no injector model exists anywhere in `core/` (fuel is a mean flow) | - | - | - | later |
@@ -1387,7 +1387,9 @@ is not checked.
 
 `check_driveline_limits(const DynoResult&, const PowertrainDesc&, clutch_file = {})` covers what the engine-only sweep
 cannot see. It returns a `ClutchCapacity` finding at the rpm of the sweep's peak net torque when that torque is within 1.3 x
-of a clutch's static capacity (`capacity_nm * static_factor`). Its **Closed remedy** is in the part field's own terms (the
+of a clutch's static capacity (`capacity_nm * static_factor`): `Near` while the clutch still holds the peak, `Limiting` from the
+static capacity, `Exceeded` more than 15 % over it (the gearbox's band, limit policy `gearbox_rating_over_exceeded`; owner
+2026-10-20). Its **Closed remedy** is in the part field's own terms (the
 kinetic `capacity_nm`): `current = capacity_nm`, `required_min = peak / static_factor` (the smallest capacity that holds the
 peak), `required_margin = 1.3 * peak / static_factor` (the table's safety margin; both equal `peak` and `1.3 * peak` when
 `static_factor` is 1). The ratios `required_min / current` and `required_margin / current` are the "increase by n x" the

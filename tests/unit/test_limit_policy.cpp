@@ -356,10 +356,11 @@ std::string probe_driveline(const LimitPolicy* p) {
     pt_.rpm = 4000.0;
     pt_.torque_nm = 500.0;
     d.points.push_back(pt_);
-    // clutch capacity (static) and gearbox rating pairs: Limiting/Limiting, Near/Exceeded, none/Near
+    // clutch capacity (static) and gearbox rating pairs: Limiting/Limiting, Near/Exceeded, none/Near, Exceeded/none (owner
+    // 2026-10-20: a clutch more than gearbox_rating_over_exceeded over its static capacity, 500 vs 420 = 19 %)
     const struct {
         double clutch, box;
-    } cases[] = {{480.0, 450.0}, {600.0, 420.0}, {10000.0, 480.0}};
+    } cases[] = {{480.0, 450.0}, {600.0, 420.0}, {10000.0, 480.0}, {420.0, 10000.0}};
     for (const auto& cs : cases) {
         PowertrainDesc pd;
         ClutchDesc cl;
