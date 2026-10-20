@@ -247,7 +247,7 @@ TEST_CASE("Audio bank prep P1b: turbo hyper V8 bank equals the pre-move generato
     std::printf("P1b: %.2f s, key %016llx, content %016llx, %zu bytes\n", r.seconds, static_cast<unsigned long long>(r.key),
                 static_cast<unsigned long long>(bank_content_hash(*r.bank)), r.bytes);
     CHECK_FALSE(r.cache_hit);
-    CHECK(bank_content_hash(*r.bank) == 0x898b073253882eb3ULL /* re-pinned 2026-10-19, cause: knock model v4, was 0xaed7766ad5d31620 (v3), 0xe1cd3181553397a5; 2026-10-18: knock opt-in + E85 fuel of the hyper; was 0x56711496c481c4a7 (knock), 0x79cc5e377994856c (before) */);  // pre-move generator
+    CHECK(bank_content_hash(*r.bank) == 0x347c22e7e107fb83ULL /* re-pinned 2026-10-20, cause: burn v3 / knock v6, owner 2026-10-20: hyper is a guess, not tuned, was 0x898b073253882eb3; re-pinned 2026-10-19, cause: knock model v4, was 0xaed7766ad5d31620 (v3), 0xe1cd3181553397a5; 2026-10-18: knock opt-in + E85 fuel of the hyper; was 0x56711496c481c4a7 (knock), 0x79cc5e377994856c (before) */);  // pre-move generator
     CHECK(r.bytes == 6380736);
     // The engine's default forced-induction file given explicitly is the same engine: same key, a hit.
     const auto again = tools::prepare_engine_audio_bank_from_files(
