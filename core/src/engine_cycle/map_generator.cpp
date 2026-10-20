@@ -565,6 +565,7 @@ void EngineMapGenTask::run_point(std::size_t i) {
             kin.p_exponent = s.desc.knock.model.pressure_exponent;  // knock model v3/v4
             kin.dilution_exponent = s.desc.knock.model.dilution_exponent; // knock model v4
             kin.end_burn_fraction = s.desc.knock.model.end_burn_fraction; // knock model v5
+            kin.charge_heat_fraction = s.desc.knock.model.charge_heat_fraction; // knock model v6
             // P7b (knock model v2): the replay runs at the ECU's lambda target of this node (enrichment raises the fuel
             // vapour share of the end gas); the node's own cycle stays at lambda 1.
             const Table2D& lt = s.desc.knock.lambda_target;

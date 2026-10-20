@@ -10,7 +10,7 @@
   },
   "ecu": {
     "ignition_strategy": "knock_limited",
-    "knock_margin_deg": 2.0,
+    "knock_margin_deg": 0.0,
     "lambda_target": {
       "rpm": [0, 7000],
       "p_im_kpa": [20, 100],
@@ -39,7 +39,7 @@
         [30.8787711, 30.8787711, 31.55317535, 31.72923841, 31.75863035, 31.7704193, 31.77779949, 31.78479702, 31.78944907, 31.79307529],
         [32.35462203, 32.35462203, 33.81907827, 34.0962848, 34.19739482, 34.1930163, 34.00263863, 33.85892049, 33.79891991, 33.74486777]
       ],
-      "source": "[D] the minimum over the six lift nodes of the generator's MBT spark at every grid node (theta_mbt_deg of each node's generated maps, printed by the hidden case 'P10 diag: ECU spark table = min over the lift nodes' generated MBT spark' in tests/unit/test_lift_family.cpp). Burn law phase 2b (2026-10-19, vault PHYS-079): re-derived under burn law F - the Wiebe duration now follows each node's charge, so MBT varies over the grid and the lift (the table spans 21.1-34.6 deg BTDC; was the constant 16.731 deg of the fixed 40.3 deg burn). No BMW spark calibration was available; knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg): runtime spark = min(this table, theta_kl)."
+      "source": "[D] the minimum over the six lift nodes of the generator's MBT spark at every grid node (theta_mbt_deg of each node's generated maps, printed by the hidden case 'P10 diag: ECU spark table = min over the lift nodes' generated MBT spark' in tests/unit/test_lift_family.cpp). Burn law phase 2b (2026-10-19, vault PHYS-079): re-derived under burn law F - the Wiebe duration now follows each node's charge, so MBT varies over the grid and the lift (the table spans 21.1-34.6 deg BTDC; was the constant 16.731 deg of the fixed 40.3 deg burn). No BMW spark calibration was available; knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg; margin 0 since 2026-10-20, knock model v6: the calibrated limit already carries the OEM margin, knock_margin_deg is margin beyond it): runtime spark = min(this table, theta_kl)."
     }
   },
   "idle_rpm": 700.0,

@@ -412,6 +412,7 @@ std::uint64_t engine_map_cache_key(const CycleModelDesc& desc, const FuelDesc& f
         f.pod(desc.knock.model.octane_index_k);
         f.pod(desc.knock.model.dilution_exponent);
         f.pod(desc.knock.model.end_burn_fraction); // knock model v5 (burn law phase 2a)
+        f.pod(desc.knock.model.charge_heat_fraction); // knock model v6 (burn law phase 3)
     }
     // Burn law (design C, vault PHYS-079): a law engine folds the law's version and every parameter (H3 rows per
     // field); a Fixed desc folds nothing here, so its key is the pre-law key (its generator version is too).

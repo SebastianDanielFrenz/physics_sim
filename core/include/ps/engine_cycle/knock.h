@@ -9,14 +9,15 @@
 //   * End-gas temperature: isentropic compression of the unburned charge from the IVC state along the single-zone
 //     pressure, cv = a + b*T per group,
 //         (a_m + r_m)*ln(T/T0) + b_m*(T - T0) = r_m*ln(p/p0),
-//     solved by Newton. Wall heat to the end gas is neglected (the single-zone pressure carries the wall loss).
+//     solved by Newton. Wall heat to the end gas is neglected (the single-zone pressure carries the wall loss). The
+//     isentrope starts at T_ivc - k_h (T_ivc - T_im) (knock model v6, KnockModelParams::charge_heat_fraction).
 //     The charge is fresh air, the residual burned fraction AND the fuel vapour (KnockReplayInput::fuel_mass_fraction):
 //     the cycle model's fresh gas is air only (gas.h, "fuel vapour neglected"), which is harmless for its work but not
 //     for the end gas - iso-octane vapour at a lambda-1 mass fraction of 1/(1+AFR) raises the unburned cv by ~16 % at
 //     600 K (gamma ~1.31 instead of ~1.38) and lowers the end-gas temperature at 45 bar by ~100 K. Vapour cv is a
 //     linear fit through two iso-octane ideal-gas cp values (kFuelVapour*, [AS] recalled, not verified locally); the
 //     generator uses the generating fuel's AFR for every listed fuel (only the octane differs between the tables).
-//   * The integral runs until the Wiebe burned fraction reaches KnockModelParams::end_burn_fraction (knock model v5 [M];
+//   * The integral runs until the Wiebe burned fraction reaches KnockModelParams::end_burn_fraction (knock model v6 0.90 [M], v5 0.75 [M];
 //     0.90 [AS] up to v4, on the argument that past it the end gas
 //     left is too small to matter) or EVO, whichever comes first; trapezoidal on a fixed kKnockReplayStepDeg grid.
 //   * theta_kl = the largest advance [deg BTDC] whose integral stays < 1, by bisection between the eta_spark table's own
@@ -36,7 +37,7 @@
 
 namespace ps::engine_cycle {
 
-// End of the integral (Wiebe x_b): the calibrated knock model v5 value (knock_model.h; 0.90 [AS] up to v4).
+// End of the integral (Wiebe x_b): the calibrated knock model value (knock_model.h; v6 0.90 [M], v5 0.75 [M], 0.90 [AS] up to v4).
 inline constexpr real kKnockEndBurnFraction = kKnockCalEndBurnFraction;
 inline constexpr real kKnockReplayStepDeg = 0.5;     // [AS] replay step; KN-C convergence test vs 0.125 deg
 inline constexpr real kKnockSearchBelowMbtDeg = 40.0; // [D] the eta_spark table's most retarded node (map_generator)
@@ -84,6 +85,9 @@ struct KnockReplayInput {
     // start - shifted by the fuel-vapour difference of the two isentropes - and is isentropic only after it; false
     // (default): isentropic from IVC (an adiabatic core).
     bool wall_heat_end_gas = false;
+    // Knock model v6: the end gas starts at T_ivc - k*(T_ivc - op.t_im_k) (k = this, only where T_ivc > t_im_k > 0) - the
+    // share of the charge's heating above the intake temperature the end gas does not carry; 0 = the v5 replay.
+    real charge_heat_fraction = kKnockCalChargeHeatFraction;
 };
 
 struct KnockReplayResult {

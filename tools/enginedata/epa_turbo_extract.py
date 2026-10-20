@@ -58,6 +58,13 @@ exhaust_cam_ret_deg (positive = exhaust cam retarded). The raw value and the wor
 kept (icam_raw, ecam_raw, cam_convention). Honda: intake "CAD ADV", exhaust "CAD RET". Ford 2.7 and Mazda: both "CAD RET".
 Ford 1.6: both "CAD" with the description "Phaser Retard" (retard assumed).
 There is NO air-flow channel in any of these workbooks (the A25A's did not have one either).
+
+EXTERNAL EGR (burn law phase 3, knock model v6): where a workbook has an "EGR Inlet Temp" column (the gas temperature
+at the EGR cooler inlet) the rows carry it as egr_inlet_c plus the flag
+    egr_shut = egr_inlet_c < EGR_SHUT_INLET_C (180 degC [AS])
+- with the EGR valve shut the inlet sits near the coolant / underhood temperature (A25A Tier 3: 55-163 degC), with
+exhaust gas flowing it reads 200-650 degC; nothing in the workbooks gives the EGR mass flow. The cycle model and the
+knock replay have no external EGR, so the knock calibration constrains only egr_shut rows and reports the others.
 """
 from __future__ import annotations
 
@@ -88,6 +95,7 @@ PART_MAP_KPA = 85.0
 PART_BMEP_BAR = 1.0
 PART_MIN_RPM = 1000.0
 SPEED_BIN_RPM = 50
+EGR_SHUT_INLET_C = 180.0  # [AS] see the module docstring: below it the EGR valve is taken as shut
 
 # package key -> (directory fragment, engine, fuel file/name, fuel report, cam convention)
 PACKAGES = {
@@ -157,6 +165,7 @@ HEADER_MAP = {
     "expansion ratio": "expansion_ratio_effective",
     "expansion stroke length": "expansion_stroke_mm",
     "epa atkinson ratio": "atkinson_ratio",
+    "egr inlet temp": "egr_inlet_c",
 }
 
 _NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -259,6 +268,8 @@ def extract(key: str, src: Path) -> dict:
                 r["intake_cam_adv_deg"] = r["icam_raw"] if spec["icam"] == "adv" else -r["icam_raw"]
             if "ecam_raw" in r:
                 r["exhaust_cam_ret_deg"] = r["ecam_raw"] if spec["ecam"] == "ret" else -r["ecam_raw"]
+            if "egr_inlet_c" in r:
+                r["egr_shut"] = r["egr_inlet_c"] < EGR_SHUT_INLET_C
             rows.append(r)
     # selection
     bmep_max = max(r["bmep_bar"] for r in rows)
@@ -271,6 +282,8 @@ def extract(key: str, src: Path) -> dict:
     for i, r in enumerate(rows):
         r["envelope"] = best[r["speed_bin_rpm"]] == i
         r["high_load"] = r["bmep_bar"] >= BMEP_FRACTION * bmep_max
+    egr_note = (f" Rows with an EGR inlet temperature carry egr_shut = egr_inlet_c < {EGR_SHUT_INLET_C:g} degC [AS]."
+                if any("egr_inlet_c" in r for r in rows) else "")
     return {
         "format": "physics_sim.epa_turbo_rows/1",
         "package": key,
@@ -280,7 +293,7 @@ def extract(key: str, src: Path) -> dict:
         "source": f"EPA NVFEL benchmark test-data package, workbook '{wb_path.name}' (package directory {wb_path.parent.name[2:]}); "
                   "public data, https://www.epa.gov/vehicle-and-fuel-emissions-testing/ (urls in out/epa_turbo_dl/urls.txt). "
                   "Literal workbook readings rounded to 6 significant digits; nothing derived except the normalised cam signs, "
-                  "the two-bank lambda mean and the envelope / high_load flags.",
+                  "the two-bank lambda mean and the envelope / high_load flags." + egr_note,
         "selection": f"high_load = bmep_bar >= {BMEP_FRACTION} * max(bmep_bar) = {r6(BMEP_FRACTION * bmep_max)} bar; "
                      f"envelope = highest torque among all rows of the {SPEED_BIN_RPM}-rpm speed bin",
         "cam_convention": {"intake": "workbook CAD " + ("ADV" if spec["icam"] == "adv" else "RET"),

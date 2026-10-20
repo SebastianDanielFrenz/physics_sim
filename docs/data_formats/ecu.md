@@ -63,7 +63,7 @@ Inside the `ecu` object (inline in an engine or in an ECU part):
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `ignition_strategy` | string | `"schedule"` | `"schedule"`: the spark is the ECU table (every engine before P7). `"knock_limited"`: the runtime spark is `min(table, theta_kl)`; theta_kl is generated from the cycle block for every listed fuel (or taken from `maps.theta_kl_deg`) |
-| `knock_margin_deg` | real, deg crank | required with `"knock_limited"` | how far the ECU stays below the knock-onset spark; in [0, 10] |
+| `knock_margin_deg` | real, deg crank | required with `"knock_limited"` | how far the ECU stays below the model's knock limit; in [0, 10]. The knock model is calibrated on production engines' measured spark taken as the limit (knock model v6), so its limit already carries the OEM's own margin: this key is margin BEYOND that OEM-equivalent limit (shipped engines 0 since 2026-10-20; the hyper 2) |
 
 With `"knock_limited"` the spark table may be omitted (and a cycle block's
 `spark_advance_deg` removed with `null` in a child engine): the ECU then tracks

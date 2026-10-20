@@ -573,7 +573,11 @@ TEST_CASE("P7 K4: the closed-cycle replay - p_max of the cycle, the integral ris
             auto dtdl = [&](real t) { return rm * t / (cv(t) + rm); };
             const int n = 4000;
             const real dl = std::log(end.p_end_pa / s0.p) / n;
+            // Knock model v6: the end gas starts the charge-heat fraction of the way from T_ivc back toward the intake
+            // temperature.
             real t = s0.t;
+            REQUIRE(s0.t > op.t_im_k);
+            t -= ec::kKnockCalChargeHeatFraction * (s0.t - op.t_im_k);
             for (int k = 0; k < n; ++k) {
                 const real k1 = dtdl(t), k2 = dtdl(t + 0.5 * dl * k1), k3 = dtdl(t + 0.5 * dl * k2), k4 = dtdl(t + dl * k3);
                 t += dl * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0;
@@ -997,12 +1001,14 @@ TEST_CASE("P7b diag: garage CR ranges with the calibrated knock limit", "[.][dia
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// K9 (knock model v5, burn law phase 2a): the generator reads the knock model's parameter set from the desc, not the
-// compiled defaults - an end fraction of 0.6 instead of the calibrated 0.75 ends the Livengood-Wu integral earlier, so
+// K9 (knock model v5, burn law phase 2a; v6 phase 3): the generator reads the knock model's parameter set from the desc,
+// not the compiled defaults - an end fraction of 0.6 instead of the calibrated 0.90 (v6; v5 0.75) ends the Livengood-Wu integral earlier, so
 // no node's knock limit falls and at least one limited node's rises; every other model field moves the table too.
 // Recorded sabotages (2026-10-19): the generator line kin.end_burn_fraction removed -> "rose > 0" fails (0 rose); the
 // end fraction dropped from the cache key -> H3 row knock.model.end_burn_fraction fails (test_engine_map_cache.cpp);
-// douaud_eyzat_v5.json end fraction 0.74 -> "KCB knock model file" fails.
+// douaud_eyzat_v5.json end fraction 0.74 -> "KCB knock model file" fails. v6 (2026-10-20): the generator line
+// kin.charge_heat_fraction removed -> moves("charge_heat_fraction") fails; the charge-heat fraction dropped from the cache
+// key -> H3 row knock.model.charge_heat_fraction fails.
 TEST_CASE("P7 K9: the generator reads the knock model from the desc (v5 end fraction)", "[knock][drivetrain][cycle]") {
     const CycleModelDesc d = small_knock_desc();
     REQUIRE(d.knock.model.end_burn_fraction == ec::kKnockCalEndBurnFraction);
@@ -1037,4 +1043,5 @@ TEST_CASE("P7 K9: the generator reads the knock model from the desc (v5 end frac
     moves("activation_k", [](CycleModelDesc& x) { x.knock.model.activation_k += 300.0; });
     moves("octane_index_k", [](CycleModelDesc& x) { x.knock.model.octane_index_k = 0.9; });
     moves("dilution_exponent", [](CycleModelDesc& x) { x.knock.model.dilution_exponent += 3.0; });
+    moves("charge_heat_fraction", [](CycleModelDesc& x) { x.knock.model.charge_heat_fraction = 0.6; }); // knock model v6
 }

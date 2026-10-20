@@ -182,9 +182,13 @@ std::unique_ptr<Package> load_a25a() {
 // The A25A's EPA Tier 3 part-load rows (tests/support/fixtures/burn_law/a25a_t3_part_rows.json: MAP <= 85 kPa, lambda
 // 0.95-1.05, BMEP >= 1 bar, rpm >= 1000) - the A25A's own light/part-load no-knock rows, every row flagged envelope so
 // the envelope-only preparation keeps them. Engine and fuel as load_a25a (knock opted in, margin 0, no schedule).
-std::unique_ptr<Package> load_a25a_part() {
+// Knock model v6: the rows split by the extractor's egr_shut flag (EGR inlet temperature < 180 degC [AS]) - EgrShut, the
+// 36 rows the light-load constraint covers ("a25a_part_light"); EgrFlowing, the 31 rows with cooled external EGR
+// flowing, which the cycle model and the replay do not model ("a25a_part_egr", reported only); All, both.
+enum class PartRows { All, EgrShut, EgrFlowing };
+std::unique_ptr<Package> load_a25a_part(PartRows which = PartRows::All) {
     auto pk = std::make_unique<Package>();
-    pk->name = "a25a_part_light";
+    pk->name = which == PartRows::EgrShut ? "a25a_part_light" : which == PartRows::EgrFlowing ? "a25a_part_egr" : "a25a_part_all";
     const std::unique_ptr<Package> base = load_a25a();
     pk->desc = base->desc;
     pk->fuel = base->fuel;
@@ -193,6 +197,8 @@ std::unique_ptr<Package> load_a25a_part() {
     REQUIRE(in.good());
     const json j = json::parse(in);
     for (const json& r : j.at("rows")) {
+        const bool shut = r.at("egr_shut").get<bool>();
+        if ((which == PartRows::EgrShut && !shut) || (which == PartRows::EgrFlowing && shut)) continue;
         Row w{};
         w.rpm = r.at("rpm").get<real>();
         w.map_kpa = r.at("map_kpa").get<real>();
@@ -312,6 +318,7 @@ struct Model {
     real k_oi = ec::kOctaneIndexK;
     real gamma = ec::kKnockCalDilutionExponent; // residual-dilution exponent: rate x (1 - x_res)^gamma
     real xb_end = ec::kKnockEndBurnFraction;    // end of the Livengood-Wu integral (Wiebe burned fraction)
+    real k_h = ec::kKnockCalChargeHeatFraction; // v6: share of the charge heating the end gas does not carry
 };
 
 struct Res {
@@ -333,6 +340,7 @@ std::vector<Res> eval_all(const Package& pk, const std::vector<Prepared>& pr, co
             kin.p_exponent = m.p_exp;
             kin.activation_k = m.b_k;
             kin.end_burn_fraction = m.xb_end;
+            kin.charge_heat_fraction = m.k_h;
             const ec::KnockLimitResult kl = ec::knock_limited_spark(kin, pr[i].mbt_btdc, 0.0);
             out[i].ok = true;
             out[i].theta_kl = kl.theta_kl_btdc;
@@ -428,8 +436,10 @@ std::vector<Set>& sets() {
         add(load_package("ford_16_levIII", "ford_16", true));
         add(load_package("mazda_25t_t2", "mazda_25t", true));
         add(load_package("mazda_25t_t3", "mazda_25t", true));
-        // Burn law phase 2b diag (PS_KCB_A25A_PART=1): the A25A's own part-load rows join the light-load constraint.
-        if (std::getenv("PS_KCB_A25A_PART") != nullptr) add(load_a25a_part());
+        // Knock model v6: the A25A's own part-load rows with the EGR valve shut join the light-load constraint; the rows
+        // with external EGR flowing are a report set (not "_light": outside the constraint).
+        add(load_a25a_part(PartRows::EgrShut));
+        add(load_a25a_part(PartRows::EgrFlowing));
         return v;
     }();
     return s;
@@ -539,12 +549,18 @@ real light_max_violation(const Model& m) {
 // PS_KCB_ABAND, PS_KCB_LBAND).
 real g_kv1bc_band = kA25aBandDeg - 0.05;
 real g_light_band = kLightTolDeg - 0.05;
+constexpr real kA25aMeanBandDeg = 1.75; // KV1-BC's mean band (declared at v5)
+real g_kv1bc_mean_band = kA25aMeanBandDeg - 0.05;
 real fit_rms_obj(const Model& m) {
     real pen = 0.0;
     for (const Set& s : sets()) {
         if (s.pk->name != "a25a_kv1bc") continue;
         const Stats st = stats(*s.pk, eval_all(*s.pk, s.pr, m), true);
         if (st.max_abs > g_kv1bc_band) pen = 10.0 * (st.max_abs - g_kv1bc_band) * (st.max_abs - g_kv1bc_band) + 0.5 * (st.max_abs - g_kv1bc_band);
+        // Knock model v6: also KV1-BC's declared mean band (|mean| < 1.75 deg since v5, test_knock_calibration.cpp), minus
+        // the same 0.05 deg slack - v5 met it without the term (+1.44), the first v6 descent did not (+2.10).
+        const real e = std::abs(st.mean) - g_kv1bc_mean_band;
+        if (e > 0.0) pen += 10.0 * e * e + 0.5 * e;
     }
     if (g_light_penalty) {
         const real e = light_max_violation(m) - g_light_band;
@@ -744,7 +760,7 @@ TEST_CASE("KCB diag: fine grid", "[.][diag][knock][knock_cal]") { fine_grid(true
 TEST_CASE("KCB diag: fine grid with the trapped-air rule", "[.][diag][knock][knock_cal]") { fine_grid(false); }
 
 TEST_CASE("KCB diag: chosen model and its sensitivities", "[.][diag][knock][knock_cal]") {
-    const Model m; // the compiled knock model v5
+    const Model m; // the compiled knock model
     struct V {
         const char* name;
         BcOpt o;
@@ -810,7 +826,7 @@ TEST_CASE("KCB diag: engine WOT table", "[.][diag][knock][knock_cal]") {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Knock model v5 (burn law phase 2a; v4 knock calibration phase B): asserted checks at MEASURED boundary conditions
+// Knock model v6 (burn law phase 3; v5 phase 2a, v4 knock calibration phase B): asserted checks at MEASURED boundary conditions
 // (fit_bc: trapped = measured air, measured IMT/lambda/cam, exhaust at ambient). Like KV1-BC the measured ECU spark is
 // taken as the knock limit with margin 0 (it is the OEM's knock limit minus its own margin, so the calibrated model
 // absorbs that margin). Every replay runs at the burn law's own per-cycle burn angles (the generator's convention).
@@ -824,6 +840,11 @@ TEST_CASE("KCB diag: engine WOT table", "[.][diag][knock][knock_cal]") {
 // bands (Honda rms 3.0, rows +-6.5) were declared before the v3 run; v3 met them but failed the light-load check found
 // afterwards (Ford 2.7 part load 22 deg, demo I4 idle). v4 traded 0.4 deg of Honda T3 rms for it (3.46 vs 2.87), and
 // its row band was widened to +-7 deg after the v4 run (Honda T3 max 6.73, held-out max 6.76).
+// v6 bands (burn law phase 3, 2026-10-20): the v5 bands unchanged, declared before the final v6 run; the light-load
+// constraint and check now also cover the A25A's EGR-shut part-load rows (a25a_part_light), and the objective also carries
+// KV1-BC's A25A mean band (1.75 deg). v6 measured: A25A max 5.74 (mean +1.55), Honda T3 rms 3.92 / max 6.25 / 0
+// saturated, held-out worst rms 3.48 (Ford 2.7 T3 HD) / max 7.31 (Ford 2.7 T2 HD1), light-load max 2.84 (a25a_part_light)
+// - every band met.
 namespace {
 constexpr real kFitRmsHonda = 4.25;  // v5 measured 3.85 (v4 band 3.5)
 constexpr real kFitMaxHonda = 8.0;   // v5 measured 7.40 (v4 band 7.0)
@@ -848,7 +869,7 @@ void prepare_named(const std::vector<std::string>& names) {
 void check_package(const std::string& name, real rms_bound, real max_bound, int max_saturated = 0) {
     const Set* s = find_set(name);
     REQUIRE(s != nullptr);
-    const Model m; // the compiled knock model v5
+    const Model m; // the compiled knock model
     const std::vector<Res> r = eval_all(*s->pk, s->pr, m);
     const Stats st = stats(*s->pk, r, true);
     std::printf("KCB %-22s n %2d mean %+6.2f rms %5.2f max %5.2f\n", name.c_str(), st.n, st.mean, st.rms, st.max_abs);
@@ -866,8 +887,8 @@ void check_package(const std::string& name, real rms_bound, real max_bound, int 
 }
 } // namespace
 
-TEST_CASE("KCB knock model file equals the compiled knock model v5", "[knock][knock_cal][io]") {
-    const std::string path = std::string(PS_SOURCE_DIR) + "/data/knock_models/douaud_eyzat_v5.json";
+TEST_CASE("KCB knock model file equals the compiled knock model v6", "[knock][knock_cal][io]") {
+    const std::string path = std::string(PS_SOURCE_DIR) + "/data/knock_models/douaud_eyzat_v6.json";
     const io::KnockModelFile f = io::load_knock_model_json(path);
     const ec::KnockModelParams d;
     CHECK(f.version == static_cast<int>(ec::kKnockModelVersion));
@@ -880,6 +901,8 @@ TEST_CASE("KCB knock model file equals the compiled knock model v5", "[knock][kn
     CHECK(f.params.dilution_exponent == d.dilution_exponent);
     CHECK(f.params.end_burn_fraction == d.end_burn_fraction);
     CHECK(d.end_burn_fraction == ec::kKnockEndBurnFraction); // the replay default is the calibrated value
+    CHECK(f.params.charge_heat_fraction == d.charge_heat_fraction);
+    CHECK(ec::KnockReplayInput{}.charge_heat_fraction == d.charge_heat_fraction); // v6: the replay default too
     // The desc default is the same set (what the loader leaves in CycleModelDesc::knock.model).
     const CycleModelDesc c;
     CHECK(c.knock.model.prefactor_scale == d.prefactor_scale);
@@ -888,6 +911,7 @@ TEST_CASE("KCB knock model file equals the compiled knock model v5", "[knock][kn
     CHECK(c.knock.model.octane_index_k == d.octane_index_k);
     CHECK(c.knock.model.dilution_exponent == d.dilution_exponent);
     CHECK(c.knock.model.end_burn_fraction == d.end_burn_fraction);
+    CHECK(c.knock.model.charge_heat_fraction == d.charge_heat_fraction);
     // Rejections (matched by type only - TOOL-019 on the asan leg).
     std::ifstream in(path);
     json j;
@@ -924,13 +948,42 @@ TEST_CASE("KCB knock model file equals the compiled knock model v5", "[knock][kn
     json k = j;
     k.erase("end_burn_fraction");
     rejects("no_end_fraction", k);
+    json q = j;
+    q["charge_heat_fraction"]["value"] = 1.0;
+    rejects("charge_heat_one", q);
+    json q2 = j;
+    q2.erase("charge_heat_fraction");
+    rejects("no_charge_heat", q2);
+    json q3 = j;
+    q3["charge_heat_fraction"]["value"] = -0.1;
+    rejects("charge_heat_negative", q3);
 }
 
-TEST_CASE("KCB fit: knock model v5 on the A25A and Honda L15B7 Tier 3 rows at measured boundary conditions", "[knock][knock_cal]") {
-    std::vector<std::string> names = {"a25a_kv1bc", "honda_l15b7_t3"};
+TEST_CASE("KCB fit: knock model v6 on the A25A and Honda L15B7 Tier 3 rows at measured boundary conditions", "[knock][knock_cal]") {
+    std::vector<std::string> names = {"a25a_kv1bc", "honda_l15b7_t3", "a25a_part_egr"};
     for (const Set& s : sets())
         if (is_light_set(s.pk->name)) names.push_back(s.pk->name);
     prepare_named(names);
+    // The A25A part-load rows with cooled external EGR flowing (not modelled, not constrained): reported row by row so a
+    // later external-EGR diluent can be checked against them. Measured 2026-10-20 under v6: n 31, limited 26, violated 15,
+    // max 8.55 deg (rows 142 and 132, 4032/3572 rpm, MAP 77/84 kPa); v5 under burn law v3, all 67 part rows: violated 28,
+    // max 15.15. Not asserted beyond the row count.
+    {
+        const Set* s = find_set("a25a_part_egr");
+        REQUIRE(s != nullptr);
+        const std::vector<Res> r = eval_all(*s->pk, s->pr, Model{});
+        const LightStats l = light_stats(s->pr, r);
+        std::printf("KCB %-28s n %3d limited %3d violated %3d max violation %5.2f (EGR flowing, report only)\n", "a25a_part_egr", l.n, l.limited,
+                    l.violated, l.max_v);
+        for (std::size_t i = 0; i < r.size(); ++i) {
+            if (!r[i].ok) continue;
+            const real ref = std::min(s->pr[i].spark, s->pr[i].mbt_btdc);
+            const real v = r[i].limited ? std::max(real(0.0), ref - r[i].theta_kl) : 0.0;
+            std::printf("KCB a25a_part_egr row %3d rpm %5.0f map %5.1f spark %6.2f mbt %6.2f kl %6.2f violation %5.2f\n", s->pk->rows[i].row,
+                        s->pk->rows[i].rpm, s->pk->rows[i].map_kpa, s->pr[i].spark, s->pr[i].mbt_btdc, r[i].limited ? r[i].theta_kl : std::nan(""), v);
+        }
+        CHECK(l.n == 31);
+    }
     // Light-load no-knock rows (the v4 fit's second constraint), every package.
     for (const Set& s : sets()) {
         if (!is_light_set(s.pk->name)) continue;
@@ -968,7 +1021,7 @@ TEST_CASE("KCB fit: knock model v5 on the A25A and Honda L15B7 Tier 3 rows at me
         INFO(what);
         CHECK(j0 < jm);
     };
-    Model a = m0, b = m0, c = m0, d = m0, e = m0, f = m0, g = m0, h = m0, xl = m0, xh = m0;
+    Model a = m0, b = m0, c = m0, d = m0, e = m0, f = m0, g = m0, h = m0, xl = m0, xh = m0, kl = m0, kh = m0;
     a.scale *= 0.9;
     b.scale *= 1.1;
     c.p_exp -= 0.05;
@@ -979,8 +1032,10 @@ TEST_CASE("KCB fit: knock model v5 on the A25A and Honda L15B7 Tier 3 rows at me
     h.gamma += 1.0;
     xl.xb_end -= 0.05;
     xh.xb_end += 0.05;
+    kl.k_h -= 0.05;
+    kh.k_h += 0.05;
     // Each neighbour gets its own best pre-factor (the scale and the shape parameters trade off).
-    for (Model* m : {&c, &d, &e, &f, &g, &h, &xl, &xh}) m->scale = fit_scale(*m, std::log10(m0.scale) - 0.5, std::log10(m0.scale) + 0.5).scale;
+    for (Model* m : {&c, &d, &e, &f, &g, &h, &xl, &xh, &kl, &kh}) m->scale = fit_scale(*m, std::log10(m0.scale) - 0.5, std::log10(m0.scale) + 0.5).scale;
     worse("scale x0.9", a);
     worse("scale x1.1", b);
     worse("n -0.05 (own best scale)", c);
@@ -991,6 +1046,8 @@ TEST_CASE("KCB fit: knock model v5 on the A25A and Honda L15B7 Tier 3 rows at me
     worse("gamma +1 (own best scale)", h);
     worse("end fraction -0.05 (own best scale)", xl);
     worse("end fraction +0.05 (own best scale)", xh);
+    worse("charge-heat fraction -0.05 (own best scale)", kl);
+    worse("charge-heat fraction +0.05 (own best scale)", kh);
     g_kv1bc_penalty = false;
     g_light_penalty = false;
 }
@@ -1003,19 +1060,23 @@ TEST_CASE("KCB holdout: Honda L15B7 Tier 2 and Ford 2.7 EcoBoost at measured bou
 
 TEST_CASE("KCB report: Ford 1.6 EcoBoost and Mazda 2.5 T at measured boundary conditions", "[knock][knock_cal][!mayfail]") {
     // Not fitted, no claim: Ford 1.6 (bore/stroke [AS]) and Mazda 2.5 T (cooled EGR not modelled) read 0.9-4.0 deg too
-    // knock-resistant on average - v5 (2026-10-19): mean +6.89/+6.77 rms 8.25/7.87 (Ford 1.6 T2/LEV III), +5.65/+3.36 and
+    // knock-resistant on average - v6 (2026-10-20): mean +4.61/+4.87 rms 5.17/5.35 max 7.55/8.48 (Ford 1.6 T2/LEV III),
+    // +4.00/+2.37 rms 5.32/4.32 max 8.00/6.08 (Mazda T2/T3) - inside the held-out bands; v5 (2026-10-19): mean +6.89/+6.77 rms 8.25/7.87 (Ford 1.6 T2/LEV III), +5.65/+3.36 and
     // 7.88/6.69 (Mazda T2/T3); v4: 0.9-4.0 deg, rms 4.3-5.4; v3 4.7-6.5 - outside the held-out band.
     const std::vector<std::string> names = {"ford_16_t2", "ford_16_levIII", "mazda_25t_t2", "mazda_25t_t3"};
     prepare_named(names);
     for (const std::string& n : names) check_package(n, kHoldRms, kBandMax);
 }
 
-// The v4 bands under knock model v5 (burn law phase 2a, measured 2026-10-19): A25A rows +-5 deg (v5 max 7.21, rows 23
+// The v4 bands under knock model v6 (burn law phase 3, measured 2026-10-20): A25A rows +-5 deg (v6 max 5.74), Honda T3
+// rms 3.5 / rows +-7 / no saturation (v6 3.92 / 6.25 / 0 - rms missed), held-out rms 3.5 / rows +-7 (v6 Ford 2.7 T2 HD1
+// 2.65 / 7.31 and T3 HD 3.48 / 7.02 miss the row band, the other three meet it), light-load 2 deg (v6 2.84
+// a25a_part_light, 2.65 Ford 2.7 LEV III cell 9). Under knock model v5 (burn law phase 2a, measured 2026-10-19): A25A rows +-5 deg (v5 max 7.21, rows 23
 // and 26 at 2017/2535 rpm among those outside), Honda T3 rms 3.5 / rows +-7 / no saturation (v5 3.85 / 7.40 / 1),
 // held-out rms 3.5 / rows +-7 (v5 Honda T2 3.89 / 8.25, Ford 2.7 Tier 3 HD 5.58 / 8.89; Ford 2.7 T2 cell 9 3.24 / 5.45,
 // LEV III cell 9 1.55 / 2.64, T2 HD1 3.40 / 5.53 meet them), light-load 2 deg (v5 2.40, Honda T3 light rows). Expected to
 // fail until a knock model meets the v4 bands under the burn law.
-TEST_CASE("KCB v4 bands under knock model v5", "[knock][knock_cal][!mayfail]") {
+TEST_CASE("KCB v4 bands under knock model v6", "[knock][knock_cal][!mayfail]") {
     std::vector<std::string> names = {"a25a_kv1bc", "honda_l15b7_t3", "honda_l15b7_t2", "ford_27_t2_cell9", "ford_27_levIII_cell9", "ford_27_t2_hd1",
                                       "ford_27_t3_hd"};
     for (const Set& s : sets())
@@ -1641,6 +1702,112 @@ TEST_CASE("KCB diag: v5 coordinate descent", "[.][diag][knock][knock_cal]") {
     g_light_penalty = false;
 }
 
+// Burn law phase 3 (knock model v6): coordinate descent like the v5 one over the parameters named in PS_KCB_FREE
+// (letters g gamma, n, b B, x end fraction, h charge-heat fraction k_h; default "gnbxh"), each trial with its own best
+// pre-factor; steps gamma 1, n 0.05, B 200 K, x_b 0.05, k_h 0.05. Start from PS_KCB_G0/N0/B0/XB/KH0 (defaults: v5's
+// gamma 4, n 1.2, B 6400, x_b 0.75, k_h 0). The v6 runs (2026-10-20, the EGR-shut A25A part rows in the constraint):
+// without the A25A mean band in the objective gamma 3, n 1.15, B 6400, x_b 0.90, k_h 0.15, objective 3.378 (A25A mean
+// +2.10 - misses KV1-BC's 1.75); with it (shipped) from both the v5 point and that one gamma 3, n 1.15, B 6400, x_b 0.85,
+// k_h 0.20, scale 0.005552, objective 3.421. A wall-heat candidate (the end gas
+// following the bulk's Woschni deficit scaled by k_w) never left k_w 0 (objective 6.36, the same as no new term); with
+// all 67 part rows constrained the descent ends at k_h 0.35 (objective 4.55), which reads the boosted held-out packages
+// 3-5 deg too knock-resistant (Ford 2.7 T2 HD1 max 15.8 deg).
+TEST_CASE("KCB diag: phase 3 coordinate descent", "[.][diag][knock][knock_cal]") {
+    auto env = [](const char* k, real d) { const char* e = std::getenv(k); return e ? std::atof(e) : d; };
+    const std::string free = std::getenv("PS_KCB_FREE") ? std::getenv("PS_KCB_FREE") : "gnbxh";
+    g_kv1bc_penalty = true;
+    g_light_penalty = true;
+    g_kv1bc_band = env("PS_KCB_ABAND", kA25aBandDeg - 0.05);
+    g_light_band = env("PS_KCB_LBAND", kLightTolDeg - 0.05);
+    prepare_sets(fit_bc());
+    Model m;
+    m.gamma = env("PS_KCB_G0", 4.0);
+    m.p_exp = env("PS_KCB_N0", 1.2);
+    m.b_k = env("PS_KCB_B0", 6400.0);
+    m.xb_end = env("PS_KCB_XB", 0.75);
+    m.k_h = env("PS_KCB_KH0", 0.0);
+    auto refit = [&](Model t) {
+        const real centre = std::log10(kV2Scale) + (t.p_exp - ec::kDouaudEyzatPExponent) * std::log10(50.0) - (t.b_k - 3800.0) / 850.0 * 0.4343;
+        return fit_scale(t, centre - 1.5, centre + 1.5);
+    };
+    auto show = [&](const char* tag, const Model& t, real j) {
+        real ra = 0, rh = 0;
+        const real r = fit_rms(t, &ra, &rh);
+        std::printf("%s gamma %.2f n %.3f B %.0f xb %.3f kh %.3f scale %.6g obj %.4f rms %.3f (A25A %.3f Honda %.3f) light %.2f\n", tag,
+                    t.gamma, t.p_exp, t.b_k, t.xb_end, t.k_h, t.scale, j, r, ra, rh, light_max_violation(t));
+        std::fflush(stdout);
+    };
+    m = refit(m);
+    real j = fit_rms_obj(m);
+    show("start", m, j);
+    for (int it = 0; it < 60; ++it) {
+        Model best = m;
+        real jb = j;
+        for (const char c : free) {
+            for (const real sgn : {-1.0, 1.0}) {
+                Model t = m;
+                switch (c) {
+                case 'g': t.gamma += sgn * 1.0; break;
+                case 'n': t.p_exp += sgn * 0.05; break;
+                case 'b': t.b_k += sgn * 200.0; break;
+                case 'x': t.xb_end += sgn * 0.05; break;
+                case 'h': t.k_h += sgn * 0.05; break;
+                default: continue;
+                }
+                if (t.gamma < 0.0 || t.xb_end >= 0.999 || t.xb_end <= 0.2 || t.k_h < -1e-12 || t.k_h >= 1.0) continue;
+                t = refit(t);
+                const real jt = fit_rms_obj(t);
+                if (jt < jb) {
+                    jb = jt;
+                    best = t;
+                }
+            }
+        }
+        if (!(jb < j)) break;
+        m = best;
+        j = jb;
+        show("move ", m, j);
+    }
+    show("final", m, j);
+    g_kv1bc_penalty = false;
+    g_light_penalty = false;
+}
+
+// Burn law phase 3: one candidate model (PS_KCB_SCALE/N/B/G/XB/KH, defaults = compiled) on every package at the fit
+// BC - fit, held-out and report packages (n, mean, rms, max, saturated) and every light set (limited, violated, max).
+TEST_CASE("KCB diag: candidate model on every package", "[.][diag][knock][knock_cal]") {
+    auto env = [](const char* k, real d) { const char* e = std::getenv(k); return e ? std::atof(e) : d; };
+    Model m;
+    m.scale = env("PS_KCB_SCALE", m.scale);
+    m.p_exp = env("PS_KCB_N", m.p_exp);
+    m.b_k = env("PS_KCB_B", m.b_k);
+    m.gamma = env("PS_KCB_G", m.gamma);
+    m.xb_end = env("PS_KCB_XB", m.xb_end);
+    m.k_h = env("PS_KCB_KH", m.k_h);
+    std::vector<std::string> names = {"a25a_kv1bc", "honda_l15b7_t3", "honda_l15b7_t2", "ford_27_t2_cell9", "ford_27_levIII_cell9",
+                                      "ford_27_t2_hd1", "ford_27_t3_hd", "ford_16_t2", "ford_16_levIII", "mazda_25t_t2", "mazda_25t_t3"};
+    const std::size_t n_env = names.size();
+    for (const Set& s : sets())
+        if (is_light_set(s.pk->name)) names.push_back(s.pk->name);
+    names.push_back("a25a_part_egr");
+    prepare_named(names);
+    std::printf("model scale %.6g n %.3f B %.0f gamma %.2f xb %.3f kh %.3f\n", m.scale, m.p_exp, m.b_k, m.gamma, m.xb_end, m.k_h);
+    for (std::size_t k = 0; k < names.size(); ++k) {
+        const Set* s = find_set(names[k]);
+        if (s == nullptr || s->pr.empty()) continue;
+        const std::vector<Res> r = eval_all(*s->pk, s->pr, m);
+        if (k < n_env) {
+            const Stats st = stats(*s->pk, r, true);
+            int sat = 0;
+            for (const Res& x : r) sat += (x.ok && x.saturated) ? 1 : 0;
+            std::printf("PKG %-22s n %2d mean %+6.2f rms %5.2f max %5.2f sat %d\n", names[k].c_str(), st.n, st.mean, st.rms, st.max_abs, sat);
+        } else {
+            const LightStats l = light_stats(s->pr, r);
+            std::printf("LIGHT %-26s n %3d limited %3d violated %3d max %5.2f\n", names[k].c_str(), l.n, l.limited, l.violated, l.max_v);
+        }
+    }
+}
+
 // Burn law phase 2b: the A25A part-load rows (its own EPA Tier 3 MAP <= 85 kPa rows, measured spark, ECU logged no
 // knock) against a knock model at measured boundary conditions (KV1-BC's rule): per row theta_kl, min(spark, MBT) and
 // the violation, then per MAP band; then the fit numbers of the same model (A25A KV1-BC rows, Honda T3 rms, light-load
@@ -1653,6 +1820,7 @@ TEST_CASE("KCB diag: A25A part-load rows against the knock model", "[.][diag][kn
     m.b_k = env("PS_KCB_B", m.b_k);
     m.gamma = env("PS_KCB_G", m.gamma);
     m.xb_end = env("PS_KCB_XB", m.xb_end);
+    m.k_h = env("PS_KCB_KH", m.k_h);
     if (std::getenv("PS_KCB_REFIT") != nullptr) { // refit the pre-factor alone, under the descent's penalised objective
         g_kv1bc_penalty = true;
         g_light_penalty = true;

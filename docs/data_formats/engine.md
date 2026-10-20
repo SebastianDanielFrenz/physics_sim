@@ -1059,21 +1059,28 @@ Model (`core/include/ps/engine_cycle/knock.h`, `core/src/engine_cycle/knock.cpp`
    `ecu.lambda_target` into the cycle's knock block, absent = 1; the node's own cycle still runs at lambda 1): the cycle model's fresh gas is air only (gas.h), which is harmless for its work but not for the end
    gas - vapour raises the unburned cv ~16 % at 600 K and lowers the end-gas temperature ~140 K at 80 bar. Vapour cv: a
    linear fit through iso-octane ideal-gas cp 188.9 J/(mol K) at 298.15 K and 425 at 900 K [AS, recalled], M 114.23 g/mol
-   [C]. Wall heat to the end gas is neglected.
+   [C]. Wall heat to the end gas is neglected. Knock model v6: the isentrope starts at `T_ivc - k_h (T_ivc - T_im)`
+   (`charge_heat_fraction` k_h 0.20 [M], T_im the node's intake temperature, only where T_ivc > T_im) - the share of the
+   generated charge's heating above the intake temperature the end gas does not carry (EFFECTIVE: the single-zone IVC
+   state mixes the hot residual uniformly, while the end gas at the periphery is the coldest charge).
 4. Douaud & Eyzat 1978 (SAE 780080, via Heywood 1988 sec. 9.6.2, not verified locally [AS]):
    `tau [s] = s_cal * 17.68e-3 * (OI/100)^3.402 * (p/1 atm)^-n * exp(B/T)` (literature n 1.7, B 3800 K), times the
    residual-dilution factor `(1 - x_res)^-gamma` on tau (the ignition rate scaled by `(1 - x_res)^gamma`, x_res = the end
-   gas's residual mass fraction at IVC, constant over the replay). Knock model v5 (burn law phase 2a, see
-   "Calibration v5" below): `s_cal` 0.006095, `n` 1.2, `B` 6400 K, `gamma` 4, end burned fraction 0.75, all [M], in
-   `data/knock_models/douaud_eyzat_v5.json` (physics_sim.knock_model/1, `ps::io::load_knock_model_json`; key
-   `end_burn_fraction` in (0, 1)) and as the compiled defaults in `core/include/ps/engine_cycle/knock_model.h` (a test pins
-   file == compiled); the generator reads all six from `CycleModelDesc::knock.model` (test K9). With the octane index
+   gas's residual mass fraction at IVC, constant over the replay). Knock model v6 (burn law phase 3, see
+   "Calibration v6" below): `s_cal` 0.005552, `n` 1.15, `B` 6400 K, `gamma` 3, end burned fraction 0.85, charge-heat
+   fraction 0.20, all [M], in `data/knock_models/douaud_eyzat_v6.json` (physics_sim.knock_model/1,
+   `ps::io::load_knock_model_json`; keys `end_burn_fraction` in (0, 1), `charge_heat_fraction` in [0, 1)) and as the
+   compiled defaults in `core/include/ps/engine_cycle/knock_model.h` (a test pins file == compiled); the generator reads
+   all seven from `CycleModelDesc::knock.model` (test K9). With the octane index
    `OI = RON - K*(RON - MON)`, K 0.5 [AS] (= (R+M)/2). Livengood-Wu: knock when `integral dt/tau >= 1`, integrated from IVC
-   to the Wiebe burned fraction `end_burn_fraction` (`kKnockEndBurnFraction`, 0.75 [M] since v5; 0.90 [AS] up to v4) or
+   to the Wiebe burned fraction `end_burn_fraction` (`kKnockEndBurnFraction`, 0.85 [M] in v6, 0.75 [M] in v5; 0.90 [AS] up to v4) or
    EVO, trapezoidal.
 5. theta_kl = the largest advance [deg BTDC] whose integral stays < 1, by bisection (0.05 deg [AS]) between theta_MBT - 40
    and theta_MBT + 10 [D] (the eta_spark table's own edges; outside them the runtime has no efficiency data). A node knocking
-   even at theta_MBT - 40 saturates there (counted in the unhashed `EngineMaps` diagnostics). The ECU margin is subtracted at
+   even at theta_MBT - 40 saturates there (counted in the unhashed `EngineMaps` diagnostics). The ECU margin
+   (`knock_margin_deg`, margin BEYOND the calibrated limit: the calibration takes the production engines' measured spark as
+   the limit, so the model's limit already carries the OEM's own margin; shipped 0 since 2026-10-20 except the hyper's 2)
+   is subtracted at
    KNOCK-LIMITED nodes only (theta_kl < theta_MBT + 10); a node that never knocks stays at theta_MBT + 10, so the runtime
    min() leaves the ECU's own target there.
 
@@ -1083,10 +1090,10 @@ workers, knock off -> on [M]: a25a_gen Sketch 0.020 -> 0.030 s, Preview 0.051 ->
 demo_i4_pipes 0.550 -> 0.556 / 1.188 -> 1.182 / 2.604 -> 2.740 s; hyper Sketch 0.735 -> 0.751 s (budget 1.5 s), Preview
 1.795 -> 1.793 s, Full 3.950 -> 4.010 s.
 
-Cache and hashes: with the opt-in the `.psmaps` key folds a "p7.knock_limit" tag, `kKnockModelVersion` 5 (burn law phase 2a;
-4 at knock calibration phase B, 3 without the dilution term, 2 at P7b, 1 at P7), the margin, each fuel's name/RON/MON (in fuels order), the knock lambda target table and (v3-v5) the
+Cache and hashes: with the opt-in the `.psmaps` key folds a "p7.knock_limit" tag, `kKnockModelVersion` 6 (burn law phase 3;
+5 at burn law phase 2a, 4 at knock calibration phase B, 3 without the dilution term, 2 at P7b, 1 at P7), the margin, each fuel's name/RON/MON (in fuels order), the knock lambda target table and (v3-v5) the
 model parameters `knock.model` (pre-factor scale, pressure exponent, activation temperature, octane-index K, from v4
-the dilution exponent and from v5 the end burned fraction); the file carries an optional trailing knock block; the maps content hash folds the
+the dilution exponent, from v5 the end burned fraction and from v6 the charge-heat fraction); the file carries an optional trailing knock block; the maps content hash folds the
 per-fuel tables only when present. All three are untouched without the opt-in (H3 table extended).
 
 MBT tracking: a knock-limited ECU may omit its spark table; the loader then fills `ecu.spark_advance_deg` from the generated
@@ -1102,9 +1109,53 @@ limit binds (theta_kl < MBT; v3/v4 measure up to 32, v2 12) - enrichment cools t
 replay follows the lambda target), K4 replay vs the cycle and an
 independent isentrope, K5 tank-fuel table selection, K6 determinism/zero alloc/progress/cancel, K7 change classes, K8 dyno
 Knock findings on a turbo conversion, K9 every `knock.model` field reaches the generator (an end fraction of 0.6 instead of
-0.75 never lowers a node's limit and raises some).
+the calibrated one never lowers a node's limit and raises some; v6 adds the charge-heat fraction).
 
-Calibration v5 (burn law phase 2a, 2026-10-19, vault PHYS-079, `tests/unit/test_knock_cal_turbo.cpp` `[knock][knock_cal]`):
+Calibration v6 (burn law phase 3, 2026-10-20, vault PHYS-079, `tests/unit/test_knock_cal_turbo.cpp` `[knock][knock_cal]`):
+under burn law v3 (pressure exponent, "Burn law" below) the v5 set read every package 1-7 deg too knock-prone and the
+A25A's own EPA Tier 3 part-load rows (`tests/support/fixtures/burn_law/a25a_t3_part_rows.json`: MAP <= 85 kPa, lambda
+0.95-1.05, BMEP >= 1 bar, rpm >= 1000; 67 rows) were violated by up to 15 deg. Diagnosis [M]: the workbook's "EGR Inlet
+Temp" reads 200-650 degC on 31 of the 67 rows (cooled external EGR flowing) and 55-163 degC on the other 36 (valve shut);
+the cycle model and the replay have no external EGR, which dilutes and cools the end gas. The extractor
+(`tools/enginedata/epa_turbo_extract.py`) now writes `egr_inlet_c` and `egr_shut = egr_inlet_c < 180 degC` [AS]; the 36
+shut rows join the light-load constraint, the 31 EGR rows are reported only (out of scope, as the Mazda 2.5 T). v6 adds ONE
+parameter, the charge-heat fraction k_h (step 3 of the model above); a second candidate, an end-gas wall-heat fraction
+(the bulk's Woschni deficit scaled by k_w), never left 0 under coordinate descent (objective 6.36, the same as no new
+term) and was dropped. Coordinate descent over gamma, n, B, end fraction and k_h (`KCB diag: phase 3 coordinate descent`,
+steps 1 / 0.05 / 200 K / 0.05 / 0.05, each with its own best scale), same rows and BC rule as v5; bands = the v5 bands,
+declared before the final run. The objective now also carries KV1-BC's declared A25A mean band (|mean| < 1.75 deg,
+minus 0.05 slack): a first descent without it ended at end fraction 0.90, k_h 0.15, scale 0.006542 (objective 3.378) with
+the A25A mean at +2.10 deg - outside KV1-BC's band (and KV2-T's A25A offset 6.2 K > 5). Optimum with the band, reached
+from both the v5 point and that one: gamma 3, n 1.15, B 6400 K, end fraction 0.85, k_h 0.20, scale 0.005552 (objective
+3.421; neighbours scale x0.9/x1.1 69.2/29.2, n -/+0.05 4.360/3.495, B -/+200 K 3.593/3.900, gamma -/+1 116.7/3.590, end
+fraction -/+0.05 3.440/3.423, k_h -/+0.05 4.578/3.622). With all 67 part rows constrained (no mean band) the descent ends
+at k_h 0.35 (objective 4.55) and reads the boosted held-out rows too knock-resistant (Ford 2.7 T2 HD1 max 15.8, T3 HD 11.5 deg -
+fails the held-out band); without any part rows at k_h 0.15, gamma 3, n 1.2, B 6600 K, end fraction 0.80 (3.27).
+Result (envelope rows, theta_kl - measured spark, deg):
+
+| package | role | n | mean | rms | max abs |
+|---|---|---|---|---|---|
+| Toyota A25A (KV1-BC) | fit | 17 | +1.55 | 2.91 | 5.74 |
+| Honda L15B7 T3 | fit | 15 | -0.82 | 3.92 | 6.25 (no saturated row) |
+| Honda L15B7 T2 | held out | 15 | +1.21 | 3.34 | 6.88 |
+| Ford 2.7 cell 9 T2 | held out | 12 | +0.53 | 1.64 | 3.41 |
+| Ford 2.7 cell 9 LEV III | held out | 12 | -0.91 | 1.54 | 2.78 |
+| Ford 2.7 HD1 T2 | held out | 13 | -0.00 | 2.65 | 7.31 |
+| Ford 2.7 HD T3 | held out | 13 | +2.51 | 3.48 | 7.02 |
+| Ford 1.6 T2 / LEV III | report | 14 / 15 | +4.61 / +4.87 | 5.17 / 5.35 | 7.55 / 8.48 |
+| Mazda 2.5 T T2 / T3 | report | 11 / 11 | +4.00 / +2.37 | 5.32 / 4.32 | 8.00 / 6.08 |
+
+Light rows (n / knock-limited / max violation, deg): A25A EGR shut 36/11/2.84, Honda T3 64/14/1.23, Honda T2 63/8/0, Ford
+2.7 cell 9 T2 10/1/0, LEV III 10/3/2.65, Ford 1.6 T2 84/0/0, LEV III 81/4/0, Mazda T2 36/0/0, T3 36/0/0. A25A EGR flowing
+(report only): 31/26, 15 violated, max 8.55 deg (3572-4032 rpm at 77-84 kPa) - the numbers an external-EGR diluent must
+remove. KV1-BC: mean +1.55 (band 1.75); KV2-T: A25A mean offset +4.2 K (band 5), Mazda -21.4 K. Every v5 band is met
+(the Ford 1.6 and Mazda reports too); the v4 bands still fail (Honda T3 rms 3.92 > 3.5, Ford 2.7 HD1 7.31 and T3 HD 7.02
+> 7, light 2.84 > 2), kept as the `[!mayfail]` case "KCB v4 bands under knock model v6".
+Margin semantics: like KV1-BC the fit takes measured spark as theta_kl with margin 0, so the calibrated limit already
+carries the OEM's own margin; the shipped A25A gen, demo_i4_pipes, K20A and N52 ECUs moved from 2 to 0 deg (the hyper
+stays 2 pending the owner). Open: external EGR is not modelled in the knock replay (or the cycle).
+
+Calibration v5 (burn law phase 2a, 2026-10-19, superseded by v6 above, vault PHYS-079, `tests/unit/test_knock_cal_turbo.cpp` `[knock][knock_cal]`):
 under burn law F (`ps/engine_cycle/burn_law.h`, see "Burn law" below) every replay's burn follows its own charge, so the
 v4 constants no longer fit (Honda T3 rms 5.8-6.0 in every refit cell). Diagnosis: the residual is MAP-structured (boosted rows
 too knock-prone, light rows too knock-safe) and explained neither by the rich rows nor by the IVC temperature (`KCB diag:

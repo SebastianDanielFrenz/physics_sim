@@ -672,6 +672,7 @@ TEST_CASE("C16b H3: the cache key changes with every field, the generator versio
         edits.emplace_back("knock.model.octane_index_k", [&](CycleModelDesc& d) { d.knock.model.octane_index_k = bump(d.knock.model.octane_index_k); });
         edits.emplace_back("knock.model.dilution_exponent", [&](CycleModelDesc& d) { d.knock.model.dilution_exponent = bump(d.knock.model.dilution_exponent); });
         edits.emplace_back("knock.model.end_burn_fraction", [&](CycleModelDesc& d) { d.knock.model.end_burn_fraction = bump(d.knock.model.end_burn_fraction); });
+        edits.emplace_back("knock.model.charge_heat_fraction", [&](CycleModelDesc& d) { d.knock.model.charge_heat_fraction = bump(d.knock.model.charge_heat_fraction); }); // knock model v6
         for (const auto& [name, edit] : edits) {
             CycleModelDesc d = base;
             edit(d);

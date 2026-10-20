@@ -10,7 +10,7 @@
   },
   "ecu": {
     "ignition_strategy": "knock_limited",
-    "knock_margin_deg": 2.0,
+    "knock_margin_deg": 0.0,
     "lambda_target": {
       "rpm": [0, 8400],
       "p_im_kpa": [20, 80, 100],
@@ -44,7 +44,7 @@
         [31.04546177, 31.04546177, 32.28329349, 32.71812224, 32.95250289, 33.10250815, 33.20908371, 33.29015304, 33.35505715],
         [30.51035149, 30.51035149, 30.51035149, 31.5578216, 32.03714031, 32.31245623, 32.50427618, 32.6484691, 32.7647426]
       ],
-      "source": "[D] the minimum over the two cam profiles of the generator's MBT spark at every grid node (theta_mbt_deg of each profile's generated maps, printed by the hidden case 'P9 diag: ECU spark table = min over the profiles' generated MBT spark' in tests/unit/test_cam_profiles.cpp). Burn law phase 2b (2026-10-19, vault PHYS-079): re-derived under burn law F - the Wiebe duration now follows each node's charge, so MBT varies 22.4-34.1 deg BTDC over the grid (was the constant 16.731 deg of the fixed 40.3 deg burn); the profiles differ by up to 5.4 deg below 7500 rpm (the minimum keeps the engine at or behind MBT on either cam). No Honda spark calibration was available; knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg): runtime spark = min(this table, theta_kl)."
+      "source": "[D] the minimum over the two cam profiles of the generator's MBT spark at every grid node (theta_mbt_deg of each profile's generated maps, printed by the hidden case 'P9 diag: ECU spark table = min over the profiles' generated MBT spark' in tests/unit/test_cam_profiles.cpp). Burn law phase 2b (2026-10-19, vault PHYS-079): re-derived under burn law F - the Wiebe duration now follows each node's charge, so MBT varies 22.4-34.1 deg BTDC over the grid (was the constant 16.731 deg of the fixed 40.3 deg burn); the profiles differ by up to 5.4 deg below 7500 rpm (the minimum keeps the engine at or behind MBT on either cam). No Honda spark calibration was available; knock-limited since 2026-10-18 (owner: opt all engines in, margin 2 deg; margin 0 since 2026-10-20, knock model v6: the calibrated limit already carries the OEM margin, knock_margin_deg is margin beyond it): runtime spark = min(this table, theta_kl)."
     }
   },
   "idle_rpm": 800.0,
