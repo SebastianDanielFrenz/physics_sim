@@ -684,13 +684,17 @@ TEST_CASE("L19 check_driveline_limits: shipped vehicles hold their engine's peak
 
 TEST_CASE("L20 check_driveline_limits: an undersized clutch gets a Closed remedy (peak x 1.3)", "[drivetrain][dyno][io]") {
     // car_sedan's powertrain with the clutch capacity replaced. i4 peak 199.8 N*m at 4550 rpm.
-    //  - static_factor 1.0, capacity 150: Limiting; required_min = peak (199.8), required_margin = 1.3 x peak (259.74).
-    //  - static_factor 1.15, capacity 150 (static 172.5): required_min = peak / 1.15 (the KINETIC capacity that holds the
-    //    peak statically), margin 1.3 x that.
+    //  - static_factor 1.0, capacity 150: 33 % over -> Exceeded (owner 2026-10-20: more than gearbox_rating_over_exceeded 15 %
+    //    over the static capacity); required_min = peak (199.8), required_margin = 1.3 x peak (259.74).
+    //  - static_factor 1.15, capacity 150 (static 172.5, 15.8 % over: Exceeded): required_min = peak / 1.15 (the KINETIC
+    //    capacity that holds the peak statically), margin 1.3 x that.
+    //  - capacity 180 (11 % over): Limiting; static capacity exactly peak / 1.15 (15 % over, not MORE): Limiting; a hair
+    //    smaller: Exceeded.
     //  - static_factor 1.0, capacity 230: holds the peak, but 1.3 x peak = 259.7 > 230: Near.
     //  - capacity 300: none.
     // Recorded sabotage: dropping the `/ static_factor` from required_min fails the 1.15 case; kDrivelineMargin 1.3 -> 1.5
-    // fails the margin numbers.
+    // fails the margin numbers; clutch_capacity_severity grading on gearbox_rating_over_limiting (5 %) instead of _exceeded
+    // fails the 180 and boundary cases (Exceeded instead of Limiting).
     const DynoResult tm = run_dyno_sweep(i4_torque_map(), nullptr, DynoSweepSpec{}, nullptr);
     const double peak = peak_torque(tm);
     vehicle::VehicleDesc v = io::load_vehicle_json(kVehicles + "car_sedan.json");
@@ -708,7 +712,7 @@ TEST_CASE("L20 check_driveline_limits: an undersized clutch gets a Closed remedy
         const auto f = check(150.0, 1.0);
         REQUIRE(f.size() == 1);
         CHECK(f[0].kind == LimitKind::ClutchCapacity);
-        CHECK(f[0].severity == LimitSeverity::Limiting);
+        CHECK(f[0].severity == LimitSeverity::Exceeded);
         CHECK(f[0].rpm == 4550.0);
         CHECK(f[0].value == peak);
         CHECK(f[0].limit == 150.0);
@@ -730,11 +734,22 @@ TEST_CASE("L20 check_driveline_limits: an undersized clutch gets a Closed remedy
     {
         const auto f = check(150.0, 1.15);
         REQUIRE(f.size() == 1);
-        CHECK(f[0].severity == LimitSeverity::Limiting);
+        CHECK(f[0].severity == LimitSeverity::Exceeded);
         CHECK(f[0].limit == Catch::Approx(172.5).epsilon(1e-12));
         REQUIRE(f[0].remedy.has_value());
         CHECK(f[0].remedy->required_min == Catch::Approx(peak / 1.15).epsilon(1e-12));
         CHECK(f[0].remedy->required_margin == Catch::Approx(1.3 * peak / 1.15).epsilon(1e-12));
+    }
+    {
+        const auto f = check(180.0, 1.0);
+        REQUIRE(f.size() == 1);
+        CHECK(f[0].severity == LimitSeverity::Limiting);
+        const auto at_band = check(peak / 1.15, 1.0);
+        REQUIRE(at_band.size() == 1);
+        CHECK(at_band[0].severity == LimitSeverity::Limiting);
+        const auto past_band = check(peak / 1.15 * (1.0 - 1e-9), 1.0);
+        REQUIRE(past_band.size() == 1);
+        CHECK(past_band[0].severity == LimitSeverity::Exceeded);
     }
     {
         const auto f = check(230.0, 1.0);
