@@ -197,6 +197,10 @@ TEST_CASE("BL4 the burn law's directions", "[burn_law][cycle]") {
     p.rpm_exponent = 0.3;
     p.flame_speed_exponent = 0.6;
     p.flame_speed_pressure_factor = 1.0; // the Metghalchi-Keck pressure dependence as measured (shipped: 0, below)
+    // Burn law v3 (2026-10-20): the burn's own pressure term is off here, so the pressure directions below are the
+    // flame speed's alone; its own direction is checked at the end. (The v3 default -0.2485 failed lines "p_ivc x 1.5
+    // slower" and "k_p = 0 is pressure neutral" - by design, not a defect: 2^-0.2485 = 53.06 / 63.03 deg.)
+    p.pressure_exponent = 0.0;
     const ec::BurnLawInput ref = reference_input(p);
     const real d0 = ec::evaluate_burn_law(p, a, m, ref).wiebe_duration_deg;
     auto dur = [&](auto edit) {
@@ -254,6 +258,20 @@ TEST_CASE("BL4 the burn law's directions", "[burn_law][cycle]") {
     ec::BurnLawInput hot = ref;
     hot.t_ivc_k *= 1.3;
     CHECK(ec::evaluate_burn_law(p0, a, m, hot).wiebe_duration_deg == Catch::Approx(ec::evaluate_burn_law(p0, a, m, ref).wiebe_duration_deg).epsilon(1e-14));
+    // Burn law v3: the burn's own pressure term f *= (p_u / p_ref)^e_p. With the flame speed's pressure dependence off,
+    // doubling p_ivc (a factor 2 on p_u along the isentrope) scales the duration by exactly 2^e_p; the shipped e_p < 0
+    // burns a denser charge faster. Recorded sabotage (2026-10-20): the factor's exponent sign flipped in burn_law.cpp
+    // fails this check (63.03 * 2^+0.2485 = 74.88 vs 53.06 deg).
+    {
+        ec::BurnLawParams pe = p;
+        pe.flame_speed_pressure_factor = 0.0;
+        pe.pressure_exponent = ec::BurnLawParams{}.pressure_exponent;
+        REQUIRE(pe.pressure_exponent < 0.0);
+        ec::BurnLawInput dense = ref;
+        dense.p_ivc_pa *= 2.0;
+        const real d_ref = ec::evaluate_burn_law(pe, a, m, ref).wiebe_duration_deg;
+        CHECK(ec::evaluate_burn_law(pe, a, m, dense).wiebe_duration_deg == Catch::Approx(d_ref * std::pow(2.0, pe.pressure_exponent)).epsilon(1e-12));
+    }
 }
 
 TEST_CASE("BL5 the engine loader: constant burn keys need \"burn_law\": \"fixed\"", "[burn_law][cycle][io]") {

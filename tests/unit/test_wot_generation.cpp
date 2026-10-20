@@ -319,8 +319,8 @@ EngineMapsPtr mazda_pipes_sketch() {
 
 // W8a: the runtime's own lookup (map_pressure_index + Table2D::value, as SimulatedEngine reads ve/pmep_excess/theta_kl)
 // returns every kept node at its own pressure and every WOT node at its own plenum pressure at ISA: the table coordinate
-// exactly, the value to <= 1e-15 relative (Table2D's bilinear form v0 + t (v1 - v0) at t = 1 is 1-2 ulp off an interior
-// knot - for every author node too, before P7d).
+// exactly, the value to <= 1e-15 relative to the largest neighbouring knot (Table2D's bilinear form v0 + t (v1 - v0) at
+// t = 1 is 1-2 ulp of the larger operand off an interior knot - for every author node too, before P7d).
 void check_nodes_exact(const EngineMaps& em) {
     const SimulatedEngineMapsDesc& m = em.maps;
     REQUIRE(has_wot_rows(m));
@@ -341,7 +341,19 @@ void check_nodes_exact(const EngineMaps& em) {
             for (const Table2D* t : tables) {
                 if (t->values.empty()) continue;
                 const real want = t->values[ir * np + ip];
-                CHECK(std::abs(t->value(rpm, ix.y) - want) <= 1e-15 * std::abs(want));
+                // 2026-10-20 (burn law phase 3): v0 + t (v1 - v0) at t = 1 rounds to a few ulp of the larger OPERAND, not
+                // of the result, so the bound is relative to the largest knot the bilinear lookup can read (the 3 x 3
+                // neighbourhood). The 4-row Sketch grid of the Mazda pipe experiment has theta_kl 53.43 / 1.71 / 16.10 deg
+                // along rpm 2000 / 2500 / 3000 at 80 kPa: 1.71 comes back 3.55e-15 off (half an ulp of 53.4) against a
+                // 1.71e-15 result-relative bound. The value is still the node's own to rounding.
+                real scale = std::abs(want);
+                for (std::size_t jr = (ir > 0 ? ir - 1 : 0); jr < std::min(nr, ir + 2); ++jr) {
+                    for (std::size_t jp = (ip > 0 ? ip - 1 : 0); jp < std::min(np, ip + 2); ++jp) {
+                        scale = std::max(scale, std::abs(t->values[jr * np + jp]));
+                    }
+                }
+                INFO("operand scale " << scale);
+                CHECK(std::abs(t->value(rpm, ix.y) - want) <= 1e-15 * scale);
                 ++checked;
             }
         }
