@@ -110,7 +110,10 @@ TEST_CASE("Guard: a pair without I7d blocks is bit-identical to master 976e8d7",
     // Engine hash re-recorded 2026-10-06 for the boost-aware idle feed-forward (test_hyper_idle_recovery.cpp):
     // the script's 1 s lift at 5000 rpm runs the DFCO dashpot, whose idle plate is now solved against the
     // charge pressure while it is above ambient; the pair hash is unchanged. Was engine 0x721d080fecaad8b0.
-    CHECK(eh == 0x9187a72a2a306b09ULL);
+    // Re-recorded 2026-10-20 for the idle-speed steady-table node (burn law phase 3, test_pedal_law.cpp P1 N5b):
+    // the fixture's steady tables gain an rpm node at idle, which the lift's idle plate reads; the pair hash is
+    // unchanged. Was engine 0x9187a72a2a306b09.
+    CHECK(eh == 0xe4068a04b037ddaaULL);
 }
 
 TEST_CASE("Guard scripts exercise the turbo: spool, lift-off, re-apply", "[turbo][drivetrain][guard]") {

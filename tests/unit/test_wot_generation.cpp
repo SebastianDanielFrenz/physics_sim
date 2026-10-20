@@ -398,9 +398,15 @@ void check_pins(const char* file, const std::filesystem::path& dir, const std::v
     const SimulatedEngineDesc sd = load_desc(file, dir);
     for (const Pin& p : pins) {
         INFO(file << " " << qname(p.q));
-        CHECK(engine_map_cache_key(*sd.cycle, sd.fuels[0], p.q) == p.key);
-        if (!generate) continue;
+        const std::uint64_t key = engine_map_cache_key(*sd.cycle, sd.fuels[0], p.q);
+        std::printf("P7d pins %s %s: key 0x%016llx", file, qname(p.q), static_cast<unsigned long long>(key));
+        CHECK(key == p.key);
+        if (!generate) {
+            std::printf("\n");
+            continue;
+        }
         const EngineMapsPtr m = generate_engine_maps(*sd.cycle, sd.fuels[0], p.q, &pool());
+        std::printf(", content_hash 0x%016llx\n", static_cast<unsigned long long>(m->content_hash));
         CHECK(m->content_hash == p.hash);
         CHECK(!has_wot_rows(m->maps));
     }
@@ -555,16 +561,22 @@ TEST_CASE("P7d W5h/W8e: the hyper and lumped engines keep their keys and map has
     // 2026-10-19 burn law F + knock model v5 (vault PHYS-079) moved the A25A gen and Mazda keys and hashes; was A25A
     // 0x7d4f5df61b83fd3d/0x75f0658d60c662b8, 0xbd44b606c7ef765f/0x4e108f53ec6e4541, 0x1d4a09fe71b9b9ce/0x470361fea395f4f3,
     // Mazda 0xd64488ea1fff9442/0x1bb312f8a650b0f4, 0x964f30d973941b20/0xbafd38470361fbab, 0x3649dce1c9c9d7b1/0x94534cc297971f9e.
-    // The hyper pins below are NOT re-pinned yet: they wait on the owner's hyper decision (octane/spark data).
+    // 2026-10-20 burn law v3 + knock model v6 (PHYS-079 phase 3) moved them again, and the Sketch rows again for the
+    // 4-row Sketch grid (kSketchGridVersion 2 in the Sketch key); was A25A 0x2fe4dae6fb085a53/0x9fa4fb02b889c7ab,
+    // 0xefef82d64e9ce131/0x2e71479db8c0b848, 0x4ff4d6cdf86724a0/0x2eaa40899574544b, Mazda 0x8140a538e6448b19/
+    // 0x23a4d1f462b9a556, 0xc135fd4992b0043b/0x117bd3ef7ecc0cf8, 0x213b51413c7a47aa/0x7cec2a203265eb47.
+    // The hyper pins below are NOT re-pinned yet: they wait on the owner's hyper decision (octane/spark data); the
+    // 2026-10-20 values are Sketch 0x0a5d355fdc243a17/0x6a233d6475a57032, Preview key 0x8bb600415357f947, Full key
+    // 0xebbb5438fd223cb6.
     check_pins("toyota_a25a_fks_gen.json", kEngines,
-               {{MapQuality::Sketch, 0x2fe4dae6fb085a53ull, 0x9fa4fb02b889c7abull},
-                {MapQuality::Preview, 0xefef82d64e9ce131ull, 0x2e71479db8c0b848ull},
-                {MapQuality::Full, 0x4ff4d6cdf86724a0ull, 0x2eaa40899574544bull}},
+               {{MapQuality::Sketch, 0x253bbfd0ceb28042ull, 0x20f029ffc4fae10full},
+                {MapQuality::Preview, 0x7e9d6c1b70121e42ull, 0xc46a220a9a92063bull},
+                {MapQuality::Full, 0x1e981823c647dad3ull, 0xaf2fe424cda51481ull}},
                true);
     check_pins("engine.json", kMazdaDir,
-               {{MapQuality::Sketch, 0x8140a538e6448b19ull, 0x23a4d1f462b9a556ull},
-                {MapQuality::Preview, 0xc135fd4992b0043bull, 0x117bd3ef7ecc0cf8ull},
-                {MapQuality::Full, 0x213b51413c7a47aaull, 0x7cec2a203265eb47ull}},
+               {{MapQuality::Sketch, 0x3f02abcdb78fb872ull, 0xa14edf744d9401d1ull},
+                {MapQuality::Preview, 0x029974d1e620ab72ull, 0x72cd7ab175cfb86bull},
+                {MapQuality::Full, 0xa29420da3c566803ull, 0xfd7d1733c21dabd5ull}},
                true);
     check_pins("hyper_v8_one1_audio.json", kEngines, {{MapQuality::Sketch, 0x98217b790e718eb9ull, 0xa09334bc88debc6cull}}, true);
     check_pins("hyper_v8_one1_audio.json", kEngines,

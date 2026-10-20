@@ -592,9 +592,11 @@ TEST_CASE("A7 V11: same seed and script give identical PCM, another seed differs
     // branch (W2) change the fixture's exhaust and every port/volume face.
     // Re-pinned 2026-10-19 by burn law F (vault PHYS-079; was 0xe4e8cf0d04b01008
     // / 0xa798da1cb19bfb03): the live engine's combustion events take the law's
-    // per-cycle burn duration and delay.
-    CHECK(a.pcm == 0x53505fd4e74a8310ull);
-    CHECK(a.state == 0x16deb877cc9f85c8ull);
+    // per-cycle burn duration and delay. Re-pinned 2026-10-20 by burn law v3
+    // (PHYS-079 phase 3, the burn's pressure exponent; was 0x53505fd4e74a8310 /
+    // 0x16deb877cc9f85c8).
+    CHECK(a.pcm == 0x65a9327a7fa5eb19ull);
+    CHECK(a.state == 0x385a6a93df29fb25ull);
     // The map generator's engine never sees a seed: a Preview CycleEngine
     // point's state hash is pinned (a generator call of the variation moves it).
     const drivetrain::CycleModelDesc& d = fixture();
