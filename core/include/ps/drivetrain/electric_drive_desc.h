@@ -46,6 +46,10 @@ struct FuelCellDesc {
 // Electric-primary parallel hybrid with a crank generator and a disconnecting gearbox.
 struct HybridControlDesc {
     real requested_power_w = 300000; // full-pedal system demand, authored calibration
+    // true = the key was absent: the full-pedal demand is DERIVED as the traction potential plus the ICE's own full-load peak
+    // power (Powertrain, from the engine's full-load envelope), and Sport/Racing scale both sources with the pedal. false =
+    // authored (every shipped hybrid before this key became optional): the split is unchanged bit for bit.
+    bool requested_power_derived = false;
     real low_soc = .2;
     real charge_target_soc = .8;
     real charge_rpm = 2200;

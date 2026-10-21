@@ -358,7 +358,7 @@ private:
     bool lc_default_state_ = false; // I7b: some offered drive mode sets launch_control_default
     // Assists I7c: channel writes a drive-mode change queues from inside step_tick (a vehicle job cannot touch World's
     // channel map). At most two (TC code, LC enable); cleared at the start of every step_tick; never hashed.
-    std::array<PendingChannelWrite, 4> pending_writes_{}; // TC, LC, ABS, ESC
+    std::array<PendingChannelWrite, 5> pending_writes_{}; // TC, LC, ABS, ESC, drive mode (hybrid Electric left)
     std::size_t pending_write_count_ = 0;
     // Assists I5: the assist unit's rear-wing automation. fit_aero_ = block present AND the car has the named surface;
     // the surface index and the launch-control hook are plain per-tick inputs, none of it hashed.

@@ -61,7 +61,7 @@ struct PowertrainDynoSpec {
     real pedal = 1.0;              // the driver's pedal, 0..1 (the car's pedal curve applies; a drive_modes bend does not)
     real battery_soc = std::numeric_limits<real>::quiet_NaN();       // every pack; NaN = each pack's initial_soc
     real hydrogen_fraction = std::numeric_limits<real>::quiet_NaN(); // of every fuel cell's tank capacity; NaN = initial fill
-    int drive_mode = 1;            // channel assist.drive_mode (hybrid supervisor: 0 Eco, 1 Normal, 2 Sport, 3 Racing)
+    int drive_mode = 1;            // channel assist.drive_mode (hybrid supervisor: 0 Eco, 1 Normal, 2 Sport, 3 Racing, 4 Electric)
     AmbientSample ambient{};       // the engine's air
     // Further channels set for the whole sweep (name, value), e.g. {"electric.ready", 1} or an assist channel. A name the
     // powertrain does not declare is ignored.
