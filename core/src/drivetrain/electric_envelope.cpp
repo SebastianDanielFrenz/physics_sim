@@ -115,23 +115,42 @@ HybridSplit hybrid_power_split(const HybridControlDesc& c, const HybridSplitInpu
     HybridSplit s;
     s.charge_latched = hybrid_update_charge_latch(c, in.battery_soc, in.charge_latched);
     const int mode = in.drive_mode;
-    s.requested_w = in.driver_command * c.requested_power_w;
+    const bool derived = c.requested_power_derived && in.ice_full_power_w > real(0);
+    if (mode >= 4) {
+        // Electric: the ICE is off and disconnected, the traction motors take the pedal LINEARLY (no ECO bend either - the
+        // drive-mode part gives this mode an identity bend). The charge latch has no say here: a low pack leaves the mode.
+        s.requested_w = in.driver_command * in.available_w;
+        s.electric_command = in.ready ? std::clamp(in.driver_command, real(0), real(1)) : real(0);
+        return s;
+    }
+    // Full-pedal system demand: authored, or derived = the electric potential plus the ICE's full-load peak power.
+    const real full_w = derived ? in.available_w + in.ice_full_power_w : c.requested_power_w;
+    // Derived Eco keeps the electric-only scale (the authored 300 kW of the swap equalled the potential): pedal -> electric.
+    s.requested_w = in.driver_command * ((derived && mode == 0) ? in.available_w : full_w);
     s.extra_power = mode != 0 && s.requested_w > in.available_w;
     s.engine_coupled = in.selector != 0 && mode != 0 && (s.extra_power || mode >= 2);
     s.engine_wanted = in.ready && (s.charge_latched || mode >= 2 || s.extra_power);
     s.electric_command = in.ready ? std::clamp(s.requested_w / std::max(real(1), in.available_w), real(0), real(1)) : real(0);
     s.engine_command = s.engine_coupled
-                           ? std::clamp((s.requested_w - in.available_w) / std::max(real(1), c.requested_power_w - in.available_w), real(0), real(1))
+                           ? std::clamp((s.requested_w - in.available_w) / std::max(real(1), full_w - in.available_w), real(0), real(1))
                            : real(0);
+    if (derived && mode >= 2 && s.engine_coupled) {
+        // Sport/Racing: the ICE is always coupled, so it must never be dragged at a closed throttle while the pedal asks for
+        // drive. Both sources scale with the pedal: requested / full == the driver's command.
+        const real command = std::clamp(in.driver_command, real(0), real(1));
+        s.electric_command = in.ready ? command : real(0);
+        s.engine_command = command;
+    }
     return s;
 }
 
 HybridSplit hybrid_full_pedal_split(const HybridControlDesc& c, real available_w, real pedal, int drive_mode, real battery_soc,
-                                    bool charge_latched) {
+                                    bool charge_latched, real ice_full_power_w) {
     HybridSplitInput in;
     in.driver_command = std::clamp(pedal, real(0), real(1));
     in.available_w = available_w;
-    in.drive_mode = std::clamp(drive_mode, 0, 3);
+    in.drive_mode = std::clamp(drive_mode, 0, 4);
+    in.ice_full_power_w = ice_full_power_w;
     in.battery_soc = battery_soc;
     in.charge_latched = charge_latched;
     return hybrid_power_split(c, in);

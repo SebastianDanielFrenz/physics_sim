@@ -38,7 +38,7 @@ void validate(const PowertrainDynoSpec& s) {
         throw std::invalid_argument("run_powertrain_dyno: battery_soc must be in [0, 1] (or NaN = the packs' initial_soc)");
     if (!std::isnan(s.hydrogen_fraction) && !(s.hydrogen_fraction >= 0 && s.hydrogen_fraction <= 1))
         throw std::invalid_argument("run_powertrain_dyno: hydrogen_fraction must be in [0, 1] (or NaN = the initial fill)");
-    if (s.drive_mode < 0 || s.drive_mode > 3) throw std::invalid_argument("run_powertrain_dyno: drive_mode must be 0..3");
+    if (s.drive_mode < 0 || s.drive_mode > 4) throw std::invalid_argument("run_powertrain_dyno: drive_mode must be 0..4");
     if (!(s.settle_window_s > 0) || !(s.max_settle_s >= s.settle_window_s) || !(s.min_settle_s >= 0) || !(s.settle_power_rel_per_s >= 0) ||
         !(s.settle_boost_bar_per_s >= 0))
         throw std::invalid_argument("run_powertrain_dyno: invalid settle parameters");
@@ -197,7 +197,8 @@ Prepared prepare(const vehicle::VehicleDesc& vehicle, const EngineMapsPtr& maps,
     p.reset.gear = p.has_gearbox ? p.reset_gear : vehicle::VehicleResetOptions::kKeepGear;
     if (p.has_hybrid) {
         const HybridSplit s = hybrid_full_pedal_split(p.hybrid, hybrid_available_w(p.desc.powertrain, spec), spec.pedal, spec.drive_mode,
-                                                      energy_weighted_soc(p.desc.powertrain, spec.battery_soc));
+                                                      energy_weighted_soc(p.desc.powertrain, spec.battery_soc), false,
+                                                      p.hybrid.requested_power_derived ? probe.hybrid_ice_full_power_w() : real(0.0));
         p.reset.engine_state = s.engine_wanted ? EngineState::Running : EngineState::Off;
         if (!s.engine_coupled) p.reset.gear = 0;
     }

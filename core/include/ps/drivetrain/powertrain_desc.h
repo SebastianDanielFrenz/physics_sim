@@ -929,6 +929,9 @@ enum class Compliance { Rigid, Compliant };
 // forward AND reverse gear range for any gearbox this project ships (car:
 // -1..6, tractor: -4..12).
 inline constexpr real kGearRequestNone = real(-100.0);
+// The EV selector position "B" (one-pedal regeneration, docs/electric_drive.md "B mode"): an absolute gear_request just
+// below the automatic gearbox's D code (99). Direction forward; only a car with traction motors on the wheel path has it.
+inline constexpr real kGearRequestB = real(98.0);
 
 // PHYS-033 P4 I7a C6: one fluid (fuel) connection, "<tank>.out" ->
 // "<engine>.fuel" - a supply path, not a shaft: it carries mass, never

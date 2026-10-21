@@ -42,7 +42,7 @@ pack is not the limit.
 
 `fuel_cell` is a lumped stack plus independent hydrogen tank feeding a named battery/DC bus. Fields: battery, max_power_w, efficiency, target_soc, hydrogen_capacity_kg, initial_hydrogen_kg, specific_energy_j_kg, mass_kg (dry stack/auxiliaries/tank), ready_channel. Generated electrical energy is limited by stack power, charge acceptance, available fuel and buffer headroom. It contributes to the DC supply budget in addition to the battery discharge limit. Conversion efficiency is fixed; no electrochemical/thermal stack or pressure dynamics are claimed. `fuel_cell_electric`, `fuel_cell_chemical`, `fuel_cell_loss` close the source conversion ledger. Hydrogen fill changes chassis contents mass when enabled. Snapshot fields separately report stack electrical power and remaining hydrogen; an ICE tank is independent.
 
-`hybrid_control` requires an ICE, a disconnecting gearbox, a downstream traction motor and a crank-mounted generator (`electric_motor.crank_assist=true`). ECO uses electric wheel propulsion, with disconnected ICE generation allowed for low SOC. Normal starts combustion for demand beyond electric capacity. Sport/Racing keep the ICE running. Requested system power is a calibrated full-pedal rating. Battery and fuel-cell ratings limit electric potential. The supervisor works on the driver's pedal command (pedal curve and drive-mode bend applied, before any traction-control or launch ceiling): request = command x `requested_power_w`; the ICE command is the part of that request the motors cannot supply, `(request - available) / (requested_power_w - available)`, and the pedal curve and bend are not applied to it a second time. A traction-control ceiling is applied once, downstream: the engine stage takes the minimum of the ICE command and the ceiling, each motor takes the ceiling as a fraction of its available torque. It is no longer folded into the request, which amplified it through the split (pedal 0.75 gave an ICE command of 0.5) and made `hybrid_requested_power_w` follow the ceiling. Automatic scheduling (auto-shift, kickdown, launch) reads the driver's pedal command, not the ICE share and not a power ratio: a hybrid shifts at the same rpm points as the same gearbox without the electric part (it used to read requested / (motors + engine envelope at the current rpm), about 0.3 at full pedal on the hypercar, i.e. part-throttle upshifts at ~4100-4700 rpm instead of ~8000). At full pedal the ICE command is 1 whenever the request exceeds the electric power; between, the split stays linear in the pedal (a step to full ICE as soon as the request passes the electric power would make the pedal binary above ~half travel). When the ICE connects while the car rolls (previously disconnected, gearbox in neutral), the supervisor engages the FIT gear, not 1st: the lowest forward gear whose gearbox input rpm at the present road speed is within the up-shift rpm of the schedule at the driver's pedal command (drive-mode overrides and the limiter range applied; the top gear if none fits; 1st at standstill). The same rule drives the automatic gearbox's D-from-N choice. Before the clutch closes the connect window revs the engine toward the fit gear's input speed (clutch held open, throttle 0.45 + 0.0006 x rpm error, the charge-mode formula) and closes within the clutch law's lock window or after `hybrid_control.connect_timeout_s` (default 1.0 s [AS], 0 disables the window); auto-shift is deferred while it is open, so there is no downshift on connecting below the down-shift point. At standstill nothing changes (bit-identical). On a manual-TCU gearbox the supervisor selects 1st only from a settled neutral (idle phase, target neutral), not while a shift passes through position 0; it used to re-request 1st mid-shift, so the car never left 1st and the driver's shift_up_count presses were discarded. The supervisor keeps auto-shift on for such a box whatever the assist.auto_shift channel says. Racing boost preconditioning is not implemented.
+`hybrid_control` requires an ICE, a disconnecting gearbox, a downstream traction motor and a crank-mounted generator (`electric_motor.crank_assist=true`). ECO uses electric wheel propulsion, with disconnected ICE generation allowed for low SOC. Normal starts combustion for demand beyond electric capacity. Sport/Racing keep the ICE running. The full-pedal system demand `requested_power_w` is either authored (a calibrated rating) or, when the key is absent, DERIVED (`HybridControlDesc::requested_power_derived`): P_full = the electric potential plus the ICE's own full-load peak power (see [Hybrid power split](#hybrid-power-split)). Battery and fuel-cell ratings limit electric potential. The supervisor works on the driver's pedal command (pedal curve and drive-mode bend applied, before any traction-control or launch ceiling): request = command x P_full (authored `requested_power_w`, or derived); the ICE command is the part of that request the motors cannot supply, `(request - available) / (P_full - available)`, and the pedal curve and bend are not applied to it a second time. A traction-control ceiling is applied once, downstream: the engine stage takes the minimum of the ICE command and the ceiling, each motor takes the ceiling as a fraction of its available torque. It is no longer folded into the request, which amplified it through the split (pedal 0.75 gave an ICE command of 0.5) and made `hybrid_requested_power_w` follow the ceiling. Automatic scheduling (auto-shift, kickdown, launch) reads the driver's pedal command, not the ICE share and not a power ratio: a hybrid shifts at the same rpm points as the same gearbox without the electric part (it used to read requested / (motors + engine envelope at the current rpm), about 0.3 at full pedal on the hypercar, i.e. part-throttle upshifts at ~4100-4700 rpm instead of ~8000). At full pedal the ICE command is 1 whenever the request exceeds the electric power; between, the split stays linear in the pedal (a step to full ICE as soon as the request passes the electric power would make the pedal binary above ~half travel). When the ICE connects while the car rolls (previously disconnected, gearbox in neutral), the supervisor engages the FIT gear, not 1st: the lowest forward gear whose gearbox input rpm at the present road speed is within the up-shift rpm of the schedule at the driver's pedal command (drive-mode overrides and the limiter range applied; the top gear if none fits; 1st at standstill). The same rule drives the automatic gearbox's D-from-N choice. Before the clutch closes the connect window revs the engine toward the fit gear's input speed (clutch held open, throttle 0.45 + 0.0006 x rpm error, the charge-mode formula) and closes within the clutch law's lock window or after `hybrid_control.connect_timeout_s` (default 1.0 s [AS], 0 disables the window); auto-shift is deferred while it is open, so there is no downshift on connecting below the down-shift point. At standstill nothing changes (bit-identical). On a manual-TCU gearbox the supervisor selects 1st only from a settled neutral (idle phase, target neutral), not while a shift passes through position 0; it used to re-request 1st mid-shift, so the car never left 1st and the driver's shift_up_count presses were discarded. The supervisor keeps auto-shift on for such a box whatever the assist.auto_shift channel says. Racing boost preconditioning is not implemented.
 
 Low SOC latches ICE charging until charge_target_soc (default0.8, termination tolerance1e-6SOC). The controller selects actual gearbox neutral while disconnected; the user's D/N/R lever remains separately latched for the downstream electric drive. The generator loads the crank and charges the real battery. A failed start is bounded by crank_timeout_s; READY cycling releases the request. No generator/disconnect hardware means the package is rejected. `car_hybrid.json` demonstrates this topology; `car_fuel_cell.json` demonstrates the fuel-cell source. All hardware ratings are authored fixtures.
 
@@ -71,6 +71,89 @@ The reflection from a motor to the rims is a tree over the shaft graph, evaluate
 - Not covered: a hybrid supervisor that opens the gearbox itself (`hybrid_control` selects neutral when no traction is wanted) removes the regeneration of a motor upstream of the gearbox by this rule; the pads then brake. A motor behind an automatic gearbox stays outside the scheme.
 - Hashing: the ramp state and the three configuration values are hashed only for a motor that has a dynamic path; a car without one hashes as before.
 
+## Hybrid power split
+
+Owner report 2026-10-21 (racing_game, hybrid hypercar): "The hybrid hyper car only gave 280kW and only in ECO mode. When the ICE turned on, power dropped to 180kW." The conversion authored `requested_power_w` = 300 kW = the electric potential (150 kW pack x 2), so `requested = pedal x 300 kW` never exceeded `available`: `extra_power` stayed false, the ICE command was 0 and, in Sport, the coupled ICE was dragged at a closed throttle (110-135 kW of drag) while the wheels got 148-170 kW.
+
+- Decision: `hybrid_control.requested_power_w` is optional. Absent = derived: P_full = available + the ICE's full-load peak power
+  (`Powertrain::hybrid_ice_full_power_w()`: the maximum over rpm idle..limiter in 64 steps of the engine's full-load torque envelope
+  `request_envelope(rpm).f_nm` x omega - the WOT curve of a torque-map engine, the dyno-settled `full_load_envelope` of a turbo
+  engine). It is computed once at build and again when the envelope is rebuilt (`replace_turbo_configuration`, an engine-maps swap),
+  never per substep. An authored value always wins: every shipped hybrid and every fixture keeps the old split bit for bit.
+- Eco: request = pedal x available (the electric potential) - Eco stays electric-only, the ICE only for the charge latch.
+- Normal: electric first, the ICE tops up. request = pedal x P_full; electric command = `min(1, request/available)`; the ICE is wanted
+  and coupled only while `request > available` (`extra_power`); ICE command = `clamp((request - available)/P_ice_full, 0, 1)`.
+- Sport / Racing: the ICE is always running and coupled, so both sources scale with the pedal: electric command = ICE command = the
+  driver's command (request / P_full). The coupled ICE is never dragged at a closed throttle while the pedal asks for drive. Pedal 0 is
+  overrun plus regeneration as before.
+- Electric: see below. The powertrain dyno and the garage chart read the same function (`hybrid_power_split`, passed
+  `ice_full_power_w`), so the chart is the car's own rule.
+- Alternatives: (a) keep the authored value and make the swap author P_full by hand - rejected: it goes stale with every engine,
+  turbo or battery change (the owner's bug was exactly that); (b) derive from the engine's rated power key - no such key exists for a
+  simulated engine, and a turbo engine's peak depends on the boost; (c) scale Sport's ICE by `(request - available)/(P_full -
+  available)` like Normal - rejected: at pedal 0.5 the ICE would idle at zero throttle while coupled, which is the drag the owner measured.
+- Numbers (tests/unit/test_hybrid_power_split.cpp HS2, a scaled DCT hybrid fixture: 300 kW pack, 400 kW motor, the ~1000 kW twin-turbo V8; 3rd gear, 7389 rpm = 183.4 km/h, pedal 1, powertrain dyno-style hold; the ICE alone is 993.1 kW, the motors alone 282.9 kW): Sport/Racing AFTER 1205.2 kW at the wheels (94 % of 993.1 + 282.9, the rest is driveline loss), BEFORE (authored 300 kW) 146.7 kW with the ICE dragged at -122.4 kW; Normal AFTER 1205.2 kW, BEFORE 269.1 kW (ICE never started); Eco 269.1 kW (unchanged). HS3, WOT from 150 km/h for 5 s, Sport: 1114 kW AFTER, 146.5 kW BEFORE. With a pedal of 0.3 or more the coupled ICE never produces negative crank work outside limiter and DFCO cuts. Recorded sabotage: passing the old denominator (ice_full_power_w = 0, request capped at the authored 300 kW) fails HS2 and HS3 (9 assertions).
+
+## B mode
+
+Owner request 2026-10-21: "There should be a B gear that maxes out regeneration on the motors at all speeds at 0 throttle and then
+scales the throttle between that maximum negative power and the maximum peak power the car can produce." B exists on a car with
+traction motors on the wheel path and no gearbox (a pure EV), and on a hybrid while it runs in Electric mode. Public pure functions in
+`ps/drivetrain/b_mode.h`; the runtime is `Powertrain::prepare_b`.
+
+- Law: system power `P(pedal) = -R + pedal (R + P_max)`. R = the regeneration the car can take right now: per wheel-path motor
+  `min(regen_torque_nm x omega, regen power limit)` x the pack's charge acceptance (`max_charge_w`, the SOC taper) x the speed fade
+  (the brake-blend factors, below) x the path ramp, summed, and scaled per battery group when the group's budget is the limit.
+  P_max = the car's peak drive power now: `min(sum of the motors' envelope power at the current speed, the packs' discharge budget)`.
+  Pedal 0 is full regeneration at every speed down to the fade; pedal 1 is the full drive power D gives; the zero-power (coasting)
+  point is at pedal `R / (R + P_max)` (`b_zero_power_pedal`, published as `b_zero_power_pedal` in the snapshot).
+- Torque domain: with a common pedal the system law is exact per speed, so each motor gets its share by capacity: a positive command
+  `c = P / P_max` of every motor's envelope torque (inside every existing torque limit, the pack's grant included), a negative one
+  `|P| / R` of every motor's regeneration capacity. A speed floor of 1 rad/s keeps the law finite at standstill.
+- The brake pedal still blends on top: regeneration for the brake pedal and B regeneration add up in the motor's regeneration torque
+  (`min(regen_torque_nm, brake request + B request, power / omega)`), the pad reduction counts only the brake request's share
+  (`regen_brake_pred_nm`), so the pads are not reduced for B's own deceleration.
+- Wheel slip: B regeneration must not lock the driven wheels on low grip. The sensor-only guard (contact-patch ground speed vs the wheel's
+  peripheral speed from `TractionWheelState`, the TC's structure in braking direction, `b_mode.slip_target` 0.08 [AS]) scales a motor's B
+  regeneration down while one of the wheels it drives slips more than the target and ramps it back when grip returns
+  (`b_slip_fraction_step`). Snapshot `b_slip_fraction` (1 = no intervention).
+- Stop: below the regeneration fade the motors cannot hold the car. With B selected and the pedal at or below the zero-power point the
+  pads hold it (`b_mode.auto_hold`, default true): the hold takes over from the fading regeneration (`hold_blend_level` x the fade),
+  then rises to the full hold at `hold_rise_per_s` once the regeneration is gone, until the pedal rises above the zero-power point by
+  `hold_pedal_margin`; the pads release over `hold_release_s`. It acts through the pad hold level of `DirectTorqueBrakes`
+  (`set_hold_level`), not through the brake channel (a brake request above 0.05 would inhibit motor driving).
+- TC ceiling (PR claude/ev-tc-ceiling, `motor_drive_request(..., ceiling_scale)`): the ceiling is the fraction of the torque available
+  now, applied after the power corner, to B's DRIVE only; B's regeneration is never scaled by it (traction control limits drive).
+- Selector (no gearbox): the EV's D/N/R latch gains B above D. Shift up from D goes to B, shift down from B goes to D (then N and R as
+  before); the absolute request `gear_request = kGearRequestB (98)` selects B directly (edge-triggered, so a game that keeps sending
+  its selector does not re-enter B after Electric mode ended it). B is refused in N and R. A car with a gearbox never has B. Snapshot
+  (never hashed): `b_mode_available`, `b_mode_active`, `b_regen_capacity_w`, `b_drive_capacity_w`, `b_power_command_w`,
+  `b_zero_power_pedal`, `b_slip_fraction`, `b_hold_level`.
+- Hash: the selector latch, the hold state and the per-motor slip fraction are hashed only while non-default, so every other car and a
+  B-capable car in D hash as before.
+- Alternatives: (a) a power-domain controller (closed-loop on measured power) - rejected: the torque-domain law is exact per speed and
+  stays open-loop and deterministic; (b) a brake-channel regeneration request (as the brake pedal does) - rejected: the pad reduction,
+  the ABS withdrawal and the drive inhibit are keyed to the brake pedal; (c) a hold through the brake channel - rejected: a brake
+  request above 0.05 disables motor driving, so the car could not pull away from the hold.
+- Numbers (tests/unit/test_b_mode.cpp, car_electric, 50 % pack): see `BM1:` / `BM3:` / `BM4:` in the test output.
+
+## Hybrid Electric mode
+
+Drive mode 4 of the hybrid supervisor (`assist.drive_mode`; owner request 2026-10-21: "The E-mode on a hybrid with other drive modes
+should, unlike ECO, scale the pedal linearly"). The ICE is off and disconnected (the gearbox in neutral), the traction motors take the
+driver's command linearly (no ECO bend, no drive-mode pedal bend - a `pedal_bend` in the mode is rejected by the loader), the
+low-SOC charge latch has no say.
+
+- Leaving: a pack at or below `low_soc` refuses or ends the mode (`hybrid_electric_leave_reason` = 1 in the snapshot); the car runs
+  Normal and `VehicleInstance` writes `assist.drive_mode` back to the part's default (never Electric) as a pending channel write, like
+  a drive-mode change queues its defaults. A car whose `drive_modes` part does not offer Electric treats the value 4 as Normal.
+- Shift inputs: in Electric mode the shift counters (`shift_up_count` / `shift_down_count`) act as the EV selector (D <-> B) and are
+  consumed before the gearbox's controller sees them, so the gearbox stays where the supervisor puts it. Leaving Electric ends B.
+- Snapshot: `hybrid_electric_mode`, `hybrid_electric_leave_reason`, `b_mode_available` (true in Electric mode).
+- The drive-mode part must list `electric` (`data/electronics/drive_modes_hybrid.json` in racing_game); the loader rejects offering it
+  without a `hybrid_control` component.
+- Hash: the lost-latch is hashed only while set; the drive-mode folds skip an unoffered mode >= 4, so a car without the key hashes as before.
+
 ## Envelope and dyno
 
 The motor law, the DC supply budget and the hybrid power split are public pure functions. The runtime calls them, so a garage chart
@@ -90,9 +173,13 @@ and the car use one implementation. Extracting them changed no state hash; the p
   - `hybrid_full_pedal_split(control, available_w, pedal, drive_mode, soc, charge_latched)` returns `{requested_w,
     electric_command, engine_command, engine_coupled, engine_wanted, charge_latched}`.
   - The supervisor's own step is `hybrid_power_split(control, HybridSplitInput)`.
-  - Rules: requested = pedal x `requested_power_w`. Electric command = `min(1, requested/available)`. The ICE is coupled in Normal
-    when the request exceeds the electric potential, and always in Sport and Racing. Its command is the deficit
-    `(requested - available)/(requested_power_w - available)`. A low SOC latches an engine start (Eco: decoupled, charging only).
+  - Rules (authored `requested_power_w`, unchanged bit for bit): requested = pedal x `requested_power_w`. Electric command =
+    `min(1, requested/available)`. The ICE is coupled in Normal when the request exceeds the electric potential, and always in
+    Sport and Racing. Its command is the deficit `(requested - available)/(requested_power_w - available)`. A low SOC latches an
+    engine start (Eco: decoupled, charging only).
+  - Rules (derived, the key is absent; `HybridSplitInput::ice_full_power_w` > 0): see [Hybrid power split](#hybrid-power-split).
+  - Drive mode 4 (Electric): ICE off and disconnected, electric command = the driver's command (linear). See
+    [Hybrid Electric mode](#hybrid-electric-mode).
 - `ps/drivetrain/powertrain_dyno.h`: `run_powertrain_dyno(vehicle, maps, PowertrainDynoSpec, pool, cancel)` returns one point per
   axis value.
   - Method: a chassis dyno. The car's own Powertrain is built without a chassis. Every hub is held at `v / r_i` by an implicit
