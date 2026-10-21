@@ -52,6 +52,10 @@ struct HybridControlDesc {
     real generator_fraction = .6;
     real stop_delay_s = 2;
     real crank_timeout_s = 5;
+    // ICE connect while rolling: the clutch stays open and the engine is revved toward the fit gear's input speed until the
+    // slip is inside the clutch law's lock window, at most this long [AS]. Only used when the fit gear's input speed is
+    // above the engine speed by more than the lock window (never at standstill).
+    real connect_timeout_s = 1.0;
 };
 
 }

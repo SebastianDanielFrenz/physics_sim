@@ -80,6 +80,7 @@ void AutoTransmission::reset(int gear, bool clutch_locked) {
     lock_req_ = false;
     e_lock_ = real(0.0);
     launch_locked_ = clutch_locked && gear != 0;
+    rev_held_ = false;
     e_launch_ = launch_locked_ ? real(1.0) : real(0.0);
     if (desc_.cvt) {
         ratio_ = desc_.cvt_desc.ratio_low;
@@ -258,7 +259,9 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
             tgt_ = cur_; // rolling back fast in R: hold R until slow
             return;
         }
-        tgt_ = (cur_ < 0) ? 0 : ((manual_ && !desc_.cvt) ? manual_gear_ : 1);
+        // D from N: the gear the schedule fits at the present speed (1 at standstill). Engaging 1st while rolling fast made
+        // the box shift up through every gear (or over-rev the engine) after a hybrid's ICE connected at speed.
+        tgt_ = (cur_ < 0) ? 0 : ((manual_ && !desc_.cvt) ? manual_gear_ : (desc_.cvt ? 1 : fit_gear(s, th)));
         return;
     }
     if (desc_.cvt) { // CVT plan C1: D is one gear; the variator law runs in update_cvt
@@ -309,6 +312,16 @@ void AutoTransmission::choose_target(const Sensors& s, real th) {
     tgt_ = desired;
 }
 
+int AutoTransmission::fit_gear(const Sensors& s, real th) const {
+    if (s.output_omega * ratio(1) <= real(0.0)) return 1;
+    const ShiftScheduleDesc sch = active_schedule(s);
+    const real up = lerp(sch.up_rpm_at_zero_throttle, sch.up_rpm_at_full_throttle, th);
+    const int top = std::clamp(selector_ > 0 ? selector_ : forward_count(), 1, forward_count());
+    for (int g = 1; g < top; ++g)
+        if (std::abs(ratio(g) * s.output_omega) * kRadPerSecToRpm <= up) return g;
+    return top;
+}
+
 void AutoTransmission::start_shift(int next, const Sensors& s, real th) {
     const real C = desc_.clutch.capacity_nm;
     next_ = next;
@@ -356,6 +369,21 @@ void AutoTransmission::update_launch(const Sensors& s, real th) {
         e_launch_ = std::min(e_launch_, std::max(real(0.0), s.clutch_capacity_cap_nm / desc_.clutch.capacity_nm));
     }
     if (phase_ != Phase::Idle && phase_ != Phase::Engage && phase_ != Phase::Closing) return;
+    if (s.rev_match_hold) {
+        e_launch_ = real(0.0);
+        launch_locked_ = false;
+        rev_held_ = true;
+        return;
+    }
+    if (rev_held_) {
+        rev_held_ = false;
+        const real slip = std::abs(s.input_omega - ratio(cur_) * s.output_omega) * kRadPerSecToRpm;
+        if (slip < desc_.tcu.launch_lock_slip_rpm) {
+            launch_locked_ = true;
+            e_launch_ = real(1.0);
+            return;
+        }
+    }
     // DCT launch control (assist unit): Armed holds the clutch open, Launch sets its capacity directly.
     if (s.launch_hold_open) {
         e_launch_ = real(0.0);
@@ -623,6 +651,7 @@ std::uint64_t AutoTransmission::fold_state_hash(std::uint64_t seed) const {
     h = fnv1a(h, e_lock_);
     h = fnv1a(h, e_launch_);
     h = fnv1a(h, launch_locked_);
+    if (rev_held_) h = fnv1a(h, rev_held_);
     if (desc_.cvt) { // CVT plan C1: only a cvt folds its variator (every other box's hash unchanged)
         h = fnv1a(h, ratio_);
         h = fnv1a(h, step_);

@@ -708,6 +708,11 @@ private:
     std::optional<HybridControlDesc> hybrid_;
     bool hybrid_charge_latched_=false,hybrid_ice_requested_=false,hybrid_disconnect_=true;
     real hybrid_selector_=0,hybrid_idle_s_=0,hybrid_crank_s_=0,hybrid_requested_w_=0,hybrid_available_w_=0,hybrid_driver_command_=0;
+    // ICE connect while rolling: > 0 = the rev-match window is open (clutch held open, engine revved toward the fit gear's
+    // input speed), the time since it opened. Hashed only while > 0.
+    real hybrid_connect_s_=0;
+    // The gear a hybrid's ICE connects in at the present speed (0 = none: CVT or no gearbox).
+    [[nodiscard]] int hybrid_fit_gear(const ComponentSubstepCtx& ctx) const;
     int hybrid_mode_slot_=-1,hybrid_ready_slot_=-1;
     int dyno_gear_hold_=kNoDynoGearHold; // powertrain dyno only, never hashed
     real electric_direction_=0; // latched fixed-reduction selector; N at spawn

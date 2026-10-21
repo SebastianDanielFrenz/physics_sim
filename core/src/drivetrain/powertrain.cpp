@@ -3,6 +3,7 @@
 
 #include "engine_params_util.h"
 #include "engine_simulated.h"
+#include "ps/drivetrain/limiter_range.h"
 
 #include <algorithm>
 #include <cmath>
@@ -2245,6 +2246,40 @@ void Powertrain::begin_substep() {
     if (!compliant_.empty()) assembly_.begin_substep_implicit(network_.node_count());
 }
 
+int Powertrain::hybrid_fit_gear(const ComponentSubstepCtx& ctx) const {
+    if (!gearbox_) return 0;
+    constexpr real kRpm = real(60) / (real(2) * real(3.14159265358979323846));
+    const real th = hybrid_driver_command_;
+    if (auto_) {
+        if (auto_->desc().cvt) return 0;
+        AutoTransmission::Sensors fs;
+        fs.output_omega = network_.omega(gearbox_out_);
+        fs.mode_channel = last_mode_channel_;
+        fs.up_rpm_at_zero_throttle = ctx.drive_up_rpm_zero;
+        fs.up_rpm_at_full_throttle = ctx.drive_up_rpm_full;
+        fs.down_rpm_at_zero_throttle = ctx.drive_down_rpm_zero;
+        fs.down_rpm_at_full_throttle = ctx.drive_down_rpm_full;
+        return auto_->fit_gear(fs, th);
+    }
+    if (!tcu_) return 0;
+    const auto pick = [](real override_value, real own) { return std::isfinite(override_value) ? override_value : own; };
+    const AutoShiftDesc& as = tcu_->desc().auto_shift;
+    real up_z = pick(ctx.drive_up_rpm_zero, as.up_rpm_at_zero_throttle);
+    real up_f = pick(ctx.drive_up_rpm_full, as.up_rpm_at_full_throttle);
+    const real k = shift_point_scale(up_z, up_f, tcu_->desc().shift_rpm_cap);
+    if (k != real(1.0)) {
+        up_z *= k;
+        up_f *= k;
+    }
+    const real up = up_z + (up_f - up_z) * th;
+    const int n = static_cast<int>(gearbox_->desc().forward_ratios.size());
+    const real w_out = network_.omega(gearbox_out_);
+    if (n < 1 || w_out * gearbox_->ratio_for_position(1) <= real(0.0)) return n < 1 ? 0 : 1;
+    for (int g = 1; g < n; ++g)
+        if (std::abs(gearbox_->ratio_for_position(g) * w_out) * kRpm <= up) return g;
+    return n;
+}
+
 void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     ComponentSubstepCtx ctx = ctx_in;
     if(hybrid_) {
@@ -2281,6 +2316,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         hybrid_crank_s_=(!hybrid_ice_requested_||running)?0:hybrid_crank_s_+ctx.h;
         ctx.ignition=hybrid_ice_requested_?1:0;
         ctx.starter=hybrid_ice_requested_&&!running&&hybrid_crank_s_<hybrid_->crank_timeout_s?1:0;
+        const bool hybrid_was_disconnected=hybrid_disconnect_;
         hybrid_disconnect_=!traction||!running;
         hybrid_requested_w_=split.requested_w;
         ctx.electric_throttle=split.electric_command;
@@ -2293,6 +2329,27 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             ctx.electric_charge=rpm>engine_->idle_rpm()*real(1.4)?hybrid_->generator_fraction*taper:0;
             ctx.throttle=std::clamp(real(.45)+real(.0006)*(hybrid_->charge_rpm-rpm),real(0),real(1));
         }
+        // ICE connect while rolling: engaging a gear on an idling engine at road speed dragged the engine up through the
+        // clutch (or shifted through every gear). Engage the gear the schedule fits, keep the clutch open and rev the
+        // engine toward that gear's input speed (same proportional law as the charge mode), then close within the clutch
+        // law's lock window - or after connect_timeout_s. Never opens at standstill (the fit gear's input speed is 0).
+        int hybrid_fit=0;
+        if(hybrid_disconnect_||!gearbox_||!engine_)hybrid_connect_s_=0;
+        else if(hybrid_selector_>0){
+            hybrid_fit=hybrid_fit_gear(ctx);
+            if(hybrid_fit>0){
+                constexpr real kRpm=real(60)/(real(2)*real(3.14159265358979323846));
+                const real fit_ratio=auto_?auto_->ratio(hybrid_fit):gearbox_->ratio_for_position(hybrid_fit);
+                const real target=std::abs(fit_ratio*network_.omega(gearbox_out_))*kRpm;
+                const real rpm=std::abs(network_.omega(engine_crank_))*kRpm;
+                const real window=auto_?auto_->desc().tcu.launch_lock_slip_rpm:(tcu_?tcu_->desc().auto_clutch.lock_slip_rpm:real(80));
+                if(hybrid_connect_s_>0){
+                    hybrid_connect_s_+=ctx.h;
+                    if(target-rpm<=window||hybrid_connect_s_>=hybrid_->connect_timeout_s)hybrid_connect_s_=0;
+                } else if(hybrid_was_disconnected&&hybrid_->connect_timeout_s>0&&target-rpm>window)hybrid_connect_s_=ctx.h;
+                if(hybrid_connect_s_>0)ctx.throttle=std::clamp(real(.45)+real(.0006)*(target-rpm),real(0),real(1));
+            } else hybrid_connect_s_=0;
+        } else hybrid_connect_s_=0;
         ctx.assist_auto_clutch=true;ctx.assist_auto_shift=true;
         if(hybrid_disconnect_)ctx.gear_request=0;
         else if(auto_)ctx.gear_request=hybrid_selector_<0?-1:real(99);
@@ -2301,7 +2358,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             // disconnect). A shift passes through position 0 while Releasing/Selecting; asking for 1st then reverted every
             // upshift (and, as a valid request, discarded the driver's shift_up_count presses) - the car never left 1st.
             const bool settled_neutral=gearbox_->current_position()==0&&gearbox_->phase()==Gearbox::Phase::Idle&&gearbox_->target()==0;
-            ctx.gear_request=hybrid_selector_<0?-1:(settled_neutral?1:kGearRequestNone);
+            ctx.gear_request=hybrid_selector_<0?-1:(settled_neutral?real(hybrid_fit>0?hybrid_fit:1):kGearRequestNone);
         }
     }
 
@@ -2412,7 +2469,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             //   more than T_engine + max_sync_torque_nm through the clutch. T_engine is the engine's demand at the
             //   throttle command INCLUDING the launch ceiling (previous substep), so the slip PI's cut shows up in
             //   the cap as well.
-            if (ctx.launch_hold_clutch) {
+            s.defer_auto_shift = hybrid_connect_s_ > real(0.0);
+            if (ctx.launch_hold_clutch || s.defer_auto_shift) {
                 s.clutch_capacity_cap_nm = real(0.0);
             } else if (ctx.launch_clutch_ramp >= real(0.0) && engine_) {
                 const real slip = s.engine_omega - s.gearbox_in_omega;
@@ -2496,6 +2554,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             //   ramp * max(0, sign(slip) * T_engine + T_sync),  T_sync = min(kLcSyncNmPerRadS * |slip|, kLcSyncFraction * C),
             // so the clutch carries what the held-rpm engine makes plus a bounded synchronising torque.
             as.launch_hold_open = ctx.launch_hold_clutch;
+            as.rev_match_hold = hybrid_connect_s_ > real(0.0);
             if (ctx.launch_clutch_ramp >= real(0.0) && engine_) {
                 constexpr real kLcSyncNmPerRadS = real(0.5), kLcSyncFraction = real(0.2); // [AS]
                 const real slip = as.input_omega - auto_->ratio(auto_->current()) * as.output_omega;
@@ -3033,6 +3092,7 @@ void Powertrain::request_engine_wear(const EngineWear& w) {
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
     for (RegenMap& m : regen_maps_) m.motor->reset_blend();
     blend_regen_nm_ = blend_pad_nm_ = real(0.0);
+    hybrid_connect_s_ = real(0.0);
     // 1. Snapshot total rotational KE BEFORE any change (signed delta booked
     //    as ledger_.external_reset below - unlike apply_topology_switch's
     //    always-non-negative engagement_loss, a reset is an arbitrary
@@ -3218,7 +3278,8 @@ real Powertrain::clutch_slip() const {
 std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
     std::uint64_t h = network_.fold_state_hash(seed);
     for(const auto& b:batteries_)h=b->fold_state_hash(h);
-    if(hybrid_){for(real v:{real(hybrid_charge_latched_),hybrid_selector_,hybrid_idle_s_,hybrid_crank_s_}){const auto* bytes=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=bytes[i];h*=1099511628211ULL;}}}
+    if(hybrid_){for(real v:{real(hybrid_charge_latched_),hybrid_selector_,hybrid_idle_s_,hybrid_crank_s_}){const auto* bytes=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=bytes[i];h*=1099511628211ULL;}}
+        if(hybrid_connect_s_>0){const real v=hybrid_connect_s_;const auto* bytes=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=bytes[i];h*=1099511628211ULL;}}}
     if(!electric_motors_.empty()) {
         const auto* b=reinterpret_cast<const unsigned char*>(&electric_direction_);
         for(std::size_t i=0;i<sizeof(electric_direction_);++i){h^=b[i];h*=1099511628211ULL;}
