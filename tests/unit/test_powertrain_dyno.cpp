@@ -668,6 +668,27 @@ TEST_CASE("Powertrain dyno A2: hybrid dual-clutch car, empty pack = the ICE car,
     }
 }
 
+TEST_CASE("Powertrain dyno A2b: hybrid dual-clutch, low crank rpm in a high gear is not rev-matched", "[drivetrain][electric][dyno][hybrid][auto_gearbox]") {
+    // The hybrid supervisor's ICE-connect (rev-match: clutch held open while the engine revs toward the SCHEDULE's fit gear's
+    // input speed) must not run in a dyno hold: at a low crank rpm in 5th the fit gear is 1st / 2nd, whose input speed is far
+    // above the held gear's, so the open clutch left the crank at 2-3x the axis (found in racing_game's garage dyno).
+    // Sabotage: the dyno-hold clause removed from `hybrid_connect_s_ = 0` in Powertrain::pre_solve_components -> engine_rpm
+    // far above the axis on the first points (measured in the commit message).
+    const auto d = fixture("car_hybrid_dct.json");
+    const GearboxDesc& g = gearbox_of(d);
+    PowertrainDynoSpec s = engine_axis(5, {1100, 1500, 2000});
+    s.drive_mode = 1;
+    const auto r = run_powertrain_dyno(d, nullptr, s);
+    for (const auto& p : r.points) {
+        INFO("rpm " << p.axis_value);
+        CHECK(p.converged);
+        CHECK(p.gear == 5);
+        CHECK(p.hybrid_engine_coupled);
+        CHECK_THAT(p.engine_rpm, WithinRel(p.axis_value, 1e-3));
+        CHECK_THAT(p.gearbox_output_rpm, WithinRel(p.axis_value / g.forward_ratios[4], 1e-3));
+    }
+}
+
 TEST_CASE("Powertrain dyno A3: automatic gearbox holds the gear and locks the converter", "[drivetrain][electric][dyno][hybrid][auto_gearbox]") {
     for (const char* name : {"car_sedan_at.json", "car_hybrid_at.json"}) {
         INFO(name);

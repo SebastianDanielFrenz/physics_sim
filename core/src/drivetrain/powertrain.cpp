@@ -2334,7 +2334,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         // engine toward that gear's input speed (same proportional law as the charge mode), then close within the clutch
         // law's lock window - or after connect_timeout_s. Never opens at standstill (the fit gear's input speed is 0).
         int hybrid_fit=0;
-        if(hybrid_disconnect_||!gearbox_||!engine_)hybrid_connect_s_=0;
+        if(hybrid_disconnect_||!gearbox_||!engine_||(auto_&&dyno_gear_hold_!=kNoDynoGearHold))hybrid_connect_s_=0; // dyno hold: no rev-match, the gear is the dyno's
         else if(hybrid_selector_>0){
             hybrid_fit=hybrid_fit_gear(ctx);
             if(hybrid_fit>0){
