@@ -25,7 +25,7 @@ const char* to_string(MotorLimit l) {
     return "unknown";
 }
 
-MotorDriveRequest motor_drive_request(const ElectricMotorDesc& d, real abs_omega, real command, real h) {
+MotorDriveRequest motor_drive_request(const ElectricMotorDesc& d, real abs_omega, real command, real h, real ceiling_scale) {
     MotorDriveRequest r;
     real demand = d.peak_torque_nm * command;
     // Conservative forward-power prediction using rotor inertia; shaft dynamics are solved by the network.
@@ -33,6 +33,7 @@ MotorDriveRequest motor_drive_request(const ElectricMotorDesc& d, real abs_omega
     const real corner = d.max_power_w / std::max(real(1), projected);
     r.power_limited = corner < demand;
     demand = std::min(demand, corner);
+    if (ceiling_scale < real(1)) demand *= std::max(real(0), ceiling_scale);
     r.torque_nm = demand;
     r.wanted_j = h * demand * std::max(real(1), projected) / d.efficiency;
     return r;
