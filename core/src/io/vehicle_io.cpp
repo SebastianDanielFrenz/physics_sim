@@ -455,7 +455,7 @@ BrakeSystemDesc read_brake_system(const json& j) {
                 const std::string& k = it.key();
                 const bool flag = k == "enabled" || k == "auto_hold";
                 if (!flag && k != "slip_target" && k != "slip_floor_mps" && k != "kp" && k != "ki_per_s" && k != "attack_rate_per_s" &&
-                    k != "recovery_rate_per_s" && k != "hold_release_s" && k != "hold_pedal_margin" && k != "hold_rise_per_s") {
+                    k != "recovery_rate_per_s" && k != "hold_release_s" && k != "hold_pedal_margin" && k != "hold_rise_per_s" && k != "hold_blend_level") {
                     throw std::runtime_error("brake_system.regen_blend.b_mode: unknown key '" + k + "'");
                 }
                 if (flag ? !it.value().is_boolean() : !it.value().is_number()) {
@@ -473,6 +473,7 @@ BrakeSystemDesc read_brake_system(const json& j) {
             bm.hold_release_s = bj.value("hold_release_s", bm.hold_release_s);
             bm.hold_pedal_margin = bj.value("hold_pedal_margin", bm.hold_pedal_margin);
             bm.hold_rise_per_s = bj.value("hold_rise_per_s", bm.hold_rise_per_s);
+            bm.hold_blend_level = bj.value("hold_blend_level", bm.hold_blend_level);
             for (const auto& kv : {std::pair<const char*, real>{"slip_target", bm.slip_target}, {"slip_floor_mps", bm.slip_floor_mps}, {"kp", bm.kp},
                                    {"ki_per_s", bm.ki_per_s}, {"attack_rate_per_s", bm.attack_rate_per_s}, {"recovery_rate_per_s", bm.recovery_rate_per_s},
                                    {"hold_rise_per_s", bm.hold_rise_per_s}}) {
@@ -483,6 +484,9 @@ BrakeSystemDesc read_brake_system(const json& j) {
             if (!(bm.slip_target < real(1.0))) throw std::runtime_error("brake_system.regen_blend.b_mode.slip_target must be below 1");
             if (!(bm.hold_release_s >= real(0.0)) || !std::isfinite(bm.hold_release_s)) {
                 throw std::runtime_error("brake_system.regen_blend.b_mode.hold_release_s must be >= 0");
+            }
+            if (!(bm.hold_blend_level >= real(0.0) && bm.hold_blend_level <= real(1.0))) {
+                throw std::runtime_error("brake_system.regen_blend.b_mode.hold_blend_level must be in [0, 1]");
             }
             if (!(bm.hold_pedal_margin >= real(0.0) && bm.hold_pedal_margin < real(1.0))) {
                 throw std::runtime_error("brake_system.regen_blend.b_mode.hold_pedal_margin must be in [0, 1)");

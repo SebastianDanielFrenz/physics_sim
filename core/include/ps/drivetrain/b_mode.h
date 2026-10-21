@@ -34,6 +34,7 @@ struct BModeDesc {
     bool auto_hold = true;
     real hold_release_s = 0.3;
     real hold_rise_per_s = 3.0; // the pads' hold level rises at most this fast (a stop, not a lock-up)
+    real hold_blend_level = 0.25; // pad level that takes over from the fading regeneration (x the fade); full once it is gone
     real hold_pedal_margin = 0.03;
 };
 

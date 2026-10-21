@@ -207,6 +207,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
             const std::string& k = f.key();
             const json& v = f.value();
             if (k == "pedal_bend") {
+                if (mi == 4) throw std::runtime_error(ctx + ": 'pedal_bend' is not allowed in electric mode (its pedal is linear)");
                 if (!v.is_object()) throw std::runtime_error(ctx + ": 'pedal_bend' must be an object {x, y}");
                 vehicle::PedalBend b;
                 bool hx = false, hy = false;

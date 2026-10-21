@@ -2313,7 +2313,10 @@ void Powertrain::prepare_b(const ComponentSubstepCtx& ctx, real pedal) {
     // point the pads do, until the pedal rises above it by the margin; they release over hold_release_s.
     if (!bd.auto_hold || p > zero_pedal + (b_hold_active_ ? bd.hold_pedal_margin : real(0.0))) b_hold_active_ = false;
     else if (regen_fade_min_ < real(1.0)) b_hold_active_ = true;
-    const real target = b_hold_active_ ? real(1.0) - regen_fade_min_ : real(0.0);
+    // While the regeneration fades the pads take over its share (hold_blend_level x the fade, no jerk); once it is gone (the car
+    // is about to stop) they rise to the full hold.
+    const real target = !b_hold_active_ ? real(0.0)
+                        : regen_fade_min_ > real(0.0) ? (real(1.0) - regen_fade_min_) * bd.hold_blend_level : real(1.0);
     if (target > b_hold_level_) b_hold_level_ = std::min(target, b_hold_level_ + bd.hold_rise_per_s * ctx.h);
     else b_hold_level_ = bd.hold_release_s > real(0.0) ? std::max(target, b_hold_level_ - ctx.h / bd.hold_release_s) : target;
     brakes_->set_hold_level(b_hold_level_);

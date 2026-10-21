@@ -83,6 +83,8 @@ struct DriveModesDesc {
 // The mode actually run. A mode the part does not offer maps, statelessly, to the part's default mode (drive modes
 // have no intervention order, so "the nearest" is not defined; the default is the one mode the owner approved).
 [[nodiscard]] constexpr DriveMode resolve_drive_mode(const DriveModesDesc& d, DriveMode requested) {
+    // A part that does not offer Electric (mode 4) keeps the pre-Electric clamp of an out-of-range request to Racing.
+    if (requested == DriveMode::Electric && !(d.modes_bits & drive_mode_bit(requested))) requested = DriveMode::Racing;
     return (d.modes_bits & drive_mode_bit(requested)) ? requested : d.default_mode;
 }
 
