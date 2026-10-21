@@ -38,8 +38,10 @@ struct MotorDriveRequest {
     real wanted_j = 0.0;
     bool power_limited = false; // the constant-power corner cut the torque
 };
-// abs_omega >= 0 [rad/s]; command = the pedal after the traction ceiling, in [0, 1]; h > 0 [s].
-[[nodiscard]] MotorDriveRequest motor_drive_request(const ElectricMotorDesc& d, real abs_omega, real command, real h);
+// abs_omega >= 0 [rad/s]; command = the pedal, in [0, 1]; h > 0 [s]. ceiling_scale in [0, 1] is the traction-control
+// fraction of the torque the motor would deliver now (after the power corner), so it bites in the constant-power region too.
+[[nodiscard]] MotorDriveRequest motor_drive_request(const ElectricMotorDesc& d, real abs_omega, real command, real h,
+                                                    real ceiling_scale = real(1));
 
 // The drive torque magnitude after the pack granted `granted_j` (<= request.wanted_j) and the residual-energy bound on the
 // pack's current `content_j`. `limit` (optional) receives the classification.

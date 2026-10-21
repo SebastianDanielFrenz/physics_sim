@@ -65,7 +65,7 @@ public:
         if(in.drives) {
             // The drive law is the public envelope (ps/drivetrain/electric_envelope.h): the power corner with the rotor-inertia
             // prediction, the pack's grant, the residual-energy bound near empty. One implementation for the car and the dyno.
-            const MotorDriveRequest r=motor_drive_request(desc_,std::abs(omega),in.command,ctx.h);
+            const MotorDriveRequest r=motor_drive_request(desc_,std::abs(omega),in.command,ctx.h,in.scale);
             const real reserved=battery_.reserve_discharge(r.wanted_j);
             torque_nm=direction*motor_drive_torque(desc_,r,reserved,battery_.content(),ctx.h,&drive_limit);
         } else if(direction!=0&&(regen>0||b_regen_nm_>0)&&std::abs(omega)>1) {
@@ -149,7 +149,7 @@ public:
     // B mode (Powertrain::prepare_b, per substep before pre_solve): the system power law's per-motor outputs. b_active: the
     // motor ignores the pedal channel and takes drive_cmd (0..1 of its envelope torque) or regen_nm (motor-shaft torque to
     // regenerate on top of the brake pedal's request). Not hashed itself (a pure function of the hashed B state and inputs).
-    void set_b_feed(bool active,real drive_cmd,real regen_nm) {b_active_=active;b_drive_cmd_=active?drive_cmd:real(0);b_regen_nm_=active?regen_nm:real(0);}
+    void set_b_feed(bool active,real drive_cmd,real regen_nm,real drive_scale=real(1)) {b_active_=active;b_drive_cmd_=active?drive_cmd:real(0);b_regen_nm_=active?regen_nm:real(0);b_scale_=active?drive_scale:real(1);}
     // The regeneration torque the motor can take at |omega| right now, before the pack's per-substep acceptance: torque and
     // power limits x the SOC taper x the low-speed fade x the path ramp; 0 under ABS or in the hold after it.
     [[nodiscard]] real b_regen_capacity_nm(real abs_omega) const {
@@ -172,7 +172,7 @@ public:
     [[nodiscard]] real drive_claim_j(const ComponentSubstepCtx& ctx,const ShaftNetwork& net) const {
         const Inputs in=inputs(ctx,net);
         if(ctx.h<=0||!in.ready||!in.drives)return 0;
-        return motor_drive_request(desc_,std::abs(in.omega),in.command,ctx.h).wanted_j;
+        return motor_drive_request(desc_,std::abs(in.omega),in.command,ctx.h,in.scale).wanted_j;
     }
     [[nodiscard]] Battery& battery() const {return battery_;}
     [[nodiscard]] const ElectricMotorDesc& desc() const {return desc_;}
@@ -182,7 +182,7 @@ public:
     real regen_pred_nm=0; // this substep's regeneration torque magnitude at the shaft (implicit damping d x |omega_old|)
     real regen_brake_pred_nm=0; // the part of it that answers the brake pedal (== regen_pred_nm outside B mode)
 private:
-    struct Inputs {real omega=0,rpm=0,direction=0,pedal=0,regen=0,command=0;bool ready=false,drives=false;};
+    struct Inputs {real omega=0,rpm=0,direction=0,pedal=0,regen=0,command=0,scale=1;bool ready=false,drives=false;};
     Inputs inputs(const ComponentSubstepCtx& ctx,const ShaftNetwork& net) const {
         Inputs in;
         const auto channel=[&](int slot,real fallback){return ctx.channels&&slot>=0&&slot<ctx.channel_count?ctx.channels[slot]:fallback;};
@@ -194,18 +194,27 @@ private:
         in.direction=request==kGearRequestNone||request==0?0:(request<0?-1:1);
         in.pedal=std::clamp(channel(throttle_slot_,desc_.crank_assist&&ctx.electric_charge>=0?real(0):(ctx.electric_throttle>=0?ctx.electric_throttle:ctx.throttle)),real(0),real(1));
         in.regen=std::clamp(channel(regen_slot_,desc_.crank_assist&&ctx.electric_charge>=0?ctx.electric_charge:ctx.brake),real(0),real(1));
+        // The ceiling is a fraction of the torque available now (ICE meaning), applied after the power corner.
+        const real ceiling=std::clamp(ctx.traction_throttle_ceiling,real(0),real(1));
         if(b_active_) {
+            // B mode: the drive command is the B law's (already a fraction of the envelope); the TC ceiling scales it through
+            // b_scale_ (set by the Powertrain from the driver's pedal). B regeneration is never scaled by the ceiling.
             in.pedal=b_drive_cmd_;
             in.drives=b_drive_cmd_>0&&in.regen<=.05&&in.direction!=0&&in.rpm<desc_.max_rpm;
-        } else in.drives=motor_drives(desc_,in.pedal,in.regen,in.direction,in.rpm);
-        in.command=std::min(in.pedal,std::clamp(ctx.traction_throttle_ceiling,real(0),real(1)));
+            in.command=in.pedal;
+            in.scale=b_scale_;
+        } else {
+            in.drives=motor_drives(desc_,in.pedal,in.regen,in.direction,in.rpm);
+            in.command=in.pedal;
+            in.scale=in.pedal>0&&ceiling<in.pedal?ceiling/in.pedal:real(1);
+        }
         return in;
     }
     real regen_d_=0;
     bool blend_=false,abs_now_=false,dynamic_=false;
     RegenBlendDesc cfg_{};
     real request_nm_=0,fade_=0,abs_hold_left_=0,ramp_=1;
-    bool b_active_=false;real b_drive_cmd_=0,b_regen_nm_=0;
+    bool b_active_=false;real b_drive_cmd_=0,b_regen_nm_=0,b_scale_=1;
     NodeId shaft_; ElectricMotorDesc desc_; Battery& battery_;
     int throttle_slot_=-1,regen_slot_=-1,direction_slot_=-1,ready_slot_=-1;
 };

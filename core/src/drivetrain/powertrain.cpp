@@ -2280,13 +2280,15 @@ void Powertrain::prepare_b(const ComponentSubstepCtx& ctx, real pedal) {
     const real p_cmd = b_system_power(regen_w, p_max, p);
     const real zero_pedal = ps::drivetrain::b_zero_power_pedal(regen_w, p_max);
     const real ceiling = std::clamp(ctx.traction_throttle_ceiling, real(0.0), real(1.0));
+    const real tc_scale = (p > real(0.0) && ceiling < p) ? ceiling / p : real(1.0);
     for (std::size_t k = 0; k < n; ++k) {
         RegenMap& m = regen_maps_[k];
         const std::size_t bi = b_battery_idx_[k];
         real slip = real(0.0);
         if (p_cmd >= real(0.0)) {
             const real c = p_max > real(0.0) ? std::clamp(p_cmd * b_scale_d_[bi] / p_max, real(0.0), real(1.0)) : real(0.0);
-            m.motor->set_b_feed(true, std::min(c, ceiling), real(0.0));
+            // TC ceiling (PR #37): a fraction of the torque available now, so it scales the drive; B regeneration below is not.
+            m.motor->set_b_feed(true, c, real(0.0), tc_scale);
         } else {
             const real f = regen_w > real(0.0) ? std::min(real(1.0), -p_cmd / regen_w) : real(0.0);
             // Wheel-slip guard (the TC regulator's structure, braking direction): the worst slip of the wheels this motor
