@@ -2364,7 +2364,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
 
     // Powertrain dyno (powertrain_dyno.cpp) only: hold the dyno's gear (a hybrid supervisor's disconnect keeps its neutral).
     // dyno_gear_hold_ is kNoDynoGearHold in every car, so this is never taken at runtime and nothing here is hashed.
-    if (dyno_gear_hold_ != kNoDynoGearHold && gearbox_ && !auto_) {
+    // An automatic / DCT / CVT gearbox takes the same request and holds it inside AutoTransmission (dyno hold).
+    if (dyno_gear_hold_ != kNoDynoGearHold && gearbox_) {
         ctx.assist_auto_shift = false;
         if (!(hybrid_ && hybrid_disconnect_)) ctx.gear_request = static_cast<real>(dyno_gear_hold_);
     }
@@ -3173,7 +3174,10 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
     //    engine below idle.
     const real idle_omega = engine_ ? rpm_to_rad_per_s(engine_->idle_rpm()) : real(0.0);
     const real gearbox_out_omega_now = gearbox_ ? network_.omega(gearbox_out_) : real(0.0);
-    const real driveline_in_omega = (gearbox_ && gear != 0) ? gearbox_->ratio_for_position(gear) * gearbox_out_omega_now : real(0.0);
+    // A held CVT ratio (powertrain dyno) is the variator's, not a virtual step's.
+    const real driveline_ratio = (gearbox_ && gear > 0 && auto_ && auto_->dyno_hold() && auto_->desc().cvt) ? auto_->ratio(gear)
+                                                                                                             : (gearbox_ && gear != 0 ? gearbox_->ratio_for_position(gear) : real(0.0));
+    const real driveline_in_omega = (gearbox_ && gear != 0) ? driveline_ratio * gearbox_out_omega_now : real(0.0);
     real engine_omega_target = real(0.0);
     if (engine_ && opts.engine_state != EngineState::Off) {
         if (opts.clutch_locked && gear != 0) {

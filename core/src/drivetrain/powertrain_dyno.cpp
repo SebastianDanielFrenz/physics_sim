@@ -90,6 +90,8 @@ struct Prepared {
     vehicle::VehicleDesc desc;
     std::vector<real> channels; // declare_control_channels order, spec overrides applied
     int gear = 0;               // the gear held (0 without a gearbox)
+    int reset_gear = 0;         // the position the Powertrain is reset to / asked for: gear, but D (1) for a CVT's forward steps
+    real cvt_ratio = 0.0;       // CVT: the held variator ratio (0 = not a CVT / reverse)
     bool has_gearbox = false, has_engine = false, has_hybrid = false;
     real kinematic = 1.0;       // axis omega (rad/s; RoadSpeed: m/s) per 1 m/s of road speed
     real driven_radius = 0.0;
@@ -100,6 +102,11 @@ struct Prepared {
 Powertrain build(const Prepared& p) {
     return Powertrain(p.desc.powertrain, p.desc.brake_system, p.desc.wheels, p.desc.controllers,
                       p.desc.name.empty() ? std::string("powertrain dyno") : p.desc.name);
+}
+
+// The gear hold (manual / sequential: the request; automatic / DCT / CVT: AutoTransmission's dyno hold).
+void hold_gear(Powertrain& pt, const Prepared& p) {
+    pt.set_dyno_gear_hold(p.has_gearbox ? p.reset_gear : Powertrain::kNoDynoGearHold, p.cvt_ratio);
 }
 
 std::vector<real> hub_targets(const Prepared& p, real v) {
@@ -130,7 +137,6 @@ Prepared prepare(const vehicle::VehicleDesc& vehicle, const EngineMapsPtr& maps,
 
     // The kinematic probe: every hub rolling at 1 m/s in the held gear; the axis shaft's speed is the ratio.
     Powertrain probe = build(p);
-    if (probe.has_auto()) throw std::invalid_argument("run_powertrain_dyno: automatic, DCT and CVT gearboxes are not supported yet");
     p.has_gearbox = probe.has_gearbox();
     p.has_engine = probe.has_engine();
     p.driven_radius = probe.driven_wheel_mean_radius();
@@ -139,6 +145,18 @@ Prepared prepare(const vehicle::VehicleDesc& vehicle, const EngineMapsPtr& maps,
         const int rev = static_cast<int>(probe.gearbox().desc().reverse_ratios.size());
         if (spec.gear > fwd || spec.gear < -rev) throw std::invalid_argument("run_powertrain_dyno: gear " + std::to_string(spec.gear) + " does not exist");
         p.gear = spec.gear;
+        p.reset_gear = spec.gear;
+        const bool cvt = probe.has_auto() && probe.auto_trans().desc().cvt;
+        if (spec.cvt_ratio != 0 && !(cvt && spec.gear > 0))
+            throw std::invalid_argument("run_powertrain_dyno: cvt_ratio needs a CVT gearbox in a forward gear");
+        if (cvt && spec.gear > 0) {
+            // A CVT has one forward gear (D); `gear` k picks its virtual step k's ratio unless cvt_ratio is given.
+            const CvtDesc& cd = probe.auto_trans().desc().cvt_desc;
+            p.reset_gear = 1;
+            p.cvt_ratio = spec.cvt_ratio != 0 ? spec.cvt_ratio : probe.gearbox().desc().forward_ratios[static_cast<std::size_t>(spec.gear - 1)];
+            if (!std::isfinite(p.cvt_ratio) || p.cvt_ratio < cd.ratio_high || p.cvt_ratio > cd.ratio_low)
+                throw std::invalid_argument("run_powertrain_dyno: the CVT ratio " + std::to_string(p.cvt_ratio) + " is outside the variator's range");
+        }
     }
     if (!p.has_gearbox && (spec.axis == PowertrainDynoAxis::EngineRpm || spec.axis == PowertrainDynoAxis::GearboxOutputRpm))
         throw std::invalid_argument("run_powertrain_dyno: the EngineRpm and GearboxOutputRpm axes need a gearbox");
@@ -149,10 +167,15 @@ Prepared prepare(const vehicle::VehicleDesc& vehicle, const EngineMapsPtr& maps,
         throw std::invalid_argument("run_powertrain_dyno: motor_index " + std::to_string(spec.motor_index) + " is out of range");
     {
         vehicle::VehicleResetOptions ro;
-        ro.gear = p.has_gearbox ? p.gear : vehicle::VehicleResetOptions::kKeepGear;
-        ro.engine_state = EngineState::Off;
+        ro.gear = p.has_gearbox ? p.reset_gear : vehicle::VehicleResetOptions::kKeepGear;
+        // A DualClutch's gear-set input IS the crank, and an Off engine rests at 0: the probe's engine runs there.
+        ro.engine_state = probe.has_auto() && probe.has_engine() ? EngineState::Running : EngineState::Off;
         ro.clutch_locked = true;
-        probe.reset(ro, hub_targets(p, 1.0));
+        if (probe.has_auto()) hold_gear(probe, p);
+        // A DualClutch's input is the crank, which a reset floors at idle: probe at a road speed whose input speed is far above
+        // idle in every gear (a manual / AT input shaft is not floored, so those keep 1 m/s, bit-identical to before).
+        const real probe_v = probe.has_auto() ? real(100.0) : real(1.0);
+        probe.reset(ro, hub_targets(p, probe_v));
         real k = 1.0;
         switch (spec.axis) {
         case PowertrainDynoAxis::EngineRpm: k = probe.gearbox_in_omega(); break;
@@ -160,18 +183,18 @@ Prepared prepare(const vehicle::VehicleDesc& vehicle, const EngineMapsPtr& maps,
         case PowertrainDynoAxis::MotorRpm:
             k = probe.node_omega(probe.electric_motors()[static_cast<std::size_t>(spec.motor_index)]->shaft_node());
             break;
-        case PowertrainDynoAxis::RoadSpeed: k = 1.0; break;
+        case PowertrainDynoAxis::RoadSpeed: k = probe_v; break;
         }
         if (!(std::abs(k) > real(1e-9)))
             throw std::invalid_argument("run_powertrain_dyno: the axis shaft does not turn with the wheels in this gear");
-        p.kinematic = std::abs(k);
+        p.kinematic = std::abs(k) / probe_v;
     }
 
     // Initial state: the engine running iff the car would run it (a hybrid: the split's start request; an ICE: always), in
     // gear iff the engine is coupled (a hybrid in Eco starts in neutral, as its supervisor would put it).
     p.reset.clutch_locked = true;
     p.reset.engine_state = p.has_engine ? EngineState::Running : EngineState::Off;
-    p.reset.gear = p.has_gearbox ? p.gear : vehicle::VehicleResetOptions::kKeepGear;
+    p.reset.gear = p.has_gearbox ? p.reset_gear : vehicle::VehicleResetOptions::kKeepGear;
     if (p.has_hybrid) {
         const HybridSplit s = hybrid_full_pedal_split(p.hybrid, hybrid_available_w(p.desc.powertrain, spec), spec.pedal, spec.drive_mode,
                                                       energy_weighted_soc(p.desc.powertrain, spec.battery_soc));
@@ -201,7 +224,7 @@ struct Window {
 
 PowertrainDynoPoint run_point(const Prepared& p, const PowertrainDynoSpec& spec, real axis_value) {
     Powertrain pt = build(p);
-    pt.set_dyno_gear_hold(p.has_gearbox ? p.gear : Powertrain::kNoDynoGearHold);
+    hold_gear(pt, p);
     pt.dyno_hold_energy_state(spec.battery_soc, spec.hydrogen_fraction);
 
     const bool rpm_axis = spec.axis != PowertrainDynoAxis::RoadSpeed;
@@ -216,8 +239,8 @@ PowertrainDynoPoint run_point(const Prepared& p, const PowertrainDynoSpec& spec,
     ctx.h = kH;
     ctx.throttle = spec.pedal;
     ctx.brake = 0;
-    ctx.gear_request = p.has_gearbox ? static_cast<real>(p.gear) : real(1); // EV: D
-    if (p.has_hybrid) ctx.gear_request = p.gear < 0 ? real(-1) : real(1);   // the driver's D / R lever
+    ctx.gear_request = p.has_gearbox ? static_cast<real>(p.reset_gear) : real(1); // EV: D
+    if (p.has_hybrid) ctx.gear_request = p.gear < 0 ? real(-1) : real(1);         // the driver's D / R lever
     ctx.ignition = 1;
     ctx.starter = 0;
     ctx.ambient = spec.ambient;

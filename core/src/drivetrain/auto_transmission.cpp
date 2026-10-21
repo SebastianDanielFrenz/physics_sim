@@ -83,11 +83,20 @@ void AutoTransmission::reset(int gear, bool clutch_locked) {
     rev_held_ = false;
     e_launch_ = launch_locked_ ? real(1.0) : real(0.0);
     if (desc_.cvt) {
-        ratio_ = desc_.cvt_desc.ratio_low;
+        ratio_ = hold_ratio_ > real(0.0) ? hold_ratio_ : desc_.cvt_desc.ratio_low;
         step_ = 0;
         t_step_ = real(0.0);
-        clamp_ = desc_.cvt_desc.belt.clamp_force_min_n;
+        clamp_ = hold_ ? desc_.cvt_desc.belt.clamp_force_max_n : desc_.cvt_desc.belt.clamp_force_min_n;
     }
+}
+
+void AutoTransmission::set_dyno_hold(bool on, real cvt_ratio) {
+    hold_ = on;
+    hold_ratio_ = 0.0;
+    if (!on || !desc_.cvt || !(cvt_ratio > real(0.0))) return;
+    hold_ratio_ = std::clamp(cvt_ratio, desc_.cvt_desc.ratio_high, desc_.cvt_desc.ratio_low);
+    ratio_ = hold_ratio_;
+    clamp_ = desc_.cvt_desc.belt.clamp_force_max_n;
 }
 
 int AutoTransmission::nearest_step() const {
@@ -121,6 +130,12 @@ ShiftScheduleDesc AutoTransmission::active_schedule(const Sensors& s) const {
 }
 
 void AutoTransmission::update_cvt(const Sensors& s, real th) {
+    if (hold_) { // powertrain dyno: the variator stays where it was put
+        step_ = 0;
+        if (hold_ratio_ > real(0.0)) ratio_ = hold_ratio_;
+        update_cvt_clamp(s);
+        return;
+    }
     const CvtDesc& c = desc_.cvt_desc;
     const AutomaticTcuDesc& t = desc_.tcu;
     const CvtTcuDesc& law = *t.cvt;
@@ -181,7 +196,13 @@ void AutoTransmission::update_cvt(const Sensors& s, real th) {
         ratio_ = (std::abs(lt - lr) <= d) ? r_t : ps::math::exp(lr + (lt > lr ? d : -d));
         ratio_ = std::clamp(ratio_, c.ratio_high, c.ratio_low);
     }
-    // Clamping force: lag toward the force that carries max(|input torque|, |engine demand|) x the safety factor.
+    update_cvt_clamp(s);
+}
+
+// Clamping force: lag toward the force that carries max(|input torque|, |engine demand|) x the safety factor.
+void AutoTransmission::update_cvt_clamp(const Sensors& s) {
+    const real th = std::clamp(s.throttle, real(0.0), real(1.0));
+    const CvtDesc& c = desc_.cvt_desc;
     const CvtBeltDesc& b = c.belt;
     const real rp = b.pulley_radius_sum_m / (real(1.0) + ratio_);
     const real per_n = real(2.0) * b.friction_coefficient * rp / cos_beta_; // N*m of capacity per N of clamping force
@@ -196,6 +217,13 @@ void AutoTransmission::update_cvt(const Sensors& s, real th) {
 
 void AutoTransmission::choose_target(const Sensors& s, real th) {
     const int n = forward_count(), m = reverse_count();
+    if (hold_) { // powertrain dyno: the requested gear, no selector, schedule, kickdown or dwell
+        if (s.gear_request > kGearRequestNone + real(0.5)) {
+            const int req = static_cast<int>(std::floor(s.gear_request + real(0.5)));
+            tgt_ = req == 0 ? 0 : (req < 0 ? -std::min(-req, m) : (desc_.cvt ? 1 : std::min(req, n)));
+        }
+        return;
+    }
     const AutomaticTcuDesc& t = desc_.tcu;
     // Selector and paddles, once per tick.
     if (s.first_substep) {
@@ -384,6 +412,11 @@ void AutoTransmission::update_launch(const Sensors& s, real th) {
             return;
         }
     }
+    if (hold_) { // powertrain dyno: a gear in = the starting clutch closed
+        launch_locked_ = true;
+        e_launch_ = real(1.0);
+        return;
+    }
     // DCT launch control (assist unit): Armed holds the clutch open, Launch sets its capacity directly.
     if (s.launch_hold_open) {
         e_launch_ = real(0.0);
@@ -452,6 +485,11 @@ void AutoTransmission::update_preselect(const Sensors& s, real th) {
 
 void AutoTransmission::update_lockup(const Sensors& s, real th) {
     if (!desc_.has_lockup) return;
+    if (hold_) { // powertrain dyno: converter locked in every gear
+        lock_req_ = cur_ != 0;
+        e_lock_ = lock_req_ ? real(1.0) : real(0.0);
+        return;
+    }
     const AutomaticTcuDesc& t = desc_.tcu;
     const real turbine_rpm = std::abs(s.input_omega) * kRadPerSecToRpm;
     const bool shifting = phase_ != Phase::Idle;
@@ -538,7 +576,7 @@ AutoTransmission::Outputs AutoTransmission::step(const Sensors& s) {
 
     update_launch(s, th);
     update_lockup(s, th);
-    update_preselect(s, th);
+    if (!hold_) update_preselect(s, th);
     if (desc_.cvt) update_cvt(s, th);
 
     // --- row commands ---

@@ -15,6 +15,7 @@
 // P4 ICE only: car_sedan (torque map) and car_sedan_sim (simulated NA) net crank torque against run_dyno_sweep (1e-12);
 //    P4b [long] car_hyper (twin turbo, Sketch maps) in 4th against run_dyno_sweep (1e-5; measured <= 4e-7).
 // P5 1 vs 10 workers vs serial: bit-identical in every field. P6 cancel and rejected specs.
+// A1-A6 (end of file): automatic, dual-clutch and CVT gearboxes, see the comment there.
 //
 // Sabotages (each reverted; results in the increment's report): reserve_discharge back to component order (A1, P1 fail);
 // dropping the engine's Coulomb row from the dyno's net torque (P4 fails); hybrid engine command from requested/requested
@@ -505,11 +506,10 @@ TEST_CASE("Powertrain dyno P6: cancel and rejected specs", "[drivetrain][electri
     bad.battery_soc = 1.5;
     CHECK_THROWS_AS(run_powertrain_dyno(ev, nullptr, bad), std::invalid_argument);
 
-    const auto at = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/car_sedan_at.json");
     PowertrainDynoSpec a;
     a.axis = PowertrainDynoAxis::RoadSpeed;
     a.points = {10};
-    CHECK_THROWS_AS(run_powertrain_dyno(at, nullptr, a), std::invalid_argument);
+    // (automatic, DCT and CVT gearboxes are measured since 2026-10-21: A1-A6)
     const auto sedan = load("car_sedan.json");
     a.gear = 9;
     CHECK_THROWS_AS(run_powertrain_dyno(sedan, nullptr, a), std::invalid_argument);
@@ -545,4 +545,232 @@ TEST_CASE("Powertrain dyno cost", "[.][diag][dyno]") {
             if (pass == 0) print(run.file, r);
         }
     }
+}
+
+// ---- Automatic, dual-clutch and CVT gearboxes (2026-10-21): the dyno holds one gear / one variator ratio ----------------
+// A1 DualClutch ICE (car_sedan_dct): gears 2 and 4 at the same crank rpm - the crank turns at the axis value (starting clutch
+//    locked), the gearbox output at axis / ratio, the held gear is the reported one, the net crank torque is the WOT curve and
+//    the wheel torque ratio is the ratio of the gear ratios times the mesh-loss factor (2 - eta).
+// A2 hybrid DualClutch (car_hybrid_dct): with an empty pack it is the ICE car (wheel torque equal to A1's car to 1e-9); with
+//    the pack, engine and motor together obey the P3 power balance in both gears.
+// A3 Automatic (car_sedan_at, car_hybrid_at): the converter is locked in the held gear (crank = turbine speed), gear held.
+// A4 CVT (car_sedan_cvt, car_hybrid_cvt): `gear` k holds the variator at virtual step k's ratio, `cvt_ratio` at an explicit
+//    ratio; out of range / on a non-CVT is rejected; gear 1 is the reported position.
+// A5 manual unchanged: car_sedan and car_hybrid (6MT) 3rd gear equal the numbers recorded before this change, bit for bit.
+// A6 1 vs 10 workers vs serial bit-identical on the DCT hybrid; gear 0 on an automatic box = neutral.
+// (Fixtures tests/support/fixtures/vehicles/car_hybrid_{dct,at,cvt}.json: car_hybrid.json with the clutch component dropped,
+//  the sedan_7dct / sedan_8at / sedan_cvt gearbox and the automatic_tcu of car_sedan_{dct,at,cvt}.json. No EV fixture: the
+//  automatic_tcu controller needs an engine, so a battery EV cannot have an automatic box in this model.)
+//
+// Sabotages (each reverted afterwards; failures measured on this branch are listed in the commit message / report):
+//  S-a AutoTransmission::choose_target's hold branch removed -> the TCU schedule picks the gear: A1/A2/A3 fail (gear != held,
+//      gearbox output rpm off by the ratio ratio);
+//  S-b update_launch's hold branch removed -> the DCT starting clutch creeps/slips instead of being locked: A1 fails;
+//  S-c update_lockup's hold branch removed -> the AT converter slips below the lock-up engage rpm: A3 fails (crank != turbine);
+//  S-d update_cvt's hold branch removed -> the variator follows its ratio law: A4 fails (output rpm off the held ratio).
+namespace {
+
+const GearboxDesc& gearbox_of(const vehicle::VehicleDesc& d) { return first<GearboxDesc>(d); }
+
+vehicle::VehicleDesc fixture(const char* name) {
+    return io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/tests/support/fixtures/vehicles/" + name);
+}
+
+PowertrainDynoSpec engine_axis(int gear, std::vector<real> rpm) {
+    PowertrainDynoSpec s;
+    s.axis = PowertrainDynoAxis::EngineRpm;
+    s.gear = gear;
+    s.points = std::move(rpm);
+    return s;
+}
+
+// Wheel torque ratio of two gears at equal crank speed: ratio of gear ratios x the lagged mesh-loss factor.
+real expected_torque_ratio(const GearboxDesc& g, int a, int b) {
+    const real ra = g.forward_ratios[static_cast<std::size_t>(a - 1)], rb = g.forward_ratios[static_cast<std::size_t>(b - 1)];
+    const real ea = g.forward_efficiency[static_cast<std::size_t>(a - 1)], eb = g.forward_efficiency[static_cast<std::size_t>(b - 1)];
+    return (ra / rb) * ((2 - eb) / (2 - ea));
+}
+
+} // namespace
+
+TEST_CASE("Powertrain dyno A1: dual-clutch ICE holds the requested gear", "[drivetrain][dyno][auto_gearbox]") {
+    const auto d = fixture("car_sedan_dct.json");
+    const GearboxDesc& g = gearbox_of(d);
+    const TorqueMapEngineDesc& eng = first<TorqueMapEngineDesc>(d);
+    // 900 rpm is below the launch law's bite rpm (1000): only the held (locked) starting clutch carries the engine there.
+    const auto lo = run_powertrain_dyno(d, nullptr, engine_axis(2, {900, 2500, 4000}));
+    const auto hi = run_powertrain_dyno(d, nullptr, engine_axis(4, {900, 2500, 4000}));
+    for (int pass = 0; pass < 2; ++pass) {
+        const int gear = pass == 0 ? 2 : 4;
+        const auto& r = pass == 0 ? lo : hi;
+        for (const auto& p : r.points) {
+            INFO("gear " << gear << " rpm " << p.axis_value);
+            CHECK(p.converged);
+            CHECK(p.gear == gear);
+            CHECK(p.engine_running);
+            CHECK_THAT(p.engine_rpm, WithinRel(p.axis_value, 1e-4)); // starting clutch locked: the crank is the axis
+            CHECK_THAT(p.gearbox_output_rpm, WithinRel(p.axis_value / g.forward_ratios[static_cast<std::size_t>(gear - 1)], 1e-3));
+            CHECK_THAT(p.engine_torque_nm, WithinRel(eng.wot_torque_nm_vs_rpm.evaluate(p.engine_rpm), 1e-4));
+        }
+    }
+    for (std::size_t i = 0; i < lo.points.size(); ++i) {
+        const real ratio = lo.points[i].system_wheel_torque_nm / hi.points[i].system_wheel_torque_nm;
+        INFO("wheel torque ratio " << ratio);
+        CHECK_THAT(ratio, WithinRel(expected_torque_ratio(g, 2, 4), 0.01));
+    }
+}
+
+TEST_CASE("Powertrain dyno A2: hybrid dual-clutch car, empty pack = the ICE car, full pack = P3 balance", "[drivetrain][electric][dyno][hybrid][auto_gearbox]") {
+    const auto ice = fixture("car_sedan_dct.json");
+    const auto d = fixture("car_hybrid_dct.json");
+    const GearboxDesc& g = gearbox_of(d);
+    SECTION("pack empty: wheel torque equals the ICE car's") {
+        PowertrainDynoSpec s = engine_axis(2, {2500, 4000});
+        s.battery_soc = 0.0;
+        for (int gear : {2, 4}) {
+            s.gear = gear;
+            const auto h = run_powertrain_dyno(d, nullptr, s);
+            const auto c = run_powertrain_dyno(ice, nullptr, s);
+            for (std::size_t i = 0; i < h.points.size(); ++i) {
+                INFO("gear " << gear << " rpm " << s.points[i]);
+                CHECK(h.points[i].gear == gear);
+                CHECK(h.points[i].motors[0].torque_nm == 0);
+                CHECK_THAT(h.points[i].system_wheel_torque_nm, WithinRel(c.points[i].system_wheel_torque_nm, 1e-9));
+            }
+        }
+    }
+    SECTION("full pack: engine + motor, both gears") {
+        const BatteryDesc& b = first<BatteryDesc>(d);
+        const real eta_red = by_id<GearPairDesc>(d, "motor_reduction").efficiency;
+        const real eta_diff = first<DifferentialDesc>(d).efficiency;
+        PowertrainDynoSpec s = engine_axis(2, {3000});
+        s.drive_mode = 1;
+        PowertrainDynoPoint pt[2];
+        const int gears[2] = {2, 4};
+        for (int k = 0; k < 2; ++k) {
+            s.gear = gears[k];
+            const auto r = run_powertrain_dyno(d, nullptr, s);
+            pt[k] = r.points[0];
+            const auto& p = pt[k];
+            INFO("gear " << gears[k]);
+            CHECK(p.converged);
+            CHECK(p.gear == gears[k]);
+            CHECK(p.hybrid_engine_coupled);
+            CHECK_THAT(p.engine_rpm, WithinRel(3000.0, 1e-4));
+            CHECK_THAT(p.gearbox_output_rpm, WithinRel(3000.0 / g.forward_ratios[static_cast<std::size_t>(gears[k] - 1)], 1e-3));
+            const real eta_g = g.forward_efficiency[static_cast<std::size_t>(gears[k] - 1)];
+            const real expect = (p.engine_power_w / (2 - eta_g) + p.motors[0].power_w / (2 - eta_red)) / (2 - eta_diff);
+            CHECK_THAT(p.system_power_w, WithinRel(expect, 2e-3));
+            CHECK(p.battery_power_w <= b.max_discharge_w);
+        }
+        // The same crank speed in the lower gear turns the wheels slower.
+        CHECK_THAT(pt[0].road_speed_mps / pt[1].road_speed_mps, WithinRel(g.forward_ratios[3] / g.forward_ratios[1], 1e-3));
+    }
+}
+
+TEST_CASE("Powertrain dyno A3: automatic gearbox holds the gear and locks the converter", "[drivetrain][electric][dyno][hybrid][auto_gearbox]") {
+    for (const char* name : {"car_sedan_at.json", "car_hybrid_at.json"}) {
+        INFO(name);
+        const auto d = fixture(name);
+        const GearboxDesc& g = gearbox_of(d);
+        PowertrainDynoSpec s = engine_axis(2, {2500, 4000});
+        s.battery_soc = 0.0; // hybrid: the ICE alone (the motor is covered by A2)
+        PowertrainDynoResult r[2];
+        const int gears[2] = {2, 4};
+        for (int k = 0; k < 2; ++k) {
+            s.gear = gears[k];
+            r[k] = run_powertrain_dyno(d, nullptr, s);
+            for (const auto& p : r[k].points) {
+                INFO("gear " << gears[k] << " rpm " << p.axis_value);
+                CHECK(p.converged);
+                CHECK(p.gear == gears[k]);
+                CHECK_THAT(p.engine_rpm, WithinRel(p.axis_value, 1e-4)); // locked: crank (pump) = turbine = axis
+                CHECK_THAT(p.gearbox_output_rpm, WithinRel(p.axis_value / g.forward_ratios[static_cast<std::size_t>(gears[k] - 1)], 1e-3));
+            }
+        }
+        for (std::size_t i = 0; i < r[0].points.size(); ++i)
+            CHECK_THAT(r[0].points[i].system_wheel_torque_nm / r[1].points[i].system_wheel_torque_nm, WithinRel(expected_torque_ratio(g, 2, 4), 0.01));
+    }
+}
+
+TEST_CASE("Powertrain dyno A4: CVT holds a variator ratio", "[drivetrain][electric][dyno][hybrid][auto_gearbox]") {
+    for (const char* name : {"car_sedan_cvt.json", "car_hybrid_cvt.json"}) {
+        INFO(name);
+        const auto d = fixture(name);
+        const GearboxDesc& g = gearbox_of(d);
+        REQUIRE(g.cvt.has_value());
+        PowertrainDynoSpec s = engine_axis(2, {2500, 4000});
+        s.battery_soc = 0.0;
+        PowertrainDynoResult r[2];
+        const int steps[2] = {2, 4};
+        for (int k = 0; k < 2; ++k) {
+            s.gear = steps[k];
+            r[k] = run_powertrain_dyno(d, nullptr, s);
+            for (const auto& p : r[k].points) {
+                INFO("step " << steps[k] << " rpm " << p.axis_value);
+                CHECK(p.converged);
+                CHECK(p.gear == 1); // a CVT has one forward position, D
+                CHECK_THAT(p.engine_rpm, WithinRel(p.axis_value, 1e-4));
+                CHECK_THAT(p.gearbox_output_rpm, WithinRel(p.axis_value / g.forward_ratios[static_cast<std::size_t>(steps[k] - 1)], 1e-3));
+            }
+        }
+        for (std::size_t i = 0; i < r[0].points.size(); ++i)
+            CHECK_THAT(r[0].points[i].system_wheel_torque_nm / r[1].points[i].system_wheel_torque_nm, WithinRel(expected_torque_ratio(g, 2, 4), 0.02));
+        // An explicit variator ratio overrides the step.
+        s.gear = 1;
+        s.cvt_ratio = 1.5;
+        const auto e = run_powertrain_dyno(d, nullptr, s);
+        for (const auto& p : e.points) {
+            CHECK(p.converged);
+            CHECK_THAT(p.gearbox_output_rpm, WithinRel(p.axis_value / 1.5, 1e-3));
+        }
+        s.cvt_ratio = g.cvt->ratio_low * 1.5; // outside the variator's range
+        CHECK_THROWS_AS(run_powertrain_dyno(d, nullptr, s), std::invalid_argument);
+        s.cvt_ratio = g.cvt->ratio_high * 0.5;
+        CHECK_THROWS_AS(run_powertrain_dyno(d, nullptr, s), std::invalid_argument);
+    }
+    // cvt_ratio on a gearbox that is not a CVT.
+    PowertrainDynoSpec s = engine_axis(2, {2500});
+    s.cvt_ratio = 1.5;
+    CHECK_THROWS_AS(run_powertrain_dyno(fixture("car_sedan_dct.json"), nullptr, s), std::invalid_argument);
+    CHECK_THROWS_AS(run_powertrain_dyno(load("car_sedan.json"), nullptr, s), std::invalid_argument);
+}
+
+TEST_CASE("Powertrain dyno A5: manual gearboxes are unchanged (bit-identical to before the auto-gearbox hold)", "[drivetrain][dyno][auto_gearbox]") {
+    // Recorded on a757c5c (before this change), 3rd gear on the engine axis, %.17g.
+    struct Pin {
+        real system_power_w, wheel_torque_nm, engine_torque_nm, output_rpm;
+    };
+    const Pin sedan[] = {{24385.9297223332, 882.40218862623362, 164.0004789520406, 1071.4456768585949},
+                         {89215.658062189992, 1076.0964588172387, 199.99988318284039, 3214.306574493161}};
+    const Pin hybrid[] = {{130082.54249088862, 4706.6968523807745, 164.00255471041592, 1071.519811086252},
+                          {224087.54250383817, 2702.8601305971565, 199.99970658722566, 3214.3381094241199}};
+    for (const char* car : {"car_sedan.json", "car_hybrid.json"}) {
+        const Pin* pins = std::strcmp(car, "car_sedan.json") == 0 ? sedan : hybrid;
+        const auto r = run_powertrain_dyno(load(car), nullptr, engine_axis(3, {1500, 4500}));
+        for (std::size_t i = 0; i < 2; ++i) {
+            const auto& p = r.points[i];
+            INFO(car << " " << p.axis_value);
+            CHECK(p.system_power_w == pins[i].system_power_w);
+            CHECK(p.system_wheel_torque_nm == pins[i].wheel_torque_nm);
+            CHECK(p.engine_torque_nm == pins[i].engine_torque_nm);
+            CHECK(p.gearbox_output_rpm == pins[i].output_rpm);
+        }
+    }
+}
+
+TEST_CASE("Powertrain dyno A6: auto-gearbox sweeps are worker-count invariant; gear 0 holds neutral", "[drivetrain][electric][dyno][determinism][auto_gearbox]") {
+    const auto d = fixture("car_hybrid_dct.json");
+    const PowertrainDynoSpec s = engine_axis(3, {1500, 2500, 3500, 4500, 5500});
+    const auto serial = run_powertrain_dyno(d, nullptr, s);
+    jobs::JobSystem p1(1), p10(10);
+    CHECK(same(serial, run_powertrain_dyno(d, nullptr, s, &p1)));
+    CHECK(same(serial, run_powertrain_dyno(d, nullptr, s, &p10)));
+    // Gear 0 on the road-speed axis: neutral (ICE automatic car, no hybrid supervisor).
+    PowertrainDynoSpec n;
+    n.axis = PowertrainDynoAxis::RoadSpeed;
+    n.gear = 0;
+    n.points = {10};
+    const auto r = run_powertrain_dyno(fixture("car_sedan_at.json"), nullptr, n);
+    CHECK(r.points[0].gear == 0);
 }
