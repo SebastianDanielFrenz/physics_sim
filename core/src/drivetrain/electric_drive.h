@@ -65,7 +65,7 @@ public:
         if(in.drives) {
             // The drive law is the public envelope (ps/drivetrain/electric_envelope.h): the power corner with the rotor-inertia
             // prediction, the pack's grant, the residual-energy bound near empty. One implementation for the car and the dyno.
-            const MotorDriveRequest r=motor_drive_request(desc_,std::abs(omega),in.command,ctx.h);
+            const MotorDriveRequest r=motor_drive_request(desc_,std::abs(omega),in.command,ctx.h,in.scale);
             const real reserved=battery_.reserve_discharge(r.wanted_j);
             torque_nm=direction*motor_drive_torque(desc_,r,reserved,battery_.content(),ctx.h,&drive_limit);
         } else if(direction!=0&&regen>0&&std::abs(omega)>1) {
@@ -148,7 +148,7 @@ public:
     [[nodiscard]] real drive_claim_j(const ComponentSubstepCtx& ctx,const ShaftNetwork& net) const {
         const Inputs in=inputs(ctx,net);
         if(ctx.h<=0||!in.ready||!in.drives)return 0;
-        return motor_drive_request(desc_,std::abs(in.omega),in.command,ctx.h).wanted_j;
+        return motor_drive_request(desc_,std::abs(in.omega),in.command,ctx.h,in.scale).wanted_j;
     }
     [[nodiscard]] Battery& battery() const {return battery_;}
     [[nodiscard]] const ElectricMotorDesc& desc() const {return desc_;}
@@ -157,7 +157,7 @@ public:
     MotorLimit drive_limit=MotorLimit::Idle; // this substep's drive-torque limit (diagnostic for the dyno, never hashed)
     real regen_pred_nm=0; // this substep's regeneration torque magnitude at the shaft (implicit damping d x |omega_old|)
 private:
-    struct Inputs {real omega=0,rpm=0,direction=0,pedal=0,regen=0,command=0;bool ready=false,drives=false;};
+    struct Inputs {real omega=0,rpm=0,direction=0,pedal=0,regen=0,command=0,scale=1;bool ready=false,drives=false;};
     Inputs inputs(const ComponentSubstepCtx& ctx,const ShaftNetwork& net) const {
         Inputs in;
         const auto channel=[&](int slot,real fallback){return ctx.channels&&slot>=0&&slot<ctx.channel_count?ctx.channels[slot]:fallback;};
@@ -170,7 +170,10 @@ private:
         in.pedal=std::clamp(channel(throttle_slot_,desc_.crank_assist&&ctx.electric_charge>=0?real(0):(ctx.electric_throttle>=0?ctx.electric_throttle:ctx.throttle)),real(0),real(1));
         in.regen=std::clamp(channel(regen_slot_,desc_.crank_assist&&ctx.electric_charge>=0?ctx.electric_charge:ctx.brake),real(0),real(1));
         in.drives=motor_drives(desc_,in.pedal,in.regen,in.direction,in.rpm);
-        in.command=std::min(in.pedal,std::clamp(ctx.traction_throttle_ceiling,real(0),real(1)));
+        // The ceiling is a fraction of the torque available now (ICE meaning), applied after the power corner.
+        in.command=in.pedal;
+        const real ceiling=std::clamp(ctx.traction_throttle_ceiling,real(0),real(1));
+        in.scale=in.pedal>0&&ceiling<in.pedal?ceiling/in.pedal:real(1);
         return in;
     }
     real regen_d_=0;
