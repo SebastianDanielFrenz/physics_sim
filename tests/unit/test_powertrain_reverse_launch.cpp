@@ -171,7 +171,7 @@ LaunchMetrics hill_start(const CarSpec& car, real throttle, real v_back, real se
 }
 } // namespace
 
-TEST_CASE("Reverse launch H1: no throttle while rolling backwards keeps the clutch open", "[tcu][hyper_clutch][drivetrain][vehicle]") {
+TEST_CASE("Reverse launch H1: no throttle while rolling backwards keeps the clutch open", "[tcu][hyper_clutch][drivetrain][vehicle][long]") {
     for (const CarSpec* car : {&kHyper, &kSedan}) {
         INFO(car->name);
         Rig r(*car);
@@ -194,7 +194,7 @@ TEST_CASE("Reverse launch H1: no throttle while rolling backwards keeps the clut
     }
 }
 
-TEST_CASE("Reverse launch H2: throttle while rolling backwards engages gradually and climbs away", "[tcu][hyper_clutch][drivetrain][vehicle]") {
+TEST_CASE("Reverse launch H2: throttle while rolling backwards engages gradually and climbs away", "[tcu][hyper_clutch][drivetrain][vehicle][long]") {
     for (const CarSpec* car : {&kHyper, &kSedan}) {
         for (const real throttle : {1.0, 0.5})
         for (const real v_back : {2.0, 4.0}) {
@@ -228,7 +228,7 @@ TEST_CASE("Reverse launch H2: throttle while rolling backwards engages gradually
     }
 }
 
-TEST_CASE("Reverse launch H3: lifting the throttle while still rolling back opens the clutch again", "[tcu][hyper_clutch][drivetrain][vehicle]") {
+TEST_CASE("Reverse launch H3: lifting the throttle while still rolling back opens the clutch again", "[tcu][hyper_clutch][drivetrain][vehicle][long]") {
     for (const CarSpec* car : {&kHyper, &kSedan}) {
         INFO(car->name);
         Rig r(*car);
