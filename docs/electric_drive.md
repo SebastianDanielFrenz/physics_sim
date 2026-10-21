@@ -101,8 +101,23 @@ and the car use one implementation. Extracting them changed no state hash; the p
     else runs as in the car at 240/960 Hz: throttle stage, hybrid supervisor including start/stop and neutral when decoupled,
     motor law, pack budget and allocation, fuel cell, gear/reduction/diff losses, clutch and engine.
   - What is held: SOC and hydrogen are held at the spec values for the whole point. The gear is held through a dyno-only hook
-    (`Powertrain::set_dyno_gear_hold`; auto-shift is off, and a hybrid's disconnect still selects neutral). Automatic, DCT and CVT
-    gearboxes are rejected for now.
+    (`Powertrain::set_dyno_gear_hold`; auto-shift is off, and a hybrid's disconnect still selects neutral).
+  - Gearbox kinds (the spec's `gear` field means the same thing for each: the position that is measured):
+    - manual / sequential: the gear is requested every substep, the manual TCU's auto-shift is off.
+    - automatic (torque converter) and dual-clutch: the automatic TCU's shift logic is frozen on that gear
+      (`AutoTransmission::set_dyno_hold`, a dyno-only flag, never hashed, off in every car): the target is the requested gear, with no
+      selector, schedule, kickdown or preselect; the DualClutch's starting clutch is locked whenever a gear is in; the Automatic's
+      converter lock-up is locked (the gear is measured as a manual gear is, in direct drive; the converter's fluid torque
+      multiplication is therefore NOT part of the dyno curve). A hybrid's disconnect still selects neutral. The EngineRpm axis of
+      a DualClutch is the crank, of an Automatic the turbine (equal when locked).
+    - CVT: the box has one forward gear (D), so `gear` k > 0 selects the CVT's k-th virtual step (the stepped ratios,
+      `forward_ratios`) and the variator is held at that step's ratio; `PowertrainDynoSpec::cvt_ratio` > 0 overrides it with an
+      explicit variator ratio (input/output, within the variator's `ratio_high..ratio_low`, else `std::invalid_argument`). The belt's
+      clamping force still follows the torque law (it starts at its maximum), so a belt that cannot carry the torque still limits
+      the point. Reverse (`gear < 0`) uses the reverse ratio. The reported gear is the gearbox position (1 for a CVT).
+    - Why steps and not "the ratio range mapped onto gear": the stepped ratios are the CVT's own authored virtual gears (what the
+      S mode and the paddles select), so `gear` k means the same step as in the car and an explicit ratio stays available.
+    - A battery EV cannot have an automatic gearbox in this model (`automatic_tcu` needs an engine); hybrids can.
   - Settling: like `run_dyno_sweep`. Window means over 0.5 s; two consecutive passing pairs on the wheel power (0.2 %/s) and, for
     a turbo engine, on boost (0.005 bar/s); at least 1 s (three windows), at most 15 s.
   - Per point: engine rpm, net crank torque (`tau0 - d*dw` plus the engine's Coulomb row, i.e. `run_dyno_sweep`'s `tau0 - c_k`)

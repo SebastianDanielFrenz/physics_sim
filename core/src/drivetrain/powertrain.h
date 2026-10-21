@@ -413,7 +413,12 @@ public:
     // Holds the dyno's gear: pre_solve_components requests it every substep (auto-shift off) unless a hybrid supervisor
     // disconnects. kNoDynoGearHold (every car) = off.
     static constexpr int kNoDynoGearHold = -1000000;
-    void set_dyno_gear_hold(int gear) {dyno_gear_hold_=gear;}
+    // Automatic / DualClutch / CVT gearbox: the same hold through AutoTransmission::set_dyno_hold (the shift schedule, converter
+    // lock-up and starting-clutch logic frozen; a CVT additionally holds `cvt_ratio`, 0 = none). Call before reset().
+    void set_dyno_gear_hold(int gear, real cvt_ratio = real(0)) {
+        dyno_gear_hold_=gear;
+        if (auto_) auto_->set_dyno_hold(gear != kNoDynoGearHold, cvt_ratio);
+    }
     // Sets every pack to `soc` (NaN = its initial_soc) and every fuel cell's hydrogen to `fraction` of its tank (NaN = the
     // initial fill). Between ticks only.
     void dyno_hold_energy_state(real soc,real hydrogen_fraction) {

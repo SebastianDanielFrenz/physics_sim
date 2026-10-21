@@ -14,6 +14,9 @@
 // System output: the dyno's absorbed power at the hubs (the wheel power, every loss between the sources and the hubs
 // included) and its torque referred to the axis shaft (wheel power / axis omega).
 //
+// Gearboxes: manual and sequential hold the requested gear; automatic, dual-clutch and CVT boxes hold it through the TCU freeze
+// documented at PowertrainDynoSpec::gear (docs/electric_drive.md "Envelope and dyno").
+//
 // Units: rpm [rev/min], torque [N*m], power [W], speed [m/s].
 #pragma once
 
@@ -43,8 +46,18 @@ struct PowertrainDynoSpec {
     PowertrainDynoAxis axis = PowertrainDynoAxis::MotorRpm;
     std::vector<real> points;      // axis values, each finite and > 0; evaluated in this order
     int motor_index = 0;           // MotorRpm axis only: index into the vehicle's electric motors (component order)
-    int gear = 1;                  // held gear (manual / sequential gearbox; ignored without a gearbox). Automatic, DCT and CVT
-                                   // gearboxes are not supported yet (std::invalid_argument).
+    // Held gear (position; 0 = neutral, < 0 reverse). Ignored without a gearbox. The same field serves every gearbox kind:
+    //   manual / sequential: the gear is requested every substep with auto-shift off (a hybrid's disconnect still selects N);
+    //   automatic / dual-clutch: the automatic TCU's shift logic is frozen on that gear (AutoTransmission::set_dyno_hold) -
+    //     no schedule, selector, kickdown or preselect; a DualClutch's starting clutch and an Automatic's converter lock-up
+    //     are locked (the gear is measured "in direct drive", as a manual gear is); a hybrid's disconnect still selects N;
+    //   CVT: the gearbox has one forward gear (D), so `gear` k > 0 selects the CVT's k-th virtual step (the stepped
+    //     ratios, forward_ratios) and the variator is held at that ratio; `cvt_ratio` below overrides it.
+    // Reported PowertrainDynoPoint::gear is the gearbox position at the end (a CVT: 1).
+    int gear = 1;
+    // CVT only (forward gear): hold this variator ratio [input/output, ratio_high..ratio_low of the gearbox's cvt block]
+    // instead of virtual step `gear`. 0 = use the step. Otherwise std::invalid_argument.
+    real cvt_ratio = 0.0;
     real pedal = 1.0;              // the driver's pedal, 0..1 (the car's pedal curve applies; a drive_modes bend does not)
     real battery_soc = std::numeric_limits<real>::quiet_NaN();       // every pack; NaN = each pack's initial_soc
     real hydrogen_fraction = std::numeric_limits<real>::quiet_NaN(); // of every fuel cell's tank capacity; NaN = initial fill
