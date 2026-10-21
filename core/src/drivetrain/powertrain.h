@@ -402,6 +402,24 @@ public:
     [[nodiscard]] real fuel_cell_hydrogen_kg() const {real kg=0;for(const auto* c:fuel_cells_)kg+=c->hydrogen_kg;return kg;}
     [[nodiscard]] real fuel_cell_power_w() const {real w=0;for(const auto* c:fuel_cells_)w+=c->power_w;return w;}
     [[nodiscard]] bool has_fuel_cells() const {return !fuel_cells_.empty();}
+    [[nodiscard]] bool hybrid_engine_coupled() const {return hybrid_.has_value()&&!hybrid_disconnect_;}
+    // Powertrain dyno (powertrain_dyno.cpp; never called by a car): the machines in component order, a node's speed, the
+    // engine's Coulomb-row torque on the crank, the last throttle command the engine received.
+    [[nodiscard]] const std::vector<ElectricMotor*>& electric_motors() const {return electric_motors_;}
+    [[nodiscard]] const std::vector<FuelCell*>& fuel_cells() const {return fuel_cells_;}
+    [[nodiscard]] real node_omega(NodeId n) const {return network_.omega(n);}
+    [[nodiscard]] real engine_friction_torque() const {return engine_ ? network_.row_lambda(engine_friction_row_) : real(0.0);}
+    [[nodiscard]] const ThrottleCommand& last_throttle_command() const {return last_throttle_command_;}
+    // Holds the dyno's gear: pre_solve_components requests it every substep (auto-shift off) unless a hybrid supervisor
+    // disconnects. kNoDynoGearHold (every car) = off.
+    static constexpr int kNoDynoGearHold = -1000000;
+    void set_dyno_gear_hold(int gear) {dyno_gear_hold_=gear;}
+    // Sets every pack to `soc` (NaN = its initial_soc) and every fuel cell's hydrogen to `fraction` of its tank (NaN = the
+    // initial fill). Between ticks only.
+    void dyno_hold_energy_state(real soc,real hydrogen_fraction) {
+        for(auto& b:batteries_)b->set_content(b->capacity()*(std::isnan(soc)?b->desc.initial_soc:soc));
+        for(auto* c:fuel_cells_)c->hydrogen_kg=std::isnan(hydrogen_fraction)?c->desc().initial_hydrogen_kg:hydrogen_fraction*c->desc().hydrogen_capacity_kg;
+    }
     [[nodiscard]] bool has_park_lock() const { return park_lock_ != nullptr; }
     [[nodiscard]] real park_lock_engaged() const { return (park_lock_ && park_lock_->engaged()) ? real(1.0) : real(0.0); }
     [[nodiscard]] real park_lock_torque() const { return park_lock_ ? network_.row_lambda(park_lock_row_) : real(0.0); }
@@ -696,6 +714,7 @@ private:
     // The gear a hybrid's ICE connects in at the present speed (0 = none: CVT or no gearbox).
     [[nodiscard]] int hybrid_fit_gear(const ComponentSubstepCtx& ctx) const;
     int hybrid_mode_slot_=-1,hybrid_ready_slot_=-1;
+    int dyno_gear_hold_=kNoDynoGearHold; // powertrain dyno only, never hashed
     real electric_direction_=0; // latched fixed-reduction selector; N at spawn
     std::vector<FuelCell*> fuel_cells_; // aliases into components_
     std::vector<std::unique_ptr<Battery>> batteries_;

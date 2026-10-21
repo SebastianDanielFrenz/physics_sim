@@ -2,6 +2,7 @@
 #include "components.h"
 #include "energy_store.h"
 #include "ps/drivetrain/brake_system_desc.h"
+#include "ps/drivetrain/electric_envelope.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -18,9 +19,21 @@ public:
     real soc() const {return joules_/capacity();}
     void withdraw(real j) override {joules_=std::max(real(0),joules_-std::max(real(0),j));}
     real set_content(real j) override {const real old=joules_;joules_=std::clamp(j,real(0),capacity());return joules_-old;}
-    void begin_substep(real h) {discharge_left_=std::min(joules_,desc.max_discharge_w*h);charge_left_=std::min(capacity()-joules_,desc.max_charge_w*h);}
+    // The substep budgets are the public envelope functions (ps/drivetrain/electric_envelope.h), so the dyno uses this law.
+    void begin_substep(real h) {discharge_left_=battery_discharge_budget_j(desc,joules_,h);charge_left_=battery_charge_budget_j(desc,joules_,h);claims_left_=0;}
     real supply(real j) {const real added=std::max(real(0),set_content(content()+j));discharge_left_+=added;return added;}
-    real reserve_discharge(real j) {const real n=std::min(discharge_left_,std::max(real(0),j));discharge_left_-=n;return n;}
+    // Discharge allocation (2026-10-19): each driving motor registers its request (add_drive_claim, by the Powertrain before
+    // the component loop); while the claims still to come exceed what is left, a request gets its PROPORTIONAL share of what
+    // is left, so a pack that cannot feed every motor splits its budget in the motors' request ratio instead of in component
+    // order (which left the last motor of a battery-limited dual-motor car with nothing). An unlimited pack, a sole or last
+    // claimant, and a request without a claim take min(left, request) as before.
+    void add_drive_claim(real j) {claims_left_+=std::max(real(0),j);}
+    real reserve_discharge(real j) {
+        const real w=std::max(real(0),j);
+        const real n=(claims_left_>discharge_left_&&claims_left_>w)?std::min(w,discharge_left_*(w/claims_left_)):std::min(discharge_left_,w);
+        claims_left_=std::max(real(0),claims_left_-w);
+        discharge_left_-=n;return n;
+    }
     real reserve_charge(real j) {const real n=std::min(charge_left_,std::max(real(0),j));charge_left_-=n;return n;}
     std::uint64_t fold_state_hash(std::uint64_t h) const override {
         for(real v:{capacity(),joules_,desc.max_discharge_w,desc.max_charge_w}) {
@@ -29,7 +42,7 @@ public:
     }
     BatteryDesc desc;
 private:
-    real joules_=0,discharge_left_=0,charge_left_=0;
+    real joules_=0,discharge_left_=0,charge_left_=0,claims_left_=0; // claims_left_: unhashed, rebuilt every substep
 };
 class ElectricMotor final : public IComponent {
 public:
@@ -42,29 +55,19 @@ public:
            !std::isfinite(desc_.mass_kg)||desc_.mass_kg<0)throw std::invalid_argument("invalid electric motor efficiency, regeneration or mass");
     }
     void pre_solve(const ComponentSubstepCtx& ctx,const ShaftNetwork& net,Assembly& assembly) override {
-        torque_nm=power_w=battery_power_w=regen_d_=regen_pred_nm=0;
-        const auto channel=[&](int slot,real fallback){return ctx.channels&&slot>=0&&slot<ctx.channel_count?ctx.channels[slot]:fallback;};
-        const real omega=net.omega(shaft_);
-        rpm=std::abs(omega)*60/(2*3.14159265358979323846);
-        ready=channel(ready_slot_,real(1))>.5;
+        torque_nm=power_w=battery_power_w=regen_d_=regen_pred_nm=0;drive_limit=MotorLimit::Idle;
+        const Inputs in=inputs(ctx,net);
+        const real omega=in.omega,direction=in.direction,regen=in.regen;
+        rpm=in.rpm;
+        ready=in.ready;
         if(ctx.h<=0||!ready)return;
-        const real request=channel(direction_slot_,desc_.crank_assist?real(1):ctx.electric_direction);
-        // N/unspecified is no propulsion; a gearbox-equipped hybrid can use its positive gear request too.
-        const real direction=request==kGearRequestNone||request==0?0:(request<0?-1:1);
-        const real pedal=std::clamp(channel(throttle_slot_,desc_.crank_assist&&ctx.electric_charge>=0?real(0):(ctx.electric_throttle>=0?ctx.electric_throttle:ctx.throttle)),real(0),real(1));
-        const real regen=std::clamp(channel(regen_slot_,desc_.crank_assist&&ctx.electric_charge>=0?ctx.electric_charge:ctx.brake),real(0),real(1));
-        const real max_omega=desc_.max_rpm*(2*3.14159265358979323846)/60;
-        if(pedal>.02&&regen<=.05&&direction!=0&&rpm<desc_.max_rpm) {
-            real demand=desc_.peak_torque_nm*std::min(pedal,std::clamp(ctx.traction_throttle_ceiling,real(0),real(1)));
-            // Conservative forward-power prediction using rotor inertia; shaft dynamics are solved below.
-            const real projected=std::abs(omega)+ctx.h*demand/desc_.inertia_kgm2;
-            demand=std::min(demand,desc_.max_power_w/std::max(real(1),projected));
-            const real wanted=ctx.h*demand*std::max(real(1),projected)/desc_.efficiency;
-            const real reserved=battery_.reserve_discharge(wanted);
-            if(wanted>0)demand*=reserved/wanted;
-            // Strict residual-energy bound near empty, including a back-driven hybrid shaft.
-            demand=std::min(demand,battery_.content()*desc_.efficiency/(ctx.h*std::max(real(1),max_omega)));
-            torque_nm=direction*demand;
+        drive_limit=rpm>=desc_.max_rpm?MotorLimit::MaxRpm:MotorLimit::Idle;
+        if(in.drives) {
+            // The drive law is the public envelope (ps/drivetrain/electric_envelope.h): the power corner with the rotor-inertia
+            // prediction, the pack's grant, the residual-energy bound near empty. One implementation for the car and the dyno.
+            const MotorDriveRequest r=motor_drive_request(desc_,std::abs(omega),in.command,ctx.h);
+            const real reserved=battery_.reserve_discharge(r.wanted_j);
+            torque_nm=direction*motor_drive_torque(desc_,r,reserved,battery_.content(),ctx.h,&drive_limit);
         } else if(direction!=0&&regen>0&&std::abs(omega)>1) {
             real demand=desc_.regen_torque_nm*regen;
             if(blend_) {
@@ -139,10 +142,37 @@ public:
     }
     void reset_blend() {abs_hold_left_=0;abs_now_=false;request_nm_=0;fade_=0;regen_pred_nm=0;ramp_=1;}
     [[nodiscard]] real regen_efficiency() const {return desc_.efficiency;}
+    [[nodiscard]] NodeId shaft_node() const {return shaft_;}
+    // The drive request this motor will make in pre_solve this substep (0 if it will not drive): the Powertrain registers it
+    // with the pack before the component loop (Battery::add_drive_claim). Same inputs as pre_solve.
+    [[nodiscard]] real drive_claim_j(const ComponentSubstepCtx& ctx,const ShaftNetwork& net) const {
+        const Inputs in=inputs(ctx,net);
+        if(ctx.h<=0||!in.ready||!in.drives)return 0;
+        return motor_drive_request(desc_,std::abs(in.omega),in.command,ctx.h).wanted_j;
+    }
+    [[nodiscard]] Battery& battery() const {return battery_;}
+    [[nodiscard]] const ElectricMotorDesc& desc() const {return desc_;}
     bool ready=true;
     real torque_nm=0,power_w=0,battery_power_w=0,rpm=0;
+    MotorLimit drive_limit=MotorLimit::Idle; // this substep's drive-torque limit (diagnostic for the dyno, never hashed)
     real regen_pred_nm=0; // this substep's regeneration torque magnitude at the shaft (implicit damping d x |omega_old|)
 private:
+    struct Inputs {real omega=0,rpm=0,direction=0,pedal=0,regen=0,command=0;bool ready=false,drives=false;};
+    Inputs inputs(const ComponentSubstepCtx& ctx,const ShaftNetwork& net) const {
+        Inputs in;
+        const auto channel=[&](int slot,real fallback){return ctx.channels&&slot>=0&&slot<ctx.channel_count?ctx.channels[slot]:fallback;};
+        in.omega=net.omega(shaft_);
+        in.rpm=std::abs(in.omega)*60/(2*3.14159265358979323846);
+        in.ready=channel(ready_slot_,real(1))>.5;
+        const real request=channel(direction_slot_,desc_.crank_assist?real(1):ctx.electric_direction);
+        // N/unspecified is no propulsion; a gearbox-equipped hybrid can use its positive gear request too.
+        in.direction=request==kGearRequestNone||request==0?0:(request<0?-1:1);
+        in.pedal=std::clamp(channel(throttle_slot_,desc_.crank_assist&&ctx.electric_charge>=0?real(0):(ctx.electric_throttle>=0?ctx.electric_throttle:ctx.throttle)),real(0),real(1));
+        in.regen=std::clamp(channel(regen_slot_,desc_.crank_assist&&ctx.electric_charge>=0?ctx.electric_charge:ctx.brake),real(0),real(1));
+        in.drives=motor_drives(desc_,in.pedal,in.regen,in.direction,in.rpm);
+        in.command=std::min(in.pedal,std::clamp(ctx.traction_throttle_ceiling,real(0),real(1)));
+        return in;
+    }
     real regen_d_=0;
     bool blend_=false,abs_now_=false,dynamic_=false;
     RegenBlendDesc cfg_{};
@@ -164,9 +194,7 @@ public:
         reserved_=0;power_w=0;
         const bool ready=ctx.channels&&ready_slot_>=0&&ready_slot_<ctx.channel_count?ctx.channels[ready_slot_]>.5:true;
         if(!ready||ctx.h<=0||hydrogen_kg<=0)return;
-        const real fraction=std::clamp((desc_.target_soc-battery_.soc())/real(.05),real(0),real(1));
-        const real available=hydrogen_kg*desc_.specific_energy_j_kg*desc_.efficiency;
-        reserved_=battery_.reserve_charge(std::min(available,ctx.h*desc_.max_power_w*fraction));
+        reserved_=battery_.reserve_charge(fuel_cell_request_j(desc_,hydrogen_kg,battery_.soc(),ctx.h)); // electric_envelope.h
         reserved_=battery_.supply(reserved_);
     }
     void post_solve(const ComponentSubstepCtx& ctx,const ShaftNetwork&,const Assembly&,PowertrainEnergy& ledger) override {
@@ -185,6 +213,7 @@ public:
         }return h;
     }
     real rated_power() const {return desc_.max_power_w;}
+    [[nodiscard]] const FuelCellDesc& desc() const {return desc_;}
     real hydrogen_kg=0,power_w=0;
 private:
     FuelCellDesc desc_;Battery& battery_;int ready_slot_=-1;real reserved_=0;

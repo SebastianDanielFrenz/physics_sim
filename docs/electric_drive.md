@@ -2,7 +2,7 @@
 
 Vehicle powertrain components may include any number of `electric_motor` machines and `battery` stores alongside the existing combustion engine, gearbox and shaft components. Motor port `shaft` connects through the usual `shafts`; the motor's `battery` names a battery component. A motor does not occupy the single combustion-engine slot. Motors may share a battery, share an ICE shaft, or drive independent axles. Electrical resources are separate from fuel/fluid links.
 
-`battery`: `capacity_kwh`, `initial_soc` (0..1), `max_discharge_w`, `max_charge_w`, `mass_kg`. Runtime energy uses joules through IEnergyStore. The shared store allocates each substep's charge/discharge budget in component-array order. There is no voltage, thermal, cell-resistance or degradation model in this increment.
+`battery`: `capacity_kwh`, `initial_soc` (0..1), `max_discharge_w`, `max_charge_w`, `mass_kg`. Runtime energy uses joules through IEnergyStore. A shared store's discharge budget per substep is min(content, max_discharge_w x h), plus what a fuel cell adds that substep. When the motors that drive this substep ask for more than that, each gets a share proportional to its request (every driving motor registers its request before the motors run; see "Discharge allocation" below). The charge budget (regeneration, fuel-cell supply) is still granted in component-array order. There is no voltage, thermal, cell-resistance or degradation model in this increment.
 
 `electric_motor`: `battery`, `peak_torque_nm`, `max_power_w`, `max_rpm`, `inertia_kgm2`, `efficiency` (0..1, exclusive zero), `regen_torque_nm`, `mass_kg`, `axis_local`. A sampled constant-torque/constant-power envelope controls the shaft torque, with a rotor-inertia prediction for the substep's power budget. Torque is zero beyond max_rpm. Mechanical work uses solved shaft speed; electrical energy accounts for fixed motor/inverter efficiency. Regeneration uses an implicit damping torque to avoid reversing the rotor at a stop. Optional `regen_power_w` (default 0 = `max_power_w`) limits regeneration power at the shaft; negative is rejected. Brake blending: see below.
 
@@ -13,6 +13,31 @@ Without a gearbox, selector requests latch D (>0), N (0), R (<0); spawn is N. An
 PowertrainSnapshot adds `electric_fitted`, `electric_ready`, `electric_motor_count`, `motor_rpm` (fastest machine), `motor_torque_nm` (signed sum), `electric_power_w` (signed mechanical sum), `battery_soc` (energy-weighted), `battery_capacity_kwh` and `battery_power_w` (positive discharge). The new cumulative energy terms are `electric_out`, `battery_draw`, `electric_loss`; the mechanical ledger includes electric_out. EV speedo uses driven-hub rotation. Fixed-reduction EVs publish transmission_kind=4 and D/N/R through transmission_selector. Combustion engine state remains Off on an EV; adapters must display READY rather than infer readiness from combustion state.
 
 All fixture ratings are authored test parameters, not production-car measurements. `data/vehicles/car_electric.json` is a two-axle 600 kW sedan testbed with a shared 90 kWh pack.
+### Discharge allocation
+
+Decision (2026-10-19): a pack that cannot feed every driving motor splits its substep budget in proportion to the motors' requests.
+Before, the budget went in component-array order, so on a battery-limited dual-motor car the first motor took all of it and the
+second got nothing (car_electric with a 100 kW pack: the front motor 94 kW, the rear 0 at 3000 rpm and above; now 47/47 kW, same
+total). How it works: after the batteries open their substep budgets, the Powertrain asks every motor for the request it will make
+this substep (`ElectricMotor::drive_claim_j`, the same inputs and drive law as its `pre_solve`) and registers it with the motor's
+pack (`Battery::add_drive_claim`). In `Battery::reserve_discharge`, while the claims still to come are larger than both the budget
+left and the request, the request gets `left x request / claims`. Otherwise it gets `min(left, request)`, the old rule. So an
+unlimited pack, a sole motor, the last claimant and a request that registered no claim behave as before. Only cars whose pack is
+the limit change. Two pins moved: car_electric 100 kW and car_fuel_cell 10 kW + 30 kW stack. Every hybrid pin stayed the same,
+since there the generator only drives when the traction motor does not. The claims are not hashed; they are rebuilt every substep.
+
+Alternatives considered:
+- Keep component order. Simple and already deterministic. But the last motor drops to zero, which flips a dual-motor car's torque
+  split at the battery limit (a FWD car becomes RWD), and the outcome depends on the order in the file.
+- Equal shares per motor. Simple, but it wastes budget: a motor that asks for less than its share leaves energy unused unless the
+  shares are redistributed in a second pass. It also ignores the motors' different ratings.
+- A priority or torque-split setting (per-axle bias). This belongs to a future torque-vectoring controller; nothing calls for it yet.
+- Two passes inside the component loop. Not possible: the motors run inside the single component loop, and what the first motor is
+  granted must be known before the second motor runs.
+
+The proportional rule needs one extra pass over the motors per substep. It stays deterministic, and it is bit-identical wherever the
+pack is not the limit.
+
 ## Hydrogen and hybrid development packages
 
 `fuel_cell` is a lumped stack plus independent hydrogen tank feeding a named battery/DC bus. Fields: battery, max_power_w, efficiency, target_soc, hydrogen_capacity_kg, initial_hydrogen_kg, specific_energy_j_kg, mass_kg (dry stack/auxiliaries/tank), ready_channel. Generated electrical energy is limited by stack power, charge acceptance, available fuel and buffer headroom. It contributes to the DC supply budget in addition to the battery discharge limit. Conversion efficiency is fixed; no electrochemical/thermal stack or pressure dynamics are claimed. `fuel_cell_electric`, `fuel_cell_chemical`, `fuel_cell_loss` close the source conversion ledger. Hydrogen fill changes chassis contents mass when enabled. Snapshot fields separately report stack electrical power and remaining hydrogen; an ICE tank is independent.
@@ -45,3 +70,63 @@ The reflection from a motor to the rims is a tree over the shaft graph, evaluate
 - The motor's request is limited by the tightest open hub; the pads of the corners it brakes are reduced by exactly the reflected torque, so the total is the request in every substep.
 - Not covered: a hybrid supervisor that opens the gearbox itself (`hybrid_control` selects neutral when no traction is wanted) removes the regeneration of a motor upstream of the gearbox by this rule; the pads then brake. A motor behind an automatic gearbox stays outside the scheme.
 - Hashing: the ramp state and the three configuration values are hashed only for a motor that has a dynamic path; a car without one hashes as before.
+
+## Envelope and dyno
+
+The motor law, the DC supply budget and the hybrid power split are public pure functions. The runtime calls them, so a garage chart
+and the car use one implementation. Extracting them changed no state hash; the pins are in tests/unit/test_electric_pins.cpp.
+
+- `ps/drivetrain/electric_envelope.h`:
+  - `motor_full_load_point(motor, rpm, electrical_budget_w, h, content_j = inf)` returns `{torque_nm, power_w, electrical_w, limit}`.
+    `limit` is one of `PeakTorque`, `RatedPower`, `BatteryDischarge`, `MaxRpm`, `Empty` (`Idle` when the motor does not drive).
+    This is the motor's own `pre_solve` law at full command: the rated-power corner uses the substep's rotor-inertia projection
+    `omega + h*T/J`, so the power stays just under `max_power_w`. The pack's grant scales the request; near empty the
+    residual-energy bound applies.
+  - Building blocks: `motor_drive_request`, `motor_drive_torque`, `motor_drives`.
+  - `battery_discharge_budget_w(battery, soc, h)` returns `min(content, max_discharge_w*h)/h`.
+  - `fuel_cell_supply_w(cell, battery, soc, hydrogen_kg, h)` is the stack's supply: `max_power_w`, scaled by a SOC ramp
+    `clamp((target_soc - soc)/0.05, 0, 1)`, and limited by the hydrogen on board and the pack's charge acceptance.
+- `ps/drivetrain/hybrid_split.h`:
+  - `hybrid_full_pedal_split(control, available_w, pedal, drive_mode, soc, charge_latched)` returns `{requested_w,
+    electric_command, engine_command, engine_coupled, engine_wanted, charge_latched}`.
+  - The supervisor's own step is `hybrid_power_split(control, HybridSplitInput)`.
+  - Rules: requested = pedal x `requested_power_w`. Electric command = `min(1, requested/available)`. The ICE is coupled in Normal
+    when the request exceeds the electric potential, and always in Sport and Racing. Its command is the deficit
+    `(requested - available)/(requested_power_w - available)`. A low SOC latches an engine start (Eco: decoupled, charging only).
+- `ps/drivetrain/powertrain_dyno.h`: `run_powertrain_dyno(vehicle, maps, PowertrainDynoSpec, pool, cancel)` returns one point per
+  axis value.
+  - Method: a chassis dyno. The car's own Powertrain is built without a chassis. Every hub is held at `v / r_i` by an implicit
+    speed hold (`-D (omega_new - target)`, `D = 1e6 N*m*s/rad`). The spec's axis (`EngineRpm` = gearbox input in the held gear,
+    `MotorRpm` of motor k, `GearboxOutputRpm`, `RoadSpeed`) sets `v` through the shaft's kinematic ratio at 1 m/s. Everything
+    else runs as in the car at 240/960 Hz: throttle stage, hybrid supervisor including start/stop and neutral when decoupled,
+    motor law, pack budget and allocation, fuel cell, gear/reduction/diff losses, clutch and engine.
+  - What is held: SOC and hydrogen are held at the spec values for the whole point. The gear is held through a dyno-only hook
+    (`Powertrain::set_dyno_gear_hold`; auto-shift is off, and a hybrid's disconnect still selects neutral). Automatic, DCT and CVT
+    gearboxes are rejected for now.
+  - Settling: like `run_dyno_sweep`. Window means over 0.5 s; two consecutive passing pairs on the wheel power (0.2 %/s) and, for
+    a turbo engine, on boost (0.005 bar/s); at least 1 s (three windows), at most 15 s.
+  - Per point: engine rpm, net crank torque (`tau0 - d*dw` plus the engine's Coulomb row, i.e. `run_dyno_sweep`'s `tau0 - c_k`)
+    and command; gear; each motor's rpm, torque, power, electrical power and limit; pack and stack power; system power at the hubs
+    and its torque at the axis shaft; boost; `battery_limited`; the supervisor's requested and available power, coupled and
+    charging flags; `converged` and `settle_s`.
+  - Execution: one job per point, each with its own Powertrain, so the result is bit-identical for any worker count. `cancel`
+    has `run_dyno_sweep`'s semantics (GenerationCancelled). There is no progress callback, as in `run_dyno_sweep`.
+  - Limits: no tyre slip, no aero load, no chassis; the hubs absorb whatever the powertrain gives. Gear-mesh losses are the
+    runtime's lagged reconstruction, so each mesh passes `P_out = P_in / (2 - eta)`.
+
+Sample sweeps (pedal 1, release build, 2026-10-19):
+
+| car | axis point | result |
+|---|---|---|
+| car_electric | 1000 rpm per motor | 2 x 600 N*m (PeakTorque), 123.2 kW at the hubs |
+| car_electric | 9000 rpm | 2 x 317.5 N*m (RatedPower), 586.7 kW; pack 629.9 kW |
+| car_electric, 100 kW pack | 3000 rpm | 2 x 150 N*m (BatteryDischarge), 92.4 kW, pack 99.2 kW |
+| car_fuel_cell | 3000 rpm | 377 kW mechanical, stack 150 kW, pack 246.9 kW net |
+| car_fuel_cell, 10 kW pack + 30 kW stack | 3000 rpm | 2 x 60 N*m, 37.7 kW mechanical |
+| car_hybrid Normal, 3rd | 3000 rpm | engine 187 N*m (WOT) + motor 286.4 N*m at 4714 rpm (pack-limited 148.8 kW), 190.1 kW at the hubs |
+| car_hybrid Eco, 3rd | 3000 rpm | engine off, neutral, motor only: 134.5 kW |
+| car_sedan, 3rd | 1500 / 4500 / 6000 rpm | engine 164 / 200 / 182 N*m, the WOT curve exactly (= `run_dyno_sweep`) |
+| car_hyper (twin turbo, Sketch maps), 4th | 3000 / 5000 / 7000 rpm | engine 1214.7 / 1369.1 / 1310.4 N*m at 1.78 / 1.76 / 1.71 bar (`run_dyno_sweep` within 4e-7), 359 / 675 / 905 kW at the hubs, settled in 5-6.5 s |
+
+Cost: 29 points for car_electric take 22 ms serial and 4.3 ms on 10 workers. The 12-point car_hybrid Normal sweep takes 30.5 ms
+serial and 9.0 ms on 10 workers. Tests: tests/unit/test_powertrain_dyno.cpp `[drivetrain][electric][dyno]`.
