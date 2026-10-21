@@ -565,9 +565,14 @@ TEST_CASE("Powertrain dyno cost", "[.][diag][dyno]") {
 // Sabotages (each reverted afterwards; failures measured on this branch are listed in the commit message / report):
 //  S-a AutoTransmission::choose_target's hold branch removed -> the TCU schedule picks the gear: A1/A2/A3 fail (gear != held,
 //      gearbox output rpm off by the ratio ratio);
-//  S-b update_launch's hold branch removed -> the DCT starting clutch creeps/slips instead of being locked: A1 fails;
+//  S-b update_launch's hold branch removed -> NOT detected by these tests (defensive only: reset already locks the clutch and the
+//      launch law keeps it locked above the anti-stall rpm; kept so a hold never depends on the launch law's tuning);
 //  S-c update_lockup's hold branch removed -> the AT converter slips below the lock-up engage rpm: A3 fails (crank != turbine);
 //  S-d update_cvt's hold branch removed -> the variator follows its ratio law: A4 fails (output rpm off the held ratio).
+//  S-e Powertrain::pre_solve_components: the hybrid ICE-connect rev-match not suppressed in a dyno hold (the `auto_ &&
+//      dyno_gear_hold_` clause of `hybrid_connect_s_ = 0`) -> NOT reproduced by these fixtures; racing_game's garage dyno test
+//      (dyno hybrid sedan: automatic, dual-clutch and CVT ...) on its 7-speed DCT hybrid fails 8 of 33 points without it
+//      (crank 2.0-2.2x the axis rpm up to ~2400 rpm).
 namespace {
 
 const GearboxDesc& gearbox_of(const vehicle::VehicleDesc& d) { return first<GearboxDesc>(d); }
@@ -665,27 +670,6 @@ TEST_CASE("Powertrain dyno A2: hybrid dual-clutch car, empty pack = the ICE car,
         }
         // The same crank speed in the lower gear turns the wheels slower.
         CHECK_THAT(pt[0].road_speed_mps / pt[1].road_speed_mps, WithinRel(g.forward_ratios[3] / g.forward_ratios[1], 1e-3));
-    }
-}
-
-TEST_CASE("Powertrain dyno A2b: hybrid dual-clutch, low crank rpm in a high gear is not rev-matched", "[drivetrain][electric][dyno][hybrid][auto_gearbox]") {
-    // The hybrid supervisor's ICE-connect (rev-match: clutch held open while the engine revs toward the SCHEDULE's fit gear's
-    // input speed) must not run in a dyno hold: at a low crank rpm in 5th the fit gear is 1st / 2nd, whose input speed is far
-    // above the held gear's, so the open clutch left the crank at 2-3x the axis (found in racing_game's garage dyno).
-    // Sabotage: the dyno-hold clause removed from `hybrid_connect_s_ = 0` in Powertrain::pre_solve_components -> engine_rpm
-    // far above the axis on the first points (measured in the commit message).
-    const auto d = fixture("car_hybrid_dct.json");
-    const GearboxDesc& g = gearbox_of(d);
-    PowertrainDynoSpec s = engine_axis(5, {1100, 1500, 2000});
-    s.drive_mode = 1;
-    const auto r = run_powertrain_dyno(d, nullptr, s);
-    for (const auto& p : r.points) {
-        INFO("rpm " << p.axis_value);
-        CHECK(p.converged);
-        CHECK(p.gear == 5);
-        CHECK(p.hybrid_engine_coupled);
-        CHECK_THAT(p.engine_rpm, WithinRel(p.axis_value, 1e-3));
-        CHECK_THAT(p.gearbox_output_rpm, WithinRel(p.axis_value / g.forward_ratios[4], 1e-3));
     }
 }
 
