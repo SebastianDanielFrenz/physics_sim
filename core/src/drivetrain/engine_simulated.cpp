@@ -1456,6 +1456,32 @@ PedalEnvelope SimulatedEngine::request_envelope(real rpm) const {
     return e;
 }
 
+// A steady map estimate, not a dyno certification. Turbo boundaries interpolate
+// between ambient and the full-load envelope with load; cam/lift use the current plant.
+real SimulatedEngine::charging_fuel_g_s(real rpm, real torque_nm) const {
+    const real omega = rpm / kRadPerSecToRpm;
+    if (!(omega > 0)) return std::numeric_limits<real>::quiet_NaN();
+    real pc = p_amb_, tc = t_amb_, px = p_amb_;
+    if (turbo_ && envelope_) {
+        const real load = std::clamp(torque_nm / std::max(real(1), full_load_torque(rpm)), real(0), real(1));
+        pc += load * (std::min(p_amb_ * envelope_->pressure_ratio.evaluate(rpm), p_amb_ + turbo_->desc.target_boost_pa) - p_amb_);
+        tc += load * (envelope_->charge_k.evaluate(rpm) * t_amb_ / kIsaTemperatureK - t_amb_);
+        px += load * p_amb_ * (envelope_->exhaust_ratio.evaluate(rpm) - real(1));
+    }
+    const Ambient sup = make_ambient(pc, tc), exh = make_ambient(px, tc);
+    return on_plant(plant_pair(), [&](const SimulatedEngineMaps& mm) {
+        real lo = real(1000), hi = steady_p(mm, sup, omega, real(1), real(0));
+        const auto eval = [&](real p) { return evaluate_torque_impl(mm, exh, StarterDesc{}, omega, p, true,
+            real(1), false, true, nullptr, ecu_k_, hyd_ref_rpm_); };
+        if (eval(hi).tau - mm.c_k < torque_nm) return std::numeric_limits<real>::quiet_NaN();
+        for (int i=0; i<24; ++i) {
+            const real mid = (lo+hi)*real(.5);
+            if (eval(mid).tau-mm.c_k < torque_nm) lo=mid; else hi=mid;
+        }
+        return eval(hi).m_fuel_rev * omega / kTwoPi * real(1000);
+    });
+}
+
 void SimulatedEngine::step_cam_switching(const Sensors& sensors, real rpm, real h) {
     if (!maps_->cam_high || cam_override_ >= real(0.0)) return;
     const CamSwitchingDesc& sw = maps_->cam_switching;

@@ -252,8 +252,8 @@
         "requested_power_w": 250000,
         "low_soc": 0.2,
         "charge_target_soc": 0.8,
-        "charge_rpm": 2200,
-        "generator_fraction": 0.6,
+        "charge_power_w": 50000,
+        "charge_optimize_efficiency": true,
         "stop_delay_s": 2,
         "crank_timeout_s": 5
       },

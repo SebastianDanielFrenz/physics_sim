@@ -52,7 +52,10 @@ struct HybridControlDesc {
     bool requested_power_derived = false;
     real low_soc = .2;
     real charge_target_soc = .8;
-    real charge_rpm = 2200;
+    // Mechanical power requested at the crank while disconnected and charging.
+    real charge_power_w = 50000;
+    bool charge_optimize_efficiency = true;
+    real charge_rpm = 2200; // legacy calibration, retained for file compatibility
     real generator_fraction = .6;
     real stop_delay_s = 2;
     real crank_timeout_s = 5;
