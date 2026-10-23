@@ -113,7 +113,7 @@ struct SimulatedEngineMaps {
     // f(p) = 0), ISA ambient, no limiter, no starter.
     vehicle::Curve1D steady_wot_nm;       // x = rpm; plate 1, fired
     vehicle::Curve1D steady_motoring_nm;  // x = rpm; plate 0, fuel off
-    Table2D steady_torque_nm;             // x = rpm (500 .. limiter + 250, step 250), y = plate 0..1 step 0.025; fired, bypass closed
+    Table2D steady_torque_nm;             // x = rpm (500 .. limiter + 250, step 250, plus idle_rpm as its own node), y = plate 0..1 step 0.025; fired, bypass closed
     Table2D inverse_plate;                // electronic only: x = rpm, y = request in [0,1] -> plate target
     real idle_ff = 0.0;                   // idle feed-forward: plate (electronic) / bypass (mechanical)
     real idle_p_im = 0.0;                 // steady manifold pressure at idle_rpm with idle_ff

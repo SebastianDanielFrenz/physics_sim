@@ -84,6 +84,7 @@ add_library(ps_engine_cycle STATIC
   src/engine_cycle/cycle_engine.cpp
   src/engine_cycle/step_team.cpp
   src/engine_cycle/knock.cpp
+  src/engine_cycle/burn_law.cpp
 )
 
 target_include_directories(ps_engine_cycle PUBLIC
@@ -224,6 +225,7 @@ add_library(ps_core STATIC
   src/io/electronics_io.cpp
   src/io/limit_policy_io.cpp
   src/io/knock_model_io.cpp
+  src/io/burn_law_io.cpp
 
   src/drivetrain/box_lcp.cpp
   src/drivetrain/network.cpp

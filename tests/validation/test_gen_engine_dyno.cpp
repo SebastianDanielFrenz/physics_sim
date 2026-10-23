@@ -776,3 +776,25 @@ TEST_CASE("C17a-MA review diag: spark retard and motoring vs A25A", "[.][diag][d
                     r.torque_nm, gas, fr_g, gas - fr_g, pump_g, pump_g - fr_g, pump_b, fr_b, pump_b - fr_b);
     }
 }
+
+// Burn law phase 2b: why check 4 (steady torque monotone in plate) fails under law F + knock v5. Prints, along p_im at
+// 1750 and 2750 rpm, the measured schedule, the generated MBT and knock limit, the runtime spark min(schedule, theta_kl),
+// eta_spark of its offset from MBT, the VE and VE * eta_spark (the torque driver at fixed eta_i).
+TEST_CASE("C17a-MA diag: check 4 spark budget along p_im", "[.][diag][drivetrain]") {
+    const auto car = load_gen_car();
+    const SimulatedEngineDesc* d = sim_engine_of(car);
+    REQUIRE(d != nullptr);
+    const SimulatedEngineMapsDesc& m = d->maps;
+    for (const real rpm : {real(1750.0), real(2750.0)}) {
+        std::printf("== %.0f rpm\n  p_im  sched    mbt     kl   used  eta_sp     ve  ve*eta_sp\n", rpm);
+        for (real p = 20000.0; p <= 100000.0; p += 2500.0) {
+            const real sched = d->ecu.spark_advance_deg.value(rpm, p);
+            const real mbt = m.theta_mbt_deg.value(rpm, p);
+            const real kl = m.theta_kl_deg.values.empty() ? real(1e9) : m.theta_kl_deg.value(rpm, p);
+            const real used = std::min(sched, kl);
+            const real es = m.eta_spark.evaluate(used - mbt);
+            const real ve = m.ve.value(rpm, p);
+            std::printf("%6.1f %6.2f %6.2f %6.2f %6.2f %7.4f %6.4f %8.4f\n", p / 1000.0, sched, mbt, kl, used, es, ve, ve * es);
+        }
+    }
+}

@@ -80,7 +80,11 @@ KnockReplayResult knock_replay(const KnockReplayInput& in, real spark_btdc) {
     eg.a = (real(1.0) - x) * fa + x * m.gas.burned.a;
     eg.b = (real(1.0) - x) * fb + x * m.gas.burned.b;
     eg.r = (real(1.0) - x) * fr + x * m.gas.burned.r;
-    eg.t0 = c0.t + in.end_gas_t0_offset_k;
+    // Knock model v6: the end gas carries only (1 - k_h) of the charge's heating above the intake temperature.
+    real t_start = c0.t;
+    if (in.charge_heat_fraction != real(0.0) && in.op.t_im_k > real(0.0) && c0.t > in.op.t_im_k)
+        t_start -= in.charge_heat_fraction * (c0.t - in.op.t_im_k);
+    eg.t0 = t_start + in.end_gas_t0_offset_k;
     eg.p0 = c0.p;
     if (!(eg.t0 > real(0.0))) throw std::invalid_argument("knock_replay: end-gas IVC temperature must stay > 0 K");
     // P7b diagnostic lever: the single-zone (air + residual) isentrope, against which the bulk's wall-heat deficit is

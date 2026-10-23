@@ -29,8 +29,10 @@ struct EngineInput {
     real throttle = 0.0;           // throttle plate fraction [0, 1] (only when p_intake_pa <= 0)
     real lambda = 1.0;             // air-fuel equivalence ratio of the next charges
     // Spark timing [deg ATDC, negative = before TDC], used when spark_given.
-    // Start of burn = spark + the desc's ignition_delay_deg; without a spark
-    // the model's MBT start of burn (ca50_mbt_deg_atdc through the Wiebe).
+    // Start of burn = spark + the cycle's ignition delay; without a spark the
+    // cycle's MBT start of burn (ca50_mbt_deg_atdc through the Wiebe). Burn
+    // law (a Standard desc): delay and duration per cycle from that cylinder's
+    // IVC state; a Fixed desc: the desc's constants.
     real spark_deg_atdc = 0.0;
     bool spark_given = false;      // false: ignore spark_deg_atdc, burn at MBT
     std::uint32_t flags = 0;       // EngineInputFlags

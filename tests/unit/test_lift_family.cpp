@@ -1,4 +1,5 @@
 // tests/unit/test_lift_family.cpp - engine garage P10: continuous intake lift (Valvetronic-style).
+#define _CRT_SECURE_NO_WARNINGS // std::getenv in the hidden diags
 //
 // Fixture: data/engines/bmw_n52b30.json (lumped cycle block, cam part data/cams/bmw_n52b30_valvetronic.json with an
 // intake lift family of six nodes u = 0, 0.15, 0.3, 0.5, 0.75, 1, ECU part data/ecus/bmw_n52b30.json with "lift_control").
@@ -564,6 +565,9 @@ TEST_CASE("P10 L4: a pipe engine with a two-node lift family", "[vvl][drivetrain
         const real mid = 0.5 * (x.front().get<real>() + x.back().get<real>());
         for (auto& v : x) v = mid + 0.5 * (v.get<real>() - mid);
     }
+    // Burn law phase 2b (2026-10-19): demo_i4_pipes.json tracks MBT (no ECU spark table), which a lift family does not
+    // support yet - the test engine keeps the file's former [AS] schedule.
+    e["ecu"]["spark_advance_deg"] = json{{"rpm", {0.0, 7000.0}}, {"p_im_kpa", {20.0, 100.0}}, {"values", {{30.0, 20.0}, {40.0, 30.0}}}};
     e["cycle"].erase("intake_lift");
     e["cycle"]["intake_lift_family"] = json::array({json{{"u", 0.5}, {"intake_lift", half}}, json{{"u", 1.0}, {"intake_lift", full}}});
     e["lift_control"] = json{{"type", "continuous"}, {"actuator_tau_s", 0.05}, {"max_rate_per_s", 3.0}, {"min_u", 0.5},
@@ -1274,6 +1278,37 @@ TEST_CASE("P10 diag: ECU spark table = min over the lift nodes' generated MBT sp
         }
     }
     std::printf("P10 diag: theta_mbt over every node and grid point: %.10g .. %.10g deg\n", lo, hi);
+    // Burn law phase 2b: the law's MBT varies over the grid, so print the node-wise minimum as the ECU table.
+    const Table2D& b = *t.front();
+    // PS_P10_RULE=u1 prints the u = 1 node's MBT table instead of the minimum; PS_P10_VERBOSE=1 adds every node's value.
+    const char* rule_env = std::getenv("PS_P10_RULE");
+    const bool u1_rule = rule_env != nullptr && std::string(rule_env) == "u1";
+    const bool verbose = std::getenv("PS_P10_VERBOSE") != nullptr;
+    for (const Table2D* x : t) {
+        REQUIRE(x->x == b.x);
+        REQUIRE(x->y == b.y);
+    }
+    std::printf("\"rpm\": [");
+    for (std::size_t i = 0; i < b.x.size(); ++i) std::printf("%s%.0f", i ? ", " : "", b.x[i]);
+    std::printf("],\n\"p_im_kpa\": [");
+    for (std::size_t j = 0; j < b.y.size(); ++j) std::printf("%s%.0f", j ? ", " : "", b.y[j] / 1000.0);
+    std::printf("],\n\"values\": [\n");
+    for (std::size_t i = 0; i < b.x.size(); ++i) {
+        std::printf("  [");
+        for (std::size_t j = 0; j < b.y.size(); ++j) {
+            real v = 1e9;
+            for (const Table2D* x : t) v = std::min(v, x->at(i, j));
+            if (u1_rule) v = b.at(i, j); // the u = 1 node's own MBT
+            if (verbose) {
+                std::printf("<");
+                for (const Table2D* x : t) std::printf("%.2f ", x->at(i, j));
+                std::printf(">");
+            }
+            std::printf("%s%.10g", j ? ", " : "", v);
+        }
+        std::printf("]%s\n", i + 1 < b.x.size() ? "," : "");
+    }
+    std::printf("]\n");
 }
 
 TEST_CASE("P10 diag: part-load fuel table, lift family vs throttled", "[.][diag][vvl]") {
@@ -1343,6 +1378,27 @@ TEST_CASE("P10 diag: the N52 car pulling away in first at part throttle", "[.][d
             std::printf("t %.3f rpm %.1f state %d speedo %.3f p_im %.0f clutch %.3f gear %d\n", (i + 1) / 240.0, ps.engine_rpm,
                         static_cast<int>(ps.engine_state), ps.speedo_mps, ps.engines.empty() ? 0.0 : ps.engines[0].p_intake_pa,
                         ps.clutch_engagement, static_cast<int>(ps.gear));
+        }
+    }
+}
+
+// Burn law (vault PHYS-079): the N52's u = 1 node at 2500 rpm / 30 kPa ends its Full cycle with a non-physical IVC
+// residual (x = -0.56, the low-MAP reverse-flow drain of the intake port); the law would read it as a fresh charge
+// (VE 1.36, MBT 14.9 deg vs 29-33 deg at the nodes above) and the eta_i resampling threw "air mass not strictly
+// increasing". node_breathes() now treats such a node as non-breathing and finish() fills it from the node above.
+TEST_CASE("P10 BL: a law node with a non-physical IVC residual is filled from the node above", "[vvl][cycle][burn_law]") {
+    const SimulatedEngineDesc& d = n52_pending();
+    const std::vector<CycleModelDesc> sets = engine_map_set_descs(*d.cycle);
+    REQUIRE(sets[0].burn_law == CycleModelDesc::BurnLawMode::Standard);
+    EngineMapsPtr m;
+    REQUIRE_NOTHROW(m = generate_engine_maps(sets[0], d.fuels.front(), MapQuality::Full, &pool10()));
+    CHECK(m->nonbreathing_points >= 2); // 20 and 30 kPa at 2500 rpm at least
+    const Table2D& ve = m->maps.ve;
+    CHECK(ve.value(2500.0, 30000.0) == ve.value(2500.0, 40000.0));
+    for (std::size_t ir = 0; ir < ve.x.size(); ++ir) {
+        for (std::size_t ip = 0; ip < ve.y.size(); ++ip) {
+            const real v = ve.values[ir * ve.y.size() + ip];
+            CHECK((v > 0.0 && v < 1.2)); // no fresh-charge artefact
         }
     }
 }

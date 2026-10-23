@@ -79,7 +79,7 @@ Shipped values:
 | `e5.json` | 95.0 | 85.0 | [AS] | EN 228 95-octane grade minimum (E5 is sold as Super 95) |
 | `e10.json` | 95.0 | 85.0 | [AS] | EN 228 95-octane grade minimum (Super E10) |
 | `e25.json` | 100.91 | 87.04 | [D] | molar blend rule below (no E25 standard exists) |
-| `e85.json` | 104.0 | 88.0 | [AS] | EN 15293 minimum (recalled) |
+| `e85.json` | 100.0 | 87.0 | [C] | Australian Fuel Quality Standards (Ethanol E85) Determination 2019 minimum, 70-85 % v/v (since 2026-10-19; was 104/88 [AS], EN 15293 recalled) |
 | `ethanol.json` (E100) | 108.6 | 89.7 | [AS] | recalled literature value (published 107-109 / 89-90) |
 | `tier3_e10_cert.json` | 92.0 | 84.0 | [C] | EPA NVFEL Report 26781, ASTM D2699/D2700 |
 | `diesel.json` | - | - | - | none: a compression-ignition fuel has no octane number |
@@ -88,6 +88,19 @@ E5/E10/E85 take the standard's MINIMUM grade, not the blend rule: a pump
 fuel is sold to a grade, and the minimum is the conservative (more
 knock-prone) choice. Each file's `source` also prints the blend-rule value for
 comparison (E5 96.47/85.51, E10 97.77/85.96, E85 107.63/89.37 [D]).
+
+E85 (owner decision 2026-10-19, vault PHYS-079): no copy of EN 15293 is
+available here, so the cited minimum grade is the Australian Determination
+2019's interim RON 100 / MON 87 for 70-85 % v/v ethanol - the only cited pair
+for a blend inside the EN 15293 (50-85 % v/v) and ASTM D5798 (51-83 % v/v)
+ranges; it exists so that engines can be calibrated to it. Cited
+alternatives, not used: ORNL (Szybist, DOE DEER 2012) measured RON 105.0 /
+MON 88.7 [C] on an "E85" splash blend of 89.33 % v/v ethanol, outside both
+ranges; ASTM D5798 (2011) sets no octane minimum. At the hyper's WOT points
+the three give knock retards of 15.5 (100/87), 13.7 (104/88) and 13.1 deg
+(105/88.7) at 6000 rpm (engine.md "Calibration v5"). `e25.json` does not
+derive from `e85.json` (its blend rule uses gasoline and ethanol), so it is
+unchanged.
 
 ### Octane blend rule (E25 only)
 

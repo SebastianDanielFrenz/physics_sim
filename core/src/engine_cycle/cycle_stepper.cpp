@@ -83,6 +83,14 @@ CycleStepper::CycleStepper(const drivetrain::CycleModelDesc& d, real lhv_j_kg, r
     m->wiebe_a = d.wiebe_a;
     m->wiebe_m = d.wiebe_m;
     m->burn_duration = d.burn_duration_deg;
+    m->burn_law = d.burn_law == drivetrain::CycleModelDesc::BurnLawMode::Standard;
+    m->burn_params = d.burn_law_params;
+    m->ca50_mbt = d.ca50_mbt_deg_atdc;
+    m->ignition_delay = d.ignition_delay_deg;
+    if (m->burn_law) {
+        const std::string err = validate_burn_law(d.burn_law_params);
+        if (!err.empty()) throw std::runtime_error("CycleStepper: burn law: " + err);
+    }
     m->woschni_c1_gx = d.woschni_c1_gx;
     m->woschni_c1_cc = d.woschni_c1_cc;
     m->woschni_c2 = d.woschni_c2;
@@ -112,9 +120,17 @@ void CycleStepper::reset(const OperatingPoint& op) {
     exhaust_shift_ = m.exhaust_phase_ref + op.exhaust_retard_deg;
     theta_ivc_ = wrap720(m.intake_lift.x.back() + intake_shift_);
     theta_evo_ = wrap720(m.exhaust_lift.x.front() + exhaust_shift_);
-    theta_spark_ = wrap720(360.0 + op.spark_deg_atdc);
     eta_c_ = op.lambda >= 1.0 ? m.combustion_eff_lean : m.combustion_eff_lean * op.lambda;
-    wiebe_ = Wiebe{m.wiebe_a, m.wiebe_m, m.burn_duration, 360.0 + op.spark_deg_atdc};
+    law_active_ = m.burn_law && op.spark_mode != OperatingPoint::SparkMode::WiebeStart;
+    if (law_active_) {
+        // Until the first IVC capture: the law's reference angles (settling cycles only).
+        apply_spark(reference_burn_angles(m.burn_params, m.wiebe_a, m.wiebe_m));
+    } else {
+        BurnAngles b;
+        b.wiebe_duration_deg = m.burn_duration;
+        b.ignition_delay_deg = m.ignition_delay;
+        apply_spark(b);
+    }
     m_air_conv_ = 0.0;
     m_fuel_ = 0.0;
     x_b_ivc_ = 0.0;
@@ -329,8 +345,41 @@ void CycleStepper::after_step(real theta_before, real dtheta) {
         ivc_m_ = state_.y[kCylM];
         ivc_u_ = state_.y[kCylU];
         ivc_mb_ = state_.y[kCylMb];
+        if (law_active_) apply_spark(burn_law_at_ivc(op_.rpm, op_.lambda)); // burn law: this cycle's own angles
     }
     theta_ = theta_end;
+}
+
+void CycleStepper::apply_spark(const BurnAngles& b) {
+    const CycleModel& m = *model_;
+    burn_ = b;
+    real start = op_.spark_deg_atdc; // WiebeStart
+    if (op_.spark_mode == OperatingPoint::SparkMode::Spark) {
+        start = op_.spark_deg_atdc + b.ignition_delay_deg;
+    } else if (op_.spark_mode == OperatingPoint::SparkMode::MbtOffset) {
+        start = mbt_wiebe_start_atdc(b, m.wiebe_a, m.wiebe_m, m.ca50_mbt) + op_.spark_deg_atdc;
+    }
+    theta_spark_ = wrap720(360.0 + start);
+    wiebe_ = Wiebe{m.wiebe_a, m.wiebe_m, b.wiebe_duration_deg, 360.0 + start};
+}
+
+BurnAngles CycleStepper::burn_law_at_ivc(real rpm, real lambda) const {
+    const CycleModel& m = *model_;
+    const real v = m.geom.eval(ivc_theta_).v;
+    const CvState c = cv_state(m.gas, ivc_m_, ivc_u_, ivc_mb_, v);
+    BurnLawInput bi;
+    bi.rpm = rpm;
+    bi.lambda = lambda;
+    bi.t_ivc_k = c.t;
+    bi.p_ivc_pa = c.p;
+    bi.residual_fraction = c.x;
+    bi.volume_ratio = v / m.geom.v_c; // the TDC volume is the clearance volume
+    return evaluate_burn_law(m.burn_params, m.wiebe_a, m.wiebe_m, bi);
+}
+
+real CycleStepper::mbt_spark_btdc() const {
+    const CycleModel& m = *model_;
+    return engine_cycle::mbt_spark_btdc(burn_, m.wiebe_a, m.wiebe_m, m.ca50_mbt);
 }
 
 void CycleStepper::step(real h) {
@@ -401,7 +450,10 @@ void CycleStepper::step_live(real theta0_deg, real dtheta_deg, real h) {
 void CycleStepper::set_combustion_event(real lambda, real start_deg_atdc, real burn_duration_deg, bool fire) {
     const CycleModel& m = *model_;
     op_.lambda = lambda;
+    op_.spark_mode = OperatingPoint::SparkMode::WiebeStart; // an explicit event: the law hook is off from here
     op_.spark_deg_atdc = start_deg_atdc;
+    law_active_ = false;
+    burn_.wiebe_duration_deg = burn_duration_deg;
     theta_spark_ = wrap720(360.0 + start_deg_atdc);
     eta_c_ = lambda >= 1.0 ? m.combustion_eff_lean : m.combustion_eff_lean * lambda;
     wiebe_ = Wiebe{m.wiebe_a, m.wiebe_m, burn_duration_deg, 360.0 + start_deg_atdc};

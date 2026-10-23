@@ -105,10 +105,10 @@ inline constexpr std::uint32_t kPsMapsFormatVersion = 1;
 // ps_audio A5: generator_version = engine_map_generator_version(desc) of the
 // desc the key was computed for (the file stores no version; the content
 // hash, re-checked on load, folds it, so a wrong value is a silent miss).
-// The two-argument form is the lumped (v1) engines' load.
+// There is no default: a version-less overload (removed with the burn law, vault PHYS-079) silently assumed v1 and missed
+// every law engine's file (v5/v6/v7).
 [[nodiscard]] EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key,
                                                     std::uint32_t generator_version);
-[[nodiscard]] EngineMapsPtr load_cached_engine_maps(const std::string& cache_dir, std::uint64_t key);
 
 // Writes maps to the cache via a temp-file-then-rename (H4). Never throws:
 // an empty cache_dir, a directory that cannot be created, or a write/rename

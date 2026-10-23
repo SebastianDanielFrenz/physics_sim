@@ -74,9 +74,16 @@ LiveEngine::LiveEngine(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, c
     if (sources_ > kLiveMaxSources) fail("more than " + std::to_string(kLiveMaxSources) + " radiating ends");
     rho_amb_ = settings_.p_amb_pa / (core_.cylinder(0).model().gas.fresh.r * settings_.t_amb_k);
     p_f_ = settings_.initial_p_intake_pa;
-    ign_delay_ = desc.ignition_delay_deg;
-    burn_deg_ = desc.burn_duration_deg;
-    sob_mbt_ = Wiebe::theta0_for_ca50(desc.wiebe_a, desc.wiebe_m, desc.burn_duration_deg, desc.ca50_mbt_deg_atdc);
+    law_ = desc.burn_law == ps::drivetrain::CycleModelDesc::BurnLawMode::Standard;
+    if (law_) {
+        const ps::engine_cycle::BurnAngles b = ps::engine_cycle::reference_burn_angles(desc.burn_law_params, desc.wiebe_a, desc.wiebe_m);
+        ign_delay_ = b.ignition_delay_deg;
+        burn_deg_ = b.wiebe_duration_deg;
+    } else {
+        ign_delay_ = desc.ignition_delay_deg;
+        burn_deg_ = desc.burn_duration_deg;
+    }
+    sob_mbt_ = Wiebe::theta0_for_ca50(desc.wiebe_a, desc.wiebe_m, burn_deg_, desc.ca50_mbt_deg_atdc);
     const std::size_t nc = static_cast<std::size_t>(core_.cylinders());
     fresh_acc_prev_.assign(nc, 0.0);
     fresh_last_.assign(nc, 0.0);
@@ -198,8 +205,17 @@ void LiveEngine::physics_step(const LiveControl& c, real* p_out) {
                     combustion_variation(settings_.variation, settings_.seed, k, events_[kk], load,
                                          settings_.variation_scale);
                 ++events_[kk];
-                cyl.set_combustion_event(c.lambda, c.start_of_burn_deg_atdc + pert.start_shift_deg,
-                                         burn_deg_ * pert.burn_scale, !fuel_off);
+                // Burn law: this cylinder's angles from its own IVC state (captured by the substep that crossed IVC).
+                real start = c.spark_given ? c.spark_deg_atdc + ign_delay_ : sob_mbt_;
+                real dur = burn_deg_;
+                if (law_) {
+                    const ps::engine_cycle::BurnAngles b = cyl.burn_law_at_ivc(rpm, c.lambda);
+                    const ps::engine_cycle::CycleModel& md = cyl.model();
+                    dur = b.wiebe_duration_deg;
+                    start = c.spark_given ? c.spark_deg_atdc + b.ignition_delay_deg
+                                          : ps::engine_cycle::mbt_wiebe_start_atdc(b, md.wiebe_a, md.wiebe_m, md.ca50_mbt);
+                }
+                cyl.set_combustion_event(c.lambda, start + pert.start_shift_deg, dur * pert.burn_scale, !fuel_off);
                 if (fuel_off) ++cuts_;
             }
             const real d_tdc = wrap720(360.0 - th0);
@@ -287,7 +303,6 @@ StabilityProbeResult probe_stability(const CycleModelDesc& desc, real lhv_j_kg, 
         LiveControl c;
         c.omega_rad_s = r.rpm / kRadToRpm;
         c.p_intake_pa = r.p_im_pa;
-        c.start_of_burn_deg_atdc = eng.mbt_start_of_burn_deg();
         const real cycle_s = 120.0 / r.rpm;
         const std::int64_t n = static_cast<std::int64_t>(std::ceil(2.0 * cycle_s * s.sample_rate_hz));
         std::array<real, kLiveMaxSources> out{};

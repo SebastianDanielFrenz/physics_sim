@@ -56,7 +56,6 @@ Voice::Voice(const CycleModelDesc& desc, real lhv_j_kg, real afr_st, const Voice
     if (!(s_.pause_fade_s > 0.0 && s_.crank_tau_s > 0.0 && s_.crank_max_rel >= 0.0))
         throw std::invalid_argument("Voice: pause_fade_s and crank_tau_s must be > 0, crank_max_rel >= 0");
     ctl_.p_intake_pa = s_.engine.initial_p_intake_pa;
-    ctl_.start_of_burn_deg_atdc = engine_.mbt_start_of_burn_deg();
     // ps_audio A8: one independent white-noise stream per source, seeded
     // from the same LiveEngineSettings::seed combustion_variation.h uses -
     // deterministic, and a different seed (or source index) gives an
@@ -163,12 +162,9 @@ void Voice::interpolate() {
     ctl_.t_charge_k=lerp(a.t_charge_k,b.t_charge_k,f);
     ctl_.throttle = lerp(a.throttle, b.throttle, f);
     ctl_.lambda = lerp(a.lambda, b.lambda, f);
-    if (a.spark_given) {
-        const real sp = b.spark_given ? lerp(a.spark_deg_atdc, b.spark_deg_atdc, f) : a.spark_deg_atdc;
-        ctl_.start_of_burn_deg_atdc = sp + engine_.ignition_delay_deg();
-    } else {
-        ctl_.start_of_burn_deg_atdc = engine_.mbt_start_of_burn_deg();
-    }
+    // The spark; the engine resolves the start of burn per cycle (burn law: from that cylinder's IVC state).
+    ctl_.spark_given = a.spark_given;
+    ctl_.spark_deg_atdc = a.spark_given ? (b.spark_given ? lerp(a.spark_deg_atdc, b.spark_deg_atdc, f) : a.spark_deg_atdc) : 0.0;
     ctl_.flags = a.flags;
     // Crank target: re-seated whenever the read point crosses a snapshot carrying a crank angle.
     if (a.t_sim_s != lower_t_) {

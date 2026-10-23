@@ -397,17 +397,21 @@ TEST_CASE("Engine wear: 1.0 is bit-identical, worn internals add friction and oi
         w.set_control("throttle", 0.5);
         for (int t = 0; t < 2400; ++t) w.step();
         if (wear) w.set_engine_wear(rig.vehicle, *wear);
-        real friction_w = 0.0;
+        // Engine speed is the 20 s mean, not the last tick (2026-10-20, burn law phase 3): in neutral at c = 0.5 the engine
+        // sits on its 6500 rpm fuel-cut limiter, and the last tick only samples the limiter cycle's phase (the idle
+        // steady-table node moved that phase and the last-tick check flipped, 6456.8 vs 6482.5 rpm).
+        real friction_w = 0.0, rpm_mean = 0.0;
         for (int t = 0; t < 4800; ++t) {
             w.step();
             friction_w += snapshot_thermal(rig).friction_heat_w / 4800.0;
+            rpm_mean += w.powertrain_state(rig.vehicle).engine_rpm / 4800.0;
         }
         struct Out {
             std::uint64_t hash;
             real oil_c, friction_w, rpm, k, wear_k;
         };
         const auto& th = snapshot_thermal(rig);
-        return Out{w.state_hash(), w.engine_thermal_state(rig.vehicle).oil_c, friction_w, w.powertrain_state(rig.vehicle).engine_rpm,
+        return Out{w.state_hash(), w.engine_thermal_state(rig.vehicle).oil_c, friction_w, rpm_mean,
                    th.friction_scale, th.wear_friction_scale};
     };
     const auto base = run(nullptr, 1);

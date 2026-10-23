@@ -159,6 +159,8 @@ add_executable(ps_unit_tests
   test_knock_calibration.cpp
   test_knock_cal_fixtures.cpp
   test_knock_cal_turbo.cpp
+  test_burn_law.cpp
+  test_burn_law_cal.cpp
   test_gas_exchange.cpp
   test_wot_generation.cpp
   test_engine_installation_io.cpp

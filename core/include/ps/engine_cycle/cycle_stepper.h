@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include "ps/engine_cycle/burn_law.h"
 #include "ps/engine_cycle/gas.h"
 #include "ps/engine_cycle/geometry.h"
 #include "ps/engine_cycle/valve_flow.h"
@@ -50,7 +51,16 @@ struct OperatingPoint {
     // plenum target above ambient, which the ambient path cannot reach.
     real p_supply_pa = 0.0;
     real lambda = 1.0;
-    real spark_deg_atdc = 0.0;       // start of combustion (Wiebe theta_0) relative to firing TDC
+    // spark_deg_atdc's meaning (burn law, design C): WiebeStart - the start of combustion (Wiebe theta_0) relative to
+    // firing TDC, with the model's constant burn_duration (every caller before the law; the live API and the knock
+    // replay). On a model whose desc runs the burn law (CycleModelDesc::burn_law == Standard) two more modes make the
+    // stepper set its Wiebe from the law at every IVC capture: Spark - the spark [deg ATDC] (Wiebe start = spark +
+    // the law's delay); MbtOffset - the spark relative to the cycle's own MBT spark [deg, + = later] (Wiebe start =
+    // the MBT start + offset). On a Fixed-law model both read as the pre-law values (Spark: + ignition_delay_deg;
+    // MbtOffset: + the constant MBT start).
+    enum class SparkMode : std::uint8_t { WiebeStart = 0, Spark = 1, MbtOffset = 2 };
+    SparkMode spark_mode = SparkMode::WiebeStart;
+    real spark_deg_atdc = 0.0;
     real intake_advance_deg = 0.0;
     real exhaust_retard_deg = 0.0;
 };
@@ -130,6 +140,12 @@ struct CycleModel {
     real v_ip = 0.0, v_ep = 0.0;
     real reservoir_cd_area = 0.0;
     real wiebe_a = 5.0, wiebe_m = 2.0, burn_duration = 60.0;
+    // Burn law (ps/engine_cycle/burn_law.h): on for a Standard desc; ca50_mbt the MBT rule's CA50 [deg ATDC];
+    // ignition_delay the Fixed desc's constant delay; v_tdc the clearance volume at firing TDC.
+    bool burn_law = false;
+    BurnLawParams burn_params;
+    real ca50_mbt = 8.0;
+    real ignition_delay = 0.0;
     real woschni_c1_gx = 6.18, woschni_c1_cc = 2.28, woschni_c2 = 3.24e-3;
     real t_wall = 450.0, head_area_factor = 1.1;
     real combustion_eff_lean = 0.98;
@@ -221,6 +237,15 @@ public:
     [[nodiscard]] real residual_fraction_ivc() const { return x_b_ivc_; }
     [[nodiscard]] real p_max() const { return p_max_; }
     [[nodiscard]] const Wiebe& wiebe() const { return wiebe_; }
+    // Burn law: the angles of the current cycle (set at its IVC capture; the law's reference angles before the first
+    // capture), the spark [deg ATDC] and the cycle's MBT spark [deg BTDC] they imply. With the law off (WiebeStart, a
+    // Fixed model): the constant duration/delay and the Wiebe start minus the delay.
+    [[nodiscard]] const BurnAngles& burn_angles() const { return burn_; }
+    [[nodiscard]] real spark_atdc() const { return wiebe_.theta0_deg - 360.0 - burn_.ignition_delay_deg; }
+    [[nodiscard]] real mbt_spark_btdc() const;
+    // Burn law: the law's angles from the last IVC capture at (rpm, lambda) - the generator's hook and the live
+    // engine's per-cycle call (the model's own law parameters; valid only after a capture).
+    [[nodiscard]] BurnAngles burn_law_at_ivc(real rpm, real lambda) const;
     [[nodiscard]] real theta_ivc() const { return theta_ivc_; }
     [[nodiscard]] real theta_evo() const { return theta_evo_; }
     // Engine garage P7: the cylinder state (m, U, m_b) and this cylinder's own
@@ -239,6 +264,8 @@ public:
 private:
     void rk4(real theta0, real theta_mid, real theta1, real h);
     void after_step(real theta_before, real dtheta);
+    // Burn law: the Wiebe (start and duration) of the coming combustion from burn_ and the op's spark mode.
+    void apply_spark(const BurnAngles& b);
     void add_port_reservoir_rates(const CycleInputs& in, PortSource& ip, PortSource& ep) const;
 
     std::shared_ptr<const CycleModel> model_;
@@ -251,6 +278,8 @@ private:
     real theta_ivc_ = 0.0, theta_evo_ = 0.0, theta_spark_ = 0.0;
     real eta_c_ = 0.98;
     Wiebe wiebe_{};
+    BurnAngles burn_{};
+    bool law_active_ = false; // the op's spark mode is not WiebeStart and the model runs the law
     real m_air_conv_ = 0.0, m_fuel_ = 0.0, x_b_ivc_ = 0.0;
     real p_ref_ = 0.0, v_ref_ = 0.0, t_ref_ = 0.0;
     real p_max_ = 0.0;

@@ -30,6 +30,11 @@ struct PointResult {
         real crank_deg = 0.0; // the cylinder's own crank angle at the capture
         real m = 0.0, u = 0.0, mb = 0.0;
     } ivc;
+    // Burn law: the last cycle's burn angles (multi-cylinder: of the cylinder `ivc` is taken from, so the knock replay
+    // runs that cylinder's own burn) and its MBT spark [deg BTDC] (multi-cylinder: the mean over the cylinders). With the
+    // law off: the constant duration/delay and the constant MBT spark.
+    BurnAngles burn;
+    real mbt_spark_btdc = 0.0;
 };
 
 // D5 stepper settings. h_s is the requested step; the step actually used is

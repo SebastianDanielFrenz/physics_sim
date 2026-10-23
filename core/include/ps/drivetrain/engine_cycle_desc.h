@@ -18,10 +18,12 @@
 
 #include "ps/drivetrain/installation_desc.h"
 #include "ps/drivetrain/table2d.h"
+#include "ps/engine_cycle/burn_law.h"
 #include "ps/engine_cycle/knock_model.h"
 #include "ps/types.h"
 #include "ps/vehicle/curve1d.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -260,15 +262,24 @@ struct CycleModelDesc {
         // stays at lambda 1, the generator's convention); empty = lambda 1.
         Table2D lambda_target;
         // Knock model v3: the Douaud-Eyzat parameter set of the replay (defaults = the calibrated compiled set, equal to
-        // data/knock_models/douaud_eyzat_v4.json). Folded into the cache key of an opted-in engine.
+        // data/knock_models/douaud_eyzat_v6.json). Folded into the cache key of an opted-in engine.
         engine_cycle::KnockModelParams model;
     } knock;
 
     // ---- Tier 2 (frozen literature; every value carries its citation in the JSON source) ----
     real wiebe_a = 5.0;           // Heywood 1988 section 9.2 [A: page]
     real wiebe_m = 2.0;
-    real burn_duration_deg = 60.0;  // [AS-literature-range]
+    real burn_duration_deg = 60.0;  // [AS-literature-range]; read only with burn_law == Fixed (see below)
     real ca50_mbt_deg_atdc = 8.0;   // MBT rule (plan D11)
+    // Burn law (design C, owner decision 2026-10-19, vault PHYS-079; ps/engine_cycle/burn_law.h): Standard (every engine
+    // with a cycle block) - the Wiebe duration and the ignition delay of each generated cycle follow the law from the
+    // cycle's own IVC state, burn_law_params (defaults = the calibrated compiled set, equal to
+    // data/burn_laws/default.json); burn_duration_deg and ignition_delay_deg are then unused and the loader rejects
+    // them. Fixed - the narrow escape hatch ("burn_law": "fixed", analytic cycle-model fixtures only): the constant
+    // burn_duration_deg / ignition_delay_deg of before the law, with the pre-law generator versions and cache keys.
+    enum class BurnLawMode : std::uint8_t { Standard = 0, Fixed = 1 };
+    BurnLawMode burn_law = BurnLawMode::Standard;
+    engine_cycle::BurnLawParams burn_law_params;
     real woschni_c1_gx = 6.18;      // Heywood 1988 eq. 12.19ff (Woschni 1967)
     real woschni_c1_cc = 2.28;
     real woschni_c2 = 3.24e-3;      // m/(s*K), after spark
