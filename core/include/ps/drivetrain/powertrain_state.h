@@ -146,7 +146,7 @@ struct PowertrainSnapshot {
     bool hybrid_fitted=false,hybrid_charging=false,hybrid_ice_requested=false;
     real hybrid_charge_target_soc=0,hybrid_requested_power_w=0,hybrid_available_power_w=0;
     // B mode / hybrid Electric mode (docs/electric_drive.md), last substep, never hashed. b_mode_available: the selector has the B
-    // position now (a pure EV; a hybrid in Electric mode); b_mode_active: B is selected. The B law (ps/drivetrain/b_mode.h):
+    // position now (a pure EV; a hybrid in Eco or Electric mode); b_mode_active: B is selected. The B law (ps/drivetrain/b_mode.h):
     // regen capacity R and drive capacity P_max (W at the shafts), the system power command, the pedal at which it is zero, the
     // wheel-slip guard's smallest regeneration fraction (1 = no intervention), the pads' auto-hold level (0..1).
     // hybrid_electric_leave_reason: 0 none, 1 pack at or below low_soc (Electric ended by the supervisor).
