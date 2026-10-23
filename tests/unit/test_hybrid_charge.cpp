@@ -83,3 +83,22 @@ TEST_CASE("Simulated engine charging fuel estimate agrees with a naturally aspir
     const auto estimate=engine.charging_fuel_g_s(2500,sp.net_torque_nm);
     CHECK(estimate==Catch::Approx(sp.fuel_g_s).epsilon(.005));
 }
+
+TEST_CASE("Turbo hybrid tracks charging power with efficiency optimization enabled", "[hybrid_charge][turbo]") {
+    auto d=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hybrid.json");
+    const auto turbo=io::load_vehicle_json(std::string(PS_SOURCE_DIR)+"/data/vehicles/car_hyper.json");
+    for(auto& c:d.powertrain.components) {
+        if(auto* b=std::get_if<BatteryDesc>(&c.params))b->initial_soc=.19;
+        if(c.id=="engine")for(const auto& donor:turbo.powertrain.components)
+            if(std::holds_alternative<SimulatedEngineDesc>(donor.params))c.params=donor.params;
+    }
+    auto rig=ps_test::build_vehicle_rig_from_desc(d,1800,{2,.4,.15},.6,0,2);
+    auto& w=*rig.world;
+    w.reset_vehicle(rig.vehicle,{.gear=0,.engine_state=EngineState::Off});
+    w.set_control("gear_request",0);w.set_control("assist.drive_mode",1);w.set_control("throttle",0);
+    real power=0,lo=1e9,hi=0;
+    for(int i=0;i<240*30;++i){w.step();if(i>=240*25){const auto p=w.powertrain_state(rig.vehicle);power-=p.battery_power_w;lo=std::min(lo,p.engine_rpm);hi=std::max(hi,p.engine_rpm);}}
+    power/=240*5;
+    std::printf("turbo hybrid battery %.2f kW rpm %.0f..%.0f\n",power/1000,lo,hi);
+    CHECK(power==Catch::Approx(47500).epsilon(.03));CHECK(hi-lo<100);
+}
