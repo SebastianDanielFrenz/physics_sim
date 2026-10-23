@@ -23,6 +23,7 @@
 // which is itself checked against std::pow separately.
 
 #include "drivetrain/engine_simulated.h"
+#include "ps/io/fuel_io.h"
 #include "ps/io/vehicle_io.h"
 
 #include "mvem_fixtures.h"
@@ -30,6 +31,7 @@
 #include "ps/jobs/debug_alloc.h"
 #include "ps/jobs/job_system.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -970,9 +972,21 @@ TEST_CASE("Twin turbo hyper V8: fuel-compatible loading, boost, coast and energy
     CHECK(top_w.tau_mean>1000);
     CHECK(top_w.charge_max-top_w.charge_min<1000);
     CHECK(high.p_exhaust_pa>high.p_intake_pa);
-    CHECK(high.fuel_flow_g_s>70);
-    CHECK(high.fuel_flow_g_s<100);
-    CHECK_FALSE(boosted.maps().maps.has_theta_kl);
+    // Fuel flow = the engine's air mass flow / (lambda * AFR_stoich of the burnt fuel). The air is the compressor flow (blow-off valve cleared,
+    // settled, so the compressor flow is what the engine breathes), lambda the ECU target, AFR_s from the engine's own fuel file (E85 9.78; the
+    // literal 70-100 g/s this replaced was written for E5, AFR_s 14.2-14.5, and the E85 engine burns 1.4-1.5x as much).
+    {
+        const auto fuel=ps::io::load_fuel_json(std::string(PS_SOURCE_DIR)+"/data/fuels/e85.json");
+        const real expected_g_s=high.compressor_flow_kg_s*1e3/(high.lambda*fuel.afr_stoich);
+        std::printf("[turbo dyno] 7500 rpm fuel flow %.2f g/s vs air/(lambda*AFR_s) = %.2f g/s (air %.1f g/s, lambda %.3f, AFR_s %.3f)\n",
+            high.fuel_flow_g_s,expected_g_s,high.compressor_flow_kg_s*1e3,high.lambda,fuel.afr_stoich);
+        CHECK(high.fuel_flow_g_s==Catch::Approx(expected_g_s).epsilon(0.01));
+    }
+    // The hyper is knock-limited (ECU ignition_strategy knock_limited, E85): the maps carry a theta_kl table and, at the WOT points above, the
+    // limit does not bind - the spark follows the ECU schedule (knock_retard_deg 0).
+    CHECK(boosted.maps().maps.has_theta_kl);
+    CHECK(br.knock_retard_deg==0.0);
+    CHECK(high.knock_retard_deg==0.0);
     // A boosted engine's clutch feed-forward must carry current charge,
     // and fuel-cut limiter pulses must not command the clutch to reopen.
     CHECK(high.torque_demand>=high.tau0-boosted.maps().c_k-1e-6);

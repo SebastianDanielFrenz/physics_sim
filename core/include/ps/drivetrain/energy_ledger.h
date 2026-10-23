@@ -22,6 +22,7 @@ struct PowertrainEnergy {
     real rotor_ke = 0.0;        // 1/2*sum(J_i*omega_i^2), instantaneous (NOT cumulative - "stored" in the plan's own naming)
     real electric_out = 0; // signed motor mechanical work, J
     real battery_draw = 0; // signed electrical energy withdrawn, J; negative = regeneration
+    real fuel_cell_electric = 0, fuel_cell_chemical = 0, fuel_cell_loss = 0; // J, outside shaft balance
     real electric_loss = 0; // motor/inverter conversion loss, J
     real balance_error = 0.0;   // per-tick closure residual (plan section 8); should stay near 0 (< 1e-9 relative)
 

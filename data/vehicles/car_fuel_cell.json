@@ -1,0 +1,288 @@
+{
+  "format": "physics_sim.vehicle/2",
+  "name": "car_fuel_cell",
+  "source": "[AS] fuel-cell development fixture: electric shaft drive with20kWh buffer and150kW lumped stack; no electrochemical/thermal stack model. H2 LHV120MJ/kg from DOE overview cited in data/fuels/hydrogen.json.",
+  "wheels": [
+    {
+      "name": "FL",
+      "attachment_local": [
+        1.35,
+        0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 1,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "FR",
+      "attachment_local": [
+        1.35,
+        -0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 73575.0,
+        "damper_bump_rate": 4000.0,
+        "damper_rebound_rate": 5900.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 15000.0
+      },
+      "arb_partner": 0,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": true,
+      "is_front": true
+    },
+    {
+      "name": "RL",
+      "attachment_local": [
+        -1.35,
+        0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 3,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    },
+    {
+      "name": "RR",
+      "attachment_local": [
+        -1.35,
+        -0.78,
+        -0.343
+      ],
+      "wheel_radius": 0.317,
+      "wheel_width": 0.225,
+      "wheel_mass": 18.0,
+      "wheel_inertia": 0.905,
+      "suspension": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "travel_max": 0.18,
+        "spring_rate": 49050.0,
+        "damper_bump_rate": 2700.0,
+        "damper_rebound_rate": 4000.0,
+        "bump_stop_rate": 400000.0,
+        "arb_rate": 10000.0
+      },
+      "arb_partner": 2,
+      "tyre": "../tyres/passenger_car_225_45r17.json",
+      "steered": false,
+      "is_front": false
+    }
+  ],
+  "steering": {
+    "max_wheel_angle": 0.5236,
+    "ackermann_fraction": 1.0,
+    "rear_steer_fraction": 0.0,
+    "steer_rate_limit": 0.0
+  },
+  "brake_system": {
+    "type": "direct_torque",
+    "corners": [
+      {
+        "wheel": "FL",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "FR",
+        "max_torque_nm": 2800.0
+      },
+      {
+        "wheel": "RL",
+        "max_torque_nm": 1600.0
+      },
+      {
+        "wheel": "RR",
+        "max_torque_nm": 1600.0
+      }
+    ],
+    "handbrake": {
+      "wheels": [
+        "RL",
+        "RR"
+      ],
+      "max_torque_nm": 1600.0
+    }
+  },
+  "aero": {
+    "drag_area_m2": 0.68
+  },
+  "powertrain": {
+    "components": [
+      {
+        "id": "battery",
+        "type": "battery",
+        "capacity_kwh": 20,
+        "initial_soc": 0.4,
+        "max_discharge_w": 700000,
+        "max_charge_w": 200000,
+        "mass_kg": 140
+      },
+      {
+        "id": "front_motor",
+        "type": "electric_motor",
+        "battery": "battery",
+        "peak_torque_nm": 600,
+        "max_power_w": 300000,
+        "max_rpm": 20000,
+        "inertia_kgm2": 0.25,
+        "efficiency": 0.95,
+        "regen_torque_nm": 100,
+        "mass_kg": 80,
+        "axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "front_diff",
+        "type": "differential",
+        "kind": "open",
+        "ratio": 9,
+        "efficiency": 0.98,
+        "carrier_inertia_kgm2": 0.02,
+        "carrier_axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "rear_motor",
+        "type": "electric_motor",
+        "battery": "battery",
+        "peak_torque_nm": 600,
+        "max_power_w": 300000,
+        "max_rpm": 20000,
+        "inertia_kgm2": 0.25,
+        "efficiency": 0.95,
+        "regen_torque_nm": 100,
+        "mass_kg": 80,
+        "axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "rear_diff",
+        "type": "differential",
+        "kind": "open",
+        "ratio": 9,
+        "efficiency": 0.98,
+        "carrier_inertia_kgm2": 0.02,
+        "carrier_axis_local": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "id": "fuel_cell",
+        "type": "fuel_cell",
+        "battery": "battery",
+        "max_power_w": 150000,
+        "efficiency": 0.55,
+        "target_soc": 0.8,
+        "hydrogen_capacity_kg": 6,
+        "initial_hydrogen_kg": 5,
+        "mass_kg": 180
+      }
+    ],
+    "shafts": [
+      {
+        "ports": [
+          "front_motor.shaft",
+          "front_diff.carrier"
+        ]
+      },
+      {
+        "ports": [
+          "front_diff.left",
+          "wheel:FL"
+        ]
+      },
+      {
+        "ports": [
+          "front_diff.right",
+          "wheel:FR"
+        ]
+      },
+      {
+        "ports": [
+          "rear_motor.shaft",
+          "rear_diff.carrier"
+        ]
+      },
+      {
+        "ports": [
+          "rear_diff.left",
+          "wheel:RL"
+        ]
+      },
+      {
+        "ports": [
+          "rear_diff.right",
+          "wheel:RR"
+        ]
+      }
+    ],
+    "compliance": "rigid",
+    "rotor_reaction": true
+  },
+  "contents_mass": {
+    "enabled": true,
+    "update_threshold_kg": 0.01
+  }
+}

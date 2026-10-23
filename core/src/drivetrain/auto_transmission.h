@@ -80,10 +80,21 @@ public:
         // DCT launch control (assist unit): hold the launch clutch open (Armed) / its kinetic capacity (Launch, < 0 none).
         bool launch_hold_open = false;
         real launch_cap_nm = -1.0;
+        // Hybrid ICE connect (rev-match window): the launch clutch stays open while the engine is brought up to the fit
+        // gear's input speed; on release with the slip inside launch_lock_slip_rpm the clutch is Locked at once (a coasting
+        // or light pedal would otherwise leave it at the creep capacity, below the launch minimum throttle).
+        bool rev_match_hold = false;
         real clutch_capacity_cap_nm = std::numeric_limits<real>::infinity(); // low-speed TC, shared by both rows
         bool first_substep = false;
         real h = 0.0;
     };
+
+    // Powertrain dyno only (set_dyno_hold): hold one gear instead of running the schedule. The target is the request's gear
+    // exactly (0 = neutral, e.g. a hybrid's disconnect; a CVT's forward gear is always D = 1), the starting clutch of a
+    // DualClutch (or clutch CVT) is locked whenever a gear is in, the converter lock-up of an Automatic is locked, and a CVT
+    // keeps the given variator ratio (its clamping force still follows the torque). Never hashed, off in every car.
+    void set_dyno_hold(bool on, real cvt_ratio = 0.0);
+    [[nodiscard]] bool dyno_hold() const { return hold_; }
 
     struct Outputs {
         RowCmd row[2];
@@ -106,6 +117,9 @@ public:
     [[nodiscard]] const Desc& desc() const { return desc_; }
     [[nodiscard]] int current() const { return cur_; }
     [[nodiscard]] int target() const { return tgt_; }
+    // Fit gear for the present output speed: the lowest forward gear whose input rpm does not exceed the schedule's upshift
+    // rpm at throttle `th` (the highest allowed gear when none does; 1 when not rolling forward). Not for a CVT.
+    [[nodiscard]] int fit_gear(const Sensors& s, real th) const;
     [[nodiscard]] Phase phase() const { return phase_; }
     [[nodiscard]] int selector() const { return selector_; }
     [[nodiscard]] bool manual_mode() const { return manual_; }
@@ -133,6 +147,7 @@ private:
     void update_lockup(const Sensors& s, real th);
     void update_preselect(const Sensors& s, real th);
     void update_cvt(const Sensors& s, real th);
+    void update_cvt_clamp(const Sensors& s);
     [[nodiscard]] int nearest_step() const;
     [[nodiscard]] real belt_capacity() const;
 
@@ -165,12 +180,16 @@ private:
     // Launch (DualClutch).
     real e_launch_ = 0.0;
     bool launch_locked_ = false;
+    bool rev_held_ = false; // a rev-match hold was applied; hashed only while set
     // CVT (hashed only with Desc::cvt).
     real ratio_ = 1.0;  // variator ratio
     int step_ = 0;      // virtual step of the stepped mode, 0 = continuous
     real t_step_ = 0.0; // time on the current step (stepped S dwell)
     real clamp_ = 0.0;  // belt clamping force [N]
     real cos_beta_ = 1.0; // unhashed constant
+    // Powertrain dyno only (set_dyno_hold); unhashed, survive reset().
+    bool hold_ = false;
+    real hold_ratio_ = 0.0; // CVT: the held variator ratio (0 = none)
 };
 
 } // namespace ps::drivetrain

@@ -48,11 +48,9 @@ FuelDesc read_fuel_object(const json& j) {
     if (d.name.empty()) throw std::runtime_error("fuel: 'name' is required and must be non-empty");
 
     const std::string phase = j.value("phase", std::string());
-    if (phase != "liquid") {
-        throw std::runtime_error("fuel '" + d.name + "': phase \"" + phase +
-                                  "\" is not yet supported (only \"liquid\" is implemented)");
-    }
-    d.phase = FuelPhase::Liquid;
+    if (phase == "liquid") d.phase = FuelPhase::Liquid;
+    else if(phase == "compressed_gas") d.phase = FuelPhase::CompressedGas;
+    else throw std::runtime_error("fuel: phase not yet supported: " + phase);
 
     d.lhv_j_kg = j.value("lhv_j_kg", d.lhv_j_kg);
     if (!(d.lhv_j_kg > real(0.0)) || !std::isfinite(d.lhv_j_kg)) {

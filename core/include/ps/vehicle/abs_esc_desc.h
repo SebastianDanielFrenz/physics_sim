@@ -18,8 +18,17 @@
 
 namespace ps::vehicle {
 
+// Where the braking reference speed v_ref (shared by ABS and ESC) comes from.
+//   GroundTruth: the simulation's own chassis velocity along the body x axis at the reference point (the point the wheel
+//     sensors are projected to), read from the chassis state. No estimation, so it cannot drift. DEFAULT (owner decision
+//     2026-10-18 after the 300 km/h brake-release defect: the integrated-IMU estimate ran 9 m/s above the true speed).
+//   Estimated: the sensor-only estimator (integrated IMU acceleration, lifted/relaxed toward the wheels, reanchor_*).
+enum class AbsReferenceSpeed : std::uint8_t { GroundTruth = 0, Estimated = 1 };
+inline constexpr const char* kAbsReferenceSpeedNames[2] = {"ground_truth", "estimated"};
+
 struct AbsDesc {
     bool default_enabled = true;      // the channel assist.abs's default (0/1)
+    AbsReferenceSpeed reference_speed = AbsReferenceSpeed::GroundTruth; // see AbsReferenceSpeed; the reanchor_* keys only act in Estimated
     real target_slip = 0.12;          // [AS] braking slip ratio the controller holds (peak of a passenger tyre, 0.10-0.15)
     real min_speed_mps = 2.0;         // [AS] below this reference speed ABS hands the full command back (wheels may lock)
     real slip_floor_mps = 3.0;        // [AS] slip = (v_ref - v_wheel) / max(v_ref, floor)

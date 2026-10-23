@@ -9,6 +9,7 @@
 #include "drivetrain/nitrous_flow.h"
 #include "vehicle_test_helpers.h"
 
+#include "ps/io/fuel_io.h"
 #include "ps/io/nitrous_io.h"
 #include "ps/io/vehicle_io.h"
 #include "ps/jobs/job_system.h"
@@ -401,9 +402,11 @@ TEST_CASE("N7 whole car: car_hyper_n2o WOT pull report", "[.][diag][n2o]") {
 //
 // N7b (owner option b): car_hyper_n2o.json now carries the vehicle-level "forced_induction" (pre-P2: "turbo_configuration") override
 // (../turbo_configurations/hyper_twin_n2o.json -> ../turbos/hyper_turbo_n2o.json, wastegate 1.4875e-3 m2 per turbo against the stock 1.18e-3)
-// and the kit custom_wet_plate_800_bigjet.json (3.81 mm N2O / 1.535 mm fuel, re-bisected). Dyno-held shot (settle 10 s, mean of 0.5 s):
+// and the kit custom_wet_plate_800_bigjet.json (3.81 mm N2O / 1.845 mm fuel, re-jetted from 1.535 mm for E85 on 2026-10-19). Dyno-held shot (settle 10 s, mean of 0.5 s):
 // MEAN GAIN OVER 3000-7000 rpm +596.1 kW = 799 hp (target 596.6 kW; jet bisection, same gate: 3.6 mm +530, 3.75 mm +577, 3.81 mm +596); wastegate at most 0.965 open (6000-7000 rpm), turbo at most 126500 rpm
 // (0.70 x the 180000 rpm cap), boost 1.71-1.78 bar gauge at the manifold (the stock engine's own 1.71-1.78 without the shot).
+// E85 re-jet (2026-10-19, knock calibration follow-up): the car burns E85, so the fuel jet is 1.845 mm (the gasoline 1.535 mm x sqrt(14.5/9.7836 x sqrt(747.5/787.025)));
+// re-measured dyno-held: lambda_c 0.830-0.832, kit fuel 46.96 g/s (= Cd*A*sqrt(2 rho dp) of E85), mean gain +595.5 kW = 799 hp (per point +611/+593/+565/+605 kW at 4000-7000 rpm), gate at most 0.970.
 // Peak shot crank torque 3153 N*m at 3000 rpm (clutch 3650). With the STOCK wastegate the same engine saturates the gate at 5000-7000 rpm,
 // boosts to 2.0-2.4 bar and hits the rotor cap (the previous N7 numbers, 3.6 mm jet: +602 kW mean): the stock configuration fails the
 // gate/cap/boost asserts below. RECORDED SABOTAGE (PS_SABOTAGE_STOCK_TURBO=1 on the dyno test, stock configuration, same 3.81 mm kit):
@@ -532,7 +535,7 @@ TEST_CASE("N7 car_hyper_n2o: parts and flow arithmetic and a coarse shot", "[n2o
     CHECK(a.kit->nitrous_jet_diameter_mm == 3.81);
     CHECK(a.kit->nitrous_jet_cd == 0.66);
     CHECK(a.kit->flow_model == drivetrain::NitrousFlowModel::Hem);
-    CHECK(a.kit->fuel_jet_diameter_mm == 1.535);
+    CHECK(a.kit->fuel_jet_diameter_mm == 1.845);
     CHECK(a.kit->fuel_jet_cd == 0.7);
     CHECK(a.kit->fuel_pressure_gauge_bar == 4.0);
     CHECK(a.kit->fuel_reference == drivetrain::NitrousFuelReference::Manifold);
@@ -595,6 +598,9 @@ TEST_CASE("N7 car_hyper_n2o: dyno-held shot at 3000-7000 rpm", "[n2o][vehicle][d
     const drivetrain::OxidizerTables tabs(a.bottle->oxidizer);
     const KitSpec spec = spec_from(*a.kit, *a.bottle);
     const real mdot = jet_flow(*a.kit, tabs, spec.bottle_abs_pa);
+    const drivetrain::FuelDesc e85 = io::load_fuel_json(data_path("fuels/e85.json"));
+    const real kit_fuel_mdot = a.kit->fuel_jet_cd * (3.14159265358979323846 / 4.0) * std::pow(a.kit->fuel_jet_diameter_mm * 1e-3, 2) *
+                               std::sqrt(2.0 * e85.density_kg_m3 * a.kit->fuel_pressure_gauge_bar * 1e5);
     constexpr real kRotorCapRpm = 1.5 * 120000.0; // the turbo model's rotor speed cap, 1.5 x the hardware reference speed
     real gain_sum = 0.0, peak_torque = 0.0, worst_gate = 0.0, worst_turbo = 0.0;
     for (real rpm : {3000.0, 4000.0, 5000.0, 6000.0, 7000.0}) {
@@ -622,8 +628,9 @@ TEST_CASE("N7 car_hyper_n2o: dyno-held shot at 3000-7000 rpm", "[n2o][vehicle][d
         CHECK(w.t_mix < 275.0);
         CHECK(w.mdot_n == Catch::Approx(mdot).epsilon(1e-12));
         CHECK(w.mdot_n * 1e3 == Catch::Approx(246.4).margin(0.5));
-        CHECK(w.mdot_kf * 1e3 > 29.5);
-        CHECK(w.mdot_kf * 1e3 < 34.0);
+        // Kit fuel = fuel jet orifice flow Cd*A*sqrt(2*rho*dp) of the car's own fuel (E85, 4 bar over the manifold): 46.96 g/s.
+        // (The old 29.5-34 g/s bound was the gasoline flow of the 1.535 mm jet; the E85 jet is 1.845 mm, see the kit's source.)
+        CHECK(w.mdot_kf == Catch::Approx(kit_fuel_mdot).epsilon(0.01));
         CHECK(w.brake_max - w.brake_min < 80.0);  // settled, not hunting
         CHECK(w.boost_bar >= b.boost_bar - 0.02); // the shot never LOWERS boost
         // No-spray reference of the engine (unchanged by the kit; the larger gate does not move it either).

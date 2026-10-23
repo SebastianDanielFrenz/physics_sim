@@ -137,6 +137,15 @@ add_executable(ps_unit_tests
   test_limit_policy.cpp
   test_gearbox_rating.cpp
   test_electric_drive.cpp
+  test_electric_traction_ceiling.cpp
+  test_electric_pins.cpp
+  test_powertrain_dyno.cpp
+  test_hybrid_shift.cpp
+  test_hybrid_ice_start_gear.cpp
+  test_brake_blend.cpp
+  test_b_mode.cpp
+  test_hybrid_power_split.cpp
+  test_brake_blend_gearbox.cpp
   test_automatic_gearbox_io.cpp
   test_cvt_gearbox_io.cpp
   test_limit_remedies.cpp
@@ -146,7 +155,10 @@ add_executable(ps_unit_tests
   test_forced_induction_conversions.cpp
   test_spark_schedule.cpp
   test_knock_limit.cpp
+  test_knock_all_engines_diag.cpp
   test_knock_calibration.cpp
+  test_knock_cal_fixtures.cpp
+  test_knock_cal_turbo.cpp
   test_gas_exchange.cpp
   test_wot_generation.cpp
   test_engine_installation_io.cpp

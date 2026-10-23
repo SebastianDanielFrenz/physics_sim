@@ -42,6 +42,8 @@
     "max_torque_nm": 25
   },
   "ecu": {
+    "ignition_strategy": "knock_limited",
+    "knock_margin_deg": 2.0,
     "lambda_target": {
       "rpm": [
         0,
@@ -402,7 +404,7 @@
   },
   "inertia_kgm2": 0.3,
   "breakaway_torque_nm": 75.0,
-  "fuel": "../../../../data/fuels/e5.json",
+  "fuel": "../../../../data/fuels/e85.json",
   "ignition": "spark",
   "idle_rpm": 950.0,
   "initial_state": "running",

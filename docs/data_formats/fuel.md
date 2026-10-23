@@ -8,12 +8,14 @@ component) are both there, not because a fuel is itself a drivetrain
 concept.
 
 A fuel file carries only bulk thermochemical/physical properties — lower
-heating value, stoichiometric air/fuel ratio, liquid density — not a
+heating value, stoichiometric air/fuel ratio, reference density — not a
 combustion model. Every numeric value must be traceable to a specific,
 readable source (publication, standard, table or problem, page/edition);
 see each shipped file's own `"source"` field for the exact citation used
 (PLAN.md section 8's "cite your source" convention, same as
 `data/tyres/*.json`/`data/vehicles/*.json`).
+
+`compressed_gas` supports the authored hydrogen descriptor in `data/fuels/hydrogen.json`: its 700 bar reference density is used for bookkeeping. Tank pressure, expansion, temperature and refuelling dynamics are not simulated.
 
 ## Fields
 
@@ -21,10 +23,10 @@ see each shipped file's own `"source"` field for the exact citation used
 |---|---|---|---|---|---|
 | `format` | string | required | — | must equal `"physics_sim.fuel/1"` | see README |
 | `name` | string | **required** | — | must be non-empty | fuel name, e.g. `"gasoline"`, `"diesel"` |
-| `phase` | string | **required** | — | must equal `"liquid"`, else `"phase \"<value>\" is not yet supported"` | phase of matter the fuel is modelled as — only `"liquid"` is implemented (a future `"gaseous"` phase, e.g. CNG/LPG/hydrogen, needs its own pressure/temperature-dependent density convention and is not modelled yet) |
+| `phase` | string | **required** | — | `"liquid"` or `"compressed_gas"`; other values throw an unsupported-phase error | Compressed gas uses an explicitly cited fixed reference storage density, not a pressure/temperature equation of state. |
 | `lhv_j_kg` | real (J/kg) | **required** | — | must be `> 0` and finite | lower heating value |
 | `afr_stoich` | real | **required** | — | must be `> 0` and finite | stoichiometric air/fuel mass ratio |
-| `density_kg_m3` | real (kg/m³) | **required** | — | must be `> 0` and finite | liquid density at the cited reference condition |
+| `density_kg_m3` | real (kg/m³) | **required** | — | must be `> 0` and finite | density at the cited reference condition; compressed gas uses the stated storage pressure/temperature reference |
 | `source` | string | **required** | — | must be non-empty | provenance note (README's "source" convention) — every numeric value's exact citation |
 
 Unlike `tyre.md`/`engine.md`'s mix of optional-with-defaults fields, every
@@ -210,9 +212,7 @@ up is a later commit (PHYS-033 P4 I7a C5d).
 
 ## Common mistakes
 
-- **Missing or non-`"liquid"` `phase`.** Throws `"fuel '<name>': phase
-  \"<value>\" is not yet supported (only \"liquid\" is implemented)"` —
-  there is no silent fallback to liquid.
+- **Missing or unsupported `phase`.** Only `"liquid"` and `"compressed_gas"` are accepted. Values such as `"gaseous"` still throw `"phase not yet supported"`; there is no implicit gas law or silent liquid fallback.
 - **`lhv_j_kg`/`afr_stoich`/`density_kg_m3` <= 0, non-finite, or omitted.**
   Each is a hard error naming the offending field and the value read; there
   is no compiled-in default for any of them (unlike most of `tyre.md`'s

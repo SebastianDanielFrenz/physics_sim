@@ -24,6 +24,7 @@
 #include "ps/drivetrain/brake_system_desc.h"
 #include "ps/drivetrain/energy_ledger.h"
 #include "ps/drivetrain/powertrain_desc.h"
+#include "ps/vehicle/traction_control.h"
 #include "ps/world/ambient.h"
 
 #include <cstdint>
@@ -39,7 +40,15 @@ namespace ps::drivetrain {
 // independent of ps::vehicle::ControlInputs/ManualTcu so this stays a plain
 // value type with no dependency on vehicle_instance.h or manual_tcu.h.
 struct ComponentSubstepCtx {
+    real electric_throttle = -1, electric_charge = -1; // hybrid supervisor overrides; -1 uses ordinary controls
     real electric_direction = 1.0; // actual selected gearbox direction, or the EV selector
+    // B mode / Electric mode inputs (VehicleInstance): the per-wheel contact-patch sensors of this substep (peripheral and
+    // ground speed, load, contact; wheel order), read only by the B-mode wheel-slip guard; null in a bare Powertrain.
+    // electric_mode_allowed false = the car's drive-modes part does not offer Electric, so channel value 4 maps to Normal.
+    const vehicle::TractionWheelState* traction_wheels = nullptr;
+    int traction_wheel_count = 0;
+    bool electric_mode_allowed = true;
+    bool throttle_is_command = false; // hybrid supervisor: `throttle` is already the ICE's final command (pedal curve and drive-mode bend were applied to the driver's pedal before the split)
     real h = 0.0;
     real throttle = 0.0;
     real brake = 0.0;
@@ -48,6 +57,9 @@ struct ComponentSubstepCtx {
     // VehicleInstance only while ABS or ESC runs on a car with the blocks. nullptr = every corner reads `brake`
     // (bit-identical to before). The handbrake share is never modulated. Never hashed.
     const real* wheel_brake = nullptr;
+    // ABS scale applied per wheel this substep (1 = not modulated), set with wheel_brake while ABS runs; nullptr without
+    // ABS. Read by the brake blending to withdraw the regeneration of a motor whose wheels ABS modulates.
+    const real* wheel_abs_scale = nullptr;
     // PHYS-033 P4 I7b C9: ambient atmospheric sample (ps/world/ambient.h),
     // from VehicleTickEnv::ambient - copied once per tick like the channel
     // inputs below. Never hashed (an environment input, not sim state).
@@ -516,6 +528,13 @@ public:
 
     DirectTorqueBrakes(std::vector<Row> rows, real static_factor) : rows_(std::move(rows)), static_factor_(static_factor) {}
 
+    // Brake blending: per-wheel service torque (N*m at the rim) the electric motors already supply this substep; the
+    // pads take only the rest. nullptr = no blending (the pads carry the whole request, as before).
+    void set_regen_reflected(const real* per_wheel) { regen_reflected_ = per_wheel; }
+    // B mode auto hold: a service-pedal-equivalent level (0..1) the pads keep on every corner whatever the driver's brake
+    // pedal says (max of the two); 0 = off, bit-identical. Not hashed here (the Powertrain hashes the hold state).
+    void set_hold_level(real level) { hold_level_ = level; }
+
     void pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Assembly& assembly) override;
     void post_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, const Assembly& assembly,
                      PowertrainEnergy& ledger) override;
@@ -523,6 +542,8 @@ public:
 private:
     std::vector<Row> rows_;
     real static_factor_;
+    const real* regen_reflected_ = nullptr;
+    real hold_level_ = 0.0;
 };
 
 } // namespace ps::drivetrain

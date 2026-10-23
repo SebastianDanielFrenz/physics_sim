@@ -25,6 +25,8 @@
   "throttle_actuator_tau_s": 0.05,
   "throttle_actuator_source": "[AS] assumed 50 ms first-order electronic throttle actuator (as the C11 test fixture)",
   "ecu": {
+    "ignition_strategy": "knock_limited",
+    "knock_margin_deg": 2.0,
     "lambda_target": {
       "source": "[D] Tier 1b: measured exhaust lambda per fired point, gridded (IDW k6, nearest outside the measured hull) by a25a_author.py; raw, protective-enrichment WOT points kept",
       "rpm": [600.0, 800.0, 1000.0, 1200.0, 1500.0, 1800.0, 2100.0, 2400.0, 2700.0, 3000.0, 3300.0, 3700.0, 4100.0, 4500.0, 4900.0, 5300.0, 5700.0, 6100.0, 6500.0, 6900.0],

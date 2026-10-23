@@ -56,6 +56,10 @@ struct AbsEscInputs {
     std::span<const TractionWheelSensor> wheels;
     std::span<const std::uint8_t> is_front; // 1 = front axle
     real imu_accel = 0, yaw_rate = 0;
+    // The simulation's own chassis velocity along the body x axis at the reference point (NaN = not provided). Used as v_ref
+    // when ground_truth is set (AbsReferenceSpeed::GroundTruth); the estimator below then does not run.
+    real ground_speed = std::numeric_limits<real>::quiet_NaN();
+    bool ground_truth = false;
     real brake = 0, handbrake = 0;
     real front_wheel_angle = 0; // mean front road-wheel angle, rad
     real wheelbase = 2.5;
@@ -73,6 +77,26 @@ struct AbsEscInputs {
     ps::math::sincos(w.steer_rad, sn, c);
     if (c < real(.5)) return std::numeric_limits<real>::quiet_NaN();
     return (w.peripheral_speed_m_s - yaw * (w.x_m * sn - w.y_m * c)) / c;
+}
+
+// The speed the braking reference is lifted to, in the direction `dir` of travel: the fastest wheel that no drive torque can
+// spin above the ground. A driven wheel still turns under power at brake onset (a part-throttle launch leaves it several
+// percent fast, 12 % at full throttle) and lifting the reference to it left v_ref 0.7-2.7 m/s above the true speed: ABS then
+// regulated against a slip the car never had, released the brakes as the speed fell and the stop took 1.5-4.5x as long. With
+// at least one undriven wheel only undriven wheels count; a car with every wheel driven has no such wheel and keeps the fastest.
+[[nodiscard]] inline real abs_lift_speed(std::span<const TractionWheelSensor> wheels, real yaw, real dir) {
+    real fastest = 0, fastest_undriven = 0;
+    bool any_undriven = false;
+    for (const TractionWheelSensor& w : wheels) {
+        const real v = abs_wheel_ground_speed(w, yaw);
+        if (!std::isfinite(v)) continue;
+        fastest = std::max(fastest, dir * v);
+        if (!w.driven) {
+            any_undriven = true;
+            fastest_undriven = std::max(fastest_undriven, dir * v);
+        }
+    }
+    return any_undriven ? fastest_undriven : fastest;
 }
 
 inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
@@ -106,7 +130,11 @@ inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
     bool braking = in.handbrake > real(.02) || in.brake > real(.02);
     if (!braking && have_free) vmin = vmin_free;
     else if (!braking) braking = true; // ESC brakes every wheel
-    if (have && std::isfinite(in.imu_accel)) {
+    if (in.ground_truth && std::isfinite(in.ground_speed)) {
+        // Ground truth (default): v_ref IS the chassis speed along body x. Nothing to integrate, lift or relax.
+        s.reference_speed_m_s = in.ground_speed;
+        s.initialized = true;
+    } else if (have && std::isfinite(in.imu_accel)) {
         if (!s.initialized) {
             s.reference_speed_m_s = braking ? vmax : vmin;
             s.initialized = true;
@@ -115,11 +143,7 @@ inline void step_abs_esc(AbsEscState& s, const AbsEscInputs& in) {
             const real dir = s.reference_speed_m_s >= 0 ? real(1) : real(-1);
             if (braking) {
                 // lifted to the wheel moving fastest in the reference's direction (a wheel turning the other way lifts nothing)
-                real fastest = 0;
-                for (std::size_t i = 0; i < n; ++i) {
-                    const real v = abs_wheel_ground_speed(in.wheels[i], in.yaw_rate);
-                    if (std::isfinite(v)) fastest = std::max(fastest, dir * v);
-                }
+                const real fastest = abs_lift_speed(in.wheels, in.yaw_rate, dir);
                 if (fastest > dir * s.reference_speed_m_s) s.reference_speed_m_s = dir * fastest;
                 // Every braked wheel fully released on the last substep and still slower than the reference: the
                 // integrated IMU has run away (it lacks the yaw-rate x lateral-velocity term in a slide), so the

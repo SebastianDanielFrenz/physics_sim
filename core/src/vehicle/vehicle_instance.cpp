@@ -483,6 +483,8 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             ai.wheels = traction_sensors_;
             ai.is_front = is_front_;
             ai.imu_accel = imu_accel;
+            ai.ground_truth = fit_abs_ && desc_.assist_unit->abs->reference_speed == AbsReferenceSpeed::GroundTruth;
+            ai.ground_speed = pose_s.orientation.inverse().rotate(twist_s.linear).x; // the shadow chassis' own velocity, body x
             ai.yaw_rate = yaw;
             ai.brake = controls.brake;
             ai.handbrake = controls.handbrake;
@@ -564,6 +566,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         ctx.brake = controls.brake;
         ctx.handbrake = controls.handbrake;
         if (assist_abs || assist_esc) ctx.wheel_brake = wheel_brake_.data(); // assists I5 part 2 / I6
+        if (assist_abs && abs_esc_state_.applied.size() == wheel_brake_.size()) ctx.wheel_abs_scale = abs_esc_state_.applied.data(); // brake blending: ABS withdraws regeneration
         ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9
         ctx.clutch_pedal = clutch_pedal;
         ctx.gear_request = gear_request;
@@ -585,6 +588,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             ctx.nitrous_arm_allowed = drive_params->nitrous_arm_allowed;
         }
         ctx.first_substep_of_tick = (s == 0);
+        // B mode wheel-slip guard: this substep's contact-patch sensors (the same ones traction control reads).
+        ctx.traction_wheels = traction_wheels_.data();
+        ctx.traction_wheel_count = static_cast<int>(traction_wheels_.size());
+        ctx.electric_mode_allowed = !desc_.drive_modes || (desc_.drive_modes->modes_bits & drive_mode_bit(DriveMode::Electric)) != 0;
         // PHYS-033 P4 I4 C3: points at this tick's already-copied component-
         // channel buffer (see the per-tick copy above) - rebuilt each
         // substep alongside the rest of ctx, but the buffer itself is only
@@ -723,6 +730,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     // PHYS-033 P4 I2 commit 5b (plan section 8): this tick's balance_error,
     // from the ledger deltas since begin_tick() above.
+    // Hybrid Electric mode ended by the supervisor (pack at low_soc): write the drive-mode channel back to the part's default
+    // (never Electric itself), like a drive-mode change queues its defaults - World::step applies it after the pipeline.
+    if (powertrain_.take_hybrid_electric_leave() && desc_.drive_modes && pending_write_count_ < pending_writes_.size()) {
+        const DriveMode back = desc_.drive_modes->default_mode == DriveMode::Electric ? DriveMode::Normal : desc_.drive_modes->default_mode;
+        pending_writes_[pending_write_count_++] = {control_indices_.assist_drive_mode, static_cast<real>(static_cast<std::uint8_t>(back))};
+    }
     powertrain_.end_tick();
 
     // PHYS-033 P4 I3 plan section 4.3/6.1.8/6.5.2/7.6 (commit 6 scope: "...
@@ -874,6 +887,21 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
         dl.clutch_slip = powertrain_.has_clutch() ? powertrain_.clutch_slip() : real(0.0);
         dl.clutch_torque = powertrain_.clutch_torque();
         snap.drive_power_w = powertrain_.transmission_input_power_w();
+        snap.hybrid_fitted=powertrain_.has_hybrid_control();snap.hybrid_charging=powertrain_.hybrid_charging();snap.hybrid_ice_requested=powertrain_.hybrid_ice_requested();
+        snap.hybrid_charge_target_soc=powertrain_.hybrid_target_soc();snap.hybrid_requested_power_w=powertrain_.hybrid_requested_power();snap.hybrid_available_power_w=powertrain_.hybrid_available_power();
+        if(snap.hybrid_fitted){
+            if(!powertrain_.has_park_lock())snap.transmission_kind=4;
+            snap.transmission_selector=static_cast<std::int8_t>(powertrain_.hybrid_selector());
+            snap.drive_power_w+=powertrain_.electric_traction_power();
+        }
+        snap.hybrid_electric_mode=powertrain_.hybrid_electric_mode();snap.hybrid_electric_leave_reason=static_cast<std::uint8_t>(powertrain_.hybrid_electric_leave_reason());
+        snap.b_mode_available=powertrain_.b_mode_available();snap.b_mode_active=powertrain_.b_mode_selected();
+        snap.b_regen_capacity_w=powertrain_.b_regen_capacity_w();snap.b_drive_capacity_w=powertrain_.b_drive_capacity_w();
+        snap.b_power_command_w=powertrain_.b_power_command_w();snap.b_zero_power_pedal=powertrain_.b_zero_power_pedal();
+        snap.b_slip_fraction=powertrain_.b_slip_fraction();snap.b_hold_level=powertrain_.b_hold_level();
+        snap.fuel_cell_fitted=powertrain_.has_fuel_cells();
+        snap.fuel_cell_hydrogen_kg=powertrain_.fuel_cell_hydrogen_kg();
+        snap.fuel_cell_power_w=powertrain_.fuel_cell_power_w();
         snap.electric_fitted=powertrain_.has_electric_motors();
         if(snap.electric_fitted) {
             if(!powertrain_.has_gearbox()) {
@@ -889,6 +917,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             if(!powertrain_.has_engine())snap.drive_power_w=snap.electric_power_w;
             snap.battery_soc=powertrain_.battery_soc();snap.battery_capacity_kwh=powertrain_.battery_capacity_kwh();
             snap.battery_power_w=powertrain_.battery_power_w();
+            // Brake blending (docs/electric_drive.md): what the motors take of the brake request, what the pads keep.
+            snap.regen_power_w=powertrain_.regen_power_w();
+            snap.regen_brake_torque_nm=powertrain_.regen_brake_torque_nm();
+            snap.pad_brake_torque_nm=powertrain_.pad_brake_torque_nm();
+            const real blend_sum=snap.regen_brake_torque_nm+snap.pad_brake_torque_nm;
+            if(blend_sum>real(0)){snap.regen_brake_share=snap.regen_brake_torque_nm/blend_sum;snap.pad_brake_share=snap.pad_brake_torque_nm/blend_sum;}
         }
 
         dl.gear = snap.gear;
@@ -1019,6 +1053,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         fold(desc_.epb->max_engage_speed_mps);fold(static_cast<std::uint8_t>(desc_.epb->epb_mode));
         if(desc_.drive_modes) {
             for(int m=0;m<kDriveModeCount;++m) {
+                if(m>=kDriveModeLegacyCount&&!(desc_.drive_modes->modes_bits&drive_mode_bit(static_cast<DriveMode>(m))))continue;
                 const auto& em=desc_.drive_modes->params[static_cast<std::size_t>(m)].epb_mode;
                 fold(static_cast<std::uint8_t>(em?static_cast<int>(*em)+1:0));
             }
@@ -1032,7 +1067,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         if(fit_abs_) {
             const AbsDesc& a=*desc_.assist_unit->abs;
             for(real v:{a.target_slip,a.min_speed_mps,a.slip_floor_mps,a.kp,a.ki_per_s,a.release_rate_per_s,a.apply_rate_per_s,a.reanchor_rate_per_s,a.reanchor_max_decel_mps2})fold(v);
-            fold(a.default_enabled);fold(a.rear_select_low);fold(a.reanchor_scale);fold(a.front_split_max);fold(a.front_split_rate_per_s);
+            fold(a.default_enabled);fold(static_cast<std::uint8_t>(a.reference_speed));fold(a.rear_select_low);fold(a.reanchor_scale);fold(a.front_split_max);fold(a.front_split_rate_per_s);
         }
         if(fit_esc_) {
             const EscDesc& e=*desc_.assist_unit->esc;
@@ -1045,6 +1080,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         }
         if(desc_.drive_modes) {
             for(int m=0;m<kDriveModeCount;++m) {
+                if(m>=kDriveModeLegacyCount&&!(desc_.drive_modes->modes_bits&drive_mode_bit(static_cast<DriveMode>(m))))continue;
                 const DriveModeParams& p=desc_.drive_modes->params[static_cast<std::size_t>(m)];
                 fold(static_cast<std::uint8_t>(p.abs_default?(*p.abs_default?2:1):0));
                 fold(static_cast<std::uint8_t>(p.esc_default?static_cast<int>(*p.esc_default)+1:0));

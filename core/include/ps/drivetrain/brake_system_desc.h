@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ps/drivetrain/b_mode.h"
 #include "ps/types.h"
 
 #include <string>
@@ -23,6 +24,35 @@ struct HandbrakeDesc {
 
 enum class BrakeSystemType { DirectTorque }; // I5 adds Hydraulic
 
+// Brake blending (regeneration first), docs/electric_drive.md "Brake blending". The pedal asks for the total service
+// brake torque (pedal x corner capacities, as always); the electric motors take it first, the pads only the rest.
+// Used only on a vehicle with electric_motor components (no effect otherwise). All numbers [AS].
+struct RegenBlendDesc {
+    bool enabled = true;           // false = the pre-blending behaviour (regen torque ~ pedal, in parallel with the pads)
+    // Charge acceptance of the pack: full below taper_start_soc, falling linearly to zero at full_soc (a pack at or
+    // above full_soc takes no regeneration; the pads carry the whole request).
+    real taper_start_soc = 0.90;
+    real full_soc = 0.98;
+    // Low-speed fade of the regeneration, on the mean rim speed of the wheels the motor drives: full above
+    // fade_start_speed_mps, zero at and below fade_end_speed_mps (the pads hold the car to a stop).
+    real fade_start_speed_mps = 2.5;
+    real fade_end_speed_mps = 0.8;
+    // Sensor-only ABS handshake: regeneration on a motor is withdrawn while ABS acts on any wheel it drives and for
+    // this long after the last intervention (so it does not chatter back into the lock).
+    real abs_hold_s = 0.3;
+    // Motors whose path to the hubs runs through a gearbox, the main clutch or a transfer case (docs/electric_drive.md
+    // "Motors behind a gearbox"): a path through the main clutch or a transfer-case front output counts as closed below
+    // this engagement; a motor upstream of the clutch is limited to this fraction of the clutch's kinetic capacity.
+    real path_min_engagement = 0.95;
+    real clutch_capacity_margin = 0.9;
+    // After a path (a gear, the clutch, a transfer output) closes again the regeneration ramps in over this time so the
+    // reflected torque does not step; 0 = no ramp. An opening path withdraws it at once (the pads cover it that substep).
+    real path_ramp_s = 0.05;
+    // The "B" one-pedal mode (docs/electric_drive.md "B mode"): the selector position above D of a car with traction motors
+    // on the wheel path. Needs blending enabled.
+    BModeDesc b_mode;
+};
+
 struct BrakeSystemDesc {
     BrakeSystemType type = BrakeSystemType::DirectTorque;
     std::vector<BrakeCornerDesc> corners;
@@ -30,6 +60,7 @@ struct BrakeSystemDesc {
     // direct_torque: 1.0 reproduces P3 (no static/kinetic distinction) -
     // cap_static = static_factor * cap_kinetic (>= 1).
     real static_factor = 1.0;
+    RegenBlendDesc regen_blend;
 };
 
 } // namespace ps::drivetrain

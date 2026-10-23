@@ -223,6 +223,7 @@ add_library(ps_core STATIC
   src/io/engine_parts.cpp
   src/io/electronics_io.cpp
   src/io/limit_policy_io.cpp
+  src/io/knock_model_io.cpp
 
   src/drivetrain/box_lcp.cpp
   src/drivetrain/network.cpp
@@ -236,6 +237,8 @@ add_library(ps_core STATIC
   src/drivetrain/engine_sound_state.cpp
   src/drivetrain/engine_rig.cpp
   src/drivetrain/engine_dyno.cpp
+  src/drivetrain/electric_envelope.cpp
+  src/drivetrain/powertrain_dyno.cpp
   src/drivetrain/limit_findings.cpp
   src/drivetrain/limit_remedies.cpp
   src/drivetrain/engine_rules.cpp

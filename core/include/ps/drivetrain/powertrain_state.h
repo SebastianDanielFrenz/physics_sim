@@ -143,10 +143,27 @@ inline constexpr std::size_t kMaxCompliantShafts = 8;
 // commit 6 wires VehicleInstance's real engine/clutch/gearbox/TCU state
 // into it.
 struct PowertrainSnapshot {
+    bool hybrid_fitted=false,hybrid_charging=false,hybrid_ice_requested=false;
+    real hybrid_charge_target_soc=0,hybrid_requested_power_w=0,hybrid_available_power_w=0;
+    // B mode / hybrid Electric mode (docs/electric_drive.md), last substep, never hashed. b_mode_available: the selector has the B
+    // position now (a pure EV; a hybrid in Eco or Electric mode); b_mode_active: B is selected. The B law (ps/drivetrain/b_mode.h):
+    // regen capacity R and drive capacity P_max (W at the shafts), the system power command, the pedal at which it is zero, the
+    // wheel-slip guard's smallest regeneration fraction (1 = no intervention), the pads' auto-hold level (0..1).
+    // hybrid_electric_leave_reason: 0 none, 1 pack at or below low_soc (Electric ended by the supervisor).
+    bool hybrid_electric_mode=false,b_mode_available=false,b_mode_active=false;
+    std::uint8_t hybrid_electric_leave_reason=0;
+    real b_regen_capacity_w=0,b_drive_capacity_w=0,b_power_command_w=0,b_zero_power_pedal=0,b_slip_fraction=1,b_hold_level=0;
+    bool fuel_cell_fitted=false;
+    real fuel_cell_hydrogen_kg=0,fuel_cell_power_w=0;
     bool electric_fitted=false, electric_ready=false;
     std::uint8_t electric_motor_count=0;
     real motor_rpm=0, motor_torque_nm=0, electric_power_w=0;
     real battery_soc=0, battery_capacity_kwh=0, battery_power_w=0;
+    // Brake blending (docs/electric_drive.md), last substep, never hashed. regen_power_w = power the brake regeneration
+    // pushes into the pack (W, battery side, >= 0); regen_brake_torque_nm / pad_brake_torque_nm = the service brake
+    // torque at the rims (sum over wheels) the motors / the pads supply; the shares are those over the total service
+    // request (regen + pad, 0 without a request or without blending).
+    real regen_power_w=0, regen_brake_torque_nm=0, pad_brake_torque_nm=0, regen_brake_share=0, pad_brake_share=0;
 
     std::int8_t gear = 0, gear_target = 0;
     ShiftPhase shift_phase = ShiftPhase::Idle;

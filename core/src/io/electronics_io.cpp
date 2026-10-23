@@ -184,7 +184,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
         return -1;
     };
     if (!j.contains("modes") || !j.at("modes").is_object() || j.at("modes").empty()) {
-        throw std::runtime_error(path + ": 'modes' is required and must be a non-empty object keyed by mode name (eco, normal, sport, racing)");
+        throw std::runtime_error(path + ": 'modes' is required and must be a non-empty object keyed by mode name (eco, normal, sport, racing, electric)");
     }
     const auto number = [&](const json& v, const std::string& ctx, const std::string& key) {
         if (!v.is_number()) throw std::runtime_error(ctx + ": '" + key + "' must be a number");
@@ -198,7 +198,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
     };
     for (auto it = j.at("modes").begin(); it != j.at("modes").end(); ++it) {
         const int mi = mode_index(it.key());
-        if (mi < 0) throw std::runtime_error(path + ": modes: unknown mode '" + it.key() + "' (expected eco, normal, sport or racing)");
+        if (mi < 0) throw std::runtime_error(path + ": modes: unknown mode '" + it.key() + "' (expected eco, normal, sport, racing or electric)");
         const std::string ctx = path + ": modes." + it.key();
         if (!it.value().is_object()) throw std::runtime_error(ctx + " must be an object");
         d.modes_bits = static_cast<std::uint8_t>(d.modes_bits | vehicle::drive_mode_bit(static_cast<vehicle::DriveMode>(mi)));
@@ -207,6 +207,7 @@ void read_drive_modes(const json& j, const std::string& path, ElectronicsPart& p
             const std::string& k = f.key();
             const json& v = f.value();
             if (k == "pedal_bend") {
+                if (mi == 4) throw std::runtime_error(ctx + ": 'pedal_bend' is not allowed in electric mode (its pedal is linear)");
                 if (!v.is_object()) throw std::runtime_error(ctx + ": 'pedal_bend' must be an object {x, y}");
                 vehicle::PedalBend b;
                 bool hx = false, hy = false;
@@ -277,6 +278,12 @@ void read_abs(const json& a, const std::string& path, vehicle::AssistUnitDesc& u
         if (k == "default_enabled") {
             if (!it.value().is_boolean()) throw std::runtime_error(ctx + ": 'default_enabled' must be a boolean");
             d.default_enabled = it.value().get<bool>();
+        } else if (k == "reference_speed") {
+            if (!it.value().is_string()) throw std::runtime_error(ctx + ": 'reference_speed' must be \"ground_truth\" or \"estimated\"");
+            const std::string v = it.value().get<std::string>();
+            if (v == "ground_truth") d.reference_speed = vehicle::AbsReferenceSpeed::GroundTruth;
+            else if (v == "estimated") d.reference_speed = vehicle::AbsReferenceSpeed::Estimated;
+            else throw std::runtime_error(ctx + ": 'reference_speed' must be \"ground_truth\" or \"estimated\", got \"" + v + "\"");
         } else if (k == "rear_select_low") {
             if (!it.value().is_boolean()) throw std::runtime_error(ctx + ": 'rear_select_low' must be a boolean");
             d.rear_select_low = it.value().get<bool>();

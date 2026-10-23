@@ -1,0 +1,9 @@
+{
+  "format": "physics_sim.fuel/1",
+  "name": "hydrogen",
+  "phase": "compressed_gas",
+  "lhv_j_kg": 120000000,
+  "afr_stoich": 34.3,
+  "density_kg_m3": 40,
+  "source": "LHV120MJ/kg and compressed H2 at700bar approximately4.8MJ/L (therefore40kg/m3): DOE2016 Hydrogen and Fuel Cell Overview p10, https://www.energy.gov/sites/prod/files/2016/03/f30/fcto_fc_expo_2016_satyapal.pdf . AFR34.3kg air/kg H2 from 2H2+O2->2H2O with authored dry-air oxygen mass fraction0.233. Density is a fixed storage reference, not a pressure/temperature equation of state."
+}

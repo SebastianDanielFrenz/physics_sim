@@ -1,0 +1,15 @@
+{
+"format":"physics_sim.epa_turbo_rows/1",
+"package":"ford_27_t2_hd1",
+"engine":"ford_27_ecoboost",
+"fuel":"epa_tier2_26864",
+"fuel_report":"NVFEL Fuel Analysis Report 26864",
+"source":"EPA NVFEL benchmark test-data package, workbook '4- 2015 Ford 2.7L EcoBoost V6 Engine Tier 2 Fuel HD1 - Test Data.xlsx' (package directory 2015-ford-2.7l-ecoboost-v6-engine-tier2-fuel-hd1-test-data-package-dated-11-27-19); public data, https://www.epa.gov/vehicle-and-fuel-emissions-testing/ (urls in out/epa_turbo_dl/urls.txt). Literal workbook readings rounded to 6 significant digits; nothing derived except the normalised cam signs, the two-bank lambda mean and the envelope / high_load flags.",
+"selection":"light load: map_kpa <= 60.0, 0.95 <= lambda <= 1.05, bmep_bar >= 0.3 (no-knock check: true knock limit >= measured spark)",
+"cam_convention":{"intake":"workbook CAD RET","exhaust":"workbook CAD RET","normalised":"intake_cam_adv_deg positive = advanced; exhaust_cam_ret_deg positive = retarded"},
+"bmep_max_bar":23.0862,
+"row_count_all":114,
+"row_count_selected":0,
+"rows":[
+
+]}

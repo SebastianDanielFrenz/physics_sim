@@ -26,7 +26,7 @@ channel except `assist.aero_control`, where it is `>= 0.5`.
 | traction control | the vehicle's `traction_control` block (= mode On), plus an optional assist unit's mode table | `assist.traction_control` | always, on every car | 0 when `fitted` is false; else the default drive mode's `traction_control_default` if the car has the `drive_modes` part and that mode has one; else the unit's `default_mode` (unit with a TC block); else the block's `enabled` | 0 Off, 1 On (the car's own block), 2 Relaxed, 3 Sport, 4 Drift; `requested = value > 0.5 ? clamp(round(value), 1, 4) : 0` |
 | launch control | EITHER the P8 two-step part (`kind: launch_control`) OR the assist unit's `launch_control` block (grades Sport/Racing); never both | `assist.launch_control` (the P8 part may rename it with its `channel` key) | only on a car with one of the two (a P8 part with `fitted: false` still registers it) | 0 for the P8 part; the unit block's `default_enabled` (shipped `false`); in both cases the default drive mode's `launch_control_default` when the car has the `drive_modes` part and that mode sets one | 0 / 1 |
 | rear-wing automation | the assist unit's `aero_control` block (grade Racing) | `assist.aero_control` | only when the unit has the block AND the car's `aero.surfaces` has the named surface | the block's `default_enabled` (shipped Racing unit: `true`) | 0 / 1, on at `>= 0.5` |
-| drive modes | the car-specific `drive_modes` electronics part | `assist.drive_mode` | only on a car with the part | the part's `default_mode` | 0 eco, 1 normal, 2 sport, 3 racing (rounded and clamped; a mode the part does not list maps to its `default_mode`) |
+| drive modes | the car-specific `drive_modes` electronics part | `assist.drive_mode` | only on a car with the part | the part's `default_mode` | 0 eco, 1 normal, 2 sport, 3 racing, 4 electric (hybrids only; rounded and clamped; a mode the part does not list maps to its `default_mode`) |
 | ABS (I5 part 2) | the assist unit's `abs` block ([below](#abs-esc)) | `assist.abs` | only when the unit has the block | the block's `default_enabled` (shipped `true`); the default drive mode's `abs_default` when the car has the `drive_modes` part and that mode sets one | 0 / 1, on at `>= 0.5` |
 | ESC (I6) | the assist unit's `esc` block ([below](#abs-esc)); needs the `abs` block | `assist.esc` | only when the unit has the block | the block's `default_mode` code; the default drive mode's `esc_default` when set | 0 off, 1 on, 2 sport; `< 0.5` or not finite = off, else `clamp(round(value), 1, 2)`; an unoffered mode maps to the nearest more-intervening one (sport -> on; off -> sport if offered, else on) |
 | electronic parking brake (Q3 / I8) | the `epb` electronics part ([below](#epb)) on the car's handbrake rows | `epb` (not an `assist.*` name) | only on a car with the part | 0 | level 0 / 1, on at `>= 0.5`; per drive mode `park_only` (refused at speed) or `handbrake` |
@@ -108,7 +108,7 @@ launch-limit parts. All three attach as a `controllers` entry of type `electroni
 
 A HUD shows hidden (fitted bit clear), fitted-off, fitted-on. Other fields: `traction_mode_requested` /
 `traction_mode_effective` / `traction_modes_available_bits` (bit *n* = code *n* is offered; 0 when TC is not fitted);
-`drive_mode_requested` / `drive_mode_effective` / `drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport, 3 racing; all 0
+`drive_mode_requested` / `drive_mode_effective` / `drive_modes_available_bits` (bit 0 eco, 1 normal, 2 sport, 3 racing, 4 electric; all 0
 without the part); `epb_state` (0 released, 1 latched, 2 handbrake) and `epb_refused` ([below](#epb)); `launch_phase` (0 Idle, 1 Armed, 2 Launch, 3 Handover), `launch_slip_target`, `launch_control_active`
 (true while the unit's LC is Armed/Launch, or the P8 two-step is latched); `aero_control_active`,
 `aero_control_target_deg`; `abs_active`, `esc_active`, `abs_reference_speed_m_s` (the controllers' own speed estimate,
@@ -439,16 +439,17 @@ desc and is not state.
 
 ## ABS and ESC (assists I5 part 2 / I6) {#abs-esc}
 
-Two blocks of the assist unit (`kind: assist_unit`, any grade). ABS and ESC remain sensor-based: they read
-the wheels' peripheral speeds (steer and yaw compensated), the gyro yaw rate, the IMU longitudinal
-acceleration, the brake / handbrake channels and the mean front road-wheel angle - never the ground speed, a tyre slip,
-a contact load or a surface. Both act only through the car's own service-brake rows (DirectTorqueBrakes): each corner's
+Two blocks of the assist unit (`kind: assist_unit`, any grade). ABS and ESC read the wheels' peripheral speeds
+(steer and yaw compensated), the gyro yaw rate, the brake / handbrake channels and the mean front road-wheel angle - never
+a tyre slip, a contact load or a surface. The braking REFERENCE SPEED is, by default, the simulation's own chassis
+velocity (`reference_speed: "ground_truth"`, below); the sensor-only estimator (integrated IMU acceleration) remains as
+`reference_speed: "estimated"`. Both act only through the car's own service-brake rows (DirectTorqueBrakes): each corner's
 row reads its own command instead of the brake channel. Descriptors `ps/vehicle/abs_esc_desc.h`, law
 `core/src/vehicle/abs_esc.h` (per substep, allocation-free). Shipped part: `data/electronics/assist_unit_abs_esc.json`
 (grade street, every number [AS]); no shipped car carries it.
 
 ```json
-"abs": { "default_enabled": true, "target_slip": 0.12, "min_speed_mps": 2.0, "slip_floor_mps": 3.0,
+"abs": { "default_enabled": true, "reference_speed": "ground_truth", "target_slip": 0.12, "min_speed_mps": 2.0, "slip_floor_mps": 3.0,
          "kp": 3.0, "ki_per_s": 30.0, "release_rate_per_s": 60.0, "apply_rate_per_s": 15.0,
          "reanchor_rate_per_s": 10.0, "reanchor_max_decel_mps2": 2.0, "reanchor_scale": 0.05, "rear_select_low": true,
          "front_split_max": 0.2, "front_split_rate_per_s": 0.4 },
@@ -464,9 +465,23 @@ absent); unknown keys, `target_slip` outside (0, 1), `reanchor_scale` outside [0
 `max_brake` above 1, `esc` without `abs`, `esc.modes` without `"on"` and a `mode_params` entry for an unlisted mode are
 rejected naming the field. A car needs a service brake corner with `max_torque_nm > 0`.
 
-**Reference speed** `v_ref` (shared, signed: forward > 0). Initialised from the wheels (braking: the wheel with the
+**Reference speed** `v_ref` (shared, signed: forward > 0), selected by `abs.reference_speed` (a string, default
+`"ground_truth"`; ESC shares it):
+- `"ground_truth"` (default, owner decision 2026-10-18): `v_ref` is set every substep to the chassis velocity along the
+  body x axis at the chassis reference point, read from the simulation's shadow chassis (`pose.inverse * linear velocity`,
+  `.x`) - the point the wheel sensors are projected to. Nothing is integrated or relaxed; `reanchor_*` have no effect. Why:
+  the estimator ran away. In the owner's 300 km/h drive (car_hyper_n2o, a weave with ~17 deg sideslip) the integrated IMU
+  lacks the yaw-rate x lateral-velocity term, `v_ref` ended ~9 m/s above the true speed with every wheel at the true speed,
+  ABS read a 12 %+ slip on a free-rolling wheel and held the brakes released for 4.5 s (the 2 m/s^2 pull-down bound of
+  `reanchor_max_decel_mps2` is what made the recovery take that long). The per-wheel speeds stay sensor values.
+- `"estimated"`: the sensor-only estimator below (kept for cars/tests that must not read the simulation's state).
+
+Estimated mode: initialised from the wheels (braking: the wheel with the
 largest |v|, else the smallest). Each substep it integrates the IMU acceleration, then:
-- braking (brake or handbrake > 0.02): lifted to the fastest wheel in the direction of travel; set to the fastest wheel
+- braking (brake or handbrake > 0.02): lifted to the fastest UNDRIVEN wheel in the direction of travel (`abs_lift_speed`; a car
+  with every wheel driven uses the fastest wheel). A driven wheel still spins under power at brake onset, 12 % fast after a
+  full-throttle launch, and lifting to it left `v_ref` 0.7-2.7 m/s above the true speed: ABS then regulated against a slip the
+  car never had and the stop took 1.5-4.5x as long (car_hyper kept 22.9 m/s after 8 s). Set to the fastest wheel
   if every wheel turns the other way faster (a car sliding backward after a spin); when every regulated wheel's
   applied scale is at or below `reanchor_scale` it relaxes toward the fastest wheel at `reanchor_rate_per_s` (the
   integrated IMU lacks the yaw-rate x lateral-velocity term and runs above the true speed in a slide). That pull-down
@@ -536,7 +551,7 @@ the mode numbers belong to one car's gearing and engine.
 
 | Key | Meaning / rejection |
 |---|---|
-| `modes` | required non-empty object keyed `eco` / `normal` / `sport` / `racing` (Q3 / I8); a mode is **offered** iff it is listed |
+| `modes` | required non-empty object keyed `eco` / `normal` / `sport` / `racing` (Q3 / I8) and `electric` (B-mode round, hybrids only); a mode is **offered** iff it is listed. `electric` needs a `hybrid_control` component (`"mode 'electric' needs a hybrid_control component"`): the hybrid supervisor runs it (ICE off and disconnected, traction motors only, linear pedal; [electric_drive.md](../electric_drive.md#hybrid-electric-mode)); give it `{}` - a `pedal_bend` in it is rejected (`"'pedal_bend' is not allowed in electric mode"`), its pedal is always linear. A car that does not offer it treats the value 4 as Normal; the snapshot bit of a hybrid that does not offer it is not set, so a car without the key hashes as before |
 | `default_mode` | required, one of the listed modes (the channel default and the target of an unoffered request) |
 | `pedal_bend` `{x, y}` | one optional point: `x` in `(0, 1)`, `y` in `[0, 1]` (`"pedal_bend x must be in (0, 1)"` / `"... y must be in [0, 1]"`, `"needs both 'x' and 'y'"`); piecewise linear through `(0,0)`, `(x,y)`, `(1,1)`. Absent = identity (bit-identical) |
 | `auto_shift` | any of the four `up_rpm_at_*`, `down_rpm_at_*` of the car's `auto_shift` (rpm `> 0`); a missing key keeps the car's. The merged values must keep `down < up` at zero and at full throttle (`"... downshift rpm must stay below the upshift rpm ..."`) |

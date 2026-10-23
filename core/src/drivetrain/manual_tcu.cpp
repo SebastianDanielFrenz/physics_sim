@@ -74,7 +74,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
                 const int step = pending_ > 0 ? 1 : -1;
                 desired_target = std::clamp(s.gearbox_current + step, s.min_gear, s.max_gear);
                 pending_ -= step;
-            } else if (s.assist_auto_shift && pending_ == 0 && s.gearbox_phase == Gearbox::Phase::Idle) {
+            } else if (s.assist_auto_shift && !s.defer_auto_shift && pending_ == 0 && s.gearbox_phase == Gearbox::Phase::Idle) {
                 // Gated on the runtime assist.auto_shift channel (plan
                 // section 7.1; AutoShiftDesc::enabled is only that channel's
                 // default, applied by World::create_vehicle). Gating on the
@@ -129,6 +129,7 @@ ManualTcu::Outputs ManualTcu::step(const Sensors& s, real h, bool first_substep_
     } else {
         time_in_gear_ += h;
     }
+    if (s.defer_auto_shift) time_in_gear_ = real(0.0);
 
     if (shift_req < desc_.auto_shift.kickdown_throttle) kickdown_spent_ = false;
 

@@ -916,3 +916,104 @@ TEST_CASE("N4 C8: kit-less and never-armed vehicles are bit-identical, N4 sound 
     INFO("first mismatching tick: " << first_mismatch);
     CHECK(first_mismatch == -1);
 }
+
+// ---------------------------------------------------------------------------
+// C9: the anti-cycle controls (owner report n2o-oscillation, vault): throttle_hysteresis,
+// max_rpm_fade_rpm and progressive.resume_within_s. Each defaults to 0 = the old behaviour.
+// Fixture controller: window 1500-6000 rpm, switch 0.95, ramp start 0.4 / delay 0 / ramp 1 s here.
+// ---------------------------------------------------------------------------
+TEST_CASE("N4 C9: throttle hysteresis, top-of-window taper and ramp hold", "[unit][n2o][drivetrain]") {
+    Parts parts = fixture_parts();
+    NitrousControllerDesc& c = parts.kit.controller;
+    c.progressive.start_fraction = 0.4;
+    c.progressive.delay_s = 0.0;
+    c.progressive.ramp_s = 1.0;
+
+    SECTION("defaults are the old behaviour: a one-substep close restarts the ramp, the window edge is hard") {
+        auto sys = make_system(parts);
+        for (int k = 0; k < 500; ++k) sys->step(go());
+        CHECK(sys->step(go()).flow_fraction == Catch::Approx(0.4 + 0.6 * 0.5).epsilon(1e-3));
+        NitrousInputs off = go();
+        off.throttle_command = 0.5;
+        sys->step(off);
+        CHECK(sys->step(go()).flow_fraction == Catch::Approx(0.4).epsilon(1e-12));
+        NitrousInputs edge = go();
+        edge.omega = rpm_to_omega(5999.0);
+        CHECK(sys->step(edge).flow_fraction > 0.0);
+        edge.omega = rpm_to_omega(6000.5);
+        CHECK_FALSE(sys->step(edge).solenoid_open);
+    }
+
+    SECTION("throttle_hysteresis: an open solenoid holds down to switch - hysteresis; opening still needs the switch") {
+        c.throttle_hysteresis = 0.15;
+        auto sys = make_system(parts);
+        NitrousInputs in = go();
+        in.throttle_command = 0.90; // below the switch: stays closed
+        CHECK_FALSE(sys->step(in).solenoid_open);
+        in.throttle_command = 0.96;
+        CHECK(sys->step(in).solenoid_open);
+        in.throttle_command = 0.81; // 0.95 - 0.15 = 0.80: still open
+        CHECK(sys->step(in).solenoid_open);
+        in.throttle_command = 0.79;
+        CHECK_FALSE(sys->step(in).solenoid_open);
+        in.throttle_command = 0.90; // closed again: needs the switch to reopen
+        CHECK_FALSE(sys->step(in).solenoid_open);
+    }
+
+    SECTION("max_rpm_fade_rpm: the flow tapers linearly to zero over the last band below max_rpm") {
+        c.max_rpm_fade_rpm = 400.0;
+        auto sys = make_system(parts);
+        NitrousInputs in = go();
+        in.omega = rpm_to_omega(5500.0); // 600 below the edge: outside the band
+        const real full = sys->step(in).flow_fraction;
+        in.omega = rpm_to_omega(5800.0); // 200 below the edge: half
+        CHECK(sys->step(in).flow_fraction == Catch::Approx(0.5 * full).epsilon(1e-3).margin(1e-3)); // the ramp advanced 2 ms
+        in.omega = rpm_to_omega(5999.9);
+        CHECK(sys->step(in).flow_fraction < 0.01);
+        in.omega = rpm_to_omega(6000.1);
+        CHECK(sys->step(in).flow_fraction == 0.0);
+    }
+
+    SECTION("resume_within_s: a closure shorter than that holds the ramp, a longer one restarts it") {
+        c.progressive.resume_within_s = 0.1;
+        auto sys = make_system(parts);
+        for (int k = 0; k < 500; ++k) sys->step(go()); // t_active 0.5 -> fraction 0.7
+        NitrousInputs off = go();
+        off.throttle_command = 0.5;
+        for (int k = 0; k < 50; ++k) sys->step(off); // 50 ms closed
+        const real held = sys->step(go()).flow_fraction;
+        CHECK(held == Catch::Approx(0.4 + 0.6 * 0.501).epsilon(2e-3));
+        for (int k = 0; k < 150; ++k) sys->step(off); // 150 ms closed > 0.1
+        CHECK(sys->step(go()).flow_fraction == Catch::Approx(0.4).epsilon(1e-12));
+    }
+
+    SECTION("loader: new keys parse, ranges are checked") {
+        nlohmann::json j = read_json(controller_path());
+        j["throttle_hysteresis"] = 0.2;
+        j["max_rpm_fade_rpm"] = 300;
+        j["progressive"]["resume_within_s"] = 0.25;
+        {
+            const TempJson t("n2o", j);
+            const NitrousControllerDesc d = io::load_nitrous_controller_json(t.str());
+            CHECK(d.throttle_hysteresis == 0.2);
+            CHECK(d.max_rpm_fade_rpm == 300.0);
+            CHECK(d.progressive.resume_within_s == 0.25);
+        }
+        {
+            const NitrousControllerDesc d = io::load_nitrous_controller_json(controller_path());
+            CHECK(d.throttle_hysteresis == 0.0);
+            CHECK(d.max_rpm_fade_rpm == 0.0);
+            CHECK(d.progressive.resume_within_s == 0.0);
+        }
+        auto rejects = [&](const char* key, nlohmann::json v, const char* message, bool progressive = false) {
+            nlohmann::json bad = read_json(controller_path());
+            if (progressive) bad["progressive"][key] = v; else bad[key] = v;
+            const TempJson t("n2o", bad);
+            CHECK_THROWS_WITH(io::load_nitrous_controller_json(t.str()), ContainsSubstring(message));
+        };
+        rejects("throttle_hysteresis", 0.96, "'throttle_hysteresis' must be in [0, min_throttle_command]");
+        rejects("throttle_hysteresis", -0.1, "'throttle_hysteresis' must be in [0, min_throttle_command]");
+        rejects("max_rpm_fade_rpm", 5000, "'max_rpm_fade_rpm' must be in [0, max_rpm - min_rpm]");
+        rejects("resume_within_s", -1.0, "'resume_within_s' must be >= 0", true);
+    }
+}

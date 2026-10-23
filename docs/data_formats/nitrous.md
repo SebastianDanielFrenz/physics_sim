@@ -111,7 +111,8 @@ from the engine's own fuel feed (the tank, if any). A torque-map engine still
   "arm_channel": "nitrous_arm", "arm_default": 0,
   "min_throttle_command": 0.95, "min_rpm": 3000, "max_rpm": 6200,
   "min_gear": 1, "max_gear": 99, "min_speed_mps": 0,
-  "progressive": { "start_fraction": 1.0, "delay_s": 0.0, "ramp_s": 0.0 },
+  "progressive": { "start_fraction": 1.0, "delay_s": 0.0, "ramp_s": 0.0, "resume_within_s": 0.0 },
+  "throttle_hysteresis": 0.0, "max_rpm_fade_rpm": 0.0,
   "spark_retard_deg": 4.0,
   "safety": { "min_bottle_gauge_bar": 55.0, "cut_on_fuel_starve": 1, "max_active_s": 15.0 },
   "purge": { "channel": "nitrous_purge", "jet_diameter_mm": 1.0, "cd": 0.66 },
@@ -132,11 +133,34 @@ previous substep had neither limiter nor DFCO active.
   channel an adapter toggle drives. It is declared (`Powertrain::declare_control_channels`)
   only for a vehicle with a kit.
 * `progressive`: with `t_active` the time the solenoid has been continuously open (it restarts from 0
-  whenever the solenoid closes, for any reason - disarm, lift, a safety cut), the flow fraction is
+  whenever the solenoid closes, for any reason - disarm, lift, a safety cut - unless `resume_within_s` holds it, below), the flow fraction is
   `start_fraction` while `t_active < delay_s`, then
   `clamp(start + (1 - start) * (t_active - delay_s) / ramp_s, 0, 1)`; `ramp_s` 0 jumps to 1 after the
   delay. The nitrous and the kit fuel flow are both multiplied by it (the two solenoids pulse together;
   the pulse-width solenoid is modelled by its mean flow). Without a `progressive` block the fraction is 1.
+* **Anti-cycle controls** (all optional, all default 0 = the behaviour described above; owner report
+  `n2o-oscillation`, vault: a ~0.9 Hz, 500-1000 rpm rev cycle in top gear and a ~10 Hz solenoid chatter on a hybrid car;
+  `custom_wet_800.json` and `custom_wet_2000.json` ship with the values in brackets):
+  * `throttle_hysteresis` (0.20): an OPEN solenoid stays open until the command falls below
+    `min_throttle_command - throttle_hysteresis`; opening still needs `min_throttle_command`. Range
+    `[0, min_throttle_command]`. A hybrid supervisor's engine command is a power share of a pedal the traction control has
+    trimmed, so with N2O wheelspin the share fell below the 0.95 switch (to 0.84-0.90), the solenoid closed, the slip fell,
+    the share rose and it reopened: a loop of about 10 Hz in 3rd-6th gear. The band has to be wider than that trim (TC
+    fractions 0.90-0.96 gave shares 0.75-0.89), and a real TC intervention (share under 0.75) still closes the spray.
+    (Since the hybrid shift fix the supervisor no longer folds the TC ceiling into its request: at full pedal the engine
+    command stays 1 and the ceiling acts on the engine downstream, so this chatter source is gone for a hybrid; the band stays
+    as protection for a command that does hover, e.g. at part pedal.)
+  * `max_rpm_fade_rpm` (300): the flow fraction is multiplied by `clamp((max_rpm - rpm) / max_rpm_fade_rpm, 0, 1)`, so the
+    spray tapers to zero over the last band below `max_rpm` instead of closing at the edge. The hard close was a bang-bang
+    limiter: in top gear (or any gear where the shot keeps the engine at the edge) the rpm reached `max_rpm`, the solenoid
+    shut for one tick, the ramp restarted at `start_fraction` (-60 % torque), the rpm fell 500-1000 rpm in about 0.2 s and
+    the 1 s ramp brought it back: a cycle of about 0.9 Hz. The taper has negative rpm feedback (more rpm, less shot), so
+    the rpm settles instead (7810-7860 rpm at 96 % flow in the test case). Range `[0, max_rpm - min_rpm]`; pick the band
+    below the engine's limiter margin (shipped: 300 rpm, limiter 8250, `max_rpm` 8100).
+  * `progressive.resume_within_s` (0.25): a closure shorter than this keeps `t_active` where it was (it is held, not
+    advanced) and the ramp resumes when the solenoid reopens; a longer closure resets it as before. A one-tick limiter,
+    window or traction cut therefore no longer restarts the ramp; a gearbox shift cut (about 0.3 s or more) still does.
+    `>= 0`. The held counter is hashed only while a closure is being held, so runs that never close shortly are unchanged.
 * `spark_retard_deg`: a constant, or `{"fraction": [...], "deg": [...]}` (strictly ascending
   fractions in `[0, 1]`, `deg >= 0`, piecewise linear, clamped at the ends) evaluated at the
   progressive flow fraction of the substep. A simulated engine applies it while N2O flows:
@@ -151,7 +175,8 @@ previous substep had neither limiter nor DFCO active.
 Rejections: missing `arm_channel`/`min_rpm`/`max_rpm`/`source`, `min_throttle_command`
 outside `[0, 1]`, `min_rpm < 0`, `max_rpm <= min_rpm`, `min_gear < 1`
 (`"'min_gear' must be >= 1 (neutral and reverse never spray)"`), `max_gear < min_gear`,
-`min_speed_mps < 0`, progressive `start_fraction` outside `(0, 1]` / negative delay or ramp,
+`min_speed_mps < 0`, progressive `start_fraction` outside `(0, 1]` / negative delay, ramp or `resume_within_s`,
+`throttle_hysteresis` outside `[0, min_throttle_command]`, `max_rpm_fade_rpm` outside `[0, max_rpm - min_rpm]`,
 negative or malformed retard (curve length mismatch, `fraction` outside `[0, 1]`),
 `max_active_s <= 0`, negative `min_bottle_gauge_bar`, a malformed `cut_on_fuel_starve`,
 purge `cd` outside `(0, 1]` / `jet_diameter_mm <= 0`.

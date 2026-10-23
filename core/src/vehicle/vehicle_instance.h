@@ -157,6 +157,7 @@ public:
     // PHYS-033 P4 I7a C6: backs World::fuel_tank_mass/set_fuel_tank_mass
     // (the set is applied at the next tick boundary - Powertrain::begin_tick).
     [[nodiscard]] bool has_fuel_tank() const { return powertrain_.has_fuel_tank(); }
+    [[nodiscard]] real fuel_cell_hydrogen_kg() const {return powertrain_.fuel_cell_hydrogen_kg();}
     [[nodiscard]] real fuel_tank_mass() const { return powertrain_.fuel_tank_mass(); }
     void request_fuel_tank_mass(real kg) { powertrain_.request_fuel_tank_mass(kg); }
     // N2O plan N1: backs World::n2o_bottle_mass/set_n2o_bottle_mass and the kit-only telemetry channels.
@@ -357,7 +358,7 @@ private:
     bool lc_default_state_ = false; // I7b: some offered drive mode sets launch_control_default
     // Assists I7c: channel writes a drive-mode change queues from inside step_tick (a vehicle job cannot touch World's
     // channel map). At most two (TC code, LC enable); cleared at the start of every step_tick; never hashed.
-    std::array<PendingChannelWrite, 4> pending_writes_{}; // TC, LC, ABS, ESC
+    std::array<PendingChannelWrite, 5> pending_writes_{}; // TC, LC, ABS, ESC, drive mode (hybrid Electric left)
     std::size_t pending_write_count_ = 0;
     // Assists I5: the assist unit's rear-wing automation. fit_aero_ = block present AND the car has the named surface;
     // the surface index and the launch-control hook are plain per-tick inputs, none of it hashed.

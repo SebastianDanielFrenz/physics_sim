@@ -3,7 +3,7 @@
 //
 // Model (every constant is in docs/data_formats/engine.md "Knock limit" with its source tag):
 //   * Douaud & Eyzat 1978 (SAE 780080), as reproduced in Heywood 1988 section 9.6.2 - NOT verified locally [AS]:
-//         tau [s] = 17.68e-3 * (ON/100)^3.402 * (p/1 atm)^-1.7 * exp(3800/T)
+//         tau [s] = 17.68e-3 * (ON/100)^3.402 * (p/1 atm)^-1.7 * exp(3800/T)  (literature; v3 calibrates n, B and A - knock_model.h)
 //     ON = the octane index OI = RON - K*S, S = RON - MON, K = 0.5 [AS] (= the anti-knock index (R+M)/2).
 //   * Livengood & Wu 1955: autoignition when integral_{IVC}^{t} dt/tau >= 1 [AS: cited by name, not verified locally].
 //   * End-gas temperature: isentropic compression of the unburned charge from the IVC state along the single-zone
@@ -28,23 +28,20 @@
 
 #include "ps/engine_cycle/cycle_point.h"
 #include "ps/engine_cycle/cycle_stepper.h"
+#include "ps/engine_cycle/knock_model.h"
 #include "ps/types.h"
 
 #include <cstdint>
 
 namespace ps::engine_cycle {
 
-inline constexpr real kDouaudEyzatA_s = 17.68e-3;    // [AS] Douaud & Eyzat 1978 via Heywood 1988 sec. 9.6.2
-inline constexpr real kDouaudEyzatOnExponent = 3.402; // [AS] same
-inline constexpr real kDouaudEyzatPExponent = 1.7;   // [AS] same (p in atm)
-inline constexpr real kDouaudEyzatB_K = 3800.0;      // [AS] same
-inline constexpr real kOctaneIndexK = 0.5;           // [AS] OI = RON - K*(RON - MON); 0.5 = (R+M)/2
 inline constexpr real kKnockEndBurnFraction = 0.90;  // [AS] end of the integral (Wiebe x_b)
 inline constexpr real kKnockReplayStepDeg = 0.5;     // [AS] replay step; KN-C convergence test vs 0.125 deg
 inline constexpr real kKnockSearchBelowMbtDeg = 40.0; // [D] the eta_spark table's most retarded node (map_generator)
 inline constexpr real kKnockSearchAboveMbtDeg = 10.0; // [D] the eta_spark table's most advanced node
 inline constexpr real kKnockSearchToleranceDeg = 0.05; // [AS] bisection stop
-// The knock model's own version, folded into the map cache key of opted-in engines only (bump on any change above).
+// kKnockModelVersion (knock_model.h) is folded into the map cache key of opted-in engines only: bump it on any change
+// to the replay above.
 // Fuel vapour in the end gas (iso-octane as the surrogate, like the burned-gas fit in engine_cycle_desc.h):
 // cp(298.15 K) = 188.9 J/(mol K), cp(900 K) = 425 J/(mol K) [AS, recalled NIST WebBook / TRC ideal-gas values, not
 // verified locally]; M = 114.23 g/mol; cv = cp - R; linear fit cv = a + b*T through the two points [D].
@@ -52,25 +49,14 @@ inline constexpr real kFuelVapourR_JkgK = 8314.462618 / 114.23;                 
 inline constexpr real kFuelVapourCvB_JkgK2 = ((425.0 - 188.9) / 0.11423) / (900.0 - 298.15);                     // [D]
 inline constexpr real kFuelVapourCvA_JkgK = 188.9 / 0.11423 - kFuelVapourR_JkgK - kFuelVapourCvB_JkgK2 * 298.15; // [D]
 
-// Engine garage P7b: the CALIBRATED set the generator uses (fitted on the Toyota A25A only - see docs/data_formats/engine.md
-// "Knock limit" and the P7b progress notes); the literature values above stay as the reference.
-//   kKnockCalPrefactorScale multiplies the Douaud-Eyzat pre-factor A (tau_cal = scale * tau_lit at equal B): fitted
-//     by least squares of theta_kl - measured spark over 17 A25A rows (7 WOT, 10 knock-limited lambda-1 rows) on a
-//     replay with the measured intake temperature, cam, lambda and trapped air: 1.2555 (rounded 1.26), rms 2.06 deg,
-//     mean +0.18 deg; +-10 % moves theta_kl by -+2.1 deg.
-//   kKnockCalActivationK replaces B: NOT fitted - a joint fit (scale, B) lands at B 3742 K with rms 2.065 vs 2.064 at
-//     3800 K (B is not identifiable from these rows), so B stays the literature value.
-inline constexpr real kKnockCalPrefactorScale = 1.26;          // [M] fitted on the Toyota A25A (P7b)
-inline constexpr real kKnockCalActivationK = kDouaudEyzatB_K; // [AS] literature (the fit cannot identify it)
-// v2 (P7b): the replay runs at the ECU's lambda target of the node (CycleModelDesc::knock.lambda_target) and uses the
-// calibrated constants.
-inline constexpr std::uint32_t kKnockModelVersion = 2;
+// The literature and calibrated Douaud-Eyzat constants and kKnockModelVersion live in ps/engine_cycle/knock_model.h.
 
-[[nodiscard]] real octane_index(real ron, real mon);
+[[nodiscard]] real octane_index(real ron, real mon, real k = kOctaneIndexK);
 
 // 1/tau [1/s] of the Douaud-Eyzat correlation; inv_on_term = (OI/100)^-3.402 / A (precomputed per fuel), b_k the
 // activation temperature.
-[[nodiscard]] real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k = kKnockCalActivationK);
+[[nodiscard]] real douaud_eyzat_rate(real inv_on_term, real p_pa, real t_k, real b_k = kKnockCalActivationK,
+                                     real p_exponent = kKnockCalPressureExponent);
 // (OI/100)^-3.402 / (prefactor_s): prefactor_s defaults to the calibrated pre-factor A * kKnockCalPrefactorScale; pass
 // kDouaudEyzatA_s for the literature correlation.
 [[nodiscard]] real douaud_eyzat_inv_on_term(real octane_index, real prefactor_s = kDouaudEyzatA_s * kKnockCalPrefactorScale);
@@ -86,6 +72,8 @@ struct KnockReplayInput {
     real step_deg = kKnockReplayStepDeg;
     real end_burn_fraction = kKnockEndBurnFraction;
     real activation_k = kKnockCalActivationK; // Douaud-Eyzat B [K]
+    real p_exponent = kKnockCalPressureExponent; // Douaud-Eyzat pressure exponent n in (p/1 atm)^-n
+    real dilution_exponent = kKnockCalDilutionExponent; // rate x (1 - x_res)^gamma, x_res = end-gas residual fraction
     bool stop_at_knock = true;           // false: integrate to the end (diagnostics)
     // Diagnostic levers (P7b budget; the generator leaves both at their defaults):
     real end_gas_t0_offset_k = 0.0;      // added to the end gas's IVC temperature (e.g. a DI charge-cooling estimate)
