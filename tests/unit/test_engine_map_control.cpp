@@ -400,7 +400,7 @@ TEST_CASE("Garage P1 T1: cancel stops generation, throws GenerationCancelled and
 // 2. Progress.
 // ---------------------------------------------------------------------------
 TEST_CASE("Garage P1 T2: progress is once per point, rising by 1, on the calling thread, at 1 and 10 workers",
-          "[drivetrain][cycle][io]") {
+          "[drivetrain][cycle][io][long]") {
     const CycleModelDesc d = fixture_desc();
     const FuelDesc fuel = fx::gasoline();
     for (MapQuality q : {MapQuality::Preview, MapQuality::Sketch, MapQuality::Full}) {

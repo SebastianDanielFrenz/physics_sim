@@ -204,7 +204,7 @@ TEST_CASE("TC owner repro: full-throttle pull through 180 km/h", "[.][tc_repro][
 //   Racing drive mode, full-throttle pull, 150-210 km/h band: peak 0.242 before (TC Sport closed the throttle plate,
 //   the boost stayed and the torque came down too slowly), 0.186 after.
 //   Sport drive mode (TC Relaxed, target 0.12), launch control: peak 0.346 before, 0.177 after.
-TEST_CASE("TC regression: car_hyper launch control and the 180 km/h pull keep the wheelspin bounded", "[assist][traction_control][launch_control]") {
+TEST_CASE("TC regression: car_hyper launch control and the 180 km/h pull keep the wheelspin bounded", "[assist][traction_control][launch_control][long]") {
     const auto wot = [](real, real) { return real(1); };
     const RunStats lc_racing = run("reg_lc_racing", 3, -1, 5, .3, wot, 0, 1.5);
     CHECK(lc_racing.slip_peak < 0.30);
