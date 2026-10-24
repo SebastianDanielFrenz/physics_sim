@@ -2190,7 +2190,7 @@ void Powertrain::refresh_hybrid_ice_power() {
 
 // B mode selector: the absolute gear_request code kGearRequestB (edge-triggered, so a game that keeps sending its selector
 // does not re-enter B after Electric mode ended it) and the shift counters (D -> up -> B, B -> down -> D). `allowed`: the
-// position exists right now (a pure EV; a hybrid in Electric mode). In Electric mode the counters are consumed here, so the
+// position exists right now (a pure EV; a hybrid in Eco or Electric mode). In these modes the counters are consumed here, so the
 // gearbox's controller never sees them (the supervisor keeps the gearbox where it wants it).
 void Powertrain::b_update_selector(const ComponentSubstepCtx& ctx_in, bool allowed) {
     if (!b_capable_ && !hybrid_) return;
@@ -2203,7 +2203,7 @@ void Powertrain::b_update_selector(const ComponentSubstepCtx& ctx_in, bool allow
     const real dd = ctx_in.shift_down_count - b_prev_down_;
     b_prev_up_ = ctx_in.shift_up_count;
     b_prev_down_ = ctx_in.shift_down_count;
-    if (hybrid_ && hybrid_electric_active_) {
+    if (hybrid_ && allowed) {
         swallow_up_ += du;
         swallow_down_ += dd;
     }
@@ -2504,7 +2504,8 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             else {mode=4;hybrid_electric_active_=true;hybrid_electric_reason_=0;}
         } else hybrid_electric_lost_=false;
         if(ctx_in.gear_request!=kGearRequestNone)hybrid_selector_=ctx_in.gear_request<0?-1:(ctx_in.gear_request>0?1:0);
-        b_update_selector(ctx_in,hybrid_electric_active_);
+        hybrid_b_allowed_=mode==0||hybrid_electric_active_;
+        b_update_selector(ctx_in,hybrid_b_allowed_);
         if(swallow_up_!=real(0)||swallow_down_!=real(0)){ctx.shift_up_count=ctx_in.shift_up_count-swallow_up_;ctx.shift_down_count=ctx_in.shift_down_count-swallow_down_;}
         real pack=0,motors=0,stack=0;
         for(const auto& b:batteries_)if(b->soc()>0)pack+=b->desc.max_discharge_w;
@@ -3339,7 +3340,7 @@ void Powertrain::request_engine_wear(const EngineWear& w) {
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
     for (RegenMap& m : regen_maps_) m.motor->reset_blend();
     blend_regen_nm_ = blend_pad_nm_ = real(0.0);
-    b_selected_ = b_hold_active_ = b_feed_on_ = false;
+    b_selected_ = b_hold_active_ = b_feed_on_ = hybrid_b_allowed_ = false;
     b_hold_level_ = real(0.0);
     std::fill(b_fraction_.begin(), b_fraction_.end(), real(1.0));
     b_counters_init_ = false;

@@ -11,7 +11,7 @@ Owner: Sebastian. Written 2026-09-21.
 - Decisions in section 3 are settled. Do not re-litigate them. If one turns out
   to be unworkable, stop, show the evidence, and ask Sebastian.
 - Ask before: installing software, adding a dependency not listed here,
-  changing a public interface of an already finished phase, pushing anywhere.
+  changing a public interface of an already finished phase.
 - Global rules from `~/.claude/CLAUDE.md` apply: search the knowledge vault
   before every phase (2–3 phrasings), and store findings / design decisions via
   the `store-knowledge` skill afterwards with `projects: physics_sim`. The
@@ -199,7 +199,7 @@ number of threads or on scheduling (D7 stays in force).
     the shared pool.
   - *Terrain.* Soil deformation requests are collected, sorted by (tile, source
     ID), then applied one job per tile. Mesh/collision rebuilds of dirty tiles
-    run as low-priority background jobs.
+    run on the background lane (terrain prefetch ring).
   - *Pipeline level.* Sim thread is decoupled from Godot (D3); telemetry and
     file IO go through a queue to an IO thread; asset/scenario loading is async.
 - Randomness (gusts, turbulence, surface noise) uses counter-based generators
@@ -238,6 +238,8 @@ auto-vectorisation and before reaching for intrinsics. Allowed: an optional
 OpenMP backend for `ps::jobs` in headless tools if a benchmark ever shows it
 ahead — the seam above makes that a contained experiment, not a rewrite.
 
+Current: `ps::jobs` has one pool plus a fixed background lane; background priority is opt-in (`JobSystemOptions::background_priority`). Results are independent of priority.
+
 *MPI.* It solves distributed memory across processes/machines. A real-time
 game tick on one shared-memory machine gains nothing from it: message-passing
 latency and process-level domain decomposition cost more than the whole 4 ms
@@ -253,32 +255,7 @@ resolution deformation/FEM solver (P10) needs more memory than one machine.
 
 ## 4. Repository layout
 
-```
-physics_sim/
-  CLAUDE.md               architecture map only
-  PLAN.md                 this file
-  CMakeLists.txt, CMakePresets.json
-  core/
-    include/ps/           public API (no Jolt, no Godot types)
-    src/
-      math/               vec, quat, mat, frames, simd wrappers
-      jobs/               work-stealing job system, parallel_for, Jolt bridge
-      world/              World, BodyId, Frame, stepping, snapshots
-      backend/            IRigidBackend + jolt/ implementation
-      force/              IForceElement pipeline (see section 5)
-      vehicle/            suspension, tyre, steering, brakes, assembly
-      drivetrain/         torque-node graph
-      aero/               atmosphere, wind, surfaces, bluff bodies, propulsion
-      machine/            hitches, linkages, hydraulics, PTO
-      terrain/            heightfield, soil model, deformation
-      io/                 json loading, .tir parser, telemetry
-  tools/ps_run/           headless scenario runner (CLI → CSV)
-  tools/sweep/            fan scenarios out over local processes (batch/validation)
-  tools/plots/            python plotting of telemetry (dev only)
-  tests/                  unit/, validation/, determinism/, bench/
-  data/                   vehicles/, tyres/, aircraft/, scenarios/
-  adapters/godot/         GDExtension (own CMake target) + demo Godot project
-```
+Repository layout: see CLAUDE.md.
 
 ## 5. Core architecture
 
@@ -398,7 +375,7 @@ the terrain tiles from the start:
 ## 7. Phases and acceptance tests
 
 Each phase ends with: tests green, `CLAUDE.md` map updated, vault tickets
-written, one git commit (or a few) with clear messages. No pushing.
+written, one git commit (or a few) with clear messages. Remote: GitHub (SebastianDanielFrenz/physics_sim). Branch + PR per change; current human instructions govern.
 CI has two levels (Sebastian, 2026-09-22): `tools/ci.ps1` is the fast
 everyday run (target < 5 min; long physics tests only in the release legs,
 short variants under the sanitizers). `tools/ci.ps1 -Full` runs everything in
@@ -688,6 +665,7 @@ inverter) attach to shafts and energy buses through common interfaces, so
 series and parallel hybrids fall out of composition rather than special
 cases. The component set and interfaces are designed before either power
 source is implemented.
+Status: partly implemented - battery EV / shaft motors done (#20, docs/electric_drive.md); hybrid and fuel cell open (#21 draft).
 
 Tanks (Sebastian, 2026-09-24): fluids and gases in tanks get no detailed
 simulation; every store is a fill state plus a pressure given as data.
@@ -706,21 +684,38 @@ I3 first drivable (torque-map engine, clutch, manual gearbox, open diff,
 minimal drag), then I4 diffs/PTO, I5 ABS/TC, I6 ESC, I7 mean-value engine and
 fuel tank, N2O, I8 map generator, I9 electric and hybrids, I10 automatics.
 
-Status 2026-09-26: I0-I4 done. I4 (C1-C16) closed by `tools\ci.ps1 -Full`
-(7 legs, all 11 cross-platform scenario hashes equal); the only failing test
-on every leg is the pre-existing Spec test 10.1 (vault PHYS-037, fails
-identically at be36545, root cause not diagnosed). Next: I7 (below).
+Status 2026-10-18 (PRs #1-#20 merged, #21 open):
 
-Status 2026-10-04: I7a-I7c done (graph-engine fuel map, fuel files and tank;
-mean-value runtime; cycle-model map generator with pipes, the generated A25A
-and the ps_audio live voice in Godot). I7d is partial: a lumped twin-turbo
-pair (quasi-steady compressor head, PID wastegate, intercooler effectiveness,
-live ambient) ships on car_hyper from the racing_game session. Missing for
-I7d: blow-off valve, surge flag and counters, intercooler pressure drop,
-anti-lag, the wastegate/BOV/anti-lag/surge sound-state fields and the turbo
-format docs - plan out/i7d_completion_plan.md (D1-D6). Then I7e (rotary
-R26B), N2O, and fuel mass feeding back into the chassis.
+| Item | Status |
+|---|---|
+| I0-I4 | done (I4 closed by `-Full`; Spec test 10.1 failing since be36545, vault PHYS-037) |
+| I5 TC | done (assists I1-I7) |
+| I5/I6 ABS/ESC | implemented (#7, sensor-only); no shipped car fits them; never observed working in a game test drive (owner 2026-10-18), diagnosis in progress |
+| I7a-I7c | done |
+| I7d D1-D5 | done; BOV r3 data shipped (09d150c); D6 anti-lag data: re-audit |
+| N2O | N0-N4, N7, N7b done; overshoot re-audit |
+| Knock C17b | done (P7/P7b; P7c/P7d gas exchange and WOT row) |
+| Fuel mass | done as contents_mass (#10) |
+| "I8" | reused for RACING mode + EPB (#6) |
+| I9 | battery EV / shaft motors done (#20, docs/electric_drive.md); hybrid / fuel cell open (#21 draft) |
+| I10 | AT/DCT done (#12); CVT + DCT launch control done (#13); DCT idle and mode profiles (#17); respawn fix (#18); M1/M2 re-audit |
+| G1 | limiter range done (#5); limiter roll-off done (#9) |
+| Q5 | envelope built off-thread (#4) |
+| Turbo stage maps | C++ port with runtime extension (#2); seam S0 / boost B0 merged |
+| Thermal | T1/T1b, water jacket (#14), cooling capacity and wear API (#15) |
+| Also merged | pedal P1, limit policy L0, transmission T0, D0 phantom re-cast, engine garage P1-P10, weather W1-W6/W3b, ps_audio A1-A11, ARM64 cross-check preset |
+| I7e (rotary R26B) | open |
 
+Open follow-ups:
+- Hybrid electronics and calibration (#21); pairs with racing_game powertrain-swap gate.
+- Damage physics: wear/limit sources for knock, piston speed, charge pipe, turbo overspeed and cooling (the API exists, #15).
+- Supercharger (needed for the Demon 170).
+- Series hybrid configurations (owner 2026-10-18, vault RACE-022): engine with no mechanical path to the wheels, crank generator as the source. Range extender (engine only recharges at low SOC); generator-style big-battery mode (battery first, generator adds power above the battery's discharge limit); generator-style small-battery mode (engine first, battery always recharged to 100 %, adds power above the generator's output). Mode by ECU tuning, default from the battery size; all thresholds config values.
+- Brake blending (owner 2026-10-18): on cars with electric motors the brake pedal asks for a total brake torque; the motors take it first (regeneration), the pads only the rest - when the battery is full or will not accept the charge power, above the motors' regen torque/power limit, at low speed and while ABS works on that axle. Today regen and pads act in parallel. Regen power, regen share and pad share in the snapshot (unhashed) for the dashboard; thresholds config values; ICE-only cars bit-identical.
+- Electric turbo (owner 2026-10-18): a motor-generator on the TurboPair rotor fed by the vehicle battery - spool assist (motor torque on the rotor, bounded by motor rating and battery power) and exhaust-energy harvest (generator mode charging the battery), both booked in the energy ledger and driven by the existing boost/wastegate control; variant: an electric compressor stage ahead of the turbo. Needs a battery (hybrid pack or a 48 V add-on pack).
+- Environment and traffic: weather W7, W8, W10, W11; per-wheel tyre profiles; P9 traffic budgets; R0 barrel roll (needs a replay); thermal re-measure; ARM64 / Steam Runtime sysroot.
+- Legacy proof gaps: remove the test_rev_limit_extremes workaround; rerun the long advisor; audit huge-thin-box phantom casts.
+- Re-audit: N2O overshoot (2.55 vs 1.8 bar target); N2O silent block in Normal mode; the P1b DFCO band; the A25A VE axis ending below ambient.
 
 Status 2026-10-09 (PHYS-068): preliminary offline compressor/turbine stage
 simulation implemented in tools/turbo_sim. Geometry-driven compressor Euler
@@ -911,8 +906,8 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
   reason. Data rule unchanged: cited manufacturer figures (peak power and
   torque on E85 and on pump fuel, bore/stroke) are the only validation
   targets, never inputs; everything else labelled assumed. Open for then:
-  the real car has an 8-speed torque-converter automatic, which the
-  project does not have yet (stand-in: sedan-style manual with the
+  the real car has an 8-speed torque-converter automatic; AT now exists (I10), the
+  project has a generic one (stand-in before it existed: sedan-style manual with the
   auto-shift assist, labelled), and drag radials, for which no citable
   tyre data is known yet.
 - Shift logic and the pedal (Sebastian, 2026-09-26): on a manual gearbox the
@@ -949,20 +944,7 @@ I7 scope and order (Sebastian, 2026-09-26, rulings on the I7 plan):
     the knock/autoignition model (I7c+), their first consumer.
   - Order: C5 fuel map, C5b assists on the torque request, C5c blend data,
     C5d fuels list plus crude model, then C6 tank, C7 cited data, C8 docs.
-  - Fuel mass moves the chassis (2026-09-27, later - not part of C6/I7a):
-    the tank's fuel mass will feed back into the chassis physics. C6 keeps
-    the chassis mass constant and only tracks m_tank; the follow-up adds
-    the coupling. Rulings (2026-09-27): the fuel is a POINT MASS at a tank
-    position given in the vehicle file (additive field); the chassis mass
-    properties are updated EVERY TICK by offsetting them with the fuel burnt
-    (or refuelled) that tick - an O(1) point-mass update (mass, CoM shift,
-    parallel-axis inertia term), no recomputation of the whole body. To keep
-    rounding from accumulating, the offset is applied as dry chassis + the
-    current m_tank point mass (same O(1) cost). Open for the plan: how the
-    backend changes a body's mass/inertia and CoM at a tick boundary without
-    allocating (Jolt's CoM comes from the shape), the shadow chassis and
-    static suspension loads picking it up, hash impact (vehicles with a tank
-    only). Sloshing is out of scope unless asked for.
+  - Fuel mass moves the chassis: implemented as contents_mass (#10): uniform density, CoM fixed; a point-mass CoM shift is not done.
 
 Pedal semantics (Sebastian, 2026-09-25), set per vehicle by its transmission
 type:
@@ -1004,6 +986,8 @@ pressure, torque requests to the power sources), never by writing simulation
 state directly. They run inside the deterministic core at a fixed, stated rate.
 This is also where the carried-over braking gap (the real ABS above) and the
 M1 launch wheelspin (traction control) get closed.
+Amendment: assists default to sensor-only laws. A physics-state variant is allowed where the game asks for it (TC, #19); it must be labelled.
+Status: TC done (assists I1-I7); ABS/ESC done (#7, sensor-only), fitted to no shipped car.
 
 Driver HUD (Sebastian, 2026-09-24, hand sketch): bottom right, a round
 tachometer (rpm x1000 around the arc, redline zone, needle) with the gear in a
@@ -1031,6 +1015,7 @@ the chassis COM with the auger folded vs. extended matches the hand-computed
 value within 1 %, and it arrives at the chassis through the arm joint; car top
 speed drops/rises correctly with CD·A; downforce raises skidpad g by the
 predicted amount; flat plate strip matches the coefficient table at all AoA.
+Status: implementation exists (8b04f0e, AERODYNAMICS.md); P5 acceptance tests not done.
 
 **P6 — Aircraft validation.** A Cessna-172-class aircraft from public data.
 Accept: trimmed cruise speed, stall speed (flaps up), best glide ratio and
@@ -1053,6 +1038,7 @@ tick shows a contact spike of about 159 m/s² when a body crosses a tile SEAM
 `TileManager::suppress_covered_samples`). Heights and normals match across
 seams to 1e-9, so this looks like a generic tiled-heightfield contact
 artefact; root-cause it here, where terrain gets its own phase.
+Status: the ghost-edge spike is addressed by the cross-tile edge weld. `tests/validation/test_terrain_seam_crossing.cpp:512` (car_sedan peak Fz) fails: re-audit (regression or expected bound change); not resolved.
 Accept: plate-sinkage test reproduces the Bekker
 curve; drawbar pull vs. slip curve has the right shape and peak against a
 published Wong example within 10 %; second pass in the same rut sinks less;
@@ -1070,78 +1056,28 @@ or asm routine. Check false sharing and the 5900X's two-CCX L3 split when
 placing per-worker data.
 Accept: both targets met; all earlier validation tests and thread-count
 determinism hashes unchanged; asm/intrinsic paths match scalar reference.
-Carried over from the terrain tiles (2026-09-23): the tile manager's slot
-bookkeeping (a hash map insert/erase when the visible tile set changes) is the
-one accepted exception to "no allocation inside jobs"; it is bounded per tick
-and the steady state while driving is allocation-free. Replace it with a fixed,
-preallocated slot table so the rule holds without exception.
-Carried over from P4 I1b (2026-09-24): with Jolt's allocator now hooked into
+Tile-slot bookkeeping: done - the slot table is a sorted reserved vector; the lazy suppression-cache insertion remains the documented exception.
+Open: carried over from P4 I1b (2026-09-24): with Jolt's allocator now hooked into
 the debug allocation check, Jolt itself allocates inside `PhysicsSystem::Update`
 (`QuadTree::UpdatePrepare`'s `new NodeID[mNumBodies]`, about 49 allocations per
 100 ticks with a vehicle). Our own code is checked separately and must stay at
 zero; Jolt's internal allocations need a fix here (e.g. an arena behind
 `JPH::Allocate`, or broadphase settings that avoid the rebuild).
-Carried over from P1.5a (Sebastian, 2026-09-22: accept 3× now, the rest here):
+Open: carried over from P1.5a (Sebastian, 2026-09-22: accept 3× now, the rest here):
 the articulation solver costs 13.5 µs per 960 Hz substep for 10 links (from
 40.6 µs; the goal was ≤ 8 µs). Known remaining levers: single-axis rank-1
 updates in ABA (U a single column, D a scalar), reusing kinematics across RK4
 stages, and the gravity forward-kinematics pass per stage. The substep rate
 stays at 960 Hz: at 480 Hz, a four-bar loop's energy drift is 0.85 % in 60 s
 (limit 0.5 %).
+Open: the 30/300-vehicle targets are not measured.
 
 Every phase P3–P8 additionally repeats the thread-count determinism test with
 its new components included.
 
-**P11 — Real-world terrain from open geodata (optional module, later).**
-Requested by Sebastian on 2026-09-22: drive around real places. A separate,
-optional library target `ps_geo` (CMake option `PS_BUILD_GEO`, default OFF).
-The core never depends on it. It plugs in through the same interfaces as the
-procedural terrain (see the seams below), so any front end gets it, not only
-Godot: the adapter only uploads render buffers the library builds.
-- Elevation: Copernicus DEM GLO-30 or SRTM/NASADEM (30 m) worldwide; where
-  available, national 1 m lidar terrain models (e.g. the German states' open
-  DGM1).
-- Ground type: ESA WorldCover (10 m) and OSM landuse/natural/surface tags,
-  mapped to our surface table (μ scale, rolling resistance) and later to soil
-  parameters (SoilGrids, for P8).
-- Structures: OSM roads (width from tags/lanes, surface from `surface=*`,
-  draped onto and flattened into the terrain), buildings as extruded
-  footprints (height from `height`/`building:levels`, or LoD1/LoD2 city models
-  where openly available), bridges, water, forests as colliders/areas.
-- Pipeline: an offline importer bakes a bounding box into our own tile format
-  (heights, surface ids, road and building geometry, attributions), so runtime
-  never parses OSM or GeoTIFF. Heavy geo libraries (GDAL/PROJ/osmium or Python
-  equivalents) stay in the importer; which ones gets decided and approved when
-  the phase starts.
-- Georeference: the scenario names an origin (lat, lon, height) and a world
-  shape:
-  - *flat* (default): projection (UTM or local transverse Mercator),
-    constant gravity along −z. Scale and curvature error at ±50 km are
-    quantified and documented. Cheapest, and enough for most driving.
-  - *curved* (optional, Sebastian 2026-09-22): the WGS84 ellipsoid. Positions
-    are true 3D geometry in a local frame tangent at the origin (ECEF offset,
-    double precision), so the ground falls away with distance (about 196 m at
-    50 km) and the horizon is real. Gravity at each body and link points along
-    the local ellipsoid normal (normal gravity per WGS84/Somigliana, with
-    height dependence). "Up", altitude and heading are local quantities
-    everywhere: atmosphere (P5) uses height above the ellipsoid, and
-    suspension and aero use the local up. Terrain tiles lie on the ellipsoid
-    (geodetic tile grid or cube-sphere quadtree, decided in the phase).
-    Earth rotation effects (Coriolis, centrifugal) are an optional extra
-    term, off by default, and the aircraft phase may use them.
-  Accept (curved): gravity direction matches the ellipsoid normal to 1e-9 rad
-  at sample points; a ball resting on the ground 50 km away stays at rest (no
-  sliding from a mismatched "down"); a straight road drapes over the curvature
-  without steps at tile borders; a flight or drive over 50 km shows the
-  expected geometric horizon drop; results are deterministic and equal across
-  platforms, as in P1.
-- Licences: ODbL (OSM) requires attribution and share-alike for derived
-  databases; Copernicus and WorldCover require attribution. The baked tiles
-  carry their source and licence, and the adapter can display attributions.
-Accept (defined in detail when scheduled): heights match the source DEM at
-sample points; roads are drivable without steps at road/terrain seams; building
-footprints match OSM within 0.1 m after projection; a 50 km drive streams
-without hitches as in M1.
+**P11 — Real-world terrain from open geodata.** Superseded by geo2map_engine through `g2m_ps_bridge` (D1, see the geo2map PLAN.md). Physics-side items that remain:
+- `IWorldShape` (curved WGS84 world shape; racing_game R8) and WGS84 frames: local frame tangent at the origin, gravity along the ellipsoid normal.
+Accept (curved): gravity direction matches the ellipsoid normal to 1e-9 rad at sample points; a ball resting on the ground 50 km away stays at rest; a flight or drive over 50 km shows the expected horizon drop; results are deterministic and equal across platforms, as in P1.
 
 **P10 — Deformation (future, not scheduled).** Write a design proposal only
 when Sebastian asks: candidate approaches (node-beam, XPBD, corotational FEM,
