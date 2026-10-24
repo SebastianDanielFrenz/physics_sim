@@ -4063,10 +4063,10 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     m.crank_assist=cj.value("crank_assist",false);
                     p.components.push_back({id,m});
                 } else if(type=="hybrid_control") {
-                    electric_keys(cj,{"id","type","requested_power_w","low_soc","charge_target_soc","charge_rpm","generator_fraction","stop_delay_s","crank_timeout_s","connect_timeout_s"},ctx);
+                    electric_keys(cj,{"id","type","requested_power_w","low_soc","charge_target_soc","charge_rpm","charge_power_w","charge_optimize_efficiency","generator_fraction","stop_delay_s","crank_timeout_s","connect_timeout_s"},ctx);
                     ps::drivetrain::HybridControlDesc h;
                     h.requested_power_derived=!cj.contains("requested_power_w");h.requested_power_w=cj.value("requested_power_w",h.requested_power_w);h.low_soc=cj.value("low_soc",h.low_soc);h.charge_target_soc=cj.value("charge_target_soc",h.charge_target_soc);
-                    h.charge_rpm=cj.value("charge_rpm",h.charge_rpm);h.generator_fraction=cj.value("generator_fraction",h.generator_fraction);
+                    h.charge_power_w=cj.value("charge_power_w",h.charge_power_w);h.charge_optimize_efficiency=cj.value("charge_optimize_efficiency",h.charge_optimize_efficiency);h.charge_rpm=cj.value("charge_rpm",h.charge_rpm);h.generator_fraction=cj.value("generator_fraction",h.generator_fraction);
                     h.stop_delay_s=cj.value("stop_delay_s",h.stop_delay_s);h.crank_timeout_s=cj.value("crank_timeout_s",h.crank_timeout_s);
                     h.connect_timeout_s=cj.value("connect_timeout_s",h.connect_timeout_s);
                     if(!(h.connect_timeout_s>=0)||!std::isfinite(h.connect_timeout_s))throw std::runtime_error(ctx+": hybrid_control connect_timeout_s must be >= 0");

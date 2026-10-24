@@ -224,7 +224,7 @@ TEST_CASE("BM4: coasting down in B stops the car with the auto hold and charges 
         w.step();
         const real v = r.speed();
         speeds.push_back(v);
-        if (kTrace && k % 12 == 0 && v < 8) std::printf("  t %.2f v %.2f hold %.2f regen_share %.2f pad_share %.2f\n", (k + 1) / 240.0, v, r.pt().b_hold_level, r.pt().regen_brake_share, r.pt().pad_brake_share);
+        if constexpr (kTrace) if (k % 12 == 0 && v < 8) std::printf("  t %.2f v %.2f hold %.2f regen_share %.2f pad_share %.2f\n", (k + 1) / 240.0, v, r.pt().b_hold_level, r.pt().regen_brake_share, r.pt().pad_brake_share);
         if (k > 3) max_balance = std::max(max_balance, std::abs(w.powertrain_energy(r.rig.vehicle).balance_error));
         if (k >= 36 && speeds[k - 12] > 3.0) max_rise = std::max(max_rise, v - speeds[k - 12]); // over 50 ms: no chassis jitter
         if (v_fade_t < 0 && v < 2.5) { v_fade_t = (k + 1) / 240.0; x_fade = r.x() - x0; }
