@@ -5,11 +5,12 @@
 // its printed precision (half a unit of the last printed digit, plus the one
 // unit FAO's own rounding of chained inputs costs, noted per line).
 //
-// Recorded sabotage (F1a, 2026-10-31): the aerodynamic term's wind coefficient
-// 0.34 changed to 0.40 in fao56_et0 -> "1 + 0.34 u2", the denominator ratios and
-// ET0 of both examples fail; the Rnl clear-sky ratio 1.35 changed to 1.30 ->
-// Rnl and ET0 of both fail; both reverted.
-
+// Recorded sabotages (F1a, 2026-10-31), each made in core/src/field/et0.cpp,
+// the test run, then reverted:
+//  - the aerodynamic wind coefficient 0.34 changed to 0.40 in
+//    (1 + 0.34 u2): both worked examples failed;
+//  - the Rnl clear-sky factor (1.35 Rs/Rso - 0.35) changed to
+//    (1.30 Rs/Rso - 0.30): both worked examples failed.
 #include "ps/field/et0.h"
 
 #include <catch2/catch_test_macros.hpp>

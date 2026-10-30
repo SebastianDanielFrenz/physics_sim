@@ -2,15 +2,16 @@
 // (ps/field/weather_record.h): a pure function of (climate, seed, day), cached,
 // aggregated consistently with ps_environment's WeatherTimeline.
 //
-// Recorded sabotages (F1a, 2026-10-31):
-//  - W1: rain/snow accumulators made `static` in DailyWeatherSource::compute
-//    (state leaking from one day to the next) -> "order independence" fails.
-//  - W2: the last precipitation interval of the day dropped -> "precipitation
-//    matches the timeline integral" fails.
-//  - W3: wind_speed_2m replaced by the 10 m value in the record -> "ET0 is the
-//    FAO-56 function of the record's own fields" fails.
-// All three reverted.
-
+// Recorded sabotages (F1a, 2026-10-31), each made in core/src/field/weather_record.cpp,
+// the test run, then reverted:
+//  - W-a: the rain/snow accumulators of compute() made `static` (state leaking
+//    from one day to the next): W1 (order independence), W2 (timeline integral)
+//    and W4 (statistics) failed;
+//  - W-b: the last of the 48 intervals of the day dropped: W2 failed;
+//  - W-c: ET0 computed with a fixed 2 m/s wind instead of the record's own:
+//    W3 failed;
+//  - W-d: Rs scaled by 1.3: W4 (30-year statistics) failed;
+//  - W-e: the pre-epoch check removed: W6 failed.
 #include "field_test_support.h"
 
 #include "ps/environment/weather.h"

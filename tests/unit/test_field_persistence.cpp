@@ -1,27 +1,23 @@
 // tests/unit/test_field_persistence.cpp - lazy stepping, checkpoint/restore,
 // thread-partitioned stepping, and the allocation-free daily step.
 //
-// Recorded sabotages (F1a, 2026-10-31), made in core/src/field/field.cpp, the
-// test run, then reverted:
-//  - P-a: advance_to skipping the last missed day (`< day - 1`): the jump
-//         tests failed (last_day and hash differ).
-//  - P-b: restore() keeping the current t_sen vector: "checkpoint restore is
-//         bit exact" failed (hash after the replay differs).
+// Recorded sabotages (F1a, 2026-10-31), each made in core/src/field/field.cpp,
+// the test run, then reverted:
+//  - P-a: advance_to stopping one day short: P1 failed;
+//  - P-b: restore() keeping the current biomass vector: P2 failed (the first
+//         attempt, keeping t_sen, did not fail: t_sen is zero at both
+//         checkpoint times, so the test could not see it);
 //  - P-c: step_cell reading its right neighbour's depletion (a cross-cell
-//         dependence): "cells in disjoint ranges" failed at 3 and 10 threads
-//         (hash differs from the sequential field); 1 thread still passed.
-//  - P-d: a std::vector<real> temporary inside step_cell: "the daily step
-//         allocates nothing" failed (count = cells x days).
-//  - P-e: DailyWeatherSource::record computed the block's neighbour day when
-//         asked out of order (a stateful cursor not reset): the order
-//         independence tests of test_field_weather_record failed - kept here
-//         because advance_to relies on it.
+//         dependence): P3 failed (the threaded runs differ from the
+//         sequential one; with one thread it cannot);
+//  - P-d: a heap allocation (new[] / delete[]) inside step_cell: P4 failed.
 
 #include "field_test_support.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <barrier>
 #include <cmath>
 #include <cstdlib>
 #include <new>
@@ -178,17 +174,34 @@ TEST_CASE("P3 cells in disjoint ranges can step on several threads", "[field][pe
     for (int threads : {1, 2, 3, 10}) {
         Field f(cfg);
         const int n = f.cell_count();
+        // Persistent workers released once per day by a barrier; the main thread applies the operations and
+        // closes the day (the same split a game loop would use).
+        std::barrier start(threads + 1), done(threads + 1);
+        const DailyWeather* today = nullptr;
+        bool stop = false;
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t) {
+            const int begin = n * t / threads, end = n * (t + 1) / threads;
+            pool.emplace_back([&, begin, end] {
+                for (;;) {
+                    start.arrive_and_wait();
+                    if (stop) return;
+                    f.step_cells(begin, end, *today);
+                    done.arrive_and_wait();
+                }
+            });
+        }
         for (std::int64_t d = 0; d <= 600; ++d) {
             const DailyWeather& w = src.record(d);
             apply_ops(f, w);
-            std::vector<std::thread> pool;
-            for (int t = 0; t < threads; ++t) {
-                const int begin = n * t / threads, end = n * (t + 1) / threads;
-                pool.emplace_back([&f, begin, end, &w] { f.step_cells(begin, end, w); });
-            }
-            for (std::thread& th : pool) th.join();
+            today = &w;
+            start.arrive_and_wait();
+            done.arrive_and_wait();
             f.finish_day(d);
         }
+        stop = true;
+        start.arrive_and_wait();
+        for (std::thread& th : pool) th.join();
         INFO(threads << " threads");
         CHECK(f.last_day() == 600);
         CHECK(f.fold_hash(1469598103934665603ull) == want);

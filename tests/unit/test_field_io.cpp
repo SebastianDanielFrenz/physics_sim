@@ -1,18 +1,13 @@
 // tests/unit/test_field_io.cpp - the soil/crop loaders (physics_sim.soil/1,
 // physics_sim.crop/1), the field scenario loader and the headless scenario run.
 //
-// Recorded sabotages (F1a, 2026-10-31), made in core/src/field/io/*.cpp, the
-// test run, then reverted:
-//  - I-a: require_tags() made a no-op: the three "no source tag" cases failed
-//         (a file without or with an untagged source loaded).
-//  - I-b: has_tag() accepting any non-empty string: the "assumed" (no tag)
-//         case failed.
-//  - I-c: ObjectReader::finish() skipped for the soil water block: "unknown
-//         key" failed.
-//  - I-d: the scenario's "doy" range check removed: the doy case failed.
-//  - I-e: run_field_scenario applying harvest rules after the step instead of
-//         before it: the harvest-count/day checks failed.
-
+// Recorded sabotages (F1a, 2026-10-31), each made in core/src/field/io/*.cpp,
+// the test run, then reverted:
+//  - I-a: require_tags() made a no-op: I2 and I5 failed (a file without a
+//         source tag, or with a null one, loaded);
+//  - I-b: has_tag() accepting any non-empty string: I2 failed;
+//  - I-d: the scenario's doy range check removed: I6 failed;
+//  - I-e: operations applied on the wrong day of year (doy + 1): I7 failed.
 #include "field_test_support.h"
 
 #include "ps/field/field_scenario.h"

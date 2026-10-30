@@ -1,30 +1,25 @@
-﻿// tests/unit/test_field_crop.cpp - the AquaCrop-style winter wheat of
+// tests/unit/test_field_crop.cpp - the AquaCrop-style winter wheat of
 // ps::field::Field: phenology, vernalisation, canopy, biomass, harvest index,
 // frost, ripeness, persistence of an unharvested crop, and the two outside
 // references (FAO-33 yield response, German statistics).
 //
-// Recorded sabotages (F1a, 2026-10-31), made in core/src/field/field.cpp, the
-// test run, then reverted:
-//  - C-a: GDD computed from the unclamped Tmax/Tmin: "phenology at a constant
-//         temperature" failed (the stage days moved).
-//  - C-b: vernalisation response always 1 (rate independent of temperature):
-//         "vernalisation rate" failed at -1.3, 15.7 and 10 C.
-//  - C-c: dev = gdd (vernalisation factor dropped): "vernalisation slows
-//         development" failed.
-//  - C-d: canopy phase two used cc * exp(g) instead of the CCx - (CCx - CC) e^-g law:
-//         "canopy cover follows" failed.
-//  - C-e: senescence exponent without the 1/peak: failed in the same test.
-//  - C-f: biomass summed with Tr instead of Tr/ET0: the et0-invariance check failed.
-//  - C-g: stress factors multiplied (product) instead of min(): "stress factors
-//         combine as a minimum" failed (0.25 vs 0.5).
-//  - C-h: frost kill ignoring the snow shield: "snow cover shields" failed.
-//  - C-i: shedding applied from the first day after maturity: "grain sheds" failed.
-//  - C-j: the model reads the day of year (growth multiplied by a season factor):
-//         "nothing is a function of the calendar" failed.
-//  - C-k: Ks_sto forced to 1: the FAO-33 test failed (relative yield 1.0 for a
-//         drought season).
-//  - C-l: WP* doubled: the German-statistics test failed (mean yield 1.6x).
-
+// Recorded sabotages (F1a, 2026-10-31), each made in core/src/field/field.cpp,
+// the test run, then reverted (failing cases in brackets):
+//  - C-a: GDD from the unclamped Tmax/Tmin [C1, C7];
+//  - C-b: vernalisation response always 1 [C2];
+//  - C-c: vernalisation factor dropped from the development rate [C2, C10, C12];
+//  - C-d: canopy phase two replaced by exponential growth [C3];
+//  - C-e: senescence exponent without the 1/peak [C3];
+//  - C-f: biomass with Tr instead of Tr/ET0 [C4, C11];
+//  - C-g: stress factors multiplied instead of min() [C5];
+//  - C-h: frost kill ignoring the snow shield [C7];
+//  - C-i: shedding from the first day after maturity [C8, C9, C4];
+//  - C-j: biomass multiplied by (1 + 0.001 doy), i.e. the model reads the date
+//         [C6; C4 and C11 fail as well];
+//  - C-k: Ks_sto forced to 1 (no water stress on transpiration or pollination) [C10];
+//  - C-l: WP* doubled [C4, C11].
+// C10 checks the response against FAO-33 and the crop file's hi_water_stress_k
+// is FITTED to it (see that file); C10 therefore guards the calibration.
 #include "field_test_support.h"
 
 #include <catch2/catch_test_macros.hpp>

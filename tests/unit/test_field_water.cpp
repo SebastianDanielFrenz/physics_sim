@@ -3,27 +3,28 @@
 // drainage, root deepening) against closed forms and conservation.
 //
 // Recorded sabotages (F1a, 2026-10-31), each made in core/src/field/field.cpp,
-// the test run, then reverted:
-//  - A1: Kr without the REW stage (Kr = (TEW - De)/(TEW - REW) from De = 0):
-//        "bare soil evaporation follows FAO-56 eq 71-77" failed (day 1 evaporation 3.4 instead of 6.0 mm).
-//  - A2: SCS retention S = 25.4 (1000/CN - 10) written with 1000 -> 100: both
-//        runoff tests failed (Q off by an order of magnitude).
-//  - A3: the CN wetness interpolation always returned CN_II: the dry/wet
-//        runoff cases failed, the CN_II case still passed.
-//  - A4: drainage out of the root zone dropped instead of filling the layer
-//        below (d_sub not reduced): "heavy rain fills the profile" and
-//        the water balance closure failed.
-//  - A5: set_root_depth moved the strip's water with the wrong weight
-//        ((z_new - z_old) / depth instead of / (depth - z_old)): "root
-//        deepening conserves water" failed (fractions differ) and so did the
-//        30-year closure.
-//  - A6: Ks without the (1 - p) divisor in the denominator: "Ks follows
-//        FAO-56 eq 84" failed.
-//  - A7: snowmelt not limited by the store (melt = factor * degrees): the
-//        snow test failed (swe went negative) and the closure test failed.
-//  - A8: the evaporation cap dropped (evap not limited to few*(TEW - De)):
-//        the bare-soil recurrence failed from day 8 on.
-
+// the test run, then reverted (test names are the case ids below):
+//  - A1: Kr denominator (TEW - De)/(TEW - REW) changed to (TEW - De)/TEW:
+//        A1 failed. (Dropping the REW stage instead is NOT a sabotage: Kr > 1
+//        is clipped by few * Kc,max, the result is identical.)
+//  - A2: SCS retention 25.4 (1000/CN - 10) changed to (1000/CN - 8): A2 failed.
+//  - A3: CN interpolation replaced by CN_II at every wetness: A2 failed (the
+//        CN_II case alone still passed).
+//  - A4: drainage out of the root zone not subtracted from the layer below:
+//        A3 (heavy rain fills the profile), A2 (mass check) and A8 (30-year
+//        closure) failed.
+//  - A5: root-deepening strip weighted by the soil depth instead of the depth
+//        below the old root zone: A5 failed.
+//  - A6: Ks without the (1 - p) divisor: A6 failed.
+//  - A7: snowmelt not limited by the store: A4 (snow) and, through the corrupted
+//        state, A1-A3, A5, A6, A8 failed.
+//  - A9: the cap of evapotranspiration by the available root-zone water removed:
+//        A9 failed (on a thin soil under a high demand, where the cap binds).
+//  - A10: transpiration booked 0.1 % short in the ledger: A8 (closure to 1e-9
+//        over 30 years) and A6 failed.
+//  Not detectable and left out: the cap few * (TEW - De) on surface evaporation
+//  only binds above an ET0 of about 12 mm/day; removing it changes nothing in
+//  any reachable state.
 #include "field_test_support.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -94,9 +95,18 @@ TEST_CASE("A1 bare soil evaporation follows FAO-56 eq 71-77", "[field][water]") 
 }
 
 TEST_CASE("A9 evaporation cannot take more than the root zone holds", "[field][water]") {
-    Field f(test_field::one_cell_config(test_field::loess(), test_field::wheat(), 1, 1, 0.999));
-    for (int d = 0; d < 20; ++d) {
-        f.step_day(test_field::synth(d, 5, 15, 0, 0, 6.0));
+    // A thin soil (TAW 6 mm in the root zone) under a hot-desert evaporative demand: the surface layer's own
+    // limit (0.85 mm) exceeds what the root zone has left (0.6 mm), so the cap by available water binds.
+    SoilDesc thin = test_field::loess();
+    thin.theta_fc = 0.15;
+    thin.rew_mm = 5.0;
+    Field f(test_field::one_cell_config(thin, test_field::wheat(), 1, 1, 0.9));
+    REQUIRE_THAT(f.view(0).taw_root_mm, WithinAbs(6.0, 1e-9));
+    f.step_day(test_field::synth(0, 5, 15, 0, 0, 12.0));
+    CHECK_THAT(f.view(0).last_e_mm, WithinAbs(0.6, 1e-9));
+    CHECK_THAT(f.view(0).d_root_mm, WithinAbs(6.0, 1e-9));
+    for (int d = 1; d < 20; ++d) {
+        f.step_day(test_field::synth(d, 5, 15, 0, 0, 12.0));
         REQUIRE(f.view(0).d_root_mm <= f.view(0).taw_root_mm + 1e-12);
         REQUIRE(f.view(0).d_root_mm >= 0.0);
     }
