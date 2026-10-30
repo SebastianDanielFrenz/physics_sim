@@ -1,0 +1,250 @@
+// tests/unit/test_field_persistence.cpp - lazy stepping, checkpoint/restore,
+// thread-partitioned stepping, and the allocation-free daily step.
+//
+// Recorded sabotages (F1a, 2026-10-31), made in core/src/field/field.cpp, the
+// test run, then reverted:
+//  - P-a: advance_to skipping the last missed day (`< day - 1`): the jump
+//         tests failed (last_day and hash differ).
+//  - P-b: restore() keeping the current t_sen vector: "checkpoint restore is
+//         bit exact" failed (hash after the replay differs).
+//  - P-c: step_cell reading its right neighbour's depletion (a cross-cell
+//         dependence): "cells in disjoint ranges" failed at 3 and 10 threads
+//         (hash differs from the sequential field); 1 thread still passed.
+//  - P-d: a std::vector<real> temporary inside step_cell: "the daily step
+//         allocates nothing" failed (count = cells x days).
+//  - P-e: DailyWeatherSource::record computed the block's neighbour day when
+//         asked out of order (a stateful cursor not reset): the order
+//         independence tests of test_field_weather_record failed - kept here
+//         because advance_to relies on it.
+
+#include "field_test_support.h"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <atomic>
+#include <cmath>
+#include <cstdlib>
+#include <new>
+#include <thread>
+
+// --- allocation counter (this executable only; ps_field_tests does not link ps_core) -------------
+namespace {
+std::atomic<bool> g_count_allocations{false};
+std::atomic<long> g_allocations{0};
+} // namespace
+
+void* operator new(std::size_t n) {
+    if (g_count_allocations.load(std::memory_order_relaxed)) g_allocations.fetch_add(1, std::memory_order_relaxed);
+    if (void* p = std::malloc(n ? n : 1)) return p;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t n) { return operator new(n); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+
+using namespace ps;
+using namespace ps::field;
+
+namespace {
+
+FieldConfig mixed_config(int nx = 3, int ny = 2) {
+    FieldConfig cfg;
+    cfg.nx = nx;
+    cfg.ny = ny;
+    cfg.soils = {test_field::loess(), test_field::sandy()};
+    cfg.crops = {test_field::wheat()};
+    for (int i = 0; i < nx * ny; ++i) cfg.cell_soil.push_back(static_cast<std::uint16_t>(i % 2));
+    cfg.initial_depletion_fraction = 0.3;
+    return cfg;
+}
+
+// The test operations: drill on doy 288 (also while a crop stands: replaces it), harvest on doy 212 from year 1.
+void apply_ops(Field& f, const DailyWeather& w) {
+    if (w.doy == 288) f.sow_all(1);
+    if (w.doy == 212 && w.day > 365) f.harvest_all();
+}
+
+// Day by day.
+void play(Field& f, DailyWeatherSource& src, std::int64_t last) {
+    for (std::int64_t d = f.last_day() + 1; d <= last; ++d) {
+        const DailyWeather& w = src.record(d);
+        apply_ops(f, w);
+        f.step_day(w);
+    }
+}
+
+// Jumps: advance_to between the days an operation happens on.
+void play_jumping(Field& f, DailyWeatherSource& src, std::int64_t last) {
+    while (f.last_day() < last) {
+        std::int64_t next = f.last_day() + 1;
+        while (next < last) {
+            const int doy = src.record(next).doy;
+            if (doy == 288 || doy == 212) break;
+            ++next;
+        }
+        f.advance_to(next - 1, src);                 // one jump over the idle stretch
+        const DailyWeather& w = src.record(next);
+        apply_ops(f, w);
+        f.step_day(w);
+    }
+}
+
+bool same_state(const Field& a, const Field& b) {
+    if (a.fold_hash(1469598103934665603ull) != b.fold_hash(1469598103934665603ull)) return false;
+    for (int c = 0; c < a.cell_count(); ++c) {
+        const CellView x = a.view(c), y = b.view(c);
+        if (x.d_root_mm != y.d_root_mm || x.d_sub_mm != y.d_sub_mm || x.cc != y.cc || x.biomass_g_m2 != y.biomass_g_m2 ||
+            x.grain_g_m2 != y.grain_g_m2 || x.gdd_sow != y.gdd_sow || x.swe_mm != y.swe_mm || x.zr_m != y.zr_m)
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+TEST_CASE("P1 advance_to in jumps equals day-by-day stepping bit for bit", "[field][persistence]") {
+    const std::int64_t last = 900;
+    DailyWeatherSource src_a(test_field::farm_climate(), 7);
+    Field a(mixed_config());
+    play(a, src_a, last);
+
+    // Fresh source, asked out of order first (a record is a pure function of the day).
+    DailyWeatherSource src_b(test_field::farm_climate(), 7);
+    (void)src_b.record(last);
+    (void)src_b.record(300);
+    Field b(mixed_config());
+    play_jumping(b, src_b, last);
+    CHECK(b.last_day() == last);
+    CHECK(same_state(a, b));
+    CHECK(a.view(0).crop_id == 1);                // the run ends with a crop standing (drilled on doy 288, not yet harvested)
+
+    // One single jump over the whole span without operations.
+    DailyWeatherSource src_c(test_field::farm_climate(), 7);
+    Field c(mixed_config()), d(mixed_config());
+    c.advance_to(400, src_c);
+    DailyWeatherSource src_d(test_field::farm_climate(), 7);
+    src_d.prefetch(0, 400);
+    for (std::int64_t day = 0; day <= 400; ++day) d.step_day(src_d.record(day));
+    CHECK(same_state(c, d));
+
+    // No time travel, no skipped days.
+    CHECK_THROWS_AS(c.advance_to(399, src_c), std::invalid_argument);
+    c.advance_to(400, src_c);                     // already there: nothing happens
+    CHECK(c.last_day() == 400);
+    CHECK_THROWS_AS(c.step_day(src_c.record(402)), std::invalid_argument);
+    CHECK_THROWS_AS(c.step_day(src_c.record(400)), std::invalid_argument);
+}
+
+TEST_CASE("P2 checkpoint restore is bit exact", "[field][persistence]") {
+    DailyWeatherSource src(test_field::farm_climate(), 5);
+    Field f(mixed_config());
+    play(f, src, 500);
+    const FieldCheckpoint cp = f.checkpoint();
+    const std::uint64_t h_cp = f.fold_hash(1469598103934665603ull);
+    play(f, src, 1000);
+    const std::uint64_t h_end = f.fold_hash(1469598103934665603ull);
+    CHECK(h_end != h_cp);
+
+    f.restore(cp);
+    CHECK(f.last_day() == 500);
+    CHECK(f.fold_hash(1469598103934665603ull) == h_cp);
+    play(f, src, 1000);                           // the replay, operations included
+    CHECK(f.fold_hash(1469598103934665603ull) == h_end);
+
+    // Into a different Field object of the same grid.
+    Field g(mixed_config());
+    g.restore(cp);
+    play(g, src, 1000);
+    CHECK(same_state(f, g));
+
+    // A checkpoint of another grid is refused.
+    Field other(mixed_config(2, 2));
+    CHECK_THROWS_AS(other.restore(cp), std::invalid_argument);
+}
+
+TEST_CASE("P3 cells in disjoint ranges can step on several threads", "[field][persistence]") {
+    DailyWeatherSource src(test_field::farm_climate(), 5);
+    src.prefetch(0, 600);
+    const FieldConfig cfg = mixed_config(8, 8);
+    Field seq(cfg);
+    for (std::int64_t d = 0; d <= 600; ++d) {
+        apply_ops(seq, src.record(d));
+        seq.step_day(src.record(d));
+    }
+    const std::uint64_t want = seq.fold_hash(1469598103934665603ull);
+
+    for (int threads : {1, 2, 3, 10}) {
+        Field f(cfg);
+        const int n = f.cell_count();
+        for (std::int64_t d = 0; d <= 600; ++d) {
+            const DailyWeather& w = src.record(d);
+            apply_ops(f, w);
+            std::vector<std::thread> pool;
+            for (int t = 0; t < threads; ++t) {
+                const int begin = n * t / threads, end = n * (t + 1) / threads;
+                pool.emplace_back([&f, begin, end, &w] { f.step_cells(begin, end, w); });
+            }
+            for (std::thread& th : pool) th.join();
+            f.finish_day(d);
+        }
+        INFO(threads << " threads");
+        CHECK(f.last_day() == 600);
+        CHECK(f.fold_hash(1469598103934665603ull) == want);
+        CHECK(same_state(f, seq));
+    }
+    Field bad(cfg);
+    CHECK_THROWS_AS(bad.step_cells(-1, 4, src.record(0)), std::out_of_range);
+    CHECK_THROWS_AS(bad.step_cells(0, 65, src.record(0)), std::out_of_range);
+    CHECK_THROWS_AS(bad.finish_day(5), std::invalid_argument);
+}
+
+TEST_CASE("P4 the daily step allocates nothing once warm", "[field][persistence]") {
+    DailyWeatherSource src(test_field::farm_climate(), 3);
+    src.prefetch(0, 900);
+    Field f(mixed_config(8, 8));
+    play(f, src, 5);                              // warm
+    g_allocations.store(0);
+    g_count_allocations.store(true);
+    for (std::int64_t d = 6; d <= 900; ++d) {
+        const DailyWeather& w = src.record(d);
+        apply_ops(f, w);                          // sow and harvest too
+        f.step_day(w);
+    }
+    // and the queries a client calls every frame
+    double acc = 0.0;
+    for (int c = 0; c < f.cell_count(); ++c) acc += f.view(c).cc + f.water_balance_residual_mm(c) + f.storage_mm(c);
+    g_count_allocations.store(false);
+    CHECK(g_allocations.load() == 0);
+    CHECK(std::isfinite(acc));
+    // The counter does count: a vector made while armed registers.
+    g_allocations.store(0);
+    g_count_allocations.store(true);
+    std::vector<double> probe(16, 1.0);
+    g_count_allocations.store(false);
+    CHECK(g_allocations.load() >= 1);
+    CHECK(probe.size() == 16);
+}
+
+TEST_CASE("P5 the grid is aligned to the world axes", "[field][persistence]") {
+    FieldConfig cfg = mixed_config(5, 3);
+    cfg.cell_size_m = 4.0;
+    cfg.origin_x_m = 100.0;
+    cfg.origin_y_m = -50.0;
+    Field f(cfg);
+    CHECK(f.cell_at_world(100.0, -50.0) == 0);
+    CHECK(f.cell_at_world(103.999, -46.001) == 0);
+    CHECK(f.cell_at_world(104.0, -50.0) == 1);
+    CHECK(f.cell_at_world(100.0, -46.0) == 5);
+    CHECK(f.cell_at_world(119.9, -38.1) == 14);
+    CHECK(f.cell_at_world(99.999, -50.0) == -1);
+    CHECK(f.cell_at_world(120.0, -50.0) == -1);
+    CHECK(f.cell_at_world(100.0, -38.0) == -1);
+    CHECK(f.cell_at_world(100.0, -50.001) == -1);
+    CHECK(f.cell_index(4, 2) == 14);
+    CHECK(f.cell_area_m2() == 16.0);
+    // soils follow the cell, not the order of stepping
+    CHECK(f.view(0).soil == 0);
+    CHECK(f.view(1).soil == 1);
+}

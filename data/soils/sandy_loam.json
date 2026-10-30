@@ -1,0 +1,44 @@
+{
+  "format": "physics_sim.soil/1",
+  "name": "sandy_loam",
+  "texture": "sandy loam",
+  "water": {
+    "theta_fc": 0.23,
+    "theta_wp": 0.11,
+    "depth_m": 1.5,
+    "fallow_root_depth_m": 0.3,
+    "source": {
+      "theta_fc": "[C] inside the FAO-56 Table 19 sandy loam range 0.18-0.28 (Allen et al. 1998, ch. 7); the value is [AS].",
+      "theta_wp": "[C] inside the FAO-56 Table 19 sandy loam range 0.06-0.16; the value is [AS]. theta_fc - theta_wp = 0.12 is just under the Table 19 range 0.11-0.15 midpoint.",
+      "depth_m": "[AS] depth of the water bucket.",
+      "fallow_root_depth_m": "[AS] depth of the 'root zone' bucket of bare soil."
+    }
+  },
+  "evaporation": {
+    "depth_m": 0.10,
+    "rew_mm": 8.0,
+    "source": {
+      "depth_m": "[C] Ze = 0.10-0.15 m (FAO-56 ch. 7).",
+      "rew_mm": "[C] FAO-56 Table 19, sandy loam REW 6-10 mm. TEW is derived (eq 73) = 17.5 mm, inside the Table 19 range 15-20."
+    }
+  },
+  "runoff": {
+    "curve_number_ii": 70.0,
+    "cn_normal_wetness": 0.5,
+    "ia_ratio": 0.2,
+    "source": {
+      "curve_number_ii": "[AS] SCS curve number, small grain, good condition, hydrologic soil group A/B boundary (NEH-4, recalled, not re-read).",
+      "cn_normal_wetness": "[AS] as silt_loam_loess.",
+      "ia_ratio": "[C] initial abstraction 0.2 S (NEH-4)."
+    }
+  },
+  "snow": {
+    "melt_mm_per_k_day": 3.0,
+    "melt_base_c": 0.0,
+    "source": {
+      "melt_mm_per_k_day": "[AS] degree-day factor, lowland range 2-4.",
+      "melt_base_c": "[AS] melt threshold temperature."
+    }
+  },
+  "source": "F1a drought-prone contrast soil (low available water): used by the drought tests."
+}

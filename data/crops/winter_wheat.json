@@ -1,0 +1,137 @@
+{
+  "format": "physics_sim.crop/1",
+  "name": "winter_wheat",
+  "family": "cereal",
+  "thermal": {
+    "t_base_c": 0.0,
+    "t_upper_c": 26.0,
+    "source": {
+      "t_base_c": "[AS] AquaCrop wheat default, recalled from the reference manual (not re-read this session).",
+      "t_upper_c": "[AS] AquaCrop wheat default upper threshold, recalled (not re-read this session)."
+    }
+  },
+  "phenology": {
+    "stages": [
+      { "name": "sown", "bbch": 0, "gdd": 0 },
+      { "name": "emergence", "bbch": 10, "gdd": 140 },
+      { "name": "tillering", "bbch": 25, "gdd": 450 },
+      { "name": "stem_elongation", "bbch": 30, "gdd": 800 },
+      { "name": "booting", "bbch": 45, "gdd": 1250 },
+      { "name": "flowering", "bbch": 65, "gdd": 1600 },
+      { "name": "senescence", "bbch": 77, "gdd": 1900 },
+      { "name": "maturity", "bbch": 89, "gdd": 2350 },
+      { "name": "overripe", "bbch": 92, "gdd": 2500 }
+    ],
+    "vernalisation_until": "stem_elongation",
+    "source": {
+      "stages": "[AS] cumulative development units (thermal time above 0 degC, scaled by the vernalisation factor before stem elongation) from sowing. Chosen so that a mid-October sowing in the Rhein-Main climate flowers in early-mid June and ripens in July, as German winter wheat does (DWD phenology: heading late May, yellow ripeness mid-late July; recalled, not re-read). BBCH codes are the standard scale."
+    }
+  },
+  "vernalisation": {
+    "t_min_c": -1.3,
+    "t_opt_c": 4.9,
+    "t_max_c": 15.7,
+    "days_saturation": 50.0,
+    "min_rate_factor": 0.3,
+    "source": {
+      "t_min_c": "[AS] cardinal temperatures of the Wang & Engel (1998) vernalisation response for wheat as used by Streck et al. (2003), recalled from memory.",
+      "t_opt_c": "[AS] see t_min_c.",
+      "t_max_c": "[AS] see t_min_c.",
+      "days_saturation": "[AS] effective vernalisation days for the full development rate of a winter wheat; the literature spans roughly 30-60 days.",
+      "min_rate_factor": "[AS] relative development rate of an unvernalised winter wheat before stem elongation."
+    }
+  },
+  "canopy": {
+    "cc0_cm2_per_plant": 1.5,
+    "plant_density_per_ha": 2500000,
+    "ccx": 0.96,
+    "cgc_per_gdd": 0.0055,
+    "cdc_per_gdd": 0.0052,
+    "senescence_acceleration": 0.5,
+    "source": {
+      "cc0_cm2_per_plant": "[AS] AquaCrop wheat default canopy size per seedling, recalled.",
+      "plant_density_per_ha": "[AS] established plants in German practice (250-400 seeds per m2 drilled, roughly 80 % emerging).",
+      "ccx": "[AS] AquaCrop wheat default maximum canopy cover, recalled.",
+      "cgc_per_gdd": "[AS] inside the 0.004-0.007 per GDD range that winter-wheat AquaCrop studies report as recommended (Agronomy 11, 2265, 2021); the point value is chosen here.",
+      "cdc_per_gdd": "[AS] same source and range as cgc_per_gdd (0.004-0.007).",
+      "senescence_acceleration": "[AS] extra senescence progress per unit of senescence stress (1 - Ks_sen)."
+    }
+  },
+  "water": {
+    "kc_tr_x": 1.10,
+    "height_max_m": 1.0,
+    "p_depletion": 0.55,
+    "p_adjust_for_etc": true,
+    "exp_p_upper": 0.20,
+    "exp_p_lower": 0.65,
+    "exp_shape": 5.0,
+    "sen_p_upper": 0.70,
+    "sen_shape": 2.5,
+    "source": {
+      "kc_tr_x": "[AS] AquaCrop crop transpiration coefficient at full canopy, 1.10 for wheat, recalled.",
+      "height_max_m": "[AS] FAO-56 Table 12 wheat height 1 m, recalled.",
+      "p_depletion": "[C] FAO-56 Table 22 (Allen et al. 1998, ch. 8): winter wheat p = 0.55 at ETc ~ 5 mm/day, maximum root depth 1.5-1.8 m.",
+      "p_adjust_for_etc": "[C] FAO-56 Table 22 note: p = p_table + 0.04 (5 - ETc), limited to 0.1-0.8 (the limits are in the code as the note's own range).",
+      "exp_p_upper": "[AS] AquaCrop wheat canopy-expansion stress threshold, recalled.",
+      "exp_p_lower": "[AS] AquaCrop wheat canopy-expansion stress limit, recalled.",
+      "exp_shape": "[AS] AquaCrop stress curve shape, recalled.",
+      "sen_p_upper": "[AS] AquaCrop wheat early-senescence stress threshold, recalled.",
+      "sen_shape": "[AS] AquaCrop stress curve shape, recalled."
+    }
+  },
+  "biomass": {
+    "wp_star_g_m2": 15.0,
+    "gdd_full": 14.0,
+    "source": {
+      "wp_star_g_m2": "[AS] AquaCrop normalised biomass water productivity of C3 crops, 15 g/m2 (Steduto et al. 2007; Raes et al. 2012), recalled.",
+      "gdd_full": "[AS] growing degree days per day at which biomass production is unrestricted by cold (AquaCrop 'minimum GDD for full biomass'), recalled."
+    }
+  },
+  "yield": {
+    "hi0": 0.46,
+    "hi_build_gdd": 700,
+    "pollination_window_gdd": 200,
+    "hi_water_stress_k": 0.4,
+    "heat_pollination_lo_c": 32.0,
+    "heat_pollination_up_c": 38.0,
+    "source": {
+      "hi0": "[AS] reference harvest index; AquaCrop winter-wheat studies report 0.42-0.48.",
+      "hi_build_gdd": "[AS] harvest index builds up over about 700 GDD after flowering.",
+      "pollination_window_gdd": "[AS] development units after flowering whose stress counts for the harvest index.",
+      "hi_water_stress_k": "[AS] harvest index loss per unit mean (1 - Ks_sto) during the window. FITTED: 0.2 left the simulated yield response milder than FAO-33 winter wheat (seasonal Ky 1.00, FAO table at fao.org/4/y3655e/y3655e04.htm) by up to 0.12 in relative yield; 0.4 brings the worst deviation over 45 season runs to 0.097 (test C10). The value is calibrated against that reference, so C10 guards the calibration; it is not an independent check.",
+      "heat_pollination_lo_c": "[AS] Tmax at which heat starts to fail pollination.",
+      "heat_pollination_up_c": "[AS] Tmax at which pollination fails completely."
+    }
+  },
+  "roots": {
+    "zr_min_m": 0.3,
+    "zr_max_m": 1.5,
+    "gdd_full": 1500,
+    "source": {
+      "zr_min_m": "[AS] AquaCrop wheat minimum effective rooting depth, recalled.",
+      "zr_max_m": "[C] FAO-56 Table 22: winter wheat maximum rooting depth 1.5-1.8 m (lower end).",
+      "gdd_full": "[AS] development units from sowing at which the maximum depth is reached (before flowering)."
+    }
+  },
+  "frost": {
+    "kill_onset_c": -12.0,
+    "kill_full_c": -22.0,
+    "snow_insulation_swe_mm": 10.0,
+    "snow_floor_c": -3.0,
+    "source": {
+      "kill_onset_c": "[AS] daily minimum air temperature at which frost starts to kill an emerged stand; hardened winter wheat survives about -15 to -20 degC (LT50), literature range, not tuned.",
+      "kill_full_c": "[AS] daily minimum at which the whole stand is killed.",
+      "snow_insulation_swe_mm": "[AS] snow water equivalent above which snow shields the stand.",
+      "snow_floor_c": "[AS] lowest temperature the stand sees under that snow."
+    }
+  },
+  "ripeness": {
+    "harvest_window_days": 14,
+    "shed_rate_per_day": 0.004,
+    "source": {
+      "harvest_window_days": "[AS] days after maturity before the grain starts to shed.",
+      "shed_rate_per_day": "[AS] fraction of the remaining grain lost per day afterwards."
+    }
+  },
+  "source": "F1a winter wheat. Most AquaCrop defaults are recalled from the reference manual and published calibrations, not re-read in this session, and are tagged [AS] on purpose; only values read this session are tagged [C]."
+}

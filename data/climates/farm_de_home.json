@@ -1,0 +1,681 @@
+{
+  "format": "physics_sim.climate/1",
+  "location": {
+    "latitude_deg": 50.14988,
+    "longitude_deg": 8.45474,
+    "elevation_m": 150
+  },
+  "sun": {
+    "mode": "astronomical"
+  },
+  "calendar": {
+    "epoch": {
+      "year": 0,
+      "season": "winter",
+      "day": 0,
+      "time_of_day_s": 0
+    },
+    "cycle_s": 86400
+  },
+  "seasons": [
+    {
+      "name": "winter",
+      "days": 90,
+      "doy_span": [
+        335,
+        59
+      ],
+      "day_night": {
+        "astronomical": true
+      },
+      "temp_mean_c": 1.8,
+      "temp_range_k": 7.9,
+      "rh_mean": 0.86,
+      "pressure_msl_hpa": 1017.0,
+      "ground_temp_c": 3.5,
+      "regimes": {
+        "clear": {
+          "duration_h": {
+            "min": 2,
+            "median": 10,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.804,
+            0.853
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 3.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 70.0
+          },
+          "gust_factor": 1.4,
+          "temp_offset_k": [
+            0.5,
+            2.0
+          ],
+          "rh": [
+            0.772,
+            0.855
+          ],
+          "pressure_offset_hpa": [
+            3,
+            8
+          ]
+        },
+        "cloudy": {
+          "duration_h": {
+            "min": 2,
+            "median": 8,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.922,
+            0.99
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 4.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.5,
+          "temp_offset_k": [
+            -1.0,
+            0.0
+          ],
+          "rh": [
+            0.855,
+            0.938
+          ],
+          "pressure_offset_hpa": [
+            -3,
+            3
+          ]
+        },
+        "rain": {
+          "duration_h": {
+            "min": 1,
+            "median": 5,
+            "sigma_log": 0.6
+          },
+          "cloud_cover": [
+            0.98,
+            1.0
+          ],
+          "precip_mm_h": {
+            "median": 0.341,
+            "sigma_log": 0.6
+          },
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 5.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.6,
+          "temp_offset_k": [
+            -2.0,
+            -1.0
+          ],
+          "rh": [
+            0.938,
+            0.979
+          ],
+          "pressure_offset_hpa": [
+            -10,
+            -4
+          ]
+        }
+      },
+      "transitions": {
+        "clear": {
+          "clear": 0.5,
+          "cloudy": 0.4,
+          "rain": 0.1
+        },
+        "cloudy": {
+          "clear": 0.3,
+          "cloudy": 0.4,
+          "rain": 0.3
+        },
+        "rain": {
+          "clear": 0.2,
+          "cloudy": 0.5,
+          "rain": 0.3
+        }
+      },
+      "initial_regime": "cloudy"
+    },
+    {
+      "name": "spring",
+      "days": 92,
+      "doy_span": [
+        60,
+        151
+      ],
+      "day_night": {
+        "astronomical": true
+      },
+      "temp_mean_c": 10.3,
+      "temp_range_k": 19.0,
+      "rh_mean": 0.72,
+      "pressure_msl_hpa": 1016.0,
+      "ground_temp_c": 10.0,
+      "regimes": {
+        "clear": {
+          "duration_h": {
+            "min": 2,
+            "median": 10,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.493,
+            0.62
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 3.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 70.0
+          },
+          "gust_factor": 1.4,
+          "temp_offset_k": [
+            0.5,
+            2.0
+          ],
+          "rh": [
+            0.543,
+            0.709
+          ],
+          "pressure_offset_hpa": [
+            3,
+            8
+          ]
+        },
+        "cloudy": {
+          "duration_h": {
+            "min": 2,
+            "median": 8,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.797,
+            0.975
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 4.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.5,
+          "temp_offset_k": [
+            -1.0,
+            0.0
+          ],
+          "rh": [
+            0.709,
+            0.875
+          ],
+          "pressure_offset_hpa": [
+            -3,
+            3
+          ]
+        },
+        "rain": {
+          "duration_h": {
+            "min": 1,
+            "median": 5,
+            "sigma_log": 0.6
+          },
+          "cloud_cover": [
+            0.949,
+            1.0
+          ],
+          "precip_mm_h": {
+            "median": 0.364,
+            "sigma_log": 0.6
+          },
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 5.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.6,
+          "temp_offset_k": [
+            -2.0,
+            -1.0
+          ],
+          "rh": [
+            0.875,
+            0.958
+          ],
+          "pressure_offset_hpa": [
+            -10,
+            -4
+          ]
+        }
+      },
+      "transitions": {
+        "clear": {
+          "clear": 0.5,
+          "cloudy": 0.4,
+          "rain": 0.1
+        },
+        "cloudy": {
+          "clear": 0.3,
+          "cloudy": 0.4,
+          "rain": 0.3
+        },
+        "rain": {
+          "clear": 0.2,
+          "cloudy": 0.5,
+          "rain": 0.3
+        }
+      },
+      "initial_regime": "cloudy"
+    },
+    {
+      "name": "summer",
+      "days": 92,
+      "doy_span": [
+        152,
+        243
+      ],
+      "day_night": {
+        "astronomical": true
+      },
+      "temp_mean_c": 19.6,
+      "temp_range_k": 19.5,
+      "rh_mean": 0.67,
+      "pressure_msl_hpa": 1015.0,
+      "ground_temp_c": 19.0,
+      "regimes": {
+        "clear": {
+          "duration_h": {
+            "min": 2,
+            "median": 10,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.589,
+            0.692
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 3.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 70.0
+          },
+          "gust_factor": 1.4,
+          "temp_offset_k": [
+            0.5,
+            2.0
+          ],
+          "rh": [
+            0.515,
+            0.691
+          ],
+          "pressure_offset_hpa": [
+            3,
+            8
+          ]
+        },
+        "cloudy": {
+          "duration_h": {
+            "min": 2,
+            "median": 8,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.836,
+            0.979
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 4.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.5,
+          "temp_offset_k": [
+            -1.0,
+            0.0
+          ],
+          "rh": [
+            0.691,
+            0.868
+          ],
+          "pressure_offset_hpa": [
+            -3,
+            3
+          ]
+        },
+        "rain": {
+          "duration_h": {
+            "min": 1,
+            "median": 5,
+            "sigma_log": 0.6
+          },
+          "cloud_cover": [
+            0.959,
+            1.0
+          ],
+          "precip_mm_h": {
+            "median": 0.337,
+            "sigma_log": 0.6
+          },
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 5.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.6,
+          "temp_offset_k": [
+            -2.0,
+            -1.0
+          ],
+          "rh": [
+            0.868,
+            0.956
+          ],
+          "pressure_offset_hpa": [
+            -10,
+            -4
+          ]
+        },
+        "thunderstorm": {
+          "duration_h": {
+            "min": 1,
+            "median": 3,
+            "sigma_log": 0.4
+          },
+          "cloud_cover": [
+            0.877,
+            1.0
+          ],
+          "precip_mm_h": {
+            "median": 0.067,
+            "sigma_log": 0.5
+          },
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 4.0
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.8,
+          "temp_offset_k": [
+            -3.0,
+            -1.0
+          ],
+          "rh": [
+            0.78,
+            0.912
+          ],
+          "pressure_offset_hpa": [
+            -5,
+            -1
+          ],
+          "convective": {
+            "cell_duration_min": {
+              "median": 30,
+              "sigma_log": 0.3
+            },
+            "gap_min": {
+              "median": 45,
+              "sigma_log": 0.5
+            },
+            "peak_mm_h": {
+              "median": 5.624,
+              "sigma_log": 0.7
+            },
+            "rise_fraction": 0.3,
+            "gust_factor": 2.0,
+            "hail": {
+              "probability": 0.05,
+              "diameter_mm": {
+                "median": 12,
+                "sigma_log": 0.4
+              },
+              "min_shape": 0.6
+            }
+          },
+          "lightning_per_min": 3.0
+        }
+      },
+      "transitions": {
+        "clear": {
+          "clear": 0.5,
+          "cloudy": 0.3,
+          "rain": 0.05,
+          "thunderstorm": 0.15
+        },
+        "cloudy": {
+          "clear": 0.35,
+          "cloudy": 0.35,
+          "rain": 0.2,
+          "thunderstorm": 0.1
+        },
+        "rain": {
+          "clear": 0.3,
+          "cloudy": 0.5,
+          "rain": 0.2
+        },
+        "thunderstorm": {
+          "clear": 0.5,
+          "cloudy": 0.4,
+          "rain": 0.1
+        }
+      },
+      "initial_regime": "cloudy"
+    },
+    {
+      "name": "autumn",
+      "days": 91,
+      "doy_span": [
+        244,
+        334
+      ],
+      "day_night": {
+        "astronomical": true
+      },
+      "temp_mean_c": 10.0,
+      "temp_range_k": 14.8,
+      "rh_mean": 0.82,
+      "pressure_msl_hpa": 1016.0,
+      "ground_temp_c": 11.0,
+      "regimes": {
+        "clear": {
+          "duration_h": {
+            "min": 2,
+            "median": 10,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.634,
+            0.725
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 3.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 70.0
+          },
+          "gust_factor": 1.4,
+          "temp_offset_k": [
+            0.5,
+            2.0
+          ],
+          "rh": [
+            0.684,
+            0.799
+          ],
+          "pressure_offset_hpa": [
+            3,
+            8
+          ]
+        },
+        "cloudy": {
+          "duration_h": {
+            "min": 2,
+            "median": 8,
+            "sigma_log": 0.5
+          },
+          "cloud_cover": [
+            0.853,
+            0.982
+          ],
+          "precip_mm_h": null,
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 4.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.5,
+          "temp_offset_k": [
+            -1.0,
+            0.0
+          ],
+          "rh": [
+            0.799,
+            0.914
+          ],
+          "pressure_offset_hpa": [
+            -3,
+            3
+          ]
+        },
+        "rain": {
+          "duration_h": {
+            "min": 1,
+            "median": 5,
+            "sigma_log": 0.6
+          },
+          "cloud_cover": [
+            0.963,
+            1.0
+          ],
+          "precip_mm_h": {
+            "median": 0.379,
+            "sigma_log": 0.6
+          },
+          "wind_mean_m_s": {
+            "weibull_k": 2.0,
+            "weibull_c": 5.5
+          },
+          "wind_dir_deg": {
+            "mean": 240.0,
+            "spread": 60.0
+          },
+          "gust_factor": 1.6,
+          "temp_offset_k": [
+            -2.0,
+            -1.0
+          ],
+          "rh": [
+            0.914,
+            0.971
+          ],
+          "pressure_offset_hpa": [
+            -10,
+            -4
+          ]
+        }
+      },
+      "transitions": {
+        "clear": {
+          "clear": 0.5,
+          "cloudy": 0.4,
+          "rain": 0.1
+        },
+        "cloudy": {
+          "clear": 0.3,
+          "cloudy": 0.4,
+          "rain": 0.3
+        },
+        "rain": {
+          "clear": 0.2,
+          "cloudy": 0.5,
+          "rain": 0.3
+        }
+      },
+      "initial_regime": "cloudy"
+    }
+  ],
+  "lags_s": {
+    "cloud": 1200,
+    "precip_on": 300,
+    "precip_off": 600,
+    "wind": 900,
+    "temp_offset": 3600,
+    "rh": 1800,
+    "pressure": 3600
+  },
+  "precip_phase": {
+    "snow_below_c": 0.0,
+    "rain_above_c": 2.0,
+    "min_rate_mm_h": 0.01
+  },
+  "humidity": {
+    "precip_rh_floor": 0.95,
+    "precip_full_mm_h": 0.5
+  },
+  "diurnal_temperature": {
+    "a_h": 1.86,
+    "b": 2.2,
+    "c_h": -0.17,
+    "reference_cycle_s": 86400,
+    "cloud_range_reduction": 0.6
+  },
+  "lightning": {
+    "distance_km": [
+      0.5,
+      15.0
+    ]
+  },
+  "source": {
+    "purpose": "climate of the farming field model (ps_field F1a): a real 365-day year starting 1 December for the home region.",
+    "location": "latitude/longitude: the racing_game home-region spawn point as in test_fixed_summer.json; elevation 150 m ASSUMED.",
+    "seasons": "days 90/92/92/91 = the real meteorological seasons (Dec-Feb 90 days in a non-leap year, Mar-May 92, Jun-Aug 92, Sep-Nov 91); doy_span as test_fixed_summer.json. Season values sit at the season midpoint, so they are set to the January/April/July/October normals.",
+    "scalars": "[AS] temp_mean_c 1.8/10.3/19.6/10.0, temp_range_k, rh_mean, ground_temp_c: approximate DWD 1991-2020 normals for the Rhein-Main area recalled from memory, NOT re-read from the DWD files. Regime offsets shift the realised means; the measured annual statistics are reported by the ps_field tests.",
+    "regimes": "[AS] the regimes, transitions and durations of test_weather.json (the weather plan's assumed regime statistics); only the rain regime's precipitation median is solved by tools/fielddata/farm_climate_gen.py so that the long-run mean precipitation matches 45/48/62/50 mm per month (winter/spring/summer/autumn, [AS] recalled Rhein-Main normals of roughly 620 mm per year).",
+    "rest": "lags_s, precip_phase, humidity, diurnal_temperature, lightning: as test_weather.json (see its source notes)."
+  }
+}

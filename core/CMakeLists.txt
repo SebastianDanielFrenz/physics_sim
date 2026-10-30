@@ -161,6 +161,52 @@ target_link_libraries(ps_environment_io
     ps_options
 )
 
+# ps_field (farming plan F1a, vault FARM-002): the field model - agronomy grid,
+# daily weather record, FAO-56 soil water, AquaCrop-style crop. Mirrors
+# ps_environment: STATIC, public headers under include/ps/field/, links
+# ps_environment (weather, calendar, sun), ps_detmath, ps_warnings, ps_options,
+# NEVER ps_core. Guard: ps_field_standalone (tests/unit/CMakeLists.txt).
+add_library(ps_field STATIC
+  src/field/et0.cpp
+  src/field/weather_record.cpp
+  src/field/desc_validation.cpp
+  src/field/field.cpp
+)
+
+target_include_directories(ps_field PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(ps_field
+  PUBLIC
+    ps_environment
+  PRIVATE
+    ps_detmath
+    ps_warnings
+    ps_options
+)
+
+# ps_field_io: soil/crop loaders and the headless scenario runner (nlohmann
+# PRIVATE, like ps_environment_io, which supplies climate loading and `extends`).
+add_library(ps_field_io STATIC
+  src/field/io/field_io.cpp
+  src/field/io/field_scenario.cpp
+)
+
+target_include_directories(ps_field_io PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(ps_field_io
+  PUBLIC
+    ps_field
+    ps_environment_io
+  PRIVATE
+    nlohmann_json::nlohmann_json
+    ps_warnings
+    ps_options
+)
+
 # ps_engine_cycle_standalone (ps_audio A1 coordinator review's link-time
 # guard: proves ps_engine_cycle links and runs WITHOUT ps_core) is defined
 # in tests/unit/CMakeLists.txt, not here, even though it links only

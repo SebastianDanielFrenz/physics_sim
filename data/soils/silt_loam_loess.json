@@ -1,0 +1,44 @@
+{
+  "format": "physics_sim.soil/1",
+  "name": "silt_loam_loess",
+  "texture": "silt loam",
+  "water": {
+    "theta_fc": 0.30,
+    "theta_wp": 0.13,
+    "depth_m": 1.8,
+    "fallow_root_depth_m": 0.3,
+    "source": {
+      "theta_fc": "[C] inside the FAO-56 Table 19 silt loam range 0.22-0.36 (Allen et al. 1998, ch. 7); the value is [AS], a loess-derived arable soil of the Rhein-Main lowlands.",
+      "theta_wp": "[C] inside the FAO-56 Table 19 silt loam range 0.09-0.21; the value is [AS]. theta_fc - theta_wp = 0.17 m3/m3 is inside the Table 19 range 0.13-0.19.",
+      "depth_m": "[AS] depth of the water bucket (deep loess, rooting is limited by the crop, not the soil, down to 1.8 m).",
+      "fallow_root_depth_m": "[AS] depth of the 'root zone' bucket of bare soil: the layer that exchanges water with the surface within days."
+    }
+  },
+  "evaporation": {
+    "depth_m": 0.10,
+    "rew_mm": 9.5,
+    "source": {
+      "depth_m": "[C] Ze = 0.10-0.15 m (FAO-56 ch. 7, Table 19 is tabulated for Ze = 0.10 m).",
+      "rew_mm": "[C] FAO-56 Table 19, silt loam REW 8-11 mm; midpoint. TEW is derived (eq 73) = 1000 (theta_fc - 0.5 theta_wp) Ze = 23.5 mm, inside the Table 19 range 18-25."
+    }
+  },
+  "runoff": {
+    "curve_number_ii": 75.0,
+    "cn_normal_wetness": 0.5,
+    "ia_ratio": 0.2,
+    "source": {
+      "curve_number_ii": "[AS] SCS curve number for average antecedent moisture, small grain, straight row, good condition, hydrologic soil group B (USDA NRCS NEH-4 table, recalled from memory, not re-read).",
+      "cn_normal_wetness": "[AS] relative root-zone wetness (1 = field capacity) at which CN_II applies; CN_I and CN_III are interpolated below and above it with the standard conversion formulas.",
+      "ia_ratio": "[C] initial abstraction 0.2 S, the classical NEH-4 ratio."
+    }
+  },
+  "snow": {
+    "melt_mm_per_k_day": 3.0,
+    "melt_base_c": 0.0,
+    "source": {
+      "melt_mm_per_k_day": "[AS] degree-day factor of the snow store, typical lowland range 2-4 mm per K per day.",
+      "melt_base_c": "[AS] melt threshold temperature."
+    }
+  },
+  "source": "F1a reference soil of the home region (loess silt loam); the numbers that are not [C] ranges are assumptions, see each block."
+}
