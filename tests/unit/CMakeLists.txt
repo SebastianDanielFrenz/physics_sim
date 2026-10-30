@@ -131,6 +131,7 @@ add_executable(ps_unit_tests
   test_engine_map_generator.cpp
   test_engine_map_cache.cpp
   test_engine_map_gen_v2.cpp
+  test_held_rpm_rows.cpp
   test_engine_map_control.cpp
   test_engine_dyno.cpp
   test_limit_findings.cpp

@@ -245,6 +245,8 @@ struct EngineMapGenTask::Impl {
     // fills it from the nearest breathing node above). Ambient-fed pipe engines (engine_map_generates_wot_rows): one
     // wide-open-throttle point per rpm-axis value at ops[wot_base + ir]; grid node trim failures are recorded in
     // node_status (1 throttle saturated, 2 not settled) and judged in finish(), which knows which rows it keeps.
+    // Held rpm rows: every pipe engine records its grid nodes' trim state in node_status (it used to throw inside
+    // run_point without WOT rows); finish() judges it, so a failing row at the top of the rpm axis can be held.
     std::vector<unsigned char> nonbreathing;
     bool wot = false;
     std::size_t wot_base = 0, wot_n = 0;
@@ -391,8 +393,8 @@ EngineMapGenTask::EngineMapGenTask(const CycleModelDesc& desc, const FuelDesc& f
             s.ops.push_back(make_op(rpm, kPamb, real(1.0), start));
         }
         s.wot_n = s.ops.size() - s.wot_base;
-        s.node_status.assign(s.grid_n, 0);
     }
+    if (s.pipe) s.node_status.assign(s.grid_n, 0);
     s.results.resize(s.ops.size());
     s.p_mean.assign(s.ops.size(), real(0.0));
     s.nonbreathing.assign(s.ops.size(), 0);
@@ -450,7 +452,7 @@ std::size_t EngineMapGenTask::reuse_points_from(const EngineMapGenTask& previous
         auto found=index.find(key(s.ops[i],kind(s,i)));if(found==index.end())continue;
         const auto j=found->second;s.results[i]=old.results[j];s.held[i]=old.held[j];s.done[i]=1;++count;
         s.p_mean[i]=old.p_mean[j];s.nonbreathing[i]=old.nonbreathing[j];
-        if(s.wot && i<s.grid_n)s.node_status[i]=old.wot ? old.node_status[j] : 0;
+        if(i<s.grid_n && !s.node_status.empty())s.node_status[i]=j<old.node_status.size() ? old.node_status[j] : 0;
         if(s.knock && kind(s,i)!=real(0)){const std::size_t a=knock_row(s,i),b=knock_row(old,j);for(std::size_t f=0;f<s.knock_nf;++f){s.knock_kl[a*s.knock_nf+f]=old.knock_kl[b*s.knock_nf+f];s.knock_flag[a*s.knock_nf+f]=old.knock_flag[b*s.knock_nf+f];s.knock_replays[a*s.knock_nf+f]=0;}}
     }
     return count;
@@ -502,21 +504,11 @@ void EngineMapGenTask::run_point(std::size_t i) {
                 if (!node_breathes(s.desc, s.lhv, s.afr, s.ops[i].p_im_pa, r.mean)) s.nonbreathing[i] = 1;
             }
             s.p_mean[i] = r.p_plenum_mean_pa;
-            if (i < s.grid_n && s.wot) {
-                // P7d: judged in finish(), which drops the rows at or above the lowest WOT plenum pressure.
+            if (i < s.grid_n) {
+                // P7d: judged in finish(), which drops the rows at or above the lowest WOT plenum pressure. Without WOT
+                // rows finish() throws run_point's old message for a breathing node (held rpm rows: unless the node's
+                // rpm row is held), in point order as before; no allocation and no throw inside the job.
                 s.node_status[i] = r.throttle_saturated ? 1 : (!(std::abs(r.plenum_error_rel) <= s.engine_settings.trim_tolerance) ? 2 : 0);
-            } else if (i < s.grid_n && !s.nonbreathing[i]) {
-                if (r.throttle_saturated) {
-                    throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[i].p_im_pa) +
-                                             " Pa unreachable at " + std::to_string(s.ops[i].rpm) +
-                                             " rpm (throttle fully open: mean plenum " + std::to_string(r.p_plenum_mean_pa) +
-                                             " Pa)");
-                }
-                if (!(std::abs(r.plenum_error_rel) <= s.engine_settings.trim_tolerance)) {
-                    throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[i].p_im_pa) +
-                                             " Pa not settled at " + std::to_string(s.ops[i].rpm) + " rpm (mean plenum " +
-                                             std::to_string(r.p_plenum_mean_pa) + " Pa)");
-                }
             }
             s.results[i] = r.mean;
         } else {
@@ -528,7 +520,10 @@ void EngineMapGenTask::run_point(std::size_t i) {
             if (i < s.grid_n && !node_breathes(s.desc, s.lhv, s.afr, s.ops[i].p_im_pa, s.results[i])) s.nonbreathing[i] = 1;
         }
         const bool knock_point = i < s.grid_n || (s.wot && i >= s.wot_base);
-        if (s.knock && knock_point && !s.nonbreathing[i]) {
+        // Held rpm rows: a node whose deferred trim failure finish() judges (no WOT rows) skips its knock search, as the
+        // throw that used to end this job skipped it - the node either fails the task or lies in a held row.
+        const bool trim_failed = s.pipe && !s.wot && i < s.grid_n && !s.nonbreathing[i] && s.node_status[i] != 0;
+        if (s.knock && knock_point && !s.nonbreathing[i] && !trim_failed) {
             // P7: the knock-limited advance of this node for every listed fuel, by closed-cycle replays from the
             // converged IVC state (no gas exchange rerun). Only the octane differs between the fuels.
             engine_cycle::KnockReplayInput kin;
@@ -576,8 +571,75 @@ EngineMapsPtr EngineMapGenTask::finish() {
     Impl& s = *impl_;
     if (s.finished) throw std::runtime_error("EngineMapGenTask::finish: called twice");
     s.finished = true;
+    // Held rpm rows (owner 2026-10-23: a rev limit raised in the garage extends grid_rpm past the engine's breathing
+    // limit, and those rows must give maps, not a load error). First the unchanged assembly: every grid that generated
+    // before returns here, bit-identical. Its exception is the one the task throws whenever no row is held.
+    const std::size_t nr = s.rpm_axis.size();
+    std::vector<std::size_t> rows(nr);
+    for (std::size_t ir = 0; ir < nr; ++ir) rows[ir] = ir;
+    std::exception_ptr failure;
+    try {
+        return build_maps(rows);
+    } catch (...) { // TOOL-019: never touched here, only rethrown
+        failure = std::current_exception();
+    }
+    // A row is valid when the maps assemble with EVERY row built from its points (every check of the assembly - per
+    // point, per row and the sweeps - judged on that row alone). r0 = the lowest failing row. Rows r0..top are held,
+    // i.e. built from row r0 - 1, when
+    //   (a) every row from r0 up fails (a contiguous failing suffix), or
+    //   (b) a valid row lies above r0, but the engine is past its breathing limit: with F(r) = the air flow of the top
+    //       manifold node (trapped air per cycle x rpm; the WOT point on an engine with WOT rows) and P = max F over
+    //       the rows below r0, F(r0 - 1) < P (the flow already falls below the failure), or F < P on every valid row
+    //       above r0 (the flow never comes back to its peak - the peak lies at or below r0 - 1). Above the breathing
+    //       limit the cycle points are marginal (VE of a few per cent at closed throttle) and an isolated row fails
+    //       between computable ones (measured: the hypercar at a 20000 rpm limit fails only at 17062.5 rpm, the
+    //       generated A25A only at 13450 rpm, where Sketch's rpm subset puts the failure right after the peak row
+    //       6900 rpm); the first failure is taken as the edge.
+    // Otherwise - row 0 fails, a failure followed by a row with more air flow than any row below it, or a held
+    // assembly that still fails - the task throws the first assembly's exception unchanged.
+    std::vector<unsigned char> valid(nr, 0);
+    for (std::size_t r = 0; r < nr; ++r) {
+        try {
+            (void)build_maps(std::vector<std::size_t>(nr, r));
+            valid[r] = 1;
+        } catch (...) {
+        }
+    }
+    std::size_t r0 = 0;
+    while (r0 < nr && valid[r0]) ++r0;
+    if (r0 == 0 || r0 == nr) std::rethrow_exception(failure);
+    bool suffix = true;
+    for (std::size_t r = r0; r < nr; ++r) suffix = suffix && !valid[r];
+    if (!suffix) {
+        const std::size_t np = s.p_axis.size();
+        auto flow = [&](std::size_t r) {
+            const std::size_t si = s.wot ? s.wot_base + r : r * np + (np - 1);
+            return s.results[si].m_air_j_cyc * s.rpm_axis[r];
+        };
+        real peak = flow(0);
+        for (std::size_t r = 1; r < r0; ++r) peak = std::max(peak, flow(r));
+        bool recovers = false; // a valid row above r0 reaches the peak below it
+        for (std::size_t r = r0 + 1; r < nr; ++r) recovers = recovers || (valid[r] && !(flow(r) < peak));
+        if (!(flow(r0 - 1) < peak) && recovers) std::rethrow_exception(failure);
+    }
+    for (std::size_t ir = r0; ir < nr; ++ir) rows[ir] = r0 - 1;
+    try {
+        return build_maps(rows); // counts the held rows (EngineMaps::held_rpm_rows)
+    } catch (...) {
+        std::rethrow_exception(failure);
+    }
+}
+
+EngineMapsPtr EngineMapGenTask::build_maps(const std::vector<std::size_t>& row_src) const {
+    const Impl& s = *impl_;
+    const std::size_t nr = s.rpm_axis.size(), np = s.p_axis.size();
+    // The rpm rows whose points the output uses (all of them for the identity).
+    std::vector<unsigned char> row_used(nr, 0);
+    for (std::size_t ir = 0; ir < nr; ++ir) row_used[row_src[ir]] = 1;
     for (std::size_t i = 0; i < s.ops.size(); ++i) {
         if (s.done[i] == 0) throw std::runtime_error("EngineMapGenTask::finish: point " + std::to_string(i) + " was not run");
+        if (i < s.grid_n && !row_used[i / np]) continue;
+        if (s.wot && i >= s.wot_base && !row_used[i - s.wot_base]) continue;
         if (s.done[i] == 2) {
             // N5: rethrow the ORIGINAL exception unmodified (never
             // reconstructed via e.what() - TOOL-019) for the lowest failing
@@ -586,9 +648,21 @@ EngineMapsPtr EngineMapGenTask::finish() {
             // loader) already lets propagate unwrapped.
             std::rethrow_exception(s.exceptions[i]);
         }
+        // Held rpm rows: run_point's deferred trim failure of a breathing node without WOT rows, at its point index
+        // and with its old message (the WOT path judges node_status below).
+        if (s.pipe && !s.wot && i < s.grid_n && !s.nonbreathing[i] && s.node_status[i] != 0) {
+            if (s.node_status[i] == 1) {
+                throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[i].p_im_pa) +
+                                         " Pa unreachable at " + std::to_string(s.ops[i].rpm) +
+                                         " rpm (throttle fully open: mean plenum " + std::to_string(s.p_mean[i]) +
+                                         " Pa)");
+            }
+            throw std::runtime_error("engine map generator: plenum target " + std::to_string(s.ops[i].p_im_pa) +
+                                     " Pa not settled at " + std::to_string(s.ops[i].rpm) + " rpm (mean plenum " +
+                                     std::to_string(s.p_mean[i]) + " Pa)");
+        }
     }
     const CycleModelDesc& d = s.desc;
-    const std::size_t nr = s.rpm_axis.size(), np = s.p_axis.size();
     const real cyl = real(d.cylinders);
     const real v_disp = v_disp_of(d);
     const real r_t = kRGas * kTref; // the runtime's make_ambient(ISA).r_t
@@ -598,6 +672,7 @@ EngineMapsPtr EngineMapGenTask::finish() {
     SimulatedEngineMapsDesc& m = em.maps;
     em.quality = s.quality;
     em.generator_version = s.version;
+    for (std::size_t ir = 0; ir < nr; ++ir) em.held_rpm_rows += row_src[ir] != ir ? 1 : 0;
 
     // P7d (progress file D1): the output p_im axis. Without WOT rows it is the author axis. With them, the author rows
     // strictly below min(ambient, the lowest WOT plenum pressure) - the others are dropped - and one top row at ambient
@@ -605,7 +680,7 @@ EngineMapsPtr EngineMapGenTask::finish() {
     std::size_t kept = np;
     if (s.wot) {
         real p_wot_min = kPamb;
-        for (std::size_t ir = 0; ir < nr; ++ir) p_wot_min = std::min(p_wot_min, s.p_mean[s.wot_base + ir]);
+        for (std::size_t ir = 0; ir < nr; ++ir) p_wot_min = std::min(p_wot_min, s.p_mean[s.wot_base + row_src[ir]]);
         kept = 0;
         while (kept < np && s.p_axis[kept] < p_wot_min) ++kept;
         // ... and (D1b) while the highest kept row traps at least as much air as the WOT state on any rpm line (near WOT
@@ -619,9 +694,9 @@ EngineMapsPtr EngineMapGenTask::finish() {
         while (kept > 0) {
             bool below = true;
             for (std::size_t ir = 0; ir < nr && below; ++ir) {
-                const std::size_t si = ir * np + (kept - 1);
+                const std::size_t si = row_src[ir] * np + (kept - 1);
                 if (s.nonbreathing[si]) continue;
-                below = air_of(si, s.p_axis[kept - 1]) < air_of(s.wot_base + ir, s.p_mean[s.wot_base + ir]);
+                below = air_of(si, s.p_axis[kept - 1]) < air_of(s.wot_base + row_src[ir], s.p_mean[s.wot_base + row_src[ir]]);
             }
             if (below) break;
             --kept;
@@ -632,7 +707,7 @@ EngineMapsPtr EngineMapGenTask::finish() {
         // (A5 G3), with run_point's message when its trim failed and a plain one when a ram-tuned cycle reached it.
         for (std::size_t ir = 0; ir < nr; ++ir) {
             for (std::size_t ip = 0; ip < np; ++ip) {
-                const std::size_t k = ir * np + ip;
+                const std::size_t k = row_src[ir] * np + ip;
                 if (ip >= kept) {
                     if (!(s.p_axis[ip] > kPamb)) continue;
                     if (s.node_status[k] != 1) {
@@ -662,8 +737,13 @@ EngineMapsPtr EngineMapGenTask::finish() {
     std::vector<real> y_out(s.p_axis.begin(), s.p_axis.begin() + static_cast<std::ptrdiff_t>(kept));
     if (s.wot) y_out.push_back(kPamb);
     // Output node (ir, ipo) -> its point index, and the pressure its VE and pumping refer to.
-    auto src = [&](std::size_t ir, std::size_t ipo) { return ipo < kept ? ir * np + ipo : s.wot_base + ir; };
-    auto p_node = [&](std::size_t ir, std::size_t ipo) { return ipo < kept ? s.p_axis[ipo] : s.p_mean[s.wot_base + ir]; };
+    // Held rpm rows: output row ir takes the points of rpm row row_src[ir] (per-cycle results, plenum pressures, status).
+    auto src = [&](std::size_t ir, std::size_t ipo) {
+        return ipo < kept ? row_src[ir] * np + ipo : s.wot_base + row_src[ir];
+    };
+    auto p_node = [&](std::size_t ir, std::size_t ipo) {
+        return ipo < kept ? s.p_axis[ipo] : s.p_mean[s.wot_base + row_src[ir]];
+    };
 
     auto grid_table = [&](Table2D& t) {
         t.x = s.rpm_axis;
@@ -749,7 +829,10 @@ EngineMapsPtr EngineMapGenTask::finish() {
             m.eta_spark.y.push_back(mean);
         }
         em.eta_spark_spread = spread;
-        for (unsigned char h : s.held) em.held_plenum_points += h;
+        // s.held is set for grid nodes only: the identity sums every point as before.
+        for (std::size_t ir = 0; ir < nr; ++ir) {
+            for (std::size_t ip = 0; ip < np; ++ip) em.held_plenum_points += s.held[row_src[ir] * np + ip];
+        }
     }
     m.theta_mbt_deg.x = {s.rpm_axis.front(), s.rpm_axis.back()};
     m.theta_mbt_deg.y = {y_out.front(), y_out.back()};
@@ -766,8 +849,9 @@ EngineMapsPtr EngineMapGenTask::finish() {
             for (std::size_t ip = 0; ip < npo; ++ip) {
                 const std::size_t k = ir * npo + ip;
                 if (fill[k]) continue;
-                // The node's own operating point (a WOT point ran at the ECU spark at ambient).
-                const real rpm = s.rpm_axis[ir], p = s.ops[src(ir, ip)].p_im_pa;
+                // The node's own operating point (a WOT point ran at the ECU spark at ambient; a held row's node ran
+                // at its source row's rpm, so its MBT-equivalent eta_i is the source row's - the edge clamp).
+                const real rpm = s.rpm_axis[row_src[ir]], p = s.ops[src(ir, ip)].p_im_pa;
                 const real x = d.spark_advance_deg.value(rpm, p) - m.theta_mbt_deg.value(rpm, p);
                 const real es = m.eta_spark.evaluate(x);
                 if (!(es > real(0.0))) {
@@ -804,7 +888,7 @@ EngineMapsPtr EngineMapGenTask::finish() {
     }
     if (s.wot) {
         m.wot_p_im_pa.x = s.rpm_axis;
-        for (std::size_t ir = 0; ir < nr; ++ir) m.wot_p_im_pa.y.push_back(s.p_mean[s.wot_base + ir]);
+        for (std::size_t ir = 0; ir < nr; ++ir) m.wot_p_im_pa.y.push_back(s.p_mean[s.wot_base + row_src[ir]]);
     }
 
     // eta_i over rpm x m_air_rev: union axis, per-line piecewise-linear resampling.
