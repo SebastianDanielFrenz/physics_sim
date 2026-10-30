@@ -241,6 +241,13 @@ but stays disconnected from the wheels. B uses the existing available motor rege
 wheel-slip protection and low-speed auto-hold. Leaving both Eco and Electric clears B; changing between them keeps it.
 ICE-only cars do not gain B.
 
+### Hybrid launch-control motor limits
+
+When a fitted combustion launch controller holds the clutch open, wheel-path motors produce no drive torque.
+On release its throttle ceiling also scales electric drive after the constant-power corner, alongside the TC limit.
+Crank-assist generators remain available for engine start and regeneration is unaffected. The host drive-mode policy
+controls where the fitted controller is allowed to operate.
+
 ## Disconnected hybrid charging power (2026-10-23)
 
 `hybrid_control.charge_power_w` is requested mechanical ICE output (default 50000 W).
