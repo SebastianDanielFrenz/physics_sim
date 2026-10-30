@@ -229,6 +229,17 @@ real VehicleInstance::ackermann_wheel_angle(std::size_t wheel_index, real delta_
 
 void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                                  real tick_dt, real substep_rate_hz) {
+    VehicleTickWork tw;
+    tick_begin(tw, backend, channel_values, env, tick_dt, substep_rate_hz);
+    for (std::size_t s = 0; s < tw.num_substeps; ++s) {
+        substep_forces(tw, s, backend);
+        substep_advance(tw);
+    }
+    tick_end(tw, backend);
+}
+
+void VehicleInstance::tick_begin(VehicleTickWork& tw, IRigidBackend& backend, const std::vector<real>& channel_values,
+                                 const VehicleTickEnv& env, real tick_dt, real substep_rate_hz) {
     // PLAN.md P4 I0: built locally (stack, no allocation) from this
     // vehicle's own pre-resolved indices - see ControlChannelIndices.
     ControlInputs controls;
@@ -415,10 +426,6 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     const std::size_t num_substeps = std::max<std::size_t>(1, static_cast<std::size_t>(tick_dt * substep_rate_hz + real(0.5)));
     const real substep_dt = tick_dt / static_cast<real>(num_substeps);
 
-    Vec3 force_sum = Vec3::zero();
-    Vec3 torque_sum = Vec3::zero();
-    Vec3 aero_force_sum{}, aero_torque_sum{};
-    real fan_energy_used=0, front_downforce_sum=0, rear_downforce_sum=0;
 
     // PHYS-033 P4 I2 commit 5b (plan section 8): snapshot the ledger's
     // cumulative fields before this tick's substeps, so end_tick() below can
@@ -444,285 +451,383 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     Pose pose_s = pose0;
     Motion twist_s = motion0;
     substep_telemetry_count_ = std::min(num_substeps, kMaxSubstepTelemetry);
-    for (std::size_t s = 0; s < num_substeps; ++s) {
-        const Vec3 com = pose_s.position;
 
-        // Pass 1: every wheel's ground contact, before pre_solve (ARB needs
-        // the partner's fresh measurement - wheel_instance.h's comment).
-        for (std::size_t i = 0; i < wheels_.size(); ++i) {
-            const real delta = ackermann_wheel_angle(i, delta_avg);
-            wheels_[i]->measure_contact(pose_s, delta, backend);
-        }
+    // What the substeps and tick_end read: step_tick's locals, kept in tw so several vehicles can take turns.
+    tw.env = env;
+    tw.tick_dt = tick_dt;
+    tw.num_substeps = num_substeps;
+    tw.substep_dt = substep_dt;
+    tw.controls = controls;
+    tw.clutch_pedal = clutch_pedal;
+    tw.gear_request = gear_request;
+    tw.shift_up_count = shift_up_count;
+    tw.shift_down_count = shift_down_count;
+    tw.ignition = ignition;
+    tw.starter = starter;
+    tw.assist_auto_clutch = assist_auto_clutch;
+    tw.assist_auto_blip = assist_auto_blip;
+    tw.assist_auto_shift = assist_auto_shift;
+    tw.drive_params = drive_params;
+    tw.drive_mode_req = drive_mode_req;
+    tw.drive_mode_eff = drive_mode_eff;
+    tw.assist_abs = assist_abs;
+    tw.esc_mode_req = esc_mode_req;
+    tw.esc_mode_eff = esc_mode_eff;
+    tw.assist_esc = assist_esc;
+    tw.tc_mode_requested = tc_mode_requested;
+    tw.tc_mode_effective = tc_mode_effective;
+    tw.assist_traction = assist_traction;
+    tw.tc_desc = &tc_desc;
+    tw.assist_launch = assist_launch;
+    tw.ceiling_throttle = ceiling_throttle;
+    tw.assist_aero = assist_aero;
+    tw.aero_control_target_deg = aero_control_target_deg;
+    tw.aero_world_command = aero_world_command;
+    tw.imu_accel = imu_accel;
+    tw.ip = ip;
+    tw.a_ext = a_ext;
+    tw.alpha_ext = alpha_ext;
+    tw.delta_avg = delta_avg;
+    tw.pose_s = pose_s;
+    tw.twist_s = twist_s;
+}
 
-        // PHYS-033 P4 I2 commit 5b (plan section 7 step 4): pre_solve -
-        // powertrain.begin_substep(); components in ARRAY order; wheels in
-        // WheelDesc order (each wheel's hub torque-law terms feed straight
-        // into the network's Assembly via add_hub_terms).
-        powertrain_.begin_substep();
-        drivetrain::ComponentSubstepCtx ctx;
-        ctx.h = substep_dt;
-        ctx.throttle = controls.throttle;
-        const real yaw=pose_s.orientation.inverse().rotate(twist_s.angular).z;
-        for(std::size_t i=0;i<wheels_.size();++i) {
-            const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
-            const bool braked=((traction_brake_bits_[i]&1)&&controls.brake>real(.05))||((traction_brake_bits_[i]&2)&&controls.handbrake>real(.05));
-            sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i),braked};
-            const auto& frame = wheels_[i]->contact_frame();
-            traction_wheels_[i] = {sensor.peripheral_speed_m_s,
-                dot(twist_s.velocity_at(frame.point - pose_s.position), frame.long_dir),
-                wheels_[i]->telemetry().fz, sensor.driven, wheels_[i]->hit_ground()};
-        }
-        // Assists I5 part 2 / I6: ABS and ESC (abs_esc.h) from the same sensors. Off (or not fitted) leaves
-        // ctx.wheel_brake null, so every brake row reads ctx.brake exactly as before.
-        real esc_fraction = 1;
-        if (assist_abs || assist_esc) {
-            real front_sum = 0; int front_n = 0;
-            for (std::size_t i = 0; i < wheels_.size(); ++i) if (is_front_[i]) { front_sum += traction_sensors_[i].steer_rad; ++front_n; }
-            esc_front_angle_ = front_n > 0 ? front_sum / static_cast<real>(front_n) : real(0);
-            AbsEscInputs ai;
-            ai.wheels = traction_sensors_;
-            ai.is_front = is_front_;
-            ai.imu_accel = imu_accel;
-            ai.ground_truth = fit_abs_ && desc_.assist_unit->abs->reference_speed == AbsReferenceSpeed::GroundTruth;
-            ai.ground_speed = pose_s.orientation.inverse().rotate(twist_s.linear).x; // the shadow chassis' own velocity, body x
-            ai.yaw_rate = yaw;
-            ai.brake = controls.brake;
-            ai.handbrake = controls.handbrake;
-            ai.front_wheel_angle = esc_front_angle_;
-            ai.wheelbase = wheelbase_;
-            ai.dt = substep_dt;
-            ai.abs = assist_abs ? &*desc_.assist_unit->abs : nullptr;
-            ai.esc = fit_esc_ ? &*desc_.assist_unit->esc : nullptr;
-            ai.esc_mode = esc_mode_eff;
-            ai.wheel_brake_out = wheel_brake_;
-            step_abs_esc(abs_esc_state_, ai);
-            esc_fraction = abs_esc_state_.esc_torque_fraction;
-        } else if (abs_esc_state_.initialized) {
-            abs_esc_state_.reset(); // both switched off: the next switch-on starts from the wheels again
-        }
-        // A wheel ABS/ESC is braking (ESC also without the pedal) only bounds TC's speed estimate from below; it is
-        // not a free wheel the estimator may track directly.
-        if (assist_abs || assist_esc)
-            for (std::size_t i = 0; i < wheels_.size(); ++i)
-                if (wheel_brake_[i] > real(.05)) traction_sensors_[i].braked = true;
-        // Assists I4 (D-LC1): the unit's launch control decides first, from the previous substep's sensors (its own
-        // powertrain reads and TC's estimator state), so this substep's TC call already knows whether the controller
-        // owns the car. While it does (Armed, Launch), TC outputs are not handed to the powertrain;
-        // launch control reads the same physical contact slip directly.
-        LaunchAssist::Outputs lc_out;
-        if(launch_) {
-            LaunchAssist::Inputs li;
-            li.enabled=assist_launch;
-            // Automatic gearbox plan A1: the unit's launch control holds the car on the manual_tcu's auto-clutch. A
-            // DualClutch's TCU always owns its launch clutch, so it arms there too (DCT launch control); a converter
-            // automatic or a CVT never arms (the converter's stall speed caps the revs).
-            li.auto_clutch=has_manual_tcu_?assist_auto_clutch:launch_on_dct_;
-            li.engine_running=powertrain_.has_engine()&&powertrain_.last_engine_result().state==drivetrain::EngineTorqueMap::EngineState::Running;
-            li.throttle=controls.throttle;li.brake=controls.brake;
-            li.speed_mps=powertrain_.approx_speed_mps();
-            if(powertrain_.has_gearbox()) {
-                const auto& gb=powertrain_.gearbox();
-                li.gear=gb.current_position();
-                li.shifting=gb.target()!=gb.current_position()||gb.phase()!=drivetrain::Gearbox::Phase::Idle;
-                if(powertrain_.has_auto()) { // DCT launch control: a decided or running clutch-to-clutch shift
-                    const auto& at=powertrain_.auto_trans();
-                    li.shifting=li.shifting||at.target()!=at.current()||(at.phase()!=drivetrain::AutoTransmission::Phase::Idle&&at.phase()!=drivetrain::AutoTransmission::Phase::Engage);
-                }
-            }
-            li.slip_valid=true;
-            li.slip=traction_driven_slip(traction_wheels_,launch_->desc().slip_floor_mps);
-            launch_slip_target_=launch_->desc().slip_target[static_cast<std::size_t>(tc_mode_effective)];
-            li.slip_target=launch_slip_target_;
-            li.dt=substep_dt;li.first_substep_of_tick=(s==0);
-            lc_out=launch_->step(li);
-            if(lc_out.handover&&assist_traction&&traction_state_.initialized) {
-                // Handover starts from the launch ceiling and recovers using current contact slip.
-                traction_state_.torque_fraction=std::clamp(lc_out.handover_ceiling,tc_desc.min_fraction,real(1));
-            }
-        }
-        const bool lc_owns=lc_out.owns;
-        const real traction_fraction_raw=step_traction_control(tc_desc,traction_state_,traction_wheels_,pose_s.orientation.inverse().rotate(twist_s.linear).x,
-            controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction||lc_owns,substep_dt);
-        // TC's output reaches the powertrain only when TC is really on and not suspended by the launch control.
-        const real traction_fraction=std::min((assist_traction&&!lc_owns)?traction_fraction_raw:real(1),esc_fraction); // I6: ESC's torque cut
-        ctx.traction_ignition_cut=assist_traction&&!lc_owns&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
-        ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*traction_fraction:real(1);
-        ctx.assist_ceiling_as_retard=tc_desc.ignition_cut; // pedal P1 (b): TC/LC ceilings as spark retard (engine.h)
-        if(lc_owns||lc_out.overlay) {
-            // overlay = the soft hand-over: traction control is back, the launch limit and the clutch fraction stay
-            // in force until the fraction has climbed to 1 (launch_assist.h)
-            ctx.launch_limiter_rpm=lc_out.limiter_rpm;
-            ctx.launch_hold_clutch=lc_out.hold_clutch;
-            ctx.launch_clutch_ramp=lc_out.clutch_ramp;
-            ctx.launch_throttle_ceiling=lc_out.ceiling<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*lc_out.ceiling:real(1);
-        }
-        // The clutch uses actual chassis speed; TC/LC uses actual per-patch slip.
-        if(assist_traction&&!lc_owns) {
-            ctx.traction_torque_fraction=traction_fraction;
-            ctx.traction_floor_fraction=tc_desc.min_fraction;
-        }
-        if(assist_traction||lc_owns)
-            ctx.ground_speed_mps=pose_s.orientation.inverse().rotate(twist_s.linear).x;
-        ctx.brake = controls.brake;
-        ctx.handbrake = controls.handbrake;
-        if (assist_abs || assist_esc) ctx.wheel_brake = wheel_brake_.data(); // assists I5 part 2 / I6
-        if (assist_abs && abs_esc_state_.applied.size() == wheel_brake_.size()) ctx.wheel_abs_scale = abs_esc_state_.applied.data(); // brake blending: ABS withdraws regeneration
-        ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9
-        ctx.clutch_pedal = clutch_pedal;
-        ctx.gear_request = gear_request;
-        ctx.shift_up_count = shift_up_count;
-        ctx.shift_down_count = shift_down_count;
-        ctx.ignition = ignition;
-        ctx.starter = starter;
-        ctx.assist_auto_clutch = assist_auto_clutch;
-        ctx.assist_auto_blip = assist_auto_blip;
-        ctx.assist_auto_shift = assist_auto_shift;
-        ctx.assist_launch_control = assist_launch;
-        if (drive_params != nullptr) { // assists I7: the effective drive mode's throttle bend, shift/close overrides, nitrous gate
-            if (drive_params->pedal_bend) { ctx.drive_bend_x = drive_params->pedal_bend->x; ctx.drive_bend_y = drive_params->pedal_bend->y; }
-            if (drive_params->up_rpm_at_zero_throttle) ctx.drive_up_rpm_zero = *drive_params->up_rpm_at_zero_throttle;
-            if (drive_params->up_rpm_at_full_throttle) ctx.drive_up_rpm_full = *drive_params->up_rpm_at_full_throttle;
-            if (drive_params->down_rpm_at_zero_throttle) ctx.drive_down_rpm_zero = *drive_params->down_rpm_at_zero_throttle;
-            if (drive_params->down_rpm_at_full_throttle) ctx.drive_down_rpm_full = *drive_params->down_rpm_at_full_throttle;
-            if (drive_params->clutch_close_time_s) ctx.drive_close_time_s = *drive_params->clutch_close_time_s;
-            ctx.nitrous_arm_allowed = drive_params->nitrous_arm_allowed;
-        }
-        ctx.first_substep_of_tick = (s == 0);
-        // B mode wheel-slip guard: this substep's contact-patch sensors (the same ones traction control reads).
-        ctx.traction_wheels = traction_wheels_.data();
-        ctx.traction_wheel_count = static_cast<int>(traction_wheels_.size());
-        ctx.electric_mode_allowed = !desc_.drive_modes || (desc_.drive_modes->modes_bits & drive_mode_bit(DriveMode::Electric)) != 0;
-        // PHYS-033 P4 I4 C3: points at this tick's already-copied component-
-        // channel buffer (see the per-tick copy above) - rebuilt each
-        // substep alongside the rest of ctx, but the buffer itself is only
-        // refilled once per tick.
-        ctx.channels = component_channel_values_.data();
-        ctx.channel_count = static_cast<int>(component_channel_values_.size());
-        powertrain_.pre_solve_components(ctx);
-        for (std::size_t i = 0; i < wheels_.size(); ++i) {
-            const WheelDesc& w = desc_.wheels[i];
-            const real delta = ackermann_wheel_angle(i, delta_avg);
-            WheelPreSolveInput in;
-            in.chassis_pose = pose_s;
-            in.chassis_motion = twist_s;
-            in.chassis_com_world = com;
-            in.steer_angle = delta;
-            in.dt = substep_dt;
-            in.partner_compression = w.arb_partner >= 0 ? wheels_[static_cast<std::size_t>(w.arb_partner)]->compression() : 0.0;
-            in.surfaces = surfaces_;
-            in.grip = env.grip;
+void VehicleInstance::substep_forces(VehicleTickWork& tw, std::size_t s, IRigidBackend& backend) {
+    const VehicleTickEnv& env = tw.env;
+    const real substep_dt = tw.substep_dt;
+    const ControlInputs& controls = tw.controls;
+    const real clutch_pedal = tw.clutch_pedal, gear_request = tw.gear_request, shift_up_count = tw.shift_up_count;
+    const real shift_down_count = tw.shift_down_count, ignition = tw.ignition, starter = tw.starter;
+    const bool assist_auto_clutch = tw.assist_auto_clutch, assist_auto_blip = tw.assist_auto_blip, assist_auto_shift = tw.assist_auto_shift;
+    const DriveModeParams* drive_params = tw.drive_params;
+    const bool assist_abs = tw.assist_abs, assist_esc = tw.assist_esc, assist_traction = tw.assist_traction, assist_launch = tw.assist_launch;
+    const EscMode esc_mode_eff = tw.esc_mode_eff;
+    const TractionMode tc_mode_effective = tw.tc_mode_effective;
+    const TractionControlDesc& tc_desc = *tw.tc_desc;
+    const real ceiling_throttle = tw.ceiling_throttle, imu_accel = tw.imu_accel, delta_avg = tw.delta_avg;
+    const Pose& pose_s = tw.pose_s;
+    const Motion& twist_s = tw.twist_s;
+    Vec3& aero_force_sum = tw.aero_force_sum;
+    Vec3& aero_torque_sum = tw.aero_torque_sum;
+    real& fan_energy_used = tw.fan_energy_used;
+    real& front_downforce_sum = tw.front_downforce_sum;
+    real& rear_downforce_sum = tw.rear_downforce_sum;
 
-            const real omega_old = powertrain_.hub_omega(i);
-            hub_omega_old_scratch_[i] = omega_old; // PHYS-033 P4 I3 plan section 6.7: needed after solve() below
-            const HubTerms ht = wheels_[i]->pre_solve(in, omega_old);
-            powertrain_.add_hub_terms(i, ht.tau0, ht.d);
-        }
+    const Vec3 com = pose_s.position;
 
-        // step 5: the network solve (also folds in integrator_loss/rotor_ke
-        // and captures each rotor port's alpha, powertrain.h's own comment).
-        powertrain_.solve(substep_dt);
-
-        // step 6: post_solve - components in ARRAY order, then wheels in
-        // WheelDesc order (each wheel's force feeds the chassis wrench and
-        // its own wheel_out/tyre_loss ledger deltas).
-        powertrain_.post_solve_components(ctx);
-
-        Vec3 force_s = Vec3::zero();
-        Vec3 torque_s = Vec3::zero();
-        for (std::size_t i = 0; i < wheels_.size(); ++i) {
-            const real omega_new = powertrain_.hub_omega(i);
-            const WheelSubstepOutput out = wheels_[i]->post_solve(omega_new);
-            powertrain_.add_wheel_energy(out.wheel_out_j, out.tyre_loss_j);
-            // Assists I2a (diag only, unhashed, preallocated): this substep's wheel telemetry.
-            if (s < kMaxSubstepTelemetry) substep_telemetry_[s * wheels_.size() + i] = wheels_[i]->telemetry();
-            // PHYS-033 I1b defect 2 fix (decision D-B): ONE force vector per
-            // wheel (already resolved along the ground-plane contact frame,
-            // WheelInstance::post_solve's own assemble_contact_wrench),
-            // acting at ONE point - replaces the old separate suspension-
-            // force-at-attachment + tyre-force-at-contact-point assembly,
-            // which double-counted nothing but resolved both along the
-            // chassis' own (possibly tilted-relative-to-ground) axes.
-            force_s += out.contact_force_world;
-            torque_s += cross(out.contact_point_world - com, out.contact_force_world) + out.extra_torque_world;
-
-            // PHYS-033 P4 I3 plan section 6.7: this hub's own rotor-reaction
-            // contribution, using the wheel's WORLD spin axis (unlike the
-            // fixed chassis-local axes powertrain_'s own rotor_ports_ use) -
-            // Powertrain::rotor_port_* never sees wheel hubs (Phase M of its
-            // constructor skips them, always-zero axis).
-            if (powertrain_.rotor_reaction_enabled()) {
-                const real alpha = (omega_new - hub_omega_old_scratch_[i]) / substep_dt;
-                torque_s += -powertrain_.hub_inertia(i) * alpha * wheels_[i]->spin_axis_world();
-            }
-        }
-
-        // Aero sees the SAME shadow pose/twist as the tyres, not a stale backend state.
-        // Local probes also work against overhead roads when the chassis is inverted.
-        std::array<aero::GroundSample,aero::max_surfaces+aero::max_fans+1> aero_ground{};
-        auto probe=[&](Vec3 point,Vec3 direction,real range) {
-            aero::GroundSample result;
-            if(range<=0) return result;
-            const Vec3 origin=pose_s.transform_point(point), dir=pose_s.transform_direction(direction);
-            const auto hit=backend.ray_cast_excluding(origin,dir,range,chassis_);
-            // Only a surface facing this probe may form a road/seal. A miss is never ground.
-            if(hit.hit&&dot(hit.normal,-dir)>.5) result={true,range*hit.fraction};
-            return result;
-        };
-        for(std::size_t i=0;i<desc_.aero.surfaces.size();++i) {
-            const auto& surface=desc_.aero.surfaces[i];
-            const real command=aero_state_.surface_command[i];
-            const real target=command>=0?command*surface.max_offset_rad:-command*surface.min_offset_rad;
-            const real offset=aero_state_.offset_rad[i]+std::clamp(target-aero_state_.offset_rad[i],-surface.rate_rad_s*substep_dt,surface.rate_rad_s*substep_dt);
-            const real lift=surface.max_offset_rad>0 ? surface.max_lift_m*std::clamp(offset/surface.max_offset_rad,real(0),real(1)) : real(0);
-            aero_ground[i]=probe(surface.position_local+surface.normal_local*lift,surface.ground.probe_local,surface.ground.range_m);
-        }
-        for(std::size_t i=0;i<desc_.aero.fans.size();++i) {
-            const auto& fan=desc_.aero.fans[i];
-            aero_ground[desc_.aero.surfaces.size()+i]=probe(fan.position_local,fan.direction_local,fan.probe_range_m);
-        }
-        if(desc_.aero.coefficient_map.table&&!desc_.aero.coefficient_map.table->data().axes[3].empty()) {
-            const auto& map=desc_.aero.coefficient_map;
-            aero_ground[desc_.aero.surfaces.size()+desc_.aero.fans.size()]=probe(map.ground_position_local,map.ground_probe_local,map.ground_range_m);
-        }
-        auto aero_sample=aero::step(desc_.aero,aero_state_,pose_s,twist_s,
-            aero::Environment{env.air_density,env.wind_world},substep_dt,aero_ground,env.wakes,chassis_,env.extra_wakes);
-        force_s+=aero_sample.wrench_world.force; torque_s+=aero_sample.wrench_world.torque;
-        aero_force_sum+=aero_sample.wrench_world.force; aero_torque_sum+=aero_sample.wrench_world.torque;
-        fan_energy_used+=aero_sample.fan_energy_used_j;
-        if(has_axle_balance_) {
-            const real pitch=pose_s.orientation.inverse().rotate(aero_sample.wrench_world.torque).y;
-            const real front=(pitch-rear_axle_x_*aero_sample.downforce_n)/wheelbase_;
-            front_downforce_sum+=front; rear_downforce_sum+=aero_sample.downforce_n-front;
-        } else {
-            front_downforce_sum+=aero_sample.front_downforce_n; rear_downforce_sum+=aero_sample.rear_downforce_n;
-        }
-        aero_telemetry_=aero_sample; // surface/actuator values describe the last substep
-
-        // PHYS-033 P4 I3 plan section 6.7: rotor reaction from every non-hub
-        // rotating port (engine crank, clutch in/out, gearbox in/out, diff
-        // carrier) - fixed chassis-local axes, rotated to world here.
-        if (powertrain_.rotor_reaction_enabled()) {
-            Vec3 t_react_local = Vec3::zero();
-            for (std::size_t i = 0; i < powertrain_.rotor_port_count(); ++i) {
-                t_react_local += -powertrain_.rotor_port_inertia(i) * powertrain_.rotor_port_alpha(i) * powertrain_.rotor_port_axis_local(i);
-            }
-            torque_s += pose_s.orientation.rotate(t_react_local);
-        }
-
-        force_sum += force_s;
-        torque_sum += torque_s;
-
-        // Shadow update (I1 plan section 3.3, step 8): velocity FIRST, from
-        // THIS substep's own wrench, then pose with the NEW velocity - the
-        // same symplectic order Jolt itself uses (F8). Tick-start inv_mass/
-        // inv_inertia_world/gravity_factor throughout (ip, read once above);
-        // no gyroscopic term (I1 plan section 2, claim A item 2 - Jolt
-        // applies none by default and this backend never enables it).
-        twist_s.linear += substep_dt * (force_s * ip.inv_mass + a_ext);
-        twist_s.angular += substep_dt * (ip.inv_inertia_world * torque_s + alpha_ext);
-        pose_s.position += twist_s.linear * substep_dt;
-        pose_s.orientation = integrate_orientation(pose_s.orientation, twist_s.angular, substep_dt);
+    // Pass 1: every wheel's ground contact, before pre_solve (ARB needs
+    // the partner's fresh measurement - wheel_instance.h's comment).
+    for (std::size_t i = 0; i < wheels_.size(); ++i) {
+        const real delta = ackermann_wheel_angle(i, delta_avg);
+        wheels_[i]->measure_contact(pose_s, delta, backend);
     }
+
+    // PHYS-033 P4 I2 commit 5b (plan section 7 step 4): pre_solve -
+    // powertrain.begin_substep(); components in ARRAY order; wheels in
+    // WheelDesc order (each wheel's hub torque-law terms feed straight
+    // into the network's Assembly via add_hub_terms).
+    powertrain_.begin_substep();
+    drivetrain::ComponentSubstepCtx ctx;
+    ctx.h = substep_dt;
+    ctx.throttle = controls.throttle;
+    const real yaw=pose_s.orientation.inverse().rotate(twist_s.angular).z;
+    for(std::size_t i=0;i<wheels_.size();++i) {
+        const auto& w=desc_.wheels[i];auto& sensor=traction_sensors_[i];
+        const bool braked=((traction_brake_bits_[i]&1)&&controls.brake>real(.05))||((traction_brake_bits_[i]&2)&&controls.handbrake>real(.05));
+        sensor={powertrain_.hub_omega(i)*w.wheel_radius,ackermann_wheel_angle(i,delta_avg),w.attachment_local.x,w.attachment_local.y,powertrain_.wheel_is_driven(i),braked};
+        const auto& frame = wheels_[i]->contact_frame();
+        traction_wheels_[i] = {sensor.peripheral_speed_m_s,
+            dot(twist_s.velocity_at(frame.point - pose_s.position), frame.long_dir),
+            wheels_[i]->telemetry().fz, sensor.driven, wheels_[i]->hit_ground()};
+    }
+    // Assists I5 part 2 / I6: ABS and ESC (abs_esc.h) from the same sensors. Off (or not fitted) leaves
+    // ctx.wheel_brake null, so every brake row reads ctx.brake exactly as before.
+    real esc_fraction = 1;
+    if (assist_abs || assist_esc) {
+        real front_sum = 0; int front_n = 0;
+        for (std::size_t i = 0; i < wheels_.size(); ++i) if (is_front_[i]) { front_sum += traction_sensors_[i].steer_rad; ++front_n; }
+        esc_front_angle_ = front_n > 0 ? front_sum / static_cast<real>(front_n) : real(0);
+        AbsEscInputs ai;
+        ai.wheels = traction_sensors_;
+        ai.is_front = is_front_;
+        ai.imu_accel = imu_accel;
+        ai.ground_truth = fit_abs_ && desc_.assist_unit->abs->reference_speed == AbsReferenceSpeed::GroundTruth;
+        ai.ground_speed = pose_s.orientation.inverse().rotate(twist_s.linear).x; // the shadow chassis' own velocity, body x
+        ai.yaw_rate = yaw;
+        ai.brake = controls.brake;
+        ai.handbrake = controls.handbrake;
+        ai.front_wheel_angle = esc_front_angle_;
+        ai.wheelbase = wheelbase_;
+        ai.dt = substep_dt;
+        ai.abs = assist_abs ? &*desc_.assist_unit->abs : nullptr;
+        ai.esc = fit_esc_ ? &*desc_.assist_unit->esc : nullptr;
+        ai.esc_mode = esc_mode_eff;
+        ai.wheel_brake_out = wheel_brake_;
+        step_abs_esc(abs_esc_state_, ai);
+        esc_fraction = abs_esc_state_.esc_torque_fraction;
+    } else if (abs_esc_state_.initialized) {
+        abs_esc_state_.reset(); // both switched off: the next switch-on starts from the wheels again
+    }
+    // A wheel ABS/ESC is braking (ESC also without the pedal) only bounds TC's speed estimate from below; it is
+    // not a free wheel the estimator may track directly.
+    if (assist_abs || assist_esc)
+        for (std::size_t i = 0; i < wheels_.size(); ++i)
+            if (wheel_brake_[i] > real(.05)) traction_sensors_[i].braked = true;
+    // Assists I4 (D-LC1): the unit's launch control decides first, from the previous substep's sensors (its own
+    // powertrain reads and TC's estimator state), so this substep's TC call already knows whether the controller
+    // owns the car. While it does (Armed, Launch), TC outputs are not handed to the powertrain;
+    // launch control reads the same physical contact slip directly.
+    LaunchAssist::Outputs lc_out;
+    if(launch_) {
+        LaunchAssist::Inputs li;
+        li.enabled=assist_launch;
+        // Automatic gearbox plan A1: the unit's launch control holds the car on the manual_tcu's auto-clutch. A
+        // DualClutch's TCU always owns its launch clutch, so it arms there too (DCT launch control); a converter
+        // automatic or a CVT never arms (the converter's stall speed caps the revs).
+        li.auto_clutch=has_manual_tcu_?assist_auto_clutch:launch_on_dct_;
+        li.engine_running=powertrain_.has_engine()&&powertrain_.last_engine_result().state==drivetrain::EngineTorqueMap::EngineState::Running;
+        li.throttle=controls.throttle;li.brake=controls.brake;
+        li.speed_mps=powertrain_.approx_speed_mps();
+        if(powertrain_.has_gearbox()) {
+            const auto& gb=powertrain_.gearbox();
+            li.gear=gb.current_position();
+            li.shifting=gb.target()!=gb.current_position()||gb.phase()!=drivetrain::Gearbox::Phase::Idle;
+            if(powertrain_.has_auto()) { // DCT launch control: a decided or running clutch-to-clutch shift
+                const auto& at=powertrain_.auto_trans();
+                li.shifting=li.shifting||at.target()!=at.current()||(at.phase()!=drivetrain::AutoTransmission::Phase::Idle&&at.phase()!=drivetrain::AutoTransmission::Phase::Engage);
+            }
+        }
+        li.slip_valid=true;
+        li.slip=traction_driven_slip(traction_wheels_,launch_->desc().slip_floor_mps);
+        launch_slip_target_=launch_->desc().slip_target[static_cast<std::size_t>(tc_mode_effective)];
+        li.slip_target=launch_slip_target_;
+        li.dt=substep_dt;li.first_substep_of_tick=(s==0);
+        lc_out=launch_->step(li);
+        if(lc_out.handover&&assist_traction&&traction_state_.initialized) {
+            // Handover starts from the launch ceiling and recovers using current contact slip.
+            traction_state_.torque_fraction=std::clamp(lc_out.handover_ceiling,tc_desc.min_fraction,real(1));
+        }
+    }
+    const bool lc_owns=lc_out.owns;
+    const real traction_fraction_raw=step_traction_control(tc_desc,traction_state_,traction_wheels_,pose_s.orientation.inverse().rotate(twist_s.linear).x,
+        controls.throttle,std::max(controls.brake,controls.handbrake),assist_traction||lc_owns,substep_dt);
+    // TC's output reaches the powertrain only when TC is really on and not suspended by the launch control.
+    const real traction_fraction=std::min((assist_traction&&!lc_owns)?traction_fraction_raw:real(1),esc_fraction); // I6: ESC's torque cut
+    ctx.traction_ignition_cut=assist_traction&&!lc_owns&&tc_desc.ignition_cut&&traction_fraction<real(.75)&&traction_state_.positive_slip>tc_desc.target_slip+real(.04);
+    ctx.traction_throttle_ceiling=traction_fraction<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*traction_fraction:real(1);
+    ctx.assist_ceiling_as_retard=tc_desc.ignition_cut; // pedal P1 (b): TC/LC ceilings as spark retard (engine.h)
+    if(lc_owns||lc_out.overlay) {
+        // overlay = the soft hand-over: traction control is back, the launch limit and the clutch fraction stay
+        // in force until the fraction has climbed to 1 (launch_assist.h)
+        ctx.launch_limiter_rpm=lc_out.limiter_rpm;
+        ctx.launch_hold_clutch=lc_out.hold_clutch;
+        ctx.launch_clutch_ramp=lc_out.clutch_ramp;
+        ctx.launch_throttle_ceiling=lc_out.ceiling<real(1)?std::clamp(ceiling_throttle,real(0),real(1))*lc_out.ceiling:real(1);
+    }
+    // The clutch uses actual chassis speed; TC/LC uses actual per-patch slip.
+    if(assist_traction&&!lc_owns) {
+        ctx.traction_torque_fraction=traction_fraction;
+        ctx.traction_floor_fraction=tc_desc.min_fraction;
+    }
+    if(assist_traction||lc_owns)
+        ctx.ground_speed_mps=pose_s.orientation.inverse().rotate(twist_s.linear).x;
+    ctx.brake = controls.brake;
+    ctx.handbrake = controls.handbrake;
+    if (assist_abs || assist_esc) ctx.wheel_brake = wheel_brake_.data(); // assists I5 part 2 / I6
+    if (assist_abs && abs_esc_state_.applied.size() == wheel_brake_.size()) ctx.wheel_abs_scale = abs_esc_state_.applied.data(); // brake blending: ABS withdraws regeneration
+    ctx.ambient = env.ambient; // PHYS-033 P4 I7b C9
+    ctx.clutch_pedal = clutch_pedal;
+    ctx.gear_request = gear_request;
+    ctx.shift_up_count = shift_up_count;
+    ctx.shift_down_count = shift_down_count;
+    ctx.ignition = ignition;
+    ctx.starter = starter;
+    ctx.assist_auto_clutch = assist_auto_clutch;
+    ctx.assist_auto_blip = assist_auto_blip;
+    ctx.assist_auto_shift = assist_auto_shift;
+    ctx.assist_launch_control = assist_launch;
+    if (drive_params != nullptr) { // assists I7: the effective drive mode's throttle bend, shift/close overrides, nitrous gate
+        if (drive_params->pedal_bend) { ctx.drive_bend_x = drive_params->pedal_bend->x; ctx.drive_bend_y = drive_params->pedal_bend->y; }
+        if (drive_params->up_rpm_at_zero_throttle) ctx.drive_up_rpm_zero = *drive_params->up_rpm_at_zero_throttle;
+        if (drive_params->up_rpm_at_full_throttle) ctx.drive_up_rpm_full = *drive_params->up_rpm_at_full_throttle;
+        if (drive_params->down_rpm_at_zero_throttle) ctx.drive_down_rpm_zero = *drive_params->down_rpm_at_zero_throttle;
+        if (drive_params->down_rpm_at_full_throttle) ctx.drive_down_rpm_full = *drive_params->down_rpm_at_full_throttle;
+        if (drive_params->clutch_close_time_s) ctx.drive_close_time_s = *drive_params->clutch_close_time_s;
+        ctx.nitrous_arm_allowed = drive_params->nitrous_arm_allowed;
+    }
+    ctx.first_substep_of_tick = (s == 0);
+    // B mode wheel-slip guard: this substep's contact-patch sensors (the same ones traction control reads).
+    ctx.traction_wheels = traction_wheels_.data();
+    ctx.traction_wheel_count = static_cast<int>(traction_wheels_.size());
+    ctx.electric_mode_allowed = !desc_.drive_modes || (desc_.drive_modes->modes_bits & drive_mode_bit(DriveMode::Electric)) != 0;
+    // PHYS-033 P4 I4 C3: points at this tick's already-copied component-
+    // channel buffer (see the per-tick copy above) - rebuilt each
+    // substep alongside the rest of ctx, but the buffer itself is only
+    // refilled once per tick.
+    ctx.channels = component_channel_values_.data();
+    ctx.channel_count = static_cast<int>(component_channel_values_.size());
+    powertrain_.pre_solve_components(ctx);
+    for (std::size_t i = 0; i < wheels_.size(); ++i) {
+        const WheelDesc& w = desc_.wheels[i];
+        const real delta = ackermann_wheel_angle(i, delta_avg);
+        WheelPreSolveInput in;
+        in.chassis_pose = pose_s;
+        in.chassis_motion = twist_s;
+        in.chassis_com_world = com;
+        in.steer_angle = delta;
+        in.dt = substep_dt;
+        in.partner_compression = w.arb_partner >= 0 ? wheels_[static_cast<std::size_t>(w.arb_partner)]->compression() : 0.0;
+        in.surfaces = surfaces_;
+        in.grip = env.grip;
+
+        const real omega_old = powertrain_.hub_omega(i);
+        hub_omega_old_scratch_[i] = omega_old; // PHYS-033 P4 I3 plan section 6.7: needed after solve() below
+        const HubTerms ht = wheels_[i]->pre_solve(in, omega_old);
+        powertrain_.add_hub_terms(i, ht.tau0, ht.d);
+    }
+
+    // step 5: the network solve (also folds in integrator_loss/rotor_ke
+    // and captures each rotor port's alpha, powertrain.h's own comment).
+    powertrain_.solve(substep_dt);
+
+    // step 6: post_solve - components in ARRAY order, then wheels in
+    // WheelDesc order (each wheel's force feeds the chassis wrench and
+    // its own wheel_out/tyre_loss ledger deltas).
+    powertrain_.post_solve_components(ctx);
+
+    Vec3 force_s = Vec3::zero();
+    Vec3 torque_s = Vec3::zero();
+    for (std::size_t i = 0; i < wheels_.size(); ++i) {
+        const real omega_new = powertrain_.hub_omega(i);
+        const WheelSubstepOutput out = wheels_[i]->post_solve(omega_new);
+        powertrain_.add_wheel_energy(out.wheel_out_j, out.tyre_loss_j);
+        // Assists I2a (diag only, unhashed, preallocated): this substep's wheel telemetry.
+        if (s < kMaxSubstepTelemetry) substep_telemetry_[s * wheels_.size() + i] = wheels_[i]->telemetry();
+        // PHYS-033 I1b defect 2 fix (decision D-B): ONE force vector per
+        // wheel (already resolved along the ground-plane contact frame,
+        // WheelInstance::post_solve's own assemble_contact_wrench),
+        // acting at ONE point - replaces the old separate suspension-
+        // force-at-attachment + tyre-force-at-contact-point assembly,
+        // which double-counted nothing but resolved both along the
+        // chassis' own (possibly tilted-relative-to-ground) axes.
+        force_s += out.contact_force_world;
+        torque_s += cross(out.contact_point_world - com, out.contact_force_world) + out.extra_torque_world;
+
+        // PHYS-033 P4 I3 plan section 6.7: this hub's own rotor-reaction
+        // contribution, using the wheel's WORLD spin axis (unlike the
+        // fixed chassis-local axes powertrain_'s own rotor_ports_ use) -
+        // Powertrain::rotor_port_* never sees wheel hubs (Phase M of its
+        // constructor skips them, always-zero axis).
+        if (powertrain_.rotor_reaction_enabled()) {
+            const real alpha = (omega_new - hub_omega_old_scratch_[i]) / substep_dt;
+            torque_s += -powertrain_.hub_inertia(i) * alpha * wheels_[i]->spin_axis_world();
+        }
+    }
+
+    // Aero sees the SAME shadow pose/twist as the tyres, not a stale backend state.
+    // Local probes also work against overhead roads when the chassis is inverted.
+    std::array<aero::GroundSample,aero::max_surfaces+aero::max_fans+1> aero_ground{};
+    auto probe=[&](Vec3 point,Vec3 direction,real range) {
+        aero::GroundSample result;
+        if(range<=0) return result;
+        const Vec3 origin=pose_s.transform_point(point), dir=pose_s.transform_direction(direction);
+        const auto hit=backend.ray_cast_excluding(origin,dir,range,chassis_);
+        // Only a surface facing this probe may form a road/seal. A miss is never ground.
+        if(hit.hit&&dot(hit.normal,-dir)>.5) result={true,range*hit.fraction};
+        return result;
+    };
+    for(std::size_t i=0;i<desc_.aero.surfaces.size();++i) {
+        const auto& surface=desc_.aero.surfaces[i];
+        const real command=aero_state_.surface_command[i];
+        const real target=command>=0?command*surface.max_offset_rad:-command*surface.min_offset_rad;
+        const real offset=aero_state_.offset_rad[i]+std::clamp(target-aero_state_.offset_rad[i],-surface.rate_rad_s*substep_dt,surface.rate_rad_s*substep_dt);
+        const real lift=surface.max_offset_rad>0 ? surface.max_lift_m*std::clamp(offset/surface.max_offset_rad,real(0),real(1)) : real(0);
+        aero_ground[i]=probe(surface.position_local+surface.normal_local*lift,surface.ground.probe_local,surface.ground.range_m);
+    }
+    for(std::size_t i=0;i<desc_.aero.fans.size();++i) {
+        const auto& fan=desc_.aero.fans[i];
+        aero_ground[desc_.aero.surfaces.size()+i]=probe(fan.position_local,fan.direction_local,fan.probe_range_m);
+    }
+    if(desc_.aero.coefficient_map.table&&!desc_.aero.coefficient_map.table->data().axes[3].empty()) {
+        const auto& map=desc_.aero.coefficient_map;
+        aero_ground[desc_.aero.surfaces.size()+desc_.aero.fans.size()]=probe(map.ground_position_local,map.ground_probe_local,map.ground_range_m);
+    }
+    auto aero_sample=aero::step(desc_.aero,aero_state_,pose_s,twist_s,
+        aero::Environment{env.air_density,env.wind_world},substep_dt,aero_ground,env.wakes,chassis_,env.extra_wakes);
+    force_s+=aero_sample.wrench_world.force; torque_s+=aero_sample.wrench_world.torque;
+    aero_force_sum+=aero_sample.wrench_world.force; aero_torque_sum+=aero_sample.wrench_world.torque;
+    fan_energy_used+=aero_sample.fan_energy_used_j;
+    if(has_axle_balance_) {
+        const real pitch=pose_s.orientation.inverse().rotate(aero_sample.wrench_world.torque).y;
+        const real front=(pitch-rear_axle_x_*aero_sample.downforce_n)/wheelbase_;
+        front_downforce_sum+=front; rear_downforce_sum+=aero_sample.downforce_n-front;
+    } else {
+        front_downforce_sum+=aero_sample.front_downforce_n; rear_downforce_sum+=aero_sample.rear_downforce_n;
+    }
+    aero_telemetry_=aero_sample; // surface/actuator values describe the last substep
+
+    // PHYS-033 P4 I3 plan section 6.7: rotor reaction from every non-hub
+    // rotating port (engine crank, clutch in/out, gearbox in/out, diff
+    // carrier) - fixed chassis-local axes, rotated to world here.
+    if (powertrain_.rotor_reaction_enabled()) {
+        Vec3 t_react_local = Vec3::zero();
+        for (std::size_t i = 0; i < powertrain_.rotor_port_count(); ++i) {
+            t_react_local += -powertrain_.rotor_port_inertia(i) * powertrain_.rotor_port_alpha(i) * powertrain_.rotor_port_axis_local(i);
+        }
+        torque_s += pose_s.orientation.rotate(t_react_local);
+    }
+
+    tw.force_s = force_s;
+    tw.torque_s = torque_s;
+}
+
+void VehicleInstance::substep_add_wrench(VehicleTickWork& tw, const Vec3& force, const Vec3& torque) {
+    tw.force_s += force;
+    tw.torque_s += torque;
+}
+
+void VehicleInstance::substep_advance(VehicleTickWork& tw) {
+    const real substep_dt = tw.substep_dt;
+    const BodyIntegrationParams& ip = tw.ip;
+    const Vec3& force_s = tw.force_s;
+    const Vec3& torque_s = tw.torque_s;
+    const Vec3& a_ext = tw.a_ext;
+    const Vec3& alpha_ext = tw.alpha_ext;
+    Pose& pose_s = tw.pose_s;
+    Motion& twist_s = tw.twist_s;
+
+    tw.force_sum += force_s;
+    tw.torque_sum += torque_s;
+
+    // Shadow update (I1 plan section 3.3, step 8): velocity FIRST, from
+    // THIS substep's own wrench, then pose with the NEW velocity - the
+    // same symplectic order Jolt itself uses (F8). Tick-start inv_mass/
+    // inv_inertia_world/gravity_factor throughout (ip, read once above);
+    // no gyroscopic term (I1 plan section 2, claim A item 2 - Jolt
+    // applies none by default and this backend never enables it).
+    twist_s.linear += substep_dt * (force_s * ip.inv_mass + a_ext);
+    twist_s.angular += substep_dt * (ip.inv_inertia_world * torque_s + alpha_ext);
+    pose_s.position += twist_s.linear * substep_dt;
+    pose_s.orientation = integrate_orientation(pose_s.orientation, twist_s.angular, substep_dt);
+}
+
+void VehicleInstance::tick_end(VehicleTickWork& tw, IRigidBackend& backend) {
+    const real tick_dt = tw.tick_dt;
+    const std::size_t num_substeps = tw.num_substeps;
+    const bool assist_aero = tw.assist_aero;
+    const real aero_world_command = tw.aero_world_command, aero_control_target_deg = tw.aero_control_target_deg;
+    const bool assist_auto_clutch = tw.assist_auto_clutch, assist_auto_blip = tw.assist_auto_blip, assist_auto_shift = tw.assist_auto_shift;
+    const bool assist_traction = tw.assist_traction, assist_launch = tw.assist_launch, assist_abs = tw.assist_abs, assist_esc = tw.assist_esc;
+    const EscMode esc_mode_req = tw.esc_mode_req, esc_mode_eff = tw.esc_mode_eff;
+    const TractionMode tc_mode_requested = tw.tc_mode_requested, tc_mode_effective = tw.tc_mode_effective;
+    const DriveMode drive_mode_req = tw.drive_mode_req, drive_mode_eff = tw.drive_mode_eff;
+    const BodyIntegrationParams& ip = tw.ip;
+    const Motion& twist_s = tw.twist_s;
+    const Vec3& aero_force_sum = tw.aero_force_sum;
+    const Vec3& aero_torque_sum = tw.aero_torque_sum;
+    const real fan_energy_used = tw.fan_energy_used, front_downforce_sum = tw.front_downforce_sum, rear_downforce_sum = tw.rear_downforce_sum;
+    const Vec3& force_sum = tw.force_sum;
+    const Vec3& torque_sum = tw.torque_sum;
 
     if (assist_aero) aero_state_.surface_command[aero_control_surface_] = aero_world_command; // I5: the World's command stands
     // Assists I4: the launch control's aero request for the NEXT tick's controller (yield order LC > airbrake > cruise).
@@ -959,6 +1064,7 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
     shadow_end_pred_.linear = twist_s.linear * std::max(real(0.0), real(1.0) - ip.linear_damping * tick_dt);
     shadow_end_pred_.angular = twist_s.angular * std::max(real(0.0), real(1.0) - ip.angular_damping * tick_dt);
     shadow_valid_ = true;
+    shadow_end_pose_ = tw.pose_s;
 
     const real n = static_cast<real>(num_substeps);
     aero_telemetry_.wrench_world={aero_force_sum/n,aero_torque_sum/n};

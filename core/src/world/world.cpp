@@ -702,6 +702,15 @@ Frame World::link_frame(ArticulationId id, int link_index, Pose local_offset) co
     return articulation_system_->link_frame(id, link_index, local_offset);
 }
 
+HitchId World::create_coupling(const machine::CouplingDesc& desc) {
+    return vehicle_system_->create_coupling(desc);
+}
+
+const machine::CouplingState& World::coupling_state(HitchId id) const {
+    if (!vehicle_system_->contains(id)) throw std::invalid_argument("invalid coupling");
+    return vehicle_system_->coupling_state(id);
+}
+
 VehicleId World::create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
                                  const std::vector<std::pair<std::string, real>>& test_only_extra_channels) {
     aero::validate(desc.aero);
@@ -1134,6 +1143,10 @@ drivetrain::PowertrainDebug World::powertrain_debug(VehicleId id) const {
 
 void World::reset_vehicle(VehicleId id, const vehicle::VehicleResetOptions& opts) {
     vehicle_system_->at(id).reset(opts, *backend_);
+}
+
+Pose World::vehicle_shadow_end_pose(VehicleId id) const {
+    return vehicle_system_->at(id).shadow_end_pose();
 }
 
 real World::vehicle_shadow_dv_error(VehicleId id) const {

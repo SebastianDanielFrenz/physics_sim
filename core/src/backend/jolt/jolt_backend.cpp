@@ -43,6 +43,7 @@
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1083,6 +1084,12 @@ public:
             JPH::FixedConstraintSettings settings;
             settings.mSpace = JPH::EConstraintSpace::WorldSpace;
             settings.mAutoDetectPoint = false;
+            settings.mPoint1 = to_rvec3(body_a_world_point(desc, desc.anchor_a_local, true));
+            settings.mPoint2 = to_rvec3(body_b_world_point(desc, desc.anchor_b_local, body_a, body_b));
+            constraint = settings.Create(*body_a, *body_b);
+        } else if (desc.type == JointType::Point) {
+            JPH::PointConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
             settings.mPoint1 = to_rvec3(body_a_world_point(desc, desc.anchor_a_local, true));
             settings.mPoint2 = to_rvec3(body_b_world_point(desc, desc.anchor_b_local, body_a, body_b));
             constraint = settings.Create(*body_a, *body_b);

@@ -23,11 +23,13 @@ struct JointIdTag {};
 struct ForceElementIdTag {};
 struct ArticulationIdTag {}; // PLAN.md D10/P1.5a: ps::World::create_articulation
 struct VehicleIdTag {};      // PLAN.md 5.1/P3: ps::World::create_vehicle
+struct HitchIdTag {};        // attachment spike A0: ps::World::create_coupling
 
 using BodyId = Id<BodyIdTag>;
 using JointId = Id<JointIdTag>;
 using ForceElementId = Id<ForceElementIdTag>;
 using ArticulationId = Id<ArticulationIdTag>;
 using VehicleId = Id<VehicleIdTag>;
+using HitchId = Id<HitchIdTag>;
 
 } // namespace ps

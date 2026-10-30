@@ -73,7 +73,7 @@ struct BodyDesc {
     real max_linear_velocity = 500.0;
 };
 
-enum class JointType { Fixed, Hinge };
+enum class JointType { Fixed, Hinge, Point };
 
 struct JointDesc {
     JointType type = JointType::Fixed;

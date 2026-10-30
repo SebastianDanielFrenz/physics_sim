@@ -16,6 +16,7 @@
 #include "ps/jobs/job_system.h"
 #include "ps/jobs/task_graph.h"
 #include "ps/io/surface_table.h"
+#include "ps/machine/coupling.h"
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
 #include "ps/vehicle/vehicle_desc.h"
@@ -305,6 +306,10 @@ public:
     // header). Always empty for every production caller.
     VehicleId create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
                               const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {});
+    // Attachment spike A0: a socket coupling between two vehicles (ps/machine/coupling.h). Sim thread between steps,
+    // setup time. The two vehicles then step together in one job, substep by substep. Couplings are never destroyed.
+    HitchId create_coupling(const machine::CouplingDesc& desc);
+    [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
     // Assists I2a (diagnostics, same live-state contract as wheel_telemetry): each substep's wheel telemetry of the
@@ -425,6 +430,7 @@ public:
     // shadow_dv_error's own comment for what these mean and their one-tick
     // offset.
     [[nodiscard]] real vehicle_shadow_dv_error(VehicleId id) const;
+    [[nodiscard]] Pose vehicle_shadow_end_pose(VehicleId id) const; // diagnostic, attachment spike A0
     [[nodiscard]] real vehicle_shadow_dw_error(VehicleId id) const;
 
     // Registration order is the element's fixed evaluation/gather id

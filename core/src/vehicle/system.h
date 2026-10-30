@@ -12,6 +12,7 @@
 #include "ps/environment/vehicle_air.h"
 #include "ps/io/surface_table.h"
 #include "ps/jobs/job_system.h"
+#include "ps/machine/coupling.h"
 #include "ps/vehicle/vehicle_desc.h"
 #include "ps/world/ids.h"
 
@@ -47,6 +48,14 @@ public:
     void step_all(IRigidBackend& backend, jobs::JobSystem& job_system, const std::vector<real>& channel_values,
                   const VehicleTickEnv& env, real tick_dt, real substep_rate_hz,
                   std::span<const environment::VehicleAir> air = {});
+
+    // Attachment spike A0: couples two vehicles at their sockets. Setup time. Vehicles joined by couplings form an
+    // island: one job that steps them substep by substep, the couplings solved in id order (one pass, exact for one
+    // coupling, Gauss-Seidel along a chain). A vehicle outside any coupling takes the plain step_tick path, and a
+    // World with no coupling never reaches any of this.
+    HitchId create_coupling(const machine::CouplingDesc& desc);
+    [[nodiscard]] bool contains(HitchId id) const { return id.generation == 1 && id.index < couplings_.size(); }
+    [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const { return couplings_[id.index].state; }
 
     [[nodiscard]] bool empty() const { return instances_.empty(); }
     // PHYS-033 P4 I7c C16b (D9): applies every vehicle's queued engine-maps
@@ -84,7 +93,26 @@ public:
     [[nodiscard]] std::uint64_t fold_state_hash(std::uint64_t seed) const;
 
 private:
+    struct Coupling {
+        machine::CouplingDesc desc;
+        std::size_t towing = 0, towed = 0; // indices into instances_
+        machine::CouplingState state;
+    };
+    // Sorted by lowest vehicle index; vehicles and couplings ascending. Built at setup, read only during the tick.
+    struct Island {
+        std::vector<std::size_t> vehicles;
+        std::vector<std::size_t> couplings;
+    };
+
+    void rebuild_islands();
+    void step_island(Island& island, IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
+                     real tick_dt, real substep_rate_hz, std::span<const environment::VehicleAir> air);
+    void solve_coupling(Coupling& c, real h);
+
     std::vector<std::unique_ptr<VehicleInstance>> instances_;
+    std::vector<Coupling> couplings_;
+    std::vector<Island> islands_;       // only with couplings: every vehicle in exactly one island
+    std::vector<VehicleTickWork> tick_work_; // one per vehicle, sized at setup; each entry touched by its island's job only
     std::vector<aero::WakeSource> aero_wakes_; // sized at create; immutable during vehicle jobs
     // PHYS-033 I1 W1: index == BodyId::index -> that vehicle's index into
     // instances_, or -1 if that body is not a vehicle chassis. Built/grown

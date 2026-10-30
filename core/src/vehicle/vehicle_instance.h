@@ -96,6 +96,33 @@ struct VehicleTickEnv {
     const environment::ConditionGrip* grip = nullptr;
 };
 
+// One tick's working state between tick_begin and tick_end, owned by the caller:
+// what step_tick would otherwise keep in locals. Exists so that coupled vehicles
+// can take turns substep by substep (vehicle::System's islands, ps::machine).
+struct VehicleTickWork {
+    VehicleTickEnv env{};
+    real tick_dt = 0.0;
+    std::size_t num_substeps = 1;
+    real substep_dt = 0.0;
+    ControlInputs controls{};
+    real clutch_pedal = 0.0, gear_request = 0.0, shift_up_count = 0.0, shift_down_count = 0.0, ignition = 0.0, starter = 0.0;
+    bool assist_auto_clutch = false, assist_auto_blip = false, assist_auto_shift = false;
+    const DriveModeParams* drive_params = nullptr;
+    DriveMode drive_mode_req = DriveMode::Normal, drive_mode_eff = DriveMode::Normal;
+    bool assist_abs = false, assist_esc = false, assist_traction = false, assist_launch = false, assist_aero = false;
+    EscMode esc_mode_req = EscMode::Off, esc_mode_eff = EscMode::Off;
+    TractionMode tc_mode_requested = TractionMode::Off, tc_mode_effective = TractionMode::Off;
+    const TractionControlDesc* tc_desc = nullptr;
+    real ceiling_throttle = 0.0, aero_control_target_deg = 0.0, aero_world_command = 0.0, imu_accel = 0.0, delta_avg = 0.0;
+    BodyIntegrationParams ip{};
+    Vec3 a_ext{}, alpha_ext{};
+    Pose pose_s{};
+    Motion twist_s{};
+    Vec3 force_s{}, torque_s{}; // this substep's wrench about the shadow's centre of mass
+    Vec3 force_sum{}, torque_sum{}, aero_force_sum{}, aero_torque_sum{};
+    real fan_energy_used = 0.0, front_downforce_sum = 0.0, rear_downforce_sum = 0.0;
+};
+
 class VehicleInstance {
 public:
     VehicleInstance(const VehicleDesc& desc, BodyId chassis, const io::SurfaceTable* surfaces,
@@ -112,6 +139,16 @@ public:
     // array, indexed by control_indices_ below.
     void step_tick(IRigidBackend& backend, const std::vector<real>& channel_values, const VehicleTickEnv& env,
                     real tick_dt, real substep_rate_hz);
+
+    // step_tick in pieces, for vehicles stepped together in one island: tick_begin once, then for each substep
+    // substep_forces, any substep_add_wrench (a coupling force about the shadow's centre of mass), substep_advance,
+    // then tick_end once. step_tick is exactly this sequence with no added wrench.
+    void tick_begin(VehicleTickWork& tw, IRigidBackend& backend, const std::vector<real>& channel_values,
+                    const VehicleTickEnv& env, real tick_dt, real substep_rate_hz);
+    void substep_forces(VehicleTickWork& tw, std::size_t s, IRigidBackend& backend);
+    static void substep_add_wrench(VehicleTickWork& tw, const Vec3& force, const Vec3& torque);
+    static void substep_advance(VehicleTickWork& tw);
+    void tick_end(VehicleTickWork& tw, IRigidBackend& backend);
 
     // Assists I7c: the channel writes the last step_tick queued (drive-mode defaults), applied by World::step after the
     // pipeline in vehicle id order. Valid until the next step_tick / reset.
@@ -271,6 +308,8 @@ public:
     // scenario's between-forces hook, or a test's set_motion).
     [[nodiscard]] real shadow_dv_error() const { return shadow_dv_error_; }
     [[nodiscard]] real shadow_dw_error() const { return shadow_dw_error_; }
+    // Diagnostic (attachment spike A0): the shadow's pose at the end of the last tick.
+    [[nodiscard]] const Pose& shadow_end_pose() const { return shadow_end_pose_; }
 
     // PHYS-033 P4 I4 C3 (plan section 2.4): this tick's copy of every
     // generic component-declared control channel's value, control_indices_.
@@ -395,6 +434,7 @@ private:
     // (re-seeded every tick from already-hashed state, same reasoning as
     // articulation::Instance's external-wrench accumulator).
     Wrench ext_wrench_accum_{};
+    Pose shadow_end_pose_{};
     Motion shadow_end_pred_{};   // shadow's predicted Jolt velocity at the end of the last tick (diagnostic only)
     bool shadow_valid_ = false;  // false until the first tick has run once (no prediction to compare against yet)
     real shadow_dv_error_ = 0.0;
