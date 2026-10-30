@@ -1,4 +1,5 @@
 #include "powertrain.h"
+#include "ps/drivetrain/hybrid_split.h"
 
 #include "engine_params_util.h"
 #include "engine_simulated.h"
@@ -2144,6 +2145,185 @@ Powertrain::Powertrain(const PowertrainDesc& pt, const BrakeSystemDesc& brakes, 
     auto brakes_component = std::make_unique<DirectTorqueBrakes>(std::move(brake_rows), brakes.static_factor);
     brakes_ = brakes_component.get();
     components_.push_back(std::move(brakes_component));
+    // B mode (docs/electric_drive.md): available when blending runs, a motor reaches the rims and the car has no gearbox
+    // (pure EV) or is a hybrid (its Electric mode). Everything below is sized here so the substep path allocates nothing.
+    b_capable_ = brakes.regen_blend.enabled && brakes.regen_blend.b_mode.enabled && !regen_maps_.empty() && (!gearbox_ || hybrid_.has_value());
+    if (b_capable_) {
+        const std::size_t nmap = regen_maps_.size();
+        b_fraction_.assign(nmap, real(1.0));
+        b_env_w_.assign(nmap, real(0.0));
+        b_regen_w_.assign(nmap, real(0.0));
+        b_regen_nm_.assign(nmap, real(0.0));
+        b_scale_d_.assign(batteries_.size(), real(1.0));
+        b_scale_r_.assign(batteries_.size(), real(1.0));
+        b_battery_idx_.assign(nmap, 0);
+        for (std::size_t k = 0; k < nmap; ++k)
+            for (std::size_t bi = 0; bi < batteries_.size(); ++bi)
+                if (&regen_maps_[k].motor->battery() == batteries_[bi].get()) b_battery_idx_[k] = bi;
+    }
+    if (hybrid_) {
+        for (const ComponentDesc& c : pt.components) {
+            const real lim = effective_limiter_rpm(c.params);
+            if (lim > real(0.0)) { engine_limiter_rpm_ = lim; break; }
+        }
+        refresh_hybrid_ice_power();
+    }
+}
+
+// Derived full-pedal demand of a hybrid: the ICE's own full-load peak power, swept over its envelope at build and again
+// whenever the envelope is rebuilt (never per substep). Authored requested_power_w -> 0 (unused).
+void Powertrain::refresh_hybrid_ice_power() {
+    hybrid_ice_full_w_ = real(0.0);
+    if (!hybrid_ || !hybrid_->requested_power_derived || !engine_) return;
+    const real idle = engine_->idle_rpm();
+    const real top = engine_limiter_rpm_ > idle ? engine_limiter_rpm_ : idle * real(2.0);
+    constexpr int kSteps = 64;
+    real best = real(0.0);
+    for (int i = 0; i <= kSteps; ++i) {
+        const real rpm = idle + (top - idle) * static_cast<real>(i) / static_cast<real>(kSteps);
+        const real w = rpm * real(2.0) * real(3.14159265358979323846) / real(60.0);
+        best = std::max(best, engine_->request_envelope(rpm).f_nm * w);
+    }
+    hybrid_ice_full_w_ = best;
+}
+
+// B mode selector: the absolute gear_request code kGearRequestB (edge-triggered, so a game that keeps sending its selector
+// does not re-enter B after Electric mode ended it) and the shift counters (D -> up -> B, B -> down -> D). `allowed`: the
+// position exists right now (a pure EV; a hybrid in Electric mode). In Electric mode the counters are consumed here, so the
+// gearbox's controller never sees them (the supervisor keeps the gearbox where it wants it).
+void Powertrain::b_update_selector(const ComponentSubstepCtx& ctx_in, bool allowed) {
+    if (!b_capable_ && !hybrid_) return;
+    if (!b_counters_init_) {
+        b_prev_up_ = ctx_in.shift_up_count;
+        b_prev_down_ = ctx_in.shift_down_count;
+        b_counters_init_ = true;
+    }
+    const real du = ctx_in.shift_up_count - b_prev_up_;
+    const real dd = ctx_in.shift_down_count - b_prev_down_;
+    b_prev_up_ = ctx_in.shift_up_count;
+    b_prev_down_ = ctx_in.shift_down_count;
+    if (hybrid_ && hybrid_electric_active_) {
+        swallow_up_ += du;
+        swallow_down_ += dd;
+    }
+    if (!b_capable_) return;
+    const real dir = hybrid_ ? hybrid_selector_ : electric_direction_;
+    bool b = b_selected_;
+    if (ctx_in.gear_request != b_prev_request_) {
+        b_prev_request_ = ctx_in.gear_request;
+        if (ctx_in.gear_request != kGearRequestNone) b = ctx_in.gear_request == kGearRequestB;
+    }
+    if (allowed && dir > real(0.0)) {
+        if (du > real(0.5) && !b) b = true;
+        else if (dd > real(0.5) && b) b = false;
+    }
+    if (!allowed || !(dir > real(0.0))) b = false;
+    if (b != b_selected_) {
+        b_selected_ = b;
+        if (!b) std::fill(b_fraction_.begin(), b_fraction_.end(), real(1.0));
+    }
+}
+
+// B mode, per substep after prepare_regen: the system power law P = -R + pedal (R + P_max) (ps/drivetrain/b_mode.h) turned
+// into each wheel-path motor's drive command or regeneration torque, the wheel-slip guard, and the pads' auto hold.
+void Powertrain::prepare_b(const ComponentSubstepCtx& ctx, real pedal) {
+    if (!b_capable_) return;
+    const BModeDesc& bd = regen_cfg_.b_mode;
+    const real dir = hybrid_ ? hybrid_selector_ : electric_direction_;
+    const bool active = b_selected_ && dir > real(0.0) && ctx.h > real(0.0);
+    if (!active) {
+        if (b_feed_on_) {
+            for (RegenMap& m : regen_maps_) m.motor->set_b_feed(false, real(0.0), real(0.0));
+            b_feed_on_ = false;
+        }
+        b_hold_active_ = false;
+        if (b_hold_level_ > real(0.0))
+            b_hold_level_ = bd.hold_release_s > real(0.0) ? std::max(real(0.0), b_hold_level_ - ctx.h / bd.hold_release_s) : real(0.0);
+        brakes_->set_hold_level(b_hold_level_);
+        b_regen_cap_w_ = b_drive_cap_w_ = b_power_cmd_w_ = b_zero_pedal_ = real(0.0);
+        return;
+    }
+    b_feed_on_ = true;
+    const std::size_t n = regen_maps_.size();
+    for (std::size_t k = 0; k < n; ++k) {
+        const ElectricMotor* mo = regen_maps_[k].motor;
+        const real om = std::abs(network_.omega(mo->shaft_node()));
+        const bool part = mo->ready;
+        b_env_w_[k] = part ? mo->drive_envelope_torque(om) * std::max(om, real(1.0)) : real(0.0);
+        const real tr = part ? mo->b_regen_capacity_nm(om) : real(0.0);
+        b_regen_nm_[k] = tr; // capacity torque before the pack's scale
+        b_regen_w_[k] = tr * om;
+    }
+    for (std::size_t bi = 0; bi < batteries_.size(); ++bi) {
+        const Battery& bat = *batteries_[bi];
+        real sum_e = real(0.0), sum_r = real(0.0), eff = real(1.0);
+        bool first = true;
+        for (std::size_t k = 0; k < n; ++k)
+            if (b_battery_idx_[k] == bi) {
+                sum_e += b_env_w_[k];
+                sum_r += b_regen_w_[k];
+                if (first) { eff = regen_maps_[k].motor->regen_efficiency(); first = false; }
+            }
+        real supply_w = battery_discharge_budget_w(bat.desc, bat.soc(), ctx.h);
+        for (const FuelCell* fc : fuel_cells_)
+            if (&fc->battery() == &bat && fc->hydrogen_kg > real(0.0)) supply_w += fc->rated_power();
+        b_scale_d_[bi] = sum_e > real(0.0) ? std::min(real(1.0), supply_w * eff / sum_e) : real(1.0);
+        const real accept_w = std::max(real(0.0), battery_charge_budget_j(bat.desc, bat.content(), ctx.h)) / ctx.h;
+        b_scale_r_[bi] = sum_r > real(0.0) ? std::min(real(1.0), accept_w / eff / sum_r) : real(1.0);
+    }
+    real p_max = real(0.0), regen_w = real(0.0);
+    for (std::size_t k = 0; k < n; ++k) {
+        p_max += b_env_w_[k] * b_scale_d_[b_battery_idx_[k]];
+        regen_w += b_regen_w_[k] * b_scale_r_[b_battery_idx_[k]];
+    }
+    const real p = std::clamp(pedal, real(0.0), real(1.0));
+    const real p_cmd = b_system_power(regen_w, p_max, p);
+    const real zero_pedal = ps::drivetrain::b_zero_power_pedal(regen_w, p_max);
+    const real ceiling = std::clamp(ctx.traction_throttle_ceiling, real(0.0), real(1.0));
+    const real tc_scale = (p > real(0.0) && ceiling < p) ? ceiling / p : real(1.0);
+    for (std::size_t k = 0; k < n; ++k) {
+        RegenMap& m = regen_maps_[k];
+        const std::size_t bi = b_battery_idx_[k];
+        real slip = real(0.0);
+        if (p_cmd >= real(0.0)) {
+            const real c = p_max > real(0.0) ? std::clamp(p_cmd * b_scale_d_[bi] / p_max, real(0.0), real(1.0)) : real(0.0);
+            // TC ceiling (PR #37): a fraction of the torque available now, so it scales the drive; B regeneration below is not.
+            m.motor->set_b_feed(true, c, real(0.0), tc_scale);
+        } else {
+            const real f = regen_w > real(0.0) ? std::min(real(1.0), -p_cmd / regen_w) : real(0.0);
+            // Wheel-slip guard (the TC regulator's structure, braking direction): the worst slip of the wheels this motor
+            // reaches, from the contact-patch sensors; the regeneration is withdrawn above the target and ramps back.
+            if (ctx.traction_wheels != nullptr) {
+                for (const RegenHub& h : m.hubs) {
+                    if (!(h.share > real(1e-9)) || static_cast<int>(h.wheel) >= ctx.traction_wheel_count) continue;
+                    const vehicle::TractionWheelState& w = ctx.traction_wheels[h.wheel];
+                    if (!w.contact || !(w.normal_load_n > real(1.0)) || !std::isfinite(w.normal_load_n) ||
+                        !std::isfinite(w.ground_speed_m_s) || !std::isfinite(w.peripheral_speed_m_s)) continue;
+                    const real sgn = std::abs(w.ground_speed_m_s) > real(0.1) ? (w.ground_speed_m_s < real(0.0) ? real(-1.0) : real(1.0))
+                                                                              : (w.peripheral_speed_m_s < real(0.0) ? real(-1.0) : real(1.0));
+                    slip = std::max(slip, sgn * (w.ground_speed_m_s - w.peripheral_speed_m_s) /
+                                              std::max(bd.slip_floor_mps, std::abs(w.ground_speed_m_s)));
+                }
+            }
+            m.motor->set_b_feed(true, real(0.0), b_regen_nm_[k] * b_scale_r_[bi] * f * b_fraction_[k]);
+        }
+        b_fraction_[k] = b_slip_fraction_step(bd, b_fraction_[k], slip, ctx.h);
+    }
+    // Auto hold: below the regeneration fade the motors cannot hold the car, so with the pedal at or below the zero-power
+    // point the pads do, until the pedal rises above it by the margin; they release over hold_release_s.
+    if (!bd.auto_hold || p > zero_pedal + (b_hold_active_ ? bd.hold_pedal_margin : real(0.0))) b_hold_active_ = false;
+    else if (regen_fade_min_ < real(1.0)) b_hold_active_ = true;
+    // While the regeneration fades the pads take over its share (hold_blend_level x the fade, no jerk); once it is gone (the car
+    // is about to stop) they rise to the full hold.
+    const real target = !b_hold_active_ ? real(0.0)
+                        : regen_fade_min_ > real(0.0) ? (real(1.0) - regen_fade_min_) * bd.hold_blend_level : real(1.0);
+    if (target > b_hold_level_) b_hold_level_ = std::min(target, b_hold_level_ + bd.hold_rise_per_s * ctx.h);
+    else b_hold_level_ = bd.hold_release_s > real(0.0) ? std::max(target, b_hold_level_ - ctx.h / bd.hold_release_s) : target;
+    brakes_->set_hold_level(b_hold_level_);
+    b_regen_cap_w_ = regen_w;
+    b_drive_cap_w_ = p_max;
+    b_power_cmd_w_ = p_cmd;
+    b_zero_pedal_ = zero_pedal;
 }
 
 // Brake blending, step 1 (before any component's pre_solve): evaluate each blended motor's path tree over the elements
@@ -2164,6 +2344,7 @@ void Powertrain::prepare_regen(const ComponentSubstepCtx& ctx) {
     }
     const bool clutch_closed = clutch_ && last_clutch_result_.engagement >= cfg.path_min_engagement;
     const bool front_closed = transfer_case_ && transfer_case_->engagement() >= cfg.path_min_engagement;
+    regen_fade_min_ = real(1.0);
     for (RegenMap& m : regen_maps_) {
         const std::size_t n = m.nodes.size();
         for (RegenHub& h : m.hubs) h.share = real(0.0);
@@ -2215,6 +2396,7 @@ void Powertrain::prepare_regen(const ComponentSubstepCtx& ctx) {
         if (active == 0) { m.motor->set_blend_feed(real(0.0), real(0.0), false, ctx.h, false); continue; }
         speed /= static_cast<real>(active);
         const real fade = std::clamp((speed - cfg.fade_end_speed_mps) / (cfg.fade_start_speed_mps - cfg.fade_end_speed_mps), real(0.0), real(1.0));
+        regen_fade_min_ = std::min(regen_fade_min_, fade);
         m.motor->set_blend_feed(request, fade, abs_acts, ctx.h, true);
     }
 }
@@ -2224,7 +2406,7 @@ void Powertrain::prepare_regen(const ComponentSubstepCtx& ctx) {
 void Powertrain::reflect_regen(const ComponentSubstepCtx& ctx) {
     std::fill(regen_wheel_nm_.begin(), regen_wheel_nm_.end(), real(0.0));
     for (const RegenMap& m : regen_maps_)
-        for (const RegenHub& h : m.hubs) regen_wheel_nm_[h.wheel] += h.share * m.motor->regen_pred_nm;
+        for (const RegenHub& h : m.hubs) regen_wheel_nm_[h.wheel] += h.share * m.motor->regen_brake_pred_nm;
     real regen = real(0.0), pad = real(0.0);
     for (std::size_t w = 0; w < regen_wheel_nm_.size(); ++w) {
         const real service = ctx.wheel_brake != nullptr ? ctx.wheel_brake[w] : ctx.brake;
@@ -2281,13 +2463,23 @@ int Powertrain::hybrid_fit_gear(const ComponentSubstepCtx& ctx) const {
 
 void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
     ComponentSubstepCtx ctx = ctx_in;
+    real b_pedal = ctx_in.throttle; // B mode: the driver's pedal (a hybrid: the electric share of the split)
     if(hybrid_) {
         const auto channel=[&](int slot,real fallback){return ctx.channels&&slot>=0&&slot<ctx.channel_count?ctx.channels[slot]:fallback;};
         const bool ready=channel(hybrid_ready_slot_,1)>.5;
-        const int mode=static_cast<int>(std::clamp(std::round(channel(hybrid_mode_slot_,1)),real(0),real(3)));
+        const int mode_raw=static_cast<int>(std::clamp(std::round(channel(hybrid_mode_slot_,1)),real(0),real(4)));
+        int mode=mode_raw;
+        // Electric mode (docs/electric_drive.md): ICE off and disconnected, traction motors only. A pack at or below low_soc
+        // leaves it for Normal (latched until the channel moves off Electric; the car writes the part's default back).
+        hybrid_electric_active_=false;
+        if(mode_raw==4) {
+            if(!ctx_in.electric_mode_allowed||hybrid_electric_lost_)mode=1;
+            else if(battery_soc()<=hybrid_->low_soc){hybrid_electric_lost_=true;hybrid_electric_reason_=1;hybrid_electric_leave_pending_=true;mode=1;}
+            else {mode=4;hybrid_electric_active_=true;hybrid_electric_reason_=0;}
+        } else hybrid_electric_lost_=false;
         if(ctx_in.gear_request!=kGearRequestNone)hybrid_selector_=ctx_in.gear_request<0?-1:(ctx_in.gear_request>0?1:0);
-        if(battery_soc()<=hybrid_->low_soc)hybrid_charge_latched_=true;
-        if(battery_soc()>=hybrid_->charge_target_soc-real(1e-6))hybrid_charge_latched_=false;
+        b_update_selector(ctx_in,hybrid_electric_active_);
+        if(swallow_up_!=real(0)||swallow_down_!=real(0)){ctx.shift_up_count=ctx_in.shift_up_count-swallow_up_;ctx.shift_down_count=ctx_in.shift_down_count-swallow_down_;}
         real pack=0,motors=0,stack=0;
         for(const auto& b:batteries_)if(b->soc()>0)pack+=b->desc.max_discharge_w;
         for(const auto* c:fuel_cells_)if(c->hydrogen_kg>0)stack+=c->rated_power();
@@ -2298,23 +2490,35 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         // stage (min with the ICE command) and the motors (min with their pedal) - not folded into the request, which
         // amplified it through the split (pedal 0.75 -> ICE 0.5) and pulled the shift schedule to part-throttle points.
         hybrid_driver_command_=std::clamp(throttle_stage_.evaluate(ctx_in).command,real(0),real(1));
-        hybrid_requested_w_=hybrid_driver_command_*hybrid_->requested_power_w;
         const bool running=last_engine_result_.state==EngineState::Running;
-        const bool extra=mode!=0&&hybrid_requested_w_>hybrid_available_w_;
-        const bool traction=hybrid_selector_!=0&&mode!=0&&(extra||mode>=2);
-        const bool want=ready&&(hybrid_charge_latched_||mode>=2||extra);
+        // The split itself is the public pure function (ps/drivetrain/hybrid_split.h; the charge latch is updated in it).
+        HybridSplitInput split_in;
+        split_in.driver_command=hybrid_driver_command_;
+        split_in.available_w=hybrid_available_w_;
+        split_in.drive_mode=mode;
+        split_in.ice_full_power_w=hybrid_->requested_power_derived?hybrid_ice_full_w_:real(0);
+        split_in.battery_soc=battery_soc();
+        split_in.charge_latched=hybrid_charge_latched_;
+        split_in.ready=ready;
+        split_in.selector=hybrid_selector_;
+        const HybridSplit split=hybrid_power_split(*hybrid_,split_in);
+        hybrid_charge_latched_=split.charge_latched;
+        const bool traction=split.engine_coupled;
+        const bool want=split.engine_wanted;
         hybrid_idle_s_=want?0:hybrid_idle_s_+ctx.h;
-        hybrid_ice_requested_=want||(ready&&running&&hybrid_idle_s_<hybrid_->stop_delay_s);
+        hybrid_ice_requested_=!hybrid_electric_active_&&(want||(ready&&running&&hybrid_idle_s_<hybrid_->stop_delay_s));
         hybrid_crank_s_=(!hybrid_ice_requested_||running)?0:hybrid_crank_s_+ctx.h;
         ctx.ignition=hybrid_ice_requested_?1:0;
         ctx.starter=hybrid_ice_requested_&&!running&&hybrid_crank_s_<hybrid_->crank_timeout_s?1:0;
         const bool hybrid_was_disconnected=hybrid_disconnect_;
         hybrid_disconnect_=!traction||!running;
-        ctx.electric_throttle=ready?std::clamp(hybrid_requested_w_/std::max(real(1),hybrid_available_w_),real(0),real(1)):0;
+        hybrid_requested_w_=split.requested_w;
+        b_pedal=split.electric_command;
+        ctx.electric_throttle=split.electric_command;
         ctx.electric_charge=0;
-        ctx.throttle=traction?std::clamp((hybrid_requested_w_-hybrid_available_w_)/std::max(real(1),hybrid_->requested_power_w-hybrid_available_w_),real(0),real(1)):0;
+        ctx.throttle=split.engine_command;
         ctx.throttle_is_command=true;
-        if(hybrid_charge_latched_&&running&&hybrid_disconnect_) {
+        if(hybrid_charge_latched_&&running&&hybrid_disconnect_&&!hybrid_electric_active_) {
             const real rpm=std::abs(network_.omega(engine_crank_))*60/(2*3.14159265358979323846);
             const real taper=std::clamp((hybrid_->charge_target_soc-battery_soc())/real(.02),real(0),real(1));
             ctx.electric_charge=rpm>engine_->idle_rpm()*real(1.4)?hybrid_->generator_fraction*taper:0;
@@ -2325,7 +2529,7 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         // engine toward that gear's input speed (same proportional law as the charge mode), then close within the clutch
         // law's lock window - or after connect_timeout_s. Never opens at standstill (the fit gear's input speed is 0).
         int hybrid_fit=0;
-        if(hybrid_disconnect_||!gearbox_||!engine_)hybrid_connect_s_=0;
+        if(hybrid_disconnect_||!gearbox_||!engine_||(auto_&&dyno_gear_hold_!=kNoDynoGearHold))hybrid_connect_s_=0; // dyno hold: no rev-match, the gear is the dyno's
         else if(hybrid_selector_>0){
             hybrid_fit=hybrid_fit_gear(ctx);
             if(hybrid_fit>0){
@@ -2351,6 +2555,14 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
             const bool settled_neutral=gearbox_->current_position()==0&&gearbox_->phase()==Gearbox::Phase::Idle&&gearbox_->target()==0;
             ctx.gear_request=hybrid_selector_<0?-1:(settled_neutral?real(hybrid_fit>0?hybrid_fit:1):kGearRequestNone);
         }
+    }
+
+    // Powertrain dyno (powertrain_dyno.cpp) only: hold the dyno's gear (a hybrid supervisor's disconnect keeps its neutral).
+    // dyno_gear_hold_ is kNoDynoGearHold in every car, so this is never taken at runtime and nothing here is hashed.
+    // An automatic / DCT / CVT gearbox takes the same request and holds it inside AutoTransmission (dyno hold).
+    if (dyno_gear_hold_ != kNoDynoGearHold && gearbox_) {
+        ctx.assist_auto_shift = false;
+        if (!(hybrid_ && hybrid_disconnect_)) ctx.gear_request = static_cast<real>(dyno_gear_hold_);
     }
 
     // --- plan section 7.2 step 3: controllers -------------------------------
@@ -2745,10 +2957,14 @@ void Powertrain::pre_solve_components(const ComponentSubstepCtx& ctx_in) {
         if(hybrid_)electric_direction_=hybrid_selector_;
         else if(gearbox_)electric_direction_=static_cast<real>(gearbox_->current_position());
         else if(ctx.gear_request!=kGearRequestNone)electric_direction_=ctx.gear_request<0?-1:(ctx.gear_request>0?1:0);
+        if(!hybrid_&&!gearbox_)b_update_selector(ctx_in,true);
         ctx.electric_direction=electric_direction_;
     }
     for(auto& b:batteries_) b->begin_substep(ctx.h);
-    if (!regen_maps_.empty()) prepare_regen(ctx);
+    if (!regen_maps_.empty()) { prepare_regen(ctx); prepare_b(ctx, b_pedal); }
+    // Discharge allocation: every motor that will drive this substep registers its request with its pack first, so a
+    // limited pack shares its budget in proportion (Battery::reserve_discharge; docs/electric_drive.md).
+    for(const ElectricMotor* m:electric_motors_) m->battery().add_drive_claim(m->drive_claim_j(ctx,network_));
     for (auto& c : components_) {
         if (!regen_maps_.empty() && c.get() == brakes_) reflect_regen(ctx); // every motor has run: the pads take the rest
         c->pre_solve(ctx, network_, assembly_);
@@ -3073,6 +3289,12 @@ void Powertrain::request_engine_wear(const EngineWear& w) {
 void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vector<real>& hub_speeds) {
     for (RegenMap& m : regen_maps_) m.motor->reset_blend();
     blend_regen_nm_ = blend_pad_nm_ = real(0.0);
+    b_selected_ = b_hold_active_ = b_feed_on_ = false;
+    b_hold_level_ = real(0.0);
+    std::fill(b_fraction_.begin(), b_fraction_.end(), real(1.0));
+    b_counters_init_ = false;
+    b_prev_request_ = kGearRequestNone;
+    if (brakes_ != nullptr) brakes_->set_hold_level(real(0.0));
     hybrid_connect_s_ = real(0.0);
     // 1. Snapshot total rotational KE BEFORE any change (signed delta booked
     //    as ledger_.external_reset below - unlike apply_topology_switch's
@@ -3154,7 +3376,10 @@ void Powertrain::reset(const vehicle::VehicleResetOptions& opts, const std::vect
     //    engine below idle.
     const real idle_omega = engine_ ? rpm_to_rad_per_s(engine_->idle_rpm()) : real(0.0);
     const real gearbox_out_omega_now = gearbox_ ? network_.omega(gearbox_out_) : real(0.0);
-    const real driveline_in_omega = (gearbox_ && gear != 0) ? gearbox_->ratio_for_position(gear) * gearbox_out_omega_now : real(0.0);
+    // A held CVT ratio (powertrain dyno) is the variator's, not a virtual step's.
+    const real driveline_ratio = (gearbox_ && gear > 0 && auto_ && auto_->dyno_hold() && auto_->desc().cvt) ? auto_->ratio(gear)
+                                                                                                             : (gearbox_ && gear != 0 ? gearbox_->ratio_for_position(gear) : real(0.0));
+    const real driveline_in_omega = (gearbox_ && gear != 0) ? driveline_ratio * gearbox_out_omega_now : real(0.0);
     real engine_omega_target = real(0.0);
     if (engine_ && opts.engine_state != EngineState::Off) {
         if (opts.clutch_locked && gear != 0) {
@@ -3265,6 +3490,12 @@ std::uint64_t Powertrain::fold_state_hash(std::uint64_t seed) const {
         const auto* b=reinterpret_cast<const unsigned char*>(&electric_direction_);
         for(std::size_t i=0;i<sizeof(electric_direction_);++i){h^=b[i];h*=1099511628211ULL;}
     }
+    // B mode / hybrid Electric mode: hashed only while non-default, so every other car (and a B-capable car in D) hashes as before.
+    if(b_selected_||b_hold_active_||b_hold_level_>0||hybrid_electric_lost_){
+        const auto fold=[&](real v){const auto* bytes=reinterpret_cast<const unsigned char*>(&v);for(std::size_t i=0;i<sizeof(v);++i){h^=bytes[i];h*=1099511628211ULL;}};
+        fold(real(0x42));fold(real(b_selected_));fold(real(b_hold_active_));fold(b_hold_level_);fold(real(hybrid_electric_lost_));
+        for(real f:b_fraction_)fold(f);
+    }
     for (const auto& c : components_) h = c->fold_state_hash(h);
     if (engine_) h = engine_->fold_state_hash(h);
     if (gearbox_) h = gearbox_->fold_state_hash(h);
@@ -3327,6 +3558,7 @@ void Powertrain::replace_turbo_configuration(std::string_view component_id,const
         throw std::runtime_error("replace_turbo_configuration: unknown simulated engine");
     sim_engine_ptr_->replace_turbo_configuration(desc,prepared);
     simulated_engine_desc_->turbo_pair=desc;
+    refresh_hybrid_ice_power(); // the full-load envelope was rebuilt for the new hardware
     // I7d D5: channels are declared at build time only; a swapped-in anti_lag block naming that channel
     // keeps reading it, any other falls back to its default_enabled (Sensors::anti_lag_channel NaN).
     anti_lag_channel_live_ = anti_lag_fitted_ && anti_lag_channel_slot_ >= 0 && desc.anti_lag && desc.anti_lag->channel == anti_lag_channel_name_;
@@ -3340,6 +3572,7 @@ void Powertrain::request_replace_engine_maps(std::string_view component_id, Engi
         throw std::runtime_error("replace_engine_maps: component '" + std::string(component_id) + "' is not a simulated engine");
     }
     if (!new_engine_maps) throw std::runtime_error("replace_engine_maps: null maps");
+    hybrid_ice_dirty_ = hybrid_.has_value();
     // Only .maps ever differs from the desc this engine was originally built
     // from (architecture/geometry/ECU/limiter/idle/starter/etc. are fixed
     // for this engine's lifetime - a hot swap replaces MAPS, not the
@@ -3359,6 +3592,7 @@ void Powertrain::request_replace_engine_maps(std::string_view component_id, Engi
 
 void Powertrain::apply_pending_engine_maps_swap() {
     if (sim_engine_ptr_ != nullptr) sim_engine_ptr_->apply_pending_maps_swap(); // returned old maps drop here
+    if (hybrid_ice_dirty_) { hybrid_ice_dirty_ = false; refresh_hybrid_ice_power(); }
 }
 
 std::uint64_t Powertrain::simulated_engine_maps_content_hash() const {

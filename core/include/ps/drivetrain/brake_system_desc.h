@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ps/drivetrain/b_mode.h"
 #include "ps/types.h"
 
 #include <string>
@@ -47,6 +48,9 @@ struct RegenBlendDesc {
     // After a path (a gear, the clutch, a transfer output) closes again the regeneration ramps in over this time so the
     // reflected torque does not step; 0 = no ramp. An opening path withdraws it at once (the pads cover it that substep).
     real path_ramp_s = 0.05;
+    // The "B" one-pedal mode (docs/electric_drive.md "B mode"): the selector position above D of a car with traction motors
+    // on the wheel path. Needs blending enabled.
+    BModeDesc b_mode;
 };
 
 struct BrakeSystemDesc {

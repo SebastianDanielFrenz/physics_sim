@@ -588,6 +588,10 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             ctx.nitrous_arm_allowed = drive_params->nitrous_arm_allowed;
         }
         ctx.first_substep_of_tick = (s == 0);
+        // B mode wheel-slip guard: this substep's contact-patch sensors (the same ones traction control reads).
+        ctx.traction_wheels = traction_wheels_.data();
+        ctx.traction_wheel_count = static_cast<int>(traction_wheels_.size());
+        ctx.electric_mode_allowed = !desc_.drive_modes || (desc_.drive_modes->modes_bits & drive_mode_bit(DriveMode::Electric)) != 0;
         // PHYS-033 P4 I4 C3: points at this tick's already-copied component-
         // channel buffer (see the per-tick copy above) - rebuilt each
         // substep alongside the rest of ctx, but the buffer itself is only
@@ -726,6 +730,12 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
 
     // PHYS-033 P4 I2 commit 5b (plan section 8): this tick's balance_error,
     // from the ledger deltas since begin_tick() above.
+    // Hybrid Electric mode ended by the supervisor (pack at low_soc): write the drive-mode channel back to the part's default
+    // (never Electric itself), like a drive-mode change queues its defaults - World::step applies it after the pipeline.
+    if (powertrain_.take_hybrid_electric_leave() && desc_.drive_modes && pending_write_count_ < pending_writes_.size()) {
+        const DriveMode back = desc_.drive_modes->default_mode == DriveMode::Electric ? DriveMode::Normal : desc_.drive_modes->default_mode;
+        pending_writes_[pending_write_count_++] = {control_indices_.assist_drive_mode, static_cast<real>(static_cast<std::uint8_t>(back))};
+    }
     powertrain_.end_tick();
 
     // PHYS-033 P4 I3 plan section 4.3/6.1.8/6.5.2/7.6 (commit 6 scope: "...
@@ -884,6 +894,11 @@ void VehicleInstance::step_tick(IRigidBackend& backend, const std::vector<real>&
             snap.transmission_selector=static_cast<std::int8_t>(powertrain_.hybrid_selector());
             snap.drive_power_w+=powertrain_.electric_traction_power();
         }
+        snap.hybrid_electric_mode=powertrain_.hybrid_electric_mode();snap.hybrid_electric_leave_reason=static_cast<std::uint8_t>(powertrain_.hybrid_electric_leave_reason());
+        snap.b_mode_available=powertrain_.b_mode_available();snap.b_mode_active=powertrain_.b_mode_selected();
+        snap.b_regen_capacity_w=powertrain_.b_regen_capacity_w();snap.b_drive_capacity_w=powertrain_.b_drive_capacity_w();
+        snap.b_power_command_w=powertrain_.b_power_command_w();snap.b_zero_power_pedal=powertrain_.b_zero_power_pedal();
+        snap.b_slip_fraction=powertrain_.b_slip_fraction();snap.b_hold_level=powertrain_.b_hold_level();
         snap.fuel_cell_fitted=powertrain_.has_fuel_cells();
         snap.fuel_cell_hydrogen_kg=powertrain_.fuel_cell_hydrogen_kg();
         snap.fuel_cell_power_w=powertrain_.fuel_cell_power_w();
@@ -1038,6 +1053,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         fold(desc_.epb->max_engage_speed_mps);fold(static_cast<std::uint8_t>(desc_.epb->epb_mode));
         if(desc_.drive_modes) {
             for(int m=0;m<kDriveModeCount;++m) {
+                if(m>=kDriveModeLegacyCount&&!(desc_.drive_modes->modes_bits&drive_mode_bit(static_cast<DriveMode>(m))))continue;
                 const auto& em=desc_.drive_modes->params[static_cast<std::size_t>(m)].epb_mode;
                 fold(static_cast<std::uint8_t>(em?static_cast<int>(*em)+1:0));
             }
@@ -1064,6 +1080,7 @@ std::uint64_t VehicleInstance::fold_state_hash(std::uint64_t seed) const {
         }
         if(desc_.drive_modes) {
             for(int m=0;m<kDriveModeCount;++m) {
+                if(m>=kDriveModeLegacyCount&&!(desc_.drive_modes->modes_bits&drive_mode_bit(static_cast<DriveMode>(m))))continue;
                 const DriveModeParams& p=desc_.drive_modes->params[static_cast<std::size_t>(m)];
                 fold(static_cast<std::uint8_t>(p.abs_default?(*p.abs_default?2:1):0));
                 fold(static_cast<std::uint8_t>(p.esc_default?static_cast<int>(*p.esc_default)+1:0));

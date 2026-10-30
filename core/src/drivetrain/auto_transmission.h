@@ -89,6 +89,13 @@ public:
         real h = 0.0;
     };
 
+    // Powertrain dyno only (set_dyno_hold): hold one gear instead of running the schedule. The target is the request's gear
+    // exactly (0 = neutral, e.g. a hybrid's disconnect; a CVT's forward gear is always D = 1), the starting clutch of a
+    // DualClutch (or clutch CVT) is locked whenever a gear is in, the converter lock-up of an Automatic is locked, and a CVT
+    // keeps the given variator ratio (its clamping force still follows the torque). Never hashed, off in every car.
+    void set_dyno_hold(bool on, real cvt_ratio = 0.0);
+    [[nodiscard]] bool dyno_hold() const { return hold_; }
+
     struct Outputs {
         RowCmd row[2];
         real lockup_cap_static = 0.0, lockup_cap_kinetic = 0.0;
@@ -140,6 +147,7 @@ private:
     void update_lockup(const Sensors& s, real th);
     void update_preselect(const Sensors& s, real th);
     void update_cvt(const Sensors& s, real th);
+    void update_cvt_clamp(const Sensors& s);
     [[nodiscard]] int nearest_step() const;
     [[nodiscard]] real belt_capacity() const;
 
@@ -179,6 +187,9 @@ private:
     real t_step_ = 0.0; // time on the current step (stepped S dwell)
     real clamp_ = 0.0;  // belt clamping force [N]
     real cos_beta_ = 1.0; // unhashed constant
+    // Powertrain dyno only (set_dyno_hold); unhashed, survive reset().
+    bool hold_ = false;
+    real hold_ratio_ = 0.0; // CVT: the held variator ratio (0 = none)
 };
 
 } // namespace ps::drivetrain

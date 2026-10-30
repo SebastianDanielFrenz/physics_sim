@@ -381,6 +381,23 @@ public:
     [[nodiscard]] real hybrid_requested_power() const {return hybrid_requested_w_;}
     [[nodiscard]] real hybrid_available_power() const {return hybrid_available_w_;}
     [[nodiscard]] real hybrid_selector() const {return hybrid_selector_;}
+    // Hybrid derived full-pedal demand: the ICE's own full-load peak power (0 = authored requested_power_w), computed at build
+    // and again whenever the engine's envelope is rebuilt (turbo swap, map swap), never per substep.
+    [[nodiscard]] real hybrid_ice_full_power_w() const {return hybrid_ice_full_w_;}
+    [[nodiscard]] bool hybrid_electric_mode() const {return hybrid_electric_active_;}
+    // Why the supervisor left Electric: 0 none, 1 state of charge at or below low_soc (kept until Electric is chosen again).
+    [[nodiscard]] int hybrid_electric_leave_reason() const {return hybrid_electric_reason_;}
+    // True once after the supervisor left Electric: the car writes the drive-mode channel back to the part's default.
+    [[nodiscard]] bool take_hybrid_electric_leave() {const bool v=hybrid_electric_leave_pending_;hybrid_electric_leave_pending_=false;return v;}
+    // B mode (docs/electric_drive.md): the car has the position, it is selected, and last substep's numbers (never hashed).
+    [[nodiscard]] bool b_mode_available() const {return b_capable_&&(!hybrid_||hybrid_electric_active_);}
+    [[nodiscard]] bool b_mode_selected() const {return b_selected_&&b_capable_;}
+    [[nodiscard]] real b_regen_capacity_w() const {return b_regen_cap_w_;}
+    [[nodiscard]] real b_drive_capacity_w() const {return b_drive_cap_w_;}
+    [[nodiscard]] real b_power_command_w() const {return b_power_cmd_w_;}
+    [[nodiscard]] real b_zero_power_pedal() const {return b_zero_pedal_;}
+    [[nodiscard]] real b_slip_fraction() const {real f=1;for(real v:b_fraction_)f=std::min(f,v);return f;}
+    [[nodiscard]] real b_hold_level() const {return b_hold_level_;}
     [[nodiscard]] real electric_traction_power() const {real w=0;for(const auto* m:electric_motors_)if(!m->is_crank_machine())w+=m->power_w;return w;}
     [[nodiscard]] real electric_direction() const {return electric_direction_;}
     [[nodiscard]] bool electric_ready() const {for(const auto* m:electric_motors_)if(m->ready&&battery_soc()>0)return true;return false;}
@@ -402,6 +419,29 @@ public:
     [[nodiscard]] real fuel_cell_hydrogen_kg() const {real kg=0;for(const auto* c:fuel_cells_)kg+=c->hydrogen_kg;return kg;}
     [[nodiscard]] real fuel_cell_power_w() const {real w=0;for(const auto* c:fuel_cells_)w+=c->power_w;return w;}
     [[nodiscard]] bool has_fuel_cells() const {return !fuel_cells_.empty();}
+    [[nodiscard]] bool hybrid_engine_coupled() const {return hybrid_.has_value()&&!hybrid_disconnect_;}
+    // Powertrain dyno (powertrain_dyno.cpp; never called by a car): the machines in component order, a node's speed, the
+    // engine's Coulomb-row torque on the crank, the last throttle command the engine received.
+    [[nodiscard]] const std::vector<ElectricMotor*>& electric_motors() const {return electric_motors_;}
+    [[nodiscard]] const std::vector<FuelCell*>& fuel_cells() const {return fuel_cells_;}
+    [[nodiscard]] real node_omega(NodeId n) const {return network_.omega(n);}
+    [[nodiscard]] real engine_friction_torque() const {return engine_ ? network_.row_lambda(engine_friction_row_) : real(0.0);}
+    [[nodiscard]] const ThrottleCommand& last_throttle_command() const {return last_throttle_command_;}
+    // Holds the dyno's gear: pre_solve_components requests it every substep (auto-shift off) unless a hybrid supervisor
+    // disconnects. kNoDynoGearHold (every car) = off.
+    static constexpr int kNoDynoGearHold = -1000000;
+    // Automatic / DualClutch / CVT gearbox: the same hold through AutoTransmission::set_dyno_hold (the shift schedule, converter
+    // lock-up and starting-clutch logic frozen; a CVT additionally holds `cvt_ratio`, 0 = none). Call before reset().
+    void set_dyno_gear_hold(int gear, real cvt_ratio = real(0)) {
+        dyno_gear_hold_=gear;
+        if (auto_) auto_->set_dyno_hold(gear != kNoDynoGearHold, cvt_ratio);
+    }
+    // Sets every pack to `soc` (NaN = its initial_soc) and every fuel cell's hydrogen to `fraction` of its tank (NaN = the
+    // initial fill). Between ticks only.
+    void dyno_hold_energy_state(real soc,real hydrogen_fraction) {
+        for(auto& b:batteries_)b->set_content(b->capacity()*(std::isnan(soc)?b->desc.initial_soc:soc));
+        for(auto* c:fuel_cells_)c->hydrogen_kg=std::isnan(hydrogen_fraction)?c->desc().initial_hydrogen_kg:hydrogen_fraction*c->desc().hydrogen_capacity_kg;
+    }
     [[nodiscard]] bool has_park_lock() const { return park_lock_ != nullptr; }
     [[nodiscard]] real park_lock_engaged() const { return (park_lock_ && park_lock_->engaged()) ? real(1.0) : real(0.0); }
     [[nodiscard]] real park_lock_torque() const { return park_lock_ ? network_.row_lambda(park_lock_row_) : real(0.0); }
@@ -696,6 +736,7 @@ private:
     // The gear a hybrid's ICE connects in at the present speed (0 = none: CVT or no gearbox).
     [[nodiscard]] int hybrid_fit_gear(const ComponentSubstepCtx& ctx) const;
     int hybrid_mode_slot_=-1,hybrid_ready_slot_=-1;
+    int dyno_gear_hold_=kNoDynoGearHold; // powertrain dyno only, never hashed
     real electric_direction_=0; // latched fixed-reduction selector; N at spawn
     std::vector<FuelCell*> fuel_cells_; // aliases into components_
     std::vector<std::unique_ptr<Battery>> batteries_;
@@ -723,6 +764,27 @@ private:
     DirectTorqueBrakes* brakes_ = nullptr;         // alias into components_ (the last one)
     real blend_regen_nm_ = 0, blend_pad_nm_ = 0;   // last substep, snapshot only (never hashed)
     void prepare_regen(const ComponentSubstepCtx& ctx);
+    // B mode. b_capable_: regeneration blending runs, a motor reaches the rims, b_mode.enabled, and the car is a pure EV
+    // (no gearbox) or a hybrid (B then exists in Electric mode only). Selected/hold state is hashed only while non-default.
+    bool b_capable_=false,b_selected_=false,b_hold_active_=false;
+    real b_hold_level_=0;
+    std::vector<real> b_fraction_;            // per regen map: the wheel-slip guard's regeneration fraction (1 = full)
+    bool b_counters_init_=false;
+    real b_prev_up_=0,b_prev_down_=0,b_prev_request_=kGearRequestNone; // selector edge detection (not hashed)
+    real swallow_up_=0,swallow_down_=0;       // shift counts consumed by the EV selector in Electric mode (not hashed)
+    real regen_fade_min_=1; // prepare_regen's results for B (not hashed)
+    real b_regen_cap_w_=0,b_drive_cap_w_=0,b_power_cmd_w_=0,b_zero_pedal_=0; // last substep (never hashed)
+    bool b_feed_on_=false;                    // the motors currently carry a B feed (cleared once when B ends)
+    std::vector<real> b_env_w_,b_regen_w_,b_regen_nm_,b_scale_d_,b_scale_r_; // prepare_b scratch (sized at build)
+    std::vector<std::size_t> b_battery_idx_;  // per regen map: index of its battery in batteries_
+    void b_update_selector(const ComponentSubstepCtx& ctx_in,bool allowed);
+    void prepare_b(const ComponentSubstepCtx& ctx,real pedal);
+    // Hybrid Electric mode / derived full-pedal demand.
+    bool hybrid_electric_active_=false,hybrid_electric_lost_=false,hybrid_electric_leave_pending_=false;
+    int hybrid_electric_reason_=0;
+    real hybrid_ice_full_w_=0,engine_limiter_rpm_=0;
+    bool hybrid_ice_dirty_=false;
+    void refresh_hybrid_ice_power(); // sweeps the engine's full-load envelope (build / envelope rebuild only)
     void reflect_regen(const ComponentSubstepCtx& ctx);
     std::vector<std::unique_ptr<IComponent>> components_; // gear_pair(s), differential(s), then brakes (appended last)
     // Non-owning aliases into components_, pt.components order (empty if

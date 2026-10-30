@@ -137,9 +137,14 @@ add_executable(ps_unit_tests
   test_limit_policy.cpp
   test_gearbox_rating.cpp
   test_electric_drive.cpp
+  test_electric_traction_ceiling.cpp
+  test_electric_pins.cpp
+  test_powertrain_dyno.cpp
   test_hybrid_shift.cpp
   test_hybrid_ice_start_gear.cpp
   test_brake_blend.cpp
+  test_b_mode.cpp
+  test_hybrid_power_split.cpp
   test_brake_blend_gearbox.cpp
   test_automatic_gearbox_io.cpp
   test_cvt_gearbox_io.cpp

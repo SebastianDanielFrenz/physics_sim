@@ -18,10 +18,14 @@
 
 namespace ps::vehicle {
 
-// Mode CODES of the channel `assist.drive_mode`. Append-only (owner: Eco, Normal, Sport; Racing added by Q3 / I8).
-enum class DriveMode : std::uint8_t { Eco = 0, Normal = 1, Sport = 2, Racing = 3 };
-inline constexpr int kDriveModeCount = 4;
-inline constexpr const char* kDriveModeNames[kDriveModeCount] = {"eco", "normal", "sport", "racing"};
+// Mode CODES of the channel `assist.drive_mode`. Append-only (owner: Eco, Normal, Sport; Racing added by Q3 / I8; Electric
+// added by the B-mode increment: the hybrid supervisor's pure-electric mode, docs/electric_drive.md "Electric mode").
+enum class DriveMode : std::uint8_t { Eco = 0, Normal = 1, Sport = 2, Racing = 3, Electric = 4 };
+inline constexpr int kDriveModeCount = 5;
+// The modes before Electric: state-hash loops that fold every mode (offered or not) stop here and fold Electric only when it
+// is offered, so a car without it hashes exactly as before.
+inline constexpr int kDriveModeLegacyCount = 4;
+inline constexpr const char* kDriveModeNames[kDriveModeCount] = {"eco", "normal", "sport", "racing", "electric"};
 inline constexpr std::uint8_t kDriveModeAllBits = static_cast<std::uint8_t>((1u << kDriveModeCount) - 1u);
 [[nodiscard]] constexpr std::uint8_t drive_mode_bit(DriveMode m) { return static_cast<std::uint8_t>(1u << static_cast<unsigned>(m)); }
 
@@ -79,6 +83,8 @@ struct DriveModesDesc {
 // The mode actually run. A mode the part does not offer maps, statelessly, to the part's default mode (drive modes
 // have no intervention order, so "the nearest" is not defined; the default is the one mode the owner approved).
 [[nodiscard]] constexpr DriveMode resolve_drive_mode(const DriveModesDesc& d, DriveMode requested) {
+    // A part that does not offer Electric (mode 4) keeps the pre-Electric clamp of an out-of-range request to Racing.
+    if (requested == DriveMode::Electric && !(d.modes_bits & drive_mode_bit(requested))) requested = DriveMode::Racing;
     return (d.modes_bits & drive_mode_bit(requested)) ? requested : d.default_mode;
 }
 
@@ -131,7 +137,7 @@ struct DriveModesDesc {
 // Range checks shared by the loader and VehicleInstance (code-built descs). Throws std::invalid_argument.
 inline void validate_drive_modes(const DriveModesDesc& d) {
     const auto fin = [](real v) { return std::isfinite(v); };
-    if (d.modes_bits == 0 || (d.modes_bits & static_cast<std::uint8_t>(~kDriveModeAllBits)) != 0) throw std::invalid_argument("drive_modes: modes must be a non-empty subset of eco, normal, sport, racing");
+    if (d.modes_bits == 0 || (d.modes_bits & static_cast<std::uint8_t>(~kDriveModeAllBits)) != 0) throw std::invalid_argument("drive_modes: modes must be a non-empty subset of eco, normal, sport, racing, electric");
     if (!(d.modes_bits & drive_mode_bit(d.default_mode))) throw std::invalid_argument("drive_modes: default_mode is not one of the offered modes");
     for (int m = 0; m < kDriveModeCount; ++m) {
         const DriveModeParams& p = d.params[static_cast<std::size_t>(m)];

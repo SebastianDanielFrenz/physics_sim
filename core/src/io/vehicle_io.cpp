@@ -408,9 +408,10 @@ BrakeSystemDesc read_brake_system(const json& j) {
             const std::string& k = it.key();
             if (k != "enabled" && k != "taper_start_soc" && k != "full_soc" && k != "fade_start_speed_mps" &&
                 k != "fade_end_speed_mps" && k != "abs_hold_s" && k != "path_min_engagement" && k != "clutch_capacity_margin" &&
-                k != "path_ramp_s") {
+                k != "path_ramp_s" && k != "b_mode") {
                 throw std::runtime_error("brake_system.regen_blend: unknown key '" + k + "'");
             }
+            if (k == "b_mode") continue; // an object, validated below
             if (k == "enabled" ? !it.value().is_boolean() : !it.value().is_number()) {
                 throw std::runtime_error("brake_system.regen_blend." + k + (k == "enabled" ? " must be a boolean" : " must be a number"));
             }
@@ -444,6 +445,52 @@ BrakeSystemDesc read_brake_system(const json& j) {
         }
         if (!(r.clutch_capacity_margin > real(0.0) && r.clutch_capacity_margin <= real(1.0))) {
             throw std::runtime_error("brake_system.regen_blend.clutch_capacity_margin must be in (0, 1]");
+        }
+        if (rj.contains("b_mode")) {
+            // The "B" one-pedal mode (docs/electric_drive.md "B mode"): every key optional, defaults are BModeDesc's.
+            const json& bj = rj.at("b_mode");
+            if (!bj.is_object()) throw std::runtime_error("brake_system.regen_blend.b_mode must be an object");
+            auto& bm = r.b_mode;
+            for (auto it = bj.begin(); it != bj.end(); ++it) {
+                const std::string& k = it.key();
+                const bool flag = k == "enabled" || k == "auto_hold";
+                if (!flag && k != "slip_target" && k != "slip_floor_mps" && k != "kp" && k != "ki_per_s" && k != "attack_rate_per_s" &&
+                    k != "recovery_rate_per_s" && k != "hold_release_s" && k != "hold_pedal_margin" && k != "hold_rise_per_s" && k != "hold_blend_level") {
+                    throw std::runtime_error("brake_system.regen_blend.b_mode: unknown key '" + k + "'");
+                }
+                if (flag ? !it.value().is_boolean() : !it.value().is_number()) {
+                    throw std::runtime_error("brake_system.regen_blend.b_mode." + k + (flag ? " must be a boolean" : " must be a number"));
+                }
+            }
+            bm.enabled = bj.value("enabled", bm.enabled);
+            bm.auto_hold = bj.value("auto_hold", bm.auto_hold);
+            bm.slip_target = bj.value("slip_target", bm.slip_target);
+            bm.slip_floor_mps = bj.value("slip_floor_mps", bm.slip_floor_mps);
+            bm.kp = bj.value("kp", bm.kp);
+            bm.ki_per_s = bj.value("ki_per_s", bm.ki_per_s);
+            bm.attack_rate_per_s = bj.value("attack_rate_per_s", bm.attack_rate_per_s);
+            bm.recovery_rate_per_s = bj.value("recovery_rate_per_s", bm.recovery_rate_per_s);
+            bm.hold_release_s = bj.value("hold_release_s", bm.hold_release_s);
+            bm.hold_pedal_margin = bj.value("hold_pedal_margin", bm.hold_pedal_margin);
+            bm.hold_rise_per_s = bj.value("hold_rise_per_s", bm.hold_rise_per_s);
+            bm.hold_blend_level = bj.value("hold_blend_level", bm.hold_blend_level);
+            for (const auto& kv : {std::pair<const char*, real>{"slip_target", bm.slip_target}, {"slip_floor_mps", bm.slip_floor_mps}, {"kp", bm.kp},
+                                   {"ki_per_s", bm.ki_per_s}, {"attack_rate_per_s", bm.attack_rate_per_s}, {"recovery_rate_per_s", bm.recovery_rate_per_s},
+                                   {"hold_rise_per_s", bm.hold_rise_per_s}}) {
+                if (!(kv.second > real(0.0)) || !std::isfinite(kv.second)) {
+                    throw std::runtime_error(std::string("brake_system.regen_blend.b_mode.") + kv.first + " must be finite and > 0");
+                }
+            }
+            if (!(bm.slip_target < real(1.0))) throw std::runtime_error("brake_system.regen_blend.b_mode.slip_target must be below 1");
+            if (!(bm.hold_release_s >= real(0.0)) || !std::isfinite(bm.hold_release_s)) {
+                throw std::runtime_error("brake_system.regen_blend.b_mode.hold_release_s must be >= 0");
+            }
+            if (!(bm.hold_blend_level >= real(0.0) && bm.hold_blend_level <= real(1.0))) {
+                throw std::runtime_error("brake_system.regen_blend.b_mode.hold_blend_level must be in [0, 1]");
+            }
+            if (!(bm.hold_pedal_margin >= real(0.0) && bm.hold_pedal_margin < real(1.0))) {
+                throw std::runtime_error("brake_system.regen_blend.b_mode.hold_pedal_margin must be in [0, 1)");
+            }
         }
     }
     return b;
@@ -4018,7 +4065,7 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                 } else if(type=="hybrid_control") {
                     electric_keys(cj,{"id","type","requested_power_w","low_soc","charge_target_soc","charge_rpm","generator_fraction","stop_delay_s","crank_timeout_s","connect_timeout_s"},ctx);
                     ps::drivetrain::HybridControlDesc h;
-                    h.requested_power_w=cj.value("requested_power_w",h.requested_power_w);h.low_soc=cj.value("low_soc",h.low_soc);h.charge_target_soc=cj.value("charge_target_soc",h.charge_target_soc);
+                    h.requested_power_derived=!cj.contains("requested_power_w");h.requested_power_w=cj.value("requested_power_w",h.requested_power_w);h.low_soc=cj.value("low_soc",h.low_soc);h.charge_target_soc=cj.value("charge_target_soc",h.charge_target_soc);
                     h.charge_rpm=cj.value("charge_rpm",h.charge_rpm);h.generator_fraction=cj.value("generator_fraction",h.generator_fraction);
                     h.stop_delay_s=cj.value("stop_delay_s",h.stop_delay_s);h.crank_timeout_s=cj.value("crank_timeout_s",h.crank_timeout_s);
                     h.connect_timeout_s=cj.value("connect_timeout_s",h.connect_timeout_s);
@@ -5215,6 +5262,12 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                                                a.down_rpm_at_zero_throttle, a.down_rpm_at_full_throttle);
                         }
                     }
+                }
+                if (part.drive_modes.modes_bits & ps::vehicle::drive_mode_bit(ps::vehicle::DriveMode::Electric)) {
+                    // Electric is the hybrid supervisor's pure-electric mode (docs/electric_drive.md "Electric mode").
+                    bool hybrid = false;
+                    for (const auto& comp : v.powertrain.components) hybrid = hybrid || std::holds_alternative<ps::drivetrain::HybridControlDesc>(comp.params);
+                    if (!hybrid) throw std::runtime_error(ectx + ": mode 'electric' needs a hybrid_control component (the hybrid supervisor runs it)");
                 }
                 v.drive_modes = part.drive_modes;
             } else if (part.kind == ElectronicsKind::Epb) {
