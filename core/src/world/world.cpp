@@ -880,6 +880,11 @@ void World::set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m) {
     vehicle_system_->set_tool_gauge_depth(id, tool, depth_m);
 }
 
+void World::set_tool_material_flow(VehicleId id, std::size_t tool, real kg_s) {
+    if (in_step_) throw std::logic_error("set_tool_material_flow: only between steps");
+    vehicle_system_->set_tool_material_flow(id, tool, kg_s);
+}
+
 void World::set_tool_enabled(VehicleId id, std::size_t tool, bool on) {
     if (in_step_) throw std::logic_error("set_tool_enabled: only between steps");
     vehicle_system_->set_tool_enabled(id, tool, on);

@@ -28,13 +28,15 @@ public:
     // Force and torque about the centre of mass, world axes.
     void substep(const Pose& pose, const Motion& motion, Vec3& force, Vec3& torque);
     void tick_end(const Pose& pose, std::uint64_t tick);
-    void disconnect_shaft() { shaft_fraction_ = 0.0; state_.pto_speed_fraction = 0.0; state_.pto_torque_nm = 0.0; }
+    void disconnect_shaft() { shaft_connected_ = false; shaft_fraction_ = 0.0; state_.pto_speed_fraction = 0.0; state_.pto_torque_nm = 0.0; }
 
     [[nodiscard]] const ToolDesc& desc() const { return desc_; }
     [[nodiscard]] const ToolState& state() const { return state_; }
     // Applicator only (a soil tool has no switch): the owner of the vehicle checks the kind first.
     void set_enabled(bool on) { enabled_ = on; state_.enabled = on; }
     [[nodiscard]] bool enabled() const { return enabled_; }
+    // What the game says goes through the tool now, kg/s (the product a sprayer or spreader puts out, later a combine's crop).
+    void set_material_flow(real kg_s) { material_kg_s_ = kg_s > 0.0 ? kg_s : 0.0; state_.material_kg_s = material_kg_s_; }
     void set_gauge_depth(real depth_m) { gauge_depth_ = depth_m; state_.gauge_depth_m = depth_m; }
     [[nodiscard]] real shaft_omega_nominal() const;
 
@@ -55,6 +57,7 @@ private:
     SoilSample soil_{};
     real ground_z_ = 0.0;
     real gauge_depth_ = 0.0;
+    real material_kg_s_ = 0.0;
     bool enabled_ = false; // applicator only
 
     // Over the tick's substeps.
@@ -65,6 +68,7 @@ private:
     bool have_edge_ = false;
     WorkPoint left_{}, right_{};
     real shaft_fraction_ = 0.0; // of nominal; 0 without a shaft
+    bool shaft_connected_ = false; // a PTO tool works only with its shaft connected (pto_load_nm ran this tick)
     bool in_soil_ = false;      // last tick: deep enough in ground it can work
 
     ToolState state_{};

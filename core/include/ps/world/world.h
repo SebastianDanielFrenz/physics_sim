@@ -154,6 +154,9 @@ public:
     [[nodiscard]] Pose get_pose(BodyId id) const { return backend_->get_pose(id); }
     [[nodiscard]] Motion get_motion(BodyId id) const { return backend_->get_motion(id); }
     [[nodiscard]] real get_mass(BodyId id) const { return backend_->get_mass(id); }
+    // Sets a dynamic body's mass (inertia scaled with it, as at creation). Sim thread, between steps. A machine carrying
+    // a tank uses it so that a full tank is heavier to carry and to pull; an unknown, static or non-positive mass is ignored.
+    void set_body_mass(BodyId id, real mass) { backend_->set_mass(id, mass); }
 
     // PLAN.md D10/P1.5a: our own reduced-coordinate (Featherstone) solver
     // for articulated chains. Runs in the vehicle-island stage,
@@ -371,6 +374,9 @@ public:
     void set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m);
     // Switches an applicator tool (ToolKind::Applicator) on or off; between steps only, std::invalid_argument for a soil tool.
     void set_tool_enabled(VehicleId id, std::size_t tool, bool on);
+    // What goes through the tool, kg/s: the term `specific_energy_kj_kg` of its shaft power is taken against it. The game states it
+    // (the product out of a tank, later a combine's crop); between steps only; any tool, 0 for none.
+    void set_tool_material_flow(VehicleId id, std::size_t tool, real kg_s);
     // Appends the quads the tools swept since the last drain, in (tick, vehicle, tool) order. Between steps; machine::
     // WorkLedger turns them into cells. Each tool holds 4096 quads; a fuller buffer drops the newest and counts them.
     void drain_work(std::vector<machine::WorkQuad>& out);

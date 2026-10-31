@@ -56,14 +56,16 @@ void ToolRuntime::tick_begin(const Pose& pose, const IRigidBackend& backend, std
 
 real ToolRuntime::pto_load_nm(real shaft_omega) {
     if (!desc_.pto.present) return 0.0;
+    shaft_connected_ = true;
     const real nominal = shaft_omega_nominal();
     shaft_fraction_ = std::abs(shaft_omega) / nominal;
     state_.pto_speed_fraction = shaft_fraction_;
     // The rotor's own losses grow with its speed like its power falls with the load: a torque. The soil is a power: what
     // goes through per second is the forward speed's, so a slowing rotor bites deeper and the torque rises.
     const real idle = tool_pto_power_w(desc_, 0.0, 0.0) / nominal;
+    state_.material_kg_s = material_kg_s_;
     const real floor = nominal * desc_.pto.min_speed_fraction;
-    const real soil_power = in_soil_ ? tool_pto_power_w(desc_, state_.speed_m_s, state_.depth_m) - tool_pto_power_w(desc_, 0.0, 0.0) : real(0.0);
+    const real soil_power = in_soil_ ? tool_pto_power_w(desc_, state_.speed_m_s, state_.depth_m, material_kg_s_) - tool_pto_power_w(desc_, 0.0, 0.0) : real(0.0);
     state_.pto_torque_nm = idle + soil_power / std::max(std::abs(shaft_omega), floor);
     return state_.pto_torque_nm;
 }
@@ -135,7 +137,11 @@ void ToolRuntime::tick_end(const Pose& pose, std::uint64_t tick) {
     state_.quality = tool_quality(desc_, state_.speed_m_s * kMsToKmh);
 
     const bool applicator = desc_.kind == ToolKind::Applicator;
-    const bool shaft_ok = !desc_.pto.present || shaft_fraction_ >= desc_.pto.min_speed_fraction;
+    // A tool on a shaft works while the shaft is connected and turning, however slowly: below min_speed_fraction of nominal its
+    // quality falls in proportion. The shaft's speed follows the engine's, so a lugging tractor does worse work, not none.
+    // Only a shaft that is off (not connected, or its clutch open) does none.
+    const bool shaft_ok = !desc_.pto.present || (shaft_connected_ && shaft_fraction_ > real(0.0));
+    if (desc_.pto.present) state_.quality *= std::clamp(shaft_fraction_ / desc_.pto.min_speed_fraction, real(0.0), real(1.0));
     // An applicator is "in soil" when it is on, over workable ground and moving forward: its depth is 0 by definition.
     in_soil_ = applicator ? (enabled_ && have_soil_ && soil_.workable && state_.speed_m_s > 0.0)
                           : (have_soil_ && soil_.workable && state_.depth_m >= desc_.depth_min_m);

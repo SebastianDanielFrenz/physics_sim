@@ -59,7 +59,8 @@
         "max_engage_speed_rad_s": 5.0, "channel": "park_lock" },
       { "id": "pto", "type": "pto", "ratios": { "540": 3.61, "1000": 1.95 },
         "capacity_nm": 700.0, "static_factor": 1.2, "engage_time_s": 1.5, "efficiency": 0.96,
-        "out_inertia_kgm2": 0.05, "disengaged_brake_time_s": 1.0, "channel": "pto", "speed_channel": "pto_speed" }
+        "out_inertia_kgm2": 0.05, "disengaged_brake_time_s": 1.0, "channel": "pto", "speed_channel": "pto_speed",
+        "stall_guard": { "source": "[AS] at idle (850 rpm) the shaft has all of it, at 600 rpm, where the engine still gives 340 N*m, none", "full_rpm": 850, "zero_rpm": 600 } }
     ],
     "shafts": [
       { "ports": ["engine.crank", "clutch.in", "pto.in"] },

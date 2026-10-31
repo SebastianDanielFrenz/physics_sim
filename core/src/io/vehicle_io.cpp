@@ -4584,6 +4584,14 @@ vehicle::VehicleDesc load_vehicle_json(const std::string& path, const VehicleLoa
                     if (!(pto.disengaged_brake_time_s > real(0.0))) {
                         throw std::runtime_error(ctx + ": pto 'disengaged_brake_time_s' must be > 0");
                     }
+                    if (cj.contains("stall_guard")) {
+                        const json& guard = cj.at("stall_guard");
+                        pto.guard_full_rpm = guard.at("full_rpm").get<real>();
+                        pto.guard_zero_rpm = guard.at("zero_rpm").get<real>();
+                        if (!(pto.guard_zero_rpm > real(0.0) && pto.guard_full_rpm > pto.guard_zero_rpm)) {
+                            throw std::runtime_error(ctx + ": pto 'stall_guard' needs full_rpm > zero_rpm > 0");
+                        }
+                    }
                     pto.channel = cj.value("channel", pto.channel);
                     if (pto.channel.empty()) throw std::runtime_error(ctx + ": pto 'channel' must be non-empty");
                     pto.speed_channel = cj.value("speed_channel", pto.speed_channel);
