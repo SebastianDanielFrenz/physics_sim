@@ -126,6 +126,56 @@ TEST_CASE("M0 a record with every member at its default changes nothing, bit for
     CHECK(c.fold_hash(1469598103934665603ull) != a.fold_hash(1469598103934665603ull));
 }
 
+// Sabotages run by hand, each failed V1: cc raised by 0.01, loosening read from seedbed, the weeds loop skipping group 0, no check
+// of end against cell_count(), residue without the stubble pool.
+TEST_CASE("V1 visual_rows reads what the views read, cell by cell, and refuses a bad range", "[field][management]") {
+    const FieldConfig cfg = mcfg(3, 1, 0.5);
+    Field f(cfg);
+    f.apply_all(op(cfg, "plough"));
+    f.sow_all(1);
+    run_synth(f, 40, 6.0, 16.0, 2.0, 2.5);
+    std::vector<VisualRow> rows(3);
+    f.visual_rows(0, 3, rows.data());
+    for (int cell = 0; cell < 3; ++cell) {
+        INFO("cell " << cell);
+        const VisualRow& r = rows[static_cast<std::size_t>(cell)];
+        const CellView v = f.view(cell);
+        const ManagementView m = f.management_view(cell);
+        CHECK(r.crop_id == v.crop_id);
+        CHECK(r.crop_id == 1);
+        CHECK(r.bbch == v.bbch);
+        CHECK(r.cc == v.cc);
+        CHECK(r.stand == v.stand);
+        CHECK(r.wet_surface == Approx(1.0 - v.d_evap_mm / v.tew_mm).epsilon(1e-12));
+        CHECK(r.wet_root == Approx(1.0 - v.d_root_mm / v.taw_root_mm).epsilon(1e-12));
+        CHECK(r.residue_t_ha == Approx(m.straw_t_ha + m.stubble_t_ha).epsilon(1e-12));
+        CHECK(r.residue_cover == m.cover);
+        CHECK(r.loosening == m.loosening);
+        CHECK(r.seedbed == m.seedbed);
+        double weeds = 0.0;
+        for (const auto& w : m.weeds) weeds += w.biomass_g_m2;
+        CHECK(r.weeds_g_m2 == Approx(weeds).epsilon(1e-12));
+    }
+    VisualRow one;
+    f.visual_rows(2, 3, &one);
+    CHECK(one.loosening == rows[2].loosening);
+    CHECK_THROWS_AS(f.visual_rows(0, 4, rows.data()), std::out_of_range);
+    CHECK_THROWS_AS(f.visual_rows(-1, 1, rows.data()), std::out_of_range);
+    CHECK_THROWS_AS(f.visual_rows(2, 1, rows.data()), std::out_of_range);
+
+    // after a harvest straw and stubble both lie on the surface: both pools count
+    DailyWeatherSource& src = tf::weather30();
+    FieldConfig c = mcfg();
+    c.initial_day = tf::find_doy(src, 365, 270) - 1;
+    Field h(c);
+    grow_and_harvest(h, src, 1, "drill", "combine_straw_chopped");
+    const ManagementView after = h.management_view(0);
+    REQUIRE(after.straw_t_ha > 0.1);
+    REQUIRE(after.stubble_t_ha > 0.1);
+    h.visual_rows(0, 1, &one);
+    CHECK(one.residue_t_ha == Approx(after.straw_t_ha + after.stubble_t_ha).epsilon(1e-12));
+}
+
 TEST_CASE("M1 the plough buries the straw and the lime, the cultivator mixes: more burial by inversion", "[field][management]") {
     DailyWeatherSource& src = tf::weather30();
     const FieldConfig cfg = mcfg();
