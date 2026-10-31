@@ -7,8 +7,7 @@ a plain rigid hitch.
 
 The links are massless and collapse on the tractor's centre plane: the two lower links into one, from the lower pivot to the
 middle of the lower pins, the top link from the top pivot to the top pin. That is a planar four-bar with one degree of freedom,
-the lower link's angle. The implement's pitch follows from the geometry. The towed point's `lower_pin` and `top_pin` are the
-sockets of its own hitch point: the two `socket_3pt_L/R` and `socket_3pt_top` in its `sockets` list.
+the lower link's angle. The implement's pitch follows from the geometry. Both points stand on three sockets, one of them named `*_top`: the middle of the other two is the lower pin, that one the top pin.
 
 ## Keys
 

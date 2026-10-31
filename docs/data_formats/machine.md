@@ -17,7 +17,7 @@ The caller binds socket names to chassis-local positions: `load_machine_json(pat
 
 ```json
 "machine": { "ref": "../../../../data/machines/cultivator_3m.json",
-             "sockets": { "socket_work_L": [-2.75, 1.495, -0.6], "socket_work_R": [-2.75, -1.495, -0.6] } }
+             "sockets": { "socket_work_L": [-1.55, 1.495, -0.6], "socket_work_R": [-1.55, -1.495, -0.6] } }
 ```
 
 `"wheels": []` is legal only with a `machine` block ([linkage.md](linkage.md)).
