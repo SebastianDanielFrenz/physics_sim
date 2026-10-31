@@ -252,7 +252,7 @@ Read by: check_buildable / check_gearbox_rating (GearboxRating), check_driveline
 
 ### `hitch`
 
-Read by: check_hitch_limits, World::hitch_limits (TowedMass, TongueLoad). The share of a towing point's rating at which a finding is Near, Limiting, Exceeded.
+Read by: check_hitch_limits, World::hitch_limits (TowedMass, TongueLoad, LiftCapacity), check_tool_limits (ToolPower, PtoShaftTorque). The share of a towing point's rating at which a finding is Near, Limiting, Exceeded.
 
 | Entry | Default | Source |
 |---|---|---|
