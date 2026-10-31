@@ -352,7 +352,10 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     const real kc_max = std::max(
         1.2 + (0.04 * (w.wind2_m_s - 2.0) - 0.004 * (w.rh_min * 100.0 - 45.0)) * ps::math::pow(height / 3.0, 0.3),
         kcb + 0.05);
-    const real few = 1.0 - cc_star;
+    // weeds: potential use (the stress part is applied with the bucket below) and the soil they shade
+    real weed_cover = 0.0;
+    real tr_w_pot = (mgmt && !cfg_.weeds.empty()) ? weed_transpiration(c, taw1, cc_star, et0, weed_cover) : 0.0;
+    const real few = (1.0 - cc_star) * (1.0 - weed_cover);
     real de_a = s.d_evap[c] - infil;
     if (de_a < 0.0) de_a = 0.0;
     real kr = de_a <= so.rew_mm ? 1.0 : std::max(0.0, (tew - de_a) / (tew - so.rew_mm));
@@ -375,13 +378,21 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
         ks_sto = s.d_root[c] <= raw ? 1.0 : std::max(0.0, (taw1 - s.d_root[c]) / ((1.0 - p) * taw1));
     }
     real tr = ks_sto * kcb * et0;
+    // weeds draw on the same bucket (F1d part 6); a share of the day's demand that the bucket cannot give is cut for all users alike.
+    // Crop plus weed transpiration plus soil evaporation stay below Kc_max x ET0 and below the energy limit of a wet surface.
+    real tr_w = tr_w_pot;
+    if (tr_w > 0.0) {
+        tr_w = std::min(tr_w, std::max(0.0, (kc_max - kcb) * et0 - evap));
+        if (w.e_wet_mm >= 0.0) tr_w = std::min(tr_w, std::max(0.0, w.e_wet_mm - tr - evap));
+    }
 
     // --- root-zone water balance (FAO-56 eq 85, 88) -------------------------------------
-    real eta = tr + evap;
+    real eta = tr + tr_w + evap;
     const real cap = std::max(0.0, taw1 - s.d_root[c] + infil);
     if (eta > cap) {
         const real k = cap / eta;
         tr *= k;
+        tr_w *= k;
         evap *= k;
         eta = cap;
     }
@@ -402,7 +413,8 @@ void Field::step_cell(std::size_t c, const DailyWeather& w) {
     s.d_evap[c] = few > 1.0e-9 ? std::min(tew, de_a + evap / few) : de_a;
     s.cum_runoff[c] += runoff;
     s.cum_evap[c] += evap;
-    s.cum_tr[c] += tr;
+    s.cum_tr[c] += tr + tr_w;
+    if (!s.cum_tr_weed.empty()) s.cum_tr_weed[c] += tr_w;
     s.cum_drain[c] += drain;
     s.last_tr[c] = tr;
     s.last_e[c] = evap;
@@ -777,6 +789,7 @@ std::uint64_t Field::fold_hash(std::uint64_t h) const {
                               &s_.w_tt, &s_.w_n, &s_.w_seed_pl, &s_.w_res_pl, &s_.w_res_sd, &s_.h_act, &s_.l_c_crop,
                               &s_.l_c_wg, &s_.l_c_rem, &s_.l_c_co2, &s_.weed_f})
             h = fold_vec(h, *v);
+        if (!s_.cum_tr_weed.empty()) h = fold_vec(h, s_.cum_tr_weed);
     }
     if (cfg_.pathogens_enabled) {
         h = fold_vec(h, s_.path_p);

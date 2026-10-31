@@ -221,6 +221,10 @@ struct WeedGroupDesc {
     real cousens_i_pct = 0.0, cousens_a_pct = 0.0;
     real rel_emerge_decay = 0.5;        // I falls by exp(-this x lag/100 GDD) for weeds younger than the crop
     real resistance_init = 1.0e-6;      // share of the population resistant to each mode of action at construction
+    // Water use (F1d part 6): the group transpires from the root-zone bucket the crop draws on.
+    real kc_tr = 1.0;                   // transpiration coefficient at full cover (FAO-56 basal coefficient of the weed canopy)
+    real p_depletion = 0.5;             // share of the root-zone TAW that can be depleted before the group is stressed (FAO-56 p)
+    real cover_per_g_m2 = 0.0075;       // canopy cover = 1 - exp(-this x biomass in g/m2)
 };
 
 struct HerbicideKindResponse {

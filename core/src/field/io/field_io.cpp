@@ -580,6 +580,14 @@ WeedGroupDesc parse_weed_group_json(const json& j, const std::string& origin) {
         w.finish();
     }
     {
+        ObjectReader w(block_of(r, "water", origin), "water", origin);
+        g.kc_tr = w.number("kc_tr", true, 0.0);
+        g.p_depletion = w.number("p_depletion", true, 0.0);
+        g.cover_per_g_m2 = w.number("cover_per_g_m2", true, 0.0);
+        w.skip("source");
+        w.finish();
+    }
+    {
         ObjectReader w(block_of(r, "resistance", origin), "resistance", origin);
         g.resistance_init = w.number("init", true, 0.0);
         w.skip("source");

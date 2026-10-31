@@ -8,7 +8,10 @@
 // al. 1995) for herbicide efficacy; selection by Hardy-Weinberg-free population fractions: the resistant share
 // after a kill is r (1 - k_r) / ((1 - r)(1 - k_s) + r (1 - k_r)). All rates are in the group and herbicide
 // descriptors; what is written below are the equations. Simplifications (documented in docs/data_formats/
-// weed_group.md): weeds take no soil water and no P or K; the carbon of the seed itself is not tracked.
+// weed_group.md): weeds take no P or K; the carbon of the seed itself is not tracked. Water (F1d part 6): a group
+// transpires from the root-zone bucket of the crop at kc_tr x cover x (1 - shade x crop cover) x ET0, reduced by its own
+// FAO-56 depletion stress; with the crop's transpiration and the soil evaporation it is cut proportionally when the
+// bucket cannot give it, and what the weeds take is missing for the crop through its depletion stress.
 
 #include "ps/field/field.h"
 
@@ -62,6 +65,27 @@ real Field::weed_competition(std::size_t c) const {
         f *= 1.0 - clamp01(loss / 100.0);
     }
     return f;
+}
+
+real Field::weed_transpiration(std::size_t c, real taw1, real cc_star, real et0, real& cover_out) const {
+    const std::size_t G = cfg_.weeds.size();
+    cover_out = 0.0;
+    real open = 1.0;   // share of the soil no weed group covers
+    real tot = 0.0;
+    for (std::size_t g = 0; g < G; ++g) {
+        const real bio = s_.w_bio[c * G + g];
+        if (!(bio > 0.0)) continue;
+        const WeedGroupDesc& w = cfg_.weeds[g];
+        const real cover = 1.0 - ps::math::exp(-w.cover_per_g_m2 * bio);
+        open *= 1.0 - cover;   // the soil is shaded whether or not the group transpires
+        if (!(w.kc_tr > 0.0) || !(et0 > 1.0e-9)) continue;
+        const real light = 1.0 - w.shade * clamp01(cc_star);
+        const real raw = w.p_depletion * taw1;
+        const real ks = taw1 <= 0.0 ? 0.0 : (s_.d_root[c] <= raw ? 1.0 : std::max(0.0, (taw1 - s_.d_root[c]) / ((1.0 - w.p_depletion) * taw1)));
+        tot += ks * w.kc_tr * cover * light * et0;
+    }
+    cover_out = 1.0 - open;
+    return tot;
 }
 
 // ---------------------------------------------------------------------------

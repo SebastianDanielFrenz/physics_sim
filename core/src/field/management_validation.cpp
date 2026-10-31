@@ -159,6 +159,9 @@ std::string weed_group_validation_error(const WeedGroupDesc& w) {
     c.fail_if(!(fin(w.cousens_a_pct) && w.cousens_a_pct >= 0.0 && w.cousens_a_pct <= 100.0), "cousens_a_pct must be in [0, 100]");
     c.nonneg("rel_emerge_decay", w.rel_emerge_decay);
     c.frac("resistance_init", w.resistance_init);
+    c.nonneg("kc_tr", w.kc_tr);
+    c.fail_if(!(fin(w.p_depletion) && w.p_depletion > 0.0 && w.p_depletion < 1.0), "p_depletion must be in (0, 1)");
+    c.pos("cover_per_g_m2", w.cover_per_g_m2);
     c.fail_if(!w.volunteer_crop.empty() && w.kind != 3, "volunteer_crop is only for the kind volunteer");
     return c.err;
 }

@@ -233,6 +233,7 @@ TEST_CASE("M4 a chopped straw mulch lowers the evaporation; the effect vanishes 
     auto evaporation_after_harvest = [&](bool keep_straw, double mulch_reduction) {
         FieldConfig cc = c;
         cc.soils[0].management.mulch_evap_max_reduction = mulch_reduction;
+        cc.weeds.clear();   // F1d part 6: weeds shade the soil and transpire; the mulch comparison must not depend on how many each run grew
         Field f(cc);
         grow_and_harvest(f, src, 1, "drill", keep_straw ? "combine_straw_chopped" : "combine_straw_off");
         const double e0 = f.ledger(0).evaporation;
@@ -657,6 +658,7 @@ TEST_CASE("F-A2 winter evapotranspiration stays below the reference value and th
         cfg.nx = 1;
         cfg.ny = 1;
         cfg.cell_soil.assign(1, static_cast<std::uint16_t>(soil));
+        cfg.weeds.clear();   // F1d part 6: weeds transpire; this test is about the soil evaporation fix of F1c, the weed effect is test W1
         DailyWeatherSource src(sc.climate, sc.seed, sc.weather);
         Field f(cfg);
         const int years = 11;

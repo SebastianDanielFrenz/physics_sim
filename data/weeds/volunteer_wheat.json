@@ -99,5 +99,15 @@
       "init": "[AS] as for black_grass."
     }
   },
+  "water": {
+    "kc_tr": 1.1,
+    "p_depletion": 0.5,
+    "cover_per_g_m2": 0.0075,
+    "source": {
+      "kc_tr": "[AS] the basal transpiration coefficient of the weed canopy at full cover: the FAO-56 Kcb of a closed green grass or broadleaf stand is about 1.0 (Allen et al. 1998, table 17, mid-season values 0.9-1.15; recalled). Volunteer wheat takes the 1.1 of the wheat crop file.",
+      "p_depletion": "[AS] 0.5: share of the root-zone TAW that can be used before the group is water stressed, the FAO-56 default for crops of about this rooting (table 22 lists 0.45-0.6 for cereals and grasses; recalled).",
+      "cover_per_g_m2": "[AS] canopy cover = 1 - exp(-k x biomass): leaf area about 0.015 m2 per g of dry matter (specific leaf area ~25 m2/kg, 60 % leaf) times an extinction coefficient 0.5 gives k = 0.0075 m2/g, i.e. 100 g/m2 of weeds cover 53 % of the soil."
+    }
+  },
   "source": "F1c weed group: volunteer winter wheat from shed grain. Every number is [AS]."
 }

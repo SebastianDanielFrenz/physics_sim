@@ -117,6 +117,7 @@ void Field::init_management() {
         v->assign(n, 0.0);
     s_.sow_viab.assign(n, 1.0);
     s_.tilth_e2.assign(n, 1.0);
+    if (!cfg_.weeds.empty()) s_.cum_tr_weed.assign(n, 0.0);
     s_.seedbed.assign(n, 0.0);
     for (std::size_t c = 0; c < n; ++c) s_.seedbed[c] = soil_of(c).management.seedbed_rest;
     for (auto* v : {&s_.w_seed_s, &s_.w_seed_a, &s_.w_seed_b, &s_.w_dens, &s_.w_bio, &s_.w_tt, &s_.w_n, &s_.w_seed_pl})
@@ -626,6 +627,7 @@ ManagementView Field::management_view(int cell) const {
     v.plants_m2 = s_.plants[c];
     v.sown_seeds_m2 = s_.sow_seeds[c] > 0.0 ? s_.sow_seeds[c] : 0.0;
     v.weed_factor = s_.weed_f[c];
+    if (!s_.cum_tr_weed.empty()) v.weed_transpiration_mm = s_.cum_tr_weed[c];
     const std::size_t G = cfg_.weeds.size(), M = static_cast<std::size_t>(moa_count_);
     for (std::size_t g = 0; g < G; ++g) {
         const std::size_t i = c * G + g;

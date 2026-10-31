@@ -183,6 +183,7 @@ struct ManagementView {
     real plants_m2 = 0.0;                // established crop plants
     real sown_seeds_m2 = 0.0;            // seeds sown and not yet emerged (0 once emerged)
     real weed_factor = 1.0;              // growth factor from weed competition of the last step
+    real weed_transpiration_mm = 0.0;    // cumulative transpiration of the weeds since construction (part of the water ledger's transpiration)
     std::vector<WeedGroupView> weeds;
     std::vector<real> herbicide_residual;   // residual activity per herbicide
 };
@@ -257,6 +258,7 @@ struct FieldState {
     std::vector<real> h_act;                                    // [cell * herbicides]
     std::vector<real> l_c_crop, l_c_wg, l_c_rem, l_c_co2;
     std::vector<real> weed_f;                                   // weed competition factor (1 = none); always sized
+    std::vector<real> cum_tr_weed;                              // transpiration of the weeds (part of cum_tr), mm; sized only with weed groups
     // pathogens (empty unless FieldConfig::pathogens_enabled)
     std::vector<real> path_p, path_s;                           // [cell * families]
     std::vector<real> path_loss0;                               // untreated loss fraction of the growing crop, fixed at emergence
@@ -386,6 +388,7 @@ private:
     void establish(std::size_t c, const CropDesc& cr);
     void apply_management(std::size_t c, const OperationEffect& e, int phase, HarvestResult* harvest_out);   // phase 1: kill, harvest, pickup, tillage; 2: spray, sowing
     real weed_competition(std::size_t c) const;
+    real weed_transpiration(std::size_t c, real taw1, real cc_star, real et0, real& cover) const;   // mm of the day's potential use, water-stress reduced; cover = combined weed canopy cover
     real crop_bbch(std::size_t c) const;
     void apply_deposit(std::size_t c, const OperationEffect& e);
     void reset_crop_state(std::size_t c);
