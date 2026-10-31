@@ -37,6 +37,7 @@ The caller binds socket names to chassis-local positions: `load_machine_json(pat
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `name` | string | yes | |
+| `kind` | string | no | `"soil"` (default) or `"applicator"`, see "Applicators" |
 | `operation` | string | yes | carried through to the game, which turns work into its own records. `ps_core` never reads it |
 | `edge_left`, `edge_right` | string | yes | sockets of the model; the width is their distance |
 | `range` | object | yes | below |
@@ -84,6 +85,27 @@ D = F_i (A + B S + C S^2) W T  x  moisture(wetness)  x  (1 + compaction_gain * c
 **`pto`**: `source`, `nominal_rpm` (the tractor must offer it), `inertia_kgm2` (at the tractor's shaft), `no_load_kw`, `kw_per_m`
 (rotor running, per metre of width), `specific_energy_mj_m3` (per cubic metre of soil worked), `min_speed_fraction` (below this
 share of nominal the tool does no work). Rotor power is `no_load + kw_per_m W + e W d v`, torque is that over the shaft's speed.
+
+## Applicators
+
+`"kind": "applicator"` is a tool that puts something on the ground without touching it: a sprayer boom, a fertiliser or lime
+spreader, a slurry distributor. A soil tool works when it is in the ground (`depth >= depth_min`); a sprayer never is, so it has a
+kind of its own. Every part without `kind` is a soil tool, exactly as before: nothing in the state hash changes for it.
+
+An applicator has `name`, `kind`, `operation`, `edge_left`, `edge_right` and a `range` with `source`, `speed_min_km_h`,
+`speed_max_km_h`, `overspeed_quality_per_km_h` and `quality_floor`. It has no `draft`, `soil` or `pto` block and no depth keys in
+`range`: the loader rejects them. Its width is the distance of its two sockets, as for a soil tool.
+
+It works while **all three** hold in a tick: `World::set_tool_enabled(vehicle, tool, true)` (off at spawn), the soil source's
+sample under the middle of the edge is `workable`, and the forward speed of that point is above zero (standing or reversing
+writes nothing). Then it writes a `WorkQuad` with `depth_m` 0 and the speed range's `quality`, like a soil tool; the first tick
+after the switch only starts the strip. It puts no force on the vehicle: no draft, no soil force, `ToolState::draft_n` and
+`vertical_n` stay 0. It does not ask the ground's height.
+
+`World::set_tool_enabled` is for between steps and refuses a soil tool (`std::invalid_argument`). `ToolState::enabled` mirrors the
+switch. The switch is part of the state hash for an applicator and not for any other tool.
+
+The game decides what comes out (a product, a rate, a tank): the part says only where and how fast.
 
 ## How a tool runs
 

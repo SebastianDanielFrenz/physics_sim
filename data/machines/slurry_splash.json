@@ -1,0 +1,21 @@
+{
+  "format": "physics_sim.machine/1",
+  "name": "slurry_splash",
+  "source": "A tanker's slurry distributor (splash plate or trailing hose). It touches nothing: no draft, no soil force, no depth (kind applicator). It works while switched on over workable ground, moving forward; the width comes from the model's two work sockets, the mass from the vehicle. Rates and tank contents belong to the game.",
+  "tools": [
+    {
+      "name": "distributor",
+      "kind": "applicator",
+      "operation": "slurry",
+      "edge_left": "socket_work_L",
+      "edge_right": "socket_work_R",
+      "range": {
+        "source": "[AS] Usual working speeds of a slurry tanker 4-10 km/h (manufacturer ranges, not read from a standard); above 10 km/h the rate control lags, 0.10 per km/h to a floor of 0.4.",
+        "speed_min_km_h": 3.0,
+        "speed_max_km_h": 10.0,
+        "overspeed_quality_per_km_h": 0.1,
+        "quality_floor": 0.4
+      }
+    }
+  ]
+}

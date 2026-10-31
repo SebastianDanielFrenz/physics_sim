@@ -7,6 +7,9 @@
 
 #pragma once
 
+#include <stdexcept>
+#include <string>
+
 #include "vehicle_instance.h"
 
 #include "ps/environment/vehicle_air.h"
@@ -91,6 +94,11 @@ public:
     [[nodiscard]] const machine::ToolDesc& tool_desc(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).desc(); }
     [[nodiscard]] const machine::ToolState& tool_state(VehicleId id, std::size_t tool) const { return tools_[id.index].at(tool).state(); }
     void set_tool_gauge_depth(VehicleId id, std::size_t tool, real depth_m) { tools_[id.index].at(tool).set_gauge_depth(depth_m); }
+    void set_tool_enabled(VehicleId id, std::size_t tool, bool on) {
+        machine::ToolRuntime& t = tools_[id.index].at(tool);
+        if (t.desc().kind != machine::ToolKind::Applicator) throw std::invalid_argument("set_tool_enabled: tool '" + t.desc().name + "' is not an applicator");
+        t.set_enabled(on);
+    }
     // Appends every buffered quad to `out` in (tick, vehicle, tool) order. Between steps; allocates.
     void drain_work(std::vector<machine::WorkQuad>& out);
     [[nodiscard]] std::uint64_t work_dropped() const;

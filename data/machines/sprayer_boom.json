@@ -1,0 +1,21 @@
+{
+  "format": "physics_sim.machine/1",
+  "name": "sprayer_boom",
+  "source": "A crop sprayer boom. It touches nothing: no draft, no soil force, no depth (kind applicator). It works while switched on over workable ground, moving forward; the width comes from the model's two work sockets, the mass from the vehicle. Rates and tank contents belong to the game.",
+  "tools": [
+    {
+      "name": "boom",
+      "kind": "applicator",
+      "operation": "sprayer",
+      "edge_left": "socket_work_L",
+      "edge_right": "socket_work_R",
+      "range": {
+        "source": "[AS] Usual working speeds of a field sprayer 6-12 km/h (manufacturer ranges, not read from a standard); above 12 km/h the boom's drift and height errors cost quality, 0.15 per km/h to a floor of 0.3.",
+        "speed_min_km_h": 4.0,
+        "speed_max_km_h": 12.0,
+        "overspeed_quality_per_km_h": 0.15,
+        "quality_floor": 0.3
+      }
+    }
+  ]
+}

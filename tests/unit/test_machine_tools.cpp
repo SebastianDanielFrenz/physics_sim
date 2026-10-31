@@ -700,6 +700,242 @@ TEST_CASE("work is the same on 1 and 10 workers, and the tick allocates nothing"
     (void)scenario(4, true);
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------
+// Applicators: tools that put something on the ground without touching it (machine.md "kind").
+//
+// Sabotages, run one at a time against "[applicator]" on 2026-10-31, each with the case that caught it (a first run let three
+// survive - the switch not hashed, a draft left in, an unconditional fold - and the cases below were tightened until they failed):
+//   the switch ignored (works while off)                         -> an applicator works only while switched on
+//   the soil source's workable ignored                           -> an applicator works only while switched on
+//   working at |speed| > 0 (reversing counts)                   -> an applicator works only while switched on
+//   the draft form applied to an applicator                      -> an applicator has no draft ...
+//   the enabled flag folded for every tool                       -> a soil tool's state hash is the one it had
+//   the enabled flag never folded                                -> the switch is state for an applicator only
+//   a soil tool accepted by set_tool_enabled                     -> the switch is state for an applicator only
+//   quality unchanged above the speed range                      -> an applicator takes the speed range's quality
+//   draft/soil/depth keys accepted on an applicator              -> applicator parts: the loader's rules
+// ---------------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+MountCfg sprayer_cfg() {
+    MountCfg cfg = on_dirt();
+    cfg.fixture = "mounted_sprayer";
+    cfg.implement_mass = 900.0;
+    return cfg;
+}
+
+MountRig sprayer_rig(int gear, real awd = 0.0, const machine::SoilSample& soil = field_soil()) {
+    MountRig r = build_mount(sprayer_cfg());
+    r.world->set_soil_source(std::make_shared<UniformSoil>(soil));
+    r.run(0.6);
+    r.set("lift", 0.5);
+    r.set("gear_request", gear);
+    r.set("awd", awd);
+    r.set("throttle", 1.0);
+    return r;
+}
+
+machine::SoilSample unworkable_soil() {
+    machine::SoilSample s = field_soil();
+    s.workable = false;
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("an applicator works only while switched on, over workable ground, moving forward", "[machine][vehicle][applicator]") {
+    MountRig r = sprayer_rig(5);
+    const machine::ToolDesc& tool = r.world->tool_desc(r.implement, 0);
+    REQUIRE(tool.kind == machine::ToolKind::Applicator);
+    CHECK_FALSE(r.world->tool_state(r.implement, 0).enabled);
+    std::vector<machine::WorkQuad> quads;
+
+    SECTION("off: it drives, it writes nothing") {
+        r.run(4.0);
+        CHECK(r.world->get_motion(r.tractor_body).linear.x > 1.0);
+        r.world->drain_work(quads);
+        CHECK(quads.empty());
+        CHECK_FALSE(r.world->tool_state(r.implement, 0).working);
+        CHECK(r.world->tool_state(r.implement, 0).worked_area_m2 == 0.0);
+    }
+
+    SECTION("on: the boom's width times the distance, at depth 0") {
+        r.run(3.0);
+        r.world->set_tool_enabled(r.implement, 0, true);
+        CHECK(r.world->tool_state(r.implement, 0).enabled);
+        r.run(0.5); // the first tick writes no quad
+        r.world->drain_work(quads);
+        quads.clear();
+        const real x0 = r.world->get_pose(r.implement_body).position.x;
+        r.run(3.0);
+        r.world->drain_work(quads);
+        const real moved = r.world->get_pose(r.implement_body).position.x - x0;
+        REQUIRE(quads.size() == 3 * 240);
+        real area = 0.0;
+        for (const machine::WorkQuad& q : quads) {
+            area += machine::work_area(q);
+            CHECK(q.depth_m == 0.0);
+            CHECK(q.quality > 0.0);
+        }
+        CHECK(tool.width_m == Approx(6.0));
+        CHECK(area == Approx(tool.width_m * moved).epsilon(0.003));
+        CHECK(r.world->tool_state(r.implement, 0).working);
+        CHECK(quads.front().vehicle == r.implement);
+
+        // Off again: nothing more is written.
+        r.world->set_tool_enabled(r.implement, 0, false);
+        r.run(0.1);
+        quads.clear();
+        r.world->drain_work(quads);
+        quads.clear();
+        r.run(2.0);
+        r.world->drain_work(quads);
+        CHECK(quads.empty());
+    }
+
+    SECTION("on, over ground that cannot be worked: nothing") {
+        r.world->set_soil_source(std::make_shared<UniformSoil>(unworkable_soil()));
+        r.world->set_tool_enabled(r.implement, 0, true);
+        r.run(4.0);
+        CHECK(r.world->get_motion(r.tractor_body).linear.x > 1.0);
+        r.world->drain_work(quads);
+        CHECK(quads.empty());
+        CHECK_FALSE(r.world->tool_state(r.implement, 0).working);
+    }
+
+    SECTION("on, standing: only the settling of the springs, centimetres") {
+        r.set("throttle", 0.0);
+        r.set("brake", 1.0);
+        r.world->set_tool_enabled(r.implement, 0, true);
+        r.run(3.0);
+        // A standing machine rocks on its springs for a moment, at well under the farm's 0.05 m/s "moving" bound.
+        CHECK(r.world->tool_state(r.implement, 0).worked_area_m2 < 0.3);
+        CHECK(std::abs(r.world->get_motion(r.tractor_body).linear.x) < 0.01);
+        quads.clear();
+        r.world->drain_work(quads);
+        quads.clear();
+        r.run(3.0);
+        r.world->drain_work(quads);
+        CHECK(quads.empty());
+    }
+
+    SECTION("on, reversing: nothing") {
+        r.set("gear_request", -1);
+        r.world->set_tool_enabled(r.implement, 0, true);
+        r.run(4.0);
+        REQUIRE(r.world->get_motion(r.tractor_body).linear.x < -0.3);
+        quads.clear();
+        r.world->drain_work(quads);
+        quads.clear();
+        r.run(2.0);
+        REQUIRE(r.world->get_motion(r.tractor_body).linear.x < -0.3);
+        r.world->drain_work(quads);
+        CHECK(quads.empty());
+        CHECK_FALSE(r.world->tool_state(r.implement, 0).working);
+    }
+}
+
+TEST_CASE("an applicator has no draft, no soil force and no depth: the tractor does not feel it", "[machine][vehicle][applicator]") {
+    // The same tractor with the same tool hung, switched off and then on: the pull at the hitch is the machine's weight and
+    // nothing else, whatever the switch says.
+    const auto run = [](bool on) {
+        MountRig r = sprayer_rig(5);
+        r.world->set_tool_enabled(r.implement, 0, on);
+        r.run(5.0);
+        const machine::ToolState& t = r.world->tool_state(r.implement, 0);
+        CHECK(t.draft_n == 0.0);
+        CHECK(t.vertical_n == 0.0);
+        CHECK(t.depth_m == 0.0);
+        return std::pair<real, real>{r.world->get_motion(r.tractor_body).linear.x, r.world->coupling_state(r.hitch).mean_force_on_towing_world.x};
+    };
+    const auto off = run(false);
+    const auto on = run(true);
+    CHECK(on.first == Approx(off.first).margin(1e-6));
+    CHECK(on.second == Approx(off.second).margin(1e-6));
+    // Even a tool that still carries a soil tool's draft numbers has none as an applicator.
+    machine::ToolDesc carries = part_tool("cultivator_3m");
+    REQUIRE(machine::tool_draft_n(carries, field_soil(), 8.0, 0.1) > 100.0);
+    carries.kind = machine::ToolKind::Applicator;
+    CHECK(machine::tool_draft_n(carries, field_soil(), 8.0, 0.1) == 0.0);
+}
+
+TEST_CASE("a soil tool's state hash is the one it had before applicators existed", "[machine][vehicle][applicator]") {
+    // Recorded 2026-10-31 from the guarded fold, which for a soil tool is no fold at all: this is what the cultivator rig hashed to without
+    // it (the fold is guarded by the tool's kind). Same on 1 and 10 workers.
+    const auto hash = [](int workers) {
+        MountCfg cfg = on_dirt();
+        cfg.workers = workers;
+        MountRig r = worked_rig(cfg, 5);
+        r.run(2.0);
+        return r.world->state_hash();
+    };
+    const std::uint64_t one = hash(1);
+    CHECK(one == hash(10));
+    CHECK(one == 0x48633e13e74d9aa5ULL);
+}
+
+TEST_CASE("an applicator takes the speed range's quality", "[machine][vehicle][applicator]") {
+    const machine::ToolDesc tool = io::load_machine_json(std::string(PS_SOURCE_DIR) + "/data/machines/sprayer_boom.json", {{"socket_work_L", Vec3{0, 3, 0}}, {"socket_work_R", Vec3{0, -3, 0}}}).tools[0];
+    CHECK(machine::tool_quality(tool, tool.speed_max_km_h) == Approx(1.0));
+    CHECK(machine::tool_quality(tool, tool.speed_max_km_h + 2.0) == Approx(1.0 - 2.0 * tool.overspeed_quality_per_km_h));
+    CHECK(machine::tool_quality(tool, 100.0) == Approx(tool.quality_floor));
+    // And in the running tool: a gear faster than the boom's top speed writes a lower quality.
+    MountRig r = sprayer_rig(9);
+    r.world->set_tool_enabled(r.implement, 0, true);
+    r.run(12.0);
+    const machine::ToolState& t = r.world->tool_state(r.implement, 0);
+    REQUIRE(t.speed_m_s * 3.6 > tool.speed_max_km_h + 1.0);
+    CHECK(t.quality < 1.0);
+    CHECK(t.quality == Approx(machine::tool_quality(tool, t.speed_m_s * 3.6)).epsilon(0.05));
+}
+
+TEST_CASE("the switch is state for an applicator only", "[machine][vehicle][applicator]") {
+    // Over ground that cannot be worked the switch changes nothing else, so the hash moves only if the switch itself is folded.
+    const auto hash = [](bool toggle) {
+        MountRig r = build_mount(sprayer_cfg());
+        r.world->set_soil_source(std::make_shared<UniformSoil>(unworkable_soil()));
+        r.run(1.0);
+        if (toggle) r.world->set_tool_enabled(r.implement, 0, true);
+        r.run(0.05);
+        return r.world->state_hash();
+    };
+    CHECK(hash(true) != hash(false));
+    CHECK(hash(true) == hash(true));
+
+    // A soil tool has no switch: refused, loudly.
+    MountRig r = build_mount(on_dirt());
+    CHECK_THROWS_AS(r.world->set_tool_enabled(r.implement, 0, true), std::invalid_argument);
+    CHECK_FALSE(r.world->tool_state(r.implement, 0).enabled);
+}
+
+TEST_CASE("applicator parts: the loader's rules", "[machine][io][applicator]") {
+    const io::MachineSockets sockets = {{"socket_work_L", Vec3{0, 3, 0}}, {"socket_work_R", Vec3{0, -3, 0}}};
+    for (const char* name : {"sprayer_boom", "spreader_broadcast", "slurry_splash"}) {
+        const machine::MachineDesc m = io::load_machine_json(std::string(PS_SOURCE_DIR) + "/data/machines/" + name + ".json", sockets);
+        REQUIRE(m.tools.size() == 1);
+        CHECK(m.tools[0].kind == machine::ToolKind::Applicator);
+        CHECK(m.tools[0].width_m == Approx(6.0));
+        CHECK(m.tools[0].depth_max_m == 0.0);
+    }
+    // Every other shipped part is still a soil tool.
+    CHECK(part_tool("cultivator_3m").kind == machine::ToolKind::Soil);
+    CHECK(part_tool("plough_2m").kind == machine::ToolKind::Soil);
+
+    const auto text = [](const std::string& range_extra, const std::string& tool_extra, const std::string& kind) {
+        return std::string(R"({"format":"physics_sim.machine/1","name":"x","source":"x","tools":[{"name":"t","kind":")") + kind +
+               R"(","operation":"sprayer","edge_left":"socket_work_L","edge_right":"socket_work_R",)" + tool_extra +
+               R"("range":{"source":"[AS] x","speed_min_km_h":4,"speed_max_km_h":12,"overspeed_quality_per_km_h":0.1,"quality_floor":0.3)" + range_extra + "}}]}";
+    };
+    CHECK_NOTHROW(io::load_machine_json(scratch_file("app_ok.json", text("", "", "applicator")), sockets));
+    CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_depth.json", text(R"(,"depth_min_m":0.05)", "", "applicator")), sockets), Catch::Matchers::ContainsSubstring("depth_min_m"));
+    CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_draft.json", text("", R"("draft":{},)", "applicator")), sockets), Catch::Matchers::ContainsSubstring("an applicator has no 'draft' block"));
+    CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_pto.json", text("", R"("pto":{},)", "applicator")), sockets), Catch::Matchers::ContainsSubstring("an applicator has no 'pto' block"));
+    CHECK_THROWS_WITH(io::load_machine_json(scratch_file("app_kind.json", text("", "", "sprinkler")), sockets), Catch::Matchers::ContainsSubstring("'kind' must be"));
+    // A soil tool still needs all of its blocks.
+    CHECK_THROWS(io::load_machine_json(scratch_file("soil_bare.json", text("", "", "soil")), sockets));
+}
+
 TEST_CASE("Ledger diag: where engine_out goes, tool lifted and in ground", "[.][diag][machine][vehicle]") {
     for (int mode = 0; mode < 2; ++mode) {
         MountRig r = worked_rig(on_dirt(), 6, 0.0, mode == 0 ? 0.3 : kWorkingAngle);

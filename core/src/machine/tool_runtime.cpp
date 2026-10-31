@@ -39,14 +39,19 @@ void ToolRuntime::tick_begin(const Pose& pose, const IRigidBackend& backend, std
     const Vec3 mid = pose.transform_point(mid_local_);
     have_soil_ = soil != nullptr;
     soil_ = have_soil_ ? soil->sample(mid.x, mid.y) : SoilSample{};
+    substeps_ = 0;
+    depth_sum_ = speed_sum_ = draft_sum_ = vertical_sum_ = 0.0;
+    // An applicator never touches the ground: it asks the soil source whether the place is workable and nothing else.
+    if (desc_.kind == ToolKind::Applicator) {
+        have_ground_ = false;
+        return;
+    }
     const Vec3 down = Vec3::unit_z() * real(-1.0);
     RayCastHit hit = backend.ray_cast_excluding(mid + Vec3::unit_z() * kGroundProbeUp, down, kGroundProbeLength, excluded);
     // A ray can slip through exactly on the edge between two triangles; beside it, it cannot.
     if (!hit.hit) hit = backend.ray_cast_excluding(mid + Vec3{kGroundProbeNudge, kGroundProbeNudge, kGroundProbeUp}, down, kGroundProbeLength, excluded);
     have_ground_ = hit.hit;
     if (hit.hit) ground_z_ = hit.point.z;
-    substeps_ = 0;
-    depth_sum_ = speed_sum_ = draft_sum_ = vertical_sum_ = 0.0;
 }
 
 real ToolRuntime::pto_load_nm(real shaft_omega) {
@@ -67,6 +72,16 @@ void ToolRuntime::substep(const Pose& pose, const Motion& motion, Vec3& force, V
     force = Vec3::zero();
     torque = Vec3::zero();
     ++substeps_;
+    if (desc_.kind == ToolKind::Applicator) {
+        // No force and no moment: only the forward speed of the boom's middle, for the quad's speed and quality.
+        Vec3 fwd = pose.orientation.rotate(Vec3::unit_x());
+        fwd.z = 0.0;
+        const real len = fwd.length();
+        if (!(len > 1e-6)) return;
+        const Vec3 v = motion.linear + cross(motion.angular, pose.transform_point(mid_local_) - pose.position);
+        speed_sum_ += dot(v, fwd / len);
+        return;
+    }
     if (!have_soil_ || !have_ground_) return;
 
     const Vec3 mid = pose.transform_point(mid_local_);
@@ -119,8 +134,11 @@ void ToolRuntime::tick_end(const Pose& pose, std::uint64_t tick) {
     state_.vertical_n = vertical_sum_ / n;
     state_.quality = tool_quality(desc_, state_.speed_m_s * kMsToKmh);
 
+    const bool applicator = desc_.kind == ToolKind::Applicator;
     const bool shaft_ok = !desc_.pto.present || shaft_fraction_ >= desc_.pto.min_speed_fraction;
-    in_soil_ = have_soil_ && soil_.workable && state_.depth_m >= desc_.depth_min_m;
+    // An applicator is "in soil" when it is on, over workable ground and moving forward: its depth is 0 by definition.
+    in_soil_ = applicator ? (enabled_ && have_soil_ && soil_.workable && state_.speed_m_s > 0.0)
+                          : (have_soil_ && soil_.workable && state_.depth_m >= desc_.depth_min_m);
     const bool working = in_soil_ && shaft_ok;
     state_.working = working;
 
@@ -174,6 +192,8 @@ std::uint64_t ToolRuntime::fold_state_hash(std::uint64_t seed) const {
     h = fold(h, state_.worked_area_m2);
     h = fold(h, state_.depth_m);
     h = fold(h, state_.speed_m_s);
+    // Only an applicator has a switch; a soil tool hashes exactly as before.
+    if (desc_.kind == ToolKind::Applicator) h = fold(h, enabled_);
     return h;
 }
 
