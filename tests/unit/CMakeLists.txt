@@ -371,6 +371,7 @@ add_executable(ps_field_tests
   test_field_crops.cpp
   test_field_pathogens.cpp
   test_field_soc.cpp
+  test_field_scenarios_30y.cpp
   test_field_weed_water.cpp
 )
 
