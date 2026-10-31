@@ -15,6 +15,16 @@
         "speed_max_km_h": 8.0,
         "overspeed_quality_per_km_h": 0.07,
         "quality_floor": 0.5
+      },
+      "pto": {
+        "source": "[AS] The machine's threshing, separating and cleaning, on the combine's own shaft. Class figures: a 200 kW combine handles roughly 30-40 t/h of grain. no_load_kw 40 for what turns with nothing going through (a fifth of that power, a usual figure for drum, rotors, fans and chopper). specific_energy_kj_kg 17.5 = 4.86 kW per t/h, so 33 t/h takes 200 kW; the flow is the grain's, the straw that comes with it is inside the figure. inertia [AS] for drum and rotors referred to the shaft. min_speed_fraction [AS]: below half speed the separator loses grain and quality falls in proportion.",
+        "nominal_rpm": 1000,
+        "inertia_kgm2": 20.0,
+        "no_load_kw": 40.0,
+        "kw_per_m": 0.0,
+        "specific_energy_mj_m3": 0.0,
+        "specific_energy_kj_kg": 17.5,
+        "min_speed_fraction": 0.5
       }
     }
   ]

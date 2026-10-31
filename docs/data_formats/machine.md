@@ -44,7 +44,7 @@ The caller binds socket names to chassis-local positions: `load_machine_json(pat
 | `range` | object | yes | below |
 | `draft` | object | yes | below |
 | `soil` | object | yes | below |
-| `pto` | object | no | a rotor on the tractor's PTO shaft |
+| `pto` | object | no | a rotor on a PTO shaft: the tractor's through a hitch, or the vehicle's own on a self-propelled machine |
 
 **`range`**: `source`, `depth_min_m` (shallower does not count as worked), `depth_nominal_m` (the gauge's first setting),
 `depth_max_m` (the tines' length, draft stops growing), `speed_min_km_h`, `speed_max_km_h`, `overspeed_quality_per_km_h`,
@@ -83,12 +83,13 @@ D = F_i (A + B S + C S^2) W T  x  moisture(wetness)  x  (1 + compaction_gain * c
 | `hard_n_m2`, `hard_friction` | ground it cannot enter (`workable` false): it scrapes over it and works nothing |
 | `damping_n_s_m2` | per metre per second of the edge's vertical speed |
 
-**`pto`**: `source`, `nominal_rpm` (the tractor must offer it), `inertia_kgm2` (at the tractor's shaft), `no_load_kw`, `kw_per_m`
+**`pto`**: `source`, `nominal_rpm` (the tractor must offer it; on a self-propelled machine the vehicle's own `pto` component, which then takes no second tool through a hitch), `inertia_kgm2` (at the tractor's shaft), `no_load_kw`, `kw_per_m`
 (rotor running, per metre of width), `specific_energy_mj_m3` (per cubic metre of soil worked), `specific_energy_kj_kg` (per
 kilogram of material the game says goes through the tool, default 0, see "Material through the tool"), `min_speed_fraction` (below
 this share of nominal the tool's quality falls in proportion; it keeps working, slower and worse: only a shaft that is off does
 none). Shaft power is `efficiency.shaft x (no_load + kw_per_m W + e W d v + e_m mdot)`, torque is that over the shaft's speed
-(held at the floor `min_speed_fraction x nominal` so the torque stays finite when the shaft is nearly still).
+(held at the floor `min_speed_fraction x nominal` so the torque stays finite when the shaft is nearly still). What keeps a lugging
+engine alive is the PTO's `stall_guard` (vehicle.md), which lets the shaft slip.
 
 **Efficiency.** A machine's coefficients describe the average machine of its class; a better one of the same type needs less. The
 part's top-level `efficiency` block (`source` tagged like any number, `draft` and `shaft`, each in (0, 2], default 1) states how

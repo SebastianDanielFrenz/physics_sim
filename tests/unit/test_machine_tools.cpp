@@ -667,6 +667,96 @@ TEST_CASE("the rotary harrow: PTO power from the soil going through it", "[machi
     CHECK_FALSE(r.world->tool_state(r.implement, 0).working);
 }
 
+// tractor.json standing in for a combine: the header part on the vehicle itself, no hitch. The material follows the speed the way
+// a crop does, so kg_per_m is how heavy the crop stands in front of the header.
+TEST_CASE("a self-propelled machine's tool turns on its own shaft and slows the machine it is on", "[machine][vehicle][applicator]") {
+    struct Result {
+        real speed = 0.0, flow = 0.0, shaft_kw = 0.0, rpm = 0.0, quality = 0.0;
+        bool working = false;
+        drivetrain::EngineState engine = drivetrain::EngineState::Off;
+    };
+    const auto cut = [](real kg_per_m) {
+        MountCfg cfg = on_dirt();
+        cfg.bare_tractor = true;
+        cfg.edit_tractor = [](vehicle::VehicleDesc& d) { d.machine = io::load_machine_json(std::string(PS_SOURCE_DIR) + "/data/machines/combine_header.json", kSockets); };
+        MountRig r = build_mount(cfg);
+        r.world->set_soil_source(std::make_shared<UniformSoil>(field_soil()));
+        r.run(0.6);
+        r.set("gear_request", 5);
+        r.set("pto_speed", 1000.0);
+        r.set("pto", 1.0);
+        r.set("throttle", 1.0);
+        r.world->set_tool_enabled(r.tractor, 0, true);
+        Result out;
+        const int ticks = 30 * 240, from = ticks - 5 * 240;
+        real absorbed0 = 0.0;
+        for (int i = 0; i < ticks; ++i) {
+            if (i == from) absorbed0 = r.world->powertrain_energy(r.tractor).external_absorbed;
+            const real v = r.world->get_motion(r.tractor_body).linear.x;
+            r.world->set_tool_material_flow(r.tractor, 0, kg_per_m * std::max(v, real(0.0)));
+            r.world->step();
+            if (i < from) continue;
+            out.speed += v;
+            out.flow += kg_per_m * std::max(v, real(0.0));
+            out.rpm += r.world->powertrain_state(r.tractor).pto_rpm;
+            out.quality += r.world->tool_state(r.tractor, 0).quality;
+        }
+        const real n = ticks - from;
+        out.speed /= n;
+        out.flow /= n;
+        out.rpm /= n;
+        out.quality /= n;
+        out.shaft_kw = (r.world->powertrain_energy(r.tractor).external_absorbed - absorbed0) / (n / 240.0) * 1e-3;
+        out.working = r.world->tool_state(r.tractor, 0).working;
+        out.engine = r.world->powertrain_state(r.tractor).engine_state;
+        const machine::ToolDesc& tool = r.world->tool_desc(r.tractor, 0);
+        // The rotor's own losses are a torque, the crop's work a power.
+        const real no_load = machine::tool_pto_power_w(tool, 0.0, 0.0);
+        const real expected = (no_load * out.rpm / tool.pto.nominal_rpm + machine::tool_pto_power_w(tool, out.speed, 0.0, out.flow) - no_load) * 1e-3;
+        printf("%.1f kg/m: %.2f km/h, %.1f kg/s, shaft %.0f rpm, %.1f kW (law %.1f kW), quality %.2f\n", kg_per_m, out.speed * 3.6, out.flow, out.rpm, out.shaft_kw, expected, out.quality);
+        CHECK(out.shaft_kw == Approx(expected).epsilon(0.03));
+        return out;
+    };
+
+    const Result idle = cut(0.0), light = cut(1.5), heavy = cut(4.0), far_too_heavy = cut(8.0);
+    for (const Result* r : {&idle, &light, &heavy, &far_too_heavy}) {
+        CHECK(r->working);
+        CHECK(r->engine == drivetrain::EngineState::Running);
+    }
+    CHECK(idle.rpm > 500.0);
+    CHECK(idle.shaft_kw == Approx(40.0 * idle.rpm / 1000.0).epsilon(0.03)); // what turns with nothing going through
+    CHECK(light.speed < idle.speed);
+    CHECK(heavy.speed < light.speed);
+    CHECK(far_too_heavy.speed < heavy.speed);
+    CHECK(far_too_heavy.speed > 0.1); // slower, not stopped, and the stall guard keeps the engine turning
+    // Sabotaged (recorded): no stall guard: the engine stalls at 4 kg/m and the shaft stands. No own shaft: the tool never works,
+    // quality 0 at every load. check_pto without its line: the "no second one through a hitch" case fails. No loader rule: the
+    // "stall guard: the loader's rule" case fails. A torque that falls below the floor speed was tried too and taken out: the guard
+    // keeps the shaft above that floor, so nothing here could tell it from the torque held there.
+}
+
+TEST_CASE("a PTO's stall guard: the loader's rule", "[machine][io]") {
+    vehicle::VehicleDesc d = io::load_vehicle_json(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+    const auto pto = std::find_if(d.powertrain.components.begin(), d.powertrain.components.end(), [](const drivetrain::ComponentDesc& c) { return std::holds_alternative<drivetrain::PtoDesc>(c.params); });
+    REQUIRE(pto != d.powertrain.components.end());
+    CHECK(std::get<drivetrain::PtoDesc>(pto->params).guard_full_rpm == 850.0);
+    CHECK(std::get<drivetrain::PtoDesc>(pto->params).guard_zero_rpm == 600.0);
+    std::ifstream in(std::string(PS_SOURCE_DIR) + "/data/vehicles/tractor.json");
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string good = R"("full_rpm": 850, "zero_rpm": 600)";
+    REQUIRE(text.find(good) != std::string::npos);
+    text.replace(text.find(good), good.size(), R"("full_rpm": 600, "zero_rpm": 850)");
+    for (std::size_t at = text.find("\"../"); at != std::string::npos; at = text.find("\"../", at)) text.replace(at + 1, 3, std::string(PS_SOURCE_DIR) + "/data/"); // the copy lies elsewhere
+    CHECK_THROWS_WITH(io::load_vehicle_json(scratch_file("bad_guard.json", text)), Catch::Matchers::ContainsSubstring("stall_guard"));
+}
+
+TEST_CASE("a shaft that turns the vehicle's own tool takes no second one through a hitch", "[machine][vehicle][applicator]") {
+    MountCfg cfg = MountCfg{}.rotary();
+    cfg.edit_tractor = [](vehicle::VehicleDesc& d) { d.machine = io::load_machine_json(std::string(PS_SOURCE_DIR) + "/data/machines/combine_header.json", kSockets); };
+    MountRig r = build_mount(cfg);
+    CHECK_THROWS_WITH(r.world->connect_pto(r.hitch), Catch::Matchers::ContainsSubstring("its own tool"));
+}
+
 TEST_CASE("work is the same on 1 and 10 workers, and the tick allocates nothing", "[machine][vehicle]") {
     const auto scenario = [](int workers, bool measure) {
         MountCfg cfg = on_dirt().rotary();

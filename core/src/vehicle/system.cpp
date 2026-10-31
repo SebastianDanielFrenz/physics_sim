@@ -473,6 +473,16 @@ void System::update_lifts(const Island& island, const std::vector<real>& channel
 }
 
 void System::update_pto_shafts(const Island& island) {
+    // A self-propelled machine: the tool and the PTO are on one vehicle, no hitch between them.
+    for (const std::size_t i : island.vehicles) {
+        if (!instances_[i]->has_pto()) continue;
+        for (machine::ToolRuntime& tool : tools_[i]) {
+            if (!tool.desc().pto.present) continue;
+            const real torque = tool.pto_load_nm(instances_[i]->pto_out_omega());
+            instances_[i]->set_pto_load({tool.desc().pto.inertia_kgm2, torque});
+            break;
+        }
+    }
     for (const std::size_t ci : island.couplings) {
         const Coupling& c = couplings_[ci];
         if (c.pto_tool == kNoTool) continue;
@@ -491,7 +501,9 @@ machine::PtoCheck System::check_pto(HitchId id) const {
     const Coupling& c = couplings_[id.index];
     const std::vector<machine::ToolRuntime>& tools = tools_[c.towed];
     const auto tool = std::find_if(tools.begin(), tools.end(), [](const machine::ToolRuntime& t) { return t.desc().pto.present; });
+    const std::vector<machine::ToolRuntime>& own = tools_[c.towing];
     if (!instances_[c.towing]->has_pto()) check.message = "pto: the towing vehicle has no PTO";
+    else if (std::any_of(own.begin(), own.end(), [](const machine::ToolRuntime& t) { return t.desc().pto.present; })) check.message = "pto: the towing vehicle's shaft turns its own tool";
     else if (tool == tools.end()) check.message = "pto: the towed vehicle has no tool on a shaft";
     else if (c.pto_tool != kNoTool) check.message = "pto: this hitch's shaft is on";
     else if (!instances_[c.towing]->pto_offers(tool->desc().pto.nominal_rpm)) check.message = format("pto: the tractor has no %.0f rpm mode", tool->desc().pto.nominal_rpm);

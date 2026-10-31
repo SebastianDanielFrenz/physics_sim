@@ -438,7 +438,12 @@ void Pto::pre_solve(const ComponentSubstepCtx& ctx, const ShaftNetwork& net, Ass
     // Assembly::begin_substep_rows resets ratio_b to 1.0 every substep - the
     // current mode's ratio must be re-asserted unconditionally.
     assembly.set_friction_row_ratio(row_, current_ratio());
-    const real cap_kinetic = engagement_ * desc_.capacity_nm;
+    real guard = real(1.0);
+    if (desc_.guard_full_rpm > real(0.0)) {
+        const real rpm = std::abs(omega_old_in_) * real(60.0 / 6.283185307179586476925286766559);
+        guard = std::clamp((rpm - desc_.guard_zero_rpm) / (desc_.guard_full_rpm - desc_.guard_zero_rpm), real(0.0), real(1.0));
+    }
+    const real cap_kinetic = engagement_ * desc_.capacity_nm * guard;
     const real cap_static = desc_.static_factor * cap_kinetic;
     assembly.set_friction_capacity(row_, cap_static, cap_kinetic);
 
