@@ -14,7 +14,7 @@ of every entry), so the file is the readable copy of the numbers in `core/src/dr
 
 | Class | Meaning | Where it lives |
 |---|---|---|
-| **POLICY** (58 entries) | decides only the severity of a finding, a build issue, the size of a remedy margin or the refusal | `LimitPolicy` field of the same name, a key of this file |
+| **POLICY** (61 entries) | decides only the severity of a finding, a build issue, the size of a remedy margin or the refusal | `LimitPolicy` field of the same name, a key of this file |
 | **NOT POLICY** (13 entries) | a mathematical constant, or something a generator / loader / grid helper BUILDS from, or anything in a cache key or state hash | stays `constexpr` in `engine_rules_table.h` |
 
 The NOT-POLICY entries are: `valve_layouts` (the list of production layouts), `valve_row_chord_fraction`,
@@ -46,7 +46,7 @@ A null pointer (the default of every consumer) is `default_limit_policy()`, the 
 behaviour before the policy existed** (every existing finding and rule result is unchanged). The pointee must outlive the
 call. The engine never drops a finding because of `warn_at` / `refuse_at`: the findings of a sweep are the same for every
 policy of the two rules, and `warns()` / `refuses()` / `has_refusing_finding()` / `has_blocking_issue()` are the predicates a
-garage UI applies. `LimitPolicy` is a plain value (58 doubles and two enums, no strings): copy it, change a field, pass its
+garage UI applies. `LimitPolicy` is a plain value (61 doubles and two enums, no strings): copy it, change a field, pass its
 address. Nothing here allocates per tick; no policy value enters a World.
 
 When a policy overrides a number, the `source_label` of a build issue says so (`[policy] <name> = <value> from a limit policy
@@ -72,7 +72,7 @@ When a policy overrides a number, the `source_label` of a build issue says so (`
 | `extends` | optional path (relative to the file) of a base policy; RFC 7396 merge, bottom-up, depth 8, cycles rejected (`ps::io::load_json_with_extends`) |
 | `refuse_at` | severity from which the garage REFUSES: `"exceeded"` (default), `"limiting"`, `"never"` |
 | `warn_at` | severity from which a finding is worth telling: `"near"` (default), `"limiting"`, `"exceeded"`, `"never"` |
-| group objects | `turbo`, `limiter`, `piston_speed`, `map_grid`, `driveline`, `nitrous`, `knock`, `valves`, `rod`, `compression`, `grid_coverage`, `cam`, `lift`, `gearbox` — each holds entries |
+| group objects | `turbo`, `limiter`, `piston_speed`, `map_grid`, `driveline`, `nitrous`, `knock`, `valves`, `rod`, `compression`, `grid_coverage`, `cam`, `lift`, `gearbox`, `hitch` — each holds entries |
 | entry | a number, or `{"value": number, "source": "[C]|[D]|[AS]|[M] text"}` |
 
 A file may be **partial**: every entry it omits keeps the compiled default (a derived file is usually `extends` + the few
@@ -253,12 +253,22 @@ Read by: check_buildable / check_gearbox_rating (GearboxRating), check_driveline
 | `gearbox_rating_over_exceeded` | 0.15 | [AS] transmission plan 7.1 / owner 2026-10-13 (Q7): more than 15 % over the rating is refused; owner 2026-10-20: also a clutch peak more than 15 % over its static capacity is Exceeded |
 | `gearbox_rating_remedy_margin` | 1.1 | [AS] transmission plan 7.1: required rating = peak x 1.1 |
 
+### `hitch`
+
+Read by: check_hitch_limits, World::hitch_limits (TowedMass, TongueLoad). The share of a towing point's rating at which a finding is Near, Limiting, Exceeded.
+
+| Entry | Default | Source |
+|---|---|---|
+| `hitch_near_share` | 0.9 | [AS] the last 10 % below a rating |
+| `hitch_limiting_share` | 1 | [D] the rating itself |
+| `hitch_exceeded_share` | 1.15 | [AS] the gearbox rating's 15 % over |
+
 ## Tests
 
 `tests/unit/test_limit_policy.cpp` (`[limit_policy][drivetrain][io]`):
 
-- `LP1` default.json equals the compiled defaults, value and source of all 58 entries; the 13 NOT-POLICY names are in no file.
-- `LP2a` / `LP2b` / `LP2c` every one of the 58 entries is reachable: set to an extreme through a policy it changes a finding,
+- `LP1` default.json equals the compiled defaults, value and source of all 61 entries; the 13 NOT-POLICY names are in no file.
+- `LP2a` / `LP2b` / `LP2c` every one of the 61 entries is reachable: set to an extreme through a policy it changes a finding,
   build issue or remedy of at least one consumer; an entry no consumer reads fails, naming it. `LP2b` is `[long]` (hyper
   sweeps, one wastegate solve).
 - `LP3` `refuse_at` / `warn_at` matrices, `has_blocking_issue`, `has_refusing_finding`, findings independent of both.

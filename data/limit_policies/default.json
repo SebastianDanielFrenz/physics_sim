@@ -262,5 +262,19 @@
       "value": 1.1,
       "source": "[AS] transmission plan 7.1: required rating = peak x 1.1"
     }
+  },
+  "hitch": {
+    "hitch_near_share": {
+      "value": 0.9,
+      "source": "[AS] the last 10 % below a rating"
+    },
+    "hitch_limiting_share": {
+      "value": 1.0,
+      "source": "[D] the rating itself"
+    },
+    "hitch_exceeded_share": {
+      "value": 1.15,
+      "source": "[AS] the gearbox rating's 15 % over"
+    }
   }
 }

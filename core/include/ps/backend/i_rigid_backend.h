@@ -16,6 +16,8 @@
 #include "ps/world/ids.h"
 
 #include <cstdint>
+#include <span>
+#include <utility>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -409,6 +411,14 @@ public:
         return hit.hit&&hit.body==excluded ? RayCastHit{} : hit;
     }
     [[nodiscard]] virtual ShapeCastHit shape_cast(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance) const = 0;
+    // The same two queries blind to several bodies: a coupled vehicle's wheels and ground probes do not see its
+    // partners' chassis, whatever the geometry at the hitch.
+    [[nodiscard]] virtual ShapeCastHit shape_cast_excluding(const ShapeDesc& shape, const Pose& start_pose, const Vec3& sweep_world, real max_distance, std::span<const BodyId> excluded) const = 0;
+    [[nodiscard]] virtual RayCastHit ray_cast_excluding(const Vec3& origin, const Vec3& direction, real distance, std::span<const BodyId> excluded) const = 0;
+
+    // Replaces the list of body pairs that make no contacts with each other. Sim thread, between steps; every listed
+    // body must be live. Queries still see these bodies.
+    virtual void set_disabled_collision_pairs(std::span<const std::pair<BodyId, BodyId>> pairs) = 0;
 
     // Pure narrowphase overlap query (no sweep, no side effects on the
     // backend) - PLAN.md P1.5b strategy A: "Jolt is used only as a collision

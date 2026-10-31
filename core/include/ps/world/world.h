@@ -16,6 +16,8 @@
 #include "ps/jobs/job_system.h"
 #include "ps/jobs/task_graph.h"
 #include "ps/io/surface_table.h"
+#include "ps/machine/coupling.h"
+#include "ps/machine/hitch_limits.h"
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
 #include "ps/vehicle/vehicle_desc.h"
@@ -90,6 +92,10 @@ struct WorldConfig {
     unsigned num_velocity_steps = 10;
     unsigned num_position_steps = 2;
     int collision_steps = 1;
+    // Sweeps over a chain's couplings per substep (Gauss-Seidel, one exact solve per coupling). A single coupling
+    // takes one whatever this says. Tractor plus two trailers: 2 and 8 agree to 3 decimals in mm, 1 leaves the first
+    // link's error at half its value because that link never sees the second one's force in the same substep.
+    int coupling_passes = 2;
     real penetration_slop = 0.02;
     real speculative_contact_distance = 0.02;
     real max_penetration_distance = 0.2;
@@ -194,14 +200,13 @@ public:
     // PLAN.md P2 adapter report / this task's step 3: named control
     // channels (e.g. "steer" -1..1, "throttle" 0..1), SI/ISO, so input can
     // reach vehicle code without any Godot (or other front-end) type
-    // crossing into the core. PLAN.md P4 I0 (PHYS-033 section 8, Q4): a
-    // global name (e.g. "steer") addresses the designated input vehicle
-    // (vehicle index 0); a "v<i>." prefix (e.g. "v1.steer") addresses
-    // vehicle i. This API is unchanged for existing callers (ps_run
-    // scenarios' control_events, the Godot adapter) - only the internal
-    // storage is index-based now (see ensure_control_channel_index below),
-    // so per-vehicle resolution at create_vehicle need not hash a string
-    // every tick.
+    // crossing into the core. Each vehicle has its own namespace: create_vehicle's
+    // channel_scope names it ("trailer_1.brake"), and without a scope vehicle index
+    // 0 reads the bare names ("steer") and vehicle i "v<i>." ones (PLAN.md P4 I0).
+    // vehicle_channel gives the full name, so a caller with several vehicles need
+    // not know the order they were created in. Storage is index-based (see
+    // ensure_control_channel_index below): resolved once at create_vehicle, no
+    // string hashing in the tick.
     void set_control(const std::string& channel, real value) {
         control_channel_values_[ensure_control_channel_index(channel)] = value;
     }
@@ -320,8 +325,35 @@ public:
     // end. Plain {string, real} pairs, not drivetrain::ChannelDecl
     // (internal, core/src/drivetrain/powertrain.h - not in any public
     // header). Always empty for every production caller.
+    // `channel_scope`: this vehicle's channels are "<scope>.<name>"; a stable name for a vehicle whose creation order
+    // is not. No dots, and two vehicles cannot share one (std::invalid_argument).
     VehicleId create_vehicle(const vehicle::VehicleDesc& desc, BodyId chassis,
-                              const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {});
+                              const std::vector<std::pair<std::string, real>>& test_only_extra_channels = {},
+                              std::string_view channel_scope = {});
+    // The full name of this vehicle's channel `name`.
+    [[nodiscard]] std::string vehicle_channel(VehicleId id, std::string_view name) const;
+    // A hitch between two vehicles (ps/machine/coupling.h). attach, detach and destroy_vehicle run on the sim thread
+    // between steps and rebuild the islands there: the coupled vehicles then step together in one job. From inside a
+    // step they throw std::logic_error. attach measures the sockets as they are and ramps them together over the
+    // class's latch time, without a jump in force; check_attach says whether it would, and what stands in the way, so
+    // a caller can ask without catching. A refused attach throws std::invalid_argument with the same message.
+    [[nodiscard]] machine::AttachCheck check_attach(const machine::CouplingDesc& desc) const;
+    HitchId attach(const machine::CouplingDesc& desc);
+    // The same by the names in the vehicles' hitch_points lists: one towing point, one towed point of the same class,
+    // the towing point's class file decides the hitch. A point takes one hitch at a time.
+    [[nodiscard]] machine::AttachCheck check_attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point) const;
+    HitchId attach(VehicleId towing, std::string_view towing_point, VehicleId towed, std::string_view towed_point);
+    // What a live hitch carries, and the findings against its towing point's ratings (none on a hitch built by hand).
+    // Tongue load comes from the last tick; std::invalid_argument for a dead hitch.
+    [[nodiscard]] machine::HitchLoads hitch_loads(HitchId id) const;
+    [[nodiscard]] std::vector<drivetrain::LimitFinding> hitch_limits(HitchId id, const drivetrain::LimitPolicy* policy = nullptr) const;
+    void detach(HitchId id);
+    [[nodiscard]] bool hitch_alive(HitchId id) const;
+    [[nodiscard]] const machine::CouplingState& coupling_state(HitchId id) const;
+    // Takes a vehicle out of the simulation, detaching its hitches. Its chassis stays a plain body, for the caller to
+    // destroy or reuse; every other vehicle keeps its index and channels. Whatever checks a VehicleId refuses the stale
+    // one, and WorldSnapshot::vehicles keeps its slot with an invalid id and no wheels.
+    void destroy_vehicle(VehicleId id);
     [[nodiscard]] std::size_t vehicle_wheel_count(VehicleId id) const;
     [[nodiscard]] const vehicle::WheelTelemetry& wheel_telemetry(VehicleId id, std::size_t wheel_index) const;
     // Assists I2a (diagnostics, same live-state contract as wheel_telemetry): each substep's wheel telemetry of the
@@ -487,7 +519,7 @@ public:
     [[nodiscard]] const jobs::TaskGraph& pipeline() const { return *pipeline_; }
 
 private:
-    // Contents mass, one entry per vehicle (index == VehicleId.index; vehicles are never destroyed).
+    // Contents mass, one entry per vehicle (index == VehicleId.index; a destroyed vehicle keeps its slot).
     struct ContentsMassState {
         bool enabled = false;
         BodyId chassis{};
@@ -529,6 +561,8 @@ private:
     WorldConfig config_;
     real dt_;
     std::uint64_t tick_ = 0;
+    bool in_step_ = false;
+    std::vector<std::string> vehicle_channel_prefix_; // one per vehicle, retired ones included
     real sim_time_ = 0.0;
     std::vector<aero::WakeSource> aero_wakes_;
     std::shared_ptr<environment::Environment> environment_; // weather plan W2; null == none installed

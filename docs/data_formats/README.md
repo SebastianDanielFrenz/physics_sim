@@ -19,6 +19,7 @@ not what the example files under `data/` happen to contain. The loaders are:
 | engine_thermal / cooling_system | `core/src/io/engine_thermal_io.cpp` (`load_engine_thermal_json`, `load_cooling_system_json`; the vehicle keys `cooling_system`/`engine_thermal_start` and the engine key `default_thermal` via `load_vehicle_json`) | `ps/drivetrain/engine_thermal_desc.h` (`EngineThermalDesc`, `CoolingSystemDesc`) |
 | n2o_bottle / nitrous_kit / nitrous_controller | `core/src/io/nitrous_io.cpp` (`load_n2o_bottle_json`, `load_nitrous_kit_json`, `load_nitrous_controller_json`; vehicle components via `load_vehicle_json`) | `ps/drivetrain/nitrous_desc.h` (`N2oBottleDesc`, `NitrousKitDesc`, `NitrousControllerDesc`) |
 | electronics (engine garage P8) | `core/src/io/electronics_io.cpp` (`load_electronics_json`; `controllers` entries of type `electronics` and `VehicleLoadOptions::electronics` via `load_vehicle_json`) | `ps/drivetrain/controller_desc.h` (`LaunchControlDesc`; fitment sets the `fitted` flags) ([electronics.md](electronics.md)) |
+| hitch_class (attachment A1) | `core/src/io/hitch_io.cpp` (`load_hitch_class_json`; the vehicle keys `hitch_points` and `tow_brake` are read by `load_vehicle_json`) | `ps/machine/hitch_class.h`, `ps/machine/hitch_point.h`, `ps/machine/tow_brake.h` |
 | ecu / cam (engine garage P2) | `core/src/io/engine_parts.cpp` (`assemble_engine`: merged into the engine JSON before `read_engine_fields`; reached from `load_vehicle_json`, `load_engine_json`, `load_engine_json_from_string`) | none of their own - the merged fields fill `TorqueMapEngineDesc` / `SimulatedEngineDesc` ([ecu.md](ecu.md), [cam.md](cam.md)) |
 
 The powertrain **graph itself** (which ports may connect, what gets
@@ -37,6 +38,7 @@ the end of this file under "Discrepancies found".
 
 - [`vehicle.md`](vehicle.md) — `physics_sim.vehicle/2`, `data/vehicles/*.json`. Wheels, suspension, steering, brakes, the powertrain graph, controllers, aero.
 - [`engine.md`](engine.md) — `physics_sim.engine/1`, `data/engines/*.json` (also embeddable inline in a vehicle file's `powertrain.components`).
+- [`hitch.md`](hitch.md) — `physics_sim.hitch_class/1`, `data/hitch_classes/*.json`. What a hitch holds and leaves free, how a latch runs.
 - [`gearbox.md`](gearbox.md) — `physics_sim.gearbox/1`, `data/gearboxes/*.json` (also embeddable inline).
 - [`tyre.md`](tyre.md) — `physics_sim.tyre/1`, `data/tyres/*.json` (also embeddable inline in a wheel, or a `.tir` file).
 - [`surfaces.md`](surfaces.md) — `physics_sim.surfaces/1`, `data/surfaces/surfaces.json`.

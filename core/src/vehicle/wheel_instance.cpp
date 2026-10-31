@@ -115,7 +115,7 @@ std::uint64_t fnv1a(std::uint64_t h, const T& v) {
 WheelInstance::WheelInstance(WheelDesc desc, std::unique_ptr<ITyreModel> tyre_model)
     : desc_(std::move(desc)), tyre_(std::move(tyre_model)) {}
 
-void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, const IRigidBackend& backend) {
+void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, const IRigidBackend& backend, std::span<const BodyId> excluded) {
     const SuspensionDesc& susp = desc_.suspension;
     const Vec3 axis_local = susp.axis.normalized();
     const Vec3 axis_world = chassis_pose.orientation.rotate(axis_local);
@@ -133,7 +133,8 @@ void WheelInstance::measure_contact(const Pose& chassis_pose, real steer_angle, 
     query_pose.orientation = chassis_pose.orientation * steer_q;
 
     const Vec3 sweep_world = -axis_world * susp.travel_max;
-    const ShapeCastHit hit = backend.shape_cast(shape, query_pose, sweep_world, susp.travel_max);
+    const ShapeCastHit hit = excluded.empty() ? backend.shape_cast(shape, query_pose, sweep_world, susp.travel_max)
+                                              : backend.shape_cast_excluding(shape, query_pose, sweep_world, susp.travel_max, excluded);
 
     // PHYS-033 P4 I3 plan section 6.7: computed unconditionally (steer_q
     // already applied to query_pose above, independent of hit/miss) so a

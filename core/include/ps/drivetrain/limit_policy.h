@@ -129,6 +129,10 @@ struct LimitPolicy {
     real gearbox_rating_over_limiting;
     real gearbox_rating_over_exceeded;
     real gearbox_rating_remedy_margin;
+    // --- hitch ---
+    real hitch_near_share;
+    real hitch_limiting_share;
+    real hitch_exceeded_share;
     // clang-format on
 };
 

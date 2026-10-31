@@ -61,6 +61,7 @@ add_executable(ps_unit_tests
   test_vehicle_io_validation.cpp
   test_tyre_injection.cpp
   test_vehicle_parallel_alloc.cpp
+  test_machine_coupling.cpp
   test_wheel_contact_frame.cpp
   test_powertrain_network.cpp
   test_powertrain_friction_lcp.cpp

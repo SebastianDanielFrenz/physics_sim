@@ -5,11 +5,11 @@
 // has_blocking_issue, has_refusing_finding.
 //
 // EXPECTED RESULTS (committed before the first run; "RUN" lines at the end of each case header are filled in afterwards):
-//   LP1  default.json == the compiled defaults: 58 POLICY entries, value AND source text identical to the table headers
-//        (limit_thresholds.h 31 + engine_rules_table.h 27), every entry present exactly once, no extra key; the 13 NOT-POLICY
-//        entries (31 + 40 = 71 table entries, 71 - 58 = 13) are exactly the listed names and are in no file; the loaded
+//   LP1  default.json == the compiled defaults: 61 POLICY entries, value AND source text identical to the table headers
+//        (limit_thresholds.h 34 + engine_rules_table.h 27), every entry present exactly once, no extra key; the 13 NOT-POLICY
+//        entries (34 + 40 = 74 table entries, 74 - 61 = 13) are exactly the listed names and are in no file; the loaded
 //        LimitPolicy equals default_limit_policy() field by field; validate_limit_policy(default) == "".
-//   LP2  reachability: for each of the 58 entries, setting it to an extreme (1e-9 or 1e9) through a policy changes the result
+//   LP2  reachability: for each of the 61 entries, setting it to an extreme (1e-9 or 1e9) through a policy changes the result
 //        of at least one consumer probe (findings, build issues, remedies); a probe given nullptr, &default_limit_policy() and
 //        a default-constructed LimitPolicy gives the same bytes. An entry that no consumer reads FAILS, naming the entry.
 //        LP2a runs the cheap probes (build rules, driveline), LP2b the dyno probes ([long]: hyper sweeps, one solve).
@@ -57,6 +57,7 @@
 #include "ps/drivetrain/engine_rules.h"
 #include "ps/drivetrain/limit_findings.h"
 #include "ps/drivetrain/limit_policy.h"
+#include "ps/machine/hitch_limits.h"
 #include "ps/drivetrain/limit_remedies.h"
 #include "ps/io/limit_policy_io.h"
 #include "ps/io/nitrous_io.h"
@@ -349,6 +350,18 @@ std::string probe_rules(const LimitPolicy* p) {
 }
 
 // ---- cheap: driveline and gearbox rating ----
+std::string probe_hitch(const LimitPolicy* p) {
+    machine::HitchPointDesc point;
+    point.name = "socket_hitch";
+    point.max_towed_mass_kg = 1000.0;
+    point.max_tongue_load_n = 1000.0;
+    std::string out;
+    for (const double load : {500.0, 950.0, 1050.0, 1300.0}) {
+        out += sig(machine::check_hitch_limits(point, machine::HitchLoads{load, load}, p));
+    }
+    return out;
+}
+
 std::string probe_driveline(const LimitPolicy* p) {
     std::string out;
     DynoResult d;
@@ -537,7 +550,8 @@ struct ProbeDef {
 };
 const std::vector<ProbeDef>& probes() {
     static const std::vector<ProbeDef> v = {
-        {"rules", true, probe_rules},   {"driveline", true, probe_driveline}, {"t16", false, probe_t16},       {"t20", false, probe_t20},
+        {"rules", true, probe_rules},   {"driveline", true, probe_driveline}, {"hitch", true, probe_hitch},
+        {"t16", false, probe_t16},      {"t20", false, probe_t20},
         {"t110", false, probe_t110},    {"rotor", false, probe_rotor},        {"surge", false, probe_surge},   {"solve", false, probe_solve},
         {"limiter", false, probe_limiter}, {"piston", false, probe_piston},   {"edge", false, probe_edge},     {"knock", false, probe_knock},
         {"kit", false, probe_kit},      {"bottle", false, probe_bottle},
@@ -551,7 +565,7 @@ const ProbeDef& probe_def(const std::string& id) {
     return probes()[0];
 }
 
-// Which probes read which entry (every one of the 58 must appear; LP2c checks the list is complete and has no stranger).
+// Which probes read which entry (every one of the 61 must appear; LP2c checks the list is complete and has no stranger).
 const std::map<std::string, std::vector<std::string>>& entry_probes() {
     static const std::map<std::string, std::vector<std::string>> m = {
         // turbo
@@ -619,6 +633,10 @@ const std::map<std::string, std::vector<std::string>>& entry_probes() {
         {"gearbox_rating_over_limiting", {"driveline"}},
         {"gearbox_rating_over_exceeded", {"driveline"}},
         {"gearbox_rating_remedy_margin", {"driveline"}},
+        // hitch ratings
+        {"hitch_near_share", {"hitch"}},
+        {"hitch_limiting_share", {"hitch"}},
+        {"hitch_exceeded_share", {"hitch"}},
     };
     return m;
 }
@@ -680,7 +698,7 @@ TEST_CASE("LP1 default.json equals the compiled defaults entry by entry; the NOT
     }
     CHECK(file_groups == groups);
 
-    CHECK(pt::kRowCount == 58);
+    CHECK(pt::kRowCount == 61);
     std::size_t entries_in_file = 0;
     for (const auto& g : groups) entries_in_file += doc[g].size();
     CHECK(entries_in_file == pt::kRowCount);
@@ -729,8 +747,8 @@ TEST_CASE("LP1 default.json equals the compiled defaults entry by entry; the NOT
     CHECK(def.warn_at == WarnAt::Near);
     CHECK(validate_limit_policy(def).empty());
 
-    // Classification: 71 table entries = 58 policy + 13 NOT policy; the 13 are named, and no file or field has them.
-    CHECK(limits::kAllLimitThresholdCount == 31);
+    // Classification: 74 table entries = 61 policy + 13 NOT policy; the 13 are named, and no file or field has them.
+    CHECK(limits::kAllLimitThresholdCount == 34);
     CHECK(rules::kAllEngineRuleThresholdCount == 40);
     const std::set<std::string> not_policy = {"valve_layouts",
                                               "valve_row_chord_fraction",
@@ -750,7 +768,7 @@ TEST_CASE("LP1 default.json equals the compiled defaults entry by entry; the NOT
     std::set<std::string> table_names;
     for (std::size_t i = 0; i < limits::kAllLimitThresholdCount; ++i) table_names.insert(limits::kAllLimitThresholds[i].name);
     for (std::size_t i = 0; i < rules::kAllEngineRuleThresholdCount; ++i) table_names.insert(rules::kAllEngineRuleThresholds[i].name);
-    CHECK(table_names.size() == 71);
+    CHECK(table_names.size() == 74);
     for (const std::string& n : table_names) {
         INFO("table entry " << n);
         CHECK((names.count(n) == 1) != (not_policy.count(n) == 1)); // exactly one of the two sets
@@ -839,7 +857,7 @@ TEST_CASE("LP2b every dyno entry moves a sweep finding or remedy", "[limit_polic
     CHECK(checked >= 28);
 }
 
-TEST_CASE("LP2c the probe list covers exactly the 58 entries", "[limit_policy][drivetrain][io]") {
+TEST_CASE("LP2c the probe list covers exactly the 61 entries", "[limit_policy][drivetrain][io]") {
     // A new entry needs a probe: the list below must hold every row, and no name that is not a row.
     std::set<std::string> rows;
     for (const pt::Row& r : pt::kRows) rows.insert(r.name);
@@ -855,7 +873,7 @@ TEST_CASE("LP2c the probe list covers exactly the 58 entries", "[limit_policy][d
         }
     }
     CHECK(listed == rows);
-    CHECK(rows.size() == 58);
+    CHECK(rows.size() == 61);
 }
 
 TEST_CASE("LP3 refuse_at / warn_at: severity matrices, blocking issues, refusing findings; findings never depend on them",
